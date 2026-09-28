@@ -311,6 +311,18 @@ pass (the crate Miri-compiles clean; the FFI-bearing loop functions are compiled
 but not interpreted when those tests run). This is the same split as the FFI crates
 (Miri for pure code, native/ASan for the C-boundary).
 
+**N431 (2026-09-28).** `kqueue_callback_reenters_through_stored_loop_pointer`
+(PORT-ADDED: a callback re-enters the loop through a stored pointer while
+`Loop::run_raw` runs) joins this exception for the same reason. Its borrow shape is
+proven twice without the exception: on the isolated harness
+`.port/phase-2/mirihar-n431` (shipped shape UB, raw-self shape CLEAN, SB and TB),
+and on the REAL epoll backend, whose twin
+`epoll::tests::epoll_callback_reenters_through_stored_loop_pointer` runs under Miri
+from the Mac via the Linux target (`cargo +nightly miri test -p rustty-xev --target
+aarch64-unknown-linux-gnu --lib <name>`; Miri shims epoll/eventfd): CLEAN under SB and
+TB with the fix, UB under both when entered through `(*root).run(..)` or on the
+pre-N431 code.
+
 ## rustty-xev C4 (Async mach-port wakeup) — MIRI exception
 
 C4's `async.rs` `wait`/`drain` + all 4 tests (`async`, `async: notify first`,

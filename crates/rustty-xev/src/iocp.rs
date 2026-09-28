@@ -20,10 +20,12 @@
 // kqueue/epoll this backend NEVER schedules onto a thread pool — every operation
 // is either handed to the kernel through the completion port or performed
 // synchronously. `Loop.init` discards `options` entirely (iocp.zig:72-74). The
-// one cross-thread entry point, `async_notify`, touches ONLY the completion's own
-// `AtomicBool` plus `PostQueuedCompletionStatus` on the port HANDLE — both read
-// out of caller-owned memory / a `Copy` handle, never through a `&mut Loop`
-// (WS19 T10's rule, preserved here by construction).
+// one cross-thread entry point, `AsyncIOCP.notify` -> `async_notify`, touches ONLY
+// the completion's own `AtomicBool` plus `PostQueuedCompletionStatus` on the port
+// HANDLE, and the HANDLE is a copy the watcher took on the loop thread at `wait`
+// time (`async_notify_handle`): the notifying thread never forms a `&Loop` nor
+// reads the `Loop` allocation while the loop thread holds its protected
+// `&mut Loop` (N385; WS19 T10's rule for the kqueue/epoll pool worker).
 //
 // PORT NOTE (`@fieldParentPtr("overlapped", ...)`): the loop recovers the
 // `*Completion` from the `*OVERLAPPED` the kernel hands back. The faithful Rust
@@ -158,8 +160,9 @@ struct LoopFlags {
 // auto-`!Send`; ghostty MOVES a `Loop` onto the spawned termio thread. SAFETY /
 // single-thread affinity: after the move a `Loop` (and every `Completion` it
 // links) is touched by exactly one thread at a time — the owning event-loop
-// thread. `async_notify` is the documented exception and touches only the
-// caller-owned completion's `AtomicBool` plus the `Copy` port handle.
+// thread. `async_notify_handle` is the documented exception: it touches only the
+// caller-owned completion's `AtomicBool` plus a copy of the port handle, never
+// the `Loop` (N385).
 unsafe impl Send for Loop {}
 
 impl Loop {
@@ -229,7 +232,7 @@ impl Loop {
         // If the completion is a cancel operation, we start it immediately as it
         // will be put in the cancellations queue.
         if matches!(unsafe { &(*completion).op }, Operation::Cancel { .. }) {
-            unsafe { self.start_completion(completion) };
+            unsafe { Loop::start_completion(self, completion) };
             return;
         }
 
@@ -255,32 +258,47 @@ impl Loop {
     /// completed events (success or error). Callbacks are only fired on the next
     /// tick.
     pub fn submit(&mut self) -> core::result::Result<(), Error> {
-        // Submit all the submissions. We copy the submission queue so that any
-        // resubmits don't cause an infinite loop.
-        //
-        // PORT NOTE: the reference's `errdefer self.submissions = queued;` restores
-        // the queue on error; `start_completion` cannot fail (it has no error
-        // path), so the loop below never returns early and the errdefer is
-        // unreachable in the reference too.
-        let mut queued = core::mem::take(&mut self.submissions);
+        // SAFETY: `self` is a live, exclusive `Loop` for the whole call.
+        unsafe { Loop::submit_raw(self) }
+    }
 
-        loop {
-            let c = unsafe { queued.pop() };
-            if c.is_null() {
-                break;
-            }
-            match unsafe { (*c).flags.state } {
-                State::Adding => unsafe { self.start_completion(c) },
-                State::Dead => unsafe { self.stop_completion(c, ptr::null_mut()) },
-                State::Active => {
-                    log_warn!("invalid state in submission queue state={:?}", unsafe {
-                        (*c).flags.state
-                    });
+    /// `submit(self: *Loop)`: the raw-pointer body of `submit`, which the tick
+    /// path calls. `start_completion` can invoke a callback synchronously (the
+    /// job-object arm), so no `&mut Loop` may be live across it (N431; see
+    /// `run`).
+    ///
+    /// # Safety
+    /// As `run_raw`.
+    unsafe fn submit_raw(this: *mut Loop) -> core::result::Result<(), Error> {
+        unsafe {
+            // Submit all the submissions. We copy the submission queue so that any
+            // resubmits don't cause an infinite loop.
+            //
+            // PORT NOTE: the reference's `errdefer self.submissions = queued;` restores
+            // the queue on error; `start_completion` cannot fail (it has no error
+            // path), so the loop below never returns early and the errdefer is
+            // unreachable in the reference too.
+            let mut queued = core::mem::take(&mut (*this).submissions);
+
+            loop {
+                let c = queued.pop();
+                if c.is_null() {
+                    break;
+                }
+                match (*c).flags.state {
+                    State::Adding => Loop::start_completion(this, c),
+                    State::Dead => (*this).stop_completion(c, ptr::null_mut()),
+                    State::Active => {
+                        log_warn!(
+                            "invalid state in submission queue state={:?}",
+                            (*c).flags.state
+                        );
+                    }
                 }
             }
-        }
 
-        Ok(())
+            Ok(())
+        }
     }
 
     /// Process the cancellations queue. This doesn't call any callbacks but can
@@ -316,15 +334,43 @@ impl Loop {
 
     /// Run the event loop. See RunMode documentation for details on modes.
     /// Once the loop is run, the pointer MUST remain stable.
+    // PORT NOTE (N431 in NEW-FINDINGS): the reference's `run(self: *Loop, ..)`
+    // body lives in `run_raw`, which takes the loop as a raw pointer, as Zig's
+    // unprotected `*Loop` does. Callbacks re-enter the loop while it runs,
+    // through their `l` argument or through a pointer the caller stored (termio's
+    // `td.loop_`), so no `&mut Loop` may be live across a callback: a
+    // function-entry `&mut self` is protected for the whole call, and any other
+    // access to the loop pops it (UB under Stacked and Tree Borrows,
+    // .port/phase-2/mirihar-n431). This entry converts to raw at once and never
+    // uses `self` again, so it is sound when callbacks reach the loop only
+    // through `l`. A caller whose callbacks re-enter through a stored pointer
+    // must enter through `run_raw` with that same pointer instead: this
+    // `&mut self` is itself protected for the call (mirihar-n431
+    // `wrapper_*_root`).
     pub fn run(&mut self, mode: RunMode) -> core::result::Result<(), Error> {
-        match mode {
-            RunMode::NoWait => self.tick(0),
-            RunMode::Once => self.tick(1),
-            RunMode::UntilDone => {
-                while !self.done() {
-                    self.tick(1)?;
+        // SAFETY: `self` is a live, exclusive `Loop` for the whole call.
+        unsafe { Loop::run_raw(self, mode) }
+    }
+
+    /// `run(self: *Loop, mode)`: the raw-pointer entry (see `run`'s PORT NOTE).
+    /// Callers whose callbacks re-enter the loop through a stored pointer
+    /// enter here with that pointer.
+    ///
+    /// # Safety
+    /// `this` must point at a live, initialized `Loop` that stays at the same
+    /// address and is not otherwise borrowed for the whole call, except by
+    /// the loop's own callbacks through raw pointers.
+    pub unsafe fn run_raw(this: *mut Loop, mode: RunMode) -> core::result::Result<(), Error> {
+        unsafe {
+            match mode {
+                RunMode::NoWait => Loop::tick_raw(this, 0),
+                RunMode::Once => Loop::tick_raw(this, 1),
+                RunMode::UntilDone => {
+                    while !(*this).done() {
+                        Loop::tick_raw(this, 1)?;
+                    }
+                    Ok(())
                 }
-                Ok(())
             }
         }
     }
@@ -332,272 +378,283 @@ impl Loop {
     /// Tick through the event loop once, waiting for at least "wait" completions
     /// to be processed by the loop itself.
     pub fn tick(&mut self, wait: u32) -> core::result::Result<(), Error> {
-        // If we're stopped then the loop is fully over.
-        if self.flags.stopped {
-            return Ok(());
-        }
-
-        // We can't nest runs.
-        if self.flags.in_run {
-            return Err(Error);
-        }
-        self.flags.in_run = true;
-        let res = self.tick_inner(wait);
-        // defer self.flags.in_run = false;
-        self.flags.in_run = false;
-        res
+        // SAFETY: as `run`.
+        unsafe { Loop::tick_raw(self, wait) }
     }
 
-    fn tick_inner(&mut self, wait: u32) -> core::result::Result<(), Error> {
-        // The raw self handle the callbacks receive (never a `&mut`).
-        let self_ptr: *mut Loop = self;
-
-        // The list of entry that will be filled with a call to
-        // GetQueuedCompletionStatusEx.
-        let mut entries: [windows::OVERLAPPED_ENTRY; 128] = unsafe { core::mem::zeroed() };
-
-        let mut wait_rem: usize = wait as usize;
-
-        // Handle all of our cancellations first because we may be able to stop
-        // submissions from even happening if its still queued. Plus,
-        // cancellations sometimes add more to the submission queue.
-        self.process_cancellations();
-
-        // Submit pending completions.
-        self.submit()?;
-
-        // Loop condition is inspired from the kqueue backend. See its
-        // documentation for details.
-        loop {
+    /// `tick(self: *Loop, wait)`: the raw-pointer twin of `tick` (see `run`).
+    ///
+    /// # Safety
+    /// As `run_raw`.
+    pub unsafe fn tick_raw(this: *mut Loop, wait: u32) -> core::result::Result<(), Error> {
+        unsafe {
             // If we're stopped then the loop is fully over.
-            if self.flags.stopped {
+            if (*this).flags.stopped {
                 return Ok(());
             }
 
-            // We must update our time no matter what.
-            self.update_now();
-
-            let should_continue =
-                (self.active > 0 && (wait == 0 || wait_rem > 0)) || !self.completions.empty();
-            if !should_continue {
-                break;
+            // We can't nest runs.
+            if (*this).flags.in_run {
+                return Err(Error);
             }
+            (*this).flags.in_run = true;
+            let res = Loop::tick_inner(this, wait);
+            // defer self.flags.in_run = false;
+            (*this).flags.in_run = false;
+            res
+        }
+    }
 
-            // Run our expired timers.
-            let mut now_timer = Timer {
-                next: self.cached_now,
-                reset: None,
-                heap: heap::IntrusiveField::default(),
-                c: ptr::null_mut(),
-            };
+    unsafe fn tick_inner(this: *mut Loop, wait: u32) -> core::result::Result<(), Error> {
+        unsafe {
+            // The list of entry that will be filled with a call to
+            // GetQueuedCompletionStatusEx.
+            let mut entries: [windows::OVERLAPPED_ENTRY; 128] = core::mem::zeroed();
+
+            let mut wait_rem: usize = wait as usize;
+
+            // Handle all of our cancellations first because we may be able to stop
+            // submissions from even happening if its still queued. Plus,
+            // cancellations sometimes add more to the submission queue.
+            (*this).process_cancellations();
+
+            // Submit pending completions.
+            Loop::submit_raw(this)?;
+
+            // Loop condition is inspired from the kqueue backend. See its
+            // documentation for details.
             loop {
-                let t = self.timers.peek();
-                if t.is_null() {
-                    break;
-                }
-                if !Timer::less((), t, &mut now_timer) {
-                    break;
+                // If we're stopped then the loop is fully over.
+                if (*this).flags.stopped {
+                    return Ok(());
                 }
 
-                // Remove the timer
-                assert!(unsafe { self.timers.delete_min() } == t);
+                // We must update our time no matter what.
+                (*this).update_now();
 
-                // Mark completion as done
-                let c = unsafe { (*t).c };
-                unsafe { (*c).flags.state = State::Dead };
-
-                // We mark it as inactive here because if we rearm below the
-                // start() function will reincrement this.
-                self.active -= 1;
-
-                // Lower our remaining count since we have processed something.
-                wait_rem = wait_rem.saturating_sub(1);
-
-                // Invoke
-                let cb = unsafe { (*c).callback };
-                let ud = unsafe { (*c).userdata };
-                let action = cb(ud, self_ptr, c, Result::Timer(Ok(TimerTrigger::Expiration)));
-                match action {
-                    CallbackAction::Disarm => {}
-                    CallbackAction::Rearm => unsafe { self.start_completion(c) },
-                }
-            }
-
-            // Process the completions we already have completed.
-            loop {
-                let c = unsafe { self.completions.pop() };
-                if c.is_null() {
+                let should_continue = ((*this).active > 0 && (wait == 0 || wait_rem > 0))
+                    || !(*this).completions.empty();
+                if !should_continue {
                     break;
                 }
 
-                // We store whether this completion was active so we can decrement
-                // the active count later.
-                let c_active = unsafe { (*c).flags.state } == State::Active;
-                unsafe { (*c).flags.state = State::Dead };
-
-                // Decrease our waiters because we are definitely processing one.
-                wait_rem = wait_rem.saturating_sub(1);
-
-                // Completion queue items MUST have a result set.
-                let result = unsafe { (*c).result.take() }.expect("completion result must be set");
-                let cb = unsafe { (*c).callback };
-                let ud = unsafe { (*c).userdata };
-                let action = cb(ud, self_ptr, c, result);
-                match action {
-                    CallbackAction::Disarm => {
-                        // If we were active, decrement the number of active
-                        // completions.
-                        if c_active {
-                            self.active -= 1;
-                        }
-                    }
-
-                    // Only resubmit if we aren't already active
-                    CallbackAction::Rearm => {
-                        if !c_active {
-                            unsafe { self.submissions.push(c) };
-                        }
-                    }
-                }
-            }
-
-            // Process asyncs
-            if !self.asyncs.empty() {
-                let mut asyncs = core::mem::take(&mut self.asyncs);
-
+                // Run our expired timers.
+                let mut now_timer = Timer {
+                    next: (*this).cached_now,
+                    reset: None,
+                    heap: heap::IntrusiveField::default(),
+                    c: ptr::null_mut(),
+                };
                 loop {
-                    let c = unsafe { asyncs.pop() };
+                    let t = (*this).timers.peek();
+                    if t.is_null() {
+                        break;
+                    }
+                    if !Timer::less((), t, &mut now_timer) {
+                        break;
+                    }
+
+                    // Remove the timer
+                    assert!((*this).timers.delete_min() == t);
+
+                    // Mark completion as done
+                    let c = (*t).c;
+                    (*c).flags.state = State::Dead;
+
+                    // We mark it as inactive here because if we rearm below the
+                    // start() function will reincrement this.
+                    (*this).active -= 1;
+
+                    // Lower our remaining count since we have processed something.
+                    wait_rem = wait_rem.saturating_sub(1);
+
+                    // Invoke
+                    let cb = (*c).callback;
+                    let ud = (*c).userdata;
+                    let action = cb(ud, this, c, Result::Timer(Ok(TimerTrigger::Expiration)));
+                    match action {
+                        CallbackAction::Disarm => {}
+                        CallbackAction::Rearm => Loop::start_completion(this, c),
+                    }
+                }
+
+                // Process the completions we already have completed.
+                loop {
+                    let c = (*this).completions.pop();
                     if c.is_null() {
                         break;
                     }
 
-                    let c_wakeup = match unsafe { &(*c).op } {
-                        Operation::AsyncWait { wakeup } => wakeup.swap(false, Ordering::SeqCst),
-                        _ => unreachable!(),
-                    };
+                    // We store whether this completion was active so we can decrement
+                    // the active count later.
+                    let c_active = (*c).flags.state == State::Active;
+                    (*c).flags.state = State::Dead;
 
-                    // If we aren't waking this one up, requeue
-                    if !c_wakeup {
-                        unsafe { self.asyncs.push(c) };
-                        continue;
-                    }
-
-                    // We are waking up, mark this as dead and call it.
-                    unsafe { (*c).flags.state = State::Dead };
-                    self.active -= 1;
-
-                    // Lower our waiters
+                    // Decrease our waiters because we are definitely processing one.
                     wait_rem = wait_rem.saturating_sub(1);
 
-                    let cb = unsafe { (*c).callback };
-                    let ud = unsafe { (*c).userdata };
-                    let action = cb(ud, self_ptr, c, Result::AsyncWait(Ok(())));
+                    // Completion queue items MUST have a result set.
+                    let result = (*c).result.take().expect("completion result must be set");
+                    let cb = (*c).callback;
+                    let ud = (*c).userdata;
+                    let action = cb(ud, this, c, result);
                     match action {
-                        CallbackAction::Disarm => {}
-                        CallbackAction::Rearm => unsafe { self.start_completion(c) },
+                        CallbackAction::Disarm => {
+                            // If we were active, decrement the number of active
+                            // completions.
+                            if c_active {
+                                (*this).active -= 1;
+                            }
+                        }
+
+                        // Only resubmit if we aren't already active
+                        CallbackAction::Rearm => {
+                            if !c_active {
+                                (*this).submissions.push(c);
+                            }
+                        }
                     }
                 }
-            }
 
-            // If we have processed enough event, we break out of the loop.
-            if wait_rem == 0 {
-                break;
-            }
+                // Process asyncs
+                if !(*this).asyncs.empty() {
+                    let mut asyncs = core::mem::take(&mut (*this).asyncs);
 
-            // Determine our next timeout based on the timers.
-            let timeout: Option<windows::DWORD> = {
-                // If we have a timer, we want to set the timeout to our next
-                // timer value. If we have no timer, we wait forever.
-                let t = self.timers.peek();
-                if t.is_null() {
-                    None
-                } else {
-                    // Determin the time in milliseconds. If the cast fails, we
-                    // fallback to the maximum acceptable value.
-                    let ms_now = self.cached_now / ns_per_ms;
-                    let ms_next = unsafe { (*t).next } / ns_per_ms;
-                    let ms = ms_next.saturating_sub(ms_now);
-                    Some(if ms > windows::DWORD::MAX as u64 {
-                        windows::INFINITE - 1
+                    loop {
+                        let c = asyncs.pop();
+                        if c.is_null() {
+                            break;
+                        }
+
+                        let c_wakeup = match &(*c).op {
+                            Operation::AsyncWait { wakeup } => wakeup.swap(false, Ordering::SeqCst),
+                            _ => unreachable!(),
+                        };
+
+                        // If we aren't waking this one up, requeue
+                        if !c_wakeup {
+                            (*this).asyncs.push(c);
+                            continue;
+                        }
+
+                        // We are waking up, mark this as dead and call it.
+                        (*c).flags.state = State::Dead;
+                        (*this).active -= 1;
+
+                        // Lower our waiters
+                        wait_rem = wait_rem.saturating_sub(1);
+
+                        let cb = (*c).callback;
+                        let ud = (*c).userdata;
+                        let action = cb(ud, this, c, Result::AsyncWait(Ok(())));
+                        match action {
+                            CallbackAction::Disarm => {}
+                            CallbackAction::Rearm => Loop::start_completion(this, c),
+                        }
+                    }
+                }
+
+                // If we have processed enough event, we break out of the loop.
+                if wait_rem == 0 {
+                    break;
+                }
+
+                // Determine our next timeout based on the timers.
+                let timeout: Option<windows::DWORD> = {
+                    // If we have a timer, we want to set the timeout to our next
+                    // timer value. If we have no timer, we wait forever.
+                    let t = (*this).timers.peek();
+                    if t.is_null() {
+                        None
                     } else {
-                        ms as windows::DWORD
-                    })
-                }
-            };
-
-            // Wait for changes IO completions.
-            let count: u32 = match unsafe {
-                windows::GetQueuedCompletionStatusEx(self.iocp_handle, &mut entries, timeout, false)
-            } {
-                Ok(n) => n,
-                // A timeout means that nothing was completed.
-                Err(windows::GetQueuedCompletionStatusError::Timeout) => 0,
-                Err(_) => return Err(Error),
-            };
-
-            // Go through the entries and perform completions callbacks.
-            for entry in entries.iter().take(count as usize) {
-                let completion: *mut Completion = if entry.lpCompletionKey == 0 {
-                    // We retrieve the Completion from the OVERLAPPED pointer as we
-                    // know it's a part of the Completion struct.
-                    let overlapped_ptr: *mut OVERLAPPED = entry.lpOverlapped;
-                    if overlapped_ptr.is_null() {
-                        // Probably an async wakeup
-                        continue;
+                        // Determin the time in milliseconds. If the cast fails, we
+                        // fallback to the maximum acceptable value.
+                        let ms_now = (*this).cached_now / ns_per_ms;
+                        let ms_next = (*t).next / ns_per_ms;
+                        let ms = ms_next.saturating_sub(ms_now);
+                        Some(if ms > windows::DWORD::MAX as u64 {
+                            windows::INFINITE - 1
+                        } else {
+                            ms as windows::DWORD
+                        })
                     }
+                };
 
-                    // @fieldParentPtr("overlapped", overlapped_ptr) — container_of.
-                    unsafe {
+                // Wait for changes IO completions.
+                let count: u32 = match windows::GetQueuedCompletionStatusEx(
+                    (*this).iocp_handle,
+                    &mut entries,
+                    timeout,
+                    false,
+                ) {
+                    Ok(n) => n,
+                    // A timeout means that nothing was completed.
+                    Err(windows::GetQueuedCompletionStatusError::Timeout) => 0,
+                    Err(_) => return Err(Error),
+                };
+
+                // Go through the entries and perform completions callbacks.
+                for entry in entries.iter().take(count as usize) {
+                    let completion: *mut Completion = if entry.lpCompletionKey == 0 {
+                        // We retrieve the Completion from the OVERLAPPED pointer as we
+                        // know it's a part of the Completion struct.
+                        let overlapped_ptr: *mut OVERLAPPED = entry.lpOverlapped;
+                        if overlapped_ptr.is_null() {
+                            // Probably an async wakeup
+                            continue;
+                        }
+
+                        // @fieldParentPtr("overlapped", overlapped_ptr) — container_of.
                         overlapped_ptr
                             .cast::<u8>()
                             .sub(core::mem::offset_of!(Completion, overlapped))
                             .cast::<Completion>()
-                    }
-                } else {
-                    // JobObjects are a special case where the OVERLAPPED_ENTRY
-                    // fields are interpreted differently. When
-                    // JOBOBJECT_ASSOCIATE_COMPLETION_PORT is used, lpOverlapped
-                    // actually contains the message value, and not the address of
-                    // the overlapped structure. The Completion pointer is passed
-                    // as the completion key instead.
-                    let completion = entry.lpCompletionKey as *mut Completion;
-                    unsafe {
-                        (*completion).result =
-                            Some(Result::JobObject(Ok(JobObjectResult::Message {
-                                type_: windows::exp::JOB_OBJECT_MSG_TYPE(
-                                    entry.dwNumberOfBytesTransferred,
-                                ),
-                                value: entry.lpOverlapped as usize,
-                            })));
-                    }
-                    completion
-                };
+                    } else {
+                        // JobObjects are a special case where the OVERLAPPED_ENTRY
+                        // fields are interpreted differently. When
+                        // JOBOBJECT_ASSOCIATE_COMPLETION_PORT is used, lpOverlapped
+                        // actually contains the message value, and not the address of
+                        // the overlapped structure. The Completion pointer is passed
+                        // as the completion key instead.
+                        let completion = entry.lpCompletionKey as *mut Completion;
+                        {
+                            (*completion).result =
+                                Some(Result::JobObject(Ok(JobObjectResult::Message {
+                                    type_: windows::exp::JOB_OBJECT_MSG_TYPE(
+                                        entry.dwNumberOfBytesTransferred,
+                                    ),
+                                    value: entry.lpOverlapped as usize,
+                                })));
+                        }
+                        completion
+                    };
 
-                wait_rem = wait_rem.saturating_sub(1);
+                    wait_rem = wait_rem.saturating_sub(1);
 
-                self.active -= 1;
-                unsafe { (*completion).flags.state = State::Dead };
+                    (*this).active -= 1;
+                    (*completion).flags.state = State::Dead;
 
-                let result = unsafe { Completion::perform(completion) };
-                let cb = unsafe { (*completion).callback };
-                let ud = unsafe { (*completion).userdata };
-                let action = cb(ud, self_ptr, completion, result);
-                match action {
-                    CallbackAction::Disarm => {}
-                    CallbackAction::Rearm => {
-                        unsafe { Completion::reset(completion) };
-                        unsafe { self.start_completion(completion) };
+                    let result = Completion::perform(completion);
+                    let cb = (*completion).callback;
+                    let ud = (*completion).userdata;
+                    let action = cb(ud, this, completion, result);
+                    match action {
+                        CallbackAction::Disarm => {}
+                        CallbackAction::Rearm => {
+                            Completion::reset(completion);
+                            Loop::start_completion(this, completion);
+                        }
                     }
+                }
+
+                // If we ran through the loop once we break if we don't care.
+                if wait == 0 {
+                    break;
                 }
             }
 
-            // If we ran through the loop once we break if we don't care.
-            if wait == 0 {
-                break;
-            }
+            Ok(())
         }
-
-        Ok(())
     }
 
     /// Returns the "loop" time in milliseconds. The loop time is updated once per
@@ -670,8 +727,9 @@ impl Loop {
             // timer isn't in the heap yet.
             State::Adding => {
                 let next = self.timer_next(next_ms);
-                if let Operation::Timer(v) = unsafe { &mut (*c).op } {
-                    v.next = next;
+                // N434: through `timer_ptr`, never `&mut (*c).op`.
+                if matches!(unsafe { &(*c).op }, Operation::Timer(_)) {
+                    unsafe { (*timer_ptr(c)).next = next };
                 }
                 unsafe { (*c).userdata = userdata };
                 unsafe { (*c).callback = cb };
@@ -681,8 +739,10 @@ impl Loop {
                 // Update the reset time for the timer to the desired time along
                 // with all the callbacks.
                 let next = self.timer_next(next_ms);
-                if let Operation::Timer(v) = unsafe { &mut (*c).op } {
-                    v.reset = Some(next);
+                // N434: the timer is linked in the heap; `timer_ptr`, never
+                // `&mut (*c).op`.
+                if matches!(unsafe { &(*c).op }, Operation::Timer(_)) {
+                    unsafe { (*timer_ptr(c)).reset = Some(next) };
                 }
                 unsafe { (*c).userdata = userdata };
                 unsafe { (*c).callback = cb };
@@ -720,92 +780,105 @@ impl Loop {
     ///
     /// # Safety
     /// `completion` must be a valid, stable `Completion` pointer.
-    unsafe fn start_completion(&mut self, completion: *mut Completion) {
-        let self_ptr: *mut Loop = self;
+    unsafe fn start_completion(this: *mut Loop, completion: *mut Completion) {
+        unsafe {
+            // PORT NOTE: `const StartAction = union(enum) { submitted, timer, cancel,
+            // async_wait, result: Result };`
+            enum StartAction {
+                // We successfully submitted the operation.
+                Submitted,
+                // We are a timer.
+                TimerA,
+                // We are a cancellation.
+                CancelA,
+                // We are an async wait
+                AsyncWaitA,
+                // We have a result code from making a system call now.
+                ResultA(Result),
+            }
 
-        // PORT NOTE: `const StartAction = union(enum) { submitted, timer, cancel,
-        // async_wait, result: Result };`
-        enum StartAction {
-            // We successfully submitted the operation.
-            Submitted,
-            // We are a timer.
-            TimerA,
-            // We are a cancellation.
-            CancelA,
-            // We are an async wait
-            AsyncWaitA,
-            // We have a result code from making a system call now.
-            ResultA(Result),
-        }
-
-        let action: StartAction = match unsafe { &mut (*completion).op } {
-            Operation::Noop => {
-                unsafe { (*completion).flags.state = State::Dead };
+            // PORT NOTE (N385): the reference's `.async_wait => {
+            // self.asyncs.push(completion); break :action .async_wait; }` arm, and
+            // its `.async_wait` tail below, taken here through a SHARED borrow of
+            // `op`. From `AsyncIOCP.wait` on, another thread may run `notify` ->
+            // `async_notify_handle`, which reads `op` and stores its `wakeup` atomic;
+            // a `&mut Operation` live across that access is invalidated under
+            // Stacked Borrows (mirihar-n385 `cached_mutop`: UB under SB). No other
+            // operation is touched off the loop thread, so the `&mut` match below
+            // stays as it was. Behaviour is unchanged.
+            if matches!(&(*completion).op, Operation::AsyncWait { .. }) {
+                (*this).asyncs.push(completion);
+                // .async_wait => { self.active += 1; completion.flags.state = .active; }
+                // We are considered an active completion.
+                (*this).active += 1;
+                (*completion).flags.state = State::Active;
                 return;
             }
 
-            Operation::Accept {
-                socket,
-                storage,
-                internal_accept_socket,
-            } => 'action: {
-                let socket = *socket;
-                if internal_accept_socket.is_none() {
-                    let mut addr: ws2_32::sockaddr_storage = unsafe { core::mem::zeroed() };
-                    let mut addr_len: i32 = core::mem::size_of::<ws2_32::sockaddr_storage>() as i32;
+            let action: StartAction = match &mut (*completion).op {
+                Operation::Noop => {
+                    (*completion).flags.state = State::Dead;
+                    return;
+                }
 
-                    debug_assert!(
-                        unsafe {
+                Operation::Accept {
+                    socket,
+                    storage,
+                    internal_accept_socket,
+                } => 'action: {
+                    let socket = *socket;
+                    if internal_accept_socket.is_none() {
+                        let mut addr: ws2_32::sockaddr_storage = core::mem::zeroed();
+                        let mut addr_len: i32 =
+                            core::mem::size_of::<ws2_32::sockaddr_storage>() as i32;
+
+                        debug_assert!(
                             ws2_32::getsockname(
                                 as_socket(socket),
                                 (&mut addr as *mut ws2_32::sockaddr_storage)
                                     .cast::<ws2_32::sockaddr>(),
                                 &mut addr_len,
-                            )
-                        } == 0
-                    );
+                            ) == 0
+                        );
 
-                    let mut socket_type: i32 = 0;
-                    let mut opt_len: i32 = core::mem::size_of::<i32>() as i32;
-                    debug_assert!(
-                        unsafe {
+                        let mut socket_type: i32 = 0;
+                        let mut opt_len: i32 = core::mem::size_of::<i32>() as i32;
+                        debug_assert!(
                             ws2_32::getsockopt(
                                 as_socket(socket),
                                 ws2_32::SOL_SOCKET,
                                 ws2_32::SO_TYPE,
                                 (&mut socket_type as *mut i32).cast::<u8>(),
                                 &mut opt_len,
-                            )
-                        } == 0
-                    );
+                            ) == 0
+                        );
 
-                    match unsafe {
-                        windows::WSASocketW(
+                        match windows::WSASocketW(
                             addr.family as i32,
                             socket_type,
                             0,
                             ptr::null_mut(),
                             0,
                             ws2_32::WSA_FLAG_OVERLAPPED,
-                        )
-                    } {
-                        Ok(s) => *internal_accept_socket = Some(s),
-                        Err(_) => {
-                            break 'action StartAction::ResultA(Result::Accept(Err(
-                                AcceptError::Unexpected,
-                            )))
+                        ) {
+                            Ok(s) => *internal_accept_socket = Some(s),
+                            Err(_) => {
+                                break 'action StartAction::ResultA(Result::Accept(Err(
+                                    AcceptError::Unexpected,
+                                )))
+                            }
                         }
                     }
-                }
 
-                let accept_socket = internal_accept_socket.unwrap();
-                let storage_ptr = storage.as_mut_ptr();
+                    let accept_socket = internal_accept_socket.unwrap();
+                    let storage_ptr = storage.as_mut_ptr();
 
-                unsafe { self.associate_fd(Completion::handle(completion).unwrap()) }.unwrap();
+                    (*this)
+                        .associate_fd(Completion::handle(completion).unwrap())
+                        .unwrap();
 
-                let mut discard: u32 = 0;
-                let result = unsafe {
-                    ws2_32::AcceptEx(
+                    let mut discard: u32 = 0;
+                    let result = ws2_32::AcceptEx(
                         as_socket(socket),
                         as_socket(accept_socket),
                         storage_ptr.cast::<core::ffi::c_void>(),
@@ -814,147 +887,165 @@ impl Loop {
                         core::mem::size_of::<ws2_32::sockaddr_storage>() as u32,
                         &mut discard,
                         ptr::addr_of_mut!((*completion).overlapped),
-                    )
-                };
-                if result != windows::TRUE {
-                    let err = unsafe { ws2_32::WSAGetLastError() };
-                    match err {
-                        ws2_32::WinsockError::WSA_IO_PENDING => {
-                            break 'action StartAction::Submitted
-                        }
-                        _ => {
-                            let _ = unsafe { windows::CloseHandle(accept_socket) };
-                            break 'action StartAction::ResultA(Result::Accept(Err(
-                                AcceptError::Unexpected,
-                            )));
+                    );
+                    if result != windows::TRUE {
+                        let err = ws2_32::WSAGetLastError();
+                        match err {
+                            ws2_32::WinsockError::WSA_IO_PENDING => {
+                                break 'action StartAction::Submitted
+                            }
+                            _ => {
+                                let _ = windows::CloseHandle(accept_socket);
+                                break 'action StartAction::ResultA(Result::Accept(Err(
+                                    AcceptError::Unexpected,
+                                )));
+                            }
                         }
                     }
+
+                    StartAction::Submitted
                 }
 
-                StartAction::Submitted
-            }
+                Operation::Close { fd } => StartAction::ResultA(Result::Close(
+                    windows::CloseHandle(*fd).map_err(|_| CloseError::Unexpected),
+                )),
 
-            Operation::Close { fd } => StartAction::ResultA(Result::Close(
-                unsafe { windows::CloseHandle(*fd) }.map_err(|_| CloseError::Unexpected),
-            )),
-
-            Operation::Connect { socket, addr } => {
-                let result = unsafe {
-                    ws2_32::connect(
+                Operation::Connect { socket, addr } => {
+                    let result = ws2_32::connect(
                         as_socket(*socket),
                         (addr as *const net::Address).cast::<ws2_32::sockaddr>(),
                         addr.get_os_sock_len(),
-                    )
-                };
-                if result != 0 {
-                    StartAction::ResultA(Result::Connect(Err(ConnectError::Unexpected)))
-                } else {
-                    StartAction::ResultA(Result::Connect(Ok(())))
-                }
-            }
-
-            Operation::Read { fd, buffer } => {
-                let fd = *fd;
-                let buffer: *mut [u8] = buffer.as_mut_slice_ptr();
-                unsafe { self.associate_fd(Completion::handle(completion).unwrap()) }.unwrap();
-                match unsafe {
-                    windows::exp::ReadFile(fd, buffer, ptr::addr_of_mut!((*completion).overlapped))
-                } {
-                    Ok(_) => StartAction::Submitted,
-                    Err(err) => StartAction::ResultA(Result::Read(Err(ReadError::from_file(err)))),
-                }
-            }
-
-            Operation::PRead { fd, buffer, offset } => {
-                let fd = *fd;
-                let offset = *offset;
-                let buffer: *mut [u8] = buffer.as_mut_slice_ptr();
-                unsafe { self.associate_fd(Completion::handle(completion).unwrap()) }.unwrap();
-                unsafe {
-                    (*completion)
-                        .overlapped
-                        .DUMMYUNIONNAME
-                        .DUMMYSTRUCTNAME
-                        .Offset = (offset & 0xFFFF_FFFF) as windows::DWORD;
-                    (*completion)
-                        .overlapped
-                        .DUMMYUNIONNAME
-                        .DUMMYSTRUCTNAME
-                        .OffsetHigh = (offset >> 32) as windows::DWORD;
-                }
-                match unsafe {
-                    windows::exp::ReadFile(fd, buffer, ptr::addr_of_mut!((*completion).overlapped))
-                } {
-                    Ok(_) => StartAction::Submitted,
-                    Err(err) => StartAction::ResultA(Result::PRead(Err(ReadError::from_file(err)))),
-                }
-            }
-
-            Operation::Shutdown { socket, how } => StartAction::ResultA(Result::Shutdown({
-                let r = unsafe { ws2_32::shutdown(as_socket(*socket), *how as i32) };
-                if r == 0 {
-                    Ok(())
-                } else {
-                    Err(ShutdownError::Unexpected)
-                }
-            })),
-
-            Operation::Write { fd, buffer } => {
-                let fd = *fd;
-                let buffer: *const [u8] = buffer.as_slice_ptr();
-                unsafe { self.associate_fd(Completion::handle(completion).unwrap()) }.unwrap();
-                match unsafe {
-                    windows::exp::WriteFile(fd, buffer, ptr::addr_of_mut!((*completion).overlapped))
-                } {
-                    Ok(_) => StartAction::Submitted,
-                    Err(err) => {
-                        StartAction::ResultA(Result::Write(Err(WriteError::from_file(err))))
+                    );
+                    if result != 0 {
+                        StartAction::ResultA(Result::Connect(Err(ConnectError::Unexpected)))
+                    } else {
+                        StartAction::ResultA(Result::Connect(Ok(())))
                     }
                 }
-            }
 
-            Operation::PWrite { fd, buffer, offset } => {
-                let fd = *fd;
-                let offset = *offset;
-                let buffer: *const [u8] = buffer.as_slice_ptr();
-                unsafe { self.associate_fd(Completion::handle(completion).unwrap()) }.unwrap();
-                unsafe {
-                    (*completion)
-                        .overlapped
-                        .DUMMYUNIONNAME
-                        .DUMMYSTRUCTNAME
-                        .Offset = (offset & 0xFFFF_FFFF) as windows::DWORD;
-                    (*completion)
-                        .overlapped
-                        .DUMMYUNIONNAME
-                        .DUMMYSTRUCTNAME
-                        .OffsetHigh = (offset >> 32) as windows::DWORD;
-                }
-                match unsafe {
-                    windows::exp::WriteFile(fd, buffer, ptr::addr_of_mut!((*completion).overlapped))
-                } {
-                    Ok(_) => StartAction::Submitted,
-                    Err(err) => {
-                        StartAction::ResultA(Result::PWrite(Err(WriteError::from_file(err))))
+                Operation::Read { fd, buffer } => {
+                    let fd = *fd;
+                    let buffer: *mut [u8] = buffer.as_mut_slice_ptr();
+                    (*this)
+                        .associate_fd(Completion::handle(completion).unwrap())
+                        .unwrap();
+                    match windows::exp::ReadFile(
+                        fd,
+                        buffer,
+                        ptr::addr_of_mut!((*completion).overlapped),
+                    ) {
+                        Ok(_) => StartAction::Submitted,
+                        Err(err) => {
+                            StartAction::ResultA(Result::Read(Err(ReadError::from_file(err))))
+                        }
                     }
                 }
-            }
 
-            Operation::Send {
-                fd,
-                buffer,
-                wsa_buffer,
-            } => {
-                let fd = *fd;
-                let (bptr, blen) = buffer.as_parts();
-                *wsa_buffer = ws2_32::WSABUF {
-                    buf: bptr as *mut u8,
-                    len: blen as u32,
-                };
-                let wsa_ptr: *mut ws2_32::WSABUF = wsa_buffer;
-                unsafe { self.associate_fd(Completion::handle(completion).unwrap()) }.unwrap();
-                let result = unsafe {
-                    ws2_32::WSASend(
+                Operation::PRead { fd, buffer, offset } => {
+                    let fd = *fd;
+                    let offset = *offset;
+                    let buffer: *mut [u8] = buffer.as_mut_slice_ptr();
+                    (*this)
+                        .associate_fd(Completion::handle(completion).unwrap())
+                        .unwrap();
+                    {
+                        (*completion)
+                            .overlapped
+                            .DUMMYUNIONNAME
+                            .DUMMYSTRUCTNAME
+                            .Offset = (offset & 0xFFFF_FFFF) as windows::DWORD;
+                        (*completion)
+                            .overlapped
+                            .DUMMYUNIONNAME
+                            .DUMMYSTRUCTNAME
+                            .OffsetHigh = (offset >> 32) as windows::DWORD;
+                    }
+                    match windows::exp::ReadFile(
+                        fd,
+                        buffer,
+                        ptr::addr_of_mut!((*completion).overlapped),
+                    ) {
+                        Ok(_) => StartAction::Submitted,
+                        Err(err) => {
+                            StartAction::ResultA(Result::PRead(Err(ReadError::from_file(err))))
+                        }
+                    }
+                }
+
+                Operation::Shutdown { socket, how } => StartAction::ResultA(Result::Shutdown({
+                    let r = ws2_32::shutdown(as_socket(*socket), *how as i32);
+                    if r == 0 {
+                        Ok(())
+                    } else {
+                        Err(ShutdownError::Unexpected)
+                    }
+                })),
+
+                Operation::Write { fd, buffer } => {
+                    let fd = *fd;
+                    let buffer: *const [u8] = buffer.as_slice_ptr();
+                    (*this)
+                        .associate_fd(Completion::handle(completion).unwrap())
+                        .unwrap();
+                    match windows::exp::WriteFile(
+                        fd,
+                        buffer,
+                        ptr::addr_of_mut!((*completion).overlapped),
+                    ) {
+                        Ok(_) => StartAction::Submitted,
+                        Err(err) => {
+                            StartAction::ResultA(Result::Write(Err(WriteError::from_file(err))))
+                        }
+                    }
+                }
+
+                Operation::PWrite { fd, buffer, offset } => {
+                    let fd = *fd;
+                    let offset = *offset;
+                    let buffer: *const [u8] = buffer.as_slice_ptr();
+                    (*this)
+                        .associate_fd(Completion::handle(completion).unwrap())
+                        .unwrap();
+                    {
+                        (*completion)
+                            .overlapped
+                            .DUMMYUNIONNAME
+                            .DUMMYSTRUCTNAME
+                            .Offset = (offset & 0xFFFF_FFFF) as windows::DWORD;
+                        (*completion)
+                            .overlapped
+                            .DUMMYUNIONNAME
+                            .DUMMYSTRUCTNAME
+                            .OffsetHigh = (offset >> 32) as windows::DWORD;
+                    }
+                    match windows::exp::WriteFile(
+                        fd,
+                        buffer,
+                        ptr::addr_of_mut!((*completion).overlapped),
+                    ) {
+                        Ok(_) => StartAction::Submitted,
+                        Err(err) => {
+                            StartAction::ResultA(Result::PWrite(Err(WriteError::from_file(err))))
+                        }
+                    }
+                }
+
+                Operation::Send {
+                    fd,
+                    buffer,
+                    wsa_buffer,
+                } => {
+                    let fd = *fd;
+                    let (bptr, blen) = buffer.as_parts();
+                    *wsa_buffer = ws2_32::WSABUF {
+                        buf: bptr as *mut u8,
+                        len: blen as u32,
+                    };
+                    let wsa_ptr: *mut ws2_32::WSABUF = wsa_buffer;
+                    (*this)
+                        .associate_fd(Completion::handle(completion).unwrap())
+                        .unwrap();
+                    let result = ws2_32::WSASend(
                         as_socket(fd),
                         wsa_ptr,
                         1,
@@ -962,45 +1053,45 @@ impl Loop {
                         0,
                         ptr::addr_of_mut!((*completion).overlapped),
                         ptr::null_mut(),
-                    )
-                };
-                if result != 0 {
-                    let err = unsafe { ws2_32::WSAGetLastError() };
-                    match err {
-                        ws2_32::WinsockError::WSA_IO_PENDING => StartAction::Submitted,
-                        ws2_32::WinsockError::WSA_OPERATION_ABORTED
-                        | ws2_32::WinsockError::WSAECONNABORTED => {
-                            StartAction::ResultA(Result::Send(Err(WriteError::Canceled)))
+                    );
+                    if result != 0 {
+                        let err = ws2_32::WSAGetLastError();
+                        match err {
+                            ws2_32::WinsockError::WSA_IO_PENDING => StartAction::Submitted,
+                            ws2_32::WinsockError::WSA_OPERATION_ABORTED
+                            | ws2_32::WinsockError::WSAECONNABORTED => {
+                                StartAction::ResultA(Result::Send(Err(WriteError::Canceled)))
+                            }
+                            ws2_32::WinsockError::WSAECONNRESET
+                            | ws2_32::WinsockError::WSAENETRESET => StartAction::ResultA(
+                                Result::Send(Err(WriteError::ConnectionResetByPeer)),
+                            ),
+                            _ => StartAction::ResultA(Result::Send(Err(WriteError::Unexpected))),
                         }
-                        ws2_32::WinsockError::WSAECONNRESET
-                        | ws2_32::WinsockError::WSAENETRESET => StartAction::ResultA(Result::Send(
-                            Err(WriteError::ConnectionResetByPeer),
-                        )),
-                        _ => StartAction::ResultA(Result::Send(Err(WriteError::Unexpected))),
+                    } else {
+                        StartAction::Submitted
                     }
-                } else {
-                    StartAction::Submitted
                 }
-            }
 
-            Operation::Recv {
-                fd,
-                buffer,
-                wsa_buffer,
-            } => {
-                let fd = *fd;
-                let (bptr, blen) = buffer.as_mut_parts();
-                *wsa_buffer = ws2_32::WSABUF {
-                    buf: bptr,
-                    len: blen as u32,
-                };
-                let wsa_ptr: *mut ws2_32::WSABUF = wsa_buffer;
-                unsafe { self.associate_fd(Completion::handle(completion).unwrap()) }.unwrap();
+                Operation::Recv {
+                    fd,
+                    buffer,
+                    wsa_buffer,
+                } => {
+                    let fd = *fd;
+                    let (bptr, blen) = buffer.as_mut_parts();
+                    *wsa_buffer = ws2_32::WSABUF {
+                        buf: bptr,
+                        len: blen as u32,
+                    };
+                    let wsa_ptr: *mut ws2_32::WSABUF = wsa_buffer;
+                    (*this)
+                        .associate_fd(Completion::handle(completion).unwrap())
+                        .unwrap();
 
-                let mut flags: u32 = 0;
+                    let mut flags: u32 = 0;
 
-                let result = unsafe {
-                    ws2_32::WSARecv(
+                    let result = ws2_32::WSARecv(
                         as_socket(fd),
                         wsa_ptr,
                         1,
@@ -1008,45 +1099,45 @@ impl Loop {
                         &mut flags,
                         ptr::addr_of_mut!((*completion).overlapped),
                         ptr::null_mut(),
-                    )
-                };
-                if result != 0 {
-                    let err = unsafe { ws2_32::WSAGetLastError() };
-                    match err {
-                        ws2_32::WinsockError::WSA_IO_PENDING => StartAction::Submitted,
-                        ws2_32::WinsockError::WSA_OPERATION_ABORTED
-                        | ws2_32::WinsockError::WSAECONNABORTED => {
-                            StartAction::ResultA(Result::Recv(Err(ReadError::Canceled)))
+                    );
+                    if result != 0 {
+                        let err = ws2_32::WSAGetLastError();
+                        match err {
+                            ws2_32::WinsockError::WSA_IO_PENDING => StartAction::Submitted,
+                            ws2_32::WinsockError::WSA_OPERATION_ABORTED
+                            | ws2_32::WinsockError::WSAECONNABORTED => {
+                                StartAction::ResultA(Result::Recv(Err(ReadError::Canceled)))
+                            }
+                            ws2_32::WinsockError::WSAECONNRESET
+                            | ws2_32::WinsockError::WSAENETRESET => StartAction::ResultA(
+                                Result::Recv(Err(ReadError::ConnectionResetByPeer)),
+                            ),
+                            _ => StartAction::ResultA(Result::Recv(Err(ReadError::Unexpected))),
                         }
-                        ws2_32::WinsockError::WSAECONNRESET
-                        | ws2_32::WinsockError::WSAENETRESET => StartAction::ResultA(Result::Recv(
-                            Err(ReadError::ConnectionResetByPeer),
-                        )),
-                        _ => StartAction::ResultA(Result::Recv(Err(ReadError::Unexpected))),
+                    } else {
+                        StartAction::Submitted
                     }
-                } else {
-                    StartAction::Submitted
                 }
-            }
 
-            Operation::SendTo {
-                fd,
-                buffer,
-                addr,
-                wsa_buffer,
-            } => {
-                let fd = *fd;
-                let (bptr, blen) = buffer.as_parts();
-                *wsa_buffer = ws2_32::WSABUF {
-                    buf: bptr as *mut u8,
-                    len: blen as u32,
-                };
-                let wsa_ptr: *mut ws2_32::WSABUF = wsa_buffer;
-                let addr_ptr = (addr as *const net::Address).cast::<ws2_32::sockaddr>();
-                let addr_len = addr.get_os_sock_len();
-                unsafe { self.associate_fd(Completion::handle(completion).unwrap()) }.unwrap();
-                let result = unsafe {
-                    ws2_32::WSASendTo(
+                Operation::SendTo {
+                    fd,
+                    buffer,
+                    addr,
+                    wsa_buffer,
+                } => {
+                    let fd = *fd;
+                    let (bptr, blen) = buffer.as_parts();
+                    *wsa_buffer = ws2_32::WSABUF {
+                        buf: bptr as *mut u8,
+                        len: blen as u32,
+                    };
+                    let wsa_ptr: *mut ws2_32::WSABUF = wsa_buffer;
+                    let addr_ptr = (addr as *const net::Address).cast::<ws2_32::sockaddr>();
+                    let addr_len = addr.get_os_sock_len();
+                    (*this)
+                        .associate_fd(Completion::handle(completion).unwrap())
+                        .unwrap();
+                    let result = ws2_32::WSASendTo(
                         as_socket(fd),
                         wsa_ptr,
                         1,
@@ -1056,49 +1147,49 @@ impl Loop {
                         addr_len,
                         ptr::addr_of_mut!((*completion).overlapped),
                         ptr::null_mut(),
-                    )
-                };
-                if result != 0 {
-                    let err = unsafe { ws2_32::WSAGetLastError() };
-                    match err {
-                        ws2_32::WinsockError::WSA_IO_PENDING => StartAction::Submitted,
-                        ws2_32::WinsockError::WSA_OPERATION_ABORTED
-                        | ws2_32::WinsockError::WSAECONNABORTED => {
-                            StartAction::ResultA(Result::SendTo(Err(WriteError::Canceled)))
+                    );
+                    if result != 0 {
+                        let err = ws2_32::WSAGetLastError();
+                        match err {
+                            ws2_32::WinsockError::WSA_IO_PENDING => StartAction::Submitted,
+                            ws2_32::WinsockError::WSA_OPERATION_ABORTED
+                            | ws2_32::WinsockError::WSAECONNABORTED => {
+                                StartAction::ResultA(Result::SendTo(Err(WriteError::Canceled)))
+                            }
+                            ws2_32::WinsockError::WSAECONNRESET
+                            | ws2_32::WinsockError::WSAENETRESET => StartAction::ResultA(
+                                Result::SendTo(Err(WriteError::ConnectionResetByPeer)),
+                            ),
+                            _ => StartAction::ResultA(Result::SendTo(Err(WriteError::Unexpected))),
                         }
-                        ws2_32::WinsockError::WSAECONNRESET
-                        | ws2_32::WinsockError::WSAENETRESET => StartAction::ResultA(
-                            Result::SendTo(Err(WriteError::ConnectionResetByPeer)),
-                        ),
-                        _ => StartAction::ResultA(Result::SendTo(Err(WriteError::Unexpected))),
+                    } else {
+                        StartAction::Submitted
                     }
-                } else {
-                    StartAction::Submitted
                 }
-            }
 
-            Operation::RecvFrom {
-                fd,
-                buffer,
-                addr,
-                addr_size,
-                wsa_buffer,
-            } => {
-                let fd = *fd;
-                let (bptr, blen) = buffer.as_mut_parts();
-                *wsa_buffer = ws2_32::WSABUF {
-                    buf: bptr,
-                    len: blen as u32,
-                };
-                let wsa_ptr: *mut ws2_32::WSABUF = wsa_buffer;
-                let addr_ptr: *mut ws2_32::sockaddr = addr;
-                let addr_size_ptr: *mut i32 = addr_size;
-                unsafe { self.associate_fd(Completion::handle(completion).unwrap()) }.unwrap();
+                Operation::RecvFrom {
+                    fd,
+                    buffer,
+                    addr,
+                    addr_size,
+                    wsa_buffer,
+                } => {
+                    let fd = *fd;
+                    let (bptr, blen) = buffer.as_mut_parts();
+                    *wsa_buffer = ws2_32::WSABUF {
+                        buf: bptr,
+                        len: blen as u32,
+                    };
+                    let wsa_ptr: *mut ws2_32::WSABUF = wsa_buffer;
+                    let addr_ptr: *mut ws2_32::sockaddr = addr;
+                    let addr_size_ptr: *mut i32 = addr_size;
+                    (*this)
+                        .associate_fd(Completion::handle(completion).unwrap())
+                        .unwrap();
 
-                let mut flags: u32 = 0;
+                    let mut flags: u32 = 0;
 
-                let result = unsafe {
-                    ws2_32::WSARecvFrom(
+                    let result = ws2_32::WSARecvFrom(
                         as_socket(fd),
                         wsa_ptr,
                         1,
@@ -1108,116 +1199,112 @@ impl Loop {
                         addr_size_ptr,
                         ptr::addr_of_mut!((*completion).overlapped),
                         ptr::null_mut(),
-                    )
-                };
-                if result != 0 {
-                    let err = unsafe { ws2_32::WSAGetLastError() };
-                    match err {
-                        ws2_32::WinsockError::WSA_IO_PENDING => StartAction::Submitted,
-                        ws2_32::WinsockError::WSA_OPERATION_ABORTED
-                        | ws2_32::WinsockError::WSAECONNABORTED => {
-                            StartAction::ResultA(Result::RecvFrom(Err(ReadError::Canceled)))
+                    );
+                    if result != 0 {
+                        let err = ws2_32::WSAGetLastError();
+                        match err {
+                            ws2_32::WinsockError::WSA_IO_PENDING => StartAction::Submitted,
+                            ws2_32::WinsockError::WSA_OPERATION_ABORTED
+                            | ws2_32::WinsockError::WSAECONNABORTED => {
+                                StartAction::ResultA(Result::RecvFrom(Err(ReadError::Canceled)))
+                            }
+                            ws2_32::WinsockError::WSAECONNRESET
+                            | ws2_32::WinsockError::WSAENETRESET => StartAction::ResultA(
+                                Result::RecvFrom(Err(ReadError::ConnectionResetByPeer)),
+                            ),
+                            _ => StartAction::ResultA(Result::RecvFrom(Err(ReadError::Unexpected))),
                         }
-                        ws2_32::WinsockError::WSAECONNRESET
-                        | ws2_32::WinsockError::WSAENETRESET => StartAction::ResultA(
-                            Result::RecvFrom(Err(ReadError::ConnectionResetByPeer)),
-                        ),
-                        _ => StartAction::ResultA(Result::RecvFrom(Err(ReadError::Unexpected))),
+                    } else {
+                        StartAction::Submitted
                     }
-                } else {
-                    StartAction::Submitted
                 }
-            }
 
-            Operation::Timer(v) => {
-                v.c = completion;
-                let v_ptr: *mut Timer = v;
-                unsafe { self.timers.insert(v_ptr) };
-                StartAction::TimerA
-            }
+                Operation::Timer(_) => {
+                    // N434: the heap keeps this pointer; it carries the
+                    // completion's own tag (`timer_ptr`), not the `&mut` op
+                    // borrow of this match.
+                    let v_ptr: *mut Timer = timer_ptr(completion);
+                    (*v_ptr).c = completion;
+                    (*this).timers.insert(v_ptr);
+                    StartAction::TimerA
+                }
 
-            Operation::Cancel { .. } => {
-                unsafe { self.cancellations.push(completion) };
-                StartAction::CancelA
-            }
+                Operation::Cancel { .. } => {
+                    (*this).cancellations.push(completion);
+                    StartAction::CancelA
+                }
 
-            Operation::AsyncWait { .. } => {
-                unsafe { self.asyncs.push(completion) };
-                StartAction::AsyncWaitA
-            }
+                // Started above through a shared borrow (N385).
+                Operation::AsyncWait { .. } => unreachable!(),
 
-            Operation::JobObject {
-                job, associated, ..
-            } => {
-                if !*associated {
-                    let job = *job;
-                    let mut port = windows::exp::JOBOBJECT_ASSOCIATE_COMPLETION_PORT {
-                        CompletionKey: completion as usize,
-                        CompletionPort: self.iocp_handle,
-                    };
+                Operation::JobObject {
+                    job, associated, ..
+                } => {
+                    if !*associated {
+                        let job = *job;
+                        let mut port = windows::exp::JOBOBJECT_ASSOCIATE_COMPLETION_PORT {
+                            CompletionKey: completion as usize,
+                            CompletionPort: (*this).iocp_handle,
+                        };
 
-                    match unsafe {
-                        windows::exp::SetInformationJobObject(
+                        match windows::exp::SetInformationJobObject(
                             job,
                             windows::exp::JOBOBJECT_INFORMATION_CLASS::JobObjectAssociateCompletionPortInformation,
                             (&mut port as *mut windows::exp::JOBOBJECT_ASSOCIATE_COMPLETION_PORT)
                                 .cast::<core::ffi::c_void>(),
                             core::mem::size_of::<windows::exp::JOBOBJECT_ASSOCIATE_COMPLETION_PORT>()
                                 as windows::DWORD,
-                        )
-                    } {
+                        ) {
                         Err(_) => {
                             StartAction::ResultA(Result::JobObject(Err(JobObjectError::Unexpected)))
                         }
                         Ok(()) => {
                             if let Operation::JobObject { associated, .. } =
-                                unsafe { &mut (*completion).op }
+                                &mut (*completion).op
                             {
                                 *associated = true;
                             }
-                            let cb = unsafe { (*completion).callback };
-                            let ud = unsafe { (*completion).userdata };
+                            let cb = (*completion).callback;
+                            let ud = (*completion).userdata;
                             let action = cb(
                                 ud,
-                                self_ptr,
+                                this,
                                 completion,
                                 Result::JobObject(Ok(JobObjectResult::Associated)),
                             );
                             match action {
                                 CallbackAction::Disarm => {
-                                    unsafe { (*completion).flags.state = State::Dead };
+                                    (*completion).flags.state = State::Dead;
                                     return;
                                 }
                                 CallbackAction::Rearm => StartAction::Submitted,
                             }
                         }
                     }
-                } else {
-                    StartAction::Submitted
+                    } else {
+                        StartAction::Submitted
+                    }
                 }
-            }
-        };
+            };
 
-        match action {
-            StartAction::TimerA | StartAction::Submitted | StartAction::CancelA => {
-                // Increase our active count so we now wait for this. We assume
-                // it'll successfully queue. If it doesn't we handle that later
-                // (see submit).
-                self.active += 1;
-                unsafe { (*completion).flags.state = State::Active };
-            }
+            match action {
+                StartAction::TimerA | StartAction::Submitted | StartAction::CancelA => {
+                    // Increase our active count so we now wait for this. We assume
+                    // it'll successfully queue. If it doesn't we handle that later
+                    // (see submit).
+                    (*this).active += 1;
+                    (*completion).flags.state = State::Active;
+                }
 
-            StartAction::AsyncWaitA => {
-                // We are considered an active completion.
-                self.active += 1;
-                unsafe { (*completion).flags.state = State::Active };
-            }
+                // Handled above, before the `&mut` match (N385).
+                StartAction::AsyncWaitA => unreachable!(),
 
-            // A result is immediately available. Queue the completion to be
-            // invoked.
-            StartAction::ResultA(r) => {
-                unsafe { (*completion).result = Some(r) };
-                unsafe { self.completions.push(completion) };
+                // A result is immediately available. Queue the completion to be
+                // invoked.
+                StartAction::ResultA(r) => {
+                    (*completion).result = Some(r);
+                    (*this).completions.push(completion);
+                }
             }
         }
     }
@@ -1240,19 +1327,23 @@ impl Loop {
 
         // Inspect other operations. WARNING: the state can be anything here so
         // per op be sure to check the state flag.
-        match unsafe { &mut (*completion).op } {
-            Operation::Timer(v) => {
+        // N434: the Timer arm reaches the timer through `timer_ptr`, never
+        // `&mut (*completion).op`, so the match is shared.
+        match unsafe { &(*completion).op } {
+            Operation::Timer(_) => {
+                let v: *mut Timer = unsafe { timer_ptr(completion) };
                 if unsafe { (*completion).flags.state } == State::Active {
                     // Remove from the heap so it never fires...
-                    let v_ptr: *mut Timer = v;
-                    unsafe { self.timers.remove(v_ptr) };
+                    unsafe { self.timers.remove(v) };
 
                     // If we have reset AND we got cancellation result, that means
                     // that we were canceled so that we can update our expiration
                     // time.
-                    if let Some(r) = v.reset {
-                        v.next = r;
-                        v.reset = None;
+                    if let Some(r) = unsafe { (*v).reset } {
+                        unsafe {
+                            (*v).next = r;
+                            (*v).reset = None;
+                        }
                         unsafe { (*completion).flags.state = State::Dead };
                         self.active -= 1;
                         unsafe { self.add(completion) };
@@ -1327,7 +1418,30 @@ impl Loop {
     ///
     /// # Safety
     /// `completion` must point at a live `async_wait` completion.
+    //
+    // PORT NOTE (N385): the reference `async_notify(self: *Loop, completion)`
+    // only reads `self.iocp_handle`, so its body is `async_notify_handle`, which
+    // takes that handle by value. This method forms a `&Loop`, so it is for the
+    // loop thread only; a notifier on another thread (`AsyncIOCP.notify`) calls
+    // `async_notify_handle` with the handle its waiter copied at `wait` time.
     pub unsafe fn async_notify(&self, completion: *mut Completion) {
+        unsafe { Loop::async_notify_handle(self.iocp_handle, completion) }
+    }
+
+    /// The port handle, for `AsyncIOCP.wait` to copy on the loop thread (N385).
+    pub(crate) fn iocp_handle(&self) -> HANDLE {
+        self.iocp_handle
+    }
+
+    /// The body of the reference `async_notify`, with the completion port handle
+    /// passed by value: it never touches the `Loop`, so any thread may call it
+    /// while the loop thread is inside `run(&mut self)` (N385).
+    ///
+    /// # Safety
+    /// `completion` must point at a live `async_wait` completion and `iocp_handle`
+    /// must be the handle of the loop that completion was added to, not yet
+    /// closed by `deinit`.
+    pub unsafe fn async_notify_handle(iocp_handle: HANDLE, completion: *mut Completion) {
         // The completion must be in a waiting state.
         debug_assert!(matches!(
             unsafe { &(*completion).op },
@@ -1344,7 +1458,7 @@ impl Loop {
         // NOTE: This call can fail but errors are not documented, so we log the
         // error here.
         if let Err(err) =
-            unsafe { windows::PostQueuedCompletionStatus(self.iocp_handle, 0, 0, ptr::null_mut()) }
+            unsafe { windows::PostQueuedCompletionStatus(iocp_handle, 0, 0, ptr::null_mut()) }
         {
             log_warn!("unexpected async_notify error={:?}", err);
         }
@@ -2231,6 +2345,32 @@ impl heap::Node for Timer {
     }
 }
 
+/// The address of `c`'s `.timer` payload, carrying `c`'s OWN provenance.
+///
+/// PORT NOTE (N434): Zig reaches the timer as the place `c.op.timer` (a plain
+/// `*Timer` into the completion), and the heap links it. The Rust port must not
+/// derive that pointer from a `&mut (*c).op` reborrow: the heap keeps it while the
+/// timer is linked, and the next `&mut (*c).op` (`timer_reset`, `stop_completion`)
+/// is a fresh Unique retag from `c` that pops it under Stacked Borrows (and, once
+/// the heap has written the node's links through it, is a Tree Borrows conflict).
+/// This helper forms only a shared borrow of the op to find the payload and
+/// returns that address with `c`'s tag, so the heap's links and every later
+/// access on the heap path share one tag. Every heap-path Timer access goes
+/// through it (proof: `.port/phase-2/mirihar-n434`).
+///
+/// # Safety
+/// `c` must be a valid `Completion` pointer whose op is `.timer`.
+#[inline]
+unsafe fn timer_ptr(c: *mut Completion) -> *mut Timer {
+    unsafe {
+        let addr = match &(*c).op {
+            Operation::Timer(t) => ptr::from_ref(t).addr(),
+            _ => unreachable!(),
+        };
+        c.cast::<u8>().with_addr(addr).cast::<Timer>()
+    }
+}
+
 impl Timer {
     /// PORT NOTE: `fn less(_: void, a: *const Timer, b: *const Timer) bool`.
     fn less(_: (), a: *mut Timer, b: *mut Timer) -> bool {
@@ -2313,6 +2453,71 @@ mod tests {
             l.run(RunMode::NoWait).unwrap();
         }
         l.deinit();
+    }
+
+    /// PORT-ADDED (N431): a callback re-enters the loop through a pointer the
+    /// caller stored (termio's `td.loop_` -> `stream.rs` `(*loop_).add`), not
+    /// through its `l`, while the loop runs through `run_raw` with that same
+    /// pointer. The second timer is armed from inside the first callback and
+    /// stops the loop, so both callbacks must have run for `until_done` to
+    /// return.
+    // Real-code twin of mirihar-n431 `raw_local_root` (the backend's syscalls
+    // keep it out of Miri; the epoll twin runs under Miri on the Linux target).
+    #[test]
+    fn iocp_callback_reenters_through_stored_loop_pointer() {
+        struct Ud {
+            root: *mut Loop,
+            c2: *mut Completion,
+            first: bool,
+            second: bool,
+        }
+        fn first_cb(
+            ud: *mut core::ffi::c_void,
+            _l: *mut Loop,
+            _c: *mut Completion,
+            _r: Result,
+        ) -> CallbackAction {
+            let ud = ud as *mut Ud;
+            unsafe {
+                (*ud).first = true;
+                // Through the stored pointer, not `_l`.
+                (*(*ud).root).timer((*ud).c2, 0, ud.cast(), second_cb);
+            }
+            CallbackAction::Disarm
+        }
+        fn second_cb(
+            ud: *mut core::ffi::c_void,
+            _l: *mut Loop,
+            _c: *mut Completion,
+            _r: Result,
+        ) -> CallbackAction {
+            let ud = ud as *mut Ud;
+            unsafe {
+                (*ud).second = true;
+                (*(*ud).root).stop();
+            }
+            CallbackAction::Disarm
+        }
+
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+        let root: *mut Loop = core::ptr::addr_of_mut!(loop_);
+        let mut c1 = Completion::default();
+        let mut c2 = Completion::default();
+        let mut ud = Ud {
+            root,
+            c2: core::ptr::addr_of_mut!(c2),
+            first: false,
+            second: false,
+        };
+        let udp: *mut Ud = core::ptr::addr_of_mut!(ud);
+        unsafe {
+            (*root).timer(core::ptr::addr_of_mut!(c1), 0, udp.cast(), first_cb);
+            Loop::run_raw(root, RunMode::UntilDone).unwrap();
+            assert!((*udp).first);
+            assert!((*udp).second);
+            assert!((*root).stopped());
+            (*root).deinit();
+        }
     }
 
     /// PORT NOTE: `test "iocp: stop"`.

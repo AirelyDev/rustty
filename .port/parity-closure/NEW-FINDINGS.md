@@ -7324,7 +7324,36 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **fix sketch**: make it `pub unsafe fn async_notify(loop_: *const Loop, completion: *mut Completion)` and read the
   handle through the raw pointer (`unsafe { (*loop_).iocp_handle }` as a place read via `addr_of!`, or copy the handle
   into the `Async`'s waiter at `wait` time), with no `&Loop` formed on the notifying thread.
-- **state**: OPEN (recorded, not fixed).
+- **second site (found while fixing)**: from `wait` on, a notifier may run while the loop thread's
+  `start_completion` (`iocp.rs`) holds `match &mut (*completion).op` for the just-submitted async completion; the
+  notifier reads `op` (the discriminant and the `wakeup` atomic), which invalidates that `&mut` under Stacked Borrows.
+- **evidence (before/after)**: `.port/phase-2/mirihar-n385/` (non-FFI harness; the loop thread holds its protected
+  `&mut Loop` through one stable raw root, as termio does, and two notifications are forced into the two windows).
+  `bash run-all.sh`, miri nightly 2026-07-22: shipped shape `loopref_mutop` UB under SB ("would remove [Unique] which
+  is strongly protected") and TB ("foreign to the protected tag"); the fix sketch's raw by-value read
+  (`rawread_*`) UB under SB, clean under TB (the `mirihar-xev-mpsc` `wakeup_copied` result again); handle copied
+  but `&mut op` kept (`cached_mutop`) UB under SB; applied shape `cached_sharedop` clean under SB and TB, also with
+  `-Zmiri-many-seeds=0..8`, and `cargo +nightly miri test` there passes under both models.
+- **fix**: `AsyncIOCP.wait` copies the loop's port handle into the waiter on the loop thread (`AsyncWaiter::
+  iocp_handle`, PORT-ADDED); `notify` calls `Loop::async_notify_handle(w.iocp_handle, w.c)`, the reference
+  `async_notify` body with the handle by value, so the notifying thread touches only the completion.
+  `Loop::async_notify(&self, c)` stays for loop-thread callers (`wait`'s notify-first case) and forwards.
+  `start_completion` takes the `async_wait` arm (push to `asyncs`, `active += 1`, state `active`) through a shared
+  borrow before the `&mut` match. Behaviour unchanged (R1). The reference has the same shape in Zig, where it is
+  not UB and the handle never changes after `init`: no UD. The WASI watcher's same-thread
+  `(*w.loop_).async_notify` is unchanged (`wasi_poll`'s `async_notify` writes the `Loop`'s own `wakeup`, and WASI
+  runs one thread).
+- **tests**: the three reference `AsyncTests` in `iocp_watcher.rs` were skip-stubs; they are live ports now
+  (`iocp_watcher_async`, `_notify_first`, `_batches_multiple_notifications`), plus PORT-ADDED
+  `iocp_watcher_async_notify_from_another_thread_wakes_running_loop` (another thread notifies while the loop blocks
+  in `GetQueuedCompletionStatusEx`; if the callback has not run 5 s later the notifier posts a rescue to the port and
+  the test fails on `rescued`). Windows VM (`rwin`, `--target x86_64-pc-windows-msvc`): `cargo test -p rustty-xev`
+  3/3 (44 passed each), `cargo test -p rustty-termio` 3/3 (67 passed, 14 ignored; its unit tests do not reach a
+  registered IOCP waiter, the `io_thread`/`live_shell` suites are `cfg(unix)`), clippy `-D warnings` for
+  rustty-xev + rustty-termio clean. Negative control (Windows, one run): the waiter's copied handle replaced by null
+  makes the cross-thread test fail after 5.07 s with "notify's post did not wake the loop; the rescue post did".
+  rustty-core does not build for Windows (N342), so no core test runs there.
+- **state**: CLOSED (fixed).
 
 ## N400 — G-BLUEPRINT's first run: green; its description of `blueprint-compiler format` was wrong
 
@@ -8040,3 +8069,136 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   job names the three targets, a named target that is skipped (no `CXX_<t>`, or a toolchain-matched link
   error) makes the run BLOCKED (exit 3), never GREEN on the legs that did build (review A-1 F1, task A-1b);
   the job must therefore treat exit 3 as a failure, not as a warning.
+
+## N430 — WASI `Async::notify` from a callback formed `&Loop` and wrote `Loop.wakeup` while `run(&mut self)` was live
+
+- **id**: N430. Parity tail X-2 (review X-1, section 5). **severity**: low (aliasing-model UB, not a reproduced
+  failure). **kind**: port soundness (Stacked and Tree Borrows). **state**: CLOSED (fixed by N431, no separate change).
+- **sites**: `crates/rustty-xev/src/wasi_watcher.rs:192` `Some(w) => unsafe { (*w.loop_).async_notify(w.c) }`;
+  `wasi_poll.rs` `async_notify(&self, c)` stores `self.wakeup`, the loop's own field, which `tick_inner` then reads
+  and clears. The loop thread held the protected `&mut Loop` of `run` -> `tick` -> `tick_inner` across every
+  callback, so a timer or I/O callback that notifies an `Async` whose waiter holds the stable root (as
+  `AsyncTests` and termio do) wrote a byte that protected borrow covers.
+- **reachability**: WASI's `Async` exists only without the wasm `atomics` feature (single thread), so the notify
+  can only come from a callback on the loop's own thread.
+- **evidence**: `.port/phase-2/mirihar-n431` (`bash run-all.sh`, miri nightly 2026-07-22): `shipped_thread_wasi`
+  and `shipped_local_wasi` UB under SB ("strongly protected") and TB ("reborrow ... is forbidden"); with the N431
+  raw-self tick path, `raw_thread_wasi` and `raw_local_wasi` are CLEAN under both, with `notify` unchanged. The
+  review's local fix (the flag moved out of the `Loop` allocation) is therefore not applied.
+- **tests**: `wasi_poll.rs` `wasi_callback_reenters_through_stored_loop_pointer` (PORT-ADDED with N431) compiles
+  for `wasm32-wasip1` (clippy `--all-targets -D warnings` clean); like every WASI test it runs only under a wasm
+  runtime (VERIFICATION_DEBT V8). UNVERIFIED by execution.
+
+## N431 — every xev backend held a protected `&mut Loop` across callbacks that re-enter the loop
+
+- **id**: N431. Parity tail X-2 (review X-1 O1). **severity**: medium (aliasing-model UB on termio's normal write
+  path; not a reproduced failure). **kind**: port soundness (Stacked and Tree Borrows). **state**: CLOSED (fixed).
+- **finding**: libxev's `run(self: *Loop)`/`tick`/`tick_inner` take an unprotected Zig pointer. The port took
+  `&mut self` in every backend (`kqueue.rs`, `epoll.rs`, `io_uring.rs`, `iocp.rs`, `wasi_poll.rs`, plus the
+  `dynamic.rs` dispatch), so a function-entry, protected `&mut Loop` was live across every callback. Callbacks
+  re-enter the loop (a) through a pointer the caller stored: termio's `thread.rs` ran `(*self_).loop_.run(..)`,
+  and the wakeup callback's `exec.rs` `td.loop_` (= `&raw mut (*thread).loop_`, `termio_impl.rs:921`) reaches
+  `stream.rs:461` `(*loop_).add(..)`; the stop callback calls `(*self_).loop_.stop()`; the renderer thread
+  (`rustty-core` `renderer_seam.rs`) and the cf release thread (`rustty-os` `cf_release_thread.rs`) have the same
+  shape; and (b) through the callback's `l` after `tick_inner` wrote a loop field through `self` (e.g.
+  `self.active -= 1` just before `cb(..)`). A third window: epoll/wasi `start` and iocp `start_completion`
+  invoke callbacks synchronously from the tick path under their own `&mut self`.
+- **fix (R1: behaviour unchanged)**: the tick path is raw-self, as Zig's `self: *Loop`. In every backend,
+  `pub unsafe fn run_raw(this: *mut Loop, mode)` and `tick_raw` hold the reference bodies; `tick_inner` (and
+  io_uring's `tick_`) take `this: *mut Loop`, and so do the callback-invoking helpers (`start`/`stop_completion`
+  on epoll and wasi_poll, `start_completion` and a private `submit_raw` on iocp). They use narrow
+  `(*this).field` accesses, and call `&mut self` helpers only for short reborrows that invoke no callback.
+  `run(&mut self)`/`tick(&mut self)`/iocp `submit(&mut self)` stay as thin entries that convert to raw at once.
+  Callers whose callbacks re-enter through a stored pointer enter through `Loop::run_raw` with that pointer:
+  termio `thread.rs` (both runs), `renderer_seam.rs` (the thread and its compression test harness),
+  `cf_release_thread.rs` (both runs), the three `exec.rs` KATs (with `loop_ptr`; `before_first_tick` now gets
+  `&mut *loop_ptr`) and `tests/live_shell.rs`. PORT NOTE on each backend's `run`; LIFETIMES rows
+  `Termio.zig ThreadData.loop` and `async.zig AsyncLoopState.waiter.loop` annotated.
+- **residual (documented, not reached by the app)**: a public `&mut self` method still carries its own protector.
+  A caller that invokes one through a stored pointer, and whose synchronously-fired callback re-enters through
+  the same pointer, is outside this fix. Of the public methods, only iocp `submit` fires callbacks synchronously
+  (the job-object arm). `run(&mut self)` is sound when callbacks reach the loop only through `l`, which is how
+  every rustty-xev unit test is written.
+- **evidence**:
+  - `.port/phase-2/mirihar-n431` (isolated, non-FFI, mirrors the tick bodies). `bash run-all.sh`, miri nightly
+    2026-07-22, 20 candidates x SB/TB. Shipped shape: `shipped_{thread,local}_root` UB/UB,
+    `shipped_{thread,local}_l` UB/CLEAN, `shipped_{thread,local}_wasi` UB/UB, `shipped_thread_sync` UB/UB.
+    Thin wrapper entered from the stored root: `wrapper_*_root` UB/UB; with only `l`, `wrapper_*_l` CLEAN/CLEAN.
+    Raw tick with `start` kept `&mut self`: `rawmutstart_thread_sync` UB/UB. The applied shape,
+    `raw_{thread,local}_{root,l,wasi,sync}`: all 8 CLEAN/CLEAN. `cargo +nightly miri test` there passes under
+    both models.
+  - Real code under Miri: the kqueue backend cannot run under Miri ("can't call foreign function `kqueue`";
+    its loop/async/timer tests are MIRI EXCEPTION C3-C5). The epoll backend can, from the Mac, via
+    `cargo +nightly miri test -p rustty-xev --target aarch64-unknown-linux-gnu` (Miri shims epoll and eventfd).
+    PORT-ADDED `epoll_callback_reenters_through_stored_loop_pointer`: CLEAN under SB and TB. Entered through
+    `(*root).run(..)`: UB under both ("strongly protected" / "reborrow ... is forbidden"). The same test on the
+    pre-N431 code (entered through `run`): UB under both. The other epoll loop/timer/async tests give the same
+    verdict before and after. Two unrelated SB results predate this change: `epoll_timer_reset` and
+    `epoll_timer_cancellation` are UB under SB and clean under TB, in the timer heap. `epoll_timerfd` is
+    unsupported (`timerfd_create`). The rustty-xev `--lib` Miri suite (21 non-FFI tests) passes under SB and TB.
+- **tests**: PORT-ADDED `<backend>_callback_reenters_through_stored_loop_pointer` in `kqueue.rs` (MIRI EXCEPTION C3),
+  `epoll.rs`, `io_uring.rs`, `iocp.rs` and `wasi_poll.rs`. A timer callback arms a second timer through the stored
+  pointer, the second stops the loop through it, and `run_raw(.., UntilDone)` returns only if both ran.
+  Mac: `cargo test -p rustty-xev -p rustty-termio` 3/3, `cargo test -p rustty-core` 1/1. Linux (rvm, epoll and
+  io_uring): clippy clean, `cargo test -p rustty-xev -p rustty-termio` 3/3 (xev 108 passed each). Windows (rwin,
+  `--target x86_64-pc-windows-msvc`): clippy `-p rustty-xev -p rustty-termio --all-targets -D warnings` clean,
+  `cargo test -p rustty-xev` 3/3 (45 passed each).
+
+## N432 — `Async.wait` rewrites the completion before taking the lock, racing a concurrent `notify` (IOCP)
+
+- **id**: N432. Parity tail X-2 (review X-1 O2). **severity**: low. **kind**: latent reference shape
+  (record only). **state**: OPEN (record only; not a UD, unreachable in Ghostty).
+- **shape**: `AsyncIOCP.wait` writes `c.* = .{ .op = .{ .async_wait = .{} }, ... }` and calls `loop.add(c)`
+  before `self.guard.lockUncancelable(io)` (reference libxev 86vtcwIR `src/watcher/async.zig:568`, `:587`, `:590`);
+  the port is the same (`crates/rustty-xev/src/iocp_watcher.rs` `wait`: `*c = Completion::new_op(..)`, then
+  `(*loop_).add(c)`, then `self.guard.lock()`). `notify` on another thread, holding `guard` with the PREVIOUS
+  waiter (the same `c`), reads `c.op` and stores its `wakeup` atomic. If a caller disarms an async wait and later
+  calls `wait` again with the same completion while another thread notifies, the rewrite races that access (a
+  data race in both languages) and the notification can be lost.
+- **reachability**: none in Ghostty. Every `Async.wait` call (termio `Thread.zig:273-274`, renderer
+  `Thread.zig:238-240`, `os/cf_release_thread.zig:133-134`) runs once at thread start. Their callbacks return
+  `.rearm`, or `.disarm` and stop the loop, and never call `wait` again. So it is not a UD (not reachable), and
+  the port stays faithful.
+
+## N434 — the xev timer heaps linked a Timer through a `&mut (*c).op` borrow that the next `&mut (*c).op` invalidated
+
+- **id**: N434. Parity tail X-3 (review X-2 F1; X-2 report concern 1). **severity**: medium (aliasing-model UB on
+  the macOS renderer thread's timer reset and cancel; no observed miscompile). **kind**: port soundness (Stacked
+  Borrows; Tree Borrows once two timers are linked). **state**: CLOSED (fixed).
+- **finding**: Zig reaches the timer as the place `c.op.timer` and links that `*Timer` in the heap. The port
+  derived the linked pointer from a `&mut (*c).op` reborrow: epoll `start` (an inner `match &mut
+  (*completion).op`), kqueue `start`, iocp `start_completion` and wasi_poll `start` (the binding of a whole-op
+  `match &mut (*c).op`). While the timer is linked, `timer_reset`'s Active arm and `stop_completion` formed a
+  fresh `&mut (*c).op`, a Unique retag from the completion's own tag that pops the heap's pointer under SB;
+  `heap::remove` -> `delete_min` -> `get_child` then read the node through the popped root link. Under TB, once
+  the heap wrote the node's links through that pointer (a second timer melded under it), the retag's read
+  froze it and `delete_min`'s `root.heap = .{}` write is forbidden. Reachable in the app on macOS through kqueue:
+  `renderer_seam.rs` `render_h.reset` (`armAnimationTimer`), `cursor_h.reset` and `cursor_h.cancel`. The
+  `heap.rs` pairing heap itself is raw end to end (no `&mut` to a node) and needed no change. io_uring has no
+  user-space timer heap.
+- **fix (R1: same writes, same order)**: one helper per backend, `unsafe fn timer_ptr(c: *mut Completion) ->
+  *mut Timer`, takes a shared `&(*c).op` only to find the payload address and returns it with `c`'s own
+  provenance (`c.cast::<u8>().with_addr(addr).cast()`). Every heap-path Timer access goes through it: the
+  `start` insert and its `.c` write (the arm is now `Operation::Timer(_)`), `timer_reset`'s Adding and Active
+  arms, and `stop_completion`'s remove and `reset`/`next` accesses, whose match is now shared (`&(*c).op`;
+  kqueue `if let` -> `matches!`, iocp/wasi `if let` in `timer_reset` -> `matches!` guard, so the non-timer no-op
+  is kept). PORT NOTE on each helper. LIFETIMES row `heap.zig Intrusive(T) root` annotated.
+- **evidence**:
+  - `.port/phase-2/mirihar-n434` (isolated, non-FFI; the REAL `heap.rs` included by `#[path]`; the renderer
+    Thread shape with three timers). `bash run-all.sh`, miri nightly 2026-07-22, 32 candidates x SB/TB. Shipped
+    shape, all four backends: `*_shipped_{reset,cancel}_root` UB/UB (SB "tag does not exist in the borrow
+    stack" at `heap.rs:39`; TB "write access .. is forbidden .. Frozen" at `heap.rs:146`);
+    `*_shipped_{reset,cancel}_inner` CLEAN/CLEAN (a non-root node's stale link is only compared by address).
+    Fixed shape: all 16 `*_fixed_*` CLEAN/CLEAN; `cargo +nightly miri test applied` passes under SB and TB.
+  - Real code under Miri (epoll, from the Mac: `cargo +nightly miri test -p rustty-xev --target
+    aarch64-unknown-linux-gnu --lib -- --exact epoll::tests::<name>`), 14 loop/timer/async/cancel tests: before
+    the fix `epoll_timer_reset` and `epoll_timer_cancellation` are UB under SB (single timer, so CLEAN under TB),
+    the other 12 CLEAN/CLEAN; after the fix all 14 CLEAN under SB and TB. The 6 lib tests matching `heap` pass under
+    Miri SB and TB. kqueue, iocp and wasi_poll cannot run under Miri (kqueue: "can't call foreign function
+    `kqueue`", MIRI EXCEPTION C3); they are proven by the harness and the shared code shape.
+- **tests**: Mac `cargo test -p rustty-xev -p rustty-termio` 3/3 (xev 52 passed + 1 ignored, including the
+  live `kqueue_timer_reset`/`kqueue_timer_cancellation`), `cargo test -p rustty-core` 1/1. Linux (rvm, `-j 4`):
+  `cargo test -p rustty-xev -p rustty-termio` 3/3 (xev 108 passed, termio 92 + 6 ignored). Windows (rwin,
+  `--target x86_64-pc-windows-msvc`): `cargo test -p rustty-xev` 3/3 (45 passed, including `iocp_timer_reset`
+  and `iocp_timer_cancellation`). WASI: compiles and clippy-clean only; no runtime (VERIFICATION_DEBT V8),
+  UNVERIFIED by execution.

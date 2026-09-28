@@ -164,15 +164,43 @@ impl Loop {
     }
 
     /// Run the event loop. See RunMode documentation for details on modes.
+    // PORT NOTE (N431 in NEW-FINDINGS): the reference's `run(self: *Loop, ..)`
+    // body lives in `run_raw`, which takes the loop as a raw pointer, as Zig's
+    // unprotected `*Loop` does. Callbacks re-enter the loop while it runs,
+    // through their `l` argument or through a pointer the caller stored (termio's
+    // `td.loop_`), so no `&mut Loop` may be live across a callback: a
+    // function-entry `&mut self` is protected for the whole call, and any other
+    // access to the loop pops it (UB under Stacked and Tree Borrows,
+    // .port/phase-2/mirihar-n431). This entry converts to raw at once and never
+    // uses `self` again, so it is sound when callbacks reach the loop only
+    // through `l`. A caller whose callbacks re-enter through a stored pointer
+    // must enter through `run_raw` with that same pointer instead: this
+    // `&mut self` is itself protected for the call (mirihar-n431
+    // `wrapper_*_root`).
     pub fn run(&mut self, mode: RunMode) -> core::result::Result<(), Error> {
-        match mode {
-            RunMode::NoWait => self.tick(0),
-            RunMode::Once => self.tick(1),
-            RunMode::UntilDone => {
-                while !self.done() {
-                    self.tick(1)?;
+        // SAFETY: `self` is a live, exclusive `Loop` for the whole call.
+        unsafe { Loop::run_raw(self, mode) }
+    }
+
+    /// `run(self: *Loop, mode)`: the raw-pointer entry (see `run`'s PORT NOTE).
+    /// Callers whose callbacks re-enter the loop through a stored pointer
+    /// enter here with that pointer.
+    ///
+    /// # Safety
+    /// `this` must point at a live, initialized `Loop` that stays at the same
+    /// address and is not otherwise borrowed for the whole call, except by
+    /// the loop's own callbacks through raw pointers.
+    pub unsafe fn run_raw(this: *mut Loop, mode: RunMode) -> core::result::Result<(), Error> {
+        unsafe {
+            match mode {
+                RunMode::NoWait => Loop::tick_raw(this, 0),
+                RunMode::Once => Loop::tick_raw(this, 1),
+                RunMode::UntilDone => {
+                    while !(*this).done() {
+                        Loop::tick_raw(this, 1)?;
+                    }
+                    Ok(())
                 }
-                Ok(())
             }
         }
     }
@@ -241,466 +269,475 @@ impl Loop {
     /// Tick through the event loop once, waiting for at least "wait" completions
     /// to be processed by the loop itself.
     pub fn tick(&mut self, wait: u32) -> core::result::Result<(), Error> {
-        // If we're stopped then the loop is fully over.
-        if self.flags.stopped {
-            return Ok(());
-        }
-
-        // We can't nest runs.
-        if self.flags.in_run {
-            return Err(Error);
-        }
-        self.flags.in_run = true;
-        let res = self.tick_inner(wait);
-        // defer self.flags.in_run = false;
-        self.flags.in_run = false;
-        res
+        // SAFETY: as `run`.
+        unsafe { Loop::tick_raw(self, wait) }
     }
 
-    fn tick_inner(&mut self, wait: u32) -> core::result::Result<(), Error> {
-        // The raw self handle the callbacks receive (never a `&mut`).
-        let self_ptr: *mut Loop = self;
-
-        // Submit all the submissions. We copy the submission queue so that
-        // any resubmits don't cause an infinite loop.
-        let mut queued = core::mem::take(&mut self.submissions);
-        loop {
-            let c = unsafe { queued.pop() };
-            if c.is_null() {
-                break;
-            }
-            // We ignore any completions that aren't in the adding state.
-            // This usually means that we switched them to be deleted or
-            // something.
-            if unsafe { (*c).flags.state } != State::Adding {
-                continue;
-            }
-            unsafe { self.start(c) };
-        }
-
-        // Wait and process events. We only do this if we have any active.
-        let mut wait_rem: usize = wait as usize;
-        loop {
+    /// `tick(self: *Loop, wait)`: the raw-pointer twin of `tick` (see `run`).
+    ///
+    /// # Safety
+    /// As `run_raw`.
+    pub unsafe fn tick_raw(this: *mut Loop, wait: u32) -> core::result::Result<(), Error> {
+        unsafe {
             // If we're stopped then the loop is fully over.
-            if self.flags.stopped {
+            if (*this).flags.stopped {
                 return Ok(());
             }
 
-            // We must always update the loop time even if we have no
-            // active completions.
-            self.update_now();
-
-            if !(self.active > 0 && (wait == 0 || wait_rem > 0)) {
-                break;
+            // We can't nest runs.
+            if (*this).flags.in_run {
+                return Err(Error);
             }
+            (*this).flags.in_run = true;
+            let res = Loop::tick_inner(this, wait);
+            // defer self.flags.in_run = false;
+            (*this).flags.in_run = false;
+            res
+        }
+    }
 
-            // Run our expired timers
-            let mut now_timer = Timer {
-                next: self.cached_now,
-                reset: None,
-                heap: heap::IntrusiveField::default(),
-                c: ptr::null_mut(),
-            };
+    unsafe fn tick_inner(this: *mut Loop, wait: u32) -> core::result::Result<(), Error> {
+        unsafe {
+            // Submit all the submissions. We copy the submission queue so that
+            // any resubmits don't cause an infinite loop.
+            let mut queued = core::mem::take(&mut (*this).submissions);
             loop {
-                let t = self.timers.peek();
-                if t.is_null() {
+                let c = queued.pop();
+                if c.is_null() {
                     break;
                 }
-                if !Timer::less((), t, &mut now_timer) {
-                    break;
+                // We ignore any completions that aren't in the adding state.
+                // This usually means that we switched them to be deleted or
+                // something.
+                if (*c).flags.state != State::Adding {
+                    continue;
                 }
-
-                // Remove the timer
-                assert!(unsafe { self.timers.delete_min() } == t);
-
-                // Completion is now dead because it has been processed.
-                // Users can reuse it (unless they specify rearm in
-                // which case we readd it).
-                let c = unsafe { (*t).c };
-                unsafe { (*c).flags.state = State::Dead };
-                self.active -= 1;
-
-                // Lower our remaining count
-                wait_rem = wait_rem.saturating_sub(1);
-
-                // Invoke
-                let cb = unsafe { (*c).callback };
-                let ud = unsafe { (*c).userdata };
-                let action = cb(ud, self_ptr, c, Result::Timer(Ok(TimerTrigger::Expiration)));
-                match action {
-                    CallbackAction::Disarm => {}
-                    CallbackAction::Rearm => unsafe { self.start(c) },
-                }
+                Loop::start(this, c);
             }
 
-            // Run our async waiters
-            if !self.asyncs.empty() {
-                let wakeup = self.wakeup.load(Ordering::SeqCst);
-                if wakeup {
-                    // Reset to false, we've "woken up" now.
-                    self.wakeup.store(false, Ordering::SeqCst);
+            // Wait and process events. We only do this if we have any active.
+            let mut wait_rem: usize = wait as usize;
+            loop {
+                // If we're stopped then the loop is fully over.
+                if (*this).flags.stopped {
+                    return Ok(());
+                }
 
-                    // There is at least one pending async. This isn't efficient
-                    // AT ALL. We should improve this in the short term by
-                    // using a queue here of asyncs we know should wake up
-                    // (we know because we have access to it in async_notify).
-                    // I didn't do that right away because we need a Wasm
-                    // compatibile std.Thread.Mutex.
-                    let mut asyncs = core::mem::take(&mut self.asyncs);
-                    loop {
-                        let c = unsafe { asyncs.pop() };
-                        if c.is_null() {
-                            break;
-                        }
+                // We must always update the loop time even if we have no
+                // active completions.
+                (*this).update_now();
 
-                        let c_wakeup = match unsafe { &(*c).op } {
-                            Operation::AsyncWait { wakeup } => wakeup.load(Ordering::SeqCst),
-                            _ => unreachable!(),
-                        };
+                if !((*this).active > 0 && (wait == 0 || wait_rem > 0)) {
+                    break;
+                }
 
-                        // If we aren't waking this one up, requeue
-                        if !c_wakeup {
-                            unsafe { self.asyncs.push(c) };
-                            continue;
-                        }
+                // Run our expired timers
+                let mut now_timer = Timer {
+                    next: (*this).cached_now,
+                    reset: None,
+                    heap: heap::IntrusiveField::default(),
+                    c: ptr::null_mut(),
+                };
+                loop {
+                    let t = (*this).timers.peek();
+                    if t.is_null() {
+                        break;
+                    }
+                    if !Timer::less((), t, &mut now_timer) {
+                        break;
+                    }
 
-                        // We are waking up, mark this as dead and call it.
-                        unsafe { (*c).flags.state = State::Dead };
-                        self.active -= 1;
+                    // Remove the timer
+                    assert!((*this).timers.delete_min() == t);
 
-                        // Lower our waiters
-                        wait_rem = wait_rem.saturating_sub(1);
+                    // Completion is now dead because it has been processed.
+                    // Users can reuse it (unless they specify rearm in
+                    // which case we readd it).
+                    let c = (*t).c;
+                    (*c).flags.state = State::Dead;
+                    (*this).active -= 1;
 
-                        let cb = unsafe { (*c).callback };
-                        let ud = unsafe { (*c).userdata };
-                        let action = cb(ud, self_ptr, c, Result::AsyncWait(Ok(())));
-                        match action {
-                            // We disarm by default
-                            CallbackAction::Disarm => {}
+                    // Lower our remaining count
+                    wait_rem = wait_rem.saturating_sub(1);
 
-                            // Rearm we just restart it. We use start instead of
-                            // add because then it'll become immediately available
-                            // if we loop again.
-                            CallbackAction::Rearm => unsafe { self.start(c) },
+                    // Invoke
+                    let cb = (*c).callback;
+                    let ud = (*c).userdata;
+                    let action = cb(ud, this, c, Result::Timer(Ok(TimerTrigger::Expiration)));
+                    match action {
+                        CallbackAction::Disarm => {}
+                        CallbackAction::Rearm => Loop::start(this, c),
+                    }
+                }
+
+                // Run our async waiters
+                if !(*this).asyncs.empty() {
+                    let wakeup = (*this).wakeup.load(Ordering::SeqCst);
+                    if wakeup {
+                        // Reset to false, we've "woken up" now.
+                        (*this).wakeup.store(false, Ordering::SeqCst);
+
+                        // There is at least one pending async. This isn't efficient
+                        // AT ALL. We should improve this in the short term by
+                        // using a queue here of asyncs we know should wake up
+                        // (we know because we have access to it in async_notify).
+                        // I didn't do that right away because we need a Wasm
+                        // compatibile std.Thread.Mutex.
+                        let mut asyncs = core::mem::take(&mut (*this).asyncs);
+                        loop {
+                            let c = asyncs.pop();
+                            if c.is_null() {
+                                break;
+                            }
+
+                            let c_wakeup = match &(*c).op {
+                                Operation::AsyncWait { wakeup } => wakeup.load(Ordering::SeqCst),
+                                _ => unreachable!(),
+                            };
+
+                            // If we aren't waking this one up, requeue
+                            if !c_wakeup {
+                                (*this).asyncs.push(c);
+                                continue;
+                            }
+
+                            // We are waking up, mark this as dead and call it.
+                            (*c).flags.state = State::Dead;
+                            (*this).active -= 1;
+
+                            // Lower our waiters
+                            wait_rem = wait_rem.saturating_sub(1);
+
+                            let cb = (*c).callback;
+                            let ud = (*c).userdata;
+                            let action = cb(ud, this, c, Result::AsyncWait(Ok(())));
+                            match action {
+                                // We disarm by default
+                                CallbackAction::Disarm => {}
+
+                                // Rearm we just restart it. We use start instead of
+                                // add because then it'll become immediately available
+                                // if we loop again.
+                                CallbackAction::Rearm => Loop::start(this, c),
+                            }
                         }
                     }
                 }
-            }
 
-            // Setup our timeout. If we have nothing to wait for then
-            // we just set an expiring timer so that we still poll but it
-            // will return ASAP.
-            let timeout: wasi::timestamp_t = if wait_rem == 0 {
-                self.cached_now
-            } else {
-                // If we have a timer use that value, otherwise we can afford
-                // to sleep for awhile since we're waiting for something to
-                // happen. We set this sleep to 60 seconds arbitrarily. On
-                // other backends we wait indefinitely.
-                let t = self.timers.peek();
-                if t.is_null() {
-                    self.cached_now + (60 * ns_per_s)
+                // Setup our timeout. If we have nothing to wait for then
+                // we just set an expiring timer so that we still poll but it
+                // will return ASAP.
+                let timeout: wasi::timestamp_t = if wait_rem == 0 {
+                    (*this).cached_now
                 } else {
-                    unsafe { (*t).next }
-                }
-            };
-            self.batch.array[0] = subscription_t {
-                userdata: 0,
-                u: wasi::subscription_u_t {
-                    tag: wasi::EVENTTYPE_CLOCK,
-                    u: wasi::subscription_u_u_t {
-                        clock: wasi::subscription_clock_t {
-                            id: wasi::CLOCK_MONOTONIC,
-                            timeout,
-                            precision: ns_per_ms,
-                            flags: wasi::SUBSCRIPTION_CLOCK_ABSTIME,
+                    // If we have a timer use that value, otherwise we can afford
+                    // to sleep for awhile since we're waiting for something to
+                    // happen. We set this sleep to 60 seconds arbitrarily. On
+                    // other backends we wait indefinitely.
+                    let t = (*this).timers.peek();
+                    if t.is_null() {
+                        (*this).cached_now + (60 * ns_per_s)
+                    } else {
+                        (*t).next
+                    }
+                };
+                (*this).batch.array[0] = subscription_t {
+                    userdata: 0,
+                    u: wasi::subscription_u_t {
+                        tag: wasi::EVENTTYPE_CLOCK,
+                        u: wasi::subscription_u_u_t {
+                            clock: wasi::subscription_clock_t {
+                                id: wasi::CLOCK_MONOTONIC,
+                                timeout,
+                                precision: ns_per_ms,
+                                flags: wasi::SUBSCRIPTION_CLOCK_ABSTIME,
+                            },
                         },
                     },
-                },
-            };
+                };
 
-            // Build our batch of subscriptions and poll
-            let mut events: [wasi::event_t; Batch::CAPACITY] = unsafe { core::mem::zeroed() };
-            let subs_len = self.batch.len;
-            assert!(events.len() >= subs_len);
-            let mut n: usize = 0;
-            let errno = unsafe {
-                wasi::poll_oneoff(
-                    self.batch.array.as_ptr(),
+                // Build our batch of subscriptions and poll
+                let mut events: [wasi::event_t; Batch::CAPACITY] = core::mem::zeroed();
+                let subs_len = (*this).batch.len;
+                assert!(events.len() >= subs_len);
+                let mut n: usize = 0;
+                let errno = wasi::poll_oneoff(
+                    (*this).batch.array.as_ptr(),
                     events.as_mut_ptr(),
                     subs_len,
                     &mut n,
-                )
-            };
-            if errno != wasi::ERRNO_SUCCESS {
-                return Err(Error);
-            }
-
-            // Poll!
-            for ev in events.iter().take(n) {
-                // A system event
-                if ev.userdata == 0 {
-                    continue;
+                );
+                if errno != wasi::ERRNO_SUCCESS {
+                    return Err(Error);
                 }
 
-                let c = ev.userdata as usize as *mut Completion;
+                // Poll!
+                for ev in events.iter().take(n) {
+                    // A system event
+                    if ev.userdata == 0 {
+                        continue;
+                    }
 
-                // We assume disarm since this is the safest time to access
-                // the completion. It makes rearms slightly more expensive
-                // but not by very much.
-                unsafe { (*c).flags.state = State::Dead };
-                unsafe { self.batch.put(c) };
-                self.active -= 1;
+                    let c = ev.userdata as usize as *mut Completion;
 
-                let res = unsafe { Completion::perform(c) };
-                let cb = unsafe { (*c).callback };
-                let ud = unsafe { (*c).userdata };
-                let action = cb(ud, self_ptr, c, res);
-                match action {
-                    // We disarm by default
-                    CallbackAction::Disarm => {}
+                    // We assume disarm since this is the safest time to access
+                    // the completion. It makes rearms slightly more expensive
+                    // but not by very much.
+                    (*c).flags.state = State::Dead;
+                    (*this).batch.put(c);
+                    (*this).active -= 1;
 
-                    // Rearm we just restart it. We use start instead of
-                    // add because then it'll become immediately available
-                    // if we loop again.
-                    CallbackAction::Rearm => unsafe { self.start(c) },
+                    let res = Completion::perform(c);
+                    let cb = (*c).callback;
+                    let ud = (*c).userdata;
+                    let action = cb(ud, this, c, res);
+                    match action {
+                        // We disarm by default
+                        CallbackAction::Disarm => {}
+
+                        // Rearm we just restart it. We use start instead of
+                        // add because then it'll become immediately available
+                        // if we loop again.
+                        CallbackAction::Rearm => Loop::start(this, c),
+                    }
                 }
+
+                if wait == 0 {
+                    break;
+                }
+                wait_rem = wait_rem.saturating_sub(n);
             }
 
-            if wait == 0 {
-                break;
-            }
-            wait_rem = wait_rem.saturating_sub(n);
+            Ok(())
         }
-
-        Ok(())
     }
 
     /// PORT NOTE: `fn start(self: *Loop, completion: *Completion) void`.
     ///
     /// # Safety
     /// `completion` must be a valid, stable `Completion` pointer.
-    unsafe fn start(&mut self, completion: *mut Completion) {
-        let self_ptr: *mut Loop = self;
+    unsafe fn start(this: *mut Loop, completion: *mut Completion) {
+        unsafe {
+            let res_: Option<Result> = match &mut (*completion).op {
+                Operation::Noop => {
+                    (*completion).flags.state = State::Dead;
+                    return;
+                }
 
-        let res_: Option<Result> = match unsafe { &mut (*completion).op } {
-            Operation::Noop => {
-                unsafe { (*completion).flags.state = State::Dead };
-                return;
-            }
-
-            Operation::Cancel { c } => {
-                // We stop immediately. We only stop if we are in the
-                // "adding" state because cancellation or any other action
-                // means we're complete already.
-                //
-                // For example, if we're in the deleting state, it means
-                // someone is cancelling the cancel. So we do nothing. If
-                // we're in the dead state it means we ran already.
-                let target = *c;
-                if unsafe { (*completion).flags.state } == State::Adding {
-                    if matches!(unsafe { &(*target).op }, Operation::Cancel { .. }) {
-                        Some(Result::Cancel(Err(CancelError::InvalidOp)))
+                Operation::Cancel { c } => {
+                    // We stop immediately. We only stop if we are in the
+                    // "adding" state because cancellation or any other action
+                    // means we're complete already.
+                    //
+                    // For example, if we're in the deleting state, it means
+                    // someone is cancelling the cancel. So we do nothing. If
+                    // we're in the dead state it means we ran already.
+                    let target = *c;
+                    if (*completion).flags.state == State::Adding {
+                        if matches!(&(*target).op, Operation::Cancel { .. }) {
+                            Some(Result::Cancel(Err(CancelError::InvalidOp)))
+                        } else {
+                            Loop::stop_completion(this, target);
+                            // We always run timers
+                            Some(Result::Cancel(Ok(())))
+                        }
                     } else {
-                        unsafe { self.stop_completion(target) };
                         // We always run timers
                         Some(Result::Cancel(Ok(())))
                     }
-                } else {
+                }
+
+                Operation::Read { .. } => match (*this).batch.get(completion) {
+                    Err(err) => Some(Result::Read(Err(ReadError::Batch(err)))),
+                    Ok(sub) => {
+                        sub.write(Completion::subscription(completion));
+                        None
+                    }
+                },
+
+                Operation::PRead { .. } => match (*this).batch.get(completion) {
+                    Err(err) => Some(Result::PRead(Err(ReadError::Batch(err)))),
+                    Ok(sub) => {
+                        sub.write(Completion::subscription(completion));
+                        None
+                    }
+                },
+
+                Operation::Write { .. } => match (*this).batch.get(completion) {
+                    Err(err) => Some(Result::Write(Err(WriteError::Batch(err)))),
+                    Ok(sub) => {
+                        sub.write(Completion::subscription(completion));
+                        None
+                    }
+                },
+
+                Operation::PWrite { .. } => match (*this).batch.get(completion) {
+                    Err(err) => Some(Result::PWrite(Err(WriteError::Batch(err)))),
+                    Ok(sub) => {
+                        sub.write(Completion::subscription(completion));
+                        None
+                    }
+                },
+
+                Operation::Recv { .. } => match (*this).batch.get(completion) {
+                    Err(err) => Some(Result::Recv(Err(ReadError::Batch(err)))),
+                    Ok(sub) => {
+                        sub.write(Completion::subscription(completion));
+                        None
+                    }
+                },
+
+                Operation::Send { .. } => match (*this).batch.get(completion) {
+                    Err(err) => Some(Result::Send(Err(WriteError::Batch(err)))),
+                    Ok(sub) => {
+                        sub.write(Completion::subscription(completion));
+                        None
+                    }
+                },
+
+                Operation::Accept { .. } => match (*this).batch.get(completion) {
+                    Err(err) => Some(Result::Accept(Err(AcceptError::Batch(err)))),
+                    Ok(sub) => {
+                        sub.write(Completion::subscription(completion));
+                        None
+                    }
+                },
+
+                Operation::Shutdown { socket, how } => {
+                    let how_flags: wasi::sdflags_t = match how {
+                        ShutdownHow::Both => wasi::SHUT_WR | wasi::SHUT_RD,
+                        ShutdownHow::Recv => wasi::SHUT_RD,
+                        ShutdownHow::Send => wasi::SHUT_WR,
+                    };
+
+                    let errno = wasi::sock_shutdown(*socket, how_flags);
+                    Some(Result::Shutdown(if errno == wasi::ERRNO_SUCCESS {
+                        Ok(())
+                    } else {
+                        Err(ShutdownError::Unexpected)
+                    }))
+                }
+
+                Operation::Close { fd } => {
+                    libc::close(*fd);
+                    Some(Result::Close(Ok(())))
+                }
+
+                Operation::AsyncWait { .. } => {
+                    // Add our async to the list of asyncs
+                    (*this).asyncs.push(completion);
+                    None
+                }
+
+                Operation::Timer(_) => {
+                    // N434: the heap keeps this pointer; it carries the
+                    // completion's own tag (`timer_ptr`), not the `&mut` op
+                    // borrow of this match.
+                    let v_ptr: *mut Timer = timer_ptr(completion);
+
+                    // Point back to completion since we need this. In the future
+                    // we want to use @fieldParentPtr but https://github.com/ziglang/zig/issues/6611
+                    (*v_ptr).c = completion;
+
+                    // Insert the timer into our heap.
+                    (*this).timers.insert(v_ptr);
+
                     // We always run timers
-                    Some(Result::Cancel(Ok(())))
+                    None
                 }
+            };
+
+            // If we failed to add the completion then we call the callback
+            // immediately and mark the error.
+            if let Some(res) = res_ {
+                (*completion).flags.state = State::Dead;
+                let cb = (*completion).callback;
+                let ud = (*completion).userdata;
+                match cb(ud, this, completion, res) {
+                    CallbackAction::Disarm => {}
+
+                    // If we rearm then we requeue this. Due to the way that tick works,
+                    // this won't try to re-add immediately it won't happen until the
+                    // next tick.
+                    CallbackAction::Rearm => (*this).add(completion),
+                }
+
+                return;
             }
 
-            Operation::Read { .. } => match unsafe { self.batch.get(completion) } {
-                Err(err) => Some(Result::Read(Err(ReadError::Batch(err)))),
-                Ok(sub) => {
-                    unsafe { sub.write(Completion::subscription(completion)) };
-                    None
-                }
-            },
+            // The completion is now active since it is in our poll set.
+            (*completion).flags.state = State::Active;
 
-            Operation::PRead { .. } => match unsafe { self.batch.get(completion) } {
-                Err(err) => Some(Result::PRead(Err(ReadError::Batch(err)))),
-                Ok(sub) => {
-                    unsafe { sub.write(Completion::subscription(completion)) };
-                    None
-                }
-            },
-
-            Operation::Write { .. } => match unsafe { self.batch.get(completion) } {
-                Err(err) => Some(Result::Write(Err(WriteError::Batch(err)))),
-                Ok(sub) => {
-                    unsafe { sub.write(Completion::subscription(completion)) };
-                    None
-                }
-            },
-
-            Operation::PWrite { .. } => match unsafe { self.batch.get(completion) } {
-                Err(err) => Some(Result::PWrite(Err(WriteError::Batch(err)))),
-                Ok(sub) => {
-                    unsafe { sub.write(Completion::subscription(completion)) };
-                    None
-                }
-            },
-
-            Operation::Recv { .. } => match unsafe { self.batch.get(completion) } {
-                Err(err) => Some(Result::Recv(Err(ReadError::Batch(err)))),
-                Ok(sub) => {
-                    unsafe { sub.write(Completion::subscription(completion)) };
-                    None
-                }
-            },
-
-            Operation::Send { .. } => match unsafe { self.batch.get(completion) } {
-                Err(err) => Some(Result::Send(Err(WriteError::Batch(err)))),
-                Ok(sub) => {
-                    unsafe { sub.write(Completion::subscription(completion)) };
-                    None
-                }
-            },
-
-            Operation::Accept { .. } => match unsafe { self.batch.get(completion) } {
-                Err(err) => Some(Result::Accept(Err(AcceptError::Batch(err)))),
-                Ok(sub) => {
-                    unsafe { sub.write(Completion::subscription(completion)) };
-                    None
-                }
-            },
-
-            Operation::Shutdown { socket, how } => {
-                let how_flags: wasi::sdflags_t = match how {
-                    ShutdownHow::Both => wasi::SHUT_WR | wasi::SHUT_RD,
-                    ShutdownHow::Recv => wasi::SHUT_RD,
-                    ShutdownHow::Send => wasi::SHUT_WR,
-                };
-
-                let errno = unsafe { wasi::sock_shutdown(*socket, how_flags) };
-                Some(Result::Shutdown(if errno == wasi::ERRNO_SUCCESS {
-                    Ok(())
-                } else {
-                    Err(ShutdownError::Unexpected)
-                }))
-            }
-
-            Operation::Close { fd } => {
-                unsafe { libc::close(*fd) };
-                Some(Result::Close(Ok(())))
-            }
-
-            Operation::AsyncWait { .. } => {
-                // Add our async to the list of asyncs
-                unsafe { self.asyncs.push(completion) };
-                None
-            }
-
-            Operation::Timer(v) => {
-                // Point back to completion since we need this. In the future
-                // we want to use @fieldParentPtr but https://github.com/ziglang/zig/issues/6611
-                v.c = completion;
-                let v_ptr: *mut Timer = v;
-
-                // Insert the timer into our heap.
-                unsafe { self.timers.insert(v_ptr) };
-
-                // We always run timers
-                None
-            }
-        };
-
-        // If we failed to add the completion then we call the callback
-        // immediately and mark the error.
-        if let Some(res) = res_ {
-            unsafe { (*completion).flags.state = State::Dead };
-            let cb = unsafe { (*completion).callback };
-            let ud = unsafe { (*completion).userdata };
-            match cb(ud, self_ptr, completion, res) {
-                CallbackAction::Disarm => {}
-
-                // If we rearm then we requeue this. Due to the way that tick works,
-                // this won't try to re-add immediately it won't happen until the
-                // next tick.
-                CallbackAction::Rearm => unsafe { self.add(completion) },
-            }
-
-            return;
+            // Increase our active count
+            (*this).active += 1;
         }
-
-        // The completion is now active since it is in our poll set.
-        unsafe { (*completion).flags.state = State::Active };
-
-        // Increase our active count
-        self.active += 1;
     }
 
     /// PORT NOTE: `fn stop_completion(self: *Loop, c: *Completion) void`.
     ///
     /// # Safety
     /// `c` must be a valid, stable `Completion` pointer.
-    unsafe fn stop_completion(&mut self, c: *mut Completion) {
-        let self_ptr: *mut Loop = self;
+    unsafe fn stop_completion(this: *mut Loop, c: *mut Completion) {
+        unsafe {
+            // We may modify the state below so we need to know now if this
+            // completion was active.
+            let active = (*c).flags.state == State::Active;
 
-        // We may modify the state below so we need to know now if this
-        // completion was active.
-        let active = unsafe { (*c).flags.state } == State::Active;
+            // N434: a shared match; the Timer is reached through `timer_ptr`,
+            // never `&mut (*c).op`.
+            let rearm: bool = match &(*c).op {
+                Operation::Timer(_) => {
+                    let v: *mut Timer = timer_ptr(c);
+                    debug_assert!((*v).c == c);
 
-        let rearm: bool = match unsafe { &mut (*c).op } {
-            Operation::Timer(v) => {
-                debug_assert!(v.c == c);
-
-                // Timers needs to be removed from the timer heap only if
-                // it has been inserted.
-                if unsafe { (*c).flags.state } == State::Active {
-                    let v_ptr: *mut Timer = v;
-                    unsafe { self.timers.remove(v_ptr) };
-                }
-
-                // If the timer was never fired, we need to fire it with
-                // the cancellation notice.
-                if unsafe { (*c).flags.state } != State::Dead {
-                    // If we have reset set AND we got a cancellation result,
-                    // that means that we were canceled so that we can update
-                    // our expiration time.
-                    let reset = match unsafe { &mut (*c).op } {
-                        Operation::Timer(v) => v.reset,
-                        _ => unreachable!(),
-                    };
-                    if let Some(r) = reset {
-                        if let Operation::Timer(v) = unsafe { &mut (*c).op } {
-                            v.next = r;
-                            v.reset = None;
-                        }
-                        true
-                    } else {
-                        // We have to set the completion as dead here because
-                        // it isn't safe to modify completions after a callback.
-                        unsafe { (*c).flags.state = State::Dead };
-
-                        let cb = unsafe { (*c).callback };
-                        let ud = unsafe { (*c).userdata };
-                        let action = cb(ud, self_ptr, c, Result::Timer(Ok(TimerTrigger::Cancel)));
-                        match action {
-                            CallbackAction::Disarm => false,
-                            CallbackAction::Rearm => true,
-                        }
+                    // Timers needs to be removed from the timer heap only if
+                    // it has been inserted.
+                    if (*c).flags.state == State::Active {
+                        (*this).timers.remove(v);
                     }
-                } else {
-                    false
+
+                    // If the timer was never fired, we need to fire it with
+                    // the cancellation notice.
+                    if (*c).flags.state != State::Dead {
+                        // If we have reset set AND we got a cancellation result,
+                        // that means that we were canceled so that we can update
+                        // our expiration time.
+                        let reset = (*v).reset;
+                        if let Some(r) = reset {
+                            (*v).next = r;
+                            (*v).reset = None;
+                            true
+                        } else {
+                            // We have to set the completion as dead here because
+                            // it isn't safe to modify completions after a callback.
+                            (*c).flags.state = State::Dead;
+
+                            let cb = (*c).callback;
+                            let ud = (*c).userdata;
+                            let action = cb(ud, this, c, Result::Timer(Ok(TimerTrigger::Cancel)));
+                            match action {
+                                CallbackAction::Disarm => false,
+                                CallbackAction::Rearm => true,
+                            }
+                        }
+                    } else {
+                        false
+                    }
                 }
+
+                _ => unreachable!(),
+            };
+
+            // Decrement the active count so we know how many are running for
+            // .until_done run semantics.
+            if active {
+                (*this).active -= 1;
             }
 
-            _ => unreachable!(),
-        };
-
-        // Decrement the active count so we know how many are running for
-        // .until_done run semantics.
-        if active {
-            self.active -= 1;
-        }
-
-        // If we're rearming, add it again immediately
-        if rearm {
-            unsafe { self.start(c) };
+            // If we're rearming, add it again immediately
+            if rearm {
+                Loop::start(this, c);
+            }
         }
     }
 
@@ -756,8 +793,9 @@ impl Loop {
             // Adding state we can just modify the metadata and return
             // since the timer isn't in the heap yet.
             State::Adding => {
-                if let Operation::Timer(v) = unsafe { &mut (*c).op } {
-                    v.next = timer_next(next_ms);
+                // N434: through `timer_ptr`, never `&mut (*c).op`.
+                if matches!(unsafe { &(*c).op }, Operation::Timer(_)) {
+                    unsafe { (*timer_ptr(c)).next = timer_next(next_ms) };
                 }
                 unsafe { (*c).userdata = userdata };
                 unsafe { (*c).callback = cb };
@@ -766,8 +804,10 @@ impl Loop {
             State::Active => {
                 // Update the reset time for the timer to the desired time
                 // along with all the callbacks.
-                if let Operation::Timer(v) = unsafe { &mut (*c).op } {
-                    v.reset = Some(timer_next(next_ms));
+                // N434: the timer is linked in the heap; `timer_ptr`, never
+                // `&mut (*c).op`.
+                if matches!(unsafe { &(*c).op }, Operation::Timer(_)) {
+                    unsafe { (*timer_ptr(c)).reset = Some(timer_next(next_ms)) };
                 }
                 unsafe { (*c).userdata = userdata };
                 unsafe { (*c).callback = cb };
@@ -1299,6 +1339,32 @@ impl heap::Node for Timer {
     }
 }
 
+/// The address of `c`'s `.timer` payload, carrying `c`'s OWN provenance.
+///
+/// PORT NOTE (N434): Zig reaches the timer as the place `c.op.timer` (a plain
+/// `*Timer` into the completion), and the heap links it. The Rust port must not
+/// derive that pointer from a `&mut (*c).op` reborrow: the heap keeps it while the
+/// timer is linked, and the next `&mut (*c).op` (`timer_reset`, `stop_completion`)
+/// is a fresh Unique retag from `c` that pops it under Stacked Borrows (and, once
+/// the heap has written the node's links through it, is a Tree Borrows conflict).
+/// This helper forms only a shared borrow of the op to find the payload and
+/// returns that address with `c`'s tag, so the heap's links and every later
+/// access on the heap path share one tag. Every heap-path Timer access goes
+/// through it (proof: `.port/phase-2/mirihar-n434`).
+///
+/// # Safety
+/// `c` must be a valid `Completion` pointer whose op is `.timer`.
+#[inline]
+unsafe fn timer_ptr(c: *mut Completion) -> *mut Timer {
+    unsafe {
+        let addr = match &(*c).op {
+            Operation::Timer(t) => ptr::from_ref(t).addr(),
+            _ => unreachable!(),
+        };
+        c.cast::<u8>().with_addr(addr).cast::<Timer>()
+    }
+}
+
 impl Timer {
     /// PORT NOTE: `fn less(_: void, a: *const Timer, b: *const Timer) bool`.
     fn less(_: (), a: *mut Timer, b: *mut Timer) -> bool {
@@ -1586,6 +1652,71 @@ mod tests {
     // RUN under a wasm runtime — see `.port/phase-2/VERIFICATION_DEBT.md` for the
     // runnable recipe. They are real tests, not stubs.
     // -----------------------------------------------------------------------
+
+    /// PORT-ADDED (N431): a callback re-enters the loop through a pointer the
+    /// caller stored (termio's `td.loop_` -> `stream.rs` `(*loop_).add`), not
+    /// through its `l`, while the loop runs through `run_raw` with that same
+    /// pointer. The second timer is armed from inside the first callback and
+    /// stops the loop, so both callbacks must have run for `until_done` to
+    /// return.
+    // Real-code twin of mirihar-n431 `raw_local_root` (the backend's syscalls
+    // keep it out of Miri; the epoll twin runs under Miri on the Linux target).
+    #[test]
+    fn wasi_callback_reenters_through_stored_loop_pointer() {
+        struct Ud {
+            root: *mut Loop,
+            c2: *mut Completion,
+            first: bool,
+            second: bool,
+        }
+        fn first_cb(
+            ud: *mut core::ffi::c_void,
+            _l: *mut Loop,
+            _c: *mut Completion,
+            _r: Result,
+        ) -> CallbackAction {
+            let ud = ud as *mut Ud;
+            unsafe {
+                (*ud).first = true;
+                // Through the stored pointer, not `_l`.
+                (*(*ud).root).timer((*ud).c2, 0, ud.cast(), second_cb);
+            }
+            CallbackAction::Disarm
+        }
+        fn second_cb(
+            ud: *mut core::ffi::c_void,
+            _l: *mut Loop,
+            _c: *mut Completion,
+            _r: Result,
+        ) -> CallbackAction {
+            let ud = ud as *mut Ud;
+            unsafe {
+                (*ud).second = true;
+                (*(*ud).root).stop();
+            }
+            CallbackAction::Disarm
+        }
+
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+        let root: *mut Loop = core::ptr::addr_of_mut!(loop_);
+        let mut c1 = Completion::default();
+        let mut c2 = Completion::default();
+        let mut ud = Ud {
+            root,
+            c2: core::ptr::addr_of_mut!(c2),
+            first: false,
+            second: false,
+        };
+        let udp: *mut Ud = core::ptr::addr_of_mut!(ud);
+        unsafe {
+            (*root).timer(core::ptr::addr_of_mut!(c1), 0, udp.cast(), first_cb);
+            Loop::run_raw(root, RunMode::UntilDone).unwrap();
+            assert!((*udp).first);
+            assert!((*udp).second);
+            assert!((*root).stopped());
+            (*root).deinit();
+        }
+    }
 
     /// PORT NOTE: `test "wasi: loop time"`.
     #[test]

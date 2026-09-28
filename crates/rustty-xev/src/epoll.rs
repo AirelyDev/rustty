@@ -292,15 +292,43 @@ impl Loop {
 
     /// Run the event loop. See RunMode documentation for details on modes.
     /// Once the loop is run, the pointer MUST remain stable.
+    // PORT NOTE (N431 in NEW-FINDINGS): the reference's `run(self: *Loop, ..)`
+    // body lives in `run_raw`, which takes the loop as a raw pointer, as Zig's
+    // unprotected `*Loop` does. Callbacks re-enter the loop while it runs,
+    // through their `l` argument or through a pointer the caller stored (termio's
+    // `td.loop_`), so no `&mut Loop` may be live across a callback: a
+    // function-entry `&mut self` is protected for the whole call, and any other
+    // access to the loop pops it (UB under Stacked and Tree Borrows,
+    // .port/phase-2/mirihar-n431). This entry converts to raw at once and never
+    // uses `self` again, so it is sound when callbacks reach the loop only
+    // through `l`. A caller whose callbacks re-enter through a stored pointer
+    // must enter through `run_raw` with that same pointer instead: this
+    // `&mut self` is itself protected for the call (mirihar-n431
+    // `wrapper_*_root`).
     pub fn run(&mut self, mode: RunMode) -> core::result::Result<(), Error> {
-        match mode {
-            RunMode::NoWait => self.tick(0),
-            RunMode::Once => self.tick(1),
-            RunMode::UntilDone => {
-                while !self.done() {
-                    self.tick(1)?;
+        // SAFETY: `self` is a live, exclusive `Loop` for the whole call.
+        unsafe { Loop::run_raw(self, mode) }
+    }
+
+    /// `run(self: *Loop, mode)`: the raw-pointer entry (see `run`'s PORT NOTE).
+    /// Callers whose callbacks re-enter the loop through a stored pointer
+    /// enter here with that pointer.
+    ///
+    /// # Safety
+    /// `this` must point at a live, initialized `Loop` that stays at the same
+    /// address and is not otherwise borrowed for the whole call, except by
+    /// the loop's own callbacks through raw pointers.
+    pub unsafe fn run_raw(this: *mut Loop, mode: RunMode) -> core::result::Result<(), Error> {
+        unsafe {
+            match mode {
+                RunMode::NoWait => Loop::tick_raw(this, 0),
+                RunMode::Once => Loop::tick_raw(this, 1),
+                RunMode::UntilDone => {
+                    while !(*this).done() {
+                        Loop::tick_raw(this, 1)?;
+                    }
+                    Ok(())
                 }
-                Ok(())
             }
         }
     }
@@ -444,10 +472,9 @@ impl Loop {
             // Adding state we can just modify the metadata and return
             // since the timer isn't in the heap yet.
             State::Adding => unsafe {
-                match &mut (*c).op {
-                    Operation::Timer(t) => t.next = self.timer_next(next_ms),
-                    _ => unreachable!(),
-                }
+                // N434: through `timer_ptr`, never `&mut (*c).op`.
+                let next = self.timer_next(next_ms);
+                (*timer_ptr(c)).next = next;
                 (*c).userdata = userdata;
                 (*c).callback = cb;
             },
@@ -456,10 +483,9 @@ impl Loop {
                 // Update the reset time for the timer to the desired time
                 // along with all the callbacks.
                 let reset = self.timer_next(next_ms);
-                match &mut (*c).op {
-                    Operation::Timer(t) => t.reset = Some(reset),
-                    _ => unreachable!(),
-                }
+                // N434: the timer is linked in the heap; `timer_ptr`, never
+                // `&mut (*c).op`.
+                (*timer_ptr(c)).reset = Some(reset);
                 (*c).userdata = userdata;
                 (*c).callback = cb;
 
@@ -516,281 +542,291 @@ impl Loop {
     /// Tick through the event loop once, waiting for at least "wait" completions
     /// to be processed by the loop itself.
     pub fn tick(&mut self, wait: u32) -> core::result::Result<(), Error> {
-        // If we're stopped then the loop is fully over.
-        if self.flags.stopped {
-            return Ok(());
-        }
-
-        // We can't nest runs.
-        if self.flags.in_run {
-            return Err(Error); // error.NestedRunsNotAllowed
-        }
-        self.flags.in_run = true;
-        // defer self.flags.in_run = false; — via the guard below.
-        let result = self.tick_inner(wait);
-        self.flags.in_run = false;
-        result
+        // SAFETY: as `run`.
+        unsafe { Loop::tick_raw(self, wait) }
     }
 
-    fn tick_inner(&mut self, wait: u32) -> core::result::Result<(), Error> {
-        let self_ptr: *mut Loop = self;
+    /// `tick(self: *Loop, wait)`: the raw-pointer twin of `tick` (see `run`).
+    ///
+    /// # Safety
+    /// As `run_raw`.
+    pub unsafe fn tick_raw(this: *mut Loop, wait: u32) -> core::result::Result<(), Error> {
+        unsafe {
+            // If we're stopped then the loop is fully over.
+            if (*this).flags.stopped {
+                return Ok(());
+            }
 
-        // Initialize
-        if !self.flags.init {
-            self.flags.init = true;
+            // We can't nest runs.
+            if (*this).flags.in_run {
+                return Err(Error); // error.NestedRunsNotAllowed
+            }
+            (*this).flags.in_run = true;
+            // defer self.flags.in_run = false; — via the guard below.
+            let result = Loop::tick_inner(this, wait);
+            (*this).flags.in_run = false;
+            result
+        }
+    }
 
-            if self.thread_pool.is_some() {
-                // Establish the stable heap-rooted raw handle ONCE, then init the
-                // self-referential queue THROUGH it, so the stub self-pointers it
-                // writes carry the queue's own (Box) allocation provenance — not a
-                // per-tick `&mut self` tag that the next tick's reborrow would pop.
-                // (mirrors kqueue.rs's LIFETIMES-AUDIT M2 fix; mirihar `boxq`.)
-                unsafe {
-                    let qp: *mut TaskCompletionQueue =
-                        &raw mut *(*self_ptr).thread_pool_completions;
-                    ptr::addr_of_mut!((*self_ptr).thread_pool_completions_ptr).write(qp);
-                    TaskCompletionQueue::init(qp);
+    unsafe fn tick_inner(this: *mut Loop, wait: u32) -> core::result::Result<(), Error> {
+        unsafe {
+            // Initialize
+            if !(*this).flags.init {
+                (*this).flags.init = true;
+
+                if (*this).thread_pool.is_some() {
+                    // Establish the stable heap-rooted raw handle ONCE, then init the
+                    // self-referential queue THROUGH it, so the stub self-pointers it
+                    // writes carry the queue's own (Box) allocation provenance — not a
+                    // per-tick `&mut self` tag that the next tick's reborrow would pop.
+                    // (mirrors kqueue.rs's LIFETIMES-AUDIT M2 fix; mirihar `boxq`.)
+                    {
+                        let qp: *mut TaskCompletionQueue =
+                            &raw mut *(*this).thread_pool_completions;
+                        ptr::addr_of_mut!((*this).thread_pool_completions_ptr).write(qp);
+                        TaskCompletionQueue::init(qp);
+                    }
+                }
+
+                let mut ev = libc::epoll_event {
+                    events: (libc::EPOLLIN | libc::EPOLLRDHUP) as u32,
+                    u64: (*this).eventfd.fd as u64,
+                };
+                // SAFETY: register the always-on wakeup eventfd with our epoll fd.
+                let rc =
+                    libc::epoll_ctl((*this).fd, libc::EPOLL_CTL_ADD, (*this).eventfd.fd, &mut ev);
+                if rc < 0 {
+                    // We reset initialization because we can't do anything
+                    // safely unless we get this eventfd registered!
+                    (*this).flags.init = false;
+                    return Err(Error);
                 }
             }
 
-            let mut ev = libc::epoll_event {
-                events: (libc::EPOLLIN | libc::EPOLLRDHUP) as u32,
-                u64: self.eventfd.fd as u64,
-            };
-            // SAFETY: register the always-on wakeup eventfd with our epoll fd.
-            let rc =
-                unsafe { libc::epoll_ctl(self.fd, libc::EPOLL_CTL_ADD, self.eventfd.fd, &mut ev) };
-            if rc < 0 {
-                // We reset initialization because we can't do anything
-                // safely unless we get this eventfd registered!
-                self.flags.init = false;
-                return Err(Error);
-            }
-        }
-
-        // Submit all the submissions. We copy the submission queue so that
-        // any resubmits don't cause an infinite loop.
-        let mut wait_rem: usize = wait as usize;
-        let mut queued = core::mem::take(&mut self.submissions);
-        // self.submissions = .{};  (done by mem::take)
-        loop {
-            let c = unsafe { queued.pop() };
-            if c.is_null() {
-                break;
-            }
-            // We ignore any completions that aren't in the adding state.
-            // This usually means that we switched them to be deleted or
-            // something.
-            if unsafe { (*c).flags.state } != State::Adding {
-                continue;
-            }
-
-            // These operations happen synchronously. Ensure they are
-            // decremented from wait_rem.
-            match unsafe { &(*c).op } {
-                Operation::Cancel { .. } | Operation::Shutdown { .. } | Operation::Timer(_) => {
-                    wait_rem = wait_rem.saturating_sub(1);
-                }
-                _ => {}
-            }
-
-            unsafe { self.start(c) };
-        }
-
-        // Handle all deletions so we don't wait for them.
-        loop {
-            let c = unsafe { self.deletions.pop() };
-            if c.is_null() {
-                break;
-            }
-            if unsafe { (*c).flags.state } != State::Deleting {
-                continue;
-            }
-            unsafe { self.stop_completion(c) };
-        }
-
-        // If we have no active handles then we return no matter what.
-        if self.active == 0 {
-            // We still have to update our concept of "now".
-            self.update_now();
-            return Ok(());
-        }
-
-        // Wait and process events. We only do this if we have any active.
-        let mut events: [libc::epoll_event; 1024] = unsafe { core::mem::zeroed() };
-        while self.active > 0 && (wait == 0 || wait_rem > 0) {
-            self.update_now();
-            let mut now_timer = Timer {
-                next: self.cached_now,
-                reset: None,
-                heap: heap::IntrusiveField::default(),
-                c: ptr::null_mut(),
-            };
-
-            // Run our expired timers
+            // Submit all the submissions. We copy the submission queue so that
+            // any resubmits don't cause an infinite loop.
+            let mut wait_rem: usize = wait as usize;
+            let mut queued = core::mem::take(&mut (*this).submissions);
+            // self.submissions = .{};  (done by mem::take)
             loop {
-                let t = self.timers.peek();
-                if t.is_null() {
+                let c = queued.pop();
+                if c.is_null() {
                     break;
                 }
-                if !Timer::less((), t, &mut now_timer) {
-                    break;
+                // We ignore any completions that aren't in the adding state.
+                // This usually means that we switched them to be deleted or
+                // something.
+                if (*c).flags.state != State::Adding {
+                    continue;
                 }
 
-                // Remove the timer
-                assert!(unsafe { self.timers.delete_min() } == t);
-
-                // Mark completion as done
-                let c = unsafe { (*t).c };
-                unsafe { (*c).flags.state = State::Dead };
-                self.active -= 1;
-
-                // Lower our remaining count
-                wait_rem = wait_rem.saturating_sub(1);
-
-                // Invoke
-                let cb = unsafe { (*c).callback };
-                let ud = unsafe { (*c).userdata };
-                let action = cb(ud, self_ptr, c, Result::Timer(Ok(TimerTrigger::Expiration)));
-                match action {
-                    CallbackAction::Disarm => {}
-                    CallbackAction::Rearm => unsafe { self.start(c) },
+                // These operations happen synchronously. Ensure they are
+                // decremented from wait_rem.
+                match &(*c).op {
+                    Operation::Cancel { .. } | Operation::Shutdown { .. } | Operation::Timer(_) => {
+                        wait_rem = wait_rem.saturating_sub(1);
+                    }
+                    _ => {}
                 }
+
+                Loop::start(this, c);
             }
 
-            // Run our completed thread pool work
-            if self.thread_pool.is_some() {
+            // Handle all deletions so we don't wait for them.
+            loop {
+                let c = (*this).deletions.pop();
+                if c.is_null() {
+                    break;
+                }
+                if (*c).flags.state != State::Deleting {
+                    continue;
+                }
+                Loop::stop_completion(this, c);
+            }
+
+            // If we have no active handles then we return no matter what.
+            if (*this).active == 0 {
+                // We still have to update our concept of "now".
+                (*this).update_now();
+                return Ok(());
+            }
+
+            // Wait and process events. We only do this if we have any active.
+            let mut events: [libc::epoll_event; 1024] = core::mem::zeroed();
+            while (*this).active > 0 && (wait == 0 || wait_rem > 0) {
+                (*this).update_now();
+                let mut now_timer = Timer {
+                    next: (*this).cached_now,
+                    reset: None,
+                    heap: heap::IntrusiveField::default(),
+                    c: ptr::null_mut(),
+                };
+
+                // Run our expired timers
                 loop {
-                    // Drain through the cached stable raw handle (never a fresh
-                    // `&mut self.thread_pool_completions`, which would pop the
-                    // queue's stub-pointer lineage). Mirrors kqueue.rs; mirihar
-                    // `boxq`.
-                    let c = unsafe {
-                        TaskCompletionQueue::pop((*self_ptr).thread_pool_completions_ptr)
-                    };
-                    if c.is_null() {
+                    let t = (*this).timers.peek();
+                    if t.is_null() {
+                        break;
+                    }
+                    if !Timer::less((), t, &mut now_timer) {
                         break;
                     }
 
+                    // Remove the timer
+                    assert!((*this).timers.delete_min() == t);
+
                     // Mark completion as done
-                    unsafe { (*c).flags.state = State::Dead };
-                    self.active -= 1;
+                    let c = (*t).c;
+                    (*c).flags.state = State::Dead;
+                    (*this).active -= 1;
 
                     // Lower our remaining count
                     wait_rem = wait_rem.saturating_sub(1);
 
                     // Invoke
-                    let cb = unsafe { (*c).callback };
-                    let ud = unsafe { (*c).userdata };
-                    let tr = unsafe { (*c).task_result };
-                    let action = cb(ud, self_ptr, c, tr);
+                    let cb = (*c).callback;
+                    let ud = (*c).userdata;
+                    let action = cb(ud, this, c, Result::Timer(Ok(TimerTrigger::Expiration)));
                     match action {
                         CallbackAction::Disarm => {}
-                        CallbackAction::Rearm => unsafe { self.start(c) },
+                        CallbackAction::Rearm => Loop::start(this, c),
                     }
                 }
-            }
 
-            // Determine our next timeout based on the timers
-            let timeout: i32 = if wait_rem == 0 {
-                0
-            } else {
-                // If we have a timer, we want to set the timeout to our next
-                // timer value. If we have no timer, we wait forever.
-                let t = self.timers.peek();
-                if t.is_null() {
-                    -1
-                } else {
-                    // Determine the time in milliseconds.
-                    let ms_now = (self.cached_now.tv_sec as u64) * ms_per_s
-                        + (self.cached_now.tv_nsec as u64) / ns_per_ms;
-                    let ms_next = (unsafe { (*t).next.tv_sec } as u64) * ms_per_s
-                        + (unsafe { (*t).next.tv_nsec } as u64) / ns_per_ms;
-                    // CARRY-FORWARD FIX (T3 review): the reference `@intCast(ms_next
-                    // -| ms_now)` truncates; a plain `as i32` on a >24.8-day wait
-                    // (u64 diff > i32::MAX ms) would WRAP NEGATIVE, turning the
-                    // epoll_wait timeout into a spurious immediate/forever value.
-                    // Clamp to i32::MAX (epoll_wait caps at ~24.8 days anyway).
-                    i32::try_from(ms_next.saturating_sub(ms_now)).unwrap_or(i32::MAX)
+                // Run our completed thread pool work
+                if (*this).thread_pool.is_some() {
+                    loop {
+                        // Drain through the cached stable raw handle (never a fresh
+                        // `&mut self.thread_pool_completions`, which would pop the
+                        // queue's stub-pointer lineage). Mirrors kqueue.rs; mirihar
+                        // `boxq`.
+                        let c = TaskCompletionQueue::pop((*this).thread_pool_completions_ptr);
+                        if c.is_null() {
+                            break;
+                        }
+
+                        // Mark completion as done
+                        (*c).flags.state = State::Dead;
+                        (*this).active -= 1;
+
+                        // Lower our remaining count
+                        wait_rem = wait_rem.saturating_sub(1);
+
+                        // Invoke
+                        let cb = (*c).callback;
+                        let ud = (*c).userdata;
+                        let tr = (*c).task_result;
+                        let action = cb(ud, this, c, tr);
+                        match action {
+                            CallbackAction::Disarm => {}
+                            CallbackAction::Rearm => Loop::start(this, c),
+                        }
+                    }
                 }
-            };
 
-            // SAFETY: epoll_wait fills `events[0..n]`; on -1 we inspect errno.
-            let n = unsafe {
-                libc::epoll_wait(
-                    self.fd,
+                // Determine our next timeout based on the timers
+                let timeout: i32 = if wait_rem == 0 {
+                    0
+                } else {
+                    // If we have a timer, we want to set the timeout to our next
+                    // timer value. If we have no timer, we wait forever.
+                    let t = (*this).timers.peek();
+                    if t.is_null() {
+                        -1
+                    } else {
+                        // Determine the time in milliseconds.
+                        let ms_now = ((*this).cached_now.tv_sec as u64) * ms_per_s
+                            + ((*this).cached_now.tv_nsec as u64) / ns_per_ms;
+                        let ms_next = ((*t).next.tv_sec as u64) * ms_per_s
+                            + ((*t).next.tv_nsec as u64) / ns_per_ms;
+                        // CARRY-FORWARD FIX (T3 review): the reference `@intCast(ms_next
+                        // -| ms_now)` truncates; a plain `as i32` on a >24.8-day wait
+                        // (u64 diff > i32::MAX ms) would WRAP NEGATIVE, turning the
+                        // epoll_wait timeout into a spurious immediate/forever value.
+                        // Clamp to i32::MAX (epoll_wait caps at ~24.8 days anyway).
+                        i32::try_from(ms_next.saturating_sub(ms_now)).unwrap_or(i32::MAX)
+                    }
+                };
+
+                // SAFETY: epoll_wait fills `events[0..n]`; on -1 we inspect errno.
+                let n = libc::epoll_wait(
+                    (*this).fd,
                     events.as_mut_ptr(),
                     events.len() as libc::c_int,
                     timeout,
-                )
-            };
-            if n < 0 {
-                match errno() {
-                    libc::EINTR => continue,
-                    _ => return Err(Error),
+                );
+                if n < 0 {
+                    match errno() {
+                        libc::EINTR => continue,
+                        _ => return Err(Error),
+                    }
                 }
-            }
-            let n = n as usize;
+                let n = n as usize;
 
-            // Process all our events and invoke their completion handlers
-            for ev in &events[0..n] {
-                // Copy out of the (potentially packed) epoll_event field.
-                let data = ev.u64;
+                // Process all our events and invoke their completion handlers
+                for ev in &events[0..n] {
+                    // Copy out of the (potentially packed) epoll_event field.
+                    let data = ev.u64;
 
-                // Handle wakeup eventfd
-                if data == self.eventfd.fd as u64 {
-                    // Drain the coalesced counter; ignore errors (WouldBlock).
-                    let _ = self.eventfd.drain();
-                    continue;
-                }
-
-                let c: *mut Completion = data as *mut Completion;
-
-                // We get the fd and mark this as in progress we can properly
-                // clean this up later.
-                let fd = if unsafe { (*c).flags.dup } {
-                    Some(unsafe { (*c).flags.dup_fd })
-                } else {
-                    unsafe { Completion::fd(c) }
-                };
-                let close_dup = unsafe { (*c).flags.dup };
-                unsafe { (*c).flags.state = State::Dead };
-
-                let res = unsafe { Completion::perform(c, Some(ev)) };
-                let cb = unsafe { (*c).callback };
-                let ud = unsafe { (*c).userdata };
-                let action = cb(ud, self_ptr, c, res);
-                match action {
-                    CallbackAction::Disarm => {
-                        // We can't use self.stop because we can't trust
-                        // that c is still a valid pointer.
-                        if let Some(v) = fd {
-                            // SAFETY: DEL on a fd we previously ADDed; never fails.
-                            unsafe {
-                                libc::epoll_ctl(self.fd, libc::EPOLL_CTL_DEL, v, ptr::null_mut())
-                            };
-
-                            if close_dup {
-                                unsafe { libc::close(v) };
-                            }
-                        }
-
-                        self.active -= 1;
+                    // Handle wakeup eventfd
+                    if data == (*this).eventfd.fd as u64 {
+                        // Drain the coalesced counter; ignore errors (WouldBlock).
+                        let _ = (*this).eventfd.drain();
+                        continue;
                     }
 
-                    // For epoll, epoll remains armed by default. We have to
-                    // reset the state, that is all.
-                    CallbackAction::Rearm => unsafe { (*c).flags.state = State::Active },
+                    let c: *mut Completion = data as *mut Completion;
+
+                    // We get the fd and mark this as in progress we can properly
+                    // clean this up later.
+                    let fd = if (*c).flags.dup {
+                        Some((*c).flags.dup_fd)
+                    } else {
+                        Completion::fd(c)
+                    };
+                    let close_dup = (*c).flags.dup;
+                    (*c).flags.state = State::Dead;
+
+                    let res = Completion::perform(c, Some(ev));
+                    let cb = (*c).callback;
+                    let ud = (*c).userdata;
+                    let action = cb(ud, this, c, res);
+                    match action {
+                        CallbackAction::Disarm => {
+                            // We can't use self.stop because we can't trust
+                            // that c is still a valid pointer.
+                            if let Some(v) = fd {
+                                // SAFETY: DEL on a fd we previously ADDed; never fails.
+                                libc::epoll_ctl(
+                                    (*this).fd,
+                                    libc::EPOLL_CTL_DEL,
+                                    v,
+                                    ptr::null_mut(),
+                                );
+
+                                if close_dup {
+                                    libc::close(v);
+                                }
+                            }
+
+                            (*this).active -= 1;
+                        }
+
+                        // For epoll, epoll remains armed by default. We have to
+                        // reset the state, that is all.
+                        CallbackAction::Rearm => (*c).flags.state = State::Active,
+                    }
                 }
+
+                if wait == 0 {
+                    break;
+                }
+                wait_rem = wait_rem.saturating_sub(n);
             }
 
-            if wait == 0 {
-                break;
-            }
-            wait_rem = wait_rem.saturating_sub(n);
+            Ok(())
         }
-
-        Ok(())
     }
 
     /// Schedule a completion to run on a thread.
@@ -919,406 +955,409 @@ impl Loop {
     /// # Safety
     /// `completion` must be a valid, stable `Completion` pointer owned by this
     /// loop and in the `Adding` state.
-    unsafe fn start(&mut self, completion: *mut Completion) {
-        let self_ptr: *mut Loop = self;
-
-        // res_ is Some(result) if the op completed synchronously (an immediate
-        // result to hand to the callback), or None if it registered with epoll
-        // (or the timer heap) and we should mark it active.
-        let res_: Option<Result> = match unsafe { &(*completion).op } {
-            Operation::Noop => {
-                unsafe { (*completion).flags.state = State::Dead };
-                return;
-            }
-
-            Operation::Cancel { c } => {
-                let target = *c;
-                // We stop immediately. We only stop if we are in the
-                // "adding" state because cancellation or any other action
-                // means we're complete already.
-                if unsafe { (*completion).flags.state } == State::Adding {
-                    if matches!(unsafe { &(*target).op }, Operation::Cancel { .. }) {
-                        panic!("cannot cancel a cancellation");
-                    }
-                    unsafe { self.stop_completion(target) };
+    unsafe fn start(this: *mut Loop, completion: *mut Completion) {
+        unsafe {
+            // res_ is Some(result) if the op completed synchronously (an immediate
+            // result to hand to the callback), or None if it registered with epoll
+            // (or the timer heap) and we should mark it active.
+            let res_: Option<Result> = match &(*completion).op {
+                Operation::Noop => {
+                    (*completion).flags.state = State::Dead;
+                    return;
                 }
 
-                // We always run cancellations.
-                Some(Result::Cancel(Ok(())))
-            }
-
-            // PORT NOTE: the reference `.read` arm opens with `if
-            // (completion.flags.threadpool) { if (self.thread_schedule(completion))
-            // |_| return else |err| break :res .{ .read = err }; }` (epoll.zig:588)
-            // — a threadpool-flagged read (File's, epoll arm) is a BLOCKING op that
-            // rides the pool, exactly like `.close`/`.pread`/`.pwrite`. With no pool
-            // attached `thread_schedule` yields `ThreadPoolRequired`. An un-flagged
-            // read (GenericStream/TCP, which set `dup` not `threadpool`) registers
-            // with epoll below.
-            Operation::Read { .. } => {
-                if unsafe { (*completion).flags.threadpool } {
-                    match unsafe { self.thread_schedule(completion) } {
-                        Ok(()) => return,
-                        Err(()) => Some(Result::Read(Err(ReadError::ThreadPoolRequired))),
+                Operation::Cancel { c } => {
+                    let target = *c;
+                    // We stop immediately. We only stop if we are in the
+                    // "adding" state because cancellation or any other action
+                    // means we're complete already.
+                    if (*completion).flags.state == State::Adding {
+                        if matches!(&(*target).op, Operation::Cancel { .. }) {
+                            panic!("cannot cancel a cancellation");
+                        }
+                        Loop::stop_completion(this, target);
                     }
-                } else {
-                    match unsafe { Completion::fd_maybe_dup(completion) } {
-                        // DupFailed — surfaced as an immediate read error.
-                        Err(()) => Some(Result::Read(Err(ReadError::Unexpected))),
-                        Ok(reg_fd) => {
-                            let mut ev = libc::epoll_event {
-                                events: (libc::EPOLLIN | libc::EPOLLRDHUP) as u32,
-                                u64: completion as u64,
-                            };
-                            // SAFETY: register `reg_fd` for read readiness with our epoll fd.
-                            let rc = unsafe {
-                                libc::epoll_ctl(self.fd, libc::EPOLL_CTL_ADD, reg_fd, &mut ev)
-                            };
-                            if rc < 0 {
-                                Some(Result::Read(Err(ReadError::Unexpected)))
-                            } else {
-                                None
+
+                    // We always run cancellations.
+                    Some(Result::Cancel(Ok(())))
+                }
+
+                // PORT NOTE: the reference `.read` arm opens with `if
+                // (completion.flags.threadpool) { if (self.thread_schedule(completion))
+                // |_| return else |err| break :res .{ .read = err }; }` (epoll.zig:588)
+                // — a threadpool-flagged read (File's, epoll arm) is a BLOCKING op that
+                // rides the pool, exactly like `.close`/`.pread`/`.pwrite`. With no pool
+                // attached `thread_schedule` yields `ThreadPoolRequired`. An un-flagged
+                // read (GenericStream/TCP, which set `dup` not `threadpool`) registers
+                // with epoll below.
+                Operation::Read { .. } => {
+                    if (*completion).flags.threadpool {
+                        match (*this).thread_schedule(completion) {
+                            Ok(()) => return,
+                            Err(()) => Some(Result::Read(Err(ReadError::ThreadPoolRequired))),
+                        }
+                    } else {
+                        match Completion::fd_maybe_dup(completion) {
+                            // DupFailed — surfaced as an immediate read error.
+                            Err(()) => Some(Result::Read(Err(ReadError::Unexpected))),
+                            Ok(reg_fd) => {
+                                let mut ev = libc::epoll_event {
+                                    events: (libc::EPOLLIN | libc::EPOLLRDHUP) as u32,
+                                    u64: completion as u64,
+                                };
+                                // SAFETY: register `reg_fd` for read readiness with our epoll fd.
+                                let rc = libc::epoll_ctl(
+                                    (*this).fd,
+                                    libc::EPOLL_CTL_ADD,
+                                    reg_fd,
+                                    &mut ev,
+                                );
+                                if rc < 0 {
+                                    Some(Result::Read(Err(ReadError::Unexpected)))
+                                } else {
+                                    None
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            // PORT NOTE: the `.pread` arm (epoll.zig:608) is byte-identical to
-            // `.read` — the same threadpool gate then the same IN|RDHUP epoll
-            // registration; only the perform-side syscall differs (`posix.pread`
-            // with the op's `offset`). File sets `threadpool = true` on pread
-            // (file.zig:131), so in practice the pool path is always taken here.
-            // REFERENCE-QUIRK PORT NOTE: the oracle tags THIS start-arm's errors
-            // `.read` even though the op is `.pread` (epoll.zig:608 — an upstream
-            // tagged-union slip; the PERFORM side at epoll.zig:992 tags `.pread`
-            // correctly). We deliberately tag `Result::PRead` here: the strict
-            // pread trampoline matches on `Result::PRead` and would hit
-            // `unreachable!` on a `Result::Read`.
-            Operation::PRead { .. } => {
-                if unsafe { (*completion).flags.threadpool } {
-                    match unsafe { self.thread_schedule(completion) } {
-                        Ok(()) => return,
-                        Err(()) => Some(Result::PRead(Err(ReadError::ThreadPoolRequired))),
-                    }
-                } else {
-                    match unsafe { Completion::fd_maybe_dup(completion) } {
-                        Err(()) => Some(Result::PRead(Err(ReadError::Unexpected))),
-                        Ok(reg_fd) => {
-                            let mut ev = libc::epoll_event {
-                                events: (libc::EPOLLIN | libc::EPOLLRDHUP) as u32,
-                                u64: completion as u64,
-                            };
-                            // SAFETY: register `reg_fd` for read readiness with our epoll fd.
-                            let rc = unsafe {
-                                libc::epoll_ctl(self.fd, libc::EPOLL_CTL_ADD, reg_fd, &mut ev)
-                            };
-                            if rc < 0 {
-                                Some(Result::PRead(Err(ReadError::Unexpected)))
-                            } else {
-                                None
+                // PORT NOTE: the `.pread` arm (epoll.zig:608) is byte-identical to
+                // `.read` — the same threadpool gate then the same IN|RDHUP epoll
+                // registration; only the perform-side syscall differs (`posix.pread`
+                // with the op's `offset`). File sets `threadpool = true` on pread
+                // (file.zig:131), so in practice the pool path is always taken here.
+                // REFERENCE-QUIRK PORT NOTE: the oracle tags THIS start-arm's errors
+                // `.read` even though the op is `.pread` (epoll.zig:608 — an upstream
+                // tagged-union slip; the PERFORM side at epoll.zig:992 tags `.pread`
+                // correctly). We deliberately tag `Result::PRead` here: the strict
+                // pread trampoline matches on `Result::PRead` and would hit
+                // `unreachable!` on a `Result::Read`.
+                Operation::PRead { .. } => {
+                    if (*completion).flags.threadpool {
+                        match (*this).thread_schedule(completion) {
+                            Ok(()) => return,
+                            Err(()) => Some(Result::PRead(Err(ReadError::ThreadPoolRequired))),
+                        }
+                    } else {
+                        match Completion::fd_maybe_dup(completion) {
+                            Err(()) => Some(Result::PRead(Err(ReadError::Unexpected))),
+                            Ok(reg_fd) => {
+                                let mut ev = libc::epoll_event {
+                                    events: (libc::EPOLLIN | libc::EPOLLRDHUP) as u32,
+                                    u64: completion as u64,
+                                };
+                                // SAFETY: register `reg_fd` for read readiness with our epoll fd.
+                                let rc = libc::epoll_ctl(
+                                    (*this).fd,
+                                    libc::EPOLL_CTL_ADD,
+                                    reg_fd,
+                                    &mut ev,
+                                );
+                                if rc < 0 {
+                                    Some(Result::PRead(Err(ReadError::Unexpected)))
+                                } else {
+                                    None
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            Operation::Timer(_) => {
-                // Point back to completion since we need this.
-                let v_ptr: *mut Timer = match unsafe { &mut (*completion).op } {
-                    Operation::Timer(t) => {
-                        t.c = completion;
-                        t
-                    }
-                    _ => unreachable!(),
-                };
+                Operation::Timer(_) => {
+                    // Point back to completion since we need this.
+                    // N434: the heap keeps this pointer; it carries the
+                    // completion's own tag (`timer_ptr`).
+                    let v_ptr: *mut Timer = timer_ptr(completion);
+                    (*v_ptr).c = completion;
 
-                // Insert the timer into our heap.
-                unsafe { self.timers.insert(v_ptr) };
+                    // Insert the timer into our heap.
+                    (*this).timers.insert(v_ptr);
 
-                // We always run timers.
-                None
-            }
-
-            // PORT NOTE: the socket-op `start` arms register the fd with epoll for
-            // the readiness the op needs (IN for read-family, OUT for write-family)
-            // and defer the actual syscall to `perform` when the fd fires. The
-            // reference `fd_maybe_dup catch DupFailed` maps to the op's `Unexpected`
-            // (the T3 read arm's established mapping — accept/connect/poll/send/recv
-            // never dup, and the dup-setting Stream read/write map dup-fail the same
-            // way).
-            Operation::Accept { .. } => {
-                match unsafe { self.epoll_register(completion, libc::EPOLLIN as u32) } {
-                    Ok(()) => None,
-                    Err(()) => Some(Result::Accept(Err(AcceptError::Unexpected))),
+                    // We always run timers.
+                    None
                 }
-            }
 
-            Operation::Connect { socket: _, addr } => {
-                let addr_copy = *addr;
-                match unsafe { Completion::fd_maybe_dup(completion) } {
-                    Err(()) => Some(Result::Connect(Err(ConnectError::Unexpected))),
-                    Ok(fd) => {
-                        // SAFETY: connect on the (possibly dup'd) socket fd; `addr`
-                        // is a valid `Address` held by value in the op.
-                        let rc = unsafe {
-                            libc::connect(
+                // PORT NOTE: the socket-op `start` arms register the fd with epoll for
+                // the readiness the op needs (IN for read-family, OUT for write-family)
+                // and defer the actual syscall to `perform` when the fd fires. The
+                // reference `fd_maybe_dup catch DupFailed` maps to the op's `Unexpected`
+                // (the T3 read arm's established mapping — accept/connect/poll/send/recv
+                // never dup, and the dup-setting Stream read/write map dup-fail the same
+                // way).
+                Operation::Accept { .. } => {
+                    match (*this).epoll_register(completion, libc::EPOLLIN as u32) {
+                        Ok(()) => None,
+                        Err(()) => Some(Result::Accept(Err(AcceptError::Unexpected))),
+                    }
+                }
+
+                Operation::Connect { socket: _, addr } => {
+                    let addr_copy = *addr;
+                    match Completion::fd_maybe_dup(completion) {
+                        Err(()) => Some(Result::Connect(Err(ConnectError::Unexpected))),
+                        Ok(fd) => {
+                            // SAFETY: connect on the (possibly dup'd) socket fd; `addr`
+                            // is a valid `Address` held by value in the op.
+                            let rc = libc::connect(
                                 fd,
                                 ptr::addr_of!(addr_copy) as *const libc::sockaddr,
                                 addr_copy.get_os_sock_len(),
-                            )
-                        };
-                        if rc == 0 {
-                            Some(Result::Connect(Ok(())))
-                        } else {
-                            match errno() {
-                                // If we would block then we register for OUT events
-                                // and are notified of connection completion that way.
-                                libc::EINPROGRESS | libc::EAGAIN => {
-                                    match unsafe {
-                                        self.epoll_register(completion, libc::EPOLLOUT as u32)
-                                    } {
-                                        Ok(()) => None,
-                                        Err(()) => {
-                                            Some(Result::Connect(Err(ConnectError::Unexpected)))
+                            );
+                            if rc == 0 {
+                                Some(Result::Connect(Ok(())))
+                            } else {
+                                match errno() {
+                                    // If we would block then we register for OUT events
+                                    // and are notified of connection completion that way.
+                                    libc::EINPROGRESS | libc::EAGAIN => {
+                                        match (*this)
+                                            .epoll_register(completion, libc::EPOLLOUT as u32)
+                                        {
+                                            Ok(()) => None,
+                                            Err(()) => {
+                                                Some(Result::Connect(Err(ConnectError::Unexpected)))
+                                            }
                                         }
                                     }
+                                    _ => Some(Result::Connect(Err(ConnectError::Unexpected))),
                                 }
-                                _ => Some(Result::Connect(Err(ConnectError::Unexpected))),
                             }
                         }
                     }
                 }
-            }
 
-            // PORT NOTE: the reference `.write` arm opens with `if
-            // (completion.flags.threadpool) { if (self.thread_schedule(completion))
-            // |_| return else |err| break :res .{ .write = err }; }`
-            // (epoll.zig:632) — the write twin of the `.read` gate above. File sets
-            // `threadpool = true` on plain write (file.zig:142), so its writes ride
-            // the pool; an un-flagged write (GenericStream/TCP, which set `dup`)
-            // registers for OUT below.
-            Operation::Write { .. } => {
-                if unsafe { (*completion).flags.threadpool } {
-                    match unsafe { self.thread_schedule(completion) } {
-                        Ok(()) => return,
-                        Err(()) => Some(Result::Write(Err(WriteError::ThreadPoolRequired))),
+                // PORT NOTE: the reference `.write` arm opens with `if
+                // (completion.flags.threadpool) { if (self.thread_schedule(completion))
+                // |_| return else |err| break :res .{ .write = err }; }`
+                // (epoll.zig:632) — the write twin of the `.read` gate above. File sets
+                // `threadpool = true` on plain write (file.zig:142), so its writes ride
+                // the pool; an un-flagged write (GenericStream/TCP, which set `dup`)
+                // registers for OUT below.
+                Operation::Write { .. } => {
+                    if (*completion).flags.threadpool {
+                        match (*this).thread_schedule(completion) {
+                            Ok(()) => return,
+                            Err(()) => Some(Result::Write(Err(WriteError::ThreadPoolRequired))),
+                        }
+                    } else {
+                        match (*this).epoll_register(completion, libc::EPOLLOUT as u32) {
+                            Ok(()) => None,
+                            Err(()) => Some(Result::Write(Err(WriteError::Unexpected))),
+                        }
                     }
-                } else {
-                    match unsafe { self.epoll_register(completion, libc::EPOLLOUT as u32) } {
+                }
+
+                // PORT NOTE: the `.pwrite` arm (epoll.zig:652) is the pwrite twin of
+                // `.write` — the same threadpool gate then the same OUT registration;
+                // only the perform-side syscall differs (`posix.pwrite` with `offset`).
+                // File sets `threadpool = true` on pwrite (file.zig:302).
+                // REFERENCE-QUIRK PORT NOTE: the oracle tags THIS start-arm's errors
+                // `.write` even though the op is `.pwrite` (epoll.zig:652 — an upstream
+                // tagged-union slip; the PERFORM side tags `.pwrite` correctly). We
+                // deliberately tag `Result::PWrite` here: the strict pwrite trampoline
+                // matches on `Result::PWrite` and would hit `unreachable!` on a
+                // `Result::Write`.
+                Operation::PWrite { .. } => {
+                    if (*completion).flags.threadpool {
+                        match (*this).thread_schedule(completion) {
+                            Ok(()) => return,
+                            Err(()) => Some(Result::PWrite(Err(WriteError::ThreadPoolRequired))),
+                        }
+                    } else {
+                        match (*this).epoll_register(completion, libc::EPOLLOUT as u32) {
+                            Ok(()) => None,
+                            Err(()) => Some(Result::PWrite(Err(WriteError::Unexpected))),
+                        }
+                    }
+                }
+
+                Operation::Send { .. } => {
+                    match (*this).epoll_register(completion, libc::EPOLLOUT as u32) {
                         Ok(()) => None,
-                        Err(()) => Some(Result::Write(Err(WriteError::Unexpected))),
+                        Err(()) => Some(Result::Send(Err(WriteError::Unexpected))),
                     }
                 }
-            }
 
-            // PORT NOTE: the `.pwrite` arm (epoll.zig:652) is the pwrite twin of
-            // `.write` — the same threadpool gate then the same OUT registration;
-            // only the perform-side syscall differs (`posix.pwrite` with `offset`).
-            // File sets `threadpool = true` on pwrite (file.zig:302).
-            // REFERENCE-QUIRK PORT NOTE: the oracle tags THIS start-arm's errors
-            // `.write` even though the op is `.pwrite` (epoll.zig:652 — an upstream
-            // tagged-union slip; the PERFORM side tags `.pwrite` correctly). We
-            // deliberately tag `Result::PWrite` here: the strict pwrite trampoline
-            // matches on `Result::PWrite` and would hit `unreachable!` on a
-            // `Result::Write`.
-            Operation::PWrite { .. } => {
-                if unsafe { (*completion).flags.threadpool } {
-                    match unsafe { self.thread_schedule(completion) } {
-                        Ok(()) => return,
-                        Err(()) => Some(Result::PWrite(Err(WriteError::ThreadPoolRequired))),
-                    }
-                } else {
-                    match unsafe { self.epoll_register(completion, libc::EPOLLOUT as u32) } {
+                Operation::Recv { .. } => {
+                    match (*this)
+                        .epoll_register(completion, (libc::EPOLLIN | libc::EPOLLRDHUP) as u32)
+                    {
                         Ok(()) => None,
-                        Err(()) => Some(Result::PWrite(Err(WriteError::Unexpected))),
+                        Err(()) => Some(Result::Recv(Err(ReadError::Unexpected))),
                     }
                 }
-            }
 
-            Operation::Send { .. } => {
-                match unsafe { self.epoll_register(completion, libc::EPOLLOUT as u32) } {
-                    Ok(()) => None,
-                    Err(()) => Some(Result::Send(Err(WriteError::Unexpected))),
-                }
-            }
-
-            Operation::Recv { .. } => {
-                match unsafe {
-                    self.epoll_register(completion, (libc::EPOLLIN | libc::EPOLLRDHUP) as u32)
-                } {
-                    Ok(()) => None,
-                    Err(()) => Some(Result::Recv(Err(ReadError::Unexpected))),
-                }
-            }
-
-            Operation::SendMsg { buffer, .. } => {
-                // if (v.buffer) |_| { @panic("TODO: sendmsg with buffer"); }
-                //
-                // PORT NOTE (a REFERENCE QUIRK, preserved deliberately): the
-                // buffer-populating path is UNIMPLEMENTED upstream and panics. Kept
-                // as a panic rather than "fixed" (that would diverge, R1); no ported
-                // watcher constructs a `SendMsg` with a buffer, so it is unreachable
-                // in practice.
-                if buffer.is_some() {
-                    panic!("TODO: sendmsg with buffer");
-                }
-                match unsafe { self.epoll_register(completion, libc::EPOLLOUT as u32) } {
-                    Ok(()) => None,
-                    Err(()) => Some(Result::SendMsg(Err(WriteError::Unexpected))),
-                }
-            }
-
-            Operation::RecvMsg { .. } => {
-                match unsafe {
-                    self.epoll_register(completion, (libc::EPOLLIN | libc::EPOLLRDHUP) as u32)
-                } {
-                    Ok(()) => None,
-                    Err(()) => Some(Result::RecvMsg(Err(ReadError::Unexpected))),
-                }
-            }
-
-            Operation::Poll { events, .. } => {
-                let ev = *events;
-                match unsafe { self.epoll_register(completion, ev) } {
-                    Ok(()) => None,
-                    Err(()) => Some(Result::Poll(Err(PollError::Unexpected))),
-                }
-            }
-
-            Operation::Close { fd, .. } => {
-                let fd = *fd;
-                // PORT NOTE: the reference routes close through the thread pool when
-                // `flags.threadpool` is set (Stream.close does, epoll arm). When a
-                // pool is attached, `thread_schedule` enqueues the blocking
-                // `posix.close` onto it and returns (the completion fires from the
-                // drain in `tick`); with no pool, `thread_schedule` yields
-                // `error.ThreadPoolRequired`, mapped to the op result. An un-flagged
-                // close (the raw socket-test path) runs `posix.close` synchronously
-                // here.
-                if unsafe { (*completion).flags.threadpool } {
-                    match unsafe { self.thread_schedule(completion) } {
-                        Ok(()) => return,
-                        Err(()) => Some(Result::Close(Err(CloseError::ThreadPoolRequired))),
+                Operation::SendMsg { buffer, .. } => {
+                    // if (v.buffer) |_| { @panic("TODO: sendmsg with buffer"); }
+                    //
+                    // PORT NOTE (a REFERENCE QUIRK, preserved deliberately): the
+                    // buffer-populating path is UNIMPLEMENTED upstream and panics. Kept
+                    // as a panic rather than "fixed" (that would diverge, R1); no ported
+                    // watcher constructs a `SendMsg` with a buffer, so it is unreachable
+                    // in practice.
+                    if buffer.is_some() {
+                        panic!("TODO: sendmsg with buffer");
                     }
-                } else {
-                    // SAFETY: closing a caller-owned fd.
-                    unsafe { libc::close(fd) };
-                    Some(Result::Close(Ok(())))
+                    match (*this).epoll_register(completion, libc::EPOLLOUT as u32) {
+                        Ok(()) => None,
+                        Err(()) => Some(Result::SendMsg(Err(WriteError::Unexpected))),
+                    }
                 }
-            }
 
-            Operation::Shutdown { socket, how } => {
-                let socket = *socket;
-                let how_i = match how {
-                    ShutdownHow::Recv => libc::SHUT_RD,
-                    ShutdownHow::Send => libc::SHUT_WR,
-                    ShutdownHow::Both => libc::SHUT_RDWR,
-                };
-                // SAFETY: shutdown on a caller-owned socket.
-                let rc = unsafe { libc::shutdown(socket, how_i) };
-                if rc == 0 {
-                    Some(Result::Shutdown(Ok(())))
-                } else {
-                    Some(Result::Shutdown(Err(ShutdownError::Unexpected)))
+                Operation::RecvMsg { .. } => {
+                    match (*this)
+                        .epoll_register(completion, (libc::EPOLLIN | libc::EPOLLRDHUP) as u32)
+                    {
+                        Ok(()) => None,
+                        Err(()) => Some(Result::RecvMsg(Err(ReadError::Unexpected))),
+                    }
                 }
+
+                Operation::Poll { events, .. } => {
+                    let ev = *events;
+                    match (*this).epoll_register(completion, ev) {
+                        Ok(()) => None,
+                        Err(()) => Some(Result::Poll(Err(PollError::Unexpected))),
+                    }
+                }
+
+                Operation::Close { fd, .. } => {
+                    let fd = *fd;
+                    // PORT NOTE: the reference routes close through the thread pool when
+                    // `flags.threadpool` is set (Stream.close does, epoll arm). When a
+                    // pool is attached, `thread_schedule` enqueues the blocking
+                    // `posix.close` onto it and returns (the completion fires from the
+                    // drain in `tick`); with no pool, `thread_schedule` yields
+                    // `error.ThreadPoolRequired`, mapped to the op result. An un-flagged
+                    // close (the raw socket-test path) runs `posix.close` synchronously
+                    // here.
+                    if (*completion).flags.threadpool {
+                        match (*this).thread_schedule(completion) {
+                            Ok(()) => return,
+                            Err(()) => Some(Result::Close(Err(CloseError::ThreadPoolRequired))),
+                        }
+                    } else {
+                        // SAFETY: closing a caller-owned fd.
+                        libc::close(fd);
+                        Some(Result::Close(Ok(())))
+                    }
+                }
+
+                Operation::Shutdown { socket, how } => {
+                    let socket = *socket;
+                    let how_i = match how {
+                        ShutdownHow::Recv => libc::SHUT_RD,
+                        ShutdownHow::Send => libc::SHUT_WR,
+                        ShutdownHow::Both => libc::SHUT_RDWR,
+                    };
+                    // SAFETY: shutdown on a caller-owned socket.
+                    let rc = libc::shutdown(socket, how_i);
+                    if rc == 0 {
+                        Some(Result::Shutdown(Ok(())))
+                    } else {
+                        Some(Result::Shutdown(Err(ShutdownError::Unexpected)))
+                    }
+                }
+            };
+
+            // If we have a synchronous result then we call the callback
+            // immediately and mark the error/completion.
+            if let Some(res) = res_ {
+                (*completion).flags.state = State::Dead;
+
+                let cb = (*completion).callback;
+                let ud = (*completion).userdata;
+                match cb(ud, this, completion, res) {
+                    CallbackAction::Disarm => {}
+
+                    // If we rearm then we requeue this. Due to the way that tick
+                    // works, this won't try to re-add immediately, it won't happen
+                    // until the next tick.
+                    CallbackAction::Rearm => (*this).add(completion),
+                }
+
+                return;
             }
-        };
 
-        // If we have a synchronous result then we call the callback
-        // immediately and mark the error/completion.
-        if let Some(res) = res_ {
-            unsafe { (*completion).flags.state = State::Dead };
+            // Mark the completion as active if we reached this point.
+            (*completion).flags.state = State::Active;
 
-            let cb = unsafe { (*completion).callback };
-            let ud = unsafe { (*completion).userdata };
-            match cb(ud, self_ptr, completion, res) {
-                CallbackAction::Disarm => {}
-
-                // If we rearm then we requeue this. Due to the way that tick
-                // works, this won't try to re-add immediately, it won't happen
-                // until the next tick.
-                CallbackAction::Rearm => unsafe { self.add(completion) },
-            }
-
-            return;
+            // Increase our active count.
+            (*this).active += 1;
         }
-
-        // Mark the completion as active if we reached this point.
-        unsafe { (*completion).flags.state = State::Active };
-
-        // Increase our active count.
-        self.active += 1;
     }
 
     /// # Safety
     /// `completion` must be a valid completion pointer owned by this loop.
-    unsafe fn stop_completion(&mut self, completion: *mut Completion) {
-        let self_ptr: *mut Loop = self;
+    unsafe fn stop_completion(this: *mut Loop, completion: *mut Completion) {
+        unsafe {
+            // Delete. This should never fail.
+            let maybe_fd = if (*completion).flags.dup {
+                Some((*completion).flags.dup_fd)
+            } else {
+                Completion::fd(completion)
+            };
 
-        // Delete. This should never fail.
-        let maybe_fd = if unsafe { (*completion).flags.dup } {
-            Some(unsafe { (*completion).flags.dup_fd })
-        } else {
-            unsafe { Completion::fd(completion) }
-        };
+            if let Some(fd) = maybe_fd {
+                // SAFETY: DEL on a fd we previously ADDed; never fails.
+                libc::epoll_ctl((*this).fd, libc::EPOLL_CTL_DEL, fd, ptr::null_mut());
+            } else {
+                // PORT NOTE: `switch (completion.op) { .timer => |*v| {...}, else => unreachable }`
+                // — the sole fd-less stoppable op is `.timer`.
+                // N434: a shared match; the Timer is reached through
+                // `timer_ptr`, never `&mut (*completion).op`.
+                match &(*completion).op {
+                    Operation::Timer(_) => {
+                        let v: *mut Timer = timer_ptr(completion);
+                        let c = (*v).c;
 
-        if let Some(fd) = maybe_fd {
-            // SAFETY: DEL on a fd we previously ADDed; never fails.
-            unsafe { libc::epoll_ctl(self.fd, libc::EPOLL_CTL_DEL, fd, ptr::null_mut()) };
-        } else {
-            // PORT NOTE: `switch (completion.op) { .timer => |*v| {...}, else => unreachable }`
-            // — the sole fd-less stoppable op is `.timer`.
-            match unsafe { &mut (*completion).op } {
-                Operation::Timer(v) => {
-                    let c = v.c;
-
-                    if unsafe { (*c).flags.state } == State::Active {
-                        // Timers need to be removed from the timer heap.
-                        let v_ptr: *mut Timer = v;
-                        unsafe { self.timers.remove(v_ptr) };
-                    }
-
-                    // If the timer was never fired, we need to fire it with
-                    // the cancellation notice.
-                    if unsafe { (*c).flags.state } != State::Dead {
-                        // If we have reset set AND we got a cancellation result,
-                        // that means that we were canceled so that we can update
-                        // our expiration time.
-                        if let Some(r) = v.reset {
-                            v.next = r;
-                            v.reset = None;
-                            self.active -= 1;
-                            unsafe { self.start(c) };
-                            return;
+                        if (*c).flags.state == State::Active {
+                            // Timers need to be removed from the timer heap.
+                            (*this).timers.remove(v);
                         }
 
-                        let cb = unsafe { (*c).callback };
-                        let ud = unsafe { (*c).userdata };
-                        let action = cb(ud, self_ptr, c, Result::Timer(Ok(TimerTrigger::Cancel)));
-                        match action {
-                            CallbackAction::Disarm => {}
-                            CallbackAction::Rearm => {
-                                self.active -= 1;
-                                unsafe { self.start(c) };
+                        // If the timer was never fired, we need to fire it with
+                        // the cancellation notice.
+                        if (*c).flags.state != State::Dead {
+                            // If we have reset set AND we got a cancellation result,
+                            // that means that we were canceled so that we can update
+                            // our expiration time.
+                            if let Some(r) = (*v).reset {
+                                (*v).next = r;
+                                (*v).reset = None;
+                                (*this).active -= 1;
+                                Loop::start(this, c);
                                 return;
+                            }
+
+                            let cb = (*c).callback;
+                            let ud = (*c).userdata;
+                            let action = cb(ud, this, c, Result::Timer(Ok(TimerTrigger::Cancel)));
+                            match action {
+                                CallbackAction::Disarm => {}
+                                CallbackAction::Rearm => {
+                                    (*this).active -= 1;
+                                    Loop::start(this, c);
+                                    return;
+                                }
                             }
                         }
                     }
+
+                    _ => unreachable!(),
                 }
-
-                _ => unreachable!(),
             }
-        }
 
-        // Decrement the active count so we know how many are running for
-        // .until_done run semantics.
-        if unsafe { (*completion).flags.state } == State::Active {
-            self.active -= 1;
-        }
+            // Decrement the active count so we know how many are running for
+            // .until_done run semantics.
+            if (*completion).flags.state == State::Active {
+                (*this).active -= 1;
+            }
 
-        // Mark the completion as done.
-        unsafe { (*completion).flags.state = State::Dead };
+            // Mark the completion as done.
+            (*completion).flags.state = State::Dead;
+        }
     }
 }
 
@@ -2369,6 +2408,32 @@ pub struct Timer {
 impl heap::Node for Timer {
     unsafe fn heap_field(this: *mut Self) -> *mut heap::IntrusiveField<Self> {
         unsafe { ptr::addr_of_mut!((*this).heap) }
+    }
+}
+
+/// The address of `c`'s `.timer` payload, carrying `c`'s OWN provenance.
+///
+/// PORT NOTE (N434): Zig reaches the timer as the place `c.op.timer` (a plain
+/// `*Timer` into the completion), and the heap links it. The Rust port must not
+/// derive that pointer from a `&mut (*c).op` reborrow: the heap keeps it while the
+/// timer is linked, and the next `&mut (*c).op` (`timer_reset`, `stop_completion`)
+/// is a fresh Unique retag from `c` that pops it under Stacked Borrows (and, once
+/// the heap has written the node's links through it, is a Tree Borrows conflict).
+/// This helper forms only a shared borrow of the op to find the payload and
+/// returns that address with `c`'s tag, so the heap's links and every later
+/// access on the heap path share one tag. Every heap-path Timer access goes
+/// through it (proof: `.port/phase-2/mirihar-n434`).
+///
+/// # Safety
+/// `c` must be a valid `Completion` pointer whose op is `.timer`.
+#[inline]
+unsafe fn timer_ptr(c: *mut Completion) -> *mut Timer {
+    unsafe {
+        let addr = match &(*c).op {
+            Operation::Timer(t) => ptr::from_ref(t).addr(),
+            _ => unreachable!(),
+        };
+        c.cast::<u8>().with_addr(addr).cast::<Timer>()
     }
 }
 
@@ -5701,6 +5766,73 @@ mod tests {
         }
 
         loop_.deinit();
+    }
+
+    /// PORT-ADDED (N431): a callback re-enters the loop through a pointer the
+    /// caller stored (termio's `td.loop_` -> `stream.rs` `(*loop_).add`), not
+    /// through its `l`, while the loop runs through `run_raw` with that same
+    /// pointer. The second timer is armed from inside the first callback and
+    /// stops the loop, so both callbacks must have run for `until_done` to
+    /// return.
+    // Under Miri (`cargo +nightly miri test -p rustty-xev --target
+    // aarch64-unknown-linux-gnu`, the epoll/eventfd shims) this is the real-code
+    // twin of mirihar-n431 `raw_local_root`: clean under SB and TB; entering
+    // through `(*root).run(..)` instead is UB (`wrapper_local_root`).
+    #[test]
+    fn epoll_callback_reenters_through_stored_loop_pointer() {
+        struct Ud {
+            root: *mut Loop,
+            c2: *mut Completion,
+            first: bool,
+            second: bool,
+        }
+        fn first_cb(
+            ud: *mut core::ffi::c_void,
+            _l: *mut Loop,
+            _c: *mut Completion,
+            _r: Result,
+        ) -> CallbackAction {
+            let ud = ud as *mut Ud;
+            unsafe {
+                (*ud).first = true;
+                // Through the stored pointer, not `_l`.
+                (*(*ud).root).timer((*ud).c2, 0, ud.cast(), second_cb);
+            }
+            CallbackAction::Disarm
+        }
+        fn second_cb(
+            ud: *mut core::ffi::c_void,
+            _l: *mut Loop,
+            _c: *mut Completion,
+            _r: Result,
+        ) -> CallbackAction {
+            let ud = ud as *mut Ud;
+            unsafe {
+                (*ud).second = true;
+                (*(*ud).root).stop();
+            }
+            CallbackAction::Disarm
+        }
+
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+        let root: *mut Loop = core::ptr::addr_of_mut!(loop_);
+        let mut c1 = Completion::default();
+        let mut c2 = Completion::default();
+        let mut ud = Ud {
+            root,
+            c2: core::ptr::addr_of_mut!(c2),
+            first: false,
+            second: false,
+        };
+        let udp: *mut Ud = core::ptr::addr_of_mut!(ud);
+        unsafe {
+            (*root).timer(core::ptr::addr_of_mut!(c1), 0, udp.cast(), first_cb);
+            Loop::run_raw(root, RunMode::UntilDone).unwrap();
+            assert!((*udp).first);
+            assert!((*udp).second);
+            assert!((*root).stopped());
+            (*root).deinit();
+        }
     }
 
     // test "epoll: stop"

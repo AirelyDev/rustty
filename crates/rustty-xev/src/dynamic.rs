@@ -352,18 +352,32 @@ impl Loop {
     }
 
     /// PORT NOTE: `pub fn run(self: *Loop, mode: RunMode) !void` (dynamic.zig:167).
+    //
+    // PORT NOTE (N431 in NEW-FINDINGS): a thin entry over `run_raw`, as the
+    // backends' own `run` (see epoll.rs `run`): no `&mut Loop` may be live across
+    // a callback, and a caller whose callbacks re-enter the loop through a stored
+    // pointer must enter through `run_raw` with that pointer.
     pub fn run(&mut self, mode: RunMode) -> core::result::Result<(), Error> {
+        // SAFETY: `self` is a live, exclusive `Loop` for the whole call.
+        unsafe { Loop::run_raw(self, mode) }
+    }
+
+    /// `run(self: *Loop, mode)`: the raw-pointer entry (see `run`).
+    ///
+    /// # Safety
+    /// `this` must point at a live, initialized `Loop` that stays at the same
+    /// address and is not otherwise borrowed for the whole call, except by the
+    /// loop's own callbacks through raw pointers.
+    pub unsafe fn run_raw(this: *mut Loop, mode: RunMode) -> core::result::Result<(), Error> {
         match backend() {
             // SAFETY: see `deinit`.
             // PORT NOTE: io_uring's `RunError` (`NestedRunsNotAllowed`/`Submit`)
             // collapses into the unified seam `Error` (the `ErrorSet` merge);
             // epoll's `run` already returns `Error`.
             Backend::IoUring => unsafe {
-                (*Loop::as_io_uring(self))
-                    .run(mode)
-                    .map_err(|_| crate::Error)
+                io_uring::Loop::run_raw(Loop::as_io_uring(this), mode).map_err(|_| crate::Error)
             },
-            Backend::Epoll => unsafe { (*Loop::as_epoll(self)).run(mode) },
+            Backend::Epoll => unsafe { epoll::Loop::run_raw(Loop::as_epoll(this), mode) },
             be => unreachable!("non-candidate backend {be:?}"),
         }
     }
