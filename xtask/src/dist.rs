@@ -329,6 +329,34 @@ pub fn distcheck_lib_vt() -> Result<PathBuf, String> {
     distcheck_scoped(Scope::LibVt)
 }
 
+/// `path`'s contents at `HEAD` (what `git archive HEAD` ships), or `None`
+/// when `HEAD` has no such file.
+fn head_file(root: &Path, path: &str) -> Result<Option<Vec<u8>>, String> {
+    let spec = format!("HEAD:{path}");
+    let exists = Command::new("git")
+        .current_dir(root)
+        .args(["cat-file", "-e", &spec])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(|e| format!("spawn git cat-file: {e}"))?;
+    if !exists.success() {
+        return Ok(None);
+    }
+    let out = Command::new("git")
+        .current_dir(root)
+        .args(["show", &spec])
+        .output()
+        .map_err(|e| format!("spawn git show: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git show {spec} exited with {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    Ok(Some(out.stdout))
+}
+
 fn distcheck_scoped(scope: Scope) -> Result<PathBuf, String> {
     let root = workspace_root();
     let name = dist_name(scope, DIST_VERSION);
@@ -369,8 +397,10 @@ fn distcheck_scoped(scope: Scope) -> Result<PathBuf, String> {
         return Err("extracted tree missing .cargo/config.toml source replacement".into());
     }
     // N422: the checkout's own config (the wasm `simd128` default) must have
-    // survived the source replacement.
-    if let Ok(tracked) = std::fs::read(root.join(".cargo/config.toml")) {
+    // survived the source replacement. The archive is `git archive HEAD`, so
+    // the reference text is HEAD's copy, not the working tree's (which may
+    // carry an uncommitted edit).
+    if let Some(tracked) = head_file(&root, ".cargo/config.toml")? {
         let shipped = std::fs::read(extracted.join(".cargo/config.toml"))
             .map_err(|e| format!("read extracted .cargo/config.toml: {e}"))?;
         if !shipped.starts_with(&tracked) {
@@ -933,6 +963,26 @@ mod tests {
         let tracked = std::fs::read(workspace_root().join(".cargo/config.toml"))
             .expect("the checkout tracks .cargo/config.toml (N422)");
         assert!(dist_cargo_config(Some(&tracked), vendor).starts_with(&tracked));
+    }
+
+    /// distcheck compares the shipped `.cargo/config.toml` with HEAD's copy
+    /// (what `git archive HEAD` put in the tarball), so an uncommitted edit to
+    /// the working-tree file cannot fail it; a path HEAD lacks is `None`.
+    #[test]
+    fn distcheck_reads_the_tracked_config_from_head() {
+        let root = workspace_root();
+        let head = head_file(&root, ".cargo/config.toml")
+            .unwrap()
+            .expect("HEAD tracks .cargo/config.toml (N422)");
+        assert!(
+            String::from_utf8_lossy(&head).contains("+simd128"),
+            "{}",
+            String::from_utf8_lossy(&head)
+        );
+        assert_eq!(
+            head_file(&root, ".cargo/no-such-file-at-head.toml").unwrap(),
+            None
+        );
     }
 
     /// N422, `Config.zig:113-130`: every wasm target defaults to the `simd128`

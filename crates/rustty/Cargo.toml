@@ -43,7 +43,7 @@ default = ["gtk", "wayland", "x11", "simd"]
 # `zig build test -Dsimd=false` is `--no-default-features --features
 # gtk,wayland,x11` here: no SIMD path is compiled and no highway/simdutf linked.
 simd = ["rustty-core/simd", "rustty-apprt/simd", "rustty-cli/simd"]
-gtk =["rustty-apprt/gtk", "rustty-cli/gtk", "dep:allocator-api2"]
+gtk = ["rustty-apprt/gtk", "rustty-cli/gtk", "dep:allocator-api2"]
 # Windowing-protocol arms of the GTK apprt's `winproto` union, passed through to
 # rustty-apprt. Both imply `gtk` and are DEFAULT-ON (F-007). CORRECTION
 # (S65-F6, 2026-09-23): a feature now only ALLOWS its arm. rustty-apprt's
