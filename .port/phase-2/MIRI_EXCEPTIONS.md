@@ -2561,3 +2561,62 @@ also leaves G6c's derived set, which it had been counted in since `bbc76bc9`
 although `cfg_attr(not(debug_assertions), ignore)` kept it from ever running there:
 that is the `83 test(s) RAN, expected at least 84` G6c red. The set is now 83
 tests, all of which run.
+
+## Parity tail C-1 — the G6 triage of 2026-09-27 (tests added since the 2026-08-29 lane)
+
+The full `ci.sh` run at `9fd17d93` had G6 red in nine crates. Miri aborts a whole test binary at the
+first offence and cargo stops at the first failing binary, so the lane only ever named one test per
+crate. Task C-1 therefore ran EVERY test of the nine crates in its own Miri process under the G6
+conditions (isolation on, no `MIRIFLAGS`, debug assertions on, 20-minute bound per test), then
+re-ran each crate's lane exactly as `check_leaks.sh` does. Nearly all were added by the parity-closure
+waves, whose briefs ran no Miri.
+
+Real defects found this way are FIXED in code, not excepted: N391 (`rustty-bench` terminal-stream
+Stacked Borrows), and the others listed under their crates below. Everything in the tables is a
+genuine Miri-cannot-model case, annotated at its source `#[cfg_attr(miri, ignore = "MIRI EXCEPTION
+(<crate>, parity tail C-1): ...")]`.
+
+4-criterion basis, for every row: (1) **impossible, not slow** — a syscall Miri's isolation forbids or
+a foreign function Miri cannot execute; each was measured, one test per Miri process, and failed at
+that call; (2) **passes natively** in ci.sh's HARD `cargo test --workspace` (and the release lane),
+which is the companion lane; (3) **no uncovered unsafe path** — the calls are the OS boundary itself
+(process spawning, files, directories, clocks, `fcntl`, `select`, kqueue, Objective-C/CoreFoundation),
+and the crate's own Rust code on either side of them is exercised by its Miri-passing tests; (4) the
+rest of each crate stays in the lane (counts below, from the lane re-run).
+
+### `rustty-bench` (lane: 37 passed, 12 ignored), `rustty-cli` (88 passed, 35 ignored), `rustty-global` (13 passed, 7 ignored), `rustty-synthetic` (26 passed, 1 ignored)
+
+| crate | test | what Miri cannot do |
+|---|---|---|
+| `rustty-bench` | `cli::tests::string_args_honour_quotes_like_arg_iterator_general` | `mkdir` is forbidden under Miri isolation |
+| `rustty-bench` | `global_init_runs_before_the_benchmark` | `open` is forbidden under Miri isolation |
+| `rustty-bench` | `page_compression_report_goes_to_stderr` | `open` is forbidden under Miri isolation |
+| `rustty-bench` | `page_compression_report_prints_to_stderr_not_stdout` | `clock_gettime(REALTIME)` is forbidden under Miri isolation |
+| `rustty-bench` | `scrollback_compression_report_goes_to_stderr` | `open` is forbidden under Miri isolation |
+| `rustty-bench` | `terminal_formatter_report_goes_to_stderr` | `open` is forbidden under Miri isolation |
+| `rustty-bench` | `terminal_formatter_roundtrip_goes_to_stderr` | `open` is forbidden under Miri isolation |
+| `rustty-bench` | `terminal_snapshot_report_goes_to_stderr` | `open` is forbidden under Miri isolation |
+| `rustty-cli` | `crash_report::tests::a_report_too_old_for_a_duration_saturates_instead_of_trapping` | `clock_gettime(REALTIME)` is forbidden under Miri isolation |
+| `rustty-cli` | `edit_config::exec_tests::exec_failure_report_prints_the_raw_command_bytes` | calls the foreign function `execve`, which Miri cannot execute |
+| `rustty-cli` | `edit_config::exec_tests::the_editor_inherits_the_ignored_sigpipe` | `mkdir` is forbidden under Miri isolation |
+| `rustty-cli` | `io_file::tests::a_write_to_a_stdout_closed_at_exec_fails_with_ebadf` | `current_exe` (`_NSGetExecutablePath`) is forbidden under Miri isolation |
+| `rustty-cli` | `io_file::tests::a_write_to_an_unwritable_stdout_fails_where_std_reports_success` | `open` is forbidden under Miri isolation |
+| `rustty-cli` | `io_file::tests::an_appended_stdout_keeps_the_existing_content` | `mkdir` is forbidden under Miri isolation |
+| `rustty-cli` | `list_colors::r13_flush_tests::plain_listing_reaches_stdout_in_full` | `current_exe` (`_NSGetExecutablePath`) is forbidden under Miri isolation |
+| `rustty-cli` | `list_themes::picker_tests::keys_on_a_filter_that_matches_nothing_do_not_index_it` | calls the foreign function `openpty`, which Miri cannot execute |
+| `rustty-cli` | `list_themes::picker_tests::the_preview_loop_delivers_a_resize` | calls the foreign function `openpty`, which Miri cannot execute |
+| `rustty-cli` | `list_themes::r13_flush_tests::a_home_too_long_for_the_xdg_lookup_is_out_of_memory` | `current_exe` (`_NSGetExecutablePath`) is forbidden under Miri isolation |
+| `rustty-cli` | `list_themes::r13_flush_tests::no_themes_messages_reach_stderr` | `mkdir` is forbidden under Miri isolation |
+| `rustty-cli` | `ssh::tests::install_failures_are_install_failed` | `arc4random_buf` is not implemented by Miri on macOS |
+| `rustty-cli` | `ssh_cache::disk_cache::tests::add_does_not_chmod_an_existing_cache_file` | `mkdir` is forbidden under Miri isolation |
+| `rustty-cli` | `zig_error::tests::realpath_error_names_follow_the_reference_mapping` | `realpath` is forbidden under Miri isolation |
+| `rustty-global` | `environ::tests::environ_from_process_matches_vars_os` | real process environment: Miri isolation gives an empty environ (the test would be vacuous there) |
+| `rustty-global` | `get_env_map_survives_non_utf8` | `current_exe` (`_NSGetExecutablePath`) is forbidden under Miri isolation |
+| `rustty-global` | `posix_duplicate_env_parent_spawns_the_child` | `current_exe` (`_NSGetExecutablePath`) is forbidden under Miri isolation |
+| `rustty-synthetic` | `the_generator_binary_is_named_rustty_gen` | `open` is forbidden under Miri isolation |
+| `rustty-cli` | `new_window::tests::error_parsing_args_prints_the_zig_error_name (unix)` | `realpath` is forbidden under Miri isolation |
+| `rustty-cli` | `new_tab::tests::error_parsing_args_prints_the_zig_error_name` | `realpath` is forbidden under Miri isolation |
+
+`rustty-bench`'s `log_site_census::every_reference_diagnostic_is_live_at_its_level_and_scope` is NOT
+excepted: it re-collapsed a whole source file per expected entry and ran past the bound; it now
+collapses each file once and passes under Miri in 232 s.

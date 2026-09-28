@@ -436,6 +436,10 @@ mod r13_flush_tests {
     const CHILD: &str = "RUSTTY_T_C_LIST_COLORS_CHILD";
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-cli, parity tail C-1): `current_exe` (`_NSGetExecutablePath`) is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn plain_listing_reaches_stdout_in_full() {
         if std::env::var_os(CHILD).is_some() {
             let code = run_opts(Options { plain: true }).expect("run_opts");

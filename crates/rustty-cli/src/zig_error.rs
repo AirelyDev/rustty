@@ -433,6 +433,10 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-cli, parity tail C-1): `realpath` is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn realpath_error_names_follow_the_reference_mapping() {
         let missing = b"/nonexistent-rustty-t-c/x";
         let e =

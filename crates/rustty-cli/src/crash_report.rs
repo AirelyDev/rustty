@@ -264,6 +264,10 @@ mod tests {
     /// earlier mtime to 1677, whose age still fits, so there the ancient report
     /// only checks the ordinary arm; the saturating arm is asserted on Linux.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-cli, parity tail C-1): `clock_gettime(REALTIME)` is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn a_report_too_old_for_a_duration_saturates_instead_of_trapping() {
         let root = std::env::temp_dir().join(format!(
             "rustty-r13d-crash-{}-{}",

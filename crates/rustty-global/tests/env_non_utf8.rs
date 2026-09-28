@@ -40,6 +40,10 @@ fn w7_child_reads_env_map() {
 
 #[test]
 #[cfg(unix)]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-global, parity tail C-1): `current_exe` (`_NSGetExecutablePath`) is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+)]
 fn get_env_map_survives_non_utf8() {
     let exe = std::env::current_exe().expect("current_exe");
 

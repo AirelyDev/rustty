@@ -62,6 +62,10 @@ fn assert_on_stderr_only(args: &[&str], prefixes: &[&str]) {
 
 // S62-F3: ScrollbackCompression.zig:257.
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-bench, parity tail C-1): `open` is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+)]
 fn scrollback_compression_report_goes_to_stderr() {
     let corpus = Corpus::new("scrollback");
     assert_on_stderr_only(
@@ -72,6 +76,10 @@ fn scrollback_compression_report_goes_to_stderr() {
 
 // S62-F4: TerminalFormatter.zig:330 and :351.
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-bench, parity tail C-1): `open` is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+)]
 fn terminal_formatter_report_goes_to_stderr() {
     let corpus = Corpus::new("formatter-report");
     assert_on_stderr_only(
@@ -91,6 +99,10 @@ fn terminal_formatter_report_goes_to_stderr() {
 
 // S62-F4: TerminalFormatter.zig:405.
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-bench, parity tail C-1): `open` is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+)]
 fn terminal_formatter_roundtrip_goes_to_stderr() {
     let corpus = Corpus::new("formatter-roundtrip");
     assert_on_stderr_only(
@@ -101,6 +113,10 @@ fn terminal_formatter_roundtrip_goes_to_stderr() {
 
 // S62-F5: TerminalSnapshot.zig:300 and :306.
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-bench, parity tail C-1): `open` is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+)]
 fn terminal_snapshot_report_goes_to_stderr() {
     let corpus = Corpus::new("snapshot");
     assert_on_stderr_only(
@@ -111,6 +127,10 @@ fn terminal_snapshot_report_goes_to_stderr() {
 
 // N180: PageCompression.zig:436 and :442 (same class, not in the audit).
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-bench, parity tail C-1): `open` is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+)]
 fn page_compression_report_goes_to_stderr() {
     let corpus = Corpus::new("page");
     assert_on_stderr_only(

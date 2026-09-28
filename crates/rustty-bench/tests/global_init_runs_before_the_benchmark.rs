@@ -11,6 +11,10 @@
 use std::process::Command;
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-bench, parity tail C-1): `open` is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+)]
 fn global_init_runs_before_the_benchmark() {
     let mut corpus = std::env::temp_dir();
     corpus.push(format!(

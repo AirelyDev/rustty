@@ -457,6 +457,10 @@ mod tests {
     /// is ONE argument with the quotes stripped. A whitespace split turns it
     /// into `--data="<dir>/a` and `b.vt"`, which fails to parse.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-bench, parity tail C-1): `mkdir` is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn string_args_honour_quotes_like_arg_iterator_general() {
         use super::{main_action, Args, Error};
 

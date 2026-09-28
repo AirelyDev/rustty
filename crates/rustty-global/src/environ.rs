@@ -1134,6 +1134,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-global, parity tail C-1): real process environment: Miri isolation gives an empty environ (the test would be vacuous there); runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn environ_from_process_matches_vars_os() {
         let e = Environ::from_process();
         // Every capture must be reachable through `get_posix` with the same

@@ -596,6 +596,10 @@ mod tests {
     // error.NotDir).
     #[cfg(unix)]
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-cli, parity tail C-1): `realpath` is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn error_parsing_args_prints_the_zig_error_name() {
         let mut it = VecArgs(vec![b"--working-directory=/etc/hosts/x".to_vec()].into_iter());
         let mut stderr: Vec<u8> = Vec::new();

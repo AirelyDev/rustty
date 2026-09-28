@@ -11,6 +11,10 @@ use std::io::Read;
 use std::process::{Command, Stdio};
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-synthetic, parity tail C-1): `open` is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+)]
 fn the_generator_binary_is_named_rustty_gen() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_rustty-gen"))
         .arg("+ascii")

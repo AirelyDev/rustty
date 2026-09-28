@@ -9,6 +9,10 @@
 use std::process::Command;
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-bench, parity tail C-1): `clock_gettime(REALTIME)` is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+)]
 fn page_compression_report_prints_to_stderr_not_stdout() {
     let dir = std::env::temp_dir().join(format!(
         "rustty-bench-s61f9-{}-{}",

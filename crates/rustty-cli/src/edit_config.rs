@@ -488,6 +488,10 @@ mod exec_tests {
     /// ARG_MAX is 1 MiB; Linux caps one argument at 128 KiB), so this runs in
     /// the test process.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-cli, parity tail C-1): calls the foreign function `execve`, which Miri cannot execute; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn exec_failure_report_prints_the_raw_command_bytes() {
         let mut command = b"\xff\xfe \xc3(".to_vec();
         command.resize(4 << 20, b'x');
@@ -525,6 +529,10 @@ mod exec_tests {
     /// std.c.environ`): the parent exports `RUSTTY_T_C_ENV_PROBE` to the child,
     /// and the script writes back the value it sees.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-cli, parity tail C-1): `mkdir` is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn the_editor_inherits_the_ignored_sigpipe() {
         const CHILD: &str = "RUSTTY_T_C_EDIT_CONFIG_EXEC_CHILD";
         if let Some(out) = std::env::var_os(CHILD) {
