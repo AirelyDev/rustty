@@ -3144,11 +3144,19 @@ const fn write_type(out: &mut [u8], len: &mut usize, decl: &TypeDecl) {
 // PORT NOTE: `@tagName(builtin.target.cpu.arch/os.tag/abi)` — the Zig target
 // tag names, mapped from the Rust cfg values (they coincide for the
 // arch names; wasm32-unknown-unknown's os is Zig `.freestanding`, and the
-// empty Rust `target_env` is Zig abi `.none`).
+// empty Rust `target_env` is Zig abi `.none`). Android (task A-1): Zig's
+// Android targets are os `.linux` with abi `.android` (`.androideabi` on
+// 32-bit arm), where Rust says `target_os = "android"` with an empty
+// `target_env`; `armv7-linux-androideabi` is Zig's `arm-linux-androideabi`
+// (arch `.arm`, baseline cpu v7a). Measured on an Android 15 emulator: the
+// reference's aarch64 `libghostty-vt.so` reports
+// `"target":"aarch64","os":"linux","environment":"android"`.
 const ABI_TARGET: &str = if cfg!(target_arch = "aarch64") {
     "aarch64"
 } else if cfg!(target_arch = "x86_64") {
     "x86_64"
+} else if cfg!(target_arch = "arm") {
+    "arm"
 } else if cfg!(target_arch = "wasm32") {
     "wasm32"
 } else {
@@ -3156,7 +3164,7 @@ const ABI_TARGET: &str = if cfg!(target_arch = "aarch64") {
 };
 const ABI_OS: &str = if cfg!(target_os = "macos") {
     "macos"
-} else if cfg!(target_os = "linux") {
+} else if cfg!(any(target_os = "linux", target_os = "android")) {
     "linux"
 } else if cfg!(target_os = "windows") {
     "windows"
@@ -3165,7 +3173,11 @@ const ABI_OS: &str = if cfg!(target_os = "macos") {
 } else {
     "unknown"
 };
-const ABI_ENVIRONMENT: &str = if cfg!(target_env = "gnu") {
+const ABI_ENVIRONMENT: &str = if cfg!(all(target_os = "android", target_arch = "arm")) {
+    "androideabi"
+} else if cfg!(target_os = "android") {
+    "android"
+} else if cfg!(target_env = "gnu") {
     "gnu"
 } else if cfg!(target_env = "musl") {
     "musl"
@@ -3699,6 +3711,40 @@ mod tests {
         // lazily allocated buffer can be involved.
         assert!(std::ptr::eq(get_json() as *const u8, JSON.as_ptr()));
         assert_eq!(get_json(), get_json());
+    }
+
+    /// Task A-1 (no reference test): the manifest's `abi` names the Zig target
+    /// tags (`@tagName(builtin.target.cpu.arch/os.tag/abi)`) of the build. The
+    /// Android expectations are what the reference's `libghostty-vt.so` for
+    /// `aarch64-linux-android` reported on an Android 15 emulator; the 32-bit
+    /// arm and x86_64 rows follow Zig's `arm-linux-androideabi` and
+    /// `x86_64-linux-android` tag names. Runs on the host, and on Android when
+    /// the test binary is run there.
+    #[test]
+    fn manifest_abi_names_the_zig_target_tags() {
+        let root = parsed_json();
+        let abi = get(root.as_object(), "abi").as_object();
+        let got = (
+            get(abi, "target").as_str(),
+            get(abi, "os").as_str(),
+            get(abi, "environment").as_str(),
+        );
+        let expected: (&str, &str, &str) = if cfg!(target_os = "android") {
+            if cfg!(target_arch = "arm") {
+                ("arm", "linux", "androideabi")
+            } else if cfg!(target_arch = "aarch64") {
+                ("aarch64", "linux", "android")
+            } else {
+                ("x86_64", "linux", "android")
+            }
+        } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            ("aarch64", "macos", "none")
+        } else if cfg!(all(target_os = "linux", target_env = "gnu")) {
+            (ABI_TARGET, "linux", "gnu")
+        } else {
+            (ABI_TARGET, ABI_OS, ABI_ENVIRONMENT)
+        };
+        assert_eq!(expected, got);
     }
 
     // fn expectPackedArmField(arm, manifest_name, comptime T, comptime

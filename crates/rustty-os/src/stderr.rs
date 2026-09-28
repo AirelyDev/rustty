@@ -56,16 +56,27 @@ mod imp {
     }
 
     // PORT NOTE: `posix.errno(rc)` reads the thread-local `errno` after a `-1`
-    // return. The symbol that exposes it differs by libc: glibc/bionic use
-    // `__errno_location`, Apple/BSD libc uses `__error`. Both return a pointer
-    // to the current thread's `errno`.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    // return. The symbol that exposes it differs by libc: glibc/musl use
+    // `__errno_location`, bionic (Android) uses `__errno`, Apple/BSD libc uses
+    // `__error`. Each returns a pointer to the current thread's `errno`.
+    // CORRECTION (task A-1): this said bionic uses `__errno_location` too. It
+    // has no such symbol: the Android `librustty_vt_c.so` failed to load with
+    // `cannot locate symbol "__errno_location"` (measured on an Android 15
+    // emulator).
+    #[cfg(target_os = "linux")]
     extern "C" {
-        fn __errno_location() -> *mut c_int;
+        #[link_name = "__errno_location"]
+        fn errno_location() -> *mut c_int;
+    }
+    #[cfg(target_os = "android")]
+    extern "C" {
+        #[link_name = "__errno"]
+        fn errno_location() -> *mut c_int;
     }
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
     extern "C" {
-        fn __error() -> *mut c_int;
+        #[link_name = "__error"]
+        fn errno_location() -> *mut c_int;
     }
 
     /// Safe wrapper over the platform errno-location extern.
@@ -75,14 +86,7 @@ mod imp {
         // libc errno-location function returns a valid, aligned pointer to the
         // calling thread's `errno` for the lifetime of the thread; a single
         // non-atomic read of that `c_int` is sound.
-        #[cfg(any(target_os = "linux", target_os = "android"))]
-        unsafe {
-            *__errno_location()
-        }
-        #[cfg(not(any(target_os = "linux", target_os = "android")))]
-        unsafe {
-            *__error()
-        }
+        unsafe { *errno_location() }
     }
 
     pub fn write(bytes: &[u8]) {

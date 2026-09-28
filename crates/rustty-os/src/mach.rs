@@ -209,9 +209,25 @@ impl TaggedPageAllocator {
         // (notably Darwin/macOS, this module's target). The reference guards the
         // `mremap` fast path on `MREMAP != void`; on Darwin that branch is dead,
         // so it is reproduced here as a `cfg(target_os = "linux")` path (Linux
-        // exposes `mremap`).
-        #[cfg(target_os = "linux")]
+        // exposes `mremap`). Android is Zig's `.linux` too, and bionic has
+        // `mremap`; the `libc` crate does not bind it there, so it is declared
+        // here (`MREMAP_MAYMOVE` is 1 in the kernel UAPI).
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
+            #[cfg(target_os = "android")]
+            mod libc {
+                pub use ::libc::MAP_FAILED;
+                pub const MREMAP_MAYMOVE: ::libc::c_int = 1;
+                extern "C" {
+                    pub fn mremap(
+                        old_address: *mut ::libc::c_void,
+                        old_size: ::libc::size_t,
+                        new_size: ::libc::size_t,
+                        flags: ::libc::c_int,
+                        ...
+                    ) -> *mut ::libc::c_void;
+                }
+            }
             // TODO: if the next_mmap_addr_hint is within the remapped range, update it
             let new_memory = unsafe {
                 libc::mremap(
@@ -230,7 +246,7 @@ impl TaggedPageAllocator {
             Some(new_memory.cast())
         }
 
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
         {
             let _ = may_move;
             if new_size_aligned < page_aligned_len {

@@ -379,7 +379,7 @@ pub fn random_secure(buffer: &mut [u8]) -> Result<(), EntropyUnavailable> {
     }
 
     // if (builtin.os.tag == .linux) {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         // const linux = std.os.linux;
         // var i: usize = 0;

@@ -80,7 +80,7 @@ const fn host_target() -> Target {
         Os::Macos
     } else if cfg!(target_os = "ios") {
         Os::Ios
-    } else if cfg!(target_os = "linux") {
+    } else if cfg!(any(target_os = "linux", target_os = "android")) {
         Os::Linux
     } else if cfg!(target_os = "freebsd") {
         Os::Freebsd
