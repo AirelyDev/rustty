@@ -769,10 +769,7 @@ mod tests {
         let mut lib = Library::init().unwrap();
 
         let mut c = Collection::init();
-        c.load_options = Some(LoadOptions {
-            library: lib,
-            ..Default::default()
-        });
+        c.load_options = Some(LoadOptions::new(lib));
 
         {
             // errdefer c.deinit(alloc);
@@ -912,10 +909,7 @@ mod tests {
         let mut lib = Library::init().unwrap();
 
         let mut c = Collection::init();
-        c.load_options = Some(LoadOptions {
-            library: lib,
-            ..Default::default()
-        });
+        c.load_options = Some(LoadOptions::new(lib));
 
         for style in [Style::Regular, Style::Bold, Style::Italic] {
             c.add(

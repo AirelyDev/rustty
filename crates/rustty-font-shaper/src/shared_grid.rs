@@ -224,17 +224,37 @@ impl<A: Allocator + Copy> SharedGrid<A> {
     /// used with a terminal grid and therefore the sprite font is always
     /// necessary for correct rendering.
     // pub fn init(alloc: Allocator, resolver: CodepointResolver) !SharedGrid {
-    pub fn init(alloc: A, resolver: CodepointResolver) -> Result<SharedGrid<A>, InitError> {
+    //
+    // PORT NOTE (N404, UD350): the reference takes the resolver BY VALUE and
+    // leaves it to the caller on failure ("The caller is responsible for
+    // cleaning up the resolver if init fails", its `init error` test, which
+    // `defer resolver.deinit(alloc)`s). A Rust move leaves the caller nothing
+    // to clean up, and `Collection` has no `Drop` (its entries own native
+    // handles freed only by `deinit`), so every error return here leaked the
+    // collection's faces. `init` therefore deinits the resolver it consumed on
+    // every error path. That also closes the reference's own leak in
+    // `SharedGridSet.ref` (UD350, PORT NOTE there).
+    pub fn init(alloc: A, mut resolver: CodepointResolver) -> Result<SharedGrid<A>, InitError> {
         // const tw = init_tw;
 
         // We need to support loading options since we use the size data
         assert!(resolver.collection.load_options.is_some());
 
-        let atlas_grayscale =
-            Atlas::init(alloc, 512, Format::Grayscale).map_err(|_| InitError::OutOfMemory)?;
+        let atlas_grayscale = match Atlas::init(alloc, 512, Format::Grayscale) {
+            Ok(a) => a,
+            Err(_) => {
+                resolver.deinit();
+                return Err(InitError::OutOfMemory);
+            }
+        };
         // errdefer atlas_grayscale.deinit(alloc); — freed on drop on the error path.
-        let atlas_color =
-            Atlas::init(alloc, 512, Format::Bgra).map_err(|_| InitError::OutOfMemory)?;
+        let atlas_color = match Atlas::init(alloc, 512, Format::Bgra) {
+            Ok(a) => a,
+            Err(_) => {
+                resolver.deinit();
+                return Err(InitError::OutOfMemory);
+            }
+        };
         // errdefer atlas_color.deinit(alloc);
 
         let mut result: SharedGrid<A> = SharedGrid {
@@ -248,6 +268,21 @@ impl<A: Allocator + Copy> SharedGrid<A> {
             glyphs: HashMap::new(),
         };
 
+        match result.init_fill() {
+            Ok(()) => Ok(result),
+            Err(e) => {
+                // The atlases and caches free when `result` drops; the
+                // resolver's collection needs its explicit `deinit`.
+                result.resolver.deinit();
+                Err(e)
+            }
+        }
+    }
+
+    /// The fallible remainder of [`init`](Self::init), after the grid owns
+    /// the resolver: its errors return to `init`, which deinits the resolver.
+    fn init_fill(&mut self) -> Result<(), InitError> {
+        let result = self;
         // We set an initial capacity that can fit a good number of characters.
         // This number was picked empirically based on my own terminal usage.
         // try tw.check(.codepoints_capacity);
@@ -270,7 +305,7 @@ impl<A: Allocator + Copy> SharedGrid<A> {
         // try result.reloadMetrics();
         result.reload_metrics()?;
 
-        Ok(result)
+        Ok(())
     }
 
     /// Deinit. Assumes no concurrent access so no lock is taken.
@@ -748,10 +783,7 @@ mod tests {
 
         let mut c = Collection::init();
         // c.load_options = .{ .library = lib };
-        c.load_options = Some(LoadOptions {
-            library: lib,
-            ..Default::default()
-        });
+        c.load_options = Some(LoadOptions::new(lib));
 
         match mode {
             TestMode::Normal => {
@@ -988,10 +1020,7 @@ mod tests {
             let mut lib = Library::init().unwrap();
 
             let mut c = Collection::init();
-            c.load_options = Some(LoadOptions {
-                library: lib,
-                ..Default::default()
-            });
+            c.load_options = Some(LoadOptions::new(lib));
             c.add(
                 Face::init(
                     lib,
@@ -1022,16 +1051,25 @@ mod tests {
             };
             // defer resolver.deinit(alloc); // Caller cleans up on init failure
             //
-            // PORT NOTE: Rust move semantics — `resolver` is moved into `init`,
-            // which drops it (freeing its collection's faces) on the error path. The
-            // reference's caller-side `defer resolver.deinit()` is subsumed by that
-            // move + drop; there is exactly one free either way.
+            // PORT NOTE (N404): `resolver` is moved into `init`, so the caller
+            // cannot clean it up; `init` deinits it on its error path instead,
+            // one teardown either way. A drop alone does NOT free the faces
+            // (`Collection` has no `Drop`): this test used to say it did, and
+            // memcheck found the collection's face leaked on every iteration.
+            // So the teardown is asserted, not assumed: the one loaded face is
+            // deinited by the failing `init`.
+            let deinits_before = crate::face::test_probe::face_deinits();
 
             // try testing.expectError(error.OutOfMemory, init(alloc, resolver));
             assert!(matches!(
                 SharedGrid::init(alloc, resolver),
                 Err(InitError::OutOfMemory)
             ));
+            assert_eq!(
+                crate::face::test_probe::face_deinits(),
+                deinits_before + 1,
+                "{tag:?}: the failed init deinits the resolver's one face"
+            );
 
             // defer tw.end(.reset) catch unreachable;
             //

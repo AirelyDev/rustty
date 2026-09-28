@@ -1090,17 +1090,22 @@ impl LoadOptions {
     }
 }
 
-impl Default for LoadOptions {
-    // PORT NOTE: the reference's field defaults (`size = .{ .points = 12 }`,
-    // `freetype_load_flags = freetype_load_flags_default`) are applied here so a
-    // `LoadOptions { library, ..Default::default() }`-style construction matches
-    // the Zig `.{ .library = lib }` (which relies on those defaults). `library`
-    // has no default; callers always set it.
-    fn default() -> Self {
+impl LoadOptions {
+    /// `.{ .library = lib }`: the given library with the reference's field
+    /// defaults (`size = .{ .points = 12 }`,
+    /// `freetype_load_flags = freetype_load_flags_default`). Override other
+    /// fields with `LoadOptions { size, ..LoadOptions::new(lib) }`.
+    //
+    // PORT NOTE (N404): `library` has no default in the reference, so a
+    // `.{}` without it does not compile. The port used to implement `Default`
+    // with a placeholder `Library::init()` that every `..Default::default()`
+    // then overwrote, which initialized a whole FreeType library per
+    // construction and leaked it (it was never `deinit`ed): 84 of the 88
+    // definite leaks memcheck found in this crate's tests. Taking the library
+    // as an argument makes it required again, as in the reference.
+    pub fn new(library: Library) -> Self {
         LoadOptions {
-            // A placeholder library; overwritten by every constructor. Never used
-            // because callers always provide `library` explicitly.
-            library: Library::init().unwrap(),
+            library,
             size: DesiredSize {
                 points: 12.0,
                 xdpi: crate::face::DEFAULT_DPI,
@@ -1544,10 +1549,7 @@ mod tests {
 
         let mut c = Collection::init();
         // Load options make `add` call `set_size` on the moved face.
-        c.load_options = Some(LoadOptions {
-            library: lib,
-            ..Default::default()
-        });
+        c.load_options = Some(LoadOptions::new(lib));
 
         let face = Face::init(
             lib,
@@ -1598,10 +1600,7 @@ mod tests {
         let mut lib = Library::init().unwrap();
 
         let mut c = Collection::init();
-        c.load_options = Some(LoadOptions {
-            library: lib,
-            ..Default::default()
-        });
+        c.load_options = Some(LoadOptions::new(lib));
 
         // A real deferred face backed by a system font.
         let name = new_cfstring("Menlo").unwrap();
@@ -1772,10 +1771,7 @@ mod tests {
         let mut lib = Library::init().unwrap();
 
         let mut c = Collection::init();
-        c.load_options = Some(LoadOptions {
-            library: lib,
-            ..Default::default()
-        });
+        c.load_options = Some(LoadOptions::new(lib));
         c.add(
             Face::init(
                 lib,
@@ -1838,10 +1834,7 @@ mod tests {
         let mut lib = Library::init().unwrap();
 
         let mut c = Collection::init();
-        c.load_options = Some(LoadOptions {
-            library: lib,
-            ..Default::default()
-        });
+        c.load_options = Some(LoadOptions::new(lib));
 
         c.add(
             Face::init(
@@ -1894,10 +1887,7 @@ mod tests {
         let mut lib = Library::init().unwrap();
 
         let mut c = Collection::init();
-        c.load_options = Some(LoadOptions {
-            library: lib,
-            ..Default::default()
-        });
+        c.load_options = Some(LoadOptions::new(lib));
 
         c.add(
             Face::init(
@@ -1939,10 +1929,7 @@ mod tests {
         let mut lib = Library::init().unwrap();
 
         let mut c = Collection::init();
-        c.load_options = Some(LoadOptions {
-            library: lib,
-            ..Default::default()
-        });
+        c.load_options = Some(LoadOptions::new(lib));
 
         let idx = c
             .add(
@@ -1993,10 +1980,7 @@ mod tests {
             let mut lib = Library::init().unwrap();
 
             let mut c = Collection::init();
-            c.load_options = Some(LoadOptions {
-                library: lib,
-                ..Default::default()
-            });
+            c.load_options = Some(LoadOptions::new(lib));
 
             let idx = c
                 .add(
@@ -2027,6 +2011,38 @@ mod tests {
         }
     }
 
+    /// N404: `LoadOptions::new(lib)` is the reference's `.{ .library = lib }`:
+    /// the caller's library, 12 points at the default DPI, and the default
+    /// FreeType load flags. (It replaced a `Default` impl that initialized and
+    /// leaked a FreeType library per construction; G-VALGRIND is what sees a
+    /// leak, this pins the values.)
+    #[test]
+    fn load_options_new_is_the_reference_field_defaults() {
+        let mut lib = Library::init().unwrap();
+        let o = LoadOptions::new(lib);
+        assert_eq!(
+            o.size,
+            DesiredSize {
+                points: 12.0,
+                xdpi: crate::face::DEFAULT_DPI,
+                ydpi: crate::face::DEFAULT_DPI,
+            }
+        );
+        // Only FreeType builds carry flags (elsewhere the type is `()`).
+        #[cfg(rustty_font_has_freetype)]
+        assert_eq!(
+            o.freetype_load_flags,
+            crate::face::FREETYPE_LOAD_FLAGS_DEFAULT
+        );
+        // The library is the caller's, not a new one.
+        assert_eq!(
+            format!("{:?}", o.library),
+            format!("{:?}", lib),
+            "LoadOptions::new keeps the given library"
+        );
+        lib.deinit();
+    }
+
     // test "metrics"
     #[test]
     fn metrics() {
@@ -2041,9 +2057,8 @@ mod tests {
             ydpi: 96,
         };
         c.load_options = Some(LoadOptions {
-            library: lib,
             size,
-            ..Default::default()
+            ..LoadOptions::new(lib)
         });
 
         c.add(
@@ -2146,9 +2161,8 @@ mod tests {
             ydpi: 96,
         };
         c.load_options = Some(LoadOptions {
-            library: lib,
             size,
-            ..Default::default()
+            ..LoadOptions::new(lib)
         });
 
         // Add our primary face.
@@ -2335,9 +2349,8 @@ mod tests {
         };
         // c.load_options = .{ .library = lib, .size = size };
         c.load_options = Some(LoadOptions {
-            library: lib,
             size,
-            ..Default::default()
+            ..LoadOptions::new(lib)
         });
 
         // const narrowIndex = try c.add(alloc, try .init(lib, narrowFont, .{ .size = size }), .{

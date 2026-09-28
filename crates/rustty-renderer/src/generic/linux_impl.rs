@@ -5332,10 +5332,7 @@ mod tests {
         let font_grid: *mut SharedGrid = {
             let lib = Library::init().unwrap();
             let mut c = Collection::init();
-            c.load_options = Some(LoadOptions {
-                library: lib,
-                ..Default::default()
-            });
+            c.load_options = Some(LoadOptions::new(lib));
             c.add(
                 Face::init(
                     lib,

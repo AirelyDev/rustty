@@ -158,10 +158,7 @@ fn test_shaper_with_font(font_req: TestFont) -> TestShaper {
     // var c = Collection.init();
     let mut c = Collection::init();
     // c.load_options = .{ .library = lib };
-    c.load_options = Some(LoadOptions {
-        library: lib,
-        ..Default::default()
-    });
+    c.load_options = Some(LoadOptions::new(lib));
 
     // Setup group
     // _ = try c.add(alloc, try .init(lib, testFont, .{ .size = .{ .points = 12 } }), .{ ... });
@@ -304,15 +301,16 @@ fn test_shaper_with_discovered_font(font_req: &str) -> Option<TestShaper> {
         "a discovered-font test ran on a `Discover == void` backend without its ignore attribute"
     );
     // var lib = try Library.init(alloc); errdefer lib.deinit();
-    let lib = Library::init().unwrap();
+    //
+    // PORT NOTE (N404): the `errdefer` runs on the reference's
+    // `SkipZigTest`/`FontNotFound` returns; both `None` returns below deinit
+    // the library for it (memcheck found it leaked there).
+    let mut lib = Library::init().unwrap();
 
     // var c = Collection.init();
     let mut c = Collection::init();
     // c.load_options = .{ .library = lib };
-    c.load_options = Some(LoadOptions {
-        library: lib,
-        ..Default::default()
-    });
+    c.load_options = Some(LoadOptions::new(lib));
 
     // Discover and add our font to the collection.
     {
@@ -333,6 +331,7 @@ fn test_shaper_with_discovered_font(font_req: &str) -> Option<TestShaper> {
             None => {
                 disco_it.deinit();
                 disco.deinit();
+                lib.deinit();
                 require_system_font_or_skip(font_req, "was not found");
                 return None;
             }
@@ -348,6 +347,7 @@ fn test_shaper_with_discovered_font(font_req: &str) -> Option<TestShaper> {
             face.deinit();
             disco_it.deinit();
             disco.deinit();
+            lib.deinit();
             require_system_font_or_skip(font_req, "was not matched (discovery fell back)");
             return None;
         }
