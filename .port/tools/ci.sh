@@ -499,6 +499,10 @@ GATE_REGISTRY=(
   # name (and the gate exits 3 BLOCKED if EVERY lane is skipped) rather than
   # contributing a vacuous green — see the gate's header.
   "G-LINT|HARD|bash $GATES/check_lints.sh"
+  # G-MIRIRUN-SELF (NEW-FINDINGS N31) — the Miri runner's classifier over real
+  # captured Miri outputs (ok / UB / LEAK / INTERP / BUILD / FAIL / TIMEOUT)
+  # and its per-run work directory. Seconds; runs no Miri.
+  "G-MIRIRUN-SELF|HARD|bash $ROOT/.port/tools/miri-run.sh --self-test"
   # G-CCONSUMER (2026-08-25) — the C/CMake/pkg-config consumer lane, the merge
   # of the reference's `build-cmake` + `test-lib-vt-pkgconfig` jobs. Nothing
   # here was exercised before: `cargo test` never invokes cmake, so a 400-line
