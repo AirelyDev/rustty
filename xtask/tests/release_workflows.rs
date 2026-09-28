@@ -751,3 +751,69 @@ fn no_other_workflow_publishes_release_artifacts() {
     }
     assert!(Path::new(&dir).join("ci.yml").is_file());
 }
+
+/// What is wrong with the `valgrind` job's shard matrix, if anything: the
+/// matrix values must be exactly `1..=N`, where N is the divisor every
+/// `/<N>` in the job's `--shard` argument and its `name` uses. `None` when
+/// they agree.
+fn valgrind_shard_mismatch(body: &str) -> Option<String> {
+    let shards: Vec<u32> = match body.lines().find_map(|l| l.trim().strip_prefix("shard: [")) {
+        Some(rest) => rest
+            .trim_end_matches(']')
+            .split(',')
+            .map(|v| v.trim().parse().expect("a shard number"))
+            .collect(),
+        None => return Some("no `shard: [...]` matrix".to_string()),
+    };
+    let mut divisors = BTreeSet::new();
+    for line in body.lines() {
+        // `--shard "$SHARD/4"` in the gate's command line, `(${{ matrix.shard }}/4)`
+        // in the job's name.
+        for (marker, end) in [("$SHARD/", '"'), ("matrix.shard }}/", ')')] {
+            if let Some(i) = line.find(marker) {
+                let rest = &line[i + marker.len()..];
+                let n = rest.split(end).next().unwrap_or_default();
+                divisors.insert(n.parse::<u32>().map_err(|_| n.to_string()));
+            }
+        }
+    }
+    let n = match divisors.len() {
+        0 => return Some("no `$SHARD/N` divisor in the job".to_string()),
+        1 => match divisors.into_iter().next().unwrap() {
+            Ok(n) => n,
+            Err(bad) => return Some(format!("divisor `{bad}` is not a number")),
+        },
+        _ => return Some(format!("the job uses several divisors: {divisors:?}")),
+    };
+    let want: Vec<u32> = (1..=n).collect();
+    (shards != want).then(|| format!("matrix shards {shards:?} for --shard K/{n}, want {want:?}"))
+}
+
+/// Review L-6 F6: the `valgrind` job's four jobs together run every test only
+/// if the matrix is exactly shards 1..N of the gate's `--shard K/N`. A shrunk
+/// matrix (or a changed divisor) would silently drop a share of the tests.
+#[test]
+fn valgrind_job_matrix_covers_every_shard() {
+    let jobs = parse_jobs(&read_workflow("ci.yml"));
+    let job = jobs.get("valgrind").expect("ci.yml has a `valgrind` job");
+    assert!(
+        job.body.contains("check_valgrind.sh --shard"),
+        "the valgrind job runs the gate sharded"
+    );
+    assert_eq!(valgrind_shard_mismatch(&job.body), None);
+
+    // Controls: each disagreement is reported.
+    let ok = "    name: rustty-valgrind (${{ matrix.shard }}/4)\n      matrix:\n        shard: [1, 2, 3, 4]\n        run: bash .port/tools/gates/check_valgrind.sh --shard \"$SHARD/4\" --jobs 4\n";
+    assert_eq!(valgrind_shard_mismatch(ok), None);
+    for bad in [
+        ok.replace("[1, 2, 3, 4]", "[1, 2, 3]"),
+        ok.replace("[1, 2, 3, 4]", "[1, 2, 4, 5]"),
+        ok.replace("$SHARD/4", "$SHARD/5"),
+        ok.replace("}}/4)", "}}/3)"),
+    ] {
+        assert!(
+            valgrind_shard_mismatch(&bad).is_some(),
+            "not reported:\n{bad}"
+        );
+    }
+}
