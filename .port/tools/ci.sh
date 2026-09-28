@@ -87,9 +87,12 @@
 #   G-BLUEPRINT check_blueprints.sh  all .blp templates compile and are
 #                                    formatted                     -> HARD-FAIL
 #                                    BLOCKED without blueprint-compiler.
-#   G-VALGRIND check_valgrind.sh     FFI-crate test binaries under memcheck
-#                                    with valgrind.supp            -> HARD-FAIL
-#                                    BLOCKED without valgrind (all of macOS).
+#   G-VALGRIND check_valgrind.sh     every workspace crate's test binaries
+#                                    under memcheck with valgrind.supp
+#                                    (N413)                        -> HARD-FAIL
+#                                    BLOCKED without valgrind (all of macOS),
+#                                    and in ci.yml's `ci` job, which defers
+#                                    to its sharded `valgrind` job.
 #                                    Closes check_leaks.sh's "deferred to Linux
 #                                    CI" FFI-leak note.
 #   G-XCF check_xcframework.sh       dist/rustty-vt.xcframework is well-formed:

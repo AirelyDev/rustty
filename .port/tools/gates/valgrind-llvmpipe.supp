@@ -1,0 +1,78 @@
+# Rustty-only Valgrind suppressions for G-VALGRIND (check_valgrind.sh), kept
+# apart from `valgrind.supp`, which stays the reference's file verbatim.
+#
+# Scope: Mesa's llvmpipe, the software OpenGL driver the renderer's live-GL
+# tests run on (LIBGL_ALWAYS_SOFTWARE=1, RUSTTY_REQUIRE_GL=1). The reference's
+# `valgrind.supp` hides graphics-driver noise the same way, by naming the
+# driver's own frames (its "Mesa", "Graphics Driver dri", "i965 addr4/addr8" and
+# "mesa memcpy/memcmp" entries). The reference runs no test that draws, so it
+# has no llvmpipe entries; these are the port's, one group per finding
+# (NEW-FINDINGS N412), each measured on the Fedora 44 aarch64 VM (Mesa 26.1.4,
+# LLVM 22.1.8, valgrind 3.27.1).
+
+# llvmpipe compiles its shaders with LLVM (gallivm) at draw time; memcheck
+# reports conditional jumps inside LLVM's code generator (AsmPrinter,
+# SelectionDAG lowering) on a value created by a stack allocation in Mesa's
+# `lp_build_create_jit_compiler_for_module`. Reproduced by
+# `.port/tools/valgrind-llvmpipe-probe/probe.c` (C, EGL surfaceless, no Rustty
+# code at all), and by a single-triangle variant of it, so it is
+# driver-internal. Every frame between the report and
+# `gallivm_jit_function` belongs to LLVM or Mesa; a Rustty defect cannot be the
+# top of such a stack.
+{
+   llvmpipe-gallivm-llvm-codegen
+   Memcheck:Cond
+   ...
+   fun:gallivm_jit_function
+}
+
+# The golden tests read back pixels llvmpipe rasterized and branch on them.
+# Memcheck marks some of those pixels undefined, with the origin inside llvmpipe
+# (`lp_scene_new_data_block`, the scene memory its JIT-compiled rasterizer
+# writes), never in a buffer Rustty uploaded. The C program
+# `.port/tools/valgrind-llvmpipe-probe/probe.c`, drawing 64 instanced quads
+# from fully written buffers with the renderer's premultiplied-alpha blend, gets
+# the same report on its own pixel comparisons (origin: a stack slot of the
+# JIT-compiled code) while every one of its 4,096 pixels has the expected
+# value, and none with blending off: blending scales the destination by
+# (1 - source alpha) = 0, and memcheck does not know a product with a defined
+# zero is defined. The values these tests assert on are right too (they pass).
+# `--expensive-definedness-checks=yes` does not remove the reports. These
+# entries match only a conditional jump whose
+# TOP frames are the test's own pixel comparisons (the test body, its
+# `Iterator::any` predicates, the slice `!=`, `Ord::max`), so a Rustty function
+# the test calls is still checked in full.
+{
+   golden-readback-cursor-fg-bg-body
+   Memcheck:Cond
+   fun:_ZN15rustty_renderer7generic10linux_impl5tests27golden_renders_cursor_fg_bg17h*E
+}
+{
+   golden-readback-cursor-fg-bg-max
+   Memcheck:Cond
+   fun:_ZN4core3cmp3Ord3max17h*E
+   fun:_ZN15rustty_renderer7generic10linux_impl5tests27golden_renders_cursor_fg_bg17h*E
+}
+{
+   golden-readback-custom-shader-passthrough-body
+   Memcheck:Cond
+   fun:_ZN15rustty_renderer7generic10linux_impl5tests40golden_renders_custom_shader_passthrough*
+}
+{
+   golden-readback-custom-shader-passthrough-any
+   Memcheck:Cond
+   fun:_ZN4core4iter6traits8iterator8Iterator3any5check*
+   fun:_ZN4core4iter6traits8iterator8Iterator8try_fold17h*E
+   fun:_ZN4core4iter6traits8iterator8Iterator3any17h*E
+   fun:_ZN15rustty_renderer7generic10linux_impl5tests40golden_renders_custom_shader_passthrough17h*E
+}
+{
+   golden-readback-custom-shader-passthrough-slice-ne
+   Memcheck:Cond
+   fun:bcmp
+   fun:*SlicePartialEq*equal*
+   fun:not_equal<*
+   fun:*PartialEq*ne*
+   fun:*PartialEq*ne*
+   fun:_ZN15rustty_renderer7generic10linux_impl5tests40golden_renders_custom_shader_passthrough28_$u7b$$u7b$closure*
+}
