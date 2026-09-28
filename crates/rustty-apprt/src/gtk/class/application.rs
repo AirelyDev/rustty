@@ -654,16 +654,16 @@ mod imp {
         /// [`Self::update_config_thunk`], which iterates every surface's config and
         /// (synchronously) re-dispatches the `.app` `config_change` action back into
         /// [`Self::set_config`]. A `None` thunk (core not yet bound) is a no-op.
+        ///
+        /// The error is returned, not logged: the reference `try`s the call and
+        /// logs once, at `reloadConfig`'s caller (N311).
         pub(super) fn update_config_app(
             &self,
             config: &rustty_config::Config,
-        ) -> Result<(), rustty_apprt_api::ApprtError> {
+        ) -> Result<(), rustty_core::app::Error> {
             // Follow the `new_window_thunk` idiom: borrow-and-call the thunk inline.
             if let Some(thunk) = self.update_config_thunk.borrow().as_ref() {
-                thunk(config).map_err(|err| {
-                    log::warn!(target: LOG_SCOPE, "error updating app config err={err:?}");
-                    rustty_apprt_api::ApprtError
-                })?;
+                thunk(config)?;
             }
             Ok(())
         }
@@ -1161,7 +1161,7 @@ mod imp {
                 // GUI.
                 //
                 // log.warn("error reloading config: {}", .{err});
-                log::warn!(target: LOG_SCOPE, "error reloading config: {err:?}");
+                log::warn!(target: LOG_SCOPE, "error reloading config: {err}");
             }
         }
 
@@ -1825,7 +1825,8 @@ unsafe extern "C" fn handle_sigusr2(ud: glib::ffi::gpointer) -> glib::ffi::gbool
         //
         // log.warn("error reloading config: {}", .{err});
         // (task-14d-3: the error VALUE was dropped — the `.is_err()` discarded it.)
-        log::warn!(target: LOG_SCOPE, "error reloading config: {err:?}");
+        // `{}` of the error is its Zig name (`ReloadConfigError`'s Display, N311).
+        log::warn!(target: LOG_SCOPE, "error reloading config: {err}");
     }
 
     // `return @intFromBool(glib.SOURCE_CONTINUE)` (`:1523`).
@@ -2406,19 +2407,19 @@ fn action_reload_config(
     // app's `.reload_config` scoped action is a pure passthrough back to the apprt
     // (`App.zig:428`, `rt_app.performAction(.app, .reload_config, .{})`), so it
     // collapses to the same `.app`-target reload the SIGUSR2 handler performs. Route
-    // it directly. On failure, log (`:1672`).
+    // it directly. On failure, log (`:1672`; `application.zig:1792-1794` at the
+    // pin). The core passthrough `try`s the apprt's error, so `err` is
+    // `reloadConfig`'s own error and the line prints its Zig name (N311).
     if let Err(err) = action::reload_config(
         app,
         Target::<AppTargetHandle>::App,
         rustty_apprt_api::action::ReloadConfig::default(),
     ) {
-        // If we fail to reload the configuration, then we want the
-        // user to know it. For now we log but we should show another
-        // GUI.
-        //
-        // log.warn("error reloading config: {}", .{err});
+        // priv.core_app.performAction(self.rt(), .reload_config) catch |err| {
+        //     log.warn("error reloading config err={}", .{err});
+        // };
         // (task-14d-3: the error VALUE was dropped — the `.is_err()` discarded it.)
-        log::warn!(target: LOG_SCOPE, "error reloading config: {err:?}");
+        log::warn!(target: LOG_SCOPE, "error reloading config err={err}");
     }
 }
 
@@ -4924,6 +4925,69 @@ mod action {
         }
     }
 
+    /// The error set `reloadConfig`'s `!void` infers (`application.zig:2945-2982`
+    /// at the pin): `CoreConfig.load`'s errors and the core `updateConfig`
+    /// errors (app or surface target). The reference `try`s each and logs once,
+    /// at the caller, `log.warn("error reloading config: {}", .{err})`
+    /// (`:1602-1606`, `:1682-1690`) or `"error reloading config err={}"`
+    /// (`:1792-1794`), which prints the error NAME.
+    ///
+    /// PORT NOTE (N311): the port used to log each failure inside `reloadConfig`
+    /// and flatten it into the unit `ApprtError`, so a failure logged twice and
+    /// the caller's line printed `ApprtError`. Carrying the error to the caller
+    /// restores the single, named line. The `performAction` arm still converts
+    /// to `ApprtError` (the apprt seam's error type).
+    #[derive(Debug)]
+    pub(super) enum ReloadConfigError {
+        /// `CoreConfig.load` (`:2966`).
+        Load(rustty_config::config_struct::LoadError),
+        /// `self.core().updateConfig` / `core.updateConfig` (`:2975-2980`).
+        Core(rustty_core::app::Error),
+    }
+
+    impl std::fmt::Display for ReloadConfigError {
+        /// `{}` of the error: its Zig name, `error.<Name>`.
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                ReloadConfigError::Load(err) => {
+                    f.write_str(&rustty_config::zig_error::load_error(err))
+                }
+                ReloadConfigError::Core(err) => match core_error_name(err) {
+                    Some(name) => f.write_str(name),
+                    // PORT NOTE: the core error sets have no Zig-name rendering
+                    // yet (the renderer/core side of that is N11); an error the
+                    // map below does not name prints the core Display.
+                    None => write!(f, "{err}"),
+                },
+            }
+        }
+    }
+
+    /// The Zig name of a core `updateConfig` error, for the variants
+    /// `updateConfig` can return: every `try` in `Surface.updateConfig`
+    /// (`Surface.zig:1744`) that allocates fails with `error.OutOfMemory`
+    /// (`Message.initChangeConfig`'s `alloc.create`, `setFontSize`'s grid
+    /// reference).
+    fn core_error_name(err: &rustty_core::app::Error) -> Option<&'static str> {
+        use rustty_core::surface::Error as SurfaceError;
+        match err {
+            rustty_core::app::Error::Surface(
+                SurfaceError::OutOfMemory(_)
+                | SurfaceError::InitChangeConfig(_)
+                | SurfaceError::FontGrid(rustty_font_shaper::shared_grid_set::Error::OutOfMemory),
+            ) => Some("error.OutOfMemory"),
+            _ => None,
+        }
+    }
+
+    /// The `performAction` arm's `try Action.reloadConfig(...)` (`:758`): the
+    /// apprt seam's error type is the unit `ApprtError`.
+    impl From<ReloadConfigError> for ApprtError {
+        fn from(_: ReloadConfigError) -> ApprtError {
+            ApprtError
+        }
+    }
+
     /// Reload the configuration for the application and propagate it
     /// across the entire application and all terminals.
     ///
@@ -4932,7 +4996,7 @@ mod action {
         app: &Application,
         target: Target<'_, C>,
         opts: rustty_apprt_api::action::ReloadConfig,
-    ) -> Result<(), ApprtError> {
+    ) -> Result<(), ReloadConfigError> {
         // Tell systemd that reloading has started.
         //
         // When we exit this function tell systemd that reloading has finished.
@@ -4955,7 +5019,7 @@ mod action {
         app: &Application,
         target: Target<'_, C>,
         opts: rustty_apprt_api::action::ReloadConfig,
-    ) -> Result<(), ApprtError> {
+    ) -> Result<(), ReloadConfigError> {
         // Get our config object.
         //
         // (`:2453-2472`.)
@@ -4975,10 +5039,10 @@ mod action {
             // (`:2464-2470`.) The reference
             // wraps the loaded `CoreConfig` in a `Config` GObject (which clones it),
             // so the local load result may drop here.
-            let core_config = CoreConfig::load().map_err(|err| {
-                log::warn!(target: LOG_SCOPE, "error loading config on reload err={err:?}");
-                ApprtError
-            })?;
+            //
+            // `var config = try CoreConfig.load(alloc);` (`:2466`): propagated,
+            // not logged (N311).
+            let core_config = CoreConfig::load().map_err(ReloadConfigError::Load)?;
             Config::new(&core_config)
         };
 
@@ -4990,7 +5054,10 @@ mod action {
         match target {
             // `.app => try self.core().updateConfig(self.rt(), config.get())`
             // (`:2472-2475`).
-            Target::App => app.imp().update_config_app(config.get())?,
+            Target::App => app
+                .imp()
+                .update_config_app(config.get())
+                .map_err(ReloadConfigError::Core)?,
             // `.surface => |core| try core.updateConfig(config.get())` (`:2477`).
             Target::Surface(v) => {
                 let rt = v.rt_surface_ptr().cast::<ApprtSurface>();
@@ -5002,10 +5069,7 @@ mod action {
                     let core = unsafe { (*rt).core() };
                     unsafe { &mut *core }
                         .updateConfig(config.get())
-                        .map_err(|err| {
-                            log::warn!(target: LOG_SCOPE, "error updating surface config err={err:?}");
-                            ApprtError
-                        })?;
+                        .map_err(|err| ReloadConfigError::Core(err.into()))?;
                 }
             }
         }
@@ -5732,6 +5796,110 @@ mod tests {
         let _default: fn() -> Application = Application::default;
         let _alloc: fn(&Application) -> allocator_api2::alloc::Global = Application::allocator;
         let _get_config: fn(&Application) -> Option<Config> = Application::get_config;
+    }
+
+    /// N311: `{}` of `reloadConfig`'s error is the Zig error name, the text the
+    /// reference's caller line prints (`application.zig:1602-1606`). Pure: no
+    /// display.
+    #[test]
+    fn reload_config_error_prints_the_zig_error_name() {
+        use super::action::ReloadConfigError;
+        assert_eq!(
+            ReloadConfigError::Load(rustty_config::config_struct::LoadError::FileNotFound)
+                .to_string(),
+            "error.FileNotFound"
+        );
+        assert_eq!(
+            ReloadConfigError::Load(rustty_config::config_struct::LoadError::OutOfMemory)
+                .to_string(),
+            "error.OutOfMemory"
+        );
+        assert_eq!(
+            ReloadConfigError::Core(rustty_core::app::Error::Surface(
+                rustty_core::surface::Error::InitChangeConfig(
+                    rustty_renderer::message::InitChangeConfigError
+                )
+            ))
+            .to_string(),
+            "error.OutOfMemory"
+        );
+    }
+
+    /// N311: a failed reload logs ONCE, at the caller, with the error name —
+    /// `application.zig:1792-1794` `log.warn("error reloading config err={}",
+    /// .{err})` for the `app.reload-config` action — and `reloadConfig` itself
+    /// logs nothing (it `try`s `Config.load` and `updateConfig`,
+    /// `:2945-2982`). The app-target `updateConfig` is made to fail with the
+    /// core's `error.OutOfMemory` through the bound thunk.
+    #[test]
+    #[ignore = "requires a display; run via xvfb-run -a cargo test -p rustty-apprt --features gtk -- --ignored"]
+    fn reload_config_failure_logs_once_at_the_caller_with_the_error_name() {
+        crate::gtk::init_for_display_test(
+            "reload_config_failure_logs_once_at_the_caller_with_the_error_name",
+        );
+        let _ = libadwaita::init();
+
+        let mut core_app: Box<CoreApp<Double>> =
+            CoreApp::<Double>::create(Global).expect("core app");
+        let core_ptr: *mut CoreApp<Double> = &mut *core_app;
+        let app = build_test_app(core_ptr.cast());
+
+        let reached = std::rc::Rc::new(std::cell::Cell::new(0usize));
+        let reached_in = reached.clone();
+        *app.imp().update_config_thunk.borrow_mut() = Some(Box::new(move |_config| {
+            reached_in.set(reached_in.get() + 1);
+            Err(rustty_core::app::Error::Surface(
+                rustty_core::surface::Error::InitChangeConfig(
+                    rustty_renderer::message::InitChangeConfigError,
+                ),
+            ))
+        }));
+
+        // `reloadConfig` alone: the error comes back, nothing is logged.
+        let cap = crate::log_capture::start();
+        let result = action::reload_config(
+            &app,
+            Target::<AppTargetHandle>::App,
+            rustty_apprt_api::action::ReloadConfig { soft: true },
+        );
+        let inner = cap.messages();
+        drop(cap);
+        assert_eq!(
+            reached.get(),
+            1,
+            "the app-target updateConfig must have run"
+        );
+        assert_eq!(
+            result.map_err(|err| err.to_string()),
+            Err("error.OutOfMemory".to_string())
+        );
+        assert_eq!(
+            Vec::<(log::Level, String, String)>::new(),
+            inner,
+            "reloadConfig propagates its error with `try` and logs nothing"
+        );
+
+        // The `app.reload-config` action handler: exactly one line, with the name.
+        let cap = crate::log_capture::start();
+        let gaction = gio::SimpleAction::new("reload-config", None);
+        action_reload_config(&gaction, None, &app);
+        // The hard reload's `Config.load` may log under its own scopes (which
+        // files it read); only this file's scope is under test.
+        let messages: Vec<_> = cap
+            .messages()
+            .into_iter()
+            .filter(|(_, target, _)| target == LOG_SCOPE)
+            .collect();
+        drop(cap);
+        assert_eq!(reached.get(), 2, "the action must reach updateConfig");
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                LOG_SCOPE.to_string(),
+                "error reloading config err=error.OutOfMemory".to_string()
+            )],
+            messages
+        );
     }
 
     // ---- display-dependent lifecycle tests --------------------------------
