@@ -243,7 +243,7 @@ mod tests {
         //
         // The conditional references are reproduced as `cfg!` checks so the
         // os-tag intent is preserved verbatim.
-        if cfg!(target_os = "linux") {
+        if cfg!(any(target_os = "linux", target_os = "android")) {
             let _ = stringify!(kernel_info);
         } else if cfg!(any(target_os = "macos", target_os = "ios")) {
             let _ = stringify!(mach);

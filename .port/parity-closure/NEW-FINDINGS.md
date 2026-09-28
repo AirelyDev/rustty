@@ -7389,6 +7389,53 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `style::` tests pass.
 - **state**: CLOSED (fixed).
 
+## N394 — `RenderState::update` held a shared row slice across `set_dirty` writes (Stacked Borrows)
+
+- **id**: N394. Not a ledger row: task C-1 (G6, found through `rustty-vt-c`'s render tests).
+- **severity**: medium (UB on the partial-redraw path of every render update with dirty rows).
+  **kind**: port soundness.
+- **finding**: `render.rs` (`RenderState::update`, the per-chunk dirty scan) formed
+  `page_rows: &[page::Row]` once per chunk and used it for every `RowDirtyMask::match_group` scan, while
+  the loop between scans writes `(*page_row).set_dirty(false)` through the raw base pointer. The
+  write's function-entry Unique retag pops the shared slice's tag, so the next scan retagged from a
+  dead tag. Miri (G6): `trying to retag from <..> for SharedReadOnly permission ... <..> was later
+  invalidated ... by a Unique function-entry retag` at `render.rs:1288`
+  (`render::tests::render_row_get_set_dirty`, `render::tests::render_update` in `rustty-vt-c`).
+- **fix** (task C-1): the shared slice is formed afresh for each scan (`page_rows()`), from the same
+  raw base pointer; the writes and the builder keep using raw element pointers.
+- **test**: `rustty-vt-c` `render::tests::render_row_get_set_dirty` and `render::tests::render_update` under Miri: UB before, pass after.
+  Native: the render tests pass.
+- **state**: CLOSED (fixed).
+
+## N395 — G4's leg B compares the port against c-vt goldens recorded at the phase-0 pin; a fresh port driver diverges on three
+
+- **id**: N395. Not a ledger row: task C-1 (the full `ci.sh` run on `tail-c1`).
+- **severity**: medium (a HARD gate that was green only through stale local binaries). **kind**: gate
+  evidence / harness.
+- **finding**: in a fresh worktree `G4` was BLOCKED (no `harness/bin/vt_driver_ref`/`vt_driver_port`:
+  build products, not tracked). The main checkout's copies are dated 2026-08-10, so the ci run at
+  `9fd17d93` compared an August port build against the goldens. Built from this branch
+  (`build_port_driver.sh`; `build_ref_driver.sh` links the prebuilt `ghostty/zig-out`, dated 2026-08-28,
+  before the pin), leg A (12 fixtures) is byte-exact, and leg B diverges on `c-vt-effects`,
+  `c-vt-formatter` and `c-vt-paste`. The port's new lines are the ones the reference's example sources
+  print at the pin 20abdb50a (checked by their `printf` formats — `Formatted output:\n`,
+  `  clipboard read (location=%d, mimes=%zu)`, `  -> pty (%zu bytes): ` — not by running the reference
+  examples, so byte equality is UNVERIFIED; `c-vt-paste/src/main.c` changed upstream on 2026-08-23),
+  but `.port/phase-0/corpora/cvt/*.golden` were recorded from the reference examples at the phase-0 pin
+  (2026-06-21) and never regenerated. `git diff 4749c4e93 20abdb50a -- example/` also changes
+  `c-vt-grid-ref-tracked`, `c-vt-grid-traverse`, `c-vt-kitty-graphics`, `c-vt-render`, both
+  `c-vt-selection*`, `c-vt-stream`, `c-vt-static` and `cpp-vt-stream` (these still match their old
+  goldens), and adds `c-vt-search` and `c-vt-snapshot`, which the corpus does not cover.
+- **also fixed** (task C-1): `build_port_driver.sh` defaulted `RUSTTY_ROOT` to the main checkout, so from a
+  worktree it built and linked the MAIN checkout's `rustty-vt-c` (into the main checkout's `target/`).
+  It now derives the root from its own location.
+- **not fixed**: regenerating the goldens needs the reference examples built at the pin. A trial
+  `zig build` of `example/c-vt-paste` fails on this host (`unable to find artifact 'ghostty-vt'`; only
+  `ghostty-vt-static` is offered), and the host had under 3 GB of free disk. Needed: rebuild
+  `ghostty/zig-out` at 20abdb50a, build the 21 (+2 new) examples, rerun `.port/phase-0/run-cvt-corpora.sh`,
+  review each golden diff against the upstream example change.
+- **state**: OPEN.
+
 ## N400 — G-BLUEPRINT's first run: green; its description of `blueprint-compiler format` was wrong
 
 - **id**: N400. Parity tail L-5 (tool-BLOCKED gates). **severity**: low. **kind**: gate accuracy. **state**:
@@ -7565,49 +7612,108 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   temporary rustty-wuffs test asserting both passes under the new gate and fails under the old one (left
   `/home/gael/projects/l5`).
 
-## N394 — `RenderState::update` held a shared row slice across `set_dirty` writes (Stacked Borrows)
+## N425 — librustty-vt did not compile for Android: the port read Zig's `.linux` as Rust's `target_os = "linux"`
 
-- **id**: N394. Not a ledger row: task C-1 (G6, found through `rustty-vt-c`'s render tests).
-- **severity**: medium (UB on the partial-redraw path of every render update with dirty rows).
-  **kind**: port soundness.
-- **finding**: `render.rs` (`RenderState::update`, the per-chunk dirty scan) formed
-  `page_rows: &[page::Row]` once per chunk and used it for every `RowDirtyMask::match_group` scan, while
-  the loop between scans writes `(*page_row).set_dirty(false)` through the raw base pointer. The
-  write's function-entry Unique retag pops the shared slice's tag, so the next scan retagged from a
-  dead tag. Miri (G6): `trying to retag from <..> for SharedReadOnly permission ... <..> was later
-  invalidated ... by a Unique function-entry retag` at `render.rs:1288`
-  (`render::tests::render_row_get_set_dirty`, `render::tests::render_update` in `rustty-vt-c`).
-- **fix** (task C-1): the shared slice is formed afresh for each scan (`page_rows()`), from the same
-  raw base pointer; the writes and the builder keep using raw element pointers.
-- **test**: `rustty-vt-c` `render::tests::render_row_get_set_dirty` and `render::tests::render_update` under Miri: UB before, pass after.
-  Native: the render tests pass.
-- **state**: CLOSED (fixed).
+- **id**: N425. Parity tail A-1. **severity**: medium (the reference's `build-libghostty-vt-android` job
+  builds lib-vt for three Android targets; the port could build none). **kind**: port defect (R1), fixed.
+  **state**: CLOSED (fixed).
+- **finding**: Zig's Android targets are os `.linux` with abi `.android`/`.androideabi`, so every
+  `builtin.os.tag == .linux` arm of the reference applies to Android. Rust's Android targets are
+  `target_os = "android"`, which `cfg(target_os = "linux")` does not match. With NDK r29 on the Mac,
+  `cargo build -p rustty-vt-c --release --target aarch64-linux-android` stopped in rustty-os at four
+  `compile_error!` fallbacks (`desktop.rs:114`, `homedir.rs:74`/`:388`, `open.rs:136`); once past those, the
+  `mremap` fast path (`mach.rs`, `MREMAP != void` in the reference, and bionic has `mremap`) had no `libc`
+  binding for Android, and `armv7-linux-androideabi` failed on `systemd.rs`'s `tv_sec * US_PER_S` (`i32` on
+  32-bit Android against the reference's `i64` `toMicroseconds()`). The same misreading also changed behaviour
+  that compiled: `rustty-vt`'s `mem.rs` (`canReclaim`/`decommit`, `mem.zig:53,103`) would not have reclaimed
+  with `MADV_DONTNEED` on Android, and the type manifest would have said `"os":"unknown"`.
+- **fix**: every code-level `target_os = "linux"` in rustty-os, rustty-vt, rustty-vt-c and rustty-build-config
+  also admits `target_os = "android"` (an `any(` element gets the sibling, anything else is wrapped in
+  `any(target_os = "linux", target_os = "android")`), rustty-os's build script compiles `pty.c` for Android
+  (bionic defines `__linux__`), `mach.rs` declares bionic's `mremap` (`MREMAP_MAYMOVE` = 1), and `systemd.rs`
+  widens `tv_sec`/`tv_nsec` with `i64::from`. Not changed: rustty-vt's port-only POSIX shared-memory tests in
+  `stream_terminal.rs` (the reference has no POSIX shared memory on Android, `graphics_image.zig:202-204`) and
+  `graphics_image.rs`, which already named Android.
+- **verification**: NDK r29 (29.0.14206865), API 29 (Zig 0.16's default Android API level,
+  `std/Target.zig:484`): `cargo build -p rustty-vt-c --release` for `aarch64-linux-android`,
+  `x86_64-linux-android` and `armv7-linux-androideabi` all link. The before state is the compile failure
+  above. On an Android 15 arm64 emulator with a 16 KiB page-size kernel (N428), the rustty-vt-c unit tests ran
+  553/554 (debug), rustty-vt 3180/3199 and rustty-os 105/107; every failure reads the host source tree
+  (`CARGO_MANIFEST_DIR` fixtures and headers, `target/` scratch), runs `/usr/bin/true` (Android has
+  `/system/bin/true`) or reads `/proc/sys/kernel/osrelease`, which SELinux denies to the adb shell (the
+  reference's `getKernelInfo` reads the same file). Host: `cargo test -p rustty-vt`, `-p rustty-os -p
+  rustty-vt-c -p rustty-build-config` 3/3 each; clippy `-D warnings` clean for the workspace and for these
+  crates at `--target aarch64-unknown-linux-gnu` (`RUSTTY_SYS_CHECK_ONLY=1`).
+- **not done**: clippy `--all-targets` for the Android targets stops at
+  `missing_const_for_thread_local` on `rustty-vt/src/modes.rs:79`, whose initializer is already `const { .. }`
+  (a clippy false positive on Android's `thread_local!` expansion; no CI lane runs clippy for Android).
 
-## N395 — G4's leg B compares the port against c-vt goldens recorded at the phase-0 pin; a fresh port driver diverges on three
+## N426 — the Android library could not load: rustty-os read errno through `__errno_location`, which bionic lacks
 
-- **id**: N395. Not a ledger row: task C-1 (the full `ci.sh` run on `tail-c1`).
-- **severity**: medium (a HARD gate that was green only through stale local binaries). **kind**: gate
-  evidence / harness.
-- **finding**: in a fresh worktree `G4` was BLOCKED (no `harness/bin/vt_driver_ref`/`vt_driver_port`:
-  build products, not tracked). The main checkout's copies are dated 2026-08-10, so the ci run at
-  `9fd17d93` compared an August port build against the goldens. Built from this branch
-  (`build_port_driver.sh`; `build_ref_driver.sh` links the prebuilt `ghostty/zig-out`, dated 2026-08-28,
-  before the pin), leg A (12 fixtures) is byte-exact, and leg B diverges on `c-vt-effects`,
-  `c-vt-formatter` and `c-vt-paste`. The port's new lines are the ones the reference's example sources
-  print at the pin 20abdb50a (checked by their `printf` formats — `Formatted output:\n`,
-  `  clipboard read (location=%d, mimes=%zu)`, `  -> pty (%zu bytes): ` — not by running the reference
-  examples, so byte equality is UNVERIFIED; `c-vt-paste/src/main.c` changed upstream on 2026-08-23),
-  but `.port/phase-0/corpora/cvt/*.golden` were recorded from the reference examples at the phase-0 pin
-  (2026-06-21) and never regenerated. `git diff 4749c4e93 20abdb50a -- example/` also changes
-  `c-vt-grid-ref-tracked`, `c-vt-grid-traverse`, `c-vt-kitty-graphics`, `c-vt-render`, both
-  `c-vt-selection*`, `c-vt-stream`, `c-vt-static` and `cpp-vt-stream` (these still match their old
-  goldens), and adds `c-vt-search` and `c-vt-snapshot`, which the corpus does not cover.
-- **also fixed** (task C-1): `build_port_driver.sh` defaulted `RUSTTY_ROOT` to the main checkout, so from a
-  worktree it built and linked the MAIN checkout's `rustty-vt-c` (into the main checkout's `target/`).
-  It now derives the root from its own location.
-- **not fixed**: regenerating the goldens needs the reference examples built at the pin. A trial
-  `zig build` of `example/c-vt-paste` fails on this host (`unable to find artifact 'ghostty-vt'`; only
-  `ghostty-vt-static` is offered), and the host had under 3 GB of free disk. Needed: rebuild
-  `ghostty/zig-out` at 20abdb50a, build the 21 (+2 new) examples, rerun `.port/phase-0/run-cvt-corpora.sh`,
-  review each golden diff against the upstream example change.
-- **state**: OPEN.
+- **id**: N426. Parity tail A-1. **severity**: high for Android (every program linking the library failed at
+  load), none elsewhere. **kind**: port defect (R1), fixed. **state**: CLOSED (fixed).
+- **finding**: `rustty-os/src/stderr.rs` (the `os/stderr.zig` port behind `logStderr`) declared
+  `__errno_location` for Linux and Android, with a PORT NOTE saying bionic has it. Bionic's errno accessor is
+  `__errno`. A shared library may link with undefined symbols, so the NDK build succeeded; on the emulator every
+  c-vt example failed with `CANNOT LINK EXECUTABLE "./c-vt": cannot locate symbol "__errno_location"
+  referenced by ".../librustty_vt_c.so"`. Checking every undefined dynamic symbol of the library against the
+  NDK's API-29 bionic stubs (libc, libm, libdl) found this one and no other.
+- **fix**: one `errno_location` declaration per libc (`__errno_location` glibc/musl, `__errno` bionic,
+  `__error` Apple/BSD) under `#[link_name]`; the PORT NOTE carries a CORRECTION.
+- **verification**: after the fix the three Android libraries have 0 unresolved symbols against the API-29
+  stubs (55, 53 and 47 undefined, all defined by bionic), and all 23 single-file c-vt examples run on the
+  emulator (exit 0). Before: 1 unresolved (`__errno_location`), 23/23 fail to load.
+
+## N427 — the type manifest's `abi` object did not name Android
+
+- **id**: N427. Parity tail A-1. **severity**: low. **kind**: port defect (R1), fixed. **state**: CLOSED (fixed).
+- **finding**: `rustty_type_json`'s `abi` is `@tagName(builtin.target.cpu.arch/os.tag/abi)` in the reference.
+  On the emulator the reference's `libghostty-vt.so` (built at the pin with Zig 0.16 and NDK r29, `zig build
+  -Demit-lib-vt -Dtarget=aarch64-linux-android`) reports `"target":"aarch64","os":"linux",
+  "environment":"android"`; the port reported `"environment":"none"`, and would have reported `"target":"unknown"`
+  for 32-bit arm. The rest of the 43 KB manifest is identical after the product rename.
+- **fix**: `ABI_TARGET` maps `target_arch = "arm"` to `arm`; `ABI_ENVIRONMENT` maps Android to `android`, and
+  32-bit arm Android to `androideabi` (Zig's `arm-linux-androideabi`, whose baseline cpu is v7a, is Rust's
+  `armv7-linux-androideabi`).
+- **test**: `types::tests::manifest_abi_names_the_zig_target_tags` (host and Android). On the emulator it
+  passes; negative control (the two Android arms removed, run alone on the emulator): fails with
+  `left: ("aarch64", "linux", "android")`, `right: ("aarch64", "linux", "none")`.
+
+## N428 — the Android lane: NDK builds on the Mac, an Android 15 16 KiB-page emulator, and a differential run against the reference
+
+- **id**: N428. Parity tail A-1. **severity**: low. **kind**: verification record + gate. **state**: CLOSED.
+- **toolchain** (user-level, no sudo): Homebrew's `android-commandlinetools` cask (already installed) with
+  `--sdk_root=~/Library/Android/sdk` (the reference's `android-ndk` default on macOS,
+  `pkg/android-ndk/build.zig`); NDK r29 29.0.14206865 (the version `test.yml:901` pins), platform-tools 37.0.1,
+  emulator 37.1.11, and `system-images;android-35;google_apis_ps16k;arm64-v8a` (Android 15, API 35, kernel
+  6.6.30, `getconf PAGE_SIZE` = 16384). rustup std for the three targets. The procedure is in the tail-wave
+  brief (section "Android lane").
+- **differential**: the reference's own 23 single-file `example/c-vt*/src/main.c` (renamed
+  ghostty->rustty per token casing), linked against the port's aarch64 `librustty_vt_c.so`, print byte-for-byte
+  what the same sources print against the reference's `libghostty-vt.so`, on the same emulator; the one
+  difference is `c-vt-paste`'s random OSC 5522 password, which differs between any two runs.
+- **16 KiB pages (S64-F9)**: every PT_LOAD of all three Android libraries is aligned 0x4000, as is the
+  reference's. G-XTARGET (`check_cross_targets.sh`) now builds all three reference targets, probes the
+  compiler cc-rs will use (`CXX_<triple>`), and fails an Android leg whose linked library has a PT_LOAD
+  aligned below 16 KiB.
+- **example drift, not a library gap**: the port's own `example/c-vt-formatter` still formats with
+  `rustty_formatter_format_alloc`, while the reference's (924c8a90d) streams through a writer, and the port's
+  `example/c-vt-effects` prints desktop-notification and progress-report sections the reference's does not.
+  The library side of both matches (the renamed reference sources above run identically).
+
+## N429 — CI has no Android leg (N376 gap 5): the job it needs
+
+- **id**: N429. Parity tail A-1. **severity**: low. **kind**: CI parity (N376 gap 5). **state**: OPEN (ci.yml
+  is batch C-1's).
+- **reference**: `build-libghostty-vt-android` (`test.yml:890-936`): matrix `aarch64-linux-android`,
+  `x86_64-linux-android`, `arm-linux-androideabi`; `nttld/setup-ndk` r29 (`add-to-path: false`,
+  `link-to-sdk: false`, `local-cache: true`); `zig build -Demit-lib-vt -Dtarget=<t>` with `ANDROID_NDK_HOME`.
+  Build only; nothing runs on a device.
+- **needed**: an `ubuntu-latest` job (or matrix) that runs the same `setup-ndk` step, `rustup target add
+  aarch64-linux-android x86_64-linux-android armv7-linux-androideabi`, exports, from
+  `${ndk}/toolchains/llvm/prebuilt/linux-x86_64/bin`, `CC_<t>`/`CXX_<t>` = `<clang-triple>29-clang(++)`,
+  `AR_<t>` = `llvm-ar` and `CARGO_TARGET_<T>_LINKER` = the same clang, for each target (clang triples
+  `aarch64-linux-android`, `x86_64-linux-android`, `armv7a-linux-androideabi`), and runs `bash
+  .port/tools/gates/check_cross_targets.sh aarch64-linux-android x86_64-linux-android
+  armv7-linux-androideabi`. That builds all three and fails on a PT_LOAD below 16 KiB. Without the NDK the
+  Android legs report `skipped`, so the existing G-XTARGET run in `ci.sh` does not cover them.

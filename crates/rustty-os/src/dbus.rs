@@ -18,7 +18,7 @@
 /// For other platforms and app runtimes, this returns false.
 #[allow(non_snake_case)]
 pub fn launchedByDbusActivation() -> bool {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         // On Linux, D-Bus activation sets `DBUS_STARTER_ADDRESS` and
         // `DBUS_STARTER_BUS_TYPE`. If these environment variables are present
@@ -28,7 +28,7 @@ pub fn launchedByDbusActivation() -> bool {
     }
 
     // No other system supports D-Bus so always return false.
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     {
         false
     }

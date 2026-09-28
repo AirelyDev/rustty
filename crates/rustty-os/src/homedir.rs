@@ -46,7 +46,12 @@ pub fn home<'a>(
     environ_map: &rustty_global::EnvMap,
     buf: &'a mut [u8],
 ) -> Result<Option<&'a [u8]>, Error> {
-    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "macos"
+    ))]
     {
         homeUnix(environ_map, buf)
     }
@@ -65,6 +70,7 @@ pub fn home<'a>(
 
     #[cfg(not(any(
         target_os = "linux",
+        target_os = "android",
         target_os = "freebsd",
         target_os = "macos",
         windows,
@@ -75,7 +81,12 @@ pub fn home<'a>(
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "macos"
+))]
 #[allow(non_snake_case)]
 // PARITY: the reference's `homeUnix` is a sequence of early `return`s; on macOS
 // the last reachable `return` becomes a tail expression after the non-macOS
@@ -184,7 +195,12 @@ fn homeUnix<'a>(
 /// limit says, exactly at the edge: 512 bytes of stderr come back with exit
 /// 1, 513 bytes fail with `StreamTooLong`; the port matches it. ReleaseFast
 /// was measured too and is identical on both streams.
-#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "macos"
+))]
 #[cfg_attr(target_os = "macos", allow(dead_code))] // tested on macOS; reached on Linux/FreeBSD
 fn home_from_shell<'a>(
     environ_map: &rustty_global::EnvMap,
@@ -325,7 +341,12 @@ fn fixed_buffer_env<'a>(
     Ok(Some(&dst[0..bytes.len()]))
 }
 
-#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "macos"
+))]
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 #[allow(non_snake_case)]
 fn trimSpace(input: &[u8]) -> &[u8] {
@@ -358,7 +379,12 @@ pub fn expandHome<'a>(
     path: &'a [u8],
     buf: &'a mut [u8],
 ) -> Result<&'a [u8], ExpandError> {
-    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "macos"
+    ))]
     {
         expandHomeUnix(environ_map, path, buf)
     }
@@ -379,6 +405,7 @@ pub fn expandHome<'a>(
 
     #[cfg(not(any(
         target_os = "linux",
+        target_os = "android",
         target_os = "freebsd",
         target_os = "macos",
         windows,
@@ -389,7 +416,12 @@ pub fn expandHome<'a>(
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "macos"
+))]
 #[allow(non_snake_case)]
 fn expandHomeUnix<'a>(
     environ_map: &rustty_global::EnvMap,

@@ -83,7 +83,7 @@ pub fn open(kind: Kind, url: &[u8]) -> Result<(), OpenError> {
     }
 
     let mut exe: std::process::Command = {
-        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
         {
             let mut c = std::process::Command::new("xdg-open");
             c.arg(crate::path::os_str_from_bytes(url));
@@ -127,6 +127,7 @@ pub fn open(kind: Kind, url: &[u8]) -> Result<(), OpenError> {
         }
         #[cfg(not(any(
             target_os = "linux",
+            target_os = "android",
             target_os = "freebsd",
             target_os = "windows",
             target_os = "macos",

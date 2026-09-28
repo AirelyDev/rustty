@@ -234,7 +234,7 @@ const fn page_size_min_default() -> usize {
     // Linux: every arch we support uses 4 KiB (aarch64/x86_64/etc.). sparc64 is
     // 8 KiB in the reference but we do not target it.
     #[cfg(all(
-        target_os = "linux",
+        any(target_os = "linux", target_os = "android"),
         not(target_arch = "sparc64"),
         not(target_arch = "m68k")
     ))]
@@ -251,7 +251,7 @@ const fn page_size_min_default() -> usize {
         all(target_os = "ios", target_arch = "aarch64"),
         target_arch = "wasm32",
         all(
-            target_os = "linux",
+            any(target_os = "linux", target_os = "android"),
             not(target_arch = "sparc64"),
             not(target_arch = "m68k")
         )

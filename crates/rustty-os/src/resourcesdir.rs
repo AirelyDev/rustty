@@ -508,7 +508,7 @@ mod tests {
 
     /// S112-F3 on a filesystem that stores non-UTF-8 names (Linux; APFS
     /// refuses them with EILSEQ): the found path keeps the raw byte.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
     fn walk_keeps_a_non_utf8_directory() {
         use std::os::unix::ffi::OsStrExt;

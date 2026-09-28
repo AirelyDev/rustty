@@ -23,7 +23,7 @@ const LOG_SCOPE: &str = "systemd";
 /// For other platforms and app runtimes, this returns false.
 #[allow(non_snake_case)]
 pub fn launchedBySystemd() -> bool {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         // On Linux, systemd sets the `INVOCATION_ID` (v232+) and the
         // `JOURNAL_STREAM` (v231+) environment variables. If these
@@ -62,7 +62,7 @@ pub fn launchedBySystemd() -> bool {
     }
 
     // No other system supports systemd so always return false.
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     {
         false
     }
@@ -100,7 +100,7 @@ pub mod notify {
         // PORT NOTE: `if (comptime builtin.os.tag != .linux) return;` — on non-Linux
         // the body below is `cfg`-excluded, which is the parity image of the
         // early `return` (the function does nothing).
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             // Get the socket address that should receive notifications.
             let socket_path = match std::env::var_os("NOTIFY_SOCKET") {
@@ -197,7 +197,7 @@ pub mod notify {
     /// See: https://www.freedesktop.org/software/systemd/man/latest/sd_notify.html#READY=1
     pub fn ready() {
         // PORT NOTE: `if (comptime builtin.os.tag != .linux) return;` — gated below.
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         send(b"READY=1");
     }
 
@@ -206,7 +206,7 @@ pub mod notify {
     /// and: https://www.freedesktop.org/software/systemd/man/latest/sd_notify.html#MONOTONIC_USEC=%E2%80%A6
     pub fn reloading() {
         // PORT NOTE: `if (comptime builtin.os.tag != .linux) return;` — gated below.
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
             let rc = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
@@ -221,20 +221,22 @@ pub mod notify {
             // PORT NOTE: `ts.sec * std.time.us_per_s + @divFloor(ts.nsec, std.time.ns_per_us)`.
             const US_PER_S: i64 = 1_000_000;
             const NS_PER_US: i64 = 1_000;
-            // PORT NOTE: no conversion on either field, exactly like the
-            // reference expression above — `timespec.tv_sec`/`tv_nsec` are
-            // already `i64` on the 64-bit targets this builds for, and both a
-            // cast and a `From` are rejected here as no-ops.
-            let now = ts.tv_sec * US_PER_S + ts.tv_nsec.div_euclid(NS_PER_US);
+            // PORT NOTE: `timespec.tv_sec`/`tv_nsec` are `i64` on 64-bit
+            // targets but `i32` on 32-bit Android (armv7, the reference's
+            // `arm-linux-androideabi` lib-vt target), where the reference's
+            // `toMicroseconds()` is still `i64`; widen with `i64::from`, a
+            // no-op on 64-bit.
+            #[allow(clippy::useless_conversion)]
+            let now = i64::from(ts.tv_sec) * US_PER_S + i64::from(ts.tv_nsec).div_euclid(NS_PER_US);
 
             let message = format!("RELOADING=1\nMONOTONIC_USEC={now}");
             send(message.as_bytes());
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     struct SocketGuard(libc::c_int);
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     impl Drop for SocketGuard {
         fn drop(&mut self) {
             unsafe {
@@ -245,7 +247,7 @@ pub mod notify {
 }
 
 /// Which step of the `/proc/<ppid>/comm` check failed.
-#[cfg(any(target_os = "linux", all(test, unix)))]
+#[cfg(any(target_os = "linux", target_os = "android", all(test, unix)))]
 #[derive(Debug, PartialEq, Eq)]
 enum CommError {
     /// `openFileAbsolute` failed: "unable to open '{s}' for reading".
@@ -261,7 +263,7 @@ enum CommError {
 // PORT NOTE (S112-F8): the reference has two failure arms with two messages
 // (open, then read) and reads into a 16-byte buffer. The port read the whole
 // file with `std::fs::read` and logged every failure as the open message.
-#[cfg(any(target_os = "linux", all(test, unix)))]
+#[cfg(any(target_os = "linux", target_os = "android", all(test, unix)))]
 fn comm_is_systemd(comm_path: &[u8]) -> Result<bool, CommError> {
     use std::io::Read;
     use std::os::unix::ffi::OsStrExt;
@@ -294,7 +296,7 @@ fn comm_is_systemd(comm_path: &[u8]) -> Result<bool, CommError> {
 }
 
 /// Why a `NOTIFY_SOCKET` value cannot be used; each is the reference's warning.
-#[cfg(any(target_os = "linux", all(test, unix)))]
+#[cfg(any(target_os = "linux", target_os = "android", all(test, unix)))]
 #[derive(Debug, PartialEq, Eq)]
 enum NotifyAddressError {
     /// "only AF_UNIX sockets with path or abstract namespace addresses are supported!"
@@ -325,7 +327,7 @@ enum NotifyAddressError {
 // becomes the leading NUL and the length is the name's. Path addresses keep
 // the reference's length, `@offsetOf(sockaddr.un, "path") + path.len` (the
 // whole struct; S112-F8).
-#[cfg(any(target_os = "linux", all(test, unix)))]
+#[cfg(any(target_os = "linux", target_os = "android", all(test, unix)))]
 fn notify_address(
     socket_path: &[u8],
 ) -> Result<(libc::sockaddr_un, libc::socklen_t), NotifyAddressError> {
@@ -364,7 +366,7 @@ fn notify_address(
 }
 
 // PORT NOTE: `std.mem.trimRight(u8, slice, "\n")`.
-#[cfg(any(target_os = "linux", all(test, unix)))]
+#[cfg(any(target_os = "linux", target_os = "android", all(test, unix)))]
 fn trim_right<'a>(slice: &'a [u8], strip: &[u8]) -> &'a [u8] {
     let mut end = slice.len();
     while end > 0 && strip.contains(&slice[end - 1]) {

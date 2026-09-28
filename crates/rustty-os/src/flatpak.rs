@@ -27,11 +27,11 @@ const LOG_SCOPE: &str = "flatpak";
 #[allow(non_snake_case)]
 pub fn isFlatpak() -> bool {
     // If we're not on Linux then we'll make this comptime false.
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     {
         false
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         // PORT NOTE: `std.fs.accessAbsolute("/.flatpak-info", .{})` — true iff the path
         // is accessible.
