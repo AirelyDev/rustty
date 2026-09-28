@@ -72,3 +72,14 @@ log = { workspace = true }
 # {rustty-global, libc} only, per its own Cargo.toml) with no edge back to
 # rustty-inspector — acyclic, `check_acyclic.sh` stays green.
 rustty-xev = { workspace = true }
+
+# TEST-ONLY (task F-1, N383): `widgets::pagelist::ws7_tests` asserts
+# `rustty_vt::compression_enabled()`, which the reference's test binary gets
+# from `builtin.is_test` (`terminal/mem.zig` `canReclaim`) on every target.
+# `test-decommit-sim` is rustty-vt's crate-external switch for it (N346).
+# Scoped to Windows, which has no OS reclamation arm; macOS and Linux reclaim
+# natively. Without it `cargo test -p rustty-inspector` failed two tests on
+# Windows unless another crate's dev-dependency unified the feature. A
+# dev-dependency's features never reach a production build (`resolver = "2"`).
+[target.'cfg(windows)'.dev-dependencies]
+rustty-vt = { workspace = true, features = ["test-decommit-sim"] }
