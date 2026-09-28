@@ -7108,7 +7108,16 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 ## N377 — the Zig build graph (`build.zig` + `src/build/*`) against Cargo + xtask: remaining options
 
 - **id**: N377. P-1 (read-only audit). **severity**: low. **kind**: build-option parity. **state**:
-  OPEN for the items below; everything else is ported, translated or recorded.
+  CLOSED by parity tail B-2 (2026-09-28) except one precisely scoped remainder: item 7 is N420, items 4
+  and 9 are N421, items 6 and 8 are N422, item 1 is N423, items 3 and 5 are N424, and both stale records
+  below are corrected (N421, N423). **Remainder** (N422): the `-Dpie` default. Measured with Zig 0.16 on
+  the Mac: a default `zig build-exe` for `x86_64-linux-gnu` / `aarch64-linux-gnu` is `ET_EXEC` (non-PIE),
+  `-fPIE` gives `ET_DYN`; rustc (the pinned 1.93.1, `aarch64-unknown-linux-gnu`, linked through a
+  `zig cc` shim) passes `-pie` and gives `ET_DYN` (x86_64 not measured). So Rust's default is the reference's `-Dpie=true` (its system-package default) and the port
+  has no counterpart of the non-PIE default. Porting it (a `-no-pie` link arg for the Linux/FreeBSD
+  `rustty` exe unless `RUSTTY_PIE=true`, with `nix/package.nix` passing it for the system-package arm)
+  needs a Linux lane to verify the real app link and its `ET_EXEC` result; B-2 ran foreground on the Mac
+  only. Previously: OPEN for the items below; everything else is ported, translated or recorded.
 - **Covered**: every `b.step` (`run`, `run-valgrind`, `test`, `test-lib-vt{,-build,-schema}`,
   `test-valgrind`, `update-translations`, `dist`, `distcheck`), every `Config.zig` option except the
   ones below, every install artifact (terminfo/termcap per OS, shell integration, themes, completions,
@@ -7495,3 +7504,204 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   each binary runs in a subshell `cd`'d there with `CARGO_MANIFEST_DIR` set. Control (VM clone, restored): a
   temporary rustty-wuffs test asserting both passes under the new gate and fails under the old one (left
   `/home/gael/projects/l5`).
+
+## N420 — `-Dsimd=false` could not be applied to the app, and no build of anything was SIMD-free
+
+- **id**: N420. Parity tail B-2 (N377 item 7). **severity**: medium. **kind**: build-option parity.
+  **state**: CLOSED (ported). Commits `860c6b98`, `ac8e5535` (packaging manifests), `40320c7e` (nix).
+- **reference**: `Config.zig:238-249` (`-Dsimd`, default true unless wasm/freestanding). `cfg.simd` is the
+  `build_options.simd` that `src/simd/*.zig` read (`comptime options.simd`: kernels or scalar
+  fallbacks), the terminal module's `simd` (`GhosttyZig.zig:125-156`), and the gate on `addSimd`
+  (`SharedDeps.zig:437`: highway, simdutf and the SIMD C++ are compiled and linked only when on). The
+  reference CI's `test-simd` job runs `zig build test -Dsimd={true,false}`.
+- **finding** (verified by reading `merge-w4`): `rustty-core` pinned `simd` on its `rustty-vt` edge and
+  `rustty-bench` pinned it on both of its edges, so the app (and `rustty-apprt-c`, which links the bench)
+  could not be built without it. Worse, `rustty-simd` hard-coded `SIMD = true` in all four modules and
+  its build script compiled the C++ kernels unconditionally, with highway/simdutf as non-optional
+  dependencies: `rustty-vt-c --no-default-features` and CMake's `RUSTTY_VT_SIMD=OFF` (documented as "a
+  minimal static archive with no vendored C++ SIMD runtime") still linked and used them.
+- **fix**: `rustty-simd` gains the `simd` feature (default-on for its own builds): the module consts are
+  `crate::SIMD = cfg!(all(feature = "simd", not(target_arch = "wasm32")))`, the extern blocks and kernel
+  calls are `cfg(all(feature = "simd", not(wasm32)))`, `build.rs` compiles nothing without it, and
+  highway-sys/simdutf-sys are optional deps behind it. `rustty-vt/simd` chains it. `rustty-core`,
+  `rustty-apprt`, `rustty-cli`, `rustty-bench`, `rustty-extra` and `rustty` get a default-on `simd` that
+  threads it; their workspace edges (and `rustty-simd`'s) set `default-features = false`;
+  `rustty-apprt-c`'s `simd` reaches all of them. No edge pins it. The flatpak (both), snap and
+  `nix/package.nix` feature lists, which drop the defaults, name `simd`. The one R14 skip in rustty-simd
+  (`decode_simd_matches_scalar`, the reference's `if (comptime !options.simd) return error.SkipZigTest`)
+  is `#[cfg_attr(not(feature = "simd"), ignore)]`; `codepointWidth_matches_kernel` needs the kernel and is
+  `cfg(feature = "simd")`, its dead `if !SIMD { return; }` deleted with G-SKIP's guard entry for it.
+- **tests**: `rustty-core` `simd_option::simd_feature_reaches_the_terminal_and_the_simd_kernels` (both
+  `rustty_vt::options::SIMD` and `rustty_simd::SIMD` equal the feature) and
+  `tests/vt_build_options.rs` (rewritten: the flag follows the option; the manifest defaults it on,
+  forwards it to both crates and does not pin it on the `rustty-vt` edge). Controls, one at a time,
+  restored: re-pinning `simd` on core's `rustty-vt` edge fails the core test in the
+  `--no-default-features` run (`rustty-vt's simd`: true vs false); dropping both forwards to
+  `rustty-simd` fails it in the default run (`rustty-simd's simd`: false vs true).
+- **measured** (macOS arm64, debug): `nm` of `librustty_apprt_c.a` — `--no-default-features`: 0
+  `T ...simdutf`, 0 `T _rustty_simd_*`; default: 195 and 5. `librustty_vt_c.a` with
+  `--no-default-features --features vt-features-default`: 0 and 0. The `rustty` binary:
+  `--no-default-features` 0 SIMD symbols, default 384. `cargo tree -e features`: no highway/simdutf in the
+  `--no-default-features` app graph. The app tier's tests with SIMD off (`cargo test --no-fail-fast -p
+  rustty-core -p rustty-apprt -p rustty-cli -p rustty-bench -p rustty-apprt-c -p rustty
+  --no-default-features`, after `cargo build -p rustty-apprt-c --no-default-features` for the smoke's
+  cdylib): 332 passed, 0 failed, 7 ignored (the one extra ignore is apprt-c's R14
+  `default_feature_set_resolves_terminal_simd_on`); `rustty-core` alone ×3: 73/73. `cargo test -p
+  rustty-simd --no-default-features`: 40 passed, 1 ignored (the R14 skip above). One run of the six
+  crates together failed `surface::paste_event_mutex_tests::paste_event_queues_while_holding_the_renderer_mutex_on_a_full_mailbox`
+  ("the paste event never reached the IO mailbox", a 10 s timeout); it passed alone and in the three
+  `rustty-core` runs and the later full run. Not investigated further: UNVERIFIED whether it is flaky on
+  `merge-w4` too.
+- **CI** (for N376 #`test-simd`, not wired: `ci.yml`/`ci.sh` belong to batch C-1): a leg running the
+  command above (`--no-default-features`, plus `--features gtk,wayland,x11` for `-p rustty` on Linux).
+
+## N421 — `-Di18n` and `-Demit-docs` had no override
+
+- **id**: N421. Parity tail B-2 (N377 items 4 and 9). **severity**: low. **kind**: build-option parity.
+  **state**: CLOSED (ported). Commit `2f075065`.
+- **reference**: `-Di18n` (`Config.zig:263-271`): default macOS/iOS true, Linux/FreeBSD
+  `isGnuLibC()`, else false; it is `build_config.i18n` (`os/i18n.zig` returns the msgid and binds nothing
+  when off), gates `GhosttyI18n` (the `.mo` install, `build.zig:91`) and makes `update-translations` fail
+  "cannot update translations when i18n is disabled" (`build.zig:449-455`). `-Demit-docs`
+  (`Config.zig:483-502`): false when another artifact is emitted, true in system-package mode, else "only
+  if we can find pandoc"; off, a Darwin target installs `GhosttyDocs.installDummy`'s
+  `share/man/.placeholder` ("emit-docs not true so no man pages", `build.zig:95-103`).
+- **fix**: `-Di18n` is the build-time variable `RUSTTY_I18N=true|false` (like `RUSTTY_VERSION_STRING` and
+  `RUSTTY_GTK_X11`; a bool option with a per-target default is not a pair of additive features):
+  `rustty-build-config`'s `build.rs` validates it (anything else panics) and
+  `Config::from_options` resolves `I18N_OPTION` over `i18n_default` (`resolve_i18n`). `xtask resources`
+  takes `--i18n <bool>`, defaulting to `RUSTTY_I18N` and then a per-target-os table (Linux layouts made
+  off Linux assume glibc — `--target-os` names no libc; FreeBSD false as the reference's
+  `isGnuLibC()` is), and installs `share/locale` only when on; `update-translations [--i18n <bool>]`
+  refuses with the reference's message. `-Demit-docs` is `xtask resources --emit-docs <bool>`, default
+  true: the pandoc probe stands for "the docs can be rendered", and the port's renderer is in-process
+  (`rustty_extra::mdgen::render`), so every arm this step has is true. Off, no man pages or doc tree, and
+  on a Darwin target the placeholder with the reference's text.
+- **tests**: `rustty-build-config` `i18n_option_overrides_the_per_target_default` (every OS arm × unset /
+  true / false) and `i18n_follows_the_build_option` (end to end through `option_env!`), run plain, with
+  `RUSTTY_I18N=false` and with `RUSTTY_I18N=true`: all pass; `RUSTTY_I18N=yes` fails the build naming the
+  variable. Control: `from_options` back on `i18n_default` fails `i18n_follows_the_build_option` under
+  `RUSTTY_I18N=false`. xtask: `i18n_resolves_flag_then_env_then_target_default`,
+  `emit_docs_defaults_on`, `update_translations_refuses_when_i18n_is_off`,
+  `res_misc::docs_and_catalogs_follow_their_options_when_off` and `docs_are_emitted_when_on`. Controls,
+  one at a time, restored: `gen_misc` always compiling catalogs fails the first ("no catalogs with
+  -Di18n=false"); dropping the Darwin placeholder fails it (placeholder not found).
+- **measured** (macOS): `RUSTTY_I18N=false cargo build -p rustty` → 0 `dgettext`/`bindtextdomain`
+  references in the binary (the gettext calls are const-folded away); default and `RUSTTY_I18N=true` → 4.
+  `xtask resources --i18n false --emit-docs false` → no `share/locale`, `share/man` holds only
+  `.placeholder`, no `share/rustty/doc`; `RUSTTY_I18N=false xtask resources` → no `share/locale`, man pages
+  present; default → `share/locale` with 34 entries.
+- **by reading, not run**: with `-Di18n=false` on macOS the reference's own `canonicalizeLocale darwin`
+  test would fail (`zh-Hans` comes back unchanged); its CI only builds that configuration, and so does the
+  port's (`i18n` const-folds the same arm in `rustty-os`'s `canonicalizeLocale_darwin`). The macOS app's
+  Xcode project references `zig-out/share/locale`, in the reference too, so an i18n-off macOS app build
+  lacks that folder in both (UNVERIFIED what Xcode does then).
+- **stale record corrected**: `crates/rustty-build-config/src/lib.rs`'s note naming `app-runtime-*` /
+  `renderer-*` / `i18n` features.
+- **CI** (N376 #14 `test-i18n`): builds with `RUSTTY_I18N=true` and `RUSTTY_I18N=false` (`cargo build -p
+  rustty`), and `cargo test -p rustty-build-config` under each.
+
+## N422 — the wasm `simd128` default and the `-Dstrip` defaults; `-Dpie` recorded
+
+- **id**: N422. Parity tail B-2 (N377 items 6 and 8). **severity**: low. **kind**: build-option parity.
+  **state**: CLOSED for `simd128` and `-Dstrip` (ported); `-Dpie`'s default is the remainder recorded in
+  N377. Commit `40320c7e`.
+- **simd128**: `Config.zig:113-130` adds the `simd128` CPU feature to every wasm target when no CPU was
+  requested (opt-out `-Dcpu=generic`); the reference CI requires the artifact to need it ("Verify WASM
+  simd128"). Port: a tracked `.cargo/config.toml` gives `cfg(target_arch = "wasm32")` the rustflags `-C
+  target-feature=+simd128`; any `RUSTFLAGS` of the caller replaces them (the `-Dcpu` analog), and
+  `cargo rustc ... --` flags add to them. `xtask dist` used to write the vendor source replacement over
+  `.cargo/config.toml`; it now appends it to the tracked file, and `distcheck` checks the tracked text
+  survived. G-XTARGET now requires `+simd128` in both wasm artifacts' `target_features` section
+  (`wasm_target_features.py`, whose `--self-test` the gate runs first; no wasm-tools needed). Measured
+  (`rustty-vt-c`, `wasm32-unknown-unknown`, release): before, the section had no simd128 and
+  `llvm-objdump -d` (Homebrew LLVM 21) counted 0 SIMD instructions; after, `+simd128` and 4282, also
+  through the `cargo rustc ... -- -C link-arg=--export-table ...` form `build-vt-wasm.sh` uses; with
+  `RUSTFLAGS=` (the opt-out) 0 and no `+simd128`. Gate: `check_cross_targets.sh wasm32-unknown-unknown
+  wasm32-wasip1` GREEN with both simd128 arms; control (the config's rustflags emptied, restored): RED
+  `wasm32-unknown-unknown(simd128)`. Tests: `dist::checkout_config_defaults_wasm_to_simd128`,
+  `dist_config_appends_the_vendor_replacement_to_the_tracked_config` (control: the tracked text dropped
+  fails it). The wasm test suites were not run (no wasm runner on the Mac).
+- **-Dstrip** (`Config.zig:414-422`): default false for Debug/ReleaseSafe, true for
+  ReleaseFast/ReleaseSmall, applied to the exe (`GhosttyExe.zig:20`) and the embedding library
+  (`GhosttyLib.zig:31,102`) only; the test executable is `.strip = false`. Port: `[profile.release]
+  strip = true` (the ReleaseFast analog, as `mode_string` reports it), `release-safe` and `bench` `strip =
+  false`, and per-package `strip = "debuginfo"` (Cargo's own release default) for the artifacts the
+  option does not reach: `rustty-vt-c`, `rustty-bench`, `rustty-synthetic`, `rustty-wasm`,
+  `rustty-web-canvas`, `xtask`. The override is Cargo's `CARGO_PROFILE_RELEASE_STRIP` (the flatpak already
+  passes `false`); `nix/package.nix` now passes it from its `strip` flag, as the reference passes
+  `-Dstrip` (its `releasesafe` builds the `release` profile, so without it that build would be stripped).
+  Test: `xtask/tests/strip_defaults.rs` resolves every profile through `inherits` and Cargo's defaults,
+  maps it to its Zig mode by `mode_string_for`'s rule and asserts the strip default, plus the bench
+  profile and the exact exception list. Controls, one at a time, restored: `strip = true` removed fails
+  (`release` is ReleaseFast ... strip = "debuginfo"); the release-safe/bench lines removed fails both.
+  Measured (macOS): `rustty` release → 1 defined symbol (`nm -U`), 6.0 MB; with
+  `CARGO_PROFILE_RELEASE_STRIP=false` → 5552, 6.5 MB; `--profile release-safe` → 8236;
+  `librustty_vt_c.dylib` release unchanged (198 `_rustty_` exports, 4624 defined);
+  `librustty_apprt_c.dylib` release stripped to its 99 defined symbols, 95 of them the `_rustty_` exports.
+- **not ported, with reasons**: (1) stripped builds drop unwind tables in the reference
+  (`unwind_tables = if (strip) .none else .sync`): the port unwinds panics (only the `xcframework` profile
+  aborts), so its tables stay. (2) `omitFramePointer()` off Darwin follows `strip`: rustc's frame-pointer
+  choice is its target spec's (NON_PORTS G5 covers Darwin), and a profile cannot set it (it would be
+  rustflags). (3) `cargo test --release` builds test executables with the `release` profile, not `bench`
+  (measured: a release `rustty-identity` test binary has 1 defined symbol), so they are stripped; the
+  reference's test executable is always Debug and unstripped. G-REL's failure backtraces lose symbol
+  names; its verdicts do not depend on them (no test inspects its own symbols). (4) `-Dpie`: see N377's
+  remainder.
+- **CI** (N376 #6 and #9): G-XTARGET already runs in `ci.sh`, so the simd128 arm runs wherever it does;
+  a `build-nix`-style strip check (`nm` of a release `rustty`: no symbols; debug: symbols) is not wired.
+
+## N423 — `zig build run` had no counterpart that sets the resources directory
+
+- **id**: N423. Parity tail B-2 (N377 item 1). **severity**: low. **kind**: build-step parity. **state**:
+  CLOSED (ported; the GTK arm is UNVERIFIED on Linux). Commit `dbb360eb`.
+- **reference**: `build.zig:282-326`: with an app runtime, run the exe with the build's arguments and
+  `GHOSTTY_RESOURCES_DIR=<install prefix>/share/ghostty`; with `.none` on Darwin, the native-only
+  xcframework + macOS app, opened (`GhosttyXcodebuild.zig:126-163`); otherwise nothing.
+- **fix**: `xtask run [--release | --profile <p>] [--prefix <dir>] [-- <args>]` (`xtask/src/run.rs`):
+  Linux/FreeBSD builds `rustty` and runs it with `RUSTTY_RESOURCES_DIR=<prefix>/share/rustty` (prefix
+  default `<root>/zig-out`, where `xtask resources` installs; `GHOSTTY_*`/`ghostty` under
+  `identity-oracle`), returning its exit status; macOS runs the already-ported app arm
+  `macos/run-rustty.sh` (S64-F7) with `XCFRAMEWORK_TARGET=native`; other targets do nothing. HACKING.md's
+  run row points at it. Stale record corrected: xtask's "PORT STATUS: scaffold" header.
+- **tests**: `run::tests` — the GTK plan (env name and path, exe path per profile, prefix, args,
+  identity-oracle names), the macOS plan, the empty plan, strict flags, and `exec` handing the variable
+  and arguments to a child and returning its status. Controls, one at a time, restored: the resources dir
+  built from the root instead of the prefix fails the GTK plan test; `exec` dropping the environment fails
+  the exec test. Not run end to end: the macOS arm opens the GUI app on the user's desktop (not done on
+  this host), and the GTK arm needs Linux.
+
+## N424 — dist tarballs named after the bare manifest version; `-Dlib-version-string` missing
+
+- **id**: N424. Parity tail B-2 (N377 items 3 and 5). **severity**: low. **kind**: build-option parity.
+  **state**: CLOSED (ported; the nix change is UNVERIFIED, no nix on the Mac). Commits `9633efae`,
+  `7cf6de99`.
+- **dist naming**: `GhosttyDist.zig:22,52-107` names the tarball, its prefix and `VERSION` (no trailing
+  newline) after the full `cfg.version`, for lib-vt too. `xtask dist`/`dist-lib-vt`/`distcheck*` now use
+  `rustty_version::VERSION_STRING` (`X.Y.Z` on a `vX.Y.Z` tag, `X.Y.Z-<branch>+<hash>` otherwise,
+  `RUSTTY_VERSION_STRING` when set) and write `VERSION` without a newline. The release workflows' `cp
+  dist/rustty-${RUSTTY_VERSION}.tar.gz` relies on the tag arm, as the reference's does. The flatpak
+  manifests read a fixed `dist/rustty-source.tar.gz`, which `flatpak.yml` (and the manifests' header
+  recipe) copies from xtask's output; `snap.yml` already globbed. G-DIST takes the tarball from xtask's
+  `wrote` line and checks name, prefix and `VERSION` against the checkout (tag, untagged `+<short hash>`,
+  or explicit arm). Run: GREEN, `rustty-0.1.0-tail-b2x+40320c7e.tar.gz`, `VERSION` bytes
+  `0.1.0-tail-b2x+40320c7e`, the lib-vt tarball `librustty-vt-0.1.0-tail-b2x+40320c7e.tar.gz`, and the
+  shipped `.cargo/config.toml` = the tracked simd128 table + the vendor replacement. Control
+  (`DIST_VERSION` back to `"0.1.0"`, restored): RED "untagged checkout: expected 0.1.0-<branch>+40320c7e,
+  got 0.1.0". Unit test `dist::tarballs_are_named_after_the_full_app_version`.
+- **-Dlib-version-string** (`Config.zig:343-353`): `RUSTTY_LIB_VERSION_STRING` (a build-time variable)
+  replaces the vt library version in `rustty-vt`'s `options` (so the C API build-info version; a malformed
+  value is a compile error, the `SemanticVersion::parse` const-eval panic) and the vt-c dylib's
+  `-current_version`. CMake's `RUSTTY_LIB_VERSION_STRING` cache option validates it (the semver regex),
+  passes it to cargo (native and `rustty_vt_add_target`), and versions the install names/soname
+  (MAJOR.MINOR.PATCH) and the `.pc` `Version:` (the full string), as `GhosttyLibVt.zig:396-436,532` do
+  from `lib_version`; `nix/librustty-vt.nix` passes `finalAttrs.version` as the reference's nix passes
+  `-Dlib-version-string`. Tests: `rustty-vt` `options::tests::lib_version_string_option_overrides_the_identity_version`,
+  run plain and with `RUSTTY_LIB_VERSION_STRING=1.2.3-rc.1+abc` (both pass; `=1.2` fails the build with
+  "invalid semantic version"); control (the option ignored) fails it. `xtask/tests/cmake_lib_vt.rs`
+  `lib_version_string_versions_the_library` (configure, build, install with `2.3.4-rc.1+b5`: both `.pc`
+  `Version:`s, `librustty-vt.2.3.4.dylib`, the `librustty-vt.2.dylib` link, `current version 2.3.4`) and
+  `lib_version_string_must_be_a_semantic_version`; the two cmake-build tests now serialize (they share
+  `target/`). Control (the `.pc.in` back on `@PROJECT_VERSION@`) fails the first.
+- **CI**: G-DIST runs in `ci.sh` already; the cmake tests run in the xtask test step with
+  `RUSTTY_REQUIRE_CMAKE=1`.

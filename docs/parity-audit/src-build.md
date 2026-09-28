@@ -613,8 +613,12 @@ Fix (if adopted): end `CONFIG_HEADER` with `"for.\n\n"`.
 
 - `Config.zig:113-130` defaults wasm builds to the `simd128` CPU feature; rustty has no `.cargo/config.toml`
   enabling `-Ctarget-feature=+simd128` for wasm32. Identical results, slower wasm hot paths.
+  (Superseded, parity tail B-2: R8 does not accept a dropped build switch as performance-only; ported,
+  NEW-FINDINGS N422.)
 - `Config.zig:414-422` strips ReleaseFast/ReleaseSmall binaries and drops unwind tables when stripped;
   rustty's `[profile.release]` sets no `strip`, so release binaries retain symbol tables — size/backtrace detail only.
+  (Superseded, parity tail B-2: the strip defaults are ported; the unwind-table and `-Dpie` residuals are
+  recorded in NEW-FINDINGS N422/N377.)
 - `GhosttyBench.zig` forces ReleaseFast for gen/bench regardless of `-Doptimize`; rustty relies on the
   caller choosing `--profile release-fast`.
 - CombineArchivesStep/LibtoolStep: rustty additionally ranlib-normalizes every archive and derives the
