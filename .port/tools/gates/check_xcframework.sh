@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # GATE G-XCF — the XCFramework structure/ABI lane.
 #
-# PORTS: ghostty `.github/scripts/check-apple-libghostty-vt.nu`, which its
-# release pipeline runs over each slice of ghostty-vt.xcframework.
+# PORTS: ghostty `.github/scripts/check-apple-libghostty-vt.nu`, which the
+# reference's `test.yml` job `build-libghostty-vt-macos` runs over each Apple
+# target's `zig-out/lib/libghostty-vt.dylib` (`--expect-platform`,
+# `--expect-arch`, `--expect-encryption`), not over the xcframework.
 #
 # ADAPTED, not transliterated, because the artifact differs. The reference
 # ships a DYLIB per slice, so its script can check the `@rpath/...` install

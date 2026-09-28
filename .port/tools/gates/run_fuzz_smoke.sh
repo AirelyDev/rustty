@@ -103,6 +103,21 @@ fi
 # likely to catch a real regression, so a red arrives sooner.
 FUZZ_TARGETS="${FUZZ_TARGETS:-vt_diff fuzz_osc fuzz_parser fuzz_stream}"
 
+# Seeding (NEW-FINDINGS N379). The reference's `run-<name>` step
+# (test/fuzz-libghostty/build.zig:14-15, `corpus/<name>-cmin`) starts afl-fuzz
+# from the minimized corpus, so the three ported harnesses start from the same
+# seeds: `.port/phase-0/corpora/cvt/<name>-cmin`, the byte-identical mirror.
+# libFuzzer reads every corpus directory it is given and writes new inputs only
+# to the FIRST, so that one is a scratch dir under target/ and the mirror is
+# never written. `vt_diff` has no reference counterpart and keeps cargo-fuzz's
+# own `fuzz/corpus/vt_diff`. A missing seed dir is RED, not an empty corpus.
+seed_dir_for() {
+  case "$1" in
+    fuzz_osc|fuzz_parser|fuzz_stream) echo "$PORT_DIR/phase-0/corpora/cvt/${1#fuzz_}-cmin" ;;
+    *) echo "" ;;
+  esac
+}
+
 if [ "$MODE" = "auto" ] && [ "$have_cargo_fuzz" = "1" ] && [ -d "$FUZZ_DIR" ]; then
   echo "--- REAL fuzz smoke (cargo fuzz found; targets: $FUZZ_TARGETS) ---"
   overall=0
@@ -115,10 +130,23 @@ if [ "$MODE" = "auto" ] && [ "$have_cargo_fuzz" = "1" ] && [ -d "$FUZZ_DIR" ]; t
     ARTIFACTS="$FUZZ_DIR/artifacts/$target"
     before=0
     [ -d "$ARTIFACTS" ] && before="$(ls -1 "$ARTIFACTS" 2>/dev/null | wc -l | tr -d ' ')"
+    corpus_args=()
+    seed="$(seed_dir_for "$target")"
+    if [ -n "$seed" ]; then
+      if [ ! -d "$seed" ] || [ -z "$(ls -A "$seed" 2>/dev/null)" ]; then
+        echo "  FAIL    $target — seed corpus missing or empty: $seed"
+        overall=1
+        continue
+      fi
+      scratch="$RUSTTY_ROOT/target/fuzz-corpus/$target"
+      mkdir -p "$scratch"
+      corpus_args=("$scratch" "$seed")
+    fi
+    mkdir -p "$RUSTTY_ROOT/target"
     set +e
     # cargo-fuzz resolves `fuzz/` relative to cwd, so run from the crate that
     # owns the fuzz dir (crates/rustty-vt), not the workspace root.
-    ( cd "$RUSTTY_ROOT/crates/rustty-vt" && cargo +nightly fuzz run "$target" -- \
+    ( cd "$RUSTTY_ROOT/crates/rustty-vt" && cargo +nightly fuzz run "$target" ${corpus_args[@]+"${corpus_args[@]}"} -- \
         -max_total_time="$FUZZ_SECS" ${FUZZ_RUNS:+-runs=$FUZZ_RUNS} ) \
       > "$RUSTTY_ROOT/target/fuzz-$target.log" 2>&1
     rc=$?
@@ -127,14 +155,14 @@ if [ "$MODE" = "auto" ] && [ "$have_cargo_fuzz" = "1" ] && [ -d "$FUZZ_DIR" ]; t
     [ -d "$ARTIFACTS" ] && after="$(ls -1 "$ARTIFACTS" 2>/dev/null | wc -l | tr -d ' ')"
     ran=$((ran+1))
     if [ "$rc" -eq 0 ] && [ "$after" -le "$before" ]; then
-      echo "  ok      $target (${FUZZ_SECS}s, no new artifacts)"
+      echo "  ok      $target (${FUZZ_SECS}s, no new artifacts${seed:+, seeded from ${seed#"$PORT_DIR"/}})"
     else
       echo "  FAIL    $target — artifacts before=$before after=$after rc=$rc"
       tail -25 "$RUSTTY_ROOT/target/fuzz-$target.log" | sed 's/^/            /'
       overall=1
     fi
   done
-  if [ "$ran" -eq 0 ]; then
+  if [ "$ran" -eq 0 ] && [ "$overall" -eq 0 ]; then
     echo "BLOCKED: no fuzz target was runnable; nothing was fuzzed (G5)"
     exit 3
   fi
@@ -142,7 +170,7 @@ if [ "$MODE" = "auto" ] && [ "$have_cargo_fuzz" = "1" ] && [ -d "$FUZZ_DIR" ]; t
     echo "GREEN: fuzz smoke clean over $ran target(s) — no new artifacts (G5)"
     exit 0
   fi
-  echo "RED: a fuzz target produced a new artifact / non-zero exit (G5)"
+  echo "RED: a fuzz target produced a new artifact / non-zero exit, or its seed corpus is missing (G5)"
   exit 1
 fi
 
