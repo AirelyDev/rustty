@@ -67,6 +67,11 @@ fn main() {
 
     let mut build = cc::Build::new();
     build
+        // Windows (MSVC ABI), task F-1 (N353): the reference compiles this with
+        // Zig's clang even when `abi == .msvc`, so on an MSVC target cc drives
+        // clang-cl (the MSVC-ABI clang driver; a CC/CXX override still wins),
+        // not cl.exe. A no-op on every other target.
+        .prefer_clang_cl_over_msvc(true)
         // The vendored dir holds png.h, pngconf.h, pngpriv.h, pngstruct.h AND
         // the ghostty-provided pnglibconf.h — one include dir covers the codec
         // sources and its build config (the reference's `addIncludePath("")`).

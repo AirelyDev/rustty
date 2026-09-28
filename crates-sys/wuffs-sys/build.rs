@@ -84,6 +84,11 @@ fn main() {
 
     let mut build = cc::Build::new();
     build
+        // Windows (MSVC ABI), task F-1 (N353): the reference compiles this with
+        // Zig's clang even when `abi == .msvc`, so on an MSVC target cc drives
+        // clang-cl (the MSVC-ABI clang driver; a CC/CXX override still wins),
+        // not cl.exe. A no-op on every other target.
+        .prefer_clang_cl_over_msvc(true)
         .include(&c_dir)
         // Vendored upstream code: do not let its warnings fail the host build.
         .warnings(false)
@@ -133,7 +138,11 @@ fn main() {
     // "wuffs"` uniqueness key is unaffected (it gates the -sys crate, not the
     // count of `rustc-link-lib` directives).
     let mut shim = cc::Build::new();
-    shim.include(&c_dir).warnings(false).flag_if_supported("-w");
+    // Same compiler as the codec TU above (task F-1, N353).
+    shim.prefer_clang_cl_over_msvc(true)
+        .include(&c_dir)
+        .warnings(false)
+        .flag_if_supported("-w");
     // The SAME module gate list, WITHOUT `WUFFS_IMPLEMENTATION` (declarations +
     // static inlines only — mirrors wrapper.h / the `@cImport`).
     for def in MODULE_DEFINES {

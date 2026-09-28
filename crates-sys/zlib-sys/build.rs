@@ -74,6 +74,11 @@ fn main() {
 
     let mut build = cc::Build::new();
     build
+        // Windows (MSVC ABI), task F-1 (N353): the reference compiles this with
+        // Zig's clang even when `abi == .msvc`, so on an MSVC target cc drives
+        // clang-cl (the MSVC-ABI clang driver; a CC/CXX override still wins),
+        // not cl.exe. A no-op on every other target.
+        .prefer_clang_cl_over_msvc(true)
         .include(&vendor)
         // Vendored upstream code: do not let its warnings fail the host build.
         .warnings(false)

@@ -48,6 +48,11 @@ fn main() {
 
     let mut build = cc::Build::new();
     build
+        // Windows (MSVC ABI), task F-1 (N353): the reference compiles this with
+        // Zig's clang even when `abi == .msvc`, so on an MSVC target cc drives
+        // clang-cl (the MSVC-ABI clang driver; a CC/CXX override still wins),
+        // not cl.exe. A no-op on every other target.
+        .prefer_clang_cl_over_msvc(true)
         // HarfBuzz is C++; the reference links libc++ (lib.linkLibCpp()).
         .cpp(true)
         .std("c++17")
@@ -107,6 +112,18 @@ fn main() {
     // Compiles the vendored amalgamation into a static archive and emits the
     // `cargo:rustc-link-lib=static=harfbuzz` + search-path directives. Because
     // the crate declares `links = "harfbuzz"`, Cargo enforces a single linkage.
+    // C++ exceptions on MSVC targets (task F-1, N353). The reference passes no
+    // exception flag, so Zig's clang compiles with its default, which on an MSVC
+    // target is `-fcxx-exceptions -fexceptions` (MEASURED: `clang
+    // --target=x86_64-pc-windows-msvc -### -x c++`). clang-cl enables C++
+    // exceptions only through `/EH`, and cc passes none, so without this the
+    // sources' `throw` is rejected ("cannot use 'throw' with exceptions
+    // disabled", MEASURED on spirv-cross). `/EHs` gives exactly that cc1 pair
+    // (`/EHsc` would add `-fexternc-nounwind`, which the reference does not).
+    if target_env == "msvc" {
+        build.flag("/EHs");
+    }
+
     build.compile("harfbuzz");
 
     // Auto-generate the FFI from the same public headers the reference's

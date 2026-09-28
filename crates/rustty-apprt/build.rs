@@ -347,7 +347,9 @@ fn main() {
 
     // 4. cc-compile the generated blob into the crate (SharedDeps.zig:750-753).
     let mut build = cc::Build::new();
-    build.file(&c_path);
+    // Task F-1 (N353): clang-cl, not cl.exe, on an MSVC target (the reference
+    // compiles every C unit with Zig's clang); a no-op elsewhere.
+    build.prefer_clang_cl_over_msvc(true).file(&c_path);
     for inc in gio_include_dirs() {
         build.include(inc);
     }
