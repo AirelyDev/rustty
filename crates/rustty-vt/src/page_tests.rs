@@ -3616,9 +3616,22 @@ mod tests {
     #[test]
     #[should_panic(expected = "page_size_min-aligned")]
     fn page_cloneBuf_rejects_unaligned_buffer() {
-        let page = Page::init(Capacity::new(10, 10)).unwrap();
-        let mut buf = PageUnalignedBuf::new(page.memory_len);
-        let _ = page.clone_buf(buf.as_mut_slice());
+        // var page = try Page.init(...); defer page.deinit();
+        // The `defer` runs while the expected panic unwinds, after the buffer's
+        // (declared later, dropped first), as Zig runs defers in reverse order
+        // (review L-6 F7).
+        let page = PageDeinitOnDrop(Page::init(Capacity::new(10, 10)).unwrap());
+        let mut buf = PageUnalignedBuf::new(page.0.memory_len);
+        let _ = page.0.clone_buf(buf.as_mut_slice());
+    }
+
+    /// `defer page.deinit()` for a test whose body is expected to panic.
+    struct PageDeinitOnDrop(Page);
+
+    impl Drop for PageDeinitOnDrop {
+        fn drop(&mut self) {
+            self.0.deinit();
+        }
     }
 
     /// PORT NOTE: `initBuf` stores `@alignCast(buf.start()[0..l.total_size])`,
