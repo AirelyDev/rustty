@@ -727,8 +727,9 @@ impl Loop {
             // timer isn't in the heap yet.
             State::Adding => {
                 let next = self.timer_next(next_ms);
-                if let Operation::Timer(v) = unsafe { &mut (*c).op } {
-                    v.next = next;
+                // N434: through `timer_ptr`, never `&mut (*c).op`.
+                if matches!(unsafe { &(*c).op }, Operation::Timer(_)) {
+                    unsafe { (*timer_ptr(c)).next = next };
                 }
                 unsafe { (*c).userdata = userdata };
                 unsafe { (*c).callback = cb };
@@ -738,8 +739,10 @@ impl Loop {
                 // Update the reset time for the timer to the desired time along
                 // with all the callbacks.
                 let next = self.timer_next(next_ms);
-                if let Operation::Timer(v) = unsafe { &mut (*c).op } {
-                    v.reset = Some(next);
+                // N434: the timer is linked in the heap; `timer_ptr`, never
+                // `&mut (*c).op`.
+                if matches!(unsafe { &(*c).op }, Operation::Timer(_)) {
+                    unsafe { (*timer_ptr(c)).reset = Some(next) };
                 }
                 unsafe { (*c).userdata = userdata };
                 unsafe { (*c).callback = cb };
@@ -1216,9 +1219,12 @@ impl Loop {
                     }
                 }
 
-                Operation::Timer(v) => {
-                    v.c = completion;
-                    let v_ptr: *mut Timer = v;
+                Operation::Timer(_) => {
+                    // N434: the heap keeps this pointer; it carries the
+                    // completion's own tag (`timer_ptr`), not the `&mut` op
+                    // borrow of this match.
+                    let v_ptr: *mut Timer = timer_ptr(completion);
+                    (*v_ptr).c = completion;
                     (*this).timers.insert(v_ptr);
                     StartAction::TimerA
                 }
@@ -1321,19 +1327,23 @@ impl Loop {
 
         // Inspect other operations. WARNING: the state can be anything here so
         // per op be sure to check the state flag.
-        match unsafe { &mut (*completion).op } {
-            Operation::Timer(v) => {
+        // N434: the Timer arm reaches the timer through `timer_ptr`, never
+        // `&mut (*completion).op`, so the match is shared.
+        match unsafe { &(*completion).op } {
+            Operation::Timer(_) => {
+                let v: *mut Timer = unsafe { timer_ptr(completion) };
                 if unsafe { (*completion).flags.state } == State::Active {
                     // Remove from the heap so it never fires...
-                    let v_ptr: *mut Timer = v;
-                    unsafe { self.timers.remove(v_ptr) };
+                    unsafe { self.timers.remove(v) };
 
                     // If we have reset AND we got cancellation result, that means
                     // that we were canceled so that we can update our expiration
                     // time.
-                    if let Some(r) = v.reset {
-                        v.next = r;
-                        v.reset = None;
+                    if let Some(r) = unsafe { (*v).reset } {
+                        unsafe {
+                            (*v).next = r;
+                            (*v).reset = None;
+                        }
                         unsafe { (*completion).flags.state = State::Dead };
                         self.active -= 1;
                         unsafe { self.add(completion) };
@@ -2332,6 +2342,32 @@ pub struct Timer {
 impl heap::Node for Timer {
     unsafe fn heap_field(this: *mut Self) -> *mut heap::IntrusiveField<Self> {
         unsafe { ptr::addr_of_mut!((*this).heap) }
+    }
+}
+
+/// The address of `c`'s `.timer` payload, carrying `c`'s OWN provenance.
+///
+/// PORT NOTE (N434): Zig reaches the timer as the place `c.op.timer` (a plain
+/// `*Timer` into the completion), and the heap links it. The Rust port must not
+/// derive that pointer from a `&mut (*c).op` reborrow: the heap keeps it while the
+/// timer is linked, and the next `&mut (*c).op` (`timer_reset`, `stop_completion`)
+/// is a fresh Unique retag from `c` that pops it under Stacked Borrows (and, once
+/// the heap has written the node's links through it, is a Tree Borrows conflict).
+/// This helper forms only a shared borrow of the op to find the payload and
+/// returns that address with `c`'s tag, so the heap's links and every later
+/// access on the heap path share one tag. Every heap-path Timer access goes
+/// through it (proof: `.port/phase-2/mirihar-n434`).
+///
+/// # Safety
+/// `c` must be a valid `Completion` pointer whose op is `.timer`.
+#[inline]
+unsafe fn timer_ptr(c: *mut Completion) -> *mut Timer {
+    unsafe {
+        let addr = match &(*c).op {
+            Operation::Timer(t) => ptr::from_ref(t).addr(),
+            _ => unreachable!(),
+        };
+        c.cast::<u8>().with_addr(addr).cast::<Timer>()
     }
 }
 
