@@ -2421,9 +2421,27 @@ what the flag feeds); for the Snap, drop the `gtk4-layer-shell` part and confirm
 `rustty` part fails to link (`gtk4-layer-shell-0` not found by pkg-config), which proves
 the part is what satisfies it on core24.
 
-## V25. Windows full-workspace test run over the clang-cl-built C/C++ dependencies, and the N355 crash recipe — **DEFERRED** (wrap-up, no long runs) [parity tail F-1, 2026-09-28]
+## V26. Windows full-workspace test run over the clang-cl-built C/C++ dependencies, and the N355 crash recipe — **ENVIRONMENT-BLOCKED** (user-deferred) [parity tail F-1, 2026-09-28]
 
-**Why deferred:** the user asked the tail wave to wrap up without long runs. Task F-1 (N353) moved every vendored
+**Blocked on:** run time, not a missing machine: the user asked the tail wave to wrap up without long runs
+(2026-09-28), and the whole Windows suite under rwin's x64 emulation is one. The host (rwin) exists; the recipe
+below runs there as is.
+
+```
+PORTED: crates-sys/zlib-sys/build.rs
+PORTED: crates-sys/freetype-sys/build.rs
+PORTED: crates-sys/harfbuzz-sys/build.rs
+PORTED: crates-sys/libpng-sys/build.rs
+PORTED: crates-sys/oniguruma-sys/build.rs
+PORTED: crates-sys/glslang-sys/build.rs
+PORTED: crates-sys/spirv-cross-sys/build.rs
+PORTED: crates-sys/wuffs-sys/build.rs
+PORTED: crates-sys/dcimgui-sys/build.rs
+PORTED: crates-sys/breakpad-sys/build.rs
+PORTED: crates/rustty-font-shaper/build.rs
+```
+
+**What is already measured:** Task F-1 (N353) moved every vendored
 `cc` build to clang-cl on MSVC targets and measured the compile lines, `cargo clippy --workspace`, and the unit
 tests of each dependency's direct consumers on rwin (`NEW-FINDINGS.md` N353). Not run: the whole Windows suite,
 whose rustty-vt part alone takes several minutes under x64 emulation.

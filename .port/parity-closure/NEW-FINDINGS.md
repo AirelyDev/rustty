@@ -6565,9 +6565,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   two rustty-inspector tests that failed on a missing `test-decommit-sim`, not on the compiler (fixed under N383,
   then 21/21). macOS is unaffected (cc drives clang there; `cargo build --workspace` and the touched `-sys` tests
   pass).
-- **not run** (`.port/phase-2/VERIFICATION_DEBT.md` V25): the full Windows `cargo test --workspace` over the clang-cl-built
+- **not run** (`.port/phase-2/VERIFICATION_DEBT.md` V26): the full Windows `cargo test --workspace` over the clang-cl-built
   dependencies (the rustty-vt suite, the only other zlib/dcimgui consumer, takes several minutes under emulation).
-- **state**: CLOSED (fixed; full-workspace Windows test run deferred to V25).
+- **state**: CLOSED (fixed; full-workspace Windows test run deferred to V26).
 
 ## N354 — `windows_threadenter_reads_the_pty_through_the_windows_read_thread` failed once in a full Windows run
 
@@ -6613,7 +6613,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   compiles into the macOS renderer), alternating default threading and `--test-threads=1`, with a
   `cargo build --workspace` and `cargo clippy --workspace` running beside it for part of the window: 496 runs
   (248 + 248), 496 exited 0, no stop. Total without a recurrence: 706 + 496 = 1202 runs.
-- **state**: CLOSED (unreproduced, 1202 runs; the recipe is `.port/phase-2/VERIFICATION_DEBT.md` V25).
+- **state**: CLOSED (unreproduced, 1202 runs; the recipe is `.port/phase-2/VERIFICATION_DEBT.md` V26).
 
 ## N360 — allocator call-shape residuals (T3): every C-observable difference the S-7 series leaves
 
