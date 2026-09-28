@@ -99,6 +99,12 @@ TARGETS=(
 )
 
 echo "=== G-XTARGET :: cross-target builds of rustty-vt-c ==="
+# The simd128 arm's checker must itself work before its verdicts count (R5).
+if ! python3 .port/tools/gates/wasm_target_features.py --self-test > "$WORK/wtf-self" 2>&1; then
+  sed 's/^/          /' "$WORK/wtf-self"
+  echo "G-XTARGET RED: wasm_target_features.py --self-test failed"
+  exit 1
+fi
 for spec in "${TARGETS[@]}"; do
   target="${spec%%|*}"
   rest="${spec#*|}"
@@ -120,6 +126,25 @@ for spec in "${TARGETS[@]}"; do
   # shellcheck disable=SC2086  # $extra is an intentional empty-or-flags word.
   if cargo build -p rustty-vt-c --target "$target" --release $extra > "$log" 2>&1; then
     ok "$target"
+    # The wasm `simd128` default (N422, `Config.zig:113-130`): the reference's
+    # CI requires the artifact to need simd128 ("Verify WASM simd128"). Here
+    # the module's target_features section must list it, which it does only
+    # when `.cargo/config.toml`'s wasm32 rustflags applied (a RUSTFLAGS in the
+    # environment replaces them, as `-Dcpu` does the reference's default).
+    case "$target" in
+      wasm32-*)
+        wasm="target/$target/release/rustty_vt_c.wasm"
+        # (Not counted as a build: `RAN` counts targets built.)
+        if python3 .port/tools/gates/wasm_target_features.py "$wasm" simd128 > "$log.simd" 2>&1; then
+          echo "  ok      $target requires simd128"
+        else
+          sed 's/^/          /' "$log.simd"
+          echo "  FAIL    $target requires simd128"
+          FAILED=1
+          FAILED_NAMES="$FAILED_NAMES $target(simd128)"
+        fi
+        ;;
+    esac
   else
     # A missing cross C toolchain is an ENVIRONMENT fact, not a rustty defect.
     # Distinguish it so a developer box without mingw/NDK does not read as a

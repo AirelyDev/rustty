@@ -70,8 +70,11 @@
   # `-Dgtk-x11` / `-Dgtk-wayland` are cargo features here. `gtk` itself is
   # implied by both, but name it so an all-false build still selects the GTK
   # apprt rather than the headless one.
+  #
+  # `simd` is `-Dsimd` (default true, N420): a default feature of `rustty`, so
+  # it must be named here, where the defaults are dropped.
   features =
-    ["gtk"]
+    ["gtk" "simd"]
     ++ lib.optional enableX11 "x11"
     ++ lib.optional enableWayland "wayland";
 
@@ -132,6 +135,11 @@ in
     buildInputs = buildInputs';
 
     dontStrip = !strip;
+    # The reference passes `-Dstrip=${lib.boolToString strip}`; the Cargo
+    # option is the profile's strip (N422). Both `releasesafe` and
+    # `releasefast` build the `release` profile, which strips by default, so
+    # this is what keeps a releasesafe build's symbols.
+    CARGO_PROFILE_RELEASE_STRIP = lib.boolToString strip;
 
     GI_TYPELIB_PATH = gi_typelib_path;
 

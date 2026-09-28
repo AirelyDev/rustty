@@ -202,6 +202,33 @@ maintainers migrating from other terminal emulators:
   `dev` (unoptimized + debug, the `Debug` analog) and any custom
   `[profile.*]` you define in `Cargo.toml`.
 
+- **Strip** (was `-Dstrip=<bool>`): like upstream's default for a
+  `ReleaseFast` build, `--release` strips the `rustty` executable and the
+  embedding library; `dev` and `--profile release-safe` (the `ReleaseSafe`
+  analog) do not. To keep the symbols of a release build (for a separate
+  debug-symbols package, as the Flatpak manifest does), set
+  `CARGO_PROFILE_RELEASE_STRIP=false`.
+
+- **SIMD** (was `-Dsimd=<bool>`): on by default. `-Dsimd=false` is
+  `--no-default-features` plus the other features you want, e.g.
+  `--no-default-features --features gtk,wayland,x11`: no SIMD code path is
+  compiled and neither highway nor simdutf is linked.
+
+- **Internationalization** (was `-Di18n=<bool>`): on by default for macOS
+  and glibc Linux, off elsewhere. Set `RUSTTY_I18N=false` (or `true`) in the
+  environment of both the `cargo build` and the `xtask resources` steps; the
+  latter then omits (or installs) the `share/locale` catalogs. `xtask
+  resources` also takes `--i18n <bool>` directly.
+
+- **Documentation** (was `-Demit-docs=<bool>`): `xtask resources` renders
+  the man pages and the HTML/markdown docs in-process (no pandoc needed), so
+  they are installed by default; `--emit-docs false` leaves them out.
+
+- **PIE** (was `-Dpie=<bool>`): Rust links Linux and FreeBSD executables as
+  position-independent by default, which is upstream's `-Dpie=true` (its
+  default for system packages). There is no switch for upstream's non-PIE
+  default.
+
 - **Baseline CPU** (was `-Dcpu=baseline`): Build for the "baseline" CPU of the
   target architecture. This avoids building for newer CPU features that may
   not be available on all target machines. rustc already does this by
@@ -247,12 +274,14 @@ target add wasm32-unknown-unknown`).
 
 Some notes for packaging the wasm module:
 
-- Upstream Ghostty enables the `simd128` feature by default. This build does
-  not yet; to enable it, append `-C target-feature=+simd128` to the rustc
-  flags after `--` above. Every browser engine has supported it for years
+- The `simd128` feature is enabled by default, as upstream Ghostty enables
+  it (the checkout's `.cargo/config.toml` adds `-C target-feature=+simd128`
+  for every wasm32 target). Every browser engine has supported it for years
   (Chrome 91, Firefox 89, Safari 16.4) and it is a large performance win for
-  VT parsing. If you target an unusual runtime without SIMD support, leave
-  it off.
+  VT parsing. If you target an unusual runtime without SIMD support, opt out
+  the way `-Dcpu=generic` does upstream: set `RUSTFLAGS` (even to an empty
+  string, or to `-C target-cpu=generic`), which replaces the configured
+  flags.
 
 - Optional feature areas can be compiled out to significantly reduce binary
   size. Each `-Dvt-features` feature is a Cargo feature of `rustty-vt-c`, all

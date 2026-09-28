@@ -455,6 +455,34 @@ enum_variant_names = "allow"
 # with ReleaseSafe — strictly safer than the mirrored artifact (PORT_RULES §DG2).
 [profile.release]
 overflow-checks = true
+# `-Dstrip` (`src/build/Config.zig:414-422`, N422): "Strip the final
+# executable. Default true for fast and small releases" — `.Debug,
+# .ReleaseSafe => false, .ReleaseFast, .ReleaseSmall => true`. This profile is
+# the ReleaseFast analog (no debug-assertions; `build_config::mode_string`
+# reports it as `ReleaseFast`), so it strips; `release-safe` below does not.
+# The option is Cargo's own: `CARGO_PROFILE_RELEASE_STRIP=false` (or
+# `--config profile.release.strip=false`) is `-Dstrip=false`, as the flatpak
+# manifest already passes. The reference applies it to the `ghostty` exe
+# (`GhosttyExe.zig:20`) and the embedding library (`GhosttyLib.zig:31,102`)
+# only, so the other linked artifacts keep Cargo's release default below.
+strip = true
+
+# The artifacts `-Dstrip` does not reach (N422): librustty-vt
+# (`GhosttyLibVt.zig` sets no `.strip`), the bench and gen tools
+# (`GhosttyBench.zig`), the wasm modules and the build tooling. `debuginfo` is
+# what Cargo's release profile gives them when no `strip` is set.
+[profile.release.package.rustty-vt-c]
+strip = "debuginfo"
+[profile.release.package.rustty-bench]
+strip = "debuginfo"
+[profile.release.package.rustty-synthetic]
+strip = "debuginfo"
+[profile.release.package.rustty-wasm]
+strip = "debuginfo"
+[profile.release.package.rustty-web-canvas]
+strip = "debuginfo"
+[profile.release.package.xtask]
+strip = "debuginfo"
 
 # Parity/bench profile mirroring the tagged ReleaseFast artifact (Goal-2 only).
 # PERF(port): overflow-checks off = the Zig ReleaseFast arithmetic tier.
@@ -472,6 +500,15 @@ overflow-checks = false
 [profile.release-safe]
 inherits = "release"
 debug-assertions = true
+# `-Dstrip`'s ReleaseSafe default is false (N422).
+strip = false
+
+# `cargo test --release` / `cargo bench` builds its test executables with this
+# profile. The reference's test executable is never stripped (`build.zig`
+# test_exe: `.strip = false`), so `-Dstrip`'s release default does not reach
+# them (N422).
+[profile.bench]
+strip = false
 
 # Shipped macOS .xcframework staticlib profile (PREPORT_SWIFT_APP §4). panic = "abort"
 # so assert-class panics (assert!/unreachable!/debug_assert!/overflow-check) ABORT

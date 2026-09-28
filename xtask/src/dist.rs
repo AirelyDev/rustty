@@ -246,8 +246,21 @@ fn dist_stage(
     }
     let cargo_dir = tree.join(".cargo");
     std::fs::create_dir_all(&cargo_dir).map_err(|e| format!("create .cargo/: {e}"))?;
-    std::fs::write(cargo_dir.join("config.toml"), &output.stdout)
-        .map_err(|e| format!("write .cargo/config.toml: {e}"))?;
+    // N422: the archive already carries the TRACKED `.cargo/config.toml` (the
+    // wasm `simd128` default), so the source replacement is appended to it,
+    // never written over it — a tarball build must keep the checkout's
+    // defaults.
+    let config_path = cargo_dir.join("config.toml");
+    let tracked = match std::fs::read(&config_path) {
+        Ok(bytes) => Some(bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("read .cargo/config.toml: {e}")),
+    };
+    std::fs::write(
+        &config_path,
+        dist_cargo_config(tracked.as_deref(), &output.stdout),
+    )
+    .map_err(|e| format!("write .cargo/config.toml: {e}"))?;
 
     // 4. Re-pack the stage into the final tarball.
     let status = Command::new("tar")
@@ -264,6 +277,21 @@ fn dist_stage(
         return Err(format!("tar create exited with {status}"));
     }
     Ok(())
+}
+
+/// The tarball's `.cargo/config.toml`: the tracked checkout config (if the
+/// archive carried one) followed by `cargo vendor`'s source replacement.
+fn dist_cargo_config(tracked: Option<&[u8]>, vendor: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    if let Some(t) = tracked {
+        out.extend_from_slice(t);
+        if !t.ends_with(b"\n") {
+            out.push(b'\n');
+        }
+        out.push(b'\n');
+    }
+    out.extend_from_slice(vendor);
+    out
 }
 
 /// Build the tarball, extract it, and build it in isolation to prove it is a
@@ -327,6 +355,15 @@ fn distcheck_scoped(scope: Scope) -> Result<PathBuf, String> {
     }
     if !extracted.join(".cargo/config.toml").is_file() {
         return Err("extracted tree missing .cargo/config.toml source replacement".into());
+    }
+    // N422: the checkout's own config (the wasm `simd128` default) must have
+    // survived the source replacement.
+    if let Ok(tracked) = std::fs::read(root.join(".cargo/config.toml")) {
+        let shipped = std::fs::read(extracted.join(".cargo/config.toml"))
+            .map_err(|e| format!("read extracted .cargo/config.toml: {e}"))?;
+        if !shipped.starts_with(&tracked) {
+            return Err("extracted .cargo/config.toml lost the tracked checkout config".into());
+        }
     }
     // The lib-vt tarball's whole reason to exist is the C-consumer story, so
     // the CMake trio must be there before the CMake build below can mean
@@ -835,6 +872,59 @@ mod tests {
             config.contains("[source.crates-io]") && config.contains("vendor"),
             "config.toml is not a vendor source replacement:\n{config}"
         );
+        // N422: and it still carries the checkout's wasm simd128 default.
+        assert!(
+            config.contains("target-feature=+simd128"),
+            "config.toml lost the tracked wasm simd128 default:\n{config}"
+        );
         let _ = std::fs::remove_dir_all(&extract);
+    }
+
+    /// N422: the tarball config is the tracked config, then the vendor
+    /// replacement; a tracked config is never overwritten.
+    #[test]
+    fn dist_config_appends_the_vendor_replacement_to_the_tracked_config() {
+        let vendor = b"[source.crates-io]\nreplace-with = \"vendored-sources\"\n";
+        assert_eq!(dist_cargo_config(None, vendor), vendor.to_vec());
+        let merged = dist_cargo_config(Some(b"[a]\nx = 1"), vendor);
+        assert_eq!(
+            merged,
+            [&b"[a]\nx = 1\n\n"[..], &vendor[..]].concat(),
+            "{}",
+            String::from_utf8_lossy(&merged)
+        );
+        let tracked = std::fs::read(workspace_root().join(".cargo/config.toml"))
+            .expect("the checkout tracks .cargo/config.toml (N422)");
+        assert!(dist_cargo_config(Some(&tracked), vendor).starts_with(&tracked));
+    }
+
+    /// N422, `Config.zig:113-130`: every wasm target defaults to the `simd128`
+    /// CPU feature. The tracked config must apply it to exactly the wasm32
+    /// targets, as target rustflags (so a RUSTFLAGS of the caller's, the
+    /// `-Dcpu` analog, replaces it).
+    #[test]
+    fn checkout_config_defaults_wasm_to_simd128() {
+        let config = std::fs::read_to_string(workspace_root().join(".cargo/config.toml"))
+            .expect("read .cargo/config.toml");
+        let lines: Vec<&str> = config
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .collect();
+        let table = lines
+            .iter()
+            .position(|l| *l == "[target.'cfg(target_arch = \"wasm32\")']")
+            .expect("a wasm32 target table");
+        assert_eq!(
+            lines.get(table + 1),
+            Some(&"rustflags = [\"-C\", \"target-feature=+simd128\"]"),
+            "{lines:?}"
+        );
+        // Nothing else sets rustflags (no non-wasm target is touched).
+        assert_eq!(
+            lines.iter().filter(|l| l.starts_with("rustflags")).count(),
+            1,
+            "{lines:?}"
+        );
     }
 }
