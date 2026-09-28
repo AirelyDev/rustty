@@ -69,8 +69,19 @@ struct AsyncState {
 /// PORT NOTE: the anonymous `struct { loop: *xev.Loop, c: *xev.Completion }`.
 #[derive(Clone, Copy)]
 struct AsyncWaiter {
+    /// The reference field. Since N385 nothing reads it: `notify` uses
+    /// `iocp_handle` below, the only thing it read through `loop`.
+    #[allow(dead_code)]
     loop_: *mut Loop,
     c: *mut Completion,
+    /// PORT-ADDED (N385): the loop's completion port handle, copied on the loop
+    /// thread in `wait`. `notify` runs on another thread while the loop thread
+    /// holds `&mut Loop` for its whole `run`; the reference's
+    /// `w.loop.async_notify(w.c)` reads only `loop.iocp_handle`, which does not
+    /// change after `Loop.init`, so `notify` posts to this copy through
+    /// `Loop::async_notify_handle` instead of forming a `&Loop` or reading the
+    /// `Loop` allocation (either is UB under Stacked Borrows; mirihar-n385).
+    iocp_handle: HANDLE,
 }
 
 // PORT NOTE: raw pointers make `AsyncWaiter` (and thus `Async`) auto-`!Send`/
@@ -162,7 +173,15 @@ impl Async {
         // self.guard.lock(); defer self.guard.unlock();
         let mut state = self.guard.lock().unwrap();
         // self.waiter = .{ .loop = loop, .c = c };
-        state.waiter = Some(AsyncWaiter { loop_, c });
+        //
+        // SAFETY: `wait` runs on the loop thread (it has just called
+        // `loop.add(c)`), so reading the handle through `loop_` is that thread's
+        // own access.
+        state.waiter = Some(AsyncWaiter {
+            loop_,
+            c,
+            iocp_handle: unsafe { (*loop_).iocp_handle() },
+        });
         // if (self.wakeup) loop.async_notify(c);
         if state.wakeup {
             unsafe { (*loop_).async_notify(c) };
@@ -204,10 +223,16 @@ impl Async {
         // self.guard.lock(); defer self.guard.unlock();
         let mut state = self.guard.lock().unwrap();
         // if (self.waiter) |w| { w.loop.async_notify(w.c); } else { self.wakeup = true; }
+        //
+        // PORT NOTE (N385): `w.loop.async_notify(w.c)` is spelled
+        // `Loop::async_notify_handle(w.iocp_handle, w.c)`: the same body, with the
+        // handle the waiter copied at `wait` time, so this thread touches only the
+        // completion and never the `Loop` (see `AsyncWaiter::iocp_handle`).
         match state.waiter {
-            // SAFETY: the waiter pointers name loop-owned memory registered by
-            // `wait` and are valid until the loop is deinit'd.
-            Some(w) => unsafe { (*w.loop_).async_notify(w.c) },
+            // SAFETY: `w.c` is the caller-owned completion registered by `wait`
+            // and `w.iocp_handle` the port of the loop it was added to; both are
+            // valid until the loop is deinit'd.
+            Some(w) => unsafe { Loop::async_notify_handle(w.iocp_handle, w.c) },
             None => state.wakeup = true,
         }
         Ok(())
@@ -1322,20 +1347,218 @@ struct WriteResult {
 // ===========================================================================
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::windows::{Options, RunMode};
+
+    // The three `AsyncTests` are live ports since N385 (2026-09-28), run on the
+    // Windows VM; the stubs below are still the Windows/WASI-host debt.
+
+    fn set_bool_rearm(
+        ud: *mut bool,
+        _l: *mut Loop,
+        _c: *mut Completion,
+        r: core::result::Result<(), AsyncError>,
+    ) -> CallbackAction {
+        r.unwrap(); // _ = r catch unreachable;
+        unsafe { *ud = true };
+        CallbackAction::Rearm
+    }
+
+    fn set_bool_disarm(
+        ud: *mut bool,
+        _l: *mut Loop,
+        _c: *mut Completion,
+        r: core::result::Result<(), AsyncError>,
+    ) -> CallbackAction {
+        r.unwrap(); // _ = r catch unreachable;
+        unsafe { *ud = true };
+        CallbackAction::Disarm
+    }
+
+    fn count_rearm(
+        ud: *mut u32,
+        _l: *mut Loop,
+        _c: *mut Completion,
+        r: core::result::Result<(), AsyncError>,
+    ) -> CallbackAction {
+        r.unwrap(); // _ = r catch unreachable;
+        unsafe { *ud += 1 };
+        CallbackAction::Rearm
+    }
+
     /// PORT NOTE: `AsyncTests(xev, AsyncIOCP)` -> `test "async"`.
-    /// SKIP-STUB: needs a live IOCP loop on a Windows host.
     #[test]
-    fn iocp_watcher_async() {}
+    fn iocp_watcher_async() {
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+        let mut notifier = Async::init().unwrap();
+
+        // Wait
+        let mut wake = false;
+        let mut c_wait = Completion::default();
+        unsafe {
+            notifier.wait(
+                &raw mut loop_,
+                &raw mut c_wait,
+                &raw mut wake,
+                set_bool_rearm,
+            )
+        };
+
+        // Send a notification
+        notifier.notify().unwrap();
+
+        // Wait for wake
+        loop_.run(RunMode::Once).unwrap();
+        assert!(wake);
+
+        // Make sure it only triggers once
+        wake = false;
+        loop_.run(RunMode::NoWait).unwrap();
+        assert!(!wake);
+
+        notifier.deinit();
+        loop_.deinit();
+    }
 
     /// PORT NOTE: `AsyncTests(xev, AsyncIOCP)` -> `test "async: notify first"`.
-    /// SKIP-STUB: needs a live IOCP loop on a Windows host.
+    /// `wait` finds `wakeup` set and calls `loop.async_notify(c)` itself.
     #[test]
-    fn iocp_watcher_async_notify_first() {}
+    fn iocp_watcher_async_notify_first() {
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+        let mut notifier = Async::init().unwrap();
+
+        // Send a notification
+        notifier.notify().unwrap();
+
+        // Wait
+        let mut wake = false;
+        let mut c_wait = Completion::default();
+        unsafe {
+            notifier.wait(
+                &raw mut loop_,
+                &raw mut c_wait,
+                &raw mut wake,
+                set_bool_disarm,
+            )
+        };
+
+        // Wait for wake
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert!(wake);
+
+        notifier.deinit();
+        loop_.deinit();
+    }
 
     /// PORT NOTE: `AsyncTests(xev, AsyncIOCP)` -> `test "async batches multiple
-    /// notifications"`. SKIP-STUB: needs a live IOCP loop on a Windows host.
+    /// notifications"`.
     #[test]
-    fn iocp_watcher_async_batches_multiple_notifications() {}
+    fn iocp_watcher_async_batches_multiple_notifications() {
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+        let mut notifier = Async::init().unwrap();
+
+        // Send a notification many times
+        for _ in 0..5 {
+            notifier.notify().unwrap();
+        }
+
+        // Wait
+        let mut count: u32 = 0;
+        let mut c_wait = Completion::default();
+        unsafe { notifier.wait(&raw mut loop_, &raw mut c_wait, &raw mut count, count_rearm) };
+
+        // Send a notification
+        notifier.notify().unwrap();
+
+        // Wait for wake
+        loop_.run(RunMode::Once).unwrap();
+        for _ in 0..10 {
+            loop_.run(RunMode::NoWait).unwrap();
+        }
+        assert_eq!(count, 1);
+
+        notifier.deinit();
+        loop_.deinit();
+    }
+
+    /// PORT-ADDED (N385): the cross-thread case the reference tests do not
+    /// cover. Another thread calls `notify` while the loop thread is blocked in
+    /// `GetQueuedCompletionStatusEx` inside `run`; `notify` posts to the handle
+    /// the waiter copied at `wait` time, which must wake the loop. The run is
+    /// bounded: if the callback has not run 5 s after `notify`, the notifier
+    /// thread posts to the loop's port itself (a rescue) so the loop returns,
+    /// and the test fails on `rescued`.
+    #[test]
+    fn iocp_watcher_async_notify_from_another_thread_wakes_running_loop() {
+        use core::sync::atomic::{AtomicBool, Ordering};
+        use std::time::{Duration, Instant};
+
+        fn set_atomic_disarm(
+            ud: *mut AtomicBool,
+            _l: *mut Loop,
+            _c: *mut Completion,
+            r: core::result::Result<(), AsyncError>,
+        ) -> CallbackAction {
+            r.unwrap();
+            unsafe { (*ud).store(true, Ordering::SeqCst) };
+            CallbackAction::Disarm
+        }
+
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+        let mut notifier = Async::init().unwrap();
+        // The port, for the rescue post only (read before `run`).
+        let port = SendHandle(loop_.iocp_handle());
+
+        let wake = AtomicBool::new(false);
+        let mut c_wait = Completion::default();
+        unsafe {
+            notifier.wait(
+                &raw mut loop_,
+                &raw mut c_wait,
+                (&raw const wake).cast_mut(),
+                set_atomic_disarm,
+            )
+        };
+
+        let mut rescued = false;
+        std::thread::scope(|s| {
+            let notifier = &notifier;
+            let wake = &wake;
+            let rescued = &mut rescued;
+            s.spawn(move || {
+                let port = port;
+                std::thread::sleep(Duration::from_millis(50));
+                notifier.notify().unwrap();
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while !wake.load(Ordering::SeqCst) {
+                    if Instant::now() > deadline {
+                        *rescued = true;
+                        unsafe {
+                            windows::PostQueuedCompletionStatus(port.0, 0, 0, ptr::null_mut())
+                        }
+                        .unwrap();
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            });
+            // Blocks until a post reaches the port.
+            loop_.run(RunMode::Once).unwrap();
+        });
+
+        assert!(wake.load(Ordering::SeqCst), "the async callback ran");
+        assert!(
+            !rescued,
+            "notify's post did not wake the loop; the rescue post did"
+        );
+
+        notifier.deinit();
+        loop_.deinit();
+    }
+
+    /// A port handle moved onto the notifier thread (the test's rescue post).
+    struct SendHandle(HANDLE);
+    unsafe impl Send for SendHandle {}
 
     /// PORT NOTE: `TimerTests(xev, TimerLoop)` -> `test "timer"`.
     /// SKIP-STUB: needs a live IOCP loop on a Windows host.

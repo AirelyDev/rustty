@@ -20,10 +20,12 @@
 // kqueue/epoll this backend NEVER schedules onto a thread pool — every operation
 // is either handed to the kernel through the completion port or performed
 // synchronously. `Loop.init` discards `options` entirely (iocp.zig:72-74). The
-// one cross-thread entry point, `async_notify`, touches ONLY the completion's own
-// `AtomicBool` plus `PostQueuedCompletionStatus` on the port HANDLE — both read
-// out of caller-owned memory / a `Copy` handle, never through a `&mut Loop`
-// (WS19 T10's rule, preserved here by construction).
+// one cross-thread entry point, `AsyncIOCP.notify` -> `async_notify`, touches ONLY
+// the completion's own `AtomicBool` plus `PostQueuedCompletionStatus` on the port
+// HANDLE, and the HANDLE is a copy the watcher took on the loop thread at `wait`
+// time (`async_notify_handle`): the notifying thread never forms a `&Loop` nor
+// reads the `Loop` allocation while the loop thread holds its protected
+// `&mut Loop` (N385; WS19 T10's rule for the kqueue/epoll pool worker).
 //
 // PORT NOTE (`@fieldParentPtr("overlapped", ...)`): the loop recovers the
 // `*Completion` from the `*OVERLAPPED` the kernel hands back. The faithful Rust
@@ -158,8 +160,9 @@ struct LoopFlags {
 // auto-`!Send`; ghostty MOVES a `Loop` onto the spawned termio thread. SAFETY /
 // single-thread affinity: after the move a `Loop` (and every `Completion` it
 // links) is touched by exactly one thread at a time — the owning event-loop
-// thread. `async_notify` is the documented exception and touches only the
-// caller-owned completion's `AtomicBool` plus the `Copy` port handle.
+// thread. `async_notify_handle` is the documented exception: it touches only the
+// caller-owned completion's `AtomicBool` plus a copy of the port handle, never
+// the `Loop` (N385).
 unsafe impl Send for Loop {}
 
 impl Loop {
@@ -738,6 +741,23 @@ impl Loop {
             ResultA(Result),
         }
 
+        // PORT NOTE (N385): the reference's `.async_wait => { try
+        // self.asyncs.push(completion); break :action .async_wait; }` arm, and
+        // its `.async_wait` tail below, taken here through a SHARED borrow of
+        // `op`. From `AsyncIOCP.wait` on, another thread may run `notify` ->
+        // `async_notify_handle`, which reads `op` and stores its `wakeup` atomic;
+        // a `&mut Operation` live across that access is invalidated under
+        // Stacked Borrows (mirihar-n385 `cached_mutop`: UB under SB). No other
+        // operation is touched off the loop thread, so the `&mut` match below
+        // stays as it was. Behaviour is unchanged.
+        if matches!(unsafe { &(*completion).op }, Operation::AsyncWait { .. }) {
+            unsafe { self.asyncs.push(completion) };
+            // .async_wait => { self.active += 1; completion.flags.state = .active; }
+            self.active += 1;
+            unsafe { (*completion).flags.state = State::Active };
+            return;
+        }
+
         let action: StartAction = match unsafe { &mut (*completion).op } {
             Operation::Noop => {
                 unsafe { (*completion).flags.state = State::Dead };
@@ -1141,10 +1161,8 @@ impl Loop {
                 StartAction::CancelA
             }
 
-            Operation::AsyncWait { .. } => {
-                unsafe { self.asyncs.push(completion) };
-                StartAction::AsyncWaitA
-            }
+            // Started above through a shared borrow (N385).
+            Operation::AsyncWait { .. } => unreachable!(),
 
             Operation::JobObject {
                 job, associated, ..
@@ -1207,11 +1225,8 @@ impl Loop {
                 unsafe { (*completion).flags.state = State::Active };
             }
 
-            StartAction::AsyncWaitA => {
-                // We are considered an active completion.
-                self.active += 1;
-                unsafe { (*completion).flags.state = State::Active };
-            }
+            // Handled above, before the `&mut` match (N385).
+            StartAction::AsyncWaitA => unreachable!(),
 
             // A result is immediately available. Queue the completion to be
             // invoked.
@@ -1327,7 +1342,30 @@ impl Loop {
     ///
     /// # Safety
     /// `completion` must point at a live `async_wait` completion.
+    //
+    // PORT NOTE (N385): the reference `async_notify(self: *Loop, completion)`
+    // only reads `self.iocp_handle`, so its body is `async_notify_handle`, which
+    // takes that handle by value. This method forms a `&Loop`, so it is for the
+    // loop thread only; a notifier on another thread (`AsyncIOCP.notify`) calls
+    // `async_notify_handle` with the handle its waiter copied at `wait` time.
     pub unsafe fn async_notify(&self, completion: *mut Completion) {
+        unsafe { Loop::async_notify_handle(self.iocp_handle, completion) }
+    }
+
+    /// The port handle, for `AsyncIOCP.wait` to copy on the loop thread (N385).
+    pub(crate) fn iocp_handle(&self) -> HANDLE {
+        self.iocp_handle
+    }
+
+    /// The body of the reference `async_notify`, with the completion port handle
+    /// passed by value: it never touches the `Loop`, so any thread may call it
+    /// while the loop thread is inside `run(&mut self)` (N385).
+    ///
+    /// # Safety
+    /// `completion` must point at a live `async_wait` completion and `iocp_handle`
+    /// must be the handle of the loop that completion was added to, not yet
+    /// closed by `deinit`.
+    pub unsafe fn async_notify_handle(iocp_handle: HANDLE, completion: *mut Completion) {
         // The completion must be in a waiting state.
         debug_assert!(matches!(
             unsafe { &(*completion).op },
@@ -1344,7 +1382,7 @@ impl Loop {
         // NOTE: This call can fail but errors are not documented, so we log the
         // error here.
         if let Err(err) =
-            unsafe { windows::PostQueuedCompletionStatus(self.iocp_handle, 0, 0, ptr::null_mut()) }
+            unsafe { windows::PostQueuedCompletionStatus(iocp_handle, 0, 0, ptr::null_mut()) }
         {
             log_warn!("unexpected async_notify error={:?}", err);
         }
