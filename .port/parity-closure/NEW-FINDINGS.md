@@ -7319,3 +7319,22 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   handle through the raw pointer (`unsafe { (*loop_).iocp_handle }` as a place read via `addr_of!`, or copy the handle
   into the `Async`'s waiter at `wait` time), with no `&Loop` formed on the notifying thread.
 - **state**: OPEN (recorded, not fixed).
+
+## N390 — librustty-vt's release log level was `.err`; Zig's default in every release mode is `.info`
+
+- **id**: N390. Not a ledger row: task C-1 (G-REL, `sys::tests::log_facade_backend_reaches_the_c_sink` failed under
+  `cargo test --release`).
+- **severity**: medium. **kind**: port defect (R1), fixed.
+- **finding**: `lib_vt.zig`'s `std_options` (pin, `:434-459`) sets no `log_level` for the `c_abi` arm, so
+  `std.log.default_level` applies: `.debug` in Debug and `.info` in ReleaseSafe/ReleaseFast/ReleaseSmall (Zig 0.16
+  `lib/std/log.zig:54-57`; the reference's `minimum_zig_version` is 0.16.0; Zig 0.15.2 has the same switch).
+  `sys::install_log_backend` set `LevelFilter::Error` for non-debug native builds, on the claim
+  (`DECISION-logging.md` IMPORTANT 4) that the default resolves to `.err` in ReleaseFast. So a release embedder's log
+  callback never received the info and warn records the reference delivers. The wasm arm (`.err` + `noop` sink,
+  `lib_vt.zig:446-455`) is unaffected. The published header says the same as the reference's
+  (`include/rustty/vt/sys.h:177-181`, `RUSTTY_SYS_OPT_LOG`): "Release builds emit info and above".
+- **fix** (task C-1): the release arm is `LevelFilter::Info`; the doc comment carries a CORRECTION note.
+- **test**: `sys::tests::log_facade_backend_reaches_the_c_sink` now asserts the warn and info records reach the sink on
+  both profiles and the debug record only with `debug_assertions`. Negative control (`--release`, the release arm set
+  to `Warn`): fails, the info record is missing.
+- **state**: CLOSED (fixed).
