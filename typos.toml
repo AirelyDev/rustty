@@ -67,6 +67,11 @@ extend-ignore-re = [
   # Ignore Apple four char codes
   'code="[A-Za-z]{4,8}"',
   '"[A-Za-z]{4}"\.fourCharCode',
+  # Ignore the Intel CPUID vendor string split into its ebx/edx/ecx words
+  # (highway-sys x86 detection test)
+  '"Genu" "ineI" "ntel"',
+  # Ignore rc.exe's `/fo <file>` output flag (the Windows resource build)
+  '\.arg\("/fo"\)',
 ]
 
 [default.extend-words]
