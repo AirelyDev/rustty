@@ -16,6 +16,12 @@ authors.workspace = true
 workspace = true
 
 [features]
+# `-Dsimd` (N420), default-on as the reference's is: threaded to `rustty-core`,
+# whose workspace edge sets `default-features = false` so it can be turned off.
+# See `crates/rustty-core/Cargo.toml`.
+default = ["simd"]
+simd = ["rustty-core/simd"]
+
 # The NATIVE GTK4/libadwaita apprt backend (`src/gtk.rs`, port of
 # `src/apprt/gtk/**`). OFF by default (R5): the macOS/embedded build never
 # enables it, so it stays byte-behavior-identical. The module itself is gated

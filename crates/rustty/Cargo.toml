@@ -36,8 +36,14 @@ path = "src/main.rs"
 # On Linux/FreeBSD a build WITHOUT `gtk` is refused by a `compile_error!` in
 # `main_rustty.rs` (parity S44-F5; CORRECTION: this used to say
 # "`--no-default-features` yields the headless / deferred-leaf build").
-default = ["gtk", "wayland", "x11"]
-gtk = ["rustty-apprt/gtk", "rustty-cli/gtk", "dep:allocator-api2"]
+default = ["gtk", "wayland", "x11", "simd"]
+# `-Dsimd` (`build/Config.zig:238-249`, N420): "Build with SIMD-accelerated
+# code paths.", default true off wasm. Threaded to every app crate that reads it
+# (their workspace edges set `default-features = false`), so the reference CI's
+# `zig build test -Dsimd=false` is `--no-default-features --features
+# gtk,wayland,x11` here: no SIMD path is compiled and no highway/simdutf linked.
+simd = ["rustty-core/simd", "rustty-apprt/simd", "rustty-cli/simd"]
+gtk =["rustty-apprt/gtk", "rustty-cli/gtk", "dep:allocator-api2"]
 # Windowing-protocol arms of the GTK apprt's `winproto` union, passed through to
 # rustty-apprt. Both imply `gtk` and are DEFAULT-ON (F-007). CORRECTION
 # (S65-F6, 2026-09-23): a feature now only ALLOWS its arm. rustty-apprt's

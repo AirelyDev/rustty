@@ -47,6 +47,14 @@ fn main() {
         return;
     }
 
+    // `-Dsimd=false` (N420): `SharedDeps.zig:437` `if (self.config.simd) try
+    // addSimd(...)` — with the option off the reference compiles none of the
+    // SIMD C++ and links neither highway nor simdutf (both are optional deps
+    // behind this crate's `simd` feature, so their `DEP_*_INCLUDE` are unset).
+    if std::env::var_os("CARGO_FEATURE_SIMD").is_none() {
+        return;
+    }
+
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let cbits = manifest_dir.join("cbits");
 

@@ -22,6 +22,13 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[features]
+# `-Dsimd` (N420): default-on, threaded to `rustty-cli` (whose workspace edge
+# sets `default-features = false`), so the generators link the same SIMD-on
+# app crates they did before the option became a feature.
+default = ["simd"]
+simd = ["rustty-cli/simd"]
+
 [dependencies]
 rustty-config = { workspace = true }
 rustty-cli = { workspace = true }

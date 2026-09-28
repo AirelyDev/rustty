@@ -6,10 +6,10 @@
 // freestanding wasm), so the value passed to `codepoint_width_lane` is not
 // consulted there — the scalar `rustty_unicode` lane below is always taken
 // (the reference's `simd = false` lane; `Config.zig` forces it on wasm32).
-const SIMD: bool = true;
+const SIMD: bool = crate::SIMD;
 
 // vt.cpp — gated OFF on `wasm32` (no C++ kernel on freestanding wasm).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "simd", not(target_arch = "wasm32")))]
 extern "C" {
     fn rustty_simd_codepoint_width(cp: u32) -> i8;
 }
@@ -29,7 +29,7 @@ pub fn codepointWidth(cp: u32) -> i8 {
 #[inline(always)]
 fn codepoint_width_lane<const USE_SIMD: bool>(cp: u32) -> i8 {
     // if (comptime options.simd) return ghostty_simd_codepoint_width(cp);
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(feature = "simd", not(target_arch = "wasm32")))]
     if USE_SIMD {
         // PERF(port) (R10 reshape): the C++ kernel's OWN first statement is
         //   `if (input <= 0xFF) return 1;`  (cbits/simd/codepoint_width.cpp,
@@ -130,12 +130,11 @@ mod tests {
     /// PERF(port) guard for the ASCII early-out hoist in `codepointWidth`:
     /// the wrapper must agree with the raw kernel on every scalar (the hoisted
     /// predicate is the kernel's own first statement).
+    // (N420: the kernel exists only with the `simd` feature, which the cfg
+    // below names; the `if !SIMD { return; }` that stood here is gone, R14 §3.)
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(feature = "simd", not(target_arch = "wasm32")))]
     fn codepointWidth_matches_kernel() {
-        if !super::SIMD {
-            return;
-        }
         for cp in 0..=0x10_FFFFu32 {
             assert_eq!(
                 super::codepointWidth(cp),
