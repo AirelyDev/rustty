@@ -310,11 +310,11 @@ fn trim_right<'a>(input: &'a [u8], cutset: &[u8]) -> &'a [u8] {
 #[cfg(not(windows))]
 fn is_flatpak() -> bool {
     // If we're not on Linux then we'll make this comptime false.
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     {
         false
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         std::fs::metadata("/.flatpak-info").is_ok()
     }
@@ -356,7 +356,7 @@ mod tests {
     //     --lib passwd::tests::<name> -- --ignored --exact --test-threads=1
 
     /// The fds of this process that are a pty master or slave, by number.
-    #[cfg(all(target_os = "linux", feature = "flatpak"))]
+    #[cfg(all(any(target_os = "linux", target_os = "android"), feature = "flatpak"))]
     fn pty_fds() -> std::collections::BTreeMap<i32, std::path::PathBuf> {
         let mut out = std::collections::BTreeMap::new();
         for ent in std::fs::read_dir("/proc/self/fd").expect("read /proc/self/fd") {
@@ -375,7 +375,7 @@ mod tests {
         out
     }
 
-    #[cfg(all(target_os = "linux", feature = "flatpak"))]
+    #[cfg(all(any(target_os = "linux", target_os = "android"), feature = "flatpak"))]
     fn require_flatpak_sandbox(test: &str) {
         assert!(
             is_flatpak(),
@@ -393,7 +393,7 @@ mod tests {
     /// `name` is set, so `name == None` proves the host path is the one that
     /// returned. The pty it opened is closed.
     #[test]
-    #[cfg(all(target_os = "linux", feature = "flatpak"))]
+    #[cfg(all(any(target_os = "linux", target_os = "android"), feature = "flatpak"))]
     #[ignore = "needs a Flatpak sandbox with --talk-name=org.freedesktop.Flatpak (R14)"]
     fn flatpak_get_reads_the_host_entry() {
         require_flatpak_sandbox("flatpak_get_reads_the_host_entry");
@@ -416,7 +416,7 @@ mod tests {
     /// pty fds. The reference's `defer pty.deinit()` closes only the master, so
     /// its early return leaks the slave (UD320).
     #[test]
-    #[cfg(all(target_os = "linux", feature = "flatpak"))]
+    #[cfg(all(any(target_os = "linux", target_os = "android"), feature = "flatpak"))]
     #[ignore = "needs a Flatpak sandbox WITHOUT org.freedesktop.Flatpak access (R14)"]
     fn flatpak_spawn_failure_returns_the_host_command_error_and_closes_the_pty() {
         require_flatpak_sandbox(

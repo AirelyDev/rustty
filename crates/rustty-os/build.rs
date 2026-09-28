@@ -19,9 +19,14 @@ use std::path::PathBuf;
 
 fn main() {
     // `pty.c` guards `#else -> #error "unsupported platform"`; compile it only
-    // on the platforms the reference supports (FreeBSD/Linux/macOS).
+    // on the platforms the reference supports (FreeBSD/Linux/macOS). Android
+    // defines `__linux__` (Zig's `os.tag == .linux` with an Android abi), so
+    // the Linux arm covers it.
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    let supported = matches!(target_os.as_str(), "macos" | "linux" | "freebsd");
+    let supported = matches!(
+        target_os.as_str(),
+        "macos" | "linux" | "android" | "freebsd"
+    );
 
     if supported {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -61,7 +66,7 @@ fn main() {
     // `_g_bus_get_sync` — which nothing noticed, because nothing ever enabled
     // the feature until the packaging manifests started passing it.
     if env::var_os("CARGO_FEATURE_FLATPAK").is_some()
-        && matches!(target_os.as_str(), "linux" | "freebsd")
+        && matches!(target_os.as_str(), "linux" | "android" | "freebsd")
     {
         // `pkg-config` rather than bare `-lgio-2.0`: the reference goes through
         // `linkSystemLibrary`, which consults pkg-config for the include and

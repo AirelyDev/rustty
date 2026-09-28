@@ -30,7 +30,7 @@ const HOST_NAME_MAX: usize = {
     {
         72
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         64
     }
@@ -40,7 +40,8 @@ const HOST_NAME_MAX: usize = {
         target_os = "tvos",
         target_os = "watchos",
         target_os = "visionos",
-        target_os = "linux"
+        target_os = "linux",
+        target_os = "android"
     )))]
     {
         255

@@ -31,6 +31,7 @@ pub fn pipe() -> std::io::Result<[fd_t; 2]> {
         // file descriptors either way, preserving the documented behavior.
         #[cfg(any(
             target_os = "linux",
+            target_os = "android",
             target_os = "freebsd",
             target_os = "netbsd",
             target_os = "dragonfly",
@@ -46,6 +47,7 @@ pub fn pipe() -> std::io::Result<[fd_t; 2]> {
         }
         #[cfg(not(any(
             target_os = "linux",
+            target_os = "android",
             target_os = "freebsd",
             target_os = "netbsd",
             target_os = "dragonfly",
@@ -85,6 +87,7 @@ pub fn pipe() -> std::io::Result<[fd_t; 2]> {
     not(windows),
     not(any(
         target_os = "linux",
+        target_os = "android",
         target_os = "freebsd",
         target_os = "netbsd",
         target_os = "dragonfly",
@@ -101,6 +104,7 @@ struct FdOps {
     not(windows),
     not(any(
         target_os = "linux",
+        target_os = "android",
         target_os = "freebsd",
         target_os = "netbsd",
         target_os = "dragonfly",
@@ -142,6 +146,7 @@ const LIBC_FD_OPS: FdOps = FdOps {
     not(windows),
     not(any(
         target_os = "linux",
+        target_os = "android",
         target_os = "freebsd",
         target_os = "netbsd",
         target_os = "dragonfly",
@@ -174,6 +179,7 @@ fn pipe_cloexec_fallback(ops: &FdOps) -> std::io::Result<[fd_t; 2]> {
     not(windows),
     not(any(
         target_os = "linux",
+        target_os = "android",
         target_os = "freebsd",
         target_os = "netbsd",
         target_os = "dragonfly",

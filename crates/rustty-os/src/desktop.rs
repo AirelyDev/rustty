@@ -68,7 +68,7 @@ pub fn launchedFromDesktop() -> bool {
     // the desktop file. Pid comparing catches the scenario where
     // another terminal was launched from a desktop file and then launches
     // rustty and rustty inherits the env.
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
     {
         // PORT NOTE (P3-W7 T3 / area-E `E15`):
         // `global.environ().getPosix("GIO_LAUNCHED_DESKTOP_FILE_PID")`.
@@ -106,6 +106,7 @@ pub fn launchedFromDesktop() -> bool {
     #[cfg(not(any(
         target_os = "macos",
         target_os = "linux",
+        target_os = "android",
         target_os = "freebsd",
         windows,
         target_os = "ios"
@@ -141,7 +142,7 @@ pub enum DesktopEnvironment {
 // `std::env::set_var` `unsafe` for exactly this reason.
 #[allow(non_snake_case)]
 #[cfg_attr(
-    not(any(target_os = "linux", target_os = "freebsd")),
+    not(any(target_os = "linux", target_os = "android", target_os = "freebsd")),
     allow(unused_variables)
 )]
 pub fn desktopEnvironment(environ_map: &rustty_global::EnvMap) -> DesktopEnvironment {
@@ -153,7 +154,7 @@ pub fn desktopEnvironment(environ_map: &rustty_global::EnvMap) -> DesktopEnviron
     {
         DesktopEnvironment::Windows
     }
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
     {
         // PORT NOTE: `if (@inComptime()) @compileError("Checking for the desktop
         // environment on Linux/BSD must be done at runtime.");` — Rust has no
@@ -188,6 +189,7 @@ pub fn desktopEnvironment(environ_map: &rustty_global::EnvMap) -> DesktopEnviron
         target_os = "macos",
         windows,
         target_os = "linux",
+        target_os = "android",
         target_os = "freebsd"
     )))]
     {
@@ -201,7 +203,7 @@ pub fn desktopEnvironment(environ_map: &rustty_global::EnvMap) -> DesktopEnviron
 // after `e8525c0fd`/`f8e13f31e`.
 
 // `std.ascii.eqlIgnoreCase`.
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
 fn eql_ignore_case(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len()
         && a.iter()
@@ -245,7 +247,7 @@ mod tests {
                 desktopEnvironment(&environ_map)
             );
         }
-        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
         {
             {
                 let mut environ_map = EnvMap::new();
@@ -286,6 +288,7 @@ mod tests {
             target_os = "macos",
             windows,
             target_os = "linux",
+            target_os = "android",
             target_os = "freebsd"
         )))]
         {

@@ -492,7 +492,7 @@ mod tests {
     // columns against the reference's 593 (macOS, test build).
     #[cfg(any(
         all(target_os = "macos", target_arch = "aarch64"),
-        all(target_os = "linux", target_arch = "aarch64")
+        all(any(target_os = "linux", target_os = "android"), target_arch = "aarch64")
     ))]
     struct RefGeometry {
         grapheme_bytes: u32,
@@ -553,7 +553,7 @@ mod tests {
         },
     ];
 
-    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    #[cfg(all(any(target_os = "linux", target_os = "android"), target_arch = "aarch64"))]
     const REF_GEOMETRY: [RefGeometry; 2] = [
         RefGeometry {
             grapheme_bytes: 512,
@@ -603,7 +603,7 @@ mod tests {
 
     #[cfg(any(
         all(target_os = "macos", target_arch = "aarch64"),
-        all(target_os = "linux", target_arch = "aarch64")
+        all(any(target_os = "linux", target_os = "android"), target_arch = "aarch64")
     ))]
     #[test]
     fn page_geometry_matches_the_reference() {

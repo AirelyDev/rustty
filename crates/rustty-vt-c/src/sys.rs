@@ -969,7 +969,7 @@ pub(crate) mod tests {
     // is one datagram, so it can count the writes; a parent/child split keeps
     // the redirection away from the other tests' stderr.
     #[test]
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "android"))]
     #[cfg_attr(miri, ignore)] // spawns a child process and redirects fd 2
     fn log_stderr_production_sink_writes_each_fitting_line_once_to_fd_2() {
         const CHILD: &str = "RUSTTY_VTC_LOG_STDERR_SINK_CHILD";
@@ -996,7 +996,7 @@ pub(crate) mod tests {
         );
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "android"))]
     fn log_stderr_sink_child() {
         use std::ffi::{c_int, c_void};
         use std::os::unix::io::AsRawFd;
@@ -1019,11 +1019,11 @@ pub(crate) mod tests {
         const SO_SNDBUF: c_int = 0x1001;
         #[cfg(target_os = "macos")]
         const SO_RCVBUF: c_int = 0x1002;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         const SOL_SOCKET: c_int = 1;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         const SO_SNDBUF: c_int = 7;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         const SO_RCVBUF: c_int = 8;
 
         let (tx, rx) = UnixDatagram::pair().unwrap();

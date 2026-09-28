@@ -10,7 +10,7 @@
 
 #[allow(non_snake_case)]
 pub fn getKernelInfo() -> Option<Vec<u8>> {
-    if cfg!(not(target_os = "linux")) {
+    if cfg!(not(any(target_os = "linux", target_os = "android"))) {
         return None;
     }
     let path = "/proc/sys/kernel/osrelease";
@@ -70,7 +70,10 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore)] // reads /proc/sys/kernel/osrelease (real OS file)
-    #[cfg_attr(not(target_os = "linux"), ignore = "reads /proc: Linux only (R14)")]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "android")),
+        ignore = "reads /proc: Linux only (R14)"
+    )]
     fn read_proc_sys_kernel_osrelease() {
         let kernel_info = getKernelInfo().unwrap();
 

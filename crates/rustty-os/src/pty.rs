@@ -463,7 +463,7 @@ impl PosixPty {
     /// `null` if there was an error getting the information or the information
     /// is not available on a particular platform.
     pub fn getForegroundPid(&mut self) -> Option<u64> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             let mut pgrp: i32 = 0;
             let rc = unsafe { libc::tcgetpgrp(self.master) };
@@ -475,7 +475,7 @@ impl PosixPty {
             }
             Some(rc as u64)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
         {
             let rc = unsafe { libc::tcgetpgrp(self.master) };
             if rc < 0 {
@@ -517,7 +517,7 @@ impl PosixPty {
                 None
             }
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             let rc = unsafe {
                 libc::ptsname_r(
@@ -533,7 +533,7 @@ impl PosixPty {
             self.tty_name = Some(len);
             std::ffi::CStr::from_bytes_with_nul(&self.tty_name_buf[..len + 1]).ok()
         }
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
         {
             None
         }
@@ -882,17 +882,27 @@ mod tests {
         // prefix per platform. The independent expected prefixes come from the OS
         // contract (POSIX `/dev/...`; Linux `/dev/pts/...`), not from the code
         // under test.
-        #[cfg(any(target_os = "freebsd", target_os = "linux", target_os = "macos"))]
+        #[cfg(any(
+            target_os = "freebsd",
+            target_os = "linux",
+            target_os = "android",
+            target_os = "macos"
+        ))]
         {
             let name_bytes = pty.getTtyName().unwrap().to_bytes().to_vec();
             #[cfg(target_os = "freebsd")]
             assert!(name_bytes.starts_with(b"/dev/"));
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "android"))]
             assert!(name_bytes.starts_with(b"/dev/pts/"));
             #[cfg(target_os = "macos")]
             assert!(name_bytes.starts_with(b"/dev/"));
         }
-        #[cfg(not(any(target_os = "freebsd", target_os = "linux", target_os = "macos")))]
+        #[cfg(not(any(
+            target_os = "freebsd",
+            target_os = "linux",
+            target_os = "android",
+            target_os = "macos"
+        )))]
         assert!(pty.getTtyName().is_none());
 
         pty.deinit();
