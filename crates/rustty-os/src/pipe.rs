@@ -223,6 +223,10 @@ mod fallback_tests {
     /// S112-F6: a failing `F_SETFD` closes BOTH new descriptors (the
     /// reference's `errdefer`) and returns the error.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-os, parity tail C-1): `fcntl(F_SETFD)` is not implemented by Miri; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn failing_setfd_closes_both_descriptors() {
         let ops = FdOps {
             pipe: recording_pipe,
@@ -245,6 +249,10 @@ mod fallback_tests {
 
     /// The success path sets `FD_CLOEXEC` on both ends and closes nothing.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-os, parity tail C-1): `fcntl(F_SETFD)` is not implemented by Miri; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn fallback_sets_cloexec_on_both_and_closes_nothing() {
         let ops = FdOps {
             pipe: recording_pipe,

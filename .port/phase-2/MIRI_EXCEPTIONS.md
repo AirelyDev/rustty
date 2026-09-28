@@ -2620,3 +2620,37 @@ rest of each crate stays in the lane (counts below, from the lane re-run).
 `rustty-bench`'s `log_site_census::every_reference_diagnostic_is_live_at_its_level_and_scope` is NOT
 excepted: it re-collapsed a whole source file per expected entry and ran past the bound; it now
 collapses each file once and passes under Miri in 232 s.
+
+### `rustty-os` (lane `--lib`: 77 passed, 45 ignored), `rustty-core` (58 passed, 14 ignored)
+
+| crate | test | what Miri cannot do |
+|---|---|---|
+| `rustty-core` | `renderer_seam::compression_tests::change_config_restarts_the_pass_only_on_disabled_to_enabled` | the harness's `Thread::init` opens a real xev event loop, whose `kqueue` Miri cannot call, and the pass is driven by that loop |
+| `rustty-core` | `renderer_seam::compression_tests::compression_idle_pass_compresses_scrollback` | the harness's `Thread::init` opens a real xev event loop, whose `kqueue` Miri cannot call, and the pass is driven by that loop |
+| `rustty-core` | `renderer_seam::compression_tests::compression_is_inert_when_the_option_is_disabled` | the harness's `Thread::init` opens a real xev event loop, whose `kqueue` Miri cannot call, and the pass is driven by that loop |
+| `rustty-core` | `surface::r13_window_size_overflow_tests::a_click_repeat_interval_above_u32_nanoseconds_is_widened_not_trapped` | `Config::finalize` calls the foreign function `getppid`, which Miri cannot execute |
+| `rustty-core` | `surface::r13_window_size_overflow_tests::an_oversized_window_padding_saturates_and_leaves_a_one_cell_grid` | `Config::finalize` calls the foreign function `getppid`, which Miri cannot execute |
+| `rustty-core` | `surface::r13_window_size_overflow_tests::initial_size_px_overflow_takes_the_skip_path` | `Config::finalize` calls the foreign function `getppid`, which Miri cannot execute |
+| `rustty-core` | `surface::r13_window_size_overflow_tests::initial_size_px_with_a_nan_content_scale_takes_the_skip_path` | `Config::finalize` calls the foreign function `getppid`, which Miri cannot execute |
+| `rustty-core` | `surface::r13_window_size_overflow_tests::size_limit_min_overflow_skips_the_action` | `Config::finalize` calls the foreign function `getppid`, which Miri cannot execute |
+| `rustty-core` | `surface_occlusion_callback_dedups_and_reports` | calls the foreign function `CFStringCreateWithBytes`, which Miri cannot execute |
+| `rustty-os` | `cf_release_thread::tests::a_clean_run_emits_the_three_debug_lines_in_the_reference_order` | calls the foreign function `kqueue`, which Miri cannot execute |
+| `rustty-os` | `file::tests::alloc_tmp_dir_keeps_the_root_directory` | `stat` is forbidden under Miri isolation |
+| `rustty-os` | `locale::tests::preferred_languages_are_bounded_by_the_fixed_buffer_and_nul` | calls the foreign function `_libintl_locale_name_canonicalize`, which Miri cannot execute |
+| `rustty-os` | `locale::tests::the_nslocale_class_lookup_resolves` | calls the foreign function `objc_getClass`, which Miri cannot execute |
+| `rustty-os` | `open::open_thread_tests::open_thread_reaps_an_opener_that_writes_stderr` | `open` is forbidden under Miri isolation |
+| `rustty-os` | `open::open_thread_tests::open_thread_spawn_failure_is_an_error` | calls the foreign function `posix_spawnattr_init`, which Miri cannot execute |
+| `rustty-os` | `pipe::fallback_tests::failing_setfd_closes_both_descriptors` | `fcntl(F_SETFD)` is not implemented by Miri |
+| `rustty-os` | `pipe::fallback_tests::fallback_sets_cloexec_on_both_and_closes_nothing` | `fcntl(F_SETFD)` is not implemented by Miri |
+| `rustty-os` | `resourcesdir::tests::candidate_longer_than_max_path_is_no_space_left` | `stat` is forbidden under Miri isolation |
+| `rustty-os` | `resourcesdir::tests::non_utf8_resources_dir_variable_is_used_raw` | `stat` is forbidden under Miri isolation |
+| `rustty-os` | `resourcesdir::tests::walk_finds_the_share_tree_above_the_executable` | `lstat` is forbidden under Miri isolation |
+| `rustty-os` | `systemd::tests::comm_check_reads_16_bytes_and_has_two_failure_arms` | `lstat` is forbidden under Miri isolation |
+
+The three `rustty-core` `renderer_seam::compression_tests` were the tests the ci run killed after an
+hour. The hour is their setup (2,000 lines streamed through a real terminal under debug
+assertions), but shrinking it would not make them Miri-tractable: the harness then calls
+`Thread::init`, which opens a real xev loop (`xev::Loop::init` -> `kqueue`, `renderer_seam.rs`
+`Thread::init`), and the pass under test is driven by that loop's timer. So they are excepted as
+impossible, not as slow. The scheduler's own logic has no `unsafe` beyond the loop and the terminal;
+the terminal's compression paths are covered by `rustty-vt`'s Miri-passing compression tests.

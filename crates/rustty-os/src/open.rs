@@ -372,6 +372,10 @@ mod open_thread_tests {
     /// thread `open` spawns, so the stderr loop ended and `wait` was reached.
     /// Only that thread waits on the child, so the pid going away proves it.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-os, parity tail C-1): `open` is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn open_thread_reaps_an_opener_that_writes_stderr() {
         let child = std::process::Command::new("/bin/sh")
             .args(["-c", "printf 'one\\ntwo\\n' >&2"])
@@ -392,6 +396,10 @@ mod open_thread_tests {
     /// S112-F7: a reaper thread that cannot be created is an error, not a
     /// panic. No stack as large as half the address space can be mapped.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-os, parity tail C-1): calls the foreign function `posix_spawnattr_init`, which Miri cannot execute; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn open_thread_spawn_failure_is_an_error() {
         let child = std::process::Command::new("/usr/bin/true")
             .stderr(std::process::Stdio::piped())

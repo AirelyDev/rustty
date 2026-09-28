@@ -373,6 +373,10 @@ impl TestSurface {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-core, parity tail C-1): calls the foreign function `CFStringCreateWithBytes`, which Miri cannot execute; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+)]
 fn surface_occlusion_callback_dedups_and_reports() {
     // REBUILD SENTINEL: verified to fire when tripped (see the lane report).
     assert_eq!(2 + 2, 4, "REBUILD SENTINEL");

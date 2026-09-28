@@ -679,6 +679,10 @@ mod tests {
     /// launch; this is the control against that.)
     #[test]
     #[cfg(target_os = "macos")]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-os, parity tail C-1): calls the foreign function `objc_getClass`, which Miri cannot execute; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn the_nslocale_class_lookup_resolves() {
         assert!(objc2::runtime::AnyClass::get(c"NSLocale").is_some());
         assert!(objc2::runtime::AnyClass::get(c"NSLocaleTypoGuard").is_none());
@@ -689,6 +693,10 @@ mod tests {
     /// does not fit the 255-byte `cstring` buffer is skipped.
     #[test]
     #[cfg(target_os = "macos")]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-os, parity tail C-1): calls the foreign function `_libintl_locale_name_canonicalize`, which Miri cannot execute; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn preferred_languages_are_bounded_by_the_fixed_buffer_and_nul() {
         use super::{cstring_255, joinPreferredLanguages, NoSpaceLeft};
         let langs = |v: &[Option<&str>]| {

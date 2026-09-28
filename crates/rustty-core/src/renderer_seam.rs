@@ -2671,6 +2671,10 @@ mod compression_tests {
     /// contract: the idle pass runs to completion (`step` returned `null`, which
     /// is why `loop.run(.until_done)` returned at all) and it compressed pages.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-core, parity tail C-1): the harness's `Thread::init` opens a real xev event loop, whose `kqueue` Miri cannot call, and the pass is driven by that loop; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn compression_idle_pass_compresses_scrollback() {
         assert!(
             rustty_vt::compression_enabled(),
@@ -2719,6 +2723,10 @@ mod compression_tests {
     ///
     /// PORTS: oracle 0fb89f4ff — the `wake`/`step` config guards.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-core, parity tail C-1): the harness's `Thread::init` opens a real xev event loop, whose `kqueue` Miri cannot call, and the pass is driven by that loop; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn compression_is_inert_when_the_option_is_disabled() {
         let h = Harness::build(false);
 
@@ -2752,6 +2760,10 @@ mod compression_tests {
     ///
     /// PORTS: oracle 0fb89f4ff `changeConfig` (:513-518).
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-core, parity tail C-1): the harness's `Thread::init` opens a real xev event loop, whose `kqueue` Miri cannot call, and the pass is driven by that loop; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn change_config_restarts_the_pass_only_on_disabled_to_enabled() {
         fn derived(scrollback_compression: bool) -> thread::DerivedConfig {
             // (PORT NOTE `aee7bf347`: `custom_shader_animation` moved to the
