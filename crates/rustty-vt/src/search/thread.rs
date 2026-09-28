@@ -76,9 +76,11 @@ use std::sync::Mutex;
 
 // const log = std.log.scoped(.search_thread);
 //
-// PORT NOTE: the reference `log.debug`/`log.warn` calls are diagnostics on
-// non-fatal paths; we mirror them with `eprintln!` behind the same message
-// strings (the convention used elsewhere in this crate, e.g. search/screen.rs).
+// PORT NOTE: the reference `log.debug`/`log.warn` calls go through the `log`
+// facade with this scope as the target (`log::debug!(target: LOG_SCOPE, ...)`),
+// the crate's convention (e.g. `stream_terminal.rs`), so they reach the
+// installed backend (`rustty_core::logging` in the app) like `logFn` (N14).
+const LOG_SCOPE: &str = "search_thread";
 
 // TODO: Some stuff that could be improved:
 // - pause the refresh timer when the terminal isn't focused
@@ -279,7 +281,7 @@ impl Thread {
         // };
         if let Err(err) = self.thread_main_() {
             // In the future, we should expose this on the thread struct.
-            eprintln!("warning(search_thread): search thread err={:?}", err);
+            log::warn!(target: LOG_SCOPE, "search thread err={:?}", err);
         }
     }
 
@@ -313,16 +315,10 @@ impl Thread {
                 Ok(()) => {
                     // PORT NOTE: `QosClass` does not derive `Debug`; format the
                     // raw discriminant (the reference prints the enum tag).
-                    eprintln!(
-                        "debug(search_thread): thread QoS class set class={}",
-                        class as u32
-                    );
+                    log::debug!(target: LOG_SCOPE, "thread QoS class set class={}", class as u32);
                 }
                 Err(err) => {
-                    eprintln!(
-                        "warning(search_thread): error setting QoS class err={:?}",
-                        err
-                    );
+                    log::warn!(target: LOG_SCOPE, "error setting QoS class err={:?}", err);
                 }
             }
         }
@@ -353,7 +349,7 @@ impl Thread {
 
         // Run
         // log.debug("starting search thread", .{});
-        eprintln!("debug(search_thread): starting search thread");
+        log::debug!(target: LOG_SCOPE, "starting search thread");
         // defer {
         //     log.debug("starting search thread shutdown", .{});
         //     // Send the quit message
@@ -368,7 +364,7 @@ impl Thread {
         let result = self.thread_main_loop();
 
         // -- begin deferred shutdown block --
-        eprintln!("debug(search_thread): starting search thread shutdown");
+        log::debug!(target: LOG_SCOPE, "starting search thread shutdown");
         // Send the quit message
         if let Some(cb) = self.opts.event_cb {
             cb(Event::Quit, self.opts.event_userdata);
@@ -393,9 +389,10 @@ impl Thread {
                 //     log.debug("mailbox message ignored during shutdown={}", .{message});
                 // }
                 while let Some(message) = self.mailbox.pop() {
-                    eprintln!(
-                        "debug(search_thread): mailbox message ignored during shutdown={:?}",
-                        message
+                    log::debug!(
+                        target: LOG_SCOPE,
+                        "mailbox message ignored during shutdown={:?}",
+                        message,
                     );
                 }
 
@@ -549,7 +546,7 @@ impl Thread {
         // while (self.mailbox.pop()) |message| {
         while let Some(message) = self.mailbox.pop() {
             // log.debug("mailbox message={}", .{message});
-            eprintln!("debug(search_thread): mailbox message={:?}", message);
+            log::debug!(target: LOG_SCOPE, "mailbox message={:?}", message);
             // switch (message) {
             match message {
                 // .change_needle => |v| {
@@ -603,9 +600,10 @@ impl Thread {
     // fn changeNeedle(self: *Thread, needle: []const u8) !void {
     fn change_needle(&mut self, needle: &[u8]) -> Result<(), DrainError> {
         // log.debug("changing search needle to '{s}'", .{needle});
-        eprintln!(
-            "debug(search_thread): changing search needle to '{}'",
-            String::from_utf8_lossy(needle)
+        log::debug!(
+            target: LOG_SCOPE,
+            "changing search needle to '{}'",
+            String::from_utf8_lossy(needle),
         );
 
         // Stop the previous search
@@ -728,7 +726,7 @@ impl Thread {
         // if (total != state.total) {
         if Some(total) != state.total {
             // log.debug("notifying total matches={}", .{total});
-            eprintln!("debug(search_thread): notifying total matches={}", total);
+            log::debug!(target: LOG_SCOPE, "notifying total matches={}", total);
             // state.total = total;
             state.total = Some(total);
             // cb(.{ .total_matches = total }, ud);
@@ -749,19 +747,17 @@ impl Thread {
                 let matches = match s.viewport_matches() {
                     Ok(m) => m,
                     Err(err) => {
-                        eprintln!(
-                            "warning(search_thread): error collecting viewport matches err={:?}",
-                            err
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "error collecting viewport matches err={:?}",
+                            err,
                         );
                         break 'viewport;
                     }
                 };
 
                 // log.debug("notifying viewport matches len={}", .{matches.len});
-                eprintln!(
-                    "debug(search_thread): notifying viewport matches len={}",
-                    matches.len()
-                );
+                log::debug!(target: LOG_SCOPE, "notifying viewport matches len={}", matches.len());
                 // cb(.{ .viewport_matches = matches }, ud);
                 cb(Event::ViewportMatches(matches), ud);
             }
@@ -821,10 +817,7 @@ impl Thread {
                 });
 
                 // log.debug("notifying selection updated idx={}", .{m.idx});
-                eprintln!(
-                    "debug(search_thread): notifying selection updated idx={}",
-                    m_idx
-                );
+                log::debug!(target: LOG_SCOPE, "notifying selection updated idx={}", m_idx);
                 // cb(
                 //     .{ .selected_match = .{
                 //         .idx = m.idx,
@@ -843,7 +836,7 @@ impl Thread {
         // } else if (state.selected != null) {
         } else if state.selected.is_some() {
             // log.debug("notifying selection cleared", .{});
-            eprintln!("debug(search_thread): notifying selection cleared");
+            log::debug!(target: LOG_SCOPE, "notifying selection cleared");
             // state.selected = null;
             state.selected = None;
             // cb(
@@ -857,7 +850,7 @@ impl Thread {
         // if (!state.complete and s.isComplete()) {
         if !state.complete && s.is_complete() {
             // log.debug("notifying search complete", .{});
-            eprintln!("debug(search_thread): notifying search complete");
+            log::debug!(target: LOG_SCOPE, "notifying search complete");
             // state.complete = true;
             state.complete = true;
             // cb(.complete, ud);
@@ -926,10 +919,7 @@ impl Thread {
         // self.drainMailbox() catch |err|
         //     log.warn("error draining mailbox err={}", .{err});
         if let Err(err) = self.drain_mailbox() {
-            eprintln!(
-                "warning(search_thread): error draining mailbox err={:?}",
-                err
-            );
+            log::warn!(target: LOG_SCOPE, "error draining mailbox err={:?}", err);
         }
 
         // return .rearm;
@@ -1007,7 +997,7 @@ impl Thread {
 struct ThreadExitedLog;
 impl Drop for ThreadExitedLog {
     fn drop(&mut self) {
-        eprintln!("debug(search_thread): search thread exited");
+        log::debug!(target: LOG_SCOPE, "search thread exited");
     }
 }
 
@@ -1922,6 +1912,63 @@ mod tests {
 
         // defer thread.deinit(); defer t.deinit(alloc); defer ud.deinit();
         drop(vp);
+        thread.deinit();
+        t.deinit(alloc);
+        drop(ud);
+    }
+
+    // N14: the thread's diagnostics go through the `log` facade under the
+    // reference's scope (`std.log.scoped(.search_thread)`), not a direct
+    // stderr print, so they reach whatever backend is installed (in the app,
+    // `rustty_core::logging`, which honours `Logging.stderr` and macOS unified
+    // logging). Drains the mailbox on the test's own thread so the capture
+    // (which admits only its owning thread) sees the records.
+    #[test]
+    fn drain_mailbox_logs_through_the_log_facade() {
+        let alloc = Allocator;
+        let mutex = rustty_zigstd::thread::Mutex::new();
+        let mut t: Terminal = Terminal::init(alloc, terminal_opts(20, 2, 10_000)).unwrap();
+        let ud: Box<TestUserData> = Box::new(TestUserData::new());
+        let ud_ptr: *const TestUserData = &*ud;
+        let mut thread: Thread = Thread::init(
+            alloc,
+            Options {
+                mutex: &mutex as *const rustty_zigstd::thread::Mutex,
+                terminal: &mut t as *mut Terminal,
+                event_cb: Some(TestUserData::callback),
+                event_userdata: ud_ptr as *mut core::ffi::c_void,
+            },
+        )
+        .unwrap();
+
+        let cap = crate::log_capture::start();
+        let _ = thread.mailbox.push(
+            Message::ChangeNeedle(WriteReq::init(b"world")),
+            rustty_datastruct::blocking_queue::Timeout::Forever,
+        );
+        thread.drain_mailbox().unwrap();
+        let records = cap.messages();
+        drop(cap);
+
+        // Thread.zig:259 `log.debug("mailbox message={}", .{message});`
+        assert!(
+            records
+                .iter()
+                .any(|(level, target, msg)| *level == log::Level::Debug
+                    && target == "search_thread"
+                    && msg.starts_with("mailbox message=")),
+            "no search_thread mailbox record captured: {records:?}"
+        );
+        // Thread.zig:286 `log.debug("changing search needle to '{s}'", .{needle});`
+        assert!(
+            records.contains(&(
+                log::Level::Debug,
+                "search_thread".to_string(),
+                "changing search needle to 'world'".to_string()
+            )),
+            "no search_thread needle record captured: {records:?}"
+        );
+
         thread.deinit();
         t.deinit(alloc);
         drop(ud);

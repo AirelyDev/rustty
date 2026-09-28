@@ -110,8 +110,9 @@ pub fn post_fork(info: &PostForkInfo, pid: Option<u32>) -> Result<(), PostForkEr
             GtkSingleInstance::Detect => {
                 // `log.err("gtk-single-instance is set to detect which should be
                 //  impossible!", .{}); return error.PostForkError;` (`:47-48`).
-                eprintln!(
-                    "error({LOG_SCOPE}): gtk-single-instance is set to detect which should be impossible!"
+                log::error!(
+                    target: LOG_SCOPE,
+                    "gtk-single-instance is set to detect which should be impossible!",
                 );
                 return Err(PostForkError);
             }
@@ -121,7 +122,7 @@ pub fn post_fork(info: &PostForkInfo, pid: Option<u32>) -> Result<(), PostForkEr
     // `const pid: u32 = @intCast(cmd.pid orelse { log.err("PID of child not
     //  known!", .{}); return error.PostForkError; });` (`:53-56`).
     let Some(pid) = pid else {
-        eprintln!("error({LOG_SCOPE}): PID of child not known!");
+        log::error!(target: LOG_SCOPE, "PID of child not known!");
         return Err(PostForkError);
     };
 
@@ -137,8 +138,9 @@ pub fn post_fork(info: &PostForkInfo, pid: Option<u32>) -> Result<(), PostForkEr
 
     // `log.debug("beginning transition to transient systemd scope {s}", ...)`
     // (`:61`).
-    eprintln!(
-        "debug({LOG_SCOPE}): beginning transition to transient systemd scope {expected_display}"
+    log::debug!(
+        target: LOG_SCOPE,
+        "beginning transition to transient systemd scope {expected_display}",
     );
 
     // `const app = Application.default();` (`:63`).
@@ -150,7 +152,7 @@ pub fn post_fork(info: &PostForkInfo, pid: Option<u32>) -> Result<(), PostForkEr
         if info.linux_cgroup_hard_fail {
             // `log.err("dbus connection required for cgroup isolation,
             //  exiting", .{}); return error.PostForkError;` (`:67-68`).
-            eprintln!("error({LOG_SCOPE}): dbus connection required for cgroup isolation, exiting");
+            log::error!(target: LOG_SCOPE, "dbus connection required for cgroup isolation, exiting");
             return Err(PostForkError);
         }
         // `return;` (`:71`).
@@ -170,15 +172,17 @@ pub fn post_fork(info: &PostForkInfo, pid: Option<u32>) -> Result<(), PostForkEr
         if info.linux_cgroup_hard_fail {
             // `log.err("unable to create transient systemd scope {s}: {t}", ...);
             //  return error.PostForkError;` (`:80-81`).
-            eprintln!(
-                "error({LOG_SCOPE}): unable to create transient systemd scope {expected_display}: {err}"
+            log::error!(
+                target: LOG_SCOPE,
+                "unable to create transient systemd scope {expected_display}: {err}",
             );
             return Err(PostForkError);
         }
         // `log.warn("unable to create transient systemd scope {s}: {t}", ...);
         //  return;` (`:84-85`).
-        eprintln!(
-            "warning({LOG_SCOPE}): unable to create transient systemd scope {expected_display}: {err}"
+        log::warn!(
+            target: LOG_SCOPE,
+            "unable to create transient systemd scope {expected_display}: {err}",
         );
         return Ok(());
     }
@@ -200,15 +204,17 @@ pub fn post_fork(info: &PostForkInfo, pid: Option<u32>) -> Result<(), PostForkEr
             if info.linux_cgroup_hard_fail {
                 // `log.err("transition to new transient systemd scope {s} took
                 //  too long", ...); return error.PostForkError;` (`:94-95`).
-                eprintln!(
-                    "error({LOG_SCOPE}): transition to new transient systemd scope {expected_display} took too long"
+                log::error!(
+                    target: LOG_SCOPE,
+                    "transition to new transient systemd scope {expected_display} took too long",
                 );
                 return Err(PostForkError);
             }
             // `log.warn("transition to transient systemd scope {s} took too
             //  long", ...); break :loop;` (`:97-98`).
-            eprintln!(
-                "warning({LOG_SCOPE}): transition to transient systemd scope {expected_display} took too long"
+            log::warn!(
+                target: LOG_SCOPE,
+                "transition to transient systemd scope {expected_display} took too long",
             );
             break 'outer;
         }
@@ -241,8 +247,9 @@ pub fn post_fork(info: &PostForkInfo, pid: Option<u32>) -> Result<(), PostForkEr
             if current_cgroup == expected_cgroup {
                 // `log.debug("transition to transient systemd scope {s}
                 //  complete", ...)` (`:113`).
-                eprintln!(
-                    "debug({LOG_SCOPE}): transition to transient systemd scope {expected_display} complete"
+                log::debug!(
+                    target: LOG_SCOPE,
+                    "transition to transient systemd scope {expected_display} complete",
                 );
                 break 'outer;
             }
@@ -294,8 +301,12 @@ mod tests {
 
     /// `.single-instance` + `detect` is the "should be impossible" hard error
     /// (`:47-48`).
+    ///
+    /// N14: the `log.err` goes through the `log` facade under the reference's
+    /// scope (`std.log.scoped(.gtk_post_fork)`), not a direct stderr print.
     #[test]
     fn single_instance_detect_is_error() {
+        let cap = crate::log_capture::start();
         assert_eq!(
             post_fork(
                 &info(LinuxCgroup::SingleInstance, GtkSingleInstance::Detect),
@@ -303,15 +314,34 @@ mod tests {
             ),
             Err(PostForkError)
         );
+        assert_eq!(
+            cap.messages(),
+            vec![(
+                log::Level::Error,
+                "gtk_post_fork".to_string(),
+                "gtk-single-instance is set to detect which should be impossible!".to_string()
+            )]
+        );
     }
 
     /// An unknown child pid is a hard error (`:53-56`). Checked BEFORE the
     /// `Application::default()` lookup, so it too is headless-safe.
     #[test]
     fn unknown_pid_is_error() {
+        let cap = crate::log_capture::start();
         assert_eq!(
             post_fork(&info(LinuxCgroup::Always, GtkSingleInstance::True), None),
             Err(PostForkError)
+        );
+        // N14: through the facade, `post_fork.zig:54` `log.err("PID of child
+        // not known!", .{})`.
+        assert_eq!(
+            cap.messages(),
+            vec![(
+                log::Level::Error,
+                "gtk_post_fork".to_string(),
+                "PID of child not known!".to_string()
+            )]
         );
     }
 }

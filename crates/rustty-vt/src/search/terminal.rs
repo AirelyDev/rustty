@@ -32,9 +32,10 @@ use crate::terminal::Terminal;
 
 // const log = std.log.scoped(.search_terminal);
 //
-// PORT NOTE: the reference `log.warn` calls are diagnostics on non-fatal
-// paths; we mirror them with `eprintln!` behind the same message strings (the
-// convention used across this crate, e.g. search/screen.rs, search/thread.rs).
+// PORT NOTE: the reference `log.warn` calls go through the `log` facade with
+// this scope as the target (`log::warn!(target: LOG_SCOPE, ...)`), the crate's
+// convention (e.g. `stream_terminal.rs`, search/thread.rs) (N14).
+const LOG_SCOPE: &str = "search_terminal";
 
 /// Searches for a needle within an entire Terminal, orchestrating a
 /// ScreenSearch per live screen plus a viewport search for the active
@@ -472,10 +473,11 @@ impl TerminalSearch {
                 //     .{ entry.key, err },
                 // ),
                 Err(super::screen::TickError::OutOfMemory) => {
-                    eprintln!(
-                        "warning(search_terminal): error ticking screen search key={:?} err={:?}",
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "error ticking screen search key={:?} err={:?}",
                         entry_key,
-                        super::screen::TickError::OutOfMemory
+                        super::screen::TickError::OutOfMemory,
                     );
                 }
 
@@ -630,9 +632,11 @@ impl TerminalSearch {
                     //     continue;
                     // },
                     Err(err) => {
-                        eprintln!(
-                            "warning(search_terminal): error initializing screen search for key={:?} err={:?}",
-                            entry_key, err
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "error initializing screen search for key={:?} err={:?}",
+                            entry_key,
+                            err,
                         );
                         continue;
                     }
@@ -660,9 +664,11 @@ impl TerminalSearch {
                 //     ),
                 // };
                 if let Err(err) = screen_search.reload_active() {
-                    eprintln!(
-                        "warning(search_terminal): error reloading active area for screen key={:?} err={:?}",
-                        active_key, err
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "error reloading active area for screen key={:?} err={:?}",
+                        active_key,
+                        err,
                     );
                 }
             }
@@ -686,10 +692,7 @@ impl TerminalSearch {
                 }
             }
             Err(err) => {
-                eprintln!(
-                    "warning(search_terminal): error updating viewport search err={:?}",
-                    err
-                );
+                log::warn!(target: LOG_SCOPE, "error updating viewport search err={:?}", err);
             }
         }
 
@@ -711,9 +714,11 @@ impl TerminalSearch {
                 //     ),
                 // };
                 if let Err(err) = entry.feed() {
-                    eprintln!(
-                        "warning(search_terminal): error feeding screen search key={:?} err={:?}",
-                        entry_key, err
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "error feeding screen search key={:?} err={:?}",
+                        entry_key,
+                        err,
                     );
                 }
             }

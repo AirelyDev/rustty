@@ -38,6 +38,10 @@ use libadwaita::subclass::prelude::*;
 use super::imgui_widget::{ImguiWidget, ImguiWidgetImpl};
 use super::surface::{CoreSurface, Surface};
 
+/// The scoped log name — `inspector_widget.zig:13`
+/// `std.log.scoped(.gtk_ghostty_inspector_widget)`, R2-renamed.
+const LOG_SCOPE: &str = "gtk_rustty_inspector_widget";
+
 mod imp {
     use super::*;
 
@@ -294,7 +298,7 @@ impl InspectorWidget {
         };
         // SAFETY: live core surface.
         if let Err(err) = unsafe { (*core_surface).activateInspector() } {
-            eprintln!("warning(gtk): failed to activate inspector err={err:?}");
+            log::warn!(target: LOG_SCOPE, "failed to activate inspector err={err:?}");
             return;
         }
 
