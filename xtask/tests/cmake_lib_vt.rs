@@ -47,6 +47,13 @@ fn cmake_pivot_panics_only_when_required() {
 /// Configure into a fresh directory, returning it, or `None` without cmake
 /// (after the strict-mode pivot).
 fn configure(tag: &str) -> Option<PathBuf> {
+    configure_with(tag, &[])
+}
+
+/// Serializes the tests that run `cmake --build` (see its users).
+static CMAKE_BUILD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn configure_with(tag: &str, extra: &[&str]) -> Option<PathBuf> {
     if let Err(e) = Command::new("cmake").arg("--version").output() {
         require_cmake_or_skip(tag, &e);
         eprintln!("skipping the `{tag}` cmake test: cmake is not on PATH ({e})");
@@ -60,6 +67,7 @@ fn configure(tag: &str) -> Option<PathBuf> {
         .arg("-B")
         .arg(&dir)
         .arg("-DCMAKE_BUILD_TYPE=Release")
+        .args(extra)
         .output()
         .expect("spawn cmake");
     assert!(
@@ -124,6 +132,9 @@ fn static_pc_needs_no_libintl_and_no_absolute_paths() {
 /// `.pc` links `-l<name>`. Builds and installs into a temporary prefix.
 #[test]
 fn install_layout_is_versioned_like_the_reference() {
+    // One cmake build at a time: they share the workspace `target/`, and the
+    // lib-version test below builds it with a different version (N424).
+    let _serial = CMAKE_BUILD.lock().unwrap_or_else(|e| e.into_inner());
     let Some(dir) = configure("install") else {
         return;
     };
@@ -264,6 +275,100 @@ fn install_layout_is_versioned_like_the_reference() {
         assert_eq!(field(&pcs, "Libs:"), "${libdir}/librustty-vt.a");
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+/// `-Dlib-version-string` (N424, `Config.zig:343-353`): the CMake option
+/// versions everything the reference derives from `lib_version` — the
+/// `.pc` `Version:` (the full string, `GhosttyLibVt.zig:532`) and the
+/// versioned install names and dylib version (MAJOR.MINOR.PATCH,
+/// `GhosttyLibVt.zig:396-436`). The library's own C-API version follows the
+/// same value through `RUSTTY_LIB_VERSION_STRING` (asserted in rustty-vt's
+/// `options` tests). Builds and installs into a temporary prefix.
+#[cfg(not(windows))]
+#[test]
+fn lib_version_string_versions_the_library() {
+    const V: &str = "2.3.4-rc.1+b5";
+    let _serial = CMAKE_BUILD.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(dir) = configure_with("libversion", &[&format!("-DRUSTTY_LIB_VERSION_STRING={V}")])
+    else {
+        return;
+    };
+    let pc = std::fs::read_to_string(dir.join("librustty-vt.pc")).unwrap();
+    assert_eq!(field(&pc, "Version:"), V);
+    let pcs = std::fs::read_to_string(dir.join("librustty-vt-static.pc")).unwrap();
+    assert_eq!(field(&pcs, "Version:"), V);
+
+    let prefix = dir.join("prefix");
+    for args in [
+        vec!["--build".into(), dir.display().to_string()],
+        vec![
+            "--install".into(),
+            dir.display().to_string(),
+            "--prefix".into(),
+            prefix.display().to_string(),
+        ],
+    ] {
+        let out = Command::new("cmake").args(&args).output().unwrap();
+        assert!(
+            out.status.success(),
+            "cmake {args:?} failed:\n{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let lib = ["lib", "lib64"]
+        .iter()
+        .map(|d| prefix.join(d))
+        .find(|d| d.join("librustty-vt.a").is_file())
+        .expect("an installed lib dir");
+    let (real, so) = if cfg!(target_os = "macos") {
+        ("librustty-vt.2.3.4.dylib", "librustty-vt.2.dylib")
+    } else {
+        ("librustty-vt.so.2.3.4", "librustty-vt.so.2")
+    };
+    assert!(lib.join(real).is_file(), "{real} installed");
+    assert_eq!(std::fs::read_link(lib.join(so)).unwrap(), Path::new(real));
+    if cfg!(target_os = "macos") {
+        let out = Command::new("otool")
+            .arg("-L")
+            .arg(lib.join(real))
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        let id = text.lines().nth(1).unwrap_or_default().trim().to_string();
+        assert!(id.contains("current version 2.3.4"), "{text}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A non-semver `RUSTTY_LIB_VERSION_STRING` fails the configure, as
+/// `std.SemanticVersion.parse` fails `zig build` (N424).
+#[test]
+fn lib_version_string_must_be_a_semantic_version() {
+    if let Err(e) = Command::new("cmake").arg("--version").output() {
+        require_cmake_or_skip("libversion-bad", &e);
+        eprintln!("skipping the `libversion-bad` cmake test: cmake is not on PATH ({e})");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("xtask-cmake-lib-vt-bad-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    for bad in ["2.3", "02.3.4", "2.3.4-", "v2.3.4"] {
+        let out = Command::new("cmake")
+            .arg("-S")
+            .arg(workspace_root())
+            .arg("-B")
+            .arg(&dir)
+            .arg(format!("-DRUSTTY_LIB_VERSION_STRING={bad}"))
+            .output()
+            .expect("spawn cmake");
+        assert!(!out.status.success(), "{bad} was accepted");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("is not a semantic version"),
+            "{bad}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// S64-F5, Windows: the `.pc` links `-lrustty-vt`, so the installed import

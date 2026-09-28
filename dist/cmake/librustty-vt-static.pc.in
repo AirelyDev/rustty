@@ -7,7 +7,7 @@ libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
 Name: librustty-vt-static
 URL: https://github.com/AirelyDev/rustty
 Description: Rustty VT library (static)
-Version: @PROJECT_VERSION@
+Version: @RUSTTY_VT_VERSION_STRING@
 Cflags: -I${includedir} -DRUSTTY_STATIC
 Libs: ${libdir}/@RUSTTY_VT_STATIC_INSTALL_NAME@
 Libs.private: @RUSTTY_VT_PC_LIBS_PRIVATE@

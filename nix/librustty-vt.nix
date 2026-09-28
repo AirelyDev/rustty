@@ -118,6 +118,9 @@ in
     cmakeFlags = [
       (lib.cmakeFeature "CMAKE_BUILD_TYPE" cmakeBuildType)
       (lib.cmakeBool "RUSTTY_VT_SIMD" simd)
+      # The reference passes `-Dlib-version-string=${finalAttrs.version}`
+      # (nix/libghostty-vt.nix:79); the CMake option is its port (N424).
+      (lib.cmakeFeature "RUSTTY_LIB_VERSION_STRING" finalAttrs.version)
     ];
 
     # CMakeLists.txt shells out to `cargo build` with the workspace root as its

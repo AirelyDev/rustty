@@ -71,6 +71,33 @@ project(rustty-vt VERSION 0.1.0 LANGUAGES C)
 
 set(RUSTTY_CARGO_BUILD_FLAGS "" CACHE STRING "Additional flags to pass to cargo build")
 
+# `-Dlib-version-string` (`src/build/Config.zig:343-353`, N424): "A specific
+# version string to use for the build of libghostty-vt. ... This must be a
+# semantic version." Empty = the built-in library version (PROJECT_VERSION,
+# which is `rustty_identity::VT_LIB_VERSION`). It versions everything the
+# reference derives from `lib_version`: the library's own reported version
+# (passed to cargo as RUSTTY_LIB_VERSION_STRING), the versioned install names
+# and soname (MAJOR.MINOR.PATCH, `GhosttyLibVt.zig:396-436`) and the
+# pkg-config `Version:` (the full string, `GhosttyLibVt.zig:532`).
+set(RUSTTY_LIB_VERSION_STRING "" CACHE STRING
+    "A specific semantic version for librustty-vt (default: the built-in version)")
+if(RUSTTY_LIB_VERSION_STRING)
+    # `std.SemanticVersion.parse`: MAJOR.MINOR.PATCH, no leading zeroes, then
+    # an optional -PRE and/or +BUILD.
+    if(NOT RUSTTY_LIB_VERSION_STRING MATCHES
+       "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$")
+        message(FATAL_ERROR
+            "RUSTTY_LIB_VERSION_STRING='${RUSTTY_LIB_VERSION_STRING}' is not a semantic version")
+    endif()
+    set(RUSTTY_VT_VERSION_MAJOR "${CMAKE_MATCH_1}")
+    set(RUSTTY_VT_VERSION "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.${CMAKE_MATCH_3}")
+    set(RUSTTY_VT_VERSION_STRING "${RUSTTY_LIB_VERSION_STRING}")
+else()
+    set(RUSTTY_VT_VERSION_MAJOR "${PROJECT_VERSION_MAJOR}")
+    set(RUSTTY_VT_VERSION "${PROJECT_VERSION}")
+    set(RUSTTY_VT_VERSION_STRING "${PROJECT_VERSION}")
+endif()
+
 # Build librustty-vt with SIMD acceleration. Defaults ON to match upstream
 # Ghostty's semantics (its `simd` build option defaults true for every non-WASM
 # target); rustty-vt-c's underlying cargo feature is now default-ON too, so OFF
@@ -142,7 +169,7 @@ else()
     # The versioned soname Zig gives libghostty-vt (S64-F5). This build asks
     # cargo for it (RUSTTY_VT_SONAME, see crates/rustty-vt-c/build.rs) and
     # links the name to the cargo artifact in the build tree below.
-    set(RUSTTY_VT_SONAME "librustty-vt.so.${PROJECT_VERSION_MAJOR}")
+    set(RUSTTY_VT_SONAME "librustty-vt.so.${RUSTTY_VT_VERSION_MAJOR}")
 endif()
 
 set(RUSTTY_VT_SHARED_LIBRARY "${RUSTTY_OUT_DIR}/${RUSTTY_VT_REALNAME}")
@@ -153,8 +180,8 @@ set(RUSTTY_VT_SHARED_LIBRARY "${RUSTTY_OUT_DIR}/${RUSTTY_VT_REALNAME}")
 # `rustty-vt-static.lib` for the static archive. The build tree keeps cargo's
 # `librustty_vt_c.*` names, which the examples link directly.
 if(APPLE)
-    set(RUSTTY_VT_INSTALL_REALNAME "librustty-vt.${PROJECT_VERSION}.dylib")
-    set(RUSTTY_VT_INSTALL_SONAME "librustty-vt.${PROJECT_VERSION_MAJOR}.dylib")
+    set(RUSTTY_VT_INSTALL_REALNAME "librustty-vt.${RUSTTY_VT_VERSION}.dylib")
+    set(RUSTTY_VT_INSTALL_SONAME "librustty-vt.${RUSTTY_VT_VERSION_MAJOR}.dylib")
     set(RUSTTY_VT_INSTALL_LINKNAME "librustty-vt.dylib")
 elseif(WIN32)
     # A DLL cannot be renamed after linking: its import library names it. So
@@ -167,7 +194,7 @@ elseif(WIN32)
     set(RUSTTY_VT_INSTALL_LINKNAME "${RUSTTY_VT_REALNAME}")
     set(RUSTTY_VT_INSTALL_IMPLIB "rustty-vt.lib")
 else()
-    set(RUSTTY_VT_INSTALL_REALNAME "librustty-vt.so.${PROJECT_VERSION}")
+    set(RUSTTY_VT_INSTALL_REALNAME "librustty-vt.so.${RUSTTY_VT_VERSION}")
     set(RUSTTY_VT_INSTALL_SONAME "${RUSTTY_VT_SONAME}")
     set(RUSTTY_VT_INSTALL_LINKNAME "librustty-vt.so")
 endif()
@@ -235,6 +262,15 @@ else()
     # that name next to it at run time.
     set(_RUSTTY_SONAME_LINK_CMD COMMAND "${CMAKE_COMMAND}" -E create_symlink
         "${RUSTTY_VT_REALNAME}" "${RUSTTY_OUT_DIR}/${RUSTTY_VT_SONAME}")
+endif()
+# `-Dlib-version-string` reaches the library's own version (the C API's
+# build-info version, `crates/rustty-vt/src/options.rs`) through the variable
+# of the same name (N424).
+if(RUSTTY_LIB_VERSION_STRING)
+    if(NOT _RUSTTY_CARGO_ENV)
+        set(_RUSTTY_CARGO_ENV "${CMAKE_COMMAND}" -E env)
+    endif()
+    list(APPEND _RUSTTY_CARGO_ENV "RUSTTY_LIB_VERSION_STRING=${RUSTTY_LIB_VERSION_STRING}")
 endif()
 add_custom_target(cargo_build_lib_vt ALL
     COMMAND ${_RUSTTY_CARGO_ENV} "${CARGO_EXECUTABLE}" build -p rustty-vt-c ${_RUSTTY_PROFILE_FLAG} ${_RUSTTY_FEATURE_FLAGS} ${RUSTTY_CARGO_BUILD_FLAGS}
@@ -357,7 +393,7 @@ configure_package_config_file(
 
 write_basic_package_version_file(
     "${CMAKE_CURRENT_BINARY_DIR}/rustty-vt-config-version.cmake"
-    VERSION "${PROJECT_VERSION}"
+    VERSION "${RUSTTY_VT_VERSION}"
     COMPATIBILITY SameMajorVersion
 )
 
@@ -552,6 +588,11 @@ function(rustty_vt_add_target)
         unset(_env)
         unset(_t_us)
         unset(_t_up)
+    endif()
+    # `-Dlib-version-string` (N424), as for the native build above.
+    if(RUSTTY_LIB_VERSION_STRING)
+        set(_cargo_cmd "${CMAKE_COMMAND}" -E env
+            "RUSTTY_LIB_VERSION_STRING=${RUSTTY_LIB_VERSION_STRING}" ${_cargo_cmd})
     endif()
 
     # An always-running target, for the same reason as cargo_build_lib_vt
