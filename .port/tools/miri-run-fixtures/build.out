@@ -1,0 +1,11 @@
+   Compiling mirifix v0.0.0 ($FIXTURE)
+error[E0308]: mismatched types
+  --> src/lib.rs:34:21
+   |
+34 | fn broken() -> u8 { "x" }
+   |                --   ^^^ expected `u8`, found `&str`
+   |                |
+   |                expected `u8` because of return type
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `mirifix` (lib) due to 1 previous error

@@ -2,10 +2,11 @@
 # Check if a given commit SHA has a corresponding tip release.
 #
 # PORTS: ghostty `.github/scripts/ghostty-tip` (nushell: one `http head` against
-# the tip artifact host, exit 0 if it resolves, exit 1 otherwise). rustty has no
-# nushell in its toolchain — ghostty gets `nu` from its Nix dev shell, and
-# rustty has no Nix flake (`.port/phase-3/NON_PORTS.md` §G13) — so this is the
-# same single HEAD probe in bash + curl.
+# the tip artifact host, exit 0 if it resolves, exit 1 otherwise). This is the
+# same single HEAD probe in bash + curl. It was written in bash when rustty had
+# no Nix flake and so no `nu`; both exist now (`flake.nix`, `nushell` in
+# `nix/devShell.nix`), and the script stays bash so it runs without the dev
+# shell (NEW-FINDINGS N379).
 #
 # Like the oracle this does NOT validate that the SHA is a real commit of this
 # repository, only that a tip release exists for it.

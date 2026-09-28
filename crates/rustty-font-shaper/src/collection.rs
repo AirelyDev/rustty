@@ -123,6 +123,17 @@ pub enum Error {
     Face(FaceError),
 }
 
+/// `@errorName` (NEW-FINDINGS N121): the wrapped face error names itself (a Zig
+/// error union is flat); the other variants are the reference's names.
+impl rustty_zigstd::error_name::ErrorName for Error {
+    fn error_name(&self) -> std::borrow::Cow<'static, str> {
+        match self {
+            Error::Face(e) => e.error_name(),
+            other => rustty_zigstd::error_name::unit_variant_name(other),
+        }
+    }
+}
+
 impl From<FaceError> for Error {
     fn from(e: FaceError) -> Self {
         Error::Face(e)

@@ -1687,7 +1687,13 @@ where
             return xev::CallbackAction::Rearm;
         }
 
-        // const t = self_.?;  (non-null by construction)
+        // const t = self_.?;
+        //
+        // PORT NOTE (R7, NEW-FINDINGS N13): Zig's `.?` is a checked unwrap
+        // (a safe build panics "attempt to use null value"); `rustty-xev` hands
+        // userdata over as a raw pointer that is null for `()` userdata, so the
+        // check is kept as an assertion instead of an unchecked dereference.
+        assert!(!self_.is_null(), "attempt to use null value");
 
         // When we wake up, we check the mailbox. Mailbox producers should
         // wake up our thread after publishing.
@@ -1740,6 +1746,8 @@ where
 
         // Draw immediately
         // const t = self_.?;
+        // R7, NEW-FINDINGS N13: the checked unwrap, as above.
+        assert!(!self_.is_null(), "attempt to use null value");
         // t.drawFrame(true);
         Self::drawFrame(self_, true);
 
@@ -2129,6 +2137,8 @@ where
             return xev::CallbackAction::Rearm;
         }
         // self_.?.loop.stop();
+        // R7, NEW-FINDINGS N13: the checked unwrap, as above.
+        assert!(!self_.is_null(), "attempt to use null value");
         unsafe { (*self_).loop_.stop() };
         // return .disarm;
         xev::CallbackAction::Disarm
@@ -3251,6 +3261,42 @@ mod thread_diagnostics_tests {
         assert_eq!(
             "{ .search_selected_match = null }",
             MessageDbg(&M::SearchSelectedMatch(None)).to_string()
+        );
+    }
+
+    /// NEW-FINDINGS N13: `Thread.zig:496`/`:542`/`:729` unwrap `self_.?`, a
+    /// checked unwrap. A null userdata must fail loudly at the unwrap, not
+    /// dereference null further in. (R7: an invariant check, ported checked.)
+    #[test]
+    #[should_panic(expected = "attempt to use null value")]
+    fn wakeup_callback_null_userdata_panics_at_the_unwrap() {
+        Thread::<TestApp>::wakeupCallback(
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            Ok(()),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to use null value")]
+    fn draw_now_callback_null_userdata_panics_at_the_unwrap() {
+        Thread::<TestApp>::drawNowCallback(
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            Ok(()),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to use null value")]
+    fn stop_callback_null_userdata_panics_at_the_unwrap() {
+        Thread::<TestApp>::stopCallback(
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            Ok(()),
         );
     }
 }

@@ -1,0 +1,38 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+     Running unittests src/lib.rs ($FIXTURE/target/miri/aarch64-apple-darwin/debug/deps/mirifix-92ff8b2b41160c88)
+
+running 1 test
+test tests::use_after_free ... error: Undefined Behavior: memory access failed: alloc45833 has been freed, so this pointer is dangling
+  --> src/lib.rs:12:26
+   |
+12 |         let v = unsafe { *p };
+   |                          ^^ Undefined Behavior occurred here
+   |
+   = help: this indicates a bug in the program: it performed an invalid operation, and caused Undefined Behavior
+   = help: see https://doc.rust-lang.org/nightly/reference/behavior-considered-undefined.html for further information
+help: alloc45833 was allocated here:
+  --> src/lib.rs:9:17
+   |
+ 9 |         let b = Box::new(7i32);
+   |                 ^^^^^^^^^^^^^^
+help: alloc45833 was deallocated here:
+  --> src/lib.rs:11:9
+   |
+11 |         drop(b);
+   |         ^^^^^^^
+   = note: this is on thread `tests::use_after_free`
+   = note: stack backtrace:
+           0: tests::use_after_free
+               at src/lib.rs:12:26: 12:28
+           1: tests::use_after_free::{closure#0}
+               at src/lib.rs:8:24: 8:24
+
+note: some details are omitted, run with `MIRIFLAGS=-Zmiri-backtrace=full` for a verbose backtrace
+
+error: aborting due to 1 previous error
+
+error: test failed, to rerun pass `--lib`
+
+Caused by:
+  process didn't exit successfully: `$RUSTUP_HOME/toolchains/nightly-aarch64-apple-darwin/bin/cargo-miri runner $FIXTURE/target/miri/aarch64-apple-darwin/debug/deps/mirifix-92ff8b2b41160c88 --exact 'tests::use_after_free' --test-threads=1` (exit status: 1)
+note: test exited abnormally; to see the full output pass --no-capture to the harness.

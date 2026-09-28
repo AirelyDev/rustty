@@ -1300,10 +1300,14 @@ mod macos_impl {
         }
     }
     // `Metal::init_shaders` (via `Renderer::init_shaders`) returns
-    // `crate::metal::shaders::Error` (`MetalFailed`).
+    // `crate::metal::shaders::Error` (`MetalFailed`, or `OutOfMemory` from
+    // `createWithBytes`, N8).
     impl From<crate::metal::shaders::Error> for Error {
-        fn from(_: crate::metal::shaders::Error) -> Self {
-            Error::MetalFailed
+        fn from(e: crate::metal::shaders::Error) -> Self {
+            match e {
+                crate::metal::shaders::Error::MetalFailed => Error::MetalFailed,
+                crate::metal::shaders::Error::OutOfMemory => Error::OutOfMemory,
+            }
         }
     }
     // `font.Shaper.init` (`changeConfig`, and the deferred `Renderer::init`) fails

@@ -1,0 +1,38 @@
+// Source of the captured outputs in this directory (NEW-FINDINGS N31), run as
+// `MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly miri test -- --exact tests::<name> --test-threads=1`
+// with miri 0.1.0 (6f72b5dd5f 2026-07-22) on macOS arm64, 2026-09-28. `<name>.out` is test <name>;
+// `build.out` is `passes` with `fn broken() -> u8 { "x" }` appended to this file. Paths are
+// rewritten to $RUSTUP_HOME / $FIXTURE.
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn passes() {
+        assert_eq!(2, 1 + 1);
+    }
+    #[test]
+    fn use_after_free() {
+        let b = Box::new(7i32);
+        let p = &*b as *const i32;
+        drop(b);
+        let v = unsafe { *p };
+        assert_eq!(7, v);
+    }
+    #[test]
+    fn leaks() {
+        std::mem::forget(Box::new(5u64));
+    }
+    #[test]
+    fn exhausts() {
+        let layout = std::alloc::Layout::from_size_align(1usize << 62, 1).unwrap();
+        let p = unsafe { std::alloc::alloc(layout) };
+        assert!(!p.is_null());
+    }
+    #[test]
+    fn unsupported() {
+        let _ = std::process::Command::new("/usr/bin/true").status();
+    }
+    #[test]
+    fn fails() {
+        assert_eq!(3, 1 + 1, "an ordinary test failure");
+    }
+}

@@ -111,6 +111,14 @@ pub struct NoopLibrary;
 #[derive(Debug)]
 pub enum LibraryError {}
 
+/// `@errorName` (NEW-FINDINGS N121): uninhabited, like the reference's `error{}`.
+#[cfg(not(rustty_font_has_freetype))]
+impl rustty_zigstd::error_name::ErrorName for LibraryError {
+    fn error_name(&self) -> std::borrow::Cow<'static, str> {
+        match *self {}
+    }
+}
+
 impl NoopLibrary {
     /// Initialize the (noop) library.
     // PORT NOTE: `NoopLibrary.init`. Active on the backends without FreeType

@@ -170,6 +170,20 @@ mod fontconfig_impl {
         Collection(crate::collection::Error),
     }
 
+    /// `@errorName` (NEW-FINDINGS N121): wrapped errors name themselves (a
+    /// Zig error union is flat); the other variants are the reference's names.
+    impl rustty_zigstd::error_name::ErrorName for Error {
+        fn error_name(&self) -> std::borrow::Cow<'static, str> {
+            match self {
+                Error::Fc(e) => e.error_name(),
+                Error::Face(e) => e.error_name(),
+                Error::Collection(e) => e.error_name(),
+                #[allow(unreachable_patterns)]
+                other => rustty_zigstd::error_name::unit_variant_name(other),
+            }
+        }
+    }
+
     impl From<fc::Error> for Error {
         fn from(e: fc::Error) -> Self {
             Error::Fc(e)
@@ -485,6 +499,19 @@ mod wasm_noop {
     pub enum Error {
         Face(FaceError),
         Collection(crate::collection::Error),
+    }
+
+    /// `@errorName` (NEW-FINDINGS N121): wrapped errors name themselves (a
+    /// Zig error union is flat); the other variants are the reference's names.
+    impl rustty_zigstd::error_name::ErrorName for Error {
+        fn error_name(&self) -> std::borrow::Cow<'static, str> {
+            match self {
+                Error::Face(e) => e.error_name(),
+                Error::Collection(e) => e.error_name(),
+                #[allow(unreachable_patterns)]
+                other => rustty_zigstd::error_name::unit_variant_name(other),
+            }
+        }
     }
 
     impl From<FaceError> for Error {
@@ -953,6 +980,19 @@ mod coretext_impl {
         CodepointTooLarge,
         Face(FaceError),
         Collection(crate::collection::Error),
+    }
+
+    /// `@errorName` (NEW-FINDINGS N121): wrapped errors name themselves (a
+    /// Zig error union is flat); the other variants are the reference's names.
+    impl rustty_zigstd::error_name::ErrorName for Error {
+        fn error_name(&self) -> std::borrow::Cow<'static, str> {
+            match self {
+                Error::Face(e) => e.error_name(),
+                Error::Collection(e) => e.error_name(),
+                #[allow(unreachable_patterns)]
+                other => rustty_zigstd::error_name::unit_variant_name(other),
+            }
+        }
     }
 
     impl From<FaceError> for Error {
@@ -2325,6 +2365,19 @@ mod windows_impl {
         OutOfMemory,
         Face(FaceError),
         Collection(crate::collection::Error),
+    }
+
+    /// `@errorName` (NEW-FINDINGS N121): wrapped errors name themselves (a
+    /// Zig error union is flat); the other variants are the reference's names.
+    impl rustty_zigstd::error_name::ErrorName for Error {
+        fn error_name(&self) -> std::borrow::Cow<'static, str> {
+            match self {
+                Error::Face(e) => e.error_name(),
+                Error::Collection(e) => e.error_name(),
+                #[allow(unreachable_patterns)]
+                other => rustty_zigstd::error_name::unit_variant_name(other),
+            }
+        }
     }
 
     impl From<FaceError> for Error {

@@ -957,6 +957,29 @@ none of them — these three were invisible to every gate.
 All three arrive with `e8525c0fd` "Update to Zig 0.16.0", the same commit behind
 config's 4 remaining G3b misses and global's 31.
 
+## G15 — `test/fuzz-libghostty/`'s AFL++ packaging — superseded by cargo-fuzz (parity tail G-1, 2026-09-28, NEW-FINDINGS N379)
+
+The package's three harnesses (`src/fuzz_{osc,parser,stream}.zig`) and its allocator helper
+(`src/mem.zig`) are PORTED: `crates/rustty-vt/src/fuzz_harness.rs` (bodies, the per-input
+fixed-buffer allocator for osc, and the recorded stream difference) behind the libFuzzer shims in
+`crates/rustty-vt/fuzz/fuzz_targets/`, inventoried in `.port/phase-0/harness/FUZZ-INVENTORY.md`.
+The corpora (`corpus/{osc,parser,stream}-{initial,cmin}`) are mirrored byte for byte in
+`.port/phase-0/corpora/cvt/`, and G5 (`run_fuzz_smoke.sh`) seeds each harness from its `-cmin`
+tier as the reference's `run-<name>` step does. The rest of the package is AFL++/Zig machinery:
+
+| Reference file(s) at `20abdb50a` | Status | Rustty counterpart / reason |
+|---|---|---|
+| `build.zig`, `build.zig.zon` | N/A — replaced | `crates/rustty-vt/fuzz/Cargo.toml` (cargo-fuzz). The reference's `run-<name>` step (`afl-fuzz -i corpus/<name>-cmin`) is `cargo +nightly fuzz run fuzz_<name> <scratch> .port/phase-0/corpora/cvt/<name>-cmin` in G5 |
+| `pkg/afl++` (`afl.c`, its `build.zig{,.zon}`, `LICENSE`) | N/A — replaced | `libfuzzer-sys` (the fuzz crate's dependency). `afl.c` is the stdin-reading AFL++ driver around `zig_fuzz_test`; libFuzzer drives `fuzz_target!` in-process |
+| `replay-crashes.nu` | N/A — superseded | replays AFL++'s `afl-out/<fuzzer>/default/crashes/*` through the stdin binaries; cargo-fuzz writes crashes to `fuzz/artifacts/<target>/` and replays one with `cargo fuzz run <target> <artifact>` |
+| `corpus/sanitize-filenames.sh` | N/A — superseded | renames AFL++'s `id:...,sig:...` output files (colons are invalid on NTFS) before commit; libFuzzer names corpus and artifact files by SHA-1 hex, which has no colons, and the committed mirror already carries the sanitized names |
+| `.afl-tmin-temp-37266` | NOT PORTED — tool debris | a 59-byte temporary file `afl-tmin` left behind and the reference committed by accident; not part of any build or corpus |
+| `AGENTS.md`, `README.md` | N/A — superseded | the AFL++ workflow they document (`zig build run-<name>`, `afl-cmin`/`afl-tmin`/`afl-showmap` over stdin) does not exist here; FUZZ-INVENTORY.md and `run_fuzz_smoke.sh`'s header document the cargo-fuzz workflow |
+| `.gitignore` | PORTED (Cargo shape) | `crates/rustty-vt/fuzz/.gitignore` (`target/`, `corpus/`, `artifacts/`, `coverage/` for `.zig-cache/`, `zig-out/`, `afl-out/`, `corpus/**/.traces/`) |
+| `.gitattributes` | PORTED | the root `.gitattributes` marks `.port/phase-0/corpora/cvt/**` binary and the `*-cmin` tiers `linguist-generated`, as the reference marks its corpora |
+
+---
+
 ## A1 — `src/datastruct/segmented_list.zig` (NEW, 468 lines) — do NOT port as a file
 
 1. **Upstream.** Zig 0.16.0 removed `std.SegmentedList`, so upstream vendored it.

@@ -1,0 +1,31 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+     Running unittests src/lib.rs ($FIXTURE/target/miri/aarch64-apple-darwin/debug/deps/mirifix-92ff8b2b41160c88)
+
+running 1 test
+test tests::leaks ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.09s
+
+error: memory leaked: alloc45942 (Rust heap, size: 8, align: 8), allocated here:
+  --> src/lib.rs:17:26
+   |
+17 |         std::mem::forget(Box::new(5u64));
+   |                          ^^^^^^^^^^^^^^
+   |
+   = note: stack backtrace:
+           0: tests::leaks
+               at src/lib.rs:17:26: 17:40
+           1: tests::leaks::{closure#0}
+               at src/lib.rs:16:15: 16:15
+
+note: some details are omitted, run with `MIRIFLAGS=-Zmiri-backtrace=full` for a verbose backtrace
+
+note: set `MIRIFLAGS=-Zmiri-ignore-leaks` to disable this check
+
+error: aborting due to 1 previous error
+
+error: test failed, to rerun pass `--lib`
+
+Caused by:
+  process didn't exit successfully: `$RUSTUP_HOME/toolchains/nightly-aarch64-apple-darwin/bin/cargo-miri runner $FIXTURE/target/miri/aarch64-apple-darwin/debug/deps/mirifix-92ff8b2b41160c88 --exact 'tests::leaks' --test-threads=1` (exit status: 1)
+note: test exited abnormally; to see the full output pass --no-capture to the harness.

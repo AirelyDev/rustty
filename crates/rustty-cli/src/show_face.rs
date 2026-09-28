@@ -33,6 +33,7 @@ use rustty_font_shaper as font;
 use rustty_config::Config;
 
 use allocator_api2::alloc::Global;
+use rustty_zigstd::error_name::ZigError;
 use std::io::Write;
 
 // pub const Options = struct {
@@ -364,9 +365,12 @@ where
         let config = match Config::load() {
             Ok(config) => config,
             Err(err) => {
-                // PORT NOTE: the reference prints `{}` of the error (`error.<Name>`);
-                // this prints the port error's Debug. NEW-FINDINGS N121 (task T-C).
-                write!(stderr, "Unable to load config: {err:?}")?;
+                // `{}` of the `Config.load` error: `error.<Name>` (NEW-FINDINGS N121).
+                write!(
+                    stderr,
+                    "Unable to load config: {}",
+                    crate::zig_error::load_error(&err)
+                )?;
                 return Ok(1);
             }
         };
@@ -421,9 +425,12 @@ where
         let mut font_grid_set = match font::SharedGridSet::init(Global) {
             Ok(set) => set,
             Err(err) => {
-                // PORT NOTE: the reference prints `{}` of the error (`error.<Name>`);
-                // this prints the port error's Debug. NEW-FINDINGS N121 (task T-C).
-                write!(stderr, "Unable to initialize font grid set: {err:?}")?;
+                // `{}` of the `Library.init` error: `error.<Name>` (NEW-FINDINGS N121).
+                write!(
+                    stderr,
+                    "Unable to initialize font grid set: {}",
+                    ZigError(&err)
+                )?;
                 return Ok(1);
             }
         };
@@ -459,9 +466,8 @@ where
         let (font_grid_key, font_grid) = match font_grid_set.r#ref(&font_config, font_size) {
             Ok(pair) => pair,
             Err(err) => {
-                // PORT NOTE: the reference prints `{}` of the error (`error.<Name>`);
-                // this prints the port error's Debug. NEW-FINDINGS N121 (task T-C).
-                write!(stderr, "Unable to get font grid: {err:?}")?;
+                // `{}` of the `SharedGridSet.ref` error: `error.<Name>` (NEW-FINDINGS N121).
+                write!(stderr, "Unable to get font grid: {}", ZigError(&err))?;
                 return Ok(1);
             }
         };
@@ -576,9 +582,8 @@ fn lookup<SO: Write, SE: Write>(
             return Ok(None);
         }
         Err(err) => {
-            // PORT NOTE: the reference prints `{}` of the error (`error.<Name>`);
-            // this prints the port error's Debug. NEW-FINDINGS N121 (task T-C).
-            write!(stderr, "Unable to get face: {err:?}")?;
+            // `{}` of the `Collection.getFace` error: `error.<Name>` (NEW-FINDINGS N121).
+            write!(stderr, "Unable to get face: {}", ZigError(&err))?;
             return Ok(Some(1));
         }
     };
@@ -593,9 +598,9 @@ fn lookup<SO: Write, SE: Write>(
     let name = match unsafe { &*face }.name(&mut buf) {
         Ok(name) => name,
         Err(err) => {
-            // PORT NOTE: the reference prints `{}` of the error (`error.<Name>`);
-            // this prints the port error's Debug. NEW-FINDINGS N121 (task T-C).
-            write!(stderr, "Unable to get name of face: {err:?}")?;
+            // `{}` of the `Face.name` error: `error.<Name>` (`Allocator.Error`, so
+            // `error.OutOfMemory`; NEW-FINDINGS N121).
+            write!(stderr, "Unable to get name of face: {}", ZigError(&err))?;
             return Ok(Some(1));
         }
     };

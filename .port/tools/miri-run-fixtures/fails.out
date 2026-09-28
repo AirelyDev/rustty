@@ -1,0 +1,24 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+     Running unittests src/lib.rs ($FIXTURE/target/miri/aarch64-apple-darwin/debug/deps/mirifix-92ff8b2b41160c88)
+
+running 1 test
+test tests::fails ... FAILED
+
+failures:
+
+---- tests::fails stdout ----
+
+thread 'tests::fails' (68045) panicked at src/lib.rs:31:9:
+assertion `left == right` failed: an ordinary test failure
+  left: 3
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+note: in Miri, you may have to set `MIRIFLAGS=-Zmiri-env-forward=RUST_BACKTRACE` for the environment variable to have an effect
+
+
+failures:
+    tests::fails
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.12s
+
+error: test failed, to rerun pass `--lib`

@@ -1178,7 +1178,7 @@ impl<H: Handler> Stream<H> {
                         //     .{cp},
                         //     0x80,
                         // );
-                        if log_unsupported_once(&SEEN_UTF8_DECODED_C1, 0x80) {
+                        if log_unsupported_once(&SEEN_UTF8_DECODED_C1_SLICE, 0x80) {
                             log::warn!(
                                 target: LOG_SCOPE,
                                 "ignoring UTF-8-decoded C1 controls, first: 0x{cp:x}"
@@ -1883,7 +1883,7 @@ impl<H: Handler> Stream<H> {
                 //     .{c},
                 //     0x80,
                 // );
-                if log_unsupported_once(&SEEN_UTF8_DECODED_C1, 0x80) {
+                if log_unsupported_once(&SEEN_UTF8_DECODED_C1_CODEPOINT, 0x80) {
                     log::warn!(
                         target: LOG_SCOPE,
                         "ignoring UTF-8-decoded C1 controls, first: 0x{c:x}"
@@ -4630,23 +4630,20 @@ impl<H: Handler> Stream<H> {
 // `"unimplemented mode: {}"` sites, and the two `"unimplemented ESC action: {f}"`
 // sites. Rust has no per-instantiation static, so the port makes the table an
 // explicit `&'static UnsupportedOnceTable` argument and declares one static per
-// distinct reference tuple — NINE statics for TWELVE call sites, with those
+// distinct reference tuple — TEN statics for TWELVE call sites, with those
 // pairs deliberately sharing theirs.
 //
-// KNOWN DIVERGENCE, pre-existing, not introduced by task 14r-a (recorded
-// 2026-09-09 while restoring the emissions; NOT fixed here because it is a
-// behavioural change outside this row's scope): the port ALSO shares
-// `SEEN_UTF8_DECODED_C1` between the two
-// `"ignoring UTF-8-decoded C1 controls, first: 0x{x}"` sites, and the reference
-// does NOT. `stream.zig:734` passes `.{cp}` where `cp` is a `u32`
-// (`cp_buf: [4096]u32`, `stream.zig:671`); `stream.zig:1185` passes `.{c}` where
-// `c` is the `u21` parameter of `handleCodepoint`. Different `@TypeOf(args)`
-// means two separate Zig instantiations, so under the reference that message
-// can be emitted once per decode path; the port emits it once in total. Both
-// sites key on the literal `0x80`, so the effect is exactly one suppressed
-// warning per process. That is the reference's own granularity,
-// and it is observable: under the reference, setting then resetting the same
-// unimplemented mode logs ONCE, not twice.
+// The two `"ignoring UTF-8-decoded C1 controls, first: 0x{x}"` sites are NOT
+// such a pair: `stream.zig:734` passes `.{cp}` where `cp` is a `u32`
+// (`cp_buf: [4096]u32`, `stream.zig:671`) and `stream.zig:1185` passes `.{c}`
+// where `c` is the `u21` parameter of `handleCodepoint`. Different
+// `@TypeOf(args)` means two separate Zig instantiations, so each decode path
+// has its own table and the message can be emitted once per path. The port
+// gives each site its own static (`SEEN_UTF8_DECODED_C1_SLICE`,
+// `SEEN_UTF8_DECODED_C1_CODEPOINT`; NEW-FINDINGS N3, which found them sharing
+// one). Consequence of the per-tuple granularity that IS shared: under the
+// reference, setting then resetting the same unimplemented mode logs ONCE,
+// not twice.
 //
 // PORT NOTE (logging facade): the `log` facade IS wired now
 // (DECISION-logging.md §6/§6r/§6r2, call shape 3 for `rustty-vt`), so the
@@ -4792,12 +4789,13 @@ fn log_unsupported_once(table: &UnsupportedOnceTable, key: u16) -> bool {
     false
 }
 
-// The nine statics behind the twelve call sites, in the order they appear in
+// The ten statics behind the twelve call sites, in the order they appear in
 // `stream.zig`. `SEEN_UNIMPLEMENTED_MODE` and `SEEN_UNIMPLEMENTED_ESC_ACTION`
-// are each shared by two call sites exactly as Zig shares them.
-// `SEEN_UTF8_DECODED_C1` is also shared by two call sites, but Zig does NOT
-// share those — see the KNOWN DIVERGENCE note above.
-static SEEN_UTF8_DECODED_C1: UnsupportedOnceTable = UnsupportedOnceTable::new();
+// are each shared by two call sites exactly as Zig shares them. The two
+// UTF-8-decoded C1 sites are two Zig instantiations (`.{cp}` is `u32` at
+// `stream.zig:734`, `.{c}` is `u21` at `:1185`), so each has its own table.
+static SEEN_UTF8_DECODED_C1_SLICE: UnsupportedOnceTable = UnsupportedOnceTable::new();
+static SEEN_UTF8_DECODED_C1_CODEPOINT: UnsupportedOnceTable = UnsupportedOnceTable::new();
 static SEEN_INVALID_C0: UnsupportedOnceTable = UnsupportedOnceTable::new();
 static SEEN_INVALID_DEVICE_ATTRIBUTES: UnsupportedOnceTable = UnsupportedOnceTable::new();
 static SEEN_UNIMPLEMENTED_MODE: UnsupportedOnceTable = UnsupportedOnceTable::new();
@@ -5043,6 +5041,42 @@ mod tests {
             ],
             messages
         );
+    }
+
+    // NEW-FINDINGS N3: the two UTF-8-decoded C1 sites are two Zig
+    // `logUnsupportedOnce` instantiations (`.{cp}` is `u32` at `stream.zig:734`,
+    // `.{c}` is `u21` at `:1185`), so each has its own `Static.seen` table and
+    // each emits once. Both key on the literal 0x80, so each static can hold at
+    // most one claimed slot whatever other tests do: asserting that BOTH are
+    // claimed after driving both paths is order- and parallelism-independent.
+    // Were the two sites to share one table, the second path would claim
+    // nothing and its static would stay empty.
+    #[test]
+    fn utf8_decoded_c1_sites_have_separate_once_tables() {
+        struct H;
+        impl Handler for H {}
+
+        // The slice path (`nextSlice`'s SIMD decode loop, `stream.zig:734`).
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H));
+        s.next_slice("a\u{85}b".as_bytes());
+        assert_eq!(
+            1,
+            SEEN_UTF8_DECODED_C1_SLICE.claimed(),
+            "the slice path's C1 arm must claim its own dedup slot"
+        );
+
+        // The per-byte path (`next` -> `handleCodepoint`, `stream.zig:1185`).
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H));
+        for &b in "a\u{85}b".as_bytes() {
+            s.next(b);
+        }
+        assert_eq!(
+            1,
+            SEEN_UTF8_DECODED_C1_CODEPOINT.claimed(),
+            "the per-codepoint path's C1 arm must claim its own dedup slot"
+        );
+        assert!(!log_unsupported_once(&SEEN_UTF8_DECODED_C1_SLICE, 0x80));
+        assert!(!log_unsupported_once(&SEEN_UTF8_DECODED_C1_CODEPOINT, 0x80));
     }
 
     // ------------------------------------------------------------------

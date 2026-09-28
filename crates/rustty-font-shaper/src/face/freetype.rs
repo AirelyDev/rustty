@@ -96,6 +96,18 @@ pub enum Error {
     FontPathCantDecode,
 }
 
+/// `@errorName` (NEW-FINDINGS N121): a `freetype.Error` is flat in the
+/// reference's union, so it names itself; the other variants are the
+/// reference's names.
+impl rustty_zigstd::error_name::ErrorName for Error {
+    fn error_name(&self) -> std::borrow::Cow<'static, str> {
+        match self {
+            Error::Freetype(e) => e.error_name(),
+            other => rustty_zigstd::error_name::unit_variant_name(other),
+        }
+    }
+}
+
 impl From<ft::FtError> for Error {
     fn from(e: ft::FtError) -> Self {
         Error::Freetype(e)
