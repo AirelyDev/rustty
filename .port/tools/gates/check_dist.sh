@@ -44,19 +44,47 @@ command -v cargo >/dev/null 2>&1 || blocked "cargo not installed"
 command -v git   >/dev/null 2>&1 || blocked "git not installed (xtask dist uses git archive)"
 command -v tar   >/dev/null 2>&1 || blocked "tar not installed"
 
-VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$ROOT/Cargo.toml" | head -1)"
-[ -n "$VERSION" ] || red "could not read [workspace.package] version from Cargo.toml"
-TARBALL="$ROOT/dist/rustty-$VERSION.tar.gz"
-PREFIX="rustty-$VERSION"
+MANIFEST_VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$ROOT/Cargo.toml" | head -1)"
+[ -n "$MANIFEST_VERSION" ] || red "could not read [workspace.package] version from Cargo.toml"
+
+# The version the tarballs are named after is the FULL app version
+# (`GhosttyDist.zig:52-107` formats `cfg.version`; N424): `X.Y.Z` on a
+# `vX.Y.Z` tag, `X.Y.Z-<branch>+<short hash>` otherwise, or
+# RUSTTY_VERSION_STRING when set. So the tarball's name is taken from what
+# xtask reports writing, and then checked against the checkout.
+rm -f "$ROOT"/dist/rustty-*.tar.gz "$ROOT"/dist/librustty-vt-*.tar.gz
 
 echo "=== G-DIST 1/5 :: cargo run -p xtask -- dist ==="
-rm -f "$TARBALL"
-if ! cargo run -q -p xtask -- dist > /dev/null 2>&1; then
+if ! OUT="$(cargo run -q -p xtask -- dist 2>/dev/null)"; then
   cargo run -q -p xtask -- dist 2>&1 | tail -20 | sed 's/^/    /'
   red "xtask dist failed"
 fi
+TARBALL="$(printf '%s\n' "$OUT" | sed -n 's/^wrote //p')"
+[ -n "$TARBALL" ] || red "xtask dist printed no \`wrote <path>\` line"
 [ -f "$TARBALL" ] || red "xtask dist reported success but $TARBALL does not exist"
+PREFIX="$(basename "$TARBALL" .tar.gz)"
+VERSION="${PREFIX#rustty-}"
 echo "    ok      $(basename "$TARBALL") ($(( $(wc -c < "$TARBALL") / 1024 / 1024 )) MB)"
+
+# N424: the name, the prefix and VERSION carry the full version.
+SHIPPED_VERSION="$(tar xzf "$TARBALL" -O "$PREFIX/VERSION" 2>/dev/null)" \
+  || red "the tarball has no $PREFIX/VERSION"
+[ "$SHIPPED_VERSION" = "$VERSION" ] \
+  || red "VERSION says '$SHIPPED_VERSION' but the tarball is named for '$VERSION'"
+if [ -n "${RUSTTY_VERSION_STRING:-}" ]; then
+  [ "$VERSION" = "$RUSTTY_VERSION_STRING" ] \
+    || red "RUSTTY_VERSION_STRING=$RUSTTY_VERSION_STRING but the tarball is named for $VERSION"
+elif TAG="$(git describe --exact-match --tags 2>/dev/null)" && [ "$TAG" != "tip" ]; then
+  [ "$VERSION" = "$MANIFEST_VERSION" ] \
+    || red "HEAD is tagged $TAG: the tarball must be named for $MANIFEST_VERSION, not $VERSION"
+else
+  HASH="$(git -c log.showSignature=false log --pretty=format:%h -n 1)"
+  case "$VERSION" in
+    "$MANIFEST_VERSION"-*+"$HASH") ;;
+    *) red "untagged checkout: expected $MANIFEST_VERSION-<branch>+$HASH, got $VERSION" ;;
+  esac
+fi
+echo "    ok      named for the full version $VERSION (VERSION file agrees)"
 
 echo "=== G-DIST 2/5 :: tarball shape ==="
 LIST="$(mktemp)"; trap 'rm -f "$LIST"' EXIT
@@ -93,8 +121,8 @@ for d in .port docs/superpowers; do
 done
 
 echo "=== G-DIST 3/5 :: xtask dist-lib-vt (the VT-library-only tarball) ==="
+# Same full app version as the workspace tarball (`GhosttyDist.zig:22,56`).
 LIBVT="$ROOT/dist/librustty-vt-$VERSION.tar.gz"
-rm -f "$LIBVT"
 if ! cargo run -q -p xtask -- dist-lib-vt > /dev/null 2>&1; then
   cargo run -q -p xtask -- dist-lib-vt 2>&1 | tail -20 | sed 's/^/    /'
   red "xtask dist-lib-vt failed"

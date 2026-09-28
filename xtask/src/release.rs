@@ -25,10 +25,11 @@
 //! ONE deliberate addition over the oracle: a Cargo-specific consistency
 //! check. Ghostty's release build takes the version from the tag
 //! (`-Dversion-string=$GHOSTTY_VERSION`), so the tag is the single source of
-//! truth. rustty's version lives in `Cargo.toml`'s `[workspace.package]` and
-//! `xtask dist` names the tarball from THAT (`dist::workspace_version`), so a
-//! tag that disagrees with the manifest would silently produce
-//! `rustty-<manifest>.tar.gz` for a `v<tag>` release. `release-info` therefore
+//! truth. rustty's version lives in `Cargo.toml`'s `[workspace.package]`, and
+//! `xtask dist` names the tarball from the version composed from it
+//! (`dist::DIST_VERSION`: on a `vX.Y.Z` tag exactly the manifest's `X.Y.Z`,
+//! N424), so a tag that disagrees with the manifest would not produce
+//! `rustty-<tag>.tar.gz` for a `v<tag>` release. `release-info` therefore
 //! fails when the two disagree, before any artifact is built. Pass
 //! `--no-workspace-check` to bypass it (e.g. a re-run against an older tag).
 
@@ -113,7 +114,7 @@ pub fn check_workspace_match(version: &str, workspace: &str) -> Result<(), Strin
     Err(format!(
         "release version `{version}` does not match Cargo.toml \
          [workspace.package] version `{workspace}` — bump the manifest (or pass \
-         --no-workspace-check); `xtask dist` names its tarball from the manifest, \
+         --no-workspace-check); `xtask dist` names its tarball from the manifest version, \
          so releasing as-is would publish rustty-{workspace}.tar.gz for tag v{version}"
     ))
 }

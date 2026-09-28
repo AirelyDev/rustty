@@ -5,7 +5,7 @@
 # Built offline from the `xtask dist` tarball, installed and run on
 # aarch64-linux (Fedora 44), parity tail P-1, 2026-09-27:
 #
-#     cargo run -p xtask -- dist
+#     cp "$(cargo run -q -p xtask -- dist | sed -n 's/^wrote //p')" dist/rustty-source.tar.gz
 #     flatpak run org.flatpak.Builder --force-clean --user \
 #       --repo=flatpak/repo flatpak/builddir-debug flatpak/io.airely.rustty-debug.yml
 #     flatpak remote-add --user --no-gpg-verify rustty-local flatpak/repo
@@ -113,7 +113,9 @@ modules:
     sources:
       # The PRE-VENDORED source tarball, not a `type: dir` of the worktree:
       # that is what makes the offline build work without a generated
-      # cargo-sources.json. Regenerate with `cargo run -p xtask -- dist`.
+      # cargo-sources.json. Regenerate with the `xtask dist` + `cp` at the top:
+      # the tarball is named after the full version (`rustty-X.Y.Z-<branch>+
+      # <hash>.tar.gz` off a tag, N424), so it is copied to a fixed name.
       - type: archive
-        path: ../dist/rustty-0.1.0.tar.gz
+        path: ../dist/rustty-source.tar.gz
         strip-components: 1

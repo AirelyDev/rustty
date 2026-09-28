@@ -83,13 +83,28 @@ pub fn dist_lib_vt() -> Result<PathBuf, String> {
     dist_scoped(Scope::LibVt)
 }
 
-pub fn dist_scoped(scope: Scope) -> Result<PathBuf, String> {
-    let root = workspace_root();
-    let version = workspace_version(&root)?;
-    let name = match scope {
+/// The version a tarball is named after and carries in `VERSION`: the full
+/// `cfg.version` (`GhosttyDist.zig:52-107` formats `{f}` of it into the
+/// prefix, the file name and `VERSION`), i.e. the composed app version —
+/// `X.Y.Z` on a `vX.Y.Z` tag, `X.Y.Z-<branch>+<short hash>` otherwise,
+/// `RUSTTY_VERSION_STRING` when set (`-Dversion-string`). The lib-vt tarball
+/// uses the same app version (`GhosttyDist.zig:22,56`), not the lib version.
+/// N424; before it this was the bare `[workspace.package]` version.
+pub(crate) const DIST_VERSION: &str = rustty_version::VERSION_STRING;
+
+/// `{name}-{version}`: the archive prefix and file stem (`GhosttyDist.zig:22`:
+/// `libghostty-vt` for lib-vt, else `ghostty`; R2 names).
+pub(crate) fn dist_name(scope: Scope, version: &str) -> String {
+    match scope {
         Scope::Workspace => format!("rustty-{version}"),
         Scope::LibVt => format!("librustty-vt-{version}"),
-    };
+    }
+}
+
+pub fn dist_scoped(scope: Scope) -> Result<PathBuf, String> {
+    let root = workspace_root();
+    let version = DIST_VERSION;
+    let name = dist_name(scope, version);
     let prefix = format!("{name}/");
 
     let dist_dir = root.join("dist");
@@ -100,7 +115,7 @@ pub fn dist_scoped(scope: Scope) -> Result<PathBuf, String> {
     let stage = std::env::temp_dir().join(format!("rustty-dist-{version}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&stage);
     std::fs::create_dir_all(&stage).map_err(|e| format!("create staging dir: {e}"))?;
-    let result = dist_stage(&root, &stage, &name, &prefix, &version, &out, scope);
+    let result = dist_stage(&root, &stage, &name, &prefix, version, &out, scope);
     let _ = std::fs::remove_dir_all(&stage);
     result?;
     Ok(out)
@@ -202,8 +217,9 @@ fn dist_stage(
     }
 
     // 2. Inject the VERSION file at the archive root (not tracked in git).
-    std::fs::write(tree.join("VERSION"), format!("{version}\n"))
-        .map_err(|e| format!("write VERSION: {e}"))?;
+    // `b.fmt("{f}", .{cfg.version})` (`GhosttyDist.zig:52`): the version with no
+    // trailing newline (N424).
+    std::fs::write(tree.join("VERSION"), version).map_err(|e| format!("write VERSION: {e}"))?;
 
     // 2b. For a lib-vt tarball, slice the staged tree down to rustty-vt-c's
     //     workspace closure before vendoring, so `cargo vendor` resolves the
@@ -315,11 +331,7 @@ pub fn distcheck_lib_vt() -> Result<PathBuf, String> {
 
 fn distcheck_scoped(scope: Scope) -> Result<PathBuf, String> {
     let root = workspace_root();
-    let version = workspace_version(&root)?;
-    let name = match scope {
-        Scope::Workspace => format!("rustty-{version}"),
-        Scope::LibVt => format!("librustty-vt-{version}"),
-    };
+    let name = dist_name(scope, DIST_VERSION);
 
     let tarball = dist_scoped(scope)?;
 
@@ -822,9 +834,8 @@ mod tests {
     #[test]
     #[ignore = "shells to git/cargo: cargo vendor over the full workspace"]
     fn dist_tarball_ships_vendor_inputs() {
-        let root = workspace_root();
-        let version = workspace_version(&root).expect("workspace version");
-        let name = format!("rustty-{version}");
+        let version = DIST_VERSION;
+        let name = dist_name(Scope::Workspace, version);
 
         let tarball = dist().expect("dist");
 
@@ -878,6 +889,32 @@ mod tests {
             "config.toml lost the tracked wasm simd128 default:\n{config}"
         );
         let _ = std::fs::remove_dir_all(&extract);
+    }
+
+    /// N424, `GhosttyDist.zig:22,52-107`: both tarballs are named — file,
+    /// archive prefix and `VERSION` — after the full app version the build
+    /// reports (`rustty_version::VERSION_STRING`, the `cfg.version` port), not
+    /// the bare manifest version; lib-vt uses the same app version.
+    #[test]
+    fn tarballs_are_named_after_the_full_app_version() {
+        assert_eq!(DIST_VERSION, rustty_version::VERSION_STRING);
+        assert_eq!(
+            dist_name(Scope::Workspace, "1.2.3-main+abc1234"),
+            "rustty-1.2.3-main+abc1234"
+        );
+        assert_eq!(
+            dist_name(Scope::LibVt, "1.2.3-main+abc1234"),
+            "librustty-vt-1.2.3-main+abc1234"
+        );
+        // The composed version starts with the manifest's X.Y.Z (every arm but
+        // an explicit RUSTTY_VERSION_STRING, which replaces it wholesale).
+        if option_env!("RUSTTY_VERSION_STRING").is_none_or(str::is_empty) {
+            let manifest = workspace_version(&workspace_root()).unwrap();
+            assert!(
+                DIST_VERSION.starts_with(&manifest),
+                "{DIST_VERSION} vs {manifest}"
+            );
+        }
     }
 
     /// N422: the tarball config is the tracked config, then the vendor

@@ -84,9 +84,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       # The manifest's source. This is also what makes the flatpak build
-      # offline: the tarball carries vendor/ + .cargo/config.toml.
+      # offline: the tarball carries vendor/ + .cargo/config.toml. It is named
+      # after the full version (N424), so the manifests read a fixed copy.
       - name: Build the vendored source tarball
-        run: cargo run -q -p xtask -- dist
+        run: |
+          tarball="$(cargo run -q -p xtask -- dist | sed -n 's/^wrote //p')"
+          cp "$tarball" dist/rustty-source.tar.gz
 
       - name: Build the Flatpak
         run: |
