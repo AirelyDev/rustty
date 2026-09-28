@@ -7392,7 +7392,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 
 - **id**: N404. Parity tail L-5. **severity**: medium (one production leak, UD350; the rest test-only). **kind**:
   CI parity (reference `test-valgrind` scope) + port defects. **state**: CLOSED for rustty-font-shaper and
-  rustty-simd (fixed, now in the gate's default set); the scope gap for the remaining crates is OPEN, below.
+  rustty-simd (fixed, now in the gate's default set); CLOSED (scope: by N413, L-6) for the remaining crates.
 - **scope**: the reference's `valgrind` job runs `zig build test-valgrind` (`build.zig:411-422`): the WHOLE unit-test
   executable (`src/main.zig`) under `valgrind --leak-check=full --error-exitcode=1 --num-callers=50
   --suppressions=valgrind.supp --gen-suppressions=all`, with valgrind's default `--errors-for-leak-kinds`
@@ -7424,6 +7424,8 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   FreeType inits were most of the time); rustty-simd: 42 passed, 0 errors (243 s). Both added to the gate's
   default crate set (net-new coverage), with rustty-xev (N406). `cargo test -p rustty-font-shaper`: Mac 139
   passed + 5 ignored, 3/3; Linux 131 passed + 4 ignored, 3/3.
+- **correction (review L-6 F3)**: the scope gap below is closed: superseded by N410 (termio), N411/N412
+  (renderer), N418 (vt lib) and N413 (whole scope). The bullets are L-5's survey as it stood.
 - **still open (scope)**: memcheck survey of further crates on `rvm` at this lane's head (gate script, default
   `definite` kinds), recorded for a follow-up batch; none of these is in the default set:
   - clean: rustty-os (2 binaries), rustty-input, rustty-config (4 binaries).
@@ -7580,6 +7582,13 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   llvmpipe entries. One entry ends at `fun:gallivm_jit_function` (every frame above it is LLVM or Mesa); five
   match only a conditional jump whose TOP frames are those two tests' own comparisons (the test body, its
   `Iterator::any` predicates, the slice `!=`, `Ord::max`). Each entry has its WHY (D6 audit clean).
+- **correction (review L-6 F2, L-6b)**: those five entries matched every conditional jump whose top frame was the
+  test body, renderer state included (the review hid a planted undefined `r.size.screen.width` at
+  `assert_eq!(px.len(), ...)` with them). They are deleted. The two tests now declare exactly the read-back bytes
+  defined, right after `read_rgba()`, with `rustty_zigstd::valgrind::memcheck::make_mem_defined` (a port of Zig
+  0.16 `std.valgrind.memcheck.makeMemDefined`, request `ToolBase("MC") + 2` = 0x4d43_0002, a no-op natively);
+  only the gallivm entry remains. Evidence in the L-6b report: the renderer under the gate is clean, and a value
+  planted undefined in a test body is now reported.
 - **negative control** (VM clone, restored): an uninitialised read planted in `px_at`, the helper those
   golden tests call, is still reported with both suppression files loaded (`ERROR SUMMARY: 212 errors from 3
   contexts (suppressed: 140 from 4)`), so the anchoring does not hide a function the test calls.
@@ -7608,6 +7617,10 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   - named per-test skips, printed on every run (N416);
   - a build failure is RED (N417); `RUSTTY_VALGRIND_OWN_JOB` makes the gate report BLOCKED, naming the job that
     runs it.
+  - (L-6b, review L-6 F1/F5/F6) `--self-test`, registered as G-VALGRIND-SELF, proves these arms against a fake
+    valgrind and cargo on every leg; the summary line counts the named skips, and a skip whose test or binary no
+    longer exists is RED; the required feature lanes are checked by name; xtask's
+    `valgrind_job_matrix_covers_every_shard` ties ci.yml's shard matrix to the `--shard K/N` divisor.
 - **CI** (`.github/workflows/ci.yml`): a `valgrind` job (4 matrix shards, `--shard K/4 --jobs 4`, 240-minute
   timeout, in `required.needs`) installs valgrind + libc6-dbg as the reference's job does, Mesa llvmpipe, and the
   GTK/GLib/blueprint/gettext build dependencies, and arms `RUSTTY_REQUIRE_GL`, `LIBGL_ALWAYS_SOFTWARE` and
@@ -7675,8 +7688,8 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   definite leaks, all in tests:
   1. `pagelist::tests::pagelist_cold_compression_continues_after_an_incompressible_page` never deinited its
      PageList, so the compressed second page's encoded bytes (4,419 bytes, `CompressedPage::init`) leaked. The
-     reference test has `defer s.deinit();` (`PageList.zig` at oracle@main 9156ada16, the test's own citation);
-     the port dropped it. `pagelist_compression_leaves_incompressible_pages_resident` dropped the same line (no
+     reference test has `defer s.deinit();` (`src/terminal/PageList.zig:9206-9210` at pin `20abdb50a`; the
+     other test's is at `:9325-9330`); the port dropped it. `pagelist_compression_leaves_incompressible_pages_resident` dropped the same line (no
      heap leak there: its pages are mappings memcheck does not track).
   2. `page::tests::page_initBuf_rejects_unaligned_buffer` and `page_cloneBuf_rejects_unaligned_buffer` leaked
      their 12,288-byte buffers on purpose ("every user panics before returning").
