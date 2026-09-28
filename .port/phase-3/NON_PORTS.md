@@ -869,6 +869,7 @@ that is ported.
    | `.github/workflows/{release-tag,release-tip,publish-tag}.yml`, `.github/scripts/ghostty-tip` | PORTED (§5) | residual differences: NEW-FINDINGS N378 |
    | `.github/workflows/{update-colorschemes,milestone,clean-artifacts}.yml`, `.github/{dependabot,pinact}.yml`, `.github/DISCUSSION_TEMPLATE/issue-triage.yml` | PORTED | same paths |
    | `.github/workflows/test.yml` | TRANSLATED job by job | `ci.yml` jobs + `.port/tools/ci.sh` gates; the per-job table and the jobs still without a counterpart are NEW-FINDINGS N376 |
+   | `.github/workflows/test.yml` job `skip` | NOT PORTED (parity tail CI-1, 2026-09-28) | its whole-run output, `skip`, is true only when every changed file is `.github/VOUCHED.td`, the governance file this port does not carry (row below), so it would always be false here; its path filters (`actions_pins`, `blueprints`, `macos`, `nix`, `shell`, `zig`) only gate the reference's linter jobs, which `ci.sh`'s G-LINT and G-BLUEPRINT run on every push. The `github.repository == 'ghostty-org/ghostty'` guard on the reference's jobs is the reference's own organisation. NEW-FINDINGS N376 gap 1 |
    | `.github/scripts/check-translations.sh` | TRANSLATED | G-I18N (`check_translations.sh`) |
    | `.github/scripts/check-apple-libghostty-vt.nu` | N/A with the §G7 precondition, **which has partly changed** — see G7's P-1 note |
    | `CLAUDE.md` (a symlink to `AGENTS.md`, reference `c09ade225`) | PORTED (P-1b, user decision 2026-09-27) | the same symlink, mode 120000 |

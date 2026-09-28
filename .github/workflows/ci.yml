@@ -2,9 +2,21 @@
 #
 # Governed by .port/PORT_RULES.md (R1-R5) and
 # .port/phase-0/plan/DEFINITION_OF_PARITY.md. The single source of truth for the
-# check sequence is .port/tools/ci.sh; this workflow only sets up the toolchain
-# and invokes it. Do NOT add checks here that are not in ci.sh (and vice-versa):
-# keeping them in lockstep is what makes "CI is real".
+# check sequence is .port/tools/ci.sh; the `ci` job only sets up the toolchain
+# and invokes it. Do NOT add checks to the `ci` job that are not in ci.sh (and
+# vice-versa): keeping them in lockstep is what makes "CI is real".
+#
+# The other jobs port reference `test.yml` jobs that need a runner, a build
+# configuration or a toolchain of their own (a feature set, an NDK, an arm64
+# host, an Xcode, a container), so they cannot be a gate inside ci.sh's single
+# process: `valgrind`, `windows`, `windows-examples-cmake`, `macos-app`, and the
+# jobs under "The remaining test.yml jobs" below (parity tail CI-1,
+# NEW-FINDINGS N376). Each names the reference job it ports.
+#
+# Not ported: the reference's `skip` job (NON_PORTS G13 §6). Its only
+# whole-run output is "every changed file is `.github/VOUCHED.td`", a governance
+# file this port does not carry (user ruling), and its path filters only gate
+# linter jobs that run here unconditionally inside ci.sh's G-LINT.
 #
 # R3: NO dependency on the ghostty tree. The reference oracle (the differential
 # harness's vt_driver_ref, which links libghostty-vt.a) is used ONLY by the G4
@@ -17,15 +29,19 @@
 
 name: ci
 
+# The reference's triggers (`test.yml`): every push to every branch, every
+# pull request, and manual dispatch (N376 gap 20).
 on:
-  push:
-    branches: [main]
-  pull_request:
-  workflow_dispatch:
+  push: {}
+  pull_request: {}
+  workflow_dispatch: {}
 
-# Cancel superseded runs on the same ref.
+# "We only want the latest commit to test for any non-main ref." The
+# reference's group: a non-main ref shares one group per ref and cancels its
+# superseded run; `main` gets a group per run, so a `main` run is never
+# cancelled (N376 gap 20).
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref_name != 'main' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -52,6 +68,22 @@ jobs:
       - windows
       - windows-examples-cmake
       - macos-app
+      - build-examples-cmake-cross
+      - build-snap
+      - build-libghostty-vt
+      - build-libghostty-vt-wasm
+      - build-libghostty-vt-features
+      - build-libghostty-vt-android
+      - build-linux
+      - build-nix
+      - build-macos-xcode-27
+      - test-gtk
+      - test-simd
+      - test-sentry-linux
+      - test-i18n
+      - test-fuzz-libghostty
+      - test-pkg-linux
+      - test-debian-13
     if: always()
     steps:
       - name: Determine status
@@ -752,3 +784,676 @@ jobs:
             -destination 'platform=macOS' \
             -only-testing:RusttyTests \
             CODE_SIGNING_ALLOWED=NO | tail -60
+
+  # ── The remaining test.yml jobs (parity tail CI-1, NEW-FINDINGS N376) ───────
+  # Each job below ports the reference job it is named after
+  # (`.github/workflows/test.yml` at the pin). Common differences, all
+  # infrastructure: GitHub-hosted runners for the Namespace profiles
+  # (`namespace-profile-ghostty-{xsm,sm,md}` -> `ubuntu-latest`,
+  # `-md-arm64` -> `ubuntu-24.04-arm`, `-macos-tahoe` -> `macos-latest`); no
+  # nscloud-cache or cachix step (Namespace-only, and this port has no binary
+  # cache); the toolchain comes from rust-toolchain.toml instead of the Nix dev
+  # shell, and the system packages the dev shell would provide are installed
+  # with apt. `needs: ci` is the reference's `needs: test`. Every job is in
+  # `required.needs`, as in the reference. None of them has run on GitHub's
+  # runners yet: VERIFICATION_DEBT V25.
+
+  # build-examples-cmake, the `c-vt-cmake-cross` row (N376 gap 3). The other two
+  # CMake examples are built by ci.sh's G-EXAMPLES. The reference runs the
+  # example inside its Nix dev shell, which has zig; the example's
+  # RusttyCrossCompiler.cmake uses `zig cc` to cross-compile for Windows (MinGW)
+  # from Linux, and hands it to cargo's cc-rs builds as CC_/CXX_/AR_<target>.
+  build-examples-cmake-cross:
+    name: Example c-vt-cmake-cross
+    runs-on: ubuntu-latest
+    needs: ci
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.16.0
+
+      # The target the example derives on a Linux host (its CMakeLists.txt).
+      - name: Install the cross target
+        run: rustup target add x86_64-pc-windows-gnu
+
+      - name: Build Example
+        run: |
+          cd example/c-vt-cmake-cross
+          cmake -B build -DFETCHCONTENT_SOURCE_DIR_RUSTTY=${{ github.workspace }}
+          cmake --build build
+
+  # build-snap: `zig build -Dsnap`, the app built with the Snap option
+  # (N376 gap 11). Packaging it with snapcraft is snap.yml's job.
+  build-snap:
+    strategy:
+      fail-fast: false
+    runs-on: ubuntu-latest
+    needs: ci
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install the GTK build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y blueprint-compiler gettext libglib2.0-dev \
+            libgtk-4-dev libadwaita-1-dev libgtk4-layer-shell-dev
+
+      - name: Build with Snap
+        run: cargo build -p rustty --features snap --locked
+
+  # build-libghostty-vt: `zig build -Demit-lib-vt -Dtarget=<t>` over the
+  # reference's six targets (N376 gap 4 named aarch64-linux and
+  # x86_64-linux-musl; the other four are here too so the matrix is the
+  # reference's). Zig cross-compiles every target from one Linux host; with
+  # Cargo each target needs a C/C++ toolchain for the -sys crates, so each row
+  # runs where one exists: the macOS rows on a macOS runner (Apple clang
+  # targets both architectures), aarch64-linux on an arm64 runner (native),
+  # windows-gnu with MinGW-w64, and musl with `zig cc` (Zig ships musl and a
+  # C++ standard library for it, as it does for the reference).
+  build-libghostty-vt:
+    name: build-libghostty-vt (${{ matrix.target }})
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: x86_64-pc-windows-gnu
+            os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    needs: ci
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install the target
+        env:
+          TARGET: ${{ matrix.target }}
+        run: rustup target add "$TARGET"
+
+      - name: Setup Zig (musl)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.16.0
+
+      - name: Point cc-rs at zig cc (musl)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          {
+            echo "CC_x86_64_unknown_linux_musl=zig cc -target x86_64-linux-musl"
+            echo "CXX_x86_64_unknown_linux_musl=zig c++ -target x86_64-linux-musl"
+          } >> "$GITHUB_ENV"
+
+      - name: Install MinGW-w64 (windows-gnu)
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+
+      - name: Build
+        env:
+          TARGET: ${{ matrix.target }}
+        run: cargo build -p rustty-vt-c --release --locked --target "$TARGET"
+
+  # build-libghostty-vt-wasm (N376 gap 6): the ReleaseFast and ReleaseSmall
+  # wasm modules, each optimized with wasm-opt, required to need simd128
+  # (N422), and smoke-tested with test/wasm-alloc.mjs. ReleaseFast is the
+  # `release` profile (build-vt-wasm.sh, as release-tip.yml); ReleaseSmall is
+  # the same build at `opt-level = "z"`, the size-optimizing level Zig's
+  # ReleaseSmall uses. Not ported: the "Validate WASM ABI manifest" step
+  # (`test-lib-vt-schema -Dtarget=wasm32-freestanding`); G-ABISCHEMA validates
+  # the native library's manifest only (N376 gap 6, still open).
+  build-libghostty-vt-wasm:
+    runs-on: ubuntu-latest
+    needs: ci
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Set up Node (test/wasm-alloc.mjs)
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+
+      - name: Install binaryen (wasm-opt) and wasm-tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binaryen
+          cargo install --locked wasm-tools@1.219.1
+
+      - name: Build ReleaseFast WASM
+        run: bash .port/tools/build-vt-wasm.sh
+
+      - name: Optimize ReleaseFast WASM
+        run: |
+          wasm-opt -O3 --strip-dwarf \
+            --enable-simd \
+            --enable-bulk-memory \
+            --enable-sign-ext \
+            --enable-nontrapping-float-to-int \
+            --enable-multivalue \
+            --enable-reference-types \
+            zig-out/bin/rustty-vt.wasm \
+            -o rustty-vt.wasm
+
+      - name: Build ReleaseSmall WASM
+        run: bash .port/tools/build-vt-wasm.sh --config 'profile.release.opt-level="z"'
+
+      - name: Optimize ReleaseSmall WASM
+        run: |
+          wasm-opt -O3 \
+            --enable-simd \
+            --enable-bulk-memory \
+            --enable-sign-ext \
+            --enable-nontrapping-float-to-int \
+            --enable-multivalue \
+            --enable-reference-types \
+            zig-out/bin/rustty-vt.wasm \
+            -o rustty-vt-small.wasm
+
+      - name: Verify WASM simd128
+        run: |
+          # wasm-tools names the simd128 proposal "simd". The artifact must
+          # fail validation when that feature is disabled.
+          for artifact in rustty-vt.wasm rustty-vt-small.wasm; do
+            wasm-tools validate "${artifact}"
+            if wasm-tools validate \
+              --features=-simd "${artifact}"; then
+              echo "${artifact} unexpectedly validates with simd128 disabled" >&2
+              exit 1
+            fi
+            echo "Verified ${artifact} requires simd128"
+          done
+
+      - name: Test WASM allocator
+        run: |
+          node test/wasm-alloc.mjs rustty-vt.wasm
+          node test/wasm-alloc.mjs rustty-vt-small.wasm
+
+  # build-libghostty-vt-features: "Compile-only checks for the -Dvt-features
+  # flags so that future changes don't regress any feature combination."
+  # (N376 gap 7). `-Dvt-features=-all` is `--no-default-features`, and
+  # `-all,+<f>` adds the one feature; `simd` is a separate option
+  # (`-Dsimd`, default on), so it is kept. The reference's nine tokens, in its
+  # order (it does not list `search`). The wasm build compiles the C API
+  # export block; `test --no-run` compiles every test without running one.
+  # G-VTFEAT's export-set comparison against the oracle stays a local gate.
+  build-libghostty-vt-features:
+    runs-on: ubuntu-latest
+    needs: ci
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Compile feature flag matrix
+        run: |
+          features="snapshot formatter selection render-state input-encode color grid-introspection glyph-protocol kitty-graphics"
+          configs="simd"
+          for f in $features; do configs="$configs simd,$f"; done
+
+          for cfg in $configs; do
+            echo "::group::--no-default-features --features $cfg"
+            cargo build -p rustty-vt-c --locked --no-default-features \
+              --features "$cfg" \
+              --target wasm32-unknown-unknown
+            cargo test -p rustty-vt-c --locked --no-default-features \
+              --features "$cfg" --no-run
+            echo "::endgroup::"
+          done
+
+  # build-libghostty-vt-android: "lib-vt requires the Android NDK for Android
+  # builds" (N376 gap 5, the recipe is NEW-FINDINGS N429). The same setup-ndk
+  # action, pin and NDK as the reference. Zig's `arm-linux-androideabi`
+  # (baseline v7a) is Rust's `armv7-linux-androideabi`; its NDK clang triple is
+  # `armv7a-linux-androideabi`. API 29 is Zig 0.16's Android default. G-XTARGET
+  # builds the named target and fails on a PT_LOAD below 16 KiB. A named
+  # target that is skipped (no CXX_<t>, or a toolchain-matched link error)
+  # makes it exit 3 BLOCKED, which fails this step like any other non-zero
+  # exit: here BLOCKED is a failure, not a warning (N429).
+  build-libghostty-vt-android:
+    name: build-libghostty-vt-android (${{ matrix.target }})
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-linux-android
+            clang: aarch64-linux-android
+          - target: x86_64-linux-android
+            clang: x86_64-linux-android
+          - target: armv7-linux-androideabi
+            clang: armv7a-linux-androideabi
+    runs-on: ubuntu-latest
+    needs: ci
+    env:
+      ANDROID_NDK_VERSION: r29
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779 # v1.6.0
+        id: setup-ndk
+        with:
+          ndk-version: r29
+          add-to-path: false
+          link-to-sdk: false
+          local-cache: true
+
+      - name: Install the target
+        env:
+          TARGET: ${{ matrix.target }}
+        run: rustup target add "$TARGET"
+
+      - name: Build
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          TARGET: ${{ matrix.target }}
+          CLANG: ${{ matrix.clang }}
+        run: |
+          set -uo pipefail
+          bin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          tv="${TARGET//-/_}"
+          tu="$(printf '%s' "$tv" | tr '[:lower:]' '[:upper:]')"
+          export "CC_${tv}=$bin/${CLANG}29-clang"
+          export "CXX_${tv}=$bin/${CLANG}29-clang++"
+          export "AR_${tv}=$bin/llvm-ar"
+          export "CARGO_TARGET_${tu}_LINKER=$bin/${CLANG}29-clang"
+          rc=0
+          bash .port/tools/gates/check_cross_targets.sh "$TARGET" || rc=$?
+          case "$rc" in
+            0) ;;
+            3) echo "::error::G-XTARGET BLOCKED (exit 3): $TARGET was named but not built; this job treats BLOCKED as a failure (N429)" ;;
+            *) echo "::error::G-XTARGET RED (exit $rc) for $TARGET" ;;
+          esac
+          exit "$rc"
+
+  # build-linux: `zig build`, the default GTK app, on an x86_64 and an arm64
+  # host (N376 gap 9).
+  build-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    needs: ci
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install the GTK build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y blueprint-compiler gettext libglib2.0-dev \
+            libgtk-4-dev libadwaita-1-dev libgtk4-layer-shell-dev
+
+      - name: Test Build
+        run: cargo build -p rustty --locked
+
+  # build-nix: the Nix packages on an x86_64 and an arm64 host (N376 gap 9):
+  # the release package's `+version` mode and that it is stripped, the debug
+  # package's mode and that it is not (the `-Dstrip` defaults, N422), and the
+  # four librustty-vt variants with their passthru tests. The installed
+  # binary is `.rustty-wrapped` (wrapGAppsHook4), as the reference's is
+  # `.ghostty-wrapped`; `main_rustty` is the entry module the reference's
+  # `main_ghostty.main` symbol names. Not ported: the reference's
+  # `build-example-c-vt-build-info` passthru test, which nix/librustty-vt.nix
+  # does not have (N376 gap 9, still open).
+  build-nix:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    needs: ci
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Test release NixOS package build
+        run: nix build .#rustty-releasefast
+
+      - name: Check version
+        run: result/bin/rustty +version | grep -q '.ReleaseFast'
+
+      - name: Check to see if the binary has been stripped
+        run: nm result/bin/.rustty-wrapped 2>&1 | grep -q 'no symbols'
+
+      - name: Test debug NixOS package build
+        run: nix build .#rustty-debug
+
+      - name: Check version
+        run: result/bin/rustty +version | grep -q '.Debug'
+
+      - name: Check to see if the binary has not been stripped
+        run: nm result/bin/.rustty-wrapped 2>&1 | grep -q 'main_rustty'
+
+      - name: Test ReleaseFast build of librustty-vt
+        run: |
+          nix build .#librustty-vt-releasefast
+          nix build .#librustty-vt-releasefast.tests.sanity-check
+          nix build .#librustty-vt-releasefast.tests.pkg-config
+          nix build .#librustty-vt-releasefast.tests.build-with-shared
+          nix build .#librustty-vt-releasefast.tests.build-with-static
+
+      - name: Test ReleaseFast (no SIMD) build of librustty-vt
+        run: |
+          nix build .#librustty-vt-releasefast-no-simd
+          nix build .#librustty-vt-releasefast-no-simd.tests.sanity-check
+          nix build .#librustty-vt-releasefast-no-simd.tests.pkg-config
+          nix build .#librustty-vt-releasefast-no-simd.tests.build-with-shared
+          nix build .#librustty-vt-releasefast-no-simd.tests.build-with-static
+
+      - name: Test Debug build of librustty-vt
+        run: |
+          nix build .#librustty-vt-debug
+          nix build .#librustty-vt-debug.tests.sanity-check
+          nix build .#librustty-vt-debug.tests.pkg-config
+          nix build .#librustty-vt-debug.tests.build-with-shared
+          nix build .#librustty-vt-debug.tests.build-with-static
+
+      - name: Test Debug (no SIMD) build of librustty-vt
+        run: |
+          nix build .#librustty-vt-debug-no-simd
+          nix build .#librustty-vt-debug-no-simd.tests.sanity-check
+          nix build .#librustty-vt-debug-no-simd.tests.pkg-config
+          nix build .#librustty-vt-debug-no-simd.tests.build-with-shared
+          nix build .#librustty-vt-debug-no-simd.tests.build-with-static
+
+  # build-macos-xcode-27: the embedding framework built with a second Xcode
+  # (N376 gap 21), `zig build -Demit-macos-app=false` -> `xtask xcframework`.
+  # The Xcode path is the reference's; whether GitHub's macOS image carries
+  # it is part of VERIFICATION_DEBT V25.
+  build-macos-xcode-27:
+    runs-on: macos-latest
+    needs: ci
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Xcode Select
+        run: sudo xcode-select -s /Applications/Xcode_27.app
+
+      - name: Xcode Version
+        run: xcodebuild -version
+
+      - name: Install the macOS targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Build with Xcode 27
+        run: cargo run --release -p xtask -- xcframework
+
+  # test-gtk: every combination of the X11 and Wayland arms (N376 gap 13).
+  # `-Dgtk-x11=<b>` / `-Dgtk-wayland=<b>` are the `x11` / `wayland` features
+  # (each allows its arm) plus RUSTTY_GTK_X11 / RUSTTY_GTK_WAYLAND (which
+  # force it on or off, S65-F6). `--no-default-features` drops `simd`, a
+  # separate option, so it is named again.
+  test-gtk:
+    strategy:
+      fail-fast: false
+      matrix:
+        x11: ["true", "false"]
+        wayland: ["true", "false"]
+    name: GTK x11=${{ matrix.x11 }} wayland=${{ matrix.wayland }}
+    runs-on: ubuntu-latest
+    needs: ci
+    env:
+      RUSTTY_GTK_X11: ${{ matrix.x11 }}
+      RUSTTY_GTK_WAYLAND: ${{ matrix.wayland }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install the GTK build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y blueprint-compiler gettext libglib2.0-dev \
+            libgtk-4-dev libadwaita-1-dev libgtk4-layer-shell-dev
+
+      - name: Select the features
+        run: |
+          feats=simd,gtk
+          if [ "$RUSTTY_GTK_X11" = "true" ]; then feats="$feats,x11"; fi
+          if [ "$RUSTTY_GTK_WAYLAND" = "true" ]; then feats="$feats,wayland"; fi
+          echo "RUSTTY_GTK_FEATURES=$feats" >> "$GITHUB_ENV"
+
+      - name: Test
+        run: |
+          cargo test -p rustty-apprt -p rustty --locked \
+            --no-default-features --features "$RUSTTY_GTK_FEATURES"
+
+      - name: Build
+        run: |
+          cargo build -p rustty --locked \
+            --no-default-features --features "$RUSTTY_GTK_FEATURES"
+
+  # test-simd: `zig build test -Dsimd={true,false}` (NEW-FINDINGS N420). The
+  # app tier's crates that carry the `simd` feature, plus rustty-simd itself;
+  # `-Dsimd=false` is `--no-default-features`, with the GTK app's default
+  # features named again for `rustty` (a Linux build of it without `gtk` is
+  # refused). rustty-apprt-c's C-ABI smoke test loads the cdylib, so it is
+  # built first with the same features.
+  test-simd:
+    strategy:
+      fail-fast: false
+      matrix:
+        simd: ["true", "false"]
+    name: Build -Dsimd=${{ matrix.simd }}
+    runs-on: ubuntu-latest
+    needs: ci
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Mesa llvmpipe and the GTK build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libegl-mesa0 libgl1 libgl1-mesa-dri \
+            blueprint-compiler gettext libglib2.0-dev \
+            libgtk-4-dev libadwaita-1-dev libgtk4-layer-shell-dev
+
+      - name: Test
+        env:
+          SIMD: ${{ matrix.simd }}
+        run: |
+          set -euo pipefail
+          if [ "$SIMD" = "true" ]; then
+            flags=()
+          else
+            flags=(--no-default-features)
+          fi
+          cargo build -p rustty-apprt-c --locked "${flags[@]}"
+          if [ "$SIMD" != "true" ]; then
+            flags+=(--features "rustty/gtk,rustty/wayland,rustty/x11")
+          fi
+          cargo test --no-fail-fast --locked -p rustty-simd -p rustty-core \
+            -p rustty-apprt -p rustty-cli -p rustty-bench -p rustty-apprt-c \
+            -p rustty "${flags[@]}"
+
+  # test-sentry-linux: `zig build -Dsentry={true,false}` on Linux (N376 gap 15).
+  test-sentry-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        sentry: ["true", "false"]
+    name: Build -Dsentry=${{ matrix.sentry }}
+    runs-on: ubuntu-latest
+    needs: ci
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install the GTK build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y blueprint-compiler gettext libglib2.0-dev \
+            libgtk-4-dev libadwaita-1-dev libgtk4-layer-shell-dev
+
+      - name: Test Sentry Build
+        env:
+          SENTRY: ${{ matrix.sentry }}
+        run: |
+          if [ "$SENTRY" = "true" ]; then
+            cargo build -p rustty --locked --features sentry
+          else
+            cargo build -p rustty --locked
+          fi
+
+  # test-i18n: `zig build -Di18n={true,false}` (NEW-FINDINGS N421): the
+  # option is the build-time variable RUSTTY_I18N. rustty-build-config's tests
+  # check that the build resolves it.
+  test-i18n:
+    strategy:
+      fail-fast: false
+      matrix:
+        i18n: ["true", "false"]
+    name: Build -Di18n=${{ matrix.i18n }}
+    runs-on: ubuntu-latest
+    needs: ci
+    env:
+      RUSTTY_I18N: ${{ matrix.i18n }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install the GTK build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y blueprint-compiler gettext libglib2.0-dev \
+            libgtk-4-dev libadwaita-1-dev libgtk4-layer-shell-dev
+
+      - name: Test
+        run: |
+          cargo build -p rustty --locked
+          cargo test -p rustty-build-config --locked
+
+  # test-fuzz-libghostty: builds the fuzz harness package (N376 gap 16).
+  # The reference's is AFL++ (`test/fuzz-libghostty`); this port's is
+  # cargo-fuzz (`crates/rustty-vt/fuzz`), which needs nightly for the
+  # sanitizer flags, so AFL++ and LLVM are replaced by nightly + cargo-fuzz.
+  test-fuzz-libghostty:
+    name: Build crates/rustty-vt/fuzz
+    runs-on: ubuntu-latest
+    needs: ci
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install nightly and cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal
+          cargo install --locked cargo-fuzz@0.13.2
+
+      - name: Verify nightly and cargo-fuzz are available
+        run: |
+          cargo +nightly --version
+          cargo fuzz --version
+
+      - name: Build fuzzer harness
+        run: |
+          cd crates/rustty-vt
+          cargo +nightly fuzz build
+
+  # test-pkg-linux: each vendored package's own tests (N376 gap 18).
+  # `pkg/wuffs` is the rustty-wuffs crate.
+  test-pkg-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        pkg: ["wuffs"]
+    name: Test pkg/${{ matrix.pkg }}
+    runs-on: ubuntu-latest
+    needs: ci
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Test ${{ matrix.pkg }} Build
+        env:
+          PKG: ${{ matrix.pkg }}
+        run: cargo test -p "rustty-$PKG" --locked
+
+  # test-debian-13: the full app built in a clean Debian 13 image
+  # (N376 gap 19). The reference builds its Dockerfile from the source tarball
+  # of `build-dist`; this port's Dockerfile builds from a checkout (its
+  # header), and the tarball's offline build in Debian 13 is G-DIST's debian
+  # arm in the `ci` job. The reference's 10-minute timeout fits a cached Zig
+  # build; a cold Cargo build of the app does not, so the limit is larger.
+  test-debian-13:
+    name: Test build on Debian 13
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    needs: ci
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build
+        run: |
+          docker build \
+            --build-arg DISTRO_VERSION=13 \
+            -f xtask/docker/debian/Dockerfile \
+            .

@@ -817,3 +817,148 @@ fn valgrind_job_matrix_covers_every_shard() {
         );
     }
 }
+
+/// What `release-tip.yml` lacks of the reference's residuals NEW-FINDINGS
+/// N378 lists (parity tail CI-1). Each entry is (job, text the job must carry);
+/// `""` as the job means the workflow's header, before `jobs:`.
+const TIP_N378: &[(&str, &str)] = &[
+    ("", "  workflow_dispatch:\n    inputs:\n      pr:\n        type: number\n        required: false\n"),
+    ("build-macos", "fetch-depth: 0"),
+    (
+        "build-macos",
+        "/usr/libexec/PlistBuddy -c \"Set :CFBundleShortVersionString $RUSTTY_COMMIT\"",
+    ),
+    (
+        "build-macos",
+        "/usr/libexec/PlistBuddy -c \"Delete :SUEnableAutomaticChecks\"",
+    ),
+    ("build-macos", "name: release-urls-${{ inputs.pr || '0' }}"),
+    ("source-tarball-lib-vt", "r2-upload-action"),
+    (
+        "source-tarball-lib-vt",
+        "https://tip.rustty.sh/${RUSTTY_COMMIT_LONG}/librustty-vt-source.tar.gz",
+    ),
+    ("build-lib-vt-xcframework", "r2-upload-action"),
+    (
+        "build-lib-vt-xcframework",
+        "https://tip.rustty.sh/${RUSTTY_COMMIT_LONG}/rustty-vt.xcframework.zip",
+    ),
+    ("build-lib-vt-wasm", "r2-upload-action"),
+    ("build-lib-vt-wasm", "-o rustty-vt-small.wasm"),
+    ("build-lib-vt-wasm", "--features=-simd \"${artifact}\""),
+    ("build-lib-vt-wasm", "rustty-vt-small.wasm.minisig"),
+    (
+        "build-lib-vt-wasm",
+        "https://tip.rustty.sh/${RUSTTY_COMMIT_LONG}/rustty-vt-small.wasm",
+    ),
+    ("sentry-dsym", "sentry-cli dif upload --project rustty --wait dsym.zip"),
+    (
+        "sentry-dsym",
+        "https://tip.rustty.sh/${RUSTTY_COMMIT_LONG}/rustty-macos-universal-dsym.zip",
+    ),
+];
+
+fn tip_n378_missing(text: &str) -> Vec<String> {
+    let jobs = parse_jobs(text);
+    let head = text.split("\njobs:").next().unwrap_or_default();
+    let mut out = Vec::new();
+    for (job, want) in TIP_N378 {
+        let body = if job.is_empty() {
+            head
+        } else {
+            match jobs.get(*job) {
+                Some(j) => j.body.as_str(),
+                None => {
+                    out.push(format!("no `{job}` job"));
+                    continue;
+                }
+            }
+        };
+        if !body.contains(want) {
+            out.push(format!("`{job}` lacks `{want}`"));
+        }
+    }
+    if let Some(j) = jobs.get("sentry-dsym") {
+        if j.needs != ["setup", "build-macos"] {
+            out.push(format!("`sentry-dsym` needs {:?}", j.needs));
+        }
+    }
+    out
+}
+
+/// N378 (parity tail CI-1): the tip workflow carries the reference's
+/// residuals that need no secret to write: the `pr` dispatch input and the
+/// artifact name it keys, the full-history checkout for the build number, the
+/// tip `CFBundleShortVersionString`, the `SUEnableAutomaticChecks` delete, the
+/// lib-vt jobs' R2 upload and URL echo, both wasm tiers with the simd128
+/// check, and the tip `sentry-dsym` job.
+#[test]
+fn tip_workflow_carries_the_n378_residuals() {
+    let text = read_workflow("release-tip.yml");
+    assert_eq!(tip_n378_missing(&text), Vec::<String>::new());
+    // Negative controls, one at a time.
+    for (what, from, to) in [
+        (
+            "short version",
+            "Set :CFBundleShortVersionString $RUSTTY_COMMIT",
+            "Set :RusttyUnused $RUSTTY_COMMIT",
+        ),
+        (
+            "auto-check delete",
+            "-c \"Delete :SUEnableAutomaticChecks\"",
+            "-c \"Print :SUEnableAutomaticChecks\"",
+        ),
+        (
+            "pr input",
+            "      pr:\n        type: number\n",
+            "      prnum:\n        type: number\n",
+        ),
+        (
+            "wasm small tier",
+            "-o rustty-vt-small.wasm",
+            "-o rustty-vt-s.wasm",
+        ),
+        ("sentry job", "  sentry-dsym:\n", "  sentry-dsym-x:\n"),
+    ] {
+        let mutated = text.replacen(from, to, 1);
+        assert_ne!(mutated, text, "{what}: the control must change the file");
+        assert!(
+            !tip_n378_missing(&mutated).is_empty(),
+            "{what}: not reported"
+        );
+    }
+}
+
+/// N378 (parity tail CI-1): the tag workflow uploads the dSYM with the
+/// reference's sentry-cli command, and publish-tag.yml checks the staged dSYM
+/// zip exists before it promotes a release, as the reference's does.
+#[test]
+fn tag_workflows_upload_and_check_the_dsym() {
+    let tag = read_workflow("release-tag.yml");
+    let jobs = parse_jobs(&tag);
+    let sentry = &jobs
+        .get("sentry-dsym")
+        .expect("release-tag.yml sentry-dsym")
+        .body;
+    let cmd = "sentry-cli dif upload --project rustty --wait rustty-macos-universal-dsym.zip";
+    assert!(
+        sentry.contains(cmd),
+        "release-tag.yml sentry-dsym lacks `{cmd}`"
+    );
+    assert!(!sentry.contains("debug-files upload --include-sources"));
+
+    let publish = read_workflow("publish-tag.yml");
+    let staged = |t: &str| t.contains("\"rustty-macos-universal-dsym.zip\" \\");
+    assert!(
+        staged(&publish),
+        "publish-tag.yml does not check the dSYM zip"
+    );
+    // Negative control.
+    let dropped = publish.replacen(
+        "            \"rustty-macos-universal-dsym.zip\" \\\n",
+        "",
+        1,
+    );
+    assert_ne!(dropped, publish);
+    assert!(!staged(&dropped));
+}

@@ -23,10 +23,12 @@
 # secret degrades the run with a `::warning::` rather than failing it.
 #
 # DELIBERATE OMISSIONS vs the oracle (recorded, not forgotten): the
-# `build-macos-debug-{slow,fast}` variants and their `sentry-dsym*` uploads
-# (rustty has no Sentry project), and the `source-tarball-lib-vt` /
-# `build-lib-vt-xcframework` jobs (upstream's separate libghostty-vt
-# distribution; rustty ships that engine inside the same workspace tarball).
+# `build-macos-debug-{slow,fast}` variants and their `sentry-dsym-debug-*`
+# uploads. The release build's `sentry-dsym` job IS ported (below), as are
+# the lib-vt jobs `source-tarball-lib-vt`, `build-lib-vt-xcframework` and
+# `build-lib-vt-wasm`, each with the reference's R2 upload and URL echo
+# (parity tail CI-1, NEW-FINDINGS N378). Secrets are referenced by name only;
+# SENTRY_AUTH_TOKEN joins the set above.
 
 on:
   workflow_run:
@@ -35,6 +37,10 @@ on:
     branches: [main]
 
   workflow_dispatch:
+    inputs:
+      pr:
+        type: number
+        required: false
 
 name: Release Tip
 
@@ -165,6 +171,37 @@ jobs:
           git tag -fa tip -m "Latest Continuous Release" "${GITHUB_SHA}"
           git push --force origin tip
 
+  # PORTS: ghostty release-tip.yml `sentry-dsym`: the release build's debug
+  # symbols, fetched from the tip host build-macos uploaded them to, sent to
+  # Sentry. A missing SENTRY_AUTH_TOKEN degrades to a warning, as every other
+  # secret in this file does.
+  sentry-dsym:
+    runs-on: ubuntu-latest
+    needs: [setup, build-macos]
+    if: needs.setup.outputs.should_skip != 'true'
+    env:
+      RUSTTY_COMMIT_LONG: ${{ needs.setup.outputs.commit_long }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install sentry-cli
+        run: |
+          curl -sL https://sentry.io/get-cli/ | bash
+
+      - name: Download dSYM
+        run: |
+          curl -L "https://tip.rustty.sh/${RUSTTY_COMMIT_LONG}/rustty-macos-universal-dsym.zip" > dsym.zip
+
+      - name: Upload dSYM to Sentry
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          if [ -z "$SENTRY_AUTH_TOKEN" ]; then
+            echo "::warning title=Sentry upload skipped::SENTRY_AUTH_TOKEN is not configured; debug symbols were not uploaded."
+            exit 0
+          fi
+          sentry-cli dif upload --project rustty --wait dsym.zip
+
   source-tarball:
     needs: [setup]
     if: needs.setup.outputs.should_skip != 'true'
@@ -286,6 +323,27 @@ jobs:
             librustty-vt-source.tar.gz.minisig
           token: ${{ secrets.GH_RELEASE_TOKEN || github.token }}
 
+      - name: Prep R2 Storage
+        run: |
+          mkdir -p "blob/${RUSTTY_COMMIT_LONG}"
+          cp librustty-vt-source.tar.gz "blob/${RUSTTY_COMMIT_LONG}/librustty-vt-source.tar.gz"
+
+      - name: Upload to R2
+        if: github.repository == 'AirelyDev/rustty'
+        uses: ryand56/r2-upload-action@b801a390acbdeb034c5e684ff5e1361c06639e7c # v1.4
+        with:
+          r2-account-id: ${{ secrets.CF_R2_TIP_ACCOUNT_ID }}
+          r2-access-key-id: ${{ secrets.CF_R2_TIP_AWS_KEY }}
+          r2-secret-access-key: ${{ secrets.CF_R2_TIP_SECRET_KEY }}
+          r2-bucket: rustty-tip
+          source-dir: blob
+          destination-dir: ./
+
+      - name: Echo Release URLs
+        run: |
+          echo "Release URLs:"
+          echo "  Source Tarball: https://tip.rustty.sh/${RUSTTY_COMMIT_LONG}/librustty-vt-source.tar.gz"
+
   # PORTS: ghostty release-tip.yml `build-lib-vt-xcframework`. The VT library
   # packaged for Swift consumers (module RusttyVt). `xtask xcframework-vt`
   # builds it; example/swift-vt-xcframework is the consumer.
@@ -345,10 +403,33 @@ jobs:
             rustty-vt.xcframework.zip.minisig
           token: ${{ secrets.GH_RELEASE_TOKEN || github.token }}
 
-  # PORTS: ghostty release-tip.yml `build-lib-vt-wasm`. The reference ships two
-  # optimization tiers (ReleaseFast and ReleaseSmall); cargo has one `release`
-  # profile plus rustty's `release-fast`, so the two artifacts here are the
-  # cargo analogs of that pair rather than a 1:1 flag mapping.
+      - name: Prep R2 Storage
+        run: |
+          mkdir -p "blob/${RUSTTY_COMMIT_LONG}"
+          cp rustty-vt.xcframework.zip "blob/${RUSTTY_COMMIT_LONG}/rustty-vt.xcframework.zip"
+
+      - name: Upload to R2
+        if: github.repository == 'AirelyDev/rustty'
+        uses: ryand56/r2-upload-action@b801a390acbdeb034c5e684ff5e1361c06639e7c # v1.4
+        with:
+          r2-account-id: ${{ secrets.CF_R2_TIP_ACCOUNT_ID }}
+          r2-access-key-id: ${{ secrets.CF_R2_TIP_AWS_KEY }}
+          r2-secret-access-key: ${{ secrets.CF_R2_TIP_SECRET_KEY }}
+          r2-bucket: rustty-tip
+          source-dir: blob
+          destination-dir: ./
+
+      - name: Echo Release URLs
+        run: |
+          echo "Release URLs:"
+          echo "  XCFramework: https://tip.rustty.sh/${RUSTTY_COMMIT_LONG}/rustty-vt.xcframework.zip"
+
+  # PORTS: ghostty release-tip.yml `build-lib-vt-wasm`: the two optimization
+  # tiers, ReleaseFast (`rustty-vt.wasm`) and ReleaseSmall
+  # (`rustty-vt-small.wasm`). ReleaseFast is the `release` profile; ReleaseSmall
+  # is the same build at `opt-level = "z"`, the size-optimizing level Zig's
+  # ReleaseSmall uses. Both must require simd128 (N422), and both are signed,
+  # attached to the tip release and uploaded to R2 as the reference's are.
   build-lib-vt-wasm:
     needs: [setup]
     if: needs.setup.outputs.should_skip != 'true'
@@ -365,20 +446,21 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
-      - name: Install binaryen (wasm-opt)
+      - name: Install binaryen (wasm-opt), wasm-tools and minisign
         run: |
           sudo apt-get update
-          sudo apt-get install -y binaryen
+          sudo apt-get install -y binaryen minisign
+          cargo install --locked wasm-tools@1.219.1
 
       # build-vt-wasm.sh is the same script the WS14 wasm lane uses: it builds
       # rustty-vt-c for wasm32-unknown-unknown and runs the growable-table
       # patch (`xtask wasm-patch-growable-table`), installing the result as
       # zig-out/bin/rustty-vt.wasm — the analog of the reference's installed
       # ghostty-vt.wasm.
-      - name: Build WASM
+      - name: Build ReleaseFast WASM
         run: bash .port/tools/build-vt-wasm.sh
 
-      - name: Optimize WASM
+      - name: Optimize ReleaseFast WASM
         run: |
           wasm-opt -O3 --strip-dwarf \
             --enable-simd \
@@ -389,7 +471,50 @@ jobs:
             --enable-reference-types \
             zig-out/bin/rustty-vt.wasm \
             -o rustty-vt.wasm
-          ls -la rustty-vt.wasm
+
+      - name: Build ReleaseSmall WASM
+        run: bash .port/tools/build-vt-wasm.sh --config 'profile.release.opt-level="z"'
+
+      - name: Optimize ReleaseSmall WASM
+        run: |
+          wasm-opt -O3 \
+            --enable-simd \
+            --enable-bulk-memory \
+            --enable-sign-ext \
+            --enable-nontrapping-float-to-int \
+            --enable-multivalue \
+            --enable-reference-types \
+            zig-out/bin/rustty-vt.wasm \
+            -o rustty-vt-small.wasm
+
+      - name: Verify WASM simd128
+        run: |
+          # wasm-tools names the simd128 proposal "simd". The artifact must
+          # fail validation when that feature is disabled.
+          for artifact in rustty-vt.wasm rustty-vt-small.wasm; do
+            wasm-tools validate "${artifact}"
+            if wasm-tools validate \
+              --features=-simd "${artifact}"; then
+              echo "${artifact} unexpectedly validates with simd128 disabled" >&2
+              exit 1
+            fi
+            echo "Verified ${artifact} requires simd128"
+          done
+
+      - name: Sign WASM
+        env:
+          MINISIGN_KEY: ${{ secrets.MINISIGN_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          if [ -z "$MINISIGN_KEY" ]; then
+            echo "::warning title=Unsigned WASM::MINISIGN_KEY is not configured; publishing the wasm modules without signatures."
+            exit 0
+          fi
+          printf '%s' "$MINISIGN_KEY" > minisign.key
+          printf '%s' "$MINISIGN_PASSWORD" > minisign.password
+          minisign -S -m rustty-vt.wasm -s minisign.key < minisign.password
+          minisign -S -m rustty-vt-small.wasm -s minisign.key < minisign.password
+          rm -f minisign.key minisign.password
 
       - name: Update Release
         if: github.repository == 'AirelyDev/rustty'
@@ -401,7 +526,33 @@ jobs:
           target_commitish: ${{ github.sha }}
           files: |
             rustty-vt.wasm
+            rustty-vt.wasm.minisig
+            rustty-vt-small.wasm
+            rustty-vt-small.wasm.minisig
           token: ${{ secrets.GH_RELEASE_TOKEN || github.token }}
+
+      - name: Prep R2 Storage
+        run: |
+          mkdir -p "blob/${RUSTTY_COMMIT_LONG}"
+          cp rustty-vt.wasm "blob/${RUSTTY_COMMIT_LONG}/rustty-vt.wasm"
+          cp rustty-vt-small.wasm "blob/${RUSTTY_COMMIT_LONG}/rustty-vt-small.wasm"
+
+      - name: Upload to R2
+        if: github.repository == 'AirelyDev/rustty'
+        uses: ryand56/r2-upload-action@b801a390acbdeb034c5e684ff5e1361c06639e7c # v1.4
+        with:
+          r2-account-id: ${{ secrets.CF_R2_TIP_ACCOUNT_ID }}
+          r2-access-key-id: ${{ secrets.CF_R2_TIP_AWS_KEY }}
+          r2-secret-access-key: ${{ secrets.CF_R2_TIP_SECRET_KEY }}
+          r2-bucket: rustty-tip
+          source-dir: blob
+          destination-dir: ./
+
+      - name: Echo Release URLs
+        run: |
+          echo "Release URLs:"
+          echo "  WASM (ReleaseFast): https://tip.rustty.sh/${RUSTTY_COMMIT_LONG}/rustty-vt.wasm"
+          echo "  WASM (ReleaseSmall): https://tip.rustty.sh/${RUSTTY_COMMIT_LONG}/rustty-vt-small.wasm"
 
   build-macos:
     needs: [setup]
@@ -419,6 +570,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Important so that build number generation works
+          fetch-depth: 0
 
       - name: Install Rust toolchain (pinned via rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@stable
@@ -458,14 +612,20 @@ jobs:
         env:
           SPARKLE_KEY_PUB: ${{ secrets.PROD_MACOS_SPARKLE_KEY_PUB }}
         run: |
-          # Version Info. A tip build has no marketing version of its own; the
-          # build number is what Sparkle compares (sparkle:version).
+          # Version Info. A tip build's marketing version is its short
+          # commit, as the reference's is; the build number is what Sparkle
+          # compares (sparkle:version).
           /usr/libexec/PlistBuddy -c "Set :RusttyCommit $RUSTTY_COMMIT" "$APP/Contents/Info.plist"
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $RUSTTY_BUILD" "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $RUSTTY_COMMIT" "$APP/Contents/Info.plist"
 
+          # Updater. Deleting SUEnableAutomaticChecks (false in
+          # Rustty-Info.plist, for local builds) turns automatic update checks
+          # on for tip builds, as the reference's workflow does.
           if [ -n "$SPARKLE_KEY_PUB" ]; then
             /usr/libexec/PlistBuddy -c "Set :SUPublicEDKey $SPARKLE_KEY_PUB" "$APP/Contents/Info.plist"
           fi
+          /usr/libexec/PlistBuddy -c "Delete :SUEnableAutomaticChecks" "$APP/Contents/Info.plist"
 
       - name: Import codesigning certificate
         env:
@@ -654,6 +814,6 @@ jobs:
       - name: Upload Release URLs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-urls
+          name: release-urls-${{ inputs.pr || '0' }}
           path: release-urls.txt
           retention-days: 2
