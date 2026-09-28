@@ -220,8 +220,8 @@ maintainers migrating from other terminal emulators:
 - **Internationalization** (was `-Di18n=<bool>`): on by default for macOS
   and glibc Linux, off elsewhere. Set `RUSTTY_I18N=false` (or `true`) in the
   environment of both the `cargo build` and the `xtask resources` steps; the
-  latter then omits (or installs) the `share/locale` catalogs. `xtask
-  resources` also takes `--i18n <bool>` directly.
+  latter then omits (or installs) the `share/locale` catalogs.
+  `xtask resources` also takes `--i18n <bool>` directly.
 
 - **Documentation** (was `-Demit-docs=<bool>`): `xtask resources` renders
   the man pages and the HTML/markdown docs in-process (no pandoc needed), so
