@@ -7372,3 +7372,19 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **test**: `cargo +nightly miri test -p rustty-vaxis --test image_tier`: E0425, then UB; after: 19 passed,
   3 ignored. The whole lane: 157 passed, 12 ignored. Native: `image_tier` passes.
 - **state**: CLOSED (fixed).
+
+## N393 — the C `Style` writer stored eight bytes through a one-byte field pointer (provenance)
+
+- **id**: N393. Not a ledger row: task C-1 (G6, `rustty-vt-c` lane).
+- **severity**: medium (UB on every C-API style read; no observed miscompile). **kind**: port soundness.
+- **finding**: `style.rs` `Style::write` ports `@as(*align(1) u64, @ptrCast(&out.bold)).* = bytes` as
+  `(&mut out.bold as *mut bool as *mut u64).write_unaligned(bytes)`. A pointer made from `&mut out.bold`
+  has provenance for that one byte, so the 8-byte store is out of bounds for it. Miri (G6):
+  `attempting a write access using <..> at alloc..[0x39], but that tag does not exist` (the tag covers
+  `[0x38..0x39]`), `style::tests::convert_style_with_colors`.
+- **fix** (task C-1): the pointer is derived from the whole `Style` (`out as *mut Style as *mut u8`,
+  offset by `offset_of!(Style, bold)`); the same eight bytes are written, and the existing const
+  asserts still pin the eight fields as consecutive.
+- **test**: `style::tests::convert_style_with_colors` under Miri: UB before, pass after. Native: the
+  `style::` tests pass.
+- **state**: CLOSED (fixed).
