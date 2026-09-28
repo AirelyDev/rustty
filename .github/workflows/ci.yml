@@ -243,10 +243,12 @@ jobs:
         if: runner.os == 'macOS'
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim
 
-      # G-BLUEPRINT and G-VALGRIND are Linux-only lanes: blueprint-compiler is
-      # a GTK tool with no macOS package, and valgrind has no working
-      # arm64-Darwin port. Both gates report BLOCKED (never green) on macOS.
-      # G-I18N needs the gettext tools on both legs.
+      # G-BLUEPRINT is a Linux-only lane: blueprint-compiler is a GTK tool
+      # with no macOS package, so the gate reports BLOCKED (never green) on
+      # macOS. G-I18N needs the gettext tools on both legs. No valgrind here:
+      # this job's G-VALGRIND is BLOCKED by RUSTTY_VALGRIND_OWN_JOB (the
+      # `valgrind` job below installs it and runs the gate), and
+      # G-VALGRIND-SELF runs against a fake valgrind (review L-6 F8).
       #
       # The GTK dev packages are what make G-GTKFEAT actually RUN. That gate
       # exists to lint the ~30k lines under `crates/rustty-apprt/src/gtk/**`
@@ -257,7 +259,7 @@ jobs:
       # configs checked in, nothing executing them. Verified by what it caught
       # the first time it ran on a machine with GTK — a dropped twin attribute
       # in the renderer that had made the lane RED (see the preceding commit).
-      - name: Install gate tooling (G-BLUEPRINT / G-VALGRIND / G-I18N / G-KAITAI)
+      - name: Install gate tooling (G-BLUEPRINT / G-I18N / G-KAITAI)
         shell: bash
         run: |
           set -euxo pipefail
@@ -266,7 +268,7 @@ jobs:
             # doxygen: G-DOXYGEN. graphviz: the Doxyfile's diagram support.
             # libglib2.0-dev: G-FEATMATRIX's `flatpak` arm links gio-2.0,
             # exactly as SharedDeps.zig:683 does.
-            sudo apt-get install -y blueprint-compiler valgrind libc6-dbg gettext \
+            sudo apt-get install -y blueprint-compiler gettext \
               doxygen graphviz libglib2.0-dev \
               libgtk-4-dev libadwaita-1-dev libgtk4-layer-shell-dev
           else
@@ -468,9 +470,11 @@ jobs:
       # silent skips. Env setup, not a check.
       - name: Require live GL and the mirrored fuzz corpus (R14)
         run: |
-          echo "RUSTTY_REQUIRE_GL=1" >> "$GITHUB_ENV"
-          echo "LIBGL_ALWAYS_SOFTWARE=1" >> "$GITHUB_ENV"
-          echo "RUSTTY_REQUIRE_FUZZ_CORPUS=1" >> "$GITHUB_ENV"
+          {
+            echo "RUSTTY_REQUIRE_GL=1"
+            echo "LIBGL_ALWAYS_SOFTWARE=1"
+            echo "RUSTTY_REQUIRE_FUZZ_CORPUS=1"
+          } >> "$GITHUB_ENV"
 
       - name: G-VALGRIND (shard ${{ matrix.shard }} of 4, 4 memcheck processes)
         env:
