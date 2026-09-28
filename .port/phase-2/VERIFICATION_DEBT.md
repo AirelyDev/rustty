@@ -2493,3 +2493,47 @@ secrets they name, dispatch `Release Tip` with `pr` set, and check the uploaded 
 `simd` on `rustty-core`'s `rustty-vt` edge; the `false` row must fail N420's
 `simd_feature_reaches_the_terminal_and_the_simd_kernels`. `build-nix`: set
 `CARGO_PROFILE_RELEASE_STRIP` to `false` in `nix/package.nix`; the `no symbols` step must fail.
+
+## V26. Windows full-workspace test run over the clang-cl-built C/C++ dependencies, and the N355 crash recipe — **ENVIRONMENT-BLOCKED** (user-deferred) [parity tail F-1, 2026-09-28]
+
+**Blocked on:** run time, not a missing machine: the user asked the tail wave to wrap up without long runs
+(2026-09-28), and the whole Windows suite under rwin's x64 emulation is one. The host (rwin) exists; the recipe
+below runs there as is.
+
+```
+PORTED: crates-sys/zlib-sys/build.rs
+PORTED: crates-sys/freetype-sys/build.rs
+PORTED: crates-sys/harfbuzz-sys/build.rs
+PORTED: crates-sys/libpng-sys/build.rs
+PORTED: crates-sys/oniguruma-sys/build.rs
+PORTED: crates-sys/glslang-sys/build.rs
+PORTED: crates-sys/spirv-cross-sys/build.rs
+PORTED: crates-sys/wuffs-sys/build.rs
+PORTED: crates-sys/dcimgui-sys/build.rs
+PORTED: crates-sys/breakpad-sys/build.rs
+PORTED: crates/rustty-font-shaper/build.rs
+```
+
+**What is already measured:** Task F-1 (N353) moved every vendored
+`cc` build to clang-cl on MSVC targets and measured the compile lines, `cargo clippy --workspace`, and the unit
+tests of each dependency's direct consumers on rwin (`NEW-FINDINGS.md` N353). Not run: the whole Windows suite,
+whose rustty-vt part alone takes several minutes under x64 emulation.
+
+**Recipe — Windows** (rwin, a fresh clone per the tail-wave brief, rc.exe's SDK dir on `PATH`,
+`RUSTTY_REQUIRE_FUZZ_CORPUS=1`):
+```
+cargo test --workspace --exclude libxml2-sys --exclude fontconfig-sys --exclude sentry-sys --target x86_64-pc-windows-msvc
+```
+Pass: every test binary green (CI's Windows leg runs the same command on `windows-latest`). To confirm the compiler,
+rebuild with `CC_ENABLE_DEBUG_OUTPUT=1` and check that no `target\x86_64-pc-windows-msvc\debug\build\*\output` has a
+`"cl.exe"` line or a `D9002` warning.
+
+**Recipe — N355** (closed unreproduced after 1202 runs; use this if the SIGSEGV of `rustty-renderer`'s macOS
+unit-test binary recurs): build it with `cargo test -p rustty-renderer --lib --no-run`, then from
+`crates/rustty-renderer`
+```
+for i in $(seq 1 500); do lldb --batch -o run -k 'thread backtrace all' -k quit -- ../../target/debug/deps/rustty_renderer-HASH || break; done
+```
+checking each run's output for `exited with status = 0` (lldb's own exit status does not say whether the process
+crashed), and alternate `--test-threads=1` runs to separate threading from Metal. A signal gives no Rust backtrace;
+the `thread backtrace all` of the stopped process is the evidence.

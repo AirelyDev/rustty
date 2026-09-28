@@ -21,6 +21,9 @@ fn main() {
     println!("cargo:rerun-if-changed=vendor/stb_image_resize.h");
 
     cc::Build::new()
+        // Task F-1 (N353): clang-cl, not cl.exe, on an MSVC target (the
+        // reference compiles every C unit with Zig's clang); a no-op elsewhere.
+        .prefer_clang_cl_over_msvc(true)
         .file("vendor/stb_impl.c")
         .include("vendor")
         // stb_image_resize.h is a public-domain single-header lib; silence its

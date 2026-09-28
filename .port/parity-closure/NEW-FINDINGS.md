@@ -6425,7 +6425,13 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   above does list all three (so clang-cl accepted them there), but whether clang-cl honours or merely tolerates
   each was not established; confirm with `CC_ENABLE_DEBUG_OUTPUT=1` (and `-###`) on Windows and route any
   ignored one through `/clang:` (left for W-4/W-3; task W-2b had no Windows host).
-- **state**: CLOSED (task W-2).
+- **task F-1** (the W-2 F6 residual): all three are honoured by clang-cl in their bare spelling, MEASURED on rwin
+  with `clang-cl -###` (LLVM 23.1.2): `-fmerge-all-constants` appears on the `-cc1` line (absent without it);
+  `-fsanitize=undefined -fsanitize-trap=undefined` gives `-fsanitize=...` and `-fsanitize-trap=...`, adding
+  `-fno-sanitize-trap=undefined` removes the `-fsanitize-trap=` set (recover instead), adding
+  `-fno-sanitize=undefined` removes every `-fsanitize*` argument. No warning for any of them. Nothing to reroute; the
+  same measurement covers the bare `-fno-sanitize*` pair in every other `-sys` build (N353).
+- **state**: CLOSED (task W-2; residual confirmed by task F-1).
 
 ## N350 — three workspace members are excluded from the Windows build, explicitly
 
@@ -6525,7 +6531,43 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `flag_if_supported` drops others silently. Everything builds and its tests pass; the difference is the compiler.
 - **fix direction**: `prefer_clang_cl_over_msvc(true)` in each build, the clang-only flags through `/clang:` (the
   N347 pattern), then a measured Windows run per dependency.
-- **state**: OPEN.
+- **fix** (task F-1): `prefer_clang_cl_over_msvc(true)` in `zlib-sys`, `freetype-sys`, `harfbuzz-sys`, `libpng-sys`,
+  `oniguruma-sys`, `glslang-sys`, `spirv-cross-sys`, `wuffs-sys` (codec and shim), `dcimgui-sys`, `gettext-sys`,
+  `breakpad-sys`, and the `rustty-os` (pty, os_log), `rustty-apprt` (GResource blob) and `rustty-font-shaper`
+  (stb_image_resize) shims. `gettext-sys`, `rustty-os` and `rustty-apprt`'s builds are not reached on an MSVC target
+  (macOS-only, POSIX-only, GTK-only), so there it only states the compiler. Flags, each MEASURED on rwin
+  (`clang-cl -###`, LLVM 23.1.2):
+  - bare `-fno-sanitize=undefined`, `-fno-sanitize-trap=undefined`, `-w` and `/FIcstdint` are honoured by clang-cl
+    (N347's task F-1 note), so they stay as they are;
+  - `-std=gnu17` (`oniguruma-sys`) is "unknown argument ignored in clang-cl": now `/clang:-std=gnu17` on MSVC;
+  - cc spells `breakpad-sys`'s `.std("gnu++17")` as `-std:gnu++17`, which clang-cl ignores ("argument unused during
+    compilation", the C++14 default then applies) as cl.exe did (D9002): now `/clang:-std=gnu++17` on MSVC,
+    `-std=gnu++17` elsewhere (what `.std()` emitted there);
+  - clang-cl enables C++ exceptions only through `/EH`, and cc passes none: `spirv-cross-sys` failed to build
+    ("cannot use 'throw' with exceptions disabled", 17 sites). The reference passes no exception flag for any of
+    these C++ packages, so Zig's clang uses its MSVC-target default, `-fcxx-exceptions -fexceptions` (MEASURED:
+    `clang --target=x86_64-pc-windows-msvc -### -x c++`). `/EHs` gives exactly that pair (`/EHsc` adds
+    `-fexternc-nounwind`; nothing gives neither), so `harfbuzz-sys`, `glslang-sys`, `spirv-cross-sys`,
+    `dcimgui-sys` and `breakpad-sys` pass `/EHs` on MSVC. No dependency had to stay on cl.exe.
+- **evidence** (rwin, `x86_64-pc-windows-msvc`, `CC_ENABLE_DEBUG_OUTPUT=1`):
+  `cargo clippy --workspace --exclude libxml2-sys --exclude fontconfig-sys --exclude sentry-sys --all-targets
+  -- -D warnings` passes. In every `-sys`/shim build-script output of that build, 0 `"cl.exe"` lines, every compile
+  line is `clang-cl.exe`, and 0 `D9002`/"unknown argument"/"argument unused" warnings; the pre-fix `zlib-sys` output
+  of the same clone (built by cl.exe) carries the two D9002 lines for `-fno-sanitize=undefined` and
+  `-fno-sanitize-trap=undefined`. Sample lines: oniguruma `... "-w" "/clang:-std=gnu17" "-fno-sanitize=undefined"
+  "-fno-sanitize-trap=undefined" ...`; breakpad `... "/clang:-std=gnu++17" "/EHs" "-w" ...`; spirv-cross, glslang,
+  harfbuzz, dcimgui `... "-std:c++17" "-W0" "/EHs" "-w" "-fno-sanitize=undefined" "-fno-sanitize-trap=undefined"
+  ...`. Tests, one run: `cargo test --no-fail-fast -p zlib-sys -p libpng-sys -p freetype-sys -p harfbuzz-sys
+  -p glslang-sys -p spirv-cross-sys -p dcimgui-sys -p oniguruma-sys -p wuffs-sys -p rustty-font-shaper
+  -p rustty-oniguruma -p rustty-wuffs -p rustty-zigimg -p rustty-renderer -p rustty-inspector`: all pass
+  (rustty-font-shaper 109 + 3 ignored, rustty-renderer 121 + `opengl_gate_parity` 3, rustty-wuffs 19,
+  rustty-zigimg 16 + codec 12, zlib-sys 11, dcimgui-sys 5, wuffs-sys 3, the other `-sys` smoke tests 1-2 each), except
+  two rustty-inspector tests that failed on a missing `test-decommit-sim`, not on the compiler (fixed under N383,
+  then 21/21). macOS is unaffected (cc drives clang there; `cargo build --workspace` and the touched `-sys` tests
+  pass).
+- **not run** (`.port/phase-2/VERIFICATION_DEBT.md` V26): the full Windows `cargo test --workspace` over the clang-cl-built
+  dependencies (the rustty-vt suite, the only other zlib/dcimgui consumer, takes several minutes under emulation).
+- **state**: CLOSED (fixed; full-workspace Windows test run deferred to V26).
 
 ## N354 — `windows_threadenter_reads_the_pty_through_the_windows_read_thread` failed once in a full Windows run
 
@@ -6566,7 +6608,12 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   debugger loop until it stops, e.g. `for i in $(seq 1 500); do lldb --batch -o run -k 'thread backtrace all'
   -k quit <target/debug/deps/rustty_renderer-HASH> || break; done`, and compare `--test-threads=1` runs to
   separate threading from Metal.
-- **state**: OPEN.
+- **task F-1** (15-minute bound, no hunt): the loop above, time-boxed to 870 s, on
+  `target/debug/deps/rustty_renderer-<hash>` built from `merge-w4` @ 110ecea9 plus F-1's build-script changes (none
+  compiles into the macOS renderer), alternating default threading and `--test-threads=1`, with a
+  `cargo build --workspace` and `cargo clippy --workspace` running beside it for part of the window: 496 runs
+  (248 + 248), 496 exited 0, no stop. Total without a recurrence: 706 + 496 = 1202 runs.
+- **state**: CLOSED (unreproduced, 1202 runs; the recipe is `.port/phase-2/VERIFICATION_DEBT.md` V26).
 
 ## N360 — allocator call-shape residuals (T3): every C-observable difference the S-7 series leaves
 
@@ -7385,7 +7432,20 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   so the CI leg is not affected.
 - **fix direction**: give the two tests their own `test-decommit-sim` edge (a rustty-core dev-dependency feature), or
   scope them on the target (R14 form 1) with the workspace-only coverage stated.
-- **state**: OPEN.
+- **fix** (task F-1): the first direction. `crates/rustty-core/Cargo.toml` has a
+  `[target.'cfg(windows)'.dev-dependencies] rustty-vt = { workspace = true, features = ["test-decommit-sim"] }` edge:
+  the tests then see `is_test` semantics on Windows as the reference's test binary does, without depending on the
+  workspace's unification. Scoped to Windows because macOS and Linux reclaim natively, so their tests keep the OS
+  path; a dev-dependency's features reach no production build (`resolver = "2"`). A sibling of the same kind:
+  `rustty-inspector`'s `widgets::pagelist::ws7_tests::pagelist_compression_view_renders_live_numbers` and
+  `pagelist_widget_draw_path_never_restores` also assert `compression_enabled()` and failed on Windows in a
+  `-p`-scoped run that did not unify the feature (MEASURED on rwin, `pagelist.rs:2677` and `:2782`); it gets the same
+  edge. No other crate outside rustty-vt asserts it (grep).
+- **evidence** (rwin, `x86_64-pc-windows-msvc`): before, `cargo test -p rustty-core compression` fails both
+  (`assertion failed: latched.is_some()`, `renderer_seam.rs:2772`), 2 passed / 2 failed; after, 4/4, then 25/25 direct
+  runs of the unit-test binary (`compression_tests`, 3 tests each). `cargo test -p rustty-inspector` alone: 21/21 + 2
+  (before: 19/21 in the multi-crate run above). macOS: `cargo test -p rustty-core compression` 4/4.
+- **state**: CLOSED (fixed).
 
 ## N384 — `EnvMap` iterated in random order; Zig's map iterates in insertion order (the child's envp order)
 

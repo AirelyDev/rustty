@@ -187,6 +187,11 @@ fn main() {
 
     let mut build = cc::Build::new();
     build
+        // Windows (MSVC ABI), task F-1 (N353): the reference compiles this with
+        // Zig's clang even when `abi == .msvc`, so on an MSVC target cc drives
+        // clang-cl (the MSVC-ABI clang driver; a CC/CXX override still wins),
+        // not cl.exe. A no-op on every other target.
+        .prefer_clang_cl_over_msvc(true)
         // config.h first (generated), then the vendored headers.
         .include(&out_dir)
         .include(&onig_src)
@@ -205,7 +210,14 @@ fn main() {
         // reproduces exactly how the vendored source was compiled upstream; the
         // emitted library is byte-for-byte identical (a front-end language-mode
         // choice only, no codegen difference for this C89-era source).
-        .flag_if_supported("-std=gnu17");
+        .flag_if_supported(if target_env == "msvc" {
+            // clang-cl ignores the bare clang spelling ("unknown argument
+            // ignored in clang-cl", MEASURED on the Windows lane, task F-1,
+            // N353); it takes the clang driver flag through `/clang:`.
+            "/clang:-std=gnu17"
+        } else {
+            "-std=gnu17"
+        });
 
     // The reference disables ubsan on MSVC (Zig's ubsan runtime cannot be
     // bundled on Windows, leaving __ubsan_handle_* unresolved).

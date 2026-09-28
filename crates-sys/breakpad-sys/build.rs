@@ -120,6 +120,11 @@ fn main() {
 
     let mut build = cc::Build::new();
     build
+        // Windows (MSVC ABI), task F-1 (N353): the reference compiles this with
+        // Zig's clang even when `abi == .msvc`, so on an MSVC target cc drives
+        // clang-cl (the MSVC-ABI clang driver; a CC/CXX override still wins),
+        // not cl.exe. A no-op on every other target.
+        .prefer_clang_cl_over_msvc(true)
         // Reference: `link_libcpp = true` — the whole library is C++ (clang
         // dispatches the .mm ObjC++ and .S asm members by extension). cc emits
         // the platform C++ runtime link (c++ on Darwin, stdc++ elsewhere), the
@@ -128,7 +133,17 @@ fn main() {
         // Reference: `zig build` drives clang with its default C++ standard
         // (gnu++17); Apple's `c++` driver may default lower, so pin it — the
         // sources use std::optional (C++17).
-        .std("gnu++17")
+        //
+        // On MSVC targets cc spells `.std()` as `-std:gnu++17`, which cl.exe
+        // (D9002) and clang-cl ("argument unused during compilation", the
+        // default C++14 then applies) both ignore, MEASURED on the Windows
+        // lane (task F-1, N353). clang-cl takes the clang spelling through
+        // `/clang:`.
+        .flag(if target_env == "msvc" {
+            "/clang:-std=gnu++17"
+        } else {
+            "-std=gnu++17"
+        })
         // Reference: `lib.root_module.addIncludePath(upstream.path("src"))`,
         // plus `b.path("vendor")` for the lss header (see the PORT NOTE in the
         // module docs — both resolve against `vendor/src` here).
@@ -143,6 +158,18 @@ fn main() {
     // default under zig build).
     if target_os == "freebsd" || target_env == "musl" {
         build.flag_if_supported("-fPIC");
+    }
+
+    // C++ exceptions on MSVC targets (task F-1, N353). The reference passes no
+    // exception flag, so Zig's clang compiles with its default, which on an MSVC
+    // target is `-fcxx-exceptions -fexceptions` (MEASURED: `clang
+    // --target=x86_64-pc-windows-msvc -### -x c++`). clang-cl enables C++
+    // exceptions only through `/EH`, and cc passes none, so without this the
+    // sources' `throw` is rejected ("cannot use 'throw' with exceptions
+    // disabled", MEASURED on spirv-cross). `/EHs` gives exactly that cc1 pair
+    // (`/EHsc` would add `-fexternc-nounwind`, which the reference does not).
+    if target_env == "msvc" {
+        build.flag("/EHs");
     }
 
     // Per-target source lists, verbatim from pkg/breakpad/build.zig.

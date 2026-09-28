@@ -31,6 +31,10 @@ fn main() {
     if supported {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         cc::Build::new()
+            // Task F-1 (N353): clang-cl, not cl.exe, on an MSVC target (the
+            // reference compiles every C unit with Zig's clang). No MSVC target
+            // reaches this build today (POSIX and macOS only).
+            .prefer_clang_cl_over_msvc(true)
             .file(manifest_dir.join("cbits/pty.c"))
             // Vendored upstream-style code: do not let warnings fail the build.
             .warnings(false)
@@ -44,6 +48,7 @@ fn main() {
     if target_os == "macos" {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         cc::Build::new()
+            .prefer_clang_cl_over_msvc(true) // task F-1 (N353), as above
             .file(manifest_dir.join("cbits/log_shim.c"))
             .warnings(false)
             .flag_if_supported("-w")
