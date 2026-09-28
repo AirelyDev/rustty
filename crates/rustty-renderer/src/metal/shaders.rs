@@ -45,10 +45,28 @@ use crate::shaders::Image;
 /// `shaders.zig:11`'s `const log = std.log.scoped(.metal);`.
 const LOG_SCOPE: &str = "metal";
 
+/// The reference error set of this file's init path (NEW-FINDINGS N8): the
+/// inferred union of `checkError`'s `error.MetalFailed` and `Allocator.Error`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Error {
-    /// A Metal API call failed.
+    /// A Metal API call failed (`checkError`).
     MetalFailed,
+    /// `Allocator.Error.OutOfMemory`. The port's own allocations abort on OOM,
+    /// so the one reachable source is `macos.foundation.String.createWithBytes`
+    /// (`pkg/macos/foundation/string.zig:8-20`), which maps a failed
+    /// `CFStringCreateWithBytes` to `error.OutOfMemory`; CoreFoundation fails
+    /// it for a custom shader whose bytes are not valid UTF-8.
+    OutOfMemory,
+}
+
+/// Zig's `{}` of an error value: `error.<Name>`.
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Error::MetalFailed => "error.MetalFailed",
+            Error::OutOfMemory => "error.OutOfMemory",
+        })
+    }
 }
 
 // -------------------------------------------------------------------------------
@@ -385,13 +403,10 @@ impl Shaders {
             // want to just not use any postprocess shaders since we don't
             // want to block Ghostty from working.
             // log.warn("error initializing postprocess shaders err={}", .{err});
-            // (R1 rendering note: the reference's `{}` on a Zig error prints
-            //  `error.<Name>` over its whole error set; the port has collapsed
-            //  every failure in this call tree to the single
-            //  `Error::MetalFailed`, so this always renders `MetalFailed`.
-            //  A pre-existing error-type divergence, not a logging one; tracked
-            //  in its own right as `.port/parity-closure/NEW-FINDINGS.md` N8.)
-            log::warn!(target: LOG_SCOPE, "error initializing postprocess shaders err={err:?}");
+            // (`{err}` renders `error.<Name>` as Zig's `{}` does; the causes the
+            //  reference distinguishes, a Metal compile error and a source that
+            //  `createWithBytes` rejects, are distinct variants. NEW-FINDINGS N8.)
+            log::warn!(target: LOG_SCOPE, "error initializing postprocess shaders err={err}");
             Vec::new()
         });
 
@@ -531,7 +546,10 @@ fn init_post_pipeline(
     // its bytes as UTF-8 WITHOUT lossy replacement. spirv-cross emits ASCII so this
     // never fails in practice, but an invalid byte is surfaced as an error rather than
     // silently corrupted to U+FFFD (the reference passes the exact `[:0]const u8` bytes).
-    let text = std::str::from_utf8(data.to_bytes()).map_err(|_| Error::MetalFailed)?;
+    // const source = try macos.foundation.String.createWithBytes(data, .utf8, false);
+    //   `CFStringCreateWithBytes` returns NULL for bytes that are not UTF-8, and
+    //   `createWithBytes` turns that into `error.OutOfMemory` (N8).
+    let text = std::str::from_utf8(data.to_bytes()).map_err(|_| Error::OutOfMemory)?;
     let src = NSString::from_str(text);
     let post_library = device
         .newLibraryWithSource_options_error(&src, None)
@@ -571,6 +589,66 @@ fn init_post_pipeline(
 fn check_error(nserr: &objc2_foundation::NSError) {
     // log.err("metal error={s}", .{str.cstringPtr(.ascii).?});
     log::error!(target: LOG_SCOPE, "metal error={}", nserr.localizedDescription());
+}
+
+/// NEW-FINDINGS N8: the postprocess-shader warning names the cause as the
+/// reference does, `error.MetalFailed` for a source Metal rejects and
+/// `error.OutOfMemory` for one `createWithBytes` rejects (not UTF-8).
+#[cfg(test)]
+mod post_pipeline_error_tests {
+    use crate::metal::metal_impl::Metal;
+    use crate::size::AlphaBlending;
+
+    fn post_shader_warnings(source: &std::ffi::CStr) -> Option<Vec<String>> {
+        let metal = match Metal::init_offscreen(AlphaBlending::Native, 4, 4) {
+            Ok(m) => m,
+            Err(e) => {
+                crate::metal::test_support::require_metal_or_skip(
+                    "post_pipeline_error_tests",
+                    &format!("{e:?}"),
+                );
+                eprintln!("no Metal device; skipping");
+                return None;
+            }
+        };
+        let capture = crate::log_capture::start();
+        let shaders = metal.init_shaders(&[source]).expect("init_shaders");
+        let records = capture.messages();
+        drop(capture);
+        assert!(
+            shaders.post_pipelines.is_empty(),
+            "the bad shader must be dropped"
+        );
+        Some(
+            records
+                .into_iter()
+                .filter(|(level, target, _)| *level == log::Level::Warn && target == "metal")
+                .map(|(_, _, msg)| msg)
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn metal_compile_error_logs_error_metal_failed() {
+        let Some(warns) = post_shader_warnings(c"this is not metal shading language") else {
+            return;
+        };
+        assert_eq!(
+            vec!["error initializing postprocess shaders err=error.MetalFailed".to_string()],
+            warns
+        );
+    }
+
+    #[test]
+    fn non_utf8_source_logs_error_out_of_memory() {
+        let Some(warns) = post_shader_warnings(c"fragment \xff\xfe") else {
+            return;
+        };
+        assert_eq!(
+            vec!["error initializing postprocess shaders err=error.OutOfMemory".to_string()],
+            warns
+        );
+    }
 }
 
 #[cfg(all(test, rustty_metallib))]
