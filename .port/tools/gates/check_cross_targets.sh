@@ -68,10 +68,42 @@ probe_cc_target() {
   # highway-sys compiling C++17 against libc++ — is what has to be probed, and
   # that is where the missing sysroot shows up.
   printf '#include <cstddef>\n#include <cstdint>\nint main(void){return 0;}\n' > "$probe/t.cc"
-  "${CXX:-c++}" --target="$triple" -std=c++17 -stdlib=libc++ \
+  # cc-rs compiles each target with `CXX_<triple>` when it is set (the NDK's
+  # `<triple><api>-clang++`, for example), so the probe asks that compiler.
+  local cxx_var="CXX_${triple//-/_}"
+  "${!cxx_var:-${CXX:-c++}}" --target="$triple" -std=c++17 -stdlib=libc++ \
     -c "$probe/t.cc" -o "$probe/t.o" > "$probe/log" 2>&1
   rc=$?
   return $rc
+}
+
+# S64-F9: `GhosttyLibVt.zig:273-276` links every Android lib-vt with
+# `link_z_max_page_size = 16384` ("Support 16kb page sizes, required for
+# Android 15+"). An Android leg passes only if every PT_LOAD segment of the
+# linked librustty_vt_c.so is aligned to at least 16 KiB. llvm-readelf is taken
+# from beside the target's cc-rs compiler (the NDK's bin/), else from PATH.
+android_page_align() {
+  local triple="$1" cc_var readelf so aligns a bad_align=""
+  cc_var="CC_${triple//-/_}"
+  readelf="$(dirname "${!cc_var:-/nonexistent/x}")/llvm-readelf"
+  [ -x "$readelf" ] || readelf="$(command -v llvm-readelf || true)"
+  so="target/$triple/release/librustty_vt_c.so"
+  if [ -z "$readelf" ]; then
+    echo "          no llvm-readelf to check $so's PT_LOAD alignment"
+    bad "$triple"
+    return
+  fi
+  aligns="$("$readelf" -lW "$so" | awk '$1 == "LOAD" { print $NF }')"
+  for a in $aligns; do
+    # bash arithmetic reads readelf's 0x-prefixed hex.
+    if (( a < 16384 )); then bad_align="$bad_align $a"; fi
+  done
+  if [ -z "$aligns" ] || [ -n "$bad_align" ]; then
+    echo "          $so PT_LOAD alignments: $(printf '%s' "$aligns" | tr '\n' ' ') (need >= 0x4000, S64-F9)"
+    bad "$triple"
+  else
+    ok "$triple (PT_LOAD align $(printf '%s\n' "$aligns" | sort -u | tr '\n' ' '| sed 's/ $//'))"
+  fi
 }
 
 # target|extra cargo args|needs a cross C toolchain (1) or not (0)
@@ -95,7 +127,13 @@ TARGETS=(
   # reports skipped on any host without it — which is the honest outcome
   # rather than the silence of not listing the target at all. This gate's
   # header named android before the target existed; now it is real.
+  # The reference's matrix is aarch64-linux-android, x86_64-linux-android and
+  # arm-linux-androideabi (test.yml:891-895); Zig's arm baseline cpu is v7a,
+  # which is Rust's armv7-linux-androideabi. Point cc-rs and cargo at the NDK
+  # with CC_/CXX_/AR_<triple> and CARGO_TARGET_<TRIPLE>_LINKER (task A-1).
   "aarch64-linux-android||1"
+  "x86_64-linux-android||1"
+  "armv7-linux-androideabi||1"
 )
 
 echo "=== G-XTARGET :: cross-target builds of rustty-vt-c ==="
@@ -119,7 +157,10 @@ for spec in "${TARGETS[@]}"; do
   log="$WORK/$target.log"
   # shellcheck disable=SC2086  # $extra is an intentional empty-or-flags word.
   if cargo build -p rustty-vt-c --target "$target" --release $extra > "$log" 2>&1; then
-    ok "$target"
+    case "$target" in
+      *-android*) android_page_align "$target" ;;
+      *) ok "$target" ;;
+    esac
   else
     # A missing cross C toolchain is an ENVIRONMENT fact, not a rustty defect.
     # Distinguish it so a developer box without mingw/NDK does not read as a
