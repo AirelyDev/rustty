@@ -59,8 +59,8 @@ pub enum DecommitMode {
 // PORT NOTE: values verified against <sys/mman.h> / <asm-generic/mman-common.h>
 // on both targets.
 //   Darwin: MADV_DONTNEED 4, MADV_FREE 5, MADV_FREE_REUSABLE 7, MADV_FREE_REUSE 8
-//   Linux:  MADV_DONTNEED 4 (x86_64/aarch64; other arches are not in the build
-//           matrix)
+//   Linux and Android: MADV_DONTNEED 4, the asm-generic value, which x86_64,
+//           aarch64 and arm (armv7-linux-androideabi) all use
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const MADV_DONTNEED: i32 = 4;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -133,7 +133,8 @@ impl MadviseError {
 }
 
 /// The errno values `MadviseError::from_errno` distinguishes. They are the
-/// same on Darwin and Linux (x86_64/aarch64) except `EAGAIN` and `ENOSYS`.
+/// same on Darwin and on Linux/Android (the asm-generic values, used by x86_64,
+/// aarch64 and arm) except `EAGAIN` and `ENOSYS`.
 #[cfg(any(
     target_os = "macos",
     target_os = "ios",

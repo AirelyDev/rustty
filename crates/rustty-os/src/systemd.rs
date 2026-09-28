@@ -7,7 +7,8 @@
 
 // PORT NOTE: the Zig reference imports `std`, `builtin`, and uses
 // `std.log.scoped(.systemd)`. The OS switch is `builtin.os.tag`; here it is
-// `cfg!(target_os = "linux")`. The Linux paths use raw `libc` syscalls
+// `cfg(any(target_os = "linux", target_os = "android"))`, because Zig's
+// Android targets are os `.linux` (N425). The Linux paths use raw `libc` syscalls
 // (R3: a binding to the SAME system library `std.os.linux` targets) for the
 // AF_UNIX socket notify protocol; environment lookups use `std::env::var_os`
 // (the reference's `std.posix.getenv`).
