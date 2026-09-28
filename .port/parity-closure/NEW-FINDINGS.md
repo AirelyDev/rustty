@@ -7044,7 +7044,11 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 ## N376 — `test.yml` job by job: what `ci.yml` + `ci.sh` cover, and the jobs still without a counterpart
 
 - **id**: N376. P-1 (read-only audit of the 53 jobs at the pin). **severity**: medium. **kind**: CI
-  parity. **state**: OPEN: the remaining items are CI legs P-1 could not run or verify; listed
+  parity. **state**: OPEN, narrowed by parity tail CI-1 (2026-09-28): gaps 1-5, 7, 11-16 and 18-21
+  are CLOSED (see "CI-1" below; the new jobs are statically checked and have not run on GitHub,
+  VERIFICATION_DEBT V25); remaining: gap 6's wasm ABI-manifest step, gap 8, gap 9's
+  `build-example-c-vt-build-info` passthru test, gap 10 and gap 17, each with its reason below.
+  Previously: OPEN: the remaining items are CI legs P-1 could not run or verify; listed
   precisely for a follow-up batch.
 - **Covered** (ported or translated, counterpart in brackets): `required` (ci.yml aggregator),
   `build-bench` (G-BENCH), `list-examples` + `build-examples-zig` (G-EXAMPLES, the 25 C/C++ examples;
@@ -7104,6 +7108,72 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `c-vt-cmake-cross`, #2 cmake-windows; 14. #8 macOS dylib checks; 15. #19 debian-13; 16. #18 wuffs
   alone, #14 `test-i18n`; 17. #10 tarball size; 18. #21 `build-macos-xcode-27`, #1 `skip`, #20
   `on:`/`concurrency`.
+- **CI-1 (parity tail, 2026-09-28): gap by gap.** Each new `ci.yml` job is named after the reference
+  job it ports, runs its steps with Cargo in place of `nix develop -c zig build`, has `needs: ci`
+  (the reference's `needs: test`) and is in `required.needs`; runner mapping and the other common
+  differences are in the section header in `ci.yml`. Proved by `xtask/tests/ci_workflow.rs` (11
+  tests, each with an in-test negative control on a mutated copy of the real job) and by actionlint,
+  prettier and G-LINT's actionlint/pinact arms. File-level controls, one at a time, restored: drop
+  `test-debian-13` from `required.needs` (RED "`required` does not need `test-debian-13`"); NDK r29 ->
+  r27 (RED "missing `ndk-version: r29`"); the SIMD-off leg's `--no-default-features` dropped (RED).
+  None of the jobs has run on GitHub's runners: VERIFICATION_DEBT V25 names each.
+  1. `skip`: CLOSED as a record, NON_PORTS G13 §6 (its only whole-run output keys on
+     `.github/VOUCHED.td`, not carried; its path filters gate linters G-LINT runs on every push).
+     `ci.yml`'s header says so.
+  2. CLOSED before CI-1: the `windows-examples-cmake` job builds `c-vt-cmake` and
+     `c-vt-cmake-static` on `windows-latest` (the latter is the `c-vt-static` step's subject).
+  3. CLOSED: `build-examples-cmake-cross` (zig 0.16.0 via the reference's setup-zig pin,
+     `x86_64-pc-windows-gnu`, the example's own `RusttyCrossCompiler.cmake`).
+  4. CLOSED: `build-libghostty-vt`, the reference's six targets: the two macOS rows on
+     `macos-latest`, `aarch64-unknown-linux-gnu` natively on `ubuntu-24.04-arm`, `x86_64-linux-gnu`,
+     `x86_64-unknown-linux-musl` through `zig cc`, `x86_64-pc-windows-gnu` with MinGW-w64.
+  5. CLOSED: `build-libghostty-vt-android`, N429's recipe.
+  6. CLOSED except one step: `build-libghostty-vt-wasm` builds ReleaseFast (`build-vt-wasm.sh`) and
+     ReleaseSmall (the same at `opt-level = "z"`), runs wasm-opt with the reference's flags, requires
+     simd128 of both with `wasm-tools validate --features=-simd`, and runs `test/wasm-alloc.mjs` on
+     both. REMAINING: "Validate WASM ABI manifest" (`test-lib-vt-schema -Dtarget=wasm32-freestanding`):
+     G-ABISCHEMA loads the native dylib through ctypes and has no wasm path, so there is nothing to
+     call yet; a gate change, not a workflow edit.
+  7. CLOSED: `build-libghostty-vt-features`, the reference's compile-only matrix (its nine tokens in
+     Cargo spelling, `-all` = `--no-default-features` keeping `simd`): a wasm32 build and a
+     `cargo test --no-run` per configuration. G-VTFEAT's export-set comparison against the oracle is
+     not a reference CI step and stays a local gate.
+  8. REMAINING: the Apple dylib checks (`check-apple-libghostty-vt.nu`). Measured on the Mac: the
+     `merge-w4` release `librustty_vt_c.dylib` is `arm64`, one `LC_BUILD_VERSION` (platform 1), no
+     encryption command, 198 exports all `_rustty_`; an `aarch64-apple-ios` cdylib from
+     `xtask xcframework-vt` is platform 2 with `LC_ENCRYPTION_INFO_64` (cryptoff 16384, cryptsize
+     1605632, cryptid 0) and 198 `_rustty_` exports. So every arm would pass except the install
+     name: Cargo's cdylib carries its absolute build path (`otool -D`), and only the CMake host
+     install sets `@rpath/librustty-vt.dylib`, so the x86_64 and iOS rows have no installed artifact
+     to check. Needs a per-target install step and the script's port; not a workflow edit.
+  9. CLOSED except one test: `build-linux` (x86_64 and arm64), and `build-nix` (x86_64 and arm64)
+     with the release and debug packages, their `+version` greps, the `nm` strip checks (N422) and
+     the four librustty-vt variants. REMAINING: the reference's
+     `build-example-c-vt-build-info` passthru test has no counterpart in `nix/librustty-vt.nix`.
+  10. REMAINING: the 5 MB tarball budget. The lib-vt tarball is 43 MB because it vendors the crates
+      it builds offline from; the assertion would fail by construction. A dist-content decision, not
+      a workflow edit.
+  11. CLOSED: `build-snap` (`cargo build -p rustty --features snap`).
+  12. CLOSED before CI-1 by N402 (the `ci` job installs kaitai-struct-compiler on macOS; C-1 made
+      G-KAITAI HARD).
+  13. CLOSED: `test-gtk`, the four x11 x wayland rows (features plus RUSTTY_GTK_X11/WAYLAND),
+      testing rustty-apprt and rustty and building the app.
+  14. CLOSED: `test-i18n` (N421).
+  15. CLOSED: `test-sentry-linux` (`-p rustty` with and without `--features sentry`).
+  16. CLOSED: `test-fuzz-libghostty` (nightly, cargo-fuzz 0.13.2, `cargo +nightly fuzz build`;
+      cargo-fuzz replaces AFL++, as FUZZ-INVENTORY.md records).
+  17. REMAINING: G-I18N's regenerate-and-compare arm (`check_translations.sh`'s header defers it
+      until `xtask update-translations` walks `crates/rustty-input`). The `translations` job's other
+      arm, msgcmp, runs in `ci.sh`. A gate change, not a workflow edit.
+  18. CLOSED: `test-pkg-linux` (`cargo test -p rustty-wuffs`).
+  19. CLOSED: `test-debian-13` builds `xtask/docker/debian/Dockerfile` with `DISTRO_VERSION=13`
+      from the checkout (the Dockerfile's documented input; the tarball's offline Debian 13 build is
+      G-DIST's arm), 90-minute limit in place of the reference's 10.
+  20. CLOSED: `on:` is the reference's (`push: {}`, `pull_request: {}`, `workflow_dispatch: {}`) and
+      so is the concurrency group, which never cancels a `main` run.
+  21. CLOSED: `build-macos-xcode-27` (`xcode-select -s /Applications/Xcode_27.app`, then
+      `xtask xcframework`, the port of `-Demit-macos-app=false`); whether the hosted image has that
+      Xcode is V25.
 
 ## N377 — the Zig build graph (`build.zig` + `src/build/*`) against Cargo + xtask: remaining options
 
@@ -7157,8 +7227,10 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 ## N378 — release workflows: residual differences from the reference
 
 - **id**: N378. P-1 (read-only audit). **severity**: medium (one can overwrite the live tip appcast).
-  **kind**: CI parity. **state**: OPEN: release workflows run only with maintainer secrets, so P-1
-  did not change them.
+  **kind**: CI parity. **state**: CLOSED by parity tail CI-1 (2026-09-28) as far as a file edit
+  goes: every residual below is ported (secrets referenced by name only); none has run, since the
+  workflows need `RUSTTY_RELEASE_ENABLED` and the maintainer's secrets (VERIFICATION_DEBT V25).
+  Previously: OPEN: release workflows run only with maintainer secrets, so P-1 did not change them.
 - **Fixed by P-1b**: the three `release-tip.yml` appcast steps require `github.ref_name == 'main'`
   again (test `tip_appcast_steps_run_only_on_main`, negative control); `release-tag.yml` `sentry-dsym` is
   `needs: [build-macos]` with no `if:`, as the reference; `!CLAUDE.md` / `!.envrc` restored in the
@@ -7173,6 +7245,31 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - `release-tag.yml`: the sentry-cli command changed; header lines 33-37 stale.
 - `publish-tag.yml`: the staged `rustty-macos-universal-dsym.zip` is no longer checked.
 - Picked up correctly from 88f57ee66..20abdb50a: milestone-action v3.2, Sparkle 2.9.6.
+- **Fixed by CI-1** (`release-tip.yml` unless named): the `pr` dispatch input (`type: number`,
+  optional) and the `release-urls-${{ inputs.pr || '0' }}` artifact it keys; `fetch-depth: 0` on
+  `build-macos`'s checkout; `Set :CFBundleShortVersionString $RUSTTY_COMMIT` and `Delete
+  :SUEnableAutomaticChecks` (the key is in `macos/Rustty-Info.plist`, false, as in the reference's
+  plist); `source-tarball-lib-vt` and `build-lib-vt-xcframework` gain "Prep R2 Storage", "Upload to
+  R2" (repository-pinned, `rustty-tip` bucket, the CF_R2_TIP_* secrets) and "Echo Release URLs";
+  `build-lib-vt-wasm` now ships both tiers (`rustty-vt.wasm`, and `rustty-vt-small.wasm` built at
+  `opt-level = "z"`), each wasm-opt'd, both required to need simd128 (`wasm-tools validate
+  --features=-simd` must fail), minisigned, attached, uploaded to R2 and echoed; the tip `sentry-dsym`
+  job (`needs: [setup, build-macos]`, downloads the dSYM from the tip host, `sentry-cli dif upload
+  --project rustty --wait dsym.zip`); the header no longer lists the ported jobs as omitted. The
+  debug-slow/fast variants stay omitted, as recorded in the header. `release-tag.yml`: `sentry-dsym`
+  runs the reference's install (`curl -sL https://sentry.io/get-cli/ | bash`) and command (`sentry-cli
+  dif upload --project rustty --wait rustty-macos-universal-dsym.zip`) on `ubuntu-latest`, and the
+  stale header lines (the job listed as omitted, "rustty has no flake") are corrected.
+  `publish-tag.yml` checks `rustty-macos-universal-dsym.zip` among the staged files again. Every
+  secret-dependent step keeps this port's convention: a missing secret is a `::warning::`, not a
+  failure. The Sentry project name `rustty` is an assumption for the maintainer to confirm.
+- **Tests**: `release_workflows.rs` `tip_workflow_carries_the_n378_residuals` (16 required texts,
+  and `sentry-dsym`'s needs; in-test controls: the short-version set, the delete, the `pr` input, the
+  small wasm tier and the sentry job each changed in turn, all reported) and
+  `tag_workflows_upload_and_check_the_dsym` (control: the publish check dropped). File-level control:
+  the `Delete :SUEnableAutomaticChecks` line removed fails the first ("`build-macos` lacks ...").
+  The existing gating tests still pass: every new job and step is behind `RUSTTY_RELEASE_ENABLED`
+  (through `needs: [setup]`), and each publishing step pins the canonical repository.
 
 ## N379 — the fuzz package, `.github` script records and other residuals
 
@@ -7784,6 +7881,13 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `merge-w4` too.
 - **CI** (for N376 #`test-simd`, not wired: `ci.yml`/`ci.sh` belong to batch C-1): a leg running the
   command above (`--no-default-features`, plus `--features gtk,wayland,x11` for `-p rustty` on Linux).
+  **Wired by parity tail CI-1 (2026-09-28):** `ci.yml` job `test-simd`, the reference's `simd:
+  ["true", "false"]` matrix; the `false` row builds `rustty-apprt-c --no-default-features` and runs
+  `cargo test --no-fail-fast -p rustty-simd -p rustty-core -p rustty-apprt -p rustty-cli -p
+  rustty-bench -p rustty-apprt-c -p rustty --no-default-features --features
+  rustty/gtk,rustty/wayland,rustty/x11`. Test `ci_workflow::test_simd_job_runs_the_simd_off_leg`
+  (controls: the `false` row dropped, `rustty-core` dropped; file-level: `flags=()` in place of
+  `--no-default-features`, RED). Not run on GitHub: VERIFICATION_DEBT V25.
 
 ## N421 — `-Di18n` and `-Demit-docs` had no override
 
@@ -7829,7 +7933,10 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **stale record corrected**: `crates/rustty-build-config/src/lib.rs`'s note naming `app-runtime-*` /
   `renderer-*` / `i18n` features.
 - **CI** (N376 #14 `test-i18n`): builds with `RUSTTY_I18N=true` and `RUSTTY_I18N=false` (`cargo build -p
-  rustty`), and `cargo test -p rustty-build-config` under each.
+  rustty`), and `cargo test -p rustty-build-config` under each. **Wired by parity tail CI-1
+  (2026-09-28):** `ci.yml` job `test-i18n`, matrix `i18n: ["true", "false"]` as the job env
+  `RUSTTY_I18N`, exactly those two commands. Test `ci_workflow::test_i18n_job_builds_both_values`
+  (control: the variable renamed, reported). Not run on GitHub: VERIFICATION_DEBT V25.
 
 ## N422 — the wasm `simd128` default and the `-Dstrip` and `-Dpie` defaults
 
@@ -7905,6 +8012,16 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `+version` rc 0). FreeBSD: UNVERIFIED (no lane).
 - **CI** (N376 #6 and #9): G-XTARGET already runs in `ci.sh`, so the simd128 arm runs wherever it does;
   a `build-nix`-style strip check (`nm` of a release `rustty`: no symbols; debug: symbols) is not wired.
+  **Wired by parity tail CI-1 (2026-09-28):** `ci.yml` job `build-nix` (x86_64 and arm64) runs the
+  reference's checks on the Nix packages: `nm result/bin/.rustty-wrapped` of `.#rustty-releasefast`
+  must say `no symbols` (nix/package.nix passes `CARGO_PROFILE_RELEASE_STRIP` from its `strip` flag),
+  and that of `.#rustty-debug` must list `main_rustty`, after the `+version` greps for `.ReleaseFast`
+  and `.Debug`. The simd128 requirement also gets the reference's own check, `wasm-tools validate
+  --features=-simd` must fail, on both wasm tiers in the `build-libghostty-vt-wasm` job and in
+  release-tip.yml. Tests: `ci_workflow::build_nix_job_checks_strip_and_mode` (control: the `no
+  symbols` grep replaced by `true`, reported; the package and passthru-test names are checked against
+  `flake.nix` and `nix/librustty-vt.nix`) and `wasm_job_builds_and_checks_both_tiers`. Not run on
+  GitHub: VERIFICATION_DEBT V25 (the Nix side also V24).
 
 ## N423 — `zig build run` had no counterpart that sets the resources directory
 
@@ -8052,8 +8169,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 
 ## N429 — CI has no Android leg (N376 gap 5): the job it needs
 
-- **id**: N429. Parity tail A-1. **severity**: low. **kind**: CI parity (N376 gap 5). **state**: OPEN (ci.yml
-  is batch C-1's).
+- **id**: N429. Parity tail A-1. **severity**: low. **kind**: CI parity (N376 gap 5). **state**: CLOSED by
+  parity tail CI-1 (2026-09-28): `ci.yml` job `build-libghostty-vt-android` (below); not run on GitHub,
+  VERIFICATION_DEBT V25. Previously: OPEN (ci.yml is batch C-1's).
 - **reference**: `build-libghostty-vt-android` (`test.yml:890-936`): matrix `aarch64-linux-android`,
   `x86_64-linux-android`, `arm-linux-androideabi`; `nttld/setup-ndk` r29 (`add-to-path: false`,
   `link-to-sdk: false`, `local-cache: true`); `zig build -Demit-lib-vt -Dtarget=<t>` with `ANDROID_NDK_HOME`.
@@ -8069,6 +8187,18 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   job names the three targets, a named target that is skipped (no `CXX_<t>`, or a toolchain-matched link
   error) makes the run BLOCKED (exit 3), never GREEN on the legs that did build (review A-1 F1, task A-1b);
   the job must therefore treat exit 3 as a failure, not as a warning.
+- **fix (CI-1)**: `build-libghostty-vt-android`, the reference's three-row matrix (`needs: ci`, in
+  `required.needs`) on `ubuntu-latest`: `nttld/setup-ndk@ed92fe6c... # v1.6.0` with `ndk-version: r29`,
+  `add-to-path: false`, `link-to-sdk: false`, `local-cache: true` and `ANDROID_NDK_VERSION: r29`, as the
+  reference; `rustup target add` of the row's target; then, from
+  `${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin`, `CC_<t>`/`CXX_<t>` =
+  `<clang-triple>29-clang(++)`, `AR_<t>` = `llvm-ar`, `CARGO_TARGET_<T>_LINKER` = the clang (clang
+  triple `armv7a-linux-androideabi` for `armv7-linux-androideabi`), and `check_cross_targets.sh
+  "$TARGET"`, whose exit status is the step's: 3 (BLOCKED) fails the row with an `::error::` saying so,
+  and nothing (`continue-on-error`, `|| true`) lets it pass. One target per row, like the reference's
+  matrix; G-XTARGET's named-target rule makes a skipped row BLOCKED. Test
+  `ci_workflow::android_job_follows_n429` (in-test controls: exit 3 accepted, `continue-on-error`,
+  NDK r27, the armv7 clang triple; file-level control: r29 -> r27, RED).
 
 ## N430 — WASI `Async::notify` from a callback formed `&Loop` and wrote `Loop.wakeup` while `run(&mut self)` was live
 

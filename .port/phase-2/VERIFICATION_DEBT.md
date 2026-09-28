@@ -2420,3 +2420,76 @@ and confirm the output carries `io.airely.rustty-debug.desktop` (the app-id deri
 what the flag feeds); for the Snap, drop the `gtk4-layer-shell` part and confirm the
 `rustty` part fails to link (`gtk4-layer-shell-0` not found by pkg-config), which proves
 the part is what satisfies it on core24.
+
+## V25. The CI jobs parity tail CI-1 ported from `test.yml` and the release residuals: written and statically checked, never run on GitHub's runners — **ENVIRONMENT-BLOCKED** [parity tail CI-1, 2026-09-28]
+
+**Blocked on:** GitHub-hosted runners (and, for the release jobs, the maintainer secrets and
+`RUSTTY_RELEASE_ENABLED`). The batch was dispatched as static-only (no long runs): the jobs were
+checked with `actionlint`, `prettier --check`, G-LINT's actionlint/prettier/pinact arms and the
+`xtask` workflow tests (`xtask/tests/ci_workflow.rs`, `release_workflows.rs`), not executed.
+
+```
+PORTED: .github/workflows/ci.yml
+PORTED: .github/workflows/release-tip.yml
+PORTED: .github/workflows/release-tag.yml
+PORTED: .github/workflows/publish-tag.yml
+```
+
+What each needs from a first run, by exact job name:
+
+- `ci.yml` (all `needs: ci`, all in `required.needs`):
+  - `build-examples-cmake-cross`: the example's `zig cc` cross toolchain builds librustty-vt for
+    `x86_64-pc-windows-gnu` from Linux (never built on Linux; the Mac build targets
+    `aarch64-unknown-linux-gnu`).
+  - `build-snap`: `cargo build -p rustty --features snap`.
+  - `build-libghostty-vt` (six rows): the `x86_64-unknown-linux-musl` row's
+    `CC_/CXX_x86_64_unknown_linux_musl="zig cc|c++ -target x86_64-linux-musl"` with the host linker
+    and the musl target's self-contained CRT (UNVERIFIED that highway/simdutf link without a C++
+    runtime there, and that cc-rs splits the command); the `x86_64-pc-windows-gnu` row with Ubuntu's
+    MinGW-w64; `aarch64-unknown-linux-gnu` on `ubuntu-24.04-arm`.
+  - `build-libghostty-vt-wasm`: `cargo install wasm-tools@1.219.1` and its
+    `validate --features=-simd`; `build-vt-wasm.sh --config 'profile.release.opt-level="z"'` (the
+    ReleaseSmall analog); `node test/wasm-alloc.mjs` on both wasm-opt outputs.
+  - `build-libghostty-vt-features`: the ten `--no-default-features --features simd[,<f>]` wasm32
+    builds and `cargo test --no-run` compiles (a feature combination that does not compile is the
+    finding the job exists for).
+  - `build-libghostty-vt-android` (three rows): the N429 recipe on the Linux NDK r29
+    (`nttld/setup-ndk`); run on the Mac with the darwin NDK by task A-1, never on Linux.
+  - `build-linux` (x86_64 and arm64), `test-gtk` (four rows: the rustty-apprt and rustty tests
+    and the app build with each x11/wayland combination; only gtk+x11+wayland has been built
+    before, on the VM), `test-simd` (the SIMD-off row is N420's command, run on the Mac by B-2),
+    `test-sentry-linux` (sentry-native + breakpad on Linux), `test-i18n`, `test-pkg-linux`.
+  - `build-nix` (x86_64 and arm64): `nix build .#rustty-releasefast` / `.#rustty-debug` with the
+    `+version` greps and the `nm` strip checks (`no symbols` in the release `.rustty-wrapped`,
+    `main_rustty` in the debug one), and the four librustty-vt variants' passthru tests; overlaps
+    V24's recipe.
+  - `build-macos-xcode-27`: whether `/Applications/Xcode_27.app` exists on the `macos-latest`
+    image (the reference's path on Namespace's image), then `xtask xcframework` under it.
+  - `test-fuzz-libghostty`: `cargo install cargo-fuzz@0.13.2` and `cargo +nightly fuzz build` in
+    `crates/rustty-vt`.
+  - `test-debian-13`: `docker build --build-arg DISTRO_VERSION=13 -f xtask/docker/debian/Dockerfile .`
+    inside the 90-minute limit.
+  - The workflow-level change: `on: push: {}` runs every branch push; the concurrency group
+    `${{ github.workflow }}-${{ github.ref_name != 'main' && github.ref || github.run_id }}`.
+- `release-tip.yml` (inert until armed): `sentry-dsym` (downloads the dSYM from
+  `https://tip.rustty.sh/<commit>/rustty-macos-universal-dsym.zip`, `sentry-cli dif upload --project
+  rustty`); the R2 upload and URL echo in `source-tarball-lib-vt`, `build-lib-vt-xcframework`,
+  `build-lib-vt-wasm`; `build-lib-vt-wasm`'s ReleaseSmall tier, simd128 check and minisign;
+  `build-macos`'s `CFBundleShortVersionString` and `Delete :SUEnableAutomaticChecks` (the key is
+  present in `macos/Rustty-Info.plist`, so the delete should not fail); the `pr` dispatch input and
+  the `release-urls-<pr>` artifact name.
+- `release-tag.yml` `sentry-dsym` (`sentry-cli dif upload --project rustty --wait
+  rustty-macos-universal-dsym.zip`, the Sentry project name `rustty` is an assumption the maintainer
+  confirms), and `publish-tag.yml`'s new `rustty-macos-universal-dsym.zip` check.
+
+**Recipe:** push the branch to the canonical repository (or a fork, for `ci.yml` only) and read the
+`Required Checks: rustty` result; each red job above is a finding for its NEW-FINDINGS entry (N376,
+N378, N420, N421, N422, N429). For the release workflows: set `RUSTTY_RELEASE_ENABLED=true` and the
+secrets they name, dispatch `Release Tip` with `pr` set, and check the uploaded objects and the
+`release-urls-<pr>` artifact.
+
+**Negative control (what makes the first run non-vacuous):** `build-libghostty-vt-android`: unset
+`CXX_<t>` in one row; G-XTARGET must exit 3 and the row must fail (N429). `test-simd`: re-pin
+`simd` on `rustty-core`'s `rustty-vt` edge; the `false` row must fail N420's
+`simd_feature_reaches_the_terminal_and_the_simd_kernels`. `build-nix`: set
+`CARGO_PROFILE_RELEASE_STRIP` to `false` in `nix/package.nix`; the `no symbols` step must fail.
