@@ -11,14 +11,17 @@
 # TWO PROPERTIES, and the second is the one that needs the git dance:
 #   1. every .blp COMPILES (`blueprint-compiler compile`), so a template that
 #      would fail at build time fails here instead;
-#   2. every .blp is already FORMATTED. `blueprint-compiler format` rewrites in
-#      place and has no --check mode, so the only way to ask "was it already
-#      formatted?" is to format and see whether anything changed. The reference
-#      does this with `git diff --exit-code` in a following step.
+#   2. every .blp is already FORMATTED. `blueprint-compiler format` WITHOUT
+#      `-f/--fix` is the check: it prints the diff it would apply and exits 1
+#      when any file is unformatted (measured on 0.20.4, N400: a mis-indented
+#      template gave "1 file would be formatted" and exit 1, the file
+#      untouched). Only `--fix` rewrites. The reference's job follows its
+#      script with `git diff --exit-code`, a second net for a compiler that
+#      rewrites.
 #
-# THIS GATE IS READ-ONLY. The reference's CI can afford to leave a reformatted
-# worktree behind — it is a throwaway checkout. A developer's is not, so the
-# formatting arm runs against a COPY and the real tree is never written to.
+# THIS GATE IS READ-ONLY. The formatting arm runs against a COPY and then also
+# diffs the copy against the tree, so even a compiler version that rewrote
+# could never modify a developer's tree, and such a rewrite is still caught.
 #
 # BLOCKED (exit 3), never green, without blueprint-compiler — which is a GTK
 # tool and is not packaged for macOS. The Nix dev shell provides it, and so
@@ -59,17 +62,19 @@ done < <(find "$ROOT/$UI_ROOT" -name '*.blp' | sort)
 echo "    ok      all $n templates compile"
 
 echo "=== G-BLUEPRINT 2/2 :: formatting ==="
-# Format a COPY, then diff against the originals. `blueprint-compiler format`
-# has no --check mode and rewrites in place, so this is the only way to ask the
-# question without touching the developer's tree.
+# Check a COPY, then also diff it against the originals. `blueprint-compiler
+# format` (no `--fix`) exits 1 on an unformatted file and prints the diff; the
+# diff arm below catches a compiler that rewrote instead.
 cp -a "$ROOT/$UI_ROOT" "$WORK/ui"
+fix_hint="    fix with: find $UI_ROOT -name '*.blp' -exec blueprint-compiler format --fix {} +"
 find "$WORK/ui" -name '*.blp' -exec blueprint-compiler format {} \+ > "$WORK/fmt.log" 2>&1 || {
   tail -12 "$WORK/fmt.log" | sed 's/^/      /'
-  red "blueprint-compiler format failed"
+  echo "$fix_hint"
+  red "blueprint-compiler format reported unformatted templates or failed (see above)"
 }
 if ! diff -rq "$ROOT/$UI_ROOT" "$WORK/ui" > "$WORK/diff.log" 2>&1; then
   sed "s|$WORK/ui|<formatted>|g; s|$ROOT/$UI_ROOT|<repo>|g" "$WORK/diff.log" | head -12 | sed 's/^/      /'
-  echo "    fix with: find $UI_ROOT -name '*.blp' -exec blueprint-compiler format {} +"
+  echo "$fix_hint"
   red "at least one blueprint is not formatted (see above)"
 fi
 echo "    ok      all $n templates are already formatted"

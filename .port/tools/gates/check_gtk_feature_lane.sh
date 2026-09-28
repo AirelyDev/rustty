@@ -91,7 +91,13 @@ FEATURES="gtk,wayland,x11"
 # catch. Raising it to the measured value is net-new coverage (R5). If a future
 # stage finds this red at a number just under 167, the question is which gated
 # tests stopped COMPILING, not whether to lower the floor.
-GTK_DELTA_FLOOR=167
+# 2026-09-27 (parity tail L-5, N401): 167 -> 220. The same drift again: the
+# first run of this gate since task-18, on the Fedora 44 VM (gtk4 4.22.4,
+# wayland-client 1.25.0, libX11 1.8.13) at 4994a515, listed 253 tests with the
+# features and 33 without, so 220 are gated — 53 above the floor, which could
+# therefore have lost 53 gated tests without going red. Raised to the
+# measurement (net-new coverage, R5).
+GTK_DELTA_FLOOR=220
 WAYLAND_NAME_FLOOR=3
 X11_NAME_FLOOR=4
 

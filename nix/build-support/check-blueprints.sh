@@ -6,8 +6,9 @@
 #   * the search root is crates/rustty-apprt/assets/ui, not src/ — that is
 #     where rustty's 19 .blp files live (versioned 1.2 … 1.5 subdirectories,
 #     same as the reference's layout under src/apprt/gtk-ng/ui);
-#   * `blueprint-compiler format` rewrites in place, so CI pairs this script
-#     with `git diff --exit-code` exactly as the reference's job does.
+#   * `blueprint-compiler format` without `--fix` is check-only: it exits 1 on
+#     an unformatted file (measured on 0.20.4, N400). CI still pairs this
+#     script with `git diff --exit-code` exactly as the reference's job does.
 
 set -o nounset -o pipefail -o errexit
 

@@ -256,7 +256,7 @@ jobs:
       # configs checked in, nothing executing them. Verified by what it caught
       # the first time it ran on a machine with GTK — a dropped twin attribute
       # in the renderer that had made the lane RED (see the preceding commit).
-      - name: Install gate tooling (G-BLUEPRINT / G-VALGRIND / G-I18N)
+      - name: Install gate tooling (G-BLUEPRINT / G-VALGRIND / G-I18N / G-KAITAI)
         shell: bash
         run: |
           set -euxo pipefail
@@ -269,7 +269,9 @@ jobs:
               doxygen graphviz libglib2.0-dev \
               libgtk-4-dev libadwaita-1-dev libgtk4-layer-shell-dev
           else
-            brew install gettext doxygen
+            # kaitai-struct-compiler: G-KAITAI (the reference's `test-kaitai`
+            # job). Without it the gate is BLOCKED on both legs (N402).
+            brew install gettext doxygen kaitai-struct-compiler
           fi
 
       - name: Set up Python 3 (gate scripts + harness)
