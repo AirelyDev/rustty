@@ -47,6 +47,7 @@ use rustty_vt::pagelist::compress::{CompressionMode, IncrementalCompressionResul
 use rustty_vt::pagelist::{Node, Storage};
 use rustty_vt::point::{Coordinate, Point};
 use rustty_vt::PageList;
+use rustty_vt::alloc::Global;
 
 // ---------------------------------------------------------------------------
 // I3 — a counting global allocator.
@@ -114,8 +115,10 @@ fn list_with_history(pages_wanted: usize) -> PageList {
     // with a single `Options`. The harness was not updated, so from that point
     // G6b failed to COMPILE and reported "RED: PageList leaked compressed-page
     // encodings" — a build break wearing a leak's clothes. Same geometry, same
-    // 1 GiB byte budget.
-    let mut list = PageList::init(rustty_vt::pagelist::Options {
+    // 1 GiB byte budget. Parity tail S7-2 restored the reference's leading
+    // `alloc` parameter; `Global` routes through this binary's global
+    // allocator, so the counting wrapper still sees every byte.
+    let mut list = PageList::init(Global, rustty_vt::pagelist::Options {
         max_size: Some(1 << 30),
         ..rustty_vt::pagelist::Options::new(20, 6)
     })
@@ -201,9 +204,10 @@ fn page_pointer_survives_sibling_accessors() {
     let _ = unsafe { Node::page_assume_resident(node) };
     // `page_preserving_state` is fallible since codex-vet F-015 restored the
     // oracle's recoverable-OOM contract (`Allocator.Error!PreservedPage`,
-    // PageList.zig:155-163). The harness exercises the success path.
+    // PageList.zig:155-163). The harness exercises the success path. It takes
+    // the reference's `alloc` since parity tail S7-3.
     let mut preserved =
-        unsafe { Node::page_preserving_state(node) }.expect("preserving read must not OOM here");
+        unsafe { Node::page_preserving_state(node, Global) }.expect("preserving read must not OOM here");
     preserved.deinit();
     let _ = unsafe { Node::page(node) };
 
@@ -246,7 +250,7 @@ fn compress_restore_round_trip() {
 
     // Preserving read: decodes into an owned buffer, node stays compressed.
     let mut preserved =
-        unsafe { Node::page_preserving_state(node) }.expect("preserving read must not OOM here");
+        unsafe { Node::page_preserving_state(node, Global) }.expect("preserving read must not OOM here");
     assert_eq!(unsafe { (*preserved.page()).size.rows }, meta_rows);
     preserved.deinit();
     assert_eq!(
