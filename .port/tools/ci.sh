@@ -884,12 +884,12 @@ GATE_REGISTRY=(
   # G-PARITY (phase-6-W1) — every audited parity finding is closed, waived-with-
   # reason, or open. The ledger in .port/parity-closure/LEDGER.tsv is the single
   # source of truth; this gate is the only thing that reads its `state` column.
-  # RED by design until the closure plan finishes (497 open on landing). The
-  # self-test is HARD and covers all three RED arms (open row, unjustified waiver,
-  # unknown state) so the gate cannot rot into a vacuous green. Flip to HARD in
-  # Task 41 when all findings are closed.
+  # HARD since Task 41 (2026-09-28): all 497 rows are CLOSED (403) or WAIVED (94),
+  # so a reopened or unjustified row fails CI. The self-test is HARD and covers
+  # all three RED arms (open row, unjustified waiver, unknown state) so the gate
+  # cannot rot into a vacuous green.
   "G-PARITY-SELF|HARD|$PY $GATES/check_parity_closure.py --self-test"
-  "G-PARITY|PROGRESS|$PY $GATES/check_parity_closure.py"
+  "G-PARITY|HARD|$PY $GATES/check_parity_closure.py"
   # G-LOGFILE (task 14gate) — the SAME blind spot as G-CENSUS, but for
   # DIAGNOSTICS. G-PARITY counts ROWS, and every row cites a RANGE of reference
   # lines, so whatever falls outside every row's range is unaudited and no row
