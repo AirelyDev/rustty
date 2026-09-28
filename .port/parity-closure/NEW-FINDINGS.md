@@ -7630,3 +7630,93 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   .port/tools/gates/check_cross_targets.sh aarch64-linux-android x86_64-linux-android
   armv7-linux-androideabi`. That builds all three and fails on a PT_LOAD below 16 KiB. Without the NDK the
   Android legs report `skipped`, so the existing G-XTARGET run in `ci.sh` does not cover them.
+
+## N430 — WASI `Async::notify` from a callback formed `&Loop` and wrote `Loop.wakeup` while `run(&mut self)` was live
+
+- **id**: N430. Parity tail X-2 (review X-1, section 5). **severity**: low (aliasing-model UB, not a reproduced
+  failure). **kind**: port soundness (Stacked and Tree Borrows). **state**: CLOSED (fixed by N431, no separate change).
+- **sites**: `crates/rustty-xev/src/wasi_watcher.rs:192` `Some(w) => unsafe { (*w.loop_).async_notify(w.c) }`;
+  `wasi_poll.rs` `async_notify(&self, c)` stores `self.wakeup`, the loop's own field, which `tick_inner` then reads
+  and clears. The loop thread held the protected `&mut Loop` of `run` -> `tick` -> `tick_inner` across every
+  callback, so a timer or I/O callback that notifies an `Async` whose waiter holds the stable root (as
+  `AsyncTests` and termio do) wrote a byte that protected borrow covers.
+- **reachability**: WASI's `Async` exists only without the wasm `atomics` feature (single thread), so the notify
+  can only come from a callback on the loop's own thread.
+- **evidence**: `.port/phase-2/mirihar-n431` (`bash run-all.sh`, miri nightly 2026-07-22): `shipped_thread_wasi`
+  and `shipped_local_wasi` UB under SB ("strongly protected") and TB ("reborrow ... is forbidden"); with the N431
+  raw-self tick path, `raw_thread_wasi` and `raw_local_wasi` are CLEAN under both, with `notify` unchanged. The
+  review's local fix (the flag moved out of the `Loop` allocation) is therefore not applied.
+- **tests**: `wasi_poll.rs` `wasi_callback_reenters_through_stored_loop_pointer` (PORT-ADDED with N431) compiles
+  for `wasm32-wasip1` (clippy `--all-targets -D warnings` clean); like every WASI test it runs only under a wasm
+  runtime (VERIFICATION_DEBT V8). UNVERIFIED by execution.
+
+## N431 — every xev backend held a protected `&mut Loop` across callbacks that re-enter the loop
+
+- **id**: N431. Parity tail X-2 (review X-1 O1). **severity**: medium (aliasing-model UB on termio's normal write
+  path; not a reproduced failure). **kind**: port soundness (Stacked and Tree Borrows). **state**: CLOSED (fixed).
+- **finding**: libxev's `run(self: *Loop)`/`tick`/`tick_inner` take an unprotected Zig pointer. The port took
+  `&mut self` in every backend (`kqueue.rs`, `epoll.rs`, `io_uring.rs`, `iocp.rs`, `wasi_poll.rs`, plus the
+  `dynamic.rs` dispatch), so a function-entry, protected `&mut Loop` was live across every callback. Callbacks
+  re-enter the loop (a) through a pointer the caller stored: termio's `thread.rs` ran `(*self_).loop_.run(..)`,
+  and the wakeup callback's `exec.rs` `td.loop_` (= `&raw mut (*thread).loop_`, `termio_impl.rs:921`) reaches
+  `stream.rs:461` `(*loop_).add(..)`; the stop callback calls `(*self_).loop_.stop()`; the renderer thread
+  (`rustty-core` `renderer_seam.rs`) and the cf release thread (`rustty-os` `cf_release_thread.rs`) have the same
+  shape; and (b) through the callback's `l` after `tick_inner` wrote a loop field through `self` (e.g.
+  `self.active -= 1` just before `cb(..)`). A third window: epoll/wasi `start` and iocp `start_completion`
+  invoke callbacks synchronously from the tick path under their own `&mut self`.
+- **fix (R1: behaviour unchanged)**: the tick path is raw-self, as Zig's `self: *Loop`. In every backend,
+  `pub unsafe fn run_raw(this: *mut Loop, mode)` and `tick_raw` hold the reference bodies; `tick_inner` (and
+  io_uring's `tick_`) take `this: *mut Loop`, and so do the callback-invoking helpers (`start`/`stop_completion`
+  on epoll and wasi_poll, `start_completion` and a private `submit_raw` on iocp). They use narrow
+  `(*this).field` accesses, and call `&mut self` helpers only for short reborrows that invoke no callback.
+  `run(&mut self)`/`tick(&mut self)`/iocp `submit(&mut self)` stay as thin entries that convert to raw at once.
+  Callers whose callbacks re-enter through a stored pointer enter through `Loop::run_raw` with that pointer:
+  termio `thread.rs` (both runs), `renderer_seam.rs` (the thread and its compression test harness),
+  `cf_release_thread.rs` (both runs), the three `exec.rs` KATs (with `loop_ptr`; `before_first_tick` now gets
+  `&mut *loop_ptr`) and `tests/live_shell.rs`. PORT NOTE on each backend's `run`; LIFETIMES rows
+  `Termio.zig ThreadData.loop` and `async.zig AsyncLoopState.waiter.loop` annotated.
+- **residual (documented, not reached by the app)**: a public `&mut self` method still carries its own protector.
+  A caller that invokes one through a stored pointer, and whose synchronously-fired callback re-enters through
+  the same pointer, is outside this fix. Of the public methods, only iocp `submit` fires callbacks synchronously
+  (the job-object arm). `run(&mut self)` is sound when callbacks reach the loop only through `l`, which is how
+  every rustty-xev unit test is written.
+- **evidence**:
+  - `.port/phase-2/mirihar-n431` (isolated, non-FFI, mirrors the tick bodies). `bash run-all.sh`, miri nightly
+    2026-07-22, 20 candidates x SB/TB. Shipped shape: `shipped_{thread,local}_root` UB/UB,
+    `shipped_{thread,local}_l` UB/CLEAN, `shipped_{thread,local}_wasi` UB/UB, `shipped_thread_sync` UB/UB.
+    Thin wrapper entered from the stored root: `wrapper_*_root` UB/UB; with only `l`, `wrapper_*_l` CLEAN/CLEAN.
+    Raw tick with `start` kept `&mut self`: `rawmutstart_thread_sync` UB/UB. The applied shape,
+    `raw_{thread,local}_{root,l,wasi,sync}`: all 8 CLEAN/CLEAN. `cargo +nightly miri test` there passes under
+    both models.
+  - Real code under Miri: the kqueue backend cannot run under Miri ("can't call foreign function `kqueue`";
+    its loop/async/timer tests are MIRI EXCEPTION C3-C5). The epoll backend can, from the Mac, via
+    `cargo +nightly miri test -p rustty-xev --target aarch64-unknown-linux-gnu` (Miri shims epoll and eventfd).
+    PORT-ADDED `epoll_callback_reenters_through_stored_loop_pointer`: CLEAN under SB and TB. Entered through
+    `(*root).run(..)`: UB under both ("strongly protected" / "reborrow ... is forbidden"). The same test on the
+    pre-N431 code (entered through `run`): UB under both. The other epoll loop/timer/async tests give the same
+    verdict before and after. Two unrelated SB results predate this change: `epoll_timer_reset` and
+    `epoll_timer_cancellation` are UB under SB and clean under TB, in the timer heap. `epoll_timerfd` is
+    unsupported (`timerfd_create`). The rustty-xev `--lib` Miri suite (21 non-FFI tests) passes under SB and TB.
+- **tests**: PORT-ADDED `<backend>_callback_reenters_through_stored_loop_pointer` in `kqueue.rs` (MIRI EXCEPTION C3),
+  `epoll.rs`, `io_uring.rs`, `iocp.rs` and `wasi_poll.rs`. A timer callback arms a second timer through the stored
+  pointer, the second stops the loop through it, and `run_raw(.., UntilDone)` returns only if both ran.
+  Mac: `cargo test -p rustty-xev -p rustty-termio` 3/3, `cargo test -p rustty-core` 1/1. Linux (rvm, epoll and
+  io_uring): clippy clean, `cargo test -p rustty-xev -p rustty-termio` 3/3 (xev 108 passed each). Windows (rwin,
+  `--target x86_64-pc-windows-msvc`): clippy `-p rustty-xev -p rustty-termio --all-targets -D warnings` clean,
+  `cargo test -p rustty-xev` 3/3 (45 passed each).
+
+## N432 — `Async.wait` rewrites the completion before taking the lock, racing a concurrent `notify` (IOCP)
+
+- **id**: N432. Parity tail X-2 (review X-1 O2). **severity**: low. **kind**: latent reference shape
+  (record only). **state**: OPEN (record only; not a UD, unreachable in Ghostty).
+- **shape**: `AsyncIOCP.wait` writes `c.* = .{ .op = .{ .async_wait = .{} }, ... }` and calls `loop.add(c)`
+  before `self.guard.lockUncancelable(io)` (reference libxev 86vtcwIR `src/watcher/async.zig:568`, `:587`, `:590`);
+  the port is the same (`crates/rustty-xev/src/iocp_watcher.rs` `wait`: `*c = Completion::new_op(..)`, then
+  `(*loop_).add(c)`, then `self.guard.lock()`). `notify` on another thread, holding `guard` with the PREVIOUS
+  waiter (the same `c`), reads `c.op` and stores its `wakeup` atomic. If a caller disarms an async wait and later
+  calls `wait` again with the same completion while another thread notifies, the rewrite races that access (a
+  data race in both languages) and the notification can be lost.
+- **reachability**: none in Ghostty. Every `Async.wait` call (termio `Thread.zig:273-274`, renderer
+  `Thread.zig:238-240`, `os/cf_release_thread.zig:133-134`) runs once at thread start. Their callbacks return
+  `.rearm`, or `.disarm` and stop the loop, and never call `wait` again. So it is not a UD (not reachable), and
+  the port stays faithful.
