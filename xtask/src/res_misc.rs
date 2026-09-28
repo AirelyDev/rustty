@@ -50,9 +50,10 @@
 //!     Homebrew's libintl: do not add a host dependency a stock machine lacks).
 //!
 //!     Two intentional divergences from the reference, both recorded on
-//!     `gen_man`: rustty always emits REAL pages rather than
-//!     `GhosttyDocs.installDummy`'s `share/man/.placeholder` (the macOS
-//!     Copy-Resources phase ships `share/man` unconditionally), and the `.TH`
+//!     `gen_man`: rustty emits REAL pages by default with no pandoc on the host
+//!     (N421: `--emit-docs false` now skips them, writing
+//!     `GhosttyDocs.installDummy`'s `share/man/.placeholder` on Darwin as the
+//!     reference does), and the `.TH`
 //!     title now follows [`crate::APP`] so `--features identity-oracle`
 //!     produces `.TH "GHOSTTY" "1"` to match the `ghostty.1` filename — before
 //!     WS13 the filename flipped but the title stayed `RUSTTY`.
@@ -128,15 +129,55 @@ const SUBLIME_SYNTAX: &[u8] =
 /// website.", default false, `Config.zig:531-535`): the reference installs the
 /// webdata only under that option (`build.zig:109`), so a packaging run does
 /// not ship it.
-pub fn gen_misc(share_dir: &Path, emit_webdata: bool) -> Result<(), String> {
-    gen_man(share_dir)?;
-    gen_doc(share_dir)?;
-    if emit_webdata {
+///
+/// `emit_docs` and `i18n` are `-Demit-docs` and `-Di18n` (N421), resolved by
+/// the caller. The man pages and the doc tree follow `build.zig:95-103`:
+/// installed under `emit_docs`, else — on a Darwin target only — the
+/// `installDummy` placeholder so the Xcode project still finds `share/man`.
+/// The `.mo` catalogs follow `build.zig:91` (`GhosttyI18n` exists only when
+/// `config.i18n`).
+pub fn gen_misc(share_dir: &Path, opts: &Misc) -> Result<(), String> {
+    if opts.emit_docs {
+        gen_man(share_dir)?;
+        gen_doc(share_dir)?;
+    } else if opts.darwin {
+        gen_man_dummy(share_dir)?;
+    }
+    if opts.emit_webdata {
         gen_webdata(share_dir)?;
     }
-    gen_locale(share_dir)?;
+    if opts.i18n {
+        gen_locale(share_dir)?;
+    }
     gen_bat(share_dir)?;
     Ok(())
+}
+
+/// The build options [`gen_misc`] reads.
+pub struct Misc {
+    /// `-Demit-docs`.
+    pub emit_docs: bool,
+    /// `-Demit-webdata`.
+    pub emit_webdata: bool,
+    /// `-Di18n`.
+    pub i18n: bool,
+    /// `config.target.result.os.tag.isDarwin()`.
+    pub darwin: bool,
+}
+
+/// `GhosttyDocs.installDummy` (`GhosttyDocs.zig:105-121`): "Installs some dummy
+/// files to satisfy the folder structure of docs without actually generating
+/// any documentation. This is useful when the `emit-docs` option is not set to
+/// true, but we still need the rough directory structure to exist, such as for
+/// the macOS app." Reached only with `--emit-docs false` on a Darwin target
+/// (N421; before it the option did not exist and this arm could not happen).
+fn gen_man_dummy(share_dir: &Path) -> Result<(), String> {
+    let man = share_dir.join("man");
+    mkdirp(&man)?;
+    write_file(
+        &man.join(".placeholder"),
+        b"emit-docs not true so no man pages",
+    )
 }
 
 /// `share/man` — the port of `GhosttyDocs.zig:20-88`'s real (non-`installDummy`)
@@ -150,9 +191,12 @@ pub fn gen_misc(share_dir: &Path, emit_webdata: bool) -> Result<(), String> {
 /// header for the tradeoff argument.
 ///
 /// Two intentional divergences from the reference:
-///   * rustty ALWAYS emits real pages, never `GhosttyDocs.installDummy`'s
-///     `share/man/.placeholder`, because the macOS Copy-Resources phase ships
-///     `share/man` unconditionally.
+///   * rustty emits real pages by default wherever it runs, where the
+///     reference needs pandoc on the host (`-Demit-docs` defaults to "pandoc
+///     found"): the in-tree renderer is always there. CORRECTION (N421): this
+///     used to say rustty never emits `installDummy`'s placeholder; with
+///     `--emit-docs false` on a Darwin target it now does, as the reference
+///     does (`gen_man_dummy`).
 ///   * the `.TH` title is derived from [`crate::APP`] rather than hardcoded, so
 ///     `--features identity-oracle` produces `.TH "GHOSTTY" "1"` alongside the
 ///     `ghostty.1` FILENAME. Before WS13 the title said `RUSTTY` in both
@@ -339,6 +383,70 @@ mod tests {
 
     fn touch(dir: &Path, name: &str) {
         fs::write(dir.join(name), b"").unwrap();
+    }
+
+    /// `-Demit-docs` / `-Di18n` (N421), the off arms: no man pages, no doc
+    /// tree, no catalogs; on a Darwin target the `installDummy` placeholder
+    /// with its exact text (`GhosttyDocs.zig:105-121`), elsewhere no
+    /// `share/man` at all. `share/bat` is unconditional. No `msgfmt` needed.
+    #[test]
+    fn docs_and_catalogs_follow_their_options_when_off() {
+        for darwin in [true, false] {
+            let share = temp_po(&format!("misc-off-{darwin}"));
+            gen_misc(
+                &share,
+                &Misc {
+                    emit_docs: false,
+                    emit_webdata: false,
+                    i18n: false,
+                    darwin,
+                },
+            )
+            .unwrap();
+            let placeholder = share.join("man/.placeholder");
+            if darwin {
+                assert_eq!(
+                    fs::read(&placeholder).unwrap(),
+                    b"emit-docs not true so no man pages"
+                );
+                let entries: Vec<_> = fs::read_dir(share.join("man")).unwrap().collect();
+                assert_eq!(entries.len(), 1, "only the placeholder under share/man");
+            } else {
+                assert!(!share.join("man").exists(), "no share/man off Darwin");
+            }
+            assert!(!share.join(crate::APP).join("doc").exists());
+            assert!(
+                !share.join("locale").exists(),
+                "no catalogs with -Di18n=false"
+            );
+            assert!(share.join("bat/syntaxes").is_dir());
+            let _ = fs::remove_dir_all(&share);
+        }
+    }
+
+    /// The `-Demit-docs=true` arm (the default here): real man pages and the
+    /// doc tree, and no placeholder. `i18n` stays off so no `msgfmt` is needed;
+    /// the catalog arm is `gen_locale`, covered by the `resources` runs.
+    #[test]
+    fn docs_are_emitted_when_on() {
+        let share = temp_po("misc-docs-on");
+        gen_misc(
+            &share,
+            &Misc {
+                emit_docs: true,
+                emit_webdata: false,
+                i18n: false,
+                darwin: true,
+            },
+        )
+        .unwrap();
+        let app = crate::APP;
+        assert!(share.join(format!("man/man1/{app}.1")).is_file());
+        assert!(share.join(format!("man/man5/{app}.5")).is_file());
+        assert!(share.join(format!("{app}/doc/{app}.1.html")).is_file());
+        assert!(!share.join("man/.placeholder").exists());
+        assert!(!share.join("locale").exists());
+        let _ = fs::remove_dir_all(&share);
     }
 
     /// Tripwire: the committed `po/` corpus and the DECLARED locale set must

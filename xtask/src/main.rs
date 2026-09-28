@@ -81,7 +81,7 @@ SUBCOMMANDS:
                        consumes.
     resources [--target-os <os>] [--prefix <prefix>] [--flatpak] [--debug] [--system-package]
               [--optimize <mode>] [--emit-terminfo <bool>] [--emit-termcap <bool>] [--emit-themes <bool>]
-              [--emit-webdata <bool>]
+              [--emit-webdata <bool>] [--emit-docs <bool>] [--i18n <bool>]
                        Generate zig-out/share/{terminfo,<app>,vim,nvim,fish,zsh,bash-completion,man,locale,bat} for the macOS Copy-Resources phase (<app> = rustty by default, ghostty under identity-oracle).
                        --target-os (linux|macos|freebsd|windows|…, default: host) selects the
                        TARGET layout like ghostty's cfg.target: freebsd puts the terminfo tree
@@ -99,7 +99,13 @@ SUBCOMMANDS:
                        --emit-webdata (share/<app>/webdata/*.mdx, the website data) to false. It also
                        picks the Linux app id: Debug/ReleaseSafe install the -debug id, as the
                        reference does, so release packaging passes --optimize ReleaseFast.
-    update-translations
+                       --emit-docs (-Demit-docs, default true: the man/HTML renderer is in-tree,
+                       so the reference's pandoc probe always succeeds) installs share/man and
+                       share/<app>/doc; off, a Darwin target gets only share/man/.placeholder.
+                       --i18n (-Di18n) installs the share/locale catalogs; default RUSTTY_I18N
+                       if set, else per target (macos/ios on, linux on for glibc, freebsd and
+                       others off) — pass false for a musl Linux package.
+    update-translations [--i18n <bool>]
                        Regenerate po/io.airely.rustty.pot from the GTK-apprt + Nautilus
                        sources and msgmerge every po/*.po catalog (needs xgettext+msgmerge
                        on PATH; on macOS prepend /opt/homebrew/opt/gettext/bin). LIVE since
@@ -203,7 +209,7 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Some("update-translations") => match translations::update_translations() {
+        Some("update-translations") => match update_translations_cmd(&mut args) {
             Ok(out) => {
                 println!("wrote {}", out.display());
                 ExitCode::SUCCESS
@@ -1036,6 +1042,10 @@ fn resources(args: &mut impl Iterator<Item = String>) -> Result<PathBuf, String>
     let mut emit_themes = true;
     // `-Demit-webdata` (`Config.zig:531-535`, default false).
     let mut emit_webdata = false;
+    // `-Di18n` (`Config.zig:263-271`) and `-Demit-docs` (`:483-502`), N421:
+    // `None` = not passed, resolved after the target is known.
+    let mut i18n: Option<bool> = None;
+    let mut emit_docs: Option<bool> = None;
     let parse_bool = |flag: &str, v: Option<String>| -> Result<bool, String> {
         match v.as_deref() {
             Some("true") => Ok(true),
@@ -1055,6 +1065,8 @@ fn resources(args: &mut impl Iterator<Item = String>) -> Result<PathBuf, String>
             "--emit-termcap" => emit_termcap = Some(parse_bool(&arg, args.next())?),
             "--emit-themes" => emit_themes = parse_bool(&arg, args.next())?,
             "--emit-webdata" => emit_webdata = parse_bool(&arg, args.next())?,
+            "--i18n" => i18n = Some(parse_bool(&arg, args.next())?),
+            "--emit-docs" => emit_docs = Some(parse_bool(&arg, args.next())?),
             "--target-os" => {
                 target_os = args.next().ok_or("--target-os requires a value")?;
             }
@@ -1069,6 +1081,12 @@ fn resources(args: &mut impl Iterator<Item = String>) -> Result<PathBuf, String>
     }
 
     let debug = linux_app_is_debug(optimize, debug_flag);
+    let i18n = resolve_i18n(
+        i18n,
+        std::env::var("RUSTTY_I18N").ok().as_deref(),
+        &target_os,
+    )?;
+    let emit_docs = emit_docs.unwrap_or_else(|| emit_docs_default(system_package));
 
     let root = workspace_root();
     let share = root.join("zig-out/share");
@@ -1085,7 +1103,20 @@ fn resources(args: &mut impl Iterator<Item = String>) -> Result<PathBuf, String>
         .map_err(|e| format!("gen_terminfo: {e}"))?;
     res_shell::gen_shell(&share).map_err(|e| format!("gen_shell: {e}"))?;
     res_editor::gen_editor(&share).map_err(|e| format!("gen_editor: {e}"))?;
-    res_misc::gen_misc(&share, emit_webdata).map_err(|e| format!("gen_misc: {e}"))?;
+    res_misc::gen_misc(
+        &share,
+        &res_misc::Misc {
+            emit_docs,
+            emit_webdata,
+            i18n,
+            // `config.target.result.os.tag.isDarwin()`.
+            darwin: matches!(
+                target_os.as_str(),
+                "macos" | "ios" | "tvos" | "watchos" | "visionos"
+            ),
+        },
+    )
+    .map_err(|e| format!("gen_misc: {e}"))?;
     // Themes: `if (cfg.emit_themes)` (`GhosttyResources.zig:127-138`).
     if emit_themes {
         res_themes::gen_themes(&share).map_err(|e| format!("gen_themes: {e}"))?;
@@ -1159,6 +1190,83 @@ fn linux_app_is_debug(optimize: res_terminfo::Optimize, debug_flag: bool) -> boo
     debug_flag || matches!(optimize, Optimize::Debug | Optimize::ReleaseSafe)
 }
 
+/// `-Di18n`'s default for a `--target-os` (`Config.zig:263-271`, N421):
+/// `switch (target.result.os.tag) { .macos, .ios => true, .linux, .freebsd =>
+/// target.result.isGnuLibC(), else => false }`.
+///
+/// `--target-os` names no libc. FreeBSD's is never glibc. A Linux layout made
+/// on a Linux host follows that host's libc (as `rustty-build-config` does for
+/// the binary); from any other host it assumes glibc, the only Linux ABI the
+/// app packaging builds — a musl package passes `--i18n false`, or sets
+/// `RUSTTY_I18N=false` for both the build and this step.
+fn i18n_default_for(target_os: &str) -> bool {
+    match target_os {
+        "macos" | "ios" => true,
+        "freebsd" => false,
+        "linux" => !cfg!(target_os = "linux") || cfg!(target_env = "gnu"),
+        _ => false,
+    }
+}
+
+/// The resolved `-Di18n` for an xtask step: an explicit `--i18n`, else the
+/// `RUSTTY_I18N` variable (the same one `rustty-build-config` reads, so one
+/// setting drives both the binary and its resources, as one `-Di18n` drives
+/// both in `zig build`), else the per-target default.
+fn resolve_i18n(flag: Option<bool>, env: Option<&str>, target_os: &str) -> Result<bool, String> {
+    if let Some(v) = flag {
+        return Ok(v);
+    }
+    match env {
+        None | Some("") => Ok(i18n_default_for(target_os)),
+        Some("true") => Ok(true),
+        Some("false") => Ok(false),
+        Some(other) => Err(format!(
+            "RUSTTY_I18N must be `true` or `false` (`-Di18n` is a bool), not {other:?}"
+        )),
+    }
+}
+
+/// `-Demit-docs`'s default (`Config.zig:483-502`, N421): false when another
+/// artifact is being emitted (bench / test exe / helpgen / lib-vt — none of
+/// which `xtask resources` produces), true for a system package, and otherwise
+/// "only if we can find pandoc". The port renders the man and HTML pages
+/// in-process (`rustty_extra::mdgen::render`, see `res_misc.rs`), so the
+/// capability the pandoc probe stands for is always present: the default is
+/// true in every arm this step has.
+fn emit_docs_default(system_package: bool) -> bool {
+    // We always emit docs in system package mode.
+    if system_package {
+        return true;
+    }
+    // The reference: `path != null` for `pandoc`. The in-tree renderer is the
+    // port's pandoc, and it is always there.
+    true
+}
+
+/// `update-translations [--i18n <bool>]`: the reference registers the step
+/// only when `config.i18n` is on and otherwise fails it with "cannot update
+/// translations when i18n is disabled" (`build.zig:449-455`, N421).
+fn update_translations_cmd(args: &mut impl Iterator<Item = String>) -> Result<PathBuf, String> {
+    let mut flag = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--i18n" => {
+                flag = Some(match args.next().as_deref() {
+                    Some("true") => true,
+                    Some("false") => false,
+                    _ => return Err("--i18n requires `true` or `false`".into()),
+                })
+            }
+            other => return Err(format!("unknown `update-translations` flag `{other}`")),
+        }
+    }
+    let env = std::env::var("RUSTTY_I18N").ok();
+    if !resolve_i18n(flag, env.as_deref(), std::env::consts::OS)? {
+        return Err("cannot update translations when i18n is disabled".into());
+    }
+    translations::update_translations()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1168,6 +1276,59 @@ mod tests {
     /// the plain ones. Before P-1 the app id ignored `--optimize`, so every
     /// release packaging run that passed `--optimize ReleaseFast` (and every
     /// Debug run that did not pass `--debug`) disagreed with the reference.
+    /// `-Di18n` for xtask steps (N421): `--i18n` beats `RUSTTY_I18N`, which
+    /// beats the per-target default (`Config.zig:263-271`); a non-bool value is
+    /// refused.
+    #[test]
+    fn i18n_resolves_flag_then_env_then_target_default() {
+        assert!(i18n_default_for("macos"));
+        assert!(i18n_default_for("ios"));
+        assert!(!i18n_default_for("freebsd"));
+        assert!(!i18n_default_for("windows"));
+        assert_eq!(
+            i18n_default_for("linux"),
+            !cfg!(target_os = "linux") || cfg!(target_env = "gnu")
+        );
+        for os in ["macos", "linux", "freebsd", "windows"] {
+            let d = i18n_default_for(os);
+            assert_eq!(resolve_i18n(None, None, os), Ok(d), "{os}");
+            assert_eq!(resolve_i18n(None, Some(""), os), Ok(d), "{os}");
+            assert_eq!(resolve_i18n(None, Some("true"), os), Ok(true), "{os}");
+            assert_eq!(resolve_i18n(None, Some("false"), os), Ok(false), "{os}");
+            assert_eq!(
+                resolve_i18n(Some(false), Some("true"), os),
+                Ok(false),
+                "{os}"
+            );
+            assert_eq!(
+                resolve_i18n(Some(true), Some("false"), os),
+                Ok(true),
+                "{os}"
+            );
+            assert!(resolve_i18n(None, Some("yes"), os).is_err(), "{os}");
+        }
+    }
+
+    /// `-Demit-docs` (N421): the pandoc probe's capability is the in-tree
+    /// renderer, so the default is on, and on for a system package.
+    #[test]
+    fn emit_docs_defaults_on() {
+        assert!(emit_docs_default(false));
+        assert!(emit_docs_default(true));
+    }
+
+    /// `build.zig:449-455`: with i18n off the translations step fails with
+    /// the reference's message, before touching `po/`.
+    #[test]
+    fn update_translations_refuses_when_i18n_is_off() {
+        let err = update_translations_cmd(&mut ["--i18n", "false"].into_iter().map(String::from))
+            .unwrap_err();
+        assert_eq!(err, "cannot update translations when i18n is disabled");
+        let err = update_translations_cmd(&mut ["--i18n", "maybe"].into_iter().map(String::from))
+            .unwrap_err();
+        assert!(err.contains("--i18n requires"), "{err}");
+    }
+
     #[test]
     fn linux_app_debug_id_follows_the_optimize_mode() {
         use res_terminfo::Optimize;

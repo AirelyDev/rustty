@@ -104,8 +104,10 @@ impl Config {
             // Reference `init()`: `config.i18n = ... orelse switch
             // (target.result.os.tag) { .macos, .ios => true, .linux, .freebsd =>
             // target.result.isGnuLibC(), else => false };`. `isGnuLibC()` maps
-            // to `cfg!(target_env = "gnu")`.
-            i18n: i18n_default(target),
+            // to `cfg!(target_env = "gnu")`. The `b.option(bool, "i18n", ...)`
+            // half is `RUSTTY_I18N` (N421; before it the option did not exist
+            // and the default was the only value).
+            i18n: resolve_i18n(I18N_OPTION, target),
             // Reference field default: `exe_entrypoint: ExeEntrypoint = .ghostty`
             // (no `init()`/option override of the runtime view).
             exe_entrypoint: ExeEntrypoint::Rustty,
@@ -160,10 +162,36 @@ pub const FONT_BACKEND_OPTION: Option<FontBackend> = if cfg!(feature = "font-bac
 /// — a rewrite that would erase the reference's arm structure.
 const IS_GNU_LIBC: bool = cfg!(target_env = "gnu");
 
+/// The explicit `-Di18n=<bool>` value, or `None` when the option is not passed.
+/// `RUSTTY_I18N` (`true` / `false`), validated by `build.rs` and baked in as
+/// `RUSTTY_I18N_OPTION` (empty = not passed). N421.
+pub const I18N_OPTION: Option<bool> = parse_bool_option(env!("RUSTTY_I18N_OPTION"));
+
+/// `true` / `false` / anything else (the empty "not passed") as an optional
+/// bool. `build.rs` has already refused every other non-empty value.
+const fn parse_bool_option(s: &str) -> Option<bool> {
+    match s.as_bytes() {
+        b"true" => Some(true),
+        b"false" => Some(false),
+        _ => None,
+    }
+}
+
+/// `config.i18n = b.option(bool, "i18n", ...) orelse <per-target default>`
+/// (`Config.zig:263-271`): the option when passed, else [`i18n_default`].
+/// Split out over its inputs so a test can drive every arm, including the
+/// ones this build does not have.
+pub const fn resolve_i18n(option: Option<bool>, target: Target) -> bool {
+    match option {
+        Some(v) => v,
+        None => i18n_default(target),
+    }
+}
+
 /// `i18n` default selection, factored out so it stays `const`. Reference
 /// `init()`: `switch (target.result.os.tag) { .macos, .ios => true, .linux,
 /// .freebsd => target.result.isGnuLibC(), else => false }`.
-const fn i18n_default(target: Target) -> bool {
+pub const fn i18n_default(target: Target) -> bool {
     match target.os {
         crate::os::Os::Macos | crate::os::Os::Ios => true,
         crate::os::Os::Linux | crate::os::Os::Freebsd => IS_GNU_LIBC,
