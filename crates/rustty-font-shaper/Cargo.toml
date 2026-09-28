@@ -212,7 +212,14 @@ harfbuzz-sys = { path = "../../crates-sys/harfbuzz-sys", optional = true }
 # fontconfig on Windows because its libxml2 dependency isn't available"). With the
 # `freetype_windows` discoverer now live, Windows uses the FreeType directory scan
 # and links no fontconfig.
-[target.'cfg(not(any(target_os = "windows", target_arch = "wasm32")))'.dependencies]
+# N286 (task W-6): a GNU-ABI Windows target is back in the table.
+# `-Dfont-backend=fontconfig_freetype` builds there in the reference
+# (`-Dtarget=x86_64-windows-gnu`, MinGW headers; its fontconfig tests pass on
+# Windows 11), with libxml2's iconv off (pkg/fontconfig/build.zig:9-13). An
+# MSVC-ABI target stays out: the reference's fontconfig does not compile against
+# the MSVC headers (`unistd.h`), and `rustty-build-config` refuses the backend
+# there by name.
+[target.'cfg(not(any(all(target_os = "windows", target_env = "msvc"), target_arch = "wasm32")))'.dependencies]
 # OPTIONAL (feature `fontconfig`, DEFAULT-ON): the `cfg` table above keeps
 # fontconfig off Windows/wasm, but Cargo's `links` uniqueness check ignores
 # `cfg` and runs over the whole resolve graph — so an embedder colliding on

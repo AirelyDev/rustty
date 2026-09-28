@@ -167,8 +167,8 @@ fn main() {
         .define("ALIGNOF_VOID_P", Some(p));
 
     if windows {
-        // (build.zig:144-150) — kept for completeness; this crate's parity
-        // target is Linux, but the Windows arm mirrors the reference verbatim.
+        // (build.zig:144-150), verbatim. Reached by `-Dfont-backend=
+        // fontconfig_freetype` on a GNU-ABI Windows target (N286).
         build
             .define("FC_CACHEDIR", Some("\"LOCAL_APPDATA_FONTCONFIG_CACHE\""))
             .define("FC_TEMPLATEDIR", Some("\"c:/share/fontconfig/conf.avail\""))
@@ -233,6 +233,12 @@ fn main() {
         .define("ENABLE_LIBXML2", None)
         .define("LIBXML_STATIC", None)
         .define("LIBXML_PUSH_ENABLED", None);
+    if windows {
+        // "NOTE: this should be defined on all targets" — the reference adds it
+        // on Windows only (build.zig:222-227), after the `-Wno-` form above, so
+        // an implicit declaration is an error there. N286.
+        build.flag_if_supported("-Werror=implicit-function-declaration");
+    }
 
     // Pin the C standard to gnu17 (pre-C23). GCC 16 defaults to gnu23, where an
     // empty parameter list `()` means `(void)` rather than the historical

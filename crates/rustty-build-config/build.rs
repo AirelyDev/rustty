@@ -116,6 +116,7 @@ fn font_backend() {
 
     let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
     let is_wasm = arch == "wasm32";
     // `Backend.default(target, wasm_target)`.
     let default = if is_wasm {
@@ -139,10 +140,16 @@ fn font_backend() {
             // replaced by the default (R14 spirit):
             //   * the CoreText backends off Darwin — they cannot link there
             //     (no CoreText), in the reference too;
-            //   * `fontconfig_freetype` on Windows — an OPEN R1 gap (N286): the
-            //     reference builds fontconfig from source on any target whose
-            //     backend has it (`SharedDeps.zig:292`), but the port gates
-            //     `fontconfig-sys` off Windows (WS20) and has not built it there.
+            //   * `fontconfig_freetype` on an MSVC-ABI Windows target — the
+            //     reference cannot build it there either (N286, measured on
+            //     Windows 11 with Zig 0.16 at the pin): `Config.zig:100-111`
+            //     makes MSVC the Windows ABI when none is named, and
+            //     pkg/fontconfig/build.zig defines `HAVE_UNISTD_H` on every
+            //     target, so `src/fcint.h:44` fails with "'unistd.h' file not
+            //     found" against the MSVC headers. With an explicit GNU ABI
+            //     (`-Dtarget=x86_64-windows-gnu`, MinGW headers) the reference
+            //     builds it and its fontconfig tests pass, so the port accepts
+            //     it on `target_env = "gnu"`.
             // (`web_canvas` has no feature: `font/main.zig:50` forces it on
             // wasm, and its face/shaper call browser externs.) CORRECTION
             // (S-14b, review M3): `fontconfig_freetype` on macOS and
@@ -166,11 +173,22 @@ fn font_backend() {
                     "coretext_harfbuzz",
                     "coretext_noshape",
                 ]
+            } else if os == "windows" && env == "gnu" {
+                &["freetype", "freetype_windows", "fontconfig_freetype"]
             } else if os == "windows" {
                 &["freetype", "freetype_windows"]
             } else {
                 &["freetype", "freetype_windows", "fontconfig_freetype"]
             };
+            if os == "windows" && env != "gnu" && tag == "fontconfig_freetype" {
+                panic!(
+                    "rustty-build-config: `-Dfont-backend=fontconfig_freetype` is not buildable \
+                     for target os `{os}` env `{env}`: Fontconfig includes `unistd.h`, which the \
+                     MSVC headers do not have (the reference fails the same way at \
+                     `fontconfig/src/fcint.h:44`); use a GNU-ABI Windows target \
+                     (`x86_64-pc-windows-gnu`, the reference's `-Dtarget=x86_64-windows-gnu`)."
+                );
+            }
             if !supported.contains(&tag) {
                 panic!(
                     "rustty-build-config: `-Dfont-backend={tag}` is not buildable by the \
