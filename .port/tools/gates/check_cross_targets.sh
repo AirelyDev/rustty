@@ -21,11 +21,18 @@
 # host lacks (Android's NDK, Windows-GNU's mingw) say so specifically instead
 # of failing.
 #
+# NAMED TARGETS ARE REQUIRED. With no arguments the gate builds what the host
+# can and lists the rest under `Not built:`. When targets are named (N429's
+# Android job names all three Android triples), every named target must build:
+# a named target that is skipped, or that is not a G-XTARGET target at all,
+# makes the run BLOCKED (exit 3) even if the others built (review A-1 F1).
+#
 # Exit contract (`.port/tools/CI.md`): 0 = pass, 1 = red, 3 = BLOCKED.
 #
 # Usage:
 #   bash .port/tools/gates/check_cross_targets.sh
 #   bash .port/tools/gates/check_cross_targets.sh wasm32-unknown-unknown
+#   bash .port/tools/gates/check_cross_targets.sh --self-test
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -33,8 +40,17 @@ cd "$ROOT" || exit 1
 
 command -v cargo >/dev/null 2>&1 || { echo "G-XTARGET BLOCKED: cargo not installed"; exit 3; }
 
-WANT="$*"
-want() { [ -z "$WANT" ] || printf '%s\n' $WANT | grep -qx "$1"; }
+SELF_TEST=0
+WANT=()
+for arg in "$@"; do
+  case "$arg" in
+    --self-test) SELF_TEST=1 ;;
+    -*) echo "G-XTARGET BLOCKED: unknown option $arg"; exit 3 ;;
+    *) WANT+=("$arg") ;;
+  esac
+done
+# `${WANT[@]+...}`: bash 3.2 (macOS /bin/bash) treats an empty array as unset under `set -u`.
+want() { [ "${#WANT[@]}" -eq 0 ] || printf '%s\n' ${WANT[@]+"${WANT[@]}"} | grep -qx "$1"; }
 
 RAN=0
 FAILED=0
@@ -45,9 +61,35 @@ ok()   { echo "  ok      $1"; RAN=$((RAN+1)); }
 bad()  { echo "  FAIL    $1"; RAN=$((RAN+1)); FAILED=1; FAILED_NAMES="$FAILED_NAMES $1"; }
 skip() { echo "  skipped $1 ($2)"; SKIPPED="$SKIPPED $1"; }
 
-INSTALLED="$(rustup target list --installed 2>/dev/null)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+
+# The verdict, from RAN/FAILED/SKIPPED and whether targets were named. Prints
+# the summary and returns the exit code.
+verdict() {
+  echo "--- G-XTARGET summary: $RAN built, $(printf '%s' "$SKIPPED" | wc -w | tr -d ' ') skipped ---"
+  if [ "$FAILED" -ne 0 ]; then
+    echo "G-XTARGET RED:$FAILED_NAMES"
+    return 1
+  fi
+  if [ "$RAN" -eq 0 ]; then
+    echo "G-XTARGET BLOCKED: no cross target was available on this host; skipped:$SKIPPED"
+    return 3
+  fi
+  if [ "${#WANT[@]}" -ne 0 ] && [ -n "$SKIPPED" ]; then
+    echo "G-XTARGET BLOCKED: named target(s) not built:$SKIPPED"
+    return 3
+  fi
+  echo "G-XTARGET GREEN ($RAN target(s) built).${SKIPPED:+ Not built:$SKIPPED}"
+  return 0
+}
+
+# Cargo's target directory, from `cargo metadata` so that CARGO_TARGET_DIR and
+# `build.target-dir` are honoured (review A-1 F2). Empty on failure.
+cargo_target_dir() {
+  cargo metadata --format-version 1 --no-deps 2>/dev/null \
+    | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null
+}
 
 # Does the host C compiler actually support this target?
 #
@@ -82,14 +124,19 @@ probe_cc_target() {
 # Android 15+"). An Android leg passes only if every PT_LOAD segment of the
 # linked librustty_vt_c.so is aligned to at least 16 KiB. llvm-readelf is taken
 # from beside the target's cc-rs compiler (the NDK's bin/), else from PATH.
+# Arguments: the triple and the path of the shared library to check.
 android_page_align() {
-  local triple="$1" cc_var readelf so aligns a bad_align=""
+  local triple="$1" so="$2" cc_var readelf aligns a bad_align=""
   cc_var="CC_${triple//-/_}"
   readelf="$(dirname "${!cc_var:-/nonexistent/x}")/llvm-readelf"
   [ -x "$readelf" ] || readelf="$(command -v llvm-readelf || true)"
-  so="target/$triple/release/librustty_vt_c.so"
   if [ -z "$readelf" ]; then
     echo "          no llvm-readelf to check $so's PT_LOAD alignment"
+    bad "$triple"
+    return
+  fi
+  if [ ! -f "$so" ]; then
+    echo "          $so does not exist (S64-F9 alignment not checked)"
     bad "$triple"
     return
   fi
@@ -105,6 +152,73 @@ android_page_align() {
     ok "$triple (PT_LOAD align $(printf '%s\n' "$aligns" | sort -u | tr '\n' ' '| sed 's/ $//'))"
   fi
 }
+
+# --self-test: prove the verdict and the PT_LOAD check flip (review A-1 F1, F3).
+if [ "$SELF_TEST" -eq 1 ]; then
+  echo "=== G-XTARGET --self-test ==="
+  st_fail=0
+  expect() { # <label> <expected> <actual>
+    if [ "$2" = "$3" ]; then echo "  pass    $1 (exit $3)"
+    else echo "  FAIL    $1: expected $2, got $3"; st_fail=1; fi
+  }
+  reset_state() { RAN=0; FAILED=0; SKIPPED=""; FAILED_NAMES=""; }
+
+  # F1: the verdict. One target built and one skipped.
+  reset_state; WANT=(a-target b-target); ok a-target > /dev/null; skip b-target "x" > /dev/null
+  verdict > /dev/null; expect "named target skipped while another built -> BLOCKED" 3 $?
+  # Negative control: the same outcome in a default (unnamed) run is GREEN,
+  # so the BLOCKED above comes from the targets being named.
+  reset_state; WANT=(); ok a-target > /dev/null; skip b-target "x" > /dev/null
+  verdict > /dev/null; expect "unnamed run with a skip -> GREEN (control)" 0 $?
+  reset_state; WANT=(a-target); ok a-target > /dev/null
+  verdict > /dev/null; expect "every named target built -> GREEN" 0 $?
+  reset_state; WANT=(a-target b-target); bad a-target > /dev/null; skip b-target "x" > /dev/null
+  verdict > /dev/null; expect "named target failed -> RED" 1 $?
+  # End to end: a name that is not a G-XTARGET target is never built.
+  bash "${BASH_SOURCE[0]}" not-a-real-target > "$WORK/e2e.log" 2>&1
+  rc=$?
+  grep -q "skipped not-a-real-target" "$WORK/e2e.log" || { echo "  FAIL    end-to-end run did not name the skip"; st_fail=1; }
+  expect "end to end: named unknown target -> BLOCKED" 3 "$rc"
+  WANT=()
+
+  # F2: the .so is looked for under cargo's target directory, not ./target.
+  st_tdir="$(CARGO_TARGET_DIR="$WORK/tdir" cargo_target_dir)"
+  if [ "$st_tdir" = "$WORK/tdir" ]; then echo "  pass    target dir follows CARGO_TARGET_DIR ($st_tdir)"
+  else echo "  FAIL    target dir with CARGO_TARGET_DIR=$WORK/tdir: got '$st_tdir'"; st_fail=1; fi
+
+  # F3: the 16 KiB PT_LOAD check on two ELF shared libraries built here.
+  st_cc="${CC:-cc}"
+  printf 'int rustty_g_xtarget_probe(void) { return 1; }\n' > "$WORK/st.c"
+  elf_ok=1
+  for size in 4096 16384; do
+    "$st_cc" -shared -fPIC -Wl,-z,max-page-size=$size -o "$WORK/lib$size.so" "$WORK/st.c" \
+      > "$WORK/cc-$size.log" 2>&1 || elf_ok=0
+    [ "$elf_ok" -eq 1 ] && [ "$(head -c 4 "$WORK/lib$size.so" | od -An -c | tr -d ' ')" = '177ELF' ] || elf_ok=0
+  done
+  if [ "$elf_ok" -ne 1 ] || ! command -v llvm-readelf > /dev/null 2>&1; then
+    echo "  the PT_LOAD arm needs a host cc that links ELF shared libraries with"
+    echo "  -Wl,-z,max-page-size and llvm-readelf on PATH (a Linux host); this host has not"
+    [ "$st_fail" -ne 0 ] && { echo "G-XTARGET SELF-TEST RED"; exit 1; }
+    echo "G-XTARGET SELF-TEST BLOCKED: the verdict and target-dir cases passed; the PT_LOAD cases need an ELF toolchain"
+    exit 3
+  fi
+  st_triple=selftest-linux-android
+  unset "CC_${st_triple//-/_}"
+  reset_state; android_page_align "$st_triple" "$WORK/lib16384.so" > "$WORK/pa.log"
+  expect "16 KiB-aligned .so -> ok" 0 "$FAILED"
+  grep -q "PT_LOAD align 0x4000" "$WORK/pa.log" || { echo "  FAIL    ok line lacks the 0x4000 alignment"; cat "$WORK/pa.log"; st_fail=1; }
+  reset_state; android_page_align "$st_triple" "$WORK/lib4096.so" > "$WORK/pa.log"
+  expect "4 KiB-aligned .so -> FAIL" 1 "$FAILED"
+  grep -q "0x1000" "$WORK/pa.log" || { echo "  FAIL    FAIL line lacks the 0x1000 alignment"; cat "$WORK/pa.log"; st_fail=1; }
+  reset_state; android_page_align "$st_triple" "$WORK/missing.so" > "$WORK/pa.log"
+  expect "missing .so -> FAIL" 1 "$FAILED"
+  if [ "$st_fail" -ne 0 ]; then echo "G-XTARGET SELF-TEST RED"; exit 1; fi
+  echo "G-XTARGET SELF-TEST GREEN"
+  exit 0
+fi
+
+INSTALLED="$(rustup target list --installed 2>/dev/null)"
+TARGET_DIR=""
 
 # target|extra cargo args|needs a cross C toolchain (1) or not (0)
 TARGETS=(
@@ -137,6 +251,12 @@ TARGETS=(
 )
 
 echo "=== G-XTARGET :: cross-target builds of rustty-vt-c ==="
+# A named target that is not in TARGETS is never built: report it by name.
+for name in ${WANT[@]+"${WANT[@]}"}; do
+  known=0
+  for spec in "${TARGETS[@]}"; do [ "${spec%%|*}" = "$name" ] && known=1; done
+  [ "$known" -eq 1 ] || skip "$name" "not a G-XTARGET target"
+done
 for spec in "${TARGETS[@]}"; do
   target="${spec%%|*}"
   rest="${spec#*|}"
@@ -150,7 +270,12 @@ for spec in "${TARGETS[@]}"; do
   fi
 
   if [ "$needs_cc" = "1" ] && ! probe_cc_target "$target"; then
-    skip "$target" "host C compiler cannot target it (no sysroot/toolchain)"
+    case "$target" in
+      *-android*)
+        tv="${target//-/_}"
+        skip "$target" "no Android NDK clang for it: set CC_$tv and CXX_$tv (and AR_$tv, CARGO_TARGET_$(printf '%s' "$tv" | tr '[:lower:]' '[:upper:]')_LINKER) to the NDK's clang" ;;
+      *) skip "$target" "host C compiler cannot target it (no sysroot/toolchain)" ;;
+    esac
     continue
   fi
 
@@ -158,7 +283,13 @@ for spec in "${TARGETS[@]}"; do
   # shellcheck disable=SC2086  # $extra is an intentional empty-or-flags word.
   if cargo build -p rustty-vt-c --target "$target" --release $extra > "$log" 2>&1; then
     case "$target" in
-      *-android*) android_page_align "$target" ;;
+      *-android*)
+        [ -n "$TARGET_DIR" ] || TARGET_DIR="$(cargo_target_dir)"
+        if [ -z "$TARGET_DIR" ]; then
+          echo "G-XTARGET BLOCKED: cargo metadata did not give the target directory"
+          exit 3
+        fi
+        android_page_align "$target" "$TARGET_DIR/$target/release/librustty_vt_c.so" ;;
       *) ok "$target" ;;
     esac
   else
@@ -175,14 +306,5 @@ for spec in "${TARGETS[@]}"; do
   fi
 done
 
-echo "--- G-XTARGET summary: $RAN built, $(printf '%s' "$SKIPPED" | wc -w | tr -d ' ') skipped ---"
-if [ "$RAN" -eq 0 ]; then
-  echo "G-XTARGET BLOCKED: no cross target was available on this host; skipped:$SKIPPED"
-  exit 3
-fi
-if [ "$FAILED" -ne 0 ]; then
-  echo "G-XTARGET RED:$FAILED_NAMES"
-  exit 1
-fi
-echo "G-XTARGET GREEN ($RAN target(s) built).${SKIPPED:+ Not built:$SKIPPED}"
-exit 0
+verdict
+exit $?
