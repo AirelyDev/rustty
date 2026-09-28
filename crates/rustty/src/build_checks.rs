@@ -117,6 +117,45 @@ pub fn windows_resource_command(
     }
 }
 
+/// `-Dpie` (`build/Config.zig:408-412`, N422/N377):
+///
+/// ```text
+/// config.pie = b.option(
+///     bool,
+///     "pie",
+///     "Build a Position Independent Executable. Default true for system packages.",
+/// ) orelse system_package;
+/// ```
+///
+/// and `GhosttyExe.zig:29-30`: "Set PIE if requested", `if (cfg.pie) exe.pie =
+/// true;`. Zig links a Linux executable as `ET_EXEC` unless `pie` is set;
+/// rustc's Linux and FreeBSD targets link position-independent (`-pie`) by
+/// default. The option is the environment variable `RUSTTY_PIE` (`true` /
+/// `false`; unset or empty = not passed), like `RUSTTY_I18N`. The port has no
+/// `--system` switch, so "not passed" takes the reference's non-system default,
+/// false, and the packaging that passes `--system` upstream (nix, flatpak) sets
+/// `RUSTTY_PIE=true`. Any other value is refused, as `zig build` refuses a
+/// non-bool `-Dpie`.
+///
+/// Returns whether the `rustty` executable links with `-no-pie`: when the
+/// option resolves to false on a target whose rustc default is PIE (Linux,
+/// FreeBSD). rustc passes a user link arg after its own `-pie`, and the C
+/// compiler driver takes the last of the two. Mach-O (arm64 macOS requires
+/// PIE) and PE have no such switch, so the option changes nothing there.
+pub fn link_no_pie(target_os: &str, pie: Option<&str>) -> Result<bool, String> {
+    let pie = match pie {
+        None | Some("") => false,
+        Some("true") => true,
+        Some("false") => false,
+        Some(other) => {
+            return Err(format!(
+                "rustty: `-Dpie` is a bool: RUSTTY_PIE must be `true` or `false`, not {other:?}"
+            ))
+        }
+    };
+    Ok(!pie && matches!(target_os, "linux" | "freebsd"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,6 +181,33 @@ mod tests {
         assert!(msg.starts_with("\x1b[33m\x1b[2mDetected building on and for NixOS"));
         assert!(msg.contains("\n  nix develop -c cargo build\n"));
         assert!(msg.ends_with("\x1b[0m"));
+    }
+
+    /// `-Dpie`: not passed = the non-system default (false), so Linux and
+    /// FreeBSD link `-no-pie`; `true` keeps rustc's PIE; other targets are
+    /// untouched; a non-bool value is refused.
+    #[test]
+    fn pie_option_resolves_like_the_reference() {
+        for os in ["linux", "freebsd"] {
+            assert_eq!(link_no_pie(os, None), Ok(true), "{os}");
+            assert_eq!(link_no_pie(os, Some("")), Ok(true), "{os}");
+            assert_eq!(link_no_pie(os, Some("false")), Ok(true), "{os}");
+            assert_eq!(link_no_pie(os, Some("true")), Ok(false), "{os}");
+        }
+        for os in ["macos", "windows", "ios", "android"] {
+            for v in [None, Some("false"), Some("true")] {
+                assert_eq!(link_no_pie(os, v), Ok(false), "{os} {v:?}");
+            }
+        }
+        for bad in ["yes", "1", "TRUE", "on"] {
+            let err = link_no_pie("linux", Some(bad)).unwrap_err();
+            assert!(
+                err.contains("RUSTTY_PIE must be `true` or `false`"),
+                "{err}"
+            );
+            assert!(err.contains(&format!("{bad:?}")), "{err}");
+            assert!(link_no_pie("macos", Some(bad)).is_err(), "{bad}");
+        }
     }
 
     #[test]

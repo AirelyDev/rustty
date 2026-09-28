@@ -96,6 +96,9 @@ modules:
         # release profile carries no debug info and strips it by default.
         CARGO_PROFILE_RELEASE_DEBUG: "true"
         CARGO_PROFILE_RELEASE_STRIP: "false"
+        # The reference builds with `--system $PWD/vendor/p`, and `-Dpie`
+        # defaults to true for a system package (`Config.zig:408-412`, N422).
+        RUSTTY_PIE: "true"
     build-commands:
       # `flatpak` is the port of the reference's `-Dflatpak=true`, which its own
       # manifest passes. Without it `build_config.flatpak` is false and the

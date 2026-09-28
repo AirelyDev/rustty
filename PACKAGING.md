@@ -120,6 +120,7 @@ cargo vendor --locked vendor > .cargo/config.toml
 ```sh
 CARGO_PROFILE_RELEASE_DEBUG=0 \
 RUSTFLAGS="-C target-cpu=x86-64" \
+RUSTTY_PIE=true \
 cargo build \
   --offline \
   --locked \
@@ -128,6 +129,8 @@ cargo build \
 ```
 
 This produces the release binary at `target/release/rustty`.
+`RUSTTY_PIE=true` is upstream's system-package default for `-Dpie` (see
+"PIE" below).
 
 3. Finally, install the binary and the runtime resource tree into your
    packaging root. Use the `DESTDIR` and `PREFIX` conventions common to
@@ -224,10 +227,13 @@ maintainers migrating from other terminal emulators:
   the man pages and the HTML/markdown docs in-process (no pandoc needed), so
   they are installed by default; `--emit-docs false` leaves them out.
 
-- **PIE** (was `-Dpie=<bool>`): Rust links Linux and FreeBSD executables as
-  position-independent by default, which is upstream's `-Dpie=true` (its
-  default for system packages). There is no switch for upstream's non-PIE
-  default.
+- **PIE** (was `-Dpie=<bool>`): set `RUSTTY_PIE=true` (or `false`) in the
+  environment of `cargo build`. Like upstream's option it defaults to false,
+  and on Linux and FreeBSD the `rustty` executable is then linked with
+  `-no-pie` (an `ET_EXEC` executable). Upstream's default is true for a
+  system package (`--system`); `RUSTTY_PIE=true` is that setting, and the
+  nix package and the flatpak manifests pass it. Any other value fails the
+  build.
 
 - **Baseline CPU** (was `-Dcpu=baseline`): Build for the "baseline" CPU of the
   target architecture. This avoids building for newer CPU features that may

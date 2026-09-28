@@ -95,6 +95,9 @@ modules:
         # than a confusing hang.
         CARGO_NET_OFFLINE: "true"
         CARGO_HOME: /run/build/rustty/cargo-home
+        # The reference builds with `--system $PWD/vendor/p`, and `-Dpie`
+        # defaults to true for a system package (`Config.zig:408-412`, N422).
+        RUSTTY_PIE: "true"
     build-commands:
       # `flatpak` = the reference's `-Dflatpak=true`; see the release manifest
       # (io.airely.rustty.yml) for what is inert without it.

@@ -141,6 +141,10 @@ in
     # this is what keeps a releasesafe build's symbols.
     CARGO_PROFILE_RELEASE_STRIP = lib.boolToString strip;
 
+    # The reference builds with `--system`, and `-Dpie` defaults to true for a
+    # system package (`Config.zig:408-412`); `RUSTTY_PIE` is that option (N422).
+    RUSTTY_PIE = "true";
+
     GI_TYPELIB_PATH = gi_typelib_path;
 
     # See nix/librustty-vt.nix: crane's vendored-deps hook hard-fails without

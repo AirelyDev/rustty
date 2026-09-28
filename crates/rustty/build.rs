@@ -11,6 +11,9 @@ fn main() {
 
     reject_unsupported_target(&target_os);
 
+    // Set PIE if requested
+    pie(&target_os);
+
     // Check for possible issues
     check_nix_shell(&target_os);
 
@@ -36,6 +39,18 @@ fn reject_unsupported_target(target_os: &str) {
         );
         // return error.UnsupportedTarget;
         std::process::exit(1);
+    }
+}
+
+/// `GhosttyExe.zig:29-30` `if (cfg.pie) exe.pie = true;` with `-Dpie`'s
+/// default (`Config.zig:408-412`); the decision is `build_checks::link_no_pie`.
+fn pie(target_os: &str) {
+    println!("cargo::rerun-if-env-changed=RUSTTY_PIE");
+    let value = std::env::var("RUSTTY_PIE").ok();
+    match build_checks::link_no_pie(target_os, value.as_deref()) {
+        Ok(true) => println!("cargo::rustc-link-arg-bin=rustty=-no-pie"),
+        Ok(false) => {}
+        Err(msg) => panic!("{msg}"),
     }
 }
 
