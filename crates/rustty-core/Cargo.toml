@@ -135,3 +135,16 @@ allocator-api2 = { workspace = true }
 # Task R13-B (UD59): the window-size overflow tests load config text through
 # `Config::load_iter`, which takes rustty-args' `LineIterator`.
 rustty-args = { workspace = true }
+
+# TEST-ONLY (task F-1, N383): the two `renderer_seam::compression_tests` assert
+# `rustty_vt::compression_enabled()`, which the reference's test binary gets
+# from `builtin.is_test` in `terminal/mem.zig` (`canReclaim`) on every target.
+# `test-decommit-sim` is rustty-vt's crate-external switch for it (N346). On
+# macOS and Linux the OS path already reclaims, so the edge is scoped to
+# Windows, where `canReclaim(.strict)` has no OS arm: without it
+# `cargo test -p rustty-core` alone failed both tests there (the workspace run
+# got the feature from rustty-vt-c's dev-dependency). A dev-dependency's
+# features reach only test/bench/example builds (`resolver = "2"`), never a
+# production build.
+[target.'cfg(windows)'.dev-dependencies]
+rustty-vt = { workspace = true, features = ["test-decommit-sim"] }
