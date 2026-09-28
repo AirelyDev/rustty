@@ -7338,3 +7338,21 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   both profiles and the debug record only with `debug_assertions`. Negative control (`--release`, the release arm set
   to `Warn`): fails, the info record is missing.
 - **state**: CLOSED (fixed).
+
+## N391 — the terminal-stream benchmark's handler pointer was invalidated by moving its box (Stacked Borrows)
+
+- **id**: N391. Not a ledger row: task C-1 (G6, `rustty-bench` Miri lane).
+- **severity**: medium (UB in a benchmark; the shipped terminal is not affected). **kind**: port soundness.
+- **finding**: `TerminalStream::create` boxed the struct with the terminal inline, took
+  `tptr = &mut b.terminal` for the stream's `Handler`, then returned the box. Returning (moving) the
+  `Box<TerminalStream>` retags it Unique, which invalidates `tptr`; so does `setup`'s
+  `self.terminal.full_reset()`. The next `Stream::next` wrote through the dead tag
+  (`stream_terminal.rs:588`). Miri, G6 conditions: `trying to retag from <..> for Unique permission ...
+  <..> was later invalidated ... by a Unique retag` at `terminal_stream.rs:188`. The reference
+  (`TerminalStream.zig`) has the same self-reference; Zig has no aliasing model.
+- **fix** (task C-1): the terminal is in its own heap allocation (`Box::into_raw`), held as the same raw
+  pointer the handler holds; every access (`setup`, `destroy`, the test) goes through it, and `destroy`
+  frees it after `stream.deinit()`.
+- **test**: `terminal_stream::terminal_stream` under Miri (G6 conditions): UB before, pass after (the
+  whole `rustty-bench` lane: 37 passed, 12 ignored). Native: both terminal-stream tests pass.
+- **state**: CLOSED (fixed).
