@@ -1240,9 +1240,8 @@ impl RenderState {
             // Borrows; task C-1, NEW-FINDINGS N394).
             let page_rows_ptr: *mut page::Row =
                 unsafe { (*p).rows.ptr((*p).memory_ptr()).add(chunk.start as usize) };
-            let page_rows = || -> &[page::Row] {
-                unsafe { core::slice::from_raw_parts(page_rows_ptr, take) }
-            };
+            let page_rows =
+                || -> &[page::Row] { unsafe { core::slice::from_raw_parts(page_rows_ptr, take) } };
             debug_assert!(unsafe { (*p).size.cols } == cols);
 
             // Store our pins and their node generations. We have to store
@@ -3223,6 +3222,10 @@ mod tests {
 
     // test "incremental updates match full rebuild"
     #[test]
+    #[cfg_attr(
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+    )]
     fn incremental_updates_match_full_rebuild() {
         let alloc = Global;
 
@@ -3883,6 +3886,10 @@ mod tests {
     // call on: growth then takes the alloc + copy + free fallback, and nothing
     // fails.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, parity tail C-1; .port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound with debug assertions on (G6) and past an 8-minute bound with them off (G6c), both measured one test per process; runs natively in cargo test --workspace and under ASan (see MIRI_EXCEPTIONS.md)"
+    )]
     fn render_state_allocation_failure_sweep() {
         use crate::alloc::testing::{with_handle, Config, FailingAllocator};
 
