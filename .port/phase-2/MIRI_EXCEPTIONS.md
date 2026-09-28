@@ -2758,7 +2758,7 @@ partition). Each ran past a 15-minute bound in G6 (one test per process, 8 worke
 some in the first pass), and each passed in G6c conditions (`-C debug-assertions=off`,
 `-Zmiri-disable-isolation`) within an 8-minute bound, 7 workers on a host other agents were also
 loading. Natively, with debug assertions, they take the times below; with them off every one of them
-takes about 0.1 s (the cargo overhead) except the LZ4 suite above: the integrity walks are the cost.
+takes at most 0.3 s, cargo overhead included: the integrity walks are the cost.
 
 | test | native, debug assertions on | G6c, measured |
 |---|---|---|
