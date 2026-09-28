@@ -2338,7 +2338,11 @@ mod tests {
         std::fs::write(&path, b"not a directory").expect("write probe file");
 
         let file_bytes = b"rustty-w7-definitely-not-a-real-binary";
-        let argv: [*const c_char; 1] = [std::ptr::null()];
+        // argv[0] is the program name, as `startPosix` passes it (`argsZ`). An
+        // empty argv (argv[0] == NULL) made memcheck report `Syscall param
+        // execve(argv[0]) points to unaddressable byte(s)` (NEW-FINDINGS N410).
+        let argv0 = c"rustty-w7-definitely-not-a-real-binary";
+        let argv: [*const c_char; 2] = [argv0.as_ptr(), std::ptr::null()];
         let envp: [*const c_char; 1] = [std::ptr::null()];
 
         let mut path_env: Vec<u8> = b"/rustty-w7-no-such-dir:".to_vec();
