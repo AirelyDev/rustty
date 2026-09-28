@@ -35,6 +35,9 @@ submissions → `start` (with the synchronous-callback arm), expired timers
 (`wakeup` load/store, take the queue, per-completion `wakeup`), the completion
 queue (kqueue `c_active` + Disarm/Rearm bookkeeping). termio's `Thread` holds the
 loop inline, `ThreadData.loop_ = &raw mut (*thread).loop_`.
+Timers here are an intrusive `next` queue, not a heap node embedded in the
+completion's `op`, so this harness cannot see the timer-heap link aliasing: that
+is N434 (`../mirihar-n434`). Its CLEAN rows do not cover the timer heap.
 
 Candidates `<shape>_<entry>_<reentry>`:
 

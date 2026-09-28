@@ -7720,3 +7720,46 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `Thread.zig:238-240`, `os/cf_release_thread.zig:133-134`) runs once at thread start. Their callbacks return
   `.rearm`, or `.disarm` and stop the loop, and never call `wait` again. So it is not a UD (not reachable), and
   the port stays faithful.
+
+## N434 — the xev timer heaps linked a Timer through a `&mut (*c).op` borrow that the next `&mut (*c).op` invalidated
+
+- **id**: N434. Parity tail X-3 (review X-2 F1; X-2 report concern 1). **severity**: medium (aliasing-model UB on
+  the macOS renderer thread's timer reset and cancel; no observed miscompile). **kind**: port soundness (Stacked
+  Borrows; Tree Borrows once two timers are linked). **state**: CLOSED (fixed).
+- **finding**: Zig reaches the timer as the place `c.op.timer` and links that `*Timer` in the heap. The port
+  derived the linked pointer from a `&mut (*c).op` reborrow: epoll `start` (an inner `match &mut
+  (*completion).op`), kqueue `start`, iocp `start_completion` and wasi_poll `start` (the binding of a whole-op
+  `match &mut (*c).op`). While the timer is linked, `timer_reset`'s Active arm and `stop_completion` formed a
+  fresh `&mut (*c).op`, a Unique retag from the completion's own tag that pops the heap's pointer under SB;
+  `heap::remove` -> `delete_min` -> `get_child` then read the node through the popped root link. Under TB, once
+  the heap wrote the node's links through that pointer (a second timer melded under it), the retag's read
+  froze it and `delete_min`'s `root.heap = .{}` write is forbidden. Reachable in the app on macOS through kqueue:
+  `renderer_seam.rs` `render_h.reset` (`armAnimationTimer`), `cursor_h.reset` and `cursor_h.cancel`. The
+  `heap.rs` pairing heap itself is raw end to end (no `&mut` to a node) and needed no change. io_uring has no
+  user-space timer heap.
+- **fix (R1: same writes, same order)**: one helper per backend, `unsafe fn timer_ptr(c: *mut Completion) ->
+  *mut Timer`, takes a shared `&(*c).op` only to find the payload address and returns it with `c`'s own
+  provenance (`c.cast::<u8>().with_addr(addr).cast()`). Every heap-path Timer access goes through it: the
+  `start` insert and its `.c` write (the arm is now `Operation::Timer(_)`), `timer_reset`'s Adding and Active
+  arms, and `stop_completion`'s remove and `reset`/`next` accesses, whose match is now shared (`&(*c).op`;
+  kqueue `if let` -> `matches!`, iocp/wasi `if let` in `timer_reset` -> `matches!` guard, so the non-timer no-op
+  is kept). PORT NOTE on each helper. LIFETIMES row `heap.zig Intrusive(T) root` annotated.
+- **evidence**:
+  - `.port/phase-2/mirihar-n434` (isolated, non-FFI; the REAL `heap.rs` included by `#[path]`; the renderer
+    Thread shape with three timers). `bash run-all.sh`, miri nightly 2026-07-22, 32 candidates x SB/TB. Shipped
+    shape, all four backends: `*_shipped_{reset,cancel}_root` UB/UB (SB "tag does not exist in the borrow
+    stack" at `heap.rs:39`; TB "write access .. is forbidden .. Frozen" at `heap.rs:146`);
+    `*_shipped_{reset,cancel}_inner` CLEAN/CLEAN (a non-root node's stale link is only compared by address).
+    Fixed shape: all 16 `*_fixed_*` CLEAN/CLEAN; `cargo +nightly miri test applied` passes under SB and TB.
+  - Real code under Miri (epoll, from the Mac: `cargo +nightly miri test -p rustty-xev --target
+    aarch64-unknown-linux-gnu --lib -- --exact epoll::tests::<name>`), 14 loop/timer/async/cancel tests: before
+    the fix `epoll_timer_reset` and `epoll_timer_cancellation` are UB under SB (single timer, so CLEAN under TB),
+    the other 12 CLEAN/CLEAN; after the fix all 14 CLEAN under SB and TB. The 6 lib tests matching `heap` pass under
+    Miri SB and TB. kqueue, iocp and wasi_poll cannot run under Miri (kqueue: "can't call foreign function
+    `kqueue`", MIRI EXCEPTION C3); they are proven by the harness and the shared code shape.
+- **tests**: Mac `cargo test -p rustty-xev -p rustty-termio` 3/3 (xev 52 passed + 1 ignored, including the
+  live `kqueue_timer_reset`/`kqueue_timer_cancellation`), `cargo test -p rustty-core` 1/1. Linux (rvm, `-j 4`):
+  `cargo test -p rustty-xev -p rustty-termio` 3/3 (xev 108 passed, termio 92 + 6 ignored). Windows (rwin,
+  `--target x86_64-pc-windows-msvc`): `cargo test -p rustty-xev` 3/3 (45 passed, including `iocp_timer_reset`
+  and `iocp_timer_cancellation`). WASI: compiles and clippy-clean only; no runtime (VERIFICATION_DEBT V8),
+  UNVERIFIED by execution.
