@@ -424,7 +424,11 @@ node .port/tools/check-vt-struct-layouts.mjs
 # discriminants to the header's enumerator values. Arm (b) compares symbol
 # NAMES; arm (c) compares struct LAYOUTS; neither looks at an enum's values, so
 # a header/Rust skew is a silent mis-dispatch rather than a compile error.
-echo "== (e) enum discriminants match the curated headers =="
+# NEW-FINDINGS N27: the arm also checks that each positional pair NAMES the
+# same thing (a transposition of implicit-value enumerators keeps every value
+# assert green); its self-test proves that on a fixture first.
+echo "== (e) enum discriminants and names match the curated headers =="
+node .port/tools/check-vt-enum-discriminants.mjs --self-test
 node .port/tools/check-vt-enum-discriminants.mjs
 
 echo "VT-HEADERS: GREEN"
