@@ -32,11 +32,20 @@
 // `crate::sprite::draw::*` modules. `wuffs` (runtime PNG decode) is used ONLY by
 // the known-answer test; per the established `glyf_rasterize_png_test` precedent
 // it is replaced there by the pure-Rust `png` dev-dependency (z2d's PNG exporter
-// is not part of the ported subset). `log.scoped(.font_sprite)` maps to the
-// crate's `eprintln!("error(font_sprite): ...")` diagnostic convention.
+// is not part of the ported subset). `log.scoped(.font_sprite)` maps to
+// `LOG_SCOPE` below: the production site logs through the `log` facade
+// (`log::error!(target: LOG_SCOPE, ...)`, N14). The private test helper
+// `test_diff_atlas_at` keeps its direct `eprintln!("error(font_sprite): ...")`
+// prints: they are test-only (the reference's :297 :382 :400 live in
+// `testDiffAtlas`, which only `test` blocks call), where Zig's test runner
+// writes log output to stderr, and this crate's test binary has no log backend
+// that would show them.
 use crate::atlas::{self, Atlas};
 use crate::glyph::Glyph;
 use crate::metrics::Metrics;
+
+/// The scoped log name — `Face.zig:25` `std.log.scoped(.font_sprite)`.
+const LOG_SCOPE: &str = "font_sprite";
 use crate::sprite::draw::{
     block, braille, branch, geometric_shapes, powerline, r#box, special,
     symbols_for_legacy_computing as slc, symbols_for_legacy_computing_supplement as slcs,
@@ -664,7 +673,7 @@ impl Face {
         //     }
         // }
         if cfg!(debug_assertions) && !self.has_codepoint(cp, None) {
-            eprintln!("error(font_sprite): invalid codepoint cp={cp:x}");
+            log::error!(target: LOG_SCOPE, "invalid codepoint cp={cp:x}");
             unreachable!(); // crash
         }
 

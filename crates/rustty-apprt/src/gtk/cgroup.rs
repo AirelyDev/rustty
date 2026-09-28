@@ -231,7 +231,7 @@ pub fn create_scope(
             // `Debug` renders the domain, the `f_code` and the `f_message` — the
             // same two fields the reference names, and it cannot be null-messaged
             // (the "(no message)" fallback is unreachable through this binding).
-            eprintln!("error({LOG_SCOPE}): creating transient cgroup scope failed {err:?}");
+            log::error!(target: LOG_SCOPE, "creating transient cgroup scope failed {err:?}");
             Err(DbusCallFailed)
         }
     }

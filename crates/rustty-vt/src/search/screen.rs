@@ -39,8 +39,10 @@ use crate::size;
 // const log = std.log.scoped(.search_screen);
 //
 // PORT NOTE: the reference `log.info(...)` calls in `reloadActive` are reached
-// only on an internal error path (a failed `select` retry); we mirror them with
-// `eprintln!` behind the same message string.
+// only on an internal error path (a failed `select` retry); they go through the
+// `log` facade with this scope as the target (`log::info!(target: LOG_SCOPE,
+// ...)`), behind the same message string (N14).
+const LOG_SCOPE: &str = "search_screen";
 
 // const reloadActive_tw = tripwire.module(enum {
 //     history_append_new,
@@ -917,9 +919,10 @@ impl ScreenSearch {
             //     log.info("reload failed to reset search selection err={}", .{err});
             // };
             if let Err(err) = self.select(Select::Prev) {
-                eprintln!(
-                    "info(search_screen): reload failed to reset search selection err={:?}",
-                    err
+                log::info!(
+                    target: LOG_SCOPE,
+                    "reload failed to reset search selection err={:?}",
+                    err,
                 );
             }
         }
@@ -1232,9 +1235,10 @@ impl ScreenSearch {
                     self.selected.take().unwrap().deinit(self.screen);
                     // _ = self.select(.prev) catch |err| { ... };
                     if let Err(err) = self.select(Select::Prev) {
-                        eprintln!(
-                            "info(search_screen): reload failed to reset search selection err={:?}",
-                            err
+                        log::info!(
+                            target: LOG_SCOPE,
+                            "reload failed to reset search selection err={:?}",
+                            err,
                         );
                     }
                 }
@@ -1261,9 +1265,10 @@ impl ScreenSearch {
                 if this.selected.is_some() {
                     this.selected.take().unwrap().deinit(this.screen);
                     if let Err(err) = this.select(Select::Next) {
-                        eprintln!(
-                            "info(search_screen): reload failed to reset search selection err={:?}",
-                            err
+                        log::info!(
+                            target: LOG_SCOPE,
+                            "reload failed to reset search selection err={:?}",
+                            err,
                         );
                     }
                 }
@@ -1416,9 +1421,10 @@ impl ScreenSearch {
             self.selected.take().unwrap().deinit(self.screen);
             // _ = self.select(.next) catch |err| { ... };
             if let Err(err) = self.select(Select::Next) {
-                eprintln!(
-                    "info(search_screen): reload failed to reset search selection err={:?}",
-                    err
+                log::info!(
+                    target: LOG_SCOPE,
+                    "reload failed to reset search selection err={:?}",
+                    err,
                 );
             }
         }

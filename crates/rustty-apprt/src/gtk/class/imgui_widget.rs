@@ -46,6 +46,10 @@ use rustty_vt::input::key::Action;
 
 use crate::gtk::key;
 
+/// The scoped log name — `imgui_widget.zig:18`
+/// `std.log.scoped(.gtk_ghostty_imgui_widget)`, R2-renamed.
+const LOG_SCOPE: &str = "gtk_rustty_imgui_widget";
+
 /// `gl.c.GL_COLOR_BUFFER_BIT` (`imgui_widget.zig:320`). The `gl` crate exposes
 /// this only through the `gl::COLOR_BUFFER_BIT` const the renderer links; the
 /// apprt crate does not depend on `gl` directly, so the value is named here (it
@@ -178,14 +182,14 @@ mod imp {
     ///
     /// PORTS: `imgui_widget.zig:480-483` `defaultSetup`.
     fn default_imgui_setup(_this: &super::ImguiWidget) {
-        eprintln!("warning(gtk): default Dear ImGui setup called, this is a bug.");
+        log::warn!(target: LOG_SCOPE, "default Dear ImGui setup called, this is a bug.");
     }
 
     /// Default render function. Does nothing but log a warning.
     ///
     /// PORTS: `imgui_widget.zig:485-488` `defaultRender`.
     fn default_imgui_render(_this: &super::ImguiWidget) {
-        eprintln!("warning(gtk): default Dear ImGui render called, this is a bug.");
+        log::warn!(target: LOG_SCOPE, "default Dear ImGui render called, this is a bug.");
     }
 }
 
@@ -326,7 +330,7 @@ impl ImguiWidget {
     pub fn set_current_context(&self) -> Result<(), ContextNotInitialized> {
         let ig_context = self.imp().ig_context.get();
         if ig_context.is_null() {
-            eprintln!("warning(gtk): Dear ImGui context not initialized");
+            log::warn!(target: LOG_SCOPE, "Dear ImGui context not initialized");
             return Err(ContextNotInitialized);
         }
         // SAFETY: non-null context handle owned by this widget.
@@ -447,14 +451,14 @@ impl ImguiWidget {
 
         imp.gl_area.make_current();
         if let Some(err) = imp.gl_area.error() {
-            eprintln!("warning(gtk): GLArea for Dear ImGui widget failed to realize: {err}");
+            log::warn!(target: LOG_SCOPE, "GLArea for Dear ImGui widget failed to realize: {err}");
             return;
         }
 
         // SAFETY: the GL context is current; create the per-widget ImGui context.
         let ig_context = unsafe { cimgui::ImGui_CreateContext(ptr::null_mut()) };
         if ig_context.is_null() {
-            eprintln!("warning(gtk): unable to initialize Dear ImGui context");
+            log::warn!(target: LOG_SCOPE, "unable to initialize Dear ImGui context");
             return;
         }
         imp.ig_context.set(ig_context);
@@ -497,7 +501,7 @@ impl ImguiWidget {
         // so we make it current for ImGui cleanup (`:260-266`).
         imp.gl_area.make_current();
         if let Some(err) = imp.gl_area.error() {
-            eprintln!("warning(gtk): GLArea for Dear ImGui widget failed to realize: {err}");
+            log::warn!(target: LOG_SCOPE, "GLArea for Dear ImGui widget failed to realize: {err}");
             return;
         }
 
