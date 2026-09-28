@@ -3,7 +3,7 @@
 //! PORTS: Zig stdlib types AS THE PORT USES THEM — std.heap.ArenaAllocator,
 //! std.heap.MemoryPool / MemoryPoolAligned, std.array_hash_map.AutoArrayHashMap,
 //! std.Thread.Mutex, std.hash.Wyhash, std.fs.path.dirnamePosix,
-//! std.valgrind (runningOnValgrind).
+//! std.valgrind (runningOnValgrind; memcheck.makeMemDefined/makeMemUndefined).
 //!
 //! PORT STATUS: done (infra; Zig stdlib equivalents; not in the 3234 contract)
 //!

@@ -2782,6 +2782,10 @@ fn pagelist_cold_compression_continues_after_an_incompressible_page() {
     // must change nothing at all.
     let _ = s.compress(CompressionMode::Full);
     assert_eq!(memory, s.memory_stats());
+
+    // defer s.deinit(); (the reference's; it was missing here, so the second
+    // page's encoded allocation leaked: NEW-FINDINGS N418)
+    s.deinit();
 }
 
 /// PORTS: oracle@main PageList.zig `test "PageList compression leaves
@@ -2809,6 +2813,9 @@ fn pagelist_compression_leaves_incompressible_pages_resident() {
     assert!(!s.compress_page(node));
     assert!(!unsafe { super::Node::is_compressed(node) });
     assert_eq!(page_size, s.page_size);
+
+    // defer s.deinit(); (the reference's; it was missing here, NEW-FINDINGS N418)
+    s.deinit();
 }
 
 #[test]

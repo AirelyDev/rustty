@@ -1,0 +1,38 @@
+# Rustty-only Valgrind suppressions for G-VALGRIND (check_valgrind.sh), kept
+# apart from `valgrind.supp`, which stays the reference's file verbatim.
+#
+# Scope: Mesa's llvmpipe, the software OpenGL driver the renderer's live-GL
+# tests run on (LIBGL_ALWAYS_SOFTWARE=1, RUSTTY_REQUIRE_GL=1). The reference's
+# `valgrind.supp` hides graphics-driver noise the same way, by naming the
+# driver's own frames (its "Mesa", "Graphics Driver dri", "i965 addr4/addr8" and
+# "mesa memcpy/memcmp" entries). The reference runs no test that draws, so it
+# has no llvmpipe entries; these are the port's, one group per finding
+# (NEW-FINDINGS N412), each measured on the Fedora 44 aarch64 VM (Mesa 26.1.4,
+# LLVM 22.1.8, valgrind 3.27.1).
+
+# llvmpipe compiles its shaders with LLVM (gallivm) at draw time; memcheck
+# reports conditional jumps inside LLVM's code generator (AsmPrinter,
+# SelectionDAG lowering) on a value created by a stack allocation in Mesa's
+# `lp_build_create_jit_compiler_for_module`. Reproduced by
+# `.port/tools/valgrind-llvmpipe-probe/probe.c` (C, EGL surfaceless, no Rustty
+# code at all), and by a single-triangle variant of it, so it is
+# driver-internal. Every frame between the report and
+# `gallivm_jit_function` belongs to LLVM or Mesa; a Rustty defect cannot be the
+# top of such a stack. The stack is deeper than valgrind's default of 12
+# callers: the entry matches only with the gate's `--num-callers=50` (review
+# L-6).
+{
+   llvmpipe-gallivm-llvm-codegen
+   Memcheck:Cond
+   ...
+   fun:gallivm_jit_function
+}
+
+# No entry for the golden tests' read-back pixels. llvmpipe's blending makes
+# memcheck mark some of them undefined although each holds its expected value
+# (N412, probe.c); the two tests that branch on them declare exactly those
+# bytes defined with `std.valgrind.memcheck.makeMemDefined`
+# (`rustty_zigstd::valgrind::memcheck::make_mem_defined`) right after
+# `read_rgba()`, so every other value they branch on stays checked. Until
+# review L-6 F2 five entries here anchored on the test bodies instead, which
+# also hid conditional jumps on renderer state.

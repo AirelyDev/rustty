@@ -464,9 +464,15 @@ impl Drop for TestSurface {
     fn drop(&mut self) {
         unsafe {
             let sp = self.surface;
-            (*sp).io.terminal.deinit(Allocator.into());
             (*sp).renderer_thread.wakeup.deinit();
             (*sp).io.renderer_wakeup.deinit();
+            // The whole Termio, as `Surface.deinit` does (`self.io.deinit()`):
+            // the backend's command and environment, the terminal, the
+            // mailbox's queue and the stream handler. Deiniting only the
+            // terminal leaked the rest (G-VALGRIND, NEW-FINDINGS N415). The
+            // Surface is a `MaybeUninit`, so the moved-out value is not dropped
+            // again.
+            std::ptr::read(std::ptr::addr_of!((*sp).io)).deinit();
             drop(Box::from_raw(self.mutex));
             Box::from_raw(self.renderer_mailbox).destroy();
             Box::from_raw(self.app).destroy();

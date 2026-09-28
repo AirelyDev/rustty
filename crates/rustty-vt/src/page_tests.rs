@@ -3571,18 +3571,41 @@ mod tests {
         });
     }
 
-    /// Carve a deliberately page-UNaligned (but still 64-byte aligned, so every
+    /// A deliberately page-UNaligned (but still 64-byte aligned, so every
     /// `Row`/`Cell`/set alignment inside the page is satisfied) buffer of `len`
-    /// bytes out of a page-aligned allocation. Deliberately leaks: every user
-    /// panics before returning.
-    fn leak_page_unaligned_buf(len: usize) -> &'static mut [u8] {
-        let l = std::alloc::Layout::from_size_align(len + PAGE_SIZE_MIN, PAGE_SIZE_MIN).unwrap();
-        // SAFETY: non-zero size; the returned block is PAGE_SIZE_MIN-aligned, so
-        // `+64` is exactly one page-alignment violation and nothing else.
-        let base = unsafe { std::alloc::alloc_zeroed(l) };
-        assert!(!base.is_null());
-        assert_eq!(base as usize % PAGE_SIZE_MIN, 0);
-        unsafe { core::slice::from_raw_parts_mut(base.add(64), len) }
+    /// bytes carved out of a page-aligned allocation. Every user panics before
+    /// returning, so the allocation is freed by `Drop` while the panic unwinds
+    /// (it used to be leaked: 12,288 bytes definitely lost per run under
+    /// G-VALGRIND, NEW-FINDINGS N418).
+    struct PageUnalignedBuf {
+        base: *mut u8,
+        layout: std::alloc::Layout,
+        len: usize,
+    }
+
+    impl PageUnalignedBuf {
+        fn new(len: usize) -> PageUnalignedBuf {
+            let layout =
+                std::alloc::Layout::from_size_align(len + PAGE_SIZE_MIN, PAGE_SIZE_MIN).unwrap();
+            // SAFETY: non-zero size; the returned block is PAGE_SIZE_MIN-aligned, so
+            // `+64` is exactly one page-alignment violation and nothing else.
+            let base = unsafe { std::alloc::alloc_zeroed(layout) };
+            assert!(!base.is_null());
+            assert_eq!(base as usize % PAGE_SIZE_MIN, 0);
+            PageUnalignedBuf { base, layout, len }
+        }
+
+        fn as_mut_slice(&mut self) -> &mut [u8] {
+            // SAFETY: `64 + len` bytes of the live allocation, borrowed from `self`.
+            unsafe { core::slice::from_raw_parts_mut(self.base.add(64), self.len) }
+        }
+    }
+
+    impl Drop for PageUnalignedBuf {
+        fn drop(&mut self) {
+            // SAFETY: `base` came from `alloc_zeroed(layout)` and is freed once.
+            unsafe { std::alloc::dealloc(self.base, self.layout) };
+        }
     }
 
     /// PORT NOTE: `cloneBuf(buf: []align(std.heap.page_size_min) u8)` — the
@@ -3593,9 +3616,22 @@ mod tests {
     #[test]
     #[should_panic(expected = "page_size_min-aligned")]
     fn page_cloneBuf_rejects_unaligned_buffer() {
-        let page = Page::init(Capacity::new(10, 10)).unwrap();
-        let buf = leak_page_unaligned_buf(page.memory_len);
-        let _ = page.clone_buf(buf);
+        // var page = try Page.init(...); defer page.deinit();
+        // The `defer` runs while the expected panic unwinds, after the buffer's
+        // (declared later, dropped first), as Zig runs defers in reverse order
+        // (review L-6 F7).
+        let page = PageDeinitOnDrop(Page::init(Capacity::new(10, 10)).unwrap());
+        let mut buf = PageUnalignedBuf::new(page.0.memory_len);
+        let _ = page.0.clone_buf(buf.as_mut_slice());
+    }
+
+    /// `defer page.deinit()` for a test whose body is expected to panic.
+    struct PageDeinitOnDrop(Page);
+
+    impl Drop for PageDeinitOnDrop {
+        fn drop(&mut self) {
+            self.0.deinit();
+        }
     }
 
     /// PORT NOTE: `initBuf` stores `@alignCast(buf.start()[0..l.total_size])`,
@@ -3607,8 +3643,8 @@ mod tests {
     #[should_panic(expected = "page_size_min-aligned")]
     fn page_initBuf_rejects_unaligned_buffer() {
         let l = Page::layout(Capacity::new(10, 10));
-        let buf = leak_page_unaligned_buf(l.total_size);
-        let _ = Page::init_buf(OffsetBuf::init(buf.as_ptr()), l);
+        let mut buf = PageUnalignedBuf::new(l.total_size);
+        let _ = Page::init_buf(OffsetBuf::init(buf.as_mut_slice().as_ptr()), l);
     }
 
     // PORT NOTE: the reference types the grapheme-tail APIs `u21`

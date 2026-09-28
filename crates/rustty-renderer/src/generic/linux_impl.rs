@@ -5324,9 +5324,13 @@ mod tests {
         }
     }
 
-    // Build a leaked embedded-font `SharedGrid` + the pixel `Size` for a cols×rows
+    // Build a heap embedded-font `SharedGrid` + the pixel `Size` for a cols×rows
     // grid (the `macos_impl::tests::test_font_grid_and_size` recipe, generic.rs:6283).
-    // The grid is leaked so the returned `*mut SharedGrid` outlives the test scope;
+    // The grid is boxed so the returned `*mut SharedGrid` stays valid for the
+    // renderer that borrows it (the renderer never owns its grid; in the app the
+    // `SharedGridSet` does). The test frees it after the renderer's `deinit`,
+    // with [`free_test_font_grid`] or [`deinit_test_renderer`]: it used to be
+    // leaked, which G-VALGRIND reported as 38 definite leaks (NEW-FINDINGS N411).
     // `size.screen` is PINNED to the grid's pixel size.
     fn test_font_grid_and_size(cols: CellCountInt, rows: CellCountInt) -> (*mut SharedGrid, Size) {
         let font_grid: *mut SharedGrid = {
@@ -5363,7 +5367,7 @@ mod tests {
                 sprite: None,
             };
             let grid = SharedGrid::init(Global, resolver).unwrap();
-            Box::leak(Box::new(grid)) as *mut SharedGrid
+            Box::into_raw(Box::new(grid))
         };
 
         let grid_metrics = unsafe { (*font_grid).metrics };
@@ -5385,6 +5389,34 @@ mod tests {
             },
         };
         (font_grid, size)
+    }
+
+    // Free a grid built by `test_font_grid_and_size`: the grid's faces
+    // (`SharedGrid::deinit`), the box, then the FreeType library the collection
+    // was loaded with, in the order `shared_grid`'s own tests use. Call it only
+    // after every renderer that borrowed the grid has been deinited.
+    fn free_test_font_grid(font_grid: *mut SharedGrid) {
+        // SAFETY: `font_grid` came from `Box::into_raw` in
+        // `test_font_grid_and_size`, and its only borrower is gone.
+        let mut grid = unsafe { Box::from_raw(font_grid) };
+        let mut lib = grid
+            .resolver
+            .collection
+            .load_options
+            .as_ref()
+            .expect("test_font_grid_and_size sets the load options")
+            .library;
+        grid.deinit();
+        drop(grid);
+        lib.deinit();
+    }
+
+    // `r.deinit()` for a renderer built on `test_font_grid_and_size`'s grid
+    // (every `golden_renderer`), then the grid itself.
+    fn deinit_test_renderer(r: &mut Renderer) {
+        let font_grid = r.font_grid;
+        r.deinit();
+        free_test_font_grid(font_grid);
     }
 
     /// L4 T9 KAT: the OpenGL `Renderer` init/deinit round-trip — one layer up from
@@ -5451,7 +5483,7 @@ mod tests {
 
         // The teardown must not panic/leak: leaf GL objects freed first (context
         // still current), then the context (via `api`'s drop after `deinit`).
-        r.deinit();
+        deinit_test_renderer(&mut r);
     }
 
     /// L5 prerequisite KAT: the GLArea re-realize cycle —
@@ -5523,7 +5555,7 @@ mod tests {
         assert!(r.swap_chain.is_some());
 
         // Teardown must not panic/leak after the re-realize cycle.
-        r.deinit();
+        deinit_test_renderer(&mut r);
     }
 
     /// PARITY (S115-F2, with S113-F1) — the BEHAVIOURAL half: a failed GL context
@@ -5636,7 +5668,7 @@ mod tests {
             ]
         );
 
-        r.deinit();
+        deinit_test_renderer(&mut r);
     }
 
     // PORT NOTE: reuse the exact `opts(cols, rows)` recipe from `macos_impl::tests`
@@ -5736,7 +5768,7 @@ mod tests {
         assert_eq!(cur.grid_pos, [2, 0]);
         assert_eq!(r.uniforms.cursor_pos, [2, 0]);
 
-        r.deinit();
+        deinit_test_renderer(&mut r);
         t.deinit(Global.into());
     }
 
@@ -5850,7 +5882,7 @@ mod tests {
         );
 
         t.deinit(Global.into());
-        r.deinit();
+        deinit_test_renderer(&mut r);
     }
 
     // UD76 (R13, task R13-C2): the OpenGL twin of `macos_impl`'s
@@ -5894,7 +5926,7 @@ mod tests {
         let h = r.size.screen.height as f32;
         assert_eq!(u32::MAX as f32, c[0], "x saturates: {c:?}");
         assert!(c[1] <= h - u32::MAX as f32, "y saturates: {c:?}");
-        r.deinit();
+        deinit_test_renderer(&mut r);
     }
 
     // F-014 PROVING TESTS (the OpenGL twin of
@@ -5948,6 +5980,10 @@ mod tests {
             );
             let scrollbar = r.scrollbar;
             r.draw_frame(true).unwrap();
+            // The frame is drawn; the terminal is this helper's to free (it was
+            // leaked, NEW-FINDINGS N411).
+            drop(st);
+            t.deinit(Global.into());
             scrollbar
         }
 
@@ -5977,7 +6013,7 @@ mod tests {
                 )]
             );
 
-            r.deinit();
+            deinit_test_renderer(&mut r);
         }
 
         /// generic.zig:1449-1456 — the `drawFrame` `defer` pushes `.scrollbar` with
@@ -6008,7 +6044,7 @@ mod tests {
                 "a landed scrollbar push must clear scrollbar_dirty"
             );
 
-            r.deinit();
+            deinit_test_renderer(&mut r);
         }
 
         /// The other arm of the same `if (... > 0)`: "Fail instantly if the surface
@@ -6039,7 +6075,7 @@ mod tests {
                 "a refused scrollbar push must keep scrollbar_dirty set"
             );
 
-            r.deinit();
+            deinit_test_renderer(&mut r);
         }
     }
 
@@ -6116,6 +6152,14 @@ mod tests {
         let px = r.swap_chain.as_ref().unwrap().frames[idx]
             .target
             .read_rgba();
+        // llvmpipe's pixels, declared defined for memcheck (a no-op natively). Its
+        // blending multiplies the destination by (1 - source alpha) = 0, and memcheck
+        // cannot tell that product is defined, so it marks read-back pixels that hold
+        // their expected values undefined (NEW-FINDINGS N412; the C program
+        // `.port/tools/valgrind-llvmpipe-probe/probe.c` gets the same report with no
+        // Rustty code). Only these bytes are exempted: every other value this test
+        // branches on stays checked (review L-6 F2).
+        rustty_zigstd::valgrind::memcheck::make_mem_defined(&px);
 
         let w = r.size.screen.width as usize;
         let h = r.size.screen.height as usize;
@@ -6175,7 +6219,7 @@ mod tests {
             "no fg glyph rendered in cell (0,0) (maxlum={maxlum})"
         );
 
-        r.deinit();
+        deinit_test_renderer(&mut r);
         t.deinit(Global.into());
     }
 
@@ -6315,7 +6359,7 @@ mod tests {
              (R={ir} G={ig} B={ib}), expected the all-0xFF white image"
         );
 
-        r.deinit();
+        deinit_test_renderer(&mut r);
         t.deinit(Global.into());
     }
 
@@ -6401,7 +6445,7 @@ mod tests {
             "the unloaded image was not evicted from the renderer image map"
         );
 
-        r.deinit();
+        deinit_test_renderer(&mut r);
         t.deinit(Global.into());
     }
 
@@ -6504,6 +6548,15 @@ mod tests {
         ) else {
             return; // GL-context skip
         };
+        // `px` is `drive_custom_shader_frame`'s `read_rgba()`, returned as is.
+        // llvmpipe's pixels, declared defined for memcheck (a no-op natively). Its
+        // blending multiplies the destination by (1 - source alpha) = 0, and memcheck
+        // cannot tell that product is defined, so it marks read-back pixels that hold
+        // their expected values undefined (NEW-FINDINGS N412; the C program
+        // `.port/tools/valgrind-llvmpipe-probe/probe.c` gets the same report with no
+        // Rustty code). Only these bytes are exempted: every other value this test
+        // branches on stays checked (review L-6 F2).
+        rustty_zigstd::valgrind::memcheck::make_mem_defined(&px);
 
         let w = r.size.screen.width as usize;
         let h = r.size.screen.height as usize;
@@ -6537,7 +6590,7 @@ mod tests {
             "cursor cell not red-dominant (R={rr} G={g} B={b})"
         );
 
-        r.deinit();
+        deinit_test_renderer(&mut r);
         t.deinit(Global.into());
     }
 
@@ -6585,7 +6638,7 @@ mod tests {
             "cursor cell not inverted to cyan-dominant (R={rr} G={g} B={b})"
         );
 
-        r.deinit();
+        deinit_test_renderer(&mut r);
         t.deinit(Global.into());
     }
 
@@ -6697,7 +6750,7 @@ mod tests {
             // Sample the center of an empty cell on the bottom row (grid (5,2)).
             // Y-FLIP: `glReadPixels` is bottom-up (see `golden_renders_cursor_fg_bg`).
             let out = px_at(&px, w, 5 * cw + cw / 2, h - 1 - (2 * ch + ch / 2));
-            r.deinit();
+            deinit_test_renderer(&mut r);
             t.deinit(Global.into());
             Some(out)
         }
@@ -6774,7 +6827,7 @@ mod tests {
         assert!(r.bg_image_buffer.info.repeat);
         assert_eq!(r.bg_image_buffer_modified, before + 1);
 
-        r.deinit();
+        deinit_test_renderer(&mut r);
     }
 
     /// F-012 — the "no path" arm of `prep_background_image` (oracle
@@ -6832,7 +6885,7 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&path);
-        r.deinit();
+        deinit_test_renderer(&mut r);
         t.deinit(Global.into());
     }
 
@@ -6917,7 +6970,7 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&path2);
-        r.deinit();
+        deinit_test_renderer(&mut r);
         t.deinit(Global.into());
     }
 
@@ -7092,7 +7145,7 @@ mod tests {
              (delta={delta})"
         );
 
-        r.deinit();
+        deinit_test_renderer(&mut r);
         t.deinit(Global.into());
     }
 
@@ -7128,7 +7181,7 @@ mod tests {
         r.rebuild_overlay(&[]).unwrap();
         assert!(r.overlay.is_none());
 
-        r.deinit();
+        deinit_test_renderer(&mut r);
     }
 
     // ===================================================================
@@ -7209,7 +7262,7 @@ mod tests {
             );
             // The break arm leaves the renderer's bg image untouched.
             assert!(r.bg_image.is_none());
-            r.deinit();
+            deinit_test_renderer(&mut r);
         }
 
         /// `generic.zig:2002` — GIF magic bytes are DETECTED, but the port decodes
@@ -7240,7 +7293,7 @@ mod tests {
                 )]
             );
             assert!(r.bg_image.is_none());
-            r.deinit();
+            deinit_test_renderer(&mut r);
         }
 
         /// The success path of the very same function must be SILENT. This is the
@@ -7263,7 +7316,7 @@ mod tests {
             // and it really did the work, so the silence is not the silence of a
             // function that never ran.
             assert!(matches!(r.bg_image, Some(crate::image::Image::Pending(_))));
-            r.deinit();
+            deinit_test_renderer(&mut r);
         }
 
         /// `generic.zig:2137` — a DEBUG-level site in a different function. Level
@@ -7299,7 +7352,7 @@ mod tests {
                 )]
             );
             assert_eq!(r.size.padding, size.padding);
-            r.deinit();
+            deinit_test_renderer(&mut r);
         }
     }
 }

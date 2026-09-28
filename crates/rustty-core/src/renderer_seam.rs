@@ -3245,12 +3245,35 @@ mod cursor_blink_interval_tests {
 
     /// Parity S114-F1: under Valgrind (one or more) the interval is five
     /// times `CURSOR_BLINK_INTERVAL` (`Thread.zig:735-748`); natively it is
-    /// the plain 600 ms, and this test binary runs natively.
+    /// the plain 600 ms.
+    ///
+    /// This test binary also runs under Valgrind (G-VALGRIND), where
+    /// `cursorBlinkInterval()` is 3000 wherever client requests are compiled
+    /// in; the test used to assert the native value unconditionally and failed
+    /// there (NEW-FINDINGS N414).
     #[test]
     fn cursor_blink_interval_is_five_times_longer_under_valgrind() {
         assert_eq!(600, cursor_blink_interval_for(0));
         assert_eq!(3000, cursor_blink_interval_for(1));
         assert_eq!(3000, cursor_blink_interval_for(2));
-        assert_eq!(600, cursorBlinkInterval());
+        let answered = under_valgrind_by_maps() && rustty_zigstd::valgrind::VALGRIND_SUPPORT;
+        assert_eq!(if answered { 3000 } else { 600 }, cursorBlinkInterval());
+    }
+
+    /// Whether this process runs under Valgrind, from evidence that does not
+    /// go through the client request `cursorBlinkInterval` uses: Valgrind maps
+    /// its `vgpreload_*.so` libraries into every program it runs (Linux; no
+    /// other host the port tests on has a Valgrind).
+    fn under_valgrind_by_maps() -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            std::fs::read_to_string("/proc/self/maps")
+                .expect("/proc/self/maps is readable on Linux")
+                .contains("/vgpreload_")
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            false
+        }
     }
 }

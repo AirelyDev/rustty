@@ -107,8 +107,8 @@ example/swift-vt-xcframework/.build/
 /result*
 /.nixos-test-history
 
-# Valgrind core dumps. G-VALGRIND runs the FFI crates' test binaries under
-# memcheck, and a crash there leaves one of these behind.
+# Valgrind core dumps. G-VALGRIND runs every workspace crate's test binaries
+# under memcheck, and a crash there leaves one of these behind.
 vgcore.*
 
 # SDD scratch (ledger, briefs, reports, review diffs) — not tracked

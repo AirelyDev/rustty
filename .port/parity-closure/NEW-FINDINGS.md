@@ -7398,7 +7398,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 
 - **id**: N404. Parity tail L-5. **severity**: medium (one production leak, UD350; the rest test-only). **kind**:
   CI parity (reference `test-valgrind` scope) + port defects. **state**: CLOSED for rustty-font-shaper and
-  rustty-simd (fixed, now in the gate's default set); the scope gap for the remaining crates is OPEN, below.
+  rustty-simd (fixed, now in the gate's default set); CLOSED (scope: by N413, L-6) for the remaining crates.
 - **scope**: the reference's `valgrind` job runs `zig build test-valgrind` (`build.zig:411-422`): the WHOLE unit-test
   executable (`src/main.zig`) under `valgrind --leak-check=full --error-exitcode=1 --num-callers=50
   --suppressions=valgrind.supp --gen-suppressions=all`, with valgrind's default `--errors-for-leak-kinds`
@@ -7430,6 +7430,8 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   FreeType inits were most of the time); rustty-simd: 42 passed, 0 errors (243 s). Both added to the gate's
   default crate set (net-new coverage), with rustty-xev (N406). `cargo test -p rustty-font-shaper`: Mac 139
   passed + 5 ignored, 3/3; Linux 131 passed + 4 ignored, 3/3.
+- **correction (review L-6 F3)**: the scope gap below is closed: superseded by N410 (termio), N411/N412
+  (renderer), N418 (vt lib) and N413 (whole scope). The bullets are L-5's survey as it stood.
 - **still open (scope)**: memcheck survey of further crates on `rvm` at this lane's head (gate script, default
   `definite` kinds), recorded for a follow-up batch; none of these is in the default set:
   - clean: rustty-os (2 binaries), rustty-input, rustty-config (4 binaries).
@@ -7501,6 +7503,208 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   each binary runs in a subshell `cd`'d there with `CARGO_MANIFEST_DIR` set. Control (VM clone, restored): a
   temporary rustty-wuffs test asserting both passes under the new gate and fails under the old one (left
   `/home/gael/projects/l5`).
+
+## N410 — rustty-termio under memcheck: an empty argv, a leaked Pipeline, and the 8-minute run
+
+- **id**: N410. Parity tail L-6. **severity**: low (test-only). **kind**: test defects found by G-VALGRIND. **state**:
+  CLOSED (fixed; the slow tests are faithful and unchanged).
+- **finding** (L-5's N404 list, diagnosed on `rvm`, valgrind 3.27.1, at 7d8a101a):
+  1. `command::tests::execvpe_latches_the_last_path_entry_errno` called `execve` with an EMPTY argv
+     (`argv[0] == NULL`); memcheck: `Syscall param execve(argv[0]) points to unaddressable byte(s)`, 2 errors
+     (one per PATH entry). The reference's `startPosix` always passes `argsZ`, whose first entry is the program.
+  2. The "errors inside forked children" were those 2 errors again: a forked child inherits its parent's error
+     count, and `--error-exitcode=1` turned the `_exit(0)` of
+     `exec::child_raw_log_tests::log_err_child_raw_completes_in_a_child_forked_while_stderr_is_locked`'s child
+     into exit status 1, so that test FAILED under memcheck (`ERROR SUMMARY: 2 errors from 1 contexts` in a child
+     whose own records were clean). Not a harness artefact of forking: the other forked children print clean
+     summaries (0 errors) and need no suppression; the reference's command line has the same default
+     (`--trace-children=no`), so nothing was added for them.
+  3. `exec::tests::gather_stage_reads_output_that_arrives_with_the_hangup` `Box::leak`ed its `Pipeline` so a hung
+     gather stage could not hang the test: 262,240 bytes definitely lost on every run.
+  4. The >500 s: the lib binary took 475 s under memcheck, 486 s of the earlier run in two tests,
+     `termio_impl::scrollback_limit_handoff_tests::config_default_scrollback_limit_lines_is_unlimited` (249 s)
+     and `..._config_scrollback_limit_lines_prunes_the_pagelist` (237 s); natively 5.3 s and 4.7 s in a debug
+     build. Each feeds 4,760 linefeeds into an 80x3 terminal, and every `PageList::grow` runs
+     `Page::assert_integrity` over the whole last page (sampled with `eu-stack`), which is the reference's
+     `PageList.grow` -> `page.assertIntegrity()` under `slow_runtime_safety` (Debug). Faithful; not changed.
+     The gate's shards spread them (N413).
+- **fix**: (1) argv is `[program, NULL]`; (3) the test frees the box once the gather thread has returned
+  (it stays leaked only in the hang case, which the `finished` assertion fails on).
+- **negative controls** (VM clone, one mutant with both reverts, restored): memcheck over the three tests
+  showed the `execve(argv[0])` error, the child test FAILED with the inherited `2 errors`, and the 262,240-byte
+  definite leak; with the fixes: 3 passed, 0 errors.
+- **after**: rustty-termio's 5 test binaries clean under memcheck (lib 92 passed + 6 ignored, 0 errors, 475 s);
+  `cargo test -p rustty-termio` on the Mac 3/3 (118 passed, 4 ignored).
+
+## N411 — rustty-renderer's test helpers leaked their font grids and terminals (2,477 memcheck errors)
+
+- **id**: N411. Parity tail L-6. **severity**: low (test-only). **kind**: test defects (one R1 test-fidelity
+  loss). **state**: CLOSED (fixed).
+- **finding** (memcheck over the lib binary, `--track-origins=yes`, 52 contexts; 42 definite leaks, 10
+  uninitialised-value contexts, the latter in N412):
+  1. `generic::linux_impl::tests::test_font_grid_and_size` `Box::leak`ed every `SharedGrid` it built, with its
+     FreeType library, faces and HarfBuzz shape-plan cache: 38 of the 42 leak records (25 grid boxes of about
+     1.4 MB each, 8 FreeType libraries, their faces, one `hb_shape_plan`). No test freed them; the renderer
+     never owns its grid (the app's `SharedGridSet` does).
+  2. `link::tests` (all four `renderCellMap` tests) never called `t.deinit(alloc)` / `state.deinit(alloc)`:
+     the reference's tests `defer` both (`renderer/link.zig:155,163,208,216,287,295,346,354`), and the port
+     kept the first test's `// defer t.deinit(alloc);` comment without the call. An R1 test-fidelity loss
+     (4 terminals).
+  3. `surface_mailbox_routing::update_and_draw` built a `Terminal` and never freed it (2 terminals; found once
+     the others were gone).
+- **fix**: the grid is `Box::into_raw`'d; `free_test_font_grid` (grid `deinit`, the box, then the library, the
+  order `shared_grid`'s own tests use) and `deinit_test_renderer` (`r.deinit()` then the grid) replace the 24
+  test `r.deinit()` calls; the link tests end with the reference's `state.deinit` + `t.deinit`; `update_and_draw`
+  deinits its terminal. The four skip arms that return before `Renderer::init` succeeded still leave the grid
+  (they fail under `RUSTTY_REQUIRE_GL=1` before that matters).
+- **after**: rustty-renderer under memcheck: 0 leaks, 0 errors with the N412 suppressions (lib 121 passed,
+  98 s; `opengl_gate_parity` 3 passed); without them the 10 llvmpipe contexts remain and nothing else. Mac
+  `cargo test -p rustty-renderer` 3/3 (121 passed, 1 ignored; the Linux-only helpers are not compiled there).
+- **not changed**: the macOS twins (`generic.rs`'s `test_renderer` and `test_font_grid_and_size`) leak the same
+  way; no leak detector runs on macOS (N404, G6's `detect_leaks=0`), so nothing reports them. Recorded, not
+  fixed here.
+
+## N412 — the renderer's 10 uninitialised-value reports are llvmpipe's, not the port's
+
+- **id**: N412. Parity tail L-6. **severity**: none (tool noise). **kind**: gate fidelity (driver noise).
+  **state**: CLOSED (suppressed, with evidence).
+- **finding**: 2 contexts are inside LLVM's code generator (`AsmPrinter::emitFunctionEntryLabel`,
+  `LowerConstantPool`) under `gallivm_jit_function`, origin a stack slot of Mesa's
+  `lp_build_create_jit_compiler_for_module`; 8 are the golden tests' own comparisons of read-back pixels
+  (`golden_renders_cursor_fg_bg`, `golden_renders_custom_shader_passthrough`), origin
+  `lp_scene_new_data_block` (llvmpipe's scene memory), never a buffer the port uploaded.
+  `--expensive-definedness-checks=yes` removes none.
+- **evidence**: `.port/tools/valgrind-llvmpipe-probe/probe.c`, a C program with no Rustty code (EGL
+  surfaceless, 64 instanced quads from fully written buffers, premultiplied-alpha blending as the renderer
+  uses): every one of its 4,096 pixels has the expected value, and memcheck reports the same LLVM context and a
+  conditional jump on its own pixel comparison (origin: JIT-compiled code). With blending off the pixel report
+  goes away (2 runs each way): blending scales the destination by (1 - source alpha) = 0, and memcheck does not
+  know that a product with a defined zero is defined. A single-triangle variant reproduces the LLVM context.
+  Mesa 26.1.4 llvmpipe, LLVM 22.1.8, Fedora 44 aarch64. On GitHub's x86_64 Ubuntu image: UNVERIFIED (other Mesa
+  and LLVM versions may surface the noise at other frames).
+- **handling**: `.port/tools/gates/valgrind-llvmpipe.supp`, passed by G-VALGRIND after `valgrind.supp` (which
+  stays the reference's file verbatim). The reference hides graphics-driver noise the same way, by naming the
+  driver's frames ("Mesa", "Graphics Driver dri", "i965 addr4/addr8"); it runs no test that draws, so it has no
+  llvmpipe entries. One entry ends at `fun:gallivm_jit_function` (every frame above it is LLVM or Mesa); five
+  match only a conditional jump whose TOP frames are those two tests' own comparisons (the test body, its
+  `Iterator::any` predicates, the slice `!=`, `Ord::max`). Each entry has its WHY (D6 audit clean).
+- **correction (review L-6 F2, L-6b)**: those five entries matched every conditional jump whose top frame was the
+  test body, renderer state included (the review hid a planted undefined `r.size.screen.width` at
+  `assert_eq!(px.len(), ...)` with them). They are deleted. The two tests now declare exactly the read-back bytes
+  defined, right after `read_rgba()`, with `rustty_zigstd::valgrind::memcheck::make_mem_defined` (a port of Zig
+  0.16 `std.valgrind.memcheck.makeMemDefined`, request `ToolBase("MC") + 2` = 0x4d43_0002, a no-op natively);
+  only the gallivm entry remains. Evidence in the L-6b report: the renderer under the gate is clean, and a value
+  planted undefined in a test body is now reported.
+- **negative control** (VM clone, restored): an uninitialised read planted in `px_at`, the helper those
+  golden tests call, is still reported with both suppression files loaded (`ERROR SUMMARY: 212 errors from 3
+  contexts (suppressed: 140 from 4)`), so the anchoring does not hide a function the test calls.
+
+## N413 — G-VALGRIND now covers the whole workspace, sharded into its own CI job
+
+- **id**: N413. Parity tail L-6. **severity**: medium (coverage). **kind**: CI parity (the reference's
+  `test-valgrind` scope). **state**: CLOSED. Closes the scope gap N404 left open.
+- **scope**: the default set is every workspace member except xtask (the port of `build.zig`, not in the
+  reference's test executable), plus `rustty-apprt:gtk,wayland,x11` (GTK is the reference's Linux runtime, so its
+  test executable there compiles the GTK apprt; `cargo test --workspace` does not) and `rustty-os:flatpak`: 62
+  entries. A member missing from the list turns the gate RED (control: dropping `rustty-zf` from the list ->
+  `RED: workspace members missing from DEFAULT_SCOPE ...: rustty-zf`).
+- **gate changes** (`check_valgrind.sh`):
+  - every process's `ERROR SUMMARY` decides, not only the test binary's, so an error in a forked child whose
+    status the test ignores is a finding (control: a temporary rustty-wuffs test whose forked child leaks 4 KiB
+    and `_exit(0)`s: the L-5 gate GREEN, this one RED "valgrind finding: 1 error(s)"); the error-record excerpt is
+    tracked per process;
+  - `--shard K/N` and `--jobs J`: every binary's `--list` is split round-robin into N*J parts, each its own
+    memcheck process, J at a time; a binary that lists no tests (`harness = false`) runs whole in the one part its
+    name hashes to. Verified: shards 1-3 of 3 with 2 jobs over rustty-cli, rustty-datastruct and rustty-apprt-c
+    ran every listed test exactly once in total (121 + 89 + the apprt-c counts; the one N416 skip excepted);
+    control: a planted 8 KiB leak shows up in its shard only, RED;
+  - `cargo build -p <crate>` before `--no-run` (rustty-apprt-c's C-ABI smoke needs the cdylib, which ci.sh has
+    from `cargo build --workspace`; the gate alone failed it: "missing cdylib");
+  - named per-test skips, printed on every run (N416);
+  - a build failure is RED (N417); `RUSTTY_VALGRIND_OWN_JOB` makes the gate report BLOCKED, naming the job that
+    runs it.
+  - (L-6b, review L-6 F1/F5/F6) `--self-test`, registered as G-VALGRIND-SELF, proves these arms against a fake
+    valgrind and cargo on every leg; the summary line counts the named skips, and a skip whose test or binary no
+    longer exists is RED; the required feature lanes are checked by name; xtask's
+    `valgrind_job_matrix_covers_every_shard` ties ci.yml's shard matrix to the `--shard K/N` divisor.
+- **CI** (`.github/workflows/ci.yml`): a `valgrind` job (4 matrix shards, `--shard K/4 --jobs 4`, 240-minute
+  timeout, in `required.needs`) installs valgrind + libc6-dbg as the reference's job does, Mesa llvmpipe, and the
+  GTK/GLib/blueprint/gettext build dependencies, and arms `RUSTTY_REQUIRE_GL`, `LIBGL_ALWAYS_SOFTWARE` and
+  `RUSTTY_REQUIRE_FUZZ_CORPUS`; the `ci` job sets `RUSTTY_VALGRIND_OWN_JOB`, so its G-VALGRIND step is a BLOCKED
+  warning naming that job. The reference also runs valgrind as a job of its own (30-minute timeout, one
+  process). Not run on GitHub: UNVERIFIED there.
+- **survey results** (VM, before fixes): clean at first run: every crate not named in N410, N411, N414-N416;
+  the GTK lane's 36 binaries clean (most GTK tests are `#[ignore]`d for want of a display, as in every lane).
+- **final run** (VM, at f4540223, exactly CI's four shards, `--shard K/4 --jobs 4`, two shards at a time on the
+  VM's 8 cores, `RUSTTY_REQUIRE_GL=1 LIBGL_ALWAYS_SOFTWARE=1 RUSTTY_REQUIRE_FUZZ_CORPUS=1`): all four GREEN, 891
+  memcheck processes (366 + 200 + 180 + 145), 0 errors. Memcheck phase per shard: 2,291 s, 3,014 s, 3,206 s,
+  2,982 s (38-53 minutes; the longest single process 1,594 s, a rustty-vt lib part); the build before it about
+  10 minutes cold. Total memcheck CPU for the scope is roughly 8.5 hours, three quarters of it rustty-vt's lib
+  (its 3,223 tests take 578 s natively in a debug build). GitHub's 4-vCPU x86_64 runner: UNVERIFIED; the job's
+  timeout is 240 minutes, about four times the VM's per-shard figure plus the build.
+
+## N414 — two tests asserted they never run under Valgrind
+
+- **id**: N414. Parity tail L-6. **severity**: low (test-only). **kind**: test defects found by G-VALGRIND.
+  **state**: CLOSED (fixed).
+- **finding**: `rustty-zigstd` `valgrind::tests::client_request_returns_default_natively` asserted that the
+  `RunningOnValgrind` client request returns its default ("the test binary does not run under Valgrind"), and
+  `rustty-core` `renderer_seam::cursor_blink_interval_tests::cursor_blink_interval_is_five_times_longer_under_valgrind`
+  asserted `cursorBlinkInterval() == 600`. Under memcheck the request is answered (1) and the interval is 3000
+  (the reference's `Thread.zig:735-748` behaviour, which the port reproduces): `left: 7, right: 1` and
+  `left: 600, right: 3000`.
+- **fix**: both tests tell the environments apart without the client request under test (`/proc/self/maps`
+  names Valgrind's `vgpreload_*.so` in every program it runs) and assert the answer that environment calls for,
+  so under G-VALGRIND they now also prove the request really reaches Valgrind. Natively (Mac 3/3, Linux) the
+  assertions are the old ones.
+
+## N415 — rustty-core's surface_visibility_kat leaked its Termio
+
+- **id**: N415. Parity tail L-6. **severity**: low (test-only). **kind**: test defect. **state**: CLOSED (fixed).
+- **finding**: the KAT's `TestSurface::drop` deinited only the Termio's terminal; the Exec backend's command
+  (`Vec<CString>`) and environment (`EnvMap`), and the SPSC mailbox queue leaked: 4 definite leaks, 4,388 bytes.
+- **fix**: `drop` moves the Termio out of the `MaybeUninit` surface and calls `Termio::deinit`, as
+  `Surface.deinit` does (`self.io.deinit()`). Under memcheck: 0 errors; Mac 3/3.
+
+## N416 — one rustty-cli test cannot run under Valgrind at all
+
+- **id**: N416. Parity tail L-6. **severity**: none. **kind**: tool limitation. **state**: CLOSED (named skip).
+- **finding**: `edit_config::exec_tests::exec_failure_report_prints_the_raw_command_bytes` makes `execve` fail
+  with E2BIG in its own process (a 4 MiB command) to check the failure report. Valgrind cannot survive a failed
+  execve of the program it runs: `EXEC FAILED: I can't recover from execve() failing, so I'm dying.`, and the
+  whole rustty-cli lib binary died at that test.
+- **handling**: G-VALGRIND's `VALGRIND_SKIPS` names it with the reason and prints it on every run; it still runs
+  in every `cargo test` lane. The rest of the binary under memcheck: 118 passed, 3 ignored, 0 errors.
+
+## N417 — G-VALGRIND reported a crate that failed to build as BLOCKED
+
+- **id**: N417. Parity tail L-6. **severity**: low. **kind**: gate defect (R5). **state**: CLOSED (fixed).
+- **finding**: the gate decided BLOCKED ("no test binary was run") before looking at failures, so when every
+  crate in its set failed to build it exited 3, a warning, instead of RED. Control on the VM:
+  `check_valgrind.sh rustty-no-such-crate` with the L-5 gate: `FAIL ... (build)` then `BLOCKED`, exit 3; with
+  this one: `RED: rustty-no-such-crate(build)`, exit 1.
+
+## N418 — rustty-vt's lib under memcheck: three test leaks, two of them lost `defer s.deinit()`s
+
+- **id**: N418. Parity tail L-6. **severity**: low (test-only). **kind**: test defects (two R1 test-fidelity
+  losses). **state**: CLOSED (fixed).
+- **run**: G-VALGRIND over rustty-vt on `rvm` (5 parts at once, `--jobs 5`): all 3,223 lib tests (3,203 run, 20
+  ignored as in every lane) and the integration binaries; 28 memcheck processes, 7,079 s wall, about 26,500 s of
+  memcheck for the lib's five parts (3,905-5,981 s each). No invalid access, no uninitialised value; three
+  definite leaks, all in tests:
+  1. `pagelist::tests::pagelist_cold_compression_continues_after_an_incompressible_page` never deinited its
+     PageList, so the compressed second page's encoded bytes (4,419 bytes, `CompressedPage::init`) leaked. The
+     reference test has `defer s.deinit();` (`src/terminal/PageList.zig:9206-9210` at pin `20abdb50a`; the
+     other test's is at `:9325-9330`); the port dropped it. `pagelist_compression_leaves_incompressible_pages_resident` dropped the same line (no
+     heap leak there: its pages are mappings memcheck does not track).
+  2. `page::tests::page_initBuf_rejects_unaligned_buffer` and `page_cloneBuf_rejects_unaligned_buffer` leaked
+     their 12,288-byte buffers on purpose ("every user panics before returning").
+- **fix**: both PageList tests end with the reference's `s.deinit()`; the page tests hold the buffer in a
+  `PageUnalignedBuf` whose `Drop` frees it while the expected panic unwinds. Under memcheck the four tests:
+  0 errors (before: the three records above). Test-only changes in `pagelist`/`page` tests: noted for a
+  controller Miri pass (not run here, per the brief).
+- **limit**: memcheck tracks heap blocks, not the page mappings (`mmap`) a PageList's pool is made of, so a
+  test that forgets a PageList with no compressed page shows nothing here; that class stays with the Miri lane.
 
 ## N420 — `-Dsimd=false` could not be applied to the app, and no build of anything was SIMD-free
 

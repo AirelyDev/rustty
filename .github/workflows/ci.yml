@@ -48,6 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - ci
+      - valgrind
       - windows
       - windows-examples-cmake
       - macos-app
@@ -242,10 +243,12 @@ jobs:
         if: runner.os == 'macOS'
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim
 
-      # G-BLUEPRINT and G-VALGRIND are Linux-only lanes: blueprint-compiler is
-      # a GTK tool with no macOS package, and valgrind has no working
-      # arm64-Darwin port. Both gates report BLOCKED (never green) on macOS.
-      # G-I18N needs the gettext tools on both legs.
+      # G-BLUEPRINT is a Linux-only lane: blueprint-compiler is a GTK tool
+      # with no macOS package, so the gate reports BLOCKED (never green) on
+      # macOS. G-I18N needs the gettext tools on both legs. No valgrind here:
+      # this job's G-VALGRIND is BLOCKED by RUSTTY_VALGRIND_OWN_JOB (the
+      # `valgrind` job below installs it and runs the gate), and
+      # G-VALGRIND-SELF runs against a fake valgrind (review L-6 F8).
       #
       # The GTK dev packages are what make G-GTKFEAT actually RUN. That gate
       # exists to lint the ~30k lines under `crates/rustty-apprt/src/gtk/**`
@@ -256,7 +259,7 @@ jobs:
       # configs checked in, nothing executing them. Verified by what it caught
       # the first time it ran on a machine with GTK — a dropped twin attribute
       # in the renderer that had made the lane RED (see the preceding commit).
-      - name: Install gate tooling (G-BLUEPRINT / G-VALGRIND / G-I18N / G-KAITAI)
+      - name: Install gate tooling (G-BLUEPRINT / G-I18N / G-KAITAI)
         shell: bash
         run: |
           set -euxo pipefail
@@ -265,7 +268,7 @@ jobs:
             # doxygen: G-DOXYGEN. graphviz: the Doxyfile's diagram support.
             # libglib2.0-dev: G-FEATMATRIX's `flatpak` arm links gio-2.0,
             # exactly as SharedDeps.zig:683 does.
-            sudo apt-get install -y blueprint-compiler valgrind libc6-dbg gettext \
+            sudo apt-get install -y blueprint-compiler gettext \
               doxygen graphviz libglib2.0-dev \
               libgtk-4-dev libadwaita-1-dev libgtk4-layer-shell-dev
           else
@@ -406,7 +409,77 @@ jobs:
           # /dev/kvm, so the NixOS guests would fall back to full emulation and
           # time out. The gate reports them skipped by name.
           RUSTTY_NIX_VM_TESTS: "0"
+          # G-VALGRIND runs in the `valgrind` job below (the whole workspace
+          # under memcheck is hours of CPU, so it is sharded there, as the
+          # reference runs valgrind in a job of its own). Here the gate reports
+          # BLOCKED, naming that job (NEW-FINDINGS N413).
+          RUSTTY_VALGRIND_OWN_JOB: "ci.yml's valgrind job"
         run: bash .port/tools/ci.sh
+
+  # ── Valgrind ───────────────────────────────────────────────────────────────
+  # PORTS the reference's `valgrind` job (`.github/workflows/test.yml` at the
+  # pin: `zig build test-valgrind`, its whole test executable under memcheck
+  # with valgrind.supp, in a job of its own). G-VALGRIND's default scope is the
+  # whole workspace (NEW-FINDINGS N413): measured on the Fedora aarch64 VM it
+  # is hours of memcheck on one core, most of it rustty-vt's lib tests, so it
+  # runs as 4 shards of 4 memcheck processes each. The shards partition every
+  # test binary's test list (see the gate's header), so the four jobs together
+  # run every test. Runtime on GitHub's runners: UNVERIFIED when this job was
+  # added (L-6); the VM measurements are in N413.
+  valgrind:
+    name: rustty-valgrind (${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - name: Checkout (rustty only — ghostty is NOT a dependency, R3)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: valgrind-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: valgrind-cargo-
+
+      # valgrind + libc6-dbg as the reference's job installs them; Mesa's
+      # llvmpipe for the renderer's live-GL tests (W8-03); and what the GTK
+      # apprt lane (`rustty-apprt:gtk,wayland,x11`, in scope because GTK is
+      # the reference's Linux runtime) and rustty-os's flatpak lane need to
+      # build: the GTK/libadwaita/layer-shell and GLib dev packages,
+      # blueprint-compiler, and gettext's msgfmt.
+      - name: Install valgrind, Mesa llvmpipe and the GTK build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y valgrind libc6-dbg \
+            libegl1 libegl-mesa0 libgl1 libgl1-mesa-dri \
+            blueprint-compiler gettext libglib2.0-dev \
+            libgtk-4-dev libadwaita-1-dev libgtk4-layer-shell-dev
+
+      # The same strict-mode pivots as the `ci` job (PORT_RULES R14): the GL
+      # tests and the corpus replays run here as executed evidence, never as
+      # silent skips. Env setup, not a check.
+      - name: Require live GL and the mirrored fuzz corpus (R14)
+        run: |
+          {
+            echo "RUSTTY_REQUIRE_GL=1"
+            echo "LIBGL_ALWAYS_SOFTWARE=1"
+            echo "RUSTTY_REQUIRE_FUZZ_CORPUS=1"
+          } >> "$GITHUB_ENV"
+
+      - name: G-VALGRIND (shard ${{ matrix.shard }} of 4, 4 memcheck processes)
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: bash .port/tools/gates/check_valgrind.sh --shard "$SHARD/4" --jobs 4
 
   # ── Windows ────────────────────────────────────────────────────────────────
   # PORTS the reference's Windows jobs (`.github/workflows/test.yml` at the pin):

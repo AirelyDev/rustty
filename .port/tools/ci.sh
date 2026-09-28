@@ -92,11 +92,16 @@
 #   G-BLUEPRINT check_blueprints.sh  all .blp templates compile and are
 #                                    formatted                     -> HARD-FAIL
 #                                    BLOCKED without blueprint-compiler.
-#   G-VALGRIND check_valgrind.sh     FFI-crate test binaries under memcheck
-#                                    with valgrind.supp            -> HARD-FAIL
-#                                    BLOCKED without valgrind (all of macOS).
+#   G-VALGRIND check_valgrind.sh     every workspace crate's test binaries
+#                                    under memcheck with valgrind.supp
+#                                    (N413)                        -> HARD-FAIL
+#                                    BLOCKED without valgrind (all of macOS),
+#                                    and in ci.yml's `ci` job, which defers
+#                                    to its sharded `valgrind` job.
 #                                    Closes check_leaks.sh's "deferred to Linux
-#                                    CI" FFI-leak note.
+#                                    CI" FFI-leak note. Its --self-test
+#                                    (G-VALGRIND-SELF) runs on every leg
+#                                    against a fake valgrind and cargo.
 #   G-XCF check_xcframework.sh       dist/rustty-vt.xcframework is well-formed:
 #                                    bundle shape, slice arch, _rustty_* export
 #                                    floor, no _ghostty_* leak (R2), and a
@@ -553,7 +558,15 @@ GATE_REGISTRY=(
   # G-VALGRIND (2026-08-26) — the reference's `valgrind` job, and the closure of
   # a deferral check_leaks.sh names in its own header: FFI *leak* detection is
   # impossible on arm64 macOS (no LSan, no valgrind), so the crates that cross
-  # into C have had no leak coverage anywhere. BLOCKED where valgrind is absent.
+  # into C had no leak coverage anywhere. It started as that FFI-leak lane; since
+  # N413 (L-6) it runs every workspace crate's test binaries, sharded into
+  # ci.yml's own `valgrind` job (here it reports BLOCKED, naming that job).
+  # BLOCKED where valgrind is absent. G-VALGRIND-SELF (review L-6 F1) runs first
+  # and needs no valgrind: copies of the gate against a fake valgrind and cargo
+  # prove the shard partition, the named skips (stale ones RED), child-process
+  # error summaries, build failure RED, OWN_JOB BLOCKED and, on the real
+  # DEFAULT_SCOPE rows, the workspace-member and feature-lane checks.
+  "G-VALGRIND-SELF|HARD|bash $GATES/check_valgrind.sh --self-test"
   "G-VALGRIND|HARD|bash $GATES/check_valgrind.sh"
   # G-XCF (2026-08-26) — the XCFramework structure/ABI lane, the adapted port
   # of the reference's check-apple-libghostty-vt.nu. Adapted because rustty

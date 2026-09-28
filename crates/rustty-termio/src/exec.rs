@@ -6293,8 +6293,14 @@ mod tests {
         }
 
         // `'static` so a hung gather stage cannot hang the test: the test waits
-        // with a timeout instead of joining.
-        let pipeline: &'static Pipeline = Box::leak(Box::new(Pipeline::new()));
+        // with a timeout instead of joining. The box is freed once the stage has
+        // ended (below); it stays leaked only when the stage hangs, the case the
+        // `finished` assertion fails on (it was always leaked: 262,240 bytes
+        // under memcheck, NEW-FINDINGS N410).
+        let pipeline_box: *mut Pipeline = Box::into_raw(Box::new(Pipeline::new()));
+        // SAFETY: `pipeline_box` is live until the `Box::from_raw` below, which
+        // runs only after the gather thread has returned from its last use.
+        let pipeline: &'static Pipeline = unsafe { &*pipeline_box };
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             ReadThread::gatherMainPosix(data_r, quit_r, pipeline);
@@ -6327,6 +6333,9 @@ mod tests {
             libc::close(quit_r);
             libc::close(quit_w);
         }
+        // SAFETY: the gather stage returned (`finished`), so the thread holds no
+        // further use of `pipeline`, and `got` is an owned copy.
+        drop(unsafe { Box::from_raw(pipeline_box) });
         assert_eq!(
             got, b"firstsecond",
             "the output that came with the hangup must be delivered"
