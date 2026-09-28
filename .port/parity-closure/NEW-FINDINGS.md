@@ -7356,3 +7356,19 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **test**: `terminal_stream::terminal_stream` under Miri (G6 conditions): UB before, pass after (the
   whole `rustty-bench` lane: 37 passed, 12 ignored). Native: both terminal-stream tests pass.
 - **state**: CLOSED (fixed).
+
+## N392 — `rustty-vaxis`'s `image_tier` test binary never ran under Miri (it did not compile there)
+
+- **id**: N392. Not a ledger row: task C-1 (G6, `rustty-vaxis` lane).
+- **severity**: low (test coverage; the finding it hid is in test code). **kind**: gate coverage.
+- **finding**: `tests/image_tier.rs` gated `png_fixture` on `#[cfg(not(miri))]`, but its callers carry only
+  `#[cfg_attr(miri, ignore)]`, so they still compile: `cargo miri test -p rustty-vaxis` failed with
+  `E0425 cannot find function png_fixture` after the lib tests, and the binary's other tests never ran
+  under Miri. Compiled, one of them hit a Stacked Borrows violation in the helper `img_draw_expect`,
+  which took `&mut Screen` while the `Window` it also received held a raw pointer to that screen (the
+  function-entry Unique retag invalidated the window's pointer before `draw` used it).
+- **fix** (task C-1): the gate is removed (the fixture only calls `rustty-zigimg`, which compiles under
+  Miri); `img_draw_expect` takes the window alone and reads the placement back through `win.screen`.
+- **test**: `cargo +nightly miri test -p rustty-vaxis --test image_tier`: E0425, then UB; after: 19 passed,
+  3 ignored. The whole lane: 157 passed, 12 ignored. Native: `image_tier` passes.
+- **state**: CLOSED (fixed).

@@ -2654,3 +2654,19 @@ assertions), but shrinking it would not make them Miri-tractable: the harness th
 `Thread::init`), and the pass under test is driven by that loop's timer. So they are excepted as
 impossible, not as slow. The scheduler's own logic has no `unsafe` beyond the loop and the terminal;
 the terminal's compression paths are covered by `rustty-vt`'s Miri-passing compression tests.
+
+### `rustty-vaxis` (lane: 157 passed, 12 ignored)
+
+| crate | test | what Miri cannot do |
+|---|---|---|
+| `rustty-vaxis` | `loop_::stop_wake_tests::a_terminal_that_answers_ends_the_read_without_the_wake` | calls the foreign function `select`, which Miri cannot execute |
+| `rustty-vaxis` | `loop_::stop_wake_tests::a_terminal_that_never_answers_is_woken_after_the_grace` | calls the foreign function `select`, which Miri cannot execute |
+| `rustty-vaxis` | `loop_::tests::loop_lifecycle` | `fcntl(F_SETFD)` is not implemented by Miri |
+| `rustty-vaxis` | `tty::tests::a_sigwinch_while_the_handlers_are_locked_still_reaches_the_callback` | `fcntl(F_SETFD)` is not implemented by Miri |
+| `rustty-vaxis` | `tty::tests::the_sigwinch_handler_neither_blocks_on_a_full_pipe_nor_clobbers_errno` | `fcntl(F_SETFD)` is not implemented by Miri |
+
+Not excepted, FIXED (NEW-FINDINGS N392): the `tests/image_tier.rs` binary did not COMPILE under Miri
+(`png_fixture` was `#[cfg(not(miri))]` while its two callers are only `cfg_attr(miri, ignore)`), so
+the lane stopped there and the binary's other 19 tests never ran under Miri. Once it compiled,
+`img_draw_expect` took `&mut Screen` alongside a `Window` holding a raw pointer to the same screen,
+a Stacked Borrows violation in the test helper; it now reads back through the window's pointer.
