@@ -7388,3 +7388,179 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **test**: `style::tests::convert_style_with_colors` under Miri: UB before, pass after. Native: the
   `style::` tests pass.
 - **state**: CLOSED (fixed).
+
+## N400 — G-BLUEPRINT's first run: green; its description of `blueprint-compiler format` was wrong
+
+- **id**: N400. Parity tail L-5 (tool-BLOCKED gates). **severity**: low. **kind**: gate accuracy. **state**:
+  CLOSED (fixed).
+- **run**: on the Fedora 44 VM (`rvm`), blueprint-compiler 0.20.4 from `/usr/bin` (already installed there),
+  at 4994a515: `G-BLUEPRINT GREEN: 19 templates compile and are formatted.` Negative controls (in the VM clone,
+  restored): a wrongly indented line in `1.2/close-confirmation-dialog.blp` makes the formatting arm RED; an appended
+  `Gtk.Bogus nonsense {` makes the compile arm RED ("Unexpected tokens", line 13).
+- **finding**: the gate and `nix/build-support/check-blueprints.sh` said `blueprint-compiler format` "rewrites in
+  place and has no --check mode". Measured on 0.20.4 it is the opposite: without `-f/--fix` it prints the diff,
+  says "1 file would be formatted" and exits 1, leaving the file untouched; only `--fix` rewrites. The gate was
+  still correct (the non-zero exit made it RED), but it reported an unformatted template as "blueprint-compiler
+  format failed", and its "fix with" hint (`format {} +`, no `--fix`) fixed nothing.
+- **fix**: comments corrected in both scripts; the RED message names unformatted templates; the hint is
+  `blueprint-compiler format --fix {} +` (verified: applying it to the mutated file restores the original byte for
+  byte and the gate goes green). The copy-then-diff arm is kept as a second net for a compiler that rewrites.
+  What the gate checks is unchanged.
+
+## N401 — G-GTKFEAT's first run since task-18: green, and its gated-test floor had drifted 53 below the measurement
+
+- **id**: N401. Parity tail L-5. **severity**: low. **kind**: gate anti-vacuity. **state**: CLOSED (fixed).
+- **run**: on `rvm` (gtk4 4.22.4, wayland-client 1.25.0, libX11 1.8.13, libadwaita 1.9.2; all dev packages
+  already installed), at 4994a515: clippy `-D warnings` clean; 253 tests listed with `--features
+  gtk,wayland,x11`, 33 without, so 220 gated (wayland_* 3, x11_* 4). GREEN, about 5 minutes cold.
+- **finding**: the floor was 167, so up to 53 gated tests could stop compiling without the gate noticing (the same
+  drift task-18 found at 141 -> 167).
+- **fix**: `GTK_DELTA_FLOOR=220`, dated note in the script. Negative controls (VM clone, restored): an `unused_mut`
+  in `src/gtk/winproto/x11.rs` plus deleting `tests/gtk_x11_winproto.rs` gives RED on all three arms (clippy:
+  `variable does not need to be mutable`; delta 219 < 220, which the old floor could not see; x11_* 3 < 4).
+
+## N402 — G-KAITAI: green on macOS with Homebrew's compiler; CI never installed one
+
+- **id**: N402. Parity tail L-5. **severity**: low. **kind**: CI parity (N376 gap 12). **state**: CLOSED (fixed;
+  the CI step itself is UNVERIFIED until a CI run).
+- **run**: on the Mac, `brew install kaitai-struct-compiler` (0.11, pulls openjdk 27); the gate provisioned its
+  cached `kaitaistruct` venv itself. `G-KAITAI PASS: 22/22 snapshot goldens validate against snapshot.ksy`.
+  kaitai-struct-compiler prints one style warning (`cell_count` could be `num_cells`) for the `.ksy`, which is
+  the reference's file verbatim. Negative controls, one at a time, restored: the envelope magic of
+  `complete-v1.hex` changed to `HHOSTSNP` gives `ValidationNotEqualError ... expected b'GHOSTSNP'` and FAIL; a
+  mutation of an unconstrained byte (`grid-v1.hex` offset 8, 0x94 -> 0x95) passes, correctly: the schema accepts
+  any value there (the Rust codec tests pin the exact bytes).
+- **finding**: neither CI leg installs kaitai-struct-compiler, so G-KAITAI was BLOCKED (a warning) on every CI
+  run, while the reference's `test-kaitai` job is required.
+- **fix**: `.github/workflows/ci.yml`'s gate-tooling step installs `kaitai-struct-compiler` with Homebrew on the
+  macOS leg (one word on the existing `brew install` line, and the step name). The gate stays PROGRESS in
+  `ci.sh`; promoting it to HARD now that CI can run it is a controller decision.
+
+## N403 — G-VALGRIND reported test failures as valgrind findings, and printed the wrong stack
+
+- **id**: N403. Parity tail L-5. **severity**: low. **kind**: gate diagnostics. **state**: CLOSED (fixed).
+- **run**: on `rvm` with the user-level valgrind 3.27.1 (N405), at 4994a515, the default set (oniguruma, wuffs,
+  vt-c): 6 test binaries clean, GREEN in 24 minutes (23.5 of them rustty-vt-c's 553 lib tests).
+- **findings** (from negative controls in `rustty-wuffs`, VM clone, restored):
+  1. A deliberate definite leak (`mem::forget(vec![0xa5u8; 4096])`) turned the gate RED, correctly (memcheck:
+     `ERROR SUMMARY: 1 errors`, the 4,096-byte record), but the excerpt printed the stack of loss record 1, a
+     48-byte *possibly lost* std thread-local, not the leak: it grepped every `at`/`by` line.
+  2. A plain failing test (`assert_eq!(1 + 1, 3)`) was reported as "valgrind finding": the classifier grepped for
+     "definitely lost", which LEAK SUMMARY prints as `definitely lost: 0 bytes in 0 blocks` on any run that ends
+     with unfreed memory. Measured with the old gate: `FAIL rustty-wuffs/rustty_wuffs (valgrind finding)`.
+  3. The `--suppressions` WHY said `valgrind.supp` suppresses "ONLY dyld/libSystem frames". It is the reference's
+     file: 233 entries naming GTK/GLib/GDK/fontconfig frames, Mesa DRI objects and DRD-only kinds (audited by
+     script); none names a frame these crates run.
+- **fix**: the classifier reads memcheck's `ERROR SUMMARY: N errors` (what `--error-exitcode` acts on); the excerpt
+  prints only error records (stacks before HEAP SUMMARY, and `definitely lost` records after it); a test failure
+  shows libtest's `FAILED`/`panicked at` lines instead of valgrind's tail; the WHY is corrected. Re-run of both
+  controls: the leak shows the 4,096-byte record and `valgrind finding: 1 error(s)`; the failing test shows
+  `panicked at crates/rustty-wuffs/src/lib.rs:283:9` and `test failure, not a valgrind finding`.
+
+## N404 — G-VALGRIND covered 3 crates; rustty-font-shaper had 88 definite leaks, one of them a reference defect
+
+- **id**: N404. Parity tail L-5. **severity**: medium (one production leak, UD350; the rest test-only). **kind**:
+  CI parity (reference `test-valgrind` scope) + port defects. **state**: CLOSED for rustty-font-shaper and
+  rustty-simd (fixed, now in the gate's default set); the scope gap for the remaining crates is OPEN, below.
+- **scope**: the reference's `valgrind` job runs `zig build test-valgrind` (`build.zig:411-422`): the WHOLE unit-test
+  executable (`src/main.zig`) under `valgrind --leak-check=full --error-exitcode=1 --num-callers=50
+  --suppressions=valgrind.supp --gen-suppressions=all`, with valgrind's default `--errors-for-leak-kinds`
+  (definite and possible). G-VALGRIND ran three crates (rustty-oniguruma, rustty-wuffs, rustty-vt-c) at `definite`
+  only. The `definite` narrowing is deliberate and measured: every Rust test binary here has a 48-byte *possibly
+  lost* std thread handle (`std::thread::current::init_current`), so the default kinds would fail every binary on
+  std itself.
+- **found**: the first memcheck run of rustty-font-shaper (Linux, FreeType/HarfBuzz/Fontconfig) gave 88 definite
+  leaks, ERROR SUMMARY 88. By cause:
+  1. 84 from `LoadOptions`'s `Default` impl, which the port invented (the reference field `library` has no default):
+     it called `Library::init()` for a placeholder that every `LoadOptions { library: lib, ..Default::default() }`
+     overwrote, so each construction initialized a FreeType library and leaked it (21 sites, all tests; production
+     `SharedGridSet::collection` sets every field). Fixed: `LoadOptions::new(library)` with the reference field
+     defaults replaces `Default` (the library is required again); the 21 sites use it (2 of them in
+     `rustty-renderer` test helpers). Test: `collection::tests::load_options_new_is_the_reference_field_defaults`.
+  2. `SharedGrid::init` consumed the resolver and, on error, dropped it; `Collection` has no `Drop`, so the faces
+     leaked (`shared_grid::tests::init_error`, whose PORT NOTE claimed the drop freed them). The reference leaves
+     cleanup to the caller, and its own `SharedGridSet.ref` does not do it: UD350 (R13). Fixed in `init` (deinit on
+     every error path). Tests: `init_error` asserts the face deinit per fail point;
+     `shared_grid_set::tests::ref_whose_grid_init_fails_deinits_the_collection` (exact build + teardown counts).
+     Negative controls: see UD350.
+  3. Test-only: five `face::freetype` tests (S91-F9, UD190, UD344, N53 probes) never deinited their library, and
+     one leaked its HarfBuzz user-data key box on purpose; the discovered-font helper's two skip returns did not
+     deinit the library (the reference's `errdefer lib.deinit()` runs there);
+     `collection_error_exit_deinits_collection` passed `&mut None` as the discoverer, so `collection` created a
+     Fontconfig discoverer in a temporary that was never deinited (its comment said discovery was skipped). All
+     fixed in the tests.
+- **after**: rustty-font-shaper under memcheck: 131 passed, 0 errors (131 s, from about 7 minutes: the leaked
+  FreeType inits were most of the time); rustty-simd: 42 passed, 0 errors (243 s). Both added to the gate's
+  default crate set (net-new coverage), with rustty-xev (N406). `cargo test -p rustty-font-shaper`: Mac 139
+  passed + 5 ignored, 3/3; Linux 131 passed + 4 ignored, 3/3.
+- **still open (scope)**: memcheck survey of further crates on `rvm` at this lane's head (gate script, default
+  `definite` kinds), recorded for a follow-up batch; none of these is in the default set:
+  - clean: rustty-os (2 binaries), rustty-input, rustty-config (4 binaries).
+  - rustty-termio: after N406, the lib binary still reports a `Box<Pipeline>` leaked by the test
+    `exec::tests::gather_stage_reads_output_that_arrives_with_the_hangup` (262,240 bytes), a
+    `Syscall param execve(argv[0]) points to unaddressable byte(s)` in the parent process, errors inside forked
+    children (each child runs under memcheck and prints its own summary), and a run longer than 500 s under
+    memcheck (killed by the timeout). Not analysed further.
+  - rustty-renderer: 2,477 errors from 52 contexts. Leaks: the Linux test helpers' deliberately leaked
+    `SharedGrid`s and FreeType libraries (`generic::linux_impl::tests::test_font_grid_and_size`, "leaked so the
+    `*mut SharedGrid` stays valid") and screen sets; plus 10 `Conditional jump or move depends on uninitialised
+    value(s)` contexts in the GL golden tests (`golden_renders_custom_shader_passthrough`,
+    `golden_renders_cursor_fg_bg`), probably the llvmpipe readback (UNVERIFIED; `--track-origins=yes` not run).
+  - rustty-vt: the 10 integration-test binaries are clean (`fuzz_corpus_replay` alone took 22 minutes). The lib
+    binary (3,223 tests) was stopped after about an hour at roughly 1,400 tests, with no memcheck error up to
+    then and one test failure caused by the gate's working directory (N407, fixed). A full run needs a lane with
+    a few hours of VM time.
+  - not run: rustty-core, rustty-apprt (+ GTK features), rustty-cli, rustty-font, rustty-crash,
+    rustty-inspector, the -sys crates' own tests, and the rest of the workspace.
+
+## N405 — how the tool-BLOCKED gates were run without root (reproduction recipe)
+
+- **id**: N405. Parity tail L-5. **kind**: tooling record. **state**: CLOSED (recorded).
+- **G-BLUEPRINT, G-GTKFEAT**: nothing to install on `rvm`; blueprint-compiler 0.20.4 (`/usr/bin`) and the gtk4,
+  libadwaita, wayland and X11 development packages were already there. Run them on the VM (both are BLOCKED on
+  macOS by design). CI's Linux leg installs the same with apt (`blueprint-compiler`, `libgtk-4-dev`,
+  `libadwaita-1-dev`, `libgtk4-layer-shell-dev`).
+- **G-VALGRIND**: no sudo on `rvm`. `dnf download --arch=aarch64 valgrind` (valgrind-3.27.1-1.fc44), then
+  `rpm2cpio valgrind-*.rpm | cpio -idm` into a user dir, then a `valgrind` wrapper first on `PATH`:
+  `VALGRIND_LIB="$HOME/<dir>/root/usr/libexec/valgrind" exec "$HOME/<dir>/root/usr/bin/valgrind" "$@"` (the
+  launcher looks for its tools under `/usr/libexec` otherwise). Fedora's glibc needed no debuginfo package
+  (`dnf download glibc-debuginfo` is not in the enabled repos, and was not needed). Kept on the VM for future
+  lanes at `~/l5-tools/` (`bin/valgrind` wrapper, `root/` tree, `rpms/`). CI's Linux leg installs `valgrind
+  libc6-dbg` with apt. Default set runtime on the VM: about 30 minutes, most of it rustty-vt-c.
+- **G-KAITAI**: on the Mac, `brew install kaitai-struct-compiler` (0.11, pulls openjdk 27); the gate provisions
+  `~/.cache/rustty-kaitai-venv` with `kaitaistruct` itself. On `rvm` (OpenJDK 25 is installed there) the
+  kaitai.io release zip would work the same way; not needed, not done. CI: N402.
+- **G-NIX**: not touched (deferred by the user).
+
+## N406 — every Linux event loop leaked its boxed completion queue (`dynamic::Loop` never dropped its backend)
+
+- **id**: N406. Parity tail L-5. **severity**: low (240 bytes per termio thread, i.e. per terminal surface, on
+  Linux). **kind**: port defect (R1), fixed.
+- **finding**: `rustty-xev`'s Linux `Loop` is the port of `dynamic.zig`'s untagged union; its arms are
+  `ManuallyDrop<io_uring::Loop>` / `ManuallyDrop<epoll::Loop>` and it had no `Drop`, so after `deinit` (which
+  closes the fds, the reference's whole `deinit`) the arm's Rust-owned fields were never dropped. The epoll loop's
+  `thread_pool_completions` is a port-side `Box` (its field PORT NOTE: heap-rooted so the queue's
+  self-referential stub survives reborrows), so each loop leaked it. Found by memcheck over rustty-termio
+  (`Thread::init` -> `dynamic::Loop::init` -> `epoll::Loop::init`, 240 bytes, one per io-thread test).
+- **fix**: `impl Drop for Loop` drops the live arm (named by the same backend global `deinit` reads). No backend
+  loop implements `Drop`, so this adds no teardown after `deinit`, only the memory a directly-used backend loop
+  frees anyway. The other `ManuallyDrop` unions in `dynamic.rs` (Completion, WriteQueue, WriteRequest, UdpState)
+  showed no leak in the rustty-xev and rustty-termio memcheck runs and were not changed.
+- **test**: `crates/rustty-xev/tests/dynamic_loop_drop.rs` (Linux; its own binary with a counting global
+  allocator): an epoll loop holds heap while alive (240 bytes) and leaves 0 after `deinit` + drop. Negative
+  control: without the `Drop` impl it fails, `left: 240, right: 0`. rustty-xev under memcheck: 3 binaries clean,
+  now in G-VALGRIND's default set; `cargo test -p rustty-xev` and `-p rustty-termio` on Linux 3/3.
+- **state**: CLOSED (fixed).
+
+## N407 — G-VALGRIND ran test binaries from the repository root, not their package directory
+
+- **id**: N407. Parity tail L-5. **severity**: low. **kind**: gate fidelity. **state**: CLOSED (fixed).
+- **finding**: `cargo test` runs each test binary with the package directory as its working directory and
+  `CARGO_MANIFEST_DIR` set; the gate ran them from the repository root with neither. rustty-vt's
+  `kitty::graphics_image::tests::image_load_rgb_not_compressed_relative_regular_file` asserts the CWD and failed
+  under the gate ("this test needs the cargo-set CWD": left `/home/gael/projects/l5`, right
+  `.../crates/rustty-vt`), so any crate with such a test would be RED for a harness reason.
+- **fix**: the binary list carries each artifact's package directory (`manifest_path` from cargo's JSON), and
+  each binary runs in a subshell `cd`'d there with `CARGO_MANIFEST_DIR` set. Control (VM clone, restored): a
+  temporary rustty-wuffs test asserting both passes under the new gate and fails under the old one (left
+  `/home/gael/projects/l5`).

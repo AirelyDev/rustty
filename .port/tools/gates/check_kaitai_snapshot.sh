@@ -18,7 +18,9 @@
 # A host without them is BLOCKED (exit 3, surfaced as a WARNING by ci.sh) —
 # NEVER a silent green. For the python runtime a cached venv is provisioned
 # when possible (the check_abi_schema.sh precedent); the compiler is a JVM
-# tool we never auto-install.
+# tool we never auto-install. On macOS `brew install kaitai-struct-compiler`
+# (0.11, pulls openjdk) is enough — ci.yml's macOS leg installs it (N402);
+# elsewhere, the kaitai.io release zip plus any JRE on PATH.
 #
 # Exit codes follow the ci.sh contract: 0 PASS, 3 BLOCKED (tooling absent),
 # other FAIL.

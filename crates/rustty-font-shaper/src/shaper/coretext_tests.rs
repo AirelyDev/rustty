@@ -138,10 +138,7 @@ fn test_shaper_with_font(font_req: TestFont) -> TestShaper {
     // var c = Collection.init();
     let mut c = Collection::init();
     // c.load_options = .{ .library = lib };
-    c.load_options = Some(LoadOptions {
-        library: lib,
-        ..Default::default()
-    });
+    c.load_options = Some(LoadOptions::new(lib));
 
     // Setup group
     // _ = try c.add(alloc, try .init(lib, testFont, .{ .size = .{ .points = 12 } }), .{ ... });
@@ -264,10 +261,7 @@ fn test_shaper_with_discovered_font(font_req: &str) -> Option<TestShaper> {
     // var c = Collection.init();
     let mut c = Collection::init();
     // c.load_options = .{ .library = lib };
-    c.load_options = Some(LoadOptions {
-        library: lib,
-        ..Default::default()
-    });
+    c.load_options = Some(LoadOptions::new(lib));
 
     // Discover and add our font to the collection.
     {

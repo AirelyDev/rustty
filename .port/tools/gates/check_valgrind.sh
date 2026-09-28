@@ -28,6 +28,14 @@
 # installed; `nix shell nixpkgs#valgrind` provides it, and so does
 # `apt install valgrind libc6-dbg`.
 #
+# WITHOUT ROOT (the Fedora VM, 2026-09-27, N405): `dnf download valgrind`,
+# `rpm2cpio valgrind-*.rpm | cpio -idm` into a user dir, and put a two-line
+# `valgrind` wrapper first on PATH that sets
+# VALGRIND_LIB=<dir>/usr/libexec/valgrind and execs <dir>/usr/bin/valgrind
+# (the launcher otherwise looks for its tools under /usr/libexec). No
+# glibc debuginfo was needed there. The default crate set (11 test binaries)
+# took 33 min there, 25 of them in rustty-vt-c's 553 lib tests.
+#
 # Exit contract (`.port/tools/CI.md`): 0 = pass, 1 = red, 3 = BLOCKED.
 #
 # Usage:
@@ -48,9 +56,15 @@ command -v valgrind >/dev/null 2>&1 \
 command -v cargo >/dev/null 2>&1 || blocked "cargo not installed"
 [ -f "$SUPP" ] || red "valgrind.supp is missing"
 
-# The crates whose tests cross into vendored C — exactly the set check_leaks.sh
-# hands to ASan and then notes it cannot leak-check on macOS.
-CRATES=("rustty-oniguruma" "rustty-wuffs" "rustty-vt-c")
+# The crates whose tests cross into vendored C: the set check_leaks.sh hands
+# to ASan and then notes it cannot leak-check on macOS, plus (N404,
+# 2026-09-27) rustty-font-shaper (FreeType, HarfBuzz, Fontconfig; its first
+# memcheck run found 88 definite leaks, now fixed), rustty-simd (simdutf,
+# highway; clean) and rustty-xev (the event loop under every termio thread;
+# N406's leaked loop box, now fixed). The reference's `test-valgrind` runs its
+# WHOLE unit-test executable under memcheck; the crates not yet listed here
+# are recorded in NEW-FINDINGS N404.
+CRATES=("rustty-oniguruma" "rustty-wuffs" "rustty-vt-c" "rustty-font-shaper" "rustty-simd" "rustty-xev")
 if [ "$#" -gt 0 ]; then
   CRATES=("$@")
 fi
@@ -75,8 +89,13 @@ for c in "${CRATES[@]}"; do
     continue
   fi
   # Test executables appear as `"test":true` compiler-artifact entries.
+  # Each line is `<executable>\t<package dir>`: `cargo test` runs a test
+  # binary with its package directory as the working directory and
+  # CARGO_MANIFEST_DIR set, and tests rely on both (rustty-vt's
+  # `image_load_rgb_not_compressed_relative_regular_file` asserts the CWD), so
+  # each binary runs the same way here (N407).
   mapfile -t bins < <(python3 - "$WORK/$c.json" <<'PY'
-import json, sys
+import json, os, sys
 for line in open(sys.argv[1]):
     line = line.strip()
     if not line.startswith("{"):
@@ -88,7 +107,7 @@ for line in open(sys.argv[1]):
     if m.get("reason") == "compiler-artifact" and m.get("profile", {}).get("test"):
         exe = m.get("executable")
         if exe:
-            print(exe)
+            print(exe + "\t" + os.path.dirname(m["manifest_path"]))
 PY
 )
   if [ "${#bins[@]}" -eq 0 ]; then
@@ -97,7 +116,9 @@ PY
     continue
   fi
 
-  for b in "${bins[@]}"; do
+  for entry in "${bins[@]}"; do
+    b="${entry%%$'\t'*}"
+    pkg_dir="${entry#*$'\t'}"
     name="$c/$(basename "$b" | sed 's/-[0-9a-f]*$//')"
     # An ARRAY rather than a `\`-continued command line so each option can
     # carry its reason on its OWN line — D6's suppression audit (rule c)
@@ -108,21 +129,51 @@ PY
       --errors-for-leak-kinds=definite
       --error-exitcode=1
       --num-callers=50
-      --suppressions="$SUPP" # WHY: valgrind.supp suppresses ONLY dyld/libSystem frames that fire before main() on every process — no rustty frame is suppressed, and each entry carries its own reason in that file.
+      --suppressions="$SUPP" # WHY: valgrind.supp is the reference's file: its 233 entries name GTK/GLib/GDK/fontconfig frames of the GUI app, Mesa DRI driver objects, or DRD-only kinds (audited 2026-09-27, N403); none names a frame these crates execute, so it cannot hide a leak in rustty or vendored-C code.
     )
-    if valgrind "${vg_opts[@]}" "$b" --test-threads=1 > "$WORK/run.log" 2>&1; then
+    if (cd "$pkg_dir" && CARGO_MANIFEST_DIR="$pkg_dir" valgrind "${vg_opts[@]}" "$b" --test-threads=1) > "$WORK/run.log" 2>&1; then
       ok_line="$(grep -m1 '^test result:' "$WORK/run.log" || echo 'ran')"
       echo "  ok      $name — $ok_line"
       RAN=$((RAN+1))
     else
       # Distinguish a TEST failure from a valgrind finding: a red gate should
-      # say which, because the fixes are entirely different.
-      if grep -q "definitely lost\|Invalid read\|Invalid write\|Invalid free" "$WORK/run.log"; then
-        grep -E "definitely lost|Invalid (read|write|free)|^==[0-9]+==    (at|by)" "$WORK/run.log" \
-          | head -14 | sed 's/^/      /'
-        echo "  FAIL    $name (valgrind finding)"
+      # say which, because the fixes are entirely different. The deciding
+      # line is memcheck's own `ERROR SUMMARY: N errors` (what
+      # --error-exitcode acts on), not a text match: every run that ends with
+      # unfreed memory prints `definitely lost: 0 bytes` in its LEAK SUMMARY,
+      # so matching "definitely lost" called a plain test failure a finding
+      # (N403).
+      vg_errors="$(sed -n 's/^==[0-9]*== ERROR SUMMARY: \([0-9,]*\) errors.*/\1/p' "$WORK/run.log" | tail -1 | tr -d ,)"
+      if [ "${vg_errors:-0}" -gt 0 ]; then
+        # Print only the ERROR records: every record with a stack before
+        # HEAP SUMMARY (memcheck prints stacks there only for errors), and
+        # after it only the `definitely lost` leak records. A plain
+        # at/by grep showed whichever stack came first — measured on the
+        # negative control, a `possibly lost` thread-local record (N403).
+        awk '
+          /HEAP SUMMARY:/ { heap = 1 }
+          /^==[0-9]+== [^ ]/ {
+            hdr = $0; pending = 0
+            if (heap) { keep = ($0 ~ /are definitely lost in loss record/); if (keep) print }
+            else { keep = 1; pending = 1 }
+            next
+          }
+          /^==[0-9]+==    (at|by) / {
+            if (pending) { print hdr; pending = 0 }
+            if (keep) print
+            next
+          }
+          { keep = 0; pending = 0 }
+        ' "$WORK/run.log" | head -40 | sed 's/^/      /'
+        echo "  FAIL    $name (valgrind finding: $vg_errors error(s))"
       else
-        tail -14 "$WORK/run.log" | sed 's/^/      /'
+        # The run log ENDS with memcheck's own summary, so its tail hides the
+        # failing test; show libtest's failure lines instead (N403).
+        if grep -qE "panicked at|^test .* FAILED$" "$WORK/run.log"; then
+          grep -E -A2 "panicked at|^test .* FAILED$" "$WORK/run.log" | head -20 | sed 's/^/      /'
+        else
+          tail -14 "$WORK/run.log" | sed 's/^/      /'
+        fi
         echo "  FAIL    $name (test failure, not a valgrind finding)"
       fi
       FAILED=1; FAILED_NAMES="$FAILED_NAMES $name"

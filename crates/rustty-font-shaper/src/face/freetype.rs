@@ -1770,7 +1770,7 @@ mod tests {
     /// truncated.
     #[test]
     fn face_name_returns_a_raw_record_longer_than_the_buffer() -> Result<(), Error> {
-        let lib = Library::init()?;
+        let mut lib = Library::init()?;
         // A Macintosh Roman family record of 1500 bytes.
         let long = vec![b'L'; 1500];
         let data = font_with_names(&[(1, 0, 0, 1, long.clone())]);
@@ -1778,6 +1778,8 @@ mod tests {
         let mut buf = [0u8; 1024];
         assert_eq!(face.name(&mut buf)?, long.as_slice());
         face.deinit();
+        // N404: the library is torn down (memcheck found it leaked).
+        lib.deinit();
         Ok(())
     }
 
@@ -1797,7 +1799,7 @@ mod tests {
     /// character fewer is decoded.
     #[test]
     fn face_name_utf16_record_too_long_for_the_buffer_is_returned_raw() -> Result<(), Error> {
-        let lib = Library::init()?;
+        let mut lib = Library::init()?;
         let utf16be =
             |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(|u| u.to_be_bytes()).collect() };
 
@@ -1830,6 +1832,8 @@ mod tests {
             }
             face.deinit();
         }
+        // N404: the library is torn down (memcheck found it leaked).
+        lib.deinit();
         Ok(())
     }
 
@@ -1840,7 +1844,7 @@ mod tests {
     /// the byte-oriented kinds are still returned raw.
     #[test]
     fn face_name_decodes_every_utf16be_family_record() -> Result<(), Error> {
-        let lib = Library::init()?;
+        let mut lib = Library::init()?;
         let utf16be =
             |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(|u| u.to_be_bytes()).collect() };
 
@@ -1887,6 +1891,8 @@ mod tests {
             );
             face.deinit();
         }
+        // N404: the library is torn down (memcheck found it leaked).
+        lib.deinit();
         Ok(())
     }
 
@@ -2835,12 +2841,13 @@ mod tests {
         // A real face, to borrow the FT face from. `base` owns it and frees it
         // in `deinit`, exactly as `initFile`/`init`'s `errdefer face.deinit()`
         // owns it around `initFace`.
-        let lib = Library::init()?;
+        let mut lib = Library::init()?;
         let mut base = Face::init(lib, embedded::VARIABLE, opts(size(12.0, 96, 96)))?;
 
         let before = DESTROYED.load(Ordering::SeqCst);
+        let mut key: *mut harfbuzz_sys::hb_user_data_key_t = core::ptr::null_mut();
         let got = Face::init_face_with(base.lib, base.face, opts(size(12.0, 96, 96)), |f| {
-            let key: *mut harfbuzz_sys::hb_user_data_key_t =
+            key =
                 // SAFETY: the key is an opaque token HarfBuzz only compares by
                 // address; zeroed is a valid value for it.
                 Box::into_raw(Box::new(unsafe {
@@ -2871,8 +2878,16 @@ mod tests {
             DESTROYED.load(Ordering::SeqCst),
             "the HarfBuzz font is destroyed on the error path, not leaked"
         );
+        // The font that held the key is destroyed (asserted above), so the
+        // key can go (N404: memcheck found it leaked).
+        assert!(!key.is_null());
+        // SAFETY: `key` came from `Box::into_raw` in the closure, and the only
+        // font it was attached to has been destroyed.
+        drop(unsafe { Box::from_raw(key) });
 
         base.deinit();
+        // N404: the library is torn down (memcheck found it leaked).
+        lib.deinit();
         Ok(())
     }
 
@@ -2949,7 +2964,7 @@ mod tests {
         WATCHED.with(|w| w.set(0));
 
         // A real face, to borrow the FT face from (as in the test above).
-        let lib = Library::init()?;
+        let mut lib = Library::init()?;
         let mut base = Face::init(lib, embedded::VARIABLE, opts(size(12.0, 96, 96)))?;
 
         WATCHED_FREED.with(|f| f.set(false));
@@ -2977,6 +2992,8 @@ mod tests {
         );
 
         base.deinit();
+        // N404: the library is torn down (memcheck found it leaked).
+        lib.deinit();
         Ok(())
     }
 

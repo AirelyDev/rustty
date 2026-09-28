@@ -246,8 +246,10 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
         // PORT NOTE: the reference allocates the grid first (stable pointer), then
         // fills it via `grid.* = try .init(...)`. rustty builds the resolver +
         // grid, boxes it (stable heap pointer), and inserts the raw pointer. If
-        // `collection`/`init` fails, the local values drop (freeing everything),
-        // and nothing is inserted — matching the reference's `errdefer` unwind.
+        // `collection` fails it deinits its partial collection (W9F-02); if
+        // `SharedGrid::init` fails it deinits the resolver it consumed (N404) —
+        // a plain drop would not, `Collection` has no `Drop` — and nothing is
+        // inserted, matching the reference's `errdefer` unwind.
 
         // grid.* = try .init(self.alloc, resolver: { ... });
         let grid_value = {
@@ -272,6 +274,20 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
             // runs before `c` is moved into the resolver below (the reference
             // errdefer's remaining coverage, `try self.discover()`, maps to the
             // infallible `discover_impl`).
+            //
+            // PORT NOTE: reference defect (R13), UD350. That errdefer is
+            // scoped to the labeled `resolver: { ... }` block, so it is gone
+            // once `break :resolver` hands the resolver to `SharedGrid.init`;
+            // and `init` leaves cleanup to its caller on failure (its own
+            // `init error` test deinits the resolver itself). So when `init`
+            // fails (atlas or cache allocation, or `reloadMetrics` failing to
+            // load the primary face, which is the first configured font), the
+            // reference leaks this collection and every face in it, on every
+            // failed `ref` (each surface or font-size change retries).
+            // Evident intent: the collection is freed on any `ref` failure.
+            // Handling: `SharedGrid::init` deinits the resolver it consumed
+            // on each error path (shared_grid.rs, N404); proven by
+            // `tests::ref_whose_grid_init_fails_deinits_the_collection`.
 
             // Setup our enabled/disabled styles
             let mut styles = StyleStatus::init_fill(true);
@@ -1362,6 +1378,13 @@ mod tests {
     // Discovery is skipped (`font_discover = None`) so the build reduces to the
     // embedded-font `add`s; the set-size fail-point makes the SECOND `add`
     // fail. Fails without the error-path `c.deinit()` in `collection`.
+    //
+    // N404: `font_discover = None` does not skip discovery; it is the
+    // "not created yet" state, and `collection` creates the discoverer in it
+    // (`discover_impl`). The test used to pass a temporary `&mut None`, so
+    // that discoverer (a Fontconfig config on Linux) was never deinited;
+    // memcheck found it. It is now a local, deinited at the end, as
+    // `SharedGridSet::deinit` does for the set's own.
     #[test]
     fn collection_error_exit_deinits_collection() {
         let alloc = Global;
@@ -1374,8 +1397,9 @@ mod tests {
         // Fail the second `set_size` call: the first embedded `add` succeeds
         // (one loaded face owned by the collection), the second fails.
         crate::face::test_probe::arm_set_size_failpoint(1);
+        let mut font_discover: Option<Discover> = None;
         let result = SharedGridSet::<Global>::collection(
-            &mut None,
+            &mut font_discover,
             set.font_lib,
             &key,
             size_points(12.0),
@@ -1396,6 +1420,77 @@ mod tests {
         #[cfg(rustty_font_has_freetype)]
         let expected = deinits_before + 2;
         assert_eq!(crate::face::test_probe::face_deinits(), expected);
+
+        key.deinit();
+        keycfg.deinit();
+        cfg.deinit();
+        if !discovery::DISCOVER_IS_VOID {
+            if let Some(d) = font_discover.as_mut() {
+                d.deinit();
+            }
+        }
+        set.deinit();
+    }
+
+    /// UD350 (R13): `ref` whose `SharedGrid::init` fails must not leak the
+    /// collection it built. The reference's `errdefer c.deinit` has already
+    /// gone out of scope when `init` runs, so there the faces leak.
+    ///
+    /// Exact accounting, because building a collection can itself deinit
+    /// faces (CoreText's `set_size` replaces its face): first build the same
+    /// collection and tear it down, counting face deinits for each phase;
+    /// then drive `ref` with `init`'s `reload_metrics` fail point armed. The
+    /// failed `ref` must show BOTH phases; without the teardown it shows only
+    /// the build's.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn ref_whose_grid_init_fails_deinits_the_collection() {
+        use crate::face::test_probe::face_deinits;
+        use crate::shared_grid::{InitFp, TwOom, INIT_TW};
+        use rustty_util::tripwire::ResetMode;
+
+        let alloc = Global;
+        let mut set = SharedGridSet::init(alloc).unwrap();
+        let mut cfg = Config::default_config();
+        let mut keycfg = DerivedConfig::init(&cfg);
+        let mut key = Key::init(&keycfg, size_points(12.0));
+
+        // Baseline: the same collection `ref` builds, and its teardown.
+        let d0 = face_deinits();
+        let mut c = SharedGridSet::<Global>::collection(
+            &mut set.font_discover,
+            set.font_lib,
+            &key,
+            size_points(12.0),
+            &keycfg,
+        )
+        .unwrap();
+        let built = face_deinits() - d0;
+        let d1 = face_deinits();
+        c.deinit();
+        let torn_down = face_deinits() - d1;
+        assert!(torn_down > 0, "the collection holds loaded faces");
+
+        let before = face_deinits();
+        INIT_TW.with(|tw| {
+            tw.borrow_mut()
+                .errorAlways(InitFp::ReloadMetrics, TwOom::OutOfMemory)
+        });
+        let result = set.r#ref(&keycfg, size_points(12.0));
+        INIT_TW
+            .with(|tw| tw.borrow_mut().end(ResetMode::Reset))
+            .unwrap();
+
+        assert!(
+            matches!(result, Err(Error::GridInit(GridInitError::OutOfMemory))),
+            "the grid's init failure propagates"
+        );
+        assert_eq!(
+            face_deinits() - before,
+            built + torn_down,
+            "the failed ref deinits the collection's faces (build {built}, teardown {torn_down})"
+        );
+        assert_eq!(set.count(), 0, "nothing is cached");
 
         key.deinit();
         keycfg.deinit();
