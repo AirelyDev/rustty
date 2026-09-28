@@ -2298,14 +2298,10 @@ impl<M: AppMailbox> StreamHandler<M> {
             return Ok(());
         }
 
-        // var host_buffer: [std.Uri.host_name_max]u8 = undefined;
+        // var host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
         // const host = uri.getHost(&host_buffer) catch |err| switch (err) {
         //     error.UriMissingHost => {
         //         log.warn("OSC 7 uri must contain a hostname: {}", .{err});
-        //         return;
-        //     },
-        //     error.UriHostTooLong => {
-        //         log.warn("failed to get full hostname for OSC 7 validation: {}", .{err});
         //         return;
         //     },
         // };
@@ -2317,16 +2313,26 @@ impl<M: AppMailbox> StreamHandler<M> {
                 log::warn!(target: LOG_SCOPE, "OSC 7 uri must contain a hostname: {err:?}");
                 return Ok(());
             }
-            // PORT NOTE (task-14e-1, 2026-09-10): this arm and its
-            // `failed to get full hostname for OSC 7 validation` message are
-            // NOT in the oracle at pin 20abdb50a — `uri.getHost`'s error set
-            // there is `error{UriMissingHost}` only. The Zig comment is a stale
-            // pre-resync artifact, so NO live emission is added here; adding one
-            // would be an emission the reference does not make. The arm itself
-            // is left alone (removing it is a behavioural change, out of this
-            // task's scope) and is filed in the report as a finding.
+            // PORT NOTE: reference defect (R13), UD351 (parity tail U-1,
+            // 2026-09-28). The reference has no arm for this: at pin
+            // 20abdb50a `getHost`'s error set is `error{UriMissingHost}` only
+            // (the port's old comment quoted a pre-resync `UriHostTooLong` arm),
+            // and Zig 0.16.0 `std.Uri.getHost`
+            // does `toRaw(buffer) catch |err| switch (err) { error.NoSpaceLeft
+            // => unreachable }` on the belief that the host was "already
+            // validated". `std.Uri.parse` never validates it (only
+            // `resolveInPlace` calls `validateHostComponent`), so an OSC 7 host
+            // that contains a `%` and percent-decodes to more than 255 bytes
+            // reaches that `unreachable`: a panic in Debug/ReleaseSafe and
+            // undefined behaviour in ReleaseFast (measured: a 100%-CPU hang).
+            // Any program writing to the terminal can emit it. A host without a
+            // `%` is returned undecoded and never overflows.
+            //
+            // Safe handling: the OSC 7 is ignored, as the reference would have
+            // ignored it had `getHost` not trapped (a host over 255 bytes can
+            // never pass `isLocal`). No log call is added: the reference has no
+            // message for this case (R13: no invented message text).
             Err(GetHostError::UriHostTooLong) => {
-                // (no reference counterpart at the pin — see the note above.)
                 return Ok(());
             }
         };
@@ -3825,7 +3831,10 @@ fn xtgettcapMap() -> &'static std::collections::HashMap<Vec<u8>, Vec<u8>> {
 /// PORT NOTE (Zig-std shim): `std.Uri.host_name_max` (the fixed host buffer size).
 const URI_HOST_NAME_MAX: usize = 255;
 
-/// PORT NOTE (Zig-std shim): the error set of `std.Uri.getHost`.
+/// PORT NOTE (Zig-std shim): the error set of `std.Uri.getHost`, plus
+/// `UriHostTooLong`, which Zig 0.16.0 does not have: its `getHost` treats the
+/// buffer overflow as `unreachable` (reference defect UD351, R13; see
+/// `reportPwd`).
 #[derive(Debug)]
 enum GetHostError {
     UriMissingHost,
@@ -4961,5 +4970,87 @@ pub(crate) mod tests {
             drop(Box::from_raw(mailbox));
         }
         term.deinit(Global.into());
+    }
+
+    // UD351 (R13, parity tail U-1): an OSC 7 whose host contains a `%` and
+    // percent-decodes to more than `std.Io.net.HostName.max_len` (255) bytes
+    // reaches `unreachable` in Zig 0.16.0 `std.Uri.getHost` in the reference.
+    // Each case drives the full path (VT parser -> OSC 7 -> `reportPwd`) and
+    // returns the terminal pwd afterwards.
+    fn osc7_pwd_after(url: &[u8]) -> Option<Vec<u8>> {
+        let mut term = Terminal::init(Global.into(), terminal_opts(None)).unwrap();
+        let h = handler_for(&raw mut term, std::ptr::null_mut(), std::ptr::null_mut());
+        let mut s = rustty_vt::stream::Stream::init(rustty_vt::stream::Options::with_handler(h));
+        let mut seq = b"\x1b]7;".to_vec();
+        seq.extend_from_slice(url);
+        seq.extend_from_slice(b"\x1b\\");
+        s.next_slice(&seq);
+        s.handler.renderer_wakeup.deinit();
+        drop(s);
+        let pwd = term.get_pwd().map(<[u8]>::to_vec);
+        term.deinit(Global.into());
+        pwd
+    }
+
+    fn file_url(host: &[u8], path: &[u8]) -> Vec<u8> {
+        let mut url = b"file://".to_vec();
+        url.extend_from_slice(host);
+        url.extend_from_slice(path);
+        url
+    }
+
+    #[test]
+    fn ud351_osc7_host_decoding_to_256_bytes_is_ignored() {
+        // 255 `a` + `%41` decodes to 256 bytes: one past the buffer.
+        let mut host = vec![b'a'; 255];
+        host.extend_from_slice(b"%41");
+        assert_eq!(None, osc7_pwd_after(&file_url(&host, b"/tmp")));
+    }
+
+    #[test]
+    fn ud351_osc7_host_of_300_bytes_with_a_percent_escape_is_ignored() {
+        // T-1's probe shape: 300 `a` + `%41`.
+        let mut host = vec![b'a'; 300];
+        host.extend_from_slice(b"%41");
+        assert_eq!(None, osc7_pwd_after(&file_url(&host, b"/tmp")));
+    }
+
+    #[test]
+    fn ud351_osc7_long_ipv6_bracketed_host_is_ignored() {
+        // The brackets are part of the host component that `getHost` decodes.
+        let mut host = b"[".to_vec();
+        host.extend_from_slice(&[b'a'; 260]);
+        host.extend_from_slice(b"%41]");
+        assert_eq!(None, osc7_pwd_after(&file_url(&host, b"/tmp")));
+    }
+
+    #[test]
+    fn ud351_osc7_long_kitty_shell_cwd_host_is_ignored() {
+        // kitty-shell-cwd takes the same `getHost` path.
+        let mut url = b"kitty-shell-cwd://".to_vec();
+        url.extend_from_slice(&[b'a'; 300]);
+        url.extend_from_slice(b"%41/tmp");
+        assert_eq!(None, osc7_pwd_after(&url));
+    }
+
+    #[test]
+    fn ud351_osc7_long_hosts_that_fit_or_need_no_decoding_are_rejected_as_non_local() {
+        // 254 `a` + `%41` decodes to exactly 255 bytes: fits, not local.
+        let mut host = vec![b'a'; 254];
+        host.extend_from_slice(b"%41");
+        assert_eq!(None, osc7_pwd_after(&file_url(&host, b"/tmp")));
+
+        // No `%`: returned undecoded however long (the reference does not trap).
+        assert_eq!(None, osc7_pwd_after(&file_url(&[b'a'; 300], b"/tmp")));
+    }
+
+    #[test]
+    fn ud351_osc7_percent_encoded_local_host_still_sets_the_pwd() {
+        // Control: a short percent-encoded host that decodes to `localhost`
+        // passes the same `getHost` decode and the pwd is set.
+        assert_eq!(
+            Some(b"/tmp".to_vec()),
+            osc7_pwd_after(b"file://local%68ost/tmp")
+        );
     }
 }
