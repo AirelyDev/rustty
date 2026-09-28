@@ -21,14 +21,14 @@ this directory held the **16.0.0** corpus of `uucode` 0.1.0 (git `5f05f8f…`, p
 `ZZjBPj96QADXyt5sqwBJUnhaDYs_qBeeKijZvlRa0eqM`), which libvaxis 0.5.1 pinned. At the
 reference pin that revision is not used by anything.
 
-| file                                  | parsed by `build.rs` for                                                                                          | origin (in uucode 2826a37a `ucd/`)        |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
-| `UnicodeData.txt`                     | `general_category` (+ First/Last range fill)                                                                      | `ucd/UnicodeData.txt`                     |
-| `extracted/DerivedEastAsianWidth.txt` | `east_asian_width` (+ `@missing Wide`)                                                                            | `ucd/extracted/DerivedEastAsianWidth.txt` |
+| file                                  | parsed by `build.rs` for                                                                                                 | origin (in uucode 2826a37a `ucd/`)        |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------- |
+| `UnicodeData.txt`                     | `general_category` (+ First/Last range fill)                                                                             | `ucd/UnicodeData.txt`                     |
+| `extracted/DerivedEastAsianWidth.txt` | `east_asian_width` (+ `@missing Wide`)                                                                                   | `ucd/extracted/DerivedEastAsianWidth.txt` |
 | `emoji/emoji-data.txt`                | `is_emoji_presentation`, `is_extended_pictographic`, `is_emoji_modifier`, `is_emoji_modifier_base`, `is_emoji_component` | `ucd/emoji/emoji-data.txt`                |
-| `auxiliary/GraphemeBreakProperty.txt` | `original_grapheme_break`                                                                                         | `ucd/auxiliary/GraphemeBreakProperty.txt` |
-| `DerivedCoreProperties.txt`           | `indic_conjunct_break` (InCB only)                                                                                | `ucd/DerivedCoreProperties.txt`           |
-| `auxiliary/GraphemeBreakTest.txt`     | UAX #29 conformance test fixture                                                                                  | `ucd/auxiliary/GraphemeBreakTest.txt`     |
+| `auxiliary/GraphemeBreakProperty.txt` | `original_grapheme_break`                                                                                                | `ucd/auxiliary/GraphemeBreakProperty.txt` |
+| `DerivedCoreProperties.txt`           | `indic_conjunct_break` (InCB only)                                                                                       | `ucd/DerivedCoreProperties.txt`           |
+| `auxiliary/GraphemeBreakTest.txt`     | UAX #29 conformance test fixture                                                                                         | `ucd/auxiliary/GraphemeBreakTest.txt`     |
 
 ## SHA-256 digests (WS12 T4)
 

@@ -6,7 +6,7 @@ Scope was the **entire** ghostty oracle tree at pin `20abdb50a` — 983 files, 4
 
 A **finding** is any functional divergence between the oracle and rustty: a missing file/function/branch/error path/test, a different constant, a stub, or a behavioural difference. **Performance-only differences are excluded by design** — rustty is free to be faster or slower, allocate differently, or restructure hot loops, as long as the observable behaviour matches. Deliberate, documented R4/R5 port divergences are recorded but only count as findings where they change behaviour.
 
-Every candidate finding was then judged by **two independent adversarial lenses**, each trying to refute it: a *presence/relocation* lens (is the logic actually absent, or just moved to another crate/file?) and a *semantic-equivalence* lens (is the difference observable at all?). **CONFIRMED** = neither lens could refute it; **DISPUTED** = exactly one lens refuted it; **REFUTED** = both did. Refuted findings are retained in the area files with the refutation, but do not count toward the surviving totals. Severity (high/medium/low) is the *corrected* severity after verification — a lens may raise or lower it.
+Every candidate finding was then judged by **two independent adversarial lenses**, each trying to refute it: a _presence/relocation_ lens (is the logic actually absent, or just moved to another crate/file?) and a _semantic-equivalence_ lens (is the difference observable at all?). **CONFIRMED** = neither lens could refute it; **DISPUTED** = exactly one lens refuted it; **REFUTED** = both did. Refuted findings are retained in the area files with the refutation, but do not count toward the surviving totals. Severity (high/medium/low) is the _corrected_ severity after verification — a lens may raise or lower it.
 
 Each shard had a per-shard verification cap on how many findings could be double-verified. Anything over that cap would be labelled **UNVERIFIED** in its area file. **The cap was never hit: 0 UNVERIFIED findings across all 215 shards**, and no shard failed to return a result.
 
@@ -18,31 +18,31 @@ Each shard had a per-shard verification cap on how many findings could be double
 
 ## Areas
 
-| Area | Shards | Lines read / in scope | Partial | High | Medium | Low | CONF | DISP | REF |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| [include](include.md) | 8 | 14,640 / 14,640 | 0 | 2 | 4 | 6 | 9 | 3 | 7 |
-| [macos](macos.md) | 22 | 37,392 / 37,392 | 0 | 0 | 4 | 4 | 6 | 2 | 4 |
-| [pkg](pkg.md) | 9 | 14,431 / 14,431 | 0 | 4 | 7 | 22 | 21 | 12 | 13 |
-| [src](src.md) | 5 | 11,039 / 11,039 | 0 | 1 | 7 | 11 | 17 | 2 | 0 |
-| [src/apprt](src-apprt.md) | 17 | 30,175 / 30,175 | 0 | 0 | 16 | 66 | 63 | 19 | 16 |
-| [src/benchmark](src-benchmark.md) | 1 | 1,971 / 1,971 | 0 | 0 | 5 | 2 | 7 | 0 | 0 |
-| [src/build](src-build.md) | 4 | 7,122 / 7,122 | 0 | 0 | 16 | 14 | 26 | 4 | 4 |
-| [src/cli](src-cli.md) | 5 | 9,162 / 9,162 | 0 | 0 | 13 | 21 | 30 | 4 | 5 |
-| [src/config](src-config.md) | 8 | 15,822 / 15,822 | 0 | 0 | 7 | 26 | 31 | 2 | 0 |
-| [src/datastruct](src-datastruct.md) | 4 | 7,421 / 7,421 | 0 | 0 | 0 | 5 | 3 | 2 | 6 |
-| [src/font](src-font.md) | 17 | 31,229 / 31,229 | 0 | 0 | 8 | 38 | 32 | 14 | 5 |
-| [src/input](src-input.md) | 6 | 11,431 / 11,431 | 0 | 1 | 2 | 6 | 7 | 2 | 6 |
-| [src/inspector](src-inspector.md) | 3 | 6,623 / 6,623 | 0 | 0 | 1 | 3 | 2 | 2 | 0 |
-| [src/lib](src-lib.md) | 2 | 3,584 / 3,584 | 0 | 0 | 3 | 12 | 13 | 2 | 3 |
-| [src/os](src-os.md) | 2 | 4,210 / 4,210 | 0 | 0 | 2 | 15 | 15 | 2 | 0 |
-| [src/renderer](src-renderer.md) | 6 | 11,567 / 11,567 | 0 | 2 | 3 | 9 | 13 | 1 | 6 |
-| [src/simd](src-simd.md) | 1 | 1,282 / 1,282 | 0 | 0 | 1 | 1 | 2 | 0 | 1 |
-| [src/stb](src-stb.md) | 1 | 1,785 / 1,785 | 0 | 0 | 1 | 1 | 2 | 0 | 0 |
-| [src/terminal](src-terminal.md) | 88 | 173,694 / 173,694 | 0 | 2 | 36 | 72 | 90 | 20 | 24 |
-| [src/terminfo](src-terminfo.md) | 1 | 673 / 673 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| [src/termio](src-termio.md) | 4 | 7,124 / 7,124 | 0 | 0 | 4 | 10 | 14 | 0 | 2 |
-| [src/unicode](src-unicode.md) | 1 | 869 / 869 | 0 | 0 | 0 | 1 | 1 | 0 | 1 |
-| **Total** | **215** | **403,246 / 403,246** | **0** | **12** | **140** | **345** | **404** | **93** | **103** |
+| Area                                |  Shards | Lines read / in scope | Partial |   High |  Medium |     Low |    CONF |   DISP |     REF |
+| ----------------------------------- | ------: | --------------------: | ------: | -----: | ------: | ------: | ------: | -----: | ------: |
+| [include](include.md)               |       8 |       14,640 / 14,640 |       0 |      2 |       4 |       6 |       9 |      3 |       7 |
+| [macos](macos.md)                   |      22 |       37,392 / 37,392 |       0 |      0 |       4 |       4 |       6 |      2 |       4 |
+| [pkg](pkg.md)                       |       9 |       14,431 / 14,431 |       0 |      4 |       7 |      22 |      21 |     12 |      13 |
+| [src](src.md)                       |       5 |       11,039 / 11,039 |       0 |      1 |       7 |      11 |      17 |      2 |       0 |
+| [src/apprt](src-apprt.md)           |      17 |       30,175 / 30,175 |       0 |      0 |      16 |      66 |      63 |     19 |      16 |
+| [src/benchmark](src-benchmark.md)   |       1 |         1,971 / 1,971 |       0 |      0 |       5 |       2 |       7 |      0 |       0 |
+| [src/build](src-build.md)           |       4 |         7,122 / 7,122 |       0 |      0 |      16 |      14 |      26 |      4 |       4 |
+| [src/cli](src-cli.md)               |       5 |         9,162 / 9,162 |       0 |      0 |      13 |      21 |      30 |      4 |       5 |
+| [src/config](src-config.md)         |       8 |       15,822 / 15,822 |       0 |      0 |       7 |      26 |      31 |      2 |       0 |
+| [src/datastruct](src-datastruct.md) |       4 |         7,421 / 7,421 |       0 |      0 |       0 |       5 |       3 |      2 |       6 |
+| [src/font](src-font.md)             |      17 |       31,229 / 31,229 |       0 |      0 |       8 |      38 |      32 |     14 |       5 |
+| [src/input](src-input.md)           |       6 |       11,431 / 11,431 |       0 |      1 |       2 |       6 |       7 |      2 |       6 |
+| [src/inspector](src-inspector.md)   |       3 |         6,623 / 6,623 |       0 |      0 |       1 |       3 |       2 |      2 |       0 |
+| [src/lib](src-lib.md)               |       2 |         3,584 / 3,584 |       0 |      0 |       3 |      12 |      13 |      2 |       3 |
+| [src/os](src-os.md)                 |       2 |         4,210 / 4,210 |       0 |      0 |       2 |      15 |      15 |      2 |       0 |
+| [src/renderer](src-renderer.md)     |       6 |       11,567 / 11,567 |       0 |      2 |       3 |       9 |      13 |      1 |       6 |
+| [src/simd](src-simd.md)             |       1 |         1,282 / 1,282 |       0 |      0 |       1 |       1 |       2 |      0 |       1 |
+| [src/stb](src-stb.md)               |       1 |         1,785 / 1,785 |       0 |      0 |       1 |       1 |       2 |      0 |       0 |
+| [src/terminal](src-terminal.md)     |      88 |     173,694 / 173,694 |       0 |      2 |      36 |      72 |      90 |     20 |      24 |
+| [src/terminfo](src-terminfo.md)     |       1 |             673 / 673 |       0 |      0 |       0 |       0 |       0 |      0 |       0 |
+| [src/termio](src-termio.md)         |       4 |         7,124 / 7,124 |       0 |      0 |       4 |      10 |      14 |      0 |       2 |
+| [src/unicode](src-unicode.md)       |       1 |             869 / 869 |       0 |      0 |       0 |       1 |       1 |      0 |       1 |
+| **Total**                           | **215** | **403,246 / 403,246** |   **0** | **12** | **140** | **345** | **404** | **93** | **103** |
 
 ## Highest-priority gaps
 

@@ -10,172 +10,172 @@ The single most important gap is **S151-F1**: `Options.codepoint_map` is discard
 
 One row per oracle unit (multi-part files aggregated across their shards).
 
-| Oracle unit | Rustty counterpart(s) | Status | Note |
-| --- | --- | --- | --- |
-| `src/terminal/PageList.zig:1-20404` (10 parts) | `crates/rustty-vt/src/pagelist/{mod,access,resize,scroll,grow,erase,compress,pin,iter,builder,tests}.rs` | ported | Every decl, branch, errdefer/defer ordering, tripwire fail point and all ~330 test blocks have counterparts; raw-pointer accessors for SB discipline. |
-| `src/terminal/Parser.zig:1-1116` | `crates/rustty-vt/src/parser.rs` | ported | State/TransitionAction/Action, SepList bitset, all 25 tests; C-ABI `Action.C` projection kept as comment. |
-| `src/terminal/Screen.zig:1-12351` (6 parts) | `crates/rustty-vt/src/screen.rs` | ported | All cursor/scroll/select/resize/hyperlink/style paths + all tests; `io: std.Io` field is a documented NON_PORT. |
-| `src/terminal/ScreenSet.zig:1-154` | `crates/rustty-vt/src/screen_set.rs` | ported | EnumMap → fixed arrays; both tests with identical assertions. |
-| `src/terminal/Selection.zig` | `crates/rustty-vt/src/selection.rs` | ported | All 20 tests, assertion-for-assertion. |
-| `src/terminal/SelectionGesture.zig` | `crates/rustty-vt/src/selection_gesture.rs` | ported | All 35 tests; `pixelFromFloat` replaced by Rust's saturating float→int cast (identical semantics). |
-| `src/terminal/StringMap.zig` | `crates/rustty-vt/src/string_map.rs` | ported | Oniguruma-gated search iterator; url regex inlined (vt cannot depend on rustty-config). |
-| `src/terminal/Tabstops.zig` | `crates/rustty-vt/src/tabstops.rs` | ported | All 7 tests; resize OOM path aborts instead of returning (S141-F3). |
-| `src/terminal/Terminal.zig:1-16505` (8 parts) | `crates/rustty-vt/src/terminal.rs` | ported | Full struct/flags/modes/print/erase/resize/DECCOLM/kitty paths + all ~500 tests. |
-| `src/terminal/UTF8Decoder.zig` | `crates/rustty-vt/src/utf8_decoder.rs` | ported | Tables verbatim; branchless reshape machine-checked against reference control flow. |
-| `src/terminal/ansi.zig` | `crates/rustty-vt/src/ansi.rs` | ported | All enums and discriminants. |
-| `src/terminal/apc.zig` | `crates/rustty-vt/src/apc/mod.rs` | partial | All 23 tests ported; the `build_options.glyph_protocol` comptime gate is missing from the handler (S149-F1). |
-| `src/terminal/bitmap_allocator.zig` | `crates/rustty-vt/src/bitmap_allocator.rs` | ported | All 25 tests; private `dumpBitmaps` omitted (S149-F3). |
-| `src/terminal/build_options.zig` | `crates/rustty-vt/src/{build_options,options}.rs` | ported | Features parse + `add()` resolution; generated module is `options.rs`. |
-| `src/terminal/charsets.zig` | `crates/rustty-vt/src/charsets.rs` | ported | All tables verified element-wise. |
-| `src/terminal/clipboard.zig` | `crates/rustty-vt/src/clipboard.rs` | ported | `Location` closed-enum divergence (S150-F2). |
-| `src/terminal/color.zig` | `crates/rustty-vt/src/color.rs`, `crates/rustty-vt-c/src/color.rs` | ported | 33/34 tests equal; `RGB.parse` weakened (S150-F1). |
-| `src/terminal/compress.zig` | `crates/rustty-vt/src/compress.rs` | ported | Module hub. |
-| `src/terminal/csi.zig` | `crates/rustty-vt/src/csi.rs` | ported | — |
-| `src/terminal/cursor.zig` | `crates/rustty-vt/src/cursor.rs` | ported | — |
-| `src/terminal/dcs.zig` | `crates/rustty-vt/src/dcs.rs` | ported | All 10 tests; tmux gate mirrors `build_options`. |
-| `src/terminal/device_attributes.zig` | `crates/rustty-vt/src/device_attributes.rs` | ported | All 7 tests. |
-| `src/terminal/device_status.zig` | `crates/rustty-vt/src/device_status.rs` | ported | Encode sizes frozen and asserted. |
-| `src/terminal/focus.zig` | `crates/rustty-vt/src/focus.rs` | ported | — |
-| `src/terminal/formatter.zig:1-7030` (4 parts) | `crates/rustty-vt/src/formatter.rs` | partial | All formatters + all tests; `codepoint_map` dropped at delegation (S151-F1). |
-| `src/terminal/fraction.zig` | `crates/rustty-vt/src/fraction.rs` | ported | All 43 assertions. |
-| `src/terminal/hash_map.zig` | `crates/rustty-vt/src/hash_map.rs` | ported | 27 tests + 2 additive; `KeyIterator`/`ValueIterator` absent (S155-F2). |
-| `src/terminal/highlight.zig` | `crates/rustty-vt/src/highlight.rs` | ported | OOM propagation folded (S155-F6). |
-| `src/terminal/hyperlink.zig` | `crates/rustty-vt/src/hyperlink.rs` | ported | `PageEntry.hash` uses SipHash, not seed-0 Wyhash (S155-F1). |
-| `src/terminal/kitty.zig` | `crates/rustty-vt/src/kitty/mod.rs` | ported | Submodule hub. |
-| `src/terminal/lib.zig` | `crates/rustty-lib/*`, `crates/rustty-vt-c/src/io.rs` | replaced | C-ABI plumbing hub; verbatim comment block retained (S155-F7 covers the stale text). |
-| `src/terminal/main.zig` | `crates/rustty-vt/src/lib.rs` | ported | Every import/re-export mapped. |
-| `src/terminal/mem.zig` | `crates/rustty-vt/src/mem.rs` | ported | All 3 tests; madvise warnings dropped (S156-F3). |
-| `src/terminal/modes.zig` | `crates/rustty-vt/src/modes.rs` | ported | 43-row table, all 14 tests. |
-| `src/terminal/mouse.zig` | `crates/rustty-vt/src/mouse.rs`, `crates/rustty-apprt/src/gtk/class/surface.rs` | partial | `Shape.getGObjectType` stripped, GTK property untyped (S156-F2). |
-| `src/terminal/osc.zig` | `crates/rustty-vt/src/osc/mod.rs` | ported | Parser/Capture/Terminator + 5 capture tests; header check tautological (S156-F1). |
-| `src/terminal/page.zig:1-4462` (3 parts) | `crates/rustty-vt/src/{page,page_impl,page_tests}.rs` | ported | Page/Row/Cell/Mask/Capacity + all 34 tests. |
-| `src/terminal/parse_table.zig` | `crates/rustty-vt/src/parse_table.rs` | ported | Every transition verified. |
-| `src/terminal/paste.zig` | `crates/rustty-vt/src/paste.rs` | ported | OTP/grant/encode precedence identical. |
-| `src/terminal/point.zig` | `crates/rustty-vt/src/point.rs`, `crates/rustty-vt-c/src/point.rs` | ported | — |
-| `src/terminal/ref_counted_set.zig` | `crates/rustty-vt/src/ref_counted_set.rs` | ported | Full Robin-Hood/PSL logic + both tests. |
-| `src/terminal/render.zig` | `crates/rustty-vt/src/render.rs` | ported | All 20 tests; two low deltas (S161-F1/F2). |
-| `src/terminal/search.zig` | `crates/rustty-vt/src/search/mod.rs` | ported | Re-export hub. |
-| `src/terminal/selection_codepoints.zig` | `crates/rustty-vt/src/selection_codepoints.rs` | ported | Tables identical. |
-| `src/terminal/sgr.zig` | `crates/rustty-vt/src/sgr.rs`, `crates/rustty-vt-c/src/sgr.rs` | ported | All 33 tests. |
-| `src/terminal/size.zig` | `crates/rustty-render-types/src/term_size.rs` | ported | Hoisted (A1) and re-exported as `rustty_vt::size`. |
-| `src/terminal/size_report.zig` | `crates/rustty-vt/src/size_report.rs` | ported | All 5 tests byte-identical. |
-| `src/terminal/stream.zig:1-5352` (3 parts) | `crates/rustty-vt/src/stream.rs` | ported | Comptime `vt()` union → `Handler` trait; all CSI/OSC/ESC arms and all tests. |
-| `src/terminal/stream_continuation.zig` | `crates/rustty-vt/src/stream_continuation.rs` | ported | All 8 tests; FailingAllocator → tripwire. |
-| `src/terminal/stream_terminal.zig:1-6538` (3 parts) | `crates/rustty-vt/src/stream_terminal.rs` | ported | All handler arms + all 63+8 tests. |
-| `src/terminal/style.zig` | `crates/rustty-vt/src/style.rs` | ported | All 38 tests; only debug `format` text differs (refuted). |
-| `src/terminal/sys.zig` | `crates/rustty-vt/src/sys.rs`, `crates/rustty-os/src/file.rs`, `crates/rustty-vt-c/src/sys.rs` | ported | decode_png/random_secure seams. |
-| `src/terminal/tmux.zig` | `crates/rustty-vt/src/tmux/mod.rs` | ported | Submodule hub. |
-| `src/terminal/x11_color.zig` | `crates/rustty-vt/src/x11_color.rs` + `res/rgb.txt` | ported | rgb.txt byte-identical. |
-| `src/terminal/apc/glyph.zig` | `crates/rustty-vt/src/apc/glyph/mod.rs` | ported | — |
-| `src/terminal/apc/glyph/Glossary.zig` | `.../glyph/glossary.rs` | ported | All 11 tests. |
-| `src/terminal/apc/glyph/execute.zig` | `.../glyph/execute.rs` | ported | All 12 tests. |
-| `src/terminal/apc/glyph/request.zig` | `.../glyph/request.rs` | ported | All 19 tests; `_` separator divergence (S170-F1). |
-| `src/terminal/apc/glyph/response.zig` | `.../glyph/response.rs` | ported | All 12 tests. |
-| `src/terminal/c/allocator.zig` | `crates/rustty-vt-c/src/allocator.rs` | ported | All 6 tests + 1 extra. |
-| `src/terminal/c/build_info.zig` | `crates/rustty-vt-c/src/build_info.rs` | ported | All 11 tests. |
-| `src/terminal/c/cell.zig` | `crates/rustty-vt-c/src/cell.rs` | ported | All 8 tests. |
-| `src/terminal/c/color.zig` | `crates/rustty-vt-c/src/color.rs` | ported | All 22 tests. |
-| `src/terminal/c/color_scheme.zig` | `crates/rustty-vt-c/src/color_scheme.rs` | ported | All 5 tests. |
-| `src/terminal/c/focus.zig` | `crates/rustty-vt-c/src/focus.rs` | ported | All 4 tests. |
-| `src/terminal/c/formatter.zig` | `crates/rustty-vt-c/src/formatter.rs` | ported | All 13 tests; zero-length alloc path differs (S171-F1). |
-| `src/terminal/c/grid_ref.zig` | `crates/rustty-vt-c/src/grid_ref.rs` | ported | All 11 tests. |
-| `src/terminal/c/grid_ref_tracked.zig` | `crates/rustty-vt-c/src/grid_ref_tracked.rs` | ported | All 4 tests. |
-| `src/terminal/c/io.zig` | `crates/rustty-vt-c/src/io.rs`, `crates/rustty-vt/src/snapshot/io.rs` | ported | All 11 tests; zero-length `stream_to` guard absent (refuted). |
-| `src/terminal/c/key_encode.zig` | `crates/rustty-vt-c/src/key_encode.rs` | ported | All 8 tests; warnings bypass log sink (S172-F1). |
-| `src/terminal/c/key_event.zig` | `crates/rustty-vt-c/src/key_event.rs` | ported | All 3 tests. |
-| `src/terminal/c/kitty_graphics.zig` | `crates/rustty-vt-c/src/kitty_graphics.rs` | ported | All 30 tests + 2 D11 tests. |
-| `src/terminal/c/main.zig` | `crates/rustty-vt-c/src/lib.rs` | ported | All 198 exports set-differenced with no gaps. |
-| `src/terminal/c/modes.zig` | `crates/rustty-vt-c/src/modes.rs` | ported | All 7 tests. |
-| `src/terminal/c/mouse_encode.zig` | `crates/rustty-vt-c/src/mouse_encode.rs` | ported | All 7 tests; warnings bypass log sink (S174-F1). |
-| `src/terminal/c/mouse_event.zig` | `crates/rustty-vt-c/src/mouse_event.rs` | ported | All 3 tests. |
-| `src/terminal/c/osc.zig` | `crates/rustty-vt-c/src/osc.rs` | partial | Parser backed by the global allocator (S174-F3) + stderr warn (S174-F2). |
-| `src/terminal/c/paste.zig` | `crates/rustty-vt-c/src/paste.rs` | partial | Out-of-range clipboard location rejected (S174-F4); mimes OOM path dropped (S174-F5). |
-| `src/terminal/c/render.zig` | `crates/rustty-vt-c/src/render.rs` | ported | All 46 tests + 12 extra; caller allocator not threaded (S175-F1). |
-| `src/terminal/c/result.zig` | `crates/rustty-vt-c/src/result.rs` | ported | All 8 discriminants. |
-| `src/terminal/c/row.zig` | `crates/rustty-vt-c/src/row.rs` | ported | All 5 tests + 1 extra. |
-| `src/terminal/c/search.zig` | `crates/rustty-vt-c/src/search.rs` | partial | All 17 tests; engine internals on the global allocator (S176-F1). |
-| `src/terminal/c/selection.zig` | `crates/rustty-vt-c/src/selection.rs` | ported | All 3 tests. |
-| `src/terminal/c/selection_gesture.zig` | `crates/rustty-vt-c/src/selection_gesture.rs` | ported | All 16 tests + 6 extra; `instant_from_ns` totality (S177-F2). |
-| `src/terminal/c/sgr.zig` | `crates/rustty-vt-c/src/sgr.rs` | ported | Both tests; overflow warn to stderr (S177-F1). |
-| `src/terminal/c/size_report.zig` | `crates/rustty-vt-c/src/size_report.rs` | ported | All 4 tests + 1 extra. |
-| `src/terminal/c/snapshot.zig` | `crates/rustty-vt-c/src/snapshot.rs` | ported | All 5 tests. |
-| `src/terminal/c/style.zig` | `crates/rustty-vt-c/src/style.rs` | ported | Both comptime layout blocks reproduced as const asserts. |
-| `src/terminal/c/sys.zig` | `crates/rustty-vt-c/src/sys.rs` | ported | All 8 tests; `log_stderr` differences (S178-F1/F2). |
-| `src/terminal/c/terminal.zig:1-6247` (3 parts) | `crates/rustty-vt-c/src/terminal.rs` | ported | All decls + all 115 tests; allocator/limit deltas (S179-F1/F2/F3). |
-| `src/terminal/c/types.zig` | `crates/rustty-vt-c/src/types.rs` | ported | 159 manifest rows; 4 stale enum-value rows (S182-F1..F4). |
-| `src/terminal/c/unicode.zig` | `crates/rustty-vt-c/src/unicode.rs` | ported | All 8 tests. |
-| `src/terminal/compress/Page.zig` | `crates/rustty-vt/src/compress/page.rs` | ported | All 4 tests + 1 extra. |
-| `src/terminal/compress/lz4.zig` | `crates/rustty-vt/src/compress/lz4.rs` | ported | Byte-for-byte codec; all 10 tests. |
-| `src/terminal/compress/lz4_differential.zig` | `crates/rustty-vt/src/compress/lz4_differential.rs` | ported | Both suites, identical budgets. |
-| `src/terminal/kitty/clipboard.zig` | `crates/rustty-vt/src/kitty/clipboard.rs` | ported | Re-export hub + concrete ref-all-decls test. |
-| `src/terminal/kitty/clipboard_command.zig` | `.../clipboard_command.rs` | ported | All 19 tests. |
-| `src/terminal/kitty/clipboard_grants.zig` | `.../clipboard_grants.rs` | ported | All 8 tests. |
-| `src/terminal/kitty/clipboard_response.zig` | `.../clipboard_response.rs` | ported | All 15 tests, byte-identical strings. |
-| `src/terminal/kitty/clipboard_write.zig` | `.../clipboard_write.rs` | ported | All 20 tests. |
-| `src/terminal/kitty/color.zig` | `crates/rustty-vt/src/kitty/color.rs` | ported | — |
-| `src/terminal/kitty/dnd.zig` | `crates/rustty-vt/src/kitty/dnd.rs` | ported | Re-export hub. |
-| `src/terminal/kitty/dnd_command.zig` | `.../dnd_command.rs` | ported | All 11 tests. |
-| `src/terminal/kitty/dnd_drop.zig` | `.../dnd_drop.rs` | ported | All 13 event arms. |
-| `src/terminal/kitty/dnd_response.zig` | `.../dnd_response.rs` | ported | All 6 tests. |
-| `src/terminal/kitty/dnd_test.zig` | `.../dnd_test.rs` | ported | All 21 harness tests. |
-| `src/terminal/kitty/graphics.zig` | `crates/rustty-vt/src/kitty/graphics.rs` | ported | Stale deferral comment (S185-F1). |
-| `src/terminal/kitty/graphics_animation.zig` | `.../graphics_animation.rs` | ported | — |
-| `src/terminal/kitty/graphics_command.zig` | `.../graphics_command.rs` | ported | All 38 tests; `_` separator divergence (S186-F1). |
-| `src/terminal/kitty/graphics_exec.zig` (2 parts) | `.../graphics_exec.rs` | ported | All 68 tests. |
-| `src/terminal/kitty/graphics_image.zig` | `.../graphics_image.rs` | ported | 28/29 tests (S189-F1); readFile truncation (S189-F2). |
-| `src/terminal/kitty/graphics_pixel.zig` | `.../graphics_pixel.rs` | ported | All 6 tests + differential KAT. |
-| `src/terminal/kitty/graphics_render.zig` | `.../graphics_render.rs` | ported | — |
-| `src/terminal/kitty/graphics_storage.zig` (3 parts) | `.../graphics_storage.rs` | ported | All decls + all 71 tests. |
-| `src/terminal/kitty/graphics_unicode.zig` | `.../graphics_unicode.rs` | ported | 295-entry diacritics table verified. |
-| `src/terminal/kitty/key.zig` | `crates/rustty-vt/src/kitty/key.rs` | ported | All 5 tests. |
-| `src/terminal/osc/encoding.zig` | `crates/rustty-vt/src/osc/encoding.rs` | ported | Test input weakened (S194-F4). |
-| `src/terminal/osc/kitty_metadata.zig` | `.../osc/kitty_metadata.rs` | ported | Both tests. |
-| `src/terminal/osc/parsers.zig` | `.../osc/parsers/mod.rs` | ported | 17 submodules. |
-| `src/terminal/osc/parsers/change_window_icon.zig` | `.../change_window_icon.rs` | ported | — |
-| `src/terminal/osc/parsers/change_window_title.zig` | `.../change_window_title.rs` | ported | All 6 tests. |
-| `src/terminal/osc/parsers/clipboard_operation.zig` | `.../clipboard_operation.rs` | ported | Allocator test weakened (S194-F2). |
-| `src/terminal/osc/parsers/color.zig` | `.../color.rs` | ported | All 11 tests + 3 extra; `_` separator (S194-F3). |
-| `src/terminal/osc/parsers/context_signal.zig` | `.../context_signal.rs` | ported | All 18 tests. |
-| `src/terminal/osc/parsers/hyperlink.zig` | `.../hyperlink.rs` | ported | All 8 tests. |
-| `src/terminal/osc/parsers/iterm2.zig` | `.../iterm2.rs` | ported | All 18 tests. |
-| `src/terminal/osc/parsers/kitty_clipboard_protocol.zig` | `.../kitty_clipboard_protocol.rs` | partial | All 27 tests; `Option_::read` hand-rolled scan (S195-F1). |
-| `src/terminal/osc/parsers/kitty_color.zig` | `.../kitty_color.rs` | ported | All 5 tests + 2 extra. |
-| `src/terminal/osc/parsers/kitty_desktop_notification.zig` | `.../kitty_desktop_notification.rs` | ported | All 57 tests. |
-| `src/terminal/osc/parsers/kitty_dnd_protocol.zig` | `.../kitty_dnd_protocol.rs` | ported | All 5 tests. |
-| `src/terminal/osc/parsers/kitty_text_sizing.zig` | `.../kitty_text_sizing.rs` | partial | All 8 tests; `_` separator rejected (S195-F2). |
-| `src/terminal/osc/parsers/mouse_shape.zig` | `.../mouse_shape.rs` | ported | — |
-| `src/terminal/osc/parsers/osc9.zig` | `.../osc9.rs` | ported | All 61 tests. |
-| `src/terminal/osc/parsers/report_pwd.zig` | `.../report_pwd.rs` | ported | Both tests. |
-| `src/terminal/osc/parsers/rxvt_extension.zig` | `.../rxvt_extension.rs` | ported | Warnings dropped (S196-F1). |
-| `src/terminal/osc/parsers/semantic_prompt.zig` | `.../semantic_prompt.rs` | ported | All 64 tests; exit-code `_` separator (S197-F1). |
-| `src/terminal/search/Thread.zig` | `crates/rustty-vt/src/search/thread.rs` | ported | xev seam timer re-arm defect (S198-F1). |
-| `src/terminal/search/active.zig` | `crates/rustty-vt/src/search/active.rs` | ported | Both tests + 1 extra. |
-| `src/terminal/search/pagelist.zig` | `crates/rustty-vt/src/search/pagelist.rs` | ported | All 9 tests. |
-| `src/terminal/search/screen.zig` | `crates/rustty-vt/src/search/screen.rs` | ported | All 23 tests + 1 extra. |
-| `src/terminal/search/sliding_window.zig` | `crates/rustty-vt/src/search/sliding_window.rs` | ported | All 26 tests + 2 extra. |
-| `src/terminal/search/terminal.zig` | `crates/rustty-vt/src/search/terminal.rs` | ported | All 6 tests. |
-| `src/terminal/search/viewport.zig` | `crates/rustty-vt/src/search/viewport.rs` (+ `tests/viewport_fingerprint_alloc.rs`) | ported | All 5 tests + the FailingAllocator test as an integration test. |
-| `src/terminal/snapshot/checkpoint.zig` | `crates/rustty-vt/src/snapshot/checkpoint.rs` | ported | All 4 tests; golden fixture byte-identical. |
-| `src/terminal/snapshot/continuation.zig` | `.../continuation.rs` | ported | All 5 tests; 7 goldens byte-identical. |
-| `src/terminal/snapshot/envelope.zig` | `.../envelope.rs` | ported | All 3 tests. |
-| `src/terminal/snapshot/fixture.zig` | `.../fixture.rs` | ported | Grammar + formatting identical. |
-| `src/terminal/snapshot/grid.zig` | `.../grid.rs` | ported | All 13 tests; grid-v1.hex byte-identical. |
-| `src/terminal/snapshot/history.zig` | `.../history.rs` | ported | All 4 tests. |
-| `src/terminal/snapshot/hyperlink.zig` | `.../hyperlink.rs` | ported | All 7 tests. |
-| `src/terminal/snapshot/io.zig` | `.../io.rs` | ported | Round-trip test + std.Io stand-in traits. |
-| `src/terminal/snapshot/main.zig` | `.../mod.rs` | ported | All 11 submodules + re-exports. |
-| `src/terminal/snapshot/page.zig` | `.../page.rs` | ported | All 19 tests; 3 goldens byte-identical; decode OOM path (S204-F1). |
-| `src/terminal/snapshot/record.zig` | `.../record.rs` | ported | All 8 tests. |
-| `src/terminal/snapshot/screen.zig` | `.../screen.rs` | ported | All 22 tests + 2 comptime-assert stand-ins. |
-| `src/terminal/snapshot/snapshot.zig` | `.../codec.rs`, `.../mod.rs` | ported | All 15 tests; OOM sweep weakened (S206-F1). |
-| `src/terminal/snapshot/style.zig` | `.../style.rs` | ported | All 6 tests. |
-| `src/terminal/snapshot/terminal.zig` | `.../terminal.rs` | ported | All 12 tests + comptime-len test; alt-screen kitty limit (S207-F1). |
-| `src/terminal/tmux/control.zig` | `crates/rustty-vt/src/tmux/control.rs` | ported | All 18 tests (8 oniguruma-gated, mirroring `build_options`). |
-| `src/terminal/tmux/layout.zig` | `crates/rustty-vt/src/tmux/layout.rs` | ported | All 40 tests. |
-| `src/terminal/tmux/output.zig` | `crates/rustty-vt/src/tmux/output.rs` | ported | All 47 tests; delimiter byte-vs-char (S208-F2). |
-| `src/terminal/tmux/viewer.zig` | `crates/rustty-vt/src/tmux/viewer.rs` | ported | All 9 tests; dead `nextIdle` intentionally dropped. |
+| Oracle unit                                               | Rustty counterpart(s)                                                                                    | Status   | Note                                                                                                                                                  |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/terminal/PageList.zig:1-20404` (10 parts)            | `crates/rustty-vt/src/pagelist/{mod,access,resize,scroll,grow,erase,compress,pin,iter,builder,tests}.rs` | ported   | Every decl, branch, errdefer/defer ordering, tripwire fail point and all ~330 test blocks have counterparts; raw-pointer accessors for SB discipline. |
+| `src/terminal/Parser.zig:1-1116`                          | `crates/rustty-vt/src/parser.rs`                                                                         | ported   | State/TransitionAction/Action, SepList bitset, all 25 tests; C-ABI `Action.C` projection kept as comment.                                             |
+| `src/terminal/Screen.zig:1-12351` (6 parts)               | `crates/rustty-vt/src/screen.rs`                                                                         | ported   | All cursor/scroll/select/resize/hyperlink/style paths + all tests; `io: std.Io` field is a documented NON_PORT.                                       |
+| `src/terminal/ScreenSet.zig:1-154`                        | `crates/rustty-vt/src/screen_set.rs`                                                                     | ported   | EnumMap → fixed arrays; both tests with identical assertions.                                                                                         |
+| `src/terminal/Selection.zig`                              | `crates/rustty-vt/src/selection.rs`                                                                      | ported   | All 20 tests, assertion-for-assertion.                                                                                                                |
+| `src/terminal/SelectionGesture.zig`                       | `crates/rustty-vt/src/selection_gesture.rs`                                                              | ported   | All 35 tests; `pixelFromFloat` replaced by Rust's saturating float→int cast (identical semantics).                                                    |
+| `src/terminal/StringMap.zig`                              | `crates/rustty-vt/src/string_map.rs`                                                                     | ported   | Oniguruma-gated search iterator; url regex inlined (vt cannot depend on rustty-config).                                                               |
+| `src/terminal/Tabstops.zig`                               | `crates/rustty-vt/src/tabstops.rs`                                                                       | ported   | All 7 tests; resize OOM path aborts instead of returning (S141-F3).                                                                                   |
+| `src/terminal/Terminal.zig:1-16505` (8 parts)             | `crates/rustty-vt/src/terminal.rs`                                                                       | ported   | Full struct/flags/modes/print/erase/resize/DECCOLM/kitty paths + all ~500 tests.                                                                      |
+| `src/terminal/UTF8Decoder.zig`                            | `crates/rustty-vt/src/utf8_decoder.rs`                                                                   | ported   | Tables verbatim; branchless reshape machine-checked against reference control flow.                                                                   |
+| `src/terminal/ansi.zig`                                   | `crates/rustty-vt/src/ansi.rs`                                                                           | ported   | All enums and discriminants.                                                                                                                          |
+| `src/terminal/apc.zig`                                    | `crates/rustty-vt/src/apc/mod.rs`                                                                        | partial  | All 23 tests ported; the `build_options.glyph_protocol` comptime gate is missing from the handler (S149-F1).                                          |
+| `src/terminal/bitmap_allocator.zig`                       | `crates/rustty-vt/src/bitmap_allocator.rs`                                                               | ported   | All 25 tests; private `dumpBitmaps` omitted (S149-F3).                                                                                                |
+| `src/terminal/build_options.zig`                          | `crates/rustty-vt/src/{build_options,options}.rs`                                                        | ported   | Features parse + `add()` resolution; generated module is `options.rs`.                                                                                |
+| `src/terminal/charsets.zig`                               | `crates/rustty-vt/src/charsets.rs`                                                                       | ported   | All tables verified element-wise.                                                                                                                     |
+| `src/terminal/clipboard.zig`                              | `crates/rustty-vt/src/clipboard.rs`                                                                      | ported   | `Location` closed-enum divergence (S150-F2).                                                                                                          |
+| `src/terminal/color.zig`                                  | `crates/rustty-vt/src/color.rs`, `crates/rustty-vt-c/src/color.rs`                                       | ported   | 33/34 tests equal; `RGB.parse` weakened (S150-F1).                                                                                                    |
+| `src/terminal/compress.zig`                               | `crates/rustty-vt/src/compress.rs`                                                                       | ported   | Module hub.                                                                                                                                           |
+| `src/terminal/csi.zig`                                    | `crates/rustty-vt/src/csi.rs`                                                                            | ported   | —                                                                                                                                                     |
+| `src/terminal/cursor.zig`                                 | `crates/rustty-vt/src/cursor.rs`                                                                         | ported   | —                                                                                                                                                     |
+| `src/terminal/dcs.zig`                                    | `crates/rustty-vt/src/dcs.rs`                                                                            | ported   | All 10 tests; tmux gate mirrors `build_options`.                                                                                                      |
+| `src/terminal/device_attributes.zig`                      | `crates/rustty-vt/src/device_attributes.rs`                                                              | ported   | All 7 tests.                                                                                                                                          |
+| `src/terminal/device_status.zig`                          | `crates/rustty-vt/src/device_status.rs`                                                                  | ported   | Encode sizes frozen and asserted.                                                                                                                     |
+| `src/terminal/focus.zig`                                  | `crates/rustty-vt/src/focus.rs`                                                                          | ported   | —                                                                                                                                                     |
+| `src/terminal/formatter.zig:1-7030` (4 parts)             | `crates/rustty-vt/src/formatter.rs`                                                                      | partial  | All formatters + all tests; `codepoint_map` dropped at delegation (S151-F1).                                                                          |
+| `src/terminal/fraction.zig`                               | `crates/rustty-vt/src/fraction.rs`                                                                       | ported   | All 43 assertions.                                                                                                                                    |
+| `src/terminal/hash_map.zig`                               | `crates/rustty-vt/src/hash_map.rs`                                                                       | ported   | 27 tests + 2 additive; `KeyIterator`/`ValueIterator` absent (S155-F2).                                                                                |
+| `src/terminal/highlight.zig`                              | `crates/rustty-vt/src/highlight.rs`                                                                      | ported   | OOM propagation folded (S155-F6).                                                                                                                     |
+| `src/terminal/hyperlink.zig`                              | `crates/rustty-vt/src/hyperlink.rs`                                                                      | ported   | `PageEntry.hash` uses SipHash, not seed-0 Wyhash (S155-F1).                                                                                           |
+| `src/terminal/kitty.zig`                                  | `crates/rustty-vt/src/kitty/mod.rs`                                                                      | ported   | Submodule hub.                                                                                                                                        |
+| `src/terminal/lib.zig`                                    | `crates/rustty-lib/*`, `crates/rustty-vt-c/src/io.rs`                                                    | replaced | C-ABI plumbing hub; verbatim comment block retained (S155-F7 covers the stale text).                                                                  |
+| `src/terminal/main.zig`                                   | `crates/rustty-vt/src/lib.rs`                                                                            | ported   | Every import/re-export mapped.                                                                                                                        |
+| `src/terminal/mem.zig`                                    | `crates/rustty-vt/src/mem.rs`                                                                            | ported   | All 3 tests; madvise warnings dropped (S156-F3).                                                                                                      |
+| `src/terminal/modes.zig`                                  | `crates/rustty-vt/src/modes.rs`                                                                          | ported   | 43-row table, all 14 tests.                                                                                                                           |
+| `src/terminal/mouse.zig`                                  | `crates/rustty-vt/src/mouse.rs`, `crates/rustty-apprt/src/gtk/class/surface.rs`                          | partial  | `Shape.getGObjectType` stripped, GTK property untyped (S156-F2).                                                                                      |
+| `src/terminal/osc.zig`                                    | `crates/rustty-vt/src/osc/mod.rs`                                                                        | ported   | Parser/Capture/Terminator + 5 capture tests; header check tautological (S156-F1).                                                                     |
+| `src/terminal/page.zig:1-4462` (3 parts)                  | `crates/rustty-vt/src/{page,page_impl,page_tests}.rs`                                                    | ported   | Page/Row/Cell/Mask/Capacity + all 34 tests.                                                                                                           |
+| `src/terminal/parse_table.zig`                            | `crates/rustty-vt/src/parse_table.rs`                                                                    | ported   | Every transition verified.                                                                                                                            |
+| `src/terminal/paste.zig`                                  | `crates/rustty-vt/src/paste.rs`                                                                          | ported   | OTP/grant/encode precedence identical.                                                                                                                |
+| `src/terminal/point.zig`                                  | `crates/rustty-vt/src/point.rs`, `crates/rustty-vt-c/src/point.rs`                                       | ported   | —                                                                                                                                                     |
+| `src/terminal/ref_counted_set.zig`                        | `crates/rustty-vt/src/ref_counted_set.rs`                                                                | ported   | Full Robin-Hood/PSL logic + both tests.                                                                                                               |
+| `src/terminal/render.zig`                                 | `crates/rustty-vt/src/render.rs`                                                                         | ported   | All 20 tests; two low deltas (S161-F1/F2).                                                                                                            |
+| `src/terminal/search.zig`                                 | `crates/rustty-vt/src/search/mod.rs`                                                                     | ported   | Re-export hub.                                                                                                                                        |
+| `src/terminal/selection_codepoints.zig`                   | `crates/rustty-vt/src/selection_codepoints.rs`                                                           | ported   | Tables identical.                                                                                                                                     |
+| `src/terminal/sgr.zig`                                    | `crates/rustty-vt/src/sgr.rs`, `crates/rustty-vt-c/src/sgr.rs`                                           | ported   | All 33 tests.                                                                                                                                         |
+| `src/terminal/size.zig`                                   | `crates/rustty-render-types/src/term_size.rs`                                                            | ported   | Hoisted (A1) and re-exported as `rustty_vt::size`.                                                                                                    |
+| `src/terminal/size_report.zig`                            | `crates/rustty-vt/src/size_report.rs`                                                                    | ported   | All 5 tests byte-identical.                                                                                                                           |
+| `src/terminal/stream.zig:1-5352` (3 parts)                | `crates/rustty-vt/src/stream.rs`                                                                         | ported   | Comptime `vt()` union → `Handler` trait; all CSI/OSC/ESC arms and all tests.                                                                          |
+| `src/terminal/stream_continuation.zig`                    | `crates/rustty-vt/src/stream_continuation.rs`                                                            | ported   | All 8 tests; FailingAllocator → tripwire.                                                                                                             |
+| `src/terminal/stream_terminal.zig:1-6538` (3 parts)       | `crates/rustty-vt/src/stream_terminal.rs`                                                                | ported   | All handler arms + all 63+8 tests.                                                                                                                    |
+| `src/terminal/style.zig`                                  | `crates/rustty-vt/src/style.rs`                                                                          | ported   | All 38 tests; only debug `format` text differs (refuted).                                                                                             |
+| `src/terminal/sys.zig`                                    | `crates/rustty-vt/src/sys.rs`, `crates/rustty-os/src/file.rs`, `crates/rustty-vt-c/src/sys.rs`           | ported   | decode_png/random_secure seams.                                                                                                                       |
+| `src/terminal/tmux.zig`                                   | `crates/rustty-vt/src/tmux/mod.rs`                                                                       | ported   | Submodule hub.                                                                                                                                        |
+| `src/terminal/x11_color.zig`                              | `crates/rustty-vt/src/x11_color.rs` + `res/rgb.txt`                                                      | ported   | rgb.txt byte-identical.                                                                                                                               |
+| `src/terminal/apc/glyph.zig`                              | `crates/rustty-vt/src/apc/glyph/mod.rs`                                                                  | ported   | —                                                                                                                                                     |
+| `src/terminal/apc/glyph/Glossary.zig`                     | `.../glyph/glossary.rs`                                                                                  | ported   | All 11 tests.                                                                                                                                         |
+| `src/terminal/apc/glyph/execute.zig`                      | `.../glyph/execute.rs`                                                                                   | ported   | All 12 tests.                                                                                                                                         |
+| `src/terminal/apc/glyph/request.zig`                      | `.../glyph/request.rs`                                                                                   | ported   | All 19 tests; `_` separator divergence (S170-F1).                                                                                                     |
+| `src/terminal/apc/glyph/response.zig`                     | `.../glyph/response.rs`                                                                                  | ported   | All 12 tests.                                                                                                                                         |
+| `src/terminal/c/allocator.zig`                            | `crates/rustty-vt-c/src/allocator.rs`                                                                    | ported   | All 6 tests + 1 extra.                                                                                                                                |
+| `src/terminal/c/build_info.zig`                           | `crates/rustty-vt-c/src/build_info.rs`                                                                   | ported   | All 11 tests.                                                                                                                                         |
+| `src/terminal/c/cell.zig`                                 | `crates/rustty-vt-c/src/cell.rs`                                                                         | ported   | All 8 tests.                                                                                                                                          |
+| `src/terminal/c/color.zig`                                | `crates/rustty-vt-c/src/color.rs`                                                                        | ported   | All 22 tests.                                                                                                                                         |
+| `src/terminal/c/color_scheme.zig`                         | `crates/rustty-vt-c/src/color_scheme.rs`                                                                 | ported   | All 5 tests.                                                                                                                                          |
+| `src/terminal/c/focus.zig`                                | `crates/rustty-vt-c/src/focus.rs`                                                                        | ported   | All 4 tests.                                                                                                                                          |
+| `src/terminal/c/formatter.zig`                            | `crates/rustty-vt-c/src/formatter.rs`                                                                    | ported   | All 13 tests; zero-length alloc path differs (S171-F1).                                                                                               |
+| `src/terminal/c/grid_ref.zig`                             | `crates/rustty-vt-c/src/grid_ref.rs`                                                                     | ported   | All 11 tests.                                                                                                                                         |
+| `src/terminal/c/grid_ref_tracked.zig`                     | `crates/rustty-vt-c/src/grid_ref_tracked.rs`                                                             | ported   | All 4 tests.                                                                                                                                          |
+| `src/terminal/c/io.zig`                                   | `crates/rustty-vt-c/src/io.rs`, `crates/rustty-vt/src/snapshot/io.rs`                                    | ported   | All 11 tests; zero-length `stream_to` guard absent (refuted).                                                                                         |
+| `src/terminal/c/key_encode.zig`                           | `crates/rustty-vt-c/src/key_encode.rs`                                                                   | ported   | All 8 tests; warnings bypass log sink (S172-F1).                                                                                                      |
+| `src/terminal/c/key_event.zig`                            | `crates/rustty-vt-c/src/key_event.rs`                                                                    | ported   | All 3 tests.                                                                                                                                          |
+| `src/terminal/c/kitty_graphics.zig`                       | `crates/rustty-vt-c/src/kitty_graphics.rs`                                                               | ported   | All 30 tests + 2 D11 tests.                                                                                                                           |
+| `src/terminal/c/main.zig`                                 | `crates/rustty-vt-c/src/lib.rs`                                                                          | ported   | All 198 exports set-differenced with no gaps.                                                                                                         |
+| `src/terminal/c/modes.zig`                                | `crates/rustty-vt-c/src/modes.rs`                                                                        | ported   | All 7 tests.                                                                                                                                          |
+| `src/terminal/c/mouse_encode.zig`                         | `crates/rustty-vt-c/src/mouse_encode.rs`                                                                 | ported   | All 7 tests; warnings bypass log sink (S174-F1).                                                                                                      |
+| `src/terminal/c/mouse_event.zig`                          | `crates/rustty-vt-c/src/mouse_event.rs`                                                                  | ported   | All 3 tests.                                                                                                                                          |
+| `src/terminal/c/osc.zig`                                  | `crates/rustty-vt-c/src/osc.rs`                                                                          | partial  | Parser backed by the global allocator (S174-F3) + stderr warn (S174-F2).                                                                              |
+| `src/terminal/c/paste.zig`                                | `crates/rustty-vt-c/src/paste.rs`                                                                        | partial  | Out-of-range clipboard location rejected (S174-F4); mimes OOM path dropped (S174-F5).                                                                 |
+| `src/terminal/c/render.zig`                               | `crates/rustty-vt-c/src/render.rs`                                                                       | ported   | All 46 tests + 12 extra; caller allocator not threaded (S175-F1).                                                                                     |
+| `src/terminal/c/result.zig`                               | `crates/rustty-vt-c/src/result.rs`                                                                       | ported   | All 8 discriminants.                                                                                                                                  |
+| `src/terminal/c/row.zig`                                  | `crates/rustty-vt-c/src/row.rs`                                                                          | ported   | All 5 tests + 1 extra.                                                                                                                                |
+| `src/terminal/c/search.zig`                               | `crates/rustty-vt-c/src/search.rs`                                                                       | partial  | All 17 tests; engine internals on the global allocator (S176-F1).                                                                                     |
+| `src/terminal/c/selection.zig`                            | `crates/rustty-vt-c/src/selection.rs`                                                                    | ported   | All 3 tests.                                                                                                                                          |
+| `src/terminal/c/selection_gesture.zig`                    | `crates/rustty-vt-c/src/selection_gesture.rs`                                                            | ported   | All 16 tests + 6 extra; `instant_from_ns` totality (S177-F2).                                                                                         |
+| `src/terminal/c/sgr.zig`                                  | `crates/rustty-vt-c/src/sgr.rs`                                                                          | ported   | Both tests; overflow warn to stderr (S177-F1).                                                                                                        |
+| `src/terminal/c/size_report.zig`                          | `crates/rustty-vt-c/src/size_report.rs`                                                                  | ported   | All 4 tests + 1 extra.                                                                                                                                |
+| `src/terminal/c/snapshot.zig`                             | `crates/rustty-vt-c/src/snapshot.rs`                                                                     | ported   | All 5 tests.                                                                                                                                          |
+| `src/terminal/c/style.zig`                                | `crates/rustty-vt-c/src/style.rs`                                                                        | ported   | Both comptime layout blocks reproduced as const asserts.                                                                                              |
+| `src/terminal/c/sys.zig`                                  | `crates/rustty-vt-c/src/sys.rs`                                                                          | ported   | All 8 tests; `log_stderr` differences (S178-F1/F2).                                                                                                   |
+| `src/terminal/c/terminal.zig:1-6247` (3 parts)            | `crates/rustty-vt-c/src/terminal.rs`                                                                     | ported   | All decls + all 115 tests; allocator/limit deltas (S179-F1/F2/F3).                                                                                    |
+| `src/terminal/c/types.zig`                                | `crates/rustty-vt-c/src/types.rs`                                                                        | ported   | 159 manifest rows; 4 stale enum-value rows (S182-F1..F4).                                                                                             |
+| `src/terminal/c/unicode.zig`                              | `crates/rustty-vt-c/src/unicode.rs`                                                                      | ported   | All 8 tests.                                                                                                                                          |
+| `src/terminal/compress/Page.zig`                          | `crates/rustty-vt/src/compress/page.rs`                                                                  | ported   | All 4 tests + 1 extra.                                                                                                                                |
+| `src/terminal/compress/lz4.zig`                           | `crates/rustty-vt/src/compress/lz4.rs`                                                                   | ported   | Byte-for-byte codec; all 10 tests.                                                                                                                    |
+| `src/terminal/compress/lz4_differential.zig`              | `crates/rustty-vt/src/compress/lz4_differential.rs`                                                      | ported   | Both suites, identical budgets.                                                                                                                       |
+| `src/terminal/kitty/clipboard.zig`                        | `crates/rustty-vt/src/kitty/clipboard.rs`                                                                | ported   | Re-export hub + concrete ref-all-decls test.                                                                                                          |
+| `src/terminal/kitty/clipboard_command.zig`                | `.../clipboard_command.rs`                                                                               | ported   | All 19 tests.                                                                                                                                         |
+| `src/terminal/kitty/clipboard_grants.zig`                 | `.../clipboard_grants.rs`                                                                                | ported   | All 8 tests.                                                                                                                                          |
+| `src/terminal/kitty/clipboard_response.zig`               | `.../clipboard_response.rs`                                                                              | ported   | All 15 tests, byte-identical strings.                                                                                                                 |
+| `src/terminal/kitty/clipboard_write.zig`                  | `.../clipboard_write.rs`                                                                                 | ported   | All 20 tests.                                                                                                                                         |
+| `src/terminal/kitty/color.zig`                            | `crates/rustty-vt/src/kitty/color.rs`                                                                    | ported   | —                                                                                                                                                     |
+| `src/terminal/kitty/dnd.zig`                              | `crates/rustty-vt/src/kitty/dnd.rs`                                                                      | ported   | Re-export hub.                                                                                                                                        |
+| `src/terminal/kitty/dnd_command.zig`                      | `.../dnd_command.rs`                                                                                     | ported   | All 11 tests.                                                                                                                                         |
+| `src/terminal/kitty/dnd_drop.zig`                         | `.../dnd_drop.rs`                                                                                        | ported   | All 13 event arms.                                                                                                                                    |
+| `src/terminal/kitty/dnd_response.zig`                     | `.../dnd_response.rs`                                                                                    | ported   | All 6 tests.                                                                                                                                          |
+| `src/terminal/kitty/dnd_test.zig`                         | `.../dnd_test.rs`                                                                                        | ported   | All 21 harness tests.                                                                                                                                 |
+| `src/terminal/kitty/graphics.zig`                         | `crates/rustty-vt/src/kitty/graphics.rs`                                                                 | ported   | Stale deferral comment (S185-F1).                                                                                                                     |
+| `src/terminal/kitty/graphics_animation.zig`               | `.../graphics_animation.rs`                                                                              | ported   | —                                                                                                                                                     |
+| `src/terminal/kitty/graphics_command.zig`                 | `.../graphics_command.rs`                                                                                | ported   | All 38 tests; `_` separator divergence (S186-F1).                                                                                                     |
+| `src/terminal/kitty/graphics_exec.zig` (2 parts)          | `.../graphics_exec.rs`                                                                                   | ported   | All 68 tests.                                                                                                                                         |
+| `src/terminal/kitty/graphics_image.zig`                   | `.../graphics_image.rs`                                                                                  | ported   | 28/29 tests (S189-F1); readFile truncation (S189-F2).                                                                                                 |
+| `src/terminal/kitty/graphics_pixel.zig`                   | `.../graphics_pixel.rs`                                                                                  | ported   | All 6 tests + differential KAT.                                                                                                                       |
+| `src/terminal/kitty/graphics_render.zig`                  | `.../graphics_render.rs`                                                                                 | ported   | —                                                                                                                                                     |
+| `src/terminal/kitty/graphics_storage.zig` (3 parts)       | `.../graphics_storage.rs`                                                                                | ported   | All decls + all 71 tests.                                                                                                                             |
+| `src/terminal/kitty/graphics_unicode.zig`                 | `.../graphics_unicode.rs`                                                                                | ported   | 295-entry diacritics table verified.                                                                                                                  |
+| `src/terminal/kitty/key.zig`                              | `crates/rustty-vt/src/kitty/key.rs`                                                                      | ported   | All 5 tests.                                                                                                                                          |
+| `src/terminal/osc/encoding.zig`                           | `crates/rustty-vt/src/osc/encoding.rs`                                                                   | ported   | Test input weakened (S194-F4).                                                                                                                        |
+| `src/terminal/osc/kitty_metadata.zig`                     | `.../osc/kitty_metadata.rs`                                                                              | ported   | Both tests.                                                                                                                                           |
+| `src/terminal/osc/parsers.zig`                            | `.../osc/parsers/mod.rs`                                                                                 | ported   | 17 submodules.                                                                                                                                        |
+| `src/terminal/osc/parsers/change_window_icon.zig`         | `.../change_window_icon.rs`                                                                              | ported   | —                                                                                                                                                     |
+| `src/terminal/osc/parsers/change_window_title.zig`        | `.../change_window_title.rs`                                                                             | ported   | All 6 tests.                                                                                                                                          |
+| `src/terminal/osc/parsers/clipboard_operation.zig`        | `.../clipboard_operation.rs`                                                                             | ported   | Allocator test weakened (S194-F2).                                                                                                                    |
+| `src/terminal/osc/parsers/color.zig`                      | `.../color.rs`                                                                                           | ported   | All 11 tests + 3 extra; `_` separator (S194-F3).                                                                                                      |
+| `src/terminal/osc/parsers/context_signal.zig`             | `.../context_signal.rs`                                                                                  | ported   | All 18 tests.                                                                                                                                         |
+| `src/terminal/osc/parsers/hyperlink.zig`                  | `.../hyperlink.rs`                                                                                       | ported   | All 8 tests.                                                                                                                                          |
+| `src/terminal/osc/parsers/iterm2.zig`                     | `.../iterm2.rs`                                                                                          | ported   | All 18 tests.                                                                                                                                         |
+| `src/terminal/osc/parsers/kitty_clipboard_protocol.zig`   | `.../kitty_clipboard_protocol.rs`                                                                        | partial  | All 27 tests; `Option_::read` hand-rolled scan (S195-F1).                                                                                             |
+| `src/terminal/osc/parsers/kitty_color.zig`                | `.../kitty_color.rs`                                                                                     | ported   | All 5 tests + 2 extra.                                                                                                                                |
+| `src/terminal/osc/parsers/kitty_desktop_notification.zig` | `.../kitty_desktop_notification.rs`                                                                      | ported   | All 57 tests.                                                                                                                                         |
+| `src/terminal/osc/parsers/kitty_dnd_protocol.zig`         | `.../kitty_dnd_protocol.rs`                                                                              | ported   | All 5 tests.                                                                                                                                          |
+| `src/terminal/osc/parsers/kitty_text_sizing.zig`          | `.../kitty_text_sizing.rs`                                                                               | partial  | All 8 tests; `_` separator rejected (S195-F2).                                                                                                        |
+| `src/terminal/osc/parsers/mouse_shape.zig`                | `.../mouse_shape.rs`                                                                                     | ported   | —                                                                                                                                                     |
+| `src/terminal/osc/parsers/osc9.zig`                       | `.../osc9.rs`                                                                                            | ported   | All 61 tests.                                                                                                                                         |
+| `src/terminal/osc/parsers/report_pwd.zig`                 | `.../report_pwd.rs`                                                                                      | ported   | Both tests.                                                                                                                                           |
+| `src/terminal/osc/parsers/rxvt_extension.zig`             | `.../rxvt_extension.rs`                                                                                  | ported   | Warnings dropped (S196-F1).                                                                                                                           |
+| `src/terminal/osc/parsers/semantic_prompt.zig`            | `.../semantic_prompt.rs`                                                                                 | ported   | All 64 tests; exit-code `_` separator (S197-F1).                                                                                                      |
+| `src/terminal/search/Thread.zig`                          | `crates/rustty-vt/src/search/thread.rs`                                                                  | ported   | xev seam timer re-arm defect (S198-F1).                                                                                                               |
+| `src/terminal/search/active.zig`                          | `crates/rustty-vt/src/search/active.rs`                                                                  | ported   | Both tests + 1 extra.                                                                                                                                 |
+| `src/terminal/search/pagelist.zig`                        | `crates/rustty-vt/src/search/pagelist.rs`                                                                | ported   | All 9 tests.                                                                                                                                          |
+| `src/terminal/search/screen.zig`                          | `crates/rustty-vt/src/search/screen.rs`                                                                  | ported   | All 23 tests + 1 extra.                                                                                                                               |
+| `src/terminal/search/sliding_window.zig`                  | `crates/rustty-vt/src/search/sliding_window.rs`                                                          | ported   | All 26 tests + 2 extra.                                                                                                                               |
+| `src/terminal/search/terminal.zig`                        | `crates/rustty-vt/src/search/terminal.rs`                                                                | ported   | All 6 tests.                                                                                                                                          |
+| `src/terminal/search/viewport.zig`                        | `crates/rustty-vt/src/search/viewport.rs` (+ `tests/viewport_fingerprint_alloc.rs`)                      | ported   | All 5 tests + the FailingAllocator test as an integration test.                                                                                       |
+| `src/terminal/snapshot/checkpoint.zig`                    | `crates/rustty-vt/src/snapshot/checkpoint.rs`                                                            | ported   | All 4 tests; golden fixture byte-identical.                                                                                                           |
+| `src/terminal/snapshot/continuation.zig`                  | `.../continuation.rs`                                                                                    | ported   | All 5 tests; 7 goldens byte-identical.                                                                                                                |
+| `src/terminal/snapshot/envelope.zig`                      | `.../envelope.rs`                                                                                        | ported   | All 3 tests.                                                                                                                                          |
+| `src/terminal/snapshot/fixture.zig`                       | `.../fixture.rs`                                                                                         | ported   | Grammar + formatting identical.                                                                                                                       |
+| `src/terminal/snapshot/grid.zig`                          | `.../grid.rs`                                                                                            | ported   | All 13 tests; grid-v1.hex byte-identical.                                                                                                             |
+| `src/terminal/snapshot/history.zig`                       | `.../history.rs`                                                                                         | ported   | All 4 tests.                                                                                                                                          |
+| `src/terminal/snapshot/hyperlink.zig`                     | `.../hyperlink.rs`                                                                                       | ported   | All 7 tests.                                                                                                                                          |
+| `src/terminal/snapshot/io.zig`                            | `.../io.rs`                                                                                              | ported   | Round-trip test + std.Io stand-in traits.                                                                                                             |
+| `src/terminal/snapshot/main.zig`                          | `.../mod.rs`                                                                                             | ported   | All 11 submodules + re-exports.                                                                                                                       |
+| `src/terminal/snapshot/page.zig`                          | `.../page.rs`                                                                                            | ported   | All 19 tests; 3 goldens byte-identical; decode OOM path (S204-F1).                                                                                    |
+| `src/terminal/snapshot/record.zig`                        | `.../record.rs`                                                                                          | ported   | All 8 tests.                                                                                                                                          |
+| `src/terminal/snapshot/screen.zig`                        | `.../screen.rs`                                                                                          | ported   | All 22 tests + 2 comptime-assert stand-ins.                                                                                                           |
+| `src/terminal/snapshot/snapshot.zig`                      | `.../codec.rs`, `.../mod.rs`                                                                             | ported   | All 15 tests; OOM sweep weakened (S206-F1).                                                                                                           |
+| `src/terminal/snapshot/style.zig`                         | `.../style.rs`                                                                                           | ported   | All 6 tests.                                                                                                                                          |
+| `src/terminal/snapshot/terminal.zig`                      | `.../terminal.rs`                                                                                        | ported   | All 12 tests + comptime-len test; alt-screen kitty limit (S207-F1).                                                                                   |
+| `src/terminal/tmux/control.zig`                           | `crates/rustty-vt/src/tmux/control.rs`                                                                   | ported   | All 18 tests (8 oniguruma-gated, mirroring `build_options`).                                                                                          |
+| `src/terminal/tmux/layout.zig`                            | `crates/rustty-vt/src/tmux/layout.rs`                                                                    | ported   | All 40 tests.                                                                                                                                         |
+| `src/terminal/tmux/output.zig`                            | `crates/rustty-vt/src/tmux/output.rs`                                                                    | ported   | All 47 tests; delimiter byte-vs-char (S208-F2).                                                                                                       |
+| `src/terminal/tmux/viewer.zig`                            | `crates/rustty-vt/src/tmux/viewer.rs`                                                                    | ported   | All 9 tests; dead `nextIdle` intentionally dropped.                                                                                                   |
 
-**Partially-read units: none.** Every shard reported an empty `units_partial` list; each oracle file was read end-to-end (multi-part files were split on line boundaries and the straddling declaration/test was always read past the boundary to completion). The `partial` rows above are *counterpart* statuses — the unit was fully read and fully compared, but at least one declaration or test in it diverges (each such row cites the finding id).
+**Partially-read units: none.** Every shard reported an empty `units_partial` list; each oracle file was read end-to-end (multi-part files were split on line boundaries and the straddling declaration/test was always read past the boundary to completion). The `partial` rows above are _counterpart_ statuses — the unit was fully read and fully compared, but at least one declaration or test in it diverges (each such row cites the finding id).
 
 ## Findings
 
@@ -184,6 +184,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 ### High
 
 #### S151-F1 — codepoint_map is discarded when Terminal/Screen/PageList formatters delegate downward (clipboard-codepoint-map has no effect)
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** high
 - **Oracle:** `src/terminal/formatter.zig:486` (TerminalFormatter → ScreenFormatter.init(..., self.opts)), `:691-698` (ScreenFormatter → PageListFormatter.init(&self.screen.pages, self.opts)), `:899` (PageListFormatter → PageFormatter.init(chunk.node.page(), self.opts))
 - **Rustty:** `crates/rustty-vt/src/formatter.rs:766-767, 1000-1001, 1310`, helper `copy_options` at `1240-1250`
@@ -192,6 +193,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** At the three content-delegation sites pass an Options copy that clones `codepoint_map` (e.g. `clone_options`), keeping the map-less copy only for the discarding extras passes; add a Screen/Terminal-level test asserting replacement happens through `ScreenFormatter`.
 
 #### S198-F1 — Search refresh timer is one-shot in rustty: the callback's re-arm is immediately cancelled by apply_action(Disarm)
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** high
 - **Oracle:** `src/terminal/search/Thread.zig:468-499` (`refreshCallback`), `:415-433` (`startRefreshTimer`)
 - **Rustty:** `crates/rustty-vt/src/search/thread.rs:499-503, 946-989, 1386-1406`
@@ -202,6 +204,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 ### Medium
 
 #### S127-F1 — clone test compares only line-limit fields instead of the whole Limits struct
+
 - **Status:** CONFIRMED · **Kind:** weakened-assertion · **Severity:** medium
 - **Oracle:** `src/terminal/PageList.zig:11390-11395`
 - **Rustty:** `crates/rustty-vt/src/pagelist/tests.rs:6969-6978`
@@ -210,6 +213,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Replace the three asserts with `assert_eq!(s.limits, cloned.limits);`.
 
 #### S131-F1 — reset-invalidates-stale-refs test drops the node-address-reuse loop and both nodeIsValid assertions
+
 - **Status:** CONFIRMED · **Kind:** weakened-assertion · **Severity:** medium
 - **Oracle:** `src/terminal/PageList.zig:18921-18967`
 - **Rustty:** `crates/rustty-vt/src/pagelist/tests.rs:1693-1719`
@@ -218,6 +222,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Port the loop faithfully with up to `PAGE_PREHEAT*4` (node ptr, serial) pairs and all six assertions.
 
 #### S133-F1 — Screen.clearCells does not clear the row's kitty_virtual_placeholder flag
+
 - **Status:** CONFIRMED · **Kind:** missing-branch · **Severity:** medium
 - **Oracle:** `src/terminal/Screen.zig:1818-1828`
 - **Rustty:** `crates/rustty-vt/src/screen.rs:2739-2742`
@@ -226,6 +231,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Add the flag-clearing block after the styled block in `Screen::clear_cells` (mirror `page_impl.rs:1975-1990`) and delete the stale deferral note.
 
 #### S133-F2 — Screen.Options.default uses kitty_image_storage_limit = 0 instead of 320MB (ghostty) / 10MB (lib)
+
 - **Status:** CONFIRMED · **Kind:** different-constant · **Severity:** medium
 - **Oracle:** `src/terminal/Screen.zig:273-293`
 - **Rustty:** `crates/rustty-vt/src/screen.rs:400-423`
@@ -234,6 +240,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Set the artifact default (320 MB) in `Options::default()` and remove the stale vt-12 note.
 
 #### S133-F3 — cursorCopy does not restore the old cursor when manualStyleUpdate fails; error set collapsed to OutOfMemory
+
 - **Status:** CONFIRMED · **Kind:** missing-error-path · **Severity:** medium
 - **Oracle:** `src/terminal/Screen.zig:1430-1451`
 - **Rustty:** `crates/rustty-vt/src/screen.rs:2341-2380`
@@ -242,6 +249,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Capture `let old = self.cursor;` (Cursor is Copy), restore it on `Err(e)` and return `e`; widen the return type to `IncreaseCapacityError`.
 
 #### S141-F1 — libghostty-vt default kitty_image_storage_limit is 320MB instead of the .lib artifact's 10MB
+
 - **Status:** CONFIRMED · **Kind:** different-constant · **Severity:** medium
 - **Oracle:** `src/terminal/Terminal.zig:289-297` (default consumed by `src/terminal/c/terminal.zig:880-886`)
 - **Rustty:** `crates/rustty-vt-c/src/terminal.rs:1547-1560`
@@ -250,6 +258,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Add an `Options` constructor in rustty-vt carrying the reference field defaults and use `10 * 1000 * 1000` for the lib artifact in rustty-vt-c.
 
 #### S143-F1 — resize failure-path test compares only subsets of flags, tabstops and cursor
+
 - **Status:** CONFIRMED · **Kind:** weakened-assertion · **Severity:** medium
 - **Oracle:** `src/terminal/Terminal.zig:4528-4569`
 - **Rustty:** `crates/rustty-vt/src/terminal.rs:19136-19306`
@@ -258,6 +267,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Snapshot `t.flags` (derive PartialEq), the full tabstop table (or all `get(i)`), and the whole `Cursor` value before/after the failed resize.
 
 #### S149-F1 — apc Handler does not gate the glyph protocol on build_options.glyph_protocol
+
 - **Status:** CONFIRMED · **Kind:** missing-branch · **Severity:** medium
 - **Oracle:** `src/terminal/apc.zig:84-97, 134-140, 200-207, 237-246, 280-283, 294-297, 661, 727`
 - **Rustty:** `crates/rustty-vt/src/apc/mod.rs:174-191, 255-261, 355-362, 427-433, 477, 502, 1069-1086, 1152-1163`
@@ -266,6 +276,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Mirror the kitty gating in feed / feed_slice / end / `State::deinit` / `Command::deinit`, and add the two test skips.
 
 #### S150-F1 — test "RGB.parse" port drops 6 of the reference assertions
+
 - **Status:** CONFIRMED · **Kind:** weakened-assertion · **Severity:** medium
 - **Oracle:** `src/terminal/color.zig:927-976`
 - **Rustty:** `crates/rustty-vt/src/color.rs:1930-2044` (+ `1798-1839`)
@@ -274,6 +285,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Add the six assertions to `rgb_parse`.
 
 #### S150-F2 — clipboard.Location is a closed enum; reference is non-exhaustive enum(c_int){_}
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** medium
 - **Oracle:** `src/terminal/clipboard.zig:4-9`
 - **Rustty:** `crates/rustty-vt/src/clipboard.rs:14-23`
@@ -282,6 +294,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Model `Location` like `WriteStatus`/`ReadStatus` (a transparent i32 newtype with associated consts), or accept and document the D11 divergence next to the type.
 
 #### S156-F1 — ghostty.h ProgressReport.State check never reads the C header (tautological lookup)
+
 - **Status:** CONFIRMED · **Kind:** weakened-assertion · **Severity:** medium
 - **Oracle:** `src/terminal/osc.zig:249-253`
 - **Rustty:** `crates/rustty-vt/src/osc/mod.rs:406-434`
@@ -290,6 +303,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Reuse `mouse.rs`'s `parse_header_enum` (hoist it into rustty-lib) against `include/rustty-embed.h`, plus a probe-can-fail test.
 
 #### S156-F2 — Shape.getGObjectType (GhosttyMouseShape GObject enum) stripped; GTK mouse-shape property is a plain int
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** medium
 - **Oracle:** `src/terminal/mouse.zig:77-92` (+ `apprt/gtk/class/surface.zig:222-241`)
 - **Rustty:** `crates/rustty-apprt/src/gtk/class/surface.rs:247-257`
@@ -298,6 +312,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Register a `RusttyMouseShape` glib enum type and type the `mouse-shape` property with it, matching `surface.zig:222-241`.
 
 #### S170-F1 — Integer control values containing '_' digit separators are rejected where the reference accepts them
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** medium
 - **Oracle:** `src/terminal/apc/glyph/request.zig:106, 217, 220-222, 372`
 - **Rustty:** `crates/rustty-vt/src/apc/glyph/request.rs:437-499` (helpers at `452-465`, `480-499`)
@@ -306,6 +321,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Port Zig's `_` handling to the non-negative branches (skip interior `_`, reject leading/trailing) and add the table rows.
 
 #### S171-F1 — format_alloc with empty output invokes a zero-length raw alloc callback and can return out_of_memory
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** medium
 - **Oracle:** `src/terminal/c/formatter.zig:220-240` (with `std/Io/Writer.zig:2646-2665`)
 - **Rustty:** `crates/rustty-vt-c/src/formatter.rs:578-626`
@@ -314,6 +330,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Skip the allocator entirely for empty output (non-null dangling ptr, len 0, Success), or at minimum use `allocator.alloc_bytes(len)`.
 
 #### S174-F1 — mouse_encode setopt warnings bypass the C API log sink (eprintln! instead of sys::log_fn)
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** medium
 - **Oracle:** `src/terminal/c/mouse_encode.zig:110-171` (five `log.warn` sites)
 - **Rustty:** `crates/rustty-vt-c/src/mouse_encode.rs:320, 355, 374, 395, 406`
@@ -322,6 +339,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Route the five warnings through `sys::log_fn(sys::StdLevel::Warn, "mouse_encode", ...)` with identical text.
 
 #### S174-F2 — osc commandData warning bypasses the C API log sink
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** medium
 - **Oracle:** `src/terminal/c/osc.zig:72-78`
 - **Rustty:** `crates/rustty-vt-c/src/osc.rs:235`
@@ -330,6 +348,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Route through `sys::log_fn(sys::StdLevel::Warn, "osc", ...)`.
 
 #### S174-F3 — C-created OSC parser does not use the caller-supplied allocator for its dynamic payloads
+
 - **Status:** DISPUTED · **Kind:** behavioral-difference · **Severity:** medium
 - **Oracle:** `src/terminal/c/osc.zig:18-36`
 - **Rustty:** `crates/rustty-vt-c/src/osc.rs:34, 66-89`
@@ -339,6 +358,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Apply the terminal.rs F-008 pattern (heap-hold the resolved C allocator inside `OscParserWrapper`, build the parser's `ZigAllocatorRef` from it, reclaim it last in `free`) — and, per the refutation, make the vt-side allocating capture actually allocate through that slot.
 
 #### S174-F4 — terminal_paste rejects an out-of-range clipboard location that the oracle accepts
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** medium
 - **Oracle:** `src/terminal/c/paste.zig:70-73` (with `src/terminal/clipboard.zig:4-9`)
 - **Rustty:** `crates/rustty-vt-c/src/paste.rs:159-175`
@@ -347,6 +367,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Model the C-boundary location as an open value (c_int newtype or `Unknown(c_int)`) threaded to the paste path.
 
 #### S175-F1 — RenderState contents (update/begin_update/deinit) bypass the caller-supplied C allocator
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** medium
 - **Oracle:** `src/terminal/c/render.zig:194-227`
 - **Rustty:** `crates/rustty-vt-c/src/render.rs:630-720`
@@ -355,6 +376,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Complete F-008 Tier 2 — parameterize `rustty_vt::render::RenderState` over the allocator so the three sites can pass `&*state.alloc`; extend the `CountingCAllocator` tests to assert caller alloc calls > 0 on update and live_bytes 0 after free.
 
 #### S176-F1 — Search engine internals are allocated through the Rust global allocator instead of the embedder-supplied C allocator
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** medium
 - **Oracle:** `src/terminal/c/search.zig:253-257`
 - **Rustty:** `crates/rustty-vt-c/src/search.rs:682-685`
@@ -363,6 +385,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Thread the wrapper's resolved C allocator into `TerminalSearch::init` via an allocator_api2 adapter over `ZigAllocator`.
 
 #### S177-F1 — sgr set_params separator-overflow warning writes to stderr instead of the C log callback
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** medium
 - **Oracle:** `src/terminal/c/sgr.zig:9, 68-74`
 - **Rustty:** `crates/rustty-vt-c/src/sgr.rs:33, 584-591`
@@ -371,6 +394,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Replace with `crate::sys::log_fn(StdLevel::Warn, "sgr", format_args!(...))`, add a module `LOG_SCOPE`, and extend the lib.rs log-scope test with an `sgr` row.
 
 #### S177-F2 — instant_from_ns can panic on a large time_ns value where the reference cannot
+
 - **Status:** DISPUTED · **Kind:** behavioral-difference · **Severity:** medium
 - **Oracle:** `src/terminal/c/selection_gesture.zig:739-743`
 - **Rustty:** `crates/rustty-vt-c/src/selection_gesture.rs:1758-1764`
@@ -380,6 +404,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Use `base.checked_add(Duration::from_nanos(ns)).unwrap_or(base)` so the conversion is provably total; refresh the stale PORT NOTE quote.
 
 #### S179-F1 — C-API terminal_new uses the 320MB app kitty-image storage limit instead of the 10MB lib default
+
 - **Status:** CONFIRMED · **Kind:** different-constant · **Severity:** medium
 - **Oracle:** `src/terminal/Terminal.zig:289-298` (default consumed by `src/terminal/c/terminal.zig:875-884`)
 - **Rustty:** `crates/rustty-vt-c/src/terminal.rs:1548-1562`
@@ -388,6 +413,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Pass the `.lib` default (10 MB) in vt-c `new_`, or derive it from an artifact constant.
 
 #### S179-F2 — Terminal internals are not allocated through the caller-supplied C allocator (F-008 Tier-2 residual)
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** medium
 - **Oracle:** `src/terminal/c/terminal.zig:875-884`
 - **Rustty:** `crates/rustty-vt-c/src/terminal.rs:1526-1546`
@@ -396,6 +422,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Thread the resolved C allocator into `ZigTerminal::init` (make rustty-vt's Terminal generic over the allocator, as its `deinit(alloc)` signature already suggests), or record the divergence as a header-documented limitation.
 
 #### S182-F1 — ABI manifest omits RUSTTY_REJECTED (-7) from the RusttyResult enum values
+
 - **Status:** CONFIRMED · **Kind:** missing-branch · **Severity:** medium
 - **Oracle:** `src/terminal/c/types.zig:244` (row) / `src/terminal/c/result.zig:2-11`
 - **Rustty:** `crates/rustty-vt-c/src/types.rs:1418-1435`
@@ -404,6 +431,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Add `("rejected", Rejected),` to the row.
 
 #### S182-F2 — ABI manifest omits RUSTTY_SYS_OPT_RANDOM_SECURE (3) from RusttySysOption
+
 - **Status:** CONFIRMED · **Kind:** missing-branch · **Severity:** medium
 - **Oracle:** `src/terminal/c/types.zig:310` (row) / `src/terminal/c/sys.zig:61-66`
 - **Rustty:** `crates/rustty-vt-c/src/types.rs:2338-2350`
@@ -412,6 +440,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Add `("random_secure", RandomSecure),`.
 
 #### S182-F3 — ABI manifest omits CLIPBOARD_READ (38) and CLIPBOARD_WRITE_MAX_BYTES (39) from RusttyTerminalOption
+
 - **Status:** CONFIRMED · **Kind:** missing-branch · **Severity:** medium
 - **Oracle:** `src/terminal/c/types.zig:315` (row) / `src/terminal/c/terminal.zig:1222-1223`
 - **Rustty:** `crates/rustty-vt-c/src/types.rs:2437-2484`
@@ -420,6 +449,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Append both rows.
 
 #### S182-F4 — ABI manifest omits CLIPBOARD_WRITE_MAX_BYTES (40) from RusttyTerminalData
+
 - **Status:** CONFIRMED · **Kind:** missing-branch · **Severity:** medium
 - **Oracle:** `src/terminal/c/types.zig:314` (row) / `src/terminal/c/terminal.zig:1595`
 - **Rustty:** `crates/rustty-vt-c/src/types.rs:2387-2436`
@@ -428,6 +458,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Append `("clipboard_write_max_bytes", ClipboardWriteMaxBytes),`.
 
 #### S186-F1 — Integer control values containing '_' digit separators are rejected where the reference accepts them (kitty graphics)
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** medium
 - **Oracle:** `src/terminal/kitty/graphics_command.zig:318-324`
 - **Rustty:** `crates/rustty-vt/src/kitty/graphics_command.rs:437-499`
@@ -436,6 +467,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Port Zig's `_` handling to the non-negative branches and add table rows (`"1_0" -> Ok(10)`, `"-1_0" -> Ok(-10)`, `"_10"/"10_" -> InvalidFormat`).
 
 #### S189-F1 — Missing test "image load: rgb, not compressed, relative regular file"
+
 - **Status:** CONFIRMED · **Kind:** missing-test · **Severity:** medium
 - **Oracle:** `src/terminal/kitty/graphics_image.zig:1446-1485`
 - **Rustty:** `crates/rustty-vt/src/kitty/graphics_image.rs:1474-2601` (mod tests)
@@ -444,6 +476,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Add `image_load_rgb_not_compressed_relative_regular_file` writing the fixture into a scratch dir under the crate CWD and passing a relative path as `Command.data`.
 
 #### S189-F2 — readFile with no `s=` size silently TRUNCATES at max_size instead of failing
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** medium
 - **Oracle:** `src/terminal/kitty/graphics_image.zig:440-443`
 - **Rustty:** `crates/rustty-vt/src/kitty/graphics_image.rs:680-687`
@@ -452,6 +485,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Read `MAX_SIZE + 1` (or check `managed.len() >= MAX_SIZE` after the take) and return `Error::InvalidData`, mirroring `error.StreamTooLong`.
 
 #### S194-F2 — test "OSC 52: get/set clipboard with allocator" ported without an allocator, making it a duplicate
+
 - **Status:** CONFIRMED · **Kind:** weakened-assertion · **Severity:** medium
 - **Oracle:** `src/terminal/osc/parsers/clipboard_operation.zig:94-107`
 - **Rustty:** `crates/rustty-vt/src/osc/parsers/clipboard_operation.rs:130-152`
@@ -460,6 +494,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Construct the parser with a `ZigAllocatorRef` in this test.
 
 #### S194-F3 — parse_int_u9 rejects the '_' digit separators that Zig's std.fmt.parseInt accepts (OSC 4/5/104/105)
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** medium
 - **Oracle:** `src/terminal/osc/parsers/color.zig:177-181, 250-254`
 - **Rustty:** `crates/rustty-vt/src/osc/parsers/color.rs:482-488`
@@ -468,6 +503,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Mirror `std.fmt.parseInt`'s separator handling (strip interior `_`, reject leading/trailing/doubled) before the numeric parse.
 
 #### S195-F1 — OSC 5522 Option_::read hand-rolls prefix key matching instead of using the ported ValueIterator
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** medium
 - **Oracle:** `src/terminal/osc/parsers/kitty_clipboard_protocol.zig:90-115` + `src/terminal/osc/kitty_metadata.zig:39-72`
 - **Rustty:** `crates/rustty-vt/src/osc/parsers/kitty_clipboard_protocol.rs:225-292`
@@ -476,6 +512,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Replace the hand-rolled scan with `kitty_metadata::ValueIterator::init(self.tag_name(), None, metadata).next()` (as `kitty_desktop_notification.rs:376-395` does), delete the local `trim_whitespace`, and add the prefix-key regression test.
 
 #### S195-F2 — OSC 66 update() rejects '_' digit separators that Zig's std.fmt.parseInt accepts
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** medium
 - **Oracle:** `src/terminal/osc/parsers/kitty_text_sizing.zig:49-54`
 - **Rustty:** `crates/rustty-vt/src/osc/parsers/kitty_text_sizing.rs:95-105`
@@ -484,6 +521,7 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Suggested fix:** Strip/accept `_` the way Zig's parseInt does before `parse::<u8>()`, ideally via a shared `parse_int_zig` helper.
 
 #### S206-F1 — Allocation-failure transactionality test sweeps 8 tripwire indices instead of every decode allocation, and drops the allocation_count > 0 assertion
+
 - **Status:** CONFIRMED · **Kind:** weakened-assertion · **Severity:** medium
 - **Oracle:** `src/terminal/snapshot/snapshot.zig:1636-1694`
 - **Rustty:** `crates/rustty-vt/src/snapshot/codec.rs:2582-2637`
@@ -491,12 +529,12 @@ Status badges: **CONFIRMED** = both verifier lenses failed to refute; **DISPUTED
 - **Evidence:** oracle `:1637-1652`; rustty `codec.rs:2596-2618`; `grep -rn "SnapshotFp::Alloc" crates/rustty-vt/src` → three sites.
 - **Suggested fix:** Instrument the remaining decode allocation sites, derive the sweep bound from a baseline that counts tripwire hits, and assert that count is > 0.
 
-
 ### Low
 
 The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPUTED). The dominant class is the deliberate one named in the summary: rustty-vt wires no logging facade, so reference `log.*` diagnostics are carried as comments rather than emitted.
 
 #### S122-F1 — All log.err/log.warn diagnostics in this range are commented out (rustty-vt has no logging facility)
+
 - **Status:** CONFIRMED · **Kind:** other · **Severity:** low
 - **Oracle:** `src/terminal/PageList.zig:186, 278, 820-823, 831-834, 845-848, 871-874, 880-883, 891-894, 1828`
 - **Rustty:** `crates/rustty-vt/src/pagelist/mod.rs:572, 625, 1985-1988, 1996-1999, 2010-2013, 2040-2043, 2049-2052, 2060-2063; crates/rustty-vt/src/pagelist/resize.rs:1587`
@@ -505,6 +543,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Route these through the crate's chosen diagnostics seam (e.g. a `log`/`tracing` facade) so the same messages are observable under a `page_list` scope.
 
 #### S123-F1 — All log.err/log.warn diagnostics in this range are commented out (rustty-vt has no logging facility)
+
 - **Status:** CONFIRMED · **Kind:** other · **Severity:** low
 - **Oracle:** `src/terminal/PageList.zig:2282, 2311, 2352, 2373, 2401, 2481, 2555, 3111, 3665, 3742`
 - **Rustty:** `crates/rustty-vt/src/pagelist/resize.rs:2065, 2105, 2158, 2186-2189, 2210-2213, 2291-2294, 2380-2383, 1060-1068; grow.rs 117-120, 873`
@@ -513,6 +552,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Wire a `log`/`tracing` facade into rustty-vt (feature-gated if desired) and replace the commented-out lines with `log::error!`/`log::warn!` calls carrying the same text.
 
 #### S123-F2 — `defer assert(self.total_rows == old_total_rows)` not evaluated on the error exit of the cols branch
+
 - **Status:** CONFIRMED · **Kind:** missing-branch · **Severity:** low
 - **Oracle:** `src/terminal/PageList.zig:2802-2803`
 - **Rustty:** `crates/rustty-vt/src/pagelist/resize.rs:596-597, 674-675`
@@ -521,6 +561,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Also assert (or debug_assert) `self.total_rows == old_total_rows` before the early `return Err(e)` at resize.rs:663-667, or wrap the block in a scope guard.
 
 #### S124-F1 — log.info/log.err calls in increaseCapacity and eraseRows are elided (commented out)
+
 - **Status:** CONFIRMED · **Kind:** other · **Severity:** low
 - **Oracle:** `src/terminal/PageList.zig:4317, 4336, 5580`
 - **Rustty:** `crates/rustty-vt/src/pagelist/grow.rs:767, 784; crates/rustty-vt/src/pagelist/erase.rs:616`
@@ -529,6 +570,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Wire the crate's logging facade (whatever rustty-vt uses for scoped `terminal` logs) and emit the three messages at the same points.
 
 #### S124-F2 — diagram() panics on an unencodable codepoint where Zig `{u}` writes U+FFFD
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/PageList.zig:5926-5931`
 - **Rustty:** `crates/rustty-vt/src/pagelist/access.rs:199-207`
@@ -537,6 +579,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Use `char::from_u32(cp).unwrap_or(char::REPLACEMENT_CHARACTER)` at both sites.
 
 #### S126-F1 — cold-compression-after-incompressible-page test drops the decommitted_raw_bytes == second page len assertion
+
 - **Status:** CONFIRMED · **Kind:** weakened-assertion · **Severity:** low
 - **Oracle:** `src/terminal/PageList.zig:9224-9227`
 - **Rustty:** `crates/rustty-vt/src/pagelist/tests.rs:2600-2632`
@@ -545,6 +588,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Add `assert_eq!(unsafe { (*super::Node::metadata(second)).memory_len() }, memory.decommitted_raw_bytes);` after the compressed_pages assertion and use `Options::new(80, 24)` to match the oracle setup.
 
 #### S132-F1 — Parser log.warn diagnostics dropped (invalid intermediates count; CSI colon/mixed separator on non-'m')
+
 - **Status:** CONFIRMED · **Kind:** other · **Severity:** low
 - **Oracle:** `src/terminal/Parser.zig:319-328, 412-424`
 - **Rustty:** `crates/rustty-vt/src/parser.rs:707-717, 820-838`
@@ -553,6 +597,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** If/when a log facade is wired into rustty-vt, emit the two warnings at the same points (cold/noinline helper for the CSI one, as the oracle does).
 
 #### S133-F4 — Screen.clone maps PageList CloneFrom errors to OutOfMemory
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/Screen.zig:480-498`
 - **Rustty:** `crates/rustty-vt/src/screen.rs:994-998`
@@ -561,6 +606,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Return `pagelist::access::CloneError` (or an enum wrapping it) from `Screen::clone` and propagate with `?` instead of collapsing.
 
 #### S133-F5 — log.warn / log.err calls in increaseCapacity, cursorChangePin and cursorCopy are elided
+
 - **Status:** CONFIRMED · **Kind:** other · **Severity:** low
 - **Oracle:** `src/terminal/Screen.zig:649-652, 671-674, 1473, 1541, 1562`
 - **Rustty:** `crates/rustty-vt/src/screen.rs:1258-1260, 1279-1281, 2295, 2318, 2410`
@@ -569,6 +615,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Route these through whatever logging seam rustty-vt adopts (e.g. the `log` crate scoped `screen`) so the warnings are observable as in the oracle.
 
 #### S134-F1 — Seven log.err/log.warn diagnostics in the resize/style/hyperlink degrade paths are commented out, not emitted
+
 - **Status:** CONFIRMED · **Kind:** other · **Severity:** low
 - **Oracle:** `src/terminal/Screen.zig:2133, 2172, 2264, 2298, 2529, 2542, 2650`
 - **Rustty:** `crates/rustty-vt/src/screen.rs:3159, 3210, 3323, 3366, 3639, 3647, 3790`
@@ -577,6 +624,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Add a logging seam to rustty-vt (e.g. the `log` facade) and emit the seven messages at the marked sites with the same text.
 
 #### S134-F2 — testWriteString flattens cursorSetHyperlink's OutOfSpace into OutOfMemory
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/Screen.zig:3796, 3813, 3826, 3836`
 - **Rustty:** `crates/rustty-vt/src/screen.rs:5221, 5238, 5259, 5274`
@@ -585,6 +633,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Add an `OutOfSpace` variant to `PrintStringError` (or a dedicated `TestWriteStringError`) and propagate `IncreaseCapacityError` unchanged.
 
 #### S139-F1 — Stale header comment says '18 Selection tests' but 20 are ported
+
 - **Status:** CONFIRMED · **Kind:** other · **Severity:** low
 - **Oracle:** `src/terminal/Selection.zig:513-1676`
 - **Rustty:** `crates/rustty-vt/src/selection.rs:7-8`
@@ -593,6 +642,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Update the header comment to say 20 tests (or drop the count).
 
 #### S140-F1 — StringMap tests build the line selection with non-default SelectLine options
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/StringMap.zig:142-147, 199-204, 264-266`
 - **Rustty:** `crates/rustty-vt/src/string_map.rs:472-481, 563-572, 661-667`
@@ -601,6 +651,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Use `whitespace: Some(&crate::selection_codepoints::DEFAULT_LINE_WHITESPACE), semantic_prompt_boundary: true` in the three test fixtures (and the additive test) to match the Zig defaults.
 
 #### S140-F2 — Alternate-screen test fixtures use max_scrollback_bytes=10_000 instead of the Screen.Options default 0
+
 - **Status:** DISPUTED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/SelectionGesture.zig:1635-1638, 1769-1772, 1826-1829, 2065-2068, 2084-2087`
 - **Rustty:** `crates/rustty-vt/src/selection_gesture.rs:1916-1919, 2094-2097, 2174-2177, 2493-2496, 2522-2525`
@@ -610,6 +661,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Disputed by:** semantic lens (confidence high) — "The fixture value does differ (oracle SelectionGesture.zig:1635-1638/1769/1826/2065/2084 pass only .cols/.rows so Screen.Options.max_scrollback_bytes defaults to 0 per Screen.zig:266; rustty selection_gesture.rs:1918/2096/2176/2495/2524 pass screen_opts(cols, rows, 10_000), helper at 1113-1126 setting Some(10_000)), but it is functionally inert here: max_scrollback_bytes only affects pruning when rows scroll off the active area, and none of these five tests writes or scrolls on the alternate screen — they press/release, switch screens, remove the screen, and assert left_click_count, left_click_screen, left_drag_autoscroll, and countTrackedPins (e.g. oracle 2053-2074 vs rustty 2479-2510). No input to the code under test and no asserted value can differ, so this is a cosmetic fixture mismatch with no observable behaviour difference."
 
 #### S141-F3 — Tabstops.resize aborts on a real allocation failure instead of returning OutOfMemory and preserving cols
+
 - **Status:** CONFIRMED · **Kind:** missing-error-path · **Severity:** low
 - **Oracle:** `src/terminal/Tabstops.zig:151-155`
 - **Rustty:** `crates/rustty-vt/src/tabstops.rs:283-291`
@@ -618,6 +670,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Use `try_reserve_exact(dynamic_count - old_len).map_err(|_| OutOfMemory)?` before `resize`, so the error propagates and `cols` stays unchanged.
 
 #### S141-F4 — log.warn diagnostics in print (zero-width), printCell (hyperlink realloc) and restoreCursor are dropped
+
 - **Status:** CONFIRMED · **Kind:** other · **Severity:** low
 - **Oracle:** `src/terminal/Terminal.zig:1467, 1480, 1958, 1975`
 - **Rustty:** `crates/rustty-vt/src/terminal.rs:2452, 2468, 2722, 3199`
@@ -626,6 +679,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Wire the crate's log facility (or `log` crate) and emit the same warnings.
 
 #### S142-F1 — All log.warn/log.err diagnostics in this range are dropped (commented out) in the port
+
 - **Status:** CONFIRMED · **Kind:** other · **Severity:** low
 - **Oracle:** `src/terminal/Terminal.zig:2288, 3012-3013, 3232-3233, 3524, 3598, 4086, 4149-4152`
 - **Rustty:** `crates/rustty-vt/src/terminal.rs:3572-3573, 4591-4593, 4847-4849, 5348-5349, 5431, 6192, 6247-6248`
@@ -634,6 +688,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** If/when rustty-vt adopts a logging facade (e.g. the `log` crate), restore these seven warn/err calls with the oracle's message text; otherwise document the crate-wide no-logging policy once so these are not re-audited.
 
 #### S143-F2 — resize() drops the two log.warn diagnostics on alternate-screen failure
+
 - **Status:** CONFIRMED · **Kind:** other · **Severity:** low
 - **Oracle:** `src/terminal/Terminal.zig:4108, 4149-4152`
 - **Rustty:** `crates/rustty-vt/src/terminal.rs:6192, 6246-6250`
@@ -642,6 +697,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** If/when rustty-vt gains a log facade, emit these two warnings at the same points.
 
 #### S145-F1 — hyperlink-dense insertLines test initialised with max_scrollback_bytes=10_000 instead of 1024
+
 - **Status:** DISPUTED · **Kind:** different-constant · **Severity:** low
 - **Oracle:** `src/terminal/Terminal.zig:8442-8444`
 - **Rustty:** `crates/rustty-vt/src/terminal.rs:16124`
@@ -651,15 +707,17 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Disputed by:** semantic lens (confidence high) — "The constant does differ (Terminal.zig:8444 `.max_scrollback_bytes = 1024` vs terminal.rs:16124 `opts(10, 5)` with `max_scrollback_bytes: Some(10_000)` at terminal.rs:7201), but it is unobservable. Both values are clamped away by the same effective-minimum logic: PageList.zig:6940-6946 `pub fn max()` returns `@max(self.bytes.explicit, self.bytes.min)` and `bytes.min = minMaxSize(cols, rows)` (PageList.zig:6907-6912, 7022-7062) = `PagePool.item_size * (pages_exact + 1)` >= 2 standard page allocations (hundreds of KB). Both 1024 and 10_000 are orders of magnitude below that floor, so `limits.max(.bytes)` is byte-identical in the two runs and no pruning/enforcement decision (PageList.zig:4027, `exceeded`) can differ. rustty ports the identical clamp: crates/rustty-vt/src/pagelist/mod.rs:1509 (`min: Limits::min_max_size(cols, rows)`), :1542 (`core::cmp::max(self.bytes.explicit, self.bytes.min)`), :1570 (`fn min_max_size`). The test body and all assertions are otherwise identical, so no input/state produces a different result."
 
 #### S146-F1 — deleteLines hyperlink-dense test inits with 10_000 scrollback bytes instead of oracle's 1024
+
 - **Status:** DISPUTED · **Kind:** different-constant · **Severity:** low
 - **Oracle:** `src/terminal/Terminal.zig:11463-11466`
 - **Rustty:** `crates/rustty-vt/src/terminal.rs:16248`
 - **Description:** Oracle test "Terminal: deleteLines hyperlink-dense row crosses page boundary" constructs the terminal with `.{ .rows = 5, .cols = 10, .max_scrollback_bytes = 1024 }`. The rustty counterpart uses `opts(10, 5)`, whose `max_scrollback_bytes` is `Some(10_000)` (terminal.rs:7201); the `opts_sb(10, 5, 1024)` helper that exists for exactly this purpose (terminal.rs:7219) is not used. The sibling 'across page boundary marks all shifted rows dirty' test does use `opts_sb(10, 5, 1024)` (terminal.rs:15396), so this one is inconsistent. All assertions of the test body are otherwise identical, so the page-boundary/hyperlink-capacity path is still exercised, but the scrollback-limit configuration under which it is exercised differs from the oracle (the same omission exists in the insertLines sibling at terminal.rs:16124 vs oracle Terminal.zig:8443, outside this shard's range).
 - **Evidence:** Oracle Terminal.zig:11465 `var t = try init(io_impl, alloc, .{ .rows = 5, .cols = 10, .max_scrollback_bytes = 1024 });` vs rustty terminal.rs:16248 `let mut t = Terminal::init(Global, opts(10, 5)).unwrap();` with opts() setting `max_scrollback_bytes: Some(10_000)` at terminal.rs:7201.
 - **Suggested fix:** Change terminal.rs:16248 to `Terminal::init(Global, opts_sb(10, 5, 1024))` (and likewise terminal.rs:16124 for the insertLines sibling).
-- **Disputed by:** semantic lens (confidence high) — "Verified oracle ghostty/src/terminal/Terminal.zig:11465 uses max_scrollback_bytes=1024 and rustty crates/rustty-vt/src/terminal.rs:16248 uses opts(10,5) with max_scrollback_bytes=Some(10_000) (terminal.rs:7201). But that value is only an *explicit* byte limit which is floored by the effective minimum: PageList.zig:6942-6947 `max(.bytes) = @max(explicit, min)` with `min = minMaxSize(cols, rows)` (PageList.zig:6910, 7022-7062), and minMaxSize returns `PagePool.item_size * (pages_exact+1)` i.e. at least two standard pages (hundreds of KiB). Both 1024 and 10_000 are far below that floor, so the effective byte limit — and hence every pruning decision the test could observe — is byte-for-byte identical in the two configurations. No input/state produces a different result; test assertions are otherwise identical (finder concedes this). Cosmetic inconsistency with the sibling test at terminal.rs:15396 only."
+- **Disputed by:** semantic lens (confidence high) — "Verified oracle ghostty/src/terminal/Terminal.zig:11465 uses max_scrollback_bytes=1024 and rustty crates/rustty-vt/src/terminal.rs:16248 uses opts(10,5) with max_scrollback_bytes=Some(10_000) (terminal.rs:7201). But that value is only an _explicit_ byte limit which is floored by the effective minimum: PageList.zig:6942-6947 `max(.bytes) = @max(explicit, min)` with `min = minMaxSize(cols, rows)` (PageList.zig:6910, 7022-7062), and minMaxSize returns `PagePool.item_size * (pages_exact+1)` i.e. at least two standard pages (hundreds of KiB). Both 1024 and 10_000 are far below that floor, so the effective byte limit — and hence every pruning decision the test could observe — is byte-for-byte identical in the two configurations. No input/state produces a different result; test assertions are otherwise identical (finder concedes this). Cosmetic inconsistency with the sibling test at terminal.rs:15396 only."
 
 #### S148-F2 — printSlice differential fuzz uses a 64-bit LCG instead of std.Random.DefaultPrng (xoshiro256++), so the 1700 exercised op sequences differ from the oracle's
+
 - **Status:** DISPUTED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/Terminal.zig:14489-14501`
 - **Rustty:** `crates/rustty-vt/src/terminal.rs:17462-17742`
@@ -669,6 +727,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Disputed by:** semantic lens (confidence medium) — "Read Terminal.zig:14489-14501 and terminal.rs:17689-17742 plus the shared helper. Op alphabet, weights, geometries (80x24, 10x4, 5x2, 2x2), op counts (500/500/500/200) and every per-op assertion (cursor x/y, pending_wrap, full-screen dump equality, two verify_integrity walks) are identical; only the deterministic generator differs (xoshiro256++ vs an MMIX LCG, same 0xC0FFEE seed). The test asserts a differential invariant (print_slice must equal print) that holds for ANY input sequence, so the port's assertions are equal in meaning and no product behaviour differs — this is a test-input-generator substitution, not an observable functional difference or a weakened assertion."
 
 #### S149-F2 — The six `log.warn("kitty graphics protocol error" / "glyph protocol error")` sites are dropped
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/apc.zig:8, 128, 136, 193, 202, 230, 241`
 - **Rustty:** `crates/rustty-vt/src/apc/mod.rs:23, 238, 257, 344, 357, 414, 430`
@@ -677,6 +736,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Route the warnings through whatever logging seam rustty-vt adopts (or at least a `#[cfg(feature = "log")]`-gated `log::warn!`) so the diagnostic text is preserved.
 
 #### S149-F3 — Private debug helper dumpBitmaps is omitted
+
 - **Status:** DISPUTED · **Kind:** missing-function · **Severity:** low
 - **Oracle:** `src/terminal/bitmap_allocator.zig:211-217`
 - **Rustty:** `crates/rustty-vt/src/bitmap_allocator.rs:322-333`
@@ -686,6 +746,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Disputed by:** semantic lens (confidence medium) — "Oracle bitmap_allocator.zig:211-217 `fn dumpBitmaps` is private (`fn`, not `pub fn`) and, grepping the ghostty tree, is never called by production or test code; it only emits std.log.warn output. rustty bitmap_allocator.rs:321-333 preserves the body verbatim as a PORT NOTE comment. No input or state produces a different result, no caller exists, and the finder concedes 'no observable behavioural effect' — a difference confined to dead code, so refuted under the semantic-equivalence lens."
 
 #### S155-F1 — PageEntry.hash uses std SipHash DefaultHasher instead of seed-0 Wyhash autoHash/autoHashStrat
+
 - **Status:** DISPUTED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/hyperlink.zig:143-160`
 - **Rustty:** `crates/rustty-vt/src/hyperlink.rs:355-377`
@@ -695,6 +756,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Disputed by:** semantic lens (confidence medium) — "Read ghostty/src/terminal/hyperlink.zig:143-160 (Wyhash.init(0) + autoHash/autoHashStrat) vs rustty crates/rustty-vt/src/hyperlink.rs:355-377 (DefaultHasher, write_u8 tag / write_u32 / write bytes). The difference is real but not observable: PageEntry.hash is consumed only by the page-local RefCountedSet (ref_counted_set.zig:250-300) to pick home slots and PSLs. Ids are handed out from next_id in insertion order, count()/refCount() (the only things Screen.zig tests assert, e.g. Screen.zig:4128,4321,11231) are hash-independent, and the set's OOM/NeedsRehash arms are either id-exhaustion-driven (next_id >= cap) or the statistically-unreachable psl_stats[31]>0 cold path. The raw page bytes that compress/page.rs LZ4s are never oracle-compared or persisted across versions, so a self-consistent hash preserves every observable result. Inconsistency with hash_map.rs's bit-exact policy is a style/doctrine issue, not a functional parity defect."
 
 #### S155-F2 — KeyIterator/ValueIterator (FieldIterator) and keyIterator()/valueIterator() not ported
+
 - **Status:** CONFIRMED · **Kind:** missing-function · **Severity:** low
 - **Oracle:** `src/terminal/hash_map.zig:313-336, 415-445`
 - **Rustty:** `crates/rustty-vt/src/hash_map.rs:642-644`
@@ -703,6 +765,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Add `FieldIterator<T>` with `next(&mut self) -> Option<*mut T>` plus `key_iterator()`/`value_iterator()` on HashMapUnmanaged mirroring lines 316-336 and 415-445.
 
 #### S155-F3 — removeByPtr zero-sized-key fallback scans for the used slot instead of using index 0 (deliberate divergence)
+
 - **Status:** DISPUTED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/hash_map.zig:901-912`
 - **Rustty:** `crates/rustty-vt/src/hash_map.rs:1119-1160`
@@ -712,6 +775,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Disputed by:** semantic lens (confidence medium) — "Both sides read: hash_map.zig:901-912 uses idx=0 for @sizeOf(K)==0; hash_map.rs:1119-1160 scans metadata for the single used slot with an expect(). The divergence exists only on the size_of::<K>()==0 branch, and every product/test caller keys on Offset(Cell)/u32 (the oracle's own 'removeByPtr 0 sized key' test uses i32), so the branch is unreachable in both trees. Per the lens, a difference confined to unreachable code is refuted; it is documented in-place (W24-B03-ZST-01) and is a strict correctness improvement."
 
 #### S155-F4 — expectCanonical ported as cfg(debug_assertions)-gated debug_assert_canonical, a no-op in release test runs
+
 - **Status:** CONFIRMED · **Kind:** weakened-assertion · **Severity:** low
 - **Oracle:** `src/terminal/hash_map.zig:1028-1046, 1476, 1527, 1564, 1616`
 - **Rustty:** `crates/rustty-vt/src/hash_map.rs:1187-1217, 1951, 1999, 2039, 2104`
@@ -720,6 +784,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Add a test-module `expect_canonical` helper that always asserts (plain assert!/assert_eq!) and call it from the four tests, keeping debug_assert_canonical for the production invariant.
 
 #### S155-F5 — Randomized tests use different PRNGs (LCG / splitmix64) than std.Random.DefaultPrng (xoshiro256++), and the PORT NOTE misdescribes the replacement
+
 - **Status:** CONFIRMED · **Kind:** other · **Severity:** low
 - **Oracle:** `src/terminal/hash_map.zig:1280-1316, 1567-1617`
 - **Rustty:** `crates/rustty-vt/src/hash_map.rs:1718-1729, 2044-2070`
@@ -728,6 +793,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Either port xoshiro256++ with Zig's DefaultPrng seeding (splitmix64 seed expansion) so the sequence matches, or correct the PORT NOTE to say splitmix64.
 
 #### S155-F6 — Flattened.init/clone return Result<_, OutOfMemory> but can never yield Err (Vec::push/with_capacity abort on OOM)
+
 - **Status:** CONFIRMED · **Kind:** missing-error-path · **Severity:** low
 - **Oracle:** `src/terminal/highlight.zig:141-172`
 - **Rustty:** `crates/rustty-vt/src/highlight.rs:168-214`
@@ -736,6 +802,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Use `try_reserve`/`try_reserve_exact` before pushing (mapping TryReserveError to OutOfMemory) as hyperlink.rs's try_dupe_bytes does.
 
 #### S155-F7 — Verbatim comment blocks for main.zig's root test and lib.zig are stale (omit compress/fraction/mem and TinyIo lines)
+
 - **Status:** CONFIRMED · **Kind:** other · **Severity:** low
 - **Oracle:** `src/terminal/main.zig:93-104`
 - **Rustty:** `crates/rustty-vt/src/lib.rs:330-341, 288-296`
@@ -744,6 +811,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Refresh the two verbatim comment blocks to the pinned oracle text.
 
 #### S156-F3 — madvise failure warnings not logged
+
 - **Status:** CONFIRMED · **Kind:** other · **Severity:** low
 - **Oracle:** `src/terminal/mem.zig:109,129,169`
 - **Rustty:** `crates/rustty-vt/src/mem.rs:189,214,262`
@@ -752,6 +820,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Wire a logging facade (e.g. the `log` crate) into rustty-vt and emit the three warnings, including the errno.
 
 #### S156-F4 — ensureAllocator warning not logged
+
 - **Status:** CONFIRMED · **Kind:** other · **Severity:** low
 - **Oracle:** `src/terminal/osc.zig:439-444`
 - **Rustty:** `crates/rustty-vt/src/osc/mod.rs:895-906`
@@ -760,6 +829,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Emit the warning through a logging facade once one is wired into rustty-vt.
 
 #### S157-F1 — verifyIntegrity log.warn diagnostics (with y/x/id/expected/actual details) are dropped
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/page.zig:405-611`
 - **Rustty:** `crates/rustty-vt/src/page_impl.rs:586-746`
@@ -768,6 +838,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Emit the equivalent `log::warn!` lines (with y, x, id, expected, actual) before each `return Err(...)` and a `log::error!` in assert_integrity before the panic.
 
 #### S158-F1 — Cell doc comment states a stale bit layout that contradicts the constants
+
 - **Status:** CONFIRMED · **Kind:** other · **Severity:** low
 - **Oracle:** `src/terminal/page.zig:2087-2130`
 - **Rustty:** `crates/rustty-vt/src/page.rs:574-586`
@@ -776,6 +847,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Rewrite the doc block to the 26/42/44/45/46/48 offsets (or delete the duplicated table and point at the CELL_* constants and cell_field_bit_offsets test).
 
 #### S161-F1 — Pin/serial skip test omits the last-row serial comparison
+
 - **Status:** CONFIRMED · **Kind:** missing-branch · **Severity:** low
 - **Oracle:** `src/terminal/render.zig:599-615`
 - **Rustty:** `crates/rustty-vt/src/render.rs:1037-1055`
@@ -784,6 +856,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Add `|| self.row_data[y + take - 1].serial != node_serial` to the condition at render.rs:1038-1044.
 
 #### S161-F2 — string() writes surrogate codepoints as WTF-8 bytes instead of U+FFFD
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/render.zig:991-999`
 - **Rustty:** `crates/rustty-vt/src/render.rs:1524-1548`
@@ -792,6 +865,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** In `write_codepoint`'s `None` arm, emit `[0xEF, 0xBF, 0xBD]` when `utf8_codepoint_sequence_length(cp)` is Some(3) (surrogate), keeping the Err for out-of-range.
 
 #### S163-F1 — vtRaw error arm (`catch` -> warn + skip) has no channel in the Rust `vt_raw` hook
+
 - **Status:** DISPUTED · **Kind:** missing-error-path · **Severity:** low
 - **Oracle:** `src/terminal/stream.zig:1289-1301`
 - **Rustty:** `crates/rustty-vt/src/stream.rs:1978-1989`
@@ -801,6 +875,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Disputed by:** semantic lens (confidence medium) — "Read both sides. Oracle stream.zig:1289-1301 folds any vtRaw error into skip=true; rustty stream.rs:1978-1989 calls the infallible trait method (stream.rs:325-327 default false) with an explicit PORT NOTE recording the folded semantic. The only fallible paths in the sole implementer are allocation ones: oracle inspector/widgets/termio.zig:828-880 can only fail via `try VTEvent.init(alloc,...)` / `vt_events.resize`/`append` OOM; in the Rust port (rustty-inspector/src/widgets/termio.rs:1816-1845) Rust's global allocator aborts on OOM, so the differing arm is unreachable rather than a different result. No non-OOM input produces a different outcome, so the behaviours are equivalent in reachable code."
 
 #### S163-F2 — All `log.warn`/`log.info` diagnostics in the stream fast paths and CSI dispatch are dropped (no log facade in rustty-vt)
+
 - **Status:** CONFIRMED · **Kind:** other · **Severity:** low
 - **Oracle:** `src/terminal/stream.zig:1352-1356, 1372, 1435, 1441-1444, 1456, 1462, 1478, 1484, 1499, 1505, 1520, 1528, 1543, 1551, 1566, 1572, 1590, 1597, 1610, 1615, 1630, 1641, 1665, 1677, 1688, 1700, 1705, 1718, 1723, 1735, 1740, 1753, 1758, 1770, 1775, 1807, 1816`
 - **Rustty:** `crates/rustty-vt/src/stream.rs:2072, 2093, 2173-2620`
@@ -809,6 +884,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Wire a `log` facade (e.g. the `log` crate scoped `stream`) and emit the same messages at the same points; make `log_unsupported_once` callers emit under the returned bool.
 
 #### S163-F3 — Action C-ABI projections (Tag/Value/C/CValue/cval and per-payload `.C`/`cval`) have no Rust counterpart
+
 - **Status:** DISPUTED · **Kind:** missing-function · **Severity:** low
 - **Oracle:** `src/terminal/stream.zig:237-249, 252-262, 272-283, 285-296, 322-330, 332-340, 352-360, 362-370, 372-380, 382-397, 399-414, 416-432, 439-449`
 - **Rustty:** `crates/rustty-vt/src/stream.rs:102-128`
@@ -818,6 +894,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Disputed by:** semantic lens (confidence high) — "Confirmed the code facts (oracle stream.zig:238-296 c_union Tag/Value/C/CValue/cval plus per-payload `.C`/`cval`; rustty stream.rs:104-128 keeps them only as commented reference with the 'C-ABI mirror lives in rustty-vt-c' note; `grep -rn 'PrintSlice|ApcPutSlice|cps' crates/rustty-vt-c/src` finds no Action mirror). But the projection is dead in the oracle at pin 20abdb50a: `grep -rn 'Stream.Action|stream.Action' ghostty/src` yields only `.Tag`/`.Value` comptime-dispatch uses (benchmark/ApcParser.zig:48-49, inspector/widgets/termio.zig:820-821, termio/stream_handler.zig:182-193) and no header in include/ghostty/vt exposes a stream Action C type. No input or C consumer can observe a difference; the residue is an inaccurate PORT NOTE sentence, i.e. doc-only. Difference confined to unreachable/unused code -> refuted."
 
 #### S164-F1 — All log.warn/log.err/log.debug emissions in csi/osc/esc dispatch and logUnsupportedOnce are dropped (no logging facade)
+
 - **Status:** CONFIRMED · **Kind:** other · **Severity:** low
 - **Oracle:** `src/terminal/stream.zig:1785-3079`
 - **Rustty:** `crates/rustty-vt/src/stream.rs:2577-4242`
@@ -826,6 +903,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Wire a logging facade (e.g. the `log` crate) into rustty-vt and emit the preserved messages at the same levels; emit under the boolean returned by log_unsupported_once.
 
 #### S165-F1 — 'stream: continuation lifecycle' is wholly #[ignore]d in release builds, not just its FailingAllocator arm
+
 - **Status:** DISPUTED · **Kind:** weakened-assertion · **Severity:** low
 - **Oracle:** `src/terminal/stream.zig:4850-4906`
 - **Rustty:** `crates/rustty-vt/src/stream.rs:6845-6932`
@@ -835,6 +913,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Disputed by:** semantic lens (confidence medium) — "Read both regions: ghostty/src/terminal/stream.zig:4830-4910 (five arms) vs rustty crates/rustty-vt/src/stream.rs:6838-6928. Every oracle assertion has an exact counterpart with identical meaning: ContinuationDisabled x3 (6851-6878), empty continuation with end==0 (6888-6892), WriteFailed on the 1-byte writer (6894-6900), ContinuationUnavailable under the tripwire-driven alloc failure (6904-6926). In the parity test configuration (cargo test, debug — the analogue of zig build test's default Debug, and the configuration in which the TRACKER_TW tripwire exists at all, mirroring Zig's builtin.is_test/FailingAllocator gating) all five arms run with the same assertions. The cfg_attr only affects a non-default `--release` run; it is test-harness hygiene, not an observable functional difference nor a weakened/looser assertion. Splitting the gate would be a nicety, not a parity defect."
 
 #### S166-F1 — Clipboard read/write reply side effects are applied after the effect callback returns instead of inside `reply`
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/stream_terminal.zig:738-760, 927-960, 1206-1234`
 - **Rustty:** `crates/rustty-vt/src/stream_terminal.rs:907-951, 1083-1118, 1261-1339, 2922-3184`
@@ -843,6 +922,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Document the deferral as an intentional contract in the Effects doc comment, or apply the grant/pty write from inside `reply` via a raw handler pointer in the state (as the oracle does) if the SB/Miri harness allows it.
 
 #### S166-F2 — Two oracle tests only run in debug builds (ignored / cfg'd out in release)
+
 - **Status:** CONFIRMED · **Kind:** missing-test · **Severity:** low
 - **Oracle:** `src/terminal/stream_terminal.zig:2075-2109, 2178-2209`
 - **Rustty:** `crates/rustty-vt/src/stream_terminal.rs:4153-4155, 4279-4286`
@@ -851,6 +931,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Make the tripwire modules available under a `cfg(test)` (not `debug_assertions`) gate so both tests run under `cargo test --release` too.
 
 #### S166-F3 — All `log.warn` diagnostics in the handler are dropped (commented out)
+
 - **Status:** CONFIRMED · **Kind:** other · **Severity:** low
 - **Oracle:** `src/terminal/stream_terminal.zig:344-347, 470-477, 506, 512, 675, 726, 741, 756-757, 930, 952, 957, 1209, 1228, 1445, 1471, 1489, 1530`
 - **Rustty:** `crates/rustty-vt/src/stream_terminal.rs:674-680, 879, 2508, 2530, 2564, 2642, 2931, 3030, 3164, 3844, 3887, 3899`
@@ -859,6 +940,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Emit the warnings via the workspace `log` crate (`log::warn!`) at each site with the same message text.
 
 #### S167-F1 — DCS command memory-release test has no leak check outside Miri
+
 - **Status:** CONFIRMED · **Kind:** weakened-assertion · **Severity:** low
 - **Oracle:** `src/terminal/stream_terminal.zig:2607-2625`
 - **Rustty:** `crates/rustty-vt/src/stream_terminal.rs:4763-4791`
@@ -867,6 +949,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Wrap the handler's DCS command buffer allocations in the crate's tripwire/alloc-counting seam (as done for CLIPBOARD_CONTENTS_TW) and assert the live-allocation count returns to zero after both the completed command and Handler::deinit, so the leak is caught in the normal test lane.
 
 #### S170-F2 — format_wire panics on non-UTF-8 `.other`/clear reason bytes instead of writing them through
+
 - **Status:** DISPUTED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/apc/glyph/response.zig:124, 199-211`
 - **Rustty:** `crates/rustty-vt/src/apc/glyph/response.rs:174, 184-186, 319-321`
@@ -876,6 +959,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Disputed by:** semantic lens (confidence medium) — "Read oracle src/terminal/apc/glyph/response.zig:203 (`writer.writeAll(reason.name())`) and :210 (`writer.writeAll(reason)`) against port crates/rustty-vt/src/apc/glyph/response.rs:174/184-186 and :319-321. The expect()-on-from_utf8 panic the finder describes is real in the code, but it is confined to unreachable state: every construction site in the workspace produces ASCII. Grepped `ResponseRegisterReason::Other` across crates — only response.rs:319 (the accessor itself), response.rs:547 (test, b"future_reason") and execute.rs:102 (b"out_of_memory"); ResponseClear.reason is likewise only set from ASCII by the executor, exactly as in the oracle, which never synthesizes non-ASCII reasons either. No terminal input or protocol path can produce non-UTF-8 reason bytes, so no input/state yields a different observable result; the difference exists only for a hypothetical external constructor of the Rust type, which is not a Ghostty parity path (unreachable-code criterion)."
 
 #### S172-F1 — key_encode setopt invalid-value warnings bypass the C log callback and print unconditionally to stderr
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/c/key_encode.zig:82-87, 115-120`
 - **Rustty:** `crates/rustty-vt-c/src/key_encode.rs:171-175, 239-243`
@@ -884,6 +968,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Replace both `eprintln!` calls with `crate::sys::log_fn(sys::StdLevel::Warn, "key_encode", ...)`.
 
 #### S174-F5 — terminal_paste mimes-array allocation failure aborts instead of returning out_of_memory
+
 - **Status:** CONFIRMED · **Kind:** missing-error-path · **Severity:** low
 - **Oracle:** `src/terminal/c/paste.zig:62-67`
 - **Rustty:** `crates/rustty-vt-c/src/paste.rs:138-147`
@@ -892,6 +977,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Use a fallible allocation (try_reserve / Vec::try_with_capacity equivalent) and return Result::OutOfMemory on failure, or record the DG5 exemption explicitly on this line.
 
 #### S176-F2 — `search::new` drops the registry-insert out-of-memory path
+
 - **Status:** DISPUTED · **Kind:** missing-error-path · **Severity:** low
 - **Oracle:** `src/terminal/c/search.zig:135-145`
 - **Rustty:** `crates/rustty-vt-c/src/search.rs:389-400`
@@ -901,6 +987,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Disputed by:** semantic lens (confidence medium) — "Read oracle search.zig:137-145 and rustty search.rs:387-400. The `catch` arm the finder cites is only the ArrayHashMap's own growth allocation failing. In rustty the registry is a plain `HashSet<*mut SearchWrapper>` (terminal.rs:237, constructed at :1709) backed by the Rust global allocator, which aborts on allocation failure by language convention — a Rust-idiom equivalence for which no caller-observable alternative behavior exists at this call site, and the `putNoClobber` uniqueness assert is preserved as `debug_assert!(inserted)`. To the extent the oracle's `terminal.gpa()` is the embedder allocator, that is the very same F-008 Tier-2 allocator-threading residual already captured by S176-F1, not an independent defect; on its own this reduces to an unreachable error path, so it does not survive as a separate finding."
 
 #### S178-F1 — log_stderr renders scope/message through String::from_utf8_lossy instead of raw bytes
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/c/sys.zig:249-285`
 - **Rustty:** `crates/rustty-vt-c/src/sys.rs:600-660`
@@ -909,6 +996,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Write the raw bytes: `lock.write_all(b"[")`, `write_all(level_text.as_bytes())`, `write_all(b"](")`, `write_all(scope)`, `write_all(b"): ")`, `write_all(message)`, `write_all(b"\n")` — or build the line into a stack `[u8; 2048+128]` buffer and issue one `write_all`, matching the reference's single-write path exactly.
 
 #### S178-F2 — log_stderr no longer emits each line with a single write; the doc-comment guarantee is unbacked
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/c/sys.zig:219-285`
 - **Rustty:** `crates/rustty-vt-c/src/sys.rs:586-660`
@@ -917,6 +1005,7 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Format into a `[u8; LogEmitter::buffer_size + 128]` stack buffer and emit it with a single `write_all`, falling back to piecewise writes when the line does not fit — restoring both the single-write property and the reference's two-path structure. (Fixing this and the lossy-UTF-8 finding together is one change.)
 
 #### S179-F3 — grid_ref_track allocates the TrackedGridRef on the Rust global heap instead of the caller's allocator
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/c/terminal.zig:1809-1834`
 - **Rustty:** `crates/rustty-vt-c/src/terminal.rs:4306-4340`
@@ -925,21 +1014,26 @@ The 71 low-severity findings below survived verification (53 CONFIRMED, 18 DISPU
 - **Suggested fix:** Allocate the TrackedGridRef through the wrapper's stored C allocator (`rustty_lib::allocator::create_raw`) and keep the `untrack_pin` + `RUSTTY_OUT_OF_MEMORY` unwind, matching the oracle's cleanup order.
 
 #### S180-F1 — `scroll_viewport null` drops the `.row` tag call
+
 - **Status:** CONFIRMED · **Kind:** weakened-assertion · **Severity:** low
 - **Oracle:** `src/terminal/c/terminal.zig:2394-2397`
 - **Rustty:** `crates/rustty-vt-c/src/terminal.rs:5218-5232`
 - **Description:** The oracle's `test "scroll_viewport null"` makes TWO calls on a null terminal handle: one with `.tag = .top, .value = undefined` and one with `.tag = .row, .value = .{ .row = 1 }`. The rustty counterpart `scroll_viewport_null` only performs the `Top` call; the `Row`-tag null call is absent, so the null guard is no longer exercised for a tag whose union payload is read.
 - **Evidence:** Oracle 2394-2397:
+
 ```
 test "scroll_viewport null" {
     scroll_viewport(null, .{ .tag = .top, .value = undefined });
     scroll_viewport(null, .{ .tag = .row, .value = .{ .row = 1 } });
 }
 ```
+
 rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scroll_viewport(null_mut(), ScrollViewportC { tag: ScrollViewportTag::Top as c_int, value: ScrollViewportCValue { _padding: [0; 2] } })` and nothing else. (The implementation at terminal.rs:3477 returns on null before decoding the tag, so behaviour is equivalent — only the test coverage is weaker.)
+
 - **Suggested fix:** Add the second call: `scroll_viewport(std::ptr::null_mut(), ScrollViewportC { tag: ScrollViewportTag::Row as c_int, value: ScrollViewportCValue { row: 1 } })`.
 
 #### S180-F2 — `get vt_processing_error` counterpart is compiled out of release builds
+
 - **Status:** DISPUTED · **Kind:** missing-test · **Severity:** low
 - **Oracle:** `src/terminal/c/terminal.zig:3035-3073`
 - **Rustty:** `crates/rustty-vt-c/src/terminal.rs:6252-6316`
@@ -949,6 +1043,7 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - **Disputed by:** presence lens (confidence medium) — "The counterpart test IS present, with assertion-for-assertion parity with oracle terminal.zig:3037-3086: initial Success+`!processing_error`, forced terminal-owned update failure through the public VT write path (the port arms `set_string_tw_error_always(SetStringFp::Reserve)` where the oracle swaps in `testing.failing_allocator`), Success+`processing_error`, then `reset(t)` and Success+`processing_error` again — 8 assertions on each side. It runs and passes in the default `cargo test` lane. The only delta is the `#[cfg(debug_assertions)]` gate at terminal.rs:6262, an artifact of the port's fail-injection mechanism (the rustty-vt tripwire fail point itself only exists under debug_assertions — the in-file PORT NOTE at 6254-6266 records that `cfg` rather than `ignore` is required because the `SetStringFp` symbols do not compile under --release), not a weakened or missing assertion. Zig has no release-mode test lane equivalent that this actually loses; production behaviour of the vt_processing_error path is unaffected. Not a functional-parity finding." Corrected location: `crates/rustty-vt-c/src/terminal.rs:6252-6316 (fn get_vt_processing_error)`.
 
 #### S185-F1 — Stale "DEFERRED to vt-12 / compiling stub" PORT NOTE on graphics_storage re-export
+
 - **Status:** CONFIRMED · **Kind:** other · **Severity:** low
 - **Oracle:** `src/terminal/kitty/graphics.zig:18-27`
 - **Rustty:** `crates/rustty-vt/src/kitty/graphics.rs:27-30`
@@ -957,6 +1052,7 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - **Suggested fix:** Delete or reword the stale deferral note in crates/rustty-vt/src/kitty/graphics.rs:27-30.
 
 #### S189-F3 — `LoadingImage.debugDump` not ported (carried as a comment)
+
 - **Status:** CONFIRMED · **Kind:** missing-function · **Severity:** low
 - **Oracle:** `src/terminal/kitty/graphics_image.zig:563-586`
 - **Rustty:** `crates/rustty-vt/src/kitty/graphics_image.rs:854-880`
@@ -965,6 +1061,7 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - **Suggested fix:** Optionally add a `#[cfg(debug_assertions)] pub fn debug_dump(&self) -> std::io::Result<()>` with the same filename format, or leave as-is and record it as an accepted cosmetic gap.
 
 #### S189-F4 — Windows has no handle-based realpath, so the kitty file/temporary-file media fail closed there
+
 - **Status:** CONFIRMED · **Kind:** stub-or-unimplemented · **Severity:** low
 - **Oracle:** `src/terminal/kitty/graphics_image.zig:451-465`
 - **Rustty:** `crates/rustty-vt/src/kitty/graphics_image.rs:1407-1420`
@@ -973,6 +1070,7 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - **Suggested fix:** Add a Windows arm using `GetFinalPathNameByHandleW` (stripping the `\\?\` prefix) so `validatedFilePath` can apply the blocklist to the opened handle, then close the deferral row.
 
 #### S190-F1 — All log.info/log.warn/log.debug diagnostics in ImageStorage are carried as comments, never emitted
+
 - **Status:** CONFIRMED · **Kind:** other · **Severity:** low
 - **Oracle:** `src/terminal/kitty/graphics_storage.zig:224-226, 302-311, 369, 576, 1025-1033, 1252, 1271, 1294, 1312, 1495-1505`
 - **Rustty:** `crates/rustty-vt/src/kitty/graphics_storage.rs:363-367, 452-458, 468, 530, 810-816, 1315-1322, 1607, 1631, 1655, 1682, 1935, 1944`
@@ -981,6 +1079,7 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - **Suggested fix:** Optional: none required for functional parity; if diagnostics are wanted later, introduce a vt-level logging shim and restore these call sites verbatim.
 
 #### S190-F2 — Two documented allocation-failure degradation paths cannot be reached in the port (abort instead)
+
 - **Status:** DISPUTED · **Kind:** missing-error-path · **Severity:** low
 - **Oracle:** `src/terminal/kitty/graphics_storage.zig:570-579, 977-988`
 - **Rustty:** `crates/rustty-vt/src/kitty/graphics_storage.rs:806-822, 1268-1300`
@@ -990,6 +1089,7 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - **Disputed by:** semantic lens (confidence high) — "Read both sides. Oracle graphics_storage.zig:569-579 `result.restores.append(...) catch { log.warn("OOM adjusting image placement for scroll"); continue; }` — the degraded arm is reachable only on allocation failure. rustty graphics_storage.rs:813-822 pushes into a Vec with the reference arm carried as a comment plus a PORT NOTE; Vec::push aborts on OOM, so under the port-wide OOM=abort policy that arm is unreachable code, and no input/state produces a different observable result. Same for oracle convertImageToRgba (`Allocator.Error!void`, line 984 `try pixel.rgbaFromFormat`) vs rustty convert_image_to_rgba (rs:1268, infallible, calling pixel::rgba_from_format which aborts on OOM): the only removed error is the allocation failure that aborts anyway, and the byte accounting / generation stamping after it is identical. Per the ground rules, a difference confined to unreachable code is refuted."
 
 #### S194-F4 — isSafeUtf8 test's 8-bit-escape case changed from a raw 0x9F byte (invalid UTF-8) to a valid U+009F, so the invalid-UTF-8 rejection branch is no longer covered
+
 - **Status:** CONFIRMED · **Kind:** weakened-assertion · **Severity:** low
 - **Oracle:** `src/terminal/osc/encoding.zig:37`
 - **Rustty:** `crates/rustty-vt/src/osc/encoding.rs:49-51`
@@ -998,6 +1098,7 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - **Suggested fix:** Use a raw byte literal, e.g. `assert!(!is_safe_utf8(b"\x9f8-bit escapes are clever, but no"));`, to restore the invalid-UTF-8 input, and optionally keep the U+009F case as an extra assertion.
 
 #### S196-F1 — rxvt_extension scoped logger and its two warn() calls are commented out
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/osc/parsers/rxvt_extension.zig:6,27-32`
 - **Rustty:** `crates/rustty-vt/src/osc/parsers/rxvt_extension.rs:7-11,34,41`
@@ -1006,6 +1107,7 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - **Suggested fix:** If/when a logging facade is wired into rustty-vt, restore both warnings with the same message text and the `osc_rxvt_extension` scope.
 
 #### S197-F1 — exit_code parsing: Zig std.fmt.parseInt accepts '_' digit separators, Rust str::parse does not
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/osc/parsers/semantic_prompt.zig:160-166`
 - **Rustty:** `crates/rustty-vt/src/osc/parsers/semantic_prompt.rs:323-333`
@@ -1014,6 +1116,7 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - **Suggested fix:** Strip interior `_` separators (rejecting leading/trailing `_` and an all-`_`/empty remainder) before calling `parse::<i32>()`, mirroring Zig's parseIntWithSign, and add a regression assertion to `option_read_exit_code`.
 
 #### S204-F1 — Decode-time temporary allocations abort instead of returning OutOfMemory
+
 - **Status:** DISPUTED · **Kind:** missing-error-path · **Severity:** low
 - **Oracle:** `src/terminal/snapshot/page.zig:252-253, 373-381`
 - **Rustty:** `crates/rustty-vt/src/snapshot/page.rs:457, 561-573`
@@ -1023,6 +1126,7 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - **Disputed by:** semantic lens (confidence high) — "Read both regions. Oracle ghostty src/terminal/snapshot/page.zig:252 (`const staged = try alloc.alloc(u8, remaining)`) and :373-381 (`grid.StyleRemap.init(alloc) catch return error.OutOfMemory`, same for HyperlinkRemap) vs rustty crates/rustty-vt/src/snapshot/page.rs:457 (`let mut staged = vec![0u8; remaining]`) and :567-573 (`grid::StyleRemap::init()` / `HyperlinkRemap::init()` returning values). The description is factually accurate, but the only divergence is behaviour under global-allocator exhaustion, which in Rust aborts rather than unwinding an error — the crate-wide infallible-allocation convention, not a snapshot-specific deviation. The staged buffer is bounded by Self::MAX_STAGED_PAYLOAD (the `else if remaining <= Self::MAX_STAGED_PAYLOAD` guard at page.rs:450 mirrors the oracle's `max_staged_payload` branch), so there is no unbounded/hostile-allocation hazard difference. PayloadDecodeError::OutOfMemory is preserved (page.rs:303) and still produced on TerminalPage::init failure (page.rs:369, :536), matching the oracle's other OOM producer. No oracle test injects a failing allocator in this file, so no test asserts less. Difference confined to a path unreachable outside OS allocator failure => refuted per the lens."
 
 #### S205-F1 — Two decode tests use unlimited scrollback where the reference uses the Options default of zero
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/snapshot/screen.zig:2371-2377, 2444-2450`
 - **Rustty:** `crates/rustty-vt/src/snapshot/screen.rs:2971, 3050`
@@ -1031,15 +1135,17 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - **Suggested fix:** Change both call sites to `screen_options(1, 1, Some(0))` so the decode options match the reference's `Options` default.
 
 #### S207-F1 — Restored alternate screen gets kitty_image_storage_limit 0 instead of the Screen.Options default (320MB)
+
 - **Status:** DISPUTED · **Kind:** different-constant · **Severity:** low
 - **Oracle:** `src/terminal/snapshot/terminal.zig:992-999`
 - **Rustty:** `crates/rustty-vt/src/snapshot/terminal.rs:1236-1251`
-- **Description:** In `decode`, the oracle creates the optional alternate screen with `screens.getInit(io_, alloc, .alternate, .{ .cols, .rows, .max_scrollback_bytes = 0 })`, letting every other `Screen.Options` field take its struct default — notably `kitty_image_storage_limit = 320 * 1000 * 1000` for the `.ghostty` artifact (src/terminal/Screen.zig:275-278). The port spreads `..crate::screen::Options::default()`, but that helper is the port of the reference's *`Options.default` constant* (cols 80 / rows 24 / scrollback 0) and sets `kitty_image_storage_limit: 0` (crates/rustty-vt/src/screen.rs:415-422). The restored alternate screen therefore carries a Kitty image storage limit of 0 rather than 320MB, while the primary screen created a few lines earlier in the same function is given 320MB explicitly (crates/rustty-vt/src/snapshot/terminal.rs:1219). Any Kitty image transmitted on the alternate screen after a snapshot restore would be rejected/evicted where the reference accepts it.
+- **Description:** In `decode`, the oracle creates the optional alternate screen with `screens.getInit(io_, alloc, .alternate, .{ .cols, .rows, .max_scrollback_bytes = 0 })`, letting every other `Screen.Options` field take its struct default — notably `kitty_image_storage_limit = 320 * 1000 * 1000` for the `.ghostty` artifact (src/terminal/Screen.zig:275-278). The port spreads `..crate::screen::Options::default()`, but that helper is the port of the reference's _`Options.default` constant_ (cols 80 / rows 24 / scrollback 0) and sets `kitty_image_storage_limit: 0` (crates/rustty-vt/src/screen.rs:415-422). The restored alternate screen therefore carries a Kitty image storage limit of 0 rather than 320MB, while the primary screen created a few lines earlier in the same function is given 320MB explicitly (crates/rustty-vt/src/snapshot/terminal.rs:1219). Any Kitty image transmitted on the alternate screen after a snapshot restore would be rejected/evicted where the reference accepts it.
 - **Evidence:** oracle src/terminal/snapshot/terminal.zig:992-999 `_ = try result.screens.getInit(io_, alloc, .alternate, .{ .cols = header.columns, .rows = header.rows, .max_scrollback_bytes = 0 });` + src/terminal/Screen.zig:275-278 default `kitty_image_storage_limit = 320 * 1000 * 1000` (.ghostty). rustty crates/rustty-vt/src/snapshot/terminal.rs:1236-1245 `crate::screen::Options { cols, rows, max_scrollback_bytes: Some(0), ..crate::screen::Options::default() }` and crates/rustty-vt/src/screen.rs:420 `kitty_image_storage_limit: 0`.
 - **Suggested fix:** Spell out `kitty_image_storage_limit: 320 * 1000 * 1000` and `kitty_image_loading_limits: Limits::DIRECT` (the artifact defaults, as done for the primary Terminal::init options at line 1219) instead of spreading `Options::default()`, or add an `Options::field_defaults()` helper that mirrors the reference struct-field defaults rather than the `Options.default` constant.
 - **Disputed by:** semantic lens (confidence high) — "Traced the whole decode pipeline in both trees. The alternate screen created by `getInit` in `terminal.decode` is an explicitly documented placeholder: oracle src/terminal/snapshot/terminal.zig:943-948 ("contains empty primary and optional alternate screens with the declared routing. Later SCREEN records replace those screens in place") and terminal.zig:995-996. In snapshot.zig:313-350 every slot is `slot.deinit(); slot.* = decoded.screen;` where `decoded.screen` comes from screen.decode(..., screen_options), and screen.zig:500-510 applies `options.kitty_image_storage_limit` / `kitty_image_loading_limits` to the FINAL screen. The port does the identical replacement at crates/rustty-vt/src/snapshot/codec.rs:888-921 and 924-960, and its `screen_options` closure spells out `kitty_image_storage_limit: 320 * 1000 * 1000` and `Limits::DIRECT` (codec.rs:918-919), matching the oracle struct default for the .ghostty artifact. So the restored primary AND alternate screens both end with total_limit 320MB in both trees; the 0 at snapshot/terminal.rs:1240 lives only on an object that is deinit'd and overwritten before any kitty command can reach it (the loop errors out on Duplicate/UnexpectedScreenKey, never leaving a slot unreplaced). The only way to observe it is a direct call to the low-level record decoder `snapshot.terminal.decode`, whose contract states the screens are empty placeholders. No input produces a different kitty-storage behaviour; refuted as a dead-value/style inconsistency (worth a cosmetic cleanup at most)."
 
 #### S207-F2 — PORT NOTE states ModePacked::BITS is 42; it is 43
+
 - **Status:** DISPUTED · **Kind:** other · **Severity:** low
 - **Oracle:** `src/terminal/snapshot/terminal.zig:247-249`
 - **Rustty:** `crates/rustty-vt/src/snapshot/terminal.rs:285-291`
@@ -1049,6 +1155,7 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - **Disputed by:** semantic lens (confidence high) — "The factual claim checks out — crates/rustty-vt/src/snapshot/terminal.rs:290 says "`ModePacked::BITS` (42) bits" while modes.rs:240 defines `BITS = ENTRIES.len()` and both the oracle test (terminal.zig:1204-1207, expects 43) and the port test (snapshot/terminal.rs:1597 `assert_eq!(43usize, ModePacked::BITS)`) say 43. But MODE_BITS_MASK is computed from the symbol `terminal_modes::ModePacked::BITS`, not from the literal, so the mask is `(1<<43)-1` and every decode/truncate path behaves identically to the oracle. A stale parenthetical inside a PORT NOTE produces no observable functional difference; refuted under the semantic-equivalence lens (valid as a comment nit only)."
 
 #### S208-F1 — Notification format/Display output text differs from the reference's comptime-reflected format
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/tmux/control.zig:568-590`
 - **Rustty:** `crates/rustty-vt/src/tmux/control.rs:878-975`
@@ -1057,6 +1164,7 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - **Suggested fix:** Emit `terminal.tmux.control.Notification` as the type name, print `void` for the payload-less tags, and render the struct payloads the way Zig's `{any}` does (byte-array members), or accept the divergence explicitly in the PORT NOTE since the only consumer is a log line.
 
 #### S208-F2 — tmux output delimiter is treated as a Unicode char rather than a byte
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/tmux/output.zig:17-36, 57-66`
 - **Rustty:** `crates/rustty-vt/src/tmux/output.rs:104-119, 383-405`
@@ -1065,6 +1173,7 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - **Suggested fix:** Split/emit on the raw byte (operate on `&[u8]`, or assert/restrict the delimiter to ASCII) so a >=0x80 delimiter behaves as in the reference.
 
 #### S208-F3 — Stale PORT NOTE claims the oniguruma binding crate does not exist
+
 - **Status:** CONFIRMED · **Kind:** other · **Severity:** low
 - **Oracle:** `src/terminal/tmux/control.zig:1-10`
 - **Rustty:** `crates/rustty-vt/src/tmux/control.rs:11-22`
@@ -1073,6 +1182,7 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - **Suggested fix:** Rewrite the note to state the real (and correct) rationale — the feature mirrors the reference `oniguruma` build option, is enabled by rustty-core for the app tier, and `cargo test -p rustty-vt --features oniguruma` is required to run the eight gated tests.
 
 #### S209-F1 — Pane terminal dimension overflow: Zig @intCast traps, Rust `as` silently truncates
+
 - **Status:** DISPUTED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/tmux/viewer.zig:1131-1140`
 - **Rustty:** `crates/rustty-vt/src/tmux/viewer.rs:935-950`
@@ -1082,6 +1192,7 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - **Disputed by:** presence lens (confidence medium) — "Read oracle src/terminal/tmux/viewer.zig:1131-1148 and rustty crates/rustty-vt/src/tmux/viewer.rs:938-950: the port carries the oracle's own TODO verbatim ("We need to gracefully handle overflow of our max cols/width here. In practice we shouldn't hit this so we cast but its not safe") and performs the same unchecked narrowing. The only delta is Zig's safe-build @intCast check, which is a build-mode safety check, not defined behaviour: in ReleaseFast (Ghostty's release mode) @intCast on out-of-range input is UB, so there is no reference-defined trap to port. Both sides parse layout width/height as usize (ghostty layout.zig; rustty tmux/layout.rs:33-34) and both construct the Terminal with the narrowed value; the ported control flow, error path and observable result on all in-range inputs are identical. This is the generic Zig-safety-check-vs-Rust-`as` class, not a functional-parity finding." Corrected location: `crates/rustty-vt/src/tmux/viewer.rs:935-950`.
 
 #### S209-F2 — All log.info/log.warn diagnostics in the viewer are dropped in the port
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/tmux/viewer.zig:16, 305, 397, 419-421, 461-472, 501, 505, 566, 654, 828, 855, 878, 900, 1027, 1049, 1063, 1075`
 - **Rustty:** `crates/rustty-vt/src/tmux/viewer.rs:66-69, 455-460, 621-627, 749-753, 1140-1146, 1600-1607`
@@ -1090,6 +1201,7 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - **Suggested fix:** None required for functional parity; if/when a logging seam exists in rustty-vt, re-instate these messages verbatim.
 
 #### S209-F3 — Action formatting text differs slightly from the reference's reflection-based format
+
 - **Status:** CONFIRMED · **Kind:** behavioral-difference · **Severity:** low
 - **Oracle:** `src/terminal/tmux/viewer.zig:207-229`
 - **Rustty:** `crates/rustty-vt/src/tmux/viewer.rs:311-333`
@@ -1097,11 +1209,9 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - **Evidence:** oracle viewer.zig:207-229 (`try writer.writeAll(@typeName(T)); ... try writer.print("{any}", .{value});`) vs rustty viewer.rs:319-332 (`writer.write_str("viewer.Viewer.Action")`, `Action::Exit => write!(writer, "exit =  }}")`, `Action::Windows(v) => write!(writer, "windows = {v:?} }}")`).
 - **Suggested fix:** Cosmetic; align the exit/windows rendering text if exact diagnostic parity is desired.
 
-
 ## Performance-only differences (not findings)
 
 385 observations recorded by the finders as performance- or idiom-only: identical observable behaviour, different implementation. They are listed per shard with the oracle unit(s) that shard covered.
-
 
 **Shard 122** — PageList.zig
 
@@ -1113,7 +1223,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - reflowRow trims trailing blanks with `iter().rev().take_while(is_empty).count()`; bulkRunLength uses `as_chunks::<BULK_GROUP_LEN>()` for the vectorized group loop — both yield identical cols_len / run lengths.
 - MemoryPool::init takes no allocator handles (Global + process page allocator) — the only oracle behaviour not compiled is the native-freestanding embedder-allocator arm, which this crate does not target.
 
-
 **Shard 123** — PageList.zig
 
 - copy_run uses core::ptr::copy_nonoverlapping instead of @memcpy (identical result; aliasing proven on a Miri harness per the PORT NOTE at resize.rs:1846-1852).
@@ -1121,7 +1230,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - scroll is split into `scroll`/`scroll_impl` (scroll.rs:57-93) solely to reproduce the two `defer` blocks (assertIntegrity + page_compression reset/markActivity) on every exit path, including through the .row -> .delta_row recursion.
 - compact/split re-derive `*mut Page` via raw projection after list splices (Stacked-Borrows hygiene, grow.rs:75, 906); no observable difference.
 - Scrollbar.C is hoisted to a sibling `ScrollbarC` type with identical repr(C) layout (grow.rs:1021-1033).
-
 
 **Shard 124** — PageList.zig
 
@@ -1131,7 +1239,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - activity_serial u48 is modelled as a u64 masked to 48 bits (compress.rs:162,179); wrap-around behaviour is identical.
 - compress_page: `compress::CompressedPage::init` takes no allocator argument (Rust global allocator) — same OOM->false handling.
 
-
 **Shard 125** — PageList.zig
 
 - `Limits.enforce(self: *const Limits, pagelist)` is relocated as `PageList::enforce_limit(&mut self, key)` operating on a `Copy` of `self.limits`; Limits is never mutated during the loop so behaviour is identical (Stacked-Borrows-driven signature change).
@@ -1140,31 +1247,26 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - Test-only FailingAllocator injection is replaced by `rustty_util::tripwire` fail points (FINISH_TW / ALLOCATE_PAGE_TW) placed at the same allocation sites; the two affected tests are ignored in release builds where tripwire is compiled out.
 - PageIterator::Limit::Row stores the pin by value and the port copies node/y out before matching to avoid holding a borrow across `self.row` writes — identical result.
 
-
 **Shard 126** — PageList.zig
 
 - Incompressible-page fixtures use a xorshift64* stream (tests.rs:2276-2295) instead of std.Random.DefaultPrng; only incompressibility is asserted, not specific bytes.
 - Rust compression tests reach compressed encoded bytes through `compressed_encoded_for_test` / `compressed_encoded_fill_for_test` raw-projection helpers rather than direct `node.data.compressed.encoded` field access, to avoid forming a `&NodeData`; observable behaviour is identical.
 - Several counterparts carry `#[cfg_attr(miri, ignore)]` / G6-lane ignores for LZ4 volume; they still run natively and under ASan.
 
-
 **Shard 127** — PageList.zig
 
 - Several counterparts (grow allocate, grow prune scrollback ×2, eraseRows/eraseRow/eraseRowBounded ×5, row erasure renews generations, increaseCapacity multi-page) carry `#[cfg_attr(all(miri, debug_assertions), ignore = ...)]`; this only gates the Miri debug-assertions lane for time budget and does not change native test behaviour.
 - rustty `pagelist_grow_prune_scrollback` keeps the oracle's explicit `if pin_y >= rows_pruned { .. } else { 0 }` rather than `saturating_sub` (allow(clippy::implicit_saturating_sub)); identical result.
 
-
 **Shard 129** — PageList.zig
 
 - Several tests carry `#[cfg_attr(all(miri, debug_assertions), ignore = ...)]` (tests.rs:10553, 11023, 11371, 11443, 11878) — Miri-budget lane gating only; the tests run unconditionally under plain cargo test and in the G6c Miri lane, so assertions are not weakened.
-
 
 **Shard 131** — PageList.zig
 
 - Miri-lane #[cfg_attr(all(miri, debug_assertions), ignore)] attributes on several ported tests (grapheme map capacity exceeded, backfill pins, grow non-standard x2, compact oversized) only affect the Miri G6 lane; the tests run normally under cargo test.
 - "destroyed pool page reuse is zeroed": Zig checks the contiguous cells slab as u64 words via std.mem.allEqual; rustty checks each cell's bytes through get_row_and_cell — same zero-ness check, different traversal.
 - PagePool.item_size in the oracle grow tests is spelled std_size() in rustty; the pool item size equals std_size so the loop conditions are identical.
-
 
 **Shard 132** — Parser.zig
 
@@ -1173,7 +1275,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - self.state hoisted into a local before the table lookup (parser.rs:569); collect/do_action/clear marked #[inline(always)] mirroring Zig `inline fn`; next marked #[inline].
 - SepList is a hand-rolled u32 bitset (StaticBitSet(24) equivalent); is_set returns false for idx >= 24 where the Zig bitset would assert — unreachable in practice (params_idx is bounded by MAX_PARAMS).
 - Parser::init zero-fills intermediates/params instead of leaving them undefined (Valgrind re-init branch is a no-op); never read past tracked indices.
-
 
 **Shard 133** — Screen.zig
 
@@ -1184,7 +1285,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - screen.rs:2966-2968 `#[inline]` on `resize` mirrors the oracle's `pub inline fn` for the rows benchmark.
 - Dirty is a plain struct of bools rather than a packed struct; Cursor derives Copy to mirror Zig by-value copies; raw `*mut` pointers replace Zig pointers throughout (Stacked-Borrows discipline) with identical observable behaviour.
 
-
 **Shard 134** — Screen.zig
 
 - set_attribute: the errdefer is realised as a closure invoked only on the single fallible call (manual_style_update); identical observable behaviour.
@@ -1194,12 +1294,10 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - select_line / prompt_click_line: cells slices are borrowed as `&[Cell]` from the raw page pointer instead of Zig's `[]Cell`; same iteration and comparisons.
 - selection_string / dump_string_alloc return an unsentineled Vec<u8> (length == Zig sentinel-exclusive len) instead of `[:0]const u8`; documented that no consumer reads the NUL.
 
-
 **Shard 135** — Screen.zig
 
 - Two rustty tests in this range ('Screen: cursorAbsolute to page with insufficient capacity' at screen.rs:5989 and 'Screen: scrolling when viewport is pruned' at screen.rs:13017) carry #[cfg_attr(all(miri, debug_assertions), ignore)] so they skip only in the Miri+debug-assertions lane for budget reasons; they run under plain cargo test with full assertions, so this is a tooling/perf-lane annotation, not a weakened test.
 - rustty's 'Screen: cursorCellEndOfPrev across mixed-width pages' (screen.rs:11573) wraps the oracle's direct `first.page().size.cols = 2` mutation in pause_integrity_checks(true/false) and restores cols=4 before deinit; the assertions are identical (cursor node == second, expected cell ptr == cursor_cell_end_of_prev()), the extra scaffolding only keeps Rust's debug integrity asserts from firing on the intentionally inconsistent modelled state.
-
 
 **Shard 136** — Screen.zig
 
@@ -1207,18 +1305,15 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - Rust resize tests pass an explicit `reflow: true, prompt_redraw: Redraw::False` where Zig relies on struct defaults (`reflow = true`, `prompt_redraw = .false`, Screen.zig:2010/2016) — identical inputs.
 - Rust tests use helper fns mkscreen/clone_clear_init/dump/vp/scr/act wrapping init+dumpStringAlloc; observable assertions unchanged.
 
-
 **Shard 138** — Screen.zig, ScreenSet.zig
 
 - ScreenSet: std.EnumMap(Key, *Screen) / EnumMap(Key, usize) are ported as fixed [Option<*mut Screen>; 2] / [usize; 2] arrays indexed by Key as usize — identical observable behaviour.
 - ScreenSet.init/get_init: the oracle allocates uninitialized storage then inits in place (with errdefer destroy); the port constructs the Screen first and only Box-allocates on success — same success/failure outcomes, no leak on the init-error path.
 - Screen tests: hyperlink URIs/IDs and selection strings are Vec<u8>/&[u8] instead of Zig []const u8 (byte-faithful); FailingAllocator replaced by the rustty_util tripwire fail-point seam at the Box::new(dupe) allocation.
 
-
 **Shard 139** — Selection.zig
 
 - None. The Rust port keeps the same pointFromPin-based ordering (including the NOTE(mitchellh) inefficiency comment) and the same cell/row iterator walks; no algorithmic substitutions observed.
-
 
 **Shard 140** — SelectionGesture.zig, StringMap.zig
 
@@ -1227,7 +1322,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - selection_gesture.rs `left_click_count` is u8 instead of Zig u3; value is clamped to 3 by @min in both, so widths are unobservable.
 - selection_gesture.rs time_since uses `as_nanos() as u64` (truncating u128->u64) where Zig does `@min(delta, maxInt(u64))`; unreachable difference for std::time::Instant durations.
 
-
 **Shard 141** — Tabstops.zig, Terminal.zig
 
 - printSliceStoreRun / the wide-pair store / the simple-cell and same-style scans: the reference uses explicit @Vector ops (splat, intCast widen, shift, std.simd.interlace, @reduce/@ctz); the port writes fixed-`lanes`-width scalar windows (terminal.rs:202-235, 271-284, 1523-1543, 1714-1732, 1814-1828) relying on LLVM auto-vectorization. Results are bit-identical.
@@ -1235,7 +1329,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - printSliceFill is split into print_slice_fill / print_slice_fill_inner and print into print / print_inner solely to model Zig `defer screen.assertIntegrity()`; no behavioural change.
 - Tabstops carries the allocator as a generic type parameter + Box<[u8]> instead of threading `alloc` into set/get; identical observable behaviour (allocation happens at the same call, same rounding via div_ceil, tail-only zeroing).
 - The reference's `resize to existing capacity does not allocate` test proves no second allocation via a FixedBufferAllocator; the port proves the same property via the pre-existing tripwire fail point (asserts resize succeeds AND the fail point was never reached) — equivalent, arguably stronger.
-
 
 **Shard 142** — Terminal.zig
 
@@ -1247,18 +1340,15 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - KittyScrollMargins disabled-build stub type is not needed in Rust: the real ScrollMargins is always compiled and the call sites are gated on the `options::KITTY_GRAPHICS` const (terminal.rs:3800-3814).
 - compressionActivity: the oracle's u48 serial is stored as a u64 pre-masked to 48 bits in pagelist/compress.rs:179, so the read is a plain load with identical values.
 
-
 **Shard 143** — Terminal.zig
 
 - Tripwire fail-point checks in resize() are `#[cfg(test)]` (compiled out of non-test builds) versus Zig's `tripwire.module` that is inert unless `builtin.is_test`; observable behaviour is identical.
 - `resize_rollback_geometry` re-sets synchronized_output on the error path even when it was already false (bumping an internal debug counter); no observable difference from the Zig errdefer.
 
-
 **Shard 144** — Terminal.zig
 
 - Test-only: rustty tests dereference raw `*mut Cell`/`*mut Row`/`*mut Page` via accessor methods (content_codepoint(), wide(), has_grapheme(), memory_ptr()) instead of Zig field access; observable assertions identical.
 - Test-only: rustty `terminal_scroll_clear_across_pages_keeps_cursor_hyperlink_refs_page_local` uses `vec![0u32; cap]` in place of `alloc.alloc(u32, cap)` + `@memset`; same holder-count logic.
-
 
 **Shard 146** — Terminal.zig
 
@@ -1266,13 +1356,11 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - Rust tests access cells/rows via raw pointers and accessor methods (`(*cell).content_tag()`, `(*row).hyperlink()`, `Node::page(node)`) in place of Zig field access; observable assertions identical.
 - Rust test fn `terminal_deleteLines_hyperlink_dense_row_crosses_page_boundary` keeps camelCase `deleteLines` in its identifier (cosmetic naming only; the `// test "..."` anchor comment is correct).
 
-
 **Shard 147** — Terminal.zig
 
 - The differential fuzz test carries `#[cfg_attr(miri, ignore)]` (terminal.rs:17733-17739) — a Miri-runtime-only exclusion documented in .port/phase-2/MIRI_EXCEPTIONS.md; the test still runs under normal `cargo test`, so no functional/test-coverage difference.
 - `deleteChars with a spacer head at the end` reads the cleared cell via `Cell::codepoint()` (tag-aware, returns 0 for bg-color tags) where the oracle reads the raw union field `content.codepoint.data`; for the blank cell asserted (default pen -> codepoint tag) both yield 0, so the assertion is equivalent.
 - Test scaffolding differences that are pure Rust idiom: explicit `t.deinit(Global)` instead of `defer`, `opts(cols, rows)` helper, `active_pt`/`screen_pt` point constructors, `unsafe { (*t.screens.active)... }` raw-pointer reads of the active screen, and `String::from_utf8_lossy` only in the diagnostic assert message of the differential helper.
-
 
 **Shard 148** — Terminal.zig, UTF8Decoder.zig, ansi.zig
 
@@ -1282,7 +1370,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - terminal.rs:17727-17734: the differential fuzz test is `#[cfg_attr(miri, ignore)]` (documented in MIRI_EXCEPTIONS.md); it still runs under normal cargo test.
 - terminal.rs:19525-19528: `resize with high unique style per cell with wrapping` is ignored only under `all(miri, debug_assertions)`; runs everywhere else.
 
-
 **Shard 149** — apc.zig, bitmap_allocator.zig, build_options.zig, charsets.zig
 
 - bitmap_allocator.rs: `find_free_chunks` iterates by index (`for idx in 0..bitmaps.len()`) instead of the oracle's `for (bitmaps, 0..) |*bitmap, idx|`; identical results and mutation order.
@@ -1290,7 +1377,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - apc/mod.rs: `UnknownBuilder.append` uses `Vec::reserve_exact(capacity - len)` for the oracle's `ensureTotalCapacityPrecise(capacity)`; the retained-byte count and truncated flag are computed identically. The OOM arms (`catch { self.truncated = true; return; }`, `toOwnedSlice` failure) have no analog because the global allocator aborts on OOM.
 - apc/mod.rs: `Identify.len` is u8 instead of u3 and the identify buffer starts zeroed instead of `undefined`; only `buf[0..len]` is ever read.
 - build_options.rs: `Options::add` returns a `Resolved` value instead of writing into a `std.Build.Module`; the option keys, values, and emission order are the same; `Features` is a plain struct instead of a packed struct (the backing integer only served the test's `@bitCast(0)`, ported as `Features::NONE`).
-
 
 **Shard 150** — clipboard.zig, color.zig, compress.zig, csi.zig, cursor.zig, dcs.zig, device_attributes.zig
 
@@ -1302,7 +1388,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - dcs.zig:8/33/37/117 scoped `log.info/debug` calls are no-op comments in dcs.rs (crate has no logging facade); log text only.
 - color.zig:1327-1357 paletteCvalSlice test poisons whole RGB elements with 0xAA rather than raw bytes (byte-equivalent since size_of::<RGB>()==3 is asserted).
 
-
 **Shard 151** — device_status.zig, focus.zig, formatter.zig
 
 - formatter.rs: `BufOut` 4096-byte buffered adapter wrapped around the io::Write sink for the duration of one PageFormatter format (stand-in for Zig's buffered std.Io.Writer); same bytes, same order.
@@ -1310,7 +1395,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - formatter.rs: HTML/VT header assembled in a `Vec<u8>` instead of a fixed 1024/512-byte stack buffer (oracle would return WriteFailed on overflow, which cannot happen for the fixed-size header content).
 - formatter.rs: PinMapMap `set_node`/`append` are infallible (Vec growth aborts on OOM) where the oracle maps Allocator.Error to WriteFailed.
 - device_status.rs: MAX_COLOR_SCHEME_REPORT_ENCODE_SIZE frozen to 9 instead of computed at comptime by dry-running the encoder; test asserts 9 and the encoder outputs are 9 bytes.
-
 
 **Shard 152** — formatter.zig
 
@@ -1320,18 +1404,15 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - appendBlankPoints / formatStyleClose / formatHyperlinkClose: Zig `ensureUnusedCapacity ... catch return error.WriteFailed` becomes `Vec::reserve`/`push` (allocation failure aborts) — standard Rust allocation idiom used throughout the port, not an observable difference under normal operation.
 - write_codepoint_utf8 (formatter.rs:163-166) PORT NOTE still cites `writer.print("{u}")` while the oracle now calls `printUnicodeCodepoint`; behaviour (U+FFFD fallback) is identical, comment-only staleness.
 
-
 **Shard 153** — formatter.zig
 
 - Rust tests use Vec<u8> as the writer and `trim_start(full_output, b"\n")` / `b"\r\n"` helper in place of std.Io.Writer.Allocating + std.mem.trimStart; identical observable assertions.
 - Rust multi-page PageList tests re-derive the `pages` raw pointer via a closure after each vt_stream() write (Stacked-Borrows hygiene, PORT NOTE WS19 T6) instead of caching `&t.screens.active.pages` once as the Zig test does; test-only, no behavioural difference.
 
-
 **Shard 154** — formatter.zig, fraction.zig
 
 - formatter.rs tests build output into a Vec<u8> and clone it instead of std.Io.Writer.Allocating buffered() slices; identical observable bytes.
 - fraction.rs uses u8::is_ascii_digit() and a RangeInclusive::contains for the [0,1] check instead of explicit comparisons; semantics (including NaN rejection and -0 acceptance) are identical.
-
 
 **Shard 155** — hash_map.zig, highlight.zig, hyperlink.zig, kitty.zig, lib.zig, main.zig
 
@@ -1341,7 +1422,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - hyperlink.rs: `SetContext` stores page pointers as exposed-provenance `usize` addresses instead of raw pointers (Stacked Borrows soundness); identical behaviour.
 - hyperlink.rs: `PageEntryId` is a byte-complete `#[repr(C)]` tagged struct with zeroed inactive payload instead of a Rust enum; same 24-byte size/alignment, avoids uninit-byte reads by the page compressor; value semantics unchanged.
 
-
 **Shard 156** — mem.zig, modes.zig, mouse.zig, osc.zig
 
 - modes.rs: ModePacked is a u64 bitset indexed by ENTRIES position and Mode->index lookup is a linear scan of MODE_BY_INDEX instead of comptime field resolution; all set/get/save/restore/reset results are identical (8-byte size asserted).
@@ -1350,7 +1430,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - osc/mod.rs: Capture fixed backing stores a running length into Parser.buffer instead of a std.Io.Writer over it; allocating backing is a Vec grown with reserve_exact to the same bounded capacities (tests assert capacity == oracle buffer.len). Terminator::cval rebuilds the C EnumType descriptor on each call.
 - osc/mod.rs: Parser::next is #[inline(always)] to mirror the oracle's @call(.always_inline) at its call sites; the comptime @sizeOf(Command) == 64 assert is not mirrored (Rust enum layout, not observable).
 - mem.rs: madvise is declared via a hand-rolled extern "C" instead of std.posix; cfg!(miri) and a `test-decommit-sim` feature join cfg!(test) on the simulated-reclaim arm.
-
 
 **Shard 157** — page.zig
 
@@ -1363,7 +1442,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - get_row_and_cell / lookup_hyperlink / layout carry #[inline] to compensate for the reference's single-compilation-unit inlining.
 - Cell/Row are #[repr(transparent)] u64 wrappers with bit-field accessors reproducing the packed struct layout (verified by layout tests); `Cell::is_style_run_cell` is a bit-test shortcut for `!hasGrapheme && !hyperlink`.
 
-
 **Shard 158** — page.zig
 
 - Mask group ops use fixed-size [Backing; GROUP_LEN] loops instead of @Vector/@reduce; identical predicates (page.rs:1962-2176 vs page.zig:2417-2560). Extra eql_group / eql_any_group (&[T; N] variants, XOR/min reductions) are additions with no oracle counterpart, purely for bounds-check elision.
@@ -1371,13 +1449,11 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - Cell::copy_with_managed_reset / is_style_run_cell (page.rs:889-930) are masked-store fusions of the sequential resets in clonePartialRowFrom; machine-checked equivalent by cell_copy_with_managed_reset_equivalence / cell_style_run_facts tests.
 - Row::reset uses debug_assert! where move_hyperlink/set_graphemes use assert!; both are at least as strict as the corresponding Zig std.debug.assert (compiled out in ReleaseFast) / slow_runtime_safety checks.
 
-
 **Shard 159** — page.zig, parse_table.zig, paste.zig, point.zig
 
 - parse_table.rs builds the transition table in a `const fn` into a `static TABLE` instead of Zig comptime `genTable()`; the accumulated OptionalTable + `orelse transition(state, .none)` fill is reproduced and the resulting table is byte-identical.
 - page_tests.rs carries three rustty-only regression tests (page_cloneFrom_style_run_refcounts_{batched,conflicting_dst_id,dead_dst_id}) guarding a PERF reshape of the style-run batch in clone_partial_row_from_inner; they pin the reference's per-cell refcount/id-mapping results, so they are additive coverage, not a behavioural divergence.
 - paste.rs `Context` drops the `alloc` field (global allocator, infallible `grants.grant`); observable behaviour identical apart from OOM on grant being unrepresentable.
-
 
 **Shard 160** — ref_counted_set.zig
 
@@ -1387,7 +1463,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - ref_counted_set.rs:456-508 and 1154-1164, 1238-1242 — item array zeroed byte-wise and Item written field-wise (instead of typed whole-struct writes) so padding bytes stay initialized for the page compressor under Miri; value bytes identical.
 - ref_counted_set.rs:1370-1381 — ref_from_id converts the `n: Id` of release_multiple to RefCount by repeated addition (O(n)) instead of an integer cast; same value.
 
-
 **Shard 161** — render.zig, search.zig, selection_codepoints.zig
 
 - render.rs: `row_data` is `Vec<Row>` (AoS) instead of `std.MultiArrayList(Row)`; per-row cells are a hand-rolled SoA `CellList` (raw/style/grapheme_spans + shared `grapheme_buf`) replacing `MultiArrayList(Cell)` + per-row ArenaAllocator; identical observable contents.
@@ -1396,13 +1471,11 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - render.rs `RowDirtyMask`/`CellSpecialMask` are const-generic `page::Mask` instantiations (match_group/match_scalar/eql/eql_exact/bits/pattern) mirroring `page.Mask(...)`.
 - render.rs `link_cells` uses rustty_zigstd AutoArrayHashMapUnmanaged for CellSet; `string()` writes into `Vec<u8>` instead of `*std.Io.Writer` (only WriteFailed can arise).
 
-
 **Shard 162** — sgr.zig, size.zig, size_report.zig
 
 - sgr.zig @branchHint(.likely/.unlikely/.cold) annotations and @call(.always_inline, SepList.isSet) have no Rust counterpart beyond #[inline] on is_colon; behaviour identical.
 - rustty's SepList::is_set (parser.rs:338) returns false for idx >= MAX_PARAMS where Zig's StaticBitSet.isSet would safety-assert; this only makes rustty more lenient on the (unreachable for valid input) out-of-range probe in the colon-consumption loop and produces no different output. SepList itself belongs to Parser.zig (other shard).
 - OffsetSlice<T> carries an explicit `_padding: u32` (64-bit only) so the page mapping has no uninitialized bytes; same size/align (16/8) as the oracle's auto-layout struct.
-
 
 **Shard 163** — stream.zig
 
@@ -1413,7 +1486,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - stream.rs:823-833 Tracker allocates on the global allocator; `Options.allocator` is used only as the presence gate (oracle passes the allocator into Tracker.init). Observable gating (allocator present AND max_bytes>0) is identical.
 - Rust `debug_assert!` used where the oracle uses `quirks.inlineAssert` (which is also compiled out in Release modes) for state preconditions in csi_entry_byte/consume_csi_params/next_utf8/next_non_utf8; `assert!` kept where the oracle asserts in next_slice_capped/consume_apc_string/consume_osc_string.
 
-
 **Shard 164** — stream.zig
 
 - Zig @branchHint(.likely/.unlikely/.cold) annotations throughout csiDispatch/oscDispatch/escDispatch are preserved as comments only; no behavioural effect.
@@ -1421,14 +1493,12 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - Kitty '=' arm folds the oracle's two-step (select Action.Tag, then switch on it) into a single match on `number` (stream.rs:3447-3467); dispatch targets and the invalid-number early exit are identical.
 - Oracle's inline `fn` dispatchers are plain methods in Rust (inlining left to the optimizer).
 
-
 **Shard 165** — stream.zig, stream_continuation.zig
 
 - stream_continuation.rs find_vt_replay_start: the oracle's @Vector/@reduce/@clz backward ESC scan (unroll 4) is emulated with scalar loops over the same lane/unroll geometry (ESC_SCAN_LANES from rustty_simd::native_vector_bits); identical result (index of the last ESC or None), just no SIMD.
 - Tracker allocation: oracle stores an explicit Allocator and ArrayList; rustty uses a global-allocator Vec<u8> whose real OOM aborts, with the `catch { markBroken }` arms preserved only through the test-only TRACKER_TW tripwire seam (documented PORT NOTE). Observable behaviour under non-OOM conditions is identical.
 - Rustty apc bulk tests drive `consume_until_ground` directly (drive_bulk/drive_bulk_into) rather than `next_slice`, because both trees' `nextSlice` degrade to per-byte in debug builds; this exercises the bulk path in every configuration and asserts a superset of the oracle's SIMD-guarded assertions (rustty-side strengthening, not a gap).
 - Tracker::deinit assigns `Vec::new()` instead of an explicit free; equivalent lifecycle.
-
 
 **Shard 166** — stream_terminal.zig
 
@@ -1438,13 +1508,11 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - vtFallible's single comptime switch is distributed over `impl stream::Handler` trait methods (monomorphized per action); the shared catch is `vt_catch`.
 - Kitty clipboard WriteState is `Option<Box<_>>` taken out of the slot during data/alias/commit and put back on success instead of a raw `?*` pointer; ReadState id/pw/mimes are owned copies instead of borrowed slices.
 
-
 **Shard 167** — stream_terminal.zig
 
-- Test-harness only: Zig local-struct `var` statics captured by callbacks become `thread_local!` cells (CAPTURE/COUNTER, DN_*, PR_*, CLIP_*, CR_*, KC) because Rust effect callbacks are bare fn pointers; the oracle's fixed capture arrays ([1024]u8 responses, [8][64]u8 mimes, [8][256]u8 data) become growable Vecs, which never truncates captured data (the oracle silently caps at 8 contents); no observable assertion differs.
+- Test-harness only: Zig local-struct `var` statics captured by callbacks become `thread_local!` cells (CAPTURE/COUNTER, DN__, PR__, CLIP__, CR__, KC) because Rust effect callbacks are bare fn pointers; the oracle's fixed capture arrays ([1024]u8 responses, [8][64]u8 mimes, [8][256]u8 data) become growable Vecs, which never truncates captured data (the oracle silently caps at 8 contents); no observable assertion differs.
 - Test-harness only: comptime `++`/`bytesToHex` query construction in the XTGETTCAP tests is replaced by runtime test_hex/test_concat helpers producing byte-identical sequences.
 - Test-harness only: `clipboard_write allocation failure is ignored` injects the allocation failure through the CLIPBOARD_CONTENTS_TW tripwire fail point instead of swapping `t.screens.active.alloc` for testing.failing_allocator (rustty's allocator is the zero-sized Global); the observable assertions (count 0, no semantic_failure) are kept and extended.
-
 
 **Shard 168** — stream_terminal.zig
 
@@ -1452,7 +1520,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - `kitty clipboard allocation failure is ignored`: the reference swaps `t.screens.active.alloc` to `testing.failing_allocator`; rustty uses the KITTY_CLIPBOARD_TW tripwire fail point (`KittyClipboardFp::CreateWriteState`) at the same `create(WriteState)` site — same observable outcome (no transaction, no semantic_failure, no responses).
 - `paste: mode 5522 without entropy`: `std.Io.failing` maps to `t.io = sys::io_failing` plus a process-wide `random_secure_test_lock`; three 5522/reader tests carry `#[cfg_attr(miri, ignore)]` only under Miri (real OS RNG), unaffected under normal cargo test.
 - `std.base64.standard.Encoder.calcSize(otp_len)` is computed inline as `otp_len.div_ceil(3) * 4` (same value).
-
 
 **Shard 169** — style.zig, sys.zig, tmux.zig, x11_color.zig
 
@@ -1462,7 +1529,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - sys.rs decode_png_wuffs copies the decoded pixel buffer into a global-allocator Vec (`result.bytes().to_vec()`) instead of the oracle's zero-copy handoff; the decode itself still runs through the caller's (limited) allocator.
 - x11_color.rs builds the case-insensitive map, the original-case key list and the entries table lazily via OnceLock at first access instead of comptime; rgb.txt is byte-identical and has no case-insensitive key conflicts so HashMap last-wins vs StaticStringMap is unobservable.
 
-
 **Shard 170** — glyph.zig, Glossary.zig, execute.zig, request.zig, response.zig
 
 - request.rs decode_glyf_payload uses a heap Vec scratch buffer instead of the oracle's stackFallback(64KiB) allocator; size is capped identically so behaviour is unchanged.
@@ -1470,7 +1536,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - request.rs inlines a verbatim port of std.base64.standard.Decoder (fast 16/4-byte paths + tail) rather than depending on a base64 crate; identical accept/reject semantics.
 - glossary.rs register() uses contains()+ordered_remove+put instead of getOrPut/putAssumeCapacity; same FIFO ordering and eviction observable behaviour.
 - decode_limited threads the per-allocation limit explicitly (each Vec allocation site checks its request size) instead of a LimitedAllocator vtable; real OOM aborts so the oracle's OutOfMemory-vs-PayloadTooLarge discriminant collapses to PayloadTooLarge with identical observable results.
-
 
 **Shard 171** — allocator.zig, build_info.zig, cell.zig, color.zig, color_scheme.zig, focus.zig, formatter.zig, grid_ref.zig, grid_ref_tracked.zig
 
@@ -1480,7 +1545,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - formatter.rs format_alloc (non-empty path): formats into a Vec and performs a single alloc+memcpy through the resolved C allocator, whereas the oracle's Allocating writer issues grow/remap/free callbacks as it fills; the C caller receives the same bytes/len and frees with the same allocator (the empty-output case is reported as a finding).
 - build_info.rs: builtin.mode is derived from cfg!(debug_assertions)/OPT_LEVEL cfgs (four-way mapping) rather than a single compiler-provided mode value; profile-pinned tests assert the ordinals.
 
-
 **Shard 172** — io.zig, key_encode.zig, key_event.zig
 
 - io.rs ReaderAdapter drops the reference's 4 KiB `transfer_buffer` (used only when the destination std.Io.Writer is unbuffered); the Rust trait pumps through the caller's destination slice instead, so the callback still receives the destination's exact capacity. Observable bytes/offsets identical; only the intermediate copy differs.
@@ -1489,13 +1553,11 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - key_event.rs keeps an owned Vec<u8> cache refreshed from the borrowed utf8 ptr/len on every use (`sync_utf8`) so the rustty-vt KeyEvent (which owns its utf8) sees the caller's live bytes; extra copy only, observable pointer identity and mutation visibility match the reference.
 - key_encode.zig's setopt/OptionAsAlt range guards and key_event.zig's set_action/set_key guards are compiled only under `std.debug.runtime_safety`; rustty always guards (safe superset).
 
-
 **Shard 173** — kitty_graphics.zig, main.zig
 
 - kitty_graphics.rs:109-114 stores the map entry as a raw (key_ptr, value_ptr) tuple and the iterator as `Option<hash_map::Iter<'static,..>>` transmuted from a borrowed iterator, instead of Zig's `PlacementMap.Entry`/unmanaged `Iterator`. Same observable behaviour (the reference's unmanaged iterator is equally untracked); documented in a PORT NOTE.
 - compute_viewport_pos widens the visibility sums to i64 (`vp_row as i64 + grid_size.rows as i64`) exactly as the oracle does at kitty_graphics.zig:2062-2065 — no divergence; noted only because the Rust code carries an R7 comment about the older i32 cast.
 - Enum selectors are narrowed from a plain `c_int` via `from_c_int` in the extern wrappers (lib.rs:1983-2139) rather than being received as `enum(c_int)` parameters. This is a documented deliberate divergence (D11) covering UB the Zig oracle has no defined behaviour for; the in-range dispositions (including `invalid = 0` -> `.invalid_value`) are identical, and two extra tests (kitty_graphics.rs:3975, 4001) pin it.
-
 
 **Shard 174** — modes.zig, mouse_encode.zig, mouse_event.zig, osc.zig, paste.zig
 
@@ -1505,14 +1567,12 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - paste.rs tests use a Vec-backed capture buffer instead of the oracle's fixed [1024]u8 + len pair, and take a process-wide mutex because Rust runs tests in parallel; assertions are unchanged.
 - osc.rs appends a NUL sentinel in place to the ChangeWindowTitle Vec before handing the pointer to C, reproducing the oracle's `[:0]const u8` `.ptr`; the extra byte is not observable through any other C surface.
 
-
 **Shard 175** — render.zig
 
 - Data-structure reshape (documented, behaviour-identical): the oracle's `RowIteratorWrapper` caches four parallel `std.MultiArrayList` column slices (`raws`/`cells`/`selection`/`dirty`); rustty caches one `*mut [RenderRow]` and projects `row_data[y].raw/.cells/.selection/.dirty`. Same for `RowCellsWrapper` (three SoA columns -> one `*const CellList`). All reads/writes, including `row_set(.dirty)` writing through the slice into the render state, are equivalent.
 - rustty adds raw-`c_int` entry points (`get_checked`, `row_get_checked`, `row_cells_get_checked`) plus per-element range checks in the `*_get_multi` loops to carry the oracle's `std.enums.fromInt` runtime-safety guard, which the oracle keeps inside its `*Dispatch` inlines. Same log scope (`render_state_c`), same `log.warn` text, same `.invalid_value` disposition, same `out_written = i` on the failing element.
 - `Dirty::from_c_int` / `set_typed` range-check the inbound `set(.dirty)` payload and return `.invalid_value` for an undeclared value. The oracle loads `value.*` directly (safety-checked illegal behavior in Debug, UB in ReleaseFast), so no defined oracle behaviour is changed; for every declared value the two are identical. Backed by the extra rustty tests `render_dirty_payload_is_int_sized`, `render_get_dirty_fills_the_whole_int_slot`, `render_set_dirty_reads_the_whole_int_slot`.
 - Uninitialized-field substitution: the oracle's `row_iterator_new`/`row_cells_new` leave every field `undefined`; rustty writes sentinels (`y/x = POSITION_NONE`, empty rows slice / shared empty `CellList`, null palette). Both are only observable after `get(.row_iterator)` / `row_get(.cells)` install real values, and the sentinel makes the pre-install `next` calls return false rather than reading uninitialized memory.
-
 
 **Shard 176** — result.zig, row.zig, search.zig, selection.zig
 
@@ -1522,7 +1582,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - `codepoint_slice` is the identity reinterpret in rustty (`page::u21 == u32`) vs Zig's `@ptrCast` of `[*]const u32` to `[*]const u21`; the size/align comptime asserts are preserved and hold trivially.
 - rustty applies the `std.enums.fromInt` range guards unconditionally (`get_checked`/`set_checked`) where the oracle gates them on `comptime std.debug.runtime_safety`; in Rust materializing an out-of-range `#[repr(C)]` discriminant is UB in every mode, so the always-on guard is strictly a superset with identical observable results in safety-enabled builds.
 
-
 **Shard 177** — selection_gesture.zig, sgr.zig, size_report.zig
 
 - selection_gesture: the reference's `union(EventType)` payloads store the borrowed `word_boundary_codepoints`/`behaviors` slices inline; rustty stores only the non-borrowing fields (PressFields/DragFields/AutoscrollTickFields/DeepPressFields) and rebuilds the borrowing `sg::Press`/`Drag`/`AutoscrollTick`/`DeepPress` at dispatch from the event-owned storage. Observably identical (set fields then dispatch).
@@ -1530,7 +1589,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - selection_gesture: `?[]u21` backing storage becomes `Option<Vec<u32>>`; `&.{}` (empty) is `Some(Vec::new())` and `null` is `None` falling back to `DEFAULT_WORD_BOUNDARIES`, matching the reference's target-slice semantics exactly.
 - sgr: `alloc.dupe(u16, params[0..0])` in the reference still enters the allocator vtable for a zero-length allocation, whereas rustty's `set_params` short-circuits `len == 0` to `(null, 0)` with no allocator call. No observable result difference (the reference's zero-length slice is likewise never freed, since `free`/`set_params` guard on `params.len > 0`); only the caller-allocator call count differs.
 - sgr: rustty operates through raw pointers + `addr_of_mut!` rather than a retained `&mut *parser_` across `free_params`, to keep Stacked Borrows happy. Same field writes, same order.
-
 
 **Shard 178** — snapshot.zig, style.zig, sys.zig
 
@@ -1541,7 +1599,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - sys.rs: the reference's module-level `var global` becomes a `Mutex<Global>`; every read takes and immediately drops the lock. Same startup-only mutation contract, no observable difference.
 - sys.rs `LogEmitter`: the reference implements a `std.Io.Writer` vtable `drain`; rustty implements `core::fmt::Write` with an explicit fill/flush loop. Chunk boundaries and callback counts are identical for the 2048/3000/4096-byte cases the reference tests pin (verified by hand against both algorithms).
 
-
 **Shard 179** — terminal.zig
 
 - clipboard_write_trampoline / clipboard_read_trampoline / clipboard_read_reply_trampoline: the oracle's `std.heap.stackFallback(128/256, gpa)` and the `>4 contents` heap path map to plain `Vec`s in rustty (the stack-first 4-element array is preserved for the write path). The only behavioural consequence is that the oracle's OOM arms (`write.reply(.io_error)`, `log.warn` + unanswered request) are unreachable under Rust's abort-on-OOM policy (DG5) — documented in-file.
@@ -1551,7 +1608,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - `apc_handler.max_bytes` EnumMap -> always-full `[usize; Protocol::COUNT]` array with `default_max_bytes` re-seeding on `remove`/`else` — identical lookup results.
 - ScrollViewport/UnknownSequence `lib.TaggedUnion` factory -> hand-authored `#[repr(C)]` struct+union with build-time size/alignment asserts; same ABI.
 
-
 **Shard 180** — terminal.zig
 
 - `compression activity and incremental scheduling`: the oracle allocates `line.len * repeat` bytes and `@memcpy`s each slot; rustty uses `Vec::with_capacity` + `extend_from_slice` in a loop. Identical resulting bytes.
@@ -1559,13 +1615,11 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - Callback capture scaffolding differs idiomatically: the oracle uses a per-test `const S = struct { var last_data: ?[]u8 ... }` with `testing.allocator.dupe`; rustty uses per-test `static mut` plus `extern "C" fn` capturing into an owned `Vec<u8>`. Observable assertions identical.
 - `continuation internal allocation and restoration`: the oracle's `continuationAllocIo` returns an allocator-owned slice freed by the test; rustty's returns a `Vec<u8>`. Same exported bytes and same `error.InvalidContinuation` / `RestoreContinuationError::InvalidContinuation` failure for input "A".
 
-
 **Shard 181** — terminal.zig
 
 - rustty test harness replaces the oracle's fixed `[64]u8`/`[512]u8` capture buffers with `Vec<u8>`/`Vec<Vec<u8>>` statics (crates/rustty-vt-c/src/terminal.rs:8648-8660, 8387-8400); assertion content and count are identical.
 - `crate::color::PaletteC` is a type alias for `[rustty_vt::color::RGB; 256]` and `palette_cval` is a plain array copy (crates/rustty-vt-c/src/color.rs:26-51) because rustty's `RGB` is already `#[repr(C)] {r,g,b:u8}`; the oracle's per-element `.cval()` loop is an identity map, so `color.default[0].cval()` and `rustty_vt::color::DEFAULT[0]` compare the same bytes.
 - `set_glyph_protocol_...` uses an array index (`enabled[Protocol::Glyph as usize]`) where the oracle uses an EnumSet `.contains(.glyph)` — identical observable predicate.
-
 
 **Shard 182** — types.zig, unicode.zig
 
@@ -1574,7 +1628,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - unicode.rs merges the oracle's four `codepoint_width *` test blocks into one Rust test containing all five assertions; no assertion is lost.
 - types.rs adds a Rust-only test `json_is_comptime_static_data` (no oracle counterpart) guarding that the manifest is static comptime data rather than a lazily allocated cache; extra coverage, not a divergence.
 
-
 **Shard 183** — Page.zig, lz4.zig, lz4_differential.zig
 
 - compress/Page.zig:76 vs page.rs:139-140 — `representation_overhead` is `@sizeOf(Page) - @sizeOf(TerminalPage)` in both, but the value differs by 8 bytes on 64-bit (Zig: []u8 16 + Allocator 16 = 32; Rust: Vec<u8> = 24) because Rust's Vec carries its Global allocator implicitly, so the oracle's `alloc: Allocator` field has no counterpart (documented PORT NOTE at page.rs:38-41). The formula, the `<=` early return, and the `-1` strictness reserve are identical; only the accounting of the port's own representation size differs, which is inherent to the representation and self-consistent (the rustty test at page.rs:464-469 asserts the same formula the oracle asserts at Page.zig:310-313). Not a behavioural divergence in the ported code paths.
@@ -1582,16 +1635,14 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - lz4.zig:449-490 vs lz4.rs:695-734 — `std.mem.readInt`/`writeInt`/`copyIntAt` on fixed-size subslices are expressed as safe `from_le_bytes`/`to_le_bytes` + `copy_from_slice` (and `copy_within` for the >=64-byte non-overlapping match memcpy). Same bytes moved, same order; the rustty module contains no `unsafe` where the oracle relies on Zig's unaligned loads.
 - lz4.zig:853-862 / lz4_differential.zig — the oracle drives its round-trip and generator suites with `std.Random.DefaultPrng`; lz4.rs:972-985 uses a xorshift64* and page.rs:509-515 an LCG, while lz4_differential.rs:65-134 reimplements xoshiro256++ with SplitMix64 seeding. The exact byte streams differ from the oracle's in the first two cases, but every assertion in those tests is structural (round-trip identity / incompressibility), so no assertion is weakened.
 
-
 **Shard 184** — clipboard.zig, clipboard_command.zig, clipboard_grants.zig, clipboard_response.zig, clipboard_write.zig, color.zig, dnd.zig
 
 - clipboard_command.rs: `Payload` stores an owned `Vec<u8>` plus a decoded length and exposes `data()` instead of the reference's two aliasing slices (`buf`/`data`); identical observable bytes.
 - clipboard_command.rs / clipboard_grants.rs / clipboard_write.rs: the reference's packet-scoped `ArenaAllocator` and `dupe` calls become owned `Vec<u8>` fields freed on drop (Zig `deinit` methods have no counterpart). Same lifetimes and contents, different allocation strategy.
-- clipboard_write.rs `WriteState::data`: the reference decodes into the spool's *uninitialized* unused capacity then bumps `items.len`; the port zero-extends the Vec (`resize(start+reserve, 0)`), feeds into the initialized tail, then truncates. One extra memset per chunk, byte-identical result (and identical spool length on the Invalid/TooLarge error paths, which both leave the spool at `start`).
+- clipboard_write.rs `WriteState::data`: the reference decodes into the spool's _uninitialized_ unused capacity then bumps `items.len`; the port zero-extends the Vec (`resize(start+reserve, 0)`), feeds into the initialized tail, then truncates. One extra memset per chunk, byte-identical result (and identical spool length on the Invalid/TooLarge error paths, which both leave the spool at `start`).
 - clipboard_write.rs `Alias.target`: the reference shares one arena-duped target slice across every alias registered in a call; the port clones the target bytes per alias. Same mapping, one small allocation per alias.
 - clipboard_response.rs: `std.base64.standard.Encoder.encodeWriter` is reproduced inline as `b64_encode_writer` (scalar 3-byte grouping); same padded standard-alphabet output.
 - clipboard_command.rs: `std.mem.TokenIterator(u8, .any)` over `std.ascii.whitespace` is reproduced as an explicit `MimeIterator` with the same delimiter set (including 0x0B, which Rust's `is_ascii_whitespace` omits) and the same `reset` rewind.
-
 
 **Shard 185** — dnd_command.zig, dnd_drop.zig, dnd_response.zig, dnd_test.zig, graphics.zig, graphics_animation.zig
 
@@ -1602,7 +1653,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - dnd_test.rs base64 round-trip decodes by splitting on ESC and stripping the "]72;"/"\\" remnants instead of splitting on the two-byte ST, and uses rustty_simd::base64::decode; same payload extraction and same final expectEqualSlices-equivalent assertion.
 - graphics_animation.rs derives Clone/PartialEq/Eq and holds Animation as Option<Box<Animation>> in Image (deep clone) instead of Zig's shared `?*Animation`; observably identical for every read per the documented PORT NOTE.
 
-
 **Shard 186** — graphics_command.zig
 
 - decode_data: the reference decodes base64 in place, aliasing `self.data.items` as both source and destination; the Rust port clones the source first (`let src = self.data.clone()`) because of the borrow checker, then decodes into `self.data[0..max_len]` and truncates. Same decoded bytes, same length, same InvalidData error path — extra allocation only.
@@ -1612,7 +1662,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - Parser.kv_temp_len is `u4` in the reference and `u8` in Rust; the value never exceeds 12 before being reset, so the width is unobservable.
 - Format/Medium/Compression are `lib.Enum(lib.target, ...)` in the reference; the port uses plain Rust enums plus a rustty-only `descriptor()` helper (hardcoded `Target::Zig`). Other `lib.Enum(lib.target, ...)` sites in the port (point.rs, focus.rs, device_attributes.rs) model no descriptor at all, so this helper is an addition, not a regression; the reference reflects over these types only for C-ABI layout, which the vt-c layer handles separately.
 
-
 **Shard 187** — graphics_exec.zig
 
 - graphics_storage::image_by_id/image_by_number return a cloned `Image` (including its pixel Vec) where the reference returns a by-value struct copy that aliases the same data slice; `display` only reads id/width/height/format from it, so behaviour is identical but the port copies more bytes.
@@ -1621,13 +1670,11 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - `delete` and the retransmit-delete branch of `load_and_add_image` `mem::take` the ImageStorage out of the active screen and move it back around the call to satisfy the borrow checker; the reference aliases the pointer directly. Same observable state on return.
 - load_and_add_image returns `img.withoutData()` (metadata-only copy) instead of the reference's data-aliasing struct copy; the caller only reads `id` and `metadata.implicit_id`.
 
-
 **Shard 188** — graphics_exec.zig
 
 - rustty accesses the active screen via raw pointer (`unsafe { &(*t.screens.active).kitty_images }`) instead of Zig's `&t.screens.active.kitty_images`; identical observable behaviour.
 - Where Zig asserts image bytes via `img.data.bytes().?`, rustty sometimes destructures `Data::Complete(bytes)` directly (e.g. graphics_exec.rs:3040, 3090); this is equal-or-stronger, same values compared.
 - Zig's `resp.encode(&writer)` into a fixed 128-byte buffer is a `Vec<u8>` in rustty (graphics_exec.rs:3329-3332); the compared output string is identical ("\x1b_Gi=1,r=2;OK\x1b\\").
-
 
 **Shard 189** — graphics_image.zig, graphics_pixel.zig, graphics_render.zig
 
@@ -1640,7 +1687,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - graphics_image.rs:900-922: zlib inflate uses the vendored C zlib (`zlib_sys::inflate_zlib`) rather than Zig's `std.compress.flate`; both cap at max_size and both surface a cap breach or malformed stream as a failure mapped to DecompressionFailed.
 - graphics_image.rs:1085-1108: `Metadata` is a plain struct rather than the oracle's `packed struct(u32)`; it is only read/written field-wise and `placement_count` is bounded by `PLACEMENT_COUNT_MAX` (maxInt(u30)) at the single increment site.
 
-
 **Shard 190** — graphics_storage.zig
 
 - Hash maps: oracle uses `std.AutoHashMapUnmanaged` with iterate-and-`removeByPtr`; the port uses `std::collections::HashMap` with a collect-keys-first-then-remove shape (graphics_storage.rs:161-164 and every removal loop). Both are unordered and each collected key is removed at most once, so membership/count results are identical.
@@ -1652,7 +1698,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - `ScrollMargins.end()` is a consuming no-op with the restore body in `Drop` (graphics_storage.rs:2261-2296), mirroring Zig's `defer state.end()` on early-return paths.
 - Screen/Terminal parameters are raw `*mut` in the port rather than `&mut` to avoid aliasing the `&mut self` receiver (storage lives inside `Screen`); all dereferences are narrow, and the resulting behaviour is identical.
 
-
 **Shard 191** — graphics_storage.zig
 
 - deleteIntersecting and evictImageExcept iterate the placements map in place in Zig; the Rust port first collects `self.placements.keys().copied()` into a Vec to satisfy the borrow checker (extra allocation, identical set of removals).
@@ -1660,13 +1705,11 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - Candidate.priority is `u2` in Zig, `u8` in Rust (only ever compared, never bit-packed; values are 0..=3 either way).
 - PlacementId is a `packed struct` in Zig and a plain `#[derive(Hash, Eq)]` struct in Rust; the value is only hashed/compared field-wise, never bit-cast.
 
-
 **Shard 192** — graphics_storage.zig
 
 - Test-structure-only differences (not functional): rustty extracts two helpers `external_placement_coord`/`external_placement` (graphics_storage.rs:6893/6930) in place of the Zig tests' inline `storage.placements.get(...)` + `pointFromPin` expressions; the assertions they feed are identical.
 - rustty adds one EXTRA test with no oracle counterpart, `storage_eviction_order_is_transient_then_unused` (graphics_storage.rs:4841), documented in-file as a deliberate negative control pinning the full 4-block eviction ordering. Additional coverage, not a parity gap.
 - Zig `pending.complete(&s, io, data)` takes an allocator-owned slice that the caller frees on `false`; the Rust `complete(&mut s, Vec<u8>)` consumes the Vec and drops it internally on `false`. Ownership idiom only - the returned bool and the stored bytes are identical in every arm the tests assert.
-
 
 **Shard 193** — graphics_unicode.zig, key.zig
 
@@ -1674,7 +1717,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - graphics_unicode PlacementIterator::next: oracle iterates `for (cells, row.x..) |*cell, x|`; rustty indexes a raw base pointer over the same `.right` cell subset with a captured x_start. Same traversal, same mutation of row.x per iteration.
 - key.rs models Zig's `u3` idx with a masked newtype (wrapping_add/wrapping_sub with MASK 0b111) and `Flags` packed-struct bit layout with explicit shifts in int()/from_int(). Bit-for-bit identical to @bitCast on packed struct(u5).
 - graphics_unicode Placement fields/Pin are copied field-by-field (Pin is deliberately non-Copy in the port) where the oracle does `row.*` / `.pin = ...` value copies. Same values.
-
 
 **Shard 194** — encoding.zig, kitty_metadata.zig, parsers.zig, change_window_icon.zig, change_window_title.zig, clipboard_operation.zig, color.zig, context_signal.zig, hyperlink.zig, iterm2.zig
 
@@ -1685,7 +1727,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - `std.mem.tokenizeScalar` is reimplemented as the local `TokenizeScalar` struct (color.rs:191-220) with identical skip-empty-runs semantics.
 - The unused `simd` import in iterm2.zig (line 4) has no counterpart; it is not referenced anywhere in the audited range.
 
-
 **Shard 195** — kitty_clipboard_protocol.zig, kitty_color.zig, kitty_desktop_notification.zig, kitty_dnd_protocol.zig, kitty_text_sizing.zig, mouse_shape.zig
 
 - kitty_color.rs copies `cap.trailing()` into an owned Vec before reborrowing `parser.command` (rs:40-45); the oracle keeps a borrowed slice. Same observable result, extra copy for Rust aliasing rules.
@@ -1694,14 +1735,12 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - Zig's comptime-dependent `key.Type()` returns are modeled as runtime-tagged `OptionValue` enums with `as_*` accessors in both kitty OSC parsers; same values, runtime dispatch instead of comptime.
 - VALID_METADATA_VALUE_CHARACTERS is built by a const-eval concatenation loop rather than Zig's `++`; identical byte content.
 
-
 **Shard 196** — osc9.zig, report_pwd.zig, rxvt_extension.zig
 
 - osc9.rs / report_pwd.rs / rxvt_extension.rs materialize payloads as owned Vec<u8> (`.to_vec()`) where the oracle returns zero-copy `[:0]const u8` sentinel slices into the capture buffer. Byte content is identical (trailing NUL excluded exactly as in Zig's `data[a .. len-1 :0]`); only an allocation/copy is added.
 - osc9.rs re-acquires `parser.capture.as_ref().unwrap().trailing(&parser.buffer)` after each `write_byte` instead of holding a long-lived `cap` binding, to satisfy Rust borrowck. Same sequence of side effects and same re-read of the (possibly reallocated) trailing slice as the Zig `data = cap.trailing();` re-fetch.
 - osc9.rs reads back the just-set state via `match &parser.command { Command::ConemuProgressReport(r) => r.state, _ => unreachable!() }` where Zig switches directly on `parser.command.conemu_progress_report.state`; identical value and branch selection.
 - Zig tests for OSC 9;6 through 9;12 construct the parser with `testing.allocator` while the Rust ports use `Parser::init(None)`. Verified non-observable: osc.zig:855-857 requests `captureTrailing(.fixed)` for state `.@"9"`, so the allocator is never consulted on the OSC 9 path and both trees exercise the fixed-buffer capture.
-
 
 **Shard 197** — semantic_prompt.zig
 
@@ -1710,14 +1749,12 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - Zig `lib.Enum(lib.target, ...)` gives `Click`/`ClickEvents` a c_int backing tag under the C target; the Rust port uses plain `#[derive]` enums with the same variant order (line/multiple/conservative_vertical/smart_vertical; absolute/relative). No C header currently exposes these types (include/ghostty/vt/osc.h only defines GHOSTTY_OSC_COMMAND_SEMANTIC_PROMPT = 3), so the tag width is not observable.
 - Zig `Redraw = enum(u2)` vs Rust plain enum with the same variant order (True, False, Last); discriminant width is not observable through any API in this file (noted in the port's own PORT NOTE at semantic_prompt.rs:415-419).
 
-
 **Shard 198** — Thread.zig, active.zig, pagelist.zig
 
 - crates/rustty-vt/src/search/pagelist.rs:871-917 (`feed_keeps_its_tracked_pin_within_a_shorter_page`) uses 80 cols instead of the oracle's 10 and wraps the fill loops in `pause_integrity_checks(true/false)`; the asserted property (split successor shorter than the second page; feed's pin lands on `shorter` and stays valid) is identical, and the integrity checks are re-enabled + `assert_integrity()` is run before the assertions. Documented PORT NOTE, runtime-only.
 - crates/rustty-vt/src/search/thread.rs:1240-1565: the in-crate `xev` seam (Loop/Async/Timer backed by std Mutex/Condvar/atomics) replaces libxev; apart from the timer re-arm defect reported as a finding, its observable semantics (level-triggered async waits, one-shot timer, run(.once)/run(.no_wait), stop/stopped) match. Callback dispatch is deferred to `run_loop` instead of inline to avoid an aliasing `*mut Thread`; ordering of side effects is preserved.
 - crates/rustty-vt/src/search/thread.rs:664-700: `notify` re-fetches `s.active_screen_search()` after the viewport-matches block instead of holding one `*ScreenSearch` across it (borrowck); `viewport_matches` does not touch `screens`, so it is the same entry.
 - Oracle Thread.zig log statements (std.log.scoped(.search_thread)) are mirrored with `eprintln!` carrying the same message text; diagnostics only.
-
 
 **Shard 199** — screen.zig
 
@@ -1726,7 +1763,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - crates/rustty-vt/src/search/screen.rs:659-668 carries a PERF NOTE that `prune_history` is O(results * chunks * live_pages) per `select` via `node_is_valid`; this is oracle-identical (`PageList.zig` `nodeIsValid` walks the same way), documented rather than changed.
 - Five tests (select_after_partial_history_erase_drops_a_pruned_selection, select_after_history_compaction_ignores_replaced_results, reload_defers_pruning_unselected_history_results, reload_after_partial_history_page_erase_drops_shifted_selection_first, select_after_partial_history_page_erase_ignores_shifted_results, select_after_history_page_split_ignores_moved_results) use 80 cols instead of the reference's 10, documented in-file: 10 cols yields ~35k-row pages whose row-by-row fill costs ~30s in a debug Rust build. Assertions are unchanged and column-count independent (they exercise history erase/split/compaction validity, not layout).
 - crates/rustty-vt/src/search/screen.rs uses `eprintln!("info(search_screen): ...")` in place of the oracle's `log.info` on the failed-select-retry paths. This is the crate-wide convention (30 occurrences across rustty-vt); message text is mirrored.
-
 
 **Shard 200** — sliding_window.zig, terminal.zig
 
@@ -1737,7 +1773,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - `assertIntegrity` skips its checks under Valgrind in Zig (`std.valgrind.runningOnValgrind() > 0`); rustty always runs them under debug_assertions. Debug-only cost, no behavioural difference.
 - `Meta::deinit` frees the ArrayList in Zig; rustty replaces the Vec with `Vec::new()` (same free), and `MetaBuf::delete_oldest`/`clear` additionally `take` the slots to drop non-Copy Meta rather than `@memset(undefined)`. Same observable state.
 
-
 **Shard 201** — viewport.zig, checkpoint.zig, continuation.zig, envelope.zig, fixture.zig
 
 - crates/rustty-vt/src/search/viewport.rs:290-320 — the reference binds `const entries = fingerprint.entries.items` once and iterates the slice; the port re-indexes `self.fingerprint.entries[i]` each iteration (Stacked-Borrows soundness, documented PORT NOTE). Identical iteration order, identical appends.
@@ -1745,7 +1780,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - crates/rustty-vt/src/snapshot/continuation.rs:199-209 — Zig's `testing.FailingAllocator` is replaced by the crate's `tw` tripwire seam plus `Vec::try_reserve_exact`; the 'limit check precedes allocation' property is asserted the same way (armed tripwire must end untripped).
 - crates/rustty-vt/src/snapshot/fixture.rs:91-123 — the reference's two comptime passes (`decodedLen` then `parse`) collapse into a single run-time pass returning `Vec<u8>`; the accepted grammar, separator rule, and error messages are byte-for-byte the same.
 - crates/rustty-vt/src/snapshot/record.rs:289-296 — `errdefer stream.cancel()` in checkpoint/continuation `encode` is subsumed by `Writer::finish`, which cancels on every exit path (plus an explicit cancel on the continuation payload-write failure path).
-
 
 **Shard 202** — grid.zig
 
@@ -1757,14 +1791,12 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - `Remap` is one concrete `u16` type with two aliases instead of the oracle's `Remap(comptime Id)` generic (both `TerminalStyleId` and `TerminalHyperlinkId` are `u16`), and its `seen` bit set is a `Vec<u64>` stand-in for `std.DynamicBitSetUnmanaged`; `deinit` is replaced by `Drop`, allocation by the global allocator (grid.rs:1795-1876). Same capacity (65536), same put/contains/get semantics. `seen_iter()` is an added helper equivalent to `seen.iterator(.{})` used by sibling modules.
 - `NATIVE_MATCHES_WIRE` is a pinned `const true` rather than a comptime-computed probe result, because the native cell accessors are not `const fn`; the oracle's three bit-pattern probes are carried verbatim in the `cell_wire_layout_registry` test (grid.rs:502-513, 1892-1975), so a native layout divergence still fails loudly.
 
-
 **Shard 203** — history.zig, hyperlink.zig, io.zig, main.zig
 
 - snapshot/io.rs replaces Zig's comptime-generic `writeInt`/`readInt` with a `LeInt` trait implemented by a macro for u16/u32/u64 (the only widths the subsystem uses); byte output and error behaviour are identical.
 - snapshot/history.rs `decode_page` splits into `decode_page` + `decode_page_inner` and threads a `*mut TerminalScreen` instead of `&mut` purely to keep Stacked-Borrows validity while `PageAllocation` aliases the PageList; observable ordering (decode -> read rows/prompt -> finalize -> set semantic_prompt.seen) is unchanged.
 - snapshot/hyperlink.rs replaces Zig `errdefer page.string_alloc.free(...)` with explicit `free_page_string` calls on every error/degrade path; the same allocations are released on the same paths.
 - snapshot/hyperlink.rs `decode` drops the `alloc: Allocator` parameter and allocates through the global allocator + `try_reserve_exact`, with a `tw::SnapshotFp::Alloc` tripwire standing in for `std.testing.FailingAllocator`; the `OutOfMemory` error path and its per-allocation index semantics are preserved (error_after(min) == fail_index).
-
 
 **Shard 204** — page.zig, record.zig
 
@@ -1775,7 +1807,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - page.rs page_hyperlink copies the entry's byte strings into owned Vec<u8> (the crate's Hyperlink owns its strings) where the reference returns slices aliasing page memory; the encoded bytes are identical.
 - page.rs Decoder::init / record.rs Reader::init are plain constructors instead of the reference's in-place `self: *T` initialization over undefined memory.
 
-
 **Shard 205** — screen.zig
 
 - Rust replaces the Zig comptime `Header.computeLen()`/`SavedCursor.computeLen()` (and their `comptime { assert(len == 53/23) }`) with pinned `LEN` consts plus two runtime tests that re-derive the length from the encoder and assert the same 53/23 values — same guarantee, moved from comptime to test time.
@@ -1784,7 +1815,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - `decode` drops the reference's `io_: std.Io` parameter because the ported `Screen` carries no `io` field (crate-wide decision, documented in a PORT NOTE above `decode`); no observable behaviour depends on it in this file.
 - `screen_sequence_failure_preserves_preceding_bytes` and the OOM arm of `screen_restoration_rejects_invalid_and_incomplete_sequences` substitute the Zig `FailingAllocator{ .fail_index = 0 }` with, respectively, a full FixedWriter destination and the pagelist Builder finish tripwire; both are documented PORT NOTEs and assert the same errors (WriteFailed with the destination still exactly "prefix"; DecodeError::OutOfMemory with no leaked partial screen).
 
-
 **Shard 206** — snapshot.zig, style.zig
 
 - codec.rs `encode`/`decode`/`ready`/`next` drop the reference's `alloc: Allocator` and `io_: std.Io` parameters where the port's `record::Writer` and `history::decode_page` allocate through the global allocator; documented PORT NOTEs, no observable behaviour change.
@@ -1792,7 +1822,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - `nextPage` is a free function over split borrows (`source` + `&mut History`) rather than a `&mut self` method, a borrow-checker accommodation with identical control flow.
 - Slot replacement in `ready_inner` and the test helpers adds `drop(core::ptr::read(slot))` before `ptr::write` because the port's PageList frees pool memory in Drop rather than in `deinit`; same net effect as the Zig `slot.deinit(); slot.* = replacement;`.
 - style.rs represents the Zig `packed struct(u16)` Flags as explicit fields plus hand-written `bits`/`from_bits` shifts instead of a bit-cast; the flag_bit_layout test pins the identical bit positions.
-
 
 **Shard 207** — terminal.zig
 
@@ -1803,7 +1832,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - `ModePacked` is a `u64` newtype with a bit mask instead of a comptime-generated packed struct; `@truncate` to the u43 backing integer maps to `raw & MODE_BITS_MASK` with the same result.
 - `record.Writer.init` drops the allocator parameter (Rust writer owns its scratch buffer); no observable difference in the emitted bytes.
 
-
 **Shard 208** — control.zig, layout.zig, output.zig
 
 - control.rs returns owned `Vec<u8>` payloads in `Notification` where the reference borrows sub-slices of the parser buffer ("Important: do not clear buffer here since name points to it"); an extra copy, identical observable values.
@@ -1811,7 +1839,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - output.rs `comptime_format` delegates to the runtime `format` instead of the reference's comptime `Discarding`-sizing + `.fixed` buffer two-pass; identical bytes, computed at runtime.
 - output.rs replaces `FormatStruct(comptime vars) -> type` + `parseFormatStruct(comptime T, ...)` with a runtime `&[Variable]` field list returning `Vec<Value>` in field order (no Rust equivalent of Zig struct-type synthesis); the delimiter splitting, MissingEntry/ExtraEntry/FormatError paths and per-variable parse results are identical.
 - control.rs `Parser::init` / `init_options` replace the reference's struct-literal field defaults (`state: .idle`, `max_bytes: 1024 * 1024`, caller-supplied `buffer: .init(alloc)` / `.initCapacity(alloc, 128)`); the DCS hook's fallible capacity reservation is preserved via `try_reserve_exact` -> `OutOfMemory`.
-
 
 **Shard 209** — viewer.zig
 
@@ -1822,7 +1849,6 @@ rustty terminal.rs:5218-5232 `fn scroll_viewport_null()` contains a single `scro
 - `self.windows.reserve(len.saturating_sub(current))` replaces `ensureTotalCapacity(windows.len)`; capacity-only.
 - Format.comptimeFormat is a comptime string in Zig and a runtime `String` build in the port; the emitted command bytes are identical.
 - `Format.Struct()` (comptime-synthesized parse struct) is replaced by parsing into a `&[Value]` slice decoded by `ListPanes::from_values` in the same variable order.
-
 
 ## Refuted candidates
 
