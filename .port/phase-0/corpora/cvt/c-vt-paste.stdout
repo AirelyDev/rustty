@@ -1,6 +1,24 @@
+Plain paste:
+  -> pty (11 bytes): hello world
+  written
+Paste with a newline (refused, then confirmed):
+  paste could inject commands; user confirmed
+  -> pty (8 bytes): echo hi\r
+  written
+Bracketed paste (mode 2004):
+  -> pty (29 bytes): ESC[200~line one\nline twoESC[201~
+  written
+Paste event (mode 5522):
+  -> pty (235 bytes): ESC]5522;type=read:status=OK:pw=c0VzR3NIZTlXbnBiSDN3NU53ZjJQWQ==ESC\ESC]5522;type=read:status=DATA:mime=Lg==:pw=c0VzR3NIZTlXbnBiSDN3NU53ZjJQWQ==;dGV4dC9wbGFpbiBpbWFnZS9wbmcKESC\ESC]5522;type=read:status=DONE:pw=c0VzR3NIZTlXbnBiSDN3NU53ZjJQWQ==ESC\
+  written
+Program reads with the event password:
+  clipboard read: name="Paste event" granted=yes (no prompt needed)
+  -> pty (143 bytes): ESC]5522;type=read:status=OKESC\ESC]5522;type=read:status=DATA:mime=dGV4dC9wbGFpbg==;aGVsbG8gZnJvbSB0aGUgY2xpcGJvYXJkESC\ESC]5522;type=read:status=DONEESC\
+IME text with mode 5522 enabled:
+  -> pty (21 bytes): ESC[200~committedESC[201~
+  written
+
+Terminal-free building blocks:
 Safe to paste
 Unsafe! Contains newline
-Data with escape sequence is UNSAFE
-Empty data is safe
-Encoded 23 bytes: [200~hello
-world[201~
+Encoded 23 bytes: ESC[200~hello\nworldESC[201~

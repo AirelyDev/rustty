@@ -44,6 +44,8 @@ PAIRS=(
   "c-vt-static:c_vt_static"
   "c-vt-stream:c_vt_stream"
   "cpp-vt-stream:cpp_vt_stream"
+  "c-vt-search:c_vt_search"
+  "c-vt-snapshot:c_vt_snapshot"
 )
 
 printf '%-26s %6s %8s %8s %8s\n' "name" "exit" "comb_B" "out_B" "err_B"

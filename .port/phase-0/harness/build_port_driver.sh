@@ -206,7 +206,7 @@ CVT_CASES=(
   c-vt-encode-key c-vt-encode-mouse c-vt-formatter c-vt-grid-ref-tracked
   c-vt-grid-traverse c-vt-kitty-graphics c-vt-modes c-vt-paste c-vt-render
   c-vt-selection c-vt-selection-gesture c-vt-sgr c-vt-size-report c-vt-static
-  c-vt-stream cpp-vt-stream
+  c-vt-stream cpp-vt-stream c-vt-search c-vt-snapshot
 )
 if [ ! -d "$EXAMPLES_DIR" ]; then
   echo "WARN: oracle example dir missing ($EXAMPLES_DIR); skipping port-side cvt example builds." >&2

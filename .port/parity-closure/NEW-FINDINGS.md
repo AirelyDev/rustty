@@ -7429,12 +7429,18 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **also fixed** (task C-1): `build_port_driver.sh` defaulted `RUSTTY_ROOT` to the main checkout, so from a
   worktree it built and linked the MAIN checkout's `rustty-vt-c` (into the main checkout's `target/`).
   It now derives the root from its own location.
-- **not fixed**: regenerating the goldens needs the reference examples built at the pin. A trial
-  `zig build` of `example/c-vt-paste` fails on this host (`unable to find artifact 'ghostty-vt'`; only
-  `ghostty-vt-static` is offered), and the host had under 3 GB of free disk. Needed: rebuild
-  `ghostty/zig-out` at 20abdb50a, build the 21 (+2 new) examples, rerun `.port/phase-0/run-cvt-corpora.sh`,
-  review each golden diff against the upstream example change.
-- **state**: OPEN.
+- **fixed** (task C-1): libghostty-vt was built at the pin outside the oracle tree
+  (`zig build -Demit-lib-vt=true -Doptimize=ReleaseSafe --prefix /tmp/... --cache-dir /tmp/...`), and each
+  reference example source at the pin (read at 20abdb50a, `example/<case>/src/main.c`) compiled with clang
+  against it and run. 18 of the 21 stored goldens are byte-identical to that output; `c-vt-effects`,
+  `c-vt-formatter` and `c-vt-paste` were re-recorded from it (golden, stdout, stderr, exit), and the port's
+  output equals the new ones. `c-vt-paste` is not deterministic in the reference: the OSC 5522 clipboard-read
+  password (`pw=<base64>`) differs on every run (measured, two runs). Leg B therefore masks exactly that
+  token on both sides (`cvt_normalize` in `run_differential.sh`); its self-test proves a password-only
+  difference compares equal and a one-byte difference next to it does not. The two examples the corpus did
+  not cover, `c-vt-search` and `c-vt-snapshot` (deterministic, measured), were recorded and added to the
+  port build and the corpus generator. G4: GREEN, 12 fixtures and 23 c-vt cases byte-exact.
+- **state**: CLOSED (fixed).
 
 ## N400 — G-BLUEPRINT's first run: green; its description of `blueprint-compiler format` was wrong
 

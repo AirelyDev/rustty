@@ -7,6 +7,12 @@ Sending DECRQM query:
 Sending clipboard write:
   clipboard write (location=0, contents=1)
     text/plain (15 bytes): Hello clipboard
+Sending clipboard read:
+  clipboard read (location=0, mimes=1)
+    text/plain
+  write_pty (41 bytes): ]52;c;SGVsbG8gZnJvbSB0aGUgY2xpcGJvYXJk\
+Sending unknown APC:
+  unknown APC (truncated=no, content=23 bytes): private-command;payload
 Sending another BEL:
   bell! (count=2)
 Total bells: 2
