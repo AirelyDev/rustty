@@ -181,16 +181,57 @@ mod tests {
     /// Natively the magic sequence is a no-op: the request returns its
     /// default. This executes the x86_64/aarch64 sequence on the host even
     /// where `VALGRIND_SUPPORT` is false (macOS), so the asm is exercised.
+    ///
+    /// Under Valgrind (G-VALGRIND runs this binary under memcheck) the same
+    /// sequence is answered: `RunningOnValgrind` returns 1 whatever the
+    /// default. The test used to assert that it never ran under Valgrind and
+    /// failed there (NEW-FINDINGS N414); it now checks the answer the
+    /// environment calls for, told apart by `under_valgrind_by_maps`, which
+    /// does not use the client request under test.
     #[test]
     #[cfg_attr(miri, ignore = "inline assembly does not run under Miri (R14)")]
     fn client_request_returns_default_natively() {
-        assert_eq!(7, raw_client_request(7, RUNNING_ON_VALGRIND, 1, 2, 3, 4, 5));
-        assert_eq!(0, raw_client_request(0, RUNNING_ON_VALGRIND, 0, 0, 0, 0, 0));
-        // The test binary does not run under Valgrind.
-        assert_eq!(0, running_on_valgrind());
+        let under_valgrind = under_valgrind_by_maps();
+        let answer = |default: usize| if under_valgrind { 1 } else { default };
         assert_eq!(
-            42,
+            answer(7),
+            raw_client_request(7, RUNNING_ON_VALGRIND, 1, 2, 3, 4, 5)
+        );
+        assert_eq!(
+            answer(0),
+            raw_client_request(0, RUNNING_ON_VALGRIND, 0, 0, 0, 0, 0)
+        );
+        // The gated entry points answer only where client requests are
+        // compiled in (`VALGRIND_SUPPORT`); elsewhere they return the default
+        // even under Valgrind.
+        let gated = |default: usize| {
+            if VALGRIND_SUPPORT {
+                answer(default)
+            } else {
+                default
+            }
+        };
+        assert_eq!(gated(0), running_on_valgrind());
+        assert_eq!(
+            gated(42),
             do_client_request(42, RUNNING_ON_VALGRIND, 0, 0, 0, 0, 0)
         );
+    }
+
+    /// Whether this process runs under Valgrind, from evidence that does not
+    /// go through a client request: Valgrind maps its `vgpreload_*.so`
+    /// libraries into every program it runs (Linux; no other host the port
+    /// tests on has a Valgrind).
+    fn under_valgrind_by_maps() -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            std::fs::read_to_string("/proc/self/maps")
+                .expect("/proc/self/maps is readable on Linux")
+                .contains("/vgpreload_")
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            false
+        }
     }
 }
