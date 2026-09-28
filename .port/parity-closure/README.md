@@ -88,3 +88,59 @@ Code gaps left after the final triage, none a ledger row:
   does not use it; Ghostty builds it only for backends that do (N286).
 - The app-runtime error type carries no detail, so a keybind-triggered config
   reload logs a generic error where Ghostty logs the error name (N311).
+
+## Continuing this work
+
+The closure was done on the `parity-closure` branch, merged into `main` on
+2026-09-28; that branch and all batch branches are deleted. Continue on
+`main`. The per-batch briefs, reports and controller log from the closure lived
+in `.superpowers/sdd/2026-09-08-parity-defect-closure/`, which is gitignored
+and local to the original machine; everything needed to continue is in the
+committed records named here.
+
+### Decisions only the maintainer can make
+
+1. Whether and when to report the two private-report crashes, **UD131** and
+   **UD351**, to Ghostty through a private security advisory
+   (`UPSTREAM-DEFECTS.md` has the full recipes; do not open public issues).
+   Before the repository is published, decide how the recipes in
+   `UPSTREAM-DEFECTS.md` are handled; `docs/ghostty-bug-fixes.md` already
+   withholds them.
+2. The G6c hang limit, raised from 5400 s to 10800 s during the closure: keep,
+   or split the lane.
+3. The Sentry project name the release workflows assume (`rustty`, V25).
+
+### Suggested order
+
+1. **Run the deferred long runs** in the table above, starting with the full
+   `ci.sh` on macOS and on the Linux VM, and the G-REL "can't find crate"
+   failure. Any red result becomes a `NEW-FINDINGS.md` entry.
+2. **Push once CI can run** and read the first run of the new CI jobs (V25);
+   the ones most likely to need a fix are the musl target, Xcode 27 on the
+   macOS image, `build-nix`, the `wasm-tools` version and `test-debian-13`'s time
+   limit.
+3. **Re-audit** the most-changed areas (Task 41 step 3 of the plan).
+4. **Fix the open gaps** above: N11 (4–6 h, needs the Linux VM), N130 (about a
+   day, Linux VM), then the N376 gaps.
+5. **Performance**: idle-machine runs and a new G8 baseline (V16–V18).
+
+### How work was run
+
+- Rules: `.port/PORT_RULES.md` (R1 fidelity, R13 reference defects are fixed
+  and recorded, never ported, R14 no silent skip). Procedure:
+  `.port/parity-closure/PROCEDURE.md`.
+- Records: `LEDGER.tsv` (11 tab-separated columns; edit by splitting on tabs,
+  never by regex over the line), `NEW-FINDINGS.md` (N ids, kept in id order),
+  `UPSTREAM-DEFECTS.md` (UD ids; every entry needs exactly one
+  `- upstream status:` line) with `docs/ghostty-bug-fixes.md`,
+  `.port/phase-2/VERIFICATION_DEBT.md` (V ids), `MIRI_EXCEPTIONS.md`,
+  `ADJUDICATION.md`, `.port/phase-3/NON_PORTS.md`.
+- Next free ids at closure: N435, UD352, V27.
+- Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
+  `.port/tools/gates/` has a `--self-test` where it matters. After merging
+  records, re-run `check_parity_closure.py` and the phase-2 closure gate.
+- Machines: the Linux lane ran on a Linux VM (Valgrind installed in the user's
+  home), the Windows lane on a Windows 11 ARM64 VM over ssh and PowerShell,
+  the Android lane needs the NDK r29 (removed from the Mac after the closure).
+- Disk: a full `ci.sh` grows `target/` to about 48 GB; run at most three
+  building checkouts at once on the Mac.

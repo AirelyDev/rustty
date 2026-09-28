@@ -4,6 +4,9 @@ Status: DESIGN STUDY with a measured prototype, IMPLEMENTED by tasks S7-1..S7-9
 (see §9 "Outcome"). The body below is the study as written; §9 records what shipped.
 Pin: `20abdb50a`. Branch `tail-s7a` (this document); prototype branch
 `tail-s7a-proto` (NOT FOR MERGE: `045dd4f0` prototype, `8f150e0d` harness).
+The prototype branch was deleted on 2026-09-28, after S7-1..S7-9 shipped the
+design; its measurement harness (`paired.py`, `census.py`) is kept in
+`.port/parity-closure/s7a-prototype/`, with paths made relative to the repo.
 
 Rows this design must close: **S174-F3** (OSC parser, narrowed), **S175-F1**
 (RenderState), **S176-F1** (search), **S179-F2** (terminal internals), **S4-F2**
@@ -296,7 +299,7 @@ Prototype `tail-s7a-proto` @ `045dd4f0` (NOT FOR MERGE). It contains:
 - `B+C` = B with the terminal on the C vtable arm.
 
 Runs are paired, interleaved and order-rotated per round
-(`.port/parity-closure/s7a-prototype/paired.py` on the proto branch). The
+(`.port/parity-closure/s7a-prototype/paired.py`). The
 metric is **child CPU time** (user+sys via `getrusage`), because the host was
 oversubscribed: **load average 25–55 on 14 cores** throughout, with other
 agents building. The table reports min over N and the median of per-round
