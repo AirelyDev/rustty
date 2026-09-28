@@ -1233,11 +1233,16 @@ impl RenderState {
             // reads through `p`. We therefore keep the rows as a raw base
             // pointer and only ever form a SHARED `&[page::Row]` for the mask
             // scans (which never write), taking a fresh raw element pointer for
-            // the `set_dirty(false)` write and for the builder.
+            // the `set_dirty(false)` write and for the builder. The shared
+            // slice is formed afresh for EACH scan (`page_rows()` below): one
+            // held across the loop is invalidated by the first `set_dirty`
+            // write, and the next scan read through a dead tag (Stacked
+            // Borrows; task C-1, NEW-FINDINGS N394).
             let page_rows_ptr: *mut page::Row =
                 unsafe { (*p).rows.ptr((*p).memory_ptr()).add(chunk.start as usize) };
-            let page_rows: &[page::Row] =
-                unsafe { core::slice::from_raw_parts(page_rows_ptr, take) };
+            let page_rows = || -> &[page::Row] {
+                unsafe { core::slice::from_raw_parts(page_rows_ptr, take) }
+            };
             debug_assert!(unsafe { (*p).size.cols } == cols);
 
             // Store our pins and their node generations. We have to store
@@ -1285,7 +1290,7 @@ impl RenderState {
                 // testable on the packed row representation.
                 let mut i: usize = 0;
                 while take - i >= RowDirtyMask::GROUP_LEN {
-                    if RowDirtyMask::match_group(page_rows, i) {
+                    if RowDirtyMask::match_group(page_rows(), i) {
                         // @branchHint(.likely)
                         i += RowDirtyMask::GROUP_LEN;
                         continue;

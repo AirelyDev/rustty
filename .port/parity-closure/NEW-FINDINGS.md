@@ -7564,3 +7564,21 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   each binary runs in a subshell `cd`'d there with `CARGO_MANIFEST_DIR` set. Control (VM clone, restored): a
   temporary rustty-wuffs test asserting both passes under the new gate and fails under the old one (left
   `/home/gael/projects/l5`).
+
+## N394 — `RenderState::update` held a shared row slice across `set_dirty` writes (Stacked Borrows)
+
+- **id**: N394. Not a ledger row: task C-1 (G6, found through `rustty-vt-c`'s render tests).
+- **severity**: medium (UB on the partial-redraw path of every render update with dirty rows).
+  **kind**: port soundness.
+- **finding**: `render.rs` (`RenderState::update`, the per-chunk dirty scan) formed
+  `page_rows: &[page::Row]` once per chunk and used it for every `RowDirtyMask::match_group` scan, while
+  the loop between scans writes `(*page_row).set_dirty(false)` through the raw base pointer. The
+  write's function-entry Unique retag pops the shared slice's tag, so the next scan retagged from a
+  dead tag. Miri (G6): `trying to retag from <..> for SharedReadOnly permission ... <..> was later
+  invalidated ... by a Unique function-entry retag` at `render.rs:1288`
+  (`render::tests::render_row_get_set_dirty`, `render::tests::render_update` in `rustty-vt-c`).
+- **fix** (task C-1): the shared slice is formed afresh for each scan (`page_rows()`), from the same
+  raw base pointer; the writes and the builder keep using raw element pointers.
+- **test**: `rustty-vt-c` `render::tests::render_row_get_set_dirty` and `render::tests::render_update` under Miri: UB before, pass after.
+  Native: the render tests pass.
+- **state**: CLOSED (fixed).
