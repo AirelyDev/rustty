@@ -627,7 +627,9 @@ half.** `iocp_watcher.rs` and `wasi_watcher.rs` (the
 DEFERRALS row) carry the reference's `AsyncTests` (3), `TimerTests` (5),
 `ProcessTests` (2, iocp only) and `GenericStreamTests` (4) as documented
 skip-stub `#[test]`s: **14 on iocp, 12 on wasi_poll**. They compile for their
-targets and hold the count; none has run. The `GenericStreamTests` pty pair/trio
+targets and hold the count; none has run. [2026-09-28, N385: the three iocp
+`AsyncTests` are now live ports and pass on the Windows VM, plus a port-added
+cross-thread notify test; **11 iocp watcher stubs** remain.] The `GenericStreamTests` pty pair/trio
 are skipped by the REFERENCE ITSELF outside `.linux`/`.macos`
 (`else => return error.SkipZigTest`), so only `Stream decls` (a comptime
 assertion, discharged by compiling) is genuinely inert there. Filling the

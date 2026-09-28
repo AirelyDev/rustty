@@ -7318,7 +7318,36 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **fix sketch**: make it `pub unsafe fn async_notify(loop_: *const Loop, completion: *mut Completion)` and read the
   handle through the raw pointer (`unsafe { (*loop_).iocp_handle }` as a place read via `addr_of!`, or copy the handle
   into the `Async`'s waiter at `wait` time), with no `&Loop` formed on the notifying thread.
-- **state**: OPEN (recorded, not fixed).
+- **second site (found while fixing)**: from `wait` on, a notifier may run while the loop thread's
+  `start_completion` (`iocp.rs`) holds `match &mut (*completion).op` for the just-submitted async completion; the
+  notifier reads `op` (the discriminant and the `wakeup` atomic), which invalidates that `&mut` under Stacked Borrows.
+- **evidence (before/after)**: `.port/phase-2/mirihar-n385/` (non-FFI harness; the loop thread holds its protected
+  `&mut Loop` through one stable raw root, as termio does, and two notifications are forced into the two windows).
+  `bash run-all.sh`, miri nightly 2026-07-22: shipped shape `loopref_mutop` UB under SB ("would remove [Unique] which
+  is strongly protected") and TB ("foreign to the protected tag"); the fix sketch's raw by-value read
+  (`rawread_*`) UB under SB, clean under TB (the `mirihar-xev-mpsc` `wakeup_copied` result again); handle copied
+  but `&mut op` kept (`cached_mutop`) UB under SB; applied shape `cached_sharedop` clean under SB and TB, also with
+  `-Zmiri-many-seeds=0..8`, and `cargo +nightly miri test` there passes under both models.
+- **fix**: `AsyncIOCP.wait` copies the loop's port handle into the waiter on the loop thread (`AsyncWaiter::
+  iocp_handle`, PORT-ADDED); `notify` calls `Loop::async_notify_handle(w.iocp_handle, w.c)`, the reference
+  `async_notify` body with the handle by value, so the notifying thread touches only the completion.
+  `Loop::async_notify(&self, c)` stays for loop-thread callers (`wait`'s notify-first case) and forwards.
+  `start_completion` takes the `async_wait` arm (push to `asyncs`, `active += 1`, state `active`) through a shared
+  borrow before the `&mut` match. Behaviour unchanged (R1). The reference has the same shape in Zig, where it is
+  not UB and the handle never changes after `init`: no UD. The WASI watcher's same-thread
+  `(*w.loop_).async_notify` is unchanged (`wasi_poll`'s `async_notify` writes the `Loop`'s own `wakeup`, and WASI
+  runs one thread).
+- **tests**: the three reference `AsyncTests` in `iocp_watcher.rs` were skip-stubs; they are live ports now
+  (`iocp_watcher_async`, `_notify_first`, `_batches_multiple_notifications`), plus PORT-ADDED
+  `iocp_watcher_async_notify_from_another_thread_wakes_running_loop` (another thread notifies while the loop blocks
+  in `GetQueuedCompletionStatusEx`; if the callback has not run 5 s later the notifier posts a rescue to the port and
+  the test fails on `rescued`). Windows VM (`rwin`, `--target x86_64-pc-windows-msvc`): `cargo test -p rustty-xev`
+  3/3 (44 passed each), `cargo test -p rustty-termio` 3/3 (67 passed, 14 ignored; its unit tests do not reach a
+  registered IOCP waiter, the `io_thread`/`live_shell` suites are `cfg(unix)`), clippy `-D warnings` for
+  rustty-xev + rustty-termio clean. Negative control (Windows, one run): the waiter's copied handle replaced by null
+  makes the cross-thread test fail after 5.07 s with "notify's post did not wake the loop; the rescue post did".
+  rustty-core does not build for Windows (N342), so no core test runs there.
+- **state**: CLOSED (fixed).
 
 ## N400 — G-BLUEPRINT's first run: green; its description of `blueprint-compiler format` was wrong
 

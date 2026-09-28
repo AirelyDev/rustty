@@ -20,7 +20,8 @@
 //!
 //! VERIFICATION: cross-compile-verified on this host
 //! (`cargo check -p rustty-xev --target x86_64-pc-windows-msvc --all-targets`).
-//! The reference `test {}` blocks are ported below as documented skip-stubs —
+//! The reference `AsyncTests` are live ports, run on a Windows host (N385); the
+//! other reference `test {}` blocks are ported below as documented skip-stubs —
 //! they need a live Win32 host, which is verification debt with a runnable
 //! recipe, NOT a scope exclusion.
 
@@ -1340,18 +1341,16 @@ struct WriteResult {
 // `ProcessTests` (process.zig:455) and `GenericStreamTests` (stream.zig:1131) are
 // all instantiated by the corresponding watcher's `test {}` on this backend. They
 // need a LIVE Win32 host (a real IOCP loop, a real child process, a real pipe),
-// which this macOS host cannot provide — so they are ported as documented
+// which this macOS host cannot provide — so they were ported as documented
 // skip-stubs (the established repo precedent, same as the 5 iocp file/socket
-// tests) and the count is held. The runnable recipe lives in
-// `.port/phase-2/VERIFICATION_DEBT.md`.
+// tests) and the count is held. The three `AsyncTests` are live ports since N385
+// (2026-09-28, run on the Windows VM); the rest remain stubs. The runnable recipe
+// lives in `.port/phase-2/VERIFICATION_DEBT.md`.
 // ===========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::windows::{Options, RunMode};
-
-    // The three `AsyncTests` are live ports since N385 (2026-09-28), run on the
-    // Windows VM; the stubs below are still the Windows/WASI-host debt.
 
     fn set_bool_rearm(
         ud: *mut bool,
