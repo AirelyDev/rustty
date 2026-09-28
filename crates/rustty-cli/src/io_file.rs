@@ -281,6 +281,10 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-cli, parity tail C-1): `open` is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn a_write_to_an_unwritable_stdout_fails_where_std_reports_success() {
         if std::env::var_os(CHILD).is_some() {
             // Child arm: report both outcomes on stderr for the parent.
@@ -339,6 +343,10 @@ mod tests {
     // succeeds; the pre-main probe makes ours fail with `EBADF`, as Zig's does.
     #[cfg(unix)]
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-cli, parity tail C-1): `current_exe` (`_NSGetExecutablePath`) is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn a_write_to_a_stdout_closed_at_exec_fails_with_ebadf() {
         if std::env::var_os(CHILD).is_some() {
             let err = stdout().write_all(b"x").err();
@@ -365,6 +373,10 @@ mod tests {
     // the content; the reference's positional writer (offset 0) overwrites it.
     #[cfg(unix)]
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-cli, parity tail C-1): `mkdir` is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn an_appended_stdout_keeps_the_existing_content() {
         if std::env::var_os(CHILD).is_some() {
             let r = stdout().write_all(b"zig\n");

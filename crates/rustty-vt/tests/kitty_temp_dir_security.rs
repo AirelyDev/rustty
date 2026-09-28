@@ -64,6 +64,10 @@ fn scratch_dir(name: &str) -> std::path::PathBuf {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-vt, parity tail C-1): file-system calls on a real temporary directory are forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+)]
 fn kitty_temp_file_medium_ignores_the_process_tmpdir() {
     // REBUILD SENTINEL: this assert exists so that a mutation of the code under
     // test which is *not* rebuilt can be detected. See the lane report — it was

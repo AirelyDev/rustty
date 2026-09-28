@@ -61,6 +61,10 @@ fn posix_duplicate_env_child_reads_first_and_last() {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-global, parity tail C-1): `current_exe` (`_NSGetExecutablePath`) is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+)]
 fn posix_duplicate_env_parent_spawns_the_child() {
     let exe = std::env::current_exe().expect("current_exe");
     let argv_owned: Vec<CString> = [

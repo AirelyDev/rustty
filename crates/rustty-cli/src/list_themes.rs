@@ -2900,6 +2900,10 @@ mod picker_tests {
     /// is the console (task W-2, N342).
     #[cfg(unix)]
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-cli, parity tail C-1): calls the foreign function `openpty`, which Miri cannot execute; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn keys_on_a_filter_that_matches_nothing_do_not_index_it() {
         const CHILD: &str = "RUSTTY_R13D_LIST_THEMES_CHILD";
         if std::env::var_os(CHILD).is_some() {
@@ -3054,6 +3058,10 @@ mod picker_tests {
     /// its pty, raises SIGWINCH, and waits for the event.
     #[cfg(unix)]
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-cli, parity tail C-1): calls the foreign function `openpty`, which Miri cannot execute; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn the_preview_loop_delivers_a_resize() {
         const CHILD: &str = "RUSTTY_S10B_LIST_THEMES_RESIZE_CHILD";
         if std::env::var_os(CHILD).is_some() {
@@ -3191,6 +3199,10 @@ mod r13_flush_tests {
     const CHILD: &str = "RUSTTY_T_C_LIST_THEMES_CHILD";
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-cli, parity tail C-1): `mkdir` is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn no_themes_messages_reach_stderr() {
         if std::env::var_os(CHILD).is_some() {
             let opts = Options {
@@ -3246,6 +3258,10 @@ mod r13_flush_tests {
     /// `None` and `run` went on to report "No themes found". Re-executed so the
     /// child's captured environment has only the long `HOME`.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-cli, parity tail C-1): `current_exe` (`_NSGetExecutablePath`) is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn a_home_too_long_for_the_xdg_lookup_is_out_of_memory() {
         if std::env::var_os(OOM_CHILD).is_some() {
             let opts = Options {

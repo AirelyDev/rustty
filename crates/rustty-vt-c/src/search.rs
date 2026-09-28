@@ -2376,6 +2376,10 @@ mod tests {
     // bytes equal what the search holds, at every step); the registry entry
     // and the tracked pins are on the terminal's (N262).
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-vt-c, parity tail C-1): intractable under Miri, two full pages of scrollback written through the terminal; measured past a 20-minute bound; runs natively and under ASan (see MIRI_EXCEPTIONS.md)"
+    )]
     fn search_internals_route_through_the_callers_allocator() {
         let term = CountingAllocator::over_heap();
         let tc = term.allocator();
@@ -2480,6 +2484,10 @@ mod tests {
     // fails at "a failed feed reports OUT_OF_MEMORY"; with `run`'s loop check
     // removed it never returns (killed by a timeout).
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-vt-c, parity tail C-1): intractable under Miri, two full pages of scrollback written through the terminal; measured past a 20-minute bound; runs natively and under ASan (see MIRI_EXCEPTIONS.md)"
+    )]
     fn search_feed_and_run_report_out_of_memory_instead_of_spinning() {
         let failing = FailingAllocator::over_heap(Config::default());
         let fc = failing.allocator();

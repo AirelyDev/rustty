@@ -2469,6 +2469,10 @@ mod tests {
 
     // test "SCREEN encodes the minimal complete-page active suffix"
     #[test]
+    #[cfg_attr(
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+    )]
     fn screen_encodes_the_minimal_complete_page_active_suffix() {
         let page_rows = {
             let mut probe =

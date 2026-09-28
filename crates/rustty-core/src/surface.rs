@@ -386,6 +386,10 @@ mod r13_window_size_overflow_tests {
     const SCALE: apprt::ContentScale = apprt::ContentScale { x: 1.0, y: 1.0 };
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-core, parity tail C-1): `Config::finalize` calls the foreign function `getppid`, which Miri cannot execute; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn initial_size_px_overflow_takes_the_skip_path() {
         // Positive control: 80x24 cells of 10x20 px, 2 px padding.
         let cfg = load(b"window-width = 80\nwindow-height = 24\n");
@@ -450,6 +454,10 @@ mod r13_window_size_overflow_tests {
     /// `subPadding` (the reference traps there). The port saturates both, and the
     /// grid keeps its one-cell minimum.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-core, parity tail C-1): `Config::finalize` calls the foreign function `getppid`, which Miri cannot execute; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn an_oversized_window_padding_saturates_and_leaves_a_one_cell_grid() {
         // Positive control: an ordinary padding is scaled by the dpi.
         let cfg = load(b"window-padding-x = 2\nwindow-padding-y = 3\n");
@@ -503,6 +511,10 @@ mod r13_window_size_overflow_tests {
     /// (`Surface.zig:395`) and traps (ReleaseFast: 5000 -> 705032704 ns,
     /// measured). Driven through the config loader into a real `DerivedConfig`.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-core, parity tail C-1): `Config::finalize` calls the foreign function `getppid`, which Miri cannot execute; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn a_click_repeat_interval_above_u32_nanoseconds_is_widened_not_trapped() {
         // Positive control: an ordinary interval.
         let cfg = load(b"click-repeat-interval = 500\n");
@@ -533,6 +545,10 @@ mod r13_window_size_overflow_tests {
     /// padding a side, Debug/ReleaseSafe/ReleaseFast, arm64 and x86_64 under
     /// Rosetta 2). The port skips instead; see `u32_from_ceil`.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-core, parity tail C-1): `Config::finalize` calls the foreign function `getppid`, which Miri cannot execute; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn initial_size_px_with_a_nan_content_scale_takes_the_skip_path() {
         let cfg = load(b"window-width = 80\nwindow-height = 24\n");
         // Positive control: the same config with a real scale.
@@ -561,6 +577,10 @@ mod r13_window_size_overflow_tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-core, parity tail C-1): `Config::finalize` calls the foreign function `getppid`, which Miri cannot execute; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn size_limit_min_overflow_skips_the_action() {
         // `adjust-cell-width` adds an absolute `i32` to the face's cell width.
         let cfg = load(b"adjust-cell-width = 500000000\n");

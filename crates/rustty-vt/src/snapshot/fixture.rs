@@ -133,6 +133,22 @@ pub fn expect_equal(
     expected: &[u8],
     actual: &[u8],
 ) {
+    // PORT NOTE (task C-1, Miri): Miri's isolation forbids the file system, so
+    // under `cfg(miri)` only the byte comparison runs; the candidate file is a
+    // debugging aid for a mismatch, written by every native run. Keeping the
+    // comparison keeps the golden encode/decode paths in the Miri lane.
+    if cfg!(miri) {
+        assert!(
+            expected == actual,
+            "snapshot fixture {reference_path} ({candidate_name}) does not match: \
+             expected {} bytes, got {}",
+            expected.len(),
+            actual.len()
+        );
+        let _ = kind;
+        return;
+    }
+
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
 
     // Kaitai parser selection lives in the reference itself. Read the textual

@@ -716,6 +716,10 @@ mod tests {
     #[test]
     #[cfg(not(windows))]
     #[allow(non_snake_case)]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-os, parity tail C-1): `stat` is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn alloc_tmp_dir_keeps_the_root_directory() {
         let env = |entries: &[&[u8]]| {
             rustty_global::Environ::from_entries(entries.iter().map(|e| e.to_vec()).collect())

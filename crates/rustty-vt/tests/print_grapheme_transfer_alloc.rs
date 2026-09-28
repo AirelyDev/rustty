@@ -127,6 +127,10 @@ fn terminal_opts(cols: u16, rows: u16) -> TerminalOptions {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-vt, parity tail C-1): intractable under Miri (it fills a whole page line by line, past a 9-minute run before it was stopped); the cross-page grapheme transfer it measures is Miri-verified in the G6c lane by terminal::tests::terminal_print_wide_grapheme_transfers_across_a_page_seam; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+)]
 fn cross_page_wide_grapheme_transfer_does_not_allocate() {
     // Non-vacuity control for the probe itself: a `Vec<u32>` of exactly the
     // cluster length is the allocation this test claims is gone, so the probe

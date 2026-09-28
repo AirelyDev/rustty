@@ -567,20 +567,27 @@ mod log_site_census {
 
     #[test]
     fn every_reference_diagnostic_is_live_at_its_level_and_scope() {
+        // Each source is whitespace-collapsed once, not once per expected
+        // emission (task C-1: re-collapsing every file per entry kept this test
+        // past a 20-minute Miri budget; the assertions are unchanged).
+        let collapsed: Vec<(&str, String)> = SOURCES
+            .iter()
+            .map(|(_z, p, s)| (*p, collapse_ws(s)))
+            .collect();
         for (_zig, port, level, message, count) in EXPECTED
             .iter()
             .map(|(port, level, message, count)| ("", *port, *level, *message, *count))
         {
-            let src = SOURCES
+            let src = &collapsed
                 .iter()
-                .find(|(_z, p, _s)| *p == port)
+                .find(|(p, _s)| *p == port)
                 .unwrap_or_else(|| panic!("no source registered for {port}"))
-                .2;
+                .1;
             let macro_name = ["log", "::", level, "!"].concat();
             let wanted = collapse_ws(&format!("{macro_name}(target: LOG_SCOPE, \"{message}\""));
             assert_eq!(
                 count,
-                collapse_ws(src).matches(&wanted).count(),
+                src.matches(&wanted).count(),
                 "expected {count} live emission(s) of `{wanted}` in {port}"
             );
         }

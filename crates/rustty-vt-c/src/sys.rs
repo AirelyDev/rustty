@@ -688,11 +688,17 @@ static LOGGER: Logger = Logger;
 ///
 /// Non-wasm level (IMPORTANT 4, task-14a review): `lib_vt.zig`'s `std_options`
 /// does NOT set `log_level` for the `terminal.options.c_abi` arm, so Zig's
-/// build-mode default applies — `.debug` in Debug, `.err` in ReleaseFast (the
-/// shipped configuration). `cfg!(debug_assertions) ? Debug : Error` is the
-/// direct port of that default, not an independent choice; a release
-/// embedder must not receive warn/info/debug records the reference itself
-/// suppresses.
+/// build-mode default applies: `std.log.default_level` is `.debug` in Debug
+/// and `.info` in ReleaseSafe, ReleaseFast and ReleaseSmall (Zig 0.16
+/// `lib/std/log.zig:54-57`, the reference's `minimum_zig_version`).
+/// `cfg!(debug_assertions) ? Debug : Info` is the direct port of that
+/// default, not an independent choice: a release embedder receives the
+/// info/warn/err records the reference delivers, and no debug records.
+///
+/// CORRECTION (task C-1, NEW-FINDINGS N390): this arm was `Error`, on the
+/// claim that Zig's default resolves to `.err` in ReleaseFast. It does not
+/// (the same holds in Zig 0.15), so a release embedder lost every warn and
+/// info record the reference delivers.
 ///
 /// CRITICAL 1 fix (task-14a review): `log::set_max_level` used to run
 /// unconditionally, even when `log::set_logger` returned `Err` (an embedder
@@ -732,7 +738,7 @@ pub fn install_log_backend() {
             } else if cfg!(debug_assertions) {
                 log::LevelFilter::Debug
             } else {
-                log::LevelFilter::Error
+                log::LevelFilter::Info
             };
             log::set_max_level(level);
         }
@@ -1477,18 +1483,37 @@ pub(crate) mod tests {
         // The mechanical shape a restored `log.warn("...", .{...})` site takes
         // under Option A: `log::warn!(target: "<scope>", "<format>", ...)`.
         log::warn!(target: "facade_test_scope", "facade proving message {}", 42);
+        // The level filter is Zig's `std.log.default_level` (`install_log_backend`):
+        // `.info` in every release mode, `.debug` in Debug. So `info` reaches the
+        // sink on both profiles and `debug` only in a debug build.
+        log::info!(target: "facade_test_scope", "facade info {}", 1);
+        log::debug!(target: "facade_test_scope", "facade debug {}", 2);
 
         GLOBAL.lock().unwrap().log = None;
 
         let captured = CALLED.lock().unwrap().clone();
-        assert_eq!(
-            captured,
-            vec![(
+        let mut expected = vec![
+            (
                 LogLevel::Warning,
                 "facade_test_scope".to_string(),
                 "facade proving message 42".to_string(),
-            )],
-            "log::warn! did not reach the C-ABI log sink through the facade backend"
+            ),
+            (
+                LogLevel::Info,
+                "facade_test_scope".to_string(),
+                "facade info 1".to_string(),
+            ),
+        ];
+        if cfg!(debug_assertions) {
+            expected.push((
+                LogLevel::Debug,
+                "facade_test_scope".to_string(),
+                "facade debug 2".to_string(),
+            ));
+        }
+        assert_eq!(
+            captured, expected,
+            "the facade backend did not deliver the reference's levels to the C-ABI log sink"
         );
     }
 
@@ -1565,6 +1590,10 @@ pub(crate) mod tests {
     /// stderr it captures, so the assertion is on the real fd-2 output of the
     /// `rustty_sys_log_stderr` export, not on a helper.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-vt-c, parity tail C-1): `current_exe` (`_NSGetExecutablePath`) is forbidden under Miri isolation (re-runs the test binary as a child); runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn log_stderr_writes_non_utf8_scope_and_message_bytes_verbatim() {
         const CHILD: &str = "RUSTTY_T_H_LOG_STDERR_CHILD";
         const NAME: &str =

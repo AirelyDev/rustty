@@ -219,7 +219,11 @@
 #   G-KAITAI check_kaitai_snapshot.sh the snapshot .ksy wire spec parses all
 #                                     checked-in snapshot goldens (CRC32C +
 #                                     byte accounting); BLOCKED without
-#                                     kaitai tooling, never silent   -> PROGRESS
+#                                     kaitai tooling, never silent   -> HARD-FAIL
+#                                     (promoted from PROGRESS by task C-1,
+#                                     controller ruling, once CI installed
+#                                     the compiler: N402), with
+#                                     G-KAITAI-SELF (its --self-test) HARD too
 #          Registered PROGRESS not HARD (R5): brand-new, fail-closed against
 #          hand-maintained audit ledgers; PROGRESS avoids a transiently
 #          un-passable CI while a new hit precedes its ledger row by a commit.
@@ -1162,9 +1166,14 @@ GATE_REGISTRY=(
   # — the check_test_counts.py oracle-absent precedent) when
   # kaitai-struct-compiler or a python with kaitaistruct is unavailable; the
   # python side self-provisions a cached venv (check_abi_schema.sh precedent).
-  # PROGRESS per the bedding-in convention; a genuine spec/golden drift RED is
-  # escalated by run_gate's PROGRESS-went-RED branch.
-  "G-KAITAI|PROGRESS|bash $GATES/check_kaitai_snapshot.sh"
+  # HARD (task C-1, controller ruling, R5): it was PROGRESS while no CI leg could
+  # run it; since L-5 (N402) the macOS leg installs kaitai-struct-compiler, so a
+  # spec/golden drift fails CI outright. A host without the tooling still gets
+  # exit 3 BLOCKED (a WARNING, never a silent green). G-KAITAI-SELF runs the
+  # gate's own --self-test (count-exact green, count-short RED, no-banner RED),
+  # which needs no Kaitai tooling.
+  "G-KAITAI-SELF|HARD|bash $GATES/check_kaitai_snapshot.sh --self-test"
+  "G-KAITAI|HARD|bash $GATES/check_kaitai_snapshot.sh"
 )
 
 HARD_FAILURES=()   # hard-fail checks that failed, or a claimed-done regression

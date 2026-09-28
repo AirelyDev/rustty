@@ -309,6 +309,15 @@ ENV_BLOCKED_ON = re.compile(r"^\*\*Blocked on:\*\*\s*(\S.*)$", re.M)
 ENV_PORTED = re.compile(r"^\s*PORTED:\s*(.+?)\s*$", re.M)
 
 
+def vd_row_is_closed(body):
+    """A VERIFICATION_DEBT row the gate treats as done (DISCHARGED / SIGNED OFF /
+    CLOSED / DELETED). Shared by the gate and its self-test so the two cannot
+    disagree about which rows are live (task C-1: a discharged row whose history
+    still quotes its old ENVIRONMENT-BLOCKED header was skipped by the gate but
+    picked up, and failed, by the self-test)."""
+    return re.search(r"\bDISCHARGED\b|\bSIGNED OFF\b|\bCLOSED\b|\bROW DELETED\b", body) is not None
+
+
 def environment_blocked_status(body):
     """(claimed, accepted, reason) for a ENVIRONMENT-BLOCKED verification-debt row.
 
@@ -404,7 +413,7 @@ def check_verification_debt(path, rel, open_ws, closed_ws, verbose):
         body = "\n".join(lines[i:j])
         title = lines[i].lstrip("# ").strip()
         # An explicitly closed row (DISCHARGED / SIGNED OFF / CLOSED / DELETED) is done.
-        if re.search(r"\bDISCHARGED\b|\bSIGNED OFF\b|\bCLOSED\b|\bROW DELETED\b", body):
+        if vd_row_is_closed(body):
             if verbose:
                 print(f"  OK   {rel}:{i + 1} | {vid} | closed")
             continue
@@ -730,8 +739,23 @@ def self_test():
     for k, (i, vid) in enumerate(starts):
         j = starts[k + 1][0] if k + 1 < len(starts) else len(lines)
         body = "\n".join(lines[i:j])
-        if ENV_BLOCKED.search(body):
+        # The gate skips closed rows before it looks for the marker; so does this.
+        if ENV_BLOCKED.search(body) and not vd_row_is_closed(body):
             rows.append((vid, body))
+
+    # The closed-row skip must not swallow a live claim: a row carrying the
+    # marker is selected unless it is closed, and a closed row whose history
+    # quotes the marker is not.
+    probe_live = "## V97. probe — **ENVIRONMENT-BLOCKED**\n**Blocked on:** x\n"
+    probe_closed = ("## V98. probe — **DISCHARGED**\n"
+                    "CORRECTION: the header read \"... — **ENVIRONMENT-BLOCKED**\".\n")
+    if not (ENV_BLOCKED.search(probe_live) and not vd_row_is_closed(probe_live)):
+        print("SELF-TEST FAILED: a live ENVIRONMENT-BLOCKED row is not selected.", file=sys.stderr)
+        return 1
+    if ENV_BLOCKED.search(probe_closed) and not vd_row_is_closed(probe_closed):
+        print("SELF-TEST FAILED: a DISCHARGED row quoting the marker is selected.", file=sys.stderr)
+        return 1
+    print("  closed-row skip: a live marker is selected, a discharged row quoting it is not")
 
     if not rows:
         print("SELF-TEST FAILED: ZERO rows carry ENVIRONMENT-BLOCKED, so the acceptance "

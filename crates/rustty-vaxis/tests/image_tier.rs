@@ -209,7 +209,6 @@ fn image_draw_scale_fit_neither_fits_picks_the_larger_difference() {
     let mut screen = screen_of(80, 24, 800, 480);
     let win = window_over(&mut screen, 30, 12);
     img_draw_expect(
-        &mut screen,
         win,
         VxImage {
             id: 4,
@@ -228,7 +227,6 @@ fn image_draw_scale_fit_neither_fits_picks_the_larger_difference() {
     let mut screen = screen_of(80, 24, 800, 480);
     let win = window_over(&mut screen, 30, 12);
     img_draw_expect(
-        &mut screen,
         win,
         VxImage {
             id: 5,
@@ -253,7 +251,6 @@ fn image_draw_scale_fit_both_fit_picks_the_closer_direction() {
     let mut screen = screen_of(80, 24, 800, 480);
     let win = window_over(&mut screen, 30, 12);
     img_draw_expect(
-        &mut screen,
         win,
         VxImage {
             id: 6,
@@ -271,7 +268,6 @@ fn image_draw_scale_fit_both_fit_picks_the_closer_direction() {
     let mut screen = screen_of(80, 24, 800, 480);
     let win = window_over(&mut screen, 30, 12);
     img_draw_expect(
-        &mut screen,
         win,
         VxImage {
             id: 7,
@@ -319,7 +315,6 @@ fn image_draw_scale_contain_fits_leaves_size_unset() {
     let mut screen2 = screen_of(80, 24, 800, 480);
     let win2 = window_over(&mut screen2, 30, 12);
     img_draw_expect(
-        &mut screen2,
         win2,
         VxImage {
             id: 9,
@@ -402,13 +397,11 @@ fn image_draw_zero_screen_cells_errors() {
     assert!(img.draw(win, DrawOptions::default()).is_ok());
 }
 
-fn img_draw_expect(
-    screen: &mut Screen<'static>,
-    win: Window<'static>,
-    img: VxImage,
-    scale: Scale,
-    expected: Option<ImageSize>,
-) {
+// The result is read back through the window's own screen pointer: a
+// `&mut Screen` argument here would retag the screen Unique on entry and
+// invalidate `win.screen` before `draw` uses it (Stacked Borrows; task C-1).
+fn img_draw_expect(win: Window<'static>, img: VxImage, scale: Scale, expected: Option<ImageSize>) {
+    let screen: *const Screen<'static> = win.screen;
     img.draw(
         win,
         DrawOptions {
@@ -417,7 +410,12 @@ fn img_draw_expect(
         },
     )
     .unwrap();
-    assert_eq!(placement_size_at_0_0(screen), expected, "scale = {scale:?}");
+    // SAFETY: the screen outlives the call and `draw` has returned.
+    assert_eq!(
+        placement_size_at_0_0(unsafe { &*screen }),
+        expected,
+        "scale = {scale:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -658,7 +656,6 @@ fn transmit_image_without_kitty_graphics_writes_nothing() {
 // ---------------------------------------------------------------------------
 
 /// Encode a small PNG through `rustty-zigimg` for the `load_image` inputs.
-#[cfg(not(miri))]
 /// 32x32, not 4x4 — see `transmit_image_png_round_trips`: the reference's
 /// `imageByteSize()`-sized PNG buffer cannot fit a PNG of a tiny image.
 fn png_fixture() -> (Vec<u8>, Vec<u8>) {

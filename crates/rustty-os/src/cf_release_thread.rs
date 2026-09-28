@@ -367,6 +367,10 @@ mod tests {
     /// LIFO fires "shutdown" and then "exited". Writing both defers as one
     /// mechanism, or in source order, reverses them.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-os, parity tail C-1): calls the foreign function `kqueue`, which Miri cannot execute; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn a_clean_run_emits_the_three_debug_lines_in_the_reference_order() {
         let cap = crate::log_capture::start();
         let mut t = Thread::init().expect("Thread::init on real xev");

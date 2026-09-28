@@ -1700,6 +1700,10 @@ mod tests {
     // file must keep its 0644.
     #[cfg(unix)]
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-cli, parity tail C-1): `mkdir` is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn add_does_not_chmod_an_existing_cache_file() {
         use std::os::unix::fs::PermissionsExt;
         // Root ignores directory permissions, so the rewrite would not fail and

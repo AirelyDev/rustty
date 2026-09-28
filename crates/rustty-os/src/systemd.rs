@@ -416,6 +416,10 @@ mod tests {
     /// S112-F8: the comm check compares at most 16 bytes, less trailing
     /// newlines, and reports an open failure and a read failure separately.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-os, parity tail C-1): `lstat` is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn comm_check_reads_16_bytes_and_has_two_failure_arms() {
         let f = Temp::path("comm");
         std::fs::write(&f.0, b"systemd\n").unwrap();

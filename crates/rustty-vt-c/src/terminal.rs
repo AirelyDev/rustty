@@ -5801,6 +5801,10 @@ mod tests {
 
     // test "compression activity and incremental scheduling" (oracle 172f15da3)
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-vt-c, parity tail C-1): intractable under Miri, 4,000 lines of history written through the terminal, then an incremental compression pass; measured past a 20-minute bound; runs natively and under ASan (see MIRI_EXCEPTIONS.md)"
+    )]
     fn compression_activity_and_incremental_scheduling() {
         with_test_allocator(|alloc| {
             let (new_result, t) = new_t(alloc, 80, 24);
@@ -11712,6 +11716,10 @@ mod tests {
     // (and deletes the chunked one), registers the glyph, and hands both
     // clipboard writes to the effect; every byte it took is returned by `free`.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-vt-c, parity tail C-1): intractable under Miri, one pass of the sweep corpus costs about 30 minutes of Miri time (its 600-column resize alone about 27); measured past a 20-minute bound; runs natively and under ASan (see MIRI_EXCEPTIONS.md)"
+    )]
     fn sweep_corpus_reaches_the_s7_4_families() {
         use rustty_vt::alloc::testing::CountingAllocator;
         let counting = CountingAllocator::over_heap();
@@ -11889,6 +11897,10 @@ mod tests {
     // advances on success), so every later growth takes the alloc+copy+free
     // fallback, with the same checks. Under Miri the corpus is smaller.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-vt-c, parity tail C-1): intractable under Miri, one pass of the sweep corpus costs about 30 minutes of Miri time (its 600-column resize alone about 27) and the sweep makes one pass per allocation; measured past a 20-minute bound; runs natively and under ASan (see MIRI_EXCEPTIONS.md)"
+    )]
     fn allocation_failure_sweep_through_the_c_api() {
         use rustty_vt::alloc::testing::{Config, FailingAllocator};
 

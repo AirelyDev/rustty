@@ -428,6 +428,10 @@ mod tests {
     /// fallback after the walk, and in a release build from the lookup before
     /// it; both are the reference's paths.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-os, parity tail C-1): `stat` is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn non_utf8_resources_dir_variable_is_used_raw() {
         let env = env_with(b"/opt/r\xffs/share/rustty");
         let dir = resources_dir_from(&env, Some(b"/nonexistent-tg-f1/bin/rustty")).unwrap();
@@ -456,6 +460,10 @@ mod tests {
     /// S112-F2: a candidate `base/sub/suffix` longer than the `max_path_bytes`
     /// buffer is `bufPrint`'s `error.NoSpaceLeft`, returned from `resourcesDir`.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-os, parity tail C-1): `stat` is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn candidate_longer_than_max_path_is_no_space_left() {
         let mut exe = b"/".to_vec();
         exe.extend(std::iter::repeat_n(b'd', max_path_bytes()));
@@ -479,6 +487,10 @@ mod tests {
     /// `std.fs.path.dirname` and finds `<dir>/share/<sentinel>`, returning
     /// `<dir>/share/rustty`.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-os, parity tail C-1): `lstat` is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn walk_finds_the_share_tree_above_the_executable() {
         let tree = TempTree::new("walk");
         let sentinel = sentinels()[0];

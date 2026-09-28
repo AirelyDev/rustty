@@ -7246,6 +7246,10 @@ mod tests {
         not(all(feature = "kitty-graphics", not(target_os = "none"))),
         ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
     )]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-vt, parity tail C-1): calls `shm_open`/`shm_unlink`, foreign functions Miri cannot execute; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn kitty_graphics_shared_memory_copies_the_requested_range() {
         let shm = PeerShm::create("range", 4096, |i| (i % 251) as u8);
         let mut t = Terminal::init(Global, shm_opts()).unwrap();

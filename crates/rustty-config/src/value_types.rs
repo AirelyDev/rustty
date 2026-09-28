@@ -9710,14 +9710,28 @@ mod tests {
         );
 
         // `keybind = <name>/` -> clear that table. `log.debug`, not `log.info`,
-        // and the ONLY one of the three that formats a value.
+        // and the ONLY one of the three that formats a value. The reference's
+        // `std_options.log_level` is `.debug` only in a Debug build and `.info`
+        // otherwise (`main_ghostty.zig:208-211`), so a release build erases it:
+        // the line is asserted in a debug build and its ABSENCE in a release one.
         set.parse_cli(Some(b"foo/shift+a=csi:hello")).unwrap();
+        assert_eq!(
+            set.tables.get(&b"foo".to_vec()).unwrap().bindings_count(),
+            1
+        );
         crate::config_struct::log_capture::arm();
         set.parse_cli(Some(b"foo/")).unwrap();
+        // The clear arm ran on both profiles.
         assert_eq!(
-            crate::config_struct::log_capture::take(),
-            vec!["debug(config): config has 'keybind = foo/', table cleared".to_string()],
+            set.tables.get(&b"foo".to_vec()).unwrap().bindings_count(),
+            0
         );
+        let expected: Vec<String> = if cfg!(debug_assertions) {
+            vec!["debug(config): config has 'keybind = foo/', table cleared".to_string()]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(crate::config_struct::log_capture::take(), expected);
     }
 
     #[test]

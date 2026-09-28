@@ -1222,6 +1222,10 @@ mod tests {
     // caller's `warnPrint(stderr, "failed to install terminfo: {t}", ...)`
     // prints as the bare tag.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-cli, parity tail C-1): `arc4random_buf` is not implemented by Miri on macOS; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn install_failures_are_install_failed() {
         let mut opts = Options::default();
         let mut err_out: Vec<u8> = Vec::new();

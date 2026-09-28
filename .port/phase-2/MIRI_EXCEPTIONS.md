@@ -2558,3 +2558,290 @@ a silent skip — the same fixture change that fixed the sibling
 added to `pagelist_integrity_detects_max_lines_exceeded`
 (`crates/rustty-vt/src/pagelist/tests.rs`). It still runs, and is required
 to pass, natively (`cargo test -p rustty-vt --lib`) and in the release lane.
+
+**RESOLVED (parity tail C-1, 2026-09-27): the exception is removed; the test runs in G6.**
+The fixture now pauses the first page's own integrity checks while `grow_rows`
+fills it (`Page::pause_integrity_checks`, the technique the reference's grow-loop
+tests use, e.g. `pagelist_pointFromPin_active_from_prior_page`), then un-pauses and
+asserts `Page::verify_integrity` and `PageList::verify_integrity` on the complete
+page before the forbidden state is built. The page is still filled row by row by
+`grow_rows`, so "one complete historical page" is the real state, not a fake; only
+the O(n^2) per-row re-check during setup is skipped. Measured under the G6
+conditions (isolation on, debug assertions on, single test): **pass, 49 s (Miri
+clock), 0 UB, 0 leaks**. With the `all(miri, debug_assertions)` annotation gone it
+also leaves G6c's derived set, which it had been counted in since `bbc76bc9`
+although `cfg_attr(not(debug_assertions), ignore)` kept it from ever running there:
+that is the `83 test(s) RAN, expected at least 84` G6c red. The set is now 83
+tests, all of which run.
+
+## Parity tail C-1 — the G6 triage of 2026-09-27 (tests added since the 2026-08-29 lane)
+
+The full `ci.sh` run at `9fd17d93` had G6 red in nine crates. Miri aborts a whole test binary at the
+first offence and cargo stops at the first failing binary, so the lane only ever named one test per
+crate. Task C-1 therefore ran EVERY test of the nine crates in its own Miri process under the G6
+conditions (isolation on, no `MIRIFLAGS`, debug assertions on, 20-minute bound per test), then
+re-ran each crate's lane exactly as `check_leaks.sh` does. Nearly all were added by the parity-closure
+waves, whose briefs ran no Miri.
+
+Real defects found this way are FIXED in code, not excepted: N391 (`rustty-bench` terminal-stream
+Stacked Borrows), and the others listed under their crates below. Everything in the tables is a
+genuine Miri-cannot-model case, annotated at its source `#[cfg_attr(miri, ignore = "MIRI EXCEPTION
+(<crate>, parity tail C-1): ...")]`.
+
+4-criterion basis, for every row: (1) **impossible, not slow** — a syscall Miri's isolation forbids or
+a foreign function Miri cannot execute; each was measured, one test per Miri process, and failed at
+that call; (2) **passes natively** in ci.sh's HARD `cargo test --workspace` (and the release lane),
+which is the companion lane; (3) **no uncovered unsafe path** — the calls are the OS boundary itself
+(process spawning, files, directories, clocks, `fcntl`, `select`, kqueue, Objective-C/CoreFoundation),
+and the crate's own Rust code on either side of them is exercised by its Miri-passing tests; (4) the
+rest of each crate stays in the lane (counts below, from the lane re-run).
+
+### `rustty-bench` (lane: 37 passed, 12 ignored), `rustty-cli` (88 passed, 35 ignored), `rustty-global` (13 passed, 7 ignored), `rustty-synthetic` (26 passed, 1 ignored)
+
+| crate | test | what Miri cannot do |
+|---|---|---|
+| `rustty-bench` | `cli::tests::string_args_honour_quotes_like_arg_iterator_general` | `mkdir` is forbidden under Miri isolation |
+| `rustty-bench` | `global_init_runs_before_the_benchmark` | `open` is forbidden under Miri isolation |
+| `rustty-bench` | `page_compression_report_goes_to_stderr` | `open` is forbidden under Miri isolation |
+| `rustty-bench` | `page_compression_report_prints_to_stderr_not_stdout` | `clock_gettime(REALTIME)` is forbidden under Miri isolation |
+| `rustty-bench` | `scrollback_compression_report_goes_to_stderr` | `open` is forbidden under Miri isolation |
+| `rustty-bench` | `terminal_formatter_report_goes_to_stderr` | `open` is forbidden under Miri isolation |
+| `rustty-bench` | `terminal_formatter_roundtrip_goes_to_stderr` | `open` is forbidden under Miri isolation |
+| `rustty-bench` | `terminal_snapshot_report_goes_to_stderr` | `open` is forbidden under Miri isolation |
+| `rustty-cli` | `crash_report::tests::a_report_too_old_for_a_duration_saturates_instead_of_trapping` | `clock_gettime(REALTIME)` is forbidden under Miri isolation |
+| `rustty-cli` | `edit_config::exec_tests::exec_failure_report_prints_the_raw_command_bytes` | calls the foreign function `execve`, which Miri cannot execute |
+| `rustty-cli` | `edit_config::exec_tests::the_editor_inherits_the_ignored_sigpipe` | `mkdir` is forbidden under Miri isolation |
+| `rustty-cli` | `io_file::tests::a_write_to_a_stdout_closed_at_exec_fails_with_ebadf` | `current_exe` (`_NSGetExecutablePath`) is forbidden under Miri isolation |
+| `rustty-cli` | `io_file::tests::a_write_to_an_unwritable_stdout_fails_where_std_reports_success` | `open` is forbidden under Miri isolation |
+| `rustty-cli` | `io_file::tests::an_appended_stdout_keeps_the_existing_content` | `mkdir` is forbidden under Miri isolation |
+| `rustty-cli` | `list_colors::r13_flush_tests::plain_listing_reaches_stdout_in_full` | `current_exe` (`_NSGetExecutablePath`) is forbidden under Miri isolation |
+| `rustty-cli` | `list_themes::picker_tests::keys_on_a_filter_that_matches_nothing_do_not_index_it` | calls the foreign function `openpty`, which Miri cannot execute |
+| `rustty-cli` | `list_themes::picker_tests::the_preview_loop_delivers_a_resize` | calls the foreign function `openpty`, which Miri cannot execute |
+| `rustty-cli` | `list_themes::r13_flush_tests::a_home_too_long_for_the_xdg_lookup_is_out_of_memory` | `current_exe` (`_NSGetExecutablePath`) is forbidden under Miri isolation |
+| `rustty-cli` | `list_themes::r13_flush_tests::no_themes_messages_reach_stderr` | `mkdir` is forbidden under Miri isolation |
+| `rustty-cli` | `ssh::tests::install_failures_are_install_failed` | `arc4random_buf` is not implemented by Miri on macOS |
+| `rustty-cli` | `ssh_cache::disk_cache::tests::add_does_not_chmod_an_existing_cache_file` | `mkdir` is forbidden under Miri isolation |
+| `rustty-cli` | `zig_error::tests::realpath_error_names_follow_the_reference_mapping` | `realpath` is forbidden under Miri isolation |
+| `rustty-global` | `environ::tests::environ_from_process_matches_vars_os` | real process environment: Miri isolation gives an empty environ (the test would be vacuous there) |
+| `rustty-global` | `get_env_map_survives_non_utf8` | `current_exe` (`_NSGetExecutablePath`) is forbidden under Miri isolation |
+| `rustty-global` | `posix_duplicate_env_parent_spawns_the_child` | `current_exe` (`_NSGetExecutablePath`) is forbidden under Miri isolation |
+| `rustty-synthetic` | `the_generator_binary_is_named_rustty_gen` | `open` is forbidden under Miri isolation |
+| `rustty-cli` | `new_window::tests::error_parsing_args_prints_the_zig_error_name (unix)` | `realpath` is forbidden under Miri isolation |
+| `rustty-cli` | `new_tab::tests::error_parsing_args_prints_the_zig_error_name` | `realpath` is forbidden under Miri isolation |
+
+`rustty-bench`'s `log_site_census::every_reference_diagnostic_is_live_at_its_level_and_scope` is NOT
+excepted: it re-collapsed a whole source file per expected entry and ran past the bound; it now
+collapses each file once and passes under Miri in 232 s.
+
+### `rustty-os` (lane `--lib`: 77 passed, 45 ignored), `rustty-core` (58 passed, 14 ignored)
+
+| crate | test | what Miri cannot do |
+|---|---|---|
+| `rustty-core` | `renderer_seam::compression_tests::change_config_restarts_the_pass_only_on_disabled_to_enabled` | the harness's `Thread::init` opens a real xev event loop, whose `kqueue` Miri cannot call, and the pass is driven by that loop |
+| `rustty-core` | `renderer_seam::compression_tests::compression_idle_pass_compresses_scrollback` | the harness's `Thread::init` opens a real xev event loop, whose `kqueue` Miri cannot call, and the pass is driven by that loop |
+| `rustty-core` | `renderer_seam::compression_tests::compression_is_inert_when_the_option_is_disabled` | the harness's `Thread::init` opens a real xev event loop, whose `kqueue` Miri cannot call, and the pass is driven by that loop |
+| `rustty-core` | `surface::r13_window_size_overflow_tests::a_click_repeat_interval_above_u32_nanoseconds_is_widened_not_trapped` | `Config::finalize` calls the foreign function `getppid`, which Miri cannot execute |
+| `rustty-core` | `surface::r13_window_size_overflow_tests::an_oversized_window_padding_saturates_and_leaves_a_one_cell_grid` | `Config::finalize` calls the foreign function `getppid`, which Miri cannot execute |
+| `rustty-core` | `surface::r13_window_size_overflow_tests::initial_size_px_overflow_takes_the_skip_path` | `Config::finalize` calls the foreign function `getppid`, which Miri cannot execute |
+| `rustty-core` | `surface::r13_window_size_overflow_tests::initial_size_px_with_a_nan_content_scale_takes_the_skip_path` | `Config::finalize` calls the foreign function `getppid`, which Miri cannot execute |
+| `rustty-core` | `surface::r13_window_size_overflow_tests::size_limit_min_overflow_skips_the_action` | `Config::finalize` calls the foreign function `getppid`, which Miri cannot execute |
+| `rustty-core` | `surface_occlusion_callback_dedups_and_reports` | calls the foreign function `CFStringCreateWithBytes`, which Miri cannot execute |
+| `rustty-os` | `cf_release_thread::tests::a_clean_run_emits_the_three_debug_lines_in_the_reference_order` | calls the foreign function `kqueue`, which Miri cannot execute |
+| `rustty-os` | `file::tests::alloc_tmp_dir_keeps_the_root_directory` | `stat` is forbidden under Miri isolation |
+| `rustty-os` | `locale::tests::preferred_languages_are_bounded_by_the_fixed_buffer_and_nul` | calls the foreign function `_libintl_locale_name_canonicalize`, which Miri cannot execute |
+| `rustty-os` | `locale::tests::the_nslocale_class_lookup_resolves` | calls the foreign function `objc_getClass`, which Miri cannot execute |
+| `rustty-os` | `open::open_thread_tests::open_thread_reaps_an_opener_that_writes_stderr` | `open` is forbidden under Miri isolation |
+| `rustty-os` | `open::open_thread_tests::open_thread_spawn_failure_is_an_error` | calls the foreign function `posix_spawnattr_init`, which Miri cannot execute |
+| `rustty-os` | `pipe::fallback_tests::failing_setfd_closes_both_descriptors` | `fcntl(F_SETFD)` is not implemented by Miri |
+| `rustty-os` | `pipe::fallback_tests::fallback_sets_cloexec_on_both_and_closes_nothing` | `fcntl(F_SETFD)` is not implemented by Miri |
+| `rustty-os` | `resourcesdir::tests::candidate_longer_than_max_path_is_no_space_left` | `stat` is forbidden under Miri isolation |
+| `rustty-os` | `resourcesdir::tests::non_utf8_resources_dir_variable_is_used_raw` | `stat` is forbidden under Miri isolation |
+| `rustty-os` | `resourcesdir::tests::walk_finds_the_share_tree_above_the_executable` | `lstat` is forbidden under Miri isolation |
+| `rustty-os` | `systemd::tests::comm_check_reads_16_bytes_and_has_two_failure_arms` | `lstat` is forbidden under Miri isolation |
+
+The three `rustty-core` `renderer_seam::compression_tests` were the tests the ci run killed after an
+hour. The hour is their setup (2,000 lines streamed through a real terminal under debug
+assertions), but shrinking it would not make them Miri-tractable: the harness then calls
+`Thread::init`, which opens a real xev loop (`xev::Loop::init` -> `kqueue`, `renderer_seam.rs`
+`Thread::init`), and the pass under test is driven by that loop's timer. So they are excepted as
+impossible, not as slow. The scheduler's own logic has no `unsafe` beyond the loop and the terminal;
+the terminal's compression paths are covered by `rustty-vt`'s Miri-passing compression tests.
+
+### `rustty-vaxis` (lane: 157 passed, 12 ignored)
+
+| crate | test | what Miri cannot do |
+|---|---|---|
+| `rustty-vaxis` | `loop_::stop_wake_tests::a_terminal_that_answers_ends_the_read_without_the_wake` | calls the foreign function `select`, which Miri cannot execute |
+| `rustty-vaxis` | `loop_::stop_wake_tests::a_terminal_that_never_answers_is_woken_after_the_grace` | calls the foreign function `select`, which Miri cannot execute |
+| `rustty-vaxis` | `loop_::tests::loop_lifecycle` | `fcntl(F_SETFD)` is not implemented by Miri |
+| `rustty-vaxis` | `tty::tests::a_sigwinch_while_the_handlers_are_locked_still_reaches_the_callback` | `fcntl(F_SETFD)` is not implemented by Miri |
+| `rustty-vaxis` | `tty::tests::the_sigwinch_handler_neither_blocks_on_a_full_pipe_nor_clobbers_errno` | `fcntl(F_SETFD)` is not implemented by Miri |
+
+Not excepted, FIXED (NEW-FINDINGS N392): the `tests/image_tier.rs` binary did not COMPILE under Miri
+(`png_fixture` was `#[cfg(not(miri))]` while its two callers are only `cfg_attr(miri, ignore)`), so
+the lane stopped there and the binary's other 19 tests never ran under Miri. Once it compiled,
+`img_draw_expect` took `&mut Screen` alongside a `Window` holding a raw pointer to the same screen,
+a Stacked Borrows violation in the test helper; it now reads back through the window's pointer.
+
+### `rustty-vt-c` (lane: 540 passed, 17 ignored)
+
+Isolation / foreign-call exceptions (same 4-criterion basis as above):
+
+| test | what Miri cannot do |
+|---|---|
+| `tests/header_scrollback_limit_docs.rs` `scrollback_max_bytes_doc_matches_oracle`, `scrollback_max_lines_doc_matches_oracle` | `open` is forbidden under isolation (they read the shipped header) |
+| `panic::tests::tiny_panic_prints_only_the_message_and_aborts` | `current_exe` (`_NSGetExecutablePath`) is forbidden under isolation (re-runs the test binary as a child) |
+| `sys::tests::log_stderr_writes_non_utf8_scope_and_message_bytes_verbatim` | as above |
+| `types::manifest_header_sync_tests::manifest_enums_match_the_shipped_headers` | `opendir` is forbidden under isolation (reads the shipped headers) |
+
+**Slow exceptions (criterion 1 is the budget, not impossibility).** Seven S7/S7-5/S7-6/reference
+tests. In the per-test enumeration each ran past its bound under the G6 conditions (8 workers on a
+14-core host with other agents' builds, so the bound was contended); the sweep corpus was then
+profiled alone with `Instant` checkpoints under Miri: one pass is about 1,770 s of Miri time before
+its final resize, of which the `resize(600, 30)` alone is 1,632 s (natively 70 ms of a 185 ms pass),
+and the terminal sweep makes one pass per allocation the scenario performs. The causes of the other
+five were not profiled (UNVERIFIED); each writes one to three full pages of history through the
+terminal.
+
+| test | what makes it heavy |
+|---|---|
+| `terminal::tests::allocation_failure_sweep_through_the_c_api` | one sweep-corpus pass (above) per allocation, then per remap |
+| `terminal::tests::sweep_corpus_reaches_the_s7_4_families` | one sweep-corpus pass (above) |
+| `terminal::tests::compression_activity_and_incremental_scheduling` (reference test, oracle 172f15da3) | 4,000 lines of history, then an incremental compression pass |
+| `snapshot::tests::snapshot_incremental_decoder_exposes_ready_and_page_progress` | three pages of history at 215 columns, then an encode and a decode |
+| `render::tests::render_state_allocation_failure_sweep_through_the_c_api` | one render-state update per allocation of the sweep |
+| `search::tests::search_feed_and_run_report_out_of_memory_instead_of_spinning` | two pages of scrollback before the search |
+| `search::tests::search_internals_route_through_the_callers_allocator` | two pages of scrollback before the search |
+
+Criterion 2: all seven pass natively in `cargo test --workspace`, and under AddressSanitizer
+(`sanitizers.sh rustty-vt-c <the seven names> address`, run once by task C-1 on 2026-09-27: 9 tests
+ran — the filters also match two sibling sweeps — all passed, no finding). The ASan run is not
+repeated by a gate (the same standing as the PageList exceptions at the top of this file). Leaks:
+the four sweeps assert, natively, that the `FailingAllocator` got every byte back
+(`allocated_bytes == freed_bytes`, `allocations == deallocations`) for every n.
+
+Criterion 3: the same code paths are Miri-verified by lighter `rustty-vt-c` tests that pass in the
+lane: `osc::tests::osc_allocation_failure_sweep_through_the_c_api`,
+`terminal::tests::allocation_failure_sweep_through_the_allocating_writers`,
+`search::tests::search_allocation_failure_sweep_through_the_c_api`,
+`search::tests::search_shared_allocator_failure_sweep_through_the_c_api`,
+`snapshot::tests::allocation_failure_sweep_through_snapshot_decode`, the `*_route_through_*`
+allocator-routing tests of `terminal`, `render`, `search` and `snapshot`, and
+`render::tests::render_state_internals_route_through_the_callers_allocator`; the page, reflow and
+compression code underneath is `rustty-vt`'s, covered by its own G6/G6c lanes.
+
+Not excepted, FIXED: `style::tests::convert_style_with_colors` (UB, NEW-FINDINGS N393);
+`render::tests::render_row_get_set_dirty` and `render::tests::render_update` (UB in `rustty-vt`'s
+`RenderState::update`, N394); `osc::tests::osc_allocation_failure_sweep_through_the_c_api` (its
+`cfg(miri)` corpus had dropped the one capture that grows, so the remap sweep asserted nothing to
+refuse; the Miri corpus keeps a `MAX_BUF + 64` capture and the test passes in 51 s).
+
+### `rustty-vt` (G6 lane: lib 3015 passed, 207 ignored, every integration binary and the doctests green; G6c: 119 passed in 6272 s)
+
+Found through this triage and FIXED in code, not excepted: N394 (`RenderState::update` held a shared
+row slice across `set_dirty` writes, Stacked Borrows); `page_tests.rs`'s two unaligned-buffer tests
+leaked their buffer on purpose (a drop guard now frees it on unwind); the snapshot golden tests
+(`snapshot::fixture::expect_equal`) now compare bytes only under `cfg(miri)`, where the candidate file
+they also write (a debugging aid for a mismatch) is forbidden by isolation, so the golden
+encode/decode paths stay in the lane; `pagelist_integrity_detects_max_lines_exceeded` fills its page
+with that page's integrity checks paused (see its entry above), so it runs in G6.
+
+Isolation / foreign-call exceptions:
+
+| test | what Miri cannot do |
+|---|---|
+| `alloc::tests::failing_allocator_captures_the_stack_at_the_first_induced_failure` | formatting the captured `Backtrace` resolves symbols, which calls `getcwd` |
+| `kitty::graphics_image::tests::zlib_inflate_accepts_exactly_the_limit` | vendored zlib (`inflateInit2_`) |
+| `ref_geometry_golden_tests::the_port_matches_the_reference_geometry_golden` | `open` (reads the checked-in golden) |
+| `stream_terminal::tests::kitty_graphics_shared_memory_copies_the_requested_range` | `shm_open` / `shm_unlink` |
+| `tests/fuzz_corpus_replay.rs`: `replay_fixed_fuzz_findings_osc`, `replay_port_full_corpus`, `replay_port_initial_seeds_{cross,osc,parser,stream}` | `stat` / `opendir` (walk the mirrored corpus) |
+| `tests/kitty_temp_dir_security.rs` `kitty_temp_file_medium_ignores_the_process_tmpdir` | real temporary-directory file system calls |
+
+Budget exceptions that are not about page integrity:
+
+| test | why |
+|---|---|
+| `compress::lz4_differential::lz4_differential_light` | a 24 s native property suite even with debug assertions off, over `lz4.rs`, which has no `unsafe`; the codec is Miri-covered by the 14 `compress::lz4::tests` (all pass in G6) and `.port/phase-2/mirihar-compress-lz4` |
+| `tests/viewport_fingerprint_alloc.rs` `fingerprint_only_allocates_on_changes` | past a 15-minute bound; the contract is Miri-verified in G6 by the port of the reference test, `search::viewport::tests::fingerprint_only_allocates_on_changes` and `fingerprint_allocation_failure_preserves_the_old_fingerprint` |
+| `tests/print_grapheme_transfer_alloc.rs` `cross_page_wide_grapheme_transfer_does_not_allocate` | fills a whole page line by line (stopped after 9 minutes); the cross-page transfer path is Miri-verified in G6c by `terminal::tests::terminal_print_wide_grapheme_transfers_across_a_page_seam` |
+
+**Moved from G6 to G6c: 36 tests** (`cfg_attr(all(miri, debug_assertions), ignore)`, the WS19 T6
+partition). Each ran past a 15-minute bound in G6 (one test per process, 8 workers; 20 minutes for
+some in the first pass), and each passed in G6c conditions (`-C debug-assertions=off`,
+`-Zmiri-disable-isolation`) within an 8-minute bound, 7 workers on a host other agents were also
+loading. Natively, with debug assertions, they take the times below; with them off every one of them
+takes at most 0.3 s, cargo overhead included: the integrity walks are the cost.
+
+| test | native, debug assertions on | G6c, measured |
+|---|---|---|
+| `terminal::tests::terminal_set_scrollback_max_lines` | 3.86 s | 4 s (found in a later pass) |
+| `terminal::tests::ud80_wide_terminal_capacity_clone_past_the_refcount_ceiling_keeps_every_cell_styled` | 0.24 s | 171 s (found in a later pass) |
+| `pagelist::tests::pagelist_enforce_limit_marks_activity_and_preserves_continuation` | 2.28 s | 2 s |
+| `pagelist::tests::pagelist_eraseRowBounded_hyperlink_dense_row_crosses_page_boundary` | 2.35 s | 2 s |
+| `pagelist::tests::pagelist_eraseRow_hyperlink_dense_row_crosses_page_boundary` | 2.31 s | 2 s |
+| `pagelist::tests::pagelist_increaseCapacity_returns_OutOfSpace_at_max_capacity` | 0.10 s | 77 s |
+| `pagelist::tests::pagelist_incremental_compression_advances_after_allocation_failure` | 1.18 s | 44 s |
+| `pagelist::tests::pagelist_incremental_compression_advances_after_decommit_failure` | 1.17 s | 45 s |
+| `pagelist::tests::pagelist_incremental_compression_advances_after_failure` | 1.18 s | 106 s |
+| `pagelist::tests::pagelist_incremental_compression_bounds_inspected_pages` | 5.01 s | 304 s |
+| `pagelist::tests::pagelist_incremental_compression_keeps_progress_after_tail_growth` | 5.47 s | 305 s |
+| `pagelist::tests::pagelist_incremental_compression_restarts_after_prune_reuse` | 1.18 s | 50 s |
+| `pagelist::tests::pagelist_incremental_compression_restarts_after_reset` | 1.18 s | 48 s |
+| `pagelist::tests::pagelist_incremental_compression_skips_visible_history` | 1.73 s | 113 s |
+| `pagelist::tests::pagelist_lazily_restores_compressed_history_made_active_by_resize` | 0.63 s | 31 s |
+| `pagelist::tests::pagelist_max_lines_and_max_size_enforce_the_smaller_limit` | 3.33 s | 3 s |
+| `pagelist::tests::pagelist_max_lines_applies_to_resize_and_clone` | 2.24 s | 23 s |
+| `pagelist::tests::pagelist_max_lines_does_not_round_larger_limits` | 0.77 s | 0 s |
+| `pagelist::tests::pagelist_max_lines_uses_one_page_minimum` | 0.63 s | 0 s |
+| `pagelist::tests::pagelist_prune_reuses_malformed_compressed_page_memory` | 1.17 s | 22 s |
+| `pagelist::tests::pagelist_set_max_bytes_prunes_immediately_and_can_be_raised` | 6.05 s | 4 s |
+| `pagelist::tests::pagelist_set_max_limits_remain_independent` | 3.89 s | 2 s |
+| `pagelist::tests::pagelist_set_max_lines_prunes_immediately_and_can_be_raised` | 4.96 s | 3 s |
+| `render::tests::incremental_updates_match_full_rebuild` | 0.30 s | 135 s |
+| `screen::tests::screen_scroll_above_hyperlink_dense_row_to_existing_page` | 16.40 s | 28 s |
+| `screen::tests::screen_scroll_above_hyperlink_dense_row_to_fresh_page` | 16.47 s | 26 s |
+| `screen::tests::screen_scrollback_bytes_zero_none_and_finite_are_distinct` | 32.70 s | 20 s |
+| `snapshot::screen::tests::screen_encodes_the_minimal_complete_page_active_suffix` | 0.63 s | 18 s |
+| `terminal::tests::terminal_deleteLines_hyperlink_dense_row_crosses_page_boundary` | 20.33 s | 23 s |
+| `terminal::tests::terminal_insertLines_hyperlink_dense_row_crosses_page_boundary` | 20.49 s | 19 s |
+| `terminal::tests::terminal_print_wide_grapheme_transfers_across_a_page_seam` | 0.59 s | 1 s |
+| `terminal::tests::terminal_scroll_clear_across_pages_keeps_cursor_hyperlink_refs_page_local` | 0.31 s | 17 s |
+| `terminal::tests::terminal_set_scrollback_max_bytes` | 3.85 s | 8 s |
+| `terminal::tests::ud131_delete_lines_degrades_on_an_ordinary_80_column_terminal` | 10.62 s | 58 s |
+| `terminal::tests::ud131_thirty_one_colours_is_the_80_column_control` | 0.67 s | 12 s |
+| `terminal::tests::ud80_wide_terminal_decaln_past_the_refcount_ceiling_keeps_every_cell_styled` | 0.19 s | 271 s |
+
+**Both lanes: 21 tests** (plain `cfg_attr(miri, ignore)`, "BOTH LANES" in the reason): past 15
+minutes in G6 AND past 8 minutes in G6c, one test per process. Criterion 2: all pass natively,
+and all 21 ran under AddressSanitizer (20 in one run, the late one alone) (`sanitizers.sh rustty-vt <the 20 names> address`, task C-1,
+2026-09-28: 20 + 1 passed, no finding; not repeated by a gate). Criterion 3: their families stay
+Miri-covered by lighter tests that pass in G6 or G6c: the incremental-compression family by the
+`pagelist_incremental_compression_*` tests moved to G6c above and the WS7 compression tests already
+there; the UD80/UD131 style-ceiling family by the G6c-moved `ud80_*`/`ud131_*` siblings and the
+`style`/`page` unit tests; snapshot history/page decode by the snapshot tests that pass in G6.
+The cost of the ud80/ud131 and compression members was not profiled further (UNVERIFIED).
+
+| test | native, debug assertions on |
+|---|---|
+| `terminal::tests::ud80_wide_terminal_live_styles_at_the_capacity_ceiling_still_split` | 1.45 s (found in a later pass; ASan: 1 passed) |
+| `pagelist::tests::pagelist_compress_page_rejects_an_already_compressed_node` | 1.19 s |
+| `pagelist::tests::pagelist_compression_restores_through_page_access` | 0.10 s |
+| `pagelist::tests::pagelist_incremental_compression_restarts_after_active_boundary_resize` | 2.26 s |
+| `pagelist::tests::pagelist_incremental_compression_restarts_after_earlier_replacement` | 2.79 s |
+| `pagelist::tests::pagelist_incremental_compression_restarts_after_replacement` | 1.73 s |
+| `pagelist::tests::ud131_erase_row_loop_degrades_only_new_styles_and_grows_the_other_dimensions` | 4.02 s |
+| `pagelist::tests::ud131_erase_row_loop_full_live_set_degrades_new_style_to_default` | 1.45 s |
+| `pagelist::tests::ud80_erase_row_into_a_page_full_of_orphaned_pinned_styles_reclaims_them` | 0.41 s |
+| `render::tests::render_state_allocation_failure_sweep` | 0.39 s |
+| `screen::tests::ud131_clone_partial_row_loop_degrades_only_new_styles_and_grows_the_other_dimensions` | 4.01 s |
+| `screen::tests::ud131_clone_partial_row_loop_full_live_set_degrades_new_style_to_default` | 1.46 s |
+| `snapshot::history::tests::history_encodes_newest_first_and_restores_complete_history` | 1.20 s |
+| `snapshot::page::tests::decode_sparse_page_rejects_every_truncation` | 0.15 s |
+| `terminal::tests::terminal_compress_incremental_restarts_after_complete` | 3.66 s |
+| `terminal::tests::terminal_compression_activity_tracks_pagelist_mutation_not_compression` | 3.66 s |
+| `terminal::tests::terminal_restore_cursor_uses_default_style_on_out_of_space` | 0.12 s |
+| `terminal::tests::ud80_delete_lines_into_a_page_full_of_orphaned_pinned_styles_reclaims_them` | 0.41 s |
+| `terminal::tests::ud80_wide_terminal_one_style_past_the_refcount_ceiling_keeps_every_cell_styled` | 0.13 s |
+| `terminal::tests::ud80_wide_terminal_orphaned_pinned_styles_at_the_capacity_ceiling_are_reclaimed_not_split` | 1.81 s |
+| `tmux::layout::tests::dropping_a_very_deep_layout_does_not_recurse` | 0.11 s |
+

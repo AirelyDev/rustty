@@ -7355,6 +7355,128 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   rustty-core does not build for Windows (N342), so no core test runs there.
 - **state**: CLOSED (fixed).
 
+## N390 — librustty-vt's release log level was `.err`; Zig's default in every release mode is `.info`
+
+- **id**: N390. Not a ledger row: task C-1 (G-REL, `sys::tests::log_facade_backend_reaches_the_c_sink` failed under
+  `cargo test --release`).
+- **severity**: medium. **kind**: port defect (R1), fixed.
+- **finding**: `lib_vt.zig`'s `std_options` (pin, `:434-459`) sets no `log_level` for the `c_abi` arm, so
+  `std.log.default_level` applies: `.debug` in Debug and `.info` in ReleaseSafe/ReleaseFast/ReleaseSmall (Zig 0.16
+  `lib/std/log.zig:54-57`; the reference's `minimum_zig_version` is 0.16.0; Zig 0.15.2 has the same switch).
+  `sys::install_log_backend` set `LevelFilter::Error` for non-debug native builds, on the claim
+  (`DECISION-logging.md` IMPORTANT 4) that the default resolves to `.err` in ReleaseFast. So a release embedder's log
+  callback never received the info and warn records the reference delivers. The wasm arm (`.err` + `noop` sink,
+  `lib_vt.zig:446-455`) is unaffected. The published header says the same as the reference's
+  (`include/rustty/vt/sys.h:177-181`, `RUSTTY_SYS_OPT_LOG`): "Release builds emit info and above".
+- **fix** (task C-1): the release arm is `LevelFilter::Info`; the doc comment carries a CORRECTION note.
+- **test**: `sys::tests::log_facade_backend_reaches_the_c_sink` now asserts the warn and info records reach the sink on
+  both profiles and the debug record only with `debug_assertions`. Negative control (`--release`, the release arm set
+  to `Warn`): fails, the info record is missing.
+- **state**: CLOSED (fixed).
+
+## N391 — the terminal-stream benchmark's handler pointer was invalidated by moving its box (Stacked Borrows)
+
+- **id**: N391. Not a ledger row: task C-1 (G6, `rustty-bench` Miri lane).
+- **severity**: medium (UB in a benchmark; the shipped terminal is not affected). **kind**: port soundness.
+- **finding**: `TerminalStream::create` boxed the struct with the terminal inline, took
+  `tptr = &mut b.terminal` for the stream's `Handler`, then returned the box. Returning (moving) the
+  `Box<TerminalStream>` retags it Unique, which invalidates `tptr`; so does `setup`'s
+  `self.terminal.full_reset()`. The next `Stream::next` wrote through the dead tag
+  (`stream_terminal.rs:588`). Miri, G6 conditions: `trying to retag from <..> for Unique permission ...
+  <..> was later invalidated ... by a Unique retag` at `terminal_stream.rs:188`. The reference
+  (`TerminalStream.zig`) has the same self-reference; Zig has no aliasing model.
+- **fix** (task C-1): the terminal is in its own heap allocation (`Box::into_raw`), held as the same raw
+  pointer the handler holds; every access (`setup`, `destroy`, the test) goes through it, and `destroy`
+  frees it after `stream.deinit()`.
+- **test**: `terminal_stream::terminal_stream` under Miri (G6 conditions): UB before, pass after (the
+  whole `rustty-bench` lane: 37 passed, 12 ignored). Native: both terminal-stream tests pass.
+- **state**: CLOSED (fixed).
+
+## N392 — `rustty-vaxis`'s `image_tier` test binary never ran under Miri (it did not compile there)
+
+- **id**: N392. Not a ledger row: task C-1 (G6, `rustty-vaxis` lane).
+- **severity**: low (test coverage; the finding it hid is in test code). **kind**: gate coverage.
+- **finding**: `tests/image_tier.rs` gated `png_fixture` on `#[cfg(not(miri))]`, but its callers carry only
+  `#[cfg_attr(miri, ignore)]`, so they still compile: `cargo miri test -p rustty-vaxis` failed with
+  `E0425 cannot find function png_fixture` after the lib tests, and the binary's other tests never ran
+  under Miri. Compiled, one of them hit a Stacked Borrows violation in the helper `img_draw_expect`,
+  which took `&mut Screen` while the `Window` it also received held a raw pointer to that screen (the
+  function-entry Unique retag invalidated the window's pointer before `draw` used it).
+- **fix** (task C-1): the gate is removed (the fixture only calls `rustty-zigimg`, which compiles under
+  Miri); `img_draw_expect` takes the window alone and reads the placement back through `win.screen`.
+- **test**: `cargo +nightly miri test -p rustty-vaxis --test image_tier`: E0425, then UB; after: 19 passed,
+  3 ignored. The whole lane: 157 passed, 12 ignored. Native: `image_tier` passes.
+- **state**: CLOSED (fixed).
+
+## N393 — the C `Style` writer stored eight bytes through a one-byte field pointer (provenance)
+
+- **id**: N393. Not a ledger row: task C-1 (G6, `rustty-vt-c` lane).
+- **severity**: medium (UB on every C-API style read; no observed miscompile). **kind**: port soundness.
+- **finding**: `style.rs` `Style::write` ports `@as(*align(1) u64, @ptrCast(&out.bold)).* = bytes` as
+  `(&mut out.bold as *mut bool as *mut u64).write_unaligned(bytes)`. A pointer made from `&mut out.bold`
+  has provenance for that one byte, so the 8-byte store is out of bounds for it. Miri (G6):
+  `attempting a write access using <..> at alloc..[0x39], but that tag does not exist` (the tag covers
+  `[0x38..0x39]`), `style::tests::convert_style_with_colors`.
+- **fix** (task C-1): the pointer is derived from the whole `Style` (`out as *mut Style as *mut u8`,
+  offset by `offset_of!(Style, bold)`); the same eight bytes are written, and the existing const
+  asserts still pin the eight fields as consecutive.
+- **test**: `style::tests::convert_style_with_colors` under Miri: UB before, pass after. Native: the
+  `style::` tests pass.
+- **state**: CLOSED (fixed).
+
+## N394 — `RenderState::update` held a shared row slice across `set_dirty` writes (Stacked Borrows)
+
+- **id**: N394. Not a ledger row: task C-1 (G6, found through `rustty-vt-c`'s render tests).
+- **severity**: medium (UB on the partial-redraw path of every render update with dirty rows).
+  **kind**: port soundness.
+- **finding**: `render.rs` (`RenderState::update`, the per-chunk dirty scan) formed
+  `page_rows: &[page::Row]` once per chunk and used it for every `RowDirtyMask::match_group` scan, while
+  the loop between scans writes `(*page_row).set_dirty(false)` through the raw base pointer. The
+  write's function-entry Unique retag pops the shared slice's tag, so the next scan retagged from a
+  dead tag. Miri (G6): `trying to retag from <..> for SharedReadOnly permission ... <..> was later
+  invalidated ... by a Unique function-entry retag` at `render.rs:1288`
+  (`render::tests::render_row_get_set_dirty`, `render::tests::render_update` in `rustty-vt-c`).
+- **fix** (task C-1): the shared slice is formed afresh for each scan (`page_rows()`), from the same
+  raw base pointer; the writes and the builder keep using raw element pointers.
+- **test**: `rustty-vt-c` `render::tests::render_row_get_set_dirty` and `render::tests::render_update` under Miri: UB before, pass after.
+  Native: the render tests pass.
+- **state**: CLOSED (fixed).
+
+## N395 — G4's leg B compares the port against c-vt goldens recorded at the phase-0 pin; a fresh port driver diverges on three
+
+- **id**: N395. Not a ledger row: task C-1 (the full `ci.sh` run on `tail-c1`).
+- **severity**: medium (a HARD gate that was green only through stale local binaries). **kind**: gate
+  evidence / harness.
+- **finding**: in a fresh worktree `G4` was BLOCKED (no `harness/bin/vt_driver_ref`/`vt_driver_port`:
+  build products, not tracked). The main checkout's copies are dated 2026-08-10, so the ci run at
+  `9fd17d93` compared an August port build against the goldens. Built from this branch
+  (`build_port_driver.sh`; `build_ref_driver.sh` links the prebuilt `ghostty/zig-out`, dated 2026-08-28,
+  before the pin), leg A (12 fixtures) is byte-exact, and leg B diverges on `c-vt-effects`,
+  `c-vt-formatter` and `c-vt-paste`. The port's new lines are the ones the reference's example sources
+  print at the pin 20abdb50a (checked by their `printf` formats — `Formatted output:\n`,
+  `  clipboard read (location=%d, mimes=%zu)`, `  -> pty (%zu bytes): ` — not by running the reference
+  examples, so byte equality is UNVERIFIED; `c-vt-paste/src/main.c` changed upstream on 2026-08-23),
+  but `.port/phase-0/corpora/cvt/*.golden` were recorded from the reference examples at the phase-0 pin
+  (2026-06-21) and never regenerated. `git diff 4749c4e93 20abdb50a -- example/` also changes
+  `c-vt-grid-ref-tracked`, `c-vt-grid-traverse`, `c-vt-kitty-graphics`, `c-vt-render`, both
+  `c-vt-selection*`, `c-vt-stream`, `c-vt-static` and `cpp-vt-stream` (these still match their old
+  goldens), and adds `c-vt-search` and `c-vt-snapshot`, which the corpus does not cover.
+- **also fixed** (task C-1): `build_port_driver.sh` defaulted `RUSTTY_ROOT` to the main checkout, so from a
+  worktree it built and linked the MAIN checkout's `rustty-vt-c` (into the main checkout's `target/`).
+  It now derives the root from its own location.
+- **fixed** (task C-1): libghostty-vt was built at the pin outside the oracle tree
+  (`zig build -Demit-lib-vt=true -Doptimize=ReleaseSafe --prefix /tmp/... --cache-dir /tmp/...`), and each
+  reference example source at the pin (read at 20abdb50a, `example/<case>/src/main.c`) compiled with clang
+  against it and run. 18 of the 21 stored goldens are byte-identical to that output; `c-vt-effects`,
+  `c-vt-formatter` and `c-vt-paste` were re-recorded from it (golden, stdout, stderr, exit), and the port's
+  output equals the new ones. `c-vt-paste` is not deterministic in the reference: the OSC 5522 clipboard-read
+  password (`pw=<base64>`) differs on every run (measured, two runs). Leg B therefore masks exactly that
+  token on both sides (`cvt_normalize` in `run_differential.sh`); its self-test proves a password-only
+  difference compares equal and a one-byte difference next to it does not. The two examples the corpus did
+  not cover, `c-vt-search` and `c-vt-snapshot` (deterministic, measured), were recorded and added to the
+  port build and the corpus generator. G4: GREEN, 12 fixtures and 23 c-vt cases byte-exact.
+- **state**: CLOSED (fixed).
+
 ## N400 — G-BLUEPRINT's first run: green; its description of `blueprint-compiler format` was wrong
 
 - **id**: N400. Parity tail L-5 (tool-BLOCKED gates). **severity**: low. **kind**: gate accuracy. **state**:

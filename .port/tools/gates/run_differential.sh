@@ -257,6 +257,20 @@ else: print("diverge")
 }
 
 # ---------------------------------------------------------------------------
+# cvt_normalize <in> <out> — the ONE nondeterministic field in the reference's
+# example output, masked on both sides before leg B compares bytes: the OSC 5522
+# clipboard-read session password (`pw=<base64>`), which libghostty-vt draws
+# fresh per terminal. Measured (task C-1, NEW-FINDINGS N395): the reference's
+# `c-vt-paste` at the pin prints a different `pw=` on every run, so no byte-exact
+# golden can exist for it. Only the base64 token after `pw=` is replaced; every
+# other byte, including the token's position and the frame around it, is still
+# compared exactly. The self-test proves both sides of that.
+# ---------------------------------------------------------------------------
+cvt_normalize() {
+  LC_ALL=C sed -E 's#(pw=)[A-Za-z0-9+/]+=*#\1<PW>#g' "$1" > "$2"
+}
+
+# ---------------------------------------------------------------------------
 # Real gate, leg B: port-built c-vt example binaries vs the stored goldens.
 # The golden is the reference build's combined stdout+stderr; the port binary
 # (built by build_port_driver.sh into $HARNESS/bin/cvt/<case>) must byte-match
@@ -296,7 +310,8 @@ except subprocess.TimeoutExpired:
       fail=1
       printf '    HANG    %s (timeout after 30s)\n' "$case_name"
       write_diag "$case_name" "hang" "port example binary timed out after 30s (ref exit=$want_ec)" "$golden" "$out"
-    elif ! cmp -s "$out" "$golden" || [ "$ec" != "$want_ec" ]; then
+    elif cvt_normalize "$out" "$out.norm" && cvt_normalize "$golden" "$out.golden.norm" \
+         && { ! cmp -s "$out.norm" "$out.golden.norm" || [ "$ec" != "$want_ec" ]; }; then
       fail=1
       if [ "$ec" != "$want_ec" ] && [ "$ec" -ge 128 ]; then cls="crash"; else cls="diverge"; fi
       printf '    %-7s %s (exit %s vs ref %s; %s)\n' "$(printf '%s' "$cls" | tr '[:lower:]' '[:upper:]')" "$case_name" "$ec" "$want_ec" "$(cmp "$golden" "$out" 2>&1 | head -1 || true)"
@@ -305,6 +320,7 @@ except subprocess.TimeoutExpired:
       printf '    OK      %s\n' "$case_name"
       rm -f "$DIAG_DIR/$case_name.diag" "$out"
     fi
+    rm -f "$out.norm" "$out.golden.norm"
   done
   return $fail
 }
@@ -329,6 +345,26 @@ run_self_test() {
   n="$(ls "$CORPUS"/*.golden 2>/dev/null | wc -l | tr -d ' ')"
   echo "  cvt golden cases: $n"
   [ "$n" -gt 0 ] || { echo "  FAIL: no golden cases"; ok=0; }
+  # 2b. leg B's normalization masks ONLY the OSC 5522 password token: two
+  #     outputs differing only there compare equal; one differing anywhere else
+  #     (here one byte of the frame right after the token) still differs.
+  local nt
+  nt="$(mktemp -d)"
+  printf 'ESC]5522;type=read:status=OK:pw=dG9LSjkyaDhzVDMy==ESC\\\n' > "$nt/a"
+  printf 'ESC]5522;type=read:status=OK:pw=bm90aGVyUGFzcw==ESC\\\n' > "$nt/b"
+  printf 'ESC]5522;type=read:status=OK:pw=bm90aGVyUGFzcw==ESD\\\n' > "$nt/c"
+  cvt_normalize "$nt/a" "$nt/a.n"; cvt_normalize "$nt/b" "$nt/b.n"; cvt_normalize "$nt/c" "$nt/c.n"
+  if cmp -s "$nt/a.n" "$nt/b.n"; then
+    echo "  leg B normalization (password-only difference => equal): OK"
+  else
+    echo "  FAIL: a password-only difference was not masked"; ok=0
+  fi
+  if cmp -s "$nt/a.n" "$nt/c.n"; then
+    echo "  FAIL: leg B normalization masked a byte outside the password"; ok=0
+  else
+    echo "  leg B normalization (a difference outside the password => differs): OK"
+  fi
+  rm -rf "$nt"
   # 3. the empty-divergence harness self-test exists (progress-mode flip proof)
   if [ -x "$HARNESS/gate_empty_divergence.sh" ]; then
     echo "  harness flip-proof gate present: OK"

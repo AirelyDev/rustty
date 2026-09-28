@@ -1857,6 +1857,10 @@ mod tests {
     /// resize still reaches the callback, on the dispatcher thread rather than
     /// in signal context.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-vaxis, parity tail C-1): `fcntl(F_SETFD)` is not implemented by Miri; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn a_sigwinch_while_the_handlers_are_locked_still_reaches_the_callback() {
         let _serial = HANDLERS_TEST.lock().unwrap_or_else(|e| e.into_inner());
         let ctx = 0xD74_usize as *mut c_void;
@@ -1921,6 +1925,10 @@ mod tests {
     ///    whose `errno` holds a sentinel, while the pipe is full, so the
     ///    handler's `write(2)` fails with `EAGAIN` and would overwrite it.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-vaxis, parity tail C-1): `fcntl(F_SETFD)` is not implemented by Miri; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn the_sigwinch_handler_neither_blocks_on_a_full_pipe_nor_clobbers_errno() {
         let _serial = HANDLERS_TEST.lock().unwrap_or_else(|e| e.into_inner());
         PosixTty::install_winch_handler().unwrap();

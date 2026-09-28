@@ -1601,12 +1601,23 @@ mod tests {
             Path::Optional(v) | Path::Required(v) => v.clone(),
         };
         assert!(diags.empty());
-        assert_eq!(
-            records,
+        // The reference's `std_options.log_level` is `.debug` only in a Debug
+        // build and `.info` otherwise (`main_ghostty.zig:208-211`), so its
+        // release builds erase this `log.debug`: the trace is asserted in a
+        // debug build and its ABSENCE in a release one.
+        let expected = if cfg!(debug_assertions) {
             vec![format!(
                 "debug(config): expanding file path relative=rustty-s78f7-does-not-exist.conf abs={}",
                 String::from_utf8_lossy(&abs)
-            )],
+            )]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(records, expected);
+        // The relative -> absolute expansion itself ran on both profiles.
+        assert_eq!(
+            abs,
+            path_to_bytes(&base_dir.join("rustty-s78f7-does-not-exist.conf"))
         );
     }
 

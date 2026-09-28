@@ -2924,6 +2924,10 @@ mod tests {
     // `MAX_SIZE`).
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-vt, parity tail C-1): calls the vendored zlib (`inflateInit2_`), a foreign function Miri cannot execute; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn zlib_inflate_accepts_exactly_the_limit() {
         let data = include_bytes!("testdata/image-rgb-zlib_deflate-128x96-2147483647-raw.data");
         let full = 128 * 96 * 3;

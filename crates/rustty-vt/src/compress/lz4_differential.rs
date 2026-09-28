@@ -586,6 +586,10 @@ fn run_suite(budget: &Budget, seed: u64) {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-vt, parity tail C-1): intractable under Miri (a 24 s native property suite even without debug assertions) over `lz4.rs`, which has no `unsafe`; the codec is Miri-covered by the `compress::lz4::tests` unit tests and `.port/phase-2/mirihar-compress-lz4`; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+)]
 fn lz4_differential_light() {
     run_suite(&LIGHT_BUDGET, 0x4C5A_3403);
 }

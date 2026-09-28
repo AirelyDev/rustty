@@ -218,8 +218,15 @@ impl Style {
         };
         // SAFETY: the eight bool fields are consecutive starting at `bold`
         // (const-asserted below) with unique 0/1 representations, so the
-        // unaligned 8-byte store writes exactly those fields.
-        unsafe { (&mut out.bold as *mut bool as *mut u64).write_unaligned(bytes) };
+        // unaligned 8-byte store writes exactly those fields. The pointer is
+        // derived from the whole `Style`, not from `&mut out.bold`: a
+        // one-byte field reference carries provenance for that byte only,
+        // and an 8-byte store through it is out of bounds (Stacked Borrows;
+        // task C-1, NEW-FINDINGS N393).
+        unsafe {
+            let base = out as *mut Style as *mut u8;
+            (base.add(core::mem::offset_of!(Style, bold)) as *mut u64).write_unaligned(bytes)
+        };
 
         // out.underline = @intFromEnum(s.flags.underline);
         out.underline = s.flags.underline as std::os::raw::c_int;

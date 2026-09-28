@@ -588,6 +588,12 @@ if cfg!(debug_assertions) { LevelFilter::Debug } else { LevelFilter::Error
 };` — the direct port of that default, not an independent choice. Documented
 in the function's own doc comment with the port-note reasoning above.
 
+**CORRECTION (task C-1, NEW-FINDINGS N390):** the premise above is wrong. Zig's
+`std.log.default_level` is `.info` in ReleaseSafe, ReleaseFast and ReleaseSmall
+(Zig 0.16 `lib/std/log.zig:54-57`, and 0.15.2 alike), so the release arm is now
+`LevelFilter::Info`, and a release embedder receives info/warn/err records as the
+reference's does.
+
 `rustty-core::logging::install_app_log_backend` (CRITICAL 2) uses a
 DIFFERENT default — `Debug`/`Info` — because it ports a DIFFERENT
 `std_options` block: `main_ghostty.zig`'s own (the actual app), which

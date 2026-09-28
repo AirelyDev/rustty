@@ -3141,6 +3141,10 @@ fn assert_matches_fresh(state: RenderState, terminal: terminal_c::Terminal, what
 // `remap`/`resize` from their n-th call on: growth falls back to
 // alloc + copy + free and nothing fails. Under Miri the corpus is smaller.
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-vt-c, parity tail C-1): intractable under Miri, one full render-state update per allocation of the sweep; measured past a 20-minute bound; runs natively and under ASan (see MIRI_EXCEPTIONS.md)"
+)]
 fn render_state_allocation_failure_sweep_through_the_c_api() {
     use rustty_vt::alloc::testing::{Config, FailingAllocator};
 

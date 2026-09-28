@@ -964,6 +964,10 @@ mod tests {
     /// libvaxis 0.6.0 `test Loop` (the Loop is constructed by `init` and no resize
     /// handler is installed; the query waits `.fromSeconds(1)`, 0.5.1 waited 1 ms).
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-vaxis, parity tail C-1): `fcntl(F_SETFD)` is not implemented by Miri; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn loop_lifecycle() {
         let mut tty = Tty::init(Vec::new()).unwrap();
         let mut vx = Vaxis::default();
@@ -1085,6 +1089,10 @@ mod stop_wake_tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-vaxis, parity tail C-1): calls the foreign function `select`, which Miri cannot execute; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn a_terminal_that_never_answers_is_woken_after_the_grace() {
         let (tty_r, tty_w) = pipe();
         let (wake_r, wake_w) = pipe();
@@ -1112,6 +1120,10 @@ mod stop_wake_tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-vaxis, parity tail C-1): calls the foreign function `select`, which Miri cannot execute; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn a_terminal_that_answers_ends_the_read_without_the_wake() {
         let (tty_r, tty_w) = pipe();
         let (wake_r, wake_w) = pipe();

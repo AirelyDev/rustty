@@ -675,6 +675,10 @@ mod tests {
     // Zig error value as `error.<Name>`. The realpath name is the one Zig 0.16.0
     // `realPathFile` returns for a missing path (MEASURED: error.FileNotFound).
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-cli, parity tail C-1): `realpath` is forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn error_parsing_args_prints_the_zig_error_name() {
         assert_eq!(
             (1, b"Error parsing args: error.FileNotFound\n".to_vec()),

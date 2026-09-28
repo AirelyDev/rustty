@@ -50,11 +50,18 @@ const LOG_SCOPE: &str = "terminal-stream-bench";
 // holds a handler that borrows `&ptr.terminal`. In Rust `Stream<H>` owns its
 // handler `H` by value, and `stream_terminal::Handler` already models its
 // terminal as a raw `*mut Terminal` (its own PORT NOTE explains why), so the
-// self-reference is fixed up after boxing, where the terminal's address is
-// stable. 258de36d1 removed the separate `handler` field entirely; so does this.
+// handler is given the terminal's heap address (see the next note). 258de36d1 removed the separate `handler` field entirely; so does this.
+//
+// PORT NOTE (task C-1, NEW-FINDINGS N391): the terminal lives in its OWN heap
+// allocation, held as the raw pointer the handler also holds, and every access
+// goes through that pointer. Inline in the `Box<TerminalStream>`, the handler's
+// `*mut Terminal` was invalidated under Stacked Borrows by the first move of the
+// box (`Ok(b)` in `create`) and by any `&mut self.terminal` reborrow, so the
+// next `Stream::next` wrote through a dead tag (Miri, G6).
 pub struct TerminalStream {
     opts: Options,
-    terminal: Terminal,
+    /// Owned: `Box::into_raw` in `create`, freed in `destroy`.
+    terminal: *mut Terminal,
     stream: Stream<'static>,
     /// The file, opened in the setup function.
     data_f: Option<DataFile>,
@@ -150,9 +157,9 @@ impl TerminalStream {
             terminal_options(opts.terminal_rows, opts.terminal_cols),
         )?;
 
-        // Box first (so the terminal's address is stable), then patch the
-        // self-reference: the handler's `*mut Terminal` points into `b.terminal`.
-        // This is the port's spelling of the reference's `.stream = undefined;`
+        // The terminal is boxed on its own (so its address is stable and no
+        // move of the TerminalStream retags it), and the handler gets that
+        // pointer. This is the port's spelling of the reference's `.stream = undefined;`
         // followed by:
         //     errdefer ptr.terminal.deinit(alloc);
         //     ptr.stream = .init(.{
@@ -169,23 +176,17 @@ impl TerminalStream {
         } else {
             None
         };
-        let mut b = Box::new(TerminalStream {
+        let tptr: *mut Terminal = Box::into_raw(Box::new(terminal));
+        Ok(Box::new(TerminalStream {
             opts,
-            terminal,
+            terminal: tptr,
             stream: Stream::init(rustty_vt::stream::Options {
                 allocator: Some(rustty_vt::alloc::Global),
-                handler: Handler::init(core::ptr::null_mut()),
+                handler: Handler::init(tptr),
                 continuation_max_bytes,
             }),
             data_f: None,
-        });
-        let tptr: *mut Terminal = &mut b.terminal;
-        b.stream = Stream::init(rustty_vt::stream::Options {
-            allocator: Some(rustty_vt::alloc::Global),
-            handler: Handler::init(tptr),
-            continuation_max_bytes,
-        });
-        Ok(b)
+        }))
     }
 
     // pub fn destroy(self: *TerminalStream, alloc: Allocator) void {
@@ -197,7 +198,12 @@ impl TerminalStream {
         // 258de36d1 adds this: the full handler owns an APC handler and an OSC
         // parser with allocated state, which the old print-only handler did not.
         self.stream.deinit();
-        self.terminal.deinit(alloc.into());
+        // SAFETY: `terminal` came from `Box::into_raw` in `create`; the stream
+        // that also pointed at it is deinitialized above.
+        unsafe {
+            (*self.terminal).deinit(alloc.into());
+            drop(Box::from_raw(self.terminal));
+        }
         drop(self);
     }
 
@@ -219,7 +225,8 @@ impl TerminalStream {
 
         // Always reset our terminal state
         // self.terminal.fullReset();
-        self_.terminal.full_reset();
+        // SAFETY: the terminal is live for the TerminalStream's lifetime.
+        unsafe { (*self_.terminal).full_reset() };
 
         // Open our data file to prepare for reading. We can do more validation
         // here eventually.
@@ -377,7 +384,7 @@ fn terminal_stream_uses_the_full_terminal_handler() {
     let bench = impl_.benchmark();
     let _ = bench.run(crate::benchmark::RunMode::Once).unwrap();
 
-    let cursor = unsafe { &(*impl_.terminal.screens.active).cursor };
+    let cursor = unsafe { &(*(*impl_.terminal).screens.active).cursor };
     assert_eq!(
         (3u16, 1u16),
         (cursor.x, cursor.y),

@@ -113,6 +113,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e5e8f6c15a24b9a3ee5efec809ccd006d3b30e8b3bb63c39af737c7f87daa1d"
 
 [[package]]
+name = "equivalent"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -144,10 +150,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
+name = "hashbrown"
+version = "0.17.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+dependencies = [
+ "allocator-api2",
+]
+
+[[package]]
 name = "highway-sys"
 version = "0.1.0"
 dependencies = [
  "cc",
+]
+
+[[package]]
+name = "indexmap"
+version = "2.14.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
+dependencies = [
+ "equivalent",
+ "hashbrown",
 ]
 
 [[package]]
@@ -351,6 +376,7 @@ dependencies = [
 name = "rustty-datastruct"
 version = "0.1.0"
 dependencies = [
+ "allocator-api2",
  "rustty-util",
 ]
 
@@ -359,17 +385,20 @@ name = "rustty-font"
 version = "0.1.0"
 dependencies = [
  "allocator-api2",
+ "log",
  "rustty-datastruct",
  "rustty-os",
  "rustty-render-types",
  "rustty-util",
  "rustty-z2d",
+ "rustty-zigstd",
 ]
 
 [[package]]
 name = "rustty-global"
 version = "0.1.0"
 dependencies = [
+ "indexmap",
  "libc",
  "rustty-build-config",
 ]
@@ -418,6 +447,7 @@ version = "0.1.0"
 dependencies = [
  "cc",
  "highway-sys",
+ "log",
  "rustty-unicode",
  "rustty-util",
  "simdutf-sys",
@@ -443,6 +473,7 @@ name = "rustty-vt"
 version = "0.1.0"
 dependencies = [
  "allocator-api2",
+ "hashbrown",
  "libc",
  "log",
  "rustty-datastruct",
@@ -484,6 +515,7 @@ name = "rustty-zigstd"
 version = "0.1.0"
 dependencies = [
  "allocator-api2",
+ "hashbrown",
  "rustty-util",
 ]
 
