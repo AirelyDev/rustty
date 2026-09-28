@@ -2807,6 +2807,22 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    create the CLI writers in streaming mode (`File.writerStreaming`), and flush rather than `end()` on stdout/stderr.
 - upstream status: not reported
 
+### UD350 — a font grid whose `SharedGrid.init` fails leaks its whole font collection
+
+- kind:            leak (R13)
+- upstream project: ghostty
+- severity:        low (a bounded leak per failed grid creation; no crash)
+- reference:       `src/font/SharedGridSet.zig:130-151` at 20abdb50a: `grid.* = try .init(self.alloc, resolver: { var c = try self.collection(..); errdefer c.deinit(self.alloc); ...; break :resolver .{ .collection = c, ... }; });`. The `errdefer` is scoped to the labeled block, so it is discarded at `break :resolver`, before `SharedGrid.init` runs. `SharedGrid.init` (`src/font/SharedGrid.zig:83-119`) takes the resolver by value and does not free it on failure: its own `test "init error"` (`:624-664`) says "The caller is responsible for cleaning up the resolver if init fails" and does `defer resolver.deinit(alloc)`. `ref` has no such cleanup.
+- defect:          when `SharedGrid.init` fails, the collection built for the grid (every loaded face with its FreeType face, HarfBuzz font and mutex, or CoreText font, plus the entry list) is never freed.
+- ReleaseSafe:     the leak; the error propagates normally (`ref` fails, the caller reports it).
+- ReleaseFast:     the same.
+- reachability:    `SharedGrid.init` fails on allocation failure (the two atlases, the codepoint and glyph caches) or when `reloadMetrics` fails, which it does when the collection's primary face (the first configured regular font, loaded here if it was deferred) cannot be loaded, e.g. a configured font file that the font system lists but FreeType or CoreText cannot open. Each failed `ref` (a new surface, a font-size change) leaks one collection. The trigger was driven through the fail point, not through a real unloadable font: that end-to-end path is UNVERIFIED.
+- port handling:   the port moves the resolver into `SharedGrid::init`, so the caller cannot clean it up; `init` deinits the resolver it consumed on every error path (`crates/rustty-font-shaper/src/shared_grid.rs`, PORT NOTE N404/UD350; `PORT NOTE: reference defect (R13)` at the `ref` site in `shared_grid_set.rs`). Before this, the port leaked on the same paths and also in `SharedGrid::init`'s own test (found by G-VALGRIND's first run over rustty-font-shaper, N404). Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; found by parity tail L-5 (NEW-FINDINGS N404).
+- test:            `shared_grid_set::tests::ref_whose_grid_init_fails_deinits_the_collection`: builds the same collection once to count the face deinits of its build (7 on macOS) and teardown (5), then drives `ref` with `SharedGrid::init`'s `reload_metrics` fail point armed and requires both (12). Negative control: without the error-path `resolver.deinit()` in `SharedGrid::init` it sees 7 and fails. `shared_grid::tests::init_error` now asserts the resolver's face is deinited on each fail point (the same control fails it at `CodepointsCapacity`, 1 vs 2), and under memcheck on Linux the same control gives 20 definite-leak errors in `init_error`.
+- proposed fix:    in `ref`, keep the resolver in a variable and add `errdefer resolver.deinit(self.alloc);` after it is built, before `grid.* = try .init(self.alloc, resolver);` (or have `SharedGrid.init` take ownership and `errdefer result.resolver.deinit(alloc)` once `result` exists, adjusting its test).
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
