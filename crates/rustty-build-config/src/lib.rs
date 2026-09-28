@@ -62,11 +62,14 @@ pub use os::{Arch, Os, Target};
 /// target (`target.result`) and computes every per-target default from it. The
 /// Rust port has no separate build-options blob, so the "resolved target" is
 /// simply the crate's own compilation target, reconstructed here from the
-/// `cfg!(target_os = ...)` / `cfg!(target_arch = ...)` toggles. The cargo
-/// features (`app-runtime-*`, `renderer-*`, `font-*`, `i18n`, ...) override
+/// `cfg!(target_os = ...)` / `cfg!(target_arch = ...)` toggles. The option
+/// seams (the `font-backend-*`, `flatpak` and `snap` cargo features, and the
+/// `RUSTTY_I18N` / `RUSTTY_VERSION_STRING` build-time variables) override
 /// these per-target defaults exactly as the `-D` build options override the
-/// `default()` selectors in the reference; when no overriding feature is set
-/// the per-target default is used verbatim.
+/// `default()` selectors in the reference; when no override is given the
+/// per-target default is used verbatim. (CORRECTION, N421: this used to name
+/// `app-runtime-*` / `renderer-*` / `i18n` features, none of which exists;
+/// `app_runtime` and `renderer` take their per-target default only.)
 const fn host_target() -> Target {
     let arch = if cfg!(target_arch = "wasm32") {
         Arch::Wasm32
@@ -382,6 +385,56 @@ mod tests {
                 "opt-level {level:?}, debug_assertions {debug_assertions}"
             );
         }
+    }
+
+    /// `-Di18n` (N421): the option wins in both directions on every target,
+    /// and without it each target keeps its reference default
+    /// (`Config.zig:263-271`).
+    #[test]
+    fn i18n_option_overrides_the_per_target_default() {
+        use crate::build::{i18n_default, resolve_i18n};
+        use crate::{Arch, Os, Target};
+        let gnu = cfg!(target_env = "gnu");
+        for (os, default) in [
+            (Os::Macos, true),
+            (Os::Ios, true),
+            (Os::Linux, gnu),
+            (Os::Freebsd, gnu),
+            (Os::Windows, false),
+            (Os::Other, false),
+        ] {
+            let t = Target::new(os, Arch::Other);
+            assert_eq!(i18n_default(t), default, "{os:?} default");
+            assert_eq!(resolve_i18n(None, t), default, "{os:?} unset");
+            assert!(resolve_i18n(Some(true), t), "{os:?} -Di18n=true");
+            assert!(!resolve_i18n(Some(false), t), "{os:?} -Di18n=false");
+        }
+    }
+
+    /// End to end: `build_config.i18n` follows `RUSTTY_I18N` as this crate was
+    /// built with it. Meaningful in all three positions — run it plain, with
+    /// `RUSTTY_I18N=false` and with `RUSTTY_I18N=true` (the reference CI's
+    /// `test-i18n` matrix): before N421 the variable was ignored and a macOS
+    /// build reported `true` whatever was asked.
+    #[test]
+    fn i18n_follows_the_build_option() {
+        match option_env!("RUSTTY_I18N") {
+            Some("true") => assert!(crate::i18n(), "RUSTTY_I18N=true"),
+            Some("false") => assert!(!crate::i18n(), "RUSTTY_I18N=false"),
+            _ => assert_eq!(
+                crate::i18n(),
+                crate::build::i18n_default(crate::host_target()),
+                "unset: the per-target default"
+            ),
+        }
+        assert_eq!(
+            crate::build::I18N_OPTION,
+            match option_env!("RUSTTY_I18N") {
+                Some("true") => Some(true),
+                Some("false") => Some(false),
+                _ => None,
+            }
+        );
     }
 
     /// The packaging options are OPTIONS, not constants.

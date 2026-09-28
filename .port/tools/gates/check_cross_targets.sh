@@ -257,6 +257,12 @@ for name in ${WANT[@]+"${WANT[@]}"}; do
   for spec in "${TARGETS[@]}"; do [ "${spec%%|*}" = "$name" ] && known=1; done
   [ "$known" -eq 1 ] || skip "$name" "not a G-XTARGET target"
 done
+# The simd128 arm's checker must itself work before its verdicts count (R5).
+if ! python3 .port/tools/gates/wasm_target_features.py --self-test > "$WORK/wtf-self" 2>&1; then
+  sed 's/^/          /' "$WORK/wtf-self"
+  echo "G-XTARGET RED: wasm_target_features.py --self-test failed"
+  exit 1
+fi
 for spec in "${TARGETS[@]}"; do
   target="${spec%%|*}"
   rest="${spec#*|}"
@@ -291,6 +297,30 @@ for spec in "${TARGETS[@]}"; do
         fi
         android_page_align "$target" "$TARGET_DIR/$target/release/librustty_vt_c.so" ;;
       *) ok "$target" ;;
+    esac
+    # The wasm `simd128` default (N422, `Config.zig:113-130`): the reference's
+    # CI requires the artifact to need simd128 ("Verify WASM simd128"). Here
+    # the module's target_features section must list it, which it does only
+    # when `.cargo/config.toml`'s wasm32 rustflags applied (a RUSTFLAGS in the
+    # environment replaces them, as `-Dcpu` does the reference's default).
+    case "$target" in
+      wasm32-*)
+        [ -n "$TARGET_DIR" ] || TARGET_DIR="$(cargo_target_dir)"
+        if [ -z "$TARGET_DIR" ]; then
+          echo "G-XTARGET BLOCKED: cargo metadata did not give the target directory"
+          exit 3
+        fi
+        wasm="$TARGET_DIR/$target/release/rustty_vt_c.wasm"
+        # (Not counted as a build: `RAN` counts targets built.)
+        if python3 .port/tools/gates/wasm_target_features.py "$wasm" simd128 > "$log.simd" 2>&1; then
+          echo "  ok      $target requires simd128"
+        else
+          sed 's/^/          /' "$log.simd"
+          echo "  FAIL    $target requires simd128"
+          FAILED=1
+          FAILED_NAMES="$FAILED_NAMES $target(simd128)"
+        fi
+        ;;
     esac
   else
     # A missing cross C toolchain is an ENVIRONMENT fact, not a rustty defect.

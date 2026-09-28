@@ -83,6 +83,15 @@ set(RUSTTY_VT_SIMD OFF CACHE BOOL "" FORCE)   # before FetchContent_MakeAvailabl
 or `-DRUSTTY_VT_SIMD=OFF` on the command line. The `c-vt-cmake-static` example
 does exactly this. SIMD does not change library output, only performance.
 
+## Library version
+
+`-DRUSTTY_LIB_VERSION_STRING=<semver>` (the analog of Ghostty's
+`-Dlib-version-string`) sets librustty-vt's version: the version the library
+reports through its build-info API, the versioned install names
+(`librustty-vt.<MAJOR>.<MINOR>.<PATCH>.dylib` / `.so.<MAJOR>.<MINOR>.<PATCH>`
+and the `<MAJOR>` soname link) and the pkg-config `Version:`. It must be a
+semantic version; empty (the default) keeps the built-in version.
+
 ## Cross-compilation
 
 For cross-compiling to a different Rust target triple, use

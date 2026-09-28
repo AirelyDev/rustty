@@ -286,3 +286,22 @@ mod type_core_prototype {
         assert_eq!(core.rt_surface, std::ptr::addr_of_mut!(surf));
     }
 }
+
+/// `-Dsimd` (N420): the app tier's one SIMD switch must reach BOTH readers of
+/// the reference's `cfg.simd` — the terminal module (`stream.zig`'s
+/// `nextSlice` fast path, `rustty_vt::options::SIMD`) and `src/simd`
+/// (`rustty_simd::SIMD`, the base64 / indexOf / codepoint-width kernels) — and
+/// nothing else in this crate's graph may turn it back on. Run both ways:
+/// `cargo test -p rustty-core` (the default, SIMD on) and `cargo test -p
+/// rustty-core --no-default-features` (`-Dsimd=false`).
+#[cfg(test)]
+mod simd_option {
+    #[test]
+    fn simd_feature_reaches_the_terminal_and_the_simd_kernels() {
+        // The reference's default resolves to false on wasm; everywhere else
+        // the option is exactly this crate's `simd` feature.
+        let want = cfg!(all(feature = "simd", not(target_arch = "wasm32")));
+        assert_eq!(rustty_vt::options::SIMD, want, "rustty-vt's `simd`");
+        assert_eq!(rustty_simd::SIMD, want, "rustty-simd's `simd`");
+    }
+}

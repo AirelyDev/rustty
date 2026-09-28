@@ -40,6 +40,37 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
     font_backend();
+    i18n();
+}
+
+/// `-Di18n` (`src/build/Config.zig:263-271`, N421):
+///
+/// ```text
+/// config.i18n = b.option(
+///     bool,
+///     "i18n",
+///     "Enables gettext-based internationalization. Enabled by default only for macOS, and other Unix-like systems like Linux and FreeBSD when using glibc.",
+/// ) orelse switch (target.result.os.tag) { ... };
+/// ```
+///
+/// A bool option whose default depends on the target, so it is an environment
+/// variable (`RUSTTY_I18N=true|false`) like `-Dversion-string`
+/// (`RUSTTY_VERSION_STRING`) and `-Dgtk-x11` (`RUSTTY_GTK_X11`), not a pair of
+/// additive features. Unset (or empty) means "not passed": the crate then takes
+/// the per-target default (`build::i18n_default`). Any other value is refused,
+/// as `zig build` refuses a non-bool `-Di18n`.
+fn i18n() {
+    println!("cargo:rerun-if-env-changed=RUSTTY_I18N");
+    let option = match std::env::var("RUSTTY_I18N").ok().as_deref() {
+        None | Some("") => "",
+        Some("true") => "true",
+        Some("false") => "false",
+        Some(other) => panic!(
+            "rustty-build-config: `-Di18n` is a bool: RUSTTY_I18N must be `true` or `false`, \
+             not {other:?}"
+        ),
+    };
+    println!("cargo:rustc-env=RUSTTY_I18N_OPTION={option}");
 }
 
 /// `-Dfont-backend` (`src/build/Config.zig:191-195`):

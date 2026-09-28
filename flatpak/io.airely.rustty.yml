@@ -7,7 +7,7 @@
 # the compiled terminfo database, the host-command D-Bus path is in the binary,
 # and desktop-file-validate / `appstreamcli validate` pass:
 #
-#     cargo run -p xtask -- dist
+#     cp "$(cargo run -q -p xtask -- dist | sed -n 's/^wrote //p')" dist/rustty-source.tar.gz
 #     flatpak run org.flatpak.Builder --force-clean --user \
 #       --repo=flatpak/repo flatpak/builddir flatpak/io.airely.rustty.yml
 #     flatpak remote-add --user --no-gpg-verify rustty-local flatpak/repo
@@ -96,6 +96,9 @@ modules:
         # release profile carries no debug info and strips it by default.
         CARGO_PROFILE_RELEASE_DEBUG: "true"
         CARGO_PROFILE_RELEASE_STRIP: "false"
+        # The reference builds with `--system $PWD/vendor/p`, and `-Dpie`
+        # defaults to true for a system package (`Config.zig:408-412`, N422).
+        RUSTTY_PIE: "true"
     build-commands:
       # `flatpak` is the port of the reference's `-Dflatpak=true`, which its own
       # manifest passes. Without it `build_config.flatpak` is false and the
@@ -107,7 +110,7 @@ modules:
       # which is why the smoke step in .github/workflows/flatpak.yml now checks
       # the host-spawn path directly.
       - cargo build --release --offline --locked
-        -p rustty --no-default-features --features "gtk wayland x11 flatpak"
+        -p rustty --no-default-features --features "gtk wayland x11 simd flatpak"
       # Stage terminfo / shell-integration / themes / man / completions /
       # locale / the desktop-app files. --flatpak swaps in the flatpak D-Bus
       # service and caps the icon at 512, matching the reference's
@@ -123,7 +126,9 @@ modules:
     sources:
       # The PRE-VENDORED source tarball, not a `type: dir` of the worktree:
       # that is what makes the offline build work without a generated
-      # cargo-sources.json. Regenerate with `cargo run -p xtask -- dist`.
+      # cargo-sources.json. Regenerate with the `xtask dist` + `cp` at the top:
+      # the tarball is named after the full version (`rustty-X.Y.Z-<branch>+
+      # <hash>.tar.gz` off a tag, N424), so it is copied to a fixed name.
       - type: archive
-        path: ../dist/rustty-0.1.0.tar.gz
+        path: ../dist/rustty-source.tar.gz
         strip-components: 1

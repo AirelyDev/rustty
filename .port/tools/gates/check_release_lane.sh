@@ -195,6 +195,13 @@ cd "$RUSTTY_ROOT" || exit 3
 SCOPE_ARGS=(--workspace)
 [ -n "$SCOPE_PKG" ] && SCOPE_ARGS=(-p "$SCOPE_PKG")
 
+# N422: `cargo test --release` builds its test executables with the `release`
+# profile, which strips (`-Dstrip`'s ReleaseFast default). The reference's test
+# executable is never stripped (`build.zig` test_exe: `.strip = false`), so this
+# lane turns the strip off, keeping panic backtraces symbolized. Exported for the
+# build step too, so both steps share one set of artifacts.
+export CARGO_PROFILE_RELEASE_STRIP=false
+
 # NOTE: macOS `mktemp` requires the X's to be the LAST characters of the
 # template — no `.log` suffix.
 LOG="$(mktemp "${TMPDIR:-/tmp}/release_lane_XXXXXX")"

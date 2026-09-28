@@ -19,10 +19,20 @@
 // false — so the two `-sys` force-links (and the `cc` C++ compile in `build.rs`)
 // are gated OFF. Same class as the existing `cfg!(miri)` scalar fallback; see the
 // per-module SIMD gates. Native/wasip1 builds are untouched.
-#[cfg(not(target_arch = "wasm32"))]
+//
+// `-Dsimd=false` (N420) gates them off everywhere: the `simd` feature is
+// `build_options.simd`, and without it neither kernel nor library is built.
+#[cfg(all(feature = "simd", not(target_arch = "wasm32")))]
 extern crate highway_sys as _;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "simd", not(target_arch = "wasm32")))]
 extern crate simdutf_sys as _;
+
+/// `build_options.simd` — whether SIMD-accelerated code paths are built: the
+/// `simd` feature (`-Dsimd`, `Config.zig:238-249`), which the reference's
+/// default resolves to false on wasm ("We can't build our SIMD dependencies
+/// for Wasm"), as `rustty_vt::options::SIMD` does. Each module's `SIMD` const
+/// is this value (N420; they were each a hard-coded `true`).
+pub const SIMD: bool = cfg!(all(feature = "simd", not(target_arch = "wasm32")));
 
 pub mod base64;
 mod codepoint_width;

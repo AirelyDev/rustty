@@ -7,11 +7,11 @@ use rustty_util::quirks::inlineAssert as assert;
 /// reference's `build_options.simd`, which defaults to `true`.
 // WASM DIVERGENCE: on `wasm32` the SIMD branch is gated OFF (no C++ kernel on
 // freestanding wasm); the scalar maximal-subpart decoder below is always taken.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-const SIMD: bool = true;
+#[cfg_attr(any(target_arch = "wasm32", not(feature = "simd")), allow(dead_code))]
+const SIMD: bool = crate::SIMD;
 
 // vt.cpp — gated OFF on `wasm32` (no C++ kernel on freestanding wasm).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "simd", not(target_arch = "wasm32")))]
 extern "C" {
     fn rustty_simd_decode_utf8_until_control_seq(
         input: *const u8,
@@ -42,7 +42,7 @@ pub struct DecodeResult {
 pub fn utf8DecodeUntilControlSeq(input: &[u8], output: &mut [u32]) -> DecodeResult {
     assert(output.len() >= input.len());
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(feature = "simd", not(target_arch = "wasm32")))]
     if SIMD && !cfg!(miri) {
         let mut decoded: usize = 0;
         let consumed = unsafe {
@@ -612,8 +612,13 @@ mod tests {
     //
     // Mirrors the reference's `if (comptime !options.simd) return SkipZigTest`:
     // on wasm the public entry point IS the scalar decoder, so the comparison
-    // would be vacuous.
+    // would be vacuous. With `-Dsimd=false` (the `simd` feature off, N420) the
+    // same holds on every target, so the test is reported ignored there.
     #[cfg(not(target_arch = "wasm32"))]
+    #[cfg_attr(
+        not(feature = "simd"),
+        ignore = "if (comptime !options.simd) return error.SkipZigTest; (R14)"
+    )]
     #[test]
     fn decode_simd_matches_scalar() {
         // SplitMix64 -- adequate for a differential corpus, and the same

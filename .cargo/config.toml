@@ -1,0 +1,25 @@
+# Cargo configuration for Rustty checkouts and source tarballs.
+#
+# (`xtask dist` appends the `cargo vendor` source replacement to this file in
+# the tarball it builds; see xtask/src/dist.rs.)
+
+# The wasm `simd128` default (N422). The reference resolves every wasm target
+# with the `simd128` CPU feature when no explicit CPU was requested
+# (src/build/Config.zig:113-130):
+#
+#   On wasm, default to enabling the simd128 feature. Every browser engine
+#   has supported it since 2023 or earlier (Chrome 91, Firefox 89, Safari
+#   16.4) and it is a large performance win for the terminal hot paths (50%+
+#   on print-heavy VT streams). Only apply when no explicit CPU was
+#   requested; targets for exotic non-browser runtimes can opt out with
+#   `-Dcpu=generic`.
+#
+# The Cargo counterpart of "no explicit CPU requested" is "no RUSTFLAGS":
+# Cargo ignores these target rustflags whenever RUSTFLAGS (or
+# CARGO_ENCODED_RUSTFLAGS) is set, so the opt-out is `RUSTFLAGS=` (empty) or
+# any RUSTFLAGS of your own, e.g. `RUSTFLAGS="-C target-cpu=generic"`, the
+# `-Dcpu=generic` analog. Flags given after `cargo rustc ... --` (the
+# `--export-table` / stack-size link args of the wasm build) are added on top
+# and keep the default.
+[target.'cfg(target_arch = "wasm32")']
+rustflags = ["-C", "target-feature=+simd128"]

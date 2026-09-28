@@ -326,9 +326,11 @@ skip_in_fast() {
 # crates/rustty-vt/src/compress/, alongside G-LZ4.
 run_lz4_slow_lane() {
   section "opt-in lane: exhaustive LZ4 differential  (--lz4-slow)"
-  echo "--- RUSTTY_LZ4_SLOW=1 cargo test -p rustty-vt --lib --release --ignored lz4_differential_exhaustive"
+  # CARGO_PROFILE_RELEASE_STRIP=false: the reference's test executable is never
+  # stripped, while the `release` profile strips (N422).
+  echo "--- RUSTTY_LZ4_SLOW=1 CARGO_PROFILE_RELEASE_STRIP=false cargo test -p rustty-vt --lib --release --ignored lz4_differential_exhaustive"
   local out
-  out="$(RUSTTY_LZ4_SLOW=1 cargo test -p rustty-vt --lib --release -- --ignored --nocapture \
+  out="$(RUSTTY_LZ4_SLOW=1 CARGO_PROFILE_RELEASE_STRIP=false cargo test -p rustty-vt --lib --release -- --ignored --nocapture \
           --exact compress::lz4_differential::lz4_differential_exhaustive 2>&1)"
   local crc=$?
   printf '%s\n' "$out" | tail -5

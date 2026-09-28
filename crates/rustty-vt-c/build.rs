@@ -53,12 +53,20 @@ mod dylib_link_args;
 /// `src/dylib_link_args.rs`.
 fn dylib_identity() {
     let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    let version = format!(
-        "{}.{}.{}",
-        std::env::var("CARGO_PKG_VERSION_MAJOR").unwrap_or_default(),
-        std::env::var("CARGO_PKG_VERSION_MINOR").unwrap_or_default(),
-        std::env::var("CARGO_PKG_VERSION_PATCH").unwrap_or_default(),
-    );
+    // `-Dlib-version-string` (N424): the reference's dylib version is
+    // `lib_version`'s MAJOR.MINOR.PATCH (`GhosttyLibVt.zig:396-400`), so an
+    // explicit RUSTTY_LIB_VERSION_STRING versions it too. (rustty-vt refuses a
+    // malformed value at compile time; this only takes its numeric core.)
+    println!("cargo::rerun-if-env-changed=RUSTTY_LIB_VERSION_STRING");
+    let version = match std::env::var("RUSTTY_LIB_VERSION_STRING") {
+        Ok(v) if !v.is_empty() => v.split(['-', '+']).next().unwrap_or_default().to_string(),
+        _ => format!(
+            "{}.{}.{}",
+            std::env::var("CARGO_PKG_VERSION_MAJOR").unwrap_or_default(),
+            std::env::var("CARGO_PKG_VERSION_MINOR").unwrap_or_default(),
+            std::env::var("CARGO_PKG_VERSION_PATCH").unwrap_or_default(),
+        ),
+    };
     println!("cargo::rerun-if-changed=src/dylib_link_args.rs");
     println!("cargo::rerun-if-env-changed=RUSTTY_VT_SONAME");
     let soname = std::env::var("RUSTTY_VT_SONAME").ok();

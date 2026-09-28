@@ -193,7 +193,11 @@ rustty-identity = { path = "crates/rustty-identity" }
 rustty-version = { path = "crates/rustty-version" }
 rustty-datastruct = { path = "crates/rustty-datastruct" }
 rustty-unicode = { path = "crates/rustty-unicode" }
-rustty-simd = { path = "crates/rustty-simd" }
+# `default-features = false`: `-Dsimd` (N420). The crate's `simd` feature is
+# default-on for its own builds; every consumer threads it from its own `simd`
+# feature, so `--no-default-features` on an artifact builds it SIMD-free. (Cargo
+# silently ignores a member's `default-features = false` unless it is set here.)
+rustty-simd = { path = "crates/rustty-simd", default-features = false }
 rustty-lib = { path = "crates/rustty-lib" }
 rustty-global = { path = "crates/rustty-global" }
 rustty-render-types = { path = "crates/rustty-render-types" }
@@ -231,19 +235,22 @@ rustty-renderer = { path = "crates/rustty-renderer", default-features = false }
 rustty-config = { path = "crates/rustty-config" }
 rustty-terminfo = { path = "crates/rustty-terminfo" }
 rustty-termio = { path = "crates/rustty-termio" }
-rustty-core = { path = "crates/rustty-core" }
+# `default-features = false` (N420): `rustty-core`'s default-on `simd` is
+# `-Dsimd`; each consumer threads it from its own `simd` so it can be turned
+# off. The same holds for `rustty-apprt`, `rustty-cli` and `rustty-bench` below.
+rustty-core = { path = "crates/rustty-core", default-features = false }
 rustty-wasm = { path = "crates/rustty-wasm" }
 rustty-web-canvas = { path = "crates/rustty-web-canvas" }
-rustty-apprt = { path = "crates/rustty-apprt" }
+rustty-apprt = { path = "crates/rustty-apprt", default-features = false }
 # The libghostty embedding C ABI top-sink (cbindgen -> include/rustty-apprt.h).
 rustty-apprt-c = { path = "crates/rustty-apprt-c" }
-rustty-cli = { path = "crates/rustty-cli" }
+rustty-cli = { path = "crates/rustty-cli", default-features = false }
 # Shell-completion + editor-syntax generators (port of src/extra/). Above config+cli.
 rustty-extra = { path = "crates/rustty-extra" }
 # The benchmark suite + its `rustty_benchmark_cli` C-ABI export (port of src/benchmark/).
 # apprt-c force-links it (the `_ = benchmark.CApi` analog) so `ghostty_benchmark_cli` lands
 # in the app C-ABI staticlib under `identity-oracle`.
-rustty-bench = { path = "crates/rustty-bench" }
+rustty-bench = { path = "crates/rustty-bench", default-features = false }
 # The synthetic data generators (port of src/synthetic/). Sibling of the
 # benchmark suite in the reference's Zig module tree; rustty-bench draws on its
 # std.Random port (`rand.rs`) for deterministic fills (phase-4 C8).
@@ -448,6 +455,34 @@ enum_variant_names = "allow"
 # with ReleaseSafe — strictly safer than the mirrored artifact (PORT_RULES §DG2).
 [profile.release]
 overflow-checks = true
+# `-Dstrip` (`src/build/Config.zig:414-422`, N422): "Strip the final
+# executable. Default true for fast and small releases" — `.Debug,
+# .ReleaseSafe => false, .ReleaseFast, .ReleaseSmall => true`. This profile is
+# the ReleaseFast analog (no debug-assertions; `build_config::mode_string`
+# reports it as `ReleaseFast`), so it strips; `release-safe` below does not.
+# The option is Cargo's own: `CARGO_PROFILE_RELEASE_STRIP=false` (or
+# `--config profile.release.strip=false`) is `-Dstrip=false`, as the flatpak
+# manifest already passes. The reference applies it to the `ghostty` exe
+# (`GhosttyExe.zig:20`) and the embedding library (`GhosttyLib.zig:31,102`)
+# only, so the other linked artifacts keep Cargo's release default below.
+strip = true
+
+# The artifacts `-Dstrip` does not reach (N422): librustty-vt
+# (`GhosttyLibVt.zig` sets no `.strip`), the bench and gen tools
+# (`GhosttyBench.zig`), the wasm modules and the build tooling. `debuginfo` is
+# what Cargo's release profile gives them when no `strip` is set.
+[profile.release.package.rustty-vt-c]
+strip = "debuginfo"
+[profile.release.package.rustty-bench]
+strip = "debuginfo"
+[profile.release.package.rustty-synthetic]
+strip = "debuginfo"
+[profile.release.package.rustty-wasm]
+strip = "debuginfo"
+[profile.release.package.rustty-web-canvas]
+strip = "debuginfo"
+[profile.release.package.xtask]
+strip = "debuginfo"
 
 # Parity/bench profile mirroring the tagged ReleaseFast artifact (Goal-2 only).
 # PERF(port): overflow-checks off = the Zig ReleaseFast arithmetic tier.
@@ -465,6 +500,16 @@ overflow-checks = false
 [profile.release-safe]
 inherits = "release"
 debug-assertions = true
+# `-Dstrip`'s ReleaseSafe default is false (N422).
+strip = false
+
+# `cargo bench` builds its executables with this profile (`cargo test
+# --release` does not: it uses `release`, which strips; G-REL and ci.sh's
+# `--release` test run set `CARGO_PROFILE_RELEASE_STRIP=false` for that). The
+# reference's test executable is never stripped (`build.zig` test_exe:
+# `.strip = false`), so `-Dstrip`'s release default does not reach them (N422).
+[profile.bench]
+strip = false
 
 # Shipped macOS .xcframework staticlib profile (PREPORT_SWIFT_APP §4). panic = "abort"
 # so assert-class panics (assert!/unreachable!/debug_assert!/overflow-check) ABORT

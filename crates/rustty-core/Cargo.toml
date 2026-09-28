@@ -24,6 +24,20 @@ workspace = true
 # test arms it on its own thread.
 init-fault-inject = []
 
+# `-Dsimd` (`build/Config.zig:238-249`, N420): "Build with SIMD-accelerated
+# code paths. Results in significant performance improvements.", default true
+# on every non-wasm target. It was pinned on here (a `features = ["simd"]` on
+# the rustty-vt edge), so no app build could turn it off. It is a feature now:
+# default-on, as the reference's is, and threaded by every crate above this one
+# (`rustty-apprt`, `rustty-cli`, `rustty-bench`, `rustty-apprt-c`, `rustty`)
+# from its own default-on `simd`, over workspace edges that set
+# `default-features = false`. So `-Dsimd=false` is `--no-default-features`
+# (plus the artifact's other features) on the crate being built, and it
+# reaches `stream.zig`'s `nextSlice` fast path (`rustty-vt/simd`) and
+# `src/simd` (`rustty-simd/simd`) together, as `cfg.simd` does.
+default = ["simd"]
+simd = ["rustty-vt/simd", "rustty-simd/simd"]
+
 [dependencies]
 # The `LOG` findings-class facade (task-14a review CRITICAL 2,
 # `.port/parity-closure/DECISION-logging.md` §6): the app-build counterpart of
@@ -48,12 +62,14 @@ log = { workspace = true }
 # significant performance improvements."), and `SharedDeps` threads `cfg.simd`
 # into the terminal module, so the reference app binary runs
 # `stream.zig`'s SIMD `nextSlice` fast path. Rustty's app tier (this crate) turns
-# it on to match. rustty-vt's OWN default stays empty — the Zig terminal module
-# has no self-default either; consumers thread the knob — so `cargo test -p
-# rustty-vt` keeps its scalar-arm coverage and `--features simd` its SIMD arm.
-rustty-vt = { workspace = true, features = ["oniguruma", "simd", "wuffs"] }
+# it on to match — through this crate's `simd` feature above (N420), no longer
+# pinned on this edge. rustty-vt's OWN default stays empty — the Zig terminal
+# module has no self-default either; consumers thread the knob — so `cargo test
+# -p rustty-vt` keeps its scalar-arm coverage and `--features simd` its SIMD arm.
+rustty-vt = { workspace = true, features = ["oniguruma", "wuffs"] }
 # bc2f7d7d2: Surface.zig gains `const simd = @import("simd/main.zig")` for the
-# OSC 52 strict base64 decode in `clipboardWrite`.
+# OSC 52 strict base64 decode in `clipboardWrite`. SIMD per this crate's
+# `simd` feature (N420).
 rustty-simd = { workspace = true }
 rustty-config = { workspace = true }
 # The three font-backend pass-throughs are default-on for this crate, exactly as

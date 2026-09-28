@@ -30,6 +30,13 @@ path = "src/main_bench.rs"
 # staticlib.
 [features]
 identity-oracle = ["rustty-identity/identity-oracle"]
+# `-Dsimd` (N420). ghostty-bench is built with the build's `cfg.simd` (default
+# true off wasm), so this is default-on and threaded to every crate that reads
+# it; before N420 the `rustty-vt` edges below pinned it, so `rustty-apprt-c`
+# (which links this crate) could never be built SIMD-free. The workspace edge
+# sets `default-features = false`; `rustty-apprt-c` threads it from its own.
+default = ["simd"]
+simd = ["rustty-vt/simd", "rustty-simd/simd", "rustty-apprt/simd"]
 
 [dependencies]
 # The `LOG`-class facade (DECISION-logging.md §6r4, call shape 2). This crate's
@@ -51,7 +58,8 @@ rustty-build-config = { workspace = true }
 # `Benchmark.run` (`Benchmark.zig:45-66`). Member 10, strictly-earlier than
 # rustty-bench (28) — acyclic (R4).
 rustty-os = { workspace = true }
-# PERF(port): `simd` restores the reference bench binary's build configuration —
+# PERF(port): `simd` (now this crate's `simd` feature, N420) restores the
+# reference bench binary's build configuration —
 # ghostty-bench is built with `build_options.simd = true` (src/build/Config.zig:34,
 # the default everywhere but wasm), so its terminal-stream bench runs the SIMD
 # `nextSlice` fast path. The ported `Stream::next_slice` SIMD path is live and
@@ -66,7 +74,7 @@ rustty-os = { workspace = true }
 # (`:521-526`, the `decodePngWuffs` default). The same set rustty-core turns on
 # for the app. Before this, the Rust bench measured a rustty-vt without the
 # tmux DCS arm or the built-in PNG decoder.
-rustty-vt = { workspace = true, features = ["simd", "oniguruma", "wuffs"] }
+rustty-vt = { workspace = true, features = ["oniguruma", "wuffs"] }
 rustty-simd = { workspace = true }
 rustty-unicode = { workspace = true }
 # WS7 D8: the `+scrollback-compression` bench walks the PageList node chain the
@@ -123,4 +131,4 @@ rustty-apprt = { workspace = true }
 # non-64-bit) it would FAIL where upstream's equivalent passes.
 # See .port/phase-3/REVIEW_CLASSES.md section 3.
 [dev-dependencies]
-rustty-vt = { workspace = true, features = ["simd", "oniguruma", "wuffs", "test-decommit-sim"] }
+rustty-vt = { workspace = true, features = ["oniguruma", "wuffs", "test-decommit-sim"] }

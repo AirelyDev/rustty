@@ -146,14 +146,9 @@ ALLOW_GUARDS = [
                   "the application artifact (no cfg selects .lib), so the arm is dead in "
                   "every build; it is kept verbatim for R1 and re-verified here",
     },
-    {
-        "guard": r"!\s*super::SIMD\b",
-        "verify": [
-            ("crates/rustty-simd/src/codepoint_width.rs", r"(?m)^const SIMD: bool = true;"),
-        ],
-        "reason": "rustty-simd hard-wires SIMD = true (the reference's `options.simd` "
-                  "for the application); the `!SIMD` early return is dead in every build",
-    },
+    # (N420 deleted the `!super::SIMD` entry: `SIMD` is now the `simd` feature,
+    # the one test that guarded on it is `#[cfg(feature = "simd")]`, and the
+    # early return is gone.)
 ]
 
 # ---------------------------------------------------------------------------

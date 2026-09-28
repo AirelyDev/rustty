@@ -31,7 +31,7 @@ here:
 
 | Command                                     | Description                                                                                                          |
 | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `cargo run -p rustty`                       | Runs Rustty                                                                                                          |
+| `cargo run -p xtask -- run`                 | Runs Rustty (with its resources directory pointed at `zig-out/share/rustty`; on macOS it builds and opens the app)   |
 | `.port/tools/gates/check_leaks.sh`          | Runs the memory-safety gate (Miri/ASan) to [check for memory leaks](#checking-for-memory-leaks)                      |
 | `cargo test`                                | Runs unit tests (accepts `-p <crate>` to scope to a crate, and a trailing `<filter>` to only run matching tests)     |
 | `cargo run -p xtask -- update-translations` | Updates Rustty's translation strings (see the [Contributor's Guide on Localizing Rustty](po/README_CONTRIBUTORS.md)) |

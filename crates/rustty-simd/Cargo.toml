@@ -22,6 +22,24 @@ build = "build.rs"
 [lints]
 workspace = true
 
+[features]
+# `build_options.simd` — the port of `-Dsimd` (`src/build/Config.zig:238-249`:
+# "Build with SIMD-accelerated code paths. Results in significant performance
+# improvements.", default true except on wasm/freestanding). `src/simd/*.zig`
+# reads it as `comptime options.simd`: on, the C++ kernels run; off, the pure
+# scalar fallbacks run and `SharedDeps.addSimd` (`SharedDeps.zig:437`,
+# `GhosttyZig.zig:155`) neither compiles the kernels nor links highway/simdutf.
+#
+# Default-on for this crate's OWN builds (`cargo test -p rustty-simd` keeps
+# testing the kernels), but the workspace dependency sets
+# `default-features = false`, so a consumer gets SIMD only by naming it. Every
+# consumer threads it from its own `simd` feature (rustty-vt, rustty-core, ...),
+# so `-Dsimd=false` is `--no-default-features` on the artifact being built.
+# (N420. Before it this crate hard-coded `SIMD = true` and always compiled and
+# linked the kernels, so no build of anything was SIMD-free.)
+default = ["simd"]
+simd = ["dep:highway-sys", "dep:simdutf-sys"]
+
 [dependencies]
 # `quirks.inlineAssert` (the reference imports `../quirks.zig`) lives in
 # rustty-util (a leaf crate).
@@ -49,9 +67,12 @@ log = { workspace = true }
 # gates + `build.rs`), so these C deps are excluded from the wasm dependency
 # graph. The `wasm32-wasip1` target ALSO takes this arm (no C++ toolchain wired
 # for it); the shipped `wasm32-wasip1` VT build uses the scalar lanes too.
+#
+# Optional since N420: only the `simd` feature pulls them in
+# (`SharedDeps.zig:437`: `if (self.config.simd) try addSimd(...)`).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-highway-sys = { path = "../../crates-sys/highway-sys" }
-simdutf-sys = { path = "../../crates-sys/simdutf-sys" }
+highway-sys = { path = "../../crates-sys/highway-sys", optional = true }
+simdutf-sys = { path = "../../crates-sys/simdutf-sys", optional = true }
 
 [build-dependencies]
 # R3: compile the copied ghostty SIMD .cpp standalone via the host C++ compiler

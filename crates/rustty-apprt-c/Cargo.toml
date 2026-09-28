@@ -57,7 +57,19 @@ identity-oracle = [
 # SIMD-on — matching upstream Ghostty's default-on library and consistent with
 # the CMake wrapper's RUSTTY_VT_SIMD default. ON by default now (see `default`
 # above), so `xtask xcframework`'s DEFAULT-feature-set build gets it.
-simd = ["rustty-vt/simd"]
+#
+# CORRECTION (N420): forwarding to rustty-vt alone did not make
+# `--no-default-features` SIMD-free — rustty-core and rustty-bench pinned the
+# feature on their own rustty-vt edges and rustty-simd always compiled its C++
+# kernels. Those are features now, workspace edges `default-features = false`,
+# and this list threads the option to every crate below that reads it.
+simd = [
+    "rustty-vt/simd",
+    "rustty-core/simd",
+    "rustty-apprt/simd",
+    "rustty-cli/simd",
+    "rustty-bench/simd",
+]
 # The reference's `-Dsentry` build option, forwarded to `rustty-crash` — where it
 # is BOTH `build_options::SENTRY` and the `SharedDeps.zig:407` link gate for
 # sentry-native + breakpad (see that crate's `[features]` header).

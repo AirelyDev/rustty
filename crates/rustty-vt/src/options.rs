@@ -232,7 +232,21 @@ pub const TMUX_CONTROL_MODE: bool = ONIGURUMA;
 // identity source of truth) — NOT `CARGO_PKG_VERSION` (the workspace/app
 // version, which only coincidentally matched): `0.1.0` under the Rustty
 // profile, the reference's exact `0.1.0-dev` under `identity-oracle`.
-const VERSION: SemanticVersion = SemanticVersion::parse(rustty_identity::VT_LIB_VERSION);
+//
+// `-Dlib-version-string` (`src/build/Config.zig:343-353`, N424): "A specific
+// version string to use for the build of libghostty-vt. If not specified, git
+// will be used. This must be a semantic version." — `config.lib_version = if
+// (lib_version_string) |v| try std.SemanticVersion.parse(v) else try
+// std.SemanticVersion.parse(libVersion)`. The option is the build-time
+// variable `RUSTTY_LIB_VERSION_STRING` (as `-Dversion-string` is
+// `RUSTTY_VERSION_STRING`); unset or empty takes the identity constant. A
+// malformed value fails the build: `SemanticVersion::parse` is const-evaluated.
+// (`option_env!` is recorded in the dep-info, so cargo rebuilds on a change.)
+const LIB_VERSION_SOURCE: &str = match option_env!("RUSTTY_LIB_VERSION_STRING") {
+    Some(v) if !v.is_empty() => v,
+    _ => rustty_identity::VT_LIB_VERSION,
+};
+const VERSION: SemanticVersion = SemanticVersion::parse(LIB_VERSION_SOURCE);
 
 /// The version string, `MAJOR.MINOR.PATCH[-PRE][+BUILD]`.
 // PORT NOTE: `opts.addOption([]const u8, "version_string", b.fmt("{f}", .{self.version}))`.
@@ -241,7 +255,7 @@ const VERSION: SemanticVersion = SemanticVersion::parse(rustty_identity::VT_LIB_
 // well-formed input that round-trips to the source string, so this is the
 // identity constant verbatim (asserted by the `version_string_is_semver_format`
 // test below).
-pub const VERSION_STRING: &str = rustty_identity::VT_LIB_VERSION;
+pub const VERSION_STRING: &str = LIB_VERSION_SOURCE;
 
 /// The major component of the version.
 // PORT NOTE: `opts.addOption(usize, "version_major", self.version.major)`.
@@ -352,10 +366,42 @@ mod tests {
         assert_eq!(VERSION_STRING, formatted);
     }
 
+    /// `RUSTTY_LIB_VERSION_STRING` as this crate was built with it (`None`
+    /// when unset or empty: the option was not passed).
+    fn lib_version_option() -> Option<&'static str> {
+        option_env!("RUSTTY_LIB_VERSION_STRING").filter(|v| !v.is_empty())
+    }
+
+    /// `-Dlib-version-string` (N424): when passed, it IS the version, every
+    /// component parsed from it; when not, the identity constant is (the two
+    /// profile tests below pin that). Run it both ways:
+    /// `RUSTTY_LIB_VERSION_STRING=1.2.3-rc.1+abc cargo test -p rustty-vt
+    /// options::` and plain.
+    #[test]
+    fn lib_version_string_option_overrides_the_identity_version() {
+        match lib_version_option() {
+            Some(v) => {
+                assert_eq!(v, VERSION_STRING);
+                assert_eq!(SemanticVersion::parse(v), VERSION);
+                assert_ne!(
+                    rustty_identity::VT_LIB_VERSION,
+                    v,
+                    "pass a version different from the default to test the override"
+                );
+            }
+            None => assert_eq!(rustty_identity::VT_LIB_VERSION, VERSION_STRING),
+        }
+    }
+
     /// Under the default (Rustty) profile the vt lib version is `0.1.0`.
     #[cfg(not(feature = "identity-oracle"))]
     #[test]
     fn version_is_rustty_vt_lib_version() {
+        if let Some(v) = lib_version_option() {
+            // The option replaces the default (asserted by the test above).
+            assert_eq!(v, VERSION_STRING);
+            return;
+        }
         assert_eq!("0.1.0", VERSION_STRING);
         assert_eq!(0, VERSION_MAJOR);
         assert_eq!(1, VERSION_MINOR);
@@ -370,6 +416,11 @@ mod tests {
     #[cfg(feature = "identity-oracle")]
     #[test]
     fn version_is_reference_lib_version() {
+        if let Some(v) = lib_version_option() {
+            // The option replaces the default (asserted by the test above).
+            assert_eq!(v, VERSION_STRING);
+            return;
+        }
         assert_eq!("0.1.0-dev", VERSION_STRING);
         assert_eq!(0, VERSION_MAJOR);
         assert_eq!(1, VERSION_MINOR);

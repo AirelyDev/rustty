@@ -83,13 +83,28 @@ pub fn dist_lib_vt() -> Result<PathBuf, String> {
     dist_scoped(Scope::LibVt)
 }
 
-pub fn dist_scoped(scope: Scope) -> Result<PathBuf, String> {
-    let root = workspace_root();
-    let version = workspace_version(&root)?;
-    let name = match scope {
+/// The version a tarball is named after and carries in `VERSION`: the full
+/// `cfg.version` (`GhosttyDist.zig:52-107` formats `{f}` of it into the
+/// prefix, the file name and `VERSION`), i.e. the composed app version —
+/// `X.Y.Z` on a `vX.Y.Z` tag, `X.Y.Z-<branch>+<short hash>` otherwise,
+/// `RUSTTY_VERSION_STRING` when set (`-Dversion-string`). The lib-vt tarball
+/// uses the same app version (`GhosttyDist.zig:22,56`), not the lib version.
+/// N424; before it this was the bare `[workspace.package]` version.
+pub(crate) const DIST_VERSION: &str = rustty_version::VERSION_STRING;
+
+/// `{name}-{version}`: the archive prefix and file stem (`GhosttyDist.zig:22`:
+/// `libghostty-vt` for lib-vt, else `ghostty`; R2 names).
+pub(crate) fn dist_name(scope: Scope, version: &str) -> String {
+    match scope {
         Scope::Workspace => format!("rustty-{version}"),
         Scope::LibVt => format!("librustty-vt-{version}"),
-    };
+    }
+}
+
+pub fn dist_scoped(scope: Scope) -> Result<PathBuf, String> {
+    let root = workspace_root();
+    let version = DIST_VERSION;
+    let name = dist_name(scope, version);
     let prefix = format!("{name}/");
 
     let dist_dir = root.join("dist");
@@ -100,7 +115,7 @@ pub fn dist_scoped(scope: Scope) -> Result<PathBuf, String> {
     let stage = std::env::temp_dir().join(format!("rustty-dist-{version}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&stage);
     std::fs::create_dir_all(&stage).map_err(|e| format!("create staging dir: {e}"))?;
-    let result = dist_stage(&root, &stage, &name, &prefix, &version, &out, scope);
+    let result = dist_stage(&root, &stage, &name, &prefix, version, &out, scope);
     let _ = std::fs::remove_dir_all(&stage);
     result?;
     Ok(out)
@@ -202,8 +217,9 @@ fn dist_stage(
     }
 
     // 2. Inject the VERSION file at the archive root (not tracked in git).
-    std::fs::write(tree.join("VERSION"), format!("{version}\n"))
-        .map_err(|e| format!("write VERSION: {e}"))?;
+    // `b.fmt("{f}", .{cfg.version})` (`GhosttyDist.zig:52`): the version with no
+    // trailing newline (N424).
+    std::fs::write(tree.join("VERSION"), version).map_err(|e| format!("write VERSION: {e}"))?;
 
     // 2b. For a lib-vt tarball, slice the staged tree down to rustty-vt-c's
     //     workspace closure before vendoring, so `cargo vendor` resolves the
@@ -246,8 +262,21 @@ fn dist_stage(
     }
     let cargo_dir = tree.join(".cargo");
     std::fs::create_dir_all(&cargo_dir).map_err(|e| format!("create .cargo/: {e}"))?;
-    std::fs::write(cargo_dir.join("config.toml"), &output.stdout)
-        .map_err(|e| format!("write .cargo/config.toml: {e}"))?;
+    // N422: the archive already carries the TRACKED `.cargo/config.toml` (the
+    // wasm `simd128` default), so the source replacement is appended to it,
+    // never written over it — a tarball build must keep the checkout's
+    // defaults.
+    let config_path = cargo_dir.join("config.toml");
+    let tracked = match std::fs::read(&config_path) {
+        Ok(bytes) => Some(bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("read .cargo/config.toml: {e}")),
+    };
+    std::fs::write(
+        &config_path,
+        dist_cargo_config(tracked.as_deref(), &output.stdout),
+    )
+    .map_err(|e| format!("write .cargo/config.toml: {e}"))?;
 
     // 4. Re-pack the stage into the final tarball.
     let status = Command::new("tar")
@@ -264,6 +293,21 @@ fn dist_stage(
         return Err(format!("tar create exited with {status}"));
     }
     Ok(())
+}
+
+/// The tarball's `.cargo/config.toml`: the tracked checkout config (if the
+/// archive carried one) followed by `cargo vendor`'s source replacement.
+fn dist_cargo_config(tracked: Option<&[u8]>, vendor: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    if let Some(t) = tracked {
+        out.extend_from_slice(t);
+        if !t.ends_with(b"\n") {
+            out.push(b'\n');
+        }
+        out.push(b'\n');
+    }
+    out.extend_from_slice(vendor);
+    out
 }
 
 /// Build the tarball, extract it, and build it in isolation to prove it is a
@@ -285,13 +329,37 @@ pub fn distcheck_lib_vt() -> Result<PathBuf, String> {
     distcheck_scoped(Scope::LibVt)
 }
 
+/// `path`'s contents at `HEAD` (what `git archive HEAD` ships), or `None`
+/// when `HEAD` has no such file.
+fn head_file(root: &Path, path: &str) -> Result<Option<Vec<u8>>, String> {
+    let spec = format!("HEAD:{path}");
+    let exists = Command::new("git")
+        .current_dir(root)
+        .args(["cat-file", "-e", &spec])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(|e| format!("spawn git cat-file: {e}"))?;
+    if !exists.success() {
+        return Ok(None);
+    }
+    let out = Command::new("git")
+        .current_dir(root)
+        .args(["show", &spec])
+        .output()
+        .map_err(|e| format!("spawn git show: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git show {spec} exited with {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    Ok(Some(out.stdout))
+}
+
 fn distcheck_scoped(scope: Scope) -> Result<PathBuf, String> {
     let root = workspace_root();
-    let version = workspace_version(&root)?;
-    let name = match scope {
-        Scope::Workspace => format!("rustty-{version}"),
-        Scope::LibVt => format!("librustty-vt-{version}"),
-    };
+    let name = dist_name(scope, DIST_VERSION);
 
     let tarball = dist_scoped(scope)?;
 
@@ -327,6 +395,17 @@ fn distcheck_scoped(scope: Scope) -> Result<PathBuf, String> {
     }
     if !extracted.join(".cargo/config.toml").is_file() {
         return Err("extracted tree missing .cargo/config.toml source replacement".into());
+    }
+    // N422: the checkout's own config (the wasm `simd128` default) must have
+    // survived the source replacement. The archive is `git archive HEAD`, so
+    // the reference text is HEAD's copy, not the working tree's (which may
+    // carry an uncommitted edit).
+    if let Some(tracked) = head_file(&root, ".cargo/config.toml")? {
+        let shipped = std::fs::read(extracted.join(".cargo/config.toml"))
+            .map_err(|e| format!("read extracted .cargo/config.toml: {e}"))?;
+        if !shipped.starts_with(&tracked) {
+            return Err("extracted .cargo/config.toml lost the tracked checkout config".into());
+        }
     }
     // The lib-vt tarball's whole reason to exist is the C-consumer story, so
     // the CMake trio must be there before the CMake build below can mean
@@ -785,9 +864,8 @@ mod tests {
     #[test]
     #[ignore = "shells to git/cargo: cargo vendor over the full workspace"]
     fn dist_tarball_ships_vendor_inputs() {
-        let root = workspace_root();
-        let version = workspace_version(&root).expect("workspace version");
-        let name = format!("rustty-{version}");
+        let version = DIST_VERSION;
+        let name = dist_name(Scope::Workspace, version);
 
         let tarball = dist().expect("dist");
 
@@ -835,6 +913,105 @@ mod tests {
             config.contains("[source.crates-io]") && config.contains("vendor"),
             "config.toml is not a vendor source replacement:\n{config}"
         );
+        // N422: and it still carries the checkout's wasm simd128 default.
+        assert!(
+            config.contains("target-feature=+simd128"),
+            "config.toml lost the tracked wasm simd128 default:\n{config}"
+        );
         let _ = std::fs::remove_dir_all(&extract);
+    }
+
+    /// N424, `GhosttyDist.zig:22,52-107`: both tarballs are named — file,
+    /// archive prefix and `VERSION` — after the full app version the build
+    /// reports (`rustty_version::VERSION_STRING`, the `cfg.version` port), not
+    /// the bare manifest version; lib-vt uses the same app version.
+    #[test]
+    fn tarballs_are_named_after_the_full_app_version() {
+        assert_eq!(DIST_VERSION, rustty_version::VERSION_STRING);
+        assert_eq!(
+            dist_name(Scope::Workspace, "1.2.3-main+abc1234"),
+            "rustty-1.2.3-main+abc1234"
+        );
+        assert_eq!(
+            dist_name(Scope::LibVt, "1.2.3-main+abc1234"),
+            "librustty-vt-1.2.3-main+abc1234"
+        );
+        // The composed version starts with the manifest's X.Y.Z (every arm but
+        // an explicit RUSTTY_VERSION_STRING, which replaces it wholesale).
+        if option_env!("RUSTTY_VERSION_STRING").is_none_or(str::is_empty) {
+            let manifest = workspace_version(&workspace_root()).unwrap();
+            assert!(
+                DIST_VERSION.starts_with(&manifest),
+                "{DIST_VERSION} vs {manifest}"
+            );
+        }
+    }
+
+    /// N422: the tarball config is the tracked config, then the vendor
+    /// replacement; a tracked config is never overwritten.
+    #[test]
+    fn dist_config_appends_the_vendor_replacement_to_the_tracked_config() {
+        let vendor = b"[source.crates-io]\nreplace-with = \"vendored-sources\"\n";
+        assert_eq!(dist_cargo_config(None, vendor), vendor.to_vec());
+        let merged = dist_cargo_config(Some(b"[a]\nx = 1"), vendor);
+        assert_eq!(
+            merged,
+            [&b"[a]\nx = 1\n\n"[..], &vendor[..]].concat(),
+            "{}",
+            String::from_utf8_lossy(&merged)
+        );
+        let tracked = std::fs::read(workspace_root().join(".cargo/config.toml"))
+            .expect("the checkout tracks .cargo/config.toml (N422)");
+        assert!(dist_cargo_config(Some(&tracked), vendor).starts_with(&tracked));
+    }
+
+    /// distcheck compares the shipped `.cargo/config.toml` with HEAD's copy
+    /// (what `git archive HEAD` put in the tarball), so an uncommitted edit to
+    /// the working-tree file cannot fail it; a path HEAD lacks is `None`.
+    #[test]
+    fn distcheck_reads_the_tracked_config_from_head() {
+        let root = workspace_root();
+        let head = head_file(&root, ".cargo/config.toml")
+            .unwrap()
+            .expect("HEAD tracks .cargo/config.toml (N422)");
+        assert!(
+            String::from_utf8_lossy(&head).contains("+simd128"),
+            "{}",
+            String::from_utf8_lossy(&head)
+        );
+        assert_eq!(
+            head_file(&root, ".cargo/no-such-file-at-head.toml").unwrap(),
+            None
+        );
+    }
+
+    /// N422, `Config.zig:113-130`: every wasm target defaults to the `simd128`
+    /// CPU feature. The tracked config must apply it to exactly the wasm32
+    /// targets, as target rustflags (so a RUSTFLAGS of the caller's, the
+    /// `-Dcpu` analog, replaces it).
+    #[test]
+    fn checkout_config_defaults_wasm_to_simd128() {
+        let config = std::fs::read_to_string(workspace_root().join(".cargo/config.toml"))
+            .expect("read .cargo/config.toml");
+        let lines: Vec<&str> = config
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .collect();
+        let table = lines
+            .iter()
+            .position(|l| *l == "[target.'cfg(target_arch = \"wasm32\")']")
+            .expect("a wasm32 target table");
+        assert_eq!(
+            lines.get(table + 1),
+            Some(&"rustflags = [\"-C\", \"target-feature=+simd128\"]"),
+            "{lines:?}"
+        );
+        // Nothing else sets rustflags (no non-wasm target is touched).
+        assert_eq!(
+            lines.iter().filter(|l| l.starts_with("rustflags")).count(),
+            1,
+            "{lines:?}"
+        );
     }
 }

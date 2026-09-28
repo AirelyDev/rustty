@@ -119,7 +119,13 @@ oniguruma = ["dep:rustty-oniguruma"]
 # default is target-conditional (`build/Config.zig:200-206` forces it false for
 # wasm); that arm lives in `options::SIMD`, which overrides this feature on
 # wasm32 targets.
-simd = []
+#
+# It also switches `rustty-simd` (N420): the reference's `src/simd/*.zig` read
+# the SAME `build_options.simd` (`GhosttyZig.zig:125-156` hands the terminal
+# module `cfg.simd` and adds the SIMD kernels only when it is set), so with this
+# feature off the base64/indexOf/codepoint-width helpers the terminal calls run
+# their scalar fallbacks and no highway/simdutf code is compiled or linked.
+simd = ["rustty-simd/simd"]
 # P3-W0 T7 step 3 — the decommit SIMULATION, gated CRATE-EXTERNALLY.
 #
 # `mem.rs` branches on `cfg!(test) || cfg!(miri)` to port Zig's
