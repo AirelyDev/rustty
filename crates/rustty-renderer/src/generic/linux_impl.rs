@@ -6152,6 +6152,14 @@ mod tests {
         let px = r.swap_chain.as_ref().unwrap().frames[idx]
             .target
             .read_rgba();
+        // llvmpipe's pixels, declared defined for memcheck (a no-op natively). Its
+        // blending multiplies the destination by (1 - source alpha) = 0, and memcheck
+        // cannot tell that product is defined, so it marks read-back pixels that hold
+        // their expected values undefined (NEW-FINDINGS N412; the C program
+        // `.port/tools/valgrind-llvmpipe-probe/probe.c` gets the same report with no
+        // Rustty code). Only these bytes are exempted: every other value this test
+        // branches on stays checked (review L-6 F2).
+        rustty_zigstd::valgrind::memcheck::make_mem_defined(&px);
 
         let w = r.size.screen.width as usize;
         let h = r.size.screen.height as usize;
@@ -6540,6 +6548,15 @@ mod tests {
         ) else {
             return; // GL-context skip
         };
+        // `px` is `drive_custom_shader_frame`'s `read_rgba()`, returned as is.
+        // llvmpipe's pixels, declared defined for memcheck (a no-op natively). Its
+        // blending multiplies the destination by (1 - source alpha) = 0, and memcheck
+        // cannot tell that product is defined, so it marks read-back pixels that hold
+        // their expected values undefined (NEW-FINDINGS N412; the C program
+        // `.port/tools/valgrind-llvmpipe-probe/probe.c` gets the same report with no
+        // Rustty code). Only these bytes are exempted: every other value this test
+        // branches on stays checked (review L-6 F2).
+        rustty_zigstd::valgrind::memcheck::make_mem_defined(&px);
 
         let w = r.size.screen.width as usize;
         let h = r.size.screen.height as usize;

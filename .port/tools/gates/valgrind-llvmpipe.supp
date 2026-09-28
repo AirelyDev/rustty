@@ -18,7 +18,9 @@
 # code at all), and by a single-triangle variant of it, so it is
 # driver-internal. Every frame between the report and
 # `gallivm_jit_function` belongs to LLVM or Mesa; a Rustty defect cannot be the
-# top of such a stack.
+# top of such a stack. The stack is deeper than valgrind's default of 12
+# callers: the entry matches only with the gate's `--num-callers=50` (review
+# L-6).
 {
    llvmpipe-gallivm-llvm-codegen
    Memcheck:Cond
@@ -26,53 +28,11 @@
    fun:gallivm_jit_function
 }
 
-# The golden tests read back pixels llvmpipe rasterized and branch on them.
-# Memcheck marks some of those pixels undefined, with the origin inside llvmpipe
-# (`lp_scene_new_data_block`, the scene memory its JIT-compiled rasterizer
-# writes), never in a buffer Rustty uploaded. The C program
-# `.port/tools/valgrind-llvmpipe-probe/probe.c`, drawing 64 instanced quads
-# from fully written buffers with the renderer's premultiplied-alpha blend, gets
-# the same report on its own pixel comparisons (origin: a stack slot of the
-# JIT-compiled code) while every one of its 4,096 pixels has the expected
-# value, and none with blending off: blending scales the destination by
-# (1 - source alpha) = 0, and memcheck does not know a product with a defined
-# zero is defined. The values these tests assert on are right too (they pass).
-# `--expensive-definedness-checks=yes` does not remove the reports. These
-# entries match only a conditional jump whose
-# TOP frames are the test's own pixel comparisons (the test body, its
-# `Iterator::any` predicates, the slice `!=`, `Ord::max`), so a Rustty function
-# the test calls is still checked in full.
-{
-   golden-readback-cursor-fg-bg-body
-   Memcheck:Cond
-   fun:_ZN15rustty_renderer7generic10linux_impl5tests27golden_renders_cursor_fg_bg17h*E
-}
-{
-   golden-readback-cursor-fg-bg-max
-   Memcheck:Cond
-   fun:_ZN4core3cmp3Ord3max17h*E
-   fun:_ZN15rustty_renderer7generic10linux_impl5tests27golden_renders_cursor_fg_bg17h*E
-}
-{
-   golden-readback-custom-shader-passthrough-body
-   Memcheck:Cond
-   fun:_ZN15rustty_renderer7generic10linux_impl5tests40golden_renders_custom_shader_passthrough*
-}
-{
-   golden-readback-custom-shader-passthrough-any
-   Memcheck:Cond
-   fun:_ZN4core4iter6traits8iterator8Iterator3any5check*
-   fun:_ZN4core4iter6traits8iterator8Iterator8try_fold17h*E
-   fun:_ZN4core4iter6traits8iterator8Iterator3any17h*E
-   fun:_ZN15rustty_renderer7generic10linux_impl5tests40golden_renders_custom_shader_passthrough17h*E
-}
-{
-   golden-readback-custom-shader-passthrough-slice-ne
-   Memcheck:Cond
-   fun:bcmp
-   fun:*SlicePartialEq*equal*
-   fun:not_equal<*
-   fun:*PartialEq*ne*
-   fun:*PartialEq*ne*
-   fun:_ZN15rustty_renderer7generic10linux_impl5tests40golden_renders_custom_shader_passthrough28_$u7b$$u7b$closure*
-}
+# No entry for the golden tests' read-back pixels. llvmpipe's blending makes
+# memcheck mark some of them undefined although each holds its expected value
+# (N412, probe.c); the two tests that branch on them declare exactly those
+# bytes defined with `std.valgrind.memcheck.makeMemDefined`
+# (`rustty_zigstd::valgrind::memcheck::make_mem_defined`) right after
+# `read_rgba()`, so every other value they branch on stays checked. Until
+# review L-6 F2 five entries here anchored on the test bodies instead, which
+# also hid conditional jumps on renderer state.

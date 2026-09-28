@@ -1,7 +1,9 @@
 //! PORTS: the part of Zig 0.16 `std.valgrind` the port uses:
 //! `runningOnValgrind()` and the `doClientRequest` it is built on
 //! (`lib/std/valgrind.zig`), for `renderer/Thread.zig`'s `cursorBlinkInterval`
-//! (parity S114-F1).
+//! (parity S114-F1); `ToolBase` (`tool_base`); and, in [`memcheck`], the part of
+//! `std.valgrind.memcheck` the port's tests use (`makeMemDefined`,
+//! `makeMemUndefined`).
 //!
 //! A Valgrind client request is a "magic" instruction sequence that is a no-op
 //! on real hardware (the rotations add up to a full turn and the final
@@ -41,6 +43,15 @@ const fn valgrind_support_for(opt_level: &str, macos: bool) -> bool {
 
 /// `Valgrind.ClientRequest.RunningOnValgrind`.
 const RUNNING_ON_VALGRIND: usize = 4097;
+
+pub mod memcheck;
+
+// pub fn ToolBase(base: [2]u8) u32 {
+//     return (@as(u32, base[0] & 0xff) << 24) | (@as(u32, base[1] & 0xff) << 16);
+// }
+pub const fn tool_base(base: [u8; 2]) -> u32 {
+    ((base[0] as u32 & 0xff) << 24) | ((base[1] as u32 & 0xff) << 16)
+}
 
 // pub fn doClientRequest(default: usize, request: usize, a1: usize, a2: usize,
 //     a3: usize, a4: usize, a5: usize) usize {
