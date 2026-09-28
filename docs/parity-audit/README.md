@@ -1,5 +1,7 @@
 # rustty ↔ ghostty functional-parity audit
 
+> **Closed 2026-09-28.** All 497 findings are closed or waived, and `G-PARITY` is HARD in CI. What was closed, what was waived and why, and what is still open or unverified: [`.port/parity-closure/README.md`](../../.port/parity-closure/README.md).
+
 ## Method
 
 Scope was the **entire** ghostty oracle tree at pin `20abdb50a` — 983 files, 403,246 lines, split into 215 shards — with no sampling: every shard's finder read its assigned line ranges **in full**, including tests, comments, build files and generated data, and every line in scope is accounted for in an area file's coverage table.
