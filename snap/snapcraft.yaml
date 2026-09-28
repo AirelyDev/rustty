@@ -129,7 +129,7 @@ parts:
       # feature that guard is dead and URL/file opening silently misbehaves
       # inside the snap.
       cargo build --release --offline --locked \
-        -p rustty --no-default-features --features "gtk wayland x11 snap"
+        -p rustty --no-default-features --features "gtk wayland x11 simd snap"
       # `-Dpatch-rpath=...`: cargo has no post-link hook, so the port of the
       # reference's patch-rpath option is `xtask patchelf`, run on the built
       # binary (S63-F4).
