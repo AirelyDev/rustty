@@ -7108,16 +7108,13 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 ## N377 — the Zig build graph (`build.zig` + `src/build/*`) against Cargo + xtask: remaining options
 
 - **id**: N377. P-1 (read-only audit). **severity**: low. **kind**: build-option parity. **state**:
-  CLOSED by parity tail B-2 (2026-09-28) except one precisely scoped remainder: item 7 is N420, items 4
-  and 9 are N421, items 6 and 8 are N422, item 1 is N423, items 3 and 5 are N424, and both stale records
-  below are corrected (N421, N423). **Remainder** (N422): the `-Dpie` default. Measured with Zig 0.16 on
-  the Mac: a default `zig build-exe` for `x86_64-linux-gnu` / `aarch64-linux-gnu` is `ET_EXEC` (non-PIE),
-  `-fPIE` gives `ET_DYN`; rustc (the pinned 1.93.1, `aarch64-unknown-linux-gnu`, linked through a
-  `zig cc` shim) passes `-pie` and gives `ET_DYN` (x86_64 not measured). So Rust's default is the reference's `-Dpie=true` (its system-package default) and the port
-  has no counterpart of the non-PIE default. Porting it (a `-no-pie` link arg for the Linux/FreeBSD
-  `rustty` exe unless `RUSTTY_PIE=true`, with `nix/package.nix` passing it for the system-package arm)
-  needs a Linux lane to verify the real app link and its `ET_EXEC` result; B-2 ran foreground on the Mac
-  only. Previously: OPEN for the items below; everything else is ported, translated or recorded.
+  CLOSED by parity tail B-2 (2026-09-28), its `-Dpie` remainder by B-2b (2026-09-28): item 7 is N420,
+  items 4 and 9 are N421, items 6 and 8 are N422 (`-Dpie` included), item 1 is N423, items 3 and 5 are
+  N424, and both stale records below are corrected (N421, N423). The `-Dpie` default was B-2's remainder:
+  measured with Zig 0.16 on the Mac, a default `zig build-exe` for `x86_64-linux-gnu` /
+  `aarch64-linux-gnu` is `ET_EXEC` (non-PIE) and `-fPIE` gives `ET_DYN`, while rustc links Linux
+  executables `-pie` (`ET_DYN`). B-2b ported it (`RUSTTY_PIE`, verified on the Linux VM; see N422).
+  Previously: OPEN for the items below; everything else is ported, translated or recorded.
 - **Covered**: every `b.step` (`run`, `run-valgrind`, `test`, `test-lib-vt{,-build,-schema}`,
   `test-valgrind`, `update-translations`, `dist`, `distcheck`), every `Config.zig` option except the
   ones below, every install artifact (terminfo/termcap per OS, shell integration, themes, completions,
@@ -7601,11 +7598,11 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **CI** (N376 #14 `test-i18n`): builds with `RUSTTY_I18N=true` and `RUSTTY_I18N=false` (`cargo build -p
   rustty`), and `cargo test -p rustty-build-config` under each.
 
-## N422 — the wasm `simd128` default and the `-Dstrip` defaults; `-Dpie` recorded
+## N422 — the wasm `simd128` default and the `-Dstrip` and `-Dpie` defaults
 
 - **id**: N422. Parity tail B-2 (N377 items 6 and 8). **severity**: low. **kind**: build-option parity.
-  **state**: CLOSED for `simd128` and `-Dstrip` (ported); `-Dpie`'s default is the remainder recorded in
-  N377. Commit `40320c7e`.
+  **state**: CLOSED (ported). `simd128` and `-Dstrip`: B-2, commit `40320c7e`. `-Dpie`, and the release
+  test runs left unstripped: B-2b (review B-2 F1, F2), commits `7e7fe910`, `c0511017`.
 - **simd128**: `Config.zig:113-130` adds the `simd128` CPU feature to every wasm target when no CPU was
   requested (opt-out `-Dcpu=generic`); the reference CI requires the artifact to need it ("Verify WASM
   simd128"). Port: a tracked `.cargo/config.toml` gives `cfg(target_arch = "wasm32")` the rustflags `-C
@@ -7643,11 +7640,36 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (`unwind_tables = if (strip) .none else .sync`): the port unwinds panics (only the `xcframework` profile
   aborts), so its tables stay. (2) `omitFramePointer()` off Darwin follows `strip`: rustc's frame-pointer
   choice is its target spec's (NON_PORTS G5 covers Darwin), and a profile cannot set it (it would be
-  rustflags). (3) `cargo test --release` builds test executables with the `release` profile, not `bench`
-  (measured: a release `rustty-identity` test binary has 1 defined symbol), so they are stripped; the
-  reference's test executable is always Debug and unstripped. G-REL's failure backtraces lose symbol
-  names; its verdicts do not depend on them (no test inspects its own symbols). (4) `-Dpie`: see N377's
-  remainder.
+  rustflags). (3) The reference's test executable is always Debug, which the release test lanes are
+  not (they exist to test the release profile).
+- **release test runs unstripped** (B-2b, review B-2 F1): `cargo test --release` builds test executables
+  with the `release` profile, not `bench`, so B-2 left them stripped (measured: a release
+  `rustty-identity` test binary had 1 defined symbol), while the reference's test executable is `.strip =
+  false`. G-REL (`check_release_lane.sh`, before its build step) and ci.sh's `--release` lz4 run now set
+  `CARGO_PROFILE_RELEASE_STRIP=false`. Measured (macOS): `check_release_lane.sh --crate rustty-identity`
+  GREEN, and the test binary it ran has 1717 defined symbols (`nm -U`); the same build without the
+  override, 1. Test: `strip_defaults::release_test_lanes_run_unstripped` (the export precedes both G-REL
+  cargo steps; every uncommented ci.sh `cargo test ... --release` carries it). Controls, one at a time,
+  restored: the G-REL export removed fails it ("G-REL exports ..."), the ci.sh override removed fails it
+  ("ci.sh release test run is stripped"). The `[profile.bench]` comment now names `cargo bench` only.
+- **-Dpie** (B-2b, review B-2 F2; `Config.zig:408-412` `orelse system_package`, `GhosttyExe.zig:29-30`
+  `if (cfg.pie) exe.pie = true`): the environment variable `RUSTTY_PIE` (`true` / `false`; unset or
+  empty = not passed, like `RUSTTY_I18N`). The port has no `--system`, so not passed is the non-system
+  default, false: on Linux and FreeBSD `crates/rustty/build.rs` links the `rustty` bin with `-no-pie`
+  (rustc passes it after its own `-pie`; the driver takes the last). `true` keeps rustc's PIE; any other
+  value fails the build script. Mach-O and PE are untouched. The reference's system packages (`nix`
+  `--system`, both flatpak manifests `--system $PWD/vendor/p`) set `RUSTTY_PIE=true`; the snap (no
+  `--system`) sets nothing. PACKAGING.md documents it. Tests: `build_checks::pie_option_resolves_like_the_reference`
+  (per target, all three values, refused values); `xtask/tests/pie_packaging.rs` (nix and both flatpak
+  manifests set it, the snap does not). Controls, one at a time, restored: not-passed resolved to true
+  fails the first (`linux`: `Ok(false)` vs `Ok(true)`); the debug flatpak's line removed fails the second.
+  Linux VM (aarch64 Fedora, pinned 1.93.1, `cargo build -p rustty`, default features gtk/x11/wayland):
+  default → `readelf -h` Type `EXEC`, `FLAGS_1: NOW`, `rustty +version` rc 0; `RUSTTY_PIE=true` →
+  `DYN (Position-Independent Executable)`, `FLAGS_1: NOW PIE`, `+version` rc 0; `RUSTTY_PIE=false` →
+  `EXEC`; `RUSTTY_PIE=yes` → build error (rc 101, "RUSTTY_PIE must be `true` or `false`, not \"yes\"");
+  control (the `-no-pie` line dropped from build.rs, restored) → default build `DYN`. Only the debug
+  profile was built on the VM; the release relink with `-no-pie` is the reviewer's measurement (EXEC,
+  `+version` rc 0). FreeBSD: UNVERIFIED (no lane).
 - **CI** (N376 #6 and #9): G-XTARGET already runs in `ci.sh`, so the simd128 arm runs wherever it does;
   a `build-nix`-style strip check (`nm` of a release `rustty`: no symbols; debug: symbols) is not wired.
 

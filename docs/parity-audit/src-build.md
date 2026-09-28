@@ -618,7 +618,7 @@ Fix (if adopted): end `CONFIG_HEADER` with `"for.\n\n"`.
 - `Config.zig:414-422` strips ReleaseFast/ReleaseSmall binaries and drops unwind tables when stripped;
   rustty's `[profile.release]` sets no `strip`, so release binaries retain symbol tables — size/backtrace detail only.
   (Superseded, parity tail B-2: the strip defaults are ported; the unwind-table and `-Dpie` residuals are
-  recorded in NEW-FINDINGS N422/N377.)
+  recorded in NEW-FINDINGS N422/N377. B-2b ported the `-Dpie` default as `RUSTTY_PIE`, N422.)
 - `GhosttyBench.zig` forces ReleaseFast for gen/bench regardless of `-Doptimize`; rustty relies on the
   caller choosing `--profile release-fast`.
 - CombineArchivesStep/LibtoolStep: rustty additionally ranlib-normalizes every archive and derives the
