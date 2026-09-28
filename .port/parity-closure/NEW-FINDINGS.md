@@ -7582,3 +7582,32 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **test**: `rustty-vt-c` `render::tests::render_row_get_set_dirty` and `render::tests::render_update` under Miri: UB before, pass after.
   Native: the render tests pass.
 - **state**: CLOSED (fixed).
+
+## N395 — G4's leg B compares the port against c-vt goldens recorded at the phase-0 pin; a fresh port driver diverges on three
+
+- **id**: N395. Not a ledger row: task C-1 (the full `ci.sh` run on `tail-c1`).
+- **severity**: medium (a HARD gate that was green only through stale local binaries). **kind**: gate
+  evidence / harness.
+- **finding**: in a fresh worktree `G4` was BLOCKED (no `harness/bin/vt_driver_ref`/`vt_driver_port`:
+  build products, not tracked). The main checkout's copies are dated 2026-08-10, so the ci run at
+  `9fd17d93` compared an August port build against the goldens. Built from this branch
+  (`build_port_driver.sh`; `build_ref_driver.sh` links the prebuilt `ghostty/zig-out`, dated 2026-08-28,
+  before the pin), leg A (12 fixtures) is byte-exact, and leg B diverges on `c-vt-effects`,
+  `c-vt-formatter` and `c-vt-paste`. The port's new lines are the ones the reference's example sources
+  print at the pin 20abdb50a (checked by their `printf` formats — `Formatted output:\n`,
+  `  clipboard read (location=%d, mimes=%zu)`, `  -> pty (%zu bytes): ` — not by running the reference
+  examples, so byte equality is UNVERIFIED; `c-vt-paste/src/main.c` changed upstream on 2026-08-23),
+  but `.port/phase-0/corpora/cvt/*.golden` were recorded from the reference examples at the phase-0 pin
+  (2026-06-21) and never regenerated. `git diff 4749c4e93 20abdb50a -- example/` also changes
+  `c-vt-grid-ref-tracked`, `c-vt-grid-traverse`, `c-vt-kitty-graphics`, `c-vt-render`, both
+  `c-vt-selection*`, `c-vt-stream`, `c-vt-static` and `cpp-vt-stream` (these still match their old
+  goldens), and adds `c-vt-search` and `c-vt-snapshot`, which the corpus does not cover.
+- **also fixed** (task C-1): `build_port_driver.sh` defaulted `RUSTTY_ROOT` to the main checkout, so from a
+  worktree it built and linked the MAIN checkout's `rustty-vt-c` (into the main checkout's `target/`).
+  It now derives the root from its own location.
+- **not fixed**: regenerating the goldens needs the reference examples built at the pin. A trial
+  `zig build` of `example/c-vt-paste` fails on this host (`unable to find artifact 'ghostty-vt'`; only
+  `ghostty-vt-static` is offered), and the host had under 3 GB of free disk. Needed: rebuild
+  `ghostty/zig-out` at 20abdb50a, build the 21 (+2 new) examples, rerun `.port/phase-0/run-cvt-corpora.sh`,
+  review each golden diff against the upstream example change.
+- **state**: OPEN.

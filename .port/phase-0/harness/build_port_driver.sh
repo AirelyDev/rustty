@@ -38,7 +38,10 @@
 set -euo pipefail
 
 HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUSTTY_ROOT="${RUSTTY_ROOT:-/Users/gael/projects/rustty}"
+# The checkout this script lives in (task C-1: a hardcoded main-checkout path
+# made a worktree's G4 compare the MAIN checkout's port, and wrote its build
+# there; the same fix as .port/tools/miri-run.sh).
+RUSTTY_ROOT="${RUSTTY_ROOT:-$(cd "$HARNESS_DIR/../../.." && pwd)}"
 GHOSTTY="${GHOSTTY:-/Users/gael/projects/ghostty}"
 OUT="$HARNESS_DIR/bin/vt_driver_port"
 CVT_OUT_DIR="$HARNESS_DIR/bin/cvt"
