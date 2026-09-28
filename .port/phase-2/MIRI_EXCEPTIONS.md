@@ -2546,3 +2546,18 @@ a silent skip — the same fixture change that fixed the sibling
 added to `pagelist_integrity_detects_max_lines_exceeded`
 (`crates/rustty-vt/src/pagelist/tests.rs`). It still runs, and is required
 to pass, natively (`cargo test -p rustty-vt --lib`) and in the release lane.
+
+**RESOLVED (parity tail C-1, 2026-09-27): the exception is removed; the test runs in G6.**
+The fixture now pauses the first page's own integrity checks while `grow_rows`
+fills it (`Page::pause_integrity_checks`, the technique the reference's grow-loop
+tests use, e.g. `pagelist_pointFromPin_active_from_prior_page`), then un-pauses and
+asserts `Page::verify_integrity` and `PageList::verify_integrity` on the complete
+page before the forbidden state is built. The page is still filled row by row by
+`grow_rows`, so "one complete historical page" is the real state, not a fake; only
+the O(n^2) per-row re-check during setup is skipped. Measured under the G6
+conditions (isolation on, debug assertions on, single test): **pass, 49 s (Miri
+clock), 0 UB, 0 leaks**. With the `all(miri, debug_assertions)` annotation gone it
+also leaves G6c's derived set, which it had been counted in since `bbc76bc9`
+although `cfg_attr(not(debug_assertions), ignore)` kept it from ever running there:
+that is the `83 test(s) RAN, expected at least 84` G6c red. The set is now 83
+tests, all of which run.

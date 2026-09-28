@@ -7083,10 +7083,6 @@ fn pagelist_enforce_limit_marks_activity_and_preserves_continuation() {
 // the active-boundary page) behind `pause_integrity_checks` and asserts the
 // check fires. Requires `debug_assertions`: `verify_integrity` is a no-op
 // without them.
-#[cfg_attr(
-    all(miri, debug_assertions),
-    ignore = "MIRI EXCEPTION — NO G6c ESCAPE (.port/phase-2/MIRI_EXCEPTIONS.md, 'no G6c escape valve exists'): this test is ALSO `#[cfg_attr(not(debug_assertions), ignore)]` above, so it cannot run in the `-C debug-assertions=off` G6c lane either — unlike the WS19 T6 compression family, there is no lane where this test both runs AND asserts something non-vacuous. Root cause: `s.grow_rows(page_rows)` builds a 593-row page one row at a time, and `debug_assertions` runs a page-level `assert_integrity` per row — O(current page size) each call, O(n^2) total. Confirmed slow-not-UB across multiple single-worker Miri runs (sustained `ub=0` past 180-240s before being stopped). See the referenced note for the fixture change (already applied to the sibling `viewport_pin_not_in_list` test) that would close this."
-)]
 #[test]
 #[cfg_attr(
     not(debug_assertions),
@@ -7106,7 +7102,20 @@ fn pagelist_integrity_detects_max_lines_exceeded() {
     .unwrap();
 
     // Right at the limit: one complete historical page plus the active row.
+    //
+    // The first page's own integrity checks are paused while it fills, the
+    // technique the reference's grow-loop tests use (`pointFromPin active from
+    // prior page` above): `grow_rows` otherwise runs a page-level
+    // `assert_integrity` per row, O(n^2) over the page, which kept this test
+    // out of the Miri lane. The page is still filled row by row by
+    // `grow_rows`; its checks run in full once it is complete.
+    let first = s.pages.first;
+    unsafe { (*super::Node::page(first)).pause_integrity_checks(true) };
     s.grow_rows(page_rows).unwrap();
+    unsafe { (*super::Node::page(first)).pause_integrity_checks(false) };
+    assert_eq!(Ok(()), unsafe {
+        (*super::Node::page(first)).verify_integrity()
+    });
     assert_eq!(Ok(()), s.verify_integrity());
 
     // Append a second complete page behind the caller's back with integrity
