@@ -36,7 +36,9 @@
 //! `fontconfig_freetype` and `freetype_windows`, with host fixtures (the
 //! G-FONTBACKEND lane); type-checked, not run, for Linux and Windows
 //! `freetype`. Not built: the CoreText backends off Darwin (no CoreText),
-//! `fontconfig_freetype` on Windows (OPEN, N286), and a native `web_canvas`
+//! `fontconfig_freetype` on an MSVC-ABI Windows target (the reference's
+//! fontconfig does not compile there either; on a GNU-ABI Windows target it is
+//! built and tested, N286), and a native `web_canvas`
 //! (no feature). The FreeType arm of the reference's never-run `face metrics`
 //! test holds stale values (N285 / UD281; faithful). (CORRECTION, S-14b: this
 //! listed `fontconfig_freetype` on macOS and `freetype_windows` off Windows as
@@ -251,9 +253,10 @@ pub mod hb;
 // `hasFontconfig()` (`rustty_font_has_fontconfig`), as the reference imports
 // `pkg/fontconfig` only for that backend (`SharedDeps.zig:292`): the Linux/BSD
 // default, and `-Dfont-backend=fontconfig_freetype` on macOS. CORRECTION (S-14b,
-// review M3): this was gated off macOS/Windows by `target_os`. Windows stays
-// excluded by `rustty-build-config` (N286: the port does not build
-// `fontconfig-sys` for Windows; WS20 gated it off there), wasm has no C deps.
+// review M3): this was gated off macOS/Windows by `target_os`. An MSVC-ABI
+// Windows target stays excluded by `rustty-build-config` (N286: the reference's
+// fontconfig does not compile against the MSVC headers either); a GNU-ABI
+// Windows target builds it, as the reference does. wasm has no C deps.
 // EMBEDDER DIVERGENCE (feature `fontconfig`, DEFAULT-ON): an embedder that
 // turns the vendored-C font backends off drops `fontconfig-sys` from the resolve
 // graph, which is what a colliding `links = "fontconfig"` needs; `build.rs`

@@ -5174,7 +5174,8 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 ## N286 — `-Dfont-backend`: which backends the port builds per target
 
 - **id**: N286. Not a ledger row (task tail-s14; corrected by tail-s14b, review M3).
-- **severity**: low. **kind**: R1 (Ghostty accepts every backend on every target); one OPEN gap.
+- **severity**: low. **kind**: R1 (Ghostty accepts every backend on every target); the one gap
+  (Windows) is closed by task W-6.
 - **oracle**: `src/build/Config.zig:191-195` validates nothing; `SharedDeps.zig:267-310` links
   HarfBuzz/FreeType/Fontconfig from source on any target whose backend has them. The reference's
   CI builds the per-OS defaults plus `coretext_freetype` on macOS (`test.yml:1383-1428`).
@@ -5185,7 +5186,8 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   refuses, loudly and by name:
   - the CoreText backends off Darwin — no CoreText there, in the reference too (justified);
   - `fontconfig_freetype` on Windows — **OPEN R1 gap**: the port gates `fontconfig-sys` off
-    Windows (WS20) and has not built it there; not attempted (no Windows host here).
+    Windows (WS20) and has not built it there; not attempted (no Windows host here). (Superseded by
+    task W-6 below: refused on MSVC only, as the reference fails there; built on GNU.)
   A native `web_canvas` has no feature at all (its face and shaper call browser externs;
   `font/main.zig:50` forces it on wasm), so it is not "refused by name" — it cannot be named.
 - **correction**: tail-s14 refused `fontconfig_freetype` on macOS ("`fontconfig-sys` is gated off
@@ -5201,7 +5203,50 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   reference `fontconfig` / `fontconfig codepoint` tests; its `freetype_windows` arm (a `SYSTEMROOT`
   fixture whose `root\Fonts` holds Arial, Arial Unicode and Noto Sans Chakma) passes 119 (+3),
   including the reference `windows` test. Clippy `-D warnings` is clean for both.
-- **state**: **OPEN** (triage T-1, 2026-09-28), for `fontconfig_freetype` on Windows only. Left: first establish whether the reference at the pin actually builds and runs `-Dfont-backend=fontconfig_freetype` on Windows (its CI does not; scope is parity only), and if it does, build `fontconfig-sys` on Windows, un-refuse the combination in `crates/rustty-build-config/build.rs:142`, and run the font-shaper tests there. Effort M, needs the Windows VM (`rwin`), not a long run; observable only in a non-default build configuration. Was: OPEN only for `fontconfig_freetype` on Windows; everything else in this entry CLOSED.
+- **task W-6 (2026-09-28), the reference measured at the pin** (Zig 0.16, the reference source at
+  `20abdb50a` with its fetched `zig-pkg`): `Config.zig:100-111` gives a Windows target the MSVC ABI
+  when none is named. (1) `zig build test -Dtarget=x86_64-windows -Demit-test-exe=true
+  -Dfont-backend=fontconfig_freetype -Dtest-filter=fontconfig`, natively on `rwin` (Windows 11 ARM64,
+  x86_64 Zig under emulation, VS 2022 Build Tools): FAILS, "compile lib fontconfig Debug
+  x86_64-windows-msvc 56 errors", every one `src/fcint.h:44:10: error: 'unistd.h' file not found` (or
+  `fccompat.c:44`): pkg/fontconfig/build.zig defines `HAVE_UNISTD_H` on every target and the MSVC
+  headers have no `unistd.h`. Control, same host and Zig, default backend (`freetype_windows`),
+  `-Dtest-filter=windows`: builds, "All 84 tests passed" (`font.discovery.test.windows` OK). (2) With
+  an explicit GNU ABI, `-Dtarget=x86_64-windows-gnu` (cross-built on the Mac, MinGW headers from Zig):
+  `zig build` installs `ghostty-internal.dll`, which carries fontconfig (`FONTCONFIG_FILE`,
+  `WINDOWSFONTDIR` strings), and the filtered test exe run on `rwin` prints "All 76 tests passed",
+  including `font.discovery.test.fontconfig`, `fontconfig codepoint` and
+  `font.DeferredFace.test.fontconfig` (each after "Fontconfig error: Cannot load default config file:
+  No such file: (null)", since no `fonts.conf` is installed). (The aarch64-windows Zig 0.16 build
+  crashed with an access violation in its build runner on `rwin`, even on a `zig init` project; the
+  x86_64 Zig was used.) So the reference accepts the option on Windows, cannot build it under its
+  default (MSVC) ABI, and builds and runs it under the GNU ABI.
+- **fix (W-6)**: match both halves. `rustty-build-config/build.rs` accepts `fontconfig_freetype` on
+  `target_env = "gnu"` Windows and refuses it on MSVC by name, citing the reference's `unistd.h`
+  failure and naming the GNU target. `rustty-font-shaper`'s `fontconfig-sys` table now excludes only
+  MSVC Windows (and wasm). `libxml2-sys` leaves `LIBXML_ICONV_ENABLED` off on Windows, as
+  pkg/fontconfig/build.zig:9-13 passes `.iconv = os != .windows` to libxml2 (before: the GNU build
+  failed with `encoding.h:28: fatal error: iconv.h: No such file or directory`). `fontconfig-sys`
+  adds the reference's Windows-only `-Werror=implicit-function-declaration` (build.zig:222-227).
+- **evidence (W-6)**: `cargo test -p rustty-font-shaper --target x86_64-pc-windows-gnu --features
+  rustty-build-config/font-backend-fontconfig-freetype --no-run` cross-built on the Mac (mingw-w64 gcc,
+  `BINDGEN_EXTRA_CLANG_ARGS` pointing at its sysroot; the build-config output reads
+  `font_backend=fontconfig_freetype`), the test exe run on `rwin` with the three MinGW runtime DLLs
+  beside it: 131 passed, 0 failed, 4 ignored, three runs of three, including `fc::tests::*` (fc_list,
+  fc_match, init/load-config), `discovery::tests::fontconfig`, `fontconfig_codepoint` and
+  `deferred_face::tests::fontconfig`, with the same "Cannot load default config file" stderr as the
+  reference. `cargo check -p rustty-build-config --target x86_64-pc-windows-msvc --features
+  font-backend-fontconfig-freetype` panics with the new message; `freetype_windows` on MSVC and
+  `fontconfig_freetype` on GNU pass it. Negative control: the old `cfg(not(any(target_os =
+  "windows", ...)))` table restored alone, the GNU build fails with E0432, unresolved import
+  `fontconfig_sys`. clippy `-D warnings` clean for the workspace (macOS) and for the GNU
+  `fontconfig_freetype` font-shaper. UNVERIFIED: a native `x86_64-pc-windows-gnu` toolchain on
+  Windows (none installed on `rwin`; the binaries were cross-built), and anything above
+  rustty-font-shaper on Windows (rustty-core does not build there, N342).
+- **state**: **CLOSED** (task W-6, 2026-09-28): parity. The reference accepts
+  `-Dfont-backend=fontconfig_freetype` on Windows, fails to build it under its default MSVC ABI and
+  builds it under the GNU ABI; the port now refuses it on MSVC with that reason and builds and tests
+  it on GNU. Was: OPEN (triage T-1) for `fontconfig_freetype` on Windows only.
 
 ## N287 — the `freetype_windows` `DeferredFace` name accessors did not type-check
 

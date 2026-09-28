@@ -232,6 +232,14 @@ fn main() {
 
     // ---- `Options` → `-DLIBXML_{FIELD}_ENABLED=1` (build.zig:68-98) ----------
     for opt in ENABLED_OPTIONS {
+        // `iconv` is the one option the consumer overrides per target: the
+        // reference's only libxml2 consumer, pkg/fontconfig/build.zig:9-13,
+        // passes `.iconv = libxml2_iconv_enabled`, whose default is
+        // `target.result.os.tag != .windows` (Windows has no `iconv.h`), to
+        // `b.lazyDependency("libxml2", ...)` (build.zig:226-230). N286.
+        if *opt == "ICONV" && windows {
+            continue;
+        }
         build.define(&format!("LIBXML_{opt}_ENABLED"), Some("1"));
     }
     // The reference's per-field companion defines (build.zig:79-97). Only the
