@@ -858,9 +858,12 @@ fn install_remote_terminfo<We: Write>(opts: &Options, stderr: &mut We) -> Result
     // short leaves margin.
     // const control_path = try internal_os.randomTmpPath(alloc, "ghostty-ssh-");
     //   R2: the temp-socket prefix carries the Rustty app name.
-    let control_path = internal_os::randomTmpPath(&format!("{}-ssh-", rustty_identity::APP_NAME));
+    //   N170: the path is raw bytes (`[]u8`), as the reference's is.
+    let control_path =
+        internal_os::randomTmpPath(format!("{}-ssh-", rustty_identity::APP_NAME).as_bytes());
     // const control_path_opt = try std.fmt.allocPrint(alloc, "ControlPath={s}", .{control_path});
-    let control_path_opt = format!("ControlPath={control_path}");
+    let mut control_path_opt = b"ControlPath=".to_vec();
+    control_path_opt.extend_from_slice(&control_path);
 
     // Under --verbose, let remote stderr through (the `tic` step is
     // the most common failure source) and inherit ssh's stderr so it
@@ -900,7 +903,7 @@ fn install_remote_terminfo<We: Write>(opts: &Options, stderr: &mut We) -> Result
         b"-o".to_vec(),
         b"ControlPersist=no".to_vec(),
         b"-o".to_vec(),
-        control_path_opt.into_bytes(),
+        control_path_opt,
     ]);
     argv.extend(opts._ssh_args.iter().cloned());
     argv.push(remote_script.as_bytes().to_vec());

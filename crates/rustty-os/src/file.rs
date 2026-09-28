@@ -257,17 +257,34 @@ pub fn randomBasename(buf: &mut [u8]) -> Result<&[u8], RandomBasenameError> {
 /// for one-shot temporary file/socket paths where a full `TempDir` is
 /// overkill.
 #[allow(non_snake_case)]
-pub fn randomTmpPath(prefix: &str) -> String {
+pub fn randomTmpPath(prefix: &[u8]) -> Vec<u8> {
     // PORT NOTE (P3-W7 T4 / area-E `E20`): this used to call
     // `allocTmpDir()` + `freeTmpDir()` on EVERY call. Upstream `e8525c0fd`
     // switched it to the temp directory discovered once at `global.init`:
-    //   const tmp_dir = global.tmpDirPath();
-    let tmp_dir = String::from_utf8_lossy(rustty_global::tmp_dir_path()).into_owned();
+    //   global.tmpDirPath()
+    //
+    // PORT NOTE (NEW-FINDINGS N170): the reference returns `[]u8` holding the
+    // temp dir's bytes verbatim, so the port returns `Vec<u8>` (a non-UTF-8
+    // `TMPDIR` must not be rewritten with U+FFFD, which would name a different
+    // directory).
+    random_tmp_path_in(rustty_global::tmp_dir_path(), prefix)
+}
+
+/// The body of [`randomTmpPath`] with the temp dir as a parameter, so a
+/// non-UTF-8 directory can be tested without re-running `global.init`.
+fn random_tmp_path_in(tmp_dir: &[u8], prefix: &[u8]) -> Vec<u8> {
+    // var name_buf: [random_basename_len]u8 = undefined;
+    // const basename = randomBasename(&name_buf) catch unreachable;
     let mut name_buf = [0u8; random_basename_len];
     let basename = randomBasename(&mut name_buf).unwrap_or_else(|_| unreachable!());
-    // PORT NOTE: `std.fmt.allocPrint(.., "{s}{c}{s}{s}", .{ tmp_dir, sep, prefix, basename })`.
-    let basename = std::str::from_utf8(basename).expect("base64 output is ASCII");
-    format!("{tmp_dir}{}{prefix}{basename}", PATH_SEP as char)
+    // return std.fmt.allocPrint(allocator, "{s}{c}{s}{s}",
+    //     .{ global.tmpDirPath(), std.fs.path.sep, prefix, basename });
+    let mut out = Vec::with_capacity(tmp_dir.len() + 1 + prefix.len() + basename.len());
+    out.extend_from_slice(tmp_dir);
+    out.push(PATH_SEP);
+    out.extend_from_slice(prefix);
+    out.extend_from_slice(basename);
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -763,14 +780,32 @@ mod tests {
     #[cfg_attr(miri, ignore)] // real-OS CSPRNG syscall
     #[allow(non_snake_case)]
     fn random_tmp_path_is_cached_and_fresh() {
-        let a = randomTmpPath("w7-");
-        let b = randomTmpPath("w7-");
+        let a = randomTmpPath(b"w7-");
+        let b = randomTmpPath(b"w7-");
         assert_ne!(a, b, "basename must differ per call");
 
-        let dir = String::from_utf8_lossy(rustty_global::tmp_dir_path()).into_owned();
-        let prefix = format!("{dir}{}w7-", PATH_SEP as char);
-        assert!(a.starts_with(&prefix), "{a} does not start with {prefix}");
+        let mut prefix = rustty_global::tmp_dir_path().to_vec();
+        prefix.push(PATH_SEP);
+        prefix.extend_from_slice(b"w7-");
+        assert!(
+            a.starts_with(&prefix),
+            "{a:?} does not start with {prefix:?}"
+        );
         assert_eq!(a.len(), prefix.len() + random_basename_len);
+    }
+
+    /// NEW-FINDINGS N170 — `randomTmpPath` formats the temp dir with `{s}`,
+    /// i.e. its bytes verbatim. A non-UTF-8 `TMPDIR` (legal on POSIX) must
+    /// come back byte-for-byte, not with U+FFFD in place of the invalid byte.
+    #[test]
+    #[cfg_attr(miri, ignore)] // real-OS CSPRNG syscall
+    fn random_tmp_path_keeps_a_non_utf8_temp_dir_verbatim() {
+        let path = random_tmp_path_in(b"/tmp/a\xffb", b"p-");
+        let mut want = b"/tmp/a\xffb".to_vec();
+        want.push(PATH_SEP);
+        want.extend_from_slice(b"p-");
+        assert_eq!(&path[..want.len()], &want[..]);
+        assert_eq!(path.len(), want.len() + random_basename_len);
     }
 
     #[test]
