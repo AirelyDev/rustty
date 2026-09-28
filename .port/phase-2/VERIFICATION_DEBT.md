@@ -2420,3 +2420,29 @@ and confirm the output carries `io.airely.rustty-debug.desktop` (the app-id deri
 what the flag feeds); for the Snap, drop the `gtk4-layer-shell` part and confirm the
 `rustty` part fails to link (`gtk4-layer-shell-0` not found by pkg-config), which proves
 the part is what satisfies it on core24.
+
+## V25. Windows full-workspace test run over the clang-cl-built C/C++ dependencies, and the N355 crash recipe — **DEFERRED** (wrap-up, no long runs) [parity tail F-1, 2026-09-28]
+
+**Why deferred:** the user asked the tail wave to wrap up without long runs. Task F-1 (N353) moved every vendored
+`cc` build to clang-cl on MSVC targets and measured the compile lines, `cargo clippy --workspace`, and the unit
+tests of each dependency's direct consumers on rwin (`NEW-FINDINGS.md` N353). Not run: the whole Windows suite,
+whose rustty-vt part alone takes several minutes under x64 emulation.
+
+**Recipe — Windows** (rwin, a fresh clone per the tail-wave brief, rc.exe's SDK dir on `PATH`,
+`RUSTTY_REQUIRE_FUZZ_CORPUS=1`):
+```
+cargo test --workspace --exclude libxml2-sys --exclude fontconfig-sys --exclude sentry-sys --target x86_64-pc-windows-msvc
+```
+Pass: every test binary green (CI's Windows leg runs the same command on `windows-latest`). To confirm the compiler,
+rebuild with `CC_ENABLE_DEBUG_OUTPUT=1` and check that no `target\x86_64-pc-windows-msvc\debug\build\*\output` has a
+`"cl.exe"` line or a `D9002` warning.
+
+**Recipe — N355** (closed unreproduced after 1202 runs; use this if the SIGSEGV of `rustty-renderer`'s macOS
+unit-test binary recurs): build it with `cargo test -p rustty-renderer --lib --no-run`, then from
+`crates/rustty-renderer`
+```
+for i in $(seq 1 500); do lldb --batch -o run -k 'thread backtrace all' -k quit -- ../../target/debug/deps/rustty_renderer-HASH || break; done
+```
+checking each run's output for `exited with status = 0` (lldb's own exit status does not say whether the process
+crashed), and alternate `--test-threads=1` runs to separate threading from Metal. A signal gives no Rust backtrace;
+the `thread backtrace all` of the stopped process is the evidence.
