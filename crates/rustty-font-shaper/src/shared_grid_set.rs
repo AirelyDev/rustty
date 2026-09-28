@@ -115,6 +115,20 @@ pub enum Error {
     GridInit(GridInitError),
 }
 
+/// `@errorName` (NEW-FINDINGS N121): the combined `ref`/`collection` set is
+/// flat in the reference, so each wrapped error names itself.
+impl rustty_zigstd::error_name::ErrorName for Error {
+    fn error_name(&self) -> std::borrow::Cow<'static, str> {
+        match self {
+            Error::OutOfMemory => std::borrow::Cow::Borrowed("OutOfMemory"),
+            Error::Collection(e) => e.error_name(),
+            Error::Face(e) => e.error_name(),
+            Error::Discovery(e) => e.error_name(),
+            Error::GridInit(e) => e.error_name(),
+        }
+    }
+}
+
 impl From<collection::Error> for Error {
     fn from(e: collection::Error) -> Self {
         Error::Collection(e)
@@ -1552,5 +1566,38 @@ mod tests {
         set.deinit();
         keycfg.deinit();
         cfg.deinit();
+    }
+}
+
+/// NEW-FINDINGS N121: `+show-face` prints the `ref`/`getFace`/`name` errors
+/// with Zig's `{}`, i.e. `error.<Name>` of a FLAT error union, so a port error
+/// nested in wrappers must print the innermost name.
+#[cfg(test)]
+mod error_name_tests {
+    use super::*;
+    use crate::collection;
+    use crate::face::FaceError;
+    use rustty_zigstd::error_name::ZigError;
+
+    #[test]
+    fn nested_errors_print_the_innermost_zig_name() {
+        let e = Error::GridInit(GridInitError::Collection(collection::Error::Face(
+            FaceError::OutOfMemory,
+        )));
+        assert_eq!("error.OutOfMemory", ZigError(&e).to_string());
+        let e = Error::Discovery(discovery::Error::Collection(
+            collection::Error::DeferredLoadingUnavailable,
+        ));
+        assert_eq!("error.DeferredLoadingUnavailable", ZigError(&e).to_string());
+        let e = Error::Collection(collection::Error::CannotLoadPrimaryFont);
+        assert_eq!("error.CannotLoadPrimaryFont", ZigError(&e).to_string());
+        assert_eq!(
+            "error.SetSizeFailed",
+            ZigError(&collection::Error::SetSizeFailed).to_string()
+        );
+        assert_eq!(
+            "error.OutOfMemory",
+            ZigError(&collection::Error::Face(FaceError::OutOfMemory)).to_string()
+        );
     }
 }

@@ -52,6 +52,13 @@ pub enum Error {
     FontconfigNoId,
 }
 
+/// `@errorName` (NEW-FINDINGS N121): the variant names are the reference's.
+impl rustty_zigstd::error_name::ErrorName for Error {
+    fn error_name(&self) -> std::borrow::Cow<'static, str> {
+        rustty_zigstd::error_name::unit_variant_name(self)
+    }
+}
+
 // =============================================================================
 // init.zig — library initialization + version.
 // =============================================================================

@@ -37,6 +37,7 @@
 
 pub mod arena_allocator;
 pub mod array_hash_map;
+pub mod error_name;
 pub mod fmt;
 pub mod fs_path;
 pub mod memory_pool;

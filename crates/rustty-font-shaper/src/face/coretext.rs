@@ -229,6 +229,13 @@ pub enum Error {
     HarfbuzzFailed,
 }
 
+/// `@errorName` (NEW-FINDINGS N121): the variant names are the reference's.
+impl rustty_zigstd::error_name::ErrorName for Error {
+    fn error_name(&self) -> std::borrow::Cow<'static, str> {
+        rustty_zigstd::error_name::unit_variant_name(self)
+    }
+}
+
 #[cfg(rustty_font_has_harfbuzz)]
 impl From<hb::HarfbuzzFailed> for Error {
     fn from(_: hb::HarfbuzzFailed) -> Self {

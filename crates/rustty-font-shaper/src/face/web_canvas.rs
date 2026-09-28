@@ -101,6 +101,13 @@ pub enum Error {
     Unsupported,
 }
 
+/// `@errorName` (NEW-FINDINGS N121): the variant names are the reference's.
+impl rustty_zigstd::error_name::ErrorName for Error {
+    fn error_name(&self) -> std::borrow::Cow<'static, str> {
+        rustty_zigstd::error_name::unit_variant_name(self)
+    }
+}
+
 impl From<rustty_font::atlas::OutOfMemory> for Error {
     fn from(_: rustty_font::atlas::OutOfMemory) -> Self {
         Error::OutOfMemory

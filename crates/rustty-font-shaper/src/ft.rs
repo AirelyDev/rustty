@@ -124,6 +124,13 @@ pub enum FtError {
     UnknownFreetypeError,
 }
 
+/// `@errorName` (NEW-FINDINGS N121): the variant names are the reference's.
+impl rustty_zigstd::error_name::ErrorName for FtError {
+    fn error_name(&self) -> std::borrow::Cow<'static, str> {
+        rustty_zigstd::error_name::unit_variant_name(self)
+    }
+}
+
 /// `pub const Error = errors.Error;` (`main.zig:10`).
 pub type Error = FtError;
 

@@ -96,6 +96,16 @@ pub enum InitError {
     Collection(collection::Error),
 }
 
+/// `@errorName` (NEW-FINDINGS N121).
+impl rustty_zigstd::error_name::ErrorName for InitError {
+    fn error_name(&self) -> std::borrow::Cow<'static, str> {
+        match self {
+            InitError::OutOfMemory => std::borrow::Cow::Borrowed("OutOfMemory"),
+            InitError::Collection(e) => e.error_name(),
+        }
+    }
+}
+
 impl From<collection::Error> for InitError {
     fn from(e: collection::Error) -> Self {
         InitError::Collection(e)
