@@ -396,6 +396,8 @@ mod tests {
         assert!(!result.contains(&point::Coordinate { x: 1, y: 2 }));
 
         set.deinit(alloc);
+        state.deinit(alloc);
+        t.deinit(alloc);
     }
 
     // test "renderCellMap hover links"
@@ -469,6 +471,8 @@ mod tests {
         }
 
         set.deinit(alloc);
+        state.deinit(alloc);
+        t.deinit(alloc);
     }
 
     // PORT NOTE (9c9cf3e82, WS10 T9): the reference proves the no-allocation
@@ -597,6 +601,8 @@ mod tests {
         assert_eq!(0, result.count());
 
         set.deinit(alloc);
+        state.deinit(alloc);
+        t.deinit(alloc);
     }
 
     // test "renderCellMap mods no match"
@@ -651,5 +657,7 @@ mod tests {
         assert!(!result.contains(&point::Coordinate { x: 1, y: 2 }));
 
         set.deinit(alloc);
+        state.deinit(alloc);
+        t.deinit(alloc);
     }
 }
