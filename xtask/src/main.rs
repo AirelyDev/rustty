@@ -4,7 +4,11 @@
 //! cbindgen headers, terminfo compilation, shell-integration/theme bundling,
 //! man pages, i18n, dist tarball, macOS xcframework/.app.
 //!
-//! PORT STATUS: scaffold (only the `header-gen` subcommand is wired so far).
+//! PORT STATUS: done — every `build.zig` step and `src/build/*` generator the
+//! port carries is a subcommand below (see USAGE); the build OPTIONS map to
+//! cargo features, profiles, build-time variables and these subcommands' flags
+//! (N377). (CORRECTION, N423: this said "scaffold (only the `header-gen`
+//! subcommand is wired so far)" long after that stopped being true.)
 //!
 //! Independent of the parity port order (R4). NO ghostty Cargo dep (R3).
 
@@ -13,6 +17,8 @@ mod wasm_patch_growable_table;
 mod dist;
 
 mod release;
+
+mod run;
 
 mod patchelf;
 
@@ -139,6 +145,12 @@ SUBCOMMANDS:
                        `patchelf --set-interpreter/--set-rpath` on a built binary. On native
                        Linux inside a Nix shell the defaults are the ld.so on PATH and
                        LD_LIBRARY_PATH, so a dev-shell build also runs outside the shell.
+    run [--release | --profile <p>] [--prefix <dir>] [-- <app args>]
+                       Port of `zig build run`. Linux/FreeBSD (GTK): cargo build -p rustty,
+                       then run it with <APP>_RESOURCES_DIR=<prefix>/share/<app> (prefix
+                       default zig-out, where `resources` installs) and the app args.
+                       macOS: macos/run-rustty.sh with XCFRAMEWORK_TARGET=native (the
+                       native-only app build, opened). Elsewhere: nothing, as upstream.
     release-info [--version <vX.Y.Z>] [--ref <refs/tags/vX.Y.Z>] [--no-workspace-check]
                        Emit the release metadata (version, build, commit, commit_long)
                        the .github/workflows/release-{tag,tip}.yml pipelines consume,
@@ -285,6 +297,13 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Some("run") => match run::run(&mut args) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("xtask: run failed: {e}");
+                ExitCode::FAILURE
+            }
+        },
         Some("release-info") => match release::run(&mut args) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
