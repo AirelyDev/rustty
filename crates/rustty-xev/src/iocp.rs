@@ -741,7 +741,7 @@ impl Loop {
             ResultA(Result),
         }
 
-        // PORT NOTE (N385): the reference's `.async_wait => { try
+        // PORT NOTE (N385): the reference's `.async_wait => {
         // self.asyncs.push(completion); break :action .async_wait; }` arm, and
         // its `.async_wait` tail below, taken here through a SHARED borrow of
         // `op`. From `AsyncIOCP.wait` on, another thread may run `notify` ->
@@ -753,6 +753,7 @@ impl Loop {
         if matches!(unsafe { &(*completion).op }, Operation::AsyncWait { .. }) {
             unsafe { self.asyncs.push(completion) };
             // .async_wait => { self.active += 1; completion.flags.state = .active; }
+            // We are considered an active completion.
             self.active += 1;
             unsafe { (*completion).flags.state = State::Active };
             return;

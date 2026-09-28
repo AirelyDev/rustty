@@ -1457,9 +1457,11 @@ mod tests {
         let mut notifier = Async::init().unwrap();
 
         // Send a notification many times
-        for _ in 0..5 {
-            notifier.notify().unwrap();
-        }
+        notifier.notify().unwrap();
+        notifier.notify().unwrap();
+        notifier.notify().unwrap();
+        notifier.notify().unwrap();
+        notifier.notify().unwrap();
 
         // Wait
         let mut count: u32 = 0;
