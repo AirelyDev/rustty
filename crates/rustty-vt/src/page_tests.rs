@@ -3571,18 +3571,34 @@ mod tests {
         });
     }
 
+    /// A page-aligned allocation that is freed on drop, including while the
+    /// expected panic unwinds (task C-1: it used to be leaked on purpose, which
+    /// Miri reports as a leak).
+    struct UnalignedBuf {
+        base: *mut u8,
+        layout: std::alloc::Layout,
+    }
+
+    impl Drop for UnalignedBuf {
+        fn drop(&mut self) {
+            // SAFETY: allocated in `page_unaligned_buf` with this layout.
+            unsafe { std::alloc::dealloc(self.base, self.layout) };
+        }
+    }
+
     /// Carve a deliberately page-UNaligned (but still 64-byte aligned, so every
     /// `Row`/`Cell`/set alignment inside the page is satisfied) buffer of `len`
-    /// bytes out of a page-aligned allocation. Deliberately leaks: every user
-    /// panics before returning.
-    fn leak_page_unaligned_buf(len: usize) -> &'static mut [u8] {
+    /// bytes out of a page-aligned allocation. The guard frees it; every user
+    /// panics before returning, and the unwind drops the guard.
+    fn page_unaligned_buf(len: usize) -> (UnalignedBuf, &'static mut [u8]) {
         let l = std::alloc::Layout::from_size_align(len + PAGE_SIZE_MIN, PAGE_SIZE_MIN).unwrap();
         // SAFETY: non-zero size; the returned block is PAGE_SIZE_MIN-aligned, so
         // `+64` is exactly one page-alignment violation and nothing else.
         let base = unsafe { std::alloc::alloc_zeroed(l) };
         assert!(!base.is_null());
         assert_eq!(base as usize % PAGE_SIZE_MIN, 0);
-        unsafe { core::slice::from_raw_parts_mut(base.add(64), len) }
+        let buf = unsafe { core::slice::from_raw_parts_mut(base.add(64), len) };
+        (UnalignedBuf { base, layout: l }, buf)
     }
 
     /// PORT NOTE: `cloneBuf(buf: []align(std.heap.page_size_min) u8)` — the
@@ -3594,7 +3610,7 @@ mod tests {
     #[should_panic(expected = "page_size_min-aligned")]
     fn page_cloneBuf_rejects_unaligned_buffer() {
         let page = Page::init(Capacity::new(10, 10)).unwrap();
-        let buf = leak_page_unaligned_buf(page.memory_len);
+        let (_guard, buf) = page_unaligned_buf(page.memory_len);
         let _ = page.clone_buf(buf);
     }
 
@@ -3607,7 +3623,7 @@ mod tests {
     #[should_panic(expected = "page_size_min-aligned")]
     fn page_initBuf_rejects_unaligned_buffer() {
         let l = Page::layout(Capacity::new(10, 10));
-        let buf = leak_page_unaligned_buf(l.total_size);
+        let (_guard, buf) = page_unaligned_buf(l.total_size);
         let _ = Page::init_buf(OffsetBuf::init(buf.as_ptr()), l);
     }
 
