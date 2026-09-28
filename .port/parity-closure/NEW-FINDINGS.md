@@ -112,7 +112,7 @@ found, and current state.
   this entry gives the leftover its own visible record. Cost if wrong: the
   finale re-audit re-derives this one test-only site and finds it already
   explained in three places.
-- **state**: **OPEN — will not fix.** Closing it requires changing
+- **state**: **STANDING (not a defect)** (triage T-1, 2026-09-28): a test-helper diagnostic (`testViewer`, test code only) that is unportable by signature; the controller ruling of 2026-09-09 above accepts it as permanently unportable, the PORT NOTE stands at `crates/rustty-vt/src/tmux/viewer.rs:2929`, and G-LOGFILE's test-only rule (task tail-s1b, `00e68940`) no longer counts the site (`tmux/viewer.zig` deficit 0). Was: **OPEN — will not fix.** Closing it requires changing
   `TestStep::run`'s contract to return a `Result` and giving `TestStep` a
   hand-written `Debug`, both of which would make the port's test helper LESS
   faithful to the reference in order to restore one of its diagnostics.
@@ -152,7 +152,7 @@ found, and current state.
   workers were committing to. The correct fix is to give each site its own
   static and assert both emit — small, but it needs its own test and its own
   review rather than riding along inside a test-isolation fix.
-- **state**: **OPEN** — to be fixed with a test that drives both call sites in
+- **state**: **OPEN** (triage T-1, 2026-09-28). Re-verified at the pin: the two sites pass `cp: u32` (`stream.zig:734`) and `c: u21` (`:1185`), two `logUnsupportedOnce` instantiations with two `Static.seen` tables; the port still shares `SEEN_UTF8_DECODED_C1` (`stream.rs:1181`, `:1886`, `:4800`). Left: one static per site plus a test that drives both sites in one process and asserts two records. Effort S, no long run; observable only as one missing warning line per process (diagnostic text, R1). Was: **OPEN** — to be fixed with a test that drives both call sites in
   one process and asserts two records, not one.
 
 ---
@@ -182,7 +182,7 @@ found, and current state.
   a satisfactory answer when it is only an accurate description of an outstanding gap.
   This project has a standing lesson that stale deferral notes manufacture fake gaps; the
   inverse also holds — a corrected note can conceal a real one.
-- **state**: **OPEN — needs an owner.** The swap is a runtime refactor: replace the mpsc
+- **state**: **CLOSED** (triage T-1, 2026-09-28): the swap is done. Task T-F `c539d380` ("the CoreText shaper runs the real CFReleaseThread", closes S94-F1/S94-F2) and T-F2 `09bdf1b2` (a recording CFAllocator proves the pool is freed on the release thread); `S94-F1` is CLOSED in `LEDGER.tsv`; see N24's discharge. Was: **OPEN — needs an owner.** The swap is a runtime refactor: replace the mpsc
   stand-in with `rustty_os::cf_release_thread`, on the real kqueue backend, with a test
   that proves released objects reach it. Schedule it as its own task; it is not logging
   work and must not ride along inside a `LOG`-class row's closure.
@@ -326,7 +326,7 @@ found, and current state.
   the divergence is knowable and permanent, and right now it lives only in a row
   disposition inside a CLOSED row, where the finale re-audit would not meet it as a
   tracked item.
-- **state**: **OPEN — needs an owner.** Closing it means giving
+- **state**: **OPEN** (triage T-1, 2026-09-28). Unchanged: `metal::shaders::Error` still has the one variant `MetalFailed` (`shaders.rs:49-52`) and the site still prints `err={err:?}` (`:394`). Left: variants for the reference's reachable causes (the `createWithBytes` failure and the Metal compile error; OutOfMemory aborts in Rust) threaded through the flattening `map_err`s, rendered as `error.<Name>` (joins N11). Effort S, no long run; observable only in one warn line's text (R1). Was: **OPEN — needs an owner.** Closing it means giving
   `metal::shaders::Error` (and the `metal::pipeline::Error` it folds in) variants that
   distinguish the reference's causes — at minimum allocation/decode/Metal-compile —
   and threading them through the four flattening `map_err`s. Note the same flattening
@@ -545,7 +545,7 @@ found, and current state.
 - **why this is recorded separately**: it is not a defect any single row introduced or can
   close. No row's `CLOSED`/`WAIVED` state rests on it, and churning ~35 sites inside a fix
   round is exactly the kind of unscoped change this plan avoids.
-- **state**: **OPEN**, scheduled as its own task. Scope: give the renderer's error types
+- **state**: **OPEN** (triage T-1, 2026-09-28). Unchanged: 59 `err={err:?}` / `err={:?}` sites remain in `crates/rustty-renderer/src`, and no renderer error type has the `error.<Name>` `Display` (the pattern exists in `rustty-config::zig_error`, `rustty-cli`, `web_canvas.rs`). Left: the scope written below. Effort M, no long run; observable only in diagnostic text (R1), no state or rendering difference. Was: **OPEN**, scheduled as its own task. Scope: give the renderer's error types
   (`opengl::opengl_impl::Error`, `opengl::gl::errors::Error`, `metal::*`, the shaper and
   collection errors that reach a log site) the `error.{name}` `Display` impl, switch the
   sites to `{err}`, **and decide the non-error aggregates named under root cause above**
@@ -690,7 +690,7 @@ found, and current state.
   reconciliation `G-LOGFILE` performs catches this variant, which is a second argument for
   the gate being per-file rather than per-row. Any future sweep of this class must count
   set-difference against the union of a file's ranges, not against their minimum.
-- **state**: **OPEN.** The gate and the corrected baseline are landed; the 183-site debt is
+- **state**: **CLOSED** (triage T-1, 2026-09-28): the debt is worked down. The S-1 log-gate work (tail-s1, tail-s1b `00e68940`, S-1c `f5ee0e13`, S-1d `ca4b8495`; merged `588f98fc`) took G-LOGFILE's allowances from 131 units over 50 files to 3 over 2, and the per-file deficits named here (`embedded.zig`, `application.zig`, `locale.zig`, `cf_release_thread.zig`) are all 0 (`check_log_reconcile.py --report`, 2026-09-28). The 3 remaining units are N314's test-only / never-compiled sites. Was: **OPEN.** The gate and the corrected baseline are landed; the 183-site debt is
   not. Next step is a per-file adjudication pass in deficit order — `embedded.zig` (54, all
   54 reference calls survive only as R1 comments) first, then `application.zig` (15),
   `locale.zig` (14) and `cf_release_thread.zig` (9) — tightening the portmap allowance in
@@ -729,7 +729,7 @@ found, and current state.
   comment currently only asserts in prose.
 - **how found**: task 14gate, while enumerating `rustty-os` and `rustty-core` emission
   sites for the G-LOGFILE portmap.
-- **state**: **OPEN.** Not fixed here — this task is a gate, and adding assertions to two
+- **state**: **OPEN** (triage T-1, 2026-09-28). Unchanged: `crates/rustty-os/src/cf_release_thread.rs:305` and `crates/rustty-core/src/renderer_seam.rs:1690` still elide `self_.?` with a "non-null by construction" comment (the render callback's null arm was fixed separately and is tested, `renderer_seam.rs:2961`). Left: an R7 checked assertion at both wakeup callbacks plus a null-userdata test each. Effort S, no long run; internal soundness only (unreachable today, no observable parity effect). Was: **OPEN.** Not fixed here — this task is a gate, and adding assertions to two
   callbacks is a code change outside its scope.
 ## N14 — the GTK subtree writes 244 diagnostics straight to stderr, bypassing the log facade entirely
 
@@ -816,7 +816,7 @@ found, and current state.
   in opposite directions. G-LOGFILE counts a logFn-shaped `eprintln!` as an emission, so
   before this column a stage could have closed `application.zig`'s 15-site deficit by adding
   fifteen more direct prints and the gate would have reported an improvement.
-- **state**: **OPEN.** Scope: route the GTK subtree through `rustty_core::logging::log_with`
+- **state**: **OPEN, narrowed** (triage T-1, 2026-09-28). The GTK class files now log through the facade (14d-3 `83ecca85` and later; `class/application.rs` has no bypass cap), and G-LOGFILE measures **51** facade-bypassing prints, down from 276, all capped: `rustty-vt` search 25 (`search/thread.rs` 16, `terminal.rs` 5, `screen.rs` 4), `font/sprite/face.rs` 5, GTK 17 (`post_fork.rs` 9, `imgui_widget.rs` 6, `inspector_widget.rs` 1, `cgroup.rs` 1), `tripwire.rs` 1 (`rustty-util` has no `log`), `xtask` 1 and `build.rs` 1 (no log backend), and `glyf_rasterize_png_test.rs` 1 (test-only). Left: route the vt/font/GTK sites (47) through `log::` (all three crates already depend on `log`; `post_fork.rs` runs in the parent, so the async-signal restriction does not apply) and tighten each `bypass_cap`; decide the four structural ones (tripwire, xtask, build script, test file) by a recorded reason. Effort M, no long run (GTK parts need a Linux build on `rvm`); observable only in log routing (an embedder that turns stderr logging off, and macOS unified logging, still see or miss these lines), no state difference. Was: **OPEN.** Scope: route the GTK subtree through `rustty_core::logging::log_with`
   (or add `log` to `rustty-apprt` and use `log::warn!(target: …)` as the rest of the
   workspace does), preserving each message verbatim, in the same pass that restores the
   sites N12 counts as missing. The count-based half of the gate is neutral to the fix (both
@@ -915,7 +915,7 @@ found, and current state.
   independent checks that confirmed the other 107 failed there. One site each; accepted
   because the stem match is unambiguous, flagged because it is the weakest evidence in the
   file.
-- **state**: **OPEN.** The instrument is fixed and the debt is declared. Working it down is a
+- **state**: **CLOSED** (triage T-1, 2026-09-28): the declared debt is worked down. Same evidence as N12: after the S-1 merge `588f98fc` the gate reports 161 of 164 log-bearing reference files reconciled (+3 excluded, within the budget), 99% site coverage, and allowances 3 over 2 files (N314); `termio/Exec.zig`, `apprt/embedded.zig` and `termio/stream_handler.zig` are at deficit 0 (`check_log_reconcile.py --report`, 2026-09-28). Was: **OPEN.** The instrument is fixed and the debt is declared. Working it down is a
   per-file adjudication pass in deficit order, starting with `termio/Exec.zig` (58),
   `apprt/embedded.zig` (54) and `termio/stream_handler.zig` (41).
 
@@ -957,7 +957,7 @@ found, and current state.
   real error path — most plausibly `environ_map()`, were the environ capture made lazy and
   fallible — the corresponding `log.warn` becomes restorable and this entry closes with
   it. A PORT NOTE at each of the three sites says so.
-- **state**: **OPEN** as a tracked non-defect. `src/config/Config.zig`'s G-LOGFILE
+- **state**: **STANDING (not a defect)** (triage T-1, 2026-09-28): the three sites are declared `infallible-call` rows in `LOG-ABSENT-SITES.tsv` (`Config.zig` 4563, 5396, 5400; task S-1c `f5ee0e13`), the gate's closed-set kind for a reference arm whose port call cannot fail, and `Config.zig`'s allowance is now 0 (26 of 29, the 3 subtracted). The entry closes by itself only if one of the three operations becomes fallible. Was: **OPEN** as a tracked non-defect. `src/config/Config.zig`'s G-LOGFILE
   allowance of 3 is these three sites and nothing else; if that number ever exceeds 3,
   something else has been dropped.
 
@@ -1146,7 +1146,7 @@ found, and current state.
   introduce the INVERSE DEFECT (an emission the reference does not make), and the class is
   invisible to every gate the plan has.
 - **kind**: fidelity / stale-comment
-- **state**: **OPEN** as a class. The three instances found are each annotated at their code
+- **state**: **STANDING (not a defect, machine-checked)** (triage T-1, 2026-09-28): G-LOGFILE's stale-comment arm is HARD in `ci.sh`, and every stranded comment it finds (19 today) is declared in `LOG-TEXT-DIVERGENCES.tsv` or the gate is RED. Per-row upstream-commit tracing stays undone and is not a parity gap. **One residual found by this triage, not a class item:** the port's OSC 7 `UriHostTooLong` arm (`crates/rustty-termio/src/stream_handler.rs:2328`) is not dead. Zig 0.16's `std.Uri.parse` does not validate the host, and `getHost` maps `NoSpaceLeft` to `unreachable`; MEASURED 2026-09-28 with Zig 0.16.0 (`std.Uri.parse("file://" ++ 300 x "a" ++ "%41/tmp")` then `getHost`: `panic: attempt to unwrap error: NoSpaceLeft`). Ghostty's `os/uri.parse` calls `std.Uri.parse` first (`src/os/uri.zig:22`), so an OSC 7 with a long percent-encoded host looks like a program-triggerable panic in safe builds (UB in ReleaseFast). The Ghostty wrapper path itself was NOT run. The port returns silently there, which is R13-shaped handling with no UD entry, test or negative control: that needs a UD id from the controller (possibly the private-report class, like UD131). Was: **OPEN** as a class. The three instances found are each annotated at their code
   site and none of them received a live emission.
 - **how found**: task-14e-1, restoring `rustty-termio`. The task's method is "read the Zig
   comment, add the live call beneath it" — which silently manufactures a wrong emission
@@ -1274,7 +1274,7 @@ found, and current state.
   preserved comment inside a test function that the content check was still reading. It is
   implemented now, in `commented_reference_calls`, with self-test arms for both halves —
   there were none before, which is why nobody noticed.
-- **state**: **OPEN** as a standing check. All 12 present divergences are declared with
+- **state**: **STANDING (not a defect)** (triage T-1, 2026-09-28): a HARD standing check in `ci.sh` (G-LOGFILE's message-content arm). Today 13 divergences and 19 stale comments are declared (cap 29), 0 undeclared unpairable emissions; the unreachable share (976 of 1395 live emissions checkable, 69%) is a measured coverage limit printed on every run, not a defect. N22's denominator note is settled (dead sites subtracted per site, `a2061c15`). Was: **OPEN** as a standing check. All 12 present divergences are declared with
   reasons; what is outstanding is the 31% of emissions the pass cannot reach, concentrated
   as described above, plus the note under N22 that the 1415 reference-site denominator is
   itself 8 too high.
@@ -1315,7 +1315,7 @@ The port is consistent with this reading already: `coretext.rs` and `harfbuzz.rs
 Making it live would additionally need `unicode.table.get(cp).grapheme_boundary_class`, which
 `rustty-unicode` does not carry (checked: no `grapheme_boundary_class` anywhere in that crate).
 
-**state**: OPEN as a measurement caveat. No port change is owed.
+**state**: **CLOSED** (triage T-1, 2026-09-28): as the heading says, `a2061c15` (14gate round 8) subtracts the eight dead `debugPositions` sites per site; they are `LOG-DEAD-SITES.tsv` `unreachable-private` rows (coretext.zig 775/793/806/820, harfbuzz.zig 379/396/409/421), and both files report deficit 0. Was: OPEN as a measurement caveat. No port change is owed.
 
 **upstream record**: the dead helpers themselves are `UPSTREAM-DEFECTS.md` UD33 (task R13-R).
 
@@ -1405,7 +1405,7 @@ if the why is another row, name that row in the `owner` cell.** This is the near
 the defect the 14e-1 review caught (a waiver contradicted by an open `missing-error-path` row);
 here the ledger does not contradict the waiver, it *dates* it.
 
-**state**: OPEN as a dependency. Discharged by whoever closes `S94-F1`, in the same change.
+**state**: **CLOSED** (triage T-1, 2026-09-28): discharged by task T-F in the change that closed `S94-F1` (`c539d380`), as the DISCHARGED paragraph below records; the `wakeup.notify` arm is restored and the remaining `toOwnedSlice` waiver now rests on a language property. Was: OPEN as a dependency. Discharged by whoever closes `S94-F1`, in the same change.
 
 **DISCHARGED (task T-F, 2026-09-23, in the change that closes `S94-F1`).** The shaper now runs
 the real `CFReleaseThread`. The `wakeup.notify` arm (`:291`) came back and is restored, and
@@ -1450,7 +1450,7 @@ the other four in the table. The table row above is kept as the record of what w
 - **how found**: task 14gate round 6, as a side effect of implementing test-span exclusion;
   surfaced as a finding in round 8 at the coordinator's instruction, because it had been left
   visible only as a raised number.
-- **state**: **OPEN.**
+- **state**: **CLOSED** (triage T-1, 2026-09-28): task tail-s1b (`00e68940`) showed the reference's own sites are test-only (`sprite/Face.zig` :297/:382/:400 are in the private test helper `testDiffAtlas`; every `glyf_rasterize_png_test.zig` site is in a test), so there is no production diagnostic to move. `sprite/Face.zig` is 1/1 production site live and both allowances are 0. The 5 + 1 direct prints left in those test paths are N14's bypass caps, not a deficit. Was: **OPEN.**
 
 ## N26 — the `checkGhosttyHEnum` tautology is four crates wide, not one file
 
@@ -1520,7 +1520,7 @@ the other four in the table. The table row above is kept as the record of what w
   `check_rustty_vt_headers.sh` and `check-vt-struct-layouts.mjs` compile the real headers;
   `check_closed_enum_abi.sh` enforces a structural rule over Rust source and has no
   "expected" side to synthesise.
-- **state**: **OPEN.**
+- **state**: **OPEN** (triage T-1, 2026-09-28). Unchanged: `.port/tools/check-vt-enum-discriminants.mjs` still pairs positionally and never compares names. Left: derive the expected header enumerator name per Rust variant (a per-enum prefix beside `PREFIX_OK`), fail on a name mismatch, and add a self-test arm that transposes two implicit-value enumerators in a fixture header. Effort S, no long run; internal gate quality only. Was: **OPEN.**
 
 ## N28 — two log-sink tests could fail SPURIOUSLY: they asserted over every OTHER test's diagnostics
 
@@ -1667,7 +1667,7 @@ the other four in the table. The table row above is kept as the record of what w
   `decode_payload_body`'s two call sites, and raise the transactionality test's
   `min_allocations` floor with a fixture whose pages carry styles. 26 call sites, 24 of
   them in `grid.rs`'s own tests.
-- **state**: **OPEN**, tracked by **S204-F1** (re-opened 2026-09-11). Not attempted by task 16.
+- **state**: **CLOSED** (triage T-1, 2026-09-28): fixed with `S204-F1` by task T-A (`0bc065f8`; `S204-F1` CLOSED in `LEDGER.tsv`), as the update below records. Was: **OPEN**, tracked by **S204-F1** (re-opened 2026-09-11). Not attempted by task 16.
 - **update (batch T-A)**: FIXED with S204-F1. `Remap::init` returns `Result` through
   `try_reserve_exact` behind a `SnapshotFp::Alloc` check, `decode_payload_body` returns
   `OutOfMemory` for either remap, and the transactionality sweep has a styled fixture and
@@ -1718,7 +1718,7 @@ the other four in the table. The table row above is kept as the record of what w
     instrument on this plan that was trusted without such an arm turned out to be wrong.
 - **NOT fixed by task 16**: it is a gate (R5), and a gate change needs its own argument and
   self-test arms rather than a drive-by patch from the task it inconvenienced.
-- **state**: **OPEN**.
+- **state**: **OPEN** (triage T-1, 2026-09-28). Unchanged: `.port/tools/miri-run.sh:23` still uses the fixed `/tmp/mirirun.$CRATE` it deletes at startup, and `:62` still classifies UB on `Undefined Behavior|memory leaked|error: aborting`. (`.port/tools/miri-sweep/driver.sh` classifies on the banner, but has no BUILD bucket or self-test.) Left: the four-part fix written above. Effort S, no long run; internal tooling only. Was: **OPEN**.
 
 ---
 
@@ -1757,7 +1757,7 @@ equivalent — a Rust signature naming a missing type does not compile — so "t
 and we don't" is not automatically a defect. Check that the reference's own version would
 compile if anything called it.
 
-**state**: OPEN as a watch item. Discharged if upstream gives `updateConfigEvent` a caller or a
+**state**: **STANDING (watch item, not a defect)** (triage T-1, 2026-09-28): nothing exists at the pin to port it against (`ApprtWindow.DerivedConfig` is absent and nothing calls `updateConfigEvent`); recorded upstream as UD29 and under `PROCEDURE.md`'s carve-out (ruled 2026-09-09). Reopen only if a later pin gives it a caller. Was: OPEN as a watch item. Discharged if upstream gives `updateConfigEvent` a caller or a
 real `DerivedConfig`; nothing to do until then.
 
 **upstream record**: `UPSTREAM-DEFECTS.md` UD29 (task R13-R).
@@ -1955,7 +1955,7 @@ in that header were re-counted and are correct.
 `S208-F3` on a prose fix must not be read as retiring the divergence — which is precisely the
 failure mode this file exists to prevent.
 
-**state**: OPEN. Needs a decision on the `oniguruma` feature default, and — if it stays OFF — a
+**state**: **STANDING (not a defect: the premise is refuted at the pin)** (triage T-1, 2026-09-28): the reference does NOT compile `oni` unconditionally. `src/terminal/build_options.zig:296` sets `tmux_control_mode = oniguruma` and `src/terminal/main.zig:30` compiles `tmux` only under it; the app's `terminalOptions` sets `.oniguruma = true` (`src/build/Config.zig:714`) and lib-vt sets it false (`src/build/GhosttyZig.zig:72`). The port has the same split: `rustty-vt`'s feature is default-off (the lib-vt build) and `rustty-core` turns it on (`crates/rustty-core/Cargo.toml:69`), so the app has all eight arms live, and G-ONIG compiles and tests the feature lane in `ci.sh`. No decision is owed. Was: OPEN. Needs a decision on the `oniguruma` feature default, and — if it stays OFF — a
 recorded justification for shipping with eight notification arms and `%output` dead, sitting
 next to the gate that lints the lane nobody compiles by default.
 
@@ -1983,7 +1983,7 @@ progress) is the obvious suspect. Deliberately NOT diagnosed here: naming the as
 the failure reproduced under load, and guessing at it in this file is how a finding becomes
 folklore.
 
-**state**: OPEN. Needs (1) the failure reproduced under deliberate load and the failing
+**state**: **OPEN** (triage T-1, 2026-09-28). No later record reproduces or fixes it; `search/thread.rs` changed since (S7-6, S-1d) without addressing it. Left: reproduce under deliberate load, name the failing assertion, decide test versus handshake, and measure repetitions under load. Effort M, and it needs a long run (repetitions under load), which the wrap-up defers; internal test reliability unless the handshake itself is wrong (then observable as a stalled search). Was: OPEN. Needs (1) the failure reproduced under deliberate load and the failing
 assertion named, (2) a decision on whether it is the test or the handshake that is wrong, and
 (3) if the suite is to be trusted under contention, a repetition measurement that is taken
 under load rather than on an idle host.
@@ -2909,7 +2909,7 @@ too (measured 2026-09-22 at `551e7a30` on `rvm`), so N88 did not cause it. The d
 correct; the test needs its boundary budget found per target (the smallest budget whose layout exceeds
 `MAX_PAGE_SIZE`) instead of a constant.
 
-**state**: CLOSED by task R13-L3, on the R13-L2 review's Linux run (see the second update).
+**state**: **CLOSED** (triage T-1, 2026-09-28): confirmed; the R13-L3 update below is the evidence (Linux aarch64 run on `rvm`, 3,089 passed, boundary found at 1,382,759,425 = the reference's Linux value, mutation RED). The "state stays OPEN" sentence in the R13-L2 update is historical. Was: CLOSED by task R13-L3, on the R13-L2 review's Linux run (see the second update).
 
 Update (task R13-L2): task R13-W2 replaced the constant with a binary search over the platform's own
 `Page::layout` that asserts it reaches exactly 2^32, so the test no longer depends on the page size; its
@@ -3470,7 +3470,7 @@ reference error is fixed: `Error parsing args: {}` (via `zig_error::args_error`,
 **proposed fix**: map each port error type to the reference's error names (as `zig_error::load_error`
 does for `Config.loadFile`), and print through that.
 
-**state**: OPEN.
+**state**: **OPEN** (triage T-1, 2026-09-28). Unchanged: the five `write!(stderr, "Unable to …: {err:?}")` sites in `crates/rustty-cli/src/show_face.rs` (:369, :426, :464, :581, :598). Left: map each port error to the reference's error names; `Unable to load config` can reuse `rustty_config::zig_error::load_error` (moved there by T-E/S-15), the grid-set, grid, face and face-name sites need new mappings per backend. Effort S-M, no long run; observable (user-visible `+show-face` stderr text on failure paths, R1). Was: OPEN.
 
 ## N122 — `+new-tab` accepted a surface id with a leading `+`
 
@@ -3571,7 +3571,7 @@ G_TYPE_STRING pspecs (set/get through `g_value_set_string`/`g_value_get_string`)
 through `raw_string_bytes`, and pass GTK setters the raw C string, then close this finding site by site with
 a non-UTF-8 test per reader.
 
-**state**: OPEN (R1 candidate; S57-F3 WAIVED to this entry).
+**state**: **OPEN** (triage T-1, 2026-09-28). Unchanged (S57-F3 WAIVED to it). Left: the remedy written above, raw-byte title properties behind hand-written `G_TYPE_STRING` pspecs across `tab.rs`, `window.rs`, `surface.rs` and `application.rs`, every Rust reader through `raw_string_bytes`, one non-UTF-8 test per reader. Effort L, no long run but needs Linux builds and tests on `rvm`; observable only for a non-UTF-8 title (both draw a replacement glyph, differently; other consumers unmeasured), R1. Was: OPEN (R1 candidate; S57-F3 WAIVED to this entry).
 
 
 ## N140 — the XDG helpers collapse `homedir.home`'s `error.BufferTooSmall` into `NoHomeDir`
@@ -3776,7 +3776,7 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   a different directory. Its one caller is `crates/rustty-cli/src/ssh.rs` (the ssh control path).
 - **proposed fix**: return `Vec<u8>` and pass it to the ssh `Command` as an `OsStr` (touches
   `rustty-cli`, area `src/cli`).
-- **state**: OPEN.
+- **state**: **OPEN** (triage T-1, 2026-09-28). Unchanged: `randomTmpPath` still returns `String` via `String::from_utf8_lossy` (`crates/rustty-os/src/file.rs:260-270`). Left: return `Vec<u8>`/`OsString` and pass it to the ssh `Command` as an `OsStr`, with a non-UTF-8 `TMPDIR` test. Effort S, no long run; observable only with a non-UTF-8 `TMPDIR` (the ssh control path names a different directory), R1. Was: OPEN.
 
 ## N171 — `flatpakExit` can now receive the timer error its `catch unreachable` assumes away
 
@@ -4718,7 +4718,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   global). `loadCoreTextFreetype` has to be ported live. A CI lane (or local run) must build and
   test `coretext_freetype` on macOS, as the oracle does. This is a multi-crate port, not a
   gate-tail item.
-- **state**: OPEN. `font` stays `PORT STATUS: in progress` until it closes.
+- **state**: **CLOSED** (triage T-1, 2026-09-28): closed by task tail-s14/tail-s14b (merged `1d886967`; `font` PORT STATUS done in `6abf60df`), as the "closed by" record below says. The only remainder is N286's `fontconfig_freetype` on Windows. Was: OPEN. `font` stays `PORT STATUS: in progress` until it closes.
 - **closed by** (task tail-s14, 2026-09-24): CLOSED.
   - **option**: `-Dfont-backend` is `rustty-build-config`'s `font-backend-{freetype,
     freetype-windows,fontconfig-freetype,coretext,coretext-freetype,coretext-harfbuzz,
@@ -5201,7 +5201,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   reference `fontconfig` / `fontconfig codepoint` tests; its `freetype_windows` arm (a `SYSTEMROOT`
   fixture whose `root\Fonts` holds Arial, Arial Unicode and Noto Sans Chakma) passes 119 (+3),
   including the reference `windows` test. Clippy `-D warnings` is clean for both.
-- **state**: OPEN only for `fontconfig_freetype` on Windows; everything else in this entry CLOSED.
+- **state**: **OPEN** (triage T-1, 2026-09-28), for `fontconfig_freetype` on Windows only. Left: first establish whether the reference at the pin actually builds and runs `-Dfont-backend=fontconfig_freetype` on Windows (its CI does not; scope is parity only), and if it does, build `fontconfig-sys` on Windows, un-refuse the combination in `crates/rustty-build-config/build.rs:142`, and run the font-shaper tests there. Effort M, needs the Windows VM (`rwin`), not a long run; observable only in a non-default build configuration. Was: OPEN only for `fontconfig_freetype` on Windows; everything else in this entry CLOSED.
 
 ## N287 — the `freetype_windows` `DeferredFace` name accessors did not type-check
 
@@ -5503,7 +5503,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `ApprtError` would otherwise lose. UNVERIFIED either way (GTK code; not traced on Linux).
 - **gate**: declared `open-finding` in `LOG-PORT-ONLY.tsv` (delete the rows in the commit that
   resolves this).
-- **state**: OPEN.
+- **state**: **OPEN** (triage T-1, 2026-09-28). Still present (`application.rs:664`, `:4979`, `:5006`) and answerable now: the reference logs once at the caller (`log.warn("error reloading config: {}", .{err})`, `application.zig:1602-1606`, which the port also has at `application.rs:1164`, `:1828`, `:2421`), so the port logs twice, and the caller's line prints the valueless `ApprtError` where the reference prints the error name. Left: carry the error (or its Zig name) through `ApprtError`, drop the three inner logs, delete the three `open-finding` rows in `LOG-PORT-ONLY.tsv`. Effort S-M, no long run, GTK so it needs a Linux build on `rvm`; observable in log text (one extra line, one valueless one), R1. Was: OPEN.
 
 ## N312 — `load_custom_css` reports a read failure as an open failure and keeps going
 
@@ -5581,7 +5581,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   over the tree. The port's `main` prints its progress with a plain `eprintln!` and cannot port the
   uucode comparison (R3; the external parity harness does that).
 - **gate**: fixture.zig allowance 1, grapheme.zig allowance 2, each naming this finding.
-- **state**: OPEN.
+- **state**: **STANDING (measurement caveat, not a defect)** (triage T-1, 2026-09-28): the three sites are hand-verified as test-only (`fixture.zig:227`) or never compiled (`grapheme.zig:221`, `:233`), so the reference emits none of them in a product build; they are G-LOGFILE's only remaining allowance units (fixture.zig 1, grapheme.zig 2), each naming this entry. Making the gate prove it (receiver-aware resolution) is optional gate precision, no port change is owed. Was: OPEN.
 
 ## N315 — S7-5 routing: the render state's contents, through the allocator it is updated with
 
@@ -5881,7 +5881,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   heap handle; its `nodes` list, the pin map's `alloc`, and the formatter's other lists are unchanged (the
   file-wide convention: Rust-heap growth that aborts on OOM). The `alloc` fields of `PinMap` are not asserted
   against the points' allocator for that reason.
-- **state**: CLOSED for the search. The formatter residual is OPEN, owned by S7-8
+- **state**: **CLOSED** (triage T-1, 2026-09-28): the search part closed by S7-6, the formatter residual by task S7-8 (N330, state CLOSED; `5bf7e3e5`). Was: CLOSED for the search. The formatter residual is OPEN, owned by S7-8
   (`DEFERRALS.md` F-008/W12-01 Tier 2 item 5). The window's own `PointMap` construction
   debug-asserts that the list is on the window's allocator (S7-6b). The formatter residual is CLOSED by task
   S7-8 (N330).
@@ -5903,7 +5903,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   raw-parts round trip; (4) `AllocatingWriter::write`'s raw copy into spare capacity; (5) `append_n_times`'s raw
   fill. Harness: `.port/phase-2/mirihar-s7-6-search` (isolated, non-FFI, reproduces 1-5 with the same borrow
   shapes; for the controller's Miri lane under `-Zmiri-stacked-borrows` and `-Zmiri-tree-borrows`).
-- **state**: OPEN for the controller's Miri lane (targets listed in the S7-6 report).
+- **state**: **OPEN (verification only)** (triage T-1, 2026-09-28). Partial evidence since: task C-1's full `rustty-vt` G6 Miri lane (default Stacked Borrows, `26453ffb`, 2026-09-27, a tree that contains S7-6 `67896ff8`) is green, lib 3015 passed. Not done: the isolated harness `.port/phase-2/mirihar-s7-6-search` has no recorded run under `-Zmiri-stacked-borrows` or `-Zmiri-tree-borrows`. Left: run it under both. Effort S (an isolated non-FFI harness, minutes, not a long run, but it is Miri, so the controller's lane); internal soundness, no observable parity effect. Was: OPEN for the controller's Miri lane (targets listed in the S7-6 report).
 
 ## N330 — the formatter pin map grows through the pin map's allocator (the N328 residual)
 
@@ -7176,7 +7176,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 
 ## N379 — the fuzz package, `.github` script records and other residuals
 
-- **id**: N379. P-1. **severity**: low. **kind**: records. **state**: OPEN (records and one gate).
+- **id**: N379. P-1. **severity**: low. **kind**: records. **state**: **OPEN** (triage T-1, 2026-09-28). Left, unchanged: NON_PORTS records for the fuzz package's superseded pieces (`build.zig`/`build.zig.zon`, `replay-crashes.nu`, `corpus/sanitize-filenames.sh`, `.afl-tmin-temp-37266`, `pkg/afl++`, the package's `AGENTS.md`/`README.md`); the stale headers of `.github/scripts/rustty-tip` (still says no Nix flake/nushell) and G-XCF (`check_xcframework.sh:5`); and `run_fuzz_smoke.sh` seeding `cargo fuzz run` from the reference's `corpus/<name>-cmin` as `run-<name>` does. The P-1b split and the SC2155 lint are done (`9fd17d93`). Effort S, no long run; records and tooling only, not observable. Was: OPEN (records and one gate).
 - `test/fuzz-libghostty/` -> `crates/rustty-vt/fuzz` (cargo-fuzz) is recorded only in
   `.port/phase-0/harness/FUZZ-INVENTORY.md`; `build.zig`/`build.zig.zon` -> `fuzz/Cargo.toml`,
   `replay-crashes.nu` and `corpus/sanitize-filenames.sh` (superseded by cargo-fuzz), the stray
