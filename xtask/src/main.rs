@@ -150,7 +150,8 @@ SUBCOMMANDS:
                        then run it with <APP>_RESOURCES_DIR=<prefix>/share/<app> (prefix
                        default zig-out, where `resources` installs) and the app args.
                        macOS: macos/run-rustty.sh with XCFRAMEWORK_TARGET=native (the
-                       native-only app build, opened). Elsewhere: nothing, as upstream.
+                       native-only app build, opened), and CONFIGURATION=ReleaseLocal for
+                       a non-dev profile. Elsewhere: nothing, as upstream.
     release-info [--version <vX.Y.Z>] [--ref <refs/tags/vX.Y.Z>] [--no-workspace-check]
                        Emit the release metadata (version, build, commit, commit_long)
                        the .github/workflows/release-{tag,tip}.yml pipelines consume,
@@ -1290,11 +1291,6 @@ fn update_translations_cmd(args: &mut impl Iterator<Item = String>) -> Result<Pa
 mod tests {
     use super::*;
 
-    /// `GhosttyResources.zig:268-280`: Debug and ReleaseSafe install the
-    /// `-debug` app id and the ` (Debug)` name, ReleaseFast and ReleaseSmall
-    /// the plain ones. Before P-1 the app id ignored `--optimize`, so every
-    /// release packaging run that passed `--optimize ReleaseFast` (and every
-    /// Debug run that did not pass `--debug`) disagreed with the reference.
     /// `-Di18n` for xtask steps (N421): `--i18n` beats `RUSTTY_I18N`, which
     /// beats the per-target default (`Config.zig:263-271`); a non-bool value is
     /// refused.
@@ -1348,6 +1344,11 @@ mod tests {
         assert!(err.contains("--i18n requires"), "{err}");
     }
 
+    /// `GhosttyResources.zig:268-280`: Debug and ReleaseSafe install the
+    /// `-debug` app id and the ` (Debug)` name, ReleaseFast and ReleaseSmall
+    /// the plain ones. Before P-1 the app id ignored `--optimize`, so every
+    /// release packaging run that passed `--optimize ReleaseFast` (and every
+    /// Debug run that did not pass `--debug`) disagreed with the reference.
     #[test]
     fn linux_app_debug_id_follows_the_optimize_mode() {
         use res_terminfo::Optimize;

@@ -58,7 +58,20 @@ pub(crate) struct Opts {
     pub prefix: Option<PathBuf>,
     /// Everything after `--` (`b.args`).
     pub args: Vec<String>,
+    /// `--help` / `-h`: print [`USAGE`] and do nothing else.
+    pub help: bool,
 }
+
+/// `xtask run --help`.
+pub(crate) const USAGE: &str = "\
+USAGE: cargo run -p xtask -- run [--release | --profile <p>] [--prefix <dir>] [-- <app args>]
+
+Port of `zig build run`. Linux/FreeBSD (GTK): cargo build -p rustty, then run
+it with <APP>_RESOURCES_DIR=<prefix>/share/<app> (prefix default zig-out, where
+`resources` installs) and the app args. macOS: macos/run-rustty.sh with
+XCFRAMEWORK_TARGET=native, and CONFIGURATION=ReleaseLocal for a non-dev
+profile. Elsewhere: nothing, as upstream.
+";
 
 pub(crate) fn parse(args: &mut impl Iterator<Item = String>) -> Result<Opts, String> {
     let mut o = Opts::default();
@@ -67,6 +80,7 @@ pub(crate) fn parse(args: &mut impl Iterator<Item = String>) -> Result<Opts, Str
             "--release" => o.profile = Some("release".into()),
             "--profile" => o.profile = Some(args.next().ok_or("--profile requires a value")?),
             "--prefix" => o.prefix = Some(args.next().ok_or("--prefix requires a value")?.into()),
+            "--help" | "-h" => o.help = true,
             "--" => {
                 o.args = args.collect();
                 break;
@@ -104,11 +118,20 @@ pub(crate) fn plan(target_os: &str, app: &str, root: &Path, opts: Opts) -> Plan 
             }
         }
         // `.none` + Darwin + (xcframework or macOS app): the app arm.
-        "macos" => Plan::MacApp {
-            script: root.join("macos").join("run-rustty.sh"),
-            env: vec![("XCFRAMEWORK_TARGET".into(), "native".into())],
-            args: opts.args,
-        },
+        "macos" => {
+            let mut env = vec![("XCFRAMEWORK_TARGET".into(), "native".into())];
+            // `GhosttyXcodebuild.zig:29-35`: the Xcode configuration follows
+            // the optimize mode, `.Debug => "Debug"` and every release mode
+            // `=> "ReleaseLocal"`. `run-rustty.sh` defaults to Debug.
+            if !matches!(opts.profile.as_deref(), None | Some("dev")) {
+                env.push(("CONFIGURATION".into(), "ReleaseLocal".into()));
+            }
+            Plan::MacApp {
+                script: root.join("macos").join("run-rustty.sh"),
+                env,
+                args: opts.args,
+            }
+        }
         _ => Plan::Nothing,
     }
 }
@@ -133,6 +156,10 @@ pub(crate) fn exec(
 
 pub fn run(args: &mut impl Iterator<Item = String>) -> Result<ExitCode, String> {
     let opts = parse(args)?;
+    if opts.help {
+        print!("{USAGE}");
+        return Ok(ExitCode::SUCCESS);
+    }
     let root = crate::workspace_root();
     match plan(std::env::consts::OS, crate::APP, &root, opts) {
         Plan::Exe {
@@ -246,6 +273,28 @@ mod tests {
                 args: vec!["-e".into(), "top".into()],
             }
         );
+        // `GhosttyXcodebuild.zig:29-35`: every release mode builds the
+        // `ReleaseLocal` configuration; Debug keeps the script's default.
+        let release_local = vec![
+            ("XCFRAMEWORK_TARGET".to_string(), "native".to_string()),
+            ("CONFIGURATION".to_string(), "ReleaseLocal".to_string()),
+        ];
+        for flags in [
+            &["--release"][..],
+            &["--profile", "release"][..],
+            &["--profile", "release-safe"][..],
+            &["--profile", "release-fast"][..],
+        ] {
+            let Plan::MacApp { env, .. } = plan("macos", "rustty", root, opts(flags)) else {
+                panic!("the macOS arm");
+            };
+            assert_eq!(env, release_local, "{flags:?}");
+        }
+        let Plan::MacApp { env, .. } = plan("macos", "rustty", root, opts(&["--profile", "dev"]))
+        else {
+            panic!("the macOS arm");
+        };
+        assert_eq!(env, [("XCFRAMEWORK_TARGET".into(), "native".into())]);
     }
 
     /// No app runtime and not Darwin: the reference's run step is empty.
@@ -263,6 +312,13 @@ mod tests {
         assert!(parse(&mut ["--prefix".to_string()].into_iter()).is_err());
         assert_eq!(opts(&["--", "--release"]).args, ["--release"]);
         assert_eq!(opts(&["--", "--release"]).profile, None);
+        // `--help` is a run flag; after `--` it is the app's.
+        assert!(opts(&["--help"]).help);
+        assert!(opts(&["-h"]).help);
+        assert!(!opts(&[]).help);
+        let app = opts(&["--", "--help"]);
+        assert!(!app.help);
+        assert_eq!(app.args, ["--help"]);
     }
 
     /// The executor really hands the variable and the arguments to the child
