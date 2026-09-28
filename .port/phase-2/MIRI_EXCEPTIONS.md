@@ -2670,3 +2670,56 @@ Not excepted, FIXED (NEW-FINDINGS N392): the `tests/image_tier.rs` binary did no
 the lane stopped there and the binary's other 19 tests never ran under Miri. Once it compiled,
 `img_draw_expect` took `&mut Screen` alongside a `Window` holding a raw pointer to the same screen,
 a Stacked Borrows violation in the test helper; it now reads back through the window's pointer.
+
+### `rustty-vt-c` (lane: 540 passed, 17 ignored)
+
+Isolation / foreign-call exceptions (same 4-criterion basis as above):
+
+| test | what Miri cannot do |
+|---|---|
+| `tests/header_scrollback_limit_docs.rs` `scrollback_max_bytes_doc_matches_oracle`, `scrollback_max_lines_doc_matches_oracle` | `open` is forbidden under isolation (they read the shipped header) |
+| `panic::tests::tiny_panic_prints_only_the_message_and_aborts` | `current_exe` (`_NSGetExecutablePath`) is forbidden under isolation (re-runs the test binary as a child) |
+| `sys::tests::log_stderr_writes_non_utf8_scope_and_message_bytes_verbatim` | as above |
+| `types::manifest_header_sync_tests::manifest_enums_match_the_shipped_headers` | `opendir` is forbidden under isolation (reads the shipped headers) |
+
+**Slow exceptions (criterion 1 is the budget, not impossibility).** Seven S7/S7-5/S7-6/reference
+tests. In the per-test enumeration each ran past its bound under the G6 conditions (8 workers on a
+14-core host with other agents' builds, so the bound was contended); the sweep corpus was then
+profiled alone with `Instant` checkpoints under Miri: one pass is about 1,770 s of Miri time before
+its final resize, of which the `resize(600, 30)` alone is 1,632 s (natively 70 ms of a 185 ms pass),
+and the terminal sweep makes one pass per allocation the scenario performs. The causes of the other
+five were not profiled (UNVERIFIED); each writes one to three full pages of history through the
+terminal.
+
+| test | what makes it heavy |
+|---|---|
+| `terminal::tests::allocation_failure_sweep_through_the_c_api` | one sweep-corpus pass (above) per allocation, then per remap |
+| `terminal::tests::sweep_corpus_reaches_the_s7_4_families` | one sweep-corpus pass (above) |
+| `terminal::tests::compression_activity_and_incremental_scheduling` (reference test, oracle 172f15da3) | 4,000 lines of history, then an incremental compression pass |
+| `snapshot::tests::snapshot_incremental_decoder_exposes_ready_and_page_progress` | three pages of history at 215 columns, then an encode and a decode |
+| `render::tests::render_state_allocation_failure_sweep_through_the_c_api` | one render-state update per allocation of the sweep |
+| `search::tests::search_feed_and_run_report_out_of_memory_instead_of_spinning` | two pages of scrollback before the search |
+| `search::tests::search_internals_route_through_the_callers_allocator` | two pages of scrollback before the search |
+
+Criterion 2: all seven pass natively in `cargo test --workspace`, and under AddressSanitizer
+(`sanitizers.sh rustty-vt-c <the seven names> address`, run once by task C-1 on 2026-09-27: 9 tests
+ran — the filters also match two sibling sweeps — all passed, no finding). The ASan run is not
+repeated by a gate (the same standing as the PageList exceptions at the top of this file). Leaks:
+the four sweeps assert, natively, that the `FailingAllocator` got every byte back
+(`allocated_bytes == freed_bytes`, `allocations == deallocations`) for every n.
+
+Criterion 3: the same code paths are Miri-verified by lighter `rustty-vt-c` tests that pass in the
+lane: `osc::tests::osc_allocation_failure_sweep_through_the_c_api`,
+`terminal::tests::allocation_failure_sweep_through_the_allocating_writers`,
+`search::tests::search_allocation_failure_sweep_through_the_c_api`,
+`search::tests::search_shared_allocator_failure_sweep_through_the_c_api`,
+`snapshot::tests::allocation_failure_sweep_through_snapshot_decode`, the `*_route_through_*`
+allocator-routing tests of `terminal`, `render`, `search` and `snapshot`, and
+`render::tests::render_state_internals_route_through_the_callers_allocator`; the page, reflow and
+compression code underneath is `rustty-vt`'s, covered by its own G6/G6c lanes.
+
+Not excepted, FIXED: `style::tests::convert_style_with_colors` (UB, NEW-FINDINGS N393);
+`render::tests::render_row_get_set_dirty` and `render::tests::render_update` (UB in `rustty-vt`'s
+`RenderState::update`, N394); `osc::tests::osc_allocation_failure_sweep_through_the_c_api` (its
+`cfg(miri)` corpus had dropped the one capture that grows, so the remap sweep asserted nothing to
+refuse; the Miri corpus keeps a `MAX_BUF + 64` capture and the test passes in 51 s).

@@ -2282,6 +2282,10 @@ mod tests {
 
     // test "snapshot incremental decoder exposes READY and page progress"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-vt-c, parity tail C-1): intractable under Miri, three full pages of history written through the terminal, then an encode and a decode; measured past a 20-minute bound; runs natively and under ASan (see MIRI_EXCEPTIONS.md)"
+    )]
     fn snapshot_incremental_decoder_exposes_ready_and_page_progress() {
         with_test_allocator(|alloc| {
             let (new_result, source) = new_t(alloc, 215, 2);

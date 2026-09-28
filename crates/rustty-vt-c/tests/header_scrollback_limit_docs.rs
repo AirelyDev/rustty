@@ -89,6 +89,10 @@ fn assert_block(header: &str, what: &str, block: &[&str]) {
 /// The oracle's page-granularity + combined-limit paragraphs must be present
 /// on OPT_SCROLLBACK_MAX_BYTES (ghostty terminal.h:968-988).
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-vt-c, parity tail C-1): `open` is forbidden under Miri isolation (reads the shipped header); runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+)]
 fn scrollback_max_bytes_doc_matches_oracle() {
     assert_block(
         &header_text(),
@@ -124,6 +128,10 @@ fn scrollback_max_bytes_doc_matches_oracle() {
 /// repeats "works alongside the line limit configuration" verbatim in BOTH
 /// entries; the port keeps the oracle's wording rather than "correcting" it.
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-vt-c, parity tail C-1): `open` is forbidden under Miri isolation (reads the shipped header); runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+)]
 fn scrollback_max_lines_doc_matches_oracle() {
     assert_block(
         &header_text(),

@@ -4049,6 +4049,10 @@ mod manifest_header_sync_tests {
     /// Every manifest enum declares EXACTLY the enumerators the shipped header
     /// declares, with the same values.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-vt-c, parity tail C-1): `opendir` is forbidden under Miri isolation (reads the shipped headers); runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn manifest_enums_match_the_shipped_headers() {
         let src = header_text();
         let enums = manifest_enums();

@@ -169,6 +169,10 @@ mod tests {
     /// gated `install()` does nothing under test (`DEBUG_MACHINERY` holds
     /// `is_test`), so std's default message appears there.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-vt-c, parity tail C-1): `current_exe` (`_NSGetExecutablePath`) is forbidden under Miri isolation (re-runs the test binary as a child); runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn tiny_panic_prints_only_the_message_and_aborts() {
         if let Some(mode) = std::env::var_os(CHILD) {
             // Child arm: the parent asserts on this process's stderr and exit.

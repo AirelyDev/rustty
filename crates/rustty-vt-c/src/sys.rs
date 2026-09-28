@@ -1590,6 +1590,10 @@ pub(crate) mod tests {
     /// stderr it captures, so the assertion is on the real fd-2 output of the
     /// `rustty_sys_log_stderr` export, not on a helper.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-vt-c, parity tail C-1): `current_exe` (`_NSGetExecutablePath`) is forbidden under Miri isolation (re-runs the test binary as a child); runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn log_stderr_writes_non_utf8_scope_and_message_bytes_verbatim() {
         const CHILD: &str = "RUSTTY_T_H_LOG_STDERR_CHILD";
         const NAME: &str =
