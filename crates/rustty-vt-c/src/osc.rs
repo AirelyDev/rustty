@@ -857,7 +857,13 @@ mod tests {
             }
             other => panic!("{what}: unexpected result {other:?}"),
         }
-        let long = if cfg!(miri) { 64 } else { osc::MAX_BUF * 3 };
+        // Past `MAX_BUF`, the allocating capture's up-front reservation, so it
+        // grows (remap) even in the smaller Miri corpus.
+        let long = if cfg!(miri) {
+            osc::MAX_BUF + 64
+        } else {
+            osc::MAX_BUF * 3
+        };
         let mut corpus: Vec<Vec<u8>> = vec![
             b"0;a title".to_vec(),
             b"4;1;?;2;?;3;?;4;?;5;?;6;?;7;?;8;?".to_vec(),
@@ -871,8 +877,14 @@ mod tests {
         osc52.extend(std::iter::repeat_n(b'A', long));
         corpus.push(osc52);
         if cfg!(miri) {
+            // Keep the growing OSC 52 capture (`long` bytes): it is the only
+            // corpus entry whose storage grows past its reservation, i.e. the
+            // remap/resize calls the second sweep refuses (task C-1: dropping
+            // it left that sweep with nothing to refuse under Miri).
+            let osc52_long = corpus.pop().expect("the long capture is last");
             corpus.truncate(5);
             corpus.push(b"52;c;aGk=".to_vec());
+            corpus.push(osc52_long);
         }
         for input in &corpus {
             for &b in input {
