@@ -362,7 +362,8 @@ G6C_MIN_PASSED="${G6C_MIN_PASSED:-$(printf '%s\n' $G6C_FILTERS | grep -c .)}"
 # (debug-assertion integrity walks put them past G6's budget; measured
 # 1,822 s for 34 of them, one test per process, on a contended host). Libtest's
 # substring filtering of ~3,300 tests by every name also grows with the set
-# under Miri. This is the hang guard only: the lane still has to run EVERY
+# under Miri. Measured: the 119-test lane took 6272 s (C-1, 2026-09-28, on a
+# host shared with other builds). This is the hang guard only: the lane still has to run EVERY
 # derived test, pass them all, and stay UB- and leak-clean.
 G6C_BOUND_SEC="${G6C_BOUND_SEC:-10800}"
 

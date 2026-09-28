@@ -2724,7 +2724,7 @@ Not excepted, FIXED: `style::tests::convert_style_with_colors` (UB, NEW-FINDINGS
 `cfg(miri)` corpus had dropped the one capture that grows, so the remap sweep asserted nothing to
 refuse; the Miri corpus keeps a `MAX_BUF + 64` capture and the test passes in 51 s).
 
-### `rustty-vt` (lane: see the C-1 report; G6c: 119 tests)
+### `rustty-vt` (G6 lane: lib 3015 passed, 207 ignored, every integration binary and the doctests green; G6c: 119 passed in 6272 s)
 
 Found through this triage and FIXED in code, not excepted: N394 (`RenderState::update` held a shared
 row slice across `set_dirty` writes, Stacked Borrows); `page_tests.rs`'s two unaligned-buffer tests
