@@ -3720,8 +3720,46 @@ mod tests {
     /// arm and x86_64 rows follow Zig's `arm-linux-androideabi` and
     /// `x86_64-linux-android` tag names. Runs on the host, and on Android when
     /// the test binary is run there.
+    ///
+    /// Every expectation is a literal for one enumerated target, and the test
+    /// exists only on those targets, so it never compares the `ABI_*` constants
+    /// with themselves (review A-1 F4). Exactly one `EXPECTED` is defined on
+    /// each target the `cfg` admits.
+    #[cfg(any(
+        all(
+            target_os = "android",
+            any(target_arch = "aarch64", target_arch = "x86_64", target_arch = "arm")
+        ),
+        all(
+            target_os = "macos",
+            any(target_arch = "aarch64", target_arch = "x86_64")
+        ),
+        all(
+            target_os = "linux",
+            target_env = "gnu",
+            any(target_arch = "aarch64", target_arch = "x86_64")
+        ),
+        all(target_os = "windows", target_env = "msvc", target_arch = "x86_64"),
+    ))]
     #[test]
     fn manifest_abi_names_the_zig_target_tags() {
+        #[cfg(all(target_os = "android", target_arch = "aarch64"))]
+        const EXPECTED: (&str, &str, &str) = ("aarch64", "linux", "android");
+        #[cfg(all(target_os = "android", target_arch = "x86_64"))]
+        const EXPECTED: (&str, &str, &str) = ("x86_64", "linux", "android");
+        #[cfg(all(target_os = "android", target_arch = "arm"))]
+        const EXPECTED: (&str, &str, &str) = ("arm", "linux", "androideabi");
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        const EXPECTED: (&str, &str, &str) = ("aarch64", "macos", "none");
+        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+        const EXPECTED: (&str, &str, &str) = ("x86_64", "macos", "none");
+        #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "aarch64"))]
+        const EXPECTED: (&str, &str, &str) = ("aarch64", "linux", "gnu");
+        #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
+        const EXPECTED: (&str, &str, &str) = ("x86_64", "linux", "gnu");
+        #[cfg(all(target_os = "windows", target_env = "msvc", target_arch = "x86_64"))]
+        const EXPECTED: (&str, &str, &str) = ("x86_64", "windows", "msvc");
+
         let root = parsed_json();
         let abi = get(root.as_object(), "abi").as_object();
         let got = (
@@ -3729,22 +3767,7 @@ mod tests {
             get(abi, "os").as_str(),
             get(abi, "environment").as_str(),
         );
-        let expected: (&str, &str, &str) = if cfg!(target_os = "android") {
-            if cfg!(target_arch = "arm") {
-                ("arm", "linux", "androideabi")
-            } else if cfg!(target_arch = "aarch64") {
-                ("aarch64", "linux", "android")
-            } else {
-                ("x86_64", "linux", "android")
-            }
-        } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-            ("aarch64", "macos", "none")
-        } else if cfg!(all(target_os = "linux", target_env = "gnu")) {
-            (ABI_TARGET, "linux", "gnu")
-        } else {
-            (ABI_TARGET, ABI_OS, ABI_ENVIRONMENT)
-        };
-        assert_eq!(expected, got);
+        assert_eq!(EXPECTED, got);
     }
 
     // fn expectPackedArmField(arm, manifest_name, comptime T, comptime
