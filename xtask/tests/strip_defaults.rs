@@ -170,6 +170,50 @@ fn bench_profile_does_not_strip() {
     assert!(!strips_symbols(&resolve(&profiles, "bench", "strip")));
 }
 
+/// `cargo test --release` builds its test executables with the `release`
+/// profile, which strips, so the lanes that run it turn the strip off (the
+/// reference's test executable is `.strip = false`): G-REL exports the
+/// override before its first cargo step, and ci.sh's `--release` lz4 run
+/// passes it on the same command.
+#[test]
+fn release_test_lanes_run_unstripped() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let lane = std::fs::read_to_string(root.join(".port/tools/gates/check_release_lane.sh"))
+        .expect("read check_release_lane.sh");
+    let export = lane
+        .find("\nexport CARGO_PROFILE_RELEASE_STRIP=false\n")
+        .expect("G-REL exports CARGO_PROFILE_RELEASE_STRIP=false");
+    let build = lane
+        .find("run_watchdogged cargo build --release")
+        .expect("G-REL's build step");
+    let test = lane
+        .find("run_watchdogged cargo test --release")
+        .expect("G-REL's test step");
+    assert!(
+        export < build && export < test,
+        "the export must precede both steps"
+    );
+
+    let ci = std::fs::read_to_string(root.join(".port/tools/ci.sh")).expect("read ci.sh");
+    let runs: Vec<&str> = ci
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            !t.starts_with('#')
+                && !t.starts_with("echo")
+                && t.contains("cargo test")
+                && t.contains("--release")
+        })
+        .collect();
+    assert!(!runs.is_empty(), "ci.sh runs `cargo test ... --release`");
+    for l in runs {
+        assert!(
+            l.contains("CARGO_PROFILE_RELEASE_STRIP=false cargo test"),
+            "ci.sh release test run is stripped: {l}"
+        );
+    }
+}
+
 /// `-Dstrip` reaches `GhosttyExe.zig:20` and `GhosttyLib.zig:31,102` only.
 /// Everything else linked in release keeps Cargo's default (`debuginfo`), and
 /// the exe (`rustty`) and the embedding library (`rustty-apprt-c`) take the

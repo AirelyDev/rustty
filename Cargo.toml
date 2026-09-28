@@ -503,10 +503,11 @@ debug-assertions = true
 # `-Dstrip`'s ReleaseSafe default is false (N422).
 strip = false
 
-# `cargo test --release` / `cargo bench` builds its test executables with this
-# profile. The reference's test executable is never stripped (`build.zig`
-# test_exe: `.strip = false`), so `-Dstrip`'s release default does not reach
-# them (N422).
+# `cargo bench` builds its executables with this profile (`cargo test
+# --release` does not: it uses `release`, which strips; G-REL and ci.sh's
+# `--release` test run set `CARGO_PROFILE_RELEASE_STRIP=false` for that). The
+# reference's test executable is never stripped (`build.zig` test_exe:
+# `.strip = false`), so `-Dstrip`'s release default does not reach them (N422).
 [profile.bench]
 strip = false
 
