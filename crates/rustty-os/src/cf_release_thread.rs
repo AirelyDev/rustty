@@ -302,8 +302,13 @@ fn wakeupCallback(
         return xev::CallbackAction::Rearm;
     }
 
-    // const t = self_.?;  -> the reference unwraps the optional; our UD is
-    // non-null by construction (the loop userdata IS the Thread).
+    // const t = self_.?;
+    //
+    // PORT NOTE (R7, NEW-FINDINGS N13): Zig's `.?` is a checked unwrap (a safe
+    // build panics "attempt to use null value"); `rustty-xev` hands userdata
+    // over as a raw pointer that is null for `()` userdata, so the check is kept
+    // as an assertion instead of an unchecked dereference.
+    assert!(!self_.is_null(), "attempt to use null value");
 
     // When we wake up, we check the mailbox. Mailbox producers should
     // wake up our thread after publishing.
@@ -324,6 +329,9 @@ fn stopCallback(
 ) -> xev::CallbackAction {
     // _ = r catch unreachable;
     r.unwrap_or_else(|_| unreachable!());
+    // self_.?.loop.stop();
+    // R7, NEW-FINDINGS N13: the checked unwrap, as above.
+    assert!(!self_.is_null(), "attempt to use null value");
     unsafe { (*self_).loop_.stop() };
     xev::CallbackAction::Disarm
 }
@@ -354,6 +362,31 @@ unsafe fn CFRelease(_cf: *mut std::ffi::c_void) {}
 mod tests {
     //! task-14e-2 / S111-F4 — `os/cf_release_thread.zig`'s nine diagnostics.
     use super::*;
+
+    /// NEW-FINDINGS N13: `cf_release_thread.zig:173`/`:190` unwrap `self_.?`,
+    /// a checked unwrap. A null userdata must fail loudly at the unwrap, not
+    /// dereference null further in. (R7: an invariant check, ported checked.)
+    #[test]
+    #[should_panic(expected = "attempt to use null value")]
+    fn wakeup_callback_null_userdata_panics_at_the_unwrap() {
+        wakeupCallback(
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            Ok(()),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to use null value")]
+    fn stop_callback_null_userdata_panics_at_the_unwrap() {
+        stopCallback(
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            Ok(()),
+        );
+    }
 
     /// Runs the REAL xev loop on THIS thread (the same shape as
     /// `tests/cf_release_live.rs`, which is an integration test and so cannot
