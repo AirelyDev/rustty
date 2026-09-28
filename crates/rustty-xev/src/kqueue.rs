@@ -815,15 +815,43 @@ impl Loop {
 
     /// Run the event loop. See RunMode documentation for details on modes.
     /// Once the loop is run, the pointer MUST remain stable.
+    // PORT NOTE (N431 in NEW-FINDINGS): the reference's `run(self: *Loop, ..)`
+    // body lives in `run_raw`, which takes the loop as a raw pointer, as Zig's
+    // unprotected `*Loop` does. Callbacks re-enter the loop while it runs,
+    // through their `l` argument or through a pointer the caller stored (termio's
+    // `td.loop_`), so no `&mut Loop` may be live across a callback: a
+    // function-entry `&mut self` is protected for the whole call, and any other
+    // access to the loop pops it (UB under Stacked and Tree Borrows,
+    // .port/phase-2/mirihar-n431). This entry converts to raw at once and never
+    // uses `self` again, so it is sound when callbacks reach the loop only
+    // through `l`. A caller whose callbacks re-enter through a stored pointer
+    // must enter through `run_raw` with that same pointer instead: this
+    // `&mut self` is itself protected for the call (mirihar-n431
+    // `wrapper_*_root`).
     pub fn run(&mut self, mode: RunMode) -> core::result::Result<(), Error> {
-        match mode {
-            RunMode::NoWait => self.tick(0),
-            RunMode::Once => self.tick(1),
-            RunMode::UntilDone => {
-                while !self.done() {
-                    self.tick(1)?;
+        // SAFETY: `self` is a live, exclusive `Loop` for the whole call.
+        unsafe { Loop::run_raw(self, mode) }
+    }
+
+    /// `run(self: *Loop, mode)`: the raw-pointer entry (see `run`'s PORT NOTE).
+    /// Callers whose callbacks re-enter the loop through a stored pointer
+    /// enter here with that pointer.
+    ///
+    /// # Safety
+    /// `this` must point at a live, initialized `Loop` that stays at the same
+    /// address and is not otherwise borrowed for the whole call, except by
+    /// the loop's own callbacks through raw pointers.
+    pub unsafe fn run_raw(this: *mut Loop, mode: RunMode) -> core::result::Result<(), Error> {
+        unsafe {
+            match mode {
+                RunMode::NoWait => Loop::tick_raw(this, 0),
+                RunMode::Once => Loop::tick_raw(this, 1),
+                RunMode::UntilDone => {
+                    while !(*this).done() {
+                        Loop::tick_raw(this, 1)?;
+                    }
+                    Ok(())
                 }
-                Ok(())
             }
         }
     }
@@ -831,362 +859,367 @@ impl Loop {
     /// Tick through the event loop once, waiting for at least "wait" completions
     /// to be processed by the loop itself.
     pub fn tick(&mut self, wait: u32) -> core::result::Result<(), Error> {
-        // If we're stopped then the loop is fully over.
-        if self.flags.stopped {
-            return Ok(());
-        }
-
-        // We can't nest runs.
-        if self.flags.in_run {
-            return Err(Error); // error.NestedRunsNotAllowed
-        }
-        self.flags.in_run = true;
-        // defer self.flags.in_run = false; — via the guard below.
-        let result = self.tick_inner(wait);
-        self.flags.in_run = false;
-        result
+        // SAFETY: as `run`.
+        unsafe { Loop::tick_raw(self, wait) }
     }
 
-    fn tick_inner(&mut self, wait: u32) -> core::result::Result<(), Error> {
-        let self_ptr: *mut Loop = self;
-
-        // Initialize
-        if !self.flags.init {
-            self.flags.init = true;
-
-            if self.thread_pool.is_some() {
-                // Establish the stable heap-rooted raw handle ONCE, then init the
-                // self-referential queue THROUGH it, so the stub self-pointers it
-                // writes carry the queue's own (Box) allocation provenance — not a
-                // per-tick `&mut self` tag that the next tick's reborrow would pop.
-                // (LIFETIMES-AUDIT M2 fix; mirihar `boxq`.)
-                unsafe {
-                    let qp: *mut TaskCompletionQueue =
-                        &raw mut *(*self_ptr).thread_pool_completions;
-                    ptr::addr_of_mut!((*self_ptr).thread_pool_completions_ptr).write(qp);
-                    TaskCompletionQueue::init(qp);
-                }
-            }
-
-            if let Err(err) = self.wakeup_state.setup(self.kqueue_fd) {
-                // We reset initialization because we can't do anything
-                // safely unless we get this mach port registered!
-                self.flags.init = false;
-                return Err(err);
-            }
-        }
-
-        // The list of events, used as both a changelist and eventlist.
-        let mut events: [Kevent; 256] = unsafe { core::mem::zeroed() };
-
-        // The number of events in the events array to submit as changes
-        // on repeat ticks. Used mostly for efficient disarm.
-        let mut changes: usize = 0;
-
-        let mut wait_rem: usize = wait as usize;
-
-        // Handle all of our cancellations first because we may be able
-        // to stop submissions from even happening if its still queued.
-        // Plus, cancellations sometimes add more to the submission queue
-        // (to remove from kqueue)
-        self.process_cancellations();
-
-        // TODO(mitchellh): an optimization in the future is for the last
-        // batch of submissions to return the changelist, because we can
-        // reuse that for the kevent call later...
-        self.submit()?;
-
-        // Explaining the loop condition: we want to loop only if we have
-        // active handles (because it means we have something to do)
-        // and we have stuff we want to wait for still (wait_rem > 0) or
-        // we requested just a nowait tick (because we have to loop at least
-        // once).
-        //
-        // We also loop if there are any requested changes. Requested
-        // changes are only ever deletions currently, so we just process
-        // those until we have no more.
-        loop {
+    /// `tick(self: *Loop, wait)`: the raw-pointer twin of `tick` (see `run`).
+    ///
+    /// # Safety
+    /// As `run_raw`.
+    pub unsafe fn tick_raw(this: *mut Loop, wait: u32) -> core::result::Result<(), Error> {
+        unsafe {
             // If we're stopped then the loop is fully over.
-            if self.flags.stopped {
+            if (*this).flags.stopped {
                 return Ok(());
             }
 
-            // We must update our time no matter what
-            self.update_now();
-
-            // NOTE(mitchellh): This is a hideous boolean statement we should
-            // clean it up.
-            if !((self.active > 0 && (wait == 0 || wait_rem > 0))
-                || changes > 0
-                || !self.completions.empty())
-            {
-                break;
+            // We can't nest runs.
+            if (*this).flags.in_run {
+                return Err(Error); // error.NestedRunsNotAllowed
             }
+            (*this).flags.in_run = true;
+            // defer self.flags.in_run = false; — via the guard below.
+            let result = Loop::tick_inner(this, wait);
+            (*this).flags.in_run = false;
+            result
+        }
+    }
 
-            // Run our expired timers
-            let mut now_timer: Timer = Timer {
-                next: self.cached_now,
-                reset: None,
-                heap: heap::IntrusiveField::default(),
-                c: ptr::null_mut(),
-            };
-            loop {
-                let t = self.timers.peek();
-                if t.is_null() {
-                    break;
-                }
-                if !Timer::less((), t, &mut now_timer) {
-                    break;
-                }
+    unsafe fn tick_inner(this: *mut Loop, wait: u32) -> core::result::Result<(), Error> {
+        unsafe {
+            // Initialize
+            if !(*this).flags.init {
+                (*this).flags.init = true;
 
-                // Remove the timer
-                assert!(unsafe { self.timers.delete_min() } == t);
-
-                // Mark completion as done
-                let c = unsafe { (*t).c };
-                unsafe { (*c).flags.state = State::Dead };
-
-                // We mark it as inactive here because if we rearm below
-                // the start() function will reincrement this.
-                self.active -= 1;
-
-                // Lower our remaining count since we have processed something.
-                wait_rem = wait_rem.saturating_sub(1);
-
-                // Invoke
-                let cb = unsafe { (*c).callback };
-                let ud = unsafe { (*c).userdata };
-                let action = cb(ud, self_ptr, c, Result::Timer(Ok(TimerTrigger::Expiration)));
-                match action {
-                    CallbackAction::Disarm => {}
-
-                    // We use undefined as the second param because timers
-                    // never set a kevent, and we assert false for the same
-                    // reason.
-                    CallbackAction::Rearm => {
-                        let mut dummy_ev: Kevent = unsafe { core::mem::zeroed() };
-                        assert!(!unsafe { self.start(c, &mut dummy_ev) });
+                if (*this).thread_pool.is_some() {
+                    // Establish the stable heap-rooted raw handle ONCE, then init the
+                    // self-referential queue THROUGH it, so the stub self-pointers it
+                    // writes carry the queue's own (Box) allocation provenance — not a
+                    // per-tick `&mut self` tag that the next tick's reborrow would pop.
+                    // (LIFETIMES-AUDIT M2 fix; mirihar `boxq`.)
+                    {
+                        let qp: *mut TaskCompletionQueue =
+                            &raw mut *(*this).thread_pool_completions;
+                        ptr::addr_of_mut!((*this).thread_pool_completions_ptr).write(qp);
+                        TaskCompletionQueue::init(qp);
                     }
                 }
+
+                if let Err(err) = (*this).wakeup_state.setup((*this).kqueue_fd) {
+                    // We reset initialization because we can't do anything
+                    // safely unless we get this mach port registered!
+                    (*this).flags.init = false;
+                    return Err(err);
+                }
             }
 
-            // Migrate our completions from the thread pool MPSC queue to our
-            // completion queue.
-            // TODO: unify the queues
-            if self.thread_pool.is_some() {
+            // The list of events, used as both a changelist and eventlist.
+            let mut events: [Kevent; 256] = core::mem::zeroed();
+
+            // The number of events in the events array to submit as changes
+            // on repeat ticks. Used mostly for efficient disarm.
+            let mut changes: usize = 0;
+
+            let mut wait_rem: usize = wait as usize;
+
+            // Handle all of our cancellations first because we may be able
+            // to stop submissions from even happening if its still queued.
+            // Plus, cancellations sometimes add more to the submission queue
+            // (to remove from kqueue)
+            (*this).process_cancellations();
+
+            // TODO(mitchellh): an optimization in the future is for the last
+            // batch of submissions to return the changelist, because we can
+            // reuse that for the kevent call later...
+            (*this).submit()?;
+
+            // Explaining the loop condition: we want to loop only if we have
+            // active handles (because it means we have something to do)
+            // and we have stuff we want to wait for still (wait_rem > 0) or
+            // we requested just a nowait tick (because we have to loop at least
+            // once).
+            //
+            // We also loop if there are any requested changes. Requested
+            // changes are only ever deletions currently, so we just process
+            // those until we have no more.
+            loop {
+                // If we're stopped then the loop is fully over.
+                if (*this).flags.stopped {
+                    return Ok(());
+                }
+
+                // We must update our time no matter what
+                (*this).update_now();
+
+                // NOTE(mitchellh): This is a hideous boolean statement we should
+                // clean it up.
+                if !(((*this).active > 0 && (wait == 0 || wait_rem > 0))
+                    || changes > 0
+                    || !(*this).completions.empty())
+                {
+                    break;
+                }
+
+                // Run our expired timers
+                let mut now_timer: Timer = Timer {
+                    next: (*this).cached_now,
+                    reset: None,
+                    heap: heap::IntrusiveField::default(),
+                    c: ptr::null_mut(),
+                };
                 loop {
-                    // Drain through the cached stable raw handle (never a fresh
-                    // `&mut self.thread_pool_completions`, which would pop the
-                    // queue's stub-pointer lineage). LIFETIMES-AUDIT M2; mirihar
-                    // `boxq`.
-                    let c = unsafe {
-                        TaskCompletionQueue::pop((*self_ptr).thread_pool_completions_ptr)
-                    };
+                    let t = (*this).timers.peek();
+                    if t.is_null() {
+                        break;
+                    }
+                    if !Timer::less((), t, &mut now_timer) {
+                        break;
+                    }
+
+                    // Remove the timer
+                    assert!((*this).timers.delete_min() == t);
+
+                    // Mark completion as done
+                    let c = (*t).c;
+                    (*c).flags.state = State::Dead;
+
+                    // We mark it as inactive here because if we rearm below
+                    // the start() function will reincrement this.
+                    (*this).active -= 1;
+
+                    // Lower our remaining count since we have processed something.
+                    wait_rem = wait_rem.saturating_sub(1);
+
+                    // Invoke
+                    let cb = (*c).callback;
+                    let ud = (*c).userdata;
+                    let action = cb(ud, this, c, Result::Timer(Ok(TimerTrigger::Expiration)));
+                    match action {
+                        CallbackAction::Disarm => {}
+
+                        // We use undefined as the second param because timers
+                        // never set a kevent, and we assert false for the same
+                        // reason.
+                        CallbackAction::Rearm => {
+                            let mut dummy_ev: Kevent = core::mem::zeroed();
+                            assert!(!(*this).start(c, &mut dummy_ev));
+                        }
+                    }
+                }
+
+                // Migrate our completions from the thread pool MPSC queue to our
+                // completion queue.
+                // TODO: unify the queues
+                if (*this).thread_pool.is_some() {
+                    loop {
+                        // Drain through the cached stable raw handle (never a fresh
+                        // `&mut self.thread_pool_completions`, which would pop the
+                        // queue's stub-pointer lineage). LIFETIMES-AUDIT M2; mirihar
+                        // `boxq`.
+                        let c = TaskCompletionQueue::pop((*this).thread_pool_completions_ptr);
+                        if c.is_null() {
+                            break;
+                        }
+                        (*this).completions.push(c);
+                    }
+                }
+
+                // Process the completions we already have completed.
+                loop {
+                    let c = (*this).completions.pop();
                     if c.is_null() {
                         break;
                     }
-                    unsafe { self.completions.push(c) };
-                }
-            }
 
-            // Process the completions we already have completed.
-            loop {
-                let c = unsafe { self.completions.pop() };
-                if c.is_null() {
-                    break;
-                }
+                    // disarm_ev is the Kevent to use for disarming if the
+                    // completion wants to disarm. We have to calculate this up
+                    // front because c can be reused in callback.
+                    let disarm_ev: Option<Kevent> = {
+                        // If we're not active then we were never part of the kqueue.
+                        // If we are part of a threadpool we also never were part
+                        // of the kqueue.
+                        if (*c).flags.state != State::Active || (*c).flags.threadpool {
+                            None
+                        } else {
+                            Completion::kevent(c)
+                        }
+                    };
 
-                // disarm_ev is the Kevent to use for disarming if the
-                // completion wants to disarm. We have to calculate this up
-                // front because c can be reused in callback.
-                let disarm_ev: Option<Kevent> = {
-                    // If we're not active then we were never part of the kqueue.
-                    // If we are part of a threadpool we also never were part
-                    // of the kqueue.
-                    if unsafe { (*c).flags.state } != State::Active
-                        || unsafe { (*c).flags.threadpool }
-                    {
-                        None
-                    } else {
-                        unsafe { Completion::kevent(c) }
+                    // We store whether this completion was active so we can decrement
+                    // the active count later
+                    let c_active = (*c).flags.state == State::Active;
+                    (*c).flags.state = State::Dead;
+
+                    // Decrease our waiters because we are definitely processing one.
+                    wait_rem = wait_rem.saturating_sub(1);
+
+                    // Completion queue items MUST have a result set.
+                    let cb = (*c).callback;
+                    let ud = (*c).userdata;
+                    let res = (*c).result.unwrap();
+                    let action = cb(ud, this, c, res);
+                    match action {
+                        // If we're active we have to schedule a delete. Otherwise
+                        // we do nothing because we were never part of the kqueue.
+                        CallbackAction::Disarm => {
+                            if let Some(ev) = disarm_ev {
+                                events[changes] = ev;
+                                events[changes].flags = libc::EV_DELETE;
+                                kev_set_udata(&mut events[changes], 0);
+                                changes += 1;
+                                assert!(changes <= events.len());
+                            }
+
+                            if c_active {
+                                (*this).active -= 1;
+                            }
+                        }
+
+                        // Only resubmit if we aren't already active (in the queue)
+                        CallbackAction::Rearm => {
+                            if !c_active {
+                                (*this).submissions.push(c);
+                            }
+                        }
                     }
+
+                    // If we filled the events slice, we break to avoid overflow.
+                    if changes == events.len() {
+                        break;
+                    }
+                }
+
+                // Determine our next timeout based on the timers
+                let timeout: Option<Timespec> = 'timeout: {
+                    if wait_rem == 0 {
+                        break 'timeout Some(core::mem::zeroed());
+                    }
+
+                    // If we have a timer, we want to set the timeout to our next
+                    // timer value. If we have no timer, we wait forever.
+                    let t = (*this).timers.peek();
+                    if t.is_null() {
+                        break 'timeout None;
+                    }
+
+                    // Determine the time in milliseconds.
+                    let ms_now = ((*this).cached_now.tv_sec as u64) * ms_per_s
+                        + ((*this).cached_now.tv_nsec as u64) / ns_per_ms;
+                    let ms_next = ((*t).next.tv_sec as u64) * ms_per_s
+                        + ((*t).next.tv_nsec as u64) / ns_per_ms;
+                    let ms = ms_next.saturating_sub(ms_now);
+
+                    // Convert to s/ns for the timespec
+                    let sec = ms / ms_per_s;
+                    let nsec = (ms % ms_per_s) * ns_per_ms;
+                    let mut ts: Timespec = core::mem::zeroed();
+                    ts.tv_sec = sec as libc::time_t;
+                    ts.tv_nsec = nsec as _;
+                    break 'timeout Some(ts);
                 };
 
-                // We store whether this completion was active so we can decrement
-                // the active count later
-                let c_active = unsafe { (*c).flags.state } == State::Active;
-                unsafe { (*c).flags.state = State::Dead };
-
-                // Decrease our waiters because we are definitely processing one.
-                wait_rem = wait_rem.saturating_sub(1);
-
-                // Completion queue items MUST have a result set.
-                let cb = unsafe { (*c).callback };
-                let ud = unsafe { (*c).userdata };
-                let res = unsafe { (*c).result.unwrap() };
-                let action = cb(ud, self_ptr, c, res);
-                match action {
-                    // If we're active we have to schedule a delete. Otherwise
-                    // we do nothing because we were never part of the kqueue.
-                    CallbackAction::Disarm => {
-                        if let Some(ev) = disarm_ev {
-                            events[changes] = ev;
-                            events[changes].flags = libc::EV_DELETE;
-                            kev_set_udata(&mut events[changes], 0);
-                            changes += 1;
-                            assert!(changes <= events.len());
-                        }
-
-                        if c_active {
-                            self.active -= 1;
-                        }
-                    }
-
-                    // Only resubmit if we aren't already active (in the queue)
-                    CallbackAction::Rearm => {
-                        if !c_active {
-                            unsafe { self.submissions.push(c) };
-                        }
-                    }
-                }
-
-                // If we filled the events slice, we break to avoid overflow.
-                if changes == events.len() {
-                    break;
-                }
-            }
-
-            // Determine our next timeout based on the timers
-            let timeout: Option<Timespec> = 'timeout: {
-                if wait_rem == 0 {
-                    break 'timeout Some(unsafe { core::mem::zeroed() });
-                }
-
-                // If we have a timer, we want to set the timeout to our next
-                // timer value. If we have no timer, we wait forever.
-                let t = self.timers.peek();
-                if t.is_null() {
-                    break 'timeout None;
-                }
-
-                // Determine the time in milliseconds.
-                let ms_now = (self.cached_now.tv_sec as u64) * ms_per_s
-                    + (self.cached_now.tv_nsec as u64) / ns_per_ms;
-                let ms_next = (unsafe { (*t).next.tv_sec } as u64) * ms_per_s
-                    + (unsafe { (*t).next.tv_nsec } as u64) / ns_per_ms;
-                let ms = ms_next.saturating_sub(ms_now);
-
-                // Convert to s/ns for the timespec
-                let sec = ms / ms_per_s;
-                let nsec = (ms % ms_per_s) * ns_per_ms;
-                let mut ts: Timespec = unsafe { core::mem::zeroed() };
-                ts.tv_sec = sec as libc::time_t;
-                ts.tv_nsec = nsec as _;
-                break 'timeout Some(ts);
-            };
-
-            // Wait for changes. Note that we ALWAYS attempt to get completions
-            // back even if are done waiting (wait_rem == 0) because if we have
-            // to make a syscall to submit changes, we might as well also check
-            // for done events too.
-            // PORT NOTE: the reference wraps this in a `completed: while (true) { break
-            // :completed kevent_syscall(...) catch |err| switch ... }` labeled-break
-            // (EINTR retry lives inside `kevent_syscall` itself), so it never
-            // actually loops — ported as a direct match.
-            // The changelist + eventlist alias the same `events` array; derive
-            // both from one raw pointer (§note on kevent_syscall).
-            let events_ptr = events.as_mut_ptr();
-            let events_cap = events.len();
-            let completed: usize = match unsafe {
-                kevent_syscall(
-                    self.kqueue_fd,
+                // Wait for changes. Note that we ALWAYS attempt to get completions
+                // back even if are done waiting (wait_rem == 0) because if we have
+                // to make a syscall to submit changes, we might as well also check
+                // for done events too.
+                // PORT NOTE: the reference wraps this in a `completed: while (true) { break
+                // :completed kevent_syscall(...) catch |err| switch ... }` labeled-break
+                // (EINTR retry lives inside `kevent_syscall` itself), so it never
+                // actually loops — ported as a direct match.
+                // The changelist + eventlist alias the same `events` array; derive
+                // both from one raw pointer (§note on kevent_syscall).
+                let events_ptr = events.as_mut_ptr();
+                let events_cap = events.len();
+                let completed: usize = match kevent_syscall(
+                    (*this).kqueue_fd,
                     events_ptr,
                     changes,
                     events_ptr,
                     events_cap,
                     timeout.as_ref(),
-                )
-            } {
-                Ok(n) => n,
-                // This should never happen because we always have
-                // space in our event list. If I'm reading the BSD source
-                // right (and Apple does something similar...) then ENOENT
-                // is always put into the eventlist if there is space:
-                // https://github.com/freebsd/freebsd-src/blob/5a4a83fd0e67a0d7787d2f3e09ef0e5552a1ffb6/sys/kern/kern_event.c#L1668
-                Err(KEventError::EventNotFound) => unreachable!(),
+                ) {
+                    Ok(n) => n,
+                    // This should never happen because we always have
+                    // space in our event list. If I'm reading the BSD source
+                    // right (and Apple does something similar...) then ENOENT
+                    // is always put into the eventlist if there is space:
+                    // https://github.com/freebsd/freebsd-src/blob/5a4a83fd0e67a0d7787d2f3e09ef0e5552a1ffb6/sys/kern/kern_event.c#L1668
+                    Err(KEventError::EventNotFound) => unreachable!(),
 
-                // Any other error is fatal
-                Err(e) => return Err(e.into()),
-            };
+                    // Any other error is fatal
+                    Err(e) => return Err(e.into()),
+                };
 
-            // Reset changes since they're not submitted
-            changes = 0;
+                // Reset changes since they're not submitted
+                changes = 0;
 
-            // Go through the completed events and queue them.
-            for i in 0..completed {
-                let ev = events[i];
-                // Zero udata values are internal events that we do nothing
-                // on such as the mach port wakeup.
-                if kev_udata(&ev) == 0 {
-                    continue;
-                }
-
-                // Ignore any successful deletions. This can only happen
-                // from disarms below and in that case we already processed
-                // their callback.
-                if ev.flags & libc::EV_DELETE != 0 {
-                    continue;
-                }
-
-                // This can only be set during changelist processing so
-                // that means that this event was never actually active.
-                // Therefore, we only decrement the waiters by 1 if we
-                // processed an active change.
-                if ev.flags & libc::EV_ERROR != 0 {
-                    // We cannot use c here because c is already dead
-                    // at this point for this event.
-                    continue;
-                }
-                wait_rem = wait_rem.saturating_sub(1);
-
-                let c: *mut Completion = kev_udata(&ev) as *mut Completion;
-
-                // c is ready to be reused rigt away if we're dearming
-                // so we mark it as dead.
-                unsafe { (*c).flags.state = State::Dead };
-
-                let result = unsafe { Completion::perform(c, Some(&ev)) };
-                let cb = unsafe { (*c).callback };
-                let ud = unsafe { (*c).userdata };
-                let action = cb(ud, self_ptr, c, result);
-                match action {
-                    CallbackAction::Disarm => {
-                        // Mark this event for deletion, it'll happen
-                        // on the next tick.
-                        events[changes] = ev;
-                        events[changes].flags = libc::EV_DELETE;
-                        kev_set_udata(&mut events[changes], 0);
-                        changes += 1;
-                        assert!(changes <= events.len());
-
-                        self.active -= 1;
+                // Go through the completed events and queue them.
+                for i in 0..completed {
+                    let ev = events[i];
+                    // Zero udata values are internal events that we do nothing
+                    // on such as the mach port wakeup.
+                    if kev_udata(&ev) == 0 {
+                        continue;
                     }
 
-                    // We rearm by default with kqueue so we just have to make
-                    // sure that the state is correct.
-                    CallbackAction::Rearm => {
-                        unsafe { (*c).flags.state = State::Active };
+                    // Ignore any successful deletions. This can only happen
+                    // from disarms below and in that case we already processed
+                    // their callback.
+                    if ev.flags & libc::EV_DELETE != 0 {
+                        continue;
                     }
+
+                    // This can only be set during changelist processing so
+                    // that means that this event was never actually active.
+                    // Therefore, we only decrement the waiters by 1 if we
+                    // processed an active change.
+                    if ev.flags & libc::EV_ERROR != 0 {
+                        // We cannot use c here because c is already dead
+                        // at this point for this event.
+                        continue;
+                    }
+                    wait_rem = wait_rem.saturating_sub(1);
+
+                    let c: *mut Completion = kev_udata(&ev) as *mut Completion;
+
+                    // c is ready to be reused rigt away if we're dearming
+                    // so we mark it as dead.
+                    (*c).flags.state = State::Dead;
+
+                    let result = Completion::perform(c, Some(&ev));
+                    let cb = (*c).callback;
+                    let ud = (*c).userdata;
+                    let action = cb(ud, this, c, result);
+                    match action {
+                        CallbackAction::Disarm => {
+                            // Mark this event for deletion, it'll happen
+                            // on the next tick.
+                            events[changes] = ev;
+                            events[changes].flags = libc::EV_DELETE;
+                            kev_set_udata(&mut events[changes], 0);
+                            changes += 1;
+                            assert!(changes <= events.len());
+
+                            (*this).active -= 1;
+                        }
+
+                        // We rearm by default with kqueue so we just have to make
+                        // sure that the state is correct.
+                        CallbackAction::Rearm => {
+                            (*c).flags.state = State::Active;
+                        }
+                    }
+                }
+
+                // If we ran through the loop once we break if we don't care.
+                if wait == 0 {
+                    break;
                 }
             }
 
-            // If we ran through the loop once we break if we don't care.
-            if wait == 0 {
-                break;
-            }
+            Ok(())
         }
-
-        Ok(())
     }
 
     /// Returns the "loop" time in milliseconds. The loop time is updated
@@ -3309,6 +3342,75 @@ mod tests {
         }
 
         loop_.deinit();
+    }
+
+    /// PORT-ADDED (N431): a callback re-enters the loop through a pointer the
+    /// caller stored (termio's `td.loop_` -> `stream.rs` `(*loop_).add`), not
+    /// through its `l`, while the loop runs through `run_raw` with that same
+    /// pointer. The second timer is armed from inside the first callback and
+    /// stops the loop, so both callbacks must have run for `until_done` to
+    /// return.
+    // Real-code twin of mirihar-n431 `raw_local_root` (the backend's syscalls
+    // keep it out of Miri; the epoll twin runs under Miri on the Linux target).
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
+    )]
+    #[test]
+    fn kqueue_callback_reenters_through_stored_loop_pointer() {
+        struct Ud {
+            root: *mut Loop,
+            c2: *mut Completion,
+            first: bool,
+            second: bool,
+        }
+        fn first_cb(
+            ud: *mut core::ffi::c_void,
+            _l: *mut Loop,
+            _c: *mut Completion,
+            _r: Result,
+        ) -> CallbackAction {
+            let ud = ud as *mut Ud;
+            unsafe {
+                (*ud).first = true;
+                // Through the stored pointer, not `_l`.
+                (*(*ud).root).timer((*ud).c2, 0, ud.cast(), second_cb);
+            }
+            CallbackAction::Disarm
+        }
+        fn second_cb(
+            ud: *mut core::ffi::c_void,
+            _l: *mut Loop,
+            _c: *mut Completion,
+            _r: Result,
+        ) -> CallbackAction {
+            let ud = ud as *mut Ud;
+            unsafe {
+                (*ud).second = true;
+                (*(*ud).root).stop();
+            }
+            CallbackAction::Disarm
+        }
+
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+        let root: *mut Loop = core::ptr::addr_of_mut!(loop_);
+        let mut c1 = Completion::default();
+        let mut c2 = Completion::default();
+        let mut ud = Ud {
+            root,
+            c2: core::ptr::addr_of_mut!(c2),
+            first: false,
+            second: false,
+        };
+        let udp: *mut Ud = core::ptr::addr_of_mut!(ud);
+        unsafe {
+            (*root).timer(core::ptr::addr_of_mut!(c1), 0, udp.cast(), first_cb);
+            Loop::run_raw(root, RunMode::UntilDone).unwrap();
+            assert!((*udp).first);
+            assert!((*udp).second);
+            assert!((*root).stopped());
+            (*root).deinit();
+        }
     }
 
     #[test]

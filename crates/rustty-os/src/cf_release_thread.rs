@@ -183,7 +183,11 @@ impl Thread {
             // defer log.debug("cf release thread fully exiting after abnormal failure", .{});
             //   (fires at the END of this block — written inline below.)
             unsafe { (*self_).flags.drain = true };
-            if let Err(err) = unsafe { (*self_).loop_.run(xev::RunMode::UntilDone) } {
+            // PORT NOTE (N431): entered through the loop pointer its callbacks re-enter
+            // through, never a `&mut Loop` (see `xev::Loop::run`).
+            if let Err(err) =
+                unsafe { xev::Loop::run_raw(&raw mut (*self_).loop_, xev::RunMode::UntilDone) }
+            {
                 // log.err("failed to start xev loop for draining err={}", .{err});
                 log::error!(target: LOG_SCOPE, "failed to start xev loop for draining err={err:?}");
             }
@@ -236,7 +240,10 @@ impl Thread {
         // log.debug("starting cf release thread", .{});
         log::debug!(target: LOG_SCOPE, "starting cf release thread");
         // defer log.debug("starting cf release thread shutdown", .{});
-        let result = unsafe { (*self_).loop_.run(xev::RunMode::UntilDone) };
+        // PORT NOTE (N431): entered through the loop pointer its callbacks re-enter
+        // through, never a `&mut Loop` (see `xev::Loop::run`).
+        let result =
+            unsafe { xev::Loop::run_raw(&raw mut (*self_).loop_, xev::RunMode::UntilDone) };
         // log.debug("starting cf release thread shutdown", .{});
         log::debug!(target: LOG_SCOPE, "starting cf release thread shutdown");
         // defer log.debug("cf release thread exited", .{});

@@ -433,7 +433,11 @@ impl Thread {
             // self.loop.run(.until_done) catch |err| {
             //     log.err("failed to start xev loop for draining err={}", .{err});
             // };
-            if let Err(err) = unsafe { (*self_).loop_.run(xev::RunMode::UntilDone) } {
+            // PORT NOTE (N431): entered through the loop pointer its callbacks re-enter
+            // through, never a `&mut Loop` (see `xev::Loop::run`).
+            if let Err(err) =
+                unsafe { xev::Loop::run_raw(&raw mut (*self_).loop_, xev::RunMode::UntilDone) }
+            {
                 log::error!(
                     target: LOG_SCOPE,
                     "failed to start xev loop for draining err={err:?}"
@@ -870,7 +874,10 @@ impl Thread {
         // this function has no exit between here and it, so the faithful
         // placement is immediately after `loop.run` returns.
         // try self.loop.run(.until_done);
-        let run_result = unsafe { (*self_).loop_.run(xev::RunMode::UntilDone) };
+        // PORT NOTE (N431): entered through the loop pointer its callbacks re-enter
+        // through, never a `&mut Loop` (see `xev::Loop::run`).
+        let run_result =
+            unsafe { xev::Loop::run_raw(&raw mut (*self_).loop_, xev::RunMode::UntilDone) };
         log::debug!(target: LOG_SCOPE, "starting IO thread shutdown");
 
         // defer io.threadExit(&cb.data);  (runs first)

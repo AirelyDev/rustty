@@ -1271,13 +1271,39 @@ impl Loop {
     }
 
     /// Run the event loop. See RunMode documentation for details on modes.
+    // PORT NOTE (N431 in NEW-FINDINGS): the reference's `run(self: *Loop, ..)`
+    // body lives in `run_raw`, which takes the loop as a raw pointer, as Zig's
+    // unprotected `*Loop` does. Callbacks re-enter the loop while it runs,
+    // through their `l` argument or through a pointer the caller stored (termio's
+    // `td.loop_`), so no `&mut Loop` may be live across a callback: a
+    // function-entry `&mut self` is protected for the whole call, and any other
+    // access to the loop pops it (UB under Stacked and Tree Borrows,
+    // .port/phase-2/mirihar-n431). This entry converts to raw at once and never
+    // uses `self` again, so it is sound when callbacks reach the loop only
+    // through `l`. A caller whose callbacks re-enter through a stored pointer
+    // must enter through `run_raw` with that same pointer instead: this
+    // `&mut self` is itself protected for the call (mirihar-n431
+    // `wrapper_*_root`).
     pub fn run(&mut self, mode: RunMode) -> core::result::Result<(), RunError> {
+        // SAFETY: `self` is a live, exclusive `Loop` for the whole call.
+        unsafe { Loop::run_raw(self, mode) }
+    }
+
+    /// `run(self: *Loop, mode)`: the raw-pointer entry (see `run`'s PORT NOTE).
+    /// Callers whose callbacks re-enter the loop through a stored pointer
+    /// enter here with that pointer.
+    ///
+    /// # Safety
+    /// `this` must point at a live, initialized `Loop` that stays at the same
+    /// address and is not otherwise borrowed for the whole call, except by
+    /// the loop's own callbacks through raw pointers.
+    pub unsafe fn run_raw(this: *mut Loop, mode: RunMode) -> core::result::Result<(), RunError> {
         // PORT NOTE: the reference's `tick_` takes the mode COMPTIME ("so we can do
         // some tricks to avoid function calls and runtime branching"). Rust has no
         // comptime-parameter monomorphization over a value, so the mode is a runtime
         // parameter (exactly as epoll.rs's `tick` takes a runtime `wait`); the
         // branch arms are identical.
-        self.tick_(mode)
+        unsafe { Loop::tick_(this, mode) }
     }
 
     /// Stop the loop. This can only be called from the main thread.
@@ -1341,106 +1367,108 @@ impl Loop {
     }
 
     /// Tick the loop.
-    fn tick_(&mut self, mode: RunMode) -> core::result::Result<(), RunError> {
-        // We can't nest runs.
-        if self.flags.in_run {
-            return Err(RunError::NestedRunsNotAllowed);
+    unsafe fn tick_(this: *mut Loop, mode: RunMode) -> core::result::Result<(), RunError> {
+        unsafe {
+            // We can't nest runs.
+            if (*this).flags.in_run {
+                return Err(RunError::NestedRunsNotAllowed);
+            }
+            (*this).flags.in_run = true;
+            // defer self.flags.in_run = false; — via the explicit reset below.
+            let result = Loop::tick_inner(this, mode);
+            (*this).flags.in_run = false;
+            result
         }
-        self.flags.in_run = true;
-        // defer self.flags.in_run = false; — via the explicit reset below.
-        let result = self.tick_inner(mode);
-        self.flags.in_run = false;
-        result
     }
 
-    fn tick_inner(&mut self, mode: RunMode) -> core::result::Result<(), RunError> {
-        let self_ptr: *mut Loop = self;
-
-        // The total number of events we're waiting for.
-        let wait: u32 = match mode {
-            // until_done is one because we need to wait for at least one
-            // (if we have any).
-            RunMode::UntilDone => 1,
-            RunMode::Once => 1,
-            RunMode::NoWait => 0,
-        };
-
-        // var cqes: [128]linux.io_uring_cqe = undefined;
-        let mut cqes: [io_uring_cqe; 128] = unsafe { core::mem::zeroed() };
-        loop {
-            // If we're stopped then the loop is fully over.
-            if self.flags.stopped {
-                break;
-            }
-
-            // We always note that our "now" value is outdated even if we have
-            // no completions to execute.
-            self.flags.now_outdated = true;
-
-            if self.active == 0 && self.submissions.empty() {
-                break;
-            }
-
-            // If we have no queued submissions then we do the wait as part
-            // of the submit call, because then we can do exactly once syscall
-            // to get all our events.
-            if self.submissions.empty() {
-                match self.ring.submit_and_wait(wait) {
-                    Ok(_) => {}
-                    Err(SubmitError::SignalInterrupt) => continue,
-                    Err(e) => return Err(RunError::Submit(e)),
-                }
-            } else {
-                // We have submissions, meaning we have to do multiple submissions
-                // anyways so we always just do non-waiting ones.
-                match self.submit() {
-                    Ok(()) => {}
-                    Err(SubmitError::SignalInterrupt) => continue,
-                    Err(e) => return Err(RunError::Submit(e)),
-                }
-            }
-
-            // Wait for completions...
-            let count = match self.ring.copy_cqes(&mut cqes, wait) {
-                Ok(v) => v,
-                // EINTR means our blocking syscall was interrupted by some
-                // process signal. We just retry when we can. See signal(7).
-                Err(SubmitError::SignalInterrupt) => continue,
-                Err(e) => return Err(RunError::Submit(e)),
+    unsafe fn tick_inner(this: *mut Loop, mode: RunMode) -> core::result::Result<(), RunError> {
+        unsafe {
+            // The total number of events we're waiting for.
+            let wait: u32 = match mode {
+                // until_done is one because we need to wait for at least one
+                // (if we have any).
+                RunMode::UntilDone => 1,
+                RunMode::Once => 1,
+                RunMode::NoWait => 0,
             };
 
-            for cqe in &cqes[0..count as usize] {
-                // const c = @as(?*Completion, @ptrFromInt(cqe.user_data)) orelse continue;
-                //
-                // PORT NOTE: a NULL `user_data` is the `.noop` completion's stray SQE
-                // (see `add_`'s noop arm) — the kernel posts a CQE for it, and we
-                // skip it WITHOUT touching `active` (the noop arm never counted it).
-                let c: *mut Completion = cqe.user_data as *mut Completion;
-                if c.is_null() {
-                    continue;
+            // var cqes: [128]linux.io_uring_cqe = undefined;
+            let mut cqes: [io_uring_cqe; 128] = core::mem::zeroed();
+            loop {
+                // If we're stopped then the loop is fully over.
+                if (*this).flags.stopped {
+                    break;
                 }
 
-                self.active -= 1;
-                unsafe { (*c).flags.state = State::Dead };
-                match unsafe { Completion::invoke(c, self_ptr, cqe.res) } {
-                    CallbackAction::Disarm => {}
-                    CallbackAction::Rearm => unsafe { self.add(c) },
-                }
-            }
+                // We always note that our "now" value is outdated even if we have
+                // no completions to execute.
+                (*this).flags.now_outdated = true;
 
-            // Subtract our waiters. If we reached zero then we're done.
-            match mode {
-                RunMode::NoWait => break,
-                RunMode::Once => {
-                    if count > 0 {
-                        break;
+                if (*this).active == 0 && (*this).submissions.empty() {
+                    break;
+                }
+
+                // If we have no queued submissions then we do the wait as part
+                // of the submit call, because then we can do exactly once syscall
+                // to get all our events.
+                if (*this).submissions.empty() {
+                    match (*this).ring.submit_and_wait(wait) {
+                        Ok(_) => {}
+                        Err(SubmitError::SignalInterrupt) => continue,
+                        Err(e) => return Err(RunError::Submit(e)),
+                    }
+                } else {
+                    // We have submissions, meaning we have to do multiple submissions
+                    // anyways so we always just do non-waiting ones.
+                    match (*this).submit() {
+                        Ok(()) => {}
+                        Err(SubmitError::SignalInterrupt) => continue,
+                        Err(e) => return Err(RunError::Submit(e)),
                     }
                 }
-                RunMode::UntilDone => {}
-            }
-        }
 
-        Ok(())
+                // Wait for completions...
+                let count = match (*this).ring.copy_cqes(&mut cqes, wait) {
+                    Ok(v) => v,
+                    // EINTR means our blocking syscall was interrupted by some
+                    // process signal. We just retry when we can. See signal(7).
+                    Err(SubmitError::SignalInterrupt) => continue,
+                    Err(e) => return Err(RunError::Submit(e)),
+                };
+
+                for cqe in &cqes[0..count as usize] {
+                    // const c = @as(?*Completion, @ptrFromInt(cqe.user_data)) orelse continue;
+                    //
+                    // PORT NOTE: a NULL `user_data` is the `.noop` completion's stray SQE
+                    // (see `add_`'s noop arm) — the kernel posts a CQE for it, and we
+                    // skip it WITHOUT touching `active` (the noop arm never counted it).
+                    let c: *mut Completion = cqe.user_data as *mut Completion;
+                    if c.is_null() {
+                        continue;
+                    }
+
+                    (*this).active -= 1;
+                    (*c).flags.state = State::Dead;
+                    match Completion::invoke(c, this, cqe.res) {
+                        CallbackAction::Disarm => {}
+                        CallbackAction::Rearm => (*this).add(c),
+                    }
+                }
+
+                // Subtract our waiters. If we reached zero then we're done.
+                match mode {
+                    RunMode::NoWait => break,
+                    RunMode::Once => {
+                        if count > 0 {
+                            break;
+                        }
+                    }
+                    RunMode::UntilDone => {}
+                }
+            }
+
+            Ok(())
+        }
     }
 
     /// Submit all queued operations. This never does an io_uring submit
@@ -6076,6 +6104,71 @@ mod tests {
         assert!(timer_called);
 
         loop_.deinit();
+    }
+
+    /// PORT-ADDED (N431): a callback re-enters the loop through a pointer the
+    /// caller stored (termio's `td.loop_` -> `stream.rs` `(*loop_).add`), not
+    /// through its `l`, while the loop runs through `run_raw` with that same
+    /// pointer. The second timer is armed from inside the first callback and
+    /// stops the loop, so both callbacks must have run for `until_done` to
+    /// return.
+    // Real-code twin of mirihar-n431 `raw_local_root` (the backend's syscalls
+    // keep it out of Miri; the epoll twin runs under Miri on the Linux target).
+    #[test]
+    fn io_uring_callback_reenters_through_stored_loop_pointer() {
+        struct Ud {
+            root: *mut Loop,
+            c2: *mut Completion,
+            first: bool,
+            second: bool,
+        }
+        fn first_cb(
+            ud: *mut core::ffi::c_void,
+            _l: *mut Loop,
+            _c: *mut Completion,
+            _r: Result,
+        ) -> CallbackAction {
+            let ud = ud as *mut Ud;
+            unsafe {
+                (*ud).first = true;
+                // Through the stored pointer, not `_l`.
+                (*(*ud).root).timer((*ud).c2, 0, ud.cast(), second_cb);
+            }
+            CallbackAction::Disarm
+        }
+        fn second_cb(
+            ud: *mut core::ffi::c_void,
+            _l: *mut Loop,
+            _c: *mut Completion,
+            _r: Result,
+        ) -> CallbackAction {
+            let ud = ud as *mut Ud;
+            unsafe {
+                (*ud).second = true;
+                (*(*ud).root).stop();
+            }
+            CallbackAction::Disarm
+        }
+
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+        let root: *mut Loop = core::ptr::addr_of_mut!(loop_);
+        let mut c1 = Completion::default();
+        let mut c2 = Completion::default();
+        let mut ud = Ud {
+            root,
+            c2: core::ptr::addr_of_mut!(c2),
+            first: false,
+            second: false,
+        };
+        let udp: *mut Ud = core::ptr::addr_of_mut!(ud);
+        unsafe {
+            (*root).timer(core::ptr::addr_of_mut!(c1), 0, udp.cast(), first_cb);
+            Loop::run_raw(root, RunMode::UntilDone).unwrap();
+            assert!((*udp).first);
+            assert!((*udp).second);
+            assert!((*root).stopped());
+            (*root).deinit();
+        }
     }
 
     // test "io_uring: loop time"

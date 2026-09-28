@@ -401,9 +401,9 @@ fn live_shell_echo_round_trips_into_the_screen() {
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut found = false;
     for _ in 0..2000 {
-        thread
-            .loop_
-            .run(xev::RunMode::NoWait)
+        // N431: through the raw loop pointer `td.loop_` re-enters through
+        // (`xev::Loop::run`), not a `&mut` of the whole loop.
+        unsafe { xev::Loop::run_raw(std::ptr::addr_of_mut!(thread.loop_), xev::RunMode::NoWait) }
             .expect("loop.run(NoWait)");
 
         let dump = h.screen_dump();

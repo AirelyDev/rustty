@@ -1233,7 +1233,9 @@ where
             }
         }
         let _thread_shutdown = ThreadShutdown;
-        unsafe { (*self_).loop_.run(xev::RunMode::UntilDone) }?;
+        // PORT NOTE (N431): entered through the loop pointer its callbacks re-enter
+        // through, never a `&mut Loop` (see `xev::Loop::run`).
+        unsafe { xev::Loop::run_raw(&raw mut (*self_).loop_, xev::RunMode::UntilDone) }?;
         Ok(())
     }
 
@@ -2629,7 +2631,9 @@ mod compression_tests {
         /// `.until_done` returns precisely when the idle pass is over (or
         /// immediately when nothing was scheduled).
         fn run(&self) {
-            unsafe { (*self.thread).loop_.run(xev::RunMode::UntilDone) }.expect("loop.run");
+            // N431: through the raw loop pointer the compression timer re-arms on.
+            unsafe { xev::Loop::run_raw(&raw mut (*self.thread).loop_, xev::RunMode::UntilDone) }
+                .expect("loop.run");
         }
 
         /// How many primary-screen pages are currently encoded (compressed) —

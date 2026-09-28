@@ -7941,7 +7941,9 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(3);
         let mut found = false;
         for _ in 0..2000 {
-            loop_.run(xev::RunMode::NoWait).expect("loop.run(NoWait)");
+            // N431: through `loop_ptr`, the pointer `td.loop_` re-enters through.
+            unsafe { xev::Loop::run_raw(loop_ptr, xev::RunMode::NoWait) }
+                .expect("loop.run(NoWait)");
 
             let dump = t.screen_dump();
             if dump.windows(needle.len()).any(|w| w == needle) {
@@ -8247,7 +8249,7 @@ mod tests {
             e.read_thread_fd
         };
 
-        before_first_tick(pid, &mut loop_);
+        before_first_tick(pid, unsafe { &mut *loop_ptr });
 
         let exited = |td: &crate::termio_impl::ThreadData<TestMailbox>| {
             let crate::backend::ThreadData::Exec(e) = &td.backend;
@@ -8255,7 +8257,9 @@ mod tests {
         };
         let deadline = Instant::now() + Duration::from_secs(5);
         while !exited(&td) && Instant::now() < deadline {
-            loop_.run(xev::RunMode::NoWait).expect("loop.run(NoWait)");
+            // N431: through `loop_ptr`, the pointer `td.loop_` re-enters through.
+            unsafe { xev::Loop::run_raw(loop_ptr, xev::RunMode::NoWait) }
+                .expect("loop.run(NoWait)");
             std::thread::sleep(Duration::from_millis(1));
         }
         let was_exited = exited(&td);
@@ -8792,7 +8796,9 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut found = false;
         while Instant::now() < deadline {
-            loop_.run(xev::RunMode::NoWait).expect("loop.run(NoWait)");
+            // N431: through `loop_ptr`, the pointer `td.loop_` re-enters through.
+            unsafe { xev::Loop::run_raw(loop_ptr, xev::RunMode::NoWait) }
+                .expect("loop.run(NoWait)");
             let dump = t.screen_dump();
             if dump.windows(needle.len()).any(|w| w == needle) {
                 found = true;
