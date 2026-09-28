@@ -7346,6 +7346,10 @@ mod tests {
 
     // ref: test "Terminal setScrollbackMaxLines"
     #[test]
+    #[cfg_attr(
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+    )]
     fn terminal_set_scrollback_max_lines() {
         let mut t = Terminal::init(
             Global,
@@ -22504,6 +22508,10 @@ mod tests {
     // two rows and start the third, so the clone's per-row `add_with_id` for
     // the third row's first cell lands on an already-saturated style.
     #[test]
+    #[cfg_attr(
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+    )]
     fn ud80_wide_terminal_capacity_clone_past_the_refcount_ceiling_keeps_every_cell_styled() {
         const PRINTS: usize = 110_000;
         let mut t = Terminal::init(Global, opts(UD80_COLS, UD80_ROWS)).unwrap();
@@ -22732,6 +22740,10 @@ mod tests {
     // each), so the re-clone reclaims nothing and the reference's split still
     // happens, once per SGR, and returns.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, parity tail C-1; .port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound with debug assertions on (G6) and past an 8-minute bound with them off (G6c), both measured one test per process; runs natively in cargo test --workspace and under ASan (see MIRI_EXCEPTIONS.md)"
+    )]
     fn ud80_wide_terminal_live_styles_at_the_capacity_ceiling_still_split() {
         let mut t = Terminal::init(Global, opts(UD80_COLS, UD80_ROWS)).unwrap();
         t.set_attribute(sgr::Attribute::Bold).unwrap();

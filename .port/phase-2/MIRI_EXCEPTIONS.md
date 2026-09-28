@@ -2724,7 +2724,7 @@ Not excepted, FIXED: `style::tests::convert_style_with_colors` (UB, NEW-FINDINGS
 `cfg(miri)` corpus had dropped the one capture that grows, so the remap sweep asserted nothing to
 refuse; the Miri corpus keeps a `MAX_BUF + 64` capture and the test passes in 51 s).
 
-### `rustty-vt` (lane: see the C-1 report; G6c: 117 tests)
+### `rustty-vt` (lane: see the C-1 report; G6c: 119 tests)
 
 Found through this triage and FIXED in code, not excepted: N394 (`RenderState::update` held a shared
 row slice across `set_dirty` writes, Stacked Borrows); `page_tests.rs`'s two unaligned-buffer tests
@@ -2753,7 +2753,7 @@ Budget exceptions that are not about page integrity:
 | `tests/viewport_fingerprint_alloc.rs` `fingerprint_only_allocates_on_changes` | past a 15-minute bound; the contract is Miri-verified in G6 by the port of the reference test, `search::viewport::tests::fingerprint_only_allocates_on_changes` and `fingerprint_allocation_failure_preserves_the_old_fingerprint` |
 | `tests/print_grapheme_transfer_alloc.rs` `cross_page_wide_grapheme_transfer_does_not_allocate` | fills a whole page line by line (stopped after 9 minutes); the cross-page transfer path is Miri-verified in G6c by `terminal::tests::terminal_print_wide_grapheme_transfers_across_a_page_seam` |
 
-**Moved from G6 to G6c: 34 tests** (`cfg_attr(all(miri, debug_assertions), ignore)`, the WS19 T6
+**Moved from G6 to G6c: 36 tests** (`cfg_attr(all(miri, debug_assertions), ignore)`, the WS19 T6
 partition). Each ran past a 15-minute bound in G6 (one test per process, 8 workers; 20 minutes for
 some in the first pass), and each passed in G6c conditions (`-C debug-assertions=off`,
 `-Zmiri-disable-isolation`) within an 8-minute bound, 7 workers on a host other agents were also
@@ -2762,6 +2762,8 @@ takes at most 0.3 s, cargo overhead included: the integrity walks are the cost.
 
 | test | native, debug assertions on | G6c, measured |
 |---|---|---|
+| `terminal::tests::terminal_set_scrollback_max_lines` | 3.86 s | 4 s (found in a later pass) |
+| `terminal::tests::ud80_wide_terminal_capacity_clone_past_the_refcount_ceiling_keeps_every_cell_styled` | 0.24 s | 171 s (found in a later pass) |
 | `pagelist::tests::pagelist_enforce_limit_marks_activity_and_preserves_continuation` | 2.28 s | 2 s |
 | `pagelist::tests::pagelist_eraseRowBounded_hyperlink_dense_row_crosses_page_boundary` | 2.35 s | 2 s |
 | `pagelist::tests::pagelist_eraseRow_hyperlink_dense_row_crosses_page_boundary` | 2.31 s | 2 s |
@@ -2797,10 +2799,10 @@ takes at most 0.3 s, cargo overhead included: the integrity walks are the cost.
 | `terminal::tests::ud131_thirty_one_colours_is_the_80_column_control` | 0.67 s | 12 s |
 | `terminal::tests::ud80_wide_terminal_decaln_past_the_refcount_ceiling_keeps_every_cell_styled` | 0.19 s | 271 s |
 
-**Both lanes: 20 tests** (plain `cfg_attr(miri, ignore)`, "BOTH LANES" in the reason): past 15
+**Both lanes: 21 tests** (plain `cfg_attr(miri, ignore)`, "BOTH LANES" in the reason): past 15
 minutes in G6 AND past 8 minutes in G6c, one test per process. Criterion 2: all pass natively,
-and all 20 ran under AddressSanitizer (`sanitizers.sh rustty-vt <the 20 names> address`, task C-1,
-2026-09-28: 20 passed, no finding; not repeated by a gate). Criterion 3: their families stay
+and all 21 ran under AddressSanitizer (20 in one run, the late one alone) (`sanitizers.sh rustty-vt <the 20 names> address`, task C-1,
+2026-09-28: 20 + 1 passed, no finding; not repeated by a gate). Criterion 3: their families stay
 Miri-covered by lighter tests that pass in G6 or G6c: the incremental-compression family by the
 `pagelist_incremental_compression_*` tests moved to G6c above and the WS7 compression tests already
 there; the UD80/UD131 style-ceiling family by the G6c-moved `ud80_*`/`ud131_*` siblings and the
@@ -2809,6 +2811,7 @@ The cost of the ud80/ud131 and compression members was not profiled further (UNV
 
 | test | native, debug assertions on |
 |---|---|
+| `terminal::tests::ud80_wide_terminal_live_styles_at_the_capacity_ceiling_still_split` | 1.45 s (found in a later pass; ASan: 1 passed) |
 | `pagelist::tests::pagelist_compress_page_rejects_an_already_compressed_node` | 1.19 s |
 | `pagelist::tests::pagelist_compression_restores_through_page_access` | 0.10 s |
 | `pagelist::tests::pagelist_incremental_compression_restarts_after_active_boundary_resize` | 2.26 s |
