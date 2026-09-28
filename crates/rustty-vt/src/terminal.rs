@@ -7275,6 +7275,10 @@ mod tests {
 
     // ref: test "Terminal setScrollbackMaxBytes"
     #[test]
+    #[cfg_attr(
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+    )]
     fn terminal_set_scrollback_max_bytes() {
         let mut t = Terminal::init(
             Global,
@@ -10240,6 +10244,10 @@ mod tests {
     // Found via fuzzing.
     // test "Terminal: scrollClear across pages keeps cursor hyperlink refs page-local"
     #[test]
+    #[cfg_attr(
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+    )]
     fn terminal_scroll_clear_across_pages_keeps_cursor_hyperlink_refs_page_local() {
         // Minimized from a 774-byte AFL fuzz input. Reading it:
         //
@@ -11419,6 +11427,10 @@ mod tests {
 
     // test "Terminal: restoreCursor uses default style on OutOfSpace"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, parity tail C-1; .port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound with debug assertions on (G6) and past an 8-minute bound with them off (G6c), both measured one test per process; runs natively in cargo test --workspace and under ASan (see MIRI_EXCEPTIONS.md)"
+    )]
     fn terminal_restore_cursor_uses_default_style_on_out_of_space() {
         // Tests that restoreCursor falls back to default style when
         // manualStyleUpdate fails with OutOfSpace (can't split a 1-row page
@@ -16335,6 +16347,10 @@ mod tests {
     #[allow(non_snake_case)]
     // test "Terminal: insertLines hyperlink-dense row crosses page boundary"
     #[test]
+    #[cfg_attr(
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+    )]
     fn terminal_insertLines_hyperlink_dense_row_crosses_page_boundary() {
         // Regression test for the cross-page copy of insertLines: when the
         // shifted row carries more unique hyperlinks than the destination
@@ -16454,6 +16470,10 @@ mod tests {
     #[allow(non_snake_case)]
     // test "Terminal: deleteLines hyperlink-dense row crosses page boundary"
     #[test]
+    #[cfg_attr(
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+    )]
     fn terminal_deleteLines_hyperlink_dense_row_crosses_page_boundary() {
         // Regression test for the cross-page copy of deleteLines: when the
         // shifted row carries more unique hyperlinks than the destination
@@ -21530,6 +21550,10 @@ mod tests {
     /// is exercised upstream only through `PageList`. It pins the two
     /// properties `Terminal::compression_activity` promises to its callers.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, parity tail C-1; .port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound with debug assertions on (G6) and past an 8-minute bound with them off (G6c), both measured one test per process; runs natively in cargo test --workspace and under ASan (see MIRI_EXCEPTIONS.md)"
+    )]
     fn terminal_compression_activity_tracks_pagelist_mutation_not_compression() {
         let alloc = Global;
         let mut t = Terminal::init(alloc, opts_sb(80, 24, 10 * 1024 * 1024)).unwrap();
@@ -21582,6 +21606,10 @@ mod tests {
     /// PORT NOTE: no reference counterpart — upstream exercises compression only
     /// through `PageList`, and documents nothing about the restart.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, parity tail C-1; .port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound with debug assertions on (G6) and past an 8-minute bound with them off (G6c), both measured one test per process; runs natively in cargo test --workspace and under ASan (see MIRI_EXCEPTIONS.md)"
+    )]
     fn terminal_compress_incremental_restarts_after_complete() {
         let alloc = Global;
         let mut t = Terminal::init(alloc, opts_sb(80, 24, 10 * 1024 * 1024)).unwrap();
@@ -22029,6 +22057,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+    )]
     fn terminal_print_wide_grapheme_transfers_across_a_page_seam() {
         let mut t = Terminal::init(Global, opts(COLS, 5)).unwrap();
 
@@ -22340,6 +22372,10 @@ mod tests {
     // API route): one style, 70,000 single prints, checked at the exact
     // ceiling on the way.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, parity tail C-1; .port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound with debug assertions on (G6) and past an 8-minute bound with them off (G6c), both measured one test per process; runs natively in cargo test --workspace and under ASan (see MIRI_EXCEPTIONS.md)"
+    )]
     fn ud80_wide_terminal_one_style_past_the_refcount_ceiling_keeps_every_cell_styled() {
         let mut t = Terminal::init(Global, opts(UD80_COLS, UD80_ROWS)).unwrap();
         t.set_attribute(sgr::Attribute::Bold).unwrap();
@@ -22412,6 +22448,10 @@ mod tests {
 
     // UD80 through DECALN (`use_multiple(cols)` per row): three full rows.
     #[test]
+    #[cfg_attr(
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+    )]
     fn ud80_wide_terminal_decaln_past_the_refcount_ceiling_keeps_every_cell_styled() {
         let mut t = Terminal::init(Global, opts(UD80_COLS, UD80_ROWS)).unwrap();
         let red = color::RGB {
@@ -22619,6 +22659,10 @@ mod tests {
     // DECALN) stays on the full half, and that SGR and every later one fail
     // (`set_attribute` keeps the previous style).
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, parity tail C-1; .port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound with debug assertions on (G6) and past an 8-minute bound with them off (G6c), both measured one test per process; runs natively in cargo test --workspace and under ASan (see MIRI_EXCEPTIONS.md)"
+    )]
     fn ud80_wide_terminal_orphaned_pinned_styles_at_the_capacity_ceiling_are_reclaimed_not_split() {
         const REAL: u32 = 4;
         const PAST: u32 = 6;
@@ -22792,6 +22836,10 @@ mod tests {
     // ("increaseCapacity OutOfSpace") here; the port re-clones once, which
     // drops the orphans, and the copy succeeds.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, parity tail C-1; .port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound with debug assertions on (G6) and past an 8-minute bound with them off (G6c), both measured one test per process; runs natively in cargo test --workspace and under ASan (see MIRI_EXCEPTIONS.md)"
+    )]
     fn ud80_delete_lines_into_a_page_full_of_orphaned_pinned_styles_reclaims_them() {
         let mut t = Terminal::init(Global, opts(4000, 5)).unwrap();
         let first_page_rows =
@@ -23202,6 +23250,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+    )]
     fn ud131_delete_lines_degrades_on_an_ordinary_80_column_terminal() {
         let o = ud131_psl_80col_run(32);
         assert!(o.y_found, "the 'Y' cell survives the copy");
@@ -23225,6 +23277,10 @@ mod tests {
     // rehashes instead of failing: nothing degrades, nothing is logged (the
     // reference survives this too).
     #[test]
+    #[cfg_attr(
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+    )]
     fn ud131_thirty_one_colours_is_the_80_column_control() {
         let o = ud131_psl_80col_run(31);
         assert!(o.y_found, "'Y' is present");

@@ -2064,6 +2064,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-vt, parity tail C-1): formatting the captured `Backtrace` resolves symbols, which calls `getcwd`, forbidden under Miri isolation; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
     fn failing_allocator_captures_the_stack_at_the_first_induced_failure() {
         let f = FailingAllocator::over_heap(Config {
             fail_index: 1,

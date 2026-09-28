@@ -2723,3 +2723,110 @@ Not excepted, FIXED: `style::tests::convert_style_with_colors` (UB, NEW-FINDINGS
 `RenderState::update`, N394); `osc::tests::osc_allocation_failure_sweep_through_the_c_api` (its
 `cfg(miri)` corpus had dropped the one capture that grows, so the remap sweep asserted nothing to
 refuse; the Miri corpus keeps a `MAX_BUF + 64` capture and the test passes in 51 s).
+
+### `rustty-vt` (lane: see the C-1 report; G6c: 117 tests)
+
+Found through this triage and FIXED in code, not excepted: N394 (`RenderState::update` held a shared
+row slice across `set_dirty` writes, Stacked Borrows); `page_tests.rs`'s two unaligned-buffer tests
+leaked their buffer on purpose (a drop guard now frees it on unwind); the snapshot golden tests
+(`snapshot::fixture::expect_equal`) now compare bytes only under `cfg(miri)`, where the candidate file
+they also write (a debugging aid for a mismatch) is forbidden by isolation, so the golden
+encode/decode paths stay in the lane; `pagelist_integrity_detects_max_lines_exceeded` fills its page
+with that page's integrity checks paused (see its entry above), so it runs in G6.
+
+Isolation / foreign-call exceptions:
+
+| test | what Miri cannot do |
+|---|---|
+| `alloc::tests::failing_allocator_captures_the_stack_at_the_first_induced_failure` | formatting the captured `Backtrace` resolves symbols, which calls `getcwd` |
+| `kitty::graphics_image::tests::zlib_inflate_accepts_exactly_the_limit` | vendored zlib (`inflateInit2_`) |
+| `ref_geometry_golden_tests::the_port_matches_the_reference_geometry_golden` | `open` (reads the checked-in golden) |
+| `stream_terminal::tests::kitty_graphics_shared_memory_copies_the_requested_range` | `shm_open` / `shm_unlink` |
+| `tests/fuzz_corpus_replay.rs`: `replay_fixed_fuzz_findings_osc`, `replay_port_full_corpus`, `replay_port_initial_seeds_{cross,osc,parser,stream}` | `stat` / `opendir` (walk the mirrored corpus) |
+| `tests/kitty_temp_dir_security.rs` `kitty_temp_file_medium_ignores_the_process_tmpdir` | real temporary-directory file system calls |
+
+Budget exceptions that are not about page integrity:
+
+| test | why |
+|---|---|
+| `compress::lz4_differential::lz4_differential_light` | a 24 s native property suite even with debug assertions off, over `lz4.rs`, which has no `unsafe`; the codec is Miri-covered by the 14 `compress::lz4::tests` (all pass in G6) and `.port/phase-2/mirihar-compress-lz4` |
+| `tests/viewport_fingerprint_alloc.rs` `fingerprint_only_allocates_on_changes` | past a 15-minute bound; the contract is Miri-verified in G6 by the port of the reference test, `search::viewport::tests::fingerprint_only_allocates_on_changes` and `fingerprint_allocation_failure_preserves_the_old_fingerprint` |
+| `tests/print_grapheme_transfer_alloc.rs` `cross_page_wide_grapheme_transfer_does_not_allocate` | fills a whole page line by line (stopped after 9 minutes); the cross-page transfer path is Miri-verified in G6c by `terminal::tests::terminal_print_wide_grapheme_transfers_across_a_page_seam` |
+
+**Moved from G6 to G6c: 34 tests** (`cfg_attr(all(miri, debug_assertions), ignore)`, the WS19 T6
+partition). Each ran past a 15-minute bound in G6 (one test per process, 8 workers; 20 minutes for
+some in the first pass), and each passed in G6c conditions (`-C debug-assertions=off`,
+`-Zmiri-disable-isolation`) within an 8-minute bound, 7 workers on a host other agents were also
+loading. Natively, with debug assertions, they take the times below; with them off every one of them
+takes about 0.1 s (the cargo overhead) except the LZ4 suite above: the integrity walks are the cost.
+
+| test | native, debug assertions on | G6c, measured |
+|---|---|---|
+| `pagelist::tests::pagelist_enforce_limit_marks_activity_and_preserves_continuation` | 2.28 s | 2 s |
+| `pagelist::tests::pagelist_eraseRowBounded_hyperlink_dense_row_crosses_page_boundary` | 2.35 s | 2 s |
+| `pagelist::tests::pagelist_eraseRow_hyperlink_dense_row_crosses_page_boundary` | 2.31 s | 2 s |
+| `pagelist::tests::pagelist_increaseCapacity_returns_OutOfSpace_at_max_capacity` | 0.10 s | 77 s |
+| `pagelist::tests::pagelist_incremental_compression_advances_after_allocation_failure` | 1.18 s | 44 s |
+| `pagelist::tests::pagelist_incremental_compression_advances_after_decommit_failure` | 1.17 s | 45 s |
+| `pagelist::tests::pagelist_incremental_compression_advances_after_failure` | 1.18 s | 106 s |
+| `pagelist::tests::pagelist_incremental_compression_bounds_inspected_pages` | 5.01 s | 304 s |
+| `pagelist::tests::pagelist_incremental_compression_keeps_progress_after_tail_growth` | 5.47 s | 305 s |
+| `pagelist::tests::pagelist_incremental_compression_restarts_after_prune_reuse` | 1.18 s | 50 s |
+| `pagelist::tests::pagelist_incremental_compression_restarts_after_reset` | 1.18 s | 48 s |
+| `pagelist::tests::pagelist_incremental_compression_skips_visible_history` | 1.73 s | 113 s |
+| `pagelist::tests::pagelist_lazily_restores_compressed_history_made_active_by_resize` | 0.63 s | 31 s |
+| `pagelist::tests::pagelist_max_lines_and_max_size_enforce_the_smaller_limit` | 3.33 s | 3 s |
+| `pagelist::tests::pagelist_max_lines_applies_to_resize_and_clone` | 2.24 s | 23 s |
+| `pagelist::tests::pagelist_max_lines_does_not_round_larger_limits` | 0.77 s | 0 s |
+| `pagelist::tests::pagelist_max_lines_uses_one_page_minimum` | 0.63 s | 0 s |
+| `pagelist::tests::pagelist_prune_reuses_malformed_compressed_page_memory` | 1.17 s | 22 s |
+| `pagelist::tests::pagelist_set_max_bytes_prunes_immediately_and_can_be_raised` | 6.05 s | 4 s |
+| `pagelist::tests::pagelist_set_max_limits_remain_independent` | 3.89 s | 2 s |
+| `pagelist::tests::pagelist_set_max_lines_prunes_immediately_and_can_be_raised` | 4.96 s | 3 s |
+| `render::tests::incremental_updates_match_full_rebuild` | 0.30 s | 135 s |
+| `screen::tests::screen_scroll_above_hyperlink_dense_row_to_existing_page` | 16.40 s | 28 s |
+| `screen::tests::screen_scroll_above_hyperlink_dense_row_to_fresh_page` | 16.47 s | 26 s |
+| `screen::tests::screen_scrollback_bytes_zero_none_and_finite_are_distinct` | 32.70 s | 20 s |
+| `snapshot::screen::tests::screen_encodes_the_minimal_complete_page_active_suffix` | 0.63 s | 18 s |
+| `terminal::tests::terminal_deleteLines_hyperlink_dense_row_crosses_page_boundary` | 20.33 s | 23 s |
+| `terminal::tests::terminal_insertLines_hyperlink_dense_row_crosses_page_boundary` | 20.49 s | 19 s |
+| `terminal::tests::terminal_print_wide_grapheme_transfers_across_a_page_seam` | 0.59 s | 1 s |
+| `terminal::tests::terminal_scroll_clear_across_pages_keeps_cursor_hyperlink_refs_page_local` | 0.31 s | 17 s |
+| `terminal::tests::terminal_set_scrollback_max_bytes` | 3.85 s | 8 s |
+| `terminal::tests::ud131_delete_lines_degrades_on_an_ordinary_80_column_terminal` | 10.62 s | 58 s |
+| `terminal::tests::ud131_thirty_one_colours_is_the_80_column_control` | 0.67 s | 12 s |
+| `terminal::tests::ud80_wide_terminal_decaln_past_the_refcount_ceiling_keeps_every_cell_styled` | 0.19 s | 271 s |
+
+**Both lanes: 20 tests** (plain `cfg_attr(miri, ignore)`, "BOTH LANES" in the reason): past 15
+minutes in G6 AND past 8 minutes in G6c, one test per process. Criterion 2: all pass natively,
+and all 20 ran under AddressSanitizer (`sanitizers.sh rustty-vt <the 20 names> address`, task C-1,
+2026-09-28: 20 passed, no finding; not repeated by a gate). Criterion 3: their families stay
+Miri-covered by lighter tests that pass in G6 or G6c: the incremental-compression family by the
+`pagelist_incremental_compression_*` tests moved to G6c above and the WS7 compression tests already
+there; the UD80/UD131 style-ceiling family by the G6c-moved `ud80_*`/`ud131_*` siblings and the
+`style`/`page` unit tests; snapshot history/page decode by the snapshot tests that pass in G6.
+The cost of the ud80/ud131 and compression members was not profiled further (UNVERIFIED).
+
+| test | native, debug assertions on |
+|---|---|
+| `pagelist::tests::pagelist_compress_page_rejects_an_already_compressed_node` | 1.19 s |
+| `pagelist::tests::pagelist_compression_restores_through_page_access` | 0.10 s |
+| `pagelist::tests::pagelist_incremental_compression_restarts_after_active_boundary_resize` | 2.26 s |
+| `pagelist::tests::pagelist_incremental_compression_restarts_after_earlier_replacement` | 2.79 s |
+| `pagelist::tests::pagelist_incremental_compression_restarts_after_replacement` | 1.73 s |
+| `pagelist::tests::ud131_erase_row_loop_degrades_only_new_styles_and_grows_the_other_dimensions` | 4.02 s |
+| `pagelist::tests::ud131_erase_row_loop_full_live_set_degrades_new_style_to_default` | 1.45 s |
+| `pagelist::tests::ud80_erase_row_into_a_page_full_of_orphaned_pinned_styles_reclaims_them` | 0.41 s |
+| `render::tests::render_state_allocation_failure_sweep` | 0.39 s |
+| `screen::tests::ud131_clone_partial_row_loop_degrades_only_new_styles_and_grows_the_other_dimensions` | 4.01 s |
+| `screen::tests::ud131_clone_partial_row_loop_full_live_set_degrades_new_style_to_default` | 1.46 s |
+| `snapshot::history::tests::history_encodes_newest_first_and_restores_complete_history` | 1.20 s |
+| `snapshot::page::tests::decode_sparse_page_rejects_every_truncation` | 0.15 s |
+| `terminal::tests::terminal_compress_incremental_restarts_after_complete` | 3.66 s |
+| `terminal::tests::terminal_compression_activity_tracks_pagelist_mutation_not_compression` | 3.66 s |
+| `terminal::tests::terminal_restore_cursor_uses_default_style_on_out_of_space` | 0.12 s |
+| `terminal::tests::ud80_delete_lines_into_a_page_full_of_orphaned_pinned_styles_reclaims_them` | 0.41 s |
+| `terminal::tests::ud80_wide_terminal_one_style_past_the_refcount_ceiling_keeps_every_cell_styled` | 0.13 s |
+| `terminal::tests::ud80_wide_terminal_orphaned_pinned_styles_at_the_capacity_ceiling_are_reclaimed_not_split` | 1.81 s |
+| `tmux::layout::tests::dropping_a_very_deep_layout_does_not_recurse` | 0.11 s |
+

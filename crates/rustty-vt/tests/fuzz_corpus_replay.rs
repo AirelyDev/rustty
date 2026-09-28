@@ -201,6 +201,10 @@ fn replay_dir_filtered(dir: &Path, harness: fn(&[u8]), keep: fn(&Path) -> bool) 
 /// no harness consumes the corpus (and fails to compile without
 /// `rustty_vt::fuzz_harness` at all).
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-vt, parity tail C-1): `stat`/`opendir` are forbidden under Miri isolation (walks the mirrored fuzz corpus); runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+)]
 fn replay_port_initial_seeds_osc() {
     if skip_without_corpus("replay_port_initial_seeds_osc") {
         return;
@@ -213,6 +217,10 @@ fn replay_port_initial_seeds_osc() {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-vt, parity tail C-1): `stat` is forbidden under Miri isolation (walks the mirrored fuzz corpus); runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+)]
 fn replay_port_initial_seeds_parser() {
     if skip_without_corpus("replay_port_initial_seeds_parser") {
         return;
@@ -225,6 +233,10 @@ fn replay_port_initial_seeds_parser() {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-vt, parity tail C-1): `stat` is forbidden under Miri isolation (walks the mirrored fuzz corpus); runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+)]
 fn replay_port_initial_seeds_stream() {
     if skip_without_corpus("replay_port_initial_seeds_stream") {
         return;
@@ -247,6 +259,10 @@ fn replay_port_initial_seeds_stream() {
 /// (`ghostty test/fuzz-libghostty/corpus/*-initial`) and adding port-local
 /// files would break that provenance.
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-vt, parity tail C-1): `opendir` is forbidden under Miri isolation (walks the mirrored fuzz corpus); runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+)]
 fn replay_fixed_fuzz_findings_osc() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("fuzz/findings");
     let n = replay_dir_filtered(&dir, fuzz_harness::fuzz_osc, |p| {
@@ -265,6 +281,10 @@ fn replay_fixed_fuzz_findings_osc() {
 /// consumes byte 0 as the path selector) and the osc seeds are valid parser
 /// inputs. Cheap (94 files) and catches cross-subsystem panics.
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-vt, parity tail C-1): `stat`/`opendir` are forbidden under Miri isolation (walks the mirrored fuzz corpus); runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+)]
 fn replay_port_initial_seeds_cross() {
     if skip_without_corpus("replay_port_initial_seeds_cross") {
         return;
@@ -300,6 +320,10 @@ const TIERS: [Tier<'static>; 6] = [
 ///
 /// The reference commits all six tiers for the same reason; this mirrors that.
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-vt, parity tail C-1): `stat`/`opendir` are forbidden under Miri isolation (walks the mirrored fuzz corpus); runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+)]
 fn replay_port_full_corpus() {
     if skip_without_corpus("replay_port_full_corpus") {
         return;

@@ -1494,6 +1494,10 @@ mod tests {
 
     // test "decode sparse page rejects every truncation"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, parity tail C-1; .port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound with debug assertions on (G6) and past an 8-minute bound with them off (G6c), both measured one test per process; runs natively in cargo test --workspace and under ASan (see MIRI_EXCEPTIONS.md)"
+    )]
     fn decode_sparse_page_rejects_every_truncation() {
         let test_page_fixture = test_page_fixture();
         for len in 0..test_page_fixture.len() {

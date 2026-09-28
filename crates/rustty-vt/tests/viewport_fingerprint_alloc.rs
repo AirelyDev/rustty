@@ -117,6 +117,10 @@ fn terminal_opts(cols: u16, rows: u16) -> TerminalOptions {
 
 // test "fingerprint only allocates on changes"
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-vt, parity tail C-1): intractable under Miri (past a 15-minute bound); the same contract is Miri-verified by the port of the reference test, `search::viewport::tests::fingerprint_only_allocates_on_changes` and `fingerprint_allocation_failure_preserves_the_old_fingerprint`; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+)]
 fn fingerprint_only_allocates_on_changes() {
     // REBUILD SENTINEL: verified to fire when tripped (see the lane report).
     assert_eq!(2 + 2, 4, "REBUILD SENTINEL");

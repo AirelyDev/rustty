@@ -1524,6 +1524,10 @@ fn pagelist_increaseCapacity_tracked_pins() {
 
 // ref: test "PageList increaseCapacity returns OutOfSpace at max capacity"
 #[test]
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+)]
 fn pagelist_increaseCapacity_returns_OutOfSpace_at_max_capacity() {
     let mut s = PageList::init(
         Global,
@@ -2812,6 +2816,10 @@ fn pagelist_compression_leaves_incompressible_pages_resident() {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, parity tail C-1; .port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound with debug assertions on (G6) and past an 8-minute bound with them off (G6c), both measured one test per process; runs natively in cargo test --workspace and under ASan (see MIRI_EXCEPTIONS.md)"
+)]
 fn pagelist_compress_page_rejects_an_already_compressed_node() {
     let mut s = PageList::init(
         Global,
@@ -3723,6 +3731,10 @@ fn compressed_encoded_fill_for_test(node: *mut super::Node, byte: u8) {
 /// PORTS: oracle@main PageList.zig `test "PageList incremental compression skips
 /// visible history"` (9156ada16).
 #[test]
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+)]
 fn pagelist_incremental_compression_skips_visible_history() {
     let mut s = PageList::init(Global, Options::new(80, 24)).unwrap();
     grow_cold_pages_for_test(&mut s, 3);
@@ -3857,6 +3869,10 @@ fn pagelist_owns_incremental_compression_state() {
 /// PORTS: oracle@main PageList.zig `test "PageList incremental compression
 /// bounds inspected pages"` (9156ada16).
 #[test]
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+)]
 fn pagelist_incremental_compression_bounds_inspected_pages() {
     const MAX: usize = super::compress::INCREMENTAL_COMPRESSION_MAX_INSPECTED;
 
@@ -3903,6 +3919,10 @@ fn pagelist_incremental_compression_bounds_inspected_pages() {
 /// PORTS: oracle@main PageList.zig `test "PageList incremental compression
 /// advances after failure"` (9156ada16).
 #[test]
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+)]
 fn pagelist_incremental_compression_advances_after_failure() {
     let mut s = PageList::init(Global, Options::new(80, 24)).unwrap();
     grow_cold_pages_for_test(&mut s, 2);
@@ -3932,6 +3952,10 @@ fn pagelist_incremental_compression_advances_after_failure() {
 /// ignored there rather than left to fail — same convention as
 /// `pagelist_compress_page_decommit_failure_leaves_the_page_resident`.
 #[test]
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+)]
 fn pagelist_incremental_compression_advances_after_decommit_failure() {
     use rustty_util::tripwire::ResetMode;
 
@@ -3968,6 +3992,10 @@ fn pagelist_incremental_compression_advances_after_decommit_failure() {
 /// that disappeared with the old node makes the pass restart and consider the
 /// oversized replacement — was unasserted. Ported here.
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, parity tail C-1; .port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound with debug assertions on (G6) and past an 8-minute bound with them off (G6c), both measured one test per process; runs natively in cargo test --workspace and under ASan (see MIRI_EXCEPTIONS.md)"
+)]
 fn pagelist_incremental_compression_restarts_after_replacement() {
     let mut s = PageList::init(Global, Options::new(80, 24)).unwrap();
     grow_cold_pages_for_test(&mut s, 1);
@@ -4004,6 +4032,10 @@ fn pagelist_incremental_compression_restarts_after_replacement() {
 /// `pagelist_compress_incremental_restarts_after_list_mutation` purely by name
 /// overlap; nothing in the tree called `reset` between incremental steps.
 #[test]
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+)]
 fn pagelist_incremental_compression_restarts_after_reset() {
     let mut s = PageList::init(Global, Options::new(80, 24)).unwrap();
     grow_cold_pages_for_test(&mut s, 1);
@@ -4025,6 +4057,10 @@ fn pagelist_incremental_compression_restarts_after_reset() {
 /// PORTS: oracle@main PageList.zig `test "PageList incremental compression
 /// restarts after active boundary resize"` (9156ada16).
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, parity tail C-1; .port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound with debug assertions on (G6) and past an 8-minute bound with them off (G6c), both measured one test per process; runs natively in cargo test --workspace and under ASan (see MIRI_EXCEPTIONS.md)"
+)]
 fn pagelist_incremental_compression_restarts_after_active_boundary_resize() {
     let mut s = PageList::init(Global, Options::new(80, 24)).unwrap();
     grow_cold_pages_for_test(&mut s, 1);
@@ -4072,6 +4108,10 @@ fn pagelist_incremental_compression_restarts_after_active_boundary_resize() {
 /// PORTS: oracle@main PageList.zig `test "PageList incremental compression
 /// restarts after prune reuse"` (9156ada16).
 #[test]
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+)]
 fn pagelist_incremental_compression_restarts_after_prune_reuse() {
     let mut s = PageList::init(
         Global,
@@ -4109,6 +4149,10 @@ fn pagelist_incremental_compression_restarts_after_prune_reuse() {
 /// PORTS: oracle@main PageList.zig `test "PageList incremental compression
 /// restarts after earlier replacement"` (9156ada16).
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, parity tail C-1; .port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound with debug assertions on (G6) and past an 8-minute bound with them off (G6c), both measured one test per process; runs natively in cargo test --workspace and under ASan (see MIRI_EXCEPTIONS.md)"
+)]
 fn pagelist_incremental_compression_restarts_after_earlier_replacement() {
     let mut s = PageList::init(Global, Options::new(80, 24)).unwrap();
     grow_cold_pages_for_test(&mut s, 3);
@@ -4138,6 +4182,10 @@ fn pagelist_incremental_compression_restarts_after_earlier_replacement() {
 /// PORTS: oracle@main PageList.zig `test "PageList incremental compression keeps
 /// progress after tail growth"` (9156ada16).
 #[test]
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+)]
 fn pagelist_incremental_compression_keeps_progress_after_tail_growth() {
     const MAX: usize = super::compress::INCREMENTAL_COMPRESSION_MAX_INSPECTED;
 
@@ -4175,6 +4223,10 @@ fn pagelist_incremental_compression_keeps_progress_after_tail_growth() {
 /// PORTS: oracle@main PageList.zig `test "PageList lazily restores compressed
 /// history made active by resize"` (9156ada16).
 #[test]
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+)]
 fn pagelist_lazily_restores_compressed_history_made_active_by_resize() {
     let mut s = PageList::init(Global, Options::new(80, 24)).unwrap();
     grow_cold_pages_for_test(&mut s, 1);
@@ -4229,6 +4281,10 @@ fn pagelist_lazily_restores_compressed_history_made_active_by_resize() {
 /// PORTS: oracle@main PageList.zig `test "PageList compression restores through
 /// page access"` (9156ada16).
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, parity tail C-1; .port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound with debug assertions on (G6) and past an 8-minute bound with them off (G6c), both measured one test per process; runs natively in cargo test --workspace and under ASan (see MIRI_EXCEPTIONS.md)"
+)]
 fn pagelist_compression_restores_through_page_access() {
     let mut s = PageList::init(Global, Options::new(80, 24)).unwrap();
 
@@ -4352,6 +4408,10 @@ fn pagelist_deinit_discards_malformed_compressed_data() {
 /// PORTS: oracle@main PageList.zig `test "PageList prune reuses malformed
 /// compressed page memory"` (9156ada16).
 #[test]
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+)]
 fn pagelist_prune_reuses_malformed_compressed_page_memory() {
     let mut s = PageList::init(
         Global,
@@ -4463,6 +4523,10 @@ fn pagelist_oversized_page_is_heap_owned() {
 /// exact-sized encoded allocation, is failed. (This replaced a tripwire
 /// stand-in used while the encoding lived on the Rust heap.)
 #[test]
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+)]
 fn pagelist_incremental_compression_advances_after_allocation_failure() {
     // var failing = testing.FailingAllocator.init(testing.allocator, .{});
     // const alloc = failing.allocator();
@@ -6728,6 +6792,10 @@ fn screen_jump_forward_prompt_skips_multiline_continuation() {
 
 // ref: test "PageList set max bytes prunes immediately and can be raised"
 #[test]
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+)]
 fn pagelist_set_max_bytes_prunes_immediately_and_can_be_raised() {
     let cols: size::CellCountInt = 80;
     let page_rows: usize = PageList::initial_capacity(cols).rows as usize;
@@ -6860,6 +6928,10 @@ fn pagelist_set_max_bytes_zero_preserves_active_boundary() {
 
 // ref: test "PageList set max lines prunes immediately and can be raised"
 #[test]
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+)]
 fn pagelist_set_max_lines_prunes_immediately_and_can_be_raised() {
     let cols: size::CellCountInt = 80;
     let page_rows: usize = PageList::initial_capacity(cols).rows as usize;
@@ -6937,6 +7009,10 @@ fn pagelist_set_max_lines_prunes_immediately_and_can_be_raised() {
 
 // ref: test "PageList set max limits remain independent"
 #[test]
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+)]
 fn pagelist_set_max_limits_remain_independent() {
     let cols: size::CellCountInt = 80;
     let page_rows: usize = PageList::initial_capacity(cols).rows as usize;
@@ -6994,6 +7070,10 @@ fn pagelist_set_max_limits_remain_independent() {
 // `enforce` that finds the limit exceeded but immediately hits the
 // active-boundary `break` must NOT invalidate the traversal.
 #[test]
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+)]
 fn pagelist_enforce_limit_marks_activity_and_preserves_continuation() {
     let cols: size::CellCountInt = 80;
     let page_rows: usize = PageList::initial_capacity(cols).rows as usize;
@@ -7435,6 +7515,10 @@ fn pagelist_integrity_detects_viewport_pin_insufficient_rows() {
 
 // ref: test "PageList max lines uses one-page minimum"
 #[test]
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+)]
 fn pagelist_max_lines_uses_one_page_minimum() {
     let cols: size::CellCountInt = 80;
     let page_rows: usize = PageList::initial_capacity(cols).rows as usize;
@@ -7473,6 +7557,10 @@ fn pagelist_max_lines_uses_one_page_minimum() {
 
 // ref: test "PageList max lines does not round larger limits"
 #[test]
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+)]
 fn pagelist_max_lines_does_not_round_larger_limits() {
     let cols: size::CellCountInt = 80;
     let page_rows: usize = PageList::initial_capacity(cols).rows as usize;
@@ -7533,6 +7621,10 @@ fn pagelist_max_lines_does_not_round_larger_limits() {
 
 // ref: test "PageList max lines and max size enforce the smaller limit"
 #[test]
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+)]
 fn pagelist_max_lines_and_max_size_enforce_the_smaller_limit() {
     let cols: size::CellCountInt = 80;
     let page_rows: usize = PageList::initial_capacity(cols).rows as usize;
@@ -7580,6 +7672,10 @@ fn pagelist_max_lines_and_max_size_enforce_the_smaller_limit() {
 
 // ref: test "PageList max lines applies to resize and clone"
 #[test]
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+)]
 fn pagelist_max_lines_applies_to_resize_and_clone() {
     let cols: size::CellCountInt = 80;
     let page_rows: usize = PageList::initial_capacity(cols).rows as usize;
@@ -17359,6 +17455,10 @@ fn pagelist_increaseCapacity_from_zero_terminates_within_a_bounded_retry() {
 
 // ref: test "PageList eraseRow hyperlink-dense row crosses page boundary"
 #[test]
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+)]
 fn pagelist_eraseRow_hyperlink_dense_row_crosses_page_boundary() {
     // Regression test: when eraseRow shifts rows up across a page
     // boundary, the top row of the next page is cloned into the last
@@ -17511,6 +17611,10 @@ fn pagelist_eraseRow_hyperlink_dense_row_crosses_page_boundary() {
 
 // ref: test "PageList eraseRowBounded hyperlink-dense row crosses page boundary"
 #[test]
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+)]
 fn pagelist_eraseRowBounded_hyperlink_dense_row_crosses_page_boundary() {
     // Same as the eraseRow variant above but for eraseRowBounded,
     // which has the same rotate-then-clone structure and had the
@@ -18420,6 +18524,10 @@ fn pagelist_resize_trimmed_rows_have_default_state() {
 // the copy succeeds. 4,000 columns keeps the page at a dozen rows, so the
 // clones are cheap.
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, parity tail C-1; .port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound with debug assertions on (G6) and past an 8-minute bound with them off (G6c), both measured one test per process; runs natively in cargo test --workspace and under ASan (see MIRI_EXCEPTIONS.md)"
+)]
 fn ud80_erase_row_into_a_page_full_of_orphaned_pinned_styles_reclaims_them() {
     let mut s = PageList::init(Global, Options::new(4000, 10)).unwrap();
     {
@@ -18546,6 +18654,10 @@ const HYPERLINK_URI: &[u8] = b"https://ud131.example/";
 // `size.rows`, so a full 215-row page would make every capacity growth a
 // 10.75M-cell copy.
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, parity tail C-1; .port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound with debug assertions on (G6) and past an 8-minute bound with them off (G6c), both measured one test per process; runs natively in cargo test --workspace and under ASan (see MIRI_EXCEPTIONS.md)"
+)]
 fn ud131_erase_row_loop_full_live_set_degrades_new_style_to_default() {
     let mut s = PageList::init(Global, Options::new(50000, 8)).unwrap();
     // Two pages of four rows each, both with a small `size.rows`.
@@ -18746,6 +18858,10 @@ fn ud131_mixed_fixture(fill: bool) -> PageList {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, parity tail C-1; .port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound with debug assertions on (G6) and past an 8-minute bound with them off (G6c), both measured one test per process; runs natively in cargo test --workspace and under ASan (see MIRI_EXCEPTIONS.md)"
+)]
 fn ud131_erase_row_loop_degrades_only_new_styles_and_grows_the_other_dimensions() {
     use crate::page::ud131_test_support as t;
     // Control: an ordinary destination stores everything.

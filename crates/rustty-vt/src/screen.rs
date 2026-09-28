@@ -6604,6 +6604,10 @@ mod tests {
     // cannot tell the new encoding from the old, so this asserts all THREE
     // behaviours against the same growth workload.
     #[test]
+    #[cfg_attr(
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+    )]
     fn screen_scrollback_bytes_zero_none_and_finite_are_distinct() {
         fn sopts(bytes: Option<usize>) -> Options {
             Options {
@@ -14761,6 +14765,10 @@ mod tests {
 
     // test "Screen: scroll above hyperlink-dense row to fresh page"
     #[test]
+    #[cfg_attr(
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+    )]
     fn screen_scroll_above_hyperlink_dense_row_to_fresh_page() {
         // Regression test for https://github.com/ghostty-org/ghostty/discussions/13160
         //
@@ -14869,6 +14877,10 @@ mod tests {
 
     // test "Screen: scroll above hyperlink-dense row to existing page"
     #[test]
+    #[cfg_attr(
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+    )]
     fn screen_scroll_above_hyperlink_dense_row_to_existing_page() {
         // Same as the fresh page variant above but the destination page
         // already exists (fresh_node == null path in cursorScrollAboveRotate).
@@ -16157,6 +16169,10 @@ mod tests {
     // this test in under a second on the loop's debug re-clone counter instead
     // of re-cloning forever.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, parity tail C-1; .port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound with debug assertions on (G6) and past an 8-minute bound with them off (G6c), both measured one test per process; runs natively in cargo test --workspace and under ASan (see MIRI_EXCEPTIONS.md)"
+    )]
     fn ud131_clone_partial_row_loop_full_live_set_degrades_new_style_to_default() {
         let mut s = Screen::init(
             Allocator,
@@ -16364,6 +16380,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, parity tail C-1; .port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound with debug assertions on (G6) and past an 8-minute bound with them off (G6c), both measured one test per process; runs natively in cargo test --workspace and under ASan (see MIRI_EXCEPTIONS.md)"
+    )]
     fn ud131_clone_partial_row_loop_degrades_only_new_styles_and_grows_the_other_dimensions() {
         use crate::page::ud131_test_support as t;
 

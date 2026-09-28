@@ -679,6 +679,10 @@ mod tests {
 
     // test "HISTORY encodes newest first and restores complete history"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, parity tail C-1; .port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound with debug assertions on (G6) and past an 8-minute bound with them off (G6c), both measured one test per process; runs natively in cargo test --workspace and under ASan (see MIRI_EXCEPTIONS.md)"
+    )]
     fn history_encodes_newest_first_and_restores_complete_history() {
         use crate::pagelist::Node;
         use crate::point;

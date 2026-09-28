@@ -222,6 +222,10 @@ fn the_layout_model_reproduces_the_host() {
 /// needs equality; the style item must fit the reference's slot, and each
 /// set's stride is the reference item.
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-vt, parity tail C-1): `open` is forbidden under Miri isolation (reads the checked-in geometry golden); runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+)]
 fn the_port_matches_the_reference_geometry_golden() {
     let golden = golden();
     let targets: Vec<&str> = {
