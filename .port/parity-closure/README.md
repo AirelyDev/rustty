@@ -70,6 +70,10 @@ Code gaps left after the final triage, none a ledger row:
   About 20 sites in 6 files. The GTK Rust bindings (glib-rs 0.22.8) build
   strings from GTK without a UTF-8 check, so reading such a title back through
   them is undefined behaviour; the fix needs raw `GValue` reads.
+- **N11**: 65 renderer log arguments across about 15 error types still print
+  Rust's `Debug` form where Ghostty prints `error.<Name>`. Log text only; 30
+  sites are in Linux-only code, so the change needs the Linux VM. The shared
+  error-name helper it needs (`rustty-zigstd` `ErrorName`) exists since N121.
 - **N35**: a load-dependent `search_thread` test failure, never diagnosed; needs
   a long run under load.
 - **N354**: a Windows test failure seen once, not reproduced.
