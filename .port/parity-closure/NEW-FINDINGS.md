@@ -7600,4 +7600,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `aarch64-linux-android`, `x86_64-linux-android`, `armv7a-linux-androideabi`), and runs `bash
   .port/tools/gates/check_cross_targets.sh aarch64-linux-android x86_64-linux-android
   armv7-linux-androideabi`. That builds all three and fails on a PT_LOAD below 16 KiB. Without the NDK the
-  Android legs report `skipped`, so the existing G-XTARGET run in `ci.sh` does not cover them.
+  Android legs report `skipped`, so the existing G-XTARGET run in `ci.sh` does not cover them. Because the
+  job names the three targets, a named target that is skipped (no `CXX_<t>`, or a toolchain-matched link
+  error) makes the run BLOCKED (exit 3), never GREEN on the legs that did build (review A-1 F1, task A-1b);
+  the job must therefore treat exit 3 as a failure, not as a warning.

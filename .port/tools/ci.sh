@@ -82,6 +82,11 @@
 #                                    Skips by name where the rustup std or a
 #                                    cross C toolchain is absent; BLOCKED if
 #                                    every target is unavailable.
+#   G-XTARGET-SELF check_cross_targets.sh --self-test
+#                                    the verdict (named-but-skipped -> BLOCKED)
+#                                    and the Android 16 KiB PT_LOAD check on
+#                                    4 KiB/16 KiB .so's -> HARD-FAIL; BLOCKED
+#                                    without an ELF cc + llvm-readelf (macOS).
 #   G-I18N check_translations.sh     msgcmp every po/*.po against the .pot
 #                                    -> HARD-FAIL. BLOCKED without gettext.
 #   G-BLUEPRINT check_blueprints.sh  all .blp templates compile and are
@@ -528,6 +533,8 @@ GATE_REGISTRY=(
   # target, which is exactly where cross breakage lives. Targets whose rustup
   # std is missing, or that the host C compiler cannot target, are reported
   # skipped BY NAME; all-skipped exits 3 BLOCKED.
+  # Its --self-test (review A-1 F1, F3) is a separate entry, as with G-XCF.
+  "G-XTARGET-SELF|HARD|bash $GATES/check_cross_targets.sh --self-test"
   "G-XTARGET|HARD|bash $GATES/check_cross_targets.sh"
   # G-I18N (2026-08-26) — msgcmp every po/*.po against the .pot (the reference's
   # `translations` job). The i18n_msgid_coverage TEST checks the msgid set
