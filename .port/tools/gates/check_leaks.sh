@@ -356,7 +356,15 @@ G6C_MIN_PASSED="${G6C_MIN_PASSED:-$(printf '%s\n' $G6C_FILTERS | grep -c .)}"
 # (the set is ~80 tests, individually 6s-260s under Miri), so the bound is
 # generous enough that a loaded host does not flap the gate, yet finite so the
 # lane always terminates.
-G6C_BOUND_SEC="${G6C_BOUND_SEC:-5400}"
+#
+# 5400 -> 10800 (parity tail C-1): the 83-test set took 3952 s in the ci run at
+# 9fd17d93 (73% of the old bound), and C-1 moved 34 more tests here out of G6
+# (debug-assertion integrity walks put them past G6's budget; measured
+# 1,822 s together, one test per process, on a contended host). Libtest's
+# substring filtering of ~3,300 tests by every name also grows with the set
+# under Miri. This is the hang guard only: the lane still has to run EVERY
+# derived test, pass them all, and stay UB- and leak-clean.
+G6C_BOUND_SEC="${G6C_BOUND_SEC:-10800}"
 
 g6c_killtree() { local p=$1 c; for c in $(pgrep -P "$p" 2>/dev/null); do g6c_killtree "$c"; done; kill -9 "$p" 2>/dev/null; }
 
@@ -414,7 +422,7 @@ run_g6c() {
   require_miri
   echo "=== G6c [$G6C_PKG] :: Miri, -C debug-assertions=off ==="
   echo "    $G6C_MIN_PASSED test(s), derived from the cfg_attr(all(miri, debug_assertions)) annotations"
-  echo "    (measured GREEN in 3092s serial on an M4 Pro, 2026-07-30; set G6C_FILTERS to narrow)"
+  echo "    (measured GREEN in 3092s serial on an M4 Pro, 2026-07-30, and 3952s for 83 tests at 9fd17d93; set G6C_FILTERS to narrow)"
   local out; out="$(mktemp "${TMPDIR:-/tmp}/g6c.XXXXXX")"
   local t0=$SECONDS
   g6c_lane "" "$out"
