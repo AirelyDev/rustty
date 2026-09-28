@@ -282,6 +282,28 @@ const _: () = assert!(offset_of!(Loop, backend) == 0);
 // trait-bound tripwire near the bottom of this file — if an arm ever stops being
 // `Send`, that assert fires here rather than at termio's `thread::spawn`.
 
+/// PORT NOTE (N406 in NEW-FINDINGS, parity tail L-5): the union arms are
+/// `ManuallyDrop`, so without this the backend loop's Rust-owned fields were
+/// never dropped: `deinit` above closes the backend's fds (the reference's
+/// whole `deinit`), but epoll's heap-rooted `thread_pool_completions` box
+/// (a port addition, see that field's PORT NOTE) leaked with every
+/// `Loop`, i.e. with every termio thread on Linux (memcheck: 240 bytes per
+/// loop). Dropping the live arm here frees exactly what a backend `Loop` used
+/// directly frees when it goes out of scope; no backend loop implements `Drop`,
+/// so this runs no teardown of its own after `deinit`. The live arm is named by
+/// the same global `deinit` reads (dynamic.zig:32's invariant).
+impl Drop for Loop {
+    fn drop(&mut self) {
+        match backend() {
+            // SAFETY: the global names the live arm (see `deinit`), and this is
+            // the only place an arm is dropped, once, as the `Loop` itself dies.
+            Backend::IoUring => unsafe { ManuallyDrop::drop(&mut self.backend.io_uring) },
+            Backend::Epoll => unsafe { ManuallyDrop::drop(&mut self.backend.epoll) },
+            be => unreachable!("non-candidate backend {be:?}"),
+        }
+    }
+}
+
 impl Loop {
     /// PORT NOTE: `pub fn init(opts: Options) !Loop` (dynamic.zig:127) — the
     /// `switch (backend) { inline else => |tag| @unionInit(Loop.Union,
