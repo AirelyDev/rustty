@@ -947,8 +947,14 @@ impl<T, A: ApiAllocator> TryPushExt<T> for allocator_api2::vec::Vec<T, A> {
 /// `UntouchedPool`'s free list), with this crate's `VtAllocator` signatures and
 /// error type. The caller's contract is unchanged: one allocator per list, as
 /// in the reference. `Send`/`Sync` come from the inner list's impls.
-#[derive(Default)]
 pub struct ArrayListUnmanaged<T: Copy>(rustty_datastruct::array_list::ArrayListUnmanaged<T>);
+
+// Hand-written: a derive would require `T: Default`, which `.empty` does not.
+impl<T: Copy> Default for ArrayListUnmanaged<T> {
+    fn default() -> Self {
+        Self::EMPTY
+    }
+}
 
 impl<T: Copy> core::ops::Deref for ArrayListUnmanaged<T> {
     type Target = [T];

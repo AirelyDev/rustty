@@ -27,13 +27,12 @@
 //!     snapshot-enabling detached-page and build-from-raw-pages APIs)
 //!
 //! PORT NOTE (vt-3c, this batch): the CORE methods are ported on top of the
-//! `rustty_zigstd` faithful Zig-stdlib equivalents. The Node pool is
-//! `rustty_zigstd::MemoryPool<Node>`, the Pin pool is
-//! `rustty_zigstd::MemoryPool<Pin>`, and the tracked-pin set is
-//! `rustty_zigstd::AutoArrayHashMapUnmanaged<*mut Pin, ()>`. The PAGE BUFFER
-//! pool is hand-rolled below (`PagePool`) as the faithful behavioral
-//! equivalent of the reference `MemoryPoolAligned([std_size]u8, page_align)` +
-//! `arena.child_allocator` usage (see the `PagePool` PORT NOTE). The 205 ported
+//! `rustty_zigstd` faithful Zig-stdlib equivalents. The Pin pool is
+//! `rustty_zigstd::MemoryPool<Pin>` and the tracked-pin set is
+//! `rustty_zigstd::AutoArrayHashMapUnmanaged<*mut Pin, ()>`. The Node and PAGE
+//! BUFFER pools are `rustty_datastruct::untouched_pool` pools (P7-W1 T5,
+//! upstream `e01e75bbb`/`efa3c66ed`; see the `NodePool`/`PagePool` PORT
+//! NOTEs). The 205 ported
 //! `test {}` blocks land with their owning clusters (a dedicated tests phase).
 
 // const PageList = @This();
@@ -96,22 +95,22 @@ mod bench;
 pub use builder::{Builder, PageAllocation};
 
 use rustty_datastruct::IntrusiveDoublyLinkedList as DoublyLinkedList;
-// const WasmPagePool = @import("../datastruct/main.zig").WasmPagePool;
+// const datastruct = @import("../datastruct/main.zig");
 //
-// PORT NOTE (`492c26067`): the wasm page pool is referenced fully-qualified
-// (`rustty_datastruct::wasm_page_pool::DynamicWasmPagePool`) at the `PagePool`
-// type switch below, `#[cfg]`-gated to wasm non-test builds.
+// PORT NOTE (`492c26067`, `e01e75bbb`): the page and node pools are referenced
+// fully-qualified (`rustty_datastruct::untouched_pool::*`, and
+// `rustty_datastruct::wasm_page_pool::DynamicWasmPagePool` for the wasm arm,
+// `#[cfg]`-gated to wasm non-test builds) at the `NodePool`/`PagePool`
+// definitions below.
 use rustty_os::page_allocator::{page_allocator, PageAllocator};
 use rustty_render_types::term_size as size;
 use rustty_render_types::term_size::OffsetBuf;
 use rustty_zigstd::array_hash_map::AutoArrayHashMapUnmanaged;
-// The native `PagePool` arm only (the wasm arm is the wasm page pool below).
-#[cfg(not(all(target_arch = "wasm32", not(test))))]
-use rustty_zigstd::memory_pool::DynamicMemoryPoolAligned;
+// The pin pool only (`std.heap.memory_pool.Managed(Pin)`).
 use rustty_zigstd::memory_pool::MemoryPool as ZigMemoryPool;
 
 use crate::alloc::Allocator;
-use allocator_api2::alloc::Allocator as _;
+use allocator_api2::alloc::Allocator as ApiAllocator;
 use core::alloc::Layout;
 use core::ptr::NonNull;
 
@@ -122,13 +121,21 @@ use crate::point;
 // const log = std.log.scoped(.page_list);
 pub(crate) const LOG_SCOPE: &str = "page_list";
 
-/// The number of PageList.Nodes we preheat the pool with. A node is
-/// a very small struct so we can afford to preheat many, but the exact
-/// number is uncertain. Any number too large is wasting memory, any number
-/// too small will cause the pool to have to allocate more memory later.
-/// This should be set to some reasonable minimum that we expect a terminal
-/// window to scroll into quickly.
+/// The number of pages we preheat the page pool with. For operating systems
+/// that support it, pages are demand-paged (see PagePool) so this only
+/// costs us address space. For other operating systems, we don't preheat.
 const PAGE_PREHEAT: usize = 4;
+
+/// The number of nodes we preheat the node pool with. Unlike pages, nodes
+/// are ordinary heap memory so every idle preheated node costs real
+/// memory. A new PageList needs exactly one node for its first page, so
+/// we preheat that one and let the pool grow on demand.
+const NODE_PREHEAT: usize = 1;
+
+/// The number of pins we preheat the pin pool with: the viewport pin that
+/// every PageList tracks and the cursor pin that every Screen tracks.
+/// Selections, searches, and so on grow the pool on demand.
+const PIN_PREHEAT: usize = 2;
 
 /// The list of pages in the screen. These are expected to be in order
 /// where the first page is the topmost page (scrollback) and the last is
@@ -718,11 +725,24 @@ impl rustty_datastruct::intrusive_linked_list::Node for Node {
 }
 
 /// The memory pool we get page nodes from.
+///
+/// We don't use a std memory pool here because it is backed by an arena
+/// and we end up paying a lot of wasted memory for the growth factor when
+/// in practice we don't usually use many nodes.
+///
+/// We don't need the "untouched" property of our UntouchedPool but
+/// this gives us a GPA-allocated pool so we reuse it here.
 //
-// PORT NOTE: the reference `NodePool = std.heap.MemoryPool(List.Node)`. We use
-// the faithful `rustty_zigstd::MemoryPool<Node>` (LIFO free-list reuse), over
-// the general-purpose allocator handle (`gen_alloc`, parity tail S7-3).
-type NodePool = ZigMemoryPool<Node, Allocator>;
+// const NodePool = datastruct.UntouchedPool(List.Node, .of(List.Node));
+//
+// PORT NOTE (`efa3c66ed`): `UntouchedPool<Node, Allocator>` — the item
+// allocator and the free-list gpa are both the general-purpose allocator
+// handle (`gen_alloc`, parity tail S7-3), as the reference passes
+// `initCapacity(gen_alloc, gen_alloc, node_preheat)`; `ALIGN = 0` is
+// `.of(List.Node)`. Every node is its own `gen_alloc` allocation, so every
+// teardown path must hand its nodes back (`release_pages`, `destroy_node_ext`)
+// before the pool's `live == free.len` assert runs.
+type NodePool = rustty_datastruct::untouched_pool::UntouchedPool<Node, Allocator>;
 
 // /// The standard page capacity that we use as a starting point for
 // /// all pages. This is chosen as a sane default that fits most terminal
@@ -760,7 +780,7 @@ use crate::page::PAGE_SIZE_MIN;
 /// through a free list shared by the whole module instance instead of
 /// dying with the pool.
 ///
-/// Test builds use the std pool even on wasm so that pool memory goes
+/// Test builds use the native pool even on wasm so that pool memory goes
 /// through the testing allocator and participates in leak detection.
 //
 // const wasm_page_pool = builtin.target.cpu.arch.isWasm() and !builtin.is_test;
@@ -777,29 +797,45 @@ const WASM_PAGE_POOL: bool = cfg!(target_arch = "wasm32") && !cfg!(test);
 /// so we can allocate these with a page allocator. We have to use a page
 /// allocator because we need memory that is zero-initialized and page-aligned.
 //
-// PORT NOTE (audit #1/#2/#3): the reference is
-// `PagePool = std.heap.MemoryPoolAligned([std_size]u8, .fromByteUnits(page_size_min))`
-// backed by `arena.child_allocator` (the page allocator). The faithful Rust
-// mapping is `DynamicMemoryPoolAligned<PageAllocator>` constructed over
-// `rustty_os::page_allocator::page_allocator()`:
+// const PagePool = if (wasm_page_pool)
+//     datastruct.WasmPagePool([std_size]u8)
+// else untouched: {
+//     // Untouched pools never read/write to the items so that we can
+//     // use demand-paging on operating systems that support it. This makes
+//     // it so that an idle item in the pool costs no physical memory,
+//     // only virtual memory.
+//     //
+//     // Contract for PageList is that every path that returns an item
+//     // to the pool must zero it.
+//     break :untouched datastruct.UntouchedPool(
+//         [std_size]u8,
+//         .fromByteUnits(std.heap.page_size_min),
+//     );
+// };
 //
-//   * It owns a `rustty_zigstd::ArenaAllocator<PageAllocator>` plus a LIFO
-//     free-list, exactly like `MemoryPoolAligned`. `item_size` is `std_size`
-//     and `item_alignment` is `page_size_min`.
-//   * The item SIZE is supplied at construction because the Rust `std_size` is a
-//     RUNTIME value (it cannot be a const-generic `[std_size]u8` array length);
-//     this is the closest faithful mapping (see `DynamicMemoryPoolAligned`).
-//   * STANDARD pages draw a slot from the pool (`pages.create()`); they are NOT
-//     eagerly zeroed — a fresh slot is lazily OS-zeroed mmap memory (audit #2,
-//     removes the eager per-page RSS commit), a reused free-list slot is zeroed
-//     by `destroyNodeExt` before it re-enters the free-list.
+// PORT NOTE (`e01e75bbb`): the native arm is
+// `rustty_datastruct::untouched_pool::DynamicUntouchedPool<P, Allocator>`:
+//
+//   * The item SIZE and alignment are supplied at construction (`std_size()`,
+//     `PAGE_SIZE_MIN`) because the Rust `std_size` is a RUNTIME value (it
+//     cannot be a const-generic `[std_size]u8` array length).
+//   * `P` is the page (item) allocator, `page_backing_alloc()` by default, and
+//     the free list grows through the general-purpose allocator handle
+//     (`gen_alloc`), the reference's `initCapacity(gen_alloc, page_alloc, ..)`.
+//     DECISIONS R13: `P` is a generic parameter of `MemoryPool` (defaulting to
+//     `PageBackingAlloc`) so the upstream pool tests inject a fixed-buffer or
+//     failing page allocator, as upstream does.
+//   * The pool never reads or writes an item, so idle items cost no physical
+//     memory. The zeroing contract is the caller's: fresh items are lazily
+//     OS-zeroed mmap memory, and every path that hands an item back with
+//     `destroy` zeroes the prefix it dirtied first (`destroy_node_ext`,
+//     `CompressionScratch::deinit`). Teardown walks `release` items straight
+//     back to the page allocator instead (`release_pool_page`).
 //   * NON-STANDARD pages bypass the pool: allocated/freed directly via
-//     `pages.child_allocator()` (the reference `pages.arena.child_allocator`).
-//   * OOM is FALLIBLE (audit #1): `pages.create()` and the direct page-allocator
-//     `allocate` return errors that propagate as `OutOfMemory`.
-//   * `reset(.retain_with_limit)` resets the arena and then zeroes the retained
-//     arena buffers (audit #3): retained memory is not re-`mmap`ed so it is not
-//     implicitly OS-zeroed (the reference `@memset(0)` over the arena BufNodes).
+//     `pages.allocator()` (the reference `pool.pages.allocator`).
+//   * OOM is FALLIBLE: `pages.create()` (item allocation or free-list growth)
+//     and the direct page-allocator `allocate` return errors that propagate
+//     as `OutOfMemory`.
 //
 // PORT NOTE (leak gate, R6): the reference `pageAllocator()` returns
 // `std.testing.allocator` under `builtin.is_test` so the test runner detects any
@@ -828,26 +864,19 @@ type PageBackingAlloc = PageAllocator;
 type PageBackingAlloc =
     rustty_zigstd::tracking_allocator::TrackingAllocator<'static, PageAllocator>;
 
-// const PagePool = if (wasm_page_pool)
-//     WasmPagePool([std_size]u8)
-// else
-//     std.heap.memory_pool.AlignedManaged(
-//         [std_size]u8,
-//         .fromByteUnits(std.heap.page_size_min),
-//     );
-//
 // PORT NOTE (`492c26067`): the wasm arm is
 // `rustty_datastruct::wasm_page_pool::DynamicWasmPagePool` — the runtime-
 // item-size instantiation of the ported `WasmPagePool` (the Rust `std_size` is
-// a runtime value, exactly the deviation `DynamicMemoryPoolAligned` already
-// carries for the native arm). The "per Item type" shared free list is
+// a runtime value, exactly the deviation `DynamicUntouchedPool` carries for
+// the native arm). The "per Item type" shared free list is
 // `PAGE_FREE_LIST` below: every page pool in the module shares it, and every
 // page pool has the same `std_size()` item size, so it is precisely the Zig
 // `WasmPagePool([std_size]u8)` container-level `var free_list`.
 #[cfg(not(all(target_arch = "wasm32", not(test))))]
-type PagePool = DynamicMemoryPoolAligned<PageBackingAlloc>;
+type PagePool<P = PageBackingAlloc> =
+    rustty_datastruct::untouched_pool::DynamicUntouchedPool<P, Allocator>;
 #[cfg(all(target_arch = "wasm32", not(test)))]
-type PagePool = rustty_datastruct::wasm_page_pool::DynamicWasmPagePool<PageBackingAlloc>;
+type PagePool<P = PageBackingAlloc> = rustty_datastruct::wasm_page_pool::DynamicWasmPagePool<P>;
 
 /// The module-instance-shared free list of standard page buffers — the Zig
 /// `WasmPagePool([std_size]u8)`'s per-monomorphization `var free_list`. Freed
@@ -1017,23 +1046,29 @@ type PinPool = ZigMemoryPool<Pin, Allocator>;
 
 /// The pool of memory used for a pagelist. This can be shared between
 /// multiple pagelists but it is not threadsafe.
-pub struct MemoryPool {
+//
+// PORT NOTE (DECISIONS R13): `P` is the page allocator (the reference's
+// `page_alloc`, held by `pages` as its item allocator), a generic parameter
+// defaulting to `PageBackingAlloc` so the upstream pool tests can inject their
+// own. A `PageList` always uses the default.
+pub struct MemoryPool<P: ApiAllocator = PageBackingAlloc> {
     // alloc: Allocator,
     //
     // PORT NOTE: the reference stores the general-purpose allocator (`alloc`)
     // used for the node/pin pools and the tracked-pin hashmap, plus the page
-    // allocator is captured inside `pages.arena.child_allocator`. The handle is
-    // stored as the reference stores it (parity tail S7-2, N264), and the
-    // node/pin pools and every `PinSet` built over this pool grow through it
-    // (parity tail S7-3). Page memory never does: it stays on the page
-    // allocator, as in the reference on every non-freestanding target.
+    // allocator is captured inside `pages.allocator`. The handle is stored as
+    // the reference stores it (parity tail S7-2, N264), and the node/pin pools,
+    // the page pool's free list and every `PinSet` built over this pool grow
+    // through it (parity tail S7-3, `e01e75bbb`). Page memory never does: it
+    // stays on the page allocator, as in the reference on every
+    // non-freestanding target.
     pub alloc: Allocator,
     nodes: NodePool,
-    pages: PagePool,
+    pages: PagePool<P>,
     pins: PinPool,
 }
 
-impl MemoryPool {
+impl<P: ApiAllocator> MemoryPool<P> {
     // pub const ResetMode = std.heap.ArenaAllocator.ResetMode;
 
     // /// Returns the allocator used for underlying page allocations.
@@ -1071,34 +1106,45 @@ impl MemoryPool {
 
     // PORT NOTE (audit #1, init signature): the reference
     // `MemoryPool.init(gen_alloc, page_alloc, preheat)` threads the
-    // general-purpose allocator into the Node/Pin pools and the page allocator
-    // into the PagePool. The signature is the reference's (parity tail S7-2,
-    // N264): `gen_alloc` is stored as `alloc` and is the Node/Pin pools' arena
-    // child (parity tail S7-3), and `page_alloc` is the page pool's child,
-    // `page_backing_alloc()` (the reference `pageAllocator()` — mmap,
-    // page-aligned, LAZILY OS-zeroed).
+    // general-purpose allocator into the Node/Pin pools and the page pool's
+    // free list, and the page allocator into the PagePool items. The
+    // signature is the reference's (parity tail S7-2, N264): `gen_alloc` is
+    // stored as `alloc`, and `page_alloc` is `page_backing_alloc()` in every
+    // PageList (the reference `pageAllocator()` — mmap, page-aligned, LAZILY
+    // OS-zeroed).
     pub fn init(
         gen_alloc: Allocator,
-        page_alloc: PageBackingAlloc,
+        page_alloc: P,
         preheat: usize,
-    ) -> Result<MemoryPool, OutOfMemory> {
-        let node_pool = NodePool::init_preheated(gen_alloc, preheat).map_err(|_| OutOfMemory)?;
-        // errdefer node_pool.deinit();
+    ) -> Result<MemoryPool<P>, OutOfMemory> {
+        // var node_pool = try NodePool.initCapacity(gen_alloc, gen_alloc, node_preheat);
+        let node_pool =
+            NodePool::init_capacity(gen_alloc, gen_alloc, NODE_PREHEAT).map_err(|_| OutOfMemory)?;
+        // errdefer node_pool.deinit(); (`Drop`: no node is live yet.)
         //
         // PORT NOTE (`492c26067`): the two arms below are the runtime spelling
         // of the comptime `PagePool` type switch — the reference's single
-        // `pool.initCapacity(page_alloc, preheat)` call resolves to either pool
-        // type's constructor. The wasm pool ignores `preheat` (creation is a
+        // `PagePool.initCapacity(gen_alloc, page_alloc, preheat)` call
+        // resolves to either pool type's constructor. The wasm pool ignores
+        // `gpa` and `preheat` (its free list is intrusive and creation is a
         // cheap memory.grow / free-list pop) and carries the page allocator
         // only for interface compatibility, exactly like the reference.
         #[cfg(not(all(target_arch = "wasm32", not(test))))]
-        let page_pool = PagePool::init_preheated(page_alloc, std_size(), PAGE_SIZE_MIN, preheat)
-            .map_err(|_| OutOfMemory)?;
+        let page_pool =
+            PagePool::<P>::init_capacity(gen_alloc, page_alloc, std_size(), PAGE_SIZE_MIN, preheat)
+                .map_err(|_| OutOfMemory)?;
         #[cfg(all(target_arch = "wasm32", not(test)))]
-        let page_pool = PagePool::init_capacity(page_alloc, &PAGE_FREE_LIST, std_size(), preheat)
-            .map_err(|_| OutOfMemory)?;
-        // errdefer page_pool.deinit();
-        let pin_pool = PinPool::init_preheated(gen_alloc, 8).map_err(|_| OutOfMemory)?;
+        let page_pool = PagePool::<P>::init_capacity(
+            gen_alloc,
+            page_alloc,
+            &PAGE_FREE_LIST,
+            std_size(),
+            preheat,
+        )
+        .map_err(|_| OutOfMemory)?;
+        // errdefer page_pool.deinit(); (`Drop`: every preheated item is free.)
+        // var pin_pool = try PinPool.initCapacity(gen_alloc, pin_preheat);
+        let pin_pool = PinPool::init_preheated(gen_alloc, PIN_PREHEAT).map_err(|_| OutOfMemory)?;
         // errdefer pin_pool.deinit();
         Ok(MemoryPool {
             alloc: gen_alloc,
@@ -1115,13 +1161,13 @@ impl MemoryPool {
     // }
     //
     // PORT NOTE: `MemoryPool::deinit` is the `Drop` of each sub-pool; dropping
-    // the `MemoryPool` runs the `pages`/`nodes`/`pins` destructors. The
-    // reference frees them in the order `pages`, `nodes`, `pins`, but that
-    // order is not observable: each sub-pool is a self-contained
-    // `MemoryPoolAligned` arena over its own child allocator with no
-    // cross-pool references, so the destructors are independent and may run in
-    // any order. (Rust happens to drop fields in declaration order, which is
-    // the same order, but nothing depends on it.)
+    // the `MemoryPool` runs the `pages`/`nodes`/`pins` destructors, and the
+    // two `UntouchedPool` destructors assert `live == free.len` as the
+    // reference's `deinit` does, so every page and node must have been handed
+    // back first (`PageList::release_pages`). The reference frees them in the
+    // order `pages`, `nodes`, `pins`; Rust drops fields in declaration order
+    // (`nodes`, `pages`, `pins`). That order is not observable: the sub-pools
+    // hold no references into each other.
 
     /// `MemoryPool.reset`: reset all sub-pools. Only the `retain_with_limit`
     /// mode is used by PageList (`reset`), so we model it directly with the
@@ -1138,8 +1184,8 @@ impl MemoryPool {
         // `_ = self.pool.pages.reset(.{ .retain_with_limit = ... });`
         #[cfg(not(all(target_arch = "wasm32", not(test))))]
         {
-            use rustty_zigstd::arena_allocator::ResetMode;
-            self.pages.reset(ResetMode::RetainWithLimit(limit_bytes));
+            use rustty_datastruct::untouched_pool::ResetMode;
+            let _ = self.pages.reset(ResetMode::RetainWithLimit(limit_bytes));
         }
         // The wasm pool's `reset` is a deliberate no-op (linear memory cannot
         // shrink; retaining every freed item is always right on wasm).
@@ -1150,19 +1196,10 @@ impl MemoryPool {
         }
     }
 
-    /// Zero the retained page-pool arena memory after a reset. Faithful map of
-    /// `PageList.reset`'s arena-zeroing block: retained arena memory is not
-    /// re-`mmap`ed so it is not implicitly OS-zeroed (the reference `@memset(0)`
-    /// walking `pool.pages.arena.state.buffer_list`). Never compiled for the
-    /// wasm page pool (its guarded call site is `PageList::reset`).
-    #[cfg(not(all(target_arch = "wasm32", not(test))))]
-    fn zero_retained_page_arena(&mut self) {
-        self.pages.zero_retained_arena();
-    }
-
     fn reset_nodes_retain_with_limit(&mut self, limit_bytes: usize) {
-        use rustty_zigstd::arena_allocator::ResetMode;
-        self.nodes.reset(ResetMode::RetainWithLimit(limit_bytes));
+        // `_ = self.pool.nodes.reset(.{ .retain_with_limit = ... });`
+        use rustty_datastruct::untouched_pool::ResetMode;
+        let _ = self.nodes.reset(ResetMode::RetainWithLimit(limit_bytes));
     }
 }
 
@@ -1741,14 +1778,13 @@ impl PageList {
         #[cfg(test)]
         init_tw_check(InitFp::InitPages)?;
         let mut page_serial: u64 = 0;
-        let (page_list, page_size) = match Self::init_pages(&mut pool, &mut page_serial, cols, rows)
-        {
-            Ok(v) => v,
-            Err(e) => {
-                // errdefer pool.deinit() (pool dropped on early return).
-                return Err(e);
-            }
-        };
+        // (`errdefer pool.deinit()`: the pool is dropped on an early return.)
+        let (page_list, page_size) = Self::init_pages(&mut pool, &mut page_serial, cols, rows)?;
+        // errdefer releasePages(&pool, page_list);
+        //
+        // PORT NOTE: the fallible steps below run in a block whose error arm
+        // is that errdefer: every page and node goes back before `pool` drops
+        // (its node pool asserts `live == free.len`).
 
         // var limits: Limits = .init(cols, rows);
         // limits.set(.bytes, opts.max_size);
@@ -1757,30 +1793,38 @@ impl PageList {
         limits.set(Key::Bytes, opts.max_size);
         limits.set(Key::Lines, opts.max_lines);
 
-        // We always track our viewport pin to ensure this is never an allocation
-        // try tw.check(.viewport_pin);
-        #[cfg(test)]
-        init_tw_check(InitFp::ViewportPin)?;
-        let viewport_pin = pool.pins.create().map_err(|_| OutOfMemory)?;
-        // viewport_pin.* = .{ .node = page_list.first.? };
-        unsafe {
-            viewport_pin.as_ptr().write(Pin {
-                node: page_list.first,
-                y: 0,
-                x: 0,
-                garbage: false,
-            });
-        }
-        let mut tracked_pins: PinSet = PinSet::new_in(pool.alloc);
-        // errdefer tracked_pins.deinit(pool.alloc);
+        let pins = (|| -> Result<(*mut Pin, PinSet), OutOfMemory> {
+            // We always track our viewport pin to ensure this is never an allocation
+            // try tw.check(.viewport_pin);
+            #[cfg(test)]
+            init_tw_check(InitFp::ViewportPin)?;
+            let viewport_pin = pool.pins.create().map_err(|_| OutOfMemory)?;
+            // viewport_pin.* = .{ .node = page_list.first.? };
+            unsafe {
+                viewport_pin.as_ptr().write(Pin {
+                    node: page_list.first,
+                    y: 0,
+                    x: 0,
+                    garbage: false,
+                });
+            }
 
-        // try tw.check(.viewport_pin_track);
-        #[cfg(test)]
-        init_tw_check(InitFp::ViewportPinTrack)?;
-        // try tracked_pins.putNoClobber(pool.alloc, viewport_pin, {});
-        tracked_pins
-            .try_put_no_clobber(viewport_pin.as_ptr(), ())
-            .map_err(|_| OutOfMemory)?;
+            // try tw.check(.viewport_pin_track);
+            #[cfg(test)]
+            init_tw_check(InitFp::ViewportPinTrack)?;
+            // var tracked_pins = try initTrackedPins(pool.alloc, viewport_pin);
+            // errdefer tracked_pins.deinit(pool.alloc);
+            let tracked_pins = Self::init_tracked_pins(pool.alloc, viewport_pin.as_ptr())?;
+            Ok((viewport_pin.as_ptr(), tracked_pins))
+        })();
+        let (viewport_pin, tracked_pins) = match pins {
+            Ok(v) => v,
+            Err(e) => {
+                // errdefer releasePages(&pool, page_list);
+                Self::release_pages(&mut pool, &page_list);
+                return Err(e);
+            }
+        };
 
         // errdefer comptime unreachable;
         let result: PageList = PageList {
@@ -1797,12 +1841,32 @@ impl PageList {
             total_rows: rows as usize,
             tracked_pins,
             viewport: Viewport::Active,
-            viewport_pin: viewport_pin.as_ptr(),
+            viewport_pin,
             viewport_pin_row_offset: None,
             pause_integrity_checks: 0,
         };
         result.assert_integrity();
         Ok(result)
+    }
+
+    /// Create the tracked pin set for a new PageList with the viewport pin
+    /// already tracked. The set is sized for exactly the viewport pin and the
+    /// cursor pin that every Screen tracks.
+    //
+    // PORT NOTE (`35a6fb747`): the Rust `PinSet` frees through its allocator
+    // when dropped, which is the `errdefer set.deinit(alloc)`.
+    pub(crate) fn init_tracked_pins(
+        alloc: Allocator,
+        viewport_pin: *mut Pin,
+    ) -> Result<PinSet, OutOfMemory> {
+        // var set: PinSet = .{};
+        // errdefer set.deinit(alloc);
+        let mut set: PinSet = PinSet::new_in(alloc);
+        // try set.entries.setCapacity(alloc, pin_preheat);
+        set.try_set_capacity(PIN_PREHEAT).map_err(|_| OutOfMemory)?;
+        // set.putAssumeCapacityNoClobber(viewport_pin, {});
+        set.put_assume_capacity_no_clobber(viewport_pin, ());
+        Ok(set)
     }
 
     fn init_pages(
@@ -1823,72 +1887,72 @@ impl PageList {
         // redundant here for safety.
         assert!(layout.total_size <= size::MAX_PAGE_SIZE as usize);
 
-        // If we have an error, we need to clean up our pages: heap-owned
-        // pages are freed directly and pool-owned pages are reclaimed.
+        // If we have an error, we need to release the pages we created.
+        // errdefer releasePages(pool, page_list);
         //
-        // PORT NOTE: the reference `errdefer` releases every page in
-        // `page_list` on failure (`release_error_pages`). We make this explicit
-        // at each fallible step by releasing the partial list before returning
-        // the error.
+        // PORT NOTE: the reference `errdefer` releases every page and node in
+        // `page_list` on failure. We make this explicit at each fallible step
+        // (`init_pages_err`), after the current iteration's own errdefer
+        // (`pool.nodes.destroy(node)`) has handed its node back.
+        macro_rules! init_pages_err {
+            ($e:expr) => {{
+                Self::release_pages(pool, &page_list);
+                return Err($e);
+            }};
+        }
         let mut rem = rows;
         while rem > 0 {
             // try tw.check(.page_node);
             #[cfg(test)]
             if let Err(e) = init_pages_tw_check(InitPagesFp::PageNode) {
-                // errdefer: release every page in the partial list.
-                Self::release_error_pages(pool, &mut page_list);
-                return Err(e);
+                init_pages_err!(e);
             }
+            // const node = try pool.nodes.create();
             let node = match pool.nodes.create() {
                 Ok(n) => n,
-                Err(_) => {
-                    Self::release_error_pages(pool, &mut page_list);
-                    return Err(OutOfMemory);
-                }
+                Err(_) => init_pages_err!(OutOfMemory),
             };
             // errdefer pool.nodes.destroy(node);
+            //
+            // SAFETY (each arm below): `node` came from `pool.nodes.create()`
+            // just above and was never initialized or published.
 
             let page_buf: NonNull<u8> = if pooled {
                 // try tw.check(.page_buf_std);
                 #[cfg(test)]
                 if let Err(e) = init_pages_tw_check(InitPagesFp::PageBufStd) {
-                    // errdefer: node is in the pool (freed on pool Drop);
-                    // release every page in the partial list.
-                    Self::release_error_pages(pool, &mut page_list);
-                    return Err(e);
+                    unsafe { pool.nodes.destroy(node) };
+                    init_pages_err!(e);
                 }
                 // const buf = try pool.pages.create();
-                // recommitPoolItem(buf);
+                // terminal_mem.recommit(buf);
                 match pool.pages.create() {
                     Ok(b) => {
                         recommit_pool_item(b.as_ptr(), std_size());
                         b
                     }
                     Err(_) => {
-                        Self::release_error_pages(pool, &mut page_list);
-                        return Err(OutOfMemory);
+                        unsafe { pool.nodes.destroy(node) };
+                        init_pages_err!(OutOfMemory);
                     }
                 }
             } else {
                 // try tw.check(.page_buf_non_std);
                 #[cfg(test)]
                 if let Err(e) = init_pages_tw_check(InitPagesFp::PageBufNonStd) {
-                    // errdefer: node is in the pool (freed on pool Drop);
-                    // release every page already appended in the partial list
-                    // (this iteration's buffer was never allocated).
-                    Self::release_error_pages(pool, &mut page_list);
-                    return Err(e);
+                    unsafe { pool.nodes.destroy(node) };
+                    init_pages_err!(e);
                 }
                 // break :buf try page_alloc.alignedAlloc(
                 //     u8,
                 //     .fromByteUnits(std.heap.page_size_min),
                 //     layout.total_size,
                 // );
-                match Self::alloc_non_standard(layout.total_size) {
+                match Self::alloc_non_standard(pool, layout.total_size) {
                     Ok(b) => b,
                     Err(_) => {
-                        Self::release_error_pages(pool, &mut page_list);
-                        return Err(OutOfMemory);
+                        unsafe { pool.nodes.destroy(node) };
+                        init_pages_err!(OutOfMemory);
                     }
                 }
             };
@@ -1904,10 +1968,11 @@ impl PageList {
             // On native, the OS page allocator (mmap) returns zeroed pages.
             //
             // PORT NOTE (audit #2/#4 lazy-zero): a POOLED buffer is NOT eagerly
-            // zeroed — a fresh slot is lazily OS-zeroed mmap memory (no eager
-            // per-page RSS commit) and a reused free-list slot was zeroed by
-            // `destroyNodeExt` before it re-entered the free-list, so handed-out
-            // pages are always observably zero. A NON-STANDARD buffer is a fresh
+            // zeroed — a fresh item is lazily OS-zeroed mmap memory (no eager
+            // per-page RSS commit), a reused free item was zeroed by
+            // `destroyNodeExt` before it re-entered the free list, and the
+            // pool never writes into its items, so handed-out pages are always
+            // observably zero. A NON-STANDARD buffer is a fresh
             // `page_allocator().allocate` (lazily OS-zeroed mmap) too. We DON'T
             // run runtime-safety/freestanding eager memsets here (those builds
             // are not targeted by this port), matching the native mmap path.
@@ -2095,27 +2160,71 @@ impl PageList {
         Ok(())
     }
 
-    /// Return a pool-owned page buffer to the page pool during a teardown
-    /// walk, zeroed for reuse (mirroring destroyNodeExt). Teardown walks
-    /// call this unconditionally for every pool-owned page.
+    /// Release every page in the list during a teardown walk (deinit,
+    /// reset, or an errdefer unwinding a partially built list): heap-owned
+    /// pages go back to the page allocator, pool-owned pages back to the
+    /// page pool, and the nodes back to the node pool's free list.
     //
-    // fn reclaimPoolPage(pool: *MemoryPool, page: *const Page) void { ... }
-    fn reclaim_pool_page(pool: &mut MemoryPool, page: *const Page) {
-        // Only wasm requires this
-        // if (comptime !wasm_page_pool) return;
-        if !WASM_PAGE_POOL {
-            return;
+    // PORT NOTE (`e01e75bbb`, `efa3c66ed`): every node is discard-restored
+    // first (WS7 B6: that is what frees a compressed node's encoded
+    // allocation), and `(*node).next` is read BEFORE the node goes back to the
+    // pool, as upstream reordered it. The list is taken by shared reference:
+    // like the reference's by-value `List`, its `first`/`last` are left
+    // dangling and the caller replaces or forgets them.
+    pub(crate) fn release_pages(pool: &mut MemoryPool, list: &List) {
+        // const page_alloc = pool.pages.allocator; (`free_page_memory`)
+        let mut it = list.first;
+        while !it.is_null() {
+            let node = it;
+            // it = node.next;
+            // SAFETY: `node` is a live node of `list`, owned by `pool`.
+            it = unsafe { (*node).next };
+            // const page = node.restore(.discard);
+            let page = unsafe { Node::restore(node, RestoreMode::Discard) };
+            match unsafe { (*node).owned } {
+                Owned::Pool => Self::release_pool_page(pool, page),
+                Owned::Heap => Self::free_page_memory(pool, page),
+            }
+            // pool.nodes.destroy(node);
+            // SAFETY: `node` came from `pool.nodes.create()`, is no longer
+            // reachable from the walk (`it` already moved past it), and is
+            // handed back exactly once.
+            unsafe { pool.nodes.destroy(NonNull::new_unchecked(node)) };
         }
+    }
 
+    /// Release a pool-owned page during a teardown walk. Unlike
+    /// destroyNodeExt, this does not zero the page: on native, the item goes
+    /// straight back to the page allocator, and zeroing it first would write
+    /// the whole page (and fault a decommitted mapping back in) only for it
+    /// to be unmapped.
+    fn release_pool_page(pool: &mut MemoryPool, page: *const Page) {
         // const item: *align(std.heap.page_size_min) [std_size]u8 =
         //     @ptrCast(@alignCast(page.memory.ptr));
         let (ptr, len) = Self::page_memory(page as *mut Page);
-        // We have to zero the item
-        // _ = terminal_mem.decommit(.zero, item, page.memory.len);
-        decommit_pool_item(ptr, std_size(), len);
-        // SAFETY: `ptr` was handed out by `pool.pages.create()` (a standard
-        // pooled buffer) and has not been destroyed.
-        unsafe { pool.pages.destroy(NonNull::new(ptr).unwrap()) };
+        // SAFETY: a pool-owned page's memory pointer is the non-null base of
+        // the pool item it was built in.
+        let item = unsafe { NonNull::new_unchecked(ptr) };
+
+        // The wasm pool's items are shared by every pool in the module and
+        // never return to the allocator, so they go back to the free list
+        // zeroed for reuse (mirroring destroyNodeExt).
+        if WASM_PAGE_POOL {
+            // _ = terminal_mem.decommit(.zero, item, page.memory.len);
+            decommit_pool_item(ptr, std_size(), len);
+            // SAFETY: `item` was handed out by `pool.pages.create()` and has
+            // not been handed back.
+            unsafe { pool.pages.destroy(item) };
+            return;
+        }
+        let _ = len;
+
+        // pool.pages.release(item);
+        #[cfg(not(all(target_arch = "wasm32", not(test))))]
+        // SAFETY: as above; the item is not used afterward.
+        unsafe {
+            pool.pages.release(item)
+        };
     }
 
     /// Deinit the pagelist, freeing all page memory and the memory pool.
@@ -2130,37 +2239,12 @@ impl PageList {
         // here to mirror the explicit deinit ordering.
         self.tracked_pins.clear_and_free();
 
-        // Go through our linked list and release every page: heap-owned
-        // pages are freed directly and pool-owned pages are reclaimed.
-        //
-        // PORT NOTE (WS7 B6): every node is discard-restored first, pool-owned
-        // ones included — that is what frees a compressed node's encoded
-        // allocation. Node storage lives in a raw memory pool that never runs
-        // `Drop`, so skipping this would leak the encoding.
-        let mut it = self.pages.first;
-        while !it.is_null() {
-            let node = it;
-            // SAFETY: `node` is a live node of this list.
-            let page = unsafe { Node::restore(node, RestoreMode::Discard) };
-            // switch (node.owned) {
-            //     .pool => reclaimPoolPage(&self.pool, page),
-            //     .heap => page_alloc.free(page.memory),
-            // }
-            match unsafe { (*node).owned } {
-                Owned::Pool => Self::reclaim_pool_page(&mut self.pool, page),
-                Owned::Heap => Self::free_page_memory(page),
-            }
-            it = unsafe { (*node).next };
-        }
-
-        // Deallocate all the pages. We don't need to deallocate the list or
-        // nodes because they all reside in the pool.
-        //
-        // PORT NOTE: `self.pool.deinit()` is the pool's `Drop`; dropping
-        // `self.pool` when the `PageList` is dropped frees the node/pin/page
-        // pools. The standard page buffers are owned by `PagePool` and freed by
-        // its `Drop`, so there is nothing to free here beyond the non-standard
-        // pages handled above.
+        // Release every page and node back to the pools, then free the pools.
+        Self::release_pages(&mut self.pool, &self.pages);
+        // PORT NOTE: the reference `self.pool.deinit()` is the pool's `Drop`,
+        // which runs when the `PageList` is dropped; `pages` is emptied so no
+        // later walk can reach a released node.
+        self.pages = List::default();
     }
 
     /// Reset the PageList back to an empty state. This is similar to
@@ -2191,71 +2275,23 @@ impl PageList {
         // area divided by the row capacity of a page.
         let page_count: usize = (self.rows as usize).div_ceil(cap.rows as usize);
 
-        // Before resetting our pools we need to release our pages:
-        // heap-owned pages are freed since they were allocated outside
-        // the pool, and pool-owned pages are reclaimed.
-        //
-        // PORT NOTE (WS7 B6): as in `deinit`, every node is discard-restored so
-        // a compressed node's encoded allocation is released.
-        {
-            let mut it = self.pages.first;
-            while !it.is_null() {
-                let node = it;
-                // SAFETY: `node` is a live node of this list.
-                let page = unsafe { Node::restore(node, RestoreMode::Discard) };
-                match unsafe { (*node).owned } {
-                    Owned::Pool => Self::reclaim_pool_page(&mut self.pool, page),
-                    Owned::Heap => Self::free_page_memory(page),
-                }
-                it = unsafe { (*node).next };
-            }
-        }
+        // Before resetting our pools we need to release our pages: heap-owned
+        // pages go back to the page allocator and pool-owned pages back to
+        // the page pool.
+        Self::release_pages(&mut self.pool, &self.pages);
+        self.pages = List::default();
 
         // Reset our pools to free as much memory as possible while retaining
         // the capacity for at least the minimum number of pages we need.
         // The return value is whether memory was reclaimed or not, but in
         // either case the pool is left in a valid state.
         //
-        // Our page pool relies on mmap to zero our page memory. Since we're
-        // retaining a certain amount of memory, it won't use mmap and won't
-        // be zeroed. This block zeroes out all the memory in the pool arena.
-        //
-        // The wasm page pool has no arena to scrub: its free-list items were
-        // zeroed by reclaimPoolPage above.
-        //
-        // Note: we only have to do this for the page pool because the
-        // nodes are always fully overwritten on each allocation.
-        //
-        // WARN: Since HeapAllocator's BufNode is not public API,
-        // we have to hardcode its layout here. We do a comptime assert
-        // on Zig version to verify we check it on every bump.
-        //
-        // The buffer minus our header
-        //
-        // NOTE: Zig 0.16.0's arenas don't use the linked list types
-        // anymore, so we can just reference fields directly. The node
-        // type is still private though, so we have to parse out some
-        // of the internal methods to work with the buffer - namely
-        // Node.loadBuf and Node.Size.toInt. They are combined below.
-        //
-        // PS: My (vancluever's) reading of the code gives me the
-        // impression that we no longer need to offset the data by the
-        // header, because there's no linked list overhead anymore. But
-        // I'm sure we'll see pretty quick when I run the tests. :)
-        //
-        // PORT NOTE: the reference reads the private `ArenaAllocator.BufNode`
-        // layout to zero the retained arena memory after `pages.reset`. Our
-        // `DynamicMemoryPoolAligned` owns a faithful `ArenaAllocator` and exposes
-        // `zero_retained_arena()`, which walks the SAME backing-node list and
-        // `@memset(0)`s each node's usable region — reproducing that behavior
-        // without hardcoding a private std layout.
+        // Retained page pool items are zero (see PagePool), so there is
+        // nothing to scrub before initPages reuses them.
         self.pool
             .reset_pages_retain_with_limit(page_count * self.pool.pages.item_size());
         self.pool
             .reset_nodes_retain_with_limit(page_count * NodePool::ITEM_SIZE);
-        // if (comptime !wasm_page_pool) { ... arena scrub ... }
-        #[cfg(not(all(target_arch = "wasm32", not(test))))]
-        self.pool.zero_retained_page_arena();
 
         // Initialize our pages. This should not be able to fail since
         // we retained the capacity for the minimum number of pages we need.
@@ -2434,7 +2470,7 @@ impl PageList {
             }
         } else {
             // break :buf try page_alloc.alignedAlloc(...);
-            match Self::alloc_non_standard(layout.total_size) {
+            match Self::alloc_non_standard(pool, layout.total_size) {
                 Ok(b) => b,
                 Err(_) => {
                     // errdefer pool.nodes.destroy(page).
@@ -2452,18 +2488,16 @@ impl PageList {
         // (WASM), the WasmAllocator reuses freed slots without zeroing.
         //
         // Otherwise, we rely on pool item buffers being zeroed: fresh items
-        // come from the OS page allocator (zeroed pages) and destroyNodeExt
-        // zeroes buffers before returning them to the pool. The one
-        // exception is the first pointer-size bytes, which hold the pool's
-        // free list node while a buffer is in the free list; initBuf below
-        // always overwrites those since the page rows start at offset 0
-        // (comptime-asserted in Page).
+        // come from the OS page allocator (zeroed pages), destroyNodeExt
+        // zeroes buffers before returning them to the pool, and the pool
+        // never writes into its items (see PagePool).
         //
         // PORT NOTE (audit #2/#4 lazy-zero): handed-out page buffers are always
-        // observably zero, but FRESH ones get there lazily: a fresh pool slot is
+        // observably zero, but FRESH ones get there lazily: a fresh pool item is
         // lazily OS-zeroed mmap memory (no eager memset / RSS commit), a reused
-        // pool slot was zeroed by `destroyNodeExt` before re-entering the
-        // free-list, and a non-standard buffer is a fresh lazily-OS-zeroed mmap.
+        // pool item was zeroed by `destroyNodeExt` (or the compression scratch)
+        // before re-entering the free list, and a non-standard buffer is a fresh
+        // lazily-OS-zeroed mmap.
         // We don't run the runtime-safety/freestanding eager memsets here.
 
         // page.* = .{
@@ -2557,7 +2591,7 @@ impl PageList {
                 unsafe { pool.pages.destroy(NonNull::new(ptr).unwrap()) };
             }
 
-            Owned::Heap => Self::free_non_standard_page(node),
+            Owned::Heap => Self::free_non_standard_page(pool, node),
         }
 
         unsafe { pool.nodes.destroy(NonNull::new(node).unwrap()) };
@@ -2581,73 +2615,49 @@ impl PageList {
 
     /// Allocate a page-aligned, `total_size`-byte buffer for a NON-STANDARD page
     /// DIRECTLY via the page allocator, bypassing the pool — the reference
-    /// `page_alloc = pool.pages.arena.child_allocator;
-    /// page_alloc.alignedAlloc(...)`. The mmap'd region is lazily OS-zeroed (no
-    /// eager memset). FALLIBLE: returns `OutOfMemory` on map failure.
+    /// `page_alloc = pool.pages.allocator; page_alloc.alignedAlloc(...)`. The
+    /// mmap'd region is lazily OS-zeroed (no eager memset). FALLIBLE: returns
+    /// `OutOfMemory` on map failure.
     //
-    // PORT NOTE (audit #1/#2): the page allocator is `page_allocator()`, the
-    // SAME value the `PagePool` arena holds as its `child_allocator` (a stateless
-    // `Copy` selector — the macOS VM tag only), so going through `page_allocator()`
-    // directly here is observably identical to `pool.pages.child_allocator()`.
-    // We keep `pool` in the signature to mirror the reference's
-    // `pool.pages.arena.child_allocator` access and keep the seam explicit.
-    fn alloc_non_standard(total_size: usize) -> Result<NonNull<u8>, OutOfMemory> {
+    // PORT NOTE: under test the page allocator is the tracking wrapper, so
+    // non-standard pages are leak-counted with the pooled ones (in Zig the
+    // single `pageAllocator()` serves both paths).
+    fn alloc_non_standard(
+        pool: &MemoryPool,
+        total_size: usize,
+    ) -> Result<NonNull<u8>, OutOfMemory> {
         let layout = Self::non_standard_layout(total_size);
-        // Under test, route through the SAME tracking wrapper / global tracker the
-        // page pool's child uses, so non-standard pages are leak-counted too
-        // (faithful: in Zig the single `pageAllocator()` serves both paths).
-        let alloc = page_backing_alloc();
-        let slice = alloc.allocate(layout).map_err(|_| OutOfMemory)?;
+        let slice = pool
+            .pages
+            .allocator()
+            .allocate(layout)
+            .map_err(|_| OutOfMemory)?;
         Ok(slice.cast::<u8>())
     }
 
     /// Free a NON-STANDARD page's backing buffer DIRECTLY via the page allocator
     /// (the reference `page_alloc.free(node.data.memory)`).
-    fn free_non_standard_page(node: *mut Node) {
+    fn free_non_standard_page(pool: &MemoryPool, node: *mut Node) {
         // SAFETY: `node` is live; the metadata carries the mapping to free and
         // never touches the (possibly discarded) page contents.
         let page = unsafe { Node::metadata(node) };
-        Self::free_page_memory(page as *mut Page);
+        Self::free_page_memory(pool, page as *mut Page);
     }
 
     /// Free a heap-owned page's backing mapping, given the `Page` that names
-    /// it. Split out of `free_non_standard_page` so `deinit`/`reset` can free
-    /// the mapping of a page they have already discard-restored.
-    fn free_page_memory(page: *mut Page) {
+    /// it. Split out of `free_non_standard_page` so `release_pages` can free
+    /// the mapping of a page it has already discard-restored.
+    fn free_page_memory(pool: &MemoryPool, page: *mut Page) {
         let (ptr, len) = Self::page_memory(page);
         let layout = Self::non_standard_layout(len);
-        let alloc = page_backing_alloc();
         // SAFETY: `ptr`/`len` describe a buffer previously returned by
-        // `alloc_non_standard` (page allocator) with this exact layout.
-        unsafe { alloc.deallocate(NonNull::new(ptr).unwrap(), layout) };
-    }
-
-    /// Release all pages currently in `list` on an error path: heap-owned
-    /// pages are freed directly and pool-owned pages are reclaimed (the
-    /// reference `errdefer` page-cleanup loop in `initPages`/`clone`).
-    //
-    // errdefer {
-    //     var it = page_list.first;
-    //     while (it) |node| : (it = node.next) {
-    //         switch (node.owned) {
-    //             .pool => reclaimPoolPage(pool, node.page()),
-    //             .heap => page_alloc.free(node.page().memory),
-    //         }
-    //     }
-    // }
-    fn release_error_pages(pool: &mut MemoryPool, list: &mut List) {
-        let mut it = list.first;
-        while !it.is_null() {
-            let node = it;
-            match unsafe { (*node).owned } {
-                // `reclaim_pool_page` is a no-op unless the wasm page pool is
-                // active (`WASM_PAGE_POOL`) — natively, pool-owned buffers are
-                // freed when `pool.pages` drops, exactly as before.
-                Owned::Pool => Self::reclaim_pool_page(pool, unsafe { Node::metadata(node) }),
-                Owned::Heap => Self::free_non_standard_page(node),
-            }
-            it = unsafe { (*node).next };
-        }
+        // `alloc_non_standard` (this pool's page allocator) with this exact
+        // layout.
+        unsafe {
+            pool.pages
+                .allocator()
+                .deallocate(NonNull::new(ptr).unwrap(), layout)
+        };
     }
 
     /// `node.data.memory.len`.
@@ -3018,9 +3028,8 @@ impl PageList {
 /// smaller than the item; bytes beyond it are already zero.
 ///
 /// The invariant required for page reuse (see `create_page_ext`): after this
-/// call the entire item reads back as zeroes. The pool writes its free-list
-/// node into the first pointer-size bytes afterwards, which is safe because
-/// page initialization always overwrites them.
+/// call the entire item reads back as zeroes. The page pool never writes into
+/// its items (`UntouchedPool`), so the item stays zero on the free list.
 ///
 /// PORT NOTE (WS7 B1): this was a hand-rolled `madvise` block in BL-2, written
 /// before the oracle factored the same logic into `src/terminal/mem.zig`.

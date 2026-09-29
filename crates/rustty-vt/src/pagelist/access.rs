@@ -807,6 +807,22 @@ impl From<CloneFromError> for CloneError {
     }
 }
 
+/// Rust-only fail points for `clone` (the reference has no tripwire there).
+/// `CloneFrom` fails the page copy after its node is already on the clone's
+/// list, which is the ordering `e01e75bbb` introduced so the errdefer
+/// releases it.
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum CloneFp {
+    CloneFrom,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static CLONE_TW: core::cell::RefCell<rustty_util::tripwire::Module<CloneFp, CloneFromError>> =
+        core::cell::RefCell::new(rustty_util::tripwire::module());
+}
+
 impl PageList {
     /// Clone this pagelist from the top to bottom (inclusive).
     ///
@@ -853,41 +869,22 @@ impl PageList {
         // Create our viewport. In a clone, the viewport always goes
         // to the top.
         let viewport_pin = pool.pins.create().map_err(|_| OutOfMemory)?.as_ptr();
-        let mut tracked_pins: PinSet = PinSet::new_in(pool.alloc);
+        // var tracked_pins = try initTrackedPins(pool.alloc, viewport_pin);
         // errdefer tracked_pins.deinit(pool.alloc);
-        // try tracked_pins.putNoClobber(pool.alloc, viewport_pin, {});
-        tracked_pins
-            .try_put_no_clobber(viewport_pin, ())
-            .map_err(|_| OutOfMemory)?;
+        let mut tracked_pins: PinSet = Self::init_tracked_pins(pool.alloc, viewport_pin)?;
 
         // Our list of pages
         let mut page_list: List = List::default();
-        // errdefer {
-        //     const page_alloc = pool.pages.allocator;
-        //     var page_it = page_list.first;
-        //     while (page_it) |node| : (page_it = node.next) {
-        //         switch (node.owned) {
-        //             .pool => reclaimPoolPage(&pool, node.page()),
-        //             .heap => page_alloc.free(node.page().memory),
-        //         }
-        //     }
-        // }
+        // errdefer releasePages(&pool, page_list);
         //
-        // PORT NOTE: the reference errdefer releases every page in `page_list`:
-        // heap-owned buffers are freed directly, and pool-owned buffers are
-        // reclaimed into the shared free list when the wasm page pool is active
-        // (natively `reclaimPoolPage` is a comptime no-op — the standard-size
-        // buffers are owned by `pool.pages` and freed when the pool is
-        // dropped). `release_error_pages` (mod.rs) performs exactly that walk
-        // over `page_list`. Because Rust cannot express a Zig `errdefer` that
-        // captures `&mut page_list` while the loop also mutates it, we
-        // reproduce the errdefer EXPLICITLY: every early-error exit in the
-        // page-copy loop releases the pages first, then `pool` drops on return
-        // to release the rest. The `clone_err!` helper macro performs that
-        // release + return so the cleanup cannot be forgotten.
+        // PORT NOTE: Rust cannot express a Zig `errdefer` that captures
+        // `&page_list` while the loop also mutates it, so every early-error
+        // exit below goes through `clone_err!`, which releases every page and
+        // node of `page_list` back to `pool` and returns; `pool` then drops on
+        // return (its `UntouchedPool`s assert every node and page came back).
         macro_rules! clone_err {
             ($e:expr) => {{
-                Self::release_error_pages(&mut pool, &mut page_list);
+                Self::release_pages(&mut pool, &page_list);
                 return Err($e);
             }};
         }
@@ -908,6 +905,11 @@ impl PageList {
                 Ok(n) => n,
                 Err(e) => clone_err!(e.into()),
             };
+
+            // Add the page to the list immediately so that the errdefer
+            // above releases it if cloning fails.
+            unsafe { page_list.append(node) };
+
             assert!(
                 unsafe { super::Node::capacity(node).rows } as usize
                     >= chunk.end as usize - chunk.start as usize
@@ -917,13 +919,20 @@ impl PageList {
                 (*super::Node::page(node)).size.rows = chunk.end - chunk.start;
                 (*super::Node::page(node)).size.cols = super::Node::cols(chunk.node);
             }
-            let clone_res = unsafe {
+            // Rust-only test seam: `clone_from` cannot fail on a page of the
+            // source's own capacity, so a test fail point stands in for its
+            // error to exercise the errdefer above (see `CLONE_TW`).
+            #[cfg(test)]
+            let tripped = CLONE_TW.with(|tw| tw.borrow_mut().check(CloneFp::CloneFrom));
+            #[cfg(not(test))]
+            let tripped: Result<(), CloneFromError> = Ok(());
+            let clone_res = tripped.and_then(|()| unsafe {
                 (*super::Node::page(node)).clone_from(
                     &(*super::Node::page(chunk.node)) as *const Page,
                     chunk.start as usize,
                     chunk.end as usize,
                 )
-            };
+            });
             if let Err(e) = clone_res {
                 unsafe {
                     (*super::Node::page(node)).assert_integrity();
@@ -937,8 +946,6 @@ impl PageList {
             unsafe {
                 (*super::Node::page(node)).dirty = (*super::Node::page(chunk.node)).dirty;
             }
-
-            unsafe { page_list.append(node) };
 
             total_rows += unsafe { super::Node::rows(node) } as usize;
 
@@ -1022,7 +1029,20 @@ impl PageList {
         if total_rows < self.rows as usize {
             let len = self.rows as usize - total_rows;
             for _ in 0..len {
-                let _ = result.grow()?;
+                // _ = try result.grow();
+                //
+                // PORT NOTE: the reference's errdefers here still name the
+                // local `pool` and `page_list`, which were copied into
+                // `result`, so on a grow failure they would release a stale
+                // copy of the pool (and miss the pages `grow` added). The pool
+                // moved into `result` in Rust, so the failure path tears down
+                // `result` itself: every page and node back to `result.pool`,
+                // which then drops with the rest of `result`.
+                if let Err(e) = result.grow() {
+                    Self::release_pages(&mut result.pool, &result.pages);
+                    result.pages = List::default();
+                    return Err(e.into());
+                }
 
                 // Clear the row. This is not very fast but in reality right
                 // now we rarely clone less than the active area and if we do

@@ -3616,13 +3616,10 @@ mod tests {
         assert!(c.has_text());
     }
 
-    /// `P3-W1 T4` (oracle c442eb4b3). A zero-row page would leave the pool's
-    /// stale free-list node in the first pointer-size bytes of a REUSED buffer,
-    /// because `init_buf`'s row loop — the only thing that overwrites those
-    /// bytes — would iterate zero times. rustty's `decommit_pool_item` makes
-    /// this live, and rustty skips the zeroing memset in release exactly as Zig
-    /// does, so without this assert the corruption would be release-only and
-    /// dependent on pool reuse order.
+    /// `P3-W1 T4` (oracle c442eb4b3): a page must always have at least one
+    /// row (`init_buf` asserts it). The pool-reuse reason that test first
+    /// recorded went away with `e01e75bbb` (the page pool no longer writes a
+    /// free-list node into its items); the assert stays.
     #[test]
     #[should_panic(expected = "cap.rows > 0")]
     fn page_init_buf_rejects_zero_rows() {

@@ -207,6 +207,38 @@ where
         self.index.try_reserve(1).map_err(|_| OutOfMemory)
     }
 
+    /// `try map.entries.setCapacity(alloc, new_capacity)`, growing only: room
+    /// for `new_capacity` entries in all, reserved exactly for the entries and
+    /// the index, so that many `*_assume_capacity` inserts never allocate.
+    /// Fails with `error.OutOfMemory` (map unchanged in content).
+    //
+    // PORT NOTE: Zig's `setCapacity` sets the entries capacity exactly and can
+    // shrink it; the one caller (PageList `initTrackedPins`) grows an empty map,
+    // so shrinking is asserted out rather than ported. The index is reserved
+    // too: Zig builds no index below its linear-scan threshold, and this port
+    // always keeps one (see the module docs), so the reserve is what keeps the
+    // following inserts allocation-free as they are in Zig.
+    pub fn try_set_capacity(&mut self, new_capacity: usize) -> Result<(), OutOfMemory> {
+        assert!(new_capacity >= self.entries.len());
+        let additional = new_capacity - self.entries.len();
+        self.entries
+            .try_reserve_exact(additional)
+            .map_err(|_| OutOfMemory)?;
+        self.index.try_reserve(additional).map_err(|_| OutOfMemory)
+    }
+
+    /// Faithful port of `putAssumeCapacityNoClobber`: asserts `key` is absent
+    /// and that the map has room, then appends without allocating.
+    pub fn put_assume_capacity_no_clobber(&mut self, key: K, value: V) {
+        assert!(
+            !self.index.contains_key(&key),
+            "putNoClobber: key already present"
+        );
+        assert!(self.entries.len() < self.entries.capacity());
+        assert!(self.index.len() < self.index.capacity());
+        self.append(key, value);
+    }
+
     /// Append a new entry. The caller has checked that `key` is absent.
     fn append(&mut self, key: K, value: V) -> usize {
         let i = self.entries.len();

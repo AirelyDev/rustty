@@ -241,7 +241,8 @@ impl<S: ItemShape, A: Allocator, G: Allocator> UntouchedPoolBase<S, A, G> {
     /// Until the previous gpa is restored, the pool must not grow or free its
     /// free list: no `create()` that finds the free list empty, no `deinit()`,
     /// no `Drop`. (`destroy()`, `release()`, `reset()` and a `create()` that
-    /// pops a free item never call the gpa.) Or the free list is still empty.
+    /// pops a free item never call the gpa.) The one exception: the free list
+    /// has never allocated (capacity 0).
     #[inline]
     pub unsafe fn set_gpa(&mut self, gpa: G) -> G {
         core::mem::replace(&mut self.gpa, gpa)

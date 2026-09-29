@@ -367,19 +367,19 @@ impl Builder {
         }
 
         // Setup our one viewport tracked pin
-        let mut tracked_pins: PinSet = PinSet::new_in(self.pool.alloc);
+        // var tracked_pins = try initTrackedPins(self.pool.alloc, viewport_pin);
         // errdefer tracked_pins.deinit(self.pool.alloc); — the Rust `PinSet`
         // frees through its allocator when dropped on an early return.
-        // try tracked_pins.putNoClobber(self.pool.alloc, viewport_pin, {});
-        if tracked_pins
-            .try_put_no_clobber(viewport_pin.as_ptr(), ())
-            .is_err()
-        {
-            // errdefer self.pool.pins.destroy(viewport_pin);
-            // SAFETY: created above, not yet published anywhere.
-            unsafe { self.pool.pins.destroy(viewport_pin) };
-            return Err(FinishError::OutOfMemory);
-        }
+        let tracked_pins: PinSet =
+            match PageList::init_tracked_pins(self.pool.alloc, viewport_pin.as_ptr()) {
+                Ok(set) => set,
+                Err(OutOfMemory) => {
+                    // errdefer self.pool.pins.destroy(viewport_pin);
+                    // SAFETY: created above, not yet published anywhere.
+                    unsafe { self.pool.pins.destroy(viewport_pin) };
+                    return Err(FinishError::OutOfMemory);
+                }
+            };
 
         // Initialize limits
         let mut limits: Limits = Limits::init(self.options.cols, self.options.rows);

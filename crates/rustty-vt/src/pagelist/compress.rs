@@ -22,6 +22,10 @@ use core::ptr::NonNull;
 /// reuse the same virtual mapping. Oversized pages use a temporary allocation
 /// from the page allocator and release it immediately after compression.
 ///
+/// A borrowed item goes back to the pool through zero-mode decommit, which
+/// only has to clear the bytes the encoder wrote. Callers therefore pass the
+/// dirty length to `deinit` rather than paying to clear the whole item.
+///
 /// PORTS: oracle@main PageList.zig `CompressionScratch`.
 pub(crate) enum CompressionScratch {
     /// A borrowed pool item. Always exactly `std_size()` bytes.
@@ -46,8 +50,12 @@ impl CompressionScratch {
         }
 
         let layout = PageList::non_standard_layout(raw_len);
-        let alloc = super::page_backing_alloc();
-        let slice = alloc.allocate(layout).map_err(|_| OutOfMemory)?;
+        // const page_alloc = pool.pages.allocator;
+        let slice = pool
+            .pages
+            .allocator()
+            .allocate(layout)
+            .map_err(|_| OutOfMemory)?;
         Ok(CompressionScratch::Allocated {
             ptr: slice.cast::<u8>().as_ptr(),
             len: raw_len,
@@ -73,25 +81,32 @@ impl CompressionScratch {
         }
     }
 
-    pub(crate) fn deinit(self, pool: &mut MemoryPool) {
+    pub(crate) fn deinit(self, pool: &mut MemoryPool, dirty_len: usize) {
         match self {
             CompressionScratch::Pooled(ptr) => {
                 // Zero (and, where supported, reclaim) the item before it
                 // re-enters the free list — `create_page_ext` relies on pooled
-                // buffers reading back as zero.
+                // buffers reading back as zero. Only the first `dirty_len`
+                // bytes were written since the item left the pool zeroed.
+                //
+                // _ = terminal_mem.decommit(.zero, memory, dirty_len);
                 //
                 // SAFETY: `ptr` is the live pool item this value borrowed.
                 let _ =
-                    unsafe { mem::decommit(mem::DecommitMode::Zero, ptr, std_size(), std_size()) };
+                    unsafe { mem::decommit(mem::DecommitMode::Zero, ptr, std_size(), dirty_len) };
                 // SAFETY: `ptr` came from `pool.pages.create()`.
                 unsafe { pool.pages.destroy(NonNull::new(ptr).unwrap()) };
             }
 
             CompressionScratch::Allocated { ptr, len } => {
                 let layout = PageList::non_standard_layout(len);
-                let alloc = super::page_backing_alloc();
-                // SAFETY: `ptr`/`layout` are the pair allocated in `init`.
-                unsafe { alloc.deallocate(NonNull::new(ptr).unwrap(), layout) };
+                // SAFETY: `ptr`/`layout` are the pair allocated in `init`
+                // through this pool's page allocator.
+                unsafe {
+                    pool.pages
+                        .allocator()
+                        .deallocate(NonNull::new(ptr).unwrap(), layout)
+                };
             }
         }
     }
@@ -401,6 +416,11 @@ impl PageList {
                 Err(OutOfMemory) => return false,
             };
 
+            // The encoder writes at most `required` bytes and reports exactly
+            // how many on success. Track that so returning the scratch only
+            // clears the prefix it dirtied instead of the whole item.
+            let mut dirty_len: usize = required;
+
             let mut table: compress::lz4::HashTable = [0; compress::lz4::HASH_TABLE_LEN];
             // SAFETY: `page` is the live resident page of `node`; the scratch
             // buffer is a distinct allocation.
@@ -413,8 +433,13 @@ impl PageList {
                 )
             };
 
-            // defer scratch.deinit(&self.pool);
-            scratch.deinit(&mut self.pool);
+            // if (result) |compressed| dirty_len = compressed.encoded.len;
+            if let Ok(Some(compressed)) = &result {
+                dirty_len = compressed.encoded.len();
+            }
+
+            // defer scratch.deinit(&self.pool, dirty_len);
+            scratch.deinit(&mut self.pool, dirty_len);
 
             match result {
                 Ok(c) => c,

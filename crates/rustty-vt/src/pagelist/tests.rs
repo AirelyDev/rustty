@@ -19124,17 +19124,24 @@ fn pagelist_internals_route_through_the_allocator_handle() {
     let counting = CountingAllocator::over_heap();
     let c = counting.allocator();
     with_handle(&c, |alloc| {
-        // init: the node pool's preheated arena, the pin pool's preheated
-        // arena and the tracked-pin set (entries array + index).
+        // init: the pools and the tracked-pin set (entries array + index).
         //
-        // The pools alone: the node pool arena (2 chunks for `PAGE_PREHEAT`
-        // nodes) and the pin pool arena (2 chunks for its 8 pins), all
-        // returned when the pools are dropped (`MemoryPool.deinit`).
+        // The pools alone (P7-W1 T5 re-derivation, `e01e75bbb`, `efa3c66ed`,
+        // `35a6fb747`): the node pool's free list (one slot) and its one
+        // preheated node (`NODE_PREHEAT`, each node its own allocation), the
+        // page pool's free list (`PAGE_PREHEAT` slots; the page items
+        // themselves come from the page allocator), and the pin pool arena
+        // (one chunk for its `PIN_PREHEAT` pins), all returned when the pools
+        // are dropped (`MemoryPool.deinit`).
         {
             let pool =
                 super::MemoryPool::init(alloc, super::page_backing_alloc(), super::PAGE_PREHEAT)
                     .unwrap();
-            assert_eq!(4, counting.alloc_calls.get(), "node + pin pool arenas");
+            assert_eq!(
+                4,
+                counting.alloc_calls.get(),
+                "node free list + 1 node, page free list, pin pool arena"
+            );
             drop(pool);
             assert_eq!(0, counting.live_bytes.get());
         }
@@ -19143,7 +19150,8 @@ fn pagelist_internals_route_through_the_allocator_handle() {
         assert_eq!(
             pools + 4 + 2,
             counting.alloc_calls.get(),
-            "PageList.init: the pools (4) plus the tracked-pin set (entries + index)"
+            "PageList.init: the pools (4) plus the tracked-pin set (entries + index); \
+             the first page's node is the preheated one"
         );
         // Page memory is NOT routed: the caller's allocator holds far less than
         // one standard page.
@@ -19218,10 +19226,14 @@ fn pagelist_internals_route_through_the_allocator_handle() {
         };
         let mut baseline = s.clone(alloc, &mut plain).unwrap();
         let clone_calls = counting.alloc_calls.get() - before;
+        // The node pool preheats one node whatever the page count
+        // (`efa3c66ed`), so the clone's second page allocates its node; its
+        // free-list slot grows the existing list in place (a remap, not an
+        // alloc call).
         assert_eq!(
-            4 + 2,
+            4 + 2 + 1,
             clone_calls,
-            "the clone's pools (4) and tracked-pin set (entries + index)"
+            "the clone's pools (4), tracked-pin set (entries + index) and second node"
         );
         baseline.deinit();
 
@@ -19266,4 +19278,518 @@ fn pagelist_internals_route_through_the_allocator_handle() {
         s.deinit();
     });
     assert_eq!(0, counting.live_bytes.get(), "deinit returns every byte");
+}
+
+// ---------------------------------------------------------------------------
+// P7-W1 T5 (`e01e75bbb`, `efa3c66ed`, `35a6fb747`): the page pool is an
+// `UntouchedPool`, nodes are pooled one by one from the gpa.
+// ---------------------------------------------------------------------------
+
+/// PORT NOTE: `std.heap.FixedBufferAllocator` over a raw backing buffer, as
+/// much of it as the upstream test observes (`end_index`, the bump allocation,
+/// and `free` reclaiming only the last allocation). Every pointer it hands out
+/// is derived from the one raw `buffer` pointer, so the test's writes through
+/// that same pointer never invalidate an item (Stacked Borrows).
+struct FixedBufferAllocator {
+    buffer: *mut u8,
+    len: usize,
+    end_index: core::cell::Cell<usize>,
+}
+
+// SAFETY: every block returned lies inside `buffer`, is disjoint from every
+// other live block (the index only moves past handed-out bytes, and moves back
+// only over the last one when it is freed), and is aligned as asked.
+unsafe impl allocator_api2::alloc::Allocator for FixedBufferAllocator {
+    fn allocate(
+        &self,
+        layout: core::alloc::Layout,
+    ) -> Result<core::ptr::NonNull<[u8]>, allocator_api2::alloc::AllocError> {
+        use allocator_api2::alloc::AllocError;
+        let end = self.end_index.get();
+        let addr = (self.buffer as usize).checked_add(end).ok_or(AllocError)?;
+        let adjusted_index = end + (addr.next_multiple_of(layout.align()) - addr);
+        let new_end_index = adjusted_index
+            .checked_add(layout.size())
+            .ok_or(AllocError)?;
+        if new_end_index > self.len {
+            return Err(AllocError);
+        }
+        self.end_index.set(new_end_index);
+        // SAFETY: `adjusted_index + size <= len`, inside the buffer.
+        let ptr = unsafe { core::ptr::NonNull::new_unchecked(self.buffer.add(adjusted_index)) };
+        Ok(core::ptr::NonNull::slice_from_raw_parts(ptr, layout.size()))
+    }
+
+    unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
+        // `if (!self.isLastAllocation(buf)) return;`
+        let end = self.end_index.get();
+        if ptr.as_ptr() as usize + layout.size() == self.buffer as usize + end {
+            self.end_index.set(end - layout.size());
+        }
+    }
+}
+
+/// `std.mem.allEqual(u8, bytes, value)` over `len` raw bytes.
+fn raw_all_equal(ptr: *const u8, len: usize, value: u8) -> bool {
+    // SAFETY: the callers pass live, initialized pool items or buffers; the
+    // shared view ends before the bytes are next written.
+    unsafe { core::slice::from_raw_parts(ptr, len) }
+        .iter()
+        .all(|&b| b == value)
+}
+
+/// PORTS: oracle@main PageList.zig
+/// `test "PageList memory pool never touches idle page memory"`.
+#[test]
+fn pagelist_memory_pool_never_touches_idle_page_memory() {
+    const PREHEAT: usize = super::PAGE_PREHEAT;
+
+    // Back the page allocator with memory we can inspect.
+    let backing_layout =
+        core::alloc::Layout::from_size_align(PREHEAT * std_size(), crate::page::PAGE_SIZE_MIN)
+            .unwrap();
+    // SAFETY: non-zero size.
+    let backing = unsafe { std::alloc::alloc(backing_layout) };
+    assert!(!backing.is_null());
+    // defer testing.allocator.free(backing);
+    struct FreeBacking(*mut u8, core::alloc::Layout);
+    impl Drop for FreeBacking {
+        fn drop(&mut self) {
+            // SAFETY: allocated above with this layout, freed once.
+            unsafe { std::alloc::dealloc(self.0, self.1) };
+        }
+    }
+    let _free_backing = FreeBacking(backing, backing_layout);
+    let fba = FixedBufferAllocator {
+        buffer: backing,
+        len: backing_layout.size(),
+        end_index: core::cell::Cell::new(0),
+    };
+
+    let mut pool = super::MemoryPool::<&FixedBufferAllocator>::init(Global, &fba, PREHEAT).unwrap();
+    // defer pool.deinit(); (dropped explicitly below, before `backing`)
+
+    // Preheat allocated exactly the items.
+    assert_eq!(PREHEAT * std_size(), fba.end_index.get());
+
+    // Lay the sentinel down after preheat: allocation itself may write
+    // (the Allocator interface fills fresh memory with undefined in
+    // safe builds, which valgrind also tracks). The sentinel must differ
+    // from Zig's 0xAA undefined pattern so that any write is visible.
+    let sentinel: u8 = 0x5A;
+    // SAFETY: the whole backing buffer, through its one raw pointer.
+    unsafe { core::ptr::write_bytes(backing, sentinel, backing_layout.size()) };
+
+    // Every preheated item is handed out untouched and without going
+    // back to the page allocator, and destroying it doesn't touch it.
+    let mut items = [core::ptr::NonNull::<u8>::dangling(); PREHEAT];
+    for item in items.iter_mut() {
+        *item = pool.pages.create().unwrap();
+        assert_eq!(PREHEAT * std_size(), fba.end_index.get());
+        assert!(raw_all_equal(item.as_ptr(), std_size(), sentinel));
+    }
+    for item in items {
+        // SAFETY: each item came from `pool.pages.create()` and goes back once.
+        unsafe { pool.pages.destroy(item) };
+    }
+    assert!(raw_all_equal(backing, backing_layout.size(), sentinel));
+    drop(pool);
+}
+
+/// PORTS: oracle@main PageList.zig
+/// `test "PageList memory pool fast path does not allocate"`.
+#[test]
+fn pagelist_memory_pool_fast_path_does_not_allocate() {
+    const PREHEAT: usize = super::PAGE_PREHEAT;
+    // var counting: std.testing.FailingAllocator = .init(testing.allocator, .{});
+    let counting = FailingAllocator::over_heap(FailingConfig::default());
+    let c = counting.allocator();
+    with_handle(&c, |page_alloc| {
+        let mut pool =
+            super::MemoryPool::<crate::alloc::VtAllocator>::init(Global, page_alloc, PREHEAT)
+                .unwrap();
+        // defer pool.deinit(); (dropped at the end of this closure)
+        assert_eq!(PREHEAT, counting.allocations.get());
+
+        // Cycle a few thousand pages through the preheated items. As long
+        // as no more than the preheat are live at once, create is a
+        // free-list pop and never touches the page allocator.
+        let mut items = [core::ptr::NonNull::<u8>::dangling(); PREHEAT];
+        for _ in 0..1024 {
+            for item in items.iter_mut() {
+                *item = pool.pages.create().unwrap();
+            }
+            for item in items {
+                // SAFETY: each item came from `create` just above.
+                unsafe { pool.pages.destroy(item) };
+            }
+        }
+        assert_eq!(PREHEAT, counting.allocations.get());
+        assert_eq!(0, counting.deallocations.get());
+
+        // Going past the preheat allocates the extra items once; they are
+        // recycled from then on.
+        let mut extra = [core::ptr::NonNull::<u8>::dangling(); PREHEAT + 2];
+        for _ in 0..1024 {
+            for item in extra.iter_mut() {
+                *item = pool.pages.create().unwrap();
+            }
+            for item in extra {
+                // SAFETY: as above.
+                unsafe { pool.pages.destroy(item) };
+            }
+        }
+        assert_eq!(extra.len(), counting.allocations.get());
+        assert_eq!(0, counting.deallocations.get());
+        drop(pool);
+    });
+    assert_eq!(counting.allocations.get(), counting.deallocations.get());
+}
+
+/// Rust-only (the zero-fill contract of `e01e75bbb`'s `PagePool`): every path
+/// that hands a page back to the pool with `destroy` leaves it zeroed, because
+/// `Page::init_buf` now builds its metadata from zeroed memory without writing
+/// it. A pool-owned page is dirtied over its whole memory, destroyed, and its
+/// item handed out again: it reads back as zero, and a page initializes from
+/// it. The same holds for a compression scratch that returns only its dirty
+/// prefix (`60b43068c`).
+#[test]
+fn pagelist_recycled_dirty_pool_page_is_zeroed_for_reuse() {
+    let mut s = PageList::init(Global, Options::new(80, 24)).unwrap();
+
+    // A destroyed node's page (`destroy_node_ext`).
+    let node = s
+        .create_page(super::CreatePage::new(std_capacity()))
+        .unwrap();
+    assert_eq!(Owned::Pool, unsafe { (*node).owned });
+    let (item, len) = PageList::page_memory(unsafe { super::Node::page(node) });
+    assert!(len <= std_size());
+    // SAFETY: the live page memory of the detached node.
+    unsafe { core::ptr::write_bytes(item, 0xAA, len) };
+    s.destroy_node(node);
+
+    // The pool is LIFO: the next item is the one just destroyed.
+    let reused = s.pool.pages.create().unwrap();
+    assert_eq!(item, reused.as_ptr());
+    assert!(raw_all_equal(reused.as_ptr(), std_size(), 0));
+    // SAFETY: handed out just above.
+    unsafe { s.pool.pages.destroy(reused) };
+
+    // And a page initializes from it (a debug build samples the zero fill in
+    // `init_buf`).
+    let node = s
+        .create_page(super::CreatePage::new(std_capacity()))
+        .unwrap();
+    assert_eq!(
+        item,
+        PageList::page_memory(unsafe { super::Node::page(node) }).0
+    );
+    s.destroy_node(node);
+
+    // A compression scratch clears only the prefix it dirtied.
+    let scratch = super::compress::CompressionScratch::init(&mut s.pool, 4096, 4096).unwrap();
+    let ptr = match scratch {
+        super::compress::CompressionScratch::Pooled(ptr) => ptr,
+        super::compress::CompressionScratch::Allocated { .. } => panic!("a standard scratch"),
+    };
+    assert_eq!(item, ptr);
+    // SAFETY: the borrowed item, exclusively held by `scratch`.
+    unsafe { core::ptr::write_bytes(ptr, 0xAA, 1000) };
+    scratch.deinit(&mut s.pool, 1000);
+    let reused = s.pool.pages.create().unwrap();
+    assert_eq!(item, reused.as_ptr());
+    assert!(raw_all_equal(reused.as_ptr(), std_size(), 0));
+    // SAFETY: handed out just above.
+    unsafe { s.pool.pages.destroy(reused) };
+
+    s.deinit();
+}
+
+/// Run `f` once per allocation of the general-purpose allocator, failing that
+/// allocation, until a run makes no induced failure. After every run nothing
+/// the allocator handed out is still live (`CountingAllocator`), and no pool
+/// assert fired (the run would have panicked). Returns the number of runs.
+fn teardown_failure_sweep(
+    what: &str,
+    mut f: impl FnMut(crate::alloc::VtAllocator) -> bool,
+) -> usize {
+    use crate::alloc::testing::CountingAllocator;
+    for n in 0.. {
+        let counting = CountingAllocator::over_heap();
+        // SAFETY: `counting` outlives `failing` (declared first, dropped last).
+        let failing = unsafe {
+            FailingAllocator::init(
+                counting.allocator(),
+                FailingConfig {
+                    fail_index: n,
+                    ..FailingConfig::default()
+                },
+            )
+        };
+        let c = failing.allocator();
+        let ok = with_handle(&c, &mut f);
+        assert_eq!(
+            0,
+            counting.live_bytes.get(),
+            "{what}: {} bytes leaked with allocation {n} failing",
+            counting.live_bytes.get()
+        );
+        if !failing.has_induced_failure.get() {
+            assert!(ok, "{what}: no failure was induced, so it must succeed");
+            return n + 1;
+        }
+        assert!(!ok, "{what}: allocation {n} failed, so it must fail");
+    }
+    unreachable!()
+}
+
+/// Rows that need three standard pages, so `init` builds a list of several
+/// nodes (the node pool preheats one).
+fn three_pages_of_rows() -> size::CellCountInt {
+    PageList::initial_capacity(80).rows * 2 + 1
+}
+
+/// Review Focus 3 (P7-W1 T5): `init`/`initPages` failing part-way through a
+/// multi-node list hands every node and page back before the pool drops.
+#[test]
+fn pagelist_teardown_after_init_failure_returns_every_node() {
+    let runs = teardown_failure_sweep("init", |alloc| {
+        match PageList::init(alloc, Options::new(80, three_pages_of_rows())) {
+            Ok(mut s) => {
+                assert_eq!(3, s.total_pages());
+                s.deinit();
+                true
+            }
+            Err(OutOfMemory) => false,
+        }
+    });
+    // The node pool, the page pool's free list, the pin pool, the second and
+    // third nodes and the tracked-pin set can each fail.
+    assert!(runs > 5, "{runs}");
+}
+
+/// A source list of three pages with a tracked pin on each, for the clone
+/// sweeps (built on the global heap, outside the swept allocator).
+fn clone_source_for_test() -> (PageList, Vec<*mut Pin>) {
+    let mut s = PageList::init(Global, Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut s, 2);
+    let mut pins = Vec::new();
+    let mut node = s.pages.first;
+    while !node.is_null() {
+        let p = s
+            .track_pin(Pin {
+                node,
+                y: 0,
+                x: 0,
+                garbage: false,
+            })
+            .unwrap();
+        pins.push(p);
+        node = unsafe { (*node).next };
+    }
+    (s, pins)
+}
+
+fn clone_from_top_with_remap(
+    s: &PageList,
+    alloc: crate::alloc::VtAllocator,
+) -> Result<PageList, super::access::CloneError> {
+    let mut opts = super::access::Clone {
+        top: point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
+        bot: None,
+        tracked_pins: Some(super::access::TrackedPinsRemap::with_hasher_in(
+            Default::default(),
+            alloc,
+        )),
+    };
+    s.clone(alloc, &mut opts)
+}
+
+/// Review Focus 3 (P7-W1 T5): every allocation failure inside `clone` (the
+/// pools, a node, the tracked-pin set, the pin remap) hands the partial list's
+/// nodes and pages back before the clone's pool drops.
+#[test]
+fn pagelist_teardown_after_clone_failure_returns_every_node() {
+    let (mut s, pins) = clone_source_for_test();
+    let runs = teardown_failure_sweep("clone", |alloc| {
+        match clone_from_top_with_remap(&s, alloc) {
+            Ok(mut c) => {
+                assert_eq!(s.total_pages(), c.total_pages());
+                c.deinit();
+                true
+            }
+            Err(super::access::CloneError::OutOfMemory) => false,
+            Err(e) => panic!("unexpected {e:?}"),
+        }
+    });
+    assert!(runs > 5, "{runs}");
+    for p in pins {
+        s.untrack_pin(p);
+    }
+    s.deinit();
+}
+
+/// Review Focus 3 (P7-W1 T5), the fail-first case: `cloneFrom` failing on the
+/// second page. Before `e01e75bbb` moved the append ahead of `cloneFrom`, the
+/// failing page's node was on no list, so nothing handed it back and the
+/// clone's node pool asserted `live == free.len` when it dropped.
+#[test]
+fn pagelist_teardown_after_clone_from_failure_returns_every_node() {
+    use super::access::{CloneFp, CLONE_TW};
+    use crate::alloc::testing::CountingAllocator;
+    use rustty_util::tripwire::ResetMode;
+
+    let (mut s, pins) = clone_source_for_test();
+    let counting = CountingAllocator::over_heap();
+    let c = counting.allocator();
+    CLONE_TW.with(|tw| {
+        tw.borrow_mut().errorAfter(
+            CloneFp::CloneFrom,
+            crate::page::CloneFromError::StyleSetOutOfMemory,
+            1,
+        )
+    });
+    let res = with_handle(&c, |alloc| {
+        clone_from_top_with_remap(&s, alloc).map(|mut c| c.deinit())
+    });
+    CLONE_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
+    assert!(matches!(
+        res,
+        Err(super::access::CloneError::CloneFrom(
+            crate::page::CloneFromError::StyleSetOutOfMemory
+        ))
+    ));
+    assert_eq!(0, counting.live_bytes.get(), "the clone leaked");
+    for p in pins {
+        s.untrack_pin(p);
+    }
+    s.deinit();
+}
+
+/// Review Focus 3 (P7-W1 T5): a clone of fewer rows than the active area
+/// grows the new list to fill it; a failing `grow` tears the new list down
+/// through the pool that moved into it.
+#[test]
+fn pagelist_teardown_after_clone_grow_failure_returns_every_node() {
+    // Two-row pages, so a one-row clone of the last row must grow new pages
+    // (a node from the general-purpose allocator) to fill the active area.
+    let mut builder = super::builder::Builder::init(Global, Options::new(80, 24)).unwrap();
+    for _ in 0..12 {
+        let page = builder
+            .allocate_page(Capacity {
+                cols: 80,
+                rows: 2,
+                ..Capacity::default()
+            })
+            .unwrap();
+        unsafe { (*page).size.rows = 2 };
+    }
+    let mut s = builder.finish().unwrap();
+    builder.deinit();
+    let last_row = (s.total_rows - 1) as u32;
+    let mut grew = false;
+    let runs = teardown_failure_sweep("clone grow", |alloc| {
+        let mut opts = super::access::Clone {
+            top: point::Point::Screen(point::Coordinate { x: 0, y: last_row }),
+            bot: None,
+            tracked_pins: None,
+        };
+        match s.clone(alloc, &mut opts) {
+            Ok(mut c) => {
+                grew = c.total_rows == c.rows as usize;
+                c.deinit();
+                true
+            }
+            Err(super::access::CloneError::OutOfMemory) => false,
+            Err(e) => panic!("unexpected {e:?}"),
+        }
+    });
+    assert!(grew, "the clone must grow to the active area");
+    assert!(runs > 3, "{runs}");
+    s.deinit();
+}
+
+/// Review Focus 3 (P7-W1 T5): a `Builder` whose page allocation or `finish`
+/// fails hands every page and node back through `deinit`.
+#[test]
+fn pagelist_teardown_after_builder_failure_returns_every_node() {
+    use super::builder::{Builder, FinishError};
+    let runs = teardown_failure_sweep("builder", |alloc| {
+        let mut builder = match Builder::init(alloc, Options::new(80, 24)) {
+            Ok(b) => b,
+            Err(OutOfMemory) => return false,
+        };
+        let mut failed = false;
+        for _ in 0..3 {
+            match builder.allocate_page(std_capacity()) {
+                Ok(page) => unsafe {
+                    (*page).size.rows = 10;
+                },
+                Err(OutOfMemory) => {
+                    failed = true;
+                    break;
+                }
+            }
+        }
+        let ok = !failed
+            && match builder.finish() {
+                Ok(mut list) => {
+                    list.deinit();
+                    true
+                }
+                Err(FinishError::OutOfMemory) => false,
+                Err(e) => panic!("unexpected {e:?}"),
+            };
+        builder.deinit();
+        ok
+    });
+    assert!(runs > 4, "{runs}");
+}
+
+/// Review Focus 3 (P7-W1 T5): a detached `PageAllocation` whose creation
+/// fails, or which is thrown away with `deinit`, leaves nothing live.
+#[test]
+fn pagelist_teardown_after_allocate_page_failure_returns_every_node() {
+    let runs = teardown_failure_sweep("allocate_page", |alloc| {
+        let mut s = match PageList::init(alloc, Options::new(80, 24)) {
+            Ok(s) => s,
+            Err(OutOfMemory) => return false,
+        };
+        let sp: *mut PageList = &mut s;
+        let mut allocs = Vec::new();
+        let mut ok = true;
+        for _ in 0..3 {
+            match unsafe { PageList::allocate_page(sp, std_capacity()) } {
+                Ok(a) => allocs.push(a),
+                Err(OutOfMemory) => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        for mut a in allocs {
+            a.deinit();
+        }
+        unsafe { (*sp).deinit() };
+        ok
+    });
+    assert!(runs > 3, "{runs}");
+}
+
+/// Review Focus 3 (P7-W1 T5): `reset` hands every page and node back before it
+/// trims the pools, and a later `deinit` returns everything.
+#[test]
+fn pagelist_teardown_after_reset_returns_every_node() {
+    use crate::alloc::testing::CountingAllocator;
+    let counting = CountingAllocator::over_heap();
+    let c = counting.allocator();
+    with_handle(&c, |alloc| {
+        let mut s = PageList::init(alloc, Options::new(80, 24)).unwrap();
+        grow_cold_pages_for_test(&mut s, 3);
+        s.reset();
+        assert_eq!(1, s.total_pages());
+        grow_cold_pages_for_test(&mut s, 1);
+        s.deinit();
+    });
+    assert_eq!(0, counting.live_bytes.get());
 }

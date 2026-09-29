@@ -495,12 +495,6 @@ impl Page {
         let cap = l.capacity;
 
         // A page must always have at least one row.
-        //
-        // PORT NOTE: in the port the row initialization below must also
-        // always overwrite the start of the buffer for pool reuse: the page
-        // pool is still the intrusive-free-list `DynamicMemoryPoolAligned`
-        // (upstream `e01e75bbb` replaces it with `UntouchedPool`, a later
-        // P7-W1 task). See the `const _` assert next to `Row` in `page.rs`.
         assert!(cap.rows > 0);
 
         // PORT NOTE: the reference stores `.memory = @alignCast(buf.start()[0..
@@ -520,8 +514,7 @@ impl Page {
         // member now initializes from zeroed memory without writing (the
         // `init_assume_zeroed`s below), so a caller that hands in dirty memory
         // would build a page whose sets, maps and allocators read garbage.
-        // The row headers are skipped: they are overwritten below, and the
-        // first bytes of a reused pool buffer hold the pool's free-list node.
+        // The row headers are skipped: they are overwritten below.
         // Only a few words are read (the first and last of the cells and of
         // each metadata member, and the layout's last word), so the check
         // touches a handful of OS pages at most.
@@ -3088,11 +3081,6 @@ impl Page {
     pub fn layout(cap: Capacity) -> Layout {
         let meta = MetaLayout::init(cap);
 
-        // PORT NOTE: the rows array must stay at offset 0 in the port for a
-        // second reason: the PageList memory pool relies on `init_buf`
-        // overwriting the first bytes of a reused page buffer, which hold the
-        // pool's free list node. See the `const _` assert next to `Row` in
-        // `page.rs`.
         let rows_count: usize = cap.rows as usize;
         let rows_start = 0;
         let rows_end: usize = rows_start + (rows_count * core::mem::size_of::<Row>());

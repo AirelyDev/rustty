@@ -449,9 +449,14 @@ mod tests {
         assert!(ref_.is_null());
         assert_eq!(pins, tracked_pins(term));
         // The ref was created through the caller's allocator and destroyed.
-        assert_eq!(allocs + 1, stats.alloc_calls.get());
-        assert_eq!(frees + 1, stats.free_calls.get());
-        assert_eq!(live, stats.live_bytes.get());
+        // Tracking its pin also grew the tracked-pin set past the two entries
+        // it is sized for (P7-W1 T5, `35a6fb747`: `initTrackedPins` holds the
+        // viewport and cursor pins): its storage was reallocated (one alloc, one
+        // free), and the larger capacity stays until `free`, so the live
+        // bytes do not return to `live` here.
+        assert_eq!(allocs + 2, stats.alloc_calls.get());
+        assert_eq!(frees + 2, stats.free_calls.get());
+        assert!(stats.live_bytes.get() >= live);
         assert!(unsafe { (*term).tracked_grid_refs.is_empty() });
 
         unsafe { terminal::free(term) };
