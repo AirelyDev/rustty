@@ -38,12 +38,12 @@ pub(crate) mod log_capture;
 /// `image-storage-limit` config.
 // pub const maximum_image_size = 4 * 1024 * 1024 * 1024;
 //
-// PORT NOTE (wasm32, DECISIONS B8): the reference constant is a `comptime_int`,
-// so `size > maximum_image_size` also compiles where `usize` is 32 bits (Zig
-// folds the comparison to `false`: no 32-bit size exceeds 4 GiB). A `usize`
-// constant cannot hold 4 GiB on wasm32, which now builds this crate, so the
-// constant is a `u64` and the guards widen `size` to compare, with the same
-// result on every target.
+// PORT NOTE (32-bit targets, DECISIONS B8): the reference constant is a
+// `comptime_int`, so `size > maximum_image_size` also compiles where `usize` is
+// 32 bits (Zig folds the comparison to `false`: no 32-bit size exceeds 4 GiB).
+// A `usize` constant cannot hold 4 GiB there (wasm32-wasip1 links this crate,
+// and armv7 Android), so the constant is a `u64` and the guards widen `size`
+// to compare, with the same result on every target.
 pub const MAXIMUM_IMAGE_SIZE: u64 = 4 * 1024 * 1024 * 1024;
 
 /// Reference `ImageData { width: u32, height: u32, data: []u8 }`.
@@ -257,12 +257,15 @@ impl<A: Allocator> Drop for Scratch<A> {
 // PORT NOTE (`619555d1c` build-without-libc): the `comptime` block above
 // exists for the reference's no-libc lane (wasm32-freestanding); there
 // `builtin.link_libc` is false and the weak stubs satisfy any surviving
-// `calloc`/`free` reference. Since P7-W5 T2 (DECISIONS B8) rustty links wuffs
-// on wasm32 too, so the block is live there. Rust has no stable weak linkage,
-// so the stubs are C: `crates-sys/wuffs-sys/wasm_libc_stubs.c`, weak and
-// hidden, compiled by wuffs-sys's build.rs for a wasm32 target without libc
-// (every wasm32 but WASI, whose libc Rust's std links). Every other target
-// links libc, where the reference emits no stubs either.
+// `calloc`/`free` reference. The reference's own lib-vt wasm artifact never
+// links wuffs (Kitty graphics is off on freestanding, and so is wuffs:
+// Ruling 30, amending DECISIONS B8), and neither does rustty's
+// `wasm32-unknown-unknown` one; the block matters for a stand-alone build of
+// this crate there. Rust has no stable weak linkage, so the stubs are C:
+// `crates-sys/wuffs-sys/wasm_libc_stubs.c`, weak and hidden, compiled by
+// wuffs-sys's build.rs for a wasm32 target without libc (every wasm32 but
+// WASI, whose libc Rust's std links). Every other target links libc, where
+// the reference emits no stubs either.
 
 // test {
 //     std.testing.refAllDeclsRecursive(@This());

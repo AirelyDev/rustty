@@ -121,12 +121,15 @@ probe_cc_target() {
 
 # Does the C compiler cc-rs would use for this target produce an object for it?
 #
-# The wasm legs compile C and no C++: wuffs-sys (the kitty graphics swizzles
-# and, since P7-W5 T2 / DECISIONS B8, the kitty zlib decoder, which the
-# reference builds for wasm32 too). They need a clang with the WebAssembly
-# backend, which Apple's clang does not have; `CC_<triple>` selects another
-# (e.g. Homebrew's llvm). No libc++ and no sysroot: the TU includes only
-# <stddef.h>, a compiler header, as wuffs-sys's minimal libc headers do.
+# The wasm32-wasip1 leg compiles C and no C++: wuffs-sys (the kitty graphics
+# swizzles and, since P7-W5 T2 / DECISIONS B8, the kitty zlib decoder; WASI has
+# Kitty graphics on, as Zig's `.wasi` does). It needs a clang with the
+# WebAssembly backend, which Apple's clang does not have; `CC_<triple>` selects
+# another (e.g. Homebrew's llvm). No libc++ and no sysroot: the TU includes
+# only <stddef.h>, a compiler header, as wuffs-sys's minimal libc headers do.
+# wasm32-unknown-unknown compiles no C: it is freestanding, where Kitty
+# graphics and so wuffs are off, as in the reference's wasm32-freestanding
+# artifact (Ruling 30).
 probe_c_target() {
   local triple="$1" probe rc
   probe="$WORK/probe-c-$triple"
@@ -252,10 +255,12 @@ TARGET_DIR=""
 TARGETS=(
   # The wasm artifact release-tip.yml's build-lib-vt-wasm ships. SIMD is off
   # for wasm by rustty-vt's own options.rs (the reference cannot build its
-  # SIMD deps for wasm either), so this is the default feature set. It
-  # compiles C since P7-W5 T2 (wuffs-sys, DECISIONS B8).
-  "wasm32-unknown-unknown||c"
-  # The WASI variant .port/tools/zig-cc-wasm.sh exists for.
+  # SIMD deps for wasm either), so this is the default feature set. Pure
+  # Rust: Kitty graphics (and so wuffs) is off on this freestanding target
+  # (Ruling 30).
+  "wasm32-unknown-unknown||0"
+  # The WASI variant .port/tools/zig-cc-wasm.sh exists for. It compiles C
+  # since P7-W5 T2 (wuffs-sys, DECISIONS B8).
   "wasm32-wasip1||c"
   # The reference's build-libghostty-vt-windows. MSVC needs no host C
   # toolchain for the Rust half; the crates-sys C compiles need one, so this

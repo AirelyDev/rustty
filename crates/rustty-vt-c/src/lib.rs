@@ -2078,6 +2078,13 @@ mod wasm_alloc_exports {
 // `PlacementData`) cross the C ABI as their `enum(c_int)` (cbindgen emits a C
 // enum); the `placement_iterator_set` `intToEnum` runtime-safety guard lives on
 // the raw `c_int` `option` here (the typed `set` cannot receive an invalid tag).
+//
+// The block is `if (features.kitty_graphics)`, where `features` is the resolved
+// terminal options: `kittyGraphics(target)`, false on a freestanding target. So
+// each export is `cfg(rustty_kitty_graphics)` (build.rs: the `kitty-graphics`
+// feature and a non-freestanding target), not the bare feature: the
+// `wasm32-unknown-unknown` artifact exports none of them, as the reference's
+// `wasm32-freestanding` one does not (Ruling 30).
 
 // pub const kitty_graphics_get = kitty_graphics.get;
 /// C: rustty_kitty_graphics_get
@@ -2085,7 +2092,7 @@ mod wasm_alloc_exports {
 /// # Safety
 /// `graphics` must be a valid `KittyGraphics` handle; `out` must point to storage
 /// of the type required by `data`.
-#[cfg(feature = "kitty-graphics")]
+#[cfg(rustty_kitty_graphics)]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_get(
     graphics: kitty_graphics::KittyGraphics,
@@ -2106,7 +2113,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_get(
 ///
 /// # Safety
 /// `graphics` must be a valid `KittyGraphics` handle.
-#[cfg(feature = "kitty-graphics")]
+#[cfg(rustty_kitty_graphics)]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_image(
     graphics: kitty_graphics::KittyGraphics,
@@ -2122,7 +2129,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_image(
 /// # Safety
 /// `image`, if non-null, must point to a valid `Image`; `out` must point to
 /// storage of the type required by `data`.
-#[cfg(feature = "kitty-graphics")]
+#[cfg(rustty_kitty_graphics)]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_image_get(
     image: kitty_graphics::ImageHandle,
@@ -2143,7 +2150,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_image_get(
 ///
 /// # Safety
 /// See `kitty_graphics::image_get_multi`.
-#[cfg(feature = "kitty-graphics")]
+#[cfg(rustty_kitty_graphics)]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_image_get_multi(
     image: kitty_graphics::ImageHandle,
@@ -2162,7 +2169,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_image_get_multi(
 /// # Safety
 /// `alloc_`, if non-null, must point to a valid C allocator; `out` must be a
 /// valid, writable pointer to a `PlacementIterator`.
-#[cfg(feature = "kitty-graphics")]
+#[cfg(rustty_kitty_graphics)]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_iterator_new(
     alloc_: *const rustty_lib::allocator::Allocator,
@@ -2183,7 +2190,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_iterator_new(
 ///
 /// # Safety
 /// `iter`, if non-null, must be a pointer returned by the matching `_new`.
-#[cfg(feature = "kitty-graphics")]
+#[cfg(rustty_kitty_graphics)]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_iterator_free(
     iter: kitty_graphics::PlacementIterator,
@@ -2198,7 +2205,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_iterator_free(
 /// # Safety
 /// `iter`, if non-null, must be a live iterator; `value`, if non-null, must point
 /// to a value of the type required by `option`.
-#[cfg(feature = "kitty-graphics")]
+#[cfg(rustty_kitty_graphics)]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_iterator_set(
     iter: kitty_graphics::PlacementIterator,
@@ -2221,7 +2228,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_iterator_set(
 ///
 /// # Safety
 /// `iter`, if non-null, must be a live iterator seeded by `get(.., .placement_iterator, ..)`.
-#[cfg(feature = "kitty-graphics")]
+#[cfg(rustty_kitty_graphics)]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_next(
     iter: kitty_graphics::PlacementIterator,
@@ -2236,7 +2243,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_next(
 /// # Safety
 /// `iter`, if non-null, must be a live iterator positioned on an entry; `out`
 /// must point to storage of the type required by `data`.
-#[cfg(feature = "kitty-graphics")]
+#[cfg(rustty_kitty_graphics)]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_get(
     iter: kitty_graphics::PlacementIterator,
@@ -2257,7 +2264,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_get(
 ///
 /// # Safety
 /// See `kitty_graphics::placement_get_multi`.
-#[cfg(feature = "kitty-graphics")]
+#[cfg(rustty_kitty_graphics)]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_get_multi(
     iter: kitty_graphics::PlacementIterator,
@@ -2277,7 +2284,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_get_multi(
 /// # Safety
 /// `iter`/`image`/`terminal`, if non-null, must be live; `out` must be a valid,
 /// writable pointer to a `CSelection`.
-#[cfg(feature = "kitty-graphics")]
+#[cfg(rustty_kitty_graphics)]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_rect(
     iter: kitty_graphics::PlacementIterator,
@@ -2295,7 +2302,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_rect(
 /// # Safety
 /// `iter`/`image`/`terminal`, if non-null, must be live; `out_width`/`out_height`
 /// must be valid, writable pointers to `u32`.
-#[cfg(feature = "kitty-graphics")]
+#[cfg(rustty_kitty_graphics)]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_pixel_size(
     iter: kitty_graphics::PlacementIterator,
@@ -2315,7 +2322,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_pixel_size(
 /// # Safety
 /// `iter`/`image`/`terminal`, if non-null, must be live; `out_cols`/`out_rows`
 /// must be valid, writable pointers to `u32`.
-#[cfg(feature = "kitty-graphics")]
+#[cfg(rustty_kitty_graphics)]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_grid_size(
     iter: kitty_graphics::PlacementIterator,
@@ -2335,7 +2342,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_grid_size(
 /// # Safety
 /// `iter`/`image`/`terminal`, if non-null, must be live; `out_col`/`out_row` must
 /// be valid, writable pointers to `i32`.
-#[cfg(feature = "kitty-graphics")]
+#[cfg(rustty_kitty_graphics)]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_viewport_pos(
     iter: kitty_graphics::PlacementIterator,
@@ -2355,7 +2362,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_viewport_pos(
 /// # Safety
 /// `iter`/`image`, if non-null, must be live; the four `out_*` pointers must be
 /// valid, writable pointers to `u32`.
-#[cfg(feature = "kitty-graphics")]
+#[cfg(rustty_kitty_graphics)]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_source_rect(
     iter: kitty_graphics::PlacementIterator,
@@ -2378,7 +2385,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_source_rect(
 /// # Safety
 /// `iter`/`image`/`terminal`, if non-null, must be live; `out`, if non-null, must
 /// be a valid, writable pointer to a `PlacementRenderInfo`.
-#[cfg(feature = "kitty-graphics")]
+#[cfg(rustty_kitty_graphics)]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_render_info(
     iter: kitty_graphics::PlacementIterator,

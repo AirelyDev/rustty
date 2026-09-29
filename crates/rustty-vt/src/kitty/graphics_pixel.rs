@@ -14,23 +14,25 @@
 //
 // PORT NOTE (wuffs edge): upstream wires wuffs into the vt module whenever
 // Kitty graphics is enabled (`322d7ae78` GhosttyZig.zig), including the
-// standalone lib build. Since P7-W5 T2 (DECISIONS B8, `4b86e3594`) rustty
-// does the same: the `kitty-graphics` cargo feature links `rustty-wuffs`
-// (the kitty zlib decoder needs it too), separately from the `wuffs` feature,
-// which now only selects the `sys.decode_png` default (G-VTCLIB). The swizzle
-// leaves below therefore go through wuffs whenever kitty graphics is compiled
-// in. The byte-exact scalar mirrors of the vendored wuffs kernels
-// (wuffs-v0.4.c: the trivial swizzle expansions and
-// `composite_nonpremul_nonpremul_u32_axxx`) remain for a build without
-// `kitty-graphics`, where upstream compiles no graphics module at all and
-// nothing dispatches here (`options::KITTY_GRAPHICS` is false); they stay
-// pinned against the real kernel by `wuffs_and_scalar_src_over_agree`.
+// standalone lib build. Since P7-W5 T2 (DECISIONS B8 as amended by Ruling 30,
+// `4b86e3594`) rustty does the same: the `kitty-graphics` cargo feature links
+// `rustty-wuffs` (the kitty zlib decoder needs it too) on every target where
+// Kitty graphics is on, i.e. not freestanding (`target_os = "none"`,
+// `wasm32-unknown-unknown`), which build.rs states as
+// `cfg(rustty_kitty_graphics)`; the `wuffs` feature only selects the
+// `sys.decode_png` default (G-VTCLIB). The swizzle leaves below go through
+// wuffs under that cfg. The byte-exact scalar mirrors of the vendored wuffs
+// kernels (wuffs-v0.4.c: the trivial swizzle expansions and
+// `composite_nonpremul_nonpremul_u32_axxx`) remain for the other builds, where
+// upstream compiles no graphics module at all and nothing dispatches here
+// (`options::KITTY_GRAPHICS` is false); they stay pinned against the real
+// kernel by `wuffs_and_scalar_src_over_agree`.
 
 // const std = @import("std");
 // const Allocator = std.mem.Allocator;
 // const wuffs = @import("wuffs");
 // const command = @import("graphics_command.zig");
-#[cfg(not(feature = "kitty-graphics"))]
+#[cfg(not(rustty_kitty_graphics))]
 use crate::alloc::CopyVecExt;
 use crate::alloc::{Allocator, Bytes};
 use crate::kitty::graphics_command as command;
@@ -55,7 +57,7 @@ pub fn rgba_from_format(
     format: command::Format,
     data: &[u8],
 ) -> Result<Bytes, OutOfMemory> {
-    #[cfg(feature = "kitty-graphics")]
+    #[cfg(rustty_kitty_graphics)]
     {
         let result = match format {
             // .rgba => return try alloc.dupe(u8, data),
@@ -89,7 +91,7 @@ pub fn rgba_from_format(
         }
     }
 
-    #[cfg(not(feature = "kitty-graphics"))]
+    #[cfg(not(rustty_kitty_graphics))]
     {
         // Byte-exact scalar mirrors of the wuffs swizzles (see the module
         // PORT NOTE): RGB/G expand with alpha forced opaque, GA replicates
@@ -130,7 +132,7 @@ pub fn rgba_from_format(
 
 /// `alloc.alloc(u8, n)`'s room: a list with capacity for exactly `n` bytes,
 /// or `OutOfMemory`.
-#[cfg(not(feature = "kitty-graphics"))]
+#[cfg(not(rustty_kitty_graphics))]
 fn try_with_capacity(alloc: Allocator, n: usize) -> Result<Bytes, OutOfMemory> {
     let mut v = Bytes::new_in(alloc);
     v.try_reserve_exact(n).map_err(|_| OutOfMemory)?;
@@ -276,7 +278,7 @@ fn compose_row(dst: &mut [u8], src: &[u8], mode: command::CompositionMode) {
 /// place. Both are straight (non-premultiplied) alpha RGBA of the same
 /// length. A transparent destination pixel takes the source pixel exactly;
 /// wuffs composites everything else in 16-bit integer space.
-#[cfg(feature = "kitty-graphics")]
+#[cfg(rustty_kitty_graphics)]
 fn rgba_src_over(dst: &mut [u8], src: &[u8]) {
     rustty_wuffs::swizzle::rgbaSrcOver(dst, src);
 }
@@ -289,7 +291,7 @@ fn rgba_src_over(dst: &mut [u8], src: &[u8]) {
 // PARITY: `% 4 == 0` kept verbatim (the rustty-wuffs swizzle.rs precedent for
 // `rgbaSrcOver`'s own asserts).
 #[allow(clippy::manual_is_multiple_of)]
-#[cfg(not(feature = "kitty-graphics"))]
+#[cfg(not(rustty_kitty_graphics))]
 fn rgba_src_over(dst: &mut [u8], src: &[u8]) {
     assert!(dst.len() == src.len());
     assert!(dst.len() % 4 == 0);
@@ -302,7 +304,7 @@ fn rgba_src_over(dst: &mut [u8], src: &[u8]) {
 
 /// One pixel of the wuffs nonpremul src-over composite, channel-symmetric
 /// over the three color lanes with alpha in lane 3 (the RGBA byte order).
-#[cfg(any(not(feature = "kitty-graphics"), test))]
+#[cfg(any(not(rustty_kitty_graphics), test))]
 fn composite_nonpremul_nonpremul_axxx(dst: [u8; 4], src: [u8; 4]) -> [u8; 4] {
     // Extract 16-bit color components.
     //
@@ -556,7 +558,7 @@ mod tests {
     // Differential KAT (rustty addition; see the module PORT NOTE): the
     // scalar mirror of the wuffs src-over kernel must agree with the real
     // FFI kernel byte-for-byte. Runs only when both arms are available.
-    #[cfg(feature = "kitty-graphics")]
+    #[cfg(rustty_kitty_graphics)]
     #[test]
     fn wuffs_and_scalar_src_over_agree() {
         // Sweep alpha lanes exhaustively-ish and color lanes coarsely; every

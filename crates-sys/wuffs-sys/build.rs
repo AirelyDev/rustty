@@ -35,17 +35,22 @@
 //! build-without-libc) are mirrored at `include/`. They exist so the reference
 //! can translate and compile wuffs without libc headers (wasm32-freestanding /
 //! no Apple SDK). Since P7-W5 T2 (DECISIONS B8: kitty zlib decodes through
-//! wuffs on every target the reference builds, wasm32 included) they are LIVE:
-//! `include/` goes first on the include path of the codec TU, the shim TU and
-//! bindgen on every non-Windows target, as the reference puts it. The headers
-//! only declare what libc declares, with the standard C ABI, so a target that
-//! links libc links the same symbols.
-//! Where no libc is linked (wasm32 other than WASI) `wasm_libc_stubs.c`
-//! supplies the reference `main.zig`'s weak, hidden `calloc`/`free` stubs.
+//! wuffs wherever Kitty graphics is on) they are LIVE: `include/` goes first on
+//! the include path of the codec TU, the shim TU and bindgen on every
+//! non-Windows target, as the reference puts it. The headers only declare what
+//! libc declares, with the standard C ABI, so a target that links libc links
+//! the same symbols. Where no libc is linked (wasm32 other than WASI)
+//! `wasm_libc_stubs.c` supplies the reference `main.zig`'s weak, hidden
+//! `calloc`/`free` stubs.
 //!
-//! wasm32 needs a C compiler that targets it (`CC_wasm32_unknown_unknown`, or
-//! a `clang` with the WebAssembly backend), as the reference's Zig toolchain
-//! does; Apple's clang has none.
+//! Which targets link wuffs at all is rustty-vt's business: since Ruling 30
+//! (amending B8) the freestanding ones, `wasm32-unknown-unknown` included, have
+//! Kitty graphics off and no wuffs, as the reference's lib-vt wasm artifact
+//! (`wasm32-freestanding`) has neither, so that artifact is pure Rust.
+//! `wasm32-wasip1` (Zig's `.wasi`) links wuffs and needs a C compiler that
+//! targets wasm (`CC_wasm32_wasip1`, or a `clang` with the WebAssembly
+//! backend; Apple's clang has none). This crate still builds for
+//! `wasm32-unknown-unknown` on its own, which is where the stubs apply.
 
 use std::env;
 use std::path::PathBuf;
@@ -102,10 +107,10 @@ fn main() {
     //   // avoids requiring an Apple SDK for translate-c on macOS.
     //   false => &.{ b.path("include"), wuffs_dep.path("release/c") },
     // Applied as the reference applies it: on every target but Windows. It is
-    // what lets a cross build with no target sysroot (wasm32, or the
-    // `c-vt-cmake-cross` example's aarch64 Linux from macOS) compile and
-    // bindgen the header, since P7-W5 T2 put wuffs in every kitty-graphics
-    // graph (DECISIONS B8).
+    // what lets a cross build with no target sysroot (wasm32-wasip1 without a
+    // WASI sysroot, or the `c-vt-cmake-cross` example's aarch64 Linux from
+    // macOS) compile and bindgen the header, since P7-W5 T2 put wuffs in every
+    // kitty-graphics graph (DECISIONS B8).
     let minimal_libc_headers = target_os != "windows";
     let wasm = target_arch == "wasm32";
     let libc_include = manifest_dir.join("include");

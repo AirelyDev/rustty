@@ -28,8 +28,9 @@
 //! PORT NOTE: DEFLATE decompression. The reference's `decompressZlib` decodes
 //! through `wuffs.zlib.decode` (`4b86e3594`; `const wuffs = @import("wuffs");`),
 //! ported as `rustty_wuffs::zlib::decode` over the same vendored Wuffs, which
-//! the `kitty-graphics` feature links on every target, wasm32 included
-//! (DECISIONS B8). PNG decoding remains the optional `sys.decode_png` hook
+//! the `kitty-graphics` feature links wherever Kitty graphics is on (not on
+//! freestanding targets, `wasm32-unknown-unknown` included: DECISIONS B8 as
+//! amended by Ruling 30; `cfg(rustty_kitty_graphics)`, see build.rs). PNG decoding remains the optional `sys.decode_png` hook
 //! (seam), faithfully reproducing the `decode_png == null` save-effort path.
 //!
 //! `const kitty_windows = @import("windows.zig");` (`0b5446364`) is
@@ -1322,7 +1323,7 @@ impl LoadingImage {
         }
     }
 
-    #[cfg(feature = "kitty-graphics")]
+    #[cfg(rustty_kitty_graphics)]
     fn decompressZlib(&mut self, alloc: Allocator) -> Result<(), Error> {
         // Provide a bounded size hint based on image metadata for the initial allocation
         // const size_hint: ?usize = hint: { ... };
@@ -1390,12 +1391,14 @@ impl LoadingImage {
         Ok(())
     }
 
-    // PORT NOTE: without the `kitty-graphics` feature the reference compiles
-    // no graphics module (`graphics = struct {}`) and links no wuffs, while
-    // the port always compiles this one; nothing dispatches into it then
+    // PORT NOTE: where Kitty graphics is off (no `kitty-graphics` feature, or
+    // a freestanding target: `target_os = "none"`, `wasm32-unknown-unknown`;
+    // Ruling 30) the reference compiles no graphics module
+    // (`graphics = struct {}`) and links no wuffs, while the port always
+    // compiles this one; nothing dispatches into it then
     // (`options::KITTY_GRAPHICS` is false at every call site), so this arm is
     // never reached.
-    #[cfg(not(feature = "kitty-graphics"))]
+    #[cfg(not(rustty_kitty_graphics))]
     fn decompressZlib(&mut self, _alloc: Allocator) -> Result<(), Error> {
         unreachable!("kitty graphics is compiled out")
     }
