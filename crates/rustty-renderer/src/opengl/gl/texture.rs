@@ -542,8 +542,14 @@ impl Binding {
     ///
     /// PORT NOTE (`value: name.Type()`): see [`Parameter::type_`]. The
     /// `@compileError` arm needs no port: [`ParameterValue`] is implemented only
-    /// for `GLint` and the three enums. The comptime check that `value`'s type is
-    /// `name.Type()` is an `assert!` here (R7).
+    /// for `GLint` and the three enums.
+    ///
+    /// PORT NOTE (compile time → run time): in the reference `name` is `comptime`,
+    /// so a value of the wrong type for its parameter is a COMPILE error and no
+    /// build ever runs one. Rust cannot type a parameter by a runtime enum value,
+    /// so the same check is an `assert!` (R7) that fires before any GL call; every
+    /// call site passes a literal `Parameter::…`, so it is a program bug, never
+    /// input-driven.
     pub fn parameter<V: ParameterValue>(
         self,
         name: Parameter,

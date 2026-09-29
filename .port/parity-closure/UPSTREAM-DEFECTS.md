@@ -2150,6 +2150,10 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - ReleaseFast:     same.
 - reachability:    none known.
 - port handling:   faithful: `crates/rustty-renderer/src/opengl/gl/framebuffer.rs` `Framebuffer::bind`, and the port's `present` binds `Target::READ` as the reference does (`crates/rustty-renderer/src/opengl/opengl_impl.rs`). Task tail-s6 corrected the PORT NOTE there, which said every reference caller binds `.framebuffer`: `present` binds `.read`.
+- new callers (12752b2ac, P7-W7 T1): the redesign's texture-backed `Target` adds two, and `Framebuffer.zig` is unchanged apart from its translate-c import, so the quirk is still present:
+  - `src/renderer/opengl/Target.zig:162-166` (`exportDmabuf`) binds `self.framebuffer` as `.read` and then `self.export_framebuffer` as `.draw`; the deferred unbinds restore the saved DRAW name onto both targets;
+  - `src/renderer/opengl/Target.zig:225` (`readPixelsAlloc`) binds `.read`.
+  - Kept faithful in the port: `crates/rustty-renderer/src/opengl/target.rs` `export_dmabuf_srgb_disabled` and `read_pixels_alloc`. Still no visible effect while both bindings start at the same framebuffer (0 on the render thread); `target::tests::target_export_dmabuf_exports_the_rendered_frame` asserts both bindings are 0 after an export. `OpenGL.present`'s `.read` bind is gone upstream (S2 removes the port's).
 - parity row(s):   none; found by task tail-s6's sweep of PORT NOTEs.
 - test:            n/a (record only).
 - proposed fix:    query `GL_READ_FRAMEBUFFER_BINDING` for `.read` and `GL_DRAW_FRAMEBUFFER_BINDING` for `.draw` (and `.framebuffer`).
@@ -2921,7 +2925,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - kind:            UB (out-of-bounds write on the stack; R13)
 - upstream project: ghostty
 - severity:        medium (driver-dependent). Each multi-plane export writes 8 to 24 bytes past a stack struct, every frame.
-- reference:       `pkg/opengl/egl.zig:211-224` at 12752b2ac (`fa2ec3a6a`), `Image.exportDmabufQuery`: `var query: DmabufQuery = undefined;` then `c.eglExportDMABUFImageQueryMESA(display, self, &query.fourcc, &query.num_planes, &query.modifier)`, where `DmabufQuery.modifier` is one `u64` (`egl.zig:257-261`). Called from `src/renderer/opengl/Target.zig:186` (`exportDmabuf`), which checks `num_planes` against `Dmabuf.max_planes` (4) only AFTER the call.
+- reference:       `pkg/opengl/egl.zig:218-229` at 12752b2ac (`fa2ec3a6a`), `Image.exportDmabufQuery`: `var query: DmabufQuery = undefined;` then `c.eglExportDMABUFImageQueryMESA(display, self, &query.fourcc, &query.num_planes, &query.modifier)`, where `DmabufQuery.modifier` is one `u64` (`egl.zig:267-271`). Called from `src/renderer/opengl/Target.zig:189` (`exportDmabuf`), which checks `num_planes` against `Dmabuf.max_planes` (4) only AFTER the call.
 - defect:          the `EGL_MESA_image_dma_buf_export` specification: "<num_planes> must be at most 4. <modifiers> must be an array of at least <num_planes> elements. All elements of the <modifiers> array must have the same value." A conforming driver exporting an image of 2, 3 or 4 planes writes that many modifiers, i.e. 8, 16 or 24 bytes past `query.modifier`, over whatever follows the `DmabufQuery` on the stack.
 - ReleaseSafe:     no safety check sees a write done by C code. By reading of the specification; not measured on a driver (the available driver, llvmpipe on rvm, exports one plane).
 - ReleaseFast:     the same.

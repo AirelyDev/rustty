@@ -425,6 +425,13 @@ impl Drop for OffscreenContext {
         // `deinit` does not unload it: `glad.unload()` belongs to `threadExit`
         // (`OpenGL.zig:234`, `OpenGL::thread_exit`), and this thread's table may
         // have been loaded from another context.
+        //
+        // NOTE: the table's pointers resolve through `self.egl`'s dlopen'd
+        // libEGL, which is dlclosed when this drops, so a table left behind here
+        // can outlive the library it came from. Only tests reach that (the live
+        // path never drops an `OffscreenContext`): each test thread either calls
+        // `thread_exit` or makes no GL call after dropping its context, and
+        // libglvnd/Mesa stay mapped by the process in practice.
 
         // // Do not destroy the EGL display here as
         // // it is shared across the entire process.
@@ -865,22 +872,30 @@ pub fn prepare_context(
     // P7-W7 T1 (DECISIONS B9): this fills the CALLING thread's table, as glad's
     // `threadlocal var context` is filled, instead of the `gl` crate's
     // process-global one.
-    glad::load(get_proc_address);
-
-    let (major, minor) = gl_version()?;
+    let previous = glad::load_replacing(get_proc_address);
 
     // errdefer gl.glad.unload();
     //
-    // PORT NOTE: the `errdefer` sits AFTER the version read in the reference, so
-    // a failed read (glad's `load` failing) leaves the table as the load left it;
-    // the same holds here. Every later error path is funnelled through
-    // `prepare_loaded_context` so the unload runs exactly once, here.
-    prepare_loaded_context(major, minor).inspect_err(|_| glad::unload())
+    // PORT NOTE (restore, not unload): the reference drops the thread's table on
+    // any error after the load. On the pin's GTK path every surface, and the
+    // inspector's widget, draw through the MAIN thread's one table, which each
+    // surface's `surfaceInit`/`displayRealized` reloads; unloading it there would
+    // make one surface's failed prep panic every other live surface on its next
+    // draw (the reference: a call through an `undefined` context). So a failure
+    // restores the table this thread had before the load: `None` on a fresh
+    // render thread (exactly the reference's unload), the other surfaces' table on
+    // the GTK main thread. It also covers a failed version read, which the
+    // reference's `errdefer` (placed after it) does not, for the same reason.
+    let prepared = gl_version().and_then(|(major, minor)| prepare_loaded_context(major, minor));
+    if prepared.is_err() {
+        glad::restore(previous);
+    }
+    prepared
 }
 
 /// The part of [`prepare_context`] after the version read, split out so that each
-/// of its error paths runs the reference's `errdefer gl.glad.unload();` in the
-/// caller.
+/// of its error paths runs the reference's `errdefer gl.glad.unload();` (a
+/// restore, see there) in the caller.
 fn prepare_loaded_context(major: u32, minor: u32) -> Result<(u32, u32), Error> {
     // log.info("loaded OpenGL {}.{}", .{ major, minor });
     log_info!("loaded OpenGL {major}.{minor}");
@@ -1076,10 +1091,10 @@ extern "system" fn gl_debug_message_callback(
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support;
+    use super::super::{draw, errors, glad, test_support};
     use super::{
-        has_extension, load_gl, parse_gl_version, version_is_outdated, Error, OffscreenContext,
-        MIN_VERSION_MAJOR, MIN_VERSION_MINOR,
+        has_extension, load_gl, parse_gl_version, prepare_context, version_is_outdated, Error,
+        OffscreenContext, MIN_VERSION_MAJOR, MIN_VERSION_MINOR,
     };
 
     /// Proves a headless GL [`MIN_VERSION_MAJOR`].[`MIN_VERSION_MINOR`] core
@@ -1302,6 +1317,71 @@ mod tests {
             slot.after, MODIFIER,
             "the second plane's modifier landed past the single slot"
         );
+    }
+
+    /// Fix round 1: a prep that fails AFTER the load must leave the thread's
+    /// previous table in place (the GTK main thread shares one table between all
+    /// surfaces and the inspector). Loads a good table, then runs
+    /// `prepare_context` with a loader that withholds `glDebugMessageCallback`
+    /// (the `MissingGlEntryPoint` arm, after the version read), then makes GL
+    /// calls on the same thread through the table that must still be there.
+    #[test]
+    fn failed_prepare_context_restores_the_previous_table() {
+        let _gl_lock = test_support::gl_lock();
+        let ctx = match OffscreenContext::init() {
+            Ok(ctx) => ctx,
+            Err(err) => {
+                test_support::require_gl_or_skip(
+                    "failed_prepare_context_restores_the_previous_table",
+                    &err,
+                );
+                eprintln!(
+                    "no headless OpenGL context ({err}); skipping \
+                     failed_prepare_context_restores_the_previous_table"
+                );
+                return;
+            }
+        };
+        if let Err(err) = load_gl(&ctx) {
+            test_support::require_gl_or_skip(
+                "failed_prepare_context_restores_the_previous_table",
+                &err,
+            );
+            eprintln!(
+                "no GL 4.3 ({err}); skipping failed_prepare_context_restores_the_previous_table"
+            );
+            return;
+        }
+        let good: *const glad::Context = glad::context(|gl| gl as *const _);
+
+        let res = prepare_context(|symbol| {
+            // `Fallbacks::All` also tries the ARB/KHR names, so withhold them all.
+            if symbol.starts_with("glDebugMessageCallback") {
+                std::ptr::null()
+            } else {
+                ctx.get_proc_address(symbol)
+            }
+        });
+        assert!(
+            matches!(
+                res,
+                Err(Error::MissingGlEntryPoint("glDebugMessageCallback"))
+            ),
+            "expected the injected failure, got {res:?}"
+        );
+
+        // The table is the one that was there before, and it draws.
+        assert!(glad::is_loaded(), "a failed prep unloaded the shared table");
+        let after: *const glad::Context = glad::context(|gl| gl as *const _);
+        assert_eq!(good, after, "a failed prep must restore the previous table");
+        let _ = errors::get_error(); // drain anything the failed prep left pending
+        draw::clear_color(0.0, 0.0, 0.0, 1.0);
+        draw::enable(gl::BLEND).expect("a GL call after the failed prep");
+        draw::disable(gl::BLEND).expect("a GL call after the failed prep");
+        assert!(glad::context(|gl| gl.DebugMessageCallback.is_loaded()));
+
+        glad::unload();
+        drop(ctx);
     }
 
     /// UD355, the port: the query hands the driver room for every plane the

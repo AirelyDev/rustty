@@ -91,8 +91,26 @@ thread_local! {
 /// reported, one call later. Loading replaces any table this thread already had,
 /// as `gladLoadGLContext` overwrites `context`.
 pub fn load(get_proc_address: impl FnMut(&'static str) -> *const c_void) {
+    drop(load_replacing(get_proc_address));
+}
+
+/// [`load`], returning the table this thread had before (if any) so a caller
+/// can put it back with [`restore`].
+///
+/// RUSTTY-ONLY: glad has no such pair. `sys::prepare_context` uses it for its
+/// `errdefer`: on the GTK path every surface and the inspector share the main
+/// thread's one table, so a failed prep must leave the table it found, not an
+/// empty slot (see `prepare_context`).
+pub fn load_replacing(
+    get_proc_address: impl FnMut(&'static str) -> *const c_void,
+) -> Option<Box<Context>> {
     let table = Box::new(Context::load_with(get_proc_address));
-    CONTEXT.with_borrow_mut(|slot| *slot = Some(table));
+    CONTEXT.with_borrow_mut(|slot| slot.replace(table))
+}
+
+/// Put back a table [`load_replacing`] returned (`None` unloads).
+pub fn restore(previous: Option<Box<Context>>) {
+    CONTEXT.with_borrow_mut(|slot| *slot = previous);
 }
 
 /// Drop the calling thread's function table.
@@ -175,6 +193,25 @@ mod tests {
         assert!(is_loaded());
 
         unload();
+        assert!(!is_loaded());
+    }
+
+    /// `load_replacing` + `restore` put back exactly the table that was there.
+    #[test]
+    fn restore_puts_back_the_previous_table() {
+        load(null_loader);
+        let first: *const super::Context = context(|gl| gl as *const _);
+        let previous = super::load_replacing(null_loader);
+        assert!(previous.is_some());
+        super::restore(previous);
+        let after: *const super::Context = context(|gl| gl as *const _);
+        assert_eq!(first, after, "restore must reinstate the same table");
+        unload();
+
+        // From an empty slot, a restore of the returned `None` unloads again.
+        let previous = super::load_replacing(null_loader);
+        assert!(previous.is_none());
+        super::restore(previous);
         assert!(!is_loaded());
     }
 
