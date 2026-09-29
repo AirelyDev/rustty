@@ -549,6 +549,22 @@ summaries.
 - Verified: `grep -rn "ownsContext\|owns_context" ghostty/src/renderer/OpenGL.zig ghostty/src/renderer/opengl` returns nothing — `owns_context` is a rustty-only addition for its offscreen/golden-image test harness, which the oracle doesn't have; on the real windowed GDK path the gate evaluates false and `crates/rustty-renderer/src/generic/linux_impl.rs:812-822` calls present exactly like the oracle. The only surviving delta (the swallowed `log.err`) is the same workspace-wide "no logging facade" gap already CONFIRMED (not disputed) as `S119-F1` elsewhere in this same audit file — this row is duplicative of an already-tracked finding, not an independent branch-behavior difference.
 - Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s119-f3
 
+### S119-F3-P7 — RE-ADJUDICATED (P7-W7 T2, DECISIONS R4): CLOSED
+- The waiver above rested on the GtkGLArea path: the port's `owns_context` gate was
+  rustty-only (the offscreen harness), and on the windowed GDK path it was false, so
+  the tail called `present_to_default` as `Frame.zig:62-70` called `present`. The
+  redesign (`2f0b65346`, pin `12752b2ac`) deleted that path: `OpenGL` owns one
+  surfaceless EGL context on every path, and `Frame.complete` became present
+  (export) → `gl.finish()` → `pushFrame` → `.redraw`, with the present failure a
+  `log.warn("failed to present render target: err={}")` (`Frame.zig:57-90`).
+- The port now carries that tail verbatim in `opengl_frame_completed`
+  (`crates/rustty-renderer/src/generic/linux_impl.rs`): no `owns_context` gate
+  exists any more (`OpenGL::owns_context` is deleted), the present runs on every
+  healthy frame, and the warn is live on the `.opengl` scope. Tests:
+  `generic::linux_impl::tests::linux_opengl_frame_completion_pushes_the_frame_and_redraws`,
+  `opengl_impl::tests::present_*`.
+- Disposition: state=CLOSED, owner=.port/parity-closure/ADJUDICATION.md#s119-f3-p7
+
 ## Batch 14c-1 — src/renderer `LOG` partial waivers (task-14c-1, 2026-09-09)
 
 Two rows whose diagnostics were restored ALMOST completely. Neither is "not a

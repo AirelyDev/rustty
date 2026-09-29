@@ -2565,135 +2565,70 @@ fn glib_log_writer(level: glib::LogLevel, fields: &[glib::LogField<'_>]) -> glib
 ///
 /// This must be called BEFORE GTK initialization.
 ///
-/// PORTS: `application.zig:2849-2951` `setGtkEnv`. Sets the `GDK_DEBUG` /
-/// `GDK_DISABLE` environment variables BEFORE GTK initializes, based on the
-/// runtime GTK version, so Ghostty gets a GL (never GLES/Vulkan) GDK backend.
-/// Must run before `adw::init()` (`application.zig:2850` asserts GTK is not yet
+/// PORTS: `application.zig:3285-3339` `setGtkEnv` (`851cd4dc1` + `202fa8e39`
+/// at `12752b2ac`). With the GtkGLArea gone GTK's GL context is no longer
+/// Rustty's, so the version-gated `gl-disable-gles`/`gl-no-fractional`/
+/// `vulkan-disable`/`gles-api`/`color-mgmt` flags are removed: `GDK_DEBUG` is
+/// only `opengl` (when requested) and `GDK_DISABLE` only `vulkan`. Must run
+/// before `adw::init()` (`application.zig:3286` asserts GTK is not yet
 /// initialized).
 ///
 /// PORT NOTE: the reference builds the comma-joined value into a fixed
-/// `[1024]u8` and can return `error.NoSpaceLeft` (`application.zig:2917,2928`);
-/// rustty joins into a growable `String`, so it cannot overflow and is
-/// infallible — the reference's only error arm (`application.zig:296-305`) is
-/// therefore unreachable and folds away.
+/// `[1024]u8` and can return `error.WriteFailed` on overflow; rustty joins into
+/// a growable `String`, so it cannot overflow and is infallible — the
+/// reference's only error arm is therefore unreachable and folds away.
 fn set_gtk_env(config: &CoreConfig) {
-    use crate::gtk::gtk_version;
-
-    // `assert(gtk.isInitialized() == 0);` (`application.zig:2850`).
+    // `assert(gtk.isInitialized() == 0);`
     debug_assert!(
         !gtk4::is_initialized(),
         "setGtkEnv must run before GTK is initialized"
     );
 
-    // GDK_DEBUG flags (`application.zig:2852-2867`). `.opengl` requires BOTH
-    // stderr logging and `gtk-opengl-debug`, since the flag dumps to stderr
-    // (`application.zig:2864-2866`). `state.logging.stderr` reads the process
-    // global state; unset (e.g. in a test) reads as `false`.
+    // const gdk_debug: struct {
+    //     /// Output OpenGL debug information,
+    //     /// `gtk-opengl-debug` dumps logs directly to stderr so both must be true
+    //     /// to enable OpenGL debugging.
+    //     opengl: bool = false,
+    // } = .{
+    //     .opengl = global.logging().stderr and config.@"gtk-opengl-debug",
+    // };
+    //
+    // `state.logging.stderr` reads the process global state; unset (e.g. in a
+    // test) reads as `false`.
     let stderr_logging = rustty_core::STATE.get().is_some_and(|s| s.logging.stderr);
-    //
-    // output OpenGL debug information
-    //
-    // `gtk-opengl-debug` dumps logs directly to stderr so both must be true
-    // to enable OpenGL debugging.
     let gdk_debug_opengl = stderr_logging && config.gtk_opengl_debug;
-    // disable GLES, Rustty can't use GLES
-    let mut gdk_debug_gl_disable_gles = false;
-    // GTK's new renderer can cause blurry font when using fractional scaling.
-    let mut gdk_debug_gl_no_fractional = false;
-    // Disabling Vulkan can improve startup times by hundreds of
-    // milliseconds on some systems. We don't use Vulkan so we can just
-    // disable it.
-    let mut gdk_debug_vulkan_disable = false;
 
-    // GDK_DISABLE flags (`application.zig:2869-2879`). `color-mgmt` defaults ON —
-    // current GTK color management is not good enough (`application.zig:2871-2874`).
-    let mut gdk_disable_gles_api = false;
-    // current gtk implementation for color management is not good enough.
-    // see: https://bugs.kde.org/show_bug.cgi?id=495647
-    // gtk issue: https://gitlab.gnome.org/GNOME/gtk/-/issues/6864
-    let mut gdk_disable_color_mgmt = true;
-    // Disabling Vulkan can improve startup times by hundreds of
-    // milliseconds on some systems. We don't use Vulkan so we can just
-    // disable it.
-    let mut gdk_disable_vulkan = false;
+    // const gdk_disable: struct {
+    //     // Even though we don't use GTK's GL context anymore, there can still
+    //     // occasionally be conflicts when Vulkan and OpenGL are used together.
+    //     // Disabling Vulkan also saves hundreds of milliseconds of initialization
+    //     // time on certain systems.
+    //     vulkan: bool = true,
+    // } = .{};
+    let gdk_disable_vulkan = true;
 
-    // Version-gated environment block (`application.zig:2881-2914`). Every gate is
-    // a LIVE runtime predicate (Cargo.toml AD-3 rule: rustty has no comptime
-    // version fold; `runtimeAtLeast`/`runtimeUntil` are unconditionally live).
-    'environment: {
-        // `if (runtimeAtLeast(4, 18, 0)) color-mgmt = false;` (`:2882-2884`).
-        if gtk_version::runtime_at_least(4, 18, 0) {
-            gdk_disable_color_mgmt = false;
-        }
-
-        // (`:2886-2892`.)
-        if gtk_version::runtime_at_least(4, 16, 0) {
-            // From gtk 4.16, GDK_DEBUG is split into GDK_DEBUG and GDK_DISABLE.
-            // For the remainder of "why" see the 4.14 comment below.
-            gdk_disable_gles_api = true;
-            gdk_disable_vulkan = true;
-            break 'environment;
-        }
-        // (`:2893-2908`.)
-        if gtk_version::runtime_at_least(4, 14, 0) {
-            // We need to export GDK_DEBUG to run on Wayland after GTK 4.14.
-            // Older versions of GTK do not support these values so it is safe
-            // to always set this. Forwards versions are uncertain so we'll have
-            // to reassess...
-            //
-            // Upstream issue: https://gitlab.gnome.org/GNOME/gtk/-/issues/6589
-            gdk_debug_gl_disable_gles = true;
-            gdk_debug_vulkan_disable = true;
-            // Removed at GTK v4.17.5 (`application.zig:2903-2906`).
-            if gtk_version::runtime_until(4, 17, 5) {
-                gdk_debug_gl_no_fractional = true;
-            }
-            break 'environment;
-        }
-        // Versions prior to 4.14 are a bit of an unknown for Rustty. It
-        // is an environment that isn't tested well and we don't have a
-        // good understanding of what we may need to do.
-        //
-        // (`application.zig:2910-2913`.)
-        gdk_debug_vulkan_disable = true;
-    }
-
-    // Build + set GDK_DEBUG (`application.zig:2916-2932`). Field order matches the
-    // reference struct's field order.
+    // Build + set GDK_DEBUG. Field order matches the reference struct's.
     {
         let mut parts: Vec<&str> = Vec::new();
         if gdk_debug_opengl {
             parts.push("opengl");
         }
-        if gdk_debug_gl_disable_gles {
-            parts.push("gl-disable-gles");
-        }
-        if gdk_debug_gl_no_fractional {
-            parts.push("gl-no-fractional");
-        }
-        if gdk_debug_vulkan_disable {
-            parts.push("vulkan-disable");
-        }
         let value = parts.join(",");
+        // log.warn("setting GDK_DEBUG={s}", .{value[0 .. value.len - 1]});
         log::warn!(target: LOG_SCOPE, "setting GDK_DEBUG={value}");
         if let Ok(v) = CString::new(value) {
             env_setenv(c"GDK_DEBUG", &v);
         }
     }
 
-    // Build + set GDK_DISABLE (`application.zig:2934-2950`).
+    // Build + set GDK_DISABLE.
     {
         let mut parts: Vec<&str> = Vec::new();
-        if gdk_disable_gles_api {
-            parts.push("gles-api");
-        }
-        if gdk_disable_color_mgmt {
-            parts.push("color-mgmt");
-        }
         if gdk_disable_vulkan {
             parts.push("vulkan");
         }
         let value = parts.join(",");
+        // log.warn("setting GDK_DISABLE={s}", .{value[0 .. value.len - 1]});
         log::warn!(target: LOG_SCOPE, "setting GDK_DISABLE={value}");
         if let Ok(v) = CString::new(value) {
             env_setenv(c"GDK_DISABLE", &v);
@@ -2702,8 +2637,8 @@ fn set_gtk_env(config: &CoreConfig) {
 
     // Sync environ after altering system env
     //
-    // (`global.syncEnviron()`, `application.zig:2951`: [`env_setenv`] re-syncs
-    // after each `setenv`, so both variables are already synced here.)
+    // (`global.syncEnviron()`: [`env_setenv`] re-syncs after each `setenv`, so
+    // both variables are already synced here.)
 }
 
 /// PORTS: the three error arms of `application.zig:477` `run` (`!void`): the

@@ -2863,7 +2863,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - port handling:
   - `crates/rustty-renderer/src/generic.rs` (macOS). `cells_rebuilt` is an `AtomicBool` (Relaxed; the stores stay under the lock).
   - The tail of `sync_display_link` is split into `display_link_sync` (the reads, yielding a `DisplayLinkSync { link: DisplayLinkHandle, should_run }`) and `DisplayLinkSync::apply` (the CoreVideo start/stop calls on a non-owning `DisplayLinkHandle`, `crates/rustty-renderer/src/metal/cvdisplaylink.rs`).
-  - `draw_frame_raw` and `update_frame` take the reads while they still hold `draw_mutex`, and apply them after the unlock, so after the unlock the render thread touches no renderer bytes. The blocking stop still runs outside the lock (the point of `72cf50855`).
+  - `draw_frame_raw` and `update_frame` take the reads while they still hold `draw_mutex`, and apply them after the unlock, so on the draw path the render thread touches no renderer bytes after the unlock. The blocking stop still runs outside the lock (the point of `72cf50855`). (Until P7-W7 T2 this overclaimed for `update_frame`: its `&mut Renderer` receiver spanned the whole call, the resync included, which is N437. Since P7-W7 T2 `update_frame_raw` locks first through an external `DrawMutex`, forms the whole `&mut` only under the lock, and applies the resync through the copied-out `DisplayLinkHandle`, now `pub(crate)` with `unsafe` methods; N437 is CLOSED.)
   - On the draw path the decision is the same as upstream's: a no-redraw draw has already seen `cells_rebuilt == false` and no animation, and only the render thread sets them back. On the `updateFrame` path, reading before the unlock is the outcome in which the main draw comes after the resync.
   - `PORT NOTE: reference defect (R13)` at the field, `sync_display_link`, `draw_frame_raw` and `update_frame`. The Linux twin has no display link and is unchanged. Listed in `docs/ghostty-bug-fixes.md`.
 - parity row(s):   none. Found by the P7-W0 T1 task review (fix round 1).
@@ -2893,7 +2893,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - output needed:   none visible; the process's open-fd count grows.
 - port handling:
   - `crates/rustty-renderer/src/dmabuf.rs` (P7-W7 T1). The driver-filled arrays are `RawPlanes`; `RawPlanes::validate` is the only place a raw fd becomes owned. On the first invalid plane it closes EVERY non-negative fd in `fds[0..count]`, as the reference's doc comment says, then returns `BadDmabuf`; on success the fds become `OwnedFd`s in `Planes`, so any later drop (`Dmabuf::deinit`, an error path, an allocation failure) closes them.
-  - The `render_surface.zig` half lands with the GTK `RenderSurface` port (stage S3); `OwnedFd` ownership removes the leak there by construction, and its failing-allocator test belongs to that task.
+  - The `render_surface.zig` half (P7-W7 T2, `crates/rustty-apprt/src/gtk/class/render_surface.rs` `rebuild_dmabuf_texture`): the frame's `Planes` hold `OwnedFd`s from `validate` on, and the texture's destroy notify owns a `Box` built from them before GDK sees any fd, so no allocation can fall between an unowned fd and its owner; a failed build drops the box (GDK does not call the destroy notify on failure). The leak is impossible by construction; there is no allocation point left for a failing-allocator test to hit.
   - `R13 FIX` note at `RawPlanes::validate`. Listed in `docs/ghostty-bug-fixes.md`.
 - parity row(s):   none. R2 §6 Q4, DECISIONS M4.
 - test:            `dmabuf::tests::dmabuf_validate_closes_every_fd_after_an_invalid_plane` (planes `[fd, -1, fd]`; each fd is a pipe's write end and its closing is observed as EOF on the read end, so fd-number reuse cannot fool it); `dmabuf_validate_edge_counts` (an invalid FIRST plane with a valid one after it); `dmabuf_validate_takes_ownership_of_valid_planes` (the success path). Negative control: with the reference's loop (close `fds[..n_valid]` only) the first two fail with "the fd after the invalid plane leaked" (macOS and Linux).
@@ -2937,6 +2937,49 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - parity row(s):   none. Found while porting `exportDmabufQuery` (P7-W7 T1).
 - test:            `opengl::gl::sys::tests::dmabuf_query_single_modifier_slot_is_overrun_by_a_two_plane_export` (a spec-conforming test double for a 2-plane image, called with the reference's one-slot shape, writes the second modifier into the word after the slot; the guard word is in the same allocation so the demonstration is defined behaviour); `dmabuf_query_gives_the_driver_a_modifier_slot_per_plane` (the port's query returns the modifier with no overrun); `dmabuf_query_reports_egl_false`.
 - proposed fix:    pass an array: `var modifiers: [Dmabuf.max_planes]u64 = undefined;` and use `modifiers[0]`, or query `num_planes` first with `modifiers = null` (the specification allows NULL) and reject counts above 4 before asking for the modifiers.
+- upstream status: NOT YET REPORTED
+
+### UD356 — a surface whose renderer fails to initialize stays blank: the error page is never shown
+
+- kind:            functional (non-crash bug breaking evident intent; R13)
+- upstream project: ghostty
+- severity:        medium. A user whose EGL/OpenGL stack cannot give the renderer a context (no EGL vendor, no 4.3 core context, a broken driver) gets an empty window and no explanation; the error page and its help text exist for exactly this case.
+- reference:       `src/apprt/gtk/class/surface.zig` at 12752b2ac (`2f0b65346`):
+  - `setError` (`:2305`) is the only place the surface's `error` property is set, and it has NO caller with `true`;
+  - at the pin (20abdb50a) the one caller was `glareaRealize` (`:3333`), which set it when the GtkGLArea's context failed; `2f0b65346` deleted the GLArea and that check with it;
+  - the renderer's context is now created by `Renderer.init` inside `initSurface` (`:3440`), which `renderSurfaceResize` calls on the first resize (`:3430-3432`) and whose failure it only logs: `log.warn("surface failed to initialize err={}", .{err})`.
+- defect:          the context failure the error page reported moved from the GLArea into `initSurface`, but the `setError(true)` did not move with it, so the failure now leaves the surface blank with no core surface.
+- ReleaseSafe:     no crash; a blank surface. MEASURED on the port (rvm, `__EGL_VENDOR_LIBRARY_FILENAMES=/nonexistent.json`, so libglvnd finds no vendor and the surfaceless display cannot be created): without the fix `surface_init_failure_shows_the_error_page` fails at "a surface whose initialization failed shows the error page".
+- ReleaseFast:     the same.
+- reachability:    any GTK user whose system cannot create the renderer's EGL context.
+- output needed:   the window shows nothing where the terminal or the error page should be.
+- port handling:
+  - `crates/rustty-apprt/src/gtk/class/surface.rs` `render_surface_resize` (P7-W7 T2): the init-failure arm logs the reference's warn and then calls `self.set_error(true)`, which shows the error page (the `propError` idle rechild).
+  - `PORT NOTE: reference defect (R13), UD356` at that arm. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none. R2 §5.5, DECISIONS M2 (measure first).
+- test:            `crates/rustty-apprt/tests/gtk_render_surface.rs` `surface_init_failure_shows_the_error_page` (headed GTK, ignored; asserts `error` and that the error page `AdwStatusPage` becomes the child); `class::surface` structural test asserts a failed init sets `error`. Negative control: without the `set_error(true)` both fail.
+- proposed fix:    in `renderSurfaceResize`'s `initSurface` catch arm, call `self.setError(true)` after the `log.warn`.
+- upstream status: NOT YET REPORTED
+
+### UD357 — under fractional scaling the flipped OpenGL frame lands half a device pixel off the snapped origin (seam rows)
+
+- kind:            functional (non-crash bug breaking evident intent; R13)
+- upstream project: ghostty
+- severity:        low. Visible artifacts at fractional scales: a one-pixel seam row above and below full-block glyphs and box-drawing lines, and the whole frame blurred vertically by resampling.
+- reference:       `src/apprt/gtk/class/render_surface.zig:176-205` at 12752b2ac (`snapshot`):
+  - `layout.snapOrigin()` (`src/apprt/gtk/scale.zig:23-28`) moves the texture's surface-relative origin onto a device pixel, "so parent chrome cannot place the texture between pixels";
+  - on OpenGL (`flip`), it does `translate(0, css_h)`, `scale(1, -1)` and then `appendTexture` at `(origin.x, origin.y)`, i.e. the snapped y is appended INSIDE the flip, so the flip negates it.
+- defect:          the texture's top lands at widget y `-origin.y` instead of `+origin.y`, so its device top is `2D - round(D)` for a device origin `D` instead of `round(D)`: whenever the snap offset is non-zero, the frame sits off the pixel grid by twice the offset, and at `D = n.75` that is half a device pixel, the exact misplacement the snap exists to prevent.
+- ReleaseSafe:     wrong placement, no crash. MEASURED on the port (rvm, headless sway at scale 1.25, surface origin device 83.75): with the reference's transform a row of full blocks has a 72-pixel seam row above and below it; with the fix 0 and 0. The blocks' device rows were 96..=172 with the reference's transform and 96..=173 with the fix.
+- ReleaseFast:     the same.
+- reachability:    OpenGL (every GTK build) at a fractional scale whose widget origin is not already on a device pixel: common (window decorations, tabs and splits put the surface at arbitrary CSS offsets).
+- output needed:   seam rows and vertical blur at fractional scales.
+- port handling:
+  - `crates/rustty-apprt/src/gtk/class/render_surface.rs` `texture_bounds` (P7-W7 T2): for the flip, the snapped y goes into the flip's translation (`translate(0, origin.y + css_h)`) and the texture is appended at y 0 inside it, so the top lands at `+origin.y`; x is not flipped and keeps the reference's origin.
+  - `PORT NOTE: reference defect (R13), UD357` at `texture_bounds`. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none. R2 §4, DECISIONS M3 (measure first).
+- test:            `class::render_surface::tests::flipped_texture_lands_on_the_snapped_origin` (the reference's transform, kept as a witness, puts the top at -0.2 CSS px, device 58.5, for an origin at device 58.75; the port's at +0.2, device 59); `crates/rustty-apprt/tests/gtk_render_surface.rs` `fractional_scale_cells_land_on_device_pixels` (grim capture of a headless sway at 1.25; fails with the reference's transform, "seam px above=72 below=72").
+- proposed fix:    in `snapshot`'s flip branch translate by `(0, origin.y + css_h)` and append the texture at `(origin.x, 0)`.
 - upstream status: NOT YET REPORTED
 
 ## Candidates pending verification

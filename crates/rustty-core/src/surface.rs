@@ -2124,13 +2124,8 @@ where
         // the C5 `DerivedConfig` arena-collapse note); after the big write it
         // is realized by [`Surface::initErrdefers`].
 
-        // Initialize our renderer with our initialized surface.
-        // try Renderer.surfaceInit(rt_surface);
-        if let Err(err) = Renderer::surfaceInit(rt_surface) {
-            // (errdefer derived_config.deinit() — Surface.zig:490)
-            derived_config.deinit();
-            return Err(err.into());
-        }
+        // P7-W7 T2 (`2f0b65346`): `try Renderer.surfaceInit(rt_surface);` is gone
+        // (the renderer no longer prepares a GL context on the main thread).
 
         // Determine our DPI configurations so we can properly configure
         // font points to pixels and handle other high-DPI scaling factors.
@@ -2163,13 +2158,15 @@ where
         // The font size we desire along with the DPI determined for the surface
         // const font_size: font.face.DesiredSize = .{
         //     .points = config.@"font-size",
-        //     .xdpi = @intFromFloat(x_dpi),
-        //     .ydpi = @intFromFloat(y_dpi),
+        //     .xdpi = @intFromFloat(@round(x_dpi)),
+        //     .ydpi = @intFromFloat(@round(y_dpi)),
         // };
+        // (`2f0b65346` rounds: a fractional GTK scale gives a fractional DPI,
+        // which `@intFromFloat` alone truncated.)
         let font_size: DesiredSize = DesiredSize {
             points: config.font_size,
-            xdpi: x_dpi as u16,
-            ydpi: y_dpi as u16,
+            xdpi: x_dpi.round() as u16,
+            ydpi: y_dpi.round() as u16,
         };
 
         // Setup our font group. This will reuse an existing font group if
@@ -2324,15 +2321,17 @@ where
         //     rt_surface,
         //     &self.renderer,
         //     &self.renderer_state,
-        //     app_mailbox,
         // );
+        // (`2f0b65346` dropped the `app_mailbox` argument. PORT-ONLY, N437: the
+        // thread also gets its own handle to the renderer's draw mutex, taken from
+        // the local `renderer_impl` because `self.renderer` is not written yet.)
         let render_thread = match crate::renderer_seam::Thread::<A>::init(
             alloc,
             config,
             rt_surface,
             unsafe { &raw mut (*self_).renderer },
             unsafe { &raw mut (*self_).renderer_state },
-            app_mailbox,
+            renderer_impl.1.draw_mutex.clone(),
         ) {
             Ok(v) => v,
             Err(err) => {
@@ -2788,28 +2787,16 @@ where
             unsafe { Self::initTry(self_, true, (*self_).resize(screen)) }?;
         }
 
-        // Give the renderer one more opportunity to finalize any surface
-        // setup on the main thread prior to spinning up the rendering thread.
-        // try renderer_impl.finalizeSurfaceInit(rt_surface);
-        //
-        // PORT NOTE: the reference calls through its LOCAL renderer copy
-        // after the `self.*` write (Zig value-copy; both copies share the
-        // underlying GPU handles) — Rust single ownership calls through the
-        // moved-into field.
-        unsafe {
-            Self::initTry(
-                self_,
-                true,
-                (*self_).renderer.finalizeSurfaceInit(rt_surface),
-            )
-        }?;
+        // P7-W7 T2 (`2f0b65346`): `try renderer_impl.finalizeSurfaceInit(rt_surface);`
+        // ("Give the renderer one more opportunity to finalize any surface setup
+        // on the main thread prior to spinning up the rendering thread.") is gone.
 
         // W-ATTACH (macos-swift-app tier): route the host NSView into the
         // renderer's windowed layer-attach so frames present to the window (the
         // renderer was built offscreen via `init_offscreen`; without this its
         // `present` drops every frame into a detached `IOSurface` → a blank
-        // window). MUST run here — on the main thread, AFTER finalizeSurfaceInit,
-        // BEFORE the render thread spawn below — so `loop_enter` installs the
+        // window). MUST run here — on the main thread, BEFORE the render thread
+        // spawn below — so `loop_enter` installs the
         // display callback against `Some(layer)`. `host_view` is null for
         // non-view-hosted backends, where `attachHostView` is a no-op.
         unsafe {
@@ -3078,10 +3065,13 @@ where
             // `init_error_path_joins_both_threads_before_freeing_their_state`
             // (rustty-apprt-c `tests/macos_window_host.rs`).
             //
-            // Unlike `deinit`, this path does not re-enter the renderer
-            // (`threadEnter`, Surface.zig:811) before `renderer.deinit()`. That
-            // is harmless at the pin: OpenGL's `threadEnter` does nothing for
-            // GTK or embedded (OpenGL.zig:197-216), and Metal defines none.
+            // P7-W7 T2: this note used to say that, unlike `deinit`, this path
+            // does not re-enter the renderer (`threadEnter`, Surface.zig:811 at
+            // the pin) before `renderer.deinit()`, and that this was harmless
+            // because OpenGL's `threadEnter` did nothing. Upstream deleted that
+            // re-entry from `deinit` (`2f0b65346`): the render thread's own
+            // `threadExit` frees the GPU objects while its context is current,
+            // and `renderer.deinit()` frees CPU state only. Both paths now agree.
             //
             // Stop the renderer via a NARROW Copy handle (no whole-struct read
             // while it may still be live — §2.2 rule 4; Async::notify(&self)
@@ -3231,11 +3221,10 @@ where
                 .join()
                 .unwrap();
 
-            // We need to become the active rendering thread again
-            // self.renderer.threadEnter(self.rt_surface) catch unreachable;
-            self.renderer
-                .threadEnter(self.rt_surface)
-                .unwrap_or_else(|_| unreachable!());
+            // (`2f0b65346` deleted "We need to become the active rendering thread
+            // again / self.renderer.threadEnter(self.rt_surface) catch
+            // unreachable;": the renderer owns its context, and its thread's
+            // `threadExit` already released the GPU resources.)
         }
 
         // Stop our IO thread
@@ -3554,6 +3543,38 @@ where
         );
 
         Ok(())
+    }
+
+    /// Report to the renderer how well the apprt can present the frames
+    /// the renderer exports. See `renderer.Health` and the renderer's
+    /// `presentation_health` state for the semantics.
+    //
+    // pub fn reportPresentationHealth(self: *Surface, health: rendererpkg.Health) void {
+    //     _ = self.renderer_thread.mailbox.push(
+    //         global.io(),
+    //         .{ .presentation_health = health },
+    //         .forever,
+    //     );
+    //     self.renderer_thread.wakeup.notify() catch |err|
+    //         log.warn("failed to wake up renderer err={}", .{err});
+    // }   (`2f0b65346`, Surface.zig:924-935)
+    //
+    // Raw-self (the `draw` precedent): the GTK `RenderSurface`'s snapshot handler
+    // calls this on the main thread while the render thread runs, and it touches
+    // only the mailbox and the wakeup handle.
+    ///
+    /// # Safety
+    /// `self_` is the stable Surface allocation; no protected `&mut Surface` may
+    /// span the call.
+    pub unsafe fn reportPresentationHealth(self_: *mut Surface<A>, health: rendererpkg::Health) {
+        let _ = unsafe { &*(*self_).renderer_thread.mailbox }.push(
+            rendererpkg::Message::PresentationHealth(health),
+            Timeout::Forever,
+        );
+        if let Err(err) = unsafe { (*self_).renderer_thread.wakeup.notify() } {
+            // log.warn("failed to wake up renderer err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "failed to wake up renderer err={err:?}");
+        }
     }
 
     /// Deactivate the inspector and stop collecting any information.
@@ -3968,6 +3989,9 @@ where
                 // try self.showDesktopNotification(title, body);
                 self.showDesktopNotification(title, body)?;
             }
+
+            // .redraw => self.redraw(),
+            Message::Redraw => self.redraw(),
 
             // .renderer_health => |health| self.updateRendererHealth(health),
             Message::RendererHealth(health) => self.updateRendererHealth(health),
@@ -5199,6 +5223,25 @@ where
         ) {
             // log.warn("failed to notify app of scrollbar change err={}", .{err});
             log::warn!(target: LOG_SCOPE, "failed to notify app of scrollbar change err={err:?}");
+        }
+    }
+
+    /// Called when the render thread has pushed a new frame.
+    /// Notifies the apprt to redraw this surface.
+    // fn redraw(self: *Surface) void {   (`2f0b65346`, Surface.zig:1743-1753)
+    fn redraw(&mut self) {
+        // _ = self.rt_app.performAction(
+        //     .{ .surface = self },
+        //     .render,
+        //     {},
+        // ) catch |err| {
+        //     log.warn("failed to notify app of frame present err={}", .{err});
+        // };
+        if let Err(err) = unsafe { &*self.rt_app }
+            .perform_action(apprt::Target::Surface(&*self), apprt::Action::Render)
+        {
+            // log.warn("failed to notify app of frame present err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "failed to notify app of frame present err={err:?}");
         }
     }
 
@@ -6592,6 +6635,54 @@ where
         Ok(())
     }
 
+    /// Called by the apprt when the surface's display is realized.
+    /// Notifies the renderer so it can begin rendering.
+    /// Safe to call from the main thread.
+    //
+    // pub fn displayRealized(self: *Surface) !void {
+    //     try self.renderer.displayRealized();
+    // }   (`2f0b65346`, Surface.zig:2541-2546)
+    //
+    // Raw-self per `draw` (the renderer is aliased raw by the render thread).
+    ///
+    /// # Safety
+    /// `self_` is the stable Surface allocation; no protected `&mut Surface` may
+    /// span the call.
+    pub unsafe fn displayRealized(
+        self_: *mut Surface<A>,
+    ) -> Result<(), crate::renderer_seam::RendererError> {
+        unsafe { crate::renderer_seam::Renderer::displayRealized(&raw mut (*self_).renderer) }
+    }
+
+    /// Called by the apprt when the surface's display is unrealized (the surface
+    /// is being destroyed or reparented). Safe to call from the main thread.
+    //
+    // pub fn displayUnrealized(self: *Surface) void {
+    //     self.renderer.displayUnrealized();
+    //
+    //     // Wake the render thread so it notices `display_realized` is now false
+    //     // and releases GPU resources (swap chain and shaders).
+    //     self.renderer_thread.wakeup.notify() catch |err| {
+    //         log.warn("failed to notify renderer thread of unrealize err={}", .{err});
+    //     };
+    // }   (`2f0b65346`, Surface.zig:2548-2558)
+    ///
+    /// # Safety
+    /// As [`Surface::displayRealized`].
+    pub unsafe fn displayUnrealized(self_: *mut Surface<A>) {
+        unsafe { crate::renderer_seam::Renderer::displayUnrealized(&raw mut (*self_).renderer) };
+
+        // Wake the render thread so it notices `display_realized` is now false
+        // and releases GPU resources (swap chain and shaders).
+        if let Err(err) = unsafe { (*self_).renderer_thread.wakeup.notify() } {
+            // log.warn("failed to notify renderer thread of unrealize err={}", .{err});
+            log::warn!(
+                target: LOG_SCOPE,
+                "failed to notify renderer thread of unrealize err={err:?}"
+            );
+        }
+    }
+
     // pub fn sizeCallback(self: *Surface, size: apprt.SurfaceSize) !void {
     //
     // (the inferred `!void` is `resize`'s — the [`Error`] union.)
@@ -6667,6 +6758,22 @@ where
             termio::Message::Resize(self.size),
             termio::termio_impl::MutexState::Unlocked,
         );
+
+        // Mail the render thread so it updates its padding and screen size.
+        // _ = self.renderer_thread.mailbox.push(
+        //     global.io(),
+        //     .{ .resize = self.size },
+        //     .forever,
+        // );
+        // self.queueRender() catch |err| {
+        //     log.warn("failed to notify renderer of resize err={}", .{err});
+        // };   (`2f0b65346`, Surface.zig:2599-2608)
+        let _ = unsafe { &*self.renderer_thread.mailbox }
+            .push(rendererpkg::Message::Resize(self.size), Timeout::Forever);
+        if let Err(err) = self.queueRender() {
+            // log.warn("failed to notify renderer of resize err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "failed to notify renderer of resize err={err:?}");
+        }
 
         Ok(())
     }
@@ -8627,10 +8734,10 @@ where
         let size = 'size: {
             // var size = self.font_size;
             let mut size = self.font_size;
-            // size.xdpi = @intFromFloat(x_dpi);
-            size.xdpi = x_dpi as u16;
-            // size.ydpi = @intFromFloat(y_dpi);
-            size.ydpi = y_dpi as u16;
+            // size.xdpi = @intFromFloat(@round(x_dpi));
+            size.xdpi = x_dpi.round() as u16;
+            // size.ydpi = @intFromFloat(@round(y_dpi));
+            size.ydpi = y_dpi.round() as u16;
             // break :size size;
             break 'size size;
         };

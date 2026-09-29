@@ -64,7 +64,7 @@ fn clipboard_copy_roundtrips_and_paste_gate() {
     window.present();
 
     let ctx = glib::MainContext::default();
-    // Pump until realized (the GLArea gets a display / clipboard).
+    // Pump until realized (the RenderSurface gets a display / clipboard).
     let deadline = Instant::now() + Duration::from_secs(30);
     while surface.core().is_none() {
         ctx.iteration(true);

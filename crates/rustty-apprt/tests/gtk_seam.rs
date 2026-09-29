@@ -1,12 +1,8 @@
 //! Compile-time KAT for the GTK apprt `App` seam (L5.1 T11).
 //!
 //! PORTS the `apprt.runtime.App` interface contract for the NATIVE gtk4-rs
-//! backend: `gtk::App` must satisfy [`rustty_apprt_api::App`], and its
-//! `MUST_DRAW_FROM_APP_THREAD` const must be `true` — the faithful Rust model of
-//! `App.zig:20-23` `pub const must_draw_from_app_thread = true` (GTK's `GLArea`
-//! cannot draw off the app thread, so the renderer sends `redraw_surface`
-//! instead, `renderer/Thread.zig:22-30`). The embedded backend does NOT declare
-//! it, so its const stays the trait default `false` (R5: byte-identical).
+//! backend: `gtk::App` must satisfy [`rustty_apprt_api::App`]. (P7-W7 T2:
+//! `2f0b65346` deleted `must_draw_from_app_thread`, which this KAT also pinned.)
 //!
 //! R5: gated `all(any(linux, freebsd), feature = "gtk")` — off the gate the
 //! `gtk` module (and the gtk4-rs bindings it uses) is compiled out entirely.
@@ -14,17 +10,11 @@
 //! needs no display, so it runs in the normal (headless) gate.
 #![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]
 
-/// Compiles only if `gtk::App` satisfies the seam with the GTK-specific const,
-/// and if the embedded backend keeps the default `false`.
+/// Compiles only if `gtk::App` satisfies the seam.
 #[test]
-fn gtk_app_satisfies_seam_with_must_draw_const() {
+fn gtk_app_satisfies_seam() {
     fn needs_app<A: rustty_apprt_api::App>() {}
     needs_app::<rustty_apprt::gtk::App>();
-
-    const _: () =
-        assert!(<rustty_apprt::gtk::App as rustty_apprt_api::App>::MUST_DRAW_FROM_APP_THREAD);
-    const _: () =
-        assert!(!<rustty_apprt::embedded::App as rustty_apprt_api::App>::MUST_DRAW_FROM_APP_THREAD);
 }
 
 /// KAT for the THIRD member of the required comptime apprt API, `resourcesDir`

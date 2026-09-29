@@ -12,14 +12,15 @@
 //! [`rustty_apprt_api::App`] directly against the GObject application, NOT through
 //! the libghostty C ABI (AD-1).
 //!
-//! # Invariant 1 — `MUST_DRAW_FROM_APP_THREAD`
+//! # Invariant 1 — the render thread draws (P7-W7 T2)
 //!
-//! `App.zig:20-23` declares `pub const must_draw_from_app_thread = true` because
-//! GTK's `GLArea` cannot draw off the app thread — the renderer must send a
-//! `redraw_surface` message so `drawFrame` runs on the app thread instead
-//! (`renderer/Thread.zig:22-30`). Rust models the reference's `@hasDecl` probe as
-//! the [`rustty_apprt_api::App::MUST_DRAW_FROM_APP_THREAD`] trait const, defaulted
-//! `false`; this backend overrides it to `true` (PREPORT_GTK §2 invariant 1).
+//! At the pin, `App.zig:20-23` declared `pub const must_draw_from_app_thread =
+//! true` because GTK's `GLArea` could not draw off the app thread, and the
+//! renderer sent a `redraw_surface` message so `drawFrame` ran here. `2f0b65346`
+//! deleted both with the GLArea: the renderer draws on its own thread into its own
+//! EGL context and hands finished frames to the `RenderSurface` widget
+//! (`class/render_surface.rs`), which the core surface asks to redraw through the
+//! `.render` action.
 
 use std::ffi::c_void;
 
@@ -480,15 +481,11 @@ fn ipc_toggle_quick_terminal(target: ipc::Target<'_>) -> Result<bool, ipc::Error
 }
 
 impl ApprtApp for App {
-    /// This is detected by the Renderer, in which case it sends a `redraw_surface`
-    /// message so that we can call `drawFrame` ourselves from the app thread,
-    /// because GTK's `GLArea` does not support drawing from a different thread.
-    ///
-    /// PORTS: `App.zig:20-23` `pub const must_draw_from_app_thread = true`
-    /// (invariant 1): GTK's `GLArea` cannot draw off the app thread, so the
-    /// renderer sends a `redraw_surface` message instead of drawing inline. This
-    /// overrides the seam's default `false`.
-    const MUST_DRAW_FROM_APP_THREAD: bool = true;
+    // P7-W7 T2 (`2f0b65346`): `pub const must_draw_from_app_thread = true` ("This
+    // is detected by the Renderer, in which case it sends a `redraw_surface`
+    // message so that we can call `drawFrame` ourselves from the app thread,
+    // because GTK's `GLArea` does not support drawing from a different thread.")
+    // is deleted with the GLArea.
 
     /// PORTS: `App.zig:14` `const Surface = @import("Surface.zig")` — the GTK
     /// per-surface backend (the placeholder [`Surface`], filled by L5.1 T18).
@@ -502,13 +499,12 @@ impl ApprtApp for App {
     /// `application.zig:668-799`), [`Application::perform_action`].
     ///
     /// The `.render` action is the **T16 render contract**'s app-thread leg: the
-    /// core app, draining a `redraw_surface` mailbox message (invariant 1,
-    /// `MUST_DRAW_FROM_APP_THREAD`), calls
-    /// `rt_app.performAction(.{ .surface = core }, .render, {})`
-    /// (`rustty_core::app::redrawSurface`, `app.rs:474-479`), which lands here,
-    /// reaches the switch's `.render` arm → `action_render` → `Surface::redraw()` →
-    /// `gl_area.queue_render()`. GTK then emits `render` on the app thread →
-    /// `glareaRender` → `drawFrame(true)`.
+    /// render thread, having pushed a frame, sends its surface a `.redraw`
+    /// message; the core surface (`Surface::redraw`) calls
+    /// `rt_app.performAction(.{ .surface = self }, .render, {})`, which lands
+    /// here, reaches the switch's `.render` arm → `action_render` →
+    /// `Surface::redraw()` → `render_surface.queue_draw()`. GTK then snapshots
+    /// the `RenderSurface`, which takes the frame.
     fn perform_action<C: CoreSurfaceHandle>(
         &self,
         target: Target<'_, C>,
@@ -710,16 +706,6 @@ mod tests {
         let _wakeup: fn(&App) = <App as ApprtApp>::wakeup;
         let _config: fn(&App) -> &rustty_config::Config = <App as ApprtApp>::config;
         let _layout: fn(&App) -> Layout = <App as ApprtApp>::keyboard_layout;
-    }
-
-    /// The GTK backend's `MUST_DRAW_FROM_APP_THREAD` is `true` (invariant 1,
-    /// `App.zig:20-23`), overriding the seam's default `false`. Asserted in a
-    /// `const` block (compile-time), matching the `gtk_seam` integration KAT's
-    /// `const _: () = assert!(...)` — duplicated here as a unit witness so the
-    /// invariant is checked alongside the shim itself.
-    #[test]
-    fn must_draw_from_app_thread_is_true() {
-        const { assert!(<App as ApprtApp>::MUST_DRAW_FROM_APP_THREAD) };
     }
 
     /// With no running instance on the session bus, both IPC actions must fail

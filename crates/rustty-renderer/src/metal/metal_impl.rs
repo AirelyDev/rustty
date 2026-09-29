@@ -155,6 +155,20 @@ pub struct Metal {
     /// `set_offscreen_size`; returned (clamped to `max_texture_size`) by
     /// `surface_size`.
     offscreen_size: SurfaceSize,
+
+    /// PORT-ONLY (N437): the layer display callback's context, owned here
+    /// (`Box::into_raw`, freed in `Drop` after the callback is cleared). Null until
+    /// `loop_enter` installs the callback.
+    display_ctx: *mut DisplayCallbackCtx,
+}
+
+/// PORT-ONLY (N437): what the CoreAnimation display callback needs, in its own
+/// allocation: the whole-`Renderer` pointer (the reference's `ctx`) and a handle
+/// to the renderer's `draw_mutex`, so the callback locks without reading the
+/// renderer's bytes (see `crate::latest_frame`).
+pub struct DisplayCallbackCtx {
+    renderer: *mut Renderer,
+    lock: crate::latest_frame::DrawMutex,
 }
 
 impl Metal {
@@ -301,6 +315,7 @@ impl Metal {
             max_texture_size,
             autorelease_pool: None,
             offscreen_size: SurfaceSize { width, height },
+            display_ctx: core::ptr::null_mut(),
         })
     }
 
@@ -448,6 +463,7 @@ impl Metal {
                 width: 0,
                 height: 0,
             },
+            display_ctx: core::ptr::null_mut(),
         })
     }
 
@@ -533,10 +549,15 @@ impl Metal {
     /// in `W5_DESIGN §3.2`. Its sole call site is `Renderer::loop_enter`, which hands
     /// it a whole-`Renderer`-provenance `*mut Metal` (`W5_DESIGN §2.4`/§3.1).
     ///
+    /// N437: `lock` is a handle to the renderer's `draw_mutex`; the callback's
+    /// context carries it so the main thread's draw locks without reading the
+    /// renderer. The caller holds `draw_mutex`.
+    ///
     /// # Safety
     /// `self_ptr` must be a whole-`Renderer`-provenance `*mut Metal` pointing at the
-    /// `Renderer.api` field (established by `Renderer::loop_enter`, §3.1).
-    pub unsafe fn loop_enter(self_ptr: *mut Metal) {
+    /// `Renderer.api` field, projected from the renderer's raw root rather than
+    /// from a reborrow (established by `Renderer::loop_enter_raw`, §3.1).
+    pub unsafe fn loop_enter(self_ptr: *mut Metal, lock: crate::latest_frame::DrawMutex) {
         // const renderer: *align(1) Renderer = @fieldParentPtr("api", self);
         // container_of: Metal is Renderer.api (faithful @fieldParentPtr). byte_sub
         // keeps the whole-Renderer provenance of `self_ptr` (`W5_DESIGN §2.4`).
@@ -550,7 +571,18 @@ impl Metal {
         // safe.
         if let Some(layer) = unsafe { (*self_ptr).layer.as_ref() } {
             // self.layer.setDisplayCallback(@ptrCast(&displayCallback), @ptrCast(renderer));
-            layer.set_display_callback(Some(display_callback), renderer as *mut c_void);
+            //
+            // PORT NOTE (N437): the context is a `DisplayCallbackCtx` carrying
+            // `renderer` and the `draw_mutex` handle. A second `loopEnter` replaces
+            // the callback before freeing the old context.
+            let ctx = Box::into_raw(Box::new(DisplayCallbackCtx { renderer, lock }));
+            layer.set_display_callback(Some(display_callback), ctx as *mut c_void);
+            let old = unsafe { core::mem::replace(&mut (*self_ptr).display_ctx, ctx) };
+            if !old.is_null() {
+                // SAFETY: `old` came from `Box::into_raw` above and the layer no
+                // longer holds it.
+                drop(unsafe { Box::from_raw(old) });
+            }
         }
     }
 
@@ -922,11 +954,8 @@ impl Metal {
         }
     }
 
-    /// Present the last presented target again. (noop for Metal)
-    // pub inline fn presentLastTarget(self: *Metal) !void { _ = self; }
-    pub fn present_last_target(&self) -> Result<(), Error> {
-        Ok(())
-    }
+    // P7-W7 T2 (`2f0b65346`): `presentLastTarget` (a no-op for Metal) is deleted
+    // with the generic renderer's call to it.
 }
 
 // fn displayCallback(renderer: *Renderer) align(8) void {
@@ -953,12 +982,15 @@ impl Metal {
 // the same Zig contract).
 //
 /// # Safety
-/// `ctx` must be the whole-`Renderer`-provenance pointer installed by `loop_enter`
-/// (round-tripped through `Cell<*mut c_void>`, so provenance is preserved).
+/// `ctx` must be the `DisplayCallbackCtx` installed by `loop_enter`, whose
+/// `renderer` is the whole-`Renderer`-provenance pointer (round-tripped through
+/// `Cell<*mut c_void>`, so provenance is preserved).
 unsafe extern "C" fn display_callback(ctx: *mut c_void) {
     abort_on_unwind(|| {
-        let renderer = ctx.cast::<Renderer>();
-        if let Err(err) = unsafe { Renderer::draw_frame_raw(renderer, true) } {
+        // SAFETY: the context outlives the installed callback (`Metal`'s `Drop`
+        // clears the callback before freeing it).
+        let ctx = unsafe { &*ctx.cast::<DisplayCallbackCtx>() };
+        if let Err(err) = unsafe { Renderer::draw_frame_raw(ctx.renderer, &ctx.lock, true) } {
             // log.warn("Error drawing frame in display callback, err={}", .{err});
             log::warn!(target: LOG_SCOPE, "Error drawing frame in display callback, err={err:?}");
         }
@@ -987,6 +1019,17 @@ impl Drop for Metal {
     //     self.layer.release();
     // }
     fn drop(&mut self) {
+        // PORT-ONLY (N437): clear the display callback, then free its context.
+        if !self.display_ctx.is_null() {
+            if let Some(layer) = self.layer.as_ref() {
+                layer.set_display_callback(None, core::ptr::null_mut());
+            }
+            // SAFETY: `display_ctx` came from `Box::into_raw` in `loop_enter` and the
+            // layer no longer holds it.
+            drop(unsafe { Box::from_raw(self.display_ctx) });
+            self.display_ctx = core::ptr::null_mut();
+        }
+
         // ARC: `queue`/`device` (Retained) release automatically on drop; `layer`
         // (the `Option<IOSurfaceLayer>`) releases via `IOSurfaceLayer`'s
         // `Retained<CALayer>` Drop — `self.layer.release()` (Metal.zig:161) ⇒ that

@@ -71,7 +71,8 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **Oracle:** `src/renderer/metal/shaders.zig:151, 350, 439-447` → **Rustty:** `crates/rustty-renderer/src/metal/shaders.rs:40-42, 374-382, 419-452, 505-507`
   - **Audit's suggested fix:** Wire the crate's log facade (once available) and emit the three messages, extracting `localizedDescription` from the NSError in the map_err closures.
   - **Disposition (task-14c-2):** CLOSED — all three of `shaders.zig`'s live calls are live in `metal/shaders.rs`. `:350`'s `shader library loaded time={}us` needed its MEASUREMENT restored too (the port had commented out the `std.time.Instant` pair along with the log); it now uses `std::time::Instant`. `:151`'s `err={err:?}` always renders `MetalFailed` because the port collapsed the whole `initPostPipelines` error set to one variant — a pre-existing error-type divergence, noted at the site, not a logging one, and tracked in its own right as `NEW-FINDINGS.md` [[N8]].
-- [ ] **S119-F3** · DISPUTED · `LOG` · missing-branch
+- [x] **S119-F3** · DISPUTED · `LOG` · missing-branch
   - **What:** OpenGL Frame.complete tail skips api.present when the API owns the context (offscreen) and drops the present-failure log.err
   - **Oracle:** `src/renderer/opengl/Frame.zig:62-70` → **Rustty:** `crates/rustty-renderer/src/generic/linux_impl.rs:812-822`
   - **Audit's suggested fix:** Emit the log.err once a facade exists; document/keep the owns_context gate only for the rustty-only offscreen harness.
+  - **Disposition (P7-W7 T2):** CLOSED on re-adjudication (`ADJUDICATION.md#s119-f3-p7`). `2f0b65346` deleted the GLArea path the waiver rested on; the port's `owns_context` gate is gone and `opengl_frame_completed` ports the new `Frame.zig:57-90` tail (present → finish → push → `.redraw`) with its `log.warn` live.

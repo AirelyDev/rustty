@@ -14,17 +14,17 @@
 //!       whose child is a [`Tab`] hosting a live [`Surface`]
 //!       (`window.zig:419-507` `newTabPage`).
 //!   (b) `Surface::core()` becomes `Some` — the lazy core surface built on the
-//!       GLArea's first resize (invariant 3), reached THROUGH the window chain.
-//!   (c) a real frame draws: `drawFrame(sync=true)` returns `Ok` with GDK's GLArea
-//!       context current + its framebuffer bound, and a `glReadPixels` readback of
-//!       that framebuffer is not uniformly zero (the render contract runs).
+//!       RenderSurface's first resize (invariant 3), reached THROUGH the window
+//!       chain.
+//!   (c) a real frame shows: the `RenderSurface` built a `GdkTexture` from a frame
+//!       the render thread exported, and its pixels are not uniformly zero (the
+//!       render contract runs; P7-W7 T2, `2f0b65346`).
 //!   (d) the shell is LIVE — `echo rustty-window-live\n` written into the pty
 //!       round-trips through the io thread into the core `Screen`.
 //!
-//! The draw/readback discipline (make_current + attach_buffers + drawFrame + read
-//! the SAME bound framebuffer) and the run notes are `gtk_first_light.rs`'s — see
-//! its module doc for the full rationale. Run with:
-//!   LIBGL_ALWAYS_SOFTWARE=1 [xvfb-run -a] \
+//! The texture inspection and the run notes are `gtk_first_light.rs`'s — see its
+//! module doc for the full rationale. Run with:
+//!   LIBGL_ALWAYS_SOFTWARE=1 \
 //!     cargo test -p rustty-apprt --features gtk --test gtk_window_live -- --ignored
 //!
 //! R5: gated `all(any(linux, freebsd), feature = "gtk")` — off the gate the whole
@@ -50,24 +50,11 @@ use rustty_apprt::gtk::{self, register_resources};
 use rustty_config::command::Command;
 use rustty_core::app::App as CoreApp;
 
+#[path = "common/gtk_live.rs"]
+mod gtk_live;
+
 /// The marker the live `/bin/sh` echoes back through the pty into the `Screen`.
 const NEEDLE: &[u8] = b"rustty-window-live";
-
-/// Recursively find the terminal `GLArea` inside a widget tree (the first-light
-/// KAT's helper: the GLArea is a private template child with no public accessor).
-fn find_gl_area(widget: &gtk4::Widget) -> Option<gtk4::GLArea> {
-    if let Ok(area) = widget.clone().downcast::<gtk4::GLArea>() {
-        return Some(area);
-    }
-    let mut child = widget.first_child();
-    while let Some(c) = child {
-        if let Some(found) = find_gl_area(&c) {
-            return Some(found);
-        }
-        child = c.next_sibling();
-    }
-    None
-}
 
 /// Dump the live core surface's ACTIVE `Screen` text UNDER THE RENDERER MUTEX
 /// (the `live_shell.rs`/first-light determinism discipline).
@@ -172,12 +159,12 @@ fn window_hosts_a_live_terminal() {
     let keepalive =
         glib::timeout_add_local(Duration::from_millis(50), || glib::ControlFlow::Continue);
 
-    // ---- 3. Pump until the window chain realizes the GLArea → lazy core init.
-    //         The split tree parents the Surface on an idle rebuild, so the
-    //         GLArea exists only after some pumping. ----
+    // ---- 3. Pump until the window chain sizes the RenderSurface → lazy core
+    //         init. The split tree parents the Surface on an idle rebuild, so the
+    //         RenderSurface is sized only after some pumping. ----
     let deadline = Instant::now() + Duration::from_secs(30);
     while surface.core().is_none() {
-        ctx.iteration(true);
+        gtk_live::iterate(&ctx, core_ptr, &app);
         if Instant::now() > deadline {
             break;
         }
@@ -185,8 +172,8 @@ fn window_hosts_a_live_terminal() {
 
     // (b) The lazy core surface was built through the window chain.
     let core = surface.core().expect(
-        "core surface built on the first GLArea resize INSIDE the window chain; \
-         is LIBGL_ALWAYS_SOFTWARE=1 set so the GLArea reaches GL 4.3 core?",
+        "core surface built on the first RenderSurface resize INSIDE the window \
+         chain; is LIBGL_ALWAYS_SOFTWARE=1 set so the renderer reaches GL 4.3 core?",
     );
 
     // The Surface widget is parented INSIDE this window (the tab hosts it).
@@ -206,66 +193,25 @@ fn window_hosts_a_live_terminal() {
         );
     }
 
-    let gl_area = find_gl_area(surface.upcast_ref::<gtk4::Widget>())
-        .expect("the surface template contains a GLArea");
-    let render_pump = {
-        let gl_area_weak = gl_area.downgrade();
-        glib::timeout_add_local(Duration::from_millis(30), move || {
-            match gl_area_weak.upgrade() {
-                Some(area) => {
-                    area.queue_render();
-                    glib::ControlFlow::Continue
-                }
-                None => glib::ControlFlow::Break,
-            }
-        })
-    };
+    let render_surface = gtk_live::find_render_surface(surface.upcast_ref::<gtk4::Widget>())
+        .expect("the surface template contains a RenderSurface");
 
-    // ---- 4. (c) A real frame draws with GDK's GLArea framebuffer bound, and the
-    //         readback of that framebuffer is not uniformly zero (the first-light
-    //         capture shape: make_current + attach_buffers replicate GDK's
-    //         `render` precondition). ----
-    let mut draw_ok = false;
+    // ---- 4. (c) A real frame shows: the RenderSurface's texture, built in its
+    //         snapshot from a frame the render thread exported, is not uniformly
+    //         zero. ----
     let mut pixels_nonzero = 0usize;
     let capture_deadline = Instant::now() + Duration::from_secs(15);
-    while !draw_ok && Instant::now() < capture_deadline {
-        for _ in 0..8 {
-            ctx.iteration(true);
-        }
-        if gl_area.error().is_some() {
-            continue;
-        }
-        gl_area.make_current();
-        if gl_area.error().is_some() {
-            continue;
-        }
-        gl_area.attach_buffers();
-        // SAFETY: `core` is the live core surface; the GLArea context is current
-        // and its framebuffer bound (make_current + attach_buffers above). Raw
-        // self per the W5 render-thread aliasing contract.
-        unsafe {
-            let draw =
-                rustty_core::renderer_seam::Renderer::drawFrame(&raw mut (*core).renderer, true);
-            let renderer = &(*core).renderer.0;
-            let w = renderer.size.screen.width as usize;
-            let h = renderer.size.screen.height as usize;
-            if draw.is_ok() && w > 0 && h > 0 {
-                let px = renderer.api.read_bound_framebuffer_rgba(w, h);
-                pixels_nonzero = px.iter().filter(|&&b| b != 0).count();
-                if pixels_nonzero > 0 {
-                    draw_ok = true;
-                }
-            }
+    while pixels_nonzero == 0 && Instant::now() < capture_deadline {
+        gtk_live::iterate(&ctx, core_ptr, &app);
+        if let Some(texture) = render_surface.texture() {
+            let (_, _, px) = gtk_live::texture_rgba(&texture);
+            pixels_nonzero = gtk_live::nonzero_bytes(&px);
         }
     }
     assert!(
-        draw_ok,
-        "drawFrame(true) drew a real frame into the window's GLArea framebuffer"
-    );
-    assert!(
         pixels_nonzero > 0,
-        "the GLArea framebuffer readback is not uniformly zero — the terminal \
-         frame rendered INSIDE the window"
+        "the RenderSurface texture is not uniformly zero — the terminal frame \
+         rendered INSIDE the window"
     );
 
     // ---- 5. (d) The live shell round-trip: `echo rustty-window-live` down the
@@ -281,7 +227,7 @@ fn window_hosts_a_live_terminal() {
     let round_trip_deadline = Instant::now() + Duration::from_secs(20);
     let mut round_tripped = false;
     while Instant::now() < round_trip_deadline {
-        ctx.iteration(true);
+        gtk_live::iterate(&ctx, core_ptr, &app);
         let dump = unsafe { screen_dump(core) };
         if dump.windows(NEEDLE.len()).any(|w| w == NEEDLE) {
             round_tripped = true;
@@ -301,8 +247,9 @@ fn window_hosts_a_live_terminal() {
     // a pre-existing termio double-free entirely outside this tier. The OS
     // reclaims the threads + `/bin/sh` at process exit.
     keepalive.remove();
-    render_pump.remove();
-    drop(gl_area);
+    drop(render_surface);
+    // SAFETY: `core` is the live core surface; stopped once, before exit.
+    unsafe { gtk_live::stop_render_thread(core) };
     std::mem::forget(surface);
     std::mem::forget(tab);
     std::mem::forget(page);

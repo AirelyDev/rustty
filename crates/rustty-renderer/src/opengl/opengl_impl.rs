@@ -27,29 +27,23 @@
 //! re-declared here. This comment is the R1 every-line ledger for lines 13-24.
 //!
 //! PORT NOTE (self: OpenGL by-value → &self): OpenGL.zig's option factories take
-//! `self: OpenGL` (an `inline` copy — OpenGL holds no GPU handles, only an
-//! allocator + blending + last_target). In Rust every read-only method takes
+//! `self: OpenGL` (an `inline` copy). In Rust every read-only method takes
 //! `&self`. `*const OpenGL` → `&self`, `*OpenGL` → `&mut self` (matching Metal's
 //! precedent).
 //!
-//! DEFERRED (windowing-host seams, offscreen scope):
-//! - the `alloc: std.mem.Allocator` field (OpenGL.zig:40) is DROPPED — the Rust
-//!   port does not thread an allocator (the leaves are `Vec`-managed), exactly as
-//!   `metal_impl` dropped it.
-//! - `surfaceInit`/`finalizeSurfaceInit`/`threadEnter`/`threadExit`
-//!   (OpenGL.zig:161-234) — the GTK-runtime `prepareContext(null)` arm — need the
-//!   `epoxy` loader decision L5 owns; NOT ported this tier. The offscreen entry
-//!   point is `init_offscreen`, which stands up its own headless
-//!   `OffscreenContext` (Task 1) and runs `prepare_context` over it.
-//!   UPDATED (task-14c-3): `displayRealized` (OpenGL.zig:237-250) IS ported now —
-//!   see [`OpenGL::display_realized`]. It was previously inlined into
-//!   `generic/linux_impl.rs::display_realized` in an ABORT-on-failure shape; the
-//!   reference warns and continues (parity rows S113-F1 / S115-F2).
-//! - `present`/`present_last_target` ("GL-ATTACH" deferred item): the real
-//!   `glBlitFramebuffer`-to-default-framebuffer body IS ported (below) but never
-//!   exercised by the offscreen milestone — the golden reads `Target::read_rgba()`
-//!   directly. Parallel to the Metal "W-ATTACH" entry (resolved for Metal, freshly
-//!   opened for OpenGL).
+//! P7-W7 T2 (`2f0b65346`, pin `12752b2ac`): the GtkGLArea is gone. `init` now
+//! creates and OWNS a surfaceless EGL display + OpenGL 4.3 core context on the main
+//! thread and releases it; the render thread makes it current in `threadEnter` and
+//! loads its own GL function table, and `present` exports each frame for the apprt
+//! (a DMA-BUF, or CPU memory when the apprt cannot import one). The pin's
+//! `surfaceInit`/`finalizeSurfaceInit`/`displayRealized`/`presentLastTarget`/
+//! `gpuResourcesReleased` are deleted, and so are the port's two constructors
+//! (`init_offscreen` for the tests, `init` for GDK's borrowed context): there is
+//! one context model now, the reference's.
+//!
+//! DROPPED: the `alloc: std.mem.Allocator` field (OpenGL.zig:40) — the Rust port
+//! does not thread an allocator (the leaves are `Vec`-managed), exactly as
+//! `metal_impl` dropped it.
 
 use std::ffi::CStr;
 use std::fmt;
@@ -60,7 +54,7 @@ use super::gl::buffer as glbuf;
 use super::gl::glad;
 use super::gl::sys::{self, OffscreenContext};
 use super::gl::texture as gltex;
-use super::gl::{draw, errors, framebuffer};
+use super::gl::{draw, errors};
 
 use super::buffer;
 use super::frame::{CompletionFn, Frame};
@@ -79,7 +73,7 @@ use super::texture::{self, Texture};
 pub(crate) const LOG_SCOPE: &str = "opengl";
 
 /// Names the anonymous `struct { width: u32, height: u32 }` that `surfaceSize`
-/// returns (OpenGL.zig:279). Mirrors `metal_impl::SurfaceSize`.
+/// returns (OpenGL.zig:239). Mirrors `metal_impl::SurfaceSize`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SurfaceSize {
     pub width: u32,
@@ -88,24 +82,21 @@ pub struct SurfaceSize {
 
 /// OpenGL-local error.
 ///
-/// PORT NOTE: `OpenGL.zig`'s own `init` is infallible (`error{}!OpenGL`,
-/// OpenGL.zig:51 — the fallible signature exists only "for parity with Metal").
-/// The RUSTTY-ONLY offscreen constructor `init_offscreen`, however, stands up a
-/// real headless `OffscreenContext`, which CAN fail (no EGL, no 4.3-core driver);
-/// that failure folds to [`Error::Context`]. The `present` blit's `gl` calls fold
-/// to [`Error::Gl`]. Both mirror how `metal_impl::Error` gathers the leaf failures
-/// its own methods can surface.
+/// PORT NOTE: `OpenGL.init` returns Zig's inferred set of the `egl.load`/
+/// `initPlatform`/`bindApi`/`Config.choose`/`Context.create`/`makeCurrent`
+/// failures; the port's EGL half ([`OffscreenContext`]) folds them into
+/// [`Error::Context`]. `threadEnter`'s `makeCurrent` is [`Error::Egl`] and its
+/// `prepareContext` [`Error::Context`]; `present`'s readback is [`Error::Gl`].
 #[derive(Debug)]
 pub enum Error {
-    /// The headless GL context could not be created, or did not reach the
-    /// [`sys::MIN_VERSION_MAJOR`].[`sys::MIN_VERSION_MINOR`] core floor. Carries
-    /// the underlying [`sys::Error`] so a caller (or a test) can distinguish a
-    /// clean skip (absent EGL / absent driver / version under the floor) from a
-    /// real port break (a missing entry point on a context EGL promised was >=
-    /// 4.3).
+    /// The EGL display or context could not be created, or the context did not
+    /// reach the [`sys::MIN_VERSION_MAJOR`].[`sys::MIN_VERSION_MINOR`] core floor.
+    /// Carries the underlying [`sys::Error`] so a caller (or a test) can
+    /// distinguish a clean skip (absent EGL / absent driver / version under the
+    /// floor) from a real port break (a missing entry point on a context EGL
+    /// promised was >= 4.3).
     Context(sys::Error),
-    /// A raw `gl` call in `present` reported an error (OpenGL.zig:298-336's
-    /// `disable`/`enable`/`bind` fallible calls).
+    /// A `gl` call failed (`present`'s `readPixelsAlloc`).
     Gl(errors::Error),
     /// An EGL call failed: `threadEnter`'s `makeCurrent` (`OpenGL.zig:224`).
     Egl(sys::EglError),
@@ -141,34 +132,75 @@ impl From<sys::EglError> for Error {
     }
 }
 
+/// A finished frame exported for presentation by the apprt.
+///
+/// PORTS: `OpenGL.zig:322-345` — `pub const ExportedFrame = union(enum)`.
+///
+/// ```zig
+/// pub const ExportedFrame = union(enum) {
+///     dmabuf: Dmabuf,
+///     memory: Memory,
+///     ...
+///     pub fn deinit(self: ExportedFrame) void {
+///         switch (self) {
+///             .dmabuf => |v| v.deinit(),
+///             .memory => |v| v.deinit(),
+///         }
+///     }
+/// };
+/// ```
+///
+/// PORT NOTE: `deinit` is the frame's `Drop` (the DMA-BUF owns its fds, the
+/// memory frame its pixels); [`ExportedFrame::deinit`] is kept so the reference's
+/// call sites read the same. The `dmabuf` arm is Unix-only, as `crate::dmabuf` is:
+/// Windows builds the OpenGL renderer but has no DMA-BUF, so there every export
+/// takes `present`'s CPU fallback.
+#[derive(Debug)]
+pub enum ExportedFrame {
+    #[cfg(unix)]
+    Dmabuf(crate::dmabuf::Dmabuf),
+    Memory(Memory),
+}
+
+/// RGBA8 pixel data with premultiplied alpha, tightly packed
+/// (`width * 4` bytes per row), in CPU memory.
+//
+// PORTS: `ExportedFrame.Memory` (`OpenGL.zig:327-338`). The `alloc` field and
+// `deinit` (`self.alloc.free(self.pixels)`) are the `Vec`'s own.
+#[derive(Debug)]
+pub struct Memory {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<u8>,
+}
+
+impl ExportedFrame {
+    /// PORTS: `ExportedFrame.deinit`; see the type's PORT NOTE.
+    pub fn deinit(self) {}
+}
+
+impl crate::latest_frame::ExportedFrameType for ExportedFrame {
+    const IS_VOID: bool = false;
+}
+
 /// Graphics API wrapper for OpenGL. Ports `OpenGL.zig`'s `OpenGL = @This()` struct
-/// (fields OpenGL.zig:40-46).
+/// (fields OpenGL.zig:40-47).
 pub struct OpenGL {
-    // OpenGL.zig:40 `alloc: std.mem.Allocator` — DROPPED (see the module DEFERRED
-    // note): the Rust leaves are Vec-managed, no allocator threading.
-    /// Alpha blending mode.
+    // OpenGL.zig:40 `alloc: std.mem.Allocator` — DROPPED (see the module note).
+    /// Alpha blending mode
     // OpenGL.zig:43 `blending: configpkg.Config.AlphaBlending`. Now the Part-A
     // hoisted `rustty_render_types::AlphaBlending` (no config edge). Drives sRGB
-    // internal-format selection in `init_target`/`texture_options`/`init_shaders`
-    // via `blending.is_linear()`.
+    // internal-format selection in `init_target` (UD354).
     pub blending: AlphaBlending,
 
-    /// The most recently presented target, in case we need to present it again.
-    // OpenGL.zig:45-46 `last_target: ?Target = null`.
-    pub last_target: Option<Target>,
-
-    /// RUSTTY-ONLY: the owned headless EGL/GL context (Task 1). `Some` on the
-    /// offscreen path (`init_offscreen`), where this type stands up + owns the
-    /// context ghostty otherwise gets from GDK; `None` on the future windowed
-    /// (L5) path, where GDK owns context lifetime. Kept alive here so the context
-    /// stays current for the target/shader/frame calls, and terminated on drop.
-    context: Option<OffscreenContext>,
-
-    /// OFFSCREEN stub for `surface_size`: the fixed surface size (replaces the
-    /// `GL_VIEWPORT` query in `surfaceSize`, OpenGL.zig:281-286). Set by
-    /// `init_offscreen`; returned by `surface_size` while `context.is_some()`.
-    /// Mirrors `metal_impl`'s `offscreen_size` seam.
-    offscreen_size: SurfaceSize,
+    // egl_display: *gl.egl.Display,
+    // egl_context: *gl.egl.Context,   (OpenGL.zig:45-46)
+    //
+    // PORT NOTE: the pair is the port's `OffscreenContext`, which also owns the
+    // dlopen'd `libEGL.so.1` the two handles are only valid through (the
+    // reference's `egl.load()` is process-global). It never terminates the display
+    // (DECISIONS B10).
+    egl: OffscreenContext,
 }
 
 impl OpenGL {
@@ -177,124 +209,106 @@ impl OpenGL {
     // OpenGL.zig:27-28 — the fragCoord for OpenGL shaders is +Y = up.
     // `pub const custom_shader_y_is_down = false;`
     pub const CUSTOM_SHADER_Y_IS_DOWN: bool = false;
-    /// Because OpenGL's frame completion is always
-    /// sync, we have no need for multi-buffering.
-    // OpenGL.zig:30-32 `pub const swap_chain_count = 1;`
-    pub const SWAP_CHAIN_COUNT: usize = 1;
+    /// Triple-buffering gives the GPU room to pipeline renders without
+    /// having to wait on the apprt consuming previous frames.
+    // OpenGL.zig:31-33 `pub const swap_chain_count = 3;`
+    pub const SWAP_CHAIN_COUNT: usize = 3;
 
-    /// OFFSCREEN constructor (RUSTTY-ONLY, no ghostty analogue). Mirrors
-    /// `metal_impl::Metal::init_offscreen`'s precedent: the reference `init`
-    /// (OpenGL.zig:51-56) needs no windowing state itself, but the GL CONTEXT it
-    /// runs against is GDK's — created out-of-band via `surfaceInit`/`prepareContext`
-    /// (OpenGL.zig:162-170), which is unavailable headless. So this stands up Task
-    /// 1's `OffscreenContext` (EGL surfaceless, core 4.3), runs `prepare_context`
-    /// over it (the load + version-gate + debug-output + `GL_FRAMEBUFFER_SRGB`
-    /// setup, OpenGL.zig:132-159, via [`sys::load_gl`]), and returns an `OpenGL`
-    /// owning that context. Takes `blending` + the fixed offscreen size directly,
-    /// so the milestone needs neither `renderer::Options` nor `apprt`.
+    /// PORTS: `OpenGL.zig:49-104` — `init`.
+    ///
+    /// ```zig
+    /// pub fn init(alloc: Allocator, opts: rendererpkg.Options) !OpenGL {
+    ///     try egl.load();
+    ///
+    ///     const display: *egl.Display = try .initPlatform(
+    ///         egl.c.EGL_PLATFORM_SURFACELESS_MESA,
+    ///         egl.c.EGL_DEFAULT_DISPLAY,
+    ///         null,
+    ///     );
+    ///
+    ///     log.info("EGL vendor={s}", ...);
+    ///     log.info("EGL extensions={s}", ...);
+    ///
+    ///     try egl.bindApi(egl.c.EGL_OPENGL_API);
+    ///     const config = egl.Config.choose(display, &.{ ... }) catch |err| { ... };
+    ///     const context = egl.Context.create(display, config, null, &.{ ... }) catch |err| { ... };
+    ///     errdefer context.destroy(display) catch {};
+    ///
+    ///     display.makeCurrent(null, null, context) catch |err| { ... };
+    ///
+    ///     // Release current so that the main thread
+    ///     // doesn't hold onto the GL context forever.
+    ///     defer display.releaseCurrent();
+    ///
+    ///     return .{ ... };
+    /// }
+    /// ```
+    ///
+    /// The display/config/context/current half, with its log lines, is
+    /// [`OffscreenContext::init`]. PORT NOTE: the reference takes the whole
+    /// `rendererpkg.Options` and reads only `opts.config.blending`; the port takes
+    /// that one value (the renderer crate's `Options` is the caller's).
     ///
     /// # Errors
-    /// [`Error::Context`] if the headless context cannot be created or does not
-    /// reach the required GL version (a clean-skip signal for the golden gate).
-    pub fn init_offscreen(
+    /// [`Error::Context`] when EGL, the surfaceless platform, an `EGL_OPENGL_BIT`
+    /// config or a 4.3 core context is unavailable.
+    pub fn init(blending: AlphaBlending) -> Result<OpenGL, Error> {
+        let egl = OffscreenContext::init()?;
+
+        // Release current so that the main thread
+        // doesn't hold onto the GL context forever.
+        egl.release_current();
+
+        Ok(OpenGL { blending, egl })
+    }
+
+    /// TEST-ONLY (RUSTTY): [`Self::init`], then [`Self::thread_enter`] on the
+    /// calling thread and [`Self::set_viewport`] to `width x height` — what the
+    /// render thread does before its first draw (`threadEnter`, then the first
+    /// `.resize` message). The renderer's own KATs run on the test thread, with no
+    /// render thread, so they stand the context up here.
+    #[cfg(test)]
+    pub(crate) fn init_offscreen(
         blending: AlphaBlending,
         width: u32,
         height: u32,
     ) -> Result<OpenGL, Error> {
-        // Stand up the headless context and make it current (Task 1).
-        let context = OffscreenContext::init()?;
-        // Load the GL entry points into it + run the reference's version gate,
-        // debug-output registration, and GL_FRAMEBUFFER_SRGB enable
-        // (OpenGL.zig:132-159 `prepareContext`, reached via `load_gl`).
-        sys::load_gl(&context)?;
-
-        // RUSTTY-ONLY (offscreen viewport — no ghostty analogue): ghostty NEVER calls
-        // `glViewport` in the renderer — the windowing host (GtkGLArea / GLFW) sets it
-        // to the drawable size on resize, and `surfaceSize` merely READS it back
-        // (OpenGL.zig:280-286). A surfaceless offscreen context has no host and starts
-        // with a 0×0 (undefined) viewport, so primitives would rasterize into nothing
-        // (`glClear` ignores the viewport — a clear "works" while no draw shows). We set
-        // it once to `offscreen_size`, the offscreen stand-in for the host's resize
-        // callback, keeping it consistent with what `surface_size` returns (the fixed
-        // `offscreen_size`) and the target the generic renderer resizes to match. First
-        // exercised by the Task-11 offscreen golden.
-        draw::viewport(
-            0,
-            0,
-            width as gl::types::GLsizei,
-            height as gl::types::GLsizei,
-        )?;
-
-        Ok(OpenGL {
-            blending,
-            last_target: None,
-            context: Some(context),
-            offscreen_size: SurfaceSize { width, height },
-        })
+        let api = Self::init(blending)?;
+        api.thread_enter()?;
+        api.set_viewport(width, height);
+        Ok(api)
     }
 
-    /// WINDOWED constructor (GL-ATTACH) — the FAITHFUL port of the reference
-    /// `OpenGL.init` (`OpenGL.zig:51-56`), which creates NO GL context: ghostty's
-    /// OpenGL graphics API never owns a context — GDK's GLArea owns it, and the
-    /// GL loader is bound out-of-band by `surfaceInit`/`displayRealized`
-    /// (`prepareContext(null)`, reached here via [`sys::prepare_context_windowed`]).
-    /// So this merely stores `blending`; `context` is `None` (GDK owns lifetime),
-    /// and `surface_size` reads the live `GL_VIEWPORT` GDK set (the `None` arm).
+    /// The owned EGL display + context, which the DMA-BUF export takes where the
+    /// reference takes `self.egl_display`/`self.egl_context` (`OpenGL.zig:306`).
+    pub fn egl(&self) -> &OffscreenContext {
+        &self.egl
+    }
+
+    /// PORTS: `OpenGL.zig:106-114` — `deinit`.
     ///
-    /// The reference's doc on `init`:
-    /// NOTE: This is an error{}!OpenGL instead of just OpenGL for parity with
-    /// Metal, since it needs to be fallible so does this, even though it
-    /// can't actually fail.
-    /// (PORT NOTE: with an empty error set there is nothing to propagate, so the
-    /// port returns `OpenGL` directly.)
+    /// ```zig
+    /// pub fn deinit(self: *OpenGL) void {
+    ///     self.egl_display.releaseCurrent();
+    ///     self.egl_context.destroy(self.egl_display) catch {};
     ///
-    /// Unlike [`Self::init_offscreen`] it does NOT stand up an `OffscreenContext`,
-    /// does NOT load GL (the windowing host already did via
-    /// `sys::prepare_context_windowed`), and does NOT set a viewport (GDK sets it
-    /// on the GLArea `resize`/`render`). The caller MUST have made a GL context
-    /// current and run `prepare_context_windowed` before any GL-touching method
-    /// (`init_shaders`/`init_target`/`present_to_default`) is reached.
-    pub fn init(blending: AlphaBlending) -> OpenGL {
-        OpenGL {
-            blending,
-            last_target: None,
-            // GDK owns the context; the renderer destroys nothing of it on drop —
-            // this is the fix for the GL-ATTACH teardown double-free.
-            context: None,
-            // Unused on the windowed path (`surface_size` reads GL_VIEWPORT while
-            // `context` is `None`); zeroed for parity with the offscreen stub.
-            offscreen_size: SurfaceSize {
-                width: 0,
-                height: 0,
-            },
-        }
-    }
-
-    /// GL-ATTACH: whether this `OpenGL` OWNS its GL context (the offscreen golden
-    /// path, [`Self::init_offscreen`]) or borrows the currently-current one (the
-    /// windowed path, [`Self::init`], where GDK owns it). The renderer's frame
-    /// completion uses this to decide whether to `present` to the default
-    /// framebuffer (windowed only — offscreen has no complete FBO 0), and it is the
-    /// same discriminant `surface_size` already switches on.
-    pub fn owns_context(&self) -> bool {
-        self.context.is_some()
-    }
-
-    /// The owned EGL display + context (the offscreen path), which the DMA-BUF
-    /// export takes where the reference takes `self.egl_display`/
-    /// `self.egl_context` (`OpenGL.zig:306`). `None` on the windowed path.
-    /// RUSTTY-ONLY accessor until stage S2 moves the pair into this struct.
-    pub fn offscreen_context(&self) -> Option<&OffscreenContext> {
-        self.context.as_ref()
-    }
+    ///     // Do not destroy the EGL display here as
+    ///     // it is shared across the entire process.
+    ///     // It will get automatically torn down by the OS.
+    ///     self.* = undefined;
+    /// }
+    /// ```
+    ///
+    /// Consuming: `OffscreenContext`'s `Drop` is that body (release, destroy, no
+    /// terminate).
+    pub fn deinit(self) {}
 
     /// Callback called by renderer.Thread when it begins. Called on the render
     /// thread. The EGL context was created at `init` time on the main thread;
     /// here we (re)bind it to this thread and load the thread-local glad
-    /// function pointers for it.
+    /// function pointers so all subsequent GL work on this thread is valid.
     ///
-    /// PORTS: `OpenGL.zig:218-227` (`2f0b65346`), for the OWNED context (P7-W7
-    /// T1, DECISIONS B9).
+    /// PORTS: `OpenGL.zig:218-227`.
     ///
     /// ```zig
     /// pub fn threadEnter(self: *OpenGL, surface: *apprt.Surface) !void {
@@ -304,18 +318,10 @@ impl OpenGL {
     ///     try prepareContext(&gl.egl.getProcAddress);
     /// }
     /// ```
-    ///
-    /// STAGE S1: nothing calls this yet. The live GTK path still draws on the
-    /// app thread through GDK's context and keeps the pin's empty `threadEnter`
-    /// arms (`generic::linux_impl::thread_enter`); stage S2 wires this in. On
-    /// the windowed path (`context` is `None`) it is that same no-op.
     pub fn thread_enter(&self) -> Result<(), Error> {
-        let Some(ctx) = &self.context else {
-            return Ok(());
-        };
-        ctx.make_current()?;
+        self.egl.make_current()?;
         // Load our function pointers for this thread's threadlocal.
-        sys::load_gl(ctx)?;
+        sys::load_gl(&self.egl)?;
         Ok(())
     }
 
@@ -323,8 +329,7 @@ impl OpenGL {
     /// thread; unbinds the context from this thread so it can be destroyed on
     /// the main thread.
     ///
-    /// PORTS: `OpenGL.zig:229-235` (`2f0b65346`), for the OWNED context; see
-    /// [`Self::thread_enter`] for the S1 scope.
+    /// PORTS: `OpenGL.zig:229-235`.
     ///
     /// ```zig
     /// pub fn threadExit(self: *OpenGL) void {
@@ -333,106 +338,85 @@ impl OpenGL {
     /// }
     /// ```
     pub fn thread_exit(&self) {
-        let Some(ctx) = &self.context else {
-            return;
-        };
-        ctx.release_current();
+        self.egl.release_current();
         glad::unload();
     }
 
-    /// PORTS: `OpenGL.zig:237-250` — `displayRealized`.
+    /// Get the current size of the runtime surface.
+    ///
+    /// PORTS: `OpenGL.zig:237-246`.
     ///
     /// ```zig
-    /// pub fn displayRealized(self: *const OpenGL) void {
+    /// pub fn surfaceSize(self: *const OpenGL) !struct { width: u32, height: u32 } {
     ///     _ = self;
-    ///
-    ///     switch (apprt.runtime) {
-    ///         apprt.gtk => prepareContext(null) catch |err| {
-    ///             log.warn(
-    ///                 "Error preparing GL context in displayRealized, err={}",
-    ///                 .{err},
-    ///             );
-    ///         },
-    ///
-    ///         else => @compileError("only GTK should be calling displayRealized"),
-    ///     }
+    ///     var viewport: [4]gl.c.GLint = undefined;
+    ///     gl.glad.context.GetIntegerv.?(gl.c.GL_VIEWPORT, &viewport);
+    ///     return .{
+    ///         .width = @intCast(viewport[2]),
+    ///         .height = @intCast(viewport[3]),
+    ///     };
     /// }
     /// ```
     ///
-    /// **The return type is `void` and that is load-bearing.** A failed
-    /// `prepareContext` is WARNED AND SWALLOWED here; the generic renderer's
-    /// `displayRealized` (`generic.zig:934-961`) goes on to rebuild the shaders and
-    /// the swap chain regardless, and only THOSE `try`s can fail the re-realize.
-    /// The port used to return `Err(Error::GlFailed)` straight out of
-    /// `generic/linux_impl.rs::display_realized` on a prep failure, which aborted the
-    /// rebuild the reference performs — parity rows `S113-F1` (this warn) and
-    /// `S115-F2` (the aborted rebuild). Both are fixed by this method existing and
-    /// returning `()`.
-    ///
-    /// RUSTTY-ONLY GUARD (`owns_context`): the reference has exactly one GL context
-    /// model — GDK owns it — so its GTK arm always reloads. The port additionally has
-    /// the OFFSCREEN model (`init_offscreen`), whose owned `OffscreenContext` is
-    /// prepared once and is NEVER torn down by `display_unrealized` (which frees only
-    /// the swap chain + shaders, `generic.zig:982-983`), so it stays current across an
-    /// unrealize/realize cycle and must not be re-loaded. On the WINDOWED path a
-    /// re-realize CAN hand us a fresh GDK context whose entry points must be re-bound,
-    /// which is what the reference's reload is for.
-    pub fn display_realized(&self) {
-        // The offscreen context never needs the reload — see the note above. This
-        // guard is NOT the reference's; the reference has no offscreen path.
-        if self.owns_context() {
-            return;
-        }
-
-        // apprt.gtk => prepareContext(null) catch |err| { ... }
-        if let Err(err) = prepare_context_for_display_realized() {
-            // log.warn(
-            //     "Error preparing GL context in displayRealized, err={}",
-            //     .{err},
-            // );
-            log::warn!(
-                target: LOG_SCOPE,
-                "Error preparing GL context in displayRealized, err={err:?}"
-            );
-        }
+    /// The viewport is the one [`Self::set_viewport`] last set (`setScreenSize`);
+    /// a surfaceless context starts with a 0x0 viewport, so nothing draws before
+    /// the first resize.
+    pub fn surface_size(&self) -> Result<SurfaceSize, Error> {
+        let mut viewport: [gl::types::GLint; 4] = [0; 4];
+        // SAFETY: `GetIntegerv(GL_VIEWPORT, ...)` writes 4 GLints; the array is
+        // exactly 4 wide. Core GL 1.0 — force-unwrapped by the reference (`.?`);
+        // `glad::context` panics on an unloaded table, matching that
+        // force-unwrap on a thread that never entered.
+        glad::context(|gl| unsafe { gl.GetIntegerv(gl::VIEWPORT, viewport.as_mut_ptr()) });
+        Ok(SurfaceSize {
+            // @intCast → `as u32` (viewport width/height are non-negative).
+            width: viewport[2] as u32,
+            height: viewport[3] as u32,
+        })
     }
 
-    /// PORTS: `OpenGL.zig:58-60`.
+    /// Set the GL viewport to cover the given size in device pixels.
+    ///
+    /// This used to be automatically called by the GtkGLArea upon resizing,
+    /// but now we need to do this manually.
+    ///
+    /// PORTS: `OpenGL.zig:248-257`.
     ///
     /// ```zig
-    /// pub fn deinit(self: *OpenGL) void {
-    ///     self.* = undefined;
+    /// pub fn setViewport(self: *const OpenGL, width: u32, height: u32) void {
+    ///     _ = self;
+    ///     gl.viewport(0, 0, @intCast(width), @intCast(height)) catch |err| {
+    ///         log.warn("failed to set OpenGL viewport err={}", .{err});
+    ///     };
     /// }
     /// ```
     ///
-    /// The reference merely invalidates `self` — the GL context is GDK's, not
-    /// owned. In the RUSTTY offscreen path the `OffscreenContext` IS owned, so
-    /// consuming `self` here drops it, which destroys the EGL context but never
-    /// terminates the display (`OffscreenContext::drop`, DECISIONS B10). Consuming (`self`), mirroring the reference
-    /// taking `*OpenGL` and leaving it `undefined`.
-    pub fn deinit(self) {
-        // `self` drops here: the owned `context` (offscreen path) destroys its
-        // EGL context; `last_target`, if any, drops without releasing GL objects
-        // (`Target` has a manual `deinit`, matching the reference's manual model —
-        // the caller deinits targets explicitly, exactly as ghostty does).
+    /// PORT NOTE (R7): `@intCast` of a `u32` to `GLsizei` traps above
+    /// `i32::MAX`; `i32::try_from(..).expect(..)` is the same assert.
+    pub fn set_viewport(&self, width: u32, height: u32) {
+        let width = gl::types::GLsizei::try_from(width).expect("viewport width exceeds GLsizei");
+        let height = gl::types::GLsizei::try_from(height).expect("viewport height exceeds GLsizei");
+        if let Err(err) = draw::viewport(0, 0, width, height) {
+            log::warn!(target: LOG_SCOPE, "failed to set OpenGL viewport err={err:?}");
+        }
     }
 
     /// Actions taken before doing anything in `drawFrame`.
     ///
     /// Right now there's nothing we need to do for OpenGL (GL has no per-frame
     /// autorelease-pool equivalent — contrast Metal's pool push).
-    // pub fn drawFrameStart(self: *OpenGL) void { _ = self; }  (OpenGL.zig:255-257)
+    // pub fn drawFrameStart(self: *OpenGL) void { _ = self; }  (OpenGL.zig:259-263)
     pub fn draw_frame_start(&mut self) {}
 
     /// Actions taken after `drawFrame` is done.
     ///
     /// Right now there's nothing we need to do for OpenGL.
-    // pub fn drawFrameEnd(self: *OpenGL) void { _ = self; }    (OpenGL.zig:262-264)
+    // pub fn drawFrameEnd(self: *OpenGL) void { _ = self; }    (OpenGL.zig:265-269)
     pub fn draw_frame_end(&mut self) {}
 
     /// Initialize our shader set.
     // pub fn initShaders(self, alloc, custom_shaders: []const [:0]const u8) !shaders.Shaders
-    //   (OpenGL.zig:266-276)
+    //   (OpenGL.zig:271-283)
     //
     // PORT NOTE: the reference `alloc` param is ELIDED — `Shaders::init`
     // (`opengl/shaders.rs`) does not thread an allocator (Vec-managed), matching
@@ -445,43 +429,9 @@ impl OpenGL {
         Shaders::init(custom_shaders)
     }
 
-    /// Get the current size of the runtime surface.
-    // pub fn surfaceSize(self: *const OpenGL) !struct { width: u32, height: u32 }
-    //   (OpenGL.zig:278-287)
-    //
-    // OFFSCREEN stub: the reference reads `GL_VIEWPORT` (which reflects the live
-    // windowing surface). Offscreen there is no viewport bound to a real surface,
-    // so while a `context` is owned we return the fixed `offscreen_size` set at
-    // construction. The real `GL_VIEWPORT` body is ported too (the `None` arm), for
-    // when L5 wires a live viewport; the offscreen ctor path never reaches it.
-    // Verbatim Zig body (OpenGL.zig:280-286):
-    //     var viewport: [4]gl.c.GLint = undefined;
-    //     gl.glad.context.GetIntegerv.?(gl.c.GL_VIEWPORT, &viewport);
-    //     return .{ .width = @intCast(viewport[2]), .height = @intCast(viewport[3]) };
-    pub fn surface_size(&self) -> Result<SurfaceSize, Error> {
-        match &self.context {
-            // Offscreen: no real viewport; return the construction-time size.
-            Some(_) => Ok(self.offscreen_size),
-            // Windowed (L5): query the live GL viewport (real body).
-            None => {
-                let mut viewport: [gl::types::GLint; 4] = [0; 4];
-                // SAFETY: `GetIntegerv(GL_VIEWPORT, ...)` writes 4 GLints; the array
-                // is exactly 4 wide. Core GL 1.0 — force-unwrapped by the reference
-                // (`.?`); the `gl` crate panics on an unloaded slot, matching that
-                // force-unwrap on a context that has none (unreachable here).
-                glad::context(|gl| unsafe { gl.GetIntegerv(gl::VIEWPORT, viewport.as_mut_ptr()) });
-                Ok(SurfaceSize {
-                    // @intCast → `as u32` (viewport width/height are non-negative).
-                    width: viewport[2] as u32,
-                    height: viewport[3] as u32,
-                })
-            }
-        }
-    }
-
     /// Initialize a new render target which can be presented by this API.
     //
-    // PORTS: `OpenGL.zig:286-292` (P7-W7 T1).
+    // PORTS: `OpenGL.zig:285-292` (P7-W7 T1).
     //
     // pub fn initTarget(self: *const OpenGL, width: usize, height: usize) !Target {
     //     _ = self;
@@ -511,214 +461,69 @@ impl OpenGL {
         })
     }
 
-    /// Present the provided target.
-    // pub fn present(self: *OpenGL, target: Target) !void  (OpenGL.zig:298-331)
-    //
-    // GL-ATTACH deferred item: ported VERBATIM but the offscreen milestone never
-    // calls it (the golden reads back via `Target::read_rgba`). It blits the
-    // target's FBO into the default framebuffer — which only exists under a live
-    // windowing host (L5). Consuming `target` by value (Zig `target: Target` is a
-    // value copy; the Rust `Target` is move-only with a manual `deinit`, so the
-    // faithful spelling takes ownership and stores it in `last_target`).
-    //
-    // # Errors
-    // [`Error::Gl`] if the `disable`/`bind`/re-`enable` GL calls fail.
-    pub fn present(&mut self, target: Target) -> Result<(), Error> {
-        // In order to present a target we blit it to the default framebuffer.
-
-        // We disable GL_FRAMEBUFFER_SRGB while doing this blit, otherwise the
-        // values may be linearized as they're copied, but even though the draw
-        // framebuffer has a linear internal format, the values in it should be
-        // sRGB, not linear!
-        draw::disable(gl::FRAMEBUFFER_SRGB)?;
-
-        // The reference `defer`s re-enabling GL_FRAMEBUFFER_SRGB so it runs on
-        // EVERY exit path (including the blit-bind error path). We reproduce the
-        // `defer` by capturing the blit result, ALWAYS re-enabling, then
-        // propagating (OpenGL.zig:307-309: the defer logs on its own failure and
-        // swallows it, so we mirror that — a re-enable failure does not mask the
-        // blit result).
-        let blit = (|| -> Result<(), errors::Error> {
-            // Bind the target for reading.
-            let fbobind = target.framebuffer.bind(framebuffer::Target::READ)?;
-            // Blit (OpenGL.zig:316-327).
-            // SAFETY: a valid READ framebuffer is bound (`fbobind`); the src/dst
-            // rects are the target's own extent; core GL 3.0. Widths/heights fit
-            // GLint (target dims are render-sized).
-            glad::context(|gl| unsafe {
-                gl.BlitFramebuffer(
-                    0,
-                    0,
-                    target.width as gl::types::GLint,
-                    target.height as gl::types::GLint,
-                    0,
-                    0,
-                    target.width as gl::types::GLint,
-                    target.height as gl::types::GLint,
-                    gl::COLOR_BUFFER_BIT,
-                    gl::NEAREST,
-                );
-            });
-            fbobind.unbind();
-            Ok(())
-        })();
-
-        // defer gl.enable(gl.c.GL_FRAMEBUFFER_SRGB) catch |err| {
-        //     log.err("Error re-enabling GL_FRAMEBUFFER_SRGB, err={}", .{err});
-        // };  (OpenGL.zig:307-309)
-        //
-        // RESTORED (task-14c-3, S113-F4). The reference LOGS and swallows — the
-        // `defer` has no way to fail the function — so the payload must be bound
-        // rather than dropped with `.is_err()`, which is what made this arm dead.
-        if let Err(err) = draw::enable(gl::FRAMEBUFFER_SRGB) {
-            log::error!(
-                target: LOG_SCOPE,
-                "Error re-enabling GL_FRAMEBUFFER_SRGB, err={err:?}"
-            );
-        }
-
-        blit?;
-
-        // Keep track of this target in case we need to repeat it.
-        self.last_target = Some(target);
-        Ok(())
-    }
-
-    /// Present the last presented target again.
-    // pub fn presentLastTarget(self: *OpenGL) !void {
-    //     if (self.last_target) |target| try self.present(target);
-    // }  (OpenGL.zig:333-336)
-    //
-    // GL-ATTACH deferred item (never called by the offscreen milestone). The Rust
-    // `Target` is move-only, so we `take` the stored target and re-present it
-    // (which stores it back). Behaviour-equivalent to the reference re-presenting
-    // the value-copied `last_target`.
-    pub fn present_last_target(&mut self) -> Result<(), Error> {
-        if let Some(target) = self.last_target.take() {
-            self.present(target)
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Called when the renderer released its GPU resources; the last
-    /// presented target is deinited with them so we must drop our copy.
-    //
-    // pub fn gpuResourcesReleased(self: *OpenGL) void {
-    //     self.last_target = null;
-    // }
-    // (`c4e16970a`. The Rust `Target` has no `Drop` — GL objects are freed by
-    // the swap-chain teardown that precedes this call — so nulling the Option
-    // drops only the handle copy, exactly like the Zig assignment.)
-    pub fn gpu_resources_released(&mut self) {
-        self.last_target = None;
-    }
-
-    /// GL-ATTACH — the WINDOWED present: blit `target`'s FBO into the CURRENTLY
-    /// BOUND draw framebuffer, which under a live GTK GLArea IS the GLArea's
-    /// framebuffer (GDK binds it — a non-zero FBO — before emitting `render`). This
-    /// IS the reference `present` body (`OpenGL.zig:298-331`): it binds `target` as
-    /// the READ framebuffer and `glBlitFramebuffer`s into the current DRAW binding,
-    /// which the reference calls "the default framebuffer" (from the renderer's
-    /// view — whatever the windowing host bound). It NEVER binds a draw framebuffer
-    /// itself, so the pixels land wherever the host directed them — that is what
-    /// makes the terminal VISIBLE on the window. It differs from [`Self::present`]
-    /// only in taking `target` by SHARED REFERENCE rather than by value: on the
-    /// windowed path the frame's `Target` is still owned by the swap chain (the
-    /// renderer's completion trampoline holds a raw `*mut Target` into it), so there
-    /// is nothing to move into `last_target` — the blit only READS the target's FBO.
-    /// `Framebuffer` is a `Copy` GL handle, so binding it for read needs no ownership.
+    /// Export a rendered target. Caller takes ownership
+    /// of the frame and is responsible for freeing it.
     ///
-    /// # Errors
-    /// [`Error::Gl`] if the `disable`/`bind`/re-`enable` GL calls fail (mirrors the
-    /// reference `present`'s `try` sites).
-    pub fn present_to_default(&self, target: &Target) -> Result<(), Error> {
-        // We disable GL_FRAMEBUFFER_SRGB while doing this blit (see `present`).
-        draw::disable(gl::FRAMEBUFFER_SRGB)?;
-
-        // Mirror the reference `defer`: always re-enable GL_FRAMEBUFFER_SRGB, even
-        // on the blit-bind error path, and never let a re-enable failure mask the
-        // blit result (OpenGL.zig:307-309).
-        let blit = (|| -> Result<(), errors::Error> {
-            // Bind the target for reading; `bind(.read)` SAVES the current
-            // GL_FRAMEBUFFER_BINDING (the host's draw framebuffer) and restores it on
-            // `unbind`, so the blit's DRAW target stays the host framebuffer.
-            let fbobind = target.framebuffer.bind(framebuffer::Target::READ)?;
-            // SAFETY: a valid READ framebuffer is bound (`fbobind`); the default
-            // (draw) framebuffer is FBO 0; core GL 3.0. Dims fit GLint.
-            glad::context(|gl| unsafe {
-                gl.BlitFramebuffer(
-                    0,
-                    0,
-                    target.width as gl::types::GLint,
-                    target.height as gl::types::GLint,
-                    0,
-                    0,
-                    target.width as gl::types::GLint,
-                    target.height as gl::types::GLint,
-                    gl::COLOR_BUFFER_BIT,
-                    gl::NEAREST,
-                );
-            });
-            fbobind.unbind();
-            Ok(())
-        })();
-
-        // defer gl.enable(gl.c.GL_FRAMEBUFFER_SRGB) catch |err| {
-        //     log.err("Error re-enabling GL_FRAMEBUFFER_SRGB, err={}", .{err});
-        // };  (OpenGL.zig:307-309)
-        //
-        // RESTORED (task-14c-3, S113-F4) — the WINDOWED twin of the same reference
-        // `defer`. The port splits the one reference `present` into `present` (by
-        // value, offscreen) and `present_to_default` (by reference, windowed), so the
-        // single oracle site has TWO live emissions here; the ledger row's rustty
-        // column names both.
-        if let Err(err) = draw::enable(gl::FRAMEBUFFER_SRGB) {
-            log::error!(
+    /// This runs on the render thread.
+    ///
+    /// PORTS: `OpenGL.zig:294-320`.
+    ///
+    /// ```zig
+    /// pub fn present(
+    ///     self: *OpenGL,
+    ///     target: Target,
+    ///     presentation_health: rendererpkg.Health,
+    /// ) !ExportedFrame {
+    ///     // We only export DMABUFs when the apprt can present them.
+    ///     // Otherwise, use CPU buffers.
+    ///     if (presentation_health == .healthy) {
+    ///         if (target.exportDmabuf(self.egl_display, self.egl_context)) |dmabuf| {
+    ///             return .{ .dmabuf = dmabuf };
+    ///         } else |_| {
+    ///             log.warn("failed to export DMABUF, falling back to CPU presentation", .{});
+    ///         }
+    ///     }
+    ///
+    ///     return .{ .memory = .{
+    ///         .width = @intCast(target.width),
+    ///         .height = @intCast(target.height),
+    ///         .pixels = try target.readPixelsAlloc(self.alloc),
+    ///         .alloc = self.alloc,
+    ///     } };
+    /// }
+    /// ```
+    ///
+    /// PORT NOTE: `target: Target` is a by-value copy of the frame's target in
+    /// Zig; the Rust `Target` is move-only and still owned by the swap chain, so
+    /// the port borrows it. `&self`: nothing here writes the api.
+    pub fn present(
+        &self,
+        target: &Target,
+        presentation_health: crate::Health,
+    ) -> Result<ExportedFrame, Error> {
+        // We only export DMABUFs when the apprt can present them.
+        // Otherwise, use CPU buffers.
+        if presentation_health == crate::Health::Healthy {
+            #[cfg(unix)]
+            {
+                if let Ok(dmabuf) = target.export_dmabuf(&self.egl) {
+                    return Ok(ExportedFrame::Dmabuf(dmabuf));
+                }
+            }
+            // PORT NOTE (Windows): no DMA-BUF exists there, so the export is the
+            // reference's failing arm on every frame.
+            log::warn!(
                 target: LOG_SCOPE,
-                "Error re-enabling GL_FRAMEBUFFER_SRGB, err={err:?}"
+                "failed to export DMABUF, falling back to CPU presentation"
             );
         }
 
-        blit?;
-        Ok(())
-    }
-
-    /// GL-ATTACH proof helper (RUSTTY-ONLY, no ghostty analogue): read the CURRENTLY
-    /// BOUND draw framebuffer — the WINDOWING HOST's framebuffer — back into a tight
-    /// `width*height*4` RGBA buffer. Under a GTK GLArea this is the GLArea's own
-    /// (NON-zero) framebuffer, which GDK binds before emitting `render` (or which
-    /// `gtk_gl_area_attach_buffers` binds), and which [`Self::present_to_default`]
-    /// blits the frame into. The visible-render KAT calls this to assert the terminal
-    /// frame landed in the WINDOW's framebuffer (NOT the renderer's offscreen target
-    /// FBO). It reads the current `GL_FRAMEBUFFER_BINDING` (the draw alias), NOT the
-    /// literal FBO 0, precisely because GtkGLArea's default framebuffer is a non-zero
-    /// FBO. MUST be called with a GL context current and the host framebuffer bound.
-    pub fn read_bound_framebuffer_rgba(&self, width: usize, height: usize) -> Vec<u8> {
-        let mut out = vec![0u8; width * height * 4];
-        let w = width as gl::types::GLsizei;
-        let h = height as gl::types::GLsizei;
-
-        // Read whatever framebuffer is currently bound as the draw target (the host's
-        // GLArea framebuffer), NOT FBO 0 — GtkGLArea's default framebuffer is a
-        // non-zero FBO.
-        // SAFETY: `GL_FRAMEBUFFER_BINDING` is single-valued; the read is `w*h*4` bytes
-        // at the default pack alignment of 4 (row stride `w*4` is a multiple of 4).
-        glad::context(|gl| unsafe {
-            let mut bound: gl::types::GLint = 0;
-            gl.GetIntegerv(gl::FRAMEBUFFER_BINDING, &mut bound);
-            gl.BindFramebuffer(gl::READ_FRAMEBUFFER, bound as gl::types::GLuint);
-            gl.ReadPixels(
-                0,
-                0,
-                w,
-                h,
-                gl::RGBA,
-                gl::UNSIGNED_BYTE,
-                out.as_mut_ptr().cast::<std::ffi::c_void>(),
-            );
-        });
-        out
+        // PORT NOTE (R7): `@intCast(target.width)` traps above `u32::MAX`.
+        Ok(ExportedFrame::Memory(Memory {
+            width: u32::try_from(target.width).expect("Target width exceeds u32"),
+            height: u32::try_from(target.height).expect("Target height exceeds u32"),
+            pixels: target.read_pixels_alloc()?,
+        }))
     }
 
     /// Returns the options to use when constructing buffers.
@@ -876,69 +681,6 @@ impl OpenGL {
     }
 }
 
-/// TEST-ONLY fault injection for [`OpenGL::display_realized`]'s
-/// `prepareContext(null)` arm.
-///
-/// The warn-and-continue behaviour the reference has (`OpenGL.zig:241-246` →
-/// `generic.zig:934-961`) is only observable when the context prep FAILS while the
-/// rest of the rebuild can still succeed, and no test can produce that state
-/// honestly: `sys::prepare_context_windowed` fails only when libEGL is missing, no
-/// context is current, or the driver is under GL 4.3 — and in every one of those
-/// states the shader/swap-chain rebuild that must be proven to still RUN would fail
-/// too, so a passing test could not distinguish "continued and rebuilt" from
-/// "aborted". Flipping this instead lets the test run against a live, healthy
-/// offscreen context while the prep arm reports failure, which isolates exactly the
-/// control flow the two parity rows are about.
-///
-/// `#[cfg(test)]` — it does not exist in the production library. Callers MUST hold
-/// `gl::test_support::gl_lock()` while it is set, because it is process-global.
-#[cfg(test)]
-pub(crate) static FORCE_DISPLAY_REALIZED_PREP_FAILURE: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-/// RAII setter for [`FORCE_DISPLAY_REALIZED_PREP_FAILURE`]: clears the flag on drop
-/// so a panicking test cannot leave the whole test binary's
-/// [`OpenGL::display_realized`] permanently faulted.
-#[cfg(test)]
-pub(crate) struct ForcedPrepFailure;
-
-#[cfg(test)]
-impl ForcedPrepFailure {
-    pub(crate) fn set() -> Self {
-        FORCE_DISPLAY_REALIZED_PREP_FAILURE.store(true, std::sync::atomic::Ordering::SeqCst);
-        Self
-    }
-}
-
-#[cfg(test)]
-impl Drop for ForcedPrepFailure {
-    fn drop(&mut self) {
-        FORCE_DISPLAY_REALIZED_PREP_FAILURE.store(false, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
-/// The message [`ForcedPrepFailure`] makes [`OpenGL::display_realized`] warn about,
-/// shared by the two tests that assert on it (here and in `generic::linux_impl`) so
-/// the two cannot drift apart.
-#[cfg(test)]
-pub(crate) const FORCED_PREP_FAILURE_WARNING: &str = concat!(
-    "Error preparing GL context in displayRealized, ",
-    "err=EglUnavailable(\"forced by FORCE_DISPLAY_REALIZED_PREP_FAILURE (test)\")"
-);
-
-/// The `prepareContext(null)` call of [`OpenGL::display_realized`], behind the
-/// test-only fault-injection hook above. In a non-test build this is exactly
-/// `sys::prepare_context_windowed()`.
-fn prepare_context_for_display_realized() -> Result<(u32, u32), sys::Error> {
-    #[cfg(test)]
-    if FORCE_DISPLAY_REALIZED_PREP_FAILURE.load(std::sync::atomic::Ordering::SeqCst) {
-        return Err(sys::Error::EglUnavailable(
-            "forced by FORCE_DISPLAY_REALIZED_PREP_FAILURE (test)".to_string(),
-        ));
-    }
-    sys::prepare_context_windowed()
-}
-
 /// Pixel format for image texture options.
 // pub const ImageTextureFormat = enum { gray, rgba, bgra };  (OpenGL.zig:380-395)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -964,13 +706,12 @@ impl ImageTextureFormat {
 
 // PORT NOTE (rustty-only smoke test, NOT a ghostty parity test): there is no
 // reference `test{}` over `OpenGL.zig`. This is the OpenGL twin of
-// `metal_impl`'s `metal_offscreen_construct_and_begin_frame`: it drives the
-// offscreen `OpenGL` (not the raw leaves) through `init_offscreen`
-// (OffscreenContext + prepare_context) → field asserts → `init_shaders` (all five
-// pipelines) → `init_target` (an offscreen renderbuffer FBO) → clean teardown. It
-// asserts no panic + the expected field/surface-size values. Skips cleanly on
-// hosts with no OpenGL 4.3 core context (the Task-1 OPEN RISK path), mirroring the
-// Metal "no device → skip" precedent.
+// `metal_impl`'s `metal_offscreen_construct_and_begin_frame`: it drives `OpenGL`
+// (not the raw leaves) through `init` + `thread_enter` + `set_viewport`
+// (`init_offscreen`) → field asserts → `init_shaders` (all five pipelines) →
+// `init_target` → clean teardown. Skips cleanly on hosts with no OpenGL 4.3 core
+// context (the Task-1 OPEN RISK path), mirroring the Metal "no device → skip"
+// precedent.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -979,11 +720,9 @@ mod tests {
     #[test]
     fn opengl_init_offscreen_then_deinit_round_trips() {
         // Hold the process-wide GL lock for the whole context lifetime: this test
-        // stands up its own `OffscreenContext` (via `init_offscreen`), which the
-        // shared lock serializes against every other GL test
-        // (`test_support::gl_lock` docs). `_guard` is declared FIRST so it drops
-        // LAST — after `ogl.deinit()` destroys the context — matching
-        // `GlTestContext`'s field-order contract.
+        // stands up its own context, which the shared lock serializes against
+        // every other GL test (`test_support::gl_lock` docs). `_guard` is declared
+        // FIRST so it drops LAST — after `ogl.deinit()` destroys the context.
         let _guard = test_support::gl_lock();
 
         let ogl = match OpenGL::init_offscreen(AlphaBlending::Native, 256, 256) {
@@ -999,12 +738,10 @@ mod tests {
             }
             // Everything else is the host being UNABLE to stand up a 4.3-core
             // context — absent EGL, no surfaceless platform, no desktop-GL config,
-            // an `EGL_BAD_MATCH` refusing the 4.3-core request (the default virgl
-            // driver on this host, per the plan's EMPIRICAL HOST FINDING), or a
-            // reported version under the floor. All are a CLEAN SKIP, mirroring
-            // `test_support::offscreen_gl` (every context-creation error skips).
-            // W8-03 strict mode: under RUSTTY_REQUIRE_GL=1 the clean skip
-            // becomes a hard failure (see test_support docs).
+            // an `EGL_BAD_MATCH` refusing the 4.3-core request, or a reported
+            // version under the floor. All are a CLEAN SKIP, mirroring
+            // `test_support::offscreen_gl`. W8-03 strict mode: under
+            // RUSTTY_REQUIRE_GL=1 the clean skip becomes a hard failure.
             Err(e) => {
                 test_support::require_gl_or_skip(
                     "opengl_init_offscreen_then_deinit_round_trips",
@@ -1020,10 +757,9 @@ mod tests {
             }
         };
 
-        // Fields (OpenGL.zig:40-46 analogues).
+        // Fields (OpenGL.zig:40-47 analogues).
         assert_eq!(ogl.blending, AlphaBlending::Native);
-        assert!(ogl.last_target.is_none());
-        // surface_size returns the offscreen construction size (the OFFSCREEN stub).
+        // surface_size reads the GL viewport `set_viewport` set.
         assert_eq!(
             ogl.surface_size().unwrap(),
             SurfaceSize {
@@ -1044,175 +780,141 @@ mod tests {
 
         // Clean teardown, in order: leaf GL objects first (while the context is
         // still current), then the context (via `deinit`, which drops it).
-        // `_guard` releases after.
         target.deinit();
         shaders.deinit();
+        ogl.thread_exit();
         ogl.deinit();
     }
-    /// PARITY (S113-F1) — `displayRealized`'s context-prep failure must WARN and
-    /// RETURN, never abort. The reference `OpenGL.displayRealized` returns `void`
-    /// (`OpenGL.zig:237`) and its GTK arm `catch`es `prepareContext`'s error into a
-    /// `log.warn` (`OpenGL.zig:241-246`); the port used to turn the same failure into
-    /// an `Err(Error::GlFailed)` that aborted the caller's rebuild.
-    ///
-    /// Asserts BOTH halves: the method returns (no panic, no error — its signature is
-    /// `()`), and it emits EXACTLY ONE record, whose full `(level, target, message)`
-    /// is compared as a vector so an extra record, a wrong scope, or a dropped `err=`
-    /// payload all fail. `{err:?}` is the crate-wide convention for the reference's
-    /// `{}`-on-an-error (`generic.rs`, `metal/*`), so the payload renders as the Rust
-    /// error's `Debug`.
-    ///
-    /// NO GL CONTEXT NEEDED, deliberately — the prep arm is faulted by
-    /// [`ForcedPrepFailure`], so this test is real coverage on every host including
-    /// the macOS lane that cannot compile the rest of this module. It takes
-    /// `gl_lock` anyway because the fault flag is process-global.
+
+    /// `init` leaves the context current on NO thread (`defer
+    /// display.releaseCurrent()`, `OpenGL.zig:100-102`) and loads no GL table:
+    /// the render thread's `threadEnter` does both. A GL call on the creating
+    /// thread before `thread_enter` therefore has no table to go through.
     #[test]
-    fn display_realized_warns_and_continues_when_context_prep_fails() {
+    fn init_releases_the_context_and_loads_no_table() {
         let _guard = test_support::gl_lock();
-        let _forced = ForcedPrepFailure::set();
-
-        // The WINDOWED api (`OpenGL::init`) — `context: None`, so `owns_context()` is
-        // false and the reference's `prepareContext(null)` arm is reached.
-        let api = OpenGL::init(AlphaBlending::Native);
-        assert!(!api.owns_context());
-
-        let capture = crate::log_capture::start();
-        // Returns `()`. If this ever regains a `Result` the parity row reopens.
-        api.display_realized();
-        let records = capture.messages();
-        drop(capture);
-
-        assert_eq!(
-            records,
-            vec![(
-                log::Level::Warn,
-                LOG_SCOPE.to_string(),
-                FORCED_PREP_FAILURE_WARNING.to_string(),
-            )]
-        );
-    }
-
-    /// The other side of the same guard: on the OFFSCREEN path (`owns_context()`)
-    /// there is no reload to attempt, so `display_realized` must emit NOTHING. This
-    /// is the "do not put a diagnostic on a success path" check — an emission here
-    /// would fire on every offscreen re-realize. Asserts the empty vector.
-    ///
-    /// Needs no GL context either: `owns_context()` is decided by the `context`
-    /// field, and the fault flag is set to prove the early return happens BEFORE the
-    /// prep arm.
-    #[test]
-    fn display_realized_is_silent_on_the_offscreen_path() {
-        let _guard = test_support::gl_lock();
-        let _forced = ForcedPrepFailure::set();
-
-        // Construct the OWNED-context shape without standing up EGL: this test is
-        // about the `owns_context()` branch, not about GL. `init_offscreen` would
-        // need a live driver and would make the test skippable for no benefit.
-        let api = match OpenGL::init_offscreen(AlphaBlending::Native, 8, 8) {
-            Ok(o) => o,
+        glad::unload();
+        let api = match OpenGL::init(AlphaBlending::LinearCorrected) {
+            Ok(api) => api,
             Err(e) => {
                 test_support::require_gl_or_skip(
-                    "display_realized_is_silent_on_the_offscreen_path",
+                    "init_releases_the_context_and_loads_no_table",
                     &e,
                 );
-                eprintln!(
-                    "no headless OpenGL {}.{} core context ({e}); skipping \
-                     display_realized_is_silent_on_the_offscreen_path",
-                    sys::MIN_VERSION_MAJOR,
-                    sys::MIN_VERSION_MINOR,
-                );
+                eprintln!("no EGL ({e}); skipping init_releases_the_context_and_loads_no_table");
                 return;
             }
         };
-        assert!(api.owns_context());
-
-        let capture = crate::log_capture::start();
-        api.display_realized();
-        let records = capture.messages();
-        drop(capture);
-
-        assert_eq!(records, Vec::new());
+        assert!(!glad::is_loaded(), "init loads no GL table");
+        api.thread_enter().expect("thread_enter");
+        assert!(glad::is_loaded(), "thread_enter loads this thread's table");
+        // A surfaceless context starts with an empty viewport: nothing draws until
+        // the first `setScreenSize` → `setViewport`.
+        assert_eq!(
+            api.surface_size().unwrap(),
+            SurfaceSize {
+                width: 0,
+                height: 0
+            }
+        );
+        api.set_viewport(12, 7);
+        assert_eq!(
+            api.surface_size().unwrap(),
+            SurfaceSize {
+                width: 12,
+                height: 7
+            }
+        );
+        api.thread_exit();
+        assert!(!glad::is_loaded());
         api.deinit();
     }
 
-    /// PARITY (S113-F4) — `present`'s `defer gl.enable(GL_FRAMEBUFFER_SRGB) catch
-    /// |err| log.err(...)` (OpenGL.zig:307-309). The port had
-    /// `if draw::enable(...).is_err() { }` — payload discarded, arm dead.
-    ///
-    /// FIXTURE, and why it is honest rather than injected: `present_to_default`
-    /// blits into the CURRENTLY BOUND draw framebuffer. Under a SURFACELESS offscreen
-    /// EGL context that is FBO 0, which has no attachments and is therefore
-    /// INCOMPLETE, so `glBlitFramebuffer` raises GL_INVALID_FRAMEBUFFER_OPERATION and
-    /// leaves it pending — and the very next `draw::enable` collects it through
-    /// `errors::get_error`. That is the real failure arm, reached by real GL, with no
-    /// fault injection.
-    ///
-    /// Asserts the full record vector (exactly one, level/target/message), and that
-    /// the blit's own error still reaches the caller — the reference `defer` LOGS and
-    /// swallows, it must not mask the `present` result.
+    /// `present` with an UNHEALTHY presentation (the apprt could not import a
+    /// DMA-BUF) never tries the export and hands back the target's pixels in CPU
+    /// memory, tightly packed RGBA8 (`OpenGL.zig:303-319`).
     #[test]
-    fn present_logs_when_the_srgb_re_enable_fails() {
+    fn present_reads_back_to_memory_when_presentation_is_unhealthy() {
         let _guard = test_support::gl_lock();
-
-        let api = match OpenGL::init_offscreen(AlphaBlending::Native, 32, 32) {
-            Ok(o) => o,
-            Err(e) => {
-                test_support::require_gl_or_skip("present_logs_when_the_srgb_re_enable_fails", &e);
-                eprintln!(
-                    "no headless OpenGL {}.{} core context ({e}); skipping \
-                     present_logs_when_the_srgb_re_enable_fails",
-                    sys::MIN_VERSION_MAJOR,
-                    sys::MIN_VERSION_MINOR,
-                );
-                return;
-            }
+        let Some(api) = crate::opengl::target::tests::api(
+            "present_reads_back_to_memory_when_presentation_is_unhealthy",
+            AlphaBlending::LinearCorrected,
+        ) else {
+            return;
         };
-        let target = api.init_target(16, 16).expect("init_target");
+        let target = api.init_target(2, 1).expect("init_target");
+        crate::opengl::target::tests::clear_pattern(
+            &target,
+            [0.0, 1.0, 0.0, 1.0],
+            [0, 0, 1, 1],
+            [1.0, 0.0, 0.0, 1.0],
+        );
 
         let capture = crate::log_capture::start();
-        let res = api.present_to_default(&target);
+        let frame = api
+            .present(&target, crate::Health::Unhealthy)
+            .expect("present");
+        let records = capture.messages();
+        drop(capture);
+        assert_eq!(records, Vec::new(), "no export was attempted");
+
+        match frame {
+            ExportedFrame::Memory(m) => {
+                assert_eq!((m.width, m.height), (2, 1));
+                assert_eq!(m.pixels, [255, 0, 0, 255, 0, 255, 0, 255]);
+            }
+            #[cfg(unix)]
+            ExportedFrame::Dmabuf(_) => panic!("an unhealthy presentation exported a DMA-BUF"),
+        }
+        target.deinit();
+        api.thread_exit();
+        api.deinit();
+    }
+
+    /// `present` with a HEALTHY presentation exports a DMA-BUF when the display
+    /// can (`RUSTTY_REQUIRE_DMABUF` pivot), and otherwise warns and falls back to
+    /// the CPU readback (`OpenGL.zig:300-311`).
+    #[cfg(unix)]
+    #[test]
+    fn present_exports_a_dmabuf_when_presentation_is_healthy() {
+        const TEST: &str = "present_exports_a_dmabuf_when_presentation_is_healthy";
+        let _guard = test_support::gl_lock();
+        let Some(api) = crate::opengl::target::tests::api(TEST, AlphaBlending::LinearCorrected)
+        else {
+            return;
+        };
+        let target = api.init_target(8, 4).expect("init_target");
+        let capture = crate::log_capture::start();
+        let frame = api
+            .present(&target, crate::Health::Healthy)
+            .expect("present");
         let records = capture.messages();
         drop(capture);
 
+        if api.egl().has_dmabuf_export() {
+            match frame {
+                ExportedFrame::Dmabuf(d) => assert_eq!((d.width, d.height), (8, 4)),
+                ExportedFrame::Memory(_) => panic!("a healthy presentation fell back to memory"),
+            }
+            assert_eq!(records, Vec::new());
+        } else {
+            test_support::require_dmabuf_or_skip(
+                TEST,
+                &"the surfaceless EGL display has no EGL_MESA_image_dma_buf_export",
+            );
+            assert!(matches!(frame, ExportedFrame::Memory(_)));
+            assert_eq!(
+                records,
+                vec![(
+                    log::Level::Warn,
+                    LOG_SCOPE.to_string(),
+                    "failed to export DMABUF, falling back to CPU presentation".to_string(),
+                )]
+            );
+        }
         target.deinit();
+        api.thread_exit();
         api.deinit();
-
-        // TWO records, in order, and the FIRST one is a bonus proof: it is
-        // `glDebugMessageCallback`'s GL_DEBUG_SEVERITY_HIGH arm (OpenGL.zig:109),
-        // which `prepareContext` registered and which this stage routed through the
-        // `log` facade along with the rest of `pkg/opengl`'s logger. The driver
-        // reports the same blit failure through it, so the message tail is Mesa's
-        // wording, not ours — hence the split assertion below rather than one
-        // `assert_eq!` over a string we do not own. The SECOND is the S113-F4 site,
-        // asserted whole.
-        assert_eq!(records.len(), 2, "records: {records:?}");
-        assert_eq!(records[0].0, log::Level::Error);
-        assert_eq!(records[0].1, LOG_SCOPE);
-        assert!(
-            records[0].2.contains("GL_INVALID_FRAMEBUFFER_OPERATION"),
-            "expected the debug-callback report of the blit failure, got {:?}",
-            records[0].2
-        );
-        assert_eq!(
-            records[1],
-            (
-                log::Level::Error,
-                LOG_SCOPE.to_string(),
-                "Error re-enabling GL_FRAMEBUFFER_SRGB, err=InvalidFramebufferOperation"
-                    .to_string(),
-            )
-        );
-
-        // AND the present itself reports OK. That is not an oversight, it is what
-        // both the reference and the port do: the `glBlitFramebuffer` call is raw and
-        // UNCHECKED on both sides (OpenGL.zig:316-327 has no `try`), so the GL error
-        // it raised is not part of the blit's result — it is collected by the NEXT
-        // `errors.getError()`, which is the one inside the SRGB re-enable. The record
-        // above is therefore the ONLY report this failure ever gets, which is
-        // precisely why the dead arm mattered. (The first VM run asserted
-        // `res.is_err()` here and failed; that assertion was wrong about the port,
-        // not the port wrong about the reference.)
-        assert!(res.is_ok(), "unexpected present error: {res:?}");
     }
 
     /// M5 / UD354 fail-first test. With `alpha-blending = native` the shaders
@@ -1251,17 +953,17 @@ mod tests {
                 &pixels[..4]
             );
             target.deinit();
+            api.thread_exit();
             api.deinit();
         }
     }
 
     /// B9: the GL function table belongs to the thread that entered. The api is
-    /// built (and its context made current) on the test thread; `thread_exit`
-    /// releases the context and drops that thread's table; a second thread's
-    /// `thread_enter` makes the context current THERE and loads ITS table, and
-    /// renders through it; `thread_exit` drops it again. This is ghostty's
-    /// `threadEnter`/`threadExit` pair (`OpenGL.zig:222-235`) around a render
-    /// thread.
+    /// built and entered on the test thread; `thread_exit` releases the context
+    /// and drops that thread's table; a second thread's `thread_enter` makes the
+    /// context current THERE and loads ITS table, and renders through it;
+    /// `thread_exit` drops it again. This is ghostty's `threadEnter`/`threadExit`
+    /// pair (`OpenGL.zig:222-235`) around a render thread.
     #[test]
     fn thread_enter_and_exit_move_the_gl_table_to_the_render_thread() {
         let _guard = test_support::gl_lock();
@@ -1273,7 +975,7 @@ mod tests {
         };
         assert!(
             glad::is_loaded(),
-            "init_offscreen loads the creating thread's table"
+            "init_offscreen enters the creating thread"
         );
 
         api.thread_exit();

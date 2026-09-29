@@ -798,9 +798,7 @@ pub(crate) mod tests {
         let Some(api) = api(TEST, AlphaBlending::LinearCorrected) else {
             return;
         };
-        let ctx = api
-            .offscreen_context()
-            .expect("the offscreen api owns its context");
+        let ctx = api.egl();
         if !ctx.has_dmabuf_export() {
             let why = "the surfaceless EGL display has no EGL_MESA_image_dma_buf_export";
             test_support::require_dmabuf_or_skip(TEST, &why);
