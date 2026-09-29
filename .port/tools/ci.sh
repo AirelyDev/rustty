@@ -894,6 +894,16 @@ GATE_REGISTRY=(
   # cannot rot into a vacuous green.
   "G-PARITY-SELF|HARD|$PY $GATES/check_parity_closure.py --self-test"
   "G-PARITY|HARD|$PY $GATES/check_parity_closure.py"
+  # G-UDDOCS (P7-W0 T2, DECISIONS.md R2) — the UD <-> docs check, tracked as a
+  # standing gate instead of task S-6's one-shot script. Every UD entry
+  # (.port/parity-closure/UPSTREAM-DEFECTS.md) has exactly one `- upstream
+  # status:` line, and every fix-type UD is a row in docs/ghostty-bug-fixes.md
+  # (and vice versa) — except an entry Ghostty has already fixed upstream
+  # (`- upstream status: fixed upstream in ...`), which has no behavioural
+  # difference left to document and is exempt. HARD from day one: it is GREEN
+  # at 178 UDs, and R5 keeps a UD/docs drift from ever going unnoticed.
+  "G-UDDOCS-SELF|HARD|$PY $GATES/check_ud_docs.py --self-test"
+  "G-UDDOCS|HARD|$PY $GATES/check_ud_docs.py"
   # G-LOGFILE (task 14gate) — the SAME blind spot as G-CENSUS, but for
   # DIAGNOSTICS. G-PARITY counts ROWS, and every row cites a RANGE of reference
   # lines, so whatever falls outside every row's range is unaudited and no row
