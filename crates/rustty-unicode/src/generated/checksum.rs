@@ -41,7 +41,7 @@ mod tests {
         // grapheme_data::DATA: [u8; 8192]
         assert_eq!(
             fnv1a(FNV_OFFSET, &grapheme_data::DATA),
-            0x29e1968ee59165fd_u64,
+            0x3c5c3746da10ce7d_u64,
             "grapheme_data::DATA checksum drift — a table entry changed; if intentional regen, re-pin (G4-uni re-proves vs oracle)"
         );
     }
@@ -65,7 +65,7 @@ mod tests {
         let mut h = fnv_u16(FNV_OFFSET, &props_data::STAGE1);
         h = fnv_u16(h, &props_data::STAGE2);
         assert_eq!(
-            h, 0xda43b786be4947d_u64,
+            h, 0xf41cf4e8302848f_u64,
             "props_data STAGE1+STAGE2 checksum drift — re-pin only on intentional regen"
         );
     }

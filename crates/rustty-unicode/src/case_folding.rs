@@ -33,7 +33,7 @@ mod tests {
         assert_eq!(0x0073, mapping[1]);
     }
 
-    /// Spot checks against `CaseFolding-17.0.0.txt`: a C entry, a
+    /// Spot checks against `CaseFolding-18.0.0.txt`: a C entry, a
     /// three-code-point F entry, a code point whose only folding is S (so full
     /// folding leaves it alone), one whose only folding is T, and one with no
     /// entry at all.
@@ -49,18 +49,22 @@ mod tests {
         assert_eq!(case_folding_full(0x0130), ([0x0069, 0x0307, 0], 2));
         // 0049; T; 0131; only matters to Turkic folding. 'I' still has C.
         assert_eq!(case_folding_full(0x0049), ([0x0069, 0, 0], 1));
+        // New in 18.0.0: A7DD; C; 0277; and 1DF95; F; 0073 0073; (with S 00DF).
+        assert_eq!(case_folding_full(0xA7DD), ([0x0277, 0, 0], 1));
+        assert_eq!(case_folding_full(0x1DF40), ([0x1DF41, 0, 0], 1));
+        assert_eq!(case_folding_full(0x1DF95), ([0x0073, 0x0073, 0], 2));
         // No entry: folds to itself.
         assert_eq!(case_folding_full(0x00E9), ([0x00E9, 0, 0], 1));
         assert_eq!(case_folding_full(0x10FFFF), ([0x10FFFF, 0, 0], 1));
     }
 
     /// The table is sorted (the lookup binary-searches it) and has the entry
-    /// counts its header records: 1481 C + 104 F = 1585.
+    /// counts its header records: 1501 C + 105 F = 1606.
     #[test]
     fn case_folding_table_is_sorted_and_complete() {
-        assert_eq!(CASE_FOLDING_FULL.len(), 1585);
+        assert_eq!(CASE_FOLDING_FULL.len(), 1606);
         assert!(CASE_FOLDING_FULL.windows(2).all(|w| w[0].0 < w[1].0));
         let multi = CASE_FOLDING_FULL.iter().filter(|(_, m)| m[1] != 0).count();
-        assert_eq!(multi, 104);
+        assert_eq!(multi, 105);
     }
 }

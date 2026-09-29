@@ -7,7 +7,7 @@ use crate::props::Properties;
 // cross-crate fn is un-inlinable without LTO — #[inline] restores the
 // zero-cost access idiom.
 // PERF(port): the const-generic sizes carry the generated arrays' fixed
-// lengths ([u16; 8192] / [u16; 31744] / [Properties; 30]) into the type so
+// lengths ([u16; 8192] / [u16; 32000] / [Properties; 31]) into the type so
 // `TablesRef::get` can elide its bounds checks, matching the reference's
 // unchecked ReleaseFast indexing.
 #[inline]

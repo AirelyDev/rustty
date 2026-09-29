@@ -8,8 +8,8 @@
 //! This crate is a leaf. It has NO dependency on the ghostty tree (R3); the
 //! Unicode tables are reproduced bit-for-bit (R1) from the reference's own
 //! `props-unigen`/`symbols-unigen` generators (built against uucode 0.2.0 @
-//! 2826a37a with ghostty's src/build/uucode_config.zig, both at the reference
-//! pin), and the grapheme-break precompute table from that uucode's
+//! 9d555245, Unicode 18, with ghostty's src/build/uucode_config.zig, both at
+//! the reference pin 12752b2ac), and the grapheme-break precompute table from that uucode's
 //! `uucode.grapheme.computeGraphemeBreakNoControl`. It is fully
 //! Miri-able (R6).
 
@@ -82,6 +82,22 @@ mod width_tests {
         assert_eq!(2, codepoint_width(0x1F600)); // emoji
         assert_eq!(2, codepoint_width(0x1F1E6)); // regional indicator
         assert_eq!(2, codepoint_width(0x2E3B)); // three-em dash (clamped)
+    }
+
+    // RUSTTY: Unicode 18 data spot-checks (uucode 9d555245, ghostty
+    // 12542b392): new East_Asian_Width=W ranges from
+    // DerivedEastAsianWidth-18.0.0. Values read from the live uucode oracle
+    // (G4-uni); the full range is diffed by that gate.
+    #[test]
+    fn codepoint_width_unicode18_wide_ranges() {
+        for cp in [
+            0x18E00, 0x19191, // Jurchen
+            0x191A0, 0x191D2, // Jurchen Radicals
+            0x3D000, 0x3FC3F, // Small Seal
+            0x1F6D9, 0x1FA8B, 0x1FA8D, 0x1FACC, 0x1FADD, 0x1FAEB, 0x1FAF9, 0x1FAFA, // E18.0
+        ] {
+            assert_eq!(2, codepoint_width(cp), "U+{cp:X}");
+        }
     }
 }
 
