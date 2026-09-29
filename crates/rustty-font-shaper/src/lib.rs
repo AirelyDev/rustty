@@ -516,10 +516,7 @@ pub enum Style {
 
 /// The presentation for an emoji.
 // pub const Presentation = enum(u1) { text=0 /*U+FE0E*/, emoji=1 /*U+FE0F*/ };
-// PORT NOTE: `Hash` is derived (beyond the reference's plain enum) so
-// `Presentation` can be a field of `SharedGrid`'s `CodepointKey` hash-map key
-// (the reference's `AutoHashMapUnmanaged` auto-derives key hashing).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Presentation {
     /// U+FE0E
