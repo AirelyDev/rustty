@@ -249,8 +249,14 @@ fn decode_png_wrapper(
         data: std::ptr::null_mut(),
         data_len: 0,
     };
-    // if (!func(global.userdata, &c_alloc, data.ptr, data.len, &out)) return error.InvalidData;
-    if !func(userdata, &c_alloc, data.as_ptr(), data.len(), &mut out) {
+    // if (!func(global.userdata, &c_alloc, lib.String.init(data).ptr, data.len, &out)) return error.InvalidData;
+    if !func(
+        userdata,
+        &c_alloc,
+        rustty_lib::String::init(data).ptr,
+        data.len(),
+        &mut out,
+    ) {
         return Err(terminal_sys::DecodeError::InvalidData);
     }
 

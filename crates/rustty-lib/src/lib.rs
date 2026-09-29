@@ -52,6 +52,18 @@ pub use crate::r#union::TaggedUnion;
 pub use crate::target::Target;
 pub use crate::types::{Buffer, String};
 
+/// The real storage behind every empty borrowed string the library hands
+/// across the C ABI: the Rust rendering of Zig's `""` literal in
+/// `String.init` (`dd2edd760`).
+///
+/// PORT NOTE (DECISIONS B1): Zig's `""` is a `*const [0:0]u8`, so it points at
+/// a real NUL byte in static memory. Rust does not guarantee that
+/// `"".as_ptr()` (or an empty slice's `as_ptr()`) is real storage: a
+/// zero-length constant may be the dangling address, which is exactly the
+/// sentinel the reference stops exposing. A one-byte `static` has a real,
+/// stable address, and its byte is the NUL Zig's literal carries.
+pub static EMPTY: [u8; 1] = [0];
+
 #[cfg(test)]
 mod main_tests {
     #[test]

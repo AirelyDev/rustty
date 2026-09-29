@@ -6034,6 +6034,20 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (every routing test fails: 5 vs 144 bytes), the continuation's `toOwnedSlice` failure turned into a panic
   (the sweep's third loop panics; the first two loops did not reach it, which is why the third exists).
 - **state**: CLOSED (task S7-8).
+- **reversal (P7-W2 T2, upstream `dd2edd760`, DECISIONS B1/B2)**: the non-null empty sentinel above is
+  gone. Upstream now returns NULL with length zero for empty `format_alloc`, `selection_format_alloc` and
+  `continuation_alloc` output (and `ghostty_alloc(.., 0)` returns NULL), because an empty Zig slice's
+  sentinel address (Rust's dangling address is the same hazard) is rejected by foreign runtimes such as
+  Go's stack scanner even at length zero. `allocator::into_c_bytes` exports an empty buffer as NULL,
+  `allocator::alloc(_, 0)` returns NULL before the allocator is resolved, and borrowed empty strings
+  (`rustty_lib::String::init`) point at the one-byte `rustty_lib::EMPTY` static (Zig's `""`).
+  `encode_alloc` keeps upstream's unconditional `bytes.ptr`, but its output is never empty (the header
+  record), so the shared `into_c_bytes` is equivalent there. Tests: the six upstream tests ("String.init
+  empty output", "alloc zero length", "format_alloc empty output", "selection_format_alloc empty output",
+  the extended "continuation buffer and allocator export exact suffix", "kitty_image_medium_temp_file empty
+  output"); the Rustty-only guards `custom_allocator_zero_length_short_circuit`,
+  `format_alloc_empty_output_never_reaches_the_c_allocator` and `format_alloc_null_allocator_round_trip`
+  now assert NULL and keep their "no zero-length allocator callback" halves.
 
 ## N332 — `snapshot::encode` takes the reference's allocator again; the record scratch spills through it
 
@@ -6856,6 +6870,15 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `memory_ptr` used after a `&mut` over the whole page memory. Such a report is a real finding, not a
   regression from this change.
 - **state**: CLOSED for `term_size.rs` (the warning is gone). The two deliberate sites stay (RECORDED).
+- **reversal (P7-W2 T2, upstream `dd2edd760`, DECISIONS B1)**: the C API no longer hands out a
+  zero-length sentinel address at all. `rustty_alloc(.., 0)` and the empty outputs of the three
+  allocating exports are NULL, and borrowed empty strings point at the real `rustty_lib::EMPTY` static,
+  so no provenance-free sentinel crosses the ABI. The selection test's `without_provenance_mut(1)`
+  (`@ptrFromInt(1)`) input sentinel is unchanged. The same task gave `rustty-lib`'s typed-helper
+  `zero_len_sentinel` (`allocator.rs`) the `without_provenance_mut` treatment this finding gave
+  `GlobalRawAllocator`: it was an integer-to-pointer cast, which Miri flagged in "String.init empty
+  output"; it is warning-free now. Miri (`formatter::`, `selection::`, `terminal::tests::continuation`,
+  `allocator::`, rustty-lib `types::`): clean.
 
 ## N362 — three S7 tests were not Miri-ready: a Stacked Borrows violation in a test, a should_panic leak, an 18-hour test
 
@@ -8625,8 +8648,8 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 ## N436 — `ghostty_search_tick` read the freed terminal's PageList after `ghostty_terminal_free`
 
 - **id**: N436. Phase 7 start (P7-W0 T4; R1 #37, R3 §3.5, DECISIONS R1). **severity**: medium (use-after-free
-  through the C API). **kind**: reference use-after-free ported faithfully, unrecorded. **state**: OPEN; closed by
-  the port of `b1c264163` (P7-W2 T1).
+  through the C API). **kind**: reference use-after-free ported faithfully, unrecorded. **state**: CLOSED
+  (P7-W2 T1) by the port of `b1c264163`.
 - **reference**: at 20abdb50a, `src/terminal/c/search.zig:170-178` `tick` checks only the search handle, then
   runs `s.tick()`. After the terminal is freed, a history search's tick reads `history.start_pin`, a pin tracked in
   the freed PageList. `b1c264163` ("vt: reject search ticks after the terminal is freed") adds
@@ -8635,8 +8658,22 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (`:988`), and the `search.h` doc.
 - **rustty**: `crates/rustty-vt-c/src/search.rs:508-525` `tick` has no terminal check, so by reading it carries
   the same use-after-free. The guard ports through the raw-self `zig_terminal` helper (`:110`).
-- **evidence**: by reading (R1, R3). The negative control discriminates only under Miri or ASan
-  (`cargo +nightly miri test -p rustty-vt-c search::`, `check_sanitizer_canary.sh`).
+- **fix**: `crates/rustty-vt-c/src/search.rs` `tick` now calls
+  `SearchWrapper::zig_terminal(search_)` and returns `Result::InvalidValue` when it is null, before touching
+  `search`. `search_free_after_terminal_free` gained the `tick(search, null)` -> `InvalidValue` assertion
+  (matching upstream's `:949` insertion), and the new test `search_tick_after_terminal_free_with_history` ports
+  upstream's "search tick after terminal free with history" (`:988`) assertion-for-assertion. The
+  `include/rustty/vt/search.h` doc for the lifetime section and `rustty_search_tick`'s `@return` were updated
+  verbatim from the oracle's `search.h` diff.
+- **evidence**: `cargo +nightly miri test -p rustty-vt-c search` — RED before the guard (with the new test
+  present, no guard): `error: Undefined Behavior: memory access failed: ... has been freed, so this pointer is
+  dangling` in `rustty_vt::search::screen::ScreenSearch::tick_history`, reached through
+  `search::tick` -> `TerminalSearch::tick` -> `ScreenSearch::tick`
+  (`search_tick_after_terminal_free_with_history` failed; `search_free_after_terminal_free` also failed its
+  `InvalidValue` assertion). GREEN after the guard: `test result: ok. 22 passed; 0 failed; 2 ignored` (the 2
+  ignored are the pre-existing MIRI EXCEPTION rows, unrelated to this change). Native
+  `cargo test -p rustty-vt-c search`: `24 passed; 0 failed`.
+- **commit**: `search: reject search ticks after the terminal is freed (b1c264163) (P7-W2 T1)`.
 - **why not a UD**: upstream found and fixed it within the range (as N435).
 
 ## N437 — the render thread forms whole-`Renderer` references that overlap the main thread's raw sync draw (macOS)

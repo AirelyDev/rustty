@@ -9,8 +9,9 @@
 //! is no options struct here).
 //!
 //! PORT STATUS: done. Every C API function body, the private helpers and all
-//! 17 `test "..."` blocks are ported assertion-for-assertion (record:
-//! `.port/phase-6/assessments/W3-search-capi.md`).
+//! 17 `test "..."` blocks from the Phase-6 range are ported assertion-for-
+//! assertion (record: `.port/phase-6/assessments/W3-search-capi.md`); Phase 7
+//! added the guard and test from `b1c264163` (P7-W2 T1, N436).
 //!
 //! OWNERSHIP (the `f0c918fc4` contract, ported exactly): a `SearchWrapper`
 //! BORROWS its terminal through a raw `terminal_c::Terminal` handle and is
@@ -508,6 +509,12 @@ pub unsafe fn free(search_: Search) {
 pub unsafe fn tick(search_: Search, out_status: *mut SearchStatus) -> Result {
     // const wrapper = search_ orelse return .invalid_value;
     if search_.is_null() {
+        return Result::InvalidValue;
+    }
+    // History ticks read a pin tracked in the terminal's page list.
+    // _ = wrapper.zigTerminal() orelse return .invalid_value;
+    // SAFETY: `search_` is a live wrapper (caller contract).
+    if unsafe { SearchWrapper::zig_terminal(search_) }.is_null() {
         return Result::InvalidValue;
     }
     // if (wrapper.search) |*s| _ = s.tick();
@@ -2192,6 +2199,8 @@ mod tests {
             terminal_c::free(terminal);
             assert_eq!(Result::InvalidValue, feed(search));
             assert_eq!(Result::InvalidValue, run(search));
+            // try testing.expectEqual(Result.invalid_value, tick(search, null));
+            assert_eq!(Result::InvalidValue, tick(search, std::ptr::null_mut()));
             assert_eq!(
                 Result::InvalidValue,
                 set(search, SearchOption::SelectNext, std::ptr::null())
@@ -2231,6 +2240,52 @@ mod tests {
             );
 
             // The search can still be freed, releasing only its own memory.
+            free(search);
+        });
+    }
+
+    // test "search tick after terminal free with history"
+    #[test]
+    fn search_tick_after_terminal_free_with_history() {
+        with_test_allocator(|alloc| unsafe {
+            // var terminal: terminal_c.Terminal = null;
+            // try testing.expectEqual(Result.success, terminal_c.new(
+            //     &lib.alloc.test_allocator,
+            //     &terminal,
+            //     10,
+            //     3,
+            // ));
+            let mut terminal: terminal_c::Terminal = std::ptr::null_mut();
+            assert_eq!(
+                Result::Success,
+                terminal_c::new(alloc, &mut terminal, 10, 3)
+            );
+
+            // Push matches into scrollback so the search has history.
+            // terminal_c.vt_write(terminal, "Fizz\r\nFizz\r\nFizz\r\nFizz\r\n", 24);
+            vt_write(terminal, b"Fizz\r\nFizz\r\nFizz\r\nFizz\r\n");
+
+            // const search: Search = try testNewSearch(terminal, "Fizz");
+            let search: Search = test_new_search(alloc, terminal, b"Fizz");
+            // defer free(search);
+
+            assert_eq!(Result::Success, feed(search));
+            // var status: Status = .complete;
+            let mut status: SearchStatus = SearchStatus::Complete;
+            assert_eq!(
+                Result::Success,
+                get(
+                    search,
+                    SearchData::Status,
+                    &mut status as *mut SearchStatus as *mut c_void
+                )
+            );
+            assert_eq!(SearchStatus::Running, status);
+
+            // The history search's tracked pin is freed with the terminal.
+            terminal_c::free(terminal);
+            assert_eq!(Result::InvalidValue, tick(search, &mut status));
+
             free(search);
         });
     }

@@ -859,13 +859,16 @@ pub unsafe fn format_alloc(
     }
 
     // const buf = aw.toOwnedSlice() catch return .out_of_memory;
-    // out_ptr.* = buf.ptr; out_len.* = buf.len;
+    // // Do not expose Zig's empty slice sentinel through the C ABI.
+    // out_ptr.* = if (buf.len == 0) null else buf.ptr;
+    // out_len.* = buf.len;
     //
     // PORT NOTE (parity tail S7-8): `toOwnedSlice` is ported as such: the
     // writer's own buffer, shrunk to the written length through the caller's
     // allocator. An empty output (an empty selection) makes no allocator call
-    // at all and yields the non-null empty sentinel (this also retires the
-    // raw zero-length `alloc` the copy-out made before, S171-F1's class).
+    // at all (this also retires the raw zero-length `alloc` the copy-out made
+    // before, S171-F1's class) and, since `dd2edd760`, yields NULL
+    // (`into_c_bytes`).
     let (ptr, len) = match aw.to_owned_slice() {
         Ok(buf) => crate::allocator::into_c_bytes(buf),
         Err(_) => return Result::OutOfMemory,
@@ -1281,6 +1284,74 @@ mod tests {
                 active: Coordinate { x, y: y as u32 },
             },
         }
+    }
+
+    // test "selection_format_alloc empty output"
+    #[test]
+    fn selection_format_alloc_empty_output() {
+        with_test_allocator(|alloc| {
+            // const failing: CAllocator = .fromZig(&std.mem.Allocator.failing);
+            let failing_zig = rustty_lib::allocator::FailingZigAllocator;
+            let failing_ref = rustty_lib::allocator::ZigAllocatorRef::new(&failing_zig);
+            let failing = CAllocator::from_zig(&failing_ref);
+            // var t: terminal_c.Terminal = null;
+            let mut t: terminal::Terminal = std::ptr::null_mut();
+            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &t, 80, 24));
+            assert_eq!(Result::Success, unsafe {
+                terminal::new(alloc, &mut t, 80, 24)
+            });
+            // defer terminal_c.free(t);
+            struct FreeTerminal(terminal::Terminal);
+            impl Drop for FreeTerminal {
+                fn drop(&mut self) {
+                    unsafe { terminal::free(self.0) };
+                }
+            }
+            let _free_t = FreeTerminal(t);
+
+            // var ref: grid_ref.CGridRef = .{};
+            let mut r#ref = CGridRef::default();
+            // try testing.expectEqual(Result.success, terminal_c.grid_ref(t, .{ .tag = .active, .value = .{ .active = .{ .x = 0, .y = 0 } } }, &ref));
+            assert_eq!(Result::Success, unsafe {
+                terminal::grid_ref(t, active_point(0, 0), &mut r#ref)
+            });
+            // const sel: CSelection = .{ .start = ref, .end = ref };
+            let sel = CSelection {
+                start: r#ref,
+                end: r#ref,
+                ..CSelection::default()
+            };
+            // try testing.expectEqual(Result.success, terminal_c.set(t, .selection, &sel));
+            assert_eq!(Result::Success, unsafe {
+                terminal::set(
+                    t,
+                    terminal::Option_::Selection,
+                    &sel as *const CSelection as *const std::ffi::c_void,
+                )
+            });
+
+            // var ptr: ?[*]u8 = null;
+            let mut ptr: *mut u8 = std::ptr::null_mut();
+            // var len: usize = 123;
+            let mut len: usize = 123;
+            // try testing.expectEqual(Result.success, format_alloc(t, &failing, .{ .emit = .plain, .unwrap = true, .trim = true }, &ptr, &len));
+            let opts = FormatOptions {
+                emit: Format::Plain as c_int,
+                unwrap: true,
+                trim: true,
+                ..format_options_default()
+            };
+            assert_eq!(Result::Success, unsafe {
+                format_alloc(t, &failing, opts, &mut ptr, &mut len)
+            });
+            // defer @import("allocator.zig").free(&failing, ptr, len);
+            // PORT NOTE: the deferred free runs after the assertions below.
+            // try testing.expectEqual(@as(usize, 0), len);
+            assert_eq!(0usize, len);
+            // try testing.expectEqual(null, ptr);
+            assert!(ptr.is_null());
+            unsafe { crate::allocator::free(Some(&failing), ptr, len) };
+        });
     }
 
     // test "selection_format_alloc uses active selection"
