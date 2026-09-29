@@ -621,6 +621,9 @@ extension Rustty {
             case RUSTTY_ACTION_MOVE_TAB:
                 return moveTab(app, target: target, move: action.action.move_tab)
 
+            case RUSTTY_ACTION_MOVE_TAB_TO_NEW_WINDOW:
+                return moveTabToNewWindow(app, target: target)
+
             case RUSTTY_ACTION_GOTO_TAB:
                 return gotoTab(app, target: target, tab: action.action.goto_tab)
 
@@ -1270,6 +1273,31 @@ extension Rustty {
                             SwiftUI.Notification.Name.RusttyMoveTabKey: Action.MoveTab(c: move),
                         ]
                     )
+
+                default:
+                    assertionFailure()
+                }
+
+                return true
+        }
+
+        private static func moveTabToNewWindow(
+            _ app: rustty_app_t,
+            target: rustty_target_s) -> Bool {
+                switch target.tag {
+                case RUSTTY_TARGET_APP:
+                    Rustty.logger.warning("move tab to new window does nothing with an app target")
+                    return false
+
+                case RUSTTY_TARGET_SURFACE:
+                    guard let surface = target.target.surface else { return false }
+                    guard let surfaceView = self.surfaceView(from: surface) else { return false }
+
+                    // See gotoTab for notes on this check. A lone tab is already
+                    // a window of its own, so there is nothing to move.
+                    guard (surfaceView.window?.tabGroup?.windows.count ?? 0) > 1 else { return false }
+
+                    surfaceView.window?.moveTabToNewWindow(nil)
 
                 default:
                     assertionFailure()
