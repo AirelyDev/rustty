@@ -285,9 +285,6 @@ move_tab:
 
 move_tab_to_new_window:
   Move a tab to a new window.
-  
-  Only implemented on Linux, but there's a native tab menu provided by
-  macOS.
 
 toggle_tab_overview:
   Toggle the tab overview.

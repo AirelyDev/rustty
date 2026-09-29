@@ -229,8 +229,16 @@ fn build_keys() -> KeyEntryArray {
         Key::PageDown,
         concat(pc_style("\x1b[6;{}~"), vec![Entry::seq("\x1B[6~")]),
     );
+    set(
+        Key::Help,
+        concat(pc_style("\x1b[28;{}~"), vec![Entry::seq("\x1B[28~")]),
+    );
+    set(
+        Key::ContextMenu,
+        concat(pc_style("\x1b[29;{}~"), vec![Entry::seq("\x1B[29~")]),
+    );
 
-    // Function Keys. todo: f13-f35 but we need to add to input.Key
+    // Function Keys. todo: f26-f35 but we need to add to input.Key
     set(
         Key::F1,
         concat(pc_style("\x1b[1;{}P"), vec![Entry::seq("\x1BOP")]),
@@ -279,27 +287,76 @@ fn build_keys() -> KeyEntryArray {
         Key::F12,
         concat(pc_style("\x1b[24;{}~"), vec![Entry::seq("\x1B[24~")]),
     );
+    set(
+        Key::F13,
+        concat(pc_style("\x1b[25;{}~"), vec![Entry::seq("\x1B[25~")]),
+    );
+    set(
+        Key::F14,
+        concat(pc_style("\x1b[26;{}~"), vec![Entry::seq("\x1B[26~")]),
+    );
+    set(
+        Key::F15,
+        concat(pc_style("\x1b[28;{}~"), vec![Entry::seq("\x1B[28~")]),
+    );
+    set(
+        Key::F16,
+        concat(pc_style("\x1b[29;{}~"), vec![Entry::seq("\x1B[29~")]),
+    );
+    set(
+        Key::F17,
+        concat(pc_style("\x1b[31;{}~"), vec![Entry::seq("\x1B[31~")]),
+    );
+    set(
+        Key::F18,
+        concat(pc_style("\x1b[32;{}~"), vec![Entry::seq("\x1B[32~")]),
+    );
+    set(
+        Key::F19,
+        concat(pc_style("\x1b[33;{}~"), vec![Entry::seq("\x1B[33~")]),
+    );
+    set(
+        Key::F20,
+        concat(pc_style("\x1b[34;{}~"), vec![Entry::seq("\x1B[34~")]),
+    );
+    set(
+        Key::F21,
+        concat(pc_style("\x1b[42;{}~"), vec![Entry::seq("\x1B[42~")]),
+    );
+    set(
+        Key::F22,
+        concat(pc_style("\x1b[43;{}~"), vec![Entry::seq("\x1B[43~")]),
+    );
+    set(
+        Key::F23,
+        concat(pc_style("\x1b[44;{}~"), vec![Entry::seq("\x1B[44~")]),
+    );
+    set(
+        Key::F24,
+        concat(pc_style("\x1b[45;{}~"), vec![Entry::seq("\x1B[45~")]),
+    );
+    set(
+        Key::F25,
+        concat(pc_style("\x1b[46;{}~"), vec![Entry::seq("\x1B[46~")]),
+    );
 
     // Keypad keys
-    set(Key::Numpad0, kp_keys("p"));
-    set(Key::Numpad1, kp_keys("q"));
-    set(Key::Numpad2, kp_keys("r"));
-    set(Key::Numpad3, kp_keys("s"));
-    set(Key::Numpad4, kp_keys("t"));
-    set(Key::Numpad5, kp_keys("u"));
-    set(Key::Numpad6, kp_keys("v"));
-    set(Key::Numpad7, kp_keys("w"));
-    set(Key::Numpad8, kp_keys("x"));
-    set(Key::Numpad9, kp_keys("y"));
-    set(Key::NumpadDecimal, kp_keys("n"));
-    set(Key::NumpadDivide, kp_keys("o"));
-    set(Key::NumpadMultiply, kp_keys("j"));
-    set(Key::NumpadSubtract, kp_keys("m"));
-    set(Key::NumpadAdd, kp_keys("k"));
-    set(
-        Key::NumpadEnter,
-        concat(kp_keys("M"), vec![Entry::seq("\r")]),
-    );
+    set(Key::Numpad0, kp_keys("p", "0"));
+    set(Key::Numpad1, kp_keys("q", "1"));
+    set(Key::Numpad2, kp_keys("r", "2"));
+    set(Key::Numpad3, kp_keys("s", "3"));
+    set(Key::Numpad4, kp_keys("t", "4"));
+    set(Key::Numpad5, kp_keys("u", "5"));
+    set(Key::Numpad6, kp_keys("v", "6"));
+    set(Key::Numpad7, kp_keys("w", "7"));
+    set(Key::Numpad8, kp_keys("x", "8"));
+    set(Key::Numpad9, kp_keys("y", "9"));
+    set(Key::NumpadDecimal, kp_keys("n", "."));
+    set(Key::NumpadDivide, kp_keys("o", "/"));
+    set(Key::NumpadMultiply, kp_keys("j", "*"));
+    set(Key::NumpadSubtract, kp_keys("m", "-"));
+    set(Key::NumpadAdd, kp_keys("k", "+"));
+    set(Key::NumpadEnter, kp_keys("M", "\r"));
     set(
         Key::NumpadUp,
         concat(pc_style("\x1b[1;{}A"), cursor_key("\x1b[A", "\x1bOA")),
@@ -733,7 +790,14 @@ fn build_keys() -> KeyEntryArray {
             },
             Entry {
                 mods: m(false, true, false, false),
+                modify_other_keys: ModifyKeys::Set,
                 sequence: "\x1b\x1b".to_string(),
+                ..Default::default()
+            },
+            Entry {
+                mods: m(false, true, false, false),
+                modify_other_keys: ModifyKeys::SetOther,
+                sequence: "\x1b[27;3;27~".to_string(),
                 ..Default::default()
             },
             Entry {
@@ -848,12 +912,19 @@ fn kp_default(suffix: &str) -> Vec<Entry> {
 
 /// Returns the entries for a keypad key. The suffix is the final character
 /// of the sent sequence, such as "r" for kp_2.
-fn kp_keys(suffix: &str) -> Vec<Entry> {
+fn kp_keys(suffix: &str, normal: &str) -> Vec<Entry> {
     let mut pc = pc_style(&format!("\x1bO{{}}{}", suffix));
     for entry in pc.iter_mut() {
         entry.keypad = KeypadMode::Application;
     }
-    concat(kp_default(suffix), pc)
+    concat(
+        concat(kp_default(suffix), pc),
+        vec![Entry {
+            keypad: KeypadMode::Normal,
+            sequence: normal.to_string(),
+            ..Default::default()
+        }],
+    )
 }
 
 /// Returns entries that are dependent on cursor key settings.

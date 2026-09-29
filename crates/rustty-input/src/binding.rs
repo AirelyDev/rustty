@@ -979,9 +979,6 @@ pub enum Action {
     MoveTab(isize),
 
     /// Move a tab to a new window.
-    ///
-    /// Only implemented on Linux, but there's a native tab menu provided by
-    /// macOS.
     MoveTabToNewWindow,
 
     /// Toggle the tab overview.
