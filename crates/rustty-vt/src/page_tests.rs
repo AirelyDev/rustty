@@ -671,7 +671,7 @@ mod tests {
         }
     }
 
-    // Rustty-only (R13, the `Capacity.adjust` row-count defect; see the PORT
+    // Rustty-only (R13, UPSTREAM-DEFECTS.md UD361, the `Capacity.adjust` row-count defect; see the PORT
     // NOTE in `adjust`): adjusting a page that left the standard capacity to a
     // narrow width must not overflow the `u16` row count. The reference panics
     // ("integer does not fit in destination type", MEASURED at `12752b2ac`);

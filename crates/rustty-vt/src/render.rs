@@ -3752,11 +3752,7 @@ mod tests {
     }
 
     /// `std.atomic.cache_line` is 128 on the targets the counts above assume.
-    const CACHE_LINE_IS_128: bool = cfg!(any(
-        target_arch = "x86_64",
-        target_arch = "aarch64",
-        target_arch = "powerpc64"
-    ));
+    const CACHE_LINE_IS_128: bool = rustty_zigstd::atomic::CACHE_LINE == 128;
 
     // The update allocator is bound on first growth; another allocator later
     // is a caller bug the port reports (Zig takes the allocator per call and

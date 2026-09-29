@@ -28,6 +28,63 @@
 /// https://github.com/golang/go/search?q=CacheLinePadSize
 pub const CACHE_LINE: usize = cache_line_for_cpu();
 
+/// A zero-sized marker aligned to [`CACHE_LINE`]: `align(std.atomic.cache_line)`.
+///
+/// PORT NOTE: `#[repr(align(N))]` takes a literal, not a `const`, so the
+/// per-target values are repeated here as `cfg_attr` arms of the same table,
+/// and the `const _` below proves they agree with [`CACHE_LINE`] on every
+/// target. Put a `[CacheLineAligned; 0]` field in a struct to give it the
+/// reference's `align(std.atomic.cache_line)`.
+#[derive(Clone, Copy, Debug, Default)]
+#[cfg_attr(
+    any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "arm64ec",
+        target_arch = "powerpc64"
+    ),
+    repr(align(128))
+)]
+#[cfg_attr(
+    any(
+        target_arch = "hexagon",
+        target_arch = "arm",
+        target_arch = "mips",
+        target_arch = "mips32r6",
+        target_arch = "mips64",
+        target_arch = "mips64r6",
+        target_arch = "sparc",
+        target_arch = "sparc64"
+    ),
+    repr(align(32))
+)]
+#[cfg_attr(target_arch = "m68k", repr(align(16)))]
+#[cfg_attr(target_arch = "msp430", repr(align(8)))]
+#[cfg_attr(target_arch = "s390x", repr(align(256)))]
+#[cfg_attr(
+    not(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "arm64ec",
+        target_arch = "powerpc64",
+        target_arch = "hexagon",
+        target_arch = "arm",
+        target_arch = "mips",
+        target_arch = "mips32r6",
+        target_arch = "mips64",
+        target_arch = "mips64r6",
+        target_arch = "sparc",
+        target_arch = "sparc64",
+        target_arch = "m68k",
+        target_arch = "msp430",
+        target_arch = "s390x"
+    )),
+    repr(align(64))
+)]
+pub struct CacheLineAligned;
+
+const _: () = assert!(core::mem::align_of::<CacheLineAligned>() == CACHE_LINE);
+
 /// `cacheLineForCpu(builtin.cpu)` for the build target.
 const fn cache_line_for_cpu() -> usize {
     // x86_64: Starting from Intel's Sandy Bridge, the spatial prefetcher pulls in pairs of 64-byte cache lines at a time.

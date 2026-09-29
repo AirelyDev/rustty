@@ -2873,6 +2873,22 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    make `cells_rebuilt` atomic (`std.atomic.Value(bool)`), or compute `syncDisplayLink`'s `should_run` while `draw_mutex` is held and do only the `start`/`stop` after releasing it.
 - upstream status: NOT YET REPORTED
 
+### UD361 — `Capacity.adjust` overflows the `u16` row count when a page off the standard capacity is adjusted to a narrow width (panic in safe builds)
+
+- kind:            crash (ReleaseFast: ub)
+- upstream project: ghostty
+- severity:        low (needs a terminal at least 47,919 columns wide, which only an embedder can create)
+- reference:       `src/terminal/page.zig:1970-1996` (`Capacity.adjust`; `adjusted.rows = @intCast(new_rows)` at `:1989`), called from `src/terminal/PageList.zig:1425` (`resizeCols`), at 12752b2ac. The same unbounded `@intCast(new_rows)` was present at 20abdb50a, before `d2ff6d77a` rewrote `adjust` in bytes.
+- defect:          `new_rows = available / bytes_per_row` is bounded only by the page's grid bytes, not by the `u16` `CellCountInt`. A page that left the standard capacity (`initialCapacity` keeps `std_capacity`'s 215 rows and sets `cols`, see UD80) holds about 215 x 8 x cols grid bytes, so adjusting it to a narrow width computes more rows than a `u16` can hold. From a 47,919-column page, any target width below about 157 columns overflows; wider pages raise that bound (a 50,000-column page resized to 80 columns computes about 132,700 rows).
+- ReleaseSafe:     panic "integer does not fit in destination type" at `page.zig:1989` in `adjust` <- `resizeCols` (`PageList.zig:1425`). MEASURED at 12752b2ac (task P7-W1 T3, Zig 0.16.0 Debug test build on macOS arm64, `.port/phase-7/probes/p7w1t3_adjust_intcast_probe.zig`): `PageList.init(cols = 50000, rows = 24)` (page capacity 50,000 x 215), then `resize(.{ .cols = 80, .reflow = true })`.
+- ReleaseFast:     the `@intCast` is unchecked (undefined behaviour); in practice a truncated row count, so the reflowed page gets far fewer rows than intended, and a count that wraps to 0 reaches `initBuf`'s `assert(cap.rows > 0)`.
+- reachability:    an embedder only. libghostty-vt / rustty-vt through the C API: create or resize a terminal to 47,919 columns or more (46,895 on Linux aarch64), then resize it to a narrow width (`ghostty_terminal_resize`; `rustty_terminal_resize` in the port). NOT reachable from terminal output: in the VT library the XTWINOPS window-resize request (`CSI 8 ; rows ; cols t`) is a no-op action (`stream_terminal.zig:565`, "Have no terminal-modifying effect"), and DECCOLM only switches between 80 and 132 columns. In the Ghostty app, `CSI 8 t` is disabled by default (`vt-window-resize-allowed`) and, when enabled, only asks the apprt to resize the WINDOW, which is clamped to the screen, so the grid can never approach 47,919 columns; the user cannot resize a window that wide either.
+- port handling:   `crates/rustty-vt/src/page.rs` `Capacity::adjust` clamps `new_rows` to `CellCountInt::MAX` before the trim loop (`PORT NOTE: reference defect (R13), UD361`), so the page gets 65,535 rows, which still fits the original size, the evident intent of `adjust`. Before this fix the port truncated with `as u16`, the ReleaseFast behaviour.
+- parity row(s):   none; found by task P7-W1 T3 while porting `d2ff6d77a`.
+- test:            `page::tests::capacity_adjust_clamps_rows_to_the_row_count_type` (`page_tests.rs`): a 50,000-column `std_capacity` adjusted to 80 columns gives 65,535 rows and a layout no larger than the original. NEGATIVE CONTROL (macOS, 2026-09-28): without the clamp it fails with 1,655 rows against 65,535.
+- proposed fix:    in `adjust`, `var new_rows: usize = @min(@divFloor(available, bytes_per_row), std.math.maxInt(size.CellCountInt));`.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

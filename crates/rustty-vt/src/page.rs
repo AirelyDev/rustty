@@ -1379,7 +1379,7 @@ impl Capacity {
                 core::mem::size_of::<Row>() + core::mem::size_of::<Cell>() * (cols as usize);
             let mut new_rows: usize = available / bytes_per_row;
 
-            // PORT NOTE: reference defect (R13). The reference stores
+            // PORT NOTE: reference defect (R13), UD361. The reference stores
             // `adjusted.rows = @intCast(new_rows)` below with no bound, and
             // `new_rows` exceeds the `u16` row count when a wide page is
             // adjusted to a narrow width: a PageList whose page is off the
