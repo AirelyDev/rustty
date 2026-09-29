@@ -77,9 +77,10 @@ Only one decision needs the maintainer; it is marked **OPEN** at the end.
 | R14 | N88 geometry re-probe | Run after the advance, from the oracle at the new pin (R1 Q9). |
 | R15 | CSI 8 t ownership | One cross-tier workstream owns the whole feature: vt, termio, config, core, apprt-api, embed header, GTK and Swift (R1 Q6). |
 
-## OPEN (maintainer)
+## Maintainer decisions (2026-09-28)
 
-- **`CLAUDE.md`** (`9d2d9acac`). Upstream deleted its `CLAUDE.md -> AGENTS.md` symlink. The
-  parity rule says to delete Rustty's too, and `AGENTS.md` stays. Side effect: Claude Code loads
-  `CLAUDE.md` automatically, so agents in this repository would no longer pick up the project
-  instructions unless they are loaded some other way.
+- **`CLAUDE.md`** (`9d2d9acac`): **delete Rustty's `CLAUDE.md -> AGENTS.md` symlink, for parity.**
+  `AGENTS.md` stays. The phase-3 NON_PORTS G13 §6 row that recorded the symlink as PORTED becomes
+  "removed with upstream `9d2d9acac`". Done in P7-W10 T4.
+- **Execution:** subagent-driven: one implementer and one reviewer per task, then a whole-branch
+  review.

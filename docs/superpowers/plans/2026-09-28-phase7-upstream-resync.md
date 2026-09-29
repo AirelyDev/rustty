@@ -807,9 +807,9 @@ The Swift half is P7-W9 T2.
 - [ ] Add a version test with `\t` in the branch name → FAIL, then port → PASS. `python3 .port/tools/gates/check_ud_docs.py` → PASS.
 - [ ] Commit `(P7-W10 T3)`.
 
-### Task 4: CI and release workflows (`380778e3c`, action bumps, EGL link and devShell)
+### Task 4: CI and release workflows (`380778e3c`, action bumps, EGL link and devShell), `CLAUDE.md` removal (`9d2d9acac`)
 
-**Files:** `.github/workflows/ci.yml:517-531,607,622,674-686` (remove `test-windows` and the apprt-c GNU build; DECISIONS R6); `release-tip.yml`, `release-tag.yml`, `publish-tag.yml`, `clean-artifacts.yml` (`r2-upload-action` v1.5, `action-gh-release` v3.0.3, `gha-remove-artifacts` v1.8.0, with pinact SHAs); `nix/devShell.nix` gains `libglvnd` if P7-W7 links EGL; N376/N378 refreshed.
+**Files:** `.github/workflows/ci.yml:517-531,607,622,674-686` (remove `test-windows` and the apprt-c GNU build; DECISIONS R6); `release-tip.yml`, `release-tag.yml`, `publish-tag.yml`, `clean-artifacts.yml` (`r2-upload-action` v1.5, `action-gh-release` v3.0.3, `gha-remove-artifacts` v1.8.0, with pinact SHAs); `nix/devShell.nix` gains `libglvnd` if P7-W7 links EGL; N376/N378 refreshed. Delete the `CLAUDE.md` symlink (maintainer decision, DECISIONS); update the phase-3 NON_PORTS G13 §6 row; remove `!CLAUDE.md` from the tip paths filter only if upstream's `release-tip.yml` drops it (it still has it at `12752b2ac`, so keep it).
 
 - [ ] Update the `xtask` workflow tests for the removed legs (negative control: re-adding a leg fails the parity test). Run actionlint and prettier.
 - [ ] Commit `(P7-W10 T4)`.
@@ -883,7 +883,7 @@ The Swift half is P7-W9 T2.
   - R4's workstreams A–R map to P7-W10 T1–T4, P7-W5 T2 and P7-W0 T4.
   - R5's advance procedure is P7-W0 T3–T4, and its finale list is P7-W12.
 - **Commits:** every non-VOUCHED commit in `R5-commits.tsv` has an owner above, or is recorded as N/A in P7-W0 T4. The four German-translation duplicates are covered by P7-W10 T3's end-state re-mirror.
-- **Questions:** all ~40 reviewer questions are settled in `DECISIONS.md`, except `CLAUDE.md` (OPEN).
+- **Questions:** all ~40 reviewer questions are settled in `DECISIONS.md`, and the two maintainer decisions (`CLAUDE.md` deleted for parity; subagent-driven execution) are recorded there.
 
 **2. Placeholder scan.** No "TBD" or "similar to". Tasks cite review sections for the per-commit hunk detail instead of inlining it. That is deliberate, as in the Phase 4–6 plans: the review files and upstream diffs are the source of truth for ~230 commits, and duplicating them here would drift. Every task names its files, its upstream tests (by name or by `R5-upstream-tests.tsv` file), its fail-first step, its verification commands and its commit.
 
