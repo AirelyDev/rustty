@@ -8584,8 +8584,8 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 ## N436 — `ghostty_search_tick` read the freed terminal's PageList after `ghostty_terminal_free`
 
 - **id**: N436. Phase 7 start (P7-W0 T4; R1 #37, R3 §3.5, DECISIONS R1). **severity**: medium (use-after-free
-  through the C API). **kind**: reference use-after-free ported faithfully, unrecorded. **state**: OPEN; closed by
-  the port of `b1c264163` (P7-W2 T1).
+  through the C API). **kind**: reference use-after-free ported faithfully, unrecorded. **state**: CLOSED
+  (P7-W2 T1) by the port of `b1c264163`.
 - **reference**: at 20abdb50a, `src/terminal/c/search.zig:170-178` `tick` checks only the search handle, then
   runs `s.tick()`. After the terminal is freed, a history search's tick reads `history.start_pin`, a pin tracked in
   the freed PageList. `b1c264163` ("vt: reject search ticks after the terminal is freed") adds
@@ -8594,8 +8594,22 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (`:988`), and the `search.h` doc.
 - **rustty**: `crates/rustty-vt-c/src/search.rs:508-525` `tick` has no terminal check, so by reading it carries
   the same use-after-free. The guard ports through the raw-self `zig_terminal` helper (`:110`).
-- **evidence**: by reading (R1, R3). The negative control discriminates only under Miri or ASan
-  (`cargo +nightly miri test -p rustty-vt-c search::`, `check_sanitizer_canary.sh`).
+- **fix**: `crates/rustty-vt-c/src/search.rs` `tick` now calls
+  `SearchWrapper::zig_terminal(search_)` and returns `Result::InvalidValue` when it is null, before touching
+  `search`. `search_free_after_terminal_free` gained the `tick(search, null)` -> `InvalidValue` assertion
+  (matching upstream's `:949` insertion), and the new test `search_tick_after_terminal_free_with_history` ports
+  upstream's "search tick after terminal free with history" (`:988`) assertion-for-assertion. The
+  `include/rustty/vt/search.h` doc for the lifetime section and `rustty_search_tick`'s `@return` were updated
+  verbatim from the oracle's `search.h` diff.
+- **evidence**: `cargo +nightly miri test -p rustty-vt-c search` — RED before the guard (with the new test
+  present, no guard): `error: Undefined Behavior: memory access failed: ... has been freed, so this pointer is
+  dangling` in `rustty_vt::search::screen::ScreenSearch::tick_history`, reached through
+  `search::tick` -> `TerminalSearch::tick` -> `ScreenSearch::tick`
+  (`search_tick_after_terminal_free_with_history` failed; `search_free_after_terminal_free` also failed its
+  `InvalidValue` assertion). GREEN after the guard: `test result: ok. 22 passed; 0 failed; 2 ignored` (the 2
+  ignored are the pre-existing MIRI EXCEPTION rows, unrelated to this change). Native
+  `cargo test -p rustty-vt-c search`: `24 passed; 0 failed`.
+- **commit**: `search: reject search ticks after the terminal is freed (b1c264163) (P7-W2 T1)`.
 - **why not a UD**: upstream found and fixed it within the range (as N435).
 
 ## N437 — the render thread forms whole-`Renderer` references that overlap the main thread's raw sync draw (macOS)
