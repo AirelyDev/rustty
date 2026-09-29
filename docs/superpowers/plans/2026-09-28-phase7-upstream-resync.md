@@ -57,6 +57,7 @@
   - check `df -h /Users/gael` before every build and stop below 12 GB;
   - delete each worktree's `target/` after merge;
   - destructive cleanup names literal paths, never shell variables (memory `cleanup-literal-paths`).
+- **Long runs are deferred until after the port** (maintainer, 2026-09-28). Inside tasks: targeted `cargo test -p`, clippy/fmt, gate scripts, and Miri runs bounded at 30 min. Full `ci.sh`, continuous Miri lanes, full workspace test lanes and benchmarks all go to P7-W12 T2.
 - **Linux lane early.** The GtkGLArea removal, EGL/DMA-BUF, fontconfig ELF aliases, GTK scale and 30 N11 sites only compile on Linux.
 - **Commit style:** `<subsystem>: <summary> (<sha…>) (P7-W<n> T<m>)`. Every commit keeps `cargo build --workspace` and clippy `-D warnings` green. End each commit message with the session's attribution lines.
 - **Privacy:** never take screenshots. Use headless goldens, broadway, `grim`/`wayshot` on a VM display only.
@@ -322,7 +323,7 @@ Miri subset: `cargo +nightly miri test -p rustty-vt -- 'hash_map|ref_counted_set
   - the Miri subset;
   - G6b `bash .port/tools/gates/check_pagelist_compress_leaks.sh`;
   - the S7 Miri groups `vt-pagelist` and `vtc`.
-- [ ] Re-baseline the alloc and `sc.clone` benches against zigbench at `12752b2ac`, and record them in N89/N360.
+- [ ] Deferred to P7-W12 T2: re-baseline the alloc and `sc.clone` benches against zigbench at `12752b2ac` (N89/N360).
 - [ ] Commit `(e01e75bbb, efa3c66ed, 35a6fb747) (P7-W1 T5)`.
 
 ### Task 6: Windows reclaim (`60b43068c` Windows half)
@@ -473,7 +474,7 @@ Miri subset: `cargo +nightly miri test -p rustty-vt -- 'hash_map|ref_counted_set
 
 - [ ] Add a CLI test that every mode name parses and runs one iteration → FAIL.
 - [ ] Port, then run → PASS; G-BENCH → GREEN.
-- [ ] Record a paired `render-*` measurement against zigbench at `12752b2ac`.
+- [ ] Deferred to P7-W12 T2: a paired `render-*` measurement against zigbench at `12752b2ac`.
 - [ ] Commit `(P7-W3 T3)`.
 
 ---
@@ -511,7 +512,7 @@ Miri subset: `cargo +nightly miri test -p rustty-vt -- 'hash_map|ref_counted_set
 
   Run → FAIL.
 
-- [ ] Port. Run → PASS. Take a paired bench of the mode-2026 render check against zigbench (upstream measured 10.5 → 3.2 ns).
+- [ ] Port. Run → PASS. Deferred to P7-W12 T2: a paired bench of the mode-2026 render check (upstream measured 10.5 → 3.2 ns).
 - [ ] Commit `(9dc0d974e, 3beb6d717, 079502e23) (P7-W4 T2)`.
 
 ### Task 3: Print, cursor, selection fixes (`a4f0d9f4a`, `d4f45bee3`, `c4f15c884`, `a3e80a685`)
@@ -520,7 +521,7 @@ Miri subset: `cargo +nightly miri test -p rustty-vt -- 'hash_map|ref_counted_set
 
 - [ ] Port the 3 + 1 + 3 tests. Check the vt-c `selection_gesture` and core double-click tests for pinned old end points. Run → FAIL.
 - [ ] Port, then run → PASS.
-- [ ] Take a paired print bench after P7-W1 T3 and P7-W10 T2 have landed (bench ordering).
+- [ ] Deferred to P7-W12 T2: a paired print bench (after P7-W1 T3 and P7-W10 T2 have landed).
 - [ ] Commit `(P7-W4 T3)`.
 
 ---
@@ -719,7 +720,7 @@ The Swift half is P7-W9 T2.
 
 - [ ] Port "Constraints lookup table" (all codepoints; R14 Miri cap printed) → FAIL.
 - [ ] Port. Run `cargo test -p rustty-font -p rustty-font-shaper` on macOS and rvm → PASS; G7 → GREEN.
-- [ ] Take a paired measurement against the old `match`.
+- [ ] Deferred to P7-W12 T2: a paired measurement against the old `match`.
 - [ ] Commit `(P7-W8 T1)`.
 
 ### Task 2: Core small (`5dfb67298`, `6674aa3ba`, `3a766ccf5`, `0fb6d2940`, `a1bf5b5e1`, `5beb94c16`)
@@ -796,7 +797,7 @@ The Swift half is P7-W9 T2.
 
 - [ ] **Review Focus 4.** Add `terminal_prints_unicode18_wide_ranges_as_two_cells` (Jurchen U+18E00, Small Seal U+3D000, emoji U+1F6D9 → cursor +2) and `terminal_keeps_incb_linker_other_in_one_cluster` (U+1CF5 sequence) in rustty-vt. Run → FAIL.
 - [ ] Port in R4 §B's order. G4-uni → 0 diffs over the full range; run the rustty-vaxis differential.
-- [ ] Run `cargo test -p rustty-unicode -p rustty-vaxis -p rustty-vt -p rustty-font-shaper` → PASS. Take a paired `grapheme_break` bench.
+- [ ] Run `cargo test -p rustty-unicode -p rustty-vaxis -p rustty-vt -p rustty-font-shaper` → PASS. Deferred to P7-W12 T2: a paired `grapheme_break` bench.
 - [ ] Commit `(12542b392) (P7-W10 T2)`.
 
 ### Task 3: Translations, themes, version string
@@ -849,7 +850,7 @@ The Swift half is P7-W9 T2.
   - G-CENSUS, A3, A4, A5, G4 (drivers rebuilt);
   - G-REFGEOM, G-EOL, G-I18N, G-THEMES, G-UDDOCS, G-PARITY, G7;
   - the post-merge gate set.
-- [ ] Linux full lane on rvm (`cargo test --workspace`, G-GTKFEAT, G-REL, G-EXAMPLES). Windows on rwin: kitty/windows, mem reclaim, fontconfig GNU, xev. macOS: `xcodebuild` RusttyTests and menu-shortcut parity.
+- [ ] Targeted cross-host checks only (the full lanes are deferred to T2): on rvm, the gtk-feature workspace clippy and `cargo test -p` for every crate a workstream touched; on rwin, kitty/windows, mem reclaim, fontconfig GNU, xev; on macOS, `xcodebuild` RusttyTests and menu-shortcut parity.
 - [ ] Records:
   - `.port/phase-7/README.md` finale table;
   - `ORACLE_SYNC.md` finale note;
@@ -857,9 +858,10 @@ The Swift half is P7-W9 T2.
   - `.port/parity-closure/README.md` updated to the new pin.
 - [ ] Merge `phase-7-upstream-resync` into `main` (fast-forward if possible) and delete the phase branch.
 
-### Task 2: The deferred long runs (from `.port/parity-closure/README.md`)
+### Task 2: The deferred long runs — after the port is merged (maintainer, 2026-09-28: "Defer long CI runs until after")
 
-- [ ] Run each row of "Not verified here" at the new pin:
+- [ ] Run the Phase 7 deferrals: every "Deferred to P7-W12 T2" bench above (alloc, `sc.clone`, `render-*`, mode lookup, print, nerd-font lookup, `grapheme_break`) against zigbench at `12752b2ac` on an idle machine; the full Linux lane on rvm (`cargo test --workspace`, G-GTKFEAT, G-REL, G-EXAMPLES).
+- [ ] Run each row of "Not verified here" in `.port/parity-closure/README.md` at the new pin:
   - full `ci.sh` on macOS and rvm;
   - the G-REL doc-test "can't find crate" failure;
   - continuous G6 and G6c;
