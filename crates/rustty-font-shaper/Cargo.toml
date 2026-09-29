@@ -198,7 +198,7 @@ harfbuzz-sys = { path = "../../crates-sys/harfbuzz-sys", optional = true }
 # discovery backend — the SAME C library the reference links (R3), consumed by
 # the `fc` module (the port of `pkg/fontconfig/*.zig`), which is compiled only
 # on `hasFontconfig()` (`-Dfont-backend=fontconfig_freetype`: the Linux/BSD
-# default, and selectable on macOS like the reference's `SharedDeps.zig:292`,
+# default, and selectable on macOS like the reference's `SharedDeps.zig:283`,
 # which builds fontconfig from source on any target whose backend has it).
 # CORRECTION (S-14b, review M3): this table excluded macOS on the premise that
 # macOS "never links fontconfig"; that is only the DEFAULT backend. A default

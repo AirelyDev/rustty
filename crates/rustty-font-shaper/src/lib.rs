@@ -251,7 +251,7 @@ pub mod hb;
 // Fontconfig binding wrapper (port of `pkg/fontconfig/*.zig`), the
 // font-discovery seam of the `fontconfig_freetype` backend. Compiled exactly on
 // `hasFontconfig()` (`rustty_font_has_fontconfig`), as the reference imports
-// `pkg/fontconfig` only for that backend (`SharedDeps.zig:292`): the Linux/BSD
+// `pkg/fontconfig` only for that backend (`SharedDeps.zig:283`): the Linux/BSD
 // default, and `-Dfont-backend=fontconfig_freetype` on macOS. CORRECTION (S-14b,
 // review M3): this was gated off macOS/Windows by `target_os`. An MSVC-ABI
 // Windows target stays excluded by `rustty-build-config` (N286: the reference's

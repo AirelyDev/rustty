@@ -165,9 +165,43 @@ mod tests {
     /// The cache is stamped as fontconfig 2.18.3 stamps it (for this build that
     /// is also what it wrote), a second font is added, and a fresh config must
     /// find both. With the reference's 2/14/2 it finds one (the stale cache).
+    ///
+    /// The scenario runs in a child process (this test binary re-executed with
+    /// `UD360_CHILD` set) whose environment drops the two variables that change
+    /// fontconfig's cache decision: `SOURCE_DATE_EPOCH` (`FcDirChecksum`,
+    /// `fccache.c:1190-1221`, records the epoch instead of an older directory
+    /// mtime, so both scans would record the same checksum; Nixpkgs' `mkShell`
+    /// exports it) and `FONTCONFIG_NO_CHECK_CACHE_VERSION`
+    /// (`FcCacheIsNewVersion` skips the version comparison). A fresh process
+    /// also starts with no fontconfig state from other tests.
     #[test]
     #[cfg(target_pointer_width = "64")]
     fn ud360_cache_stamped_by_fontconfig_2_18_3_is_rescanned_after_its_dir_changes() {
+        const NAME: &str =
+            "tests::ud360_cache_stamped_by_fontconfig_2_18_3_is_rescanned_after_its_dir_changes";
+        if std::env::var_os("UD360_CHILD").is_some() {
+            ud360_scenario();
+            return;
+        }
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", NAME, "--nocapture", "--test-threads=1"])
+            .env("UD360_CHILD", "1")
+            .env_remove("SOURCE_DATE_EPOCH")
+            .env_remove("FONTCONFIG_NO_CHECK_CACHE_VERSION")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success() && stdout.contains("1 passed"),
+            "UD360 child failed ({}):\n{stdout}\n{stderr}",
+            out.status
+        );
+    }
+
+    /// The UD360 scenario (run in the child process, see above).
+    #[cfg(target_pointer_width = "64")]
+    fn ud360_scenario() {
         use std::fs;
         use std::io::{Seek, SeekFrom, Write};
 
@@ -202,13 +236,14 @@ mod tests {
         assert_eq!(cache_files.len(), 1, "one cache file: {cache_files:?}");
 
         // Stamp it as fontconfig 2.18.3 does (a system 2.18.3 sharing the
-        // cache directory would have written exactly this).
+        // cache directory would have written exactly this, in native byte
+        // order, like every `FcCache` field).
         let mut f = fs::OpenOptions::new()
             .write(true)
             .open(&cache_files[0])
             .unwrap();
         f.seek(SeekFrom::Start(FC_VERSION_OFFSET)).unwrap();
-        f.write_all(&STAMP_2_18_3.to_le_bytes()).unwrap();
+        f.write_all(&STAMP_2_18_3.to_ne_bytes()).unwrap();
         drop(f);
 
         // Change the directory in a later second (the cache compares whole
