@@ -8603,7 +8603,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **id**: N437. Phase 7 start (P7-W0 T4; the P7-W0 T1 review, controller ruling 7). **severity**: medium
   (aliasing-model UB on the macOS renderer every frame; no observed miscompile). **kind**: port soundness (Stacked
   and Tree Borrows); pre-existing, not introduced by `72cf50855`. **state**: OPEN; owned by P7-W7 T2 (the
-  renderer-lifecycle rework).
+  renderer-lifecycle rework). CLOSED (fixed, P7-W7 T2).
 - **finding**: on macOS CoreAnimation calls `draw_frame_raw(sync = true)` on the main thread
   (`crates/rustty-core/src/renderer_seam.rs:492`, `:496`), which reaches the renderer through a raw pointer and
   takes `draw_mutex`. Meanwhile the render thread calls whole-`Renderer` `&mut self` / `&self` methods through
@@ -8625,3 +8625,21 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **fix direction**: raw-self receivers with narrow field access for every render-thread entry that can overlap
   the sync draw (memory `shaper-hook-sb-clean-interleave`), with LIFETIMES rows first and an isolated Miri
   harness under `.port/phase-2/mirihar-<name>/` that is UB before and clean after.
+- **fix** (P7-W7 T2): `draw_mutex` moved out of the renderer into its own allocation
+  (`rustty_renderer::latest_frame::DrawMutex`, an `Arc<Mutex>` handle); core holds one handle for the render
+  thread (`renderer_seam::Thread::draw_mutex`) and one for the main thread (`RendererHandles`, beside the
+  renderer). Every cross-thread entry in both `generic` twins is a raw-self `*_raw` entry or goes through
+  `Renderer::with_locked`, which locks through the caller's handle BEFORE forming any renderer reference; the
+  whole `&mut` exists only under the lock. The entries the reference runs unlocked (`setFocus`, `setVisible`,
+  `animationWake`, `hasVsync`, `loopEnter`, `setMacOSDisplayID`) lock too. The latest-frame slot is an
+  `Arc<LatestFrame>`, so the GTK main thread's `takeFrame` touches no renderer byte. The macOS display
+  callback's context carries the renderer pointer and a `DrawMutex` handle (`metal_impl::DisplayCallbackCtx`).
+  LIFETIMES rows added. Both follow-ups done: UD352 reworded; `DisplayLink::handle` is `pub(crate)` and the
+  `DisplayLinkHandle` methods are `pub(crate) unsafe fn` with `# Safety` sections.
+- **proof**: `.port/phase-2/mirihar-n437/` (the real `Mutex` and `latest_frame` by `#[path]`; 16 seeds, SB and
+  TB): the three shipped shapes (`update_frame`, unlocked `animation_wake`, `set_focus` vs the raw sync draw)
+  are UB under both; two negatives (lock-first with the mutex inline; external lock with the frame slot inline)
+  are UB under both; the fix against the macOS sync draw and against the GTK main thread is clean under both.
+- **residual** (not in N437's scope; reported to the controller): the Metal GCD completion handler
+  (`frame_completed`) still reaches renderer bytes without the draw lock, and core `Surface` `&mut self`
+  methods on the main thread cover the embedded renderer's bytes.
