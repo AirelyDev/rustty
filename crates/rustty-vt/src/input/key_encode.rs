@@ -463,37 +463,10 @@ fn legacy<W: Write>(writer: &mut W, event: &key::KeyEvent, opts: Options) -> std
         }
     }
 
-    // If we match a control sequence, we output that directly. For
-    // ctrlSeq we have to use all mods because we want it to only
-    // match ctrl+<char>.
-    if let Some(char) = ctrl_seq(event.key, &event.utf8, event.unshifted_codepoint, all_mods) {
-        // C0 sequences support alt-as-esc prefixing.
-        if binding_mods.alt {
-            writer.write_all(&[0x1B])?;
-            writer.write_all(&[char])?;
-            return Ok(());
-        }
-
-        writer.write_all(&[char])?;
-        return Ok(());
-    }
-
-    // If we have no UTF8 text then the only possibility is the
-    // alt-prefix handling of unshifted codepoints... so we process that.
-    let utf8 = &event.utf8;
-    if utf8.is_empty() {
-        if let Some(byte) = legacy_alt_prefix(event, binding_mods, all_mods, opts) {
-            // PORT NOTE: `try writer.print("\x1B{c}", .{byte})`. Zig's `{c}`
-            // writes the `u8` RAW; `byte as char` would UTF-8-encode anything
-            // >= 0x80 into two bytes (S104-F1).
-            writer.write_all(&[0x1B, byte])?;
-        }
-        return Ok(());
-    }
-
     // In modify other keys state 2, we send the CSI 27 sequence
-    // for any char with a modifier. Ctrl sequences like Ctrl+a
-    // are already handled above.
+    // for any char with a modifier. This must happen before converting
+    // Ctrl+<char> to a C0 byte because mode 2 encodes those keys, too.
+    let utf8 = &event.utf8;
     if opts.modify_other_keys_state_2 {
         'modify_other: {
             let view = match std::str::from_utf8(utf8) {
@@ -582,6 +555,28 @@ fn legacy<W: Write>(writer: &mut W, event: &key::KeyEvent, opts: Options) -> std
         }
     }
 
+    // If we match a control sequence, we output that directly. For
+    // ctrlSeq we have to use all mods because we want it to only
+    // match ctrl+<char>.
+    if let Some(char) = ctrl_seq(event.key, &event.utf8, event.unshifted_codepoint, all_mods) {
+        // C0 sequences support alt-as-esc prefixing.
+        if binding_mods.alt {
+            writer.write_all(&[0x1B])?;
+            writer.write_all(&[char])?;
+            return Ok(());
+        }
+
+        writer.write_all(&[char])?;
+        return Ok(());
+    }
+
+    // If we have no UTF8 text then the only possibility is the
+    // alt-prefix handling of unshifted codepoints... so we process that.
+    if utf8.is_empty() {
+        let _ = legacy_alt_prefix(writer, event, binding_mods, all_mods, opts)?;
+        return Ok(());
+    }
+
     // Let's see if we should apply fixterms to this codepoint.
     // At this stage of key processing, we only need to apply fixterms
     // to unicode codepoints if we have ctrl set.
@@ -639,10 +634,8 @@ fn legacy<W: Write>(writer: &mut W, event: &key::KeyEvent, opts: Options) -> std
 
     // If we have alt-pressed and alt-esc-prefix is enabled, then
     // we need to prefix the utf8 sequence with an esc.
-    if let Some(byte) = legacy_alt_prefix(event, binding_mods, all_mods, opts) {
-        // PORT NOTE: `return try writer.print("\x1B{c}", .{byte});` — `{c}`
-        // writes the `u8` RAW (S104-F1).
-        return writer.write_all(&[0x1B, byte]);
+    if legacy_alt_prefix(writer, event, binding_mods, all_mods, opts)? {
+        return Ok(());
     }
 
     // If we are on macOS, command+keys do not encode text. It isn't
@@ -661,15 +654,16 @@ fn legacy<W: Write>(writer: &mut W, event: &key::KeyEvent, opts: Options) -> std
     writer.write_all(utf8)
 }
 
-fn legacy_alt_prefix(
+fn legacy_alt_prefix<W: Write>(
+    writer: &mut W,
     event: &key::KeyEvent,
     binding_mods: Mods,
     mods: Mods,
     opts: Options,
-) -> Option<u8> {
+) -> std::io::Result<bool> {
     // This only takes effect with alt pressed
     if !binding_mods.alt || !opts.alt_esc_prefix {
-        return None;
+        return Ok(false);
     }
 
     // On macOS, we only handle option like alt in certain
@@ -677,40 +671,68 @@ fn legacy_alt_prefix(
     // and we allow that to happen.
     if cfg!(target_os = "macos") {
         match opts.macos_option_as_alt {
-            OptionAsAlt::r#false => return None,
+            OptionAsAlt::r#false => return Ok(false),
             OptionAsAlt::left => {
                 if mods.sides.alt == super::key_mods::ModSide::Right {
-                    return None;
+                    return Ok(false);
                 }
             }
             OptionAsAlt::right => {
                 if mods.sides.alt == super::key_mods::ModSide::Left {
-                    return None;
+                    return Ok(false);
                 }
             }
             OptionAsAlt::r#true => {}
         }
     }
 
-    // Otherwise, we require utf8 to already have the byte represented.
+    // A single byte is already the exact text we want to prefix. In
+    // particular, this preserves shifted ASCII punctuation.
     let utf8 = &event.utf8;
     if utf8.len() == 1 {
-        // PORT NOTE: `std.math.cast(u8, utf8[0])` — `utf8[0]` is already a `u8`
-        // so the cast always succeeds; the value passes through unchanged.
-        let byte: u8 = utf8[0];
-        return Some(byte);
+        writer.write_all(&[0x1B])?;
+        writer.write_all(utf8)?;
+        return Ok(true);
     }
 
-    // If UTF8 isn't set, we will allow unshifted codepoints through.
-    if event.unshifted_codepoint > 0 {
-        if let Ok(byte) = u8::try_from(event.unshifted_codepoint) {
-            return Some(byte);
+    // PORT NOTE: `var unshifted_buf: [4]u8 = undefined;` plus
+    // `std.unicode.utf8Encode(cp, &unshifted_buf) catch return false`.
+    // `utf8Encode` fails for a surrogate or a value past U+10FFFF;
+    // `char::from_u32` rejects exactly those, and `encode_utf8` into a 4-byte
+    // buffer cannot fail after that.
+    let mut unshifted_buf = [0u8; 4];
+    let value: &[u8] = 'value: {
+        // On macOS, Option may translate the text into a different Unicode
+        // value. When Option is configured as Alt, use the physical key's
+        // unshifted codepoint just as the single-byte implementation did.
+        if cfg!(target_os = "macos") && event.unshifted_codepoint > 0 {
+            let Some(c) = char::from_u32(event.unshifted_codepoint) else {
+                return Ok(false);
+            };
+            break 'value c.encode_utf8(&mut unshifted_buf).as_bytes();
         }
-    }
 
-    // Else, we can't figure out the byte to alt-prefix so we
-    // exit this handling.
-    None
+        // Outside of the macOS translation case, prefix the complete UTF-8
+        // text rather than truncating it to a single byte.
+        if !utf8.is_empty() {
+            break 'value utf8;
+        }
+
+        // Frontends may omit UTF-8 while still supplying the physical key's
+        // unshifted codepoint. Encode the complete scalar in that case.
+        if event.unshifted_codepoint > 0 {
+            let Some(c) = char::from_u32(event.unshifted_codepoint) else {
+                return Ok(false);
+            };
+            break 'value c.encode_utf8(&mut unshifted_buf).as_bytes();
+        }
+
+        return Ok(false);
+    };
+
+    writer.write_all(&[0x1B])?;
+    writer.write_all(value)?;
+    Ok(true)
 }
 
 /// A helper to memcpy a src value to a buffer and return the result.
@@ -2948,6 +2970,48 @@ mod tests {
     }
 
     #[test]
+    fn legacy_alt_escape_with_modify_other_state_2() {
+        {
+            let mut writer: Vec<u8> = Vec::new();
+            legacy(
+                &mut writer,
+                &ev(key::KeyEvent {
+                    key: key::Key::Escape,
+                    mods: Mods {
+                        alt: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+                Options::default(),
+            )
+            .unwrap();
+            assert_eq!(writer, b"\x1b\x1b");
+        }
+
+        {
+            let mut writer: Vec<u8> = Vec::new();
+            legacy(
+                &mut writer,
+                &ev(key::KeyEvent {
+                    key: key::Key::Escape,
+                    mods: Mods {
+                        alt: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+                Options {
+                    modify_other_keys_state_2: true,
+                    ..Options::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(writer, b"\x1b[27;3;27~");
+        }
+    }
+
+    #[test]
     fn legacy_ctrl_shift_minus_underscore_on_us() {
         let mut writer: Vec<u8> = Vec::new();
         legacy(
@@ -3037,17 +3101,122 @@ mod tests {
         assert_eq!(writer, b"\x1Be");
     }
 
-    /// PORT NOTE: no reference analogue — Zig's `writer.print("\x1B{c}", .{byte})`
-    /// writes `byte` RAW (a single `u8`), so the reference cannot express this
-    /// bug and never needed a test for it. The port wrote
-    /// `write!(writer, "\x1B{}", byte as char)`, which UTF-8-ENCODES the value:
-    /// every `legacyAltPrefix` byte in `0x80..=0xFF` came out as two bytes
-    /// instead of one (finding S104-F1). Both call sites are covered: the
-    /// no-UTF-8 / unshifted-codepoint path here and the has-UTF-8 path below.
+    #[test]
+    fn legacy_alt_unicode() {
+        struct Case {
+            text: &'static str,
+            codepoint: key::u21,
+            expected: &'static str,
+        }
+        let cases = [
+            Case {
+                text: "é",
+                codepoint: 'é' as key::u21,
+                expected: "\x1Bé",
+            },
+            Case {
+                text: "ő",
+                codepoint: 'ő' as key::u21,
+                expected: "\x1Bő",
+            },
+            Case {
+                text: "界",
+                codepoint: '界' as key::u21,
+                expected: "\x1B界",
+            },
+            Case {
+                text: "😀",
+                codepoint: '😀' as key::u21,
+                expected: "\x1B😀",
+            },
+        ];
+
+        for case in cases {
+            let mut writer: Vec<u8> = Vec::new();
+            legacy(
+                &mut writer,
+                &ev(key::KeyEvent {
+                    key: key::Key::Unidentified,
+                    utf8: case.text.as_bytes().to_vec(),
+                    unshifted_codepoint: case.codepoint,
+                    mods: Mods {
+                        alt: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+                Options {
+                    alt_esc_prefix: true,
+                    macos_option_as_alt: OptionAsAlt::r#true,
+                    ..Options::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(writer, case.expected.as_bytes());
+        }
+    }
+
+    #[test]
+    fn legacy_alt_unicode_only_unshifted() {
+        let mut writer: Vec<u8> = Vec::new();
+        legacy(
+            &mut writer,
+            &ev(key::KeyEvent {
+                key: key::Key::Unidentified,
+                unshifted_codepoint: '界' as key::u21,
+                mods: Mods {
+                    alt: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            Options {
+                alt_esc_prefix: true,
+                macos_option_as_alt: OptionAsAlt::r#true,
+                ..Options::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(writer, "\x1B界".as_bytes());
+    }
+
+    #[test]
+    fn legacy_alt_unicode_without_unshifted() {
+        let mut writer: Vec<u8> = Vec::new();
+        legacy(
+            &mut writer,
+            &ev(key::KeyEvent {
+                key: key::Key::Unidentified,
+                utf8: "😀".as_bytes().to_vec(),
+                mods: Mods {
+                    alt: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            Options {
+                alt_esc_prefix: true,
+                macos_option_as_alt: OptionAsAlt::r#true,
+                ..Options::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(writer, "\x1B😀".as_bytes());
+    }
+
+    /// PORT NOTE: no reference analogue. This Rustty-only guard was added for
+    /// finding S104-F1, when `legacyAltPrefix` returned a single `u8` that the
+    /// reference wrote RAW with `writer.print("\x1B{c}", .{byte})` and the port
+    /// UTF-8-encoded by mistake. Since upstream `587e08f3f` the helper writes
+    /// ESC plus the chosen payload itself: the complete UTF-8 text, or the
+    /// UTF-8 encoding of `unshifted_codepoint` (DECISIONS B2). Both call sites
+    /// are still covered: the no-UTF-8 / unshifted-codepoint path, which now
+    /// UTF-8-encodes the scalar, and the has-UTF-8 path, where a single byte in
+    /// `utf8` is still written verbatim.
     #[test]
     fn legacy_alt_prefix_high_byte_is_written_raw() {
         // The no-UTF-8 path: `legacyAltPrefix` falls through to
-        // `unshifted_codepoint`, which casts to `u8` for anything <= 0xFF.
+        // `unshifted_codepoint`, which is now UTF-8-encoded in full.
         let mut writer: Vec<u8> = Vec::new();
         legacy(
             &mut writer,
@@ -3067,10 +3236,10 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(writer, b"\x1B\xE9");
+        assert_eq!(writer, b"\x1B\xC3\xA9");
 
-        // The has-UTF-8 path: a single byte >= 0x80 in `utf8` is returned
-        // directly by `legacyAltPrefix` and prefixed at the second call site.
+        // The has-UTF-8 path: a single byte >= 0x80 in `utf8` is the exact
+        // text to prefix, so `legacyAltPrefix` writes it verbatim.
         let mut writer: Vec<u8> = Vec::new();
         legacy(
             &mut writer,
@@ -3168,11 +3337,12 @@ mod tests {
             }),
             Options {
                 alt_esc_prefix: true,
+                macos_option_as_alt: OptionAsAlt::r#true,
                 ..Options::default()
             },
         )
         .unwrap();
-        assert_eq!(writer, "ф".as_bytes());
+        assert_eq!(writer, "\x1Bф".as_bytes());
     }
 
     #[test]
@@ -3339,6 +3509,49 @@ mod tests {
         )
         .unwrap();
         assert_eq!(writer, b"\x1b[27;6;72~");
+    }
+
+    #[test]
+    fn legacy_ctrl_char_with_modify_other_state_2() {
+        let mut writer: Vec<u8> = Vec::new();
+        legacy(
+            &mut writer,
+            &ev(key::KeyEvent {
+                key: key::Key::KeyP,
+                mods: Mods {
+                    ctrl: true,
+                    ..Default::default()
+                },
+                utf8: b"p".to_vec(),
+                ..Default::default()
+            }),
+            Options {
+                modify_other_keys_state_2: true,
+                ..Options::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(writer, b"\x1b[27;5;112~");
+    }
+
+    #[test]
+    fn legacy_ctrl_char_without_modify_other_state_2() {
+        let mut writer: Vec<u8> = Vec::new();
+        legacy(
+            &mut writer,
+            &ev(key::KeyEvent {
+                key: key::Key::KeyP,
+                mods: Mods {
+                    ctrl: true,
+                    ..Default::default()
+                },
+                utf8: b"p".to_vec(),
+                ..Default::default()
+            }),
+            Options::default(),
+        )
+        .unwrap();
+        assert_eq!(writer, b"\x10");
     }
 
     #[test]
@@ -3589,6 +3802,54 @@ mod tests {
     }
 
     #[test]
+    fn legacy_keypad_1_with_modify_other_state_2() {
+        {
+            let mut writer: Vec<u8> = Vec::new();
+            legacy(
+                &mut writer,
+                &ev(key::KeyEvent {
+                    key: key::Key::Numpad1,
+                    mods: Mods {
+                        ctrl: true,
+                        ..Default::default()
+                    },
+                    utf8: b"1".to_vec(),
+                    ..Default::default()
+                }),
+                Options {
+                    modify_other_keys_state_2: true,
+                    ..Options::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(writer, b"1");
+        }
+
+        {
+            let mut writer: Vec<u8> = Vec::new();
+            legacy(
+                &mut writer,
+                &ev(key::KeyEvent {
+                    key: key::Key::Numpad1,
+                    mods: Mods {
+                        ctrl: true,
+                        ..Default::default()
+                    },
+                    utf8: b"1".to_vec(),
+                    ..Default::default()
+                }),
+                Options {
+                    keypad_key_application: true,
+                    modify_other_keys_state_2: true,
+                    ..Options::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(writer, b"\x1bO5q");
+        }
+    }
+
+    #[test]
     fn legacy_keypad_1_with_application_keypad() {
         let mut writer: Vec<u8> = Vec::new();
         legacy(
@@ -3758,6 +4019,164 @@ mod tests {
             )
             .unwrap();
             assert_eq!(writer, b"\x1b[15;5~");
+        }
+    }
+
+    #[test]
+    fn legacy_f13_through_f25() {
+        struct Case {
+            key: key::Key,
+            code: u8,
+        }
+        let cases = [
+            Case {
+                key: key::Key::F13,
+                code: 25,
+            },
+            Case {
+                key: key::Key::F14,
+                code: 26,
+            },
+            Case {
+                key: key::Key::F15,
+                code: 28,
+            },
+            Case {
+                key: key::Key::F16,
+                code: 29,
+            },
+            Case {
+                key: key::Key::F17,
+                code: 31,
+            },
+            Case {
+                key: key::Key::F18,
+                code: 32,
+            },
+            Case {
+                key: key::Key::F19,
+                code: 33,
+            },
+            Case {
+                key: key::Key::F20,
+                code: 34,
+            },
+            Case {
+                key: key::Key::F21,
+                code: 42,
+            },
+            Case {
+                key: key::Key::F22,
+                code: 43,
+            },
+            Case {
+                key: key::Key::F23,
+                code: 44,
+            },
+            Case {
+                key: key::Key::F24,
+                code: 45,
+            },
+            Case {
+                key: key::Key::F25,
+                code: 46,
+            },
+        ];
+
+        for case in cases {
+            {
+                let mut writer: Vec<u8> = Vec::new();
+                legacy(
+                    &mut writer,
+                    &ev(key::KeyEvent {
+                        key: case.key,
+                        ..Default::default()
+                    }),
+                    Options::default(),
+                )
+                .unwrap();
+                let expected = format!("\x1b[{}~", case.code);
+                assert_eq!(writer, expected.as_bytes());
+            }
+
+            {
+                let mut writer: Vec<u8> = Vec::new();
+                legacy(
+                    &mut writer,
+                    &ev(key::KeyEvent {
+                        key: case.key,
+                        mods: Mods {
+                            ctrl: true,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }),
+                    Options {
+                        modify_other_keys_state_2: true,
+                        ..Options::default()
+                    },
+                )
+                .unwrap();
+                let expected = format!("\x1b[{};5~", case.code);
+                assert_eq!(writer, expected.as_bytes());
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_help_and_context_menu() {
+        struct Case {
+            key: key::Key,
+            code: u8,
+        }
+        let cases = [
+            Case {
+                key: key::Key::Help,
+                code: 28,
+            },
+            Case {
+                key: key::Key::ContextMenu,
+                code: 29,
+            },
+        ];
+
+        for case in cases {
+            {
+                let mut writer: Vec<u8> = Vec::new();
+                legacy(
+                    &mut writer,
+                    &ev(key::KeyEvent {
+                        key: case.key,
+                        ..Default::default()
+                    }),
+                    Options::default(),
+                )
+                .unwrap();
+                let expected = format!("\x1b[{}~", case.code);
+                assert_eq!(writer, expected.as_bytes());
+            }
+
+            {
+                let mut writer: Vec<u8> = Vec::new();
+                legacy(
+                    &mut writer,
+                    &ev(key::KeyEvent {
+                        key: case.key,
+                        mods: Mods {
+                            ctrl: true,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }),
+                    Options {
+                        modify_other_keys_state_2: true,
+                        ..Options::default()
+                    },
+                )
+                .unwrap();
+                let expected = format!("\x1b[{};5~", case.code);
+                assert_eq!(writer, expected.as_bytes());
+            }
         }
     }
 

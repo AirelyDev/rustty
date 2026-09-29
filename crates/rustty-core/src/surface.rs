@@ -16446,6 +16446,147 @@ mod clipboard_codepoint_map_e2e {
     }
 }
 
+// P7-W4 T1 (Review Focus 5): the modifyOtherKeys-2 legacy encoder series
+// (upstream `4406cea3e`, `636a2f35b`, `587e08f3f`) end to end through the
+// Surface key path. MOK2 is enabled the way a program such as vim does it,
+// by writing `CSI > 4 ; 2 m` to the terminal, and each key is then encoded by
+// `Surface::encodeKey` -> `encodeKeyOpts` (`Options::from_terminal`) ->
+// `key_encode::encode`, the bytes `keyCallback` queues to the pty.
+//
+// `Surface::init` is untestable here (it spawns a live pty/renderer/io
+// thread; see `clipboard_codepoint_map_e2e` above), so this uses the same
+// fabrication recipe: a heap-pinned `Surface<TestApp>` in `MaybeUninit` with
+// ONLY the fields `encodeKey` reads written: `renderer_state.mutex`,
+// `io.terminal` and `config` (the macOS arm of `encodeKeyOpts` reads
+// `config.macos_option_as_alt`, set here so the `mouse`/`rt_app` detection
+// fallback is never reached). `keyCallback` itself is not driven: before it
+// reaches `encodeKey` it walks bindings, the inspector, the renderer and the
+// apprt, none of which exist in this fixture.
+#[cfg(test)]
+mod mok2_key_path_e2e {
+    use super::*;
+    use crate::app::test_runtime::TestApp;
+    use std::mem::MaybeUninit;
+
+    fn encode(surface: &mut Surface<TestApp>, event: KeyEvent) -> Vec<u8> {
+        match surface.encodeKey(&event, None).expect("encodeKey") {
+            Some(req) => req.slice().to_vec(),
+            None => Vec::new(),
+        }
+    }
+
+    #[test]
+    fn surface_mok2_keypad_alt_ctrl_end_to_end() {
+        let mut full_config = configpkg::Config::default_config();
+        // Keep `DerivedConfig::init` off the oniguruma FFI (the
+        // `clipboard_codepoint_map_fixture_is_miri_clean` precedent); links
+        // are irrelevant to key encoding.
+        full_config.link.links.clear();
+        let mut derived_config =
+            DerivedConfig::init(Allocator, &full_config).expect("DerivedConfig::init");
+        derived_config.macos_option_as_alt = Some(OptionAsAlt::True);
+
+        let mut terminal = rustty_vt::terminal::Terminal::init(
+            Allocator.into(),
+            rustty_vt::terminal::Options {
+                cols: 80,
+                rows: 24,
+                max_scrollback_bytes: Some(1000),
+                max_scrollback_lines: None,
+                colors: rustty_vt::terminal::Colors::default(),
+                default_modes: rustty_vt::modes::ModePacked::default(),
+                default_cursor_style: rustty_vt::screen::CursorStyle::Block,
+                default_cursor_blink: Some(false),
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .expect("Terminal::init");
+        {
+            // modifyOtherKeys 2 (xterm `CSI > 4 ; 2 m`), as vim sends it.
+            let mut s = terminal.vt_stream();
+            s.next_slice(b"\x1b[>4;2m");
+        }
+        assert!(terminal.flags.modify_other_keys_2);
+
+        let mutex: *mut rustty_zigstd::thread::Mutex =
+            Box::into_raw(Box::new(rustty_zigstd::thread::Mutex::new()));
+
+        let mut mu: Box<MaybeUninit<Surface<TestApp>>> = Box::new(MaybeUninit::uninit());
+        let sp = mu.as_mut_ptr();
+        unsafe {
+            std::ptr::addr_of_mut!((*sp).renderer_state.mutex).write(mutex);
+            std::ptr::addr_of_mut!((*sp).io.terminal).write(terminal);
+            std::ptr::addr_of_mut!((*sp).config).write(derived_config);
+        }
+
+        {
+            let surface = unsafe { &mut *sp };
+
+            // Keypad 1 keeps its numeric output under MOK2 (`636a2f35b`).
+            let out = encode(
+                surface,
+                KeyEvent {
+                    key: Key::Numpad1,
+                    mods: Mods {
+                        ctrl: true,
+                        ..Default::default()
+                    },
+                    utf8: b"1".to_vec(),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(out, b"1");
+
+            // Alt + a non-ASCII key prefixes the complete UTF-8 encoding of
+            // the unshifted codepoint (`587e08f3f`). The event carries no
+            // UTF-8 text (a frontend that supplies only the physical key's
+            // unshifted codepoint): with text, the MOK2 block claims alt+é
+            // first and sends `CSI 27 ; 3 ; 233 ~`, upstream too, since
+            // `587e08f3f` leaves MOK2 unchanged.
+            let out = encode(
+                surface,
+                KeyEvent {
+                    key: Key::Unidentified,
+                    mods: Mods {
+                        alt: true,
+                        ..Default::default()
+                    },
+                    unshifted_codepoint: 'é' as u21,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(out, b"\x1b\xc3\xa9");
+
+            // Ctrl + char uses the MOK2 CSI 27 encoding rather than the C0
+            // byte (`4406cea3e`).
+            let out = encode(
+                surface,
+                KeyEvent {
+                    key: Key::KeyP,
+                    mods: Mods {
+                        ctrl: true,
+                        ..Default::default()
+                    },
+                    utf8: b"p".to_vec(),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(out, b"\x1b[27;5;112~");
+        }
+
+        // Teardown through `sp` only (the `clipboard_codepoint_map_e2e`
+        // Stacked-Borrows note); `mu` never drops its uninitialized fields.
+        unsafe {
+            (*sp).io.terminal.deinit(Allocator.into());
+            (*sp).config.deinit();
+            std::ptr::drop_in_place(std::ptr::addr_of_mut!((*sp).config));
+            drop(Box::from_raw(mutex));
+        }
+        let _ = &mu;
+    }
+}
+
 // ===========================================================================
 // task 14d-1 (S41-F1, S42-F2): the restored `Surface.zig` diagnostics.
 //
