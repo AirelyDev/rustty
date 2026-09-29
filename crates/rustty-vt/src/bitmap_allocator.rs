@@ -67,9 +67,8 @@ use rustty_util::quirks::inlineAssert as assert;
 #[derive(Clone, Copy)]
 pub struct BitmapAllocator<const CHUNK_SIZE: usize> {
     /// The bitmap of available chunks. Each bit represents a chunk. A
-    /// 1 means the chunk is free and a 0 means it's used. We use 1
-    /// for free since it makes it very slightly faster to find free
-    /// chunks.
+    /// 0 means the chunk is free and a 1 means it's used, so an
+    /// all-zero bitmap is a fully free allocator.
     pub bitmap: Offset<u64>,
     pub bitmap_count: usize,
 
@@ -115,16 +114,35 @@ impl<const CHUNK_SIZE: usize> BitmapAllocator<CHUNK_SIZE> {
         // assert(base_align.check(@intFromPtr(buf.start())));
         assert(unsafe { buf.start() } as usize % Self::BASE_ALIGN == 0);
 
-        // Initialize our bitmaps to all 1s to note that all chunks are free.
+        // Clear our bitmaps to note that all chunks are free.
         let bitmap: Offset<u64> = buf.member(l.bitmap_start);
-        let bitmap_ptr = unsafe { bitmap.ptr(buf) };
-        // @memset(bitmap_ptr[0..l.bitmap_count], std.math.maxInt(u64));
+        // @memset(bitmap.ptr(buf)[0..l.bitmap_count], 0);
         unsafe {
-            core::slice::from_raw_parts_mut(bitmap_ptr, l.bitmap_count).fill(u64::MAX);
+            core::slice::from_raw_parts_mut(bitmap.ptr(buf), l.bitmap_count).fill(0);
         }
 
+        unsafe { Self::init_assume_zeroed(buf, l) }
+    }
+
+    /// Initialize the allocator map over memory that the caller
+    /// guarantees is already zero-filled.
+    ///
+    /// This writes nothing to the buffer: an all-zero bitmap already
+    /// marks every chunk as free. Behavior is undefined if the bitmap
+    /// region is not zero.
+    ///
+    /// # Safety
+    ///
+    /// `buf` must point at a valid, `base_align`-aligned allocation of at
+    /// least `l.total_size` bytes, and the bitmap region (`l.bitmap_start`,
+    /// `l.bitmap_count` `u64`s) must already be zero-filled.
+    pub unsafe fn init_assume_zeroed(buf: OffsetBuf, l: Layout) -> Self {
+        // Force the comptime power-of-two assertion for this instantiation.
+        let () = Self::_ASSERT_POW2;
+        // assert(base_align.check(@intFromPtr(buf.start())));
+        assert(unsafe { buf.start() } as usize % Self::BASE_ALIGN == 0);
         BitmapAllocator {
-            bitmap,
+            bitmap: buf.member(l.bitmap_start),
             bitmap_count: l.bitmap_count,
             // search_start: the `= 0` field default.
             search_start: 0,
@@ -194,7 +212,7 @@ impl<const CHUNK_SIZE: usize> BitmapAllocator<CHUNK_SIZE> {
         // next scan starts at the first word with a free bit.
         self.search_start = {
             let mut new_start = start;
-            while new_start < self.bitmap_count && bitmaps[new_start] == 0 {
+            while new_start < self.bitmap_count && bitmaps[new_start] == u64::MAX {
                 new_start += 1;
             }
             new_start
@@ -245,23 +263,23 @@ impl<const CHUNK_SIZE: usize> BitmapAllocator<CHUNK_SIZE> {
             // Number of bits we need to mark in this bitmap.
             let bits = core::cmp::min(rem, 64 - bit);
 
-            // bitmaps[i] |= ~@as(u64, 0) >> @intCast(64 - bits) << @intCast(bit);
-            bitmaps[i] |= ((!0u64) >> (64 - bits)) << bit;
+            // bitmaps[i] &= ~(~@as(u64, 0) >> @intCast(64 - bits) << @intCast(bit));
+            bitmaps[i] &= !(((!0u64) >> (64 - bits)) << bit);
             rem -= bits;
         }
 
         // Mark any full bitmaps worth of bits that need to be marked.
         i += 1;
         while rem > 64 {
-            bitmaps[i] = u64::MAX;
+            bitmaps[i] = 0;
             rem -= 64;
             i += 1;
         }
 
         // Mark any bits at the start of this last bitmap if it needs it.
         if rem > 0 {
-            // bitmaps[i] |= ~@as(u64, 0) >> @intCast(64 - rem);
-            bitmaps[i] |= (!0u64) >> (64 - rem);
+            // bitmaps[i] &= ~(~@as(u64, 0) >> @intCast(64 - rem));
+            bitmaps[i] &= !((!0u64) >> (64 - rem));
         }
     }
 
@@ -278,12 +296,11 @@ impl<const CHUNK_SIZE: usize> BitmapAllocator<CHUNK_SIZE> {
     pub unsafe fn used_bytes<B: IntFromBase + Copy>(&self, base: B) -> usize {
         let bitmaps =
             unsafe { core::slice::from_raw_parts(self.bitmap.ptr(base), self.bitmap_count) };
-        let mut free_chunks: usize = 0;
+        let mut used_chunks: usize = 0;
         for bitmap in bitmaps {
-            free_chunks += bitmap.count_ones() as usize;
+            used_chunks += bitmap.count_ones() as usize;
         }
-        let total_chunks = self.bitmap_count * Self::BITMAP_BIT_SIZE;
-        (total_chunks - free_chunks) * CHUNK_SIZE
+        used_chunks * CHUNK_SIZE
     }
 
     /// For testing only.
@@ -311,7 +328,7 @@ impl<const CHUNK_SIZE: usize> BitmapAllocator<CHUNK_SIZE> {
         for i in chunk_idx..chunk_idx + chunk_count {
             let bitmap = i / Self::BITMAP_BIT_SIZE;
             let bit = i % Self::BITMAP_BIT_SIZE;
-            if bitmaps[bitmap] & (1u64 << bit) != 0 {
+            if bitmaps[bitmap] & (1u64 << bit) == 0 {
                 return false;
             }
         }
@@ -423,8 +440,8 @@ fn find_free_chunks(bitmaps: &mut [u64], n: usize) -> Option<usize> {
         // search: while (i < bitmaps.len) {
         'search: while i < bitmaps.len() {
             // Number of chunks available at the end of this bitmap.
-            // const prefix = @clz(~bitmaps[i]);
-            let prefix = (!bitmaps[i]).leading_zeros() as usize;
+            // const prefix = @clz(bitmaps[i]);
+            let prefix = bitmaps[i].leading_zeros() as usize;
 
             // If there are no chunks available at the end of this bitmap
             // then we can't start in it, so we'll try the next one.
@@ -449,7 +466,7 @@ fn find_free_chunks(bitmaps: &mut [u64], n: usize) -> Option<usize> {
 
                 // There's more than 64 remaining chunks and this bitmap has
                 // content in it, so we try starting again with this bitmap.
-                if bitmaps[i] != u64::MAX {
+                if bitmaps[i] != 0 {
                     continue 'search;
                 }
 
@@ -461,27 +478,27 @@ fn find_free_chunks(bitmaps: &mut [u64], n: usize) -> Option<usize> {
 
             // If the number of available chunks at the start of this bitmap
             // is less than the remaining required, we have to try again.
-            // if (@ctz(~bitmaps[i]) < rem) continue;
-            if ((!bitmaps[i]).trailing_zeros() as usize) < rem {
+            // if (@ctz(bitmaps[i]) < rem) continue;
+            if (bitmaps[i].trailing_zeros() as usize) < rem {
                 continue;
             }
 
             let suffix = (n - prefix) % 64;
 
-            // Found! Mark everything between our start and end as full.
-            // bitmaps[start_bitmap] ^= ~@as(u64, 0) >> @intCast(start_bit) << @intCast(start_bit);
-            bitmaps[start_bitmap] ^= ((!0u64) >> start_bit) << start_bit;
+            // Found! Mark everything between our start and end as used.
+            // bitmaps[start_bitmap] |= ~@as(u64, 0) >> @intCast(start_bit) << @intCast(start_bit);
+            bitmaps[start_bitmap] |= ((!0u64) >> start_bit) << start_bit;
             // const full_bitmaps = @divFloor(n - prefix - suffix, 64);
             let full_bitmaps = (n - prefix - suffix) / 64;
             // for (bitmaps[start_bitmap + 1 ..][0..full_bitmaps]) |*bitmap| {
-            //     bitmap.* = 0;
+            //     bitmap.* = std.math.maxInt(u64);
             // }
             for bitmap in &mut bitmaps[start_bitmap + 1..][0..full_bitmaps] {
-                *bitmap = 0;
+                *bitmap = u64::MAX;
             }
-            // if (suffix > 0) bitmaps[i] ^= ~@as(u64, 0) >> @intCast(64 - suffix);
+            // if (suffix > 0) bitmaps[i] |= ~@as(u64, 0) >> @intCast(64 - suffix);
             if suffix > 0 {
-                bitmaps[i] ^= (!0u64) >> (64 - suffix);
+                bitmaps[i] |= (!0u64) >> (64 - suffix);
             }
 
             return Some(start_bitmap * 64 + start_bit);
@@ -503,10 +520,12 @@ fn find_free_chunks(bitmaps: &mut [u64], n: usize) -> Option<usize> {
         //         = 000001000000010000
         //                ^       ^
         // In this example there are 2 places with at least 4 sequential 1s.
-        let mut shifted: u64 = bitmaps[idx];
-        // for (1..n) |i| shifted &= bitmap.* >> @intCast(i);
+        // Work on the inverted word so that free chunks are 1 bits.
+        let free = !bitmaps[idx];
+        let mut shifted: u64 = free;
+        // for (1..n) |i| shifted &= free >> @intCast(i);
         for i in 1..n {
-            shifted &= bitmaps[idx] >> i;
+            shifted &= free >> i;
         }
 
         // If we have zero then we have no matches
@@ -521,8 +540,8 @@ fn find_free_chunks(bitmaps: &mut [u64], n: usize) -> Option<usize> {
         // Calculate the mask so we can mark it as used
         // const mask = (@as(u64, std.math.maxInt(u64)) >> @intCast(64 - n)) << @intCast(bit);
         let mask = (u64::MAX >> (64 - n)) << bit;
-        // bitmap.* ^= mask;
-        bitmaps[idx] ^= mask;
+        // bitmap.* |= mask;
+        bitmaps[idx] |= mask;
 
         // return (idx * 64) + bit;
         return Some((idx * 64) + bit);
@@ -573,11 +592,11 @@ mod tests {
     #[test]
     fn findFreeChunks_single_found() {
         let mut bitmaps: [u64; 1] =
-            [0b10000000_00000000_00000000_00000000_00000000_00000000_00001110_00000000];
+            [0b01111111_11111111_11111111_11111111_11111111_11111111_11110001_11111111];
         let idx = find_free_chunks(&mut bitmaps, 2).unwrap();
         assert_eq!(9usize, idx);
         assert_eq!(
-            0b10000000_00000000_00000000_00000000_00000000_00000000_00001000_00000000,
+            0b01111111_11111111_11111111_11111111_11111111_11111111_11110111_11111111,
             bitmaps[0],
         );
     }
@@ -585,7 +604,7 @@ mod tests {
     #[test]
     fn findFreeChunks_single_not_found() {
         let mut bitmaps: [u64; 1] =
-            [0b10000111_00000000_00000000_00000000_00000000_00000000_00000000_00000000];
+            [0b01111000_11111111_11111111_11111111_11111111_11111111_11111111_11111111];
         let idx = find_free_chunks(&mut bitmaps, 4);
         assert!(idx == None);
     }
@@ -593,13 +612,13 @@ mod tests {
     #[test]
     fn findFreeChunks_multiple_found() {
         let mut bitmaps: [u64; 2] = [
-            0b10000111_00000000_00000000_00000000_00000000_00000000_00000000_01110000,
-            0b10000000_00111110_00000000_00000000_00000000_00000000_00111110_00000000,
+            0b01111000_11111111_11111111_11111111_11111111_11111111_11111111_10001111,
+            0b01111111_11000001_11111111_11111111_11111111_11111111_11000001_11111111,
         ];
         let idx = find_free_chunks(&mut bitmaps, 4).unwrap();
         assert_eq!(73usize, idx);
         assert_eq!(
-            0b10000000_00111110_00000000_00000000_00000000_00000000_00100000_00000000,
+            0b01111111_11000001_11111111_11111111_11111111_11111111_11011111_11111111,
             bitmaps[1],
         );
     }
@@ -607,10 +626,10 @@ mod tests {
     #[test]
     fn findFreeChunks_exactly_64_chunks() {
         let mut bitmaps: [u64; 1] =
-            [0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111];
+            [0b00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000];
         let idx = find_free_chunks(&mut bitmaps, 64).unwrap();
         assert_eq!(
-            0b00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000,
+            0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111,
             bitmaps[0],
         );
         assert_eq!(0usize, idx);
@@ -619,16 +638,16 @@ mod tests {
     #[test]
     fn findFreeChunks_larger_than_64_chunks() {
         let mut bitmaps: [u64; 2] = [
-            0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111,
-            0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111,
+            0b00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000,
+            0b00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000,
         ];
         let idx = find_free_chunks(&mut bitmaps, 65).unwrap();
         assert_eq!(
-            0b00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000,
+            0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111,
             bitmaps[0],
         );
         assert_eq!(
-            0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111110,
+            0b00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000001,
             bitmaps[1],
         );
         assert_eq!(0usize, idx);
@@ -637,21 +656,21 @@ mod tests {
     #[test]
     fn findFreeChunks_larger_than_64_chunks_not_at_beginning() {
         let mut bitmaps: [u64; 3] = [
-            0b11111111_00000000_00000000_00000000_00000000_00000000_00000000_00000000,
-            0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111,
-            0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111,
+            0b00000000_11111111_11111111_11111111_11111111_11111111_11111111_11111111,
+            0b00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000,
+            0b00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000,
         ];
         let idx = find_free_chunks(&mut bitmaps, 65).unwrap();
         assert_eq!(
-            0b00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000,
+            0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111,
             bitmaps[0],
         );
         assert_eq!(
-            0b11111110_00000000_00000000_00000000_00000000_00000000_00000000_00000000,
+            0b00000001_11111111_11111111_11111111_11111111_11111111_11111111_11111111,
             bitmaps[1],
         );
         assert_eq!(
-            0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111,
+            0b00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000,
             bitmaps[2],
         );
         assert_eq!(56usize, idx);
@@ -660,16 +679,16 @@ mod tests {
     #[test]
     fn findFreeChunks_larger_than_64_chunks_exact() {
         let mut bitmaps: [u64; 2] = [
-            0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111,
-            0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111,
+            0b00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000,
+            0b00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000,
         ];
         let idx = find_free_chunks(&mut bitmaps, 128).unwrap();
         assert_eq!(
-            0b00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000,
+            0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111,
             bitmaps[0],
         );
         assert_eq!(
-            0b00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000,
+            0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111,
             bitmaps[1],
         );
         assert_eq!(0usize, idx);
@@ -909,7 +928,7 @@ mod tests {
 
         // All of our bitmaps should be free.
         let bitmaps: &[u64] = unsafe { core::slice::from_raw_parts(bm.bitmap.ptr(buf.base()), 3) };
-        assert_eq!(&[!0u64; 3][..], bitmaps);
+        assert_eq!(&[0u64; 3][..], bitmaps);
     }
 
     // test "BitmapAllocator search hint skips full words"
@@ -1022,7 +1041,7 @@ mod tests {
 
         // All of our bitmaps should be free.
         let bitmaps: &[u64] = unsafe { core::slice::from_raw_parts(bm.bitmap.ptr(buf.base()), 3) };
-        assert_eq!(&[!0u64; 3][..], bitmaps);
+        assert_eq!(&[0u64; 3][..], bitmaps);
     }
 
     #[test]
@@ -1068,7 +1087,7 @@ mod tests {
 
         // All of our bitmaps should be free.
         let bitmaps: &[u64] = unsafe { core::slice::from_raw_parts(bm.bitmap.ptr(buf.base()), 3) };
-        assert_eq!(&[!0u64; 3][..], bitmaps);
+        assert_eq!(&[0u64; 3][..], bitmaps);
     }
 
     #[test]
@@ -1101,7 +1120,7 @@ mod tests {
 
         // All of our bitmaps should be free.
         let bitmaps: &[u64] = unsafe { core::slice::from_raw_parts(bm.bitmap.ptr(buf.base()), 3) };
-        assert_eq!(&[!0u64; 3][..], bitmaps);
+        assert_eq!(&[0u64; 3][..], bitmaps);
     }
 
     #[test]
@@ -1149,7 +1168,7 @@ mod tests {
 
         // All of our bitmaps should be free.
         let bitmaps: &[u64] = unsafe { core::slice::from_raw_parts(bm.bitmap.ptr(buf.base()), 3) };
-        assert_eq!(&[!0u64; 3][..], bitmaps);
+        assert_eq!(&[0u64; 3][..], bitmaps);
     }
 
     #[test]
@@ -1199,7 +1218,7 @@ mod tests {
 
         // All of our bitmaps should be free.
         let bitmaps: &[u64] = unsafe { core::slice::from_raw_parts(bm.bitmap.ptr(buf.base()), 3) };
-        assert_eq!(&[!0u64; 3][..], bitmaps);
+        assert_eq!(&[0u64; 3][..], bitmaps);
     }
 
     #[test]
@@ -1263,7 +1282,7 @@ mod tests {
 
         // All of our bitmaps should be free.
         let bitmaps: &[u64] = unsafe { core::slice::from_raw_parts(bm.bitmap.ptr(buf.base()), 3) };
-        assert_eq!(&[!0u64; 3][..], bitmaps);
+        assert_eq!(&[0u64; 3][..], bitmaps);
     }
 
     #[test]
@@ -1328,7 +1347,7 @@ mod tests {
 
         // All of our bitmaps should be free.
         let bitmaps: &[u64] = unsafe { core::slice::from_raw_parts(bm.bitmap.ptr(buf.base()), 4) };
-        assert_eq!(&[!0u64; 4][..], bitmaps);
+        assert_eq!(&[0u64; 4][..], bitmaps);
     }
 
     #[test]
