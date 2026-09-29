@@ -1,0 +1,235 @@
+sha	date	subject	files	area	cited_by	flag
+ba8690c42	2026-08-17	i18n(de): Typo fix	po/de.po	R4	R4	-
+8b5678bd1	2026-02-18	i18n(de): German translation improvements	po/de.po	R4	R4	-
+4c7496c03	2026-08-13	i18n: update Lithuanian translation for v1.4	po/lt.po	R4	R4	-
+53ae1dd8b	2026-08-13	update translation	po/vi.po	R4	R4	-
+d13d43995	2026-08-13	update	po/vi.po	R4	R4	-
+1266c0a32	2026-08-15	i18n: update `de_DE` translations	po/de.po	R4	R4	-
+3e0865422	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+167ed5788	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+bd4226741	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+f8304c01f	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+e9693a4a2	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+0f03d156c	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+b3f4dbb37	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+57b312293	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+dc2d6f1b3	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+eba2ec988	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+1779cabf4	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+58dd6d777	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+a44c47477	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+4df91b3fc	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+ab26bb4b2	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+7d355b8a0	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+d405da445	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+6633869d8	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+18d323d24	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+7a8221113	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+7d6c090a7	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+56b739cc3	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+85508ca2c	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+05dd3c53a	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+159be4d3c	2026-08-16	Update po/lt.po	po/lt.po	R4	R4	-
+b32b2f87a	2026-08-17	i18n(de): Typo fix	po/de.po	R4	-	cited-by-no-reviewer
+fee8cb523	2026-08-20	i18n(de): Wording plain text	po/de.po	R4	R4	-
+4cc8fa335	2026-08-20	i18n(de): Fix accidental deletion	po/de.po	R4	R4	-
+9c4a5a899	2026-02-18	i18n(de): German translation improvements	po/de.po	R4	-	cited-by-no-reviewer
+3879bff33	2026-08-20	i18n(de): Wording plain text	po/de.po	R4	-	cited-by-no-reviewer
+1aaca23e3	2026-08-20	i18n(de): Fix accidental deletion	po/de.po	R4	-	cited-by-no-reviewer
+654228866	2026-08-24	Start Italian translation for 1.4	po/it.po	R4	R4	-
+5e6167072	2026-08-24	i18n(de): update German translation	po/de.po	R4	R4	-
+e3849b7a6	2026-08-26	i18n(de): update German translation	po/de.po	R4	R4	-
+807a51e3e	2026-08-30	updated localization file	po/mk.po	R4	R4	-
+36015c99d	2026-08-30	updated revision date	po/mk.po	R4	R4	-
+ee10453a2	2026-08-30	fix unclosed quote	po/mk.po	R4	R4	-
+59141ad21	2026-08-31	add eu translation	po/eu.po	R4	R4	-
+38c984e67	2026-09-01	build(deps): bump softprops/action-gh-release from 3.0.2 to 3.0.3	.github/workflows/release-tip.yml	R4	R4	-
+d4a5ff58b	2026-09-01	macOS: fix window cascading	macos/Sources/Features/Terminal/TerminalController.swift	R2	R2	-
+451e224c6	2026-09-01	macOS: clean up for #14106	macos/Sources/Features/Terminal/TerminalController.swift	R2	R2	-
+501e7b5c1	2026-09-01	pkg/fontconfig: update to 2.18.3	build.zig.zon.json;build.zig.zon.nix;build.zig.zon.txt;flatpak/zig-packages.json;pkg/fontconfig/build.zig;pkg/fontconfig/build.zig.zon;pkg/fontconfig/override/fc-case/fccase.h;pkg/fontconfig/override/fc-const/fcconst.h;pkg/fontconfig/override/fc-genericfamily/fcgenericfamily.h;pkg/fontconfig/override/fc-lang/fclang.h;pkg/fontconfig/override/fontconfig/fontconfig.h;pkg/fontconfig/override/include/fcalias.h;pkg/fontconfig/override/include/fcaliastail.h;pkg/fontconfig/override/include/fcftalias.h;pkg/fontconfig/override/include/fcftaliastail.h;pkg/fontconfig/override/src/fcalias.h;pkg/fontconfig/override/src/fcaliastail.h;pkg/fontconfig/override/src/fcftalias.h;pkg/fontconfig/override/src/fcftaliastail.h;pkg/fontconfig/override/src/fcint.h;pkg/fontconfig/override/src/fcobjshash.h;pkg/fontconfig/override/src/fcstdint.h	R4	R4	outside-declared-scopes(nix/flake/flatpak/unicode/stb->R4;App.zig/apprt.zig->R2)
+2ba75764f	2026-09-02	build(deps): bump flatpak/flatpak-github-actions/flatpak-builder	.github/workflows/flatpak.yml	R4	R4	-
+7358067d1	2026-09-02	build(deps): bump cachix/cachix-action	.github/workflows/nix.yml;.github/workflows/release-tag.yml;.github/workflows/release-tip.yml;.github/workflows/test.yml;.github/workflows/update-colorschemes.yml	R4	R4	-
+310797df1	2026-09-02	macOS: fix cascading without affecting other new-window behaviours	macos/Sources/Features/Terminal/TerminalController.swift	R2	R2	-
+a8b0855b6	2026-09-02	macOS: fix cascading for HiddenTitlebarTerminalWindow	macos/Sources/Features/Terminal/TerminalController.swift	R2	R2	-
+58aa59d0e	2026-09-02	Update po/eu.po	po/eu.po	R4	R4	-
+6a5152651	2026-09-02	Update po/eu.po	po/eu.po	R4	R4	-
+4c731b5d8	2026-09-02	Update po/eu.po	po/eu.po	R4	R4	-
+4ffec4bda	2026-09-02	Update po/eu.po	po/eu.po	R4	R4	-
+f407316c8	2026-09-02	Update po/eu.po	po/eu.po	R4	R4	-
+63039a688	2026-09-02	update	po/eu.po	R4	R4	-
+f184d3ceb	2026-09-02	update	po/eu.po	R4	R4	-
+4da902b3c	2026-09-02	update	po/eu.po	R4	R4	-
+9801423d0	2026-09-02	update	po/eu.po	R4	R4	-
+5d6615fc4	2026-09-02	bash: upgrade to bash-preexec 0.7.0	src/shell-integration/bash/bash-preexec.sh	R3	R3	-
+752017502	2026-09-02	more fixes	po/eu.po	R4	R4	-
+aafacb1cb	2026-09-02	macOS: fix flickering when creating new tab with glass style	macos/Sources/Features/Terminal/TerminalViewContainer.swift	R2	R2	-
+06178eeaa	2026-09-02	terminal/search: resume a complete search when history is prepended	src/terminal/search/pagelist.zig;src/terminal/search/screen.zig;src/terminal/search/terminal.zig	R1	R1	-
+3b8141fbd	2026-09-02	os/open: consume the newline when draining opener stderr	src/os/open.zig	R3	R3	-
+5dfb67298	2026-09-02	surface: restore mouse_shape when modifier overrides end	src/surface_mouse.zig	R2	R2	-
+6674aa3ba	2026-09-02	surface: update keyToMouseShape tests to expect mouse_shape	src/surface_mouse.zig	R2	R2	-
+3a766ccf5	2026-09-02	surface: show .text (i-beam) while shift is held without mouse tracking	src/surface_mouse.zig	R2	R2	-
+0fb6d2940	2026-09-02	SurfaceMouse: simplify keyToMouseShape	src/surface_mouse.zig	R2	R2	-
+e01e75bbb	2026-09-02	terminal: don't touch me! keep the page pool free list unobtrusive	src/datastruct/main.zig;src/datastruct/untouched_pool.zig;src/datastruct/wasm_page_pool.zig;src/terminal/PageList.zig;src/terminal/page.zig	R1	R1	-
+e347482fb	2026-09-03	macOS: fix find previous action when search is focused	macos/Sources/Features/Terminal/BaseTerminalController.swift	R2	R2	-
+e8936b896	2026-09-03	macOS: follow up cascading fix for #14118	macos/Sources/Features/Terminal/TerminalController.swift	R2	R2	-
+ffe015ee5	2026-09-03	terminal: bitmap allocator marks free chunks with zero bits	src/terminal/bitmap_allocator.zig	R1	R1	-
+c0a4f80d8	2026-09-03	terminal: hash map and ref counted set can initialize from zeroed memory	src/terminal/hash_map.zig;src/terminal/ref_counted_set.zig	R1	R1	-
+6112935a2	2026-09-03	terminal: hash map keeps its capacity and entry pointers in the struct	src/terminal/hash_map.zig	R1	R1	-
+d2ff6d77a	2026-09-03	terminal: pages initialize from zeroed memory and cache-line align their cells	src/terminal/page.zig	R1	R1	-
+efa3c66ed	2026-09-03	terminal: PageList nodes are pooled individually from the gpa instead of an arena	src/terminal/PageList.zig	R1	R1	-
+35a6fb747	2026-09-03	terminal: PageList preheats only the viewport and cursor pins	src/terminal/PageList.zig	R1	R1	-
+105d0a545	2026-09-03	terminal: C terminal wrapper allocates the kitty temp dir path only when it is set	src/terminal/c/terminal.zig	R3	R1,R3	-
+d1cd56a56	2026-09-03	terminal: dynamic palette shares the built-in default instead of copying it per terminal	src/terminal/Terminal.zig;src/terminal/c/terminal.zig;src/terminal/color.zig;src/terminal/snapshot/terminal.zig;src/termio/Termio.zig	R1+R3	R1,R3	-
+4406cea3e	2026-09-04	input: encode ctrl keys with modifyOtherKeys 2	src/input/key_encode.zig	R3	R3	-
+636a2f35b	2026-09-04	input: preserve numeric keypad output with MOK2	src/input/function_keys.zig;src/input/key_encode.zig	R3	R3	-
+e7bdda991	2026-09-04	input: encode F13 through F25	src/input/function_keys.zig;src/input/key_encode.zig	R3	R3	-
+37e3cdd2d	2026-09-04	input: encode alt+escape with MOK2	src/input/function_keys.zig;src/input/key_encode.zig	R3	R3	-
+cc3fd8a77	2026-09-04	input: encode help and context menu keys	src/input/function_keys.zig;src/input/key_encode.zig	R3	R3	-
+587e08f3f	2026-09-04	input: encode non-ASCII alt prefixes as UTF-8	src/input/key_encode.zig	R3	R3	-
+11d1cc4fc	2026-09-06	deps: Update iTerm2 color schemes	build.zig.zon;build.zig.zon.json;build.zig.zon.nix;build.zig.zon.txt;flatpak/zig-packages.json	R4	R4	outside-declared-scopes(nix/flake/flatpak/unicode/stb->R4;App.zig/apprt.zig->R2)
+50f757dc8	2026-09-06	i18n(de): adjust floating state description	po/de.po	R4	R4	-
+5909690de	2026-09-07	config: rebuild RepeatableCommand's C mirror on clone	src/config/Config.zig	R3	R3	-
+97f2ddb06	2026-09-07	Sync CODEOWNERS vouch list (#14163)	.github/VOUCHED.td	non-port	R4	-
+258c057c0	2026-09-07	build(deps): bump ryand56/r2-upload-action from 1.4 to 1.5	.github/workflows/publish-tag.yml;.github/workflows/release-tag.yml;.github/workflows/release-tip.yml;.github/workflows/update-colorschemes.yml	R4	R4	-
+e9283ba87	2026-09-07	build(deps): bump c-hive/gha-remove-artifacts from 1.4.0 to 1.8.0	.github/workflows/clean-artifacts.yml	R4	R4	-
+2b3b89391	2026-09-02	deps: update translate-c backport	build.zig.zon;build.zig.zon.json;build.zig.zon.nix;build.zig.zon.txt;flatpak/zig-packages.json;pkg/gtk4-layer-shell/build.zig.zon;pkg/harfbuzz/build.zig.zon;pkg/macos/build.zig.zon;pkg/wuffs/build.zig.zon	R2+R4	R2,R4	outside-declared-scopes(nix/flake/flatpak/unicode/stb->R4;App.zig/apprt.zig->R2)
+72cf50855	2026-09-07	renderer: never stop the display link while holding the draw mutex	src/renderer/generic.zig	R2	R2	-
+ff5b87e4d	2026-09-07	i18n: re-apply remaining lt.po review suggestions	po/lt.po	R4	R4	-
+607d59b0e	2026-09-07	i18n: fix Lithuanian grammar and terminology consistency in lt.po	po/lt.po	R4	R4	-
+dd2edd760	2026-09-07	libvt: return safe pointers for empty output	include/ghostty/vt/allocator.h;include/ghostty/vt/formatter.h;include/ghostty/vt/selection.h;include/ghostty/vt/terminal.h;include/ghostty/vt/types.h;src/lib/types.zig;src/terminal/c/allocator.zig;src/terminal/c/formatter.zig;src/terminal/c/selection.zig;src/terminal/c/sys.zig;src/terminal/c/terminal.zig	R3	R1,R3	-
+1ff027c33	2026-08-25	i18n(hr): started updating hr translation	po/hr.po	R4	R4	-
+437dce21b	2026-08-31	Update hr.po	po/hr.po	R4	R4	-
+edf3aa01b	2026-09-01	i18n(hr): added more translations and fixes	po/hr.po	R4	R4	-
+c01c683eb	2026-09-01	i18n(hr): "toggle" string translations	po/hr.po	R4	R4	-
+d1ed60d56	2026-09-04	Update hr.po	po/hr.po	R4	R4	-
+68852fc00	2026-09-08	i18n(hr): unify translation	po/hr.po	R4	R4	-
+0b5446364	2026-09-09	terminal/kitty: reject unsafe Windows paths for image file mediums	src/terminal/kitty/graphics_image.zig;src/terminal/kitty/windows.zig	R1	R1	-
+7adbb5160	2026-09-09	build/libghostty-vt: export uucode so that it can be re-used	src/build/SharedDeps.zig	R4	R4	-
+60b43068c	2026-09-09	terminal: reclaim pooled and compressed page memory on Windows	src/os/windows.zig;src/terminal/PageList.zig;src/terminal/mem.zig	R1+R3	R1,R3	-
+c488a41b0	2026-08-27	nix: add libglvnd to devShell for EGL	nix/devShell.nix	R4	R4	outside-declared-scopes(nix/flake/flatpak/unicode/stb->R4;App.zig/apprt.zig->R2)
+fa2ec3a6a	2026-08-27	pkg/opengl: add EGL headers and bindings	pkg/opengl/egl.zig;pkg/opengl/main.zig;vendor/glad/include/EGL/eglplatform.h;vendor/glad/include/glad/glad_egl.h;vendor/glad/src/glad_egl.c	R2	R2,R4	-
+758100916	2026-08-27	build: link against libEGL	src/build/SharedDeps.zig	R4	R4	-
+2f0b65346	2026-08-27	gtk,opengl: free us from the clutches of GtkGLArea	pkg/opengl/main.zig;src/App.zig;src/Surface.zig;src/apprt.zig;src/apprt/gtk/App.zig;src/apprt/gtk/class.zig;src/apprt/gtk/class/render_surface.zig;src/apprt/gtk/class/surface.zig;src/apprt/gtk/ui/1.2/surface.blp;src/apprt/surface.zig;src/renderer/Dmabuf.zig;src/renderer/Metal.zig;src/renderer/OpenGL.zig;src/renderer/Thread.zig;src/renderer/generic.zig;src/renderer/metal/shaders.zig;src/renderer/opengl/Frame.zig;src/renderer/opengl/Target.zig;src/renderer/opengl/shaders.zig	R2	R2	outside-declared-scopes(nix/flake/flatpak/unicode/stb->R4;App.zig/apprt.zig->R2)
+380778e3c	2026-08-28	ci: drop libghostty-internal builds on Windows	.github/workflows/test.yml	R4	R4	-
+a5f604da7	2026-08-28	renderer: make LatestFrame methods no-ops when ExportedFrame is void	src/renderer/generic.zig	R2	R2	-
+4c8983586	2026-08-28	gtk: initialize core surface on first resize	src/apprt/gtk/class/surface.zig	R2	R2	-
+b87af8646	2026-08-28	pkg/opengl: replace cImport with translate-c	pkg/opengl/Buffer.zig;pkg/opengl/Framebuffer.zig;pkg/opengl/Program.zig;pkg/opengl/Renderbuffer.zig;pkg/opengl/Sampler.zig;pkg/opengl/Shader.zig;pkg/opengl/Texture.zig;pkg/opengl/VertexArray.zig;pkg/opengl/build.zig;pkg/opengl/c.zig;pkg/opengl/draw.zig;pkg/opengl/errors.zig;pkg/opengl/extensions.zig;pkg/opengl/gl.c;pkg/opengl/glad.zig;pkg/opengl/main.zig;pkg/opengl/primitives.zig	R2	R2	-
+adf161473	2026-08-30	pkg/opengl: polish API	pkg/opengl/Sampler.zig;pkg/opengl/Texture.zig;pkg/opengl/draw.zig;pkg/opengl/main.zig;src/renderer/OpenGL.zig;src/renderer/opengl/Sampler.zig;src/renderer/opengl/Target.zig;src/renderer/opengl/Texture.zig	R2	R2	-
+45aa963d6	2026-09-05	opengl: delay opengl flush	src/renderer/opengl/Frame.zig	R2	R2	-
+ce5d51f46	2026-09-06	gtk/render_surface: report dmabuf build errors	src/apprt/gtk/class/render_surface.zig	R2	R2	-
+202fa8e39	2026-09-06	gtk: do not disable OpenGL ES and Vulkan	src/apprt/gtk/class/application.zig	R2	R2	-
+7644e6d62	2026-09-09	build/linghostty-vt: fix libvaxis access to uucode tables	src/build/uucode_config.zig	R4	R4	-
+57286723d	2026-09-09	nix: update zon2nix to 0.7.0	build.zig.zon.nix;flake.lock	R4	R4	outside-declared-scopes(nix/flake/flatpak/unicode/stb->R4;App.zig/apprt.zig->R2)
+f5efbaee5	2026-09-09	nix: use hardlinks	build.zig.zon.nix;flake.lock	R4	R4	outside-declared-scopes(nix/flake/flatpak/unicode/stb->R4;App.zig/apprt.zig->R2)
+13a21fc04	2026-09-09	nix: use --reflink=auto instead of --link	build.zig.zon.nix;flake.lock	R4	R4	outside-declared-scopes(nix/flake/flatpak/unicode/stb->R4;App.zig/apprt.zig->R2)
+f6cb8312b	2026-09-09	tinyio: implement a Windows version and use it in the C API	src/lib/TinyIo.zig;src/lib/tinyio/posix.zig;src/lib/tinyio/test.zig;src/lib/tinyio/windows.zig;src/lib_vt.zig;src/os/windows.zig;src/terminal/c/snapshot.zig;src/terminal/c/terminal.zig	R3	R1,R3	-
+8a3dbc8ce	2026-09-09	i18n(hr): spiffy up the translation	po/hr.po	R4	R4	-
+8c17235f8	2026-09-09	Update VOUCHED list (#14195)	.github/VOUCHED.td	non-port	R4	-
+d08ebcc86	2026-09-10	Keep working on italian translation on 1.4	po/it.po	R4	R4	-
+69f42c1a3	2026-09-10	Use 'riquadro' instead of 'divisione' for 'Split'	po/it.po	R4	R4	-
+466439bdf	2026-09-10	Update VOUCHED list (#14205)	.github/VOUCHED.td	non-port	R4	-
+6d8f8b9aa	2026-09-10	chore: make event reporting explicit	po/hr.po	R4	R4	-
+c0c5473da	2026-09-08	build: refactoring our use of translate-c	build.zig;build.zig.zon;pkg/gtk4-layer-shell/build.zig;pkg/gtk4-layer-shell/build.zig.zon;pkg/harfbuzz/build.zig;pkg/harfbuzz/build.zig.zon;pkg/macos/build.zig;pkg/macos/build.zig.zon;pkg/translate-c/build.zig;pkg/translate-c/build.zig.zon;pkg/wuffs/build.zig;pkg/wuffs/build.zig.zon;src/build/SharedDeps.zig	R2+R4	R2,R4	-
+d00a49827	2026-09-09	opengl: flip Y axis during framebuffer blit	src/apprt/gtk/class/render_surface.zig;src/renderer/opengl/Target.zig	R2	R2	-
+1a8f331f1	2026-09-08	macOS: implement move_tab_to_new_window	macos/Sources/Ghostty/Ghostty.App.swift;src/input/Binding.zig	R2+R3	R2,R3	-
+9bbb9b246	2026-09-12	Update VOUCHED list (#14215)	.github/VOUCHED.td	non-port	R4	-
+4dac203c3	2026-09-12	Finish italian translation for 1.4	po/it.po	R4	R4	-
+74e47a706	2026-09-12	macOS: fix title bar clipping custom font	macos/Sources/Features/Terminal/TerminalController.swift;macos/Sources/Features/Terminal/Window Styles/TerminalWindow.swift	R2	R2	-
+6a64b1c86	2026-09-13	po/zh_CN: add missing translations	po/zh_CN.po	R4	R4	-
+ef7edc4a2	2026-09-11	gtk/build: speed up repeated builds by letting the Zig build cache work	src/apprt/gtk/build/blueprint.zig;src/apprt/gtk/build/gresource.zig;src/build/SharedDeps.zig	R4	R2,R4	-
+09a2724c2	2026-09-13	Update VOUCHED list (#14223)	.github/VOUCHED.td	non-port	R4	-
+55c3e8cc0	2026-09-13	First review feedback	po/it.po	R4	R4	-
+0c2a290d3	2026-09-14	Sync CODEOWNERS vouch list (#14229)	.github/VOUCHED.td	non-port	R4	-
+5beb94c16	2026-09-14	renderer: apply font-thicken to IME preedit text	src/renderer/generic.zig	R2	R2	-
+45058d768	2026-09-14	Review feedback	po/it.po	R4	R4	-
+6ab34cad2	2026-09-14	gtk: remove unused blueprint using statement	src/apprt/gtk/ui/1.2/surface.blp	R2	R2	-
+9dc0d974e	2026-09-14	terminal: answer ANSI DECRQM queries	src/terminal/c/terminal.zig;src/terminal/stream.zig;src/terminal/stream_terminal.zig	R1+R3	R1,R3	-
+3beb6d717	2026-09-14	terminal: decrqm don't truncate 16-bit mode requests	src/terminal/c/modes.zig;src/terminal/modes.zig;src/terminal/stream_terminal.zig;src/termio/stream_handler.zig	R1+R3	R1,R3	-
+d4c88d806	2026-09-15	Update VOUCHED list (#14241)	.github/VOUCHED.td	non-port	R4	-
+fe9cf6a26	2026-09-11	build: fully transition away from cImport/addTranslateC	pkg/dcimgui/build.zig;pkg/dcimgui/build.zig.zon;pkg/dcimgui/main.zig;pkg/fontconfig/build.zig;pkg/fontconfig/build.zig.zon;pkg/fontconfig/c.zig;pkg/freetype/build.zig;pkg/freetype/build.zig.zon;pkg/freetype/c.zig;pkg/glslang/build.zig;pkg/glslang/build.zig.zon;pkg/glslang/c.zig;pkg/gtk4-layer-shell/build.zig;pkg/gtk4-layer-shell/src/main.zig;pkg/harfbuzz/build.zig;pkg/oniguruma/build.zig;pkg/oniguruma/build.zig.zon;pkg/oniguruma/c.zig;pkg/opengl/Buffer.zig;pkg/opengl/Framebuffer.zig;pkg/opengl/Program.zig;pkg/opengl/Renderbuffer.zig;pkg/opengl/Sampler.zig;pkg/opengl/Shader.zig;pkg/opengl/Texture.zig;pkg/opengl/VertexArray.zig;pkg/opengl/build.zig;pkg/opengl/build.zig.zon;pkg/opengl/draw.zig;pkg/opengl/egl.zig;pkg/opengl/errors.zig;pkg/opengl/extensions.zig;pkg/opengl/gl.c;pkg/opengl/glad.zig;pkg/opengl/main.zig;pkg/opengl/primitives.zig;pkg/sentry/build.zig;pkg/sentry/build.zig.zon;pkg/sentry/c.zig;pkg/spirv-cross/build.zig;pkg/spirv-cross/build.zig.zon;pkg/spirv-cross/c.zig;pkg/translate-c/build.zig;src/apprt/gtk/winproto/x11.zig;src/build/SharedDeps.zig;src/config/Config.zig;src/os/desktop.zig;src/os/passwd.zig;src/stb/main.zig;src/termio/Exec.zig	R2+R3+R4	R2,R3,R4	outside-declared-scopes(nix/flake/flatpak/unicode/stb->R4;App.zig/apprt.zig->R2)
+4dfa44ecd	2026-09-15	bash: use passed exit status in precmd	src/shell-integration/bash/ghostty.bash	R3	R3	-
+ed7f046ee	2026-09-15	bash: recognize attributed prompt command arrays	src/shell-integration/bash/ghostty.bash	R3	R3	-
+591ccacbd	2026-09-15	bash: preserve exit status across prompt commands	src/shell-integration/bash/ghostty.bash	R3	R3	-
+f9a3f24a5	2026-09-16	Update VOUCHED list (#14256)	.github/VOUCHED.td	non-port	R4	-
+494e41374	2026-09-16	i18n(ru): refine Russian translation	po/ru.po	R4	R4	-
+a4031c8e3	2026-09-15	bash: detect hooks in prompt command arrays	src/shell-integration/bash/ghostty.bash	R3	R3	-
+a1bf5b5e1	2026-09-16	embedded: route split and close C APIs through performBindingAction	src/apprt/embedded.zig	R3	R2,R3	-
+a41248013	2026-09-16	tmux: fix list-windows action use-after-free	src/terminal/tmux/viewer.zig	R1	R1	-
+ab34b8b13	2026-09-17	opengl: explicitly set EGL_SURFACE_TYPE	src/renderer/OpenGL.zig	R2	R2	-
+c15e2f799	2026-09-17	opengl: EGLattrib arrays need no explicit sentinel	src/renderer/OpenGL.zig	R2	R2	-
+851cd4dc1	2026-09-17	gtk: disable Vulkan again, remove old version gates	src/apprt/gtk/class/application.zig	R2	R2	-
+0fca3d34a	2026-09-17	gtk/imgui_widget: remove direct call to glClearColor	passthrough.glsl;src/apprt/gtk/class/imgui_widget.zig	R2	R2,R4	-
+590ab157f	2026-09-18	opengl/Sampler: handle enum parameters correctly	pkg/opengl/Sampler.zig	R2	R2	-
+f5c056d30	2026-09-17	font: import Constraint from Glyph.zig in nerd-font codegen	src/font/nerd_font_codegen.py	R2	R2	-
+57bdb8c44	2026-09-17	i18n(ru): small fixes	po/ru.po	R4	R4	-
+cd8daf9eb	2026-09-18	build(deps): bump docker/build-push-action from 7.3.0 to 7.4.0	.github/workflows/test.yml	R4	R4	-
+98f2e3e6d	2026-09-18	build(deps): bump namespacelabs/nscloud-cache-action from 1.6.1 to 1.7.0	.github/workflows/nix.yml;.github/workflows/release-tag.yml;.github/workflows/release-tip.yml;.github/workflows/snap.yml;.github/workflows/test.yml;.github/workflows/update-colorschemes.yml	R4	R4	-
+e842d763c	2026-09-18	Update VOUCHED list (#14290)	.github/VOUCHED.td	non-port	R4	-
+87b60655b	2026-09-18	Update the Norwegian translation	po/nb.po	R4	R4	-
+86f449013	2026-09-18	Update VOUCHED list (#14292)	.github/VOUCHED.td	non-port	R4	-
+12542b392	2026-09-17	deps: Update uucode for Unicode 18	build.zig.zon;src/unicode/grapheme.zig	R4	R4	outside-declared-scopes(nix/flake/flatpak/unicode/stb->R4;App.zig/apprt.zig->R2)
+aef7aaeb8	2026-09-18	check-zig-hash --update	build.zig.zon.json;build.zig.zon.nix;build.zig.zon.txt;flatpak/zig-packages.json	R4	R4	outside-declared-scopes(nix/flake/flatpak/unicode/stb->R4;App.zig/apprt.zig->R2)
+c55f213aa	2026-09-18	terminal: add option to disable scrollback pull on resize	include/ghostty/vt/terminal.h;src/terminal/PageList.zig;src/terminal/Screen.zig;src/terminal/Terminal.zig;src/terminal/c/terminal.zig	R1+R3	R1,R3	-
+f3276131f	2026-09-17	font: store glyph cache keys as packed u64	src/font/SharedGrid.zig	R2	R2	-
+b15fe2eea	2026-09-17	font: store CodepointKey as a packed u64	src/font/SharedGrid.zig	R2	R2	-
+a925a97e3	2026-09-19	renderer/opengl: fix missing gl.finish() between present request and sharing presented frame	src/renderer/opengl/Frame.zig	R2	R2	-
+790c6b60f	2026-09-19	Update VOUCHED list	.github/VOUCHED.td	non-port	-	-
+ca9b0384f	2026-09-19	Update VOUCHED list (#14308)	.github/VOUCHED.td	non-port	R4	-
+079502e23	2026-09-19	terminal: look up modes by number with a comptime sorted set	src/datastruct/comptime_int_set.zig;src/datastruct/main.zig;src/terminal/modes.zig	R1	R1	-
+e50779498	2026-09-19	libghostty-vt: add render hold effect for synchronized output (mode 2026)	include/ghostty/vt/render.h;include/ghostty/vt/terminal.h;src/terminal/c/terminal.zig;src/terminal/stream_terminal.zig	R1+R3	R1,R3	-
+cc140d478	2026-09-20	opengl: explicitly initialize surfaceless display	pkg/opengl/egl.zig;src/renderer/OpenGL.zig;vendor/glad/include/glad/glad_egl.h;vendor/glad/src/glad_egl.c	R2	R2,R4	-
+27e8b3fa8	2026-09-20	Update VOUCHED list (#14320)	.github/VOUCHED.td	non-port	R4	-
+8619becb2	2026-09-20	opengl: validate exported DMA-BUF planes	src/renderer/opengl/Target.zig	R2	R2	-
+9a4ba7d54	2026-09-20	tmux: test list-windows action lifetime	src/terminal/tmux/viewer.zig	R1	R1	-
+3c47ca159	2026-09-21	Sync CODEOWNERS vouch list (#14327)	.github/VOUCHED.td	non-port	R4	-
+9fc8d9ebd	2026-09-21	gtk: streamline surface overrides	src/apprt/gtk/class/Overrides.zig;src/apprt/gtk/class/application.zig;src/apprt/gtk/class/split_tree.zig;src/apprt/gtk/class/surface.zig;src/apprt/gtk/class/tab.zig;src/apprt/gtk/class/window.zig	R2	R2	-
+a93a8b03b	2026-09-22	gtk,imgui: Fix broken widget by allowing a GLES context to be used	src/apprt/gtk/class/imgui_widget.zig;src/apprt/gtk/ui/1.5/imgui-widget.blp	R2	R2	-
+bd1c82bc5	2026-09-22	Update VOUCHED list (#14341)	.github/VOUCHED.td	non-port	R4	-
+9d2d9acac	2026-09-22	agents: drop CLAUDE.md	CLAUDE.md	R4	R4	-
+c4f15c884	2026-09-22	terminal: stop word selection at hard line breaks	src/terminal/Screen.zig	R1	R1	-
+a4f0d9f4a	2026-09-22	terminal: batch special graphics character writes	src/terminal/Terminal.zig	R1	R1	-
+7fb75b3c5	2026-09-23	Update VOUCHED list (#14363)	.github/VOUCHED.td	non-port	R4	-
+78494bad8	2026-09-23	terminal/c: expose the application-requested mouse shape	include/ghostty/vt/mouse.h;include/ghostty/vt/mouse/shape.h;include/ghostty/vt/terminal.h;src/terminal/c/terminal.zig;src/terminal/c/types.zig	R3	R1,R3	-
+622b4eecd	2026-09-23	Update VOUCHED list (#14367)	.github/VOUCHED.td	non-port	R4	-
+7c40388b2	2026-09-24	Update VOUCHED list (#14373)	.github/VOUCHED.td	non-port	R4	-
+714fe9b90	2026-09-23	terminal,macos: support resizing the window with CSI 8 t	include/ghostty.h;macos/Sources/Features/Terminal/TerminalController.swift;macos/Sources/Ghostty/Ghostty.App.swift;src/Surface.zig;src/apprt/action.zig;src/apprt/gtk/class/application.zig;src/apprt/surface.zig;src/config/Config.zig;src/terminal/stream.zig;src/terminal/stream_terminal.zig;src/termio/stream_handler.zig	R1+R2+R3	R1,R2,R3	-
+219cca932	2026-09-23	gtk: support resizing the window with CSI 8 t	src/apprt/gtk/class/application.zig;src/apprt/gtk/class/window.zig;src/config/Config.zig	R2+R3	R2,R3	-
+45013faf8	2026-08-30	gtk: support fractional surface scaling	src/Surface.zig;src/apprt/gtk.zig;src/apprt/gtk/class/render_surface.zig;src/apprt/gtk/class/surface.zig;src/apprt/gtk/scale.zig	R2	R2	-
+1964ed123	2026-09-10	gtk: harden fractional scale notify and DPI rounding	src/apprt/gtk/class/render_surface.zig;src/apprt/gtk/class/surface.zig	R2	R2	-
+df2186dce	2026-09-17	gtk: drop 4.12 version checks	src/apprt/gtk/class/render_surface.zig;src/apprt/gtk/scale.zig	R2	R2	-
+08931f405	2026-09-17	gtk: added logs to debug scaling values	src/apprt/gtk/class/render_surface.zig;src/apprt/gtk/class/surface.zig	R2	R2	-
+9dc7408be	2026-09-20	gtk: snap fractional texture origin to device pixels	src/apprt/gtk/class/render_surface.zig;src/apprt/gtk/scale.zig;src/build/SharedDeps.zig	R2+R4	R2,R4	-
+0070f9d0a	2026-09-20	gtk: snap fractional texture origin GdkSurface	src/apprt/gtk/class/render_surface.zig;src/apprt/gtk/scale.zig	R2	R2	-
+70a75ceb5	2026-09-20	gtk: Layout unifies scale, origin, snapped size	src/apprt/gtk/scale.zig	R2	R2	-
+d1da18350	2026-09-20	gtk: remove widgetDeviceSize, snapshotOrigin wrappers	src/apprt/gtk/class/render_surface.zig;src/apprt/gtk/scale.zig	R2	R2	-
+e1916c1ab	2026-09-23	gtk: demote log from info to debug	src/apprt/gtk/class/render_surface.zig	R2	R2	-
+c273d6ff6	2026-09-24	Update VOUCHED list (#14387)	.github/VOUCHED.td	non-port	R4	-
+5ca09acf6	2026-09-24	build: trim branch name before sanitizing it for the version	src/build/GitVersion.zig	R4	R4	-
+2a987d59d	2026-09-24	config: move vt-window-resize-allowed next to vt-kam-allowed	src/config/Config.zig	R3	R3	-
+d4f45bee3	2026-09-22	terminal: fix reverse wrap cursor jump	src/terminal/Terminal.zig	R1	R1	-
+a3e80a685	2026-09-22	terminal: fix word selection across wide characters	src/terminal/Screen.zig	R1	R1	-
+4eb308831	2026-09-25	gtk: don't tell systemd we're ready before we can handle SIGUSR2	src/apprt/gtk/class/application.zig	R2	R2	-
+ca4f719f7	2026-09-25	terminal: add overscan support to RenderState for smooth scrolling	src/benchmark/ScreenClone.zig;src/terminal/render.zig	R1+R3	R1,R3	-
+47693cc4b	2026-09-26	gtk,renderer: don't export DMABUFs when apprts can't accept them	src/Surface.zig;src/apprt/gtk/class/render_surface.zig;src/renderer/OpenGL.zig;src/renderer/Thread.zig;src/renderer/generic.zig;src/renderer/message.zig;src/renderer/opengl/Frame.zig	R2	R2	-
+b9e07f98f	2026-09-26	gtk,opengl: flip CPU rendered textures correctly	src/apprt/gtk/class/render_surface.zig;src/renderer/generic.zig;src/renderer/opengl/Target.zig	R2	R2	-
+2ea1eeae2	2026-09-25	libghostty-vt: expose RenderState overscan in the C API	include/ghostty/vt/render.h;src/terminal/c/render.zig;src/terminal/c/types.zig	R3	R1,R3	-
+b60eed139	2026-09-17	font: append BMP codepoints as one UTF-16 unit	src/font/shaper/coretext.zig	R2	R2	-
+6301810a4	2026-09-25	Update VOUCHED list (#14409)	.github/VOUCHED.td	non-port	R4	-
+67fb0c940	2026-09-25	terminal/c: move mouse shapes into mouse.h	include/ghostty/vt/mouse.h;include/ghostty/vt/mouse/shape.h;include/ghostty/vt/terminal.h	R3	R1,R3	-
+e8fe0a5e6	2026-09-26	macOS: fix duplicate new windows triggered by Shortcuts.app	macos/Sources/App/AppDelegate.swift;macos/Sources/Helpers/Extensions/NSAppleEventDescriptor+Extension.swift	R2	R2	-
+b94b3a056	2026-09-26	macOS: reduce the tab bar background opacity on macOS 27	macos/Sources/Features/Terminal/Window Styles/TitlebarTabsTahoeTerminalWindow.swift;macos/Sources/Features/Terminal/Window Styles/TransparentTitlebarTerminalWindow.swift	R2	R2	-
+73768913b	2026-09-26	terminal: reject digit separators in OSC integers	src/terminal/color.zig;src/terminal/kitty/color.zig;src/terminal/main.zig;src/terminal/osc/parsers/color.zig;src/terminal/osc/parsers/context_signal.zig;src/terminal/osc/parsers/kitty_desktop_notification.zig;src/terminal/osc/parsers/kitty_text_sizing.zig;src/terminal/osc/parsers/osc9.zig;src/terminal/osc/parsers/semantic_prompt.zig;src/terminal/parse_int.zig	R1	R1	-
+a3f3331d4	2026-09-26	font: store nerd-font constraints in a 3-level table	src/font/nerd_font_attributes.zig;src/font/nerd_font_codegen.py;src/font/nerd_font_tables.zig	R2	R2	-
+4b86e3594	2026-09-25	terminal/kitty: use wuffs for zlib image decompression	pkg/wuffs/src/main.zig;pkg/wuffs/src/zlib.zig;src/terminal/kitty/graphics_image.zig;src/terminal/kitty/testdata/image-png-zlib_deflate-50x76-2147483647-raw.data	R1+R4	R1,R4	-
+42049f1c4	2026-09-27	pkg/wuffs: align zlib decoder storage	pkg/wuffs/src/zlib.zig	R4	R4	-
+75166e9eb	2026-09-27	deps: Update iTerm2 color schemes	build.zig.zon;build.zig.zon.json;build.zig.zon.nix;build.zig.zon.txt;flatpak/zig-packages.json	R4	R4	outside-declared-scopes(nix/flake/flatpak/unicode/stb->R4;App.zig/apprt.zig->R2)
+1ca2858d0	2026-09-26	tmux: map pane mouse flags to the selectors tmux reports	src/terminal/tmux/output.zig;src/terminal/tmux/viewer.zig	R1	R1	-
+d92e3400e	2026-09-27	terminal: parse OSC integers in a single pass	src/terminal/parse_int.zig	R1	R1	-
+500040d3b	2026-09-27	lib: move parseInt to src/lib and expose it from main.zig	src/lib/main.zig;src/lib/parse_int.zig;src/terminal/color.zig;src/terminal/kitty/color.zig;src/terminal/lib.zig;src/terminal/main.zig;src/terminal/osc/parsers/color.zig;src/terminal/osc/parsers/context_signal.zig;src/terminal/osc/parsers/kitty_desktop_notification.zig;src/terminal/osc/parsers/kitty_text_sizing.zig;src/terminal/osc/parsers/osc9.zig;src/terminal/osc/parsers/semantic_prompt.zig	R1+R3	R1,R3	-
+31bbb1273	2026-09-27	lib: document why parseInt does not use std.fmt.parseInt	src/lib/parse_int.zig	R1	R1	-
+3822aa01d	2026-09-27	terminal: test OSC 3008 numeric fields reject non-digits	src/terminal/osc/parsers/context_signal.zig	R1	R1	-
+b1c264163	2026-09-27	vt: reject search ticks after the terminal is freed	include/ghostty/vt/search.h;src/terminal/c/search.zig	R3	R1,R3	-
+1a174c063	2026-09-28	nix: update zon2nix to 0.8.1	build.zig.zon.nix;flake.lock;flake.nix	R4	R4	outside-declared-scopes(nix/flake/flatpak/unicode/stb->R4;App.zig/apprt.zig->R2)
+1f3d869b4	2026-09-28	nix: remove no-longer-necessary linkFarm override	nix/libghostty-vt.nix	R4	R4	outside-declared-scopes(nix/flake/flatpak/unicode/stb->R4;App.zig/apprt.zig->R2)
+659ca22c0	2026-09-28	update to zon2nix 0.9.0	build.zig.zon.nix;flake.lock;flake.nix	R4	R4	outside-declared-scopes(nix/flake/flatpak/unicode/stb->R4;App.zig/apprt.zig->R2)
+12752b2ac	2026-09-28	Update VOUCHED list (#14445)	.github/VOUCHED.td	non-port	R1,R2,R3,R4	-

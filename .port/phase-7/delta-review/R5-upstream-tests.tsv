@@ -1,0 +1,201 @@
+file	test_name	change	sha
+pkg/wuffs/src/zlib.zig	zlib decode grows output	add	4b86e3594
+pkg/wuffs/src/zlib.zig	zlib decode enforces output limit	add	4b86e3594
+pkg/wuffs/src/zlib.zig	zlib decode accepts exact limit and rejects truncated input	add	4b86e3594
+pkg/wuffs/src/zlib.zig	zlib decode aligns decoder in an unaligned allocator buffer	add	42049f1c4
+pkg/wuffs/src/zlib.zig	zlib decode rejects corrupted checksum	add	42049f1c4
+src/apprt/gtk.zig	test {} (anonymous; import/refAllDecls block)	change	45013faf8
+src/apprt/gtk/scale.zig	deviceSize integer scale	add	45013faf8
+src/apprt/gtk/scale.zig	deviceSize fractional scale	add	45013faf8
+src/apprt/gtk/scale.zig	deviceSize rejects non-positive inputs	add	45013faf8
+src/apprt/gtk/scale.zig	snapOffset aligns fractional device origins	add	9dc7408be
+src/apprt/gtk/scale.zig	snapOffset rejects non-positive scale	add	70a75ceb5
+src/apprt/gtk/scale.zig	snappedDeviceSize uses origin-aware device spans	add	0070f9d0a
+src/apprt/gtk/scale.zig	snappedDeviceSize integer scale with origin	add	70a75ceb5
+src/config/Config.zig	RepeatableCommand clone rebuilds the C mirror	add	5909690de
+src/datastruct/comptime_int_set.zig	ComptimeIntSet: empty	add	079502e23
+src/datastruct/comptime_int_set.zig	ComptimeIntSet: single	add	079502e23
+src/datastruct/comptime_int_set.zig	ComptimeIntSet: unsorted keys return original index	add	079502e23
+src/datastruct/comptime_int_set.zig	ComptimeIntSet: exhaustive against linear scan	add	079502e23
+src/datastruct/comptime_int_set.zig	ComptimeIntSet: signed	add	079502e23
+src/datastruct/untouched_pool.zig	UntouchedPool: create, destroy, reuse	add	e01e75bbb
+src/datastruct/untouched_pool.zig	UntouchedPool: create and destroy never touch items	add	e01e75bbb
+src/datastruct/untouched_pool.zig	UntouchedPool: destroy never allocates from the general allocator	add	e01e75bbb
+src/datastruct/untouched_pool.zig	UntouchedPool: reset retains at most the limit	add	e01e75bbb
+src/datastruct/untouched_pool.zig	UntouchedPool: release frees immediately	add	e01e75bbb
+src/datastruct/wasm_page_pool.zig	test WasmPagePool (decltest)	change	e01e75bbb
+src/font/SharedGrid.zig	renderGlyph error after cache insert rolls back cache entry	change	f3276131f
+src/font/nerd_font_attributes.zig	Constraints lookup table	add	a3f3331d4
+src/input/key_encode.zig	legacy: alt+escape with modify other state 2	add	37e3cdd2d
+src/input/key_encode.zig	legacy: alt+unicode	add	587e08f3f
+src/input/key_encode.zig	legacy: alt+unicode only unshifted	add	587e08f3f
+src/input/key_encode.zig	legacy: alt+unicode without unshifted	add	587e08f3f
+src/input/key_encode.zig	legacy: alt+ф	change	587e08f3f
+src/input/key_encode.zig	legacy: ctrl+char with modify other state 2	add	4406cea3e
+src/input/key_encode.zig	legacy: ctrl+char without modify other state 2	add	4406cea3e
+src/input/key_encode.zig	legacy: keypad 1 with modify other state 2	add	636a2f35b
+src/input/key_encode.zig	legacy: f13 through f25	add	e7bdda991
+src/input/key_encode.zig	legacy: help and context menu	add	cc3fd8a77
+src/lib/TinyIo.zig	test {} (anonymous; import/refAllDecls block)	add	f6cb8312b
+src/lib/TinyIo.zig	read a file through File.Reader	remove	f6cb8312b
+src/lib/TinyIo.zig	seek	remove	f6cb8312b
+src/lib/TinyIo.zig	realPath and deleteFile	remove	f6cb8312b
+src/lib/TinyIo.zig	openFile of a directory returns IsDir	remove	f6cb8312b
+src/lib/TinyIo.zig	Io.Mutex through TinyIo	remove	f6cb8312b
+src/lib/TinyIo.zig	randomSecure fills with fresh entropy	remove	f6cb8312b
+src/lib/TinyIo.zig	unused operations fail gracefully	remove	f6cb8312b
+src/lib/TinyIo.zig	openFile edge cases	remove	f6cb8312b
+src/lib/TinyIo.zig	openFile symlink handling	remove	f6cb8312b
+src/lib/TinyIo.zig	positional reads at and beyond EOF return zero	remove	f6cb8312b
+src/lib/TinyIo.zig	vectored reads scatter across buffers	remove	f6cb8312b
+src/lib/TinyIo.zig	streaming reads: EndOfStream and scatter	remove	f6cb8312b
+src/lib/TinyIo.zig	pipes: streaming works, positional and seek are Unseekable	remove	f6cb8312b
+src/lib/TinyIo.zig	operate delegates non-read operations to failing stubs	remove	f6cb8312b
+src/lib/TinyIo.zig	dirRealPathFile edge cases	remove	f6cb8312b
+src/lib/TinyIo.zig	deleteFile edge cases	remove	f6cb8312b
+src/lib/TinyIo.zig	dirClose closes the descriptor	remove	f6cb8312b
+src/lib/TinyIo.zig	cancel protection operations are benign	remove	f6cb8312b
+src/lib/TinyIo.zig	async runs inline; concurrency is unavailable	remove	f6cb8312b
+src/lib/TinyIo.zig	futex timed waits return	remove	f6cb8312b
+src/lib/TinyIo.zig	Io.Mutex under real thread contention	remove	f6cb8312b
+src/lib/parse_int.zig	protocol integer parsing	add	500040d3b
+src/lib/tinyio/test.zig	read a file through File.Reader	add	f6cb8312b
+src/lib/tinyio/test.zig	seek	add	f6cb8312b
+src/lib/tinyio/test.zig	realPath and deleteFile	add	f6cb8312b
+src/lib/tinyio/test.zig	openFile of a directory returns IsDir	add	f6cb8312b
+src/lib/tinyio/test.zig	Io.Mutex through TinyIo	add	f6cb8312b
+src/lib/tinyio/test.zig	randomSecure fills with fresh entropy	add	f6cb8312b
+src/lib/tinyio/test.zig	unused operations fail gracefully	add	f6cb8312b
+src/lib/tinyio/test.zig	openFile edge cases	add	f6cb8312b
+src/lib/tinyio/test.zig	openFile symlink handling	add	f6cb8312b
+src/lib/tinyio/test.zig	positional reads at and beyond EOF return zero	add	f6cb8312b
+src/lib/tinyio/test.zig	vectored reads scatter across buffers	add	f6cb8312b
+src/lib/tinyio/test.zig	streaming reads: EndOfStream and scatter	add	f6cb8312b
+src/lib/tinyio/test.zig	pipes: streaming works; positional and seek are Unseekable or ignored	add	f6cb8312b
+src/lib/tinyio/test.zig	operate delegates non-read operations to failing stubs	add	f6cb8312b
+src/lib/tinyio/test.zig	dirRealPathFile edge cases	add	f6cb8312b
+src/lib/tinyio/test.zig	deleteFile edge cases	add	f6cb8312b
+src/lib/tinyio/test.zig	dirClose closes the descriptor	add	f6cb8312b
+src/lib/tinyio/test.zig	cancel protection operations are benign	add	f6cb8312b
+src/lib/tinyio/test.zig	async runs inline; concurrency is unavailable	add	f6cb8312b
+src/lib/tinyio/test.zig	futex timed waits return	add	f6cb8312b
+src/lib/tinyio/test.zig	Io.Mutex under real thread contention	add	f6cb8312b
+src/lib/tinyio/windows.zig	windows: path conversion	add	f6cb8312b
+src/lib/tinyio/windows.zig	windows: realPath resolves through symlinks	add	f6cb8312b
+src/lib/types.zig	String.init empty output	add	dd2edd760
+src/surface_mouse.zig	keyToMouseShape	change	6674aa3ba 0fb6d2940
+src/terminal/PageList.zig	PageList resize reflow less cols no scrollback pull blank active	add	c55f213aa
+src/terminal/PageList.zig	PageList memory pool never touches idle page memory	add	e01e75bbb
+src/terminal/PageList.zig	PageList memory pool fast path does not allocate	add	e01e75bbb
+src/terminal/Screen.zig	Screen: resize (no reflow) more rows no scrollback pull	add	c55f213aa
+src/terminal/Screen.zig	Screen: resize more cols no scrollback pull	add	c55f213aa
+src/terminal/Screen.zig	Screen: resize more cols no scrollback pull wrap straddles scrollback	add	c55f213aa
+src/terminal/Screen.zig	Screen: resize more cols and rows no scrollback pull	add	c55f213aa
+src/terminal/Screen.zig	Screen: resize less cols no scrollback pull	add	c55f213aa
+src/terminal/Screen.zig	Screen: selectWord at hard line breaks	add	c4f15c884
+src/terminal/Screen.zig	Screen: selectWord across soft-wrap at right edge	add	c4f15c884
+src/terminal/Screen.zig	Screen: selectWord wide characters	add	a3e80a685
+src/terminal/Terminal.zig	Terminal: cursorLeft reverse wrap with pending wrap above top margin	add	d4f45bee3
+src/terminal/Terminal.zig	Terminal: printSlice charset batched fill	add	a4f0d9f4a
+src/terminal/Terminal.zig	Terminal: printSlice charset matches scalar printing	add	a4f0d9f4a
+src/terminal/Terminal.zig	Terminal: printSlice charset single shift and repeat	add	a4f0d9f4a
+src/terminal/Terminal.zig	Terminal: resize without scrollback pull	add	c55f213aa
+src/terminal/bitmap_allocator.zig	findFreeChunks single found	change	ffe015ee5
+src/terminal/bitmap_allocator.zig	findFreeChunks single not found	change	ffe015ee5
+src/terminal/bitmap_allocator.zig	findFreeChunks multiple found	change	ffe015ee5
+src/terminal/bitmap_allocator.zig	findFreeChunks exactly 64 chunks	change	ffe015ee5
+src/terminal/bitmap_allocator.zig	findFreeChunks larger than 64 chunks	change	ffe015ee5
+src/terminal/bitmap_allocator.zig	findFreeChunks larger than 64 chunks not at beginning	change	ffe015ee5
+src/terminal/bitmap_allocator.zig	findFreeChunks larger than 64 chunks exact	change	ffe015ee5
+src/terminal/bitmap_allocator.zig	BitmapAllocator alloc and free one bitmap	change	ffe015ee5
+src/terminal/bitmap_allocator.zig	BitmapAllocator alloc and free half bitmap	change	ffe015ee5
+src/terminal/bitmap_allocator.zig	BitmapAllocator alloc and free two half bitmaps	change	ffe015ee5
+src/terminal/bitmap_allocator.zig	BitmapAllocator alloc and free 1.5 bitmaps	change	ffe015ee5
+src/terminal/bitmap_allocator.zig	BitmapAllocator alloc and free two 1.5 bitmaps	change	ffe015ee5
+src/terminal/bitmap_allocator.zig	BitmapAllocator alloc and free 1.5 bitmaps offset by 0.75	change	ffe015ee5
+src/terminal/bitmap_allocator.zig	BitmapAllocator alloc and free three 0.75 bitmaps	change	ffe015ee5
+src/terminal/bitmap_allocator.zig	BitmapAllocator alloc and free two 1.5 bitmaps offset 0.75	change	ffe015ee5
+src/terminal/c/allocator.zig	alloc zero length	change	dd2edd760
+src/terminal/c/formatter.zig	format_alloc empty output	add	dd2edd760
+src/terminal/c/render.zig	render: overscan request applies on the next update	add	2ea1eeae2
+src/terminal/c/render.zig	render: overscan option roundtrip	add	2ea1eeae2
+src/terminal/c/render.zig	render: overscan clamps to existing rows	add	2ea1eeae2
+src/terminal/c/render.zig	render: row iterator unchanged without overscan	add	2ea1eeae2
+src/terminal/c/render.zig	render: row iterator covers overscan	add	2ea1eeae2
+src/terminal/c/render.zig	render: row iterator overscan at the bottom	add	2ea1eeae2
+src/terminal/c/render.zig	render: row ids stable across scroll	add	2ea1eeae2
+src/terminal/c/render.zig	render: row id without overscan	add	2ea1eeae2
+src/terminal/c/render.zig	render: overscan invalid values	add	2ea1eeae2
+src/terminal/c/render.zig	render: overscan get_multi and row_get_multi	add	2ea1eeae2
+src/terminal/c/search.zig	search free after terminal free	change	b1c264163
+src/terminal/c/search.zig	search tick after terminal free with history	add	b1c264163
+src/terminal/c/selection.zig	selection_format_alloc empty output	add	dd2edd760
+src/terminal/c/terminal.zig	continuation buffer and allocator export exact suffix	change	dd2edd760
+src/terminal/c/terminal.zig	set resize pull scrollback	add	c55f213aa
+src/terminal/c/terminal.zig	set write_pty callback DECRQM	add	9dc0d974e
+src/terminal/c/terminal.zig	set write_pty without callback ignores queries	change	9dc0d974e
+src/terminal/c/terminal.zig	set render_hold callback	add	e50779498
+src/terminal/c/terminal.zig	kitty_image_medium_temp_file empty output	add	dd2edd760
+src/terminal/c/terminal.zig	get mouse_shape	add	78494bad8
+src/terminal/c/terminal.zig	set write_pty callback	remove	9dc0d974e
+src/terminal/c/types.zig	manifest describes render state overscan types	add	2ea1eeae2
+src/terminal/c/types.zig	manifest uses public enum names	change	78494bad8
+src/terminal/color.zig	RGB.parse rejects digit separators	add	73768913b
+src/terminal/color.zig	DynamicPalette: init	change	d1cd56a56
+src/terminal/color.zig	DynamicPalette: set	change	d1cd56a56
+src/terminal/color.zig	DynamicPalette: reset	change	d1cd56a56
+src/terminal/color.zig	DynamicPalette: resetAll	change	d1cd56a56
+src/terminal/color.zig	DynamicPalette: changeDefault with no changes	change	d1cd56a56
+src/terminal/color.zig	DynamicPalette: changeDefault shares the built-in default	add	d1cd56a56
+src/terminal/color.zig	DynamicPalette: changeDefault preserves changes	change	d1cd56a56
+src/terminal/color.zig	DynamicPalette: changeDefault with multiple changes	change	d1cd56a56
+src/terminal/kitty/color.zig	OSC: kitty color indexes reject digit separators	add	73768913b
+src/terminal/kitty/graphics_image.zig	test {} (anonymous; import/refAllDecls block)	add	0b5446364
+src/terminal/kitty/graphics_image.zig	image load: windows UNC path is rejected before open	add	0b5446364
+src/terminal/kitty/graphics_image.zig	image load: windows device namespace paths are rejected before open	add	0b5446364
+src/terminal/kitty/graphics_image.zig	image load: windows reserved device names are rejected before open	add	0b5446364
+src/terminal/kitty/graphics_image.zig	image load: windows local file accepted in forward slash and upper case spellings	add	0b5446364
+src/terminal/kitty/graphics_image.zig	image load: windows temporary file with differently spelled directory	add	0b5446364
+src/terminal/kitty/graphics_image.zig	image load: windows canonical path check accepts a local file opened through a device spelling	add	0b5446364
+src/terminal/kitty/graphics_image.zig	image load: windows canonical path check rejects a file reached through a UNC share	add	0b5446364
+src/terminal/kitty/graphics_image.zig	image load: png, zlib compressed, direct	add	4b86e3594
+src/terminal/kitty/windows.zig	checkPath rejects UNC paths	add	0b5446364
+src/terminal/kitty/windows.zig	checkPath rejects device and NT namespaces	add	0b5446364
+src/terminal/kitty/windows.zig	checkPath accepts plain local paths	add	0b5446364
+src/terminal/kitty/windows.zig	checkPath rejects reserved device names in any component	add	0b5446364
+src/terminal/kitty/windows.zig	checkCanonicalPath requires a drive-absolute local path	add	0b5446364
+src/terminal/kitty/windows.zig	test isDriveAbsolute (decltest)	add	0b5446364
+src/terminal/modes.zig	test modeFromInt (decltest)	change	079502e23
+src/terminal/modes.zig	modeFromInt matches entries exhaustively	add	079502e23
+src/terminal/modes.zig	getReport large unknown modes	add	3beb6d717
+src/terminal/modes.zig	Report.encode maximum size	add	3beb6d717
+src/terminal/osc/parsers/color.zig	OSC color indexes reject digit separators	add	73768913b
+src/terminal/osc/parsers/context_signal.zig	OSC 3008: numeric fields reject non-digits	add	3822aa01d
+src/terminal/osc/parsers/kitty_desktop_notification.zig	OSC 99: w 5	add	73768913b
+src/terminal/osc/parsers/kitty_text_sizing.zig	OSC 66: numeric fields reject digit separators	add	73768913b
+src/terminal/osc/parsers/osc9.zig	OSC 9: numeric fields reject digit separators	add	73768913b
+src/terminal/osc/parsers/semantic_prompt.zig	OSC 133: exit codes reject digit separators	add	73768913b
+src/terminal/render.zig	incremental updates match full rebuild	change	ca4f719f7
+src/terminal/render.zig	incremental updates match full rebuild with overscan	add	ca4f719f7
+src/terminal/render.zig	overscan zero request unchanged	add	ca4f719f7
+src/terminal/render.zig	overscan row_data layout	add	ca4f719f7
+src/terminal/render.zig	overscan request change forces redraw	add	ca4f719f7
+src/terminal/render.zig	overscan row ids stable	add	ca4f719f7
+src/terminal/render.zig	overscan row ids and dirty on in-place rewrite	add	ca4f719f7
+src/terminal/render.zig	overscan cursor in overscan row	add	ca4f719f7
+src/terminal/render.zig	overscan selection on overscan rows	add	ca4f719f7
+src/terminal/search/pagelist.zig	feed discovers pages prepended after exhaustion	add	06178eeaa
+src/terminal/search/screen.zig	feed after complete discovers prepended history pages	add	06178eeaa
+src/terminal/search/terminal.zig	feed after complete discovers prepended snapshot history	add	06178eeaa
+src/terminal/snapshot/terminal.zig	TERMINAL payload round trip	change	d1cd56a56
+src/terminal/snapshot/terminal.zig	TERMINAL payload rejects noncanonical state	change	d1cd56a56
+src/terminal/snapshot/terminal.zig	TERMINAL payload ignores tab-stop padding	change	d1cd56a56
+src/terminal/stream.zig	stream: DECRQM dispatch	add	9dc0d974e
+src/terminal/stream.zig	stream: CSI 8 t resize window	add	714fe9b90
+src/terminal/stream_terminal.zig	render hold effect fires on synchronized output transitions only	add	e50779498
+src/terminal/stream_terminal.zig	render hold effect can snapshot the frame when the hold begins	add	e50779498
+src/terminal/stream_terminal.zig	request mode DECRQM with write_pty callback	change	9dc0d974e
+src/terminal/stream_terminal.zig	request mode DECRQM ANSI responses	add	9dc0d974e
+src/terminal/tmux/output.zig	parse mouse_any_flag	remove	1ca2858d0
+src/terminal/tmux/viewer.zig	session changed resets state	change	9a4ba7d54
+src/terminal/tmux/viewer.zig	two pane flow with pane state	change	1ca2858d0
