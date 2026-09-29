@@ -202,6 +202,34 @@ for c in displaycb_naive displaycb_shipped; do
 done
 ```
 
+## SYNCLINK candidates (P7-W0 T1, `72cf50855`: display-link resync after the unlock)
+
+Upstream `72cf50855` (#14150) moved `syncDisplayLink` out of the locked `drawFrame`
+body: the no-redraw path now returns `true` from `drawFrameLocked`, and `drawFrame`
+resyncs only after releasing `draw_mutex`. The resync can therefore overlap the main
+thread's CoreAnimation `draw_frame_raw(sync = true)`. The handshake parks the render
+thread INSIDE the resync (standing in for the `CVDisplayLinkStop` join) while the main
+thread runs its raw draw (lock + plain-field write). Selected by argv `synclink_naive` /
+`synclink_shipped`.
+
+| candidate | models | SB | TB |
+|---|---|---|---|
+| `synclink_naive` | the resync through the `&mut self` `sync_display_link` receiver (a protected whole-`Renderer` `&mut` fn arg), reached from the raw draw path after the unlock | **UB** (main's `draw_mutex.lock()` "would remove [Unique …] which is strongly protected") | **UB** (main's field write "is forbidden") |
+| `synclink_shipped` | **shipped**: `sync_display_link_raw(this: *mut Renderer)`, narrow field reads through the raw root; no protector spans the call | **CLEAN** | **CLEAN** |
+
+So `draw_frame_raw` calls `sync_display_link_raw`; the `&mut self` `sync_display_link`
+wrapper stays only for render-thread callers that already hold a `&mut Renderer`.
+
+Run:
+
+```sh
+for c in synclink_naive synclink_shipped; do
+  echo "== $c =="
+  cargo +nightly miri run --quiet -- "$c"                          # Stacked Borrows
+  MIRIFLAGS=-Zmiri-tree-borrows cargo +nightly miri run -q -- "$c" # Tree Borrows
+done
+```
+
 ## LOOPTHREAD candidates (VAXIS_C3B_DESIGN §8: the vaxis `Loop` read thread)
 
 Added for `VAXIS_C3B_DESIGN.md` §8 — the vaxis Chunk-3b `Loop.zig` read thread

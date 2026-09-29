@@ -2646,7 +2646,14 @@ mod macos_impl {
 
         /// Create or update the display link and match it to the current
         /// surface state.
-        // generic.zig:1121-1153 syncDisplayLink (NEW in `a177ba90a`).
+        ///
+        /// Must be called on the render thread and must NOT be called
+        /// while holding `draw_mutex`. Stopping a CVDisplayLink is a
+        /// blocking join on CoreVideo's IO thread, and the apprt calls
+        /// `drawFrame` (which takes `draw_mutex`) from the CoreAnimation
+        /// layer display path on the main thread.
+        // generic.zig:1121-1153 syncDisplayLink (NEW in `a177ba90a`; doc from
+        // `72cf50855`).
         //   fn syncDisplayLink(
         //       self: *Self,
         //       display_id: ?u32,
@@ -2723,10 +2730,37 @@ mod macos_impl {
         //
         // `if (comptime DisplayLink == void) return;` — macOS: DisplayLink is never
         // void; no early return.
+        //
+        // PORT NOTE (`72cf50855`, raw-self): the body lives in
+        // `sync_display_link_raw`, which drives the renderer through a raw
+        // `*mut Self` with narrow field reborrows. `draw_frame_raw` now resyncs
+        // AFTER releasing `draw_mutex`, so the main thread's `draw_frame_raw(sync)`
+        // can run concurrently with the resync; a protected whole-`Renderer`
+        // `&mut` receiver spanning it would alias that draw's raw field accesses
+        // (the `synclink_naive` mirihar-chunk3b control). This `&mut self`
+        // wrapper stays for the render-thread callers that already hold one.
         fn sync_display_link(&mut self, display_id: Option<u32>, draw_now: Option<Async>) {
-            if self.display_link.is_none() {
+            let this: *mut Self = self;
+            // SAFETY: `this` comes from a live `&mut self`.
+            unsafe { Self::sync_display_link_raw(this, display_id, draw_now) }
+        }
+
+        /// The raw-self body of [`sync_display_link`](Self::sync_display_link).
+        ///
+        /// # Safety
+        /// `this` must be a valid, whole-`Renderer`-provenance pointer that
+        /// outlives the call. Called on the render thread with `draw_mutex` NOT
+        /// held.
+        unsafe fn sync_display_link_raw(
+            this: *mut Self,
+            display_id: Option<u32>,
+            draw_now: Option<Async>,
+        ) {
+            #[cfg(test)]
+            tests::on_sync_display_link(this);
+            if unsafe { (*this).display_link.is_none() } {
                 // if (!self.config.vsync) return;
-                if !self.config.vsync {
+                if !unsafe { (*this).config.vsync } {
                     return;
                 }
                 // const callback = draw_now orelse return;
@@ -2754,14 +2788,14 @@ mod macos_impl {
                     return;
                 }
 
-                self.display_link = Some(result);
+                unsafe { (*this).display_link = Some(result) };
                 // log.info("created display link", .{});
                 log::info!(target: LOG_SCOPE, "created display link");
             }
 
             // The `orelse` arm above either returned or assigned, so the link is
             // present here — the re-borrow standing in for the reference's copy.
-            let Some(display_link) = self.display_link.as_ref() else {
+            let Some(display_link) = (unsafe { (*this).display_link.as_ref() }) else {
                 return;
             };
 
@@ -2777,9 +2811,9 @@ mod macos_impl {
 
             let should_run =
                 // Non-visible windows never vsync
-                self.visible &&
+                unsafe { (*this).visible } &&
                 // Only vsync if we have cell changes or animation
-                (self.cells_rebuilt || self.animation_wake().is_some());
+                (unsafe { (*this).cells_rebuilt } || unsafe { (*this).animation_wake() }.is_some());
 
             if should_run {
                 if !display_link.is_running() {
@@ -6328,27 +6362,65 @@ mod macos_impl {
             //     );
             // }
 
-            // We hold a the draw mutex to prevent changes to any
-            // data we access while we're in the middle of drawing.
-            // self.draw_mutex.lock();
-            // defer self.draw_mutex.unlock();
+            // Everything that touches draw state happens under the draw
+            // mutex. The display link is synced only after the mutex is
+            // released; see `syncDisplayLink` for why it must never be
+            // called with the draw mutex held.
+            // const sync_display_link = locked: {
+            //     self.draw_mutex.lockUncancelable(global.io());
+            //     defer self.draw_mutex.unlock(global.io());
+            //     break :locked try self.drawFrameLocked(sync);
+            // };
             // (`self_ptr` is now the raw-self receiver; W5_DESIGN §2.3.)
-            unsafe { (*self_ptr).draw_mutex.lock() };
+            let sync_display_link = {
+                unsafe { (*self_ptr).draw_mutex.lock() };
+                // `defer self.draw_mutex.unlock()` as an RAII guard holding the raw
+                // root `self_ptr` (a NARROW field reborrow on `drop`); it also
+                // unlocks on the `try` early return, as the reference's `defer`.
+                struct UnlockGuard(*mut Renderer);
+                impl Drop for UnlockGuard {
+                    fn drop(&mut self) {
+                        unsafe { (*self.0).draw_mutex.unlock() };
+                    }
+                }
+                let _unlock = UnlockGuard(self_ptr);
+                unsafe { Self::draw_frame_locked(self_ptr, sync) }?
+            };
 
+            #[cfg(test)]
+            tests::between_draw_unlock_and_sync(self_ptr);
+
+            // if (sync_display_link) self.syncDisplayLink(null, null);
+            // (raw-self: no whole-`Renderer` `&mut` spans the resync, which can
+            // now overlap the main thread's `draw_frame_raw(sync)`.)
+            if sync_display_link {
+                unsafe { Self::sync_display_link_raw(self_ptr, None, None) };
+            }
+            Ok(())
+        }
+
+        /// The body of `drawFrame`. Must be called with `draw_mutex` held.
+        ///
+        /// Returns true if the display link should be resynced once the
+        /// draw mutex is released. This is only ever true on the no-redraw
+        /// path, which a sync draw never takes, so the main thread's sync
+        /// draws never touch the display link and `syncDisplayLink` stays
+        /// on the render thread.
+        // generic.zig `drawFrameLocked` (`72cf50855`): `fn drawFrameLocked(self:
+        // *Self, sync: bool) !bool`. Same raw-ptr discipline as `draw_frame_raw`.
+        //
+        /// # Safety
+        /// As [`draw_frame_raw`](Self::draw_frame_raw), and the caller holds
+        /// `draw_mutex` for the whole call.
+        unsafe fn draw_frame_locked(self_ptr: *mut Renderer, sync: bool) -> Result<bool, Error> {
             // Hand-rolled `defer`s as RAII guards, each holding the raw root `self_ptr`
             // and performing its cleanup via a NARROW field reborrow on `drop` (so no
             // guard holds a live `&`/`&mut` across the body). Declared so they drop
-            // LIFO in the reference order: `draw_frame_end` → scrollbar → unlock (Rust
-            // drops locals in reverse declaration order). `frame_ctx.complete(sync)` is
-            // the reference's LAST-registered `defer` (fires FIRST); it is called
-            // explicitly at the end of the body, before these guards drop.
-            struct UnlockGuard(*mut Renderer);
-            impl Drop for UnlockGuard {
-                fn drop(&mut self) {
-                    // self.draw_mutex.unlock();
-                    unsafe { (*self.0).draw_mutex.unlock() };
-                }
-            }
+            // LIFO in the reference order: `draw_frame_end` → scrollbar (Rust drops
+            // locals in reverse declaration order); the caller's unlock follows.
+            // `frame_ctx.complete(sync)` is the reference's LAST-registered `defer`
+            // (fires FIRST); it is called explicitly at the end of the body, before
+            // these guards drop.
             struct ScrollbarGuard(*mut Renderer);
             impl Drop for ScrollbarGuard {
                 fn drop(&mut self) {
@@ -6401,7 +6473,6 @@ mod macos_impl {
                 }
             }
 
-            let _unlock = UnlockGuard(self_ptr);
             let _scrollbar = ScrollbarGuard(self_ptr);
 
             // Let our graphics API do any bookkeeping, etc.
@@ -6418,15 +6489,15 @@ mod macos_impl {
             // If either of our surface dimensions is zero
             // then drawing is absurd, so we just return.
             if surface_size.width == 0 || surface_size.height == 0 {
-                return Ok(());
+                return Ok(false);
             }
 
             // If we have no graphics context we can't draw. This is
             // only the case while unrealized (GTK); displayRealized
             // rebuilds the swap chain.
-            // if (!self.display_realized) return;
+            // if (!self.display_realized) return false;
             if !unsafe { (*self_ptr).display_realized } {
-                return Ok(());
+                return Ok(false);
             }
 
             // Get our swap chain, rebuilding it if it was released
@@ -6480,11 +6551,10 @@ mod macos_impl {
                 // try self.api.presentLastTarget();
                 unsafe { (*self_ptr).api.present_last_target() }?;
 
-                // Resync the display link because we can probably pause
-                // the display link at this point.
-                // self.syncDisplayLink(null, null);
-                unsafe { (*self_ptr).sync_display_link(None, None) };
-                return Ok(());
+                // Ask our caller to resync the display link once the draw
+                // mutex is released, because we can probably pause the
+                // display link at this point.
+                return Ok(true);
             }
             // self.cells_rebuilt = false;
             unsafe { (*self_ptr).cells_rebuilt = false };
@@ -6992,9 +7062,9 @@ mod macos_impl {
             // `metal_buffer_completed` directly (H2). `frame` is NOT used after this.
             frame_ctx.complete(sync);
 
-            Ok(())
-            // The three RAII guards drop here in the reference LIFO order:
-            // draw_frame_end → scrollbar → unlock.
+            Ok(false)
+            // The two RAII guards drop here in the reference LIFO order:
+            // draw_frame_end → scrollbar; the caller then unlocks.
         }
 
         /// `&mut self` convenience wrapper over [`draw_frame_raw`]. Sound **only** for
@@ -8797,6 +8867,171 @@ mod macos_impl {
                 r.set_visible(true);
                 assert_eq!(running(&r), Some(true));
 
+                r.deinit();
+            }
+        }
+
+        // ---- `72cf50855` (#14150): the display link and the draw mutex ----------
+        //
+        // `draw_frame`'s no-redraw path used to call `sync_display_link` while
+        // still holding `draw_mutex`, and stopping a CVDisplayLink is a blocking
+        // join on CoreVideo's IO thread while the main thread's CoreAnimation
+        // display callback takes the same mutex through `draw_frame(sync = true)`.
+        // A real CoreVideo/CoreAnimation schedule cannot be driven
+        // deterministically, so two test-only seams stand in for it (the UD70
+        // `between_display_stores` pattern): `on_sync_display_link` runs first
+        // thing in `sync_display_link` (the test double that records whether the
+        // mutex is held), and `between_draw_unlock_and_sync` runs in
+        // `draw_frame_raw` after the mutex is released and before the resync.
+        // Both exist only in this crate's test build and do nothing unless a test
+        // on the SAME thread installed a hook.
+
+        /// A test hook, handed the raw renderer the seam runs on.
+        type DrawHook = Box<dyn FnMut(*mut Renderer)>;
+
+        thread_local! {
+            static ON_SYNC_DISPLAY_LINK: std::cell::RefCell<Option<DrawHook>> =
+                const { std::cell::RefCell::new(None) };
+            static BETWEEN_DRAW_UNLOCK_AND_SYNC: std::cell::RefCell<Option<DrawHook>> =
+                const { std::cell::RefCell::new(None) };
+        }
+
+        fn run_hook(
+            slot: &'static std::thread::LocalKey<std::cell::RefCell<Option<DrawHook>>>,
+            this: *mut Renderer,
+        ) {
+            let hook = slot.with(|h| h.borrow_mut().take());
+            if let Some(mut hook) = hook {
+                hook(this);
+                slot.with(|h| *h.borrow_mut() = Some(hook));
+            }
+        }
+
+        pub(super) fn on_sync_display_link(this: *mut Renderer) {
+            run_hook(&ON_SYNC_DISPLAY_LINK, this);
+        }
+
+        pub(super) fn between_draw_unlock_and_sync(this: *mut Renderer) {
+            run_hook(&BETWEEN_DRAW_UNLOCK_AND_SYNC, this);
+        }
+
+        mod display_link_draw_mutex {
+            use super::*;
+            use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+            use std::time::Duration;
+
+            struct SendRenderer(*mut Renderer);
+            // SAFETY: the pointee outlives the thread (joined inside the hook), and
+            // `draw_frame_raw` serialises its field accesses on `draw_mutex`.
+            unsafe impl Send for SendRenderer {}
+
+            /// Clears both hooks even when an assertion unwinds.
+            struct ClearHooks;
+            impl Drop for ClearHooks {
+                fn drop(&mut self) {
+                    ON_SYNC_DISPLAY_LINK.with(|h| *h.borrow_mut() = None);
+                    BETWEEN_DRAW_UNLOCK_AND_SYNC.with(|h| *h.borrow_mut() = None);
+                }
+            }
+
+            /// `72cf50855` (#14150). The render thread (this thread) draws on
+            /// the no-redraw path, which resyncs the display link; a stand-in
+            /// main thread then takes `draw_mutex` through `draw_frame(sync =
+            /// true)`, as the CoreAnimation display callback does. The resync
+            /// must never run while `draw_mutex` is held, and the main thread's
+            /// sync draw must get through before it.
+            ///
+            /// NEGATIVE CONTROL: the pre-fix body (`sync_display_link` called
+            /// inside the locked region) sets `held_at_sync`, and the main
+            /// thread's draw never runs at the gap.
+            #[test]
+            fn draw_frame_does_not_sync_display_link_under_draw_mutex() {
+                let mut r = match golden_renderer(10, 3) {
+                    Some(r) => r,
+                    None => return, // Metal-skip
+                };
+                // One real frame, so the next unsynced draw has nothing new to
+                // render: no size change, the swap chain exists, the rebuilt
+                // cells are consumed, and there is no animation.
+                r.draw_frame(true).expect("first draw");
+                assert!(!r.cells_rebuilt);
+                assert!(r.animation_wake().is_none());
+
+                let held_at_sync = std::sync::Arc::new(AtomicBool::new(false));
+                let sync_calls = std::sync::Arc::new(AtomicUsize::new(0));
+                // `Some(ok)` once the stand-in main thread's sync draw finished
+                // at the gap; `None` if it never ran or timed out.
+                let main_draw: std::rc::Rc<std::cell::Cell<Option<bool>>> = Default::default();
+
+                let _clear = ClearHooks;
+                {
+                    let held_at_sync = held_at_sync.clone();
+                    let sync_calls = sync_calls.clone();
+                    let hook: DrawHook = Box::new(move |this: *mut Renderer| {
+                        sync_calls.fetch_add(1, Ordering::SeqCst);
+                        // SAFETY: a shared borrow of the `Sync` mutex field only.
+                        let m = unsafe { &(*this).draw_mutex };
+                        if m.try_lock() {
+                            m.unlock();
+                        } else {
+                            held_at_sync.store(true, Ordering::SeqCst);
+                        }
+                    });
+                    ON_SYNC_DISPLAY_LINK.with(|h| *h.borrow_mut() = Some(hook));
+                }
+                let stuck: std::rc::Rc<std::cell::RefCell<Option<std::thread::JoinHandle<()>>>> =
+                    Default::default();
+                {
+                    let main_draw = main_draw.clone();
+                    let stuck = stuck.clone();
+                    let hook: DrawHook = Box::new(move |this: *mut Renderer| {
+                        let p = SendRenderer(this);
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        let main = std::thread::spawn(move || {
+                            let p = p;
+                            // SAFETY: see `SendRenderer`; this thread parks in
+                            // `recv_timeout` below and touches no field meanwhile.
+                            let ok = unsafe { Renderer::draw_frame_raw(p.0, true) }.is_ok();
+                            let _ = tx.send(ok);
+                        });
+                        match rx.recv_timeout(Duration::from_secs(10)) {
+                            Ok(ok) => {
+                                main.join().expect("main-thread draw panicked");
+                                main_draw.set(Some(ok));
+                            }
+                            // The mutex is still held: join the thread once the
+                            // draw below has released it, and fail.
+                            Err(_) => {
+                                main_draw.set(None);
+                                *stuck.borrow_mut() = Some(main);
+                            }
+                        }
+                    });
+                    BETWEEN_DRAW_UNLOCK_AND_SYNC.with(|h| *h.borrow_mut() = Some(hook));
+                }
+
+                let rp: *mut Renderer = &raw mut r;
+                // SAFETY: `rp` is the whole local renderer; no reference is live.
+                unsafe { Renderer::draw_frame_raw(rp, false) }.expect("no-redraw draw");
+                drop(_clear);
+                if let Some(main) = stuck.borrow_mut().take() {
+                    main.join().expect("main-thread draw panicked");
+                }
+
+                assert_eq!(
+                    1,
+                    sync_calls.load(Ordering::SeqCst),
+                    "the no-redraw path resyncs the display link once"
+                );
+                assert!(
+                    !held_at_sync.load(Ordering::SeqCst),
+                    "sync_display_link ran while draw_mutex was held"
+                );
+                assert_eq!(
+                    Some(true),
+                    main_draw.get(),
+                    "a sync draw must take draw_mutex between the unlock and the resync"
+                );
                 r.deinit();
             }
         }

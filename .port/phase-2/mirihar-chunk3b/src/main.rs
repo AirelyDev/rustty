@@ -1298,6 +1298,99 @@ fn run_displaycb(naive: bool) {
 }
 
 // ============================================================================
+// P7-W0 T1 (`72cf50855`, #14150): the display-link resync moved OUT of the locked
+// draw body. `draw_frame_raw` now releases `draw_mutex` and only then resyncs the
+// display link (`sync_display_link`), so the resync can overlap the main thread's
+// CoreAnimation `draw_frame_raw(sync = true)`. The question: may the resync keep its
+// `&mut self` receiver, or must it be raw-self like the draw itself?
+//
+//   synclink_naive — the resync through a `&mut self` method (a protected whole-
+//     `Renderer` `&mut` function argument), reached from the raw draw path after the
+//     unlock. The handshake parks INSIDE the resync (the CVDisplayLinkStop join) while
+//     the main thread runs its raw sync draw (lock + plain-field write). Expected: UB.
+//
+//   synclink_shipped — `sync_display_link_raw(this: *mut Renderer)`: NARROW field
+//     reads through the raw root, no protector spans the call. Expected: CLEAN.
+//
+// The mpsc handshake orders the field accesses (no data race masks the verdict).
+// ============================================================================
+
+// The resync's reads: `display_link`/`visible` (modelled by `lead`), `cells_rebuilt`
+// (modelled by `field`).
+fn synclink_sync_mut(this: &mut FakeRenderer, go: &Receiver<u8>, ack: &Sender<u8>) -> u64 {
+    let seen = this.lead.wrapping_add(this.field);
+    // Parked inside the call: `this`'s protector is live across the main draw.
+    ack.send(1).unwrap();
+    go.recv().unwrap();
+    seen.wrapping_add(this.lead)
+}
+
+unsafe fn synclink_sync_raw(this: *mut FakeRenderer, go: &Receiver<u8>, ack: &Sender<u8>) -> u64 {
+    let seen = unsafe { (*this).lead.wrapping_add((*this).field) };
+    ack.send(1).unwrap();
+    go.recv().unwrap();
+    seen.wrapping_add(unsafe { (*this).lead })
+}
+
+// The render thread's no-redraw draw: the locked body (lock, read, unlock), then the
+// resync after the mutex is released.
+unsafe fn synclink_draw_no_redraw(
+    self_ptr: *mut FakeRenderer,
+    naive: bool,
+    go: &Receiver<u8>,
+    ack: &Sender<u8>,
+) -> u64 {
+    let wants_sync = {
+        let _g = unsafe { (*self_ptr).draw_mutex.lock().unwrap() };
+        unsafe { (*self_ptr).field == 0 }
+    };
+    if !wants_sync {
+        return 0;
+    }
+    if naive {
+        synclink_sync_mut(unsafe { &mut *self_ptr }, go, ack)
+    } else {
+        unsafe { synclink_sync_raw(self_ptr, go, ack) }
+    }
+}
+
+fn run_synclink(naive: bool) {
+    let mut owner: Box<RNewtype> = Box::new(RNewtype(FakeRenderer::new()));
+    let owner_ptr: *mut RNewtype = &raw mut *owner;
+    let rp: *mut FakeRenderer = unsafe { &raw mut (*owner_ptr).0 };
+
+    let (go_tx, go_rx): (Sender<u8>, Receiver<u8>) = channel();
+    let (ack_tx, ack_rx): (Sender<u8>, Receiver<u8>) = channel();
+
+    let send = SendRN(owner_ptr);
+    let handle = std::thread::Builder::new()
+        .name("render".into())
+        .spawn(move || {
+            let s = send;
+            let self_ptr: *mut FakeRenderer = unsafe { &raw mut (*s.0).0 };
+            unsafe { synclink_draw_no_redraw(self_ptr, naive, &go_rx, &ack_tx) }
+        })
+        .unwrap();
+
+    // Wait until the render thread is parked inside its resync, draw_mutex released.
+    ack_rx.recv().unwrap();
+
+    // MAIN: the CoreAnimation display callback's raw sync draw takes draw_mutex and
+    // writes a plain field while the resync is still running.
+    unsafe { displaycb_draw_frame_raw(rp) };
+
+    go_tx.send(0).unwrap();
+    let seen = handle.join().unwrap();
+
+    let field = unsafe { (*rp).field };
+    println!(
+        "synclink_{}: seen={seen} field={field}",
+        if naive { "naive" } else { "shipped" }
+    );
+    drop(owner);
+}
+
+// ============================================================================
 // VAXIS_C3B_DESIGN §8: the Loop read-thread aliasing model (loopthread_*).
 //
 // Models Loop.zig's construct-then-spawn read thread with its DISTINCT field mechanics
@@ -2182,6 +2275,14 @@ fn main() {
         }
         "displaycb_naive" => {
             run_displaycb(true);
+            return;
+        }
+        "synclink_shipped" => {
+            run_synclink(false);
+            return;
+        }
+        "synclink_naive" => {
+            run_synclink(true);
             return;
         }
         "loopthread_shipped" => {
