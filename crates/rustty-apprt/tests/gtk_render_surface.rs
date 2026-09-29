@@ -23,6 +23,10 @@
 //!
 //! * `surface_init_failure_shows_the_error_page` — UD356 (below).
 //!
+//! * `render_surface_dmabuf_build_failure_skips_the_destroy_notify` — GDK never
+//!   calls the DMA-BUF destroy notify for a build that failed, so the failure
+//!   arm's own free of the planes' holder is the only one.
+//!
 //! Each test stands up GTK and a `GApplication` singleton, so each must run in its
 //! own process: select one with its exact name.
 //!
@@ -235,6 +239,80 @@ fn render_surface_falls_back_to_cpu_when_dmabuf_import_fails_body(TEST: &str) {
         "the RenderSurface never showed a CPU-readback texture (last: {kind:?})"
     );
     eprintln!("{TEST}: broadway fell back to a memory texture");
+    finish(live, ka);
+}
+
+/// The failure arm of `rebuild_dmabuf_texture` frees the planes' holder itself,
+/// which is sound only if GDK does not ALSO call the destroy notify for a build
+/// that failed (a double free). On Wayland: first let DMA-BUF textures build and
+/// be replaced (so GDK's notify demonstrably fires for built textures), then
+/// force the import failure and check that GDK never calls the notify for the
+/// failed builds.
+#[test]
+#[ignore = "headed GTK on a Wayland display with DMA-BUF import and --features render-surface-fault-inject; run alone with --exact"]
+fn render_surface_dmabuf_build_failure_skips_the_destroy_notify() {
+    const TEST: &str = "render_surface_dmabuf_build_failure_skips_the_destroy_notify";
+    #[cfg(not(feature = "render-surface-fault-inject"))]
+    panic!("{TEST}: build with --features render-surface-fault-inject (see the module doc)");
+    #[cfg(feature = "render-surface-fault-inject")]
+    render_surface_dmabuf_build_failure_skips_the_destroy_notify_body(TEST);
+}
+
+#[cfg(feature = "render-surface-fault-inject")]
+fn render_surface_dmabuf_build_failure_skips_the_destroy_notify_body(TEST: &str) {
+    use rustty_apprt::gtk::class::render_surface::{dmabuf_witness, FORCE_DMABUF_IMPORT_FAILURE};
+    use std::sync::atomic::Ordering::SeqCst;
+    if !renderer_exports_dmabuf() {
+        require_dmabuf_or_skip(TEST, "the renderer's EGL display exports no DMA-BUF");
+        return;
+    }
+    let live = boot(0);
+    let ka = keepalive();
+    let rs = live.render_surface.clone();
+
+    // Built DMA-BUF textures, each released when the next frame replaces it.
+    let cycled = pump_until(&live, 30, || dmabuf_witness::DESTROY_CALLS.load(SeqCst) > 0);
+    let kind = rs.texture().map(|t| gtk_live::texture_kind(&t));
+    if !cycled {
+        require_dmabuf_or_skip(
+            TEST,
+            &format!("no DMA-BUF texture was built and released (last texture: {kind:?})"),
+        );
+        finish(live, ka);
+        return;
+    }
+    eprintln!(
+        "{TEST}: {} built DMA-BUF texture(s) released through the notify",
+        dmabuf_witness::DESTROY_CALLS.load(SeqCst)
+    );
+
+    // Now every build fails. Keep the frames coming (the terminal redraws on
+    // output) and let GDK settle.
+    FORCE_DMABUF_IMPORT_FAILURE.store(true, SeqCst);
+    type_into_shell(&live, b"echo failure\n");
+    let failed = pump_until(&live, 30, || {
+        dmabuf_witness::BUILD_FAILURES.load(SeqCst) > 0
+    });
+    assert!(
+        failed,
+        "{TEST}: no DMA-BUF build failed after forcing the failure"
+    );
+    pump_until(&live, 2, || false);
+    // The replaced texture is dropped when the widget goes away.
+    live.window.close();
+    pump_until(&live, 1, || false);
+
+    assert_eq!(
+        dmabuf_witness::DESTROY_CALLS_FOR_FAILED_BUILDS.load(SeqCst),
+        0,
+        "{TEST}: GDK called the destroy notify for {} failed build(s); the failure \
+         arm's own free would then be a double free",
+        dmabuf_witness::BUILD_FAILURES.load(SeqCst)
+    );
+    eprintln!(
+        "{TEST}: {} failed build(s), 0 notifies for them",
+        dmabuf_witness::BUILD_FAILURES.load(SeqCst)
+    );
     finish(live, ka);
 }
 

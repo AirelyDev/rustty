@@ -163,6 +163,23 @@ impl Default for RenderSurface {
 pub static FORCE_DMABUF_IMPORT_FAILURE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// TEST-ONLY witnesses for the DMA-BUF destroy notify (feature
+/// `render-surface-fault-inject`): how many builds failed, how many times GDK
+/// called `dmabuf_destroy` for a texture it built, and how many times it called
+/// it for a build that FAILED (whose holder the failure arm already freed; such
+/// a call is counted and ignored instead of freeing the holder twice).
+#[cfg(feature = "render-surface-fault-inject")]
+pub mod dmabuf_witness {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Mutex;
+
+    pub static BUILD_FAILURES: AtomicUsize = AtomicUsize::new(0);
+    pub static DESTROY_CALLS: AtomicUsize = AtomicUsize::new(0);
+    pub static DESTROY_CALLS_FOR_FAILED_BUILDS: AtomicUsize = AtomicUsize::new(0);
+    /// The holder addresses of failed builds.
+    pub(crate) static FAILED: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+}
+
 /// `rebuildTexture`'s error set: `error.DmabufBuildFailed` (the one the
 /// snapshot handler switches on) plus the reference's allocator errors, which
 /// the port's infallible allocation collapses.
@@ -436,7 +453,8 @@ impl RenderSurface {
         // leaked `Box` that `dmabuf_destroy` reclaims exactly once when GDK
         // releases a texture it built. GDK only takes the destroy notify on
         // success (`gdk_dmabuf_texture_builder_build` returns null without
-        // calling it on failure; `render_surface_dmabuf_build_failure_skips_the_destroy_notify`
+        // calling it on failure; `tests/gtk_render_surface.rs`
+        // `render_surface_dmabuf_build_failure_skips_the_destroy_notify`
         // checks this), so the failure arm reclaims the box itself.
         let texture = unsafe {
             gdk::ffi::gdk_dmabuf_texture_builder_build(
@@ -448,6 +466,11 @@ impl RenderSurface {
         };
         if texture.is_null() {
             // errdefer planes.deinit(); errdefer alloc.destroy(planes);
+            #[cfg(feature = "render-surface-fault-inject")]
+            {
+                dmabuf_witness::BUILD_FAILURES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                dmabuf_witness::FAILED.lock().unwrap().push(planes as usize);
+            }
             // SAFETY: GDK did not take the notify; this is the only owner.
             drop(unsafe { Box::from_raw(planes) });
             if !err.is_null() {
@@ -518,6 +541,18 @@ impl RenderSurface {
 unsafe extern "C" fn dmabuf_destroy(data: glib::ffi::gpointer) {
     if data.is_null() {
         return;
+    }
+    #[cfg(feature = "render-surface-fault-inject")]
+    {
+        use std::sync::atomic::Ordering::SeqCst;
+        let mut failed = dmabuf_witness::FAILED.lock().unwrap();
+        if let Some(i) = failed.iter().position(|&p| p == data as usize) {
+            // A notify for a build that failed: its holder is already freed.
+            failed.swap_remove(i);
+            dmabuf_witness::DESTROY_CALLS_FOR_FAILED_BUILDS.fetch_add(1, SeqCst);
+            return;
+        }
+        dmabuf_witness::DESTROY_CALLS.fetch_add(1, SeqCst);
     }
     // SAFETY: `data` is the `Box<Planes>` `rebuild_dmabuf_texture` leaked; GDK
     // calls this once. Dropping it closes every plane fd.
