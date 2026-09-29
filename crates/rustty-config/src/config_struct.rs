@@ -104,8 +104,9 @@ pub use rustty_vt::cursor::Style as CursorStyle;
 // const log = std.log.scoped(.config);
 
 // Used on Unixes for some defaults.
-// const c = @cImport({ @cInclude("unistd.h"); });
-// PORT NOTE: the unistd.h cImport is not needed in the port; retained as a
+// const c = @import("posix_c"); (fe9cf6a26 replaced the unistd.h cImport with
+// the shared posix_c translate-c module; same header, refresh only.)
+// PORT NOTE: the unistd.h import is not needed in the port; retained as a
 // comment for fidelity (Unix defaults go via rustty-os / libc).
 
 /// Key is an enum of all the available configuration keys. This is used

@@ -6021,14 +6021,21 @@ impl RepeatableCommand {
     /// Deep copy of the struct. Required by Config.
     // pub fn clone(self: *const Self, alloc: Allocator) Allocator.Error!Self
     //
-    // PORT NOTE (ABI FIX, S1-F1/S103-F1): the reference clones `value_c`
-    // directly (`try self.value_c.clone(alloc)`), which is safe there because
-    // Zig's `Command.C` strings are independently heap-owned. Rust's `C` is a
-    // bare pointer struct borrowing `self.storage`; naively cloning `value_c`
-    // would copy pointers that alias INTO `self`'s storage, which dangle the
-    // moment either `RepeatableCommand` is dropped or reallocates. Instead,
-    // clone `value` and rebuild `value_c`/`storage` from the clone in the same
-    // motion, exactly like `init`/`parse_cli` do.
+    // PORT NOTE (ABI FIX, S1-F1/S103-F1): the reference used to clone
+    // `value_c` directly (`try self.value_c.clone(alloc)`), which copied
+    // `Command.C` structs whose string pointers still referenced the source
+    // config's memory — a use-after-free once the source config was freed
+    // (embedded host: `rustty_config_clone` + `rustty_config_free` of the
+    // old config), caught by ASan (`5909690de`). Upstream fixed this by
+    // rebuilding `value_c` from the cloned commands via the same `cval`
+    // path `parseCLI` uses. Rust's `C` is a bare pointer struct borrowing
+    // `self.storage`, so this port never had a choice in the matter: cloning
+    // `value_c` directly would copy pointers that alias INTO `self`'s
+    // storage, which dangle the moment either `RepeatableCommand` is dropped
+    // or reallocates. Clone `value` and rebuild `value_c`/`storage` from the
+    // clone in the same motion, exactly like `init`/`parse_cli` do — this
+    // already matches upstream's fixed end state, so there is no behavior
+    // change here, only the corrected rationale.
     pub fn clone_in(&self) -> RepeatableCommand {
         let value: Vec<rustty_input::command::Command> =
             self.value.iter().map(|item| item.clone_in()).collect();
@@ -9826,6 +9833,32 @@ mod tests {
         list.parse_cli(Some(b"")).unwrap();
         // try testing.expectEqual(inputpkg.command.defaults.len, list.value.items.len);
         assert_eq!(rustty_input::command::defaults().len(), list.value.len());
+    }
+
+    // test "RepeatableCommand clone rebuilds the C mirror" (5909690de)
+    #[test]
+    fn repeatable_command_clone_rebuilds_the_c_mirror() {
+        let mut list = RepeatableCommand::default();
+        // try list.parseCLI(alloc, "title:Foo,description:bar,action:new_tab");
+        list.parse_cli(Some(b"title:Foo,description:bar,action:new_tab"))
+            .unwrap();
+
+        // const copy = try list.clone(alloc);
+        let copy = list.clone_in();
+        // try testing.expectEqual(list.value_c.items.len, copy.value_c.items.len);
+        assert_eq!(list.value_c.len(), copy.value_c.len());
+        // The clone's C strings must not alias the source's — the
+        // source config can be freed while the clone lives on.
+        // try testing.expect(list.value_c.items[0].title != copy.value_c.items[0].title);
+        assert_ne!(list.value_c[0].title, copy.value_c[0].title);
+        // try testing.expectEqualStrings(
+        //     std.mem.span(list.value_c.items[0].title),
+        //     std.mem.span(copy.value_c.items[0].title),
+        // );
+        assert_eq!(
+            unsafe { std::ffi::CStr::from_ptr(list.value_c[0].title).to_bytes() },
+            unsafe { std::ffi::CStr::from_ptr(copy.value_c[0].title).to_bytes() },
+        );
     }
 
     // test "RepeatableCommand formatConfig empty"
