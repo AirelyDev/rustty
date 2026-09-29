@@ -1,0 +1,234 @@
+12752b2ac Update VOUCHED list (#14445)
+659ca22c0 update to zon2nix 0.9.0
+1f3d869b4 nix: remove no-longer-necessary linkFarm override
+1a174c063 nix: update zon2nix to 0.8.1
+b1c264163 vt: reject search ticks after the terminal is freed
+3822aa01d terminal: test OSC 3008 numeric fields reject non-digits
+31bbb1273 lib: document why parseInt does not use std.fmt.parseInt
+500040d3b lib: move parseInt to src/lib and expose it from main.zig
+d92e3400e terminal: parse OSC integers in a single pass
+1ca2858d0 tmux: map pane mouse flags to the selectors tmux reports
+75166e9eb deps: Update iTerm2 color schemes
+42049f1c4 pkg/wuffs: align zlib decoder storage
+4b86e3594 terminal/kitty: use wuffs for zlib image decompression
+a3f3331d4 font: store nerd-font constraints in a 3-level table
+73768913b terminal: reject digit separators in OSC integers
+b94b3a056 macOS: reduce the tab bar background opacity on macOS 27
+e8fe0a5e6 macOS: fix duplicate new windows triggered by Shortcuts.app
+67fb0c940 terminal/c: move mouse shapes into mouse.h
+6301810a4 Update VOUCHED list (#14409)
+b60eed139 font: append BMP codepoints as one UTF-16 unit
+2ea1eeae2 libghostty-vt: expose RenderState overscan in the C API
+b9e07f98f gtk,opengl: flip CPU rendered textures correctly
+47693cc4b gtk,renderer: don't export DMABUFs when apprts can't accept them
+ca4f719f7 terminal: add overscan support to RenderState for smooth scrolling
+4eb308831 gtk: don't tell systemd we're ready before we can handle SIGUSR2
+a3e80a685 terminal: fix word selection across wide characters
+d4f45bee3 terminal: fix reverse wrap cursor jump
+2a987d59d config: move vt-window-resize-allowed next to vt-kam-allowed
+5ca09acf6 build: trim branch name before sanitizing it for the version
+c273d6ff6 Update VOUCHED list (#14387)
+e1916c1ab gtk: demote log from info to debug
+d1da18350 gtk: remove widgetDeviceSize, snapshotOrigin wrappers
+70a75ceb5 gtk: Layout unifies scale, origin, snapped size
+0070f9d0a gtk: snap fractional texture origin GdkSurface
+9dc7408be gtk: snap fractional texture origin to device pixels
+08931f405 gtk: added logs to debug scaling values
+df2186dce gtk: drop 4.12 version checks
+1964ed123 gtk: harden fractional scale notify and DPI rounding
+45013faf8 gtk: support fractional surface scaling
+219cca932 gtk: support resizing the window with CSI 8 t
+714fe9b90 terminal,macos: support resizing the window with CSI 8 t
+7c40388b2 Update VOUCHED list (#14373)
+622b4eecd Update VOUCHED list (#14367)
+78494bad8 terminal/c: expose the application-requested mouse shape
+7fb75b3c5 Update VOUCHED list (#14363)
+a4f0d9f4a terminal: batch special graphics character writes
+c4f15c884 terminal: stop word selection at hard line breaks
+9d2d9acac agents: drop CLAUDE.md
+bd1c82bc5 Update VOUCHED list (#14341)
+a93a8b03b gtk,imgui: Fix broken widget by allowing a GLES context to be used
+9fc8d9ebd gtk: streamline surface overrides
+3c47ca159 Sync CODEOWNERS vouch list (#14327)
+9a4ba7d54 tmux: test list-windows action lifetime
+8619becb2 opengl: validate exported DMA-BUF planes
+27e8b3fa8 Update VOUCHED list (#14320)
+cc140d478 opengl: explicitly initialize surfaceless display
+e50779498 libghostty-vt: add render hold effect for synchronized output (mode 2026)
+079502e23 terminal: look up modes by number with a comptime sorted set
+ca9b0384f Update VOUCHED list (#14308)
+790c6b60f Update VOUCHED list
+a925a97e3 renderer/opengl: fix missing gl.finish() between present request and sharing presented frame
+b15fe2eea font: store CodepointKey as a packed u64
+f3276131f font: store glyph cache keys as packed u64
+c55f213aa terminal: add option to disable scrollback pull on resize
+aef7aaeb8 check-zig-hash --update
+12542b392 deps: Update uucode for Unicode 18
+86f449013 Update VOUCHED list (#14292)
+87b60655b Update the Norwegian translation
+e842d763c Update VOUCHED list (#14290)
+98f2e3e6d build(deps): bump namespacelabs/nscloud-cache-action from 1.6.1 to 1.7.0
+cd8daf9eb build(deps): bump docker/build-push-action from 7.3.0 to 7.4.0
+57bdb8c44 i18n(ru): small fixes
+f5c056d30 font: import Constraint from Glyph.zig in nerd-font codegen
+590ab157f opengl/Sampler: handle enum parameters correctly
+0fca3d34a gtk/imgui_widget: remove direct call to glClearColor
+851cd4dc1 gtk: disable Vulkan again, remove old version gates
+c15e2f799 opengl: EGLattrib arrays need no explicit sentinel
+ab34b8b13 opengl: explicitly set EGL_SURFACE_TYPE
+a41248013 tmux: fix list-windows action use-after-free
+a1bf5b5e1 embedded: route split and close C APIs through performBindingAction
+a4031c8e3 bash: detect hooks in prompt command arrays
+494e41374 i18n(ru): refine Russian translation
+f9a3f24a5 Update VOUCHED list (#14256)
+591ccacbd bash: preserve exit status across prompt commands
+ed7f046ee bash: recognize attributed prompt command arrays
+4dfa44ecd bash: use passed exit status in precmd
+fe9cf6a26 build: fully transition away from cImport/addTranslateC
+d4c88d806 Update VOUCHED list (#14241)
+3beb6d717 terminal: decrqm don't truncate 16-bit mode requests
+9dc0d974e terminal: answer ANSI DECRQM queries
+6ab34cad2 gtk: remove unused blueprint using statement
+45058d768 Review feedback
+5beb94c16 renderer: apply font-thicken to IME preedit text
+0c2a290d3 Sync CODEOWNERS vouch list (#14229)
+55c3e8cc0 First review feedback
+09a2724c2 Update VOUCHED list (#14223)
+ef7edc4a2 gtk/build: speed up repeated builds by letting the Zig build cache work
+6a64b1c86 po/zh_CN: add missing translations
+74e47a706 macOS: fix title bar clipping custom font
+4dac203c3 Finish italian translation for 1.4
+9bbb9b246 Update VOUCHED list (#14215)
+1a8f331f1 macOS: implement move_tab_to_new_window
+d00a49827 opengl: flip Y axis during framebuffer blit
+c0c5473da build: refactoring our use of translate-c
+6d8f8b9aa chore: make event reporting explicit
+466439bdf Update VOUCHED list (#14205)
+69f42c1a3 Use 'riquadro' instead of 'divisione' for 'Split'
+d08ebcc86 Keep working on italian translation on 1.4
+8c17235f8 Update VOUCHED list (#14195)
+8a3dbc8ce i18n(hr): spiffy up the translation
+f6cb8312b tinyio: implement a Windows version and use it in the C API
+13a21fc04 nix: use --reflink=auto instead of --link
+f5efbaee5 nix: use hardlinks
+57286723d nix: update zon2nix to 0.7.0
+7644e6d62 build/linghostty-vt: fix libvaxis access to uucode tables
+202fa8e39 gtk: do not disable OpenGL ES and Vulkan
+ce5d51f46 gtk/render_surface: report dmabuf build errors
+45aa963d6 opengl: delay opengl flush
+adf161473 pkg/opengl: polish API
+b87af8646 pkg/opengl: replace cImport with translate-c
+4c8983586 gtk: initialize core surface on first resize
+a5f604da7 renderer: make LatestFrame methods no-ops when ExportedFrame is void
+380778e3c ci: drop libghostty-internal builds on Windows
+2f0b65346 gtk,opengl: free us from the clutches of GtkGLArea
+758100916 build: link against libEGL
+fa2ec3a6a pkg/opengl: add EGL headers and bindings
+c488a41b0 nix: add libglvnd to devShell for EGL
+60b43068c terminal: reclaim pooled and compressed page memory on Windows
+7adbb5160 build/libghostty-vt: export uucode so that it can be re-used
+0b5446364 terminal/kitty: reject unsafe Windows paths for image file mediums
+68852fc00 i18n(hr): unify translation
+d1ed60d56 Update hr.po
+c01c683eb i18n(hr): "toggle" string translations
+edf3aa01b i18n(hr): added more translations and fixes
+437dce21b Update hr.po
+1ff027c33 i18n(hr): started updating hr translation
+dd2edd760 libvt: return safe pointers for empty output
+607d59b0e i18n: fix Lithuanian grammar and terminology consistency in lt.po
+ff5b87e4d i18n: re-apply remaining lt.po review suggestions
+72cf50855 renderer: never stop the display link while holding the draw mutex
+2b3b89391 deps: update translate-c backport
+e9283ba87 build(deps): bump c-hive/gha-remove-artifacts from 1.4.0 to 1.8.0
+258c057c0 build(deps): bump ryand56/r2-upload-action from 1.4 to 1.5
+97f2ddb06 Sync CODEOWNERS vouch list (#14163)
+5909690de config: rebuild RepeatableCommand's C mirror on clone
+50f757dc8 i18n(de): adjust floating state description
+11d1cc4fc deps: Update iTerm2 color schemes
+587e08f3f input: encode non-ASCII alt prefixes as UTF-8
+cc3fd8a77 input: encode help and context menu keys
+37e3cdd2d input: encode alt+escape with MOK2
+e7bdda991 input: encode F13 through F25
+636a2f35b input: preserve numeric keypad output with MOK2
+4406cea3e input: encode ctrl keys with modifyOtherKeys 2
+d1cd56a56 terminal: dynamic palette shares the built-in default instead of copying it per terminal
+105d0a545 terminal: C terminal wrapper allocates the kitty temp dir path only when it is set
+35a6fb747 terminal: PageList preheats only the viewport and cursor pins
+efa3c66ed terminal: PageList nodes are pooled individually from the gpa instead of an arena
+d2ff6d77a terminal: pages initialize from zeroed memory and cache-line align their cells
+6112935a2 terminal: hash map keeps its capacity and entry pointers in the struct
+c0a4f80d8 terminal: hash map and ref counted set can initialize from zeroed memory
+ffe015ee5 terminal: bitmap allocator marks free chunks with zero bits
+e8936b896 macOS: follow up cascading fix for #14118
+e347482fb macOS: fix find previous action when search is focused
+e01e75bbb terminal: don't touch me! keep the page pool free list unobtrusive
+0fb6d2940 SurfaceMouse: simplify keyToMouseShape
+3a766ccf5 surface: show .text (i-beam) while shift is held without mouse tracking
+6674aa3ba surface: update keyToMouseShape tests to expect mouse_shape
+5dfb67298 surface: restore mouse_shape when modifier overrides end
+3b8141fbd os/open: consume the newline when draining opener stderr
+06178eeaa terminal/search: resume a complete search when history is prepended
+aafacb1cb macOS: fix flickering when creating new tab with glass style
+752017502 more fixes
+5d6615fc4 bash: upgrade to bash-preexec 0.7.0
+9801423d0 update
+4da902b3c update
+f184d3ceb update
+63039a688 update
+f407316c8 Update po/eu.po
+4ffec4bda Update po/eu.po
+4c731b5d8 Update po/eu.po
+6a5152651 Update po/eu.po
+58aa59d0e Update po/eu.po
+a8b0855b6 macOS: fix cascading for HiddenTitlebarTerminalWindow
+310797df1 macOS: fix cascading without affecting other new-window behaviours
+7358067d1 build(deps): bump cachix/cachix-action
+2ba75764f build(deps): bump flatpak/flatpak-github-actions/flatpak-builder
+501e7b5c1 pkg/fontconfig: update to 2.18.3
+451e224c6 macOS: clean up for #14106
+d4a5ff58b macOS: fix window cascading
+38c984e67 build(deps): bump softprops/action-gh-release from 3.0.2 to 3.0.3
+59141ad21 add eu translation
+ee10453a2 fix unclosed quote
+36015c99d updated revision date
+807a51e3e updated localization file
+e3849b7a6 i18n(de): update German translation
+5e6167072 i18n(de): update German translation
+654228866 Start Italian translation for 1.4
+1aaca23e3 i18n(de): Fix accidental deletion
+3879bff33 i18n(de): Wording plain text
+9c4a5a899 i18n(de): German translation improvements
+4cc8fa335 i18n(de): Fix accidental deletion
+fee8cb523 i18n(de): Wording plain text
+b32b2f87a i18n(de): Typo fix
+159be4d3c Update po/lt.po
+05dd3c53a Update po/lt.po
+85508ca2c Update po/lt.po
+56b739cc3 Update po/lt.po
+7d6c090a7 Update po/lt.po
+7a8221113 Update po/lt.po
+18d323d24 Update po/lt.po
+6633869d8 Update po/lt.po
+d405da445 Update po/lt.po
+7d355b8a0 Update po/lt.po
+ab26bb4b2 Update po/lt.po
+4df91b3fc Update po/lt.po
+a44c47477 Update po/lt.po
+58dd6d777 Update po/lt.po
+1779cabf4 Update po/lt.po
+eba2ec988 Update po/lt.po
+dc2d6f1b3 Update po/lt.po
+57b312293 Update po/lt.po
+b3f4dbb37 Update po/lt.po
+0f03d156c Update po/lt.po
+e9693a4a2 Update po/lt.po
+f8304c01f Update po/lt.po
+bd4226741 Update po/lt.po
+167ed5788 Update po/lt.po
+3e0865422 Update po/lt.po
+1266c0a32 i18n: update `de_DE` translations
+d13d43995 update
+53ae1dd8b update translation
+4c7496c03 i18n: update Lithuanian translation for v1.4
+8b5678bd1 i18n(de): German translation improvements
+ba8690c42 i18n(de): Typo fix

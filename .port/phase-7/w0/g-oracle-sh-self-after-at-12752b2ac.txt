@@ -1,0 +1,56 @@
+=== G-ORACLE-SH-SELF :: shell oracle resolution ===
+  ok   fixture has no worktree-sibling oracle (no stopgap)
+  ok   from a worktree names the MAIN checkout's sibling
+  ok   from the main checkout names its sibling
+  ok   agrees with _gatelib.oracle_root
+  ok   GIT_DIR + GIT_WORK_TREE do not redirect the oracle
+  ok   rustty_oracle_git ignores GIT_DIR + GIT_WORK_TREE
+  ok   a failing git's output is ignored (fallback: the checkout's sibling)
+  ok   check_eol_fidelity.sh ignores env overrides and GIT_* (cwd outside the fixture)
+  ok   run_differential.sh ignores env overrides and GIT_* (cwd outside the fixture)
+  ok   menu-shortcut-parity.sh ignores env overrides and GIT_* (cwd outside the fixture)
+  ok   run.sh ignores env overrides and GIT_* (cwd outside the fixture)
+  ok   live worktree run resolves to the main checkout's sibling
+  ok   rustty_oracle_pin and _gatelib.oracle_pin read one file and agree
+  ok   no other tracked .port/tools file hardcodes the pin (the literal 40-hex SHA)
+  ok   no other tracked .port/tools file holds a 7-hex piece of the pin (split or abbreviated copy)
+  ok   no tracked .port/tools/gates file but ORACLE_PIN holds a 40-hex constant
+  ok   7a-7c scan tracked files only: tracked copies caught; untracked and gitignored (.pyc) ignored
+  ok   7a-7c are BLOCKED (2), not a pass, where git cannot list the files
+  ok   run.sh reads the pinned fixture oracle under a GIT_DIR decoy (D10)
+  ok   run.sh is BLOCKED (3) when the oracle lacks the pin commit (D10)
+  ok   G-EOL at the pin compares against the resolved oracle and is GREEN
+  ok   G-EOL is BLOCKED (3), not GREEN, when the oracle is absent
+  ok   G-EOL is BLOCKED (3) when the oracle is off the pin
+  ok   G-EOL is BLOCKED (3) when the oracle's corpus is dirty
+  ok   G-EOL: a RED arm 1 wins over arm 3's BLOCKED (exit 1)
+  ok   check_eol_fidelity.sh: $ORACLE assigned once; no plain `git ... $ORACLE` on one line; no letter escapes; git words and bare $ORACLE mentions at their fixed counts
+  ok   run_differential.sh: $GHOSTTY assigned once; no plain `git ... $GHOSTTY` on one line; no letter escapes; git words and bare $GHOSTTY mentions at their fixed counts
+  ok   menu-shortcut-parity.sh: $GHOSTTY_ROOT assigned once; no plain `git ... $GHOSTTY_ROOT` on one line; no letter escapes; git words and bare $GHOSTTY_ROOT mentions at their fixed counts
+  ok   run.sh: $ORACLE_REPO assigned once; no plain `git ... $ORACLE_REPO` on one line; no letter escapes; git words and bare $ORACLE_REPO mentions at their fixed counts
+  ok   check_bench_tests.sh: $ORACLE assigned once; no plain `git ... $ORACLE` on one line; no letter escapes; git words and bare $ORACLE mentions at their fixed counts
+  ok   check_lz4_byte_exact.sh: $ORACLE assigned once; no plain `git ... $ORACLE` on one line; no letter escapes; git words and bare $ORACLE mentions at their fixed counts
+  ok   check_rustty_vt_headers.sh: $GH assigned once; no plain `git ... $GH` on one line; no letter escapes; git words and bare $GH mentions at their fixed counts
+  ok   check-vt-struct-layouts.mjs: ORACLE assigned once, git spawned (either quote style) only in oracleGit, git words at their fixed count, no joined or escaped git
+  ok   Python: `git -C <oracle>` appears only in _gatelib.oracle_git
+  ok   Python: every git call with cwd=ORACLE passes env=git_env()
+  ok   Python: no line forms git by joining literals or with a letter/digit escape
+  ok   10s. unmodified copies of G-EOL and the Node reader pass the structural checks
+  ok   10s. G-EOL copy + `gi''t -C "$ORACLE" rev-parse HEAD` is RED
+  ok   10s. G-EOL copy + `gi\t -C "$ORACLE" rev-parse HEAD` is RED
+  ok   10s. G-EOL copy + `$'\x67it' -C "$ORACLE" rev-parse HEAD` is RED
+  ok   10s. G-EOL copy + `$'\147it' -C "$ORACLE" rev-parse HEAD` is RED
+  ok   10s. G-EOL copy + `eval "g""it -C \"\$ORACLE\" rev-parse HEAD"` is RED
+  ok   10s. Node reader copy + `execFileSync('g'+'it', ['-C', ORACLE, 'rev-parse', 'HEAD']);` is RED
+  ok   10s. Node reader copy + `execFileSync(`gi` + `t`, ['-C', ORACLE, 'rev-parse', 'HEAD']);` is RED
+  ok   10s. Node reader copy + `execFileSync('\x67it', ['-C', ORACLE, 'rev-parse', 'HEAD']);` is RED
+  ok   10s. a clean Python file passes
+  ok   10s. Python + `subprocess.run(["g" + "it", "-C", ORACLE])` is RED
+  ok   10s. Python + `subprocess.run(["g" "it", "-C", ORACLE])` is RED
+  ok   10s. Python + `subprocess.run(["\x67it", "-C", ORACLE])` is RED
+  ok   run_differential.sh --self-test-oracle
+  ok   check_bench_tests.sh --self-test-oracle
+  ok   check_lz4_byte_exact.sh --self-test-oracle
+  ok   check_rustty_vt_headers.sh --self-test-oracle
+G-ORACLE-SH-SELF GREEN: the shell resolver, the pin, and every oracle reader hold.
+exit=0

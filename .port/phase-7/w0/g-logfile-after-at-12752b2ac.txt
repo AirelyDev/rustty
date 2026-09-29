@@ -1,0 +1,89 @@
+G-LOGFILE: 172 reference file(s) — 1392 live reference log site(s), 1297 live port emission(s) on the thinnest arm (8 of them BYPASSING the facade — N14), 28 log facade name(s) resolved
+           3 reference file(s) DECLARED-EXCLUDED holding 4 site(s) (budget 3 file(s) / 4 site(s)): 2 build-tooling, 1 unresolved
+           80 reference `pub fn`(s) are referenced only from test code tree-wide, so their sites are test-only (task S-1c): addCodepoints, addLang, addLatin1, addPendingImage, addRect, addUTF16, addUTF32, addUTF8, changeIterator, checkGhosttyHEnum, clearClippingRegions, clientAccepted ...
+           15 DEAD reference site(s) subtracted from the inventory (budget 15): 5 dead-branch, 9 unreachable-private, 1 unreferenced-pub — the reference contains these calls and never reaches them
+           54 PORT-ONLY emission(s) declared and subtracted from the port count of 27 reference file(s) (budget 54): 3 abi-guard, 33 expansion, 3 instrumentation, 3 r13-handling, 10 rust-only-path, 1 test-only-reference, 1 transport — diagnostics with no reference counterpart, which would otherwise over-credit their file and mask a real loss (N81)
+           93 ABSENT reference site(s) declared per arm (budget 93): 71 infallible-call, 6 platform-gated, 16 unrepresentable-state — the reference reaches these, on a condition the port (or that arm) cannot produce; none may be emitted by an arm it excuses
+           27 ATTRIBUTION row(s) (budget 27): 7 default-owner, 3 facade, 17 owner — 7 shared port file(s) credit each emission to ONE reference file, not to every arm that holds the file
+           coverage: 162 of 169 reference file(s) with live log sites reconciled (+3 excluded), 1392 of 1412 site(s) (98%)
+RED: 4 reference file(s) carry live `log.*` sites and are neither declared nor excluded (16 site(s) invisible to this gate). Silence is not coverage — declare the port arms or record an exclusion:
+          7  src/apprt/gtk/class/Overrides.zig
+          4  src/apprt/gtk/class/render_surface.zig
+          4  src/renderer/opengl/Target.zig
+          1  pkg/opengl/egl.zig
+RED: 4 dead-site declaration(s) name a line that is not a live reference log site at the pin. A declaration that does not correspond to anything removes nothing and hides a drift:
+       src/termio/Exec.zig:1078
+       src/apprt/gtk/class/surface.zig:3618
+       src/terminal/bitmap_allocator.zig:215
+       src/termio/Termio.zig:705
+RED: 36 LOG-ABSENT-SITES.tsv declaration(s) name a line that is not a live PRODUCTION reference log site at the pin:
+       :46 src/apprt/gtk/class/surface.zig:2735 -> crates/rustty-apprt/src/gtk/class/surface.rs fn drop  (not a live production reference log site at the pin)
+       :47 src/apprt/gtk/class/surface.zig:2762 -> crates/rustty-apprt/src/gtk/class/surface.rs fn drop  (not a live production reference log site at the pin)
+       :56 src/renderer/generic.zig:991 -> crates/rustty-renderer/src/generic/linux_impl.rs fn loop_enter  (not a live production reference log site at the pin)
+       :57 src/renderer/generic.zig:1169 -> crates/rustty-renderer/src/generic/linux_impl.rs fn set_macos_display_id  (not a live production reference log site at the pin)
+       :58 src/renderer/generic.zig:1177 -> crates/rustty-renderer/src/generic/linux_impl.rs fn set_macos_display_id  (not a live production reference log site at the pin)
+       :59 src/renderer/generic.zig:1183 -> crates/rustty-renderer/src/generic/linux_impl.rs fn set_macos_display_id  (not a live production reference log site at the pin)
+       :60 src/renderer/generic.zig:1188 -> crates/rustty-renderer/src/generic/linux_impl.rs fn set_macos_display_id  (not a live production reference log site at the pin)
+       :61 src/renderer/generic.zig:1190 -> crates/rustty-renderer/src/generic/linux_impl.rs fn set_macos_display_id  (not a live production reference log site at the pin)
+RED: 1 LOG-ABSENT-SITES.tsv declaration(s) excuse a site whose message the arm STILL EMITS — the row would silence a real emission; delete it (the site is ported):
+       :116 src/apprt/gtk/class/application.zig:1804 -> crates/rustty-apprt/src/gtk/class/application.rs fn action_toggle_quick_terminal  (arm 1 emits 'error reloading config err={}' at crates/rustty-apprt/src/gtk/class/application.rs:2422 against 1 reference site(s))
+RED: 14 reference file(s) whose port emits fewer diagnostics than the allowance permits:
+       src/Surface.zig: reference=108 port=100 deficit=7 allowance=0
+           arms: crates/rustty-core/src/surface.rs=100 (expects 107 after declared-absent sites)
+           rows: ['S41-F1(WAIVED)', 'S42-F2(CLOSED)']
+       src/apprt/embedded.zig: reference=55 port=48 deficit=1 allowance=0
+           arms: crates/rustty-apprt/src/embedded.rs+crates/rustty-apprt-c/src/lib.rs=48 (expects 49 after declared-absent sites)
+           rows: ['S46-F5(WAIVED)']
+       src/apprt/gtk/class/application.zig: reference=106 port=97 deficit=7 allowance=0
+           arms: crates/rustty-apprt/src/gtk/class/application.rs+crates/rustty-apprt/src/gtk.rs=97 (expects 104 after declared-absent sites)
+           rows: ['S49-F5(CLOSED)', 'S50-F4(CLOSED)']
+       src/apprt/gtk/class/imgui_widget.zig: reference=7 port=6 deficit=1 allowance=0
+           arms: crates/rustty-apprt/src/gtk/class/imgui_widget.rs=6
+           rows: -
+       src/benchmark/ScreenClone.zig: reference=15 port=11 deficit=4 allowance=0
+           arms: crates/rustty-bench/src/screen_clone.rs=11
+           rows: -
+       src/config/Config.zig: reference=29 port=26 deficit=3 allowance=0
+           arms: crates/rustty-config/src/config_struct.rs+crates/rustty-config/src/value_types.rs=26
+           rows: ['S74-F5(CLOSED)', 'S75-F1(CLOSED)', 'S75-F2(CLOSED)']
+       src/renderer/OpenGL.zig: reference=14 port=9 deficit=5 allowance=0
+           arms: crates/rustty-renderer/src/opengl/opengl_impl.rs+crates/rustty-renderer/src/opengl/gl/sys.rs=9
+           rows: ['S113-F1(CLOSED)', 'S113-F4(CLOSED)']
+       src/renderer/generic.zig: reference=33 port=24 deficit=9 allowance=0
+           arms: crates/rustty-renderer/src/generic.rs+crates/rustty-renderer/src/metal/cvdisplaylink.rs=30 | crates/rustty-renderer/src/generic/linux_impl.rs=24
+           rows: ['S115-F2(CLOSED)', 'S115-F4(WAIVED)', 'S116-F2(WAIVED)']
+       src/terminal/bitmap_allocator.zig: reference=1 port=0 deficit=1 allowance=0
+           arms: crates/rustty-vt/src/bitmap_allocator.rs=0
+           rows: ['S149-F3(WAIVED)']
+       src/terminal/mem.zig: reference=4 port=3 deficit=1 allowance=0
+           arms: crates/rustty-vt/src/mem.rs=3
+           rows: -
+       src/terminal/stream.zig: reference=129 port=128 deficit=1 allowance=0
+           arms: crates/rustty-vt/src/stream.rs=128
+           rows: ['S163-F2(CLOSED)', 'S164-F1(CLOSED)']
+       src/termio/Exec.zig: reference=58 port=55 deficit=3 allowance=0
+           arms: crates/rustty-termio/src/exec.rs=55
+           rows: -
+       src/termio/Termio.zig: reference=7 port=5 deficit=2 allowance=0
+           arms: crates/rustty-termio/src/termio_impl.rs=5
+           rows: -
+       src/termio/stream_handler.zig: reference=41 port=40 deficit=1 allowance=0
+           arms: crates/rustty-termio/src/stream_handler.rs=40
+           rows: -
+           message content: 976 of 1392 LIVE EMISSION(S) (every shape: log::, macro/fn facade, and facade-bypassing print) have a preserved reference comment to check against (70%). The rest are UNCHECKED — this pass can only compare what the port wrote down.
+           message content: 1 crate(s) have live emissions and NOT ONE checkable pair, so the check cannot see them at all: crates/rustty-config
+           message content: 3 crate(s) emit NOTHING at all, so they are outside the ratio entirely, not merely unchecked: crates/rustty-build-config, crates/rustty-lib, crates/rustty-unicode
+           message content: unchecked sites are CONCENTRATED, not random — 26% of the 416 unchecked sites are in crates/rustty-apprt/src/gtk/class/application.rs (77) and crates/rustty-apprt/src/gtk/class/surface.rs (34)
+           message content: 13 divergence(s) and 25 stale preserved comment(s), 28 declared (cap 28)
+           message content: 1 emission(s) (0 undeclared) HAVE a candidate reference comment in their block and match none of it above the 0.55 similarity floor (budget 0). This is NOT the same state as having no comment at all — that is the honest unknown; this is the suspicious one.
+RED: 7 preserved comment(s) quote a reference call that does not exist at the pin (N20). Nothing emits them, so nothing is wrong today — the risk is a future stage reading the comment and faithfully restoring a call the reference never had:
+       crates/rustty-apprt/src/gtk/class/surface.rs:3520  'this is a common cause of this issue: https://gitlab.gnome.org/GNOME/gtk/-/issues/4950'
+       crates/rustty-apprt/src/gtk/class/surface.rs:4412  'this is a common cause of this issue: https://ghostty.org/docs/help/gtk-opengl-context'
+       crates/rustty-apprt/src/gtk/class/surface.rs:4524  'failed to draw frame err={}'
+       crates/rustty-renderer/src/generic/linux_impl.rs:1280  'OpenGL extension available name={}'
+       crates/rustty-renderer/src/opengl/opengl_impl.rs:281  'Error preparing GL context in displayRealized, err={}'
+       crates/rustty-renderer/src/opengl/opengl_impl.rs:319  'Error preparing GL context in displayRealized, err={}'
+       crates/rustty-vt/src/kitty/graphics_image.rs:1238  'failed to read decompressed data: {}'
+NOTE: 1 `log_*` definition(s) never reach the log facade (no-op stubs; their call sites are counted as dropped, not emitted):
+       crates/rustty-vt/src/stream.rs:4749 log_unsupported_once
+logfile exit=1

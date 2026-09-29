@@ -1,0 +1,23 @@
+== (a) headers compile ==
+  OK
+== (a2) EVERY published header compiles standalone as C11 and C++17 ==
+  OK  rustty.h (c11 + c++17)
+  OK  rustty-apprt.h (c11 + c++17)
+  OK  rustty-embed.h (c11 + c++17)
+  OK  rustty/vt.h (c++17; the (a) probe covers C)
+== (a3) include/rustty.h is byte-identical to a fresh cbindgen run ==
+  OK (regenerated and byte-identical)
+== (a3b) include/rustty-apprt.h is byte-identical to a fresh cbindgen run ==
+  OK (regenerated and byte-identical)
+== (a4) generated rustty_style_default pointee == curated RusttyStyle ==
+  OK (pointee is a 72-byte struct, == sizeof(RusttyStyle))
+== (b) every declared+cbindgen rustty_* symbol is a real export ==
+  OK (203 symbols cross-checked, floor 203; 6 documented non-ABI tokens)
+== (d) every ORACLE lib_vt.zig export has a rustty_* counterpart ==
+  OK (203 oracle exports checked; 0 documented residual(s), owner: P4-W5 T6 Bundle W)
+== (c) struct layouts match rustty_type_json() ==
+    type_json REGISTRY DIVERGES FROM THE ORACLE:
+      GhosttyMouseShape: in the oracle registry, absent from rustty_type_json()
+      GhosttyRenderStateOverscan: in the oracle registry, absent from rustty_type_json()
+      GhosttyRenderStateRowId: in the oracle registry, absent from rustty_type_json()
+a5 exit=1

@@ -6,9 +6,9 @@ R3 forbids any build-time dependency on it).
 ## Pinned baseline
 
 ```
-commit  20abdb50a6216c450d6d4d010c41c7edf5ab15b2   (short: 20abdb50a / 20abdb50)
-date    2026-08-31
-subject Update VOUCHED list (#14101)
+commit  12752b2ac1bb05ce53402ed8c853ed1f96eef0b1   (short: 12752b2ac / 12752b2a)
+date    2026-09-28
+subject Update VOUCHED list (#14445)
 ```
 
 There is **one** sync point. The oracle working tree is checked out (detached) at this commit, and
@@ -38,7 +38,7 @@ tracked file in `.port/tools/gates` holds a 40-hex constant. Untracked and ignor
 Verify with:
 
 ```sh
-git -C ../ghostty rev-parse HEAD          # 20abdb50a6216c450d6d4d010c41c7edf5ab15b2
+git -C ../ghostty rev-parse HEAD          # 12752b2ac1bb05ce53402ed8c853ed1f96eef0b1
 git -C ../ghostty status --porcelain      # empty
 ```
 
@@ -58,6 +58,7 @@ at an empty tree and every gate finds zero reference sentences, i.e. vacuous gre
 | 2026-08-25 | `12967b68f` (2026-08-17) | `683d8db64` (2026-08-25) | Phase 5 upstream resync (advance-first, same doctrine; before/after gate states in `.port/phase-5/w0/`) |
 | 2026-08-26 | `683d8db64` (2026-08-25) | `88f57ee66` (2026-08-25) | Gap-close drift absorb (advance-first): the 2-commit `stream.zig` ground-state tail — `0f35043c9` (execute C0 0x10-0x1F) + `40a40f848` (ignore UTF-8-decoded C1). See `.port/gap-close/`. |
 | 2026-09-01 | `88f57ee66` (2026-08-25) | `20abdb50a` (2026-08-31) | Phase 6 upstream resync (advance-first, same doctrine; before/after gate states in `.port/phase-6/w0/`). 121 commits, 74 non-merge, 75 files, +6,261/−1,269. |
+| 2026-09-28 | `20abdb50a` (2026-08-31) | `12752b2ac` (2026-09-28) | Phase 7 upstream resync (`P7-W0 T3`, advance-first, same doctrine; before/after gate states in `.port/phase-7/w0/`). 333 commits, 234 non-merge, 233 files, +35,723/−9,235. |
 
 **Phase-4 note on ordering.** Unlike `P3-W10`, this advance happened at the *start* of the
 resync (explicit user direction: update the oracle, then port the whole range). The
@@ -152,8 +153,10 @@ before/after reports, the per-crate delta table, and the per-file attribution of
 
 ## Upstream beyond this pin
 
-At the time of the Phase-6 advance (2026-09-01) the pin IS `origin/main` — there is no
-beyond-pin gap. Phase 6 absorbs `88f57ee66..20abdb50a` (121 commits, 74 non-merge, 75 files,
+At the time of the Phase-7 advance (2026-09-28) the pin IS `origin/main` — there is no
+beyond-pin gap. Phase 7 absorbs `20abdb50a..12752b2ac` (333 commits, 234 non-merge, 233 files,
++35,723/−9,235; artifacts in `.port/phase-7/`, delta reviews in `.port/phase-7/delta-review/`);
+Phase 6 absorbed `88f57ee66..20abdb50a` (121 commits, 74 non-merge, 75 files,
 +6,261/−1,269; artifacts in `.port/phase-6/`); the gap-close absorbed `683d8db64..88f57ee66`
 (`.port/gap-close/`); Phase 5 absorbed `12967b68f..683d8db64` (`.port/phase-5/`); Phase 4
 absorbed `6ad1fe7d8..12967b68f` (`.port/phase-4/`). Any future upstream movement is the seed

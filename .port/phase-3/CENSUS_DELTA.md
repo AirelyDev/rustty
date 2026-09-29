@@ -5,34 +5,37 @@ Read by `.port/tools/gates/check_census_staleness.py` (G-CENSUS). Keep the
 
 ## The numbers
 
-Measured 2026-09-01 by re-running the phase-0 tokenizer
+Measured 2026-09-28 by re-running the phase-0 tokenizer
 (`.port/phase-0/inventory/extract_tests.py`, the *same* script, so the two sides
-are comparable) against the live oracle tree at `20abdb50a`:
+are comparable) against the live oracle tree at `12752b2ac`:
 
-- `total_test_blocks`: 3234 -> 4288 (+1054)
-- `total_assertions`: 11975 -> 17127 (+5152)
-- `files_with_tests`: 279 -> 348 (+69)
+- `total_test_blocks`: 3234 -> 4397 (+1163)
+- `total_assertions`: 11975 -> 17717 (+5742)
+- `files_with_tests`: 279 -> 357 (+78)
 
 | measured | pin | test blocks | assertions | files with tests |
 | --- | --- | --- | --- | --- |
 | 2026-07-31 | `6ad1fe7d8` | 3550 (+316) | 13533 (+1558) | 296 (+17) |
 | 2026-08-28 | `88f57ee66` | 4262 (+1028) | 16926 (+4951) | 346 (+67) |
 | 2026-09-01 | `20abdb50a` | 4288 (+1054) | 17127 (+5152) | 348 (+69) |
+| 2026-09-28 | `12752b2ac` | 4397 (+1163) | 17717 (+5742) | 357 (+78) |
 
 The jump is the phase-4 and phase-5 resyncs plus the gap-close advance
 (`6ad1fe7d8` → `12967b68f` → `683d8db64` → `88f57ee66`, `ORACLE_SYNC.md`). The
 gate went red at the first advance and stayed red until this row was written,
 which is exactly the behaviour it exists for — but it also means the drift went
 un-recorded across three advances, so the table above now keeps the history
-rather than overwriting one line each time.
+rather than overwriting one line each time. The 2026-09-28 row is the Phase-7
+advance (`20abdb50a` → `12752b2ac`, `P7-W0 T3`): +109 blocks, +590 assertions,
++9 files over the previous pin.
 
 ## What this means, plainly
 
 G1 (test counts), G1b (per-module counts) and G2 (assertion floor) all measure
 the port against `.port/phase-0/inventory/`, captured at the ORIGINAL pin
-`4749c4e93`. **G2's 11975-assertion floor is 71% of the live figure** (it was 88%
-at the previous measurement — the floor did not move, the tree did). Those three
-gates can be fully green while 1028 upstream test blocks are unported, because
+`4749c4e93`. **G2's 11975-assertion floor is 68% of the live figure** (it was 88%
+at the 2026-07-31 measurement — the floor did not move, the tree did). Those three
+gates can be fully green while 1163 upstream test blocks are unported, because
 those tests are in neither their numerator nor their denominator.
 
 This is the same frozen-inventory blind spot that G-FILES found at file level

@@ -3,7 +3,9 @@
 
 Runs each parser module's extraction in-process and writes a single
 consolidated JSON under .port/phase-0/inventory/parity-surface.json.
-All data is parsed directly from the ghostty reference tree pinned at 4749c4e.
+All data is parsed directly from the ghostty reference tree at its checked-out
+HEAD (originally the phase-0 pin 4749c4e; regenerated at each later pin per
+.port/phase-7/DECISIONS.md R10).
 """
 import json
 import subprocess
@@ -126,8 +128,11 @@ for line in ansi_lines:
 surface = {
     "_meta": {
         "reference": GHOSTTY,
-        "reference_rev": "4749c4e93731067049bfbf2e4572061cef2bdd17",
-        "zig_version": "0.15.2",
+        # Read from the tree actually parsed, so a regeneration at a later pin
+        # (DECISIONS R10, P7-W0 T3) never claims the phase-0 revision.
+        "reference_rev": subprocess.check_output(
+            ["git", "-C", GHOSTTY, "rev-parse", "HEAD"], text=True).strip(),
+        "zig_version": subprocess.check_output(["zig", "version"], text=True).strip(),
         "generated_for": "phase-0 parity surface census",
         "note": "All counts parsed directly from reference source; no fabrication.",
     },

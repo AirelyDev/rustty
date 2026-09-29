@@ -1,0 +1,16 @@
+=== G9 :: full surface coverage (config/keybind/action/terminfo) ===
+config    : covered 209/209  owners=config (done)  -> done
+keybind   : covered 85/85  owners=input (done)  -> done
+cli       : covered 18/18  owners=cli (done)  -> done
+terminfo  : covered 268/268  owners=terminfo (done)  -> done
+modes     : covered 41/41  owners=vt (done)  -> done
+sgr       : covered 31/31  owners=vt (done)  -> done
+osc       : covered 25/25  owners=vt (done)  -> done
+csi       : (no ids in parity-surface.json)
+esc       : (no ids in parity-surface.json)
+c0        : (no ids in parity-surface.json)
+terminfo  : infocmp-parity: rustty terminfo entry not compiled/installed yet
+
+PROGRESS: surface ids covered 677/677
+GREEN: progress 677/677; no claimed-done owner uncovered
+g9 exit=0

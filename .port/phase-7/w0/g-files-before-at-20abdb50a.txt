@@ -1,0 +1,4 @@
+
+AUDIT: 545 oracle files examined (0 MISSING, 0 THIN, 14 recorded NON-PORT, 531 OK)
+GREEN: every oracle file has a counterpart or a written non-port.
+files exit=0

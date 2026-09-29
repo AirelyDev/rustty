@@ -1,0 +1,360 @@
+NOT-CARRIED-INVALID: COMMENT-NOT-CARRIED.tsv:40 (lib_vt.zig:505): STALE — the oracle line at the pin is '', not the declared text
+NOT-CARRIED-INVALID: COMMENT-NOT-CARRIED.tsv:41 (lib_vt.zig:508): STALE — the oracle line at the pin is '///', not the declared text
+NOT-CARRIED-INVALID: COMMENT-NOT-CARRIED.tsv:42 (lib_vt.zig:509): STALE — the oracle line at the pin is '/// `std.Options.debug_io` defaults to `std.Io.Threaded`, and anything', not the declared text
+NOT-CARRIED-INVALID: COMMENT-NOT-CARRIED.tsv:43 (lib_vt.zig:510): STALE — the oracle line at the pin is '/// that reaches it (std.debug.print, std.debug.lockStderr, the default', not the declared text
+NOT-CARRIED-INVALID: COMMENT-NOT-CARRIED.tsv:44 (lib_vt.zig:511): STALE — the oracle line at the pin is "/// std.log handler, etc.) pins Threaded's entire vtable into the binary:", not the declared text
+NOT-CARRIED-INVALID: COMMENT-NOT-CARRIED.tsv:45 (lib_vt.zig:513): STALE — the oracle line at the pin is '///', not the declared text
+NOT-CARRIED-INVALID: COMMENT-NOT-CARRIED.tsv:75 (apprt/gtk/class/application.zig:3486): line out of range at the pin
+NOT-CARRIED-INVALID: COMMENT-NOT-CARRIED.tsv:76 (apprt/gtk/winproto/x11.zig:486): STALE — the oracle line at the pin is '', not the declared text
+    NOT-CARRIED (no-counterpart, was MISSING): apprt/gtk/adw_version.zig:3 Until the gobject bindings are built at the same time we are building
+    NOT-CARRIED (no-counterpart, was MISSING): apprt/gtk/adw_version.zig:4 Ghostty, we need to import `adwaita.h` directly to ensure that the version
+    NOT-CARRIED (no-counterpart, was MISSING): apprt/gtk/adw_version.zig:5 macros match the version of `libadwaita` that we are building/linking
+    NOT-CARRIED (no-counterpart, was MISSING): apprt/gtk/adw_version.zig:101 Whether AdwDialog, AdwAlertDialog, etc. are supported (1.5+)
+    NOT-CARRIED (no-counterpart, was MISSING): apprt/gtk/class/config.zig:94 Get the mutable configuration. This is usually NOT recommended
+    NOT-CARRIED (no-counterpart, was MISSING): apprt/gtk/class/config.zig:95 because any changes to the config won't be propagated to anyone
+    NOT-CARRIED (no-counterpart, was MISSING): apprt/gtk/class/config.zig:96 with a reference to this object. If you know what you're doing, then
+    NOT-CARRIED (gag-prose, was MISSING): apprt/gtk/class/global_shortcuts.zig:380 XDG Portals are really, really poorly-designed pieces of hot garbage.
+    NOT-CARRIED (gag-prose, was MISSING): apprt/gtk/class/global_shortcuts.zig:396 And they know this. Instead of fixing their freaking protocol, they just
+    NOT-CARRIED (gag-prose, was MISSING): apprt/gtk/class/global_shortcuts.zig:406 When in Rome, do as the Romans do, I guess...?
+    NOT-CARRIED (no-counterpart, was MISSING): apprt/gtk/gtk_version.zig:3 Until the gobject bindings are built at the same time we are building
+    NOT-CARRIED (no-counterpart, was MISSING): apprt/gtk/gtk_version.zig:4 Ghostty, we need to import `gtk/gtk.h` directly to ensure that the version
+    NOT-CARRIED (no-counterpart, was MISSING): apprt/gtk/gtk_version.zig:5 macros match the version of `gtk4` that we are building/linking against.
+    NOT-CARRIED (gag-prose, was MISSING): apprt/gtk/winproto/BlurRegion.zig:58 NOTE(pluiedev): CSDs are a f--king mistake.
+    (14 reference comment(s) excused by COMMENT-NOT-CARRIED.tsv; each row is validated above)
+G3b [apprt]: distinctive ref comments=2538 missing=55 review=11
+    REVIEW (ratio 0.68): checks that `libadwaita` is at least the given version and that
+    REVIEW (ratio 0.64): example: blueprint.zig 1 5 blueprint-check.stamp
+    REVIEW (ratio 0.65): give the render surface a pointer to the core surface so it
+    REVIEW (ratio 0.79): if our surface is initialized, we send callbacks.
+    REVIEW (ratio 0.67): if we haven't initalized a surface yet, now's the time to
+    REVIEW (ratio 0.66): notify our core surface that it should realize.
+    REVIEW (ratio 0.67): output to cache this step by.
+    REVIEW (ratio 0.68): setup some signal handlers. this must happen before anything
+    REVIEW (ratio 0.76): tell systemd that reloading has started, but only once startup
+    REVIEW (ratio 0.64): then be realized when the widget itself is realized.
+    MISSING ref comment: `<stamp>` is written when every check passes, so the build system has an
+    MISSING ref comment: `blueprint-compiler` is on the path and new enough. the blueprints
+    MISSING ref comment: `genicons` do for the css and icons.
+    MISSING ref comment: `initsurface` will start the core surface in an unrealized
+    MISSING ref comment: `rendersurfacerealize`) before building gpu resources.
+    MISSING ref comment: absolute path into the zig cache would change whenever the step that
+    MISSING ref comment: abusing integers to be enums and booleans is a terrible idea, c.
+    MISSING ref comment: and the compositor doesn't own the window size.
+    MISSING ref comment: and then convert it to the window's logical pixels. resizing the
+    MISSING ref comment: before then (e.g. syncing the color scheme during startup) must
+    MISSING ref comment: can pull presents from the renderer in its snapshot handler.
+    MISSING ref comment: check that the blueprint *sources* exist instead, as `genroot` and
+    MISSING ref comment: disabling vulkan also saves hundreds of milliseconds of initialization
+    MISSING ref comment: do so. we cannot do this any earlier since gtk defers the
+    MISSING ref comment: each file is written as a *relative* path, `{major}.{minor}/{name}.ui`,
+    MISSING ref comment: even though we don't use gtk's gl context anymore, there can still
+    MISSING ref comment: gtk may use gles for its shared context. imgui's default shader
+    MISSING ref comment: hook as a close-surface keybind, rather than a raw close() that
+    MISSING ref comment: i know this is really ugly. x11 is ugly. i consider it apropos.
+    MISSING ref comment: if the widget isn't realized yet, start the renderer in an
+    MISSING ref comment: includes the font dpi, so we compute the change in device pixels
+    MISSING ref comment: is complete. a reload during startup is not a reload to systemd.
+    MISSING ref comment: is somehow realized before the first resize signal ever fires.
+    MISSING ref comment: layouting and size allocation until after widget initialization.
+    MISSING ref comment: let gtk apply the default size set by a requested resize.
+G3b [apprt-api]: distinctive ref comments=330 missing=5 review=2
+    REVIEW (ratio 0.66): resize the window to the given grid size, as requested by the
+    REVIEW (ratio 0.65): split or the window is fullscreen.
+    MISSING ref comment: and apprts may ignore it, for example if the surface is in a
+    MISSING ref comment: kept as is. this is requested by the running program (csi 8 t)
+    MISSING ref comment: renderer pushed a new frame, redraw this surface.
+    MISSING ref comment: resize the window containing the target surface so that the
+    MISSING ref comment: surface is the given size in points. a zero dimension should be
+G3b [args]: distinctive ref comments=186 missing=0 review=1
+    REVIEW (ratio 0.79): returns true if this type can track diagnostics.
+G3b [bench]: distinctive ref comments=165 missing=27 review=1
+    REVIEW (ratio 0.67): the overscan request used by the overscan modes.
+    MISSING ref comment: after each scroll. the viewport starts at the bottom, so the first
+    MISSING ref comment: below. this models a renderer that captures extra rows so it can
+    MISSING ref comment: default limit is small enough that the setup lines would be
+    MISSING ref comment: direction changes for the scroll modes, in iterations.
+    MISSING ref comment: direction every `interval` iterations, and update the render state
+    MISSING ref comment: draw partially visible rows while smooth scrolling.
+    MISSING ref comment: large multipliers) rather than smooth scrolling.
+    MISSING ref comment: make sure the viewport follows the active area so each line
+    MISSING ref comment: modes have room to move in both directions.
+    MISSING ref comment: number of scrollback lines written during setup so that the scroll
+    MISSING ref comment: overscan (`renderstate.overscan_request`) of 4 rows above and 1
+    MISSING ref comment: program streaming output. each frame the viewport pin moves
+    MISSING ref comment: renderstate update after one new line of output is written
+    MISSING ref comment: renderstate update after scrolling the viewport by half a
+    MISSING ref comment: renderstate update after scrolling the viewport by one row.
+    MISSING ref comment: screen. this models paging (page up/down, wheel ticks with
+    MISSING ref comment: scroll the viewport by `step` rows per iteration, reversing
+    MISSING ref comment: scrollback (e.g. a trackpad fling), which today changes the
+    MISSING ref comment: stretch scrolls up into scrollback.
+    MISSING ref comment: the overscan request for the given mode.
+    MISSING ref comment: the render-scroll, render-output, and render-clean modes with
+    MISSING ref comment: the scroll modes need real scrollback to move through. the
+    MISSING ref comment: the scroll modes need scrollback above the screen so the
+    MISSING ref comment: this is the per-frame cost of user-driven scrolling through
+    MISSING ref comment: viewport has somewhere to go.
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:179 On Windows, Zig's _DllMainCRTStartup does not initialize the MSVC C
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:180 runtime when targeting MSVC ABI. Without initialization, any C library
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:181 function that depends on CRT internal state (setlocale, malloc from C
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:182 dependencies, C++ constructors in glslang) crashes with null pointer
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:183 dereferences. Declaring DllMain causes Zig's start.zig to call it
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:184 during DLL_PROCESS_ATTACH/DETACH, and for MSVC we forward to the CRT
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:185 bootstrap functions from libvcruntime and libucrt (already linked).
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:186 For other ABIs (MinGW) the handler is a no-op since dllcrt2.obj already
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:187 handles CRT init; we still need `DllMain` declared so that Zig's
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:188 start.zig does not fall back to calling a non-function value.
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:190 This is a workaround. Zig handles MinGW DLLs correctly (via dllcrt2.obj)
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:191 but not MSVC. No upstream issue tracks this exact gap as of 2026-03-26.
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:192 Closest: Codeberg ziglang/zig #30936 (reimplement crt0 code).
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:193 Remove this DllMain when Zig handles MSVC DLL CRT init natively.
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:211 Only MSVC needs to bootstrap the CRT; MinGW handles it via dllcrt2.obj.
+    (15 reference comment(s) excused by COMMENT-NOT-CARRIED.tsv; each row is validated above)
+G3b [bin]: distinctive ref comments=177 missing=5 review=2
+    REVIEW (ratio 0.7): `std.options.debug_io` defaults to `std.io.threaded`, and anything
+    REVIEW (ratio 0.63): this verifies nothing ever touches it.
+    MISSING ref comment: guards release builds against accidentally reintroducing the std
+    MISSING ref comment: macos and 370kb on windows. see the tinyio docs for the exact
+    MISSING ref comment: roughly 110kb of unreachable code.
+    MISSING ref comment: std.log handler, etc.) pins threaded's entire vtable into the binary:
+    MISSING ref comment: that reaches it (std.debug.print, std.debug.lockstderr, the default
+G3b [build-config]: distinctive ref comments=27 missing=0 review=1
+    REVIEW (ratio 0.75): the semantic version of this build.
+G3b [cfg-fmt]: distinctive ref comments=13 missing=0 review=0
+G3b [cli]: distinctive ref comments=602 missing=0 review=2
+    REVIEW (ratio 0.68): this should be returned by actions that want to print the help text.
+    REVIEW (ratio 0.72): var buf: [std.compress.flate.max_window_len]u8 = undefined;
+G3b [config]: distinctive ref comments=2873 missing=13 review=9
+    REVIEW (ratio 0.64): 3. "application support" directory (macos only)
+    REVIEW (ratio 0.66): can't shrink the window to hide its output.
+    REVIEW (ratio 0.62): if true, allows the running program to resize the window using the
+    REVIEW (ratio 0.71): load the configuration according to the default rules:
+    REVIEW (ratio 0.73): see "clipboard-codepoint-map" for documentation.
+    REVIEW (ratio 0.69): see `font-synthetic-style` for documentation.
+    REVIEW (ratio 0.75): see macos-dock-drop-behavior
+    REVIEW (ratio 0.74): see window-show-tab-bar
+    REVIEW (ratio 0.63): valid values for confirm-close-surface
+    MISSING ref comment: cloning value_c directly would copy command.c structs
+    MISSING ref comment: memory — the clone must stay valid after the source is
+    MISSING ref comment: multiple tabs, or the quick terminal, or if the window manager controls
+    MISSING ref comment: or omitted, the current size of that dimension is kept. sizes smaller
+    MISSING ref comment: running on a remote machine, change the size of your window.
+    MISSING ref comment: source config can be freed while the clone lives on.
+    MISSING ref comment: than 40 columns by 10 rows are raised to that size so that a program
+    MISSING ref comment: the clone's c strings must not alias the source's — the
+    MISSING ref comment: the request is ignored if the terminal is in a split, in a window with
+    MISSING ref comment: the window size, such as when it is fullscreen, maximized, or tiled.
+    MISSING ref comment: this is disabled by default because it lets any program, including one
+    MISSING ref comment: whose string pointers still reference the source config's
+    MISSING ref comment: xterm `csi 8 ; rows ; columns t` escape sequence. if a parameter is zero
+G3b [core]: distinctive ref comments=1253 missing=29 review=5
+    REVIEW (ratio 0.63): handle possible overrides depending on mouse tracking state.
+    REVIEW (ratio 0.62): mail the render thread so it updates its padding and screen size.
+    REVIEW (ratio 0.72): notifies the renderer so it can begin rendering.
+    REVIEW (ratio 0.74): padding since balanced padding depends on the size.
+    REVIEW (ratio 0.76): safe to call from the main thread.
+    MISSING ref comment: `presentation_health` state for the semantics.
+    MISSING ref comment: a zero dimension is passed through so the apprt keeps it as is.
+    MISSING ref comment: and releases gpu resources (swap chain and shaders).
+    MISSING ref comment: called by the apprt when the surface's display is realized.
+    MISSING ref comment: called by the apprt when the surface's display is unrealized (the surface
+    MISSING ref comment: called when the render thread has pushed a new frame.
+    MISSING ref comment: handle a request from the running program (csi 8 t) to resize the
+    MISSING ref comment: handles overrides on key presses depending on whether or not we are in
+    MISSING ref comment: is being destroyed or reparented). safe to call from the main thread.
+    MISSING ref comment: minimum size in cells that the running program can resize the window
+    MISSING ref comment: mouse tracking mode, however it is also responsible for resetting cursor
+    MISSING ref comment: no override restores the application shape (mouse tracking)
+    MISSING ref comment: no override restores the application shape (no mouse tracking)
+    MISSING ref comment: no overrides means we just revert back to the stored terminal mouse
+    MISSING ref comment: notifies the apprt to redraw this surface.
+    MISSING ref comment: our cell size and padding are in pixels but the apprt expects
+    MISSING ref comment: points. we use the configured padding rather than the current
+    MISSING ref comment: program can't shrink the window to hide its output.
+    MISSING ref comment: report to the renderer how well the apprt can present the frames
+    MISSING ref comment: shape. note that this may be different than what has been currently sent
+    MISSING ref comment: shift shows an i-beam so selection is obvious even when
+    MISSING ref comment: state on any particular key releases.
+    MISSING ref comment: the application cursor is not text (osc 22). release
+    MISSING ref comment: the renderer exports. see `renderer.health` and the renderer's
+    MISSING ref comment: to (csi 8 t). this is larger than the minimum window size so that a
+G3b [crash]: distinctive ref comments=167 missing=0 review=2
+    REVIEW (ratio 0.75): linux). on darwin the thread names itself in initthread.
+    REVIEW (ratio 0.76): naming the thread from here only works on some platforms (e.g.
+G3b [datastruct]: distinctive ref comments=478 missing=0 review=0
+G3b [extra]: distinctive ref comments=20 missing=0 review=2
+    REVIEW (ratio 0.67): generates the syntax file at comptime.
+    REVIEW (ratio 0.72): this results leading or tailing spaces being necessary to move onto the next match.
+G3b [font]: distinctive ref comments=3360 missing=12 review=0
+    MISSING ref comment: 3-level codepoint lookup. same shape as `unicode/symbols_table.zig`.
+    MISSING ref comment: `table` is a 3-level codepoint lookup, same shape as
+    MISSING ref comment: `unicode/symbols_table.zig`. pages with no constrained glyphs share
+    MISSING ref comment: and compares a u64 instead of a full renderoptions (metrics,
+    MISSING ref comment: cache key for rendered glyphs. packed to 8 bytes so hashmap stores
+    MISSING ref comment: lut.zig pages are 256 codepoints. the generator stores the all-null
+    MISSING ref comment: nerd font constraint for `cp`, or null when the codepoint has none.
+    MISSING ref comment: nerd-font constraint, etc. are not part of the identity).
+    MISSING ref comment: one stage1 entry for every high byte of a u21.
+    MISSING ref comment: one stage2 block and return null after the stage1 load.
+    MISSING ref comment: page at stage2 offset 0, and stage3 index 0 is null.
+    MISSING ref comment: pages with no constrained glyphs return after the stage1 load.
+G3b [global]: distinctive ref comments=106 missing=0 review=2
+    REVIEW (ratio 0.64): asserts that `self.io_impl` has been initialized.
+    REVIEW (ratio 0.78): returns the global state action.
+G3b [input]: distinctive ref comments=1113 missing=0 review=0
+G3b [inspector]: distinctive ref comments=202 missing=0 review=0
+G3b [lib]: distinctive ref comments=89 missing=5 review=0
+    MISSING ref comment: borrowed strings keep a non-null pointer, but it must point
+    MISSING ref comment: empty borrowed strings use the same real storage as an empty literal,
+    MISSING ref comment: never zig's zero-length allocation sentinel.
+    MISSING ref comment: that foreign runtimes reject even without dereferencing.
+    MISSING ref comment: to real storage: empty zig slices can use invalid sentinels
+G3b [os]: distinctive ref comments=685 missing=17 review=3
+    REVIEW (ratio 0.75): first check the env var. on windows we treat `localappdata` as a
+    REVIEW (ratio 0.76): https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-discardvirtualm
+    REVIEW (ratio 0.66): not great, but xev timer can't fail atm
+    MISSING ref comment: behind `\device\cng` (what processprng and bcryptgenrandom draw from).
+    MISSING ref comment: byte length if the buffer is too small, or 0 on failure.
+    MISSING ref comment: canonicalizes it, keeping any `\\?\` or `\\.\` prefix. returns
+    MISSING ref comment: child writes a line this loop would receive an empty slice
+    MISSING ref comment: distinct from the win32 createfilew value open_existing.
+    MISSING ref comment: forever, pinning a core and spamming empty warnings.
+    MISSING ref comment: getfinalpathnamebyhandlew dwflags: normalized name with a dos drive
+    MISSING ref comment: interval in 100ns units, null to wait forever.
+    MISSING ref comment: ioctl that fills the output buffer with bytes from the kernel csprng
+    MISSING ref comment: letter (both are the zero flag values).
+    MISSING ref comment: ntcreatefile createdisposition: open an existing file, never create.
+    MISSING ref comment: read inclusively so the delimiter is consumed:
+    MISSING ref comment: resolves a win32 path against the process working directory and
+    MISSING ref comment: takedelimiterexclusive leaves the '\n' buffered, so once the
+    MISSING ref comment: the byte length written excluding the terminator, the required
+    MISSING ref comment: the futex primitives that kernel32's waitonaddress and
+    MISSING ref comment: wakebyaddress* forward to. timeout is a relative (negative)
+G3b [render-types]: distinctive ref comments=149 missing=0 review=0
+G3b [renderer]: distinctive ref comments=1798 missing=100 review=20
+    REVIEW (ratio 0.62): and does not free gpu resources like the swap chain and
+    REVIEW (ratio 0.62): caller must lock the draw mutex before calling this function.
+    REVIEW (ratio 0.64): guarantees a current context on the render thread).
+    REVIEW (ratio 0.62): health of how well the apprt can present our frames.
+    REVIEW (ratio 0.66): if the frame is healthy, draw it to an exportedframe
+    REVIEW (ratio 0.62): in this case, a texture-backed framebuffer. the color attachment is a
+    REVIEW (ratio 0.72): it should be srgb, not linear!
+    REVIEW (ratio 0.76): lock the draw mutex so that we can safely update state.
+    REVIEW (ratio 0.63): ownership of the returned frame. called on the main thread.
+    REVIEW (ratio 0.7): rebuild the swap chain and shaders on the next `drawframe`,
+    MISSING ref comment: (`width * 4` bytes per row), in cpu memory.
+    MISSING ref comment: - `export_texture`: `gl_rgba8`. this is the texture we actually export
+    MISSING ref comment: - `texture`: `gl_srgb8_alpha8`. we render to this. with
+    MISSING ref comment: --- export texture (plain rgba8, for dma-buf export) ---
+    MISSING ref comment: [ exportedframe ] - a finished frame ready to be consumed by the apprt
+    MISSING ref comment: `gl_framebuffer_srgb` enabled, the gpu automatically converts linear
+    MISSING ref comment: `gl_framebuffer_srgb` has no effect on `readpixels`, so the stored
+    MISSING ref comment: `gl_texture_2d` texture instead of a renderbuffer so that we can create
+    MISSING ref comment: a finished frame exported for presentation by the apprt.
+    MISSING ref comment: a plain rgba8 texture + framebuffer that we blit `texture` into for
+    MISSING ref comment: a thread-safe, single-slot "latest wins" queue. the render thread
+    MISSING ref comment: already-srgb-encoded pixels into this non-srgb texture and export it.
+    MISSING ref comment: an eglimage from it and export the rendered frame as a dma-buf for
+    MISSING ref comment: as a dma-buf. mesa cannot export `gl_srgb8_alpha8` textures to
+    MISSING ref comment: at this point the exportedframe is finished and can be shared
+    MISSING ref comment: bitcast instead of intcast since the numerical value of fourccs
+    MISSING ref comment: but now we need to do this manually.
+    MISSING ref comment: called when the apprt reports a change in how well
+    MISSING ref comment: calls `push` with the latest frame; the apprt calls `take` in its
+    MISSING ref comment: can produce healthy frames that the apprt can't present.
+    MISSING ref comment: choose a config. we need a config that is renderable with
+    MISSING ref comment: dma-buf export. mesa can't export srgb textures, so we blit the
+    MISSING ref comment: dma-buf, so we blit the rendered srgb texture into this plain rgba8
+    MISSING ref comment: do not destroy the egl display here as
+    MISSING ref comment: doesn't hold onto the gl context forever.
+G3b [simd]: distinctive ref comments=177 missing=0 review=0
+G3b [synthetic]: distinctive ref comments=101 missing=0 review=0
+G3b [terminfo]: distinctive ref comments=99 missing=0 review=0
+G3b [termio]: distinctive ref comments=1224 missing=5 review=6
+    REVIEW (ratio 0.65): or if due to race conditions it doesn't exist or any various other
+    REVIEW (ratio 0.72): password is allocated and must be freed.
+    REVIEW (ratio 0.7): reasons. we don't want to crash the entire process if this fails so we
+    REVIEW (ratio 0.68): sets the fd to non-blocking mode. returns false on failure.
+    REVIEW (ratio 0.64): this functionality has been taken from zig stdlib, a simplified
+    REVIEW (ratio 0.78): version of the exec bits with path search so that we can just
+    MISSING ref comment: if we can't allocate the copy of the configured palette we fall back
+    MISSING ref comment: once the terminal owns its memory and can release it on deinit.
+    MISSING ref comment: the default palette may be an allocator-owned copy, so it is set
+    MISSING ref comment: to the built-in default, which never allocates.
+    MISSING ref comment: update the default palette. a config change must not fail here, so
+G3b [unicode]: distinctive ref comments=124 missing=0 review=0
+G3b [util]: distinctive ref comments=146 missing=0 review=0
+G3b [vt]: distinctive ref comments=14224 missing=437 review=141
+    REVIEW (ratio 0.74): (markmutated sets both); dirty set without a generation change
+    REVIEW (ratio 0.74): - `above` is less near the top of the scrollback.
+    REVIEW (ratio 0.63): - `below` is less when the viewport is close to the bottom of
+    REVIEW (ratio 0.62): // reuse `cached` at the new position
+    REVIEW (ratio 0.79): `page_serial`. consequently, every previously captured pointer-plus-serial
+    REVIEW (ratio 0.71): `page` metadata. a resident page can access the mapping directly since
+    REVIEW (ratio 0.79): a caller may pass our current tracked selection back to us by value, so
+    REVIEW (ratio 0.68): a dynamic palette using the built-in default palette. this owns
+    REVIEW (ratio 0.62): a group of raw values for the vectorized operations.
+    REVIEW (ratio 0.7): ahead of the cells. if we can't even fit that, return null.
+    MISSING ref comment: (incremental snapshot history restore), the feed picks them up and
+    MISSING ref comment: (incremental snapshot history restore). the history searcher's
+    MISSING ref comment: (see `changedefault`), in which case it points at an
+    MISSING ref comment: (the allocator interface fills fresh memory with undefined in
+    MISSING ref comment: // draw `cells` at row `y` shifted by the scroll offset
+    MISSING ref comment: // rebuild this row and cache it under row.id()
+    MISSING ref comment: 2026). the hold begins when vt input sets the mode. it ends
+    MISSING ref comment: [rows][cells][styles, graphemes, strings, hyperlinks]
+    MISSING ref comment: `csi 4 h` is `modefromint(4, true)` (insert).
+    MISSING ref comment: `overscan_request` to ask for extra rows above and below the viewport:
+    MISSING ref comment: `overscan_request`, and is less when those rows don't exist:
+    MISSING ref comment: `self.windows.items` (stable for the duration of next()), not the
+    MISSING ref comment: `self.windows` via synclayouts; this list only owns the
+    MISSING ref comment: `viewportstart()` reads it and `row_data` is laid out for it by the
+    MISSING ref comment: `viewportstart()`. only the entries in `rowdatarange()` hold data
+    MISSING ref comment: `{any}` walks freed/poisoned arena nodes.
+    MISSING ref comment: a borrowed item goes back to the pool through zero-mode decommit, which
+    MISSING ref comment: a captured row. this is either a viewport row or an overscan row,
+    MISSING ref comment: a complete search had exhausted the pagelist as of its last
+    MISSING ref comment: a custom default is an owned copy.
+    MISSING ref comment: a large unknown mode must not alias wraparound mode 7.
+    MISSING ref comment: a named pipe reached through the local device namespace.
+    MISSING ref comment: a number of rows above and below the viewport. used both to request
+    MISSING ref comment: a query identifier can use the full parser parameter range. keep it
+    MISSING ref comment: a range of `row_data` indices. `start` is inclusive and `end` is
+G3b [vt-c]: distinctive ref comments=726 missing=60 review=13
+    REVIEW (ratio 0.7): `std.io.failing`, which is correct: they have no filesystem.
+    REVIEW (ratio 0.63): `std.io.threaded` (see lib/tinyio.zig), on posix and windows alike.
+    REVIEW (ratio 0.68): allocation failed or `len` is zero.
+    REVIEW (ratio 0.64): at the bottom there is nothing below the viewport.
+    REVIEW (ratio 0.65): clearing the callback silences it.
+    REVIEW (ratio 0.62): every row except the last one (which scrolled out of the captured
+    REVIEW (ratio 0.72): if iteration hasn't started. always validate against `raws.len`
+    REVIEW (ratio 0.74): on the remaining targets (e.g. freestanding wasm) tinyio degrades to
+    REVIEW (ratio 0.62): the caller owns the returned slice and must free it with `alloc`.
+    REVIEW (ratio 0.65): the current index into the row slices below, or `position_none`
+    MISSING ref comment: (`renderstate.rowdatarange`), so every index below `raws.len` is
+    MISSING ref comment: `io` is the owner the decoded terminal was built with and is retained
+    MISSING ref comment: `state.overscan_request` at the start of each update rather than
+    MISSING ref comment: a reference state with no overscan for comparison.
+    MISSING ref comment: a reset always turns off synchronized output, ending its hold.
+    MISSING ref comment: a set during a hold and a reset without a hold are ignored.
+    MISSING ref comment: allocator-owned copy of the temporary directory path for some
+    MISSING ref comment: an idle parser has no continuation. never export the empty zig slice's
+    MISSING ref comment: an incomplete osc must not update the shape before its terminator.
+    MISSING ref comment: applied by the next update. see the field docs for why.
+    MISSING ref comment: apply any pending option changes to the render state. called at
+    MISSING ref comment: at the top there is nothing above the viewport.
+    MISSING ref comment: before the first next, there is no current row.
+    MISSING ref comment: before use. without overscan this is also the viewport y. with
+    MISSING ref comment: between an update and reading that update's rows would point the
+    MISSING ref comment: by the returned wrapper. the decoded terminal is transferred only
+    MISSING ref comment: changing the mode ourselves (e.g. for a timeout) isn't reported.
+    MISSING ref comment: changing the request after an update must not affect reading the
+    MISSING ref comment: completing the sequence must return an empty, allocation-free result.
+    MISSING ref comment: do not expose zig's empty slice sentinel through the c abi.
+    MISSING ref comment: empty zig slices may contain sentinel pointers that foreign runtimes
+    MISSING ref comment: every screen points at the new copy now so the previous
+    MISSING ref comment: hyperlinks don't override the application's requested shape.
+    MISSING ref comment: internal and may change: `bits[0]` is the page serial and `bits[1]`
+    MISSING ref comment: invalid names leave the last accepted shape unchanged.
+RED: dropped reference comment(s) or an invalid NOT-CARRIED row — see MISSING / NOT-CARRIED-INVALID above (R1 violation)
+g3b-strict exit=1
