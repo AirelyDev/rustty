@@ -2840,6 +2840,38 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    in `reportPwd`, use `uri.getHostAlloc(arena)` (whose error set is `UriMissingHost || OutOfMemory`, no `unreachable`) or check the decoded length first, e.g. treat a host whose `%`-decoded form cannot fit `HostName.max_len` as not local and `log.warn` + return. Upstream Zig: `std.Uri.getHost` should return an error (or `parse` should validate the host, as its field comment claims) instead of `unreachable`.
 - upstream status: NOT YET REPORTED. Report PRIVATELY through Ghostty's GitHub security advisory process (a repository Security Advisory / private vulnerability report), NOT a public issue: this is a remotely reachable denial of service (one short escape sequence in any terminal output crashes or hangs Ghostty). The std half can go to Zig once Ghostty has shipped a fix. Scrub the recipe above, or file the advisory, before this repository is ever made public (as for UD131).
 
+### UD352 — the display-link resync reads draw state without the draw mutex while the main thread's sync draw writes it (data race)
+
+- kind:            UB (data race; R13)
+- upstream project: ghostty
+- severity:        low (a formal data race on a `bool`. No wrong output was observed: on the draw path, both values the read can see lead to the same start/stop decision)
+- reference:       `src/renderer/generic.zig` at 12752b2ac (the `72cf50855` end state):
+  - `cells_rebuilt: bool` (`:177`), set under `draw_mutex` by `rebuildCells` (`:2877`) and cleared under it by `drawFrameLocked` (`:1769`);
+  - `drawFrame` (`:1678-1693`) releases `draw_mutex`, then calls `syncDisplayLink(null, null)` (`:1692`);
+  - `updateFrame` does the same after its locked block (`:1610`, `:1671`);
+  - `syncDisplayLink` reads `self.visible`, `self.cells_rebuilt` and `self.animationWake()` with no lock (`:1263-1266`);
+  - `drawFrame` is also called with `sync = true` from the main thread through the Metal layer's display callback (`src/renderer/Metal.zig:172-176`).
+  - `setFocus` (`:1160`) and `setVisible` (`:1179`) also resync unlocked. The `updateFrame` and `setFocus`/`setVisible` resyncs were already unlocked at 20abdb50a; `72cf50855` added the `drawFrame` one.
+- defect:          the render thread reads `cells_rebuilt` while the main thread's `drawFrame(sync)` can be writing it under `draw_mutex`, with no happens-before between the two: a data race. Zig treats a racing `bool` read as benign; the language gives it no defined meaning, and in Rust it is undefined behaviour. In the port, the sync draw also reborrows the whole renderer `&mut` (`upload_background_image`, `update_custom_shader_uniforms_for_frame`), which Miri's race detector counts as a write over every field the resync reads.
+- ReleaseSafe:     no safety check sees it; no observed misbehaviour. By reading; not measured.
+- ReleaseFast:     the same.
+- reachability:    every frame. The render thread resyncs after each no-redraw draw and each `updateFrame`, while CoreAnimation calls the sync draw on the main thread (a resize, `needsDisplayOnBoundsChange`).
+- port handling:
+  - `crates/rustty-renderer/src/generic.rs` (macOS). `cells_rebuilt` is an `AtomicBool` (Relaxed; the stores stay under the lock).
+  - The tail of `sync_display_link` is split into `display_link_sync` (the reads, yielding a `DisplayLinkSync { link: DisplayLinkHandle, should_run }`) and `DisplayLinkSync::apply` (the CoreVideo start/stop calls on a non-owning `DisplayLinkHandle`, `crates/rustty-renderer/src/metal/cvdisplaylink.rs`).
+  - `draw_frame_raw` and `update_frame` take the reads while they still hold `draw_mutex`, and apply them after the unlock, so after the unlock the render thread touches no renderer bytes. The blocking stop still runs outside the lock (the point of `72cf50855`).
+  - On the draw path the decision is the same as upstream's: a no-redraw draw has already seen `cells_rebuilt == false` and no animation, and only the render thread sets them back. On the `updateFrame` path, reading before the unlock is the outcome in which the main draw comes after the resync.
+  - `PORT NOTE: reference defect (R13)` at the field, `sync_display_link`, `draw_frame_raw` and `update_frame`. The Linux twin has no display link and is unchanged. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none. Found by the P7-W0 T1 task review (fix round 1).
+- test:
+  - Miri, `.port/phase-2/mirihar-chunk3b` (no happens-before between the threads; README "SYNCLINK_RACE"):
+    - `synclink_race_prev` (the reference shape: plain bool read after the unlock, `animationWake(&self)`) is UB under SB and TB (data race);
+    - `synclink_race_minfix` (atomic plus narrow reads, still after the unlock) is UB under SB (the main draw's `&mut` retag races the read);
+    - `synclink_race_fixed` (the shipped shape) is clean under SB and TB, with the default seed and `-Zmiri-many-seeds=0..16`.
+  - On the real renderer, `draw_frame_does_not_sync_display_link_under_draw_mutex` (rustty-renderer, macOS) asserts that the start/stop runs with `draw_mutex` free and that the main thread's sync draw completes between the unlock and the resync. It cannot observe the race itself.
+- proposed fix:    make `cells_rebuilt` atomic (`std.atomic.Value(bool)`), or compute `syncDisplayLink`'s `should_run` while `draw_mutex` is held and do only the `start`/`stop` after releasing it.
+- upstream status: NOT YET REPORTED
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

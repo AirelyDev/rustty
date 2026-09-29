@@ -1311,8 +1311,11 @@ fn run_displaycb(naive: bool) {
 //
 //   synclink_shipped — `sync_display_link_raw(this: *mut Renderer)`: NARROW field
 //     reads through the raw root, no protector spans the call. Expected: CLEAN.
+//     (Round 1 as first committed; SUPERSEDED by `synclink_race_fixed`.)
 //
-// The mpsc handshake orders the field accesses (no data race masks the verdict).
+// The mpsc handshake orders the field accesses, so this pair shows only the receiver
+// protector question; it does not model the resync's reads racing the main draw.
+// The `synclink_race_*` candidates below do.
 // ============================================================================
 
 // The resync's reads: `display_link`/`visible` (modelled by `lead`), `cells_rebuilt`
@@ -1388,6 +1391,182 @@ fn run_synclink(naive: bool) {
         if naive { "naive" } else { "shipped" }
     );
     drop(owner);
+}
+
+// ============================================================================
+// P7-W0 T1 fix round 1 (UD352): the REAL overlap, with NO happens-before between the
+// render thread's post-unlock resync and the main thread's sync draw.
+//
+// The `synclink_*` pair above parks the resync after its reads and orders the two
+// threads with mpsc (happens-before), so it only shows that a protected `&mut self`
+// receiver on the resync is UB; it says nothing about the resync's own reads racing the
+// main draw. These candidates use only Relaxed flags (no happens-before) to force the
+// overlap: the render thread does its locked draw, unlocks, and does its resync while
+// the main thread's CoreAnimation `draw_frame_raw(sync)` is inside the locked draw,
+// having cleared `cells_rebuilt` and being inside a whole-`&mut Renderer` call
+// (`upload_background_image` / `update_custom_shader_uniforms_for_frame`).
+//
+//   synclink_race_prev   — round 1 as first shipped: plain `cells_rebuilt: bool` read
+//     through the raw root after the unlock, `animation_wake(&self)`, and the link read
+//     from the renderer field. Expected: UB (data race and/or protector).
+//   synclink_race_minfix — `cells_rebuilt: AtomicBool` + NARROW raw reads of every
+//     other input (no `&self` method), still after the unlock. Expected: UB under SB
+//     (the main draw's protected whole-`&mut` covers the fields read), so atomics +
+//     narrow reads alone are not enough.
+//   synclink_race_fixed  — SHIPPED: the reads happen under `draw_mutex` (before the
+//     unlock) and yield a `DisplayLinkSync { link: handle, should_run }`; after the
+//     unlock only the CoreVideo object (a SEPARATE allocation) is touched.
+//     Expected: CLEAN.
+// ============================================================================
+
+// The CVDisplayLink: a separate CoreVideo allocation, `running` is its state.
+struct RaceLink {
+    running: AtomicBool,
+}
+
+struct RaceRenderer {
+    draw_mutex: SMutex<()>,
+    visible: bool,
+    focused: bool, // an animation-wake input, written only by the render thread
+    cells_rebuilt_plain: bool,
+    cells_rebuilt: AtomicBool,
+    uniforms: u64, // written by the main draw's whole-`&mut` call
+    link: *const RaceLink,
+}
+
+impl RaceRenderer {
+    // `animation_wake(&self)`: a protected shared reborrow of the whole renderer.
+    fn animation_wake(&self) -> bool {
+        self.focused && false
+    }
+}
+
+// The main draw's whole-`&mut self` method (models `upload_background_image`). Holds
+// its protector while the render thread resyncs.
+fn race_upload_bg(this: &mut RaceRenderer, flags: &RaceFlags) {
+    this.uniforms = this.uniforms.wrapping_add(1);
+    flags.main_in_call.store(true, AOrd::Relaxed);
+    while !flags.render_done.load(AOrd::Relaxed) {
+        std::thread::yield_now();
+    }
+    this.uniforms = this.uniforms.wrapping_add(1);
+}
+
+struct RaceFlags {
+    render_unlocked: AtomicBool,
+    main_in_call: AtomicBool,
+    render_done: AtomicBool,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Race {
+    Prev,
+    MinFix,
+    Fixed,
+}
+
+// `DisplayLinkSync::apply`: touches only the CoreVideo object.
+unsafe fn race_apply(link: *const RaceLink, should_run: bool) {
+    unsafe { (*link).running.store(should_run, AOrd::Relaxed) };
+}
+
+struct SendRace(*mut RaceRenderer, *const RaceFlags);
+unsafe impl Send for SendRace {}
+
+fn run_synclink_race(variant: Race) {
+    let link: *const RaceLink = Box::into_raw(Box::new(RaceLink { running: AtomicBool::new(true) }));
+    let owner: *mut RaceRenderer = Box::into_raw(Box::new(RaceRenderer {
+        draw_mutex: SMutex::new(()),
+        visible: true,
+        focused: false,
+        cells_rebuilt_plain: false,
+        cells_rebuilt: AtomicBool::new(false),
+        uniforms: 0,
+        link,
+    }));
+    let flags: *const RaceFlags = Box::into_raw(Box::new(RaceFlags {
+        render_unlocked: AtomicBool::new(false),
+        main_in_call: AtomicBool::new(false),
+        render_done: AtomicBool::new(false),
+    }));
+
+    // The render thread: the no-redraw `draw_frame_raw(false)`, then the resync.
+    let send = SendRace(owner, flags);
+    let render = std::thread::spawn(move || {
+        let s = send;
+        let (this, flags) = (s.0, unsafe { &*s.1 });
+        let planned = {
+            let _g = unsafe { (*this).draw_mutex.lock().unwrap() };
+            // The locked body saw nothing to redraw.
+            if variant == Race::Fixed {
+                // Shipped: take the resync's reads under the mutex.
+                let should_run = unsafe {
+                    (*this).visible
+                        && ((*this).cells_rebuilt.load(AOrd::Relaxed) || (*this).focused && false)
+                };
+                Some((unsafe { (*this).link }, should_run))
+            } else {
+                None
+            }
+        };
+        flags.render_unlocked.store(true, AOrd::Relaxed);
+        while !flags.main_in_call.load(AOrd::Relaxed) {
+            std::thread::yield_now();
+        }
+        match variant {
+            Race::Prev => {
+                let should_run = unsafe {
+                    (*this).visible && ((*this).cells_rebuilt_plain || (*this).animation_wake())
+                };
+                unsafe { race_apply((*this).link, should_run) };
+            }
+            Race::MinFix => {
+                let should_run = unsafe {
+                    (*this).visible
+                        && ((*this).cells_rebuilt.load(AOrd::Relaxed) || (*this).focused && false)
+                };
+                unsafe { race_apply((*this).link, should_run) };
+            }
+            Race::Fixed => {
+                let (link, should_run) = planned.unwrap();
+                unsafe { race_apply(link, should_run) };
+            }
+        }
+        flags.render_done.store(true, AOrd::Relaxed);
+    });
+
+    // The main thread: CoreAnimation `draw_frame_raw(sync = true)`.
+    let flags_ref = unsafe { &*flags };
+    while !flags_ref.render_unlocked.load(AOrd::Relaxed) {
+        std::thread::yield_now();
+    }
+    {
+        let _g = unsafe { (*owner).draw_mutex.lock().unwrap() };
+        // `self.cells_rebuilt = false`, through the raw root.
+        match variant {
+            Race::Prev => unsafe { (*owner).cells_rebuilt_plain = false },
+            _ => unsafe { (*owner).cells_rebuilt.store(false, AOrd::Relaxed) },
+        }
+        // `try self.uploadBackgroundImage()`: a whole-`&mut self` call.
+        race_upload_bg(unsafe { &mut *owner }, flags_ref);
+    }
+    render.join().unwrap();
+
+    let running = unsafe { (*link).running.load(AOrd::Relaxed) };
+    let uniforms = unsafe { (*owner).uniforms };
+    println!(
+        "synclink_race_{}: running={running} uniforms={uniforms}",
+        match variant {
+            Race::Prev => "prev",
+            Race::MinFix => "minfix",
+            Race::Fixed => "fixed",
+        }
+    );
+    unsafe {
+        drop(Box::from_raw(owner));
+        drop(Box::from_raw(link as *mut RaceLink));
+        drop(Box::from_raw(flags as *mut RaceFlags));
+    }
 }
 
 // ============================================================================
@@ -2283,6 +2462,18 @@ fn main() {
         }
         "synclink_naive" => {
             run_synclink(true);
+            return;
+        }
+        "synclink_race_prev" => {
+            run_synclink_race(Race::Prev);
+            return;
+        }
+        "synclink_race_minfix" => {
+            run_synclink_race(Race::MinFix);
+            return;
+        }
+        "synclink_race_fixed" => {
+            run_synclink_race(Race::Fixed);
             return;
         }
         "loopthread_shipped" => {

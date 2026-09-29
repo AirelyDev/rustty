@@ -215,15 +215,42 @@ thread runs its raw draw (lock + plain-field write). Selected by argv `synclink_
 | candidate | models | SB | TB |
 |---|---|---|---|
 | `synclink_naive` | the resync through the `&mut self` `sync_display_link` receiver (a protected whole-`Renderer` `&mut` fn arg), reached from the raw draw path after the unlock | **UB** (main's `draw_mutex.lock()` "would remove [Unique …] which is strongly protected") | **UB** (main's field write "is forbidden") |
-| `synclink_shipped` | **shipped**: `sync_display_link_raw(this: *mut Renderer)`, narrow field reads through the raw root; no protector spans the call | **CLEAN** | **CLEAN** |
+| `synclink_shipped` | round 1 as first committed (superseded, see below): `sync_display_link_raw(this: *mut Renderer)`, narrow field reads through the raw root; no protector spans the call | **CLEAN** | **CLEAN** |
 
-So `draw_frame_raw` calls `sync_display_link_raw`; the `&mut self` `sync_display_link`
-wrapper stays only for render-thread callers that already hold a `&mut Renderer`.
+**What this pair proves, and what it does not.** The mpsc handshake gives
+happens-before between the two threads, and the resync parks after its reads. So the
+pair proves only that a protected `&mut self` receiver spanning the resync is UB when
+the main thread draws meanwhile. It does NOT show that the resync's own reads are
+sound against the main draw: `synclink_shipped` was never a model of the real overlap.
+Fix round 1 found that the round-1 raw-self resync was still unsound (UD352), and
+replaced it. The `synclink_race_*` candidates below cover that overlap.
+
+### SYNCLINK_RACE candidates (fix round 1, UD352: the real overlap, no happens-before)
+
+Only Relaxed flags order the threads (no happens-before). The render thread does its
+locked no-redraw draw, unlocks, and resyncs while the main thread's sync draw is inside
+its locked region. The main draw has cleared `cells_rebuilt` and is inside a whole-
+`&mut Renderer` call, standing in for `upload_background_image` /
+`update_custom_shader_uniforms_for_frame`, which the real sync draw makes every frame.
+
+| candidate | models | SB | TB |
+|---|---|---|---|
+| `synclink_race_prev` | round 1 as first committed: after the unlock, read plain `cells_rebuilt: bool` through the raw root, call `animation_wake(&self)`, read the link from the renderer field | **UB** (data race: main's `&mut` retag write vs the render thread's read) | **UB** (data race: main's `cells_rebuilt = false` vs the read) |
+| `synclink_race_minfix` | `cells_rebuilt: AtomicBool` plus narrow raw reads of every other input, still after the unlock | **UB** (data race: main's whole-`&mut` retag write vs the narrow read of `visible`) | clean |
+| `synclink_race_fixed` | **shipped**: the reads are taken under `draw_mutex`, before the unlock, into a `DisplayLinkSync { link: handle, should_run }`; after the unlock only the CoreVideo object, a separate allocation, is touched | **CLEAN** (default seed and `-Zmiri-many-seeds=0..16`) | **CLEAN** (the same) |
+
+So an atomic `cells_rebuilt` plus narrow reads is NOT sufficient. The main draw's
+whole-renderer `&mut` reborrows cover every field the resync would read after the
+unlock. The shipped shape reads under the lock and uses the non-owning
+`DisplayLinkHandle` afterwards.
+
+The UB verdicts for `prev` and `minfix` are for the default seed. Without happens-before,
+detection depends on the schedule.
 
 Run:
 
 ```sh
-for c in synclink_naive synclink_shipped; do
+for c in synclink_naive synclink_shipped synclink_race_prev synclink_race_minfix synclink_race_fixed; do
   echo "== $c =="
   cargo +nightly miri run --quiet -- "$c"                          # Stacked Borrows
   MIRIFLAGS=-Zmiri-tree-borrows cargo +nightly miri run -q -- "$c" # Tree Borrows

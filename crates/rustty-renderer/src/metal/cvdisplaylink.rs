@@ -187,30 +187,17 @@ impl DisplayLink {
 
     /// Reference `start(self) Error!void`.
     pub fn start(&self) -> Result<(), Error> {
-        // SAFETY: `link` is a valid +1 CVDisplayLinkRef.
-        let rc = unsafe { CVDisplayLinkStart(self.link.as_ptr()) };
-        if rc != kCVReturnSuccess {
-            Err(Error::InvalidOperation)
-        } else {
-            Ok(())
-        }
+        self.handle().start()
     }
 
     /// Reference `stop(self) Error!void`.
     pub fn stop(&self) -> Result<(), Error> {
-        // SAFETY: `link` is a valid +1 CVDisplayLinkRef.
-        let rc = unsafe { CVDisplayLinkStop(self.link.as_ptr()) };
-        if rc != kCVReturnSuccess {
-            Err(Error::InvalidOperation)
-        } else {
-            Ok(())
-        }
+        self.handle().stop()
     }
 
     /// Reference `isRunning(self) bool { return c.CVDisplayLinkIsRunning(...) != 0; }`.
     pub fn is_running(&self) -> bool {
-        // SAFETY: `link` is a valid +1 CVDisplayLinkRef.
-        unsafe { CVDisplayLinkIsRunning(self.link.as_ptr()) != 0 }
+        self.handle().is_running()
     }
 
     /// Reference `setCurrentCGDisplay(self, display_id: CGDirectDisplayID) Error!void`.
@@ -256,6 +243,53 @@ impl DisplayLink {
         } else {
             Ok(())
         }
+    }
+
+    /// A non-owning copy of the `CVDisplayLinkRef`, so `start`/`stop`/
+    /// `isRunning` can run without touching the bytes of whatever owns this
+    /// wrapper (the renderer; UD352).
+    pub fn handle(&self) -> DisplayLinkHandle {
+        DisplayLinkHandle { link: self.link }
+    }
+}
+
+/// PORT-ONLY (UD352): a `Copy`, non-owning `CVDisplayLinkRef` carrying the
+/// reference `start`/`stop`/`isRunning`. It holds no reference count; the owning
+/// [`DisplayLink`] must outlive every use. The renderer takes it under
+/// `draw_mutex` and uses it on the render thread after the unlock; the link is
+/// released only on that same thread, so it cannot be freed in between.
+#[derive(Clone, Copy, Debug)]
+pub struct DisplayLinkHandle {
+    link: NonNull<CVDisplayLink>,
+}
+
+impl DisplayLinkHandle {
+    /// Reference `start(self) Error!void`.
+    pub fn start(self) -> Result<(), Error> {
+        // SAFETY: `link` is a valid CVDisplayLinkRef owned by a live `DisplayLink`.
+        let rc = unsafe { CVDisplayLinkStart(self.link.as_ptr()) };
+        if rc != kCVReturnSuccess {
+            Err(Error::InvalidOperation)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Reference `stop(self) Error!void`.
+    pub fn stop(self) -> Result<(), Error> {
+        // SAFETY: `link` is a valid CVDisplayLinkRef owned by a live `DisplayLink`.
+        let rc = unsafe { CVDisplayLinkStop(self.link.as_ptr()) };
+        if rc != kCVReturnSuccess {
+            Err(Error::InvalidOperation)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Reference `isRunning(self) bool`.
+    pub fn is_running(self) -> bool {
+        // SAFETY: `link` is a valid CVDisplayLinkRef owned by a live `DisplayLink`.
+        unsafe { CVDisplayLinkIsRunning(self.link.as_ptr()) != 0 }
     }
 }
 
