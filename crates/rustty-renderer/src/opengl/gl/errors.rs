@@ -1,5 +1,6 @@
 //! PORTS: ghostty `pkg/opengl/errors.zig` (33 loc), in full.
 
+use super::glad;
 use std::fmt;
 
 /// PORTS: `errors.zig:5-13`.
@@ -83,7 +84,7 @@ pub fn get_error() -> Result<(), Error> {
     // SAFETY: `glGetError` takes no arguments, returns an enum, and is valid to
     // call on any current context. It is UB only with no current context, which
     // is the same precondition the reference (and all of `pkg/opengl`) assumes.
-    match unsafe { gl::GetError() } {
+    match glad::context(|gl| unsafe { gl.GetError() }) {
         gl::NO_ERROR => Ok(()),
         gl::INVALID_ENUM => Err(Error::InvalidEnum),
         gl::INVALID_VALUE => Err(Error::InvalidValue),

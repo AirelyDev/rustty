@@ -14,6 +14,7 @@
 use gl::types::{GLenum, GLint, GLintptr, GLsizei, GLuint};
 
 use super::errors;
+use super::glad;
 
 /// PORTS: `VertexArray.zig:1-7` — `const VertexArray = @This(); … id: c.GLuint`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -41,7 +42,7 @@ impl VertexArray {
         let mut vao: GLuint = 0;
         // SAFETY: `glGenVertexArrays` writes exactly `n` (= 1) GLuints through
         // the pointer; `&mut vao` is one live, aligned GLuint.
-        unsafe { gl::GenVertexArrays(1, &mut vao) };
+        glad::context(|gl| unsafe { gl.GenVertexArrays(1, &mut vao) });
         Ok(VertexArray { id: vao })
     }
 
@@ -63,7 +64,7 @@ impl VertexArray {
     pub fn bind(self) -> Result<Binding, errors::Error> {
         // SAFETY: binds a name this `VertexArray` owns. A name that was never
         // generated is GL_INVALID_OPERATION, collected immediately below.
-        unsafe { gl::BindVertexArray(self.id) };
+        glad::context(|gl| unsafe { gl.BindVertexArray(self.id) });
         errors::get_error()?;
         Ok(Binding)
     }
@@ -81,7 +82,7 @@ impl VertexArray {
     pub fn destroy(self) {
         // SAFETY: `glDeleteVertexArrays` reads exactly `n` (= 1) GLuints through
         // the pointer; `&self.id` is one live, aligned GLuint.
-        unsafe { gl::DeleteVertexArrays(1, &self.id) };
+        glad::context(|gl| unsafe { gl.DeleteVertexArrays(1, &self.id) });
     }
 }
 
@@ -106,7 +107,7 @@ impl Binding {
     /// ```
     pub fn unbind(self) {
         // SAFETY: binding VAO name 0 always succeeds.
-        unsafe { gl::BindVertexArray(0) };
+        glad::context(|gl| unsafe { gl.BindVertexArray(0) });
     }
 
     /// PORTS: `VertexArray.zig:33-36`.
@@ -129,7 +130,7 @@ impl Binding {
         // SAFETY: acts on the currently-bound VAO. Every failure mode (no VAO
         // bound, index >= GL_MAX_VERTEX_ATTRIBS) is a defined GL error, collected
         // below.
-        unsafe { gl::EnableVertexAttribArray(idx) };
+        glad::context(|gl| unsafe { gl.EnableVertexAttribArray(idx) });
         errors::get_error()
     }
 
@@ -147,7 +148,7 @@ impl Binding {
     /// per-ATTRIBUTE `glVertexAttribDivisor`.
     pub fn binding_divisor(self, idx: GLuint, divisor: GLuint) -> Result<(), errors::Error> {
         // SAFETY: see `enable_attrib_array`.
-        unsafe { gl::VertexBindingDivisor(idx, divisor) };
+        glad::context(|gl| unsafe { gl.VertexBindingDivisor(idx, divisor) });
         errors::get_error()
     }
 
@@ -169,7 +170,7 @@ impl Binding {
         binding_idx: GLuint,
     ) -> Result<(), errors::Error> {
         // SAFETY: see `enable_attrib_array`.
-        unsafe { gl::VertexAttribBinding(attrib_idx, binding_idx) };
+        glad::context(|gl| unsafe { gl.VertexAttribBinding(attrib_idx, binding_idx) });
         errors::get_error()
     }
 
@@ -205,7 +206,7 @@ impl Binding {
         // `@intCast(@intFromBool(normalized))`: bool -> GLboolean (u8).
         let normalized_c: gl::types::GLboolean = if normalized { gl::TRUE } else { gl::FALSE };
         // SAFETY: see `enable_attrib_array`.
-        unsafe { gl::VertexAttribFormat(idx, size, typ, normalized_c, offset) };
+        glad::context(|gl| unsafe { gl.VertexAttribFormat(idx, size, typ, normalized_c, offset) });
         errors::get_error()
     }
 
@@ -239,7 +240,7 @@ impl Binding {
         offset: GLuint,
     ) -> Result<(), errors::Error> {
         // SAFETY: see `enable_attrib_array`.
-        unsafe { gl::VertexAttribIFormat(idx, size, typ, offset) };
+        glad::context(|gl| unsafe { gl.VertexAttribIFormat(idx, size, typ, offset) });
         errors::get_error()
     }
 
@@ -272,7 +273,7 @@ impl Binding {
         offset: GLuint,
     ) -> Result<(), errors::Error> {
         // SAFETY: see `enable_attrib_array`.
-        unsafe { gl::VertexAttribLFormat(idx, size, gl::DOUBLE, offset) };
+        glad::context(|gl| unsafe { gl.VertexAttribLFormat(idx, size, gl::DOUBLE, offset) });
         errors::get_error()
     }
 
@@ -307,7 +308,7 @@ impl Binding {
         stride: GLsizei,
     ) -> Result<(), errors::Error> {
         // SAFETY: see `enable_attrib_array`.
-        unsafe { gl::BindVertexBuffer(idx, buffer, offset, stride) };
+        glad::context(|gl| unsafe { gl.BindVertexBuffer(idx, buffer, offset, stride) });
         errors::get_error()
     }
 }

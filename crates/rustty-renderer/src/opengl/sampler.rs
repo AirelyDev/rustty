@@ -17,10 +17,8 @@
 //! PORT NOTE (no `Binding`, `parameter` on the sampler): the `gl::Sampler` leaf has
 //! no `Binding` type — `glSamplerParameteri` takes the sampler name directly — so
 //! `parameter` is a method on the sampler and needs no prior bind. The reference's
-//! `Sampler.zig` init drives exactly that (`sampler.parameter(.WrapS, …)`), and it
+//! `Sampler.zig` init drives exactly that (`sampler.parameter(.wrap_s, …)`), and it
 //! is ported as-is.
-
-use gl::types::GLint;
 
 use super::gl::sampler::Sampler as GlSampler;
 use super::gl::texture::{MagFilter, MinFilter, Parameter, Wrap};
@@ -60,10 +58,10 @@ impl Sampler {
     // pub fn init(opts: Options) Error!Self {
     //     const sampler = gl.Sampler.create() catch return error.OpenGLFailed;
     //     errdefer sampler.destroy();
-    //     sampler.parameter(.WrapS, @intFromEnum(opts.wrap_s)) catch return error.OpenGLFailed;
-    //     sampler.parameter(.WrapT, @intFromEnum(opts.wrap_t)) catch return error.OpenGLFailed;
-    //     sampler.parameter(.MinFilter, @intFromEnum(opts.min_filter)) catch return error.OpenGLFailed;
-    //     sampler.parameter(.MagFilter, @intFromEnum(opts.mag_filter)) catch return error.OpenGLFailed;
+    //     sampler.parameter(.wrap_s, opts.wrap_s) catch return error.OpenGLFailed;
+    //     sampler.parameter(.wrap_t, opts.wrap_t) catch return error.OpenGLFailed;
+    //     sampler.parameter(.min_filter, opts.min_filter) catch return error.OpenGLFailed;
+    //     sampler.parameter(.mag_filter, opts.mag_filter) catch return error.OpenGLFailed;
     //     return .{ .sampler = sampler };
     // }
     // ```
@@ -73,23 +71,24 @@ impl Sampler {
     // reproduces that: run the four `parameter` calls, and on the first error
     // destroy the sampler and propagate.
     //
-    // PORT NOTE (`@intFromEnum(opts.wrap_s)` etc.): the `#[repr(i32)]` enums map
-    // via `as GLint`, the `c.GLint` arm `gl::Sampler::parameter` accepts.
+    // PORT NOTE (`adf161473`): the reference passes the typed enums straight
+    // through (`value: name.Type()`), and so does this; `gl::Sampler::parameter`
+    // does the `@intFromEnum`.
     pub fn init(opts: Options) -> Result<Self, Error> {
         let sampler = GlSampler::create().map_err(|_| Error::OpenGLFailed)?;
 
         let configured = (|| -> Result<(), Error> {
             sampler
-                .parameter(Parameter::WrapS, opts.wrap_s as GLint)
+                .parameter(Parameter::WrapS, opts.wrap_s)
                 .map_err(|_| Error::OpenGLFailed)?;
             sampler
-                .parameter(Parameter::WrapT, opts.wrap_t as GLint)
+                .parameter(Parameter::WrapT, opts.wrap_t)
                 .map_err(|_| Error::OpenGLFailed)?;
             sampler
-                .parameter(Parameter::MinFilter, opts.min_filter as GLint)
+                .parameter(Parameter::MinFilter, opts.min_filter)
                 .map_err(|_| Error::OpenGLFailed)?;
             sampler
-                .parameter(Parameter::MagFilter, opts.mag_filter as GLint)
+                .parameter(Parameter::MagFilter, opts.mag_filter)
                 .map_err(|_| Error::OpenGLFailed)?;
             Ok(())
         })();

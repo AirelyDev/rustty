@@ -57,6 +57,7 @@ use std::fmt;
 use rustty_render_types::AlphaBlending; // ← Part A hoist (no config edge)
 
 use super::gl::buffer as glbuf;
+use super::gl::glad;
 use super::gl::sys::{self, OffscreenContext};
 use super::gl::texture as gltex;
 use super::gl::{draw, errors, framebuffer};
@@ -106,6 +107,8 @@ pub enum Error {
     /// A raw `gl` call in `present` reported an error (OpenGL.zig:298-336's
     /// `disable`/`enable`/`bind` fallible calls).
     Gl(errors::Error),
+    /// An EGL call failed: `threadEnter`'s `makeCurrent` (`OpenGL.zig:224`).
+    Egl(sys::EglError),
 }
 
 impl fmt::Display for Error {
@@ -113,6 +116,7 @@ impl fmt::Display for Error {
         match self {
             Self::Context(err) => write!(f, "OpenGL context setup failed: {err}"),
             Self::Gl(err) => write!(f, "OpenGL error: {err}"),
+            Self::Egl(err) => write!(f, "EGL error: {err}"),
         }
     }
 }
@@ -128,6 +132,12 @@ impl From<sys::Error> for Error {
 impl From<errors::Error> for Error {
     fn from(err: errors::Error) -> Self {
         Self::Gl(err)
+    }
+}
+
+impl From<sys::EglError> for Error {
+    fn from(err: sys::EglError) -> Self {
+        Self::Egl(err)
     }
 }
 
@@ -248,8 +258,8 @@ impl OpenGL {
         OpenGL {
             blending,
             last_target: None,
-            // GDK owns the context; the renderer does NOT eglTerminate anything on
-            // drop — this is the fix for the GL-ATTACH teardown double-free.
+            // GDK owns the context; the renderer destroys nothing of it on drop —
+            // this is the fix for the GL-ATTACH teardown double-free.
             context: None,
             // Unused on the windowed path (`surface_size` reads GL_VIEWPORT while
             // `context` is `None`); zeroed for parity with the offscreen stub.
@@ -268,6 +278,66 @@ impl OpenGL {
     /// same discriminant `surface_size` already switches on.
     pub fn owns_context(&self) -> bool {
         self.context.is_some()
+    }
+
+    /// The owned EGL display + context (the offscreen path), which the DMA-BUF
+    /// export takes where the reference takes `self.egl_display`/
+    /// `self.egl_context` (`OpenGL.zig:306`). `None` on the windowed path.
+    /// RUSTTY-ONLY accessor until stage S2 moves the pair into this struct.
+    pub fn offscreen_context(&self) -> Option<&OffscreenContext> {
+        self.context.as_ref()
+    }
+
+    /// Callback called by renderer.Thread when it begins. Called on the render
+    /// thread. The EGL context was created at `init` time on the main thread;
+    /// here we (re)bind it to this thread and load the thread-local glad
+    /// function pointers for it.
+    ///
+    /// PORTS: `OpenGL.zig:218-227` (`2f0b65346`), for the OWNED context (P7-W7
+    /// T1, DECISIONS B9).
+    ///
+    /// ```zig
+    /// pub fn threadEnter(self: *OpenGL, surface: *apprt.Surface) !void {
+    ///     _ = surface;
+    ///     try self.egl_display.makeCurrent(null, null, self.egl_context);
+    ///     // Load our function pointers for this thread's threadlocal.
+    ///     try prepareContext(&gl.egl.getProcAddress);
+    /// }
+    /// ```
+    ///
+    /// STAGE S1: nothing calls this yet. The live GTK path still draws on the
+    /// app thread through GDK's context and keeps the pin's empty `threadEnter`
+    /// arms (`generic::linux_impl::thread_enter`); stage S2 wires this in. On
+    /// the windowed path (`context` is `None`) it is that same no-op.
+    pub fn thread_enter(&self) -> Result<(), Error> {
+        let Some(ctx) = &self.context else {
+            return Ok(());
+        };
+        ctx.make_current()?;
+        // Load our function pointers for this thread's threadlocal.
+        sys::load_gl(ctx)?;
+        Ok(())
+    }
+
+    /// Callback called by renderer.Thread when it exits. Called on the render
+    /// thread; unbinds the context from this thread so it can be destroyed on
+    /// the main thread.
+    ///
+    /// PORTS: `OpenGL.zig:229-235` (`2f0b65346`), for the OWNED context; see
+    /// [`Self::thread_enter`] for the S1 scope.
+    ///
+    /// ```zig
+    /// pub fn threadExit(self: *OpenGL) void {
+    ///     self.egl_display.releaseCurrent();
+    ///     gl.glad.unload();
+    /// }
+    /// ```
+    pub fn thread_exit(&self) {
+        let Some(ctx) = &self.context else {
+            return;
+        };
+        ctx.release_current();
+        glad::unload();
     }
 
     /// PORTS: `OpenGL.zig:237-250` — `displayRealized`.
@@ -337,12 +407,12 @@ impl OpenGL {
     ///
     /// The reference merely invalidates `self` — the GL context is GDK's, not
     /// owned. In the RUSTTY offscreen path the `OffscreenContext` IS owned, so
-    /// consuming `self` here drops it, which terminates EGL
-    /// (`OffscreenContext::drop`). Consuming (`self`), mirroring the reference
+    /// consuming `self` here drops it, which destroys the EGL context but never
+    /// terminates the display (`OffscreenContext::drop`, DECISIONS B10). Consuming (`self`), mirroring the reference
     /// taking `*OpenGL` and leaving it `undefined`.
     pub fn deinit(self) {
-        // `self` drops here: the owned `context` (offscreen path) terminates the
-        // EGL display; `last_target`, if any, drops without releasing GL objects
+        // `self` drops here: the owned `context` (offscreen path) destroys its
+        // EGL context; `last_target`, if any, drops without releasing GL objects
         // (`Target` has a manual `deinit`, matching the reference's manual model —
         // the caller deinits targets explicitly, exactly as ghostty does).
     }
@@ -399,7 +469,7 @@ impl OpenGL {
                 // is exactly 4 wide. Core GL 1.0 — force-unwrapped by the reference
                 // (`.?`); the `gl` crate panics on an unloaded slot, matching that
                 // force-unwrap on a context that has none (unreachable here).
-                unsafe { gl::GetIntegerv(gl::VIEWPORT, viewport.as_mut_ptr()) };
+                glad::context(|gl| unsafe { gl.GetIntegerv(gl::VIEWPORT, viewport.as_mut_ptr()) });
                 Ok(SurfaceSize {
                     // @intCast → `as u32` (viewport width/height are non-negative).
                     width: viewport[2] as u32,
@@ -410,10 +480,26 @@ impl OpenGL {
     }
 
     /// Initialize a new render target which can be presented by this API.
-    // pub fn initTarget(self: *const OpenGL, width: usize, height: usize) !Target
-    //   (OpenGL.zig:289-296)
+    //
+    // PORTS: `OpenGL.zig:286-292` (P7-W7 T1).
+    //
+    // pub fn initTarget(self: *const OpenGL, width: usize, height: usize) !Target {
+    //     _ = self;
+    //     return Target.init(.{
+    //         .width = width,
+    //         .height = height,
+    //     });
+    // }
+    //
+    // R13 FIX (DECISIONS M5, UD354): the reference passes only the size and its
+    // `Target` always renders into `SRGB8_ALPHA8`, which encodes the already
+    // sRGB-encoded output of the `native` shaders a second time. The port keeps
+    // the pin's format choice (`OpenGL.zig:289-296` at `20abdb50a`); see
+    // `target::Options::internal_format`.
     pub fn init_target(&self, width: usize, height: usize) -> Result<Target, target::Error> {
         Target::init(target::Options {
+            width,
+            height,
             // Using an sRGB internal format makes GL gamma-encode the pixels
             // written to it *after* blending, i.e. linear (correct) alpha blending
             // rather than gamma-incorrect blending.
@@ -422,8 +508,6 @@ impl OpenGL {
             } else {
                 gltex::InternalFormat::RGBA
             },
-            width,
-            height,
         })
     }
 
@@ -461,8 +545,8 @@ impl OpenGL {
             // SAFETY: a valid READ framebuffer is bound (`fbobind`); the src/dst
             // rects are the target's own extent; core GL 3.0. Widths/heights fit
             // GLint (target dims are render-sized).
-            unsafe {
-                gl::BlitFramebuffer(
+            glad::context(|gl| unsafe {
+                gl.BlitFramebuffer(
                     0,
                     0,
                     target.width as gl::types::GLint,
@@ -474,7 +558,7 @@ impl OpenGL {
                     gl::COLOR_BUFFER_BIT,
                     gl::NEAREST,
                 );
-            }
+            });
             fbobind.unbind();
             Ok(())
         })();
@@ -562,8 +646,8 @@ impl OpenGL {
             let fbobind = target.framebuffer.bind(framebuffer::Target::READ)?;
             // SAFETY: a valid READ framebuffer is bound (`fbobind`); the default
             // (draw) framebuffer is FBO 0; core GL 3.0. Dims fit GLint.
-            unsafe {
-                gl::BlitFramebuffer(
+            glad::context(|gl| unsafe {
+                gl.BlitFramebuffer(
                     0,
                     0,
                     target.width as gl::types::GLint,
@@ -575,7 +659,7 @@ impl OpenGL {
                     gl::COLOR_BUFFER_BIT,
                     gl::NEAREST,
                 );
-            }
+            });
             fbobind.unbind();
             Ok(())
         })();
@@ -620,11 +704,11 @@ impl OpenGL {
         // non-zero FBO.
         // SAFETY: `GL_FRAMEBUFFER_BINDING` is single-valued; the read is `w*h*4` bytes
         // at the default pack alignment of 4 (row stride `w*4` is a multiple of 4).
-        unsafe {
+        glad::context(|gl| unsafe {
             let mut bound: gl::types::GLint = 0;
-            gl::GetIntegerv(gl::FRAMEBUFFER_BINDING, &mut bound);
-            gl::BindFramebuffer(gl::READ_FRAMEBUFFER, bound as gl::types::GLuint);
-            gl::ReadPixels(
+            gl.GetIntegerv(gl::FRAMEBUFFER_BINDING, &mut bound);
+            gl.BindFramebuffer(gl::READ_FRAMEBUFFER, bound as gl::types::GLuint);
+            gl.ReadPixels(
                 0,
                 0,
                 w,
@@ -633,7 +717,7 @@ impl OpenGL {
                 gl::UNSIGNED_BYTE,
                 out.as_mut_ptr().cast::<std::ffi::c_void>(),
             );
-        }
+        });
         out
     }
 
@@ -895,11 +979,11 @@ mod tests {
     #[test]
     fn opengl_init_offscreen_then_deinit_round_trips() {
         // Hold the process-wide GL lock for the whole context lifetime: this test
-        // stands up its own `OffscreenContext` (via `init_offscreen`) and writes
-        // the `gl::load_with` globals, both of which the shared lock serializes
-        // against every other GL test (`test_support::gl_lock` docs). `_guard` is
-        // declared FIRST so it drops LAST — after `ogl.deinit()` terminates the
-        // context — matching `GlTestContext`'s field-order contract.
+        // stands up its own `OffscreenContext` (via `init_offscreen`), which the
+        // shared lock serializes against every other GL test
+        // (`test_support::gl_lock` docs). `_guard` is declared FIRST so it drops
+        // LAST — after `ogl.deinit()` destroys the context — matching
+        // `GlTestContext`'s field-order contract.
         let _guard = test_support::gl_lock();
 
         let ogl = match OpenGL::init_offscreen(AlphaBlending::Native, 256, 256) {
@@ -953,14 +1037,14 @@ mod tests {
         let mut shaders = ogl.init_shaders(&[]).expect("init_shaders");
         assert!(shaders.post_pipelines.is_empty());
 
-        // initTarget → an offscreen renderbuffer-backed FBO of the requested size.
+        // initTarget → an offscreen texture-backed FBO of the requested size.
         let target = ogl.init_target(10, 10).expect("init_target");
         assert_eq!(target.width, 10);
         assert_eq!(target.height, 10);
 
         // Clean teardown, in order: leaf GL objects first (while the context is
-        // still current), then the context (via `deinit`, which drops it →
-        // eglTerminate). `_guard` releases after.
+        // still current), then the context (via `deinit`, which drops it).
+        // `_guard` releases after.
         target.deinit();
         shaders.deinit();
         ogl.deinit();
@@ -1129,5 +1213,112 @@ mod tests {
         // `res.is_err()` here and failed; that assertion was wrong about the port,
         // not the port wrong about the reference.)
         assert!(res.is_ok(), "unexpected present error: {res:?}");
+    }
+
+    /// M5 / UD354 fail-first test. With `alpha-blending = native` the shaders
+    /// write sRGB-ENCODED values (they `unlinearize` before output), so the render
+    /// target must store them verbatim; with a linear mode they write LINEAR
+    /// values and the target must encode them. A clear to 0.2 therefore has to
+    /// read back as `0.2 * 255 = 51` under `native` and as `srgb(0.2) = 124` under
+    /// `linear-corrected`. The reference's always-`SRGB8_ALPHA8` target encodes
+    /// both, so `native` reads back 124: every color is encoded twice.
+    #[test]
+    fn native_blending_target_stores_shader_output_verbatim() {
+        let _guard = test_support::gl_lock();
+        for (blending, expected) in [
+            (AlphaBlending::Native, 51u8),
+            (AlphaBlending::Linear, 124),
+            (AlphaBlending::LinearCorrected, 124),
+        ] {
+            let Some(api) = crate::opengl::target::tests::api(
+                "native_blending_target_stores_shader_output_verbatim",
+                blending,
+            ) else {
+                return;
+            };
+            let target = api.init_target(2, 2).expect("init_target");
+            crate::opengl::target::tests::clear_pattern(
+                &target,
+                [0.2, 0.2, 0.2, 1.0],
+                [0, 0, 0, 0],
+                [0.2, 0.2, 0.2, 1.0],
+            );
+            let pixels = target.read_pixels_alloc().expect("read_pixels_alloc");
+            assert_eq!(
+                &pixels[..4],
+                &[expected, expected, expected, 255],
+                "{blending:?}: a 0.2 clear read back as {:?}",
+                &pixels[..4]
+            );
+            target.deinit();
+            api.deinit();
+        }
+    }
+
+    /// B9: the GL function table belongs to the thread that entered. The api is
+    /// built (and its context made current) on the test thread; `thread_exit`
+    /// releases the context and drops that thread's table; a second thread's
+    /// `thread_enter` makes the context current THERE and loads ITS table, and
+    /// renders through it; `thread_exit` drops it again. This is ghostty's
+    /// `threadEnter`/`threadExit` pair (`OpenGL.zig:222-235`) around a render
+    /// thread.
+    #[test]
+    fn thread_enter_and_exit_move_the_gl_table_to_the_render_thread() {
+        let _guard = test_support::gl_lock();
+        let Some(api) = crate::opengl::target::tests::api(
+            "thread_enter_and_exit_move_the_gl_table_to_the_render_thread",
+            AlphaBlending::LinearCorrected,
+        ) else {
+            return;
+        };
+        assert!(
+            glad::is_loaded(),
+            "init_offscreen loads the creating thread's table"
+        );
+
+        api.thread_exit();
+        assert!(!glad::is_loaded(), "thread_exit drops this thread's table");
+
+        /// The renderer crosses to its thread by value in the app (behind
+        /// `rustty-core`'s own `Send` wrapper); this is the test's.
+        struct SendApi(OpenGL);
+        // SAFETY: the EGL handles are process-wide; the context is current on no
+        // thread between `thread_exit` above and `thread_enter` below.
+        unsafe impl Send for SendApi {}
+
+        let moved = SendApi(api);
+        let back = std::thread::spawn(move || {
+            let moved = moved;
+            assert!(!glad::is_loaded(), "a fresh thread starts without a table");
+            moved.0.thread_enter().expect("thread_enter");
+            assert!(glad::is_loaded(), "thread_enter loads this thread's table");
+
+            let target = moved
+                .0
+                .init_target(2, 1)
+                .expect("init_target on the render thread");
+            crate::opengl::target::tests::clear_pattern(
+                &target,
+                [0.0, 1.0, 0.0, 1.0],
+                [0, 0, 1, 1],
+                [1.0, 0.0, 0.0, 1.0],
+            );
+            let pixels = target.read_pixels_alloc().expect("read_pixels_alloc");
+            assert_eq!(pixels, [255, 0, 0, 255, 0, 255, 0, 255]);
+            target.deinit();
+
+            moved.0.thread_exit();
+            assert!(
+                !glad::is_loaded(),
+                "thread_exit drops the render thread's table"
+            );
+            moved
+        })
+        .join()
+        .expect("render thread");
+
+        // `deinit` on the creating thread, as the reference's `OpenGL.deinit`
+        // runs on the main thread.
+        back.0.deinit();
     }
 }

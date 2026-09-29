@@ -583,9 +583,10 @@ impl ImguiWidget {
         }
 
         // OpenGL final render (`:318-321`). NOTE: `gl::clear_color`/`gl::clear`
-        // dispatch through the renderer crate's process-global GL loader, which
-        // the terminal GLArea's realize populates (mirroring the reference's
-        // process-global glad).
+        // dispatch through the renderer crate's per-thread GL function table
+        // (`opengl::gl::glad`, P7-W7 T1), which the terminal GLArea's realize loads
+        // on this (the GTK main) thread, as the reference's thread-local glad
+        // context is loaded there.
         gl::clear_color(
             0x28 as f32 / 0xFF as f32,
             0x2C as f32 / 0xFF as f32,

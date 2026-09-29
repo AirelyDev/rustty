@@ -23,18 +23,18 @@ use crate::opengl::gl::sys::{self, OffscreenContext};
 /// (thread-parallel) Rust test harness would otherwise hit as soon as a second GL
 /// test exists — which is exactly what this task adds:
 ///
-/// 1. **`eglTerminate` on a shared display.** `OffscreenContext::drop`'s CAVEAT
-///    (`sys.rs`) spells it out: `eglGetPlatformDisplay` hands back the SAME
-///    `EGLDisplay` for the same platform + native display, and `eglTerminate`
-///    marks EVERY resource on that display for deletion. So two concurrent
-///    `OffscreenContext`s share a display and the first one dropped invalidates
-///    the other. Serializing means the terminate always lands after the other
-///    test is done with the display, and the next `eglInitialize` re-initializes
-///    it — which is legal and is the sequence this lock produces.
-/// 2. **`gl::load_with` writes process-global statics.** The `gl` crate's entry
-///    points are `static mut` slots (glad's `glad.context` analogue, which
-///    ghostty likewise has exactly one of); two threads calling `load_with`
-///    concurrently is a data race regardless of both writing the same values.
+/// 1. **`eglTerminate` on a shared display.** `eglGetPlatformDisplay` hands
+///    back the SAME `EGLDisplay` for the same platform + native display, and
+///    `eglTerminate` marks EVERY resource on that display for deletion, so two
+///    concurrent `OffscreenContext`s shared a display and the first one dropped
+///    invalidated the other. P7-W7 T1 (DECISIONS B10) removed the terminate, as
+///    the reference never terminates, so this hazard is gone.
+/// 2. **`gl::load_with` wrote process-global statics.** P7-W7 T1 (DECISIONS B9)
+///    replaced them with a per-thread table (`glad`), so this hazard is gone too.
+///
+/// The lock stays: every GL test still assumes it is alone on the driver (the
+/// leak tests count live GL object names, the log-capture tests expect exactly
+/// their own debug-callback records), and serializing keeps them independent.
 ///
 /// `sys.rs`'s own `offscreen_egl_context_reaches_gl43_core` takes this lock
 /// directly rather than going through [`offscreen_gl`], because it asserts on the
@@ -94,12 +94,37 @@ fn require_gl_or_skip_impl(required: bool, test_name: &str, err: &dyn std::fmt::
     );
 }
 
+/// RUSTTY-ONLY strict mode for DMA-BUF export (P7-W7 T1, R14): under
+/// `RUSTTY_REQUIRE_DMABUF=1` a test that needs `EGL_MESA_image_dma_buf_export`
+/// FAILS when the display does not offer it, instead of skipping. Separate from
+/// [`gl_required`] because a host can have a perfectly good GL 4.3 context
+/// (llvmpipe) and still no DMA-BUF export, so the GL lane cannot demand it.
+pub(crate) fn dmabuf_required() -> bool {
+    gl_required_from(std::env::var_os("RUSTTY_REQUIRE_DMABUF").as_deref())
+}
+
+/// The DMA-BUF strict-mode pivot: [`require_gl_or_skip`]'s twin over
+/// [`dmabuf_required`].
+#[track_caller]
+pub(crate) fn require_dmabuf_or_skip(test_name: &str, err: &dyn std::fmt::Display) {
+    require_dmabuf_or_skip_impl(dmabuf_required(), test_name, err);
+}
+
+/// The env-independent core of [`require_dmabuf_or_skip`].
+#[track_caller]
+fn require_dmabuf_or_skip_impl(required: bool, test_name: &str, err: &dyn std::fmt::Display) {
+    assert!(
+        !required,
+        "DMA-BUF export required but unavailable (RUSTTY_REQUIRE_DMABUF=1): \
+         {test_name} would have skipped: {err}"
+    );
+}
+
 /// A live, GL-loaded context for one test, plus the [`gl_lock`] guard.
 pub(crate) struct GlTestContext {
     /// FIELD ORDER IS LOAD-BEARING: Rust drops fields in declaration order, so
-    /// the context (and its `eglTerminate`) must be destroyed BEFORE the lock is
-    /// released, or the next test can start on a display that is about to be
-    /// terminated out from under it.
+    /// the context is destroyed BEFORE the lock is released and the next test
+    /// never overlaps it (see [`gl_lock`]).
     _ctx: OffscreenContext,
     _guard: MutexGuard<'static, ()>,
 }
@@ -163,7 +188,7 @@ pub(crate) fn offscreen_gl(test_name: &str) -> Option<GlTestContext> {
 mod tests {
     use std::ffi::OsStr;
 
-    use super::{gl_required_from, require_gl_or_skip_impl};
+    use super::{gl_required_from, require_dmabuf_or_skip_impl, require_gl_or_skip_impl};
 
     #[test]
     fn gl_required_only_when_env_is_exactly_one() {
@@ -184,5 +209,17 @@ mod tests {
     #[should_panic(expected = "GL context required but unavailable (RUSTTY_REQUIRE_GL=1)")]
     fn skip_pivot_panics_when_gl_required() {
         require_gl_or_skip_impl(true, "some_test", &"no context");
+    }
+
+    #[test]
+    fn dmabuf_skip_pivot_is_noop_when_not_required() {
+        require_dmabuf_or_skip_impl(false, "some_test", &"no export");
+    }
+
+    /// The negative control of the `RUSTTY_REQUIRE_DMABUF` arm (R5).
+    #[test]
+    #[should_panic(expected = "DMA-BUF export required but unavailable (RUSTTY_REQUIRE_DMABUF=1)")]
+    fn dmabuf_skip_pivot_panics_when_required() {
+        require_dmabuf_or_skip_impl(true, "some_test", &"no export");
     }
 }

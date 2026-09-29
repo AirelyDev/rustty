@@ -2872,6 +2872,69 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    make `cells_rebuilt` atomic (`std.atomic.Value(bool)`), or compute `syncDisplayLink`'s `should_run` while `draw_mutex` is held and do only the `start`/`stop` after releasing it.
 - upstream status: NOT YET REPORTED
 
+### UD353 — an exported DMA-BUF with an invalid middle plane leaks the valid fds after it
+
+- kind:            leak (file descriptors; R13)
+- upstream project: ghostty
+- severity:        low (driver-dependent). One fd leaks per affected frame, and frames are exported continuously, so an affected driver would exhaust the process's fd limit.
+- reference:       `src/renderer/Dmabuf.zig:62-70` at 12752b2ac (`8619becb2`), `Planes.validate`:
+  - it walks `fds[0..count]`, and at the first `fd < 0` closes `self.fds[0..n_valid]` (only the fds BEFORE the invalid plane) and returns `error.BadDmabuf`;
+  - its doc comment says "we close all the known valid FDs and bail";
+  - the caller, `src/renderer/opengl/Target.zig:196-203` (`exportDmabuf`), has no `errdefer` for the planes, and `OpenGL.present` (`src/renderer/OpenGL.zig:305-310`) falls back to CPU readback on the error, so nothing else closes them.
+  - A second leak on the same fds: `src/apprt/gtk/class/render_surface.zig:345` (`rebuildDmabufTexture`) allocates the `Planes` copy with `alloc.create(Planes)` before its `errdefer`, so an allocation failure leaks every fd of the frame (DECISIONS M4).
+- defect:          for `count > 1`, a valid fd at a plane AFTER an invalid one is never closed and never owned by anything: a file descriptor leak per rejected frame.
+- ReleaseSafe:     no safety check sees it. By reading; not measured on a driver (no available driver returns such a plane set).
+- ReleaseFast:     the same.
+- reachability:    driver-dependent. `EGL_MESA_image_dma_buf_export` lets a driver return fewer fds than planes only as trailing `-1` slots ("subsequent fd slots should contain -1"), which `validate` handles without a leak; a leak needs an fd AFTER a `-1`, which only a non-conforming driver returns. The `alloc.create` leak needs an allocation failure (OOM).
+- output needed:   none visible; the process's open-fd count grows.
+- port handling:
+  - `crates/rustty-renderer/src/dmabuf.rs` (P7-W7 T1). The driver-filled arrays are `RawPlanes`; `RawPlanes::validate` is the only place a raw fd becomes owned. On the first invalid plane it closes EVERY non-negative fd in `fds[0..count]`, as the reference's doc comment says, then returns `BadDmabuf`; on success the fds become `OwnedFd`s in `Planes`, so any later drop (`Dmabuf::deinit`, an error path, an allocation failure) closes them.
+  - The `render_surface.zig` half lands with the GTK `RenderSurface` port (stage S3); `OwnedFd` ownership removes the leak there by construction, and its failing-allocator test belongs to that task.
+  - `R13 FIX` note at `RawPlanes::validate`. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none. R2 §6 Q4, DECISIONS M4.
+- test:            `dmabuf::tests::dmabuf_validate_closes_every_fd_after_an_invalid_plane` (planes `[fd, -1, fd]`; each fd is a pipe's write end and its closing is observed as EOF on the read end, so fd-number reuse cannot fool it); `dmabuf_validate_edge_counts` (an invalid FIRST plane with a valid one after it); `dmabuf_validate_takes_ownership_of_valid_planes` (the success path). Negative control: with the reference's loop (close `fds[..n_valid]` only) the first two fail with "the fd after the invalid plane leaked" (macOS and Linux).
+- proposed fix:    close every valid fd on the error path: `for (self.fds[0..self.count]) |fd| if (fd >= 0) _ = std.posix.system.close(fd);` (which is `Planes.deinit`), and create the `Planes` copy in `rebuildDmabufTexture` before taking ownership of the fds, or add an `errdefer planes.deinit()` ahead of the `alloc.create`.
+- upstream status: NOT YET REPORTED
+
+### UD354 — with `alpha-blending = native`, OpenGL output is sRGB-encoded twice (every color too light)
+
+- kind:            functional (non-crash bug breaking evident intent; R13)
+- upstream project: ghostty
+- severity:        medium. Every rendered color on Linux (OpenGL) is wrong under a documented config value: the render target encodes values the shaders already encoded, so colors wash out (`#3060C0` becomes `#78A5E1`, dark grey `#141414` becomes `#4F4F4F`).
+- reference:       `src/renderer/opengl/Target.zig:55-81` at 12752b2ac (`2f0b65346`): the render texture is always `.srgba` (`GL_SRGB8_ALPHA8`), and `OpenGL.initTarget` (`src/renderer/OpenGL.zig:286-292`) no longer passes a format. `prepareContext` enables `GL_FRAMEBUFFER_SRGB` (`OpenGL.zig:214-215`), so writes to an sRGB attachment are encoded. The shaders write sRGB-encoded values when blending is not linear: `src/renderer/shaders/glsl/cell_text.f.glsl:36-38, 90-93` (`if (!use_linear_blending) color = unlinearize(color)`), `image.f.glsl:14-15`, `bg_image.f.glsl:44-45`, and `bg_color.f.glsl`/`cell_bg.f.glsl` through `load_color(…, use_linear_blending)`. At the pin (20abdb50a) `OpenGL.initTarget` chose `.srgba` only `if (self.blending.isLinear())` and `.rgba` otherwise; the redesign dropped that choice.
+- defect:          under `native` the shader output is already sRGB-encoded, and the `SRGB8_ALPHA8` target encodes it again on write. The file comment says the sRGB texture "is required for the linear-blending color pipeline"; nothing in the change says `native` should change.
+- ReleaseSafe:     wrong colors, no crash. MEASURED on the port (rvm, llvmpipe, Mesa 26.1.4): with the reference's always-sRGB target, the offscreen OpenGL golden set to `native` changes in 5 of 5 frame dumps (bg image `(48,96,192)` → `(120,165,225)`; cursor golden background `(20,20,20)` → `(79,79,79)`; custom-shader goldens differ in 315 bytes); the `linear` and `linear-corrected` dumps are byte-identical to the pin's. A 0.2 clear reads back 124 (`srgb(0.2)`) instead of 51.
+- ReleaseFast:     the same.
+- reachability:    any Linux user with `alpha-blending = native` (the default on Linux is `linear-corrected`, `src/config/Config.zig:408-412`, so the default is unaffected).
+- output needed:   every glyph, background and image color is too light.
+- port handling:
+  - `crates/rustty-renderer/src/opengl/target.rs` (P7-W7 T1): `Options` keeps an `internal_format` for the render texture, and `OpenGL::init_target` (`opengl/opengl_impl.rs`) passes `SRGBA` for the linear modes and `RGBA` for `native`, the pin's choice. The export texture stays `RGBA8` either way (the export blit copies the stored bytes verbatim, with `GL_FRAMEBUFFER_SRGB` disabled).
+  - `R13 FIX` notes at `Options::internal_format` and `init_target`. Listed in `docs/ghostty-bug-fixes.md`.
+  - Result: the offscreen OpenGL golden dumps are byte-identical to the pin's under all three `alpha-blending` values.
+- parity row(s):   none. R2 §6 Q9, DECISIONS M5 (measure first; the measurement changed the output).
+- test:            `opengl::opengl_impl::tests::native_blending_target_stores_shader_output_verbatim` (a 0.2 clear reads back 51 under `native`, 124 under `linear` and `linear-corrected`); `generic::linux_impl::tests::golden_renders_background_image` now also requires the image's exact color (±2) under `native`. Negative control: with the render texture forced to `SRGBA` (the reference) both fail ("Native: a 0.2 clear read back as [124, 124, 124, 255]", "bg-image R=120 is not the image's 48").
+- proposed fix:    restore the pin's format choice in `OpenGL.initTarget` (`.srgba` if `blending.isLinear()`, else `.rgba`) and pass it through `Target.Options`; the export texture and blit need no change.
+- upstream status: NOT YET REPORTED
+
+### UD355 — `exportDmabufQuery` gives the driver one `u64` for a per-plane modifier array (stack overwrite on a multi-plane export)
+
+- kind:            UB (out-of-bounds write on the stack; R13)
+- upstream project: ghostty
+- severity:        medium (driver-dependent). Each multi-plane export writes 8 to 24 bytes past a stack struct, every frame.
+- reference:       `pkg/opengl/egl.zig:211-224` at 12752b2ac (`fa2ec3a6a`), `Image.exportDmabufQuery`: `var query: DmabufQuery = undefined;` then `c.eglExportDMABUFImageQueryMESA(display, self, &query.fourcc, &query.num_planes, &query.modifier)`, where `DmabufQuery.modifier` is one `u64` (`egl.zig:257-261`). Called from `src/renderer/opengl/Target.zig:186` (`exportDmabuf`), which checks `num_planes` against `Dmabuf.max_planes` (4) only AFTER the call.
+- defect:          the `EGL_MESA_image_dma_buf_export` specification: "<num_planes> must be at most 4. <modifiers> must be an array of at least <num_planes> elements. All elements of the <modifiers> array must have the same value." A conforming driver exporting an image of 2, 3 or 4 planes writes that many modifiers, i.e. 8, 16 or 24 bytes past `query.modifier`, over whatever follows the `DmabufQuery` on the stack.
+- ReleaseSafe:     no safety check sees a write done by C code. By reading of the specification; not measured on a driver (the available driver, llvmpipe on rvm, exports one plane).
+- ReleaseFast:     the same.
+- reachability:    driver-dependent: an export whose layout has more than one plane (for example a modifier with a compression or auxiliary plane) on the healthy DMA-BUF path, which `OpenGL.present` takes every frame (`OpenGL.zig:305-306`).
+- output needed:   stack corruption in the render thread; the effect depends on what the overwritten bytes held.
+- port handling:
+  - `crates/rustty-renderer/src/opengl/gl/sys.rs` (P7-W7 T1): `export_dmabuf_query_with` hands the driver a `[u64; 4]` modifier array (the extension's maximum plane count) and reports its first element; `Image::export_dmabuf_query` calls it. `Target::export_dmabuf` keeps the reference's plane-count check after the call.
+  - `R13 FIX` note at `export_dmabuf_query_with`. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none. Found while porting `exportDmabufQuery` (P7-W7 T1).
+- test:            `opengl::gl::sys::tests::dmabuf_query_single_modifier_slot_is_overrun_by_a_two_plane_export` (a spec-conforming test double for a 2-plane image, called with the reference's one-slot shape, writes the second modifier into the word after the slot; the guard word is in the same allocation so the demonstration is defined behaviour); `dmabuf_query_gives_the_driver_a_modifier_slot_per_plane` (the port's query returns the modifier with no overrun); `dmabuf_query_reports_egl_false`.
+- proposed fix:    pass an array: `var modifiers: [Dmabuf.max_planes]u64 = undefined;` and use `modifiers[0]`, or query `num_planes` first with `modifiers = null` (the specification allows NULL) and reject counts above 4 before asking for the modifiers.
+- upstream status: NOT YET REPORTED
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

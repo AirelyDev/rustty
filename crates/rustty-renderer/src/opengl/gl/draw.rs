@@ -1,24 +1,24 @@
-//! PORTS: ghostty `pkg/opengl/draw.zig` (94 loc), in full.
+//! PORTS: ghostty `pkg/opengl/draw.zig` (155 loc at `12752b2ac`), in full.
 //!
 //! PORT NOTE (`glad.context.<Fn>.?(…)`): every call below force-unwraps glad's
 //! function-pointer slot in the reference, i.e. panics if the entry point is
-//! absent. The `gl` crate's unloaded entry points panic identically, so calling
-//! them straight through is the faithful port. See `errors::get_error`'s note.
+//! absent. `glad::context` lends the calling thread's table, and an unloaded
+//! entry point in it panics identically, so calling straight through is the
+//! faithful port. See `errors::get_error`'s note.
 //!
-//! PORT NOTE (`!void` with no `getError`): `clearColor`/`clear`/`finish`/`flush`
-//! return `void` in the reference, and `viewport` returns `!void` while never
-//! calling `errors.getError()` — so its inferred error set is EMPTY and `try
-//! viewport(…)` can never actually fail. Both shapes are preserved exactly:
-//! the `void` ones return nothing, and `viewport` returns a `Result` that is
-//! always `Ok`. Collapsing `viewport` to `()` would silently change the
-//! signature a later task ports its call sites against.
+//! PORT NOTE (`void` returns): `clearColor`/`clear`/`finish`/`flush` return
+//! `void` in the reference and nothing here. `viewport` used to be the one
+//! `!void` that never called `errors.getError()`; `adf161473` made it check,
+//! so it now can fail (P7-W7 T1).
 
 use std::ffi::c_void;
 
 use gl::types::{GLbitfield, GLenum, GLint, GLsizei};
 
 use super::errors;
+use super::glad;
 use super::primitives::Primitive;
+use super::texture;
 
 /// PORTS: `draw.zig:6-8`.
 ///
@@ -30,7 +30,7 @@ use super::primitives::Primitive;
 pub fn clear_color(r: f32, g: f32, b: f32, a: f32) {
     // SAFETY: four floats to a no-op-on-bad-input GL setter; valid on any
     // current context.
-    unsafe { gl::ClearColor(r, g, b, a) };
+    glad::context(|gl| unsafe { gl.ClearColor(r, g, b, a) });
 }
 
 /// PORTS: `draw.zig:10-12`.
@@ -43,7 +43,7 @@ pub fn clear_color(r: f32, g: f32, b: f32, a: f32) {
 pub fn clear(mask: GLbitfield) {
     // SAFETY: a bitfield to a GL setter. An unrecognized bit yields
     // GL_INVALID_VALUE (readable via `errors::get_error`), never UB.
-    unsafe { gl::Clear(mask) };
+    glad::context(|gl| unsafe { gl.Clear(mask) });
 }
 
 /// PORTS: `draw.zig:14-17`.
@@ -65,7 +65,7 @@ pub fn draw_arrays(mode: GLenum, first: GLint, count: GLsizei) -> Result<(), err
     // (bad mode, negative count, incomplete VAO) is a defined GL error, which is
     // what `get_error` immediately collects — this is the reference's own
     // contract for the whole package.
-    unsafe { gl::DrawArrays(mode, first, count) };
+    glad::context(|gl| unsafe { gl.DrawArrays(mode, first, count) });
     errors::get_error()
 }
 
@@ -99,7 +99,7 @@ pub fn draw_arrays_instanced(
     // `as` can never wrap.
     //
     // SAFETY: see `draw_arrays`.
-    unsafe { gl::DrawArraysInstanced(mode as GLenum, first, count, primcount) };
+    glad::context(|gl| unsafe { gl.DrawArraysInstanced(mode as GLenum, first, count, primcount) });
     errors::get_error()
 }
 
@@ -133,7 +133,7 @@ pub fn draw_elements(
     };
 
     // SAFETY: see `draw_arrays`.
-    unsafe { gl::DrawElements(mode, count, typ, offset_ptr) };
+    glad::context(|gl| unsafe { gl.DrawElements(mode, count, typ, offset_ptr) });
     errors::get_error()
 }
 
@@ -167,7 +167,9 @@ pub fn draw_elements_instanced(
     primcount: GLsizei,
 ) -> Result<(), errors::Error> {
     // SAFETY: see `draw_arrays`.
-    unsafe { gl::DrawElementsInstanced(mode, count, typ, std::ptr::null(), primcount) };
+    glad::context(|gl| unsafe {
+        gl.DrawElementsInstanced(mode, count, typ, std::ptr::null(), primcount)
+    });
     errors::get_error()
 }
 
@@ -182,7 +184,7 @@ pub fn draw_elements_instanced(
 pub fn enable(cap: GLenum) -> Result<(), errors::Error> {
     // SAFETY: a capability enum to a GL setter; an unknown one is
     // GL_INVALID_ENUM, collected immediately below.
-    unsafe { gl::Enable(cap) };
+    glad::context(|gl| unsafe { gl.Enable(cap) });
     errors::get_error()
 }
 
@@ -196,7 +198,7 @@ pub fn enable(cap: GLenum) -> Result<(), errors::Error> {
 /// ```
 pub fn disable(cap: GLenum) -> Result<(), errors::Error> {
     // SAFETY: see `enable`.
-    unsafe { gl::Disable(cap) };
+    glad::context(|gl| unsafe { gl.Disable(cap) });
     errors::get_error()
 }
 
@@ -213,7 +215,7 @@ pub fn disable(cap: GLenum) -> Result<(), errors::Error> {
 /// files".
 pub fn front_face(mode: GLenum) -> Result<(), errors::Error> {
     // SAFETY: see `enable`.
-    unsafe { gl::FrontFace(mode) };
+    glad::context(|gl| unsafe { gl.FrontFace(mode) });
     errors::get_error()
 }
 
@@ -231,36 +233,148 @@ pub fn front_face(mode: GLenum) -> Result<(), errors::Error> {
 /// (Task 6).
 pub fn blend_func(sfactor: GLenum, dfactor: GLenum) -> Result<(), errors::Error> {
     // SAFETY: see `enable`.
-    unsafe { gl::BlendFunc(sfactor, dfactor) };
+    glad::context(|gl| unsafe { gl.BlendFunc(sfactor, dfactor) });
     errors::get_error()
 }
 
-/// PORTS: `draw.zig:76-78`.
+/// PORTS: `draw.zig:78-81` (`adf161473`).
 ///
 /// ```zig
 /// pub fn viewport(x: c.GLint, y: c.GLint, width: c.GLsizei, height: c.GLsizei) !void {
 ///     glad.context.Viewport.?(x, y, width, height);
+///     try errors.getError();
 /// }
 /// ```
 ///
-/// PORT NOTE: the ONLY `!void` in this file with no `try errors.getError()`, so
-/// its Zig error set is empty and it cannot fail. The `Result` is kept anyway —
-/// see the module docs. Unused by the reference's renderer, which reads
-/// `GL_VIEWPORT` rather than setting it (`OpenGL.zig:278-287`); carried over per
-/// "port whole files".
+/// The reference's renderer now calls it from `OpenGL.setViewport`
+/// (`OpenGL.zig:252`, stage S2); the port's offscreen constructor calls it too.
 pub fn viewport(x: GLint, y: GLint, width: GLsizei, height: GLsizei) -> Result<(), errors::Error> {
     // SAFETY: four ints to a GL setter; a negative width/height is
-    // GL_INVALID_VALUE, never UB. (The reference does not collect it — see above.)
-    unsafe { gl::Viewport(x, y, width, height) };
-    Ok(())
+    // GL_INVALID_VALUE, never UB, and is collected below.
+    glad::context(|gl| unsafe { gl.Viewport(x, y, width, height) });
+    errors::get_error()
 }
 
-/// PORTS: `draw.zig:80-86`.
+/// PORTS: `draw.zig:83-102` (`adf161473`).
+///
+/// ```zig
+/// pub fn readPixels(
+///     x: c.GLint,
+///     y: c.GLint,
+///     width: c.GLsizei,
+///     height: c.GLsizei,
+///     format: Texture.Format,
+///     typ: Texture.DataType,
+///     data: ?*anyopaque,
+/// ) !void {
+///     glad.context.ReadPixels.?(
+///         x,
+///         y,
+///         width,
+///         height,
+///         @intFromEnum(format),
+///         @intFromEnum(typ),
+///         data,
+///     );
+///     try errors.getError();
+/// }
+/// ```
+///
+/// # Safety
+///
+/// PORT NOTE (why `unsafe`, when the reference's fn is not): the DRIVER writes
+/// through `data`, and how many bytes it writes follows from `width`/`height`/
+/// `format`/`typ` and the current `GL_PACK_*` state, none of which the pointer
+/// carries — the same obligation as `texture::Binding::image_2d`. Callers must
+/// guarantee `data` is null or points to at least that many writable bytes.
+pub unsafe fn read_pixels(
+    x: GLint,
+    y: GLint,
+    width: GLsizei,
+    height: GLsizei,
+    format: texture::Format,
+    typ: texture::DataType,
+    data: *mut c_void,
+) -> Result<(), errors::Error> {
+    // SAFETY: `data`'s size is the caller's obligation, per the doc above. A bad
+    // format/type pairing or an incomplete read framebuffer is a defined GL error,
+    // collected below.
+    glad::context(|gl| unsafe { gl.ReadPixels(x, y, width, height, format.0, typ.0, data) });
+    errors::get_error()
+}
+
+/// PORTS: `draw.zig:104-129` (`adf161473`).
+///
+/// ```zig
+/// pub fn blitFramebuffer(
+///     src_x0: c.GLint,
+///     src_y0: c.GLint,
+///     src_x1: c.GLint,
+///     src_y1: c.GLint,
+///     dst_x0: c.GLint,
+///     dst_y0: c.GLint,
+///     dst_x1: c.GLint,
+///     dst_y1: c.GLint,
+///     mask: BlitMask,
+///     filter: Texture.MagFilter,
+/// ) !void {
+///     glad.context.BlitFramebuffer.?(
+///         src_x0,
+///         src_y0,
+///         src_x1,
+///         src_y1,
+///         dst_x0,
+///         dst_y0,
+///         dst_x1,
+///         dst_y1,
+///         @bitCast(mask),
+///         @intCast(@intFromEnum(filter)),
+///     );
+///     try errors.getError();
+/// }
+/// ```
+#[allow(clippy::too_many_arguments)]
+pub fn blit_framebuffer(
+    src_x0: GLint,
+    src_y0: GLint,
+    src_x1: GLint,
+    src_y1: GLint,
+    dst_x0: GLint,
+    dst_y0: GLint,
+    dst_x1: GLint,
+    dst_y1: GLint,
+    mask: BlitMask,
+    filter: texture::MagFilter,
+) -> Result<(), errors::Error> {
+    // `@intCast(@intFromEnum(filter))`: the `c_int`-backed filter's tag to the
+    // `GLenum` parameter; both tags are small positive GL constants.
+    //
+    // SAFETY: copies between the bound READ and DRAW framebuffers. Every failure
+    // mode (an incomplete framebuffer, a format mismatch, a bad filter) is a
+    // defined GL error, collected below.
+    glad::context(|gl| unsafe {
+        gl.BlitFramebuffer(
+            src_x0,
+            src_y0,
+            src_x1,
+            src_y1,
+            dst_x0,
+            dst_y0,
+            dst_x1,
+            dst_y1,
+            mask.bits(),
+            filter as GLenum,
+        );
+    });
+    errors::get_error()
+}
+
+/// PORTS: `draw.zig:131-137`.
 ///
 /// ```zig
 /// pub fn pixelStore(mode: c.GLenum, value: anytype) !void {
 ///     switch (@typeInfo(@TypeOf(value))) {
-///         .ComptimeInt, .Int => glad.context.PixelStorei.?(mode, value),
+///         .comptime_int, .int => glad.context.PixelStorei.?(mode, value),
 ///         else => unreachable,
 ///     }
 ///     try errors.getError();
@@ -274,16 +388,12 @@ pub fn viewport(x: GLint, y: GLint, width: GLsizei, height: GLsizei) -> Result<(
 /// arm a COMPILE error at the call site instead of a runtime trap, which is
 /// strictly the same contract, enforced earlier.
 ///
-/// PORT NOTE (stale in the reference): `.ComptimeInt`/`.Int` are the PRE-0.14
-/// `@typeInfo` tag spellings (today's are `.comptime_int`/`.int`, as
-/// `Buffer.zig:117-131`'s `.pointer`/`.slice` show). Zig only type-checks a
-/// generic body when it is instantiated, so this fn has had no call site since
-/// the rename and would not compile if called. It is ported to its evident
-/// intent. Unused by the reference's renderer; carried over per "port whole
-/// files".
+/// (`adf161473` renamed the pre-0.14 `.ComptimeInt`/`.Int` tags, which UD40
+/// recorded, to `.comptime_int`/`.int`.) Unused by the reference's renderer;
+/// carried over per "port whole files".
 pub fn pixel_store(mode: GLenum, value: GLint) -> Result<(), errors::Error> {
     // SAFETY: see `enable`.
-    unsafe { gl::PixelStorei(mode, value) };
+    glad::context(|gl| unsafe { gl.PixelStorei(mode, value) });
     errors::get_error()
 }
 
@@ -296,7 +406,7 @@ pub fn pixel_store(mode: GLenum, value: GLint) -> Result<(), errors::Error> {
 /// ```
 pub fn finish() {
     // SAFETY: no arguments; blocks until the GL pipeline drains.
-    unsafe { gl::Finish() };
+    glad::context(|gl| unsafe { gl.Finish() });
 }
 
 /// PORTS: `draw.zig:92-94`.
@@ -308,5 +418,64 @@ pub fn finish() {
 /// ```
 pub fn flush() {
     // SAFETY: no arguments.
-    unsafe { gl::Flush() };
+    glad::context(|gl| unsafe { gl.Flush() });
+}
+
+/// PORTS: `draw.zig:147-155` (`adf161473`).
+///
+/// ```zig
+/// pub const BlitMask = packed struct(c.GLbitfield) {
+///     _pad1: u8 = 0,
+///     depth_buffer_bit: bool = false,
+///     _pad2: u1 = 0,
+///     stencil_buffer_bit: bool = false,
+///     _pad3: u3 = 0,
+///     color_buffer_bit: bool = false,
+///     _pad4: std.meta.Int(.unsigned, @bitSizeOf(c.GLbitfield) - 15) = 0,
+/// };
+/// ```
+///
+/// PORT NOTE: Rust has no bit-packed struct, so the three flags are plain
+/// `bool`s and [`BlitMask::bits`] is the `@bitCast`: bit 8
+/// (`GL_DEPTH_BUFFER_BIT`, 0x100), bit 10 (`GL_STENCIL_BUFFER_BIT`, 0x400), bit
+/// 14 (`GL_COLOR_BUFFER_BIT`, 0x4000), the positions the packed layout puts them
+/// at. `Default` is the reference's all-`false` field defaults.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BlitMask {
+    pub depth_buffer_bit: bool,
+    pub stencil_buffer_bit: bool,
+    pub color_buffer_bit: bool,
+}
+
+impl BlitMask {
+    /// `@bitCast(mask)` to the `GLbitfield`.
+    pub const fn bits(self) -> GLbitfield {
+        ((self.depth_buffer_bit as GLbitfield) << 8)
+            | ((self.stencil_buffer_bit as GLbitfield) << 10)
+            | ((self.color_buffer_bit as GLbitfield) << 14)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BlitMask;
+
+    /// The packed layout's bit positions ARE the GL constants (the reference gets
+    /// this from the compiler; the port restates it in `bits`).
+    #[test]
+    fn blit_mask_bits_are_the_gl_constants() {
+        assert_eq!(BlitMask::default().bits(), 0);
+        let only = |d, s, c| BlitMask {
+            depth_buffer_bit: d,
+            stencil_buffer_bit: s,
+            color_buffer_bit: c,
+        };
+        assert_eq!(only(true, false, false).bits(), gl::DEPTH_BUFFER_BIT);
+        assert_eq!(only(false, true, false).bits(), gl::STENCIL_BUFFER_BIT);
+        assert_eq!(only(false, false, true).bits(), gl::COLOR_BUFFER_BIT);
+        assert_eq!(
+            only(true, true, true).bits(),
+            gl::DEPTH_BUFFER_BIT | gl::STENCIL_BUFFER_BIT | gl::COLOR_BUFFER_BIT
+        );
+    }
 }

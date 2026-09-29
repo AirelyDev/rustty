@@ -1585,6 +1585,7 @@ dependencies = [
  "block2",
  "dispatch2",
  "gl",
+ "gl_generator",
  "glslang-sys",
  "khronos-egl",
  "log",
