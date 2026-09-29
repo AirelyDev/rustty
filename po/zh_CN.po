@@ -3,14 +3,15 @@
 # Copyright (C) 2025 Mitchell Hashimoto, Rustty contributors
 # This file is distributed under the same license as the io.airely.rustty package.
 # Leah <hi@pluie.me>, 2025.
+# Lukas <134181853+bo2themax@users.noreply.github.com>, 2026.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: io.airely.rustty\n"
 "Report-Msgid-Bugs-To: gael@airely.io\n"
 "POT-Creation-Date: 2026-08-10 10:06-0500\n"
-"PO-Revision-Date: 2026-02-12 01:56+0800\n"
-"Last-Translator: Leah <hi@pluie.me>\n"
+"PO-Revision-Date: 2026-09-13 10:50+0800\n"
+"Last-Translator: Lukas <134181853+bo2themax@users.noreply.github.com>\n"
 "Language-Team: Chinese (simplified) <i18n-zh@googlegroups.com>\n"
 "Language: zh_CN\n"
 "MIME-Version: 1.0\n"
@@ -200,7 +201,7 @@ msgstr "窗口"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:406 crates/rustty-apprt/assets/ui/1.5/window.blp:215
 msgid "Change Window Title…"
-msgstr ""
+msgstr "更改窗口标题…"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:411 crates/rustty-apprt/assets/ui/1.5/window.blp:220
 #: crates/rustty-input/src/command.rs:421
@@ -286,7 +287,7 @@ msgstr "导出"
 
 #: crates/rustty-apprt/src/gtk/class/application.rs:2783
 msgid "Editing configuration file"
-msgstr ""
+msgstr "正在编辑配置文件"
 
 #: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:198
 msgid ""
@@ -366,7 +367,7 @@ msgstr "更改标签页标题"
 
 #: crates/rustty-apprt/src/gtk/class/title_dialog.rs:229
 msgid "Change Window Title"
-msgstr ""
+msgstr "更改窗口标题"
 
 #: crates/rustty-apprt/src/gtk/class/window.rs:1153
 msgid "Reloaded the configuration"
@@ -776,11 +777,11 @@ msgstr "将当前标签页向右移动。"
 
 #: crates/rustty-input/src/command.rs:446
 msgid "Move Tab to New Window"
-msgstr ""
+msgstr "将标签页移至新窗口"
 
 #: crates/rustty-input/src/command.rs:447
 msgid "Move the current tab to a new window."
-msgstr ""
+msgstr "将当前标签页移动到一个新的窗口。"
 
 #: crates/rustty-input/src/command.rs:452
 msgid "Toggle Tab Overview"

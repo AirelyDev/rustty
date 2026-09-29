@@ -189,4 +189,32 @@ mod tests {
             crate::VERSION_STRING
         );
     }
+
+    /// R4 §F (`5ca09acf6`, upstream's own follow-on fix of UD150): the trim
+    /// set widened from `"\r\n "` to the full `std.ascii.whitespace`, which
+    /// adds `\t` (plus VT/FF) and trims both ends, not just the end. Before
+    /// this port, a trailing `\t` (as `git rev-parse --abbrev-ref` could in
+    /// principle emit, and as a defensive/adversarial input covers) was not
+    /// in the old `trim_end`'s `['\r', '\n', ' ']` set: `"main\t\n"` trimmed
+    /// only the `\n`, leaving `"main\t"`, which `sanitize_branch` then turned
+    /// into `"main-"` — a stray trailing `-`, the same class of defect as
+    /// UD150 itself. With `std.ascii.whitespace`, `\t` is trimmed along with
+    /// the newline and the result is clean.
+    #[test]
+    fn git_branch_trims_tab_and_full_ascii_whitespace() {
+        assert_eq!(
+            crate::git_version::branch_from_rev_parse("main\t\n"),
+            "main"
+        );
+        // Leading whitespace too (`std.mem.trim` is both-ends, not `trimEnd`).
+        assert_eq!(
+            crate::git_version::branch_from_rev_parse("\t main\n"),
+            "main"
+        );
+        // Vertical tab (0x0B) and form feed (0x0C) are also ASCII whitespace.
+        assert_eq!(
+            crate::git_version::branch_from_rev_parse("main\x0B\x0C\n"),
+            "main"
+        );
+    }
 }
