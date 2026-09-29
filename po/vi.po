@@ -8,7 +8,7 @@ msgstr ""
 "Project-Id-Version: io.airely.rustty\n"
 "Report-Msgid-Bugs-To: gael@airely.io\n"
 "POT-Creation-Date: 2026-08-10 10:06-0500\n"
-"PO-Revision-Date: 2026-03-04 09:32+0700\n"
+"PO-Revision-Date: 2026-08-13 21:30+0700\n"
 "Last-Translator: Anh Thang <buianhthang89@gmail.com>\n"
 "Language-Team: Vietnamese <translation-team-vi@lists.sourceforge.net>\n"
 "Language: vi\n"
@@ -26,7 +26,7 @@ msgstr "Mở Rustty"
 #: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:197
 #: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:201
 msgid "Authorize Clipboard Access"
-msgstr "Cho phép Truy cập Bảng tạm"
+msgstr "Cho phép truy cập Bảng tạm"
 
 #: crates/rustty-apprt/assets/ui/1.0/clipboard-confirmation-dialog.blp:17
 #: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:17
@@ -40,7 +40,7 @@ msgstr "Cho phép"
 
 #: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:92
 msgid "Remember choice for this split"
-msgstr "Ghi nhớ lựa chọn cho chia màn hình này"
+msgstr "Ghi nhớ lựa chọn cho phần chia màn hình này"
 
 #: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:93
 msgid "Reload configuration to show this prompt again"
@@ -97,7 +97,7 @@ msgstr "Tìm kiếm…"
 
 #: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:69
 msgid "Previous Match"
-msgstr "Kết quả trước"
+msgstr "Kết quả trước đó"
 
 #: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:79
 msgid "Next Match"
@@ -109,7 +109,7 @@ msgstr "Ôi hỏng rồi."
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:8
 msgid "Unable to acquire an OpenGL context for rendering."
-msgstr "Không thể lấy ngữ cảnh OpenGL để kết xuất đồ họa."
+msgstr "Không thể lấy ngữ cảnh OpenGL để hiển thị."
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:101
 msgid ""
@@ -174,7 +174,7 @@ msgstr "Chia sang phải"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:377
 msgid "Close Split"
-msgstr ""
+msgstr "Đóng chia màn hình"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:383
 msgid "Tab"
@@ -202,7 +202,7 @@ msgstr "Cửa sổ"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:406 crates/rustty-apprt/assets/ui/1.5/window.blp:215
 msgid "Change Window Title…"
-msgstr ""
+msgstr "Đổi tiêu đề cửa sổ…"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:411 crates/rustty-apprt/assets/ui/1.5/window.blp:220
 #: crates/rustty-input/src/command.rs:421
@@ -220,11 +220,11 @@ msgstr "Cấu hình"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:427 crates/rustty-apprt/assets/ui/1.5/window.blp:306
 msgid "Open Configuration in OS Editor"
-msgstr ""
+msgstr "Mở cấu hình bằng trình chỉnh sửa của hệ điều hành"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:433 crates/rustty-apprt/assets/ui/1.5/window.blp:312
 msgid "Open Configuration in New Window"
-msgstr ""
+msgstr "Mở cấu hình trong cửa sổ mới"
 
 #: crates/rustty-apprt/assets/ui/1.5/title-dialog.blp:5
 msgid "Leave blank to restore the default title."
@@ -264,31 +264,31 @@ msgstr "Thoát"
 
 #: crates/rustty-apprt/assets/ui/1.5/command-palette.blp:17
 msgid "Execute a command…"
-msgstr "Chạy một lệnh…"
+msgstr "Thực thi lệnh…"
 
 #: crates/rustty-apprt/src/gtk/class/application.rs:1767
 msgid "The keybind was revoked by the system."
-msgstr ""
+msgstr "Tổ hợp phím đã bị hệ thống thu hồi."
 
 #: crates/rustty-apprt/src/gtk/class/application.rs:1769
 msgid "The keybind was denied by the system."
-msgstr ""
+msgstr "Tổ hợp phím đã bị hệ thống từ chối."
 
 #: crates/rustty-apprt/src/gtk/class/application.rs:1780
 msgid "Global keybind unavailable"
-msgstr ""
+msgstr "Tổ hợp phím toàn cục không khả dụng"
 
 #: crates/rustty-apprt/src/gtk/class/application.rs:2259
 msgid "Export Terminal IO Events"
-msgstr ""
+msgstr "Xuất các sự kiện I/O của terminal"
 
 #: crates/rustty-apprt/src/gtk/class/application.rs:2262
 msgid "Export"
-msgstr ""
+msgstr "Xuất"
 
 #: crates/rustty-apprt/src/gtk/class/application.rs:2783
 msgid "Editing configuration file"
-msgstr ""
+msgstr "Đang chỉnh sửa tệp cấu hình"
 
 #: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:198
 msgid ""
@@ -357,12 +357,12 @@ msgstr "Lệnh đã kết thúc"
 #: crates/rustty-apprt/src/gtk/class/surface.rs:1182
 #: crates/rustty-apprt/src/gtk/class/surface_child_exited.rs:109
 msgid "Command Succeeded"
-msgstr "Lệnh thành công"
+msgstr "Lệnh đã thực thi thành công"
 
 #: crates/rustty-apprt/src/gtk/class/surface.rs:1183
 #: crates/rustty-apprt/src/gtk/class/surface_child_exited.rs:113
 msgid "Command Failed"
-msgstr "Lệnh thất bại"
+msgstr "Lệnh thực thi thất bại"
 
 #: crates/rustty-apprt/src/gtk/class/title_dialog.rs:227
 msgid "Change Terminal Title"
@@ -374,7 +374,7 @@ msgstr "Đổi tiêu đề Tab"
 
 #: crates/rustty-apprt/src/gtk/class/title_dialog.rs:229
 msgid "Change Window Title"
-msgstr ""
+msgstr "Đổi tiêu đề cửa sổ"
 
 #: crates/rustty-apprt/src/gtk/class/window.rs:1153
 msgid "Reloaded the configuration"
@@ -394,710 +394,735 @@ msgstr "Các nhà phát triển Rustty"
 
 #: crates/rustty-input/src/command.rs:149
 msgid "Reset Terminal"
-msgstr ""
+msgstr "Đặt lại Terminal"
 
 #: crates/rustty-input/src/command.rs:150
 msgid "Reset the terminal to a clean state."
-msgstr ""
+msgstr "Đặt lại terminal về trạng thái ban đầu."
 
 #: crates/rustty-input/src/command.rs:155
 msgid "Copy to Clipboard"
-msgstr ""
+msgstr "Sao chép vào bảng tạm"
 
 #: crates/rustty-input/src/command.rs:156
 msgid ""
 "Copy the selected text to the clipboard in both plain and styled formats."
 msgstr ""
+"Sao chép văn bản đã chọn vào bảng tạm dưới dạng thuần và có định dạng."
 
 #: crates/rustty-input/src/command.rs:159
 msgid "Copy Selection as Plain Text to Clipboard"
-msgstr ""
+msgstr "Sao chép vùng chọn dưới dạng văn bản thuần vào bảng tạm"
 
 #: crates/rustty-input/src/command.rs:160
 msgid "Copy the selected text as plain text to the clipboard."
-msgstr ""
+msgstr "Sao chép văn bản đã chọn dưới dạng văn bản thuần vào bảng tạm."
 
 #: crates/rustty-input/src/command.rs:163
 msgid "Copy Selection as ANSI Sequences to Clipboard"
-msgstr ""
+msgstr "Sao chép vùng chọn dưới dạng chuỗi ANSI vào bảng tạm"
 
 #: crates/rustty-input/src/command.rs:164
 msgid "Copy the selected text as ANSI escape sequences to the clipboard."
-msgstr ""
+msgstr "Sao chép văn bản đã chọn dưới dạng chuỗi thoát ANSI vào bảng tạm."
 
 #: crates/rustty-input/src/command.rs:167
 msgid "Copy Selection as HTML to Clipboard"
-msgstr ""
+msgstr "Sao chép vùng chọn dưới dạng HTML vào bảng tạm"
 
 #: crates/rustty-input/src/command.rs:168
 msgid "Copy the selected text as HTML to the clipboard."
-msgstr ""
+msgstr "Sao chép văn bản đã chọn dưới dạng HTML vào bảng tạm."
 
 #: crates/rustty-input/src/command.rs:173
 msgid "Copy URL to Clipboard"
-msgstr ""
+msgstr "Sao chép URL vào bảng tạm"
 
 #: crates/rustty-input/src/command.rs:174
 msgid "Copy the URL under the cursor to the clipboard."
-msgstr ""
+msgstr "Sao chép URL dưới con trỏ chuột vào bảng tạm."
 
 #: crates/rustty-input/src/command.rs:179
 msgid "Copy Terminal Title to Clipboard"
-msgstr ""
+msgstr "Sao chép tiêu đề Terminal vào bảng tạm"
 
 #: crates/rustty-input/src/command.rs:180
 msgid ""
 "Copy the terminal title to the clipboard. If the terminal title is not set "
 "this has no effect."
 msgstr ""
+"Sao chép tiêu đề terminal vào bảng tạm. Nếu tiêu đề chưa được đặt, "
+"lệnh này không có hiệu lực."
 
 #: crates/rustty-input/src/command.rs:185
 msgid "Paste from Clipboard"
-msgstr ""
+msgstr "Dán từ bảng tạm"
 
 #: crates/rustty-input/src/command.rs:186
 msgid "Paste the contents of the main clipboard."
-msgstr ""
+msgstr "Dán nội dung từ bảng tạm chính."
 
 #: crates/rustty-input/src/command.rs:191
 msgid "Paste from Selection"
-msgstr ""
+msgstr "Dán từ vùng chọn"
 
 #: crates/rustty-input/src/command.rs:192
 msgid "Paste the contents of the selection clipboard."
-msgstr ""
+msgstr "Dán nội dung từ bảng tạm vùng chọn."
 
 #: crates/rustty-input/src/command.rs:197
 msgid "Start Search"
-msgstr ""
+msgstr "Bắt đầu tìm kiếm"
 
 #: crates/rustty-input/src/command.rs:198
 msgid "Start a search if one isn't already active."
-msgstr ""
+msgstr "Bắt đầu tìm kiếm nếu chưa có tìm kiếm nào đang hoạt động."
 
 #: crates/rustty-input/src/command.rs:203
 msgid "Search Selection"
-msgstr ""
+msgstr "Tìm kiếm văn bản đã chọn"
 
 #: crates/rustty-input/src/command.rs:204
 msgid "Start a search for the current text selection."
-msgstr ""
+msgstr "Bắt đầu tìm kiếm theo văn bản đang được chọn."
 
 #: crates/rustty-input/src/command.rs:209
 msgid "End Search"
-msgstr ""
+msgstr "Kết thúc tìm kiếm"
 
 #: crates/rustty-input/src/command.rs:210
 msgid "End the current search if any and hide any GUI elements."
-msgstr ""
+msgstr "Kết thúc lượt tìm kiếm hiện tại (nếu có) và ẩn các phần tử giao diện."
 
 #: crates/rustty-input/src/command.rs:215
 msgid "Next Search Result"
-msgstr ""
+msgstr "Kết quả tìm kiếm tiếp theo"
 
 #: crates/rustty-input/src/command.rs:216
 msgid "Navigate to the next search result, if any."
-msgstr ""
+msgstr "Chuyển đến kết quả tìm kiếm tiếp theo, nếu có."
 
 #: crates/rustty-input/src/command.rs:219
 msgid "Previous Search Result"
-msgstr ""
+msgstr "Kết quả tìm kiếm trước"
 
 #: crates/rustty-input/src/command.rs:220
 msgid "Navigate to the previous search result, if any."
-msgstr ""
+msgstr "Chuyển đến kết quả tìm kiếm trước đó, nếu có."
 
 #: crates/rustty-input/src/command.rs:225
 msgid "Increase Font Size"
-msgstr ""
+msgstr "Tăng cỡ chữ"
 
 #: crates/rustty-input/src/command.rs:226
 msgid "Increase the font size by 1 point."
-msgstr ""
+msgstr "Tăng cỡ chữ thêm 1 pt."
 
 #: crates/rustty-input/src/command.rs:231
 msgid "Decrease Font Size"
-msgstr ""
+msgstr "Giảm cỡ chữ"
 
 #: crates/rustty-input/src/command.rs:232
 msgid "Decrease the font size by 1 point."
-msgstr ""
+msgstr "Giảm cỡ chữ đi 1 pt."
 
 #: crates/rustty-input/src/command.rs:237
 msgid "Reset Font Size"
-msgstr ""
+msgstr "Đặt lại cỡ chữ"
 
 #: crates/rustty-input/src/command.rs:238
 msgid "Reset the font size to the default."
-msgstr ""
+msgstr "Đặt lại cỡ chữ về mặc định."
 
 #: crates/rustty-input/src/command.rs:243
 msgid "Clear Screen"
-msgstr ""
+msgstr "Xóa màn hình"
 
 #: crates/rustty-input/src/command.rs:244
 msgid "Clear the screen and scrollback."
-msgstr ""
+msgstr "Xóa màn hình và lịch sử cuộn."
 
 #: crates/rustty-input/src/command.rs:249
 msgid "Select All"
-msgstr ""
+msgstr "Chọn tất cả"
 
 #: crates/rustty-input/src/command.rs:250
 msgid "Select all text on the screen."
-msgstr ""
+msgstr "Chọn toàn bộ văn bản trên màn hình."
 
 #: crates/rustty-input/src/command.rs:255
 msgid "Scroll to Top"
-msgstr ""
+msgstr "Cuộn lên trên cùng"
 
 #: crates/rustty-input/src/command.rs:256
 msgid "Scroll to the top of the screen."
-msgstr ""
+msgstr "Cuộn lên đầu màn hình."
 
 #: crates/rustty-input/src/command.rs:261
 msgid "Scroll to Bottom"
-msgstr ""
+msgstr "Cuộn xuống dưới cùng"
 
 #: crates/rustty-input/src/command.rs:262
 msgid "Scroll to the bottom of the screen."
-msgstr ""
+msgstr "Cuộn xuống cuối màn hình."
 
 #: crates/rustty-input/src/command.rs:267
 msgid "Scroll to Selection"
-msgstr ""
+msgstr "Cuộn đến vùng chọn"
 
 #: crates/rustty-input/src/command.rs:268
 msgid "Scroll to the selected text."
-msgstr ""
+msgstr "Cuộn đến vị trí văn bản đang được chọn."
 
 #: crates/rustty-input/src/command.rs:273
 msgid "Scroll Page Up"
-msgstr ""
+msgstr "Cuộn lên một trang"
 
 #: crates/rustty-input/src/command.rs:274
 msgid "Scroll the screen up by a page."
-msgstr ""
+msgstr "Cuộn màn hình lên một trang."
 
 #: crates/rustty-input/src/command.rs:279
 msgid "Scroll Page Down"
-msgstr ""
+msgstr "Cuộn xuống một trang"
 
 #: crates/rustty-input/src/command.rs:280
 msgid "Scroll the screen down by a page."
-msgstr ""
+msgstr "Cuộn màn hình xuống một trang."
 
 #: crates/rustty-input/src/command.rs:286
 msgid "Copy Screen to Temporary File and Copy Path"
-msgstr ""
+msgstr "Sao chép màn hình vào tệp tạm và sao chép đường dẫn"
 
 #: crates/rustty-input/src/command.rs:287
 msgid ""
 "Copy the screen contents to a temporary file and copy the path to the "
 "clipboard."
 msgstr ""
+"Sao chép nội dung màn hình vào một tệp tạm và sao chép đường dẫn tệp "
+"vào bảng tạm."
 
 #: crates/rustty-input/src/command.rs:291
 msgid "Copy Screen to Temporary File and Paste Path"
-msgstr ""
+msgstr "Sao chép màn hình vào tệp tạm và dán đường dẫn"
 
 #: crates/rustty-input/src/command.rs:292
 msgid ""
 "Copy the screen contents to a temporary file and paste the path to the file."
 msgstr ""
+"Sao chép nội dung màn hình vào một tệp tạm và dán đường dẫn tệp đó."
 
 #: crates/rustty-input/src/command.rs:296
 msgid "Copy Screen to Temporary File and Open"
-msgstr ""
+msgstr "Sao chép màn hình vào tệp tạm và mở"
 
 #: crates/rustty-input/src/command.rs:297
 msgid "Copy the screen contents to a temporary file and open it."
-msgstr ""
+msgstr "Sao chép nội dung màn hình vào một tệp tạm và mở tệp đó."
 
 #: crates/rustty-input/src/command.rs:305
 msgid "Copy Screen as HTML to Temporary File and Copy Path"
-msgstr ""
+msgstr "Sao chép màn hình dưới dạng HTML vào tệp tạm và sao chép đường dẫn"
 
 #: crates/rustty-input/src/command.rs:306
 msgid ""
 "Copy the screen contents as HTML to a temporary file and copy the path to "
 "the clipboard."
 msgstr ""
+"Sao chép nội dung màn hình dưới dạng HTML vào tệp tạm và sao chép đường dẫn "
+"vào bảng tạm."
 
 #: crates/rustty-input/src/command.rs:313
 msgid "Copy Screen as HTML to Temporary File and Paste Path"
-msgstr ""
+msgstr "Sao chép màn hình dưới dạng HTML vào tệp tạm và dán đường dẫn"
 
 #: crates/rustty-input/src/command.rs:314
 msgid ""
 "Copy the screen contents as HTML to a temporary file and paste the path to "
 "the file."
 msgstr ""
+"Sao chép nội dung màn hình dưới dạng HTML vào tệp tạm và dán đường dẫn tệp đó."
 
 #: crates/rustty-input/src/command.rs:321
 msgid "Copy Screen as HTML to Temporary File and Open"
-msgstr ""
+msgstr "Sao chép màn hình dưới dạng HTML vào tệp tạm và mở"
 
 #: crates/rustty-input/src/command.rs:322
 msgid "Copy the screen contents as HTML to a temporary file and open it."
-msgstr ""
+msgstr "Sao chép nội dung màn hình dưới dạng HTML vào tệp tạm và mở tệp đó."
 
 #: crates/rustty-input/src/command.rs:330
 msgid "Copy Screen as ANSI Sequences to Temporary File and Copy Path"
-msgstr ""
+msgstr "Sao chép màn hình dưới dạng chuỗi ANSI vào tệp tạm và sao chép đường dẫn"
 
 #: crates/rustty-input/src/command.rs:331
 msgid ""
 "Copy the screen contents as ANSI escape sequences to a temporary file and "
 "copy the path to the clipboard."
 msgstr ""
+"Sao chép nội dung màn hình dưới dạng chuỗi thoát ANSI vào tệp tạm "
+"và sao chép đường dẫn vào bảng tạm."
 
 #: crates/rustty-input/src/command.rs:338
 msgid "Copy Screen as ANSI Sequences to Temporary File and Paste Path"
-msgstr ""
+msgstr "Sao chép màn hình dưới dạng chuỗi ANSI vào tệp tạm và dán đường dẫn"
 
 #: crates/rustty-input/src/command.rs:339
 msgid ""
 "Copy the screen contents as ANSI escape sequences to a temporary file and "
 "paste the path to the file."
 msgstr ""
+"Sao chép nội dung màn hình dưới dạng chuỗi thoát ANSI vào tệp tạm "
+"và dán đường dẫn tệp đó."
 
 #: crates/rustty-input/src/command.rs:346
 msgid "Copy Screen as ANSI Sequences to Temporary File and Open"
-msgstr ""
+msgstr "Sao chép màn hình dưới dạng chuỗi ANSI vào tệp tạm và mở"
 
 #: crates/rustty-input/src/command.rs:347
 msgid ""
 "Copy the screen contents as ANSI escape sequences to a temporary file and "
 "open it."
 msgstr ""
+"Sao chép nội dung màn hình dưới dạng chuỗi thoát ANSI vào tệp tạm và mở tệp đó."
 
 #: crates/rustty-input/src/command.rs:354
 msgid "Copy Selection to Temporary File and Copy Path"
-msgstr ""
+msgstr "Sao chép vùng chọn vào tệp tạm và sao chép đường dẫn"
 
 #: crates/rustty-input/src/command.rs:355
 msgid ""
 "Copy the selection contents to a temporary file and copy the path to the "
 "clipboard."
 msgstr ""
+"Sao chép nội dung vùng chọn vào tệp tạm và sao chép đường dẫn vào bảng tạm."
 
 #: crates/rustty-input/src/command.rs:359
 msgid "Copy Selection to Temporary File and Paste Path"
-msgstr ""
+msgstr "Sao chép vùng chọn vào tệp tạm và dán đường dẫn"
 
 #: crates/rustty-input/src/command.rs:360
 msgid ""
 "Copy the selection contents to a temporary file and paste the path to the "
 "file."
 msgstr ""
+"Sao chép nội dung vùng chọn vào tệp tạm và dán đường dẫn tệp đó."
 
 #: crates/rustty-input/src/command.rs:364
 msgid "Copy Selection to Temporary File and Open"
-msgstr ""
+msgstr "Sao chép vùng chọn vào tệp tạm và mở"
 
 #: crates/rustty-input/src/command.rs:365
 msgid "Copy the selection contents to a temporary file and open it."
-msgstr ""
+msgstr "Sao chép nội dung vùng chọn vào tệp tạm và mở tệp đó."
 
 #: crates/rustty-input/src/command.rs:373
 msgid "Copy Selection as HTML to Temporary File and Copy Path"
-msgstr ""
+msgstr "Sao chép vùng chọn dưới dạng HTML vào tệp tạm và sao chép đường dẫn"
 
 #: crates/rustty-input/src/command.rs:374
 msgid ""
 "Copy the selection contents as HTML to a temporary file and copy the path to "
 "the clipboard."
 msgstr ""
+"Sao chép nội dung vùng chọn dưới dạng HTML vào tệp tạm và sao chép đường dẫn "
+"vào bảng tạm."
 
 #: crates/rustty-input/src/command.rs:381
 msgid "Copy Selection as HTML to Temporary File and Paste Path"
-msgstr ""
+msgstr "Sao chép vùng chọn dưới dạng HTML vào tệp tạm và dán đường dẫn"
 
 #: crates/rustty-input/src/command.rs:382
 msgid ""
 "Copy the selection contents as HTML to a temporary file and paste the path "
 "to the file."
 msgstr ""
+"Sao chép nội dung vùng chọn dưới dạng HTML vào tệp tạm "
+"và dán đường dẫn tệp đó."
 
 #: crates/rustty-input/src/command.rs:389
 msgid "Copy Selection as HTML to Temporary File and Open"
-msgstr ""
+msgstr "Sao chép vùng chọn dưới dạng HTML vào tệp tạm và mở"
 
 #: crates/rustty-input/src/command.rs:390
 msgid "Copy the selection contents as HTML to a temporary file and open it."
-msgstr ""
+msgstr "Sao chép nội dung vùng chọn dưới dạng HTML vào tệp tạm và mở tệp đó."
 
 #: crates/rustty-input/src/command.rs:398
 msgid "Copy Selection as ANSI Sequences to Temporary File and Copy Path"
-msgstr ""
+msgstr "Sao chép vùng chọn dưới dạng chuỗi ANSI vào tệp tạm và sao chép đường dẫn"
 
 #: crates/rustty-input/src/command.rs:399
 msgid ""
 "Copy the selection contents as ANSI escape sequences to a temporary file and "
 "copy the path to the clipboard."
 msgstr ""
+"Sao chép nội dung vùng chọn dưới dạng chuỗi thoát ANSI vào tệp tạm "
+"và sao chép đường dẫn vào bảng tạm."
 
 #: crates/rustty-input/src/command.rs:406
 msgid "Copy Selection as ANSI Sequences to Temporary File and Paste Path"
-msgstr ""
+msgstr "Sao chép vùng chọn dưới dạng chuỗi ANSI vào tệp tạm và dán đường dẫn"
 
 #: crates/rustty-input/src/command.rs:407
 msgid ""
 "Copy the selection contents as ANSI escape sequences to a temporary file and "
 "paste the path to the file."
 msgstr ""
+"Sao chép nội dung vùng chọn dưới dạng chuỗi thoát ANSI vào tệp tạm "
+"và dán đường dẫn tệp đó."
 
 #: crates/rustty-input/src/command.rs:414
 msgid "Copy Selection as ANSI Sequences to Temporary File and Open"
-msgstr ""
+msgstr "Sao chép vùng chọn dưới dạng chuỗi ANSI vào tệp tạm và mở"
 
 #: crates/rustty-input/src/command.rs:415
 msgid ""
 "Copy the selection contents as ANSI escape sequences to a temporary file and "
 "open it."
 msgstr ""
+"Sao chép nội dung vùng chọn dưới dạng chuỗi thoát ANSI vào tệp tạm và mở tệp đó."
 
 #: crates/rustty-input/src/command.rs:422
 msgid "Open a new window."
-msgstr ""
+msgstr "Mở một cửa sổ mới."
 
 #: crates/rustty-input/src/command.rs:428
 msgid "Open a new tab."
-msgstr ""
+msgstr "Mở một tab mới."
 
 #: crates/rustty-input/src/command.rs:434
 msgid "Move Tab Left"
-msgstr ""
+msgstr "Di chuyển Tab sang trái"
 
 #: crates/rustty-input/src/command.rs:435
 msgid "Move the current tab to the left."
-msgstr ""
+msgstr "Di chuyển tab hiện tại sang trái."
 
 #: crates/rustty-input/src/command.rs:439
 msgid "Move Tab Right"
-msgstr ""
+msgstr "Di chuyển Tab sang phải"
 
 #: crates/rustty-input/src/command.rs:440
 msgid "Move the current tab to the right."
-msgstr ""
+msgstr "Di chuyển tab hiện tại sang phải."
 
 #: crates/rustty-input/src/command.rs:446
 msgid "Move Tab to New Window"
-msgstr ""
+msgstr "Chuyển Tab sang cửa sổ mới"
 
 #: crates/rustty-input/src/command.rs:447
 msgid "Move the current tab to a new window."
-msgstr ""
+msgstr "Chuyển tab hiện tại sang một cửa sổ mới."
 
 #: crates/rustty-input/src/command.rs:452
 msgid "Toggle Tab Overview"
-msgstr ""
+msgstr "Bật/Tắt tổng quan các Tab"
 
 #: crates/rustty-input/src/command.rs:453
 msgid "Toggle the tab overview."
-msgstr ""
+msgstr "Bật hoặc tắt chế độ xem tổng quan các tab."
 
 #: crates/rustty-input/src/command.rs:458
 msgid "Change Terminal Title…"
-msgstr ""
+msgstr "Đổi tiêu đề Terminal…"
 
 #: crates/rustty-input/src/command.rs:459
 msgid "Prompt for a new title for the current terminal."
-msgstr ""
+msgstr "Yêu cầu nhập tiêu đề mới cho terminal hiện tại."
 
 #: crates/rustty-input/src/command.rs:465
 msgid "Prompt for a new title for the current tab."
-msgstr ""
+msgstr "Yêu cầu nhập tiêu đề mới cho tab hiện tại."
 
 #: crates/rustty-input/src/command.rs:478
 msgid "Split the terminal to the left."
-msgstr ""
+msgstr "Chia màn hình terminal sang bên trái."
 
 #: crates/rustty-input/src/command.rs:483
 msgid "Split the terminal to the right."
-msgstr ""
+msgstr "Chia màn hình terminal sang bên phải."
 
 #: crates/rustty-input/src/command.rs:488
 msgid "Split the terminal up."
-msgstr ""
+msgstr "Chia màn hình terminal lên phía trên."
 
 #: crates/rustty-input/src/command.rs:493
 msgid "Split the terminal down."
-msgstr ""
+msgstr "Chia màn hình terminal xuống phía dưới."
 
 #: crates/rustty-input/src/command.rs:500
 msgid "Focus Split: Previous"
-msgstr ""
+msgstr "Chuyển đến phần chia trước"
 
 #: crates/rustty-input/src/command.rs:501
 msgid "Focus the previous split, if any."
-msgstr ""
+msgstr "Chuyển sang phần chia màn hình trước đó (nếu có)."
 
 #: crates/rustty-input/src/command.rs:505
 msgid "Focus Split: Next"
-msgstr ""
+msgstr "Chuyển đến phần chia tiếp theo"
 
 #: crates/rustty-input/src/command.rs:506
 msgid "Focus the next split, if any."
-msgstr ""
+msgstr "Chuyển sang phần chia màn hình tiếp theo (nếu có)."
 
 #: crates/rustty-input/src/command.rs:510
 msgid "Focus Split: Left"
-msgstr ""
+msgstr "Chuyển đến phần chia bên trái"
 
 #: crates/rustty-input/src/command.rs:511
 msgid "Focus the split to the left, if it exists."
-msgstr ""
+msgstr "Chuyển sang phần chia màn hình ở bên trái (nếu có)."
 
 #: crates/rustty-input/src/command.rs:515
 msgid "Focus Split: Right"
-msgstr ""
+msgstr "Chuyển đến phần chia bên phải"
 
 #: crates/rustty-input/src/command.rs:516
 msgid "Focus the split to the right, if it exists."
-msgstr ""
+msgstr "Chuyển sang phần chia màn hình ở bên phải (nếu có)."
 
 #: crates/rustty-input/src/command.rs:520
 msgid "Focus Split: Up"
-msgstr ""
+msgstr "Chuyển đến phần chia phía trên"
 
 #: crates/rustty-input/src/command.rs:521
 msgid "Focus the split above, if it exists."
-msgstr ""
+msgstr "Chuyển sang phần chia màn hình phía trên (nếu có)."
 
 #: crates/rustty-input/src/command.rs:525
 msgid "Focus Split: Down"
-msgstr ""
+msgstr "Chuyển đến phần chia phía dưới"
 
 #: crates/rustty-input/src/command.rs:526
 msgid "Focus the split below, if it exists."
-msgstr ""
+msgstr "Chuyển sang phần chia màn hình phía dưới (nếu có)."
 
 #: crates/rustty-input/src/command.rs:533
 msgid "Focus Window: Previous"
-msgstr ""
+msgstr "Chuyển đến cửa sổ trước"
 
 #: crates/rustty-input/src/command.rs:534
 msgid "Focus the previous window, if any."
-msgstr ""
+msgstr "Chuyển sang cửa sổ trước đó (nếu có)."
 
 #: crates/rustty-input/src/command.rs:538
 msgid "Focus Window: Next"
-msgstr ""
+msgstr "Chuyển đến cửa sổ tiếp theo"
 
 #: crates/rustty-input/src/command.rs:539
 msgid "Focus the next window, if any."
-msgstr ""
+msgstr "Chuyển sang cửa sổ tiếp theo (nếu có)."
 
 #: crates/rustty-input/src/command.rs:545
 msgid "Toggle Split Zoom"
-msgstr ""
+msgstr "Bật/Tắt phóng to phần chia"
 
 #: crates/rustty-input/src/command.rs:546
 msgid "Toggle the zoom state of the current split."
-msgstr ""
+msgstr "Phóng to hoặc thu nhỏ phần chia màn hình hiện tại."
 
 #: crates/rustty-input/src/command.rs:551
 msgid "Toggle Read-Only Mode"
-msgstr ""
+msgstr "Bật/Tắt chế độ chỉ đọc"
 
 #: crates/rustty-input/src/command.rs:552
 msgid "Toggle read-only mode for the current surface."
-msgstr ""
+msgstr "Bật hoặc tắt chế độ chỉ đọc cho terminal hiện tại."
 
 #: crates/rustty-input/src/command.rs:557
 msgid "Equalize Splits"
-msgstr ""
+msgstr "Cân bằng kích thước các phần chia"
 
 #: crates/rustty-input/src/command.rs:558
 msgid "Equalize the size of all splits."
-msgstr ""
+msgstr "Đưa kích thước của tất cả các phần chia về bằng nhau."
 
 #: crates/rustty-input/src/command.rs:563
 msgid "Reset Window Size"
-msgstr ""
+msgstr "Đặt lại kích thước cửa sổ"
 
 #: crates/rustty-input/src/command.rs:564
 msgid "Reset the window size to the default."
-msgstr ""
+msgstr "Đặt lại kích thước cửa sổ về mặc định."
 
 #: crates/rustty-input/src/command.rs:569
 msgid "Toggle Inspector"
-msgstr ""
+msgstr "Bật/Tắt bộ kiểm tra"
 
 #: crates/rustty-input/src/command.rs:570
 msgid "Toggle the inspector."
-msgstr ""
+msgstr "Bật hoặc tắt giao diện bộ kiểm tra."
 
 #: crates/rustty-input/src/command.rs:575
 msgid "Show the GTK Inspector"
-msgstr ""
+msgstr "Hiển thị bộ kiểm tra GTK Inspector"
 
 #: crates/rustty-input/src/command.rs:576
 msgid "Show the GTK inspector."
-msgstr ""
+msgstr "Mở bộ kiểm tra giao diện GTK Inspector."
 
 #: crates/rustty-input/src/command.rs:581
 msgid "Show On-Screen Keyboard"
-msgstr ""
+msgstr "Hiển thị bàn phím ảo"
 
 #: crates/rustty-input/src/command.rs:582
 msgid "Show the on-screen keyboard if present."
-msgstr ""
+msgstr "Hiển thị bàn phím ảo trên màn hình nếu hỗ trợ."
 
 #: crates/rustty-input/src/command.rs:588
 msgid "Open Config Using OS editor"
-msgstr ""
+msgstr "Mở tệp cấu hình bằng trình chỉnh sửa của hệ điều hành"
 
 #: crates/rustty-input/src/command.rs:589
 msgid "Open the config file with the OS's default editor."
-msgstr ""
+msgstr "Mở tệp cấu hình bằng trình chỉnh sửa mặc định của hệ điều hành."
 
 #: crates/rustty-input/src/command.rs:593
 msgid "Open Config in New Terminal Window"
-msgstr ""
+msgstr "Mở tệp cấu hình trong cửa sổ Terminal mới"
 
 #: crates/rustty-input/src/command.rs:594
 msgid "Open the config file in a new window using $EDITOR or $VISUAL."
-msgstr ""
+msgstr "Mở tệp cấu hình trong cửa sổ mới bằng $EDITOR hoặc $VISUAL."
 
 #: crates/rustty-input/src/command.rs:600
 msgid "Reload Config"
-msgstr ""
+msgstr "Tải lại cấu hình"
 
 #: crates/rustty-input/src/command.rs:601
 msgid "Reload the config file."
-msgstr ""
+msgstr "Tải lại tệp cấu hình."
 
 #: crates/rustty-input/src/command.rs:606
 msgid "Close Terminal"
-msgstr ""
+msgstr "Đóng Terminal"
 
 #: crates/rustty-input/src/command.rs:607
 msgid "Close the current terminal."
-msgstr ""
+msgstr "Đóng terminal hiện tại."
 
 #: crates/rustty-input/src/command.rs:614
 msgid "Close the current tab."
-msgstr ""
+msgstr "Đóng tab hiện tại."
 
 #: crates/rustty-input/src/command.rs:618
 msgid "Close Other Tabs"
-msgstr ""
+msgstr "Đóng các Tab khác"
 
 #: crates/rustty-input/src/command.rs:619
 msgid "Close all tabs in this window except the current one."
-msgstr ""
+msgstr "Đóng tất cả các tab trong cửa sổ này ngoại trừ tab hiện tại."
 
 #: crates/rustty-input/src/command.rs:623
 msgid "Close Tabs to the Right"
-msgstr ""
+msgstr "Đóng các Tab bên phải"
 
 #: crates/rustty-input/src/command.rs:624
 msgid "Close all tabs to the right of the current one."
-msgstr ""
+msgstr "Đóng tất cả các tab ở phía bên phải tab hiện tại."
 
 #: crates/rustty-input/src/command.rs:631
 msgid "Close the current window."
-msgstr ""
+msgstr "Đóng cửa sổ hiện tại."
 
 #: crates/rustty-input/src/command.rs:636
 msgid "Close All Windows"
-msgstr ""
+msgstr "Đóng tất cả cửa sổ"
 
 #: crates/rustty-input/src/command.rs:637
 msgid "Close all windows."
-msgstr ""
+msgstr "Đóng tất cả các cửa sổ đang mở."
 
 #: crates/rustty-input/src/command.rs:642
 msgid "Toggle Maximize"
-msgstr ""
+msgstr "Bật/Tắt phóng to cửa sổ"
 
 #: crates/rustty-input/src/command.rs:643
 msgid "Toggle the maximized state of the current window."
-msgstr ""
+msgstr "Bật hoặc tắt chế độ phóng to của cửa sổ hiện tại."
 
 #: crates/rustty-input/src/command.rs:648
 msgid "Toggle Fullscreen"
-msgstr ""
+msgstr "Bật/Tắt toàn màn hình"
 
 #: crates/rustty-input/src/command.rs:649
 msgid "Toggle the fullscreen state of the current window."
-msgstr ""
+msgstr "Bật hoặc tắt chế độ toàn màn hình của cửa sổ hiện tại."
 
 #: crates/rustty-input/src/command.rs:654
 msgid "Toggle Window Decorations"
-msgstr ""
+msgstr "Bật/Tắt trang trí cửa sổ"
 
 #: crates/rustty-input/src/command.rs:655
 msgid "Toggle the window decorations."
-msgstr ""
+msgstr "Ẩn hoặc hiện viền và thanh tiêu đề của cửa sổ."
 
 #: crates/rustty-input/src/command.rs:660
 msgid "Toggle Float on Top"
-msgstr ""
+msgstr "Bật/Tắt ghim trên cùng"
 
 #: crates/rustty-input/src/command.rs:661
 msgid "Toggle the float on top state of the current window."
-msgstr ""
+msgstr "Bật hoặc tắt chế độ luôn hiển thị trên cùng của cửa sổ."
 
 #: crates/rustty-input/src/command.rs:666
 msgid "Toggle Secure Input"
-msgstr ""
+msgstr "Bật/Tắt nhập liệu an toàn"
 
 #: crates/rustty-input/src/command.rs:667
 msgid "Toggle secure input mode."
-msgstr ""
+msgstr "Bật hoặc tắt chế độ nhập liệu an toàn."
 
 #: crates/rustty-input/src/command.rs:672
 msgid "Toggle Mouse Reporting"
-msgstr ""
+msgstr "Bật/Tắt báo cáo chuột"
 
 #: crates/rustty-input/src/command.rs:673
 msgid "Toggle whether mouse events are reported to terminal applications."
-msgstr ""
+msgstr "Bật hoặc tắt việc gửi sự kiện thao tác chuột tới các ứng dụng chạy trong terminal."
 
 #: crates/rustty-input/src/command.rs:678
 msgid "Toggle Background Opacity"
-msgstr ""
+msgstr "Bật/Tắt độ mờ nền"
 
 #: crates/rustty-input/src/command.rs:679
 msgid "Toggle the background opacity of a window that started transparent."
-msgstr ""
+msgstr "Bật hoặc tắt độ mờ (độ trong suốt) của nền cửa sổ ban đầu."
 
 #: crates/rustty-input/src/command.rs:684
 msgid "Check for Updates"
-msgstr ""
+msgstr "Kiểm tra bản cập nhật"
 
 #: crates/rustty-input/src/command.rs:685
 msgid "Check for updates to the application."
-msgstr ""
+msgstr "Kiểm tra xem có bản cập nhật mới cho ứng dụng hay không."
 
 #: crates/rustty-input/src/command.rs:690
 msgid "Undo"
-msgstr ""
+msgstr "Hoàn tác"
 
 #: crates/rustty-input/src/command.rs:691
 msgid "Undo the last action."
-msgstr ""
+msgstr "Hoàn tác hành động gần nhất."
 
 #: crates/rustty-input/src/command.rs:696
 msgid "Redo"
-msgstr ""
+msgstr "Làm lại"
 
 #: crates/rustty-input/src/command.rs:697
 msgid "Redo the last undone action."
-msgstr ""
+msgstr "Làm lại hành động vừa hoàn tác."
 
 #: crates/rustty-input/src/command.rs:703
 msgid "Quit the application."
-msgstr ""
+msgstr "Thoát ứng dụng."
 
 #: crates/rustty-input/src/command.rs:708
 msgid "Rustty"
-msgstr ""
+msgstr "Rustty"
 
 #: crates/rustty-input/src/command.rs:709
 msgid "Put a little Rustty in your terminal."
-msgstr ""
+msgstr "Mang một chút Rustty vào terminal của bạn."

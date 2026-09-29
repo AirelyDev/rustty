@@ -636,3 +636,85 @@ fn remaining_jobs_run_their_reference_commands() {
         assert!(workspace_root().join(p).is_file(), "missing {p}");
     }
 }
+
+/// What is wrong with the `windows` job w.r.t. the two legs upstream dropped
+/// (R4 §G / DECISIONS R6 / P7-W10 T4): non-empty means a leg was re-added, or
+/// the replacement vt-lib test coverage is missing.
+fn windows_leg_problems(body: &str) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    if body.contains("- name: Test the workspace") {
+        out.push("windows job has the removed `test-windows` leg (\"Test the workspace\" step)");
+    }
+    if body.contains("run: cargo test --workspace") {
+        out.push("windows job runs a full-workspace test (the removed `test-windows` leg)");
+    }
+    if body.contains("- name: Build the apprt-c library for the GNU ABI") {
+        out.push("windows job has the removed `build-libghostty-windows-gnu` leg");
+    }
+    if body.contains("x86_64-pc-windows-gnu") {
+        out.push("windows job targets the GNU ABI (the removed `build-libghostty-windows-gnu` leg)");
+    }
+    // The replacement: vt-lib testing on Windows must not silently disappear
+    // along with the removed full-workspace test.
+    if !body.contains("cargo test -p rustty-vt-c --locked") {
+        out.push("windows job lost its rustty-vt-c test coverage");
+    }
+    if !body.contains("cargo build -p rustty-vt-c --release --locked") {
+        out.push("windows job lost its rustty-vt-c release build (build-libghostty-vt-windows)");
+    }
+    out
+}
+
+/// R4 §G / DECISIONS R6 / P7-W10 T4: upstream `380778e3c` dropped
+/// `test-windows` and `build-libghostty-windows-gnu` from `test.yml`
+/// (20abdb50a..12752b2ac — "libghostty-internal isn't really supposed to be
+/// used in Windows anyway"). Rustty's `windows` job had ported both as the
+/// "Test the workspace" step and the "Build the apprt-c library for the GNU
+/// ABI" step; both are now removed, for parity. `build-libghostty-vt-windows`
+/// is UNCHANGED upstream, so its `test-lib-vt` coverage (which used to ride
+/// along inside the now-removed workspace test) gets its own scoped step.
+#[test]
+fn windows_job_drops_the_legs_upstream_dropped() {
+    let jobs = parse_jobs(&ci_yml());
+    let body = job_body(&jobs, "windows");
+    assert_eq!(windows_leg_problems(&body), Vec::<&str>::new());
+
+    // Negative controls: re-adding either leg must be caught by the same check.
+    let readded_test = body.replacen(
+        "- name: Build librustty-vt (release)",
+        "- name: Test the workspace\n        shell: pwsh\n        run: cargo test --workspace --locked\n\n      - name: Build librustty-vt (release)",
+        1,
+    );
+    assert_ne!(readded_test, body, "the control must change the text");
+    assert_eq!(
+        windows_leg_problems(&readded_test),
+        [
+            "windows job has the removed `test-windows` leg (\"Test the workspace\" step)",
+            "windows job runs a full-workspace test (the removed `test-windows` leg)",
+        ]
+    );
+
+    let readded_gnu = format!(
+        "{body}\n      - name: Build the apprt-c library for the GNU ABI\n        run: |\n          rustup target add x86_64-pc-windows-gnu\n          cargo build -p rustty-apprt-c --target x86_64-pc-windows-gnu --locked\n"
+    );
+    assert_ne!(readded_gnu, body, "the control must change the text");
+    assert_eq!(
+        windows_leg_problems(&readded_gnu),
+        [
+            "windows job has the removed `build-libghostty-windows-gnu` leg",
+            "windows job targets the GNU ABI (the removed `build-libghostty-windows-gnu` leg)",
+        ]
+    );
+
+    // Negative control: dropping the replacement vt-lib test coverage is also caught.
+    let dropped_vt_test = body.replacen(
+        "- name: Test librustty-vt\n        shell: pwsh\n        run: cargo test -p rustty-vt-c --locked\n\n      ",
+        "",
+        1,
+    );
+    assert_ne!(dropped_vt_test, body, "the control must change the text");
+    assert_eq!(
+        windows_leg_problems(&dropped_vt_test),
+        ["windows job lost its rustty-vt-c test coverage"]
+    );
+}

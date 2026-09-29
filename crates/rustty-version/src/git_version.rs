@@ -66,6 +66,15 @@ fn trim_end(s: &str) -> &str {
     s.trim_end_matches(['\r', '\n', ' '])
 }
 
+/// `std.ascii.whitespace`: `{ ' ', '\t', '\n', '\r', 0x0B (VT), 0x0C (FF) }`.
+const ASCII_WHITESPACE: [char; 6] = [' ', '\t', '\n', '\r', '\x0B', '\x0C'];
+
+/// `std.mem.trim(u8, s, &std.ascii.whitespace)`: trims BOTH ends against the
+/// full ASCII whitespace set (adds `\t`, VT, FF to the `trim_end`'s `"\r\n "`).
+fn trim_ascii_whitespace(s: &str) -> &str {
+    s.trim_matches(ASCII_WHITESPACE.as_slice())
+}
+
 /// Replace characters that are not valid in semantic version pre-release
 /// identifiers (which only allow [0-9A-Za-z-]). Slashes would also mess up
 /// dist tarball paths.
@@ -83,20 +92,22 @@ pub fn sanitize_branch(branch: &str) -> String {
 }
 
 /// The branch name from `git rev-parse --abbrev-ref HEAD`'s raw stdout:
-/// trimmed of `"\r\n "`, then sanitized.
+/// trimmed of `std.ascii.whitespace` (both ends), then sanitized.
 //
-// PORT NOTE: reference defect (R13), UD150. `GitVersion.zig:22-41` sanitizes
-// the RAW output first, so git's trailing newline becomes `-`, and the
-// `trimEnd(u8, branch, "\r\n ")` at `:84` then has nothing left to trim: every
-// dev version reads `X.Y.Z-<branch>-+<hash>` (measured on the reference's own
-// cached build options: `1.3.2-HEAD-+4540d499a`). The trim can only be meant
-// to strip that newline, and before upstream `ad9225a4c` (which replaced the
-// `/`-only rewrite with the full sanitizing loop) versions came out
-// `X.Y.Z-main+hash`. Reachable on every untagged build from a git checkout.
-// The port trims first and then sanitizes, which is the reference's own two
-// steps in the order that makes the trim effective: `main\n` -> `main`.
+// PORT NOTE: UD150, fixed upstream in `5ca09acf6` (`GitVersion.zig:33-34`).
+// The reference used to sanitize the RAW output first, so git's trailing
+// newline became `-`, and the `trimEnd(u8, branch, "\r\n ")` that used to sit
+// after the sanitizing loop then had nothing left to trim: every dev version
+// read `X.Y.Z-<branch>-+<hash>` (measured on the reference's own cached build
+// options: `1.3.2-HEAD-+4540d499a`). `5ca09acf6` fixed this the same way
+// rustty already had (trim first, then sanitize) and additionally widened the
+// trim set from `"\r\n "` to the full `std.ascii.whitespace` (adds `\t`, VT,
+// FF) and trims both ends, not just the end (`std.mem.trim` vs `trimEnd`;
+// git's `rev-parse --abbrev-ref` output has no leading whitespace in
+// practice, so the both-ends widening is a no-op on real output, but it is
+// what the reference now does). The port matches: `main\n` -> `main`.
 pub fn branch_from_rev_parse(raw: &str) -> String {
-    sanitize_branch(trim_end(raw))
+    sanitize_branch(trim_ascii_whitespace(raw))
 }
 
 /// Initialize the version and detect it from the Git environment rooted at
@@ -119,7 +130,9 @@ pub fn detect(root: &Path) -> Result<Version, Error> {
             "1",
         ],
     )? {
-        Run::Ok(s) => trim_end(&s).to_string(),
+        // `std.mem.trim(u8, output, &std.ascii.whitespace)`: both ends, full
+        // ASCII whitespace set (not just `trim_end`'s `"\r\n "`).
+        Run::Ok(s) => trim_ascii_whitespace(&s).to_string(),
         // `else => return err`: the reference fails the build here.
         Run::ExitCodeFailure => return Err(Error::Other("git log exited non-zero".into())),
     };

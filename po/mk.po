@@ -9,7 +9,7 @@ msgstr ""
 "Project-Id-Version: io.airely.rustty\n"
 "Report-Msgid-Bugs-To: gael@airely.io\n"
 "POT-Creation-Date: 2026-08-10 10:06-0500\n"
-"PO-Revision-Date: 2026-02-12 17:00+0100\n"
+"PO-Revision-Date: 2026-08-30 12:23+0200\n"
 "Last-Translator: Andrej Daskalov <andrej.daskalov@gmail.com>\n"
 "Language-Team: Macedonian\n"
 "Language: mk\n"
@@ -175,7 +175,7 @@ msgstr "Подели надесно"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:377
 msgid "Close Split"
-msgstr ""
+msgstr "Затвори поделба"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:383
 msgid "Tab"
@@ -203,7 +203,7 @@ msgstr "Прозор"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:406 crates/rustty-apprt/assets/ui/1.5/window.blp:215
 msgid "Change Window Title…"
-msgstr ""
+msgstr "Промени наслов на прозор…"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:411 crates/rustty-apprt/assets/ui/1.5/window.blp:220
 #: crates/rustty-input/src/command.rs:421
@@ -221,11 +221,11 @@ msgstr "Конфигурација"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:427 crates/rustty-apprt/assets/ui/1.5/window.blp:306
 msgid "Open Configuration in OS Editor"
-msgstr ""
+msgstr "Отвори ја конфигурацијата во уредувачот на оперативниот систем"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:433 crates/rustty-apprt/assets/ui/1.5/window.blp:312
 msgid "Open Configuration in New Window"
-msgstr ""
+msgstr "Отвори ја конфигурацијата во нов прозор"
 
 #: crates/rustty-apprt/assets/ui/1.5/title-dialog.blp:5
 msgid "Leave blank to restore the default title."
@@ -269,27 +269,27 @@ msgstr "Изврши команда…"
 
 #: crates/rustty-apprt/src/gtk/class/application.rs:1767
 msgid "The keybind was revoked by the system."
-msgstr ""
+msgstr "Системот ја отповика кратенката на тастатурата."
 
 #: crates/rustty-apprt/src/gtk/class/application.rs:1769
 msgid "The keybind was denied by the system."
-msgstr ""
+msgstr "Системот ја одби кратенката на тастатурата."
 
 #: crates/rustty-apprt/src/gtk/class/application.rs:1780
 msgid "Global keybind unavailable"
-msgstr ""
+msgstr "Глобалната кратенка на тастатурата е недостапна"
 
 #: crates/rustty-apprt/src/gtk/class/application.rs:2259
 msgid "Export Terminal IO Events"
-msgstr ""
+msgstr "Извези ги влезно-излезните настани на терминалот"
 
 #: crates/rustty-apprt/src/gtk/class/application.rs:2262
 msgid "Export"
-msgstr ""
+msgstr "Извези"
 
 #: crates/rustty-apprt/src/gtk/class/application.rs:2783
 msgid "Editing configuration file"
-msgstr ""
+msgstr "Уредување на конфигурациската датотека"
 
 #: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:198
 msgid ""
@@ -375,7 +375,7 @@ msgstr "Промени наслов на јазиче"
 
 #: crates/rustty-apprt/src/gtk/class/title_dialog.rs:229
 msgid "Change Window Title"
-msgstr ""
+msgstr "Промени наслов на прозор"
 
 #: crates/rustty-apprt/src/gtk/class/window.rs:1153
 msgid "Reloaded the configuration"
@@ -395,710 +395,729 @@ msgstr "Развивачи на Rustty"
 
 #: crates/rustty-input/src/command.rs:149
 msgid "Reset Terminal"
-msgstr ""
+msgstr "Ресетирај терминал"
 
 #: crates/rustty-input/src/command.rs:150
 msgid "Reset the terminal to a clean state."
-msgstr ""
+msgstr "Ресетирај го терминалот во чиста состојба."
 
 #: crates/rustty-input/src/command.rs:155
 msgid "Copy to Clipboard"
-msgstr ""
+msgstr "Копирај во привремена меморија"
 
 #: crates/rustty-input/src/command.rs:156
 msgid ""
 "Copy the selected text to the clipboard in both plain and styled formats."
-msgstr ""
+msgstr "Копирај го избраниот текст во привремената меморија и како обичен "
+"и како форматиран текст."
 
 #: crates/rustty-input/src/command.rs:159
 msgid "Copy Selection as Plain Text to Clipboard"
-msgstr ""
+msgstr "Копирај го избраното како обичен текст во привремена меморија"
 
 #: crates/rustty-input/src/command.rs:160
 msgid "Copy the selected text as plain text to the clipboard."
-msgstr ""
+msgstr "Копирај го избраниот текст како обичен текст во привремената меморија."
 
 #: crates/rustty-input/src/command.rs:163
 msgid "Copy Selection as ANSI Sequences to Clipboard"
-msgstr ""
+msgstr "Копирај го избраното како ANSI-секвенци во привремена меморија"
 
 #: crates/rustty-input/src/command.rs:164
 msgid "Copy the selected text as ANSI escape sequences to the clipboard."
-msgstr ""
+msgstr "Копирај го избраниот текст како ANSI-контролни секвенци во привремената меморија."
 
 #: crates/rustty-input/src/command.rs:167
 msgid "Copy Selection as HTML to Clipboard"
-msgstr ""
+msgstr "Копирај го избраното како HTML во привремена меморија"
 
 #: crates/rustty-input/src/command.rs:168
 msgid "Copy the selected text as HTML to the clipboard."
-msgstr ""
+msgstr "Копирај го избраниот текст како HTML во привремената меморија."
 
 #: crates/rustty-input/src/command.rs:173
 msgid "Copy URL to Clipboard"
-msgstr ""
+msgstr "Копирај URL во привремена меморија"
 
 #: crates/rustty-input/src/command.rs:174
 msgid "Copy the URL under the cursor to the clipboard."
-msgstr ""
+msgstr "Копирај го URL-то под покажувачот во привремената меморија."
 
 #: crates/rustty-input/src/command.rs:179
 msgid "Copy Terminal Title to Clipboard"
-msgstr ""
+msgstr "Копирај го насловот на терминалот во привремена меморија"
 
 #: crates/rustty-input/src/command.rs:180
 msgid ""
 "Copy the terminal title to the clipboard. If the terminal title is not set "
 "this has no effect."
-msgstr ""
+msgstr "Копирај го насловот на терминалот во привремената меморија. "
+"Ако насловот не е поставен, ова нема дејство."
 
 #: crates/rustty-input/src/command.rs:185
 msgid "Paste from Clipboard"
-msgstr ""
+msgstr "Вметни од привремена меморија"
 
 #: crates/rustty-input/src/command.rs:186
 msgid "Paste the contents of the main clipboard."
-msgstr ""
+msgstr "Вметни ја содржината од главната привремена меморија."
 
 #: crates/rustty-input/src/command.rs:191
 msgid "Paste from Selection"
-msgstr ""
+msgstr "Вметни од избраното"
 
 #: crates/rustty-input/src/command.rs:192
 msgid "Paste the contents of the selection clipboard."
-msgstr ""
+msgstr "Вметни ја содржината од привремената меморија за избраното."
 
 #: crates/rustty-input/src/command.rs:197
 msgid "Start Search"
-msgstr ""
+msgstr "Започни пребарување"
 
 #: crates/rustty-input/src/command.rs:198
 msgid "Start a search if one isn't already active."
-msgstr ""
+msgstr "Започни пребарување ако веќе нема активно."
 
 #: crates/rustty-input/src/command.rs:203
 msgid "Search Selection"
-msgstr ""
+msgstr "Пребарај го избраното"
 
 #: crates/rustty-input/src/command.rs:204
 msgid "Start a search for the current text selection."
-msgstr ""
+msgstr "Започни пребарување на тековно избраниот текст."
 
 #: crates/rustty-input/src/command.rs:209
 msgid "End Search"
-msgstr ""
+msgstr "Заврши пребарување"
 
 #: crates/rustty-input/src/command.rs:210
 msgid "End the current search if any and hide any GUI elements."
-msgstr ""
+msgstr "Заврши го тековното пребарување, ако постои, и скриј ги "
+"сите елементи на графичкиот интерфејс."
 
 #: crates/rustty-input/src/command.rs:215
 msgid "Next Search Result"
-msgstr ""
+msgstr "Следен резултат од пребарувањето"
 
 #: crates/rustty-input/src/command.rs:216
 msgid "Navigate to the next search result, if any."
-msgstr ""
+msgstr "Оди до следниот резултат од пребарувањето, ако постои."
 
 #: crates/rustty-input/src/command.rs:219
 msgid "Previous Search Result"
-msgstr ""
+msgstr "Претходен резултат од пребарувањето"
 
 #: crates/rustty-input/src/command.rs:220
 msgid "Navigate to the previous search result, if any."
-msgstr ""
+msgstr "Оди до претходниот резултат од пребарувањето, ако постои."
 
 #: crates/rustty-input/src/command.rs:225
 msgid "Increase Font Size"
-msgstr ""
+msgstr "Зголеми ја големината на фонтот"
 
 #: crates/rustty-input/src/command.rs:226
 msgid "Increase the font size by 1 point."
-msgstr ""
+msgstr "Зголеми ја големината на фонтот за 1 точка."
 
 #: crates/rustty-input/src/command.rs:231
 msgid "Decrease Font Size"
-msgstr ""
+msgstr "Намали ја големината на фонтот"
 
 #: crates/rustty-input/src/command.rs:232
 msgid "Decrease the font size by 1 point."
-msgstr ""
+msgstr "Намали ја големината на фонтот за 1 точка."
 
 #: crates/rustty-input/src/command.rs:237
 msgid "Reset Font Size"
-msgstr ""
+msgstr "Ресетирај ја големината на фонтот"
 
 #: crates/rustty-input/src/command.rs:238
 msgid "Reset the font size to the default."
-msgstr ""
+msgstr "Врати ја големината на фонтот на стандардната."
 
 #: crates/rustty-input/src/command.rs:243
 msgid "Clear Screen"
-msgstr ""
+msgstr "Исчисти екран"
 
 #: crates/rustty-input/src/command.rs:244
 msgid "Clear the screen and scrollback."
-msgstr ""
+msgstr "Исчисти ги екранот и историјата на лизгање."
 
 #: crates/rustty-input/src/command.rs:249
 msgid "Select All"
-msgstr ""
+msgstr "Избери сè"
 
 #: crates/rustty-input/src/command.rs:250
 msgid "Select all text on the screen."
-msgstr ""
+msgstr "Избери го целиот текст на екранот."
 
 #: crates/rustty-input/src/command.rs:255
 msgid "Scroll to Top"
-msgstr ""
+msgstr "Лизгај до врвот"
 
 #: crates/rustty-input/src/command.rs:256
 msgid "Scroll to the top of the screen."
-msgstr ""
+msgstr "Лизгај до врвот на екранот."
 
 #: crates/rustty-input/src/command.rs:261
 msgid "Scroll to Bottom"
-msgstr ""
+msgstr "Лизгај до дното"
 
 #: crates/rustty-input/src/command.rs:262
 msgid "Scroll to the bottom of the screen."
-msgstr ""
+msgstr "Лизгај до дното на екранот."
 
 #: crates/rustty-input/src/command.rs:267
 msgid "Scroll to Selection"
-msgstr ""
+msgstr "Лизгај до избраното"
 
 #: crates/rustty-input/src/command.rs:268
 msgid "Scroll to the selected text."
-msgstr ""
+msgstr "Лизгај до избраниот текст."
 
 #: crates/rustty-input/src/command.rs:273
 msgid "Scroll Page Up"
-msgstr ""
+msgstr "Лизгај една страница нагоре"
 
 #: crates/rustty-input/src/command.rs:274
 msgid "Scroll the screen up by a page."
-msgstr ""
+msgstr "Лизгај го екранот една страница нагоре."
 
 #: crates/rustty-input/src/command.rs:279
 msgid "Scroll Page Down"
-msgstr ""
+msgstr "Лизгај една страница надолу"
 
 #: crates/rustty-input/src/command.rs:280
 msgid "Scroll the screen down by a page."
-msgstr ""
+msgstr "Лизгај го екранот една страница надолу."
 
 #: crates/rustty-input/src/command.rs:286
 msgid "Copy Screen to Temporary File and Copy Path"
-msgstr ""
+msgstr "Копирај го екранот во привремена датотека и копирај ја патеката"
 
 #: crates/rustty-input/src/command.rs:287
 msgid ""
 "Copy the screen contents to a temporary file and copy the path to the "
 "clipboard."
-msgstr ""
+msgstr "Копирај ја содржината на екранот во привремена датотека и "
+"копирај ја патеката во привремената меморија."
 
 #: crates/rustty-input/src/command.rs:291
 msgid "Copy Screen to Temporary File and Paste Path"
-msgstr ""
+msgstr "Копирај го екранот во привремена датотека и вметни ја патеката"
 
 #: crates/rustty-input/src/command.rs:292
 msgid ""
 "Copy the screen contents to a temporary file and paste the path to the file."
-msgstr ""
+msgstr "Копирај ја содржината на екранот во привремена датотека и "
+"вметни ја патеката до датотеката."
 
 #: crates/rustty-input/src/command.rs:296
 msgid "Copy Screen to Temporary File and Open"
-msgstr ""
+msgstr "Копирај го екранот во привремена датотека и отвори ја"
 
 #: crates/rustty-input/src/command.rs:297
 msgid "Copy the screen contents to a temporary file and open it."
-msgstr ""
+msgstr "Копирај ја содржината на екранот во привремена датотека и отвори ја."
 
 #: crates/rustty-input/src/command.rs:305
 msgid "Copy Screen as HTML to Temporary File and Copy Path"
-msgstr ""
+msgstr "Копирај го екранот како HTML во привремена датотека и копирај ја патеката"
 
 #: crates/rustty-input/src/command.rs:306
 msgid ""
 "Copy the screen contents as HTML to a temporary file and copy the path to "
 "the clipboard."
-msgstr ""
+msgstr "Копирај ја содржината на екранот како HTML во привремена датотека и "
+"копирај ја патеката во привремената меморија."
 
 #: crates/rustty-input/src/command.rs:313
 msgid "Copy Screen as HTML to Temporary File and Paste Path"
-msgstr ""
+msgstr "Копирај го екранот како HTML во привремена датотека и вметни ја патеката"
 
 #: crates/rustty-input/src/command.rs:314
 msgid ""
 "Copy the screen contents as HTML to a temporary file and paste the path to "
 "the file."
-msgstr ""
+msgstr "Копирај ја содржината на екранот како HTML во привремена датотека и "
+"вметни ја патеката до датотеката."
 
 #: crates/rustty-input/src/command.rs:321
 msgid "Copy Screen as HTML to Temporary File and Open"
-msgstr ""
+msgstr "Копирај го екранот како HTML во привремена датотека и отвори ја"
 
 #: crates/rustty-input/src/command.rs:322
 msgid "Copy the screen contents as HTML to a temporary file and open it."
-msgstr ""
+msgstr "Копирај ја содржината на екранот како HTML во привремена датотека и отвори ја."
 
 #: crates/rustty-input/src/command.rs:330
 msgid "Copy Screen as ANSI Sequences to Temporary File and Copy Path"
-msgstr ""
+msgstr "Копирај го екранот како ANSI-секвенци во привремена датотека и копирај ја патеката"
 
 #: crates/rustty-input/src/command.rs:331
 msgid ""
 "Copy the screen contents as ANSI escape sequences to a temporary file and "
 "copy the path to the clipboard."
-msgstr ""
+msgstr "Копирај ја содржината на екранот како ANSI-контролни секвенци во "
+"привремена датотека и копирај ја патеката во привремената меморија."
 
 #: crates/rustty-input/src/command.rs:338
 msgid "Copy Screen as ANSI Sequences to Temporary File and Paste Path"
-msgstr ""
+msgstr "Копирај го екранот како ANSI-секвенци во привремена датотека и вметни ја патеката"
 
 #: crates/rustty-input/src/command.rs:339
 msgid ""
 "Copy the screen contents as ANSI escape sequences to a temporary file and "
 "paste the path to the file."
-msgstr ""
+msgstr "Копирај ја содржината на екранот како ANSI-контролни секвенци во "
+"привремена датотека и вметни ја патеката до датотеката."
 
 #: crates/rustty-input/src/command.rs:346
 msgid "Copy Screen as ANSI Sequences to Temporary File and Open"
-msgstr ""
+msgstr "Копирај го екранот како ANSI-секвенци во привремена датотека и отвори ја"
 
 #: crates/rustty-input/src/command.rs:347
 msgid ""
 "Copy the screen contents as ANSI escape sequences to a temporary file and "
 "open it."
-msgstr ""
+msgstr "Копирај ја содржината на екранот како ANSI-контролни секвенци "
+"во привремена датотека и отвори ја."
 
 #: crates/rustty-input/src/command.rs:354
 msgid "Copy Selection to Temporary File and Copy Path"
-msgstr ""
+msgstr "Копирај го избраното во привремена датотека и копирај ја патеката"
 
 #: crates/rustty-input/src/command.rs:355
 msgid ""
 "Copy the selection contents to a temporary file and copy the path to the "
 "clipboard."
-msgstr ""
+msgstr "Копирај ја избраната содржина во привремена датотека и копирај ја "
+"патеката во привремената меморија."
 
 #: crates/rustty-input/src/command.rs:359
 msgid "Copy Selection to Temporary File and Paste Path"
-msgstr ""
+msgstr "Копирај го избраното во привремена датотека и вметни ја патеката"
 
 #: crates/rustty-input/src/command.rs:360
 msgid ""
 "Copy the selection contents to a temporary file and paste the path to the "
 "file."
-msgstr ""
+msgstr "Копирај ја избраната содржина во привремена датотека и вметни ја "
+"патеката до датотеката."
 
 #: crates/rustty-input/src/command.rs:364
 msgid "Copy Selection to Temporary File and Open"
-msgstr ""
+msgstr "Копирај го избраното во привремена датотека и отвори ја"
 
 #: crates/rustty-input/src/command.rs:365
 msgid "Copy the selection contents to a temporary file and open it."
-msgstr ""
+msgstr "Копирај ја избраната содржина во привремена датотека и отвори ја."
 
 #: crates/rustty-input/src/command.rs:373
 msgid "Copy Selection as HTML to Temporary File and Copy Path"
-msgstr ""
+msgstr "Копирај го избраното како HTML во привремена датотека и копирај ја патеката"
 
 #: crates/rustty-input/src/command.rs:374
 msgid ""
 "Copy the selection contents as HTML to a temporary file and copy the path to "
 "the clipboard."
-msgstr ""
+msgstr "Копирај ја избраната содржина како HTML во привремена датотека и "
+"копирај ја патеката во привремената меморија."
 
 #: crates/rustty-input/src/command.rs:381
 msgid "Copy Selection as HTML to Temporary File and Paste Path"
-msgstr ""
+msgstr "Копирај го избраното како HTML во привремена датотека и вметни ја патеката"
 
 #: crates/rustty-input/src/command.rs:382
 msgid ""
 "Copy the selection contents as HTML to a temporary file and paste the path "
 "to the file."
-msgstr ""
+msgstr "Копирај ја избраната содржина како HTML во привремена датотека и "
+"вметни ја патеката до датотеката."
 
 #: crates/rustty-input/src/command.rs:389
 msgid "Copy Selection as HTML to Temporary File and Open"
-msgstr ""
+msgstr "Копирај го избраното како HTML во привремена датотека и отвори ја"
 
 #: crates/rustty-input/src/command.rs:390
 msgid "Copy the selection contents as HTML to a temporary file and open it."
-msgstr ""
+msgstr "Копирај ја избраната содржина како HTML во привремена датотека и отвори ја."
 
 #: crates/rustty-input/src/command.rs:398
 msgid "Copy Selection as ANSI Sequences to Temporary File and Copy Path"
-msgstr ""
+msgstr "Копирај го избраното како ANSI-секвенци во привремена датотека и копирај ја патеката"
 
 #: crates/rustty-input/src/command.rs:399
 msgid ""
 "Copy the selection contents as ANSI escape sequences to a temporary file and "
 "copy the path to the clipboard."
-msgstr ""
+msgstr "Копирај ја избраната содржина како ANSI-контролни секвенци во привремена "
+"датотека и копирај ја патеката во привремената меморија."
 
 #: crates/rustty-input/src/command.rs:406
 msgid "Copy Selection as ANSI Sequences to Temporary File and Paste Path"
-msgstr ""
+msgstr "Копирај го избраното како ANSI-секвенци во привремена датотека "
+"и вметни ја патеката"
 
 #: crates/rustty-input/src/command.rs:407
 msgid ""
 "Copy the selection contents as ANSI escape sequences to a temporary file and "
 "paste the path to the file."
-msgstr ""
+msgstr "Копирај ја избраната содржина како ANSI-контролни секвенци во привремена "
+"датотека и вметни ја патеката до датотеката."
 
 #: crates/rustty-input/src/command.rs:414
 msgid "Copy Selection as ANSI Sequences to Temporary File and Open"
-msgstr ""
+msgstr "Копирај го избраното како ANSI-секвенци во привремена датотека "
+"и отвори ја"
 
 #: crates/rustty-input/src/command.rs:415
 msgid ""
 "Copy the selection contents as ANSI escape sequences to a temporary file and "
 "open it."
-msgstr ""
+msgstr "Копирај ја избраната содржина како ANSI-контролни секвенци во привремена "
+"датотека и отвори ја."
 
 #: crates/rustty-input/src/command.rs:422
 msgid "Open a new window."
-msgstr ""
+msgstr "Отвори нов прозор."
 
 #: crates/rustty-input/src/command.rs:428
 msgid "Open a new tab."
-msgstr ""
+msgstr "Отвори ново јазиче."
 
 #: crates/rustty-input/src/command.rs:434
 msgid "Move Tab Left"
-msgstr ""
+msgstr "Премести го јазичето налево"
 
 #: crates/rustty-input/src/command.rs:435
 msgid "Move the current tab to the left."
-msgstr ""
+msgstr "Премести го тековното јазиче налево."
 
 #: crates/rustty-input/src/command.rs:439
 msgid "Move Tab Right"
-msgstr ""
+msgstr "Премести го јазичето надесно"
 
 #: crates/rustty-input/src/command.rs:440
 msgid "Move the current tab to the right."
-msgstr ""
+msgstr "Премести го тековното јазиче надесно."
 
 #: crates/rustty-input/src/command.rs:446
 msgid "Move Tab to New Window"
-msgstr ""
+msgstr "Премести го јазичето во нов прозор"
 
 #: crates/rustty-input/src/command.rs:447
 msgid "Move the current tab to a new window."
-msgstr ""
+msgstr "Премести го тековното јазиче во нов прозор."
 
 #: crates/rustty-input/src/command.rs:452
 msgid "Toggle Tab Overview"
-msgstr ""
+msgstr "Вклучи или исклучи го прегледот на јазичиња"
 
 #: crates/rustty-input/src/command.rs:453
 msgid "Toggle the tab overview."
-msgstr ""
+msgstr "Вклучи или исклучи го прегледот на јазичиња."
 
 #: crates/rustty-input/src/command.rs:458
 msgid "Change Terminal Title…"
-msgstr ""
+msgstr "Промени наслов на терминал…"
 
 #: crates/rustty-input/src/command.rs:459
 msgid "Prompt for a new title for the current terminal."
-msgstr ""
+msgstr "Побарај нов наслов за тековниот терминал."
 
 #: crates/rustty-input/src/command.rs:465
 msgid "Prompt for a new title for the current tab."
-msgstr ""
+msgstr "Побарај нов наслов за тековното јазиче."
 
 #: crates/rustty-input/src/command.rs:478
 msgid "Split the terminal to the left."
-msgstr ""
+msgstr "Подели го терминалот налево."
 
 #: crates/rustty-input/src/command.rs:483
 msgid "Split the terminal to the right."
-msgstr ""
+msgstr "Подели го терминалот надесно."
 
 #: crates/rustty-input/src/command.rs:488
 msgid "Split the terminal up."
-msgstr ""
+msgstr "Подели го терминалот нагоре."
 
 #: crates/rustty-input/src/command.rs:493
 msgid "Split the terminal down."
-msgstr ""
+msgstr "Подели го терминалот надолу."
 
 #: crates/rustty-input/src/command.rs:500
 msgid "Focus Split: Previous"
-msgstr ""
+msgstr "Фокусирај поделба: претходна"
 
 #: crates/rustty-input/src/command.rs:501
 msgid "Focus the previous split, if any."
-msgstr ""
+msgstr "Фокусирај ја претходната поделба, ако постои."
 
 #: crates/rustty-input/src/command.rs:505
 msgid "Focus Split: Next"
-msgstr ""
+msgstr "Фокусирај поделба: следна"
 
 #: crates/rustty-input/src/command.rs:506
 msgid "Focus the next split, if any."
-msgstr ""
+msgstr "Фокусирај ја следната поделба, ако постои."
 
 #: crates/rustty-input/src/command.rs:510
 msgid "Focus Split: Left"
-msgstr ""
+msgstr "Фокусирај поделба: лево"
 
 #: crates/rustty-input/src/command.rs:511
 msgid "Focus the split to the left, if it exists."
-msgstr ""
+msgstr "Фокусирај ја поделбата одлево, ако постои."
 
 #: crates/rustty-input/src/command.rs:515
 msgid "Focus Split: Right"
-msgstr ""
+msgstr "Фокусирај поделба: десно"
 
 #: crates/rustty-input/src/command.rs:516
 msgid "Focus the split to the right, if it exists."
-msgstr ""
+msgstr "Фокусирај ја поделбата оддесно, ако постои."
 
 #: crates/rustty-input/src/command.rs:520
 msgid "Focus Split: Up"
-msgstr ""
+msgstr "Фокусирај поделба: горе"
 
 #: crates/rustty-input/src/command.rs:521
 msgid "Focus the split above, if it exists."
-msgstr ""
+msgstr "Фокусирај ја поделбата погоре, ако постои."
 
 #: crates/rustty-input/src/command.rs:525
 msgid "Focus Split: Down"
-msgstr ""
+msgstr "Фокусирај поделба: долу"
 
 #: crates/rustty-input/src/command.rs:526
 msgid "Focus the split below, if it exists."
-msgstr ""
+msgstr "Фокусирај ја поделбата подолу, ако постои."
 
 #: crates/rustty-input/src/command.rs:533
 msgid "Focus Window: Previous"
-msgstr ""
+msgstr "Фокусирај прозор: претходен"
 
 #: crates/rustty-input/src/command.rs:534
 msgid "Focus the previous window, if any."
-msgstr ""
+msgstr "Фокусирај го претходниот прозор, ако постои."
 
 #: crates/rustty-input/src/command.rs:538
 msgid "Focus Window: Next"
-msgstr ""
+msgstr "Фокусирај прозор: следен"
 
 #: crates/rustty-input/src/command.rs:539
 msgid "Focus the next window, if any."
-msgstr ""
+msgstr "Фокусирај го следниот прозор, ако постои."
 
 #: crates/rustty-input/src/command.rs:545
 msgid "Toggle Split Zoom"
-msgstr ""
+msgstr "Вклучи или исклучи зумирање на поделбата"
 
 #: crates/rustty-input/src/command.rs:546
 msgid "Toggle the zoom state of the current split."
-msgstr ""
+msgstr "Вклучи или исклучи ја зумираната состојба на тековната поделба."
 
 #: crates/rustty-input/src/command.rs:551
 msgid "Toggle Read-Only Mode"
-msgstr ""
+msgstr "Вклучи или исклучи режим само за читање"
 
 #: crates/rustty-input/src/command.rs:552
 msgid "Toggle read-only mode for the current surface."
-msgstr ""
+msgstr "Вклучи или исклучи го режимот само за читање за тековната површина."
 
 #: crates/rustty-input/src/command.rs:557
 msgid "Equalize Splits"
-msgstr ""
+msgstr "Изедначи ги поделбите"
 
 #: crates/rustty-input/src/command.rs:558
 msgid "Equalize the size of all splits."
-msgstr ""
+msgstr "Изедначи ја големината на сите поделби."
 
 #: crates/rustty-input/src/command.rs:563
 msgid "Reset Window Size"
-msgstr ""
+msgstr "Ресетирај ја големината на прозорецот"
 
 #: crates/rustty-input/src/command.rs:564
 msgid "Reset the window size to the default."
-msgstr ""
+msgstr "Врати ја големината на прозорецот на стандардната."
 
 #: crates/rustty-input/src/command.rs:569
 msgid "Toggle Inspector"
-msgstr ""
+msgstr "Вклучи или исклучи го инспекторот"
 
 #: crates/rustty-input/src/command.rs:570
 msgid "Toggle the inspector."
-msgstr ""
+msgstr "Вклучи или исклучи го инспекторот."
 
 #: crates/rustty-input/src/command.rs:575
 msgid "Show the GTK Inspector"
-msgstr ""
+msgstr "Прикажи го GTK-инспекторот"
 
 #: crates/rustty-input/src/command.rs:576
 msgid "Show the GTK inspector."
-msgstr ""
+msgstr "Прикажи го GTK-инспекторот."
 
 #: crates/rustty-input/src/command.rs:581
 msgid "Show On-Screen Keyboard"
-msgstr ""
+msgstr "Прикажи тастатура на екранот"
 
 #: crates/rustty-input/src/command.rs:582
 msgid "Show the on-screen keyboard if present."
-msgstr ""
+msgstr "Прикажи ја тастатурата на екранот ако е достапна."
 
 #: crates/rustty-input/src/command.rs:588
 msgid "Open Config Using OS editor"
-msgstr ""
+msgstr "Отвори ја конфигурацијата со уредувачот на оперативниот систем"
 
 #: crates/rustty-input/src/command.rs:589
 msgid "Open the config file with the OS's default editor."
-msgstr ""
+msgstr "Отвори ја конфигурациската датотека со стандардниот уредувач на оперативниот систем."
 
 #: crates/rustty-input/src/command.rs:593
 msgid "Open Config in New Terminal Window"
-msgstr ""
+msgstr "Отвори ја конфигурацијата во нов терминал прозор"
 
 #: crates/rustty-input/src/command.rs:594
 msgid "Open the config file in a new window using $EDITOR or $VISUAL."
-msgstr ""
+msgstr "Отвори ја конфигурациската датотека во нов прозор користејќи $EDITOR или $VISUAL."
 
 #: crates/rustty-input/src/command.rs:600
 msgid "Reload Config"
-msgstr ""
+msgstr "Одново вчитај ја конфигурацијата"
 
 #: crates/rustty-input/src/command.rs:601
 msgid "Reload the config file."
-msgstr ""
+msgstr "Одново вчитај ја конфигурациската датотека."
 
 #: crates/rustty-input/src/command.rs:606
 msgid "Close Terminal"
-msgstr ""
+msgstr "Затвори терминал"
 
 #: crates/rustty-input/src/command.rs:607
 msgid "Close the current terminal."
-msgstr ""
+msgstr "Затвори го тековниот терминал."
 
 #: crates/rustty-input/src/command.rs:614
 msgid "Close the current tab."
-msgstr ""
+msgstr "Затвори го тековното јазиче."
 
 #: crates/rustty-input/src/command.rs:618
 msgid "Close Other Tabs"
-msgstr ""
+msgstr "Затвори ги другите јазичиња"
 
 #: crates/rustty-input/src/command.rs:619
 msgid "Close all tabs in this window except the current one."
-msgstr ""
+msgstr "Затвори ги сите јазичиња во овој прозор освен тековното."
 
 #: crates/rustty-input/src/command.rs:623
 msgid "Close Tabs to the Right"
-msgstr ""
+msgstr "Затвори ги јазичињата надесно"
 
 #: crates/rustty-input/src/command.rs:624
 msgid "Close all tabs to the right of the current one."
-msgstr ""
+msgstr "Затвори ги сите јазичиња десно од тековното."
 
 #: crates/rustty-input/src/command.rs:631
 msgid "Close the current window."
-msgstr ""
+msgstr "Затвори го тековниот прозор."
 
 #: crates/rustty-input/src/command.rs:636
 msgid "Close All Windows"
-msgstr ""
+msgstr "Затвори ги сите прозорци"
 
 #: crates/rustty-input/src/command.rs:637
 msgid "Close all windows."
-msgstr ""
+msgstr "Затвори ги сите прозорци."
 
 #: crates/rustty-input/src/command.rs:642
 msgid "Toggle Maximize"
-msgstr ""
+msgstr "Вклучи или исклучи максимизирање"
 
 #: crates/rustty-input/src/command.rs:643
 msgid "Toggle the maximized state of the current window."
-msgstr ""
+msgstr "Вклучи или исклучи ја максимизираната состојба на тековниот прозор."
 
 #: crates/rustty-input/src/command.rs:648
 msgid "Toggle Fullscreen"
-msgstr ""
+msgstr "Вклучи или исклучи цел екран"
 
 #: crates/rustty-input/src/command.rs:649
 msgid "Toggle the fullscreen state of the current window."
-msgstr ""
+msgstr "Вклучи или исклучи го приказот на цел екран за тековниот прозор."
 
 #: crates/rustty-input/src/command.rs:654
 msgid "Toggle Window Decorations"
-msgstr ""
+msgstr "Вклучи или исклучи ги декорациите на прозорецот"
 
 #: crates/rustty-input/src/command.rs:655
 msgid "Toggle the window decorations."
-msgstr ""
+msgstr "Вклучи или исклучи ги декорациите на прозорецот."
 
 #: crates/rustty-input/src/command.rs:660
 msgid "Toggle Float on Top"
-msgstr ""
+msgstr "Вклучи или исклучи лебдење на врвот"
 
 #: crates/rustty-input/src/command.rs:661
 msgid "Toggle the float on top state of the current window."
-msgstr ""
+msgstr "Вклучи или исклучи го лебдењето на тековниот прозор над другите прозорци."
 
 #: crates/rustty-input/src/command.rs:666
 msgid "Toggle Secure Input"
-msgstr ""
+msgstr "Вклучи или исклучи безбеден внес"
 
 #: crates/rustty-input/src/command.rs:667
 msgid "Toggle secure input mode."
-msgstr ""
+msgstr "Вклучи или исклучи го режимот за безбеден внес."
 
 #: crates/rustty-input/src/command.rs:672
 msgid "Toggle Mouse Reporting"
-msgstr ""
+msgstr "Вклучи или исклучи пријавување на глувчето"
 
 #: crates/rustty-input/src/command.rs:673
 msgid "Toggle whether mouse events are reported to terminal applications."
-msgstr ""
+msgstr "Вклучи или исклучи дали настаните од глувчето се пријавуваат на терминал апликациите."
 
 #: crates/rustty-input/src/command.rs:678
 msgid "Toggle Background Opacity"
-msgstr ""
+msgstr "Вклучи или исклучи непроѕирност на заднината"
 
 #: crates/rustty-input/src/command.rs:679
 msgid "Toggle the background opacity of a window that started transparent."
-msgstr ""
+msgstr "Вклучи или исклучи ја непроѕирноста на заднината на прозорец што е отворен како проѕирен."
 
 #: crates/rustty-input/src/command.rs:684
 msgid "Check for Updates"
-msgstr ""
+msgstr "Провери за ажурирања"
 
 #: crates/rustty-input/src/command.rs:685
 msgid "Check for updates to the application."
-msgstr ""
+msgstr "Провери дали има ажурирања за апликацијата."
 
 #: crates/rustty-input/src/command.rs:690
 msgid "Undo"
-msgstr ""
+msgstr "Врати"
 
 #: crates/rustty-input/src/command.rs:691
 msgid "Undo the last action."
-msgstr ""
+msgstr "Врати го последното дејство."
 
 #: crates/rustty-input/src/command.rs:696
 msgid "Redo"
-msgstr ""
+msgstr "Повтори"
 
 #: crates/rustty-input/src/command.rs:697
 msgid "Redo the last undone action."
-msgstr ""
+msgstr "Повтори го последното вратено дејство."
 
 #: crates/rustty-input/src/command.rs:703
 msgid "Quit the application."
-msgstr ""
+msgstr "Прекини ја апликацијата."
 
 #: crates/rustty-input/src/command.rs:708
 msgid "Rustty"
-msgstr ""
+msgstr "Rustty"
 
 #: crates/rustty-input/src/command.rs:709
 msgid "Put a little Rustty in your terminal."
-msgstr ""
+msgstr "Внеси мал Rustty во твојот терминал."

@@ -126,7 +126,7 @@
 #                                    coretext_freetype      -> HARD-FAIL.
 #                                    The reference's build-macos-freetype.
 #                                    BLOCKED off macOS (after the lint).
-#   G-THEMES check_theme_corpus.py   the 606 vendored iterm2 theme files match
+#   G-THEMES check_theme_corpus.py   the 617 vendored iterm2 theme files match
 #                                    a committed per-file SHA-256 manifest
 #                                    -> HARD-FAIL. res_themes.rs only counts
 #                                    them; content drift is invisible to a
@@ -1051,8 +1051,8 @@ GATE_REGISTRY=(
   "G-LZ4|PROGRESS|bash $GATES/check_lz4_byte_exact.sh"
   # G-THEMES (P3-W9 T5) — the vendored iterm2 theme corpus vs a committed
   # per-file SHA-256 manifest. `xtask/src/res_themes.rs` asserts the emitted
-  # count is exactly 606 (20260824-153547-75c93ee re-vendor, phase-6
-  # w6-platform-tail; 602 before it), which catches an add/delete and NOTHING else: content
+  # count is exactly 617 (20260921-150923-0b55a9e re-vendor, phase-7 w10 T3;
+  # 606 before it), which catches an add/delete and NOTHING else: content
   # drift inside an existing theme is invisible to a count, and exactly ONE
   # theme body is ever read by a test. Not hypothetical — the 20260720 re-vendor
   # changed the CONTENT of four `Catppuccin *` files with the count unmoved.
