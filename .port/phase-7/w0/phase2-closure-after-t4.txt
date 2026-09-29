@@ -1,0 +1,19 @@
+PHASE-2 CLOSURE GATE (G-P2)
+  open workstreams : WS19 (+ Phase 3)
+  closed workstreams: P3-W0, P3-W1, P3-W10, P3-W11, P3-W12, P3-W2, P3-W3, P3-W4, P3-W5, P3-W6, P3-W7, P3-W8, P3-W9, WS1, WS10, WS11, WS12, WS13, WS14, WS15, WS16, WS17, WS18, WS2, WS20, WS3, WS4, WS5, WS6, WS7, WS8, WS9
+  .port/phase-2/DEFERRALS.md: 62 open-claim entries examined, 0 violation(s)
+    ENVIRONMENT-BLOCKED V2: a Linux box with a real GPU. The project's only Linux machine is a
+    ENVIRONMENT-BLOCKED V8: a Windows host (for `iocp`) and a WASI runtime host (for
+    ENVIRONMENT-BLOCKED V10: a Windows host with the MSVC toolchain (`zlib-sys`'s vendored C
+    ENVIRONMENT-BLOCKED V11: a stock Windows install (the discoverer scans `%SYSTEMROOT%\Fonts`
+    ENVIRONMENT-BLOCKED V12: a Linux host running inside a flatpak sandbox (or a container
+    ENVIRONMENT-BLOCKED V19: a macOS 27 host (beta or release) — **for `2104e0749` and
+    ENVIRONMENT-BLOCKED V23: a FreeBSD >= 13 host (amd64 or arm64) with the GTK4 stack from ports. The
+    ENVIRONMENT-BLOCKED V24: a Nix install (multi-user Nix needs root to create `/nix`) and snapd (a
+    ENVIRONMENT-BLOCKED V25: GitHub-hosted runners (and, for the release jobs, the maintainer secrets and
+    ENVIRONMENT-BLOCKED V26: run time, not a missing machine: the user asked the tail wave to wrap up without long runs
+  .port/phase-2/VERIFICATION_DEBT.md: 16 open-claim entries examined, 0 violation(s)
+  .port/phase-2/MIRI_EXCEPTIONS.md: 1 open-claim entry examined, 0 violation(s)
+  .port/phase-2/INTEGRATION_PARITY.md: 18 open-claim entries examined, 0 violation(s)
+
+PHASE-2 CLOSURE GATE: GREEN — 97 open-claim entries examined; every one is struck, reclassified, or owned by an OPEN workstream.

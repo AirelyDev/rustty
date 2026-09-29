@@ -1,0 +1,2 @@
+G-PARITY: 497 finding(s) — 403 closed, 94 waived, 0 open
+GREEN: every audited parity finding is closed or waived-with-reason.

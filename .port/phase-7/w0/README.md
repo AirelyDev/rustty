@@ -77,3 +77,94 @@ A5 `sh check_rustty_vt_headers.sh`.
 | `*-after-at-12752b2ac.txt` | the same set, plus G9 and G-ORACLE-SH-SELF |
 | `g-census-arrival-at-12752b2ac.txt` | G-CENSUS at the new pin before `CENSUS_DELTA.md` moved (RED by design) |
 | `g9-before-regen-at-12752b2ac.txt` | G9 at the new pin against the old frozen surface (GREEN 677/677) |
+
+## Phase-start records and gate maps (`P7-W0 T4`)
+
+### Gate maps (Step 1: negative controls)
+
+- **G1b MAP rows** (`check_test_counts.py`): `datastruct_untouched_pool`,
+  `datastruct_comptime_int_set`, `datastruct_wasm_page_pool`, `lib_parse_int`, `lib_types`,
+  `apprt_gtk_scale`, `font_nerd_font_attributes`, `snapshot_terminal`; `zlib.zig` added to the
+  `wuffs` row. A Rust file that does not exist yet is named by a one-file glob, so the row counts
+  rust 0 instead of tripping the stale-mapping arm. G1b now reads (`g1b-after-t4-maps.txt`):
+
+  | row | zig | rust | verdict |
+  |---|---|---|---|
+  | `input_key_encode` | 104 | 96 | RED (arrival) |
+  | `datastruct_untouched_pool` | 5 | 0 | **RED** (negative control) |
+  | `datastruct_comptime_int_set` | 5 | 0 | **RED** |
+  | `lib_parse_int` | 1 | 0 | **RED** |
+  | `lib_types` | 1 | 0 | **RED** (`String.init empty output`, `dd2edd760`) |
+  | `apprt_gtk_scale` | 7 | 0 | **RED** |
+  | `font_nerd_font_attributes` | 1 | 0 | **RED** (`Constraints lookup table`, `a3f3331d4`) |
+  | `datastruct_wasm_page_pool` | 1 | 1 | ok |
+  | `snapshot_terminal` | 12 | 14 | ok (by slack; 3 changed bodies, `R5-upstream-tests.tsv`) |
+  | `wuffs` | 8 → 13 | 20 | ok (by slack; the 5 `zlib.zig` names are the meter) |
+
+- **G3b `crate_map`** (`.port/phase-0/inventory/tests-summary.json`, `_amendments` row
+  `P7-W0-T4`): `datastruct/{comptime_int_set,untouched_pool,wasm_page_pool}.zig`,
+  `lib/parse_int.zig`, `apprt/gtk/scale.zig`, `terminal/kitty/windows.zig`,
+  `terminal/snapshot/terminal.zig`, each with `test_blocks` 0 so G1's frozen 3234 contract does not
+  move (G1 and G2 re-run GREEN, D3 PASS). The new files' missing comments:
+  `untouched_pool` 55, `comptime_int_set` 36, `wasm_page_pool` 4, `parse_int` 10,
+  `kitty/windows` 32, `snapshot/terminal` 1. `lib/types.zig` and `font/nerd_font_attributes.zig`
+  were already mapped. Not added (outside this task's list; see the task report):
+  `apprt/gtk/class/{Overrides,render_surface}.zig`, `font/nerd_font_tables.zig`,
+  `renderer/Dmabuf.zig`.
+
+### F1 resolved
+
+The 8 stale `COMMENT-NOT-CARRIED.tsv` rows are re-anchored at `12752b2ac`: `lib_vt.zig`
+505/508/509/510/511/513 → 506/509/510/511/512/514, `application.zig:3486` → `:3348`,
+`x11.zig:486` → `:482`, with the gag-prose evidence record in `.port/phase-3/NON_PORTS.md` and the
+phase-4 `std_options_debug_io` row updated. `--not-carried-check`: GREEN, 37 rows
+(`g3b-not-carried-after-t4.txt`).
+
+### F2 corrected: nothing to restore
+
+The sentence F2 names ("We hold a the draw mutex to prevent changes to any data we access while
+we're in the middle of drawing.") was deleted upstream by `72cf50855` itself, which replaced it
+with "Everything that touches draw state happens under the draw mutex. …" (`generic.zig:1682-1685`
+at `12752b2ac`). `P7-W0 T1` ported that end state (`generic.rs` `draw_frame_raw`). The pre-advance
+`--strict` run compared a post-`72cf50855` port against the `20abdb50a` oracle, so the 2 missing
+sentences were an artifact of the order (fix before advance). At `12752b2ac`, G3b `--strict
+--crate renderer --ref-files renderer/generic.zig` lists no draw-mutex or display-link sentence as
+missing (41 missing, all from other range commits). Restoring the old comment would contradict
+the reference, so it was not restored.
+
+### Records (Step 2)
+
+- UD statuses (R5 §1.1, DECISIONS M1/R2): UD150 fixed upstream in `5ca09acf6` (docs row
+  removed); UD140, UD141, UD31, UD40, UD200 partly fixed (docs rows reworded to the remaining
+  difference where the entry has one); UD32 obsolete upstream.
+- Re-anchors (DECISIONS D4): 76 `reference:` fields remapped from `20abdb50a` to `12752b2ac` by a
+  content line map of each cited changed file, plus hand re-anchors of UD205 (pin anchors were 12
+  lines off), UD206 (the pin text had the declaration and call swapped), UD250, UD300 (sibling
+  text corrected), UD310, UD313, UD315 and UD343, and the seven status UDs. Entries whose cited
+  code did not move stay stamped `at 20abdb50a`.
+- NEW-FINDINGS **N435** (search `unreachable!()`, `06178eeaa`, P7-W5 T4), **N436** (search tick
+  use-after-free, `b1c264163`, P7-W2 T1), **N437** (render-thread whole-`Renderer` references
+  overlapping the main thread's raw sync draw, P7-W7 T2), all OPEN.
+- NON_PORTS: phase-4 TinyIo row extended to `src/lib/tinyio/{posix,windows,test}.zig` with the
+  reopen-trigger re-read; a phase-3 "Phase 7 start" section (the tinyio cross-reference that
+  G-SYMS/G-FILES need, `passthrough.glsl`, `7adbb5160`, `7644e6d62`, translate-c/cImport, the
+  Zig-package and Nix renderings, the GTK build cache, VOUCHED).
+- LEDGER `oracle` column re-anchored for the 38 WAIVED rows of R5 §2.2 (34 moved; S37-F1, S46-F5,
+  S94-F4, S207-F2 unchanged). The column has no pin stamp; these 38 now read at `12752b2ac`.
+- Closure README "Still open": the stale N311 line dropped; N435-N437 listed.
+
+### Gates after `P7-W0 T4`
+
+| gate | arrival (`*-after-at-12752b2ac.txt`) | after T4 |
+|---|---|---|
+| G1b | RED, 1 row | RED, 7 rows (above; the 6 new rows are the honest meter) |
+| G3b (default) | RED, 610 missing + 8 NOT-CARRIED-INVALID | RED, **748** missing, 0 NOT-CARRIED-INVALID: vt 470 (+33: `kitty/windows` 32, `snapshot/terminal` 1), datastruct 95 (new), vt-c 60, core 29, bench 27, os 17, lib 15 (+10: `parse_int`), config 13, font 12, apprt-api 5, termio 5 (`g3b-after-t4.txt`) |
+| G3b `--not-carried-check` | RED (8 stale rows) | GREEN, 37 rows |
+| G-TESTS | RED, 4211 blocks, 94 unexplained | RED, 4188 blocks, 76 unexplained (the 18 TinyIo gaps gone) |
+| G-SYMS | RED, 2922, 57 unexplained | RED, 2890, 31 unexplained (the 26 TinyIo gaps gone) |
+| G-FILES | RED, 557, 8 MISSING, 14 NON-PORT | RED, 557, 8 MISSING, 18 NON-PORT (`TinyIo.zig` + the 3 tinyio files) |
+| G-UDDOCS | PASS (116 docs rows) | PASS (115 docs rows; UD150's removed) |
+| G-PARITY | GREEN | GREEN, 497: 403 closed, 94 waived, 0 open |
+| phase-2 closure | GREEN | GREEN, 97 open-claim entries |
+
+Evidence files: `*-after-t4*.txt` in this directory.

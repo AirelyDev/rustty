@@ -1,0 +1,11 @@
+MISSING  src/apprt/gtk/class/Overrides.zig                            zig=102
+MISSING  src/apprt/gtk/class/render_surface.zig                       zig=393
+MISSING  src/apprt/gtk/scale.zig                                      zig=163
+MISSING  src/datastruct/comptime_int_set.zig                          zig=152
+MISSING  src/datastruct/untouched_pool.zig                            zig=256
+MISSING  src/font/nerd_font_tables.zig                                zig=2362
+MISSING  src/lib/parse_int.zig                                        zig=75
+MISSING  src/renderer/Dmabuf.zig                                      zig=61
+
+AUDIT: 557 oracle files examined (8 MISSING, 0 THIN, 18 recorded NON-PORT, 531 OK)
+RED: an oracle file has no counterpart and no NON_PORTS.md entry.
