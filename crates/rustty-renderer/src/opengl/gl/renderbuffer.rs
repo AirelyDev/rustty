@@ -11,6 +11,7 @@
 use gl::types::{GLenum, GLint, GLsizei, GLuint};
 
 use super::errors;
+use super::glad;
 use super::texture;
 
 /// PORTS: `Renderbuffer.zig:1-10` — `const Renderbuffer = @This(); … id: c.GLuint`.
@@ -44,7 +45,7 @@ impl Renderbuffer {
         let mut rbo: GLuint = 0;
         // SAFETY: `glGenRenderbuffers` writes exactly `n` (= 1) GLuints through
         // the pointer; `&mut rbo` is one live, aligned GLuint.
-        unsafe { gl::GenRenderbuffers(1, &mut rbo) };
+        glad::context(|gl| unsafe { gl.GenRenderbuffers(1, &mut rbo) });
         Ok(Renderbuffer { id: rbo })
     }
 
@@ -62,7 +63,7 @@ impl Renderbuffer {
         // SAFETY: `glDeleteRenderbuffers` reads exactly `n` (= 1) GLuints through
         // the pointer; `&self.id` is one live, aligned GLuint. Deleting an
         // already-deleted or unknown name is silently ignored by GL, not UB.
-        unsafe { gl::DeleteRenderbuffers(1, &self.id) };
+        glad::context(|gl| unsafe { gl.DeleteRenderbuffers(1, &self.id) });
     }
 
     /// PORTS: `Renderbuffer.zig:23-29`.
@@ -92,9 +93,9 @@ impl Renderbuffer {
         // SAFETY: `GL_RENDERBUFFER_BINDING` is a single-valued query, so
         // `glGetIntegerv` writes exactly one GLint through the pointer; `&mut
         // current` is one live, aligned GLint.
-        unsafe { gl::GetIntegerv(gl::RENDERBUFFER_BINDING, &mut current) };
+        glad::context(|gl| unsafe { gl.GetIntegerv(gl::RENDERBUFFER_BINDING, &mut current) });
         // SAFETY: binds a name this `Renderbuffer` owns to the only legal target.
-        unsafe { gl::BindRenderbuffer(gl::RENDERBUFFER, self.id) };
+        glad::context(|gl| unsafe { gl.BindRenderbuffer(gl::RENDERBUFFER, self.id) });
         // `@intCast(current)`: GLint -> GLuint, trapping on a negative in Zig.
         // `try_from` panics identically. A GL object name is never negative.
         let previous =
@@ -127,7 +128,7 @@ impl Binding {
         // SAFETY: rebinds whatever name was bound before. If that name has since
         // been deleted, GL raises GL_INVALID_OPERATION (which the reference does
         // not collect here) — never UB.
-        unsafe { gl::BindRenderbuffer(gl::RENDERBUFFER, self.previous) };
+        glad::context(|gl| unsafe { gl.BindRenderbuffer(gl::RENDERBUFFER, self.previous) });
     }
 
     /// PORTS: `Renderbuffer.zig:41-55`.
@@ -169,7 +170,9 @@ impl Binding {
     ) -> Result<(), errors::Error> {
         // SAFETY: allocates storage for the bound renderbuffer. An unsupported
         // format or an out-of-range size is a defined GL error, collected below.
-        unsafe { gl::RenderbufferStorage(gl::RENDERBUFFER, format.0 as GLenum, width, height) };
+        glad::context(|gl| unsafe {
+            gl.RenderbufferStorage(gl::RENDERBUFFER, format.0 as GLenum, width, height)
+        });
         errors::get_error()
     }
 }

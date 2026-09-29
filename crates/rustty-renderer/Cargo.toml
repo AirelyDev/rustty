@@ -263,7 +263,8 @@ block2 = { version = "0.6" }
 # `.opengl` backend, and FreeBSD is a real windowed target at the pin
 # (`apprt/runtime.zig:18`). Both crates below are FreeBSD-clean with no version or
 # feature change: `gl` is generated bindings with no link-time dependency at all
-# (loaded through `gl::load_with`), and `khronos-egl`'s `dynamic` feature dlopen's
+# (its constants and types only; the entry points are loaded per thread through
+# `opengl::gl::glad`), and `khronos-egl`'s `dynamic` feature dlopen's
 # `libEGL.so.1` through `libloading` (full unix support; FreeBSD ships libEGL via
 # mesa/libglvnd), so neither names a Linux-only symbol or library.
 # Task W-2 (N342): and Windows, the third `.opengl` target (`backend.zig:20-21`). Neither
@@ -271,9 +272,11 @@ block2 = { version = "0.6" }
 # embedded runtime's `surfaceInit` is a no-op, and the offscreen test context skips
 # through `require_gl_or_skip` like any host without EGL).
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))'.dependencies]
-# `gl`: raw `gl_generator`-produced FFI bindings loaded through an explicit
-# `gl::load_with(|s| …)` closure — Rust's analogue of ghostty's own glad
-# function-pointer context (`pkg/opengl/glad.zig`, `gl.c.gl*` / `gl.c.GL_*`).
+# `gl`: raw `gl_generator`-produced FFI bindings — Rust's analogue of ghostty's
+# `gl.c.GL_*` constants and `gl.c.GL*` types. Its process-global function table is
+# NOT loaded any more (P7-W7 T1, DECISIONS B9): the entry points go through the
+# per-thread struct table `opengl::gl::glad` generates in `build.rs` (ghostty's
+# `pkg/opengl/glad.zig` `threadlocal var context`).
 # Deliberately NOT `glow` (its `Context` trait has a foreign method vocabulary, so
 # the `renderer/opengl/*.zig` leaves could not port method-for-method) and NOT
 # `epoxy-sys` (libepoxy is the right loader for L5's windowed GLArea path, where
@@ -286,6 +289,17 @@ gl = "0.14"
 # `EGL/egl.h` at build time is unusable. `dynamic` also means a machine with no
 # EGL at all fails at `init()` (a clean test skip) instead of failing to link.
 khronos-egl = { version = "6", features = ["dynamic"] }
+
+[build-dependencies]
+# `gl_generator`: generates the per-render-thread OpenGL function table
+# (`StructGenerator`, a `Gl` struct of function pointers) that replaces the `gl`
+# crate's process-global table (P7-W7 T1, DECISIONS B9: ghostty's glad context is
+# a `threadlocal var`, loaded in `threadEnter` and unloaded in `threadExit`). The
+# same generator, at the same version, the `gl` crate already builds with (it is
+# `gl`'s own build-dependency), so no new crate enters the graph. Unconditional
+# because `build.rs` is compiled for the HOST: it only RUNS the generator for the
+# `.opengl` targets (Linux/FreeBSD/Windows), matching `resolve_glsl_includes`.
+gl_generator = "0.14"
 
 [dev-dependencies]
 # Pure-Rust PNG encoder — generates the small solid-color background-image fixture

@@ -13,6 +13,7 @@ use std::ffi::CStr;
 use gl::types::{GLint, GLuint};
 
 use super::errors;
+use super::glad;
 
 /// Returns the number of extensions.
 //
@@ -34,7 +35,7 @@ pub fn len() -> Result<u32, errors::Error> {
     // SAFETY: `GL_NUM_EXTENSIONS` is a single-valued query, so `glGetIntegerv`
     // writes exactly one GLint through the pointer; `&mut n` is one live, aligned
     // GLint.
-    unsafe { gl::GetIntegerv(gl::NUM_EXTENSIONS, &mut n) };
+    glad::context(|gl| unsafe { gl.GetIntegerv(gl::NUM_EXTENSIONS, &mut n) });
     errors::get_error()?;
     // `@intCast(n)`: GLint -> u32, trapping on a negative in Zig. `try_from`
     // panics identically. A count is never negative.
@@ -126,7 +127,7 @@ impl Iterator {
         // NUL-terminated string owned by the driver. The bounds check above is what
         // makes the index in-range; an out-of-range one would return null and raise
         // GL_INVALID_VALUE, which is why the `getError` below precedes any read.
-        let res = unsafe { gl::GetStringi(gl::EXTENSIONS, self.i) };
+        let res = glad::context(|gl| unsafe { gl.GetStringi(gl::EXTENSIONS, self.i) });
         errors::get_error()?;
         self.i += 1;
         // SAFETY: `res` is a valid, NUL-terminated, driver-owned C string — the

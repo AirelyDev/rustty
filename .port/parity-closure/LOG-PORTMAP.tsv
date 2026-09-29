@@ -182,6 +182,7 @@ src/renderer/metal/Pipeline.zig	crates/rustty-renderer/src/metal/pipeline.rs	0	0
 src/renderer/metal/buffer.zig	crates/rustty-renderer/src/metal/buffer.rs	0	0	N15: this file was OUTSIDE the portmap until 2026-09-10 — the portmap was seeded from the audit's LOG rows and inherited its blind spots, so no row names it. Measured, not adjudicated: deficit 2. Task S-1c (N310): :98 and :155 declared unrepresentable-state in LOG-ABSENT-SITES.tsv.
 src/renderer/metal/shaders.zig	crates/rustty-renderer/src/metal/shaders.rs	0	0	
 src/renderer/opengl/Frame.zig	crates/rustty-renderer/src/generic/linux_impl.rs	0	0	task tail-s1b: 1/1: Frame.zig:65's one site is inlined into generic/linux_impl.rs `opengl_frame_completed`, owned here in LOG-ATTRIBUTION.tsv (linux_impl.rs's default owner is src/renderer/generic.zig). Before, this arm was credited with all of linux_impl.rs (25 against 1).
+src/renderer/opengl/Target.zig	crates/rustty-renderer/src/opengl/target.rs	0	0	P7-W7 T1 (at 12752b2ac): 4/4 - `render framebuffer incomplete` and `export framebuffer incomplete` (init_pair, one call per pair), `Error re-enabling GL_FRAMEBUFFER_SRGB` (export_dmabuf's `defer`) and `DMABUF has too many planes` (export_dmabuf_image). The pin's renderbuffer-backed Target.zig had no log sites.
 src/renderer/opengl/shaders.zig	crates/rustty-renderer/src/opengl/shaders.rs	0	0	
 src/renderer/shadertoy.zig	crates/rustty-renderer/src/shadertoy.rs	0	0	
 src/simd/base64.zig	crates/rustty-simd/src/base64.rs	0	0	task-14e-2: closes S120-F2 — the 1 site is live.

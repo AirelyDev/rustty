@@ -915,8 +915,8 @@ impl Renderer {
     /// create GL objects against that current context. Core guarantees this ordering:
     /// `gl_area.make_current()` → `surfaceInit` → `init_windowed`.
     ///
-    /// Because `api` owns no context, the resulting `Renderer` eglTerminates nothing
-    /// on `deinit` — this is the GL-ATTACH teardown-double-free fix.
+    /// Because `api` owns no context, the resulting `Renderer` destroys nothing of
+    /// GDK's on `deinit` — this is the GL-ATTACH teardown-double-free fix.
     pub fn init_windowed(alloc: Global, options: Options) -> Result<Self, Error> {
         // Zig: var api = try GraphicsAPI.init(alloc, options); the OpenGL reference
         // `init` creates no context (OpenGL.zig:51-56) — GDK owns it.
@@ -1130,7 +1130,7 @@ impl Renderer {
         self.deinit_shaders();
 
         // self.api.deinit(); (827) — the owned `OpenGL` (its `OffscreenContext`)
-        // terminates EGL on `Drop` when the `Renderer` value drops. A `&mut self`
+        // destroys its EGL context on `Drop` when the `Renderer` value drops. A `&mut self`
         // `deinit` cannot move `api` out; documented. (`OpenGL::deinit` consumes
         // `self`, unreachable here — the field drop achieves the same.)
         //
@@ -1231,12 +1231,12 @@ impl Renderer {
     //
     // GL-ATTACH (LANDED): this is the WINDOWED GL-loader hook. The GTK apprt calls it
     // (via core's `Surface::init`) right after `gl_area.make_current()`, so GDK's
-    // GLArea context IS current here; `sys::prepare_context_windowed` binds the `gl`
-    // crate's entry points to it (via `eglGetProcAddress`) + runs the reference's
-    // version gate / debug-output / GL_FRAMEBUFFER_SRGB setup. It is a type-level fn
-    // (no self / no api yet — the api is built by `init_windowed`, AFTER this), so it
-    // loads the process-global GL dispatch that `init_windowed`'s `SwapChain::init`
-    // then uses. The OFFSCREEN golden never reaches here (it calls `Renderer::init`
+    // GLArea context IS current here; `sys::prepare_context_windowed` loads the
+    // calling thread's GL function table (`opengl::gl::glad`, via `eglGetProcAddress`)
+    // + runs the reference's version gate / debug-output / GL_FRAMEBUFFER_SRGB setup.
+    // It is a type-level fn (no self / no api yet — the api is built by
+    // `init_windowed`, AFTER this), so it loads the table of the GTK main thread,
+    // which `init_windowed`'s `SwapChain::init` and every app-thread draw then use. The OFFSCREEN golden never reaches here (it calls `Renderer::init`
     // directly, whose owned `OffscreenContext` self-loads GL) — see `init` vs
     // `init_windowed`.
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -5432,9 +5432,8 @@ mod tests {
     /// driver here; runs for real under `LIBGL_ALWAYS_SOFTWARE=1` → llvmpipe 4.5).
     ///
     /// Holds the process-wide [`test_support::gl_lock`] for the whole context
-    /// lifetime (the `eglTerminate`-on-a-shared-display + `gl::load_with`-global
-    /// hazards), `_guard` declared FIRST so it drops LAST (after `deinit`
-    /// terminates the context), matching Task 8's field-order contract.
+    /// lifetime (see its docs), `_guard` declared FIRST so it drops LAST (after
+    /// `deinit` destroys the context), matching Task 8's field-order contract.
     #[test]
     fn linux_opengl_renderer_init_then_deinit_round_trips() {
         let _guard = test_support::gl_lock();
@@ -5781,10 +5780,9 @@ mod tests {
     //
     // GL-CONTEXT SKIP (Task-1 OPEN RISK): if the host cannot stand up a 4.3-core
     // context, `init_offscreen` fails ⇒ clean skip (returns None), mirroring the Metal
-    // "no device ⇒ skip" precedent. The probe context is dropped (its `eglTerminate`
-    // fires) BEFORE `Renderer::init` stands up its own; the CALLER holds
-    // `test_support::gl_lock`, so the terminate/re-init is SEQUENTIAL — the parallel
-    // 2nd-live-context hazard the lock guards against never arises.
+    // "no device ⇒ skip" precedent. The probe context is dropped BEFORE
+    // `Renderer::init` stands up its own; the CALLER holds `test_support::gl_lock`,
+    // so the two are SEQUENTIAL.
     fn golden_renderer(cols: CellCountInt, rows: CellCountInt) -> Option<Renderer> {
         if let Err(e) = OpenGL::init_offscreen(AlphaBlending::Native, 1, 1) {
             // W8-03 strict mode: this ONE arm covers every golden test — they
@@ -6108,8 +6106,8 @@ mod tests {
     /// this host); CLEAN-SKIPS (never panics, never fabricates a golden) on the
     /// default virgl driver, which exposes no desktop core profile (Task-1 finding).
     /// Holds the process-wide `test_support::gl_lock` for the whole context lifetime
-    /// (the `eglTerminate`-shared-display + `gl::load_with`-global hazards); `_guard`
-    /// declared FIRST so it drops LAST (after `deinit` terminates the context).
+    /// (see its docs); `_guard` declared FIRST so it drops LAST (after `deinit`
+    /// destroys the context).
     #[test]
     fn golden_renders_cursor_fg_bg() {
         let _guard = test_support::gl_lock();
@@ -6779,11 +6777,26 @@ mod tests {
         // `read_rgba` returns (R, G, B, A). The image is blue-dominant
         // (0x30,0x60,0xC0): B ≈ 0xC0 (>128), R ≈ 0x30 (<128), B > R, opaque.
         // Structural thresholds, never a byte-diff against the Metal golden.
-        let (br, _bg2, bb, ba) = bg;
+        let (br, bg2, bb, ba) = bg;
         assert!(bb > 128, "bg-image blue channel too low (B={bb})");
         assert!(br < 128, "bg-image red channel too high (R={br})");
         assert!(bb > br, "bg-image not blue-dominant (B={bb} R={br})");
         assert!(ba > 128, "bg-image not opaque (A={ba})");
+
+        // UD354 (DECISIONS M5): under `native` blending the image's sRGB bytes
+        // must reach the target unchanged (within rounding), not encoded a second
+        // time. The reference's always-sRGB render target turns #3060C0 into
+        // #78A5E1, which the structural checks above still accept.
+        for (got, want, channel) in [
+            (br, IMG_RGB[0], 'R'),
+            (bg2, IMG_RGB[1], 'G'),
+            (bb, IMG_RGB[2], 'B'),
+        ] {
+            assert!(
+                got.abs_diff(want) <= 2,
+                "bg-image {channel}={got} is not the image's {want} (sRGB encoded twice?)"
+            );
+        }
 
         // The negative control is dark (black bg_color) — proves the bg-image step
         // (not the bg_color fallback) produced the color above.

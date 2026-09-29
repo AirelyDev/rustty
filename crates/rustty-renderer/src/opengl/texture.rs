@@ -82,12 +82,12 @@ impl Texture {
     //     {
     //         const texbind = tex.bind(opts.target) catch return error.OpenGLFailed;
     //         defer texbind.unbind();
-    //         texbind.parameter(.WrapS, @intFromEnum(opts.wrap_s)) catch return error.OpenGLFailed;
-    //         texbind.parameter(.WrapT, @intFromEnum(opts.wrap_t)) catch return error.OpenGLFailed;
-    //         texbind.parameter(.MinFilter, @intFromEnum(opts.min_filter)) catch return error.OpenGLFailed;
-    //         texbind.parameter(.MagFilter, @intFromEnum(opts.mag_filter)) catch return error.OpenGLFailed;
+    //         texbind.parameter(.wrap_s, opts.wrap_s) catch return error.OpenGLFailed;
+    //         texbind.parameter(.wrap_t, opts.wrap_t) catch return error.OpenGLFailed;
+    //         texbind.parameter(.min_filter, opts.min_filter) catch return error.OpenGLFailed;
+    //         texbind.parameter(.mag_filter, opts.mag_filter) catch return error.OpenGLFailed;
     //         texbind.image2D(0, opts.internal_format, @intCast(width), @intCast(height),
-    //             opts.format, .UnsignedByte, if (data) |d| @ptrCast(d.ptr) else null) catch return error.OpenGLFailed;
+    //             opts.format, .unsigned_byte, if (data) |d| @ptrCast(d.ptr) else null) catch return error.OpenGLFailed;
     //     }
     //     return .{ .texture = tex, .width = width, .height = height,
     //               .format = opts.format, .target = opts.target };
@@ -101,9 +101,9 @@ impl Texture {
     // below reproduces both scopes and that ordering (unbind before destroy). A
     // `bind` failure runs only the `errdefer destroy`.
     //
-    // PORT NOTE (`@intFromEnum(opts.wrap_s)` etc.): the `gl` leaf's `Wrap`/
-    // `MinFilter`/`MagFilter` are `#[repr(i32)]`, so `@intFromEnum` is `as GLint`,
-    // exactly the `c.GLint` arm `gl::texture::Binding::parameter` accepts.
+    // PORT NOTE (`adf161473`): the reference passes the typed `Wrap`/`MinFilter`/
+    // `MagFilter` straight through (`value: name.Type()`), and so does this;
+    // `gl::texture::Binding::parameter` does the `@intFromEnum`.
     pub fn init(
         opts: Options,
         width: usize,
@@ -118,16 +118,16 @@ impl Texture {
 
             let inner = (|| -> Result<(), Error> {
                 texbind
-                    .parameter(Parameter::WrapS, opts.wrap_s as GLint)
+                    .parameter(Parameter::WrapS, opts.wrap_s)
                     .map_err(|_| Error::OpenGLFailed)?;
                 texbind
-                    .parameter(Parameter::WrapT, opts.wrap_t as GLint)
+                    .parameter(Parameter::WrapT, opts.wrap_t)
                     .map_err(|_| Error::OpenGLFailed)?;
                 texbind
-                    .parameter(Parameter::MinFilter, opts.min_filter as GLint)
+                    .parameter(Parameter::MinFilter, opts.min_filter)
                     .map_err(|_| Error::OpenGLFailed)?;
                 texbind
-                    .parameter(Parameter::MagFilter, opts.mag_filter as GLint)
+                    .parameter(Parameter::MagFilter, opts.mag_filter)
                     .map_err(|_| Error::OpenGLFailed)?;
 
                 // `if (data) |d| @ptrCast(d.ptr) else null`.
@@ -200,7 +200,7 @@ impl Texture {
     //     const texbind = self.texture.bind(self.target) catch return error.OpenGLFailed;
     //     defer texbind.unbind();
     //     texbind.subImage2D(0, @intCast(x), @intCast(y), @intCast(width), @intCast(height),
-    //         self.format, .UnsignedByte, data.ptr) catch return error.OpenGLFailed;
+    //         self.format, .unsigned_byte, data.ptr) catch return error.OpenGLFailed;
     // }
     // ```
     //

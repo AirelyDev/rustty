@@ -36,6 +36,7 @@ use std::fmt;
 
 use gl::types::{GLchar, GLint, GLsizei, GLuint};
 
+use super::glad;
 use super::shader::{self, display_info_log, Shader};
 use super::{errors, log_debug, log_err};
 
@@ -143,7 +144,7 @@ impl Binding {
     pub fn unbind(self) {
         // SAFETY: `glUseProgram(0)` unbinds whatever program is current and always
         // succeeds outside of a transform-feedback block.
-        unsafe { gl::UseProgram(0) };
+        glad::context(|gl| unsafe { gl.UseProgram(0) });
     }
 }
 
@@ -173,7 +174,7 @@ impl Program {
     pub fn create() -> Result<Self, errors::Error> {
         // SAFETY: `glCreateProgram` takes no arguments and returns a name, or 0 on
         // failure (handled below).
-        let id = unsafe { gl::CreateProgram() };
+        let id = glad::context(|gl| unsafe { gl.CreateProgram() });
         if id == 0 {
             errors::must_error()?;
         }
@@ -297,7 +298,7 @@ impl Program {
         // SAFETY: deletes a name this `Program` owns. Deleting an already-deleted
         // or unknown name is silently ignored by GL, not UB. Any shader still
         // attached is freed with it.
-        unsafe { gl::DeleteProgram(self.id) };
+        glad::context(|gl| unsafe { gl.DeleteProgram(self.id) });
         log_debug!("program destroyed id={}", self.id);
     }
 
@@ -315,7 +316,7 @@ impl Program {
         // SAFETY: attaches a name `s` owns to a name this `Program` owns.
         // Attaching twice, or a non-shader name, is a defined GL error, collected
         // below.
-        unsafe { gl::AttachShader(self.id, s.id) };
+        glad::context(|gl| unsafe { gl.AttachShader(self.id, s.id) });
         errors::get_error()
     }
 
@@ -350,13 +351,13 @@ impl Program {
     pub fn link(self) -> Result<(), Error> {
         // SAFETY: links a name this `Program` owns. A link failure is reported via
         // GL_LINK_STATUS, not as a GL error.
-        unsafe { gl::LinkProgram(self.id) };
+        glad::context(|gl| unsafe { gl.LinkProgram(self.id) });
 
         // Check if linking succeeded
         let mut success: GLint = 0;
         // SAFETY: `GL_LINK_STATUS` writes exactly one GLint through the pointer;
         // `&mut success` is one live, aligned GLint.
-        unsafe { gl::GetProgramiv(self.id, gl::LINK_STATUS, &mut success) };
+        glad::context(|gl| unsafe { gl.GetProgramiv(self.id, gl::LINK_STATUS, &mut success) });
         if success == GLint::from(gl::TRUE) {
             log_debug!("program linked id={}", self.id);
             return Ok(());
@@ -391,7 +392,7 @@ impl Program {
     pub fn use_(self) -> Result<Binding, errors::Error> {
         // SAFETY: makes a name this `Program` owns current. An unlinked or unknown
         // name is a defined GL error, collected below.
-        unsafe { gl::UseProgram(self.id) };
+        glad::context(|gl| unsafe { gl.UseProgram(self.id) });
         errors::get_error()?;
         Ok(Binding)
     }
@@ -418,7 +419,7 @@ impl Program {
     ) -> Result<(), errors::Error> {
         // SAFETY: acts on a name this `Program` owns. A bad block index or an
         // out-of-range binding point is a defined GL error, collected below.
-        unsafe { gl::UniformBlockBinding(self.id, index, binding) };
+        glad::context(|gl| unsafe { gl.UniformBlockBinding(self.id, index, binding) });
         errors::get_error()
     }
 
@@ -451,14 +452,14 @@ impl Program {
         // SAFETY: `maxLength` is `msg`'s true length, so GL writes at most that
         // many bytes into it (NUL terminator included). A null `length` out-param
         // is explicitly legal and simply means "don't report the length written".
-        unsafe {
-            gl::GetProgramInfoLog(
+        glad::context(|gl| unsafe {
+            gl.GetProgramInfoLog(
                 self.id,
                 INFO_LOG_LEN as GLsizei,
                 std::ptr::null_mut(),
                 msg.as_mut_ptr().cast::<GLchar>(),
             );
-        }
+        });
         msg
     }
 }
@@ -470,7 +471,7 @@ impl Program {
 #[cfg(test)]
 mod create_vf_leak_tests {
     use super::Program;
-    use crate::opengl::gl::test_support;
+    use crate::opengl::gl::{glad, test_support};
 
     const VS_OK: &std::ffi::CStr = c"#version 430 core\nvoid main() { gl_Position = vec4(0.0); }\n";
     const FS_OK: &std::ffi::CStr =
@@ -487,14 +488,14 @@ mod create_vf_leak_tests {
         let mut programs = Vec::new();
         for id in 1..=512u32 {
             // SAFETY: plain queries on the current context.
-            unsafe {
-                if gl::IsShader(id) == gl::TRUE {
+            glad::context(|gl| unsafe {
+                if gl.IsShader(id) == gl::TRUE {
                     shaders.push(id);
                 }
-                if gl::IsProgram(id) == gl::TRUE {
+                if gl.IsProgram(id) == gl::TRUE {
                     programs.push(id);
                 }
-            }
+            });
         }
         (shaders, programs)
     }

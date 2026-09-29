@@ -18,6 +18,7 @@ use std::fmt;
 
 use gl::types::{GLchar, GLenum, GLint, GLsizei, GLuint};
 
+use super::glad;
 use super::{errors, log_debug, log_err};
 
 /// The size of the stack buffer [`Shader::get_info_log`] reads into.
@@ -97,7 +98,7 @@ impl Shader {
     pub fn create(typ: GLenum) -> Result<Self, errors::Error> {
         // SAFETY: `glCreateShader` takes an enum and returns a name. An
         // unrecognized type is GL_INVALID_ENUM + a 0 return, handled below.
-        let id = unsafe { gl::CreateShader(typ) };
+        let id = glad::context(|gl| unsafe { gl.CreateShader(typ) });
         if id == 0 {
             errors::must_error()?;
             unreachable!("errors::must_error returned Ok");
@@ -147,9 +148,9 @@ impl Shader {
         // at, and `source_ptr` is NUL-terminated and live for the call. A null
         // `length` is explicitly legal and means "each string is NUL-terminated".
         // GL copies the source before returning; it retains nothing.
-        unsafe { gl::ShaderSource(self.id, 1, &source_ptr, std::ptr::null()) };
+        glad::context(|gl| unsafe { gl.ShaderSource(self.id, 1, &source_ptr, std::ptr::null()) });
         // SAFETY: compiles the source just attached to a name this `Shader` owns.
-        unsafe { gl::CompileShader(self.id) };
+        glad::context(|gl| unsafe { gl.CompileShader(self.id) });
 
         // Check if compilation succeeded
         //
@@ -160,7 +161,7 @@ impl Shader {
         let mut success: GLint = 0;
         // SAFETY: `GL_COMPILE_STATUS` writes exactly one GLint through the
         // pointer; `&mut success` is one live, aligned GLint.
-        unsafe { gl::GetShaderiv(self.id, gl::COMPILE_STATUS, &mut success) };
+        glad::context(|gl| unsafe { gl.GetShaderiv(self.id, gl::COMPILE_STATUS, &mut success) });
         if success == GLint::from(gl::TRUE) {
             return Ok(());
         }
@@ -204,14 +205,14 @@ impl Shader {
         // SAFETY: `maxLength` is `msg`'s true length, so GL writes at most that
         // many bytes into it (NUL terminator included). A null `length` out-param
         // is explicitly legal and simply means "don't report the length written".
-        unsafe {
-            gl::GetShaderInfoLog(
+        glad::context(|gl| unsafe {
+            gl.GetShaderInfoLog(
                 self.id,
                 INFO_LOG_LEN as GLsizei,
                 std::ptr::null_mut(),
                 msg.as_mut_ptr().cast::<GLchar>(),
             );
-        }
+        });
         msg
     }
 
@@ -236,7 +237,7 @@ impl Shader {
         debug_assert!(self.id != 0);
         // SAFETY: deletes a name this `Shader` owns. Deleting an already-deleted
         // or unknown name is silently ignored by GL, not UB.
-        unsafe { gl::DeleteShader(self.id) };
+        glad::context(|gl| unsafe { gl.DeleteShader(self.id) });
         log_debug!("shader destroyed id={}", self.id);
     }
 }

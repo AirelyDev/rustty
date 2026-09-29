@@ -15,6 +15,7 @@ use std::ffi::c_void;
 use gl::types::{GLenum, GLint, GLsizei, GLuint};
 
 use super::errors;
+use super::glad;
 
 /// PORTS: `Texture.zig:1-8` — `const Texture = @This(); … id: c.GLuint`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -44,7 +45,7 @@ impl Texture {
     pub fn active(index: GLuint) -> Result<(), errors::Error> {
         // SAFETY: `glActiveTexture` takes an enum by value. An out-of-range unit
         // is GL_INVALID_ENUM, collected below — never UB.
-        unsafe { gl::ActiveTexture(index + gl::TEXTURE0) };
+        glad::context(|gl| unsafe { gl.ActiveTexture(index + gl::TEXTURE0) });
         errors::get_error()
     }
 
@@ -72,7 +73,7 @@ impl Texture {
         let mut id: GLuint = 0;
         // SAFETY: `glGenTextures` writes exactly `n` (= 1) GLuints through the
         // pointer; `&mut id` is one live, aligned GLuint.
-        unsafe { gl::GenTextures(1, &mut id) };
+        glad::context(|gl| unsafe { gl.GenTextures(1, &mut id) });
         errors::get_error()?;
         Ok(Texture { id })
     }
@@ -95,7 +96,7 @@ impl Texture {
     pub fn bind(self, target: Target) -> Result<Binding, errors::Error> {
         // SAFETY: binds a name this `Texture` owns to a GL target. A name bound to
         // an incompatible target is GL_INVALID_OPERATION, collected below.
-        unsafe { gl::BindTexture(target as GLenum, self.id) };
+        glad::context(|gl| unsafe { gl.BindTexture(target as GLenum, self.id) });
         errors::get_error()?;
         Ok(Binding { target })
     }
@@ -116,7 +117,7 @@ impl Texture {
         // SAFETY: `glDeleteTextures` reads exactly `n` (= 1) GLuints through the
         // pointer; `&self.id` is one live, aligned GLuint. Deleting an already-
         // deleted or unknown name is silently ignored by GL, not UB.
-        unsafe { gl::DeleteTextures(1, &self.id) };
+        glad::context(|gl| unsafe { gl.DeleteTextures(1, &self.id) });
     }
 }
 
@@ -190,8 +191,9 @@ pub enum Target {
 // };
 // ```
 //
-// PORT NOTE: CLOSED (no trailing `_`) -> a real Rust enum. The variant names are
-// already PascalCase in the reference and are carried over verbatim.
+// PORT NOTE: CLOSED (no trailing `_`) -> a real Rust enum. `adf161473` renamed
+// the reference's variants to snake_case (`.min_filter`, `.wrap_s`, …); Rust
+// variants stay PascalCase, so only this comment changed.
 //
 // PORT NOTE: shared with `Sampler.parameter` (`Sampler.zig:27`), which takes this
 // very enum — hence it lives here, where the reference puts it, rather than being
@@ -215,6 +217,89 @@ pub enum Parameter {
     WrapS = gl::TEXTURE_WRAP_S,
     WrapT = gl::TEXTURE_WRAP_T,
     WrapR = gl::TEXTURE_WRAP_R,
+}
+
+impl Parameter {
+    /// The value type a parameter takes.
+    ///
+    /// PORTS: `Texture.zig:67-74` (`adf161473`).
+    ///
+    /// ```zig
+    /// pub fn Type(comptime self: Parameter) type {
+    ///     return switch (self) {
+    ///         .min_filter => MinFilter,
+    ///         .mag_filter => MagFilter,
+    ///         .wrap_s, .wrap_t, .wrap_r => Wrap,
+    ///         else => c.GLint,
+    ///     };
+    /// }
+    /// ```
+    ///
+    /// PORT NOTE: a Zig fn returning a `type` has no Rust equivalent over a
+    /// runtime enum value, so the type is named by [`ParameterType`] and each
+    /// value type declares its own through [`ParameterValue::TYPE`]; `parameter`
+    /// asserts the two agree where the reference's compiler checks it.
+    pub const fn type_(self) -> ParameterType {
+        match self {
+            Self::MinFilter => ParameterType::MinFilter,
+            Self::MagFilter => ParameterType::MagFilter,
+            Self::WrapS | Self::WrapT | Self::WrapR => ParameterType::Wrap,
+            _ => ParameterType::GLint,
+        }
+    }
+}
+
+/// The types [`Parameter::type_`] names. RUSTTY-ONLY: the value of the
+/// reference's `Parameter.Type()`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ParameterType {
+    /// `c.GLint`
+    GLint,
+    /// [`MinFilter`]
+    MinFilter,
+    /// [`MagFilter`]
+    MagFilter,
+    /// [`Wrap`]
+    Wrap,
+}
+
+/// A value `Binding::parameter`/`Sampler::parameter` accept: the reference's
+/// `value: name.Type()`, as either a `c.GLint` or one of the `enum(c_int)`
+/// parameter enums, which it passes as `@intFromEnum(value)`.
+pub trait ParameterValue: Copy {
+    /// Which [`ParameterType`] this is.
+    const TYPE: ParameterType;
+    /// The value as the `GLint` `glTexParameteri`/`glSamplerParameteri` take
+    /// (`@intFromEnum` for the enums).
+    fn to_glint(self) -> GLint;
+}
+
+impl ParameterValue for GLint {
+    const TYPE: ParameterType = ParameterType::GLint;
+    fn to_glint(self) -> GLint {
+        self
+    }
+}
+
+impl ParameterValue for MinFilter {
+    const TYPE: ParameterType = ParameterType::MinFilter;
+    fn to_glint(self) -> GLint {
+        self as GLint
+    }
+}
+
+impl ParameterValue for MagFilter {
+    const TYPE: ParameterType = ParameterType::MagFilter;
+    fn to_glint(self) -> GLint {
+        self as GLint
+    }
+}
+
+impl ParameterValue for Wrap {
+    const TYPE: ParameterType = ParameterType::Wrap;
+    fn to_glint(self) -> GLint {
+        self as GLint
+    }
 }
 
 /// Internal format enum for texture images.
@@ -310,9 +395,9 @@ impl Format {
 //
 // PORT NOTE: CLOSED -> a real Rust enum, `#[repr(i32)]` for `enum(c_int)`.
 //
-// PORT NOTE (why an `enum(c_int)` at all): these feed `parameter`, whose only
-// instantiated arm takes a `c.GLint` — so the reference's call sites spell them
-// `@intFromEnum(MinFilter.linear)`. Here that is `MinFilter::Linear as GLint`.
+// PORT NOTE (why an `enum(c_int)`): these feed `parameter`, which since
+// `adf161473` takes them typed (`Parameter.Type()`) and passes
+// `@intFromEnum(value)`; here that is [`ParameterValue::to_glint`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(i32)]
 pub enum MinFilter {
@@ -412,7 +497,7 @@ impl Binding {
     /// with `buffer::Binding`). The reference's asymmetry looks incidental.
     pub fn unbind(self) {
         // SAFETY: binding name 0 to a valid target always succeeds.
-        unsafe { gl::BindTexture(self.target as GLenum, 0) };
+        glad::context(|gl| unsafe { gl.BindTexture(self.target as GLenum, 0) });
     }
 
     /// PORTS: `Texture.zig:134-136`.
@@ -429,36 +514,59 @@ impl Binding {
         // SAFETY: acts on the texture currently bound to `self.target`. Every
         // failure mode (incomplete texture, bad target) is a defined GL error the
         // reference deliberately does not read.
-        unsafe { gl::GenerateMipmap(self.target as GLenum) };
+        glad::context(|gl| unsafe { gl.GenerateMipmap(self.target as GLenum) });
     }
 
-    /// PORTS: `Texture.zig:138-148`.
+    /// PORTS: `Texture.zig:147-166` (`adf161473`).
     ///
     /// ```zig
-    /// pub fn parameter(b: Binding, name: Parameter, value: anytype) errors.Error!void {
-    ///     switch (@TypeOf(value)) {
+    /// pub fn parameter(b: Binding, comptime name: Parameter, value: name.Type()) errors.Error!void {
+    ///     switch (name.Type()) {
     ///         c.GLint => glad.context.TexParameteri.?(
     ///             @intFromEnum(b.target),
     ///             @intFromEnum(name),
     ///             value,
     ///         ),
-    ///         else => unreachable,
+    ///         else => switch (@typeInfo(name.Type())) {
+    ///             .@"enum" => glad.context.TexParameteri.?(
+    ///                 @intFromEnum(b.target),
+    ///                 @intFromEnum(name),
+    ///                 @intFromEnum(value),
+    ///             ),
+    ///             else => @compileError("unknown parameter type"),
+    ///         },
     ///     }
     ///     try errors.getError();
     /// }
     /// ```
     ///
-    /// PORT NOTE (`value: anytype` -> `value: GLint`): the switch has exactly ONE
-    /// live arm (`c.GLint`) and an `unreachable` default. Ported as the arm the
-    /// reference actually reaches — same reasoning as `buffer::data_info`'s
-    /// `.slice`. The `unreachable` arm needs no port: it traps at runtime on a type
-    /// Rust rejects at compile time, which is the same contract enforced earlier.
-    /// Every call site in the reference passes an `@intFromEnum(…)` of one of
-    /// [`MinFilter`]/[`MagFilter`]/[`Wrap`], i.e. a `GLint`.
-    pub fn parameter(self, name: Parameter, value: GLint) -> Result<(), errors::Error> {
+    /// PORT NOTE (`value: name.Type()`): see [`Parameter::type_`]. The
+    /// `@compileError` arm needs no port: [`ParameterValue`] is implemented only
+    /// for `GLint` and the three enums.
+    ///
+    /// PORT NOTE (compile time → run time): in the reference `name` is `comptime`,
+    /// so a value of the wrong type for its parameter is a COMPILE error and no
+    /// build ever runs one. Rust cannot type a parameter by a runtime enum value,
+    /// so the same check is an `assert!` (R7) that fires before any GL call; every
+    /// call site passes a literal `Parameter::…`, so it is a program bug, never
+    /// input-driven.
+    pub fn parameter<V: ParameterValue>(
+        self,
+        name: Parameter,
+        value: V,
+    ) -> Result<(), errors::Error> {
+        assert!(
+            V::TYPE == name.type_(),
+            "texture parameter {name:?} takes {:?}, not {:?}",
+            name.type_(),
+            V::TYPE
+        );
+        let value = value.to_glint();
         // SAFETY: acts on the texture currently bound to `self.target`. A bad
         // name/value pairing is GL_INVALID_ENUM/GL_INVALID_VALUE, collected below.
-        unsafe { gl::TexParameteri(self.target as GLenum, name as GLenum, value) };
+        glad::context(|gl| unsafe {
+            gl.TexParameteri(self.target as GLenum, name as GLenum, value)
+        });
         errors::get_error()
     }
 
@@ -521,8 +629,8 @@ impl Binding {
         // SAFETY: `data`'s validity is the caller's obligation, per the doc above.
         // GL copies out of it before returning — it retains nothing. A null `data`
         // is explicitly legal and allocates uninitialized storage.
-        unsafe {
-            gl::TexImage2D(
+        glad::context(|gl| unsafe {
+            gl.TexImage2D(
                 self.target as GLenum,
                 level,
                 internal_format.0,
@@ -533,7 +641,7 @@ impl Binding {
                 typ.0,
                 data,
             );
-        }
+        });
         errors::get_error()
     }
 
@@ -584,8 +692,8 @@ impl Binding {
         // SAFETY: see `image_2d`. An offset+size past the image's bounds is
         // GL_INVALID_VALUE, collected below — GL bounds-checks against the
         // dimensions it was given, it does not read past `data`.
-        unsafe {
-            gl::TexSubImage2D(
+        glad::context(|gl| unsafe {
+            gl.TexSubImage2D(
                 self.target as GLenum,
                 level,
                 xoffset,
@@ -596,7 +704,7 @@ impl Binding {
                 typ.0,
                 data,
             );
-        }
+        });
         errors::get_error()
     }
 
@@ -644,8 +752,8 @@ impl Binding {
         // SAFETY: reads from the bound READ framebuffer into the bound texture.
         // Every failure mode — an incomplete read framebuffer, out-of-bounds
         // offsets, a feedback loop — is a defined GL error, collected below.
-        unsafe {
-            gl::CopyTexSubImage2D(
+        glad::context(|gl| unsafe {
+            gl.CopyTexSubImage2D(
                 self.target as GLenum,
                 level,
                 xoffset,
@@ -655,14 +763,54 @@ impl Binding {
                 width,
                 height,
             );
-        }
+        });
         errors::get_error()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DataType, Format, InternalFormat, MagFilter, MinFilter, Parameter, Target, Wrap};
+    use super::{
+        Binding, DataType, Format, InternalFormat, MagFilter, MinFilter, Parameter, ParameterType,
+        Target, Wrap,
+    };
+
+    /// `adf161473`'s `Parameter.Type()`, arm by arm.
+    #[test]
+    fn parameter_types_match_the_reference() {
+        assert_eq!(Parameter::MinFilter.type_(), ParameterType::MinFilter);
+        assert_eq!(Parameter::MagFilter.type_(), ParameterType::MagFilter);
+        for wrap in [Parameter::WrapS, Parameter::WrapT, Parameter::WrapR] {
+            assert_eq!(wrap.type_(), ParameterType::Wrap);
+        }
+        for other in [
+            Parameter::BaseLevel,
+            Parameter::CompareFunc,
+            Parameter::CompareMode,
+            Parameter::LodBias,
+            Parameter::MinLod,
+            Parameter::MaxLod,
+            Parameter::MaxLevel,
+            Parameter::SwizzleR,
+            Parameter::SwizzleG,
+            Parameter::SwizzleB,
+            Parameter::SwizzleA,
+        ] {
+            assert_eq!(other.type_(), ParameterType::GLint);
+        }
+    }
+
+    /// A value of the wrong type for its parameter is the reference's COMPILE
+    /// error; here it is an `assert!` that fires before any GL call, so no GL
+    /// context is needed.
+    #[test]
+    #[should_panic(expected = "texture parameter MinFilter takes MinFilter, not Wrap")]
+    fn parameter_rejects_a_value_of_the_wrong_type() {
+        let binding = Binding {
+            target: Target::Texture2D,
+        };
+        let _ = binding.parameter(Parameter::MinFilter, Wrap::Repeat);
+    }
 
     /// RUSTTY-ONLY. The reference gets `enum(c_uint) { @"2D" = c.GL_TEXTURE_2D, … }`
     /// checked by the Zig compiler: the tag values ARE the `c.GL_*` constants, by

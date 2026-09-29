@@ -332,7 +332,7 @@ fn auto_attribute(
 #[cfg(test)]
 mod deinit_leak_tests {
     use super::{Options, Pipeline, StepFunction};
-    use crate::opengl::gl::test_support;
+    use crate::opengl::gl::{glad, test_support};
 
     #[test]
     fn deinit_releases_the_framebuffer_and_vertex_array() {
@@ -354,35 +354,35 @@ mod deinit_leak_tests {
         .expect("a valid pipeline");
         let (fbo, vao, program) = (pipeline.fbo.id, pipeline.vao.id, pipeline.program.id);
         // SAFETY: plain queries on the current context.
-        unsafe {
+        glad::context(|gl| unsafe {
             assert_eq!(
-                gl::IsFramebuffer(fbo),
+                gl.IsFramebuffer(fbo),
                 gl::TRUE,
                 "init bound the framebuffer"
             );
             assert_eq!(
-                gl::IsVertexArray(vao),
+                gl.IsVertexArray(vao),
                 gl::TRUE,
                 "init bound the vertex array"
             );
-        }
+        });
         pipeline.deinit();
-        unsafe {
+        glad::context(|gl| unsafe {
             assert_eq!(
-                gl::IsProgram(program),
+                gl.IsProgram(program),
                 gl::FALSE,
                 "deinit destroys the program"
             );
             assert_eq!(
-                gl::IsFramebuffer(fbo),
+                gl.IsFramebuffer(fbo),
                 gl::FALSE,
                 "deinit must destroy the framebuffer init created"
             );
             assert_eq!(
-                gl::IsVertexArray(vao),
+                gl.IsVertexArray(vao),
                 gl::FALSE,
                 "deinit must destroy the vertex array init created"
             );
-        }
+        });
     }
 }

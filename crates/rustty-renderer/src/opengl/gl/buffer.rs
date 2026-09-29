@@ -30,6 +30,7 @@ use std::ffi::c_void;
 use gl::types::{GLenum, GLint, GLsizei, GLsizeiptr, GLuint};
 
 use super::errors;
+use super::glad;
 
 /// PORTS: `Buffer.zig:1-8` — `const Buffer = @This(); … id: c.GLuint`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -63,7 +64,7 @@ impl Buffer {
         let mut vbo: GLuint = 0;
         // SAFETY: `glGenBuffers` writes exactly `n` (= 1) GLuints through the
         // pointer; `&mut vbo` is one live, aligned GLuint.
-        unsafe { gl::GenBuffers(1, &mut vbo) };
+        glad::context(|gl| unsafe { gl.GenBuffers(1, &mut vbo) });
         Ok(Buffer { id: vbo })
     }
 
@@ -82,7 +83,7 @@ impl Buffer {
     pub fn bind(self, target: Target) -> Result<Binding, errors::Error> {
         // SAFETY: binds a name this `Buffer` owns to a GL target. A bad target is
         // GL_INVALID_ENUM (which the reference does not collect here), never UB.
-        unsafe { gl::BindBuffer(target.0, self.id) };
+        glad::context(|gl| unsafe { gl.BindBuffer(target.0, self.id) });
         Ok(Binding {
             id: self.id,
             target,
@@ -106,7 +107,7 @@ impl Buffer {
         // SAFETY: `glDeleteBuffers` reads exactly `n` (= 1) GLuints through the
         // pointer; `&self.id` is one live, aligned GLuint. Deleting an already-
         // deleted or unknown name is silently ignored by GL, not UB.
-        unsafe { gl::DeleteBuffers(1, &self.id) };
+        glad::context(|gl| unsafe { gl.DeleteBuffers(1, &self.id) });
     }
 
     /// PORTS: `Buffer.zig:27-34`.
@@ -131,7 +132,7 @@ impl Buffer {
     pub fn bind_base(self, target: Target, idx: GLuint) -> Result<(), errors::Error> {
         // SAFETY: an indexed bind of a name this `Buffer` owns. An out-of-range
         // index or a non-indexed target is a defined GL error, collected below.
-        unsafe { gl::BindBufferBase(target.0, idx, self.id) };
+        glad::context(|gl| unsafe { gl.BindBufferBase(target.0, idx, self.id) });
         errors::get_error()
     }
 }
@@ -157,7 +158,7 @@ impl Binding {
     /// ```
     pub fn unbind(self) {
         // SAFETY: binding name 0 to a valid target always succeeds.
-        unsafe { gl::BindBuffer(self.target.0, 0) };
+        glad::context(|gl| unsafe { gl.BindBuffer(self.target.0, 0) });
     }
 
     /// Sets the data of this bound buffer. The data can be any array-like
@@ -187,7 +188,7 @@ impl Binding {
         let info = data_info(data);
         // SAFETY: `info.ptr`/`info.size` describe `data`'s own bytes exactly (see
         // `data_info`), and GL copies them before returning — it retains nothing.
-        unsafe { gl::BufferData(self.target.0, info.size, info.ptr, usage.0) };
+        glad::context(|gl| unsafe { gl.BufferData(self.target.0, info.size, info.ptr, usage.0) });
         errors::get_error()
     }
 
@@ -224,7 +225,7 @@ impl Binding {
         // SAFETY: see `set_data`. An offset+size past the store's end is
         // GL_INVALID_VALUE, collected below — GL bounds-checks against the size
         // it was given, it does not read past `data`.
-        unsafe { gl::BufferSubData(self.target.0, offset, info.size, info.ptr) };
+        glad::context(|gl| unsafe { gl.BufferSubData(self.target.0, offset, info.size, info.ptr) });
         errors::get_error()
     }
 
@@ -261,14 +262,14 @@ impl Binding {
         // SAFETY: a null `data` pointer is explicitly legal for `glBufferData` —
         // it allocates the store and leaves the contents undefined, which is this
         // fn's whole purpose.
-        unsafe {
-            gl::BufferData(
+        glad::context(|gl| unsafe {
+            gl.BufferData(
                 self.target.0,
                 size_of::<T>() as GLsizeiptr,
                 std::ptr::null(),
                 usage.0,
             );
-        }
+        });
         errors::get_error()
     }
 
@@ -299,7 +300,9 @@ impl Binding {
         let size = GLsizeiptr::try_from(size)
             .expect("Buffer.Binding::set_data_null_manual size exceeds GLsizeiptr");
         // SAFETY: see `set_data_null`.
-        unsafe { gl::BufferData(self.target.0, size, std::ptr::null(), usage.0) };
+        glad::context(|gl| unsafe {
+            gl.BufferData(self.target.0, size, std::ptr::null(), usage.0)
+        });
         errors::get_error()
     }
 
@@ -327,7 +330,7 @@ impl Binding {
     pub fn attribute_divisor(self, idx: GLuint, divisor: GLuint) -> Result<(), errors::Error> {
         // SAFETY: acts on the currently-bound VAO's attribute state; a bad index
         // is GL_INVALID_VALUE, collected below.
-        unsafe { gl::VertexAttribDivisor(idx, divisor) };
+        glad::context(|gl| unsafe { gl.VertexAttribDivisor(idx, divisor) });
         errors::get_error()
     }
 
@@ -376,7 +379,9 @@ impl Binding {
 
         // SAFETY: acts on the currently-bound VAO + ARRAY_BUFFER. Every failure
         // mode is a defined GL error, collected below.
-        unsafe { gl::VertexAttribPointer(idx, size, typ, normalized_c, stride, offset_ptr) };
+        glad::context(|gl| unsafe {
+            gl.VertexAttribPointer(idx, size, typ, normalized_c, stride, offset_ptr)
+        });
         errors::get_error()
     }
 
@@ -417,7 +422,7 @@ impl Binding {
         };
 
         // SAFETY: see `attribute_advanced`.
-        unsafe { gl::VertexAttribIPointer(idx, size, typ, stride, offset_ptr) };
+        glad::context(|gl| unsafe { gl.VertexAttribIPointer(idx, size, typ, stride, offset_ptr) });
         errors::get_error()
     }
 }
