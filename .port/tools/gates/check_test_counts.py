@@ -196,6 +196,9 @@ RSXEV = f"{RS_ROOT}/crates/rustty-xev/src"
 # tests); main.zig's only `test {}` is the anonymous refAllDecls (skipped by
 # zig_count); error.zig/swizzle.zig carry 0 (swizzle is an R5 seam). zig=6; the
 # Rust side adds the ref_all_decls compile-touch (rust=7 >= 6).
+# P7-W0 T4: zlib.zig (NEW at 12752b2ac, `4b86e3594`: kitty zlib through wuffs)
+# carries 5 named tests: the row reads zig 8 -> 13 at arrival (still GREEN by
+# slack, rust=20), so the 5 names are the per-test meter (DECISIONS B8).
 GHWUFFS = "/Users/gael/projects/ghostty/pkg/wuffs/src"
 RSWUFFS = f"{RS_ROOT}/crates/rustty-wuffs/src"
 
@@ -241,7 +244,7 @@ VAXIS_APC = 1  # the vxfw doctest source scan, see above
 
 # module -> (list of zig ref globs, list of rust globs, apc_deferred_count)
 MAP = {
-    "wuffs":           ([f"{GHWUFFS}/png.zig", f"{GHWUFFS}/jpeg.zig", f"{GHWUFFS}/main.zig", f"{GHWUFFS}/error.zig", f"{GHWUFFS}/swizzle.zig"], [f"{RSWUFFS}/*.rs"], 0),
+    "wuffs":           ([f"{GHWUFFS}/png.zig", f"{GHWUFFS}/jpeg.zig", f"{GHWUFFS}/main.zig", f"{GHWUFFS}/error.zig", f"{GHWUFFS}/swizzle.zig", f"{GHWUFFS}/zlib.zig"], [f"{RSWUFFS}/*.rs"], 0),
     "zf":              ([f"{GHZF}/zf.zig", f"{GHZF}/filter.zig", f"{GHZF}/clib.zig"], [f"{RSZF}/*.rs"], 0),
     "vaxis":           ([f"{GHVAXIS}/Cell.zig", f"{GHVAXIS}/Key.zig", f"{GHVAXIS}/Mouse.zig", f"{GHVAXIS}/GraphemeCache.zig", f"{GHVAXIS}/Image.zig", f"{GHVAXIS}/gwidth.zig", f"{GHVAXIS}/unicode.zig", f"{GHVAXIS}/Screen.zig", f"{GHVAXIS}/InternalScreen.zig", f"{GHVAXIS}/Window.zig", f"{GHVAXIS}/Parser.zig", f"{GHVAXIS}/event.zig", f"{GHVAXIS}/ctlseqs.zig", f"{GHVAXIS}/queue.zig", f"{GHVAXIS}/tty.zig", f"{GHVAXIS}/Loop.zig", f"{GHVAXIS}/widgets/TextInput.zig"] + [f"{GHVAXIS}/{f}" for f in VAXIS_VXFW_FILES], [f"{RSVAXIS}/*.rs", f"{RSVAXIS}/widgets/*.rs", f"{RSVAXIS}/vxfw/*.rs"], VAXIS_APC),
     "pagelist":        ([f"{GH}/PageList.zig"], [f"{RS}/pagelist/*.rs"], 0),
@@ -941,6 +944,28 @@ MAP = {
     # UNMAPPED for the same reason `net.rs` and `linux.rs` are: windows.zig carries
     # 0 `test{}`, and wasi.rs is a std.os.wasi/loop.zig-twin slice with no 1:1
     # reference oracle.
+    # ---------------------------------------------------------------------
+    # P7-W0 T4 (Phase-7 start, pin 12752b2ac): test files the MAP could not see
+    # (R5 §3 G1b; R1 §3 "Gate bookkeeping"). A gate that cannot see a new file is
+    # bookkeeping green (memory derived-gate-green-can-be-bookkeeping), so every
+    # row lands at phase start, before its port. A not-yet-ported Rust file is
+    # named by a one-file GLOB (`<name>*.rs`), not a literal path: the literal
+    # would trip the STALE-MAPPING arm and abort the whole gate, while the glob
+    # expands to nothing and counts rust=0, so the row reads RED with the
+    # upstream count until the port lands. Arrival state is in
+    # `.port/phase-7/w0/README.md`.
+    # ---------------------------------------------------------------------
+    "datastruct_untouched_pool":   ([f"{GHSRC}/datastruct/untouched_pool.zig"], [f"{RS_ROOT}/crates/rustty-datastruct/src/untouched_pool*.rs"], 0),
+    "datastruct_comptime_int_set": ([f"{GHSRC}/datastruct/comptime_int_set.zig"], [f"{RS_ROOT}/crates/rustty-datastruct/src/comptime_int_set*.rs"], 0),
+    # Pre-existing (not new in the range), but never mapped; its `test WasmPagePool`
+    # body changed in the range.
+    "datastruct_wasm_page_pool":   ([f"{GHSRC}/datastruct/wasm_page_pool.zig"], [f"{RS_ROOT}/crates/rustty-datastruct/src/wasm_page_pool.rs"], 0),
+    # parse_int.zig moves to rustty-lib (DECISIONS B4).
+    "lib_parse_int":     ([f"{GHSRC}/lib/parse_int.zig"], [f"{RS_ROOT}/crates/rustty-lib/src/parse_int*.rs"], 0),
+    "lib_types":         ([f"{GHSRC}/lib/types.zig"], [f"{RS_ROOT}/crates/rustty-lib/src/types.rs"], 0),
+    "apprt_gtk_scale":   ([f"{GHAP}/gtk/scale.zig"], [f"{RSAPPRT}/gtk/scale*.rs"], 0),
+    "font_nerd_font_attributes":([f"{GHF}/nerd_font_attributes.zig"], [f"{RSF}/nerd_font_attributes.rs"], 0),
+    "snapshot_terminal": ([f"{GH}/snapshot/terminal.zig"], [f"{RS}/snapshot/terminal.rs"], 0),
 }
 
 def expand(globs):
