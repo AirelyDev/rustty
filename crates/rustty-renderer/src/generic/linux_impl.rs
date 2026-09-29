@@ -3818,68 +3818,62 @@ impl Renderer {
         cursor_blink_visible: bool,
     ) -> Result<(), VtOutOfMemory> {
         let mutex = self.draw_mutex.clone();
-        mutex.lock();
-        let result = self.update_frame_locked(state, cursor_blink_visible);
-        mutex.unlock();
-        result
+        let self_ptr: *mut Renderer = self;
+        unsafe { Self::update_frame_raw(self_ptr, &mutex, state, cursor_blink_visible) }
     }
 
-    /// [`Self::update_frame`] with `draw_mutex` held by the caller for the WHOLE
-    /// call.
-    //
-    // PORT NOTE (N437): the reference takes `draw_mutex` twice inside
-    // `updateFrame` (around the Kitty image update and around the GPU-cell
-    // rebuild) and touches the rest of the renderer unlocked, because only the
-    // render thread writes those fields. In Rust the render thread's
-    // whole-renderer `&mut` would then overlap the main thread's own locked
-    // accesses (a foreign access to protected bytes under Stacked and Tree
-    // Borrows), so the render thread takes the lock first, through its own
-    // handle, and holds it across the whole update; the two inner lock pairs are
-    // the caller's. Lock order: draw mutex, then the terminal-state mutex; no
-    // path takes them the other way round.
-    pub fn update_frame_locked(
-        &mut self,
-        state: &state::State,
-        cursor_blink_visible: bool,
-    ) -> Result<(), VtOutOfMemory> {
-        // CoreText shaping accumulates objects for deferred release over
-        // the course of a frame. Always flush those objects, including
-        // when rebuilding the frame fails due to memory pressure.
-        // defer self.font_shaper.endFrame();
-        //
-        // PORT NOTE (parity S115-F1): the reference's first statement is
-        // this `defer`, so `endFrame` runs on every exit: the
-        // synchronized-output early `return`, a failed `beginUpdate`, and
-        // the normal end. The body is `update_frame_impl`; running
-        // `end_frame` after it here is that defer. It also keeps the
-        // reference's order at the normal end: the later-registered `defer
-        // self.terminal_state.dirty = .false` (the impl's last statement)
-        // runs before `endFrame`. CORRECTION: `end_frame` used to be a plain
-        // statement at the end of the success path only.
-        // UNVERIFIED on Linux: written on macOS, compile and suite pending on
-        // rvm (NEW-FINDINGS N181).
-        let result = self.update_frame_impl(state, cursor_blink_visible);
-        self.font_shaper.end_frame();
-        result
-    }
-
-    /// The body of [`Self::update_frame`], which runs
+    /// The body of [`Self::update_frame_raw`], which runs
     /// `font_shaper.end_frame()` after it on every exit.
-    fn update_frame_impl(
-        &mut self,
+    ///
+    /// # Safety
+    /// `self_ptr` is a valid, whole-`Renderer`-provenance pointer and `lock`
+    /// a handle to its draw mutex, which the caller does NOT hold; only the
+    /// render thread calls this.
+    unsafe fn update_frame_impl(
+        self_ptr: *mut Renderer,
+        lock: &DrawMutex,
         state: &state::State,
         cursor_blink_visible: bool,
     ) -> Result<(), VtOutOfMemory> {
+        // N437 / ruling 32 (P7-W7 T2 fix round 1): the reference runs this part of
+        // `updateFrame` without the draw mutex; only the render thread uses these
+        // fields. The port reaches each through a narrow place of the raw root, never
+        // a whole-renderer reference, so the main thread's locked accesses (its sync
+        // draw on macOS, `displayRealized`/`displayUnrealized` on GTK, all narrow
+        // too) touch no byte these borrows cover. Proven on
+        // `.port/phase-2/mirihar-n437` (`split_*`).
+        let alloc = unsafe { (*self_ptr).alloc };
+        let scroll_to_bottom_on_output = unsafe { (*self_ptr).config.scroll_to_bottom_on_output };
+        // (`render_cell_map` updates the link matchers' caches, so this one is `&mut`.)
+        let config_links = unsafe { &mut (*self_ptr).config.links };
+        let terminal_state: &mut RenderState = unsafe { &mut (*self_ptr).terminal_state };
+        let terminal_state_frame_count = unsafe { &mut (*self_ptr).terminal_state_frame_count };
+        let last_bottom_node = unsafe { &mut (*self_ptr).last_bottom_node };
+        let last_bottom_y = unsafe { &mut (*self_ptr).last_bottom_y };
+        let kitty_animation_next_ms = unsafe { &mut (*self_ptr).kitty_animation_next_ms };
+        let kitty_animation_clock = unsafe { &mut (*self_ptr).kitty_animation_clock };
+        let search_matches_dirty = unsafe { &mut (*self_ptr).search_matches_dirty };
+        let search_selected_match = unsafe { &(*self_ptr).search_selected_match };
+        let search_matches = unsafe { &(*self_ptr).search_matches };
+
+        /// Unlocks the draw mutex on every exit of the Kitty block.
+        struct DrawUnlock<'a>(&'a DrawMutex);
+        impl Drop for DrawUnlock<'_> {
+            fn drop(&mut self) {
+                self.0.unlock();
+            }
+        }
+
         // We fully deinit and reset the terminal state every so often so that a
         // particularly large terminal state doesn't cause the renderer to hold on to
         // retained memory. Frame count is ~12 minutes at 120Hz.
         let max_terminal_state_frame_count = 100_000;
-        if self.terminal_state_frame_count >= max_terminal_state_frame_count {
-            self.terminal_state.deinit(self.alloc.into());
-            self.terminal_state = RenderState::empty();
-            self.terminal_state_frame_count = 0;
+        if *terminal_state_frame_count >= max_terminal_state_frame_count {
+            terminal_state.deinit(alloc.into());
+            *terminal_state = RenderState::empty();
+            *terminal_state_frame_count = 0;
         }
-        self.terminal_state_frame_count += 1;
+        *terminal_state_frame_count += 1;
 
         // Data we extract out of the critical area.
         struct Critical {
@@ -3939,7 +3933,7 @@ impl Renderer {
             // If scroll-to-bottom on output is enabled, check if the final line
             // changed by comparing the bottom-right pin. Update this BEFORE we update
             // our render state so we can draw the new scrolled data immediately.
-            if self.config.scroll_to_bottom_on_output {
+            if scroll_to_bottom_on_output {
                 'scroll: {
                     let active = unsafe { (*t).screens.active };
                     let br = match unsafe { (*active).pages.get_bottom_right(point::Tag::Screen) } {
@@ -3948,14 +3942,13 @@ impl Renderer {
                     };
 
                     // If the pin hasn't changed, then don't scroll.
-                    if self.last_bottom_node == Some(br.node as usize) && self.last_bottom_y == br.y
-                    {
+                    if *last_bottom_node == Some(br.node as usize) && *last_bottom_y == br.y {
                         break 'scroll;
                     }
 
                     // Update tracked pin state for next frame
-                    self.last_bottom_node = Some(br.node as usize);
-                    self.last_bottom_y = br.y;
+                    *last_bottom_node = Some(br.node as usize);
+                    *last_bottom_y = br.y;
 
                     // Scroll
                     unsafe {
@@ -3965,11 +3958,10 @@ impl Renderer {
             }
 
             // Update our terminal state
-            self.terminal_state
-                .update(self.alloc.into(), unsafe { &mut *t })?;
+            terminal_state.update(alloc.into(), unsafe { &mut *t })?;
 
             // If our terminal state is dirty at all we need to redo the viewport search.
-            if self.terminal_state.dirty != Dirty::False {
+            if terminal_state.dirty != Dirty::False {
                 unsafe {
                     (*t).flags.search_viewport_dirty = true;
                 }
@@ -4000,7 +3992,7 @@ impl Renderer {
             // `begin_update` above) — the IO thread cannot interleave. The
             // `&mut` is re-derived from the raw screen ptr for exactly this
             // statement (no borrow held across).
-            self.kitty_animation_next_ms = 'next: {
+            *kitty_animation_next_ms = 'next: {
                 // Likely case: we have no kitty images, so do nothing.
                 let active = unsafe { (*t).screens.active };
                 if unsafe { &(*active).kitty_images }.images.is_empty() {
@@ -4008,10 +4000,10 @@ impl Renderer {
                 }
 
                 let now = Instant::now();
-                let base = match self.kitty_animation_clock {
+                let base = match *kitty_animation_clock {
                     Some(base) => base,
                     None => {
-                        self.kitty_animation_clock = Some(now);
+                        *kitty_animation_clock = Some(now);
                         now
                     }
                 };
@@ -4032,18 +4024,26 @@ impl Renderer {
             // an image.
             //
             // PORTS: generic.zig:1229-1248; macos_impl generic.rs:4813-4833.
-            if self.images.kitty_requires_update(unsafe { &*t }) {
-                // We need to grab the draw mutex since this updates
-                // our image state that drawFrame uses.
-                // (N437: held by the caller of `update_frame_locked`.)
-                self.images.kitty_update(
-                    self.alloc,
-                    unsafe { &*t },
-                    CellSize {
-                        width: self.grid_metrics.cell_width,
-                        height: self.grid_metrics.cell_height,
-                    },
-                );
+            // N437 / ruling 32: the lock is taken around the check as well as the
+            // update. `kittyRequiresUpdate` reads the image state that the main
+            // thread's draw writes under the lock; unlocked, that read would race it.
+            {
+                lock.lock();
+                let _unlock = DrawUnlock(lock);
+                if unsafe { (*self_ptr).images.kitty_requires_update(&*t) } {
+                    // We need to grab the draw mutex since this updates
+                    // our image state that drawFrame uses.
+                    unsafe {
+                        (*self_ptr).images.kitty_update(
+                            alloc,
+                            &*t,
+                            CellSize {
+                                width: (*self_ptr).grid_metrics.cell_width,
+                                height: (*self_ptr).grid_metrics.cell_height,
+                            },
+                        )
+                    };
+                }
             }
 
             // Get our OSC8 links we're hovering if we have a mouse.
@@ -4053,7 +4053,7 @@ impl Renderer {
                     if !state.mouse.mods.equal(key::ctrl_or_super(Mods::default())) {
                         CellSet::new()
                     } else {
-                        self.terminal_state
+                        terminal_state
                             .link_cells(Global.into(), vp)
                             .unwrap_or_else(|err| {
                                 // log.warn("error searching for OSC8 links err={}", .{err});
@@ -4098,10 +4098,10 @@ impl Renderer {
         // Outside the critical area we can update our links to contain our regex
         // results.
         // catch |err| log.warn("error searching for regex links err={}", .{err});
-        if let Err(err) = self.config.links.render_cell_map(
+        if let Err(err) = config_links.render_cell_map(
             Global.into(),
             &mut critical.links,
-            &self.terminal_state,
+            &*terminal_state,
             state.mouse.point,
             state.mouse.mods,
         ) {
@@ -4109,30 +4109,30 @@ impl Renderer {
         }
 
         // Clear our highlight state and update.
-        if self.search_matches_dirty || self.terminal_state.dirty != Dirty::False {
-            self.search_matches_dirty = false;
+        if *search_matches_dirty || terminal_state.dirty != Dirty::False {
+            *search_matches_dirty = false;
 
             // Clear the prior highlights
             let mut any_dirty: bool = false;
-            for row in self.terminal_state.row_data.iter_mut() {
+            for row in terminal_state.row_data.iter_mut() {
                 if !row.highlights.is_empty() {
                     row.highlights.clear();
                     row.dirty = true;
                     any_dirty = true;
                 }
             }
-            if any_dirty && self.terminal_state.dirty == Dirty::False {
-                self.terminal_state.dirty = Dirty::Partial;
+            if any_dirty && terminal_state.dirty == Dirty::False {
+                terminal_state.dirty = Dirty::Partial;
             }
 
             // NOTE: The order below matters. Highlights added earlier take priority.
-            if let Some(m) = &self.search_selected_match {
+            if let Some(m) = search_selected_match {
                 // catch |err| {
                 //     // Not a critical error, we just won't show highlights.
                 //     log.warn("error updating search selected highlight err={}", .{err});
                 // }
-                if let Err(err) = self.terminal_state.update_highlights_flattened(
-                    self.alloc.into(),
+                if let Err(err) = terminal_state.update_highlights_flattened(
+                    alloc.into(),
                     HighlightTag::SearchMatchSelected as u8,
                     core::slice::from_ref(&m.r#match),
                 ) {
@@ -4143,13 +4143,13 @@ impl Renderer {
                     );
                 }
             }
-            if let Some(m) = &self.search_matches {
+            if let Some(m) = search_matches {
                 // catch |err| {
                 //     // Not a critical error, we just won't show highlights.
                 //     log.warn("error updating search highlights err={}", .{err});
                 // }
-                if let Err(err) = self.terminal_state.update_highlights_flattened(
-                    self.alloc.into(),
+                if let Err(err) = terminal_state.update_highlights_flattened(
+                    alloc.into(),
                     HighlightTag::SearchMatch as u8,
                     &m.matches,
                 ) {
@@ -4161,89 +4161,94 @@ impl Renderer {
 
         // From this point forward no more errors.
 
-        // Rebuild the overlay image if we have one. We can do this
-        // outside of any critical areas.
-        // self.rebuildOverlay(critical.overlay_features) catch |err|
-        //     log.warn("error rebuilding overlay surface err={}", .{err});
-        //
-        // PORTS: generic.zig:1356-1365; macos_impl generic.rs:4959.
-        if let Err(err) = self.rebuild_overlay(&critical.overlay_features) {
-            log::warn!(target: LOG_SCOPE, "error rebuilding overlay surface err={err:?}");
-        }
-
         // Acquire the draw mutex for all remaining state updates.
-        // (N437: held by the caller of `update_frame_locked`.)
-        {
-            // Build our GPU cells. `critical.preedit` is MOVED into `rebuild_cells`,
-            // but `critical.preedit.is_some()` is read FIRST for `cursor::style`.
-            let cs = cursor::style(
-                &self.terminal_state,
-                cursor::StyleOptions {
-                    preedit: critical.preedit.is_some(),
-                    focused: self.focused,
-                    blink_visible: cursor_blink_visible,
-                },
-            );
-            self.rebuild_cells(critical.preedit, cs, &critical.links);
-            // catch |err| {
-            //     // This means we weren't able to allocate our buffer
-            //     // to update the cells. In this case, we continue with
-            //     // our old buffer (frozen contents) and log it.
-            //     comptime assert(@TypeOf(err) == error{OutOfMemory});
-            //     log.warn("error rebuilding GPU cells err={}", .{err});
-            // }
-            //
-            // LOG PORT NOTE (task-14c-5, N9 — Linux-side residual of the WAIVED row
-            // S115-F4): `rebuild_cells` is INFALLIBLE in rustty (it returns `()`;
-            // its sole OOM source aborts via the `Global` allocator), so the
-            // reference's "continue with frozen contents" catch path is unreachable
-            // here and this `log.warn` is NOT restorable — emitting it
-            // unconditionally would put a diagnostic on the SUCCESS path. Same
-            // ruling as the Metal twin (task-14c-1, generic.rs:5412-5427). See
-            // ADJUDICATION.md#s115-f4.
+        // (N437 / ruling 32: the whole `&mut` exists only here, under the
+        // lock, after the last use of the unlocked view above.)
+        unsafe {
+            Self::with_locked(self_ptr, lock, move |r| {
+                // PORT NOTE (N437 / ruling 32): the reference rebuilds the
+                // overlay "outside of any critical areas", but the draw
+                // reads `self.overlay` under the lock (`generic.zig:1964`), so
+                // an unlocked write would race a draw on another thread; it
+                // runs first under the lock instead.
+                // Rebuild the overlay image if we have one. We can do this
+                // outside of any critical areas.
+                // self.rebuildOverlay(critical.overlay_features) catch |err|
+                //     log.warn("error rebuilding overlay surface err={}", .{err});
+                //
+                // PORTS: generic.zig:1356-1365; macos_impl generic.rs:4959.
+                if let Err(err) = r.rebuild_overlay(&critical.overlay_features) {
+                    log::warn!(target: LOG_SCOPE, "error rebuilding overlay surface err={err:?}");
+                }
 
-            // The scrollbar is only emitted during draws so we also check the
-            // scrollbar cache here and update if needed.
-            if !self.scrollbar.eql(critical.scrollbar) {
-                self.scrollbar = critical.scrollbar;
-                self.scrollbar_dirty = true;
-            }
+                // Build our GPU cells. `critical.preedit` is MOVED into `rebuild_cells`,
+                // but `critical.preedit.is_some()` is read FIRST for `cursor::style`.
+                let cs = cursor::style(
+                    &r.terminal_state,
+                    cursor::StyleOptions {
+                        preedit: critical.preedit.is_some(),
+                        focused: r.focused,
+                        blink_visible: cursor_blink_visible,
+                    },
+                );
+                r.rebuild_cells(critical.preedit, cs, &critical.links);
+                // catch |err| {
+                //     // This means we weren't able to allocate our buffer
+                //     // to update the cells. In this case, we continue with
+                //     // our old buffer (frozen contents) and log it.
+                //     comptime assert(@TypeOf(err) == error{OutOfMemory});
+                //     log.warn("error rebuilding GPU cells err={}", .{err});
+                // }
+                //
+                // LOG PORT NOTE (task-14c-5, N9 — Linux-side residual of the WAIVED row
+                // S115-F4): `rebuild_cells` is INFALLIBLE in rustty (it returns `()`;
+                // its sole OOM source aborts via the `Global` allocator), so the
+                // reference's "continue with frozen contents" catch path is unreachable
+                // here and this `log.warn` is NOT restorable — emitting it
+                // unconditionally would put a diagnostic on the SUCCESS path. Same
+                // ruling as the Metal twin (task-14c-1, generic.rs:5412-5427). See
+                // ADJUDICATION.md#s115-f4.
 
-            // Update our background color
-            self.uniforms.bg_color = [
-                self.terminal_state.colors.background.r,
-                self.terminal_state.colors.background.g,
-                self.terminal_state.colors.background.b,
-                (self.config.background_opacity * 255.0).round() as u8,
-            ];
+                // The scrollbar is only emitted during draws so we also check the
+                // scrollbar cache here and update if needed.
+                if !r.scrollbar.eql(critical.scrollbar) {
+                    r.scrollbar = critical.scrollbar;
+                    r.scrollbar_dirty = true;
+                }
 
-            // NOT A CUT (macOS glass background): macos_impl generic.rs:5007-5021 is
-            // guarded by `if (comptime builtin.os.tag == .macos)` in generic.zig;
-            // that branch is COMPILED OUT on Linux, so it is absent here by fidelity.
+                // Update our background color
+                r.uniforms.bg_color = [
+                    r.terminal_state.colors.background.r,
+                    r.terminal_state.colors.background.g,
+                    r.terminal_state.colors.background.b,
+                    (r.config.background_opacity * 255.0).round() as u8,
+                ];
 
-            // Prepare our overlay image for upload (or unload). This has to use our
-            // general allocator since it modifies state that survives frames.
-            // self.images.overlayUpdate(self.alloc, self.overlay) catch |err|
-            //     log.warn("error updating overlay images err={}", .{err});
-            //
-            // PORTS: generic.zig:1416-1424; macos_impl generic.rs:5026-5028.
-            // (`Option<&Overlay>` — the borrowed-ownership deviation documented on
-            //  `image::linux_impl::State::overlay_update`.)
-            if let Err(err) = self
-                .images
-                .overlay_update(self.alloc, self.overlay.as_ref())
-            {
-                log::warn!(target: LOG_SCOPE, "error updating overlay images err={err:?}");
-            }
+                // NOT A CUT (macOS glass background): macos_impl generic.rs:5007-5021 is
+                // guarded by `if (comptime builtin.os.tag == .macos)` in generic.zig;
+                // that branch is COMPILED OUT on Linux, so it is absent here by fidelity.
 
-            // Update custom shader uniforms that depend on terminal state.
-            // self.updateCustomShaderUniformsFromState();
-            self.update_custom_shader_uniforms_from_state();
-        }
+                // Prepare our overlay image for upload (or unload). This has to use our
+                // general allocator since it modifies state that survives frames.
+                // self.images.overlayUpdate(self.alloc, self.overlay) catch |err|
+                //     log.warn("error updating overlay images err={}", .{err});
+                //
+                // PORTS: generic.zig:1416-1424; macos_impl generic.rs:5026-5028.
+                // (`Option<&Overlay>` — the borrowed-ownership deviation documented on
+                //  `image::linux_impl::State::overlay_update`.)
+                if let Err(err) = r.images.overlay_update(r.alloc, r.overlay.as_ref()) {
+                    log::warn!(target: LOG_SCOPE, "error updating overlay images err={err:?}");
+                }
+
+                // Update custom shader uniforms that depend on terminal state.
+                // self.updateCustomShaderUniformsFromState();
+                r.update_custom_shader_uniforms_from_state();
+            })
+        };
 
         // Reset our dirty state after updating (the reference `defer
         // self.terminal_state.dirty = .false`, fired at fn scope exit — §C.4).
-        self.terminal_state.dirty = Dirty::False;
+        unsafe { (*self_ptr).terminal_state.dirty = Dirty::False };
 
         Ok(())
     }
@@ -5504,8 +5509,9 @@ impl Renderer {
         unsafe { Self::with_locked(self_ptr, lock, |r| r.animation_wake()) }
     }
 
-    /// `updateFrame`, with the lock held across the whole update (see
-    /// [`Self::update_frame_locked`]).
+    /// `updateFrame`, with the reference's lock scopes: the draw mutex is taken
+    /// around the Kitty image update and the GPU-cell rebuild only (N437 /
+    /// ruling 32, see `update_frame_impl`).
     ///
     /// # Safety
     /// As [`Self::with_locked`].
@@ -5515,11 +5521,22 @@ impl Renderer {
         state: &state::State,
         cursor_blink_visible: bool,
     ) -> Result<(), VtOutOfMemory> {
-        unsafe {
-            Self::with_locked(self_ptr, lock, |r| {
-                r.update_frame_locked(state, cursor_blink_visible)
-            })
-        }
+        let result =
+            unsafe { Self::update_frame_impl(self_ptr, lock, state, cursor_blink_visible) };
+        // CoreText shaping accumulates objects for deferred release over
+        // the course of a frame. Always flush those objects, including
+        // when rebuilding the frame fails due to memory pressure.
+        // defer self.font_shaper.endFrame();
+        //
+        // PORT NOTE (parity S115-F1): the reference's first statement is this
+        // `defer`, so `endFrame` runs on every exit: the synchronized-output early
+        // `return`, a failed `beginUpdate`, and the normal end, after the
+        // later-registered `defer self.terminal_state.dirty = .false` (the impl's
+        // last statement). Running `end_frame` after the impl returns is that
+        // defer. (N437 / ruling 32: unlocked, as in the reference, through a
+        // narrow place; the draw never touches the shaper.)
+        unsafe { (*self_ptr).font_shaper.end_frame() };
+        result
     }
 
     /// `displayRealized`, from the apprt's main thread.
@@ -5534,7 +5551,18 @@ impl Renderer {
         // declares `displayRealized`; see `display_realized_locked`.)
         //
         // Lock the draw mutex so that we can safely update state.
-        unsafe { Self::with_locked(self_ptr, lock, |r| r.display_realized_locked()) }
+        lock.lock();
+        // N437 / ruling 32: the main thread writes the three flags through narrow
+        // places of the raw root (never a whole-renderer reference), because the
+        // render thread may be working on its own fields unlocked in `update_frame_raw`.
+        // The writes are `display_realized_locked`'s body.
+        unsafe {
+            (*self_ptr).display_realized = true;
+            (*self_ptr).reinitialize_shaders = true;
+            (*self_ptr).target_config_modified = 1;
+        }
+        lock.unlock();
+        Ok(())
     }
 
     /// `displayUnrealized`, from the apprt's main thread.
@@ -5543,7 +5571,11 @@ impl Renderer {
     /// As [`Self::with_locked`].
     pub unsafe fn display_unrealized_raw(self_ptr: *mut Renderer, lock: &DrawMutex) {
         // Lock the draw mutex so that we can safely update state.
-        unsafe { Self::with_locked(self_ptr, lock, |r| r.display_unrealized_locked()) }
+        lock.lock();
+        // (N437 / ruling 32: a narrow place, as in `display_realized_raw`;
+        // `display_unrealized_locked`'s body.)
+        unsafe { (*self_ptr).display_realized = false };
+        lock.unlock();
     }
 
     /// `renderCallback`'s unrealized arm (`Thread.zig:556-565` at `12752b2ac`):

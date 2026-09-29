@@ -1851,8 +1851,9 @@ where
         //
         // (PORT NOTE: `update_frame` takes a SHARED `&State`; the error is
         // `VtOutOfMemory`, logged not propagated.)
-        // (N437: the whole update runs under the thread's lock handle; see
-        // `rustty_renderer::Renderer::update_frame_locked`.)
+        // (N437 / ruling 32: the update takes the thread's lock handle around
+        // the Kitty image update and the GPU-cell rebuild only, as the
+        // reference does; see `rustty_renderer::Renderer::update_frame_raw`.)
         if let Err(err) = unsafe {
             rustty_renderer::Renderer::update_frame_raw(
                 &raw mut (*(*self_).renderer).0,

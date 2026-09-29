@@ -144,6 +144,8 @@ struct Fixed {
     terminal_state: u64,
     uniforms: [f32; 4],
     swap_chain: Option<Vec<u8>>,
+    /// The Kitty image state `update_frame` updates under a brief lock.
+    images: u64,
 }
 
 impl Fixed {
@@ -159,6 +161,7 @@ impl Fixed {
             terminal_state: 0,
             uniforms: [0.0; 4],
             swap_chain: None,
+            images: 0,
         }
     }
 
@@ -276,6 +279,105 @@ fn main_gtk(p: P<Fixed>, lock: &DrawMutex, slot: &LatestFrame<Frame>) {
 }
 
 // ===========================================================================
+// RULING 32 (P7-W7 T2 fix round 1): `update_frame` keeps the reference's lock
+// scopes. The render thread works on its own fields UNLOCKED through narrow
+// field references (never a whole-renderer reference), takes the lock briefly
+// around the Kitty image update (narrow), and forms the whole `&mut` only for
+// the locked tail (`rebuildCells` & co.). For that to be sound the main thread's
+// locked accesses must be narrow too: a whole-renderer retag under the lock
+// still covers the bytes the render thread is using unlocked.
+// ===========================================================================
+
+/// The render thread's `update_frame_raw` with the reference's scopes.
+unsafe fn split_update_frame(p: P<Fixed>, lock: &DrawMutex) {
+    unsafe {
+        // Unlocked: the render-thread-only state (`terminal_state`, the
+        // scroll/kitty clocks, the search highlights, the overlay) through a
+        // narrow view.
+        let terminal_state: &mut u64 = &mut (*p.0).terminal_state;
+        *terminal_state += 1;
+        std::thread::yield_now();
+        // The Kitty update: the lock, briefly, and a narrow reference.
+        lock.lock();
+        (*p.0).images += 1;
+        lock.unlock();
+        *terminal_state += 1;
+        std::thread::yield_now();
+        // The locked tail: the whole `&mut` exists only under the lock, after
+        // the last use of the unlocked view.
+        let _sync = Fixed::with_locked(p.0, lock, |r| {
+            r.cells.push(1);
+            r.cells_rebuilt = true;
+            r.visible && r.cells_rebuilt
+        });
+    }
+}
+
+fn split_render_round(p: P<Fixed>, lock: &DrawMutex, round: usize) {
+    unsafe {
+        if Fixed::with_locked(p.0, lock, |r| r.release_if_unrealized()) {
+            return;
+        }
+        split_update_frame(p, lock);
+        Fixed::with_locked(p.0, lock, |r| r.draw_frame_locked());
+        let _ = Fixed::with_locked(p.0, lock, |r| r.animation_wake());
+        Fixed::with_locked(p.0, lock, |r| r.set_focus_locked(round % 2 == 0));
+    }
+}
+
+fn run_split(main_side: fn(P<Fixed>, &DrawMutex, &LatestFrame<Frame>)) {
+    let p = P(Box::into_raw(Box::new(Fixed::new())));
+    let main_lock = unsafe { (*p.0).draw_mutex.clone() };
+    let main_slot = unsafe { (*p.0).latest_frame.clone() };
+    let render_lock = main_lock.clone();
+    let t = spawn_render(p, move |p| {
+        for round in 0..ROUNDS {
+            split_render_round(p, &render_lock, round);
+        }
+    });
+    for _ in 0..ROUNDS {
+        main_side(p, &main_lock, &main_slot);
+        std::thread::yield_now();
+    }
+    t.join().unwrap();
+    drop(main_slot);
+    drop(unsafe { Box::from_raw(p.0) });
+}
+
+/// The macOS sync draw with narrow field access only (`draw_frame_locked`'s raw
+/// root plus the `*_raw` helpers): never a reference to the whole renderer.
+fn main_sync_draw_narrow(p: P<Fixed>, lock: &DrawMutex, _slot: &LatestFrame<Frame>) {
+    lock.lock();
+    unsafe {
+        if (*p.0).display_realized {
+            if (*p.0).swap_chain.is_none() {
+                (*p.0).swap_chain = Some(vec![0; 16]);
+            }
+            let uniforms: &mut [f32; 4] = &mut (*p.0).uniforms;
+            uniforms[0] += 1.0;
+            (*p.0).cells_rebuilt = false;
+            (*p.0).latest_frame.push(Frame(vec![1, 2, 3]));
+        }
+    }
+    lock.unlock();
+}
+
+/// The GTK main thread with narrow flag writes (`display_realized_raw` /
+/// `display_unrealized_raw`) and `takeFrame` through its own handle.
+fn main_gtk_narrow(p: P<Fixed>, lock: &DrawMutex, slot: &LatestFrame<Frame>) {
+    unsafe {
+        lock.lock();
+        (*p.0).display_realized = false;
+        lock.unlock();
+        drop(slot.take());
+        lock.lock();
+        (*p.0).display_realized = true;
+        lock.unlock();
+        drop(slot.take());
+    }
+}
+
+// ===========================================================================
 // NEGATIVE controls for the two halves of the fix.
 // ===========================================================================
 
@@ -355,6 +457,14 @@ fn main() {
         // CLEAN expected (the fix).
         "fixed_vs_sync_draw" => run_fixed(main_sync_draw),
         "fixed_vs_gtk_main" => run_fixed(main_gtk),
+        // Ruling 32: the reference's lock scopes in `update_frame`.
+        // UB expected: a whole-renderer retag on the main thread under the lock
+        // still covers the render thread's unlocked narrow view.
+        "split_vs_sync_draw_whole" => run_split(main_sync_draw),
+        "split_vs_gtk_main_whole" => run_split(main_gtk),
+        // CLEAN expected: every main-thread access narrow.
+        "split_vs_sync_draw_narrow" => run_split(main_sync_draw_narrow),
+        "split_vs_gtk_main_narrow" => run_split(main_gtk_narrow),
         other => panic!("unknown candidate {other}"),
     }
 }

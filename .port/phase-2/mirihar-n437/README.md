@@ -63,6 +63,10 @@ scheduler is explored over 16 seeds (`-Zmiri-many-seeds=0..16`).
 | `latest_frame_inline` | NEGATIVE: external lock, but the frame slot INLINE (`takeFrame` through the renderer) | **UB** | **UB** |
 | `fixed_vs_sync_draw` | the fix vs the macOS main-thread sync draw | **CLEAN** | **CLEAN** |
 | `fixed_vs_gtk_main` | the fix vs the GTK main thread (realize flags + `takeFrame`) | **CLEAN** | **CLEAN** |
+| `split_vs_sync_draw_whole` | ruling 32 render side vs a main-thread sync draw that retags the whole renderer under the lock | **UB** | **UB** |
+| `split_vs_gtk_main_whole` | ruling 32 render side vs GTK flag writes through a whole-renderer `&mut` under the lock | **UB** | **UB** |
+| `split_vs_sync_draw_narrow` | ruling 32 render side vs the narrow sync draw (the shipped shape) | **CLEAN** | **CLEAN** |
+| `split_vs_gtk_main_narrow` | ruling 32 render side vs narrow flag writes + `takeFrame` (the shipped shape) | **CLEAN** | **CLEAN** |
 
 Every UB row is an aliasing-model violation (SB: "not granting access to tag … which
 is strongly protected"; TB: a data race between a retag and the other thread's
@@ -71,6 +75,23 @@ is not enough while the mutex is inline, and the external lock does not cover an
 inline frame slot.
 
 Measured 2026-09-28, `miri 0.1.0 (6f72b5dd5f 2026-07-22)`, macOS host.
+
+## Ruling 32: the reference's lock scopes in `update_frame` (P7-W7 T2 fix round 1)
+
+`update_frame` takes the draw mutex only around the Kitty image update and the
+GPU-cell rebuild, as `generic.zig:1478, 1609` does. The rest runs unlocked on
+fields only the render thread uses, reached through narrow places of the raw root
+(`update_frame_impl`'s view), never a whole-renderer reference; the whole `&mut`
+exists only in the locked tail. `split_*` model this. The two `_whole` negatives
+show the condition that makes it sound: every main-thread access under the lock
+must be narrow too, since a whole-renderer retag still covers the bytes the render
+thread is using unlocked (Miri: "Data race detected between (1) non-atomic write on
+thread `unnamed-1` and (2) retag write of type `Fixed`"). The port therefore makes
+the main thread's entries narrow: `display_realized_raw` / `display_unrealized_raw`
+(both twins) and the macOS sync draw's helpers (`init_shaders_raw`,
+`update_screen_size_uniforms_raw`, `upload_background_image_raw`,
+`update_custom_shader_uniforms_for_frame_raw`), and the sync draw no longer calls
+`animation_wake` (`sync` is tested first). Measured 2026-09-29, same toolchain.
 
 ## Run
 
