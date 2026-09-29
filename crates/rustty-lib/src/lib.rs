@@ -1,7 +1,7 @@
 //! rustty-lib
 //!
-//! PORTS: ghostty src/lib/ (allocator, allocator/wasm, c_abi, enum, main, struct,
-//! target, types, union) — allocator utilities. (`string` was deleted upstream
+//! PORTS: ghostty src/lib/ (allocator, allocator/wasm, c_abi, enum, main,
+//! parse_int, struct, target, types, union) — allocator utilities. (`string` was deleted upstream
 //! by `1d6bc6829`: callers moved to `std.mem.cutPrefix` / slice `strip_prefix`;
 //! `allocator/convenience` was deleted upstream by `a8e9b413f`, replaced by the
 //! byte-based `allocator/wasm`.)
@@ -32,6 +32,7 @@ pub mod c_header;
 pub mod crc32c;
 pub mod r#enum;
 pub mod packed;
+pub mod parse_int;
 pub mod r#struct;
 pub mod target;
 pub mod types;
@@ -44,6 +45,8 @@ pub use crate::packed::{PackedLayout as Packed, PackedTaggedUnionLayout as Packe
 /// `allocator` module above. The remaining `main.zig` re-exports map onto the
 /// items below.
 pub use crate::r#enum::{check_ghostty_henum, enum_type as Enum};
+// pub const parseInt = @import("parse_int.zig").parseInt;
+pub use crate::parse_int::parse_int;
 pub use crate::r#struct::{sized_field_fits as struct_sized_field_fits, struct_type as Struct};
 pub use crate::r#union::TaggedUnion;
 pub use crate::target::Target;
@@ -59,8 +62,8 @@ mod main_tests {
         // re-exports to mirror `refAllDecls`.
         #[allow(unused_imports)]
         use super::{
-            struct_sized_field_fits, Buffer, Enum, Packed, PackedTaggedUnion, String, Struct,
-            TaggedUnion, Target,
+            parse_int, struct_sized_field_fits, Buffer, Enum, Packed, PackedTaggedUnion, String,
+            Struct, TaggedUnion, Target,
         };
         let _ = Target::C;
         let _ = Target::Zig;

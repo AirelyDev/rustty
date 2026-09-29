@@ -265,29 +265,13 @@ impl Field {
             return match self {
                 Field::Type => FieldValue::Type(ContextType::parse(value)),
                 Field::Exit => FieldValue::Exit(ExitStatus::parse(value)),
+                // .pid, .pidfdid, .status => lib.parseInt(
+                //     u64,
+                //     value,
+                //     10,
+                // ) catch null,
                 Field::Pid | Field::Pidfdid | Field::Status => {
-                    // value: {
-                    //     for (value) |c| {
-                    //         if (c < '0' or c > '9') break :value null;
-                    //     }
-                    //     break :value std.fmt.parseInt(u64, value, 10) catch null;
-                    // }
-                    let mut parsed: Option<u64> = None;
-                    'value: {
-                        for &c in value {
-                            // PORT NOTE: faithful to the reference `c < '0' or
-                            // c > '9'`; clippy's range-contains rewrite is
-                            // suppressed to preserve the ported comparison.
-                            #[allow(clippy::manual_range_contains)]
-                            if c < b'0' || c > b'9' {
-                                break 'value;
-                            }
-                        }
-                        parsed = core::str::from_utf8(value)
-                            .ok()
-                            .and_then(|s| s.parse::<u64>().ok());
-                    }
-                    FieldValue::Int(parsed)
+                    FieldValue::Int(rustty_lib::parse_int::<u64, 10>(value).ok())
                 }
                 // String fields
                 Field::User
@@ -609,6 +593,26 @@ mod tests {
             cs.read_option(Field::Signal).as_bytes().unwrap(),
             b"SIGKILL".as_slice()
         );
+    }
+
+    // test "OSC 3008: numeric fields reject non-digits" {
+    #[test]
+    fn osc_3008_numeric_fields_reject_non_digits() {
+        let mut p: Parser = Parser::init(None);
+        let input = "3008;start=myctx;pid=4_2;pidfdid=+42;status=-1";
+        for ch in input.bytes() {
+            p.next(ch);
+        }
+
+        let cmd = p.end(None).unwrap();
+        assert!(matches!(cmd, Command::ContextSignal(_)));
+        let cs = match cmd {
+            Command::ContextSignal(cs) => cs,
+            _ => unreachable!(),
+        };
+        assert!(cs.read_option(Field::Pid).as_int().is_none());
+        assert!(cs.read_option(Field::Pidfdid).as_int().is_none());
+        assert!(cs.read_option(Field::Status).as_int().is_none());
     }
 
     #[test]
