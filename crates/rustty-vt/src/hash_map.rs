@@ -54,6 +54,8 @@
 //   const OffsetBuf = @import("size.zig").OffsetBuf;
 //   const getOffset = @import("size.zig").getOffset;
 // The offset types are the hoisted size types from rustty-render-types (A1).
+// Since `6112935a2` nothing in the reference file calls `getOffset` any more
+// (the import stays in the reference); the port drops the unused `use`.
 //
 // PORT NOTE: the reference is a comptime `HashMapUnmanaged(K, V, Context)` / its
 // `OffsetHashMap` wrapper. In Rust both are generic over `K`, `V` and a
@@ -77,7 +79,7 @@
 
 use core::marker::PhantomData;
 
-use rustty_render_types::term_size::{get_offset, Offset, OffsetBuf};
+use rustty_render_types::term_size::{Offset, OffsetBuf};
 use rustty_util::quirks::inlineAssert as assert;
 
 /// `OutOfMemory` error. The reference uses `Allocator.Error`, whose only
@@ -267,14 +269,25 @@ impl<K: core::hash::Hash + PartialEq> HashMapContext<K> for AutoContext<K> {
 /// possible to efficiently move around the backing memory without
 /// invalidating the HashMap.
 pub struct OffsetHashMap<K, V, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8> {
+    /// The slot metadata in the backing memory. The map's size counter
+    /// sits immediately before it (see `Unmanaged.Header`).
     pub metadata: Offset<Metadata>,
+
+    /// The key and value arrays in the backing memory.
+    pub keys: Offset<K>,
+    pub values: Offset<V>,
+
+    /// The number of slots. This never changes after init, so it is
+    /// kept here rather than in the backing memory.
+    pub capacity: Size,
+
     _marker: PhantomData<(K, V, Context)>,
 }
 
-// PORT NOTE: the reference `OffsetHashMap` is a plain struct holding a single
-// `Offset` (a `u32`), so `var x = self.*` copies it trivially. We mirror that
-// with `Clone`/`Copy` (the only field is `Copy`); needed by `Page` clone, which
-// copies the whole struct (`var result = self.*`).
+// PORT NOTE: the reference `OffsetHashMap` is a plain struct of three `Offset`s
+// (each a `u32`) and a `u32` capacity, so `var x = self.*` copies it trivially.
+// We mirror that with `Clone`/`Copy` (every field is `Copy`); needed by `Page`
+// clone, which copies the whole struct (`var result = self.*`).
 impl<K, V, Context: HashMapContext<K>, const P: u8> Clone for OffsetHashMap<K, V, Context, P> {
     fn clone(&self) -> Self {
         *self
@@ -291,10 +304,15 @@ impl<K, V, Context: HashMapContext<K>, const P: u8> Copy for OffsetHashMap<K, V,
 // "we're wrapping") and to the shared crate-level `Layout` type. The comments are
 // preserved here so nothing is lost.
 
+// PORT NOTE: the reference field defaults are `metadata: Offset(..) = .{}`,
+// `keys: Offset(K) = .{}`, `values: Offset(V) = .{}`, `capacity: Size = 0`.
 impl<K, V, Context: HashMapContext<K>, const P: u8> Default for OffsetHashMap<K, V, Context, P> {
     fn default() -> Self {
         OffsetHashMap {
             metadata: Offset::default(),
+            keys: Offset::default(),
+            values: Offset::default(),
+            capacity: 0,
             _marker: PhantomData,
         }
     }
@@ -322,11 +340,29 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const P: u8> OffsetHashMap<K,
     /// `buf` must point at a valid `base_align`-aligned allocation of at least
     /// `l.total_size` bytes.
     pub unsafe fn init(buf: OffsetBuf, l: Layout) -> Self {
-        assert(unsafe { buf.start() } as usize % Self::base_align() == 0);
+        let this = unsafe { Self::init_assume_zeroed(buf, l) };
+        let mut m = unsafe { this.map(buf) };
+        m.clear_retaining_capacity();
+        this
+    }
 
-        let m = unsafe { HashMapUnmanaged::<K, V, Context, P>::init(buf, l) };
+    /// Like `init`, but for backing memory that the caller guarantees
+    /// is already zero-filled (e.g. fresh OS pages). This writes
+    /// nothing to the backing memory: all-zero slot metadata means
+    /// every slot is free and a zero size counter means empty, so the
+    /// OS pages behind the map stay untouched until the first insert.
+    ///
+    /// # Safety
+    ///
+    /// As `init`, and the header and metadata region of the buffer must be
+    /// zero. Behavior is undefined otherwise.
+    pub unsafe fn init_assume_zeroed(buf: OffsetBuf, l: Layout) -> Self {
+        assert(unsafe { buf.start() } as usize % Self::base_align() == 0);
         OffsetHashMap {
-            metadata: unsafe { get_offset(buf, m.metadata.unwrap() as *const Metadata) },
+            metadata: buf.member(l.metadata_start),
+            keys: buf.member(l.keys_start),
+            values: buf.member(l.vals_start),
+            capacity: l.capacity,
             _marker: PhantomData,
         }
     }
@@ -336,12 +372,28 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const P: u8> OffsetHashMap<K,
     /// # Safety
     ///
     /// `base` must be the true base pointer this map was initialized against.
+    //
+    // PORT NOTE (P7-W1 T2, Stacked/Tree Borrows): the reference passes
+    // `base: anytype` to each of the three `Offset.ptr` calls. The port reads
+    // the base pointer ONCE (`ptr_from_base`) and derives metadata, keys and
+    // values from that one raw pointer, so all three cached pointers share the
+    // same provenance. Every page caller hands in the page's raw
+    // `memory_ptr()`, never a `&mut [u8]`/`&mut Page` projection: a cached
+    // pointer derived from a `&mut` retag is invalidated by the next `&mut`
+    // over the page memory (the hyperlink set release or the grapheme alloc
+    // between two map calls). Ledger: `.port/audits/GHOSTTY_LIFETIMES.tsv`
+    // (`HashMapUnmanaged` metadata/keys/values); proof harness:
+    // `.port/phase-2/mirihar-p7-hashmap/`.
     pub unsafe fn map<B: rustty_render_types::term_size::IntFromBase>(
         &self,
         base: B,
     ) -> HashMapUnmanaged<K, V, Context, P> {
+        let base = base.ptr_from_base();
         HashMapUnmanaged {
-            metadata: Some(unsafe { self.metadata.ptr(base) }),
+            metadata: unsafe { self.metadata.ptr(base) },
+            keys: unsafe { self.keys.ptr(base) },
+            values: unsafe { self.values.ptr(base) },
+            cap: self.capacity,
             _marker: PhantomData,
         }
     }
@@ -445,26 +497,29 @@ pub struct GetOrPutResult<K, V> {
     pub found_existing: bool,
 }
 
-/// `const Header = struct { values, keys, capacity, size };`
+/// The part of the map's state that changes after init. It lives
+/// in the backing buffer so that the map can be handed around by
+/// value; its zero value is the empty map.
 //
 // PORT NOTE: the reference `Header` is a plain Zig struct laid out immediately
-// before the metadata. We reproduce the same field order and types. The keys/
-// values offsets are relative to the metadata pointer (`Offset(V)`/`Offset(K)`).
+// before the metadata. Since `6112935a2` its only field is the size counter
+// (the capacity and the key/value offsets moved into the map structs).
 #[repr(C)]
-struct Header<K, V> {
-    /// The keys/values offset are relative to the metadata
-    values: Offset<V>,
-    keys: Offset<K>,
-    capacity: Size,
+struct Header {
     size: Size,
 }
 
 /// The memory layout for the underlying buffer for a given capacity.
+/// All offsets are from the start of the buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Layout {
     /// The total size of the buffer required. The buffer is expected
     /// to be aligned to `base_align`.
     pub total_size: usize,
+
+    /// The offset to the start of the slot metadata. The header
+    /// occupies the bytes before it.
+    pub metadata_start: usize,
 
     /// The offset to the start of the keys data.
     pub keys_start: usize,
@@ -480,26 +535,30 @@ pub struct Layout {
 /// the key/values pointer, and backward-shift deletion in place of
 /// tombstones. The metadata is still a pointer to limit the amount of
 /// arithmetic required to access it. See the file comment for full details.
+//
+// LIFETIMES (`.port/audits/GHOSTTY_LIFETIMES.tsv`, P7-W1 T2 rows):
+//   metadata / keys / values — BORROW_FIELD, raw non-owning pointers into the
+//     backing buffer (the page's memory). All three are derived from ONE raw
+//     base (`OffsetHashMap::map`, `init_assume_zeroed`), never from a `&mut`
+//     projection; the buffer's owner outlives every map value built from it.
 pub struct HashMapUnmanaged<K, V, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8> {
-    // This is actually a midway pointer to the single buffer containing
-    // a `Header` field, the `Metadata`s and `Entry`s.
-    // At `-@sizeOf(Header)` is the Header field.
-    // At `sizeOf(Metadata) * capacity + offset`, which is pointed to by
-    // self.header().entries, is the array of entries.
-    // This means that the hashmap only holds one live allocation, to
-    // reduce memory fragmentation and struct size.
-    /// Pointer to the metadata.
-    pub metadata: Option<*mut Metadata>,
-    _marker: PhantomData<(K, V, Context)>,
-}
+    // The backing buffer holds a `Header` (the size counter) followed
+    // by the `Metadata`s, then the keys and values arrays. Everything
+    // the map needs that does not change after init, the capacity and
+    // the entry pointers, lives in this struct instead of the buffer,
+    // so that a zero-filled buffer is a valid empty map and init never
+    // has to write to it.
+    /// Pointer to the slot metadata. The header sits right before it.
+    pub metadata: *mut Metadata,
 
-impl<K, V, Context: HashMapContext<K>, const P: u8> Default for HashMapUnmanaged<K, V, Context, P> {
-    fn default() -> Self {
-        HashMapUnmanaged {
-            metadata: None,
-            _marker: PhantomData,
-        }
-    }
+    /// The key and value arrays.
+    pub keys: *mut K,
+    pub values: *mut V,
+
+    /// The number of slots. Always zero or a power of two.
+    pub cap: Size,
+
+    _marker: PhantomData<(K, V, Context)>,
 }
 
 impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8>
@@ -511,7 +570,7 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
     const _ASSERT_MAX_LOAD: () = assert!(MAX_LOAD_PERCENTAGE > 0 && MAX_LOAD_PERCENTAGE <= 100);
 
     fn header_align() -> usize {
-        core::mem::align_of::<Header<K, V>>()
+        core::mem::align_of::<Header>()
     }
     fn key_align() -> usize {
         if core::mem::size_of::<K>() == 0 {
@@ -552,6 +611,21 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
     /// `buf` must point at a valid `base_align`-aligned allocation of at least
     /// `layout.total_size` bytes.
     pub unsafe fn init(buf: OffsetBuf, layout: Layout) -> Self {
+        let mut map = unsafe { Self::init_assume_zeroed(buf, layout) };
+        map.clear_retaining_capacity();
+        map
+    }
+
+    /// Like `init`, but for a buffer that the caller guarantees is
+    /// already zero-filled. Nothing is written: an all-zero metadata
+    /// byte is a free slot (see `Metadata.isFree`) and a zero header
+    /// is an empty map. Behavior is undefined if the header and
+    /// metadata region is not zero.
+    ///
+    /// # Safety
+    ///
+    /// As `init`, and the header and metadata region must be zero.
+    pub unsafe fn init_assume_zeroed(buf: OffsetBuf, layout: Layout) -> Self {
         // Force the comptime asserts to be evaluated for this instantiation.
         let () = Self::_ASSERT_META_ALIGN;
         let () = Self::_ASSERT_META_SIZE;
@@ -559,28 +633,13 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
         let () = Self::_ASSERT_MAX_LOAD;
 
         assert(unsafe { buf.start() } as usize % Self::base_align() == 0);
-
-        // Get all our main pointers
-        let metadata_buf = unsafe { buf.rebase(core::mem::size_of::<Header<K, V>>()) };
-        let metadata_ptr: *mut Metadata = unsafe { metadata_buf.start() } as *mut Metadata;
-
-        // Build our map
-        let mut map: Self = HashMapUnmanaged {
-            metadata: Some(metadata_ptr),
+        HashMapUnmanaged {
+            metadata: unsafe { buf.start().add(layout.metadata_start) } as *mut Metadata,
+            keys: unsafe { buf.member::<K>(layout.keys_start).ptr(buf) },
+            values: unsafe { buf.member::<V>(layout.vals_start).ptr(buf) },
+            cap: layout.capacity,
             _marker: PhantomData,
-        };
-        let hdr = unsafe { map.header() };
-        unsafe {
-            (*hdr).capacity = layout.capacity;
-            (*hdr).size = 0;
-            // if (@sizeOf([*]K) != 0) hdr.keys = metadata_buf.member(K, layout.keys_start);
-            (*hdr).keys = metadata_buf.member(layout.keys_start);
-            // if (@sizeOf([*]V) != 0) hdr.values = metadata_buf.member(V, layout.vals_start);
-            (*hdr).values = metadata_buf.member(layout.vals_start);
         }
-        unsafe { map.init_metadatas() };
-
-        map
     }
 
     pub fn ensure_total_capacity(&mut self, new_size: Size) -> Result<(), OutOfMemory> {
@@ -595,11 +654,9 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
     }
 
     pub fn clear_retaining_capacity(&mut self) {
-        if self.metadata.is_some() {
-            unsafe {
-                self.init_metadatas();
-                (*self.header()).size = 0;
-            }
+        unsafe {
+            self.init_metadatas();
+            (*self.header()).size = 0;
         }
     }
 
@@ -607,36 +664,22 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
         unsafe { (*self.header()).size }
     }
 
-    /// # Safety: metadata must be non-null.
-    unsafe fn header(&self) -> *mut Header<K, V> {
-        // @ptrCast(@as([*]Header, @ptrCast(@alignCast(self.metadata.?))) - 1)
-        let meta = self.metadata.unwrap() as *mut Header<K, V>;
+    /// # Safety: metadata must point into a live backing buffer.
+    unsafe fn header(&self) -> *mut Header {
+        // @ptrCast(@as([*]Header, @ptrCast(@alignCast(self.metadata))) - 1)
+        let meta = self.metadata as *mut Header;
         unsafe { meta.sub(1) }
     }
 
-    /// # Safety: metadata must be valid.
-    unsafe fn keys(&self) -> *mut K {
-        unsafe { (*self.header()).keys.ptr(self.metadata.unwrap()) }
-    }
-
-    /// # Safety: metadata must be valid.
-    unsafe fn values(&self) -> *mut V {
-        unsafe { (*self.header()).values.ptr(self.metadata.unwrap()) }
-    }
-
     pub fn capacity(&self) -> Size {
-        if self.metadata.is_none() {
-            return 0;
-        }
-
-        unsafe { (*self.header()).capacity }
+        self.cap
     }
 
     /// Maximum number of entries the map will hold. This is less than
     /// capacity when MAX_LOAD_PERCENTAGE is below 100, which keeps free
     /// slots in every probe chain and bounds probe lengths.
     pub fn max_load(&self) -> Size {
-        Self::max_load_for_capacity(self.capacity())
+        Self::max_load_for_capacity(self.cap)
     }
 
     pub fn iterator(&self) -> Iterator<'_, K, V, Context, MAX_LOAD_PERCENTAGE> {
@@ -644,58 +687,29 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
     }
 
     // pub fn keyIterator(self: *const Self) KeyIterator {
-    //     if (self.metadata) |metadata| {
-    //         return .{
-    //             .len = self.capacity(),
-    //             .metadata = metadata,
-    //             .items = self.keys(),
-    //         };
-    //     } else {
-    //         return .{
-    //             .len = 0,
-    //             .metadata = undefined,
-    //             .items = undefined,
-    //         };
-    //     }
+    //     return .{
+    //         .len = self.cap,
+    //         .metadata = self.metadata,
+    //         .items = self.keys,
+    //     };
     // }
-    // PORT NOTE (parity S155-F2): the `undefined` pointers of the empty arm
-    // are null here; `len == 0` means `next` never reads them.
     pub fn key_iterator(&self) -> KeyIterator<'_, K> {
-        match self.metadata {
-            Some(metadata) => FieldIterator {
-                len: self.capacity() as usize,
-                metadata,
-                // SAFETY: `metadata` is set, so the header and its key array
-                // are valid for `capacity()` slots.
-                items: unsafe { self.keys() },
-                _marker: PhantomData,
-            },
-            None => FieldIterator {
-                len: 0,
-                metadata: core::ptr::null(),
-                items: core::ptr::null_mut(),
-                _marker: PhantomData,
-            },
+        FieldIterator {
+            len: self.cap as usize,
+            metadata: self.metadata,
+            items: self.keys,
+            _marker: PhantomData,
         }
     }
 
     // pub fn valueIterator(self: *const Self) ValueIterator { ... }
-    // (the same shape as `keyIterator`, over `self.values()`)
+    // (the same shape as `keyIterator`, over `self.values`)
     pub fn value_iterator(&self) -> ValueIterator<'_, V> {
-        match self.metadata {
-            Some(metadata) => FieldIterator {
-                len: self.capacity() as usize,
-                metadata,
-                // SAFETY: as in `key_iterator`, over the value array.
-                items: unsafe { self.values() },
-                _marker: PhantomData,
-            },
-            None => FieldIterator {
-                len: 0,
-                metadata: core::ptr::null(),
-                items: core::ptr::null_mut(),
-                _marker: PhantomData,
-            },
+        FieldIterator {
+            len: self.cap as usize,
+            metadata: self.metadata,
+            items: self.values,
+            _marker: PhantomData,
         }
     }
 
@@ -733,22 +747,22 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
         // as a `debug_assert!` for the same reason the reference added it — it
         // turns a violated assume-capacity contract into a panic instead of a
         // silent live-entry overwrite.
-        debug_assert!(unsafe { (*self.header()).size } < self.capacity());
+        debug_assert!(unsafe { (*self.header()).size } < self.cap);
 
         let hash = ctx.hash(key);
-        let mask = self.capacity() - 1;
+        let mask = self.cap - 1;
         let mut idx = (hash & (mask as u64)) as usize;
 
-        let mut metadata = unsafe { self.metadata.unwrap().add(idx) };
+        let mut metadata = unsafe { self.metadata.add(idx) };
         while unsafe { (*metadata).is_used() } {
             idx = (idx + 1) & (mask as usize);
-            metadata = unsafe { self.metadata.unwrap().add(idx) };
+            metadata = unsafe { self.metadata.add(idx) };
         }
 
         unsafe {
             (*metadata).fill(Metadata::take_fingerprint(hash));
-            *self.keys().add(idx) = key;
-            *self.values().add(idx) = value;
+            *self.keys.add(idx) = key;
+            *self.values.add(idx) = value;
             (*self.header()).size += 1;
         }
     }
@@ -803,8 +817,8 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
     pub fn fetch_remove_context(&mut self, key: K, ctx: &Context) -> Option<KV<K, V>> {
         let idx = self.get_index(key, ctx)?;
         let result = KV {
-            key: unsafe { *self.keys().add(idx) },
-            value: unsafe { *self.values().add(idx) },
+            key: unsafe { *self.keys.add(idx) },
+            value: unsafe { *self.values.add(idx) },
         };
         self.remove_by_index_context(idx, ctx);
         Some(result)
@@ -827,18 +841,18 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
         // If you get a compile error on this line, it means that your generic hash
         // function is invalid for these parameters.
         let hash = ctx.hash(key);
-        let mask = self.capacity() - 1;
+        let mask = self.cap - 1;
         let fingerprint = Metadata::take_fingerprint(hash);
         // Don't loop indefinitely when there are no free slots.
-        let mut limit = self.capacity();
+        let mut limit = self.cap;
         let mut idx = (hash & (mask as u64)) as usize;
 
-        let mut metadata = unsafe { self.metadata.unwrap().add(idx) };
+        let mut metadata = unsafe { self.metadata.add(idx) };
         while !unsafe { (*metadata).is_free() } && limit != 0 {
             if unsafe { (*metadata).is_used() }
                 && unsafe { (*metadata).fingerprint() } == fingerprint
             {
-                let test_key = unsafe { self.keys().add(idx) };
+                let test_key = unsafe { self.keys.add(idx) };
                 // If you get a compile error on this line, it means that your generic eql
                 // function is invalid for these parameters.
                 let eql = ctx.eql(key, unsafe { *test_key });
@@ -856,7 +870,7 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
 
             limit -= 1;
             idx = (idx + 1) & (mask as usize);
-            metadata = unsafe { self.metadata.unwrap().add(idx) };
+            metadata = unsafe { self.metadata.add(idx) };
         }
 
         None
@@ -871,8 +885,8 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
     pub fn get_entry_adapted(&self, key: K, ctx: &Context) -> Option<Entry<K, V>> {
         if let Some(idx) = self.get_index(key, ctx) {
             return Some(Entry {
-                key_ptr: unsafe { self.keys().add(idx) },
-                value_ptr: unsafe { self.values().add(idx) },
+                key_ptr: unsafe { self.keys.add(idx) },
+                value_ptr: unsafe { self.values.add(idx) },
             });
         }
         None
@@ -891,7 +905,7 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
     }
     pub fn get_key_ptr_adapted(&self, key: K, ctx: &Context) -> Option<*mut K> {
         if let Some(idx) = self.get_index(key, ctx) {
-            return Some(unsafe { self.keys().add(idx) });
+            return Some(unsafe { self.keys.add(idx) });
         }
         None
     }
@@ -902,7 +916,7 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
     }
     pub fn get_key_adapted(&self, key: K, ctx: &Context) -> Option<K> {
         if let Some(idx) = self.get_index(key, ctx) {
-            return Some(unsafe { *self.keys().add(idx) });
+            return Some(unsafe { *self.keys.add(idx) });
         }
         None
     }
@@ -913,7 +927,7 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
     }
     pub fn get_ptr_adapted(&self, key: K, ctx: &Context) -> Option<*mut V> {
         if let Some(idx) = self.get_index(key, ctx) {
-            return Some(unsafe { self.values().add(idx) });
+            return Some(unsafe { self.values.add(idx) });
         }
         None
     }
@@ -930,7 +944,7 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
     #[inline]
     pub fn get_adapted(&self, key: K, ctx: &Context) -> Option<V> {
         if let Some(idx) = self.get_index(key, ctx) {
-            return Some(unsafe { *self.values().add(idx) });
+            return Some(unsafe { *self.values.add(idx) });
         }
         None
     }
@@ -962,8 +976,8 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
                     None => return Err(err),
                 };
                 return Ok(GetOrPutResult {
-                    key_ptr: unsafe { self.keys().add(index) },
-                    value_ptr: unsafe { self.values().add(index) },
+                    key_ptr: unsafe { self.keys.add(index) },
+                    value_ptr: unsafe { self.values.add(index) },
                     found_existing: true,
                 });
             }
@@ -996,17 +1010,17 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
         // `if (@TypeOf(hash) != Hash) @compileError(...)`; in Rust the
         // `HashMapContext::hash` trait method's signature fixes the return type to
         // `u64` (== `Hash`) at compile time, so the check is statically satisfied.
-        let mask = self.capacity() - 1;
+        let mask = self.cap - 1;
         let fingerprint = Metadata::take_fingerprint(hash);
-        let mut limit = self.capacity();
+        let mut limit = self.cap;
         let mut idx = (hash & (mask as u64)) as usize;
 
-        let mut metadata = unsafe { self.metadata.unwrap().add(idx) };
+        let mut metadata = unsafe { self.metadata.add(idx) };
         while !unsafe { (*metadata).is_free() } && limit != 0 {
             if unsafe { (*metadata).is_used() }
                 && unsafe { (*metadata).fingerprint() } == fingerprint
             {
-                let test_key = unsafe { self.keys().add(idx) };
+                let test_key = unsafe { self.keys.add(idx) };
                 // If you get a compile error on this line, it means that your generic eql
                 // function is invalid for these parameters.
                 let eql = ctx.eql(key, unsafe { *test_key });
@@ -1020,7 +1034,7 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
                 if eql {
                     return GetOrPutResult {
                         key_ptr: test_key,
-                        value_ptr: unsafe { self.values().add(idx) },
+                        value_ptr: unsafe { self.values.add(idx) },
                         found_existing: true,
                     };
                 }
@@ -1028,7 +1042,7 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
 
             limit -= 1;
             idx = (idx + 1) & (mask as usize);
-            metadata = unsafe { self.metadata.unwrap().add(idx) };
+            metadata = unsafe { self.metadata.add(idx) };
         }
 
         // The caller guaranteed capacity for at least one new entry, so
@@ -1042,8 +1056,8 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
 
         unsafe {
             (*metadata).fill(fingerprint);
-            let new_key = self.keys().add(idx);
-            let new_value = self.values().add(idx);
+            let new_key = self.keys.add(idx);
+            let new_value = self.values.add(idx);
             // new_key.* = undefined; new_value.* = undefined; (no-op)
             (*self.header()).size += 1;
 
@@ -1092,8 +1106,8 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
     //
     // UB HAZARD (area D §4.5): this writes `metadata[hole]`, `keys[hole]` and
     // `values[hole]` — three overlapping raw views into ONE `Page` allocation —
-    // while also reading `keys[j]` to rehash it. `metadata`, `keys()` and
-    // `values()` are therefore kept as RAW pointers; do NOT form `&mut [K]` and
+    // while also reading `keys[j]` to rehash it. `metadata`, `keys` and
+    // `values` are therefore kept as RAW pointers; do NOT form `&mut [K]` and
     // `&mut [Metadata]` simultaneously from the same base for the convenience
     // of indexing. Proof harness: `.port/phase-3/mirihar-hashmap-shift/`.
     //
@@ -1101,10 +1115,10 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
     // and value pointer the map has handed out is invalidated. Caller audit:
     // `.port/phase-3/HASHMAP_CALLER_AUDIT.md` (12/12 rows resolved).
     fn remove_by_index_context(&mut self, idx: usize, ctx: &Context) {
-        let mask: usize = (self.capacity() - 1) as usize;
-        let metadata = self.metadata.unwrap();
-        let keys_ptr = unsafe { self.keys() };
-        let values_ptr = unsafe { self.values() };
+        let mask: usize = (self.cap - 1) as usize;
+        let metadata = self.metadata;
+        let keys_ptr = self.keys;
+        let values_ptr = self.values;
 
         // A completely full table has no free slot to terminate the
         // scan, so bound it to one full cycle. That is sufficient: the
@@ -1112,7 +1126,7 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
         // visited, so each entry needs to be considered exactly once.
         let mut hole = idx;
         let mut j = idx;
-        let mut limit = self.capacity() - 1;
+        let mut limit = self.cap - 1;
         while limit != 0 {
             limit -= 1;
             j = (j + 1) & mask;
@@ -1196,10 +1210,10 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
         // non-ZST caller (the branch is `size_of::<K>() == 0` only) and correct
         // for the generic contract the tests below now pin.
         let idx = if core::mem::size_of::<K>() > 0 {
-            ((key_ptr as usize) - (unsafe { self.keys() } as usize)) / core::mem::size_of::<K>()
+            ((key_ptr as usize) - (self.keys as usize)) / core::mem::size_of::<K>()
         } else {
-            let metadata = self.metadata.unwrap();
-            let capacity = self.capacity() as usize;
+            let metadata = self.metadata;
+            let capacity = self.cap as usize;
             let mut found: Option<usize> = None;
             for i in 0..capacity {
                 if unsafe { (*metadata.add(i)).is_used() } {
@@ -1217,11 +1231,11 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
 
     /// # Safety: metadata must be valid.
     unsafe fn init_metadatas(&mut self) {
-        // @memset(@as([*]u8, @ptrCast(self.metadata.?))[0 .. @sizeOf(Metadata) * self.capacity()], 0);
+        // @memset(@as([*]u8, @ptrCast(self.metadata))[0 .. @sizeOf(Metadata) * self.cap], 0);
         unsafe {
             core::slice::from_raw_parts_mut(
-                self.metadata.unwrap() as *mut u8,
-                core::mem::size_of::<Metadata>() * self.capacity() as usize,
+                self.metadata as *mut u8,
+                core::mem::size_of::<Metadata>() * self.cap as usize,
             )
             .fill(0);
         }
@@ -1277,16 +1291,16 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
         let mask = (cap - 1) as usize;
         let mut used: Size = 0;
         for idx in 0..cap as usize {
-            let metadata = unsafe { *self.metadata.unwrap().add(idx) };
+            let metadata = unsafe { *self.metadata.add(idx) };
             if !metadata.is_used() {
                 continue;
             }
             used += 1;
 
             let mut probe: usize =
-                (ctx.hash(unsafe { *self.keys().add(idx) }) & (mask as u64)) as usize;
+                (ctx.hash(unsafe { *self.keys.add(idx) }) & (mask as u64)) as usize;
             while probe != idx {
-                if !unsafe { (*self.metadata.unwrap().add(probe)).is_used() } {
+                if !unsafe { (*self.metadata.add(probe)).is_used() } {
                     return Some(format!(
                         "canonical placement violated: entry at slot {idx} is separated \
                          from its home slot by the free slot {probe}"
@@ -1333,10 +1347,9 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
         // See: https://github.com/ziglang/zig/pull/19048
         let cap: usize = new_capacity as usize;
 
-        // Pack our metadata, keys, and values.
-        let meta_start = core::mem::size_of::<Header<K, V>>();
-        let meta_end =
-            core::mem::size_of::<Header<K, V>>() + cap * core::mem::size_of::<Metadata>();
+        // Pack our header, metadata, keys, and values.
+        let meta_start = core::mem::size_of::<Header>();
+        let meta_end = meta_start + cap * core::mem::size_of::<Metadata>();
         let keys_start = align_forward(meta_end, Self::key_align());
         let keys_end = keys_start + cap * core::mem::size_of::<K>();
         let vals_start = align_forward(keys_end, Self::val_align());
@@ -1346,16 +1359,11 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
         // aligned to the base required alignment.
         let total_size = align_forward(vals_end, Self::base_align());
 
-        // The offsets we actually store in the map are from the
-        // metadata pointer so that we can use self.metadata as
-        // the base.
-        let keys_offset = keys_start - meta_start;
-        let vals_offset = vals_start - meta_start;
-
         Layout {
             total_size,
-            keys_start: keys_offset,
-            vals_start: vals_offset,
+            metadata_start: meta_start,
+            keys_start,
+            vals_start,
             capacity: new_capacity,
         }
     }
@@ -1400,19 +1408,19 @@ pub struct Iterator<'a, K, V, Context: HashMapContext<K>, const MAX_LOAD_PERCENT
 
 impl<K: Copy, V: Copy, Context: HashMapContext<K>, const P: u8> Iterator<'_, K, V, Context, P> {
     pub fn next(&mut self) -> Option<Entry<K, V>> {
-        assert(self.index <= self.hm.capacity());
+        assert(self.index <= self.hm.cap);
         if unsafe { (*self.hm.header()).size } == 0 {
             return None;
         }
 
-        let cap = self.hm.capacity();
-        let end = unsafe { self.hm.metadata.unwrap().add(cap as usize) };
-        let mut metadata = unsafe { self.hm.metadata.unwrap().add(self.index as usize) };
+        let cap = self.hm.cap;
+        let end = unsafe { self.hm.metadata.add(cap as usize) };
+        let mut metadata = unsafe { self.hm.metadata.add(self.index as usize) };
 
         while metadata != end {
             if unsafe { (*metadata).is_used() } {
-                let key = unsafe { self.hm.keys().add(self.index as usize) };
-                let value = unsafe { self.hm.values().add(self.index as usize) };
+                let key = unsafe { self.hm.keys.add(self.index as usize) };
+                let value = unsafe { self.hm.values.add(self.index as usize) };
                 self.index += 1;
                 return Some(Entry {
                     key_ptr: key,
@@ -1508,6 +1516,17 @@ mod tests {
             let ptr = unsafe { alloc(layout) };
             assert!(!ptr.is_null());
             AlignedBuf { ptr, layout }
+        }
+        // `alloc.alignedAlloc` + `@memset(buf, 0)`: the zero-filled backing
+        // memory `initAssumeZeroed` requires (fresh OS pages in the product).
+        fn new_zeroed(total_size: usize, base_align: usize) -> AlignedBuf {
+            let layout = StdLayout::from_size_align(total_size, base_align).unwrap();
+            let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+            assert!(!ptr.is_null());
+            AlignedBuf { ptr, layout }
+        }
+        fn bytes(&self) -> &[u8] {
+            unsafe { core::slice::from_raw_parts(self.ptr, self.layout.size()) }
         }
         fn base(&self) -> *mut u8 {
             self.ptr
@@ -2662,6 +2681,86 @@ mod tests {
         for i in 0..requested_size {
             assert_eq!(i, map.get_context(i, &c).unwrap());
         }
+    }
+
+    // ADDITIVE (P7-W1 T2, `c0a4f80d8` + `6112935a2`; the reference adds no
+    // test): `initAssumeZeroed` writes nothing to the backing memory, and the
+    // zero-filled buffer is already a valid empty map that works as one.
+    #[test]
+    fn OffsetHashMap_initAssumeZeroed_writes_nothing() {
+        type OffsetMap = AutoOffsetHashMap<u32, u32, DEFAULT_MAX_LOAD_PERCENTAGE>;
+        let layout = OffsetMap::layout(16);
+        let buf = AlignedBuf::new_zeroed(layout.total_size, OffsetMap::base_align());
+
+        let offset_map = unsafe { OffsetMap::init_assume_zeroed(buf.offset_buf(), layout) };
+        assert!(buf.bytes().iter().all(|&b| b == 0));
+        assert_eq!(layout.capacity, offset_map.capacity);
+
+        let mut map = unsafe { offset_map.map(buf.base() as *const u8) };
+        let c = ctx::<u32>();
+        assert_eq!(0, map.count());
+        assert_eq!(layout.capacity, map.capacity());
+        assert!(map.key_iterator().next().is_none());
+        assert!(buf.bytes().iter().all(|&b| b == 0));
+
+        for i in 0..5u32 {
+            map.put_context(i, i * 10, &c).unwrap();
+        }
+        assert_eq!(5, map.count());
+        for i in 0..5u32 {
+            assert_eq!(i * 10, map.get_context(i, &c).unwrap());
+        }
+        assert!(map.remove_context(3, &c));
+        assert_eq!(4, map.count());
+        map.expect_canonical(&c);
+    }
+
+    // ADDITIVE (P7-W1 T2): `init` still resets a dirty buffer, now as
+    // `initAssumeZeroed` + `clearRetainingCapacity`.
+    #[test]
+    fn OffsetHashMap_init_clears_dirty_memory() {
+        type OffsetMap = AutoOffsetHashMap<u32, u32, DEFAULT_MAX_LOAD_PERCENTAGE>;
+        let layout = OffsetMap::layout(16);
+        let buf = AlignedBuf::new(layout.total_size, OffsetMap::base_align());
+        unsafe { core::ptr::write_bytes(buf.base(), 0xAA, layout.total_size) };
+
+        let offset_map = unsafe { OffsetMap::init(buf.offset_buf(), layout) };
+        let mut map = unsafe { offset_map.map(buf.base() as *const u8) };
+        let c = ctx::<u32>();
+        assert_eq!(0, map.count());
+        assert!(map.key_iterator().next().is_none());
+        // The header and the metadata are zero; the entry arrays are not
+        // touched (their bytes are never read for a free slot).
+        let meta_end = layout.metadata_start + layout.capacity as usize;
+        assert!(buf.bytes()[..meta_end].iter().all(|&b| b == 0));
+
+        map.put_context(7, 70, &c).unwrap();
+        assert_eq!(Some(70), map.get_context(7, &c));
+        assert_eq!(1, map.count());
+    }
+
+    // ADDITIVE (P7-W1 T2, `6112935a2`): the header is only the size counter,
+    // every layout offset is from the start of the buffer, and the map's
+    // cached key/value pointers land on those offsets.
+    #[test]
+    fn HashMap_layout_offsets_are_from_buffer_start() {
+        type Map = AutoHashMapUnmanaged<u32, u64, DEFAULT_MAX_LOAD_PERCENTAGE>;
+        let layout = Map::layout_for_capacity(16);
+        assert_eq!(core::mem::size_of::<Size>(), core::mem::size_of::<Header>());
+        assert_eq!(4, layout.metadata_start);
+        // meta_end = 4 + 16 = 20, u32 keys aligned to 4.
+        assert_eq!(20, layout.keys_start);
+        // keys_end = 20 + 64 = 84, u64 values aligned to 8.
+        assert_eq!(88, layout.vals_start);
+        assert_eq!(88 + 16 * 8, layout.total_size);
+
+        let buf = AlignedBuf::new_zeroed(layout.total_size, Map::base_align());
+        let map = unsafe { Map::init(buf.offset_buf(), layout) };
+        let base = buf.base() as usize;
+        assert_eq!(base + layout.metadata_start, map.metadata as usize);
+        assert_eq!(base + layout.keys_start, map.keys as usize);
+        assert_eq!(base + layout.vals_start, map.values as usize);
+        assert_eq!(16, map.cap);
     }
 
     #[test]

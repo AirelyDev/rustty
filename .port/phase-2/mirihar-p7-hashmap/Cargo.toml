@@ -1,0 +1,19 @@
+[package]
+name = "mirihar-p7-hashmap"
+version = "0.0.0"
+edition = "2021"
+
+[[bin]]
+name = "mirihar-p7-hashmap"
+path = "src/main.rs"
+
+# The REAL `crates/rustty-vt/src/hash_map.rs` is included by `#[path]` (it is not
+# a copy); these are exactly the crates its `use` lines name. Each resolves its
+# own `workspace = true` inheritance against the rustty root workspace.
+[dependencies]
+rustty-render-types = { path = "../../../crates/rustty-render-types" }
+rustty-util = { path = "../../../crates/rustty-util" }
+rustty-zigstd = { path = "../../../crates/rustty-zigstd" }
+
+# Standalone: not part of the rustty root workspace (this is a proof artifact).
+[workspace]
