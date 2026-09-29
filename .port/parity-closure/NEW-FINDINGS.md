@@ -6767,6 +6767,17 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
         Windows". Since task W-1 (N342), rustty-vt-c builds and is tested on Windows, so this difference is
         now reachable there.
       - It is one allocation per terminal, not a routing gap.
+  11. **Kitty file-medium canonical path buffers** (P7-W5 T2, `0b5446364`):
+      `crates/rustty-vt/src/kitty/graphics_image.rs` `readFile` and `isPathInTempDir`.
+      - The reference allocates each `std.fs.max_path_bytes` buffer through `alloc` (about 96 KiB on
+        Windows), and so does the port: one alloc and one free of `MAX_PATH_BYTES` per buffer, the
+        first before the open, the second only when the temp-directory prefix check reaches the real
+        path fallback. An allocation failure is `error.OutOfMemory` in both.
+      - The reference's `realPath` writes the canonical path straight into that buffer. The port's
+        `realpath_of_handle` and `realpath` return it in a transient Rust-heap `Vec` (on Windows via a
+        Rust-heap WTF-16 buffer too), which is copied into the buffer; a longer path is `NameTooLong`
+        as in the reference. So the C allocator sees the same calls, and the Rust heap sees one more
+        allocation per resolved path (listed under "Not C-observable" below).
 - **Not C-observable** (listed so the inventory is complete):
   - **Rust-heap allocations** that the reference never makes, or makes inside caller-allocated storage
     (N334 has the details). Current lines:
@@ -6775,8 +6786,11 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
     - rustty-vt-c: the `Box<dyn ZigAllocator>` adapters at `terminal.rs:1620`, `:1958` and
       `render.rs:1354`, `:1549`; the kitty temporary-directory copies at `terminal.rs:3179`, `:3187`; the
       snapshot decoder's `Source`/`ReaderState` boxes at `snapshot.rs:323-324`;
-    - N274's port-only transients: response strings, `format!` reports, map-key snapshots, tmux
-      notification copies, and zlib's own `malloc` for inflate state;
+    - N274's port-only transients: response strings, `format!` reports, map-key snapshots, and tmux
+      notification copies (zlib's own `malloc` for inflate state is gone since P7-W5 T2: the kitty
+      zlib decoder is wuffs, whose state and output are allocated through the caller's allocator, as
+      the reference's are);
+    - the kitty file media's canonical-path `Vec`s (item 11);
     - the per-dispatch `Box` of the borrowed OSC command (N320).
 
     The C allocator sees none of these, so a C embedder's memory accounting misses them.

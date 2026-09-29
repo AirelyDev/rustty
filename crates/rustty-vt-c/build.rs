@@ -42,7 +42,29 @@ fn main() {
         println!("cargo::rustc-cfg=rustty_opt_small");
     }
 
+    kitty_graphics();
+
     dylib_identity();
+}
+
+/// `cfg(rustty_kitty_graphics)`: the `kitty-graphics` feature resolved against
+/// the target, as `lib_vt.zig`'s `if (features.kitty_graphics)` export block
+/// sees it. `features` is the terminal module's build options, whose
+/// `kitty_graphics` is `Options.kittyGraphics(target)`
+/// (`src/terminal/build_options.zig:274-277`, `:304-306`): false on a
+/// freestanding target. So the reference's lib-vt wasm artifact
+/// (`wasm32-freestanding`) exports no `ghostty_kitty_graphics_*` symbol. Zig's
+/// `.freestanding` is Rust's `target_os = "none"` and `wasm32-unknown-unknown`
+/// (Ruling 30); rustty-vt's build.rs and `options::KITTY_GRAPHICS` state the
+/// same predicate.
+fn kitty_graphics() {
+    println!("cargo::rustc-check-cfg=cfg(rustty_kitty_graphics)");
+    let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let freestanding = os == "none" || (arch == "wasm32" && os == "unknown");
+    if std::env::var_os("CARGO_FEATURE_KITTY_GRAPHICS").is_some() && !freestanding {
+        println!("cargo::rustc-cfg=rustty_kitty_graphics");
+    }
 }
 
 #[path = "src/dylib_link_args.rs"]

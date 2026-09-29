@@ -1539,6 +1539,9 @@ dependencies = [
 [[package]]
 name = "rustty-lib"
 version = "0.1.0"
+dependencies = [
+ "rustty-zigstd",
+]
 
 [[package]]
 name = "rustty-oniguruma"
@@ -1722,7 +1725,6 @@ dependencies = [
  "rustty-util",
  "rustty-wuffs",
  "rustty-zigstd",
- "zlib-sys",
 ]
 
 [[package]]

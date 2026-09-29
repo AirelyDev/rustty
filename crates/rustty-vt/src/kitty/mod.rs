@@ -55,6 +55,12 @@ pub mod graphics_pixel;
 pub mod graphics_render;
 pub mod graphics_storage;
 pub mod graphics_unicode;
+// PORT NOTE (`0b5446364`): `graphics_image.zig` imports `windows.zig`
+// privately (`const kitty_windows = @import("windows.zig");`) and pulls its
+// tests in with `test { _ = kitty_windows; }`. Rust's module tree needs it
+// declared here, next to the other `graphics_*` siblings; it stays
+// crate-private as the reference's import is.
+pub(crate) mod windows;
 
 // pub const KeyFlags = key.Flags;
 pub use key::Flags as KeyFlags;

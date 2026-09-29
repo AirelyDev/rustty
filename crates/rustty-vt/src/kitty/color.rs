@@ -160,13 +160,11 @@ impl Kind {
         if let Some(s) = Special::string_to_enum(key) {
             return Some(Kind::Special(s));
         }
-        // PORT NOTE: `std.fmt.parseUnsigned(u8, key, 10) catch return null` —
-        // base-10 unsigned parse; on failure return null. This is NOT Rust's
-        // `str::parse::<u8>()`: `parseUnsigned` rejects a sign prefix (`"+1"`)
-        // and accepts `_` digit separators between digits (`"1_2"` == 12), so
-        // the faithful `std.fmt` helper is used instead.
+        // PORT NOTE: `lib.parseInt(u8, key, 10) catch return null` — base-10
+        // digits only; on failure return null. This is NOT Rust's
+        // `str::parse::<u8>()`, which accepts a `+` prefix (`"+1"`).
         Some(Kind::Palette(
-            match rustty_zigstd::fmt::parse_unsigned::<u8>(key.as_bytes(), 10) {
+            match rustty_lib::parse_int::<u8, 10>(key.as_bytes()) {
                 Ok(p) => p,
                 Err(_) => return None,
             },
@@ -224,18 +222,29 @@ mod tests {
         assert!(!Kind::Special(Special::SelectionBackground).has_terminal_query_color());
     }
 
+    // test "OSC: kitty color indexes reject digit separators" {
+    #[test]
+    fn osc_kitty_color_indexes_reject_digit_separators() {
+        assert_eq!(None, Kind::parse("1_0"));
+        assert_eq!(Kind::Palette(10), Kind::parse("10").unwrap());
+        assert_eq!(
+            Kind::Special(Special::SelectionForeground),
+            Kind::parse("selection_foreground").unwrap(),
+        );
+    }
+
     // PARITY (rustty-added): `Kind.parse` routes the palette key through
-    // `std.fmt.parseUnsigned(u8, key, 10)`, which is NOT Rust's
-    // `str::parse::<u8>()`: it rejects a sign prefix and accepts `_` digit
-    // separators between digits. Cross-checked against zig 0.16.
+    // `lib.parseInt(u8, key, 10)`, which is NOT Rust's `str::parse::<u8>()`:
+    // it rejects a sign prefix. Since `73768913b` it also rejects `_` digit
+    // separators (`std.fmt.parseUnsigned`, used before, accepted them).
     #[test]
     fn osc_kitty_color_protocol_kind_parse_unsigned_semantics() {
         assert_eq!(Kind::parse("42"), Some(Kind::Palette(42)));
         assert_eq!(Kind::parse("255"), Some(Kind::Palette(255)));
-        // `parseUnsigned` accepts `_` separators between digits.
-        assert_eq!(Kind::parse("1_2"), Some(Kind::Palette(12)));
-        assert_eq!(Kind::parse("2_5_5"), Some(Kind::Palette(255)));
-        // `parseUnsigned` accepts NO sign prefix.
+        // `parseInt` rejects `_` separators between digits.
+        assert_eq!(Kind::parse("1_2"), None);
+        assert_eq!(Kind::parse("2_5_5"), None);
+        // `parseInt` accepts NO sign prefix on an unsigned type.
         assert_eq!(Kind::parse("+1"), None);
         assert_eq!(Kind::parse("-1"), None);
         assert_eq!(Kind::parse("-0"), None);

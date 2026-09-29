@@ -213,8 +213,31 @@ pub const GLYPH_PROTOCOL: bool = cfg!(feature = "glyph-protocol");
 // `Options.kittyGraphics(target)` — `if (target.os.tag == .freestanding)
 // return false;` (`3376153a4`: ANY freestanding OS, not only
 // wasm32-freestanding; no way to get timestamps there). Zig's `.freestanding`
-// OS tag is Rust's `target_os = "none"`.
-pub const KITTY_GRAPHICS: bool = cfg!(feature = "kitty-graphics") && !cfg!(target_os = "none");
+// OS tag is Rust's `target_os = "none"` and, for wasm32, `wasm32-unknown-unknown`
+// (the reference's lib-vt wasm artifact is `wasm32-freestanding`, rustty's is
+// `wasm32-unknown-unknown`: `.port/tools/build-vt-wasm.sh`). `wasm32-wasip1` is
+// Zig's `.wasi` and keeps it (Ruling 30, amending DECISIONS B8). The crate's
+// build.rs emits `cfg(rustty_kitty_graphics)` for the same predicate (the cfg
+// the wuffs-backed code compiles under); `kitty_graphics_cfg_matches_the_option`
+// pins the two together.
+pub const KITTY_GRAPHICS: bool = resolve_kitty_graphics(
+    cfg!(feature = "kitty-graphics"),
+    cfg!(any(
+        target_os = "none",
+        all(target_arch = "wasm32", target_os = "unknown")
+    )),
+);
+
+/// `Options.kittyGraphics(target)`, factored out so both arms are testable
+/// from a native test run (`src/terminal/build_options.zig:274-277`).
+const fn resolve_kitty_graphics(feature: bool, freestanding: bool) -> bool {
+    // if (target.os.tag == .freestanding) return false;
+    if freestanding {
+        return false;
+    }
+    // return self.features.kitty_graphics;
+    feature
+}
 
 /// Whether Tmux control mode is enabled.
 // PORT NOTE: synthesized by `Options.add`: `opts.addOption(bool,
@@ -331,8 +354,27 @@ mod tests {
         // This test binary is never a freestanding target, so kitty graphics
         // is enabled (freestanding — any arch since `3376153a4` — is the only
         // OS the reference disables it on).
-        let freestanding = cfg!(target_os = "none");
+        let freestanding = cfg!(any(
+            target_os = "none",
+            all(target_arch = "wasm32", target_os = "unknown")
+        ));
         assert_eq!(!freestanding, KITTY_GRAPHICS);
+    }
+
+    // Ruling 30: both arms of the target override, from a native run.
+    #[test]
+    fn kitty_graphics_is_off_on_freestanding_targets() {
+        assert!(resolve_kitty_graphics(true, false));
+        assert!(!resolve_kitty_graphics(false, false));
+        assert!(!resolve_kitty_graphics(true, true));
+        assert!(!resolve_kitty_graphics(false, true));
+    }
+
+    // build.rs's `cfg(rustty_kitty_graphics)` (what links and compiles the
+    // wuffs-backed code) and this const state the same predicate.
+    #[test]
+    fn kitty_graphics_cfg_matches_the_option() {
+        assert_eq!(cfg!(rustty_kitty_graphics), KITTY_GRAPHICS);
     }
 
     #[test]

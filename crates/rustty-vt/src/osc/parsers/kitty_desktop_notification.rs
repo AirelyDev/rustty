@@ -430,20 +430,11 @@ impl Option_ {
             Option_::T => unreachable!(),
             Option_::U => OptionValue::Urgency(Urgency::init(value)),
             Option_::W => OptionValue::Int('value: {
-                // Zig's integer parser allows '_', we don't
-                if value.contains(&b'_') {
-                    // break :value key.default();  (.w default = -1)
-                    break 'value -1;
-                }
-                // const tmp = std.fmt.parseInt(i32, value, 10) catch break :value key.default();
-                // PORT NOTE: `i32::from_str` mirrors Zig's base-10 parse here —
-                // optional +/- sign, overflow and empty input error (→ default).
-                let tmp: i32 = match std::str::from_utf8(value)
-                    .ok()
-                    .and_then(|s| s.parse::<i32>().ok())
-                {
-                    Some(v) => v,
-                    None => break 'value -1,
+                // const tmp = lib.parseInt(i32, value, 10) catch break :value key.default();
+                // (.w default = -1)
+                let tmp: i32 = match rustty_lib::parse_int::<i32, 10>(value) {
+                    Ok(v) => v,
+                    Err(_) => break 'value -1,
                 };
                 // negative values less than -1 are not allowed
                 if tmp < -1 {
@@ -1319,6 +1310,14 @@ mod tests {
     #[test]
     fn osc_99_w_4() {
         parse_kdn!(kdn, "99;w=4294967296;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
+        assert_eq!(-1, kdn.read_option(Option_::W).as_int());
+    }
+
+    // test "OSC 99: w 5" {
+    #[test]
+    fn osc_99_w_5() {
+        parse_kdn!(kdn, "99;w=4_2;foobar");
         assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(-1, kdn.read_option(Option_::W).as_int());
     }
