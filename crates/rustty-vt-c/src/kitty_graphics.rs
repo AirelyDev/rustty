@@ -1513,6 +1513,15 @@ const _: c_int = 0;
 mod tests {
     use super::*;
     use crate::terminal as terminal_c;
+
+    // Ruling 30 (fix round 2): the 16 `rustty_kitty_graphics_*` exports are
+    // `cfg(rustty_kitty_graphics)` (this crate's build.rs); rustty-vt builds
+    // the kitty path by `options::KITTY_GRAPHICS`. The two must agree (also a
+    // compile-time assert in lib.rs, for targets where tests do not run).
+    #[test]
+    fn export_cfg_matches_the_vt_kitty_graphics_option() {
+        assert_eq!(cfg!(rustty_kitty_graphics), KITTY_GRAPHICS);
+    }
     use crate::test_util::with_test_allocator;
 
     // PORT NOTE: the reference passes `&lib.alloc.test_allocator` (Zig's
@@ -4053,6 +4062,10 @@ mod tests {
     // The exported C entry points: an undeclared selector returns
     // RUSTTY_INVALID_VALUE (-2) WITHOUT dereferencing the handle, and the
     // declared `invalid = 0` selector is the matched in-range control.
+    // PORT NOTE (R14, Ruling 30): calls the `rustty_kitty_graphics_*` exports,
+    // which exist only under `cfg(rustty_kitty_graphics)` (the feature on a
+    // non-freestanding target), so the test is compiled under the same cfg.
+    #[cfg(rustty_kitty_graphics)]
     #[test]
     fn exported_getters_reject_out_of_range_selector() {
         const INVALID_VALUE: std::os::raw::c_int = -2;
@@ -4121,11 +4134,11 @@ mod tests {
     // callers actually link against. `f=32` (32bpp) selects `Format::Rgba`;
     // `s=1,v=3` keeps the raw payload (12 bytes) a multiple of 3 so the
     // base64 body needs no `=` padding.
+    // PORT NOTE (R14, Ruling 30): calls the `rustty_kitty_graphics_*` exports,
+    // which exist only under `cfg(rustty_kitty_graphics)` (the feature on a
+    // non-freestanding target), so the test is compiled under the same cfg.
+    #[cfg(rustty_kitty_graphics)]
     #[test]
-    #[cfg_attr(
-        not(feature = "kitty-graphics"),
-        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
-    )]
     fn image_get_writes_a_full_c_int_for_format_and_compression() {
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();

@@ -2086,6 +2086,15 @@ mod wasm_alloc_exports {
 // `wasm32-unknown-unknown` artifact exports none of them, as the reference's
 // `wasm32-freestanding` one does not (Ruling 30).
 
+// The export cfg (this crate's build.rs) and the option rustty-vt resolves
+// (`options::KITTY_GRAPHICS`, which its own build.rs cfg is pinned to) state
+// the same predicate in separate crates; this holds them together on every
+// target, wasm32 included, at compile time.
+const _: () = assert!(
+    cfg!(rustty_kitty_graphics) == rustty_vt::options::KITTY_GRAPHICS,
+    "rustty-vt-c's cfg(rustty_kitty_graphics) disagrees with rustty_vt::options::KITTY_GRAPHICS"
+);
+
 // pub const kitty_graphics_get = kitty_graphics.get;
 /// C: rustty_kitty_graphics_get
 ///
