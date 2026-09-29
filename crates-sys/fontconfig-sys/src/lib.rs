@@ -1,11 +1,11 @@
-//! fontconfig-sys — FFI bindings to the vendored Fontconfig 2.14.2 font
+//! fontconfig-sys — FFI bindings to the vendored Fontconfig 2.18.3 font
 //! discovery/matching engine (`links = "fontconfig"`).
 //!
 //! PORT STATUS: vendored (full library)
 //!
-//! R3: copies the SAME C library the reference uses (fontconfig 2.14.2, per
+//! R3: copies the SAME C library the reference uses (fontconfig 2.18.3, per
 //! pkg/fontconfig/build.zig.zon:8) and builds it standalone (`cc` + `bindgen`;
-//! see `build.rs`). The host's system fontconfig (2.17) is deliberately NOT
+//! see `build.rs`). The host's system fontconfig is deliberately NOT
 //! linked — parity is pinned to the version the reference itself builds. The
 //! FFI is bindgen-generated from `wrapper.h` — the same single public umbrella
 //! header the reference's `pkg/fontconfig/c.zig` @cImports
@@ -55,14 +55,16 @@ mod tests {
     use std::os::raw::{c_char, c_int};
     use std::ptr;
 
-    /// R3 known-answer test: prove the vendored fontconfig 2.14.2 links and runs.
+    /// R3 known-answer test: prove the vendored fontconfig 2.18.3 links and runs.
     ///
     /// Mirrors the reference's smoke paths (pkg/fontconfig `init.zig` version /
     /// initLoadConfig tests + `pattern.zig`'s "create" test):
     ///
-    ///   * `FcGetVersion()` returns exactly `21402` — the fixed known answer for
-    ///     the pinned 2.14.2, and proof we linked the vendored archive rather
-    ///     than the host's system fontconfig (2.17, which reports `21700`).
+    ///   * `FcGetVersion()` returns exactly `21803` — the fixed known answer for
+    ///     the pinned 2.18.3 (`FC_VERSION` in `override/fontconfig/fontconfig.h`,
+    ///     NOT the stale `FC_VERSION_*` 2.14.2 defines `build.rs` passes, N438),
+    ///     and proof we linked the vendored archive rather than a host's system
+    ///     fontconfig (2.17 reports `21700`, 2.14.2 `21402`).
     ///   * `FcInitLoadConfig()` returns a non-null `*FcConfig` — a LIVE fontconfig
     ///     call that parses the XML config (exercising the `fcxml.c` → libxml2
     ///     wiring end to end) but, unlike `FcInit()`/`FcInitLoadConfigAndFonts()`,
@@ -74,15 +76,16 @@ mod tests {
     ///     `FcResultMatch` with the value read back as `"monospace"`;
     ///     `FcPatternDestroy` / `FcConfigDestroy` tear down cleanly.
     #[test]
-    fn kat_fontconfig_2_14_2_init_and_pattern() {
-        // Known-answer: the vendored release is exactly fontconfig 2.14.2, whose
-        // encoded version is major*10000 + minor*100 + micro = 2*10000 + 14*100
-        // + 2 = 21402. If this ever reads 21700 (or anything else), we linked a
-        // different fontconfig than the pinned one.
+    fn kat_fontconfig_2_18_3_init_and_pattern() {
+        // Known-answer: the vendored release is exactly fontconfig 2.18.3, whose
+        // encoded version is major*10000 + minor*100 + micro = 2*10000 + 18*100
+        // + 3 = 21803. If this ever reads 21402 (the stale `FC_VERSION_*`
+        // defines), 21700 (or anything else), we linked a different fontconfig
+        // than the pinned one.
         // SAFETY: `FcGetVersion` takes no arguments and only reads a compile-time
         // constant; it is safe to call at any time.
         let version = unsafe { FcGetVersion() };
-        assert_eq!(version, 21402, "vendored fontconfig FcGetVersion (2.14.2)");
+        assert_eq!(version, 21803, "vendored fontconfig FcGetVersion (2.18.3)");
 
         unsafe {
             // Load the configuration WITHOUT scanning fonts or touching the

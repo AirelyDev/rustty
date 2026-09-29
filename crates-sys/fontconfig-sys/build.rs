@@ -1,33 +1,33 @@
-//! Build script for fontconfig-sys (Fontconfig 2.14.2 font discovery/matching).
+//! Build script for fontconfig-sys (Fontconfig 2.18.3 font discovery/matching).
 //!
 //! PORT STATUS: vendored (full library)
 //!
 //! R3 — self-contained, no ghostty dependency:
-//!   1. The upstream C sources for fontconfig 2.14.2 are vendored in-tree under
+//!   1. The upstream C sources for fontconfig 2.18.3 are vendored in-tree under
 //!      `vendor/` (fetched from the exact URL in the reference's
-//!      pkg/fontconfig/build.zig.zon:8 — the
-//!      `https://deps.files.ghostty.org/fontconfig-2.14.2.tar.gz` mirror of the
-//!      freedesktop `fontconfig` `2.14.2` release). This build NEVER references
+//!      pkg/fontconfig/build.zig.zon:8 — the freedesktop generic-package
+//!      `fontconfig-2.18.3.tar.xz` release). This build NEVER references
 //!      /home/gael/projects/ghostty, and never links the host's system
-//!      fontconfig (2.17 on this box — the parity target is the reference's
-//!      pinned 2.14.2).
+//!      fontconfig (the parity target is the reference's pinned 2.18.3).
 //!   2. They are compiled with the `cc` crate, mirroring the reference's
-//!      pkg/fontconfig/build.zig `buildLib` exactly: the same 28 `src/*.c`
-//!      translation units (build.zig:269-298), the same verbatim `-D`/`-W`/`-f`
-//!      flag list (build.zig:87-194) plus the libxml2 enablement flags
-//!      (build.zig:216-221).
-//!   3. `vendor/override/include/` holds the reference's five override headers
-//!      verbatim (pkg/fontconfig/override/include): the four EMPTY alias stubs
-//!      `fcalias.h`/`fcaliastail.h`/`fcftalias.h`/`fcftaliastail.h` (so the
-//!      `#include "fcalias.h"` machinery resolves for a static, non-exported
-//!      build where upstream's `makealias` is not run) + the 347-line
-//!      pre-generated `fcobjshash.h` (the `gperf` object-name hash table,
-//!      avoiding a build-time `gperf` dependency). Placed FIRST on the include
-//!      path. The rest of what `./configure` would template is unneeded: the
-//!      distribution tarball already ships `src/fcstdint.h`,
-//!      `fc-lang/fclang.h`, `fc-case/fccase.h`; and every `#include <config.h>`
-//!      is guarded by `HAVE_CONFIG_H`, which — exactly as the reference — is
-//!      never defined (all config arrives as `-D` flags below).
+//!      pkg/fontconfig/build.zig `buildLib` exactly: the same 29 `src/*.c`
+//!      translation units (build.zig:343-373), the same verbatim `-D`/`-W`/`-f`
+//!      flag list (build.zig:148-265) plus the FreeType and libxml2 enablement
+//!      flags (build.zig:267-297).
+//!   3. `vendor/override/` holds the reference's twelve override headers
+//!      verbatim, in the reference's directory layout
+//!      (pkg/fontconfig/override/{fc-case,fc-const,fc-genericfamily,fc-lang,
+//!      fontconfig,src}). The 2.18.3 tarball no longer ships the headers its
+//!      autotools/meson build generates (`fc-case/fccase.h`,
+//!      `fc-const/fcconst.h`, `fc-genericfamily/fcgenericfamily.h`,
+//!      `fc-lang/fclang.h`, `fontconfig/fontconfig.h`, `src/fcstdint.h`, the
+//!      `makealias` outputs `src/fc{,ft}alias{,tail}.h`, and the `gperf` table
+//!      `src/fcobjshash.h`); upstream extracted them from an autogen run
+//!      (build.zig:6-46 documents how to regenerate them). `override/src/fcint.h`
+//!      is byte-identical to the tarball's `src/fcint.h`. Every
+//!      `#include <config.h>` is guarded by `HAVE_CONFIG_H`, which — exactly as
+//!      the reference — is never defined (all config arrives as `-D` flags
+//!      below).
 //!   4. FreeType (`src/fcfreetype.c`) is provided by the `freetype-sys` crate:
 //!      its vendored header dir arrives via `DEP_FREETYPE_INCLUDE`, and its
 //!      static `freetype` archive is linked through the normal dependency (the
@@ -35,10 +35,19 @@
 //!      (`src/fcxml.c`, under `-DENABLE_LIBXML2`) likewise comes from
 //!      `libxml2-sys` via `DEP_XML2_INCLUDE` + `DEP_XML2_OVERRIDE_INCLUDE`.
 //!   5. `bindgen` auto-generates the FFI from `wrapper.h` — the same public
-//!      header the reference's `c.zig` @cImports (`fontconfig/fontconfig.h`).
+//!      header the reference's `c.zig` translates (`fontconfig/fontconfig.h`),
+//!      which in 2.18.3 exists only as `override/fontconfig/fontconfig.h` (the
+//!      tarball ships `fontconfig.h.in`; the reference installs the override
+//!      copy, build.zig:326-336).
 //!   6. `cargo:rustc-link-*` is emitted by `cc` (static archive `libfontconfig`);
 //!      the crate declares `links = "fontconfig"`, so Cargo enforces a single
 //!      linkage.
+//!
+//! The real `fcalias.h`/`fcaliastail.h` switch on fontconfig's hidden-alias
+//! scheme (`fcint.h:131-134`) on ELF targets (`__ELF__` and GCC >= 3.3): the
+//! Linux and FreeBSD archives export `Fc*` as aliases of hidden `IA__Fc*`
+//! symbols. Darwin and Windows are not ELF and keep the plain shape. Faithful
+//! (`.port/phase-7/DECISIONS.md` B15).
 
 use std::env;
 use std::path::PathBuf;
@@ -49,9 +58,15 @@ mod dir_defines;
 /// fontconfig translation units compiled into the static library.
 ///
 /// The verbatim `srcs` list from the reference's
-/// pkg/fontconfig/build.zig:269-298. (`src/fcarch.c` is present in the vendored
+/// pkg/fontconfig/build.zig:343-373. (`src/fcarch.c` is present in the vendored
 /// tree but, exactly as in the reference, is NOT compiled — its contents are
-/// pulled in via header inclusion elsewhere.)
+/// pulled in via header inclusion elsewhere. `src/fcfontations.c` needs the
+/// Rust `fontations` backend, which the reference does not enable.
+/// `src/fcconffile.c` is omitted by the reference although upstream's meson
+/// build compiles it (`src/meson.build:25`): it defines only the public
+/// `FcConfigFileGenerate`/`FcConfigFileGenerateGenericAlias`, which no other TU
+/// calls, so the archive leaves that API undefined. Faithful,
+/// `.port/phase-7/DECISIONS.md` B14; latent note N439.)
 const SOURCES: &[&str] = &[
     "src/fcatomic.c",
     "src/fccache.c",
@@ -64,6 +79,7 @@ const SOURCES: &[&str] = &[
     "src/fcformat.c",
     "src/fcfreetype.c",
     "src/fcfs.c",
+    "src/fcgenericalias.c",
     "src/fcptrlist.c",
     "src/fchash.c",
     "src/fcinit.c",
@@ -87,7 +103,20 @@ fn main() {
     println!("cargo:rerun-if-changed=src/dir_defines.rs");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let vendor = manifest_dir.join("vendor");
-    let override_include = vendor.join("override/include");
+    let override_root = vendor.join("override");
+    // The reference's override include dirs, in its order (build.zig:130-143).
+    //
+    // NOTE (build.zig:130-134): `override/fc-case` is present but deliberately
+    // not listed. `src/fcstr.c:186` does `#include "../fc-case/fccase.h"`; the
+    // file-relative lookup (`vendor/src/../fc-case/`) misses, because the
+    // tarball's `fc-case/` holds only `fccase.tmpl.h` and is not vendored, so
+    // the compiler walks the `-I` list and resolves the `..` against an
+    // `override/<subdir>` entry: `override/fc-const/../fc-case/fccase.h`. Keep
+    // at least one `override/<subdir>` on the path for that lookup to work.
+    let override_dirs: Vec<PathBuf> = ["", "fc-const", "fc-genericfamily", "fc-lang", "src"]
+        .iter()
+        .map(|d| override_root.join(d))
+        .collect();
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let windows = target_os == "windows";
@@ -111,15 +140,18 @@ fn main() {
         .expect("DEP_XML2_OVERRIDE_INCLUDE not set by libxml2-sys");
 
     let mut build = cc::Build::new();
+    // Include-path order mirrors the reference (build.zig:135-143 then
+    // build.zig:313): the five override dirs FIRST (so the generated headers
+    // resolve, and `<fontconfig/fontconfig.h>` finds
+    // `override/fontconfig/fontconfig.h`), then the upstream root (for
+    // `<fontconfig/fcprivate.h>` / `<fontconfig/fcfreetype.h>`). The upstream
+    // `src/` dir need not be listed: quote-includes (`"fcint.h"`) resolve
+    // relative to each `.c` file's own directory, which the compiler always
+    // searches first.
+    for dir in &override_dirs {
+        build.include(dir);
+    }
     build
-        // Include-path order mirrors the reference (build.zig:82 then
-        // build.zig:243): `override/include` FIRST (so `fcobjshash.h` and the
-        // empty alias stubs resolve), then the upstream root (for
-        // `<fontconfig/fontconfig.h>` / `<fontconfig/fcprivate.h>`). The `src/`
-        // dir need not be listed: quote-includes (`"fcint.h"`,
-        // `"../fc-lang/fclang.h"`) resolve relative to each `.c` file's own
-        // directory, which the compiler always searches first.
-        .include(&override_include)
         .include(&vendor)
         // FreeType + libxml2 headers for fcfreetype.c / fcxml.c.
         .include(&ft_include)
@@ -129,7 +161,20 @@ fn main() {
         .warnings(false)
         .flag_if_supported("-w");
 
-    // ---- Verbatim common flag list (build.zig:87-129) -----------------------
+    // ---- FC_VERSION_* (build.zig:148-153) -----------------------------------
+    // The reference derives these from its `build.zig.zon` `.version`, which
+    // still reads "2.14.2" at 2.18.3 (stale). Ported as the reference's literal
+    // values (`.port/phase-7/DECISIONS.md` B14; N438). `FcGetVersion()` does not
+    // read them (it returns `FC_VERSION` from `fontconfig.h`, i.e. 21803), but
+    // the cache does: `fccache.c:1340-1342` stamps every cache file it writes
+    // with them, and `FcCacheIsNewVersion` (`fccache.c:793-817`) compares a
+    // cache's stamp against them. N438 records what that changes.
+    build
+        .define("FC_VERSION_MAJOR", Some("2"))
+        .define("FC_VERSION_MINOR", Some("14"))
+        .define("FC_VERSION_MICRO", Some("2"));
+
+    // ---- Verbatim common flag list (build.zig:155-198) ----------------------
     for def in [
         "HAVE_DIRENT_H",
         "HAVE_FCNTL_H",
@@ -140,6 +185,8 @@ fn main() {
         "HAVE_MKSTEMP",
         "HAVE_RAND",
         "HAVE_VPRINTF",
+        // Selects the `FcStrDupVapFormat` arm at `fcint.h:1031`.
+        "HAVE_VSNPRINTF",
         "HAVE_FT_GET_BDF_PROPERTY",
         "HAVE_FT_GET_PS_FONT_INFO",
         "HAVE_FT_HAS_PS_GLYPH_NAMES",
@@ -152,22 +199,22 @@ fn main() {
         build.define(def, None);
     }
     build.define("FC_GPERF_SIZE_T", Some("size_t"));
-    // "Default errors that fontconfig can't handle" (build.zig:122-124).
+    // "Default errors that fontconfig can't handle" (build.zig:191-193).
     build
         .flag_if_supported("-Wno-implicit-function-declaration")
         .flag_if_supported("-Wno-int-conversion")
-        // fontconfig MR#231: fontconfig's own casts trip ubsan (build.zig:126-128).
+        // fontconfig MR#231: fontconfig's own casts trip ubsan (build.zig:195-197).
         .flag_if_supported("-fno-sanitize=undefined")
         .flag_if_supported("-fno-sanitize-trap=undefined");
 
-    // ---- Pointer-width defines (build.zig:131-143) --------------------------
+    // ---- Pointer-width defines (build.zig:200-212) --------------------------
     let p = if ptr_bits == 32 { "4" } else { "8" };
     build
         .define("SIZEOF_VOID_P", Some(p))
         .define("ALIGNOF_VOID_P", Some(p));
 
     if windows {
-        // (build.zig:144-150), verbatim. Reached by `-Dfont-backend=
+        // (build.zig:213-219), verbatim. Reached by `-Dfont-backend=
         // fontconfig_freetype` on a GNU-ABI Windows target (N286).
         build
             .define("FC_CACHEDIR", Some("\"LOCAL_APPDATA_FONTCONFIG_CACHE\""))
@@ -178,7 +225,7 @@ fn main() {
                 Some("\"\\t<dir>WINDOWSFONTDIR</dir>\\n\\t<dir>WINDOWSUSERFONTDIR</dir>\\n\""),
             );
     } else {
-        // ---- Off-Windows HAVE_* + cache/font dirs (build.zig:151-173) -------
+        // ---- Off-Windows HAVE_* + cache/font dirs (build.zig:220-243) -------
         for def in [
             "HAVE_FSTATFS",
             "HAVE_FSTATVFS",
@@ -195,13 +242,16 @@ fn main() {
             "HAVE_RANDOM",
             "HAVE_RAND_R",
             "HAVE_READLINK",
+            // The only arm of `FcLocaleSetCurrent` (`fccompat.c:375-385`) that
+            // does not `#error` off Windows.
+            "HAVE_USELOCALE",
             "HAVE_SYS_MOUNT_H",
             "HAVE_SYS_STATVFS_H",
         ] {
             build.define(def, None);
         }
         // The compiled-in cache dir is ported verbatim from the reference
-        // (build.zig:171). It may be unwritable in this sandbox — that is an
+        // (build.zig:241). It may be unwritable in this sandbox — that is an
         // accepted out-of-scope RUNTIME concern; the KAT does not depend on a
         // writable cache or a system font scan.
         build
@@ -211,13 +261,13 @@ fn main() {
                 Some("\"<dir>/usr/share/fonts</dir><dir>/usr/local/share/fonts</dir>\""),
             );
 
-        // The FreeBSD / other-OS directory arms (build.zig:178-187, S31-F1),
+        // The FreeBSD / other-OS directory arms (build.zig:245-257, S31-F1),
         // chosen by `src/dir_defines.rs` where they are tested.
         for (name, value) in dir_defines::fc_dir_defines(&target_os) {
             build.define(name, Some(value));
         }
 
-        // Linux-specific headers (build.zig:189-193).
+        // Linux-specific headers (build.zig:259-264).
         if target_os == "linux" {
             build
                 .define("HAVE_SYS_STATFS_H", None)
@@ -225,7 +275,17 @@ fn main() {
         }
     }
 
-    // ---- libxml2 enablement (build.zig:216-221) -----------------------------
+    // ---- FreeType enablement (build.zig:267-282) ----------------------------
+    // "Value-tested (#if/#elif) by upstream so it must be =1." The reference's
+    // `enable-freetype` defaults to true, and this crate always links
+    // `freetype-sys`. It gates the FreeType paths of `fcdir.c:35,91`,
+    // `fclang.c:27,1062` and `fcpat.c:25,311,880,1102,1595`. Without it (or with
+    // `=0`), `fcdir.c:89-94` selects no font-query function for
+    // `FcFileScanConfig`, and the archive fails to compile at `fcdir.c:100`
+    // (the negative control recorded in the P7-W10 T1 report).
+    build.define("ENABLE_FREETYPE", Some("1"));
+
+    // ---- libxml2 enablement (build.zig:284-297) -----------------------------
     // The reference always builds fontconfig's XML config parser against
     // libxml2 (`enable-libxml2` defaults to true), matching our `libxml2-sys`
     // dependency.
@@ -235,14 +295,14 @@ fn main() {
         .define("LIBXML_PUSH_ENABLED", None);
     if windows {
         // "NOTE: this should be defined on all targets" — the reference adds it
-        // on Windows only (build.zig:222-227), after the `-Wno-` form above, so
+        // on Windows only (build.zig:292-297), after the `-Wno-` form above, so
         // an implicit declaration is an error there. N286.
         build.flag_if_supported("-Werror=implicit-function-declaration");
     }
 
     // Pin the C standard to gnu17 (pre-C23). GCC 16 defaults to gnu23, where an
     // empty parameter list `()` means `(void)` rather than the historical
-    // "unspecified arguments" — fontconfig 2.14.2 is older C with such
+    // "unspecified arguments" — fontconfig 2.18.3 is older C with such
     // prototypes. The reference's clang toolchain (Zig 0.15.2) defaults to
     // gnu17, so this reproduces exactly how the vendored source was compiled
     // upstream; it is a front-end language-mode choice only, no codegen
@@ -258,10 +318,10 @@ fn main() {
     // `cargo:rustc-link-lib=static=fontconfig` + search-path directives. Because
     // the crate declares `links = "fontconfig"`, Cargo enforces a single
     // linkage. The archive name matches the reference's
-    // `b.addLibrary(.{ .name = "fontconfig" })` (build.zig:70).
+    // `b.addLibrary(.{ .name = "fontconfig" })` (build.zig:108-116).
     build.compile("fontconfig");
 
-    // The reference links pthread off-Windows (build.zig:78-80). On modern
+    // The reference links pthread off-Windows (build.zig:126-128). On modern
     // glibc (>= 2.34) pthread is folded into libc so this is a no-op stub, but
     // it is emitted for parity and for older/musl toolchains.
     if !windows {
@@ -269,10 +329,15 @@ fn main() {
     }
 
     // Auto-generate the FFI from `wrapper.h` (`<fontconfig/fontconfig.h>`)
-    // against the same include path the C build uses.
-    let bindings = bindgen::Builder::default()
-        .header(manifest_dir.join("wrapper.h").to_string_lossy())
-        .clang_arg(format!("-I{}", override_include.display()))
+    // against the same include path the C build uses: `<fontconfig/fontconfig.h>`
+    // resolves to `override/fontconfig/fontconfig.h` (the tarball ships only
+    // `fontconfig.h.in`).
+    let mut bindgen_builder =
+        bindgen::Builder::default().header(manifest_dir.join("wrapper.h").to_string_lossy());
+    for dir in &override_dirs {
+        bindgen_builder = bindgen_builder.clang_arg(format!("-I{}", dir.display()));
+    }
+    let bindings = bindgen_builder
         .clang_arg(format!("-I{}", vendor.display()))
         .clang_arg(format!("-I{ft_include}"))
         .clang_arg(format!("-I{xml_include}"))
@@ -294,10 +359,14 @@ fn main() {
     // build against the fontconfig headers (Task 4's `fc.rs` links the crate
     // directly rather than re-including headers, but this keeps the -sys
     // template's `cargo:include` contract complete). Cargo sets
-    // `DEP_FONTCONFIG_INCLUDE` / `DEP_FONTCONFIG_OVERRIDE_INCLUDE`.
+    // `DEP_FONTCONFIG_INCLUDE` / `DEP_FONTCONFIG_OVERRIDE_INCLUDE`; the
+    // override root carries `fontconfig/fontconfig.h`, the header the reference
+    // installs (build.zig:333-336).
     println!("cargo:include={}", vendor.display());
-    println!("cargo:override_include={}", override_include.display());
+    println!("cargo:override_include={}", override_root.display());
 
+    // The override headers are all header-only inputs of every TU.
+    println!("cargo:rerun-if-changed=vendor/override");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=wrapper.h");
 }
