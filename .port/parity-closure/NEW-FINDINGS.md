@@ -7128,7 +7128,12 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **P-1b (user decision 2026-09-27)**: `CLAUDE.md` is ported, a symlink to `AGENTS.md` (mode
   120000) exactly as the reference's `c09ade225`; `release-tip.yml`'s paths filter regains `!CLAUDE.md`
   and `!.envrc`. `.envrc` now carries the UD345 fix (R13, controller ruling) instead of the reference's
-  wrong `nix/wraptest.nix` path.
+  wrong `nix/wraptest.nix` path. SUPERSEDED at P7-W10 T4 (2026-09-28, maintainer decision, DECISIONS
+  "Maintainer decisions"): upstream itself deleted the symlink at `9d2d9acac` (20abdb50a..12752b2ac,
+  R4 §L), so Rustty's copy is now removed too, for parity — `AGENTS.md` stays, and the
+  `release-tip.yml` `!CLAUDE.md` filter entry is KEPT (upstream's own `release-tip.yml` still carries
+  it at `12752b2ac`, naming a file that no longer exists there either). NON_PORTS G13 §6's row is
+  updated to match.
 - **Recorded, not changed**: `test/pkgconfig/test_librustty_vt.c` duplicating
   `nix/test-src/test_librustty_vt.c` (G-CCONSUMER uses one, the Nix tests the other);
   `macos/build-rustty-signed.sh` citing a `macos/DISTRIBUTION.md` that does not exist (Rustty-only
@@ -7160,7 +7165,15 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (`zig build -Dapp-runtime=none test`) and `build-libghostty-windows-gnu` are gaps analysed in
   **N342** (the application tier does not compile for Windows; being addressed by W-2/W-4), not
   repeated below; `build-macos-xcode-27` (a second macOS app build on Xcode 27) has no counterpart and
-  no record since NON_PORTS G13 §1 was superseded: gap 21.
+  no record since NON_PORTS G13 §1 was superseded: gap 21. STALE as of P7-W10 T4 (2026-09-28): task
+  W-2 later DID port both (once the app tier compiled on Windows, as the `windows` job's "Build/Test
+  the workspace" and "Build the apprt-c library for the GNU ABI" steps); then upstream itself removed
+  both jobs (`380778e3c`, 20abdb50a..12752b2ac, "libghostty-internal isn't really supposed to be used
+  in Windows anyway"), so P7-W10 T4 removed the two ported steps again, for parity (DECISIONS R6).
+  End state: NEITHER is a gap nor a Rustty-only surplus — upstream doesn't have them either. The vt-lib
+  Windows test that used to ride along inside "Test the workspace" (a `cargo test --workspace` also
+  runs `rustty-vt-c`'s own tests) got its own scoped "Test librustty-vt" step, matching
+  `build-libghostty-vt-windows`'s unaffected `test-lib-vt` step.
 - **Gaps (no counterpart or partial, no record)**:
   1. `skip` (path-filter fan-out; the fork/VOUCHED skip): needs a NON_PORTS record.
   2. `build-examples-cmake-windows` and the `c-vt-static` step of `build-libghostty-vt-windows`.
@@ -7324,6 +7337,20 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   **kind**: CI parity. **state**: CLOSED by parity tail CI-1 (2026-09-28) as far as a file edit
   goes: every residual below is ported (secrets referenced by name only); none has run, since the
   workflows need `RUSTTY_RELEASE_ENABLED` and the maintainer's secrets (VERIFICATION_DEBT V25).
+- **P7-W10 T4 addendum (2026-09-28), R4 §G — action version bumps in the range `20abdb50a..12752b2ac`:**
+  applied, with pinact-style SHA + comment: `ryand56/r2-upload-action` v1.4 `b801a390…` -> v1.5
+  `33ebb7a4…` (7 sites: `publish-tag.yml`, `release-tag.yml`, 5x `release-tip.yml`);
+  `softprops/action-gh-release` v3.0.2 `3d0d9888…` -> v3.0.3 `efb35369…` (5 sites, all
+  `release-tip.yml`); `c-hive/gha-remove-artifacts` v1.4.0 `44fc7aca…` -> v1.8.0 `62c2fbea…` (1
+  site, `clean-artifacts.yml`). All three release lanes stay inert behind `RUSTTY_RELEASE_ENABLED`
+  (unverified by running, V25). N/A, recorded (no Rustty counterpart to bump): `nscloud-cache-action`
+  (56 upstream sites — Rustty has no Namespace runner pool, per the existing "no nscloud-cache step"
+  notes at `ci.yml:806`, `nix.yml:23`, `snap.yml:29`), `cachix-action` (55 sites — Rustty has no
+  binary cache, per `nix.yml:25`; `cachix/install-nix-action` at `ci.yml:341,1161` and `nix.yml:67`
+  is a DIFFERENT action, already pinned and unaffected by this bump), `docker/build-push-action`
+  (Rustty's `test-debian-13` builds with a bare `docker build`, not this action) and
+  `flatpak-github-actions/flatpak-builder` (Rustty's `build-flatpak` runs `flatpak-builder` as a CLI
+  step, not through this action — N379/N-comment at `NEW-FINDINGS.md:7098`).
   Previously: OPEN: release workflows run only with maintainer secrets, so P-1 did not change them.
 - **Fixed by P-1b**: the three `release-tip.yml` appcast steps require `github.ref_name == 'main'`
   again (test `tip_appcast_steps_run_only_on_main`, negative control); `release-tag.yml` `sentry-dsym` is

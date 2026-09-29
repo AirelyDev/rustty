@@ -147,11 +147,13 @@ jobs:
       # version is pinned to match the harness requirement (0.16.0 — the
       # harness build.zig.zon's minimum_zig_version, the reference's own
       # minimum at pin 20abdb50a, and the pin the script's BLOCKED message
-      # names). The oracle's uucode is the reference's revision 2826a37a,
-      # which does not build under 0.15.x (and the pre-bump revision does not
-      # build under 0.16), so the zig pin and the uucode revision move
-      # together (.port/phase-3/NON_PORTS.md §G1). Harness tooling only, R3:
-      # no rustty crate depends on zig or uucode.
+      # names). The oracle's uucode is the reference's revision 9d55524
+      # (bumped from 2826a37a in lockstep with ghostty `12542b392` "deps:
+      # Update uucode for Unicode 18", P7-W10 T2; UCD 17.0.0 -> 18.0.0), which
+      # does not build under 0.15.x (and the pre-bump revision does not build
+      # under 0.16), so the zig pin and the uucode revision move together
+      # (.port/phase-3/NON_PORTS.md §G1). Harness tooling only, R3: no rustty
+      # crate depends on zig or uucode.
       - name: Install zig 0.16.0 (pinned — G4-uni uucode oracle)
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
@@ -516,21 +518,32 @@ jobs:
   # ── Windows ────────────────────────────────────────────────────────────────
   # PORTS the reference's Windows jobs (`.github/workflows/test.yml` at the pin):
   #
-  #   test-windows (:1711-1724)         `zig build -Dapp-runtime=none test`, the
-  #                                     full test binary (renderer, termio,
-  #                                     apprt, Command, pty, font, cli, ...)
-  #                                     -> the workspace build + test steps;
   #   build-libghostty-vt-windows       `test-lib-vt`, `-Demit-lib-vt`, and the
   #     (:938-957)                      c-vt-static link -> the vt test, release
   #                                     library and (static link) the
   #                                     `windows-examples-cmake` job below;
-  #   build-libghostty-windows-gnu      `-Dtarget=native-native-gnu
-  #     (:959-971)                      -Dapp-runtime=none`, the internal
-  #                                     library (App + Surface + the OpenGL
-  #                                     renderer) for the GNU ABI -> the
-  #                                     apprt-c GNU build;
   #   build-examples-cmake-windows      every CMake example except the cross one
   #     (:315-341)                      -> `windows-examples-cmake` below.
+  #
+  # `test-windows` (`zig build -Dapp-runtime=none test`, the full app-tier test
+  # binary: renderer, termio, apprt, Command, pty, font, cli, ...) and
+  # `build-libghostty-windows-gnu` (`-Dtarget=native-native-gnu
+  # -Dapp-runtime=none`, the internal App+Surface+OpenGL-renderer library for
+  # the GNU ABI) are REMOVED here, for parity: upstream `380778e3c` ("ci: drop
+  # libghostty-internal builds on Windows" — "libghostty-internal isn't really
+  # supposed to be used in Windows anyway, so why bother testing it?") dropped
+  # both from `test.yml` and from `required`, 20abdb50a..12752b2ac (DECISIONS
+  # R6). Rustty had ported both, as the "Build/Test the workspace" steps and
+  # the "Build the apprt-c library for the GNU ABI" step, once task W-2 made
+  # the application tier (rustty-core and up) compile for Windows; that work
+  # is retained (the app tier still builds and clippy-checks on this job, via
+  # the individual `rustty`/`rustty-apprt-c` release builds below and the
+  # workspace clippy step), only the app-tier BUILD-AND-RUN-ITS-TESTS step and
+  # the GNU-ABI app-library build are gone, matching upstream exactly.
+  # `build-libghostty-vt-windows` is UNCHANGED upstream and stays fully
+  # covered: "Test libghostty-vt" (`zig build test-lib-vt`) -> the
+  # "Test librustty-vt" step below, "Build libghostty-vt" (`-Demit-lib-vt`) ->
+  # "Build librustty-vt (release)".
   #
   # Task W-2 (NEW-FINDINGS N342) made rustty-core and everything above it
   # compile, link and test on Windows (the OpenGL renderer arm with the
@@ -604,7 +617,12 @@ jobs:
           if (-not $rc) { throw "rc.exe not found under the Windows 10/11 SDK" }
           echo $rc.DirectoryName >> $env:GITHUB_PATH
 
-      # test-windows: `zig build -Dapp-runtime=none test`.
+      # Compile verification for the application tier (rustty-core and up),
+      # which task W-2 made build on Windows. `test-windows`'s TEST half
+      # (`zig build -Dapp-runtime=none test` actually running the app-tier
+      # test binary) is REMOVED here, for parity with upstream `380778e3c`
+      # (DECISIONS R6, see the job header); the build+lint half is kept, since
+      # nothing upstream asks Rustty to stop compiling here.
       #
       # The three `--exclude`s are N350's (see the job header), written inline in
       # a native shell: task W-2 measured these commands from `cmd`, and Git
@@ -619,12 +637,16 @@ jobs:
         shell: pwsh
         run: cargo clippy --workspace --exclude libxml2-sys --exclude fontconfig-sys --exclude sentry-sys --all-targets --locked -- -D warnings
 
-      - name: Test the workspace
+      # build-libghostty-vt-windows (UNCHANGED upstream): `zig build
+      # test-lib-vt`, then `-Demit-lib-vt`. Previously the `test-lib-vt` half
+      # was covered incidentally by the now-removed "Test the workspace" step
+      # (a `cargo test --workspace` also runs rustty-vt-c's own tests); with
+      # that step gone, it needs its own, scoped step so vt-lib Windows test
+      # coverage does not silently disappear along with the app-tier test run.
+      - name: Test librustty-vt
         shell: pwsh
-        run: cargo test --workspace --exclude libxml2-sys --exclude fontconfig-sys --exclude sentry-sys --locked
+        run: cargo test -p rustty-vt-c --locked
 
-      # build-libghostty-vt-windows: `zig build -Demit-lib-vt`. (Its
-      # `test-lib-vt` step is covered by the workspace test above.)
       - name: Build librustty-vt (release)
         run: cargo build -p rustty-vt-c --release --locked
 
@@ -671,19 +693,11 @@ jobs:
           if ($out -notmatch "rustty_info:") { throw "unexpected output: $out" }
           Pop-Location
 
-      # build-libghostty-windows-gnu: the internal library (App + Surface + the
-      # OpenGL renderer) for the GNU ABI — a different C ABI and linker, which
-      # catches things MSVC does not.
-      # CORRECTION (task W-2): this step built `rustty-vt-c` under the name of a
-      # `build-ghostty-windows-gnu` job; the reference's job builds the app
-      # library, which rustty-apprt-c ports.
-      # UNVERIFIED (review W-2 F8): the vendored C/C++ needs a MinGW-w64
-      # `gcc`/`g++` on PATH for this target; whether windows-latest provides it
-      # has not been checked, and this step has never run.
-      - name: Build the apprt-c library for the GNU ABI
-        run: |
-          rustup target add x86_64-pc-windows-gnu
-          cargo build -p rustty-apprt-c --target x86_64-pc-windows-gnu --locked
+  # build-libghostty-windows-gnu (the internal App+Surface+OpenGL-renderer
+  # library for the GNU ABI) is REMOVED here, for parity with upstream
+  # `380778e3c` (DECISIONS R6; see the job header). It was UNVERIFIED (review
+  # W-2 F8: MinGW-w64 availability on `windows-latest` was never checked, and
+  # the step never ran), so nothing regresses that ever ran green.
 
   # build-examples-cmake-windows: each CMake example built against this
   # checkout, excluding `c-vt-cmake-cross` as the reference does ("Cross-
