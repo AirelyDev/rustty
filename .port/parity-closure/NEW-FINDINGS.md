@@ -8561,3 +8561,67 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `--target x86_64-pc-windows-msvc`): `cargo test -p rustty-xev` 3/3 (45 passed, including `iocp_timer_reset`
   and `iocp_timer_cancellation`). WASI: compiles and clippy-clean only; no runtime (VERIFICATION_DEBT V8),
   UNVERIFIED by execution.
+
+## N435 — `ScreenSearch::feed` carried the reference's `.complete => unreachable` after history is prepended
+
+- **id**: N435. Phase 7 start (P7-W0 T4; R1 #1, DECISIONS R1). **severity**: medium (a reachable panic).
+  **kind**: reference crash ported faithfully, unrecorded. **state**: OPEN; closed by the port of `06178eeaa`
+  (P7-W5 T4).
+- **reference**: at 20abdb50a, `src/terminal/search/screen.zig:308` `feed` switches on the state with
+  `.complete => unreachable` (`:343`), under the comment "If we're complete then the feed call above should always
+  return false and we can't reach this." Upstream found that it is reachable and fixed it in the range:
+  `06178eeaa` ("terminal/search: resume a complete search when history is prepended") makes the arm
+  `.complete => self.state = .history` (`search/screen.zig:354` at 12752b2ac).
+- **rustty**: `crates/rustty-vt/src/search/screen.rs:569` `feed`, `State::Complete => unreachable!()` (`:619`),
+  a faithful port of the pin.
+- **reachability**: a screen search that has already exhausted its PageList (`.complete`) is fed again after
+  older history pages are prepended below it (incremental snapshot history restore); the history searcher's
+  tracked pin keeps its node identity through the prepend, so the feed finds new pages and reaches the arm.
+  By reading (R1); not reproduced.
+- **why not a UD**: upstream found and fixed it within the range, so at the new pin it is not an R13 divergence;
+  the port adopts `06178eeaa` as is, with its tests.
+
+## N436 — `ghostty_search_tick` read the freed terminal's PageList after `ghostty_terminal_free`
+
+- **id**: N436. Phase 7 start (P7-W0 T4; R1 #37, R3 §3.5, DECISIONS R1). **severity**: medium (use-after-free
+  through the C API). **kind**: reference use-after-free ported faithfully, unrecorded. **state**: OPEN; closed by
+  the port of `b1c264163` (P7-W2 T1).
+- **reference**: at 20abdb50a, `src/terminal/c/search.zig:170-178` `tick` checks only the search handle, then
+  runs `s.tick()`. After the terminal is freed, a history search's tick reads `history.start_pin`, a pin tracked in
+  the freed PageList. `b1c264163` ("vt: reject search ticks after the terminal is freed") adds
+  `_ = wrapper.zigTerminal() orelse return .invalid_value;` (`c/search.zig:176` at 12752b2ac), an assertion in
+  "search free after terminal free" (`:949`), the new test "search tick after terminal free with history"
+  (`:988`), and the `search.h` doc.
+- **rustty**: `crates/rustty-vt-c/src/search.rs:508-525` `tick` has no terminal check, so by reading it carries
+  the same use-after-free. The guard ports through the raw-self `zig_terminal` helper (`:110`).
+- **evidence**: by reading (R1, R3). The negative control discriminates only under Miri or ASan
+  (`cargo +nightly miri test -p rustty-vt-c search::`, `check_sanitizer_canary.sh`).
+- **why not a UD**: upstream found and fixed it within the range (as N435).
+
+## N437 — the render thread forms whole-`Renderer` references that overlap the main thread's raw sync draw (macOS)
+
+- **id**: N437. Phase 7 start (P7-W0 T4; the P7-W0 T1 review, controller ruling 7). **severity**: medium
+  (aliasing-model UB on the macOS renderer every frame; no observed miscompile). **kind**: port soundness (Stacked
+  and Tree Borrows); pre-existing, not introduced by `72cf50855`. **state**: OPEN; owned by P7-W7 T2 (the
+  renderer-lifecycle rework).
+- **finding**: on macOS CoreAnimation calls `draw_frame_raw(sync = true)` on the main thread
+  (`crates/rustty-core/src/renderer_seam.rs:492`, `:496`), which reaches the renderer through a raw pointer and
+  takes `draw_mutex`. Meanwhile the render thread calls whole-`Renderer` `&mut self` / `&self` methods through
+  `(*(*self_).renderer).0`: `update_frame` (`renderer_seam.rs:1823`), `animation_wake` without the lock
+  (`:1313`, `armAnimationTimer`), `set_visible` (`:1396`), `set_focus` (`:1424`), `loop_enter` (`:1164`) and
+  `set_macos_display_id` (`:1583`). Each forms a reference over the whole renderer, and a function-entry
+  `&mut self` is protected for the whole call, so a concurrent main-thread access through the raw pointer to any
+  field (the sync draw's `&mut` reborrows included) is UB under Stacked and Tree Borrows, whether or not the two
+  touch the same bytes and whatever `draw_mutex` serialises. Zig's `*Renderer` has no such aliasing rule. By
+  reading; not yet shown in a Miri harness.
+- **follow-ups for P7-W7 T2**:
+  - UD352's port-handling text says "after the unlock the render thread touches no renderer bytes". That
+    overclaims for `update_frame`: its receiver is a `&mut Renderer` for the whole call, the unlocked resync
+    included. Reword UD352 when the rework lands.
+  - `DisplayLinkHandle` (`crates/rustty-renderer/src/metal/cvdisplaylink.rs:251-280`) is a safe `pub`,
+    `Copy` API over a non-owning `CVDisplayLinkRef` with no lifetime, so safe code can call `start`/`stop` after
+    the owning `DisplayLink` is released. Make `DisplayLink::handle` `pub(crate)`, or make the handle's methods
+    `unsafe` with a `# Safety` section.
+- **fix direction**: raw-self receivers with narrow field access for every render-thread entry that can overlap
+  the sync draw (memory `shaper-hook-sb-clean-interleave`), with LIFETIMES rows first and an isolated Miri
+  harness under `.port/phase-2/mirihar-<name>/` that is UB before and clean after.

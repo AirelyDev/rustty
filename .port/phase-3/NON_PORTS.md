@@ -1057,8 +1057,25 @@ unless the row proves, `MIXED-CARRIED`, that the port carries its fact).
 - `apprt/gtk/class/global_shortcuts.zig:406`: a closing quip, no fact.
 - `apprt/gtk/winproto/BlurRegion.zig:58`: an insult, no fact; `:59-61` (the
   ~30% CSD fact) are carried verbatim in `blur_region.rs`.
-- `apprt/gtk/class/application.zig:3486`: MIXED (parity tail L-2). The jab is
-  dropped; `:3484-3485` (`isActive` returns 1, 0 means equality) are carried verbatim.
-- `apprt/gtk/winproto/x11.zig:486`: a closing quip, no fact (controller, 2026-09-26,
-  after the gate learned `X11` as a proper-noun token); `:482-484` (the alignment
-  note) are carried verbatim in `x11.rs`.
+- `apprt/gtk/class/application.zig:3348`: MIXED (parity tail L-2; `:3486` at 20abdb50a,
+  re-anchored at P7-W0 T4). The jab is dropped; `:3346-3347` (`isActive` returns 1, 0 means
+  equality) are carried verbatim.
+- `apprt/gtk/winproto/x11.zig:482`: a closing quip, no fact (controller, 2026-09-26,
+  after the gate learned `X11` as a proper-noun token; `:486` at 20abdb50a, re-anchored at
+  P7-W0 T4); `:478-480` (the alignment note) are carried verbatim in `x11.rs`.
+
+# Phase 7 start — non-ports in the `20abdb50a..12752b2ac` range (P7-W0 T4, DECISIONS R5, R8, R9)
+
+Recorded at the pin advance so the range's Zig-build mechanics, governance and stray files are
+decided before the workstreams start. Each row cites the review that checked it.
+
+| Reference item | Commit(s) | Status | Reason |
+|---|---|---|---|
+| `src/lib/tinyio/posix.zig`, `src/lib/tinyio/windows.zig`, `src/lib/tinyio/test.zig` | `f6cb8312b` | NON-PORT (the TinyIo row) | The split of `src/lib/TinyIo.zig`; the verdict, the argument and the Phase 7 re-read of the reopen trigger (it did not fire) are in `.port/phase-4/NON_PORTS.md`'s TinyIo row. Named here too because `audit_symbol_coverage.py` and `audit_file_coverage.py` read only this file's backticked paths (`audit_test_coverage.py` reads every phase's ledger). |
+| `passthrough.glsl` (repository root, 4 lines) | `0fca3d34a` | NOT PORTED — unreferenced file | A `mainImage` shader that samples `iChannel0` and forces alpha to 1. Nothing references it: at 12752b2ac no tracked file names it (a whole-tree search for `passthrough.glsl`), and the commit that added it is about the GTK imgui widget's `glClearColor`. R2 Q8, R4 Q8. |
+| uucode module export for Zig embedders (`src/build/SharedDeps.zig`) | `7adbb5160` | N/A — Zig package graph | Exports the `uucode` Zig module from libghostty-vt's build so Zig consumers can reuse it. Rustty has no uucode package to export: the Unicode tables are generated into `rustty-unicode` (and `rustty-vaxis`), which are ordinary crates any Rust consumer already depends on directly. R4 §B, Q7. |
+| `src/build/uucode_config.zig` `.packing = .unpacked` for the build-time table | `7644e6d62` | N/A — Zig comptime workaround | A packed table this size cannot be evaluated at comptime by Zig 0.16.0; unpacking it changes no value. Rustty's generated tables are `const` data with no comptime evaluation limit. The table values themselves arrive with the uucode 9d55524 resync (R4 §B). |
+| `@cImport` / `b.addTranslateC` → the in-tree `pkg/translate-c` helper (50 files), and the translate-c backport bump | `c0c5473da`, `fe9cf6a26`, `2b3b89391` | N/A — Zig build mechanics | Rust binds C through `bindgen` per `-sys` crate (precedent E26). R4 checked that no C compile flag moved: the `-D/-W/-f/-I/-s` literals in every `pkg/*/build.zig` are identical at both pins except `-fblocks`, which at `20abdb50a` was a translate-c argument only; `default_init = true` affects only Zig's translated struct defaults. R4 §I. |
+| Zig-package and Nix renderings: `build.zig.zon.{json,nix,txt}`, `flatpak/zig-packages.json`, the zon2nix 0.7.0 → 0.9.0 bump, the `linkFarm` removal in `nix/libghostty-vt.nix` | `aef7aaeb8`, `57286723d`, `f5efbaee5`, `13a21fc04`, `1a174c063`, `659ca22c0`, `1f3d869b4` | N/A (G13 §6) | Renderings of the Zig package set for Nix and Flatpak; Rustty's Nix build vendors from `Cargo.lock` through crane, has no zon2nix input (`flake.nix`, `nix/devShell.nix`) and never carried the `linkFarm` override (`nix/librustty-vt.nix`). The only payloads these files carry (the uucode, fontconfig, translate-c and themes URLs) are ported by their own workstreams. R4 §J. |
+| GTK build cache: relative `.ui` paths under `--sourcedir`, a one-shot blueprint-compiler version check, a memoised gresource pipeline (`src/apprt/gtk/build/`) | `ef7edc4a2` | N/A — Zig build-cache mechanics | Rustty's `crates/rustty-apprt/build.rs` compiles the blueprints itself with per-blueprint libadwaita checks, which is equivalent to upstream's single check against the highest version; the generated bundle aliases are unchanged. Its citations of the old `blueprint.zig`/`gresource.zig` line ranges and module docs are refreshed with the GTK work (G3b sees the new `genUi` doc). The `graphene` import of `9dc7408be` is GTK port work, not this row. R4 §K. |
+| `.github/VOUCHED.td` updates (17 `Update VOUCHED list`) and 3 `Sync CODEOWNERS vouch list` | 20 commits, e.g. `12752b2ac` | NOT PORTED — governance (G13 §6) | Contributor-vouching governance of the reference's own GitHub organisation, already not carried (G13 §6). `CODEOWNERS` itself has no diff in the range. R4 §M. |
