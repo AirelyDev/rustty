@@ -16,12 +16,12 @@
 //! while it is live inside `drawFrame` (`rust-mut-args-strongly-protected`), so a
 //! `&mut` here would be UB.
 //!
-//! PORT NOTE (`sync` is ignored — GL always blocks, `Frame.zig:50-57`): unlike
-//! Metal's command-buffer completion block, OpenGL's `complete` ALWAYS blocks via
-//! `gl.finish()` regardless of `sync`. So there is no async/block path here at all
-//! (the whole HARD-SPOT-2 `RcBlock` machinery `metal/frame.rs` needs is absent): the
-//! health is computed from `gl.errors.getError()` right after the blocking finish,
-//! and the completion fn is invoked directly. Ported verbatim.
+//! PORT NOTE (`sync` is ignored, `Frame.zig:51-56` at `12752b2ac`): "For OpenGL,
+//! `sync` is ignored and we never block, instead pushing the newly presented and
+//! exported frame to the frame queue." So there is no async/block path here at
+//! all (the whole HARD-SPOT-2 `RcBlock` machinery `metal/frame.rs` needs is
+//! absent): the health is computed from `gl.errors.getError()` and the completion
+//! tail is invoked directly.
 
 use crate::Health;
 
@@ -35,22 +35,46 @@ use super::target::Target;
 // Frame.zig:15's scope) rather than the `generic_renderer` scope of the file it ended
 // up in — the scope belongs to the file whose call is being ported.
 
-/// The present + report tail of `Frame.complete` (`Frame.zig:62-70`), type-erased
-/// so `Frame` compiles before `GenericRenderer(OpenGL)` exists. The renderer task
-/// supplies a concrete fn that casts `renderer` back to `*mut GenericRenderer` and
-/// runs, on a healthy frame, `renderer.api.present(*target)` (logging on failure),
-/// then `renderer.frameCompleted(health)` unconditionally. Raw `*mut` per the
-/// module note; `Health` is already computed by [`Frame::complete`] and handed in.
+/// The present + push + report tail of `Frame.complete` (`Frame.zig:65-89` at
+/// `12752b2ac`), type-erased so `Frame` compiles without naming
+/// `GenericRenderer(OpenGL)`. The renderer supplies a concrete fn that casts
+/// `renderer` back to `*mut GenericRenderer` and runs the reference's tail from
+/// the present on, `health` being computed by [`Frame::complete`] and handed in.
+/// Raw `*mut` per the module note.
 ///
 /// The reference body this stands in for:
 /// ```zig
-/// if (health == .healthy) {
-///     self.renderer.api.present(self.target.*) catch |err| {
-///         log.err("Failed to present render target: err={}", .{err});
+/// // If the frame is healthy, draw it to an ExportedFrame
+/// // Then sync before exporting and pushing to the present queue.
+/// // The apprt pulls from this queue in its snapshot handler.
+/// const presented_frame: ?OpenGL.ExportedFrame = if (health == .healthy) frame: {
+///     const frame = self.renderer.api.present(
+///         self.target.*,
+///         self.renderer.presentationHealth(),
+///     ) catch |err| {
+///         log.warn("failed to present render target: err={}", .{err});
+///         break :frame null;
 ///     };
+///     break :frame frame;
+/// } else null;
+///
+/// // Sync after frame draw AND frame present GL calls.
+/// gl.finish();
+///
+/// // At this point the ExportedFrame is finished and can be shared
+/// if (presented_frame) |frame| {
+///     self.renderer.pushFrame(frame);
+///
+///     // Notify the surface that it should redraw
+///     _ = self.renderer.surface_mailbox.push(.redraw, .{ .forever = {} });
 /// }
+///
+/// // Report the health to the renderer.
 /// self.renderer.frameCompleted(health);
 /// ```
+///
+/// PORT NOTE: the `gl.finish()` therefore runs inside the tail, between the
+/// present and the push, where the reference puts it.
 pub type CompletionFn = unsafe fn(renderer: *mut (), target: *mut Target, health: Health);
 
 /// Options for beginning a frame.
@@ -124,15 +148,15 @@ impl Frame {
         super::render_pass::RenderPass::begin(super::render_pass::Options { attachments })
     }
 
-    /// PORTS: `Frame.zig:50-70`.
+    /// PORTS: `Frame.zig:51-90` (`2f0b65346`).
     ///
     /// ```zig
     /// pub fn complete(self: *const Self, sync: bool) void {
     ///     _ = sync;
-    ///     gl.finish();
+    ///
+    ///     // If there are any GL errors, consider the frame unhealthy.
     ///     const health: Health = if (gl.errors.getError()) .healthy else |_| .unhealthy;
-    ///     if (health == .healthy) { self.renderer.api.present(self.target.*) catch … }
-    ///     self.renderer.frameCompleted(health);
+    ///     ... // the tail: see `CompletionFn`
     /// }
     /// ```
     ///
@@ -140,12 +164,12 @@ impl Frame {
     ///
     /// If `sync` is true, this will block until the frame is presented.
     ///
-    /// NOTE: For OpenGL, `sync` is ignored and we always block.
+    /// NOTE: For OpenGL, `sync` is ignored and we never block, instead
+    /// pushing the newly presented and exported frame to the frame queue.
     ///
-    /// The present + `frameCompleted` tail is [`on_completed`](Self::on_completed).
+    /// The present + finish + push + `frameCompleted` tail is
+    /// [`on_completed`](Self::on_completed).
     pub fn complete(&self, _sync: bool) {
-        super::gl::finish();
-
         // If there are any GL errors, consider the frame unhealthy.
         // `if (gl.errors.getError()) .healthy else |_| .unhealthy` — Ok => healthy.
         let health = if super::gl::errors::get_error().is_ok() {
@@ -154,15 +178,12 @@ impl Frame {
             Health::Unhealthy
         };
 
-        // If the frame is healthy, present it.
-        // Report the health to the renderer.
+        // The present / `gl.finish()` / push / `frameCompleted` tail (the renderer
+        // authors the body — see [`CompletionFn`]).
         //
-        // PORT NOTE: the present-if-healthy + `frameCompleted(health)` tail (the
-        // renderer task authors the body — see [`CompletionFn`]).
-        //
-        // SAFETY: the renderer pointer is live for the duration of `drawFrame`;
-        // single-threaded on this path (we just blocked on `gl.finish()`); the
-        // pointers are raw `*mut`, never aliased as `&mut` (the module note).
+        // SAFETY: the renderer pointer is live for the duration of `drawFrame`,
+        // which is running on this (the render) thread; the pointers are raw
+        // `*mut`, never aliased as `&mut` (the module note).
         unsafe {
             (self.on_completed)(self.renderer, self.target, health);
         }

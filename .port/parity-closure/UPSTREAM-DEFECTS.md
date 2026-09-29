@@ -2863,7 +2863,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - port handling:
   - `crates/rustty-renderer/src/generic.rs` (macOS). `cells_rebuilt` is an `AtomicBool` (Relaxed; the stores stay under the lock).
   - The tail of `sync_display_link` is split into `display_link_sync` (the reads, yielding a `DisplayLinkSync { link: DisplayLinkHandle, should_run }`) and `DisplayLinkSync::apply` (the CoreVideo start/stop calls on a non-owning `DisplayLinkHandle`, `crates/rustty-renderer/src/metal/cvdisplaylink.rs`).
-  - `draw_frame_raw` and `update_frame` take the reads while they still hold `draw_mutex`, and apply them after the unlock, so after the unlock the render thread touches no renderer bytes. The blocking stop still runs outside the lock (the point of `72cf50855`).
+  - `draw_frame_raw` and `update_frame` take the reads while they still hold `draw_mutex`, and apply them after the unlock, so on the draw path the render thread touches no renderer bytes after the unlock. The blocking stop still runs outside the lock (the point of `72cf50855`). (Until P7-W7 T2 this overclaimed for `update_frame`: its `&mut Renderer` receiver spanned the whole call, the resync included, which is N437. Since P7-W7 T2 `update_frame_raw` locks first through an external `DrawMutex`, forms the whole `&mut` only under the lock, and applies the resync through the copied-out `DisplayLinkHandle`, now `pub(crate)` with `unsafe` methods; N437 is CLOSED.)
   - On the draw path the decision is the same as upstream's: a no-redraw draw has already seen `cells_rebuilt == false` and no animation, and only the render thread sets them back. On the `updateFrame` path, reading before the unlock is the outcome in which the main draw comes after the resync.
   - `PORT NOTE: reference defect (R13)` at the field, `sync_display_link`, `draw_frame_raw` and `update_frame`. The Linux twin has no display link and is unchanged. Listed in `docs/ghostty-bug-fixes.md`.
 - parity row(s):   none. Found by the P7-W0 T1 task review (fix round 1).
@@ -2893,7 +2893,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - output needed:   none visible; the process's open-fd count grows.
 - port handling:
   - `crates/rustty-renderer/src/dmabuf.rs` (P7-W7 T1). The driver-filled arrays are `RawPlanes`; `RawPlanes::validate` is the only place a raw fd becomes owned. On the first invalid plane it closes EVERY non-negative fd in `fds[0..count]`, as the reference's doc comment says, then returns `BadDmabuf`; on success the fds become `OwnedFd`s in `Planes`, so any later drop (`Dmabuf::deinit`, an error path, an allocation failure) closes them.
-  - The `render_surface.zig` half lands with the GTK `RenderSurface` port (stage S3); `OwnedFd` ownership removes the leak there by construction, and its failing-allocator test belongs to that task.
+  - The `render_surface.zig` half (P7-W7 T2, `crates/rustty-apprt/src/gtk/class/render_surface.rs` `rebuild_dmabuf_texture`): the frame's `Planes` hold `OwnedFd`s from `validate` on, and the texture's destroy notify owns a `Box` built from them before GDK sees any fd, so no allocation can fall between an unowned fd and its owner; a failed build drops the box (GDK does not call the destroy notify on failure). The leak is impossible by construction; there is no allocation point left for a failing-allocator test to hit.
   - `R13 FIX` note at `RawPlanes::validate`. Listed in `docs/ghostty-bug-fixes.md`.
 - parity row(s):   none. R2 §6 Q4, DECISIONS M4.
 - test:            `dmabuf::tests::dmabuf_validate_closes_every_fd_after_an_invalid_plane` (planes `[fd, -1, fd]`; each fd is a pipe's write end and its closing is observed as EOF on the read end, so fd-number reuse cannot fool it); `dmabuf_validate_edge_counts` (an invalid FIRST plane with a valid one after it); `dmabuf_validate_takes_ownership_of_valid_planes` (the success path). Negative control: with the reference's loop (close `fds[..n_valid]` only) the first two fail with "the fd after the invalid plane leaked" (macOS and Linux).
@@ -2937,6 +2937,49 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - parity row(s):   none. Found while porting `exportDmabufQuery` (P7-W7 T1).
 - test:            `opengl::gl::sys::tests::dmabuf_query_single_modifier_slot_is_overrun_by_a_two_plane_export` (a spec-conforming test double for a 2-plane image, called with the reference's one-slot shape, writes the second modifier into the word after the slot; the guard word is in the same allocation so the demonstration is defined behaviour); `dmabuf_query_gives_the_driver_a_modifier_slot_per_plane` (the port's query returns the modifier with no overrun); `dmabuf_query_reports_egl_false`.
 - proposed fix:    pass an array: `var modifiers: [Dmabuf.max_planes]u64 = undefined;` and use `modifiers[0]`, or query `num_planes` first with `modifiers = null` (the specification allows NULL) and reject counts above 4 before asking for the modifiers.
+- upstream status: NOT YET REPORTED
+
+### UD356 — a surface whose renderer fails to initialize stays blank: the error page is never shown
+
+- kind:            functional (non-crash bug breaking evident intent; R13)
+- upstream project: ghostty
+- severity:        medium. A user whose EGL/OpenGL stack cannot give the renderer a context (no EGL vendor, no 4.3 core context, a broken driver) gets an empty window and no explanation; the error page and its help text exist for exactly this case.
+- reference:       `src/apprt/gtk/class/surface.zig` at 12752b2ac (`2f0b65346`):
+  - `setError` (`:2305`) is the only place the surface's `error` property is set, and it has NO caller with `true`;
+  - at the pin (20abdb50a) the one caller was `glareaRealize` (`:3333`), which set it when the GtkGLArea's context failed; `2f0b65346` deleted the GLArea and that check with it;
+  - the renderer's context is now created by `Renderer.init` inside `initSurface` (`:3440`), which `renderSurfaceResize` calls on the first resize (`:3430-3432`) and whose failure it only logs: `log.warn("surface failed to initialize err={}", .{err})`.
+- defect:          the context failure the error page reported moved from the GLArea into `initSurface`, but the `setError(true)` did not move with it, so the failure now leaves the surface blank with no core surface.
+- ReleaseSafe:     no crash; a blank surface. MEASURED on the port (rvm, `__EGL_VENDOR_LIBRARY_FILENAMES=/nonexistent.json`, so libglvnd finds no vendor and the surfaceless display cannot be created): without the fix `surface_init_failure_shows_the_error_page` fails at "a surface whose initialization failed shows the error page".
+- ReleaseFast:     the same.
+- reachability:    any GTK user whose system cannot create the renderer's EGL context.
+- output needed:   the window shows nothing where the terminal or the error page should be.
+- port handling:
+  - `crates/rustty-apprt/src/gtk/class/surface.rs` `render_surface_resize` (P7-W7 T2): the init-failure arm logs the reference's warn and then calls `self.set_error(true)`, which shows the error page (the `propError` idle rechild).
+  - `PORT NOTE: reference defect (R13), UD356` at that arm. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none. R2 §5.5, DECISIONS M2 (measure first).
+- test:            `crates/rustty-apprt/tests/gtk_render_surface.rs` `surface_init_failure_shows_the_error_page` (headed GTK, ignored; asserts `error` and that the error page `AdwStatusPage` becomes the child); `class::surface` structural test asserts a failed init sets `error`. Negative control: without the `set_error(true)` both fail.
+- proposed fix:    in `renderSurfaceResize`'s `initSurface` catch arm, call `self.setError(true)` after the `log.warn`.
+- upstream status: NOT YET REPORTED
+
+### UD357 — under fractional scaling the flipped OpenGL frame lands half a device pixel off the snapped origin (seam rows)
+
+- kind:            functional (non-crash bug breaking evident intent; R13)
+- upstream project: ghostty
+- severity:        low. Visible artifacts at fractional scales: a one-pixel seam row above and below full-block glyphs and box-drawing lines, and the whole frame blurred vertically by resampling.
+- reference:       `src/apprt/gtk/class/render_surface.zig:176-205` at 12752b2ac (`snapshot`):
+  - `layout.snapOrigin()` (`src/apprt/gtk/scale.zig:23-28`) moves the texture's surface-relative origin onto a device pixel, "so parent chrome cannot place the texture between pixels";
+  - on OpenGL (`flip`), it does `translate(0, css_h)`, `scale(1, -1)` and then `appendTexture` at `(origin.x, origin.y)`, i.e. the snapped y is appended INSIDE the flip, so the flip negates it.
+- defect:          the texture's top lands at widget y `-origin.y` instead of `+origin.y`, so its device top is `2D - round(D)` for a device origin `D` instead of `round(D)`: whenever the snap offset is non-zero, the frame sits off the pixel grid by twice the offset, and at `D = n.75` that is half a device pixel, the exact misplacement the snap exists to prevent.
+- ReleaseSafe:     wrong placement, no crash. MEASURED on the port (rvm, headless sway at scale 1.25, surface origin device 83.75): with the reference's transform a row of full blocks has a 72-pixel seam row above and below it; with the fix 0 and 0. The blocks' device rows were 96..=172 with the reference's transform and 96..=173 with the fix.
+- ReleaseFast:     the same.
+- reachability:    OpenGL (every GTK build) at a fractional scale whose widget origin is not already on a device pixel: common (window decorations, tabs and splits put the surface at arbitrary CSS offsets).
+- output needed:   seam rows and vertical blur at fractional scales.
+- port handling:
+  - `crates/rustty-apprt/src/gtk/class/render_surface.rs` `texture_bounds` (P7-W7 T2): for the flip, the snapped y goes into the flip's translation (`translate(0, origin.y + css_h)`) and the texture is appended at y 0 inside it, so the top lands at `+origin.y`; x is not flipped and keeps the reference's origin.
+  - `PORT NOTE: reference defect (R13), UD357` at `texture_bounds`. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none. R2 §4, DECISIONS M3 (measure first).
+- test:            `class::render_surface::tests::flipped_texture_lands_on_the_snapped_origin` (the reference's transform, kept as a witness, puts the top at -0.2 CSS px, device 58.5, for an origin at device 58.75; the port's at +0.2, device 59); `crates/rustty-apprt/tests/gtk_render_surface.rs` `fractional_scale_cells_land_on_device_pixels` (grim capture of a headless sway at 1.25; fails with the reference's transform, "seam px above=72 below=72").
+- proposed fix:    in `snapshot`'s flip branch translate by `(0, origin.y + css_h)` and append the texture at `(origin.x, 0)`.
 - upstream status: NOT YET REPORTED
 
 ### UD358 — fontconfig 2.18.3 does not compile for GNU-ABI Windows: `FcLocaleSetCurrent` is undeclared there
@@ -2989,6 +3032,57 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - test:            `fontconfig-sys` `tests::ud360_cache_stamped_by_fontconfig_2_18_3_is_rescanned_after_its_dir_changes` (the scenario runs in a re-executed child process with `SOURCE_DATE_EPOCH` and `FONTCONFIG_NO_CHECK_CACHE_VERSION` removed from its environment, so it holds in a Nix shell too): one font in a private font directory and cachedir, scan (writes the cache), stamp the cache 0x2012003, add a second font a second later, and a fresh config must find 2 fonts. Fail-first, on macOS and on Linux (`rvm`): with the reference's 2/14/2 it prints the warning and finds 1 (`left: 1, right: 2`). With 2/18/3 it passes on macOS, Linux (`rvm`) and Windows GNU (`rwin`, 3/3 runs).
 - proposed fix:    set `build.zig.zon`'s `.version` to "2.18.3" (the defines then follow), or pass the fontconfig tarball's own version.
 - upstream status: not reported
+
+### UD362 — the OpenGL renderer pushes `.redraw` with `.forever` while holding the draw mutex that the GTK main thread (the mailbox's consumer) needs: a full app mailbox deadlocks the app
+
+- kind:            deadlock (R13)
+- upstream project: ghostty
+- severity:        high when reached (the whole app freezes: the GTK main thread and the surface's render thread wait on each other forever); needs a full app mailbox, so rare.
+- reference:       at 12752b2ac (`2f0b65346`):
+  - `src/renderer/opengl/Frame.zig:81-89` (`complete`): after `gl.finish()`, `pushFrame` then `self.renderer.surface_mailbox.push(.redraw, .{ .forever = {} })`, then `frameCompleted(health)`;
+  - `src/renderer/generic.zig:2012-2019` (`frameCompleted`): `surface_mailbox.push(.{ .renderer_health = health }, .{ .forever = {} })` on a health change;
+  - OpenGL frames complete synchronously inside `drawFrameLocked`, i.e. with `draw_mutex` held (`drawFrame` locks it around `drawFrameLocked`);
+  - the surface mailbox is `App.Mailbox` (`src/apprt/surface.zig:189-196`), one `BlockingQueue(Message, 64)` shared by every surface (`src/App.zig:581`), drained only by the app's main-thread loop;
+  - the GTK main thread takes the same `draw_mutex` in `displayRealized` / `displayUnrealized` (`generic.zig:950-985`), called from `renderSurfaceRealize` / `renderSurfaceUnrealize` and `initSurface` (`src/apprt/gtk/class/surface.zig:3305-3340`, `:3514-3517`).
+- defect:          when the app mailbox is full, the render thread blocks in the `.forever` push while holding `draw_mutex`. If the main thread then realizes or unrealizes that surface's render widget before draining the mailbox, it blocks on `draw_mutex`, and the only thread that would drain the mailbox is itself: neither thread can proceed.
+- ReleaseSafe:     a permanent hang, no crash. MEASURED on the port (rvm, llvmpipe): with the reference's order, the fail-first test's render thread is still blocked in the push after 3 s while the main thread waits in `displayUnrealized`.
+- ReleaseFast:     the same.
+- reachability:    a user action that realizes or unrealizes a surface's widget (moving a tab or a split, closing a split, reparenting) at a moment when the 64-entry app mailbox is full, i.e. while the main thread is behind on draining it and at least one surface completes a frame. Not triggerable by terminal output alone.
+- output needed:   the app freezes.
+- port handling:
+  - `crates/rustty-renderer/src/generic/linux_impl.rs` (P7-W7 T2 fix round 1): `opengl_frame_completed` and `frame_completed` queue their `.forever` pushes in `deferred_surface_pushes` (`defer_forever_push`); `draw_frame_raw` takes them under the lock (`take_deferred_surface_pushes`, with a clone of the mailbox handle, so no renderer byte is touched after the unlock, N437) and sends them after releasing `draw_mutex`. Messages keep their order; the `.instant` scrollbar push stays in the locked `defer`, so it now lands before `.redraw`.
+  - The Metal twin is not changed: its frames complete on the Metal completion-handler thread, which does not hold `draw_mutex`. By reading, a related wait exists there (the completion handler pushes `.renderer_health` with `.forever` before `releaseFrame`, while a main-thread sync draw can wait for that frame slot under `draw_mutex`); not measured and not part of this fix.
+  - `PORT NOTE: reference defect (R13), UD362` at the field, both pushes and `draw_frame_raw`. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none. Found by the P7-W7 T2 task review (fix round 1, ruling 31).
+- test:            `generic::linux_impl::tests::linux_opengl_full_mailbox_does_not_deadlock_display_unrealize`: a full test mailbox whose `.forever` push waits up to 3 s for the consumer; the main thread, once the render thread is blocked in that push, calls `display_unrealized_raw` and only then drains. RED with the reference's order ("the render thread blocked in a `.forever` push while holding the draw mutex the main thread needed"), GREEN with the push after the unlock. `frame_completed_pushes_renderer_health_on_transition_only` and the two scrollbar-push tests assert the deferred order.
+- proposed fix:    have `drawFrameLocked` return whether a `.redraw` (and a `.renderer_health`) is pending, and push them in `drawFrame` after `draw_mutex` is released, as `syncDisplayLink` already is.
+- extension (Metal, by reading; P7-W7 T2 fix round 2, ruling 36; NOT fixed in the port yet, owned by N440):
+  - (a) `frameCompleted` (`generic.zig:2012-2025`) pushes `.renderer_health` with `.forever` BEFORE `releaseFrame`. On the Metal completion thread, with all three swap-chain frames in flight and the app mailbox full, the push blocks while the main thread's `drawFrame(sync)` holds `draw_mutex` and waits in `nextFrame` → `frame_sema.wait()` for exactly that release: the main thread (the mailbox's only drainer) waits on the frame slot, the completion thread waits on the mailbox.
+  - (b) on the sync path `metal/Frame.zig` `complete(sync = true)` runs the completion on the main thread itself, so a health change pushes `.renderer_health` with `.forever` into the mailbox that only this thread drains: a full mailbox blocks it forever.
+  - Fix direction: release the frame before the push, and send the push without blocking the drainer (defer it past the draw like the OpenGL fix, or push `.instant` from the main thread and retry).
+- upstream status: NOT YET REPORTED
+
+### UD363 — `updateFrame` rebuilds `self.overlay` without the draw mutex while the macOS sync draw reads it under the mutex (data race)
+
+- kind:            UB (data race; R13)
+- upstream project: ghostty
+- severity:        low (a formal data race on an optional; with the inspector's overlay features on, the draw can read `self.overlay` while it is being deinitialized and replaced)
+- reference:       `src/renderer/generic.zig` at 12752b2ac:
+  - `updateFrame` calls `self.rebuildOverlay(critical.overlay_features)` after the terminal critical section and before taking `draw_mutex` (`:1594-1604`, "We can do this outside of any critical areas");
+  - `rebuildOverlay` (`:2519-2572`) deinitializes `self.overlay`, sets it to `null`, re-inits it, or resets and redraws it in place;
+  - `drawFrameLocked` reads `self.overlay != null` (`:1964`) under `draw_mutex`; on macOS it also runs on the main thread through the Metal layer's display callback (`src/renderer/Metal.zig:172-176`, `drawFrame(true)`), concurrently with the render thread's `updateFrame`.
+- defect:          the render thread writes `self.overlay` with no happens-before relation to the main thread's read of it: a data race. Zig gives it no defined meaning; in Rust it is undefined behaviour.
+- ReleaseSafe:     no safety check sees it; no observed misbehaviour. By reading; not measured.
+- ReleaseFast:     the same.
+- reachability:    macOS with inspector overlay features enabled (the terminal inspector's overlay) during a live resize (CoreAnimation calls the sync draw on the main thread while the render thread updates frames).
+- output needed:   none reliably visible.
+- port handling:
+  - `crates/rustty-renderer/src/generic.rs` and `generic/linux_impl.rs` (P7-W7 T2 fix round 2, ruling 35): `update_frame_impl` builds the next overlay into a local without the lock (`rebuild_overlay_into`, reusing the overlay replaced last frame, kept in the render-thread-only `overlay_spare`), then swaps it into `self.overlay` inside the locked tail; the replaced overlay goes back to `overlay_spare`, or is deinitialized when no overlay is configured. The lock scope is the reference's except for the swap. `self.size`, which the draw writes on a resize, is copied for the rebuild during the (already locked) Kitty block.
+  - `PORT NOTE: reference defect (R13), UD363` at the field, the local build and the swap. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none. Found by the P7-W7 T2 review (fix round 1, candidate C12; ruling 35).
+- test:            `.port/phase-2/mirihar-n437` `split_*` model the ruling-32 scopes (a main-thread access overlapping the render thread's unlocked writes is UB; the shipped narrow shapes are clean under SB and TB); `rebuild_overlay_builds_and_clears` (both twins) covers `rebuild_overlay_into` through `rebuild_overlay`. No test reproduces the race itself (it needs the inspector overlay and a concurrent sync draw).
+- proposed fix:    build the overlay into a local in `updateFrame` and assign `self.overlay` under `draw_mutex` (or take `draw_mutex` around `rebuildOverlay`).
+- upstream status: NOT YET REPORTED
 
 ## Candidates pending verification
 

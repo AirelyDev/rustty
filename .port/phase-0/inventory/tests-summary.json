@@ -1238,6 +1238,10 @@
      "test_blocks": 0
     },
     {
+     "file": "apprt/gtk/class/render_surface.zig",
+     "test_blocks": 0
+    },
+    {
      "file": "apprt/gtk/class/resize_overlay.zig",
      "test_blocks": 0
     },
@@ -1371,7 +1375,7 @@
     }
    ],
    "test_blocks": 27,
-   "file_count": 58
+   "file_count": 59
   },
   "apprt-api": {
    "files": [
@@ -2386,6 +2390,10 @@
      "test_blocks": 2
     },
     {
+     "file": "renderer/Dmabuf.zig",
+     "test_blocks": 0
+    },
+    {
      "file": "renderer/Metal.zig",
      "test_blocks": 0
     },
@@ -2523,7 +2531,7 @@
     }
    ],
    "test_blocks": 21,
-   "file_count": 35
+   "file_count": 36
   },
   "simd": {
    "files": [

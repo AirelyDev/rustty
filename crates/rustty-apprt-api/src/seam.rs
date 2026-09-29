@@ -68,23 +68,9 @@ pub trait CoreSurfaceHandle {
 /// surface core's `App.zig`/`Surface.zig` reach through `rt_app`. See
 /// PORT_PLAN break #8.
 pub trait App: Sized {
-    /// Whether the renderer must draw from the app thread rather than its own
-    /// render thread.
-    ///
-    /// PORT NOTE (A5 glue): this is the faithful Rust model of the reference's
-    /// `@hasDecl(apprt.App, "must_draw_from_app_thread")` probe in
-    /// `renderer/Thread.zig:22-30` — a backend either DECLARES the decl (GTK:
-    /// `App.zig:20-23` `pub const must_draw_from_app_thread = true`, because
-    /// GTK's `GLArea` cannot draw off the app thread, so the renderer sends a
-    /// `redraw_surface` message instead) or it does NOT, in which case the probe
-    /// resolves to `false`. Zig models the two cases with `@hasDecl`; Rust models
-    /// them with a trait const that DEFAULTS to `false`, so every backend that
-    /// does not override it (embedded/none/browser) is byte-identical to the
-    /// reference's non-declaring case (R5). Only the GTK backend overrides it to
-    /// `true`. Read at `rustty-core`'s `renderer_seam` `drawFrame`
-    /// (`renderer/Thread.zig:191-203`): the `true` arm pushes `redraw_surface`,
-    /// the `false` arm draws inline — both arms stay live for either value.
-    const MUST_DRAW_FROM_APP_THREAD: bool = false;
+    // P7-W7 T2 (`2f0b65346`): `const MUST_DRAW_FROM_APP_THREAD` (the port of
+    // `apprt.must_draw_from_app_thread`, which only the GTK `GLArea` backend set)
+    // is deleted: every renderer draws on its own render thread.
 
     /// The runtime's surface type. Bound to `Surface<App = Self>` so the two
     /// halves of the seam stay in lock-step (mirrors `apprt.runtime.App`/

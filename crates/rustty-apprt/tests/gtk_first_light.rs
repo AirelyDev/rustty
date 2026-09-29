@@ -1,75 +1,47 @@
-//! L5.2 T19 / GL-ATTACH — THE FIRST-LIGHT KAT (the proof milestone of the whole
-//! Linux/GTK port), now proving VISIBLE render into GDK's GLArea framebuffer.
+//! L5.2 T19 — THE FIRST-LIGHT KAT (the proof milestone of the whole Linux/GTK port),
+//! rewritten for P7-W7 T2 (`2f0b65346`): the terminal is a `RenderSurface` that
+//! displays the frames the render thread exports, and the visible-render proof is
+//! the `GdkTexture` that widget builds in its snapshot.
 //!
-//! This is the FIRST TIME the Linux port renders a LIVE terminal frame driven by a
-//! real GTK window, end to end AND lands it on the WINDOW: an `adw::ApplicationWindow`
-//! hosts the REAL `class::Surface` (built from the vendored `ui/1.2/surface.blp`),
-//! whose `GLArea` lazily stands up the ONE OWNED libghostty-core `Surface` on its
-//! first resize (invariant 3), which builds the REAL `rustty_renderer` OpenGL renderer
-//! bound to GDK's GLArea context (the GL-ATTACH work), spawns a REAL `/bin/sh` on a
-//! REAL pty (the L1 epoll/io_uring `Dynamic` loop, L3 fontconfig), and draws a real
-//! frame that appears on the window. It CONSUMES EVERYTHING: L1 (event loop) + L3
-//! (font discovery) + L4 (the OpenGL renderer) + L5.0-L5.2 (the gtk apprt) + GL-ATTACH.
+//! An `adw::ApplicationWindow` hosts the REAL `class::Surface` (built from the
+//! vendored `ui/1.2/surface.blp`), whose `RenderSurface` lazily stands up the ONE
+//! OWNED libghostty-core `Surface` on its first resize (invariant 3), which builds
+//! the REAL `rustty_renderer` OpenGL renderer over its own surfaceless EGL context,
+//! spawns a REAL `/bin/sh` on a REAL pty, and whose render thread draws frames the
+//! widget shows. It CONSUMES EVERYTHING: L1 (event loop) + L3 (font discovery) + L4
+//! (the OpenGL renderer) + L5.0-L5.2 (the gtk apprt) + the EGL/DMA-BUF redesign.
 //!
-//! WHAT THIS PROVES (the task brief's body):
+//! WHAT THIS PROVES:
 //!   (a) `Surface::core()` is `Some` — the lazy core surface built on first resize.
-//!   (b) `renderer_seam::Renderer::drawFrame(sync=true)` returns `Ok` on the live
-//!       renderer, driven with GDK's GLArea context current + its framebuffer bound —
-//!       a real frame drawn by the L4 OpenGL backend and PRESENTED into that
-//!       framebuffer via `present_to_default`.
-//!   (c) THE VISIBLE-RENDER PROOF: a `glReadPixels` readback of GDK's GLArea
-//!       framebuffer (the currently-bound host framebuffer — a NON-zero FBO, NOT the
-//!       renderer's offscreen target FBO) is not uniformly zero. The frame the
-//!       renderer `present_to_default`-blitted landed in the WINDOW's framebuffer.
-//!   (d) the shell is LIVE — `echo rustty-first-light\n` written into the pty
-//!       round-trips through the io thread into the core `Screen` (the `live_shell.rs`
-//!       KAT's assertion shape).
-//!   (e) `App::run()` returns `Ok(())` after a scheduled `quit_now` — the hand-rolled
-//!       event loop ticks the core (draining the real render contract) and exits
-//!       cleanly — followed by a teardown that UNREALIZES the GLArea and survives GDK's
-//!       "Destroying EGL context" with NO `munmap` double-free and NO `thread
-//!       'renderer' panicked` line. The renderer no longer owns a separate surfaceless
-//!       EGL context (GL-ATTACH: it borrows GDK's), so tearing it down no longer
-//!       corrupts GDK's shared EGL bookkeeping — the `munmap_chunk(): invalid pointer`
-//!       abort at "Destroying EGL context" is GONE. (A FULL `drop(surface)` then hits
-//!       a SEPARATE, out-of-scope termio `Subprocess::drop` gap — see section 6.)
-//!
-//! WHERE THE DRAW+READBACK HAPPENS — and why (the honest, non-stub path). Under
-//! `--features gtk` the renderer is now built via `OpenGL::init` (the WINDOWED ctor —
-//! it owns NO context; GDK's GLArea context is loaded via `prepare_context_windowed`
-//! in `surfaceInit`). The visible frame lands on the window through the template's own
-//! `gl_render` (in GTK's `render` signal), which `present_to_default`-blits the frame
-//! into the GLArea framebuffer GDK bound. For the READBACK proof the KAT cannot use a
-//! second `render` handler — `GtkGLArea::render` has a boolean-handled accumulator and
-//! the template `gl_render` returns TRUE (handled), stopping later handlers. So the KAT
-//! replicates the `render` precondition explicitly: `gl_area.make_current()` +
-//! `gl_area.attach_buffers()` (which binds the GLArea's own framebuffer exactly as GDK
-//! does before `render`), then `drawFrame(true)` (renders into the frame's offscreen
-//! target THEN `present_to_default`-blits it into that bound framebuffer), then reads
-//! the SAME framebuffer back — proving the terminal pixels reached the WINDOW's
-//! framebuffer, not just the renderer's private target FBO. Nothing is fabricated.
+//!   (b) THE VISIBLE-RENDER PROOF: the `RenderSurface` built a `GdkTexture` from a
+//!       frame the render thread exported (`ExportedFrame` → `LatestFrame` →
+//!       `takeFrame` in `snapshot`), the size of the widget in device pixels, and
+//!       its pixels are not uniformly zero (a bare terminal writes an opaque
+//!       background and a cursor). The texture kind (DMA-BUF import or the
+//!       CPU-readback fallback) is printed.
+//!   (c) the shell is LIVE — `echo rustty-first-light\n` written into the pty
+//!       round-trips through the io thread into the core `Screen` (the
+//!       `live_shell.rs` KAT's assertion shape).
+//!   (d) `App::run()` returns `Ok(())` after a scheduled `quit_now`, followed by a
+//!       teardown that UNREALIZES the `RenderSurface` (the render thread then
+//!       releases its GPU resources on its own context) with no `thread 'renderer'
+//!       panicked` line.
 //!
 //! TEST-ONLY SCAFFOLDING, deliberately (task brief R1): the KAT hosts the real
 //! `class::Surface` in a PLAIN `adw::ApplicationWindow` rather than the real
-//! `GhosttyWindow`/Tab/SplitTree chain (Task 20+). Parity is preserved because this
-//! scaffolding lives in a `tests/` KAT, never in product code — the same discipline
-//! as the L1 `live_shell.rs` and the T16 `render_contract_chain` precedents.
+//! `GhosttyWindow`/Tab/SplitTree chain. Parity is preserved because this
+//! scaffolding lives in a `tests/` KAT, never in product code.
 //!
-//! WHY ITS OWN INTEGRATION BINARY (one process, one test): like `live_shell.rs`,
-//! this `fork()`s a real shell and stands up a process-global `GApplication`
-//! singleton + GTK — isolating both from the unit suite. GTK also demands the app's
-//! main thread; a single-test binary keeps everything on the one thread cargo-test
-//! gives it.
+//! WHY ITS OWN INTEGRATION BINARY (one process, one test): this `fork()`s a real
+//! shell and stands up a process-global `GApplication` singleton + GTK, and GTK
+//! demands the app's main thread; a single-test binary keeps everything on the one
+//! thread cargo-test gives it.
 //!
-//! CRITICAL RUN NOTE (GL 4.3 core): on the CI/dev host GL 4.3 core is available ONLY
-//! under `LIBGL_ALWAYS_SOFTWARE=1` (llvmpipe → GL 4.5 core); the default virgl
-//! driver exposes no desktop core profile. The `App` sets `GDK_DISABLE=gles-api`
-//! before GTK inits, forcing the desktop-GL context the renderer requires. The
-//! GLArea's own GDK context therefore ALSO needs `LIBGL_ALWAYS_SOFTWARE=1` to reach
-//! 4.3 core. Run with:
-//!   LIBGL_ALWAYS_SOFTWARE=1 [xvfb-run -a] \
+//! RUN NOTE (GL 4.3 core): the renderer's surfaceless context needs GL 4.3 core;
+//! on the rvm host that is llvmpipe under `LIBGL_ALWAYS_SOFTWARE=1`. Run under any
+//! display (a headless sway, or broadway for the CPU-readback path):
+//!   LIBGL_ALWAYS_SOFTWARE=1 \
 //!     cargo test -p rustty-apprt --features gtk --test gtk_first_light -- --ignored
-//! (xvfb-run may be absent — a real DISPLAY works directly.)
 //!
 //! R5: gated `all(any(linux, freebsd), feature = "gtk")` — off the gate (macOS /
 //! default Linux build) the whole file compiles out.
@@ -78,10 +50,8 @@
 // reference `Renderer` API the port preserves verbatim (R1/R2).
 #![allow(non_snake_case)]
 
-use std::cell::{Cell, RefCell};
 use std::io::Write as _;
 use std::os::fd::{FromRawFd as _, RawFd};
-use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use allocator_api2::alloc::Global;
@@ -95,47 +65,11 @@ use rustty_apprt::gtk::{self, register_resources};
 use rustty_config::command::Command;
 use rustty_core::app::App as CoreApp;
 
+#[path = "common/gtk_live.rs"]
+mod gtk_live;
+
 /// The marker the live `/bin/sh` echoes back through the pty into the `Screen`.
 const NEEDLE: &[u8] = b"rustty-first-light";
-
-/// The first-light outcome captured with GDK's GLArea context current + its
-/// framebuffer bound (via `make_current` + `attach_buffers` — see the module doc).
-/// Asserted on the main thread after the capture so a panic never crosses the glib
-/// FFI boundary.
-#[derive(Default)]
-struct FirstLight {
-    /// A capture ran and observed a non-zero GLArea-framebuffer frame.
-    captured: Cell<bool>,
-    /// `Surface::core()` resolved at the capture.
-    core_present: Cell<bool>,
-    /// (b) `drawFrame(true)` returned `Ok`.
-    draw_ok: Cell<bool>,
-    /// The `drawFrame` error, if any (for the assertion message).
-    draw_err: RefCell<Option<String>>,
-    /// The GLArea-framebuffer readback length (`width*height*4`).
-    pixels_len: Cell<usize>,
-    /// (c) count of non-zero bytes in the GLArea-framebuffer readback.
-    pixels_nonzero: Cell<usize>,
-}
-
-/// Recursively find the terminal `GLArea` inside the `Surface` widget tree
-/// (`Surface` → `terminal_page` Overlay → Box → `GLArea`, per `surface.blp`). The
-/// KAT needs the GLArea to `make_current` + `attach_buffers` for the visible-render
-/// readback; the widget is a private template child with no public accessor, so we
-/// walk the tree by type — a `tests/`-only concern that never touches product code.
-fn find_gl_area(widget: &gtk4::Widget) -> Option<gtk4::GLArea> {
-    if let Ok(area) = widget.clone().downcast::<gtk4::GLArea>() {
-        return Some(area);
-    }
-    let mut child = widget.first_child();
-    while let Some(c) = child {
-        if let Some(found) = find_gl_area(&c) {
-            return Some(found);
-        }
-        child = c.next_sibling();
-    }
-    None
-}
 
 /// Dump the live core surface's ACTIVE `Screen` text, read UNDER THE RENDERER MUTEX
 /// — the same lock the io thread's `processOutput` holds while it commits, so this
@@ -174,48 +108,10 @@ unsafe fn pty_master(core: *mut CoreSurface) -> RawFd {
     }
 }
 
-/// Draw one real frame WITH GDK'S GLAREA FRAMEBUFFER BOUND, then read that framebuffer
-/// back — the GL-ATTACH visible-render proof. The caller has already made the GLArea
-/// context current and called `gtk_gl_area_attach_buffers`, which binds the GLArea's
-/// own (non-zero) framebuffer exactly as GDK does before emitting `render`. So this
-/// replicates the `gl_render` precondition: `drawFrame(sync=true)` renders into the
-/// frame's offscreen target and, on the windowed path, `present_to_default`-blits it
-/// into the bound GLArea framebuffer; we then read that SAME framebuffer to prove the
-/// pixels reached the WINDOW's context (NOT the renderer's private target FBO).
-///
-/// # Safety
-/// `core` must point at a live, initialized [`CoreSurface`]; the GLArea context must
-/// be current and its framebuffer bound (the caller's `make_current` + `attach_buffers`).
-unsafe fn draw_present_read_glarea_fb(core: *mut CoreSurface, out: &FirstLight) {
-    unsafe {
-        // (b) A real `drawFrame(sync=true)` on the live renderer — the SAME call
-        //     `gl_render` makes. Raw-self per the W5 render-thread aliasing contract
-        //     (renderer_seam.rs:382); `sync=true` forces the redraw + a blocking
-        //     `gl.finish()` and (windowed) the `present_to_default` blit into the
-        //     bound GLArea framebuffer.
-        let draw = rustty_core::renderer_seam::Renderer::drawFrame(&raw mut (*core).renderer, true);
-        out.draw_ok.set(draw.is_ok());
-        *out.draw_err.borrow_mut() = draw.err().map(|e| format!("{e:?}"));
-
-        // (c) Read the currently-bound (GLArea) framebuffer, NOT the renderer's
-        //     offscreen target FBO. The renderer's stored `size.screen` is the live
-        //     GLArea viewport size (set from `surface_size()`/`GL_VIEWPORT`).
-        let renderer = &(*core).renderer.0;
-        let w = renderer.size.screen.width as usize;
-        let h = renderer.size.screen.height as usize;
-        if w > 0 && h > 0 {
-            let px = renderer.api.read_bound_framebuffer_rgba(w, h);
-            out.pixels_len.set(px.len());
-            out.pixels_nonzero
-                .set(px.iter().filter(|&&b| b != 0).count());
-        }
-    }
-}
-
 /// THE FIRST-LIGHT KAT. See the module doc for the full body/reference map.
 #[test]
 #[ignore = "headed GTK + a GL 4.3-core context + a live shell; run via \
-            LIBGL_ALWAYS_SOFTWARE=1 [xvfb-run -a] cargo test -p rustty-apprt \
+            LIBGL_ALWAYS_SOFTWARE=1 cargo test -p rustty-apprt \
             --features gtk --test gtk_first_light -- --ignored"]
 fn first_light_renders_a_live_terminal_frame() {
     // ---- 0. Initialize the process-global `rustty_core::STATE` — exactly what the
@@ -279,47 +175,25 @@ fn first_light_renders_a_live_terminal_frame() {
     window.set_default_size(800, 480);
     window.set_content(Some(&surface));
 
-    // GL-ATTACH visible-render capture happens AFTER the pump (below), not in a
-    // `render` handler: `GtkGLArea::render` uses a boolean-handled accumulator and the
-    // template's `gl_render` returns TRUE (handled), which stops any later handler — so
-    // a second `render` handler never runs. Instead we drive the capture explicitly via
-    // `make_current` + `attach_buffers` (which binds the GLArea's own framebuffer just
-    // as GDK does before `render`), so the readback observes the SAME framebuffer the
-    // on-window `gl_render` presents into. We grab the GLArea now (its `render` — the
-    // real visible path — keeps presenting during the pump).
-    let outcome = Rc::new(FirstLight::default());
-    let gl_area = find_gl_area(surface.upcast_ref::<gtk4::Widget>())
-        .expect("the surface template contains a GLArea");
+    let render_surface = gtk_live::find_render_surface(surface.upcast_ref::<gtk4::Widget>())
+        .expect("the surface template contains a RenderSurface");
 
     window.present();
 
     // A low-frequency keepalive so a blocking `MainContext::iteration(true)` never
-    // stalls past a deadline check (it unblocks at least every 50 ms), and a periodic
-    // `queue_render` so the GLArea keeps emitting `render` (the real on-window present).
-    // Both are removed before teardown (a `SourceId` dropped does NOT remove its
-    // source), and the `queue_render` timer holds only a WEAK GLArea ref.
+    // stalls past a deadline check (it unblocks at least every 50 ms). Removed
+    // before teardown (a `SourceId` dropped does NOT remove its source).
     let ctx = glib::MainContext::default();
     let keepalive =
         glib::timeout_add_local(Duration::from_millis(50), || glib::ControlFlow::Continue);
-    let render_pump = {
-        let gl_area_weak = gl_area.downgrade();
-        glib::timeout_add_local(Duration::from_millis(30), move || {
-            match gl_area_weak.upgrade() {
-                Some(area) => {
-                    area.queue_render();
-                    glib::ControlFlow::Continue
-                }
-                None => glib::ControlFlow::Break,
-            }
-        })
-    };
 
-    // ---- 3. Pump the main loop until the window maps → the GLArea realizes + sizes
-    //         → `gl_resize` lazily runs `init_surface` (invariant 3: first RESIZE) →
-    //         the core surface is built and the GLArea starts presenting real frames. ----
+    // ---- 3. Pump the main loop until the window maps → the RenderSurface sizes
+    //         → `render_surface_resize` lazily runs `init_surface` (invariant 3:
+    //         first RESIZE) → the core surface is built and its render thread
+    //         starts drawing. ----
     let deadline = Instant::now() + Duration::from_secs(30);
     while surface.core().is_none() {
-        ctx.iteration(true);
+        gtk_live::iterate(&ctx, core_ptr, &app);
         if Instant::now() > deadline {
             break;
         }
@@ -327,66 +201,39 @@ fn first_light_renders_a_live_terminal_frame() {
 
     // (a) The lazy core surface was built on the first resize.
     let core = surface.core().expect(
-        "core surface built on first GLArea resize (first light); \
-         is LIBGL_ALWAYS_SOFTWARE=1 set so the GLArea reaches GL 4.3 core?",
+        "core surface built on first RenderSurface resize (first light); \
+         is LIBGL_ALWAYS_SOFTWARE=1 set so the renderer reaches GL 4.3 core?",
     );
 
-    // Let the real on-window `gl_render` present a few frames into the GLArea
-    // framebuffer, then capture: make the GLArea context current, bind its framebuffer
-    // (`attach_buffers`, exactly as GDK does before `render`), draw + present + read.
-    let capture_deadline = Instant::now() + Duration::from_secs(10);
-    while !outcome.captured.get() && Instant::now() < capture_deadline {
-        // Pump a little so `gl_render` runs and the widget is fully realized.
-        for _ in 0..8 {
-            ctx.iteration(true);
-        }
-        if gl_area.error().is_some() {
-            continue;
-        }
-        gl_area.make_current();
-        if gl_area.error().is_some() {
-            continue;
-        }
-        // Bind the GLArea's framebuffer as the draw target (GDK's `render` precondition).
-        gl_area.attach_buffers();
-        outcome.core_present.set(true);
-        // SAFETY: `core` is the live core surface; the GLArea context is current and
-        // its framebuffer bound (make_current + attach_buffers above).
-        unsafe { draw_present_read_glarea_fb(core, &outcome) };
-        if outcome.pixels_nonzero.get() > 0 {
-            outcome.captured.set(true);
+    // (b) Pump until the RenderSurface has built a texture from an exported frame
+    //     with pixels in it: the render thread pushed a frame, `.redraw` reached
+    //     `Surface::redraw` → `queue_draw`, and the snapshot took it.
+    //     The compositor may resize the window after the first frames, so wait
+    //     for a frame the size of the widget in device pixels (one texel per
+    //     device pixel, `render_surface.zig:176-180`).
+    let capture_deadline = Instant::now() + Duration::from_secs(20);
+    let mut captured: Option<(usize, usize, usize, &'static str)> = None;
+    let mut last = None;
+    while captured.is_none() && Instant::now() < capture_deadline {
+        gtk_live::iterate(&ctx, core_ptr, &app);
+        if let Some(texture) = render_surface.texture() {
+            let (w, h, px) = gtk_live::texture_rgba(&texture);
+            let nonzero = gtk_live::nonzero_bytes(&px);
+            let device = render_surface.device_size();
+            last = Some((w, h, device));
+            if nonzero > 0 && (w as u32, h as u32) == (device.width, device.height) {
+                captured = Some((w, h, nonzero, gtk_live::texture_kind(&texture)));
+            }
         }
     }
-
-    assert!(
-        outcome.captured.get(),
-        "captured a non-zero frame from the GLArea framebuffer"
-    );
-    assert!(
-        outcome.core_present.get(),
-        "the core surface exists at the capture"
-    );
-
-    // (b) A real frame was drawn by the L4 OpenGL backend, driven from `render`.
-    assert!(
-        outcome.draw_ok.get(),
-        "drawFrame(true) drew a real frame: {:?}",
-        outcome.draw_err.borrow()
-    );
-
-    // (c) THE VISIBLE-RENDER PROOF: the readback of GDK's GLArea framebuffer (FBO 0)
-    //     is real pixels, not uniformly zero. Even a bare terminal writes an opaque
-    //     `bg_color` layer (alpha 255) + a cursor, and `present_to_default` blitted
-    //     that into FBO 0 — so a real windowed render is never all-zero.
-    assert!(
-        outcome.pixels_len.get() > 0,
-        "FBO-0 readback has a non-empty extent (the GLArea viewport was sized)"
-    );
-    assert!(
-        outcome.pixels_nonzero.get() > 0,
-        "glReadPixels of GDK's GLArea framebuffer (FBO 0) is not uniformly zero — the \
-         frame the renderer present_to_default-blitted landed in the WINDOW's context"
-    );
+    let (w, h, nonzero, kind) = captured.unwrap_or_else(|| {
+        panic!(
+            "the RenderSurface never displayed a non-zero frame of its device size \
+             (last texture/device: {last:?})"
+        )
+    });
+    eprintln!("FIRST-LIGHT: {kind} texture {w}x{h}, {nonzero} non-zero bytes");
+    assert!(w > 0 && h > 0, "the texture has an extent");
 
     // ---- 4. The live shell round-trip (d): write `echo rustty-first-light\n` into
     //         the pty master; the shell runs it and its output round-trips through
@@ -405,7 +252,7 @@ fn first_light_renders_a_live_terminal_frame() {
     let mut round_tripped = false;
     while Instant::now() < round_trip_deadline {
         // Block (bounded by the keepalive) to yield to the io + render threads.
-        ctx.iteration(true);
+        gtk_live::iterate(&ctx, core_ptr, &app);
         let dump = unsafe { screen_dump(core) };
         if dump.windows(NEEDLE.len()).any(|w| w == NEEDLE) {
             round_tripped = true;
@@ -419,13 +266,11 @@ fn first_light_renders_a_live_terminal_frame() {
         String::from_utf8_lossy(&unsafe { screen_dump(core) })
     );
 
-    // Stop our helper timers and drop the KAT's strong GLArea ref BEFORE teardown, so
-    // nothing external keeps the GLArea (a surface child) alive past the surface drop
-    // and no timer fires `queue_render` on an unrealized area. (The scheduled
-    // `quit_now` source below wakes `App::run` on its own — no keepalive needed there.)
+    // Stop our helper timer and drop the KAT's strong RenderSurface ref BEFORE
+    // teardown, so nothing external keeps it (a surface child) alive past the surface
+    // drop. (The scheduled `quit_now` source below wakes `App::run` on its own.)
     keepalive.remove();
-    render_pump.remove();
-    drop(gl_area);
+    drop(render_surface);
 
     // ---- 5. (e) The hand-rolled event loop exits cleanly. Schedule `quit_now` on the
     //         pumped context (the `application_run_loop_ticks_then_quits` shape), then
@@ -448,29 +293,16 @@ fn first_light_renders_a_live_terminal_frame() {
         run_result.err()
     );
 
-    // ---- 6. Teardown — the GL-ATTACH renderer double-free fix in action, PROVEN by
-    //         surviving the GLArea unrealize + GDK context destroy.
-    //
-    //         Before GL-ATTACH the renderer OWNED a SEPARATE surfaceless EGL context
-    //         that shared GDK's EGL display; tearing it down corrupted GDK's shared EGL
-    //         bookkeeping — a DETERMINISTIC `munmap_chunk(): invalid pointer` abort at
-    //         "Destroying EGL context". GL-ATTACH makes the windowed renderer BORROW
-    //         GDK's context (it owns none), so it eglTerminates nothing.
-    //
-    //         Unparent the surface and pump out the pending unrefs. This UNREALIZES the
-    //         GLArea → `displayUnrealized` frees the swap-chain + shaders while GDK's
-    //         context is still current → GDK then destroys its own GLArea context
-    //         ("Destroying EGL context"). We now survive that with NO `munmap` / NO
-    //         abort — the renderer double-free is GONE. The renderer/io threads are
-    //         STILL LIVE here, so the renderer thread keeps reading `Surface::core()`
-    //         through the unrealize — a single `AtomicPtr` load that stays PUBLISHED,
-    //         so NO `thread 'renderer' panicked ... uninitialized surface` line prints.
+    // ---- 6. Teardown. Unparent the surface and pump out the pending unrefs. This
+    //         UNREALIZES the RenderSurface → `displayUnrealized` → the render thread
+    //         releases the swap chain and shaders on its own EGL context. The
+    //         renderer/io threads are STILL LIVE here, so the renderer thread keeps
+    //         reading `Surface::core()` through the unrealize — a single `AtomicPtr`
+    //         load that stays PUBLISHED, so NO `thread 'renderer' panicked ...
+    //         uninitialized surface` line prints.
     window.set_content(gtk4::Widget::NONE);
     while ctx.iteration(false) {}
 
-    // The core surface pointer is still published (sound cross-thread read) even after
-    // the GLArea was unrealized under the live render thread — and we passed GDK's
-    // "Destroying EGL context" without the pre-GL-ATTACH munmap double-free.
     assert!(
         surface.core().is_some(),
         "core() still resolves through unrealize (pointer published until the \
@@ -484,12 +316,10 @@ fn first_light_renders_a_live_terminal_frame() {
     // (subprocess args/env) with a mismatched size. That is a TERMIO teardown
     // double-free (an explicit `deinit` followed by a Rust `Drop` over the same
     // buffers), entirely in `rustty-termio`, with NO GL / renderer / EGL frame on the
-    // aborting stack. It is INDEPENDENT of this task and was never observable before,
-    // because the pre-GL-ATTACH KAT `forget`s the surface to dodge the (now-fixed) EGL
-    // munmap. The GL-ATTACH deliverable — the renderer no longer double-frees its
-    // context — is proven above (we survive "Destroying EGL context"); the termio
-    // `Subprocess::drop` gap is left to its owner. So we `forget` the live objects
+    // aborting stack. It is left to its owner, so we `forget` the live objects
     // (their threads + the `/bin/sh` reclaimed by the OS at process exit).
+    // SAFETY: `core` is the live core surface; stopped once, before exit.
+    unsafe { gtk_live::stop_render_thread(core) };
     std::mem::forget(window);
     std::mem::forget(surface);
     std::mem::forget(application);

@@ -66,6 +66,8 @@ use rustty_renderer::thread;
 // `Options<A>.config` below carries it). `init<C: RendererConfig>` runs headless
 // with `C = rustty_config::Config`, the type core binds that the renderer crate
 // cannot.
+use rustty_renderer::generic::ExportedFrame;
+use rustty_renderer::latest_frame::{DrawMutex, LatestFrame};
 use rustty_renderer::message::Message;
 use rustty_renderer::DerivedConfig;
 use rustty_xev as xev;
@@ -97,25 +99,9 @@ use std::sync::Arc;
 // floor inside `animation_wake`).
 const CURSOR_BLINK_INTERVAL: u64 = 600;
 
-// PORT NOTE (Thread.zig / `c4e16970a` HOIST): upstream moved the
-// `must_draw_from_app_thread` decl from renderer/Thread.zig into
-// `src/apprt.zig`:
-//   /// True if all GPU operations (drawing, resource creation and
-//   /// destruction) must happen on the app thread. This is the case
-//   /// when the graphics context is owned by the app thread (GTK's
-//   /// GLArea). When false, the render thread performs GPU operations
-//   /// itself.
-//   pub const must_draw_from_app_thread =
-//       @hasDecl(App, "must_draw_from_app_thread") and
-//       App.must_draw_from_app_thread;
-// Rust already models the `@hasDecl` two-case fold as the apprt-level trait
-// const `apprt::App::MUST_DRAW_FROM_APP_THREAD` (DEFAULTS to `false`; the GTK
-// backend overrides it to `true`) — i.e. the hoisted apprt-owned decl. It is
-// read at the `drawFrame` site below as `A::MUST_DRAW_FROM_APP_THREAD` — the
-// concrete apprt backend `A` picks the arm. Both `drawFrame` arms (the
-// `drawFrame` helper below) stay live regardless. The renderer twins fold the
-// same constant statically per-target (generic.rs / generic/linux_impl.rs
-// `set_visible`).
+// P7-W7 T2 (`2f0b65346`): `apprt.must_draw_from_app_thread` (hoisted from
+// renderer/Thread.zig by `c4e16970a`) is deleted with the GtkGLArea. Every apprt's
+// renderer now draws on its own render thread; the `drawFrame` below has one arm.
 
 /// PORT NOTE (Rust-only glue): the reference `threadMain_` returns an INFERRED
 /// error union combining the xev handle errors (`loop.run`, `wakeup.notify`)
@@ -172,21 +158,23 @@ impl Drop for RendererThreadStateGuard {
 /// raw `*mut Renderer` (the child no longer races the main thread once the
 /// guard drops — `loop.run` has returned). `@hasDecl(Renderer, "loopExit")` is
 /// TRUE for Metal, so this fires unconditionally.
-struct LoopExitGuard(*mut Renderer);
+//
+// N437: it also holds the thread's own `draw_mutex` handle; see `Thread::draw_mutex`.
+struct LoopExitGuard(*mut Renderer, DrawMutex);
 impl Drop for LoopExitGuard {
     fn drop(&mut self) {
         // self.renderer.loopExit();
-        unsafe { (*self.0).0.loop_exit() };
+        unsafe { rustty_renderer::Renderer::loop_exit_raw(&raw mut (*self.0).0, &self.1) };
     }
 }
 
 /// PORT NOTE (Rust-only glue): the reference `defer self.renderer.threadExit();`
 /// (Thread.zig:236).
-struct ThreadExitGuard(*mut Renderer);
+struct ThreadExitGuard(*mut Renderer, DrawMutex);
 impl Drop for ThreadExitGuard {
     fn drop(&mut self) {
         // self.renderer.threadExit();
-        unsafe { (*self.0).0.thread_exit() };
+        unsafe { rustty_renderer::Renderer::thread_exit_raw(&raw mut (*self.0).0, &self.1) };
     }
 }
 
@@ -277,6 +265,7 @@ impl<A: apprt::App + 'static> rustty_renderer::generic::SurfaceMailboxSink
         let msg = match msg {
             RMessage::Scrollbar(scrollbar) => apprt::surface::Message::Scrollbar(scrollbar),
             RMessage::RendererHealth(health) => apprt::surface::Message::RendererHealth(health),
+            RMessage::Redraw => apprt::surface::Message::Redraw,
         };
         // `App.Mailbox.Queue.Size` (u32) -> the trait's `usize` count.
         usize::try_from(self.surface_mailbox.push(msg, timeout)).unwrap_or(0)
@@ -301,7 +290,7 @@ impl<A: apprt::App + 'static> rustty_renderer::generic::SurfaceMailboxSink
 // touch the 6 forwarders below. Surface.zig embeds it by value
 // (`renderer: renderer.Renderer`).
 #[cfg(target_os = "macos")]
-pub struct Renderer(pub rustty_renderer::Renderer);
+pub struct Renderer(pub rustty_renderer::Renderer, pub RendererHandles);
 
 /// L4 SWAP LANDED (first light): the Linux renderer — the monomorphic
 /// `rustty_renderer::Renderer` = `GenericRenderer(OpenGL)` (renderer.zig:38's
@@ -314,28 +303,23 @@ pub struct Renderer(pub rustty_renderer::Renderer);
 /// `unimplemented!()` leaves) are deleted — the `Thread<A>` call sites now type-check
 /// against the real `GenericRenderer(OpenGL)` on both targets.
 #[cfg(not(target_os = "macos"))]
-pub struct Renderer(pub rustty_renderer::Renderer);
+pub struct Renderer(pub rustty_renderer::Renderer, pub RendererHandles);
+
+/// PORT-ONLY (N437): the main thread's handles to the renderer's cross-thread
+/// state, taken when the renderer is built (before the render thread starts). They
+/// sit beside the renderer (the wrapper's `.1`), not in it, so the main thread
+/// reaches the draw mutex and the latest-frame slot without touching the bytes the
+/// render thread's `&mut` covers; see `rustty_renderer::latest_frame`.
+pub struct RendererHandles {
+    /// The renderer's `draw_mutex`.
+    pub draw_mutex: DrawMutex,
+    /// The renderer's `latest_frame` slot.
+    pub latest_frame: Arc<LatestFrame<ExportedFrame>>,
+}
 
 impl Renderer {
-    /// This is called early right after surface creation.
-    //
-    // PORT NOTE: `pub fn surfaceInit(surface: *apprt.Surface) !void`
-    // (generic.zig:864, a type-level fn — no self); callsite Surface.zig:493
-    // `try Renderer.surfaceInit(rt_surface);`. Generic `<S>` per the
-    // blueprint §5 signature: the forwarder passes the pointer without
-    // needing an `App` bound.
-    pub fn surfaceInit<S>(rt_surface: *mut S) -> Result<(), RendererError> {
-        // (A) `Error == RendererError`, so the real error flows out directly.
-        #[cfg(target_os = "macos")]
-        {
-            rustty_renderer::Renderer::surface_init(rt_surface)
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            // (A) `Error == RendererError`, so the real error flows out directly.
-            rustty_renderer::Renderer::surface_init(rt_surface)
-        }
-    }
+    // P7-W7 T2 (`2f0b65346`): `surfaceInit` (`Surface.zig:493` at the pin) is
+    // deleted from `generic.zig` and its caller.
 
     // PORT NOTE ([ADV-FIX 3]): the reference init takes `(alloc, options)` —
     // `pub fn init(alloc: Allocator, options: renderer.Options) !Self`
@@ -375,57 +359,25 @@ impl Renderer {
             rustty_renderer::generic::SurfaceMailbox::new(Arc::new(SurfaceMailboxAdapter {
                 surface_mailbox,
             }));
-        #[cfg(target_os = "macos")]
-        {
-            let inner = rustty_renderer::Renderer::init(
-                alloc,
-                rustty_renderer::generic::Options {
-                    config,
-                    font_grid,
-                    size,
-                    surface_mailbox,
-                },
-            )?;
-            Ok(Renderer(inner))
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            // GL-ATTACH (LANDED): the WINDOWED constructor. Core's `Surface::init`
-            // reaches this on the GTK path AFTER `gl_area.make_current()` +
-            // `Renderer::surfaceInit` (which ran `prepare_context_windowed` against
-            // GDK's current GLArea context), so `init_windowed` builds an `OpenGL`
-            // that borrows GDK's context (owns none — no teardown double-free) and
-            // creates its swap-chain / shader GL objects on that context. (The
-            // offscreen `Renderer::init` is used only by the renderer crate's own
-            // golden / unit tests, which stand up their own context.)
-            let inner = rustty_renderer::Renderer::init_windowed(
-                alloc,
-                rustty_renderer::generic::Options {
-                    config,
-                    font_grid,
-                    size,
-                    surface_mailbox,
-                },
-            )?;
-            Ok(Renderer(inner))
-        }
+        let inner = rustty_renderer::Renderer::init(
+            alloc,
+            rustty_renderer::generic::Options {
+                config,
+                font_grid,
+                size,
+                surface_mailbox,
+            },
+        )?;
+        // N437: the main thread's handles, taken before the render thread starts.
+        let handles = RendererHandles {
+            draw_mutex: inner.draw_mutex.clone(),
+            latest_frame: inner.latest_frame_handle(),
+        };
+        Ok(Renderer(inner, handles))
     }
 
-    /// This is called just prior to spinning up the renderer thread for
-    /// final main thread setup requirements.
-    //
-    // PORT NOTE: `pub fn finalizeSurfaceInit(self: *Self, surface:
-    // *apprt.Surface) !void` (generic.zig:873); callsite Surface.zig:712.
-    pub fn finalizeSurfaceInit<S>(&mut self, rt_surface: *mut S) -> Result<(), RendererError> {
-        #[cfg(target_os = "macos")]
-        {
-            self.0.finalize_surface_init(rt_surface)
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            self.0.finalize_surface_init(rt_surface)
-        }
-    }
+    // P7-W7 T2 (`2f0b65346`): `finalizeSurfaceInit` (`Surface.zig:712` at the pin)
+    // is deleted from `generic.zig` and its caller.
 
     /// W-ATTACH: route the host NSView into the renderer's windowed layer-attach.
     /// Forwards the raw view pointer + scale (core reads them from the apprt
@@ -443,29 +395,17 @@ impl Renderer {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            // OpenGL: no windowed host-attach — GTK's GLArea owns the context; the
-            // real leaf is a no-op on a null/typeless view (linux_impl
+            // OpenGL: no windowed host-attach. The renderer owns a surfaceless EGL
+            // context and exports its frames to the apprt (`2f0b65346`); the real
+            // leaf is a no-op on a null/typeless view (linux_impl
             // `attach_host_view`), matching the reference's non-macOS `attach_host_view`.
             self.0.attach_host_view(view, scale)
         }
     }
 
-    /// Callback called by renderer.Thread when it begins.
-    //
-    // PORT NOTE: `pub fn threadEnter(self: *const Self, surface:
-    // *apprt.Surface) !void` (generic.zig:881); core reaches it on the
-    // surface deinit path (Surface.zig:801
-    // `self.renderer.threadEnter(self.rt_surface) catch unreachable;`).
-    pub fn threadEnter<S>(&self, rt_surface: *mut S) -> Result<(), RendererError> {
-        #[cfg(target_os = "macos")]
-        {
-            self.0.thread_enter(rt_surface)
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            self.0.thread_enter(rt_surface)
-        }
-    }
+    // P7-W7 T2 (`2f0b65346`): the surface-deinit `threadEnter` forwarder is gone
+    // with its caller ("We need to become the active rendering thread again",
+    // `Surface.zig:810-811` at the pin): the render thread owns the GL context.
 
     /// Draw the frame to the screen.
     ///
@@ -485,67 +425,55 @@ impl Renderer {
     /// # Safety
     /// `self_` must be a valid, stable `*mut Renderer` (the Surface-embedded renderer,
     /// aliased raw by the render thread). No protected `&mut` may span the call.
+    //
+    // N437: the lock is the main thread's own handle, `(*self_).1.draw_mutex`
+    // (beside the renderer, not in it).
     pub unsafe fn drawFrame(self_: *mut Renderer, sync: bool) -> Result<(), RendererError> {
         // self.0.draw_frame(sync)  →  raw-self draw (no protector spans the call)
-        #[cfg(target_os = "macos")]
-        {
-            unsafe { rustty_renderer::Renderer::draw_frame_raw(&raw mut (*self_).0, sync) }
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            unsafe { rustty_renderer::Renderer::draw_frame_raw(&raw mut (*self_).0, sync) }
-        }
+        let lock: &DrawMutex = unsafe { &(*self_).1.draw_mutex };
+        unsafe { rustty_renderer::Renderer::draw_frame_raw(&raw mut (*self_).0, lock, sync) }
     }
 
-    // PORT NOTE: `pub fn displayRealized(self: *Self) !void` (generic.zig:937-942,
-    // `if (@hasDecl(GraphicsAPI, "displayRealized")) self.api.displayRealized()`).
-    // Callsite `Surface.zig:3251` (the GTK apprt's `glareaRealize`) — reload the
-    // GL loader over the context GDK just made current on (re-)realize.
+    /// Take the latest completed frame for the apprt to composite.
+    /// Returns null if no frame is available. The caller takes
+    /// ownership of the returned frame. Called on the main thread.
+    //
+    // PORT NOTE: `pub fn takeFrame(self: *Self) ?ExportedFrame` (generic.zig:1036);
+    // callsite `render_surface.zig:156` (`core.renderer.takeFrame()`). N437: through
+    // the main thread's handle to the slot, touching no renderer byte.
+    ///
+    /// # Safety
+    /// `self_` is the Surface-embedded renderer.
+    pub unsafe fn takeFrame(self_: *const Renderer) -> Option<ExportedFrame> {
+        unsafe { (*self_).1.latest_frame.take() }
+    }
+
+    // PORT NOTE: `pub fn displayRealized(self: *Self) !void` (generic.zig:947-968);
+    // callsite `Surface.displayRealized` (`Surface.zig:2544`), from the GTK apprt's
+    // `renderSurfaceRealize`. Only flags change (`2f0b65346`); the render thread
+    // rebuilds its GPU resources on the next draw.
     //
     // Raw-self, per the `drawFrame` precedent (W5): the renderer is aliased raw by
-    // the render thread, so no protected `&mut` may span the call. macOS is a
-    // no-op: the Metal graphics API declares no `displayRealized` (the `@hasDecl`
-    // arm is false), so the reference method is a no-op there.
+    // the render thread, so no protected `&mut` may span the call; the lock is the
+    // main thread's own handle (N437).
     //
     /// # Safety
     /// `self_` must be a valid, stable `*mut Renderer` (the Surface-embedded
     /// renderer, aliased raw by the render thread). No protected `&mut` may span.
     pub unsafe fn displayRealized(self_: *mut Renderer) -> Result<(), RendererError> {
-        #[cfg(target_os = "macos")]
-        {
-            let _ = self_;
-            Ok(())
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            // Forward to the real OpenGL `display_realized` (reinit shaders + swap
-            // chain over the freshly-current GL context; linux_impl generic.rs).
-            // GTK runs all GL on the MAIN thread (`OpenGL::threadEnter` is a no-op —
-            // the render thread does no GL), so the transient `&mut (*self_).0` this
-            // `&mut self` method needs cannot race a render-thread draw.
-            unsafe { (*self_).0.display_realized() }
-        }
+        let lock: &DrawMutex = unsafe { &(*self_).1.draw_mutex };
+        unsafe { rustty_renderer::Renderer::display_realized_raw(&raw mut (*self_).0, lock) }
     }
 
-    // PORT NOTE: `pub fn displayUnrealized(self: *Self) void` (generic.zig, the
-    // `displayRealized` sibling). Callsite `Surface.zig:3292` (`glareaUnrealize`)
-    // — free the GL-adjacent resources when the GLArea's context goes away. macOS
-    // no-op (Metal declares none), Linux deferred; raw-self per `drawFrame`.
+    // PORT NOTE: `pub fn displayUnrealized(self: *Self) void` (generic.zig:970-985);
+    // callsite `Surface.displayUnrealized` (`Surface.zig:2550`), from
+    // `renderSurfaceUnrealize` and `initSurface`. Raw-self per `drawFrame`.
     //
     /// # Safety
     /// As [`Renderer::displayRealized`].
     pub unsafe fn displayUnrealized(self_: *mut Renderer) {
-        #[cfg(target_os = "macos")]
-        {
-            let _ = self_;
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            // Forward to the real OpenGL `display_unrealized` (tear down the swap
-            // chain + shaders, marking them defunct; linux_impl generic.rs). Same
-            // main-thread-GL discipline as `displayRealized`.
-            unsafe { (*self_).0.display_unrealized() };
-        }
+        let lock: &DrawMutex = unsafe { &(*self_).1.draw_mutex };
+        unsafe { rustty_renderer::Renderer::display_unrealized_raw(&raw mut (*self_).0, lock) }
     }
 
     // PORT NOTE: `pub fn deinit(self: *Self) void` (generic.zig:800).
@@ -667,6 +595,15 @@ impl core::fmt::Display for MessageDbg<'_> {
             ),
             M::Inspector(v) => write!(f, "{{ .inspector = {v} }}"),
             M::MacosDisplayId(v) => write!(f, "{{ .macos_display_id = {v} }}"),
+            // Zig's `{}` on an enum payload renders `.tag`.
+            M::PresentationHealth(v) => write!(
+                f,
+                "{{ .presentation_health = {} }}",
+                match v {
+                    rustty_renderer::Health::Healthy => ".healthy",
+                    rustty_renderer::Health::Unhealthy => ".unhealthy",
+                }
+            ),
         }
     }
 }
@@ -764,8 +701,14 @@ pub struct Thread<A: apprt::App + 'static> {
     // `BlockingQueue<renderer::Message, 64>`).
     pub mailbox: *mut thread::Mailbox,
 
-    /// Mailbox to send messages to the app thread
-    pub app_mailbox: crate::app::Mailbox<A>,
+    // P7-W7 T2 (`2f0b65346`): `app_mailbox: App.Mailbox` ("Mailbox to send
+    // messages to the app thread") is deleted with `must_draw_from_app_thread`'s
+    // `.redraw_surface` push, its only use.
+    /// PORT-ONLY (N437): the render thread's own handle to the renderer's
+    /// `draw_mutex`, taken in `init` (before the thread starts). Every call into
+    /// the renderer locks through it before forming a reference to the renderer;
+    /// see `rustty_renderer::latest_frame`.
+    pub draw_mutex: DrawMutex,
 
     /// Configuration we need derived from the main config.
     //
@@ -824,9 +767,9 @@ impl<A: apprt::App + 'static> Thread<A> {
     //
     // PORT NOTE: `pub fn init(alloc: Allocator, config: *const
     // configpkg.Config, surface: *apprt.Surface, renderer_impl:
-    // *rendererpkg.Renderer, state: *rendererpkg.State, app_mailbox:
-    // App.Mailbox) !Thread` (renderer/Thread.zig:125); callsite
-    // Surface.zig:567. Error type: the xev handle-init failures (termio
+    // *rendererpkg.Renderer, state: *rendererpkg.State) !Thread`
+    // (renderer/Thread.zig:116 at `12752b2ac`; `2f0b65346` dropped the
+    // `app_mailbox` parameter); callsite Surface.zig:577. Error type: the xev handle-init failures (termio
     // `Thread::init` precedent; `Mailbox.create`'s alloc failure collapses
     // into Rust's infallible `Box`). The `alloc` param is kept on the
     // placeholder ([ADV-FIX 3] doctrine).
@@ -836,7 +779,7 @@ impl<A: apprt::App + 'static> Thread<A> {
         surface: *mut A::Surface,
         renderer_impl: *mut Renderer,
         state: *mut State,
-        app_mailbox: crate::app::Mailbox<A>,
+        draw_mutex: DrawMutex,
     ) -> Result<Thread<A>, xev::Error> {
         // PORT NOTE ([ADV-FIX 3]): the `alloc` param is kept on the placeholder
         // signature, but the reference `Mailbox.create(alloc)` collapses to
@@ -1009,8 +952,8 @@ impl<A: apprt::App + 'static> Thread<A> {
             state,
             // .mailbox = mailbox,
             mailbox,
-            // .app_mailbox = app_mailbox,
-            app_mailbox,
+            // N437: the render thread's handle (Rust-only parameter).
+            draw_mutex,
             flags: Flags::default(),
         })
     }
@@ -1161,16 +1104,30 @@ where
         // OpenGL leaf has no `loopEnter` and ignores it.
         #[allow(clippy::clone_on_copy)]
         let draw_now = unsafe { (*self_).draw_now.clone() };
-        unsafe { (*(*self_).renderer).0.loop_enter(draw_now) }?;
-        let _loop_exit = LoopExitGuard(unsafe { (*self_).renderer });
+        // N437: through the thread's own lock handle; see `Thread::draw_mutex`.
+        let lock: DrawMutex = unsafe { (*self_).draw_mutex.clone() };
+        unsafe {
+            rustty_renderer::Renderer::loop_enter_raw(
+                &raw mut (*(*self_).renderer).0,
+                &lock,
+                draw_now,
+            )
+        }?;
+        let _loop_exit = LoopExitGuard(unsafe { (*self_).renderer }, lock.clone());
 
         // Run our thread start/end callbacks. This is important because some
         // renderers have to do per-thread setup. For example, OpenGL has to set
         // some thread-local state since that is how it works.
         // try self.renderer.threadEnter(self.surface);
         // defer self.renderer.threadExit();
-        unsafe { (*(*self_).renderer).0.thread_enter((*self_).surface) }?;
-        let _thread_exit = ThreadExitGuard(unsafe { (*self_).renderer });
+        unsafe {
+            rustty_renderer::Renderer::thread_enter_raw(
+                &raw mut (*(*self_).renderer).0,
+                &lock,
+                (*self_).surface,
+            )
+        }?;
+        let _thread_exit = ThreadExitGuard(unsafe { (*self_).renderer }, lock);
 
         // Start the async handlers
         // self.wakeup.wait(&self.loop, &self.wakeup_c, Thread, self, wakeupCallback);
@@ -1310,7 +1267,12 @@ where
     // (`aee7bf347`: REPLACES `syncDrawTimer` — deleted with the draw timer.)
     fn armAnimationTimer(self_: *mut Thread<A>) {
         // const wake = self.renderer.animationWake() orelse return;
-        let wake = match unsafe { (*(*self_).renderer).0.animation_wake() } {
+        let wake = match unsafe {
+            rustty_renderer::Renderer::animation_wake_raw(
+                &raw mut (*(*self_).renderer).0,
+                &(*self_).draw_mutex,
+            )
+        } {
             Some(wake) => wake,
             None => return,
         };
@@ -1393,7 +1355,13 @@ where
 
                     // Notify the renderer so it can update any state.
                     // self.renderer.setVisible(v);
-                    unsafe { (*(*self_).renderer).0.set_visible(v) };
+                    unsafe {
+                        rustty_renderer::Renderer::set_visible_raw(
+                            &raw mut (*(*self_).renderer).0,
+                            &(*self_).draw_mutex,
+                            v,
+                        )
+                    };
 
                     // Note that we're explicitly today not stopping any
                     // cursor timers, draw timers, etc. These things have very
@@ -1421,7 +1389,13 @@ where
 
                     // Set it on the renderer
                     // try self.renderer.setFocus(v);
-                    unsafe { (*(*self_).renderer).0.set_focus(v) }?;
+                    unsafe {
+                        rustty_renderer::Renderer::set_focus_raw(
+                            &raw mut (*(*self_).renderer).0,
+                            &(*self_).draw_mutex,
+                            v,
+                        )
+                    }?;
 
                     // Focus gates custom shader animation, so re-arm
                     // the animation timer for the new state.
@@ -1506,7 +1480,13 @@ where
                     old_key,
                 } => {
                     // self.renderer.setFontGrid(grid.grid);
-                    unsafe { (*(*self_).renderer).0.set_font_grid(grid) };
+                    unsafe {
+                        rustty_renderer::Renderer::with_locked(
+                            &raw mut (*(*self_).renderer).0,
+                            &(*self_).draw_mutex,
+                            |r| r.set_font_grid_locked(grid),
+                        )
+                    };
                     // grid.set.deref(grid.old_key);
                     unsafe { (*set).deref(old_key) };
                     // (PORT NOTE: `new_key` is an OWNED `Key` copy the reference discards
@@ -1515,8 +1495,23 @@ where
                     drop(new_key);
                 }
 
+                // .presentation_health => |v| self.renderer.setPresentationHealth(v),
+                Message::PresentationHealth(v) => unsafe {
+                    rustty_renderer::Renderer::with_locked(
+                        &raw mut (*(*self_).renderer).0,
+                        &(*self_).draw_mutex,
+                        |r| r.set_presentation_health(v),
+                    )
+                },
+
                 // .resize => |v| self.renderer.setScreenSize(v),
-                Message::Resize(v) => unsafe { (*(*self_).renderer).0.set_screen_size(v) },
+                Message::Resize(v) => unsafe {
+                    rustty_renderer::Renderer::with_locked(
+                        &raw mut (*(*self_).renderer).0,
+                        &(*self_).draw_mutex,
+                        |r| r.set_screen_size_locked(v),
+                    )
+                },
 
                 // .change_config => |config| {
                 Message::ChangeConfig { thread, r#impl } => {
@@ -1527,7 +1522,13 @@ where
                     // try self.changeConfig(config.thread);
                     Self::changeConfig(self_, *thread);
                     // try self.renderer.changeConfig(config.impl);
-                    unsafe { (*(*self_).renderer).0.change_config(*r#impl) }?;
+                    unsafe {
+                        rustty_renderer::Renderer::with_locked(
+                            &raw mut (*(*self_).renderer).0,
+                            &(*self_).draw_mutex,
+                            |r| r.change_config_locked(*r#impl),
+                        )
+                    }?;
 
                     // The config affects what animation wakes the
                     // renderer needs (custom shaders, animation mode).
@@ -1543,9 +1544,18 @@ where
                     // (PORT NOTE: the `arena.deinit()` collapses into the drop of the old
                     // `Option`'s owned `Vec` when the field is reassigned below.)
                     // self.renderer.search_matches = v;
-                    unsafe { (*(*self_).renderer).0.search_matches = Some(v) };
                     // self.renderer.search_matches_dirty = true;
-                    unsafe { (*(*self_).renderer).0.search_matches_dirty = true };
+                    // (N437: under the thread's lock handle; see `Thread::draw_mutex`.)
+                    unsafe {
+                        rustty_renderer::Renderer::with_locked(
+                            &raw mut (*(*self_).renderer).0,
+                            &(*self_).draw_mutex,
+                            |r| {
+                                r.search_matches = Some(v);
+                                r.search_matches_dirty = true;
+                            },
+                        )
+                    };
                 }
 
                 // .search_selected_match => |v| {
@@ -1553,9 +1563,17 @@ where
                     // if (self.renderer.search_selected_match) |*m| m.arena.deinit();
                     // (same arena collapse as above.)
                     // self.renderer.search_selected_match = v;
-                    unsafe { (*(*self_).renderer).0.search_selected_match = v };
                     // self.renderer.search_matches_dirty = true;
-                    unsafe { (*(*self_).renderer).0.search_matches_dirty = true };
+                    unsafe {
+                        rustty_renderer::Renderer::with_locked(
+                            &raw mut (*(*self_).renderer).0,
+                            &(*self_).draw_mutex,
+                            |r| {
+                                r.search_selected_match = v;
+                                r.search_matches_dirty = true;
+                            },
+                        )
+                    };
                 }
 
                 // .inspector => |v| self.flags.has_inspector = v,
@@ -1580,7 +1598,14 @@ where
                     // `threadMain_`'s `loop_enter`.)
                     #[allow(clippy::clone_on_copy)]
                     let draw_now = unsafe { (*self_).draw_now.clone() };
-                    unsafe { (*(*self_).renderer).0.set_macos_display_id(v, draw_now) }?;
+                    unsafe {
+                        rustty_renderer::Renderer::set_macos_display_id_raw(
+                            &raw mut (*(*self_).renderer).0,
+                            &(*self_).draw_mutex,
+                            v,
+                            draw_now,
+                        )
+                    }?;
                 }
             }
         }
@@ -1627,48 +1652,36 @@ where
         // If the renderer is managing a vsync on its own, we only draw
         // when we're forced to via `now`.
         // if (!now and self.renderer.hasVsync()) return;
-        if !now && unsafe { (*(*self_).renderer).0.has_vsync() } {
+        if !now
+            && unsafe {
+                rustty_renderer::Renderer::has_vsync_raw(
+                    &raw mut (*(*self_).renderer).0,
+                    &(*self_).draw_mutex,
+                )
+            }
+        {
             return;
         }
 
-        // if (apprt.must_draw_from_app_thread) {
-        // (`c4e16970a`: the decl is the apprt-level one now — see the module
-        // PORT NOTE above.)
-        if A::MUST_DRAW_FROM_APP_THREAD {
-            // _ = self.app_mailbox.push(.{ .redraw_surface = self.surface }, .{ .instant = {} });
-            let _ = unsafe {
-                (*self_).app_mailbox.push(
-                    crate::app::Message::RedrawSurface((*self_).surface),
-                    rustty_datastruct::blocking_queue::Timeout::Instant,
-                )
-            };
-        } else {
-            // self.renderer.drawFrame(false) catch |err| log.warn("error drawing err={}", .{err});
-            // W5 (`W5_DESIGN §2.5` caller 1): RAW-self draw — the render thread must
-            // NOT establish a protected whole-`Renderer` `&mut` (it would race the
-            // main-thread display callback's `draw_frame_raw` under `draw_mutex`; the
-            // mutex cannot rescue a protector established before the lock).
-            // `&raw mut (*(*self_).renderer).0` is a raw place projection off the
-            // already-raw `renderer: *mut Renderer` — no reborrow, no protector.
-            #[cfg(target_os = "macos")]
-            {
-                let rp: *mut rustty_renderer::Renderer = unsafe { &raw mut (*(*self_).renderer).0 };
-                if let Err(err) = unsafe { rustty_renderer::Renderer::draw_frame_raw(rp, false) } {
-                    // log.warn("error drawing err={}", .{err});
-                    log::warn!(target: LOG_SCOPE, "error drawing err={err:?}");
-                }
-            }
-            // L4 SWAP LANDED (first light): the raw-self draw routes through the core
-            // `Renderer::drawFrame` leaf, which now forwards to the REAL OpenGL
-            // `draw_frame_raw` (`&raw mut (*self_).0`, same W5 raw-self shape as the
-            // macOS arm). Routing through the seam keeps ONE draw path on this target.
-            #[cfg(not(target_os = "macos"))]
-            {
-                if let Err(err) = unsafe { Renderer::drawFrame((*self_).renderer, false) } {
-                    // log.warn("error drawing err={}", .{err});
-                    log::warn!(target: LOG_SCOPE, "error drawing err={err:?}");
-                }
-            }
+        // self.renderer.drawFrame(false) catch |err|
+        //     log.warn("error drawing err={}", .{err});
+        //
+        // (`2f0b65346`: the `apprt.must_draw_from_app_thread` arm, which pushed
+        // `.redraw_surface` to the app thread instead, is deleted.)
+        //
+        // W5 (`W5_DESIGN §2.5` caller 1): RAW-self draw — the render thread must
+        // NOT establish a protected whole-`Renderer` `&mut` (it would race the
+        // main thread's `draw_frame_raw` under `draw_mutex`; the mutex cannot
+        // rescue a protector established before the lock). `&raw mut
+        // (*(*self_).renderer).0` is a raw place projection off the already-raw
+        // `renderer: *mut Renderer` — no reborrow, no protector. N437: locked
+        // through the thread's own handle.
+        let rp: *mut rustty_renderer::Renderer = unsafe { &raw mut (*(*self_).renderer).0 };
+        if let Err(err) =
+            unsafe { rustty_renderer::Renderer::draw_frame_raw(rp, &(*self_).draw_mutex, false) }
+        {
+            // log.warn("error drawing err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "error drawing err={err:?}");
         }
     }
 
@@ -1803,6 +1816,28 @@ where
             return xev::CallbackAction::Disarm;
         }
 
+        // If the display is now unrealized, release GPU resources now
+        // we're on the render thread, and do not try to update and draw
+        // this frame.
+        // if (!t.renderer.display_realized) {
+        //     t.renderer.draw_mutex.lockUncancelable(global.io());
+        //     defer t.renderer.draw_mutex.unlock(global.io());
+        //
+        //     t.renderer.releaseGpuResources();
+        //     return .disarm;
+        // }
+        //
+        // (N437: `display_realized` is read under the lock; see
+        // `rustty_renderer::Renderer::release_if_unrealized_raw`.)
+        if unsafe {
+            rustty_renderer::Renderer::release_if_unrealized_raw(
+                &raw mut (*(*self_).renderer).0,
+                &(*self_).draw_mutex,
+            )
+        } {
+            return xev::CallbackAction::Disarm;
+        }
+
         // If we're not visible there's no point spending CPU rebuilding cells —
         // we'll catch up when the .visible mailbox message flips us back on.
         // Kitty graphics animations pause with us and resume on visibility.
@@ -1817,10 +1852,16 @@ where
         //
         // (PORT NOTE: `update_frame` takes a SHARED `&State`; the error is
         // `VtOutOfMemory`, logged not propagated.)
+        // (N437 / ruling 32: the update takes the thread's lock handle around
+        // the Kitty image update and the GPU-cell rebuild only, as the
+        // reference does; see `rustty_renderer::Renderer::update_frame_raw`.)
         if let Err(err) = unsafe {
-            (*(*self_).renderer)
-                .0
-                .update_frame(&*(*self_).state, (*self_).flags.cursor_blink_visible)
+            rustty_renderer::Renderer::update_frame_raw(
+                &raw mut (*(*self_).renderer).0,
+                &(*self_).draw_mutex,
+                &*(*self_).state,
+                (*self_).flags.cursor_blink_visible,
+            )
         } {
             // log.warn("error rendering err={}", .{err});
             log::warn!(target: LOG_SCOPE, "error rendering err={err:?}");
@@ -2615,10 +2656,8 @@ mod compression_tests {
                     core::ptr::null_mut(),
                     core::ptr::null_mut(),
                     state,
-                    crate::app::Mailbox::<TestApp> {
-                        rt_app: core::ptr::null_mut(),
-                        mailbox: core::ptr::null_mut(),
-                    },
+                    // (no renderer: the compression harness never locks it)
+                    DrawMutex::new(),
                 )
                 .expect("Thread::init"),
             ));

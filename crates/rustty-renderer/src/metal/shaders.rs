@@ -36,6 +36,7 @@ use crate::metal::pipeline::{
     Attachment, Options as PipelineOptions, Pipeline, VertexAttribute as VA, VertexLayoutRef,
 };
 use crate::shaders::Image;
+use crate::undefined::Undefined;
 
 // const log = std.log.scoped(.metal);
 // PORT NOTE (task-14c-2): the `log` facade is wired for this crate
@@ -331,10 +332,12 @@ pub struct PipelineCollection {
 
 /// This contains the state for the shaders used by the Metal renderer.
 pub struct Shaders {
-    pub library: Retained<ProtocolObject<dyn MTLLibrary>>,
+    // PORT NOTE (`2f0b65346`): `library` and `pipelines` are `undefined` in
+    // `Shaders.uninit`; see `crate::undefined`.
+    pub library: Undefined<Retained<ProtocolObject<dyn MTLLibrary>>>,
 
     /// Collection of available render pipelines.
-    pub pipelines: PipelineCollection,
+    pub pipelines: Undefined<PipelineCollection>,
 
     /// Custom shaders to run against the final drawable texture. This
     /// can be used to apply a lot of effects. Each shader is run in sequence
@@ -349,6 +352,28 @@ pub struct Shaders {
 }
 
 impl Shaders {
+    /// PORTS: `metal/shaders.zig:108-113` (`2f0b65346`).
+    ///
+    /// ```zig
+    /// pub const uninit: Shaders = .{
+    ///     .library = undefined,
+    ///     .pipelines = undefined,
+    ///     .post_pipelines = &.{},
+    ///     .defunct = true,
+    /// };
+    /// ```
+    ///
+    /// The renderer starts with these and builds its real shaders lazily on the
+    /// render thread. `defunct` makes a `deinit` of them a no-op.
+    pub const fn uninit() -> Shaders {
+        Shaders {
+            library: Undefined::UNDEFINED,
+            pipelines: Undefined::UNDEFINED,
+            post_pipelines: Vec::new(),
+            defunct: true,
+        }
+    }
+
     /// Initialize our shader set.
     ///
     /// "post_shaders" is an optional list of postprocess shaders to run
@@ -411,8 +436,8 @@ impl Shaders {
         });
 
         Ok(Self {
-            library,
-            pipelines,
+            library: Undefined::new(library),
+            pipelines: Undefined::new(pipelines),
             post_pipelines,
             defunct: false,
         })

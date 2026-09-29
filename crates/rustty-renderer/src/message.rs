@@ -116,6 +116,12 @@ pub enum Message {
 
     /// The macOS display ID has changed for the window.
     MacosDisplayId(u32),
+
+    /// Updates the health of the current presentation state.
+    ///
+    /// If unhealthy, then somehow the apprt failed to present frames from
+    /// the renderer. On GTK, this can be caused by failing to import a DMABUF.
+    PresentationHealth(crate::Health),
 }
 
 // PORT NOTE: reference `pub const SearchMatches = struct { arena:

@@ -62,6 +62,7 @@ pub mod imgui_widget;
 pub mod inspector_widget;
 pub mod inspector_window;
 pub mod key_state_overlay;
+pub mod render_surface;
 pub mod resize_overlay;
 pub mod search_overlay;
 pub mod split_tree;

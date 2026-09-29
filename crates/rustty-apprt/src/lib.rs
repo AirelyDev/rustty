@@ -56,19 +56,8 @@
 // /// Window or something.
 // pub const runtime = switch (build_config.artifact) { ... };
 //
-// /// True if all GPU operations (drawing, resource creation and
-// /// destruction) must happen on the app thread. This is the case
-// /// when the graphics context is owned by the app thread (GTK's
-// /// GLArea). When false, the render thread performs GPU operations
-// /// itself.
-// pub const must_draw_from_app_thread =
-//     @hasDecl(App, "must_draw_from_app_thread") and
-//     App.must_draw_from_app_thread;
-//
-// PORT NOTE: `must_draw_from_app_thread` is the
-// `rustty_apprt_api::App::MUST_DRAW_FROM_APP_THREAD` associated const (the
-// `@hasDecl` probe becomes a defaulted trait const each backend may
-// override; the GTK `App` sets it to `true`).
+// (P7-W7 T2: `2f0b65346` deleted the companion `must_draw_from_app_thread`
+// constant, and with it the port's `MUST_DRAW_FROM_APP_THREAD` trait const.)
 pub mod browser;
 pub mod embedded;
 // PORT NOTE (R5): the reference re-exports `gtk` unconditionally (`apprt.zig:17`
@@ -106,6 +95,18 @@ pub const GTK_WAYLAND: bool = cfg!(rustty_gtk_wayland);
 
 #[cfg(test)]
 mod gtk_targets;
+
+// TEST-ONLY (P7-W7 T2): `gtk/scale.rs`'s pure functions and their seven
+// reference tests (`scale.zig`) name no GTK type, so they also run where the GTK
+// backend is not built (its widget helpers are cfg-gated inside the file). Where
+// the backend IS built, the same tests run as `gtk::scale::tests`.
+#[cfg(all(
+    test,
+    not(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))
+))]
+#[path = "gtk/scale.rs"]
+#[allow(dead_code)]
+mod gtk_scale;
 
 // TEST-ONLY: the capture `log::Log` the restored `LOG`-row sites are asserted
 // against (stage 14d-3). Not part of any published surface.

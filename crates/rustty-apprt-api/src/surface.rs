@@ -215,6 +215,9 @@ pub enum Message<'a> {
 
     /// Selected search index change
     SearchSelected(Option<usize>),
+
+    /// Renderer pushed a new frame, redraw this surface.
+    Redraw,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -41,7 +41,6 @@ use gtk4::CompositeTemplate;
 use libadwaita::subclass::prelude::*;
 
 use dcimgui_sys as cimgui;
-use rustty_renderer::opengl::gl;
 use rustty_vt::input::key::Action;
 
 use crate::gtk::key;
@@ -49,12 +48,6 @@ use crate::gtk::key;
 /// The scoped log name — `imgui_widget.zig:18`
 /// `std.log.scoped(.gtk_ghostty_imgui_widget)`, R2-renamed.
 const LOG_SCOPE: &str = "gtk_rustty_imgui_widget";
-
-/// `gl.c.GL_COLOR_BUFFER_BIT` (`imgui_widget.zig:320`). The `gl` crate exposes
-/// this only through the `gl::COLOR_BUFFER_BIT` const the renderer links; the
-/// apprt crate does not depend on `gl` directly, so the value is named here (it
-/// is a stable GL enum) and passed to the renderer's `gl::clear` wrapper.
-const GL_COLOR_BUFFER_BIT: u32 = 0x0000_4000;
 
 /// `io.BackendPlatformName` (`imgui_widget.zig:232`). R2 product-identity rename
 /// of the reference's `"ghostty_gtk"`.
@@ -472,9 +465,34 @@ impl ImguiWidget {
         unsafe { (*io).BackendPlatformName = BACKEND_PLATFORM_NAME.as_ptr() };
 
         // Realize means that our OpenGL context is ready, so we can now
-        // initialize the ImgUI OpenGL backend for our context (`:234-236`).
-        // SAFETY: OpenGL context current; null glsl_version → backend default.
-        unsafe { cimgui::ImGui_ImplOpenGL3_Init(ptr::null()) };
+        // initialize the ImgUI OpenGL backend for our context.
+        // GTK may use GLES for its shared context. ImGui's default shader
+        // version is for desktop GL, so select GLSL ES explicitly in that case.
+        // (`:236-250`, `a93a8b03b`.)
+        //
+        // const context = priv.gl_area.getContext().?;
+        let context = imp
+            .gl_area
+            .context()
+            .expect("a realized GLArea without an error has a GL context");
+        let glsl_version: Option<&CStr> = if context.uses_es() {
+            Some(c"#version 300 es")
+        } else {
+            None
+        };
+        // SAFETY: OpenGL context current; `glsl_version` is null (the backend's
+        // default) or a NUL-terminated `'static` string.
+        let initialized = unsafe {
+            cimgui::ImGui_ImplOpenGL3_Init(glsl_version.map_or(ptr::null(), CStr::as_ptr))
+        };
+        if !initialized {
+            log::warn!(target: LOG_SCOPE, "unable to initialize Dear ImGui OpenGL backend");
+            // SAFETY: `ig_context` is the context created above and not yet
+            // handed to anything else.
+            unsafe { cimgui::ImGui_DestroyContext(ig_context) };
+            imp.ig_context.set(ptr::null_mut());
+            return;
+        }
 
         // Call the virtual method to setup the UI (`:238-239`).
         this.imgui_setup();
@@ -582,18 +600,9 @@ impl ImguiWidget {
             unsafe { cimgui::ImGui_Render() };
         }
 
-        // OpenGL final render (`:318-321`). NOTE: `gl::clear_color`/`gl::clear`
-        // dispatch through the renderer crate's per-thread GL function table
-        // (`opengl::gl::glad`, P7-W7 T1), which the terminal GLArea's realize loads
-        // on this (the GTK main) thread, as the reference's thread-local glad
-        // context is loaded there.
-        gl::clear_color(
-            0x28 as f32 / 0xFF as f32,
-            0x2C as f32 / 0xFF as f32,
-            0x34 as f32 / 0xFF as f32,
-            1.0,
-        );
-        gl::clear(GL_COLOR_BUFFER_BIT);
+        // (`0fca3d34a` deleted the "OpenGL final render" `gl.clearColor(0x28,
+        // 0x2C, 0x34)`/`gl.clear` that preceded this: nothing loads a GL function
+        // table on the GTK main thread any more.)
         // SAFETY: context current; `ImGui_GetDrawData` returns the current
         // frame's draw data (valid until the next `NewFrame`).
         unsafe { cimgui::ImGui_ImplOpenGL3_RenderDrawData(cimgui::ImGui_GetDrawData()) };

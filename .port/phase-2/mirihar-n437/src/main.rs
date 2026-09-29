@@ -1,0 +1,521 @@
+//! N437 — the render thread's whole-`Renderer` references vs the main thread's
+//! raw draw. Isolated, non-FFI model; see `README.md` for the candidates and
+//! results. Each candidate is one executed path (Miri checks only what runs),
+//! selected by argv[1].
+//!
+//! The REAL renderer mutex (`rustty_zigstd::thread::Mutex`) and the REAL
+//! `rustty_renderer::latest_frame` (`DrawMutex`, `LatestFrame`) are included by
+//! `#[path]`; `extern crate self as rustty_zigstd` lets `latest_frame.rs`'s own
+//! `use rustty_zigstd::thread::Mutex` resolve to the included copy.
+
+extern crate self as rustty_zigstd;
+
+#[path = "../../../../crates/rustty-zigstd/src/thread.rs"]
+pub mod thread;
+
+#[path = "../../../../crates/rustty-renderer/src/latest_frame.rs"]
+#[allow(dead_code)]
+mod latest_frame;
+
+use latest_frame::{DrawMutex, ExportedFrameType, LatestFrame};
+use std::sync::Arc;
+use thread::Mutex;
+
+const ROUNDS: usize = 3;
+
+/// An exported frame that owns memory (the OpenGL `ExportedFrame::Memory`).
+struct Frame(#[allow(dead_code)] Vec<u8>);
+impl ExportedFrameType for Frame {
+    const IS_VOID: bool = false;
+}
+
+struct P<T>(*mut T);
+impl<T> Clone for P<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<T> Copy for P<T> {}
+unsafe impl<T> Send for P<T> {}
+
+fn spawn_render<T: 'static>(p: P<T>, f: impl FnOnce(P<T>) + Send + 'static) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || f(p))
+}
+
+// ===========================================================================
+// SHIPPED (pre-N437): the mutex inline in the renderer; render-thread entries
+// with whole-renderer receivers (`renderer_seam.rs` called
+// `(*(*self_).renderer).0.update_frame(..)`, `.animation_wake()`,
+// `.set_focus(..)`, ...); the main thread's raw sync draw (`draw_frame_raw`)
+// locks the inline mutex and reborrows the whole renderer inside it.
+// ===========================================================================
+struct Shipped {
+    draw_mutex: Mutex,
+    focused: bool,
+    cells_rebuilt: bool,
+    cells: Vec<u32>,
+    terminal_state: u64,
+    uniforms: [f32; 4],
+}
+
+impl Shipped {
+    fn new() -> Self {
+        Shipped {
+            draw_mutex: Mutex::new(),
+            focused: true,
+            cells_rebuilt: false,
+            cells: vec![0; 8],
+            terminal_state: 0,
+            uniforms: [0.0; 4],
+        }
+    }
+
+    /// `update_frame(&mut self, ..)`: unlocked work, then the locked rebuild.
+    fn update_frame(&mut self) {
+        self.terminal_state += 1;
+        std::thread::yield_now();
+        self.draw_mutex.lock();
+        self.cells.push(1);
+        self.cells_rebuilt = true;
+        self.draw_mutex.unlock();
+    }
+
+    /// `animation_wake(&self)`: an unlocked read (`armAnimationTimer`).
+    fn animation_wake(&self) -> bool {
+        std::thread::yield_now();
+        self.focused && !self.cells.is_empty()
+    }
+
+    /// `set_focus(&mut self, ..)`: unlocked writes.
+    fn set_focus(&mut self, focus: bool) {
+        self.focused = focus;
+        std::thread::yield_now();
+    }
+
+    /// A whole-`&mut self` helper `draw_frame_raw` calls under the lock
+    /// (`update_screen_size_uniforms`, `init_shaders`, ...).
+    fn update_uniforms(&mut self) {
+        self.uniforms[0] += 1.0;
+    }
+
+    /// `draw_frame_raw(self_ptr, sync)`: raw entry, inline lock, whole `&mut`
+    /// helpers inside.
+    unsafe fn draw_frame_raw(p: *mut Shipped) {
+        unsafe {
+            (*p).draw_mutex.lock();
+            (*p).update_uniforms();
+            (*p).cells_rebuilt = false;
+            let _ = (*p).focused;
+            (*p).draw_mutex.unlock();
+        }
+    }
+}
+
+fn run_shipped(render: fn(P<Shipped>)) {
+    let p = P(Box::into_raw(Box::new(Shipped::new())));
+    let t = spawn_render(p, move |p| {
+        for _ in 0..ROUNDS {
+            render(p)
+        }
+    });
+    for _ in 0..ROUNDS {
+        unsafe { Shipped::draw_frame_raw(p.0) };
+        std::thread::yield_now();
+    }
+    t.join().unwrap();
+    drop(unsafe { Box::from_raw(p.0) });
+}
+
+// ===========================================================================
+// FIXED (N437): `draw_mutex` in its own allocation (`DrawMutex`), each thread
+// holding its own handle; every cross-thread entry locks through that handle
+// BEFORE it forms any reference to the renderer (`Renderer::with_locked`,
+// `*_raw`); the display-link apply runs after the unlock on a copy; the
+// latest-frame slot is behind an `Arc` the main thread holds its own handle to.
+// ===========================================================================
+struct Fixed {
+    draw_mutex: DrawMutex,
+    latest_frame: Arc<LatestFrame<Frame>>,
+    focused: bool,
+    visible: bool,
+    display_realized: bool,
+    cells_rebuilt: bool,
+    cells: Vec<u32>,
+    terminal_state: u64,
+    uniforms: [f32; 4],
+    swap_chain: Option<Vec<u8>>,
+    /// The Kitty image state `update_frame` updates under a brief lock.
+    images: u64,
+    /// `health` (an atomic in the renderer).
+    health: std::sync::atomic::AtomicBool,
+}
+
+impl Fixed {
+    fn new() -> Self {
+        Fixed {
+            draw_mutex: DrawMutex::new(),
+            latest_frame: Arc::new(LatestFrame::new()),
+            focused: true,
+            visible: true,
+            display_realized: true,
+            cells_rebuilt: false,
+            cells: vec![0; 8],
+            terminal_state: 0,
+            uniforms: [0.0; 4],
+            swap_chain: None,
+            images: 0,
+            health: std::sync::atomic::AtomicBool::new(true),
+        }
+    }
+
+    /// `Renderer::with_locked`.
+    unsafe fn with_locked<T>(p: *mut Fixed, lock: &DrawMutex, f: impl FnOnce(&mut Fixed) -> T) -> T {
+        lock.lock();
+        struct Unlock<'a>(&'a DrawMutex);
+        impl Drop for Unlock<'_> {
+            fn drop(&mut self) {
+                self.0.unlock();
+            }
+        }
+        let _u = Unlock(lock);
+        f(unsafe { &mut *p })
+    }
+
+    /// `update_frame_locked(&mut self, ..)`: the whole body under the lock.
+    fn update_frame_locked(&mut self) -> bool {
+        self.terminal_state += 1;
+        std::thread::yield_now();
+        self.cells.push(1);
+        self.cells_rebuilt = true;
+        self.visible && self.cells_rebuilt // the display-link sync, applied after
+    }
+
+    fn animation_wake(&self) -> bool {
+        self.focused && !self.cells.is_empty()
+    }
+
+    fn set_focus_locked(&mut self, focus: bool) {
+        self.focused = focus;
+    }
+
+    fn update_uniforms(&mut self) {
+        self.uniforms[0] += 1.0;
+    }
+
+    /// `draw_frame_locked`: whole `&mut` helpers, a swap chain built lazily,
+    /// a frame pushed into the latest-frame slot (`opengl_frame_completed`).
+    fn draw_frame_locked(&mut self) {
+        if !self.display_realized {
+            return;
+        }
+        self.swap_chain.get_or_insert_with(|| vec![0; 16]);
+        self.update_uniforms();
+        self.cells_rebuilt = false;
+        self.latest_frame.push(Frame(vec![1, 2, 3]));
+    }
+
+    /// `release_if_unrealized_raw`'s body.
+    fn release_if_unrealized(&mut self) -> bool {
+        if self.display_realized {
+            return false;
+        }
+        self.swap_chain = None;
+        true
+    }
+}
+
+/// The render thread's loop body: every entry through its own handle.
+fn fixed_render_round(p: P<Fixed>, lock: &DrawMutex, round: usize) {
+    unsafe {
+        // renderCallback: unrealized release, update, draw.
+        if Fixed::with_locked(p.0, lock, |r| r.release_if_unrealized()) {
+            return;
+        }
+        let sync = Fixed::with_locked(p.0, lock, |r| r.update_frame_locked());
+        let _ = sync; // DisplayLinkSync::apply after the unlock touches no renderer byte
+        Fixed::with_locked(p.0, lock, |r| r.draw_frame_locked());
+        // armAnimationTimer, setFocus, setVisible, the search-match writes.
+        let _ = Fixed::with_locked(p.0, lock, |r| r.animation_wake());
+        Fixed::with_locked(p.0, lock, |r| r.set_focus_locked(round % 2 == 0));
+        Fixed::with_locked(p.0, lock, |r| {
+            r.visible = true;
+            r.cells.truncate(8);
+        });
+    }
+}
+
+fn run_fixed(main_side: fn(P<Fixed>, &DrawMutex, &LatestFrame<Frame>)) {
+    let p = P(Box::into_raw(Box::new(Fixed::new())));
+    // Both handles taken before the render thread starts (`RendererHandles`,
+    // `Thread::draw_mutex`).
+    let main_lock = unsafe { (*p.0).draw_mutex.clone() };
+    let main_slot = unsafe { (*p.0).latest_frame.clone() };
+    let render_lock = main_lock.clone();
+    let t = spawn_render(p, move |p| {
+        for round in 0..ROUNDS {
+            fixed_render_round(p, &render_lock, round);
+        }
+    });
+    for _ in 0..ROUNDS {
+        main_side(p, &main_lock, &main_slot);
+        std::thread::yield_now();
+    }
+    t.join().unwrap();
+    drop(main_slot);
+    drop(unsafe { Box::from_raw(p.0) });
+}
+
+/// The macOS main thread: CoreAnimation's sync draw (`display_callback`).
+fn main_sync_draw(p: P<Fixed>, lock: &DrawMutex, _slot: &LatestFrame<Frame>) {
+    unsafe { Fixed::with_locked(p.0, lock, |r| r.draw_frame_locked()) };
+}
+
+/// The GTK main thread: `displayUnrealized`/`displayRealized` flags and the
+/// `RenderSurface` snapshot's `takeFrame`.
+fn main_gtk(p: P<Fixed>, lock: &DrawMutex, slot: &LatestFrame<Frame>) {
+    unsafe {
+        Fixed::with_locked(p.0, lock, |r| r.display_realized = false);
+        drop(slot.take());
+        Fixed::with_locked(p.0, lock, |r| r.display_realized = true);
+        drop(slot.take());
+    }
+}
+
+// ===========================================================================
+// RULING 32 (P7-W7 T2 fix round 1): `update_frame` keeps the reference's lock
+// scopes. The render thread works on its own fields UNLOCKED through narrow
+// field references (never a whole-renderer reference), takes the lock briefly
+// around the Kitty image update (narrow), and forms the whole `&mut` only for
+// the locked tail (`rebuildCells` & co.). For that to be sound the main thread's
+// locked accesses must be narrow too: a whole-renderer retag under the lock
+// still covers the bytes the render thread is using unlocked.
+// ===========================================================================
+
+/// The render thread's `update_frame_raw` with the reference's scopes.
+unsafe fn split_update_frame(p: P<Fixed>, lock: &DrawMutex) {
+    unsafe {
+        // Unlocked: the render-thread-only state (`terminal_state`, the
+        // scroll/kitty clocks, the search highlights, the overlay) through a
+        // narrow view.
+        let terminal_state: &mut u64 = &mut (*p.0).terminal_state;
+        *terminal_state += 1;
+        std::thread::yield_now();
+        // The Kitty update: the lock, briefly, and a narrow reference.
+        lock.lock();
+        (*p.0).images += 1;
+        lock.unlock();
+        *terminal_state += 1;
+        std::thread::yield_now();
+        // The locked tail: the whole `&mut` exists only under the lock, after
+        // the last use of the unlocked view.
+        let _sync = Fixed::with_locked(p.0, lock, |r| {
+            r.cells.push(1);
+            r.cells_rebuilt = true;
+            r.visible && r.cells_rebuilt
+        });
+    }
+}
+
+fn split_render_round(p: P<Fixed>, lock: &DrawMutex, round: usize) {
+    unsafe {
+        if Fixed::with_locked(p.0, lock, |r| r.release_if_unrealized()) {
+            return;
+        }
+        split_update_frame(p, lock);
+        Fixed::with_locked(p.0, lock, |r| r.draw_frame_locked());
+        let _ = Fixed::with_locked(p.0, lock, |r| r.animation_wake());
+        Fixed::with_locked(p.0, lock, |r| r.set_focus_locked(round % 2 == 0));
+    }
+}
+
+fn run_split(main_side: fn(P<Fixed>, &DrawMutex, &LatestFrame<Frame>)) {
+    let p = P(Box::into_raw(Box::new(Fixed::new())));
+    let main_lock = unsafe { (*p.0).draw_mutex.clone() };
+    let main_slot = unsafe { (*p.0).latest_frame.clone() };
+    let render_lock = main_lock.clone();
+    let t = spawn_render(p, move |p| {
+        for round in 0..ROUNDS {
+            split_render_round(p, &render_lock, round);
+        }
+    });
+    for _ in 0..ROUNDS {
+        main_side(p, &main_lock, &main_slot);
+        std::thread::yield_now();
+    }
+    t.join().unwrap();
+    drop(main_slot);
+    drop(unsafe { Box::from_raw(p.0) });
+}
+
+/// The macOS sync draw's body with narrow field access only (`draw_frame_locked`'s
+/// raw root plus the `*_raw` helpers).
+unsafe fn narrow_draw_body(p: P<Fixed>) {
+    unsafe {
+        if (*p.0).swap_chain.is_none() {
+            (*p.0).swap_chain = Some(vec![0; 16]);
+        }
+        let uniforms: &mut [f32; 4] = &mut (*p.0).uniforms;
+        uniforms[0] += 1.0;
+        (*p.0).cells_rebuilt = false;
+        (*p.0).latest_frame.push(Frame(vec![1, 2, 3]));
+    }
+}
+
+/// The completion trampoline a sync draw runs on the main thread
+/// (`Frame::complete(sync = true)` → `metal_buffer_completed` → `frame_completed`),
+/// shipped shape: `frame_completed_raw`, place expressions on `health`,
+/// `surface_mailbox` and `swap_chain` only.
+unsafe fn frame_completed_narrow(p: *const Fixed) {
+    use std::sync::atomic::Ordering::SeqCst;
+    unsafe {
+        if (*p).health.load(SeqCst) {
+            (*p).health.store(true, SeqCst);
+        }
+        let _ = (*p).swap_chain.as_ref().map(|c| c.len());
+    }
+}
+
+/// The pre-round-2 shape: `(*renderer).frame_completed(health)`, a `&self` over
+/// the whole renderer.
+fn frame_completed_whole(r: &Fixed) {
+    use std::sync::atomic::Ordering::SeqCst;
+    if r.health.load(SeqCst) {
+        r.health.store(true, SeqCst);
+    }
+    let _ = r.swap_chain.as_ref().map(|c| c.len());
+}
+
+/// The macOS sync draw with narrow field access only, trampoline included:
+/// never a reference to the whole renderer.
+fn main_sync_draw_narrow(p: P<Fixed>, lock: &DrawMutex, _slot: &LatestFrame<Frame>) {
+    lock.lock();
+    unsafe {
+        if (*p.0).display_realized {
+            narrow_draw_body(p);
+            frame_completed_narrow(p.0);
+        }
+    }
+    lock.unlock();
+}
+
+/// The same sync draw whose trampoline borrows the whole renderer (`&self`).
+fn main_sync_draw_trampoline_whole(p: P<Fixed>, lock: &DrawMutex, _slot: &LatestFrame<Frame>) {
+    lock.lock();
+    unsafe {
+        if (*p.0).display_realized {
+            narrow_draw_body(p);
+            frame_completed_whole(&*p.0);
+        }
+    }
+    lock.unlock();
+}
+
+/// The GTK main thread with narrow flag writes (`display_realized_raw` /
+/// `display_unrealized_raw`) and `takeFrame` through its own handle.
+fn main_gtk_narrow(p: P<Fixed>, lock: &DrawMutex, slot: &LatestFrame<Frame>) {
+    unsafe {
+        lock.lock();
+        (*p.0).display_realized = false;
+        lock.unlock();
+        drop(slot.take());
+        lock.lock();
+        (*p.0).display_realized = true;
+        lock.unlock();
+        drop(slot.take());
+    }
+}
+
+// ===========================================================================
+// NEGATIVE controls for the two halves of the fix.
+// ===========================================================================
+
+/// Lock-first but with the mutex INLINE: the waiter's `&Mutex` over renderer
+/// bytes is clobbered by the holder's whole `&mut` retag.
+fn run_inline_lock_whole_mut() {
+    let p = P(Box::into_raw(Box::new(Shipped::new())));
+    let t = spawn_render(p, |p| {
+        for _ in 0..ROUNDS {
+            unsafe {
+                let m: *const Mutex = &raw const (*p.0).draw_mutex;
+                (*m).lock();
+                (*p.0).update_uniforms();
+                (*m).unlock();
+            }
+        }
+    });
+    for _ in 0..ROUNDS {
+        unsafe { Shipped::draw_frame_raw(p.0) };
+        std::thread::yield_now();
+    }
+    t.join().unwrap();
+    drop(unsafe { Box::from_raw(p.0) });
+}
+
+/// The external lock, but the latest-frame slot INLINE: the main thread's
+/// `take` reads renderer bytes the render thread's locked whole `&mut` covers.
+struct InlineSlot {
+    draw_mutex: DrawMutex,
+    latest: LatestFrame<Frame>,
+    uniforms: [f32; 4],
+}
+
+fn run_latest_frame_inline() {
+    let p = P(Box::into_raw(Box::new(InlineSlot {
+        draw_mutex: DrawMutex::new(),
+        latest: LatestFrame::new(),
+        uniforms: [0.0; 4],
+    })));
+    let main_lock = unsafe { (*p.0).draw_mutex.clone() };
+    let render_lock = main_lock.clone();
+    let t = spawn_render(p, move |p| {
+        for _ in 0..ROUNDS {
+            render_lock.lock();
+            let r = unsafe { &mut *p.0 };
+            fn draw(r: &mut InlineSlot) {
+                r.uniforms[0] += 1.0;
+                std::thread::yield_now();
+                r.latest.push(Frame(vec![1]));
+            }
+            draw(r);
+            render_lock.unlock();
+        }
+    });
+    for _ in 0..ROUNDS {
+        // `takeFrame` through the renderer (`(*core).renderer.latest_frame`).
+        drop(unsafe { (*p.0).latest.take() });
+        std::thread::yield_now();
+    }
+    t.join().unwrap();
+    drop(main_lock);
+    drop(unsafe { Box::from_raw(p.0) });
+}
+
+fn main() {
+    let which = std::env::args().nth(1).expect("candidate name");
+    match which.as_str() {
+        // UB expected (the shipped shapes N437 names).
+        "shipped_update_frame" => run_shipped(|p| unsafe { (*p.0).update_frame() }),
+        "shipped_animation_wake" => run_shipped(|p| {
+            let _ = unsafe { (*p.0).animation_wake() };
+        }),
+        "shipped_set_focus" => run_shipped(|p| unsafe { (*p.0).set_focus(false) }),
+        // UB expected (negative controls for each half of the fix).
+        "inline_lock_whole_mut" => run_inline_lock_whole_mut(),
+        "latest_frame_inline" => run_latest_frame_inline(),
+        // CLEAN expected (the fix).
+        "fixed_vs_sync_draw" => run_fixed(main_sync_draw),
+        "fixed_vs_gtk_main" => run_fixed(main_gtk),
+        // Ruling 32: the reference's lock scopes in `update_frame`.
+        // UB expected: a whole-renderer retag on the main thread under the lock
+        // still covers the render thread's unlocked narrow view.
+        "split_vs_sync_draw_whole" => run_split(main_sync_draw),
+        "split_vs_gtk_main_whole" => run_split(main_gtk),
+        // UB expected (fix round 2): a narrow sync draw whose completion
+        // trampoline borrows the whole renderer (`&self` `frame_completed`).
+        "split_vs_sync_draw_trampoline_whole" => run_split(main_sync_draw_trampoline_whole),
+        // CLEAN expected: every main-thread access narrow.
+        "split_vs_sync_draw_narrow" => run_split(main_sync_draw_narrow),
+        "split_vs_gtk_main_narrow" => run_split(main_gtk_narrow),
+        other => panic!("unknown candidate {other}"),
+    }
+}

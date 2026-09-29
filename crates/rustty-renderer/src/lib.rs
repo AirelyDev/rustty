@@ -80,6 +80,9 @@ pub mod cell;
 pub mod config;
 pub mod cursor;
 pub mod generic;
+// `generic.zig`'s `LatestFrame` and the `draw_mutex` handle (`2f0b65346`, N437),
+// shared by both `generic` twins.
+pub mod latest_frame;
 pub mod link;
 pub mod message;
 pub mod row;
@@ -87,6 +90,8 @@ pub mod shaders;
 pub mod shadertoy;
 pub mod state;
 pub mod thread;
+// The reference's `undefined` for the lazily built `Shaders` (`Shaders.uninit`).
+pub mod undefined;
 
 // Shared `#[cfg(test)]` mock `C` (impl `RendererConfig`) exercising the
 // `RendererConfig`-bounded seams (`DerivedConfig::init`,

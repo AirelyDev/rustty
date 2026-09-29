@@ -24,9 +24,9 @@
 //! and never terminates its display. This module now also carries that EGL
 //! half — [`EglError`], [`Image`], the `EGL_MESA_image_dma_buf_export` entry
 //! points, the `EGL_SURFACE_TYPE = 0` config request, no `eglTerminate`
-//! (DECISIONS B10) — and [`OffscreenContext`] stands in for the renderer-owned
-//! display + context until stage S2 merges it into `OpenGL::init`. The GL function
-//! table [`prepare_context`] loads is the calling thread's (`glad`, DECISIONS B9).
+//! (DECISIONS B10) — and [`OffscreenContext`] is the renderer-owned display +
+//! context that `OpenGL::init` creates (P7-W7 T2). The GL function table
+//! [`prepare_context`] loads is the calling thread's (`glad`, DECISIONS B9).
 //!
 //! PORT NOTE (`const log = std.log.scoped(.opengl);`, `OpenGL.zig:34`): the
 //! scoped logger is reproduced by the `log_*!` macros in the parent module. (The
@@ -46,6 +46,9 @@ use std::fmt;
 use khronos_egl as egl;
 
 use super::{draw, errors, glad, log_debug, log_err, log_info, log_warn};
+
+/// `const log = std.log.scoped(.opengl_egl);` (`pkg/opengl/egl.zig:13`).
+const EGL_LOG_SCOPE: &str = "opengl_egl";
 
 /// PORTS: `OpenGL.zig:36-38`.
 ///
@@ -209,7 +212,24 @@ impl OffscreenContext {
         }?;
 
         let (egl_major, egl_minor) = egl.initialize(display)?;
-        log_debug!("initialized EGL {egl_major}.{egl_minor}");
+        // log.debug("EGL initialized {}.{}", .{ major, minor });   (egl.zig:90)
+        //
+        // P7-W7 T2: `egl.zig` logs under its own `.opengl_egl` scope (`egl.zig:13`).
+        log::debug!(target: EGL_LOG_SCOPE, "EGL initialized {egl_major}.{egl_minor}");
+
+        // log.info("EGL vendor={s}", .{display.queryString(.vendor) orelse "(unknown)"});
+        // log.info("EGL extensions={s}", .{display.queryString(.extensions) orelse "(unknown)"});
+        //   (OpenGL.zig:59-60)
+        {
+            let query = |name| {
+                egl.query_string(Some(display), name)
+                    .ok()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "(unknown)".to_owned())
+            };
+            log_info!("EGL vendor={}", query(egl::VENDOR));
+            log_info!("EGL extensions={}", query(egl::EXTENSIONS));
+        }
 
         // P7-W7 T1 (DECISIONS B10): a failure from here on does NOT terminate the
         // display. Ghostty's `OpenGL.init` never terminates it on any path
@@ -243,10 +263,20 @@ impl OffscreenContext {
         };
 
         // NO_SURFACE draw/read: legal for a core context via EGL 1.5 /
-        // EGL_KHR_surfaceless_context. The offscreen path renders into an FBO it
-        // owns (Task 11), never into a window-system surface.
-        this.egl
-            .make_current(this.display, None, None, Some(this.context))?;
+        // EGL_KHR_surfaceless_context. The renderer renders into an FBO it owns,
+        // never into a window-system surface.
+        //
+        // display.makeCurrent(null, null, context) catch |err| {
+        //     log.warn("failed to make EGL context current err={}", .{err});
+        //     return err;
+        // };   (OpenGL.zig:95-98; the `errdefer context.destroy` is `this`'s Drop)
+        if let Err(err) = this
+            .egl
+            .make_current(this.display, None, None, Some(this.context))
+        {
+            log_warn!("failed to make EGL context current err={err:?}");
+            return Err(err.into());
+        }
 
         Ok(this)
     }
@@ -261,7 +291,13 @@ impl OffscreenContext {
         // the default bound API is EGL_OPENGL_ES_API.
         egl.bind_api(egl::OPENGL_API)?;
 
-        let config = Self::choose_config(egl, display)?;
+        // const config = egl.Config.choose(display, &.{ ... }) catch |err| {
+        //     log.warn("failed to choose config err={}", .{err});
+        //     return err;
+        // };   (OpenGL.zig:65-80)
+        let config = Self::choose_config(egl, display).inspect_err(|err| {
+            log_warn!("failed to choose config err={err:?}");
+        })?;
 
         let attributes = [
             egl::CONTEXT_MAJOR_VERSION,
@@ -273,7 +309,15 @@ impl OffscreenContext {
             egl::NONE,
         ];
 
-        Ok(egl.create_context(display, config, None, &attributes)?)
+        // const context = egl.Context.create(display, config, null, &.{ ... }) catch |err| {
+        //     log.warn("failed to create EGL context err={}", .{err});
+        //     return err;
+        // };   (OpenGL.zig:83-91)
+        egl.create_context(display, config, None, &attributes)
+            .map_err(|err| {
+                log_warn!("failed to create EGL context err={err:?}");
+                Error::from(err)
+            })
     }
 
     /// Picks an `EGL_OPENGL_BIT` RGBA8 config, with no surface type required.
@@ -802,47 +846,15 @@ pub(crate) fn export_dmabuf_query_with(
 /// Loads the GL entry points from `ctx` and applies the reference's version gate
 /// and debug-output setup. Returns the loaded `(major, minor)`.
 ///
-/// This is the [`OffscreenContext`] flavour of [`prepare_context`], i.e. the
-/// `glad::load(|s| egl.get_proc_address(s))` binding of the reference's
-/// `getProcAddress` parameter (`OpenGL.zig:133`). Ghostty's own GTK arm passes
-/// `null` instead (`OpenGL.zig:170`) because GDK has already made a context
-/// current; Task 8 binds that arm to [`prepare_context`] directly.
+/// This is `threadEnter`'s `try prepareContext(&gl.egl.getProcAddress)`
+/// (`OpenGL.zig:226`): the reference's `getProcAddress` parameter bound to the
+/// context's own `eglGetProcAddress`.
+///
+/// P7-W7 T2: the pin's other binding, the GTK arm's `prepareContext(null)` over
+/// GDK's current GLArea context (`surfaceInit`/`displayRealized`, the port's
+/// `prepare_context_windowed`), is gone with the GLArea (`2f0b65346`).
 pub fn load_gl(ctx: &OffscreenContext) -> Result<(u32, u32), Error> {
     prepare_context(|symbol| ctx.get_proc_address(symbol))
-}
-
-/// GL-ATTACH — the WINDOWED flavour of [`prepare_context`], i.e. the reference's
-/// `apprt.gtk => try prepareContext(null)` arm (`OpenGL.zig:169-170`, reached from
-/// `surfaceInit`/`displayRealized`). Ghostty passes `null` because GDK has already
-/// made its GLArea context CURRENT before this runs; glad then loads GL from the
-/// platform's default loader against that current context. The Rust `gl` crate has
-/// no null-loader equivalent, so we bind `getProcAddress` to `eglGetProcAddress`,
-/// which — per EGL 1.5, and as libglvnd guarantees — resolves the (vendor-neutral)
-/// GL dispatch entry points that route to whatever context is current on the
-/// calling thread. It creates NO display and NO context (GDK owns those); it only
-/// dlopen's `libEGL.so.1` for its `eglGetProcAddress`.
-///
-/// The `DynamicInstance` is leaked (`Box::leak`) so `libEGL.so.1` stays mapped for
-/// the process lifetime — the loaded GL pointers live in libglvnd's dispatch (kept
-/// alive by GDK) but keeping libEGL resident is the belt-and-braces cheap option
-/// (one small one-time leak per realize; the GL function table itself is per
-/// thread and replaced on every load, `glad::load`).
-///
-/// # Errors
-/// [`Error::EglUnavailable`] if `libEGL.so.1` cannot be loaded, or any
-/// [`prepare_context`] error (version-gate / GL failure) against the current
-/// context.
-pub fn prepare_context_windowed() -> Result<(u32, u32), Error> {
-    // SAFETY: `load_required` dlopen's libEGL.so.1 and resolves the core entry
-    // points; unsafe only because it trusts the shared object to be EGL.
-    let egl = unsafe { egl::DynamicInstance::<egl::EGL1_5>::load_required() }
-        .map_err(|err| Error::EglUnavailable(err.to_string()))?;
-    let egl: &'static egl::DynamicInstance<egl::EGL1_5> = Box::leak(Box::new(egl));
-
-    prepare_context(|symbol| match egl.get_proc_address(symbol) {
-        Some(f) => f as *const c_void,
-        None => std::ptr::null(),
-    })
 }
 
 /// Prepares the provided GL context, loading it with the `gl` bindings.
