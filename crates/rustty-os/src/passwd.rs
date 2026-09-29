@@ -26,10 +26,12 @@ const LOG_SCOPE: &str = "passwd";
 #[cfg(target_family = "wasm")]
 compile_error!("passwd is not available for wasm");
 
-// PORT NOTE: `const c = if (builtin.os.tag != .windows) @cImport({ sys/types.h;
-// unistd.h; pwd.h }) else {};` — used to determine the default shell and
-// directory on Unixes. In Rust the `libc` crate provides `passwd`, `getpwuid_r`,
-// and `getuid` for the same system headers.
+// PORT NOTE: `const c = if (builtin.os.tag != .windows) @import("posix_c") else
+// {};` (fe9cf6a26 replaced the sys/types.h/unistd.h/pwd.h cImport with the
+// shared posix_c translate-c module; same headers, refresh only) — used to
+// determine the default shell and directory on Unixes. In Rust the `libc`
+// crate provides `passwd`, `getpwuid_r`, and `getuid` for the same system
+// headers.
 /// Used to determine the default shell and directory on Unixes.
 #[cfg(not(windows))]
 use libc as c;
