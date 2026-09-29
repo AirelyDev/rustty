@@ -22307,8 +22307,9 @@ mod tests {
     //
     // Width: 50,000 leaves the standard capacity in Ghostty and in the port,
     // in every build measured. The first width that does is, for Ghostty,
-    // 47,932 shipped on macOS arm64, 46,908 shipped on Linux aarch64 and
-    // 48,047 in a macOS test build (it depends on the platform's page size);
+    // 47,919 shipped on macOS arm64, 46,895 shipped on Linux aarch64 and
+    // 48,034 in a macOS test build at `12752b2ac` (it depends on the
+    // platform's page size; 47,932 / 46,908 / 48,047 before `d2ff6d77a`);
     // the port's are the same, since its style set is laid out with the
     // reference's item geometry (N88). `ud80_scan`
     // asserts the page really is the wide one, so the tests cannot go vacuous

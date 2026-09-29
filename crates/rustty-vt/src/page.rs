@@ -33,7 +33,6 @@
 //!   const hash_map = @import("hash_map.zig");
 //!   const AutoOffsetHashMap = hash_map.AutoOffsetHashMap;
 //!   const alignForward = std.mem.alignForward;
-//!   const alignBackward = std.mem.alignBackward;
 //!
 //! PORT NOTE: `Cell` and `Row` are reference `packed struct(u64)` types whose
 //! exact bit layout is load-bearing: `Page` `@bitCast`s them, `@memset`s cell
@@ -178,14 +177,19 @@ fn hyperlink_bytes_default() -> usize {
 }
 const HYPERLINK_CELL_MULTIPLIER: usize = 16;
 
-// PORT NOTE: `std.mem.alignForward(usize, v, a)` / `alignBackward`.
+// PORT NOTE: `std.mem.alignForward(usize, v, a)`.
 #[inline]
-fn align_forward(v: usize, a: usize) -> usize {
+const fn align_forward(v: usize, a: usize) -> usize {
     (v + a - 1) & !(a - 1)
 }
-#[inline]
-fn align_backward(v: usize, a: usize) -> usize {
-    v & !(a - 1)
+
+/// `@max(a, b)` in a `const` context (`usize::max` is not `const`).
+const fn const_max(a: usize, b: usize) -> usize {
+    if a > b {
+        a
+    } else {
+        b
+    }
 }
 
 // PORT NOTE: `std.heap.page_size_min`. In the reference this is a comptime
@@ -260,6 +264,24 @@ const fn page_size_min_default() -> usize {
         4 << 10
     }
 }
+
+/// The alignment of the start of a page's cell array. Align it to a cache
+/// line so that row cells always start on a cache line. This avoids
+/// a scenario where cells in every row always start mid-cache line and
+/// straddle an extra.
+//
+// PORT NOTE: `std.atomic.cache_line` is `rustty_zigstd::atomic::CACHE_LINE`,
+// the reference's per-target table (`cacheLineForCpu`), so the geometry
+// matches on every target, not only the hosts the goldens run on.
+pub(crate) const CELLS_ALIGN: usize = const_max(
+    core::mem::align_of::<Cell>(),
+    if rustty_zigstd::atomic::CACHE_LINE < PAGE_SIZE_MIN {
+        rustty_zigstd::atomic::CACHE_LINE
+    } else {
+        // Cap it at page size for freestanding targets.
+        PAGE_SIZE_MIN
+    },
+);
 
 // PORT NOTE: the reference selects `AllocWindows` or `AllocPosix` at comptime
 // (`const PageAlloc = switch (builtin.os.tag) { .windows => AllocWindows, else
@@ -1319,17 +1341,18 @@ impl Capacity {
     /// the amount of memory the original capacity will take. If you modify
     /// the original capacity to add rows, then you can fit more columns.
     pub fn max_cols(self) -> Option<size::CellCountInt> {
-        let available_bits = self.available_bits_for_grid();
+        let available = self.available_bytes_for_grid();
 
-        // If we can't even fit the row metadata, return null
-        if available_bits <= bit_size_of_row() {
+        // A single row's header occupies a whole cell-aligned region
+        // ahead of the cells. If we can't even fit that, return null.
+        let row_region = align_forward(core::mem::size_of::<Row>(), CELLS_ALIGN);
+        if available <= row_region {
             return None;
         }
 
         // We do the math of how many columns we can fit in the remaining
-        // bits ignoring the metadata of a row.
-        let remaining_bits = available_bits - bit_size_of_row();
-        let max_cols = remaining_bits / bit_size_of_cell();
+        // bytes ignoring the metadata of a row.
+        let max_cols = (available - row_region) / core::mem::size_of::<Cell>();
 
         // Clamp to CellCountInt max
         Some(core::cmp::min(size::CellCountInt::MAX as usize, max_cols) as size::CellCountInt)
@@ -1346,73 +1369,65 @@ impl Capacity {
     pub fn adjust(self, req: Adjustment) -> Result<Capacity, OutOfMemory> {
         let mut adjusted = self;
         if let Some(cols) = req.cols {
-            let available_bits = self.available_bits_for_grid();
+            let total_size = Page::layout(self).total_size;
+            let available = self.available_bytes_for_grid();
 
             // The size per row is:
             //   - The row metadata itself
             //   - The cells per row (n=cols)
-            let bits_per_row: usize = bit_size_of_row() + bit_size_of_cell() * (cols as usize);
-            let new_rows: usize = available_bits / bits_per_row;
+            let bytes_per_row: usize =
+                core::mem::size_of::<Row>() + core::mem::size_of::<Cell>() * (cols as usize);
+            let mut new_rows: usize = available / bytes_per_row;
+
+            // PORT NOTE: reference defect (R13). The reference stores
+            // `adjusted.rows = @intCast(new_rows)` below with no bound, and
+            // `new_rows` exceeds the `u16` row count when a wide page is
+            // adjusted to a narrow width: a PageList whose page is off the
+            // standard capacity (47,919 or more columns in a shipped macOS
+            // arm64 build) resized to 80 columns computes about 132,700 rows.
+            // MEASURED at 12752b2ac (a Zig test in a scratch copy: a
+            // 50,000 x 24 PageList, then `resize(.{ .cols = 80, .reflow =
+            // true })`): "panic: integer does not fit in destination type" at
+            // `page.zig:1989` <- `resizeCols`. The port clamps to the largest
+            // row count, a page that still fits the original size.
+            new_rows = core::cmp::min(new_rows, size::CellCountInt::MAX as usize);
+
+            // The cell array is aligned to a cache line, so the padding
+            // between the row headers and the cells depends on the row
+            // count. Trim rows until the layout fits the original size.
+            // The padding is less than a cache line so this takes a
+            // handful of iterations at most.
+            adjusted.cols = cols;
+            while new_rows > 0 {
+                adjusted.rows = new_rows as size::CellCountInt;
+                if Page::layout(adjusted).total_size <= total_size {
+                    break;
+                }
+                new_rows -= 1;
+            }
 
             // If our rows go to zero then we can't fit any row metadata
             // for the desired number of columns.
             if new_rows == 0 {
                 return Err(OutOfMemory);
             }
-
-            adjusted.cols = cols;
-            adjusted.rows = new_rows as size::CellCountInt;
         }
 
         Ok(adjusted)
     }
 
-    /// Computes the number of bits available for rows and cells in the page.
-    ///
-    /// This is done by laying out the "meta" members (styles, graphemes,
-    /// hyperlinks, strings) from the end of the page and finding where they
-    /// start, which gives us the space available for rows and cells.
+    /// Computes the number of bytes available for the row headers and
+    /// cells in the page: the page size minus the metadata block.
     // PERF(port): `#[inline]` — see `Page::layout`.
     #[inline]
-    fn available_bits_for_grid(self) -> usize {
-        // The math below only works if there is no alignment gap between
-        // the end of the rows array and the start of the cells array.
-        //
-        // To guarantee this, we assert that Row's size is a multiple of
-        // Cell's alignment, so that any length array of Rows will end on
-        // a valid alignment for the start of the Cell array.
-        assert!(core::mem::size_of::<Row>().is_multiple_of(core::mem::align_of::<Cell>()));
+    fn available_bytes_for_grid(self) -> usize {
+        const {
+            assert!(CELLS_ALIGN.is_multiple_of(MetaLayout::ALIGNMENT));
+            assert!(core::mem::size_of::<Cell>().is_multiple_of(MetaLayout::ALIGNMENT));
+        }
 
         let l = Page::layout(self);
-
-        // Layout meta members from the end to find styles_start
-        let hyperlink_map_start = align_backward(
-            l.total_size - l.hyperlink_map_layout.total_size,
-            hyperlink_map_base_align(),
-        );
-        let hyperlink_set_start = align_backward(
-            hyperlink_map_start - l.hyperlink_set_layout.total_size,
-            hyperlink_set_base_align(),
-        );
-        let string_alloc_start = align_backward(
-            hyperlink_set_start - l.string_alloc_layout.total_size,
-            StringAlloc::BASE_ALIGN,
-        );
-        let grapheme_map_start = align_backward(
-            string_alloc_start - l.grapheme_map_layout.total_size,
-            grapheme_map_base_align(),
-        );
-        let grapheme_alloc_start = align_backward(
-            grapheme_map_start - l.grapheme_alloc_layout.total_size,
-            GraphemeAlloc::BASE_ALIGN,
-        );
-        let styles_start = align_backward(
-            grapheme_alloc_start - l.styles_layout.total_size,
-            style_set_base_align(),
-        );
-
-        // Multiply by 8 to convert bytes to bits
-        styles_start * 8
+        l.total_size - MetaLayout::init(self).total_size
     }
 }
 
@@ -2179,30 +2194,21 @@ impl<T: Packed, const MASK: Backing, const GROUP_LEN: usize> Mask<T, MASK, GROUP
     }
 }
 
-// PORT NOTE: `@bitSizeOf(Row)` / `@bitSizeOf(Cell)`. Both are `packed
-// struct(u64)`, so their bit size is exactly 64.
-#[inline]
-fn bit_size_of_row() -> usize {
-    64
-}
-#[inline]
-fn bit_size_of_cell() -> usize {
-    64
-}
-
 // PORT NOTE: `StyleSet.base_align.toByteUnits()`, `GraphemeMap.base_align`,
 // `hyperlink.Map.base_align`, `hyperlink.Set.base_align`. These are the offset-
 // based structures' base alignments (max of header/key/value alignments).
-fn style_set_base_align() -> usize {
+// `const fn`: the reference's are comptime, and `MetaLayout::ALIGNMENT` folds
+// them into a `const`.
+const fn style_set_base_align() -> usize {
     StyleSet::base_align()
 }
-fn grapheme_map_base_align() -> usize {
+const fn grapheme_map_base_align() -> usize {
     GraphemeMap::base_align()
 }
-fn hyperlink_map_base_align() -> usize {
+const fn hyperlink_map_base_align() -> usize {
     hyperlink::Map::base_align()
 }
-fn hyperlink_set_base_align() -> usize {
+const fn hyperlink_set_base_align() -> usize {
     hyperlink::Set::base_align()
 }
 

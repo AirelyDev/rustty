@@ -3,7 +3,8 @@
 //! PORTS: Zig stdlib types AS THE PORT USES THEM — std.heap.ArenaAllocator,
 //! std.heap.MemoryPool / MemoryPoolAligned, std.array_hash_map.AutoArrayHashMap,
 //! std.Thread.Mutex, std.hash.Wyhash, std.fs.path.dirnamePosix,
-//! std.valgrind (runningOnValgrind; memcheck.makeMemDefined/makeMemUndefined).
+//! std.valgrind (runningOnValgrind; memcheck.makeMemDefined/makeMemUndefined),
+//! std.atomic.cache_line.
 //!
 //! PORT STATUS: done (infra; Zig stdlib equivalents; not in the 3234 contract)
 //!
@@ -23,6 +24,8 @@
 //!     (CORE_BLUEPRINT §3; renderer `State.mutex`); and `std.Thread.Semaphore`,
 //!     the counting semaphore `generic.zig`'s `SwapChain` uses for triple-buffer
 //!     GPU-frame backpressure.
+//!   * atomic — `std.atomic.cache_line`, the per-target cache-line size
+//!     (`cacheLineForCpu`), which aligns a terminal page's cell array.
 //!   * wyhash — `std.hash.Wyhash`, the hash `src/terminal/hash_map.zig`'s
 //!     `AutoContext` uses (`Wyhash.hash(0, asBytes(&key))`). Bit-exact, because
 //!     it decides the physical slot/fingerprint layout inside a page's backing
@@ -37,6 +40,7 @@
 
 pub mod arena_allocator;
 pub mod array_hash_map;
+pub mod atomic;
 pub mod error_name;
 pub mod fmt;
 pub mod fs_path;

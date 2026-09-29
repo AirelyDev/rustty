@@ -116,9 +116,9 @@ impl_refcount_int!(u8, u16, u32, u64, usize);
 // increments a reference count with an unguarded `item.meta.ref += 1` (`add`,
 // `addWithId`, `use`) or `+= n` (`useMultiple`), and the style set's
 // `RefCountInt` is `u16` (`style.zig:681-684`). A terminal wide enough to
-// leave the standard page capacity — in Ghostty, measured: 47,932 columns or
-// more in a shipped build on macOS arm64, 46,908 on Linux aarch64, 48,047 in
-// a macOS test build; it depends on the platform's page size (the port's
+// leave the standard page capacity — in Ghostty, measured at `12752b2ac`:
+// 47,919 columns or more in a shipped build on macOS arm64, 46,895 on Linux
+// aarch64, 48,034 in a macOS test build; it depends on the platform's page size (the port's
 // thresholds are the same since N88) — gets a page of 215 rows x cols
 // (`PageList.zig:535-540`), so ordinary styled output — the VT stream's
 // `printSliceFill` (`useMultiple`, `Terminal.zig:1114`), `printCell`
@@ -567,14 +567,28 @@ where
     Context: RefCountedSetContext<T>,
 {
     /// `pub const base_align: std.mem.Alignment = .fromByteUnits(@max(...))`
-    pub fn base_align() -> usize {
+    // PERF(port): `const fn` — comptime in the reference, and
+    // `Page::MetaLayout::ALIGNMENT` folds it into a `const`. `usize::max` is
+    // not `const`, hence the comparisons.
+    pub const fn base_align() -> usize {
         // @max(@alignOf(Context), @alignOf(Layout), @alignOf(Item), @alignOf(Id))
         //
         // `@alignOf(Item)` is the reference's (`ItemStride::ALIGN`, N88).
-        core::mem::align_of::<Context>()
-            .max(core::mem::align_of::<Layout<Id>>())
-            .max(ItemStride::<T, Id, RefCount>::ALIGN)
-            .max(core::mem::align_of::<Id>())
+        let aligns = [
+            core::mem::align_of::<Context>(),
+            core::mem::align_of::<Layout<Id>>(),
+            ItemStride::<T, Id, RefCount>::ALIGN,
+            core::mem::align_of::<Id>(),
+        ];
+        let mut max = 0;
+        let mut i = 0;
+        while i < aligns.len() {
+            if aligns[i] > max {
+                max = aligns[i];
+            }
+            i += 1;
+        }
+        max
     }
 
     /// This is the max load until the set returns OutOfMemory and
@@ -1166,8 +1180,8 @@ where
     /// dimensions, so the snapshot grid decoder asks this before taking a
     /// reference; see `snapshot/grid.rs`. The native write path can reach the
     /// ceiling too: a terminal wide enough to leave the standard capacity
-    /// (in Ghostty 47,932 columns or more in a shipped macOS arm64 build,
-    /// 46,908 on Linux aarch64; the port's are the same since N88) gets a
+    /// (in Ghostty 47,919 columns or more in a shipped macOS arm64 build,
+    /// 46,895 on Linux aarch64; the port's are the same since N88) gets a
     /// page of 215 rows x cols (`PageList.zig:535-540`), and ordinary styled
     /// output on it overflows `useMultiple` from `printSliceFill` and `use`
     /// from `printCell` (UPSTREAM-DEFECTS.md UD80). Every

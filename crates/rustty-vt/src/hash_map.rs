@@ -321,7 +321,9 @@ impl<K, V, Context: HashMapContext<K>, const P: u8> Default for OffsetHashMap<K,
 impl<K: Copy, V: Copy, Context: HashMapContext<K>, const P: u8> OffsetHashMap<K, V, Context, P> {
     /// This is the alignment that the base pointer must have.
     // `pub const base_align = Unmanaged.base_align;`
-    pub fn base_align() -> usize {
+    // PERF(port): `const fn` — the reference's `base_align` is a comptime
+    // constant, and `Page::MetaLayout::ALIGNMENT` folds it into a `const`.
+    pub const fn base_align() -> usize {
         HashMapUnmanaged::<K, V, Context, P>::base_align()
     }
 
@@ -569,17 +571,17 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
     // comptime { assert(max_load_percentage > 0); assert(max_load_percentage <= 100); }
     const _ASSERT_MAX_LOAD: () = assert!(MAX_LOAD_PERCENTAGE > 0 && MAX_LOAD_PERCENTAGE <= 100);
 
-    fn header_align() -> usize {
+    const fn header_align() -> usize {
         core::mem::align_of::<Header>()
     }
-    fn key_align() -> usize {
+    const fn key_align() -> usize {
         if core::mem::size_of::<K>() == 0 {
             1
         } else {
             core::mem::align_of::<K>()
         }
     }
-    fn val_align() -> usize {
+    const fn val_align() -> usize {
         if core::mem::size_of::<V>() == 0 {
             1
         } else {
@@ -588,10 +590,16 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
     }
 
     /// `base_align: mem.Alignment = .fromByteUnits(@max(header_align, key_align, val_align));`
-    pub fn base_align() -> usize {
-        Self::header_align()
-            .max(Self::key_align())
-            .max(Self::val_align())
+    // PERF(port): `const fn` (comptime in the reference); `usize::max` is not
+    // `const`, hence the comparisons.
+    pub const fn base_align() -> usize {
+        let (h, k, v) = (Self::header_align(), Self::key_align(), Self::val_align());
+        let hk = if h > k { h } else { k };
+        if hk > v {
+            hk
+        } else {
+            v
+        }
     }
 
     // This is purely empirical and not a /very smart magic constant™/.

@@ -445,11 +445,18 @@ impl Page {
     //       // alignment is always divisible by this.
     //       assert(std.heap.page_size_min % @max(
     //           @alignOf(Row),
-    //           @alignOf(Cell),
-    //           StyleSet.base_align.toByteUnits(),
+    //           cells_align,
+    //           MetaLayout.alignment,
     //       ) == 0);
     //   }
-    // Reproduced as `page_alignment_invariant` test below.
+    // Reproduced as the `const _` below (a compile-time assert, as in the
+    // reference) and the `page_alignment_invariant` test.
+    const _ASSERT_PAGE_ALIGNMENT: () = assert!(
+        PAGE_SIZE_MIN.is_multiple_of(const_max(
+            const_max(core::mem::align_of::<Row>(), CELLS_ALIGN),
+            MetaLayout::ALIGNMENT
+        ))
+    );
 
     /// Initialize a new page, allocating the required backing memory.
     /// The size of the initialized page defaults to the full capacity.
@@ -477,13 +484,23 @@ impl Page {
 
     /// Initialize a new page using the given backing memory.
     /// It is up to the caller to not call deinit on these pages.
+    ///
+    /// The backing memory must be zero-filled. A page treats zero as the
+    /// empty state everywhere: cells are blank when zero, and every
+    /// metadata member initializes from zeroed memory without writing
+    /// anything. Only the row headers are written, so the OS pages behind
+    /// everything else stay untouched until first use.
     pub fn init_buf(buf: OffsetBuf, l: Layout) -> Page {
+        let () = Self::_ASSERT_PAGE_ALIGNMENT;
         let cap = l.capacity;
 
-        // A page must always have at least one row. Aside from being
-        // useless otherwise, the row initialization below must always
-        // overwrite the start of the buffer for pool reuse. See the
-        // `const _` assert next to `Row` in `page.rs`.
+        // A page must always have at least one row.
+        //
+        // PORT NOTE: in the port the row initialization below must also
+        // always overwrite the start of the buffer for pool reuse: the page
+        // pool is still the intrusive-free-list `DynamicMemoryPoolAligned`
+        // (upstream `e01e75bbb` replaces it with `UntouchedPool`, a later
+        // P7-W1 task). See the `const _` assert next to `Row` in `page.rs`.
         assert!(cap.rows > 0);
 
         // PORT NOTE: the reference stores `.memory = @alignCast(buf.start()[0..
@@ -499,6 +516,44 @@ impl Page {
             (unsafe { buf.start() } as usize).is_multiple_of(PAGE_SIZE_MIN),
             "page backing memory must be page_size_min-aligned",
         );
+        // Rustty-only: the zero-filled contract, sampled. Every metadata
+        // member now initializes from zeroed memory without writing (the
+        // `init_assume_zeroed`s below), so a caller that hands in dirty memory
+        // would build a page whose sets, maps and allocators read garbage.
+        // The row headers are skipped: they are overwritten below, and the
+        // first bytes of a reused pool buffer hold the pool's free-list node.
+        // Only a few words are read (the first and last of the cells and of
+        // each metadata member, and the layout's last word), so the check
+        // touches a handful of OS pages at most.
+        #[cfg(debug_assertions)]
+        {
+            // SAFETY: every word read is inside the `l.total_size`-byte buffer
+            // (a section's last read ends at or before its end), and `buf` is
+            // the caller's live buffer. The reads are unaligned: the hyperlink
+            // map is only 4-byte aligned.
+            let word_at =
+                |off: usize| unsafe { (buf.start().add(off) as *const u64).read_unaligned() };
+            let sample = |start: usize, len: usize, what: &str| {
+                if len < 8 {
+                    return;
+                }
+                for off in [start, start + (len & !7) - 8] {
+                    debug_assert!(
+                        word_at(off) == 0,
+                        "init_buf: backing memory must be zero-filled ({what} at offset {off})",
+                    );
+                }
+            };
+            sample(l.cells_start, l.cells_size, "cells");
+            sample(l.styles_start, l.styles_layout.total_size, "styles");
+            sample(l.grapheme_alloc_start, l.grapheme_alloc_layout.total_size, "grapheme_alloc");
+            sample(l.grapheme_map_start, l.grapheme_map_layout.total_size, "grapheme_map");
+            sample(l.string_alloc_start, l.string_alloc_layout.total_size, "string_alloc");
+            sample(l.hyperlink_set_start, l.hyperlink_set_layout.total_size, "hyperlink_set");
+            sample(l.hyperlink_map_start, l.hyperlink_map_layout.total_size, "hyperlink_map");
+            sample(l.total_size - 8, 8, "page tail");
+        }
+
         let rows: Offset<Row> = buf.member(l.rows_start);
         let cells: Offset<Cell> = buf.member(l.cells_start);
 
@@ -526,23 +581,36 @@ impl Page {
             owned: false,
             rows,
             cells,
+            // SAFETY (all six): the backing memory is zero-filled (this
+            // function's contract, sampled above in debug builds) and each
+            // member's region is inside it at its base alignment.
             styles: unsafe {
-                StyleSet::init(buf.add(l.styles_start), l.styles_layout, stylepkg::SetContext)
+                StyleSet::init_assume_zeroed(
+                    buf.add(l.styles_start),
+                    l.styles_layout,
+                    stylepkg::SetContext,
+                )
             },
             string_alloc: unsafe {
-                StringAlloc::init(buf.add(l.string_alloc_start), l.string_alloc_layout)
+                StringAlloc::init_assume_zeroed(buf.add(l.string_alloc_start), l.string_alloc_layout)
             },
             grapheme_alloc: unsafe {
-                GraphemeAlloc::init(buf.add(l.grapheme_alloc_start), l.grapheme_alloc_layout)
+                GraphemeAlloc::init_assume_zeroed(
+                    buf.add(l.grapheme_alloc_start),
+                    l.grapheme_alloc_layout,
+                )
             },
             grapheme_map: unsafe {
-                GraphemeMap::init(buf.add(l.grapheme_map_start), l.grapheme_map_layout)
+                GraphemeMap::init_assume_zeroed(buf.add(l.grapheme_map_start), l.grapheme_map_layout)
             },
             hyperlink_map: unsafe {
-                hyperlink::Map::init(buf.add(l.hyperlink_map_start), l.hyperlink_map_layout)
+                hyperlink::Map::init_assume_zeroed(
+                    buf.add(l.hyperlink_map_start),
+                    l.hyperlink_map_layout,
+                )
             },
             hyperlink_set: unsafe {
-                hyperlink::Set::init(
+                hyperlink::Set::init_assume_zeroed(
                     buf.add(l.hyperlink_set_start),
                     l.hyperlink_set_layout,
                     hyperlink::SetContext::default(),
@@ -1253,7 +1321,7 @@ impl Page {
     /// stay clustered at every capacity doubling, so `increaseCapacity(.styles)`
     /// climbs to 65535 and returns `OutOfSpace` on a page holding only ~32 live
     /// styles. Route (b), the distinct-live-styles arm, needs a wide terminal
-    /// (>= 47,932 cols on shipped macOS) whose page holds a full set of 53,247
+    /// (>= 47,919 cols on shipped macOS) whose page holds a full set of 53,247
     /// distinct LIVE styles. Each is followed by an IL/DL, scroll, or erase that
     /// pulls a row carrying a new style across a page boundary. Following the
     /// reference's own precedent for
@@ -2997,6 +3065,17 @@ impl Page {
 
     /// The memory layout for a page given a desired minimum cols
     /// and rows size.
+    ///
+    /// The backing memory is laid out as the row headers, the cell
+    /// array, and then the metadata block (see `MetaLayout`):
+    ///
+    ///   [rows][cells][styles, graphemes, strings, hyperlinks]
+    ///
+    /// Row headers always start at offset zero. The cell array is aligned
+    /// to a cache line (see `cells_align`). Initializing a page writes only
+    /// the row headers: the cells and every metadata member treat zero as
+    /// their empty state, so the OS pages behind everything past the row
+    /// headers stay untouched until something is stored in them.
     // PERF(port): `#[inline(always)]` — the reference is `pub inline fn layout`
     // (page.zig), a HARD inline directive, and `std_size =
     // Page.layout(std_capacity).total_size` is a comptime constant. Plain
@@ -3007,23 +3086,96 @@ impl Page {
     // lets the constant-argument callers fold to a few instructions.
     #[inline(always)]
     pub fn layout(cap: Capacity) -> Layout {
-        // The rows array must stay at offset 0: the PageList memory
-        // pool relies on `init_buf` overwriting the first bytes of a
-        // reused page buffer, which hold the pool's free list node.
-        // See the `const _` assert next to `Row` in `page.rs`.
+        let meta = MetaLayout::init(cap);
+
+        // PORT NOTE: the rows array must stay at offset 0 in the port for a
+        // second reason: the PageList memory pool relies on `init_buf`
+        // overwriting the first bytes of a reused page buffer, which hold the
+        // pool's free list node. See the `const _` assert next to `Row` in
+        // `page.rs`.
         let rows_count: usize = cap.rows as usize;
         let rows_start = 0;
         let rows_end: usize = rows_start + (rows_count * core::mem::size_of::<Row>());
 
         let cells_count: usize = (cap.cols as usize) * (cap.rows as usize);
-        let cells_start = align_forward(rows_end, core::mem::align_of::<Cell>());
+        let cells_start = align_forward(rows_end, CELLS_ALIGN);
         let cells_end = cells_start + (cells_count * core::mem::size_of::<Cell>());
 
+        let meta_start = align_forward(cells_end, MetaLayout::ALIGNMENT);
+        let meta_end = meta_start + meta.total_size;
+
+        let total_size = align_forward(meta_end, PAGE_SIZE_MIN);
+
+        Layout {
+            total_size,
+            rows_start,
+            rows_size: rows_end - rows_start,
+            cells_start,
+            cells_size: cells_end - cells_start,
+            styles_start: meta_start + meta.styles_start,
+            styles_layout: meta.styles_layout,
+            grapheme_alloc_start: meta_start + meta.grapheme_alloc_start,
+            grapheme_alloc_layout: meta.grapheme_alloc_layout,
+            grapheme_map_start: meta_start + meta.grapheme_map_start,
+            grapheme_map_layout: meta.grapheme_map_layout,
+            string_alloc_start: meta_start + meta.string_alloc_start,
+            string_alloc_layout: meta.string_alloc_layout,
+            hyperlink_map_start: meta_start + meta.hyperlink_map_start,
+            hyperlink_map_layout: meta.hyperlink_map_layout,
+            hyperlink_set_start: meta_start + meta.hyperlink_set_start,
+            hyperlink_set_layout: meta.hyperlink_set_layout,
+            capacity: cap,
+        }
+    }
+}
+
+/// `Page.MetaLayout`
+///
+/// Meta is everything that isn't the grid, such as styles, graphemes,
+/// etc. `layout` places it directly after the grid.
+#[derive(Clone, Copy)]
+pub struct MetaLayout {
+    /// The size of the block including internal alignment padding.
+    pub total_size: usize,
+    pub styles_start: usize,
+    pub styles_layout: crate::ref_counted_set::Layout<StyleId>,
+    pub grapheme_alloc_start: usize,
+    pub grapheme_alloc_layout: crate::bitmap_allocator::Layout,
+    pub grapheme_map_start: usize,
+    pub grapheme_map_layout: crate::hash_map::Layout,
+    pub string_alloc_start: usize,
+    pub string_alloc_layout: crate::bitmap_allocator::Layout,
+    pub hyperlink_set_start: usize,
+    pub hyperlink_set_layout: crate::ref_counted_set::Layout<hyperlink::Id>,
+    pub hyperlink_map_start: usize,
+    pub hyperlink_map_layout: crate::hash_map::Layout,
+}
+
+impl MetaLayout {
+    /// The alignment of the block's start: the largest alignment any
+    /// member requires, so that the member offsets above don't depend
+    /// on where the block is placed.
+    // PERF(port): a `const`, as the reference's is comptime.
+    pub const ALIGNMENT: usize = const_max(
+        const_max(
+            const_max(style_set_base_align(), GraphemeAlloc::BASE_ALIGN),
+            const_max(grapheme_map_base_align(), StringAlloc::BASE_ALIGN),
+        ),
+        const_max(hyperlink_set_base_align(), hyperlink_map_base_align()),
+    );
+
+    /// Compute the layout of the block for the given capacity.
+    // PERF(port): `#[inline(always)]` so it folds into `Page::layout` (itself
+    // `#[inline(always)]`) and, for a constant capacity, to constants: the
+    // reference computes it at comptime for `std_size` (memory
+    // `comptime-flattening-perf-hazard`).
+    #[inline(always)]
+    pub fn init(cap: Capacity) -> MetaLayout {
         let styles_layout =
             crate::ref_counted_set::Layout::<StyleId>::init::<Style, size::CellCountInt>(
                 cap.styles as usize,
             );
-        let styles_start = align_forward(cells_end, style_set_base_align());
+        let styles_start = 0;
         let styles_end = styles_start + styles_layout.total_size;
 
         let grapheme_alloc_layout = GraphemeAlloc::layout(cap.grapheme_bytes as usize);
@@ -3075,14 +3227,8 @@ impl Page {
         let hyperlink_map_start = align_forward(hyperlink_set_end, hyperlink_map_base_align());
         let hyperlink_map_end = hyperlink_map_start + hyperlink_map_layout.total_size;
 
-        let total_size = align_forward(hyperlink_map_end, PAGE_SIZE_MIN);
-
-        Layout {
-            total_size,
-            rows_start,
-            rows_size: rows_end - rows_start,
-            cells_start,
-            cells_size: cells_end - cells_start,
+        MetaLayout {
+            total_size: hyperlink_map_end,
             styles_start,
             styles_layout,
             grapheme_alloc_start,
@@ -3091,11 +3237,10 @@ impl Page {
             grapheme_map_layout,
             string_alloc_start: string_start,
             string_alloc_layout: string_layout,
-            hyperlink_map_start,
-            hyperlink_map_layout,
             hyperlink_set_start,
             hyperlink_set_layout,
-            capacity: cap,
+            hyperlink_map_start,
+            hyperlink_map_layout,
         }
     }
 }
@@ -3231,7 +3376,7 @@ pub(crate) mod ud131_test_support {
 
     /// Page widths for the mixed tests. The full set needs 53,248 live cells
     /// on the destination's two fill rows, and one page must hold every row
-    /// of the fixture, which needs a width past `maxCols` (47,931 on macOS;
+    /// of the fixture, which needs a width past `maxCols` (47,918 on macOS;
     /// below it a standard page holds only one such row). The control only
     /// needs the mixed row (`SPAN` columns). Every capacity growth re-clones
     /// the page and every copy re-checks its integrity, which in a debug

@@ -1516,8 +1516,8 @@ fn apply_cell(
         // This is NOT decoder-only. A terminal wide enough to leave the
         // standard capacity gets `std_capacity` with only `cols` changed
         // (`PageList.zig:535-540`): 215 rows x cols, over ten million cells.
-        // In Ghostty that is 47,932 columns or more in a shipped macOS arm64
-        // build, 46,908 on Linux aarch64 and 48,047 in a macOS test build
+        // In Ghostty that is 47,919 columns or more in a shipped macOS arm64
+        // build, 46,895 on Linux aarch64 and 48,034 in a macOS test build
         // (it depends on the platform's page size); the port's thresholds
         // are the same since its style set is laid out with the reference's
         // item geometry (N88). Ordinary styled output on such a terminal overflows the

@@ -5,26 +5,42 @@
 //! (`grapheme_bytes = 8192` — the crate's own unit tests see the reference's
 //! `builtin.is_test` value 512 instead and could never observe this number).
 //!
-//! ## Oracle vs port geometry (re-measured 2026-09-22, reference `20abdb50a`)
+//! ## Oracle vs port geometry (re-measured 2026-09-28, reference `12752b2ac`)
 //!
 //! Every section and the total equal the reference's, on aarch64-macos
 //! (`page_size_min` 16 KiB) and on aarch64-linux (4 KiB). The reference's
-//! numbers were measured by a Zig probe appended to a scratch copy of
-//! `page.zig` (`zig build test-lib-vt`, Zig 0.16.0; cross-compiled with
-//! `-Dtarget=aarch64-linux-gnu` and run on Linux for the 4 KiB figures):
+//! numbers were measured by the Zig probe
+//! `.port/phase-7/probes/p7w1t3_page_geometry_probe.zig`, appended to a
+//! scratch copy of `page.zig` (`zig build test-lib-vt`, Zig 0.16.0;
+//! cross-compiled with `-Dtarget=aarch64-linux-gnu` and run on Linux for the
+//! 4 KiB figures):
 //!
 //! | section        | reference = port | note |
 //! |----------------|-----------------:|------|
 //! | rows           |   1720 | |
+//! | cells start    |   1792 | aligned to the 128-byte cache line (`d2ff6d77a`) |
 //! | cells          | 369800 | |
 //! | styles         |   4000 | 104 items at the reference's 36-byte `Item` (NEW-FINDINGS N88) |
 //! | grapheme_alloc |   8256 | |
-//! | grapheme_map   |  10768 | |
+//! | grapheme_map   |  10760 | header `{size}` since `6112935a2` |
 //! | string_alloc   |   2056 | |
 //! | hyperlink_set  |    152 | |
-//! | hyperlink_map  |    912 | |
+//! | hyperlink_map  |    900 | header `{size}` since `6112935a2` |
 //! | total, 16 KiB  | 409600 | 25 x 16 KiB |
 //! | total, 4 KiB   | 401408 | 98 x 4 KiB |
+//!
+//! NOTE (2026-09-28, P7-W1 T2/T3): two upstream commits moved this page.
+//! `6112935a2` moved the hash map's `keys`, `values` and `capacity` out of the
+//! in-buffer `Header` into the map struct, leaving `{size: u32}`: grapheme_map
+//! 10768 -> 10760 (-8) and hyperlink_map 912 -> 900 (-12) (the grapheme map's
+//! 8-byte-aligned members absorb 4 of the 12 bytes as padding). `d2ff6d77a`
+//! aligned the cell array to `std.atomic.cache_line` (128 on aarch64), so the
+//! cells start at 1792 instead of right after the 1720 bytes of row headers,
+//! and laid the metadata out as one `MetaLayout` block after the grid;
+//! `maxCols` and `adjust` now count bytes and trim rows until the layout fits.
+//! The totals did not move (the page-size rounding absorbs both), but the rows
+//! per page did at some widths, and `maxCols` fell by 13 on each target
+//! (47,931 -> 47,918 on macOS, 46,907 -> 46,894 on Linux, shipped budget).
 //!
 //! CORRECTION (2026-09-22, N88): this doc used to give the oracle as 589,824
 //! bytes, with grapheme_alloc 131,136 and string_alloc 65,544. Those were an
@@ -84,7 +100,8 @@
 //! This test pins the reference's values so any FUTURE drift (cell/row
 //! struct changes, RefCountedSet geometry, chunk sizing, ...) is caught
 //! structurally. If it fires, diff `Page::layout` section-by-section against
-//! page.zig:1700-1760 before touching the golden value.
+//! page.zig:1762-1890 (`Page.layout` and `Page.MetaLayout`, at `12752b2ac`)
+//! before touching the golden value.
 
 /// Rows per page of `std_capacity.adjust(.{ .cols = c })` and `maxCols` in a
 /// shipped (non-test) build, as the reference's Zig probe measured them.
@@ -114,7 +131,7 @@ fn std_size_golden_aarch64_macos() {
     use rustty_vt::page::{std_capacity, Page};
 
     let cap = std_capacity();
-    // The production std_capacity the oracle measured (page.zig:1780-1787).
+    // The production std_capacity the oracle measured (page.zig:1896-1901).
     assert_eq!(cap.cols, 215, "std_capacity.cols drifted");
     assert_eq!(cap.rows, 215, "std_capacity.rows drifted");
     assert_eq!(cap.styles, 128, "std_capacity.styles drifted");
@@ -126,6 +143,10 @@ fn std_size_golden_aarch64_macos() {
     let layout = Page::layout(cap);
     // Section-by-section pins so a drift names its culprit directly.
     assert_eq!(layout.rows_size, 1720, "rows section drifted (Row size)");
+    assert_eq!(
+        layout.cells_start, 1792,
+        "cells start drifted (cache-line alignment, d2ff6d77a)"
+    );
     assert_eq!(
         layout.cells_size, 369800,
         "cells section drifted (Cell size)"
@@ -159,8 +180,12 @@ fn std_size_golden_aarch64_macos() {
     // grapheme budget 8,192: grapheme_map 10768, string_alloc 2056,
     // hyperlink_set 152, hyperlink_map 912, total 409600). These goldens are
     // now byte-identical to the reference, not only "no further drift".
+    //
+    // RE-MEASURED (2026-09-28, P7-W1 T3) at `12752b2ac`: grapheme_map 10760
+    // and hyperlink_map 900 after `6112935a2`'s header shrink (see the module
+    // doc); the other sections and the total are unchanged.
     assert_eq!(
-        layout.grapheme_map_layout.total_size, 10768,
+        layout.grapheme_map_layout.total_size, 10760,
         "grapheme_map section drifted"
     );
     assert_eq!(
@@ -176,13 +201,15 @@ fn std_size_golden_aarch64_macos() {
         // max_load_percentage (oracle `hyperlink.zig:23`:
         // `AutoOffsetHashMap(Offset(Cell), Id, 80)`), which raises the capacity
         // needed for the same entry count; then 916 -> 912 (-4) when `P3-W2` T3
-        // ported `fedd42e8d` and deleted `Header.available`. The load factor is
-        // what holds this at 912 instead of 464 — a regression to ~464 means the
-        // 80% has been lost, which is separately pinned by
+        // ported `fedd42e8d` and deleted `Header.available`; then 912 -> 900
+        // (-12) when P7-W1 T2 ported `6112935a2`, which leaves only `size` in
+        // the header. The load factor is what holds this at 900 instead of
+        // about 450 — a regression there means the 80% has been lost, which is
+        // separately pinned by
         // `page_hyperlinkCapacity_reports_max_load_not_raw_capacity`. Upstream's
         // own design; see the VERIFICATION LIMIT note above.
         layout.hyperlink_map_layout.total_size,
-        912,
+        900,
         "hyperlink_map section drifted"
     );
     assert_eq!(
@@ -199,7 +226,7 @@ fn std_size_golden_aarch64_macos() {
             (200, 238),
             (1000, 47),
         ],
-        47931,
+        47918,
     );
 }
 
@@ -219,6 +246,10 @@ fn std_size_golden_aarch64_linux() {
     let layout = Page::layout(cap);
     assert_eq!(layout.rows_size, 1720, "rows section drifted (Row size)");
     assert_eq!(
+        layout.cells_start, 1792,
+        "cells start drifted (cache-line alignment, d2ff6d77a)"
+    );
+    assert_eq!(
         layout.cells_size, 369800,
         "cells section drifted (Cell size)"
     );
@@ -231,7 +262,7 @@ fn std_size_golden_aarch64_linux() {
         "grapheme_alloc section drifted"
     );
     assert_eq!(
-        layout.grapheme_map_layout.total_size, 10768,
+        layout.grapheme_map_layout.total_size, 10760,
         "grapheme_map section drifted"
     );
     assert_eq!(
@@ -243,7 +274,7 @@ fn std_size_golden_aarch64_linux() {
         "hyperlink_set section drifted"
     );
     assert_eq!(
-        layout.hyperlink_map_layout.total_size, 912,
+        layout.hyperlink_map_layout.total_size, 900,
         "hyperlink_map section drifted"
     );
     assert_eq!(
@@ -254,12 +285,12 @@ fn std_size_golden_aarch64_linux() {
     assert_rows_per_page(
         &[
             (1, 23454),
-            (80, 579),
+            (80, 578),
             (119, 390),
             (120, 387),
             (200, 233),
             (1000, 46),
         ],
-        46907,
+        46894,
     );
 }

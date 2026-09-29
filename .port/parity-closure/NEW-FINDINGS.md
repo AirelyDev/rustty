@@ -2880,6 +2880,20 @@ leave the native sizes at 48/8 and cost nothing: clone minus noop, N = 21, rotat
 
 **state**: CLOSED by task R13-L.
 
+Update (P7-W1 T3, 2026-09-28): upstream `d2ff6d77a` (at the new pin `12752b2ac`) aligns the cell array to
+`std.atomic.cache_line`, lays the metadata out as one `MetaLayout` block after the grid, and rewrites
+`maxCols`/`adjust` in bytes (`availableBitsForGrid` became `availableBytesForGrid`); `6112935a2` shrank the
+hash-map header (grapheme map 10,768 -> 10,760, hyperlink map 912 -> 900). Both geometry goldens were
+re-probed at `12752b2ac` with the checked-in Zig probe `.port/phase-7/probes/p7w1t3_page_geometry_probe.zig`
+on macOS arm64 and on Linux aarch64 (`rvm`), at 512 and 8,192 grapheme bytes, and the port's ported layout
+matches every value: cells start at 1,792 (was 1,720); the standard sizes are unchanged; `maxCols` fell by
+13 everywhere (macOS 47,931 -> 47,918 shipped, 48,046 -> 48,033 test; Linux 46,907 -> 46,894 shipped,
+46,510 -> 46,497 test); rows per page moved at a few widths (macOS: 1 column 24,023 -> 24,017 test, 40
+columns 1,169 -> 1,168 shipped, 1,000 columns 47 -> 48 test; Linux shipped: 80 columns 579 -> 578, 40
+columns 1,144 -> 1,143; Linux test: 1 column 23,255 -> 23,249). `page_geometry_matches_the_reference`
+renamed its field to `available_bytes`; `std_size_golden` pins `cells_start` too. The port's
+`std.atomic.cache_line` is `rustty_zigstd::atomic::CACHE_LINE`, the reference's per-arch table.
+
 ## N89 — the `hyperlink.Set`, `Page` and `PageList` node headers are larger than the reference's
 
 - **id**: N89.
