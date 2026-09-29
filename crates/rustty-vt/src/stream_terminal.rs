@@ -2511,7 +2511,7 @@ impl<'a> Handler<'a> {
         let mut report = self
             .term()
             .modes
-            .get_report(modes::ModeTag::from_mode(mode));
+            .get_report(modes::ReportTag::from_mode(mode));
 
         // Kitty paste events (mode 5522) can't work without a clipboard
         // read effect, so if that isn't set mark it as unrecognized.
@@ -2524,15 +2524,14 @@ impl<'a> Handler<'a> {
 
     // fn requestModeUnknown(self: *Handler, mode_raw: u16, ansi: bool) void {
     //     const report = self.terminal.modes.getReport(.{
-    //         .value = @truncate(mode_raw),
+    //         .value = mode_raw,
     //         .ansi = ansi,
     //     });
     //     self.sendModeReport(report);
     // }
     fn do_request_mode_unknown(&mut self, mode_raw: u16, ansi: bool) {
-        let report = self.term().modes.get_report(modes::ModeTag {
-            // .value = @truncate(mode_raw),
-            value: mode_raw & 0x7FFF,
+        let report = self.term().modes.get_report(modes::ReportTag {
+            value: mode_raw,
             ansi,
         });
         self.send_mode_report(report);
@@ -5885,6 +5884,7 @@ mod tests {
             let mut s = t.vt_stream();
             // DECRQM for mode 7 (wraparound) — should be silently ignored
             s.next_slice(b"\x1B[?7$p");
+            s.next_slice(b"\x1B[4$p");
         }
 
         t.full_reset();
@@ -5904,6 +5904,12 @@ mod tests {
             s.next_slice(b"\x1B[?7$p");
             assert_eq!(cap_take().unwrap().as_slice(), b"\x1B[?7;2$y");
 
+            // A large unknown mode must not alias wraparound mode 7.
+            let before = s.handler.term().modes;
+            s.next_slice(b"\x1B[?32775$p");
+            assert_eq!(cap_take().unwrap().as_slice(), b"\x1B[?32775;0$y");
+            assert_eq!(before, s.handler.term().modes);
+
             // Query an unknown mode
             s.next_slice(b"\x1B[?9999$p");
             assert_eq!(cap_take().unwrap().as_slice(), b"\x1B[?9999;0$y");
@@ -5913,6 +5919,92 @@ mod tests {
             assert_eq!(cap_take().unwrap().as_slice(), b"\x1B[?117;4$y");
         }
 
+        t.deinit(Global);
+    }
+
+    // Capture cells for "request mode DECRQM ANSI responses" (oracle
+    // 9dc0d974e): the reference's `S { var response: [32]u8; var len; var
+    // calls }`, as thread-locals so the parallel runner never aliases them.
+    thread_local! {
+        static ANSI_RESPONSE: core::cell::RefCell<Vec<u8>> =
+            const { core::cell::RefCell::new(Vec::new()) };
+        static ANSI_CALLS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    }
+
+    fn ansi_write_pty(_: &mut Handler, data: &[u8]) {
+        ANSI_RESPONSE.with(|c| *c.borrow_mut() = data.to_vec());
+        ANSI_CALLS.with(|c| c.set(c.get() + 1));
+    }
+
+    fn ansi_reset() {
+        ANSI_CALLS.with(|c| c.set(0));
+        ANSI_RESPONSE.with(|c| c.borrow_mut().clear());
+    }
+
+    fn ansi_calls() -> usize {
+        ANSI_CALLS.with(|c| c.get())
+    }
+
+    fn ansi_response() -> Vec<u8> {
+        ANSI_RESPONSE.with(|c| c.borrow().clone())
+    }
+
+    // test "request mode DECRQM ANSI responses" (oracle 9dc0d974e)
+    #[test]
+    fn request_mode_decrqm_ansi_responses() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.handler.effects.write_pty = Some(ansi_write_pty);
+
+            // PORT NOTE: the reference's two nested `inline for`s over
+            // comptime tuples become plain loops; the query and the expected
+            // response are formatted at run time instead of `++`-concatenated.
+            for (num, mode) in [
+                ("2", modes::Mode::DisableKeyboard),
+                ("4", modes::Mode::Insert),
+                ("12", modes::Mode::SendReceiveMode),
+                ("20", modes::Mode::Linefeed),
+            ] {
+                for enabled in [false, true, false] {
+                    s.next_slice(
+                        format!("\x1b[{num}{}", if enabled { "h" } else { "l" }).as_bytes(),
+                    );
+                    assert_eq!(enabled, s.handler.term().modes.get(mode));
+                    let query = format!("\x1b[{num}$p");
+                    let query = query.as_bytes();
+                    for split in 0..query.len() + 1 {
+                        ansi_reset();
+                        s.next_slice(&query[..split]);
+                        if split < query.len() {
+                            assert_eq!(0, ansi_calls());
+                        }
+                        s.next_slice(&query[split..]);
+                        assert_eq!(1, ansi_calls());
+                        assert_eq!(
+                            format!("\x1b[{num}{}", if enabled { ";1$y" } else { ";2$y" })
+                                .as_bytes(),
+                            ansi_response().as_slice()
+                        );
+                        assert_eq!(enabled, s.handler.term().modes.get(mode));
+                    }
+                }
+            }
+
+            // The two namespaces must report independent states for mode 4.
+            s.next_slice(b"\x1b[4h\x1b[?4l");
+            let cases: [(&[u8], &[u8]); 3] = [
+                (b"\x1b[4$p", b"\x1b[4;1$y"),
+                (b"\x1b[?4$p", b"\x1b[?4;2$y"),
+                (b"\x1b[9999$p", b"\x1b[9999;0$y"),
+            ];
+            for (query, expected) in cases {
+                ansi_reset();
+                s.next_slice(query);
+                assert_eq!(1, ansi_calls());
+                assert_eq!(expected, ansi_response().as_slice());
+            }
+        }
         t.deinit(Global);
     }
 

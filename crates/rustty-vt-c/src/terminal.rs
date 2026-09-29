@@ -7753,16 +7753,18 @@ mod tests {
     // statics are isolated to its own `mod`-like block so the parallel test runner
     // never aliases them.
 
-    // test "set write_pty callback"
+    // test "set write_pty callback DECRQM" (renamed by oracle 9dc0d974e)
     #[test]
-    fn set_write_pty_callback() {
+    fn set_write_pty_callback_decrqm() {
         static mut LAST_DATA: Option<Vec<u8>> = None;
         static mut LAST_USERDATA: *mut c_void = std::ptr::null_mut();
+        static mut CALLS: usize = 0;
         extern "C" fn write_pty(_t: Terminal, ud: *mut c_void, ptr: *const u8, len: usize) {
             let data = unsafe { core::slice::from_raw_parts(ptr, len) }.to_vec();
             unsafe {
                 LAST_DATA = Some(data);
                 LAST_USERDATA = ud;
+                CALLS += 1;
             }
         }
 
@@ -7773,6 +7775,7 @@ mod tests {
             unsafe {
                 LAST_DATA = None;
                 LAST_USERDATA = std::ptr::null_mut();
+                CALLS = 0;
             }
 
             // Set userdata and write_pty callback
@@ -7793,6 +7796,20 @@ mod tests {
             assert!(unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }.is_some());
             assert_eq!(
                 b"\x1B[?7;1$y".as_slice(),
+                unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }
+                    .unwrap()
+                    .as_slice()
+            );
+            assert_eq!(&mut sentinel as *mut u8 as *mut c_void, unsafe {
+                LAST_USERDATA
+            });
+            assert_eq!(1, unsafe { CALLS });
+
+            let query = b"\x1B[4h\x1B[4$p";
+            vtw(t, query);
+            assert_eq!(2, unsafe { CALLS });
+            assert_eq!(
+                b"\x1B[4;1$y".as_slice(),
                 unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }
                     .unwrap()
                     .as_slice()
@@ -7887,6 +7904,7 @@ mod tests {
             assert_eq!(Result::Success, new_result);
             // Without setting a callback, DECRQM should be silently ignored (no crash)
             vtw(t, b"\x1B[?7$p");
+            vtw(t, b"\x1B[4$p");
             unsafe { free(t) };
         });
     }
@@ -11135,7 +11153,7 @@ mod tests {
                 Some(rustty_vt::modes::Mode::KittyPasteEvents)
             );
             let report =
-                unsafe { &(*zig_terminal(t)).modes }.get_report(rustty_vt::modes::ModeTag {
+                unsafe { &(*zig_terminal(t)).modes }.get_report(rustty_vt::modes::ReportTag {
                     value: 5522,
                     ansi: false,
                 });
