@@ -1932,6 +1932,10 @@
      "test_blocks": 0
     },
     {
+     "file": "font/nerd_font_tables.zig",
+     "test_blocks": 0
+    },
+    {
      "file": "font/opentype.zig",
      "test_blocks": 1
     },
@@ -2049,7 +2053,7 @@
     }
    ],
    "test_blocks": 178,
-   "file_count": 50
+   "file_count": 51
   },
   "global": {
    "files": [

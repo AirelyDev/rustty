@@ -11,8 +11,9 @@
 //! the D1 three-tier font split and holds: `opentype` (sfnt, head, hhea, os2,
 //! post, glyf, svg), `embedded` (test font fixtures), the `terminal_options`
 //! `artifact` seam (`options`), `metrics` (font Metrics + Modifier + Key),
-//! `glyph` (Glyph + Size + RenderOptions + Constraint), the generated
-//! `nerd_font_attributes` codepoint→Constraint table, `atlas` (texture-atlas
+//! `glyph` (Glyph + Size + RenderOptions + Constraint), the
+//! `nerd_font_attributes` codepoint→Constraint lookup over its 3-level table
+//! (`generated::nerd_font_tables`), `atlas` (texture-atlas
 //! rect packing), `codepoint_map` (codepoint→descriptor map, discovery
 //! descriptor seamed thin), `glyf_rasterize` (+ its PNG test) and `sprite`
 //! (Face, canvas, every `draw/` module). The rest of the `font` crate-map key
@@ -43,6 +44,7 @@
 pub mod atlas;
 pub mod codepoint_map;
 pub mod embedded;
+mod generated;
 pub mod glyf_rasterize;
 pub mod glyph;
 pub mod metrics;

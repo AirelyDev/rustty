@@ -1454,6 +1454,7 @@ dependencies = [
  "rustty-datastruct",
  "rustty-os",
  "rustty-render-types",
+ "rustty-unicode",
  "rustty-util",
  "rustty-z2d",
  "rustty-zigstd",

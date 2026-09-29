@@ -53,6 +53,11 @@ rustty-z2d = { workspace = true }
 # Stable polyfill of `core::alloc::Allocator` — the faithful Rust map of Zig's
 # `std.mem.Allocator` threaded through Atlas/CodepointMap (`Global` == `std.alloc`).
 allocator-api2 = { workspace = true }
+# nerd_font_attributes.zig's 3-level constraint table reads through
+# `unicode/lut.zig`'s `Tables` (a3f3331d4), i.e. `rustty_unicode::lut::TablesRef`.
+# rustty-unicode is a dependency-free leaf, so the edge adds no cycle and
+# rustty-font stays pure and below vt (D1).
+rustty-unicode = { workspace = true }
 
 [dev-dependencies]
 # TEST-ONLY (parity S85-F4): the reference's two `formatConfig` tests run the
