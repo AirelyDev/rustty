@@ -50,7 +50,18 @@
 // general-purpose allocator for the free list (`gpa`, defaulting to `A`).
 // PageList passes the page backing allocator and the S7 `VtAllocator`
 // (P7-W1 T5; DECISIONS R13 makes the page allocator a generic parameter
-// there, defaulting to `PageBackingAlloc`, which this crate cannot name).
+// there, defaulting to `PageBackingAlloc`).
+//
+// PORT NOTE (field access): upstream's fields are public and its test swaps
+// `pool.gpa`. Here the fields are private behind getters: from safe code, a
+// swapped allocator would grow or free memory another allocator made, and a
+// pointer pushed onto `free` would be freed as an item. The gpa swap is the
+// `unsafe` [`set_gpa`](UntouchedPoolBase::set_gpa).
+//
+// PORT NOTE (free list): `std.ArrayList(ItemPtr)` is the port's one unmanaged
+// list, [`crate::array_list::ArrayListUnmanaged`] (the S7 T3 call shape that
+// rustty-vt's `alloc::ArrayListUnmanaged` also wraps), grown and freed through
+// `gpa` per call.
 //
 // PORT NOTE (Stacked Borrows, LIFETIMES.tsv P7-W1 T4 rows): the free list
 // holds raw `NonNull` item pointers and the pool never forms a `&T`/`&mut T`
@@ -65,148 +76,10 @@ use core::ptr::NonNull;
 
 use allocator_api2::alloc::Allocator;
 
-pub use crate::limited_allocator::OutOfMemory;
+use crate::array_list::ArrayListUnmanaged;
+pub use crate::array_list::OutOfMemory;
 /// `pub const ResetMode = std.heap.ArenaAllocator.ResetMode;`
 pub use rustty_zigstd::arena_allocator::ResetMode;
-
-/// `std.atomic.cache_line`: Zig's `ArrayList` sizes its `init_capacity` with
-/// it (the reference's per-target table).
-const CACHE_LINE: usize = rustty_zigstd::atomic::CACHE_LINE;
-
-/// `std.ArrayList(ItemPtr)`: the pool's free list, an UNMANAGED list (no
-/// stored allocator) of `Copy` elements, grown and freed through the
-/// allocator each call is given, as the reference's is.
-///
-/// PORT NOTE: this is the call shape of rustty-vt's `alloc::ArrayListUnmanaged`
-/// and `zig_list.rs` (parity tail S7, T3): `ensureTotalCapacity` rounds up with
-/// Zig 0.16's `growCapacity` (`minimum +| (minimum / 2 + init_capacity)`,
-/// `init_capacity = max(1, cache_line / @sizeOf(T))`), and
-/// `ensureTotalCapacityPrecise` asks the allocator to `grow` (the S7 handle's
-/// grow is `remap` first, then alloc + copy + free). It is restated here
-/// because rustty-datastruct sits below rustty-vt and cannot name it.
-/// Allocating per call rather than binding the allocator is what lets the
-/// upstream test swap `pool.gpa` and see which allocator the list grows through.
-pub struct ArrayList<P: Copy> {
-    ptr: NonNull<P>,
-    len: usize,
-    cap: usize,
-}
-
-impl<P: Copy> ArrayList<P> {
-    /// `.empty`: allocates nothing.
-    pub const EMPTY: ArrayList<P> = ArrayList {
-        ptr: NonNull::dangling(),
-        len: 0,
-        cap: 0,
-    };
-
-    /// `items`.
-    #[inline]
-    pub fn items(&self) -> &[P] {
-        // SAFETY: `ptr` is valid for `len` initialized elements (dangling and
-        // aligned when `len == 0`).
-        unsafe { core::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
-    }
-
-    /// `items.len`.
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
-    /// `items.len == 0`.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    /// `capacity`.
-    #[inline]
-    pub fn capacity(&self) -> usize {
-        self.cap
-    }
-
-    /// `pop()`: the last element, if any.
-    #[inline]
-    fn pop(&mut self) -> Option<P> {
-        if self.len == 0 {
-            return None;
-        }
-        self.len -= 1;
-        // SAFETY: index `len` (the old `len - 1`) is an initialized element.
-        Some(unsafe { self.ptr.as_ptr().add(self.len).read() })
-    }
-
-    /// `appendAssumeCapacity(item)`.
-    #[inline]
-    fn append_assume_capacity(&mut self, item: P) {
-        // The reference asserts this in `addOneAssumeCapacity`; here it also
-        // guards the write below.
-        assert!(self.len < self.cap);
-        // SAFETY: `len < cap`, so the slot is inside the allocation.
-        unsafe { self.ptr.as_ptr().add(self.len).write(item) };
-        self.len += 1;
-    }
-
-    fn layout(cap: usize) -> Option<Layout> {
-        Layout::array::<P>(cap).ok()
-    }
-
-    /// `growCapacity(minimum)`.
-    #[inline]
-    fn grow_capacity(minimum: usize) -> usize {
-        let init_capacity = (CACHE_LINE / size_of::<P>().max(1)).max(1);
-        minimum.saturating_add(minimum / 2 + init_capacity)
-    }
-
-    /// `try list.ensureTotalCapacity(gpa, new_capacity)`.
-    #[inline]
-    fn ensure_total_capacity<G: Allocator>(
-        &mut self,
-        gpa: &G,
-        new_capacity: usize,
-    ) -> Result<(), OutOfMemory> {
-        if self.cap >= new_capacity {
-            return Ok(());
-        }
-        self.ensure_total_capacity_precise(gpa, Self::grow_capacity(new_capacity))
-    }
-
-    /// `try list.ensureTotalCapacityPrecise(gpa, new_capacity)`.
-    fn ensure_total_capacity_precise<G: Allocator>(
-        &mut self,
-        gpa: &G,
-        new_capacity: usize,
-    ) -> Result<(), OutOfMemory> {
-        if self.cap >= new_capacity {
-            return Ok(());
-        }
-        let new_layout = Self::layout(new_capacity).ok_or(OutOfMemory)?;
-        let new_memory = if self.cap == 0 {
-            // `remap` of an empty allocation is null: `alignedAlloc`.
-            gpa.allocate(new_layout).map_err(|_| OutOfMemory)?
-        } else {
-            let old_layout = Self::layout(self.cap).expect("a live allocation has a valid layout");
-            // SAFETY: `ptr` is the live allocation of `old_layout`, made
-            // through `gpa` (the pool's contract: the list is always grown and
-            // freed through the pool's gpa), and `new_layout` is larger.
-            unsafe { gpa.grow(self.ptr.cast(), old_layout, new_layout) }.map_err(|_| OutOfMemory)?
-        };
-        self.ptr = new_memory.cast();
-        self.cap = new_capacity;
-        Ok(())
-    }
-
-    /// `list.deinit(gpa)`, leaving the list `.empty`.
-    fn deinit<G: Allocator>(&mut self, gpa: &G) {
-        if self.cap != 0 {
-            let layout = Self::layout(self.cap).expect("a live allocation has a valid layout");
-            // SAFETY: the live allocation of `layout`, made through `gpa`.
-            unsafe { gpa.deallocate(self.ptr.cast(), layout) };
-        }
-        *self = Self::EMPTY;
-    }
-}
 
 /// The item size and alignment of an [`UntouchedPoolBase`]: comptime
 /// ([`Fixed`]) or runtime ([`Dynamic`]).
@@ -233,11 +106,21 @@ impl<T, const ALIGN: usize> Fixed<T, ALIGN> {
         align_of::<T>()
     };
 
-    /// Both, as one layout (a compile error if `ALIGN` is not a power of two).
-    pub const LAYOUT: Layout = match Layout::from_size_align(Self::ITEM_SIZE, Self::ITEM_ALIGNMENT)
-    {
-        Ok(layout) => layout,
-        Err(_) => panic!("UntouchedPool: the alignment must be a power of two"),
+    /// `alignment` is a Zig `Alignment`: a power of two (`0` here meaning
+    /// `.of(Item)`). A compile error otherwise, even when `.of(Item)` is larger.
+    const ALIGN_IS_VALID: () = assert!(
+        ALIGN == 0 || ALIGN.is_power_of_two(),
+        "UntouchedPool: ALIGN must be 0 or a power of two"
+    );
+
+    /// Both, as one layout.
+    pub const LAYOUT: Layout = {
+        #[allow(clippy::let_unit_value)]
+        let () = Self::ALIGN_IS_VALID;
+        match Layout::from_size_align(Self::ITEM_SIZE, Self::ITEM_ALIGNMENT) {
+            Ok(layout) => layout,
+            Err(_) => panic!("UntouchedPool: the alignment must be a power of two"),
+        }
     };
 }
 
@@ -276,18 +159,18 @@ pub type DynamicUntouchedPool<A, G = A> = UntouchedPoolBase<Dynamic, A, G>;
 /// [`DynamicUntouchedPool`].
 pub struct UntouchedPoolBase<S: ItemShape, A: Allocator, G: Allocator> {
     /// The allocator items are allocated from.
-    pub allocator: A,
+    allocator: A,
 
     /// The general-purpose allocator for the free list.
-    pub gpa: G,
+    gpa: G,
 
     /// Free items. The most recently destroyed item is handed out first.
-    pub free: ArrayList<NonNull<S::Item>>,
+    free: ArrayListUnmanaged<NonNull<S::Item>>,
 
     /// Number of items currently allocated from the item allocator,
     /// free or in use. `free.capacity >= live` always holds so that
     /// destroy() never has to grow the free list.
-    pub live: usize,
+    live: usize,
 
     shape: S,
 }
@@ -301,6 +184,8 @@ impl<T, A: Allocator, G: Allocator, const ALIGN: usize> UntouchedPoolBase<Fixed<
 
     /// Create a pool with `preheat` items already allocated.
     pub fn init_capacity(gpa: G, item_alloc: A, preheat: usize) -> Result<Self, OutOfMemory> {
+        #[allow(clippy::let_unit_value)]
+        let () = Fixed::<T, ALIGN>::ALIGN_IS_VALID;
         Self::init_capacity_shape(gpa, item_alloc, Fixed(PhantomData), preheat)
     }
 }
@@ -316,6 +201,9 @@ impl<A: Allocator, G: Allocator> UntouchedPoolBase<Dynamic, A, G> {
         alignment: usize,
         preheat: usize,
     ) -> Result<Self, OutOfMemory> {
+        // PORT NOTE: `[item_size]u8` is never zero-sized for a pool upstream
+        // (a page); a zero size would divide by zero in `reset`.
+        assert!(item_size > 0);
         let layout = Layout::from_size_align(item_size, alignment)
             .expect("UntouchedPool: the alignment must be a power of two");
         Self::init_capacity_shape(gpa, item_alloc, Dynamic { layout }, preheat)
@@ -335,6 +223,43 @@ impl<A: Allocator, G: Allocator> UntouchedPoolBase<Dynamic, A, G> {
 }
 
 impl<S: ItemShape, A: Allocator, G: Allocator> UntouchedPoolBase<S, A, G> {
+    /// `allocator`: the allocator items are allocated from.
+    #[inline]
+    pub fn allocator(&self) -> &A {
+        &self.allocator
+    }
+
+    /// `gpa`: the general-purpose allocator for the free list.
+    #[inline]
+    pub fn gpa(&self) -> &G {
+        &self.gpa
+    }
+
+    /// `pool.gpa = gpa`, returning the previous one.
+    ///
+    /// # Safety
+    /// Until the previous gpa is restored, the pool must not grow or free its
+    /// free list: no `create()` that finds the free list empty, no `deinit()`,
+    /// no `Drop`. (`destroy()`, `release()`, `reset()` and a `create()` that
+    /// pops a free item never call the gpa.) Or the free list is still empty.
+    #[inline]
+    pub unsafe fn set_gpa(&mut self, gpa: G) -> G {
+        core::mem::replace(&mut self.gpa, gpa)
+    }
+
+    /// `free`: the free items, most recently destroyed last.
+    #[inline]
+    pub fn free(&self) -> &ArrayListUnmanaged<NonNull<S::Item>> {
+        &self.free
+    }
+
+    /// `live`: the number of items allocated from the item allocator, free or
+    /// in use.
+    #[inline]
+    pub fn live(&self) -> usize {
+        self.live
+    }
+
     /// `initCapacity(gpa, item_alloc, preheat)` for either shape.
     fn init_capacity_shape(
         gpa: G,
@@ -345,15 +270,15 @@ impl<S: ItemShape, A: Allocator, G: Allocator> UntouchedPoolBase<S, A, G> {
         let mut pool = UntouchedPoolBase {
             allocator: item_alloc,
             gpa,
-            free: ArrayList::EMPTY,
+            free: ArrayListUnmanaged::EMPTY,
             live: 0,
             shape,
         };
         // errdefer self.deinit(); (`Drop`: every item allocated so far is on
         // the free list, so `live == free.len` holds on every failure path.)
 
-        pool.free
-            .ensure_total_capacity_precise(&pool.gpa, preheat)?;
+        // SAFETY: the list is empty; `pool.gpa` is the list's gpa from now on.
+        unsafe { pool.free.ensure_total_capacity_precise(&pool.gpa, preheat) }?;
         for _ in 0..preheat {
             let item = pool.alloc_item()?;
             pool.free.append_assume_capacity(item);
@@ -375,7 +300,8 @@ impl<S: ItemShape, A: Allocator, G: Allocator> UntouchedPoolBase<S, A, G> {
             // `layout` and is owned by the pool; it is freed exactly once here.
             unsafe { self.allocator.deallocate(item.cast(), layout) };
         }
-        self.free.deinit(&self.gpa);
+        // SAFETY: `gpa` grew the list (`set_gpa`'s contract).
+        unsafe { self.free.deinit(&self.gpa) };
         self.live = 0;
     }
 
@@ -418,7 +344,9 @@ impl<S: ItemShape, A: Allocator, G: Allocator> UntouchedPoolBase<S, A, G> {
 
         // Reserve the free-list slot for the new item before
         // allocating it so that destroy() can never fail.
-        self.free.ensure_total_capacity(&self.gpa, self.live + 1)?;
+        let min = self.live.checked_add(1).expect("live item count overflow");
+        // SAFETY: `gpa` grew the list (`set_gpa`'s contract).
+        unsafe { self.free.ensure_total_capacity(&self.gpa, min) }?;
         self.alloc_item()
     }
 
@@ -700,14 +628,15 @@ mod tests {
         for item in &mut items {
             *item = pool.create().unwrap();
         }
-        let gpa = pool.gpa;
-        pool.gpa = &failing;
+        // SAFETY: only `destroy` runs before the gpa is restored.
+        let gpa = unsafe { pool.set_gpa(&failing) };
         for item in items {
             // SAFETY: each item is live and came from this pool.
             unsafe { pool.destroy(item) };
         }
-        pool.gpa = gpa;
-        assert_eq!(items.len(), pool.free.items().len());
+        // SAFETY: restores the gpa that grew the free list.
+        unsafe { pool.set_gpa(gpa) };
+        assert_eq!(items.len(), pool.free().items().len());
         // PORT NOTE: an added check (R1 "no-loss, not no-addition"): destroy
         // returns nothing, so upstream would only see a failed growth as a
         // crash; here the failing allocator also proves it was never called.
@@ -724,20 +653,20 @@ mod tests {
 
         // Free everything above the limit
         assert!(pool.reset(ResetMode::RetainWithLimit(2 * ITEM_SIZE)));
-        assert_eq!(2, pool.free.items().len());
-        assert_eq!(2, pool.live);
+        assert_eq!(2, pool.free().items().len());
+        assert_eq!(2, pool.live());
 
         // retain_capacity keeps everything
         assert!(pool.reset(ResetMode::RetainCapacity));
-        assert_eq!(2, pool.free.items().len());
+        assert_eq!(2, pool.free().items().len());
 
         // Retained items are handed out without allocating; new items
         // beyond them are allocated as needed.
         let a = pool.create().unwrap();
         let b = pool.create().unwrap();
-        assert_eq!(2, pool.live);
+        assert_eq!(2, pool.live());
         let c = pool.create().unwrap();
-        assert_eq!(3, pool.live);
+        assert_eq!(3, pool.live());
         // SAFETY: each item is live and came from this pool.
         unsafe {
             pool.destroy(a);
@@ -746,8 +675,8 @@ mod tests {
         }
 
         assert!(pool.reset(ResetMode::FreeAll));
-        assert_eq!(0, pool.free.items().len());
-        assert_eq!(0, pool.live);
+        assert_eq!(0, pool.free().items().len());
+        assert_eq!(0, pool.live());
 
         pool.deinit();
     }
@@ -760,14 +689,14 @@ mod tests {
 
         let a = pool.create().unwrap();
         let b = pool.create().unwrap();
-        assert_eq!(2, pool.live);
+        assert_eq!(2, pool.live());
         // SAFETY: `a` is live and came from this pool.
         unsafe { pool.release(a) };
-        assert_eq!(1, pool.live);
-        assert_eq!(0, pool.free.items().len());
+        assert_eq!(1, pool.live());
+        assert_eq!(0, pool.free().items().len());
         // SAFETY: `b` is live and came from this pool.
         unsafe { pool.destroy(b) };
-        assert_eq!(1, pool.free.items().len());
+        assert_eq!(1, pool.free().items().len());
 
         pool.deinit();
     }
@@ -788,11 +717,11 @@ mod tests {
         .unwrap();
         assert_eq!(item_size, pool.item_size());
         assert_eq!(PAGE_SIZE_MIN, pool.item_alignment());
-        assert_eq!((1, 1), (pool.live, pool.free.len()));
+        assert_eq!((1, 1), (pool.live(), pool.free().len()));
 
         let a = pool.create().unwrap();
         let b = pool.create().unwrap();
-        assert_eq!((2, 0), (pool.live, pool.free.len()));
+        assert_eq!((2, 0), (pool.live(), pool.free().len()));
         for item in [a, b] {
             assert_eq!(0, item.as_ptr() as usize % PAGE_SIZE_MIN);
             // SAFETY: a live item of `item_size` bytes from this pool.
@@ -808,8 +737,8 @@ mod tests {
             pool.release(a);
             pool.destroy(b);
         }
-        assert_eq!((1, 1), (pool.live, pool.free.len()));
+        assert_eq!((1, 1), (pool.live(), pool.free().len()));
         assert!(pool.reset(ResetMode::FreeAll));
-        assert_eq!((0, 0), (pool.live, pool.free.len()));
+        assert_eq!((0, 0), (pool.live(), pool.free().len()));
     }
 }

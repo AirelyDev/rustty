@@ -941,23 +941,14 @@ impl<T, A: ApiAllocator> TryPushExt<T> for allocator_api2::vec::Vec<T, A> {
 /// (`minimum +| (minimum / 2 + init_capacity)`, `init_capacity =
 /// max(1, cache_line / @sizeOf(T))`) and `ensureTotalCapacityPrecise` tries
 /// `remap` first, then allocates, copies and frees (the handle's `grow`).
-pub struct ArrayListUnmanaged<T: Copy> {
-    ptr: NonNull<T>,
-    len: usize,
-    cap: usize,
-}
-
-// SAFETY: the list owns its `Copy` elements outright; the raw pointer is a
-// unique owning pointer, as a `Vec`'s is.
-unsafe impl<T: Copy + Send> Send for ArrayListUnmanaged<T> {}
-// SAFETY: shared access only reads the elements.
-unsafe impl<T: Copy + Sync> Sync for ArrayListUnmanaged<T> {}
-
-impl<T: Copy> Default for ArrayListUnmanaged<T> {
-    fn default() -> Self {
-        Self::EMPTY
-    }
-}
+///
+/// PORT NOTE (P7-W1 T4): a thin newtype over the port's one unmanaged list,
+/// [`rustty_datastruct::array_list::ArrayListUnmanaged`] (also
+/// `UntouchedPool`'s free list), with this crate's `VtAllocator` signatures and
+/// error type. The caller's contract is unchanged: one allocator per list, as
+/// in the reference. `Send`/`Sync` come from the inner list's impls.
+#[derive(Default)]
+pub struct ArrayListUnmanaged<T: Copy>(rustty_datastruct::array_list::ArrayListUnmanaged<T>);
 
 impl<T: Copy> core::ops::Deref for ArrayListUnmanaged<T> {
     type Target = [T];
@@ -967,49 +958,39 @@ impl<T: Copy> core::ops::Deref for ArrayListUnmanaged<T> {
     }
 }
 
-/// `std.atomic.cache_line` (Zig's `ArrayList` sizes `init_capacity` with it):
-/// the reference's per-target table.
-const CACHE_LINE: usize = rustty_zigstd::atomic::CACHE_LINE;
-
 impl<T: Copy> ArrayListUnmanaged<T> {
     /// `.empty`: allocates nothing.
-    pub const EMPTY: ArrayListUnmanaged<T> = ArrayListUnmanaged {
-        ptr: NonNull::dangling(),
-        len: 0,
-        cap: 0,
-    };
+    pub const EMPTY: ArrayListUnmanaged<T> =
+        ArrayListUnmanaged(rustty_datastruct::array_list::ArrayListUnmanaged::EMPTY);
 
     /// `items`.
     #[inline]
     pub fn items(&self) -> &[T] {
-        // SAFETY: `ptr` is valid for `len` initialized elements (dangling and
-        // aligned when `len == 0`).
-        unsafe { core::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+        self.0.items()
     }
 
     /// `items` (mutable).
     #[inline]
     pub fn items_mut(&mut self) -> &mut [T] {
-        // SAFETY: as `items`, and `&mut self` is exclusive.
-        unsafe { core::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
+        self.0.items_mut()
     }
 
     /// `items` as a slice (the `Vec::as_slice` spelling).
     #[inline]
     pub fn as_slice(&self) -> &[T] {
-        self.items()
+        self.0.items()
     }
 
     /// `capacity`.
     #[inline]
     pub fn capacity(&self) -> usize {
-        self.cap
+        self.0.capacity()
     }
 
     /// The start of the allocated slice, for raw writes.
     #[inline]
     pub fn as_mut_ptr(&mut self) -> *mut T {
-        self.ptr.as_ptr()
+        self.0.as_mut_ptr()
     }
 
     /// `items.len = new_len`.
@@ -1019,24 +1000,19 @@ impl<T: Copy> ArrayListUnmanaged<T> {
     /// initialized before they are read.
     #[inline]
     pub unsafe fn set_len(&mut self, new_len: usize) {
-        debug_assert!(new_len <= self.cap);
-        self.len = new_len;
+        // SAFETY: the caller's contract.
+        unsafe { self.0.set_len(new_len) }
     }
 
     /// `clearRetainingCapacity`.
     #[inline]
     pub fn clear_retaining_capacity(&mut self) {
-        self.len = 0;
-    }
-
-    fn layout(cap: usize) -> Option<Layout> {
-        Layout::array::<T>(cap).ok()
+        self.0.clear_retaining_capacity()
     }
 
     /// `growCapacity(minimum)`.
     pub fn grow_capacity(minimum: usize) -> usize {
-        let init_capacity = (CACHE_LINE / core::mem::size_of::<T>().max(1)).max(1);
-        minimum.saturating_add(minimum / 2 + init_capacity)
+        rustty_datastruct::array_list::ArrayListUnmanaged::<T>::grow_capacity(minimum)
     }
 
     /// `try list.ensureTotalCapacity(gpa, new_capacity)`.
@@ -1045,10 +1021,9 @@ impl<T: Copy> ArrayListUnmanaged<T> {
         gpa: VtAllocator,
         new_capacity: usize,
     ) -> Result<(), OutOfMemory> {
-        if self.cap >= new_capacity {
-            return Ok(());
-        }
-        self.ensure_total_capacity_precise(gpa, Self::grow_capacity(new_capacity))
+        // SAFETY: one allocator per list, the caller's (S7-3) contract, as in
+        // the reference.
+        unsafe { self.0.ensure_total_capacity(&gpa, new_capacity) }.map_err(|_| OutOfMemory)
     }
 
     /// `try list.ensureTotalCapacityPrecise(gpa, new_capacity)`.
@@ -1057,34 +1032,15 @@ impl<T: Copy> ArrayListUnmanaged<T> {
         gpa: VtAllocator,
         new_capacity: usize,
     ) -> Result<(), OutOfMemory> {
-        if self.cap >= new_capacity {
-            return Ok(());
-        }
-        let new_layout = Self::layout(new_capacity).ok_or(OutOfMemory)?;
-        let new_memory = if self.cap == 0 {
-            // `remap` of an empty allocation is null: `alignedAlloc`.
-            gpa.allocate(new_layout).map_err(|_| OutOfMemory)?
-        } else {
-            let old_layout = Self::layout(self.cap).expect("a live allocation has a valid layout");
-            // SAFETY: `ptr` is the live allocation of `old_layout` made
-            // through `gpa` (the caller's contract: one allocator per list,
-            // as in the reference), and `new_layout` is larger.
-            unsafe { gpa.grow(self.ptr.cast(), old_layout, new_layout) }.map_err(|_| OutOfMemory)?
-        };
-        self.ptr = new_memory.cast();
-        self.cap = new_capacity;
-        Ok(())
+        // SAFETY: as in `ensure_total_capacity`.
+        unsafe { self.0.ensure_total_capacity_precise(&gpa, new_capacity) }.map_err(|_| OutOfMemory)
     }
 
     /// `list.deinit(gpa)`, leaving the list `.empty` (the port's
     /// `self.* = undefined` is a reusable empty list).
     pub fn deinit(&mut self, gpa: VtAllocator) {
-        if self.cap != 0 {
-            let layout = Self::layout(self.cap).expect("a live allocation has a valid layout");
-            // SAFETY: the live allocation of `layout`, made through `gpa`.
-            unsafe { gpa.deallocate(self.ptr.cast(), layout) };
-        }
-        *self = Self::EMPTY;
+        // SAFETY: as in `ensure_total_capacity`.
+        unsafe { self.0.deinit(&gpa) }
     }
 }
 

@@ -2,7 +2,8 @@
 //!
 //! PORTS: ghostty src/datastruct/ (blocking_queue, cache_table, circ_buf,
 //! comparison, intrusive_linked_list, limited_allocator, main, message_data,
-//! split_tree, untouched_pool, wasm_page_pool).
+//! split_tree, untouched_pool, wasm_page_pool), plus `array_list` (the
+//! port's one `std.ArrayListUnmanaged` for `Copy` elements).
 //!
 //! PORT STATUS: done
 //!
@@ -13,6 +14,7 @@
 //! (`std.atomic.cache_line`, `std.heap` for `UntouchedPool`). It has NO
 //! dependency on the ghostty tree (R3) and is fully Miri-able (R6).
 
+pub mod array_list;
 pub mod blocking_queue;
 pub mod cache_table;
 pub mod circ_buf;
