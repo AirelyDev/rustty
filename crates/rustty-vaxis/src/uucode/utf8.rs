@@ -1,4 +1,4 @@
-//! `uucode/src/utf8.zig` (2826a37a; unchanged from 0.1.0 except its tests) — Björn
+//! `uucode/src/utf8.zig` (9d555245; unchanged from 0.1.0 except its tests, and from 2826a37a) — Björn
 //! Höhrmann's UTF-8 decoder DFA, ported verbatim.
 //!
 //! See https://bjoern.hoehrmann.de/utf-8/decoder/dfa/

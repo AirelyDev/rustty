@@ -4,17 +4,19 @@
 //! (VAXIS_C1B_DESIGN.md §3). It parses the vendored UCD corpus under `ucd/` and writes
 //! `uucode_tables.rs` into `OUT_DIR`, `include!`d by `src/uucode/tables.rs`.
 //!
-//! REVISION (parity tail S-10b, NON_PORTS.md §G2): at the reference pin 20abdb50a,
-//! libvaxis 0.6.0 does not build its own uucode; ghostty passes `external_uucode = true`
-//! and wires in its singleton uucode module, uucode **2826a37a** built with ghostty's
-//! `src/build/uucode_config.zig` (`SharedDeps.zig:24-78, 512-519`; the four fields come
-//! from its `libvaxis_only` + `runtime` tables and the config does not alter them). So
-//! this generator follows uucode 2826a37a's `src/components.zig` (`UnicodeData`,
+//! REVISION (parity tail S-10b, NON_PORTS.md §G2; bumped by P7-W10 T2): at the
+//! reference pin 12752b2ac, libvaxis 0.6.0 does not build its own uucode; ghostty passes
+//! `external_uucode = true` and wires in its singleton uucode module, uucode **9d555245**
+//! (ghostty 12542b392 "deps: Update uucode for Unicode 18") built with ghostty's
+//! `src/build/uucode_config.zig` (`SharedDeps.zig`; the four fields come from its
+//! `libvaxis_only` + `runtime` tables and the config does not alter them). So this
+//! generator follows uucode 9d555245's `src/components.zig` (`UnicodeData`,
 //! `EastAsianWidth`, `GraphemeBreak`, `DerivedCoreProperties`, `EmojiData`,
-//! `GraphemeBreakDerived`) over its UCD **17.0.0** corpus, no longer uucode 0.1.0's
-//! `src/build/Ucd.zig` + `src/build/tables.zig` over UCD 16.0.0. The per-code-point
-//! values are proven equal to the Zig oracle's `uucode.get` over 0..=0x10FFFF (S-10b
-//! differential, NEW-FINDINGS.md N240).
+//! `GraphemeBreakDerived`) over its UCD **18.0.0** corpus (17.0.0 / uucode 2826a37a
+//! before P7-W10 T2; uucode 0.1.0's `src/build/Ucd.zig` + `src/build/tables.zig` over
+//! UCD 16.0.0 before S-10b). The per-code-point values are proven equal to the Zig
+//! oracle's `uucode.get` over 0..=0x10FFFF (the S-10b differential,
+//! `.port/phase-3/w9-vaxis-diff.sh`, NEW-FINDINGS.md N240).
 //!
 //! Representation freedom (design §3.3): the uucode table is *unpacked*, so there is
 //! no canonical stage2 bit layout to reproduce — only the per-cp *values* must be
@@ -52,7 +54,7 @@ const INCB_LINKER: u8 = 1;
 const INCB_CONSONANT: u8 = 2;
 const INCB_EXTEND: u8 = 3;
 
-// ---- GraphemeBreak discriminants (types.zig:121-144, order pinned) ----
+// ---- GraphemeBreak discriminants (types.zig:121-150, 9d555245, order pinned) ----
 const GB_OTHER: u8 = 0;
 const GB_CONTROL: u8 = 1;
 const GB_PREPEND: u8 = 2;
@@ -71,8 +73,9 @@ const GB_EXTENDED_PICTOGRAPHIC: u8 = 14;
 const GB_EMOJI_MODIFIER_BASE: u8 = 15;
 const GB_EMOJI_MODIFIER: u8 = 16;
 const GB_INDIC_CONJUNCT_BREAK_EXTEND: u8 = 17;
-const GB_INDIC_CONJUNCT_BREAK_LINKER: u8 = 18;
-const GB_INDIC_CONJUNCT_BREAK_CONSONANT: u8 = 19;
+const GB_INDIC_CONJUNCT_BREAK_LINKER_EXTEND: u8 = 18;
+const GB_INDIC_CONJUNCT_BREAK_LINKER_OTHER: u8 = 19;
+const GB_INDIC_CONJUNCT_BREAK_CONSONANT: u8 = 20;
 
 fn main() {
     let ucd = Path::new(env!("CARGO_MANIFEST_DIR")).join("ucd");
@@ -106,7 +109,7 @@ fn main() {
     }
 
     // 256-block dedup (the 2-stage layout of uucode 0.1.0's tables.zig:1001-1014, kept as
-    // the port's own representation: 2826a37a's generate.zig layout is not reproduced,
+    // the port's own representation: 9d555245's generate.zig layout is not reproduced,
     // only the per-cp values are pinned). Offsets assigned in scan order.
     let mut stage1: Vec<u32> = Vec::with_capacity(N / 256);
     let mut stage2: Vec<u16> = Vec::new();
@@ -402,7 +405,7 @@ fn parse_derived_core_properties(bytes: &[u8]) -> Vec<u8> {
     incb
 }
 
-// ---- EmojiData → the six emoji flags (components.zig `EmojiData`, 2826a37a) ----
+// ---- EmojiData → the six emoji flags (components.zig `EmojiData`, 9d555245) ----
 
 /// The `EmojiData` component's rows, restricted to the flags the `grapheme_break`
 /// derivation and the `is_emoji_presentation` field read (`is_emoji` is parsed and
@@ -450,7 +453,7 @@ fn parse_emoji_data(bytes: &[u8]) -> EmojiFlags {
     flags
 }
 
-// ---- grapheme_break derivation (components.zig `GraphemeBreakDerived`, 2826a37a) ----
+// ---- grapheme_break derivation (components.zig `GraphemeBreakDerived`, 9d555245) ----
 
 fn derive_grapheme_break(cp: u32, emoji: &EmojiFlags, incb: u8, ogb: u8) -> u8 {
     let i = cp as usize;
@@ -539,13 +542,13 @@ fn derive_grapheme_break(cp: u32, emoji: &EmojiFlags, incb: u8, ogb: u8) -> u8 {
                 GB_INDIC_CONJUNCT_BREAK_EXTEND
             }
         }
-        INCB_LINKER => {
-            assert!(
-                ogb == OGB_EXTEND,
-                "InCB linker cp {cp:x} is not original `extend`"
-            );
-            GB_INDIC_CONJUNCT_BREAK_LINKER
-        }
+        // Unicode 18 gives some GCB=Other code points InCB=Linker (U+1CF5, U+1CF6,
+        // U+11A3A), so the linker splits on the original grapheme break.
+        INCB_LINKER => match ogb {
+            OGB_EXTEND => GB_INDIC_CONJUNCT_BREAK_LINKER_EXTEND,
+            OGB_OTHER => GB_INDIC_CONJUNCT_BREAK_LINKER_OTHER,
+            _ => unreachable!("InCB linker cp {cp:x} is original grapheme break {ogb}"),
+        },
         INCB_CONSONANT => {
             assert!(
                 ogb == OGB_OTHER,
@@ -569,8 +572,8 @@ fn pack(eaw: u8, gb: u8, gc: u8, emoji_pres: bool) -> u16 {
 fn emit(stage1: &[u32], stage2: &[u16]) {
     let mut out = String::with_capacity(stage2.len() * 6 + stage1.len() * 6 + 4096);
     out.push_str(
-        "// @generated by build.rs from the vendored UCD 17.0.0 corpus. DO NOT EDIT.\n\
-         // The per-cp values of uucode 2826a37a's four vaxis fields, as 2-stage tables\n\
+        "// @generated by build.rs from the vendored UCD 18.0.0 corpus. DO NOT EDIT.\n\
+         // The per-cp values of uucode 9d555245's four vaxis fields, as 2-stage tables\n\
          // (VAXIS_C1B_DESIGN.md §3): stage2 holds each `Data` packed as a 14-bit u16\n\
          // (eaw:3 | grapheme_break:5 | general_category:5 | is_emoji_presentation:1).\n\n",
     );

@@ -4,11 +4,10 @@
 //! src/unicode/symbols_uucode.zig) built against uucode 0.2.0 with
 //! ghostty's src/build/uucode_config.zig.
 //!
-//! Re-generated on 2026-09-23 (S-10a, `.port/phase-3/NON_PORTS.md` §G1) at the
-//! reference pin 20abdb50a, i.e. uucode 0.2.0 @ 2826a37a with that pin's
-//! rewritten `uucode_config.zig`: the regenerated arrays are identical,
-//! element for element, to the ones this file held from the pre-bump
-//! revision.
+//! Re-generated on 2026-09-28 (P7-W10 T2) for ghostty 12542b392 "deps: Update
+//! uucode for Unicode 18" at the reference pin 12752b2ac, i.e. uucode 0.2.0 @
+//! 9d555245 (UCD 18.0.0) with that pin's `uucode_config.zig`
+//! (`.port/phase-7/w10-t2-regen-unicode.py`).
 
 pub const STAGE1: [u16; 8192] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,

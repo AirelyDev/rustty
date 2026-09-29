@@ -12,8 +12,8 @@
 //! CHUNK 1b adds the width/grapheme surface:
 //! - [`gwidth`] — `gwidth.zig` (grapheme-width Method/eawToWidth/gwidth, 11-test pin)
 //! - [`unicode`] — `unicode.zig` (Old-API grapheme iterator wrapper)
-//! - [`uucode`] — the vendored `uucode` runtime subset (2826a37a since S-10b; types/get/grapheme/utf8
-//!   + the stage1/stage2 tables `build.rs` reproduces from the vendored UCD 17.0.0)
+//! - [`uucode`] — the vendored `uucode` runtime subset (9d555245 since P7-W10 T2, 2826a37a since S-10b; types/get/grapheme/utf8
+//!   + the stage1/stage2 tables `build.rs` reproduces from the vendored UCD 18.0.0)
 //!
 //! CHUNK 2 adds the RENDERING layer:
 //! - [`screen`] — `Screen.zig` (the flat `Vec<Cell<'a>>` cell buffer)

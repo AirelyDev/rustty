@@ -8549,6 +8549,85 @@ mod tests {
         t.deinit(Global);
     }
 
+    // RUSTTY: P7 Review Focus 4 (uucode 9d555245, Unicode 18, ghostty
+    // 12542b392). Upstream changed no terminal test for the bump; these pin
+    // the new East_Asian_Width=W ranges end to end through `print`:
+    // Jurchen U+18E00, Small Seal U+3D000 and the E18.0 emoji U+1F6D9 each
+    // advance the cursor by two cells.
+    #[test]
+    fn terminal_prints_unicode18_wide_ranges_as_two_cells() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        for (i, cp) in [0x18E00u32, 0x3D000, 0x1F6D9].into_iter().enumerate() {
+            t.print(cp).unwrap();
+            let x = 2 * (i as u16 + 1);
+            assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+            assert_eq!(
+                unsafe { (*t.screens.active).cursor.x },
+                x,
+                "U+{cp:X} should be two cells wide"
+            );
+
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(x - 2, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, cp);
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(x - 1, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerTail);
+        }
+
+        t.deinit(Global);
+    }
+
+    // RUSTTY: P7 Review Focus 4. Unicode 18 gives U+1CF5 VEDIC SIGN
+    // JIHVAMULIYA InCB=Linker while its Grapheme_Cluster_Break stays Other
+    // (uucode's new `indic_conjunct_break_linker_other`). With mode 2027 it
+    // starts a new cluster after 'a' (no GB9 extend), but GB9c now joins
+    // `Linker Extend* x Consonant`, so U+0300 and U+0915 DEVANAGARI KA stay in
+    // its cell; KA is not zero-width in a grapheme, so the cluster is wide.
+    #[test]
+    fn terminal_keeps_incb_linker_other_in_one_cluster() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        // Enable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        t.print('a' as u32).unwrap();
+        t.print(0x1CF5).unwrap();
+        t.print(0x0300).unwrap();
+        t.print(0x0915).unwrap();
+
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 3);
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 'a' as u32);
+            assert!(!unsafe { (*cell).has_grapheme() });
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(1, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0x1CF5);
+            assert!(unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+            let cps =
+                unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }
+                    .unwrap();
+            assert_eq!(cps, &[0x0300, 0x0915]);
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(2, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0);
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerTail);
+        }
+
+        t.deinit(Global);
+    }
+
     // test "Terminal: Fitzpatrick skin tone next valid base"
     #[test]
     fn terminal_fitzpatrick_skin_tone_next_valid_base() {

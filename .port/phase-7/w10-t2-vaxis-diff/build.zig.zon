@@ -1,0 +1,32 @@
+.{
+    .name = .p7_vaxisprobe,
+    .version = "0.0.0",
+    .fingerprint = 0x7369c81c505b023d,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        // uucode 0.2.0 — the EXACT dependency ghostty pins (see ghostty
+        // build.zig.zon). This is harness-only tooling (R3): no rustty Cargo
+        // crate depends on uucode.
+        //
+        // Bumped in lockstep with ghostty e8525c0fd "Update to Zig 0.16.0",
+        // which moved this pin from
+        //   uucode-0.2.0-ZZjBPqZVVABQepOqZHR7vV_NcaN-wats0IB6o-Exj6m9
+        // to jacobsandlund/uucode 2826a37a and rewrote
+        // src/build/uucode_config.zig for the new component API.
+        //
+        // Bumped again in lockstep with ghostty 12542b392 "deps: Update uucode
+        // for Unicode 18" (reference pin 12752b2ac, P7-W10 T2): 2826a37a ->
+        // 9d555245 (UCD 17.0.0 -> 18.0.0, the InCB linker split into
+        // `indic_conjunct_break_linker_{extend,other}`, and `BreakState` as a
+        // packed u3). uucode_config.zig is re-copied verbatim from that pin
+        // (it gains `.packing = .unpacked`, a Zig 0.16 comptime workaround,
+        // 7644e6d62; values unchanged). rustty's tables are regenerated from
+        // this revision and this gate re-proves them 0-diff.
+        .uucode = .{
+            // jacobsandlund/uucode
+            .url = "https://github.com/jacobsandlund/uucode/archive/9d55524551411b493cca41ca06363625d90aff1e.tar.gz",
+            .hash = "uucode-0.2.0-ZZjBPuuFVgC8YZ8eld4fOKsZANLIhTFMzULQxhkLi1C7",
+        },
+    },
+    .paths = .{""},
+}
