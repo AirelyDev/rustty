@@ -65,7 +65,8 @@ scheduler is explored over 16 seeds (`-Zmiri-many-seeds=0..16`).
 | `fixed_vs_gtk_main` | the fix vs the GTK main thread (realize flags + `takeFrame`) | **CLEAN** | **CLEAN** |
 | `split_vs_sync_draw_whole` | ruling 32 render side vs a main-thread sync draw that retags the whole renderer under the lock | **UB** | **UB** |
 | `split_vs_gtk_main_whole` | ruling 32 render side vs GTK flag writes through a whole-renderer `&mut` under the lock | **UB** | **UB** |
-| `split_vs_sync_draw_narrow` | ruling 32 render side vs the narrow sync draw (the shipped shape) | **CLEAN** | **CLEAN** |
+| `split_vs_sync_draw_trampoline_whole` | ruling 32 render side vs a narrow sync draw whose completion trampoline borrows the whole renderer (`&self` `frame_completed`, the pre-round-2 shape) | **UB** | **UB** |
+| `split_vs_sync_draw_narrow` | ruling 32 render side vs the narrow sync draw, trampoline included (`frame_completed_raw`; the shipped shape) | **CLEAN** | **CLEAN** |
 | `split_vs_gtk_main_narrow` | ruling 32 render side vs narrow flag writes + `takeFrame` (the shipped shape) | **CLEAN** | **CLEAN** |
 
 Every UB row is an aliasing-model violation (SB: "not granting access to tag … which
@@ -92,6 +93,13 @@ the main thread's entries narrow: `display_realized_raw` / `display_unrealized_r
 `update_screen_size_uniforms_raw`, `upload_background_image_raw`,
 `update_custom_shader_uniforms_for_frame_raw`), and the sync draw no longer calls
 `animation_wake` (`sync` is tested first). Measured 2026-09-29, same toolchain.
+
+Fix round 2: on a sync draw `Frame::complete` runs the completion trampoline on the
+main thread (`metal_buffer_completed` → `frame_completed`), which borrowed the whole
+renderer (`&self`). `split_vs_sync_draw_trampoline_whole` shows that is UB against
+the ruling-32 render side ("retag read of type `Fixed`"); the shipped
+`frame_completed_raw` touches only `health`, `surface_mailbox` and `swap_chain`
+through place expressions, and `split_vs_sync_draw_narrow` now models it.
 
 ## Run
 

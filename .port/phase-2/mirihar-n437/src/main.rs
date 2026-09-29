@@ -146,6 +146,8 @@ struct Fixed {
     swap_chain: Option<Vec<u8>>,
     /// The Kitty image state `update_frame` updates under a brief lock.
     images: u64,
+    /// `health` (an atomic in the renderer).
+    health: std::sync::atomic::AtomicBool,
 }
 
 impl Fixed {
@@ -162,6 +164,7 @@ impl Fixed {
             uniforms: [0.0; 4],
             swap_chain: None,
             images: 0,
+            health: std::sync::atomic::AtomicBool::new(true),
         }
     }
 
@@ -344,19 +347,64 @@ fn run_split(main_side: fn(P<Fixed>, &DrawMutex, &LatestFrame<Frame>)) {
     drop(unsafe { Box::from_raw(p.0) });
 }
 
-/// The macOS sync draw with narrow field access only (`draw_frame_locked`'s raw
-/// root plus the `*_raw` helpers): never a reference to the whole renderer.
+/// The macOS sync draw's body with narrow field access only (`draw_frame_locked`'s
+/// raw root plus the `*_raw` helpers).
+unsafe fn narrow_draw_body(p: P<Fixed>) {
+    unsafe {
+        if (*p.0).swap_chain.is_none() {
+            (*p.0).swap_chain = Some(vec![0; 16]);
+        }
+        let uniforms: &mut [f32; 4] = &mut (*p.0).uniforms;
+        uniforms[0] += 1.0;
+        (*p.0).cells_rebuilt = false;
+        (*p.0).latest_frame.push(Frame(vec![1, 2, 3]));
+    }
+}
+
+/// The completion trampoline a sync draw runs on the main thread
+/// (`Frame::complete(sync = true)` → `metal_buffer_completed` → `frame_completed`),
+/// shipped shape: `frame_completed_raw`, place expressions on `health`,
+/// `surface_mailbox` and `swap_chain` only.
+unsafe fn frame_completed_narrow(p: *const Fixed) {
+    use std::sync::atomic::Ordering::SeqCst;
+    unsafe {
+        if (*p).health.load(SeqCst) {
+            (*p).health.store(true, SeqCst);
+        }
+        let _ = (*p).swap_chain.as_ref().map(|c| c.len());
+    }
+}
+
+/// The pre-round-2 shape: `(*renderer).frame_completed(health)`, a `&self` over
+/// the whole renderer.
+fn frame_completed_whole(r: &Fixed) {
+    use std::sync::atomic::Ordering::SeqCst;
+    if r.health.load(SeqCst) {
+        r.health.store(true, SeqCst);
+    }
+    let _ = r.swap_chain.as_ref().map(|c| c.len());
+}
+
+/// The macOS sync draw with narrow field access only, trampoline included:
+/// never a reference to the whole renderer.
 fn main_sync_draw_narrow(p: P<Fixed>, lock: &DrawMutex, _slot: &LatestFrame<Frame>) {
     lock.lock();
     unsafe {
         if (*p.0).display_realized {
-            if (*p.0).swap_chain.is_none() {
-                (*p.0).swap_chain = Some(vec![0; 16]);
-            }
-            let uniforms: &mut [f32; 4] = &mut (*p.0).uniforms;
-            uniforms[0] += 1.0;
-            (*p.0).cells_rebuilt = false;
-            (*p.0).latest_frame.push(Frame(vec![1, 2, 3]));
+            narrow_draw_body(p);
+            frame_completed_narrow(p.0);
+        }
+    }
+    lock.unlock();
+}
+
+/// The same sync draw whose trampoline borrows the whole renderer (`&self`).
+fn main_sync_draw_trampoline_whole(p: P<Fixed>, lock: &DrawMutex, _slot: &LatestFrame<Frame>) {
+    lock.lock();
+    unsafe {
+        if (*p.0).display_realized {
+            narrow_draw_body(p);
+            frame_completed_whole(&*p.0);
         }
     }
     lock.unlock();
@@ -462,6 +510,9 @@ fn main() {
         // still covers the render thread's unlocked narrow view.
         "split_vs_sync_draw_whole" => run_split(main_sync_draw),
         "split_vs_gtk_main_whole" => run_split(main_gtk),
+        // UB expected (fix round 2): a narrow sync draw whose completion
+        // trampoline borrows the whole renderer (`&self` `frame_completed`).
+        "split_vs_sync_draw_trampoline_whole" => run_split(main_sync_draw_trampoline_whole),
         // CLEAN expected: every main-thread access narrow.
         "split_vs_sync_draw_narrow" => run_split(main_sync_draw_narrow),
         "split_vs_gtk_main_narrow" => run_split(main_gtk_narrow),

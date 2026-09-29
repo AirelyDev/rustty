@@ -1670,6 +1670,16 @@ mod macos_impl {
         /// Our overlay state, if any.
         pub overlay: Option<Overlay>,
 
+        /// The overlay `overlay` replaced last frame, kept so the next rebuild can
+        /// reuse its surface. Only the render thread touches it.
+        //
+        // rustty-only (R13, UPSTREAM-DEFECTS.md UD363): the reference rebuilds
+        // `self.overlay` in place without the draw mutex while the macOS main
+        // thread's sync draw reads it under the mutex. The port builds the next
+        // overlay into a local (reusing this one) without the lock and swaps it
+        // into `overlay` under the lock.
+        pub overlay_spare: Option<Overlay>,
+
         /// The base timestamp for the Kitty graphics animation clock.
         /// Animation frame timing is expressed as milliseconds since
         /// this instant. Set on the first frame update that observes
@@ -2392,6 +2402,7 @@ mod macos_impl {
                 terminal_state: RenderState::empty(),
                 terminal_state_frame_count: 0,
                 overlay: None,
+                overlay_spare: None,
             };
 
             // Ensure our undefined values above are correctly initialized.
@@ -2444,6 +2455,10 @@ mod macos_impl {
             // if (self.overlay) |*overlay| overlay.deinit(self.alloc);
             // Port: `Overlay::deinit(&mut self)` takes NO allocator arg (overlay.rs:176).
             if let Some(overlay) = &mut self.overlay {
+                overlay.deinit();
+            }
+            // (UD363: the reused overlay the port keeps beside it.)
+            if let Some(overlay) = &mut self.overlay_spare {
                 overlay.deinit();
             }
             // self.terminal_state.deinit(self.alloc);
@@ -5011,6 +5026,22 @@ mod macos_impl {
             &mut self,
             features: &[crate::overlay::Feature],
         ) -> Result<(), crate::overlay::InitError> {
+            Self::rebuild_overlay_into(
+                &mut self.overlay,
+                &self.size,
+                &self.terminal_state,
+                features,
+            )
+        }
+
+        /// `rebuildOverlay` over an explicit overlay slot, so `update_frame` can
+        /// build the next overlay into a local without the draw mutex (UD363).
+        pub fn rebuild_overlay_into(
+            slot: &mut Option<Overlay>,
+            size: &Size,
+            terminal_state: &RenderState,
+            features: &[crate::overlay::Feature],
+        ) -> Result<(), crate::overlay::InitError> {
             // const start = std.time.Instant.now() catch unreachable;
             // const start_micro = std.time.microTimestamp();
             // defer {
@@ -5028,9 +5059,9 @@ mod macos_impl {
             // If we have no features enabled, don't build an overlay.
             // If we had a previous overlay, deallocate it.
             if features.is_empty() {
-                if let Some(old) = self.overlay.as_mut() {
+                if let Some(old) = slot.as_mut() {
                     old.deinit();
-                    self.overlay = None;
+                    *slot = None;
                 }
 
                 return Ok(());
@@ -5038,7 +5069,7 @@ mod macos_impl {
 
             // If we had a previous overlay, clear it. Otherwise, init.
             'overlay: {
-                if let Some(v) = self.overlay.as_mut() {
+                if let Some(v) = slot.as_mut() {
                     'existing: {
                         // Verify that our overlay size matches our screen
                         // size as we know it now. If not, deinit and reinit.
@@ -5046,14 +5077,14 @@ mod macos_impl {
                         // stores as i32 but we always init with a u32.
                         let width: u32 = v.surface.get_width() as u32;
                         let height: u32 = v.surface.get_height() as u32;
-                        let term_size = self.size.terminal();
+                        let term_size = size.terminal();
                         if width != term_size.width || height != term_size.height {
                             break 'existing;
                         }
 
                         // We also depend on cell size.
-                        if v.cell_size.width != self.size.cell.width
-                            || v.cell_size.height != self.size.cell.height
+                        if v.cell_size.width != size.cell.width
+                            || v.cell_size.height != size.cell.height
                         {
                             break 'existing;
                         }
@@ -5066,26 +5097,20 @@ mod macos_impl {
                 }
 
                 // If we reached this point we want to reset our overlay.
-                if let Some(v) = self.overlay.as_mut() {
+                if let Some(v) = slot.as_mut() {
                     v.deinit();
-                    self.overlay = None;
+                    *slot = None;
                 }
 
-                assert!(self.overlay.is_none());
-                let new: Overlay = Overlay::init(self.size)?;
-                self.overlay = Some(new);
+                assert!(slot.is_none());
+                let new: Overlay = Overlay::init(*size)?;
+                *slot = Some(new);
             }
 
             // overlay.applyFeatures(alloc, &self.terminal_state, features);
-            // SAFETY: `self.overlay` and `self.terminal_state` are DISJOINT fields; the
-            // raw ptr detaches the immutable `terminal_state` read from the `&mut
-            // self.overlay` borrow (a field-level reborrow does not retag
-            // `terminal_state`).
-            let terminal_state: *const RenderState = &self.terminal_state;
-            self.overlay
-                .as_mut()
+            slot.as_mut()
                 .unwrap()
-                .apply_features(unsafe { &*terminal_state }, features);
+                .apply_features(terminal_state, features);
             Ok(())
         }
     }
@@ -5211,6 +5236,8 @@ mod macos_impl {
                 preedit: Option<state::Preedit>,
                 scrollbar: Scrollbar,
                 overlay_features: Vec<crate::overlay::Feature>,
+                /// `self.size`, copied under the draw mutex for the overlay rebuild (UD363).
+                size: Size,
             }
 
             // The renderer-thread state carries its terminal behind a `*mut Terminal`
@@ -5395,12 +5422,18 @@ mod macos_impl {
                 // If we have any virtual references, we must also rebuild our
                 // kitty state on every frame because any cell change can move
                 // an image.
-                // N437 / ruling 32: the lock is taken around the check as well as the
-                // update. `kittyRequiresUpdate` reads the image state that the main
-                // thread's draw writes under the lock; unlocked, that read would race it.
-                {
+                // PORT NOTE (N437 / ruling 32, Rust aliasing, not a reference defect):
+                // the reference reads `kittyRequiresUpdate` without the lock; the
+                // fields it reads are ones the draw never writes. In the port the
+                // check forms a reference to the whole `images` state, which the main
+                // thread's draw mutates under the lock (`images.upload`), so the lock is
+                // taken around the check as well as the update. The same lock hold
+                // copies `size`, which the draw writes on a resize (`self.size.screen`),
+                // for the overlay rebuild below.
+                let size_snapshot: Size = {
                     lock.lock();
                     let _unlock = DrawUnlock(lock);
+                    let size_snapshot = unsafe { (*self_ptr).size };
                     if unsafe { (*self_ptr).images.kitty_requires_update(&*t) } {
                         // We need to grab the draw mutex since this updates
                         // our image state that drawFrame uses.
@@ -5415,7 +5448,8 @@ mod macos_impl {
                             )
                         };
                     }
-                }
+                    size_snapshot
+                };
 
                 // Get our OSC8 links we're hovering if we have a mouse.
                 // This requires terminal state because of URLs.
@@ -5466,6 +5500,7 @@ mod macos_impl {
                     preedit,
                     scrollbar,
                     overlay_features,
+                    size: size_snapshot,
                 }
             };
 
@@ -5555,22 +5590,35 @@ mod macos_impl {
             // after `endFrame`; the `endFrame` defer is registered FIRST, so it runs
             // LAST, after this reset (in `update_frame`, after this body returns).
 
+            // Rebuild the overlay image if we have one. We can do this
+            // outside of any critical areas.
+            // self.rebuildOverlay(critical.overlay_features) catch |err|
+            //     log.warn("error rebuilding overlay surface err={}", .{err});
+            //
+            // PORT NOTE: reference defect (R13), UD363. The reference rebuilds
+            // `self.overlay` in place here, without the lock, while the macOS
+            // main thread's sync draw reads `self.overlay != null` under it. The
+            // port builds the next overlay into a local (reusing last frame's
+            // replaced one, `overlay_spare`) and swaps it in under the lock below.
+            let mut next_overlay: Option<Overlay> = unsafe { (*self_ptr).overlay_spare.take() };
+            if let Err(err) = Self::rebuild_overlay_into(
+                &mut next_overlay,
+                &critical.size,
+                terminal_state,
+                &critical.overlay_features,
+            ) {
+                log::warn!(target: LOG_SCOPE, "error rebuilding overlay surface err={err:?}");
+            }
+
             // Acquire the draw mutex for all remaining state updates.
             // (N437 / ruling 32: the whole `&mut` exists only here, under the
             // lock, after the last use of the unlocked view above.)
-            let sync = unsafe {
+            let (sync, old_overlay) = unsafe {
                 Self::with_locked(self_ptr, lock, move |r| {
-                    // PORT NOTE (N437 / ruling 32): the reference rebuilds the
-                    // overlay "outside of any critical areas", but the main
-                    // thread's draw reads `self.overlay` under the lock
-                    // (`generic.zig:1964`), so an unlocked write would race it;
-                    // it runs first under the lock instead.
-                    // Rebuild the overlay image if we have one. We can do this
-                    // outside of any critical areas.
-                    // catch |err| log.warn("error rebuilding overlay surface err={}", .{err});
-                    if let Err(err) = r.rebuild_overlay(&critical.overlay_features) {
-                        log::warn!(target: LOG_SCOPE, "error rebuilding overlay surface err={err:?}");
-                    }
+                    // PORT NOTE: reference defect (R13), UD363. The overlay was built
+                    // into `next_overlay` above, without the lock (as the reference
+                    // rebuilds it); only the swap into `self.overlay` happens here.
+                    let old_overlay = core::mem::replace(&mut r.overlay, next_overlay);
 
                     // Build our GPU cells.
                     //
@@ -5650,9 +5698,15 @@ mod macos_impl {
                     // takes them after it, racing the main thread's `drawFrame(sync)`
                     // clearing `cells_rebuilt`. Reading here is the outcome where
                     // that draw comes after the resync.
-                    r.display_link_sync()
+                    (r.display_link_sync(), old_overlay)
                 })
             };
+            // UD363: keep the replaced overlay for the next rebuild to reuse, or,
+            // with no overlay configured, release it as the reference does.
+            match old_overlay {
+                Some(mut old) if unsafe { (*self_ptr).overlay.is_none() } => old.deinit(),
+                old => unsafe { (*self_ptr).overlay_spare = old },
+            }
 
             // Start the display link now that the rebuilt frame is ready.
             // (`6688aa072`: the link is parked while idle, so the rebuild that
@@ -6116,7 +6170,8 @@ mod macos_impl {
             }
         }
         // block.renderer.frameCompleted(health);
-        unsafe { (*renderer).frame_completed(health) };
+        // (N437 / ruling 32: the raw, narrow form; see `frame_completed_raw`.)
+        unsafe { Renderer::frame_completed_raw(renderer, health) };
     }
 
     impl Renderer {
@@ -6403,31 +6458,52 @@ mod macos_impl {
         // trampoline's reborrow a SHARED reborrow (SB/TB-cleaner; frame is unused after
         // `complete()`, so the whole-`&self` reborrow is clean — mirihar).
         pub fn frame_completed(&self, health: crate::Health) {
-            // If our health value hasn't changed, then we do nothing. We don't
-            // do a cmpxchg here because strict atomicity isn't important.
-            // if (self.health.load(.seq_cst) != health) {
-            if self.health.load() != health {
-                // self.health.store(health, .seq_cst);
-                self.health.store(health);
+            // SAFETY: `self` is a live renderer; the raw form only reads through it.
+            unsafe { Self::frame_completed_raw(self, health) }
+        }
 
-                // Our health value changed, so we notify the surface so that it
-                // can do something about it.
-                // _ = self.surface_mailbox.push(.{ .renderer_health = health }, .{ .forever = {} });
-                //   — REAL (seam §B.2 resolved): core's sink re-wraps this into
-                //     `apprt::surface::Message::RendererHealth` and enqueues it.
-                //     Detached (offscreen) mailboxes still return 0.
-                let _ = self.surface_mailbox.push(
-                    SurfaceMessage::RendererHealth(health),
-                    MailboxTimeout::Forever,
-                );
+        /// [`Self::frame_completed`] through a raw root: it reaches only
+        /// `health`, `surface_mailbox` and `swap_chain`, through place
+        /// expressions, never a reference to the whole renderer.
+        //
+        // N437 / ruling 32 (P7-W7 T2 fix round 2): on a sync draw `Frame::complete`
+        // runs this on the MAIN thread (`metal/frame.rs`), under the draw mutex,
+        // while the render thread may be working on its own fields unlocked in
+        // `update_frame_raw`; a whole-renderer `&self` would race those writes
+        // (`.port/phase-2/mirihar-n437` `split_*_trampoline_*`). Off the sync path
+        // it runs on the Metal completion thread without the lock (N440).
+        ///
+        /// # Safety
+        /// `self_ptr` is a valid, whole-`Renderer`-provenance pointer whose
+        /// swap chain exists (a frame of it is completing).
+        pub unsafe fn frame_completed_raw(self_ptr: *const Renderer, health: crate::Health) {
+            unsafe {
+                // If our health value hasn't changed, then we do nothing. We don't
+                // do a cmpxchg here because strict atomicity isn't important.
+                // if (self.health.load(.seq_cst) != health) {
+                if (*self_ptr).health.load() != health {
+                    // self.health.store(health, .seq_cst);
+                    (*self_ptr).health.store(health);
+
+                    // Our health value changed, so we notify the surface so that it
+                    // can do something about it.
+                    // _ = self.surface_mailbox.push(.{ .renderer_health = health }, .{ .forever = {} });
+                    //   — REAL (seam §B.2 resolved): core's sink re-wraps this into
+                    //     `apprt::surface::Message::RendererHealth` and enqueues it.
+                    //     Detached (offscreen) mailboxes still return 0.
+                    let _ = (*self_ptr).surface_mailbox.push(
+                        SurfaceMessage::RendererHealth(health),
+                        MailboxTimeout::Forever,
+                    );
+                }
+
+                // Always release our semaphore. The swap chain is
+                // guaranteed to exist here: it is only torn down after
+                // waiting for all in-flight frames to complete, and this
+                // callback is what signals that completion.
+                // self.swap_chain.?.releaseFrame();
+                (*self_ptr).swap_chain.as_ref().unwrap().release_frame();
             }
-
-            // Always release our semaphore. The swap chain is
-            // guaranteed to exist here: it is only torn down after
-            // waiting for all in-flight frames to complete, and this
-            // callback is what signals that completion.
-            // self.swap_chain.?.releaseFrame();
-            self.swap_chain.as_ref().unwrap().release_frame();
         }
 
         /// Draw the frame to the screen.
@@ -7885,6 +7961,7 @@ mod macos_impl {
                 terminal_state: RenderState::empty(),
                 terminal_state_frame_count: 0,
                 overlay: None,
+                overlay_spare: None,
             })
         }
 

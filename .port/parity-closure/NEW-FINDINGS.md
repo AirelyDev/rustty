@@ -8670,6 +8670,18 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   presenter), so it forms no reference to the renderer; prove it on a `.port/phase-2/mirihar-*`
   harness (UB before, clean after, SB and TB). UD362's by-reading Metal note (the `.renderer_health`
   `.forever` push before `releaseFrame`) belongs in the same task.
+- **update (fix round 2)**: on the SYNC path the trampoline runs on the main thread under the lock; its
+  whole-renderer `&self` raced the ruling-32 render side, so `frame_completed` is now
+  `frame_completed_raw` (place expressions on `health`, `surface_mailbox`, `swap_chain` only;
+  harness `split_vs_sync_draw_trampoline_whole` UB, `split_vs_sync_draw_narrow` CLEAN). The async
+  (completion-thread, unlocked) half of this finding stays OPEN.
+- **Metal deadlock variants to fix in the same task** (UD362 extension, ruling 36): (a) the completion
+  thread's `.renderer_health` `.forever` push precedes `release_frame`, while the main thread's sync
+  draw holds `draw_mutex` in `next_frame` → `frame_sema.wait()` with all three frames in flight and a
+  full mailbox; (b) on the sync path the main thread itself pushes `.renderer_health` `.forever` into
+  the mailbox only it drains. Fix direction: `release_frame` before the push, and never block the
+  drainer on its own mailbox (defer the push past the draw, as the OpenGL twin does, or push
+  `.instant` from the main thread).
 
 ## N441 — main-thread references to the whole core `Surface` cover the renderer the render thread writes under the draw mutex
 

@@ -3005,6 +3005,32 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - parity row(s):   none. Found by the P7-W7 T2 task review (fix round 1, ruling 31).
 - test:            `generic::linux_impl::tests::linux_opengl_full_mailbox_does_not_deadlock_display_unrealize`: a full test mailbox whose `.forever` push waits up to 3 s for the consumer; the main thread, once the render thread is blocked in that push, calls `display_unrealized_raw` and only then drains. RED with the reference's order ("the render thread blocked in a `.forever` push while holding the draw mutex the main thread needed"), GREEN with the push after the unlock. `frame_completed_pushes_renderer_health_on_transition_only` and the two scrollbar-push tests assert the deferred order.
 - proposed fix:    have `drawFrameLocked` return whether a `.redraw` (and a `.renderer_health`) is pending, and push them in `drawFrame` after `draw_mutex` is released, as `syncDisplayLink` already is.
+- extension (Metal, by reading; P7-W7 T2 fix round 2, ruling 36; NOT fixed in the port yet, owned by N440):
+  - (a) `frameCompleted` (`generic.zig:2012-2025`) pushes `.renderer_health` with `.forever` BEFORE `releaseFrame`. On the Metal completion thread, with all three swap-chain frames in flight and the app mailbox full, the push blocks while the main thread's `drawFrame(sync)` holds `draw_mutex` and waits in `nextFrame` → `frame_sema.wait()` for exactly that release: the main thread (the mailbox's only drainer) waits on the frame slot, the completion thread waits on the mailbox.
+  - (b) on the sync path `metal/Frame.zig` `complete(sync = true)` runs the completion on the main thread itself, so a health change pushes `.renderer_health` with `.forever` into the mailbox that only this thread drains: a full mailbox blocks it forever.
+  - Fix direction: release the frame before the push, and send the push without blocking the drainer (defer it past the draw like the OpenGL fix, or push `.instant` from the main thread and retry).
+- upstream status: NOT YET REPORTED
+
+### UD363 — `updateFrame` rebuilds `self.overlay` without the draw mutex while the macOS sync draw reads it under the mutex (data race)
+
+- kind:            UB (data race; R13)
+- upstream project: ghostty
+- severity:        low (a formal data race on an optional; with the inspector's overlay features on, the draw can read `self.overlay` while it is being deinitialized and replaced)
+- reference:       `src/renderer/generic.zig` at 12752b2ac:
+  - `updateFrame` calls `self.rebuildOverlay(critical.overlay_features)` after the terminal critical section and before taking `draw_mutex` (`:1594-1604`, "We can do this outside of any critical areas");
+  - `rebuildOverlay` (`:2519-2572`) deinitializes `self.overlay`, sets it to `null`, re-inits it, or resets and redraws it in place;
+  - `drawFrameLocked` reads `self.overlay != null` (`:1964`) under `draw_mutex`; on macOS it also runs on the main thread through the Metal layer's display callback (`src/renderer/Metal.zig:172-176`, `drawFrame(true)`), concurrently with the render thread's `updateFrame`.
+- defect:          the render thread writes `self.overlay` with no happens-before relation to the main thread's read of it: a data race. Zig gives it no defined meaning; in Rust it is undefined behaviour.
+- ReleaseSafe:     no safety check sees it; no observed misbehaviour. By reading; not measured.
+- ReleaseFast:     the same.
+- reachability:    macOS with inspector overlay features enabled (the terminal inspector's overlay) during a live resize (CoreAnimation calls the sync draw on the main thread while the render thread updates frames).
+- output needed:   none reliably visible.
+- port handling:
+  - `crates/rustty-renderer/src/generic.rs` and `generic/linux_impl.rs` (P7-W7 T2 fix round 2, ruling 35): `update_frame_impl` builds the next overlay into a local without the lock (`rebuild_overlay_into`, reusing the overlay replaced last frame, kept in the render-thread-only `overlay_spare`), then swaps it into `self.overlay` inside the locked tail; the replaced overlay goes back to `overlay_spare`, or is deinitialized when no overlay is configured. The lock scope is the reference's except for the swap. `self.size`, which the draw writes on a resize, is copied for the rebuild during the (already locked) Kitty block.
+  - `PORT NOTE: reference defect (R13), UD363` at the field, the local build and the swap. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none. Found by the P7-W7 T2 review (fix round 1, candidate C12; ruling 35).
+- test:            `.port/phase-2/mirihar-n437` `split_*` model the ruling-32 scopes (a main-thread access overlapping the render thread's unlocked writes is UB; the shipped narrow shapes are clean under SB and TB); `rebuild_overlay_builds_and_clears` (both twins) covers `rebuild_overlay_into` through `rebuild_overlay`. No test reproduces the race itself (it needs the inspector overlay and a concurrent sync draw).
+- proposed fix:    build the overlay into a local in `updateFrame` and assign `self.overlay` under `draw_mutex` (or take `draw_mutex` around `rebuildOverlay`).
 - upstream status: NOT YET REPORTED
 
 ## Candidates pending verification
@@ -3017,4 +3043,3 @@ Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do
 | C4 | `src/termio/Exec.zig:1045`; `src/apprt/gtk/pre_exec.zig:39,58` | superseded by UD101 (task R13-D) | deadlock | see UD101 | tasks 14d-3, 14e-1 |
 | C5 | `src/font/DeferredFace.zig:154-157, 186-197` | superseded by UD110 (task R13-D) | leak | see UD110 | task 16 |
 | ~~C11~~ | ~~`src/font/face/coretext.zig:1023-1036`; `src/terminal/StringMap` tests~~ | ~~assertions cannot distinguish the fixture under test~~ STRUCK (task R13-D): refuted as a reference defect by the R13 verify pass (those tests assert what they are named for; the insensitivity only limits the port's negative controls) | ~~test-weakness~~ | ported verbatim (S90-F5, S140-F1) | task 17 |
-| C12 | `src/renderer/generic.zig:1596-1606` (`updateFrame` → `rebuildOverlay`, no lock) vs `:1964` (`drawFrameLocked` reads `self.overlay`); also `:1467-1487` (`kittyRequiresUpdate` read before the lock) | the render thread writes `self.overlay` (and reads the Kitty image state) without `draw_mutex` while the macOS main thread's `drawFrame(sync)` reads them under it: a data race | UB (data race) | not ported: both run under the lock (P7-W7 T2 fix round 1, ruling 32; `.port/phase-7/DECISIONS.md` Port notes) | P7-W7 T2 fix round 1 |

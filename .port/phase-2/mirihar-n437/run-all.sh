@@ -6,7 +6,7 @@ printf '%-26s %-6s %-6s\n' candidate SB TB
 for c in shipped_update_frame shipped_animation_wake shipped_set_focus \
          inline_lock_whole_mut latest_frame_inline \
          fixed_vs_sync_draw fixed_vs_gtk_main \
-         split_vs_sync_draw_whole split_vs_gtk_main_whole \
+         split_vs_sync_draw_whole split_vs_gtk_main_whole split_vs_sync_draw_trampoline_whole \
          split_vs_sync_draw_narrow split_vs_gtk_main_narrow; do
   sb=CLEAN; tb=CLEAN
   MIRIFLAGS="-Zmiri-many-seeds=0..16" \
