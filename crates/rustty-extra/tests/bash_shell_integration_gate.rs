@@ -1,11 +1,28 @@
 //! `P7-W11 T1` fix round 1 — wire `bash_shell_integration_exit_status.sh`
 //! into `cargo test` so a regression in `rustty.bash` is caught, instead of
-//! only being provable by hand.
+//! only being provable by hand. Fix round 2 extended the script's own case
+//! coverage (see its header comment) to also exercise `ed7f046ee`
+//! (recognise `declare -ax` / attributed PROMPT_COMMAND arrays) and
+//! `a4031c8e3` (detect our hook inside PROMPT_COMMAND arrays), which
+//! previously had no behavioural test in this wired gate — only the
+//! manually-run, `#[ignore]`d byte-parity KAT
+//! (`xtask`'s `oracle_shell_integration_parity`).
 //!
 //! The script (`crates/rustty-extra/tests/bash_shell_integration_exit_status.sh`)
-//! proves: with `PROMPT_COMMAND` pre-declared as an exported array
-//! (`declare -ax`), a failing command must report exit status 1 through the
-//! OSC 133 `D` mark. It needs a real bash >= 4.4 to exercise that code path
+//! runs several cases and reports a single pass/fail/skip verdict:
+//!   1. with `PROMPT_COMMAND` pre-declared as an empty exported array
+//!      (`declare -ax`), a failing command must report exit status 1
+//!      through the OSC 133 `D` mark;
+//!   2. with `PROMPT_COMMAND` pre-declared as a NON-EMPTY exported array
+//!      (`declare -ax PROMPT_COMMAND=(__prior_marker_hook)`), sourcing must:
+//!      keep it an array, keep the prior entry byte-identical (not merged
+//!      into a wrapped string), and not double-install the hook on a second
+//!      source;
+//!   3. the same, with TWO prior elements, to force the hook-present guard
+//!      to search across a space-joined, multi-element `PROMPT_COMMAND[*]`
+//!      rather than a single already-merged element.
+//!
+//! It needs a real bash >= 4.4 to exercise this hook-installer code path
 //! (macOS ships bash 3.2 as `/bin/bash`, which takes a different branch), so
 //! it exits 77 (the automake SKIP convention) when none is found, 0 on pass,
 //! and any other non-zero on failure.
@@ -38,7 +55,7 @@ fn bash44_required_from(value: Option<&std::ffi::OsStr>) -> bool {
 }
 
 #[test]
-fn declare_ax_prompt_command_reports_exit_status_through_osc_133_d() {
+fn declare_ax_prompt_command_is_installed_and_reports_status_correctly() {
     let script: PathBuf = [
         env!("CARGO_MANIFEST_DIR"),
         "tests",
@@ -72,7 +89,7 @@ fn declare_ax_prompt_command_reports_exit_status_through_osc_133_d() {
             // build's captured stdout) shows this test never actually
             // exercised the array-PROMPT_COMMAND fix.
             println!(
-                "skipping declare_ax_prompt_command_reports_exit_status_through_osc_133_d: {stderr}"
+                "skipping declare_ax_prompt_command_is_installed_and_reports_status_correctly: {stderr}"
             );
         }
         other => {
