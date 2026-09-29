@@ -1,7 +1,7 @@
 //! rustty-wuffs — R1 safe wrapper over the vendored Wuffs image codecs.
 //!
-//! PORTS: ghostty pkg/wuffs/src/main.zig (+ the `png`/`jpeg`/`error`/`swizzle`
-//! submodules). The SAFE `decode` API over the raw `wuffs-sys` FFI leaf.
+//! PORTS: ghostty pkg/wuffs/src/main.zig (+ the `png`/`jpeg`/`error`/`swizzle`/
+//! `zlib` submodules). The SAFE `decode` API over the raw `wuffs-sys` FFI leaf.
 //!
 //! PORT STATUS: ported (main/error/png/jpeg/swizzle every line/comment, R1;
 //! swizzle carries the reference "gaToRgba"/"rgbaSrcOver" test{} blocks plus
@@ -18,6 +18,8 @@ pub mod png;
 pub mod jpeg;
 // pub const swizzle = @import("swizzle.zig");
 pub mod swizzle;
+// pub const zlib = @import("zlib.zig");
+pub mod zlib;
 // pub const Error = @import("error.zig").Error;
 pub mod error;
 pub use error::Error;
@@ -35,7 +37,14 @@ pub(crate) mod log_capture;
 /// The maximum image size, based on the 4G limit of Ghostty's
 /// `image-storage-limit` config.
 // pub const maximum_image_size = 4 * 1024 * 1024 * 1024;
-pub const MAXIMUM_IMAGE_SIZE: usize = 4 * 1024 * 1024 * 1024;
+//
+// PORT NOTE (wasm32, DECISIONS B8): the reference constant is a `comptime_int`,
+// so `size > maximum_image_size` also compiles where `usize` is 32 bits (Zig
+// folds the comparison to `false`: no 32-bit size exceeds 4 GiB). A `usize`
+// constant cannot hold 4 GiB on wasm32, which now builds this crate, so the
+// constant is a `u64` and the guards widen `size` to compare, with the same
+// result on every target.
+pub const MAXIMUM_IMAGE_SIZE: u64 = 4 * 1024 * 1024 * 1024;
 
 /// Reference `ImageData { width: u32, height: u32, data: []u8 }`.
 ///
@@ -119,6 +128,30 @@ impl<A: Allocator> RawBuf<A> {
     /// The raw base pointer (for handing to a Wuffs `slice_u8`).
     pub(crate) fn ptr(&self) -> *mut u8 {
         self.ptr.as_ptr()
+    }
+
+    /// `alloc.realloc(buf, new_len)`: resize the buffer to `new_len` bytes
+    /// (align 1), keeping its prefix. On failure the buffer is unchanged and
+    /// still owned (so the caller's `errdefer alloc.free(..)` is this buffer's
+    /// `Drop`). Zig's `reallocAdvanced` has no equal-length shortcut and
+    /// neither does this: an equal length still reaches the allocator (as a
+    /// `shrink`, which `VtAllocator`'s C arm turns into `rawRemap`).
+    pub(crate) fn realloc(&mut self, new_len: usize) -> Result<(), Error> {
+        let old = Layout::from_size_align(self.len, 1).map_err(|_| Error::OutOfMemory)?;
+        let new = Layout::from_size_align(new_len, 1).map_err(|_| Error::OutOfMemory)?;
+        // SAFETY: `ptr`/`old` describe the live block this buffer owns, from
+        // `self.alloc`; `grow` gets `new >= old` and `shrink` `new <= old`.
+        let ptr = unsafe {
+            if new_len > self.len {
+                self.alloc.grow(self.ptr, old, new)
+            } else {
+                self.alloc.shrink(self.ptr, old, new)
+            }
+        }
+        .map_err(|_| Error::OutOfMemory)?;
+        self.ptr = ptr.cast();
+        self.len = new_len;
+        Ok(())
     }
 
     /// Consume the buffer WITHOUT freeing (`mem::forget` the `Drop`), returning the
@@ -221,15 +254,15 @@ impl<A: Allocator> Drop for Scratch<A> {
 //     _ = ptr;
 // }
 //
-// PORT NOTE (`619555d1c` build-without-libc, N-A): the `comptime` block above
-// exists for the reference's no-libc lane (wasm32-freestanding lib-vt);
-// `builtin.link_libc` is false there and the weak stubs satisfy any surviving
-// `calloc`/`free` reference. wuffs-sys compiles the vendored TU with `cc`
-// against the REAL system libc on every rustty target, so the analog of
-// `builtin.link_libc` is unconditionally true and the whole branch is dead —
-// no stubs are emitted, faithfully. (Flag: if a wasm32/freestanding lane ever
-// links wuffs, this block — and the vendored minimal libc headers mirrored at
-// crates-sys/wuffs-sys/include/ — become live; see wuffs-sys build.rs.)
+// PORT NOTE (`619555d1c` build-without-libc): the `comptime` block above
+// exists for the reference's no-libc lane (wasm32-freestanding); there
+// `builtin.link_libc` is false and the weak stubs satisfy any surviving
+// `calloc`/`free` reference. Since P7-W5 T2 (DECISIONS B8) rustty links wuffs
+// on wasm32 too, so the block is live there. Rust has no stable weak linkage,
+// so the stubs are C: `crates-sys/wuffs-sys/wasm_libc_stubs.c`, weak and
+// hidden, compiled by wuffs-sys's build.rs for a wasm32 target without libc
+// (every wasm32 but WASI, whose libc Rust's std links). Every other target
+// links libc, where the reference emits no stubs either.
 
 // test {
 //     std.testing.refAllDeclsRecursive(@This());
@@ -255,6 +288,9 @@ mod tests {
             allocator_api2::alloc::Global,
             &[u8],
         ) -> Result<ImageData<allocator_api2::alloc::Global>, Error> = jpeg::decode;
+        type G = allocator_api2::alloc::Global;
+        type DecodeZlib = fn(G, &[u8], usize, Option<usize>) -> Result<RawBuf<G>, Error>;
+        let _decode_zlib: DecodeZlib = zlib::decode;
         let _e = Error::WuffsError;
     }
 
@@ -265,8 +301,8 @@ mod tests {
     // so any widening of the effective limit (or a `>` -> `>=` flip) fails here.
     #[test]
     fn maximum_image_size_threshold_matrix() {
-        let at_limit = 32768usize * 32768 * 4;
-        let past_limit = 32769usize * 32768 * 4;
+        let at_limit = 32768u64 * 32768 * 4;
+        let past_limit = 32769u64 * 32768 * 4;
         assert_eq!(at_limit, MAXIMUM_IMAGE_SIZE);
         // The guards in `png.rs`/`jpeg.rs` reject on `size > MAXIMUM_IMAGE_SIZE`,
         // so the exactly-at-limit size must NOT be rejected.

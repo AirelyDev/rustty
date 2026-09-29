@@ -103,7 +103,14 @@ glyph-protocol = []
 # with a target check, because the protocol needs OS timestamps and is always
 # off on freestanding targets (`target_os = "none"`, any arch — `3376153a4`)
 # regardless of the setting (the reference `Options.kittyGraphics` override).
-kitty-graphics = []
+#
+# It also links `rustty-wuffs` (DECISIONS B8, `4b86e3594`): the reference wires
+# wuffs into the vt module whenever Kitty graphics is enabled
+# (`src/build/GhosttyZig.zig:140-152`, for the pixel swizzles and, since
+# `4b86e3594`, the zlib decoder), on every target it builds, wasm32 included.
+# This is separate from the `wuffs` feature below, which only selects the
+# `sys.decode_png` default.
+kitty-graphics = ["dep:rustty-wuffs"]
 # ---------------------------------------------------------------------------
 # Whether Oniguruma regex support is available (reference `oniguruma`). Gates
 # Kitty graphics protocol and Tmux control mode. Off by default, matching a build
@@ -153,6 +160,9 @@ test-decommit-sim = []
 # it OFF so a `-p rustty-vt-c` build keeps the reference `null` default.
 # (Workspace-wide dev builds unify the feature onto rustty-vt-c too — additive
 # and harmless; the SHIPPED standalone vt lib is built `-p rustty-vt-c`.)
+# Since DECISIONS B8 the crate is also LINKED under `kitty-graphics` (above), so
+# this feature no longer decides whether wuffs is in the graph, only the
+# `decode_png` default.
 wuffs = ["dep:rustty-wuffs"]
 # Parity-harness identity profile (R2). Flips the vt LIBRARY version (the
 # reference's deliberate app/lib version split, `build.zig:10` `lib_version`)
@@ -251,22 +261,19 @@ libc = "0.2"
 # under `--features imgui` (turned on by the apprt `gtk` feature), so a default VT
 # build has no GUI dependency. A lower-tier `-sys` crate (acyclic).
 dcimgui-sys = { workspace = true, optional = true }
-# The pkg/wuffs safe-decode parity crate — `decodePngWuffs`'s `wuffs.png.decode`
-# (sys.zig). Optional: only the `wuffs` feature (application artifacts) pulls it;
-# a strictly-earlier leaf (deps: wuffs-sys + allocator-api2), no cycle (R4).
-rustty-wuffs = { workspace = true, optional = true }
-
-# R3: vendored zlib 1.3.1 (the SAME C library the reference's std.compress.flate
-# wraps). Used by kitty/graphics_image for DEFLATE decompression of transmitted
-# image data.
+# The pkg/wuffs parity crate: `decodePngWuffs`'s `wuffs.png.decode` (sys.zig,
+# the `wuffs` feature), and the kitty graphics swizzles and zlib decoder
+# (`wuffs.swizzle`, `wuffs.zlib.decode`, the `kitty-graphics` feature). Optional
+# so a build without either has no wuffs, as the reference's has none without
+# Kitty graphics. A strictly-earlier leaf (deps: wuffs-sys + allocator-api2), no
+# cycle (R4).
 #
-# WASM DIVERGENCE (`cfg(not(target_arch = "wasm32"))`): the vendored C `zlib-sys`
-# cannot link on freestanding `wasm32-unknown-unknown` (no libc). The kitty
-# zlib-deflate image path is not needed for a terminal-in-browser text demo, so
-# on wasm `decompressZlib` is a faithful `Unsupported` stub (graphics_image.rs)
-# and this C dep is excluded from the wasm graph. Applies to `wasm32-wasip1` too.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-zlib-sys = { workspace = true }
+# P7-W5 T2 (DECISIONS B8): kitty zlib decompression moved from the vendored C
+# zlib (`zlib-sys`, excluded from wasm32 with an `Unsupported` stub there) to
+# wuffs, as `4b86e3594` moved the reference's off `std.compress.flate`. So
+# `zlib-sys` is no longer a rustty-vt dependency, and wuffs-sys builds for
+# wasm32 the way the reference's pkg/wuffs does (minimal libc headers).
+rustty-wuffs = { workspace = true, optional = true }
 
 [dev-dependencies]
 # TEST-ONLY: enable the `tracking` feature of rustty-zigstd so the PageList tests

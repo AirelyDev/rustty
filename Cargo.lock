@@ -1725,7 +1725,6 @@ dependencies = [
  "rustty-util",
  "rustty-wuffs",
  "rustty-zigstd",
- "zlib-sys",
 ]
 
 [[package]]

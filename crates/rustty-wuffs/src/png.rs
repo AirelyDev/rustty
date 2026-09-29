@@ -125,7 +125,7 @@ pub fn decode<A: Allocator + Copy>(alloc: A, data: &[u8]) -> Result<ImageData<A>
     //     log.warn("image size {d} is larger than the maximum allowed ({d})", .{ size, maximum_image_size });
     //     return error.Overflow;
     // }
-    if size > MAXIMUM_IMAGE_SIZE {
+    if size as u64 > MAXIMUM_IMAGE_SIZE {
         log::warn!(
             target: LOG_SCOPE,
             "image size {size} is larger than the maximum allowed ({MAXIMUM_IMAGE_SIZE})"

@@ -25,16 +25,27 @@
 //! reproduced over `std`/`libc`; `fastmem`/`command`/`PageList`/`sys` map to the
 //! ported sibling modules, and the temp-file helpers come from `rustty_os`.
 //!
-//! PORT NOTE: DEFLATE decompression. The reference's `decompressZlib` uses
-//! `std.compress.flate.Decompress` (zlib mode). We bind the SAME C library the
-//! reference's std wraps (vendored zlib 1.3.1 via `zlib-sys`, R3) and call its
-//! streaming inflate. PNG decoding remains the optional `sys.decode_png` hook
+//! PORT NOTE: DEFLATE decompression. The reference's `decompressZlib` decodes
+//! through `wuffs.zlib.decode` (`4b86e3594`; `const wuffs = @import("wuffs");`),
+//! ported as `rustty_wuffs::zlib::decode` over the same vendored Wuffs, which
+//! the `kitty-graphics` feature links on every target, wasm32 included
+//! (DECISIONS B8). PNG decoding remains the optional `sys.decode_png` hook
 //! (seam), faithfully reproducing the `decode_png == null` save-effort path.
+//!
+//! `const kitty_windows = @import("windows.zig");` (`0b5446364`) is
+//! `crate::kitty::windows`.
 
 #![allow(non_snake_case)]
 
 use crate::alloc::{ABox, Allocator, Bytes, CopyVecExt};
 use crate::kitty::graphics_command as command;
+// const kitty_windows = @import("windows.zig");
+//
+// PORT NOTE: the reference imports it on every target and calls it only under
+// `comptime builtin.os.tag == .windows`; the port imports it where it is
+// called (its own tests run on every host).
+#[cfg(windows)]
+use crate::kitty::windows as kitty_windows;
 use crate::pagelist as PageList;
 use crate::sys;
 // const LimitedAllocator = @import("../../datastruct/main.zig").LimitedAllocator;
@@ -77,6 +88,34 @@ const MAX_DIMENSION: u32 = 10000;
 
 /// Maximum size in bytes, taken from Kitty.
 const MAX_SIZE: usize = 400 * 1024 * 1024; // 400MB
+
+// PORT NOTE: `std.fs.max_path_bytes`, the size of the canonical path buffers
+// `readFile` and `isPathInTempDir` allocate (`0b5446364`): `PATH_MAX` on the
+// unix targets and `PATH_MAX_WIDE * 3 + 1` on Windows (`rustty_os::path`),
+// and 4096 elsewhere (Zig's wasi value; on freestanding wasm the file media
+// never open a file).
+#[cfg(any(unix, windows))]
+const MAX_PATH_BYTES: usize = rustty_os::path::MAX_PATH_BYTES;
+#[cfg(not(any(unix, windows)))]
+const MAX_PATH_BYTES: usize = 4096;
+
+/// The error set of `LoadingImage::validatedFilePath`.
+// PORT NOTE: the reference's is inferred (`![]const u8`): `File.realPath`'s
+// errors, the blocklist's `error.InvalidData`, and on Windows
+// `kitty_windows.Error` from `checkCanonicalPath` (`0b5446364`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ValidatedFilePathError {
+    /// The blocklist refused the canonical path.
+    #[cfg_attr(windows, allow(dead_code))]
+    InvalidData,
+    /// The canonical path does not fit the buffer (`error.NameTooLong`).
+    NameTooLong,
+    /// `File.realPath` failed.
+    RealPath(std::io::ErrorKind),
+    /// `kitty_windows.checkCanonicalPath` refused the canonical path.
+    #[cfg(windows)]
+    Windows(kitty_windows::Error),
+}
 
 /// PORT NOTE: the reference returns the Zig error set `Image.Error` (plus
 /// `Allocator.Error`/`InvalidData` propagated from helpers). This enum models
@@ -746,27 +785,64 @@ impl LoadingImage {
             _ => unreachable!("readFile only supports file and temporary_file"),
         }
 
+        // Some Windows paths are dangerous to even open, so the raw path
+        // is checked before the open. The canonical path of the opened
+        // file is checked again in validatedFilePath. See kitty_windows
+        // for what is refused and why.
+        #[cfg(windows)]
+        if let Err(err) = kitty_windows::check_path(path) {
+            // log.warn("invalid image path: {}", .{err});
+            log::warn!(target: LOG_SCOPE, "invalid image path: {err:?}");
+            return Err(Error::InvalidData);
+        }
+
+        // The canonical path buffer is sized for the longest path the
+        // platform allows, which is about 96 KiB on Windows, so it is
+        // heap allocated rather than placed on the stack of whichever
+        // host thread feeds the stream. It is allocated before the open
+        // so the deferred temporary file deletion below can still use it.
+        // const abs_buf = try alloc.alloc(u8, std.fs.max_path_bytes);
+        // defer alloc.free(abs_buf);
+        //
+        // PORT NOTE (`0b5446364`, N360): one `alloc` of `max_path_bytes`
+        // through the caller's allocator, freed on every exit path. The buffer
+        // is owned by the delete guard below, because the delete path is a
+        // prefix of it (the reference's `delete_path = abs_path`).
+        let mut abs_buf = Bytes::new_in(alloc);
+        if abs_buf.try_reserve_exact(MAX_PATH_BYTES).is_err() {
+            return Err(Error::OutOfMemory);
+        }
+        // The capacity is reserved, so this never allocates.
+        abs_buf.resize_copy(MAX_PATH_BYTES, 0);
+
         // We'll populate a delete path if this is a temporary file.
-        // PORT NOTE: the reference's single `defer { file.close(io);
+        // PORT NOTE: the reference's `defer { file.close(io);
         // if (delete_path) |p| ... deleteFile(p) ... }` runs close-then-delete
-        // on every exit path. Rust drop order is reverse declaration order, so
-        // the delete guard is declared BEFORE `file`: at scope exit `file`
-        // drops first (close), then the guard best-effort deletes.
+        // on every exit path, and the earlier `defer alloc.free(abs_buf)` runs
+        // after it. Rust drop order is reverse declaration order, so the guard
+        // is declared BEFORE `file`: at scope exit `file` drops first (close),
+        // then the guard best-effort deletes, then its buffer is freed.
         struct DeletePathGuard {
+            abs_buf: Bytes,
             // var delete_path: ?[]const u8 = null;
-            delete_path: Option<Vec<u8>>,
+            //
+            // (the length of the `abs_buf` prefix that is the delete path)
+            delete_path: Option<usize>,
         }
         impl Drop for DeletePathGuard {
             fn drop(&mut self) {
-                if let Some(p) = &self.delete_path {
-                    if let Err(err) = unlink(p) {
+                if let Some(len) = self.delete_path {
+                    if let Err(err) = unlink(&self.abs_buf[..len]) {
                         // log.warn("failed to delete temporary file: {}", .{err});
                         log::warn!(target: LOG_SCOPE, "failed to delete temporary file: {err}");
                     }
                 }
             }
         }
-        let mut delete_guard = DeletePathGuard { delete_path: None };
+        let mut delete_guard = DeletePathGuard {
+            abs_buf,
+            delete_path: None,
+        };
 
         // Open our file right away before we do validation. This avoids
         // TOCTOU issues.
@@ -783,7 +859,7 @@ impl LoadingImage {
         // Derive the path from the open handle so the file we validate is the
         // exact file we read. Resolving a path before opening it would allow a
         // cooperating process to swap a symlink or directory entry in between.
-        let abs_path = match Self::validatedFilePath(&file) {
+        let abs_path = match Self::validatedFilePath(&file, &mut delete_guard.abs_buf) {
             Ok(p) => p,
             Err(err) => {
                 // log.warn("failed to validate image file path: {}", .{err});
@@ -801,14 +877,14 @@ impl LoadingImage {
             // overlap a `&mut self` — `isPathInTempDir` is an associated
             // function, so no `self` borrow is live inside it.
             let dir = self.temporary_directory.as_deref().unwrap();
-            if !Self::isPathInTempDir(dir, &abs_path) {
+            if !Self::isPathInTempDir(alloc, dir, abs_path)? {
                 return Err(Error::TemporaryFileNotInTempDir);
             }
-            if index_of(&abs_path, b"tty-graphics-protocol").is_none() {
+            if index_of(abs_path, b"tty-graphics-protocol").is_none() {
                 return Err(Error::TemporaryFileNotNamedCorrectly);
             }
             // delete_path = abs_path;
-            delete_guard.delete_path = Some(abs_path);
+            delete_guard.delete_path = Some(abs_path.len());
         }
 
         // File must be a regular file
@@ -933,26 +1009,54 @@ impl LoadingImage {
     // HANDLE. Rust std has no handle-based realpath, so `realpath_of_handle`
     // below reproduces it per platform (macOS `fcntl(F_GETPATH)`, Linux
     // `/proc/self/fd/N` readlink) — never by re-resolving the submitted path,
-    // which would reintroduce the TOCTOU this exists to close. Any handle-path
-    // failure maps to `InvalidData` (the caller logs then maps every error to
-    // `InvalidData` anyway).
-    fn validatedFilePath(file: &std::fs::File) -> Result<Vec<u8>, Error> {
+    // which would reintroduce the TOCTOU this exists to close. The error set
+    // is the reference's inferred one: `realPath`'s failures, the blocklist's
+    // `error.InvalidData`, and on Windows `kitty_windows.Error`
+    // ([`ValidatedFilePathError`]); the caller logs it and maps every error to
+    // `InvalidData`.
+    //
+    // PORT NOTE (N360): `realpath_of_handle` returns the path in a transient
+    // Rust-heap `Vec` (the reference writes it straight into `buf`), which is
+    // copied into `buf`; a path longer than `buf` is `error.NameTooLong`, as
+    // `realPath` reports it. The caller's allocator sees only `buf`.
+    fn validatedFilePath<'b>(
+        file: &std::fs::File,
+        buf: &'b mut [u8],
+    ) -> Result<&'b [u8], ValidatedFilePathError> {
         // const path = buf[0..try file.realPath(io, buf)];
-        let path = match realpath_of_handle(file) {
+        let real = match realpath_of_handle(file) {
             Ok(p) => p,
-            Err(_) => return Err(Error::InvalidData),
+            Err(err) => return Err(ValidatedFilePathError::RealPath(err.kind())),
         };
+        if real.len() > buf.len() {
+            return Err(ValidatedFilePathError::NameTooLong);
+        }
+        buf[..real.len()].copy_from_slice(&real);
+        let path: &'b [u8] = &buf[..real.len()];
 
-        // This is logic copied directly from Kitty, mostly. This is really
-        // rough but it will catch obvious bad actors.
-        if starts_with(&path, b"/proc/")
-            || starts_with(&path, b"/sys/")
-            || (starts_with(&path, b"/dev/") && !starts_with(&path, b"/dev/shm/"))
+        // if (comptime builtin.os.tag == .windows) {
+        //     try kitty_windows.checkCanonicalPath(path);
+        //     return path;
+        // }
+        #[cfg(windows)]
         {
-            return Err(Error::InvalidData);
+            kitty_windows::check_canonical_path(path).map_err(ValidatedFilePathError::Windows)?;
+            Ok(path)
         }
 
-        Ok(path)
+        #[cfg(not(windows))]
+        {
+            // This is logic copied directly from Kitty, mostly. This is really
+            // rough but it will catch obvious bad actors.
+            if starts_with(path, b"/proc/")
+                || starts_with(path, b"/sys/")
+                || (starts_with(path, b"/dev/") && !starts_with(path, b"/dev/shm/"))
+            {
+                return Err(ValidatedFilePathError::InvalidData);
+            }
+
+            Ok(path)
+        }
     }
 
     /// Returns true if path appears to be in a temporary directory.
@@ -961,32 +1065,54 @@ impl LoadingImage {
     // PARAMETER. The previous body called `temp_dir.allocTmpDir()`, which read
     // `TMPDIR`/`TMP` from the process environment at validation time; that
     // lookup is DELETED. See the `temp_dir` module note above.
-    fn isPathInTempDir(dir: &[u8], path: &[u8]) -> bool {
+    // PORT NOTE (`0b5446364`): now `Allocator.Error!bool`: the real-path
+    // buffer below is allocated through `alloc`, and only that allocation's
+    // failure is an error (`Error::OutOfMemory`).
+    fn isPathInTempDir(alloc: Allocator, dir: &[u8], path: &[u8]) -> Result<bool, Error> {
         if isPathInDir(b"/tmp", path) {
-            return true;
+            return Ok(true);
         }
         if isPathInDir(b"/dev/shm", path) {
-            return true;
+            return Ok(true);
         }
         if isPathInDir(dir, path) {
-            return true;
+            return Ok(true);
         }
 
         // The temporary dir is sometimes a symlink. On macOS for
-        // example /tmp is /private/var/...
-        // PORT NOTE: `std.Io.Dir.cwd().realPathFile(io, dir, &buf) catch return
+        // example /tmp is /private/var/... On Windows the directory a
+        // host passes (typically GetTempPath output) regularly differs
+        // from the canonical path in case or uses 8.3 short names, and
+        // resolving it covers both. The buffer is heap allocated for
+        // the reason given in readFile.
+        // const buf = try alloc.alloc(u8, std.fs.max_path_bytes);
+        // defer alloc.free(buf);
+        let mut buf = Bytes::new_in(alloc);
+        if buf.try_reserve_exact(MAX_PATH_BYTES).is_err() {
+            return Err(Error::OutOfMemory);
+        }
+        // The capacity is reserved, so this never allocates.
+        buf.resize_copy(MAX_PATH_BYTES, 0);
+        // PORT NOTE: `std.Io.Dir.cwd().realPathFile(io, dir, buf) catch return
         // false`. `e8525c0fd` turned the old `if (posix.realpath(...)) |…| …
         // else |_| {}` fall-through into an early `return false`; with nothing
         // after the check in either version the two are equivalent, and we
-        // follow the new shape.
-        let Ok(real_dir) = realpath(dir) else {
-            return false;
+        // follow the new shape. `realpath` returns a transient Rust-heap `Vec`
+        // (N360), copied into `buf`; one longer than `buf` is `realPathFile`'s
+        // `error.NameTooLong`, so `false` too.
+        let Ok(real) = realpath(dir) else {
+            return Ok(false);
         };
-        if isPathInDir(&real_dir, path) {
-            return true;
+        if real.len() > buf.len() {
+            return Ok(false);
+        }
+        buf[..real.len()].copy_from_slice(&real);
+        let real_dir = &buf[..real.len()];
+        if isPathInDir(real_dir, path) {
+            return Ok(true);
         }
 
-        false
+        Ok(false)
     }
 
     // pub fn deinit(self: *LoadingImage, alloc: Allocator) void {
@@ -1196,61 +1322,82 @@ impl LoadingImage {
         }
     }
 
-    // WASM DIVERGENCE (`wasm32`): the kitty zlib-deflate image path binds the
-    // vendored C `zlib-sys` library, which cannot link on freestanding
-    // `wasm32-unknown-unknown` (no libc). The kitty PNG/zlib image-decode path is
-    // not needed for a terminal-in-browser text demo, so on wasm this method is a
-    // faithful `Unsupported` stub returning `DecompressionFailed` — mirroring how
-    // the reference gates the wasm/lib image path (PNG decode is likewise a null
-    // `sys::decode_png` seam). The `Compression::ZlibDeflate` match arm and its
-    // signature are unchanged; only the body diverges. Native/other targets keep
-    // the real C-zlib inflate below. (`zlib-sys` is `cfg(not(wasm32))` in Cargo.)
-    #[cfg(target_arch = "wasm32")]
-    fn decompressZlib(&mut self, _alloc: Allocator) -> Result<(), Error> {
-        Err(Error::DecompressionFailed)
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(feature = "kitty-graphics")]
     fn decompressZlib(&mut self, alloc: Allocator) -> Result<(), Error> {
-        // PORT NOTE: the reference opens a `std.compress.flate.Decompress` in
-        // zlib mode over `self.data.items`, then appends the remaining
-        // decompressed bytes (limited to `max_size`) into a managed list. We
-        // call the vendored zlib's streaming inflate (same C library) with the
-        // same `max_size` cap; any failure maps to `DecompressionFailed`.
-        //
-        // PORT NOTE: reference defect (R13), UD140. The reference's
-        // `.limited(max_size)` rejects EXACTLY `max_size` decompressed bytes
-        // (the same off-by-one as `readFile`'s no-`s=` path); `inflate_zlib`
-        // accepts exactly `max_size` and rejects more, the inclusive limit
-        // every other `max_size` check in this file uses. Pinned by
-        // `zlib_inflate_accepts_exactly_the_limit`.
-        //
-        // Write it to an array list
-        // var list: std.ArrayList(u8) = .empty;
-        // errdefer list.deinit(alloc);
-        // PORT NOTE (parity tail S7-4): the list grows through `alloc`; a
-        // refused growth fails the inflate, which is the reference's
-        // catch-all `DecompressionFailed`.
-        let mut list = InflateBytes(Bytes::new_in(alloc));
-        let list = match zlib_sys::inflate_zlib_into(&self.data, MAX_SIZE, &mut list) {
-            Ok(()) => list.0,
-            Err(err) => {
-                // log.warn("failed to read decompressed data: {?}", .{stream.err});
-                //
-                // PORT NOTE: the reference renders the stream's OPTIONAL stored
-                // error (`{?}`); here the failure is always present at this
-                // site, so it renders as the error itself.
-                log::warn!(target: LOG_SCOPE, "failed to read decompressed data: {err:?}");
-                return Err(Error::DecompressionFailed);
+        // Provide a bounded size hint based on image metadata for the initial allocation
+        // const size_hint: ?usize = hint: { ... };
+        let size_hint: Option<usize> = 'hint: {
+            if self.image.format == command::Format::Png
+                || self.image.width == 0
+                || self.image.height == 0
+                || self.image.width > MAX_DIMENSION
+                || self.image.height > MAX_DIMENSION
+            {
+                break 'hint None;
+            }
+            // const pixels = std.math.mul(usize, self.image.width, self.image.height) catch break :hint null;
+            let Some(pixels) = (self.image.width as usize).checked_mul(self.image.height as usize)
+            else {
+                break 'hint None;
+            };
+            // const bytes = std.math.mul(usize, pixels, command.Transmission.formatBpp(self.image.format)) catch break :hint null;
+            let Some(bytes) = pixels.checked_mul(usize::from(command::Transmission::format_bpp(
+                self.image.format,
+            ))) else {
+                break 'hint None;
+            };
+            // break :hint if (bytes <= max_size) bytes else null;
+            if bytes <= MAX_SIZE {
+                Some(bytes)
+            } else {
+                None
+            }
+        };
+        // const decompressed = wuffs.zlib.decode(
+        //     alloc,
+        //     self.data.items,
+        //     max_size,
+        //     size_hint,
+        // ) catch |err| switch (err) {
+        //     error.OutOfMemory => return error.OutOfMemory,
+        //     error.WuffsError, error.Overflow => return error.DecompressionFailed,
+        // };
+        let decompressed = match rustty_wuffs::zlib::decode(alloc, &self.data, MAX_SIZE, size_hint)
+        {
+            Ok(buf) => buf,
+            Err(rustty_wuffs::Error::OutOfMemory) => return Err(Error::OutOfMemory),
+            Err(rustty_wuffs::Error::WuffsError | rustty_wuffs::Error::Overflow) => {
+                return Err(Error::DecompressionFailed)
             }
         };
 
-        // Empty our current data list, take ownership over managed array list
-        self.data = list;
+        // self.data.deinit(alloc);
+        // self.data = .{ .items = decompressed, .capacity = decompressed.len };
+        //
+        // PORT NOTE: the decoded buffer (allocated through `alloc`, align 1,
+        // exactly `len` bytes after `decode`'s final `realloc`) becomes the
+        // list's storage with `capacity == len`, as the reference's does; the
+        // old list is freed by the assignment.
+        self.data.allocator().debug_assert_same(alloc);
+        let (ptr, len) = decompressed.into_raw();
+        // SAFETY: `ptr` is a live `len`-byte, align-1 allocation made through
+        // `alloc` (`RawBuf`), which is exactly `Layout::array::<u8>(len)`;
+        // ownership moves to the list.
+        self.data = unsafe { Bytes::from_raw_parts_in(ptr.as_ptr(), len, len, alloc) };
 
         // Make sure we note that our image is no longer compressed
         self.image.compression = command::Compression::None;
         Ok(())
+    }
+
+    // PORT NOTE: without the `kitty-graphics` feature the reference compiles
+    // no graphics module (`graphics = struct {}`) and links no wuffs, while
+    // the port always compiles this one; nothing dispatches into it then
+    // (`options::KITTY_GRAPHICS` is false at every call site), so this arm is
+    // never reached.
+    #[cfg(not(feature = "kitty-graphics"))]
+    fn decompressZlib(&mut self, _alloc: Allocator) -> Result<(), Error> {
+        unreachable!("kitty graphics is compiled out")
     }
 
     /// Decode the data as PNG. This will also updated the image dimensions.
@@ -1706,36 +1853,6 @@ fn append_remaining_limited(
         };
         list.try_extend_copy(&buf[..n])
             .map_err(|_| AppendRemainingError::OutOfMemory)?;
-    }
-}
-
-/// The zlib inflate's output list, grown through its allocator (a local
-/// newtype so the foreign `InflateOut` trait can be implemented for it).
-#[cfg(not(target_arch = "wasm32"))]
-struct InflateBytes(Bytes);
-
-// SAFETY: `try_grow` reserves, then `resize_copy`s to exactly `new_len`
-// (initialized); `truncate` keeps the prefix; `as_mut_ptr` is the list's own
-// buffer, valid until its next growth.
-#[cfg(not(target_arch = "wasm32"))]
-unsafe impl zlib_sys::InflateOut for InflateBytes {
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-    fn try_grow(&mut self, new_len: usize) -> Result<(), zlib_sys::InflateError> {
-        let extra = new_len - self.0.len();
-        self.0
-            .try_reserve(extra)
-            .map_err(|_| zlib_sys::InflateError)?;
-        // The capacity is reserved, so this never allocates.
-        self.0.resize_copy(new_len, 0);
-        Ok(())
-    }
-    fn truncate(&mut self, new_len: usize) {
-        self.0.truncate(new_len)
-    }
-    fn as_mut_ptr(&mut self) -> *mut u8 {
-        self.0.as_mut_ptr()
     }
 }
 
@@ -2518,7 +2635,7 @@ mod tests {
 
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored zlib C FFI (inflateInit2_) -- foreign function; covered natively + by ASan"
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs zlib decoder (C FFI, R14) -- foreign function; covered natively + by ASan"
     )]
     #[test]
     fn image_load_rgb_zlib_compressed_direct() {
@@ -2570,7 +2687,7 @@ mod tests {
 
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored zlib C FFI (inflateInit2_) -- foreign function; covered natively + by ASan"
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs zlib decoder (C FFI, R14) -- foreign function; covered natively + by ASan"
     )]
     #[test]
     fn image_load_rgb_zlib_compressed_direct_chunked() {
@@ -2614,7 +2731,7 @@ mod tests {
 
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored zlib C FFI (inflateInit2_) -- foreign function; covered natively + by ASan"
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs zlib decoder (C FFI, R14) -- foreign function; covered natively + by ASan"
     )]
     #[test]
     fn image_load_rgb_zlib_compressed_direct_chunked_with_zero_initial_chunk() {
@@ -2915,28 +3032,28 @@ mod tests {
         );
     }
 
-    // Parity S189-F2 / UD140, the zlib path: the reference's
-    // `decompressZlib` reads the decompressed stream with the same
-    // `.limited(max_size)`, so it rejects EXACTLY `max_size` output bytes.
-    // The port's inflate (`zlib_sys::inflate_zlib`) already accepts exactly
-    // the limit and rejects one byte more; this pins that, at a limit equal
-    // to the fixture's decompressed length (the production call passes
-    // `MAX_SIZE`).
+    // Parity S189-F2 / UD140, the zlib path (NOT a reference test): at
+    // 20abdb50a the reference's `decompressZlib` read the stream with
+    // `.limited(max_size)` and rejected EXACTLY `max_size` output bytes.
+    // `4b86e3594` fixed that upstream: `decompressZlib` now decodes through
+    // `wuffs.zlib.decode`, which accepts exactly its limit (the upstream test
+    // "zlib decode accepts exact limit and rejects truncated input",
+    // `rustty-wuffs`). This keeps the pin on the kitty fixture, at a limit
+    // equal to its decompressed length (the production call passes
+    // `MAX_SIZE`) and one byte less, with no size hint as for a PNG payload.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
-    #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (rustty-vt, parity tail C-1): calls the vendored zlib (`inflateInit2_`), a foreign function Miri cannot execute; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
-    )]
+    #[cfg_attr(miri, ignore = "calls the vendored Wuffs C decoder (R14)")]
     fn zlib_inflate_accepts_exactly_the_limit() {
+        use rustty_wuffs::zlib::decode;
         let data = include_bytes!("testdata/image-rgb-zlib_deflate-128x96-2147483647-raw.data");
         let full = 128 * 96 * 3;
+        let a = crate::alloc::Global;
+        assert_eq!(full, decode(a, data, usize::MAX / 2, None).unwrap().len());
+        assert_eq!(full, decode(a, data, full, None).unwrap().len());
         assert_eq!(
-            full,
-            zlib_sys::inflate_zlib(data, usize::MAX / 2).unwrap().len()
+            Some(rustty_wuffs::Error::Overflow),
+            decode(a, data, full - 1, None).err()
         );
-        assert_eq!(full, zlib_sys::inflate_zlib(data, full).unwrap().len());
-        assert!(zlib_sys::inflate_zlib(data, full - 1).is_err());
     }
 
     // test "image load: rgb, not compressed, relative regular file"
@@ -3126,17 +3243,313 @@ mod tests {
         std::os::unix::fs::symlink("safe.data", base.join("image.data.atomic")).unwrap();
         std::fs::rename(base.join("image.data.atomic"), base.join("image.data")).unwrap();
 
+        // var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        let mut path_buf = vec![0u8; MAX_PATH_BYTES];
         assert_eq!(
-            Err(Error::InvalidData),
-            LoadingImage::validatedFilePath(&blocked_file).map(|_| ())
+            Err(ValidatedFilePathError::InvalidData),
+            LoadingImage::validatedFilePath(&blocked_file, &mut path_buf).map(|_| ())
         );
 
         // The pathname now resolves to the safe replacement, demonstrating that
         // the rejection above came from the already-open file handle.
         let safe_file = std::fs::File::open(base.join("image.data")).unwrap();
-        LoadingImage::validatedFilePath(&safe_file).unwrap();
+        LoadingImage::validatedFilePath(&safe_file, &mut path_buf).unwrap();
         // (blocked_file/safe_file close on drop; the reference defers both.)
         drop(blocked_file);
+        tmp_dir.deinit();
+    }
+
+    // The seven `image load: windows …` tests (`0b5446364`). Each reference
+    // test starts with `if (builtin.os.tag != .windows) return
+    // error.SkipZigTest;`, mapped to `#[cfg(windows)]` (R14); they run in the
+    // Windows lane (`cargo test -p rustty-vt kitty` on rwin).
+
+    /// `LoadingImage.init(io, alloc, &cmd, limits)` for a `path` transmitted
+    /// with `medium`, as the Windows tests build it (rgb, 20x15, id 31).
+    #[cfg(windows)]
+    fn windows_load(
+        path: &[u8],
+        medium: command::Medium,
+        limits: &Limits,
+    ) -> Result<LoadingImage, Error> {
+        let cmd: command::Command = command::Command {
+            control: command::Control::Transmit(command::Transmission {
+                format: command::Format::Rgb,
+                medium,
+                compression: command::Compression::None,
+                width: 20,
+                height: 15,
+                image_id: 31,
+                ..Default::default()
+            }),
+            quiet: command::Quiet::No,
+            // .data = try alloc.dupe(u8, path),
+            data: crate::alloc::heap_bytes(path),
+        };
+        LoadingImage::init(crate::alloc::Global, &cmd, limits)
+    }
+
+    /// `.{ .file = true, .temporary_file = .disabled, .shared_memory = false }`
+    #[cfg(windows)]
+    const WINDOWS_FILE_ONLY: Limits = Limits {
+        file: true,
+        temporary_file: TemporaryFileLimit::Disabled,
+        shared_memory: false,
+    };
+
+    // test "image load: windows UNC path is rejected before open"
+    #[cfg(windows)]
+    #[test]
+    #[cfg_attr(miri, ignore)] // real-OS filesystem syscalls
+    fn image_load_windows_unc_path_is_rejected_before_open() {
+        // Opening a UNC path would resolve the host name and authenticate to
+        // it over SMB, so the rejection has to happen on the raw path. The
+        // host name is in the reserved .invalid TLD so it can never resolve.
+        let paths: [&[u8]; 3] = [
+            b"\\\\nonexistent-host.invalid\\share\\tty-graphics-protocol-image.data",
+            b"//nonexistent-host.invalid/share/tty-graphics-protocol-image.data",
+            b"\\\\?\\UNC\\nonexistent-host.invalid\\share\\image.data",
+        ];
+        for path in paths {
+            assert_eq!(
+                Some(Error::InvalidData),
+                windows_load(path, command::Medium::File, &WINDOWS_FILE_ONLY).err(),
+                "{}",
+                String::from_utf8_lossy(path)
+            );
+        }
+    }
+
+    // test "image load: windows device namespace paths are rejected before open"
+    #[cfg(windows)]
+    #[test]
+    #[cfg_attr(miri, ignore)] // real-OS temp-file filesystem syscalls
+    fn image_load_windows_device_namespace_paths_are_rejected_before_open() {
+        let mut tmp_dir = temp_dir::TempDir::init().unwrap();
+        let filename = "tty-graphics-protocol-image.data";
+        let data = include_bytes!("testdata/image-rgb-none-20x15-2147483647-raw.data");
+        tmp_dir.dir().writeFile(filename, data).unwrap();
+
+        let dir_path = tmp_dir_realpath(&tmp_dir);
+        let real_path = path_to_bytes(&tmp_dir.dir().realpath(filename).unwrap());
+
+        // The verbatim, local device and NT namespace spellings all resolve
+        // to the same real file, so rejecting them proves the check runs on
+        // the raw path rather than on the canonical one.
+        let prefixes: [&[u8]; 3] = [b"\\\\?\\", b"\\\\.\\", b"\\??\\"];
+        for prefix in prefixes {
+            // const path = try std.mem.concat(alloc, u8, &.{ prefix, real_path });
+            let path = [prefix, &real_path[..]].concat();
+
+            let mediums = [command::Medium::File, command::Medium::TemporaryFile];
+            for medium in mediums {
+                assert_eq!(
+                    Some(Error::InvalidData),
+                    windows_load(&path, medium, &Limits::all_with_temp_dir(&dir_path)).err(),
+                    "{} {medium:?}",
+                    String::from_utf8_lossy(&path)
+                );
+            }
+        }
+
+        // A named pipe reached through the local device namespace.
+        {
+            assert_eq!(
+                Some(Error::InvalidData),
+                windows_load(
+                    b"\\\\.\\pipe\\rustty-kitty-graphics-test",
+                    command::Medium::File,
+                    &Limits::all_with_temp_dir(&dir_path),
+                )
+                .err()
+            );
+        }
+
+        // Nothing above reached the temporary file deletion.
+        tmp_dir
+            .dir()
+            .access(std::path::Path::new(filename))
+            .unwrap();
+        tmp_dir.deinit();
+    }
+
+    // test "image load: windows reserved device names are rejected before open"
+    #[cfg(windows)]
+    #[test]
+    #[cfg_attr(miri, ignore)] // real-OS temp-file filesystem syscalls
+    fn image_load_windows_reserved_device_names_are_rejected_before_open() {
+        let mut tmp_dir = temp_dir::TempDir::init().unwrap();
+        let dir_path = tmp_dir_realpath(&tmp_dir);
+
+        let names: [&[u8]; 6] = [b"CON", b"NUL.data", b"com1", b"LPT9.png", b"AUX", b"PRN."];
+        for name in names {
+            // const path = try std.fs.path.join(alloc, &.{ dir_path, name });
+            let path = [&dir_path[..], b"\\", name].concat();
+
+            assert_eq!(
+                Some(Error::InvalidData),
+                windows_load(&path, command::Medium::File, &WINDOWS_FILE_ONLY).err(),
+                "{}",
+                String::from_utf8_lossy(&path)
+            );
+        }
+        tmp_dir.deinit();
+    }
+
+    // test "image load: windows local file accepted in forward slash and upper case spellings"
+    #[cfg(windows)]
+    #[test]
+    #[cfg_attr(miri, ignore)] // real-OS temp-file filesystem syscalls
+    fn image_load_windows_local_file_accepted_in_forward_slash_and_upper_case_spellings() {
+        let mut tmp_dir = temp_dir::TempDir::init().unwrap();
+        let filename = "image.data";
+        let data = include_bytes!("testdata/image-rgb-none-20x15-2147483647-raw.data");
+        tmp_dir.dir().writeFile(filename, data).unwrap();
+
+        let real_path = path_to_bytes(&tmp_dir.dir().realpath(filename).unwrap());
+
+        // Both spellings open the same file; the canonical path the checks
+        // see is the backslash, on-disk case form either way.
+        // std.mem.replaceScalar(u8, forward, '\\', '/');
+        let forward: Vec<u8> = real_path
+            .iter()
+            .map(|&c| if c == b'\\' { b'/' } else { c })
+            .collect();
+        // _ = std.ascii.upperString(upper, real_path);
+        let upper = real_path.to_ascii_uppercase();
+
+        let spellings = [forward, upper];
+        for path in &spellings {
+            let mut loading =
+                windows_load(path, command::Medium::File, &WINDOWS_FILE_ONLY).unwrap();
+            let img = loading.complete(crate::alloc::Global).unwrap();
+            assert!(img.compression == command::Compression::None);
+        }
+
+        tmp_dir
+            .dir()
+            .access(std::path::Path::new(filename))
+            .unwrap();
+        tmp_dir.deinit();
+    }
+
+    // test "image load: windows temporary file with differently spelled directory"
+    #[cfg(windows)]
+    #[test]
+    #[cfg_attr(miri, ignore)] // real-OS temp-file filesystem syscalls
+    fn image_load_windows_temporary_file_with_differently_spelled_directory() {
+        let mut tmp_dir = temp_dir::TempDir::init().unwrap();
+        let filename = "tty-graphics-protocol-image.data";
+        let data = include_bytes!("testdata/image-rgb-none-20x15-2147483647-raw.data");
+        tmp_dir.dir().writeFile(filename, data).unwrap();
+
+        let dir_path = tmp_dir_realpath(&tmp_dir);
+        let real_path = path_to_bytes(&tmp_dir.dir().realpath(filename).unwrap());
+
+        // Hosts hand over GetTempPath output, which regularly differs from
+        // the canonical path in case (`C:\WINDOWS\TEMP\`), so the directory
+        // prefix check only passes through the real-path fallback.
+        let dir_upper = dir_path.to_ascii_uppercase();
+        let path_upper = real_path.to_ascii_uppercase();
+        assert!(!isPathInDir(&dir_upper, &real_path) || dir_upper == dir_path);
+
+        let mut loading = windows_load(
+            &path_upper,
+            command::Medium::TemporaryFile,
+            &Limits::all_with_temp_dir(&dir_upper),
+        )
+        .unwrap();
+        let img = loading.complete(crate::alloc::Global).unwrap();
+        assert!(img.compression == command::Compression::None);
+
+        // Temporary file should be gone
+        assert_eq!(
+            std::io::ErrorKind::NotFound,
+            tmp_dir
+                .dir()
+                .access(std::path::Path::new(filename))
+                .unwrap_err()
+                .kind()
+        );
+        tmp_dir.deinit();
+    }
+
+    // test "image load: windows canonical path check accepts a local file opened through a device spelling"
+    #[cfg(windows)]
+    #[test]
+    #[cfg_attr(miri, ignore)] // real-OS temp-file filesystem syscalls
+    fn image_load_windows_canonical_path_check_accepts_a_local_file_opened_through_a_device_spelling(
+    ) {
+        let mut tmp_dir = temp_dir::TempDir::init().unwrap();
+        let filename = "image.data";
+        tmp_dir.dir().writeFile(filename, b"safe").unwrap();
+
+        let real_path = path_to_bytes(&tmp_dir.dir().realpath(filename).unwrap());
+
+        // readFile refuses this spelling before the open, but the post-open
+        // check works from the canonical path and so does not care how the
+        // file was reached: `\\.\C:\...` canonicalizes back to `C:\...`.
+        let device_path = [&b"\\\\.\\"[..], &real_path[..]].concat();
+        let file = open_file(&device_path).unwrap();
+
+        // const canon_buf = try alloc.alloc(u8, std.fs.max_path_bytes);
+        let mut canon_buf = vec![0u8; MAX_PATH_BYTES];
+        let canon = LoadingImage::validatedFilePath(&file, &mut canon_buf).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&real_path),
+            String::from_utf8_lossy(canon)
+        );
+        drop(file);
+        tmp_dir.deinit();
+    }
+
+    // test "image load: windows canonical path check rejects a file reached through a UNC share"
+    #[cfg(windows)]
+    #[test]
+    #[cfg_attr(miri, ignore)] // real-OS temp-file filesystem syscalls
+    fn image_load_windows_canonical_path_check_rejects_a_file_reached_through_a_unc_share() {
+        let mut tmp_dir = temp_dir::TempDir::init().unwrap();
+        let filename = "image.data";
+        tmp_dir.dir().writeFile(filename, b"safe").unwrap();
+
+        let real_path = path_to_bytes(&tmp_dir.dir().realpath(filename).unwrap());
+        assert!(kitty_windows::is_drive_absolute(&real_path));
+
+        // Reach the same local file through the loopback administrative
+        // share, which is how a junction or symlink into a share would look
+        // to the post-open check. The share needs the server service and an
+        // administrative token, so the test is skipped when the open fails.
+        let unc_path = format!(
+            "\\\\localhost\\{}$\\{}",
+            real_path[0] as char,
+            String::from_utf8_lossy(&real_path[3..])
+        );
+        // const file = std.Io.Dir.cwd().openFile(io, unc_path, .{}) catch
+        //     return error.SkipZigTest;
+        //
+        // PORT NOTE (R14): a runtime skip, printed, since only the open's
+        // outcome decides it.
+        let file = match open_file(unc_path.as_bytes()) {
+            Ok(f) => f,
+            Err(err) => {
+                eprintln!(
+                    "SKIP image_load_windows_canonical_path_check_rejects_a_file_reached_through_a_unc_share: \
+                     cannot open {unc_path} ({err}); the loopback administrative share needs the \
+                     server service and an administrative token (R14)"
+                );
+                tmp_dir.deinit();
+                return;
+            }
+        };
+
+        let mut canon_buf = vec![0u8; MAX_PATH_BYTES];
+        assert_eq!(
+            Err(ValidatedFilePathError::Windows(
+                kitty_windows::Error::NotDriveAbsolute
+            )),
+            LoadingImage::validatedFilePath(&file, &mut canon_buf).map(|_| ())
+        );
+        drop(file);
         tmp_dir.deinit();
     }
 
@@ -3197,6 +3610,87 @@ mod tests {
         assert!(img.format == command::Format::Rgba);
         tmp_dir.dir().access(&path).unwrap();
         tmp_dir.deinit();
+    }
+
+    // test "image load: png, zlib compressed, direct" (`4b86e3594`)
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs zlib decoder (C FFI, R14) -- foreign function; covered natively + by ASan"
+    )]
+    #[cfg_attr(
+        not(feature = "wuffs"),
+        ignore = "SkipZigTest: no PNG decoder without the wuffs feature (R14)"
+    )]
+    fn image_load_png_zlib_compressed_direct() {
+        // if (sys.decode_png == null) return error.SkipZigTest;
+        //
+        // PORT NOTE: as in `image_load_png_not_compressed_regular_file`: the
+        // skip is the `cfg_attr(.., ignore)` above, and a missing decoder here
+        // is a failure (R14).
+        let _png_lock = sys::decode_png_test_lock
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        assert!(
+            sys::decode_png.read().unwrap().is_some(),
+            "the wuffs feature is on but no PNG decoder is installed"
+        );
+
+        // const data = @embedFile("testdata/image-png-zlib_deflate-50x76-2147483647-raw.data");
+        let data = include_bytes!("testdata/image-png-zlib_deflate-50x76-2147483647-raw.data");
+
+        let cmd: command::Command = command::Command {
+            control: command::Control::Transmit(command::Transmission {
+                format: command::Format::Png,
+                medium: command::Medium::Direct,
+                compression: command::Compression::ZlibDeflate,
+                image_id: 31,
+                ..Default::default()
+            }),
+            quiet: command::Quiet::No,
+            data: crate::alloc::heap_bytes(data),
+        };
+        let mut loading = LoadingImage::init(crate::alloc::Global, &cmd, &Limits::DIRECT).unwrap();
+        let img = loading.complete(crate::alloc::Global).unwrap();
+
+        // try testing.expectEqual(command.Transmission.Compression.none, img.compression);
+        assert_eq!(command::Compression::None, img.compression);
+        // try testing.expectEqual(command.Transmission.Format.rgba, img.format);
+        assert_eq!(command::Format::Rgba, img.format);
+        // try testing.expectEqual(@as(u32, 50), img.width);
+        assert_eq!(50u32, img.width);
+        // try testing.expectEqual(@as(u32, 76), img.height);
+        assert_eq!(76u32, img.height);
+    }
+
+    // NOT a reference test (P7-W5 T2): `4b86e3594` changed `decompressZlib`'s
+    // error mapping so an allocation failure is `error.OutOfMemory`
+    // (`error.OutOfMemory => return error.OutOfMemory`), where the stream reader
+    // before it reported every failure as `DecompressionFailed`. Allocation 0
+    // is the payload copy; allocation 1, the first of the decode (the decoder
+    // storage), is refused.
+    #[test]
+    #[cfg_attr(miri, ignore = "calls the vendored Wuffs C decoder (R14)")]
+    fn image_load_zlib_decompression_propagates_out_of_memory() {
+        let failing =
+            crate::alloc::testing::FailingAllocator::over_heap(crate::alloc::testing::Config {
+                fail_index: 1,
+                ..crate::alloc::testing::Config::default()
+            });
+        let failing_c = failing.allocator();
+        let compressed =
+            include_bytes!("testdata/image-rgb-zlib_deflate-128x96-2147483647-raw.data");
+        crate::alloc::testing::with_handle(&failing_c, |alloc| {
+            let mut loading = LoadingImage {
+                data: crate::alloc::try_dupe(alloc, compressed).unwrap(),
+                ..shm_loading(128, 96, command::Format::Rgb)
+            };
+            loading.image.compression = command::Compression::ZlibDeflate;
+            assert_eq!(Err(Error::OutOfMemory), loading.decompress(alloc));
+            assert!(failing.has_induced_failure.get());
+            assert_eq!(command::Compression::ZlibDeflate, loading.image.compression);
+            loading.deinit(alloc);
+        });
     }
 
     // test "image load: png rejects oversized decoder allocation"

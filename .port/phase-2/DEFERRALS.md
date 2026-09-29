@@ -5782,7 +5782,13 @@ rustty_vt_c.wasm` (~1.02 MB, valid WASM MVP, 157 exports)** — the rustty analo
    cfg(wasm) for every simdutf/highway kernel (base64, codepoint_width, index_of,
    utf8-vt — extending the existing `cfg!(miri)` scalar precedent; C++ `-sys`
    gated off), and `rustty-vt` kitty zlib path → `Unsupported` stub on wasm
-   (drops `zlib-sys`). New `crates/rustty-web-canvas` cdylib pulls `rustty-vt-c` +
+   (drops `zlib-sys`). (SUPERSEDED by P7-W5 T2, DECISIONS B8: the reference's
+   kitty zlib now decodes through wuffs, which it builds for wasm32 with minimal
+   libc headers, so the stub is gone and `rustty-vt` links the C `wuffs-sys`
+   whenever `kitty-graphics` is on, on wasm32 too; its `zlib-sys` edge is gone.
+   A wasm build of anything with kitty graphics therefore needs a C compiler
+   that targets wasm32, `CC_wasm32_unknown_unknown` or a `clang` with the
+   WebAssembly backend; Apple's clang has none.) New `crates/rustty-web-canvas` cdylib pulls `rustty-vt-c` +
    `rustty-font-shaper` + web_canvas. The wasi `rustty-vt-c.wasm` (residual 3)
    remains as the server/node variant; native + wasip1 builds stay green.
 3. ~~**Runtime proof is instantiate + `rustty_type_json()`**~~ **RESOLVED
