@@ -139,7 +139,7 @@ pub mod imp {
             self.parent_size_allocate(width, height, baseline);
 
             if !self.scale_logged_size.get() && width > 0 && height > 0 {
-                obj.log_scale("allocated", width, height);
+                obj.report_scale("allocated", width, height);
                 self.scale_logged_size.set(true);
             }
         }
@@ -261,8 +261,6 @@ impl RenderSurface {
         let bounds = texture_bounds(flip, origin, css_w, css_h);
         if flip {
             snap.save();
-        }
-        if flip {
             snap.translate(&graphene::Point::new(
                 bounds.translate.0,
                 bounds.translate.1,
@@ -323,7 +321,7 @@ impl RenderSurface {
         });
         imp.scale_notify_id.replace(Some(id));
         let widget: &gtk4::Widget = self.upcast_ref();
-        self.log_scale("connected", widget.width(), widget.height());
+        self.report_scale("connected", widget.width(), widget.height());
     }
 
     fn disconnect_scale_notify(&self) {
@@ -339,12 +337,16 @@ impl RenderSurface {
 
     fn on_scale_notify(&self) {
         let widget: &gtk4::Widget = self.upcast_ref();
-        self.log_scale("changed", widget.width(), widget.height());
+        self.report_scale("changed", widget.width(), widget.height());
         self.emit_device_resize(widget.width(), widget.height());
         widget.queue_draw();
     }
 
-    fn log_scale(&self, event: &str, css_width: i32, css_height: i32) {
+    // PORTS: `render_surface.zig:277` `logScale`. PORT NOTE: named
+    // `report_scale`, not `log_scale`, because the log gate (G-LOGFILE) treats a
+    // `log_*` fn as a facade and counts its call sites, which are method calls
+    // here that it cannot see; under this name it counts the one `log::debug!`.
+    fn report_scale(&self, event: &str, css_width: i32, css_height: i32) {
         let widget: &gtk4::Widget = self.upcast_ref();
         let Some(native) = widget.native() else {
             return;

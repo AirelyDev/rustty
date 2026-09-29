@@ -395,8 +395,9 @@ impl Renderer {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            // OpenGL: no windowed host-attach — GTK's GLArea owns the context; the
-            // real leaf is a no-op on a null/typeless view (linux_impl
+            // OpenGL: no windowed host-attach. The renderer owns a surfaceless EGL
+            // context and exports its frames to the apprt (`2f0b65346`); the real
+            // leaf is a no-op on a null/typeless view (linux_impl
             // `attach_host_view`), matching the reference's non-macOS `attach_host_view`.
             self.0.attach_host_view(view, scale)
         }

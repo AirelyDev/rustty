@@ -503,20 +503,24 @@ impl OpenGL {
     ) -> Result<ExportedFrame, Error> {
         // We only export DMABUFs when the apprt can present them.
         // Otherwise, use CPU buffers.
+        //
+        // PORT NOTE (Windows, port-only): DMA-BUFs exist only on unix, so off
+        // unix the export attempt and its warn are compiled out and every frame
+        // goes straight to CPU memory. The reference builds no Windows library
+        // (UD359), so there is no reference behaviour to follow there.
+        #[cfg(unix)]
         if presentation_health == crate::Health::Healthy {
-            #[cfg(unix)]
-            {
-                if let Ok(dmabuf) = target.export_dmabuf(&self.egl) {
-                    return Ok(ExportedFrame::Dmabuf(dmabuf));
-                }
+            if let Ok(dmabuf) = target.export_dmabuf(&self.egl) {
+                return Ok(ExportedFrame::Dmabuf(dmabuf));
+            } else {
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "failed to export DMABUF, falling back to CPU presentation"
+                );
             }
-            // PORT NOTE (Windows): no DMA-BUF exists there, so the export is the
-            // reference's failing arm on every frame.
-            log::warn!(
-                target: LOG_SCOPE,
-                "failed to export DMABUF, falling back to CPU presentation"
-            );
         }
+        #[cfg(not(unix))]
+        let _ = presentation_health;
 
         // PORT NOTE (R7): `@intCast(target.width)` traps above `u32::MAX`.
         Ok(ExportedFrame::Memory(Memory {

@@ -24,9 +24,9 @@
 //! and never terminates its display. This module now also carries that EGL
 //! half — [`EglError`], [`Image`], the `EGL_MESA_image_dma_buf_export` entry
 //! points, the `EGL_SURFACE_TYPE = 0` config request, no `eglTerminate`
-//! (DECISIONS B10) — and [`OffscreenContext`] stands in for the renderer-owned
-//! display + context until stage S2 merges it into `OpenGL::init`. The GL function
-//! table [`prepare_context`] loads is the calling thread's (`glad`, DECISIONS B9).
+//! (DECISIONS B10) — and [`OffscreenContext`] is the renderer-owned display +
+//! context that `OpenGL::init` creates (P7-W7 T2). The GL function table
+//! [`prepare_context`] loads is the calling thread's (`glad`, DECISIONS B9).
 //!
 //! PORT NOTE (`const log = std.log.scoped(.opengl);`, `OpenGL.zig:34`): the
 //! scoped logger is reproduced by the `log_*!` macros in the parent module. (The
