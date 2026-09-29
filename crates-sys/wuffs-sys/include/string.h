@@ -1,8 +1,7 @@
 /* PORTS: ghostty pkg/wuffs/include/string.h (`619555d1c` build-without-libc).
- * LIVE on wasm32 since P7-W5 T2 (DECISIONS B8): wuffs-sys's build.rs puts
- * this directory first on the include path there (the reference does so on
- * every non-Windows target); native targets compile against the real system
- * libc headers. */
+ * LIVE since P7-W5 T2 (DECISIONS B8): wuffs-sys's build.rs puts this
+ * directory first on the include path on every non-Windows target, as the
+ * reference does. */
 
 // Minimal string.h so that wuffs can be translated and compiled without
 // requiring libc headers (e.g. for wasm32-freestanding targets, or to

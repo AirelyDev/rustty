@@ -35,11 +35,11 @@
 //! build-without-libc) are mirrored at `include/`. They exist so the reference
 //! can translate and compile wuffs without libc headers (wasm32-freestanding /
 //! no Apple SDK). Since P7-W5 T2 (DECISIONS B8: kitty zlib decodes through
-//! wuffs on every target the reference builds, wasm32 included) they are LIVE
-//! on wasm32: `include/` goes first on the include path of the codec TU, the
-//! shim TU and bindgen there, as the reference puts it first on every
-//! non-Windows target. Native targets keep compiling against the real system
-//! libc headers, as before (the headers only declare what libc declares).
+//! wuffs on every target the reference builds, wasm32 included) they are LIVE:
+//! `include/` goes first on the include path of the codec TU, the shim TU and
+//! bindgen on every non-Windows target, as the reference puts it. The headers
+//! only declare what libc declares, with the standard C ABI, so a target that
+//! links libc links the same symbols.
 //! Where no libc is linked (wasm32 other than WASI) `wasm_libc_stubs.c`
 //! supplies the reference `main.zig`'s weak, hidden `calloc`/`free` stubs.
 //!
@@ -101,8 +101,12 @@ fn main() {
     //   // libc, notably for freestanding targets (wasm32) but this also
     //   // avoids requiring an Apple SDK for translate-c on macOS.
     //   false => &.{ b.path("include"), wuffs_dep.path("release/c") },
-    // PORT NOTE (DECISIONS B8): applied on wasm32, the target that has no libc
-    // headers here; native targets have their SDK's (see the module header).
+    // Applied as the reference applies it: on every target but Windows. It is
+    // what lets a cross build with no target sysroot (wasm32, or the
+    // `c-vt-cmake-cross` example's aarch64 Linux from macOS) compile and
+    // bindgen the header, since P7-W5 T2 put wuffs in every kitty-graphics
+    // graph (DECISIONS B8).
+    let minimal_libc_headers = target_os != "windows";
     let wasm = target_arch == "wasm32";
     let libc_include = manifest_dir.join("include");
     // `builtin.link_libc` is false: nothing else provides `calloc`/`free`.
@@ -110,7 +114,7 @@ fn main() {
     let no_libc = wasm && target_os != "wasi";
 
     let mut build = cc::Build::new();
-    if wasm {
+    if minimal_libc_headers {
         build.include(&libc_include);
     }
     build
@@ -180,7 +184,7 @@ fn main() {
     // "wuffs"` uniqueness key is unaffected (it gates the -sys crate, not the
     // count of `rustc-link-lib` directives).
     let mut shim = cc::Build::new();
-    if wasm {
+    if minimal_libc_headers {
         shim.include(&libc_include);
     }
     // Same compiler as the codec TU above (task F-1, N353).
@@ -235,8 +239,10 @@ fn main() {
     // object.
     let mut builder =
         bindgen::Builder::default().header(manifest_dir.join("wrapper.h").to_string_lossy());
-    if wasm {
+    if minimal_libc_headers {
         builder = builder.clang_arg(format!("-I{}", libc_include.display()));
+    }
+    if wasm {
         // clang gives wasm targets hidden default visibility, and bindgen
         // emits no binding for a hidden function (it could not be linked from
         // another object): parse with default visibility so the declared
