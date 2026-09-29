@@ -66,7 +66,7 @@ mod dir_defines;
 /// build compiles it (`src/meson.build:25`): it defines only the public
 /// `FcConfigFileGenerate`/`FcConfigFileGenerateGenericAlias`, which no other TU
 /// calls, so the archive leaves that API undefined. Faithful,
-/// `.port/phase-7/DECISIONS.md` B14; latent note N439.)
+/// `.port/phase-7/DECISIONS.md` B14; latent note N438.)
 const SOURCES: &[&str] = &[
     "src/fcatomic.c",
     "src/fccache.c",
@@ -119,6 +119,7 @@ fn main() {
         .collect();
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
     let windows = target_os == "windows";
     let ptr_bits: u32 = env::var("CARGO_CFG_TARGET_POINTER_WIDTH")
         .ok()
@@ -162,17 +163,23 @@ fn main() {
         .flag_if_supported("-w");
 
     // ---- FC_VERSION_* (build.zig:148-153) -----------------------------------
-    // The reference derives these from its `build.zig.zon` `.version`, which
-    // still reads "2.14.2" at 2.18.3 (stale). Ported as the reference's literal
-    // values (`.port/phase-7/DECISIONS.md` B14; N438). `FcGetVersion()` does not
-    // read them (it returns `FC_VERSION` from `fontconfig.h`, i.e. 21803), but
-    // the cache does: `fccache.c:1340-1342` stamps every cache file it writes
-    // with them, and `FcCacheIsNewVersion` (`fccache.c:793-817`) compares a
-    // cache's stamp against them. N438 records what that changes.
+    // PORT NOTE: reference defect (R13), UD360. The reference derives these
+    // from its `build.zig.zon` `.version`, which still reads "2.14.2" at 2.18.3
+    // (stale), so it passes 2/14/2. `FcGetVersion()` does not read them (it
+    // returns `FC_VERSION` from `fontconfig.h`, i.e. 21803), but the cache
+    // does: `fccache.c:1340-1342` stamps every cache file it writes with them,
+    // and `FcCacheIsNewVersion` (`fccache.c:793-817`) treats a cache stamped
+    // with a higher version as newer and re-uses it after its directory
+    // changed (`fccache.c:1015-1021`). With 2/14/2, a cache written by a real
+    // 2.18.x fontconfig is re-used stale and fonts added since are not seen.
+    // The port passes the vendored release's real version, 2/18/3, which is
+    // what fontconfig's own autotools and meson builds pass
+    // (`configure.ac:75-77`, `meson.build:45-47`). Tested by
+    // `ud360_cache_stamped_by_fontconfig_2_18_3_is_rescanned_after_its_dir_changes`.
     build
         .define("FC_VERSION_MAJOR", Some("2"))
-        .define("FC_VERSION_MINOR", Some("14"))
-        .define("FC_VERSION_MICRO", Some("2"));
+        .define("FC_VERSION_MINOR", Some("18"))
+        .define("FC_VERSION_MICRO", Some("3"));
 
     // ---- Verbatim common flag list (build.zig:155-198) ----------------------
     for def in [
@@ -185,7 +192,8 @@ fn main() {
         "HAVE_MKSTEMP",
         "HAVE_RAND",
         "HAVE_VPRINTF",
-        // Selects the `FcStrDupVapFormat` arm at `fcint.h:1031`.
+        // Selects the `FcStrDupVapFormat` arm at `fcint.h:1044` (UD358: not on
+        // Windows GNU, where `HAVE__VSNPRINTF_L` below takes precedence).
         "HAVE_VSNPRINTF",
         "HAVE_FT_GET_BDF_PROPERTY",
         "HAVE_FT_GET_PS_FONT_INFO",
@@ -224,6 +232,22 @@ fn main() {
                 "FC_DEFAULT_FONTS",
                 Some("\"\\t<dir>WINDOWSFONTDIR</dir>\\n\\t<dir>WINDOWSUSERFONTDIR</dir>\\n\""),
             );
+        // PORT NOTE: reference defect (R13), UD358. The reference defines
+        // `HAVE_VSNPRINTF` on every target (build.zig:169), which selects the
+        // `FcStrDupVapFormat` arm at `fcint.h:1044-1077`. That arm calls
+        // `FcLocaleSetCurrent`, which fontconfig declares and defines off
+        // Windows only (`fcint.h:973-976`, `fccompat.c:374-387`), so on a
+        // GNU-ABI Windows target the reference's own
+        // `-Werror=implicit-function-declaration` (build.zig:292-297) fails
+        // `fcstr.c` and the backend it offers there does not build. Defining
+        // `HAVE__VSNPRINTF_L` selects the arm fontconfig provides for Windows
+        // (`fcint.h:991-1010`: `_vsnprintf_l` with a `_create_locale` "C"
+        // locale), which never calls `FcLocaleSetCurrent`. MSVC is
+        // refused before this crate is built (`rustty-build-config`, N286: no
+        // `unistd.h`), so only the GNU ABI reaches it.
+        if target_env == "gnu" {
+            build.define("HAVE__VSNPRINTF_L", None);
+        }
     } else {
         // ---- Off-Windows HAVE_* + cache/font dirs (build.zig:220-243) -------
         for def in [

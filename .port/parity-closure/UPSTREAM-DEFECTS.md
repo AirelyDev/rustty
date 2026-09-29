@@ -2872,6 +2872,57 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    make `cells_rebuilt` atomic (`std.atomic.Value(bool)`), or compute `syncDisplayLink`'s `should_run` while `draw_mutex` is held and do only the `start`/`stop` after releasing it.
 - upstream status: NOT YET REPORTED
 
+### UD358 — fontconfig 2.18.3 does not compile for GNU-ABI Windows: `FcLocaleSetCurrent` is undeclared there
+
+- kind:            non-crash (evident intent broken: build failure)
+- upstream project: ghostty (its `pkg/fontconfig/build.zig` flag set; fontconfig itself is consistent)
+- severity:        low (a build option Ghostty offers on Windows does not build; nothing at runtime)
+- reference:       `pkg/fontconfig/build.zig` at 12752b2ac (`501e7b5c1`): `-DHAVE_VSNPRINTF` on every target (`:169`), a Windows arm (`:213-219`) and a Windows-only `-Werror=implicit-function-declaration` (`:292-297`). fontconfig 2.18.3: `HAVE_VSNPRINTF` selects the `FcStrDupVapFormat` arm at `src/fcint.h:1044-1077`, which calls `FcLocaleSetCurrent`; that function is declared and defined only `#ifndef _WIN32` (`fcint.h:973-976`, `fccompat.c:374-387`). The arm fontconfig provides for Windows is `HAVE__VSNPRINTF_L` (`fcint.h:991-1010`, `_vsnprintf_l` with a `_create_locale` "C" locale), which the reference never defines. `src/build/SharedDeps.zig:292` builds fontconfig for any target whose font backend has it, and `-Dfont-backend=fontconfig_freetype` is accepted on Windows (`Config.zig:191-195`).
+- defect:          on `x86_64-windows-gnu`, `fcstr.c` calls an undeclared `FcLocaleSetCurrent`, which the reference's own `-Werror=implicit-function-declaration` turns into an error, so `-Dfont-backend=fontconfig_freetype` no longer builds there. At 20abdb50a (fontconfig 2.14.2, no `HAVE_VSNPRINTF`) it built and its fontconfig tests passed on Windows 11 (N286, task W-6).
+- ReleaseSafe:     build failure. MEASURED (P7-W10 T1): Zig 0.16 cross-build on macOS of a copy of the reference at 12752b2ac, `zig build -Dtarget=x86_64-windows-gnu -Demit-test-exe=true -Dfont-backend=fontconfig_freetype -Dtest-filter=fontconfig`: "compile lib fontconfig Debug x86_64-windows-gnu 5 errors", `src/fcstr.c:121:5` (and `:133`, `:1001`, `:1015`): "call to undeclared function 'FcLocaleSetCurrent'".
+- ReleaseFast:     the same.
+- reachability:    any Windows GNU build with `-Dfont-backend=fontconfig_freetype`. (At the pin that build also stops on UD359.)
+- output needed:   the compile errors above.
+- port handling:   `crates-sys/fontconfig-sys/build.rs` defines `HAVE__VSNPRINTF_L` when the target is Windows with the GNU ABI, which selects fontconfig's Windows arm. MSVC is refused earlier by `rustty-build-config` (N286: no `unistd.h`, which the reference also fails on). `PORT NOTE: reference defect (R13)` at the define. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   N286 (the Windows `fontconfig_freetype` row this reopened); DECISIONS D3.
+- test:            the GNU build itself, run on Windows 11 (`rwin`): `cargo test -p fontconfig-sys -p rustty-font-shaper --target x86_64-pc-windows-gnu --features rustty-build-config/font-backend-fontconfig-freetype`, cross-built on macOS with mingw-w64 and the test executables run on `rwin`, three runs of three: fontconfig-sys 4 passed (KAT and UD360 included); font-shaper 132 passed, 0 failed, 4 ignored, including `fc::tests::fc_list`, `fc_match`, `discovery::tests::fontconfig`, `fontconfig_codepoint` and `deferred_face::tests::fontconfig`. Negative control: without the define, the port's GNU build fails the same way as the reference (`fcint.h:1051:29: error: implicit declaration of function 'FcLocaleSetCurrent'`).
+- proposed fix:    in `pkg/fontconfig/build.zig`'s Windows arm, add `-DHAVE__VSNPRINTF_L` (or define `HAVE_VSNPRINTF` off Windows only and `HAVE__VSNPRINTF_L` on Windows).
+- upstream status: not reported
+
+### UD359 — the reference's `posix_c` translate-c step includes `pwd.h` on every target, so no Windows build of the Ghostty library compiles
+
+- kind:            non-crash (evident intent broken: build failure)
+- upstream project: ghostty
+- severity:        low for Ghostty's shipped apps (none is built for Windows, and CI builds only libghostty-vt there); it breaks every Windows build of the full library
+- reference:       `src/build/SharedDeps.zig:216-229` at 12752b2ac (added by `fe9cf6a26`, "build: fully transition away from cImport/addTranslateC"): `translate_c.addImportToModule(b, "posix_c", ...)` with `errno.h`, `pwd.h`, `signal.h`, `sys/types.h`, `unistd.h`, unconditionally. Before, each user gated its own `@cImport` (`src/os/passwd.zig` at 20abdb50a: `const c = if (builtin.os.tag != .windows) @cImport({ ... @cInclude("pwd.h"); }) else {};`); at the pin the users still gate the import (`passwd.zig:20`: `if (builtin.os.tag != .windows) @import("posix_c") else {}`), but the translation step itself now runs for Windows too. Neither MinGW nor the MSVC headers have `pwd.h`.
+- defect:          the `posix_c` translate-c step fails on Windows, so `compile lib ghostty` (the `ghostty-internal` library and the test executable) cannot build for Windows, whatever the font backend. libghostty-vt does not use `posix_c` and still builds (CI's `build-libghostty-vt` covers `x86_64-windows-gnu`, which is why this was not caught).
+- ReleaseSafe:     build failure. MEASURED (P7-W10 T1): GNU, cross-built on macOS (`zig build -Dtarget=x86_64-windows-gnu -Demit-test-exe=true`, both with `-Dfont-backend=fontconfig_freetype` and with the default backend and `-Dtest-filter=windows`): "translate-c posix_c.h failure ... posix_c.h:2:10: fatal error: 'pwd.h' not found"; only `ghostty-vt.dll` is installed. MSVC, natively on `rwin` (`zig build test -Dtarget=x86_64-windows ...`): the same `pwd.h` failure. At 20abdb50a (before `fe9cf6a26`) both built: the MSVC default-backend tests passed natively on `rwin` ("All 84 tests passed") and the GNU `fontconfig_freetype` build passed its tests there ("All 76 tests passed"), N286.
+- ReleaseFast:     the same.
+- reachability:    any Windows build of the Ghostty library or its tests.
+- output needed:   the translate-c error above.
+- port handling:   Rustty is unaffected; no code change. Rust has no translate-c step: `rustty-os` takes `passwd`, `getpwuid_r` and `getuid` from the `libc` crate behind `#[cfg(not(windows))]` (`crates/rustty-os/src/passwd.rs`), so nothing reads `pwd.h` when building for Windows, and the portable tier builds and passes its tests on `rwin` (N342). Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   R4 §I (recorded `fe9cf6a26` as "N/A, no compile flag changed"; this is the one build effect it missed).
+- test:            none in Rust (nothing to translate). Evidence: the Windows lanes of `rustty-os` and the -sys tier build (`fontconfig-sys`/`rustty-font-shaper` GNU tests above, UD358).
+- proposed fix:    add the `posix_c` import only when `target.result.os.tag != .windows` (the users already gate on that), or split `pwd.h` into its own non-Windows import.
+- upstream status: not reported
+
+### UD360 — the reference compiles fontconfig 2.18.3 with the version 2.14.2, so it re-uses stale font caches written by a real fontconfig
+
+- kind:            non-crash (evident intent broken: stale font cache re-used)
+- upstream project: ghostty
+- severity:        low (fonts added after a system fontconfig last wrote the cache are not found until that cache is regenerated; a warning on stderr)
+- reference:       `pkg/fontconfig/build.zig:148-153` at 12752b2ac: `-DFC_VERSION_{MAJOR,MINOR,MICRO}` from `build.zig.zon`'s `.version`, which `501e7b5c1` left at "2.14.2" while moving the tarball to 2.18.3. fontconfig 2.18.3 `src/fccache.c`: `:1340-1342` stamps every cache file it writes with `(FC_VERSION_MAJOR << 24) + (FC_VERSION_MINOR << 12) + FC_VERSION_MICRO`; `FcCacheIsNewVersion` (`:793-817`) returns true for a cache whose stamp is higher, printing "Fontconfig warning: We will not regenerate the cache because some cache files were generated by a newer version ..." once; `FcDirCacheMapFd` (`:1015-1021`, also `:1070`) then re-uses the cache although `FcCacheTimeValid` found its directory changed. `FcGetVersion()` is not affected (it returns `FC_VERSION` from the generated `fontconfig.h`, 21803).
+- defect:          the static fontconfig stamps its caches 0x200e002 and treats every cache stamped by a real fontconfig of a later version that writes the same cache format (`FC_CACHE_VERSION_NUMBER` 12, for example 2.18.x) as newer. When such a system fontconfig shares the cache directory (`~/.cache/fontconfig`), a font directory that changed since is not rescanned: new fonts are missing. A correctly stamped 2.18.3 compares equal and rescans. R4 §A fact 1 and DECISIONS B14 assumed nothing reads the defines; `fccache.c` does, directly as `-D` flags.
+- ReleaseSafe:     wrong font list, no crash. MEASURED (P7-W10 T1) on Fedora 44 (`rvm`) with the port built as the reference (2/14/2): the cache files it writes read `fc_version = 0x200e002` at offset 64; with a private `<cachedir>`, a cache whose stamp is patched to 0x2012003 (what fontconfig 2.18.3 writes) and a font added to its directory: the warning above, "(0x2012003) ... (current version: 0x200e002)", and the cache is not rewritten; without the patch, no warning and the directory is rescanned.
+- ReleaseFast:     the same.
+- reachability:    a Linux or BSD Ghostty that links the bundled fontconfig (not `-fsys=fontconfig`) on a system whose fontconfig writes cache format 12 with a real version above 2.14.2; fonts installed after the system cache was last regenerated.
+- output needed:   the stderr warning, and a font missing from `+list-fonts` and font fallback.
+- port handling:   `crates-sys/fontconfig-sys/build.rs` passes the vendored release's real version, `FC_VERSION_MAJOR=2`, `FC_VERSION_MINOR=18`, `FC_VERSION_MICRO=3` (what fontconfig's autotools and meson builds pass, `configure.ac:75-77`, `meson.build:45-47`). `PORT NOTE: reference defect (R13)` at the defines. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   DECISIONS B14 (revised by the controller, 2026-09-28); NEW-FINDINGS N438 (the remaining `fcconffile.c` note).
+- test:            `fontconfig-sys` `tests::ud360_cache_stamped_by_fontconfig_2_18_3_is_rescanned_after_its_dir_changes`: one font in a private font directory and cachedir, scan (writes the cache), stamp the cache 0x2012003, add a second font a second later, and a fresh config must find 2 fonts. Fail-first, on macOS and on Linux (`rvm`): with the reference's 2/14/2 it prints the warning and finds 1 (`left: 1, right: 2`). With 2/18/3 it passes on macOS, Linux (`rvm`) and Windows GNU (`rwin`, 3/3 runs).
+- proposed fix:    set `build.zig.zon`'s `.version` to "2.18.3" (the defines then follow), or pass the fontconfig tarball's own version.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

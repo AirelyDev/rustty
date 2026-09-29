@@ -150,11 +150,10 @@ fn font_backend() {
             //     (re-measured at 2.18.3, P7-W10 T1). With an explicit GNU ABI
             //     (`-Dtarget=x86_64-windows-gnu`, MinGW headers) the reference
             //     built it at 2.14.2 and its fontconfig tests passed, so the
-            //     port accepts it on `target_env = "gnu"`. At 2.18.3 both the
-            //     reference and the port fail to compile fontconfig there
-            //     (`FcLocaleSetCurrent` is declared off Windows only, and the
-            //     reference defines no `HAVE__VSNPRINTF_L`); see the P7-W10 T1
-            //     report.
+            //     port accepts it on `target_env = "gnu"`. At 2.18.3 the
+            //     reference no longer compiles fontconfig there
+            //     (`FcLocaleSetCurrent` is declared off Windows only); the port
+            //     fixes that in `fontconfig-sys` (UD358).
             // (`web_canvas` has no feature: `font/main.zig:50` forces it on
             // wasm, and its face/shaper call browser externs.) CORRECTION
             // (S-14b, review M3): `fontconfig_freetype` on macOS and

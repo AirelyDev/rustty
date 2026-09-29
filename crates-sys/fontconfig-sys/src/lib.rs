@@ -61,8 +61,8 @@ mod tests {
     /// initLoadConfig tests + `pattern.zig`'s "create" test):
     ///
     ///   * `FcGetVersion()` returns exactly `21803` — the fixed known answer for
-    ///     the pinned 2.18.3 (`FC_VERSION` in `override/fontconfig/fontconfig.h`,
-    ///     NOT the stale `FC_VERSION_*` 2.14.2 defines `build.rs` passes, N438),
+    ///     the pinned 2.18.3 (`FC_VERSION` in `override/fontconfig/fontconfig.h`;
+    ///     the `FC_VERSION_*` defines `build.rs` passes stamp the cache, UD360),
     ///     and proof we linked the vendored archive rather than a host's system
     ///     fontconfig (2.17 reports `21700`, 2.14.2 `21402`).
     ///   * `FcInitLoadConfig()` returns a non-null `*FcConfig` — a LIVE fontconfig
@@ -79,9 +79,8 @@ mod tests {
     fn kat_fontconfig_2_18_3_init_and_pattern() {
         // Known-answer: the vendored release is exactly fontconfig 2.18.3, whose
         // encoded version is major*10000 + minor*100 + micro = 2*10000 + 18*100
-        // + 3 = 21803. If this ever reads 21402 (the stale `FC_VERSION_*`
-        // defines), 21700 (or anything else), we linked a different fontconfig
-        // than the pinned one.
+        // + 3 = 21803. If this ever reads 21402, 21700 (or anything else), we
+        // linked a different fontconfig than the pinned one.
         // SAFETY: `FcGetVersion` takes no arguments and only reads a compile-time
         // constant; it is safe to call at any time.
         let version = unsafe { FcGetVersion() };
@@ -122,5 +121,106 @@ mod tests {
             FcPatternDestroy(pat);
             FcConfigDestroy(config);
         }
+    }
+
+    /// Byte offset of `FcCache.fc_version` in a cache file (`fcint.h:453-466`:
+    /// two `int`s, four `intptr_t`s, four more `int`s and the `int64_t`
+    /// `checksum_nano` precede it on a 64-bit target: 8 + 32 + 16 + 8 = 64).
+    #[cfg(target_pointer_width = "64")]
+    const FC_VERSION_OFFSET: u64 = 64;
+
+    /// The stamp fontconfig 2.18.3 writes into every cache file
+    /// (`fccache.c:1340-1342`: `(major << 24) + (minor << 12) + micro`).
+    const STAMP_2_18_3: i64 = (2 << 24) + (18 << 12) + 3;
+
+    /// Number of fonts a fresh config over `conf` (a fonts.conf document)
+    /// finds, using and writing the cache.
+    fn fonts_found(conf: &str) -> c_int {
+        let doc = std::ffi::CString::new(conf).unwrap();
+        // SAFETY: plain fontconfig C API calls on a config this function
+        // creates and destroys; `doc` outlives the parse, and the font set is
+        // owned by the config and read before it is destroyed.
+        unsafe {
+            let config = FcConfigCreate();
+            assert!(!config.is_null(), "FcConfigCreate returned NULL");
+            assert_ne!(
+                FcConfigParseAndLoadFromMemory(config, doc.as_ptr() as *const FcChar8, 1),
+                0,
+                "FcConfigParseAndLoadFromMemory"
+            );
+            assert_ne!(FcConfigBuildFonts(config), 0, "FcConfigBuildFonts");
+            let set = FcConfigGetFonts(config, _FcSetName_FcSetSystem);
+            let n = if set.is_null() { 0 } else { (*set).nfont };
+            FcConfigDestroy(config);
+            n
+        }
+    }
+
+    /// UD360: the reference passes its stale `build.zig.zon` version, 2.14.2,
+    /// as `FC_VERSION_*`, so its cache files are stamped 0x200e002 and a cache
+    /// stamped by a real fontconfig 2.18.3 counts as NEWER
+    /// (`FcCacheIsNewVersion`, `fccache.c:793-817`): `FcDirCacheMapFd` re-uses
+    /// it after its directory changed, and a font added since is not found.
+    ///
+    /// The cache is stamped as fontconfig 2.18.3 stamps it (for this build that
+    /// is also what it wrote), a second font is added, and a fresh config must
+    /// find both. With the reference's 2/14/2 it finds one (the stale cache).
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn ud360_cache_stamped_by_fontconfig_2_18_3_is_rescanned_after_its_dir_changes() {
+        use std::fs;
+        use std::io::{Seek, SeekFrom, Write};
+
+        let base =
+            std::env::temp_dir().join(format!("fontconfig-sys-ud360-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let fonts = base.join("fonts");
+        let cache = base.join("cache");
+        fs::create_dir_all(&fonts).unwrap();
+        fs::create_dir_all(&cache).unwrap();
+        // A font the sibling `freetype-sys` crate ships, embedded so the test
+        // also runs where it was not built (the Windows GNU test executables
+        // are cross-built); two copies under two names are two fonts to
+        // fontconfig.
+        const FONT: &[u8] = include_bytes!("../../freetype-sys/res/GeistMono-Regular.ttf");
+        fs::write(fonts.join("a.ttf"), FONT).unwrap();
+
+        let conf = format!(
+            "<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n\
+             <fontconfig><dir>{}</dir><cachedir>{}</cachedir></fontconfig>",
+            fonts.display(),
+            cache.display()
+        );
+
+        // Scan once: writes the directory's cache file.
+        assert_eq!(fonts_found(&conf), 1, "first scan");
+        let cache_files: Vec<_> = fs::read_dir(&cache)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.to_string_lossy().contains(".cache-"))
+            .collect();
+        assert_eq!(cache_files.len(), 1, "one cache file: {cache_files:?}");
+
+        // Stamp it as fontconfig 2.18.3 does (a system 2.18.3 sharing the
+        // cache directory would have written exactly this).
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .open(&cache_files[0])
+            .unwrap();
+        f.seek(SeekFrom::Start(FC_VERSION_OFFSET)).unwrap();
+        f.write_all(&STAMP_2_18_3.to_le_bytes()).unwrap();
+        drop(f);
+
+        // Change the directory in a later second (the cache compares whole
+        // seconds of the directory's mtime, `FcCacheTimeValid`).
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        fs::write(fonts.join("b.ttf"), FONT).unwrap();
+
+        let found = fonts_found(&conf);
+        let _ = fs::remove_dir_all(&base);
+        assert_eq!(
+            found, 2,
+            "a cache stamped by fontconfig 2.18.3 must be rescanned once its directory changed"
+        );
     }
 }
