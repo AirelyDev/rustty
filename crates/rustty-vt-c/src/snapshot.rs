@@ -1180,6 +1180,10 @@ pub unsafe fn encode_alloc(
     // const bytes = writer.toOwnedSlice() catch return .out_of_memory;
     // PORT NOTE (parity tail S7-8): the writer's own buffer, shrunk to the
     // written length through the caller's allocator (`toOwnedSlice`).
+    // PORT NOTE (`dd2edd760`): the reference keeps `out_ptr.* = bytes.ptr`
+    // here; the shared `into_c_bytes` would export an empty buffer as NULL,
+    // but an encoded snapshot is never empty (it always carries the header
+    // record), so the two agree on every reachable output.
     let (dst, len) = match writer.to_owned_slice() {
         Ok(buf) => crate::allocator::into_c_bytes(buf),
         Err(_) => return Result::OutOfMemory,

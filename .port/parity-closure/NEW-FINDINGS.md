@@ -6034,6 +6034,20 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (every routing test fails: 5 vs 144 bytes), the continuation's `toOwnedSlice` failure turned into a panic
   (the sweep's third loop panics; the first two loops did not reach it, which is why the third exists).
 - **state**: CLOSED (task S7-8).
+- **reversal (P7-W2 T2, upstream `dd2edd760`, DECISIONS B1/B2)**: the non-null empty sentinel above is
+  gone. Upstream now returns NULL with length zero for empty `format_alloc`, `selection_format_alloc` and
+  `continuation_alloc` output (and `ghostty_alloc(.., 0)` returns NULL), because an empty Zig slice's
+  sentinel address (Rust's dangling address is the same hazard) is rejected by foreign runtimes such as
+  Go's stack scanner even at length zero. `allocator::into_c_bytes` exports an empty buffer as NULL,
+  `allocator::alloc(_, 0)` returns NULL before the allocator is resolved, and borrowed empty strings
+  (`rustty_lib::String::init`) point at the one-byte `rustty_lib::EMPTY` static (Zig's `""`).
+  `encode_alloc` keeps upstream's unconditional `bytes.ptr`, but its output is never empty (the header
+  record), so the shared `into_c_bytes` is equivalent there. Tests: the six upstream tests ("String.init
+  empty output", "alloc zero length", "format_alloc empty output", "selection_format_alloc empty output",
+  the extended "continuation buffer and allocator export exact suffix", "kitty_image_medium_temp_file empty
+  output"); the Rustty-only guards `custom_allocator_zero_length_short_circuit`,
+  `format_alloc_empty_output_never_reaches_the_c_allocator` and `format_alloc_null_allocator_round_trip`
+  now assert NULL and keep their "no zero-length allocator callback" halves.
 
 ## N332 — `snapshot::encode` takes the reference's allocator again; the record scratch spills through it
 
@@ -6842,6 +6856,15 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `memory_ptr` used after a `&mut` over the whole page memory. Such a report is a real finding, not a
   regression from this change.
 - **state**: CLOSED for `term_size.rs` (the warning is gone). The two deliberate sites stay (RECORDED).
+- **reversal (P7-W2 T2, upstream `dd2edd760`, DECISIONS B1)**: the C API no longer hands out a
+  zero-length sentinel address at all. `rustty_alloc(.., 0)` and the empty outputs of the three
+  allocating exports are NULL, and borrowed empty strings point at the real `rustty_lib::EMPTY` static,
+  so no provenance-free sentinel crosses the ABI. The selection test's `without_provenance_mut(1)`
+  (`@ptrFromInt(1)`) input sentinel is unchanged. The same task gave `rustty-lib`'s typed-helper
+  `zero_len_sentinel` (`allocator.rs`) the `without_provenance_mut` treatment this finding gave
+  `GlobalRawAllocator`: it was an integer-to-pointer cast, which Miri flagged in "String.init empty
+  output"; it is warning-free now. Miri (`formatter::`, `selection::`, `terminal::tests::continuation`,
+  `allocator::`, rustty-lib `types::`): clean.
 
 ## N362 — three S7 tests were not Miri-ready: a Stacked Borrows violation in a test, a should_panic leak, an 18-hour test
 

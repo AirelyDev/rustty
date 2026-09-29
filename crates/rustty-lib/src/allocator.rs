@@ -43,8 +43,12 @@ impl Alignment {
 /// maxInt(usize)))`, Zig 0.16 `std.mem.Allocator`). Non-null, aligned, and
 /// dereference-free; returned by the typed helpers WITHOUT calling the raw
 /// allocator so custom C allocators never observe zero-length callbacks.
+///
+/// PORT NOTE (strict provenance, as N361 did for `GlobalRawAllocator`): the
+/// address carries no provenance (`without_provenance_mut`), never an
+/// integer-to-pointer cast; it is never dereferenced.
 fn zero_len_sentinel(alignment: Alignment) -> *mut u8 {
-    alignment.backward(usize::MAX) as *mut u8
+    std::ptr::without_provenance_mut(alignment.backward(usize::MAX))
 }
 
 /// PORT NOTE: The Rust embodiment of a Zig `[]u8` slice — a `(ptr, len)` pair

@@ -1005,15 +1005,10 @@ impl Effects {
         // path allocation-free while supporting arbitrary multi-MIME writes.
         // (parity tail S7-4: past 4 the array is allocated through the
         // terminal's `gpa()`, fallibly: `catch return write.reply(.io_error)`.)
+        // .mime = .init(content.mime), .data = .init(content.data)
         let to_c = |content: &clipboard::Content<'_>| ClipboardContent {
-            mime: LibString {
-                ptr: content.mime.as_ptr(),
-                len: content.mime.len(),
-            },
-            data: LibString {
-                ptr: content.data.as_ptr(),
-                len: content.data.len(),
-            },
+            mime: LibString::init(content.mime),
+            data: LibString::init(content.data),
         };
 
         let mut stack_contents: [ClipboardContent; 4] = [ClipboardContent {
@@ -1318,14 +1313,9 @@ impl Effects {
         // actually built, never a literal.
         let request = DesktopNotification {
             size: std::mem::size_of::<DesktopNotification>(),
-            title: LibString {
-                ptr: notification.title.as_ptr(),
-                len: notification.title.len(),
-            },
-            body: LibString {
-                ptr: notification.body.as_ptr(),
-                len: notification.body.len(),
-            },
+            // .title = .init(notification.title), .body = .init(notification.body)
+            title: LibString::init(notification.title),
+            body: LibString::init(notification.body),
         };
         func(wrapper, userdata, &request);
     }
@@ -1392,10 +1382,8 @@ impl Effects {
                 value: UnknownSequenceValue {
                     apc: UnknownStringSequence {
                         truncated: apc_value.truncated,
-                        content: LibString {
-                            ptr: apc_value.content.as_ptr(),
-                            len: apc_value.content.len(),
-                        },
+                        // .content = .init(apc_value.content)
+                        content: LibString::init(apc_value.content),
                     },
                 },
             },
@@ -2425,11 +2413,15 @@ pub unsafe fn continuation_alloc(
 
     // Ownership crosses the ABI here; callers release this exact pointer and
     // length with rustty_free and the same allocator selection.
+    // An idle parser has no continuation. Never export the empty Zig slice's
+    // sentinel pointer to a foreign runtime.
     // PORT NOTE (parity tail S7-8): the bytes are the allocating writer's own
     // buffer on the caller's allocator (`toOwnedSlice`); an empty
-    // continuation made no allocator call.
+    // continuation made no allocator call, and `into_c_bytes` exports it as
+    // NULL (`dd2edd760`).
     let (dst, len) = crate::allocator::into_c_bytes(bytes);
-    // out_ptr.* = bytes.ptr; out_len.* = bytes.len;
+    // out_ptr.* = if (bytes.len == 0) null else bytes.ptr;
+    // out_len.* = bytes.len;
     unsafe {
         *out_ptr_ = dst;
         *out_len_ = len;
@@ -4257,7 +4249,7 @@ unsafe fn get_typed(terminal_: Terminal, data: TerminalData, out: *mut c_void) -
         //         .enabled => |d| d.directory,
         //         .disabled => "",
         //     };
-        //     out.* = .{ .ptr = dir.ptr, .len = dir.len };
+        //     out.* = .init(dir);
         // },
         TerminalData::KittyImageMediumTempFile => {
             if !rustty_vt::options::KITTY_GRAPHICS {
@@ -4997,12 +4989,13 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 continuation_alloc(t, Some(alloc), &mut out_ptr, &mut out_len)
             });
+            // const allocated = (out_ptr orelse return error.TestExpectedEqual)[0..out_len];
             assert!(!out_ptr.is_null());
             // SAFETY: `out_ptr[0..out_len]` is the allocation returned above.
-            assert_eq!(b"\x1b[31", unsafe {
-                core::slice::from_raw_parts(out_ptr, out_len)
-            });
-            // defer lib.alloc.default(&test_allocator).free(allocated[0..out_len]);
+            let allocated = unsafe { core::slice::from_raw_parts(out_ptr, out_len) };
+            // try testing.expectEqualStrings("\x1b[31", allocated);
+            assert_eq!(b"\x1b[31", allocated);
+            // defer lib.alloc.default(&test_allocator).free(allocated);
             rustty_lib::allocator::default(Some(alloc)).free(
                 rustty_lib::allocator::ZigSlice::new(out_ptr, out_len),
                 rustty_lib::allocator::Alignment::from_byte_units(1),
@@ -5014,6 +5007,23 @@ mod tests {
                 continuation_buf(t, std::ptr::null_mut(), 0, &mut required)
             });
             assert_eq!(0usize, required);
+
+            // Completing the sequence must return an empty, allocation-free result.
+            // const failing: CAllocator = .fromZig(&std.mem.Allocator.failing);
+            let failing_zig = rustty_lib::allocator::FailingZigAllocator;
+            let failing_ref = rustty_lib::allocator::ZigAllocatorRef::new(&failing_zig);
+            let failing = rustty_lib::allocator::Allocator::from_zig(&failing_ref);
+            // try testing.expectEqual(Result.success, continuation_alloc(t, &failing, &out_ptr, &out_len));
+            assert_eq!(Result::Success, unsafe {
+                continuation_alloc(t, Some(&failing), &mut out_ptr, &mut out_len)
+            });
+            // defer @import("allocator.zig").free(&failing, out_ptr, out_len);
+            // PORT NOTE: the deferred free runs after the assertions below.
+            // try testing.expectEqual(null, out_ptr);
+            assert!(out_ptr.is_null());
+            // try testing.expectEqual(@as(usize, 0), out_len);
+            assert_eq!(0usize, out_len);
+            unsafe { crate::allocator::free(Some(&failing), out_ptr, out_len) };
             unsafe { free(t) };
         });
     }
@@ -8265,6 +8275,63 @@ mod tests {
             // OSC 2 without a callback should not crash
             vtw(t, b"\x1B]2;Hello\x1B\\");
             unsafe { free(t) };
+        });
+    }
+
+    // test "kitty_image_medium_temp_file empty output"
+    #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
+    fn kitty_image_medium_temp_file_empty_output() {
+        // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
+        // PORT NOTE (R14): the skip is the `cfg_attr(ignore)` above.
+        with_test_allocator(|alloc| {
+            // var t: Terminal = null;
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &t, 80, 24));
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+            // defer free(t);
+            struct FreeTerminal(Terminal);
+            impl Drop for FreeTerminal {
+                fn drop(&mut self) {
+                    unsafe { free(self.0) };
+                }
+            }
+            let _free_t = FreeTerminal(t);
+
+            // const empty: lib.String = .{ .ptr = "", .len = 0 };
+            let empty = LibString {
+                ptr: rustty_lib::EMPTY.as_ptr(),
+                len: 0,
+            };
+            // try testing.expectEqual(Result.success, set(t, .kitty_image_medium_temp_file, &empty));
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::KittyImageMediumTempFile,
+                    core::ptr::addr_of!(empty) as *const c_void,
+                )
+            });
+            // var result: lib.String = undefined;
+            let mut result = LibString {
+                ptr: core::ptr::null(),
+                len: usize::MAX,
+            };
+            // try testing.expectEqual(Result.success, get(t, .kitty_image_medium_temp_file, &result));
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::KittyImageMediumTempFile,
+                    core::ptr::addr_of_mut!(result) as *mut c_void,
+                )
+            });
+            // try testing.expectEqual(@as(usize, 0), result.len);
+            assert_eq!(0usize, result.len);
+            // try testing.expectEqual(@as([*]const u8, ""), result.ptr);
+            // PORT NOTE (DECISIONS B1): Zig's `""` is `rustty_lib::EMPTY`.
+            assert_eq!(rustty_lib::EMPTY.as_ptr(), result.ptr);
         });
     }
 
