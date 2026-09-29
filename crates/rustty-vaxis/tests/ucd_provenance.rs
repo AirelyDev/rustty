@@ -1,4 +1,4 @@
-//! WS12 T4 — the vendored UCD corpus (17.0.0 since S-10b; 16.0.0 before) is TAMPER-EVIDENT.
+//! WS12 T4 — the vendored UCD corpus (18.0.0 since P7-W10 T2; 17.0.0 since S-10b; 16.0.0 before) is TAMPER-EVIDENT.
 //!
 //! `build.rs` derives this crate's entire Unicode width/grapheme table from the six
 //! text files under `ucd/`. A silent edit to any of them silently changes

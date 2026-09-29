@@ -1,7 +1,7 @@
-//! `uucode/src/types.zig` (uucode 2826a37a) — the enum subset vaxis's width/grapheme
+//! `uucode/src/types.zig` (uucode 9d555245) — the enum subset vaxis's width/grapheme
 //! surface needs (VAXIS_C1B_DESIGN.md §5). Discriminants are PINNED (`#[repr(u8)]` +
-//! explicit values) because the 2000-entry grapheme-break precompute indexes by
-//! `state*400 + gb1*20 + gb2` — any drift silently corrupts the table. They are also
+//! explicit values) because the 2205-entry grapheme-break precompute indexes by
+//! `state.table_index()*441 + gb1*21 + gb2` — any drift silently corrupts the table. They are also
 //! the `@intFromEnum` values the S-10b differential compares against the Zig oracle.
 //!
 //! `OriginalGraphemeBreak` / `IndicConjunctBreak` are build-time-only inputs to the
@@ -110,9 +110,9 @@ impl GeneralCategory {
     }
 }
 
-/// `GraphemeBreak` `enum(u5)` — 20 variants, discriminants pinned to types.zig:121-144
-/// (uucode 2826a37a). `extend` is decomposed into `Zwnj` + `IndicConjunctBreak{Extend,
-/// Linker}` and the emoji modifier / modifier base are split out (the derivation in
+/// `GraphemeBreak` `enum(u5)` — 21 variants, discriminants pinned to types.zig:121-150
+/// (uucode 9d555245). `extend` is decomposed into `Zwnj` + `IndicConjunctBreak{Extend,
+/// LinkerExtend}` and the emoji modifier / modifier base are split out (the derivation in
 /// `build.rs`), so this order differs from `OriginalGraphemeBreak`'s.
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -137,15 +137,19 @@ pub enum GraphemeBreak {
     // extend, ==
     //   zwnj +
     //   indic_conjunct_break_extend +
-    //   indic_conjunct_break_linker
+    //   indic_conjunct_break_linker_extend
     IndicConjunctBreakExtend = 17,
-    IndicConjunctBreakLinker = 18,
-    IndicConjunctBreakConsonant = 19,
+    IndicConjunctBreakLinkerExtend = 18,
+    // InCB=Linker with Grapheme_Cluster_Break=Other (U+1CF5, U+1CF6, U+11A3A
+    // as of Unicode 18), so unlike `indic_conjunct_break_linker_extend` it is not
+    // part of `extend`.
+    IndicConjunctBreakLinkerOther = 19,
+    IndicConjunctBreakConsonant = 20,
 }
 
 impl GraphemeBreak {
     /// Number of variants — the grapheme-break precompute's `gb` dimension.
-    pub const COUNT: usize = 20;
+    pub const COUNT: usize = 21;
 
     /// Decode a stored discriminant (from the packed stage2 `u16`).
     pub const fn from_u8(v: u8) -> Self {
@@ -168,8 +172,9 @@ impl GraphemeBreak {
             15 => Self::EmojiModifierBase,
             16 => Self::EmojiModifier,
             17 => Self::IndicConjunctBreakExtend,
-            18 => Self::IndicConjunctBreakLinker,
-            19 => Self::IndicConjunctBreakConsonant,
+            18 => Self::IndicConjunctBreakLinkerExtend,
+            19 => Self::IndicConjunctBreakLinkerOther,
+            20 => Self::IndicConjunctBreakConsonant,
             _ => unreachable!(),
         }
     }
