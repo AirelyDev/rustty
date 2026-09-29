@@ -8640,6 +8640,53 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   TB): the three shipped shapes (`update_frame`, unlocked `animation_wake`, `set_focus` vs the raw sync draw)
   are UB under both; two negatives (lock-first with the mutex inline; external lock with the frame slot inline)
   are UB under both; the fix against the macOS sync draw and against the GTK main thread is clean under both.
-- **residual** (not in N437's scope; reported to the controller): the Metal GCD completion handler
-  (`frame_completed`) still reaches renderer bytes without the draw lock, and core `Surface` `&mut self`
-  methods on the main thread cover the embedded renderer's bytes.
+- **residual** (not in N437's scope): the Metal completion handler is **N440**; the main thread's
+  whole-core-`Surface` references over the embedded renderer are **N441**. Both OPEN.
+- **ruling 32 follow-up** (P7-W7 T2 fix round 1): `update_frame` keeps the reference's lock scopes;
+  the unlocked part uses a narrow view, and the main thread's locked entries are narrow too
+  (`display_realized_raw` / `display_unrealized_raw`, the sync draw's `*_raw` helpers). Harness
+  candidates `split_*` in `.port/phase-2/mirihar-n437` (narrow main side CLEAN, whole-renderer main
+  side UB, SB and TB).
+
+## N440 — the Metal completion handler reaches the renderer without the draw mutex while the render thread holds a whole-renderer `&mut`
+
+- **id**: N440. P7-W7 T2 fix round 1 (review IMPORTANT 3, controller ruling 33). **severity**: medium
+  (aliasing-model UB on macOS on frames that complete while the render thread is inside a locked
+  entry; no observed miscompile). **kind**: port soundness (Stacked and Tree Borrows). **state**: OPEN;
+  a follow-up task.
+- **finding**: Metal command buffers complete on a Metal-owned thread, which runs
+  `metal_buffer_completed` (`crates/rustty-renderer/src/generic.rs`, the inlined
+  `metal/Frame.zig:79-91` `bufferCompleted`). It recovers the renderer as a raw pointer and calls
+  `(*renderer).api.present(..)` (a `&mut` reborrow of `api`) and `(*renderer).frame_completed(health)`
+  (a `&self` reborrow of the whole renderer; it reads `health`, `surface_mailbox` and `swap_chain`),
+  without taking `draw_mutex`. Meanwhile the render thread may hold a whole-renderer `&mut` under the
+  lock (`Renderer::with_locked`, e.g. the locked tail of `update_frame_impl`, `set_font_grid_locked`,
+  the search-match writes), whose retag and accesses cover the same bytes: a data race with a retag and
+  a foreign access to protected bytes. The reference's `*Renderer` has no such rule; its fields are
+  either atomics (`health`) or only read. By reading; not yet shown in a harness.
+- **fix direction**: give the completion handler what it needs outside the renderer's bytes: move
+  `health` and the swap chain's frame semaphore behind an `Arc` (as `LatestFrame`), hand the handler a
+  clone of the surface mailbox and a raw `*const` to `api`'s presentation state (or an `Arc`ed
+  presenter), so it forms no reference to the renderer; prove it on a `.port/phase-2/mirihar-*`
+  harness (UB before, clean after, SB and TB). UD362's by-reading Metal note (the `.renderer_health`
+  `.forever` push before `releaseFrame`) belongs in the same task.
+
+## N441 — main-thread references to the whole core `Surface` cover the renderer the render thread writes under the draw mutex
+
+- **id**: N441. P7-W7 T2 fix round 1 (review IMPORTANT 3, controller ruling 33). **severity**: medium
+  (aliasing-model UB on every platform whenever a main-thread surface callback overlaps a render-thread
+  locked write; no observed miscompile). **kind**: port soundness (Stacked and Tree Borrows).
+  **state**: OPEN; a follow-up task.
+- **finding**: the core `Surface` embeds the renderer (`renderer: renderer_seam::Renderer`, whose `.0`
+  is the `rustty_renderer::Renderer`). The GTK main thread calls core methods through a whole
+  `&mut Surface`: `unsafe { &mut *core }.contentScaleCallback(..)` and `.sizeCallback(..)`
+  (`crates/rustty-apprt/src/gtk/class/surface.rs`, `render_surface_resize`), and the other
+  `&mut self` / `&self` methods of `crates/rustty-core/src/surface.rs` the apprt calls (key, mouse,
+  focus, clipboard callbacks). Each retag of the whole `Surface` covers the renderer's bytes, which the
+  render thread writes under `draw_mutex` through its own raw root (N437's fix): a data race with a
+  retag. N437 made every renderer entry lock-first and narrow; it did not change how the apprt reaches
+  the core surface.
+- **fix direction**: move the renderer out of the `Surface` allocation (a `Box`/raw pointer the render
+  thread and the surface share, as the terminal already is), or make the main-thread core entries
+  raw-self with narrow access that never spans `renderer`. Harness first (`.port/phase-2/mirihar-*`),
+  UB before and clean after under SB and TB.
