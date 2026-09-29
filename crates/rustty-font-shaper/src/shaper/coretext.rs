@@ -1354,21 +1354,27 @@ impl shape::run::RunIteratorHook for RunIteratorHook {
         let state = unsafe { &mut (*self.shaper).run_state };
 
         // Build our UTF-16 string for CoreText
-        // try state.unichars.ensureUnusedCapacity(self.shaper.alloc, 2);
-        state.unichars.reserve(2);
-
-        // state.unichars.appendNTimesAssumeCapacity(0, 2);
-        let base = state.unichars.len();
-        state.unichars.push(0);
-        state.unichars.push(0);
-
-        // const pair = macos.foundation.stringGetSurrogatePairForLongCharacter(
-        //     cp, state.unichars.items[state.unichars.items.len - 2 ..][0..2]);
-        let pair =
-            string_get_surrogate_pair_for_long_character(cp, &mut state.unichars[base..base + 2]);
-        // if (!pair) state.unichars.items.len -= 1;
-        if !pair {
-            state.unichars.pop();
+        // const pair = cp > 0xFFFF;
+        let pair = cp > 0xFFFF;
+        if pair {
+            // try state.unichars.ensureUnusedCapacity(self.shaper.alloc, 2);
+            state.unichars.reserve(2);
+            // state.unichars.appendNTimesAssumeCapacity(0, 2);
+            let base = state.unichars.len();
+            state.unichars.push(0);
+            state.unichars.push(0);
+            // _ = macos.foundation.stringGetSurrogatePairForLongCharacter(
+            //     cp,
+            //     state.unichars.items[state.unichars.items.len - 2 ..][0..2],
+            // );
+            let _ = string_get_surrogate_pair_for_long_character(
+                cp,
+                &mut state.unichars[base..base + 2],
+            );
+        } else {
+            // try state.unichars.append(self.shaper.alloc, @intCast(cp));
+            // (`cp <= 0xFFFF` on this branch, so the cast is lossless.)
+            state.unichars.push(cp as u16);
         }
 
         // Build our reverse lookup table for codepoints to clusters
