@@ -2982,6 +2982,31 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    in `snapshot`'s flip branch translate by `(0, origin.y + css_h)` and append the texture at `(origin.x, 0)`.
 - upstream status: NOT YET REPORTED
 
+### UD362 — the OpenGL renderer pushes `.redraw` with `.forever` while holding the draw mutex that the GTK main thread (the mailbox's consumer) needs: a full app mailbox deadlocks the app
+
+- kind:            deadlock (R13)
+- upstream project: ghostty
+- severity:        high when reached (the whole app freezes: the GTK main thread and the surface's render thread wait on each other forever); needs a full app mailbox, so rare.
+- reference:       at 12752b2ac (`2f0b65346`):
+  - `src/renderer/opengl/Frame.zig:81-89` (`complete`): after `gl.finish()`, `pushFrame` then `self.renderer.surface_mailbox.push(.redraw, .{ .forever = {} })`, then `frameCompleted(health)`;
+  - `src/renderer/generic.zig:2012-2019` (`frameCompleted`): `surface_mailbox.push(.{ .renderer_health = health }, .{ .forever = {} })` on a health change;
+  - OpenGL frames complete synchronously inside `drawFrameLocked`, i.e. with `draw_mutex` held (`drawFrame` locks it around `drawFrameLocked`);
+  - the surface mailbox is `App.Mailbox` (`src/apprt/surface.zig:189-196`), one `BlockingQueue(Message, 64)` shared by every surface (`src/App.zig:581`), drained only by the app's main-thread loop;
+  - the GTK main thread takes the same `draw_mutex` in `displayRealized` / `displayUnrealized` (`generic.zig:950-985`), called from `renderSurfaceRealize` / `renderSurfaceUnrealize` and `initSurface` (`src/apprt/gtk/class/surface.zig:3305-3340`, `:3514-3517`).
+- defect:          when the app mailbox is full, the render thread blocks in the `.forever` push while holding `draw_mutex`. If the main thread then realizes or unrealizes that surface's render widget before draining the mailbox, it blocks on `draw_mutex`, and the only thread that would drain the mailbox is itself: neither thread can proceed.
+- ReleaseSafe:     a permanent hang, no crash. MEASURED on the port (rvm, llvmpipe): with the reference's order, the fail-first test's render thread is still blocked in the push after 3 s while the main thread waits in `displayUnrealized`.
+- ReleaseFast:     the same.
+- reachability:    a user action that realizes or unrealizes a surface's widget (moving a tab or a split, closing a split, reparenting) at a moment when the 64-entry app mailbox is full, i.e. while the main thread is behind on draining it and at least one surface completes a frame. Not triggerable by terminal output alone.
+- output needed:   the app freezes.
+- port handling:
+  - `crates/rustty-renderer/src/generic/linux_impl.rs` (P7-W7 T2 fix round 1): `opengl_frame_completed` and `frame_completed` queue their `.forever` pushes in `deferred_surface_pushes` (`defer_forever_push`); `draw_frame_raw` takes them under the lock (`take_deferred_surface_pushes`, with a clone of the mailbox handle, so no renderer byte is touched after the unlock, N437) and sends them after releasing `draw_mutex`. Messages keep their order; the `.instant` scrollbar push stays in the locked `defer`, so it now lands before `.redraw`.
+  - The Metal twin is not changed: its frames complete on the Metal completion-handler thread, which does not hold `draw_mutex`. By reading, a related wait exists there (the completion handler pushes `.renderer_health` with `.forever` before `releaseFrame`, while a main-thread sync draw can wait for that frame slot under `draw_mutex`); not measured and not part of this fix.
+  - `PORT NOTE: reference defect (R13), UD362` at the field, both pushes and `draw_frame_raw`. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none. Found by the P7-W7 T2 task review (fix round 1, ruling 31).
+- test:            `generic::linux_impl::tests::linux_opengl_full_mailbox_does_not_deadlock_display_unrealize`: a full test mailbox whose `.forever` push waits up to 3 s for the consumer; the main thread, once the render thread is blocked in that push, calls `display_unrealized_raw` and only then drains. RED with the reference's order ("the render thread blocked in a `.forever` push while holding the draw mutex the main thread needed"), GREEN with the push after the unlock. `frame_completed_pushes_renderer_health_on_transition_only` and the two scrollbar-push tests assert the deferred order.
+- proposed fix:    have `drawFrameLocked` return whether a `.redraw` (and a `.renderer_health`) is pending, and push them in `drawFrame` after `draw_mutex` is released, as `syncDisplayLink` already is.
+- upstream status: NOT YET REPORTED
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

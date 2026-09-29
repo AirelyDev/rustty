@@ -317,6 +317,19 @@ pub struct Renderer {
     /// The mailbox for communicating with the window.
     pub surface_mailbox: SurfaceMailbox,
 
+    /// Blocking (`.forever`) surface-mailbox pushes made while `draw_mutex` is
+    /// held, to be sent once it is released.
+    //
+    // rustty-only (R13, UPSTREAM-DEFECTS.md UD362). The reference's frame
+    // completion (`opengl/Frame.zig:83` `.redraw`, `generic.zig:2017`
+    // `.renderer_health`) pushes with `.forever` inside `drawFrameLocked`, i.e.
+    // with the draw mutex held. The app mailbox's only consumer is the apprt
+    // main thread, which takes the same mutex in `displayRealized` /
+    // `displayUnrealized`: a full mailbox then deadlocks both threads. The
+    // pushes are queued here under the lock and `draw_frame_raw` sends them
+    // after the unlock (as UD352 does for the display-link calls).
+    pub deferred_surface_pushes: core::cell::RefCell<Vec<SurfaceMessage>>,
+
     /// The latest exported frame ready to be consumed by an apprt
     /// who needs to manually composite the frame with UI elements.
     /// Previously exported frames are released when a new frame is
@@ -945,16 +958,32 @@ unsafe fn opengl_frame_completed(renderer: *mut (), target: *mut Target, health:
 
         // Notify the surface that it should redraw
         // _ = self.renderer.surface_mailbox.push(.redraw, .{ .forever = {} });
-        let _ = unsafe {
-            (*renderer)
-                .surface_mailbox
-                .push(SurfaceMessage::Redraw, MailboxTimeout::Forever)
-        };
+        //
+        // PORT NOTE: reference defect (R13), UD362. This runs with the draw
+        // mutex held; the `.forever` push is deferred until `draw_frame_raw`
+        // releases it (`deferred_surface_pushes`).
+        unsafe { (*renderer).defer_forever_push(SurfaceMessage::Redraw) };
     }
 
     // Report the health to the renderer.
     // self.renderer.frameCompleted(health);
     unsafe { (*renderer).frame_completed(health) };
+}
+
+/// `.forever` surface-mailbox pushes taken under the draw mutex, sent after it
+/// is released (UD362).
+pub struct DeferredSurfacePushes {
+    mailbox: SurfaceMailbox,
+    msgs: Vec<SurfaceMessage>,
+}
+
+impl DeferredSurfacePushes {
+    /// Send every queued message with `.forever`, in order.
+    pub fn push_all(self) {
+        for msg in self.msgs {
+            let _ = self.mailbox.push(msg, MailboxTimeout::Forever);
+        }
+    }
 }
 
 impl Renderer {
@@ -1047,6 +1076,7 @@ impl Renderer {
             config: options.config,
             // .surface_mailbox = options.surface_mailbox, (generic.zig:704)
             surface_mailbox: options.surface_mailbox,
+            deferred_surface_pushes: Default::default(),
             grid_metrics,
             size: options.size,
             focused: true,
@@ -4557,6 +4587,22 @@ impl Renderer {
     // (`AtomicHealth`), `surface_mailbox.push` (`&self` — the sink is behind an
     // `Arc`), and `swap_chain.release_frame`
     // (posts the semaphore).
+    /// Queue a `.forever` surface-mailbox push until the draw mutex is
+    /// released (UD362).
+    pub fn defer_forever_push(&self, msg: SurfaceMessage) {
+        self.deferred_surface_pushes.borrow_mut().push(msg);
+    }
+
+    /// Take the queued `.forever` pushes (under the draw mutex) together with a
+    /// handle to the mailbox, so the caller can send them after the unlock
+    /// without touching the renderer (UD362, N437).
+    pub fn take_deferred_surface_pushes(&self) -> DeferredSurfacePushes {
+        DeferredSurfacePushes {
+            mailbox: self.surface_mailbox.clone(),
+            msgs: core::mem::take(&mut *self.deferred_surface_pushes.borrow_mut()),
+        }
+    }
+
     pub fn frame_completed(&self, health: crate::Health) {
         // If our health value hasn't changed, then we do nothing.
         // if (self.health.load(.seq_cst) != health) {
@@ -4568,10 +4614,11 @@ impl Renderer {
             // sink re-wraps this into `apprt::surface::Message::RendererHealth`; a
             // DETACHED offscreen mailbox still returns 0).
             // _ = self.surface_mailbox.push(.{ .renderer_health = health }, .{ .forever = {} });
-            let _ = self.surface_mailbox.push(
-                SurfaceMessage::RendererHealth(health),
-                MailboxTimeout::Forever,
-            );
+            //
+            // PORT NOTE: reference defect (R13), UD362. On OpenGL this runs
+            // inside `drawFrameLocked` (the frame completes synchronously), so
+            // the `.forever` push is deferred until the draw mutex is released.
+            self.defer_forever_push(SurfaceMessage::RendererHealth(health));
         }
 
         // Always release our semaphore. The swap chain is
@@ -4638,7 +4685,7 @@ impl Renderer {
         //     defer self.draw_mutex.unlock(global.io());
         //     break :locked try self.drawFrameLocked(sync);
         // };
-        let sync_display_link = {
+        let (sync_display_link, deferred) = {
             lock.lock();
             struct UnlockGuard<'a>(&'a DrawMutex);
             impl Drop for UnlockGuard<'_> {
@@ -4647,8 +4694,21 @@ impl Renderer {
                 }
             }
             let _unlock = UnlockGuard(lock);
-            unsafe { Self::draw_frame_locked(self_ptr, sync) }?
+            let result = unsafe { Self::draw_frame_locked(self_ptr, sync) };
+            // UD362: take the frame completion's `.forever` pushes while the
+            // lock is held; they are sent below, after the unlock.
+            (result, unsafe {
+                (*self_ptr).take_deferred_surface_pushes()
+            })
         };
+
+        // PORT NOTE: reference defect (R13), UD362. The `.redraw` and
+        // `.renderer_health` pushes the reference makes inside the locked
+        // frame completion go out here, with the draw mutex released, so a
+        // full app mailbox cannot block the render thread while it holds the
+        // mutex the apprt main thread (the mailbox's consumer) needs.
+        deferred.push_all();
+        let sync_display_link = sync_display_link?;
 
         // if (sync_display_link) self.syncDisplayLink(null, null);
         // (`if (comptime DisplayLink == void) return;` — nothing to sync off macOS.)
@@ -5937,6 +5997,123 @@ mod tests {
         deinit_test_renderer(&mut r);
     }
 
+    /// UD362: a full app mailbox must not deadlock the render thread against the
+    /// apprt main thread. The render thread completes a frame and pushes
+    /// `.redraw` with `.forever` into a full mailbox; the main thread (the
+    /// mailbox's only consumer) first calls `displayUnrealized`, which takes the
+    /// draw mutex, and only then drains. With the reference's order (the push
+    /// inside the locked frame completion) the two wait on each other; the test
+    /// mailbox gives up after 3 s and reports it. With the push after the
+    /// unlock, the main thread gets the mutex, drains, and the push lands.
+    #[test]
+    fn linux_opengl_full_mailbox_does_not_deadlock_display_unrealize() {
+        use crate::generic::{MailboxTimeout, SurfaceMailboxSink, SurfaceMessage};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Condvar, Mutex};
+        use std::time::Duration;
+
+        let _guard = test_support::gl_lock();
+        let Some(mut r) = golden_renderer(10, 3) else {
+            return;
+        };
+
+        struct FullMailbox {
+            full: Mutex<bool>,
+            cv: Condvar,
+            blocked: AtomicBool,
+            timed_out: AtomicBool,
+            delivered: Mutex<Vec<SurfaceMessage>>,
+        }
+        impl SurfaceMailboxSink for FullMailbox {
+            fn push(&self, msg: SurfaceMessage, timeout: MailboxTimeout) -> usize {
+                let full = self.full.lock().unwrap();
+                if *full {
+                    if timeout == MailboxTimeout::Instant {
+                        return 0;
+                    }
+                    // `.forever` on a full queue: wait for the consumer.
+                    self.blocked.store(true, Ordering::SeqCst);
+                    self.cv.notify_all();
+                    let (full, res) = self
+                        .cv
+                        .wait_timeout_while(full, Duration::from_secs(3), |f| *f)
+                        .unwrap();
+                    drop(full);
+                    if res.timed_out() {
+                        self.timed_out.store(true, Ordering::SeqCst);
+                        return 0;
+                    }
+                } else {
+                    drop(full);
+                }
+                self.delivered.lock().unwrap().push(msg);
+                1
+            }
+        }
+        let mailbox = Arc::new(FullMailbox {
+            full: Mutex::new(true),
+            cv: Condvar::new(),
+            blocked: AtomicBool::new(false),
+            timed_out: AtomicBool::new(false),
+            delivered: Mutex::new(Vec::new()),
+        });
+        r.surface_mailbox = SurfaceMailbox::new(mailbox.clone());
+        r.set_presentation_health(crate::Health::Unhealthy);
+
+        struct SendPtr(*mut Renderer);
+        // SAFETY: the pointer is only used through the lock-first raw entries.
+        unsafe impl Send for SendPtr {}
+        let lock = r.draw_mutex.clone();
+        let r_ptr: *mut Renderer = &mut r;
+
+        // The apprt main thread.
+        let main = std::thread::spawn({
+            let mailbox = mailbox.clone();
+            let lock = lock.clone();
+            let p = SendPtr(r_ptr);
+            move || {
+                let p = p;
+                let mut full = mailbox.full.lock().unwrap();
+                while !mailbox.blocked.load(Ordering::SeqCst) {
+                    let (f, res) = mailbox
+                        .cv
+                        .wait_timeout(full, Duration::from_secs(10))
+                        .unwrap();
+                    full = f;
+                    assert!(!res.timed_out(), "the render thread never pushed `.redraw`");
+                }
+                drop(full);
+                // SAFETY: `p` is the live renderer; the entry locks first.
+                unsafe { Renderer::display_unrealized_raw(p.0, &lock) };
+                // Drain: the queue has room again.
+                *mailbox.full.lock().unwrap() = false;
+                mailbox.cv.notify_all();
+            }
+        });
+
+        // The render thread (this test's thread, where the GL context is current).
+        // SAFETY: `r_ptr` is the live renderer and `lock` its draw mutex.
+        unsafe { Renderer::draw_frame_raw(r_ptr, &lock, true) }.expect("draw");
+        main.join().expect("main thread");
+
+        assert!(
+            !mailbox.timed_out.load(Ordering::SeqCst),
+            "the render thread blocked in a `.forever` push while holding the draw \
+             mutex the main thread needed (UD362)"
+        );
+        assert!(
+            mailbox
+                .delivered
+                .lock()
+                .unwrap()
+                .contains(&SurfaceMessage::Redraw),
+            "`.redraw` was delivered once the main thread drained"
+        );
+        assert!(!r.display_realized, "the unrealize went through");
+
+        deinit_test_renderer(&mut r);
+    }
+
     // PORT NOTE: reuse the exact `opts(cols, rows)` recipe from `macos_impl::tests`
     // (generic.rs:6066) — renamed `term_opts` to avoid shadowing the `Options`
     // renderer struct that the other tests construct as a local `opts`.
@@ -6275,6 +6452,10 @@ mod tests {
             r.frame_completed(crate::Health::Unhealthy);
             // Identical health → `if (self.health.load(...) != health)` is false.
             r.frame_completed(crate::Health::Unhealthy);
+            // UD362: the `.forever` push waits for the draw mutex's release,
+            // which `draw_frame_raw` does by sending the deferred pushes.
+            assert!(sink.pushed().is_empty(), "nothing is sent under the lock");
+            r.take_deferred_surface_pushes().push_all();
 
             assert_eq!(
                 sink.pushed(),
@@ -6303,16 +6484,17 @@ mod tests {
 
             let scrollbar = update_and_draw(&mut r);
 
-            // `2f0b65346`: the completed frame's `.redraw` (`Frame.zig:85`) lands
-            // first; the scrollbar `defer` runs after `drawFrameLocked`'s body.
+            // The scrollbar `defer` runs at the end of `drawFrameLocked`, under
+            // the lock; the completed frame's `.redraw` (`Frame.zig:83`) is sent
+            // after the unlock (UD362), so it lands second.
             assert_eq!(
                 sink.pushed(),
                 vec![
-                    (SurfaceMessage::Redraw, MailboxTimeout::Forever),
                     (
                         SurfaceMessage::Scrollbar(scrollbar),
                         MailboxTimeout::Instant
-                    )
+                    ),
+                    (SurfaceMessage::Redraw, MailboxTimeout::Forever),
                 ]
             );
             assert!(
@@ -6339,15 +6521,16 @@ mod tests {
 
             let scrollbar = update_and_draw(&mut r);
 
-            // (the frame's `.redraw` is refused too; `2f0b65346`)
+            // (the frame's `.redraw` is refused too; `2f0b65346`. It is sent
+            // after the unlock, UD362.)
             assert_eq!(
                 sink.pushed(),
                 vec![
-                    (SurfaceMessage::Redraw, MailboxTimeout::Forever),
                     (
                         SurfaceMessage::Scrollbar(scrollbar),
                         MailboxTimeout::Instant
-                    )
+                    ),
+                    (SurfaceMessage::Redraw, MailboxTimeout::Forever),
                 ]
             );
             assert!(
