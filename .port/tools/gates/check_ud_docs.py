@@ -61,7 +61,12 @@ RECIPE = re.compile(r'\d[\d.,]*\s*(?:[KMG]i?B|bytes?)\b|\d+\s+(?:specific\s+)?co
 
 def parse_entries(ud):
     """Split the '## Entries' section (template + Candidates excluded) into
-    {id: block} keyed by UD id, same split points as the original checker."""
+    {id: block} keyed by UD id, same split points as the original checker.
+    Returns {} both when the section is empty and when the '## Entries'
+    marker itself is missing/moved — callers must not treat {} as vacuously
+    satisfied (see the empty-ledger guard in verdict())."""
+    if '## Entries' not in ud:
+        return {}
     entries_part = ud.split('## Entries', 1)[1].split('## Candidates pending verification', 1)[0]
     blocks = re.split(r'\n(?=### UD\d+ )', entries_part)
     entries = {}
@@ -105,13 +110,17 @@ def docs_citations(docs):
 
 
 def verdict(ud, docs):
-    """Return (rc, lines). rc 0 GREEN, 1 RED."""
+    """Return (rc, lines). rc 0 GREEN, 1 RED, 3 BLOCKED (vacuous input)."""
     out = []
     ok = True
 
+    entries = parse_entries(ud)
+    if not entries:
+        return 3, ['BLOCKED: parsed zero UD entries (the `## Entries` section is empty, or its '
+                    'marker is missing/moved) — refusing to report a vacuous green']
+
     headings_all = len(re.findall(r'^### UD', ud, re.M))
     status_all = len(re.findall(r'^- upstream status:', ud, re.M))
-    entries = parse_entries(ud)
     status_entries = sum(1 for b in entries.values() if re.search(r'^- upstream status:', b, re.M))
 
     out.append(f'### UD headings (whole file, template included): {headings_all}')
@@ -235,9 +244,78 @@ def self_test():
     print(f'  case 4 control (exemption removed)   -> rc={rc4b} (expect 1) {"ok" if case4b_ok else "FAIL"}')
     ok = ok and case4b_ok
 
-    print("SELF-TEST GREEN: the gate flips RED on a missing/duplicated status line and on an "
-          "undocumented fix, stays GREEN when a fixed-upstream entry has no docs row, and flips "
-          "back RED when that exemption text is removed." if ok else "SELF-TEST RED: the gate did not flip as expected.")
+    # Case 5: an empty '## Entries' section -> BLOCKED (vacuous-green guard),
+    # not a trivially-satisfied CHECK PASS.
+    ud5_empty = _ud_doc('')
+    rc5, lines5 = verdict(ud5_empty, docs3)
+    case5_ok = rc5 == 3 and any('vacuous green' in l for l in lines5)
+    print(f'  case 5 (empty Entries section)       -> rc={rc5} (expect 3) {"ok" if case5_ok else "FAIL"}')
+    ok = ok and case5_ok
+
+    # Case 5b: the '## Entries' marker itself is missing/moved -> also BLOCKED,
+    # not silently zero entries.
+    ud5b_no_marker = '# Upstream defects\n\nno Entries heading here\n'
+    rc5b, lines5b = verdict(ud5b_no_marker, docs3)
+    case5b_ok = rc5b == 3 and any('vacuous green' in l for l in lines5b)
+    print(f'  case 5b (missing Entries marker)     -> rc={rc5b} (expect 3) {"ok" if case5b_ok else "FAIL"}')
+    ok = ok and case5b_ok
+
+    # Case 6: a docs row cites a UD id that has no entry at all -> RED.
+    ud6 = _ud_doc(_entry('UD1', 'crash', 'fixed: safe handling', 'not reported'))
+    docs6 = ('# docs\n\n| Area | Ghostty | Rustty | Record |\n| ---- | ------- | ------ | ------ |\n'
+             '| x | crashes | does not | UD1 |\n'
+             '| y | crashes | does not | UD99 |\n')
+    rc6, lines6 = verdict(ud6, docs6)
+    case6_ok = rc6 == 1 and any('cited in the docs log but not a UD entry' in l for l in lines6)
+    print(f'  case 6 (cite UD id with no entry)    -> rc={rc6} (expect 1) {"ok" if case6_ok else "FAIL"}')
+    ok = ok and case6_ok
+
+    # Case 7: a docs row cites an entry that exists but is not fix-type -> RED.
+    ud7 = _ud_doc(
+        _entry('UD1', 'crash', 'fixed: safe handling', 'not reported') +
+        _entry('UD2', 'latent', 'faithful: not user-visible', 'not reported'))
+    docs7 = ('# docs\n\n| Area | Ghostty | Rustty | Record |\n| ---- | ------- | ------ | ------ |\n'
+             '| x | crashes | does not | UD1 |\n'
+             '| y | latent | faithful | UD2 |\n')
+    rc7, lines7 = verdict(ud7, docs7)
+    case7_ok = rc7 == 1 and any('cited in the docs log but not fix-type' in l for l in lines7)
+    print(f'  case 7 (cite a non-fix-type entry)   -> rc={rc7} (expect 1) {"ok" if case7_ok else "FAIL"}')
+    ok = ok and case7_ok
+
+    # Case 8: a privately-reported UD whose docs row lacks the withholding
+    # marker -> RED.
+    ud8 = _ud_doc(_entry('UD1', 'crash', 'fixed: safe handling', 'Report PRIVATELY to Ghostty'))
+    docs8_no_marker = ('# docs\n\n| Area | Ghostty | Rustty | Record |\n| ---- | ------- | ------ | ------ |\n'
+                        '| x | crashes | does not | UD1 |\n')
+    rc8, lines8 = verdict(ud8, docs8_no_marker)
+    case8_ok = rc8 == 1 and any('lacks the marker' in l for l in lines8)
+    print(f'  case 8 (private UD, no marker)       -> rc={rc8} (expect 1) {"ok" if case8_ok else "FAIL"}')
+    ok = ok and case8_ok
+
+    # Case 9: a privately-reported UD whose docs row carries the marker but
+    # still leaks a trigger recipe -> RED.
+    docs9_recipe = ('# docs\n\n| Area | Ghostty | Rustty | Record |\n| ---- | ------- | ------ | ------ |\n'
+                     '| x | overflow past 4096 bytes | fixed | UD1 (details withheld until reported '
+                     'to Ghostty privately) |\n')
+    rc9, lines9 = verdict(ud8, docs9_recipe)
+    case9_ok = rc9 == 1 and any('describes the trigger' in l for l in lines9)
+    print(f'  case 9 (private UD, marker+recipe)   -> rc={rc9} (expect 1) {"ok" if case9_ok else "FAIL"}')
+    ok = ok and case9_ok
+
+    # Case 9b: the clean fixture — marker present, no recipe -> GREEN. Proves
+    # cases 8/9 are not vacuously RED no matter what the row says.
+    docs9b_clean = ('# docs\n\n| Area | Ghostty | Rustty | Record |\n| ---- | ------- | ------ | ------ |\n'
+                     '| x | crashes | fixed (details withheld until reported to Ghostty privately) | UD1 |\n')
+    rc9b, _ = verdict(ud8, docs9b_clean)
+    case9b_ok = rc9b == 0
+    print(f'  case 9b (private UD, clean row)      -> rc={rc9b} (expect 0) {"ok" if case9b_ok else "FAIL"}')
+    ok = ok and case9b_ok
+
+    print("SELF-TEST GREEN: the gate flips RED on a missing/duplicated status line, an "
+          "undocumented fix, a citation of a non-existent or non-fix-type UD, and a private-report "
+          "row that leaks its marker or recipe; flips BLOCKED on an empty/markerless ledger; and "
+          "stays GREEN on the fixed-upstream exemption and a clean private-report row."
+          if ok else "SELF-TEST RED: the gate did not flip as expected.")
     return 0 if ok else 1
 
 
