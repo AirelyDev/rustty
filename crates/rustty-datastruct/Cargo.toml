@@ -21,3 +21,8 @@ rustty-util.workspace = true
 # allocator so the OSC color list can grow through libghostty-vt's caller
 # allocator handle (parity tail S7-7).
 allocator-api2 = { workspace = true }
+# `UntouchedPool` (untouched_pool.rs, upstream `e01e75bbb`) grows its free list
+# as Zig's `ArrayList` does, whose `init_capacity` reads `std.atomic.cache_line`,
+# and resets with `std.heap.ArenaAllocator.ResetMode`; its tests size an item as
+# `std.heap.page_size_min`. zigstd is a leaf over rustty-util, so no cycle.
+rustty-zigstd.workspace = true
