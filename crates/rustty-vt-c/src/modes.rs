@@ -62,11 +62,14 @@ pub unsafe fn report_encode(
     // const mode_tag: modes.ModeTag = @bitCast(tag);
     let mode_tag: modes::ModeTag = modes::ModeTag::from_backing(tag);
     // const report: modes.Report = .{
-    //     .tag = mode_tag,
+    //     .tag = .{ .value = mode_tag.value, .ansi = mode_tag.ansi },
     //     .state = state.toZig() orelse return .invalid_value,
     // };
     let report = modes::Report {
-        tag: mode_tag,
+        tag: modes::ReportTag {
+            value: mode_tag.value,
+            ansi: mode_tag.ansi,
+        },
         state: match state.to_zig() {
             Some(s) => s,
             None => return Result::InvalidValue,

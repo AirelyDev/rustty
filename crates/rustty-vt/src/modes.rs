@@ -28,6 +28,9 @@
 
 use core::fmt::Write;
 
+// const ComptimeIntSet = @import("../datastruct/main.zig").ComptimeIntSet;
+use rustty_datastruct::ComptimeIntSet;
+
 /// A struct that maintains the state of all the settable modes.
 // PORT NOTE: PartialEq/Eq are derived for the snapshot TERMINAL codec's
 // round-trip test (Zig: `std.testing.expectEqualDeep(terminal.modes, ...)`).
@@ -147,7 +150,7 @@ impl ModeState {
 
     /// Return a DECRPM report for the given mode tag. If the tag does
     /// not correspond to a known mode, the report state is .not_recognized.
-    pub fn get_report(&self, tag: ModeTag) -> Report {
+    pub fn get_report(&self, tag: ReportTag) -> Report {
         // DECECM (Erase Color Mode, DEC private mode 117) controls whether erasing
         // and scrolling use the default background or the active background color.
         // Rustty's behavior is fixed equivalent to DECECM reset, and DECRQM has a
@@ -372,53 +375,147 @@ impl ModeTag {
     }
 }
 
+/// Returns the mode for a mode number as it appears in a control
+/// sequence, or null if the mode is unknown or disabled.
+///
+/// ANSI and DEC private modes are numbered separately, so the same
+/// number can mean two different modes. `ansi` selects which one. For
+/// example, `CSI ? 4 h` is `modeFromInt(4, false)` (slow scroll) and
+/// `CSI 4 h` is `modeFromInt(4, true)` (insert).
+#[inline]
 pub fn mode_from_int(v: u16, ansi: bool) -> Option<Mode> {
-    // inline for (entries) |entry| {
-    //     if (comptime !entry.disabled) {
-    //         if (entry.value == v and entry.ansi == ansi) {
-    //             const tag: ModeTag = .{ .ansi = ansi, .value = entry.value };
-    //             const int: ModeTag.Backing = @bitCast(tag);
-    //             return @enumFromInt(int);
-    //         }
-    //     }
-    // }
-    for (i, entry) in ENTRIES.iter().enumerate() {
-        if !entry.disabled && entry.value == v && entry.ansi == ansi {
-            // The artifact-dependent `.disabled` (parity S6-F2), checked only
-            // once the entry matches; see `ModeEntry::disabled_by_artifact`.
-            if entry.disabled_by_artifact && kitty_paste_events_disabled() {
-                continue;
-            }
-            let tag = ModeTag {
-                ansi,
-                value: entry.value,
-            };
-            let int: u16 = tag.to_backing();
-            debug_assert_eq!(int, MODE_BY_INDEX[i] as u16);
-            return Some(MODE_BY_INDEX[i]);
-        }
+    // ModeTag stores the number in 15 bits. A larger number can't be a
+    // known mode, and packing it below would spill into the ansi bit.
+    if v > 0x7FFF {
+        return None;
     }
 
-    None
+    // This runs for every mode that is set, reset, or queried, so we use
+    // a sorted lookup instead of comparing against each entry in turn.
+    let tag = ModeTag { ansi, value: v };
+    let int: ModeTagBacking = tag.to_backing();
+    let idx = ENTRY_SET.index_of(int)?;
+    if ENTRIES_ANY_DISABLED && ENTRIES_DISABLED[idx] {
+        return None;
+    }
+
+    // PORT NOTE (R8 deviation, parity S6-F2): the artifact-dependent
+    // `.disabled` of the `kitty_paste_events` entry is not part of the
+    // comptime `entries_disabled` fold above; it is checked at run time,
+    // only once the index lookup has matched that entry. See
+    // `ModeEntry::disabled_by_artifact`.
+    if ENTRIES_DISABLED_BY_ARTIFACT[idx] && kitty_paste_events_disabled() {
+        return None;
+    }
+
+    // return @enumFromInt(int);
+    // PORT NOTE: `Mode` is a closed Rust enum, so the index selects the
+    // variant; its discriminant is `int` by construction
+    // (`entries_match_mode`).
+    let mode = MODE_BY_INDEX[idx];
+    debug_assert_eq!(int, mode as u16);
+    Some(mode)
 }
+
+// PORT NOTE: `entries.len` as a const, so the per-entry const tables below
+// can be arrays.
+const ENTRIES_LEN: usize = ENTRIES.len();
+
+/// The tag of every entry, in the same order as `entries`. Looking up
+/// a tag here returns the index of its entry.
+const ENTRY_SET: ComptimeIntSet<ModeTagBacking, ENTRIES_LEN> =
+    ComptimeIntSet::<ModeTagBacking, ENTRIES_LEN>::new({
+        let mut keys = [0 as ModeTagBacking; ENTRIES_LEN];
+        let mut i = 0;
+        while i < ENTRIES_LEN {
+            // @bitCast(ModeTag{ .value = entry.value, .ansi = entry.ansi })
+            keys[i] = (ENTRIES[i].value & 0x7FFF) | ((ENTRIES[i].ansi as u16) << 15);
+            i += 1;
+        }
+        keys
+    });
+
+/// Whether each entry is disabled, in the same order as `entries`.
+const ENTRIES_DISABLED: [bool; ENTRIES_LEN] = {
+    let mut result = [false; ENTRIES_LEN];
+    let mut i = 0;
+    while i < ENTRIES_LEN {
+        result[i] = ENTRIES[i].disabled;
+        i += 1;
+    }
+    result
+};
+
+/// True if any entry is disabled. When false, modeFromInt skips the
+/// disabled check entirely.
+const ENTRIES_ANY_DISABLED: bool = {
+    let mut any = false;
+    let mut i = 0;
+    while i < ENTRIES_LEN {
+        if ENTRIES[i].disabled {
+            any = true;
+        }
+        i += 1;
+    }
+    any
+};
+
+// PORT NOTE (parity S6-F2): whether each entry's `.disabled` is the
+// artifact-dependent predicate, in the same order as `entries`. The run-time
+// half of the reference's `entries_disabled`.
+const ENTRIES_DISABLED_BY_ARTIFACT: [bool; ENTRIES_LEN] = {
+    let mut result = [false; ENTRIES_LEN];
+    let mut i = 0;
+    while i < ENTRIES_LEN {
+        result[i] = ENTRIES[i].disabled_by_artifact;
+        i += 1;
+    }
+    result
+};
 
 /// A DECRPM mode report response.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Report {
-    pub tag: ModeTag,
+    pub tag: ReportTag,
     pub state: State,
+}
+
+/// A query identifier can use the full parser parameter range. Keep it
+/// separate from ModeTag, which packs supported modes and the ANSI flag
+/// into a u16 and is also used by the public C API.
+// PORT NOTE: the reference nests this as `Report.Tag`; Rust has no nested
+// type declarations, so it is the module-level `ReportTag`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReportTag {
+    pub value: u16,
+    pub ansi: bool, // default false
+}
+
+impl ReportTag {
+    /// Construct a ReportTag with the default `ansi = false`.
+    pub fn new(value: u16) -> ReportTag {
+        ReportTag { value, ansi: false }
+    }
+
+    pub fn from_mode(mode: Mode) -> ReportTag {
+        let tag = ModeTag::from_mode(mode);
+        ReportTag {
+            value: tag.value,
+            ansi: tag.ansi,
+        }
+    }
 }
 
 impl Report {
     // PORT NOTE: the reference `max_size` is a comptime value computed by
     // encoding the largest possible report and counting bytes. The largest
-    // report is `tag.value = maxInt(u15) = 32767`, `ansi = false` (so the "?"
+    // report is `tag.value = maxInt(u16) = 65535`, `ansi = false` (so the "?"
     // prefix is present), `state = permanently_reset` (single digit 4):
-    // "\x1B[?32767;4$y" == 12 bytes.
+    // "\x1B[?65535;4$y" == 12 bytes.
     pub const MAX_SIZE: usize = {
         // Construct the largest possible report in terms of values.
         // (Computed verbatim from the encode of the worst-case report.)
-        "\x1B[?32767;4$y".len()
+        "\x1B[?65535;4$y".len()
     };
 }
 
@@ -761,6 +858,60 @@ mod tests {
         assert!(mode_from_int(9, true).is_none());
         assert!(mode_from_int(9, false).unwrap() == Mode::MouseEventX10);
         assert!(mode_from_int(14, true).is_none());
+
+        // Numbers too large for the tag must not be mistaken for an ANSI mode.
+        assert!(mode_from_int(4 | 0x8000, false).is_none());
+        assert!(mode_from_int(u16::MAX, true).is_none());
+    }
+
+    // test "modeFromInt matches entries exhaustively" (oracle 079502e23)
+    //
+    // PORT NOTE (R14, DECISIONS R12): the reference runs all 2 x 65,536
+    // inputs. Under Miri that is too slow, so a Miri run is capped: it
+    // checks every `STRIDE`-th input plus every entry's number and its
+    // neighbours and the u15/u16 boundaries, and prints the cap. Outside
+    // Miri the loop is the full, uncapped run.
+    #[test]
+    fn mode_from_int_matches_entries_exhaustively() {
+        #[cfg(miri)]
+        const STRIDE: usize = 257;
+        #[cfg(not(miri))]
+        const STRIDE: usize = 1;
+
+        let mut inputs: Vec<usize> = (0..u16::MAX as usize + 1).step_by(STRIDE).collect();
+        if STRIDE != 1 {
+            for entry in ENTRIES {
+                let v = entry.value as usize;
+                inputs.extend([v.saturating_sub(1), v, v + 1, v | 0x8000]);
+            }
+            inputs.extend([0x7FFE, 0x7FFF, 0x8000, 0x8001, 0xFFFE, 0xFFFF]);
+            inputs.retain(|&v| v <= u16::MAX as usize);
+            eprintln!(
+                "R14 MIRI CAP (DECISIONS R12): modeFromInt matches entries exhaustively \
+                 checks {} of 65536 inputs per namespace (stride {STRIDE} plus every \
+                 entry +/-1 and the u15/u16 boundaries); the full run is outside Miri",
+                inputs.len()
+            );
+        }
+
+        // Compare every possible input against a plain scan of the entries.
+        for ansi in [false, true] {
+            for &v in &inputs {
+                let expected: Option<Mode> = 'expected: {
+                    for (i, entry) in ENTRIES.iter().enumerate() {
+                        if !entry.disabled && entry.value as usize == v && entry.ansi == ansi {
+                            // The run-time half of `.disabled` (parity S6-F2).
+                            if entry.disabled_by_artifact && kitty_paste_events_disabled() {
+                                break 'expected None;
+                            }
+                            break 'expected Some(MODE_BY_INDEX[i]);
+                        }
+                    }
+                    None
+                };
+                assert_eq!(expected, mode_from_int(v as u16, ansi), "v={v} ansi={ansi}");
+            }
+        }
     }
 
     /// Parity S6-F2: mode 5522's `.disabled` is
@@ -800,7 +951,7 @@ mod tests {
         };
         assert_eq!(mode_from_int(5522, false), expected);
         let state = ModeState::default();
-        let report = state.get_report(ModeTag {
+        let report = state.get_report(ReportTag {
             value: 5522,
             ansi: false,
         });
@@ -859,13 +1010,13 @@ mod tests {
     #[test]
     fn get_report_known_dec_mode() {
         let mut state: ModeState = ModeState::default();
-        let report = state.get_report(ModeTag::new(1));
+        let report = state.get_report(ReportTag::new(1));
         assert_eq!(State::Reset, report.state);
         assert_eq!(false, report.tag.ansi);
         assert_eq!(1_u16, report.tag.value);
 
         state.set(Mode::CursorKeys, true);
-        let report2 = state.get_report(ModeTag::new(1));
+        let report2 = state.get_report(ReportTag::new(1));
         assert_eq!(State::Set, report2.state);
     }
 
@@ -873,7 +1024,7 @@ mod tests {
     fn get_report_known_ansi_mode() {
         let mut state: ModeState = ModeState::default();
         state.set(Mode::Insert, true);
-        let report = state.get_report(ModeTag {
+        let report = state.get_report(ReportTag {
             value: 4,
             ansi: true,
         });
@@ -884,7 +1035,7 @@ mod tests {
     #[test]
     fn get_report_dececm_permanently_reset() {
         let state: ModeState = ModeState::default();
-        let report = state.get_report(ModeTag {
+        let report = state.get_report(ReportTag {
             value: 117,
             ansi: false,
         });
@@ -895,7 +1046,7 @@ mod tests {
     #[test]
     fn get_report_unknown_mode() {
         let state: ModeState = ModeState::default();
-        let report = state.get_report(ModeTag::new(9999));
+        let report = state.get_report(ReportTag::new(9999));
         assert_eq!(State::NotRecognized, report.state);
     }
 
@@ -903,7 +1054,7 @@ mod tests {
     fn report_encode_dec_mode_set() {
         let mut buf = String::new();
         let report = Report {
-            tag: ModeTag {
+            tag: ReportTag {
                 value: 1,
                 ansi: false,
             },
@@ -917,7 +1068,7 @@ mod tests {
     fn report_encode_dec_mode_reset() {
         let mut buf = String::new();
         let report = Report {
-            tag: ModeTag {
+            tag: ReportTag {
                 value: 1,
                 ansi: false,
             },
@@ -931,7 +1082,7 @@ mod tests {
     fn report_encode_ansi_mode() {
         let mut buf = String::new();
         let report = Report {
-            tag: ModeTag {
+            tag: ReportTag {
                 value: 4,
                 ansi: true,
             },
@@ -945,7 +1096,7 @@ mod tests {
     fn report_encode_not_recognized() {
         let mut buf = String::new();
         let report = Report {
-            tag: ModeTag {
+            tag: ReportTag {
                 value: 9999,
                 ansi: false,
             },
@@ -953,5 +1104,58 @@ mod tests {
         };
         report.encode(&mut buf).unwrap();
         assert_eq!("\x1B[?9999;0$y", buf);
+    }
+
+    // test "getReport large unknown modes" (oracle 3beb6d717)
+    #[test]
+    fn get_report_large_unknown_modes() {
+        let state: ModeState = ModeState::default();
+        // These would alias ANSI insert mode and fixed-status DEC mode 117.
+        for tag in [
+            ReportTag {
+                value: 32772,
+                ansi: true,
+            },
+            ReportTag::new(32885),
+        ] {
+            let report = state.get_report(tag);
+            assert_eq!(State::NotRecognized, report.state);
+            assert_eq!(tag, report.tag);
+        }
+    }
+
+    // test "Report.encode maximum size" (oracle 3beb6d717)
+    //
+    // PORT NOTE: the reference encodes into a `.fixed` writer over a
+    // `[Report.max_size]u8`, which fails on overflow; the port encodes into
+    // a fixed-capacity sink that errors past `MAX_SIZE` bytes.
+    #[test]
+    fn report_encode_maximum_size() {
+        struct Fixed {
+            buf: [u8; Report::MAX_SIZE],
+            len: usize,
+        }
+        impl Write for Fixed {
+            fn write_str(&mut self, s: &str) -> core::fmt::Result {
+                let end = self.len + s.len();
+                if end > self.buf.len() {
+                    return Err(core::fmt::Error);
+                }
+                self.buf[self.len..end].copy_from_slice(s.as_bytes());
+                self.len = end;
+                Ok(())
+            }
+        }
+        let mut writer = Fixed {
+            buf: [0; Report::MAX_SIZE],
+            len: 0,
+        };
+        let report = Report {
+            tag: ReportTag::new(65535),
+            state: State::PermanentlyReset,
+        };
+        report.encode(&mut writer).unwrap();
+        assert_eq!(b"\x1b[?65535;4$y", &writer.buf[..writer.len]);
+        assert_eq!(writer.buf.len(), writer.len);
     }
 }

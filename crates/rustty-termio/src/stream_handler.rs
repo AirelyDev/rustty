@@ -887,16 +887,16 @@ impl<M: AppMailbox> StreamHandler<M> {
         let report = self
             .term()
             .modes
-            .get_report(modes::ModeTag::from_mode(mode));
+            .get_report(modes::ReportTag::from_mode(mode));
         self.sendModeReport(report);
         Ok(())
     }
 
     // fn requestModeUnknown(self: *StreamHandler, mode_raw: u16, ansi: bool) !void {
     fn requestModeUnknown(&mut self, mode_raw: u16, ansi_: bool) -> Result<(), crate::Error> {
-        // self.sendModeReport(self.terminal.modes.getReport(.{ .value = @truncate(mode_raw), .ansi = ansi }));
-        let report = self.term().modes.get_report(modes::ModeTag {
-            value: mode_raw & 0x7FFF, // @truncate to the u15 tag value
+        // self.sendModeReport(self.terminal.modes.getReport(.{ .value = mode_raw, .ansi = ansi }));
+        let report = self.term().modes.get_report(modes::ReportTag {
+            value: mode_raw,
             ansi: ansi_,
         });
         self.sendModeReport(report);
