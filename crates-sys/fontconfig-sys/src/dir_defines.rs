@@ -7,7 +7,7 @@
 /// `FC_TEMPLATEDIR`, `FONTCONFIG_PATH` and `CONFIGDIR` for a target OS
 /// (cargo's `CARGO_CFG_TARGET_OS` spelling), as `(name, quoted value)` pairs.
 ///
-/// PORTS the non-Windows arm of `pkg/fontconfig/build.zig:178-187`: FreeBSD
+/// PORTS the non-Windows arm of `pkg/fontconfig/build.zig:245-257`: FreeBSD
 /// keeps its configuration under `/usr/local/etc/fonts`, every other OS under
 /// `/etc/fonts` (S31-F1: the port used the second set on FreeBSD too).
 pub fn fc_dir_defines(target_os: &str) -> [(&'static str, &'static str); 3] {
@@ -37,7 +37,7 @@ pub fn fc_dir_defines(target_os: &str) -> [(&'static str, &'static str); 3] {
 mod tests {
     use super::fc_dir_defines;
 
-    /// S31-F1: `pkg/fontconfig/build.zig:178-183`, the FreeBSD arm.
+    /// S31-F1: `pkg/fontconfig/build.zig:245-250`, the FreeBSD arm.
     #[test]
     fn freebsd_uses_usr_local_etc_fonts() {
         assert_eq!(
@@ -50,7 +50,7 @@ mod tests {
         );
     }
 
-    /// `pkg/fontconfig/build.zig:184-187`, every other non-Windows OS.
+    /// `pkg/fontconfig/build.zig:251-256`, every other non-Windows OS.
     #[test]
     fn other_oses_use_etc_fonts() {
         for os in ["linux", "macos", "android"] {

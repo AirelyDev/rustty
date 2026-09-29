@@ -145,11 +145,15 @@ fn font_backend() {
             //     Windows 11 with Zig 0.16 at the pin): `Config.zig:100-111`
             //     makes MSVC the Windows ABI when none is named, and
             //     pkg/fontconfig/build.zig defines `HAVE_UNISTD_H` on every
-            //     target, so `src/fcint.h:44` fails with "'unistd.h' file not
-            //     found" against the MSVC headers. With an explicit GNU ABI
+            //     target, so `src/fcint.h:45` (2.18.3; `:44` in 2.14.2) fails
+            //     with "'unistd.h' file not found" against the MSVC headers
+            //     (re-measured at 2.18.3, P7-W10 T1). With an explicit GNU ABI
             //     (`-Dtarget=x86_64-windows-gnu`, MinGW headers) the reference
-            //     builds it and its fontconfig tests pass, so the port accepts
-            //     it on `target_env = "gnu"`.
+            //     built it at 2.14.2 and its fontconfig tests passed, so the
+            //     port accepts it on `target_env = "gnu"`. At 2.18.3 the
+            //     reference no longer compiles fontconfig there
+            //     (`FcLocaleSetCurrent` is declared off Windows only); the port
+            //     fixes that in `fontconfig-sys` (UD358).
             // (`web_canvas` has no feature: `font/main.zig:50` forces it on
             // wasm, and its face/shaper call browser externs.) CORRECTION
             // (S-14b, review M3): `fontconfig_freetype` on macOS and
@@ -185,7 +189,7 @@ fn font_backend() {
                     "rustty-build-config: `-Dfont-backend=fontconfig_freetype` is not buildable \
                      for target os `{os}` env `{env}`: Fontconfig includes `unistd.h`, which the \
                      MSVC headers do not have (the reference fails the same way at \
-                     `fontconfig/src/fcint.h:44`); use a GNU-ABI Windows target \
+                     `fontconfig/src/fcint.h:45`); use a GNU-ABI Windows target \
                      (`x86_64-pc-windows-gnu`, the reference's `-Dtarget=x86_64-windows-gnu`)."
                 );
             }

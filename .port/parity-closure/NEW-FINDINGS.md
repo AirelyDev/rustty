@@ -8625,3 +8625,19 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **fix direction**: raw-self receivers with narrow field access for every render-thread entry that can overlap
   the sync draw (memory `shaper-hook-sb-clean-interleave`), with LIFETIMES rows first and an isolated Miri
   harness under `.port/phase-2/mirihar-<name>/` that is UB before and clean after.
+
+## N438 — the reference's fontconfig archive omits `fcconffile.c`, leaving two public functions undefined
+
+- **id**: N438. P7-W10 T1 (R4 §A fact 2; DECISIONS B14). **severity**: none observable. **kind**: latent
+  reference shape (record only). **state**: OPEN (record only; not a UD, unreachable).
+- **shape**: the reference's `srcs` list (`pkg/fontconfig/build.zig:343-373`) has 29 translation units; upstream's
+  meson build also compiles `src/fcconffile.c` (`src/meson.build:25`). That file defines the public
+  `FcConfigFileGenerate` and `FcConfigFileGenerateGenericAlias` (declared in `fontconfig.h:1224` onward). No
+  other TU calls them, so the static archive links, but a caller of either would get an undefined symbol.
+- **reachability**: none. Neither Ghostty nor the port calls them (the `fc` module binds neither), and nothing
+  inside fontconfig does.
+- **port**: faithful. `fontconfig-sys` vendors `src/fcconffile.c` (the tarball's `src/*.c`) but leaves it out of
+  `SOURCES`, with a comment citing B14 and this note. Evidence: `nm` of the macOS and Linux (rvm) archives lists
+  no `FcConfigFileGenerate*` symbol.
+- **not here**: R4 §A fact 1 (the stale `FC_VERSION_*` defines), first recorded under this id as latent, is
+  observable (it stamps and compares cache files) and is fixed as UD360.

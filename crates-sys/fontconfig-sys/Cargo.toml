@@ -1,17 +1,19 @@
 # fontconfig-sys — vendored C dependency (R3: self-contained, no ghostty dep)
 #
 # This crate vendors the SAME upstream library the reference uses — Fontconfig
-# 2.14.2, the font-discovery/matching engine — copied in-tree under `vendor/`
+# 2.18.3, the font-discovery/matching engine — copied in-tree under `vendor/`
 # and built standalone via `cc` + `bindgen`. It mirrors the reference's
-# pkg/fontconfig/build.zig `buildLib`: the same 28 `src/*.c` translation units
-# (build.zig:269-298), the same verbatim `-D`/`-W`/`-f` flag list
-# (build.zig:87-194) plus the libxml2 enablement flags (build.zig:216-221), and
-# the same five `override/include/` headers (the four empty alias stubs + the
-# pre-generated `fcobjshash.h` gperf table upstream's build would otherwise run
-# `makealias`/`gperf` to produce).
+# pkg/fontconfig/build.zig `buildLib`: the same 29 `src/*.c` translation units
+# (build.zig:343-373), the same verbatim `-D`/`-W`/`-f` flag list
+# (build.zig:148-265) plus the FreeType and libxml2 enablement flags
+# (build.zig:267-297), and the same twelve `override/` headers in the
+# reference's layout (the headers fontconfig's autotools/meson build generates,
+# which the 2.18.3 tarball no longer ships: `fccase.h`, `fcconst.h`,
+# `fcgenericfamily.h`, `fclang.h`, `fontconfig.h`, the `makealias` outputs, the
+# `gperf` table `fcobjshash.h`, `fcstdint.h`, and `fcint.h`).
 #
-# The host has a system fontconfig 2.17 — deliberately NOT used: R3 pins parity
-# to the 2.14.2 the reference itself builds. No pkg-config, no system link.
+# The host's system fontconfig is deliberately NOT used: R3 pins parity to the
+# 2.18.3 the reference itself builds. No pkg-config, no system link.
 #
 # `links` declares the native lib so Cargo enforces one-version linking; the
 # archive name `fontconfig` matches the reference's
