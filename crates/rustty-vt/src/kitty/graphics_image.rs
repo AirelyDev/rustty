@@ -2827,7 +2827,11 @@ mod tests {
             .join("../../target")
             .join(format!("kitty-prefix-scratch-{}", std::process::id()));
         std::fs::create_dir_all(&base).unwrap();
-        let base = std::fs::canonicalize(&base).unwrap();
+        // `realPath`/`realPathFile` give the DOS form on Windows (`C:\..`), as
+        // `rustty_os::path::realpath` does; `std::fs::canonicalize`'s verbatim
+        // `\\?\C:\..` is a device-namespace spelling that `readFile` refuses
+        // before the open since `0b5446364` (measured on rwin, P7-W5 T2).
+        let base = rustty_os::path::realpath(&base).unwrap();
         // try tmp_dir.dir.createDir(io, "temp", .default_dir);
         // try tmp_dir.dir.createDir(io, "temp-suffix", .default_dir);
         std::fs::create_dir(base.join("temp")).unwrap();
@@ -2837,8 +2841,9 @@ mod tests {
         let data = include_bytes!("testdata/image-rgb-none-20x15-2147483647-raw.data");
         std::fs::write(base.join("temp-suffix").join(filename), data).unwrap();
 
-        let trusted_path = std::fs::canonicalize(base.join("temp")).unwrap();
-        let outside_path = std::fs::canonicalize(base.join("temp-suffix").join(filename)).unwrap();
+        let trusted_path = rustty_os::path::realpath(&base.join("temp")).unwrap();
+        let outside_path =
+            rustty_os::path::realpath(&base.join("temp-suffix").join(filename)).unwrap();
 
         let cmd: command::Command = command::Command {
             control: command::Control::Transmit(command::Transmission {
