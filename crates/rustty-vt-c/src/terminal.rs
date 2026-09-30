@@ -272,6 +272,75 @@ pub struct TerminalWrapper {
     // (the terminal's allocator too: the search's registration is charged to
     // the terminal, N262.)
     pub searches: WrapperSet<*mut SearchWrapper>,
+
+    /// PORT NOTE (N452, P7-W2 T9; LIFETIMES.tsv `TerminalWrapper
+    /// live_handler`): no reference field. The handler pointer of the
+    /// innermost effect trampoline that is running a C callback, or null.
+    ///
+    /// A C callback may re-enter the C API on this terminal (the reference
+    /// forbids only `vt_write`/`vt_write_until_ground` there). While it runs,
+    /// the stream's handler dispatch holds a protected `&mut Handler` (the
+    /// `stream::Handler` trait methods take `&mut self`), so reaching the
+    /// handler's bytes through this wrapper would be Stacked Borrows UB even
+    /// though the reference's plain `*TerminalWrapper` access is sound. Each
+    /// trampoline therefore derives ONE raw pointer from its own `&mut
+    /// Handler` argument — a child of every live handler borrow — and
+    /// publishes it here for exactly the duration of the callback
+    /// ([`LiveHandler`]); [`handler_ptr`] hands it to every C API that touches
+    /// handler bytes. Outside callbacks it is null and those APIs reach the
+    /// handler by place.
+    pub live_handler: *mut Handler<'static>,
+}
+
+/// The handler a C API call must reach (N452; see
+/// `TerminalWrapper::live_handler`): the running trampoline's handler
+/// pointer inside an effect callback, else the wrapper's own
+/// `stream.handler` by place. Neither forms a reference.
+///
+/// # Safety
+/// `wrapper` must be a live terminal wrapper.
+#[inline]
+pub(crate) unsafe fn handler_ptr(wrapper: *mut TerminalWrapper) -> *mut Handler<'static> {
+    // SAFETY: `wrapper` is live (caller contract); a read of a sibling of
+    // `stream`, then a place projection.
+    unsafe {
+        let live = (*wrapper).live_handler;
+        if live.is_null() {
+            std::ptr::addr_of_mut!((*wrapper).stream.handler)
+        } else {
+            live
+        }
+    }
+}
+
+/// Publishes a trampoline's handler pointer in `live_handler` for the
+/// duration of one C callback, restoring the previous value on drop so
+/// nested effects (a callback's `resize` firing `write_pty`) nest (N452).
+pub(crate) struct LiveHandler {
+    wrapper: *mut TerminalWrapper,
+    prev: *mut Handler<'static>,
+}
+
+impl LiveHandler {
+    /// `handler` must be the raw pointer the trampoline derived from its own
+    /// handler argument (or, for C `reset`, the by-place handler pointer),
+    /// and `wrapper` the wrapper recovered from it.
+    #[inline]
+    pub(crate) fn publish(wrapper: *mut TerminalWrapper, handler: *mut Handler<'static>) -> Self {
+        // SAFETY: `wrapper` is the live owning wrapper; `live_handler` is a
+        // sibling of `stream`, written by place.
+        let prev =
+            unsafe { std::ptr::replace(std::ptr::addr_of_mut!((*wrapper).live_handler), handler) };
+        LiveHandler { wrapper, prev }
+    }
+}
+
+impl Drop for LiveHandler {
+    #[inline]
+    fn drop(&mut self) {
+        // SAFETY: as in `publish`; the wrapper outlives the callback.
+        unsafe { *std::ptr::addr_of_mut!((*self.wrapper).live_handler) = self.prev };
+    }
 }
 
 /// `std.AutoArrayHashMapUnmanaged(K, void)` over the terminal's allocator
@@ -822,6 +891,9 @@ impl Effects {
     //     func(@ptrCast(wrapper), wrapper.effects.userdata, data.ptr, data.len);
     // }
     pub(crate) fn write_pty_trampoline(handler: &mut Handler<'static>, data: &[u8]) {
+        // N452: ONE raw pointer from the argument, which is not used
+        // again (see `TerminalWrapper::live_handler`).
+        let handler: *mut Handler<'static> = handler;
         let wrapper = wrapper_from_handler(handler);
         // SAFETY: `wrapper` is the live owning `TerminalWrapper`; we read its
         // `effects` sibling (not the `&mut Handler` we were handed) via raw ptr.
@@ -830,6 +902,7 @@ impl Effects {
             None => return,
         };
         let userdata = unsafe { (*wrapper).effects.userdata };
+        let _live = LiveHandler::publish(wrapper, handler);
         func(wrapper, userdata, data.as_ptr(), data.len());
     }
 
@@ -838,12 +911,16 @@ impl Effects {
     //     func(@ptrCast(wrapper), wrapper.effects.userdata);
     // }
     pub(crate) fn bell_trampoline(handler: &mut Handler<'static>) {
+        // N452: ONE raw pointer from the argument, which is not used
+        // again (see `TerminalWrapper::live_handler`).
+        let handler: *mut Handler<'static> = handler;
         let wrapper = wrapper_from_handler(handler);
         let func = match unsafe { (*wrapper).effects.bell } {
             Some(f) => f,
             None => return,
         };
         let userdata = unsafe { (*wrapper).effects.userdata };
+        let _live = LiveHandler::publish(wrapper, handler);
         func(wrapper, userdata);
     }
 
@@ -856,11 +933,15 @@ impl Effects {
     pub(crate) fn color_scheme_trampoline(
         handler: &mut Handler<'static>,
     ) -> Option<device_status::ColorScheme> {
+        // N452: ONE raw pointer from the argument, which is not used
+        // again (see `TerminalWrapper::live_handler`).
+        let handler: *mut Handler<'static> = handler;
         let wrapper = wrapper_from_handler(handler);
         let func = unsafe { (*wrapper).effects.color_scheme }?;
         let userdata = unsafe { (*wrapper).effects.userdata };
         // var scheme: device_status.ColorScheme = undefined;
         let mut scheme = core::mem::MaybeUninit::<device_status::ColorScheme>::uninit();
+        let _live = LiveHandler::publish(wrapper, handler);
         if func(wrapper, userdata, scheme.as_mut_ptr()) {
             return Some(unsafe { scheme.assume_init() });
         }
@@ -878,6 +959,9 @@ impl Effects {
     pub(crate) fn device_attributes_trampoline(
         handler: &mut Handler<'static>,
     ) -> device_attributes::Attributes {
+        // N452: ONE raw pointer from the argument, which is not used
+        // again (see `TerminalWrapper::live_handler`).
+        let handler: *mut Handler<'static> = handler;
         let wrapper = wrapper_from_handler(handler);
         let func = match unsafe { (*wrapper).effects.device_attributes_cb } {
             Some(f) => f,
@@ -888,6 +972,7 @@ impl Effects {
         // Get our attributes from the callback.
         // var c_attrs: CDeviceAttributes = undefined;
         let mut c_attrs = core::mem::MaybeUninit::<CDeviceAttributes>::uninit();
+        let _live = LiveHandler::publish(wrapper, handler);
         if !func(wrapper, userdata, c_attrs.as_mut_ptr()) {
             return device_attributes::Attributes::default();
         }
@@ -942,12 +1027,16 @@ impl Effects {
     //     return result.ptr[0..result.len];
     // }
     pub(crate) fn enquiry_trampoline(handler: &mut Handler<'static>) -> &'static [u8] {
+        // N452: ONE raw pointer from the argument, which is not used
+        // again (see `TerminalWrapper::live_handler`).
+        let handler: *mut Handler<'static> = handler;
         let wrapper = wrapper_from_handler(handler);
         let func = match unsafe { (*wrapper).effects.enquiry } {
             Some(f) => f,
             None => return b"",
         };
         let userdata = unsafe { (*wrapper).effects.userdata };
+        let _live = LiveHandler::publish(wrapper, handler);
         let result = func(wrapper, userdata);
         if result.len == 0 {
             return b"";
@@ -961,12 +1050,16 @@ impl Effects {
 
     // fn xtversionTrampoline(handler: *Handler) []const u8 { ... identical shape ... }
     pub(crate) fn xtversion_trampoline(handler: &mut Handler<'static>) -> &'static [u8] {
+        // N452: ONE raw pointer from the argument, which is not used
+        // again (see `TerminalWrapper::live_handler`).
+        let handler: *mut Handler<'static> = handler;
         let wrapper = wrapper_from_handler(handler);
         let func = match unsafe { (*wrapper).effects.xtversion } {
             Some(f) => f,
             None => return b"",
         };
         let userdata = unsafe { (*wrapper).effects.userdata };
+        let _live = LiveHandler::publish(wrapper, handler);
         let result = func(wrapper, userdata);
         if result.len == 0 {
             return b"";
@@ -976,12 +1069,16 @@ impl Effects {
 
     // fn titleChangedTrampoline(handler: *Handler) void { ... }
     pub(crate) fn title_changed_trampoline(handler: &mut Handler<'static>) {
+        // N452: ONE raw pointer from the argument, which is not used
+        // again (see `TerminalWrapper::live_handler`).
+        let handler: *mut Handler<'static> = handler;
         let wrapper = wrapper_from_handler(handler);
         let func = match unsafe { (*wrapper).effects.title_changed } {
             Some(f) => f,
             None => return,
         };
         let userdata = unsafe { (*wrapper).effects.userdata };
+        let _live = LiveHandler::publish(wrapper, handler);
         func(wrapper, userdata);
     }
 
@@ -1016,17 +1113,22 @@ impl Effects {
             None => return,
         };
         let userdata = unsafe { (*wrapper).effects.userdata };
+        let _live = LiveHandler::publish(wrapper, handler);
         func(wrapper, userdata, held);
     }
 
     // fn pwdChangedTrampoline(handler: *Handler) void { ... }
     pub(crate) fn pwd_changed_trampoline(handler: &mut Handler<'static>) {
+        // N452: ONE raw pointer from the argument, which is not used
+        // again (see `TerminalWrapper::live_handler`).
+        let handler: *mut Handler<'static> = handler;
         let wrapper = wrapper_from_handler(handler);
         let func = match unsafe { (*wrapper).effects.pwd_changed } {
             Some(f) => f,
             None => return,
         };
         let userdata = unsafe { (*wrapper).effects.userdata };
+        let _live = LiveHandler::publish(wrapper, handler);
         func(wrapper, userdata);
     }
 
@@ -1037,10 +1139,14 @@ impl Effects {
     //     return null;
     // }
     pub(crate) fn size_trampoline(handler: &mut Handler<'static>) -> Option<size_report::Size> {
+        // N452: ONE raw pointer from the argument, which is not used
+        // again (see `TerminalWrapper::live_handler`).
+        let handler: *mut Handler<'static> = handler;
         let wrapper = wrapper_from_handler(handler);
         let func = unsafe { (*wrapper).effects.size_cb }?;
         let userdata = unsafe { (*wrapper).effects.userdata };
         let mut s = core::mem::MaybeUninit::<size_report::Size>::uninit();
+        let _live = LiveHandler::publish(wrapper, handler);
         if func(wrapper, userdata, s.as_mut_ptr()) {
             return Some(unsafe { s.assume_init() });
         }
@@ -1113,11 +1219,11 @@ impl Effects {
         };
 
         // const ctx: ClipboardWriteCtx = .{ .write = write };
-        // (Derived last: nothing touches `handler` again until `func` returns.)
-        let ctx = ClipboardWriteCtx {
-            write,
-            handler: core::ptr::from_mut(handler),
-        };
+        // (Derived last: nothing touches `handler` again until `func` returns.
+        // N452: the same single raw pointer is the reply's handler and the
+        // callback's `live_handler`.)
+        let handler: *mut Handler<'static> = core::ptr::from_mut(handler);
+        let ctx = ClipboardWriteCtx { write, handler };
         let request = ClipboardWrite {
             size: std::mem::size_of::<ClipboardWrite>(),
             location: write.location,
@@ -1133,6 +1239,7 @@ impl Effects {
             ctx: &ctx as *const ClipboardWriteCtx<'_> as *const c_void,
             reply: Self::clipboard_write_reply_trampoline,
         };
+        let _live = LiveHandler::publish(wrapper, handler);
         func(wrapper, userdata, &request);
     }
 
@@ -1225,11 +1332,14 @@ impl Effects {
         }
 
         // const ctx: ClipboardReadCtx = .{ .read = read, .wrapper = wrapper };
-        // (Derived last: nothing touches `handler` again until `func` returns.)
+        // (Derived last: nothing touches `handler` again until `func` returns.
+        // N452: the same single raw pointer is the reply's handler and the
+        // callback's `live_handler`.)
+        let handler: *mut Handler<'static> = core::ptr::from_mut(handler);
         let ctx = ClipboardReadCtx {
             read,
             wrapper,
-            handler: core::ptr::from_mut(handler),
+            handler,
         };
         let request = ClipboardRead {
             size: std::mem::size_of::<ClipboardRead>(),
@@ -1247,6 +1357,7 @@ impl Effects {
             ctx: &ctx as *const ClipboardReadCtx<'_> as *const c_void,
             reply: Self::clipboard_read_reply_trampoline,
         };
+        let _live = LiveHandler::publish(wrapper, handler);
         func(wrapper, userdata, &request);
     }
 
@@ -1368,6 +1479,9 @@ impl Effects {
         handler: &mut Handler<'static>,
         notification: rustty_vt::stream::ShowDesktopNotification<'_>,
     ) {
+        // N452: ONE raw pointer from the argument, which is not used
+        // again (see `TerminalWrapper::live_handler`).
+        let handler: *mut Handler<'static> = handler;
         let wrapper = wrapper_from_handler(handler);
         let Some(func) = (unsafe { (*wrapper).effects.desktop_notification }) else {
             return;
@@ -1383,6 +1497,7 @@ impl Effects {
             title: LibString::init(notification.title),
             body: LibString::init(notification.body),
         };
+        let _live = LiveHandler::publish(wrapper, handler);
         func(wrapper, userdata, &request);
     }
 
@@ -1393,6 +1508,9 @@ impl Effects {
         handler: &mut Handler<'static>,
         report: rustty_vt::osc::ProgressReport,
     ) {
+        // N452: ONE raw pointer from the argument, which is not used
+        // again (see `TerminalWrapper::live_handler`).
+        let handler: *mut Handler<'static> = handler;
         let wrapper = wrapper_from_handler(handler);
         let Some(func) = (unsafe { (*wrapper).effects.progress_report }) else {
             return;
@@ -1408,6 +1526,7 @@ impl Effects {
             state: ProgressState::from_vt(report.state),
             progress: cval.progress,
         };
+        let _live = LiveHandler::publish(wrapper, handler);
         func(wrapper, userdata, &request);
     }
 
@@ -1434,6 +1553,9 @@ impl Effects {
         handler: &mut Handler<'static>,
         sequence: rustty_vt::stream_terminal::UnknownSequence<'_>,
     ) {
+        // N452: ONE raw pointer from the argument, which is not used
+        // again (see `TerminalWrapper::live_handler`).
+        let handler: *mut Handler<'static> = handler;
         let wrapper = wrapper_from_handler(handler);
         let Some(func) = (unsafe { (*wrapper).effects.unknown_sequence }) else {
             return;
@@ -1454,6 +1576,7 @@ impl Effects {
                 },
             },
         };
+        let _live = LiveHandler::publish(wrapper, handler);
         func(wrapper, userdata, &value);
     }
 }
@@ -1894,6 +2017,7 @@ unsafe fn wrap(
                 tmp_dir_path: None,
                 tracked_grid_refs: WrapperSet::new_in(capture_alloc),
                 searches: WrapperSet::new_in(capture_alloc),
+                live_handler: std::ptr::null_mut(),
             },
         )
     };
@@ -1938,7 +2062,9 @@ pub unsafe fn restore_continuation(
     if !continuation.is_empty() {
         // SAFETY: `terminal_` is a live wrapper (caller contract); the
         // stream's handler aliases this wrapper's terminal.
-        unsafe { (*terminal_).stream.next_slice(continuation) };
+        unsafe {
+            Stream::next_slice_raw(std::ptr::addr_of_mut!((*terminal_).stream), continuation)
+        };
     }
 
     // var exported: std.Io.Writer.Allocating = .init(wrapper.terminal.gpa());
@@ -1952,7 +2078,9 @@ pub unsafe fn restore_continuation(
     let mut exported = rustty_vt::alloc::AllocatingWriter::init(gpa);
     // wrapper.stream.writeContinuation(&exported.writer) catch |err| switch (err) { ... };
     // SAFETY: `terminal_` is a live wrapper (caller contract).
-    match unsafe { (*terminal_).stream.write_continuation(&mut exported) } {
+    match unsafe {
+        Stream::write_continuation_raw(std::ptr::addr_of!((*terminal_).stream), &mut exported)
+    } {
         Ok(()) => {}
         Err(rustty_vt::stream::WriteContinuationError::WriteFailed(_)) => {
             return Err(RestoreContinuationError::OutOfMemory)
@@ -2136,7 +2264,9 @@ pub unsafe fn vt_write(terminal_: Terminal, ptr: *const u8, len: usize) {
     // SAFETY: `terminal_` is a live wrapper; `ptr[0..len]` is readable (caller
     // contract). The stream's handler aliases this wrapper's terminal.
     let input = unsafe { core::slice::from_raw_parts(ptr, len) };
-    unsafe { (*terminal_).stream.next_slice(input) };
+    // N452: raw-self (`Stream::next_slice_raw`), so an effect callback that
+    // re-enters this terminal finds no protected `&mut Stream`.
+    unsafe { Stream::next_slice_raw(std::ptr::addr_of_mut!((*terminal_).stream), input) };
 }
 
 // pub fn vt_write_until_ground(
@@ -2181,7 +2311,10 @@ pub unsafe fn vt_write_until_ground(
     // if (wrapper.stream.nextSliceUntilGround(input)) |consumed| { ... }
     // SAFETY: `terminal_` is a live wrapper; the stream's handler aliases this
     // wrapper's terminal.
-    if let Some(consumed) = unsafe { (*terminal_).stream.next_slice_until_ground(input) } {
+    // N452: raw-self, as in `vt_write`.
+    if let Some(consumed) = unsafe {
+        Stream::next_slice_until_ground_raw(std::ptr::addr_of_mut!((*terminal_).stream), input)
+    } {
         unsafe { *out_consumed_ = consumed };
         return Result::Success;
     }
@@ -2226,17 +2359,20 @@ pub unsafe fn continuation_write_io(
     // tracker that lost bytes after allocation failure or limit overflow.
     // try wrapper.stream.writeContinuation(writer);
     // SAFETY: `terminal_` is a live wrapper (caller contract).
-    unsafe { (*terminal_).stream.write_continuation(writer) }.map_err(|err| match err {
-        rustty_vt::stream::WriteContinuationError::WriteFailed(_) => {
-            ContinuationWriteError::WriteFailed
-        }
-        rustty_vt::stream::WriteContinuationError::ContinuationDisabled => {
-            ContinuationWriteError::ContinuationDisabled
-        }
-        rustty_vt::stream::WriteContinuationError::ContinuationUnavailable => {
-            ContinuationWriteError::ContinuationUnavailable
-        }
-    })
+    // N452: by place (`write_continuation_raw`); this may run from an effect
+    // callback while the handler dispatch holds a protected `&mut Handler`.
+    unsafe { Stream::write_continuation_raw(std::ptr::addr_of!((*terminal_).stream), writer) }
+        .map_err(|err| match err {
+            rustty_vt::stream::WriteContinuationError::WriteFailed(_) => {
+                ContinuationWriteError::WriteFailed
+            }
+            rustty_vt::stream::WriteContinuationError::ContinuationDisabled => {
+                ContinuationWriteError::ContinuationDisabled
+            }
+            rustty_vt::stream::WriteContinuationError::ContinuationUnavailable => {
+                ContinuationWriteError::ContinuationUnavailable
+            }
+        })
 }
 
 // pub const ContinuationAllocError = error{
@@ -2285,7 +2421,7 @@ pub unsafe fn continuation_alloc_io(
     // SAFETY: `terminal_` is a live wrapper (caller contract); shared reads.
     if allow_untracked_ground
         && unsafe { (*terminal_).stream.continuation.is_none() }
-        && unsafe { (*terminal_).stream.ground() }
+        && unsafe { Stream::ground_raw(std::ptr::addr_of!((*terminal_).stream)) }
     {
         // `alloc.dupe(u8, "")`: an empty slice, no allocator call.
         return Ok(rustty_vt::alloc::AVec::new_in(alloc));
@@ -2561,7 +2697,7 @@ unsafe fn set_continuation_max_bytes(wrapper: *mut TerminalWrapper, max_bytes: u
         (*wrapper).stream.continuation = Some(rustty_vt::stream_continuation::Tracker::init(
             gpa, max_bytes,
         ));
-        if !(*wrapper).stream.ground() {
+        if !Stream::ground_raw(std::ptr::addr_of!((*wrapper).stream)) {
             // The parser was already mid-sequence while tracking was disabled, so
             // exporting now would omit an unknown prefix.
             (*wrapper).stream.continuation.as_mut().unwrap().broken = true;
@@ -2885,7 +3021,7 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
             // handler's null fast path (a null Zig-level effect makes Kitty
             // clipboard writes fail up front instead of spooling a
             // transaction that can never commit; see Effects).
-            (*terminal_).stream.handler.effects.clipboard_write = if !value.is_null() {
+            (*handler_ptr(terminal_)).effects.clipboard_write = if !value.is_null() {
                 Some(Effects::clipboard_write_trampoline)
             } else {
                 None
@@ -2903,7 +3039,7 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
                 std::mem::transmute::<*const c_void, Option<ClipboardReadFn>>(value);
             // Installed dynamically to keep the handler's null fast path
             // (reads stay denied without a callback; see Effects).
-            (*terminal_).stream.handler.effects.clipboard_read = if !value.is_null() {
+            (*handler_ptr(terminal_)).effects.clipboard_read = if !value.is_null() {
                 Some(Effects::clipboard_read_trampoline)
             } else {
                 None
@@ -2922,7 +3058,7 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
                 std::mem::transmute::<*const c_void, Option<UnknownSequenceFn>>(value);
             // The trampoline is installed dynamically to preserve the
             // handler's null fast path.
-            (*terminal_).stream.handler.unknown_sequence = if !value.is_null() {
+            (*handler_ptr(terminal_)).unknown_sequence = if !value.is_null() {
                 Some(Effects::unknown_sequence_trampoline)
             } else {
                 None
@@ -2942,7 +3078,7 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
                 false
             };
             // SAFETY: raw place write off the handle (no wrapper-level `&mut`).
-            unsafe { (*terminal_).stream.handler.title_report = v };
+            unsafe { (*handler_ptr(terminal_)).title_report = v };
         }
 
         // .desktop_notification => wrapper.effects.desktop_notification = value,
@@ -3050,7 +3186,7 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
             // buffer; it lives exactly as long as the wrapper (freed in `free`
             // together with the stream).
             unsafe {
-                (*terminal_).stream.handler.terminfo_name = if src_len > 0 {
+                (*handler_ptr(terminal_)).terminfo_name = if src_len > 0 {
                     Some(core::slice::from_raw_parts(buf as *const u8, src_len))
                 } else {
                     None
@@ -3330,7 +3466,7 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
             // every protocol to the value; the `else .{}` branch (an EnumMap with
             // no entries) is, under the always-full port, the field's struct
             // default — `default_max_bytes` per protocol.
-            let handler = unsafe { &mut (*terminal_).stream.handler };
+            let handler = unsafe { &mut *handler_ptr(terminal_) };
             let ptr = value as *const usize;
             if !ptr.is_null() {
                 let v = unsafe { *ptr };
@@ -3355,7 +3491,7 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
             // defaultMaxBytes(.kitty)` falls back to the default; under the
             // always-full array port that is exactly resetting the slot to
             // `defaultMaxBytes(.kitty)`.
-            let handler = unsafe { &mut (*terminal_).stream.handler };
+            let handler = unsafe { &mut *handler_ptr(terminal_) };
             let ptr = value as *const usize;
             let kitty = rustty_vt::apc::Protocol::Kitty as usize;
             if !ptr.is_null() {
@@ -3380,9 +3516,7 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
             let enabled = unsafe { *ptr };
             // wrapper.stream.handler.apc_handler.enable(.glyph, enabled);
             unsafe {
-                (*terminal_)
-                    .stream
-                    .handler
+                (*handler_ptr(terminal_))
                     .apc_handler
                     .enable(rustty_vt::apc::Protocol::Glyph, enabled)
             };
@@ -3529,7 +3663,7 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
                 0
             };
             // SAFETY: raw place write off the handle (no wrapper-level `&mut`).
-            unsafe { (*terminal_).stream.handler.apc_handler.unknown_max_bytes = v };
+            unsafe { (*handler_ptr(terminal_)).apc_handler.unknown_max_bytes = v };
         }
 
         // .clipboard_write_max_bytes => wrapper.stream.handler.kitty_clipboard_write_max_bytes =
@@ -3543,7 +3677,7 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
                 rustty_vt::kitty::clipboard::max_write_size
             };
             // SAFETY: raw place write off the handle (no wrapper-level `&mut`).
-            unsafe { (*terminal_).stream.handler.kitty_clipboard_write_max_bytes = v };
+            unsafe { (*handler_ptr(terminal_)).kitty_clipboard_write_max_bytes = v };
         }
 
         // .resize_pull_scrollback => wrapper.terminal.flags.resize_pull_scrollback =
@@ -3865,17 +3999,14 @@ pub unsafe fn resize(
     // `rustty_vt::modes::sync_output_clear_count`).
     // SAFETY: `terminal_` is a live wrapper; the handler aliases its terminal.
     let r = unsafe {
-        (*terminal_)
-            .stream
-            .handler
-            .resize(rustty_vt::terminal::Resize {
-                cols,
-                rows,
-                cell_size_px: Some(rustty_vt::terminal::ResizeCellSize {
-                    width: cell_width_px,
-                    height: cell_height_px,
-                }),
-            })
+        (*handler_ptr(terminal_)).resize(rustty_vt::terminal::Resize {
+            cols,
+            rows,
+            cell_size_px: Some(rustty_vt::terminal::ResizeCellSize {
+                width: cell_width_px,
+                height: cell_height_px,
+            }),
+        })
     };
     if let Err(err) = r {
         return match err {
@@ -3913,10 +4044,12 @@ pub unsafe fn reset(terminal_: Terminal) {
     let sync = unsafe { (*t).modes.get(rustty_vt::modes::Mode::SynchronizedOutput) };
     unsafe { (*t).full_reset() };
     if sync {
-        // SAFETY (SB): `addr_of_mut!` reaches the handler by place, and the
-        // raw trampoline never dereferences it, so no `&mut Handler` exists
-        // while the callback re-enters the terminal.
-        let handler = unsafe { std::ptr::addr_of_mut!((*terminal_).stream.handler) };
+        // SAFETY (SB): `handler_ptr` reaches the handler by place (or, when
+        // this `reset` itself runs inside an effect callback, through the
+        // running trampoline's `live_handler`, N452), and the raw trampoline
+        // never dereferences it, so no `&mut Handler` exists while the
+        // callback re-enters the terminal.
+        let handler = unsafe { handler_ptr(terminal_) };
         Effects::render_hold_trampoline_raw(handler, false);
     }
 }
@@ -4239,7 +4372,7 @@ unsafe fn get_typed(terminal_: Terminal, data: TerminalData, out: *mut c_void) -
         },
         // .vt_processing_error => out.* = wrapper.stream.handler.semantic_failure,
         TerminalData::VtProcessingError => unsafe {
-            *(out as *mut bool) = (*terminal_).stream.handler.semantic_failure
+            *(out as *mut bool) = (*handler_ptr(terminal_)).semantic_failure
         },
 
         // .scrollback_max_bytes => {
@@ -4281,7 +4414,10 @@ unsafe fn get_typed(terminal_: Terminal, data: TerminalData, out: *mut c_void) -
         }
 
         // .vt_ground => out.* = wrapper.stream.ground(),
-        TerminalData::VtGround => unsafe { *(out as *mut bool) = (*terminal_).stream.ground() },
+        // (N452: by place, never a whole-stream `&self`; see `Stream::ground_raw`.)
+        TerminalData::VtGround => unsafe {
+            *(out as *mut bool) = Stream::ground_raw(std::ptr::addr_of!((*terminal_).stream))
+        },
 
         // .mode => {
         //     const mode = out.toMode() orelse return .invalid_value;
@@ -4310,7 +4446,7 @@ unsafe fn get_typed(terminal_: Terminal, data: TerminalData, out: *mut c_void) -
 
         // .clipboard_write_max_bytes => out.* = wrapper.stream.handler.kitty_clipboard_write_max_bytes,
         TerminalData::ClipboardWriteMaxBytes => unsafe {
-            *(out as *mut usize) = (*terminal_).stream.handler.kitty_clipboard_write_max_bytes
+            *(out as *mut usize) = (*handler_ptr(terminal_)).kitty_clipboard_write_max_bytes
         },
 
         // .mouse_shape => out.* = t.mouse_shape,
@@ -4924,6 +5060,15 @@ pub unsafe fn free(terminal_: Terminal) {
     // storage (its `alloc` field is a raw pointer, so no double reclaim),
     // return the storage through the C-resolved allocator, then drop the
     // value (stream buffers/tracked set) while the allocator is still alive.
+    //
+    // PORT NOTE (N451, P7-W2 T9): the handler's `terminfo_name` borrows this
+    // wrapper's own `terminfo_name_buf`. The moved-out value outlives the
+    // storage it points into (it is dropped after `destroy_raw`), and a
+    // dangling `&[u8]` inside a moved value is UB in Rust (Miri: "constructing
+    // invalid value ... dangling reference"), though the reference's Zig slice
+    // may dangle. Clear the borrow by place first; nothing reads it again.
+    // SAFETY: `terminal_` is still live, initialized storage.
+    unsafe { (*terminal_).stream.handler.terminfo_name = None };
     // SAFETY: `terminal_` was created by `new_` via `create_raw`; after this
     // read the storage is treated as uninitialized and freed exactly once.
     let wrapper_val: TerminalWrapper = unsafe { std::ptr::read(terminal_) };
@@ -8839,6 +8984,327 @@ mod tests {
             }
 
             unsafe { crate::render::free(render_state) };
+            unsafe { free(t) };
+        });
+    }
+
+    // ---------------------------------------------------------------------
+    // Rust-only (P7-W2 T9, N452; Miri targets in the `vtc` group). Effect
+    // callbacks run synchronously inside `vt_write`, and the reference forbids
+    // only `vt_write`/`vt_write_until_ground` on the same terminal from one.
+    // Each test below re-enters one other API class from a callback fired
+    // while the parser is mid-sequence (a BEL inside a CSI executes as C0 in
+    // csi_param), and the sequence then completes. Under Miri (SB and TB)
+    // they prove the raw-self stream drivers and the trampolines'
+    // `live_handler` leave no protected `&mut Stream`/`&mut Handler` for the
+    // re-entry to invalidate (`.port/phase-2/mirihar-n452`).
+    // ---------------------------------------------------------------------
+
+    /// The re-entry tests' shared userdata.
+    #[derive(Default)]
+    struct Reentry {
+        bells: usize,
+        pty: Vec<u8>,
+        grounds: Vec<bool>,
+        semantic_failures: Vec<bool>,
+        clipboard_write_max: Vec<usize>,
+        continuation_max: Vec<usize>,
+        continuation_results: Vec<(Result, Vec<u8>)>,
+    }
+
+    extern "C" fn reentry_write_pty(_t: Terminal, ud: *mut c_void, ptr: *const u8, len: usize) {
+        // SAFETY: `ud` is the test's live `Reentry`; `ptr[0..len]` is the
+        // borrowed response.
+        unsafe {
+            let data = std::slice::from_raw_parts(ptr, len);
+            (*(ud as *mut Reentry)).pty.extend_from_slice(data);
+        }
+    }
+
+    extern "C" fn reentry_clipboard_write(
+        _t: Terminal,
+        _ud: *mut c_void,
+        _request: *const ClipboardWrite,
+    ) {
+    }
+
+    /// A new 10x3 terminal with `r` as userdata, `write_pty` recording, and
+    /// `bell` set to `on_bell`.
+    fn reentry_terminal(alloc: &CAllocator, r: *mut Reentry, on_bell: BellFn) -> Terminal {
+        let (new_result, t) = new_t(alloc, 10, 3);
+        assert_eq!(Result::Success, new_result);
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::Userdata, r as *const c_void)
+        });
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::WritePty, reentry_write_pty as *const c_void)
+        });
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::Bell, on_bell as *const c_void)
+        });
+        t
+    }
+
+    #[test]
+    fn reentrant_callback_resize() {
+        extern "C" fn on_bell(t: Terminal, ud: *mut c_void) {
+            // SAFETY: `ud` is the test's live `Reentry`.
+            unsafe { (*(ud as *mut Reentry)).bells += 1 };
+            // With mode 2048 on, the resize reports the new size in band
+            // through `write_pty`: a nested effect from inside the callback.
+            assert_eq!(Result::Success, unsafe { resize(t, 20, 6, 9, 18) });
+        }
+        with_test_allocator(|alloc| {
+            let mut r = Reentry::default();
+            let rp: *mut Reentry = &mut r;
+            let t = reentry_terminal(alloc, rp, on_bell);
+
+            vtw(t, b"\x1b[?2048h");
+            unsafe { (*rp).pty.clear() };
+            vtw(t, b"\x1b[2\x07;3H");
+
+            let mut cols: size::CellCountInt = 0;
+            let mut rows: size::CellCountInt = 0;
+            let mut x: size::CellCountInt = 0;
+            let mut y: size::CellCountInt = 0;
+            unsafe {
+                assert_eq!(1, (*rp).bells);
+                assert_eq!(b"\x1b[48;6;20;108;180t".as_slice(), (*rp).pty.as_slice());
+                assert_eq!(
+                    Result::Success,
+                    get(t, TerminalData::Cols, (&raw mut cols).cast())
+                );
+                assert_eq!(
+                    Result::Success,
+                    get(t, TerminalData::Rows, (&raw mut rows).cast())
+                );
+                assert_eq!(
+                    Result::Success,
+                    get(t, TerminalData::CursorX, (&raw mut x).cast())
+                );
+                assert_eq!(
+                    Result::Success,
+                    get(t, TerminalData::CursorY, (&raw mut y).cast())
+                );
+            }
+            assert_eq!((20, 6), (cols, rows));
+            // The CSI resumed after the callback: CUP 2;3 on the new grid.
+            assert_eq!((2, 1), (x, y));
+
+            unsafe { free(t) };
+        });
+    }
+
+    #[test]
+    fn reentrant_callback_set_handler_option() {
+        extern "C" fn on_bell(t: Terminal, ud: *mut c_void) {
+            // SAFETY: `ud` is the test's live `Reentry`.
+            unsafe { (*(ud as *mut Reentry)).bells += 1 };
+            let yes = true;
+            let unknown_max: usize = 5;
+            let clipboard_max: usize = 7;
+            let name = LibString::init(b"xterm-n452");
+            unsafe {
+                assert_eq!(
+                    Result::Success,
+                    set(t, Option_::TitleReport, (&raw const yes).cast())
+                );
+                assert_eq!(
+                    Result::Success,
+                    set(t, Option_::UnknownMaxBytes, (&raw const unknown_max).cast())
+                );
+                assert_eq!(
+                    Result::Success,
+                    set(
+                        t,
+                        Option_::ClipboardWriteMaxBytes,
+                        (&raw const clipboard_max).cast()
+                    )
+                );
+                assert_eq!(
+                    Result::Success,
+                    set(t, Option_::TerminfoName, (&raw const name).cast())
+                );
+                assert_eq!(
+                    Result::Success,
+                    set(
+                        t,
+                        Option_::ClipboardWrite,
+                        reentry_clipboard_write as *const c_void
+                    )
+                );
+            }
+        }
+        with_test_allocator(|alloc| {
+            let mut r = Reentry::default();
+            let rp: *mut Reentry = &mut r;
+            let t = reentry_terminal(alloc, rp, on_bell);
+
+            // The bell turns title reports on mid-write; the report later in
+            // the same write sees it.
+            vtw(t, b"\x1b[1\x07m\x1b]2;hi\x1b\\\x1b[21t");
+
+            let mut clipboard_max: usize = 0;
+            unsafe {
+                assert_eq!(1, (*rp).bells);
+                assert_eq!(b"\x1b]lhi\x1b\\".as_slice(), (*rp).pty.as_slice());
+                assert_eq!(
+                    Result::Success,
+                    get(
+                        t,
+                        TerminalData::ClipboardWriteMaxBytes,
+                        (&raw mut clipboard_max).cast()
+                    )
+                );
+                assert!((*t).stream.handler.title_report);
+                assert_eq!(5, (*t).stream.handler.apc_handler.unknown_max_bytes);
+                assert_eq!(
+                    Some(b"xterm-n452".as_slice()),
+                    (*t).stream.handler.terminfo_name
+                );
+                assert!((*t).stream.handler.effects.clipboard_write.is_some());
+            }
+            assert_eq!(7, clipboard_max);
+
+            unsafe { free(t) };
+        });
+    }
+
+    #[test]
+    fn reentrant_callback_get_vt_ground() {
+        extern "C" fn on_bell(t: Terminal, ud: *mut c_void) {
+            let r = ud as *mut Reentry;
+            let mut ground = false;
+            let mut failure = true;
+            let mut clipboard_max: usize = 0;
+            // SAFETY: `ud` is the test's live `Reentry`; `out` pointers are
+            // locals of the right types.
+            unsafe {
+                (*r).bells += 1;
+                assert_eq!(
+                    Result::Success,
+                    get(t, TerminalData::VtGround, (&raw mut ground).cast())
+                );
+                assert_eq!(
+                    Result::Success,
+                    get(
+                        t,
+                        TerminalData::VtProcessingError,
+                        (&raw mut failure).cast()
+                    )
+                );
+                assert_eq!(
+                    Result::Success,
+                    get(
+                        t,
+                        TerminalData::ClipboardWriteMaxBytes,
+                        (&raw mut clipboard_max).cast()
+                    )
+                );
+                (*r).grounds.push(ground);
+                (*r).semantic_failures.push(failure);
+                (*r).clipboard_write_max.push(clipboard_max);
+            }
+        }
+        with_test_allocator(|alloc| {
+            let mut r = Reentry::default();
+            let rp: *mut Reentry = &mut r;
+            let t = reentry_terminal(alloc, rp, on_bell);
+
+            // Mid-CSI, then at ground.
+            vtw(t, b"\x1b[1\x07mA\x07");
+
+            unsafe {
+                assert_eq!(2, (*rp).bells);
+                assert_eq!(vec![false, true], (*rp).grounds);
+                assert_eq!(vec![false, false], (*rp).semantic_failures);
+                assert_eq!(
+                    vec![rustty_vt::kitty::clipboard::max_write_size; 2],
+                    (*rp).clipboard_write_max
+                );
+            }
+
+            unsafe { free(t) };
+        });
+    }
+
+    #[test]
+    fn reentrant_callback_continuation() {
+        extern "C" fn on_bell(t: Terminal, ud: *mut c_void) {
+            let r = ud as *mut Reentry;
+            let mut max: usize = 0;
+            let mut buf = [0u8; 64];
+            let mut written: usize = 0;
+            // SAFETY: `ud` is the test's live `Reentry`; `out` pointers are
+            // locals of the right types.
+            unsafe {
+                (*r).bells += 1;
+                assert_eq!(
+                    Result::Success,
+                    get(t, TerminalData::ContinuationMaxBytes, (&raw mut max).cast())
+                );
+                (*r).continuation_max.push(max);
+                let result = continuation_buf(t, buf.as_mut_ptr(), buf.len(), &raw mut written);
+                (*r).continuation_results
+                    .push((result, buf[..written].to_vec()));
+                // Change the tracking policy mid-feed: shrink the cap on the
+                // first bell, disable on the second, re-enable on the third.
+                let next: usize = match (*r).bells {
+                    1 => 32,
+                    2 => 0,
+                    _ => 16,
+                };
+                assert_eq!(
+                    Result::Success,
+                    set(t, Option_::ContinuationMaxBytes, (&raw const next).cast())
+                );
+            }
+        }
+        with_test_allocator(|alloc| {
+            let mut r = Reentry::default();
+            let rp: *mut Reentry = &mut r;
+            let t = reentry_terminal(alloc, rp, on_bell);
+            let max: usize = 64;
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ContinuationMaxBytes, (&raw const max).cast())
+            });
+
+            // A feed that ends mid-sequence leaves a continuation; the next
+            // feed's bells run with the parser mid-CSI.
+            vtw(t, b"\x1b[1");
+            vtw(t, b"\x07;2\x07\x07");
+
+            let mut after: usize = 0;
+            let mut buf = [0u8; 64];
+            let mut written: usize = 0;
+            let result = unsafe {
+                assert_eq!(
+                    Result::Success,
+                    get(
+                        t,
+                        TerminalData::ContinuationMaxBytes,
+                        (&raw mut after).cast()
+                    )
+                );
+                continuation_buf(t, buf.as_mut_ptr(), buf.len(), &raw mut written)
+            };
+            unsafe {
+                assert_eq!(3, (*rp).bells);
+                assert_eq!(vec![64, 32, 0], (*rp).continuation_max);
+                let seen: Vec<Result> = (*rp).continuation_results.iter().map(|c| c.0).collect();
+                assert_eq!(
+                    vec![Result::Success, Result::Success, Result::InvalidValue],
+                    seen
+                );
+                let results = &(*rp).continuation_results;
+                assert_eq!(b"\x1b[1".as_slice(), results[0].1.as_slice());
+                assert_eq!(b"\x1b[1".as_slice(), results[1].1.as_slice());
+            }
+            // Re-enabled mid-sequence by the last bell: the prefix is lost,
+            // so the continuation is unavailable (`InvalidValue`).
+            assert_eq!(16, after);
+            assert_eq!(Result::InvalidValue, result);
+
             unsafe { free(t) };
         });
     }

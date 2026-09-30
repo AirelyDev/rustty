@@ -1,0 +1,15 @@
+[package]
+name = "mirihar-n452"
+version = "0.0.0"
+edition = "2021"
+
+[[bin]]
+name = "mirihar-n452"
+path = "src/main.rs"
+
+# No dependencies: a self-contained model of the vt `Stream`/`Handler` and the
+# vt-c `TerminalWrapper` effect seam (the D3 `offset_of!` container_of over
+# exposed provenance), reduced to the borrow shapes N452 is about.
+
+# Standalone: not part of the rustty root workspace (this is a proof artifact).
+[workspace]

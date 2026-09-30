@@ -9162,7 +9162,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **id**: N452. P7-W2 T6 (implementer concern 4; task review, controller ruling 51). **severity**: medium
   (aliasing-model UB in the port only; no observed miscompile). **kind**: port soundness (Stacked
   Borrows). **Not upstream**: Zig's `*Stream`/`*Handler` carry no protector, so the reference is sound.
-  **state**: OPEN → follow-up task P7-W2 T9 (a Phase-7 exit item).
+  **state**: OPEN → follow-up task P7-W2 T9 (a Phase-7 exit item). CLOSED (fixed, P7-W2 T9).
 - **shape**: `rustty_terminal_vt_write` runs `next_slice` with a protected `&mut Stream` (and the
   handler's `&mut self` below it) for the whole call, and effect callbacks (bell, title, clipboard,
   render_hold, …) run synchronously inside it. The reference headers
@@ -9186,3 +9186,53 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `*mut Handler`, with narrow reborrows that end before each effect call (memories
   `rust-mut-args-strongly-protected`, `shaper-hook-sb-clean-interleave`). LIFETIMES rows first. The
   harness must be UB before and clean after, under SB and TB.
+- **fix** (P7-W2 T9): raw-self stream drivers, plus the trampolines' own handler pointer for handler
+  bytes. No behaviour change.
+  - rustty-vt `Stream`: `next_slice_raw`, `next_slice_until_ground_raw`, `next_raw` and every private
+    driver that reaches a handler action (`next_slice_untracked`, `next_slice_capped`,
+    `next_slice_until_ground_untracked`, `consume_all_escapes`, `consume_until_ground`,
+    `consume_apc_string`, `csi_entry_byte`, `consume_csi_params`, `next_untracked`, `next_utf8`,
+    `handle_codepoint`, `next_non_utf8`, `csi_dispatch_final`) are `unsafe fn(this: *mut Self, ..)`,
+    the reference's `self: *Self`, with narrow place accesses. The pure dispatchers (`print`,
+    `execute`, `csi_dispatch`, `esc_dispatch`, `configure_charset`, like `osc_dispatch` already) take
+    `handler: &mut H` only. Across a handler action only the handler bytes are protected.
+    `ground_raw` and `write_continuation_raw` read by place. The `&mut self`/`&self` methods of the
+    same names forward to the raw bodies for Rust callers.
+  - The `stream::Handler` trait keeps `&mut self`, so the handler bytes stay protected during an
+    action. rustty-vt-c `TerminalWrapper.live_handler` (port-only field): each of the 15 effect
+    trampolines derives ONE raw pointer from its `&mut Handler` argument and publishes it for exactly
+    the C callback's duration (`LiveHandler` guard: save, set, restore on drop, so nested effects
+    nest). `handler_ptr(w)` gives every C API that touches handler bytes that pointer when set, else
+    `stream.handler` by place: the `set_typed` handler arms, `get` of `VT_PROCESSING_ERROR` and
+    `CLIPBOARD_WRITE_MAX_BYTES`, `resize`, C `reset`'s render_hold, and `rustty_terminal_paste`.
+  - The C API reaches stream state by place only: `vt_write` / `vt_write_until_ground` /
+    `restore_continuation` through the raw entries, `get(VT_GROUND)`, `setContinuationMaxBytes` and
+    `continuationAllocIo` through `ground_raw`, `continuation_write_io` through
+    `write_continuation_raw`.
+- **proof**: `.port/phase-2/mirihar-n452` (16 seeds, SB+TB). The shipped shape is UB for every API
+  class (`n452_shipped_{set,get_ground,continuation}` under SB and TB, `_resize` under TB,
+  `_get_handler` under SB); each fix part alone stays UB (`n452_raw_stream_only_set`,
+  `n452_stash_only_get_ground`, `n452_raw_stream_whole_ground`); `n452_fixed_*` and
+  `n452_fixed_all` are CLEAN under both. The real code: vt-c Miri targets
+  `reentrant_callback_resize`, `reentrant_callback_set_handler_option`,
+  `reentrant_callback_get_vt_ground` and `reentrant_callback_continuation`, CLEAN under SB and TB,
+  with negative controls (T9 report). LIFETIMES rows `src/terminal/stream.zig Stream (self: *Self)`
+  and `src/terminal/c/terminal.zig TerminalWrapper live_handler`.
+- **residual**: the terminal (`*mut Terminal`, a separate allocation) is outside this finding; the
+  effect call sites drop their `term()` borrows before the effect (T6 discipline, re-checked at
+  every site in the T9 report). Found by the new set-option test: **N451**.
+
+## N451 — `rustty_terminal_free` moves out a wrapper whose `terminfo_name` borrows the freed wrapper storage
+
+- **id**: N451. P7-W2 T9 (found by `reentrant_callback_set_handler_option` under Miri). **severity**:
+  low (aliasing/validity UB in the port only; no observed miscompile). **kind**: port soundness
+  (reference validity). **Not upstream**: the reference's `terminfo_name` is a Zig slice, which may
+  dangle. **state**: CLOSED (fixed, P7-W2 T9).
+- **shape**: `set(.terminfo_name)` publishes `handler.terminfo_name: Option<&[u8]>` into the
+  wrapper's own `terminfo_name_buf`. `free` does `ptr::read(terminal_)`, returns the storage through
+  `destroy_raw`, then drops the moved value, whose `&[u8]` now points into freed memory. Miri (SB):
+  "constructing invalid value of type TerminalWrapper: at .stream.handler.terminfo_name.<Some>.0,
+  encountered a dangling reference (use-after-free)". Every free of a terminal with a terminfo name
+  set hit it; the existing terminfo test clears the name before `free`, so it never did.
+- **fix**: `free` clears `terminfo_name` by place before the move (nothing reads it again). Proven by
+  `reentrant_callback_set_handler_option`, which frees with the name set, CLEAN under SB and TB.

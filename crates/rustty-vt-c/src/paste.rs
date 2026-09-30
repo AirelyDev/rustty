@@ -220,21 +220,21 @@ pub unsafe fn terminal_paste(
     // trampoline reads it back as `*const Request` and never writes through
     // it — no `*mut`-intending-writes is ever minted from the `&`-derived
     // pointer.
+    //
+    // (N452: the handler through `handler_ptr`, so a paste made from inside
+    // an effect callback reaches it through the running trampoline's pointer.)
     let result = unsafe {
-        (*terminal_)
-            .stream
-            .handler
-            .paste(terminal_paste_pkg::Request {
-                source,
-                contents: terminal_paste_pkg::Contents::Reader(terminal_paste_pkg::Reader {
-                    mimes: &mimes,
-                    read: clipboard::MimeReader {
-                        ctx: req_ as *mut Request as *mut c_void,
-                        read_fn: read_trampoline,
-                    },
-                }),
-                allow_unsafe: req.allow_unsafe,
-            })
+        (*crate::terminal::handler_ptr(terminal_)).paste(terminal_paste_pkg::Request {
+            source,
+            contents: terminal_paste_pkg::Contents::Reader(terminal_paste_pkg::Reader {
+                mimes: &mimes,
+                read: clipboard::MimeReader {
+                    ctx: req_ as *mut Request as *mut c_void,
+                    read_fn: read_trampoline,
+                },
+            }),
+            allow_unsafe: req.allow_unsafe,
+        })
     };
     let written = match result {
         Ok(written) => written,
