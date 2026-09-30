@@ -2533,6 +2533,7 @@ static DECLS: &[TypeDecl] = {
                     ("clipboard_read", ClipboardRead),
                     ("clipboard_write_max_bytes", ClipboardWriteMaxBytes),
                     ("resize_pull_scrollback", ResizePullScrollback),
+                    ("render_hold", RenderHold),
                 ]
             )
         ),

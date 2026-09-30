@@ -306,6 +306,7 @@ pub struct Effects {
     pub desktop_notification: Option<DesktopNotificationFn>,
     pub progress_report: Option<ProgressReportFn>,
     pub unknown_sequence: Option<UnknownSequenceFn>,
+    pub render_hold: Option<RenderHoldFn>,
 
     /// Scratch buffer for DA1 feature codes. The device attributes
     /// trampoline converts C feature codes into this buffer and returns
@@ -338,6 +339,7 @@ impl Default for Effects {
             desktop_notification: None,
             progress_report: None,
             unknown_sequence: None,
+            render_hold: None,
             da_features_buf: [rustty_vt::device_attributes::Feature::AnsiColor; 64],
         }
     }
@@ -374,6 +376,10 @@ pub type XtversionFn = extern "C" fn(Terminal, *mut c_void) -> LibString;
 /// C function pointer type for the title_changed callback.
 // pub const TitleChangedFn = *const fn (Terminal, ?*anyopaque) callconv(lib.calling_conv) void;
 pub type TitleChangedFn = extern "C" fn(Terminal, *mut c_void);
+
+/// C function pointer type for the render_hold callback.
+// pub const RenderHoldFn = *const fn (Terminal, ?*anyopaque, bool) callconv(lib.calling_conv) void;
+pub type RenderHoldFn = extern "C" fn(Terminal, *mut c_void, bool);
 
 /// C function pointer type for the pwd_changed callback.
 // pub const PwdChangedFn = *const fn (Terminal, ?*anyopaque) callconv(lib.calling_conv) void;
@@ -977,6 +983,40 @@ impl Effects {
         };
         let userdata = unsafe { (*wrapper).effects.userdata };
         func(wrapper, userdata);
+    }
+
+    // fn renderHoldTrampoline(handler: *Handler, held: bool) void {
+    //     const wrapper = TerminalWrapper.fromHandler(handler);
+    //     const func = wrapper.effects.render_hold orelse return;
+    //     func(@ptrCast(wrapper), wrapper.effects.userdata, held);
+    // }
+    //
+    // PORT NOTE (SB, LIFETIMES.tsv `Effects render_hold`): the reference
+    // takes a plain `*Handler`, and C `reset()` passes
+    // `&wrapper.stream.handler`. The stream-handler effect slot needs the
+    // `fn(&mut Handler, bool)` shape, so that entry forwards to
+    // `render_hold_trampoline_raw`, which takes the handler as a RAW pointer.
+    // C `reset` calls the raw entry with `addr_of_mut!((*w).stream.handler)`
+    // and so never forms a `&mut Handler`: a callback that re-enters the
+    // terminal (the documented `rustty_render_state_update`) cannot find a
+    // protected handler borrow that C `reset` created.
+    pub(crate) fn render_hold_trampoline(handler: &mut Handler<'static>, held: bool) {
+        Self::render_hold_trampoline_raw(handler, held);
+    }
+
+    /// The body of `render_hold_trampoline` over a raw handler pointer. It
+    /// only recovers the wrapper address from `handler` and never
+    /// dereferences it.
+    pub(crate) fn render_hold_trampoline_raw(handler: *mut Handler<'static>, held: bool) {
+        let wrapper = wrapper_from_handler(handler);
+        // SAFETY: `wrapper` is the live owning `TerminalWrapper`; read its
+        // `effects` sibling through the raw pointer (never via the handler).
+        let func = match unsafe { (*wrapper).effects.render_hold } {
+            Some(f) => f,
+            None => return,
+        };
+        let userdata = unsafe { (*wrapper).effects.userdata };
+        func(wrapper, userdata, held);
     }
 
     // fn pwdChangedTrampoline(handler: *Handler) void { ... }
@@ -1802,6 +1842,7 @@ unsafe fn wrap(
         pwd_changed: Some(Effects::pwd_changed_trampoline),
         progress_report: Some(Effects::progress_report_trampoline),
         size: Some(Effects::size_trampoline),
+        render_hold: Some(Effects::render_hold_trampoline),
 
         // Installed dynamically when the callback is set; see Effects.
         clipboard_write: None,
@@ -2663,6 +2704,8 @@ pub enum Option_ {
     ClipboardWriteMaxBytes = 39,
     /// Input type: `*const bool` (oracle c55f213aa).
     ResizePullScrollback = 40,
+    /// Input type: `RenderHoldFn` (oracle e50779498).
+    RenderHold = 41,
     // /// Input type expected for setting the option.
     // pub fn InType(comptime self: Option) type {
     //     return switch (self) {
@@ -2679,6 +2722,7 @@ pub enum Option_ {
     //         .clipboard_write => ?Effects.ClipboardWriteFn,
     //         .clipboard_read => ?Effects.ClipboardReadFn,
     //         .unknown_sequence => ?Effects.UnknownSequenceFn,
+    //         .render_hold => ?Effects.RenderHoldFn,
     //         .title, .pwd, .terminfo_name => ?*const lib.String,
     //         .color_foreground, .color_background, .color_cursor => ?*const color.RGB.C,
     //         .color_palette => ?*const color.PaletteC,
@@ -2821,6 +2865,11 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
         Option_::SizeCb => unsafe {
             (*terminal_).effects.size_cb =
                 std::mem::transmute::<*const c_void, Option<SizeFn>>(value);
+        },
+        // .render_hold => wrapper.effects.render_hold = value,
+        Option_::RenderHold => unsafe {
+            (*terminal_).effects.render_hold =
+                std::mem::transmute::<*const c_void, Option<RenderHoldFn>>(value);
         },
         // .clipboard_write => {
         //     wrapper.effects.clipboard_write = value;
@@ -3840,18 +3889,36 @@ pub unsafe fn resize(
 }
 
 // pub fn reset(terminal_: Terminal) ... {
-//     const t: *ZigTerminal = (terminal_ orelse return).terminal;
+//     const wrapper = terminal_ orelse return;
+//     const t: *ZigTerminal = wrapper.terminal;
+//
+//     // A reset always turns off synchronized output, ending its hold.
+//     const sync = t.modes.get(.synchronized_output);
 //     t.fullReset();
+//     if (sync) Effects.renderHoldTrampoline(&wrapper.stream.handler, false);
 // }
 /// # Safety
 /// `terminal_`, if non-null, must be a live terminal handle.
 pub unsafe fn reset(terminal_: Terminal) {
+    // const wrapper = terminal_ orelse return;
     if terminal_.is_null() {
         return;
     }
     // SAFETY: `terminal_` is a live wrapper.
     let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
+
+    // A reset always turns off synchronized output, ending its hold.
+    // SAFETY: short-lived place reads/calls through the raw terminal
+    // pointer; no terminal borrow outlives its statement.
+    let sync = unsafe { (*t).modes.get(rustty_vt::modes::Mode::SynchronizedOutput) };
     unsafe { (*t).full_reset() };
+    if sync {
+        // SAFETY (SB): `addr_of_mut!` reaches the handler by place, and the
+        // raw trampoline never dereferences it, so no `&mut Handler` exists
+        // while the callback re-enters the terminal.
+        let handler = unsafe { std::ptr::addr_of_mut!((*terminal_).stream.handler) };
+        Effects::render_hold_trampoline_raw(handler, false);
+    }
 }
 
 // (cfc19e805: `mode_get`/`mode_set` were REMOVED — replaced by the
@@ -8544,6 +8611,234 @@ mod tests {
             // Another title change
             vtw(t, b"\x1B]2;World\x1B\\");
             assert_eq!(2usize, unsafe { TITLE_COUNT });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set render_hold callback"
+    #[test]
+    fn set_render_hold_callback() {
+        // const S = struct {
+        //     var events: [8]bool = undefined;
+        //     var len: usize = 0;
+        //     var last_userdata: ?*anyopaque = null;
+        //     fn hold(_: Terminal, ud: ?*anyopaque, held: bool) callconv(lib.calling_conv) void { ... }
+        // };
+        //
+        // PORT NOTE: `S.events[0..S.len]` is the prefix of the fixed array,
+        // compared with `&EVENTS[..LEN]`.
+        static mut EVENTS: [bool; 8] = [false; 8];
+        static mut LEN: usize = 0;
+        static mut LAST_USERDATA: *mut c_void = std::ptr::null_mut();
+        extern "C" fn hold(_t: Terminal, ud: *mut c_void, held: bool) {
+            unsafe {
+                EVENTS[LEN] = held;
+                LEN += 1;
+                LAST_USERDATA = ud;
+            }
+        }
+        fn events() -> Vec<bool> {
+            // SAFETY: single-threaded test-local statics.
+            unsafe { (&*std::ptr::addr_of!(EVENTS))[..LEN].to_vec() }
+        }
+
+        with_test_allocator(|alloc| {
+            // var t: Terminal = null;
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &t, 80, 24));
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+            // defer free(t);
+
+            // S.len = 0;
+            // S.last_userdata = null;
+            unsafe {
+                LEN = 0;
+                LAST_USERDATA = std::ptr::null_mut();
+            }
+
+            // var sentinel: u8 = 0;
+            let mut sentinel: u8 = 0;
+            // try testing.expectEqual(Result.success, set(t, .userdata, @ptrCast(&sentinel)));
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::Userdata,
+                    &mut sentinel as *mut u8 as *const c_void,
+                )
+            });
+            // try testing.expectEqual(Result.success, set(t, .render_hold, @ptrCast(&S.hold)));
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::RenderHold, hold as *const c_void)
+            });
+
+            // A set during a hold and a reset without a hold are ignored.
+            let frame = b"\x1b[?2026h\x1b[?2026hA\x1b[?2026l\x1b[?2026l";
+            vtw(t, frame);
+            assert_eq!(vec![true, false], events());
+            assert_eq!(&mut sentinel as *mut u8 as *mut c_void, unsafe {
+                LAST_USERDATA
+            });
+
+            // Resize and reset turn the mode off and end the hold.
+            let begin = b"\x1b[?2026h";
+            unsafe { LEN = 0 };
+            vtw(t, begin);
+            assert_eq!(Result::Success, unsafe { resize(t, 80, 24, 9, 18) });
+            vtw(t, begin);
+            unsafe { reset(t) };
+            unsafe { reset(t) };
+            assert_eq!(vec![true, false, true, false], events());
+
+            // Changing the mode ourselves (e.g. for a timeout) isn't reported.
+            unsafe { LEN = 0 };
+            vtw(t, begin);
+            // const off: ModeConfig = .{ .mode = 2026, .value = false };
+            let off = ModeConfig {
+                mode: 2026,
+                value: false,
+            };
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::Mode, &off as *const ModeConfig as *const c_void)
+            });
+            // try testing.expect(!t.?.terminal.modes.get(.synchronized_output));
+            assert!(!unsafe { (*(*t).terminal).modes.get(modes::Mode::SynchronizedOutput) });
+            assert_eq!(vec![true], events());
+
+            // Clearing the callback silences it.
+            unsafe { LEN = 0 };
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::RenderHold, std::ptr::null())
+            });
+            vtw(t, frame);
+            assert_eq!(0, unsafe { LEN });
+
+            unsafe { free(t) };
+        });
+    }
+
+    // Rust-only (P7-W2 T6; delta review R1 #20 SB hazard; Miri target in the
+    // `vtc` group). The render_hold callback is documented to re-enter the
+    // terminal with `rustty_render_state_update` while the terminal is still
+    // processing the sequence (or the resize, or the C reset) that ended or
+    // began the hold. This drives that re-entry through every call site that
+    // fires the effect — `vt_write` (set, reset, restore, RIS), the C
+    // `resize` (through `Handler::resize`) and the C `reset` — and checks the
+    // captured frame. Under Miri (SB and TB) it proves that no `&mut
+    // Terminal`/Screen/Page, and no `&mut Handler` formed by C `reset`, is live
+    // across the callback.
+    #[test]
+    fn render_hold_callback_reenters_render_state_update() {
+        struct Renderer {
+            render_state: crate::render::RenderState,
+            snapshots: usize,
+            held: bool,
+        }
+        extern "C" fn on_render_hold(terminal: Terminal, userdata: *mut c_void, held: bool) {
+            // SAFETY: `userdata` is the test's live `Renderer`.
+            let r = userdata as *mut Renderer;
+            // Update on every event (on `true` to capture the frame the
+            // program wants left on screen; on `false` as an embedder that
+            // resumes updating does), so every call site is re-entered.
+            let rs = unsafe { (*r).render_state };
+            assert_eq!(Result::Success, unsafe {
+                crate::render::update(rs, terminal)
+            });
+            unsafe {
+                (*r).snapshots += 1;
+                (*r).held = held;
+            }
+        }
+        fn char(r: &Renderer, y: usize, x: usize) -> u32 {
+            // SAFETY: `render_state` is live for the test.
+            unsafe {
+                (&(*r.render_state).state.row_data)[y]
+                    .cells
+                    .get(x)
+                    .raw
+                    .codepoint()
+            }
+        }
+
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 10, 3);
+            assert_eq!(Result::Success, new_result);
+
+            let mut render_state: crate::render::RenderState = std::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                crate::render::new(Some(alloc), &mut render_state)
+            });
+            let mut r = Renderer {
+                render_state,
+                snapshots: 0,
+                held: false,
+            };
+            let rp: *mut Renderer = &mut r;
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::Userdata, rp as *const c_void)
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::RenderHold, on_render_hold as *const c_void)
+            });
+
+            // vt_write: the hold begins mid-write; the frame before it is
+            // captured and nothing after it.
+            vtw(t, b"AB\x1b[?2026h\x1b[HXY");
+            unsafe {
+                assert_eq!(1, (*rp).snapshots);
+                assert!((*rp).held);
+                assert_eq!('A' as u32, char(&*rp, 0, 0));
+                assert_eq!('B' as u32, char(&*rp, 0, 1));
+            }
+
+            // vt_write: the hold ends and the next begins in one write; the
+            // finished frame is captured.
+            vtw(t, b"Z\x1b[?2026l\x1b[?2026h\x1b[H123");
+            unsafe {
+                assert_eq!(3, (*rp).snapshots);
+                assert!((*rp).held);
+                assert_eq!('X' as u32, char(&*rp, 0, 0));
+                assert_eq!('Y' as u32, char(&*rp, 0, 1));
+                assert_eq!('Z' as u32, char(&*rp, 0, 2));
+            }
+
+            // vt_write: restore (XTRESTORE) ends the hold.
+            vtw(t, b"\x1b[?2026l\x1b[?2026s\x1b[?2026h\x1b[?2026r");
+            unsafe {
+                assert_eq!(6, (*rp).snapshots);
+                assert!(!(*rp).held);
+                assert_eq!('1' as u32, char(&*rp, 0, 0));
+            }
+
+            // vt_write: RIS ends the hold.
+            vtw(t, b"\x1b[?2026h\x1bc");
+            unsafe {
+                assert_eq!(8, (*rp).snapshots);
+                assert!(!(*rp).held);
+                assert_eq!(0, char(&*rp, 0, 0));
+            }
+
+            // C resize (through `Handler::resize`) ends the hold.
+            vtw(t, b"Q\x1b[?2026h");
+            assert_eq!(Result::Success, unsafe { resize(t, 12, 4, 9, 18) });
+            unsafe {
+                assert_eq!(10, (*rp).snapshots);
+                assert!(!(*rp).held);
+                let rows = &(*(*rp).render_state).state.row_data;
+                assert_eq!(4, rows.len());
+                assert_eq!('Q' as u32, char(&*rp, 0, 0));
+            }
+
+            // C reset ends the hold.
+            vtw(t, b"\x1b[?2026h");
+            unsafe { reset(t) };
+            unsafe {
+                assert_eq!(12, (*rp).snapshots);
+                assert!(!(*rp).held);
+                assert_eq!(0, char(&*rp, 0, 0));
+            }
+
+            unsafe { crate::render::free(render_state) };
             unsafe { free(t) };
         });
     }

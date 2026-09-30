@@ -377,6 +377,40 @@ pub struct Effects<'a> {
     /// is 256 bytes; longer strings will be silently ignored.
     // xtversion: ?*const fn (*Handler) []const u8
     pub xtversion: Option<fn(&mut Handler<'a>) -> &'a [u8]>,
+
+    /// Called with `true` when the running program asks the terminal
+    /// to stop updating the screen, and with `false` when it allows
+    /// updates again. The time in between is a "render hold". Programs
+    /// use a hold so that the user never sees a half-drawn frame.
+    ///
+    /// Today the only source of a hold is synchronized output (mode
+    /// 2026). The hold begins when VT input sets the mode. It ends
+    /// when VT input resets the mode, on a full reset, and on a resize
+    /// through `Handler.resize`. The calls always come in pairs:
+    /// setting the mode during a hold does nothing, and neither does
+    /// resetting it when there is no hold. Writing `terminal.modes`
+    /// directly never calls this.
+    ///
+    /// When a hold begins, nothing after the sequence that began it
+    /// has been processed yet, so the terminal contains exactly the
+    /// frame the program wants left on screen. A renderer can capture
+    /// that frame from within this callback (e.g. `RenderState.update`)
+    /// and then skip updates until the hold ends. Checking the mode
+    /// before each draw instead can't do this. It leaves whatever was
+    /// drawn last on screen, and it loses a finished frame entirely
+    /// when one hold ends and the next begins between two draws.
+    ///
+    /// The terminal has no clock so it never ends a hold on its own.
+    /// The caller must use a timeout so that a program that never
+    /// releases its hold can't freeze the screen.
+    // render_hold: ?*const fn (*Handler, bool) void,
+    //
+    // PORT NOTE (SB, LIFETIMES.tsv `Handler.Effects render_hold`): the
+    // callback may re-enter the terminal (`RenderState::update` through
+    // `handler.terminal`), so every call site (`do_set_mode`, `resize`,
+    // `full_reset`) drops its `term()` borrow before `render_hold` runs; no
+    // `&mut Terminal`/`Screen`/`Page` is live across the callback.
+    pub render_hold: Option<fn(&mut Handler<'a>, bool)>,
 }
 
 impl<'a> Effects<'a> {
@@ -395,6 +429,7 @@ impl<'a> Effects<'a> {
         enquiry: None,
         progress_report: None,
         size: None,
+        render_hold: None,
         title_changed: None,
         pwd_changed: None,
         write_pty: None,
@@ -464,9 +499,16 @@ impl<'a> Handler<'a> {
         &mut self,
         value: crate::terminal::Resize,
     ) -> Result<(), crate::terminal::ResizeError> {
+        // Resize always turns off synchronized output, ending its hold.
+        // const sync = self.terminal.modes.get(.synchronized_output);
+        let sync = self.term().modes.get(modes::Mode::SynchronizedOutput);
         // try self.terminal.resize(self.terminal.gpa(), value);
         let gpa = self.term().gpa();
         self.term().resize(gpa, value)?;
+        // if (sync) self.renderHold(false);
+        if sync {
+            self.render_hold(false);
+        }
 
         // Mode 2048 reports require complete, current cell pixel geometry.
         // const cell_size = value.cell_size_px orelse return;
@@ -1579,12 +1621,38 @@ impl<'a> Handler<'a> {
         }
     }
 
+    /// Report that a render hold began or ended. See `Effects.render_hold`.
+    // inline fn renderHold(self: *Handler, held: bool) void {
+    //     const func = self.effects.render_hold orelse return;
+    //     func(self, held);
+    // }
+    #[inline]
+    fn render_hold(&mut self, held: bool) {
+        let Some(func) = self.effects.render_hold else {
+            return;
+        };
+        func(self, held);
+    }
+
     // fn setMode(self: *Handler, mode: modes.Mode, enabled: bool) !void
     fn do_set_mode(
         &mut self,
         mode: modes::Mode,
         enabled: bool,
     ) -> Result<(), crate::pagelist::OutOfMemory> {
+        // Synchronized output is reported as a render hold. We only report
+        // real changes. Reporting a set during a hold would be harmful
+        // because the screen is half-drawn at that point and the callback
+        // is expected to capture it.
+        if mode == modes::Mode::SynchronizedOutput {
+            if self.term().modes.get(mode) == enabled {
+                return Ok(());
+            }
+            self.term().modes.set(mode, enabled);
+            self.render_hold(enabled);
+            return Ok(());
+        }
+
         // Set the mode on the terminal
         // self.terminal.modes.set(mode, enabled);
         self.term().modes.set(mode, enabled);
@@ -1659,11 +1727,16 @@ impl<'a> Handler<'a> {
                 )?;
             }
 
-            // .synchronized_output,
+            // Handled above
+            // .synchronized_output => unreachable,
+            //
+            // PORT NOTE (R7): an invariant `unreachable`, ported as a panic.
+            modes::Mode::SynchronizedOutput => unreachable!(),
+
             // .linefeed,
             // .focus_event,
             // => {},
-            modes::Mode::SynchronizedOutput | modes::Mode::Linefeed | modes::Mode::FocusEvent => {}
+            modes::Mode::Linefeed | modes::Mode::FocusEvent => {}
 
             // Enabling mode 2048 reports already-committed pixel geometry.
             // Waiting for the next resize leaves late-enabling clients without
@@ -3460,7 +3533,10 @@ impl<'a> stream::Handler for Handler<'a> {
     }
 
     // .full_reset => {
+    //     // A reset turns off synchronized output, ending its hold.
+    //     const sync = self.terminal.modes.get(.synchronized_output);
     //     self.terminal.fullReset();
+    //     if (sync) self.renderHold(false);
     //
     //     // Full reset clears grants
     //     self.kitty_clipboard_grants.deinit(self.terminal.gpa());
@@ -3473,7 +3549,12 @@ impl<'a> stream::Handler for Handler<'a> {
     // PORT NOTE (oracle c594031d5): `Terminal::full_reset` now performs the
     // cursor-default restore itself (`setCursorStyle(.default)`).
     fn full_reset(&mut self) {
+        // A reset turns off synchronized output, ending its hold.
+        let sync = self.term().modes.get(modes::Mode::SynchronizedOutput);
         self.term().full_reset();
+        if sync {
+            self.render_hold(false);
+        }
 
         // Full reset clears grants
         let gpa = self.term().gpa();
@@ -3517,11 +3598,29 @@ impl<'a> stream::Handler for Handler<'a> {
     }
 
     // .restore_mode => {
+    //     const prev = self.terminal.modes.get(value.mode);
     //     const v = self.terminal.modes.restore(value.mode);
+    //
+    //     // Restore writes the value directly. Put the old value
+    //     // back for synchronized output so that setMode can see
+    //     // the change and report the render hold.
+    //     if (value.mode == .synchronized_output) {
+    //         self.terminal.modes.set(value.mode, prev);
+    //     }
+    //
     //     try self.setMode(value.mode, v);
     // },
     fn restore_mode(&mut self, v: stream::Mode) {
+        let prev = self.term().modes.get(v.mode);
         let enabled = self.term().modes.restore(v.mode);
+
+        // Restore writes the value directly. Put the old value
+        // back for synchronized output so that setMode can see
+        // the change and report the render hold.
+        if v.mode == modes::Mode::SynchronizedOutput {
+            self.term().modes.set(v.mode, prev);
+        }
+
         let r = self.do_set_mode(v.mode, enabled);
         self.vt_catch("restore_mode", r);
     }
@@ -3968,6 +4067,189 @@ mod tests {
             width: 9,
             height: 18,
         }
+    }
+
+    // -- render_hold effect tests (oracle e50779498) ---------------------------
+    //
+    // PORT NOTE: the reference hangs `var events: [8]bool` / `var len` on a
+    // local `S` struct; the callback is a bare `fn` pointer here, so the
+    // captures live in thread-locals (the module's `CAPTURE` idiom). A `Vec`
+    // replaces the fixed `[8]bool` + `len` pair; `S.events[0..S.len]` is the
+    // whole vector.
+    thread_local! {
+        static HOLD_EVENTS: core::cell::RefCell<Vec<bool>> =
+            const { core::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn hold_events() -> Vec<bool> {
+        HOLD_EVENTS.with(|e| e.borrow().clone())
+    }
+
+    fn hold_events_reset() {
+        HOLD_EVENTS.with(|e| e.borrow_mut().clear());
+    }
+
+    // test "render hold effect fires on synchronized output transitions only"
+    #[test]
+    fn render_hold_effect_fires_on_synchronized_output_transitions_only() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        // fn hold(_: *Handler, held: bool) void {
+        //     events[len] = held;
+        //     len += 1;
+        // }
+        fn hold(_: &mut Handler, held: bool) {
+            HOLD_EVENTS.with(|e| e.borrow_mut().push(held));
+        }
+        // S.len = 0;
+        hold_events_reset();
+
+        // var handler: Handler = .init(&t);
+        // handler.effects.render_hold = &S.hold;
+        // var s: Stream = .init(.{ .allocator = testing.allocator, .handler = handler });
+        // defer s.deinit();
+        let mut s = t.vt_stream();
+        s.handler.effects.render_hold = Some(hold);
+
+        // Reset without a hold is ignored
+        s.next_slice(b"\x1b[?2026l");
+        assert_eq!(0, hold_events().len());
+
+        // A set during a hold is ignored since the screen is half-drawn
+        s.next_slice(b"\x1b[?2026hA\x1b[?2026hB\x1b[?2026l\x1b[?2026l");
+        assert_eq!(vec![true, false], hold_events());
+
+        // Save and restore report the same way as set and reset
+        hold_events_reset();
+        s.next_slice(b"\x1b[?2026s\x1b[?2026h\x1b[?2026r\x1b[?2026r");
+        assert_eq!(vec![true, false], hold_events());
+        // try testing.expect(!t.modes.get(.synchronized_output));
+        // SAFETY: the stream's handler aliases `t`; read through its raw
+        // pointer while the stream (which borrows `t`) is live.
+        assert!(!unsafe {
+            (*s.handler.terminal)
+                .modes
+                .get(modespkg::Mode::SynchronizedOutput)
+        });
+
+        // Full reset
+        hold_events_reset();
+        s.next_slice(b"\x1b[?2026h\x1bc\x1bc");
+        assert_eq!(vec![true, false], hold_events());
+
+        // Resize
+        hold_events_reset();
+        s.next_slice(b"\x1b[?2026h");
+        s.handler
+            .resize(crate::terminal::Resize {
+                cols: 80,
+                rows: 24,
+                cell_size_px: None,
+            })
+            .unwrap();
+        s.handler
+            .resize(crate::terminal::Resize {
+                cols: 80,
+                rows: 24,
+                cell_size_px: None,
+            })
+            .unwrap();
+        assert_eq!(vec![true, false], hold_events());
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "render hold effect can snapshot the frame when the hold begins"
+    #[test]
+    fn render_hold_effect_can_snapshot_the_frame_when_the_hold_begins() {
+        use crate::render::RenderState;
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();
+
+        // This is how a renderer is expected to use the effect: capture the
+        // frame when the hold begins and then leave the render state alone
+        // until the hold ends.
+        //
+        // PORT NOTE: the reference's `S.state`/`S.snapshots` statics live in
+        // thread-locals here (`RenderState` is not const-constructible, so the
+        // state slot is an `Option` filled before the stream runs).
+        thread_local! {
+            static STATE: core::cell::RefCell<Option<RenderState>> =
+                const { core::cell::RefCell::new(None) };
+            static SNAPSHOTS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+        }
+
+        // fn hold(h: *Handler, held: bool) void {
+        //     if (!held) return;
+        //     state.update(testing.allocator, h.terminal) catch unreachable;
+        //     snapshots += 1;
+        // }
+        fn hold(h: &mut Handler, held: bool) {
+            if !held {
+                return;
+            }
+            // SAFETY: `h.terminal` is the live terminal the handler aliases;
+            // no other `&mut Terminal` is live across the effect callback
+            // (the render-hold call sites drop every `term()` borrow first).
+            let term = unsafe { &mut *h.terminal };
+            STATE.with(|s| {
+                s.borrow_mut()
+                    .as_mut()
+                    .unwrap()
+                    .update(Global, term)
+                    .expect("unreachable")
+            });
+            SNAPSHOTS.with(|c| c.set(c.get() + 1));
+        }
+
+        // fn char(y: usize, x: usize) u21 {
+        //     return state.row_data.items(.cells)[y].get(x).raw.codepoint();
+        // }
+        fn char(y: usize, x: usize) -> u32 {
+            STATE.with(|s| {
+                s.borrow().as_ref().unwrap().row_data[y]
+                    .cells
+                    .get(x)
+                    .raw
+                    .codepoint()
+            })
+        }
+
+        // S.state = .empty;
+        // S.snapshots = 0;
+        // defer S.state.deinit(alloc);
+        STATE.with(|s| *s.borrow_mut() = Some(RenderState::empty()));
+        SNAPSHOTS.with(|c| c.set(0));
+
+        // var handler: Handler = .init(&t);
+        // handler.effects.render_hold = &S.hold;
+        // var s: Stream = .init(.{ .allocator = alloc, .handler = handler });
+        // defer s.deinit();
+        let mut s = t.vt_stream();
+        s.handler.effects.render_hold = Some(hold);
+
+        // Normal output, the start of a hold, and part of the next frame all
+        // arrive in one write with no draw in between. The captured frame
+        // must have all of the output before the hold and none after.
+        s.next_slice(b"AB\x1b[?2026h\x1b[HXY");
+        assert_eq!(1, SNAPSHOTS.with(|c| c.get()));
+        assert_eq!('A' as u32, char(0, 0));
+        assert_eq!('B' as u32, char(0, 1));
+
+        // The frame is finished and the next hold begins before we ever
+        // draw. The finished frame must be captured, not lost.
+        s.next_slice(b"Z\x1b[?2026l\x1b[?2026h\x1b[H123");
+        assert_eq!(2, SNAPSHOTS.with(|c| c.get()));
+        assert_eq!('X' as u32, char(0, 0));
+        assert_eq!('Y' as u32, char(0, 1));
+        assert_eq!('Z' as u32, char(0, 2));
+
+        s.deinit();
+        if let Some(mut state) = STATE.with(|s| s.borrow_mut().take()) {
+            state.deinit(alloc);
+        }
+        t.deinit(alloc);
     }
 
     // test "resize clears synchronized output on unchanged cell dimensions"
