@@ -1180,8 +1180,8 @@ fn trackedPinsTable(pages: &PageList) {
         let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(1) };
         if pin.garbage {
             unsafe {
-                dcimgui_sys::ImGui_TextColored(
-                    dcimgui_sys::ImVec4 {
+                dcimgui_sys::ImGui_TextColoredPtr(
+                    &dcimgui_sys::ImVec4 {
                         x: 1.0,
                         y: 0.5,
                         z: 0.3,
@@ -1255,8 +1255,8 @@ fn trackedPinsTable(pages: &PageList) {
             };
             if dirty {
                 unsafe {
-                    dcimgui_sys::ImGui_TextColored(
-                        dcimgui_sys::ImVec4 {
+                    dcimgui_sys::ImGui_TextColoredPtr(
+                        &dcimgui_sys::ImVec4 {
                             x: 1.0,
                             y: 0.4,
                             z: 0.4,
@@ -1287,8 +1287,8 @@ fn trackedPinsTable(pages: &PageList) {
         let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(4) };
         if pin.eql(active_pin) {
             unsafe {
-                dcimgui_sys::ImGui_TextColored(
-                    dcimgui_sys::ImVec4 {
+                dcimgui_sys::ImGui_TextColoredPtr(
+                    &dcimgui_sys::ImVec4 {
                         x: 0.4,
                         y: 0.9,
                         z: 0.4,
@@ -1299,8 +1299,8 @@ fn trackedPinsTable(pages: &PageList) {
             };
         } else if pin.eql(viewport_pin) {
             unsafe {
-                dcimgui_sys::ImGui_TextColored(
-                    dcimgui_sys::ImVec4 {
+                dcimgui_sys::ImGui_TextColoredPtr(
+                    &dcimgui_sys::ImVec4 {
                         x: 0.4,
                         y: 0.8,
                         z: 1.0,
@@ -1311,8 +1311,8 @@ fn trackedPinsTable(pages: &PageList) {
             };
         } else if pin.garbage {
             unsafe {
-                dcimgui_sys::ImGui_TextColored(
-                    dcimgui_sys::ImVec4 {
+                dcimgui_sys::ImGui_TextColoredPtr(
+                    &dcimgui_sys::ImVec4 {
                         x: 1.0,
                         y: 0.5,
                         z: 0.3,
@@ -2406,8 +2406,8 @@ impl CellInfo {
                 // if (row.wrap) { cimgui.c.ImGui_TextColored(.{ .x = 0.4, .y = 0.8, .z = 1.0, .w = 1.0 }, "wrap"); cimgui.c.ImGui_SameLine(); }
                 if row.wrap() {
                     unsafe {
-                        dcimgui_sys::ImGui_TextColored(
-                            dcimgui_sys::ImVec4 {
+                        dcimgui_sys::ImGui_TextColoredPtr(
+                            &dcimgui_sys::ImVec4 {
                                 x: 0.4,
                                 y: 0.8,
                                 z: 1.0,
@@ -2421,8 +2421,8 @@ impl CellInfo {
                 // if (row.wrap_continuation) { cimgui.c.ImGui_TextColored(.{ .x = 0.4, .y = 0.8, .z = 1.0, .w = 1.0 }, "cont"); cimgui.c.ImGui_SameLine(); }
                 if row.wrap_continuation() {
                     unsafe {
-                        dcimgui_sys::ImGui_TextColored(
-                            dcimgui_sys::ImVec4 {
+                        dcimgui_sys::ImGui_TextColoredPtr(
+                            &dcimgui_sys::ImVec4 {
                                 x: 0.4,
                                 y: 0.8,
                                 z: 1.0,
@@ -2436,8 +2436,8 @@ impl CellInfo {
                 // if (row.grapheme) { cimgui.c.ImGui_TextColored(.{ .x = 0.9, .y = 0.7, .z = 0.3, .w = 1.0 }, "grapheme"); cimgui.c.ImGui_SameLine(); }
                 if row.grapheme() {
                     unsafe {
-                        dcimgui_sys::ImGui_TextColored(
-                            dcimgui_sys::ImVec4 {
+                        dcimgui_sys::ImGui_TextColoredPtr(
+                            &dcimgui_sys::ImVec4 {
                                 x: 0.9,
                                 y: 0.7,
                                 z: 0.3,
@@ -2451,8 +2451,8 @@ impl CellInfo {
                 // if (row.styled) { cimgui.c.ImGui_TextColored(.{ .x = 0.7, .y = 0.9, .z = 0.5, .w = 1.0 }, "styled"); cimgui.c.ImGui_SameLine(); }
                 if row.styled() {
                     unsafe {
-                        dcimgui_sys::ImGui_TextColored(
-                            dcimgui_sys::ImVec4 {
+                        dcimgui_sys::ImGui_TextColoredPtr(
+                            &dcimgui_sys::ImVec4 {
                                 x: 0.7,
                                 y: 0.9,
                                 z: 0.5,
@@ -2466,8 +2466,8 @@ impl CellInfo {
                 // if (row.hyperlink) { cimgui.c.ImGui_TextColored(.{ .x = 0.8, .y = 0.6, .z = 1.0, .w = 1.0 }, "link"); cimgui.c.ImGui_SameLine(); }
                 if row.hyperlink() {
                     unsafe {
-                        dcimgui_sys::ImGui_TextColored(
-                            dcimgui_sys::ImVec4 {
+                        dcimgui_sys::ImGui_TextColoredPtr(
+                            &dcimgui_sys::ImVec4 {
                                 x: 0.8,
                                 y: 0.6,
                                 z: 1.0,

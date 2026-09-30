@@ -79,6 +79,18 @@ extern "C" {
     /// `ImGuiStyle::ImGuiStyle()`), writing the proper non-zero defaults.
     /// (ext.cpp — `ImGuiStyle_ImGuiStyle(cimgui::ImGuiStyle* self)`.)
     pub fn ImGuiStyle_ImGuiStyle(self_: *mut ImGuiStyle);
+
+    /// RUSTTY-ONLY (N485): Dear Bindings' `ImGui_TextColored(ImVec4 col,
+    /// const char* fmt, ...)` with `col` passed by pointer. The by-value form
+    /// is blocklisted in build.rs: on aarch64-pc-windows-msvc a variadic
+    /// function's named composites go in general registers as their bytes
+    /// (clang-cl: `col` in x0:x1, `fmt` in x2), but rustc passed the `ImVec4`
+    /// HFA as four floats in w0..w3 and `fmt` in x4, and ImGui read a float's
+    /// bits as the format pointer. The reference's
+    /// `cimgui.c.ImGui_TextColored(col, fmt, ...)` calls map to this one.
+    /// (ext.cpp — `ImGui_TextColoredPtr(const cimgui::ImVec4* col, const char*
+    /// fmt, ...)`.)
+    pub fn ImGui_TextColoredPtr(col: *const ImVec4, fmt: *const std::os::raw::c_char, ...);
 }
 
 // ---------------------------------------------------------------------------
@@ -502,5 +514,169 @@ mod tests {
 
             ImGui_DestroyContext(ctx);
         }
+    }
+
+    /// N485 known answer: `ImGui_TextColoredPtr` formats its variadic
+    /// arguments. The item it lays out is exactly as wide as the expected
+    /// string, which only holds if `fmt` and the arguments arrived intact (the
+    /// by-value `ImGui_TextColored` it replaces faulted on
+    /// aarch64-pc-windows-msvc before reading them).
+    #[test]
+    fn kat_text_colored_ptr_formats_its_arguments() {
+        let _guard = IMGUI_CONTEXT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            let ctx = ImGui_CreateContext(ptr::null_mut());
+            assert!(!ctx.is_null(), "ImGui_CreateContext(NULL) returned null");
+            let io = ImGui_GetIO();
+            (*io).DisplaySize = ImVec2 {
+                x: 1280.0,
+                y: 720.0,
+            };
+            (*io).DeltaTime = 1.0 / 60.0;
+            // No renderer backend: declare texture ownership so `NewFrame`
+            // builds the font atlas itself.
+            (*io).BackendFlags |=
+                ImGuiBackendFlags__ImGuiBackendFlags_RendererHasTextures as ImGuiBackendFlags;
+            ImGui_NewFrame();
+
+            let col = ImVec4 {
+                x: 0.4,
+                y: 0.9,
+                z: 0.4,
+                w: 1.0,
+            };
+            ImGui_TextColoredPtr(
+                &col,
+                c"%s-%d".as_ptr(),
+                c"active".as_ptr(),
+                42 as std::os::raw::c_int,
+            );
+            let drawn = ImGui_GetItemRectSize();
+            let expected = ImGui_CalcTextSize(c"active-42".as_ptr());
+            assert!(expected.x > 0.0, "the font atlas measured an empty string");
+            assert_eq!(drawn.x, expected.x);
+            assert_eq!(drawn.y, expected.y);
+
+            ImGui_EndFrame();
+            ImGui_DestroyContext(ctx);
+        }
+    }
+
+    /// The variadic bindgen declarations in `src`, as `(name, params)` with the
+    /// parameter list whitespace-normalised and without the trailing `...`.
+    fn variadic_decls(src: &str) -> Vec<(String, String)> {
+        let flat = src.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut out = Vec::new();
+        for decl in flat.split("pub fn ").skip(1) {
+            let Some(end) = decl.find(';') else { continue };
+            let decl = &decl[..end];
+            let (Some(open), Some(close)) = (decl.find('('), decl.rfind(')')) else {
+                continue;
+            };
+            let params = decl[open + 1..close].trim();
+            if let Some(fixed) = params.strip_suffix("...") {
+                out.push((decl[..open].to_string(), fixed.trim().to_string()));
+            }
+        }
+        out
+    }
+
+    /// The by-value aggregate (struct or union) parameters of every variadic
+    /// declaration in `src`, as `name(param: Type)`.
+    fn variadic_by_value_aggregates(src: &str) -> Vec<String> {
+        let flat = src.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut aggregates: Vec<&str> = flat
+            .split("pub struct ")
+            .skip(1)
+            .chain(flat.split("pub union ").skip(1))
+            .filter_map(|rest| rest.split([' ', '{', '(', '<']).next())
+            .collect();
+        // bindgen names the C struct `ImVec4_t` and aliases the typedef
+        // (`pub type ImVec4 = ImVec4_t;`); follow aliases to a fixed point.
+        let aliases: Vec<(&str, &str)> = flat
+            .split("pub type ")
+            .skip(1)
+            .filter_map(|rest| {
+                let (name, target) = rest.split_once(" = ")?;
+                Some((name.trim(), target.split(';').next()?.trim()))
+            })
+            .collect();
+        loop {
+            let before = aggregates.len();
+            for &(name, target) in &aliases {
+                if aggregates.contains(&target) && !aggregates.contains(&name) {
+                    aggregates.push(name);
+                }
+            }
+            if aggregates.len() == before {
+                break;
+            }
+        }
+        let mut hits = Vec::new();
+        for (name, params) in variadic_decls(src) {
+            for param in params.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+                let ty = param.split_once(':').map_or("", |(_, t)| t.trim());
+                if aggregates.contains(&ty) {
+                    hits.push(format!("{name}({param})"));
+                }
+            }
+        }
+        hits
+    }
+
+    /// N485: no C-variadic binding may take a struct or union by value.
+    ///
+    /// On aarch64-pc-windows-msvc every argument of a variadic call, the named
+    /// ones included, follows the variadic convention: a composite is never an
+    /// HFA and travels in general registers as its bytes. clang-cl compiles
+    /// `ImGui_TextColored(ImVec4 col, const char* fmt, ...)` that way (`col` in
+    /// x0:x1, `fmt` in x2). rustc 1.93.1 passes the `ImVec4` HFA as four
+    /// floats in w0..w3 and `fmt` in x4, so ImGui took `0.4f`'s bits as the
+    /// format pointer (`STATUS_ACCESS_VIOLATION` in
+    /// `ImFormatStringToTempBufferV`). Such functions are blocklisted in
+    /// build.rs and reached through a pointer-taking shim in `ext.cpp`
+    /// ([`ImGui_TextColoredPtr`]). This test runs on every host, so a new
+    /// variadic with a by-value aggregate fails here rather than at run time on
+    /// one target.
+    #[test]
+    fn no_variadic_binding_takes_an_aggregate_by_value() {
+        let src = include_str!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+        assert!(
+            variadic_decls(src)
+                .iter()
+                .any(|(name, _)| name == "ImGui_Text"),
+            "the variadic scanner found no `ImGui_Text`; it is not reading the bindings"
+        );
+        let hits = variadic_by_value_aggregates(src);
+        assert!(
+            hits.is_empty(),
+            "variadic bindings take aggregates by value (miscompiled on \
+             aarch64-pc-windows-msvc, N485): {hits:?}"
+        );
+    }
+
+    /// Negative control for the scanner above (R5): the pre-N485 declaration
+    /// and a by-value union are caught; pointer, scalar and non-variadic
+    /// parameters are not.
+    #[test]
+    fn variadic_aggregate_scanner_negative_control() {
+        let src = "#[repr(C)] pub struct ImVec4_t { pub x: f32 }\n\
+                   pub type ImVec4 = ImVec4_t;\n\
+                   pub type ImGuiID = ::std::os::raw::c_uint;\n\
+                   pub union ImU { pub a: u32 }\n\
+                   unsafe extern \"C\" {\n    pub fn ImGui_TextColored(col: ImVec4,\n        \
+                   fmt: *const ::std::os::raw::c_char, ...);\n}\n\
+                   unsafe extern \"C\" { pub fn U(u: ImU, ...); }\n\
+                   unsafe extern \"C\" { pub fn P(col: *const ImVec4, n: f32, id: ImGuiID, ...); }\n\
+                   unsafe extern \"C\" { pub fn NonVariadic(col: ImVec4); }\n";
+        assert_eq!(
+            variadic_by_value_aggregates(src),
+            vec![
+                "ImGui_TextColored(col: ImVec4)".to_string(),
+                "U(u: ImU)".to_string()
+            ]
+        );
     }
 }

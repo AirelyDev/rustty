@@ -301,8 +301,8 @@ impl Info {
             //     "⚠ Viewing inactive screen",
             // );
             unsafe {
-                dcimgui_sys::ImGui_TextColored(
-                    dcimgui_sys::ImVec4 {
+                dcimgui_sys::ImGui_TextColoredPtr(
+                    &dcimgui_sys::ImVec4 {
                         x: 1.0,
                         y: 0.8,
                         z: 0.0,
