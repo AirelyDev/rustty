@@ -72,6 +72,9 @@ extend-ignore-re = [
   '"Genu" "ineI" "ntel"',
   # Ignore rc.exe's `/fo <file>` output flag (the Windows resource build)
   '\.arg\("/fo"\)',
+  # Ignore the "Earl Grey" theme name cited in prose (theme names are
+  # third-party data, as the themes/ exclude above says)
+  'Earl Grey',
 ]
 
 [default.extend-words]
