@@ -33,7 +33,7 @@ use objc2_core_foundation::Type;
 use objc2_io_surface::IOSurfaceRef;
 use rustty_zigstd::thread::Semaphore;
 
-use crate::generic::{AtomicHealth, HealthReportRetry, SurfaceMailbox};
+use crate::generic::{AtomicHealth, HealthReport, SurfaceMailbox};
 use crate::metal::metal_impl::LayerCell;
 use crate::metal::render_pass::{Attachment, Options as RpOptions, RenderPass};
 
@@ -68,7 +68,7 @@ pub enum Error {
 // - `health`: the renderer's `health` cell (`Arc<AtomicHealth>`);
 // - `frame_sema`: the swap chain's frame semaphore (`releaseFrame`);
 // - `surface_mailbox`: a clone of the renderer's surface mailbox handle;
-// - `health_retry`: the renderer's refused-health-report retry (UD362);
+// - `health_report`: the renderer's health-report state (UD362);
 // - `layer`: Metal's presenter cell (`api.present` reads only the layer);
 // - `surface`: the target's IOSurface (`present` reads only `target.surface`; the
 //   frame slot is held by `frame_sema` until this completion, so it is the surface
@@ -81,7 +81,7 @@ pub struct CompletionContext {
     pub health: Arc<AtomicHealth>,
     pub frame_sema: Arc<Semaphore>,
     pub surface_mailbox: SurfaceMailbox,
-    pub health_retry: Arc<HealthReportRetry>,
+    pub health_report: Arc<HealthReport>,
     pub layer: Arc<LayerCell>,
     pub surface: CFRetained<IOSurfaceRef>,
     pub sync: bool,
@@ -103,7 +103,7 @@ impl CompletionContext {
             health: Arc::new(AtomicHealth::new(crate::Health::Healthy)),
             frame_sema: Arc::new(Semaphore::new()),
             surface_mailbox: SurfaceMailbox::DETACHED,
-            health_retry: Arc::new(HealthReportRetry::new()),
+            health_report: Arc::new(HealthReport::new()),
             layer: Arc::new(LayerCell::offscreen()),
             surface: surface.retain(),
             sync: false,

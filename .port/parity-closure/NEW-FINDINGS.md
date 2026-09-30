@@ -8794,7 +8794,10 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   an `.instant` push plus withdrawal and a `HealthReportRetry` (redraw flag + `draw_now` wakeup, also in
   the context), so no completion can outlive `SwapChain::deinit`; `LayerCell` is narrowed (private
   field, only `present` reachable, `Metal::layer()` for the rest); the harness tears the renderer down
-  before joining the completion thread and models the new order (still UB / CLEAN / CLEAN).
+  before joining the completion thread and models the new order (still UB / CLEAN / CLEAN). Fix round 2
+  (ruling 41): the retry state is `HealthReport` (`reported` under a mutex, `pending`, a paced `draw_now`
+  wakeup that skips while the display link runs), shared by the renderer (`health_report`) and the
+  context; the harness models `reported` (still UB / CLEAN / CLEAN).
 
 ## N441 — main-thread references to the whole core `Surface` cover the renderer the render thread writes under the draw mutex
 

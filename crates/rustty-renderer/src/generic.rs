@@ -1086,20 +1086,6 @@ impl AtomicHealth {
     pub fn store(&self, health: Health) {
         self.raw.store(health as i32, Ordering::SeqCst);
     }
-
-    /// `cmpxchgStrong(current, new, .seq_cst, .seq_cst)`: stores `new` only if the
-    /// value is still `current`. Rustty-only: the Metal sync path's undelivered
-    /// health report is withdrawn with it (UD362).
-    pub fn compare_exchange(&self, current: Health, new: Health) -> bool {
-        self.raw
-            .compare_exchange(
-                current as i32,
-                new as i32,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            )
-            .is_ok()
-    }
 }
 
 // ===========================================================================
@@ -1645,11 +1631,11 @@ mod macos_impl {
         // handler's load/store touch no renderer byte.
         pub health: Arc<AtomicHealth>,
 
-        /// A refused health report's retry: a redraw request and the render
-        /// thread's `draw_now` wakeup.
+        /// The health reports to the surface: the health it was last told,
+        /// whether a report is owed, and the paced retry wakeup.
         //
-        // rustty-only (R13, UPSTREAM-DEFECTS.md UD362); see `HealthReportRetry`.
-        pub health_retry: Arc<HealthReportRetry>,
+        // rustty-only (R13, UPSTREAM-DEFECTS.md UD362); see `HealthReport`.
+        pub health_report: Arc<HealthReport>,
 
         /// Health of how well the apprt can present our frames.
         ///
@@ -2432,7 +2418,7 @@ mod macos_impl {
                 bg_image_changed: false,
                 bg_image_buffer_modified: 0,
                 health: Arc::new(AtomicHealth::new(crate::Health::Healthy)),
-                health_retry: Arc::new(HealthReportRetry::new()),
+                health_report: Arc::new(HealthReport::new()),
                 target_config_modified: 0,
                 terminal_state: RenderState::empty(),
                 terminal_state_frame_count: 0,
@@ -2681,8 +2667,8 @@ mod macos_impl {
         //   }
         /// Called by renderer.Thread when it exits the main loop.
         pub fn loop_exit(&self) {
-            // UD362: disarm the health-report retry's wakeup.
-            self.health_retry.arm(None);
+            // UD362: disarm the health-report wakeup.
+            self.health_report.arm(None);
             // Stop our display link. If this fails its okay it just means
             // that we either never started it or the view its attached to
             // is gone which is fine.
@@ -6177,7 +6163,7 @@ mod macos_impl {
     // which in Rust is an aliasing violation (a data race with that retag). The port's
     // context carries clones of exactly what this body needs (the layer cell, the
     // target's IOSurface, the health cell, the frame semaphore, the surface
-    // mailbox and the health-report retry), taken under the draw mutex when the
+    // mailbox and the health-report state), taken under the draw mutex when the
     // frame began, so it forms no
     // reference to any renderer byte. `.port/phase-2/mirihar-n440`:
     // `shipped_async_handler` UB, `fixed_async_handler` and
@@ -6221,73 +6207,141 @@ mod macos_impl {
             &ctx.health,
             &ctx.frame_sema,
             &ctx.surface_mailbox,
-            &ctx.health_retry,
+            &ctx.health_report,
             health,
         );
     }
 
-    /// What a health report the full app mailbox refused needs to be retried
-    /// soon: a redraw request the next draw consumes, and the render thread's
-    /// `draw_now` wakeup.
+    /// The renderer's health reports to the surface: the health the surface was
+    /// last told, whether a report is still owed, and how to retry one soon.
     //
-    // rustty-only (R13, UPSTREAM-DEFECTS.md UD362): `frame_completed_on` pushes
-    // `.renderer_health` with `.instant` where the reference blocks in `.forever`.
-    // On a refusal it withdraws the report and calls `request`: the flag makes the
-    // next `draw_frame_locked` draw a frame even with nothing else to redraw, and
-    // the wakeup runs that draw now (`drawNowCallback`), so the report is retried
-    // within one render-thread wakeup rather than whenever a frame next happens to
-    // complete. In its own allocation (an `Arc` the renderer and each in-flight
-    // frame's `CompletionContext` share, N440). The wakeup is armed by
-    // `loop_enter_raw` and disarmed by `loop_exit_raw` (render thread), before the
-    // render thread's `draw_now` is deinitialized, and a completion notifies it
-    // only under the same mutex, so it never notifies a released handle.
-    pub struct HealthReportRetry {
-        redraw: AtomicBool,
-        draw_now: std::sync::Mutex<Option<Async>>,
+    // rustty-only (R13, UPSTREAM-DEFECTS.md UD362). `frame_completed_on` reports
+    // with `.instant` where the reference blocks in `.forever`, so a full app
+    // mailbox can refuse a report. Instead of withdrawing the health cell (fix
+    // round 1; round 2 found that a withdrawal could restore a value that was
+    // itself never delivered), the surface's view is tracked on its own:
+    // - `reported`: the last health actually delivered (or, with a detached
+    //   mailbox, settled). Every completion compares its health with it and
+    //   reports when they differ, under this mutex, so `reported` always equals
+    //   what the surface last heard and a report never goes back in time.
+    // - `pending`: a report is owed (the last attempt was refused). While set,
+    //   `animation_wake` asks for draw-only wakes at `DRAW_INTERVAL_MS`, so every
+    //   draw renders a frame whose completion retries, and a render-thread draw
+    //   resyncs the display link, which then runs (vsync-paced) until the report
+    //   lands and a draw finds nothing to redraw.
+    // - `wake`: the render thread's `draw_now` wakeup, to start that retry at once
+    //   when nothing else will. It is paced: skipped while the display link is
+    //   running (its vsync tick already draws), and otherwise sent at most once per
+    //   `DRAW_INTERVAL_MS`. Armed by `loop_enter_raw` / on link creation, disarmed
+    //   by `loop_exit_raw` (render thread) before `draw_now` is deinitialized and
+    //   the link released; a completion uses it only under the same mutex.
+    // In its own allocation (an `Arc` the renderer and each in-flight frame's
+    // `CompletionContext` share, N440).
+    pub struct HealthReport {
+        reported: std::sync::Mutex<crate::Health>,
+        pending: AtomicBool,
+        wake: std::sync::Mutex<HealthReportWake>,
     }
 
-    impl Default for HealthReportRetry {
+    /// `HealthReport`'s wakeup state.
+    #[derive(Default)]
+    struct HealthReportWake {
+        draw_now: Option<Async>,
+        link: Option<DisplayLinkHandle>,
+        last: Option<Instant>,
+    }
+
+    // SAFETY: `link` is a CVDisplayLink handle, only queried (`isRunning`) while
+    // armed: it is set on the render thread when the link is created and cleared
+    // in `loop_exit_raw`, before `Renderer::deinit` releases the link, under the
+    // mutex every reader holds. CoreVideo's display-link calls are thread-safe.
+    // `draw_now` is a mach-port name (Copy, Send).
+    unsafe impl Send for HealthReportWake {}
+
+    impl Default for HealthReport {
         fn default() -> Self {
             Self::new()
         }
     }
 
-    impl HealthReportRetry {
-        pub fn new() -> HealthReportRetry {
-            HealthReportRetry {
-                redraw: AtomicBool::new(false),
-                draw_now: std::sync::Mutex::new(None),
+    impl HealthReport {
+        pub fn new() -> HealthReport {
+            HealthReport {
+                // The surface starts out assuming a healthy renderer (the
+                // reference's `health` starts `.healthy` and reports changes only).
+                reported: std::sync::Mutex::new(crate::Health::Healthy),
+                pending: AtomicBool::new(false),
+                wake: std::sync::Mutex::new(HealthReportWake::default()),
             }
         }
 
-        fn draw_now(&self) -> std::sync::MutexGuard<'_, Option<Async>> {
-            self.draw_now.lock().unwrap_or_else(|e| e.into_inner())
+        fn wake_state(&self) -> std::sync::MutexGuard<'_, HealthReportWake> {
+            self.wake.lock().unwrap_or_else(|e| e.into_inner())
         }
 
-        /// Arms (`Some`, `loopEnter`) or disarms (`None`, `loopExit`) the wakeup.
+        /// The health the surface was last told.
+        pub fn reported(&self) -> crate::Health {
+            *self.reported.lock().unwrap_or_else(|e| e.into_inner())
+        }
+
+        /// Whether a report is owed (the last attempt was refused).
+        pub fn pending(&self) -> bool {
+            self.pending.load(Ordering::SeqCst)
+        }
+
+        /// Arms (`Some`, `loopEnter`) or disarms (`None`, `loopExit`) the
+        /// `draw_now` wakeup; disarming also forgets the display link.
         pub fn arm(&self, draw_now: Option<Async>) {
-            *self.draw_now() = draw_now;
+            let mut w = self.wake_state();
+            if draw_now.is_none() {
+                w.link = None;
+            }
+            w.draw_now = draw_now;
         }
 
-        /// A report was refused: redraw, and wake the render thread to do it.
-        pub fn request(&self) {
-            self.redraw.store(true, Ordering::SeqCst);
-            if let Some(draw_now) = self.draw_now().as_ref() {
-                if let Err(err) = draw_now.notify() {
-                    log::warn!(target: LOG_SCOPE, "error notifying draw_now err={err:?}");
+        /// The render thread created its display link (the wakeup skips
+        /// `draw_now` while it runs).
+        pub(crate) fn set_link(&self, link: Option<DisplayLinkHandle>) {
+            self.wake_state().link = link;
+        }
+
+        /// Wakes the render thread to retry an owed report, paced: not while the
+        /// display link runs, and at most once per `DRAW_INTERVAL_MS`. Returns
+        /// whether `draw_now` was notified.
+        pub fn wake(&self) -> bool {
+            let mut w = self.wake_state();
+            let Some(draw_now) = w.draw_now else {
+                return false;
+            };
+            if let Some(link) = w.link {
+                // SAFETY: see `HealthReportWake`'s `Send` impl: the link is live
+                // while armed.
+                if unsafe { link.is_running() } {
+                    return false;
                 }
             }
+            let now = Instant::now();
+            if let Some(last) = w.last {
+                if now.duration_since(last) < std::time::Duration::from_millis(DRAW_INTERVAL_MS) {
+                    return false;
+                }
+            }
+            w.last = Some(now);
+            if let Err(err) = draw_now.notify() {
+                log::warn!(target: LOG_SCOPE, "error notifying draw_now err={err:?}");
+            }
+            true
         }
 
-        /// Whether a redraw was requested; clears the request.
-        pub fn take_redraw(&self) -> bool {
-            self.redraw.swap(false, Ordering::SeqCst)
+        /// Test-only: mark a report as owed.
+        #[cfg(test)]
+        pub(crate) fn set_pending_for_test(&self) {
+            self.pending.store(true, Ordering::SeqCst);
         }
     }
 
     /// `frameCompleted`'s body over the cells it touches: the renderer's `health`,
-    /// its swap chain's `frame_sema`, its surface mailbox and its health-report
-    /// retry.
+    /// its swap chain's `frame_sema`, its surface mailbox and its health reports.
     //
     // PORT NOTE (N440, P7-W7 T5a): the reference's `frameCompleted(self: *Self, ..)`
     // reaches these through the renderer; the completion handler passes its
@@ -6297,47 +6351,53 @@ mod macos_impl {
         health_cell: &AtomicHealth,
         frame_sema: &Semaphore,
         surface_mailbox: &SurfaceMailbox,
-        retry: &HealthReportRetry,
+        report: &HealthReport,
         health: crate::Health,
     ) {
         // If our health value hasn't changed, then we do nothing. We don't
         // do a cmpxchg here because strict atomicity isn't important.
         // if (self.health.load(.seq_cst) != health) {
-        let previous = health_cell.load();
-        if previous != health {
-            // self.health.store(health, .seq_cst);
+        //     self.health.store(health, .seq_cst);
+        if health_cell.load() != health {
             health_cell.store(health);
+        }
 
-            // Our health value changed, so we notify the surface so that it
-            // can do something about it.
-            // _ = self.surface_mailbox.push(.{ .renderer_health = health }, .{ .forever = {} });
-            //   — REAL (seam §B.2 resolved): core's sink re-wraps this into
-            //     `apprt::surface::Message::RendererHealth` and enqueues it.
-            //     Detached (offscreen) mailboxes still return 0.
-            //
-            // PORT NOTE: reference defect (R13), UD362 (Metal). The reference
-            // pushes with `.forever`, which blocks while the app mailbox is full:
-            // (a) on the Metal completion thread, before `releaseFrame`, while the
-            // main thread's sync draw holds `draw_mutex` and waits in `nextFrame`
-            // for exactly that release (the mailbox's only drainer waits on the
-            // frame, the completion thread on the mailbox); (b) on the main
-            // thread itself, whose sync draw completes its frame inline, into the
-            // mailbox only it drains. The port pushes `.instant` on both paths, so
-            // a completion never blocks; the order stays the reference's (store,
-            // push, release), so `SwapChain::deinit`, which waits for every frame's
-            // release, still waits for every push. A report the full mailbox
-            // refused is withdrawn (the health goes back to what the surface was
-            // last told, unless another completion changed it meanwhile) and a
-            // redraw is requested (`HealthReportRetry`): the render thread is woken
-            // now and draws a frame, whose completion reports the health again.
-            if surface_mailbox.push(
-                SurfaceMessage::RendererHealth(health),
-                MailboxTimeout::Instant,
-            ) == 0
-                && surface_mailbox.is_attached()
+        // Our health value changed, so we notify the surface so that it
+        // can do something about it.
+        // _ = self.surface_mailbox.push(.{ .renderer_health = health }, .{ .forever = {} });
+        //   — REAL (seam §B.2 resolved): core's sink re-wraps this into
+        //     `apprt::surface::Message::RendererHealth` and enqueues it.
+        //     Detached (offscreen) mailboxes still return 0.
+        //
+        // PORT NOTE: reference defect (R13), UD362 (Metal). The reference pushes
+        // with `.forever`, which blocks while the app mailbox is full: (a) on the
+        // Metal completion thread, before `releaseFrame`, while the main thread's
+        // sync draw holds `draw_mutex` and waits in `nextFrame` for exactly that
+        // release (the mailbox's only drainer waits on the frame, the completion
+        // thread on the mailbox); (b) on the main thread itself, whose sync draw
+        // completes its frame inline, into the mailbox only it drains. The port
+        // pushes `.instant`, so a completion never blocks, and keeps the
+        // reference's order (store, push, release), so `SwapChain::deinit`, which
+        // waits for every frame's release, still waits for every push. The report
+        // is decided against what the surface was last told (`HealthReport`), not
+        // against the previous frame, so a refused report stays owed: it is
+        // retried by the next completion (a paced redraw is requested for that).
+        {
+            let mut reported = report.reported.lock().unwrap_or_else(|e| e.into_inner());
+            if *reported == health {
+                report.pending.store(false, Ordering::SeqCst);
+            } else if !surface_mailbox.is_attached()
+                || surface_mailbox.push(
+                    SurfaceMessage::RendererHealth(health),
+                    MailboxTimeout::Instant,
+                ) > 0
             {
-                let _ = health_cell.compare_exchange(health, previous);
-                retry.request();
+                *reported = health;
+                report.pending.store(false, Ordering::SeqCst);
+            } else {
+                report.pending.store(true, Ordering::SeqCst);
+                drop(reported);
+                report.wake();
             }
         }
 
@@ -6437,6 +6497,15 @@ mod macos_impl {
                         }
                     }
                 };
+            };
+
+            // PORT NOTE: reference defect (R13), UD362. An owed health report
+            // (`HealthReport`) wants draw-only wakes at the draw interval, so
+            // every draw renders a frame whose completion retries it.
+            let shader_delay = if self.health_report.pending() {
+                Some(shader_delay.map_or(DRAW_INTERVAL_MS, |d| d.min(DRAW_INTERVAL_MS)))
+            } else {
+                shader_delay
             };
 
             // Kitty animations tick during updateFrame; between
@@ -6639,7 +6708,7 @@ mod macos_impl {
                 &self.health,
                 &swap_chain.frame_sema,
                 &self.surface_mailbox,
-                &self.health_retry,
+                &self.health_report,
                 health,
             );
         }
@@ -6752,7 +6821,8 @@ mod macos_impl {
         /// draw mutex is released. This is only ever true on the no-redraw
         /// path, which a sync draw never takes, so the main thread's sync
         /// draws never touch the display link and `syncDisplayLink` stays
-        /// on the render thread.
+        /// on the render thread. (Rustty-only, UD362: also on a non-sync draw
+        /// while a health report is owed.)
         // generic.zig `drawFrameLocked` (`72cf50855`): `fn drawFrameLocked(self:
         // *Self, sync: bool) !bool`. Same raw-ptr discipline as `draw_frame_raw`.
         //
@@ -6890,12 +6960,9 @@ mod macos_impl {
             //
             // While any animation is in progress (a pending animation wake)
             // every draw must actually render.
-            // PORT NOTE: reference defect (R13), UD362. A health report the full
-            // app mailbox refused asked for a frame (`HealthReportRetry`) so that
-            // its completion reports the health again; consume that request here.
-            let health_retry = unsafe { (*self_ptr).health_retry.take_redraw() };
-            let needs_redraw = health_retry
-                || size_changed
+            // (UD362: an owed health report is such an animation wake, see
+            // `animation_wake` and `HealthReport`.)
+            let needs_redraw = size_changed
                 || swap_chain_rebuilt
                 || unsafe { (*self_ptr).cells_rebuilt.load(Ordering::Relaxed) }
                 || sync
@@ -7197,7 +7264,7 @@ mod macos_impl {
                     health: (*self_ptr).health.clone(),
                     frame_sema,
                     surface_mailbox: (*self_ptr).surface_mailbox.clone(),
-                    health_retry: (*self_ptr).health_retry.clone(),
+                    health_report: (*self_ptr).health_report.clone(),
                     layer: (*self_ptr).api.presenter(),
                     surface: (*frame).target.surface.clone(),
                     sync: false,
@@ -7432,7 +7499,13 @@ mod macos_impl {
             // `metal_buffer_completed` directly (H2). `frame` is NOT used after this.
             frame_ctx.complete(sync);
 
-            Ok(false)
+            // PORT NOTE: reference defect (R13), UD362. While a health report is
+            // owed (`HealthReport`), a render-thread draw asks for the display-link
+            // resync too, so the link runs (its `should_run` sees the owed report as
+            // an animation wake) and paces the retries at vsync; the no-redraw draw
+            // after the report lands parks it again. Never on a sync draw, which
+            // must not touch the display link.
+            Ok(!sync && unsafe { (*self_ptr).health_report.pending() })
             // The two RAII guards drop here in the reference LIFO order:
             // draw_frame_end → scrollbar; the caller then unlocks.
         }
@@ -7542,7 +7615,14 @@ mod macos_impl {
                 }
 
                 // self.display_link = result;
-                unsafe { Self::with_locked(self_ptr, lock, |r| r.display_link = Some(result)) };
+                unsafe {
+                    Self::with_locked(self_ptr, lock, |r| {
+                        // UD362: the health-report wakeup skips `draw_now` while the
+                        // link runs (disarmed with it in `loop_exit_raw`).
+                        r.health_report.set_link(Some(result.handle()));
+                        r.display_link = Some(result)
+                    })
+                };
                 // log.info("created display link", .{});
                 log::info!(target: LOG_SCOPE, "created display link");
             }
@@ -7614,9 +7694,9 @@ mod macos_impl {
             lock.lock();
             let api_ptr: *mut Metal = unsafe { &raw mut (*self_ptr).api };
             unsafe { Metal::loop_enter(api_ptr, lock.clone()) };
-            // UD362: arm the health-report retry's wakeup (disarmed in
+            // UD362: arm the health-report wakeup (disarmed in
             // `loop_exit_raw`, before the render thread releases `draw_now`).
-            unsafe { (*self_ptr).health_retry.arm(Some(draw_now)) };
+            unsafe { (*self_ptr).health_report.arm(Some(draw_now)) };
             lock.unlock();
 
             // `if (comptime DisplayLink == void) return;` — macOS: DisplayLink is
@@ -7636,8 +7716,8 @@ mod macos_impl {
         pub unsafe fn loop_exit_raw(self_ptr: *mut Renderer, lock: &DrawMutex) {
             let link = unsafe {
                 Self::with_locked(self_ptr, lock, |r| {
-                    // UD362: disarm the health-report retry's wakeup.
-                    r.health_retry.arm(None);
+                    // UD362: disarm the health-report wakeup.
+                    r.health_report.arm(None);
                     r.display_link.as_ref().map(DisplayLink::handle)
                 })
             };
@@ -8113,7 +8193,7 @@ mod macos_impl {
                 api,
                 display_link: None,
                 health: Arc::new(AtomicHealth::new(crate::Health::Healthy)),
-                health_retry: Arc::new(HealthReportRetry::new()),
+                health_report: Arc::new(HealthReport::new()),
                 display_realized: true,
                 swap_chain: Some(swap_chain),
                 kitty_animation_clock: None,
@@ -8657,6 +8737,11 @@ mod macos_impl {
                     })
                 }
 
+                /// The mailbox is full again.
+                fn fill(&self) {
+                    *self.full.lock().unwrap() = true;
+                }
+
                 /// The main thread drains the mailbox: it has room again.
                 fn drain(&self) {
                     *self.full.lock().unwrap() = false;
@@ -8697,7 +8782,7 @@ mod macos_impl {
                 health: Arc<AtomicHealth>,
                 frame_sema: Arc<Semaphore>,
                 surface_mailbox: SurfaceMailbox,
-                retry: Arc<HealthReportRetry>,
+                report: Arc<HealthReport>,
             }
             // SAFETY: the mailbox's sink is `FullMailbox` (Sync); the renderer
             // hands the same clones to the Metal completion thread.
@@ -8709,20 +8794,20 @@ mod macos_impl {
             /// `draw_mutex` and waits in `nextFrame` for a frame slot; only once it
             /// has one can it finish the draw and drain the mailbox. With the
             /// reference's blocking `.forever` push (before `releaseFrame`) the two
-            /// threads wait on each other. The port's `.instant` push is refused,
-            /// the report withdrawn and a redraw requested; the frame is released.
+            /// threads wait on each other. The port's `.instant` push is refused and
+            /// the report stays owed; the frame is released.
             #[test]
             fn metal_async_frame_completed_never_blocks_on_a_full_mailbox() {
                 let mailbox = FullMailbox::new();
                 let health = Arc::new(AtomicHealth::new(crate::Health::Healthy));
                 // Every swap-chain frame in flight: no permit left.
                 let frame_sema = Arc::new(Semaphore::new());
-                let retry = Arc::new(HealthReportRetry::new());
+                let report = Arc::new(HealthReport::new());
                 let cells = CompletionCells {
                     health: health.clone(),
                     frame_sema: frame_sema.clone(),
                     surface_mailbox: SurfaceMailbox::new(mailbox.clone()),
-                    retry: retry.clone(),
+                    report: report.clone(),
                 };
 
                 // The Metal completion thread.
@@ -8732,7 +8817,7 @@ mod macos_impl {
                         &c.health,
                         &c.frame_sema,
                         &c.surface_mailbox,
-                        &c.retry,
+                        &c.report,
                         crate::Health::Unhealthy,
                     );
                     c
@@ -8749,17 +8834,19 @@ mod macos_impl {
                     "the completion thread blocked in the `.forever` health push before \
                      releasing the frame the mailbox's drainer was waiting for (UD362)"
                 );
-                // Refused while full: withdrawn, and a redraw requested.
+                // Refused while full: the frame's health is recorded, the report
+                // owed, the surface still believes the old health.
                 assert!(mailbox.delivered().is_empty());
-                assert_eq!(health.load(), crate::Health::Healthy);
-                assert!(retry.take_redraw());
+                assert_eq!(health.load(), crate::Health::Unhealthy);
+                assert_eq!(report.reported(), crate::Health::Healthy);
+                assert!(report.pending());
 
                 // The retried frame (the mailbox drained) reports it.
                 frame_completed_on(
                     &cells.health,
                     &cells.frame_sema,
                     &cells.surface_mailbox,
-                    &cells.retry,
+                    &cells.report,
                     crate::Health::Unhealthy,
                 );
                 assert_eq!(
@@ -8769,28 +8856,27 @@ mod macos_impl {
                         MailboxTimeout::Instant
                     )]
                 );
-                assert_eq!(health.load(), crate::Health::Unhealthy);
-                assert!(!retry.take_redraw());
+                assert_eq!(report.reported(), crate::Health::Unhealthy);
+                assert!(!report.pending());
             }
 
             /// UD362 (b): a sync draw completes its frame on the main thread
             /// itself, the app mailbox's only drainer. A health change must not
-            /// block it on its own full mailbox; the report that could not be
-            /// delivered is withdrawn and a redraw requested, so a later frame
-            /// reports it.
+            /// block it on its own full mailbox; the refused report stays owed and
+            /// a later frame delivers it, once.
             #[test]
             fn metal_sync_frame_completed_never_blocks_the_mailbox_drainer() {
                 let mailbox = FullMailbox::new();
                 let surface_mailbox = SurfaceMailbox::new(mailbox.clone());
                 let health = AtomicHealth::new(crate::Health::Healthy);
                 let frame_sema = Semaphore::new();
-                let retry = HealthReportRetry::new();
+                let report = HealthReport::new();
 
                 frame_completed_on(
                     &health,
                     &frame_sema,
                     &surface_mailbox,
-                    &retry,
+                    &report,
                     crate::Health::Unhealthy,
                 );
                 assert!(
@@ -8800,10 +8886,8 @@ mod macos_impl {
                 );
                 // The frame was released all the same.
                 assert!(frame_sema.timed_wait(0).is_ok());
-                // Not delivered: the transition is withdrawn, a redraw requested.
                 assert!(mailbox.delivered().is_empty());
-                assert_eq!(health.load(), crate::Health::Healthy);
-                assert!(retry.take_redraw());
+                assert!(report.pending());
 
                 // The main thread drains; the next frame reports the transition.
                 mailbox.drain();
@@ -8811,16 +8895,15 @@ mod macos_impl {
                     &health,
                     &frame_sema,
                     &surface_mailbox,
-                    &retry,
+                    &report,
                     crate::Health::Unhealthy,
                 );
-                assert_eq!(health.load(), crate::Health::Unhealthy);
                 // Identical health: no second report.
                 frame_completed_on(
                     &health,
                     &frame_sema,
                     &surface_mailbox,
-                    &retry,
+                    &report,
                     crate::Health::Unhealthy,
                 );
                 assert_eq!(
@@ -8830,45 +8913,192 @@ mod macos_impl {
                         MailboxTimeout::Instant
                     )]
                 );
-                assert!(!retry.take_redraw());
+                assert!(!report.pending());
                 assert!(frame_sema.timed_wait(0).is_ok());
                 assert!(frame_sema.timed_wait(0).is_ok());
                 assert!(frame_sema.timed_wait(0).is_err());
             }
 
+            /// Round 2 (Minor 1): the fix-round-1 withdrawal race. A completes
+            /// Unhealthy and is refused; B completes Healthy before A's report
+            /// lands; then the mailbox takes reports again. The surface must end
+            /// up believing the last frame's health, and never be told a health
+            /// that was not the one it should switch to. With the round-1
+            /// withdrawal (compare-exchange back to the previous health) the cell
+            /// could end at a value the surface never heard; with `reported` the
+            /// surface's view is tracked on its own.
+            #[test]
+            fn metal_health_report_never_restores_an_undelivered_health() {
+                let mailbox = FullMailbox::new();
+                let surface_mailbox = SurfaceMailbox::new(mailbox.clone());
+                let health = AtomicHealth::new(crate::Health::Healthy);
+                let frame_sema = Semaphore::new();
+                let report = HealthReport::new();
+                let complete =
+                    |h| frame_completed_on(&health, &frame_sema, &surface_mailbox, &report, h);
+
+                // A: Unhealthy, refused (the mailbox is full).
+                complete(crate::Health::Unhealthy);
+                assert!(report.pending());
+                // B: Healthy, before A's report landed: the surface already
+                // believes Healthy, so nothing is owed any more.
+                complete(crate::Health::Healthy);
+                assert!(!report.pending());
+                assert_eq!(report.reported(), crate::Health::Healthy);
+                assert_eq!(health.load(), crate::Health::Healthy);
+                // The mailbox drains; another Healthy frame reports nothing.
+                mailbox.drain();
+                complete(crate::Health::Healthy);
+                assert!(mailbox.delivered().is_empty());
+
+                // The same race the other way round: Unhealthy delivered, then a
+                // refused Healthy, then Unhealthy again: nothing owed, one report.
+                complete(crate::Health::Unhealthy);
+                mailbox.fill();
+                complete(crate::Health::Healthy);
+                assert!(report.pending());
+                complete(crate::Health::Unhealthy);
+                assert!(!report.pending());
+                assert_eq!(report.reported(), crate::Health::Unhealthy);
+                assert_eq!(
+                    mailbox.delivered(),
+                    vec![(
+                        SurfaceMessage::RendererHealth(crate::Health::Unhealthy),
+                        MailboxTimeout::Instant
+                    )]
+                );
+                for _ in 0..6 {
+                    assert!(frame_sema.timed_wait(0).is_ok());
+                }
+            }
+
+            /// Round 2 (Minor 1), concurrent: two completion threads (the Metal
+            /// completion thread and a main-thread sync draw) report alternating
+            /// healths into a mailbox that refuses every other push. Whatever the
+            /// interleaving, the last health the surface heard is `reported`, and
+            /// once a final frame completes with room, it is that frame's health.
+            #[test]
+            fn metal_health_report_concurrent_completions_stay_consistent() {
+                struct FlakyMailbox {
+                    n: std::sync::atomic::AtomicUsize,
+                    delivered: Mutex<Vec<crate::Health>>,
+                }
+                impl SurfaceMailboxSink for FlakyMailbox {
+                    fn push(&self, msg: SurfaceMessage, _t: MailboxTimeout) -> usize {
+                        if self.n.fetch_add(1, Ordering::SeqCst).is_multiple_of(2) {
+                            return 0;
+                        }
+                        let SurfaceMessage::RendererHealth(h) = msg else {
+                            panic!("unexpected message");
+                        };
+                        self.delivered.lock().unwrap().push(h);
+                        1
+                    }
+                }
+                let sink = Arc::new(FlakyMailbox {
+                    n: std::sync::atomic::AtomicUsize::new(0),
+                    delivered: Mutex::new(Vec::new()),
+                });
+                let health = Arc::new(AtomicHealth::new(crate::Health::Healthy));
+                let frame_sema = Arc::new(Semaphore::new());
+                let report = Arc::new(HealthReport::new());
+                let threads: Vec<_> = (0..2)
+                    .map(|t| {
+                        let cells = CompletionCells {
+                            health: health.clone(),
+                            frame_sema: frame_sema.clone(),
+                            surface_mailbox: SurfaceMailbox::new(sink.clone()),
+                            report: report.clone(),
+                        };
+                        std::thread::spawn(move || {
+                            let c = cells;
+                            for i in 0..200 {
+                                let h = if (i + t) % 2 == 0 {
+                                    crate::Health::Healthy
+                                } else {
+                                    crate::Health::Unhealthy
+                                };
+                                frame_completed_on(
+                                    &c.health,
+                                    &c.frame_sema,
+                                    &c.surface_mailbox,
+                                    &c.report,
+                                    h,
+                                );
+                            }
+                        })
+                    })
+                    .collect();
+                for t in threads {
+                    t.join().unwrap();
+                }
+                let heard = |sink: &FlakyMailbox| {
+                    *sink
+                        .delivered
+                        .lock()
+                        .unwrap()
+                        .last()
+                        .unwrap_or(&crate::Health::Healthy)
+                };
+                assert_eq!(heard(&sink), report.reported());
+
+                // A final frame, retried until the flaky mailbox takes it.
+                let mailbox = SurfaceMailbox::new(sink.clone());
+                for _ in 0..2 {
+                    frame_completed_on(
+                        &health,
+                        &frame_sema,
+                        &mailbox,
+                        &report,
+                        crate::Health::Unhealthy,
+                    );
+                }
+                assert!(!report.pending());
+                assert_eq!(report.reported(), crate::Health::Unhealthy);
+                assert_eq!(heard(&sink), crate::Health::Unhealthy);
+                // No report ever repeats the health the surface already had.
+                let d = sink.delivered.lock().unwrap().clone();
+                let mut prev = crate::Health::Healthy;
+                for h in d {
+                    assert_ne!(h, prev, "a report repeated the surface's health");
+                    prev = h;
+                }
+            }
+
             /// A frame on an offscreen renderer (a DETACHED mailbox: nothing to
-            /// deliver to) keeps its health; there is no report to withdraw.
+            /// deliver to) owes no report.
             #[test]
             fn metal_sync_frame_completed_detached_mailbox_keeps_health() {
                 let health = AtomicHealth::new(crate::Health::Healthy);
                 let frame_sema = Semaphore::new();
-                let retry = HealthReportRetry::new();
+                let report = HealthReport::new();
                 frame_completed_on(
                     &health,
                     &frame_sema,
                     &SurfaceMailbox::DETACHED,
-                    &retry,
+                    &report,
                     crate::Health::Unhealthy,
                 );
                 assert_eq!(health.load(), crate::Health::Unhealthy);
-                assert!(!retry.take_redraw());
+                assert!(!report.pending());
                 assert!(frame_sema.timed_wait(0).is_ok());
             }
 
-            /// The retry wakes the render thread: `request` notifies the armed
+            /// The retry wakes the render thread, paced: `wake` notifies the armed
             /// `draw_now` (observed by a loop waiting on it, the render thread's
-            /// `drawNowCallback`), and a disarmed retry only raises the flag.
+            /// `drawNowCallback`), then not again within `DRAW_INTERVAL_MS`, and a
+            /// disarmed report notifies nothing.
             #[test]
-            fn metal_health_retry_request_wakes_draw_now() {
+            fn metal_health_report_wake_notifies_draw_now_paced() {
                 let mut draw_now = Async::init().expect("Async::init");
-                let retry = HealthReportRetry::new();
-                // Disarmed: only the flag.
-                retry.request();
-                assert!(retry.take_redraw());
+                let report = HealthReport::new();
+                // Disarmed: nothing to notify.
+                assert!(!report.wake());
 
-                // Armed: the request notifies `draw_now`.
-                retry.arm(Some(draw_now));
-                retry.request();
+                report.arm(Some(draw_now));
+                assert!(report.wake());
+                // Paced: not again within the draw interval.
+                assert!(!report.wake());
                 let mut lp = rustty_xev::Loop::init(rustty_xev::Options::default()).expect("loop");
                 let mut woke = false;
                 let mut c_wait = rustty_xev::Completion::default();
@@ -8890,18 +9120,22 @@ mod macos_impl {
                 }
                 lp.run(rustty_xev::RunMode::Once).expect("run");
                 assert!(woke, "the retry did not notify draw_now");
-                assert!(retry.take_redraw());
+                // After the interval, again.
+                std::thread::sleep(Duration::from_millis(DRAW_INTERVAL_MS + 2));
+                assert!(report.wake());
 
-                retry.arm(None);
+                report.arm(None);
+                assert!(!report.wake());
                 lp.deinit();
                 draw_now.deinit();
             }
 
-            /// The retry's redraw request makes the next draw render a frame (whose
-            /// completion reports the health again) even when nothing else changed:
-            /// without it, that draw takes the no-redraw path.
+            /// An owed report is an animation wake: every draw renders a frame
+            /// (whose completion retries it) even when nothing else changed, and a
+            /// render-thread draw asks for the display-link resync; without one,
+            /// that draw takes the no-redraw path.
             #[test]
-            fn metal_health_retry_forces_a_frame() {
+            fn metal_health_report_owed_forces_frames() {
                 let mut r = match golden_renderer(10, 3) {
                     Some(r) => r,
                     None => return, // Metal-skip
@@ -8913,11 +9147,38 @@ mod macos_impl {
                 // Nothing changed: the async draw does not render.
                 r.draw_frame(false).expect("no-redraw draw");
                 assert_eq!(index(&r), before, "an idle draw rendered a frame");
-                // A refused report asked for a frame: the next draw renders one.
-                r.health_retry.request();
+                assert_eq!(r.animation_wake(), None);
+                // A report is owed: an animation wake, and draws render.
+                r.health_report.set_pending_for_test();
+                assert_eq!(
+                    r.animation_wake(),
+                    Some(AnimationWake {
+                        delay_ms: DRAW_INTERVAL_MS,
+                        kind: AnimationWakeKind::Draw
+                    })
+                );
                 r.draw_frame(false).expect("retry draw");
-                assert_ne!(index(&r), before, "the retry request did not force a frame");
-                assert!(!r.health_retry.take_redraw());
+                let after = index(&r);
+                assert_ne!(after, before, "an owed report did not force a frame");
+                // The detached mailbox settles it on that frame's completion, so
+                // the next draw is idle again.
+                let self_ptr: *mut Renderer = &mut r;
+                let lock = r.draw_mutex.clone();
+                // Wait for the async completion (all frames released).
+                unsafe {
+                    Renderer::with_locked(self_ptr, &lock, |r| {
+                        let chain = r.swap_chain.as_ref().unwrap();
+                        for _ in 0..SWAP_CHAIN_COUNT {
+                            chain.frame_sema.wait();
+                        }
+                        for _ in 0..SWAP_CHAIN_COUNT {
+                            chain.frame_sema.post();
+                        }
+                    })
+                };
+                assert!(!r.health_report.pending());
+                r.draw_frame(false).expect("idle draw");
+                assert_eq!(index(&r), after);
 
                 r.thread_exit();
                 r.deinit();

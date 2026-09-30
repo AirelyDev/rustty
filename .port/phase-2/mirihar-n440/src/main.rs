@@ -85,6 +85,13 @@ impl Mailbox {
     }
 }
 
+/// `HealthReport` (round 2): what the surface was last told, and whether a
+/// report is owed.
+struct HealthReport {
+    reported: StdMutex<i32>,
+    pending: AtomicBool,
+}
+
 /// A small app mailbox, so the fixed model also takes the refusal path.
 const MAILBOX_CAPACITY: usize = 1;
 
@@ -240,12 +247,12 @@ fn run_shipped() {
 // handler needs, each in its own allocation: `health: Arc<AtomicHealth>`,
 // `frame_sema: Arc<Semaphore>` (the swap chain's), a `SurfaceMailbox` clone,
 // the presenter cell `Arc<LayerCell>` (Metal's `layer`), the health-report
-// retry (`Arc<HealthReportRetry>`) and the target's retained IOSurface. The
-// handler forms no reference to any renderer byte. Fix round 1 (ruling 39): the
-// reference's order, store → push → release, with an `.instant` push whose
-// refusal withdraws the report (compare-exchange back) and requests a redraw
-// (UD362), so `SwapChain::deinit`'s wait for every release also waits for every
-// push. Teardown (wait on the semaphore, take the chain, free the renderer)
+// reports (`Arc<HealthReport>`) and the target's retained IOSurface. The
+// handler forms no reference to any renderer byte. Fix rounds 1 and 2 (rulings
+// 39, 41): the reference's order, store → push → release, with an `.instant`
+// push decided against `reported` (the health the surface last heard) under its
+// mutex; a refusal leaves the report owed (UD362), so `SwapChain::deinit`'s wait
+// for every release also waits for every push. Teardown (wait on the semaphore, take the chain, free the renderer)
 // happens BEFORE the completion thread is joined: after its release a
 // completion may only drop its clones.
 // ===========================================================================
@@ -263,7 +270,7 @@ struct FixedSwapChain {
 struct Fixed {
     draw_mutex: DrawMutex,
     health: Arc<AtomicI32>,
-    health_retry: Arc<AtomicBool>,
+    health_report: Arc<HealthReport>,
     surface_mailbox: Mailbox,
     api: FixedApi,
     swap_chain: Option<FixedSwapChain>,
@@ -274,7 +281,7 @@ struct Fixed {
 /// The fixed `CompletionContext`: owned clones only.
 struct FixedCtx {
     health: Arc<AtomicI32>,
-    health_retry: Arc<AtomicBool>,
+    health_report: Arc<HealthReport>,
     frame_sema: Arc<Semaphore>,
     surface_mailbox: Mailbox,
     layer: Arc<Option<Layer>>,
@@ -287,7 +294,10 @@ impl Fixed {
         Fixed {
             draw_mutex: DrawMutex::new(),
             health: Arc::new(AtomicI32::new(0)),
-            health_retry: Arc::new(AtomicBool::new(false)),
+            health_report: Arc::new(HealthReport {
+                reported: StdMutex::new(0),
+                pending: AtomicBool::new(false),
+            }),
             surface_mailbox: Mailbox(Arc::new(StdMutex::new(Vec::new()))),
             api: FixedApi {
                 layer: Arc::new(Some(Layer {
@@ -329,7 +339,7 @@ impl Fixed {
             (*p).uniforms[1] += 1.0;
             FixedCtx {
                 health: (*p).health.clone(),
-                health_retry: (*p).health_retry.clone(),
+                health_report: (*p).health_report.clone(),
                 frame_sema: (*chain).frame_sema.clone(),
                 surface_mailbox: (*p).surface_mailbox.clone(),
                 layer: (*p).api.layer.clone(),
@@ -347,12 +357,20 @@ fn fixed_buffer_completed(ctx: &FixedCtx, health: i32) {
             *layer.contents.lock().unwrap() = ctx.surface.len() + usize::from(ctx.sync);
         }
     }
-    let previous = ctx.health.load(SeqCst);
-    if previous != health {
+    if ctx.health.load(SeqCst) != health {
         ctx.health.store(health, SeqCst);
-        if !ctx.surface_mailbox.push_instant(health) {
-            let _ = ctx.health.compare_exchange(health, previous, SeqCst, SeqCst);
-            ctx.health_retry.store(true, SeqCst);
+    }
+    // `HealthReport`: decide against what the surface was last told, under its
+    // mutex; a refusal leaves the report owed (`pending`).
+    {
+        let mut reported = ctx.health_report.reported.lock().unwrap();
+        if *reported == health {
+            ctx.health_report.pending.store(false, SeqCst);
+        } else if ctx.surface_mailbox.push_instant(health) {
+            *reported = health;
+            ctx.health_report.pending.store(false, SeqCst);
+        } else {
+            ctx.health_report.pending.store(true, SeqCst);
         }
     }
     ctx.frame_sema.post();
@@ -380,9 +398,10 @@ fn run_fixed(with_main_sync_draw: bool) {
                     r.api.blending ^= 1;
                     r.uniforms[0] += 1.0;
                 });
-                // `draw_frame_raw(sync = false)`: the draw consumes a retry request.
+                // `draw_frame_raw(sync = false)`: an owed report is an animation wake.
                 render_lock.lock();
-                let _retry = (*p.0).health_retry.swap(false, SeqCst);
+                let report: &Arc<HealthReport> = &(*p.0).health_report;
+                let _owed = report.pending.load(SeqCst);
                 let ctx = Fixed::begin_frame(p.0, false);
                 tx.send(ctx).unwrap();
                 render_lock.unlock();

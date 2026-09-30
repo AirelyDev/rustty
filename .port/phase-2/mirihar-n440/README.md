@@ -32,17 +32,17 @@ draw mutex when the frame begins (`draw_frame_locked`):
 - `surface`: a retain of the target's IOSurface, the only part of the `Target`
   `present` reads.
 
-- `health_retry: Arc<HealthReportRetry>`: the UD362 retry (a redraw flag and the render
-  thread's `draw_now` wakeup).
+- `health_report: Arc<HealthReport>`: the UD362 report state (the health the surface was
+  last told, whether a report is owed, and the paced `draw_now` wakeup).
 
 The handler (`metal_buffer_completed` → `LayerCell::present` + `frame_completed_on`)
-forms no reference to any renderer byte. Fix round 1 (ruling 39): it keeps the
-reference's order (store, push, release) with an `.instant` push; a refused report is
-withdrawn (compare-exchange back) and a redraw requested (UD362). The model does the
-same, with a one-slot app mailbox so the refusal path runs, and it tears the renderer
-down (wait for every release, take the chain, free the box) BEFORE joining the
-completion thread, since after its release a completion may still be dropping its
-clones.
+forms no reference to any renderer byte. It keeps the reference's order (store, push,
+release) with an `.instant` push (fix round 1, ruling 39), decided against
+`reported` under the report's mutex (fix round 2, ruling 41: no compare-exchange
+withdrawal of the health cell); a refused report stays owed. The model does the same,
+with a one-slot app mailbox so the refusal path runs, and it tears the renderer down
+(wait for every release, take the chain, free the box) BEFORE joining the completion
+thread, since after its release a completion may still be dropping its clones.
 
 ## The model
 
@@ -73,7 +73,8 @@ write …" / "(1) atomic store … and (2) retag read of type `Shipped`".
 
 Measured 2026-09-29, `miri 0.1.0 (6f72b5dd5f 2026-07-22)`, macOS host: the shipped candidate was run
 before the port change, the fixed candidates model the change as landed; re-run after fix round 1
-(new order, refusal path, teardown before the join) with the same results.
+(new order, refusal path, teardown before the join) and after fix round 2 (the
+`reported` mutex) with the same results.
 
 ## Run
 
