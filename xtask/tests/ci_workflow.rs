@@ -652,7 +652,9 @@ fn windows_leg_problems(body: &str) -> Vec<&'static str> {
         out.push("windows job has the removed `build-libghostty-windows-gnu` leg");
     }
     if body.contains("x86_64-pc-windows-gnu") {
-        out.push("windows job targets the GNU ABI (the removed `build-libghostty-windows-gnu` leg)");
+        out.push(
+            "windows job targets the GNU ABI (the removed `build-libghostty-windows-gnu` leg)",
+        );
     }
     // The replacement: vt-lib testing on Windows must not silently disappear
     // along with the removed full-workspace test.
