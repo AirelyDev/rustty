@@ -9286,7 +9286,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   keybind on macOS; no miscompile has been observed. **kind**: port soundness (Stacked Borrows and
   Tree Borrows; a function-argument protector). **Not upstream**: Zig's `*Surface` has no protector.
   **state**: PARTIAL. The protected `&mut Surface` on the `resize_window` path is gone (P7-W6 T1). The
-  shared `Target` protector is OPEN → P7-W6 T3.
+  shared `Target` protector is OPEN → P7-W6 T3. CLOSED (fixed, P7-W6 T3).
 - **shape**: an action whose host handler resizes the window writes the core surface inside the
   callback. That write happens while `perform_action`'s shared `apprt::Target::Surface(&Surface)`
   argument protects the whole surface.
@@ -9321,6 +9321,30 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   and `ud371_csi_8_t_overflow_returns_without_panicking` drive `Surface::handleMessage` through the raw
   root on a fabricated surface. Miri clean (SB), macOS 2026-09-29. Their test host does not re-enter,
   so they cover the raw-self half only; the protector half is for T3's harness.
+- **fix** (P7-W6 T3, ruling 55): `rustty_apprt_api::Target::Surface` carries a
+  `SurfacePtr<'s, C>` (`NonNull<C>` + `PhantomData<&'s C>`, re-exported from the crate root), not a
+  `&'s C`. It has no protector, like the reference's `*CoreSurface`.
+  - Constructors: `Target::surface_ref(&C)` (the reference is dead at return; used at the `&self` /
+    `&mut self` / local-reborrow `this` sites) and `unsafe Target::surface_ptr(*const C)` (the raw-self
+    sites keep the raw root's provenance: `resizeWindow`, `App::newWindow`'s parent, the search and
+    `performBindingAction` `self_` arms, `rustty_surface_split_resize` / `_split_equalize`, the GTK
+    `new-tab` IPC).
+  - Consumers read only `rt_surface`, through `SurfacePtr::rt_surface_ptr` (a transient `&C` for the
+    one trait call): `Target::cval`, the embedded `performPreAction` `set_title` arm, the GTK
+    `widget()` / `action_render` resolution. No consumer holds a reference across a host call.
+  - Every core, apprt-embedded, apprt-c, GTK and test constructor was updated (about 90 sites). The C
+    projection `rustty_target_s` / `TargetC` is unchanged: the embed-ABI gates pass, and
+    `target_surface_is_a_raw_pointer_to_the_core_surface` pins its size and the projected pointer.
+  - No behaviour change, no UD.
+- **proof**: `.port/phase-2/mirihar-n456` (16 seeds, SB and TB). `n456_shipped_*` (key-route and
+  binding-action `reset_window_size`, tick-route `resize_window`) are UB under both;
+  `n456_fixed_ref_held_*` (the raw target, but a whole `&C` held across the callback) are UB under
+  both; `n456_fixed_*` and `n456_fixed_all` are CLEAN under both. Live route:
+  `crates/rustty-apprt-c/tests/macos_window_host.rs::reset_window_size_host_callback_resizes_the_target_surface`
+  (its action callback calls `rustty_surface_set_size` on the target surface on `RESET_WINDOW_SIZE`;
+  passes with `RUSTTY_REQUIRE_METAL=1`). `target_surface_is_a_raw_pointer_to_the_core_surface`
+  (apprt-api) is Miri clean under SB and TB. LIFETIMES row
+  `src/apprt/action.zig Target surface`.
 
 ## N452 — effect callbacks that re-enter the Terminal C API reach stream/handler bytes under the protected `&mut Stream`/`&mut Handler`
 

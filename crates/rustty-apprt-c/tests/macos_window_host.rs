@@ -70,7 +70,7 @@ use rustty_apprt_c::{
     rustty_surface_inherited_config, rustty_surface_mouse_scroll, rustty_surface_new,
     rustty_surface_quicklook_font, rustty_surface_quicklook_word, rustty_surface_request_close,
     rustty_surface_set_content_scale, rustty_surface_set_display_id, rustty_surface_set_size,
-    rustty_surface_split, rustty_surface_split_focus,
+    rustty_surface_size, rustty_surface_split, rustty_surface_split_focus,
 };
 use rustty_config::value_types::BackgroundBlur;
 
@@ -239,6 +239,22 @@ extern "C" fn cb_action(_app: *mut App, t: TargetC, a: ActionC) -> bool {
         }
         // SAFETY: as above.
         ActionKey::GotoSplit => Recorded::GotoSplit(unsafe { a.value.goto_split }),
+        ActionKey::ResetWindowSize => {
+            // Resize the window the way the Swift host does, synchronously
+            // inside this callback: the NotificationCenter post runs
+            // `onResetWindowSize` -> `returnToDefaultSize` -> `apply(to:)` ->
+            // `setFrame(display: true)`, whose layout pass calls
+            // `rustty_surface_set_size` on this same surface (N456: a write to
+            // the core surface the `Target` points at).
+            if t.key == TargetKey::Surface {
+                // SAFETY: a surface target carries the live embedded surface.
+                let surface = unsafe { t.value.surface } as *mut Surface;
+                // SAFETY: `surface` is live for the duration of the callback.
+                unsafe { rustty_surface_set_size(surface, RESET_SIZE_PX.0, RESET_SIZE_PX.1) };
+                RESIZED.with(|c| c.set(c.get() + 1));
+            }
+            Recorded::Other(ActionKey::ResetWindowSize)
+        }
         other => Recorded::Other(other),
     };
     ACTIONS.with(|v| v.borrow_mut().push((t.key, rec)));
@@ -257,7 +273,11 @@ thread_local! {
         const { core::cell::RefCell::new(Vec::new()) };
     static CLOSES: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
     static INHERITED: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    static RESIZED: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
 }
+
+/// The pixel size `cb_action`'s `reset_window_size` handler sets.
+const RESET_SIZE_PX: (u32, u32) = (812, 522);
 extern "C" fn cb_read_clipboard(
     _ud: *mut c_void,
     _t: c_int,
@@ -671,6 +691,60 @@ fn split_and_close_exports_reach_the_host() {
         ACTIONS.with(|v| v.borrow().is_empty()),
         "close_surface dispatches no apprt action: {:?}",
         ACTIONS.with(|v| v.borrow().clone())
+    );
+}
+
+// N456 (P7-W6 T3): the macOS host's `reset_window_size` handler resizes the
+// window synchronously inside the action callback, and the layout pass calls
+// `rustty_surface_set_size` on the target surface: `updateSize(&mut self)` ->
+// `sizeCallback(&mut self)`, a write to the core surface the action's `Target`
+// points at. With `Target::Surface(&C)` that write hit the protector of the
+// shared reference `perform_action` received (UB under Stacked and Tree
+// Borrows); `Target::Surface` is now a raw pointer with no protector, proven on
+// the isolated harness `.port/phase-2/mirihar-n456`. Miri cannot see across this
+// FFI; the test proves the re-entrant write runs on the live route and lands.
+#[test]
+fn reset_window_size_host_callback_resizes_the_target_surface() {
+    let Some(host) = HostedSurface::spawn() else {
+        eprintln!("no Metal device / app_new failed; skipping");
+        return;
+    };
+    ACTIONS.with(|v| v.borrow_mut().clear());
+    RESIZED.with(|c| c.set(0));
+
+    // SAFETY: `host.surface` is the live surface from `rustty_surface_new`.
+    let before = unsafe { rustty_surface_size(host.surface) };
+    assert_ne!(
+        (before.width_px, before.height_px),
+        RESET_SIZE_PX,
+        "the handler's size must differ from the initial one, or sizeCallback returns early"
+    );
+
+    let a = b"reset_window_size";
+    // SAFETY: as above; `a` is a live byte string for the call. This thread is
+    // the host's main thread for the surface.
+    let handled = unsafe { rustty_surface_binding_action(host.surface, a.as_ptr(), a.len()) };
+    assert!(handled, "reset_window_size is performed");
+    assert_eq!(
+        vec![(
+            TargetKey::Surface,
+            Recorded::Other(ActionKey::ResetWindowSize)
+        )],
+        ACTIONS.with(|v| v.borrow().clone()),
+        "reset_window_size reaches the host as one surface-targeted action"
+    );
+    assert_eq!(
+        1,
+        RESIZED.with(|c| c.get()),
+        "the callback re-entered rustty_surface_set_size once (N456 shape)"
+    );
+
+    // SAFETY: as above.
+    let after = unsafe { rustty_surface_size(host.surface) };
+    assert_eq!(
+        RESET_SIZE_PX,
+        (after.width_px, after.height_px),
+        "the re-entrant set_size reached sizeCallback on the core surface"
     );
 }
 

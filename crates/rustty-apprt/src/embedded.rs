@@ -2101,9 +2101,10 @@ impl Surface {
     pub fn queueInspectorRender(&mut self) {
         // SAFETY: `self.app` is a live `*mut App` for the lifetime of this Surface
         // (E1/E2 invariant — the embedded app outlives every surface it owns).
-        if let Err(err) = unsafe { &*self.app }
-            .perform_action(Target::Surface(&self.core_surface), Action::RenderInspector)
-        {
+        if let Err(err) = unsafe { &*self.app }.perform_action(
+            Target::surface_ref(&self.core_surface),
+            Action::RenderInspector,
+        ) {
             // log.err("error rendering the inspector err={}", .{err});
             log::error!(target: LOG_SCOPE, "error rendering the inspector err={err:?}");
         }
