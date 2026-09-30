@@ -50,18 +50,29 @@ red() { echo "G-NIX RED: $*" >&2; exit 1; }
 
 # classify_devshell_log LOG SYSTEM RC
 # Prints one verdict line and returns 0 (GREEN), 1 (RED) or 3 (BLOCKED, N489).
-# A failing derivation is a LEAF when nix reports it failed for its own reason
-# (new format: `error: Cannot build '<drv>'.` then a `Reason:` other than a
-# failed dependency; old format: `error: builder for '<drv>' failed ...`).
-# Dependency-propagation errors are not leaves. Any other `error:` line
-# (evaluation, hash mismatch, ...) is RED on its own.
+# ANSI escapes and CRs are stripped first (nix colours its output when
+# CLICOLOR_FORCE is set). The known forms, and nothing else, are consumed:
+#   `error: Cannot build '<drv>'.` + `Reason: ...`   (nix >= 2.2x)
+#   `error: builder for '<drv>' failed ...`          (older nix)
+#   `error: N dependencies of derivation '<drv>' failed to build`,
+#   `error: build of '<drv>' failed`, `Reason: N dependency failed.`
+#                                                    (propagation, not failures)
+#   `  > ...` build-log excerpt lines of the current failing derivation.
+# A derivation that failed for its own reason is a LEAF. A leaf is N489-eligible
+# only when its reason is `builder failed with exit code N` (not a signal, e.g.
+# an OOM kill, and not a timeout) and, when its excerpt holds pytest output,
+# that output carries N489's marker `bindings need an update`. EVERY other line
+# that starts with `error` after optional indentation (a bare `error:` before a
+# `... while ...` trace, `error (ignored): ...`, an indented `error: unable to
+# download ...`, an evaluation or hash-mismatch error) is RED on its own.
 classify_devshell_log() {
-  local log="$1" sys="$2" rc="$3" out leaves others nonwasm
+  local log="$1" sys="$2" rc="$3" out leaves others nonwasm bad
   if [ "$rc" = "0" ]; then
     echo "devshell GREEN: devShells.$sys.default built"
     return 0
   fi
-  out="$(awk -v q="'" '
+  out="$(awk -v q="'" -v esc="$(printf '\033')" '
+    BEGIN { ansi = esc "\\[[0-9;?]*[ -/]*[@-~]" }
     function drv_of(line,   i, rest, j) {
       i = index(line, q "/nix/store/")
       if (i == 0) return ""
@@ -72,24 +83,49 @@ classify_devshell_log() {
       sub(/^.*\//, "", rest)
       return rest
     }
+    # state: "" (none), "await" (Cannot build, no Reason yet), "leaf", "dep"
+    function flush() {
+      if (state == "await") print "OTHER no Reason line for " cur
+      else if (state == "leaf") {
+        if (!reason_ok) print "LEAF " cur " INELIGIBLE(" why ")"
+        else if (pytest && !marker) print "LEAF " cur " INELIGIBLE(pytest output without the N489 marker)"
+        else print "LEAF " cur " ELIGIBLE"
+      }
+      state = ""; cur = ""; reason_ok = 0; why = ""; pytest = 0; marker = 0
+    }
+    { gsub(ansi, ""); sub(/\r$/, "") }
     /^error: Cannot build / {
-      if (pending != "") print "OTHER no Reason line for " pending
-      pending = drv_of($0)
-      if (pending == "") print "OTHER " $0
-      next
+      flush(); cur = drv_of($0)
+      if (cur == "") { print "OTHER " $0; next }
+      state = "await"; next
     }
     /^[[:space:]]+Reason: / {
-      if (pending != "") {
-        if ($0 !~ /Reason: [0-9]+ dependenc(y|ies) failed/) print "LEAF " pending
-        pending = ""
+      if (state != "await") { print "OTHER stray " $0; next }
+      if ($0 ~ /Reason: [0-9]+ dependenc(y|ies) failed\.?[[:space:]]*$/) { state = "dep"; next }
+      state = "leaf"
+      reason_ok = ($0 ~ /Reason: builder failed with exit code [0-9]+\.?[[:space:]]*$/)
+      why = $0; sub(/^[[:space:]]+/, "", why)
+      next
+    }
+    /^error: builder for / {
+      flush(); cur = drv_of($0)
+      if (cur == "") { print "OTHER " $0; next }
+      state = "leaf"
+      reason_ok = ($0 ~ /failed with exit code [0-9]+;?[[:space:]]*$/)
+      why = $0
+      next
+    }
+    /^error: [0-9]+ dependencies of derivation / { flush(); next }
+    /^error: build of / { flush(); next }
+    /^[[:space:]]+>/ {
+      if (state == "leaf") {
+        if ($0 ~ /pytest/) pytest = 1
+        if ($0 ~ /bindings need an update/) marker = 1
       }
       next
     }
-    /^error: builder for / { d = drv_of($0); if (d == "") print "OTHER " $0; else print "LEAF " d; next }
-    /^error: [0-9]+ dependencies of derivation / { next }
-    /^error: build of / { next }
-    /^error: / { print "OTHER " $0 }
-    END { if (pending != "") print "OTHER no Reason line for " pending }
+    tolower($0) ~ /^[[:space:]]*error/ { print "OTHER " $0; next }
+    END { flush() }
   ' "$log")"
   leaves="$(printf '%s\n' "$out" | sed -n 's/^LEAF //p')"
   others="$(printf '%s\n' "$out" | sed -n 's/^OTHER //p')"
@@ -101,9 +137,14 @@ classify_devshell_log() {
     echo "devshell RED: the build failed (rc $rc) and no failing derivation was identified"
     return 1
   fi
-  nonwasm="$(printf '%s\n' "$leaves" | grep -Ev '^[a-z0-9]{32}-python3\.[0-9]+-wasmtime-[0-9][0-9.]*\.drv$' || true)"
+  nonwasm="$(printf '%s\n' "$leaves" | grep -Ev '^[a-z0-9]{32}-python3\.[0-9]+-wasmtime-[0-9][0-9.]*\.drv ' || true)"
   if [ -n "$nonwasm" ]; then
     echo "devshell RED: failing derivation(s) other than nixpkgs' wasmtime: $(printf '%s' "$nonwasm" | tr '\n' ' ')"
+    return 1
+  fi
+  bad="$(printf '%s\n' "$leaves" | grep -v ' ELIGIBLE$' || true)"
+  if [ -n "$bad" ]; then
+    echo "devshell RED: nixpkgs' wasmtime failed, but not the N489 way: $(printf '%s' "$bad" | tr '\n' ' ')"
     return 1
   fi
   if [ "$sys" != "aarch64-linux" ]; then
@@ -161,6 +202,90 @@ LOG
   } >"$tmp/wasm_timeout"
   printf "error: flake 'git+file:///x' does not provide attribute 'devShells.aarch64-linux.default'\n" >"$tmp/eval"
   : >"$tmp/empty"
+  local E
+  E="$(printf '\033')"
+  # nix's bare `error:` before an indented trace (fetch failure).
+  {
+    cat "$tmp/wasm_only"
+    printf "error:\n       … while fetching the input 'github:x/y'\n\n       error: unable to download 'https://x.invalid/y': HTTP error 404\n"
+  } >"$tmp/wasm_bare"
+  {
+    cat "$tmp/wasm_only"
+    printf "error (ignored): error: cannot connect to socket at '/nix/var/nix/daemon-socket/socket'\n"
+  } >"$tmp/wasm_ignored"
+  # CLICOLOR_FORCE: every line coloured. The wasmtime-only log still BLOCKED,
+  # a coloured unknown error alongside it RED.
+  sed "s/^error:/${E}[31;1merror:${E}[0m/; s/Reason:/${E}[1mReason:${E}[0m/" "$tmp/wasm_only" >"$tmp/wasm_ansi"
+  {
+    cat "$tmp/wasm_ansi"
+    printf "%s[31;1merror:%s[0m unable to download 'https://x.invalid/y': HTTP error 404\n" "$E" "$E"
+  } >"$tmp/wasm_ansi_other"
+  # Only the unknown error coloured: without the strip it would not start with `error`.
+  {
+    cat "$tmp/wasm_only"
+    printf "%s[31;1merror:%s[0m unable to download 'https://x.invalid/y': HTTP error 404\n" "$E" "$E"
+  } >"$tmp/wasm_plus_coloured"
+  sed 's/Reason: builder failed with exit code 2\./Reason: builder failed due to signal 9 (Killed)./' "$tmp/wasm_only" >"$tmp/wasm_oom"
+  sed 's/Reason: builder failed with exit code 2\./Reason: timed out after 3600 seconds./' "$tmp/wasm_only" >"$tmp/wasm_timeout_only"
+  sed 's/failed with exit code 2;/failed due to signal 9 (Killed);/' "$tmp/old_fmt" >"$tmp/old_oom"
+  cat >"$tmp/wasm_other_pytest" <<LOG
+error: Cannot build '$W'.
+       Reason: builder failed with exit code 1.
+       > Executing pytestCheckPhase
+       > FAILED tests/test_memory.py::test_grow - OSError: [Errno 28] No space left on device
+error: Cannot build '$SH'.
+       Reason: 1 dependency failed.
+LOG
+  # The real log, verbatim but for one line's trailing spaces: rvm (aarch64-linux, nix 2.35.2), `nix build
+  # .#devShells.aarch64-linux.default --no-link --keep-going`, P7-W12 T5 round 2.
+  cat >"$tmp/real_rvm" <<'REALLOG'
+these 3 derivations will be built:
+  /nix/store/s7g8hsh2cfl3piimil4jxqsks6gndw3b-python3.14-wasmtime-47.0.1.drv
+  /nix/store/7fjg87dmhgbcm3c8dj1r16rlm5qw355y-python3-3.14.7-env.drv
+  /nix/store/kaim4lqrcfyq6jiriaraywn8l0pdkgk9-rustty.drv
+building '/nix/store/s7g8hsh2cfl3piimil4jxqsks6gndw3b-python3.14-wasmtime-47.0.1.drv'...
+error: Cannot build '/nix/store/s7g8hsh2cfl3piimil4jxqsks6gndw3b-python3.14-wasmtime-47.0.1.drv'.
+       Reason: builder failed with exit code 2.
+       Output paths:
+         /nix/store/yhl8wv22z9rgrmpgn76jkl3j8n6xbdbf-python3.14-wasmtime-47.0.1
+         /nix/store/z2zxay2r8nmw4y1afvgp1ln3krhx2ji1-python3.14-wasmtime-47.0.1-dist
+       Last 25 log lines:
+       > Running phase: pythonCatchConflictsPhase
+       > Running phase: pythonRemoveBinBytecodePhase
+       > Running phase: pythonImportsCheckPhase
+       > Executing pythonImportsCheckPhase
+       > Check whether the following modules can be imported: wasmtime
+       > Running phase: pythonMetadataCheckPhase
+       > Executing pythonMetadataCheckPhase
+       > Running phase: pytestCheckPhase
+       > Executing pytestCheckPhase
+       > pytest flags: -m pytest
+       > ============================= test session starts ==============================
+       > platform linux -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0
+       > rootdir: /build/source
+       > configfile: pytest.ini
+       > collected 155 items / 1 error
+       >
+       > ==================================== ERRORS ====================================
+       > _______________________ ERROR collecting ci/cbindgen.py ________________________
+       > ci/cbindgen.py:317: in <module>
+       >     raise RuntimeError("bindings need an update, run this script")
+       > E   RuntimeError: bindings need an update, run this script
+       > =========================== short test summary info ============================
+       > ERROR ci/cbindgen.py - RuntimeError: bindings need an update, run this script
+       > !!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+       > =============================== 1 error in 0.39s ===============================
+       For full logs, run:
+         nix log /nix/store/s7g8hsh2cfl3piimil4jxqsks6gndw3b-python3.14-wasmtime-47.0.1.drv
+error: Cannot build '/nix/store/7fjg87dmhgbcm3c8dj1r16rlm5qw355y-python3-3.14.7-env.drv'.
+       Reason: 1 dependency failed.
+       Output paths:
+         /nix/store/ngqf7mcm0ipdhqp8hkwfif3wsivriqwp-python3-3.14.7-env
+error: Cannot build '/nix/store/kaim4lqrcfyq6jiriaraywn8l0pdkgk9-rustty.drv'.
+       Reason: 1 dependency failed.
+       Output paths:
+         /nix/store/va18jv60b06xfym51d62z6gk3wil4dxj-rustty
+REALLOG
   # name | log | system | rc | expected return
   local cases=(
     "success|empty|aarch64-linux|0|0"
@@ -174,6 +299,16 @@ LOG
     "wasmtime-plus-timeout|wasm_timeout|aarch64-linux|1|1"
     "eval-error|eval|aarch64-linux|1|1"
     "failed-without-errors|empty|aarch64-linux|1|1"
+    "real-rvm-log|real_rvm|aarch64-linux|1|3"
+    "wasmtime-plus-bare-error|wasm_bare|aarch64-linux|1|1"
+    "wasmtime-plus-error-ignored|wasm_ignored|aarch64-linux|1|1"
+    "ansi-wasmtime-only|wasm_ansi|aarch64-linux|1|3"
+    "ansi-wasmtime-plus-error|wasm_ansi_other|aarch64-linux|1|1"
+    "wasmtime-plus-coloured-error|wasm_plus_coloured|aarch64-linux|1|1"
+    "wasmtime-oom|wasm_oom|aarch64-linux|1|1"
+    "wasmtime-timeout|wasm_timeout_only|aarch64-linux|1|1"
+    "wasmtime-oom-old-format|old_oom|aarch64-linux|1|1"
+    "wasmtime-pytest-without-marker|wasm_other_pytest|aarch64-linux|1|1"
   )
   local c name log sys rc want got line
   for c in "${cases[@]}"; do

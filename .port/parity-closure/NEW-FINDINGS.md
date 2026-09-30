@@ -10074,25 +10074,39 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   going RED on this failure but also stopped building the shell at all.
 - **gate**: `check_nix.sh` step 3 carries a PORT NOTE for the divergence from upstream's command.
   Step 4 builds the shell explicitly (`nix build .#devShells.<system>.default --no-link
-  --keep-going`) and classifies the log (`classify_devshell_log`). Success is GREEN. A failure whose
-  only failing derivations are `python3.N-wasmtime-*` on aarch64-linux is BLOCKED (exit 3, citing
-  N489). Any other failing derivation, any non-build `error:` line (evaluation, hash mismatch), a
-  failure with no identifiable derivation, or the same wasmtime failure on another system is RED.
-  Dependency-propagation errors are not counted as failures of their own. Step 2's undefined `red`
-  helper (it would have printed "command not found" and carried on) is now defined.
-- **tests**: `check_nix.sh --self-test` (G-NIX-SELF, a new `ci.sh` entry; needs no nix) runs eleven
-  fixture logs built from the real rvm failure, in both nix log formats. NEGATIVE CONTROLS (macOS):
-  each of six classifier mutations turns it RED: dropping the system check (x86_64 and darwin go
-  BLOCKED), counting dependency failures as leaves (the real log goes RED), dropping the
-  other-derivation check, ignoring other `error:` lines (hash mismatch goes BLOCKED), dropping the
-  no-leaf check, and not parsing the old `builder for` format.
+  --keep-going`) and classifies the log (`classify_devshell_log`), after stripping ANSI escapes and
+  CRs. It consumes only these forms: `error: Cannot build '<drv>'.` with its `Reason:` line, the
+  older `error: builder for '<drv>' failed ...`, the propagation lines (`Reason: N dependency
+  failed.`, `error: N dependencies of derivation ...`, `error: build of ...`), and the indented
+  `> ...` build-log excerpt of the current failing derivation. Every other line that starts with
+  `error`, indented or not (a bare `error:` before a `... while ...` trace, `error (ignored): ...`,
+  an evaluation, download or hash-mismatch error), is RED. A derivation that failed for its own
+  reason is a leaf. Success is GREEN. BLOCKED (exit 3, citing N489) needs all of: every leaf is
+  `python3.N-wasmtime-*`; each leaf's reason is `builder failed with exit code N` (not a signal
+  such as an OOM kill, and not a timeout); a leaf whose excerpt holds pytest output also carries
+  N489's marker `bindings need an update`; and the system is aarch64-linux. Anything else is RED,
+  including a failure with no identifiable leaf. Step 2's undefined `red` helper (it would have
+  printed "command not found" and carried on) is now defined.
+- **tests**: `check_nix.sh --self-test` (G-NIX-SELF, a new `ci.sh` entry; needs no nix) runs 21
+  fixture logs, in both nix log formats, including the real rvm log verbatim (BLOCKED), a bare
+  `error:` trace, `error (ignored):`, coloured logs (all lines, and one unknown error alone), an
+  OOM kill in both formats, a timeout, and pytest output without the marker (each RED).
+  NEGATIVE CONTROLS (macOS, fix round 2): each of eleven classifier mutations turns it RED: no ANSI
+  strip (the coloured wasmtime-only log and the lone coloured error), the old column-0 `^error: `
+  catch-all (the bare and the ignored error), any `Reason:` eligible (OOM, timeout), any old-format
+  reason eligible, no marker check, no ineligible-leaf check, no system check (x86_64, darwin),
+  dependency failures counted as leaves (the real log), no other-derivation check, no no-leaf
+  check, and no old-format parsing.
 - **evidence**: rvm (aarch64-linux, gawk 5.3.2), a temporary clone at `5033457bd`: G-NIX-SELF
   GREEN (11/11; also on macOS's BSD awk). Step 4 was run on its own, from a copy of `check_nix.sh`
   with steps 1-3 deleted (its step-4 text diffed identical to the gate's): it built the shell with
   `--keep-going`, the only builder failure was `python3.14-wasmtime-47.0.1`, and it ended
   `G-NIX BLOCKED ... (N489)`, exit 3. Steps 1-2 were not re-run, to keep the Nix work on the VM
   small (they rebuild librustty-vt and the GTK app, and this round does not touch them); step 3,
-  `nix fmt -- --check .`, exit 0. The clone was deleted afterwards.
+  `nix fmt -- --check .`, exit 0. The clone was deleted afterwards. Fix round 2: step 4's build was re-run
+  on rvm at `6c3299c38` to recapture the log (same single wasmtime builder failure, exit code 2,
+  with the marker); the new classifier reads it as BLOCKED (N489), on macOS and on rvm, and it is
+  now a self-test fixture. The clone and log were deleted afterwards.
 - **next**: re-check when nixpkgs updates `python3Packages.wasmtime`; once the shell builds, step 4
   is GREEN with no change to the gate.
 
