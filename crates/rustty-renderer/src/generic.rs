@@ -4948,8 +4948,15 @@ mod macos_impl {
                 cp.codepoint,
                 rustty_font_shaper::Style::Regular,
                 Some(Presentation::Text),
+                // .{
+                //     .grid_metrics = self.grid_metrics,
+                //     .thicken = self.config.font_thicken,
+                //     .thicken_strength = self.config.font_thicken_strength,
+                // },
                 RenderOptions {
                     grid_metrics: self.grid_metrics,
+                    thicken: self.config.font_thicken,
+                    thicken_strength: self.config.font_thicken_strength,
                     ..RenderOptions::default()
                 },
             ) {
@@ -9752,6 +9759,78 @@ mod macos_impl {
             assert_eq!(&cur.color[0..3], &[0xFF, 0, 0]);
             assert_eq!(cur.grid_pos, [2, 0]);
             assert_eq!(r.uniforms.cursor_pos, [2, 0]);
+
+            t.deinit(Global.into());
+        }
+
+        // 5beb94c16: the preedit glyph is rendered with `font-thicken` and
+        // `font-thicken-strength`, as normal cells are. The grid caches a glyph
+        // per render options (`GlyphKey`), so the preedit cell's atlas slot is
+        // the one a thickened render of the same codepoint resolves to, and not
+        // the unthickened one.
+        #[test]
+        fn preedit_glyph_uses_font_thicken() {
+            let mut r = match test_renderer(10, 3) {
+                Some(r) => r,
+                None => return, // skip w/o Metal
+            };
+            r.config.font_thicken = true;
+            r.config.font_thicken_strength = 200;
+
+            let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
+            r.terminal_state.update(Global.into(), &mut t).unwrap();
+            let cs = cursor::style(
+                &r.terminal_state,
+                cursor::StyleOptions {
+                    preedit: true,
+                    focused: true,
+                    blink_visible: true,
+                },
+            );
+            let preedit = state::Preedit {
+                codepoints: vec![state::Codepoint {
+                    codepoint: 'A' as u32,
+                    wide: false,
+                }],
+            };
+            r.rebuild_cells(Some(preedit), cs, &CellSet::new());
+
+            // The preedit sits at the cursor, (0, 0): fg row list index y+1 == 1.
+            let cell = *r.cells.fg_rows[1]
+                .iter()
+                .find(|c| c.grid_pos == [0, 0])
+                .expect("preedit glyph at the cursor");
+
+            let render = |thicken: bool| {
+                // SAFETY: the test owns the leaked grid; no other borrow is live.
+                unsafe { &mut *r.font_grid }
+                    .render_codepoint(
+                        Global,
+                        'A' as u32,
+                        rustty_font_shaper::Style::Regular,
+                        Some(Presentation::Text),
+                        RenderOptions {
+                            grid_metrics: r.grid_metrics,
+                            thicken,
+                            thicken_strength: 200,
+                            ..RenderOptions::default()
+                        },
+                    )
+                    .unwrap()
+                    .expect("A renders")
+            };
+            let thick = render(true);
+            let thin = render(false);
+            assert_ne!(
+                [thick.glyph.atlas_x, thick.glyph.atlas_y],
+                [thin.glyph.atlas_x, thin.glyph.atlas_y],
+                "the grid caches thickened and unthickened glyphs apart"
+            );
+            assert_eq!(
+                [thick.glyph.atlas_x, thick.glyph.atlas_y],
+                cell.glyph_pos,
+                "the preedit glyph is the thickened render"
+            );
 
             t.deinit(Global.into());
         }

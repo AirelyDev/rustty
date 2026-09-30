@@ -3657,8 +3657,15 @@ impl Renderer {
             cp.codepoint,
             rustty_font_shaper::Style::Regular,
             Some(Presentation::Text),
+            // .{
+            //     .grid_metrics = self.grid_metrics,
+            //     .thicken = self.config.font_thicken,
+            //     .thicken_strength = self.config.font_thicken_strength,
+            // },
             RenderOptions {
                 grid_metrics: self.grid_metrics,
+                thicken: self.config.font_thicken,
+                thicken_strength: self.config.font_thicken_strength,
                 ..RenderOptions::default()
             },
         ) {
