@@ -1774,7 +1774,8 @@ pub unsafe extern "C" fn rustty_surface_set_color_scheme(surface: *mut Surface, 
 
     // surface.colorSchemeCallback(scheme);
     // SAFETY: `surface` validity is the caller's contract.
-    unsafe { (*surface).colorSchemeCallback(scheme) };
+    // (N456, ruling 57: raw-self, the host re-enters this surface.)
+    unsafe { Surface::colorSchemeCallback(surface, scheme) };
 }
 
 /// C: rustty_surface_set_content_scale

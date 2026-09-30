@@ -55,6 +55,24 @@ dispatch) -> `performBindingAction` (raw-self, local reborrow `this`), `rustty_s
 | `n456_fixed_resize_window` | CLEAN | CLEAN |
 | `n456_fixed_all` (set_title pre-action, both resets, resize, a later binding) | CLEAN | CLEAN |
 
+### Fix round 1 (ruling 57): the colour-scheme soft-reload chain
+
+`colorSchemeCallback` (embedded and core) → `notifyConfigConditionalState` performs a soft
+`reload_config` on the surface. The host's handler writes the surface synchronously: macOS
+`rustty_surface_update_config` → `updateConfig`, GTK `reload_config_inner` → `updateConfig`. At the
+T3 commit the target was already raw, but the three `&mut self` receivers were still protected
+(`Mode::T3Receivers`). The fix makes the chain raw-self. Rerun 2026-09-30, 16 seeds:
+
+| candidate | SB | TB |
+|---|---|---|
+| `n456_t3_macos_color_scheme` (`rustty_surface_set_color_scheme` entry) | UB | UB |
+| `n456_t3_gtk_color_scheme` (GTK `color_scheme_thunk` over two surfaces) | UB | UB |
+| `n456_fixed_macos_color_scheme` | CLEAN | CLEAN |
+| `n456_fixed_gtk_color_scheme` | CLEAN | CLEAN |
+
+The nine T3 rows above were rerun unchanged, and `n456_fixed_all` now also runs the macOS
+colour-scheme path.
+
 - Shipped, SB: `not granting access to tag .. because that would remove [SharedReadOnly for ..] which
   is strongly protected`, at `update_size(&mut self)`. TB: `write access .. is forbidden` at
   `size_callback`'s write.

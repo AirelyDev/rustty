@@ -69,8 +69,9 @@ use rustty_apprt_c::{
     rustty_surface_free, rustty_surface_free_text, rustty_surface_ime_point,
     rustty_surface_inherited_config, rustty_surface_mouse_scroll, rustty_surface_new,
     rustty_surface_quicklook_font, rustty_surface_quicklook_word, rustty_surface_request_close,
-    rustty_surface_set_content_scale, rustty_surface_set_display_id, rustty_surface_set_size,
-    rustty_surface_size, rustty_surface_split, rustty_surface_split_focus,
+    rustty_surface_set_color_scheme, rustty_surface_set_content_scale,
+    rustty_surface_set_display_id, rustty_surface_set_size, rustty_surface_size,
+    rustty_surface_split, rustty_surface_split_focus, rustty_surface_update_config,
 };
 use rustty_config::value_types::BackgroundBlur;
 
@@ -255,6 +256,26 @@ extern "C" fn cb_action(_app: *mut App, t: TargetC, a: ActionC) -> bool {
             }
             Recorded::Other(ActionKey::ResetWindowSize)
         }
+        ActionKey::ReloadConfig => {
+            // The Swift host's `configReload` -> `reloadConfig(surface:soft:)`
+            // (Rustty.App.swift:164-168): for a surface target it calls
+            // `rustty_surface_update_config` on that surface synchronously,
+            // inside this callback (N456, ruling 57: a write to the surface
+            // `colorSchemeCallback` -> `notifyConfigConditionalState` targets).
+            if t.key == TargetKey::Surface {
+                // SAFETY: a surface target carries the live embedded surface.
+                let surface = unsafe { t.value.surface } as *mut Surface;
+                let cfg = rustty_config_new_and_finalize();
+                // SAFETY: `surface` is live for the callback; `cfg` is a live,
+                // finalized Config that `updateConfig` only reads (it clones).
+                unsafe { rustty_surface_update_config(surface, cfg) };
+                // SAFETY: allocated above, not retained by the surface.
+                unsafe { rustty_config::c_api::rustty_config_free(cfg) };
+                RELOADED.with(|c| c.set(c.get() + 1));
+            }
+            // SAFETY: the key names the live union arm.
+            Recorded::ReloadConfig(unsafe { a.value.reload_config }.soft)
+        }
         other => Recorded::Other(other),
     };
     ACTIONS.with(|v| v.borrow_mut().push((t.key, rec)));
@@ -265,6 +286,8 @@ extern "C" fn cb_action(_app: *mut App, t: TargetC, a: ActionC) -> bool {
 enum Recorded {
     NewSplit(SplitDirection),
     GotoSplit(GotoSplit),
+    /// `reload_config`, with its `soft` flag.
+    ReloadConfig(bool),
     Other(ActionKey),
 }
 
@@ -274,6 +297,7 @@ thread_local! {
     static CLOSES: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
     static INHERITED: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
     static RESIZED: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    static RELOADED: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
 }
 
 /// The pixel size `cb_action`'s `reset_window_size` handler sets.
@@ -745,6 +769,71 @@ fn reset_window_size_host_callback_resizes_the_target_surface() {
         RESET_SIZE_PX,
         (after.width_px, after.height_px),
         "the re-entrant set_size reached sizeCallback on the core surface"
+    );
+}
+
+// N456 fix round 1 (ruling 57): a system appearance change calls
+// `rustty_surface_set_color_scheme` (BaseTerminalController.swift:1535). The
+// core `colorSchemeCallback` -> `notifyConfigConditionalState` performs a soft
+// `reload_config` on the surface, and the Swift host's handler calls
+// `rustty_surface_update_config` on that same surface inside the callback: a
+// write to the surface. With `&mut self` receivers along the chain (embedded
+// and core `colorSchemeCallback`, `notifyConfigConditionalState`) that write
+// hit their protectors (UB under SB and TB); the chain is raw-self now, proven
+// on `.port/phase-2/mirihar-n456` (`n456_{t3,fixed}_macos_color_scheme`).
+// Miri cannot see across this FFI; the test proves the re-entry runs and lands.
+#[test]
+fn color_scheme_soft_reload_host_callback_updates_the_target_surface() {
+    let Some(host) = HostedSurface::spawn() else {
+        eprintln!("no Metal device / app_new failed; skipping");
+        return;
+    };
+    ACTIONS.with(|v| v.borrow_mut().clear());
+    RELOADED.with(|c| c.set(0));
+
+    // Both schemes, so one of them differs from the surface's initial theme.
+    // SAFETY: `host.surface` is the live surface from `rustty_surface_new`, and
+    // this thread is the host's main thread for it.
+    unsafe {
+        rustty_surface_set_color_scheme(host.surface, 0);
+        rustty_surface_set_color_scheme(host.surface, 1);
+    }
+    let reloads: Vec<bool> = ACTIONS.with(|v| {
+        v.borrow()
+            .iter()
+            .filter_map(|&(k, r)| match r {
+                Recorded::ReloadConfig(soft) => {
+                    assert_eq!(TargetKey::Surface, k, "the reload targets the surface");
+                    Some(soft)
+                }
+                _ => None,
+            })
+            .collect()
+    });
+    assert!(
+        !reloads.is_empty() && reloads.iter().all(|&soft| soft),
+        "a scheme change performs a soft surface reload_config: {reloads:?}"
+    );
+    assert_eq!(
+        reloads.len(),
+        RELOADED.with(|c| c.get()),
+        "each reload re-entered rustty_surface_update_config (N456 shape)"
+    );
+    assert!(
+        ACTIONS.with(|v| v.borrow().iter().any(
+            |&(k, r)| k == TargetKey::Surface && r == Recorded::Other(ActionKey::ConfigChange)
+        )),
+        "the re-entrant updateConfig ran on the surface (it reports config_change)"
+    );
+
+    // The same scheme again changes nothing: no reload.
+    let n = RELOADED.with(|c| c.get());
+    // SAFETY: as above.
+    unsafe { rustty_surface_set_color_scheme(host.surface, 1) };
+    assert_eq!(
+        n,
+        RELOADED.with(|c| c.get()),
+        "an unchanged scheme does not reload"
     );
 }
 

@@ -680,6 +680,13 @@ impl App {
                     // `alloc.free(v)`); `CString::new(..).ok()` is the `dupeZ .. catch
                     // null` (None on the — here, interior-NUL — failure).
                     let rt = surface.rt_surface_ptr() as *mut Surface;
+                    // SAFETY: `rt` is the embedded surface's own back-pointer
+                    // (`core_surface.rt_surface`, set at `Surface::init` from the
+                    // surface's stable allocation), live while its core surface
+                    // is the action target. `title` is a sibling field of
+                    // `core_surface`, outside the core-surface bytes the target
+                    // points at; the write is a single place write on the main
+                    // thread, and no reference into `title` is live across it.
                     unsafe {
                         (*rt).title = CString::new(value.title).ok();
                     }
@@ -1891,12 +1898,25 @@ impl Surface {
     }
 
     // pub fn colorSchemeCallback(self: *Surface, scheme: apprt.ColorScheme) void { ... }
-    pub fn colorSchemeCallback(&mut self, scheme: ColorScheme) {
+    //
+    // PORT NOTE (N456, ruling 57): raw-self. The core callback runs the host's
+    // soft `reload_config` handler, which calls `rustty_surface_update_config`
+    // on this surface synchronously, so no protected reference to it may span
+    // the call.
+    ///
+    /// # Safety
+    /// `self_` is a live surface from `rustty_surface_new`; main thread; no
+    /// protected reference to it may span the call.
+    pub unsafe fn colorSchemeCallback(self_: *mut Self, scheme: ColorScheme) {
         // self.core_surface.colorSchemeCallback(scheme) catch |err| {
         //     log.err("error setting color scheme err={}", .{err});
         //     return;
         // };
-        if let Err(err) = self.core_surface.colorSchemeCallback(scheme) {
+        // SAFETY: `self_` is live (this fn's contract); the core surface is
+        // reached by place, never through a `&mut Self`.
+        if let Err(err) =
+            unsafe { CoreSurface::colorSchemeCallback(&raw mut (*self_).core_surface, scheme) }
+        {
             // log.err("error setting color scheme err={}", .{err});
             log::error!(target: LOG_SCOPE, "error setting color scheme err={err:?}");
         }

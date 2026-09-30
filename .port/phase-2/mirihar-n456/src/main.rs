@@ -33,6 +33,10 @@ pub enum Action {
     /// `.set_title`: the embedded `performPreAction` reads `rt_surface` through
     /// the target, then the host does nothing re-entrant.
     SetTitle,
+    /// `.reload_config = .{ .soft = true }` (from `notifyConfigConditionalState`).
+    /// macOS: `reloadConfig(surface:soft:)` -> `rustty_surface_update_config`
+    /// -> `updateConfig`; GTK: `reload_config_inner` -> `updateConfig`.
+    ReloadConfigSoft,
 }
 
 /// The core `Surface` (the fields the paths touch).
@@ -42,6 +46,12 @@ pub struct Core {
     pub vt_window_resize_allowed: bool,
     pub readonly: bool,
     pub last_binding: u32,
+    /// `config_conditional_state.theme`.
+    pub theme: u8,
+    /// Bumped by `updateConfig`.
+    pub config_gen: u32,
+    /// Written by `queueIo` (the 2031 report).
+    pub io_queued: u32,
     pub rt_surface: *mut Embedded,
     pub rt_app: *const RtApp,
 }
@@ -128,6 +138,10 @@ pub enum Mode {
     /// NEGATIVE: the fixed target, but the embedded `perform_action` keeps a
     /// whole `&C` from it alive across the host callback.
     FixedRefHeld,
+    /// Colour-scheme chain at the T3 commit (before fix round 1): the raw
+    /// target, but `colorSchemeCallback(&mut self)` (embedded and core) and
+    /// `notifyConfigConditionalState(&mut self)` receivers.
+    T3Receivers,
 }
 
 thread_local! {
@@ -240,6 +254,96 @@ pub unsafe fn host_action(_app: *const RtApp, target: TargetC, action: Action) -
             true
         }
         Action::SetTitle => true,
+        Action::ReloadConfigSoft => {
+            unsafe { c_surface_update_config(target.surface) };
+            true
+        }
+    }
+}
+
+/// `rustty_surface_update_config(surface, config)`:
+/// `(*surface).core_surface.updateConfig(..)` (a `&mut` core surface).
+pub unsafe fn c_surface_update_config(surface: *mut Embedded) {
+    unsafe { (*surface).core_surface.update_config() }
+}
+
+impl Core {
+    /// `updateConfig(&mut self, config)`: writes the surface.
+    pub fn update_config(&mut self) {
+        self.config_gen += 1;
+    }
+
+    /// T3 `notifyConfigConditionalState(&mut self)`.
+    fn notify_config_conditional_state_mut(&mut self) {
+        let rt_app: &RtApp = unsafe { &*self.rt_app };
+        rt_app.perform_action_ptr(
+            TargetPtr::Surface(SurfacePtr::from_ref(&*self)),
+            Action::ReloadConfigSoft,
+        );
+    }
+
+    /// T3 `colorSchemeCallback(&mut self, scheme)`.
+    pub fn color_scheme_callback_mut(&mut self, scheme: u8) {
+        if self.theme == scheme {
+            return;
+        }
+        self.theme = scheme;
+        self.notify_config_conditional_state_mut();
+        self.io_queued += 1;
+    }
+
+    /// FIXED `notifyConfigConditionalState(self_: *mut Self)`.
+    unsafe fn notify_config_conditional_state_raw(self_: *mut Core) {
+        let rt_app: &RtApp = unsafe { &*(*self_).rt_app };
+        rt_app.perform_action_ptr(
+            TargetPtr::Surface(unsafe { SurfacePtr::from_raw(self_) }),
+            Action::ReloadConfigSoft,
+        );
+    }
+
+    /// FIXED `colorSchemeCallback(self_: *mut Self, scheme)`.
+    pub unsafe fn color_scheme_callback_raw(self_: *mut Core, scheme: u8) {
+        let this = unsafe { &mut *self_ };
+        if this.theme == scheme {
+            return;
+        }
+        this.theme = scheme;
+        unsafe { Core::notify_config_conditional_state_raw(self_) };
+        let this = unsafe { &mut *self_ };
+        this.io_queued += 1;
+    }
+}
+
+impl Embedded {
+    /// T3 embedded `colorSchemeCallback(&mut self, scheme)`.
+    pub fn color_scheme_callback_mut(&mut self, scheme: u8) {
+        self.core_surface.color_scheme_callback_mut(scheme);
+    }
+
+    /// FIXED embedded `colorSchemeCallback(self_: *mut Self, scheme)`.
+    pub unsafe fn color_scheme_callback_raw(self_: *mut Embedded, scheme: u8) {
+        unsafe { Core::color_scheme_callback_raw(&raw mut (*self_).core_surface, scheme) }
+    }
+}
+
+/// `rustty_surface_set_color_scheme(surface, scheme)` (macOS: every system
+/// appearance change, `BaseTerminalController.swift:1535`).
+pub unsafe fn c_surface_set_color_scheme(surface: *mut Embedded, scheme: u8) {
+    match mode() {
+        Mode::T3Receivers => unsafe { (*surface).color_scheme_callback_mut(scheme) },
+        _ => unsafe { Embedded::color_scheme_callback_raw(surface, scheme) },
+    }
+}
+
+/// GTK `color_scheme_thunk`: for each surface, `surface.core()` then
+/// `colorSchemeCallback` on the core surface pointer (`application.rs`).
+pub unsafe fn gtk_color_scheme_thunk(surfaces: &[*mut Embedded], scheme: u8) {
+    for &s in surfaces {
+        let core: *mut Core = unsafe { &raw mut (*s).core_surface };
+        match mode() {
+            Mode::T3Receivers => unsafe { (*core).color_scheme_callback_mut(scheme) },
+            _ => unsafe { Core::color_scheme_callback_raw(core, scheme) },
+        }
     }
 }
 
@@ -255,7 +359,7 @@ pub unsafe fn perform_binding_action(self_: *mut Core, action: Action) -> bool {
         // `Target::Surface(&*this)`
         Mode::Shipped => rt_app.perform_action_ref(TargetRef::Surface(&*this), action),
         // `Target::surface_ref(&*this)`
-        Mode::Fixed | Mode::FixedRefHeld => {
+        Mode::Fixed | Mode::FixedRefHeld | Mode::T3Receivers => {
             rt_app.perform_action_ptr(TargetPtr::Surface(SurfacePtr::from_ref(&*this)), action)
         }
     }
@@ -289,7 +393,7 @@ pub unsafe fn resize_window(self_: *mut Core, rows: u32, columns: u32) {
             rt_app.perform_action_ref(TargetRef::Surface(unsafe { &*self_ }), action);
         }
         // `unsafe { Target::surface_ptr(self_) }`
-        Mode::Fixed | Mode::FixedRefHeld => {
+        Mode::Fixed | Mode::FixedRefHeld | Mode::T3Receivers => {
             rt_app.perform_action_ptr(
                 TargetPtr::Surface(unsafe { SurfacePtr::from_raw(self_) }),
                 action,
@@ -332,6 +436,9 @@ fn new_surface(app: *const RtApp) -> *mut Embedded {
             vt_window_resize_allowed: true,
             readonly: false,
             last_binding: 0,
+            theme: 0,
+            config_gen: 0,
+            io_queued: 0,
             rt_surface: core::ptr::null_mut(),
             rt_app: app,
         },
@@ -378,6 +485,29 @@ fn all(s: *mut Embedded) {
     // through the raw roots.
     assert!(unsafe { c_surface_key(s, Action::SetTitle) });
     assert_eq!(unsafe { (*s).core_surface.last_binding }, 4);
+    macos_color_scheme(s);
+}
+
+/// macOS: `rustty_surface_set_color_scheme` (system appearance change), whose
+/// soft `reload_config` handler re-enters `rustty_surface_update_config`.
+fn macos_color_scheme(s: *mut Embedded) {
+    let gen0 = unsafe { (*s).core_surface.config_gen };
+    unsafe { c_surface_set_color_scheme(s, 1) };
+    assert_eq!(unsafe { (*s).core_surface.config_gen }, gen0 + 1);
+    assert_eq!(unsafe { (*s).core_surface.io_queued }, 1);
+    // Unchanged scheme: no reload.
+    unsafe { c_surface_set_color_scheme(s, 1) };
+    assert_eq!(unsafe { (*s).core_surface.config_gen }, gen0 + 1);
+}
+
+/// GTK: `handleStyleManagerDark` -> `color_scheme_thunk` over every surface;
+/// `reload_config_inner` re-enters `updateConfig` on the target.
+fn gtk_color_scheme(s: *mut Embedded) {
+    let s2 = new_surface(unsafe { (*s).core_surface.rt_app });
+    unsafe { gtk_color_scheme_thunk(&[s, s2], 1) };
+    assert_eq!(unsafe { (*s).core_surface.config_gen }, 1);
+    assert_eq!(unsafe { (*s2).core_surface.config_gen }, 1);
+    unsafe { drop(Box::from_raw(s2)) };
 }
 
 fn main() {
@@ -395,6 +525,11 @@ fn main() {
         "n456_fixed_binding_reset_window_size" => run(Mode::Fixed, binding_reset),
         "n456_fixed_resize_window" => run(Mode::Fixed, tick_resize),
         "n456_fixed_all" => run(Mode::Fixed, all),
+        // ---- fix round 1 (ruling 57): the colour-scheme reload chain ----
+        "n456_t3_macos_color_scheme" => run(Mode::T3Receivers, macos_color_scheme),
+        "n456_t3_gtk_color_scheme" => run(Mode::T3Receivers, gtk_color_scheme),
+        "n456_fixed_macos_color_scheme" => run(Mode::Fixed, macos_color_scheme),
+        "n456_fixed_gtk_color_scheme" => run(Mode::Fixed, gtk_color_scheme),
         other => panic!("unknown candidate {other:?}"),
     }
 }

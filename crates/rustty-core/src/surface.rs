@@ -4381,6 +4381,11 @@ where
     // `self_`, so no protected `&mut Surface` spans the callback (N442's
     // shape). Every other arm runs in `handleMessageArms` on an unprotected
     // reborrow, as before.
+    //
+    // PORT NOTE (N459, P7-W6 T3 fix round 1): `.present_surface` is dispatched
+    // here raw-self too. Its macOS handler (`makeKeyAndOrderFront`) may fire the
+    // focus publishers synchronously and re-enter this surface
+    // (`SurfaceView.swift:40`); unverified, and cheap to make sound.
     ///
     /// # Safety
     /// `self_` is the stable Surface allocation (init's stability contract); no
@@ -4390,6 +4395,8 @@ where
         match msg {
             // .resize_window => |size| try self.resizeWindow(size),
             Message::ResizeWindow(size) => unsafe { Self::resizeWindow(self_, size) },
+            // .present_surface => try self.presentSurface(),
+            Message::PresentSurface => unsafe { Self::presentSurface(self_) },
             msg => unsafe { &mut *self_ }.handleMessageArms(msg),
         }
     }
@@ -4694,8 +4701,8 @@ where
             // .scrollbar => |scrollbar| self.updateScrollbar(scrollbar),
             Message::Scrollbar(scrollbar) => self.updateScrollbar(scrollbar),
 
-            // .present_surface => try self.presentSurface(),
-            Message::PresentSurface => self.presentSurface()?,
+            // (dispatched raw-self by `handleMessage`)
+            Message::PresentSurface => unreachable!("handleMessage dispatches present_surface"),
 
             // .password_input => |v| try self.passwordInput(v),
             Message::PasswordInput(v) => self.passwordInput(v)?,
@@ -5974,7 +5981,19 @@ where
     // fn notifyConfigConditionalState(self: *Surface) void {
     //
     // PORT NOTE: the C13 colorSchemeCallback (:4720) callsite is live.
-    fn notifyConfigConditionalState(&mut self) {
+    //
+    // PORT NOTE (N456, ruling 57): raw-self. The host's soft `reload_config`
+    // handler re-enters this surface synchronously and writes it: macOS
+    // `reloadConfig(surface:soft:)` -> `rustty_surface_update_config` ->
+    // `updateConfig`, GTK `reload_config_inner` -> `updateConfig`. So no
+    // protected reference to the surface may span `perform_action`; it reads
+    // `rt_app` by place and passes `Target::surface_ptr(self_)`. Proof:
+    // `.port/phase-2/mirihar-n456`.
+    ///
+    /// # Safety
+    /// `self_` is the live, stable core surface; main thread; no protected
+    /// reference to it may span the call.
+    unsafe fn notifyConfigConditionalState(self_: *mut Self) {
         // _ = self.rt_app.performAction(
         //     .{ .surface = self },
         //     .reload_config,
@@ -5982,8 +6001,10 @@ where
         // ) catch |err| {
         //     log.warn("failed to notify app of config state change err={}", .{err});
         // };
-        if let Err(err) = unsafe { &*self.rt_app }.perform_action(
-            apprt::Target::surface_ref(&*self),
+        let rt_app: &A = unsafe { &*(*self_).rt_app };
+        if let Err(err) = rt_app.perform_action(
+            // SAFETY: `self_` is live for the call (this fn's contract).
+            unsafe { apprt::Target::surface_ptr(self_) },
             apprt::Action::ReloadConfig(ReloadConfig { soft: true }),
         ) {
             // log.warn("failed to notify app of config state change err={}", .{err});
@@ -12002,10 +12023,23 @@ where
     // pub fn colorSchemeCallback(self: *Surface, scheme: apprt.ColorScheme) !void {
     //
     // (the inferred `!void` is the [`Error`] union.)
-    pub fn colorSchemeCallback(&mut self, scheme: apprt::ColorScheme) -> Result<(), Error> {
+    //
+    // PORT NOTE (N456, ruling 57): raw-self. `notifyConfigConditionalState`
+    // runs the host's soft `reload_config` handler, which writes this surface
+    // (`updateConfig`) synchronously. `this` is an unprotected local reborrow,
+    // dead across that call and taken afresh after it.
+    ///
+    /// # Safety
+    /// `self_` is the live, stable core surface; main thread; no protected
+    /// reference to it may span the call.
+    pub unsafe fn colorSchemeCallback(
+        self_: *mut Self,
+        scheme: apprt::ColorScheme,
+    ) -> Result<(), Error> {
+        let this = unsafe { &mut *self_ };
         // Crash metadata in case we crash in here
         // crash.sentry.thread_state = self.crashThreadState();
-        crash::sentry::setThreadState(self.crashThreadState());
+        crash::sentry::setThreadState(this.crashThreadState());
         // defer crash.sentry.thread_state = null;
         // ([ADV 6.1] — the Drop guard clears at every exit below.)
         let _thread_state = ThreadStateGuard;
@@ -12021,19 +12055,22 @@ where
 
         // If our scheme didn't change, then we don't do anything.
         // if (self.config_conditional_state.theme == new_scheme) return;
-        if self.config_conditional_state.theme == new_scheme {
+        if this.config_conditional_state.theme == new_scheme {
             return Ok(());
         }
 
         // Setup our conditional state which has the current color theme.
         // self.config_conditional_state.theme = new_scheme;
-        self.config_conditional_state.theme = new_scheme;
+        this.config_conditional_state.theme = new_scheme;
         // self.notifyConfigConditionalState();
-        self.notifyConfigConditionalState();
+        //
+        // (`this` is dead from here: the host callback writes the surface.)
+        unsafe { Self::notifyConfigConditionalState(self_) };
 
         // If mode 2031 is on, then we report the change live.
         // self.queueIo(.{ .color_scheme_report = .{ .force = false } }, .unlocked);
-        self.queueIo(
+        let this = unsafe { &mut *self_ };
+        this.queueIo(
             termio::Message::ColorSchemeReport { force: false },
             termio::termio_impl::MutexState::Unlocked,
         );
@@ -15739,14 +15776,21 @@ where
     //
     // (Surface.zig:6023 — the C10 range's 6014-end tail; the inferred
     // `!void` is the performAction error.)
-    fn presentSurface(&mut self) -> Result<(), Error> {
+    //
+    // PORT NOTE (N459): raw-self; see `handleMessage`.
+    ///
+    /// # Safety
+    /// As [`Surface::handleMessage`].
+    unsafe fn presentSurface(self_: *mut Self) -> Result<(), Error> {
         // _ = try self.rt_app.performAction(
         //     .{ .surface = self },
         //     .present_terminal,
         //     {},
         // );
-        let _ = unsafe { &*self.rt_app }.perform_action(
-            apprt::Target::surface_ref(&*self),
+        let rt_app: &A = unsafe { &*(*self_).rt_app };
+        let _ = rt_app.perform_action(
+            // SAFETY: `self_` is live for the call (this fn's contract).
+            unsafe { apprt::Target::surface_ptr(self_) },
             apprt::Action::PresentTerminal,
         )?;
         Ok(())

@@ -3270,7 +3270,12 @@ impl Application {
                     // SAFETY: as above — app-thread-only access to the surface
                     // backrefs the core app owns.
                     let core = unsafe { &*surface }.core();
-                    if let Err(err) = unsafe { &mut *core }.colorSchemeCallback(scheme) {
+                    // N456 (ruling 57): raw-self, because the soft
+                    // `reload_config` it performs re-enters this surface
+                    // (`reload_config_inner` -> `updateConfig`).
+                    if let Err(err) =
+                        unsafe { rustty_core::surface::Surface::colorSchemeCallback(core, scheme) }
+                    {
                         // log.warn(
                         //     "unable to tell surface about color scheme change err={}",
                         //     .{err},

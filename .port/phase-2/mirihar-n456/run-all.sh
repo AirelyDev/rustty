@@ -14,7 +14,9 @@ for c in n456_shipped_key_reset_window_size n456_shipped_binding_reset_window_si
          n456_shipped_resize_window \
          n456_fixed_ref_held_reset_window_size n456_fixed_ref_held_resize_window \
          n456_fixed_key_reset_window_size n456_fixed_binding_reset_window_size \
-         n456_fixed_resize_window n456_fixed_all; do
+         n456_fixed_resize_window n456_fixed_all \
+         n456_t3_macos_color_scheme n456_t3_gtk_color_scheme \
+         n456_fixed_macos_color_scheme n456_fixed_gtk_color_scheme; do
   sbl="/tmp/mirihar-n456-$c-sb.log"; tbl="/tmp/mirihar-n456-$c-tb.log"
   MIRIFLAGS="-Zmiri-many-seeds=0..16" cargo +nightly miri run -q -- "$c" >"$sbl" 2>&1; sb=$?
   MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-many-seeds=0..16" cargo +nightly miri run -q -- "$c" >"$tbl" 2>&1; tb=$?
