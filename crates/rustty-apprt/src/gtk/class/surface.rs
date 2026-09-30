@@ -6532,7 +6532,7 @@ mod tests {
         // The `.surface` arm reaches through `rt_surface_ptr` to the apprt surface
         // and calls `redraw()` → `render_surface.queue_draw()` (a safe no-op on an
         // unrealized widget).
-        crate::gtk::class::application::action_render(Target::Surface(&handle));
+        crate::gtk::class::application::action_render(Target::surface_ref(&handle));
 
         // Confirm the handle's `rt_surface` pointer — the one `action_render`
         // dereferenced — resolves to THIS widget.

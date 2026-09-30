@@ -471,7 +471,7 @@ fn ref_all_decls_recursive() {
     // Target: both arms + key()/cval() (exercises the CoreSurfaceHandle bridge).
     let surf = DummySurface;
     let t_app: Target<'_, DummySurface> = Target::App;
-    let t_surf: Target<'_, DummySurface> = Target::Surface(&surf);
+    let t_surf: Target<'_, DummySurface> = Target::surface_ref(&surf);
     assert_eq!(t_app.key(), TargetKey::App);
     assert_eq!(t_surf.key(), TargetKey::Surface);
     let _ = t_app.cval();
@@ -620,4 +620,74 @@ fn ref_all_decls_recursive() {
         progress: Some(50),
     })
     .cval();
+}
+
+// N456 (P7-W6 T3): `Target::Surface` is the reference's `*CoreSurface`, a raw
+// pointer with no protector. Both constructors point at the surface, `cval`
+// still projects `rt_surface` (the C ABI of `rustty_target_s` is unchanged),
+// and a write through the raw root after the target is built (what the macOS
+// host's synchronous `setFrame` -> `rustty_surface_set_size` does inside the
+// action callback) leaves the target usable. The aliasing proof is
+// `.port/phase-2/mirihar-n456`.
+#[test]
+fn target_surface_is_a_raw_pointer_to_the_core_surface() {
+    use crate::action::{SurfacePtr, Target, TargetC, TargetKey};
+    use crate::seam::CoreSurfaceHandle;
+
+    struct Core {
+        rt_surface: *mut core::ffi::c_void,
+        size: (u32, u32),
+    }
+    impl CoreSurfaceHandle for Core {
+        fn rt_surface_ptr(&self) -> *mut core::ffi::c_void {
+            self.rt_surface
+        }
+    }
+
+    // The C projection is two words: the tag (padded) and the pointer.
+    assert_eq!(
+        core::mem::size_of::<TargetC>(),
+        2 * core::mem::size_of::<usize>()
+    );
+    assert_eq!(
+        core::mem::size_of::<SurfacePtr<'_, Core>>(),
+        core::mem::size_of::<*const Core>()
+    );
+
+    let mut rt = 0u8;
+    let rt_ptr: *mut core::ffi::c_void = (&raw mut rt).cast();
+    let root: *mut Core = Box::into_raw(Box::new(Core {
+        rt_surface: rt_ptr,
+        size: (800, 600),
+    }));
+
+    // Raw-self sites: `Target::surface_ptr(self_)`.
+    // SAFETY: `root` is live until the `Box::from_raw` below.
+    let t: Target<'_, Core> = unsafe { Target::surface_ptr(root) };
+    assert_eq!(t.key(), TargetKey::Surface);
+    let Target::Surface(p) = &t else {
+        panic!("surface target")
+    };
+    assert_eq!(p.as_ptr(), root.cast_const());
+    // The host writes the surface through its own pointer while `t` is live.
+    unsafe { (*root).size = (640, 480) };
+    let c = t.cval();
+    assert_eq!(c.key, TargetKey::Surface);
+    // SAFETY: the surface arm is the active union member.
+    assert_eq!(unsafe { c.value.surface }, rt_ptr);
+
+    // Reference sites: `Target::surface_ref(&*this)`.
+    {
+        // SAFETY: `root` is live; the reference ends when the target is built.
+        let t = Target::surface_ref(unsafe { &*root });
+        let Target::Surface(p) = t else {
+            panic!("surface target")
+        };
+        assert_eq!(p.rt_surface_ptr(), rt_ptr);
+        assert_eq!(p.as_ptr(), root.cast_const());
+    }
+
+    // SAFETY: allocated above; no target outlives it.
+    let core = unsafe { Box::from_raw(root) };
+    assert_eq!(core.size, (640, 480));
 }

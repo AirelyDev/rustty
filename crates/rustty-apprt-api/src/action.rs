@@ -20,6 +20,8 @@
 //! guaranteed ABI.
 
 use core::ffi::c_void;
+use core::marker::PhantomData;
+use core::ptr::NonNull;
 
 use rustty_config::value_types::Duration;
 use rustty_config::Config;
@@ -45,11 +47,83 @@ pub(crate) const TYPE_NAME_PREFIX: &str = "apprt.action.";
 /// since actions can also be triggered by timers, scripts, etc.
 //
 // PORT NOTE: reference `Target = union(Key) { app, surface: *CoreSurface }`. To
-// avoid naming rustty-core, the `surface` arm borrows a `C: CoreSurfaceHandle`
+// avoid naming rustty-core, the `surface` arm points at a `C: CoreSurfaceHandle`
 // (implemented by core's `Surface`) — the cycle-break bridge.
+//
+// PORT NOTE (N456, P7-W6 T3): the `surface` arm is a raw [`SurfacePtr`], not a
+// `&'s C`. `Target` is passed BY VALUE to `perform_action`, so a reference field
+// would be retagged at function entry with a protector over every
+// non-`UnsafeCell` byte of the core surface for the whole synchronous host
+// action callback. The macOS host resizes the window inside that callback
+// (`reset_window_size`, `resize_window`: `setFrame(display: true)` ->
+// `rustty_surface_set_size` -> `sizeCallback`), a write to those bytes: UB under
+// Stacked and Tree Borrows. The reference's `*CoreSurface` has no aliasing rule;
+// neither has the pointer. Proof: `.port/phase-2/mirihar-n456`.
 pub enum Target<'s, C: CoreSurfaceHandle> {
     App,
-    Surface(&'s C),
+    Surface(SurfacePtr<'s, C>),
+}
+
+/// The `surface` arm of [`Target`]: the reference's `*CoreSurface`, a pointer to a
+/// core surface that is live for `'s`, carrying no aliasing protector.
+///
+/// Consumers dereference it only for the one read they need
+/// ([`SurfacePtr::rt_surface_ptr`]), never holding a reference to the surface
+/// across a host call: the host may write the surface inside its action callback.
+pub struct SurfacePtr<'s, C> {
+    ptr: NonNull<C>,
+    _life: PhantomData<&'s C>,
+}
+
+impl<C> Clone for SurfacePtr<'_, C> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<C> Copy for SurfacePtr<'_, C> {}
+
+impl<'s, C: CoreSurfaceHandle> SurfacePtr<'s, C> {
+    /// A pointer to `v`. The reference ends here; the pointer keeps its
+    /// provenance but no protector.
+    #[inline]
+    pub fn from_ref(v: &'s C) -> Self {
+        SurfacePtr {
+            ptr: NonNull::from(v),
+            _life: PhantomData,
+        }
+    }
+
+    /// A pointer from a raw surface pointer, keeping the raw root's provenance
+    /// (the raw-self call sites).
+    ///
+    /// # Safety
+    /// `p` is non-null and points at a live `C` for `'s`; nothing frees it while
+    /// the target is in use.
+    #[inline]
+    pub unsafe fn from_raw(p: *const C) -> Self {
+        SurfacePtr {
+            // SAFETY: non-null per the caller's contract.
+            ptr: unsafe { NonNull::new_unchecked(p.cast_mut()) },
+            _life: PhantomData,
+        }
+    }
+
+    /// The raw core-surface pointer (the reference's `*CoreSurface` value).
+    #[inline]
+    pub fn as_ptr(self) -> *const C {
+        self.ptr.as_ptr()
+    }
+
+    /// `v.rt_surface`: the opaque runtime-surface handle, read through a
+    /// reference that lives only for this call.
+    #[inline]
+    pub fn rt_surface_ptr(self) -> *mut c_void {
+        // SAFETY: the pointee is live for `'s` (constructor contract); the
+        // shared reference lasts only for the field read, which no host call
+        // interleaves.
+        unsafe { (*self.ptr.as_ptr()).rt_surface_ptr() }
+    }
 }
 
 // Sync with: rustty_target_tag_e
@@ -83,6 +157,23 @@ pub struct TargetC {
 }
 
 impl<'s, C: CoreSurfaceHandle> Target<'s, C> {
+    /// `.{ .surface = v }` from a reference (see [`SurfacePtr::from_ref`]).
+    #[inline]
+    pub fn surface_ref(v: &'s C) -> Self {
+        Target::Surface(SurfacePtr::from_ref(v))
+    }
+
+    /// `.{ .surface = self }` from a raw surface pointer (see
+    /// [`SurfacePtr::from_raw`]).
+    ///
+    /// # Safety
+    /// As [`SurfacePtr::from_raw`].
+    #[inline]
+    pub unsafe fn surface_ptr(p: *const C) -> Self {
+        // SAFETY: forwarded to the caller.
+        Target::Surface(unsafe { SurfacePtr::from_raw(p) })
+    }
+
     /// The active tag (`@as(Key, self)`).
     pub fn key(&self) -> TargetKey {
         match self {
