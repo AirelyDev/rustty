@@ -48,7 +48,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-# CHUNK 1b: build.rs parses the vendored UCD corpus (`ucd/`; 17.0.0 from uucode 2826a37a since
+# CHUNK 1b: build.rs parses the vendored UCD corpus (`ucd/`; 18.0.0 from uucode 9d555245 since P7-W10 T2, 17.0.0 from 2826a37a since
 # S-10b, 16.0.0 from uucode 0.1.0 before) and emits the
 # stage1/stage2 width/grapheme tables of the four vaxis uucode fields into OUT_DIR. std-only, NO
 # build-dependencies (keeps rustty-vaxis a dep-free R4 leaf; Miri-clean at runtime).

@@ -76,6 +76,7 @@ fn main() {
         Ok("linux") | Ok("freebsd") | Ok("windows")
     ) {
         resolve_glsl_includes();
+        generate_gl_struct_bindings();
     }
 
     // Metal shader compilation is macOS-only; elsewhere the source-compile
@@ -150,6 +151,29 @@ fn metal_toolchain_available() -> bool {
 /// missing) is treated as failure (→ skip), never a panic.
 fn run(cmd: &mut Command) -> bool {
     cmd.status().map(|s| s.success()).unwrap_or(false)
+}
+
+/// Generates the per-thread OpenGL function table (P7-W7 T1, DECISIONS B9) into
+/// `$OUT_DIR/gl_struct_bindings.rs`, which `opengl::gl::glad` `include!`s.
+///
+/// This is the Rust stand-in for ghostty's vendored glad context struct
+/// (`vendor/glad/include/glad/gl.h`'s `GladGLContext`, used through
+/// `pkg/opengl/glad.zig`'s `threadlocal var context`). `gl_generator`'s
+/// `StructGenerator` emits a `Gl` struct holding one function pointer per entry
+/// point, loaded with `Gl::load_with`; the process-global `GlobalGenerator` the
+/// `gl` crate uses has no per-thread form. The registry arguments are the `gl`
+/// crate's own (`gl-0.14.0/build.rs`: GL 4.5 core, all fallbacks, no extensions),
+/// so the struct resolves exactly the entry points the global table did and the
+/// `gl::` constants and `gl::types` aliases the call sites keep using match it.
+fn generate_gl_struct_bindings() {
+    use gl_generator::{Api, Fallbacks, Profile, Registry, StructGenerator};
+
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR set by cargo"));
+    let mut file = std::fs::File::create(out_dir.join("gl_struct_bindings.rs"))
+        .expect("create $OUT_DIR/gl_struct_bindings.rs");
+    Registry::new(Api::Gl, (4, 5), Profile::Core, Fallbacks::All, [])
+        .write_bindings(StructGenerator, &mut file)
+        .expect("write the OpenGL struct bindings");
 }
 
 /// Ports ghostty's comptime `loadShaderCode` (`opengl/shaders.zig:347-376`) to

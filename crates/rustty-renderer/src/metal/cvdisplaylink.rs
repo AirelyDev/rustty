@@ -187,28 +187,26 @@ impl DisplayLink {
 
     /// Reference `start(self) Error!void`.
     pub fn start(&self) -> Result<(), Error> {
-        self.handle().start()
+        // SAFETY: `self` owns the +1 ref, so the link is live for this call.
+        unsafe { self.handle().start() }
     }
 
     /// Reference `stop(self) Error!void`.
     pub fn stop(&self) -> Result<(), Error> {
-        self.handle().stop()
+        // SAFETY: as `start`.
+        unsafe { self.handle().stop() }
     }
 
     /// Reference `isRunning(self) bool { return c.CVDisplayLinkIsRunning(...) != 0; }`.
     pub fn is_running(&self) -> bool {
-        self.handle().is_running()
+        // SAFETY: as `start`.
+        unsafe { self.handle().is_running() }
     }
 
     /// Reference `setCurrentCGDisplay(self, display_id: CGDirectDisplayID) Error!void`.
     pub fn set_current_cg_display(&self, display_id: CGDirectDisplayID) -> Result<(), Error> {
-        // SAFETY: `link` is a valid +1 CVDisplayLinkRef.
-        let rc = unsafe { CVDisplayLinkSetCurrentCGDisplay(self.link.as_ptr(), display_id) };
-        if rc != kCVReturnSuccess {
-            Err(Error::InvalidOperation)
-        } else {
-            Ok(())
-        }
+        // SAFETY: as `start`.
+        unsafe { self.handle().set_current_cg_display(display_id) }
     }
 
     /// Reference `setOutputCallback(self, comptime Userdata, comptime callbackFn, userinfo)`.
@@ -246,18 +244,27 @@ impl DisplayLink {
     }
 
     /// A non-owning copy of the `CVDisplayLinkRef`, so `start`/`stop`/
-    /// `isRunning` can run without touching the bytes of whatever owns this
-    /// wrapper (the renderer; UD352).
-    pub fn handle(&self) -> DisplayLinkHandle {
+    /// `isRunning`/`setCurrentCGDisplay` can run without touching the bytes of
+    /// whatever owns this wrapper (the renderer; UD352, N437).
+    ///
+    /// `pub(crate)` (N437 follow-up): the handle holds no reference count, so it
+    /// must not outlive this `DisplayLink`; its methods are `unsafe` and state
+    /// that contract, and only the renderer, which owns and releases the link on
+    /// the render thread, can obtain one.
+    pub(crate) fn handle(&self) -> DisplayLinkHandle {
         DisplayLinkHandle { link: self.link }
     }
 }
 
 /// PORT-ONLY (UD352): a `Copy`, non-owning `CVDisplayLinkRef` carrying the
-/// reference `start`/`stop`/`isRunning`. It holds no reference count; the owning
-/// [`DisplayLink`] must outlive every use. The renderer takes it under
-/// `draw_mutex` and uses it on the render thread after the unlock; the link is
-/// released only on that same thread, so it cannot be freed in between.
+/// reference `start`/`stop`/`isRunning`/`setCurrentCGDisplay`. It holds no
+/// reference count; the owning [`DisplayLink`] must outlive every use. The
+/// renderer takes it under `draw_mutex` and uses it on the render thread after
+/// the unlock; the link is released only on that same thread, so it cannot be
+/// freed in between.
+///
+/// Only [`DisplayLink::handle`] (`pub(crate)`) makes one (N437 follow-up), and
+/// every method is `unsafe` with the lifetime contract as its `# Safety`.
 #[derive(Clone, Copy, Debug)]
 pub struct DisplayLinkHandle {
     link: NonNull<CVDisplayLink>,
@@ -265,7 +272,10 @@ pub struct DisplayLinkHandle {
 
 impl DisplayLinkHandle {
     /// Reference `start(self) Error!void`.
-    pub fn start(self) -> Result<(), Error> {
+    ///
+    /// # Safety
+    /// The [`DisplayLink`] this handle came from has not been released.
+    pub(crate) unsafe fn start(self) -> Result<(), Error> {
         // SAFETY: `link` is a valid CVDisplayLinkRef owned by a live `DisplayLink`.
         let rc = unsafe { CVDisplayLinkStart(self.link.as_ptr()) };
         if rc != kCVReturnSuccess {
@@ -276,7 +286,10 @@ impl DisplayLinkHandle {
     }
 
     /// Reference `stop(self) Error!void`.
-    pub fn stop(self) -> Result<(), Error> {
+    ///
+    /// # Safety
+    /// As [`Self::start`].
+    pub(crate) unsafe fn stop(self) -> Result<(), Error> {
         // SAFETY: `link` is a valid CVDisplayLinkRef owned by a live `DisplayLink`.
         let rc = unsafe { CVDisplayLinkStop(self.link.as_ptr()) };
         if rc != kCVReturnSuccess {
@@ -287,9 +300,29 @@ impl DisplayLinkHandle {
     }
 
     /// Reference `isRunning(self) bool`.
-    pub fn is_running(self) -> bool {
+    ///
+    /// # Safety
+    /// As [`Self::start`].
+    pub(crate) unsafe fn is_running(self) -> bool {
         // SAFETY: `link` is a valid CVDisplayLinkRef owned by a live `DisplayLink`.
         unsafe { CVDisplayLinkIsRunning(self.link.as_ptr()) != 0 }
+    }
+
+    /// Reference `setCurrentCGDisplay(self, display_id: CGDirectDisplayID) Error!void`.
+    ///
+    /// # Safety
+    /// As [`Self::start`].
+    pub(crate) unsafe fn set_current_cg_display(
+        self,
+        display_id: CGDirectDisplayID,
+    ) -> Result<(), Error> {
+        // SAFETY: `link` is a valid CVDisplayLinkRef owned by a live `DisplayLink`.
+        let rc = unsafe { CVDisplayLinkSetCurrentCGDisplay(self.link.as_ptr(), display_id) };
+        if rc != kCVReturnSuccess {
+            Err(Error::InvalidOperation)
+        } else {
+            Ok(())
+        }
     }
 }
 

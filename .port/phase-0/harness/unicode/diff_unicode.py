@@ -3,7 +3,7 @@
 
 Diffs rustty's embedded unicode tables (dumped by the
 `cargo run --example dump_tables` Rust dumper) against the INDEPENDENT live
-uucode oracle (dumped by the Zig `uucode-oracle`, built against uucode 0.2.0 @ 2826a37a +
+uucode oracle (dumped by the Zig `uucode-oracle`, built against uucode 0.2.0 @ 9d555245 +
 ghostty's uucode_config.zig). This is the faithful full-range reproduction of
 ghostty's `props_uucode.zig` / `symbols_uucode.zig` `test "... tables match
 uucode"` blocks, whose live external oracle R3 forbids in-crate.

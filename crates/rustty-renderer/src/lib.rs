@@ -80,6 +80,9 @@ pub mod cell;
 pub mod config;
 pub mod cursor;
 pub mod generic;
+// `generic.zig`'s `LatestFrame` and the `draw_mutex` handle (`2f0b65346`, N437),
+// shared by both `generic` twins.
+pub mod latest_frame;
 pub mod link;
 pub mod message;
 pub mod row;
@@ -87,6 +90,8 @@ pub mod shaders;
 pub mod shadertoy;
 pub mod state;
 pub mod thread;
+// The reference's `undefined` for the lazily built `Shaders` (`Shaders.uninit`).
+pub mod undefined;
 
 // Shared `#[cfg(test)]` mock `C` (impl `RendererConfig`) exercising the
 // `RendererConfig`-bounded seams (`DerivedConfig::init`,
@@ -126,12 +131,20 @@ pub mod metal;
 // at the pin (`apprt/runtime.zig:18` `.linux, .freebsd => .gtk`). The L4 milestone
 // scoped itself to Linux only because the macOS-first plan sequenced the GTK tier
 // last; the OpenGL arm itself names nothing Linux-specific (EGL via a dlopen'd
-// `libEGL.so.1`, and `gl` is pure generated bindings loaded through
-// `gl::load_with`), so FreeBSD gets the identical arm rather than a second twin.
+// `libEGL.so.1`, and the GL entry points are pure generated bindings loaded through
+// `opengl::gl::glad::load`), so FreeBSD gets the identical arm rather than a second
+// twin.
 // PORT NOTE (task W-2, N342): Windows is the third `.opengl` target (`backend.zig:20-21`);
 // its runtime is `.none`, so it builds the `apprt.embedded` arms of `OpenGL.zig`.
 #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
 pub mod opengl;
+
+// `src/renderer/Dmabuf.zig` (P7-W7 T1): the exported DMA-BUF frame, placed beside the
+// graphics APIs rather than under `opengl` exactly as the reference places it
+// ("DMABUFs are independent of the graphics API used"). Unix-only (a DMA-BUF is a
+// Linux fd), and pure, so its tests also run on macOS.
+#[cfg(unix)]
+pub mod dmabuf;
 
 // PORT: the reference `renderer.zig`'s own module doc comment (`:1-8`). The crate
 // root above carries rustty's PORT STATUS narrative rather than the reference's

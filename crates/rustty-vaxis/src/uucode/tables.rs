@@ -1,6 +1,6 @@
 //! The generated stage1/stage2 tables + the `Data` value + the 2-stage lookup
 //! (VAXIS_C1B_DESIGN.md §3.2). `STAGE1`/`STAGE2` are emitted by `build.rs` into
-//! `OUT_DIR/uucode_tables.rs` from the vendored UCD 17.0.0 corpus; this module wraps
+//! `OUT_DIR/uucode_tables.rs` from the vendored UCD 18.0.0 corpus; this module wraps
 //! them with the typed `Data` decode. Statics only ⇒ Miri-clean (R6).
 
 use super::types::{EastAsianWidth, GeneralCategory, GraphemeBreak};
@@ -50,7 +50,7 @@ mod tests {
         }
     }
 
-    /// Spot-check a few code points' EAW/GC against known Unicode 17.0.0 facts.
+    /// Spot-check a few code points' EAW/GC against known Unicode 18.0.0 facts.
     #[test]
     fn spot_check() {
         // 'a' — Ll, narrow.
@@ -72,7 +72,7 @@ mod tests {
         // U+200C ZERO WIDTH NON-JOINER — grapheme_break Zwnj.
         assert_eq!(data(0x200C).grapheme_break, GraphemeBreak::Zwnj);
 
-        // U+1F469 WOMAN — Emoji_Modifier_Base (so, in uucode 2826a37a,
+        // U+1F469 WOMAN — Emoji_Modifier_Base (so, in uucode 9d555245,
         // `emoji_modifier_base` rather than `extended_pictographic`), emoji presentation, Wide.
         let woman = data(0x1F469);
         assert_eq!(woman.grapheme_break, GraphemeBreak::EmojiModifierBase);
@@ -100,5 +100,26 @@ mod tests {
         let hole = data(0xFA6E);
         assert_eq!(hole.general_category, GeneralCategory::OtherNotAssigned);
         assert_eq!(hole.east_asian_width, EastAsianWidth::Wide);
+
+        // Unicode 18.0.0 (uucode 9d555245): U+1CF5 VEDIC SIGN JIHVAMULIYA is InCB=Linker
+        // with GCB=Other ⇒ `indic_conjunct_break_linker_other`; U+094D DEVANAGARI VIRAMA
+        // stays the extend-side linker; U+18E00 (Jurchen) is Wide; U+1F6D9 LIGHTHOUSE is an
+        // E18.0 emoji-presentation extended pictographic.
+        assert_eq!(
+            data(0x1CF5).grapheme_break,
+            GraphemeBreak::IndicConjunctBreakLinkerOther
+        );
+        assert_eq!(
+            data(0x094D).grapheme_break,
+            GraphemeBreak::IndicConjunctBreakLinkerExtend
+        );
+        assert_eq!(data(0x18E00).east_asian_width, EastAsianWidth::Wide);
+        let lighthouse = data(0x1F6D9);
+        assert_eq!(lighthouse.east_asian_width, EastAsianWidth::Wide);
+        assert!(lighthouse.is_emoji_presentation);
+        assert_eq!(
+            lighthouse.grapheme_break,
+            GraphemeBreak::ExtendedPictographic
+        );
     }
 }

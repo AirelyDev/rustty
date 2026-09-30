@@ -35,7 +35,7 @@ Only one decision needs the maintainer; it is marked **OPEN** at the end.
 | B5 | tmux list-windows (`a41248013`, `9a4ba7d54`) | Faithful: append the action after `sync_layouts`, use the new errdefer, print `[N windows]`. The action borrows the viewer's windows list the way upstream does: a raw slice valid until the next viewer mutation, as in Zig. Port upstream's pointer-identity assertion, and cover the borrow with a Miri target (R1 Q4). Retires LEDGER S209-F3. |
 | B6 | Kitty temp-dir path (`105d0a545`) | Faithful: one wrapper-owned copy from the caller's allocator, which every screen borrows (R1 Q3). |
 | B7 | Dynamic palette (`d1cd56a56`) | Faithful: an owner enum (`&'static Palette` built-in, or a `VtAllocator`-owned copy). Losing `Copy` is accepted. The termio half moves in the same change (R1 Q10). |
-| B8 | Wuffs for kitty zlib (`4b86e3594`) | Faithful: `rustty-wuffs` becomes a mandatory dependency of rustty-vt and rustty-vt-c whenever kitty graphics is on, including wasm32 as upstream builds it. `zlib-sys` leaves rustty-vt, and the wasm `Unsupported` stub is removed (R1 Q5, R4 Q6). |
+| B8 | Wuffs for kitty zlib (`4b86e3594`) | Faithful: `rustty-wuffs` becomes a mandatory dependency of rustty-vt and rustty-vt-c whenever kitty graphics is on, including wasm32 as upstream builds it. `zlib-sys` leaves rustty-vt, and the wasm `Unsupported` stub is removed (R1 Q5, R4 Q6). Amended 2026-09-29, Ruling 30: upstream's lib-vt wasm is freestanding with kitty graphics off and no wuffs (rustty's `wasm32-unknown-unknown` matches; `wasm32-wasip1` keeps both). |
 | B9 | GL function loading after the GtkGLArea removal | Faithful: a per-render-thread function table (a struct-based `gl_generator` binding), loaded in `thread_enter` and dropped in `thread_exit`, as glad's thread-local context is (R2 Q1, option b). |
 | B10 | EGL display teardown | Faithful: never call `eglTerminate`, as upstream. `EGL_SURFACE_TYPE` is `0` (R2 §3.2). |
 | B11 | Windows OpenGL target now requiring EGL | Faithful: `OpenGL::init` loads EGL on every target as upstream does. First check whether upstream links `glad_egl` for Windows at all; mirror whatever upstream builds (R2 Q5). |
@@ -84,3 +84,7 @@ Only one decision needs the maintainer; it is marked **OPEN** at the end.
   "removed with upstream `9d2d9acac`". Done in P7-W10 T4.
 - **Execution:** subagent-driven: one implementer and one reviewer per task, then a whole-branch
   review.
+
+## Port notes
+
+- **Renderer lock scopes (P7-W7 T2, ruling 32).** `update_frame` keeps the reference's draw-mutex scopes (Kitty update and GPU-cell rebuild only; the rest through narrow raw-root places, `.port/phase-2/mirihar-n437` `split_*`), except that the lock also covers the `kittyRequiresUpdate` check (a Rust-aliasing need, not an upstream defect: the check borrows the whole `images` state, which the draw mutates under the lock; the same hold copies `size` for the overlay) and the swap of the rebuilt overlay into `self.overlay` (UD363; the overlay itself is still built unlocked, into a local). The brief render-thread entries (`setFocus`, `setVisible`, `animationWake`, `hasVsync`, `loopEnter`) take the lock for their short bodies although the reference runs them unlocked (N437); latency is measured at the finale.

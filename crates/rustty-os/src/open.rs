@@ -240,7 +240,11 @@ fn openThread(stderr: Option<std::process::ChildStderr>, exe_: std::process::Chi
 // var stream = stderr.readerStreaming(io, &buffer);
 // const reader = &stream.interface;
 // while (true) {
-//     const line = reader.takeDelimiterExclusive('\n') catch |outer| switch (outer) {
+//     // Read inclusively so the delimiter is consumed: takeDelimiterExclusive
+//     // leaves the '\n' buffered, so once the child writes a line this loop
+//     // would receive an empty slice forever, pinning a core and spamming
+//     // empty warnings.
+//     const line = reader.takeDelimiterInclusive('\n') catch |outer| switch (outer) {
 //         error.EndOfStream => break,
 //         error.ReadFailed => break,
 //         error.StreamTooLong => reader.take(buffer.len) catch |inner| switch (inner) {
@@ -248,21 +252,29 @@ fn openThread(stderr: Option<std::process::ChildStderr>, exe_: std::process::Chi
 //             error.EndOfStream => break,
 //         },
 //     };
-//     log.warn("open stderr={s}", .{line});
+//     log.warn("open stderr={s}", .{std.mem.trimEnd(u8, line, "\n")});
 // }
 //
-// PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD200. In Zig 0.16,
-// `takeDelimiterExclusive` advances "up to (but not past) the delimiter"
-// (`std/Io/Reader.zig:852-876`), so after the first line every call finds the
-// same `'\n'` at the read position and returns an empty slice: the loop logs
-// `open stderr=` forever, never reads further, and never reaches `exe.wait()`,
-// so the opener is never reaped and the thread spins. Reachable whenever the
-// opener (`open`, `xdg-open`) writes anything to stderr followed by a newline.
-// Measured with the reference loop under zig 0.16.0 on "hello\nworld\n": line
-// 0 is "hello", lines 1.. are empty. The port does what the loop is for: it
-// consumes the delimiter, so each line is logged once, and it keeps the
-// 256-byte buffer's `StreamTooLong => take(buffer.len)` chunking of a long
-// line. (S112-F7: the port had instead logged whole lines of any length.)
+// PORT NOTE (UPSTREAM-DEFECTS.md UD200): at 20abdb50a the reference used
+// `takeDelimiterExclusive`, which never consumes the `'\n'`, so after the
+// first line every call found the same delimiter and returned an empty
+// slice forever: `open stderr=` spammed the log, `exe.wait()` was never
+// reached, and the opener was never reaped (R13, fixed here first). Ghostty
+// fixed that same spin-and-leak in `3b8141fbd` (at this pin, 12752b2ac) by
+// switching to `takeDelimiterInclusive('\n')` and trimming the trailing
+// `\n` for the log message, shown above. One difference remains at end of
+// stream: `takeDelimiterInclusive` propagates `EndOfStream` from a partial
+// read with no delimiter, and the reference's `error.EndOfStream => break`
+// arm silently drops that unterminated last line — which breaks the loop's
+// own evident intent of logging the opener's stderr (DECISIONS M1: Rustty
+// keeps fixing this; not reported upstream, see docs/ghostty-bug-fixes.md).
+// This port logs the pending bytes at end of stream instead (modelled on
+// `takeDelimiterExclusive`'s own end-of-stream case, since Rust's
+// `BufReader` has no `takeDelimiterInclusive` to mirror directly), so each
+// line is logged exactly once whether or not it ends in `\n`, and it keeps
+// the 256-byte buffer's `StreamTooLong => take(buffer.len)` chunking of a
+// long line. (S112-F7: the port had instead logged whole lines of any
+// length.)
 fn log_stderr_lines(stderr: impl std::io::Read, mut log: impl FnMut(&[u8])) {
     use std::io::BufRead;
 

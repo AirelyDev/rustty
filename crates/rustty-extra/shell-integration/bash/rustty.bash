@@ -134,7 +134,7 @@ _rustty_executing=""
 _rustty_last_reported_cwd=""
 
 function __rustty_precmd() {
-  local ret="$?"
+  local ret="${1:-$?}"
   if test "$_rustty_executing" != "0"; then
     _RUSTTY_SAVE_PS1="$PS1"
     _RUSTTY_SAVE_PS2="$PS2"
@@ -223,8 +223,15 @@ if (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) )
     [[ -n "$cmd" ]] && __rustty_preexec "$cmd"
   }
 
+  # Bash 5.1+ restores the command status for each PROMPT_COMMAND array entry.
+  # Scalar values need to save and restore it before existing commands run.
+  __rustty_restore_status() {
+    builtin return "$1"
+  }
+
   __rustty_hook() {
-    builtin local ret=$?
+    builtin local ret="${__rustty_status:-$?}"
+    builtin unset __rustty_status
     __rustty_precmd "$ret"
 
     # Append preexec hook to PS0 if not already present.
@@ -240,24 +247,26 @@ if (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) )
     fi
   }
 
-  # Append our hook to PROMPT_COMMAND, preserving its existing type.
+  # Append our hook to PROMPT_COMMAND, preserving its existing type. Array
+  # entries receive their command's status directly, while scalar values
+  # need a leading status capture before existing commands run.
   #
   # The 2>/dev/null suppresses "command not found" in subshells that inherit
-  # PROMPT_COMMAND without the function definition. This also silences any
-  # errors from inside __rustty_hook itself, but those are all terminal escape
-  # sequences and non-actionable.
-  #
+  # PROMPT_COMMAND without the function definitions. This also silences any
+  # errors from inside our hooks, but those are all terminal escape sequences
+  # and non-actionable.
   # shellcheck disable=SC2128,SC2178,SC2179
-  if [[ ";${PROMPT_COMMAND[*]:-};" != *";__rustty_hook 2>/dev/null;"* ]]; then
+  if [[ "${PROMPT_COMMAND[*]:-}" != *"__rustty_hook 2>/dev/null"* ]]; then
     if [[ -z "${PROMPT_COMMAND[*]}" ]]; then
       if (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )); then
         PROMPT_COMMAND=("__rustty_hook 2>/dev/null")
       else
         PROMPT_COMMAND="__rustty_hook 2>/dev/null"
       fi
-    elif [[ $(builtin declare -p PROMPT_COMMAND 2>/dev/null) == "declare -a "* ]]; then
+    elif [[ $(builtin declare -p PROMPT_COMMAND 2>/dev/null) == "declare -a"* ]]; then
       PROMPT_COMMAND+=("__rustty_hook 2>/dev/null")
     else
+      PROMPT_COMMAND='__rustty_status=$?;if builtin declare -F __rustty_restore_status >/dev/null;then __rustty_restore_status "$__rustty_status";else (exit "$__rustty_status");fi;'"${PROMPT_COMMAND}"
       [[ "${PROMPT_COMMAND}" =~ (\;[[:space:]]*|$'\n')$ ]] || PROMPT_COMMAND+=";"
       PROMPT_COMMAND+="__rustty_hook 2>/dev/null"
     fi

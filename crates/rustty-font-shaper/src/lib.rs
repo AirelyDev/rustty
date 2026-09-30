@@ -251,7 +251,7 @@ pub mod hb;
 // Fontconfig binding wrapper (port of `pkg/fontconfig/*.zig`), the
 // font-discovery seam of the `fontconfig_freetype` backend. Compiled exactly on
 // `hasFontconfig()` (`rustty_font_has_fontconfig`), as the reference imports
-// `pkg/fontconfig` only for that backend (`SharedDeps.zig:292`): the Linux/BSD
+// `pkg/fontconfig` only for that backend (`SharedDeps.zig:283`): the Linux/BSD
 // default, and `-Dfont-backend=fontconfig_freetype` on macOS. CORRECTION (S-14b,
 // review M3): this was gated off macOS/Windows by `target_os`. An MSVC-ABI
 // Windows target stays excluded by `rustty-build-config` (N286: the reference's
@@ -516,10 +516,7 @@ pub enum Style {
 
 /// The presentation for an emoji.
 // pub const Presentation = enum(u1) { text=0 /*U+FE0E*/, emoji=1 /*U+FE0F*/ };
-// PORT NOTE: `Hash` is derived (beyond the reference's plain enum) so
-// `Presentation` can be a field of `SharedGrid`'s `CodepointKey` hash-map key
-// (the reference's `AutoHashMapUnmanaged` auto-derives key hashing).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Presentation {
     /// U+FE0E

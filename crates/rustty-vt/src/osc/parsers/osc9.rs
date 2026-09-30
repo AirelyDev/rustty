@@ -37,21 +37,8 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<Command<'a>> {
                     // OSC 9;1 sleep
                     b';' => {
                         command = Command::ConemuSleep {
-                            // CORRECTION (parity N100): this parsed with
-                            // `str::parse::<u16>()`, which accepts a `+` sign
-                            // and rejects the `_` digit separators, where
-                            // `std.fmt.parseUnsigned` does the opposite.
-                            // PORT NOTE: reference defect (R13), UD141: a `_` digit separator is refused
-                            // before parsing, as Ghostty's own OSC 99 parser does; see
-                            // `protocol_int::reject_digit_separators`.
-                            duration_ms: match crate::protocol_int::reject_digit_separators(
-                                &data[2..],
-                            )
-                            .and_then(|()| {
-                                rustty_zigstd::fmt::parse_unsigned::<u16>(&data[2..], 10)
-                            })
-                            .ok()
-                            {
+                            // .duration_ms = if (lib.parseInt(u16, data[2..], 10)) |num| @min(num, 10_000) else |_| 100,
+                            duration_ms: match rustty_lib::parse_int::<u16, 10>(&data[2..]).ok() {
                                 Some(num) => num.min(10_000),
                                 None => 100,
                             },
@@ -257,14 +244,8 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<Command<'a>> {
                         }
                         // parse the progress value
                         let value: Option<u8> = (|| {
-                            // CORRECTION (parity N100): this parsed with
-                            // `str::parse::<usize>()`; see the sleep arm.
-                            // PORT NOTE: reference defect (R13), UD141: a `_` digit separator is refused
-                            // before parsing, as Ghostty's own OSC 99 parser does; see
-                            // `protocol_int::reject_digit_separators`.
-                            crate::protocol_int::reject_digit_separators(&data[4..]).ok()?;
-                            let parsed =
-                                rustty_zigstd::fmt::parse_unsigned::<usize>(&data[4..], 10).ok()?;
+                            // lib.parseInt(usize, data[4..], 10) catch break :value null,
+                            let parsed = rustty_lib::parse_int::<usize, 10>(&data[4..]).ok()?;
                             // @intCast(std.math.clamp(..., 0, 100))
                             Some(parsed.clamp(0, 100) as u8)
                         })();
@@ -410,6 +391,28 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<Command<'a>> {
 mod tests {
     use crate::osc::{Command, ConemuChangeTabTitle, Parser, ProgressReportState};
 
+    // test "OSC 9: numeric fields reject digit separators" {
+    #[test]
+    fn osc_9_numeric_fields_reject_digit_separators() {
+        let mut sleep: Parser = Parser::init(None);
+        for ch in "9;1;4_2".bytes() {
+            sleep.next(ch);
+        }
+        match sleep.end(None).unwrap() {
+            Command::ConemuSleep { duration_ms } => assert_eq!(100, duration_ms),
+            other => panic!("expected conemu_sleep, got {other:?}"),
+        }
+
+        let mut progress: Parser = Parser::init(None);
+        for ch in "9;4;1;4_2".bytes() {
+            progress.next(ch);
+        }
+        match progress.end(None).unwrap() {
+            Command::ConemuProgressReport(r) => assert_eq!(None, r.progress),
+            other => panic!("expected conemu_progress_report, got {other:?}"),
+        }
+    }
+
     #[test]
     fn osc_9_show_desktop_notification() {
         let mut p: Parser = Parser::init(None);
@@ -505,10 +508,9 @@ mod tests {
     }
 
     // Parity N100 (no reference test): the sleep duration and the progress
-    // value are parsed with `std.fmt.parseUnsigned`, which rejects any sign
-    // byte. UD141 (R13): its `_` digit separators are refused as well, as
-    // Ghostty's own OSC 99 parser refuses them (the reference reads `4_20` as
-    // 420 and `4_2` as 42).
+    // value are parsed with `lib.parseInt` (`73768913b`), which rejects any
+    // sign byte on these unsigned types and `_` digit separators (the
+    // `std.fmt.parseUnsigned` it replaced read `4_20` as 420 and `4_2` as 42).
     #[test]
     fn osc_9_numbers_use_zig_parse_unsigned() {
         fn parse(input: &str) -> Command<'static> {

@@ -60,7 +60,11 @@ fn scratch_dir(name: &str) -> std::path::PathBuf {
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::canonicalize(&dir).unwrap()
+    // The DOS form on Windows (`C:\..`), as the reference's `realPath` gives
+    // it: `std::fs::canonicalize`'s verbatim `\\?\C:\..` is a device-namespace
+    // spelling that `readFile` refuses before the open since `0b5446364`
+    // (measured on rwin, P7-W5 T2).
+    rustty_os::path::realpath(&dir).unwrap()
 }
 
 #[test]

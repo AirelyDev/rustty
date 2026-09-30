@@ -2083,11 +2083,9 @@ pub struct Config {
 // later dropped (never a bitwise `ptr::read` duplicate, which would defeat the
 // empty-after-deinit invariant).
 pub struct Subprocess {
-    // const c = @cImport({
-    //     @cInclude("errno.h");
-    //     @cInclude("signal.h");
-    //     @cInclude("unistd.h");
-    // });
+    // const c = @import("posix_c");
+    // (fe9cf6a26 replaced the errno.h/signal.h/unistd.h cImport with the
+    // shared posix_c translate-c module; same headers, refresh only.)
     // (PORT NOTE: the `libc` binding — the SAME system headers; R3.)
 
     // arena: std.heap.ArenaAllocator,

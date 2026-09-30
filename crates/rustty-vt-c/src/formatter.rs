@@ -608,7 +608,13 @@ pub unsafe fn format_alloc(
     }
 
     // const buf = aw.toOwnedSlice() catch return .out_of_memory;
-    // out_ptr.* = buf.ptr; out_len.* = buf.len;
+    // // Empty Zig slices may contain sentinel pointers that foreign runtimes
+    // // reject even when the length is zero (for example Go's stack scanner).
+    // out_ptr.* = if (buf.len == 0) null else buf.ptr;
+    // out_len.* = buf.len;
+    //
+    // PORT NOTE (`dd2edd760`): `into_c_bytes` is the `if (buf.len == 0) null`
+    // above: empty output is NULL with length zero.
     //
     // PORT NOTE (parity S171-F1): use the TYPED helper `alloc_bytes`, not the
     // RAW `alloc`. `aw.toOwnedSlice()` on empty output returns
@@ -932,6 +938,99 @@ mod tests {
         unsafe { free(std::ptr::null_mut()) };
     }
 
+    // test "format_alloc empty output"
+    #[test]
+    fn format_alloc_empty_output() {
+        with_test_allocator(|calloc| {
+            // const failing: CAllocator = .fromZig(&std.mem.Allocator.failing);
+            let failing_zig = rustty_lib::allocator::FailingZigAllocator;
+            let failing_ref = rustty_lib::allocator::ZigAllocatorRef::new(&failing_zig);
+            let failing = CAllocator::from_zig(&failing_ref);
+            // var t: terminal_c.Terminal = null;
+            let mut t: terminal_c::Terminal = std::ptr::null_mut();
+            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &t, 100, 40));
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::new(calloc, &mut t, 100, 40)
+            });
+            // defer terminal_c.free(t);
+            struct FreeTerminal(terminal_c::Terminal);
+            impl Drop for FreeTerminal {
+                fn drop(&mut self) {
+                    unsafe { terminal_c::free(self.0) };
+                }
+            }
+            let _free_t = FreeTerminal(t);
+
+            // Match a zero-initialized C options struct, including trim = false.
+            // const opts: TerminalOptions = std.mem.zeroInit(TerminalOptions, .{});
+            // PORT NOTE: `zeroInit` keeps the `size`/`selection` field
+            // defaults (and recursively the extras' `size` defaults) and zeroes
+            // everything else: `emit = .plain` (0), `unwrap`/`trim` false.
+            let opts = TerminalOptions {
+                emit: 0,
+                unwrap: false,
+                trim: false,
+                extra: TerminalOptionsExtra::default(),
+                ..TerminalOptions::default()
+            };
+            // var f: Formatter = null;
+            let mut f: Formatter = std::ptr::null_mut();
+            // try testing.expectEqual(Result.success, terminal_new(&lib.alloc.test_allocator, &f, t, opts));
+            assert_eq!(Result::Success, unsafe {
+                terminal_new(Some(calloc), &mut f, t, opts)
+            });
+            // defer free(f);
+            struct FreeFormatter(Formatter);
+            impl Drop for FreeFormatter {
+                fn drop(&mut self) {
+                    unsafe { free(self.0) };
+                }
+            }
+            let _free_f = FreeFormatter(f);
+
+            // for ([_]?*const CAllocator{ null, &failing }) |allocator| {
+            for allocator in [None, Some(&failing)] {
+                // var sentinel: u8 = 0;
+                let mut sentinel: u8 = 0;
+                // var ptr: ?[*]u8 = @ptrCast(&sentinel);
+                let mut ptr: *mut u8 = &mut sentinel;
+                // var len: usize = 123;
+                let mut len: usize = 123;
+                // try testing.expectEqual(Result.success, format_alloc(f, allocator, &ptr, &len));
+                assert_eq!(Result::Success, unsafe {
+                    format_alloc(f, allocator, &mut ptr, &mut len)
+                });
+                // defer @import("allocator.zig").free(allocator, ptr, len);
+                // PORT NOTE: the deferred free runs after the two assertions,
+                // at the end of the iteration; an assertion failure panics
+                // before it, which a test tolerates.
+                // try testing.expectEqual(@as(usize, 0), len);
+                assert_eq!(0usize, len);
+                // try testing.expectEqual(null, ptr);
+                assert!(ptr.is_null());
+                unsafe { crate::allocator::free(allocator, ptr, len) };
+            }
+
+            // Reusing the same formatter must still allocate and return real output.
+            // terminal_c.vt_write(t, "hello", 5);
+            unsafe { terminal_c::vt_write(t, b"hello".as_ptr(), 5) };
+            // var ptr: ?[*]u8 = null;
+            let mut ptr: *mut u8 = std::ptr::null_mut();
+            // var len: usize = 0;
+            let mut len: usize = 0;
+            // try testing.expectEqual(Result.success, format_alloc(f, null, &ptr, &len));
+            assert_eq!(Result::Success, unsafe {
+                format_alloc(f, None, &mut ptr, &mut len)
+            });
+            // defer @import("allocator.zig").free(null, ptr, len);
+            // try testing.expectEqualStrings("hello", ptr.?[0..len]);
+            assert!(!ptr.is_null());
+            // SAFETY: `ptr[0..len]` is the allocation returned above.
+            assert_eq!(b"hello", unsafe { core::slice::from_raw_parts(ptr, len) });
+            unsafe { crate::allocator::free(None, ptr, len) };
+        });
+    }
+
     // PORT NOTE: shared setup for the format tests — build a terminal, write
     // `bytes`, build a plain formatter, returning the handles WITH their
     // unasserted `new` Results. Mirrors the repeated `terminal_c.new` +
@@ -1008,7 +1107,9 @@ mod tests {
             format_alloc(f, Some(&calloc), &mut out_ptr, &mut out_len)
         });
         assert_eq!(0, out_len);
-        assert!(!out_ptr.is_null());
+        // Since `dd2edd760` (DECISIONS B2) empty output is NULL, never a
+        // sentinel address.
+        assert!(out_ptr.is_null());
         // The C allocator was never asked for a zero-size block.
         assert_eq!(allocs_before, stats.alloc_calls.get());
 
@@ -1515,7 +1616,8 @@ mod tests {
     // is built through the handle's Global arm (`lib.alloc.default(null)`) and
     // released with `rustty_free(NULL, ..)`, whose default allocator is the same
     // Rust heap; the lengths and alignment must match (Miri checks the layout).
-    // Also the empty output: the non-null empty sentinel and a no-op free.
+    // Also the empty output: NULL since `dd2edd760` (it was a non-null
+    // sentinel before, N331) and a no-op free.
     #[test]
     fn format_alloc_null_allocator_round_trip() {
         for (input, expected) in [(&b"Hello"[..], &b"Hello"[..]), (&b""[..], &b""[..])] {
@@ -1534,10 +1636,15 @@ mod tests {
                 assert_eq!(Result::Success, unsafe {
                     format_alloc(f, None, &mut out_ptr, &mut out_len)
                 });
-                assert!(!out_ptr.is_null());
-                assert_eq!(expected, unsafe {
-                    std::slice::from_raw_parts(out_ptr, out_len)
-                });
+                // Empty output is NULL, anything else a real buffer.
+                assert_eq!(expected.is_empty(), out_ptr.is_null());
+                let got: &[u8] = if out_ptr.is_null() {
+                    &[]
+                } else {
+                    // SAFETY: `out_ptr[0..out_len]` is the allocation returned above.
+                    unsafe { std::slice::from_raw_parts(out_ptr, out_len) }
+                };
+                assert_eq!(expected, got);
                 unsafe { crate::allocator::free(None, out_ptr, out_len) };
                 unsafe { free(f) };
                 unsafe { terminal_c::free(t) };

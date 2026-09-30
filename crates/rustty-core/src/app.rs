@@ -500,10 +500,12 @@ where
             // if (comptime std.log.logEnabled(.debug, .app)) {
             //     switch (message) {
             //         // these tend to be way too verbose for normal debugging
-            //         .redraw_surface => {},
             //         else => log.debug("mailbox message={t}", .{message}),
             //     }
             // }
+            //
+            // (`2f0b65346` deleted the `.redraw_surface => {},` arm with the
+            // message; the switch keeps its comment and its lone `else`.)
             //
             // PORT NOTE (task 14d-1): `std.log.logEnabled(.debug, .app)` is a
             // COMPTIME query of the build's `std_options.log_level` in the
@@ -515,15 +517,12 @@ where
             // paying for `@tagName`/formatting when debug logging is off, and
             // `log_enabled!` preserves exactly that property.
             if log::log_enabled!(target: LOG_SCOPE, log::Level::Debug) {
-                match &message {
-                    // these tend to be way too verbose for normal debugging
-                    Message::RedrawSurface(_) => {}
-                    _ => log::debug!(
-                        target: LOG_SCOPE,
-                        "mailbox message={}",
-                        message.tag_name()
-                    ),
-                }
+                // these tend to be way too verbose for normal debugging
+                log::debug!(
+                    target: LOG_SCOPE,
+                    "mailbox message={}",
+                    message.tag_name()
+                );
             }
             match message {
                 // .open_config => |v| try self.performAction(
@@ -548,7 +547,6 @@ where
                 Message::NewWindow(msg) => self.newWindow(rt_app, msg)?,
                 Message::Close(surface) => self.closeSurface(surface),
                 Message::SurfaceMessage(msg) => self.surfaceMessage(msg.surface, msg.message)?,
-                Message::RedrawSurface(surface) => self.redrawSurface(rt_app, surface)?,
 
                 // If we're quitting, then we set the quit flag and stop
                 // draining the mailbox immediately. This lets us defer
@@ -582,19 +580,9 @@ where
         self.focused_surface = Some(surface);
     }
 
-    fn redrawSurface(&mut self, rt_app: &A, surface: *mut A::Surface) -> Result<(), Error> {
-        if !self.hasRtSurface(surface) {
-            return Ok(());
-        }
-
-        // _ = try rt_app.performAction(.{ .surface = surface.core() }, .render, {});
-        let core = unsafe { &*surface }.core();
-        let _ = rt_app.perform_action(
-            apprt::Target::Surface(unsafe { &*core }),
-            apprt::Action::Render,
-        )?;
-        Ok(())
-    }
+    // P7-W7 T2 (`2f0b65346`): `redrawSurface` is deleted with
+    // `Message.redraw_surface`; the render thread asks its own surface to redraw
+    // (`apprt.surface.Message.redraw`, `Surface.redraw`).
 
     /// Create a new window
     pub fn newWindow(&mut self, rt_app: &A, msg: NewWindow<A>) -> Result<(), Error> {
@@ -942,15 +930,7 @@ where
         None
     }
 
-    fn hasRtSurface(&self, surface: *mut A::Surface) -> bool {
-        for &v in self.surfaces.iter() {
-            if v == surface {
-                return true;
-            }
-        }
-
-        false
-    }
+    // (`2f0b65346` deleted `hasRtSurface`; `redrawSurface` was its only caller.)
 }
 
 /// Returns a new config for a surface for the given app that should be
@@ -1045,12 +1025,8 @@ pub enum Message<A: apprt::App + 'static> {
     // `'static` message (the `AppMailbox` note: the one borrowed variant is
     // never queued).
     SurfaceMessage(apprt::SurfaceMessageEnvelope<'static, *mut Surface<A>>),
-
-    /// Redraw a surface. This only has an effect for runtimes that
-    /// use single-threaded draws. To redraw a surface for all runtimes,
-    /// wake up the renderer thread. The renderer thread will send this
-    /// message if it needs to.
-    RedrawSurface(*mut A::Surface),
+    // (`2f0b65346` deleted `redraw_surface: *apprt.Surface`, "Redraw a surface.
+    // This only has an effect for runtimes that use single-threaded draws.")
 }
 
 impl<A: apprt::App + 'static> Message<A> {
@@ -1066,7 +1042,6 @@ impl<A: apprt::App + 'static> Message<A> {
             Message::Close(_) => "close",
             Message::Quit => "quit",
             Message::SurfaceMessage(_) => "surface_message",
-            Message::RedrawSurface(_) => "redraw_surface",
         }
     }
 }
@@ -1075,7 +1050,7 @@ impl<A: apprt::App + 'static> Message<A> {
 // documented invariant (CORE_BLUEPRINT §1/§8.3): the surface pointers are
 // stable for the surface's lifetime (apprt-owned heap allocations), and the
 // app thread VALIDATES every received pointer against its known-surface list
-// before dereferencing (`hasSurface`/`hasRtSurface` — "We want to ensure our
+// before dereferencing (`hasSurface` — "We want to ensure our
 // window is still active"; "This surface may not be valid; you must always
 // call hasSurface to validate it"). No `&`/`&mut` crosses threads here.
 unsafe impl<A: apprt::App> Send for Message<A> {}
@@ -1796,8 +1771,8 @@ pub(crate) mod test_runtime {
     //
     // Three tests, chosen for shapes that break INDEPENDENTLY of each
     // other rather than one per site: a plain interpolated argument, the
-    // `logEnabled` gate + `{t}`/`@tagName` rendering + the `redraw_surface`
-    // exclusion, and a failure-arm site carrying both `@tagName(action)`
+    // `logEnabled` gate + `{t}`/`@tagName` rendering, and a failure-arm site
+    // carrying both `@tagName(action)`
     // and the error payload. Every assertion is a full-vector `assert_eq!`
     // on the captured records, so a wrong level, a wrong scope, an extra
     // record or a dropped/renamed payload all fail.
@@ -1833,25 +1808,26 @@ pub(crate) mod test_runtime {
         );
     }
 
-    /// `App.zig:271` + `App.zig:294` — the `logEnabled(.debug, .app)`
-    /// switch (which skips `.redraw_surface` as "way too verbose") and the
-    /// quit short-circuit `log.info`. Asserts the `{t}` rendering uses the
-    /// REFERENCE tag names (`quit`, not `Quit`).
+    /// `App.zig:269` + `App.zig:292` — the `logEnabled(.debug, .app)`
+    /// switch and the quit short-circuit `log.info`. Asserts the `{t}`
+    /// rendering uses the REFERENCE tag names (`close`, `quit`, not `Close`,
+    /// `Quit`). P7-W7 T2: `2f0b65346` deleted the `.redraw_surface` exclusion
+    /// with the message, so every message now logs.
     #[test]
-    fn drain_mailbox_logs_message_tags_but_skips_redraw_surface() {
+    fn drain_mailbox_logs_message_tags() {
         let mut rt_app = TestApp::new();
         let mut app = App::<TestApp>::init(Allocator).unwrap();
 
-        // An unregistered rt-surface pointer: `redrawSurface` rejects it
-        // through `hasRtSurface` before any dereference, so this is only
-        // ever compared, never read.
-        let unknown: *mut TestSurface = std::ptr::NonNull::dangling().as_ptr();
+        // An unregistered surface pointer: `closeSurface` rejects it through
+        // `hasSurface` before any dereference, so this is only ever compared,
+        // never read.
+        let unknown: *mut Surface<TestApp> = std::ptr::NonNull::dangling().as_ptr();
         {
             let mailbox = Mailbox::<TestApp> {
                 rt_app: &mut rt_app,
                 mailbox: &mut app.mailbox,
             };
-            mailbox.push(Message::RedrawSurface(unknown), Timeout::Instant);
+            mailbox.push(Message::Close(unknown), Timeout::Instant);
             mailbox.push(Message::Quit, Timeout::Instant);
         }
 
@@ -1863,6 +1839,11 @@ pub(crate) mod test_runtime {
 
         assert_eq!(
             vec![
+                (
+                    log::Level::Debug,
+                    "app".to_string(),
+                    "mailbox message=close".to_string()
+                ),
                 (
                     log::Level::Debug,
                     "app".to_string(),

@@ -1,0 +1,3 @@
+NOT-CARRIED [apprt]: 16 row(s) checked
+NOT-CARRIED [bin]: 21 row(s) checked
+GREEN: COMMENT-NOT-CARRIED.tsv: all 37 row(s) prove themselves

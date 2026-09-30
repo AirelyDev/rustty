@@ -565,20 +565,15 @@ impl<'a> TokenizeScalar<'a> {
     }
 }
 
-// PORT NOTE: glue for `std.fmt.parseInt(u9, s, 10)`, through the port of the
-// std function in `rustty_zigstd::fmt` at the reference's `u9` width.
-// Returns `None` on any parse failure or when the value overflows `u9`
-// (0..=511); the value is widened to `u16`.
-// CORRECTION (parity S194-F3): this used `str::parse::<u16>()` plus a range
-// check, which rejects the `_` digit separators and the `-0` that
-// `std.fmt.parseInt` accepts.
+// PORT NOTE: glue for `lib.parseInt(u9, s, 10)` (`73768913b`), through
+// `rustty_lib::parse_int::parse_int_type` at the reference's `u9` width.
+// Returns `None` on any parse failure (a `_` digit separator or a sign
+// included) or when the value overflows `u9` (0..=511); the value is widened
+// to `u16`.
 fn parse_int_u9(s: &[u8]) -> Option<u16> {
-    // PORT NOTE: reference defect (R13), UD141: a `_` digit separator is refused
-    // before parsing, as Ghostty's own OSC 99 parser does; see
-    // `protocol_int::reject_digit_separators`.
-    crate::protocol_int::reject_digit_separators(s).ok()?;
     let v =
-        rustty_zigstd::fmt::parse_int_type(rustty_zigstd::fmt::IntType::unsigned(9), s, 10).ok()?;
+        rustty_lib::parse_int::parse_int_type::<10>(rustty_zigstd::fmt::IntType::unsigned(9), s)
+            .ok()?;
     Some(u16::try_from(v).expect("a u9 fits in u16"))
 }
 
@@ -673,6 +668,24 @@ mod tests {
         (DynamicColor::TektronixCursor, 18),
         (DynamicColor::HighlightForeground, 19),
     ];
+
+    // test "OSC color indexes reject digit separators" {
+    #[test]
+    fn osc_color_indexes_reject_digit_separators() {
+        // inline for (.{ Operation.osc_4, Operation.osc_5 }) |op| {
+        for op in [Operation::osc_4, Operation::osc_5] {
+            let list = parse_color(crate::alloc::Global, op, b"1;red;0_3;blue;2;green").unwrap();
+            // Invalid indexes stop get/set requests at the valid prefix.
+            assert_eq!(1, list.len());
+        }
+
+        // inline for (.{ Operation.osc_104, Operation.osc_105 }) |op| {
+        for op in [Operation::osc_104, Operation::osc_105] {
+            let list = parse_color(crate::alloc::Global, op, b"1;0_3;2").unwrap();
+            // Invalid indexes are skipped in reset requests.
+            assert_eq!(2, list.len());
+        }
+    }
 
     // test "OSC 4:" {
     #[test]
@@ -797,10 +810,11 @@ mod tests {
 
     // test "OSC 4: multiple requests" {
     // Parity S194-F3: no reference test. The color index is parsed with
-    // `std.fmt.parseInt(u9, color_str, 10)`, which accepts a leading `+` and
-    // `-0`, and rejects anything past `u9`. UD141 (R13): its `_` digit
-    // separators are refused, as Ghostty's own OSC 99 parser refuses them,
-    // taking the same failure path as any bad index.
+    // `lib.parseInt(u9, color_str, 10)` (`73768913b`), which rejects `_`
+    // digit separators and, the type being unsigned, a leading `+` or `-`
+    // (`std.fmt.parseInt`, used before, accepted `+11`, `-0` and `1_0`), and
+    // rejects anything past `u9`. A rejected index takes the same failure path
+    // as any bad index.
     #[test]
     fn osc_4_104_color_index_follows_zig_parse_int_but_refuses_digit_separators() {
         // A `_` fails the parse, which ends an OSC 4 list.
@@ -811,8 +825,9 @@ mod tests {
                 .len()
         );
 
+        // So does a sign: the list stops at `+11`.
         let list = parse_color(crate::alloc::Global, Operation::osc_4, b"10;red;+11;blue").unwrap();
-        assert_eq!(2, list.len());
+        assert_eq!(1, list.len());
         assert_eq!(
             Request::Set(ColoredTarget {
                 target: Target::Palette(10),
@@ -820,25 +835,17 @@ mod tests {
             }),
             list[0]
         );
-        assert_eq!(
-            Request::Set(ColoredTarget {
-                target: Target::Palette(11),
-                color: RGB { r: 0, g: 0, b: 255 },
-            }),
-            list[1]
-        );
 
-        // OSC 104 skips a bad index and goes on.
+        // OSC 104 skips a bad index (`_` or a sign) and goes on.
         let list = parse_color(
             crate::alloc::Global,
             Operation::osc_104,
-            b"1_2;_3;3_;-0;5_12;4;12",
+            b"1_2;_3;3_;-0;+1;5_12;4;12",
         )
         .unwrap();
-        assert_eq!(3, list.len());
-        assert_eq!(Request::Reset(Target::Palette(0)), list[0]);
-        assert_eq!(Request::Reset(Target::Palette(4)), list[1]);
-        assert_eq!(Request::Reset(Target::Palette(12)), list[2]);
+        assert_eq!(2, list.len());
+        assert_eq!(Request::Reset(Target::Palette(4)), list[0]);
+        assert_eq!(Request::Reset(Target::Palette(12)), list[1]);
 
         // A leading `_` fails the parse, which ends an OSC 4 list.
         assert_eq!(

@@ -114,6 +114,7 @@ pub mod media;
 pub mod portal;
 pub mod post_fork;
 pub mod pre_exec;
+pub mod scale;
 pub mod surface;
 pub mod weak_ref;
 pub mod winproto;

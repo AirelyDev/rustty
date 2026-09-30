@@ -119,6 +119,28 @@ probe_cc_target() {
   return $rc
 }
 
+# Does the C compiler cc-rs would use for this target produce an object for it?
+#
+# The wasm32-wasip1 leg compiles C and no C++: wuffs-sys (the kitty graphics
+# swizzles and, since P7-W5 T2 / DECISIONS B8, the kitty zlib decoder; WASI has
+# Kitty graphics on, as Zig's `.wasi` does). It needs a clang with the
+# WebAssembly backend, which Apple's clang does not have; `CC_<triple>` selects
+# another (e.g. Homebrew's llvm). No libc++ and no sysroot: the TU includes
+# only <stddef.h>, a compiler header, as wuffs-sys's minimal libc headers do.
+# wasm32-unknown-unknown compiles no C: it is freestanding, where Kitty
+# graphics and so wuffs are off, as in the reference's wasm32-freestanding
+# artifact (Ruling 30).
+probe_c_target() {
+  local triple="$1" probe rc
+  probe="$WORK/probe-c-$triple"
+  mkdir -p "$probe"
+  printf '#include <stddef.h>\nsize_t f(size_t x){return x+1;}\n' > "$probe/t.c"
+  local cc_var="CC_${triple//-/_}"
+  "${!cc_var:-${CC:-clang}}" --target="$triple" -c "$probe/t.c" -o "$probe/t.o" > "$probe/log" 2>&1
+  rc=$?
+  return $rc
+}
+
 # S64-F9: `GhosttyLibVt.zig:273-276` links every Android lib-vt with
 # `link_z_max_page_size = 16384` ("Support 16kb page sizes, required for
 # Android 15+"). An Android leg passes only if every PT_LOAD segment of the
@@ -181,6 +203,14 @@ if [ "$SELF_TEST" -eq 1 ]; then
   expect "end to end: named unknown target -> BLOCKED" 3 "$rc"
   WANT=()
 
+  # P7-W5 T2: the wasm legs' C-compiler probe reports a compiler that cannot
+  # target the triple (`false`), and passes one that can (`true`, control).
+  CC_selftest_c_target=false probe_c_target selftest-c-target; st_rc=$?
+  [ "$st_rc" -ne 0 ] && st_rc=1
+  expect "C probe with a compiler that fails -> not buildable" 1 "$st_rc"
+  CC_selftest_c_target=true probe_c_target selftest-c-target
+  expect "C probe with a compiler that succeeds -> buildable (control)" 0 $?
+
   # F2: the .so is looked for under cargo's target directory, not ./target.
   st_tdir="$(CARGO_TARGET_DIR="$WORK/tdir" cargo_target_dir)"
   if [ "$st_tdir" = "$WORK/tdir" ]; then echo "  pass    target dir follows CARGO_TARGET_DIR ($st_tdir)"
@@ -220,14 +250,18 @@ fi
 INSTALLED="$(rustup target list --installed 2>/dev/null)"
 TARGET_DIR=""
 
-# target|extra cargo args|needs a cross C toolchain (1) or not (0)
+# target|extra cargo args|needs a cross C++ toolchain (1), a C-only one (c),
+# or none (0)
 TARGETS=(
   # The wasm artifact release-tip.yml's build-lib-vt-wasm ships. SIMD is off
   # for wasm by rustty-vt's own options.rs (the reference cannot build its
-  # SIMD deps for wasm either), so this is the default feature set.
+  # SIMD deps for wasm either), so this is the default feature set. Pure
+  # Rust: Kitty graphics (and so wuffs) is off on this freestanding target
+  # (Ruling 30).
   "wasm32-unknown-unknown||0"
-  # The WASI variant .port/tools/zig-cc-wasm.sh exists for.
-  "wasm32-wasip1||0"
+  # The WASI variant .port/tools/zig-cc-wasm.sh exists for. It compiles C
+  # since P7-W5 T2 (wuffs-sys, DECISIONS B8).
+  "wasm32-wasip1||c"
   # The reference's build-libghostty-vt-windows. MSVC needs no host C
   # toolchain for the Rust half; the crates-sys C compiles need one, so this
   # is the leg most likely to report a toolchain skip off Windows.
@@ -275,6 +309,11 @@ for spec in "${TARGETS[@]}"; do
     continue
   fi
 
+  if [ "$needs_cc" = "c" ] && ! probe_c_target "$target"; then
+    tv="${target//-/_}"
+    skip "$target" "the C compiler cannot target it: set CC_$tv to a clang with the WebAssembly backend (Apple's clang has none)"
+    continue
+  fi
   if [ "$needs_cc" = "1" ] && ! probe_cc_target "$target"; then
     case "$target" in
       *-android*)

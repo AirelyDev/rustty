@@ -710,6 +710,28 @@ pub(crate) fn resize_tw_end(
     RESIZE_TW.with(|tw| tw.borrow_mut().end(mode))
 }
 
+/// Return the codepoint for word selection, following wide-character spacers.
+fn select_word_codepoint(pin: Pin) -> Option<u21> {
+    let rac = pin.row_and_cell();
+    let cell: *mut Cell = match unsafe { (*rac.cell).wide() } {
+        pagepkg::Wide::Narrow | pagepkg::Wide::Wide => rac.cell,
+        pagepkg::Wide::SpacerTail => pin.left(1).row_and_cell().cell,
+        pagepkg::Wide::SpacerHead => {
+            let next_row = pin.down(1)?;
+            let owner: *mut Cell = next_row.cells(pagelist::pin::CellSubset::All) as *mut Cell;
+            if unsafe { (*owner).wide() } != pagepkg::Wide::Wide {
+                return None;
+            }
+            owner
+        }
+    };
+    if unsafe { (*cell).has_text() } {
+        Some(unsafe { (*cell).codepoint() })
+    } else {
+        None
+    }
+}
+
 pub struct SelectLine<'a> {
     /// The pin of some part of the line to select.
     pub pin: Pin,
@@ -5026,43 +5048,32 @@ impl Screen {
 
         // If our cell is empty we can't select a word, because we can't select
         // areas where the screen is not yet written.
-        let start_cell = pin.row_and_cell().cell;
-        if !unsafe { (*start_cell).has_text() } {
-            return None;
-        }
+        let start_codepoint = select_word_codepoint(pin)?;
 
         // Determine if we are a boundary or not to determine what our boundary is.
-        let expect_boundary = boundary_codepoints
-            .iter()
-            .any(|&b| b == unsafe { (*start_cell).codepoint() });
+        let expect_boundary = boundary_codepoints.contains(&start_codepoint);
 
         // Go forwards to find our end boundary
         let end: Pin = 'end: {
             let mut it = pin.cell_iterator(pagelist::iter::Direction::RightDown, None);
             let mut prev = it.next().unwrap(); // Consume one, our start
             while let Some(p) = it.next() {
-                let rac = p.row_and_cell();
-                let cell = rac.cell;
+                // Only cross a row boundary if the previous row wraps.
+                if prev.x == unsafe { crate::pagelist::Node::cols(prev.node) } - 1
+                    && !unsafe { (*prev.row_and_cell().row).wrap() }
+                {
+                    break 'end prev;
+                }
 
                 // If we reached an empty cell its always a boundary
-                if !unsafe { (*cell).has_text() } {
+                let Some(codepoint) = select_word_codepoint(p) else {
                     break 'end prev;
-                }
+                };
 
                 // If we do not match our expected set, we hit a boundary
-                let this_boundary = boundary_codepoints
-                    .iter()
-                    .any(|&b| b == unsafe { (*cell).codepoint() });
+                let this_boundary = boundary_codepoints.contains(&codepoint);
                 if this_boundary != expect_boundary {
                     break 'end prev;
-                }
-
-                // If we are going to the next row and it isn't wrapped, we
-                // return the previous.
-                if p.x == unsafe { crate::pagelist::Node::cols(p.node) } - 1
-                    && !unsafe { (*rac.row).wrap() }
-                {
-                    break 'end p;
                 }
 
                 prev = p;
@@ -5077,7 +5088,6 @@ impl Screen {
             let mut prev = it.next().unwrap(); // Consume one, our start
             while let Some(p) = it.next() {
                 let rac = p.row_and_cell();
-                let cell = rac.cell;
 
                 // If we are going to the next row and it isn't wrapped, we
                 // return the previous.
@@ -5088,14 +5098,12 @@ impl Screen {
                 }
 
                 // If we reached an empty cell its always a boundary
-                if !unsafe { (*cell).has_text() } {
+                let Some(codepoint) = select_word_codepoint(p) else {
                     break 'start prev;
-                }
+                };
 
                 // If we do not match our expected set, we hit a boundary
-                let this_boundary = boundary_codepoints
-                    .iter()
-                    .any(|&b| b == unsafe { (*cell).codepoint() });
+                let this_boundary = boundary_codepoints.contains(&codepoint);
                 if this_boundary != expect_boundary {
                     break 'start prev;
                 }
@@ -10391,6 +10399,229 @@ mod tests {
         }
 
         s.deinit();
+    }
+
+    // test "Screen: selectWord at hard line breaks"
+    #[test]
+    fn screen_select_word_at_hard_line_breaks() {
+        struct Case {
+            cols: size::CellCountInt,
+            text: &'static [u8],
+        }
+        let cases = [
+            Case {
+                cols: 5,
+                text: b"abcde\nfghij",
+            },
+            Case {
+                cols: 5,
+                text: b"     \n     ",
+            },
+            Case {
+                cols: 1,
+                text: b"a\nb",
+            },
+            Case {
+                cols: 1,
+                text: b" \n ",
+            },
+        ];
+        for case in cases {
+            let mut s = mkscreen(case.cols, 2, 0);
+            s.test_write_string(case.text).unwrap();
+
+            for y in 0..2u32 {
+                for x in 0..case.cols {
+                    let pin = spin(&s, pactive(x, y));
+                    let sel = s.select_word(pin, &[0, ' ' as u32]).unwrap();
+                    assert_eq!(pscreen(0, y), pfp_screen(&s, sel.start()));
+                    assert_eq!(pscreen(case.cols - 1, y), pfp_screen(&s, sel.end()));
+                    sel.deinit(&mut s);
+                }
+            }
+
+            s.deinit();
+        }
+    }
+
+    // test "Screen: selectWord across soft-wrap at right edge"
+    #[test]
+    fn screen_select_word_across_soft_wrap_at_right_edge() {
+        let mut s = mkscreen(5, 3, 0);
+        s.test_write_string(b"abcdefghij\nklmno").unwrap();
+
+        for y in 0..2u32 {
+            for x in 0..5 {
+                let pin = spin(&s, pactive(x, y));
+                let sel = s.select_word(pin, &[0, ' ' as u32]).unwrap();
+                assert_eq!(pscreen(0, 0), pfp_screen(&s, sel.start()));
+                assert_eq!(pscreen(4, 1), pfp_screen(&s, sel.end()));
+                sel.deinit(&mut s);
+            }
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectWord wide characters"
+    #[test]
+    fn screen_select_word_wide_characters() {
+        struct Case {
+            text: &'static str,
+            cols: size::CellCountInt,
+            boundary_codepoints: &'static [u32],
+            start: usize,
+            end: usize,
+            expected: &'static str,
+        }
+        let cases = [
+            Case {
+                text: "日本語",
+                cols: 10,
+                boundary_codepoints: &[0, ' ' as u32],
+                start: 0,
+                end: 5,
+                expected: "日本語",
+            },
+            Case {
+                text: "日本語",
+                cols: 10,
+                boundary_codepoints: &[' ' as u32],
+                start: 0,
+                end: 5,
+                expected: "日本語",
+            },
+            Case {
+                text: "a日b語c",
+                cols: 10,
+                boundary_codepoints: &[0, ' ' as u32],
+                start: 0,
+                end: 6,
+                expected: "a日b語c",
+            },
+            Case {
+                text: " 日本語 ",
+                cols: 10,
+                boundary_codepoints: &[0, ' ' as u32],
+                start: 1,
+                end: 6,
+                expected: "日本語",
+            },
+            Case {
+                text: "日本語",
+                cols: 4,
+                boundary_codepoints: &[0, ' ' as u32],
+                start: 0,
+                end: 5,
+                expected: "日本語",
+            },
+            Case {
+                text: "日本語",
+                cols: 5,
+                boundary_codepoints: &[0, ' ' as u32],
+                start: 0,
+                end: 6,
+                expected: "日本語",
+            },
+            Case {
+                text: "日本\n語文",
+                cols: 4,
+                boundary_codepoints: &[0, ' ' as u32],
+                start: 0,
+                end: 3,
+                expected: "日本",
+            },
+            Case {
+                text: "日本\n語文",
+                cols: 4,
+                boundary_codepoints: &[0, ' ' as u32],
+                start: 4,
+                end: 7,
+                expected: "語文",
+            },
+            Case {
+                text: "a語b",
+                cols: 10,
+                boundary_codepoints: &[0, '語' as u32],
+                start: 0,
+                end: 0,
+                expected: "a",
+            },
+            Case {
+                text: "a語b",
+                cols: 10,
+                boundary_codepoints: &[0, '語' as u32],
+                start: 1,
+                end: 2,
+                expected: "語",
+            },
+            Case {
+                text: "a語b",
+                cols: 10,
+                boundary_codepoints: &[0, '語' as u32],
+                start: 3,
+                end: 3,
+                expected: "b",
+            },
+            Case {
+                text: "abcd語ef",
+                cols: 5,
+                boundary_codepoints: &[0, '語' as u32],
+                start: 0,
+                end: 3,
+                expected: "abcd",
+            },
+            Case {
+                text: "abcd語ef",
+                cols: 5,
+                boundary_codepoints: &[0, '語' as u32],
+                start: 4,
+                end: 6,
+                expected: "語",
+            },
+            Case {
+                text: "abcd語ef",
+                cols: 5,
+                boundary_codepoints: &[0, '語' as u32],
+                start: 7,
+                end: 8,
+                expected: "ef",
+            },
+        ];
+
+        for case in cases {
+            let mut s = mkscreen(case.cols, 4, 0);
+            s.test_write_string(case.text.as_bytes()).unwrap();
+
+            let cols = case.cols as usize;
+            // Selecting any cell in the word should select the whole word.
+            for offset in case.start..=case.end {
+                let x = (offset % cols) as size::CellCountInt;
+                let y = (offset / cols) as u32;
+                let pin = spin(&s, pactive(x, y));
+                let sel = s.select_word(pin, case.boundary_codepoints).unwrap();
+                assert_eq!(
+                    pscreen(
+                        (case.start % cols) as size::CellCountInt,
+                        (case.start / cols) as u32
+                    ),
+                    pfp_screen(&s, sel.start())
+                );
+                assert_eq!(
+                    pscreen(
+                        (case.end % cols) as size::CellCountInt,
+                        (case.end / cols) as u32
+                    ),
+                    pfp_screen(&s, sel.end())
+                );
+
+                let contents = selstr(&mut s, sel, false);
+                assert_eq!(String::from_utf8(contents).unwrap(), case.expected);
+                sel.deinit(&mut s);
+            }
+
+            s.deinit();
+        }
     }
 
     // test "Screen: selectWord across soft-wrap"

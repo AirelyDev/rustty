@@ -19,6 +19,15 @@
 //! path. It is the Rust analogue of "whatever made a context current before
 //! `prepareContext` ran", not a port of anything.
 //!
+//! P7-W7 T1 (pin `12752b2ac`): upstream now DOES create its own surfaceless
+//! context (`OpenGL.init`, `2f0b65346`), over `pkg/opengl/egl.zig` (`fa2ec3a6a`),
+//! and never terminates its display. This module now also carries that EGL
+//! half — [`EglError`], [`Image`], the `EGL_MESA_image_dma_buf_export` entry
+//! points, the `EGL_SURFACE_TYPE = 0` config request, no `eglTerminate`
+//! (DECISIONS B10) — and [`OffscreenContext`] is the renderer-owned display +
+//! context that `OpenGL::init` creates (P7-W7 T2). The GL function table
+//! [`prepare_context`] loads is the calling thread's (`glad`, DECISIONS B9).
+//!
 //! PORT NOTE (`const log = std.log.scoped(.opengl);`, `OpenGL.zig:34`): the
 //! scoped logger is reproduced by the `log_*!` macros in the parent module. (The
 //! original note's "this crate has no log facade and R3 permits no new dependency
@@ -31,12 +40,15 @@
 //! to `gl.rs` unchanged, because `Shader.zig`/`Program.zig` declare that same
 //! scoped logger and the reference shares ONE `.opengl` scope across the package.
 
-use std::ffi::{c_char, c_void, CStr};
+use std::ffi::{c_char, c_int, c_void, CStr};
 use std::fmt;
 
 use khronos_egl as egl;
 
-use super::{draw, errors, log_debug, log_err, log_info, log_warn};
+use super::{draw, errors, glad, log_debug, log_err, log_info, log_warn};
+
+/// `const log = std.log.scoped(.opengl_egl);` (`pkg/opengl/egl.zig:13`).
+const EGL_LOG_SCOPE: &str = "opengl_egl";
 
 /// PORTS: `OpenGL.zig:36-38`.
 ///
@@ -79,7 +91,7 @@ pub enum Error {
     /// CHECK itself could not run.
     VersionUnavailable,
     /// A GL entry point that the loaded context's own version guarantees was not
-    /// resolved by [`gl::load_with`].
+    /// resolved by [`glad::load`].
     ///
     /// Distinct from [`Error::VersionUnavailable`] on purpose: this cannot happen
     /// on a conformant context at or above the [`MIN_VERSION_MAJOR`].
@@ -135,12 +147,24 @@ impl From<errors::Error> for Error {
 ///
 /// RUSTTY-ONLY — see the module docs: ghostty has no analogue because GDK owns
 /// context creation in the GTK path.
+///
+/// P7-W7 T1: it is also the stand-in, until the renderer's `init` owns one
+/// (stage S2), for the `egl_display`/`egl_context` pair ghostty's `OpenGL`
+/// holds (`OpenGL.zig:45-46`). The DMA-BUF export ([`Image`],
+/// `opengl::target::Target::export_dmabuf`) takes it where the reference takes
+/// that pair.
 pub struct OffscreenContext {
     /// The dlopen'd `libEGL.so.1`. Must outlive `display`/`context`, so it is
     /// owned here rather than in a global.
     egl: egl::DynamicInstance<egl::EGL1_5>,
     display: egl::Display,
     context: egl::Context,
+    /// `eglExportDMABUFImageQueryMESA`, resolved once at [`Self::init`] as glad
+    /// resolves it in `gladLoadEGL` (`vendor/glad/src/glad_egl.c:34-37`). `None`
+    /// when `eglGetProcAddress` has no such entry point.
+    export_dmabuf_query_mesa: Option<ExportDmabufImageQueryMesaFn>,
+    /// `eglExportDMABUFImageMESA`; see `export_dmabuf_query_mesa`.
+    export_dmabuf_mesa: Option<ExportDmabufImageMesaFn>,
 }
 
 impl OffscreenContext {
@@ -188,31 +212,71 @@ impl OffscreenContext {
         }?;
 
         let (egl_major, egl_minor) = egl.initialize(display)?;
-        log_debug!("initialized EGL {egl_major}.{egl_minor}");
+        // log.debug("EGL initialized {}.{}", .{ major, minor });   (egl.zig:90)
+        //
+        // P7-W7 T2: `egl.zig` logs under its own `.opengl_egl` scope (`egl.zig:13`).
+        log::debug!(target: EGL_LOG_SCOPE, "EGL initialized {egl_major}.{egl_minor}");
 
-        // `Drop` only runs once `Self` is built, so every fallible step from here
-        // on has to terminate the now-initialized display itself. They are all
-        // funnelled through `create_context` so there is exactly ONE such error
-        // path to get right, rather than one per `?`.
-        let context = match Self::create_context(&egl, display) {
-            Ok(context) => context,
-            Err(err) => {
-                let _ = egl.terminate(display);
-                return Err(err);
-            }
-        };
+        // log.info("EGL vendor={s}", .{display.queryString(.vendor) orelse "(unknown)"});
+        // log.info("EGL extensions={s}", .{display.queryString(.extensions) orelse "(unknown)"});
+        //   (OpenGL.zig:59-60)
+        {
+            let query = |name| {
+                egl.query_string(Some(display), name)
+                    .ok()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "(unknown)".to_owned())
+            };
+            log_info!("EGL vendor={}", query(egl::VENDOR));
+            log_info!("EGL extensions={}", query(egl::EXTENSIONS));
+        }
+
+        // P7-W7 T1 (DECISIONS B10): a failure from here on does NOT terminate the
+        // display. Ghostty's `OpenGL.init` never terminates it on any path
+        // (`OpenGL.zig:113-115`, "Do not destroy the EGL display here as it is
+        // shared across the entire process."); see `Drop`.
+        let context = Self::create_context(&egl, display)?;
+
+        // `pub fn getProcAddress(name)` (`egl.zig:20-22`) through glad's
+        // `load_EGL_MESA_image_dma_buf_export` (`glad_egl.c:34-37`).
+        //
+        // SAFETY (both transmutes): `eglGetProcAddress` returned these for exactly
+        // these names, and the fn types are the extension's C prototypes
+        // (`EGL_MESA_image_dma_buf_export`; `extern "system"` is the EGL ABI).
+        let export_dmabuf_query_mesa =
+            egl.get_proc_address("eglExportDMABUFImageQueryMESA")
+                .map(|f| unsafe {
+                    std::mem::transmute::<extern "system" fn(), ExportDmabufImageQueryMesaFn>(f)
+                });
+        let export_dmabuf_mesa = egl
+            .get_proc_address("eglExportDMABUFImageMESA")
+            .map(|f| unsafe {
+                std::mem::transmute::<extern "system" fn(), ExportDmabufImageMesaFn>(f)
+            });
 
         let this = Self {
             egl,
             display,
             context,
+            export_dmabuf_query_mesa,
+            export_dmabuf_mesa,
         };
 
         // NO_SURFACE draw/read: legal for a core context via EGL 1.5 /
-        // EGL_KHR_surfaceless_context. The offscreen path renders into an FBO it
-        // owns (Task 11), never into a window-system surface.
-        this.egl
-            .make_current(this.display, None, None, Some(this.context))?;
+        // EGL_KHR_surfaceless_context. The renderer renders into an FBO it owns,
+        // never into a window-system surface.
+        //
+        // display.makeCurrent(null, null, context) catch |err| {
+        //     log.warn("failed to make EGL context current err={}", .{err});
+        //     return err;
+        // };   (OpenGL.zig:95-98; the `errdefer context.destroy` is `this`'s Drop)
+        if let Err(err) = this
+            .egl
+            .make_current(this.display, None, None, Some(this.context))
+        {
+            log_warn!("failed to make EGL context current err={err:?}");
+            return Err(err.into());
+        }
 
         Ok(this)
     }
@@ -227,7 +291,13 @@ impl OffscreenContext {
         // the default bound API is EGL_OPENGL_ES_API.
         egl.bind_api(egl::OPENGL_API)?;
 
-        let config = Self::choose_config(egl, display)?;
+        // const config = egl.Config.choose(display, &.{ ... }) catch |err| {
+        //     log.warn("failed to choose config err={}", .{err});
+        //     return err;
+        // };   (OpenGL.zig:65-80)
+        let config = Self::choose_config(egl, display).inspect_err(|err| {
+            log_warn!("failed to choose config err={err:?}");
+        })?;
 
         let attributes = [
             egl::CONTEXT_MAJOR_VERSION,
@@ -239,13 +309,48 @@ impl OffscreenContext {
             egl::NONE,
         ];
 
-        Ok(egl.create_context(display, config, None, &attributes)?)
+        // const context = egl.Context.create(display, config, null, &.{ ... }) catch |err| {
+        //     log.warn("failed to create EGL context err={}", .{err});
+        //     return err;
+        // };   (OpenGL.zig:83-91)
+        egl.create_context(display, config, None, &attributes)
+            .map_err(|err| {
+                log_warn!("failed to create EGL context err={err:?}");
+                Error::from(err)
+            })
     }
 
-    /// Picks a pbuffer-capable `EGL_OPENGL_BIT` config.
+    /// Picks an `EGL_OPENGL_BIT` RGBA8 config, with no surface type required.
     ///
-    /// `EGL_SURFACE_TYPE = EGL_PBUFFER_BIT` is REQUIRED here, not decoration, and
-    /// is what the plan names. `eglChooseConfig` DEFAULTS `EGL_SURFACE_TYPE` to
+    /// PORTS (P7-W7 T1, DECISIONS B10): the `egl.Config.choose` attribute list of
+    /// ghostty's `OpenGL.init` (`OpenGL.zig:63-80`, from `ab34b8b13`):
+    ///
+    /// ```zig
+    /// // Choose a config. We need a config that is renderable with
+    /// // OpenGL and a RGBA8 color buffer.
+    /// const config = egl.Config.choose(display, &.{
+    ///     // EGL_SURFACE_TYPE defaults to EGL_WINDOW_BIT even though
+    ///     // we are rendering exclusively through surfaceless mode.
+    ///     // This is no problem on Mesa but we need to specify this
+    ///     // explicitly for proprietary Nvidia drivers.
+    ///     egl.c.EGL_SURFACE_TYPE,    0,
+    ///     egl.c.EGL_RENDERABLE_TYPE, egl.c.EGL_OPENGL_BIT,
+    ///     egl.c.EGL_RED_SIZE,        8,
+    ///     egl.c.EGL_GREEN_SIZE,      8,
+    ///     egl.c.EGL_BLUE_SIZE,       8,
+    ///     egl.c.EGL_ALPHA_SIZE,      8,
+    /// }) catch |err| { ... };
+    /// ```
+    ///
+    /// `EGL_SURFACE_TYPE = 0` requires no surface type bit at all, so every
+    /// `EGL_OPENGL_BIT` config matches whatever surfaces it can back. The port
+    /// previously asked for `EGL_PBUFFER_BIT`, which the measurement below shows
+    /// also works on Mesa; `0` is the end state because a driver need not
+    /// advertise pbuffers on a surfaceless display. The history is kept because
+    /// the table still explains why the attribute cannot be left out.
+    ///
+    /// HISTORY (`EGL_SURFACE_TYPE = EGL_PBUFFER_BIT`): the attribute is REQUIRED,
+    /// not decoration. `eglChooseConfig` DEFAULTS `EGL_SURFACE_TYPE` to
     /// `EGL_WINDOW_BIT` when it is left out (EGL 1.5 spec, table 3.4), so omitting
     /// it silently asks for a WINDOW-capable config on a WINDOWLESS platform and
     /// can only ever match zero configs.
@@ -268,25 +373,32 @@ impl OffscreenContext {
     ///
     /// PORT NOTE: the config selects the context's pixel format only — the context
     /// is made current with NO surface ([`Self::init`]), and the offscreen path
-    /// renders into an FBO whose format it chooses itself. A pbuffer is never
-    /// actually created; `PBUFFER_BIT` is simply the surface type that exists on a
-    /// windowless platform.
+    /// renders into an FBO whose format it chooses itself. No surface is ever
+    /// created.
     fn choose_config(
         egl: &egl::DynamicInstance<egl::EGL1_5>,
         display: egl::Display,
     ) -> Result<egl::Config, Error> {
         let attributes = [
+            egl::SURFACE_TYPE,
+            0,
             egl::RENDERABLE_TYPE,
             egl::OPENGL_BIT,
-            egl::SURFACE_TYPE,
-            egl::PBUFFER_BIT,
+            egl::RED_SIZE,
+            8,
+            egl::GREEN_SIZE,
+            8,
+            egl::BLUE_SIZE,
+            8,
+            egl::ALPHA_SIZE,
+            8,
             egl::NONE,
         ];
         egl.choose_first_config(display, &attributes)?
             .ok_or(Error::NoConfig)
     }
 
-    /// Resolves an OpenGL entry point, for [`gl::load_with`].
+    /// Resolves an OpenGL entry point, for [`glad::load`].
     ///
     /// `eglGetProcAddress` is the GTK/Wayland-era analogue of the
     /// `getProcAddress` argument the reference threads into `gl.glad.load`
@@ -297,71 +409,452 @@ impl OffscreenContext {
             None => std::ptr::null(),
         }
     }
+
+    /// Make the context current on the calling thread.
+    ///
+    /// PORTS: `egl.zig:106-113` `Display.makeCurrent(null, null, context)`, as
+    /// `OpenGL.threadEnter` calls it (`OpenGL.zig:224`).
+    pub fn make_current(&self) -> Result<(), EglError> {
+        self.egl
+            .make_current(self.display, None, None, Some(self.context))
+            .map_err(EglError::from)
+    }
+
+    /// Release whatever context is current on the calling thread.
+    ///
+    /// PORTS: `egl.zig:115-117` `Display.releaseCurrent`, as `OpenGL.threadExit`
+    /// calls it (`OpenGL.zig:233`). The reference discards the result.
+    pub fn release_current(&self) {
+        let _ = self.egl.make_current(self.display, None, None, None);
+    }
+
+    /// Queries `EGL_VENDOR` or `EGL_EXTENSIONS` on the display.
+    ///
+    /// PORTS: `egl.zig:98-104` `Display.queryString`.
+    pub fn query_string(&self, name: StringQuery) -> Option<String> {
+        let name = match name {
+            StringQuery::Vendor => egl::VENDOR,
+            StringQuery::Extensions => egl::EXTENSIONS,
+        };
+        self.egl
+            .query_string(Some(self.display), name)
+            .ok()
+            .map(|s| s.to_string_lossy().into_owned())
+    }
+
+    /// Whether the display offers `EGL_MESA_image_dma_buf_export` AND both of its
+    /// entry points resolved: the precondition of [`Image::export_dmabuf_query`]
+    /// and [`Image::export_dmabuf`]. RUSTTY-ONLY (the DMA-BUF KAT's skip probe).
+    pub fn has_dmabuf_export(&self) -> bool {
+        self.export_dmabuf_query_mesa.is_some()
+            && self.export_dmabuf_mesa.is_some()
+            && self
+                .query_string(StringQuery::Extensions)
+                .is_some_and(|exts| has_extension(&exts, "EGL_MESA_image_dma_buf_export"))
+    }
 }
 
 impl Drop for OffscreenContext {
     fn drop(&mut self) {
         // Release the context before destroying it: a context that is still
         // current is only marked for deletion by eglDestroyContext.
+        //
+        // The shape of `OpenGL.deinit` (`OpenGL.zig:109-117`):
+        //     self.egl_display.releaseCurrent();
+        //     self.egl_context.destroy(self.egl_display) catch {};
         let _ = self.egl.make_current(self.display, None, None, None);
         let _ = self.egl.destroy_context(self.display, self.context);
-        // CAVEAT for future callers (Task 11): `eglGetPlatformDisplay` returns the
-        // SAME EGLDisplay for the same platform+native-display, and eglTerminate
-        // marks EVERY resource on that display for deletion — it is not
-        // usefully refcounted against a second eglInitialize. So two live
-        // `OffscreenContext`s in one process share a display, and the first one
-        // dropped invalidates the other. Harmless today (exactly one exists, in
-        // one test), but a second concurrent context — e.g. the default-parallel
-        // Rust test harness running two GL tests as threads — must either share a
-        // single context or drop the terminate.
-        let _ = self.egl.terminate(self.display);
+
+        // The GL function table is NOT unloaded here, as the reference's
+        // `deinit` does not unload it: `glad.unload()` belongs to `threadExit`
+        // (`OpenGL.zig:234`, `OpenGL::thread_exit`), and this thread's table may
+        // have been loaded from another context.
+        //
+        // NOTE: the table's pointers resolve through `self.egl`'s dlopen'd
+        // libEGL, which is dlclosed when this drops, so a table left behind here
+        // can outlive the library it came from. Only tests reach that (the live
+        // path never drops an `OffscreenContext`): each test thread either calls
+        // `thread_exit` or makes no GL call after dropping its context, and
+        // libglvnd/Mesa stay mapped by the process in practice.
+
+        // // Do not destroy the EGL display here as
+        // // it is shared across the entire process.
+        // // It will get automatically torn down by the OS.
+        //
+        // P7-W7 T1 (DECISIONS B10): this used to call `eglTerminate`. The display
+        // `eglGetPlatformDisplay` returns is the SAME one for every caller in the
+        // process, and terminating it marks every resource on it for deletion, so
+        // one context's teardown invalidated every other context on the display
+        // (the hazard `gtk_first_light.rs` recorded when a separate context shared
+        // GDK's display). The reference never terminates; neither does this.
     }
+}
+
+/// `const StringQuery = enum(c.EGLint) { vendor, extensions }` (`egl.zig:98-101`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StringQuery {
+    /// `EGL_VENDOR`.
+    Vendor,
+    /// `EGL_EXTENSIONS`.
+    Extensions,
+}
+
+/// PORTS: `egl.zig:24-40` — the `Error` set every EGL wrapper returns.
+///
+/// PORT NOTE: `khronos-egl`'s `egl::Error` carries the same fourteen codes; this
+/// type adds the reference's `Unknown` (an EGL call failed and `eglGetError`
+/// reported `EGL_SUCCESS`, `egl.zig:63-66` `mustError`) and a Rust-only
+/// [`EglError::MissingEntryPoint`] for an extension entry point
+/// `eglGetProcAddress` did not resolve (glad would leave the pointer null and the
+/// call would jump through it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EglError {
+    NotInitialized,
+    BadAccess,
+    BadAlloc,
+    BadAttribute,
+    BadContext,
+    BadConfig,
+    BadCurrentSurface,
+    BadDisplay,
+    BadSurface,
+    BadMatch,
+    BadParameter,
+    BadNativePixmap,
+    BadNativeWindow,
+    ContextLost,
+    Unknown,
+    /// RUSTTY-ONLY; see the type docs.
+    MissingEntryPoint(&'static str),
+}
+
+impl From<egl::Error> for EglError {
+    /// PORTS: `egl.zig:42-61` `getError`'s switch.
+    fn from(err: egl::Error) -> Self {
+        match err {
+            egl::Error::NotInitialized => Self::NotInitialized,
+            egl::Error::BadAccess => Self::BadAccess,
+            egl::Error::BadAlloc => Self::BadAlloc,
+            egl::Error::BadAttribute => Self::BadAttribute,
+            egl::Error::BadContext => Self::BadContext,
+            egl::Error::BadConfig => Self::BadConfig,
+            egl::Error::BadCurrentSurface => Self::BadCurrentSurface,
+            egl::Error::BadDisplay => Self::BadDisplay,
+            egl::Error::BadSurface => Self::BadSurface,
+            egl::Error::BadMatch => Self::BadMatch,
+            egl::Error::BadParameter => Self::BadParameter,
+            egl::Error::BadNativePixmap => Self::BadNativePixmap,
+            egl::Error::BadNativeWindow => Self::BadNativeWindow,
+            egl::Error::ContextLost => Self::ContextLost,
+        }
+    }
+}
+
+impl fmt::Display for EglError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingEntryPoint(name) => write!(f, "EGL entry point {name} is unavailable"),
+            other => write!(f, "{other:?}"),
+        }
+    }
+}
+
+impl std::error::Error for EglError {}
+
+/// PORTS: `egl.zig:63-66`.
+///
+/// ```zig
+/// pub fn mustError() Error {
+///     try getError();
+///     return error.Unknown;
+/// }
+/// ```
+fn must_error(egl: &egl::DynamicInstance<egl::EGL1_5>) -> EglError {
+    egl.get_error().map_or(EglError::Unknown, EglError::from)
+}
+
+/// `PFNEGLEXPORTDMABUFIMAGEQUERYMESAPROC` (`EGL_MESA_image_dma_buf_export`).
+pub type ExportDmabufImageQueryMesaFn = unsafe extern "system" fn(
+    dpy: *mut c_void,
+    image: *mut c_void,
+    fourcc: *mut c_int,
+    num_planes: *mut c_int,
+    modifiers: *mut u64,
+) -> egl::Boolean;
+
+/// `PFNEGLEXPORTDMABUFIMAGEMESAPROC` (`EGL_MESA_image_dma_buf_export`).
+pub type ExportDmabufImageMesaFn = unsafe extern "system" fn(
+    dpy: *mut c_void,
+    image: *mut c_void,
+    fds: *mut c_int,
+    strides: *mut egl::Int,
+    offsets: *mut egl::Int,
+) -> egl::Boolean;
+
+/// The most planes an exported DMA-BUF can have: the extension's "<num_planes>
+/// must be at most 4", which is also `Dmabuf.max_planes` (asserted equal below
+/// wherever `crate::dmabuf` exists; this module also builds for Windows).
+pub const MAX_DMABUF_PLANES: usize = 4;
+
+#[cfg(unix)]
+const _: () = assert!(MAX_DMABUF_PLANES == crate::dmabuf::MAX_PLANES);
+
+/// PORTS: `egl.zig:267-271`.
+///
+/// ```zig
+/// pub const DmabufQuery = struct {
+///     fourcc: c_int,
+///     num_planes: c_int,
+///     modifier: u64,
+/// };
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DmabufQuery {
+    pub fourcc: c_int,
+    pub num_planes: c_int,
+    pub modifier: u64,
+}
+
+/// PORTS: `egl.zig:250-265` — `pub const ImageTarget = union(ImageTarget.Tag)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImageTarget {
+    /// OpenGL 2D Texture with the given name.
+    Texture2d(u32),
+    // Many other variants, add when needed
+}
+
+impl ImageTarget {
+    /// `pub const Tag = enum(c.EGLenum) { texture_2d = c.EGL_GL_TEXTURE_2D }`.
+    fn tag(self) -> egl::Enum {
+        match self {
+            Self::Texture2d(_) => egl::GL_TEXTURE_2D as egl::Enum,
+        }
+    }
+
+    /// PORTS: `egl.zig:259-264` `toClientBuffer`.
+    fn to_client_buffer(self) -> egl::ClientBuffer {
+        match self {
+            // Yes this really is that cursed
+            //
+            // SAFETY: for `EGL_GL_TEXTURE_2D` the "client buffer" IS the GL texture
+            // name, passed as a pointer-sized integer (EGL_KHR_gl_texture_2D_image);
+            // EGL never dereferences it.
+            Self::Texture2d(v) => unsafe {
+                egl::ClientBuffer::from_ptr(v as usize as egl::EGLClientBuffer)
+            },
+        }
+    }
+}
+
+/// An `EGLImage`.
+///
+/// PORTS: `egl.zig:194-248` — `pub const Image = opaque { … }`.
+///
+/// PORT NOTE: the reference passes `display: *Display` to each method. The Rust
+/// `khronos-egl` calls also need the dlopen'd instance, and the MESA entry points
+/// are resolved per context, so the methods take the [`OffscreenContext`] that
+/// owns all three.
+#[derive(Debug)]
+pub struct Image(egl::Image);
+
+impl Image {
+    /// PORTS: `egl.zig:195-210`.
+    ///
+    /// ```zig
+    /// pub fn create(
+    ///     display: *Display,
+    ///     context: ?*Context,
+    ///     target: ImageTarget,
+    ///     attrs: ?[:c.EGL_NONE]const c.EGLAttrib,
+    /// ) Error!*Image {
+    ///     const image = c.eglCreateImage(
+    ///         display,
+    ///         context,
+    ///         @intFromEnum(target),
+    ///         target.toClientBuffer(),
+    ///         if (attrs) |a| a.ptr else null,
+    ///     ) orelse return mustError();
+    ///
+    ///     return @ptrCast(image);
+    /// }
+    /// ```
+    ///
+    /// PORT NOTE (`attrs`): `khronos-egl` requires the list to END with
+    /// `EGL_NONE`, which the reference's sentinel-terminated slice also
+    /// guarantees; pass `&[egl::ATTRIB_NONE]` for the reference's `&.{}`.
+    pub fn create(
+        ctx: &OffscreenContext,
+        target: ImageTarget,
+        attrs: &[egl::Attrib],
+    ) -> Result<Image, EglError> {
+        ctx.egl
+            .create_image(
+                ctx.display,
+                ctx.context,
+                target.tag(),
+                target.to_client_buffer(),
+                attrs,
+            )
+            .map(Image)
+            .map_err(EglError::from)
+    }
+
+    /// PORTS: `egl.zig:212-216`.
+    ///
+    /// ```zig
+    /// pub fn destroy(self: *Image, display: *Display) Error!void {
+    ///     if (c.eglDestroyImage(display, self) != c.EGL_TRUE) {
+    ///         return mustError();
+    ///     }
+    /// }
+    /// ```
+    pub fn destroy(self, ctx: &OffscreenContext) -> Result<(), EglError> {
+        ctx.egl
+            .destroy_image(ctx.display, self.0)
+            .map_err(EglError::from)
+    }
+
+    /// PORTS: `egl.zig:218-230`.
+    ///
+    /// ```zig
+    /// pub fn exportDmabufQuery(self: *Image, display: *Display) Error!DmabufQuery {
+    ///     var query: DmabufQuery = undefined;
+    ///     if (c.eglExportDMABUFImageQueryMESA(
+    ///         display,
+    ///         self,
+    ///         &query.fourcc,
+    ///         &query.num_planes,
+    ///         &query.modifier,
+    ///     ) != c.EGL_TRUE) {
+    ///         return mustError();
+    ///     }
+    ///     return query;
+    /// }
+    /// ```
+    ///
+    /// R13 FIX: see [`export_dmabuf_query_with`] — the reference hands the driver
+    /// ONE `u64` for `modifiers`, which the extension defines as "an array of at
+    /// least <num_planes> elements".
+    pub fn export_dmabuf_query(&self, ctx: &OffscreenContext) -> Result<DmabufQuery, EglError> {
+        let f = ctx
+            .export_dmabuf_query_mesa
+            .ok_or(EglError::MissingEntryPoint("eglExportDMABUFImageQueryMESA"))?;
+        export_dmabuf_query_with(f, ctx.display.as_ptr(), self.0.as_ptr())
+            .map_err(|()| must_error(&ctx.egl))
+    }
+
+    /// PORTS: `egl.zig:231-247`.
+    ///
+    /// ```zig
+    /// pub fn exportDmabuf(
+    ///     self: *Image,
+    ///     display: *Display,
+    ///     fds: []c_int,
+    ///     strides: []c_int,
+    ///     offsets: []c_int,
+    /// ) Error!void {
+    ///     if (c.eglExportDMABUFImageMESA(
+    ///         display,
+    ///         self,
+    ///         fds.ptr,
+    ///         strides.ptr,
+    ///         offsets.ptr,
+    ///     ) != c.EGL_TRUE) {
+    ///         return mustError();
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// PORT NOTE (slices → arrays): the extension writes one entry per plane and
+    /// "<num_planes> must be at most 4", so the arrays are fixed at
+    /// [`MAX_DMABUF_PLANES`] rather than trusting a slice length the C side never
+    /// sees. The reference's only caller passes its 4-element `Planes` arrays.
+    pub fn export_dmabuf(
+        &self,
+        ctx: &OffscreenContext,
+        fds: &mut [c_int; MAX_DMABUF_PLANES],
+        strides: &mut [c_int; MAX_DMABUF_PLANES],
+        offsets: &mut [c_int; MAX_DMABUF_PLANES],
+    ) -> Result<(), EglError> {
+        let f = ctx
+            .export_dmabuf_mesa
+            .ok_or(EglError::MissingEntryPoint("eglExportDMABUFImageMESA"))?;
+        // SAFETY: `f` is the resolved `eglExportDMABUFImageMESA`; the display and
+        // image are live; each out-array holds the extension's maximum of 4
+        // entries.
+        let ok = unsafe {
+            f(
+                ctx.display.as_ptr(),
+                self.0.as_ptr(),
+                fds.as_mut_ptr(),
+                strides.as_mut_ptr(),
+                offsets.as_mut_ptr(),
+            )
+        };
+        if ok != egl::TRUE {
+            return Err(must_error(&ctx.egl));
+        }
+        Ok(())
+    }
+}
+
+/// The body of [`Image::export_dmabuf_query`] over an explicit entry point, so the
+/// modifier-array fix is testable without a driver. `Err(())` means the call
+/// returned `EGL_FALSE`; the caller turns that into `mustError`.
+///
+/// R13 FIX (`.port/parity-closure/UPSTREAM-DEFECTS.md` UD355): the reference
+/// passes `&query.modifier`, the address of ONE `u64`, as `modifiers`.
+/// `EGL_MESA_image_dma_buf_export` says "<modifiers> must be an array of at least
+/// <num_planes> elements", and `<num_planes>` may be up to 4 — so for a 2-, 3- or
+/// 4-plane export (a compressed or multi-plane layout the driver chose) the driver
+/// writes 8, 16 or 24 bytes past the end of the reference's stack struct. Here the
+/// driver writes into a [`MAX_DMABUF_PLANES`]-element array, and the query keeps
+/// the first element (the extension requires every element to hold the same
+/// value). No bound is checked before the call: the extension caps
+/// `<num_planes>` at 4, and a larger or smaller count is still rejected after it
+/// by `Target::export_dmabuf`, as in the reference.
+pub(crate) fn export_dmabuf_query_with(
+    f: ExportDmabufImageQueryMesaFn,
+    display: *mut c_void,
+    image: *mut c_void,
+) -> Result<DmabufQuery, ()> {
+    let mut fourcc: c_int = 0;
+    let mut num_planes: c_int = 0;
+    let mut modifiers = [0u64; MAX_DMABUF_PLANES];
+    // SAFETY: `f` is the resolved `eglExportDMABUFImageQueryMESA` (or a test
+    // double with its signature); `fourcc`/`num_planes` are single live ints and
+    // `modifiers` holds the extension's maximum of 4 planes.
+    let ok = unsafe {
+        f(
+            display,
+            image,
+            &mut fourcc,
+            &mut num_planes,
+            modifiers.as_mut_ptr(),
+        )
+    };
+    if ok != egl::TRUE {
+        return Err(());
+    }
+    Ok(DmabufQuery {
+        fourcc,
+        num_planes,
+        modifier: modifiers[0],
+    })
 }
 
 /// Loads the GL entry points from `ctx` and applies the reference's version gate
 /// and debug-output setup. Returns the loaded `(major, minor)`.
 ///
-/// This is the [`OffscreenContext`] flavour of [`prepare_context`], i.e. the
-/// `gl::load_with(|s| egl.get_proc_address(s))` binding of the reference's
-/// `getProcAddress` parameter (`OpenGL.zig:133`). Ghostty's own GTK arm passes
-/// `null` instead (`OpenGL.zig:170`) because GDK has already made a context
-/// current; Task 8 binds that arm to [`prepare_context`] directly.
+/// This is `threadEnter`'s `try prepareContext(&gl.egl.getProcAddress)`
+/// (`OpenGL.zig:226`): the reference's `getProcAddress` parameter bound to the
+/// context's own `eglGetProcAddress`.
+///
+/// P7-W7 T2: the pin's other binding, the GTK arm's `prepareContext(null)` over
+/// GDK's current GLArea context (`surfaceInit`/`displayRealized`, the port's
+/// `prepare_context_windowed`), is gone with the GLArea (`2f0b65346`).
 pub fn load_gl(ctx: &OffscreenContext) -> Result<(u32, u32), Error> {
     prepare_context(|symbol| ctx.get_proc_address(symbol))
-}
-
-/// GL-ATTACH — the WINDOWED flavour of [`prepare_context`], i.e. the reference's
-/// `apprt.gtk => try prepareContext(null)` arm (`OpenGL.zig:169-170`, reached from
-/// `surfaceInit`/`displayRealized`). Ghostty passes `null` because GDK has already
-/// made its GLArea context CURRENT before this runs; glad then loads GL from the
-/// platform's default loader against that current context. The Rust `gl` crate has
-/// no null-loader equivalent, so we bind `getProcAddress` to `eglGetProcAddress`,
-/// which — per EGL 1.5, and as libglvnd guarantees — resolves the (vendor-neutral)
-/// GL dispatch entry points that route to whatever context is current on the
-/// calling thread. It creates NO display and NO context (GDK owns those); it only
-/// dlopen's `libEGL.so.1` for its `eglGetProcAddress`.
-///
-/// The `DynamicInstance` is leaked (`Box::leak`) so `libEGL.so.1` stays mapped for
-/// the process lifetime — the loaded GL pointers live in libglvnd's dispatch (kept
-/// alive by GDK) but keeping libEGL resident is the belt-and-braces cheap option
-/// (one small one-time leak, mirroring how the process-global `gl::load_with`
-/// statics are themselves never torn down).
-///
-/// # Errors
-/// [`Error::EglUnavailable`] if `libEGL.so.1` cannot be loaded, or any
-/// [`prepare_context`] error (version-gate / GL failure) against the current
-/// context.
-pub fn prepare_context_windowed() -> Result<(u32, u32), Error> {
-    // SAFETY: `load_required` dlopen's libEGL.so.1 and resolves the core entry
-    // points; unsafe only because it trusts the shared object to be EGL.
-    let egl = unsafe { egl::DynamicInstance::<egl::EGL1_5>::load_required() }
-        .map_err(|err| Error::EglUnavailable(err.to_string()))?;
-    let egl: &'static egl::DynamicInstance<egl::EGL1_5> = Box::leak(Box::new(egl));
-
-    prepare_context(|symbol| match egl.get_proc_address(symbol) {
-        Some(f) => f as *const c_void,
-        None => std::ptr::null(),
-    })
 }
 
 /// Prepares the provided GL context, loading it with the `gl` bindings.
@@ -384,18 +877,38 @@ pub fn prepare_context(
     // const minor = gl.glad.versionMinor(@intCast(version));
     //
     // PORT NOTE: glad's loader RETURNS the version it detected, so the reference
-    // gets `major`/`minor` straight out of `load`. The `gl` crate's `load_with`
-    // returns `()`, so the version is queried separately, immediately after.
-    gl::load_with(get_proc_address);
-    let (major, minor) = gl_version()?;
+    // gets `major`/`minor` straight out of `load`. `glad::load` (the generated
+    // struct's `load_with`) returns `()`, so the version is queried separately,
+    // immediately after.
+    //
+    // P7-W7 T1 (DECISIONS B9): this fills the CALLING thread's table, as glad's
+    // `threadlocal var context` is filled, instead of the `gl` crate's
+    // process-global one.
+    let previous = glad::load_replacing(get_proc_address);
 
     // errdefer gl.glad.unload();
     //
-    // PORT NOTE: no analogue. `gladLoaderUnloadGLContext` frees the glad context
-    // struct ghostty owns; the `gl` crate's entry points are process-global
-    // statics with no teardown, and re-running `load_with` simply overwrites
-    // them. Nothing to unload, so nothing leaks by not unloading.
+    // PORT NOTE (restore, not unload): the reference drops the thread's table on
+    // any error after the load. On the pin's GTK path every surface, and the
+    // inspector's widget, draw through the MAIN thread's one table, which each
+    // surface's `surfaceInit`/`displayRealized` reloads; unloading it there would
+    // make one surface's failed prep panic every other live surface on its next
+    // draw (the reference: a call through an `undefined` context). So a failure
+    // restores the table this thread had before the load: `None` on a fresh
+    // render thread (exactly the reference's unload), the other surfaces' table on
+    // the GTK main thread. It also covers a failed version read, which the
+    // reference's `errdefer` (placed after it) does not, for the same reason.
+    let prepared = gl_version().and_then(|(major, minor)| prepare_loaded_context(major, minor));
+    if prepared.is_err() {
+        glad::restore(previous);
+    }
+    prepared
+}
 
+/// The part of [`prepare_context`] after the version read, split out so that each
+/// of its error paths runs the reference's `errdefer gl.glad.unload();` (a
+/// restore, see there) in the caller.
+fn prepare_loaded_context(major: u32, minor: u32) -> Result<(u32, u32), Error> {
     // log.info("loaded OpenGL {}.{}", .{ major, minor });
     log_info!("loaded OpenGL {major}.{minor}");
 
@@ -436,12 +949,14 @@ pub fn prepare_context(
     // core 4.3 guarantees). The offscreen tests must never panic on a hostile
     // driver — the plan's clean-skip rule — so the missing slot is an `Err`
     // here instead. Unreachable on any conformant 4.3 context either way.
-    if !gl::DebugMessageCallback::is_loaded() {
+    if !glad::context(|gl| gl.DebugMessageCallback.is_loaded()) {
         return Err(Error::MissingGlEntryPoint("glDebugMessageCallback"));
     }
     // SAFETY: the callback is an `extern "system"` fn with the GLDEBUGPROC
     // signature and a null user_param, which it ignores.
-    unsafe { gl::DebugMessageCallback(Some(gl_debug_message_callback), std::ptr::null()) };
+    glad::context(|gl| unsafe {
+        gl.DebugMessageCallback(Some(gl_debug_message_callback), std::ptr::null())
+    });
 
     // Enable SRGB framebuffer for linear blending support.
     // try gl.enable(gl.c.GL_FRAMEBUFFER_SRGB);
@@ -483,12 +998,12 @@ fn gl_version() -> Result<(u32, u32), Error> {
     // A driver too broken to even resolve glGetString would make the `gl`
     // crate's missing-entry-point stub PANIC; the plan's clean-skip rule forbids
     // that, so the slot is checked before the call.
-    if !gl::GetString::is_loaded() {
+    if !glad::context(|gl| gl.GetString.is_loaded()) {
         return Err(Error::VersionUnavailable);
     }
     // SAFETY: `GetString` was just confirmed loaded, and `GL_VERSION` returns a
     // static, NUL-terminated string owned by the driver for the context's life.
-    let version = unsafe { gl::GetString(gl::VERSION) };
+    let version = glad::context(|gl| unsafe { gl.GetString(gl::VERSION) });
     if version.is_null() {
         return Err(Error::VersionUnavailable);
     }
@@ -588,10 +1103,10 @@ extern "system" fn gl_debug_message_callback(
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support;
+    use super::super::{draw, errors, glad, test_support};
     use super::{
-        has_extension, load_gl, parse_gl_version, version_is_outdated, Error, OffscreenContext,
-        MIN_VERSION_MAJOR, MIN_VERSION_MINOR,
+        has_extension, load_gl, parse_gl_version, prepare_context, version_is_outdated, Error,
+        OffscreenContext, MIN_VERSION_MAJOR, MIN_VERSION_MINOR,
     };
 
     /// Proves a headless GL [`MIN_VERSION_MAJOR`].[`MIN_VERSION_MINOR`] core
@@ -633,14 +1148,10 @@ mod tests {
     /// not lift that ceiling; a different driver is what lifts it.
     #[test]
     fn offscreen_egl_context_reaches_gl43_core() {
-        // The [`Drop`] CAVEAT above is no longer hypothetical: Task 2 added a
-        // SECOND GL test (`opengl::gl::tests::gl_buffer_vertex_array_smoke`), and
-        // the Rust harness runs tests as parallel threads — so two
-        // `OffscreenContext`s would share one `EGLDisplay` and the first drop
-        // would `eglTerminate` it out from under the other. Every GL test in this
-        // crate holds this lock for its context's whole lifetime; see
-        // `test_support::gl_lock` for the full rationale (it also covers
-        // `gl::load_with`'s process-global statics).
+        // Every GL test in this crate holds this lock for its context's whole
+        // lifetime; see `test_support::gl_lock` for the rationale (P7-W7 T1 removed
+        // the two hazards it was introduced for, `eglTerminate` on the shared
+        // display and the process-global `gl::load_with` table).
         //
         // This test takes the lock DIRECTLY instead of going through
         // `test_support::offscreen_gl` because it asserts on WHICH `load_gl`
@@ -755,5 +1266,172 @@ mod tests {
         // A prefix of a present extension must NOT match.
         assert!(!has_extension(exts, "EGL_KHR_no_config"));
         assert!(!has_extension(exts, "EGL_KHR_platform_gbm"));
+    }
+
+    /// The modifier every plane of the test double's export reports.
+    const MODIFIER: u64 = 0x0100_0000_0000_0005;
+    /// A value no write of the double produces, for the guard word.
+    const CANARY: u64 = 0xDEAD_BEEF_DEAD_BEEF;
+
+    /// A spec-conforming `eglExportDMABUFImageQueryMESA` for a 2-plane image:
+    /// `<modifiers> must be an array of at least <num_planes> elements` and
+    /// every element holds the same value, so it writes `modifiers[0..2]`.
+    unsafe extern "system" fn two_plane_query(
+        _dpy: *mut std::ffi::c_void,
+        _image: *mut std::ffi::c_void,
+        fourcc: *mut std::ffi::c_int,
+        num_planes: *mut std::ffi::c_int,
+        modifiers: *mut u64,
+    ) -> khronos_egl::Boolean {
+        // SAFETY: the extension's contract, which the caller must honour.
+        unsafe {
+            *fourcc = i32::from_le_bytes(*b"AB24");
+            *num_planes = 2;
+            for i in 0..2 {
+                *modifiers.add(i) = MODIFIER;
+            }
+        }
+        khronos_egl::TRUE
+    }
+
+    /// UD355 fail-first, on the reference's call shape: `exportDmabufQuery`
+    /// passes `&query.modifier`, ONE `u64`. A conforming driver exporting two
+    /// planes writes the second modifier into whatever follows it. The guard word
+    /// after the slot is in the same allocation here (so the demonstration is
+    /// defined behaviour); in the reference it is whatever sits after the
+    /// `DmabufQuery` on the stack.
+    #[test]
+    fn dmabuf_query_single_modifier_slot_is_overrun_by_a_two_plane_export() {
+        #[repr(C)]
+        struct UpstreamSlot {
+            modifier: u64,
+            after: u64,
+        }
+        let mut slot = UpstreamSlot {
+            modifier: 0,
+            after: CANARY,
+        };
+        let (mut fourcc, mut num_planes) = (0, 0);
+        // SAFETY: the pointer covers the whole struct, so the double's second
+        // write lands in `after`, inside the allocation.
+        let ok = unsafe {
+            two_plane_query(
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut fourcc,
+                &mut num_planes,
+                (&raw mut slot).cast::<u64>(),
+            )
+        };
+        assert_eq!(ok, khronos_egl::TRUE);
+        assert_eq!(slot.modifier, MODIFIER);
+        assert_eq!(
+            slot.after, MODIFIER,
+            "the second plane's modifier landed past the single slot"
+        );
+    }
+
+    /// Fix round 1: a prep that fails AFTER the load must leave the thread's
+    /// previous table in place (the GTK main thread shares one table between all
+    /// surfaces and the inspector). Loads a good table, then runs
+    /// `prepare_context` with a loader that withholds `glDebugMessageCallback`
+    /// (the `MissingGlEntryPoint` arm, after the version read), then makes GL
+    /// calls on the same thread through the table that must still be there.
+    #[test]
+    fn failed_prepare_context_restores_the_previous_table() {
+        let _gl_lock = test_support::gl_lock();
+        let ctx = match OffscreenContext::init() {
+            Ok(ctx) => ctx,
+            Err(err) => {
+                test_support::require_gl_or_skip(
+                    "failed_prepare_context_restores_the_previous_table",
+                    &err,
+                );
+                eprintln!(
+                    "no headless OpenGL context ({err}); skipping \
+                     failed_prepare_context_restores_the_previous_table"
+                );
+                return;
+            }
+        };
+        if let Err(err) = load_gl(&ctx) {
+            test_support::require_gl_or_skip(
+                "failed_prepare_context_restores_the_previous_table",
+                &err,
+            );
+            eprintln!(
+                "no GL 4.3 ({err}); skipping failed_prepare_context_restores_the_previous_table"
+            );
+            return;
+        }
+        let good: *const glad::Context = glad::context(|gl| gl as *const _);
+
+        let res = prepare_context(|symbol| {
+            // `Fallbacks::All` also tries the ARB/KHR names, so withhold them all.
+            if symbol.starts_with("glDebugMessageCallback") {
+                std::ptr::null()
+            } else {
+                ctx.get_proc_address(symbol)
+            }
+        });
+        assert!(
+            matches!(
+                res,
+                Err(Error::MissingGlEntryPoint("glDebugMessageCallback"))
+            ),
+            "expected the injected failure, got {res:?}"
+        );
+
+        // The table is the one that was there before, and it draws.
+        assert!(glad::is_loaded(), "a failed prep unloaded the shared table");
+        let after: *const glad::Context = glad::context(|gl| gl as *const _);
+        assert_eq!(good, after, "a failed prep must restore the previous table");
+        let _ = errors::get_error(); // drain anything the failed prep left pending
+        draw::clear_color(0.0, 0.0, 0.0, 1.0);
+        draw::enable(gl::BLEND).expect("a GL call after the failed prep");
+        draw::disable(gl::BLEND).expect("a GL call after the failed prep");
+        assert!(glad::context(|gl| gl.DebugMessageCallback.is_loaded()));
+
+        glad::unload();
+        drop(ctx);
+    }
+
+    /// UD355, the port: the query hands the driver room for every plane the
+    /// extension allows, and reports the (shared) modifier.
+    #[test]
+    fn dmabuf_query_gives_the_driver_a_modifier_slot_per_plane() {
+        let query = super::export_dmabuf_query_with(
+            two_plane_query,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+        .expect("the double returns EGL_TRUE");
+        assert_eq!(
+            query,
+            super::DmabufQuery {
+                fourcc: i32::from_le_bytes(*b"AB24"),
+                num_planes: 2,
+                modifier: MODIFIER,
+            }
+        );
+    }
+
+    /// `EGL_FALSE` is reported as `Err(())`, which the wrapper turns into
+    /// `mustError`.
+    #[test]
+    fn dmabuf_query_reports_egl_false() {
+        unsafe extern "system" fn failing(
+            _: *mut std::ffi::c_void,
+            _: *mut std::ffi::c_void,
+            _: *mut std::ffi::c_int,
+            _: *mut std::ffi::c_int,
+            _: *mut u64,
+        ) -> khronos_egl::Boolean {
+            khronos_egl::FALSE
+        }
+        assert_eq!(
+            super::export_dmabuf_query_with(failing, std::ptr::null_mut(), std::ptr::null_mut()),
+            Err(())
+        );
     }
 }

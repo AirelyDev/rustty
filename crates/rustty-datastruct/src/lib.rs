@@ -1,9 +1,10 @@
 //! rustty-datastruct
 //!
 //! PORTS: ghostty src/datastruct/ (blocking_queue, cache_table, circ_buf,
-//! comparison, intrusive_linked_list, limited_allocator, main, message_data,
-//! split_tree, untouched_pool, wasm_page_pool), plus `array_list` (the
-//! port's one `std.ArrayListUnmanaged` for `Copy` elements).
+//! comparison, comptime_int_set, intrusive_linked_list, limited_allocator,
+//! main, message_data, split_tree, untouched_pool, wasm_page_pool), plus
+//! `array_list` (the port's one `std.ArrayListUnmanaged` for `Copy`
+//! elements).
 //!
 //! PORT STATUS: done
 //!
@@ -19,6 +20,7 @@ pub mod blocking_queue;
 pub mod cache_table;
 pub mod circ_buf;
 pub mod comparison;
+pub mod comptime_int_set;
 pub mod f16;
 pub mod intrusive_linked_list;
 pub mod limited_allocator;
@@ -33,6 +35,7 @@ pub mod wasm_page_pool;
 //   pub const BlockingQueue = blocking_queue.BlockingQueue;
 //   pub const CacheTable = cache_table.CacheTable;
 //   pub const CircBuf = circ_buf.CircBuf;
+//   pub const ComptimeIntSet = @import("comptime_int_set.zig").ComptimeIntSet;
 //   pub const IntrusiveDoublyLinkedList = intrusive_linked_list.DoublyLinkedList;
 //   pub const LimitedAllocator = @import("limited_allocator.zig").LimitedAllocator;
 //   pub const MessageData = @import("message_data.zig").MessageData;
@@ -42,6 +45,7 @@ pub mod wasm_page_pool;
 pub use blocking_queue::BlockingQueue;
 pub use cache_table::CacheTable;
 pub use circ_buf::CircBuf;
+pub use comptime_int_set::ComptimeIntSet;
 pub use intrusive_linked_list::DoublyLinkedList as IntrusiveDoublyLinkedList;
 pub use limited_allocator::LimitedAllocator;
 pub use message_data::MessageData;

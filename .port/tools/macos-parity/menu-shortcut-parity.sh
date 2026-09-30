@@ -60,7 +60,7 @@ clang -arch arm64 -I "$GHOSTTY_ROOT/include" "$HERE/ghostty_trigger_oracle.c" "$
 # --- rustty oracle ---
 R_XCF="$RUSTTY_ROOT/macos/RusttyKit.xcframework/macos-arm64_x86_64"
 [ -f "$R_XCF/libRusttyKit.a" ] || fail "missing rustty lib $R_XCF/libRusttyKit.a (build RusttyKit first)"
-clang -arch arm64 -I "$R_XCF/Headers" "$HERE/rustty_trigger_oracle.c" "$R_XCF/libRusttyKit.a" \
+clang -arch arm64 -Wl,-dead_strip -I "$R_XCF/Headers" "$HERE/rustty_trigger_oracle.c" "$R_XCF/libRusttyKit.a" \
   "${FW[@]}" ${INTL_DIR:+-L"$INTL_DIR" -lintl} -lc++ -lz -o "$OUT/r_oracle" || fail "rustty oracle link failed"
 "$OUT/r_oracle" > "$OUT/r.txt" || fail "rustty oracle CRASHED (exit $?) — likely a config_trigger C-ABI mismatch (see MACOS_UI_PARITY_GAPS.md)"
 

@@ -1,9 +1,10 @@
 //! GLYPH-DUMP — a validation harness (NOT a CI KAT). Clones the `gtk_first_light`
 //! setup but writes some visible text into the live shell, lets the renderer draw the
-//! grid, then reads GDK's GLArea framebuffer back and dumps it to a PPM (path from the
-//! `RUSTTY_DUMP_PPM` env var). This exists to get a GPU-accurate screenshot of rustty's
-//! REAL rendered output on machines where the compositor screenshot path cannot read a
-//! GTK4 GLArea (e.g. `import`/XGetImage under XWayland captures the GLArea blank).
+//! grid, then downloads the `GdkTexture` the `RenderSurface` built from the renderer's
+//! exported frame and dumps it to a PPM (path from the `RUSTTY_DUMP_PPM` env var). This
+//! exists to get a GPU-accurate image of rustty's REAL rendered output without a
+//! compositor screenshot. (P7-W7 T2, `2f0b65346`: it read GDK's GLArea framebuffer
+//! back before the GLArea was replaced.)
 //!
 //! Run:  RUSTTY_DUMP_PPM=/path/out.ppm \
 //!         cargo test -p rustty-apprt --features gtk --test gtk_glyph_dump -- --ignored --exact glyph_dump
@@ -12,10 +13,8 @@
 #![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]
 #![allow(non_snake_case)]
 
-use std::cell::{Cell, RefCell};
 use std::io::Write as _;
 use std::os::fd::{FromRawFd as _, RawFd};
-use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use allocator_api2::alloc::Global;
@@ -29,35 +28,11 @@ use rustty_apprt::gtk::{self, register_resources};
 use rustty_config::command::Command;
 use rustty_core::app::App as CoreApp;
 
+#[path = "common/gtk_live.rs"]
+mod gtk_live;
+
 /// The marker the live `/bin/sh` echoes back through the pty into the `Screen`.
 const NEEDLE: &[u8] = b"RUSTTY-GLYPH-DUMP-OK";
-
-#[derive(Default)]
-struct Dump {
-    captured: Cell<bool>,
-    core_present: Cell<bool>,
-    draw_ok: Cell<bool>,
-    draw_err: RefCell<Option<String>>,
-    pixels_len: Cell<usize>,
-    pixels_nonzero: Cell<usize>,
-    /// The raw RGBA readback (bottom-up, as glReadPixels returns it).
-    rgba: RefCell<Vec<u8>>,
-    dims: Cell<(usize, usize)>,
-}
-
-fn find_gl_area(widget: &gtk4::Widget) -> Option<gtk4::GLArea> {
-    if let Some(area) = widget.downcast_ref::<gtk4::GLArea>() {
-        return Some(area.clone());
-    }
-    let mut child = widget.first_child();
-    while let Some(c) = child {
-        if let Some(found) = find_gl_area(&c) {
-            return Some(found);
-        }
-        child = c.next_sibling();
-    }
-    None
-}
 
 unsafe fn screen_dump(core: *mut CoreSurface) -> Vec<u8> {
     unsafe {
@@ -79,42 +54,6 @@ unsafe fn pty_master(core: *mut CoreSurface) -> RawFd {
             exec.subprocess.pty.as_ref().expect("pty started").master
         }
     }
-}
-
-unsafe fn draw_present_read_glarea_fb(core: *mut CoreSurface, out: &Dump) {
-    unsafe {
-        let draw = rustty_core::renderer_seam::Renderer::drawFrame(&raw mut (*core).renderer, true);
-        out.draw_ok.set(draw.is_ok());
-        *out.draw_err.borrow_mut() = draw.err().map(|e| format!("{e:?}"));
-
-        let renderer = &(*core).renderer.0;
-        let w = renderer.size.screen.width as usize;
-        let h = renderer.size.screen.height as usize;
-        if w > 0 && h > 0 {
-            let px = renderer.api.read_bound_framebuffer_rgba(w, h);
-            out.pixels_len.set(px.len());
-            out.pixels_nonzero
-                .set(px.iter().filter(|&&b| b != 0).count());
-            out.dims.set((w, h));
-            *out.rgba.borrow_mut() = px;
-        }
-    }
-}
-
-/// Write the captured RGBA (bottom-up) to a top-down binary PPM (P6, RGB).
-fn write_ppm(path: &str, rgba: &[u8], w: usize, h: usize) {
-    let mut buf = Vec::with_capacity(w * h * 3 + 32);
-    buf.extend_from_slice(format!("P6\n{w} {h}\n255\n").as_bytes());
-    // glReadPixels returns rows bottom-to-top; flip to top-down for a normal image.
-    for y in (0..h).rev() {
-        let row = &rgba[y * w * 4..(y + 1) * w * 4];
-        for x in 0..w {
-            buf.push(row[x * 4]);
-            buf.push(row[x * 4 + 1]);
-            buf.push(row[x * 4 + 2]);
-        }
-    }
-    std::fs::write(path, buf).expect("write PPM dump");
 }
 
 #[test]
@@ -158,39 +97,26 @@ fn glyph_dump() {
     window.set_default_size(800, 480);
     window.set_content(Some(&surface));
 
-    let outcome = Rc::new(Dump::default());
-    let gl_area = find_gl_area(surface.upcast_ref::<gtk4::Widget>())
-        .expect("the surface template contains a GLArea");
+    let render_surface = gtk_live::find_render_surface(surface.upcast_ref::<gtk4::Widget>())
+        .expect("the surface template contains a RenderSurface");
 
     window.present();
 
     let ctx = glib::MainContext::default();
     let keepalive =
         glib::timeout_add_local(Duration::from_millis(50), || glib::ControlFlow::Continue);
-    let render_pump = {
-        let gl_area_weak = gl_area.downgrade();
-        glib::timeout_add_local(Duration::from_millis(30), move || {
-            match gl_area_weak.upgrade() {
-                Some(area) => {
-                    area.queue_render();
-                    glib::ControlFlow::Continue
-                }
-                None => glib::ControlFlow::Break,
-            }
-        })
-    };
 
     // Pump until the lazy core surface exists.
     let deadline = Instant::now() + Duration::from_secs(30);
     while surface.core().is_none() {
-        ctx.iteration(true);
+        gtk_live::iterate(&ctx, core_ptr, &app);
         if Instant::now() > deadline {
             break;
         }
     }
     let core = surface
         .core()
-        .expect("core surface built on first GLArea resize");
+        .expect("core surface built on first RenderSurface resize");
 
     // ---- Write visible text into the live shell FIRST, so the captured frame shows
     //      real rendered glyphs (not a bare prompt). ----
@@ -208,7 +134,7 @@ fn glyph_dump() {
     let round_trip_deadline = Instant::now() + Duration::from_secs(20);
     let mut round_tripped = false;
     while Instant::now() < round_trip_deadline {
-        ctx.iteration(true);
+        gtk_live::iterate(&ctx, core_ptr, &app);
         let dump = unsafe { screen_dump(core) };
         if dump.windows(NEEDLE.len()).any(|w| w == NEEDLE) {
             round_tripped = true;
@@ -221,41 +147,47 @@ fn glyph_dump() {
         String::from_utf8_lossy(&unsafe { screen_dump(core) })
     );
 
-    // ---- Now let the renderer draw the grid WITH the text, then capture. ----
+    // ---- Now let the renderer draw the grid WITH the text, then capture the
+    //      texture the RenderSurface built from the latest exported frame. ----
+    let settle = Instant::now() + Duration::from_millis(800);
+    while Instant::now() < settle {
+        gtk_live::iterate(&ctx, core_ptr, &app);
+    }
     let capture_deadline = Instant::now() + Duration::from_secs(10);
-    while !outcome.captured.get() && Instant::now() < capture_deadline {
-        for _ in 0..8 {
-            ctx.iteration(true);
-        }
-        if gl_area.error().is_some() {
-            continue;
-        }
-        gl_area.make_current();
-        if gl_area.error().is_some() {
-            continue;
-        }
-        gl_area.attach_buffers();
-        outcome.core_present.set(true);
-        unsafe { draw_present_read_glarea_fb(core, &outcome) };
-        if outcome.pixels_nonzero.get() > 0 {
-            outcome.captured.set(true);
+    let mut captured = None;
+    while captured.is_none() && Instant::now() < capture_deadline {
+        gtk_live::iterate(&ctx, core_ptr, &app);
+        if let Some(texture) = render_surface.texture() {
+            let (w, h, px) = gtk_live::texture_rgba(&texture);
+            if gtk_live::nonzero_bytes(&px) > 0 {
+                captured = Some((w, h, px, gtk_live::texture_kind(&texture)));
+            }
         }
     }
-
-    assert!(outcome.captured.get(), "captured a non-zero GLArea frame");
-    let (w, h) = outcome.dims.get();
-    assert!(w > 0 && h > 0, "the GLArea viewport was sized");
-    write_ppm(&ppm_path, &outcome.rgba.borrow(), w, h);
+    let (w, h, mut rgba, kind) = captured.expect("captured a non-zero RenderSurface texture");
+    assert!(w > 0 && h > 0, "the texture has an extent");
+    // The OpenGL frame's rows are bottom-up (the widget flips it when drawing,
+    // `render_surface.zig:188-199`); flip for a normal image.
+    if !rustty_renderer::generic::CUSTOM_SHADER_Y_IS_DOWN {
+        let row = w * 4;
+        let mut flipped = Vec::with_capacity(rgba.len());
+        for y in (0..h).rev() {
+            flipped.extend_from_slice(&rgba[y * row..(y + 1) * row]);
+        }
+        rgba = flipped;
+    }
+    gtk_live::write_ppm(&ppm_path, &rgba, w, h);
     eprintln!(
-        "GLYPH-DUMP: wrote {ppm_path} ({w}x{h}), {} of {} bytes non-zero",
-        outcome.pixels_nonzero.get(),
-        outcome.pixels_len.get()
+        "GLYPH-DUMP: wrote {ppm_path} ({w}x{h}, {kind} texture), {} of {} bytes non-zero",
+        gtk_live::nonzero_bytes(&rgba),
+        rgba.len()
     );
 
     // Clean teardown (mirrors first_light).
     keepalive.remove();
-    render_pump.remove();
-    drop(gl_area);
+    drop(render_surface);
+    // SAFETY: `core` is the live core surface; stopped once, after the last frame.
+    unsafe { gtk_live::stop_render_thread(core) };
     {
         let app_weak = application.downgrade();
         glib::timeout_add_local_once(Duration::from_millis(150), move || {

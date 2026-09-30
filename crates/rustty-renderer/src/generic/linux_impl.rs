@@ -64,7 +64,7 @@ use rustty_vt::style::{Fg, Style};
 use rustty_vt::terminal::ScrollViewport;
 use rustty_vt::Scrollbar;
 use rustty_vt::{color, page, point, sgr};
-use rustty_zigstd::thread::{Mutex, Semaphore};
+use rustty_zigstd::thread::Semaphore;
 
 use core::mem;
 use core::ptr::addr_of_mut;
@@ -92,12 +92,20 @@ use super::{
 use crate::cell::{self, Contents, Key};
 use crate::cursor;
 use crate::image::{self, DrawPlacements};
+use crate::latest_frame::{DrawMutex, LatestFrame};
 use crate::opengl::buffer::Buffer;
 use crate::opengl::frame::Frame;
 use crate::opengl::gl::primitives::Primitive;
 use crate::opengl::gpu_abi::{
     BgImage as BgImageGpu, CellText as CellTextGpu, Uniforms as UniformsGpu,
 };
+/// A finished frame ready to be consumed by the apprt in case that the
+/// frame needs to be composited with UI elements by the graphical toolkit
+/// manually.
+//
+// pub const ExportedFrame = if (@hasDecl(GraphicsAPI, "ExportedFrame"))
+//     GraphicsAPI.ExportedFrame else void;   (generic.zig:93)
+pub use crate::opengl::opengl_impl::ExportedFrame;
 use crate::opengl::render_pass::{Attachment, AttachmentTarget, Draw, Step};
 use crate::opengl::sampler::Sampler;
 use crate::opengl::shaders::Shaders;
@@ -116,6 +124,7 @@ use crate::size::{
 };
 use crate::state;
 use crate::Overlay;
+use std::sync::Arc;
 
 // const log = std.log.scoped(.generic_renderer);   (generic.zig:46)
 //
@@ -147,11 +156,9 @@ const LOG_SCOPE: &str = "generic_renderer";
 //
 // PORT NOTE (macos_impl generic.rs:913-919): reference `SwapChain.buf_count =
 // GraphicsAPI.swap_chain_count`. Monomorphized to the concrete
-// `OpenGL::SWAP_CHAIN_COUNT` (= 1, per `OpenGL.zig:30-32` "OpenGL's frame
-// completion is always sync … no need for multi-buffering"). This collapses the
-// semaphore-backpressure logic to the trivial 1-buffer case; it is ported anyway
-// (not special-cased) so the code stays parallel to Metal's 3-buffer version and
-// any later buffer-count change is a one-constant edit.
+// `OpenGL::SWAP_CHAIN_COUNT` (= 3 since `2f0b65346`, `OpenGL.zig:31-33`:
+// "Triple-buffering gives the GPU room to pipeline renders without having to wait
+// on the apprt consuming previous frames"; it was 1 at the pin).
 const SWAP_CHAIN_COUNT: usize = OpenGL::SWAP_CHAIN_COUNT;
 
 /// Whether +Y points down in the custom-shader coordinate space.
@@ -160,7 +167,11 @@ const SWAP_CHAIN_COUNT: usize = OpenGL::SWAP_CHAIN_COUNT;
 // `GraphicsAPI.custom_shader_y_is_down` — monomorphized to
 // `OpenGL::CUSTOM_SHADER_Y_IS_DOWN` (`OpenGL.zig:27-28` = `false`: the OpenGL
 // fragCoord is +Y = up). Read by `update_custom_shader_uniforms_for_frame`.
-const CUSTOM_SHADER_Y_IS_DOWN: bool = OpenGL::CUSTOM_SHADER_Y_IS_DOWN;
+//
+// `2f0b65346` makes it public on the renderer: "Whether +Y is down in the
+// coordinate space of exported frames. Apprts use this to orient frames when
+// presenting." (`generic.zig:95-97`). The GTK `RenderSurface` flips on it.
+pub const CUSTOM_SHADER_Y_IS_DOWN: bool = OpenGL::CUSTOM_SHADER_Y_IS_DOWN;
 
 /// PORT NOTE (macos_impl generic.rs:931-954): the aggregate renderer error.
 /// Reference `generic.zig` methods return Zig `!T` (inferred error unions of the
@@ -294,13 +305,43 @@ pub struct Renderer {
 
     /// This mutex must be held whenever any state used in `drawFrame` is being
     /// modified, and also when it's being accessed in `drawFrame`.
-    pub draw_mutex: Mutex,
+    //
+    // PORT NOTE (N437): the mutex lives in its own allocation (`DrawMutex`, an
+    // `Arc` handle); see `crate::latest_frame`. Every cross-thread entry locks it
+    // through the caller's own handle before it forms a reference to the renderer.
+    pub draw_mutex: DrawMutex,
 
     /// The configuration we need derived from the main config.
     pub config: DerivedConfig,
 
     /// The mailbox for communicating with the window.
     pub surface_mailbox: SurfaceMailbox,
+
+    /// Blocking (`.forever`) surface-mailbox pushes made while `draw_mutex` is
+    /// held, to be sent once it is released.
+    //
+    // rustty-only (R13, UPSTREAM-DEFECTS.md UD362). The reference's frame
+    // completion (`opengl/Frame.zig:83` `.redraw`, `generic.zig:2017`
+    // `.renderer_health`) pushes with `.forever` inside `drawFrameLocked`, i.e.
+    // with the draw mutex held. The app mailbox's only consumer is the apprt
+    // main thread, which takes the same mutex in `displayRealized` /
+    // `displayUnrealized`: a full mailbox then deadlocks both threads. The
+    // pushes are queued here under the lock and `draw_frame_raw` sends them
+    // after the unlock (as UD352 does for the display-link calls).
+    pub deferred_surface_pushes: core::cell::RefCell<Vec<SurfaceMessage>>,
+
+    /// The latest exported frame ready to be consumed by an apprt
+    /// who needs to manually composite the frame with UI elements.
+    /// Previously exported frames are released when a new frame is
+    /// exported and pushed onto the queue.
+    ///
+    /// Unused if the renderer does not need to export frames to
+    /// present its rendered frame.
+    //
+    // PORT NOTE (N437): behind an `Arc` so the apprt's main thread takes frames
+    // through its own handle (`latest_frame_handle`) without touching the
+    // renderer's bytes; see `crate::latest_frame`.
+    pub latest_frame: Arc<LatestFrame<ExportedFrame>>,
 
     /// Current font metrics defining our grid.
     pub grid_metrics: Metrics,
@@ -310,6 +351,12 @@ pub struct Renderer {
 
     /// True if the window is focused.
     pub focused: bool,
+
+    /// True if the window is visible.
+    //
+    // (`a177ba90a`; read only by `syncDisplayLink`, which is a no-op off macOS.
+    // Added with P7-W7 T2 so `setVisible` is the reference's on both twins.)
+    pub visible: bool,
 
     /// Flag to indicate that our focus state changed for custom shaders to
     /// update their state.
@@ -397,6 +444,12 @@ pub struct Renderer {
     /// Health of the most recently completed frame.
     pub health: AtomicHealth,
 
+    /// Health of how well the apprt can present our frames.
+    ///
+    /// This is separate from `health` because a renderer
+    /// can produce healthy frames that the apprt can't present.
+    pub presentation_health: AtomicHealth,
+
     /// True when we have a graphics context that can create GPU
     /// resources. Creating any GPU resource while this is false is invalid.
     pub display_realized: bool,
@@ -427,6 +480,19 @@ pub struct Renderer {
 
     /// Our overlay state, if any.
     pub overlay: Option<Overlay>,
+
+    /// The overlay `overlay` replaced last frame, kept so the next rebuild can
+    /// reuse its surface. Only the render thread touches it.
+    //
+    // rustty-only (R13, UPSTREAM-DEFECTS.md UD363): the reference rebuilds
+    // `self.overlay` in place without the draw mutex while the macOS main
+    // thread's sync draw reads it under the mutex. The port builds the next
+    // overlay into a local (reusing this one) without the lock and swaps it
+    // into `overlay` under the lock. Cost: while the overlay is on, two
+    // terminal-sized overlay surfaces stay resident (`overlay` and this spare,
+    // where the reference keeps one); it is released when the overlay is
+    // turned off.
+    pub overlay_spare: Option<Overlay>,
 
     /// The base timestamp for the Kitty graphics animation clock.
     /// Animation frame timing is expressed as milliseconds since
@@ -822,123 +888,142 @@ impl From<shape::harfbuzz::Error> for RebuildRowError {
 }
 
 /// The `Frame` completion tail (`opengl::frame::CompletionFn`) — the OpenGL twin of
-/// `macos_impl::metal_buffer_completed` (generic.rs:5171). `Frame::complete` computes
-/// `health` from `gl.errors.getError()` (after its blocking `gl.finish()`) and hands
-/// it in, so — unlike Metal, which inspects an `MTLCommandBuffer` here — this only has
-/// to run the present-if-healthy + `frameCompleted` tail (`opengl/Frame.zig:62-70`).
+/// `macos_impl::metal_buffer_completed` (generic.rs). `Frame::complete` computes
+/// `health` from `gl.errors.getError()` and hands it in, so — unlike Metal, which
+/// inspects an `MTLCommandBuffer` here — this runs the reference's tail from the
+/// present on (`opengl/Frame.zig:62-89` at `12752b2ac`, `2f0b65346`):
+///
+/// ```zig
+/// const presented_frame: ?OpenGL.ExportedFrame = if (health == .healthy) frame: {
+///     const frame = self.renderer.api.present(
+///         self.target.*,
+///         self.renderer.presentationHealth(),
+///     ) catch |err| {
+///         log.warn("failed to present render target: err={}", .{err});
+///         break :frame null;
+///     };
+///     break :frame frame;
+/// } else null;
+///
+/// // Sync after frame draw AND frame present GL calls.
+/// gl.finish();
+///
+/// // At this point the ExportedFrame is finished and can be shared
+/// if (presented_frame) |frame| {
+///     self.renderer.pushFrame(frame);
+///
+///     // Notify the surface that it should redraw
+///     _ = self.renderer.surface_mailbox.push(.redraw, .{ .forever = {} });
+/// }
+///
+/// // Report the health to the renderer.
+/// self.renderer.frameCompleted(health);
+/// ```
 //
-// GL-ATTACH (LANDED): the reference tail is
-//   `if (health == .healthy) self.renderer.api.present(self.target.*) catch …;`
-//   `self.renderer.frameCompleted(health);`
-// `present_to_default` blits the frame's target FBO into the CURRENTLY BOUND draw
-// framebuffer — under a live GTK GLArea that is the GLArea's (non-zero) framebuffer,
-// which GDK binds before emitting `render` — so this is what makes the terminal
-// VISIBLE on the window. It runs ONLY on the WINDOWED path (`!api.owns_context()` —
-// GDK owns the context); the OFFSCREEN golden (`api.owns_context()`, its own
-// surfaceless context) has no host-bound framebuffer and reads its target back via
-// `Target::read_rgba` directly, so present is skipped there — the one honest
-// rustty-only divergence from the always-present reference.
-//
-// It calls [`OpenGL::present_to_default`] (present-by-reference) rather than the
-// value-consuming [`OpenGL::present`]: `target` is a raw pointer into the frame the
-// renderer still owns (Rust `Target` is move-only), so there is nothing to move; the
-// blit only READS the target FBO. Failures are logged-and-swallowed exactly as the
-// reference `catch |err| log.err(...)` does — a present failure never fails the frame.
+// The log site's oracle is `renderer/opengl/Frame.zig`, whose scope is `.opengl`
+// (Frame.zig:15), NOT `generic.zig`'s `.generic_renderer` — so it targets
+// `crate::opengl::opengl_impl::LOG_SCOPE` even though the code lives here, exactly
+// as the Metal twin targets `metal::frame::LOG_SCOPE`. It lives here at all because
+// the port inlines `Frame.zig`'s completion tail into this trampoline.
 //
 // PORT NOTE (raw-ptr re-entry, `rust-mut-args-strongly-protected`): the renderer is
 // recovered as a RAW `*mut Renderer` (never `&mut`) and deref'd HERE — inside
 // `Frame::complete`, which runs inside `draw_frame_raw` while its `self_ptr` raw root
-// is live. Both `present_to_default(&self)` and `frame_completed(&self)` reborrow only
-// `&self` (narrow), matching the Metal lane's proven-clean shape.
+// is live. `present(&self)`, `push_frame(&self)`, the mailbox push and
+// `frame_completed(&self)` each reborrow only `&` (narrow). The whole-renderer
+// `&self` they form is sound because OpenGL frames complete synchronously, here on
+// the render thread with `draw_mutex` held, so no other thread touches the
+// renderer meanwhile (N437: every other entry locks first).
 //
 // # Safety
 // `renderer` must be a live, whole-`Renderer`-provenance `*mut ()` (the `self_ptr`
 // `begin_frame` was handed); `target` a live `*mut Target` into that renderer's frame;
-// single-threaded on this path (we just blocked on `gl.finish()`).
+// called on the render thread inside `draw_frame_raw`, with `draw_mutex` held.
 unsafe fn opengl_frame_completed(renderer: *mut (), target: *mut Target, health: crate::Health) {
     let renderer = renderer as *mut Renderer;
-    // if (health == .healthy) self.renderer.api.present(self.target.*) catch |err| { log.err(...) };
-    // WINDOWED only: GDK owns the context ⇒ FBO 0 is the GLArea framebuffer.
-    if health == crate::Health::Healthy && !unsafe { (*renderer).api.owns_context() } {
-        if let Err(err) = unsafe { (*renderer).api.present_to_default(&*target) } {
-            // log.err("Failed to present render target: err={}", .{err});
-            //
-            // RESTORED (task-14c-3). This site's oracle is `renderer/opengl/Frame.zig:65`,
-            // whose scope is `.opengl` (Frame.zig:15) — NOT `generic.zig`'s
-            // `.generic_renderer` — so it targets `crate::opengl::opengl_impl::LOG_SCOPE`
-            // even though the code lives here, exactly as the Metal twin
-            // (`generic.rs:5895`) targets `metal::frame::LOG_SCOPE`. It lives here at all
-            // because the port inlines `Frame.zig`'s completion tail into this
-            // trampoline. Logged and swallowed, as the reference `catch` does.
-            log::error!(
-                target: crate::opengl::opengl_impl::LOG_SCOPE,
-                "Failed to present render target: err={err:?}"
-            );
+
+    // If the frame is healthy, draw it to an ExportedFrame
+    // Then sync before exporting and pushing to the present queue.
+    // The apprt pulls from this queue in its snapshot handler.
+    let presented_frame: Option<ExportedFrame> = if health == crate::Health::Healthy {
+        let presentation_health = unsafe { (*renderer).presentation_health() };
+        match unsafe { (*renderer).api.present(&*target, presentation_health) } {
+            Ok(frame) => Some(frame),
+            Err(err) => {
+                // log.warn("failed to present render target: err={}", .{err});
+                log::warn!(
+                    target: crate::opengl::opengl_impl::LOG_SCOPE,
+                    "failed to present render target: err={err:?}"
+                );
+                None
+            }
         }
+    } else {
+        None
+    };
+
+    // Sync after frame draw AND frame present GL calls.
+    // gl.finish();
+    crate::opengl::gl::finish();
+
+    // At this point the ExportedFrame is finished and can be shared
+    if let Some(frame) = presented_frame {
+        // self.renderer.pushFrame(frame);
+        unsafe { (*renderer).push_frame(frame) };
+
+        // Notify the surface that it should redraw
+        // _ = self.renderer.surface_mailbox.push(.redraw, .{ .forever = {} });
+        //
+        // PORT NOTE: reference defect (R13), UD362. This runs with the draw
+        // mutex held; the `.forever` push is deferred until `draw_frame_raw`
+        // releases it (`deferred_surface_pushes`).
+        unsafe { (*renderer).defer_forever_push(SurfaceMessage::Redraw) };
     }
-    // block.renderer.frameCompleted(health);
+
+    // Report the health to the renderer.
+    // self.renderer.frameCompleted(health);
     unsafe { (*renderer).frame_completed(health) };
 }
 
+/// `.forever` surface-mailbox pushes taken under the draw mutex, sent after it
+/// is released (UD362).
+pub struct DeferredSurfacePushes {
+    mailbox: SurfaceMailbox,
+    msgs: Vec<SurfaceMessage>,
+}
+
+impl DeferredSurfacePushes {
+    /// Send every queued message with `.forever`, in order.
+    pub fn push_all(self) {
+        for msg in self.msgs {
+            let _ = self.mailbox.push(msg, MailboxTimeout::Forever);
+        }
+    }
+}
+
 impl Renderer {
-    // PORTS: generic.zig:658-799 `Renderer.init`; macos_impl generic.rs:1831-2076.
+    // PORTS: generic.zig:658-819 `Renderer.init`; macos_impl generic.rs.
     //
-    // OFFSCREEN path (Task 9 / golden). Builds `api` via the offscreen-portable ctor
-    // (`OpenGL::init_offscreen`, which OWNS a surfaceless EGL/GL context), then runs
-    // the shared [`Self::init_with_api`] body. Used by the golden + the renderer's
-    // own unit tests, which provide no windowing host. The WINDOWED sibling is
-    // [`Self::init_windowed`]. The macOS `display_link`/vsync branch
-    // (generic.zig:692-698 `else => null`) is the only omission — see the module
-    // docs. (`images`/`bg_image` used to be omitted here too; `crate::image` is a
-    // twin pair now, so both are real fields — w2 F-005/F-012.)
+    // The macOS `display_link`/vsync branch (generic.zig `else => null`) is the only
+    // omission — see the module docs.
+    //
+    // P7-W7 T2 (`2f0b65346`): `api` is the reference's `OpenGL.init`, which owns a
+    // surfaceless EGL context and releases it before returning, so this touches no
+    // GL at all: the swap chain and the shaders are built lazily by the first
+    // `drawFrame` on the render thread (`.swap_chain = null`, `.shaders = .uninit`,
+    // `.reinitialize_shaders = true`). The port's two constructors (`init` over an
+    // offscreen context the tests owned, `init_windowed` over GDK's borrowed GLArea
+    // context) are one again.
     pub fn init(alloc: Global, options: Options) -> Result<Self, Error> {
-        // Zig: var api = try GraphicsAPI.init(alloc, options); errdefer api.deinit();
-        // (macos_impl generic.rs:1848-1852: reuse the offscreen ctor, layer `None`.)
-        let api = OpenGL::init_offscreen(
-            options.config.blending,
-            options.size.screen.width,
-            options.size.screen.height,
-        )?;
-        Self::init_with_api(alloc, options, api)
-    }
+        // Initialize our graphics API wrapper, this will prepare the
+        // surface provided by the apprt and set up any API-specific
+        // GPU resources.
+        // var api = try GraphicsAPI.init(alloc, options);
+        // errdefer api.deinit();
+        let api = OpenGL::init(options.config.blending)?;
 
-    /// GL-ATTACH (LANDED) — the WINDOWED renderer constructor. This is the FAITHFUL
-    /// `Renderer.init` path: it builds `api` via the reference `OpenGL::init` (which
-    /// creates + owns NO GL context — GDK's GLArea owns it), then runs the same shared
-    /// [`Self::init_with_api`] body. Core's `Surface::init` calls it (through the
-    /// renderer seam) on the GTK path.
-    ///
-    /// # Preconditions
-    /// GDK's GLArea context MUST be current and GL MUST already be loaded
-    /// (`Renderer::surface_init` → `sys::prepare_context_windowed` ran) before this
-    /// is called, because [`Self::init_with_api`]'s `SwapChain::init` / `init_shaders`
-    /// create GL objects against that current context. Core guarantees this ordering:
-    /// `gl_area.make_current()` → `surfaceInit` → `init_windowed`.
-    ///
-    /// Because `api` owns no context, the resulting `Renderer` eglTerminates nothing
-    /// on `deinit` — this is the GL-ATTACH teardown-double-free fix.
-    pub fn init_windowed(alloc: Global, options: Options) -> Result<Self, Error> {
-        // Zig: var api = try GraphicsAPI.init(alloc, options); the OpenGL reference
-        // `init` creates no context (OpenGL.zig:51-56) — GDK owns it.
-        let api = OpenGL::init(options.config.blending);
-        Self::init_with_api(alloc, options, api)
-    }
-
-    /// Shared body of [`Self::init`] (offscreen) and [`Self::init_windowed`]
-    /// (windowed): everything after the `GraphicsAPI.init` step of the reference
-    /// `Renderer.init` (generic.zig:658-799). The only difference between the two
-    /// paths is whether `api` owns a GL context, so it is built by the caller and
-    /// handed in here; the swap chain / shaders / font shaper / uniform setup below
-    /// is identical.
-    fn init_with_api(alloc: Global, options: Options, api: OpenGL) -> Result<Self, Error> {
         // const has_custom_shaders = options.config.custom_shaders.value.items.len > 0;
         let has_custom_shaders = !options.config.custom_shaders.value.is_empty();
-
-        // Prepare our swap chain (errdefer -> the `?` early-return + explicit deinit
-        // are handled by the leaf teardown; here the `?` drops nothing GL-owned yet
-        // because `SwapChain::init` frees its own partial frames on failure via the
-        // Vec push loop's leaf errors).
-        let swap_chain = SwapChain::init(&api, has_custom_shaders)?;
 
         // Create the font shaper.
         // Zig: var font_shaper = try font.Shaper.init(alloc, .{ .features = ... });
@@ -997,11 +1082,6 @@ impl Renderer {
             c
         };
 
-        // .shaders = undefined (generic.zig:781) — set by `result.init_shaders()`
-        // below. Rust needs a value: build the base shaders (empty custom set);
-        // `init_shaders` re-runs from the real config right after the literal.
-        let shaders = api.init_shaders(&[])?;
-
         // .cells = .{} (generic.zig:717) — an EMPTY Contents, sized by the first
         // `update_frame`/`rebuild_cells`.
         let cells = Contents::default();
@@ -1011,6 +1091,7 @@ impl Renderer {
             config: options.config,
             // .surface_mailbox = options.surface_mailbox, (generic.zig:704)
             surface_mailbox: options.surface_mailbox,
+            deferred_surface_pushes: Default::default(),
             grid_metrics,
             size: options.size,
             focused: true,
@@ -1029,14 +1110,21 @@ impl Renderer {
             font_grid: options.font_grid,
             font_shaper,
             font_shaper_cache: ShaperCache::init(),
-            shaders,
+            // Graphics API stuff
             api,
-            swap_chain: Some(swap_chain),
+            swap_chain: None,
+            has_custom_shaders,
+            reinitialize_shaders: true,
+            // Shaders are initialized lazily on the render thread.
+            shaders: Shaders::uninit(),
             // ---- Zig struct-decl defaults (OMITTED by the 701-787 literal) ----
+            latest_frame: Arc::new(LatestFrame::new()),
+            visible: true,
+            presentation_health: AtomicHealth::new(crate::Health::Healthy),
             display_realized: true,
             kitty_animation_clock: None,
             kitty_animation_next_ms: None,
-            draw_mutex: Mutex::new(),
+            draw_mutex: DrawMutex::new(),
             custom_shader_focused_changed: false,
             cells_rebuilt: false,
             first_frame_time: None,
@@ -1053,15 +1141,11 @@ impl Renderer {
             bg_image_buffer_modified: 0,
             health: AtomicHealth::new(crate::Health::Healthy),
             target_config_modified: 0,
-            reinitialize_shaders: false,
-            has_custom_shaders,
             terminal_state: RenderState::empty(),
             terminal_state_frame_count: 0,
             overlay: None,
+            overlay_spare: None,
         };
-
-        // try result.initShaders(); (789)
-        result.init_shaders()?;
 
         // Ensure our undefined values above are correctly initialized.
         result.update_font_grid_uniforms(); // (792)
@@ -1072,69 +1156,55 @@ impl Renderer {
         Ok(result)
     }
 
-    // PORTS: generic.zig:800-830 `Renderer.deinit`; macos_impl generic.rs:2114-2179.
+    // PORTS: generic.zig:822-850 `Renderer.deinit` (`2f0b65346`); macos_impl generic.rs.
     //
-    // Off-macOS: the `if (DisplayLink != void)` teardown (806-811) collapses to
-    // nothing (that field does not exist here — see the module docs). ORDER IS
-    // LOAD-BEARING for OpenGL: the GL objects (`swap_chain` frames, `images`'
-    // textures, `shaders`) are freed HERE while the owned GL context is still
-    // current; `api` (its `OffscreenContext`) drops last, when the `Renderer` value
-    // drops, terminating EGL.
+    // This only deinitializes and frees CPU-side state
+    // and does not free GPU resources like the swap chain and
+    // shaders. Those are freed with `releaseGpuResources`.
+    //
+    // Off-macOS: the `if (DisplayLink != void)` teardown collapses to nothing (that
+    // field does not exist here — see the module docs). The GPU objects (swap chain,
+    // shaders, images, background image) were freed by `thread_exit` on the render
+    // thread, whose context was current; the images' CPU state goes with them there
+    // (`generic.zig:903-912`).
     pub fn deinit(&mut self) {
-        // if (self.overlay) |*overlay| overlay.deinit(self.alloc); (801)
+        // if (self.overlay) |*overlay| overlay.deinit(self.alloc);
         // Port: `Overlay::deinit(&mut self)` takes NO allocator arg.
         if let Some(overlay) = &mut self.overlay {
             overlay.deinit();
         }
-        // self.terminal_state.deinit(self.alloc); (802)
-        self.terminal_state.deinit(self.alloc.into());
-        // (803-804) `search_selected_match`/`search_matches` arena teardown: the
-        // arena field was collapsed (message.rs), so the owned `Option`s free via
-        // Rust `Drop`; no explicit call.
-        //
-        // if (self.swap_chain) |*sc| sc.deinit(); (805) — frees every frame's GL
-        // objects (context still current).
-        if let Some(sc) = &mut self.swap_chain {
-            sc.deinit();
+        // (UD363: the reused overlay the port keeps beside it.)
+        if let Some(overlay) = &mut self.overlay_spare {
+            overlay.deinit();
         }
+        // self.terminal_state.deinit(self.alloc);
+        self.terminal_state.deinit(self.alloc.into());
+        // `search_selected_match`/`search_matches` arena teardown: the arena field
+        // was collapsed (message.rs), so the owned `Option`s free via Rust `Drop`;
+        // no explicit call.
 
-        // (806-811) DisplayLink teardown — omitted (void off macOS).
+        // self.latest_frame.deinit(global.io());
+        self.latest_frame.deinit();
 
-        // self.cells.deinit(self.alloc); (814) — takes NO allocator arg.
+        // DisplayLink teardown — omitted (void off macOS).
+
+        // self.cells.deinit(self.alloc); — takes NO allocator arg.
         self.cells.deinit();
 
-        // self.font_shaper.deinit(); (816)
+        // self.font_shaper.deinit();
         self.font_shaper.deinit();
-        // self.font_shaper_cache.deinit(self.alloc); (817) — takes NO allocator arg.
+        // self.font_shaper_cache.deinit(self.alloc); — takes NO allocator arg.
         self.font_shaper_cache.deinit();
 
-        // self.config.deinit(); (819)
+        // self.config.deinit();
         self.config.deinit();
 
-        // self.images.deinit(self.alloc); (821) — macos_impl generic.rs:2386-2394.
+        // self.api.deinit(); — the owned `OpenGL` (its `OffscreenContext`) releases
+        // and destroys its EGL context on `Drop` when the `Renderer` value drops. A
+        // `&mut self` `deinit` cannot move `api` out; documented. (`OpenGL::deinit`
+        // consumes `self`, unreachable here — the field drop achieves the same.)
         //
-        // ORDER IS LOAD-BEARING (GL): this DELETES every Kitty/overlay image's GL
-        // texture (`image::Image::deinit` → `Texture::deinit` → `glDeleteTextures`),
-        // so it must run HERE — while the owned context is still current — not from
-        // a `Drop`. Same rule as the swap chain above and the shaders below.
-        self.images.deinit(self.alloc);
-
-        // if (self.bg_image) |img| img.deinit(self.alloc); (823)
-        // Port: `image::Image::deinit(self, alloc)` consumes `self` by value, so
-        // move the `Image` out of the `Option` with `.take()`.
-        if let Some(img) = self.bg_image.take() {
-            img.deinit(self.alloc);
-        }
-
-        // self.deinitShaders(); (825) — frees the shader pipelines' GL objects.
-        self.deinit_shaders();
-
-        // self.api.deinit(); (827) — the owned `OpenGL` (its `OffscreenContext`)
-        // terminates EGL on `Drop` when the `Renderer` value drops. A `&mut self`
-        // `deinit` cannot move `api` out; documented. (`OpenGL::deinit` consumes
-        // `self`, unreachable here — the field drop achieves the same.)
-        //
-        // self.* = undefined; (829) — no-op (Rust ownership handles teardown).
+        // self.* = undefined; — no-op (Rust ownership handles teardown).
     }
 
     /// The soonest animation wake this renderer needs, if any:
@@ -1222,134 +1292,93 @@ impl Renderer {
     // resolved against the concrete `OpenGL` leaf (OpenGL.zig), cited per method.
     // =======================================================================
 
-    /// This is called early right after surface creation.
+    // P7-W7 T2 (`2f0b65346`): `surfaceInit` and `finalizeSurfaceInit` are gone
+    // from `generic.zig` (and `OpenGL.zig`'s GTK `prepareContext(null)` arm with
+    // them): the renderer owns its context and nothing prepares a GL context on the
+    // main thread any more.
+
+    /// Callback called by renderer.Thread when it begins.
     //
-    // PORTS: generic.zig:864-869 `surfaceInit`; macos_impl generic.rs:2193-2196.
-    // `@hasDecl(GraphicsAPI, "surfaceInit")` is TRUE for `OpenGL` (OpenGL.zig:162),
-    // whose GTK-arm body is `prepareContext(null)` (OpenGL.zig:169-170) — load the GL
-    // loader over the context GDK has already made current.
+    // PORTS: generic.zig:880-886 `threadEnter` (`2f0b65346`: `self: *Self`).
     //
-    // GL-ATTACH (LANDED): this is the WINDOWED GL-loader hook. The GTK apprt calls it
-    // (via core's `Surface::init`) right after `gl_area.make_current()`, so GDK's
-    // GLArea context IS current here; `sys::prepare_context_windowed` binds the `gl`
-    // crate's entry points to it (via `eglGetProcAddress`) + runs the reference's
-    // version gate / debug-output / GL_FRAMEBUFFER_SRGB setup. It is a type-level fn
-    // (no self / no api yet — the api is built by `init_windowed`, AFTER this), so it
-    // loads the process-global GL dispatch that `init_windowed`'s `SwapChain::init`
-    // then uses. The OFFSCREEN golden never reaches here (it calls `Renderer::init`
-    // directly, whose owned `OffscreenContext` self-loads GL) — see `init` vs
-    // `init_windowed`.
+    //     pub fn threadEnter(self: *Self, surface: *apprt.Surface) !void {
+    //         // If our API has to do things on thread enter, let it.
+    //         if (@hasDecl(GraphicsAPI, "threadEnter")) {
+    //             try self.api.threadEnter(surface);
+    //         }
+    //     }
+    //
+    // `OpenGL` declares `threadEnter` (OpenGL.zig:218-227): make the context
+    // current on the render thread and load this thread's GL function table.
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    pub fn surface_init<S>(rt_surface: *mut S) -> Result<(), Error> {
-        let _ = rt_surface;
-        // If our API has to do things here, let it.
-        //
-        //
-        // switch (apprt.runtime) { else => @compileError("unsupported app runtime
-        // for OpenGL"), ... } (OpenGL.zig:165-177). The port's `apprt.runtime` is
-        // `rustty_build_config::app_runtime()` (the same per-target const), and its
-        // `Runtime` has exactly the two arms below, so the `@compileError` arm has
-        // no counterpart.
-        // CORRECTION (task W-2, N342): the embedded arm was a comment reading "(not
-        // built here — the GTK apprt is the only OpenGL host)"; Windows is an OpenGL
-        // target whose runtime is `.none` (`apprt/runtime.zig:14-24`), so the arm is
-        // live there.
-        match rustty_build_config::app_runtime() {
-            // GTK uses global OpenGL context so we load from null.
-            // (OpenGL.zig:166-170) try prepareContext(null); — load GL against
-            // GDK's current GLArea context. A version-gate / GL failure folds to
-            // `Error::GlFailed`.
-            rustty_build_config::Runtime::Gtk => {
-                crate::opengl::gl::sys::prepare_context_windowed().map_err(|_| Error::GlFailed)?;
-            }
-
-            // OpenGL.zig:172-176, the `apprt.embedded` arm:
-            rustty_build_config::Runtime::None => {
-                // TODO(mitchellh): this does nothing today to allow librustty
-                // to compile for OpenGL targets but librustty is strictly
-                // broken for rendering on this platforms.
-            }
-        }
-
-        // OpenGL.zig:179-186, kept commented as in the reference:
-        //     // These are very noisy so this is commented, but easy to uncomment
-        //     // whenever we need to check the OpenGL extension list
-        //     // if (builtin.mode == .Debug) {
-        //     //     var ext_iter = try gl.ext.iterator();
-        //     //     while (try ext_iter.next()) |ext| {
-        //     //         log.debug("OpenGL extension available name={s}", .{ext});
-        //     //     }
-        //     // }
-        Ok(())
-    }
-
-    /// This is called just prior to spinning up the renderer thread for final
-    /// main-thread setup requirements.
-    //
-    // PORTS: generic.zig:873-878 `finalizeSurfaceInit`; macos_impl
-    // generic.rs:2206-2209. `OpenGL::finalizeSurfaceInit` (OpenGL.zig:191-195) is a
-    // no-op (`_ = self; _ = surface;`), so this is a faithful no-op.
-    #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    pub fn finalize_surface_init<S>(&mut self, rt_surface: *mut S) -> Result<(), Error> {
-        let _ = rt_surface;
-        // If our API has to do things to finalize surface init, let it.
-        // (OpenGL.zig:189-195: "This is called just prior to spinning up the renderer
-        // thread for final main thread setup requirements." — a no-op body.)
-        Ok(())
-    }
-
-    /// Callback called by `renderer.Thread` when it begins.
-    //
-    // PORTS: generic.zig:881-886 `threadEnter`; macos_impl generic.rs:2252-2255.
-    // `OpenGL::threadEnter` (OpenGL.zig:197-218) is a no-op for GTK: "GTK doesn't
-    // support threaded OpenGL operations … we don't do anything here" — all draws +
-    // texture syncs run on the main thread (this is why `MUST_DRAW_FROM_APP_THREAD`).
-    #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    pub fn thread_enter<S>(&self, rt_surface: *mut S) -> Result<(), Error> {
+    pub fn thread_enter<S>(&mut self, rt_surface: *mut S) -> Result<(), Error> {
         let _ = rt_surface;
         // If our API has to do things on thread enter, let it.
-        //
-        // switch (apprt.runtime) (OpenGL.zig:201-217); both arms are empty.
-        match rustty_build_config::app_runtime() {
-            // OpenGL.zig:204-209, the `apprt.gtk` arm:
-            rustty_build_config::Runtime::Gtk => {
-                // GTK doesn't support threaded OpenGL operations as far as I can
-                // tell, so we use the renderer thread to setup all the state
-                // but then do the actual draws and texture syncs and all that
-                // on the main thread. As such, we don't do anything here.
-            }
-
-            // OpenGL.zig:211-215, the `apprt.embedded` arm (task W-2, N342):
-            rustty_build_config::Runtime::None => {
-                // TODO(mitchellh): this does nothing today to allow librustty
-                // to compile for OpenGL targets but librustty is strictly
-                // broken for rendering on this platforms.
-            }
-        }
+        self.api.thread_enter()?;
         Ok(())
     }
 
-    /// Callback called by `renderer.Thread` when it exits.
+    /// Callback called by renderer.Thread when it exits. Called on the
+    /// render thread. Releases all GPU resources before the API tears down
+    /// its context, since after this the GL context will be gone.
     //
-    // PORTS: generic.zig:889-894 `threadExit`; macos_impl generic.rs:2261.
-    // `OpenGL::threadExit` (OpenGL.zig:220-234) is a no-op for GTK ("we may be
-    // sharing the global bindings with other windows").
-    pub fn thread_exit(&self) {
-        // If our API has to do things on thread exit, let it.
-        //
-        // switch (apprt.runtime) (OpenGL.zig:223-233); both arms are empty.
-        match rustty_build_config::app_runtime() {
-            // OpenGL.zig:226-229, the `apprt.gtk` arm:
-            rustty_build_config::Runtime::Gtk => {
-                // We don't need to do any unloading for GTK because we may
-                // be sharing the global bindings with other windows.
-            }
+    // PORTS: generic.zig:888-916 `threadExit` (`2f0b65346`).
+    //
+    //     pub fn threadExit(self: *Self) void {
+    //         {
+    //             self.draw_mutex.lockUncancelable(global.io());
+    //             defer self.draw_mutex.unlock(global.io());
+    //             ...
+    //         }
+    //         // If our API has to do things on thread exit, let it.
+    //         if (@hasDecl(GraphicsAPI, "threadExit")) {
+    //             self.api.threadExit();
+    //         }
+    //     }
+    //
+    // The locked block is [`Self::thread_exit_locked`]; this entry locks
+    // `self.draw_mutex` around it for the single-threaded callers (the tests).
+    // The render thread calls the two halves through `renderer_seam` with its own
+    // lock handle (N437).
+    pub fn thread_exit(&mut self) {
+        let mutex = self.draw_mutex.clone();
+        mutex.lock();
+        self.thread_exit_locked();
+        mutex.unlock();
 
-            // OpenGL.zig:231-233, the `apprt.embedded` arm (task W-2, N342):
-            rustty_build_config::Runtime::None => {
-                // TODO: see threadEnter
-            }
+        self.thread_exit_api();
+    }
+
+    /// The `draw_mutex` block of [`Self::thread_exit`]. The caller holds
+    /// `draw_mutex`.
+    pub fn thread_exit_locked(&mut self) {
+        // Release swap chain and shaders.
+        self.release_gpu_resources();
+
+        // We don't release images in `releaseGpuResources`
+        // since it can be called whenever the terminal is
+        // occluded or unrealized, and we don't want to
+        // reupload images every time that happens.
+        // self.images.deinit(self.alloc); self.images = .empty;
+        //
+        // ORDER IS LOAD-BEARING (GL): this DELETES every Kitty/overlay image's GL
+        // texture, so it must run here, while the render thread's context is still
+        // current — the `api.threadExit()` below releases it.
+        self.images.deinit(self.alloc);
+        self.images = image::State::empty();
+
+        // if (self.bg_image) |img| { img.deinit(self.alloc); self.bg_image = null; }
+        if let Some(img) = self.bg_image.take() {
+            img.deinit(self.alloc);
         }
+    }
+
+    /// The tail of [`Self::thread_exit`], after the `draw_mutex` block.
+    pub fn thread_exit_api(&mut self) {
+        // If our API has to do things on thread exit, let it.
+        // (`OpenGL` declares `threadExit`, OpenGL.zig:229-235: release the context
+        // and drop this thread's GL table.)
+        self.api.thread_exit();
     }
 
     /// Run our loop start callback if the renderer cares.
@@ -1413,59 +1442,85 @@ impl Renderer {
         Ok(())
     }
 
-    /// PORTS: `setVisible`. The display-link half is inside `if (comptime
-    /// DisplayLink != void)`, so on Linux (DisplayLink void) it folds away.
+    /// Callback when the window is visible or occluded.
+    ///
+    /// Must be called on the render thread.
     //
-    // PORT NOTE (`c4e16970a`, monomorphic fold): the release-on-hidden tail is
-    // gated `if (comptime !apprt.must_draw_from_app_thread)` — this OpenGL twin
-    // serves the GTK apprt, whose `MUST_DRAW_FROM_APP_THREAD` is TRUE (GTK owns
-    // the GL context on the app thread), so the guard folds the release AWAY
-    // here; the apprt calls `release_gpu_resources` at the appropriate time
-    // instead (on the app thread with the context current).
-    pub fn set_visible(&self, visible: bool) {
-        let _ = visible;
+    // PORTS: generic.zig:1174-1188 `setVisible` (`2f0b65346`).
+    //
+    //     pub fn setVisible(self: *Self, visible: bool) void {
+    //         self.visible = visible;
+    //         self.syncDisplayLink(null, null);
+    //
+    //         // When we're hidden, release our GPU resources.
+    //         if (!visible) {
+    //             self.draw_mutex.lockUncancelable(global.io());
+    //             defer self.draw_mutex.unlock(global.io());
+    //             self.releaseGpuResources();
+    //         }
+    //     }
+    //
+    // `syncDisplayLink` returns at once off macOS (`DisplayLink == void`). The
+    // pin's `comptime !apprt.must_draw_from_app_thread` gate, which folded the
+    // release away for GTK, is gone: the render thread owns the context now.
+    //
+    // N437: the render thread holds `draw_mutex` for the whole call (it takes it
+    // through its own handle before forming this `&mut self`), so this is the
+    // locked form: the reference's own lock around the release is the caller's.
+    pub fn set_visible_locked(&mut self, visible: bool) -> DisplayLinkSync {
+        self.visible = visible;
+
+        // When we're hidden, release our GPU resources.
+        if !visible {
+            self.release_gpu_resources();
+        }
+
+        DisplayLinkSync
     }
 
     /// Release the GPU resources we hold while the surface is not
     /// visible. Today this is the swap chain (render targets, font
     /// atlas texture copies, cell buffers, custom shader textures),
-    /// which makes up nearly all of a surface's GPU memory usage;
-    /// a hidden surface doesn't draw, so it doesn't need it. The
-    /// swap chain is rebuilt on the next `drawFrame`.
+    /// which makes up nearly all of a surface's GPU memory usage.
+    /// The swap chain is rebuilt on the next `drawFrame`.
     ///
-    /// This is safe to call in any state; resources that are
-    /// already released are skipped.
+    /// Note that images are NOT released here since we don't want
+    /// to reupload images every time the terminal is brought back
+    /// from being occluded or unrealized.
     ///
-    /// For OpenGL this must be called on the app thread with the
-    /// GL context current (the same requirement as
-    /// `displayUnrealized`). Other APIs may call this from the
-    /// render thread; see `apprt.must_draw_from_app_thread`.
+    /// Caller must lock the draw mutex before calling this function.
+    /// Resources that are already released are skipped.
     //
-    // pub fn releaseGpuResources(self: *Self) void { ... }
-    // (`c4e16970a`; the macos twin carries the verbatim quote.)
+    // PORTS: generic.zig:1190-1214 `releaseGpuResources` (`2f0b65346`).
+    //
+    //     pub fn releaseGpuResources(self: *Self) void {
+    //         if (self.swap_chain) |*sc| {
+    //             // Waits for any in-flight frames to complete, then
+    //             // frees all GPU resources.
+    //             sc.deinit();
+    //             self.swap_chain = null;
+    //         }
+    //
+    //         // Release the shaders as well if we're unrealized.
+    //         if (!self.display_realized) {
+    //             self.shaders.deinit(self.alloc);
+    //         }
+    //     }
+    //
+    // Runs on the render thread with its context current (`thread_exit`,
+    // `set_visible`, `renderCallback`'s unrealized arm).
     pub fn release_gpu_resources(&mut self) {
-        self.draw_mutex.lock();
-        // `defer self.draw_mutex.unlock()`: INFALLIBLE body (no `?`) => the end
-        // unlock is reached on every non-panic path (the `set_font_grid`
-        // precedent).
-
         if let Some(sc) = &mut self.swap_chain {
             // Waits for any in-flight frames to complete, then
             // frees all GPU resources.
             sc.deinit();
             self.swap_chain = None;
-
-            // Let the API drop any references it holds to swap
-            // chain resources (e.g. OpenGL's last presented
-            // target).
-            // if (comptime @hasDecl(GraphicsAPI, "gpuResourcesReleased")) {
-            //     self.api.gpuResourcesReleased();
-            // }
-            // (TRUE for the OpenGL leaf — OpenGL.zig declares it.)
-            self.api.gpu_resources_released();
         }
 
-        self.draw_mutex.unlock();
+        // Release the shaders as well if we're unrealized.
+        if !self.display_realized {
+            self.shaders.deinit();
+        }
     }
 
     /// Mark the full screen as dirty so that we redraw everything.
@@ -1484,8 +1539,17 @@ impl Renderer {
     // so the single unlock at the natural end is reached on every non-panic path.
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn set_font_grid(&mut self, grid: *mut SharedGrid) {
-        self.draw_mutex.lock();
+        let mutex = self.draw_mutex.clone();
+        mutex.lock();
+        self.set_font_grid_locked(grid);
+        mutex.unlock();
+    }
 
+    /// The body of [`Self::set_font_grid`] between its `lock()` and the
+    /// `defer unlock()`; the caller holds `draw_mutex` (N437: the render thread
+    /// takes it through its own handle before forming this `&mut self`).
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub fn set_font_grid_locked(&mut self, grid: *mut SharedGrid) {
         // Update our grid.
         self.font_grid = grid;
 
@@ -1528,28 +1592,49 @@ impl Renderer {
         // Force a full rebuild, because cached rows may still reference an outdated
         // atlas from the old grid and this can cause garbage to be rendered.
         self.mark_dirty();
-
-        self.draw_mutex.unlock();
     }
 
     /// Resize the screen.
     //
-    // PORTS: generic.zig `setScreenSize`; macos_impl generic.rs:2468-2482.
-    // Graphics-API-agnostic. INFALLIBLE body ⇒ end-unlock reached on every non-panic
-    // path (as in `set_font_grid`).
+    // PORTS: generic.zig:2210-2226 `setScreenSize` (`2f0b65346`); macos_impl
+    // generic.rs.
+    //
+    //     pub fn setScreenSize(self: *Self, size: renderer.Size) void {
+    //         self.draw_mutex.lockUncancelable(global.io());
+    //         defer self.draw_mutex.unlock(global.io());
+    //
+    //         self.size = size;
+    //         self.updateScreenSizeUniforms();
+    //
+    //         // Some graphics APIs need to manually update their viewport,
+    //         // like OpenGL. Do so here.
+    //         if (@hasDecl(GraphicsAPI, "setViewport")) {
+    //             self.api.setViewport(self.size.screen.width, self.size.screen.height);
+    //         }
+    //
+    //         log.debug("screen size size={}", .{size});
+    //     }
     pub fn set_screen_size(&mut self, size: Size) {
-        self.draw_mutex.lock();
+        let mutex = self.draw_mutex.clone();
+        mutex.lock();
+        self.set_screen_size_locked(size);
+        mutex.unlock();
+    }
 
-        // We only actually need the padding from this, everything else is derived
-        // elsewhere.
-        self.size.padding = size.padding;
-
+    /// The body of [`Self::set_screen_size`]; the caller holds `draw_mutex`
+    /// (N437). Runs on the render thread: `setViewport` is a GL call on its
+    /// context.
+    pub fn set_screen_size_locked(&mut self, size: Size) {
+        self.size = size;
         self.update_screen_size_uniforms();
+
+        // Some graphics APIs need to manually update their viewport,
+        // like OpenGL. Do so here.
+        self.api
+            .set_viewport(self.size.screen.width, self.size.screen.height);
 
         // log.debug("screen size size={}", .{size});
         log::debug!(target: LOG_SCOPE, "screen size size={size:?}");
-
-        self.draw_mutex.unlock();
     }
 
     /// Update the configuration.
@@ -1568,20 +1653,23 @@ impl Renderer {
     // lock/unlock with NO RAII guard, so `defer` is replicated by explicit unlock on
     // every early return (unlock-before-`?`) plus the unlock at the natural end.
     pub fn change_config(&mut self, config: DerivedConfig) -> Result<(), Error> {
-        self.draw_mutex.lock();
+        let mutex = self.draw_mutex.clone();
+        mutex.lock();
+        let result = self.change_config_locked(config);
+        mutex.unlock();
+        result
+    }
 
+    /// The body of [`Self::change_config`]; the caller holds `draw_mutex`
+    /// (N437), so the reference's `defer self.draw_mutex.unlock()` is the
+    /// caller's on every exit.
+    pub fn change_config_locked(&mut self, config: DerivedConfig) -> Result<(), Error> {
         // We always redo the font shaper in case font features changed. Easier and
-        // rare enough to not cause performance issues. unlock-before-`?`.
+        // rare enough to not cause performance issues.
         {
-            let font_shaper = match Shaper::init(shape::Options {
+            let font_shaper = Shaper::init(shape::Options {
                 features: config.font_features.clone(),
-            }) {
-                Ok(s) => s,
-                Err(e) => {
-                    self.draw_mutex.unlock();
-                    return Err(e.into());
-                }
-            };
+            })?;
             self.font_shaper.deinit();
             self.font_shaper = font_shaper;
         }
@@ -1633,10 +1721,7 @@ impl Renderer {
         // `defer draw_mutex.unlock()` is replicated on every early return).
         // macos_impl generic.rs:2805-2810.
         if bg_image_changed {
-            if let Err(e) = self.prep_background_image() {
-                self.draw_mutex.unlock();
-                return Err(e);
-            }
+            self.prep_background_image()?;
         }
 
         // If our background image config changed, update the vertex buffer.
@@ -1663,7 +1748,6 @@ impl Renderer {
             self.reinitialize_shaders = true;
         }
 
-        self.draw_mutex.unlock();
         Ok(())
     }
 
@@ -1892,158 +1976,129 @@ impl Renderer {
     }
 
     /// This is called by the GTK apprt after the surface is
-    /// reinitialized due to any of the events mentioned in
-    /// the doc comment for `displayUnrealized`.
-    ///
-    /// (Via `glareaRealize`; see [`Renderer::display_unrealized`].) It tells the
-    /// renderer the GL context became available again so it can rebuild its
-    /// GL-context-bound resources.
+    /// reinitialized (e.g. after the widget is re-realized following
+    /// a display change or reparenting).
     //
-    // PORTS: generic.zig:935-962 `displayRealized`.
+    // PORTS: generic.zig:947-968 `displayRealized` (`2f0b65346`).
     //
     // ```zig
     // pub fn displayRealized(self: *Self) !void {
-    //     if (@hasDecl(GraphicsAPI, "displayRealized")) self.api.displayRealized();
-    //     self.draw_mutex.lock();
-    //     defer self.draw_mutex.unlock();
-    //     assert(self.swap_chain.defunct);
-    //     try self.initShaders();
-    //     self.swap_chain = try SwapChain.init(self.api, self.has_custom_shaders);
-    //     self.reinitialize_shaders = false;
+    //     // If our API has to do things on realize, let it.
+    //     if (@hasDecl(GraphicsAPI, "displayRealized")) {
+    //         self.api.displayRealized();
+    //     }
+    //
+    //     // Lock the draw mutex so that we can safely update state.
+    //     self.draw_mutex.lockUncancelable(global.io());
+    //     defer self.draw_mutex.unlock(global.io());
+    //
+    //     // Mark the display as realized. ...
+    //     self.display_realized = true;
+    //     self.reinitialize_shaders = true;
     //     self.target_config_modified = 1;
     // }
     // ```
     //
-    // # Errors
-    // [`Error`] if `init_shaders` or `SwapChain::init` fails while rebuilding the
-    // GL-context-bound resources (the reference `try` sites).
-    pub fn display_realized(&mut self) -> Result<(), Error> {
-        // If our API has to do things on realize, let it.
-        // if (@hasDecl(GraphicsAPI, "displayRealized")) self.api.displayRealized();
-        //   (generic.zig:939-942)
-        //
-        // OpenGL DOES declare `displayRealized` (OpenGL.zig:237-250), whose body is
-        // the GTK arm's `prepareContext(null)` — reload the GL loader over the context
-        // GDK just made current on (re-)realize. That body now lives where the
-        // reference puts it, in [`OpenGL::display_realized`], including its
-        // `owns_context` offscreen guard; read that method's doc for why the offscreen
-        // path skips the reload.
-        //
-        // FIXED (task-14c-3, parity rows S113-F1 + S115-F2): this used to be
-        //     if !self.api.owns_context()
-        //         && crate::opengl::gl::sys::prepare_context_windowed().is_err()
-        //     { return Err(Error::GlFailed); }
-        // i.e. a failed context prep ABORTED the whole re-realize. The reference
-        // cannot do that: `api.displayRealized()` returns `void` (OpenGL.zig:237) and
-        // swallows the failure after a `log.warn` (OpenGL.zig:241-246), so
-        // `generic.zig:939-942` has no error to propagate and the rebuild below ALWAYS
-        // runs. The rebuild is now reached in a state the port never used to enter —
-        // GL possibly not (re-)loaded — which is exactly the reference's state, and it
-        // is handled the same way: `init_shaders` and `SwapChain::init` are the `try`
-        // sites (generic.zig:955-958), so a genuinely dead context fails THERE, with
-        // the leaf GL error, instead of being pre-empted by a `GlFailed` that hid it.
-        // (This runs BEFORE `draw_mutex.lock()` below — reference order
-        // generic.zig:939-947.)
-        self.api.display_realized();
-
-        // Lock the draw mutex so that we can
-        // safely reinitialize our GPU resources.
-        // self.draw_mutex.lock(); defer self.draw_mutex.unlock(); (generic.zig:946-947)
-        //
-        // The ported `Mutex` is bare lock/unlock with no RAII guard, and the body
-        // reborrows `&mut self` (`init_shaders`, field writes), so a scope guard
-        // holding `&self.draw_mutex` would conflict. `defer` is replicated by
-        // explicit unlock-before-`?` on every early return plus the unlock at the
-        // natural end — the exact idiom used by `generic.rs::change_config`.
-        self.draw_mutex.lock();
-
-        // We assume that the swap chain was deinited in
-        // `displayUnrealized`. If not, we have a problem.
-        // assert(self.swap_chain == null);
-        // assert(!self.display_realized);
-        assert!(self.swap_chain.is_none());
-        assert!(!self.display_realized);
-
-        // We reinitialize our shaders and our swap chain.
-        // try self.initShaders(); (generic.zig:955)
-        if let Err(e) = self.init_shaders() {
-            self.draw_mutex.unlock();
-            return Err(e);
-        }
-        // self.swap_chain = try SwapChain.init(self.api, self.has_custom_shaders);
-        match SwapChain::init(&self.api, self.has_custom_shaders) {
-            Ok(sc) => self.swap_chain = Some(sc),
-            Err(e) => {
-                self.draw_mutex.unlock();
-                return Err(e);
-            }
-        }
-        // self.display_realized = true;
+    // `OpenGL` no longer declares `displayRealized` (its GTK `prepareContext(null)`
+    // arm went with the GLArea), so the `@hasDecl` arm is statically false. The
+    // lock is the caller's: the main thread calls this through `renderer_seam` with
+    // its own `draw_mutex` handle (N437).
+    //
+    // PORT NOTE: the inferred `!void` has an empty error set now; the `Result`
+    // stays so the core seam's `try` reads as the reference's.
+    pub fn display_realized_locked(&mut self) -> Result<(), Error> {
+        // Mark the display as realized. The render thread will lazily
+        // rebuild the swap chain and shaders on the next `drawFrame`,
+        // which is the right place for GL resource creation (it
+        // guarantees a current context on the render thread).
         self.display_realized = true;
-        // self.reinitialize_shaders = false; (generic.zig:960)
-        self.reinitialize_shaders = false;
-        // self.target_config_modified = 1; (generic.zig:961)
+        self.reinitialize_shaders = true;
         self.target_config_modified = 1;
-
-        self.draw_mutex.unlock();
         Ok(())
     }
 
-    /// This is called by the GTK apprt when the surface is being destroyed.
-    /// This can happen because the surface is being closed but also when
-    /// moving the window between displays or splitting.
+    /// This is called when the surface is being unrealized.
+    /// This can happen because the surface is being closed but
+    /// also when moving the window between displays or splitting.
     ///
-    /// (Via `glareaUnrealize`.) It tears down the GL-context-bound resources
-    /// (marking them defunct) before the context goes away.
+    /// This runs on the main thread and only updates CPU-side state
+    /// here; resource cleanup happens on the render thread via
+    /// `releaseGpuResources`.
     //
-    // PORTS: generic.zig:964-984 `displayUnrealized`.
+    // PORTS: generic.zig:970-985 `displayUnrealized` (`2f0b65346`).
     //
     // ```zig
     // pub fn displayUnrealized(self: *Self) void {
-    //     if (@hasDecl(GraphicsAPI, "displayUnrealized")) self.api.displayUnrealized();
-    //     self.draw_mutex.lock();
-    //     defer self.draw_mutex.unlock();
-    //     self.swap_chain.deinit();
-    //     self.shaders.deinit(self.alloc);
+    //     // Lock the draw mutex so that we can safely update state.
+    //     self.draw_mutex.lockUncancelable(global.io());
+    //     defer self.draw_mutex.unlock(global.io());
+    //
+    //     // Clearing `display_realized` ensures drawFrame doesn't attempt
+    //     // to rebuild the swap chain or make any graphics API calls.
+    //     // The actual GPU resource release is done by the render thread.
+    //     self.display_realized = false;
     // }
     // ```
-    pub fn display_unrealized(&mut self) {
-        // If our API has to do things on unrealize, let it.
-        // if (@hasDecl(GraphicsAPI, "displayUnrealized")) self.api.displayUnrealized();
-        //   (generic.zig:969-971)
-        //
-        // OpenGL does NOT declare `displayUnrealized` — it exists only on the generic
-        // renderer (grep of `src/renderer` finds no `OpenGL.displayUnrealized`), so
-        // the `@hasDecl` guard is statically FALSE and there is no api call. Faithful
-        // elision (R1).
-
-        // Lock the draw mutex so that we can
-        // safely deinitialize our GPU resources.
-        // self.draw_mutex.lock(); defer self.draw_mutex.unlock(); (generic.zig:975-976)
-        //
-        // The body is infallible (no `?`), so the `defer` collapses to a plain lock
-        // + unlock at the natural end — no early-return unlock needed.
-        self.draw_mutex.lock();
-
-        // We deinit our swap chain and shaders. Clearing
-        // `display_realized` ensures drawFrame doesn't attempt
-        // to rebuild the swap chain (we have no GPU context);
-        // displayRealized will.
-        // if (self.swap_chain) |*sc| sc.deinit();
-        // self.swap_chain = null;
-        // self.display_realized = false;
-        if let Some(sc) = &mut self.swap_chain {
-            sc.deinit();
-        }
-        self.swap_chain = None;
+    //
+    // The lock is the caller's (N437), as for `display_realized_locked`.
+    pub fn display_unrealized_locked(&mut self) {
+        // Clearing `display_realized` ensures drawFrame doesn't attempt
+        // to rebuild the swap chain or make any graphics API calls.
+        // The actual GPU resource release is done by the render thread.
         self.display_realized = false;
-        // self.shaders.deinit(self.alloc); (generic.zig:983) — the Rust `Shaders`
-        // frees its GL pipelines with no allocator arg (see `deinit_shaders`); it is
-        // `defunct`-guarded, so the later `Renderer::deinit`/`init_shaders` won't
-        // double-free.
-        self.shaders.deinit();
+    }
 
-        self.draw_mutex.unlock();
+    /// Push the latest completed frame, replacing if one previously
+    /// existed. Called on the render thread.
+    ///
+    /// Has no effect for renderers that do not export frames
+    /// (i.e. `ExportedFrame == void`).
+    // pub fn pushFrame(self: *Self, frame: ExportedFrame) void {
+    //     return self.latest_frame.push(global.io(), frame);
+    // }   (generic.zig:1028-1034)
+    pub fn push_frame(&self, frame: ExportedFrame) {
+        self.latest_frame.push(frame);
+    }
+
+    /// Take the latest completed frame for the apprt to composite.
+    /// Returns null if no frame is available. The caller takes
+    /// ownership of the returned frame. Called on the main thread.
+    ///
+    /// Has no effect for renderers that do not export frames
+    /// (i.e. `ExportedFrame == void`).
+    // pub fn takeFrame(self: *Self) ?ExportedFrame {
+    //     return self.latest_frame.take(global.io());
+    // }   (generic.zig:1036-1044)
+    //
+    // PORT NOTE (N437): the main thread takes frames through
+    // [`Self::latest_frame_handle`], which reaches the slot without touching the
+    // renderer; this method is that handle's `take` for callers that own the
+    // renderer outright (the tests).
+    pub fn take_frame(&self) -> Option<ExportedFrame> {
+        self.latest_frame.take()
+    }
+
+    /// A handle to the `latest_frame` slot for the apprt's main thread (N437).
+    /// Taken once, before the render thread starts.
+    pub fn latest_frame_handle(&self) -> Arc<LatestFrame<ExportedFrame>> {
+        self.latest_frame.clone()
+    }
+
+    /// Called when the apprt reports a change in how well
+    /// frames can be presented.
+    // pub fn setPresentationHealth(self: *Self, health: Health) void {
+    //     self.presentation_health.store(health, .seq_cst);
+    // }   (generic.zig:1163-1167)
+    pub fn set_presentation_health(&self, health: crate::Health) {
+        self.presentation_health.store(health);
+    }
+
+    /// Returns how well frames can be presented.
+    // pub fn presentationHealth(self: *Self) Health {
+    //     return self.presentation_health.load(.seq_cst);
+    // }   (generic.zig:1169-1172)
+    pub fn presentation_health(&self) -> crate::Health {
+        self.presentation_health.load()
     }
 
     /// Update uniforms that are based on the font grid.
@@ -3607,8 +3662,15 @@ impl Renderer {
             cp.codepoint,
             rustty_font_shaper::Style::Regular,
             Some(Presentation::Text),
+            // .{
+            //     .grid_metrics = self.grid_metrics,
+            //     .thicken = self.config.font_thicken,
+            //     .thicken_strength = self.config.font_thicken_strength,
+            // },
             RenderOptions {
                 grid_metrics: self.grid_metrics,
+                thicken: self.config.font_thicken,
+                thicken_strength: self.config.font_thicken_strength,
                 ..RenderOptions::default()
             },
         ) {
@@ -3687,6 +3749,22 @@ impl Renderer {
         &mut self,
         features: &[crate::overlay::Feature],
     ) -> Result<(), crate::overlay::InitError> {
+        Self::rebuild_overlay_into(
+            &mut self.overlay,
+            &self.size,
+            &self.terminal_state,
+            features,
+        )
+    }
+
+    /// `rebuildOverlay` over an explicit overlay slot, so `update_frame` can
+    /// build the next overlay into a local without the draw mutex (UD363).
+    pub fn rebuild_overlay_into(
+        slot: &mut Option<Overlay>,
+        size: &Size,
+        terminal_state: &RenderState,
+        features: &[crate::overlay::Feature],
+    ) -> Result<(), crate::overlay::InitError> {
         // const alloc = self.alloc;
         // (rustty `Overlay` drops the reference `alloc` arg — its z2d surface
         // owns its `Vec`; `Overlay::init`/`apply_features` take no `alloc`.)
@@ -3694,9 +3772,9 @@ impl Renderer {
         // If we have no features enabled, don't build an overlay.
         // If we had a previous overlay, deallocate it.
         if features.is_empty() {
-            if let Some(old) = self.overlay.as_mut() {
+            if let Some(old) = slot.as_mut() {
                 old.deinit();
-                self.overlay = None;
+                *slot = None;
             }
 
             return Ok(());
@@ -3704,7 +3782,7 @@ impl Renderer {
 
         // If we had a previous overlay, clear it. Otherwise, init.
         'overlay: {
-            if let Some(v) = self.overlay.as_mut() {
+            if let Some(v) = slot.as_mut() {
                 'existing: {
                     // Verify that our overlay size matches our screen
                     // size as we know it now. If not, deinit and reinit.
@@ -3712,14 +3790,14 @@ impl Renderer {
                     // stores as i32 but we always init with a u32.
                     let width: u32 = v.surface.get_width() as u32;
                     let height: u32 = v.surface.get_height() as u32;
-                    let term_size = self.size.terminal();
+                    let term_size = size.terminal();
                     if width != term_size.width || height != term_size.height {
                         break 'existing;
                     }
 
                     // We also depend on cell size.
-                    if v.cell_size.width != self.size.cell.width
-                        || v.cell_size.height != self.size.cell.height
+                    if v.cell_size.width != size.cell.width
+                        || v.cell_size.height != size.cell.height
                     {
                         break 'existing;
                     }
@@ -3732,26 +3810,20 @@ impl Renderer {
             }
 
             // If we reached this point we want to reset our overlay.
-            if let Some(v) = self.overlay.as_mut() {
+            if let Some(v) = slot.as_mut() {
                 v.deinit();
-                self.overlay = None;
+                *slot = None;
             }
 
-            assert!(self.overlay.is_none());
-            let new: Overlay = Overlay::init(self.size)?;
-            self.overlay = Some(new);
+            assert!(slot.is_none());
+            let new: Overlay = Overlay::init(*size)?;
+            *slot = Some(new);
         }
 
         // overlay.applyFeatures(alloc, &self.terminal_state, features);
-        // SAFETY: `self.overlay` and `self.terminal_state` are DISJOINT fields; the
-        // raw ptr detaches the immutable `terminal_state` read from the `&mut
-        // self.overlay` borrow (a field-level reborrow does not retag
-        // `terminal_state`).
-        let terminal_state: *const RenderState = &self.terminal_state;
-        self.overlay
-            .as_mut()
+        slot.as_mut()
             .unwrap()
-            .apply_features(unsafe { &*terminal_state }, features);
+            .apply_features(terminal_state, features);
         Ok(())
     }
 
@@ -3782,44 +3854,63 @@ impl Renderer {
         state: &state::State,
         cursor_blink_visible: bool,
     ) -> Result<(), VtOutOfMemory> {
-        // CoreText shaping accumulates objects for deferred release over
-        // the course of a frame. Always flush those objects, including
-        // when rebuilding the frame fails due to memory pressure.
-        // defer self.font_shaper.endFrame();
-        //
-        // PORT NOTE (parity S115-F1): the reference's first statement is
-        // this `defer`, so `endFrame` runs on every exit: the
-        // synchronized-output early `return`, a failed `beginUpdate`, and
-        // the normal end. The body is `update_frame_impl`; running
-        // `end_frame` after it here is that defer. It also keeps the
-        // reference's order at the normal end: the later-registered `defer
-        // self.terminal_state.dirty = .false` (the impl's last statement)
-        // runs before `endFrame`. CORRECTION: `end_frame` used to be a plain
-        // statement at the end of the success path only.
-        // UNVERIFIED on Linux: written on macOS, compile and suite pending on
-        // rvm (NEW-FINDINGS N181).
-        let result = self.update_frame_impl(state, cursor_blink_visible);
-        self.font_shaper.end_frame();
-        result
+        let mutex = self.draw_mutex.clone();
+        let self_ptr: *mut Renderer = self;
+        unsafe { Self::update_frame_raw(self_ptr, &mutex, state, cursor_blink_visible) }
     }
 
-    /// The body of [`Self::update_frame`], which runs
+    /// The body of [`Self::update_frame_raw`], which runs
     /// `font_shaper.end_frame()` after it on every exit.
-    fn update_frame_impl(
-        &mut self,
+    ///
+    /// # Safety
+    /// `self_ptr` is a valid, whole-`Renderer`-provenance pointer and `lock`
+    /// a handle to its draw mutex, which the caller does NOT hold; only the
+    /// render thread calls this.
+    unsafe fn update_frame_impl(
+        self_ptr: *mut Renderer,
+        lock: &DrawMutex,
         state: &state::State,
         cursor_blink_visible: bool,
     ) -> Result<(), VtOutOfMemory> {
+        // N437 / ruling 32 (P7-W7 T2 fix round 1): the reference runs this part of
+        // `updateFrame` without the draw mutex; only the render thread uses these
+        // fields. The port reaches each through a narrow place of the raw root, never
+        // a whole-renderer reference, so the main thread's locked accesses (its sync
+        // draw on macOS, `displayRealized`/`displayUnrealized` on GTK, all narrow
+        // too) touch no byte these borrows cover. Proven on
+        // `.port/phase-2/mirihar-n437` (`split_*`).
+        let alloc = unsafe { (*self_ptr).alloc };
+        let scroll_to_bottom_on_output = unsafe { (*self_ptr).config.scroll_to_bottom_on_output };
+        // (`render_cell_map` updates the link matchers' caches, so this one is `&mut`.)
+        let config_links = unsafe { &mut (*self_ptr).config.links };
+        let terminal_state: &mut RenderState = unsafe { &mut (*self_ptr).terminal_state };
+        let terminal_state_frame_count = unsafe { &mut (*self_ptr).terminal_state_frame_count };
+        let last_bottom_node = unsafe { &mut (*self_ptr).last_bottom_node };
+        let last_bottom_y = unsafe { &mut (*self_ptr).last_bottom_y };
+        let kitty_animation_next_ms = unsafe { &mut (*self_ptr).kitty_animation_next_ms };
+        let kitty_animation_clock = unsafe { &mut (*self_ptr).kitty_animation_clock };
+        let search_matches_dirty = unsafe { &mut (*self_ptr).search_matches_dirty };
+        let search_selected_match = unsafe { &(*self_ptr).search_selected_match };
+        let search_matches = unsafe { &(*self_ptr).search_matches };
+
+        /// Unlocks the draw mutex on every exit of the Kitty block.
+        struct DrawUnlock<'a>(&'a DrawMutex);
+        impl Drop for DrawUnlock<'_> {
+            fn drop(&mut self) {
+                self.0.unlock();
+            }
+        }
+
         // We fully deinit and reset the terminal state every so often so that a
         // particularly large terminal state doesn't cause the renderer to hold on to
         // retained memory. Frame count is ~12 minutes at 120Hz.
         let max_terminal_state_frame_count = 100_000;
-        if self.terminal_state_frame_count >= max_terminal_state_frame_count {
-            self.terminal_state.deinit(self.alloc.into());
-            self.terminal_state = RenderState::empty();
-            self.terminal_state_frame_count = 0;
+        if *terminal_state_frame_count >= max_terminal_state_frame_count {
+            terminal_state.deinit(alloc.into());
+            *terminal_state = RenderState::empty();
+            *terminal_state_frame_count = 0;
         }
-        self.terminal_state_frame_count += 1;
+        *terminal_state_frame_count += 1;
 
         // Data we extract out of the critical area.
         struct Critical {
@@ -3831,6 +3922,8 @@ impl Renderer {
             preedit: Option<state::Preedit>,
             scrollbar: Scrollbar,
             overlay_features: Vec<crate::overlay::Feature>,
+            /// `self.size`, copied under the draw mutex for the overlay rebuild (UD363).
+            size: Size,
         }
 
         // The renderer-thread state carries its terminal behind a `*mut Terminal` (a
@@ -3879,7 +3972,7 @@ impl Renderer {
             // If scroll-to-bottom on output is enabled, check if the final line
             // changed by comparing the bottom-right pin. Update this BEFORE we update
             // our render state so we can draw the new scrolled data immediately.
-            if self.config.scroll_to_bottom_on_output {
+            if scroll_to_bottom_on_output {
                 'scroll: {
                     let active = unsafe { (*t).screens.active };
                     let br = match unsafe { (*active).pages.get_bottom_right(point::Tag::Screen) } {
@@ -3888,14 +3981,13 @@ impl Renderer {
                     };
 
                     // If the pin hasn't changed, then don't scroll.
-                    if self.last_bottom_node == Some(br.node as usize) && self.last_bottom_y == br.y
-                    {
+                    if *last_bottom_node == Some(br.node as usize) && *last_bottom_y == br.y {
                         break 'scroll;
                     }
 
                     // Update tracked pin state for next frame
-                    self.last_bottom_node = Some(br.node as usize);
-                    self.last_bottom_y = br.y;
+                    *last_bottom_node = Some(br.node as usize);
+                    *last_bottom_y = br.y;
 
                     // Scroll
                     unsafe {
@@ -3905,11 +3997,10 @@ impl Renderer {
             }
 
             // Update our terminal state
-            self.terminal_state
-                .update(self.alloc.into(), unsafe { &mut *t })?;
+            terminal_state.update(alloc.into(), unsafe { &mut *t })?;
 
             // If our terminal state is dirty at all we need to redo the viewport search.
-            if self.terminal_state.dirty != Dirty::False {
+            if terminal_state.dirty != Dirty::False {
                 unsafe {
                     (*t).flags.search_viewport_dirty = true;
                 }
@@ -3940,7 +4031,7 @@ impl Renderer {
             // `begin_update` above) — the IO thread cannot interleave. The
             // `&mut` is re-derived from the raw screen ptr for exactly this
             // statement (no borrow held across).
-            self.kitty_animation_next_ms = 'next: {
+            *kitty_animation_next_ms = 'next: {
                 // Likely case: we have no kitty images, so do nothing.
                 let active = unsafe { (*t).screens.active };
                 if unsafe { &(*active).kitty_images }.images.is_empty() {
@@ -3948,10 +4039,10 @@ impl Renderer {
                 }
 
                 let now = Instant::now();
-                let base = match self.kitty_animation_clock {
+                let base = match *kitty_animation_clock {
                     Some(base) => base,
                     None => {
-                        self.kitty_animation_clock = Some(now);
+                        *kitty_animation_clock = Some(now);
                         now
                     }
                 };
@@ -3972,20 +4063,34 @@ impl Renderer {
             // an image.
             //
             // PORTS: generic.zig:1229-1248; macos_impl generic.rs:4813-4833.
-            if self.images.kitty_requires_update(unsafe { &*t }) {
-                // We need to grab the draw mutex since this updates
-                // our image state that drawFrame uses.
-                self.draw_mutex.lock();
-                self.images.kitty_update(
-                    self.alloc,
-                    unsafe { &*t },
-                    CellSize {
-                        width: self.grid_metrics.cell_width,
-                        height: self.grid_metrics.cell_height,
-                    },
-                );
-                self.draw_mutex.unlock();
-            }
+            // PORT NOTE (N437 / ruling 32, Rust aliasing, not a reference defect):
+            // the reference reads `kittyRequiresUpdate` without the lock; the
+            // fields it reads are ones the draw never writes. In the port the
+            // check forms a reference to the whole `images` state, which the main
+            // thread's draw mutates under the lock (`images.upload`), so the lock is
+            // taken around the check as well as the update. The same lock hold
+            // copies `size`, which the draw writes on a resize (`self.size.screen`),
+            // for the overlay rebuild below.
+            let size_snapshot: Size = {
+                lock.lock();
+                let _unlock = DrawUnlock(lock);
+                let size_snapshot = unsafe { (*self_ptr).size };
+                if unsafe { (*self_ptr).images.kitty_requires_update(&*t) } {
+                    // We need to grab the draw mutex since this updates
+                    // our image state that drawFrame uses.
+                    unsafe {
+                        (*self_ptr).images.kitty_update(
+                            alloc,
+                            &*t,
+                            CellSize {
+                                width: (*self_ptr).grid_metrics.cell_width,
+                                height: (*self_ptr).grid_metrics.cell_height,
+                            },
+                        )
+                    };
+                }
+                size_snapshot
+            };
 
             // Get our OSC8 links we're hovering if we have a mouse.
             let links: CellSet = match state.mouse.point {
@@ -3994,7 +4099,7 @@ impl Renderer {
                     if !state.mouse.mods.equal(key::ctrl_or_super(Mods::default())) {
                         CellSet::new()
                     } else {
-                        self.terminal_state
+                        terminal_state
                             .link_cells(Global.into(), vp)
                             .unwrap_or_else(|err| {
                                 // log.warn("error searching for OSC8 links err={}", .{err});
@@ -4033,16 +4138,17 @@ impl Renderer {
                 preedit,
                 scrollbar,
                 overlay_features,
+                size: size_snapshot,
             }
         };
 
         // Outside the critical area we can update our links to contain our regex
         // results.
         // catch |err| log.warn("error searching for regex links err={}", .{err});
-        if let Err(err) = self.config.links.render_cell_map(
+        if let Err(err) = config_links.render_cell_map(
             Global.into(),
             &mut critical.links,
-            &self.terminal_state,
+            &*terminal_state,
             state.mouse.point,
             state.mouse.mods,
         ) {
@@ -4050,30 +4156,30 @@ impl Renderer {
         }
 
         // Clear our highlight state and update.
-        if self.search_matches_dirty || self.terminal_state.dirty != Dirty::False {
-            self.search_matches_dirty = false;
+        if *search_matches_dirty || terminal_state.dirty != Dirty::False {
+            *search_matches_dirty = false;
 
             // Clear the prior highlights
             let mut any_dirty: bool = false;
-            for row in self.terminal_state.row_data.iter_mut() {
+            for row in terminal_state.row_data.iter_mut() {
                 if !row.highlights.is_empty() {
                     row.highlights.clear();
                     row.dirty = true;
                     any_dirty = true;
                 }
             }
-            if any_dirty && self.terminal_state.dirty == Dirty::False {
-                self.terminal_state.dirty = Dirty::Partial;
+            if any_dirty && terminal_state.dirty == Dirty::False {
+                terminal_state.dirty = Dirty::Partial;
             }
 
             // NOTE: The order below matters. Highlights added earlier take priority.
-            if let Some(m) = &self.search_selected_match {
+            if let Some(m) = search_selected_match {
                 // catch |err| {
                 //     // Not a critical error, we just won't show highlights.
                 //     log.warn("error updating search selected highlight err={}", .{err});
                 // }
-                if let Err(err) = self.terminal_state.update_highlights_flattened(
-                    self.alloc.into(),
+                if let Err(err) = terminal_state.update_highlights_flattened(
+                    alloc.into(),
                     HighlightTag::SearchMatchSelected as u8,
                     core::slice::from_ref(&m.r#match),
                 ) {
@@ -4084,13 +4190,13 @@ impl Renderer {
                     );
                 }
             }
-            if let Some(m) = &self.search_matches {
+            if let Some(m) = search_matches {
                 // catch |err| {
                 //     // Not a critical error, we just won't show highlights.
                 //     log.warn("error updating search highlights err={}", .{err});
                 // }
-                if let Err(err) = self.terminal_state.update_highlights_flattened(
-                    self.alloc.into(),
+                if let Err(err) = terminal_state.update_highlights_flattened(
+                    alloc.into(),
                     HighlightTag::SearchMatch as u8,
                     &m.matches,
                 ) {
@@ -4107,87 +4213,107 @@ impl Renderer {
         // self.rebuildOverlay(critical.overlay_features) catch |err|
         //     log.warn("error rebuilding overlay surface err={}", .{err});
         //
-        // PORTS: generic.zig:1356-1365; macos_impl generic.rs:4959.
-        if let Err(err) = self.rebuild_overlay(&critical.overlay_features) {
+        // PORT NOTE: reference defect (R13), UD363. The reference rebuilds
+        // `self.overlay` in place here, without the lock, while the macOS
+        // main thread's sync draw reads `self.overlay != null` under it. The
+        // port builds the next overlay into a local (reusing last frame's
+        // replaced one, `overlay_spare`) and swaps it in under the lock below.
+        let mut next_overlay: Option<Overlay> = unsafe { (*self_ptr).overlay_spare.take() };
+        if let Err(err) = Self::rebuild_overlay_into(
+            &mut next_overlay,
+            &critical.size,
+            terminal_state,
+            &critical.overlay_features,
+        ) {
             log::warn!(target: LOG_SCOPE, "error rebuilding overlay surface err={err:?}");
         }
 
         // Acquire the draw mutex for all remaining state updates.
-        {
-            self.draw_mutex.lock();
+        // (N437 / ruling 32: the whole `&mut` exists only here, under the
+        // lock, after the last use of the unlocked view above.)
+        let (old_overlay, overlay_off) = unsafe {
+            Self::with_locked(self_ptr, lock, move |r| {
+                // PORT NOTE: reference defect (R13), UD363. The overlay was built
+                // into `next_overlay` above, without the lock (as the reference
+                // rebuilds it); only the swap into `self.overlay` happens here.
+                let old_overlay = core::mem::replace(&mut r.overlay, next_overlay);
 
-            // Build our GPU cells. `critical.preedit` is MOVED into `rebuild_cells`,
-            // but `critical.preedit.is_some()` is read FIRST for `cursor::style`.
-            let cs = cursor::style(
-                &self.terminal_state,
-                cursor::StyleOptions {
-                    preedit: critical.preedit.is_some(),
-                    focused: self.focused,
-                    blink_visible: cursor_blink_visible,
-                },
-            );
-            self.rebuild_cells(critical.preedit, cs, &critical.links);
-            // catch |err| {
-            //     // This means we weren't able to allocate our buffer
-            //     // to update the cells. In this case, we continue with
-            //     // our old buffer (frozen contents) and log it.
-            //     comptime assert(@TypeOf(err) == error{OutOfMemory});
-            //     log.warn("error rebuilding GPU cells err={}", .{err});
-            // }
-            //
-            // LOG PORT NOTE (task-14c-5, N9 — Linux-side residual of the WAIVED row
-            // S115-F4): `rebuild_cells` is INFALLIBLE in rustty (it returns `()`;
-            // its sole OOM source aborts via the `Global` allocator), so the
-            // reference's "continue with frozen contents" catch path is unreachable
-            // here and this `log.warn` is NOT restorable — emitting it
-            // unconditionally would put a diagnostic on the SUCCESS path. Same
-            // ruling as the Metal twin (task-14c-1, generic.rs:5412-5427). See
-            // ADJUDICATION.md#s115-f4.
+                // Build our GPU cells. `critical.preedit` is MOVED into `rebuild_cells`,
+                // but `critical.preedit.is_some()` is read FIRST for `cursor::style`.
+                let cs = cursor::style(
+                    &r.terminal_state,
+                    cursor::StyleOptions {
+                        preedit: critical.preedit.is_some(),
+                        focused: r.focused,
+                        blink_visible: cursor_blink_visible,
+                    },
+                );
+                r.rebuild_cells(critical.preedit, cs, &critical.links);
+                // catch |err| {
+                //     // This means we weren't able to allocate our buffer
+                //     // to update the cells. In this case, we continue with
+                //     // our old buffer (frozen contents) and log it.
+                //     comptime assert(@TypeOf(err) == error{OutOfMemory});
+                //     log.warn("error rebuilding GPU cells err={}", .{err});
+                // }
+                //
+                // LOG PORT NOTE (task-14c-5, N9 — Linux-side residual of the WAIVED row
+                // S115-F4): `rebuild_cells` is INFALLIBLE in rustty (it returns `()`;
+                // its sole OOM source aborts via the `Global` allocator), so the
+                // reference's "continue with frozen contents" catch path is unreachable
+                // here and this `log.warn` is NOT restorable — emitting it
+                // unconditionally would put a diagnostic on the SUCCESS path. Same
+                // ruling as the Metal twin (task-14c-1, generic.rs:5412-5427). See
+                // ADJUDICATION.md#s115-f4.
 
-            // The scrollbar is only emitted during draws so we also check the
-            // scrollbar cache here and update if needed.
-            if !self.scrollbar.eql(critical.scrollbar) {
-                self.scrollbar = critical.scrollbar;
-                self.scrollbar_dirty = true;
-            }
+                // The scrollbar is only emitted during draws so we also check the
+                // scrollbar cache here and update if needed.
+                if !r.scrollbar.eql(critical.scrollbar) {
+                    r.scrollbar = critical.scrollbar;
+                    r.scrollbar_dirty = true;
+                }
 
-            // Update our background color
-            self.uniforms.bg_color = [
-                self.terminal_state.colors.background.r,
-                self.terminal_state.colors.background.g,
-                self.terminal_state.colors.background.b,
-                (self.config.background_opacity * 255.0).round() as u8,
-            ];
+                // Update our background color
+                r.uniforms.bg_color = [
+                    r.terminal_state.colors.background.r,
+                    r.terminal_state.colors.background.g,
+                    r.terminal_state.colors.background.b,
+                    (r.config.background_opacity * 255.0).round() as u8,
+                ];
 
-            // NOT A CUT (macOS glass background): macos_impl generic.rs:5007-5021 is
-            // guarded by `if (comptime builtin.os.tag == .macos)` in generic.zig;
-            // that branch is COMPILED OUT on Linux, so it is absent here by fidelity.
+                // NOT A CUT (macOS glass background): macos_impl generic.rs:5007-5021 is
+                // guarded by `if (comptime builtin.os.tag == .macos)` in generic.zig;
+                // that branch is COMPILED OUT on Linux, so it is absent here by fidelity.
 
-            // Prepare our overlay image for upload (or unload). This has to use our
-            // general allocator since it modifies state that survives frames.
-            // self.images.overlayUpdate(self.alloc, self.overlay) catch |err|
-            //     log.warn("error updating overlay images err={}", .{err});
-            //
-            // PORTS: generic.zig:1416-1424; macos_impl generic.rs:5026-5028.
-            // (`Option<&Overlay>` — the borrowed-ownership deviation documented on
-            //  `image::linux_impl::State::overlay_update`.)
-            if let Err(err) = self
-                .images
-                .overlay_update(self.alloc, self.overlay.as_ref())
-            {
-                log::warn!(target: LOG_SCOPE, "error updating overlay images err={err:?}");
-            }
+                // Prepare our overlay image for upload (or unload). This has to use our
+                // general allocator since it modifies state that survives frames.
+                // self.images.overlayUpdate(self.alloc, self.overlay) catch |err|
+                //     log.warn("error updating overlay images err={}", .{err});
+                //
+                // PORTS: generic.zig:1416-1424; macos_impl generic.rs:5026-5028.
+                // (`Option<&Overlay>` — the borrowed-ownership deviation documented on
+                //  `image::linux_impl::State::overlay_update`.)
+                if let Err(err) = r.images.overlay_update(r.alloc, r.overlay.as_ref()) {
+                    log::warn!(target: LOG_SCOPE, "error updating overlay images err={err:?}");
+                }
 
-            // Update custom shader uniforms that depend on terminal state.
-            // self.updateCustomShaderUniformsFromState();
-            self.update_custom_shader_uniforms_from_state();
-
-            self.draw_mutex.unlock();
+                // Update custom shader uniforms that depend on terminal state.
+                // self.updateCustomShaderUniformsFromState();
+                r.update_custom_shader_uniforms_from_state();
+                (old_overlay, r.overlay.is_none())
+            })
+        };
+        // UD363: keep the replaced overlay for the next rebuild to reuse, or,
+        // with no overlay configured, release it as the reference does.
+        // (`overlay_off` was read under the lock with the swap.)
+        match old_overlay {
+            Some(mut old) if overlay_off => old.deinit(),
+            old => unsafe { (*self_ptr).overlay_spare = old },
         }
 
         // Reset our dirty state after updating (the reference `defer
         // self.terminal_state.dirty = .false`, fired at fn scope exit — §C.4).
-        self.terminal_state.dirty = Dirty::False;
+        unsafe { (*self_ptr).terminal_state.dirty = Dirty::False };
 
         Ok(())
     }
@@ -4531,6 +4657,22 @@ impl Renderer {
     // (`AtomicHealth`), `surface_mailbox.push` (`&self` — the sink is behind an
     // `Arc`), and `swap_chain.release_frame`
     // (posts the semaphore).
+    /// Queue a `.forever` surface-mailbox push until the draw mutex is
+    /// released (UD362).
+    pub fn defer_forever_push(&self, msg: SurfaceMessage) {
+        self.deferred_surface_pushes.borrow_mut().push(msg);
+    }
+
+    /// Take the queued `.forever` pushes (under the draw mutex) together with a
+    /// handle to the mailbox, so the caller can send them after the unlock
+    /// without touching the renderer (UD362, N437).
+    pub fn take_deferred_surface_pushes(&self) -> DeferredSurfacePushes {
+        DeferredSurfacePushes {
+            mailbox: self.surface_mailbox.clone(),
+            msgs: core::mem::take(&mut *self.deferred_surface_pushes.borrow_mut()),
+        }
+    }
+
     pub fn frame_completed(&self, health: crate::Health) {
         // If our health value hasn't changed, then we do nothing.
         // if (self.health.load(.seq_cst) != health) {
@@ -4542,10 +4684,11 @@ impl Renderer {
             // sink re-wraps this into `apprt::surface::Message::RendererHealth`; a
             // DETACHED offscreen mailbox still returns 0).
             // _ = self.surface_mailbox.push(.{ .renderer_health = health }, .{ .forever = {} });
-            let _ = self.surface_mailbox.push(
-                SurfaceMessage::RendererHealth(health),
-                MailboxTimeout::Forever,
-            );
+            //
+            // PORT NOTE: reference defect (R13), UD362. On OpenGL this runs
+            // inside `drawFrameLocked` (the frame completes synchronously), so
+            // the `.forever` push is deferred until the draw mutex is released.
+            self.defer_forever_push(SurfaceMessage::RendererHealth(health));
         }
 
         // Always release our semaphore. The swap chain is
@@ -4586,23 +4729,84 @@ impl Renderer {
     // `addr_of_mut!((*self_ptr).swap_chain.frames[idx])` after every whole-`&mut self`
     // call, because a whole `&mut *self_ptr` reborrow POPS a held `frame` tag.
     //
+    // P7-W7 T2: `drawFrame` is split into its locked body, `drawFrameLocked`
+    // (`72cf50855`, P7-W0 T1 on the Metal twin), so `syncDisplayLink` runs after
+    // the mutex is released. Off macOS `syncDisplayLink` returns at once
+    // (`DisplayLink == void`), so the split only changes where the lock ends.
+    //
+    // N437: `lock` is the caller's own `draw_mutex` handle (`crate::latest_frame`),
+    // taken before the render thread started; the body forms references to the
+    // renderer only while it is held.
+    //
     /// # Safety
     /// `self_ptr` must be a valid, well-aligned, whole-`Renderer`-provenance pointer
-    /// that outlives the call.
-    pub unsafe fn draw_frame_raw(self_ptr: *mut Renderer, sync: bool) -> Result<(), Error> {
-        // self.draw_mutex.lock(); defer self.draw_mutex.unlock();
-        unsafe { (*self_ptr).draw_mutex.lock() };
+    /// that outlives the call, and `lock` a handle to its `draw_mutex`.
+    pub unsafe fn draw_frame_raw(
+        self_ptr: *mut Renderer,
+        lock: &DrawMutex,
+        sync: bool,
+    ) -> Result<(), Error> {
+        // Everything that touches draw state happens under the draw
+        // mutex. The display link is synced only after the mutex is
+        // released; see `syncDisplayLink` for why it must never be
+        // called with the draw mutex held.
+        // const sync_display_link = locked: {
+        //     self.draw_mutex.lockUncancelable(global.io());
+        //     defer self.draw_mutex.unlock(global.io());
+        //     break :locked try self.drawFrameLocked(sync);
+        // };
+        let (sync_display_link, deferred) = {
+            lock.lock();
+            struct UnlockGuard<'a>(&'a DrawMutex);
+            impl Drop for UnlockGuard<'_> {
+                fn drop(&mut self) {
+                    self.0.unlock();
+                }
+            }
+            let _unlock = UnlockGuard(lock);
+            let result = unsafe { Self::draw_frame_locked(self_ptr, sync) };
+            // UD362: take the frame completion's `.forever` pushes while the
+            // lock is held; they are sent below, after the unlock.
+            (result, unsafe {
+                (*self_ptr).take_deferred_surface_pushes()
+            })
+        };
 
+        // PORT NOTE: reference defect (R13), UD362. The `.redraw` and
+        // `.renderer_health` pushes the reference makes inside the locked
+        // frame completion go out here, with the draw mutex released, so a
+        // full app mailbox cannot block the render thread while it holds the
+        // mutex the apprt main thread (the mailbox's consumer) needs.
+        deferred.push_all();
+        let sync_display_link = sync_display_link?;
+
+        // if (sync_display_link) self.syncDisplayLink(null, null);
+        // (`if (comptime DisplayLink == void) return;` — nothing to sync off macOS.)
+        let _ = sync_display_link;
+        Ok(())
+    }
+
+    /// The body of `drawFrame`. Must be called with `draw_mutex` held.
+    ///
+    /// Returns true if the display link should be resynced once the
+    /// draw mutex is released. This is only ever true on the no-redraw
+    /// path, which a sync draw never takes, so the main thread's sync
+    /// draws never touch the display link and `syncDisplayLink` stays
+    /// on the render thread.
+    //
+    // generic.zig:1695-2003 `drawFrameLocked` (`72cf50855`, `2f0b65346`).
+    //
+    /// # Safety
+    /// As [`draw_frame_raw`](Self::draw_frame_raw), and the caller holds
+    /// `draw_mutex` for the whole call.
+    // PORT NOTE: `&(&(*self_ptr).shaders.pipelines).x` spells out the reference the
+    // pipelines `Undefined` derefs through (the rustc lint `dangerous_implicit_autorefs` rejects
+    // the implicit one on a raw-pointer place); clippy calls that borrow needless.
+    #[allow(clippy::needless_borrow)]
+    unsafe fn draw_frame_locked(self_ptr: *mut Renderer, sync: bool) -> Result<bool, Error> {
         // Hand-rolled `defer`s as RAII guards (each holds the raw root, cleans up via a
         // NARROW field reborrow), dropping LIFO in the reference order:
-        // draw_frame_end → scrollbar → unlock.
-        struct UnlockGuard(*mut Renderer);
-        impl Drop for UnlockGuard {
-            fn drop(&mut self) {
-                // self.draw_mutex.unlock();
-                unsafe { (*self.0).draw_mutex.unlock() };
-            }
-        }
+        // draw_frame_end → scrollbar.
         struct ScrollbarGuard(*mut Renderer);
         impl Drop for ScrollbarGuard {
             fn drop(&mut self) {
@@ -4649,7 +4853,6 @@ impl Renderer {
             }
         }
 
-        let _unlock = UnlockGuard(self_ptr);
         let _scrollbar = ScrollbarGuard(self_ptr);
 
         // self.api.drawFrameStart(); defer self.api.drawFrameEnd();
@@ -4661,15 +4864,15 @@ impl Renderer {
 
         // If either dimension is zero, drawing is absurd — return.
         if surface_size.width == 0 || surface_size.height == 0 {
-            return Ok(());
+            return Ok(false);
         }
 
         // If we have no graphics context we can't draw. This is
         // only the case while unrealized (GTK); displayRealized
         // rebuilds the swap chain.
-        // if (!self.display_realized) return;
+        // if (!self.display_realized) return false;
         if !unsafe { (*self_ptr).display_realized } {
-            return Ok(());
+            return Ok(false);
         }
 
         // Get our swap chain, rebuilding it if it was released
@@ -4708,9 +4911,13 @@ impl Renderer {
             || sync;
 
         if !needs_redraw {
-            // try self.api.presentLastTarget();
-            unsafe { (*self_ptr).api.present_last_target() }?;
-            return Ok(());
+            // Ask our caller to resync the display link once the draw
+            // mutex is released, because we can probably pause the
+            // display link at this point.
+            //
+            // (`2f0b65346` deleted the `try self.api.presentLastTarget()` that
+            // preceded this: the apprt keeps displaying the last exported frame.)
+            return Ok(true);
         }
         // self.cells_rebuilt = false;
         unsafe { (*self_ptr).cells_rebuilt = false };
@@ -5006,7 +5213,7 @@ impl Renderer {
             //     &.{ null, frame.cells_bg.buffer }, .draw = {triangle, 3} }); }
             match unsafe { (*self_ptr).bg_image.as_ref() } {
                 Some(image::Image::Ready(texture)) => pass.step(Step {
-                    pipeline: unsafe { &(*self_ptr).shaders.pipelines.bg_image },
+                    pipeline: unsafe { &(&(*self_ptr).shaders.pipelines).bg_image },
                     uniforms: Some(unsafe { (*frame).uniforms.buffer }),
                     buffers: &[Some(unsafe { (*frame).bg_image_buffer.buffer })],
                     textures: &[Some(texture)],
@@ -5020,7 +5227,7 @@ impl Renderer {
                 Some(_) => {}
                 None => {
                     pass.step(Step {
-                        pipeline: unsafe { &(*self_ptr).shaders.pipelines.bg_color },
+                        pipeline: unsafe { &(&(*self_ptr).shaders.pipelines).bg_color },
                         uniforms: Some(unsafe { (*frame).uniforms.buffer }),
                         buffers: &[None, Some(unsafe { (*frame).cells_bg.buffer })],
                         textures: &[],
@@ -5043,7 +5250,7 @@ impl Renderer {
             unsafe {
                 (*self_ptr).images.draw(
                     &(*self_ptr).api,
-                    &(*self_ptr).shaders.pipelines.image,
+                    &(&(*self_ptr).shaders.pipelines).image,
                     &mut pass,
                     DrawPlacements::KittyBelowBg,
                 );
@@ -5053,7 +5260,7 @@ impl Renderer {
             // pass.step(.{ .pipeline = cell_bg, .uniforms, .buffers = &.{ null,
             //     frame.cells_bg.buffer }, .draw = {triangle, 3} });
             pass.step(Step {
-                pipeline: unsafe { &(*self_ptr).shaders.pipelines.cell_bg },
+                pipeline: unsafe { &(&(*self_ptr).shaders.pipelines).cell_bg },
                 uniforms: Some(unsafe { (*frame).uniforms.buffer }),
                 buffers: &[None, Some(unsafe { (*frame).cells_bg.buffer })],
                 textures: &[],
@@ -5072,7 +5279,7 @@ impl Renderer {
             unsafe {
                 (*self_ptr).images.draw(
                     &(*self_ptr).api,
-                    &(*self_ptr).shaders.pipelines.image,
+                    &(&(*self_ptr).shaders.pipelines).image,
                     &mut pass,
                     DrawPlacements::KittyBelowText,
                 );
@@ -5083,7 +5290,7 @@ impl Renderer {
             //     frame.cells.buffer, frame.cells_bg.buffer }, .textures = &.{
             //     frame.grayscale, frame.color }, .draw = {triangle_strip, 4, fg_count} });
             pass.step(Step {
-                pipeline: unsafe { &(*self_ptr).shaders.pipelines.cell_text },
+                pipeline: unsafe { &(&(*self_ptr).shaders.pipelines).cell_text },
                 uniforms: Some(unsafe { (*frame).uniforms.buffer }),
                 buffers: &[
                     Some(unsafe { (*frame).cells.buffer }),
@@ -5108,7 +5315,7 @@ impl Renderer {
             unsafe {
                 (*self_ptr).images.draw(
                     &(*self_ptr).api,
-                    &(*self_ptr).shaders.pipelines.image,
+                    &(&(*self_ptr).shaders.pipelines).image,
                     &mut pass,
                     DrawPlacements::KittyAboveText,
                 );
@@ -5123,7 +5330,7 @@ impl Renderer {
                 unsafe {
                     (*self_ptr).images.draw(
                         &(*self_ptr).api,
-                        &(*self_ptr).shaders.pipelines.image,
+                        &(&(*self_ptr).shaders.pipelines).image,
                         &mut pass,
                         DrawPlacements::Overlay,
                     );
@@ -5207,17 +5414,263 @@ impl Renderer {
         // directly. `frame` is NOT used after this.
         frame_ctx.complete(sync);
 
-        Ok(())
-        // The three RAII guards drop here in the reference LIFO order:
-        // draw_frame_end → scrollbar → unlock.
+        Ok(false)
+        // The two RAII guards drop here in the reference LIFO order:
+        // draw_frame_end → scrollbar; the caller's unlock follows.
     }
 
-    /// `&mut self` convenience wrapper over [`draw_frame_raw`]. Sound for the exclusive
-    /// single-threaded offscreen callers (the golden unit tests). Mirrors
-    /// `macos_impl::draw_frame` (generic.rs:6032-6035).
+    /// `&mut self` convenience wrapper over [`draw_frame_raw`], locking through
+    /// the renderer's own handle. Sound for the exclusive single-threaded
+    /// offscreen callers (the golden unit tests). Mirrors `macos_impl::draw_frame`.
     pub fn draw_frame(&mut self, sync: bool) -> Result<(), Error> {
+        let mutex = self.draw_mutex.clone();
         let self_ptr: *mut Renderer = self;
-        unsafe { Self::draw_frame_raw(self_ptr, sync) }
+        unsafe { Self::draw_frame_raw(self_ptr, &mutex, sync) }
+    }
+}
+
+/// PORT-ONLY (UD352): the outcome of the `syncDisplayLink` tail's reads, applied
+/// once `draw_mutex` is released. Off macOS `DisplayLink` is `void` and
+/// `syncDisplayLink` returns at once, so this is empty and `apply` does nothing;
+/// it exists so `renderer_seam` drives both twins the same way.
+#[derive(Clone, Copy, Debug)]
+pub struct DisplayLinkSync;
+
+impl DisplayLinkSync {
+    /// `if (comptime DisplayLink == void) return;`
+    pub fn apply(self) {}
+}
+
+// ===========================================================================
+// N437: the cross-thread entries.
+//
+// Every renderer call the render thread makes (`renderer_seam::Thread`), and
+// every one the apprt's main thread makes while the render thread runs
+// (`displayRealized`/`displayUnrealized`), goes through one of these. Each takes
+// the caller's own `draw_mutex` handle and forms a reference to the renderer only
+// while holding it, so a whole-renderer `&mut` never overlaps another thread's
+// access (Stacked and Tree Borrows; `.port/phase-2/mirihar-n437/`). Where the
+// reference runs an entry unlocked (`setFocus`, `setVisible`'s field write,
+// `animationWake`, `hasVsync`, `loopEnter`, `setMacOSDisplayID`, the search-match
+// writes), it only ever races the main thread's draw on macOS; the port takes the
+// lock rather than keep a data race, and runs the display link's CoreVideo calls
+// after the unlock exactly as `drawFrame` does (UD352, `72cf50855`).
+// ===========================================================================
+impl Renderer {
+    /// Runs `f` on the renderer with `lock` held.
+    ///
+    /// # Safety
+    /// `self_ptr` is the live renderer and `lock` a handle to its `draw_mutex`;
+    /// no other thread may form a reference to the renderer, or touch its bytes,
+    /// without holding that mutex.
+    pub unsafe fn with_locked<T>(
+        self_ptr: *mut Renderer,
+        lock: &DrawMutex,
+        f: impl FnOnce(&mut Renderer) -> T,
+    ) -> T {
+        lock.lock();
+        struct UnlockGuard<'a>(&'a DrawMutex);
+        impl Drop for UnlockGuard<'_> {
+            fn drop(&mut self) {
+                self.0.unlock();
+            }
+        }
+        let _unlock = UnlockGuard(lock);
+        // SAFETY: the caller's contract; the mutex excludes every other access.
+        f(unsafe { &mut *self_ptr })
+    }
+
+    /// `threadEnter` under the lock.
+    ///
+    /// # Safety
+    /// As [`Self::with_locked`].
+    pub unsafe fn thread_enter_raw<S>(
+        self_ptr: *mut Renderer,
+        lock: &DrawMutex,
+        rt_surface: *mut S,
+    ) -> Result<(), Error> {
+        unsafe { Self::with_locked(self_ptr, lock, |r| r.thread_enter(rt_surface)) }
+    }
+
+    /// `threadExit`: its `draw_mutex` block, then the api's `threadExit`.
+    ///
+    /// # Safety
+    /// As [`Self::with_locked`].
+    pub unsafe fn thread_exit_raw(self_ptr: *mut Renderer, lock: &DrawMutex) {
+        unsafe { Self::with_locked(self_ptr, lock, |r| r.thread_exit_locked()) };
+        unsafe { Self::with_locked(self_ptr, lock, |r| r.thread_exit_api()) };
+    }
+
+    /// `loopEnter`.
+    ///
+    /// # Safety
+    /// As [`Self::with_locked`].
+    pub unsafe fn loop_enter_raw(
+        self_ptr: *mut Renderer,
+        lock: &DrawMutex,
+        draw_now: rustty_xev::Async,
+    ) -> Result<(), Error> {
+        unsafe { Self::with_locked(self_ptr, lock, |r| r.loop_enter(draw_now)) }
+    }
+
+    /// `loopExit`.
+    ///
+    /// # Safety
+    /// As [`Self::with_locked`].
+    pub unsafe fn loop_exit_raw(self_ptr: *mut Renderer, lock: &DrawMutex) {
+        unsafe { Self::with_locked(self_ptr, lock, |r| r.loop_exit()) }
+    }
+
+    /// `setMacOSDisplayID`.
+    ///
+    /// # Safety
+    /// As [`Self::with_locked`].
+    pub unsafe fn set_macos_display_id_raw(
+        self_ptr: *mut Renderer,
+        lock: &DrawMutex,
+        id: u32,
+        draw_now: rustty_xev::Async,
+    ) -> Result<(), Error> {
+        unsafe { Self::with_locked(self_ptr, lock, |r| r.set_macos_display_id(id, draw_now)) }
+    }
+
+    /// `hasVsync`.
+    ///
+    /// # Safety
+    /// As [`Self::with_locked`].
+    pub unsafe fn has_vsync_raw(self_ptr: *mut Renderer, lock: &DrawMutex) -> bool {
+        unsafe { Self::with_locked(self_ptr, lock, |r| r.has_vsync()) }
+    }
+
+    /// `setFocus`.
+    ///
+    /// # Safety
+    /// As [`Self::with_locked`].
+    pub unsafe fn set_focus_raw(
+        self_ptr: *mut Renderer,
+        lock: &DrawMutex,
+        focus: bool,
+    ) -> Result<(), Error> {
+        unsafe { Self::with_locked(self_ptr, lock, |r| r.set_focus(focus)) }
+    }
+
+    /// `setVisible`: the locked body, then the display-link sync after the unlock.
+    ///
+    /// # Safety
+    /// As [`Self::with_locked`].
+    pub unsafe fn set_visible_raw(self_ptr: *mut Renderer, lock: &DrawMutex, visible: bool) {
+        let sync = unsafe { Self::with_locked(self_ptr, lock, |r| r.set_visible_locked(visible)) };
+        sync.apply();
+    }
+
+    /// `animationWake`.
+    ///
+    /// # Safety
+    /// As [`Self::with_locked`].
+    pub unsafe fn animation_wake_raw(
+        self_ptr: *mut Renderer,
+        lock: &DrawMutex,
+    ) -> Option<AnimationWake> {
+        unsafe { Self::with_locked(self_ptr, lock, |r| r.animation_wake()) }
+    }
+
+    /// `updateFrame`, with the reference's lock scopes: the draw mutex is taken
+    /// around the Kitty image update and the GPU-cell rebuild only (N437 /
+    /// ruling 32, see `update_frame_impl`).
+    ///
+    /// # Safety
+    /// As [`Self::with_locked`].
+    pub unsafe fn update_frame_raw(
+        self_ptr: *mut Renderer,
+        lock: &DrawMutex,
+        state: &state::State,
+        cursor_blink_visible: bool,
+    ) -> Result<(), VtOutOfMemory> {
+        let result =
+            unsafe { Self::update_frame_impl(self_ptr, lock, state, cursor_blink_visible) };
+        // CoreText shaping accumulates objects for deferred release over
+        // the course of a frame. Always flush those objects, including
+        // when rebuilding the frame fails due to memory pressure.
+        // defer self.font_shaper.endFrame();
+        //
+        // PORT NOTE (parity S115-F1): the reference's first statement is this
+        // `defer`, so `endFrame` runs on every exit: the synchronized-output early
+        // `return`, a failed `beginUpdate`, and the normal end, after the
+        // later-registered `defer self.terminal_state.dirty = .false` (the impl's
+        // last statement). Running `end_frame` after the impl returns is that
+        // defer. (N437 / ruling 32: unlocked, as in the reference, through a
+        // narrow place; the draw never touches the shaper.)
+        unsafe { (*self_ptr).font_shaper.end_frame() };
+        result
+    }
+
+    /// `displayRealized`, from the apprt's main thread.
+    ///
+    /// # Safety
+    /// As [`Self::with_locked`].
+    pub unsafe fn display_realized_raw(
+        self_ptr: *mut Renderer,
+        lock: &DrawMutex,
+    ) -> Result<(), Error> {
+        // If our API has to do things on realize, let it. (`OpenGL` no longer
+        // declares `displayRealized`; see `display_realized_locked`.)
+        //
+        // Lock the draw mutex so that we can safely update state.
+        lock.lock();
+        // N437 / ruling 32: the main thread writes the three flags through narrow
+        // places of the raw root (never a whole-renderer reference), because the
+        // render thread may be working on its own fields unlocked in `update_frame_raw`.
+        // The writes are `display_realized_locked`'s body.
+        unsafe {
+            (*self_ptr).display_realized = true;
+            (*self_ptr).reinitialize_shaders = true;
+            (*self_ptr).target_config_modified = 1;
+        }
+        lock.unlock();
+        Ok(())
+    }
+
+    /// `displayUnrealized`, from the apprt's main thread.
+    ///
+    /// # Safety
+    /// As [`Self::with_locked`].
+    pub unsafe fn display_unrealized_raw(self_ptr: *mut Renderer, lock: &DrawMutex) {
+        // Lock the draw mutex so that we can safely update state.
+        lock.lock();
+        // (N437 / ruling 32: a narrow place, as in `display_realized_raw`;
+        // `display_unrealized_locked`'s body.)
+        unsafe { (*self_ptr).display_realized = false };
+        lock.unlock();
+    }
+
+    /// `renderCallback`'s unrealized arm (`Thread.zig:556-565` at `12752b2ac`):
+    /// if the display is now unrealized, release the GPU resources on the render
+    /// thread and report `true` so the callback disarms.
+    //
+    //     if (!t.renderer.display_realized) {
+    //         t.renderer.draw_mutex.lockUncancelable(global.io());
+    //         defer t.renderer.draw_mutex.unlock(global.io());
+    //
+    //         t.renderer.releaseGpuResources();
+    //         return .disarm;
+    //     }
+    //
+    // PORT NOTE (N437): the reference reads `display_realized` before it locks,
+    // racing the main thread's `displayRealized`/`displayUnrealized` write; the
+    // port reads it under the lock it takes for the release anyway.
+    ///
+    /// # Safety
+    /// As [`Self::with_locked`].
+    pub unsafe fn release_if_unrealized_raw(self_ptr: *mut Renderer, lock: &DrawMutex) -> bool {
+        unsafe {
+            Self::with_locked(self_ptr, lock, |r| {
+                if r.display_realized {
+                    return false;
+                }
+                r.release_gpu_resources();
+                true
+            })
+        }
     }
 }
 
@@ -5415,8 +5868,20 @@ mod tests {
     // (every `golden_renderer`), then the grid itself.
     fn deinit_test_renderer(r: &mut Renderer) {
         let font_grid = r.font_grid;
+        // The render thread's `threadExit` frees the GPU objects while its context
+        // is current (`2f0b65346`); the tests are that thread.
+        r.thread_exit();
         r.deinit();
         free_test_font_grid(font_grid);
+    }
+
+    /// What the render thread does before its first draw (`threadEnter`, then
+    /// the first `.resize` message, whose `setScreenSize` sets the GL viewport).
+    fn enter_test_renderer(r: &mut Renderer) {
+        r.thread_enter(core::ptr::null_mut::<()>())
+            .expect("thread_enter");
+        let size = r.size;
+        r.set_screen_size(size);
     }
 
     /// L4 T9 KAT: the OpenGL `Renderer` init/deinit round-trip — one layer up from
@@ -5432,9 +5897,8 @@ mod tests {
     /// driver here; runs for real under `LIBGL_ALWAYS_SOFTWARE=1` → llvmpipe 4.5).
     ///
     /// Holds the process-wide [`test_support::gl_lock`] for the whole context
-    /// lifetime (the `eglTerminate`-on-a-shared-display + `gl::load_with`-global
-    /// hazards), `_guard` declared FIRST so it drops LAST (after `deinit`
-    /// terminates the context), matching Task 8's field-order contract.
+    /// lifetime (see its docs), `_guard` declared FIRST so it drops LAST (after
+    /// `deinit` destroys the context), matching Task 8's field-order contract.
     #[test]
     fn linux_opengl_renderer_init_then_deinit_round_trips() {
         let _guard = test_support::gl_lock();
@@ -5470,7 +5934,14 @@ mod tests {
             }
         };
 
-        // Fields the offscreen ctor + the `update_*` tail set (non-vacuous: proves
+        // `init` touches no GL (`2f0b65346`): the swap chain and the shaders
+        // are built lazily by the first draw on the render thread.
+        assert!(r.swap_chain.is_none());
+        assert!(r.shaders.defunct);
+        assert!(r.reinitialize_shaders);
+        enter_test_renderer(&mut r);
+
+        // Fields the ctor + the `update_*` tail set (non-vacuous: proves
         // `init` ran the whole path, not just the struct literal).
         assert!(!r.has_custom_shaders);
         assert_eq!(
@@ -5486,187 +5957,256 @@ mod tests {
         deinit_test_renderer(&mut r);
     }
 
-    /// L5 prerequisite KAT: the GLArea re-realize cycle —
-    /// [`Renderer::display_unrealized`] then [`Renderer::display_realized`]. Proves
-    /// unrealize marks the swap chain + shaders defunct (freeing their GL objects
-    /// while the context is current) and that realize rebuilds them from the
-    /// defunct state, resetting the frame-config flags exactly as the reference
-    /// `displayRealized` does (generic.zig:952-961).
+    /// The unrealize/realize cycle after `2f0b65346`: `displayUnrealized` and
+    /// `displayRealized` only flip flags (on the main thread, under the draw
+    /// mutex); the render thread's `renderCallback` releases the swap chain and
+    /// the shaders while unrealized (`Thread.zig:556-565`), no draw builds them
+    /// while unrealized (`drawFrameLocked`'s `if (!self.display_realized) return
+    /// false`), and the first draw after `displayRealized` rebuilds both
+    /// (`reinitialize_shaders = true`, `target_config_modified = 1`).
     ///
-    /// The offscreen `OffscreenContext` is owned and stays current across the whole
-    /// cycle (the api-level `displayRealized`/`prepareContext` reload is L5-owned and
-    /// not exercised here), so this validates the generic renderer's GPU-resource
-    /// rebuild in isolation. Clean-skips (never panics/fabricates) when the host
-    /// cannot give a 4.3-core context — runs for real under `LIBGL_ALWAYS_SOFTWARE=1`
-    /// (llvmpipe ⇒ GL 4.5 core). Holds the process-wide `test_support::gl_lock` for
-    /// the whole context lifetime, `_guard` first so it drops last (after `deinit`).
+    /// The test thread plays the render thread (`threadEnter`), calling the
+    /// `renderer_seam` entries with a separate `draw_mutex` handle as the render
+    /// and main threads do (N437).
     #[test]
-    fn linux_opengl_display_unrealize_then_realize_rebuilds() {
+    fn linux_opengl_display_unrealize_then_realize_releases_and_rebuilds_on_the_render_thread() {
+        const TEST: &str =
+            "linux_opengl_display_unrealize_then_realize_releases_and_rebuilds_on_the_render_thread";
         let _guard = test_support::gl_lock();
 
-        let (font_grid, size) = test_font_grid_and_size(10, 3);
-        let opts = Options {
-            config: derived_config_for_test(),
-            font_grid,
-            size,
-            // Offscreen: no surface, hence no mailbox (push returns 0).
-            surface_mailbox: SurfaceMailbox::DETACHED,
+        let Some(mut r) = golden_renderer(10, 3) else {
+            let _ = TEST;
+            return;
         };
-        let mut r = match Renderer::init(Global, opts) {
-            Ok(r) => r,
-            Err(e) => {
-                // W8-03 strict mode (see test_support docs).
-                test_support::require_gl_or_skip(
-                    "linux_opengl_display_unrealize_then_realize_rebuilds",
-                    &e,
-                );
-                eprintln!(
-                    "no headless OpenGL 4.3 core context ({e}); skipping \
-                     linux_opengl_display_unrealize_then_realize_rebuilds"
-                );
-                return;
-            }
-        };
+        let lock = r.draw_mutex.clone();
+        let rp: *mut Renderer = &mut r;
 
-        // Fresh renderer: live GL resources.
-        assert!(r.swap_chain.is_some());
-        assert!(!r.shaders.defunct);
-
-        // Unrealize: frees + marks the GL-context-bound resources defunct
-        // (generic.zig:982-983).
-        r.display_unrealized();
-        assert!(r.swap_chain.is_none());
-        assert!(r.shaders.defunct);
-
-        // Realize: rebuilds from the defunct state (asserts swap_chain.defunct
-        // internally) and resets the frame-config flags (generic.zig:952-961).
-        r.display_realized().expect("display_realized rebuild");
+        // The first draw builds the GPU resources.
+        r.draw_frame(false).expect("first draw");
         assert!(r.swap_chain.is_some());
         assert!(!r.shaders.defunct);
         assert!(!r.reinitialize_shaders);
-        assert_eq!(r.target_config_modified, 1);
 
-        // A second cycle proves the rebuilt resources are themselves re-tearable
-        // (no double-free on the fresh swap chain / shaders).
-        r.display_unrealized();
+        // Unrealize (main thread): only the flag changes.
+        unsafe { Renderer::display_unrealized_raw(rp, &lock) };
+        assert!(!r.display_realized);
+        assert!(
+            r.swap_chain.is_some(),
+            "unrealize leaves the release to the render thread"
+        );
+
+        // renderCallback (render thread): releases, and disarms.
+        assert!(unsafe { Renderer::release_if_unrealized_raw(rp, &lock) });
         assert!(r.swap_chain.is_none());
-        r.display_realized()
-            .expect("display_realized second rebuild");
-        assert!(r.swap_chain.is_some());
+        assert!(r.shaders.defunct, "unrealized: the shaders go too");
 
-        // Teardown must not panic/leak after the re-realize cycle.
+        // No draw while unrealized.
+        r.draw_frame(true).expect("unrealized draw");
+        assert!(r.swap_chain.is_none());
+
+        // Realize (main thread): only flags.
+        unsafe { Renderer::display_realized_raw(rp, &lock) }.expect("display_realized");
+        assert!(r.display_realized);
+        assert!(r.reinitialize_shaders);
+        assert_eq!(r.target_config_modified, 1);
+        assert!(r.swap_chain.is_none());
+        assert!(!unsafe { Renderer::release_if_unrealized_raw(rp, &lock) });
+
+        // The next draw rebuilds both.
+        r.draw_frame(false).expect("draw after realize");
+        assert!(r.swap_chain.is_some());
+        assert!(!r.shaders.defunct);
+        assert!(!r.reinitialize_shaders);
+
+        // A second cycle proves the rebuilt resources are themselves re-tearable.
+        unsafe { Renderer::display_unrealized_raw(rp, &lock) };
+        assert!(unsafe { Renderer::release_if_unrealized_raw(rp, &lock) });
+        assert!(r.swap_chain.is_none());
+
         deinit_test_renderer(&mut r);
     }
 
-    /// PARITY (S115-F2, with S113-F1) — the BEHAVIOURAL half: a failed GL context
-    /// prep must NOT abort the re-realize. The reference's
-    /// `generic.zig:934-961 displayRealized` calls `self.api.displayRealized()`, which
-    /// returns `void` after warning (`OpenGL.zig:237-250`), and then ALWAYS runs
-    /// `try self.initShaders()` + `SwapChain.init`. The port used to `return
-    /// Err(Error::GlFailed)` before the mutex was even taken, so the shaders and the
-    /// swap chain were never rebuilt — the GLArea would come back from a display move
-    /// or a split with no GPU resources at all.
-    ///
-    /// This asserts the REBUILD, not the log line: after `display_unrealized` leaves
-    /// the swap chain `None` and the shaders `defunct`, a `display_realized` whose
-    /// context prep FAILS must still return `Ok`, repopulate `swap_chain`, un-`defunct`
-    /// the shaders and reset the two frame-config flags — i.e. everything
-    /// `generic.zig:955-961` does. It also pins the one warning, as a full-vector
-    /// `assert_eq!`, because a rebuild that happened SILENTLY would mean the api hook
-    /// was not called at all.
-    ///
-    /// WHY THE FAULT IS INJECTED: see [`crate::opengl::opengl_impl::FORCE_DISPLAY_REALIZED_PREP_FAILURE`].
-    /// Every honest way to make `prepare_context_windowed` fail also breaks the
-    /// rebuild this test has to observe succeeding, which would make a pass
-    /// indistinguishable from the abort being tested for.
-    ///
-    /// The renderer is built with [`Renderer::init_windowed`] — the api must NOT own
-    /// the context, or `display_realized`'s offscreen guard returns before the prep
-    /// arm — over a context this test stands up itself, so GL is genuinely live while
-    /// the prep arm reports failure. That is exactly the reference's situation: GDK
-    /// owns a working context and only the LOADER reload failed.
+    /// `setVisible(false)` releases the swap chain on the render thread
+    /// (`2f0b65346`: the pin's GTK arm skipped the release, because the GLArea
+    /// owned the context), but not the shaders while the display is realized
+    /// (`releaseGpuResources`).
     #[test]
-    fn linux_opengl_display_realized_rebuilds_even_when_context_prep_fails() {
-        // Holds `gl_lock` for the whole context lifetime AND for the process-global
-        // fault flag; `_gl` drops last (after `r.deinit()`).
-        let _gl = match test_support::offscreen_gl(
-            "linux_opengl_display_realized_rebuilds_even_when_context_prep_fails",
-        ) {
-            Some(ctx) => ctx,
-            // `offscreen_gl` has already run `require_gl_or_skip` + printed the skip
-            // line (and panics instead under RUSTTY_REQUIRE_GL=1).
-            None => return,
+    fn linux_opengl_set_visible_false_releases_the_swap_chain() {
+        let _guard = test_support::gl_lock();
+        let Some(mut r) = golden_renderer(10, 3) else {
+            return;
         };
-
-        let (font_grid, size) = test_font_grid_and_size(10, 3);
-        let opts = Options {
-            config: derived_config_for_test(),
-            font_grid,
-            size,
-            surface_mailbox: SurfaceMailbox::DETACHED,
-        };
-        // WINDOWED api (`OpenGL::init`): owns no context, so `display_realized`
-        // reaches the `prepareContext(null)` arm. The context `_gl` holds is current,
-        // so the GL work below is real.
-        let mut r = Renderer::init_windowed(Global, opts).expect("init_windowed");
-
-        r.display_unrealized();
-        assert!(r.swap_chain.is_none());
-        assert!(r.shaders.defunct);
-        r.reinitialize_shaders = true;
-        r.target_config_modified = 0;
-
-        let _forced = crate::opengl::opengl_impl::ForcedPrepFailure::set();
-        let capture = crate::log_capture::start();
-        let result = r.display_realized();
-        let records = capture.messages();
-        drop(capture);
-
-        // THE ROW: the re-realize completed rather than aborting on the prep failure.
-        result.expect("display_realized must not abort on a context-prep failure");
+        let lock = r.draw_mutex.clone();
+        let rp: *mut Renderer = &mut r;
+        r.draw_frame(false).expect("first draw");
         assert!(r.swap_chain.is_some());
-        assert!(!r.shaders.defunct);
-        assert!(!r.reinitialize_shaders);
-        assert_eq!(r.target_config_modified, 1);
 
-        // ...and it warned exactly once, FIRST, through the api hook, in
-        // `OpenGL.zig`'s `.opengl` scope (NOT this file's `generic_renderer`).
-        //
-        // The capture is NOT a one-element vector, and the reason is itself evidence:
-        // everything after the warning is the REBUILD's own `pkg/opengl` chatter
-        // (`shader created id=…` / `program linked id=…`, `Shader.zig`/`Program.zig`
-        // debug sites), which this stage's third commit routed through the same
-        // facade. Under the old abort those records could not exist, because
-        // `init_shaders` never ran. So the assertion is split rather than loosened —
-        // an exact `assert_eq!` on the head, and an exact `assert_eq!` on the tail
-        // PROJECTED to `(level, target)` so the GL object ids (driver-assigned) stay
-        // out of it. No `.any()`, no `.contains()`.
-        let (head, tail) = records.split_first().expect("at least the warning");
-        assert_eq!(
-            head,
-            &(
-                log::Level::Warn,
-                crate::opengl::opengl_impl::LOG_SCOPE.to_string(),
-                crate::opengl::opengl_impl::FORCED_PREP_FAILURE_WARNING.to_string(),
-            )
+        unsafe { Renderer::set_visible_raw(rp, &lock, false) };
+        assert!(!r.visible);
+        assert!(r.swap_chain.is_none());
+        assert!(!r.shaders.defunct, "realized: the shaders stay");
+
+        unsafe { Renderer::set_visible_raw(rp, &lock, true) };
+        r.draw_frame(false).expect("draw after visible");
+        assert!(r.swap_chain.is_some());
+
+        deinit_test_renderer(&mut r);
+    }
+
+    /// A completed healthy frame is exported, pushed into `latest_frame` and
+    /// announced with `.redraw` (`opengl/Frame.zig:62-89`); the apprt takes it.
+    /// With the presentation unhealthy the frame is CPU memory.
+    #[test]
+    fn linux_opengl_frame_completion_pushes_the_frame_and_redraws() {
+        let _guard = test_support::gl_lock();
+        let Some(mut r) = golden_renderer(10, 3) else {
+            return;
+        };
+        use crate::generic::surface_mailbox_tests::RecordingSink;
+        use crate::generic::{MailboxTimeout, SurfaceMessage};
+        let sink = std::sync::Arc::new(RecordingSink::accepting());
+        r.surface_mailbox = SurfaceMailbox::new(sink.clone());
+        let slot = r.latest_frame_handle();
+
+        r.set_presentation_health(crate::Health::Unhealthy);
+        r.draw_frame(true).expect("draw");
+        assert!(
+            sink.pushed()
+                .contains(&(SurfaceMessage::Redraw, MailboxTimeout::Forever)),
+            "pushed: {:?}",
+            sink.pushed()
+        );
+        match slot.take().expect("a frame was pushed") {
+            crate::opengl::opengl_impl::ExportedFrame::Memory(m) => {
+                assert_eq!(
+                    (m.width, m.height),
+                    (r.size.screen.width, r.size.screen.height)
+                );
+                assert_eq!(m.pixels.len(), (m.width * m.height * 4) as usize);
+            }
+            #[cfg(unix)]
+            crate::opengl::opengl_impl::ExportedFrame::Dmabuf(_) => {
+                panic!("an unhealthy presentation exported a DMA-BUF")
+            }
+        }
+        assert!(r.take_frame().is_none(), "take empties the slot");
+
+        deinit_test_renderer(&mut r);
+    }
+
+    /// UD362: a full app mailbox must not deadlock the render thread against the
+    /// apprt main thread. The render thread completes a frame and pushes
+    /// `.redraw` with `.forever` into a full mailbox; the main thread (the
+    /// mailbox's only consumer) first calls `displayUnrealized`, which takes the
+    /// draw mutex, and only then drains. With the reference's order (the push
+    /// inside the locked frame completion) the two wait on each other; the test
+    /// mailbox gives up after 3 s and reports it. With the push after the
+    /// unlock, the main thread gets the mutex, drains, and the push lands.
+    #[test]
+    fn linux_opengl_full_mailbox_does_not_deadlock_display_unrealize() {
+        use crate::generic::{MailboxTimeout, SurfaceMailboxSink, SurfaceMessage};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Condvar, Mutex};
+        use std::time::Duration;
+
+        let _guard = test_support::gl_lock();
+        let Some(mut r) = golden_renderer(10, 3) else {
+            return;
+        };
+
+        struct FullMailbox {
+            full: Mutex<bool>,
+            cv: Condvar,
+            blocked: AtomicBool,
+            timed_out: AtomicBool,
+            delivered: Mutex<Vec<SurfaceMessage>>,
+        }
+        impl SurfaceMailboxSink for FullMailbox {
+            fn push(&self, msg: SurfaceMessage, timeout: MailboxTimeout) -> usize {
+                let full = self.full.lock().unwrap();
+                if *full {
+                    if timeout == MailboxTimeout::Instant {
+                        return 0;
+                    }
+                    // `.forever` on a full queue: wait for the consumer.
+                    self.blocked.store(true, Ordering::SeqCst);
+                    self.cv.notify_all();
+                    let (full, res) = self
+                        .cv
+                        .wait_timeout_while(full, Duration::from_secs(3), |f| *f)
+                        .unwrap();
+                    drop(full);
+                    if res.timed_out() {
+                        self.timed_out.store(true, Ordering::SeqCst);
+                        return 0;
+                    }
+                } else {
+                    drop(full);
+                }
+                self.delivered.lock().unwrap().push(msg);
+                1
+            }
+        }
+        let mailbox = Arc::new(FullMailbox {
+            full: Mutex::new(true),
+            cv: Condvar::new(),
+            blocked: AtomicBool::new(false),
+            timed_out: AtomicBool::new(false),
+            delivered: Mutex::new(Vec::new()),
+        });
+        r.surface_mailbox = SurfaceMailbox::new(mailbox.clone());
+        r.set_presentation_health(crate::Health::Unhealthy);
+
+        struct SendPtr(*mut Renderer);
+        // SAFETY: the pointer is only used through the lock-first raw entries.
+        unsafe impl Send for SendPtr {}
+        let lock = r.draw_mutex.clone();
+        let r_ptr: *mut Renderer = &mut r;
+
+        // The apprt main thread.
+        let main = std::thread::spawn({
+            let mailbox = mailbox.clone();
+            let lock = lock.clone();
+            let p = SendPtr(r_ptr);
+            move || {
+                let p = p;
+                let mut full = mailbox.full.lock().unwrap();
+                while !mailbox.blocked.load(Ordering::SeqCst) {
+                    let (f, res) = mailbox
+                        .cv
+                        .wait_timeout(full, Duration::from_secs(10))
+                        .unwrap();
+                    full = f;
+                    assert!(!res.timed_out(), "the render thread never pushed `.redraw`");
+                }
+                drop(full);
+                // SAFETY: `p` is the live renderer; the entry locks first.
+                unsafe { Renderer::display_unrealized_raw(p.0, &lock) };
+                // Drain: the queue has room again.
+                *mailbox.full.lock().unwrap() = false;
+                mailbox.cv.notify_all();
+            }
+        });
+
+        // The render thread (this test's thread, where the GL context is current).
+        // SAFETY: `r_ptr` is the live renderer and `lock` its draw mutex.
+        unsafe { Renderer::draw_frame_raw(r_ptr, &lock, true) }.expect("draw");
+        main.join().expect("main thread");
+
+        assert!(
+            !mailbox.timed_out.load(Ordering::SeqCst),
+            "the render thread blocked in a `.forever` push while holding the draw \
+             mutex the main thread needed (UD362)"
         );
         assert!(
-            !tail.is_empty(),
-            "the rebuild must have emitted the shader/program debug records that \
-             prove it ran; an empty tail means `init_shaders` was skipped"
+            mailbox
+                .delivered
+                .lock()
+                .unwrap()
+                .contains(&SurfaceMessage::Redraw),
+            "`.redraw` was delivered once the main thread drained"
         );
-        let tail_shape: Vec<(log::Level, String)> =
-            tail.iter().map(|(l, t, _)| (*l, t.clone())).collect();
-        assert_eq!(
-            tail_shape,
-            vec![
-                (
-                    log::Level::Debug,
-                    crate::opengl::opengl_impl::LOG_SCOPE.to_string()
-                );
-                tail.len()
-            ]
-        );
+        assert!(!r.display_realized, "the unrealize went through");
 
         deinit_test_renderer(&mut r);
     }
@@ -5781,10 +6321,9 @@ mod tests {
     //
     // GL-CONTEXT SKIP (Task-1 OPEN RISK): if the host cannot stand up a 4.3-core
     // context, `init_offscreen` fails ⇒ clean skip (returns None), mirroring the Metal
-    // "no device ⇒ skip" precedent. The probe context is dropped (its `eglTerminate`
-    // fires) BEFORE `Renderer::init` stands up its own; the CALLER holds
-    // `test_support::gl_lock`, so the terminate/re-init is SEQUENTIAL — the parallel
-    // 2nd-live-context hazard the lock guards against never arises.
+    // "no device ⇒ skip" precedent. The probe context is dropped BEFORE
+    // `Renderer::init` stands up its own; the CALLER holds `test_support::gl_lock`,
+    // so the two are SEQUENTIAL.
     fn golden_renderer(cols: CellCountInt, rows: CellCountInt) -> Option<Renderer> {
         if let Err(e) = OpenGL::init_offscreen(AlphaBlending::Native, 1, 1) {
             // W8-03 strict mode: this ONE arm covers every golden test — they
@@ -5802,7 +6341,9 @@ mod tests {
             // Offscreen: no surface, hence no mailbox (push returns 0).
             surface_mailbox: SurfaceMailbox::DETACHED,
         };
-        Some(Renderer::init(Global, opts).expect("Renderer::init (GL probed above)"))
+        let mut r = Renderer::init(Global, opts).expect("Renderer::init (GL probed above)");
+        enter_test_renderer(&mut r);
+        Some(r)
     }
 
     // rustty-only (R13, UPSTREAM-DEFECTS.md UD57): the OpenGL twin of
@@ -5999,11 +6540,19 @@ mod tests {
             };
             let sink = Arc::new(RecordingSink::accepting());
             r.surface_mailbox = SurfaceMailbox::new(sink.clone());
+            // A frame only completes once the swap chain exists; the renderer
+            // builds it lazily on the first draw (`2f0b65346`), so build it here.
+            r.swap_chain =
+                Some(crate::generic::SwapChain::init(&r.api, false).expect("swap chain"));
 
             // `health` starts `.healthy`, so this IS a transition → one push.
             r.frame_completed(crate::Health::Unhealthy);
             // Identical health → `if (self.health.load(...) != health)` is false.
             r.frame_completed(crate::Health::Unhealthy);
+            // UD362: the `.forever` push waits for the draw mutex's release,
+            // which `draw_frame_raw` does by sending the deferred pushes.
+            assert!(sink.pushed().is_empty(), "nothing is sent under the lock");
+            r.take_deferred_surface_pushes().push_all();
 
             assert_eq!(
                 sink.pushed(),
@@ -6032,12 +6581,18 @@ mod tests {
 
             let scrollbar = update_and_draw(&mut r);
 
+            // The scrollbar `defer` runs at the end of `drawFrameLocked`, under
+            // the lock; the completed frame's `.redraw` (`Frame.zig:83`) is sent
+            // after the unlock (UD362), so it lands second.
             assert_eq!(
                 sink.pushed(),
-                vec![(
-                    SurfaceMessage::Scrollbar(scrollbar),
-                    MailboxTimeout::Instant
-                )]
+                vec![
+                    (
+                        SurfaceMessage::Scrollbar(scrollbar),
+                        MailboxTimeout::Instant
+                    ),
+                    (SurfaceMessage::Redraw, MailboxTimeout::Forever),
+                ]
             );
             assert!(
                 !r.scrollbar_dirty,
@@ -6063,12 +6618,17 @@ mod tests {
 
             let scrollbar = update_and_draw(&mut r);
 
+            // (the frame's `.redraw` is refused too; `2f0b65346`. It is sent
+            // after the unlock, UD362.)
             assert_eq!(
                 sink.pushed(),
-                vec![(
-                    SurfaceMessage::Scrollbar(scrollbar),
-                    MailboxTimeout::Instant
-                )]
+                vec![
+                    (
+                        SurfaceMessage::Scrollbar(scrollbar),
+                        MailboxTimeout::Instant
+                    ),
+                    (SurfaceMessage::Redraw, MailboxTimeout::Forever),
+                ]
             );
             assert!(
                 r.scrollbar_dirty,
@@ -6108,8 +6668,8 @@ mod tests {
     /// this host); CLEAN-SKIPS (never panics, never fabricates a golden) on the
     /// default virgl driver, which exposes no desktop core profile (Task-1 finding).
     /// Holds the process-wide `test_support::gl_lock` for the whole context lifetime
-    /// (the `eglTerminate`-shared-display + `gl::load_with`-global hazards); `_guard`
-    /// declared FIRST so it drops LAST (after `deinit` terminates the context).
+    /// (see its docs); `_guard` declared FIRST so it drops LAST (after `deinit`
+    /// destroys the context).
     #[test]
     fn golden_renders_cursor_fg_bg() {
         let _guard = test_support::gl_lock();
@@ -6779,11 +7339,26 @@ mod tests {
         // `read_rgba` returns (R, G, B, A). The image is blue-dominant
         // (0x30,0x60,0xC0): B ≈ 0xC0 (>128), R ≈ 0x30 (<128), B > R, opaque.
         // Structural thresholds, never a byte-diff against the Metal golden.
-        let (br, _bg2, bb, ba) = bg;
+        let (br, bg2, bb, ba) = bg;
         assert!(bb > 128, "bg-image blue channel too low (B={bb})");
         assert!(br < 128, "bg-image red channel too high (R={br})");
         assert!(bb > br, "bg-image not blue-dominant (B={bb} R={br})");
         assert!(ba > 128, "bg-image not opaque (A={ba})");
+
+        // UD354 (DECISIONS M5): under `native` blending the image's sRGB bytes
+        // must reach the target unchanged (within rounding), not encoded a second
+        // time. The reference's always-sRGB render target turns #3060C0 into
+        // #78A5E1, which the structural checks above still accept.
+        for (got, want, channel) in [
+            (br, IMG_RGB[0], 'R'),
+            (bg2, IMG_RGB[1], 'G'),
+            (bb, IMG_RGB[2], 'B'),
+        ] {
+            assert!(
+                got.abs_diff(want) <= 2,
+                "bg-image {channel}={got} is not the image's {want} (sRGB encoded twice?)"
+            );
+        }
 
         // The negative control is dark (black bg_color) — proves the bg-image step
         // (not the bg_color fallback) produced the color above.

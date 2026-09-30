@@ -196,6 +196,8 @@ RUSTTY_API RusttyResult rustty_formatter_format_buf(RusttyFormatter formatter,
  * The caller is responsible for freeing the returned buffer with
  * rustty_free(), passing the same allocator (or NULL for the default)
  * that was used for the allocation.
+ * Empty output returns RUSTTY_SUCCESS with *out_ptr set to NULL and
+ * *out_len set to zero. This result can be passed to rustty_free().
  *
  * @param formatter The formatter handle (must not be NULL)
  * @param allocator Pointer to allocator, or NULL to use the default allocator

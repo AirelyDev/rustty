@@ -86,8 +86,13 @@ Code gaps left after the final triage, none a ledger row:
 - Build difference: with the default `fontconfig` feature, Rustty builds
   fontconfig on GNU-ABI Windows and on macOS even when the chosen font backend
   does not use it; Ghostty builds it only for backends that do (N286).
-- The app-runtime error type carries no detail, so a keybind-triggered config
-  reload logs a generic error where Ghostty logs the error name (N311).
+- Opened at Phase 7 start (P7-W0 T4), each owned by a Phase 7 task:
+  - **N435**: a reachable `unreachable!()` in the screen search's `feed`, which
+    upstream fixed in `06178eeaa` (P7-W5 T4).
+  - **N436**: a use-after-free in `ghostty_search_tick` after the terminal is
+    freed, which upstream fixed in `b1c264163` (P7-W2 T1).
+  - **N437**: on macOS the render thread forms whole-renderer references that
+    overlap the main thread's sync draw (aliasing-model UB; P7-W7 T2).
 
 ## Continuing this work
 

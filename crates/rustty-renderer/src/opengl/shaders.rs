@@ -37,6 +37,8 @@
 
 use std::ffi::CStr;
 
+use crate::undefined::Undefined;
+
 use super::gpu_abi::{BgImage, CellText, Image};
 use super::pipeline::{
     AttribClass, AttribDesc, Options as PipelineOptions, Pipeline, StepFunction, VertexLayout,
@@ -344,7 +346,10 @@ pub struct PipelineCollection {
 /// PORTS: `opengl/shaders.zig:84-160`.
 pub struct Shaders {
     /// Collection of available render pipelines.
-    pub pipelines: PipelineCollection,
+    //
+    // PORT NOTE (`2f0b65346`): `undefined` in `Shaders.uninit`; see
+    // `crate::undefined`.
+    pub pipelines: Undefined<PipelineCollection>,
 
     /// Custom shaders to run against the final drawable texture. Each shader is
     /// run in sequence against the output of the previous shader.
@@ -358,6 +363,26 @@ pub struct Shaders {
 }
 
 impl Shaders {
+    /// PORTS: `opengl/shaders.zig:92-96` (`2f0b65346`).
+    ///
+    /// ```zig
+    /// pub const uninit: Shaders = .{
+    ///     .pipelines = undefined,
+    ///     .post_pipelines = &.{},
+    ///     .defunct = true,
+    /// };
+    /// ```
+    ///
+    /// The renderer starts with these and builds its real shaders lazily on the
+    /// render thread. `defunct` makes a `deinit` of them a no-op.
+    pub const fn uninit() -> Shaders {
+        Shaders {
+            pipelines: Undefined::UNDEFINED,
+            post_pipelines: Vec::new(),
+            defunct: true,
+        }
+    }
+
     /// Initialize our shader set.
     ///
     /// PORTS: `opengl/shaders.zig:103-141` — `Shaders.init`. `post_shaders` is a
@@ -426,7 +451,7 @@ impl Shaders {
         });
 
         Ok(Self {
-            pipelines,
+            pipelines: Undefined::new(pipelines),
             post_pipelines,
             defunct: false,
         })

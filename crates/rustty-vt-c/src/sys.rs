@@ -249,8 +249,14 @@ fn decode_png_wrapper(
         data: std::ptr::null_mut(),
         data_len: 0,
     };
-    // if (!func(global.userdata, &c_alloc, data.ptr, data.len, &out)) return error.InvalidData;
-    if !func(userdata, &c_alloc, data.as_ptr(), data.len(), &mut out) {
+    // if (!func(global.userdata, &c_alloc, lib.String.init(data).ptr, data.len, &out)) return error.InvalidData;
+    if !func(
+        userdata,
+        &c_alloc,
+        rustty_lib::String::init(data).ptr,
+        data.len(),
+        &mut out,
+    ) {
         return Err(terminal_sys::DecodeError::InvalidData);
     }
 
@@ -1192,6 +1198,10 @@ pub(crate) mod tests {
         assert!(GLOBAL.lock().unwrap().log.is_none());
     }
 
+    // PORT NOTE (R14): `emit_log` is `cfg(not(wasm32))` (see its note), so the
+    // test that drives it compiles only there; this keeps `cargo check --tests
+    // --target wasm32-unknown-unknown` building (P7-W5 T2 fix round 2).
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn set_log_installs_callback() {
         let _guard = reset_global();

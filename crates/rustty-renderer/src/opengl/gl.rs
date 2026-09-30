@@ -29,6 +29,7 @@ pub mod draw;
 pub mod errors;
 pub mod extensions;
 pub mod framebuffer;
+pub mod glad;
 pub mod primitives;
 pub mod program;
 pub mod renderbuffer;
@@ -147,8 +148,10 @@ pub use primitives::Primitive;
 // pub const enable = draw.enable;
 // pub const disable = draw.disable;
 // pub const frontFace = draw.frontFace;
+// pub const readPixels = draw.readPixels;
 // pub const pixelStore = draw.pixelStore;
 // pub const viewport = draw.viewport;
+// pub const blitFramebuffer = draw.blitFramebuffer;
 // pub const flush = draw.flush;
 // pub const finish = draw.finish;
 //
@@ -160,15 +163,14 @@ pub use primitives::Primitive;
 // spellings — `gl::clear_color(…)` (the reference's) and `gl::draw::clear_color(…)`
 // — therefore resolve.
 pub use draw::{
-    blend_func, clear, clear_color, disable, draw_arrays, draw_arrays_instanced, draw_elements,
-    draw_elements_instanced, enable, finish, flush, front_face, pixel_store, viewport,
+    blend_func, blit_framebuffer, clear, clear_color, disable, draw_arrays, draw_arrays_instanced,
+    draw_elements, draw_elements_instanced, enable, finish, flush, front_face, pixel_store,
+    read_pixels, viewport,
 };
 
 #[cfg(test)]
 mod tests {
     use std::ffi::CStr;
-
-    use gl::types::GLint;
 
     use super::buffer::{Buffer, Target, Usage};
     use super::errors::get_error;
@@ -469,31 +471,19 @@ mod tests {
         assert!(get_error().is_ok(), "after Texture::bind");
 
         // The four `parameter` calls `renderer/opengl/Texture.zig` makes on every
-        // texture it creates. Each takes a `c.GLint`, the reference's only
-        // instantiated `parameter` arm.
+        // texture it creates, each with its typed value (`adf161473`'s
+        // `value: name.Type()`).
         tbind
-            .parameter(
-                texture::Parameter::WrapS,
-                texture::Wrap::ClampToEdge as GLint,
-            )
+            .parameter(texture::Parameter::WrapS, texture::Wrap::ClampToEdge)
             .expect("Binding::parameter WrapS");
         tbind
-            .parameter(
-                texture::Parameter::WrapT,
-                texture::Wrap::ClampToEdge as GLint,
-            )
+            .parameter(texture::Parameter::WrapT, texture::Wrap::ClampToEdge)
             .expect("Binding::parameter WrapT");
         tbind
-            .parameter(
-                texture::Parameter::MinFilter,
-                texture::MinFilter::Linear as GLint,
-            )
+            .parameter(texture::Parameter::MinFilter, texture::MinFilter::Linear)
             .expect("Binding::parameter MinFilter");
         tbind
-            .parameter(
-                texture::Parameter::MagFilter,
-                texture::MagFilter::Linear as GLint,
-            )
+            .parameter(texture::Parameter::MagFilter, texture::MagFilter::Linear)
             .expect("Binding::parameter MagFilter");
         assert!(get_error().is_ok(), "after Binding::parameter");
 
@@ -553,10 +543,7 @@ mod tests {
         // `Sampler.parameter` takes `Texture.Parameter` — the reference shares the
         // one enum across both objects (`Sampler.zig:27`).
         sampler
-            .parameter(
-                texture::Parameter::MinFilter,
-                texture::MinFilter::Linear as GLint,
-            )
+            .parameter(texture::Parameter::MinFilter, texture::MinFilter::Linear)
             .expect("Sampler::parameter");
         assert!(get_error().is_ok(), "after Sampler::parameter");
 

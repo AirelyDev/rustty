@@ -858,6 +858,16 @@ The Swift half is P7-W9 T2.
   - `.port/parity-closure/README.md` updated to the new pin.
 - [ ] Merge `phase-7-upstream-resync` into `main` (fast-forward if possible) and delete the phase branch.
 
+### Task 1b: Cross-platform build check (maintainer, 2026-09-28) — before any deferred long run
+
+The whole ported tree must build on Linux and Windows before P7-W12 T2 starts.
+
+- [ ] **Linux (rvm):** from a fresh clone of the phase branch, `cargo build --workspace --all-targets` with the GTK features (`--features rustty/gtk,rustty/x11,rustty/wayland`, as the Linux lane uses), plus `cargo clippy --workspace --all-targets -- -D warnings` with the same features. Also build the release `rustty` binary once (`cargo build --release -p rustty`), since `-no-pie` and strip settings only show up in a release link.
+- [ ] **Windows (rwin):** from a fresh clone, `cargo build --workspace --all-targets --target x86_64-pc-windows-msvc` (the MSVC default; exclude only the crates the Windows CI job already excludes: `libxml2-sys`, `fontconfig-sys`, `sentry-sys`), plus the same clippy. Also build `x86_64-pc-windows-gnu` for `rustty-font-shaper` with `fontconfig_freetype` (the N286 GNU arm) and `rustty-vt-c --release`.
+- [ ] **macOS:** `cargo build --workspace --all-targets` and `xcodebuild` for the app, so all three hosts build from the same commit.
+- [ ] A build failure on any host is fixed in this step (a fail-first reproduction, the fix, a rebuild on that host). It is not deferred.
+- [ ] Delete the VM clones and every `target/` with literal paths when done.
+
 ### Task 2: The deferred long runs — after the port is merged (maintainer, 2026-09-28: "Defer long CI runs until after")
 
 - [ ] Run the Phase 7 deferrals: every "Deferred to P7-W12 T2" bench above (alloc, `sc.clone`, `render-*`, mode lookup, print, nerd-font lookup, `grapheme_break`) against zigbench at `12752b2ac` on an idle machine; the full Linux lane on rvm (`cargo test --workspace`, G-GTKFEAT, G-REL, G-EXAMPLES).

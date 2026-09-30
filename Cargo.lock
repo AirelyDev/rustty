@@ -1455,6 +1455,7 @@ dependencies = [
  "rustty-datastruct",
  "rustty-os",
  "rustty-render-types",
+ "rustty-unicode",
  "rustty-util",
  "rustty-z2d",
  "rustty-zigstd",
@@ -1540,6 +1541,9 @@ dependencies = [
 [[package]]
 name = "rustty-lib"
 version = "0.1.0"
+dependencies = [
+ "rustty-zigstd",
+]
 
 [[package]]
 name = "rustty-oniguruma"
@@ -1586,6 +1590,7 @@ dependencies = [
  "block2",
  "dispatch2",
  "gl",
+ "gl_generator",
  "glslang-sys",
  "khronos-egl",
  "log",
@@ -1722,7 +1727,6 @@ dependencies = [
  "rustty-util",
  "rustty-wuffs",
  "rustty-zigstd",
- "zlib-sys",
 ]
 
 [[package]]

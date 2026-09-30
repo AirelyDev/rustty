@@ -337,15 +337,8 @@ pub mod option {
         key: b"",
         is_exit_code: true,
         decode: |full| {
-            // std.fmt.parseInt(i32, full, 10) catch null
-            // CORRECTION (parity S197-F1): this was
-            // `core::str::from_utf8(full).ok()?.parse::<i32>().ok()`, which
-            // rejects the `_` digit separators `std.fmt.parseInt` accepts.
-            // PORT NOTE: reference defect (R13), UD141: a `_` digit separator is refused
-            // before parsing, as Ghostty's own OSC 99 parser does; see
-            // `protocol_int::reject_digit_separators`.
-            crate::protocol_int::reject_digit_separators(full).ok()?;
-            rustty_zigstd::fmt::parse_int::<i32>(full, 10).ok()
+            // lib.parseInt(i32, full, 10) catch null
+            rustty_lib::parse_int::<i32, 10>(full).ok()
         },
     };
 }
@@ -1614,9 +1607,9 @@ mod tests {
     }
 
     // Parity S197-F1: no reference test. The exit code is parsed with
-    // `std.fmt.parseInt(i32, full, 10)`, which accepts a leading `+`. UD141
-    // (R13): its `_` digit separators are refused, as Ghostty's own OSC 99
-    // parser refuses them (the reference reads `1_2` as 12).
+    // `lib.parseInt(i32, full, 10)`, which accepts a leading sign (the type is
+    // signed) and, since `73768913b`, refuses `_` digit separators (the
+    // `std.fmt.parseInt` it replaced read `1_2` as 12).
     #[test]
     fn option_read_exit_code_follows_zig_parse_int_but_refuses_digit_separators() {
         assert_eq!(Some(12), option::EXIT_CODE.read(b"+12"));
@@ -1625,5 +1618,16 @@ mod tests {
         assert_eq!(None, option::EXIT_CODE.read(b"-1_2;aid=foo"));
         assert_eq!(None, option::EXIT_CODE.read(b"_12"));
         assert_eq!(None, option::EXIT_CODE.read(b"12_"));
+    }
+
+    // test "OSC 133: exit codes reject digit separators" {
+    #[test]
+    fn osc_133_exit_codes_reject_digit_separators() {
+        let mut p: Parser = Parser::init(None);
+        for ch in "133;D;-4_2;aid=foo".bytes() {
+            p.next(ch);
+        }
+        let cmd = p.end(None).unwrap();
+        assert_eq!(None, semantic_prompt(&cmd).read_option(option::EXIT_CODE));
     }
 }

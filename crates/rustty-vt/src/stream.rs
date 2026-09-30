@@ -3398,8 +3398,8 @@ impl<H: Handler> Stream<H> {
             // DECRQM - Request Mode
             // 'p' => switch (input.intermediates.len) { ... }
             b'p' => match input.intermediates.len() {
-                // 2 => decrqm: { ... }
-                2 => 'decrqm: {
+                // 1, 2 => decrqm: { ... }
+                1 | 2 => 'decrqm: {
                     // const ansi_mode = ansi: { ... };
                     let ansi_mode = 'ansi: {
                         // switch (input.intermediates.len) {
@@ -6180,6 +6180,95 @@ mod tests {
         s.handler.mode = None;
         s.next_slice(b"\x1B[>5h");
         assert!(s.handler.mode.is_none());
+    }
+
+    // test "stream: DECRQM dispatch" (oracle 9dc0d974e)
+    #[test]
+    fn stream_decrqm_dispatch() {
+        #[derive(Default)]
+        struct H {
+            calls: usize,
+            mode: Option<modes::Mode>,
+            raw: Option<RawMode>,
+        }
+        impl Handler for H {
+            fn request_mode(&mut self, v: Mode) {
+                self.calls += 1;
+                self.mode = Some(v.mode);
+            }
+            fn request_mode_unknown(&mut self, v: RawMode) {
+                self.calls += 1;
+                self.raw = Some(v);
+            }
+        }
+
+        struct Case {
+            input: &'static [u8],
+            mode: Option<modes::Mode>,
+            raw: Option<RawMode>,
+        }
+        const fn c(input: &'static [u8]) -> Case {
+            Case {
+                input,
+                mode: None,
+                raw: None,
+            }
+        }
+        let cases = [
+            Case {
+                mode: Some(modes::Mode::Insert),
+                ..c(b"\x1b[4$p")
+            },
+            Case {
+                mode: Some(modes::Mode::SlowScroll),
+                ..c(b"\x1b[?4$p")
+            },
+            Case {
+                raw: Some(RawMode {
+                    mode: 9999,
+                    ansi: true,
+                }),
+                ..c(b"\x1b[9999$p")
+            },
+            Case {
+                raw: Some(RawMode {
+                    mode: 9999,
+                    ansi: false,
+                }),
+                ..c(b"\x1b[?9999$p")
+            },
+            c(b"\x1b[4p"),
+            c(b"\x1b[?4p"),
+            c(b"\x1b[4!p"),
+            c(b"\x1b[4 p"),
+            c(b"\x1b[>4$p"),
+            c(b"\x1b[?4!p"),
+            c(b"\x1b[$p"),
+            c(b"\x1b[?$p"),
+            c(b"\x1b[4;20$p"),
+            c(b"\x1b[?4;7$p"),
+            c(b"\x1b[4:20$p"),
+        ];
+        for case in &cases {
+            for split in 0..case.input.len() + 1 {
+                let mut s: Stream<H> = Stream::init(Options::with_handler(H::default()));
+                s.next_slice(&case.input[..split]);
+                if split < case.input.len() {
+                    assert_eq!(0, s.handler.calls);
+                }
+                s.next_slice(&case.input[split..]);
+                assert_eq!(
+                    if case.mode.is_some() || case.raw.is_some() {
+                        1usize
+                    } else {
+                        0
+                    },
+                    s.handler.calls
+                );
+                assert_eq!(case.mode, s.handler.mode);
+                assert_eq!(case.raw, s.handler.raw);
+            }
+        }
     }
 
     // test "stream: ansi set mode (SM) and reset mode (RM) with unknown value" { ... }

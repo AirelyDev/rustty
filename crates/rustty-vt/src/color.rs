@@ -1023,14 +1023,14 @@ impl RGB {
             return Err(InvalidFormat);
         }
 
-        // const color = std.fmt.parseUnsigned(u16, value, 16) catch return error.InvalidFormat;
+        // const color = lib.parseInt(u16, value, 16) catch {
+        //     @branchHint(.cold);
+        //     return error.InvalidFormat;
+        // };
         //
-        // PORT NOTE: `rustty_zigstd::fmt::parse_unsigned`, NOT `u16::from_str_radix`. The
-        // reference rejects a leading sign (`"+f"`/`"-f"`) but accepts `_` as an
-        // interior digit separator (`"f_f"` == 255); `from_str_radix` does the
-        // opposite on both counts.
-        let color =
-            rustty_zigstd::fmt::parse_unsigned::<u16>(value, 16).map_err(|_| InvalidFormat)?;
+        // PORT NOTE: `rustty_lib::parse_int`, NOT `u16::from_str_radix`, which
+        // accepts a leading `+` (`"+f"`) that the reference rejects.
+        let color = rustty_lib::parse_int::<u16, 16>(value).map_err(|_| InvalidFormat)?;
 
         let divisor: usize = match value.len() {
             1 => 0xF, // std.math.maxInt(u4)
@@ -1822,6 +1822,13 @@ mod tests {
         assert_eq!(Err(InvalidFormat), RGB::parse(b"nosuchcolor"));
     }
 
+    // test "RGB.parse rejects digit separators" {
+    #[test]
+    fn rgb_parse_rejects_digit_separators() {
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb:f_f/0/0"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"#f_f000000"));
+    }
+
     /// PORT NOTE: no reference test — these pin the `fromIntensity`/`fromHex`
     /// edge semantics of the oracle (`src/terminal/color.zig:593-628`) that a
     /// naive Rust translation gets wrong.
@@ -1844,20 +1851,18 @@ mod tests {
         assert_eq!(Ok(RGB { r: 0, g: 255, b: 0 }), RGB::parse(b"rgbi:0/1.0/0"));
         assert_eq!(Ok(RGB { r: 0, g: 0, b: 0 }), RGB::parse(b"rgbi:-0/0/0"));
 
-        // `std.fmt.parseUnsigned` accepts NO sign prefix.
+        // `lib.parseInt` accepts NO sign prefix on an unsigned type.
         assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb:+f/0/0"));
         assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb:+0/0/0"));
         assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb:+ff/0/0"));
         assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb:-f/0/0"));
         assert_eq!(Err(InvalidFormat), RGB::parse(b"#+f0010"));
 
-        // ...but it does accept `_` as an interior digit separator. The divisor
-        // stays keyed on the RAW component length (3 here, not 2), so "f_f"
-        // (== 255) scales as a 12-bit value: 255 * 255 / 0xFFF == 15.
-        assert_eq!(Ok(RGB { r: 15, g: 0, b: 0 }), RGB::parse(b"rgb:f_f/0/0"));
-        // Same for a 4-char component: "f_ff" == 0xfff scaled as 16-bit.
-        assert_eq!(Ok(RGB { r: 15, g: 0, b: 0 }), RGB::parse(b"rgb:f_ff/0/0"));
-        // Leading/trailing `_` are rejected.
+        // Nor `_` as a digit separator (since `73768913b`; the
+        // `std.fmt.parseUnsigned` it replaced read "f_f" as 255 and scaled it
+        // as a 12-bit value, r == 15), interior or not.
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb:f_f/0/0"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb:f_ff/0/0"));
         assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb:_f/0/0"));
         assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb:f_/0/0"));
     }

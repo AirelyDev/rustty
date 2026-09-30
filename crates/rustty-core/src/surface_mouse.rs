@@ -55,23 +55,10 @@ pub struct SurfaceMouse {
 }
 
 impl SurfaceMouse {
-    /// Translates key state to mouse shape (cursor) state, based on a state
-    /// machine.
-    ///
-    /// There are 4 current states:
-    ///
-    /// * text: starting state, displays a text bar.
-    /// * default: default state when in a mouse tracking mode. (e.g. vim, etc).
-    ///   Displays an arrow pointer.
-    /// * pointer: default state when over a link. Displays a pointing finger.
-    /// * crosshair: any above state can transition to this when the rectangle
-    ///   select keys are pressed (ctrl/super+alt).
-    ///
-    /// Additionally, default can transition back to text if one of the shift keys
-    /// are pressed during mouse tracking mode.
-    ///
-    /// Any secondary state transitions back to its default state when the
-    /// appropriate keys are released.
+    /// Translates key state to mouse shape, called during key events. This mainly
+    /// handles overrides on key presses depending on whether or not we are in
+    /// mouse tracking mode, however it is also responsible for resetting cursor
+    /// state on any particular key releases.
     ///
     /// null is returned when the mouse shape does not need changing.
     // pub fn keyToMouseShape(self: SurfaceMouse) ?MouseShape {
@@ -90,53 +77,41 @@ impl SurfaceMouse {
             return None;
         }
 
-        // Set our current default state
-        // PORT NOTE: `var current_shape_state: MouseShape = undefined;` — Rust
-        // has no `undefined`; the if/else below initializes it on both paths
-        // exactly as the reference's two assignments do.
-        let current_shape_state: MouseShape = if self.mouse_event != MouseEvent::None {
-            // In mouse tracking mode, should be default (arrow pointer)
-            MouseShape::Default
-        } else {
-            // Default terminal mode, should be text (text bar)
-            MouseShape::Text
-        };
-
-        // Transition table.
-        //
-        // TODO: This could be updated eventually to be a true transition table if
-        // we move to a full stateful mouse surface, e.g. very specific inputs
-        // transitioning state based on previous state, versus flags like "is the
-        // mouse over a link", etc.
-        match current_shape_state {
-            MouseShape::Default => {
+        // Handle possible overrides depending on mouse tracking state.
+        // switch (self.mouse_event != .none) {
+        match self.mouse_event != MouseEvent::None {
+            true => {
+                // In mouse tracking mode
                 if Self::is_mouse_mode_override_state(self.mods)
                     && Self::is_rectangle_select_state(self.mods)
                 {
                     // Crosshair (rectangle select), only set if we are also
                     // overriding (e.g. shift+ctrl+alt)
-                    Some(MouseShape::Crosshair)
+                    return Some(MouseShape::Crosshair);
                 } else if Self::is_mouse_mode_override_state(self.mods) {
                     // Normal override state
-                    Some(MouseShape::Text)
-                } else {
-                    Some(MouseShape::Default)
+                    return Some(MouseShape::Text);
                 }
             }
 
-            MouseShape::Text => {
+            false => {
+                // Default terminal mode
                 if Self::is_rectangle_select_state(self.mods) {
                     // Crosshair (rectangle select)
-                    Some(MouseShape::Crosshair)
-                } else {
-                    Some(MouseShape::Text)
+                    return Some(MouseShape::Crosshair);
+                } else if Self::is_mouse_mode_override_state(self.mods) {
+                    // Shift shows an I-beam so selection is obvious even when
+                    // the application cursor is not text (OSC 22). Release
+                    // restores mouse_shape below.
+                    return Some(MouseShape::Text);
                 }
             }
-
-            // Fall back on default state
-            // else => unreachable,
-            _ => unreachable!(),
         }
+
+        // No overrides means we just revert back to the stored terminal mouse
+        // shape. Note that this may be different than what has been currently sent
+        // to the apprt, so this will force the reset.
+        Some(self.mouse_shape)
     }
 
     // fn eligibleMouseShapeKeyEvent(physical_key: input.Key) bool {
@@ -177,7 +152,7 @@ mod tests {
 
     // test "keyToMouseShape" {
     // PORT NOTE: ported as ONE Rust test mirroring the single reference test{}
-    // block with its 13 sub-blocks in order (rust >= zig; CORE_BLUEPRINT §7).
+    // block with its 12 sub-blocks in order (rust >= zig; CORE_BLUEPRINT §7).
     #[test]
     fn key_to_mouse_shape() {
         // const testing = std.testing;
@@ -311,7 +286,7 @@ mod tests {
         }
 
         {
-            // crosshair -> default (mouse tracking)
+            // no override restores the application shape (mouse tracking)
             let m = SurfaceMouse {
                 physical_key: Key::AltLeft,
                 mouse_event: MouseEvent::X10,
@@ -321,7 +296,7 @@ mod tests {
                 hidden: false,
             };
 
-            let want: MouseShape = MouseShape::Default;
+            let want: MouseShape = MouseShape::Crosshair;
             let got = m.key_to_mouse_shape();
             assert_eq!(Some(want), got);
         }
@@ -344,22 +319,6 @@ mod tests {
             };
 
             let want: MouseShape = MouseShape::Crosshair;
-            let got = m.key_to_mouse_shape();
-            assert_eq!(Some(want), got);
-        }
-
-        {
-            // text -> default (mouse tracking)
-            let m = SurfaceMouse {
-                physical_key: Key::ShiftLeft,
-                mouse_event: MouseEvent::X10,
-                mouse_shape: MouseShape::Text,
-                mods: Mods::default(),
-                over_link: false,
-                hidden: false,
-            };
-
-            let want: MouseShape = MouseShape::Default;
             let got = m.key_to_mouse_shape();
             assert_eq!(Some(want), got);
         }
@@ -403,7 +362,7 @@ mod tests {
         }
 
         {
-            // crosshair -> text (no mouse tracking)
+            // no override restores the application shape (no mouse tracking)
             let m = SurfaceMouse {
                 physical_key: Key::AltLeft,
                 mouse_event: MouseEvent::None,
@@ -413,9 +372,62 @@ mod tests {
                 hidden: false,
             };
 
-            let want: MouseShape = MouseShape::Text;
+            let want: MouseShape = MouseShape::Crosshair;
             let got = m.key_to_mouse_shape();
             assert_eq!(Some(want), got);
+        }
+    }
+
+    // PORT NOTE: Rust-only (rust >= zig). Upstream's test above has no sub-block
+    // for 3a766ccf5 (shift shows the I-beam without mouse tracking) or for the
+    // OSC 22 case 5dfb67298 fixes (release restores a non-text application
+    // shape). Both are pinned here with an application shape that is neither of
+    // the pin's hard-coded fallbacks (`.default`/`.text`).
+    #[test]
+    fn key_to_mouse_shape_osc22_shape_with_shift() {
+        {
+            // shift held, no mouse tracking: I-beam over an OSC 22 pointer
+            let m = SurfaceMouse {
+                physical_key: Key::ShiftLeft,
+                mouse_event: MouseEvent::None,
+                mouse_shape: MouseShape::Pointer,
+                mods: Mods {
+                    shift: true,
+                    ..Default::default()
+                },
+                over_link: false,
+                hidden: false,
+            };
+
+            assert_eq!(Some(MouseShape::Text), m.key_to_mouse_shape());
+        }
+
+        {
+            // shift released, no mouse tracking: the OSC 22 pointer comes back
+            let m = SurfaceMouse {
+                physical_key: Key::ShiftLeft,
+                mouse_event: MouseEvent::None,
+                mouse_shape: MouseShape::Pointer,
+                mods: Mods::default(),
+                over_link: false,
+                hidden: false,
+            };
+
+            assert_eq!(Some(MouseShape::Pointer), m.key_to_mouse_shape());
+        }
+
+        {
+            // shift released, mouse tracking: the OSC 22 pointer comes back
+            let m = SurfaceMouse {
+                physical_key: Key::ShiftLeft,
+                mouse_event: MouseEvent::X10,
+                mouse_shape: MouseShape::Pointer,
+                mods: Mods::default(),
+                over_link: false,
+                hidden: false,
+            };
+
+            assert_eq!(Some(MouseShape::Pointer), m.key_to_mouse_shape());
         }
     }
 }

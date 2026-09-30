@@ -102,7 +102,7 @@ harfbuzz = ["dep:harfbuzz-sys", "dep:freetype-sys"]
 # FreeType 2.13.2 glyph rasterization: the `ft` FFI glue, the `face::freetype`
 # backend face, and `library::FreetypeLibrary`. Implies `harfbuzz`.
 freetype = ["dep:freetype-sys", "harfbuzz"]
-# Fontconfig 2.14.2 font discovery/matching (the `fc` module, the port of
+# Fontconfig 2.18.3 font discovery/matching (the `fc` module, the port of
 # `pkg/fontconfig/*.zig`) for the `fontconfig_freetype` backend (the `fc`
 # module is compiled only there; `fontconfig-sys` is off Windows/wasm by `cfg`).
 # This feature is what lets an embedder drop `links = "fontconfig"` from the
@@ -194,11 +194,11 @@ rustty-os = { workspace = true }
 freetype-sys = { path = "../../crates-sys/freetype-sys", optional = true }
 harfbuzz-sys = { path = "../../crates-sys/harfbuzz-sys", optional = true }
 
-# Fontconfig 2.14.2 (font discovery/matching) for the FreeType/Fontconfig
+# Fontconfig 2.18.3 (font discovery/matching) for the FreeType/Fontconfig
 # discovery backend — the SAME C library the reference links (R3), consumed by
 # the `fc` module (the port of `pkg/fontconfig/*.zig`), which is compiled only
 # on `hasFontconfig()` (`-Dfont-backend=fontconfig_freetype`: the Linux/BSD
-# default, and selectable on macOS like the reference's `SharedDeps.zig:292`,
+# default, and selectable on macOS like the reference's `SharedDeps.zig:283`,
 # which builds fontconfig from source on any target whose backend has it).
 # CORRECTION (S-14b, review M3): this table excluded macOS on the premise that
 # macOS "never links fontconfig"; that is only the DEFAULT backend. A default
@@ -215,7 +215,7 @@ harfbuzz-sys = { path = "../../crates-sys/harfbuzz-sys", optional = true }
 # N286 (task W-6): a GNU-ABI Windows target is back in the table.
 # `-Dfont-backend=fontconfig_freetype` builds there in the reference
 # (`-Dtarget=x86_64-windows-gnu`, MinGW headers; its fontconfig tests pass on
-# Windows 11), with libxml2's iconv off (pkg/fontconfig/build.zig:9-13). An
+# Windows 11), with libxml2's iconv off (pkg/fontconfig/build.zig:53-57). An
 # MSVC-ABI target stays out: the reference's fontconfig does not compile against
 # the MSVC headers (`unistd.h`), and `rustty-build-config` refuses the backend
 # there by name.

@@ -20,6 +20,20 @@
 #                         the reference's fuzzer is AFL++ (afl-cc); rustty's is
 #                         cargo-fuzz/libFuzzer (crates/rustty-vt/fuzz), which
 #                         does not go through afl-cc
+#   libglvnd (`c488a41b0`, paired with EGL link `758100916`)
+#                         N/A: that pair adds a LINK-TIME libEGL dependency
+#                         because the reference compiles `vendor/glad/src/
+#                         glad_egl.c` and links system `egl` (`SharedDeps.zig`).
+#                         rustty's `crates/rustty-renderer` uses `khronos-egl`
+#                         with the `dynamic` feature (Cargo.toml comment,
+#                         `opengl/gl/sys.rs`), which `dlopen`s `libEGL.so.1`
+#                         through `libloading` at RUNTIME and links nothing at
+#                         build time (no `-sys` crate, no build.rs link line
+#                         names EGL — checked, none does). A machine with no
+#                         EGL runtime fails at `init()` as a clean test skip
+#                         instead of a link error, so there is no link-time
+#                         `libEGL.so`/`libglvnd` dev package to add here.
+#                         R4 §H.
 {
   mkShell,
   lib,

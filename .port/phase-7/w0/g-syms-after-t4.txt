@@ -1,0 +1,35 @@
+indexing port symbols…
+ABSENT  src/Surface.zig                                      pub fn reportPresentationHealth
+ABSENT  src/apprt/gtk/class/application.zig                  pub fn resizeWindow
+ABSENT  src/apprt/gtk/class/render_surface.zig               pub fn deviceSize
+ABSENT  src/apprt/gtk/class/render_surface.zig               pub fn setCoreSurface
+ABSENT  src/apprt/gtk/class/window.zig                       pub fn resizeSurface
+ABSENT  src/apprt/gtk/scale.zig                              pub fn snapOrigin
+ABSENT  src/apprt/gtk/scale.zig                              pub fn widgetSurfaceScale
+ABSENT  src/apprt/gtk/scale.zig                              pub fn widgetSurfaceOrigin
+ABSENT  src/apprt/gtk/scale.zig                              pub fn widgetLayout
+ABSENT  src/apprt/gtk/scale.zig                              pub fn widgetLayoutForSize
+ABSENT  src/apprt/gtk/scale.zig                              pub fn deviceSize
+ABSENT  src/apprt/gtk/scale.zig                              pub fn snappedDeviceSize
+ABSENT  src/apprt/gtk/scale.zig                              pub fn snapOffset
+ABSENT  src/datastruct/comptime_int_set.zig                  pub fn ComptimeIntSet
+ABSENT  src/datastruct/untouched_pool.zig                    pub fn UntouchedPool
+ABSENT  src/renderer/OpenGL.zig                              pub fn setViewport
+ABSENT  src/renderer/generic.zig                             pub fn pushFrame
+ABSENT  src/renderer/generic.zig                             pub fn takeFrame
+ABSENT  src/renderer/generic.zig                             pub fn setPresentationHealth
+ABSENT  src/renderer/generic.zig                             pub fn presentationHealth
+ABSENT  src/renderer/opengl/Target.zig                       pub fn exportDmabuf
+ABSENT  src/renderer/opengl/Target.zig                       pub fn readPixelsAlloc
+ABSENT  src/terminal/bitmap_allocator.zig                    pub fn initAssumeZeroed
+ABSENT  src/terminal/hash_map.zig                            pub fn initAssumeZeroed
+ABSENT  src/terminal/hash_map.zig                            pub fn initAssumeZeroed
+ABSENT  src/terminal/kitty/windows.zig                       pub fn checkPath
+ABSENT  src/terminal/kitty/windows.zig                       pub fn checkCanonicalPath
+ABSENT  src/terminal/kitty/windows.zig                       pub fn isDriveAbsolute
+ABSENT  src/terminal/ref_counted_set.zig                     pub fn initAssumeZeroed
+ABSENT  src/terminal/render.zig                              pub fn viewportStart
+ABSENT  src/terminal/render.zig                              pub fn rowDataRange
+
+SYMBOL AUDIT: 2890 oracle `pub fn` checked across 539 files; 31 unexplained, 7 accepted with a written reason
+RED: an oracle `pub fn` has no counterpart and no SYMBOL_AUDIT.md entry.

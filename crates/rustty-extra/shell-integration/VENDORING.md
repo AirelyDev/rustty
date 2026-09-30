@@ -16,6 +16,16 @@ run/build dependency on the ghostty checkout** (R3 self-contained).
   upstream after the `4749c4e9` copy (ghostty `7fa43764`, present at the
   audit pin `6ad1fe7d`) and backported here to restore external-completer
   delegation parity.
+- Re-sync (P7-W11 T1, `5d6615fc4`, `4dfa44ecd`, `ed7f046ee`, `591ccacbd`,
+  `a4031c8e3`): `bash/bash-preexec.sh` and `bash/rustty.bash` were
+  transplanted from `ghostty` `src/shell-integration/bash/` at the Phase 7
+  pin `12752b2ac` (bash-preexec 0.6.0 -> 0.7.0; `ghostty.bash`'s
+  `__ghostty_status`/`__ghostty_restore_status` -> `__rustty_status`/
+  `__rustty_restore_status`), proven at 0 diff lines against the rebrand
+  transform (`cargo test -p xtask -- --ignored oracle_shell_integration_parity`).
+  Every other file in this tree (zsh, fish, elvish, nushell) is still at the
+  `4749c4e9` pin above; re-sync those the same way when their turn comes,
+  rather than treating this line as covering the whole directory.
 
 ## Rebranded identifiers (Task 13 — R2 product identity)
 

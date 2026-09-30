@@ -7,6 +7,7 @@
 use gl::types::{GLenum, GLint, GLsizei, GLuint};
 
 use super::errors;
+use super::glad;
 use super::renderbuffer::Renderbuffer;
 use super::texture::{self, Texture};
 
@@ -36,7 +37,7 @@ impl Framebuffer {
         let mut fbo: GLuint = 0;
         // SAFETY: `glGenFramebuffers` writes exactly `n` (= 1) GLuints through the
         // pointer; `&mut fbo` is one live, aligned GLuint.
-        unsafe { gl::GenFramebuffers(1, &mut fbo) };
+        glad::context(|gl| unsafe { gl.GenFramebuffers(1, &mut fbo) });
         Ok(Framebuffer { id: fbo })
     }
 
@@ -54,7 +55,7 @@ impl Framebuffer {
         // SAFETY: `glDeleteFramebuffers` reads exactly `n` (= 1) GLuints through
         // the pointer; `&self.id` is one live, aligned GLuint. Deleting an
         // already-deleted or unknown name is silently ignored by GL, not UB.
-        unsafe { gl::DeleteFramebuffers(1, &self.id) };
+        glad::context(|gl| unsafe { gl.DeleteFramebuffers(1, &self.id) });
     }
 
     /// PORTS: `Framebuffer.zig:23-31`.
@@ -98,10 +99,10 @@ impl Framebuffer {
         // SAFETY: `GL_FRAMEBUFFER_BINDING` is a single-valued query, so
         // `glGetIntegerv` writes exactly one GLint through the pointer; `&mut
         // current` is one live, aligned GLint.
-        unsafe { gl::GetIntegerv(gl::FRAMEBUFFER_BINDING, &mut current) };
+        glad::context(|gl| unsafe { gl.GetIntegerv(gl::FRAMEBUFFER_BINDING, &mut current) });
         // SAFETY: binds a name this `Framebuffer` owns to a GL target. A bad
         // target is GL_INVALID_ENUM (which the reference does not collect here).
-        unsafe { gl::BindFramebuffer(target.0, self.id) };
+        glad::context(|gl| unsafe { gl.BindFramebuffer(target.0, self.id) });
         // `@intCast(current)`: GLint -> GLuint, trapping on a negative in Zig.
         // `try_from` panics identically. A GL object name is never negative.
         let previous =
@@ -237,7 +238,7 @@ impl Binding {
         // SAFETY: rebinds whatever name was bound before. If that name has since
         // been deleted, GL raises GL_INVALID_OPERATION (which the reference does
         // not collect here) — never UB.
-        unsafe { gl::BindFramebuffer(self.target.0, self.previous) };
+        glad::context(|gl| unsafe { gl.BindFramebuffer(self.target.0, self.previous) });
     }
 
     /// PORTS: `Framebuffer.zig:73-88`.
@@ -272,15 +273,15 @@ impl Binding {
         // SAFETY: attaches a name the caller's `Texture` owns to the bound
         // framebuffer. A deleted name, a bad level, or a mismatched target is a
         // defined GL error, collected below.
-        unsafe {
-            gl::FramebufferTexture2D(
+        glad::context(|gl| unsafe {
+            gl.FramebufferTexture2D(
                 self.target.0,
                 attachment.0,
                 textarget as GLenum,
                 texture.id,
                 level,
             );
-        }
+        });
         errors::get_error()
     }
 
@@ -312,9 +313,9 @@ impl Binding {
     ) -> Result<(), errors::Error> {
         // SAFETY: attaches a name the caller's `Renderbuffer` owns to the bound
         // framebuffer. Every failure mode is a defined GL error, collected below.
-        unsafe {
-            gl::FramebufferRenderbuffer(self.target.0, attachment.0, gl::RENDERBUFFER, buffer.id);
-        }
+        glad::context(|gl| unsafe {
+            gl.FramebufferRenderbuffer(self.target.0, attachment.0, gl::RENDERBUFFER, buffer.id);
+        });
         errors::get_error()
     }
 
@@ -350,7 +351,7 @@ impl Binding {
         // SAFETY: `bufs` is a live slice of `n` `Attachment`s, each layout-identical
         // to a `GLenum`, so the pointer is valid for `n` GLenum reads. GL copies the
         // list before returning — it retains nothing.
-        unsafe { gl::DrawBuffers(n, bufs.as_ptr().cast::<GLenum>()) };
+        glad::context(|gl| unsafe { gl.DrawBuffers(n, bufs.as_ptr().cast::<GLenum>()) });
         errors::get_error()
     }
 
@@ -372,7 +373,9 @@ impl Binding {
     pub fn check_status(self) -> Status {
         // SAFETY: queries the completeness of the bound framebuffer. A bad target
         // makes it return 0, which is a `Status` the newtype represents fine.
-        Status(unsafe { gl::CheckFramebufferStatus(self.target.0) })
+        Status(glad::context(|gl| unsafe {
+            gl.CheckFramebufferStatus(self.target.0)
+        }))
     }
 }
 

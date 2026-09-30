@@ -16,7 +16,9 @@
 #[cfg(target_os = "macos")]
 use rustty_build_config as build_config;
 
-// PORT NOTE: `const c = @cImport({ @cInclude("unistd.h"); });`.
+// PORT NOTE: `const c = @import("posix_c");` (fe9cf6a26 replaced the
+// unistd.h cImport with the shared posix_c translate-c module; same header,
+// refresh only).
 #[cfg(not(windows))]
 use libc as c;
 

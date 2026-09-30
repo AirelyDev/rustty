@@ -6048,6 +6048,20 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (every routing test fails: 5 vs 144 bytes), the continuation's `toOwnedSlice` failure turned into a panic
   (the sweep's third loop panics; the first two loops did not reach it, which is why the third exists).
 - **state**: CLOSED (task S7-8).
+- **reversal (P7-W2 T2, upstream `dd2edd760`, DECISIONS B1/B2)**: the non-null empty sentinel above is
+  gone. Upstream now returns NULL with length zero for empty `format_alloc`, `selection_format_alloc` and
+  `continuation_alloc` output (and `ghostty_alloc(.., 0)` returns NULL), because an empty Zig slice's
+  sentinel address (Rust's dangling address is the same hazard) is rejected by foreign runtimes such as
+  Go's stack scanner even at length zero. `allocator::into_c_bytes` exports an empty buffer as NULL,
+  `allocator::alloc(_, 0)` returns NULL before the allocator is resolved, and borrowed empty strings
+  (`rustty_lib::String::init`) point at the one-byte `rustty_lib::EMPTY` static (Zig's `""`).
+  `encode_alloc` keeps upstream's unconditional `bytes.ptr`, but its output is never empty (the header
+  record), so the shared `into_c_bytes` is equivalent there. Tests: the six upstream tests ("String.init
+  empty output", "alloc zero length", "format_alloc empty output", "selection_format_alloc empty output",
+  the extended "continuation buffer and allocator export exact suffix", "kitty_image_medium_temp_file empty
+  output"); the Rustty-only guards `custom_allocator_zero_length_short_circuit`,
+  `format_alloc_empty_output_never_reaches_the_c_allocator` and `format_alloc_null_allocator_round_trip`
+  now assert NULL and keep their "no zero-length allocator callback" halves.
 
 ## N332 — `snapshot::encode` takes the reference's allocator again; the record scratch spills through it
 
@@ -6781,6 +6795,17 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
         Windows". Since task W-1 (N342), rustty-vt-c builds and is tested on Windows, so this difference is
         now reachable there.
       - It is one allocation per terminal, not a routing gap.
+  11. **Kitty file-medium canonical path buffers** (P7-W5 T2, `0b5446364`):
+      `crates/rustty-vt/src/kitty/graphics_image.rs` `readFile` and `isPathInTempDir`.
+      - The reference allocates each `std.fs.max_path_bytes` buffer through `alloc` (about 96 KiB on
+        Windows), and so does the port: one alloc and one free of `MAX_PATH_BYTES` per buffer, the
+        first before the open, the second only when the temp-directory prefix check reaches the real
+        path fallback. An allocation failure is `error.OutOfMemory` in both.
+      - The reference's `realPath` writes the canonical path straight into that buffer. The port's
+        `realpath_of_handle` and `realpath` return it in a transient Rust-heap `Vec` (on Windows via a
+        Rust-heap WTF-16 buffer too), which is copied into the buffer; a longer path is `NameTooLong`
+        as in the reference. So the C allocator sees the same calls, and the Rust heap sees one more
+        allocation per resolved path (listed under "Not C-observable" below).
 - **Not C-observable** (listed so the inventory is complete):
   - **Rust-heap allocations** that the reference never makes, or makes inside caller-allocated storage
     (N334 has the details). Current lines:
@@ -6789,8 +6814,11 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
     - rustty-vt-c: the `Box<dyn ZigAllocator>` adapters at `terminal.rs:1620`, `:1958` and
       `render.rs:1354`, `:1549`; the kitty temporary-directory copies at `terminal.rs:3179`, `:3187`; the
       snapshot decoder's `Source`/`ReaderState` boxes at `snapshot.rs:323-324`;
-    - N274's port-only transients: response strings, `format!` reports, map-key snapshots, tmux
-      notification copies, and zlib's own `malloc` for inflate state;
+    - N274's port-only transients: response strings, `format!` reports, map-key snapshots, and tmux
+      notification copies (zlib's own `malloc` for inflate state is gone since P7-W5 T2: the kitty
+      zlib decoder is wuffs, whose state and output are allocated through the caller's allocator, as
+      the reference's are);
+    - the kitty file media's canonical-path `Vec`s (item 11);
     - the per-dispatch `Box` of the borrowed OSC command (N320).
 
     The C allocator sees none of these, so a C embedder's memory accounting misses them.
@@ -6856,6 +6884,15 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `memory_ptr` used after a `&mut` over the whole page memory. Such a report is a real finding, not a
   regression from this change.
 - **state**: CLOSED for `term_size.rs` (the warning is gone). The two deliberate sites stay (RECORDED).
+- **reversal (P7-W2 T2, upstream `dd2edd760`, DECISIONS B1)**: the C API no longer hands out a
+  zero-length sentinel address at all. `rustty_alloc(.., 0)` and the empty outputs of the three
+  allocating exports are NULL, and borrowed empty strings point at the real `rustty_lib::EMPTY` static,
+  so no provenance-free sentinel crosses the ABI. The selection test's `without_provenance_mut(1)`
+  (`@ptrFromInt(1)`) input sentinel is unchanged. The same task gave `rustty-lib`'s typed-helper
+  `zero_len_sentinel` (`allocator.rs`) the `without_provenance_mut` treatment this finding gave
+  `GlobalRawAllocator`: it was an integer-to-pointer cast, which Miri flagged in "String.init empty
+  output"; it is warning-free now. Miri (`formatter::`, `selection::`, `terminal::tests::continuation`,
+  `allocator::`, rustty-lib `types::`): clean.
 
 ## N362 — three S7 tests were not Miri-ready: a Stacked Borrows violation in a test, a should_panic leak, an 18-hour test
 
@@ -7142,7 +7179,12 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **P-1b (user decision 2026-09-27)**: `CLAUDE.md` is ported, a symlink to `AGENTS.md` (mode
   120000) exactly as the reference's `c09ade225`; `release-tip.yml`'s paths filter regains `!CLAUDE.md`
   and `!.envrc`. `.envrc` now carries the UD345 fix (R13, controller ruling) instead of the reference's
-  wrong `nix/wraptest.nix` path.
+  wrong `nix/wraptest.nix` path. SUPERSEDED at P7-W10 T4 (2026-09-28, maintainer decision, DECISIONS
+  "Maintainer decisions"): upstream itself deleted the symlink at `9d2d9acac` (20abdb50a..12752b2ac,
+  R4 §L), so Rustty's copy is now removed too, for parity — `AGENTS.md` stays, and the
+  `release-tip.yml` `!CLAUDE.md` filter entry is KEPT (upstream's own `release-tip.yml` still carries
+  it at `12752b2ac`, naming a file that no longer exists there either). NON_PORTS G13 §6's row is
+  updated to match.
 - **Recorded, not changed**: `test/pkgconfig/test_librustty_vt.c` duplicating
   `nix/test-src/test_librustty_vt.c` (G-CCONSUMER uses one, the Nix tests the other);
   `macos/build-rustty-signed.sh` citing a `macos/DISTRIBUTION.md` that does not exist (Rustty-only
@@ -7174,7 +7216,15 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (`zig build -Dapp-runtime=none test`) and `build-libghostty-windows-gnu` are gaps analysed in
   **N342** (the application tier does not compile for Windows; being addressed by W-2/W-4), not
   repeated below; `build-macos-xcode-27` (a second macOS app build on Xcode 27) has no counterpart and
-  no record since NON_PORTS G13 §1 was superseded: gap 21.
+  no record since NON_PORTS G13 §1 was superseded: gap 21. STALE as of P7-W10 T4 (2026-09-28): task
+  W-2 later DID port both (once the app tier compiled on Windows, as the `windows` job's "Build/Test
+  the workspace" and "Build the apprt-c library for the GNU ABI" steps); then upstream itself removed
+  both jobs (`380778e3c`, 20abdb50a..12752b2ac, "libghostty-internal isn't really supposed to be used
+  in Windows anyway"), so P7-W10 T4 removed the two ported steps again, for parity (DECISIONS R6).
+  End state: NEITHER is a gap nor a Rustty-only surplus — upstream doesn't have them either. The vt-lib
+  Windows test that used to ride along inside "Test the workspace" (a `cargo test --workspace` also
+  runs `rustty-vt-c`'s own tests) got its own scoped "Test librustty-vt" step, matching
+  `build-libghostty-vt-windows`'s unaffected `test-lib-vt` step.
 - **Gaps (no counterpart or partial, no record)**:
   1. `skip` (path-filter fan-out; the fork/VOUCHED skip): needs a NON_PORTS record.
   2. `build-examples-cmake-windows` and the `c-vt-static` step of `build-libghostty-vt-windows`.
@@ -7338,6 +7388,20 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   **kind**: CI parity. **state**: CLOSED by parity tail CI-1 (2026-09-28) as far as a file edit
   goes: every residual below is ported (secrets referenced by name only); none has run, since the
   workflows need `RUSTTY_RELEASE_ENABLED` and the maintainer's secrets (VERIFICATION_DEBT V25).
+- **P7-W10 T4 addendum (2026-09-28), R4 §G — action version bumps in the range `20abdb50a..12752b2ac`:**
+  applied, with pinact-style SHA + comment: `ryand56/r2-upload-action` v1.4 `b801a390…` -> v1.5
+  `33ebb7a4…` (7 sites: `publish-tag.yml`, `release-tag.yml`, 5x `release-tip.yml`);
+  `softprops/action-gh-release` v3.0.2 `3d0d9888…` -> v3.0.3 `efb35369…` (5 sites, all
+  `release-tip.yml`); `c-hive/gha-remove-artifacts` v1.4.0 `44fc7aca…` -> v1.8.0 `62c2fbea…` (1
+  site, `clean-artifacts.yml`). All three release lanes stay inert behind `RUSTTY_RELEASE_ENABLED`
+  (unverified by running, V25). N/A, recorded (no Rustty counterpart to bump): `nscloud-cache-action`
+  (56 upstream sites — Rustty has no Namespace runner pool, per the existing "no nscloud-cache step"
+  notes at `ci.yml:806`, `nix.yml:23`, `snap.yml:29`), `cachix-action` (55 sites — Rustty has no
+  binary cache, per `nix.yml:25`; `cachix/install-nix-action` at `ci.yml:341,1161` and `nix.yml:67`
+  is a DIFFERENT action, already pinned and unaffected by this bump), `docker/build-push-action`
+  (Rustty's `test-debian-13` builds with a bare `docker build`, not this action) and
+  `flatpak-github-actions/flatpak-builder` (Rustty's `build-flatpak` runs `flatpak-builder` as a CLI
+  step, not through this action — N379/N-comment at `NEW-FINDINGS.md:7098`).
   Previously: OPEN: release workflows run only with maintainer secrets, so P-1 did not change them.
 - **Fixed by P-1b**: the three `release-tip.yml` appcast steps require `github.ref_name == 'main'`
   again (test `tip_appcast_steps_run_only_on_main`, negative control); `release-tag.yml` `sentry-dsym` is
@@ -8575,3 +8639,234 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `--target x86_64-pc-windows-msvc`): `cargo test -p rustty-xev` 3/3 (45 passed, including `iocp_timer_reset`
   and `iocp_timer_cancellation`). WASI: compiles and clippy-clean only; no runtime (VERIFICATION_DEBT V8),
   UNVERIFIED by execution.
+
+## N435 — `ScreenSearch::feed` carried the reference's `.complete => unreachable` after history is prepended
+
+- **id**: N435. Phase 7 start (P7-W0 T4; R1 #1, DECISIONS R1). **severity**: medium (a reachable panic).
+  **kind**: reference crash ported faithfully, unrecorded. **state**: OPEN; closed by the port of `06178eeaa`
+  (P7-W5 T4).
+- **reference**: at 20abdb50a, `src/terminal/search/screen.zig:308` `feed` switches on the state with
+  `.complete => unreachable` (`:343`), under the comment "If we're complete then the feed call above should always
+  return false and we can't reach this." Upstream found that it is reachable and fixed it in the range:
+  `06178eeaa` ("terminal/search: resume a complete search when history is prepended") makes the arm
+  `.complete => self.state = .history` (`search/screen.zig:354` at 12752b2ac).
+- **rustty**: `crates/rustty-vt/src/search/screen.rs:569` `feed`, `State::Complete => unreachable!()` (`:619`),
+  a faithful port of the pin.
+- **reachability**: a screen search that has already exhausted its PageList (`.complete`) is fed again after
+  older history pages are prepended below it (incremental snapshot history restore); the history searcher's
+  tracked pin keeps its node identity through the prepend, so the feed finds new pages and reaches the arm.
+  By reading (R1); not reproduced.
+- **why not a UD**: upstream found and fixed it within the range, so at the new pin it is not an R13 divergence;
+  the port adopts `06178eeaa` as is, with its tests.
+
+## N436 — `ghostty_search_tick` read the freed terminal's PageList after `ghostty_terminal_free`
+
+- **id**: N436. Phase 7 start (P7-W0 T4; R1 #37, R3 §3.5, DECISIONS R1). **severity**: medium (use-after-free
+  through the C API). **kind**: reference use-after-free ported faithfully, unrecorded. **state**: CLOSED
+  (P7-W2 T1) by the port of `b1c264163`.
+- **reference**: at 20abdb50a, `src/terminal/c/search.zig:170-178` `tick` checks only the search handle, then
+  runs `s.tick()`. After the terminal is freed, a history search's tick reads `history.start_pin`, a pin tracked in
+  the freed PageList. `b1c264163` ("vt: reject search ticks after the terminal is freed") adds
+  `_ = wrapper.zigTerminal() orelse return .invalid_value;` (`c/search.zig:176` at 12752b2ac), an assertion in
+  "search free after terminal free" (`:949`), the new test "search tick after terminal free with history"
+  (`:988`), and the `search.h` doc.
+- **rustty**: `crates/rustty-vt-c/src/search.rs:508-525` `tick` has no terminal check, so by reading it carries
+  the same use-after-free. The guard ports through the raw-self `zig_terminal` helper (`:110`).
+- **fix**: `crates/rustty-vt-c/src/search.rs` `tick` now calls
+  `SearchWrapper::zig_terminal(search_)` and returns `Result::InvalidValue` when it is null, before touching
+  `search`. `search_free_after_terminal_free` gained the `tick(search, null)` -> `InvalidValue` assertion
+  (matching upstream's `:949` insertion), and the new test `search_tick_after_terminal_free_with_history` ports
+  upstream's "search tick after terminal free with history" (`:988`) assertion-for-assertion. The
+  `include/rustty/vt/search.h` doc for the lifetime section and `rustty_search_tick`'s `@return` were updated
+  verbatim from the oracle's `search.h` diff.
+- **evidence**: `cargo +nightly miri test -p rustty-vt-c search` — RED before the guard (with the new test
+  present, no guard): `error: Undefined Behavior: memory access failed: ... has been freed, so this pointer is
+  dangling` in `rustty_vt::search::screen::ScreenSearch::tick_history`, reached through
+  `search::tick` -> `TerminalSearch::tick` -> `ScreenSearch::tick`
+  (`search_tick_after_terminal_free_with_history` failed; `search_free_after_terminal_free` also failed its
+  `InvalidValue` assertion). GREEN after the guard: `test result: ok. 22 passed; 0 failed; 2 ignored` (the 2
+  ignored are the pre-existing MIRI EXCEPTION rows, unrelated to this change). Native
+  `cargo test -p rustty-vt-c search`: `24 passed; 0 failed`.
+- **commit**: `search: reject search ticks after the terminal is freed (b1c264163) (P7-W2 T1)`.
+- **why not a UD**: upstream found and fixed it within the range (as N435).
+
+## N437 — the render thread forms whole-`Renderer` references that overlap the main thread's raw sync draw (macOS)
+
+- **id**: N437. Phase 7 start (P7-W0 T4; the P7-W0 T1 review, controller ruling 7). **severity**: medium
+  (aliasing-model UB on the macOS renderer every frame; no observed miscompile). **kind**: port soundness (Stacked
+  and Tree Borrows); pre-existing, not introduced by `72cf50855`. **state**: OPEN; owned by P7-W7 T2 (the
+  renderer-lifecycle rework). CLOSED (fixed, P7-W7 T2).
+- **finding**: on macOS CoreAnimation calls `draw_frame_raw(sync = true)` on the main thread
+  (`crates/rustty-core/src/renderer_seam.rs:492`, `:496`), which reaches the renderer through a raw pointer and
+  takes `draw_mutex`. Meanwhile the render thread calls whole-`Renderer` `&mut self` / `&self` methods through
+  `(*(*self_).renderer).0`: `update_frame` (`renderer_seam.rs:1823`), `animation_wake` without the lock
+  (`:1313`, `armAnimationTimer`), `set_visible` (`:1396`), `set_focus` (`:1424`), `loop_enter` (`:1164`) and
+  `set_macos_display_id` (`:1583`). Each forms a reference over the whole renderer, and a function-entry
+  `&mut self` is protected for the whole call, so a concurrent main-thread access through the raw pointer to any
+  field (the sync draw's `&mut` reborrows included) is UB under Stacked and Tree Borrows, whether or not the two
+  touch the same bytes and whatever `draw_mutex` serialises. Zig's `*Renderer` has no such aliasing rule. By
+  reading; not yet shown in a Miri harness.
+- **follow-ups for P7-W7 T2**:
+  - UD352's port-handling text says "after the unlock the render thread touches no renderer bytes". That
+    overclaims for `update_frame`: its receiver is a `&mut Renderer` for the whole call, the unlocked resync
+    included. Reword UD352 when the rework lands.
+  - `DisplayLinkHandle` (`crates/rustty-renderer/src/metal/cvdisplaylink.rs:251-280`) is a safe `pub`,
+    `Copy` API over a non-owning `CVDisplayLinkRef` with no lifetime, so safe code can call `start`/`stop` after
+    the owning `DisplayLink` is released. Make `DisplayLink::handle` `pub(crate)`, or make the handle's methods
+    `unsafe` with a `# Safety` section.
+- **fix direction**: raw-self receivers with narrow field access for every render-thread entry that can overlap
+  the sync draw (memory `shaper-hook-sb-clean-interleave`), with LIFETIMES rows first and an isolated Miri
+  harness under `.port/phase-2/mirihar-<name>/` that is UB before and clean after.
+- **fix** (P7-W7 T2): `draw_mutex` moved out of the renderer into its own allocation
+  (`rustty_renderer::latest_frame::DrawMutex`, an `Arc<Mutex>` handle); core holds one handle for the render
+  thread (`renderer_seam::Thread::draw_mutex`) and one for the main thread (`RendererHandles`, beside the
+  renderer). Every cross-thread entry in both `generic` twins is a raw-self `*_raw` entry or goes through
+  `Renderer::with_locked`, which locks through the caller's handle BEFORE forming any renderer reference; the
+  whole `&mut` exists only under the lock. The entries the reference runs unlocked (`setFocus`, `setVisible`,
+  `animationWake`, `hasVsync`, `loopEnter`, `setMacOSDisplayID`) lock too. The latest-frame slot is an
+  `Arc<LatestFrame>`, so the GTK main thread's `takeFrame` touches no renderer byte. The macOS display
+  callback's context carries the renderer pointer and a `DrawMutex` handle (`metal_impl::DisplayCallbackCtx`).
+  LIFETIMES rows added. Both follow-ups done: UD352 reworded; `DisplayLink::handle` is `pub(crate)` and the
+  `DisplayLinkHandle` methods are `pub(crate) unsafe fn` with `# Safety` sections.
+- **proof**: `.port/phase-2/mirihar-n437/` (the real `Mutex` and `latest_frame` by `#[path]`; 16 seeds, SB and
+  TB): the three shipped shapes (`update_frame`, unlocked `animation_wake`, `set_focus` vs the raw sync draw)
+  are UB under both; two negatives (lock-first with the mutex inline; external lock with the frame slot inline)
+  are UB under both; the fix against the macOS sync draw and against the GTK main thread is clean under both.
+- **residual** (not in N437's scope): the Metal completion handler is **N440**; the main thread's
+  whole-core-`Surface` references over the embedded renderer are **N441**. Both OPEN.
+- **ruling 32 follow-up** (P7-W7 T2 fix round 1): `update_frame` keeps the reference's lock scopes;
+  the unlocked part uses a narrow view, and the main thread's locked entries are narrow too
+  (`display_realized_raw` / `display_unrealized_raw`, the sync draw's `*_raw` helpers). Harness
+  candidates `split_*` in `.port/phase-2/mirihar-n437` (narrow main side CLEAN, whole-renderer main
+  side UB, SB and TB).
+
+## N438 — the reference's fontconfig archive omits `fcconffile.c`, leaving two public functions undefined
+
+- **id**: N438. P7-W10 T1 (R4 §A fact 2; DECISIONS B14). **severity**: none observable. **kind**: latent
+  reference shape (record only). **state**: OPEN (record only; not a UD, unreachable).
+- **shape**: the reference's `srcs` list (`pkg/fontconfig/build.zig:343-373`) has 29 translation units; upstream's
+  meson build also compiles `src/fcconffile.c` (`src/meson.build:25`). That file defines the public
+  `FcConfigFileGenerate` and `FcConfigFileGenerateGenericAlias` (declared in `fontconfig.h:1224` onward). No
+  other TU calls them, so the static archive links, but a caller of either would get an undefined symbol.
+- **reachability**: none. Neither Ghostty nor the port calls them (the `fc` module binds neither), and nothing
+  inside fontconfig does.
+- **port**: faithful. `fontconfig-sys` vendors `src/fcconffile.c` (the tarball's `src/*.c`) but leaves it out of
+  `SOURCES`, with a comment citing B14 and this note. Evidence: `nm` of the macOS and Linux (rvm) archives lists
+  no `FcConfigFileGenerate*` symbol.
+- **not here**: R4 §A fact 1 (the stale `FC_VERSION_*` defines), first recorded under this id as latent, is
+  observable (it stamps and compares cache files) and is fixed as UD360.
+
+## N440 — the Metal completion handler reaches the renderer without the draw mutex while the render thread holds a whole-renderer `&mut`
+
+- **id**: N440. P7-W7 T2 fix round 1 (review IMPORTANT 3, controller ruling 33). **severity**: medium
+  (aliasing-model UB on macOS on frames that complete while the render thread is inside a locked
+  entry; no observed miscompile). **kind**: port soundness (Stacked and Tree Borrows). **state**: CLOSED
+  by P7-W7 T5a (both halves; see "closure" below).
+- **finding**: Metal command buffers complete on a Metal-owned thread, which runs
+  `metal_buffer_completed` (`crates/rustty-renderer/src/generic.rs`, the inlined
+  `metal/Frame.zig:79-91` `bufferCompleted`). It recovers the renderer as a raw pointer and calls
+  `(*renderer).api.present(..)` (a `&mut` reborrow of `api`) and `(*renderer).frame_completed(health)`
+  (a `&self` reborrow of the whole renderer; it reads `health`, `surface_mailbox` and `swap_chain`),
+  without taking `draw_mutex`. Meanwhile the render thread may hold a whole-renderer `&mut` under the
+  lock (`Renderer::with_locked`, e.g. the locked tail of `update_frame_impl`, `set_font_grid_locked`,
+  the search-match writes), whose retag and accesses cover the same bytes: a data race with a retag and
+  a foreign access to protected bytes. The reference's `*Renderer` has no such rule; its fields are
+  either atomics (`health`) or only read. By reading; not yet shown in a harness.
+- **fix direction**: give the completion handler what it needs outside the renderer's bytes: move
+  `health` and the swap chain's frame semaphore behind an `Arc` (as `LatestFrame`), hand the handler a
+  clone of the surface mailbox and a raw `*const` to `api`'s presentation state (or an `Arc`ed
+  presenter), so it forms no reference to the renderer; prove it on a `.port/phase-2/mirihar-*`
+  harness (UB before, clean after, SB and TB). UD362's by-reading Metal note (the `.renderer_health`
+  `.forever` push before `releaseFrame`) belongs in the same task.
+- **update (fix round 2)**: on the SYNC path the trampoline runs on the main thread under the lock; its
+  whole-renderer `&self` raced the ruling-32 render side, so `frame_completed` is now
+  `frame_completed_raw` (place expressions on `health`, `surface_mailbox`, `swap_chain` only;
+  harness `split_vs_sync_draw_trampoline_whole` UB, `split_vs_sync_draw_narrow` CLEAN). The async
+  (completion-thread, unlocked) half of this finding stays OPEN.
+- **Metal deadlock variants to fix in the same task** (UD362 extension, ruling 36): (a) the completion
+  thread's `.renderer_health` `.forever` push precedes `release_frame`, while the main thread's sync
+  draw holds `draw_mutex` in `next_frame` → `frame_sema.wait()` with all three frames in flight and a
+  full mailbox; (b) on the sync path the main thread itself pushes `.renderer_health` `.forever` into
+  the mailbox only it drains. Fix direction: `release_frame` before the push, and never block the
+  drainer on its own mailbox (defer the push past the draw, as the OpenGL twin does, or push
+  `.instant` from the main thread).
+- **closure (P7-W7 T5a)**: the async half is fixed. `crate::metal::frame::CompletionContext` no longer
+  carries the renderer or target pointers; it carries owned clones, each in its own allocation, taken
+  under the draw mutex when the frame begins (`draw_frame_locked`): `health: Arc<AtomicHealth>` (the
+  renderer's `health` field is now that `Arc`), `frame_sema: Arc<Semaphore>` (the swap chain's
+  semaphore is now that `Arc`), a `SurfaceMailbox` clone, `layer: Arc<LayerCell>` (Metal's `layer`,
+  the presenter state, now in its own cell; `LayerCell` is `Send + Sync` by a documented SAFETY note)
+  and a retain of the target's IOSurface (all `present` reads of the `Target`). The handler
+  (`metal_buffer_completed` → `metal_impl::present_layer` + `frame_completed_on`) forms no reference
+  to any renderer byte, on either path. `frame_completed_raw` is gone; `Renderer::frame_completed`
+  is a test-only method over the renderer's own cells. Proof: `.port/phase-2/mirihar-n440`
+  (`shipped_async_handler` UB under SB and TB, run before the change; `fixed_async_handler` and
+  `fixed_async_and_sync_draw` CLEAN under SB and TB, 16 seeds each). LIFETIMES rows: `Frame.zig`
+  `CompletionBlock.Context` `renderer`/`target`, `generic.zig` `Renderer.health`,
+  `SwapChain.frame_sema`, `Metal.zig` `Metal.layer`. The two Metal deadlock variants are fixed in the
+  same task (UD362). Fix round 1 (ruling 39): the reference's order (store, push, release) is kept with
+  an `.instant` push plus withdrawal and a `HealthReportRetry` (redraw flag + `draw_now` wakeup, also in
+  the context), so no completion can outlive `SwapChain::deinit`; `LayerCell` is narrowed (private
+  field, only `present` reachable, `Metal::layer()` for the rest); the harness tears the renderer down
+  before joining the completion thread and models the new order (still UB / CLEAN / CLEAN). Fix round 2
+  (ruling 41): the retry state is `HealthReport` (`reported` under a mutex, `pending`, a paced `draw_now`
+  wakeup that skips while the display link runs), shared by the renderer (`health_report`) and the
+  context; the harness models `reported` (still UB / CLEAN / CLEAN). Fix round 3: the wake is sent only when a
+  report becomes owed, and core's `drawNowCallback` arms the animation timer while one is owed
+  (`Renderer::health_report_owed_raw`), so no refused report is stranded.
+
+## N441 — main-thread references to the whole core `Surface` cover the renderer the render thread writes under the draw mutex
+
+- **id**: N441. P7-W7 T2 fix round 1 (review IMPORTANT 3, controller ruling 33). **severity**: medium
+  (aliasing-model UB on every platform whenever a main-thread surface callback overlaps a render-thread
+  locked write; no observed miscompile). **kind**: port soundness (Stacked and Tree Borrows).
+  **state**: OPEN; a follow-up task.
+- **finding**: the core `Surface` embeds the renderer (`renderer: renderer_seam::Renderer`, whose `.0`
+  is the `rustty_renderer::Renderer`). The GTK main thread calls core methods through a whole
+  `&mut Surface`: `unsafe { &mut *core }.contentScaleCallback(..)` and `.sizeCallback(..)`
+  (`crates/rustty-apprt/src/gtk/class/surface.rs`, `render_surface_resize`), and the other
+  `&mut self` / `&self` methods of `crates/rustty-core/src/surface.rs` the apprt calls (key, mouse,
+  focus, clipboard callbacks). Each retag of the whole `Surface` covers the renderer's bytes, which the
+  render thread writes under `draw_mutex` through its own raw root (N437's fix): a data race with a
+  retag. N437 made every renderer entry lock-first and narrow; it did not change how the apprt reaches
+  the core surface.
+- **fix direction**: move the renderer out of the `Surface` allocation (a `Box`/raw pointer the render
+  thread and the surface share, as the terminal already is), or make the main-thread core entries
+  raw-self with narrow access that never spans `renderer`. Harness first (`.port/phase-2/mirihar-*`),
+  UB before and clean after under SB and TB.
+
+## N442 — `performBindingAction(&mut self)` holds a protected `&mut Surface` across the host callback that re-enters the same surface
+
+- **id**: N442. P7-W8 T2 fix round 1 (review IMPORTANT, controller ruling 37). **severity**: medium
+  (aliasing-model UB on every menu or keybind split/tab/window; no observed miscompile). **kind**: port
+  soundness (Stacked Borrows; a function-argument protector). **Not upstream**: Zig's `*Surface` carries no
+  aliasing rule and no protector, so the reference is sound. **state**: OPEN → P7-W7 T5 (lands with N441).
+- **shape**: `rustty_core::Surface::performBindingAction(&mut self, ..)` (`crates/rustty-core/src/surface.rs:11270`)
+  is a `&mut self` method, so `self` is a protected Unique for the whole call. Its `new_split`
+  (`:12537`), `new_tab` (`:12426`) and `new_window` (`:11282`) arms call `rt_app.perform_action(..)`, which
+  runs the embedder's C action callback synchronously while that protector is live.
+- **re-entrant reader**: the macOS host's action handlers call
+  `rustty_surface_inherited_config(surface, RUSTTY_SURFACE_CONTEXT_{SPLIT,TAB,WINDOW})` inside that
+  callback (`macos/Sources/RusttyKit/Rustty.App.swift:1004`, `:976`, `:940`). It reaches
+  `embedded::Surface::newSurfaceOptions(&self)` (`crates/rustty-apprt/src/embedded.rs:2096`), which reads
+  `self.core_surface.font_size` (and the working directory) through the parent embedded-surface pointer: a
+  read through a tag the protected Unique invalidates, which is UB under Stacked Borrows.
+- **routes** (all three reach `performBindingAction` with a `&mut` formed from the raw C pointer):
+  - the keybind path, `rustty_surface_key` (`crates/rustty-apprt-c/src/lib.rs:1878`) → `keyCallback` →
+    binding dispatch;
+  - `rustty_surface_binding_action` (`lib.rs:2390`);
+  - the menu path since a1bf5b5e1 (P7-W8 T2): `rustty_surface_split` (`lib.rs:2249`), and by the same shape
+    `rustty_surface_split_focus` (`:2286`) and `rustty_surface_request_close` (`:2214`). Before the port of
+    a1bf5b5e1 the menu split formed only a shared `&core_surface` for the `Target`, which a shared read
+    does not invalidate.
+- **reachability**: every menu or keybind split (Cmd-D), and every keybind or binding-action new tab and new
+  window, on macOS. The GTK apprt does not call back into the core surface from its action handler this way.
+- **test**: `crates/rustty-apprt-c/tests/macos_window_host.rs::split_and_close_exports_reach_the_host` —
+  its `cb_action` calls `rustty_surface_inherited_config` on `NewSplit`, so the re-entry is exercised on a
+  live surface. Miri cannot see it across the FFI; the test proves only that the re-entry runs.
+- **fix direction**: raw-self dispatch (`*mut Surface` with narrow field access, memory
+  `rust-mut-args-strongly-protected`) for the `performBindingAction` arms that call
+  `rt_app.perform_action`, so no protected `&mut Surface` spans the host callback; the three routes then
+  enter through the raw root. LIFETIMES row first (`.port/audits/GHOSTTY_LIFETIMES.tsv`, core `Surface`
+  `[self across rt_app.perform_action]`), and an isolated harness under `.port/phase-2/mirihar-*` that is UB
+  before (protected `&mut` + a re-entrant read through the parent pointer) and clean after, under SB and TB.

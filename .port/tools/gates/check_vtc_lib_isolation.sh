@@ -25,9 +25,14 @@
 # invocations; combined workspace builds intentionally unify and are never
 # release artifacts. This gate pins both halves of that rule:
 #
-#   1. BUILD-GRAPH arm: the isolated rustty-vt-c resolution must not contain
-#      `wuffs` (neither the `rustty-vt feature "wuffs"` edge nor the
-#      rustty-wuffs crate). `cargo tree` only — no compile.
+#   1. BUILD-GRAPH arm: the isolated rustty-vt-c resolution must not enable
+#      rustty-vt's `wuffs` feature. `cargo tree` only — no compile.
+#      (P7-W5 T2, DECISIONS B8: the rustty-wuffs CRATE is now in this graph by
+#      design, linked by rustty-vt's `kitty-graphics` feature for the kitty
+#      swizzles and zlib decoder as the reference's lib-vt links wuffs whenever
+#      Kitty graphics is on (GhosttyZig.zig:140-152). What decides the
+#      `decode_png` default is the `wuffs` FEATURE alone (sys.rs), so that is
+#      what the arm checks; before B8 the crate's presence was a proxy for it.)
 #   2. DETECTOR CONTROL (anti-vacuity, always on, still no compile): the same
 #      detector MUST fire on `--features rustty-vt/wuffs` (simulated
 #      unification). A grep that can no longer match its target is the gate
@@ -61,11 +66,14 @@ cd "$ROOT" || exit 1
 
 TESTNAME=isolated_vtc_selection_keeps_lib_null_decode_default
 MARKER=RUSTTY_VTC_LIB_NULL_DEFAULT_RAN
-# Either symptom counts: the feature edge (how a dep-line edge shows up) or
-# the crate itself (how CLI/graph activation shows up — `cargo tree -e
-# features` does NOT print a feature edge for CLI-enabled features, measured
-# 2026-08-10, which is why the crate name is grepped too).
-DETECT='rustty-vt feature "wuffs"|rustty-wuffs'
+# The detector reads rustty-vt's RESOLVED feature list (`cargo tree -f
+# '{p} [{f}]'`), which shows the feature however it was enabled: a dep-line
+# edge or the CLI. (`cargo tree -e features` does NOT print a feature edge for
+# CLI-enabled features, measured 2026-08-10, which is why this gate used to
+# grep the rustty-wuffs crate name as well; since DECISIONS B8 that crate is in
+# the isolated graph by design, so the name no longer tells the two apart.)
+DETECT='^rustty-vt v[^ ]* .*\[([^]]*,)?wuffs(,[^]]*)?\]$'
+TREE_FMT='{p} [{f}]'
 
 if [ "${1:-}" = "--self-test" ]; then
   echo "=== G-VTCLIB SELF-TEST (arm 3 fail path: simulated unification) ==="
@@ -93,9 +101,9 @@ echo "G-VTCLIB: lib-vt C artifact keeps the oracle null decode_png default (W36-
 fail=0
 
 # --- arm 1: the isolated build graph -----------------------------------------
-tree_iso="$(cargo tree -p rustty-vt-c -e features --prefix none 2>&1)"
+tree_iso="$(cargo tree -p rustty-vt-c -e normal -f "$TREE_FMT" --prefix none 2>&1)"
 if [ $? -ne 0 ]; then
-  echo "  RED: 'cargo tree -p rustty-vt-c -e features' itself failed:" >&2
+  echo "  RED: 'cargo tree -p rustty-vt-c -f' itself failed:" >&2
   printf '%s\n' "$tree_iso" | head -5 >&2
   exit 1
 fi
@@ -107,11 +115,11 @@ if [ -n "$hits" ]; then
   echo "  (a wuffs edge on rustty-vt-c's dep line? sys.zig:16-20 says lib => null)" >&2
   fail=1
 else
-  echo "  arm 1: isolated -p rustty-vt-c graph is wuffs-free"
+  echo "  arm 1: isolated -p rustty-vt-c graph leaves rustty-vt's wuffs feature off"
 fi
 
 # --- arm 2: the detector control (cargo tree only, no compile) ---------------
-tree_inj="$(cargo tree -p rustty-vt-c --features rustty-vt/wuffs -e features --prefix none 2>&1)"
+tree_inj="$(cargo tree -p rustty-vt-c --features rustty-vt/wuffs -e normal -f "$TREE_FMT" --prefix none 2>&1)"
 if [ $? -ne 0 ]; then
   echo "  RED: the detector-control 'cargo tree --features rustty-vt/wuffs' failed:" >&2
   printf '%s\n' "$tree_inj" | head -5 >&2

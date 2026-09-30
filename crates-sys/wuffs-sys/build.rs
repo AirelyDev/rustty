@@ -32,12 +32,25 @@
 //!      `DEP_WUFFS_INCLUDE` for downstream crates.
 //!
 //! Reference `pkg/wuffs/include/{stdlib.h,string.h}` (`619555d1c`
-//! build-without-libc) are mirrored at `include/` but NOT placed on any
-//! include path: they exist so the reference's translate-c can parse wuffs
-//! without libc headers (wasm32-freestanding / no Apple SDK), while `cc` here
-//! always compiles against the real system libc. Wiring them up (plus the
-//! main.zig weak `calloc`/`free` stubs — see rustty-wuffs lib.rs) becomes live
-//! only if a wasm32/freestanding lane ever links wuffs.
+//! build-without-libc) are mirrored at `include/`. They exist so the reference
+//! can translate and compile wuffs without libc headers (wasm32-freestanding /
+//! no Apple SDK). Since P7-W5 T2 (DECISIONS B8: kitty zlib decodes through
+//! wuffs wherever Kitty graphics is on) they are LIVE: `include/` goes first on
+//! the include path of the codec TU, the shim TU and bindgen on every
+//! non-Windows target, as the reference puts it. The headers only declare what
+//! libc declares, with the standard C ABI, so a target that links libc links
+//! the same symbols. Where no libc is linked (wasm32 other than WASI)
+//! `wasm_libc_stubs.c` supplies the reference `main.zig`'s weak, hidden
+//! `calloc`/`free` stubs.
+//!
+//! Which targets link wuffs at all is rustty-vt's business: since Ruling 30
+//! (amending B8) the freestanding ones, `wasm32-unknown-unknown` included, have
+//! Kitty graphics off and no wuffs, as the reference's lib-vt wasm artifact
+//! (`wasm32-freestanding`) has neither, so that artifact is pure Rust.
+//! `wasm32-wasip1` (Zig's `.wasi`) links wuffs and needs a C compiler that
+//! targets wasm (`CC_wasm32_wasip1`, or a `clang` with the WebAssembly
+//! backend; Apple's clang has none). This crate still builds for
+//! `wasm32-unknown-unknown` on its own, which is where the stubs apply.
 
 use std::env;
 use std::path::PathBuf;
@@ -81,8 +94,34 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+
+    // The reference's `pkg/wuffs/build.zig` (`c0c5473da` end state):
+    //   // Windows always has a libc available.
+    //   const windows = target.result.os.tag == .windows;
+    //   ...
+    //   // Wuffs only needs stdlib.h and string.h from libc, and only for
+    //   // a handful of declarations. We provide minimal versions of these
+    //   // headers so that wuffs can be translated and compiled without
+    //   // libc, notably for freestanding targets (wasm32) but this also
+    //   // avoids requiring an Apple SDK for translate-c on macOS.
+    //   false => &.{ b.path("include"), wuffs_dep.path("release/c") },
+    // Applied as the reference applies it: on every target but Windows. It is
+    // what lets a cross build with no target sysroot (wasm32-wasip1 without a
+    // WASI sysroot, or the `c-vt-cmake-cross` example's aarch64 Linux from
+    // macOS) compile and bindgen the header, since P7-W5 T2 put wuffs in every
+    // kitty-graphics graph (DECISIONS B8).
+    let minimal_libc_headers = target_os != "windows";
+    let wasm = target_arch == "wasm32";
+    let libc_include = manifest_dir.join("include");
+    // `builtin.link_libc` is false: nothing else provides `calloc`/`free`.
+    // WASI links wasi-libc through Rust's std, so only the other wasm32 targets.
+    let no_libc = wasm && target_os != "wasi";
 
     let mut build = cc::Build::new();
+    if minimal_libc_headers {
+        build.include(&libc_include);
+    }
     build
         // Windows (MSVC ABI), task F-1 (N353): the reference compiles this with
         // Zig's clang even when `abi == .msvc`, so on an MSVC target cc drives
@@ -119,6 +158,18 @@ fn main() {
             .flag_if_supported("-fno-sanitize-trap=undefined");
     }
 
+    // The wasm `simd128` default (N422, `src/build/Config.zig:113-130`) is a
+    // property of the resolved target, so the reference compiles this C with
+    // it too. cc-rs does not forward Rust's target features to the C compiler;
+    // pass it when the Rust side has it (`.cargo/config.toml`).
+    let simd128 = env::var("CARGO_CFG_TARGET_FEATURE")
+        .unwrap_or_default()
+        .split(',')
+        .any(|f| f == "simd128");
+    if wasm && simd128 {
+        build.flag("-msimd128");
+    }
+
     build.file(&source);
     println!("cargo:rerun-if-changed=vendor/release/c/wuffs-v0.4.c");
 
@@ -138,6 +189,9 @@ fn main() {
     // "wuffs"` uniqueness key is unaffected (it gates the -sys crate, not the
     // count of `rustc-link-lib` directives).
     let mut shim = cc::Build::new();
+    if minimal_libc_headers {
+        shim.include(&libc_include);
+    }
     // Same compiler as the codec TU above (task F-1, N353).
     shim.prefer_clang_cl_over_msvc(true)
         .include(&c_dir)
@@ -152,19 +206,55 @@ fn main() {
         shim.flag_if_supported("-fno-sanitize=undefined")
             .flag_if_supported("-fno-sanitize-trap=undefined");
     }
+    if wasm && simd128 {
+        shim.flag("-msimd128");
+    }
     shim.file(manifest_dir.join("shim.c"));
     println!("cargo:rerun-if-changed=shim.c");
     println!("cargo:rerun-if-changed=shim.h");
     shim.compile("wuffs_shim");
+
+    // The reference `main.zig`'s no-libc stubs:
+    //   // Wuffs' generated `wuffs_foo__bar__alloc()` convenience functions are the
+    //   // only code that references libc's calloc/free. [...] When libc isn't
+    //   // linked there would be nothing to provide calloc/free if they survive,
+    //   // so export stubs to satisfy the link. Weak so that any real definition
+    //   // wins. Hidden keeps them out of the export table where the format
+    //   // honors it (e.g. wasm).
+    //   comptime { if (!builtin.link_libc) { @export(&callocStub, ...); ... } }
+    // PORT NOTE: Rust has no stable weak linkage, so the two stubs are C, in
+    // their own archive, compiled only where the reference exports them.
+    if no_libc {
+        let mut stubs = cc::Build::new();
+        stubs
+            .include(&libc_include)
+            .warnings(false)
+            .flag_if_supported("-w")
+            .file(manifest_dir.join("wasm_libc_stubs.c"));
+        stubs.compile("wuffs_libc_stubs");
+    }
+    println!("cargo:rerun-if-changed=wasm_libc_stubs.c");
+    println!("cargo:rerun-if-changed=include/stdlib.h");
+    println!("cargo:rerun-if-changed=include/string.h");
 
     // Auto-generate the FFI from `wrapper.h` (which `#include`s the same
     // `wuffs-v0.4.c` the reference's `c.zig` @cIncludes). The module defines are
     // passed here too — WITHOUT `WUFFS_IMPLEMENTATION`, mirroring the `@cImport`
     // (declarations only) — so the generated surface matches the compiled
     // object.
-    let mut builder = bindgen::Builder::default()
-        .header(manifest_dir.join("wrapper.h").to_string_lossy())
-        .clang_arg(format!("-I{}", c_dir.display()));
+    let mut builder =
+        bindgen::Builder::default().header(manifest_dir.join("wrapper.h").to_string_lossy());
+    if minimal_libc_headers {
+        builder = builder.clang_arg(format!("-I{}", libc_include.display()));
+    }
+    if wasm {
+        // clang gives wasm targets hidden default visibility, and bindgen
+        // emits no binding for a hidden function (it could not be linked from
+        // another object): parse with default visibility so the declared
+        // surface is the same as on every other target.
+        builder = builder.clang_arg("-fvisibility=default");
+    }
+    builder = builder.clang_arg(format!("-I{}", c_dir.display()));
     for def in MODULE_DEFINES {
         builder = builder.clang_arg(format!("-D{def}=1"));
     }
@@ -181,6 +271,11 @@ fn main() {
         .allowlist_function("rustty_wuffs_.*")
         .allowlist_type("wuffs_.*")
         .allowlist_var("WUFFS_.*")
+        // The suspension status strings (`extern const char
+        // wuffs_base__suspension__short_write[]` etc.). The reference's
+        // `pkg/wuffs/src/zlib.zig` compares a status `repr` against
+        // `c.wuffs_base__suspension__short_write` by address (`4b86e3594`).
+        .allowlist_var("wuffs_base__suspension__.*")
         // Wuffs' generated header is enormous; block the layout-tests bindgen
         // would otherwise emit for every internal struct (they slow the build
         // and add nothing to the FFI surface).

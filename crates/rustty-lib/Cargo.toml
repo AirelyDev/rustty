@@ -16,3 +16,7 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+# `parse_int` (ghostty `src/lib/parse_int.zig`) takes `std.fmt.ParseIntError` and
+# `std.fmt.charToDigit` from Zig's std; their one port is `rustty_zigstd::fmt`.
+# rustty-zigstd is a leaf over rustty-util, so the graph stays acyclic.
+rustty-zigstd = { workspace = true }

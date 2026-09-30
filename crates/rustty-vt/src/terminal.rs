@@ -164,8 +164,10 @@ fn print_slice_check_expected(style_id: style::Id) -> u64 {
 /// single integer, keeping the loop pure data movement: no per-cell
 /// field assignments and no branches.
 ///
-/// This loop is manually vectorized: Zig 0.16 (LLVM 21) no longer
-/// auto-vectorizes the scalar form the way Zig 0.15 (LLVM 20) did.
+/// If a charset table is provided, all input codepoints must fit in a byte.
+///
+/// The unmapped loop is manually vectorized: Zig 0.16 (LLVM 21) no longer
+/// auto-vectorizes it as Zig 0.15 (LLVM 20) did.
 //
 // PORT NOTE: `cells`/`cps` are RAW pointers, not `&mut [Cell]`/`&[u32]`, per
 // the `rust-mut-args-strongly-protected` rule: the caller keeps its own raw
@@ -175,7 +177,9 @@ fn print_slice_check_expected(style_id: style::Id) -> u64 {
 ///
 /// # Safety
 ///
-/// `cells[from..to]` and `cps[from..to]` must both be in bounds.
+/// `cells[from..to]` and `cps[from..to]` must both be in bounds. If
+/// `charset_table` is `Some`, every codepoint in `cps[from..to]` must be
+/// `<= 0xFF` (an index into the 256-entry table).
 #[inline]
 unsafe fn print_slice_store_run(
     cells: *mut pagepkg::Cell,
@@ -183,6 +187,7 @@ unsafe fn print_slice_store_run(
     from: usize,
     to: usize,
     template_bits: u64,
+    charset_table: Option<&[u16]>,
 ) {
     // The bit position of the `content` field within the packed
     // Cell. A codepoint occupies the low bits of `content`, so
@@ -195,6 +200,14 @@ unsafe fn print_slice_store_run(
     // corrupt the stored codepoints.
     const CONTENT_MASK: u64 = ((1u64 << pagepkg::CELL_CONTENT_BITS) - 1) << CP_SHIFT;
     debug_assert!(template_bits & CONTENT_MASK == 0);
+
+    if let Some(table) = charset_table {
+        for idx in from..to {
+            let cp = table[unsafe { *cps.add(idx) } as usize] as u64;
+            unsafe { *cells.add(idx) = pagepkg::Cell::from_bits(template_bits | (cp << CP_SHIFT)) };
+        }
+        return;
+    }
 
     let mut idx = from;
 
@@ -1353,15 +1366,10 @@ impl Terminal {
                 break 'fast false;
             }
 
-            // Charset must map ASCII as-is (true unless a DEC special
-            // charset is actively invoked, which is rare).
+            // Single shifts require per-codepoint charset handling.
             let screen: *mut Screen = self.screens.active;
             if unsafe { (*screen).charset.single_shift }.is_some() {
                 break 'fast false;
-            }
-            match unsafe { (*screen).charset.charsets.get((*screen).charset.gl) } {
-                charsets::Charset::Utf8 | charsets::Charset::Ascii => {}
-                _ => break 'fast false,
             }
 
             // Hyperlinks require per-cell map bookkeeping.
@@ -1385,7 +1393,14 @@ impl Terminal {
         // print() consults the cell left of the margin after wrapping,
         // which we can't reason about here. Restrict the fast path to
         // the [0x10, 0xFF] range in that case (those never cluster).
-        let allow_unicode = !grapheme_cluster || self.scrolling_region.left == 0;
+        let screen: *mut Screen = self.screens.active;
+        let allow_unicode = match unsafe { (*screen).charset.charsets.get((*screen).charset.gl) } {
+            charsets::Charset::Utf8 | charsets::Charset::Ascii => {
+                !grapheme_cluster || self.scrolling_region.left == 0
+            }
+            // print() handles Unicode width and clustering before charset mapping.
+            _ => false,
+        };
 
         let mut i: usize = 0;
         while i < cps.len() {
@@ -1545,6 +1560,12 @@ impl Terminal {
         allow_unicode: bool,
     ) -> Result<usize, OutOfMemory> {
         let screen: *mut Screen = self.screens.active;
+        let charset_table: Option<&'static [u16]> =
+            match unsafe { (*screen).charset.charsets.get((*screen).charset.gl) } {
+                charsets::Charset::Utf8 | charsets::Charset::Ascii => None,
+                set => Some(charsets::table(set)),
+            };
+        assert!(charset_table.is_none() || !allow_unicode);
 
         // PORT NOTE: the reference declares `simple_mask` and `cp_shift` here
         // and uses them in the row-fill body below; that body is
@@ -1635,7 +1656,7 @@ impl Terminal {
         // After doing any printing, wrapping, scrolling, etc. we want to
         // ensure that our screen remains in a consistent state.
         // defer screen.assertIntegrity();
-        let result = self.print_slice_fill_inner::<WIDTH>(cps, run_len);
+        let result = self.print_slice_fill_inner::<WIDTH>(cps, run_len, charset_table);
         unsafe { (*screen).assert_integrity() };
         result
     }
@@ -1648,6 +1669,7 @@ impl Terminal {
         &mut self,
         cps: &[u32],
         run_len: usize,
+        charset_table: Option<&'static [u16]>,
     ) -> Result<usize, OutOfMemory> {
         // Our fast path can only handle "simple" cells. A simple cell is
         // a codepoint cell (no grapheme data or bg-color tag), narrow, and
@@ -1844,6 +1866,7 @@ impl Terminal {
                             k,
                             simple,
                             template_bits,
+                            charset_table,
                         )
                     };
                     k = simple;
@@ -1923,6 +1946,7 @@ impl Terminal {
                                 k,
                                 m,
                                 template_bits,
+                                charset_table,
                             )
                         };
                         k = m;
@@ -1966,10 +1990,13 @@ impl Terminal {
                         *cells.add(k + 1) = pagepkg::Cell::from_bits(spacer_bits);
                     }
                 } else {
+                    let cp: u32 = match charset_table {
+                        Some(table) => table[cps[printed + k] as usize] as u32,
+                        None => cps[printed + k],
+                    };
                     unsafe {
-                        *cells.add(k) = pagepkg::Cell::from_bits(
-                            template_bits | ((cps[printed + k] as u64) << CP_SHIFT),
-                        );
+                        *cells.add(k) =
+                            pagepkg::Cell::from_bits(template_bits | ((cp as u64) << CP_SHIFT));
                     }
                 }
                 k += cells_per_cp;
@@ -3065,6 +3092,9 @@ impl Terminal {
         if unsafe { (*self.screens.active).cursor.pending_wrap } {
             count -= 1;
             unsafe { (*self.screens.active).cursor.pending_wrap = false };
+            if count == 0 {
+                return;
+            }
         }
 
         // The margins we can move to.
@@ -8549,6 +8579,85 @@ mod tests {
         t.deinit(Global);
     }
 
+    // RUSTTY: P7 Review Focus 4 (uucode 9d555245, Unicode 18, ghostty
+    // 12542b392). Upstream changed no terminal test for the bump; these pin
+    // the new East_Asian_Width=W ranges end to end through `print`:
+    // Jurchen U+18E00, Small Seal U+3D000 and the E18.0 emoji U+1F6D9 each
+    // advance the cursor by two cells.
+    #[test]
+    fn terminal_prints_unicode18_wide_ranges_as_two_cells() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        for (i, cp) in [0x18E00u32, 0x3D000, 0x1F6D9].into_iter().enumerate() {
+            t.print(cp).unwrap();
+            let x = 2 * (i as u16 + 1);
+            assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+            assert_eq!(
+                unsafe { (*t.screens.active).cursor.x },
+                x,
+                "U+{cp:X} should be two cells wide"
+            );
+
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(x - 2, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, cp);
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(x - 1, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerTail);
+        }
+
+        t.deinit(Global);
+    }
+
+    // RUSTTY: P7 Review Focus 4. Unicode 18 gives U+1CF5 VEDIC SIGN
+    // JIHVAMULIYA InCB=Linker while its Grapheme_Cluster_Break stays Other
+    // (uucode's new `indic_conjunct_break_linker_other`). With mode 2027 it
+    // starts a new cluster after 'a' (no GB9 extend), but GB9c now joins
+    // `Linker Extend* x Consonant`, so U+0300 and U+0915 DEVANAGARI KA stay in
+    // its cell; KA is not zero-width in a grapheme, so the cluster is wide.
+    #[test]
+    fn terminal_keeps_incb_linker_other_in_one_cluster() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        // Enable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        t.print('a' as u32).unwrap();
+        t.print(0x1CF5).unwrap();
+        t.print(0x0300).unwrap();
+        t.print(0x0915).unwrap();
+
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 3);
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 'a' as u32);
+            assert!(!unsafe { (*cell).has_grapheme() });
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(1, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0x1CF5);
+            assert!(unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+            let cps =
+                unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }
+                    .unwrap();
+            assert_eq!(cps, &[0x0300, 0x0915]);
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(2, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0);
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerTail);
+        }
+
+        t.deinit(Global);
+    }
+
     // test "Terminal: Fitzpatrick skin tone next valid base"
     #[test]
     fn terminal_fitzpatrick_skin_tone_next_valid_base() {
@@ -10957,6 +11066,40 @@ mod tests {
         {
             let str = t.plain_string(Global).unwrap();
             assert_eq!(str.as_slice(), "ABCDX".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorLeft reverse wrap with pending wrap above top margin"
+    #[test]
+    fn terminal_cursor_left_reverse_wrap_with_pending_wrap_above_top_margin() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.modes.set(modespkg::Mode::Wraparound, true);
+        t.modes.set(modespkg::Mode::ReverseWrap, true);
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.set_left_and_right_margin(1, 2);
+        for c in "AB".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.save_cursor();
+
+        // Restore pending wrap at the left margin, above the top margin.
+        t.set_left_and_right_margin(2, 5);
+        t.set_top_and_bottom_margin(3, 5);
+        t.restore_cursor();
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+
+        t.cursor_left(1);
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+        assert_eq!(1, unsafe { (*t.screens.active).cursor.x });
+        assert_eq!(0, unsafe { (*t.screens.active).cursor.y });
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "AX".as_bytes());
         }
 
         t.deinit(Global);
@@ -17657,6 +17800,148 @@ mod tests {
         t.deinit(Global);
     }
 
+    // test "Terminal: printSlice charset batched fill"
+    #[test]
+    fn terminal_print_slice_charset_batched_fill() {
+        let mut t = Terminal::init(Global, opts(5, 2)).unwrap();
+
+        t.configure_charset(charsets::Slots::G1, charsets::Charset::DecSpecial);
+        t.invoke_charset(charsets::ActiveSlot::GL, charsets::Slots::G1, false);
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        // Background-only cells use the general fill path.
+        t.set_attribute(sgr::Attribute::Color8Bg(color::Name::Red))
+            .unwrap();
+        t.erase_display(csi::EraseDisplay::Complete, false);
+
+        // Require batching when reusing cells and replacing styles.
+        let cps = [
+            'l' as u32, 'q' as u32, 'q' as u32, 'q' as u32, 'k' as u32, 'm' as u32, 'q' as u32,
+            'q' as u32, 'q' as u32, 'j' as u32,
+        ];
+        for attr in [
+            sgr::Attribute::Unset,
+            sgr::Attribute::Unset,
+            sgr::Attribute::Bold,
+            sgr::Attribute::Bold,
+            sgr::Attribute::Unset,
+        ] {
+            t.set_cursor_pos(1, 1);
+            t.set_attribute(attr).unwrap();
+            assert_eq!(cps.len(), t.print_slice_fast(&cps, true, false).unwrap());
+            {
+                let str = t.plain_string(Global).unwrap();
+                assert_eq!(str.as_slice(), "┌───┐\n└───┘".as_bytes());
+            }
+            assert_eq!('j' as u32, t.previous_char.unwrap());
+            assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+            for y in 0..2u32 {
+                for x in 0..5 {
+                    let cell = unsafe {
+                        (*t.screens.active)
+                            .pages
+                            .get_cell(active_pt(x, y))
+                            .unwrap()
+                            .cell
+                    };
+                    assert_eq!(unsafe { (*t.screens.active).cursor.style_id }, unsafe {
+                        (*cell).style_id()
+                    });
+                }
+            }
+            unsafe {
+                let page = crate::pagelist::Node::page((*(*t.screens.active).cursor.page_pin).node);
+                (*page).verify_integrity().unwrap();
+            }
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: printSlice charset matches scalar printing"
+    #[test]
+    fn terminal_print_slice_charset_matches_scalar_printing() {
+        for set in [charsets::Charset::DecSpecial, charsets::Charset::British] {
+            for grapheme_cluster in [false, true] {
+                let mut scalar = Terminal::init(Global, opts(17, 4)).unwrap();
+                let mut batched = Terminal::init(Global, opts(17, 4)).unwrap();
+
+                for t in [&mut scalar, &mut batched] {
+                    t.configure_charset(charsets::Slots::G0, set);
+                    t.modes
+                        .set(modespkg::Mode::GraphemeCluster, grapheme_cluster);
+                }
+
+                let mut bytes = [0u32; 240];
+                for (i, cp) in bytes.iter_mut().enumerate() {
+                    *cp = (0x10 + i) as u32;
+                }
+                let mixed: [u32; 9] = [
+                    0x100, 'q' as u32, 0x301, 'x' as u32, 0x4E00, '#' as u32, 0xFE0F, 0x1F600,
+                    'j' as u32,
+                ];
+                for cps in [bytes.as_slice(), mixed.as_slice()] {
+                    for &cp in cps {
+                        scalar.print(cp).unwrap();
+                    }
+                    batched.print_slice(cps).unwrap();
+
+                    let expected = unsafe {
+                        (*scalar.screens.active)
+                            .dump_string_alloc(
+                                Global,
+                                point::Point::Screen(point::Coordinate::default()),
+                            )
+                            .unwrap()
+                    };
+                    let actual = unsafe {
+                        (*batched.screens.active)
+                            .dump_string_alloc(
+                                Global,
+                                point::Point::Screen(point::Coordinate::default()),
+                            )
+                            .unwrap()
+                    };
+                    assert_eq!(expected, actual);
+                    assert_eq!(unsafe { (*scalar.screens.active).cursor.x }, unsafe {
+                        (*batched.screens.active).cursor.x
+                    });
+                    assert_eq!(unsafe { (*scalar.screens.active).cursor.y }, unsafe {
+                        (*batched.screens.active).cursor.y
+                    });
+                    assert_eq!(
+                        unsafe { (*scalar.screens.active).cursor.pending_wrap },
+                        unsafe { (*batched.screens.active).cursor.pending_wrap }
+                    );
+                    assert_eq!(scalar.previous_char, batched.previous_char);
+                }
+            }
+        }
+    }
+
+    // test "Terminal: printSlice charset single shift and repeat"
+    #[test]
+    fn terminal_print_slice_charset_single_shift_and_repeat() {
+        let mut t = Terminal::init(Global, opts(10, 2)).unwrap();
+
+        t.configure_charset(charsets::Slots::G0, charsets::Charset::DecSpecial);
+        t.configure_charset(charsets::Slots::G2, charsets::Charset::British);
+        t.invoke_charset(charsets::ActiveSlot::GL, charsets::Slots::G2, true);
+        t.print_slice(&['#' as u32, 'q' as u32]).unwrap();
+        assert_eq!(None, unsafe { (*t.screens.active).charset.single_shift });
+        t.print_repeat(2).unwrap();
+
+        // REP uses the original byte with the current charset.
+        t.configure_charset(charsets::Slots::G0, charsets::Charset::Ascii);
+        t.print_repeat(2).unwrap();
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "£───qq".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
     // test "Terminal: printSlice wraps and scrolls"
     #[test]
     fn terminal_print_slice_wraps_and_scrolls() {
@@ -17864,10 +18149,13 @@ mod tests {
                     t2.active_mut().end_hyperlink();
                 }
                 20 => {
-                    let set: charsets::Charset = if rand.boolean() {
-                        charsets::Charset::DecSpecial
-                    } else {
-                        charsets::Charset::Utf8
+                    // rand.enumValue(charsets.Charset)
+                    let set: charsets::Charset = match rand.range_less_than(4) {
+                        0 => charsets::Charset::Utf8,
+                        1 => charsets::Charset::Ascii,
+                        2 => charsets::Charset::British,
+                        3 => charsets::Charset::DecSpecial,
+                        _ => unreachable!(),
                     };
                     t1.configure_charset(charsets::Slots::G0, set);
                     t2.configure_charset(charsets::Slots::G0, set);

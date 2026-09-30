@@ -1149,8 +1149,8 @@ findings were FIXED, commit 9e3fe1c, not excepted); (4) documented here with cau
   This is the same class as the pre-existing 23 PageList exceptions (now enforced in
   source). Isolation-confirmed for the 6 sub-timeout candidates; the 64 hit the full
   1200s discovery budget. ASan runs all PageList tests in ~18s.
-- **zlib C FFI (3 tests):** `kitty::graphics_image::image_load_rgb_zlib_compressed_*` —
-  Miri cannot call the vendored zlib `inflateInit2_` (foreign function). ASan covers the
+- **zlib C FFI (3 tests, now 4):** `kitty::graphics_image::image_load_rgb_zlib_compressed_*` and (P7-W5 T2) `image_load_png_zlib_compressed_direct` —
+  Miri cannot call the vendored zlib decoder (`inflateInit2_`; since P7-W5 T2, DECISIONS B8, the Wuffs `wuffs_zlib__decoder__transform_io`), a foreign function. ASan covers the
   C boundary.
 - **rustc/Miri ICE (1 test):** `search::thread::search_thread` — Miri interpreter ICE
   (`rustc_const_eval/.../operand.rs:160`, an upstream Miri bug, not a soundness signal).
@@ -2428,7 +2428,7 @@ Miri-cannot-model case.
 | `rustty-global` | `environ::…global_environ_map_reflects_the_process`, `rlimit_tests::restore_round_trips_nofile` | empty environ under isolation; `getrlimit` | 8 passed, 2 ignored |
 | `rustty-vaxis` | `recover_tests::{recover_writes_exact_reset_bundle_to_stored_fd, recover_restores_saved_termios_on_a_pty, install_panic_recovery_runs_recover_then_chains_previous_hook}` | real pty + `tcsetattr` | 98 passed, 3 ignored |
 | `rustty-vt` | `hyperlink::…try_dupe_bytes_reports_allocation_failure` | Miri hard-errors instead of failing an allocation | — |
-| `rustty-vt-c` | `kitty_graphics::…image_compression_and_format_always_report_decoded_data` | vendored zlib `inflateInit2_` | — |
+| `rustty-vt-c` | `kitty_graphics::…image_compression_and_format_always_report_decoded_data` | vendored zlib decoder (Wuffs since P7-W5 T2; was zlib `inflateInit2_`) | — |
 | `rustty-z2d` | `path_fx::offset::tests::offset_e2e_{inset,outset}`, `tess::stroke_plotter::…slope_difference_below_epsilon_does_not_produce_nan` | **Miri's libm is not bit-faithful** | 81 passed, 13 ignored |
 
 Each is annotated at its source with the reason, the convention this file already
@@ -2751,7 +2751,7 @@ Isolation / foreign-call exceptions:
 | test | what Miri cannot do |
 |---|---|
 | `alloc::tests::failing_allocator_captures_the_stack_at_the_first_induced_failure` | formatting the captured `Backtrace` resolves symbols, which calls `getcwd` |
-| `kitty::graphics_image::tests::zlib_inflate_accepts_exactly_the_limit` | vendored zlib (`inflateInit2_`) |
+| `kitty::graphics_image::tests::zlib_inflate_accepts_exactly_the_limit` | vendored Wuffs zlib decoder (`wuffs_zlib__decoder__initialize`; was zlib `inflateInit2_` before P7-W5 T2) |
 | `ref_geometry_golden_tests::the_port_matches_the_reference_geometry_golden` | `open` (reads the checked-in golden) |
 | `stream_terminal::tests::kitty_graphics_shared_memory_copies_the_requested_range` | `shm_open` / `shm_unlink` |
 | `tests/fuzz_corpus_replay.rs`: `replay_fixed_fuzz_findings_osc`, `replay_port_full_corpus`, `replay_port_initial_seeds_{cross,osc,parser,stream}` | `stat` / `opendir` (walk the mirrored corpus) |

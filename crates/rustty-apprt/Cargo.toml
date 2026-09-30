@@ -42,6 +42,14 @@ simd = ["rustty-core/simd"]
 # so the gtk inspector's ImGui key routing has the real mapping — it is an
 # apprt-layer GUI-glue dependency (R3) that only the gtk backend needs.
 gtk = ["dep:glib", "dep:gio", "dep:gdk4", "dep:gtk4", "dep:libadwaita", "rustty-vt/imgui"]
+# TEST-ONLY (P7-W7 T2): exposes `render_surface::FORCE_DMABUF_IMPORT_FAILURE`, which
+# makes GDK reject the renderer's DMA-BUFs so the live KAT
+# `render_surface_falls_back_to_cpu_when_dmabuf_import_fails` can drive the
+# `DmabufBuildFailed` → unhealthy → CPU-readback fallback end to end. GTK >= 4.14
+# imports a linear DMA-BUF on every backend (broadway by CPU download), so without
+# it the fallback is unreachable on the hosts we test on. The `rustty-core`
+# `init-fault-inject` precedent: never enabled by a product build.
+render-surface-fault-inject = ["gtk"]
 # The reference's `-Dsentry` build option, forwarded to `rustty-crash` — where it
 # is BOTH `build_options::SENTRY` and the `SharedDeps.zig:407` link gate for
 # sentry-native + breakpad (see that crate's `[features]` header).

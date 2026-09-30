@@ -5,7 +5,7 @@ const uucode = @import("uucode");
 // rustty unicode differential oracle (ORACLE #2) — harness-only tooling.
 //
 // This is the INDEPENDENT external oracle for the rustty-unicode tables. It is
-// built against uucode 0.2.0 @ 2826a37a (the exact dependency ghostty uses) with ghostty's
+// built against uucode 0.2.0 @ 9d555245 (the exact dependency ghostty uses) with ghostty's
 // own src/build/uucode_config.zig, and dumps — for EVERY code point in
 // 0..=0x10FFFF — the same fields ghostty's reference tests read out of uucode:
 //
@@ -63,20 +63,16 @@ const Value = packed struct(u4) {
 const grapheme_precompute = precompute: {
     var result: [std.math.maxInt(u13) + 1]Value = undefined;
 
-    const max_state_int = blk: {
-        var max: usize = 0;
-        for (@typeInfo(uucode.grapheme.BreakState).@"enum".fields) |field| {
-            if (field.value > max) max = field.value;
-        }
-        break :blk max;
-    };
-
+    // Mirrors ghostty 12542b392: uucode 9d555245's `BreakState` is a
+    // `packed struct(u3)` whose valid encodings are `0..table_len` (the one
+    // unreachable combination, regional_indicator + after_linker, is the
+    // highest value and has no row), built with `.fromTableIndex`.
     @setEvalBranchQuota(1_000_000);
     const info = @typeInfo(uucode.types.GraphemeBreakNoControl).@"enum";
-    for (0..max_state_int + 1) |state_int| {
+    for (0..uucode.grapheme.BreakState.table_len) |state_int| {
         for (info.fields) |field1| {
             for (info.fields) |field2| {
-                var state: uucode.grapheme.BreakState = @enumFromInt(state_int);
+                var state: uucode.grapheme.BreakState = .fromTableIndex(state_int);
                 const key: Key = .{
                     .gb1 = @field(uucode.types.GraphemeBreakNoControl, field1.name),
                     .gb2 = @field(uucode.types.GraphemeBreakNoControl, field2.name),

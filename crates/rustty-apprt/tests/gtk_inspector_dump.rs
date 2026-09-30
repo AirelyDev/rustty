@@ -1,24 +1,28 @@
-//! INSPECTOR-DUMP — a headed framebuffer KAT for the GTK Dear ImGui terminal
-//! inspector. Models the `gtk_glyph_dump` harness: it constructs a headed GTK
-//! surface, opens the inspector window (`control_inspector(Toggle)`), pumps the
-//! main loop until the `InspectorWidget` realizes + renders its ImGui panels,
-//! reads GDK's GLArea framebuffer back and dumps it to a PPM (path from the
-//! `RUSTTY_DUMP_PPM` env var).
+//! INSPECTOR-DUMP — a headed KAT for the GTK Dear ImGui terminal inspector, and
+//! (P7-W7 T2) the two-surfaces-plus-inspector session. It constructs TWO headed GTK
+//! surfaces in two windows (two render threads, each with its own EGL context and
+//! its own GL function table, `opengl::gl::glad`), waits until both display frames
+//! their renderers exported, then opens the inspector window
+//! (`control_inspector(Toggle)`) — a GtkGLArea on GDK's context, drawn on the main
+//! thread — and pumps the main loop until the `InspectorWidget` realizes + renders
+//! its ImGui panels. It renders the inspector widget to a texture through its
+//! window's GSK renderer and dumps it to a PPM (path from `RUSTTY_DUMP_PPM`).
 //!
-//! Beyond the glyph-dump's single readback, this KAT proves LIVE INPUT reaches
-//! the inspector: it focuses the inspector's "Keyboard" panel (the docked window
-//! that renders the recorded key-event stream), captures a baseline frame A,
-//! feeds a synthetic key event through the core surface's `keyCallback` (which
-//! records it into the inspector via the `InspEvGuard` drop, exactly as a real
-//! keypress would), renders again, and captures frame B. It then asserts:
+//! It proves LIVE INPUT reaches the inspector: it focuses the inspector's
+//! "Keyboard" panel (the docked window that renders the recorded key-event stream),
+//! captures a baseline frame A, feeds a synthetic key event through the core
+//! surface's `keyCallback` (which records it into the inspector via the
+//! `InspEvGuard` drop, exactly as a real keypress would), renders again, and
+//! captures frame B. It then asserts:
 //!
-//!   (a) the inspector framebuffer is NOT a uniform clear (the `#282C34` clear
-//!       color) — the ImGui panels actually drew; and
+//!   (a) the inspector frame is not uniform — the ImGui panels actually drew;
 //!   (b) a needle-scan of the keyboard panel shows a pixel delta between A and B
-//!       — the synthetic key event reached the live panel.
+//!       — the synthetic key event reached the live panel; and
+//!   (c) both terminals kept presenting new frames while the inspector drew — the
+//!       per-thread GL tables of the two render threads and GDK's main-thread
+//!       context did not clash.
 //!
-//! Run:  DISPLAY=:0 XAUTHORITY=/run/user/1000/gdm/Xauthority \
-//!         RUSTTY_DUMP_PPM=/path/out.ppm \
+//! Run:  LIBGL_ALWAYS_SOFTWARE=1 RUSTTY_DUMP_PPM=/path/out.ppm \
 //!         cargo test -p rustty-apprt --features gtk --test gtk_inspector_dump \
 //!         -- --ignored --exact inspector_dump
 //!
@@ -44,28 +48,9 @@ use rustty_core::app::App as CoreApp;
 use rustty_vt::input::key::{Action, Key, KeyEvent};
 use rustty_vt::input::key_mods::Mods;
 
-/// The `#282C34` OpenGL clear the ImGui widget issues before drawing
-/// (`imgui_widget.rs` `render`, `imgui_widget.zig:318-320`).
-const CLEAR_RGB: [u8; 3] = [0x28, 0x2C, 0x34];
+#[path = "common/gtk_live.rs"]
+mod gtk_live;
 
-/// Recursively find the first [`gtk4::GLArea`] under `widget`.
-fn find_gl_area(widget: &gtk4::Widget) -> Option<gtk4::GLArea> {
-    if let Some(area) = widget.downcast_ref::<gtk4::GLArea>() {
-        return Some(area.clone());
-    }
-    let mut child = widget.first_child();
-    while let Some(c) = child {
-        if let Some(found) = find_gl_area(&c) {
-            return Some(found);
-        }
-        child = c.next_sibling();
-    }
-    None
-}
-
-/// Find the live [`InspectorWindow`] among the process's toplevel windows (the
-/// inspector is a separate top-level; `control_inspector` presents it but does
-/// not return it, and `Surface::inspector` is `pub(crate)`).
 fn find_inspector_window() -> Option<InspectorWindow> {
     let toplevels = gtk4::Window::toplevels();
     for i in 0..toplevels.n_items() {
@@ -84,25 +69,6 @@ unsafe fn pty_master(core: *mut CoreSurface) -> std::os::fd::RawFd {
             exec.subprocess.pty.as_ref().expect("pty started").master
         }
     }
-}
-
-/// Make the inspector GLArea current, bind its framebuffer, and read it back to a
-/// tight `w*h*4` RGBA buffer (bottom-up, as `glReadPixels` returns it). Reuses the
-/// renderer crate's `read_bound_framebuffer_rgba` (which dispatches only through
-/// the process-global GL loader, so it reads whichever context is current — here
-/// the inspector's, NOT the terminal's).
-fn capture_inspector(
-    gl_area: &gtk4::GLArea,
-    api: &rustty_renderer::opengl::OpenGL,
-    w: usize,
-    h: usize,
-) -> Option<Vec<u8>> {
-    gl_area.make_current();
-    if gl_area.error().is_some() {
-        return None;
-    }
-    gl_area.attach_buffers();
-    Some(api.read_bound_framebuffer_rgba(w, h))
 }
 
 /// Count pixels whose RGB differs from `pixel[0]` beyond `tol` in any channel —
@@ -137,46 +103,11 @@ fn changed_pixels(a: &[u8], b: &[u8], tol: u8) -> usize {
     n
 }
 
-/// Fraction of pixels within `tol` of the `#282C34` clear color.
-fn clear_fraction(rgba: &[u8], tol: u8) -> f32 {
-    if rgba.is_empty() {
-        return 1.0;
-    }
-    let mut clear = 0usize;
-    let total = rgba.len() / 4;
-    for px in rgba.chunks_exact(4) {
-        if px[0].abs_diff(CLEAR_RGB[0]) <= tol
-            && px[1].abs_diff(CLEAR_RGB[1]) <= tol
-            && px[2].abs_diff(CLEAR_RGB[2]) <= tol
-        {
-            clear += 1;
-        }
-    }
-    clear as f32 / total as f32
-}
-
-/// Write the captured RGBA (bottom-up) to a top-down binary PPM (P6, RGB). Same
-/// helper the glyph-dump uses (`gtk_glyph_dump.rs`).
-fn write_ppm(path: &str, rgba: &[u8], w: usize, h: usize) {
-    let mut buf = Vec::with_capacity(w * h * 3 + 32);
-    buf.extend_from_slice(format!("P6\n{w} {h}\n255\n").as_bytes());
-    // glReadPixels returns rows bottom-to-top; flip to top-down for a normal image.
-    for y in (0..h).rev() {
-        let row = &rgba[y * w * 4..(y + 1) * w * 4];
-        for x in 0..w {
-            buf.push(row[x * 4]);
-            buf.push(row[x * 4 + 1]);
-            buf.push(row[x * 4 + 2]);
-        }
-    }
-    std::fs::write(path, buf).expect("write PPM dump");
-}
-
 #[test]
 #[ignore = "headed GTK + GL 4.3-core context + a live inspector; run with \
-            DISPLAY=:0 XAUTHORITY=/run/user/1000/gdm/Xauthority \
-            RUSTTY_DUMP_PPM=/path/out.ppm cargo test -p rustty-apprt --features gtk \
-            --test gtk_inspector_dump -- --ignored --exact inspector_dump"]
+            LIBGL_ALWAYS_SOFTWARE=1 RUSTTY_DUMP_PPM=/path/out.ppm cargo test \
+            -p rustty-apprt --features gtk --test gtk_inspector_dump -- --ignored \
+            --exact inspector_dump"]
 fn inspector_dump() {
     let ppm_path = std::env::var("RUSTTY_DUMP_PPM")
         .unwrap_or_else(|_| "/tmp/rustty-inspector-dump.ppm".to_string());
@@ -215,37 +146,47 @@ fn inspector_dump() {
     window.set_content(Some(&surface));
     window.present();
 
+    // A second surface in a second window: a second render thread with its own
+    // EGL context and GL function table.
+    let surface2 = Surface::new(SurfaceOverrides {
+        command: Some(Command::Direct(vec![b"/bin/sh".to_vec()])),
+        shell_integration: None,
+        working_directory: None,
+        title: None,
+    });
+    let window2 = libadwaita::ApplicationWindow::new(&application);
+    window2.set_default_size(640, 400);
+    window2.set_content(Some(&surface2));
+    window2.present();
+
     let ctx = glib::MainContext::default();
     let keepalive =
         glib::timeout_add_local(Duration::from_millis(50), || glib::ControlFlow::Continue);
 
-    // Pump the main-surface GLArea so the lazy core surface gets built on its
-    // first resize (same lazy-realize path the glyph-dump relies on).
-    let main_gl_area = find_gl_area(surface.upcast_ref::<gtk4::Widget>())
-        .expect("the surface template contains a GLArea");
-    let main_pump = {
-        let weak = main_gl_area.downgrade();
-        glib::timeout_add_local(Duration::from_millis(30), move || match weak.upgrade() {
-            Some(area) => {
-                area.queue_render();
-                glib::ControlFlow::Continue
-            }
-            None => glib::ControlFlow::Break,
-        })
-    };
-
     let deadline = Instant::now() + Duration::from_secs(30);
-    while surface.core().is_none() {
-        ctx.iteration(true);
-        assert!(Instant::now() < deadline, "core surface was never built");
+    while surface.core().is_none() || surface2.core().is_none() {
+        gtk_live::iterate(&ctx, core_ptr, &app);
+        assert!(Instant::now() < deadline, "a core surface was never built");
     }
     let core = surface
         .core()
-        .expect("core surface built on first GLArea resize");
+        .expect("core surface built on first RenderSurface resize");
 
-    // The terminal renderer's OpenGL API — reused only for its context-agnostic
-    // `read_bound_framebuffer_rgba` (it reads whichever GL context is current).
-    let api: &rustty_renderer::opengl::OpenGL = unsafe { &(*core).renderer.0.api };
+    let render_surfaces = [
+        gtk_live::find_render_surface(surface.upcast_ref::<gtk4::Widget>())
+            .expect("surface 1 contains a RenderSurface"),
+        gtk_live::find_render_surface(surface2.upcast_ref::<gtk4::Widget>())
+            .expect("surface 2 contains a RenderSurface"),
+    ];
+    // Both terminals display a frame their renderer exported.
+    let frames_deadline = Instant::now() + Duration::from_secs(20);
+    while render_surfaces.iter().any(|rs| rs.texture().is_none()) {
+        gtk_live::iterate(&ctx, core_ptr, &app);
+        assert!(
+            Instant::now() < frames_deadline,
+            "a terminal never displayed a frame (two render threads)"
+        );
+    }
 
     // ---- Open the inspector (control_inspector Toggle) + present its window. ----
     assert!(
@@ -253,10 +194,10 @@ fn inspector_dump() {
         "control_inspector(Toggle) returns true"
     );
 
-    // Pump until the inspector window + its GLArea appear.
+    // Pump until the inspector window + its GLArea (GDK's context) appear.
     let inspector_deadline = Instant::now() + Duration::from_secs(20);
     let inspector_window = loop {
-        ctx.iteration(true);
+        gtk_live::iterate(&ctx, core_ptr, &app);
         if let Some(win) = find_inspector_window() {
             break win;
         }
@@ -266,8 +207,10 @@ fn inspector_dump() {
         );
     };
     let inspector_gl_area = loop {
-        ctx.iteration(true);
-        if let Some(area) = find_gl_area(inspector_window.upcast_ref::<gtk4::Widget>()) {
+        gtk_live::iterate(&ctx, core_ptr, &app);
+        if let Some(area) =
+            gtk_live::find_widget::<gtk4::GLArea>(inspector_window.upcast_ref::<gtk4::Widget>())
+        {
             break area;
         }
         assert!(
@@ -294,25 +237,20 @@ fn inspector_dump() {
         })
     };
 
-    // Helper: pump `iters` main-loop iterations then read the inspector back.
-    let pump_and_capture = |iters: usize| -> Option<Vec<u8>> {
-        let scale = inspector_gl_area.scale_factor().max(1);
-        let w = (inspector_gl_area.width() * scale).max(0) as usize;
-        let h = (inspector_gl_area.height() * scale).max(0) as usize;
+    // Helper: pump `iters` main-loop iterations then render the inspector widget
+    // to a texture through its window's GSK renderer (top row first).
+    let pump_and_capture = |iters: usize| -> Option<(usize, usize, Vec<u8>)> {
         inspector_gl_area.queue_render();
         for _ in 0..iters {
-            ctx.iteration(true);
+            gtk_live::iterate(&ctx, core_ptr, &app);
         }
-        if w == 0 || h == 0 {
-            return None;
-        }
-        capture_inspector(&inspector_gl_area, api, w, h)
+        gtk_live::render_widget_rgba(inspector_gl_area.upcast_ref::<gtk4::Widget>())
     };
 
     // ---- Warm-up: pump until the panels actually draw (a non-uniform frame). ----
     let warm_deadline = Instant::now() + Duration::from_secs(20);
     loop {
-        if let Some(px) = pump_and_capture(8) {
+        if let Some((_, _, px)) = pump_and_capture(8) {
             if non_uniform_pixels(&px, 8) > 1000 {
                 break;
             }
@@ -337,20 +275,17 @@ fn inspector_dump() {
         let a_deadline = Instant::now() + Duration::from_secs(10);
         // Pump generously so both passes settle before we snapshot.
         for _ in 0..6 {
-            a = pump_and_capture(10);
+            a = pump_and_capture(10).or(a);
             assert!(Instant::now() < a_deadline, "frame A capture timed out");
         }
         a.expect("captured baseline inspector frame A")
     };
-    let (w, h) = {
-        let scale = inspector_gl_area.scale_factor().max(1);
-        (
-            (inspector_gl_area.width() * scale) as usize,
-            (inspector_gl_area.height() * scale) as usize,
-        )
-    };
-    assert!(w > 0 && h > 0, "the inspector GLArea viewport was sized");
+    let (w, h, frame_a) = frame_a;
+    assert!(w > 0 && h > 0, "the inspector widget was sized");
     assert_eq!(frame_a.len(), w * h * 4, "frame A is a tight RGBA buffer");
+
+    // The terminals' current textures, to prove they keep presenting (c).
+    let textures_before: Vec<_> = render_surfaces.iter().map(|rs| rs.texture()).collect();
 
     // ---- Feed a synthetic key event through the core surface's keyCallback.
     //      Because the inspector is active, keyCallback's InspEvGuard records the
@@ -367,7 +302,7 @@ fn inspector_dump() {
     };
     // SAFETY: `core` is the widget's boxed, initialized core surface; called on
     // the main thread, mirroring the apprt key controller.
-    let _ = unsafe { (*core).keyCallback(ev) };
+    let _ = unsafe { (*core).keyCallback(ev.clone()) };
 
     // Also flush the pty so the shell's echo does not race the capture windows
     // (belt-and-braces; the key stream entry alone drives the assert).
@@ -384,23 +319,25 @@ fn inspector_dump() {
         let mut b = None;
         let b_deadline = Instant::now() + Duration::from_secs(10);
         for _ in 0..6 {
-            b = pump_and_capture(10);
+            b = pump_and_capture(10).or(b);
             assert!(Instant::now() < b_deadline, "frame B capture timed out");
         }
         b.expect("captured post-input inspector frame B")
     };
+    let (wb, hb, frame_b) = frame_b;
+    assert_eq!((wb, hb), (w, h), "frame B has frame A's size");
     assert_eq!(frame_b.len(), w * h * 4, "frame B is a tight RGBA buffer");
 
     // Leave the post-input frame on disk for human review.
-    write_ppm(&ppm_path, &frame_b, w, h);
+    gtk_live::write_ppm(&ppm_path, &frame_b, w, h);
 
-    // ---- ASSERT (a): the framebuffer is NOT a uniform #282C34 clear. ----
-    let clear_frac = clear_fraction(&frame_b, 8);
+    // ---- ASSERT (a): the frame is not uniform (`0fca3d34a` dropped the
+    //      `#282C34` clear this used to measure against). ----
     let drew = non_uniform_pixels(&frame_b, 8);
     assert!(
-        clear_frac < 0.98 && drew > 1000,
-        "inspector framebuffer looks like a uniform clear (clear_fraction={clear_frac:.3}, \
-         non_uniform_pixels={drew}); the ImGui panels did not draw"
+        drew > 1000,
+        "inspector frame looks uniform (non_uniform_pixels={drew}); the ImGui panels \
+         did not draw"
     );
 
     // ---- ASSERT (b): a needle-scan of the keyboard panel shows a pixel delta
@@ -412,18 +349,41 @@ fn inspector_dump() {
          (changed_pixels={delta}); live input did not reach the keyboard panel"
     );
 
+    // ---- ASSERT (c): both terminals presented new frames while the inspector
+    //      drew on the main thread (two render threads + GDK's context). ----
+    let present_deadline = Instant::now() + Duration::from_secs(10);
+    let mut both_new = false;
+    while Instant::now() < present_deadline {
+        // Nudge both terminals to draw (a key through the second one too).
+        gtk_live::iterate(&ctx, core_ptr, &app);
+        both_new = render_surfaces
+            .iter()
+            .zip(&textures_before)
+            .all(|(rs, before)| rs.texture().is_some() && rs.texture() != *before);
+        if both_new {
+            break;
+        }
+        for c in [surface.core(), surface2.core()].into_iter().flatten() {
+            // SAFETY: the widget's boxed, initialized core surface, main thread.
+            let _ = unsafe { (*c).keyCallback(ev.clone()) };
+        }
+    }
+    assert!(
+        both_new,
+        "both terminals kept presenting frames alongside the inspector"
+    );
+
     eprintln!(
-        "INSPECTOR-DUMP: wrote {ppm_path} ({w}x{h}); non_uniform={drew} clear_fraction={clear_frac:.3} \
-         keyboard-panel delta A->B = {delta} px"
+        "INSPECTOR-DUMP: wrote {ppm_path} ({w}x{h}); non_uniform={drew} \
+         keyboard-panel delta A->B = {delta} px; two terminals presenting"
     );
 
     // Clean teardown (mirrors the glyph-dump).
     keepalive.remove();
-    main_pump.remove();
     inspector_pump.remove();
     inspector_window.upcast_ref::<gtk4::Window>().destroy();
     drop(inspector_gl_area);
-    drop(main_gl_area);
+    drop(render_surfaces);
     {
         let app_weak = application.downgrade();
         glib::timeout_add_local_once(Duration::from_millis(150), move || {
@@ -432,17 +392,11 @@ fn inspector_dump() {
             }
         });
     }
-    // Drain the core-app mailbox before re-entering the run loop. Every inspector
-    // frame the render pumps drew went through `renderer_seam::drawFrame`, which —
-    // because GTK is `MUST_DRAW_FROM_APP_THREAD` — pushes a `RedrawSurface` onto the
-    // core-app mailbox with `Timeout::Instant`. Those pushes are non-blocking (they
-    // drop when full), and nothing drained them here (the core-app `tick` that
-    // drains the mailbox is only wired into `app.run()`, not the manual
-    // `ctx.iteration` pump), so after ~64 frames the 64-slot mailbox is full.
-    // `app.run()` below emits `activate`, whose `new_window_thunk` does a BLOCKING
-    // `push(NewWindow, Timeout::Forever)` — onto a full queue that would deadlock.
-    // Draining gives that one push room; subsequent `RedrawSurface` pushes stay
-    // non-blocking and `quit_now` (scheduled above) ends the loop.
+    // Drain the core-app mailbox before re-entering the run loop: nothing drains it
+    // during the manual `ctx.iteration` pump (the core-app `tick` is only wired
+    // into `app.run()`), and `app.run()` emits `activate`, whose `new_window_thunk`
+    // does a BLOCKING `push(NewWindow, Timeout::Forever)` that a full queue would
+    // deadlock.
     while core_app.mailbox.pop().is_some() {}
 
     let run_result = app.run();
@@ -451,4 +405,11 @@ fn inspector_dump() {
         "App::run returns Ok: {:?}",
         run_result.err()
     );
+
+    for s in [&surface, &surface2] {
+        if let Some(core) = s.core() {
+            // SAFETY: the widget's live core surface; stopped once, before exit.
+            unsafe { gtk_live::stop_render_thread(core) };
+        }
+    }
 }

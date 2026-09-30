@@ -5,14 +5,15 @@
 # Robin Pfäffle <r@rpfaeffle.com>, 2025.
 # Jan Klass <kissaki@posteo.de>, 2026.
 # Klaus Hipp <khipp@users.noreply.github.com>, 2026.
+# derVedro unter Druck <dervedro@googlemail.com>, 2026.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: io.airely.rustty\n"
 "Report-Msgid-Bugs-To: gael@airely.io\n"
 "POT-Creation-Date: 2026-08-10 10:06-0500\n"
-"PO-Revision-Date: 2026-02-13 08:05+0100\n"
-"Last-Translator: Klaus Hipp <khipp@users.noreply.github.com>\n"
+"PO-Revision-Date: 2026-02-18 21:12+0200\n"
+"Last-Translator: derVedro <dervedro@googlemail.com>\n"
 "Language-Team: German <translation-team-de@lists.sourceforge.net>\n"
 "Language: de\n"
 "MIME-Version: 1.0\n"
@@ -43,7 +44,7 @@ msgstr "Erlauben"
 
 #: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:92
 msgid "Remember choice for this split"
-msgstr "Auswahl für dieses geteilte Fenster beibehalten"
+msgstr "Auswahl für diesen Bereich beibehalten"
 
 #: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:93
 msgid "Reload configuration to show this prompt again"
@@ -140,7 +141,7 @@ msgstr "Einfügen"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:326
 msgid "Notify on Next Command Finish"
-msgstr "Bei Abschluss des nächsten Befehls benachrichtigen"
+msgstr "Nach Befehlsende melden"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:333 crates/rustty-apprt/assets/ui/1.5/window.blp:281
 msgid "Clear"
@@ -152,35 +153,35 @@ msgstr "Zurücksetzen"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:345 crates/rustty-apprt/assets/ui/1.5/window.blp:250
 msgid "Split"
-msgstr "Fenster teilen"
+msgstr "Bereich"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:348 crates/rustty-apprt/assets/ui/1.5/window.blp:253
 msgid "Change Title…"
-msgstr "Titel bearbeiten…"
+msgstr "Bereichtitel ändern…"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:353 crates/rustty-apprt/assets/ui/1.5/window.blp:180
 #: crates/rustty-apprt/assets/ui/1.5/window.blp:258 crates/rustty-input/src/command.rs:487
 msgid "Split Up"
-msgstr "Fenster nach oben teilen"
+msgstr "Nach oben teilen"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:359 crates/rustty-apprt/assets/ui/1.5/window.blp:185
 #: crates/rustty-apprt/assets/ui/1.5/window.blp:263 crates/rustty-input/src/command.rs:492
 msgid "Split Down"
-msgstr "Fenster nach unten teilen"
+msgstr "Nach unten teilen"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:365 crates/rustty-apprt/assets/ui/1.5/window.blp:190
 #: crates/rustty-apprt/assets/ui/1.5/window.blp:268 crates/rustty-input/src/command.rs:477
 msgid "Split Left"
-msgstr "Fenter nach links teilen"
+msgstr "Nach links teilen"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:371 crates/rustty-apprt/assets/ui/1.5/window.blp:195
 #: crates/rustty-apprt/assets/ui/1.5/window.blp:273 crates/rustty-input/src/command.rs:482
 msgid "Split Right"
-msgstr "Fenster nach rechts teilen"
+msgstr "Nach rechts teilen"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:377
 msgid "Close Split"
-msgstr ""
+msgstr "Bereich schließen"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:383
 msgid "Tab"
@@ -189,7 +190,7 @@ msgstr "Tab"
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:386 crates/rustty-apprt/assets/ui/1.5/window.blp:232
 #: crates/rustty-apprt/assets/ui/1.5/window.blp:339 crates/rustty-input/src/command.rs:464
 msgid "Change Tab Title…"
-msgstr "Tab-Titel ändern…"
+msgstr "Tabtitel ändern…"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:391 crates/rustty-apprt/assets/ui/1.5/window.blp:60
 #: crates/rustty-apprt/assets/ui/1.5/window.blp:110 crates/rustty-apprt/assets/ui/1.5/window.blp:237
@@ -208,7 +209,7 @@ msgstr "Fenster"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:406 crates/rustty-apprt/assets/ui/1.5/window.blp:215
 msgid "Change Window Title…"
-msgstr ""
+msgstr "Fenstertitel ändern…"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:411 crates/rustty-apprt/assets/ui/1.5/window.blp:220
 #: crates/rustty-input/src/command.rs:421
@@ -226,11 +227,11 @@ msgstr "Konfiguration"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:427 crates/rustty-apprt/assets/ui/1.5/window.blp:306
 msgid "Open Configuration in OS Editor"
-msgstr ""
+msgstr "Konfiguration im Standardeditor des Betriebssystems öffnen"
 
 #: crates/rustty-apprt/assets/ui/1.2/surface.blp:433 crates/rustty-apprt/assets/ui/1.5/window.blp:312
 msgid "Open Configuration in New Window"
-msgstr ""
+msgstr "Konfiguration in neuem Fenster öffnen"
 
 #: crates/rustty-apprt/assets/ui/1.5/title-dialog.blp:5
 msgid "Leave blank to restore the default title."
@@ -242,7 +243,7 @@ msgstr "OK"
 
 #: crates/rustty-apprt/assets/ui/1.5/window.blp:61 crates/rustty-apprt/assets/ui/1.5/window.blp:111
 msgid "New Split"
-msgstr "Neues geteiltes Fenster"
+msgstr "Neuer Bereich"
 
 #: crates/rustty-apprt/assets/ui/1.5/window.blp:71 crates/rustty-apprt/assets/ui/1.5/window.blp:129
 msgid "View Open Tabs"
@@ -274,27 +275,27 @@ msgstr "Einen Befehl ausführen…"
 
 #: crates/rustty-apprt/src/gtk/class/application.rs:1767
 msgid "The keybind was revoked by the system."
-msgstr ""
+msgstr "Die Tastenkombination wurde vom System widerrufen."
 
 #: crates/rustty-apprt/src/gtk/class/application.rs:1769
 msgid "The keybind was denied by the system."
-msgstr ""
+msgstr "Das System hat die Tastenkombination abgelehnt."
 
 #: crates/rustty-apprt/src/gtk/class/application.rs:1780
 msgid "Global keybind unavailable"
-msgstr ""
+msgstr "Globale Tastenkombination nicht verfügbar"
 
 #: crates/rustty-apprt/src/gtk/class/application.rs:2259
 msgid "Export Terminal IO Events"
-msgstr ""
+msgstr "Terminal-IO-Ereignisse exportieren"
 
 #: crates/rustty-apprt/src/gtk/class/application.rs:2262
 msgid "Export"
-msgstr ""
+msgstr "Exportieren"
 
 #: crates/rustty-apprt/src/gtk/class/application.rs:2783
 msgid "Editing configuration file"
-msgstr ""
+msgstr "Konfigurationsdatei wird bearbeitet"
 
 #: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:198
 msgid ""
@@ -338,7 +339,7 @@ msgstr "Fenster schließen?"
 
 #: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:187
 msgid "Close Split?"
-msgstr "Geteiltes Fenster schließen?"
+msgstr "Bereich schließen?"
 
 #: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:193
 msgid "All terminal sessions will be terminated."
@@ -354,7 +355,7 @@ msgstr "Alle Terminalsitzungen in diesem Fenster werden beendet."
 
 #: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:196
 msgid "The currently running process in this split will be terminated."
-msgstr "Der aktuell laufende Prozess in diesem geteilten Fenster wird beendet."
+msgstr "Der aktuell laufende Prozess in diesem Bereich wird beendet."
 
 #: crates/rustty-apprt/src/gtk/class/surface.rs:1181
 msgid "Command Finished"
@@ -380,7 +381,7 @@ msgstr "Tab-Titel ändern"
 
 #: crates/rustty-apprt/src/gtk/class/title_dialog.rs:229
 msgid "Change Window Title"
-msgstr ""
+msgstr "Fenstertitel ändern"
 
 #: crates/rustty-apprt/src/gtk/class/window.rs:1153
 msgid "Reloaded the configuration"
@@ -400,710 +401,741 @@ msgstr "Rustty-Entwickler"
 
 #: crates/rustty-input/src/command.rs:149
 msgid "Reset Terminal"
-msgstr ""
+msgstr "Terminal zurücksetzen"
 
 #: crates/rustty-input/src/command.rs:150
 msgid "Reset the terminal to a clean state."
-msgstr ""
+msgstr "Terminal auf einen sauberen Zustand zurücksetzen."
 
 #: crates/rustty-input/src/command.rs:155
 msgid "Copy to Clipboard"
-msgstr ""
+msgstr "In die Zwischenablage kopieren"
 
 #: crates/rustty-input/src/command.rs:156
 msgid ""
 "Copy the selected text to the clipboard in both plain and styled formats."
 msgstr ""
+"Ausgewählten Text formatiert und unformatiert in die Zwischenablage kopieren."
 
 #: crates/rustty-input/src/command.rs:159
 msgid "Copy Selection as Plain Text to Clipboard"
-msgstr ""
+msgstr "Auswahl als Reintext in die Zwischenablage kopieren"
 
 #: crates/rustty-input/src/command.rs:160
 msgid "Copy the selected text as plain text to the clipboard."
-msgstr ""
+msgstr "Auswahl unformatiert in die Zwischenablage kopieren."
 
 #: crates/rustty-input/src/command.rs:163
 msgid "Copy Selection as ANSI Sequences to Clipboard"
-msgstr ""
+msgstr "Auswahl als ANSI in die Zwischenablage kopieren"
 
 #: crates/rustty-input/src/command.rs:164
 msgid "Copy the selected text as ANSI escape sequences to the clipboard."
-msgstr ""
+msgstr "Auswahl als ANSI-Escapesequenzen in die Zwischenablage kopieren."
 
 #: crates/rustty-input/src/command.rs:167
 msgid "Copy Selection as HTML to Clipboard"
-msgstr ""
+msgstr "Auswahl als HTML in die Zwischenablage kopieren"
 
 #: crates/rustty-input/src/command.rs:168
 msgid "Copy the selected text as HTML to the clipboard."
-msgstr ""
+msgstr "Auswahl als HTML in die Zwischenablage kopieren."
 
 #: crates/rustty-input/src/command.rs:173
 msgid "Copy URL to Clipboard"
-msgstr ""
+msgstr "URL in die Zwischenablage kopieren"
 
 #: crates/rustty-input/src/command.rs:174
 msgid "Copy the URL under the cursor to the clipboard."
-msgstr ""
+msgstr "URL unter dem Cursor in die Zwischenablage kopieren."
 
 #: crates/rustty-input/src/command.rs:179
 msgid "Copy Terminal Title to Clipboard"
-msgstr ""
+msgstr "Terminaltitel in die Zwischenablage kopieren"
 
 #: crates/rustty-input/src/command.rs:180
 msgid ""
 "Copy the terminal title to the clipboard. If the terminal title is not set "
 "this has no effect."
 msgstr ""
+"Terminaltitel in die Zwischenablage kopieren. Wenn kein Terminaltitel "
+"festgelegt ist, hat dies keine Auswirkung."
 
 #: crates/rustty-input/src/command.rs:185
 msgid "Paste from Clipboard"
-msgstr ""
+msgstr "Aus der Zwischenablage einfügen"
 
 #: crates/rustty-input/src/command.rs:186
 msgid "Paste the contents of the main clipboard."
-msgstr ""
+msgstr "Inhalt aus der Zwischenablage einfügen."
 
 #: crates/rustty-input/src/command.rs:191
 msgid "Paste from Selection"
-msgstr ""
+msgstr "Aus der Auswahl einfügen"
 
 #: crates/rustty-input/src/command.rs:192
 msgid "Paste the contents of the selection clipboard."
-msgstr ""
+msgstr "Inhalt aus der Auswahl-Zwischenablage einfügen."
 
 #: crates/rustty-input/src/command.rs:197
 msgid "Start Search"
-msgstr ""
+msgstr "Suche starten"
 
 #: crates/rustty-input/src/command.rs:198
 msgid "Start a search if one isn't already active."
-msgstr ""
+msgstr "Suche starten, falls noch keine aktiv ist."
 
 #: crates/rustty-input/src/command.rs:203
 msgid "Search Selection"
-msgstr ""
+msgstr "Auswahl suchen"
 
 #: crates/rustty-input/src/command.rs:204
 msgid "Start a search for the current text selection."
-msgstr ""
+msgstr "Suche nach der aktuellen Auswahl starten."
 
 #: crates/rustty-input/src/command.rs:209
 msgid "End Search"
-msgstr ""
+msgstr "Suche beenden"
 
 #: crates/rustty-input/src/command.rs:210
 msgid "End the current search if any and hide any GUI elements."
-msgstr ""
+msgstr "Aktuelle Suche beenden und Suchmaske ausblenden."
 
 #: crates/rustty-input/src/command.rs:215
 msgid "Next Search Result"
-msgstr ""
+msgstr "Nächstes Suchergebnis"
 
 #: crates/rustty-input/src/command.rs:216
 msgid "Navigate to the next search result, if any."
-msgstr ""
+msgstr "Zum nächsten Suchergebnis wechseln."
 
 #: crates/rustty-input/src/command.rs:219
 msgid "Previous Search Result"
-msgstr ""
+msgstr "Vorheriges Suchergebnis"
 
 #: crates/rustty-input/src/command.rs:220
 msgid "Navigate to the previous search result, if any."
-msgstr ""
+msgstr "Zum vorherigen Suchergebnis wechseln."
 
 #: crates/rustty-input/src/command.rs:225
 msgid "Increase Font Size"
-msgstr ""
+msgstr "Schriftgröße erhöhen"
 
 #: crates/rustty-input/src/command.rs:226
 msgid "Increase the font size by 1 point."
-msgstr ""
+msgstr "Schriftgröße um 1 Punkt erhöhen."
 
 #: crates/rustty-input/src/command.rs:231
 msgid "Decrease Font Size"
-msgstr ""
+msgstr "Schriftgröße verringern"
 
 #: crates/rustty-input/src/command.rs:232
 msgid "Decrease the font size by 1 point."
-msgstr ""
+msgstr "Schriftgröße um 1 Punkt verringern."
 
 #: crates/rustty-input/src/command.rs:237
 msgid "Reset Font Size"
-msgstr ""
+msgstr "Schriftgröße zurücksetzen"
 
 #: crates/rustty-input/src/command.rs:238
 msgid "Reset the font size to the default."
-msgstr ""
+msgstr "Schriftgröße auf die Standardeinstellung zurücksetzen."
 
 #: crates/rustty-input/src/command.rs:243
 msgid "Clear Screen"
-msgstr ""
+msgstr "Bildschirm leeren"
 
 #: crates/rustty-input/src/command.rs:244
 msgid "Clear the screen and scrollback."
-msgstr ""
+msgstr "Bildschirm und Ausgabeverlauf leeren."
 
 #: crates/rustty-input/src/command.rs:249
 msgid "Select All"
-msgstr ""
+msgstr "Alles auswählen"
 
 #: crates/rustty-input/src/command.rs:250
 msgid "Select all text on the screen."
-msgstr ""
+msgstr "Gesamte Ausgabe auswählen."
 
 #: crates/rustty-input/src/command.rs:255
 msgid "Scroll to Top"
-msgstr ""
+msgstr "Zum Anfang scrollen"
 
 #: crates/rustty-input/src/command.rs:256
 msgid "Scroll to the top of the screen."
-msgstr ""
+msgstr "Zum Anfang der Ausgabe scrollen."
 
 #: crates/rustty-input/src/command.rs:261
 msgid "Scroll to Bottom"
-msgstr ""
+msgstr "Zum Ende scrollen"
 
 #: crates/rustty-input/src/command.rs:262
 msgid "Scroll to the bottom of the screen."
-msgstr ""
+msgstr "Zum Ende der Ausgabe scrollen."
 
 #: crates/rustty-input/src/command.rs:267
 msgid "Scroll to Selection"
-msgstr ""
+msgstr "Zur Auswahl scrollen"
 
-#: crates/rustty-input/src/command.rs:268
 msgid "Scroll to the selected text."
-msgstr ""
+msgstr "Zum ausgewählten Text scrollen."
 
 #: crates/rustty-input/src/command.rs:273
 msgid "Scroll Page Up"
-msgstr ""
+msgstr "Seite nach oben scrollen"
 
 #: crates/rustty-input/src/command.rs:274
 msgid "Scroll the screen up by a page."
-msgstr ""
+msgstr "Um eine Seite nach oben scrollen."
 
 #: crates/rustty-input/src/command.rs:279
 msgid "Scroll Page Down"
-msgstr ""
+msgstr "Seite nach unten scrollen"
 
 #: crates/rustty-input/src/command.rs:280
 msgid "Scroll the screen down by a page."
-msgstr ""
+msgstr "Um eine Seite nach unten scrollen."
 
 #: crates/rustty-input/src/command.rs:286
 msgid "Copy Screen to Temporary File and Copy Path"
-msgstr ""
+msgstr "Ausgabe in temporäre Datei kopieren und Pfad kopieren"
 
 #: crates/rustty-input/src/command.rs:287
 msgid ""
 "Copy the screen contents to a temporary file and copy the path to the "
 "clipboard."
 msgstr ""
+"Ausgabe in eine temporäre Datei kopieren und Pfad in die Zwischenablage "
+"kopieren."
 
 #: crates/rustty-input/src/command.rs:291
 msgid "Copy Screen to Temporary File and Paste Path"
-msgstr ""
+msgstr "Ausgabe in temporäre Datei kopieren und Pfad einfügen"
 
 #: crates/rustty-input/src/command.rs:292
 msgid ""
 "Copy the screen contents to a temporary file and paste the path to the file."
 msgstr ""
+"Ausgabe in eine temporäre Datei kopieren und Pfad zur Datei einfügen."
 
 #: crates/rustty-input/src/command.rs:296
 msgid "Copy Screen to Temporary File and Open"
-msgstr ""
+msgstr "Ausgabe in temporäre Datei kopieren und öffnen"
 
 #: crates/rustty-input/src/command.rs:297
 msgid "Copy the screen contents to a temporary file and open it."
-msgstr ""
+msgstr "Ausgabe in eine temporäre Datei kopieren und öffnen."
 
 #: crates/rustty-input/src/command.rs:305
 msgid "Copy Screen as HTML to Temporary File and Copy Path"
-msgstr ""
+msgstr "Ausgabe als HTML in temporäre Datei kopieren und Pfad kopieren"
 
 #: crates/rustty-input/src/command.rs:306
 msgid ""
 "Copy the screen contents as HTML to a temporary file and copy the path to "
 "the clipboard."
 msgstr ""
+"Ausgabe als HTML in eine temporäre Datei kopieren und Pfad in die "
+"Zwischenablage kopieren."
 
 #: crates/rustty-input/src/command.rs:313
 msgid "Copy Screen as HTML to Temporary File and Paste Path"
-msgstr ""
+msgstr "Ausgabe als HTML in temporäre Datei kopieren und Pfad einfügen"
 
 #: crates/rustty-input/src/command.rs:314
 msgid ""
 "Copy the screen contents as HTML to a temporary file and paste the path to "
 "the file."
 msgstr ""
+"Ausgabe als HTML in eine temporäre Datei kopieren und Pfad zur Datei "
+"einfügen."
 
 #: crates/rustty-input/src/command.rs:321
 msgid "Copy Screen as HTML to Temporary File and Open"
-msgstr ""
+msgstr "Ausgabe als HTML in temporäre Datei kopieren und öffnen"
 
 #: crates/rustty-input/src/command.rs:322
 msgid "Copy the screen contents as HTML to a temporary file and open it."
-msgstr ""
+msgstr "Ausgabe als HTML in eine temporäre Datei kopieren und öffnen."
 
 #: crates/rustty-input/src/command.rs:330
 msgid "Copy Screen as ANSI Sequences to Temporary File and Copy Path"
-msgstr ""
+msgstr "Ausgabe als ANSI in temporäre Datei kopieren und Pfad kopieren"
 
 #: crates/rustty-input/src/command.rs:331
 msgid ""
 "Copy the screen contents as ANSI escape sequences to a temporary file and "
 "copy the path to the clipboard."
 msgstr ""
+"Ausgabe als ANSI-Escapesequenzen in eine temporäre Datei kopieren und Pfad "
+"in die Zwischenablage kopieren."
 
 #: crates/rustty-input/src/command.rs:338
 msgid "Copy Screen as ANSI Sequences to Temporary File and Paste Path"
-msgstr ""
+msgstr "Ausgabe als ANSI in temporäre Datei kopieren und Pfad einfügen"
 
 #: crates/rustty-input/src/command.rs:339
 msgid ""
 "Copy the screen contents as ANSI escape sequences to a temporary file and "
 "paste the path to the file."
 msgstr ""
+"Ausgabe als ANSI-Escapesequenzen in eine temporäre Datei kopieren und Pfad "
+"zur Datei einfügen."
 
 #: crates/rustty-input/src/command.rs:346
 msgid "Copy Screen as ANSI Sequences to Temporary File and Open"
-msgstr ""
+msgstr "Ausgabe als ANSI in temporäre Datei kopieren und öffnen"
 
 #: crates/rustty-input/src/command.rs:347
 msgid ""
 "Copy the screen contents as ANSI escape sequences to a temporary file and "
 "open it."
 msgstr ""
+"Ausgabe als ANSI-Escapesequenzen in eine temporäre Datei kopieren und "
+"öffnen."
 
 #: crates/rustty-input/src/command.rs:354
 msgid "Copy Selection to Temporary File and Copy Path"
-msgstr ""
+msgstr "Auswahl in temporäre Datei kopieren und Pfad kopieren"
 
 #: crates/rustty-input/src/command.rs:355
 msgid ""
 "Copy the selection contents to a temporary file and copy the path to the "
 "clipboard."
 msgstr ""
+"Auswahl in eine temporäre Datei kopieren und Pfad in die Zwischenablage "
+"kopieren."
 
 #: crates/rustty-input/src/command.rs:359
 msgid "Copy Selection to Temporary File and Paste Path"
-msgstr ""
+msgstr "Auswahl in temporäre Datei kopieren und Pfad einfügen"
 
 #: crates/rustty-input/src/command.rs:360
 msgid ""
 "Copy the selection contents to a temporary file and paste the path to the "
 "file."
 msgstr ""
+"Auswahl in eine temporäre Datei kopieren und Pfad zur Datei einfügen."
 
 #: crates/rustty-input/src/command.rs:364
 msgid "Copy Selection to Temporary File and Open"
-msgstr ""
+msgstr "Auswahl in temporäre Datei kopieren und öffnen"
 
 #: crates/rustty-input/src/command.rs:365
 msgid "Copy the selection contents to a temporary file and open it."
-msgstr ""
+msgstr "Auswahl in eine temporäre Datei kopieren und öffnen."
 
 #: crates/rustty-input/src/command.rs:373
 msgid "Copy Selection as HTML to Temporary File and Copy Path"
-msgstr ""
+msgstr "Auswahl als HTML in temporäre Datei kopieren und Pfad kopieren"
 
 #: crates/rustty-input/src/command.rs:374
 msgid ""
 "Copy the selection contents as HTML to a temporary file and copy the path to "
 "the clipboard."
 msgstr ""
+"Auswahl als HTML in eine temporäre Datei kopieren und Pfad in die "
+"Zwischenablage kopieren."
 
 #: crates/rustty-input/src/command.rs:381
 msgid "Copy Selection as HTML to Temporary File and Paste Path"
-msgstr ""
+msgstr "Auswahl als HTML in temporäre Datei kopieren und Pfad einfügen"
 
 #: crates/rustty-input/src/command.rs:382
 msgid ""
 "Copy the selection contents as HTML to a temporary file and paste the path "
 "to the file."
 msgstr ""
+"Auswahl als HTML in eine temporäre Datei kopieren und Pfad zur Datei "
+"einfügen."
 
 #: crates/rustty-input/src/command.rs:389
 msgid "Copy Selection as HTML to Temporary File and Open"
-msgstr ""
+msgstr "Auswahl als HTML in temporäre Datei kopieren und öffnen"
 
 #: crates/rustty-input/src/command.rs:390
 msgid "Copy the selection contents as HTML to a temporary file and open it."
-msgstr ""
+msgstr "Auswahl als HTML in eine temporäre Datei kopieren und öffnen."
 
 #: crates/rustty-input/src/command.rs:398
 msgid "Copy Selection as ANSI Sequences to Temporary File and Copy Path"
-msgstr ""
+msgstr "Auswahl als ANSI in temporäre Datei kopieren und Pfad kopieren"
 
 #: crates/rustty-input/src/command.rs:399
 msgid ""
 "Copy the selection contents as ANSI escape sequences to a temporary file and "
 "copy the path to the clipboard."
 msgstr ""
+"Auswahl als ANSI-Escapesequenzen in eine temporäre Datei kopieren und Pfad "
+"in die Zwischenablage kopieren."
 
 #: crates/rustty-input/src/command.rs:406
 msgid "Copy Selection as ANSI Sequences to Temporary File and Paste Path"
-msgstr ""
+msgstr "Auswahl als ANSI in temporäre Datei kopieren und Pfad einfügen"
 
 #: crates/rustty-input/src/command.rs:407
 msgid ""
 "Copy the selection contents as ANSI escape sequences to a temporary file and "
 "paste the path to the file."
 msgstr ""
+"Auswahl als ANSI-Escapesequenzen in eine temporäre Datei kopieren und Pfad "
+"zur Datei einfügen."
 
 #: crates/rustty-input/src/command.rs:414
 msgid "Copy Selection as ANSI Sequences to Temporary File and Open"
-msgstr ""
+msgstr "Auswahl als ANSI in temporäre Datei kopieren und öffnen"
 
 #: crates/rustty-input/src/command.rs:415
 msgid ""
 "Copy the selection contents as ANSI escape sequences to a temporary file and "
 "open it."
 msgstr ""
+"Auswahl als ANSI-Escapesequenzen in eine temporäre Datei kopieren und "
+"öffnen."
 
 #: crates/rustty-input/src/command.rs:422
 msgid "Open a new window."
-msgstr ""
+msgstr "Neues Fenster öffnen."
 
 #: crates/rustty-input/src/command.rs:428
 msgid "Open a new tab."
-msgstr ""
+msgstr "Neuen Tab öffnen."
 
 #: crates/rustty-input/src/command.rs:434
 msgid "Move Tab Left"
-msgstr ""
+msgstr "Tab nach links verschieben"
 
 #: crates/rustty-input/src/command.rs:435
 msgid "Move the current tab to the left."
-msgstr ""
+msgstr "Aktuellen Tab nach links verschieben."
 
 #: crates/rustty-input/src/command.rs:439
 msgid "Move Tab Right"
-msgstr ""
+msgstr "Tab nach rechts verschieben"
 
 #: crates/rustty-input/src/command.rs:440
 msgid "Move the current tab to the right."
-msgstr ""
+msgstr "Aktuellen Tab nach rechts verschieben."
 
 #: crates/rustty-input/src/command.rs:446
 msgid "Move Tab to New Window"
-msgstr ""
+msgstr "Tab in neues Fenster verschieben"
 
 #: crates/rustty-input/src/command.rs:447
 msgid "Move the current tab to a new window."
-msgstr ""
+msgstr "Aktuellen Tab in ein neues Fenster verschieben."
 
 #: crates/rustty-input/src/command.rs:452
 msgid "Toggle Tab Overview"
-msgstr ""
+msgstr "Tab-Übersicht umschalten"
 
 #: crates/rustty-input/src/command.rs:453
 msgid "Toggle the tab overview."
-msgstr ""
+msgstr "Tab-Übersicht umschalten."
 
 #: crates/rustty-input/src/command.rs:458
 msgid "Change Terminal Title…"
-msgstr ""
+msgstr "Terminaltitel ändern…"
 
 #: crates/rustty-input/src/command.rs:459
 msgid "Prompt for a new title for the current terminal."
-msgstr ""
+msgstr "Neuen Titel für das aktuelle Terminal eingeben."
 
 #: crates/rustty-input/src/command.rs:465
 msgid "Prompt for a new title for the current tab."
-msgstr ""
+msgstr "Neuen Titel für den aktuellen Tab eingeben."
 
 #: crates/rustty-input/src/command.rs:478
 msgid "Split the terminal to the left."
-msgstr ""
+msgstr "Bereich nach links teilen."
 
 #: crates/rustty-input/src/command.rs:483
 msgid "Split the terminal to the right."
-msgstr ""
+msgstr "Bereich nach rechts teilen."
 
 #: crates/rustty-input/src/command.rs:488
 msgid "Split the terminal up."
-msgstr ""
+msgstr "Bereich nach oben teilen."
 
 #: crates/rustty-input/src/command.rs:493
 msgid "Split the terminal down."
-msgstr ""
+msgstr "Bereich nach unten teilen."
 
 #: crates/rustty-input/src/command.rs:500
 msgid "Focus Split: Previous"
-msgstr ""
+msgstr "Zum vorherigen Bereich wechseln"
 
 #: crates/rustty-input/src/command.rs:501
 msgid "Focus the previous split, if any."
-msgstr ""
+msgstr "Zum vorherigen Bereich wechseln, falls vorhanden."
 
 #: crates/rustty-input/src/command.rs:505
 msgid "Focus Split: Next"
-msgstr ""
+msgstr "Zum nächsten Bereich wechseln"
 
 #: crates/rustty-input/src/command.rs:506
 msgid "Focus the next split, if any."
-msgstr ""
+msgstr "Zum nächsten Bereich wechseln, falls vorhanden."
 
 #: crates/rustty-input/src/command.rs:510
 msgid "Focus Split: Left"
-msgstr ""
+msgstr "Zum linken Bereich wechseln"
 
 #: crates/rustty-input/src/command.rs:511
 msgid "Focus the split to the left, if it exists."
-msgstr ""
+msgstr "Zum linken Bereich wechseln, falls vorhanden."
 
 #: crates/rustty-input/src/command.rs:515
 msgid "Focus Split: Right"
-msgstr ""
+msgstr "Zum rechten Bereich wechseln"
 
 #: crates/rustty-input/src/command.rs:516
 msgid "Focus the split to the right, if it exists."
-msgstr ""
+msgstr "Zum rechten Bereich wechseln, falls vorhanden."
 
 #: crates/rustty-input/src/command.rs:520
 msgid "Focus Split: Up"
-msgstr ""
+msgstr "Zum oberen Bereich wechseln"
 
 #: crates/rustty-input/src/command.rs:521
 msgid "Focus the split above, if it exists."
-msgstr ""
+msgstr "Zum oberen Bereich wechseln, falls vorhanden."
 
 #: crates/rustty-input/src/command.rs:525
 msgid "Focus Split: Down"
-msgstr ""
+msgstr "Zum unteren Bereich wechseln"
 
 #: crates/rustty-input/src/command.rs:526
 msgid "Focus the split below, if it exists."
-msgstr ""
+msgstr "Zum unteren Bereich wechseln, falls vorhanden."
 
 #: crates/rustty-input/src/command.rs:533
 msgid "Focus Window: Previous"
-msgstr ""
+msgstr "Zum vorherigen Fenster wechseln"
 
 #: crates/rustty-input/src/command.rs:534
 msgid "Focus the previous window, if any."
-msgstr ""
+msgstr "Zum vorherigen Fenster wechseln, falls vorhanden."
 
 #: crates/rustty-input/src/command.rs:538
 msgid "Focus Window: Next"
-msgstr ""
+msgstr "Zum nächsten Fenster wechseln"
 
 #: crates/rustty-input/src/command.rs:539
 msgid "Focus the next window, if any."
-msgstr ""
+msgstr "Zum nächsten Fenster wechseln, falls vorhanden."
 
 #: crates/rustty-input/src/command.rs:545
 msgid "Toggle Split Zoom"
-msgstr ""
+msgstr "Bereichs-Zoom umschalten"
 
 #: crates/rustty-input/src/command.rs:546
 msgid "Toggle the zoom state of the current split."
-msgstr ""
+msgstr "Zoom des aktuellen Bereichs umschalten."
 
 #: crates/rustty-input/src/command.rs:551
 msgid "Toggle Read-Only Mode"
-msgstr ""
+msgstr "Schreibgeschützten Modus umschalten"
 
 #: crates/rustty-input/src/command.rs:552
 msgid "Toggle read-only mode for the current surface."
-msgstr ""
+msgstr "Schreibgeschützten Modus für den aktuellen Bereich umschalten."
 
 #: crates/rustty-input/src/command.rs:557
 msgid "Equalize Splits"
-msgstr ""
+msgstr "Bereiche angleichen"
 
 #: crates/rustty-input/src/command.rs:558
 msgid "Equalize the size of all splits."
-msgstr ""
+msgstr "Größe aller Bereiche angleichen."
 
 #: crates/rustty-input/src/command.rs:563
 msgid "Reset Window Size"
-msgstr ""
+msgstr "Fenstergröße zurücksetzen"
 
 #: crates/rustty-input/src/command.rs:564
 msgid "Reset the window size to the default."
-msgstr ""
+msgstr "Fenstergröße auf die Standardeinstellung zurücksetzen."
 
 #: crates/rustty-input/src/command.rs:569
 msgid "Toggle Inspector"
-msgstr ""
+msgstr "Inspektor umschalten"
 
 #: crates/rustty-input/src/command.rs:570
 msgid "Toggle the inspector."
-msgstr ""
+msgstr "Inspektor umschalten."
 
 #: crates/rustty-input/src/command.rs:575
 msgid "Show the GTK Inspector"
-msgstr ""
+msgstr "GTK-Inspektor anzeigen"
 
 #: crates/rustty-input/src/command.rs:576
 msgid "Show the GTK inspector."
-msgstr ""
+msgstr "GTK-Inspektor anzeigen."
 
 #: crates/rustty-input/src/command.rs:581
 msgid "Show On-Screen Keyboard"
-msgstr ""
+msgstr "Bildschirmtastatur anzeigen"
 
 #: crates/rustty-input/src/command.rs:582
 msgid "Show the on-screen keyboard if present."
-msgstr ""
+msgstr "Bildschirmtastatur anzeigen, falls vorhanden."
 
 #: crates/rustty-input/src/command.rs:588
 msgid "Open Config Using OS editor"
-msgstr ""
+msgstr "Konfiguration im Standardeditor öffnen"
 
 #: crates/rustty-input/src/command.rs:589
 msgid "Open the config file with the OS's default editor."
-msgstr ""
+msgstr "Konfigurationsdatei im Standardeditor öffnen."
 
 #: crates/rustty-input/src/command.rs:593
 msgid "Open Config in New Terminal Window"
-msgstr ""
+msgstr "Konfiguration in neuem Terminalfenster öffnen"
 
 #: crates/rustty-input/src/command.rs:594
 msgid "Open the config file in a new window using $EDITOR or $VISUAL."
 msgstr ""
+"Konfigurationsdatei in einem neuen Fenster mit $EDITOR oder $VISUAL öffnen."
 
 #: crates/rustty-input/src/command.rs:600
 msgid "Reload Config"
-msgstr ""
+msgstr "Konfiguration neu laden"
 
 #: crates/rustty-input/src/command.rs:601
 msgid "Reload the config file."
-msgstr ""
+msgstr "Konfigurationsdatei neu laden."
 
 #: crates/rustty-input/src/command.rs:606
 msgid "Close Terminal"
-msgstr ""
+msgstr "Terminal schließen"
 
 #: crates/rustty-input/src/command.rs:607
 msgid "Close the current terminal."
-msgstr ""
+msgstr "Aktuelles Terminal schließen."
 
 #: crates/rustty-input/src/command.rs:614
 msgid "Close the current tab."
-msgstr ""
+msgstr "Aktuellen Tab schließen."
 
 #: crates/rustty-input/src/command.rs:618
 msgid "Close Other Tabs"
-msgstr ""
+msgstr "Andere Tabs schließen"
 
 #: crates/rustty-input/src/command.rs:619
 msgid "Close all tabs in this window except the current one."
-msgstr ""
+msgstr "Alle anderen Tabs in diesem Fenster schließen."
 
 #: crates/rustty-input/src/command.rs:623
 msgid "Close Tabs to the Right"
-msgstr ""
+msgstr "Tabs rechts schließen"
 
 #: crates/rustty-input/src/command.rs:624
 msgid "Close all tabs to the right of the current one."
-msgstr ""
+msgstr "Alle Tabs rechts vom aktuellen schließen."
 
 #: crates/rustty-input/src/command.rs:631
 msgid "Close the current window."
-msgstr ""
+msgstr "Aktuelles Fenster schließen."
 
 #: crates/rustty-input/src/command.rs:636
 msgid "Close All Windows"
-msgstr ""
+msgstr "Alle Fenster schließen"
 
 #: crates/rustty-input/src/command.rs:637
 msgid "Close all windows."
-msgstr ""
+msgstr "Alle Fenster schließen."
 
 #: crates/rustty-input/src/command.rs:642
 msgid "Toggle Maximize"
-msgstr ""
+msgstr "Maximieren umschalten"
 
 #: crates/rustty-input/src/command.rs:643
 msgid "Toggle the maximized state of the current window."
-msgstr ""
+msgstr "Maximierten Zustand des aktuellen Fensters umschalten."
 
 #: crates/rustty-input/src/command.rs:648
 msgid "Toggle Fullscreen"
-msgstr ""
+msgstr "Vollbild umschalten"
 
 #: crates/rustty-input/src/command.rs:649
 msgid "Toggle the fullscreen state of the current window."
-msgstr ""
+msgstr "Vollbildmodus des aktuellen Fensters umschalten."
 
 #: crates/rustty-input/src/command.rs:654
 msgid "Toggle Window Decorations"
-msgstr ""
+msgstr "Fensterdekorationen umschalten"
 
 #: crates/rustty-input/src/command.rs:655
 msgid "Toggle the window decorations."
-msgstr ""
+msgstr "Fensterdekorationen umschalten."
 
 #: crates/rustty-input/src/command.rs:660
 msgid "Toggle Float on Top"
-msgstr ""
+msgstr "Immer im Vordergrund umschalten"
 
 #: crates/rustty-input/src/command.rs:661
 msgid "Toggle the float on top state of the current window."
-msgstr ""
+msgstr "Das aktuelle Fenster im Vordergrund fixieren oder lösen."
 
 #: crates/rustty-input/src/command.rs:666
 msgid "Toggle Secure Input"
-msgstr ""
+msgstr "Sicheren Eingabemodus umschalten"
 
 #: crates/rustty-input/src/command.rs:667
 msgid "Toggle secure input mode."
-msgstr ""
+msgstr "Sicheren Eingabemodus umschalten."
 
 #: crates/rustty-input/src/command.rs:672
 msgid "Toggle Mouse Reporting"
-msgstr ""
+msgstr "Mausereignisweiterleitung umschalten"
 
 #: crates/rustty-input/src/command.rs:673
 msgid "Toggle whether mouse events are reported to terminal applications."
-msgstr ""
+msgstr "Weiterleitung von Mausereignissen an Terminalanwendungen umschalten."
 
 #: crates/rustty-input/src/command.rs:678
 msgid "Toggle Background Opacity"
-msgstr ""
+msgstr "Hintergrundtransparenz umschalten"
 
 #: crates/rustty-input/src/command.rs:679
 msgid "Toggle the background opacity of a window that started transparent."
 msgstr ""
+"Hintergrundtransparenz eines Fensters umschalten, das transparent gestartet "
+"wurde."
 
 #: crates/rustty-input/src/command.rs:684
 msgid "Check for Updates"
-msgstr ""
+msgstr "Auf Updates prüfen"
 
 #: crates/rustty-input/src/command.rs:685
 msgid "Check for updates to the application."
-msgstr ""
+msgstr "Auf Updates für die Anwendung prüfen."
 
 #: crates/rustty-input/src/command.rs:690
 msgid "Undo"
-msgstr ""
+msgstr "Rückgängig"
 
 #: crates/rustty-input/src/command.rs:691
 msgid "Undo the last action."
-msgstr ""
+msgstr "Letzte Aktion rückgängig machen."
 
 #: crates/rustty-input/src/command.rs:696
 msgid "Redo"
-msgstr ""
+msgstr "Wiederholen"
 
 #: crates/rustty-input/src/command.rs:697
 msgid "Redo the last undone action."
-msgstr ""
+msgstr "Letzte rückgängig gemachte Aktion wiederholen."
 
 #: crates/rustty-input/src/command.rs:703
 msgid "Quit the application."
-msgstr ""
+msgstr "Anwendung beenden."
 
 #: crates/rustty-input/src/command.rs:708
 msgid "Rustty"
-msgstr ""
+msgstr "Rustty"
 
 #: crates/rustty-input/src/command.rs:709
 msgid "Put a little Rustty in your terminal."
-msgstr ""
+msgstr "Einen kleinen Rustty in dein Terminal setzen."

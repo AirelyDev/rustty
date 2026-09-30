@@ -1238,6 +1238,10 @@
      "test_blocks": 0
     },
     {
+     "file": "apprt/gtk/class/render_surface.zig",
+     "test_blocks": 0
+    },
+    {
      "file": "apprt/gtk/class/resize_overlay.zig",
      "test_blocks": 0
     },
@@ -1334,6 +1338,10 @@
      "test_blocks": 0
     },
     {
+     "file": "apprt/gtk/scale.zig",
+     "test_blocks": 0
+    },
+    {
      "file": "apprt/gtk/weak_ref.zig",
      "test_blocks": 1
     },
@@ -1367,7 +1375,7 @@
     }
    ],
    "test_blocks": 27,
-   "file_count": 57
+   "file_count": 59
   },
   "apprt-api": {
    "files": [
@@ -1776,6 +1784,10 @@
      "test_blocks": 24
     },
     {
+     "file": "datastruct/comptime_int_set.zig",
+     "test_blocks": 0
+    },
+    {
      "file": "datastruct/intrusive_linked_list.zig",
      "test_blocks": 1
     },
@@ -1798,10 +1810,18 @@
     {
      "file": "datastruct/split_tree.zig",
      "test_blocks": 18
+    },
+    {
+     "file": "datastruct/untouched_pool.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "datastruct/wasm_page_pool.zig",
+     "test_blocks": 0
     }
    ],
    "test_blocks": 76,
-   "file_count": 11
+   "file_count": 14
   },
   "extra": {
    "files": [
@@ -1913,6 +1933,10 @@
     },
     {
      "file": "font/nerd_font_attributes.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "font/nerd_font_tables.zig",
      "test_blocks": 0
     },
     {
@@ -2033,7 +2057,7 @@
     }
    ],
    "test_blocks": 178,
-   "file_count": 50
+   "file_count": 51
   },
   "global": {
    "files": [
@@ -2180,6 +2204,10 @@
      "test_blocks": 1
     },
     {
+     "file": "lib/parse_int.zig",
+     "test_blocks": 0
+    },
+    {
      "file": "lib/string.zig",
      "test_blocks": 1
     },
@@ -2201,7 +2229,7 @@
     }
    ],
    "test_blocks": 13,
-   "file_count": 9
+   "file_count": 10
   },
   "os": {
    "files": [
@@ -2366,6 +2394,10 @@
      "test_blocks": 2
     },
     {
+     "file": "renderer/Dmabuf.zig",
+     "test_blocks": 0
+    },
+    {
      "file": "renderer/Metal.zig",
      "test_blocks": 0
     },
@@ -2503,7 +2535,7 @@
     }
    ],
    "test_blocks": 21,
-   "file_count": 35
+   "file_count": 36
   },
   "simd": {
    "files": [
@@ -2900,6 +2932,10 @@
      "test_blocks": 5
     },
     {
+     "file": "terminal/kitty/windows.zig",
+     "test_blocks": 0
+    },
+    {
      "file": "terminal/lib.zig",
      "test_blocks": 0
     },
@@ -3048,6 +3084,10 @@
      "test_blocks": 5
     },
     {
+     "file": "terminal/snapshot/terminal.zig",
+     "test_blocks": 0
+    },
+    {
      "file": "terminal/stream.zig",
      "test_blocks": 38
     },
@@ -3089,7 +3129,7 @@
     }
    ],
    "test_blocks": 1996,
-   "file_count": 94
+   "file_count": 96
   },
   "vt-c": {
    "files": [
@@ -3369,6 +3409,7 @@
  "_amendments": [
   "A1-hoist: moved terminal/size.zig (5 tests) from crate 'vt' to 'render-types' so render-types is a leaf (->util) and the vt<->render-types size cycle is broken. Total test_blocks unchanged (3234). Documented in PORT_PLAN A1.",
   "A5-resolution: split crate 'apprt' (was 47) into 'apprt' (27) + 'apprt-api' (20) \u2014 the break #8 interface crate carves apprt/{action,ipc,runtime,surface,structs}.zig (20 test_blocks: action 17, ipc 2, runtime 1) out of apprt. Total test_blocks unchanged (3234). Documented in PORT_PLAN A5.",
-  "13b-relocation: moved Command.zig (10 tests) from crate 'core' to 'termio' per the ratified break #13b (PORT_PLAN crates 23/24: Command-in-core would cycle; termio contract 44 = 34 + 10). Total test_blocks unchanged (3234). Applied 2026-07-10 (phase-2 payoff; the map had missed the relocation the PORT_PLAN documents)."
+  "13b-relocation: moved Command.zig (10 tests) from crate 'core' to 'termio' per the ratified break #13b (PORT_PLAN crates 23/24: Command-in-core would cycle; termio contract 44 = 34 + 10). Total test_blocks unchanged (3234). Applied 2026-07-10 (phase-2 payoff; the map had missed the relocation the PORT_PLAN documents).",
+  "P7-W0-T4 phase-start map (pin 12752b2ac): added datastruct/{comptime_int_set,untouched_pool,wasm_page_pool}.zig to 'datastruct', lib/parse_int.zig to 'lib', apprt/gtk/scale.zig to 'apprt', and terminal/{kitty/windows,snapshot/terminal}.zig to 'vt', so G3b reads their comments (R1 \u00a73 'Gate bookkeeping', R5 \u00a73). lib/types.zig and font/nerd_font_attributes.zig were already mapped. Each new entry carries test_blocks 0: the per-crate test_blocks are G1's frozen 3234 contract (4749c4e93), which this amendment does not move. Their tests are counted by G1b's MAP rows and matched by name by audit_test_coverage.py."
  ]
 }

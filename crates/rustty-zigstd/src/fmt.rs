@@ -21,7 +21,9 @@
 //! against Zig 0.16.0 over the union of their tables and a fresh probe (no
 //! value differed), kept the arbitrary-width integer core of the rustty-vt copy
 //! here, and deleted the others. rustty-vt keeps only its UD141 `_` filter
-//! (`protocol_int::reject_digit_separators`), which runs before this parser.
+//! (`protocol_int::reject_digit_separators`), which runs before this parser at
+//! the glyph APC and kitty graphics sites. (The OSC and colour sites moved to
+//! Ghostty's own `lib.parseInt`, `rustty_lib::parse_int`, in `73768913b`.)
 //!
 //! The float GRAMMAR is ported in full, because that decides acceptance. The
 //! DECIMAL numeric conversion (`convertFast` / `convertEiselLemire` /

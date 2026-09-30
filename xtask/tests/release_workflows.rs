@@ -962,3 +962,63 @@ fn tag_workflows_upload_and_check_the_dsym() {
     assert_ne!(dropped, publish);
     assert!(!staged(&dropped));
 }
+
+/// R4 §G / P7-W10 T4: three action bumps applied in the range
+/// `20abdb50a..12752b2ac`, pinact-style (SHA + version comment), across every
+/// site. The old pins must be gone everywhere, and the new ones present the
+/// documented number of times.
+#[test]
+fn release_actions_are_bumped_to_the_p7_w10_pins() {
+    let table: &[(&str, &str, &str, usize)] = &[
+        (
+            "ryand56/r2-upload-action",
+            "b801a390acbdeb034c5e684ff5e1361c06639e7c", // v1.4
+            "33ebb7a494b3a8a3c5ed2ea6bbdc72e707090317", // v1.5
+            7,
+        ),
+        (
+            "softprops/action-gh-release",
+            "3d0d9888cb7fd7b750713d6e236d1fcb99157228", // v3.0.2
+            "efb35369e0ad2afab669f228072c1b0d510eae64", // v3.0.3
+            5,
+        ),
+        (
+            "c-hive/gha-remove-artifacts",
+            "44fc7acaf1b3d0987da0e8d4707a989d80e9554b", // v1.4.0
+            "62c2fbea931baa7dd4a6b73ea5a799984a818f61", // v1.8.0
+            1,
+        ),
+    ];
+    // Every workflow any of these three actions could appear in.
+    let files = [
+        "publish-tag.yml",
+        "release-tag.yml",
+        "release-tip.yml",
+        "clean-artifacts.yml",
+    ];
+    let combined: String = files.iter().map(|f| read_workflow(f)).collect();
+    for (action, old_sha, new_sha, want_count) in table {
+        assert!(
+            !combined.contains(old_sha),
+            "{action}: old pin {old_sha} is still present somewhere"
+        );
+        let pin = format!("{action}@{new_sha}");
+        let count = combined.matches(&pin).count();
+        assert_eq!(
+            count, *want_count,
+            "{action}: expected {want_count} sites pinned to {new_sha}, found {count}"
+        );
+    }
+    // Negative control: reverting one site to the old pin must be caught.
+    let mutated = combined.replacen(
+        "ryand56/r2-upload-action@33ebb7a494b3a8a3c5ed2ea6bbdc72e707090317",
+        "ryand56/r2-upload-action@b801a390acbdeb034c5e684ff5e1361c06639e7c",
+        1,
+    );
+    assert_ne!(mutated, combined, "the control must change the text");
+    assert!(mutated.contains("b801a390acbdeb034c5e684ff5e1361c06639e7c"));
+    let new_count = mutated
+        .matches("ryand56/r2-upload-action@33ebb7a494b3a8a3c5ed2ea6bbdc72e707090317")
+        .count();
+    assert_eq!(new_count, 6, "control did not drop exactly one site");
+}

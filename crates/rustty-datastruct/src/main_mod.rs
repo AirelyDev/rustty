@@ -9,6 +9,7 @@
 //   - BlockingQueue               -> blocking_queue::BlockingQueue
 //   - CacheTable                  -> cache_table::CacheTable
 //   - CircBuf                     -> circ_buf::CircBuf
+//   - ComptimeIntSet              -> comptime_int_set::ComptimeIntSet
 //   - IntrusiveDoublyLinkedList   -> intrusive_linked_list::DoublyLinkedList
 //   - LimitedAllocator            -> limited_allocator::LimitedAllocator
 //   - MessageData                 -> message_data::MessageData

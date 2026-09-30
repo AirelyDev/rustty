@@ -2,11 +2,12 @@
 //!
 //! Bug it guards (found by running the real binary): `Surface`'s template stacks the
 //! T24 "inhabited placeholder" overlays (`GhosttyResizeOverlay`, `GhosttySearchOverlay`,
-//! `GhosttyKeyStateOverlay`) on top of the GLArea via GtkOverlay. A bare `adw::Bin`
+//! `GhosttyKeyStateOverlay`) on top of the terminal widget (the `RenderSurface`
+//! since P7-W7 T2, a GLArea when this KAT was written) via GtkOverlay. A bare `adw::Bin`
 //! subclass defaults to `visible: true` + `can-target: true`, and an overlay child with
 //! default FILL/FILL alignment is allocated the FULL terminal rectangle. So each empty
 //! placeholder was an invisible full-size sheet of glass that rendered nothing but
-//! swallowed every pointer event → the GLArea never got focus → NO keystrokes reached
+//! swallowed every pointer event → the terminal never got focus → NO keystrokes reached
 //! the terminal. The reference keeps all three hidden by default in their own `.blp`
 //! (`resize-overlay.blp: visible:false; can-target:false`, `search-overlay.blp:
 //! visible: bind template.active`, `key-state-overlay.blp: visible: bind $has_state(...)`).
@@ -28,21 +29,9 @@ use rustty_apprt::gtk::{self, register_resources};
 use rustty_config::command::Command;
 use rustty_core::app::App as CoreApp;
 
-fn find_gl_area(widget: &gtk4::Widget) -> Option<gtk4::GLArea> {
-    if let Some(area) = widget.downcast_ref::<gtk4::GLArea>() {
-        return Some(area.clone());
-    }
-    let mut child = widget.first_child();
-    while let Some(c) = child {
-        if let Some(found) = find_gl_area(&c) {
-            return Some(found);
-        }
-        child = c.next_sibling();
-    }
-    None
-}
+#[path = "common/gtk_live.rs"]
+mod gtk_live;
 
-/// Collect every widget in the tree whose GType name matches `type_name`.
 fn find_by_type(widget: &gtk4::Widget, type_name: &str, out: &mut Vec<gtk4::Widget>) {
     if widget.type_().name() == type_name {
         out.push(widget.clone());
@@ -87,23 +76,24 @@ fn placeholder_overlays_do_not_capture_input() {
     window.set_default_size(800, 480);
     window.set_content(Some(&surface));
     let surface_widget = surface.upcast_ref::<gtk4::Widget>().clone();
-    let gl_area = find_gl_area(&surface_widget).expect("the surface template contains a GLArea");
+    let render_surface = gtk_live::find_render_surface(&surface_widget)
+        .expect("the surface template contains a RenderSurface");
     window.present();
 
     let ctx = glib::MainContext::default();
     let deadline = Instant::now() + Duration::from_secs(30);
     while surface.core().is_none() {
-        ctx.iteration(true);
+        gtk_live::iterate(&ctx, core_ptr, &app);
         if Instant::now() > deadline {
             break;
         }
     }
     for _ in 0..40 {
-        ctx.iteration(true);
+        gtk_live::iterate(&ctx, core_ptr, &app);
     }
 
     // (1) The three placeholder overlays must be hidden by default — otherwise they
-    //     cover the GLArea and swallow input.
+    //     cover the RenderSurface and swallow input.
     for type_name in [
         "GhosttyResizeOverlay",
         "GhosttySearchOverlay",
@@ -118,22 +108,22 @@ fn placeholder_overlays_do_not_capture_input() {
         for w in &found {
             assert!(
                 !w.is_visible(),
-                "{type_name} must be hidden by default so it does not cover the GLArea \
+                "{type_name} must be hidden by default so it does not cover the RenderSurface \
                  and swallow pointer/keyboard input"
             );
         }
     }
 
     // (2) With the overlays out of the way, the owner-initiated focus path must land
-    //     keyboard focus on the GLArea (the input part).
+    //     keyboard focus on the RenderSurface (the input part).
     surface.grab_focus();
     for _ in 0..10 {
-        ctx.iteration(true);
+        gtk_live::iterate(&ctx, core_ptr, &app);
     }
     assert!(
-        gl_area.is_focus(),
-        "surface.grab_focus() must focus the inner GLArea; a covering overlay would \
-         prevent the GLArea from ever becoming the focus widget"
+        render_surface.is_focus(),
+        "surface.grab_focus() must focus the inner RenderSurface; a covering overlay \
+         would prevent it from ever becoming the focus widget"
     );
 
     // (3) Fire the context-menu `closed` and child-exited `close-request` signals.
@@ -167,7 +157,7 @@ fn placeholder_overlays_do_not_capture_input() {
         w.emit_by_name::<()>("close-request", &[]);
     }
     for _ in 0..10 {
-        ctx.iteration(true);
+        gtk_live::iterate(&ctx, core_ptr, &app);
     }
 
     {
@@ -179,4 +169,9 @@ fn placeholder_overlays_do_not_capture_input() {
         });
     }
     let _ = app.run();
+
+    if let Some(core) = surface.core() {
+        // SAFETY: the widget's live core surface; stopped once, before exit.
+        unsafe { gtk_live::stop_render_thread(core) };
+    }
 }

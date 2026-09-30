@@ -31,10 +31,14 @@ pub enum GraphemeBreakNoControl {
     // extend, ==
     //   zwnj +
     //   indic_conjunct_break_extend +
-    //   indic_conjunct_break_linker
+    //   indic_conjunct_break_linker_extend
     IndicConjunctBreakExtend = 14,
-    IndicConjunctBreakLinker = 15,
-    IndicConjunctBreakConsonant = 16,
+    IndicConjunctBreakLinkerExtend = 15,
+    // InCB=Linker with Grapheme_Cluster_Break=Other (U+1CF5, U+1CF6, U+11A3A
+    // as of Unicode 18), so unlike `indic_conjunct_break_linker_extend` it is not
+    // part of `extend`.
+    IndicConjunctBreakLinkerOther = 16,
+    IndicConjunctBreakConsonant = 17,
 }
 
 /// PARITY: the reference `Properties` is a `packed struct(u16)` whose final
@@ -133,7 +137,12 @@ impl GraphemeBreakNoControl {
             GraphemeBreakNoControl::EmojiModifierBase => "emoji_modifier_base",
             GraphemeBreakNoControl::EmojiModifier => "emoji_modifier",
             GraphemeBreakNoControl::IndicConjunctBreakExtend => "indic_conjunct_break_extend",
-            GraphemeBreakNoControl::IndicConjunctBreakLinker => "indic_conjunct_break_linker",
+            GraphemeBreakNoControl::IndicConjunctBreakLinkerExtend => {
+                "indic_conjunct_break_linker_extend"
+            }
+            GraphemeBreakNoControl::IndicConjunctBreakLinkerOther => {
+                "indic_conjunct_break_linker_other"
+            }
             GraphemeBreakNoControl::IndicConjunctBreakConsonant => "indic_conjunct_break_consonant",
         }
     }

@@ -137,7 +137,7 @@ const VERSION_MICRO: &str = "5";
 /// ghostty actually builds, and the value is **provably inert for our link
 /// graph**: the sole consumer of `LIBXML_VERSION` in libxml2 is `xmlCheckVersion`
 /// (parserInternals.c:64), which only runs if a client invokes the
-/// `LIBXML_TEST_VERSION` macro — and fontconfig 2.14.2 (our only consumer)
+/// `LIBXML_TEST_VERSION` macro — and fontconfig 2.18.3 (our only consumer)
 /// references neither macro anywhere. So this reproduces the reference exactly
 /// with no reachable behavior difference. `LIBXML_DOTTED_VERSION` — the string
 /// anything human-facing reads — is correct either way (`"2.11.5"`).
@@ -233,10 +233,10 @@ fn main() {
     // ---- `Options` → `-DLIBXML_{FIELD}_ENABLED=1` (build.zig:68-98) ----------
     for opt in ENABLED_OPTIONS {
         // `iconv` is the one option the consumer overrides per target: the
-        // reference's only libxml2 consumer, pkg/fontconfig/build.zig:9-13,
+        // reference's only libxml2 consumer, pkg/fontconfig/build.zig:53-57,
         // passes `.iconv = libxml2_iconv_enabled`, whose default is
         // `target.result.os.tag != .windows` (Windows has no `iconv.h`), to
-        // `b.lazyDependency("libxml2", ...)` (build.zig:226-230). N286.
+        // `b.lazyDependency("libxml2", ...)` (build.zig:302-306). N286.
         if *opt == "ICONV" && windows {
             continue;
         }

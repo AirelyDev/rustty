@@ -4,8 +4,10 @@
 # single module the rustty wasm examples (example/wasm-{vt,sgr,key-encode}) load,
 # mirroring how all three ghostty wasm examples load one `ghostty-vt.wasm`.
 #
-# Pure Rust (rustty-simd scalar fallbacks + no zlib on wasm), so no C toolchain /
-# no zig is needed — unlike build-wasm.sh (the wasip1 variant with the C deps).
+# Pure Rust (rustty-simd scalar fallbacks; Kitty graphics off on this
+# freestanding target, so no wuffs and no zlib, as the reference's
+# wasm32-freestanding artifact: Ruling 30), so no C toolchain / no zig is
+# needed — unlike build-wasm.sh (the wasip1 variant with the C deps).
 #
 # Mirrors GhosttyLibVt.initWasm's three-step pipeline:
 #   (a) link with the indirect function table EXPORTED (`exe.export_table =

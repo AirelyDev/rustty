@@ -4,30 +4,95 @@ use crate::props_table::table;
 
 /// Grapheme break state, maintained between calls to [`grapheme_break`].
 ///
-/// PARITY: mirrors `uucode.grapheme.BreakState` (an `enum(u3)`). The packed
-/// `Precompute.Value` stores this in bits 1..=3, so the discriminants must
-/// match uucode's ordering exactly.
+/// PARITY: mirrors `uucode.grapheme.BreakState` (uucode 9d555245, ghostty
+/// 12542b392), a `packed struct(u3) { after_linker: bool, base: Base }`.
+/// uucode documents it as:
+///
+/// > GB9c can overlap GB11: after `ExtPict Linker`, `Extend* ZWJ ExtPict` is
+/// > still an emoji ZWJ sequence while `Extend* Consonant` is still a conjunct.
+/// > So "after a linker" is tracked alongside `base` rather than as a state of
+/// > its own.
+/// >
+/// > Field order matters: packed struct fields are laid out from the low bits
+/// > up, so a `@bitCast` to `u3` gives `base * 2 + after_linker`. With
+/// > `regional_indicator` last in `Base`, the one combination that can never
+/// > occur (`regional_indicator` with `after_linker`, since the flag is only set
+/// > when gb2 is InCB Extend or ZWJ while the base only becomes
+/// > `regional_indicator` when gb2 is a regional indicator) is the highest value,
+/// > so the precomputed tables can leave it out. `buildGraphemeBreakTable`
+/// > asserts this at comptime.
+///
+/// PORT NOTE: stored as the `u3` bit pattern itself (`base * 2 +
+/// after_linker`, i.e. the `@bitCast` upstream's packed `Precompute.Key` /
+/// `Value` carry) in a `u8`, with [`BreakState::after_linker`] /
+/// [`BreakState::base`] as the field reads. rustty-unicode only ever looks the
+/// state up in the precomputed table (the rules that write the fields run in
+/// the generator), so the hot path in [`grapheme_break`] indexes with the raw
+/// value and each `Value` stays two bytes (PERF: no decode on the per-codepoint
+/// path, and the 8192-entry table keeps its footprint).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[repr(transparent)]
+pub struct BreakState(u8);
+
+/// `BreakState.Base` (`enum(u2)`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[repr(u8)]
-pub enum BreakState {
+pub enum Base {
     #[default]
     Default = 0,
-    RegionalIndicator = 1,
-    ExtendedPictographic = 2,
-    IndicConjunctBreakConsonant = 3,
-    IndicConjunctBreakLinker = 4,
+    ExtendedPictographic = 1,
+    RegionalIndicator = 2,
 }
 
 impl BreakState {
-    const fn from_int(v: u8) -> BreakState {
-        match v {
-            0 => BreakState::Default,
-            1 => BreakState::RegionalIndicator,
-            2 => BreakState::ExtendedPictographic,
-            3 => BreakState::IndicConjunctBreakConsonant,
-            4 => BreakState::IndicConjunctBreakLinker,
+    /// Deprecated: initialize with `BreakState::default()` instead.
+    ///
+    /// PARITY: uucode keeps `pub const default: BreakState = .{}` as a
+    /// deprecated alias, and ghostty still spells its states `.default`.
+    #[allow(non_upper_case_globals)]
+    pub const Default: BreakState = BreakState(0);
+
+    // pub const table_len = @typeInfo(Base).@"enum".fields.len * 2 - 1;
+    pub const TABLE_LEN: usize = 3 * 2 - 1;
+
+    /// `BreakState{ .after_linker = after_linker, .base = base }`.
+    #[inline]
+    pub const fn new(after_linker: bool, base: Base) -> BreakState {
+        BreakState((after_linker as u8) | ((base as u8) << 1))
+    }
+
+    /// The `after_linker` field.
+    #[inline]
+    pub const fn after_linker(self) -> bool {
+        (self.0 & 1) != 0
+    }
+
+    /// The `base` field.
+    #[inline]
+    pub const fn base(self) -> Base {
+        match self.0 >> 1 {
+            0 => Base::Default,
+            1 => Base::ExtendedPictographic,
+            2 => Base::RegionalIndicator,
             _ => unreachable!(),
         }
+    }
+
+    // pub inline fn tableIndex(self: BreakState) usize { return @as(u3, @bitCast(self)); }
+    #[inline]
+    pub const fn table_index(self) -> usize {
+        self.0 as usize
+    }
+
+    // pub fn fromTableIndex(i: usize) BreakState { return @bitCast(@as(u3, @intCast(i))); }
+    //
+    // PORT NOTE: `@intCast` to u3 and a `base` of 3 in the `@bitCast` are
+    // safety-checked illegal behaviour upstream; they port as the panics below
+    // (R7). Only the precompute decode calls this, at compile time.
+    #[inline]
+    pub const fn from_table_index(i: usize) -> BreakState {
+        assert!(i < 8 && (i >> 1) < 3);
+        BreakState(i as u8)
     }
 }
 
@@ -212,7 +277,7 @@ struct Key {
 
 impl Key {
     fn index(&self) -> usize {
-        let state = self.state as usize;
+        let state = self.state.table_index();
         let gb1 = self.gb1 as usize;
         let gb2 = self.gb2 as usize;
         // packed struct(u13): state occupies bits 0..3, gb1 bits 3..8, gb2 bits 8..13
@@ -247,12 +312,15 @@ impl Precompute {
             result: false,
             state: BreakState::Default,
         }; 8192];
+        // The table never hands back a state it has no row for
+        // (`buildGraphemeBreakTable`'s `inlineAssert(state.tableIndex() <
+        // BreakState.table_len)`); unreachable keys are zero.
         let mut i = 0;
         while i < 8192 {
             let byte = grapheme_data::DATA[i];
             result[i] = Value {
                 result: (byte & 0x1) != 0,
-                state: BreakState::from_int(byte >> 1),
+                state: BreakState::from_table_index((byte >> 1) as usize),
             };
             i += 1;
         }
@@ -273,7 +341,7 @@ pub fn harness_precompute_bytes() -> [u8; 8192] {
     let mut i = 0;
     while i < 8192 {
         let v = Precompute::DATA[i];
-        out[i] = u8::from(v.result) | ((v.state as u8) << 1);
+        out[i] = u8::from(v.result) | ((v.state.table_index() as u8) << 1);
         i += 1;
     }
     out
@@ -399,6 +467,88 @@ mod tests {
         cp2 = it.next().unwrap();
         assert!(cp1 == 0x1F466); // 👦
         assert!(grapheme_break(cp1, cp2, &mut state)); // break
+    }
+
+    // uucode 9d555245 `src/grapheme.zig` test "BreakState table index layout"
+    // (rustty's `BreakState` mirrors uucode's, so its layout test lives here).
+    #[test]
+    fn break_state_table_index_layout() {
+        let s = BreakState::new;
+        assert_eq!(0, BreakState::default().table_index());
+        assert_eq!(1, s(true, Base::Default).table_index());
+        assert_eq!(2, s(false, Base::ExtendedPictographic).table_index());
+        assert_eq!(3, s(true, Base::ExtendedPictographic).table_index());
+        assert_eq!(4, s(false, Base::RegionalIndicator).table_index());
+        assert_eq!(5, BreakState::TABLE_LEN);
+        assert_eq!(5, s(true, Base::RegionalIndicator).table_index());
+        for i in 0..BreakState::TABLE_LEN {
+            assert_eq!(i, BreakState::from_table_index(i).table_index());
+        }
+        // RUSTTY: the field reads round-trip through the stored bit pattern.
+        for i in 0..BreakState::TABLE_LEN {
+            let state = BreakState::from_table_index(i);
+            assert_eq!(state, s(state.after_linker(), state.base()));
+        }
+        // The deprecated `.default` alias is the zero state.
+        assert_eq!(BreakState::Default, BreakState::default());
+    }
+
+    // RUSTTY: uucode 9d555245 `src/grapheme.zig` test "Unicode 18 Indic linker
+    // boundaries and overlapping emoji sequences", run through ghostty's
+    // precomputed `graphemeBreak` (ghostty 12542b392 builds that table from
+    // the same `computeGraphemeBreakNoControl`). These are all non-control
+    // code points, so the no-control table must agree with uucode's
+    // `isBreakNoControl` column of the upstream test.
+    #[test]
+    fn unicode_18_indic_linker_boundaries_and_overlapping_emoji_sequences() {
+        let cases: [(&[u32], &[bool]); 19] = [
+            // GB9c no longer needs a leading consonant: Linker Extend* x Consonant
+            (&[0x094D, 0x0915], &[false]),
+            (&[0x0061, 0x094D, 0x0915], &[false, false]),
+            (&[0x094D, 0x0300, 0x200D, 0x0915], &[false, false, false]),
+            (&[0x094D, 0x094D, 0x0915], &[false, false]),
+            // Extend without a linker doesn't join a consonant
+            (&[0x0915, 0x0300, 0x0915], &[false, true]),
+            // A consonant ends the linker sequence
+            (&[0x094D, 0x0915, 0x0300, 0x0915], &[false, false, true]),
+            // Only InCB=Extend continues the sequence: ZWNJ, SpacingMark and an
+            // emoji modifier all end it
+            (&[0x094D, 0x200C, 0x0300, 0x0915], &[false, false, true]),
+            (&[0x094D, 0x0903, 0x0915], &[false, true]),
+            (&[0x094D, 0x1F3FB, 0x0915], &[true, true]),
+            // InCB=Linker with Grapheme_Cluster_Break=Other (`indic_conjunct_break_linker_other`):
+            // breaks before it, but still joins a following consonant
+            (&[0x0061, 0x1CF5, 0x0300, 0x0915], &[true, false, false]),
+            (&[0x0061, 0x1CF6, 0x0915], &[true, false]),
+            (&[0x0061, 0x11A3A, 0x11A0B], &[true, false]),
+            (&[0x11A3A, 0x0061], &[true]),
+            // GB9c and GB11 overlap: a linker inside an emoji sequence can still
+            // lead to either a ZWJ emoji or a consonant
+            (
+                &[0x1F600, 0x094D, 0x0300, 0x200D, 0x1F600],
+                &[false, false, false, false],
+            ),
+            (&[0x1F600, 0x094D, 0x0300, 0x0915], &[false, false, false]),
+            (
+                &[0x1F600, 0x094D, 0x200C, 0x200D, 0x1F600],
+                &[false, false, false, false],
+            ),
+            (&[0x1F600, 0x094D, 0x200C, 0x0915], &[false, false, true]),
+            // An emoji modifier sequence can lead into GB9c
+            (&[0x1F44D, 0x1F3FB, 0x094D, 0x0915], &[false, false, false]),
+            // A Grapheme_Cluster_Break=Other linker ends the emoji sequence
+            (&[0x1F600, 0x1CF5, 0x0915], &[true, false]),
+        ];
+        for (cps, breaks) in cases {
+            let mut state = BreakState::default();
+            for (i, &expected) in breaks.iter().enumerate() {
+                assert_eq!(
+                    expected,
+                    grapheme_break(cps[i], cps[i + 1], &mut state),
+                    "{cps:X?} at {i}"
+                );
+            }
+        }
     }
 
     // test "grapheme width: variation selectors" (oracle 65e61282a)

@@ -274,7 +274,7 @@ mod tests {
         let w = 4usize;
         let h = 4usize;
 
-        // Target::init OFFSCREEN — a renderbuffer-backed FBO in RGBA8.
+        // Target::init OFFSCREEN — a texture-backed FBO (P7-W7 T1).
         let target = Target::init(TargetOptions {
             width: w,
             height: h,

@@ -49,16 +49,18 @@
 //! kept as a comment. The offscreen entry point is `init_offscreen`.
 
 use std::ffi::CStr;
+use std::sync::Arc;
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
+use objc2_io_surface::IOSurfaceRef;
 use objc2_metal::{MTLCommandQueue, MTLDevice, MTLGPUFamily};
 
 use rustty_render_types::AlphaBlending; // ← Part A hoist (no config edge)
 
 use super::api;
 use super::buffer::BufferOptions;
-use super::frame::{self, CompletionFn, Frame};
+use super::frame::{self, CompletionContext, CompletionFn, Frame};
 use super::iosurface_layer::{self, IOSurfaceLayer};
 use super::sampler::SamplerOptions;
 use super::shaders::{self, Shaders};
@@ -112,6 +114,69 @@ pub enum Error {
     ObjCFailed,
 }
 
+/// Metal's presenter cell: the layer frames are presented on (`None` offscreen).
+//
+// PORT NOTE (N440, P7-W7 T5a): the reference's `layer: IOSurfaceLayer` field, moved
+// into its own allocation (`Metal::layer: Arc<LayerCell>`) so the frame completion
+// handler presents through its own clone instead of through the renderer. The
+// field is private: through a `&LayerCell` only `present` is reachable; `Metal`
+// reads the layer itself (`Metal::layer`) on the threads that own it.
+pub struct LayerCell(Option<IOSurfaceLayer>);
+
+// SAFETY: a `&LayerCell` reaches the layer only through `present`, which is what
+// the completion handler calls on the Metal completion thread (async frames) or on
+// the drawing thread (sync frames, the main thread's sync draw):
+// - `present(sync = false)` → `IOSurfaceLayer::set_surface`: retains the layer and
+//   the surface and hops to the main queue for the `contents` write (it runs the
+//   write inline only when already on the main thread);
+// - `present(sync = true)` → `set_surface_sync`: the `contents` write on the
+//   calling thread, which for a sync frame is the drawing (main) thread, as in the
+//   reference;
+// - the final `Drop` of a cell whose last clone a completion held: the display-
+//   callback clear (atomic ivar stores) plus a CALayer release (the ObjC retain
+//   count is atomic).
+// Every other use of the layer goes through `Metal` (`surface_size`, `loop_enter`,
+// `attach_view`, `Drop`), on the threads the reference uses.
+unsafe impl Send for LayerCell {}
+// SAFETY: see the `Send` impl.
+unsafe impl Sync for LayerCell {}
+
+impl LayerCell {
+    fn new(layer: Option<IOSurfaceLayer>) -> LayerCell {
+        LayerCell(layer)
+    }
+
+    /// An offscreen cell (no layer): `present` is a no-op.
+    pub(crate) fn offscreen() -> LayerCell {
+        LayerCell(None)
+    }
+
+    /// `Metal.present`'s body: presents `surface` on this cell's layer.
+    //
+    // PORT NOTE (N440, P7-W7 T5a): the frame completion handler calls this with its
+    // context's clones of the cell and of the target's IOSurface (the only part of
+    // the `Target` the reference's `present` reads), never through the renderer.
+    pub fn present(&self, surface: &IOSurfaceRef, sync: bool) -> Result<(), Error> {
+        match &self.0 {
+            Some(layer) => {
+                if sync {
+                    layer.set_surface_sync(surface);
+                } else {
+                    // try self.layer.setSurface(target.surface);  (Metal.zig:257)
+                    layer
+                        .set_surface(surface)
+                        .map_err(|iosurface_layer::Error::ObjCFailed| Error::ObjCFailed)?;
+                }
+                Ok(())
+            }
+            // OFFSCREEN (layer None): no layer to set; the completion path reads back
+            // via `Target::read_bgra` instead. Preserved no-op (never exercised
+            // on-screen).
+            None => Ok(()),
+        }
+    }
+}
+
 /// Graphics API wrapper for Metal. Ports `Metal.zig`'s `Metal = @This()` struct.
 pub struct Metal {
     // Metal.zig:41 — `layer: IOSurfaceLayer,` (non-optional in ghostty, which always
@@ -120,7 +185,14 @@ pub struct Metal {
     // the minimal faithful encoding is `Option`: None == offscreen (present no-op,
     // surface_size == offscreen_size), Some == on-screen (layer attached to an NSView).
     // Placed first to match Metal.zig's field order (`layer` before `device`).
-    pub layer: Option<IOSurfaceLayer>,
+    //
+    // PORT NOTE (N440, P7-W7 T5a): the presenter state, behind its own `Arc`
+    // allocation. `present` runs in the frame completion handler, which on the
+    // async path runs on a Metal-owned thread without the draw mutex; each
+    // in-flight frame's `CompletionContext` holds a clone, so presenting reads no
+    // renderer byte. `attach_view` swaps in a new cell (before the render loop
+    // starts); an in-flight frame keeps presenting through the cell it began with.
+    layer: Arc<LayerCell>,
     /// MTLDevice
     pub device: Retained<ProtocolObject<dyn MTLDevice>>,
     /// MTLCommandQueue
@@ -155,6 +227,20 @@ pub struct Metal {
     /// `set_offscreen_size`; returned (clamped to `max_texture_size`) by
     /// `surface_size`.
     offscreen_size: SurfaceSize,
+
+    /// PORT-ONLY (N437): the layer display callback's context, owned here
+    /// (`Box::into_raw`, freed in `Drop` after the callback is cleared). Null until
+    /// `loop_enter` installs the callback.
+    display_ctx: *mut DisplayCallbackCtx,
+}
+
+/// PORT-ONLY (N437): what the CoreAnimation display callback needs, in its own
+/// allocation: the whole-`Renderer` pointer (the reference's `ctx`) and a handle
+/// to the renderer's `draw_mutex`, so the callback locks without reading the
+/// renderer's bytes (see `crate::latest_frame`).
+pub struct DisplayCallbackCtx {
+    renderer: *mut Renderer,
+    lock: crate::latest_frame::DrawMutex,
 }
 
 impl Metal {
@@ -293,7 +379,7 @@ impl Metal {
         // attach — see its verbatim body.
 
         Ok(Metal {
-            layer: None,
+            layer: Arc::new(LayerCell::offscreen()),
             device,
             queue,
             blending,
@@ -301,6 +387,7 @@ impl Metal {
             max_texture_size,
             autorelease_pool: None,
             offscreen_size: SurfaceSize { width, height },
+            display_ctx: core::ptr::null_mut(),
         })
     }
 
@@ -434,7 +521,7 @@ impl Metal {
         layer.as_ca_layer().setNeedsDisplayOnBoundsChange(true);
 
         Ok(Metal {
-            layer: Some(layer),
+            layer: Arc::new(LayerCell::new(Some(layer))),
             device,
             queue,
             blending,
@@ -448,7 +535,24 @@ impl Metal {
                 width: 0,
                 height: 0,
             },
+            display_ctx: core::ptr::null_mut(),
         })
+    }
+
+    /// The layer frames are presented on (`None` offscreen).
+    pub fn layer(&self) -> Option<&IOSurfaceLayer> {
+        self.layer.0.as_ref()
+    }
+
+    /// The presenter cell, for a frame's completion context (N440).
+    pub(crate) fn presenter(&self) -> Arc<LayerCell> {
+        self.layer.clone()
+    }
+
+    /// Test-only: present on a headless layer without a host view.
+    #[cfg(test)]
+    pub(crate) fn set_layer_for_test(&mut self, layer: IOSurfaceLayer) {
+        self.layer = Arc::new(LayerCell::new(Some(layer)));
     }
 
     /// W-ATTACH (macos-swift-app tier): attach an already-offscreen `Metal` to a
@@ -478,7 +582,7 @@ impl Metal {
         }
         layer.as_ca_layer().setContentsScale(scale_factor);
         layer.as_ca_layer().setNeedsDisplayOnBoundsChange(true);
-        self.layer = Some(layer);
+        self.layer = Arc::new(LayerCell::new(Some(layer)));
         Ok(())
     }
 
@@ -533,10 +637,15 @@ impl Metal {
     /// in `W5_DESIGN §3.2`. Its sole call site is `Renderer::loop_enter`, which hands
     /// it a whole-`Renderer`-provenance `*mut Metal` (`W5_DESIGN §2.4`/§3.1).
     ///
+    /// N437: `lock` is a handle to the renderer's `draw_mutex`; the callback's
+    /// context carries it so the main thread's draw locks without reading the
+    /// renderer. The caller holds `draw_mutex`.
+    ///
     /// # Safety
     /// `self_ptr` must be a whole-`Renderer`-provenance `*mut Metal` pointing at the
-    /// `Renderer.api` field (established by `Renderer::loop_enter`, §3.1).
-    pub unsafe fn loop_enter(self_ptr: *mut Metal) {
+    /// `Renderer.api` field, projected from the renderer's raw root rather than
+    /// from a reborrow (established by `Renderer::loop_enter_raw`, §3.1).
+    pub unsafe fn loop_enter(self_ptr: *mut Metal, lock: crate::latest_frame::DrawMutex) {
         // const renderer: *align(1) Renderer = @fieldParentPtr("api", self);
         // container_of: Metal is Renderer.api (faithful @fieldParentPtr). byte_sub
         // keeps the whole-Renderer provenance of `self_ptr` (`W5_DESIGN §2.4`).
@@ -548,9 +657,21 @@ impl Metal {
         // OFFSCREEN divergence: `layer` is `Option`. On-screen (loopEnter's only real
         // caller) it is always `Some`; a defensive `if let` keeps the offscreen ctor
         // safe.
-        if let Some(layer) = unsafe { (*self_ptr).layer.as_ref() } {
+        let cell: &Arc<LayerCell> = unsafe { &(*self_ptr).layer };
+        if let Some(layer) = cell.0.as_ref() {
             // self.layer.setDisplayCallback(@ptrCast(&displayCallback), @ptrCast(renderer));
-            layer.set_display_callback(Some(display_callback), renderer as *mut c_void);
+            //
+            // PORT NOTE (N437): the context is a `DisplayCallbackCtx` carrying
+            // `renderer` and the `draw_mutex` handle. A second `loopEnter` replaces
+            // the callback before freeing the old context.
+            let ctx = Box::into_raw(Box::new(DisplayCallbackCtx { renderer, lock }));
+            layer.set_display_callback(Some(display_callback), ctx as *mut c_void);
+            let old = unsafe { core::mem::replace(&mut (*self_ptr).display_ctx, ctx) };
+            if !old.is_null() {
+                // SAFETY: `old` came from `Box::into_raw` above and the layer no
+                // longer holds it.
+                drop(unsafe { Box::from_raw(old) });
+            }
         }
     }
 
@@ -765,7 +886,7 @@ impl Metal {
     //         .height = @min(@as(u32, @intFromFloat(bounds.size.height * scale)), self.max_texture_size),
     //     };
     pub fn surface_size(&self) -> Result<SurfaceSize, Error> {
-        match &self.layer {
+        match self.layer() {
             Some(layer) => {
                 // bounds = layer.bounds; scale = layer.contentsScale (Metal.zig:217-218).
                 let bounds = layer.as_ca_layer().bounds(); // CGRect
@@ -821,14 +942,12 @@ impl Metal {
     //              completed.
     pub fn begin_frame(
         &self,
-        renderer: *mut (),
-        target: *mut Target,
+        completion: CompletionContext,
         on_completed: CompletionFn,
     ) -> Result<Frame, frame::Error> {
         Frame::begin(
             frame::Options { queue: &self.queue },
-            renderer,
-            target,
+            completion,
             on_completed,
         )
     }
@@ -902,31 +1021,12 @@ impl Metal {
     //     } else {
     //         try self.layer.setSurface(target.surface);
     //     }
-    pub fn present(&mut self, target: &Target, sync: bool) -> Result<(), Error> {
-        match &self.layer {
-            Some(layer) => {
-                if sync {
-                    layer.set_surface_sync(&target.surface);
-                } else {
-                    // try self.layer.setSurface(target.surface);  (Metal.zig:257)
-                    layer
-                        .set_surface(&target.surface)
-                        .map_err(|iosurface_layer::Error::ObjCFailed| Error::ObjCFailed)?;
-                }
-                Ok(())
-            }
-            // OFFSCREEN (layer None): no layer to set; the completion path reads back
-            // via `Target::read_bgra` instead. Preserved no-op (never exercised
-            // on-screen).
-            None => Ok(()),
-        }
+    pub fn present(&self, target: &Target, sync: bool) -> Result<(), Error> {
+        self.layer.present(&target.surface, sync)
     }
 
-    /// Present the last presented target again. (noop for Metal)
-    // pub inline fn presentLastTarget(self: *Metal) !void { _ = self; }
-    pub fn present_last_target(&self) -> Result<(), Error> {
-        Ok(())
-    }
+    // P7-W7 T2 (`2f0b65346`): `presentLastTarget` (a no-op for Metal) is deleted
+    // with the generic renderer's call to it.
 }
 
 // fn displayCallback(renderer: *Renderer) align(8) void {
@@ -953,12 +1053,15 @@ impl Metal {
 // the same Zig contract).
 //
 /// # Safety
-/// `ctx` must be the whole-`Renderer`-provenance pointer installed by `loop_enter`
-/// (round-tripped through `Cell<*mut c_void>`, so provenance is preserved).
+/// `ctx` must be the `DisplayCallbackCtx` installed by `loop_enter`, whose
+/// `renderer` is the whole-`Renderer`-provenance pointer (round-tripped through
+/// `Cell<*mut c_void>`, so provenance is preserved).
 unsafe extern "C" fn display_callback(ctx: *mut c_void) {
     abort_on_unwind(|| {
-        let renderer = ctx.cast::<Renderer>();
-        if let Err(err) = unsafe { Renderer::draw_frame_raw(renderer, true) } {
+        // SAFETY: the context outlives the installed callback (`Metal`'s `Drop`
+        // clears the callback before freeing it).
+        let ctx = unsafe { &*ctx.cast::<DisplayCallbackCtx>() };
+        if let Err(err) = unsafe { Renderer::draw_frame_raw(ctx.renderer, &ctx.lock, true) } {
             // log.warn("Error drawing frame in display callback, err={}", .{err});
             log::warn!(target: LOG_SCOPE, "Error drawing frame in display callback, err={err:?}");
         }
@@ -987,6 +1090,19 @@ impl Drop for Metal {
     //     self.layer.release();
     // }
     fn drop(&mut self) {
+        // PORT-ONLY (N437): clear the display callback, then free its context.
+        if !self.display_ctx.is_null() {
+            // (Explicitly: an in-flight frame's completion context may still hold
+            // the layer cell, so its `IOSurfaceLayer` Drop can run later.)
+            if let Some(layer) = self.layer() {
+                layer.set_display_callback(None, core::ptr::null_mut());
+            }
+            // SAFETY: `display_ctx` came from `Box::into_raw` in `loop_enter` and the
+            // layer no longer holds it.
+            drop(unsafe { Box::from_raw(self.display_ctx) });
+            self.display_ctx = core::ptr::null_mut();
+        }
+
         // ARC: `queue`/`device` (Retained) release automatically on drop; `layer`
         // (the `Option<IOSurfaceLayer>`) releases via `IOSurfaceLayer`'s
         // `Retained<CALayer>` Drop — `self.layer.release()` (Metal.zig:161) ⇒ that
@@ -1092,17 +1208,15 @@ mod tests {
         // pass → complete(sync).
         let shaders = metal.init_shaders(&[]).expect("init_shaders");
         assert!(shaders.post_pipelines.is_empty());
-        let mut target = metal.init_target(4, 4).expect("init_target");
+        let target = metal.init_target(4, 4).expect("init_target");
 
         // A no-op completion fn (the Chunk-3 `drawFrame` installs the real one).
-        unsafe fn noop(_c: &frame::CompletionContext, _b: &ProtocolObject<dyn MTLCommandBuffer>) {}
+        fn noop(_c: &frame::CompletionContext, _b: &ProtocolObject<dyn MTLCommandBuffer>) {}
 
-        // Raw `*mut` target; the pointer does not hold the borrow, so `target`
-        // stays usable below. Null renderer + no-op completion (Chunk-2 does not
-        // exercise the container_of trampoline).
-        let tp: *mut Target = &mut target;
+        // A context over no renderer + no-op completion (Chunk-2 does not
+        // exercise the renderer's completion handler).
         let mut frame = metal
-            .begin_frame(core::ptr::null_mut(), tp, noop)
+            .begin_frame(frame::CompletionContext::detached(&target.surface), noop)
             .expect("begin_frame");
 
         // A trivial RenderPass: clear the target, begin/complete (no draw step).
