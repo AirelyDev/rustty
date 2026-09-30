@@ -53,6 +53,7 @@ use crate::result::Result;
 use crate::search::SearchWrapper;
 use crate::writer::{CountingWriter, FixedWriter};
 use rustty_lib::allocator::Allocator as CAllocator;
+use rustty_lib::allocator::{ZigAllocator, ZigSlice};
 use rustty_lib::String as LibString;
 use rustty_vt::clipboard;
 use rustty_vt::device_attributes;
@@ -88,14 +89,20 @@ pub(crate) const LOG_SCOPE: &str = "terminal_c";
 // wrapper's boxed allocator; `stream::Options.allocator` is the runtime handle
 // now (`rustty_vt::alloc::default(alloc_)`), as the reference passes `alloc`.
 
-/// PORT NOTE (oracle `e8525c0fd`/`960c2cca5`): `wrapper.tmp_dir_path` is a
-/// `[std.fs.max_path_bytes]u8` field whose only role is to OWN the temp-dir
-/// bytes the limits borrow. rustty's `Limits` owns those bytes itself, so the
-/// field is structurally N/A — but the length bound it imposes is an observable
-/// part of the C contract (`RUSTTY_OUT_OF_MEMORY` for an over-long directory),
-/// so the constant survives. Values match `std.fs.max_path_bytes`: `PATH_MAX`
-/// on POSIX (1024 on Darwin/BSD, 4096 on Linux), `PATH_MAX_WIDE * 3 + 1` on
-/// Windows, and 4096 on WASI/freestanding. R3: a plain constant, no `libc`.
+/// PORT NOTE (oracle `e8525c0fd`/`960c2cca5`, amended `105d0a545`/P7-W2 T3):
+/// the reference's `wrapper.tmp_dir_path` was originally a
+/// `[std.fs.max_path_bytes]u8` inline buffer; `105d0a545` turned it into an
+/// allocator-owned `?[]u8`, allocated only once the embedder sets the option
+/// (`TerminalWrapper::tmp_dir_path`, this file). Every screen's
+/// `Limits.temporary_file` (`TemporaryFileLimit::Enabled.directory`, a raw
+/// `*const [u8]`, `rustty_vt::kitty::graphics_image`) BORROWS that one wrapper
+/// copy — DECISIONS B6, faithful. The length bound the old fixed buffer
+/// imposed is still an observable part of the C contract
+/// (`RUSTTY_OUT_OF_MEMORY` for an over-long directory), so the constant
+/// survives regardless of storage shape. Values match `std.fs.max_path_bytes`:
+/// `PATH_MAX` on POSIX (1024 on Darwin/BSD, 4096 on Linux), `PATH_MAX_WIDE * 3
+/// + 1` on Windows, and 4096 on WASI/freestanding. R3: a plain constant, no
+/// `libc`.
 const MAX_PATH_BYTES: usize = if cfg!(any(
     target_os = "macos",
     target_os = "ios",
@@ -215,14 +222,33 @@ pub struct TerminalWrapper {
     // Rust's I/O is ambient, so there is nothing to store, allocate in `new`,
     // transfer from snapshot decoding, or `deinit` in `free`.
     //
-    // /// We also need to store a temp dir path for some operations (e.g., kitty
-    // /// graphics). This provides stable storage for the API calls.
-    // tmp_dir_path: [max_path_bytes]u8,
+    // /// Allocator-owned copy of the temporary directory path for some
+    // /// operations (e.g. kitty graphics). This is only allocated once the
+    // /// embedder sets the option.
+    // tmp_dir_path: ?[]u8 = null,
     //
-    // PORT NOTE: N/A for storage — rustty's `Limits` owns the temp-dir bytes
-    // itself, so there is no borrow needing stable backing. The LENGTH BOUND
-    // the field imposes is still observable through the C API and survives as
-    // `MAX_PATH_BYTES`; see its PORT NOTE above.
+    /// PORT NOTE (oracle `105d0a545`, P7-W2 T3, DECISIONS B6): the wrapper's
+    /// OWN copy of the kitty temp-dir path, allocated through the CALLER's C
+    /// allocator (F-008: `alloc.dupe` in the reference is `wrapper.terminal
+    /// .gpa()`, i.e. the SAME allocator as `wrapper.alloc` here) only when
+    /// `kitty_image_medium_temp_file` is set — never unconditionally, unlike
+    /// the pre-`105d0a545` fixed buffer this replaced. Every screen's
+    /// `Limits.temporary_file` BORROWS this buffer as a raw `*const [u8]`
+    /// (`TemporaryFileLimit::Enabled`, `rustty_vt::kitty::graphics_image`) —
+    /// never an independent copy. `ZigSlice` (not `Vec<u8>`) because the
+    /// backing bytes must round-trip through `wrapper.alloc`'s raw
+    /// alloc/free, exactly like every other F-008 allocation in this file —
+    /// a plain `Vec<u8>` would silently use the RUST GLOBAL allocator
+    /// instead, breaking a caller-supplied allocator's accounting.
+    ///
+    /// SAFETY (Stacked Borrows discipline,
+    /// `.port/audits/GHOSTTY_LIFETIMES.tsv`): every write site below updates
+    /// ALL screens to a NEW value (a fresh copy, or `Disabled`) BEFORE the
+    /// old value here is freed/replaced, so no screen ever reads through a
+    /// dangling pointer — covering path clear, path set twice, and (via the
+    /// explicit `free_bytes` call in `free` below, since `ZigSlice` has no
+    /// `Drop` of its own) terminal free.
+    pub tmp_dir_path: Option<ZigSlice>,
     //
     /// The terminfo name reported for XTGETTCAP "TN". The stream handler holds
     /// a slice into this.
@@ -1818,6 +1844,13 @@ unsafe fn wrap(
                     continuation_max_bytes: Some(continuation_max_bytes),
                 }),
                 effects: Effects::default(),
+                // .tmp_dir_path = undefined -> None: the reference leaves it
+                // `undefined` because `105d0a545` made it `?[]u8 = null` with
+                // a field default (the literal above never overrides
+                // defaults); the first `set(.kitty_image_medium_temp_file)`
+                // populates it (or it stays `None` for the terminal's whole
+                // life if the embedder never sets the option).
+                tmp_dir_path: None,
                 tracked_grid_refs: WrapperSet::new_in(capture_alloc),
                 searches: WrapperSet::new_in(capture_alloc),
             },
@@ -3130,9 +3163,21 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
             if !rustty_vt::options::KITTY_GRAPHICS {
                 return Result::Success;
             }
+            // const alloc = wrapper.terminal.gpa();
+            // SAFETY: `(*terminal_).alloc` is the live C-resolved allocator
+            // (F-008), valid until `free` reclaims it.
+            let alloc: &dyn ZigAllocator = unsafe { &*(*terminal_).alloc };
+
             let ptr = value as *const LibString;
             if ptr.is_null() {
                 // `else` arm: a NULL value pointer DISABLES the medium.
+                //
+                // SAFETY (Stacked Borrows discipline, path clear): every
+                // screen is switched to `Disabled` FIRST, so none of them
+                // still borrows `wrapper.tmp_dir_path` by the time it is
+                // freed just below — matching upstream's
+                // `if (wrapper.tmp_dir_path) |old| alloc.free(old);` AFTER
+                // its own screen loop.
                 for slot in unsafe { (*t).screens.all.iter() } {
                     if let Some(screen) = *slot {
                         unsafe {
@@ -3141,45 +3186,74 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
                         }
                     }
                 }
+                // if (wrapper.tmp_dir_path) |old| alloc.free(old);
+                // wrapper.tmp_dir_path = null;
+                if let Some(old) = unsafe { (*terminal_).tmp_dir_path.take() } {
+                    alloc.free_bytes(old);
+                }
                 return Result::Success;
             }
 
-            // PORT NOTE (oracle `960c2cca5`, "fix kitty temp directory copy
-            // length mismatch"): the reference copies the caller's bytes into
-            // `wrapper.tmp_dir_path`, a fixed `[max_path_bytes]u8` buffer whose
+            // PORT NOTE (oracle `960c2cca5`/`105d0a545`, P7-W2 T3): the
+            // reference copies the caller's bytes into
+            // `wrapper.tmp_dir_path`, now an allocator-owned `?[]u8` (was a
+            // fixed `[max_path_bytes]u8` buffer before `105d0a545`) whose
             // slice the limits then BORROW. `960c2cca5` fixed a `@memcpy(&buf,
             // v.ptr[0..v.len])` whose destination was the WHOLE buffer while
-            // the source was `v.len` bytes — a length mismatch. rustty's limits
-            // OWN their directory bytes (`Vec<u8>`), so there is no fixed
-            // buffer and the mismatched-memcpy shape cannot occur. What must
-            // survive the port is the observable contract that fix sits inside:
+            // the source was `v.len` bytes — a length mismatch; that fix's
+            // observable contract still applies here:
             //   (a) the length is bounds-checked FIRST, against
             //       `MAX_PATH_BYTES`, returning `RUSTTY_OUT_OF_MEMORY`;
             //   (b) EXACTLY `v.len` bytes are copied — never more.
+            //
+            // DECISIONS B6 (faithful): the wrapper allocates exactly ONE copy
+            // (`dir` below), through the CALLER's allocator (F-008), and
+            // every screen's `Limits` borrows it — not an independent
+            // per-screen copy, and not a Rust-global-heap allocation.
             let v = unsafe { &*ptr };
             let len = v.len;
             // if (v.len > wrapper.tmp_dir_path.len) return .out_of_memory;
             if len > MAX_PATH_BYTES {
                 return Result::OutOfMemory;
             }
-            // @memcpy(wrapper.tmp_dir_path[0..v.len], v.ptr[0..v.len]);
-            let dir: Vec<u8> = if len == 0 {
-                Vec::new()
-            } else {
-                // SAFETY: the C caller guarantees `ptr`/`len` describe a valid
-                // borrowed byte range for the duration of this call.
-                unsafe { core::slice::from_raw_parts(v.ptr, len) }.to_vec()
-            };
-            debug_assert_eq!(len, dir.len());
+            // const path = alloc.dupe(u8, v.ptr[0..v.len]) catch return .out_of_memory;
+            let new_ptr = alloc.alloc_bytes(len);
+            if new_ptr.is_null() {
+                return Result::OutOfMemory;
+            }
+            if len > 0 {
+                // SAFETY: `new_ptr` is a freshly allocated, non-overlapping
+                // `len`-byte buffer (caller contract guarantees `v.ptr` is
+                // readable for `len` bytes).
+                unsafe { core::ptr::copy_nonoverlapping(v.ptr, new_ptr, len) };
+            }
+            let dir = ZigSlice::new(new_ptr, len);
+            // var it = wrapper.terminal.screens.all.iterator();
+            // while (it.next()) |entry| { ... screen.kitty_images.image_limits.temporary_file = .{ .enabled = .{ .directory = path } }; }
+            //
+            // SAFETY (Stacked Borrows discipline, path set twice): every
+            // screen is pointed at the NEW `dir` here, BEFORE the wrapper's
+            // OLD copy is freed below — so a screen updated earlier in this
+            // very loop never observes a dangling pointer, and neither does
+            // one updated on a LATER call (the old copy this call is about to
+            // replace was already superseded for every screen by the time the
+            // PREVIOUS call returned).
             for slot in unsafe { (*t).screens.all.iter() } {
                 if let Some(screen) = *slot {
                     unsafe {
                         (*screen).kitty_images.image_limits.temporary_file =
                             TemporaryFileLimit::Enabled {
-                                directory: dir.clone(),
+                                directory: std::ptr::slice_from_raw_parts(dir.ptr, dir.len),
                             };
                     }
                 }
+            }
+            // Every screen points at the new copy now so the previous
+            // one can be released.
+            // if (wrapper.tmp_dir_path) |old| alloc.free(old);
+            // wrapper.tmp_dir_path = path;
+            if let Some(old) = unsafe { (*terminal_).tmp_dir_path.replace(dir) } {
+                alloc.free_bytes(old);
             }
         }
 
@@ -4257,11 +4331,16 @@ unsafe fn get_typed(terminal_: Terminal, data: TerminalData, out: *mut c_void) -
             }
             // PORT NOTE (byte-slice rule + borrow contract): `RusttyString` is
             // documented as BORROWED — the pointer is valid for as long as the
-            // producing object is unchanged. Here it points into the active
-            // screen's own `Vec<u8>`, exactly as upstream's points into
-            // `wrapper.tmp_dir_path`.
+            // producing object is unchanged. Here it points into
+            // `wrapper.tmp_dir_path` (via the active screen's borrowed
+            // `*const [u8]`), exactly as upstream's does.
+            // SAFETY: the active screen's `directory` pointer, when present,
+            // borrows `(*terminal_).tmp_dir_path` (P7-W2 T3), which is still
+            // live — nothing between the last `set` and this `get` can have
+            // dropped or replaced it (the C API is single-threaded per
+            // terminal, and only `set`/`free` touch that field).
             let dir: &[u8] = match unsafe { &(*active).kitty_images.image_limits.temporary_file } {
-                TemporaryFileLimit::Enabled { directory } => directory.as_slice(),
+                TemporaryFileLimit::Enabled { directory } => unsafe { &**directory },
                 TemporaryFileLimit::Disabled => b"",
             };
             unsafe { *(out as *mut LibString) = LibString::init(dir) };
@@ -4622,9 +4701,21 @@ pub unsafe fn point_from_grid_ref(
 //     wrapper.searches.deinit(alloc);
 //     wrapper.stream.deinit();
 //     t.deinit(alloc);
+//     if (wrapper.tmp_dir_path) |path| alloc.free(path);
 //     alloc.destroy(t);
 //     alloc.destroy(wrapper);
 // }
+//
+// PORT NOTE (oracle `105d0a545`, P7-W2 T3): the reference's explicit
+// `if (wrapper.tmp_dir_path) |path| alloc.free(path);` is ported as the same
+// explicit `free_bytes` call, below, through the SAME caller allocator
+// (`alloc_holder`) it was allocated from — `TerminalWrapper::tmp_dir_path` is
+// `Option<ZigSlice>`, which (unlike `Option<Vec<u8>>`) has no `Drop` of its
+// own, matching the F-008 rule that this buffer's lifecycle is entirely
+// manual, routed through the caller's allocator like every other byte this
+// file hands the embedder. It runs AFTER every screen was torn down by
+// `t.deinit(alloc)` above, so no screen's borrowed `*const [u8]` is read
+// afterward.
 //
 // PORT NOTE (F-008, supersedes the D3-lifecycle substitution): the reference
 // frees `t` and `wrapper` via the C allocator (`alloc.destroy`), recovered as
@@ -4696,6 +4787,22 @@ pub unsafe fn free(terminal_: Terminal) {
 
     // t.deinit(alloc);
     unsafe { (*t).deinit(alloc) };
+
+    // if (wrapper.tmp_dir_path) |path| alloc.free(path);
+    //
+    // PORT NOTE (oracle `105d0a545`, P7-W2 T3): `ZigSlice` has no `Drop` of
+    // its own (see `TerminalWrapper::tmp_dir_path`'s PORT NOTE) — the
+    // reference's explicit free is ported as an explicit free here too,
+    // through the SAME caller allocator (`alloc_holder`) it was allocated
+    // from. This runs AFTER every screen was torn down by `t.deinit` above,
+    // so no screen's borrowed `*const [u8]` is read afterward.
+    // SAFETY: `terminal_` is still live, initialized storage; taking the
+    // field leaves `None` behind, so the read further below sees nothing to
+    // double-free.
+    if let Some(old) = unsafe { (*terminal_).tmp_dir_path.take() } {
+        unsafe { (&*alloc_holder).free_bytes(old) };
+    }
+
     // alloc.destroy(t); — drop the terminal value in place (Rust must run its
     // Drop; Zig has no destructors), then return its storage through the
     // C-resolved allocator, AFTER the stream's handler (which aliased it) is
@@ -11449,6 +11556,161 @@ mod tests {
                 "a rejected over-long directory must not partially overwrite \
                  the previous value"
             );
+
+            unsafe { free(t) };
+        });
+    }
+
+    /// DECISIONS B6 (P7-W2 T3, oracle `105d0a545`): the wrapper allocates
+    /// exactly ONE copy of the kitty temp-dir path and every screen's
+    /// `Limits` BORROWS it — never an independent per-screen copy, and the
+    /// one copy is actually freed (through the caller's allocator) when the
+    /// path is cleared.
+    #[test]
+    fn kitty_image_medium_temp_file_screens_share_wrapper_copy() {
+        let stats = crate::test_util::CountingCAllocator::new();
+        let calloc = stats.c_allocator();
+        let (r, t) = new_t(&calloc, 80, 24);
+        assert_eq!(Result::Success, r);
+
+        // SAFETY: `t` is a live terminal from `new_t`.
+        let zt: *mut ZigTerminal = unsafe { (*t).terminal };
+        // The alternate screen is allocated lazily; enter it so both slots
+        // are populated — otherwise "every screen" below would be vacuously
+        // true for just the primary screen.
+        vtw(t, b"\x1B[?1049h");
+        let screen_count = unsafe { (*zt).screens.all.iter() }
+            .filter(|slot| slot.is_some())
+            .count();
+        assert!(
+            screen_count >= 2,
+            "expected at least primary + alternate screens, got {screen_count}"
+        );
+
+        let dir = b"/shared/wrapper/copy";
+        let v = LibString::init(dir);
+        assert_eq!(Result::Success, unsafe {
+            set(
+                t,
+                Option_::KittyImageMediumTempFile,
+                core::ptr::addr_of!(v) as *const c_void,
+            )
+        });
+
+        // Every screen's `directory` pointer must be the SAME address as the
+        // wrapper's own copy — a shared borrow, not N independent clones.
+        // SAFETY: `t` is a live terminal; `tmp_dir_path` was just populated.
+        let wrapper_ptr = unsafe { (*t).tmp_dir_path.as_ref() }
+            .expect("tmp_dir_path must be populated after set")
+            .ptr;
+        let mut checked = 0;
+        for slot in unsafe { (*zt).screens.all.iter() } {
+            if let Some(screen) = *slot {
+                match unsafe { &(*screen).kitty_images.image_limits.temporary_file } {
+                    TemporaryFileLimit::Enabled { directory } => {
+                        assert_eq!(
+                            wrapper_ptr as *const u8,
+                            (*directory).cast::<u8>(),
+                            "every screen must borrow the wrapper's single copy"
+                        );
+                        // SAFETY: the pointer borrows the wrapper's live copy.
+                        assert_eq!(dir.as_slice(), unsafe { &**directory });
+                        checked += 1;
+                    }
+                    TemporaryFileLimit::Disabled => panic!("temp file medium was not enabled"),
+                }
+            }
+        }
+        assert_eq!(screen_count, checked);
+
+        // Clearing the path must free the wrapper's one copy through the
+        // caller allocator (not leak it, and not free it more than once —
+        // Miri/the counting allocator would trip on a double free).
+        let free_calls_before = stats.free_calls.get();
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::KittyImageMediumTempFile, core::ptr::null())
+        });
+        assert!(
+            stats.free_calls.get() > free_calls_before,
+            "clearing the path must free the wrapper's copy"
+        );
+        // SAFETY: `t` is still live.
+        assert!(
+            unsafe { (*t).tmp_dir_path.is_none() },
+            "the wrapper must drop its own reference once cleared"
+        );
+        for slot in unsafe { (*zt).screens.all.iter() } {
+            if let Some(screen) = *slot {
+                assert_eq!(
+                    TemporaryFileLimit::Disabled,
+                    unsafe { &(*screen).kitty_images.image_limits.temporary_file }.clone(),
+                    "every screen must stop borrowing the freed copy"
+                );
+            }
+        }
+
+        unsafe { free(t) };
+    }
+
+    /// UD365 (P7-W2 T3): the oracle's `LoadingImage.temporary_directory`
+    /// borrows `Limits.temporary_file.enabled.directory`, which itself
+    /// borrows `wrapper.tmp_dir_path`. A chunked kitty transfer spans
+    /// multiple `vt_write` calls; if the embedder calls
+    /// `kitty_image_medium_temp_file` again (or clears it) BETWEEN chunks,
+    /// the oracle's in-flight `LoadingImage` keeps reading through a
+    /// dangling slice once the wrapper's old copy is freed/replaced — a
+    /// reachable use-after-free (R13). rustty's `LoadingImage::init` deep
+    /// copies the directory bytes up front (`graphics_image.rs`'s
+    /// `temporary_directory` PORT NOTE), so it is immune: this proves the
+    /// terminal survives (and later resolves) an option change mid-transfer.
+    #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
+    fn kitty_image_medium_temp_file_change_mid_transfer_does_not_dangle() {
+        with_test_allocator(|alloc| {
+            let (r, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, r);
+
+            let first_dir = b"/first/temp/dir";
+            let v = LibString::init(first_dir);
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::KittyImageMediumTempFile,
+                    core::ptr::addr_of!(v) as *const c_void,
+                )
+            });
+
+            // Open a chunked kitty transmission (temp-file medium; `m=1`
+            // means "more chunks follow"). The exact payload is irrelevant —
+            // it is expected to fail validation (there is no such file) —
+            // what matters is that a `LoadingImage` starts accumulating
+            // while `first_dir` is the active wrapper copy.
+            vtw(t, b"\x1B_Gf=100,t=t,m=1,S=4;/no/such/file\x1B\\");
+
+            // Replace the wrapper's copy mid-transfer: this frees the copy
+            // the in-flight load (if any) captured a slice of, under the
+            // oracle's own design.
+            let second_dir = b"/second/temp/dir/longer";
+            let v = LibString::init(second_dir);
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::KittyImageMediumTempFile,
+                    core::ptr::addr_of!(v) as *const c_void,
+                )
+            });
+
+            // Finish the chunked transfer. Under Miri this must not touch
+            // freed memory; functionally we only require the terminal keeps
+            // working afterward (the transfer's own outcome is unspecified —
+            // the file does not exist — so we don't assert success here).
+            vtw(t, b"\x1B_Gm=0;\x1B\\");
+
+            // The terminal must still be fully usable afterward.
+            assert_eq!(second_dir.to_vec(), temp_dir_data(t));
 
             unsafe { free(t) };
         });

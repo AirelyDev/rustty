@@ -19210,7 +19210,10 @@ mod tests {
             assert!(storage.image_limits.shared_memory);
             match &storage.image_limits.temporary_file {
                 TemporaryFileLimit::Enabled { directory } => {
-                    assert_eq!(temp_dir.as_slice(), directory.as_slice());
+                    // SAFETY: `temp_dir` is `&'static [u8]`, which is what
+                    // `Limits::all_with_temp_dir` was given above, so the
+                    // borrow is live for the whole test.
+                    assert_eq!(temp_dir.as_slice(), unsafe { &**directory });
                 }
                 TemporaryFileLimit::Disabled => panic!("temporary file limit was reset"),
             }
