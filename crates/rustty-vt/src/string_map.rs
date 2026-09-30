@@ -441,6 +441,14 @@ mod tests {
         assert_eq!(1, match_.region.starts()[0]);
         assert_eq!(3, match_.region.ends()[0]);
         match_.deinit();
+
+        // N458: tear down like the sibling reference tests (`defer
+        // map.deinit(alloc)`, `defer re.deinit()`, `defer s.deinit()`). A
+        // Screen dropped without `deinit` still holds its PageList nodes, and
+        // the node pool's drop asserts that every node was returned.
+        it.map.deinit(alloc);
+        it.regex.deinit();
+        s.deinit();
     }
 
     // test "StringMap searchIterator"
