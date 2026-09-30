@@ -213,7 +213,9 @@ impl State {
         //     .history_feed => true,
         //
         //     // Not obvious but complete search states will prune
-        //     // stale history results on feed.
+        //     // stale history results on feed, and pick up pages
+        //     // prepended below the searched frontier since the last
+        //     // feed (incremental snapshot history restore).
         //     .complete => true,
         //
         //     else => false,
@@ -222,7 +224,9 @@ impl State {
             State::HistoryFeed => true,
 
             // Not obvious but complete search states will prune
-            // stale history results on feed.
+            // stale history results on feed, and pick up pages
+            // prepended below the searched frontier since the last
+            // feed (incremental snapshot history restore).
             State::Complete => true,
 
             _ => false,
@@ -565,6 +569,11 @@ impl ScreenSearch {
     ///
     /// Feed on a complete screen search will perform some cleanup of
     /// potentially stale history results (pruned) and reclaim some memory.
+    ///
+    /// If pages were prepended to the PageList since the search completed
+    /// (incremental snapshot history restore), the feed picks them up and
+    /// the search resumes, since "complete" only ever means caught up with
+    /// the PageList as of the last feed.
     // pub fn feed(self: *ScreenSearch) Allocator.Error!void {
     pub fn feed(&mut self) -> Result<(), OutOfMemory> {
         // Resize/reflow invalidates every flattened result, not just search
@@ -613,10 +622,14 @@ impl ScreenSearch {
             // .history_feed => self.state = .history,
             State::HistoryFeed => self.state = State::History,
 
-            // If we're complete then the feed call above should always
-            // return false and we can't reach this.
-            // .complete => unreachable,
-            State::Complete => unreachable!(),
+            // A complete search had exhausted the PageList as of its last
+            // feed, but pages can still be prepended below that afterward
+            // (incremental snapshot history restore). The history searcher's
+            // tracked pin keeps its node identity through a prepend, so it
+            // just discovered those older pages and loaded them. Resume
+            // searching history.
+            // .complete => self.state = .history,
+            State::Complete => self.state = State::History,
         }
 
         Ok(())
@@ -3400,6 +3413,270 @@ mod tests {
             drop(matches);
             assert_eq!(0, counting.live_bytes.get());
         });
+
+        search.deinit();
+        s.deinit();
+        t.deinit(alloc);
+    }
+
+    /// PORTS: oracle 06178eeaa (N435)
+    /// `test "feed after complete discovers prepended history pages"`
+    #[test]
+    fn feed_after_complete_discovers_prepended_history_pages() {
+        use crate::page::{Capacity, Cell};
+        use crate::pagelist::builder::Location;
+        use crate::pagelist::Node;
+        use crate::screen::SelectionString;
+        use crate::selection::Selection;
+
+        let alloc = Allocator;
+        // var t: Terminal = try .init(io, alloc, .{
+        //     .cols = 10,
+        //     .rows = 2,
+        //     .max_scrollback_bytes = std.math.maxInt(usize),
+        // });
+        let mut t: Terminal = Terminal::init(alloc, terminal_opts(10, 2, usize::MAX)).unwrap();
+        let active_ptr: *mut Screen = t.screens.active;
+        // const list: *PageList = &t.screens.active.pages;
+        //
+        // SB: `list()` re-derives the pointer via `&raw mut` (no retag) each
+        // time, rather than caching one `*mut PageList` across the
+        // interleaved `s.next_slice`/`selection_string`/`search.*` calls
+        // below that reborrow the whole `Screen` — the same idiom already
+        // used elsewhere in this file (e.g. `erase_history` after `feed`
+        // tests) and required here so a literal `&mut (*active_ptr).pages`
+        // never invalidates `search`'s own internal PageList pointer
+        // (rust-mut-args-strongly-protected).
+        let list = || -> *mut PageList { unsafe { &raw mut (*active_ptr).pages } };
+
+        let mut s = t.vt_stream();
+
+        // The screen begins with the tail of the needle so a restored page which
+        // soft-wraps into it can complete a match across the restore boundary.
+        // s.nextSlice("st\r\nTest\r\n");
+        s.next_slice(b"st\r\nTest\r\n");
+        // while (list.totalPages() < 2) s.nextSlice("\r\n");
+        while unsafe { (*list()).total_pages() } < 2 {
+            s.next_slice(b"\r\n");
+        }
+        // for (0..list.rows) |_| s.nextSlice("\r\n");
+        let rows = unsafe { (*list()).rows };
+        for _ in 0..rows {
+            s.next_slice(b"\r\n");
+        }
+        // s.nextSlice("Test");
+        s.next_slice(b"Test");
+        // const old_first = list.pages.first.?;
+        let old_first = unsafe { (*list()).pages.first };
+
+        // Search to completion, then select the oldest match so we can verify
+        // that restored (older) results never move an existing selection.
+        // var search: ScreenSearch = try .init(alloc, t.screens.active, "Test");
+        let mut search: ScreenSearch = ScreenSearch::init(alloc, active_ptr, b"Test").unwrap();
+        // try search.searchAll();
+        search.search_all().unwrap();
+        // try testing.expect(search.state.isComplete());
+        assert!(search.state.is_complete());
+        // try testing.expectEqual(1, search.active_results.items.len);
+        assert_eq!(1, search.active_results.len());
+        // try testing.expectEqual(1, search.history_results.items.len);
+        assert_eq!(1, search.history_results.len());
+        // try testing.expect(try search.select(.prev));
+        assert!(search.select(Select::Prev).unwrap());
+        // const selected_idx = search.selected.?.idx;
+        let selected_idx = search.selected.as_ref().unwrap().idx;
+        // try testing.expectEqual(1, selected_idx);
+        assert_eq!(1, selected_idx);
+        // const selected_before = search.selectedMatch().?.untracked();
+        let selected_before = search.selected_match().unwrap().untracked();
+        // try testing.expectEqual(old_first, selected_before.start.node);
+        assert!(core::ptr::eq(selected_before.start.node, old_first));
+
+        // Restore the newest history page: a full match on its first row and a
+        // soft-wrapped last row ending in "Te" which joins the screen's "st".
+        {
+            // var allocation = try list.allocatePage(.{ .cols = 10, .rows = 2 });
+            let mut allocation = unsafe {
+                PageList::allocate_page(
+                    list(),
+                    Capacity {
+                        cols: 10,
+                        rows: 2,
+                        ..Capacity::default()
+                    },
+                )
+            }
+            .unwrap();
+            // defer allocation.deinit();
+            // const page = allocation.page();
+            let page = allocation.page();
+            // page.size.rows = 2;
+            unsafe {
+                (*page).size.rows = 2;
+            }
+            // for ("Test", 0..) |c, x| page.getRowAndCell(x, 0).cell.* = .init(c);
+            for (x, c) in b"Test".iter().enumerate() {
+                unsafe {
+                    *(*page).get_row_and_cell(x, 0).cell = Cell::init(*c as u32);
+                }
+            }
+            // for ("xxxxxxxxTe", 0..) |c, x| page.getRowAndCell(x, 1).cell.* = .init(c);
+            for (x, c) in b"xxxxxxxxTe".iter().enumerate() {
+                unsafe {
+                    *(*page).get_row_and_cell(x, 1).cell = Cell::init(*c as u32);
+                }
+            }
+            // page.getRow(1).wrap = true;
+            unsafe {
+                (*(*page).get_row(1)).set_wrap(true);
+            }
+            // old_first.page().getRow(0).wrap_continuation = true;
+            unsafe {
+                (*(*Node::page(old_first)).get_row(0)).set_wrap_continuation(true);
+            }
+            // try allocation.finalize(.prepend);
+            allocation.finalize(Location::Prepend).unwrap();
+            allocation.deinit();
+        }
+        // const newest = list.pages.first.?;
+        let newest = unsafe { (*list()).pages.first };
+
+        // The completed search is fed like any periodic refresh. It must pick
+        // the page up and go back to searching rather than staying complete.
+        // try search.feed();
+        search.feed().unwrap();
+        // try testing.expect(!search.state.isComplete());
+        assert!(!search.state.is_complete());
+        // try search.searchAll();
+        search.search_all().unwrap();
+        // try testing.expectEqual(1, search.active_results.items.len);
+        assert_eq!(1, search.active_results.len());
+        // try testing.expectEqual(3, search.history_results.items.len);
+        assert_eq!(3, search.history_results.len());
+
+        // New results are older than everything cached, so they append in
+        // newest-to-oldest order: the boundary match first, then the row above.
+        {
+            // const boundary = search.history_results.items[1].untracked();
+            let boundary = search.history_results[1].untracked();
+            // try testing.expectEqual(newest, boundary.start.node);
+            assert!(core::ptr::eq(boundary.start.node, newest));
+            // try testing.expectEqual(old_first, boundary.end.node);
+            assert!(core::ptr::eq(boundary.end.node, old_first));
+            // try testing.expectEqual(@as(size.CellCountInt, 1), boundary.start.y);
+            assert_eq!(1, boundary.start.y);
+            // try testing.expectEqual(@as(size.CellCountInt, 8), boundary.start.x);
+            assert_eq!(8, boundary.start.x);
+            // try testing.expectEqual(@as(size.CellCountInt, 0), boundary.end.y);
+            assert_eq!(0, boundary.end.y);
+            // try testing.expectEqual(@as(size.CellCountInt, 1), boundary.end.x);
+            assert_eq!(1, boundary.end.x);
+            // const str = try t.screens.active.selectionString(alloc, .{
+            //     .sel = .init(boundary.start, boundary.end, false),
+            // });
+            let str = unsafe {
+                (*active_ptr).selection_string(
+                    alloc,
+                    SelectionString {
+                        sel: Selection::init(boundary.start, boundary.end, false),
+                        trim: true,
+                    },
+                )
+            }
+            .unwrap();
+            // defer alloc.free(str);
+            // try testing.expectEqualStrings("Test", str);
+            assert_eq!(b"Test".as_slice(), str.as_slice());
+        }
+        {
+            // const oldest = search.history_results.items[2].untracked();
+            let oldest = search.history_results[2].untracked();
+            // try testing.expectEqual(newest, oldest.start.node);
+            assert!(core::ptr::eq(oldest.start.node, newest));
+            // try testing.expectEqual(@as(size.CellCountInt, 0), oldest.start.y);
+            assert_eq!(0, oldest.start.y);
+            // try testing.expectEqual(@as(size.CellCountInt, 0), oldest.start.x);
+            assert_eq!(0, oldest.start.x);
+        }
+
+        // The selection kept both its index and its target.
+        // try testing.expectEqual(selected_idx, search.selected.?.idx);
+        assert_eq!(selected_idx, search.selected.as_ref().unwrap().idx);
+        {
+            // const selected_after = search.selectedMatch().?.untracked();
+            let selected_after = search.selected_match().unwrap().untracked();
+            // try testing.expect(selected_before.start.eql(selected_after.start));
+            assert!(selected_before.start.eql(selected_after.start));
+            // try testing.expect(selected_before.end.eql(selected_after.end));
+            assert!(selected_before.end.eql(selected_after.end));
+        }
+
+        // Restore an even older page. Each incremental step is discovered from
+        // the frontier left behind by the previous one.
+        {
+            // var allocation = try list.allocatePage(.{ .cols = 10, .rows = 2 });
+            let mut allocation = unsafe {
+                PageList::allocate_page(
+                    list(),
+                    Capacity {
+                        cols: 10,
+                        rows: 2,
+                        ..Capacity::default()
+                    },
+                )
+            }
+            .unwrap();
+            // defer allocation.deinit();
+            // const page = allocation.page();
+            let page = allocation.page();
+            // page.size.rows = 2;
+            unsafe {
+                (*page).size.rows = 2;
+            }
+            // for ("Test", 0..) |c, x| page.getRowAndCell(x, 0).cell.* = .init(c);
+            for (x, c) in b"Test".iter().enumerate() {
+                unsafe {
+                    *(*page).get_row_and_cell(x, 0).cell = Cell::init(*c as u32);
+                }
+            }
+            // try allocation.finalize(.prepend);
+            allocation.finalize(Location::Prepend).unwrap();
+            allocation.deinit();
+        }
+        // const oldest_node = list.pages.first.?;
+        let oldest_node = unsafe { (*list()).pages.first };
+        // try search.feed();
+        search.feed().unwrap();
+        // try search.searchAll();
+        search.search_all().unwrap();
+        // try testing.expectEqual(4, search.history_results.items.len);
+        assert_eq!(4, search.history_results.len());
+        // try testing.expectEqual(
+        //     oldest_node,
+        //     search.history_results.items[3].untracked().start.node,
+        // );
+        assert!(core::ptr::eq(
+            search.history_results[3].untracked().start.node,
+            oldest_node
+        ));
+        // try testing.expectEqual(selected_idx, search.selected.?.idx);
+        assert_eq!(selected_idx, search.selected.as_ref().unwrap().idx);
+        {
+            // const selected_after = search.selectedMatch().?.untracked();
+            let selected_after = search.selected_match().unwrap().untracked();
+            // try testing.expect(selected_before.start.eql(selected_after.start));
+            assert!(selected_before.start.eql(selected_after.start));
+            // try testing.expect(selected_before.end.eql(selected_after.end));
+            assert!(selected_before.end.eql(selected_after.end));
+        }
+
+        // With nothing new, a feed on the complete search stays complete.
+        // try search.feed();
+        search.feed().unwrap();
+        // try testing.expect(search.state.isComplete());
+        assert!(search.state.is_complete());
+        // try testing.expectEqual(5, search.matchesLen());
+        assert_eq!(5, search.matches_len());
 
         search.deinit();
         s.deinit();
