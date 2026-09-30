@@ -23,6 +23,22 @@
 // smallest unsigned integer that holds every index. The port stores each
 // original index as a `u16` (`new` asserts `N <= 65536`) and `index_of`
 // returns it widened to `usize`, so the result indexes any table directly.
+//
+// Reference comment on `Index`, carried:
+//
+// The type returned by `indexOf`. This is the smallest unsigned
+// integer that can hold every valid index into `keys`.
+//
+// The reference's doc example, whose Rust spelling is the doctest on the type
+// below (`IDS.index_of(id)?`):
+//
+//         const i = Ids.indexOf(id) orelse return null;
+//         return entries[i].name;
+//
+// Reference comment on the sort, carried (the port's `const fn` insertion sort
+// has no eval-branch quota to raise):
+//
+// Sorting at comptime needs more than the default quota.
 
 /// A fixed set of integers that is known at compile time and can be
 /// searched quickly at runtime.
@@ -93,6 +109,15 @@
 pub struct ComptimeIntSet<T, const N: usize> {
     /// The keys in ascending order, each paired with its index in the
     /// original `keys` slice. That is, `table[i].0 == keys[table[i].1]`.
+    //
+    // Reference comments on `Table`, carried:
+    //
+    // The keys in ascending order.
+    // sorted: [len]T,
+    //
+    // For each sorted key, its index in the original `keys`
+    // slice. That is, `sorted[i] == keys[original[i]]`.
+    // original: [len]Index,
     // PORT NOTE: the reference's `Table { sorted: [len]T, original:
     // [len]Index }` pair of arrays, zipped into one array of pairs.
     table: [(T, u16); N],

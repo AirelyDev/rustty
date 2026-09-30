@@ -193,6 +193,25 @@ pub fn GetComputerNameA(lpBuffer: LPSTR, nSize: *mut DWORD) -> BOOL {
 // re-export without reimplementing the std wrapper.
 pub type OpenFileFn = unsafe extern "system" fn();
 
+// PORT NOTE: the reference's `ntdll` surface is not transcribed (no rustty
+// caller; see the module PORT NOTE), but its doc comments are carried here:
+//
+// /// GetFinalPathNameByHandleW dwFlags: normalized name with a DOS drive
+// /// letter (both are the zero flag values).
+// pub const FILE_NAME_NORMALIZED = 0x0;
+// /// NtCreateFile CreateDisposition: open an existing file, never create.
+// /// Distinct from the Win32 CreateFileW value OPEN_EXISTING.
+// pub const FILE_OPEN = 0x00000001;
+// /// Resolves a Win32 path against the process working directory and
+// /// canonicalizes it, keeping any `\\?\` or `\\.\` prefix. Returns
+// /// the byte length written excluding the terminator, the required
+// /// byte length if the buffer is too small, or 0 on failure.
+// pub extern "ntdll" fn RtlGetFullPathName_U(..)
+// /// The futex primitives that kernel32's WaitOnAddress and
+// /// WakeByAddress* forward to. Timeout is a relative (negative)
+// /// interval in 100ns units, null to wait forever.
+// pub extern "ntdll" fn RtlWaitOnAddress(..)
+
 // Bit-field and enum constant values
 pub const FILE_ATTRIBUTE_NORMAL: DWORD = 0x00000080;
 pub const FILE_FLAG_OVERLAPPED: DWORD = 0x40000000;

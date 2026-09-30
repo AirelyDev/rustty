@@ -240,10 +240,10 @@ fn openThread(stderr: Option<std::process::ChildStderr>, exe_: std::process::Chi
 // var stream = stderr.readerStreaming(io, &buffer);
 // const reader = &stream.interface;
 // while (true) {
-//     // Read inclusively so the delimiter is consumed: takeDelimiterExclusive
-//     // leaves the '\n' buffered, so once the child writes a line this loop
-//     // would receive an empty slice forever, pinning a core and spamming
-//     // empty warnings.
+//     // Read inclusively so the delimiter is consumed:
+//     // takeDelimiterExclusive leaves the '\n' buffered, so once the
+//     // child writes a line this loop would receive an empty slice
+//     // forever, pinning a core and spamming empty warnings.
 //     const line = reader.takeDelimiterInclusive('\n') catch |outer| switch (outer) {
 //         error.EndOfStream => break,
 //         error.ReadFailed => break,

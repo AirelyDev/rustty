@@ -153,6 +153,8 @@ fn print_slice_check_expected(style_id: style::Id) -> u64 {
     e.to_bits()
 }
 
+/// Store narrow cells using a template with zeroed codepoint bits.
+///
 /// Store a run of narrow codepoint cells built from a bit template:
 /// for each `idx` in `[from, to)`, `cells[idx]` is assigned the bits
 /// `template_bits | (cps[idx] << cp_shift)`.
