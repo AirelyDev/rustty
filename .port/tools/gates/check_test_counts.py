@@ -945,7 +945,7 @@ MAP = {
     # 0 `test{}`, and wasi.rs is a std.os.wasi/loop.zig-twin slice with no 1:1
     # reference oracle.
     # ---------------------------------------------------------------------
-    # P7-W0 T4 (Phase-7 start, the ORACLE_PIN pin): test files the MAP could not see
+    # P7-W0 T4 (Phase-7 start, the Phase-7 pin): test files the MAP could not see
     # (R5 §3 G1b; R1 §3 "Gate bookkeeping"). A gate that cannot see a new file is
     # bookkeeping green (memory derived-gate-green-can-be-bookkeeping), so every
     # row lands at phase start, before its port. A not-yet-ported Rust file is

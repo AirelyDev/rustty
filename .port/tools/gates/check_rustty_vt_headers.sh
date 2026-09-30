@@ -57,7 +57,7 @@ fi
 
 # --self-test-masking (P7-W12 T0, R5 negative control for the every-arm-runs
 # verdict below): run THIS gate for real with a `cbindgen` shim first on PATH
-# that always fails, so arm (a3), the third arm, fails. Under the old
+# that always fails, so arms (a3) and (a3b) fail. Under the old
 # straight-line `set -e` the run ended there and printed nothing of (a4), (b),
 # (d), (c) or (e). The control passes only if every later arm still printed its
 # header, the summary names (a3) as failed, and the gate exits 1.
@@ -69,18 +69,20 @@ if [ "${1:-}" = "--self-test-masking" ]; then
   out=$(PATH="$shim:$PATH" sh "$0" 2>&1) || grc=$?
   rm -rf "$shim"
   rc=0
-  for arm in "(a4)" "(b)" "(d)" "(c)" "(e)"; do
+  for arm in "(a3b)" "(a4)" "(b)" "(d)" "(c)" "(e)"; do
     if printf '%s\n' "$out" | grep -qF "== $arm "; then
       echo "  ok   arm $arm still ran after (a3) failed"
     else
       echo "  FAIL arm $arm did not run: an earlier failure masked it"; rc=1
     fi
   done
-  if printf '%s\n' "$out" | grep -qF "  -> arm (a3) FAILED"; then
-    echo "  ok   arm (a3) reported as FAILED"
-  else
-    echo "  FAIL arm (a3) was not reported as FAILED"; rc=1
-  fi
+  for arm in "(a3)" "(a3b)"; do
+    if printf '%s\n' "$out" | grep -qF "  -> arm $arm FAILED"; then
+      echo "  ok   arm $arm reported as FAILED"
+    else
+      echo "  FAIL arm $arm was not reported as FAILED"; rc=1
+    fi
+  done
   last=$(printf '%s\n' "$out" | tail -1)
   case "$last" in
     "VT-HEADERS: RED (failed arm(s):"*"(a3)"*) echo "  ok   the verdict line is RED and names (a3)" ;;
