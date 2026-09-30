@@ -74,7 +74,13 @@
 #                                    -> HARD-FAIL where nix exists, BLOCKED
 #                                    (exit 3) where it does not. The hermetic
 #                                    counterpart to G-CCONSUMER: same install,
-#                                    no ambient system libraries.
+#                                    no ambient system libraries. Step 4
+#                                    builds the dev shell: BLOCKED (N489)
+#                                    when only nixpkgs' wasmtime fails on
+#                                    aarch64-linux, RED on any other failure.
+#   G-NIX-SELF check_nix.sh --self-test
+#                                    the dev-shell log classifier over
+#                                    fixture logs (needs no nix) -> HARD-FAIL.
 #   G-XTARGET check_cross_targets.sh cross-target builds of rustty-vt-c
 #                                    (wasm32-unknown-unknown, wasm32-wasip1,
 #                                    x86_64-pc-windows-msvc,
@@ -454,22 +460,25 @@ run_test_counts() {
   # environment cannot redirect the checked root), so it binds on every lane; a
   # RED here is a PROGRESS-went-RED failure, never a warning.
   "$PY" "$GATES/check_test_counts.py" --self-test || return 1
-  # Must stay identical to the root check_test_counts.py hard-codes (defense 1).
-  local oracle="/Users/gael/projects/ghostty"
+  # Must stay identical to the root check_test_counts.py reads (defense 1): N483, both
+  # derive it as `ghostty` beside the main checkout (`_oracle_root.sh`, the twin of
+  # `_gatelib.oracle_root`). The pin itself is checked by check_test_counts.py (BLOCKED).
+  local oracle
+  oracle="$( . "$GATES/_oracle_root.sh" && rustty_oracle_root "$ROOT")"
   if [ ! -d "$oracle/src" ]; then
     echo "BLOCKED: ghostty oracle checkout not found at $oracle (R3 — the"
     echo "         external oracle never ships to CI); the per-module"
     echo "         test-count gate cannot bind here."
     return 3
   fi
-  # WS19 T1 (N4), defense 3: the ZIG-DEP corpora under ~/.cache/zig/p/ are a CACHE and
+  # WS19 T1 (N4), defense 3: the ZIG-DEP corpora under the zig cache (<cache>/p/) are a CACHE and
   # get evicted (a zig upgrade or `rm -rf ~/.cache` is enough). check_test_counts.py
   # already exits 3 BLOCKED in that case, but it does so with a wall of paths and no
   # remedy. Pre-flight it here so the BLOCKED message names the one command that fixes
   # it. --verify-only never fetches, so CI stays hermetic.
   if ! bash "$ROOT/.port/tools/restore_zig_deps.sh" --verify-only >/dev/null 2>&1; then
     echo "BLOCKED: the pinned zig-dep source corpora (libxev / zf / vaxis) under"
-    echo "         ~/.cache/zig/p/ are absent or incomplete, so G1b's ZIG side"
+    echo "         the zig cache (<cache>/p/) are absent or incomplete, so G1b's ZIG side"
     echo "         cannot bind (a missing ref would count zig=0 -> vacuous green)."
     echo "         Restore with: bash .port/tools/restore_zig_deps.sh"
     bash "$ROOT/.port/tools/restore_zig_deps.sh" --verify-only 2>&1 | sed 's/^/         /'
@@ -542,6 +551,8 @@ GATE_REGISTRY=(
   # .pc files, and a C consumer linked BOTH ways). BLOCKED, never green, where
   # nix is absent — which is every macOS leg here.
   "G-NIX|HARD|bash $GATES/check_nix.sh"
+  # Its dev-shell classifier's self-test (N489), a separate entry like G-XCF-SELF.
+  "G-NIX-SELF|HARD|bash $GATES/check_nix.sh --self-test"
   # G-XTARGET (2026-08-26) — cross-target BUILDS of rustty-vt-c (the
   # reference's build-libghostty-vt-{wasm,windows,...} legs). G-WINCHK is
   # `cargo check`-level and never runs the crates-sys C compiles for the

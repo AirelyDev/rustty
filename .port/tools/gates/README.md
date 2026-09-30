@@ -133,8 +133,9 @@ to hide that is precisely the R5 weakening the gate exists to prevent.
 
 **Read this before "fixing" a G3b `missing` count that went UP after a port lane.**
 
-`check_comment_coverage.py` resolves its reference side from the hard-coded
-`/Users/gael/projects/ghostty/src` — the oracle **working tree** (the `GHOSTTY_SRC` env
+`check_comment_coverage.py` resolves its reference side from `<oracle>/src`, the oracle
+root derived by `_oracle_root.sh` / `_gatelib.oracle_root()` (N483) — the oracle
+**working tree** (the `GHOSTTY_SRC` env
 override was **deleted** by `P3-W0 T2 Step 6`; see the FORBIDDEN note below). Consequence:
 when a lane ports a **beyond-pin** upstream state in which
 upstream **DELETED** a comment, that sentence still exists on the reference side at the

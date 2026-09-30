@@ -1,10 +1,14 @@
 #!/bin/sh
 # c-vt example parity gate: diff a rustty c-vt example's stdout against its
 # ghostty twin (`zig build run`). Usage: .port/tools/cvt-parity.sh <example-name>
+#        .port/tools/cvt-parity.sh --print-oracle   (the derived oracle root; G-ORACLE-SH-SELF arm 5)
 set -e
-name="$1"; [ -n "$name" ] || { echo "usage: cvt-parity.sh <c-vt-example>"; exit 2; }
+name="${1:-}"; [ -n "$name" ] || { echo "usage: cvt-parity.sh <c-vt-example>"; exit 2; }
 root=$(cd "$(dirname "$0")/../.." && pwd)
-gdir="/Users/gael/projects/ghostty/example/$name"
+# N483: the oracle is `ghostty` beside the main checkout (`rustty_oracle_root`), not a fixed path.
+ORACLE="$(bash -c '. "$1" || exit 3; rustty_oracle_root "$2"' oracle_root "$root/.port/tools/gates/_oracle_root.sh" "$root")"
+[ "$name" = "--print-oracle" ] && { printf '%s\n' "$ORACLE"; exit 0; }
+gdir="$ORACLE/example/$name"
 rdir="$root/example/$name"
 T="${TMPDIR:-/tmp}"
 [ -d "$gdir" ] || { echo "BLOCKED: ghostty example $gdir absent"; exit 3; }

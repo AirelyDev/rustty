@@ -430,7 +430,8 @@ record "(b)" $?
 # deliberate (above), so no pin check applies to this arm.
 ( set -e
 echo "== (d) every ORACLE lib_vt.zig export has a rustty_* counterpart =="
-GH="/Users/gael/projects/ghostty"
+# N483: the oracle is `ghostty` beside the main checkout (`rustty_oracle_root`), not a fixed path.
+GH="$(bash -c '. "$1" || exit 3; rustty_oracle_root "$2"' oracle_root "$ORACLE_LIB" "$root" || true)"
 if [ ! -d "$GH/.git" ]; then
   echo "  BLOCKED: ghostty oracle checkout not found at $GH (R3 — the external"
   echo "           oracle never ships to CI); the bidirectional export-parity arm"
