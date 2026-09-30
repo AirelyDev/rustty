@@ -39,6 +39,9 @@ use rustty_config::command::Command;
 use rustty_core::app::App as CoreApp;
 use rustty_datastruct::split_tree::{Direction, Layout, Node};
 
+#[path = "common/gtk_live.rs"]
+mod gtk_live;
+
 /// Every `DropTarget` among `widget`'s own controllers.
 fn drop_targets(widget: &gtk4::Widget) -> Vec<gtk4::DropTarget> {
     let controllers = widget.observe_controllers();
@@ -152,6 +155,10 @@ fn dropping_a_surface_on_another_moves_the_split() {
     let b: Surface = right;
     assert!(b != a, "B is a new surface");
 
+    // Stops both render threads if an assertion unwinds past the close below
+    // (P7-W7 T6, N450). Declared after `core_app` and `app`, so it drops first.
+    let render_threads = gtk_live::RenderThreadGuard::new(core_ptr, [&a, &b]);
+
     window.set_default_size(800, 480);
     window.present();
     let ctx = glib::MainContext::default();
@@ -190,17 +197,29 @@ fn dropping_a_surface_on_another_moves_the_split() {
     assert!(top == b, "B is on top");
     assert!(bottom == a, "A moved below B");
 
-    // Teardown as `gtk_window_live.rs`: the live-shell surfaces are forgotten
-    // (the documented termio `Subprocess::drop` gap).
+    // Teardown as `gtk_window_live.rs`: close both surfaces the way the app
+    // does (the window is destroyed and both `Surface`s are finalized, their
+    // threads joined and shells reaped), then tear the apps down in `run_gtk`'s
+    // order. (This KAT used to `forget` everything here, to dodge a termio
+    // `Subprocess` double-free that has since been fixed; P7-W7 T6.)
+    // SAFETY: both are live core surfaces whose shells were started by init.
+    let (a_pid, b_pid) = unsafe {
+        (
+            gtk_live::shell_pid(a_core),
+            gtk_live::shell_pid(b.core().expect("B's core surface")),
+        )
+    };
     keepalive.remove();
-    std::mem::forget(target);
-    std::mem::forget(a);
-    std::mem::forget(b);
-    std::mem::forget(tab);
-    std::mem::forget(page);
-    std::mem::forget(tab_view);
-    std::mem::forget(window);
-    std::mem::forget(application);
-    std::mem::forget(app);
-    std::mem::forget(core_app);
+    drop(target);
+    drop(top);
+    drop(bottom);
+    drop(tab);
+    drop(page);
+    drop(tab_view);
+    drop(left);
+    gtk_live::close_surfaces(&ctx, window, vec![(a, a_pid), (b, b_pid)]);
+    gtk_live::close_other_windows(&ctx);
+    drop(render_threads);
+    app.terminate();
+    core_app.destroy();
 }

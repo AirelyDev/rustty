@@ -170,8 +170,7 @@ fn inspector_dump() {
     // Stops both render threads when it drops, including when an assertion below
     // panics. It is declared after `core_app` and `app`, so unwinding drops it
     // first, while the core app is still alive (P7-W7 T6).
-    let render_threads =
-        gtk_live::RenderThreadGuard::new(core_ptr, [surface.clone(), surface2.clone()]);
+    let render_threads = gtk_live::RenderThreadGuard::new(core_ptr, [&surface, &surface2]);
 
     let ctx = glib::MainContext::default();
     let keepalive =
@@ -185,6 +184,13 @@ fn inspector_dump() {
     let core = surface
         .core()
         .expect("core surface built on first RenderSurface resize");
+    // SAFETY: both are live core surfaces whose shells were started by init.
+    let shell_pids = unsafe {
+        (
+            gtk_live::shell_pid(core),
+            gtk_live::shell_pid(surface2.core().expect("surface 2's core surface")),
+        )
+    };
 
     let render_surfaces = [
         gtk_live::find_render_surface(surface.upcast_ref::<gtk4::Widget>())
@@ -431,5 +437,14 @@ fn inspector_dump() {
         run_result.err()
     );
 
+    // Close both terminals the way the app does (each window destroyed, each
+    // `Surface` finalized, threads joined, shell reaped), then tear the apps down
+    // in `run_gtk`'s order (P7-W7 T6).
+    drop(imgui_widget);
+    gtk_live::close_surface(&ctx, window, surface, shell_pids.0);
+    gtk_live::close_surface(&ctx, window2, surface2, shell_pids.1);
+    gtk_live::close_other_windows(&ctx);
     drop(render_threads);
+    app.terminate();
+    core_app.destroy();
 }

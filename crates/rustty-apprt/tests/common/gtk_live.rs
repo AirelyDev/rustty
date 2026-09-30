@@ -19,6 +19,7 @@ use gtk4::prelude::*;
 
 use rustty_apprt::gtk;
 use rustty_apprt::gtk::class::render_surface::RenderSurface;
+use rustty_apprt::gtk::class::surface::{CoreSurface, Surface};
 use rustty_core::app::App as CoreApp;
 
 /// One main-loop iteration, then one core-app tick — what `App::run`'s loop does
@@ -36,69 +37,83 @@ pub fn iterate(ctx: &glib::MainContext, core_app: *mut CoreApp<gtk::App>, app: &
     }
 }
 
-/// Stop and join a live surface's render thread, for a KAT that ends without
-/// tearing its surfaces down (the out-of-scope termio `Subprocess::drop` gap,
-/// `gtk_first_light.rs` section 6). Since `2f0b65346` the render thread draws
-/// with its own EGL context; left running, it can still be inside libEGL when the
-/// process exits and the driver's exit-time teardown runs, which crashes the test
-/// binary after the test has passed. The render thread's `threadExit` releases
-/// its GPU resources and its context on the way out.
+/// Stops and joins the render threads of the surfaces it watches when it drops,
+/// whether the test passed or an assertion panicked (P7-W7 T6, N450).
 ///
-/// # Safety
-/// `core` is the widget's live core surface; the main thread calls this once.
-pub unsafe fn stop_render_thread(core: *mut rustty_apprt::gtk::class::surface::CoreSurface) {
-    unsafe {
-        let _ = (*(*core).renderer_thread.as_ptr()).stop.notify();
-        if let Some(handle) = (*core).renderer_thr.take() {
-            handle.join().expect("the render thread exits cleanly");
-        }
-    }
-}
-
-/// Stops and joins the render threads of `surfaces` when dropped, on the pass
-/// path AND when an assertion panics (P7-W7 T6, N450).
+/// Since `2f0b65346` the render thread draws with its own EGL context. If a KAT
+/// exits while that thread is still running, the driver's exit-time teardown
+/// runs underneath it. On rvm (Mesa llvmpipe) a KAT whose assertion panicked
+/// crashed at exit with SIGSEGV inside `glReadPixels` (`OpenGL::present` →
+/// `read_pixels`, on a `renderer` thread), after libtest had already reported
+/// the failure. The render thread's `threadExit` releases its GPU resources and
+/// its context on the way out.
 ///
-/// A KAT that stops its render threads with a trailing [`stop_render_thread`]
-/// skips that call when an assertion panics. libtest then catches the panic and
-/// calls `exit`, and the render threads are still drawing when the driver's
-/// exit-time teardown runs. On rvm (Mesa llvmpipe) that crashed the binary
-/// with SIGSEGV inside `glReadPixels` (`OpenGL::present` → `read_pixels`,
-/// on a `renderer` thread) after the test had already reported its failure.
+/// The guard holds WEAK references. A KAT that closes its surfaces normally
+/// ([`close_surface`]: the GObject finalize → `CoreSurface::deinit`, which joins
+/// both threads) leaves it nothing to do. A surface still alive when the guard
+/// drops, because the KAT keeps it or an assertion unwound past its close, gets
+/// its render thread stopped and joined here. So does every surface in a
+/// toplevel still open when the guard drops (e.g. the app-created window).
 ///
 /// Declare the guard AFTER the core app and the apprt app, so that unwinding
 /// drops it first, while the core app is still alive. While it waits for a
 /// thread to exit, it drains the core-app mailbox. A render thread blocked on a
 /// `.forever` push to a full queue (`frameCompleted`) can therefore still see
 /// its stop. The drop never panics, because a panic during unwinding aborts.
+///
+/// A surface whose render thread the guard joined must not be finalized
+/// afterwards, because `CoreSurface::deinit` expects `renderer_thr` to still be
+/// set. The guard acts only at the end of a test, and nothing finalizes a
+/// surface after that.
 pub struct RenderThreadGuard {
     core_app: *mut CoreApp<gtk::App>,
-    surfaces: Vec<rustty_apprt::gtk::class::surface::Surface>,
+    surfaces: Vec<glib::WeakRef<Surface>>,
 }
 
 impl RenderThreadGuard {
     /// `core_app` is the test's live boxed core app, and it outlives the guard.
-    pub fn new(
+    pub fn new<'a>(
         core_app: *mut CoreApp<gtk::App>,
-        surfaces: impl IntoIterator<Item = rustty_apprt::gtk::class::surface::Surface>,
+        surfaces: impl IntoIterator<Item = &'a Surface>,
     ) -> Self {
         Self {
             core_app,
-            surfaces: surfaces.into_iter().collect(),
+            surfaces: surfaces.into_iter().map(|s| s.downgrade()).collect(),
         }
+    }
+
+    /// Watch one more surface (e.g. one the product code built later).
+    pub fn watch(&mut self, surface: &Surface) {
+        self.surfaces.push(surface.downgrade());
     }
 }
 
 impl Drop for RenderThreadGuard {
     fn drop(&mut self) {
-        for surface in &self.surfaces {
+        // The watched surfaces that are still alive (a finalized one's
+        // `CoreSurface::deinit` already joined its threads), plus every surface
+        // in a toplevel still open. The second set covers the window that
+        // `App::run`'s `activate` creates (see [`close_other_windows`]), when an
+        // assertion unwinds before that window is closed.
+        let mut live: Vec<Surface> = self.surfaces.iter().filter_map(|w| w.upgrade()).collect();
+        let toplevels = gtk4::Window::toplevels();
+        for i in 0..toplevels.n_items() {
+            if let Some(widget) = toplevels
+                .item(i)
+                .and_then(|o| o.downcast::<gtk4::Widget>().ok())
+            {
+                collect_surfaces(&widget, &mut live);
+            }
+        }
+        for surface in live {
             let Some(core) = surface.core() else {
                 continue;
             };
-            // SAFETY: `core` is the widget's live core surface (the KATs never
-            // finalize one), and the main thread is the only caller.
-            // `renderer_thr.take()` makes a second stop a no-op.
+            // SAFETY: `core` is the widget's live core surface (the widget is
+            // alive, so it has not been finalized), and the main thread is the
+            // only caller. `renderer_thr.take()` makes a second stop a no-op.
             unsafe {
-                let _ = (*core).renderer_thread.stop.notify();
+                let _ = (*(*core).renderer_thread.as_ptr()).stop.notify();
                 let Some(handle) = (*core).renderer_thr.take() else {
                     continue;
                 };
@@ -117,6 +132,147 @@ impl Drop for RenderThreadGuard {
                 }
             }
         }
+    }
+}
+
+/// The pid of a live surface's shell (`io.backend` → `Exec.subprocess.process`).
+///
+/// # Safety
+/// `core` points at a live, initialized core surface whose shell was started.
+pub unsafe fn shell_pid(core: *mut CoreSurface) -> libc::pid_t {
+    match unsafe { &(*(*core).io.as_ptr()).backend } {
+        rustty_termio::Backend::Exec(exec) => match exec.subprocess.process.as_ref() {
+            Some(rustty_termio::exec::Process::ForkExec(cmd)) => {
+                cmd.pid.expect("the shell was forked")
+            }
+            _ => panic!("the shell runs as a fork/exec child"),
+        },
+    }
+}
+
+/// Whether `pid` no longer exists: it was killed AND reaped (a zombie still
+/// answers `kill(pid, 0)`).
+pub fn process_gone(pid: libc::pid_t) -> bool {
+    // SAFETY: signal 0 only checks that the process exists.
+    let rc = unsafe { libc::kill(pid, 0) };
+    rc == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
+/// Close a live surface the way the app does, and prove it closed. See
+/// [`close_surfaces`].
+pub fn close_surface(
+    ctx: &glib::MainContext,
+    window: impl IsA<gtk4::Window>,
+    surface: Surface,
+    shell_pid: libc::pid_t,
+) {
+    close_surfaces(ctx, window, vec![(surface, shell_pid)]);
+}
+
+/// Close the live surfaces of one window the way the app does, and prove they
+/// closed (P7-W7 T6).
+///
+/// The caller has already dropped every other strong reference it held (the
+/// surfaces' widgets included), and passes the last reference to each surface,
+/// its shell's pid, and the window that hosts them. This destroys the window,
+/// drops the surfaces, and pumps the main loop until every `Surface` GObject is
+/// finalized. Each finalize runs `deleteSurface`, then `CoreSurface::deinit`
+/// (stop and join the render and io threads, kill and reap the shell), then
+/// frees the core surface without drop glue.
+///
+/// It asserts, for every surface, that the finalize happened (no leaked
+/// reference) and that its shell is gone (killed and reaped).
+pub fn close_surfaces(
+    ctx: &glib::MainContext,
+    window: impl IsA<gtk4::Window>,
+    surfaces: Vec<(Surface, libc::pid_t)>,
+) {
+    let watched: Vec<(glib::WeakRef<Surface>, libc::pid_t)> = surfaces
+        .into_iter()
+        .map(|(surface, pid)| (surface.downgrade(), pid))
+        .collect();
+    window.upcast_ref::<gtk4::Window>().destroy();
+    drop(window);
+    let alive = || watched.iter().any(|(weak, _)| weak.upgrade().is_some());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while alive() && std::time::Instant::now() < deadline {
+        ctx.iteration(false);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    for (i, (weak, pid)) in watched.iter().enumerate() {
+        assert!(
+            weak.upgrade().is_none(),
+            "surface {i} was not finalized after its window was destroyed (a leaked reference)"
+        );
+        assert!(
+            process_gone(*pid),
+            "surface {i}'s shell (pid {pid}) outlived the surface's close"
+        );
+    }
+}
+
+/// Every `Surface` in `widget`'s tree (itself included).
+fn collect_surfaces(widget: &gtk4::Widget, out: &mut Vec<Surface>) {
+    if let Ok(surface) = widget.clone().downcast::<Surface>() {
+        out.push(surface);
+    }
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        collect_surfaces(&c, out);
+        child = c.next_sibling();
+    }
+}
+
+/// Close every toplevel window still open, the way [`close_surfaces`] closes
+/// the KAT's own, and assert that each `Surface` inside was finalized and its
+/// shell reaped.
+///
+/// `App::run` emits `activate`, and its `new_window_thunk` pushes a
+/// `NewWindow`. A KAT that runs the loop to a scheduled quit can therefore own
+/// a second, app-created window with its own terminal. That surface holds a
+/// font-grid reference, which `CoreApp::deinit` asserts is gone, and its
+/// threads would otherwise still run at exit (P7-W7 T6).
+pub fn close_other_windows(ctx: &glib::MainContext) {
+    let mut watched: Vec<(glib::WeakRef<Surface>, Option<libc::pid_t>)> = Vec::new();
+    let toplevels = gtk4::Window::toplevels();
+    let windows: Vec<gtk4::Window> = (0..toplevels.n_items())
+        .filter_map(|i| toplevels.item(i))
+        .filter_map(|obj| obj.downcast::<gtk4::Window>().ok())
+        .collect();
+    drop(toplevels);
+    for window in windows {
+        let mut surfaces = Vec::new();
+        collect_surfaces(window.upcast_ref::<gtk4::Widget>(), &mut surfaces);
+        for surface in surfaces {
+            // SAFETY: a live widget's published core surface, main thread.
+            let pid = surface.core().map(|core| unsafe { shell_pid(core) });
+            watched.push((surface.downgrade(), pid));
+        }
+        window.destroy();
+    }
+    let alive = || watched.iter().any(|(weak, _)| weak.upgrade().is_some());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while alive() && std::time::Instant::now() < deadline {
+        ctx.iteration(false);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    for (i, (weak, pid)) in watched.iter().enumerate() {
+        assert!(
+            weak.upgrade().is_none(),
+            "app-created surface {i} was not finalized after its window was destroyed"
+        );
+        if let Some(pid) = pid {
+            assert!(
+                process_gone(*pid),
+                "app-created surface {i}'s shell (pid {pid}) outlived its close"
+            );
+        }
+    }
+    if !watched.is_empty() {
+        eprintln!(
+            "close_other_windows: closed {} app-created surface(s)",
+            watched.len()
+        );
     }
 }
 

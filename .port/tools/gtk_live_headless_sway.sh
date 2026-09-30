@@ -79,8 +79,13 @@ done
 [ -S "$SWAYSOCK" ] || { tail -30 "$WORK/sway.log" >&2; echo "sway never created $SWAYSOCK" >&2; exit 1; }
 
 # sway 1.11 does not export WAYLAND_DISPLAY into its log environment; it logs
-# "Running compositor on wayland display 'wayland-N'".
-WL="$(grep -oE "compositor on wayland display 'wayland-[0-9]+'" "$WORK/sway.log" | tail -1 | grep -oE 'wayland-[0-9]+')"
+# "Running compositor on wayland display 'wayland-N'". That line can land after the
+# IPC socket appears, so wait for it too.
+for _ in $(seq 1 150); do
+  WL="$(grep -oE "compositor on wayland display 'wayland-[0-9]+'" "$WORK/sway.log" | tail -1 | grep -oE 'wayland-[0-9]+')"
+  [ -n "$WL" ] && break
+  sleep 0.2
+done
 [ -n "$WL" ] || { tail -30 "$WORK/sway.log" >&2; echo "could not determine sway's WAYLAND_DISPLAY" >&2; exit 1; }
 sleep 1
 echo "headless sway: pid $SWAY_PID WAYLAND_DISPLAY=$WL (tiling, pixman)"
