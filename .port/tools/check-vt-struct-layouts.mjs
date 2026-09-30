@@ -8,7 +8,8 @@
 // with clang. A failed assert => a header/ABI layout mismatch (printed by clang).
 import { readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const ROOT = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
 const WASM = `${ROOT}/target/wasm32-unknown-unknown/release/rustty_vt_c.wasm`;
@@ -190,7 +191,22 @@ const NOT_IN_TYPE_JSON = {};
 // rustty's type_json key set to equal it after the R2 rename. Oracle absent =>
 // exit 3 BLOCKED, never a silent green. `origin/main`, not the pin, is
 // deliberate (the lib-vt C-API surface lives beyond the pin), so no pin check.
-const ORACLE = "/Users/gael/projects/ghostty";
+// N483: the oracle is `ghostty` beside the MAIN checkout, resolved by the shell twin
+// `_oracle_root.sh` (one rule for every gate, no environment override).
+function resolveOracleRoot() {
+  const here = fileURLToPath(new URL(".", import.meta.url));
+  const root = resolve(here, "..", "..");
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_")),
+  );
+  return execFileSync(
+    "bash",
+    ["-c", '. "$1" || exit 3; rustty_oracle_root "$2"', "oracle_root",
+      join(root, ".port/tools/gates/_oracle_root.sh"), root],
+    { env, encoding: "utf8" },
+  ).trim();
+}
+const ORACLE = resolveOracleRoot();
 try {
   oracleGit(ORACLE, ["rev-parse", "--git-dir"]);
 } catch {

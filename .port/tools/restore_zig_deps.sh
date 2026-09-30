@@ -4,8 +4,8 @@
 #
 # WHY THIS EXISTS
 # ---------------
-# G1b's zig side reads three EXTERNAL, read-only checkouts under `~/.cache/zig/p/`
-# (R3: the oracle and its deps are references, never build inputs). `~/.cache/zig/p/`
+# G1b's zig side reads three EXTERNAL, read-only checkouts under `<zig cache>/p/`
+# (R3: the oracle and its deps are references, never build inputs). `<zig cache>/p/`
 # is a CACHE — a `zig` upgrade or a plain `rm -rf ~/.cache` evicts it. When it is gone
 # the gate exits 3 BLOCKED (never a silent green: a missing reference would count zig=0
 # and turn every mapped module VACUOUSLY green, R5). This script is the documented way
@@ -14,10 +14,19 @@
 # R3 SCOPE — VERIFICATION INPUT ONLY, NEVER A BUILD DEPENDENCY
 # ------------------------------------------------------------
 # These corpora exist solely so G1b has a zig-side reference to count against. NOTHING
-# in any `Cargo.toml` or any `build.rs` in this repository may read `~/.cache/zig`; the
+# in any `Cargo.toml` or any `build.rs` in this repository may read the zig cache; the
 # rustty build graph is fully self-contained (every codec, UCD corpus and asset is
-# vendored in-tree). A `build.rs` reaching into `~/.cache/zig` would be an R3 violation.
+# vendored in-tree). A `build.rs` reaching into the zig cache would be an R3 violation.
 #   Audit with:  grep -rn 'cache/zig' --include=build.rs --include=Cargo.toml .
+#
+# WHICH VERSIONS (N483)
+# ---------------------
+# The packages are the ones the ORACLE's `build.zig.zon` names at the pin (gates/ORACLE_PIN):
+# zf 0.11.0 and vaxis 0.6.0, plus the libxev (86vtc4Ic...) that G1b's xev rows still read.
+# libxev at the pin itself (86vtcwIR..., 9ce8e8e6) is read by G1b from the ORACLE's own
+# `zig-pkg/` (the `xev_file` row); it is checked for presence below, never fetched into the
+# cache, because the oracle is read-only. The cache root is resolved like zig does (above),
+# so this works unchanged on macOS and Linux with no `/Users/<name>` symlinks.
 #
 # DIGEST POLICY — TWO INDEPENDENT PINS
 # -----------------------------------
@@ -27,7 +36,7 @@
 #     `test {}` blocks out of whatever the network happened to serve.
 # (2) SECONDARY, opportunistic: zig's OWN package content hash, which is literally the
 #     package directory name (`libxev-0.0.0-86vtc4Ic…`) that `check_test_counts.py`
-#     hardcodes at :162 (libxev), :183 (zf) and :200 (vaxis). When `zig` is on PATH we
+#     hardcodes (GHXEV, GHZF, GHVAXIS). When `zig` is on PATH we
 #     cross-check it and FAIL LOUDLY on a mismatch. It is a *cross-check*, not the only
 #     gate, for the reason in the next paragraph.
 #
@@ -62,7 +71,13 @@
 set -euo pipefail
 
 ROOT="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
-CACHE="${HOME}/.cache/zig/p"
+# N483: the zig global cache is resolved the way zig (and `_gatelib.zig_cache_root`, which
+# G1b reads it through) does: ZIG_GLOBAL_CACHE_DIR, else $XDG_CACHE_HOME/zig, else
+# ~/.cache/zig. Never a fixed home directory. Packages live under <cache>/p/.
+if [ -n "${ZIG_GLOBAL_CACHE_DIR:-}" ]; then ZIG_CACHE="$ZIG_GLOBAL_CACHE_DIR"
+elif [ -n "${XDG_CACHE_HOME:-}" ]; then ZIG_CACHE="$XDG_CACHE_HOME/zig"
+else ZIG_CACHE="${HOME}/.cache/zig"; fi
+CACHE="$ZIG_CACHE/p"
 
 VERIFY_ONLY=0
 [ "${1:-}" = "--verify-only" ] && VERIFY_ONLY=1
@@ -70,8 +85,8 @@ VERIFY_ONLY=0
 # name|pinned package-dir (== zig's content hash, pinned by check_test_counts.py)|url|tarball sha256
 PKGS=(
   "libxev|libxev-0.0.0-86vtc4IcEwCqEYxEYoN_3KXmc6A9VLcm22aVImfvecYs|https://deps.files.ghostty.org/libxev-34fa50878aec6e5fa8f532867001ab3c36fae23e.tar.gz|6003ea6b96e4a518a128f932327d79a11bd30996b13b73baeb29916379487dd7"
-  "zf|zf-0.10.3-OIRy8RuJAACKA3Lohoumrt85nRbHwbpMcUaLES8vxDnh|https://deps.files.ghostty.org/zf-3c52637b7e937c5ae61fd679717da3e276765b23.tar.gz|3b015d928af04e9e26272bc15eb4dbb4d9a9d469eb6d290a0ddae673b77c4568"
-  "vaxis|vaxis-0.5.1-BWNV_LosCQAGmCCNOLljCIw6j6-yt53tji6n6rwJ2BhS|https://deps.files.ghostty.org/vaxis-7dbb9fd3122e4ffad262dd7c151d80d863b68558.tar.gz|2e72332bc89c5b541ec6e6bd48769e1f3fb757c4006f3d1af940b54f9b088ef6"
+  "zf|zf-0.11.0-OIRy8X-RAAAwaRXHMYpj2uvBnuGTZWEE_3V7acqHQNtW|https://deps.files.ghostty.org/zf-c35c421f84895193246db06c40683c1a30e616ef.tar.gz|ca4bc109fd9d97cedae2f5bdb879cc78c346d43c14a34e3a2abd2ee9208c8547"
+  "vaxis|vaxis-0.6.0-BWNV_CrbCQCscGpzsAlR402rYQ_tV3aAl081c2iRRkka|https://deps.files.ghostty.org/vaxis-1dbbe575dff4586fe51e3217aa5c3fecdcbb6089.tar.gz|3ea050e905887c46bca1a2c18e41d6edf574c1aa6ebfbc5cf3c52846275e4fa8"
 )
 
 sha256_of() {
@@ -104,7 +119,7 @@ sentinels_for() {
               src/backend/epoll.zig src/backend/io_uring.zig src/api.zig src/backend.zig \
               src/main.zig src/loop.zig src/ThreadPool.zig src/dynamic.zig \
               src/linux/timerfd.zig ;;
-    zf)     printf '%s\n' src/zf/zf.zig src/zf/filter.zig ;;
+    zf)     printf '%s\n' src/zf/zf.zig src/zf/filter.zig src/zf/clib.zig ;;
     # WS12 T3: was `src/widgets/TextInput.zig` ALONE, which let this script report
     # "present and complete" for a corpus the gate would still BLOCK on. Now the full
     # 17-file list G1b actually reads (check_test_counts.py MAP["vaxis"]).
@@ -112,7 +127,8 @@ sentinels_for() {
               src/Image.zig src/gwidth.zig src/unicode.zig src/Screen.zig \
               src/InternalScreen.zig src/Window.zig src/Parser.zig src/event.zig \
               src/ctlseqs.zig src/queue.zig src/tty.zig src/Loop.zig \
-              src/widgets/TextInput.zig ;;
+              src/widgets/TextInput.zig src/Vaxis.zig src/vxfw/vxfw.zig src/vxfw/App.zig \
+              src/vxfw/Text.zig src/vxfw/Center.zig ;;
   esac
 }
 
@@ -137,8 +153,22 @@ for spec in "${PKGS[@]}"; do
   fi
 done
 
+# libxev at the oracle's own pin lives in the ORACLE's read-only `zig-pkg/` (G1b's `xev_file`
+# row). It cannot be restored from here; report it so a missing one is named, never silent.
+# shellcheck source=.port/tools/gates/_oracle_root.sh
+source "$ROOT/.port/tools/gates/_oracle_root.sh"
+ORACLE_DIR="$(rustty_oracle_root "$ROOT")"
+XEV_CUR_FILE="$ORACLE_DIR/zig-pkg/libxev-0.0.0-86vtcwIRFADbH4hk-EjROXxlrKIRPQdA41XiTSytYO-F/src/watcher/file.zig"
+oracle_missing=0
+if [ -f "$XEV_CUR_FILE" ]; then
+  echo "  OK      libxev (oracle pin) -> $XEV_CUR_FILE"
+else
+  echo "  MISSING libxev (oracle pin) -> $XEV_CUR_FILE (in the read-only oracle checkout; not restorable here)"
+  oracle_missing=1
+fi
+
 if [ "$VERIFY_ONLY" -eq 1 ]; then
-  if [ "${#missing[@]}" -gt 0 ]; then
+  if [ "${#missing[@]}" -gt 0 ] || [ "$oracle_missing" -eq 1 ]; then
     echo "VERIFY-ONLY: ${#missing[@]} corpus/corpora absent or incomplete."
     echo "Restore with: bash .port/tools/restore_zig_deps.sh"
     exit 1

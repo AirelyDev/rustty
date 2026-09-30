@@ -48,11 +48,12 @@ MIN_TESTS=44
 # The oracle for the action-set arm, and the stripped git runner that reads it.
 # `rustty_oracle_git` removes every GIT_* variable: a plain `git -C "$ORACLE"
 # show` honours GIT_DIR, so a decoy repository could hand this arm any action
-# list (R5). The path stays fixed (no environment override) and is read at
-# `origin/main` on purpose, so no pin applies — see the arm below.
-ORACLE="/Users/gael/projects/ghostty"
+# list (R5). The path is DERIVED (N483: `ghostty` beside the main checkout, no
+# environment override) and is read at `origin/main` on purpose, so no pin
+# applies — see the arm below.
 # shellcheck source=.port/tools/gates/_oracle_root.sh
 source "$SELF_DIR/_oracle_root.sh" || { echo "BLOCKED: cannot source _oracle_root.sh" >&2; exit 3; }
+ORACLE="$(rustty_oracle_root "$RUSTTY_ROOT")"
 
 # oracle_actions ORACLE OUT — the ONLY read of the oracle: the sorted action
 # names of `origin/main:src/benchmark/cli.zig`, written to OUT.

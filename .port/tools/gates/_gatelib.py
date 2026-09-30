@@ -1068,6 +1068,50 @@ def oracle_pin(path=None):
     return pin if re.fullmatch(r"[0-9a-f]{40}", pin) else None
 
 
+def oracle_pin_problem(oracle=None, pin=None):
+    """Why the ORACLE checkout cannot be trusted at the pin, or None when it can.
+
+    The Python twin of `_oracle_root.sh`'s `rustty_oracle_pin_status` (N483): a
+    missing checkout, a directory that is not a repository, an unreadable or
+    malformed `ORACLE_PIN`, and a HEAD that is not exactly the pin each return a
+    one-line reason. A gate that reads the oracle's WORKING TREE calls this
+    first and turns any reason into BLOCKED (exit 3), never into a skip. Every
+    read of the oracle goes through `oracle_git` (GIT_* stripped)."""
+    oracle = oracle if oracle is not None else oracle_root()
+    pin = pin if pin is not None else oracle_pin()
+    if not os.path.isdir(oracle):
+        return f"no oracle checkout at {oracle}"
+    if not pin:
+        return f"the oracle pin file {ORACLE_PIN_FILE} is missing or not a 40-hex commit"
+    try:
+        r = oracle_git(oracle, "rev-parse", "--verify", "-q", "HEAD",
+                       capture_output=True, text=True)
+    except OSError:
+        return f"{oracle} is not a checkout with a HEAD"
+    if r.returncode != 0 or not r.stdout.strip():
+        return f"{oracle} is not a checkout with a HEAD"
+    head = r.stdout.strip()
+    if head != pin:
+        return f"the oracle at {oracle} is at {head}, not the pin {pin}"
+    return None
+
+
+def zig_cache_root():
+    """zig's global cache directory, resolved the way zig does (N483): the
+    `ZIG_GLOBAL_CACHE_DIR` override, else `$XDG_CACHE_HOME/zig`, else
+    `~/.cache/zig` (zig's default on Linux and macOS alike). Never a fixed home.
+
+    Content-addressed packages live under `<root>/p/<name-version-hash>`. The
+    path is only LOCATED here: a package directory that is absent is the
+    caller's BLOCKED, and `restore_zig_deps.sh` is the way back."""
+    env = os.environ
+    if env.get("ZIG_GLOBAL_CACHE_DIR"):
+        return env["ZIG_GLOBAL_CACHE_DIR"]
+    if env.get("XDG_CACHE_HOME"):
+        return os.path.join(env["XDG_CACHE_HOME"], "zig")
+    return os.path.join(os.path.expanduser("~"), ".cache", "zig")
+
+
 def oracle_git(oracle, *args, **kw):
     """`git -C <oracle> <args>` with every `GIT_*` variable removed (R5).
 

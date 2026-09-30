@@ -21,6 +21,9 @@ exit 3 as a WARNING, never a pass).
 """
 import re, sys, glob, os
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _gatelib as G  # noqa: E402  (the one oracle/zig-cache resolver)
+
 # WS19 T1 (N1): the RUST side must follow the CHECKOUT THIS SCRIPT LIVES IN, not a
 # hardcoded absolute path. Run from a git worktree, the old hardcodes made the gate
 # count `main`'s tests while reporting on the worktree's changes — G1b was VACUOUS for
@@ -32,17 +35,23 @@ import re, sys, glob, os
 GATES_DIR = os.path.dirname(os.path.abspath(__file__))
 RS_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(GATES_DIR)))
 
-# The ORACLE root stays hardcoded ON PURPOSE (R3: the oracle is an EXTERNAL reference,
-# never shipped to CI) and stays NON-overridable: `.port/tools/ci.sh:114-129` records
-# why an env-redirectable oracle probe was killed as a spoof hole (probe passes against
-# a fake dir while the script counts zig=0 everywhere -> vacuous green, R5).
-GH_ROOT = "/Users/gael/projects/ghostty"
+# The ORACLE root is DERIVED, not hardcoded (N483), and stays NON-overridable (R3: the
+# oracle is an EXTERNAL reference, never shipped to CI): `_gatelib.oracle_root()` is
+# `ghostty` beside the MAIN checkout (the same rule as `_oracle_root.sh`), with no
+# environment override — `.port/tools/ci.sh:114-129` records why an env-redirectable
+# oracle probe was killed as a spoof hole (probe passes against a fake dir while the
+# script counts zig=0 everywhere -> vacuous green, R5). A missing or off-pin oracle is
+# BLOCKED in `main()` (`_gatelib.oracle_pin_problem`). The zig package cache resolves the
+# way zig does (`_gatelib.zig_cache_root`); a package dir that is absent is BLOCKED by
+# the missing-reference guard in `main()`.
+GH_ROOT = G.oracle_root()
+ZIG_P = os.path.join(G.zig_cache_root(), "p")
 
-GH = "/Users/gael/projects/ghostty/src/terminal"
+GH = f"{GH_ROOT}/src/terminal"
 RS = f"{RS_ROOT}/crates/rustty-vt/src"
 
 # rustty-font: GH base differs (src/font, not src/terminal).
-GHF = "/Users/gael/projects/ghostty/src/font"
+GHF = f"{GH_ROOT}/src/font"
 RSF = f"{RS_ROOT}/crates/rustty-font/src"
 
 # rustty-font-shaper: the D1 3-tier shaper crate (ABOVE vt+font). Same GH base
@@ -56,7 +65,7 @@ RSF = f"{RS_ROOT}/crates/rustty-font/src"
 RSFS = f"{RS_ROOT}/crates/rustty-font-shaper/src"
 
 # rustty-args: GH base differs (src/cli, not src/terminal). Stage C.
-GHC = "/Users/gael/projects/ghostty/src/cli"
+GHC = f"{GH_ROOT}/src/cli"
 RSA = f"{RS_ROOT}/crates/rustty-args/src"
 
 # rustty-cli: GH base = src/cli (same GHC) + src/cli.zig. Phase-2 CLI milestone.
@@ -65,11 +74,11 @@ RSCLI = f"{RS_ROOT}/crates/rustty-cli/src"
 # rustty-extra: GH base = src/extra (shell completions + editor syntax). The five
 # comptime generators; only fish.zig (`getDescription`) + vim.zig (anon `test {}`,
 # skipped by zig_count) carry tests.
-GHX = "/Users/gael/projects/ghostty/src/extra"
+GHX = f"{GH_ROOT}/src/extra"
 RSX = f"{RS_ROOT}/crates/rustty-extra/src"
 
 # rustty-terminfo: GH base differs (src/terminfo, not src/terminal). Stage C.
-GHT = "/Users/gael/projects/ghostty/src/terminfo"
+GHT = f"{GH_ROOT}/src/terminfo"
 RST = f"{RS_ROOT}/crates/rustty-terminfo/src"
 
 # rustty-cfg-fmt: GH base = src/config (config/formatter.zig). Near-leaf below
@@ -77,7 +86,7 @@ RST = f"{RS_ROOT}/crates/rustty-terminfo/src"
 # Config later). Distinct from the EXISTING `formatter` module above, which maps
 # the much larger src/terminal/formatter.zig (the Page/Screen/Terminal debug
 # formatters in rustty-vt).
-GHCFG = "/Users/gael/projects/ghostty/src/config"
+GHCFG = f"{GH_ROOT}/src/config"
 RSCF = f"{RS_ROOT}/crates/rustty-cfg-fmt/src"
 
 # rustty-config: C1 leaf value-types (same GH base = src/config as GHCFG above).
@@ -89,7 +98,7 @@ RSCG = f"{RS_ROOT}/crates/rustty-config/src"
 # src/input/: Binding/command/config/keycodes/KeymapDarwin/KeymapNoop/Link/
 # keyboard/helpgen_actions (+ the config-dependent RemapSet/translation half of
 # key_mods, counted by the existing input_key_mods entry above).
-GHI = "/Users/gael/projects/ghostty/src/input"
+GHI = f"{GH_ROOT}/src/input"
 RSI = f"{RS_ROOT}/crates/rustty-input/src"
 
 # rustty-renderer: the R-a headless renderer slice (heavy-tier, R-a of memory
@@ -104,7 +113,7 @@ RSI = f"{RS_ROOT}/crates/rustty-input/src"
 # ported now that Oniguruma landed — the previous apc_deferred=3 is flipped to 0
 # (mirrors the config url-regex + input Link.zig resolutions, DEFERRALS.md). The GPU
 # draw path (Metal/OpenGL/generic/image/custom shaders) is R-d/Phase 3.
-GHR = "/Users/gael/projects/ghostty/src/renderer"
+GHR = f"{GH_ROOT}/src/renderer"
 RSR = f"{RS_ROOT}/crates/rustty-renderer/src"
 RSRT = f"{RS_ROOT}/crates/rustty-render-types/src"
 
@@ -115,7 +124,7 @@ RSRT = f"{RS_ROOT}/crates/rustty-render-types/src"
 # (28 c/*.zig ref files vs the whole vt-c src tree) because the C wrappers are one
 # tightly-coupled ABI surface; the per-crate `cargo test -p rustty-vt-c` count is
 # the authoritative backstop and this gate guards rust #[test] >= zig test{}.
-GHVC = "/Users/gael/projects/ghostty/src/terminal/c"
+GHVC = f"{GH_ROOT}/src/terminal/c"
 RSVC = f"{RS_ROOT}/crates/rustty-vt-c/src"
 
 # rustty-apprt-api: the A5 keystone interface crate (break #8, breaks apprt<->core).
@@ -125,7 +134,7 @@ RSVC = f"{RS_ROOT}/crates/rustty-vt-c/src"
 # for the future rustty-apprt crate. renderer.Health (a 2-variant enum(c_int) with
 # zero GPU dep) is hoisted into the rustty-renderer crate root (like the
 # render-types A1 size hoist) and mapped by `renderer_health` below.
-GHAP = "/Users/gael/projects/ghostty/src/apprt"
+GHAP = f"{GH_ROOT}/src/apprt"
 RSAP = f"{RS_ROOT}/crates/rustty-apprt-api/src"
 # rustty-apprt: the concrete apprt backends (embedded/none/browser), EMBEDDED_BLUEPRINT
 # §7. Same GH base = src/apprt as GHAP above (the backend files, not the seam). The
@@ -139,29 +148,29 @@ RSAPPRTC = f"{RS_ROOT}/crates/rustty-apprt-c/src"
 # main_ghostty.zig live beside App.zig). CLI_BLUEPRINT.md §5/§6 chunk C6.
 RSBIN = f"{RS_ROOT}/crates/rustty/src"
 # renderer.zig is at src/renderer.zig (crate root), one level above GHR (src/renderer).
-GHSRC = "/Users/gael/projects/ghostty/src"
+GHSRC = f"{GH_ROOT}/src"
 
 # rustty-crash: the crash tier (integration-tier blueprint stage 1). GH base =
 # src/crash. The `pkg/sentry` Zig binding package is hosted in-crate as the
 # `sentry_pkg` module (dep-glue over the vendored sentry-sys) and counted with
 # crash_sentry (its only anon `test { refAllDecls }` is skipped by zig_count;
 # the Rust side adds reify/seam helper tests — rust >= zig holds).
-GHCR = "/Users/gael/projects/ghostty/src/crash"
-GHPKGS = "/Users/gael/projects/ghostty/pkg/sentry"
+GHCR = f"{GH_ROOT}/src/crash"
+GHPKGS = f"{GH_ROOT}/pkg/sentry"
 RSCR = f"{RS_ROOT}/crates/rustty-crash/src"
 
 # rustty-termio: the termio tier (integration-tier blueprint stage 2+). GH base
 # = src/termio (+ termio.zig at src root). Stage 2 lands the dep wiring + the
 # struct shapes of the 0-test files + message.zig; Exec/shell_integration/
 # stream_handler (+ the relocated src/Command.zig, break #13b) are stages 3-4.
-GHTIO = "/Users/gael/projects/ghostty/src/termio"
+GHTIO = f"{GH_ROOT}/src/termio"
 RSTIO = f"{RS_ROOT}/crates/rustty-termio/src"
 
 # rustty-inspector: core-tier chunk C1 (CORE_BLUEPRINT §4). GH base =
 # src/inspector. Only the pure-data key-widget surface (Event/EventRing/label)
 # + the main.zig KeyEvent re-export are carved; ALL inspector GUI logic
 # (Inspector.zig, units.zig, the other widgets, dcimgui) is Phase 3.
-GHINS = "/Users/gael/projects/ghostty/src/inspector"
+GHINS = f"{GH_ROOT}/src/inspector"
 RSINS = f"{RS_ROOT}/crates/rustty-inspector/src"
 
 # rustty-core: the core tier (CORE_BLUEPRINT §6/§7). GH base = src root
@@ -181,12 +190,12 @@ RSCORE = f"{RS_ROOT}/crates/rustty-core/src"
 # (DEFERRALS.md), so only the in-scope files are mapped. C1 seeds the mapping with
 # the three pure intrusive data-structure files (queue/queue_mpsc/heap); later
 # chunks add darwin/loop/kqueue/async/timer/process/stream entries.
-GHXEV = "/Users/gael/.cache/zig/p/libxev-0.0.0-86vtc4IcEwCqEYxEYoN_3KXmc6A9VLcm22aVImfvecYs/src"
+GHXEV = f"{ZIG_P}/libxev-0.0.0-86vtc4IcEwCqEYxEYoN_3KXmc6A9VLcm22aVImfvecYs/src"
 # The CURRENT ghostty pin (libxev 9ce8e8e6, hash 86vtcwIR…), extracted from the
 # tarball ghostty's build.zig.zon names. If this checkout is absent, re-extract
-# /Users/gael/.cache/zig/p/libxev-0.0.0-86vtcwIRFADbH4hk-EjROXxlrKIRPQdA41XiTSytYO-F.tar.gz
+# <zig cache>/p/libxev-0.0.0-86vtcwIRFADbH4hk-EjROXxlrKIRPQdA41XiTSytYO-F.tar.gz
 # to this path (the R3 guard below turns its absence into BLOCKED, never green).
-GHXEV_CUR = "/Users/gael/projects/ghostty/zig-pkg/libxev-0.0.0-86vtcwIRFADbH4hk-EjROXxlrKIRPQdA41XiTSytYO-F/src"
+GHXEV_CUR = f"{GH_ROOT}/zig-pkg/libxev-0.0.0-86vtcwIRFADbH4hk-EjROXxlrKIRPQdA41XiTSytYO-F/src"
 RSXEV = f"{RS_ROOT}/crates/rustty-xev/src"
 
 # rustty-wuffs: the pkg/wuffs safe-wrapper parity crate (the renderer's
@@ -199,7 +208,7 @@ RSXEV = f"{RS_ROOT}/crates/rustty-xev/src"
 # P7-W0 T4: zlib.zig (NEW at the Phase-7 pin, `4b86e3594`: kitty zlib through wuffs)
 # carries 5 named tests: the row reads zig 8 -> 13 at arrival (still GREEN by
 # slack, rust=20), so the 5 names are the per-test meter (DECISIONS B8).
-GHWUFFS = "/Users/gael/projects/ghostty/pkg/wuffs/src"
+GHWUFFS = f"{GH_ROOT}/pkg/wuffs/src"
 RSWUFFS = f"{RS_ROOT}/crates/rustty-wuffs/src"
 
 # rustty-zf: the vendored `zf` 0.11.0 (0.10.3 until parity tail S-10b) fuzzy-finder parity crate (the theme-picker
@@ -211,7 +220,7 @@ RSWUFFS = f"{RS_ROOT}/crates/rustty-wuffs/src"
 # rankNeedle, FixedArrayList); clib.zig carries 2 (rank/highlight exported C library
 # interface). zig=9; the Rust side adds the ref_all_decls compile-touch and the
 # default-polarity pin (rust=11 >= 9).
-GHZF = "/Users/gael/.cache/zig/p/zf-0.11.0-OIRy8X-RAAAwaRXHMYpj2uvBnuGTZWEE_3V7acqHQNtW/src/zf"
+GHZF = f"{ZIG_P}/zf-0.11.0-OIRy8X-RAAAwaRXHMYpj2uvBnuGTZWEE_3V7acqHQNtW/src/zf"
 RSZF = f"{RS_ROOT}/crates/rustty-zf/src"
 
 # rustty-vaxis: the vendored `libvaxis` 0.6.0 (0.5.1 until parity tail S-10b) TUI-lib parity crate (the interactive
@@ -237,7 +246,7 @@ RSZF = f"{RS_ROOT}/crates/rustty-zf/src"
 # `{RSVAXIS}/vxfw/*.rs`. zig = 87 + 18 = 105. apc_deferred = 1: the doctest source scan
 # (`vxfw.zig:541`) reads `./src/vxfw/*.zig` at run time and has no Rust counterpart
 # (NEW-FINDINGS N240). `--self-test` binds this row (VAXIS_VXFW_FILES, VAXIS_APC).
-GHVAXIS = "/Users/gael/.cache/zig/p/vaxis-0.6.0-BWNV_CrbCQCscGpzsAlR402rYQ_tV3aAl081c2iRRkka/src"
+GHVAXIS = f"{ZIG_P}/vaxis-0.6.0-BWNV_CrbCQCscGpzsAlR402rYQ_tV3aAl081c2iRRkka/src"
 RSVAXIS = f"{RS_ROOT}/crates/rustty-vaxis/src"
 VAXIS_VXFW_FILES = ["Vaxis.zig", "vxfw/vxfw.zig", "vxfw/App.zig", "vxfw/Text.zig", "vxfw/Center.zig"]
 VAXIS_APC = 1  # the vxfw doctest source scan, see above
@@ -276,12 +285,12 @@ MAP = {
     "tabstops":        ([f"{GH}/Tabstops.zig"], [f"{RS}/tabstops.rs"], 0),
     "utf8_decoder":    ([f"{GH}/UTF8Decoder.zig"], [f"{RS}/UTF8Decoder.zig" if False else f"{RS}/utf8_decoder.rs"], 0),
     # vt-14 input slice (src/input/, pulled into vt)
-    "input_mouse":       (["/Users/gael/projects/ghostty/src/input/mouse.zig"], [f"{RS}/input/mouse.rs"], 0),
-    "input_paste":       (["/Users/gael/projects/ghostty/src/input/paste.zig"], [f"{RS}/input/paste.rs"], 0),
-    "input_key":         (["/Users/gael/projects/ghostty/src/input/key.zig"], [f"{RS}/input/key.rs"], 0),
-    "input_mouse_encode":(["/Users/gael/projects/ghostty/src/input/mouse_encode.zig"], [f"{RS}/input/mouse_encode.rs"], 0),
-    "input_key_encode":  (["/Users/gael/projects/ghostty/src/input/key_encode.zig"], [f"{RS}/input/key_encode.rs"], 0),
-    "input_function_keys":(["/Users/gael/projects/ghostty/src/input/function_keys.zig"], [f"{RS}/input/function_keys.rs"], 0),
+    "input_mouse":       ([f"{GH_ROOT}/src/input/mouse.zig"], [f"{RS}/input/mouse.rs"], 0),
+    "input_paste":       ([f"{GH_ROOT}/src/input/paste.zig"], [f"{RS}/input/paste.rs"], 0),
+    "input_key":         ([f"{GH_ROOT}/src/input/key.zig"], [f"{RS}/input/key.rs"], 0),
+    "input_mouse_encode":([f"{GH_ROOT}/src/input/mouse_encode.zig"], [f"{RS}/input/mouse_encode.rs"], 0),
+    "input_key_encode":  ([f"{GH_ROOT}/src/input/key_encode.zig"], [f"{RS}/input/key_encode.rs"], 0),
+    "input_function_keys":([f"{GH_ROOT}/src/input/function_keys.zig"], [f"{RS}/input/function_keys.rs"], 0),
     # key_mods.zig is split across two crates: the VT-Mods slice (Mods packed
     # struct + VT methods + bit-layout test) in rustty-vt's input/key_mods.rs,
     # and the config-dependent RemapSet/translation slice (the 23 RemapSet: +
@@ -289,7 +298,7 @@ MAP = {
     # 23 are no longer deferred — they landed once OptionAsAlt + cfg-fmt became
     # available — so apc_deferred is now 0 and BOTH rust files count against the
     # one zig file (vt=1 anon test + input=23 -> 24 >= 23).
-    "input_key_mods":    (["/Users/gael/projects/ghostty/src/input/key_mods.zig"], [f"{RS}/input/key_mods.rs", f"{RS_ROOT}/crates/rustty-input/src/key_mods.rs"], 0),
+    "input_key_mods":    ([f"{GH_ROOT}/src/input/key_mods.zig"], [f"{RS}/input/key_mods.rs", f"{RS_ROOT}/crates/rustty-input/src/key_mods.rs"], 0),
     # vt-15 search/ (gated)
     "search":            ([f"{GH}/search/Thread.zig", f"{GH}/search/active.zig", f"{GH}/search/pagelist.zig", f"{GH}/search/screen.zig", f"{GH}/search/sliding_window.zig", f"{GH}/search/terminal.zig", f"{GH}/search/viewport.zig"], [f"{RS}/search/*.rs"], 0),
     # vt-16 tmux/ (control mode; oniguruma-gated control tests counted via static
@@ -738,7 +747,7 @@ MAP = {
     # ported as lib.rs's ref_all_decls reify smoke (the blueprint's "root 1"
     # of termio=44, accounted HERE exactly once; its shell_integration reify
     # half lands with stage 4's 21 tests). rust=1 >= 0.
-    "termio_root":       (["/Users/gael/projects/ghostty/src/termio.zig"], [f"{RSTIO}/lib.rs"], 0),
+    "termio_root":       ([f"{GH_ROOT}/src/termio.zig"], [f"{RSTIO}/lib.rs"], 0),
     # Exec.zig (integration-tier stage 4): 10 quoted tests -> 10 live #[test]
     # in exec.rs (the 2 darwin-only + 4 windows-only tests keep the reference's
     # SkipZigTest cfg-gating — stage-3 Command / F3 DirectWrite precedent). The
@@ -1052,6 +1061,50 @@ def self_test_rows():
     return not fails
 
 
+def self_test_paths():
+    """N483: path resolution, and the negative controls for the oracle check.
+
+    A missing oracle and a wrong-pin oracle must each yield a reason (-> BLOCKED in
+    `main()`), the right pin must yield none, and the zig cache must follow
+    ZIG_GLOBAL_CACHE_DIR, then XDG_CACHE_HOME, then ~/.cache/zig."""
+    import subprocess, tempfile
+    fails = []
+
+    def arm(ok, label):
+        print(f"  {'ok  ' if ok else 'FAIL'} {label}")
+        if not ok:
+            fails.append(label)
+
+    saved = {k: os.environ.pop(k, None) for k in ("ZIG_GLOBAL_CACHE_DIR", "XDG_CACHE_HOME")}
+    try:
+        arm(G.zig_cache_root() == os.path.join(os.path.expanduser("~"), ".cache", "zig"),
+            "zig cache defaults to ~/.cache/zig")
+        os.environ["XDG_CACHE_HOME"] = "/x/xdg"
+        arm(G.zig_cache_root() == "/x/xdg/zig", "zig cache honours XDG_CACHE_HOME")
+        os.environ["ZIG_GLOBAL_CACHE_DIR"] = "/x/zig"
+        arm(G.zig_cache_root() == "/x/zig", "ZIG_GLOBAL_CACHE_DIR wins over XDG_CACHE_HOME")
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+    with tempfile.TemporaryDirectory() as td:
+        fx = os.path.join(td, "ghostty")
+        os.makedirs(fx)
+        ident = ["-c", "user.name=t", "-c", "user.email=t@invalid", "-c", "commit.gpgsign=false"]
+        G.oracle_git(fx, "init", "-q", check=True)
+        G.oracle_git(fx, *ident, "commit", "-q", "--allow-empty", "-m", "f", check=True)
+        head = G.oracle_git(fx, "rev-parse", "HEAD", check=True,
+                            capture_output=True, text=True).stdout.strip()
+        arm(G.oracle_pin_problem(fx, head) is None, "an oracle at the pin passes")
+        arm(G.oracle_pin_problem(fx, "0" * 40) is not None, "NEGATIVE: a wrong-pin oracle is refused")
+        arm(G.oracle_pin_problem(os.path.join(td, "absent"), head) is not None,
+            "NEGATIVE: a missing oracle is refused")
+        arm(G.oracle_pin_problem(td, head) is not None, "NEGATIVE: a non-checkout directory is refused")
+        arm(G.oracle_pin_problem(fx, "") is not None, "NEGATIVE: a missing pin is refused")
+    return not fails
+
+
 def self_test():
     """G1b's self-test (oracle-free, so ci.sh runs it before the oracle probe).
 
@@ -1065,6 +1118,9 @@ def self_test():
     print(f"  {'ok  ' if ok else 'FAIL'} GIT_DIR + GIT_WORK_TREE do not redirect RS_ROOT")
     if not ok:
         print(f"       ({why})")
+        print("G1b SELF-TEST: RED")
+        return 1
+    if not self_test_paths():
         print("G1b SELF-TEST: RED")
         return 1
     if not self_test_rows():
@@ -1087,6 +1143,11 @@ def main():
     # WARNING, never a pass). This binds INSIDE the gate so no wrapper/probe
     # mismatch (e.g. an env override the probe honors but this script ignores)
     # can convert an absent oracle into a green.
+    why = G.oracle_pin_problem(GH_ROOT)
+    if why:
+        print("TEST-COUNT GATE: BLOCKED — " + why + " (R3; N483): the oracle is the")
+        print("`ghostty` checkout beside the main rustty checkout, at the ORACLE_PIN commit.")
+        sys.exit(3)
     missing = []
     for mod, (zg, _rg, _apc) in MAP.items():
         if only and mod != only:

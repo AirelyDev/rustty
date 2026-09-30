@@ -43,6 +43,11 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 # literal beyond what the map itself pins.
 # shellcheck source=/dev/null
 source "$REPO_ROOT/.port/tools/parity_names.env"
+# N483: the oracle is DERIVED (`ghostty` beside the main checkout), not written in the map.
+# shellcheck source=.port/tools/gates/_oracle_root.sh
+source "$REPO_ROOT/.port/tools/gates/_oracle_root.sh" || { echo "BLOCKED: cannot source _oracle_root.sh" >&2; exit 3; }
+ORACLE_TREE="$(rustty_oracle_root "$REPO_ROOT")"
+ORACLE_HEADER_PATH="$ORACLE_TREE/include/ghostty.h"
 
 TSV="${CABI_SYMBOLS_TSV:-$REPO_ROOT/$CABI_MAP}"
 GHOSTTY_H="${GHOSTTY_H:-$ORACLE_HEADER_PATH}"

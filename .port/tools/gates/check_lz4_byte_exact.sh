@@ -60,13 +60,13 @@
 # 1,631 and not the plan's 1,929 (assessment B's harnesses were transient and
 # never committed, so there is no artifact to converge on).
 #
-# The oracle path is hard-coded on purpose. An env override would let the gate
+# The oracle path is DERIVED, never caller-set (N483: `ghostty` beside the main
+# checkout, via `rustty_oracle_root`). An env override would let the gate
 # pass against a fake tree — the same spoof hole `ci.sh:114-129` documents for
 # the test-count gate.
 
 set -uo pipefail
 
-ORACLE="/Users/gael/projects/ghostty"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 GATEDIR="$ROOT/.port/tools/gates/lz4_differential"
 LZ4_RS="$ROOT/crates/rustty-vt/src/compress/lz4.rs"
@@ -89,6 +89,7 @@ say() { echo "[G-LZ4] $*"; }
 # answer `git -C "$ORACLE" show` from another repository (R5).
 # shellcheck source=.port/tools/gates/_oracle_root.sh
 source "$ROOT/.port/tools/gates/_oracle_root.sh" || { say "BLOCKED: cannot source _oracle_root.sh"; exit 3; }
+ORACLE="$(rustty_oracle_root "$ROOT")"
 
 # read_oracle_codec ORACLE DEST — the ONLY read of the oracle: lz4.zig and
 # lz4_differential.zig at origin/main, into DEST. Returns non-zero (with git's

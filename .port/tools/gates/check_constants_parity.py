@@ -62,7 +62,7 @@ def _parity_names(root):
     rename never makes the port look artificially divergent from the oracle.
     Falls back to the pre-Task-0 hardcoded default if the map is absent so
     this loader can never turn a missing-map case into a crash."""
-    d = {"ORACLE_TREE": "/Users/gael/projects/ghostty"}
+    d = {"ORACLE_TREE": g.oracle_root()}
     try:
         with open(os.path.join(root, ".port/tools/parity_names.env")) as f:
             for line in f:

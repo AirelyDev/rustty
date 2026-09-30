@@ -17,11 +17,31 @@
 //   the byte-parity flow below, which additionally needs an oracle
 //   `ghostty-vt.wasm` whose `type_json` matches the flow's struct expectations.
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const TABLE_ONLY = process.argv.includes("--table-only");
 
-const GHOSTTY = "/Users/gael/projects/ghostty/zig-out/bin/ghostty-vt.wasm";
-const RUSTTY = "/Users/gael/projects/rustty/zig-out/bin/rustty-vt.wasm";
+// N483: the oracle is `ghostty` beside the MAIN checkout, resolved by the shell twin
+// `_oracle_root.sh` (one rule for every gate, no environment override).
+function resolveOracleRoot() {
+  const here = fileURLToPath(new URL(".", import.meta.url));
+  const root = resolve(here, "..", "..");
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_")),
+  );
+  return execFileSync(
+    "bash",
+    ["-c", '. "$1" || exit 3; rustty_oracle_root "$2"', "oracle_root",
+      join(root, ".port/tools/gates/_oracle_root.sh"), root],
+    { env, encoding: "utf8" },
+  ).trim();
+}
+
+const REPO = resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..");
+const GHOSTTY = join(resolveOracleRoot(), "zig-out/bin/ghostty-vt.wasm");
+const RUSTTY = join(REPO, "zig-out/bin/rustty-vt.wasm");
 
 // The exact default input from the wasm-vt example (\x1b/\r/\n unescaped).
 const VT =

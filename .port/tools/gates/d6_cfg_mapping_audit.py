@@ -41,7 +41,10 @@ import re
 import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-ORACLE = "/Users/gael/projects/ghostty"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _gatelib  # noqa: E402  (N483: the one oracle resolver)
+
+ORACLE = _gatelib.oracle_root()
 
 RED = "\033[31m" if sys.stdout.isatty() else ""
 GRN = "\033[32m" if sys.stdout.isatty() else ""

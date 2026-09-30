@@ -4,7 +4,8 @@
 set -e
 name="$1"; [ -n "$name" ] || { echo "usage: cvt-parity.sh <c-vt-example>"; exit 2; }
 root=$(cd "$(dirname "$0")/../.." && pwd)
-gdir="/Users/gael/projects/ghostty/example/$name"
+# N483: the oracle is `ghostty` beside the main checkout (`rustty_oracle_root`), not a fixed path.
+gdir="$(bash -c '. "$1" || exit 3; rustty_oracle_root "$2"' oracle_root "$root/.port/tools/gates/_oracle_root.sh" "$root")/example/$name"
 rdir="$root/example/$name"
 T="${TMPDIR:-/tmp}"
 [ -d "$gdir" ] || { echo "BLOCKED: ghostty example $gdir absent"; exit 3; }

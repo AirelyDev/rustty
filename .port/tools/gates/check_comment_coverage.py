@@ -44,10 +44,10 @@ import _g3b_not_carried as NC  # noqa: E402  (S-8d NOT-CARRIED ledger)
 # shape `ci.sh:114-129` documents for the test-count gate: point the variable at
 # an empty or fake tree and every reference file is missing, so the gate finds
 # zero reference sentences everywhere and reports full coverage against nothing.
-# The oracle is an EXTERNAL read-only reference (R3) at one hard-coded path;
+# The oracle is an EXTERNAL read-only reference (R3) at one DERIVED path (N483: `ghostty` beside the main checkout);
 # `P3-W10 T3` advances that real tree, which is the only supported way to change
 # what this gate reads.
-GHOSTTY_SRC = "/Users/gael/projects/ghostty/src"
+GHOSTTY_SRC = os.path.join(G.oracle_root(), "src")
 INV = os.path.join(G.RUSTTY_ROOT, ".port", "phase-0", "inventory")
 sys.path.insert(0, INV)
 import census_comments as CC  # noqa: E402  (reuse string-aware find_comment_start)

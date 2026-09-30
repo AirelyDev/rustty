@@ -14,7 +14,10 @@ File-level reachability + SCC condensation for ghostty src/.
 import os, re, sys
 from collections import defaultdict
 
-SRC = os.environ.get("GHOSTTY_SRC", "/Users/gael/projects/ghostty/src")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "gates"))
+import _gatelib  # noqa: E402  (N483: the one oracle resolver)
+
+SRC = os.environ.get("GHOSTTY_SRC", os.path.join(_gatelib.oracle_root(), "src"))
 IMPORT_RE = re.compile(r'@import\("([^"]+)"\)')
 TEST_OPEN = re.compile(r'^\s*test\b.*\{\s*$')
 
