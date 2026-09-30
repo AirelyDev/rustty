@@ -1785,7 +1785,7 @@ impl Window {
     pub fn resize_surface(&self, surface: &Surface, size: ResizeWindow) -> bool {
         // const tree = ext.getAncestor(SplitTree, surface.as(gtk.Widget)) orelse return false;
         // if (tree.getIsSplit()) return false;
-        let is_split = ext::ancestor::<SplitTree>(surface).map(|t| t.property::<bool>("is-split"));
+        let is_split = ext::ancestor::<SplitTree>(surface).map(|t| t.is_split());
         if resize_surface_refused(ResizeSurfaceState {
             quick_terminal: self.is_quick_terminal(),
             maximized: self.is_maximized(),

@@ -250,19 +250,38 @@ fn resize_window_refuses_tiled_resizes_floating_and_clamps_ud372() {
     //      would re-assert the current size; the `resize_requested` one-shot
     //      makes it step aside. ----
     let cur = surface.get_size();
+    let scale = surface.get_content_scale();
+    let factor = window.scale_factor() as f32;
+    let (old_w, old_h) = (window.width(), window.height());
+    // `resizeDelta`'s arithmetic, recomputed here from the same inputs, so the
+    // default size the port set is checked to the pixel.
+    let dw = ((400.0 * scale.x - cur.width as f32) / factor).round() as i32;
+    let dh = ((300.0 * scale.y - cur.height as f32) / factor).round() as i32;
     let performed = resize_window(&application, core, 400, 300);
     assert!(performed, "the shrink request is performed");
-    // The height is checked only for a shrink well below the old one: the
-    // reference resizes the window by the surface's size change, which assumes
-    // the chrome above the surface keeps its height. At 400 px wide it does not
-    // quite (on rvm the surface came out 400x294, the window 400x389), a
-    // property of 219cca932's delta method, not of the port.
+    assert_eq!(
+        window.default_size(),
+        (old_w + dw, old_h + dh),
+        "setDefaultSize(widget width + dw, widget height + dh) from a \
+         {old_w}x{old_h} window and a {cur:?} surface"
+    );
+    // The width is exact. The height may fall short by the chrome drift only:
+    // the reference resizes the window by the surface's size change, which
+    // assumes the headerbar and tab bar keep their height. At 400 px wide they
+    // grow a little (on rvm the surface came out 400x294 for a 400x389
+    // window), a property of 219cca932's delta method, not of the port. So
+    // the shortfall is one-sided and bounded by the measured amount.
     let shrunk = pump_until(10, &|| {
         let s = surface.get_size();
-        s.width.abs_diff(400) <= 1 && s.height.abs_diff(300) <= 10
+        s.width.abs_diff(400) <= 1 && (0..=10).contains(&(300 - i64::from(s.height)))
     });
     let after = surface.get_size();
-    eprintln!("RESIZE shrink from full head: {cur:?} -> {after:?}, expected 400x300 (height +-10)");
+    eprintln!(
+        "RESIZE shrink from full head: window {old_w}x{old_h} -> default {:?} \
+         (dw {dw}, dh {dh}); surface {cur:?} -> {after:?}, expected 400x300 \
+         (height up to 10 short)",
+        window.default_size()
+    );
     assert!(
         shrunk,
         "the screen-filling window did not shrink: surface {after:?} (the \
