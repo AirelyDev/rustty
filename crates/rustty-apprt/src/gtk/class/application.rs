@@ -3793,6 +3793,10 @@ impl Application {
             // `.resize_split => return Action.resizeSplit(target, value)` (`:742`).
             Action::ResizeSplit(v) => return Ok(action::resize_split(target, v)),
 
+            // `.resize_window => return Action.resizeWindow(target, value)`
+            // (`:771`, 219cca932).
+            Action::ResizeWindow(v) => return Ok(action::resize_window(target, v)),
+
             // `.ring_bell => Action.ringBell(target)` (`:744`).
             Action::RingBell => action::ring_bell(target),
 
@@ -3865,8 +3869,6 @@ impl Application {
             | Action::RendererHealth(_)
             | Action::ColorChange(_)
             | Action::ResetWindowSize
-            // (714fe9b90; implemented on GTK by 219cca932, P7-W6 T2.)
-            | Action::ResizeWindow(_)
             | Action::CheckForUpdates
             | Action::Undo
             | Action::Redo => {
@@ -4982,6 +4984,36 @@ mod action {
                         false
                     }
                 }
+            }
+        }
+    }
+
+    /// `pub fn resizeWindow(target, value) bool` (`application.zig:2917-2939`,
+    /// 219cca932). Reaches the enclosing [`Window`] and asks it to resize so the
+    /// surface is the requested size ([`Window::resize_surface`]).
+    //
+    // PORT NOTE (N456): the core surface is reached only through `widget(v)`'s
+    // one `rt_surface` read. No reference to it is held across
+    // `resize_surface`, whose `set_default_size` can run GTK layout.
+    pub(super) fn resize_window<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        value: rustty_apprt_api::action::ResizeWindow,
+    ) -> bool {
+        match target {
+            Target::App => {
+                log::warn!(target: LOG_SCOPE, "resize_window to app is unexpected");
+                false
+            }
+            Target::Surface(v) => {
+                // const surface = core.rt_surface.surface;
+                let Some(surface) = widget(v) else {
+                    return false;
+                };
+                let Some(window) = ext::ancestor::<Window>(&surface) else {
+                    log::warn!(target: LOG_SCOPE, "surface is not in a window, ignoring resize_window");
+                    return false;
+                };
+                window.resize_surface(&surface, value)
             }
         }
     }
