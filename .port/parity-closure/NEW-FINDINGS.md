@@ -9156,3 +9156,33 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   mechanism, fix and tests are in `.port/parity-closure/UPSTREAM-DEFECTS.md` UD366. This entry stays
   only as a pointer, because the T5b fix-round-1 commits, the harness and the LIFETIMES row cite
   N448.
+
+## N452 — effect callbacks that re-enter the Terminal C API reach stream/handler bytes under the protected `&mut Stream`/`&mut Handler`
+
+- **id**: N452. P7-W2 T6 (implementer concern 4; task review, controller ruling 51). **severity**: medium
+  (aliasing-model UB in the port only; no observed miscompile). **kind**: port soundness (Stacked
+  Borrows). **Not upstream**: Zig's `*Stream`/`*Handler` carry no protector, so the reference is sound.
+  **state**: OPEN → follow-up task P7-W2 T9 (a Phase-7 exit item).
+- **shape**: `rustty_terminal_vt_write` runs `next_slice` with a protected `&mut Stream` (and the
+  handler's `&mut self` below it) for the whole call, and effect callbacks (bell, title, clipboard,
+  render_hold, …) run synchronously inside it. The reference headers
+  (`include/ghostty/vt/terminal.h:78-81`, `:2212-2215` at 12752b2ac; Rustty's header says the same)
+  forbid only `vt_write`/`vt_write_until_ground` on the same terminal from a callback. They do NOT
+  forbid:
+  - `rustty_terminal_resize` (`crates/rustty-vt-c/src/terminal.rs:3867-3879`);
+  - `rustty_terminal_set` arms that write handler fields (`CLIPBOARD_WRITE`/`READ`,
+    `UNKNOWN_SEQUENCE`, `TITLE_REPORT`, `TERMINFO_NAME`, `UNKNOWN_MAX_BYTES`,
+    `CLIPBOARD_WRITE_MAX_BYTES`; `terminal.rs:2888-3546`);
+  - `rustty_terminal_get` of `SEMANTIC_FAILURE`, `VT_GROUND`, `KITTY_CLIPBOARD_WRITE_MAX_BYTES`
+    (`:4242`, `:4284`, `:4313`);
+  - the continuation APIs.
+
+  Each reaches stream or handler bytes through the wrapper pointer while the outer protected `&mut`
+  is live: UB under Stacked Borrows, well-defined in Zig. `rustty_render_state_update` from a
+  callback is sound (it touches only the separately allocated terminal; proven by
+  `render_hold_callback_reenters_render_state_update`, P7-W2 T6).
+- **fix direction**: build an isolated harness under `.port/phase-2/mirihar-*` that shows the UB, then
+  make effect dispatch raw-self: `next_slice`, dispatch and effect calls over `*mut Stream` /
+  `*mut Handler`, with narrow reborrows that end before each effect call (memories
+  `rust-mut-args-strongly-protected`, `shaper-hook-sb-clean-interleave`). LIFETIMES rows first. The
+  harness must be UB before and clean after, under SB and TB.
