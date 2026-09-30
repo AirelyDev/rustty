@@ -935,4 +935,130 @@ mod tests {
         search.deinit();
         pages.deinit();
     }
+
+    /// PORTS: oracle 06178eeaa (N435)
+    /// `test "feed discovers pages prepended after exhaustion"`
+    #[test]
+    fn feed_discovers_pages_prepended_after_exhaustion() {
+        use crate::page::{Capacity, Cell};
+        use crate::pagelist::builder::Location;
+        use crate::pagelist::PageList;
+
+        let alloc = Allocator;
+        // var t: Terminal = try .init(io, alloc, .{
+        //     .cols = 10,
+        //     .rows = 10,
+        //     .max_scrollback_bytes = std.math.maxInt(usize),
+        // });
+        let mut t: Terminal = Terminal::init(
+            alloc,
+            TerminalOptions {
+                max_scrollback_bytes: Some(usize::MAX),
+                ..terminal_opts(10, 10)
+            },
+        )
+        .unwrap();
+        let active_ptr: *mut Screen = t.screens.active;
+
+        // var s = t.vtStream();
+        let mut s = t.vt_stream();
+        // s.nextSlice("Fizz");
+        s.next_slice(b"Fizz");
+
+        // Exhaust the list: one match on the only page and nothing left to feed.
+        // const pages = &t.screens.active.pages;
+        let active = unsafe { &mut *active_ptr };
+        // var search: PageListSearch = try .init(
+        //     alloc,
+        //     "Fizz",
+        //     pages,
+        //     pages.pages.last.?,
+        // );
+        let last = active.pages.pages.last;
+        let mut search: PageListSearch =
+            PageListSearch::init(alloc, b"Fizz", &mut active.pages, last).unwrap();
+        // try testing.expect(search.next() != null);
+        assert!(search.next().is_some());
+        // try testing.expect(search.next() == null);
+        assert!(search.next().is_none());
+        // try testing.expect(!try search.feed());
+        assert!(!search.feed().unwrap());
+
+        // Prepend an older page the way incremental snapshot history restore
+        // does. The frontier pin names the page that used to be first, and
+        // finalize keeps that node's identity, so the pin now has a `prev`.
+        // const old_first = pages.pages.first.?;
+        let old_first = active.pages.pages.first;
+        {
+            // var allocation = try pages.allocatePage(.{ .cols = 10, .rows = 2 });
+            //
+            // SB: reuse `search.list` (the same `*mut PageList` already
+            // registered with the searcher) rather than forming a fresh
+            // `&mut active.pages` here — a new Unique retag of the same
+            // place would invalidate the SharedReadWrite tag `search`
+            // already holds (rust-mut-args-strongly-protected).
+            let this: *mut PageList = search.list;
+            let mut allocation = unsafe {
+                PageList::allocate_page(
+                    this,
+                    Capacity {
+                        cols: 10,
+                        rows: 2,
+                        ..Capacity::default()
+                    },
+                )
+            }
+            .unwrap();
+            // defer allocation.deinit();
+            // const page = allocation.page();
+            let page = allocation.page();
+            // page.size.rows = 2;
+            // for ("Fizz", 0..) |c, x| page.getRowAndCell(x, 1).cell.* = .init(c);
+            unsafe {
+                (*page).size.rows = 2;
+            }
+            for (x, c) in b"Fizz".iter().enumerate() {
+                unsafe {
+                    *(*page).get_row_and_cell(x, 1).cell = Cell::init(*c as u32);
+                }
+            }
+            // try allocation.finalize(.prepend);
+            allocation.finalize(Location::Prepend).unwrap();
+            allocation.deinit();
+        }
+        // const prepended = pages.pages.first.?;
+        let prepended = active.pages.pages.first;
+        // try testing.expect(prepended != old_first);
+        assert!(!core::ptr::eq(prepended, old_first));
+        // try testing.expectEqual(old_first, search.pin.node);
+        assert!(core::ptr::eq(unsafe { (*search.pin).node }, old_first));
+
+        // Feeding resumes into the restored history and finds its match.
+        // try testing.expect(try search.feed());
+        assert!(search.feed().unwrap());
+        // try testing.expectEqual(prepended, search.pin.node);
+        assert!(core::ptr::eq(unsafe { (*search.pin).node }, prepended));
+        // const h = search.next().?;
+        let h = search.next().unwrap();
+        // const sel = h.untracked();
+        let sel = h.untracked();
+        // try testing.expectEqual(prepended, sel.start.node);
+        assert!(core::ptr::eq(sel.start.node, prepended));
+        // try testing.expectEqual(prepended, sel.end.node);
+        assert!(core::ptr::eq(sel.end.node, prepended));
+        // try testing.expectEqual(@as(size.CellCountInt, 1), sel.start.y);
+        assert_eq!(1, sel.start.y);
+        // try testing.expectEqual(@as(size.CellCountInt, 0), sel.start.x);
+        assert_eq!(0, sel.start.x);
+        // try testing.expectEqual(@as(size.CellCountInt, 3), sel.end.x);
+        assert_eq!(3, sel.end.x);
+        // try testing.expect(search.next() == null);
+        assert!(search.next().is_none());
+        // try testing.expect(!try search.feed());
+        assert!(!search.feed().unwrap());
+
+        search.deinit();
+        s.deinit();
+        t.deinit(alloc);
+    }
 }

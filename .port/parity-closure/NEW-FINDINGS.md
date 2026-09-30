@@ -8643,8 +8643,8 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 ## N435 — `ScreenSearch::feed` carried the reference's `.complete => unreachable` after history is prepended
 
 - **id**: N435. Phase 7 start (P7-W0 T4; R1 #1, DECISIONS R1). **severity**: medium (a reachable panic).
-  **kind**: reference crash ported faithfully, unrecorded. **state**: OPEN; closed by the port of `06178eeaa`
-  (P7-W5 T4).
+  **kind**: reference crash ported faithfully, unrecorded. **state**: CLOSED by P7-W5 T4, by the port of
+  `06178eeaa`.
 - **reference**: at 20abdb50a, `src/terminal/search/screen.zig:308` `feed` switches on the state with
   `.complete => unreachable` (`:343`), under the comment "If we're complete then the feed call above should always
   return false and we can't reach this." Upstream found that it is reachable and fixed it in the range:
@@ -8655,9 +8655,28 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **reachability**: a screen search that has already exhausted its PageList (`.complete`) is fed again after
   older history pages are prepended below it (incremental snapshot history restore); the history searcher's
   tracked pin keeps its node identity through the prepend, so the feed finds new pages and reaches the arm.
-  By reading (R1); not reproduced.
+  By reading (R1); reproduced by the pre-fix `feed_after_complete_discovers_prepended_history_pages` test
+  panicking on `unreachable!()` (`crates/rustty-vt/src/search/screen.rs:632`, recorded in the P7-W5 T4 commit).
 - **why not a UD**: upstream found and fixed it within the range, so at the new pin it is not an R13 divergence;
   the port adopts `06178eeaa` as is, with its tests.
+- **fix** (P7-W5 T4): `crates/rustty-vt/src/search/screen.rs` `feed`'s `State::Complete` arm now sets
+  `self.state = State::History` (`06178eeaa`, `search/screen.zig:354` at 12752b2ac), with doc updates on
+  `State::needs_feed` and `ScreenSearch::feed`. Ported all 3 upstream tests, names and assertions preserved:
+  `feed_discovers_pages_prepended_after_exhaustion` (`crates/rustty-vt/src/search/pagelist.rs`),
+  `feed_after_complete_discovers_prepended_history_pages` (`crates/rustty-vt/src/search/screen.rs`), and
+  `feed_after_complete_discovers_prepended_snapshot_history` (`crates/rustty-vt/src/search/terminal.rs`).
+  Verified: targeted `cargo test -p rustty-vt search` (92 passed) and `-p rustty-vt-c search` (24 passed);
+  clippy `-D warnings`; fmt; `cargo build --workspace`; `check_ud_docs.py` PASS. Miri (bounded at 1800s per
+  run, foreground): `cargo +nightly miri test -p rustty-vt search::` ran `feed_discovers_pages_prepended_
+  after_exhaustion` clean (`ok`) but hit the 1800s bound partway through
+  `feed_after_complete_discovers_prepended_history_pages` (exit via SIGALRM, not a failure) before reaching
+  `feed_after_complete_discovers_prepended_snapshot_history`; both are heavier PageList-integrity tests of
+  the same class already carrying "MIRI EXCEPTION — WS19 T6" budget-outs elsewhere in this file (Page::
+  assert_integrity is O(page) under debug_assertions), so this is consistent with that documented cost, not
+  a new UB signal. `pagelist::builder` matched 0 tests (no test's fully-qualified path contains that literal
+  substring — the allocate_page/`Location::Prepend` path this fix exercises is covered by the Miri-clean
+  `feed_discovers_pages_prepended_after_exhaustion` above instead). Not retried per the bounded-run rule;
+  flagged as a follow-up for whoever next extends the WS19 T6 Miri-budget table.
 
 ## N436 — `ghostty_search_tick` read the freed terminal's PageList after `ghostty_terminal_free`
 
