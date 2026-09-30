@@ -8847,6 +8847,26 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `Renderer::deinit` in `Surface::deinit`, in `initErrdefers`, and at init's two pre-publication
   errdefers. Proof: `n441_box_drop_leak` (the round-0 shape, freed through `ManuallyDrop`) fails
   Miri's leak check under SB and TB; `n441_box_dealloc_after_deinit` is CLEAN under both.
+- **fix round 2** (P7-W7 T5b, ruling 46): round 1 freed the box as `ManuallyDrop`, and
+  `Renderer::deinit` left the backend to `Metal::drop`, which never ran.
+  - The reference's `Metal.deinit` → `layer.release()` clears the layer's display callback (upstream
+    4b4a5b241). In the port that clear lived only in `Metal::drop` / `IOSurfaceLayer::drop`.
+  - So a view-retained layer (the `ExpiringUndoManager` keeps the view; `needsDisplayOnBoundsChange`
+    is set) kept a callback whose context pointed into the freed renderer, and a resize or display
+    pass ran `draw_frame_raw` on freed memory.
+  - The callback context, queue, device, layer reference, search matches, `Arc`s and, on Linux, the
+    EGL context also leaked on every close.
+
+  Now `Metal::deinit(&mut self)` (idempotent; `Drop` calls it again) clears the callback and frees the
+  context, and `Renderer::deinit` calls it where the reference calls `self.api.deinit()`.
+  `RendererBox::dealloc_after_deinit` then drops the renderer normally. An audit showed every
+  explicit `deinit` in `Renderer::deinit` (macOS and the OpenGL twin) leaves its field safe to drop
+  (T5b report). The OpenGL twin's `api` teardown is `OffscreenContext`'s `Drop`, now run on the main
+  thread as the reference's `OpenGL.deinit` is.
+  Proof: `n441_r1_display_after_free` is UB and `n441_r1_drop_only_fields_leak` LEAKs under SB and
+  TB; `n441_r2_deinit_then_drop` is CLEAN. The live Metal test
+  `generic::macos_impl::tests::deinit_clears_the_layer_display_callback` fails without the
+  `api.deinit()` call.
 - **residual**: the same race class covers the other fields that other threads write through raw
   pointers into the surface: `io` (the inline terminal), `io_thread`, `renderer_thread` and
   `renderer_state`. That is **N444**, OPEN → W7.T5c.
@@ -9016,27 +9036,10 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   allocation behind a shared raw root (a `RendererBox`-style owner), and keep main-thread access to it
   narrow and locked.
 
-## N448 — `App::performAllAction` iterates the live surface list while each surface's host callback can append to it
+## N448 — superseded: now UD366
 
-- **id**: N448. P7-W7 T5b fix round 1 (found while making `performAllAction` raw-self).
-  **severity**: medium. It is a use-after-free when the list reallocates. **kind**: memory safety; the
-  same shape exists in the reference (see below). **state**: CLOSED (fixed in the port, P7-W7 T5b fix
-  round 1).
-- **finding**:
-  - `performAllAction`'s surface arm iterates `self.surfaces` and runs each surface's
-    `performBindingAction`. The reference does the same over `self.surfaces.items`
-    (`src/App.zig:502` @12752b2ac).
-  - For an `all:`/`global:` surface-scoped binding such as `new_split`, `new_tab` or `new_window`,
-    each surface's action runs the macOS host's handler, which creates a surface synchronously
-    (`rustty_surface_new` → `addSurface`, an append).
-  - An append that reallocates the list frees the buffer the loop is iterating. In Zig the captured
-    slice then dangles; in Rust the iterator's borrow is invalidated as well.
-- **fix**: the surface arm iterates a snapshot of the list taken before the first action (the
-  surfaces the reference means to visit) and skips a surface no longer in the list when its turn
-  comes. PORT NOTE at the loop.
-- **proof**: `.port/phase-2/mirihar-n441`. `r0_all_new_split_live_iter` (two surfaces, a full list,
-  `all:new_split`) is UB under SB and TB (Miri: "alloc has been freed, so this pointer is
-  dangling"); `fixed_all_new_split_snapshot` is CLEAN under both.
-- **upstream**: the reference's loop has the same use-after-free once the append reallocates. That
-  is a candidate upstream defect; it needs a UD id from the controller (this round was given only
-  UD365).
+- **id**: N448. P7-W7 T5b fix round 1 (found while making `App::performAllAction` raw-self).
+  **state**: superseded by **UD366** (ruling 46: confirmed as an upstream defect). The record,
+  mechanism, fix and tests are in `.port/parity-closure/UPSTREAM-DEFECTS.md` UD366. This entry stays
+  only as a pointer, because the T5b fix-round-1 commits, the harness and the LIFETIMES row cite
+  N448.

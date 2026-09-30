@@ -3109,6 +3109,28 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    copy the actions before dispatch (`const actions = try alloc.dupe(input.Binding.Action, leaf.actionsSlice())`, freed after the checks), or make `updateConfig` defer freeing the old `DerivedConfig` until the current key event is done.
 - upstream status: NOT YET REPORTED
 
+### UD366 — `performAllAction` walks a surface list that the action's host callback appends to (use-after-free)
+
+- kind:            UB (use-after-free; R13)
+- upstream project: ghostty
+- severity:        medium (an `all:` surface-scoped binding whose action creates a surface reads the freed surface list once it grows past its capacity)
+- reference:       at 12752b2ac:
+  - `src/App.zig` `performAllAction` (`:486-511`): `.surface => for (self.surfaces.items) |surface| { _ = surface.core().performBindingAction(action) ... }` captures the slice once (`:502`);
+  - each surface's `performBindingAction` for `new_split` / `new_tab` / `new_window` calls `rt_app.performAction`; the macOS host's handlers post through `NotificationCenter`, whose observers run synchronously and build the new view: `TerminalController.newSplit` / `newTab` / `newWindow` → `SurfaceView` init → `ghostty_surface_new` → `App.addSurface` → `self.surfaces.append` (`:194-198`);
+  - once the list is full (its capacity is 16 on aarch64 for the first growth), that append reallocates and frees the buffer the loop's slice points into; the next iteration reads freed memory.
+- defect:          the loop's slice outlives the buffer it points into.
+- ReleaseSafe:     no safety check covers a dangling slice; the read sees whatever the freed memory holds (by reading; not measured).
+- ReleaseFast:     the same.
+- reachability:    macOS, a keybind such as `keybind = all:super+d=new_split:right` (or `global:`) with enough surfaces open that the appends outgrow the list's capacity.
+- output needed:   none reliably visible; a crash, a skipped surface, or an action sent to a stale pointer.
+- port handling:
+  - `crates/rustty-core/src/app.rs` `App::performAllAction` (P7-W7 T5b fix round 1): the surface arm iterates a snapshot of the list taken before the first action, the surfaces the reference means to visit, and skips a surface no longer in the list when its turn comes.
+  - `PORT NOTE: reference defect (R13), UD366` at the loop. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none. Found while making `performAllAction` raw-self (P7-W7 T5b fix round 1, recorded first as N448); confirmed by the round-1 re-review (ruling 46).
+- test:            `crates/rustty-core/src/app.rs` `ud366_perform_all_action_survives_a_host_append_that_reallocates` (a fake runtime whose `new_split` callback `addSurface`s onto a full list). It passes natively and under Miri; with the reference's live-list iteration restored it is UB under Miri ("alloc has been freed, so this pointer is dangling"). Also `.port/phase-2/mirihar-n441` `r0_all_new_split_live_iter` (UB, SB and TB) vs `fixed_all_new_split_snapshot` (CLEAN).
+- proposed fix:    iterate a copy of the list (`const surfaces = try alloc.dupe(*apprt.Surface, self.surfaces.items)`), or iterate by index against the live `items` and stop at the length the loop started with.
+- upstream status: NOT YET REPORTED
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
