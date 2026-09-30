@@ -26,3 +26,16 @@ index f4fa74133..ce016f0bc 100644
          try stdout.print("Usage: ghostty +<action> [flags]\n\n", .{});
          try stdout.print(
              \\This is the Ghostty helper CLI that accompanies the graphical Ghostty app.
+diff --git a/src/build/SharedDeps.zig b/src/build/SharedDeps.zig
+--- a/src/build/SharedDeps.zig
++++ b/src/build/SharedDeps.zig
+@@ -219,7 +219,8 @@
+     try translate_c.addImportToModule(b, "posix_c", step.root_module, .{
+         .source = .{ .includes = .{ .files = &.{
+             .{ .path = "errno.h" },
+-            .{ .path = "pwd.h" },
++            // W12-SCRATCH: MinGW has no pwd.h; the pin translates it on every target
++            .{ .path = if (target.result.os.tag == .windows) "errno.h" else "pwd.h" },
+             .{ .path = "signal.h" },
+             .{ .path = "sys/types.h" },
+             .{ .path = "unistd.h" },

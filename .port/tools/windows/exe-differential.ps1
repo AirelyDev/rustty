@@ -35,6 +35,14 @@
        in Zig 0.16. It becomes
        `var w = std.Io.File.stdout().writer(std.Io.Threaded.global_single_threaded.io(), &.{});
         const stdout = &w.interface;` (unbuffered, like 0.14's writer).
+  Since the Phase 7 pin (`12752b2ac`) a third one is needed (P7-W12 T1b):
+    3. src/build/SharedDeps.zig: the `posix_c` translate-c step includes
+       `pwd.h` on every target, and MinGW has none, so the exe's compile
+       stops there. On Windows it translates `errno.h` in its place.
+  With the three changes the exe builds; `ghostty-internal.dll` still fails
+  to compile (pkg/opengl and the Dmabuf renderer), which the exe does not
+  need. The goldens of that pin were captured from an exe cross-built on
+  macOS with `-Dtarget=x86_64-windows-gnu`, which is the same GNU ABI.
   With the reference's default MSVC ABI the exe then fails to link
   (`lld-link: undefined symbol: WinMain`). The GNU ABI is what the
   reference's own Windows CI builds (`build-libghostty-windows-gnu`), so:

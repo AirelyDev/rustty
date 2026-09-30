@@ -577,6 +577,7 @@ command-palette-entry = title:"Toggle Window Decorations",description:"Toggle th
 command-palette-entry = title:"Undo",description:"Undo the last action.",action:"undo"
 osc-color-report-format = 16-bit
 vt-kam-allowed = false
+vt-window-resize-allowed = false
 custom-shader = 
 custom-shader-animation = true
 bell-features = no-system,no-audio,attention,title,no-border
