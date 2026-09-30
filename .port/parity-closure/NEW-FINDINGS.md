@@ -5682,6 +5682,14 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   implemented and MEASURED at +3.4% cycles on `screen-clone.render` (1.8% fewer instructions; the
   growCapacity headroom between its columns spreads the hot `raw`/`style` columns), outside the +2%
   fence; the per-column lists measured +0.1%. S7-9 carries this in the T3 record.
+- **with overscan (P7-W3 T1, `ca4f719f7`)**: overscan multiplies the rows built, and so the three-for-one
+  call count, by the rows captured (`rowDataRange()`, at most `above + rows + below`); `row_data`
+  itself is still one allocation, and entries outside the captured range are never built in either
+  implementation. MEASURED (CountingAllocator, 80x24, 100 lines of history, first update): no
+  request, 24 rows built, 73 allocations (reference 25); a request of `{above 4, below 1}` (the
+  ScreenClone bench's) scrolled 10 rows into history, 29 rows built, 88 allocations (reference 30);
+  the same request following the active area (nothing below), 28 rows built, 85 allocations
+  (reference 29). In general `1 + 3n` against `1 + n` for `n` captured plain-text rows.
 - **T3 (call shape)**: the MultiArrayLists grow as Zig 0.16's `resize` does (to `growCapacity(n)`
   elements, alloc + copy + free, never `remap`); the `ArrayList`s to `growCapacity(n)` by `remap`
   first, then alloc + copy + free. The `init_capacity` of each is computed from the REFERENCE's sizes
@@ -6709,7 +6717,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
      `crates/rustty-vt/src/render.rs:400` (`CellList`) and `:570` (`set_capacity`).
      - A row's cells are three allocations (the raw, grapheme-span and style columns), not one
        `MultiArrayList` block. So each row growth makes three alloc calls (and later three frees) instead
-       of one: a 24-row first update makes 73 allocations where the reference makes 25.
+       of one: a 24-row first update makes 73 allocations where the reference makes 25. With overscan
+       every captured row counts (P7-W3 T1): the same update with `{above 4, below 1}` scrolled into
+       history builds 29 rows, 88 allocations where the reference makes 30 (N315).
      - The allocator sees per-column sizes and alignments instead of `capacityInBytes(cap)` at `big_align`.
      - If the second or third column is refused, the port makes an extra alloc/free pair.
      - Reason: the faithful single block was implemented and measured at +3.4% cycles on
@@ -9186,3 +9196,20 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `*mut Handler`, with narrow reborrows that end before each effect call (memories
   `rust-mut-args-strongly-protected`, `shaper-hook-sb-clean-interleave`). LIFETIMES rows first. The
   harness must be UB before and clean after, under SB and TB.
+
+## N453 — the overscan port's two reference defects: a stale `rowDataRange()` after a failed update, and `u16` style-run rows (UD367, UD368)
+
+- **id**: N453. Not a ledger row: found by task P7-W3 T1 while porting `ca4f719f7` (RenderState
+  overscan). **severity**: low. **kind**: reference defects (crash; UB in ReleaseFast), reachable by
+  an embedder only.
+- **what**: (1) `beginUpdate` writes `overscan` only after the fallible row loop, so after a failed
+  update `rowDataRange()` mixes the previous update's `overscan` with the new request, rows and
+  `row_data` length: it ends past `row_data` or underflows, and the C row iterator slices with it
+  (UD367). (2) `StyleRun.y` stays `u16` while it now holds a `row_data` index up to three `u16`
+  counts (UD368). Both MEASURED as panics at 12752b2ac (`.port/phase-7/probes/p7w3t1_overscan_probe.zig`).
+- **fix / proof**: `crates/rustty-vt/src/render.rs`: `begin_update` resets `overscan` on failure,
+  `row_data_range`/`viewport_range` clamp to `row_data.len()`, `StyleRun.y` is `u32`. Tests
+  `row_data_range_stays_in_bounds_after_a_failed_overscan_update` and
+  `style_runs_address_rows_past_u16_with_large_overscan`, each with a negative control recorded in
+  the UD entry.
+- **state**: CLOSED (task P7-W3 T1).

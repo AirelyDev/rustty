@@ -2765,7 +2765,7 @@ Budget exceptions that are not about page integrity:
 | `tests/viewport_fingerprint_alloc.rs` `fingerprint_only_allocates_on_changes` | past a 15-minute bound; the contract is Miri-verified in G6 by the port of the reference test, `search::viewport::tests::fingerprint_only_allocates_on_changes` and `fingerprint_allocation_failure_preserves_the_old_fingerprint` |
 | `tests/print_grapheme_transfer_alloc.rs` `cross_page_wide_grapheme_transfer_does_not_allocate` | fills a whole page line by line (stopped after 9 minutes); the cross-page transfer path is Miri-verified in G6c by `terminal::tests::terminal_print_wide_grapheme_transfers_across_a_page_seam` |
 
-**Moved from G6 to G6c: 36 tests** (`cfg_attr(all(miri, debug_assertions), ignore)`, the WS19 T6
+**Moved from G6 to G6c: 37 tests** (36 in parity tail C-1, plus the P7-W3 T1 overscan sibling of `incremental_updates_match_full_rebuild`; `cfg_attr(all(miri, debug_assertions), ignore)`, the WS19 T6
 partition). Each ran past a 15-minute bound in G6 (one test per process, 8 workers; 20 minutes for
 some in the first pass), and each passed in G6c conditions (`-C debug-assertions=off`,
 `-Zmiri-disable-isolation`) within an 8-minute bound, 7 workers on a host other agents were also
@@ -2798,6 +2798,7 @@ takes at most 0.3 s, cargo overhead included: the integrity walks are the cost.
 | `pagelist::tests::pagelist_set_max_limits_remain_independent` | 3.89 s | 2 s |
 | `pagelist::tests::pagelist_set_max_lines_prunes_immediately_and_can_be_raised` | 4.96 s | 3 s |
 | `render::tests::incremental_updates_match_full_rebuild` | 0.30 s | 135 s |
+| `render::tests::incremental_updates_match_full_rebuild_with_overscan` | 0.3 s | 92 s (P7-W3 T1, 2026-09-29: the same 300-round body with a `{above 2, below 1}` request) |
 | `screen::tests::screen_scroll_above_hyperlink_dense_row_to_existing_page` | 16.40 s | 28 s |
 | `screen::tests::screen_scroll_above_hyperlink_dense_row_to_fresh_page` | 16.47 s | 26 s |
 | `screen::tests::screen_scrollback_bytes_zero_none_and_finite_are_distinct` | 32.70 s | 20 s |
