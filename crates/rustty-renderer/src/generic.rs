@@ -2522,11 +2522,16 @@ mod macos_impl {
             // self.config.deinit();
             self.config.deinit();
 
-            // self.api.deinit(); -> the `Metal` `Drop` releases queue/device/
-            // layer (ARC). An explicit `deinit` is unnecessary AND impossible here (a
-            // `&mut self` `deinit` cannot move `api` out); documented.
+            // self.api.deinit();
             //
-            // self.* = undefined; -> no-op (Rust drop/ownership handles teardown).
+            // PORT NOTE (P7-W7 T5b fix round 2): `Metal::deinit` clears the layer's
+            // display callback and frees its context, as the reference's
+            // `layer.release()` does; the ARC releases of queue/device/layer are the
+            // `api` field's drop, which the owner runs right after this `deinit`
+            // (core `RendererBox::dealloc_after_deinit` drops the whole renderer).
+            self.api.deinit();
+
+            // self.* = undefined; -> no-op (the owner drops the value next).
         }
 
         // P7-W7 T2 (`2f0b65346`): `surfaceInit` and `finalizeSurfaceInit` are gone
@@ -9625,6 +9630,63 @@ mod macos_impl {
             r.thread_exit();
             r.deinit();
             t.deinit(Global.into());
+        }
+
+        // P7-W7 T5b fix round 2 (ruling 46): `Renderer::deinit` must clear the layer's
+        // display callback (the reference's `Metal.deinit` → `layer.release()`,
+        // upstream 4b4a5b241), because the host view can keep the layer alive after
+        // the renderer is freed and a later Core Animation display pass would run the
+        // callback on it. Before the fix only `Metal`'s `Drop` cleared it, and the
+        // core surface's owner never runs that `Drop`.
+        #[test]
+        fn deinit_clears_the_layer_display_callback() {
+            use crate::metal::iosurface_layer::IOSurfaceLayer;
+            use objc2::msg_send;
+            use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+
+            let mut r = match golden_renderer(10, 3) {
+                Some(r) => r,
+                None => return, // Metal-skip
+            };
+            let layer = IOSurfaceLayer::init().expect("IOSurfaceLayer::init");
+            layer.as_ca_layer().setContentsScale(1.0);
+            layer.as_ca_layer().setBounds(CGRect::new(
+                CGPoint::new(0.0, 0.0),
+                CGSize::new(r.size.screen.width as f64, r.size.screen.height as f64),
+            ));
+            r.api.set_layer_for_test(layer);
+            let self_ptr: *mut Renderer = &mut r;
+            let api_ptr: *mut Metal = unsafe { &raw mut (*self_ptr).api };
+            let lock = unsafe { (*self_ptr).draw_mutex.clone() };
+            unsafe { Metal::loop_enter(api_ptr, lock) };
+            assert!(
+                r.api.has_display_ctx(),
+                "loop_enter installs the callback context"
+            );
+
+            // The host view's retention of the backing CALayer, outliving the renderer.
+            let host_retained = r.api.layer().unwrap().layer.clone();
+
+            r.thread_exit();
+            r.deinit();
+
+            assert!(
+                !r.api.has_display_ctx(),
+                "deinit must free the display-callback context"
+            );
+            // A later display pass on the host-retained layer must not reach the
+            // renderer: with the callback still installed it would run a sync draw,
+            // whose completion sets health to Healthy.
+            r.health.store(crate::Health::Unhealthy);
+            let _: () = unsafe { msg_send![&*host_retained, display] };
+            assert_eq!(
+                r.health.load(),
+                crate::Health::Unhealthy,
+                "a display pass after deinit must not run the renderer's callback"
+            );
+            // The owner then drops the renderer (core `RendererBox::dealloc_after_deinit`);
+            // `Metal::drop` re-runs its now-idempotent `deinit`.
+            drop(r);
         }
 
         // A minimal ObjC test-double for the host NSView. `Metal::init` (the on-screen

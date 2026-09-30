@@ -330,14 +330,16 @@ pub struct RendererHandles {
 /// raw root from `Box::into_raw`; nothing forms a `Box`/`&mut` from it while
 /// the render thread runs, except under the draw mutex (N437's discipline).
 ///
-/// Freeing mirrors the inline field it replaces: the renderer is torn down by
-/// its explicit `deinit` and its memory is then released WITHOUT drop glue,
-/// because every owner of a core `Surface` frees it that way (embedded
-/// `closeSurface` through `ManuallyDrop`, GTK through `dealloc`, the init-error
-/// callers through the `MaybeUninit` slot). There is deliberately no `Drop`
-/// impl: it would never run on those paths (leaking the box, the round-0 bug),
-/// and glue after `deinit` would tear the renderer down twice. Each teardown
-/// site calls [`RendererBox::dealloc_after_deinit`] right after `deinit`.
+/// Freeing (P7-W7 T5b fix rounds 1 and 2): every owner of a core `Surface` frees
+/// it WITHOUT drop glue (embedded `closeSurface` through `ManuallyDrop`, GTK
+/// through `dealloc`, the init-error callers through the `MaybeUninit` slot), so a
+/// `Drop` here would never run. Each teardown site instead calls
+/// [`RendererBox::dealloc_after_deinit`] right after `Renderer::deinit`, which
+/// drops the renderer NORMALLY: its explicit `deinit` does the reference's
+/// ordered teardown (including `Metal::deinit`, which clears the layer's display
+/// callback), and the drop then releases what only `Drop` frees (the backend's
+/// queue/device/layer or EGL context, the search matches, the `Arc`s). Every
+/// explicit `deinit` leaves its field safe to drop (audit in the T5b report).
 pub struct RendererBox(*mut Renderer);
 
 impl RendererBox {
@@ -352,22 +354,17 @@ impl RendererBox {
         self.0
     }
 
-    /// Release the allocation after `Renderer::deinit`, without drop glue (the
-    /// inline field's memory was released with the surface's, never dropped).
+    /// Drop the renderer and release its allocation, after `Renderer::deinit`.
     ///
     /// # Safety
     /// `deinit` has run on the renderer; the render thread is joined or was
-    /// never spawned; nothing uses [`RendererBox::as_ptr`] afterwards, and this
-    /// is called once.
+    /// never spawned; this runs on the thread that owns the surface (the main
+    /// thread); nothing uses [`RendererBox::as_ptr`] afterwards, and this is
+    /// called once.
     pub unsafe fn dealloc_after_deinit(&self) {
-        // SAFETY: `self.0` came from `Box::into_raw(Box::new(..))` in `new`;
-        // `ManuallyDrop<Renderer>` has `Renderer`'s layout, so the box frees the
-        // same allocation and runs no `Renderer` drop glue.
-        unsafe {
-            drop(Box::from_raw(
-                self.0.cast::<core::mem::ManuallyDrop<Renderer>>(),
-            ))
-        };
+        // SAFETY: `self.0` came from `Box::into_raw(Box::new(..))` in `new`, and
+        // the contract above makes this the last use.
+        unsafe { drop(Box::from_raw(self.0)) };
     }
 }
 

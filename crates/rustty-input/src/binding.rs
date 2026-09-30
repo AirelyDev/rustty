@@ -4143,6 +4143,49 @@ impl LeafChained {
 
 /// A generic leaf node that can be used to unify the handling of
 /// leaf and leaf_chained.
+///
+/// PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD365. The reference's
+/// `GenericLeaf.actions.many` is a slice INTO the set's `leaf_chained` list, so a
+/// chained `reload_config`, which replaces the config (and the set) while the
+/// chain runs, leaves the loop reading freed memory. The port's leaf OWNS a copy
+/// of the actions, so it outlives the replaced set:
+///
+/// ```
+/// use rustty_input::binding::{Action, Set, Trigger, TriggerKey, Value};
+/// let mut s = Set::default();
+/// s.parse_and_put(b"a=reload_config").unwrap();
+/// s.parse_and_put(b"chain=text:world").unwrap();
+/// let t = Trigger { key: TriggerKey::Unicode('a' as u32), ..Default::default() };
+/// let leaf = match s.get_value(t).unwrap() {
+///     Value::LeafChained(l) => l.generic(),
+///     _ => unreachable!(),
+/// };
+/// // The config reload replaces the set mid-chain.
+/// s = Set::default();
+/// # let _ = &s;
+/// assert_eq!(2, leaf.actions_slice().len());
+/// assert!(leaf.actions_slice()[0] == Action::ReloadConfig);
+/// ```
+///
+/// The reference's borrowed shape is rejected: the same program, with the leaf's
+/// actions a slice into the set, does not compile (the set is replaced while
+/// borrowed):
+///
+/// ```compile_fail,E0506
+/// use rustty_input::binding::{Action, Set, Trigger, TriggerKey, Value};
+/// let mut s = Set::default();
+/// s.parse_and_put(b"a=reload_config").unwrap();
+/// s.parse_and_put(b"chain=text:world").unwrap();
+/// let t = Trigger { key: TriggerKey::Unicode('a' as u32), ..Default::default() };
+/// let actions: &[Action] = match s.get_value(t).unwrap() {
+///     Value::LeafChained(l) => &l.actions,
+///     _ => unreachable!(),
+/// };
+/// // The config reload replaces the set mid-chain.
+/// s = Set::default();
+/// # let _ = &s;
+/// assert_eq!(2, actions.len());
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct GenericLeaf {
     pub flags: Flags,
@@ -6902,8 +6945,9 @@ mod tests {
     // `performAllChainedAction`, then read freed memory. The port's
     // `GenericLeaf` owns a copy of the actions, so they outlive the set. This
     // test fails on the reference's shape: with a borrowed slice, `leaf` could
-    // not outlive the set it borrows (`drop(s)` below would not compile), and
-    // an unchecked borrow would be the use-after-free Miri reports.
+    // not outlive the set it borrows (replacing `s` below, `drop(mem::take(&mut
+    // s))`, would not compile; the `compile_fail` doctest on `GenericLeaf` is that
+    // arm), and an unchecked borrow would be the use-after-free Miri reports.
     #[test]
     fn ud365_generic_leaf_actions_outlive_a_replaced_set() {
         let mut s = Set::default();

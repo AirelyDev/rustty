@@ -992,14 +992,21 @@ where
             // Surface-scoped actions are performed on all surfaces. Errors
             // are logged but processing continues.
             //
-            // PORT NOTE (N448, P7-W7 T5b fix round 1): the reference iterates the
+            // PORT NOTE: reference defect (R13), UD366. The reference iterates the
             // `surfaces.items` slice it read once, while each surface's action can
             // run the embedder's callback, and the macOS host's `new_split` /
             // `new_tab` / `new_window` handlers create a surface synchronously
-            // (`addSurface` appends, which may reallocate the list under the
-            // loop). The port iterates a snapshot of the list taken before the
-            // first action (the surfaces the reference means to visit) and skips a
-            // surface that is gone by the time its turn comes.
+            // (NotificationCenter -> `rustty_surface_new` -> `addSurface`'s
+            // append), which reallocates the list under the loop once it is full:
+            // a use-after-free. The port iterates a snapshot of the list taken
+            // before the first action (the surfaces the reference means to visit).
+            //
+            // PORT NOTE: the snapshot also skips a surface that is no longer in the
+            // list when its turn comes (one freed synchronously by an earlier
+            // surface's action). That test is by address: were a freed surface's
+            // address reused by one created during this loop, the new, live surface
+            // would get the action instead. Sound (the pointer is live), but a
+            // drift from the reference, which would read the stale slice entry.
             Scope::Surface => {
                 let surfaces: Vec<*mut A::Surface> = unsafe { (*self_).surfaces.clone() };
                 for surface in surfaces {
@@ -1401,6 +1408,11 @@ pub(crate) mod test_runtime {
         /// If set, `perform_action` fails (AFTER recording) for this key —
         /// drives the performAllChainedAction continue-past-failures test.
         fail_key: Option<ActionKey>,
+        /// UD366: on each `new_split`, `addSurface` the next of these on
+        /// `append_to` from inside the callback (the macOS host creates the new
+        /// surface synchronously: NotificationCenter -> `rustty_surface_new`).
+        append_on_new_split: std::cell::RefCell<Vec<*mut TestSurface>>,
+        append_to: std::cell::Cell<*mut App<TestApp>>,
     }
 
     impl TestApp {
@@ -1410,6 +1422,8 @@ pub(crate) mod test_runtime {
                 wakeups: AtomicUsize::new(0),
                 actions: Mutex::new(Vec::new()),
                 fail_key: None,
+                append_on_new_split: std::cell::RefCell::new(Vec::new()),
+                append_to: std::cell::Cell::new(std::ptr::null_mut()),
             }
         }
 
@@ -1433,6 +1447,14 @@ pub(crate) mod test_runtime {
                 _ => RecordedAction::Simple(key),
             };
             self.actions.lock().unwrap().push((target.key(), rec));
+            if key == ActionKey::NewSplit {
+                let next = self.append_on_new_split.borrow_mut().pop();
+                if let Some(s) = next {
+                    // SAFETY: the test keeps the app and the surface alive; the
+                    // app's entries are raw-self, so no reference to it is live.
+                    unsafe { (*self.append_to.get()).addSurface(s) };
+                }
+            }
             if self.fail_key == Some(key) {
                 return Err(apprt::ApprtError);
             }
@@ -1745,6 +1767,77 @@ pub(crate) mod test_runtime {
         );
 
         app.deinit();
+    }
+
+    // UD366 (P7-W7 T5b fix round 2): an `all:` surface-scoped binding whose host
+    // callback appends surfaces while `performAllAction` walks the list. The
+    // reference iterates the `surfaces.items` slice it read once, and the append
+    // that grows the list past its capacity frees that buffer under the loop
+    // (a use-after-free; Miri reports it on the pre-fix shape). The port walks a
+    // snapshot: each ORIGINAL surface is visited exactly once, the appended ones
+    // are not, and nothing reads the freed buffer.
+    #[test]
+    fn ud366_perform_all_action_survives_a_host_append_that_reallocates() {
+        let mut rt_app = TestApp::new();
+        let mut app = App::<TestApp>::init(Allocator).unwrap();
+        let app_ptr: *mut App<TestApp> = &raw mut app;
+        let rt_app_ptr: *mut TestApp = &raw mut rt_app;
+
+        // Four fabricated surfaces: two live, two the host "creates".
+        let mut cores: Vec<Box<std::mem::MaybeUninit<Surface<TestApp>>>> = (0..4)
+            .map(|_| Box::new(std::mem::MaybeUninit::uninit()))
+            .collect();
+        let mut rts: Vec<*mut TestSurface> = Vec::new();
+        for (i, mu) in cores.iter_mut().enumerate() {
+            let core = fabricateSurface(mu, i as u64 + 1);
+            // `performBindingAction` reaches the runtime through `rt_app`.
+            unsafe { std::ptr::addr_of_mut!((*core).rt_app).write(rt_app_ptr) };
+            let rt = Box::into_raw(Box::new(TestSurface {
+                core,
+                app: rt_app_ptr,
+            }));
+            unsafe { std::ptr::addr_of_mut!((*core).rt_surface).write(rt) };
+            rts.push(rt);
+        }
+        unsafe {
+            (*app_ptr).addSurface(rts[0]);
+            (*app_ptr).addSurface(rts[1]);
+            // A full list: the first append from the callback reallocates it.
+            (*app_ptr).surfaces.shrink_to_fit();
+            assert_eq!((*app_ptr).surfaces.len(), (*app_ptr).surfaces.capacity());
+            (*rt_app_ptr).append_to.set(app_ptr);
+            *(*rt_app_ptr).append_on_new_split.borrow_mut() = vec![rts[3], rts[2]];
+        }
+        let before = unsafe { (*rt_app_ptr).recorded().len() };
+
+        unsafe {
+            App::performAllAction(
+                app_ptr,
+                &*rt_app_ptr,
+                BindingAction::NewSplit(rustty_input::binding::SplitDirection::Right),
+            )
+        }
+        .unwrap();
+
+        let splits = unsafe { (*rt_app_ptr).recorded() }[before..]
+            .iter()
+            .filter(|(t, a)| {
+                *t == TargetKey::Surface && *a == RecordedAction::Simple(ActionKey::NewSplit)
+            })
+            .count();
+        assert_eq!(2, splits, "each original surface performs the action once");
+        assert_eq!(
+            4,
+            unsafe { (*app_ptr).surfaces.len() },
+            "both host appends landed"
+        );
+
+        unsafe { (*app_ptr).surfaces.clear() };
+        app.deinit();
+        for rt in rts {
+            drop(unsafe { Box::from_raw(rt) });
+        }
+        drop(cores);
     }
 
     // rustty-only: deleteSurface clears a matching focused_surface (the

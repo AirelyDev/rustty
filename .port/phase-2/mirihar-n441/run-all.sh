@@ -13,6 +13,7 @@ verdict() {
 for c in n441_inline_renderer n441_boxed_renderer \
          n441_residual_terminal_inline n441_residual_terminal_boxed \
          n441_box_drop_leak n441_box_dealloc_after_deinit \
+         n441_r1_drop_only_fields_leak n441_r1_display_after_free n441_r2_deinit_then_drop \
          n442_shipped_key_route n442_shipped_binding_new_split \
          n442_shipped_binding_new_tab n442_shipped_binding_new_window \
          n442_raw_this_spans \

@@ -377,6 +377,154 @@ fn run_box_dealloc_after_deinit() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// N441 fix round 2 (ruling 46): the backend teardown. The renderer's fields that
+// only `Drop` frees (the Metal backend with its display-callback context, the
+// search matches, the `Arc`s) and the layer the host view keeps alive with the
+// callback pointing into the renderer. Round 1 freed the renderer WITHOUT drop
+// glue and never cleared the callback: those fields leak, and a later display
+// pass on the view-retained layer runs the callback on the freed renderer. Round
+// 2: `Renderer::deinit` calls `Metal::deinit` (clear the callback, free its
+// context, as the reference's `layer.release()`), then the owner drops the
+// renderer normally.
+// ---------------------------------------------------------------------------
+mod backend {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    /// The CALayer the host view retains: a display callback + context.
+    pub struct Layer {
+        pub cb: Cell<Option<unsafe fn(*mut Ctx)>>,
+        pub ctx: Cell<*mut Ctx>,
+    }
+
+    impl Layer {
+        /// Core Animation's display pass.
+        pub fn display(&self) {
+            if let Some(cb) = self.cb.get() {
+                unsafe { cb(self.ctx.get()) };
+            }
+        }
+    }
+
+    /// `DisplayCallbackCtx { renderer, lock }`.
+    pub struct Ctx {
+        pub renderer: *mut Renderer,
+    }
+
+    /// `Metal`: the layer reference and the callback context.
+    pub struct Metal {
+        pub layer: Rc<Layer>,
+        pub display_ctx: *mut Ctx,
+    }
+
+    impl Metal {
+        /// Round 2 `Metal::deinit`: clear the callback, free the context.
+        pub fn deinit(&mut self) {
+            self.layer.cb.set(None);
+            self.layer.ctx.set(core::ptr::null_mut());
+            if !self.display_ctx.is_null() {
+                drop(unsafe { Box::from_raw(self.display_ctx) });
+                self.display_ctx = core::ptr::null_mut();
+            }
+        }
+    }
+
+    impl Drop for Metal {
+        fn drop(&mut self) {
+            self.deinit();
+        }
+    }
+
+    #[allow(dead_code)]
+    pub struct Renderer {
+        pub api: Metal,
+        pub cells: Vec<u32>,
+        /// `search_matches`: freed only by `Drop` (the reference frees its arena
+        /// in `deinit`; the port's `Option` drops).
+        pub search_matches: Option<Vec<u32>>,
+        pub latest_frame: std::sync::Arc<u32>,
+        pub drawn: u32,
+    }
+
+    /// `display_callback` → `draw_frame_raw(renderer, sync = true)`.
+    pub unsafe fn display_callback(ctx: *mut Ctx) {
+        unsafe {
+            let r = (*ctx).renderer;
+            (*r).drawn += 1;
+        }
+    }
+
+    /// `Renderer::init` + `loopEnter` (the render thread installs the callback).
+    pub fn new(layer: &Rc<Layer>) -> *mut Renderer {
+        let r = Box::into_raw(Box::new(Renderer {
+            api: Metal {
+                layer: layer.clone(),
+                display_ctx: core::ptr::null_mut(),
+            },
+            cells: vec![0; 4],
+            search_matches: Some(vec![1, 2, 3]),
+            latest_frame: std::sync::Arc::new(0),
+            drawn: 0,
+        }));
+        let ctx = Box::into_raw(Box::new(Ctx { renderer: r }));
+        unsafe {
+            (*r).api.display_ctx = ctx;
+            layer.cb.set(Some(display_callback));
+            layer.ctx.set(ctx);
+        }
+        r
+    }
+
+    /// `Renderer::deinit` without `api.deinit()` (round 1): the explicit
+    /// teardown of what `deinit` owns.
+    pub unsafe fn renderer_deinit_round1(r: *mut Renderer) {
+        unsafe { (*r).cells = Vec::new() };
+    }
+
+    /// `Renderer::deinit` with `api.deinit()` (round 2).
+    pub unsafe fn renderer_deinit_round2(r: *mut Renderer) {
+        unsafe {
+            (*r).cells = Vec::new();
+            (*r).api.deinit();
+        }
+    }
+
+    pub fn host_layer() -> Rc<Layer> {
+        Rc::new(Layer {
+            cb: Cell::new(None),
+            ctx: Cell::new(core::ptr::null_mut()),
+        })
+    }
+}
+
+/// Round 1: `deinit`, then the box freed as `ManuallyDrop` (no glue).
+fn run_r1_backend(display_after: bool) {
+    let layer = backend::host_layer();
+    let r = backend::new(&layer);
+    unsafe {
+        backend::renderer_deinit_round1(r);
+        drop(Box::from_raw(
+            r.cast::<std::mem::ManuallyDrop<backend::Renderer>>(),
+        ));
+    }
+    if display_after {
+        // A resize / display pass on the view-retained layer.
+        layer.display();
+    }
+}
+
+/// Round 2: `deinit` (with `Metal::deinit`), then the renderer dropped normally.
+fn run_r2_backend() {
+    let layer = backend::host_layer();
+    let r = backend::new(&layer);
+    unsafe {
+        backend::renderer_deinit_round2(r);
+        drop(Box::from_raw(r));
+    }
+    layer.display();
+}
+
 // ===========================================================================
 // N442 / N443 / N448
 // ===========================================================================
@@ -1056,6 +1204,10 @@ fn main() {
         // Fix round 1: the box freed without drop glue.
         "n441_box_drop_leak" => run_box_drop_leak(),
         "n441_box_dealloc_after_deinit" => run_box_dealloc_after_deinit(),
+        // Fix round 2: the backend teardown and the fields only `Drop` frees.
+        "n441_r1_drop_only_fields_leak" => run_r1_backend(false),
+        "n441_r1_display_after_free" => run_r1_backend(true),
+        "n441_r2_deinit_then_drop" => run_r2_backend(),
 
         // ---- N442: before T5b ----
         "n442_shipped_key_route" => n442_keys(M::Shipped, n442::c_surface_key, &[4, 1, 2, 3]),

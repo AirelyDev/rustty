@@ -2352,7 +2352,7 @@ where
                 // errdefer alloc.destroy(mutex);
                 unsafe { drop(Box::from_raw(mutex)) };
                 // errdefer renderer_impl.deinit();
-                // (N441: then its own allocation is released, no drop glue.)
+                // (N441: then the renderer is dropped and its allocation freed.)
                 unsafe {
                     (*renderer_ptr).deinit();
                     renderer_impl.dealloc_after_deinit();
@@ -2407,7 +2407,7 @@ where
                 // errdefer alloc.destroy(mutex);
                 unsafe { drop(Box::from_raw(mutex)) };
                 // errdefer renderer_impl.deinit();
-                // (N441: then its own allocation is released, no drop glue.)
+                // (N441: then the renderer is dropped and its allocation freed.)
                 unsafe {
                     (*renderer_ptr).deinit();
                     renderer_impl.dealloc_after_deinit();
@@ -3157,8 +3157,8 @@ where
             drop(Box::from_raw((*self_).renderer_state.mutex));
             // errdefer renderer_impl.deinit(); (Surface.zig:559)
             (*(*self_).renderer.as_ptr()).deinit();
-            // (N441: then its own allocation is released, no drop glue; the
-            // caller frees the surface slot the same way.)
+            // (N441: then the renderer is dropped and its own allocation freed;
+            // the caller frees the surface slot itself without glue.)
             (*self_).renderer.dealloc_after_deinit();
             // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD115: the
             // missing `errdefer app.font_grid_set.deref(font_grid_key)` (see the
@@ -3284,8 +3284,8 @@ where
         // the out-of-line renderer overlaps nothing.)
         unsafe {
             (*self.renderer.as_ptr()).deinit();
-            // (N441: then its own allocation is released, no drop glue; the
-            // apprt frees the surface itself without glue too.)
+            // (N441: then the renderer is dropped and its own allocation freed;
+            // the apprt frees the surface itself without glue.)
             self.renderer.dealloc_after_deinit();
         }
         // self.io_thread.deinit();
