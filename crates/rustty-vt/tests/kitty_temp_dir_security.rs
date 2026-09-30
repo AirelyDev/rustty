@@ -97,7 +97,13 @@ fn kitty_temp_file_medium_ignores_the_process_tmpdir() {
     let allowed_file = allowed.join(FILE_NAME);
     std::fs::write(&allowed_file, IMAGE_DATA).unwrap();
 
-    let limits = Limits::all_with_temp_dir(&path_bytes(&allowed));
+    // Named so this buffer outlives every later use of `limits` below:
+    // `Limits::all_with_temp_dir` (P7-W2 T3, oracle `105d0a545`) borrows its
+    // argument instead of copying it (see the `TemporaryFileLimit` PORT
+    // NOTE), matching upstream's own zero-copy slice.
+    // SAFETY: `allowed_bytes` outlives every use of `limits` below.
+    let allowed_bytes = path_bytes(&allowed);
+    let limits = unsafe { Limits::all_with_temp_dir(&allowed_bytes) };
 
     // Point the process temp dir AT THE ATTACKER'S DIRECTORY. Before
     // `e8525c0fd` this is exactly what `isPathInTempDir` consulted, so the
@@ -152,7 +158,9 @@ fn kitty_temp_file_medium_ignores_the_process_tmpdir() {
     // was caused by the configured directory and not by some unrelated
     // property of the path (a self-check against a vacuous control).
     std::fs::write(&attacker_file, IMAGE_DATA).unwrap();
-    let attacker_limits = Limits::all_with_temp_dir(&path_bytes(&attacker));
+    // SAFETY: `attacker_bytes` outlives every use of `attacker_limits` below.
+    let attacker_bytes = path_bytes(&attacker);
+    let attacker_limits = unsafe { Limits::all_with_temp_dir(&attacker_bytes) };
     assert!(
         LoadingImage::init(
             rustty_vt::alloc::Global,
