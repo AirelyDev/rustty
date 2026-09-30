@@ -48,6 +48,7 @@ use libadwaita as adw;
 use libadwaita::prelude::*;
 use libadwaita::subclass::prelude::*;
 
+use rustty_apprt_api::action::ResizeWindow;
 use rustty_apprt_api::{Clipboard, NewSurfaceContext};
 use rustty_config::value_types::{
     Fullscreen, GtkTabsLocation, GtkTitlebarStyle, GtkToolbarStyle, WindowNewTabPosition,
@@ -208,6 +209,12 @@ mod imp {
         /// PORTS: `window.zig:250` `surface_init` — whether any surface has
         /// initialized (gates default-size).
         pub surface_init: Cell<bool>,
+
+        /// True if the running program requested a resize (see
+        /// resizeSurface) that toplevelComputeSize should not override.
+        ///
+        /// PORTS: `window.zig:267-269` `resize_requested` (219cca932).
+        pub resize_requested: Cell<bool>,
 
         /// See tabOverviewOpen for why we have this.
         ///
@@ -953,6 +960,14 @@ mod imp {
             // if (self.isMaximized() or self.isFullscreen() or
             //     self.isQuickTerminal()) return;
             if obj.is_maximized() || obj.is_fullscreen() || obj.is_quick_terminal() {
+                return;
+            }
+
+            // Let GTK apply the default size set by a requested resize.
+            //
+            // (`window.zig:1259-1264`, 219cca932.)
+            if self.resize_requested.get() {
+                self.resize_requested.set(false);
                 return;
             }
 
@@ -1755,11 +1770,76 @@ impl Window {
             })
     }
 
+    /// Resize the window so that the given surface is the given size, as
+    /// requested by the running program. See `apprt.action.ResizeWindow`.
+    /// This is only done if the surface is the only terminal in the window
+    /// and the compositor doesn't own the window size.
+    ///
+    /// PORTS: `window.zig:964-1000` `resizeSurface` (219cca932).
+    //
+    // PORT NOTE: the refusal checks are gathered into [`ResizeSurfaceState`] and
+    // decided by the pure [`resize_surface_refused`], so each one is unit-testable
+    // without a live toplevel (the `compute_size_decision` split). Every getter is
+    // side-effect free, so reading them all before deciding is behaviour-identical
+    // to the reference's short-circuiting `or` and early returns.
+    pub fn resize_surface(&self, surface: &Surface, size: ResizeWindow) -> bool {
+        // const tree = ext.getAncestor(SplitTree, surface.as(gtk.Widget)) orelse return false;
+        // if (tree.getIsSplit()) return false;
+        let is_split = ext::ancestor::<SplitTree>(surface).map(|t| t.is_split());
+        if resize_surface_refused(ResizeSurfaceState {
+            quick_terminal: self.is_quick_terminal(),
+            maximized: self.is_maximized(),
+            fullscreen: self.is_fullscreen(),
+            tiled: self.is_tiled(),
+            n_pages: self.get_tab_view().n_pages(),
+            is_split,
+        }) {
+            return false;
+        }
+
+        // The requested size is in the surface's content scale, which also
+        // includes the font DPI, so we compute the change in device pixels
+        // and then convert it to the window's logical pixels. Resizing the
+        // window by the change accounts for the headerbar and tab bar.
+        let scale = surface.get_content_scale();
+        let current = surface.get_size();
+        let factor = self.upcast_ref::<gtk4::Widget>().scale_factor() as f32;
+        let dw = resize_delta(size.width, scale.x, current.width, factor);
+        let dh = resize_delta(size.height, scale.y, current.height, factor);
+
+        let widget = self.upcast_ref::<gtk4::Widget>();
+        self.imp().resize_requested.set(true);
+        // self.as(gtk.Window).setDefaultSize(
+        //     widget.getWidth() + dw,
+        //     widget.getHeight() + dh,
+        // );
+        //
+        // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD372): the two
+        // `c_int` sums are unchecked; see `resize_default_size`.
+        let (w, h) = resize_default_size(widget.width(), widget.height(), dw, dh);
+        self.set_default_size(w, h);
+        true
+    }
+
     /// Toggle the window decorations for this window.
     ///
     /// PORTS: `window.zig:928-945` `toggleWindowDecorations`.
     pub fn toggle_window_decorations(&self) {
         self.imp().toggle_window_decorations();
+    }
+
+    /// PORTS: `window.zig:1078-1082` `isTiled` (219cca932).
+    fn is_tiled(&self) -> bool {
+        // const surface = self.as(gtk.Native).getSurface() orelse return false;
+        let Some(surface) = self.surface() else {
+            return false;
+        };
+        // const toplevel = gobject.ext.cast(gdk.Toplevel, surface) orelse return false;
+        let Ok(toplevel) = surface.downcast::<gdk4::Toplevel>() else {
+            return false;
+        };
+        // return toplevel.getState().tiled;
+        toplevel.state().contains(gdk4::ToplevelState::TILED)
     }
 
     /// Create a new tab with the given parent. The tab will be inserted
@@ -2731,6 +2811,73 @@ fn action_toggle_inspector(
     this.imp().toggle_inspector();
 }
 
+/// The window and tree state `resizeSurface` refuses on (219cca932). See
+/// [`resize_surface_refused`].
+#[derive(Clone, Copy, Debug)]
+struct ResizeSurfaceState {
+    quick_terminal: bool,
+    maximized: bool,
+    fullscreen: bool,
+    tiled: bool,
+    /// `self.getTabView().getNPages()`.
+    n_pages: i32,
+    /// `tree.getIsSplit()` of the surface's enclosing `SplitTree`, or `None` if
+    /// the surface has no `SplitTree` ancestor.
+    is_split: Option<bool>,
+}
+
+/// The refusal half of `resizeSurface` (`window.zig:968-983`, 219cca932): true
+/// when the compositor owns the window size or the surface is not the only
+/// terminal in the window.
+fn resize_surface_refused(s: ResizeSurfaceState) -> bool {
+    // if (self.isQuickTerminal() or
+    //     self.isMaximized() or
+    //     self.isFullscreen() or
+    //     self.isTiled()) return false;
+    if s.quick_terminal || s.maximized || s.fullscreen || s.tiled {
+        return true;
+    }
+    // if (self.getTabView().getNPages() != 1) return false;
+    if s.n_pages != 1 {
+        return true;
+    }
+    // const tree = ext.getAncestor(...) orelse return false;
+    // if (tree.getIsSplit()) return false;
+    s.is_split.unwrap_or(true)
+}
+
+/// Returns the change in logical pixels from the current device pixel
+/// size to the requested size, or zero if the requested size is zero.
+///
+/// PORTS: `window.zig:1003-1009` `resizeDelta` (219cca932).
+//
+// PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD372). The reference's
+// `@intFromFloat` to `c_int` panics when the delta is outside `c_int`, and core
+// can send any `u32` (a 40000 px cell × 65535 columns is 2621400000). The port
+// saturates to `i32::MIN..=i32::MAX` instead (Rust's `f32 as i32` is the
+// saturating conversion; NaN gives 0). Clamping, not refusing, is the evident
+// intent: `vt-window-resize-allowed` documents that sizes larger than the screen
+// are clamped to the screen, and every in-range oversize request already reaches
+// `setDefaultSize` for GTK and the compositor to clamp.
+fn resize_delta(requested: u32, scale: f32, current: u32, factor: f32) -> i32 {
+    if requested == 0 {
+        return 0;
+    }
+    let px = requested as f32 * scale;
+    ((px - current as f32) / factor).round() as i32
+}
+
+/// The two `setDefaultSize` arguments of `resizeSurface`: the widget's size plus
+/// the deltas (`window.zig:995-999`, 219cca932).
+//
+// PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD372). The reference's
+// `widget.getWidth() + dw` is an unchecked `c_int` sum, which panics when a delta
+// near `maxInt(c_int)` meets the headerbar height. The port saturates, the same
+// clamp as `resize_delta`.
+fn resize_default_size(width: i32, height: i32, dw: i32, dh: i32) -> (i32, i32) {
+    (width.saturating_add(dw), height.saturating_add(dh))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2822,6 +2969,127 @@ mod tests {
         assert!(imp::compute_size_decision(1000, 600, 800, 600));
         assert!(imp::compute_size_decision(800, 900, 800, 600));
         assert!(imp::compute_size_decision(3440, 1440, 1512, 982));
+    }
+
+    /// Each refusal of `resizeSurface` (219cca932), one at a time from a state
+    /// that is accepted: the quick terminal, maximized, fullscreen, tiled, more
+    /// or fewer than one tab, a split, and no enclosing `SplitTree`.
+    #[test]
+    fn resize_window_refuses_when_not_the_only_floating_terminal() {
+        let ok = ResizeSurfaceState {
+            quick_terminal: false,
+            maximized: false,
+            fullscreen: false,
+            tiled: false,
+            n_pages: 1,
+            is_split: Some(false),
+        };
+        assert!(
+            !resize_surface_refused(ok),
+            "a lone floating terminal resizes"
+        );
+
+        let refused = [
+            (
+                "quick terminal",
+                ResizeSurfaceState {
+                    quick_terminal: true,
+                    ..ok
+                },
+            ),
+            (
+                "maximized",
+                ResizeSurfaceState {
+                    maximized: true,
+                    ..ok
+                },
+            ),
+            (
+                "fullscreen",
+                ResizeSurfaceState {
+                    fullscreen: true,
+                    ..ok
+                },
+            ),
+            ("tiled", ResizeSurfaceState { tiled: true, ..ok }),
+            ("two tabs", ResizeSurfaceState { n_pages: 2, ..ok }),
+            ("no tabs", ResizeSurfaceState { n_pages: 0, ..ok }),
+            (
+                "split",
+                ResizeSurfaceState {
+                    is_split: Some(true),
+                    ..ok
+                },
+            ),
+            (
+                "no split tree",
+                ResizeSurfaceState {
+                    is_split: None,
+                    ..ok
+                },
+            ),
+        ];
+        for (name, state) in refused {
+            assert!(resize_surface_refused(state), "{name} must refuse");
+        }
+    }
+
+    /// `resizeDelta` and the `setDefaultSize` sums on in-range sizes: the
+    /// positive controls of `.port/phase-7/probes/p7w6t2_gtk_resize_delta_probe.zig`
+    /// (`ok` and `hidpi`), which give the same numbers in Zig.
+    #[test]
+    fn resize_window_delta_in_range() {
+        // A zero (omitted) dimension leaves that dimension alone.
+        assert_eq!(resize_delta(0, 1.0, 800, 1.0), 0);
+        // `ok`: CSI 8;24;80 t, 10x20 px cells, 2 px padding, 1x: core sends
+        // 804x484 for an 800x480 surface under a 47 px headerbar.
+        let (dw, dh) = (
+            resize_delta(804, 1.0, 800, 1.0),
+            resize_delta(484, 1.0, 480, 1.0),
+        );
+        assert_eq!((dw, dh), (4, 4));
+        assert_eq!(resize_default_size(800, 527, dw, dh), (804, 531));
+        // `hidpi`: the same request on a 2x display (content scale 2, integer
+        // scale factor 2): core sends 800x480 points; no change.
+        let (dw, dh) = (
+            resize_delta(800, 2.0, 1600, 2.0),
+            resize_delta(480, 2.0, 960, 2.0),
+        );
+        assert_eq!(resize_default_size(800, 527, dw, dh), (800, 527));
+        // Shrinking gives a negative delta.
+        assert_eq!(resize_delta(400, 1.0, 800, 1.0), -400);
+    }
+
+    /// UD372: `resizeDelta`'s `@intFromFloat` to `c_int` and the `setDefaultSize`
+    /// sum both panic in the reference for sizes the core can send (measured by
+    /// `.port/phase-7/probes/p7w6t2_gtk_resize_delta_probe.zig`, cases `cvt` and
+    /// `add`). The port clamps to `i32::MAX`, so the window is asked for the
+    /// largest size and GTK and the compositor clamp it to the screen.
+    ///
+    /// NEGATIVE CONTROL: with the reference's checked conversion
+    /// (`i32::try_from(x as i64).unwrap()`, the Zig safety check) in
+    /// `resize_delta` the `cvt` assertion panics; with the reference's plain `+`
+    /// in `resize_default_size` the `add` assertion panics with "attempt to add
+    /// with overflow".
+    #[test]
+    fn ud372_resize_window_delta_saturates_instead_of_trapping() {
+        // `cvt`: `adjust-cell-width` giving a 40000 px cell, CSI 8;24;65535 t,
+        // 1x. Core sends 65535 * 40000 = 2621400000 (fits u32); the delta
+        // 2621399200 does not fit c_int.
+        let dw = resize_delta(65535 * 40000, 1.0, 800, 1.0);
+        assert_eq!(dw, i32::MAX);
+        assert_eq!(resize_default_size(800, 527, dw, 0), (i32::MAX, 527));
+
+        // `add`: a 32768 px cell, `window-padding-y = 16610`, CSI 8;65535;0 t:
+        // core sends 2147484160 (its own f32 rounding of 2147484100). The delta
+        // rounds to 2147483520, which fits, but the sum with a 650 px widget
+        // height does not.
+        let dh = resize_delta(2_147_484_160, 1.0, 600, 1.0);
+        assert_eq!(dh, 2_147_483_520);
+        assert_eq!(resize_default_size(800, 650, 0, dh), (800, i32::MAX));
+
+        // The largest request at a large content scale still clamps.
+        assert_eq!(resize_delta(u32::MAX, 4.0, 1, 1.0), i32::MAX);
     }
 
     /// Build a process-global default [`Application`] the way the app-lifecycle

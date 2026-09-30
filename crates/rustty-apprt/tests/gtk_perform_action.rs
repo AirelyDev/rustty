@@ -232,7 +232,7 @@ fn perform_action_unimplemented_returns_false() {
     let h = display_application();
 
     // The Unimplemented set, one variant per reference line (`:777-791`).
-    let unimplemented: [Action<'_>; 14] = [
+    let unimplemented: [Action<'_>; 13] = [
         Action::SecureInput(SecureInput::Toggle),
         Action::CloseAllWindows,
         Action::FloatWindow(FloatWindow::Toggle),
@@ -251,10 +251,6 @@ fn perform_action_unimplemented_returns_false() {
             b: 0,
         }),
         Action::ResetWindowSize,
-        Action::ResizeWindow(rustty_apprt_api::action::ResizeWindow {
-            width: 0,
-            height: 0,
-        }),
         Action::CheckForUpdates,
         Action::Undo,
         Action::Redo,
@@ -302,6 +298,28 @@ fn perform_action_selection_changed_returns_true() {
         handled,
         ".selection_changed is a handled no-op (returns true)"
     );
+}
+
+/// `.resize_window` is implemented (219cca932), so it has left the Unimplemented
+/// block. Its `.app` arm warns `resize_window to app is unexpected` and returns
+/// `false` (`application.zig:2921-2925`). The `.surface` arm is covered live by
+/// `gtk_resize_window_live.rs`.
+#[test]
+#[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk \
+            --test gtk_perform_action -- --ignored --exact"]
+fn perform_action_resize_window_app_returns_false() {
+    let h = display_application();
+    let handled = h
+        .application
+        .perform_action(
+            Target::<NullHandle>::App,
+            Action::ResizeWindow(rustty_apprt_api::action::ResizeWindow {
+                width: 800,
+                height: 600,
+            }),
+        )
+        .expect("resize_window dispatch does not error");
+    assert!(!handled, ".resize_window to the app is not performed");
 }
 
 // Silence unused-import warnings for the payload types the coverage classifier
