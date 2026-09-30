@@ -9636,3 +9636,58 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   production owners' error paths (`screen_set`, snapshot decode and codec, the tmux viewer pane sync,
   termio init) never drop a live `PageList`.
 - **fix**: the test now deinits the three objects, as the reference does.
+
+## N461 — the UD351 OSC 7 control test assumed a unix host
+
+- **id**: N461. P7-W12 T1b (carried from W7.T5d). **severity**: none in production (test only).
+  **state**: CLOSED by P7-W12 T1b (`f739cd6d9`).
+- **finding**: `ud351_osc7_percent_encoded_local_host_still_sets_the_pwd` failed on
+  `x86_64-pc-windows-msvc` (`left: Some("/tmp")`, `right: None`), already at `df350e613`. On Windows
+  `reportPwd` logs "reportPwd unimplemented on windows" and returns before it parses the URL
+  (`stream_handler.zig:1486-1489`, ported as-is), so no OSC 7 sets the pwd there. Not a UD: the
+  Windows arm is the reference's declared behaviour and is ported unchanged.
+- **fix**: the control expects `None` on Windows, with a PORT NOTE that it pins the early return and
+  that the other `ud351_*` rejections hold on Windows only through it.
+- **evidence**: rwin, `cargo test -p rustty-termio --lib --target x86_64-pc-windows-msvc ud351`:
+  1 failed at `5da45a868`, 6 passed after; the full `-p rustty-termio` run is 74 passed, 0 failed,
+  14 ignored.
+
+## N462 — the DMA-BUF strict-mode pivots were dead code on Windows
+
+- **id**: N462. P7-W12 T1b. **severity**: low (CI Windows clippy red). **state**: CLOSED by
+  P7-W12 T1b (`d857cb820`).
+- **finding**: `cargo clippy --workspace --all-targets -- -D warnings` for `x86_64-pc-windows-msvc`
+  failed with `dead_code` on `test_support::dmabuf_required` and `require_dmabuf_or_skip`, whose only
+  callers are `#[cfg(unix)]` DMA-BUF KATs (`opengl_impl.rs`, `target.rs`, P7-W7 T1).
+- **fix**: both are `#[cfg(unix)]`; the env-independent `require_dmabuf_or_skip_impl` and its unit
+  tests stay on every target.
+- **evidence**: rwin, the Windows clippy failed with the two errors at `5da45a868` and is clean after.
+
+## N463 — the iocp `log_warn!` shim left a release-only unused variable
+
+- **id**: N463. P7-W12 T1b. **severity**: low (a release-build warning). **state**: CLOSED by
+  P7-W12 T1b (`6bf795191`).
+- **finding**: `cargo build -p rustty --release --target x86_64-pc-windows-msvc` warned
+  `unused variable: err` at `rustty-xev/src/iocp.rs` (`async_notify`): the shim dropped its arguments
+  under `#[cfg(not(debug_assertions))]`, and that log is the binding's only read.
+- **fix**: the shim tests `cfg!(debug_assertions)`, so its arguments are type-checked and used in
+  every profile; release still formats nothing.
+- **evidence**: rwin, the release build has no warning after the fix.
+
+## N464 — `dcimgui-sys/ext.cpp` failed a native aarch64 Windows build with clang 23
+
+- **id**: N464. P7-W12 T1b (carried from W7.T5d). **severity**: low (native ARM64 Windows build
+  broken; CI's Windows job is x64 only). **state**: CLOSED by P7-W12 T1b (`cd9a6d29a`).
+- **finding**: `ext.cpp` includes `dcimgui.h` inside `namespace cimgui`, so the TU's first
+  `<stdint.h>` declares `cimgui::uint64_t` and sets the include guard. The OpenGL3 loader's
+  `<windows.h>` then reaches the compiler's `<intrin.h>`. clang 23's includes `<arm_acle.h>` on
+  aarch64 (`intrin.h:33-34`), which needs `::uint64_t`: "unknown type name 'uint64_t'; did you mean
+  'cimgui::uint64_t'?". Port-only, not a UD: the reference's `ext.cpp` is the same, but its pinned
+  Zig 0.16 clang (21.1.8) `<intrin.h>` has no `<arm_acle.h>` include, and the reference `ext.cpp`
+  compiles for `aarch64-windows-gnu` with that Zig. Rustty compiles with the host's clang-cl
+  (`prefer_clang_cl_over_msvc`, N353), so it meets the newer header.
+- **fix**: `ext.cpp` includes the five C headers `dcimgui.h` pulls in at global scope before the
+  namespace, making the in-namespace includes no-ops.
+- **evidence**: rwin, `cargo build -p dcimgui-sys --target aarch64-pc-windows-msvc` failed at
+  `5da45a868` and passes after; the native ARM64 `cargo build --workspace --all-targets` and clippy
+  `-D warnings` (the CI excludes) then pass. macOS and Linux rebuild `dcimgui-sys` clean.
