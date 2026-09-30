@@ -8797,7 +8797,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   before joining the completion thread and models the new order (still UB / CLEAN / CLEAN). Fix round 2
   (ruling 41): the retry state is `HealthReport` (`reported` under a mutex, `pending`, a paced `draw_now`
   wakeup that skips while the display link runs), shared by the renderer (`health_report`) and the
-  context; the harness models `reported` (still UB / CLEAN / CLEAN).
+  context; the harness models `reported` (still UB / CLEAN / CLEAN). Fix round 3: the wake is sent only when a
+  report becomes owed, and core's `drawNowCallback` arms the animation timer while one is owed
+  (`Renderer::health_report_owed_raw`), so no refused report is stranded.
 
 ## N441 — main-thread references to the whole core `Surface` cover the renderer the render thread writes under the draw mutex
 

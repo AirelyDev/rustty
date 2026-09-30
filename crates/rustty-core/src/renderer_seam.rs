@@ -1764,6 +1764,24 @@ where
         // t.drawFrame(true);
         Self::drawFrame(self_, true);
 
+        // PORT NOTE: reference defect (R13), UD362 (Metal; fix round 3). A health
+        // report the full app mailbox refused stays owed (`HealthReport`) and is an
+        // animation wake, but the reference's `drawNowCallback` never arms the
+        // animation timer, so a draw here could be the last one: the draw the
+        // report's own `draw_now` wake caused, or a no-redraw draw that parked the
+        // display link while the report was being refused. Arm it (after the draw
+        // and its display-link resync) while a report is owed; the Draw timer
+        // re-arms itself and draws only while no display link runs.
+        #[cfg(target_os = "macos")]
+        if unsafe {
+            rustty_renderer::Renderer::health_report_owed_raw(
+                &raw mut (*(*self_).renderer).0,
+                &(*self_).draw_mutex,
+            )
+        } {
+            Self::armAnimationTimer(self_);
+        }
+
         // return .rearm;
         xev::CallbackAction::Rearm
     }

@@ -6229,12 +6229,19 @@ mod macos_impl {
     //   draw renders a frame whose completion retries, and a render-thread draw
     //   resyncs the display link, which then runs (vsync-paced) until the report
     //   lands and a draw finds nothing to redraw.
-    // - `wake`: the render thread's `draw_now` wakeup, to start that retry at once
-    //   when nothing else will. It is paced: skipped while the display link is
-    //   running (its vsync tick already draws), and otherwise sent at most once per
-    //   `DRAW_INTERVAL_MS`. Armed by `loop_enter_raw` / on link creation, disarmed
-    //   by `loop_exit_raw` (render thread) before `draw_now` is deinitialized and
-    //   the link released; a completion uses it only under the same mutex.
+    // - `wake`: the render thread's `draw_now` wakeup, to start that retry at once.
+    //   It is sent only when a report BECOMES owed (not on every refusal), and is
+    //   skipped while the display link is running (its vsync tick already draws).
+    //   The draw it causes (`drawNowCallback`) arms the render thread's animation
+    //   timer while the report is still owed (fix round 3), and that Draw timer
+    //   re-arms itself every `DRAW_INTERVAL_MS` until `animation_wake` has nothing
+    //   left, drawing only while no display link runs; so the retries are paced
+    //   by vsync or by the timer, never by the completions. The same post-draw
+    //   check also catches a report refused while a no-redraw draw was parking
+    //   the link (the wake saw it running). Armed by `loop_enter_raw` / on link
+    //   creation, disarmed by `loop_exit_raw` (render thread) before `draw_now` is
+    //   deinitialized and the link released; a completion uses it only under the
+    //   same mutex.
     // In its own allocation (an `Arc` the renderer and each in-flight frame's
     // `CompletionContext` share, N440).
     pub struct HealthReport {
@@ -6248,7 +6255,6 @@ mod macos_impl {
     struct HealthReportWake {
         draw_now: Option<Async>,
         link: Option<DisplayLinkHandle>,
-        last: Option<Instant>,
     }
 
     // SAFETY: `link` is a CVDisplayLink handle, only queried (`isRunning`) while
@@ -6305,11 +6311,11 @@ mod macos_impl {
             self.wake_state().link = link;
         }
 
-        /// Wakes the render thread to retry an owed report, paced: not while the
-        /// display link runs, and at most once per `DRAW_INTERVAL_MS`. Returns
-        /// whether `draw_now` was notified.
+        /// Wakes the render thread to retry a report that just became owed: not
+        /// while the display link runs (its tick draws). Returns whether
+        /// `draw_now` was notified.
         pub fn wake(&self) -> bool {
-            let mut w = self.wake_state();
+            let w = self.wake_state();
             let Some(draw_now) = w.draw_now else {
                 return false;
             };
@@ -6320,13 +6326,6 @@ mod macos_impl {
                     return false;
                 }
             }
-            let now = Instant::now();
-            if let Some(last) = w.last {
-                if now.duration_since(last) < std::time::Duration::from_millis(DRAW_INTERVAL_MS) {
-                    return false;
-                }
-            }
-            w.last = Some(now);
             if let Err(err) = draw_now.notify() {
                 log::warn!(target: LOG_SCOPE, "error notifying draw_now err={err:?}");
             }
@@ -6395,9 +6394,14 @@ mod macos_impl {
                 *reported = health;
                 report.pending.store(false, Ordering::SeqCst);
             } else {
-                report.pending.store(true, Ordering::SeqCst);
+                // Wake the render thread only when the report becomes owed; while
+                // it stays owed the render thread's animation timer (or the display
+                // link) paces the retries.
+                let was_owed = report.pending.swap(true, Ordering::SeqCst);
                 drop(reported);
-                report.wake();
+                if !was_owed {
+                    report.wake();
+                }
             }
         }
 
@@ -7794,6 +7798,21 @@ mod macos_impl {
             }
         }
 
+        /// Whether a health report is owed (UD362, `HealthReport`), through the
+        /// caller's `draw_mutex` handle.
+        ///
+        /// The render thread's `drawNowCallback` asks this after its draw (and
+        /// the display-link resync) and arms its animation timer when it is true,
+        /// so an owed report keeps being retried even when the draw that
+        /// `HealthReport::wake` caused, or a no-redraw draw that parked the link
+        /// while the report was being refused, would otherwise be the last one.
+        ///
+        /// # Safety
+        /// As [`Self::with_locked`].
+        pub unsafe fn health_report_owed_raw(self_ptr: *mut Renderer, lock: &DrawMutex) -> bool {
+            unsafe { Self::with_locked(self_ptr, lock, |r| r.health_report.pending()) }
+        }
+
         /// `animationWake`.
         ///
         /// # Safety
@@ -9084,21 +9103,27 @@ mod macos_impl {
                 assert!(frame_sema.timed_wait(0).is_ok());
             }
 
-            /// The retry wakes the render thread, paced: `wake` notifies the armed
-            /// `draw_now` (observed by a loop waiting on it, the render thread's
-            /// `drawNowCallback`), then not again within `DRAW_INTERVAL_MS`, and a
-            /// disarmed report notifies nothing.
+            /// The retry wakes the render thread when a report BECOMES owed, and
+            /// only then: a further refusal while it is owed does not notify (the
+            /// animation timer paces those), and after the report settles the next
+            /// refusal notifies again at once, however soon (fix round 3: a timed
+            /// pacing could skip that wake and strand the report). Observed by a
+            /// kqueue loop waiting on `draw_now`, as the render thread's
+            /// `drawNowCallback` does.
             #[test]
-            fn metal_health_report_wake_notifies_draw_now_paced() {
+            fn metal_health_report_wakes_draw_now_when_a_report_becomes_owed() {
                 let mut draw_now = Async::init().expect("Async::init");
                 let report = HealthReport::new();
+                let mailbox = FullMailbox::new();
+                let surface_mailbox = SurfaceMailbox::new(mailbox.clone());
+                let health = AtomicHealth::new(crate::Health::Healthy);
+                let frame_sema = Semaphore::new();
+                let complete =
+                    |h| frame_completed_on(&health, &frame_sema, &surface_mailbox, &report, h);
                 // Disarmed: nothing to notify.
                 assert!(!report.wake());
-
                 report.arm(Some(draw_now));
-                assert!(report.wake());
-                // Paced: not again within the draw interval.
-                assert!(!report.wake());
+
                 let mut lp = rustty_xev::Loop::init(rustty_xev::Options::default()).expect("loop");
                 let mut woke = false;
                 let mut c_wait = rustty_xev::Completion::default();
@@ -9108,7 +9133,7 @@ mod macos_impl {
                           r: Result<(), rustty_xev::WaitError>| {
                     r.unwrap();
                     unsafe { *ud = true };
-                    rustty_xev::CallbackAction::Disarm
+                    rustty_xev::CallbackAction::Rearm
                 };
                 unsafe {
                     draw_now.wait(
@@ -9118,14 +9143,42 @@ mod macos_impl {
                         cb,
                     );
                 }
-                lp.run(rustty_xev::RunMode::Once).expect("run");
-                assert!(woke, "the retry did not notify draw_now");
-                // After the interval, again.
-                std::thread::sleep(Duration::from_millis(DRAW_INTERVAL_MS + 2));
-                assert!(report.wake());
+                let woken = |lp: &mut rustty_xev::Loop, woke: *mut bool| {
+                    lp.run(rustty_xev::RunMode::NoWait).expect("run");
+                    unsafe { core::mem::replace(&mut *woke, false) }
+                };
+
+                // Becomes owed: notified.
+                complete(crate::Health::Unhealthy);
+                assert!(report.pending());
+                assert!(
+                    woken(&mut lp, &raw mut woke),
+                    "the owed report did not wake"
+                );
+                // Still owed: not again.
+                complete(crate::Health::Unhealthy);
+                assert!(
+                    !woken(&mut lp, &raw mut woke),
+                    "a still-owed report woke again"
+                );
+                // Settles (the mailbox drains), then a new refusal right away:
+                // notified again, with no interval in between.
+                mailbox.drain();
+                complete(crate::Health::Unhealthy);
+                assert!(!report.pending());
+                mailbox.fill();
+                complete(crate::Health::Healthy);
+                assert!(report.pending());
+                assert!(
+                    woken(&mut lp, &raw mut woke),
+                    "a newly owed report did not wake"
+                );
 
                 report.arm(None);
                 assert!(!report.wake());
+                for _ in 0..4 {
+                    assert!(frame_sema.timed_wait(0).is_ok());
+                }
                 lp.deinit();
                 draw_now.deinit();
             }
@@ -10236,6 +10289,97 @@ mod macos_impl {
                 r.set_visible(true);
                 assert_eq!(running(&r), Some(true));
 
+                r.thread_exit();
+                r.deinit();
+            }
+
+            /// UD362 fix round 3, gap (b): a no-redraw draw decides, under the
+            /// lock, to park the display link; a health report refused before the
+            /// link actually stops sees the link still running and skips its
+            /// `draw_now` wake. After the draw the link is stopped and the report
+            /// is still owed: `health_report_owed_raw` says so, which is what the
+            /// render thread's `drawNowCallback` checks after its draw to arm the
+            /// animation timer (so the report is not stranded), and the owed report
+            /// is an animation wake for that timer.
+            #[test]
+            fn owed_report_refused_while_the_link_parks_is_not_stranded() {
+                let mut r = match golden_renderer(10, 3) {
+                    Some(r) => r,
+                    None => return, // skip w/o Metal
+                };
+                r.config.vsync = true;
+                let draw_now = Async::init().expect("xev Async");
+                r.sync_display_link(None, Some(draw_now));
+                if r.display_link.is_none() {
+                    r.thread_exit();
+                    r.deinit();
+                    crate::metal::test_support::require_display_or_skip(
+                        "owed_report_refused_while_the_link_parks_is_not_stranded",
+                        &"createWithActiveCGDisplays failed (no active display)",
+                    );
+                    eprintln!(
+                        "no active display; skipping \
+                         owed_report_refused_while_the_link_parks_is_not_stranded"
+                    );
+                    return;
+                }
+                r.health_report.arm(Some(draw_now));
+                let running = |r: &Renderer| r.display_link.as_ref().map(|l| l.is_running());
+
+                // A frame, then the link running (a rebuilt frame un-parks it).
+                r.draw_frame(true).expect("first draw");
+                r.cells_rebuilt.store(true, Ordering::Relaxed);
+                r.sync_display_link(None, None);
+                assert_eq!(running(&r), Some(true));
+                r.cells_rebuilt.store(false, Ordering::Relaxed);
+
+                // Between the no-redraw draw's unlock and its resync, a completion
+                // is refused: its wake sees the link still running and skips.
+                let skipped = std::rc::Rc::new(std::cell::Cell::new(None));
+                let skipped_in = skipped.clone();
+                BETWEEN_DRAW_UNLOCK_AND_SYNC.with(|h| {
+                    *h.borrow_mut() = Some(Box::new(move |this: *mut Renderer| {
+                        let report: &HealthReport = unsafe { &(*this).health_report };
+                        let refusing = SurfaceMailbox::new(std::sync::Arc::new(
+                            crate::generic::surface_mailbox_tests::RecordingSink::refusing(),
+                        ));
+                        let health = AtomicHealth::new(crate::Health::Healthy);
+                        let sema = Semaphore::new();
+                        frame_completed_on(
+                            &health,
+                            &sema,
+                            &refusing,
+                            report,
+                            crate::Health::Unhealthy,
+                        );
+                        skipped_in.set(Some(report.pending() && !report.wake()));
+                    }))
+                });
+                r.draw_frame(false).expect("no-redraw draw");
+                BETWEEN_DRAW_UNLOCK_AND_SYNC.with(|h| *h.borrow_mut() = None);
+
+                assert_eq!(
+                    skipped.get(),
+                    Some(true),
+                    "the refusal did not happen while the link was still running"
+                );
+                // The link is parked now, and the report still owed.
+                assert_eq!(running(&r), Some(false));
+                let self_ptr: *mut Renderer = &mut r;
+                let lock = r.draw_mutex.clone();
+                assert!(
+                    unsafe { Renderer::health_report_owed_raw(self_ptr, &lock) },
+                    "drawNowCallback would not see the owed report"
+                );
+                assert_eq!(
+                    r.animation_wake(),
+                    Some(AnimationWake {
+                        delay_ms: DRAW_INTERVAL_MS,
+                        kind: AnimationWakeKind::Draw
+                    })
+                );
+
+                r.health_report.arm(None);
                 r.thread_exit();
                 r.deinit();
             }
