@@ -7,6 +7,11 @@
 //! any more, so they now inspect the texture the `RenderSurface` built in its
 //! snapshot, or render a widget to a texture through its window's GSK renderer.
 //! Included by `#[path]` from each test binary; every helper is test-only.
+//!
+//! On a Linux host without a desktop session (rvm), run these KATs through the
+//! canonical launcher, `.port/tools/gtk_live_headless_sway.sh <cargo test ...>`.
+//! It starts a TILING headless sway (pixman, its own socket), and its header
+//! explains each part of the recipe (P7-W7 T6).
 #![allow(dead_code)]
 
 use gtk4::gdk;
@@ -46,6 +51,71 @@ pub unsafe fn stop_render_thread(core: *mut rustty_apprt::gtk::class::surface::C
         let _ = (*core).renderer_thread.stop.notify();
         if let Some(handle) = (*core).renderer_thr.take() {
             handle.join().expect("the render thread exits cleanly");
+        }
+    }
+}
+
+/// Stops and joins the render threads of `surfaces` when dropped, on the pass
+/// path AND when an assertion panics (P7-W7 T6, N450).
+///
+/// A KAT that stops its render threads with a trailing [`stop_render_thread`]
+/// skips that call when an assertion panics. libtest then catches the panic and
+/// calls `exit`, and the render threads are still drawing when the driver's
+/// exit-time teardown runs. On rvm (Mesa llvmpipe) that crashed the binary
+/// with SIGSEGV inside `glReadPixels` (`OpenGL::present` → `read_pixels`,
+/// on a `renderer` thread) after the test had already reported its failure.
+///
+/// Declare the guard AFTER the core app and the apprt app, so that unwinding
+/// drops it first, while the core app is still alive. While it waits for a
+/// thread to exit, it drains the core-app mailbox. A render thread blocked on a
+/// `.forever` push to a full queue (`frameCompleted`) can therefore still see
+/// its stop. The drop never panics, because a panic during unwinding aborts.
+pub struct RenderThreadGuard {
+    core_app: *mut CoreApp<gtk::App>,
+    surfaces: Vec<rustty_apprt::gtk::class::surface::Surface>,
+}
+
+impl RenderThreadGuard {
+    /// `core_app` is the test's live boxed core app, and it outlives the guard.
+    pub fn new(
+        core_app: *mut CoreApp<gtk::App>,
+        surfaces: impl IntoIterator<Item = rustty_apprt::gtk::class::surface::Surface>,
+    ) -> Self {
+        Self {
+            core_app,
+            surfaces: surfaces.into_iter().collect(),
+        }
+    }
+}
+
+impl Drop for RenderThreadGuard {
+    fn drop(&mut self) {
+        for surface in &self.surfaces {
+            let Some(core) = surface.core() else {
+                continue;
+            };
+            // SAFETY: `core` is the widget's live core surface (the KATs never
+            // finalize one), and the main thread is the only caller.
+            // `renderer_thr.take()` makes a second stop a no-op.
+            unsafe {
+                let _ = (*core).renderer_thread.stop.notify();
+                let Some(handle) = (*core).renderer_thr.take() else {
+                    continue;
+                };
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while !handle.is_finished() && std::time::Instant::now() < deadline {
+                    // SAFETY: the core app outlives the guard (see the type docs).
+                    while (*self.core_app).mailbox.pop().is_some() {}
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                if handle.is_finished() {
+                    if handle.join().is_err() {
+                        eprintln!("RenderThreadGuard: a render thread panicked");
+                    }
+                } else {
+                    eprintln!("RenderThreadGuard: a render thread did not stop within 10 s");
+                }
+            }
         }
     }
 }

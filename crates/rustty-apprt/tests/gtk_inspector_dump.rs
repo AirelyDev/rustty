@@ -26,6 +26,14 @@
 //!         cargo test -p rustty-apprt --features gtk --test gtk_inspector_dump \
 //!         -- --ignored --exact inspector_dump
 //!
+//! On a host without a desktop session (rvm), use the CANONICAL recipe, a
+//! headless sway that TILES:
+//!   .port/tools/gtk_live_headless_sway.sh cargo test -p rustty-apprt \
+//!       --features gtk --test gtk_inspector_dump -- --ignored --exact inspector_dump
+//! Do not float the windows (the v20b gate's `floating enable` rule). The
+//! floating inspector window then covers both terminals. A covered window gets
+//! no frame callbacks, so assertion (c) fails every time (P7-W7 T6).
+//!
 //! R5: gated `all(any(linux, freebsd), feature = "gtk")` — compiles out off the gate.
 #![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]
 #![allow(non_snake_case)]
@@ -158,6 +166,12 @@ fn inspector_dump() {
     window2.set_default_size(640, 400);
     window2.set_content(Some(&surface2));
     window2.present();
+
+    // Stops both render threads when it drops, including when an assertion below
+    // panics. It is declared after `core_app` and `app`, so unwinding drops it
+    // first, while the core app is still alive (P7-W7 T6).
+    let render_threads =
+        gtk_live::RenderThreadGuard::new(core_ptr, [surface.clone(), surface2.clone()]);
 
     let ctx = glib::MainContext::default();
     let keepalive =
@@ -368,9 +382,20 @@ fn inspector_dump() {
             let _ = unsafe { CoreSurface::keyCallback(c, ev.clone()) };
         }
     }
+    // A terminal's texture changes only when GTK snapshots its window, and a
+    // compositor sends no frame callbacks to a window it has fully covered. The
+    // floating inspector window covers both terminals under a floating
+    // compositor, so this assertion needs the tiling recipe in the header.
     assert!(
         both_new,
-        "both terminals kept presenting frames alongside the inspector"
+        "both terminals kept presenting frames alongside the inspector (new texture \
+         per terminal: {:?}; is a window covering the terminals? run under the \
+         tiling headless-sway recipe in this file's header)",
+        render_surfaces
+            .iter()
+            .zip(&textures_before)
+            .map(|(rs, before)| rs.texture().is_some() && rs.texture() != *before)
+            .collect::<Vec<_>>()
     );
 
     eprintln!(
@@ -406,10 +431,5 @@ fn inspector_dump() {
         run_result.err()
     );
 
-    for s in [&surface, &surface2] {
-        if let Some(core) = s.core() {
-            // SAFETY: the widget's live core surface; stopped once, before exit.
-            unsafe { gtk_live::stop_render_thread(core) };
-        }
-    }
+    drop(render_threads);
 }

@@ -9057,3 +9057,51 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   mechanism, fix and tests are in `.port/parity-closure/UPSTREAM-DEFECTS.md` UD366. This entry stays
   only as a pointer, because the T5b fix-round-1 commits, the harness and the LIFETIMES row cite
   N448.
+
+## N450 — the live inspector KAT leaves both render threads running when an assertion panics, and the process then crashes at exit
+
+- **id**: N450. P7-W7 T6 (controller ruling 47). **severity**: low. Only the test harness is
+  affected; no product path is involved. **kind**: test-harness teardown order (a crash at process
+  exit after a failed assertion). **Not upstream**: `gtk_inspector_dump` is a Rustty KAT, and the
+  reference has no counterpart.
+- **rustty (pre-fix)**: `crates/rustty-apprt/tests/gtk_inspector_dump.rs`. `inspector_dump` stopped
+  its two render threads only through the trailing `gtk_live::stop_render_thread` loop, which runs
+  after `app.run()`. An assertion that panicked earlier skipped that loop.
+- **finding**: libtest catches the panic, prints the result and calls `exit`. The two `renderer`
+  threads are still in their xev loop at that point; gdb, breaking on `exit`, shows both threads plus
+  the `io` threads alive. Mesa's exit-time teardown then runs under them. The crash occurred in 3 of
+  8 runs of the pre-fix binary on rvm:
+  - SIGSEGV on a `renderer` thread in `glReadPixels`
+    (`OpenGL::present` → `Target::read_pixels_alloc` → `gl::draw::read_pixels`, from
+    `Frame::complete` → `draw_frame_locked`, in coredumpctl);
+  - once as a glibc `corrupted double-linked list` abort.
+
+  The llvmpipe worker threads exit just before the fault, which is the driver tearing down.
+- **how found**: the P7-W7 T5c report, which saw "SIGSEGV after the panic". It was reproduced with
+  the floating headless-sway launch, which always fails assertion (c); that assertion failure is a
+  recipe issue, not a defect (see below).
+- **fix**: a new `gtk_live::RenderThreadGuard`. It is declared after the core app and the apprt app,
+  so unwinding drops it first, while the core app is alive. Its `Drop`:
+  - sends each surface's render thread its stop;
+  - drains the core-app mailbox while it waits, because a `.forever` push from `frameCompleted`
+    must not block the join;
+  - joins the thread, and never panics.
+
+  `inspector_dump` uses the guard on both the pass path and the panic path.
+- **fail-first**: under the floating recipe, the pre-fix binary crashed in 3 of 8 runs (SIGSEGV
+  ×2, abort ×1). The fixed binary crashed in 0 of 16 runs: all 16 failed cleanly with exit 101 and
+  the new per-terminal diagnostic `[false, false]`.
+- **related, not a defect**: assertion (c), "both terminals kept presenting frames alongside the
+  inspector", fails only when the sway config floats windows (the v20b gate's `floating enable`
+  rule).
+  - sway centers floating windows, and the 1000x600 inspector then fully covers both terminals.
+  - A fully covered surface gets no `wl_surface.frame` callbacks, so GTK never snapshots its
+    `RenderSurface` and its texture never changes.
+  - The result is the same at `99f23b5ee` (T2, where the assertion was introduced), at `19cb14955`
+    (T5b) and at `f00301f28`: the test passes when windows tile and fails when they float.
+    Moving the inspector off the terminals over IPC makes the floating launch pass.
+  - The canonical recipe is now `.port/tools/gtk_live_headless_sway.sh` (tiling), cited from the
+    test headers.
+- **state**: CLOSED (P7-W7 T6). The other live KATs (`gtk_window_live`, `gtk_first_light`,
+  `gtk_glyph_dump`, `gtk_render_surface`, `gtk_input_focus`) still stop their render threads with a
+  trailing call, so the same crash-after-panic can happen there. They can adopt the guard.
