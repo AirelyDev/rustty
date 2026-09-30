@@ -118,6 +118,22 @@ fn main() {
     // WASI links wasi-libc through Rust's std, so only the other wasm32 targets.
     let no_libc = wasm && target_os != "wasi";
 
+    // Check-only cross lane (W2D_WINDOWS_OS / F-001, the G-WINCHK gate's
+    // `cargo check --target x86_64-pc-windows-msvc` on a host with no MSVC
+    // sysroot), the same opt-in switch as highway/simdutf/zlib-sys and
+    // rustty-simd. `cargo check` never links, so the three C archives below are
+    // not needed and are skipped. Unlike those crates this one cannot return
+    // early: the Rust side `include!`s the bindgen output, so bindgen still
+    // runs (see the libc-shim note at the bindgen call). A real build never
+    // sets the switch, so it cannot silently skip.
+    //
+    // PORT NOTE (N480): since P7-W5 T2 made wuffs a mandatory kitty dependency
+    // the gate failed on macOS (`'stdlib.h' file not found`: no Windows SDK
+    // headers) and on Linux aarch64 (`cc: unrecognized '-m64'`: gcc driven
+    // with an x86_64 flag), because this build script ignored the switch.
+    println!("cargo:rerun-if-env-changed=RUSTTY_SYS_CHECK_ONLY");
+    let check_only = env::var_os("RUSTTY_SYS_CHECK_ONLY").is_some();
+
     let mut build = cc::Build::new();
     if minimal_libc_headers {
         build.include(&libc_include);
@@ -176,7 +192,9 @@ fn main() {
     // Compiles the single vendored TU into a static archive and emits the
     // `cargo:rustc-link-lib=static=wuffs` + search-path directives. Because the
     // crate declares `links = "wuffs"`, Cargo enforces a single linkage.
-    build.compile("wuffs");
+    if !check_only {
+        build.compile("wuffs");
+    }
 
     // The static-inline shim (shim.c): a SECOND C translation unit compiled
     // WITHOUT `WUFFS_IMPLEMENTATION` (so it emits NO duplicate copy of the codec
@@ -212,7 +230,9 @@ fn main() {
     shim.file(manifest_dir.join("shim.c"));
     println!("cargo:rerun-if-changed=shim.c");
     println!("cargo:rerun-if-changed=shim.h");
-    shim.compile("wuffs_shim");
+    if !check_only {
+        shim.compile("wuffs_shim");
+    }
 
     // The reference `main.zig`'s no-libc stubs:
     //   // Wuffs' generated `wuffs_foo__bar__alloc()` convenience functions are the
@@ -224,7 +244,7 @@ fn main() {
     //   comptime { if (!builtin.link_libc) { @export(&callocStub, ...); ... } }
     // PORT NOTE: Rust has no stable weak linkage, so the two stubs are C, in
     // their own archive, compiled only where the reference exports them.
-    if no_libc {
+    if no_libc && !check_only {
         let mut stubs = cc::Build::new();
         stubs
             .include(&libc_include)
@@ -244,8 +264,21 @@ fn main() {
     // object.
     let mut builder =
         bindgen::Builder::default().header(manifest_dir.join("wrapper.h").to_string_lossy());
-    if minimal_libc_headers {
+    // In the check-only lane the reference's minimal libc headers also stand
+    // in on Windows: the host has no Windows SDK for `stdlib.h`/`string.h`,
+    // and the shims declare the same libc symbols with the standard C ABI.
+    // None of them is allowlisted, so the generated surface is unchanged.
+    // For the same reason the lane defines Wuffs' public
+    // `WUFFS_CONFIG__AVOID_CPU_ARCH` (`wuffs-v0.4.c:138-142`): the CPU-arch
+    // block otherwise pulls in `<intrin.h>`/`<immintrin.h>`, whose clang
+    // versions `#include <malloc.h>` from the absent SDK. The switch only
+    // changes the bodies of `static inline` helpers, which bindgen never
+    // binds.
+    if minimal_libc_headers || check_only {
         builder = builder.clang_arg(format!("-I{}", libc_include.display()));
+    }
+    if check_only {
+        builder = builder.clang_arg("-DWUFFS_CONFIG__AVOID_CPU_ARCH=1");
     }
     if wasm {
         // clang gives wasm targets hidden default visibility, and bindgen

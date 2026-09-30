@@ -117,8 +117,19 @@ pub fn parse_overrides(arguments_it: glib::VariantIter) -> Option<TabOverrides> 
         // `std.meta.stringToEnum` (== `string_to_enum`, the config name-map);
         // a parse failure warns and CONTINUES (`:89-91`), unlike the
         // command arm.
+        //
+        // PORT NOTE (N477): `parseIntoField` (`cli/args.zig:326-339`) first
+        // treats an empty (post-trim) value as "reset to the field default";
+        // the anonymous struct's `@"shell-integration"` defaults to `null`,
+        // so an empty or all-whitespace `--shell-integration=` resets an
+        // earlier value to None instead of failing to parse.
         if let Some(v) = str.strip_prefix("--shell-integration=") {
-            match ShellIntegration::string_to_enum(trim_ascii_whitespace(v).as_bytes()) {
+            let trimmed = trim_ascii_whitespace(v);
+            if trimmed.is_empty() {
+                parsed_shell_integration = None;
+                continue;
+            }
+            match ShellIntegration::string_to_enum(trimmed.as_bytes()) {
                 Some(parsed) => parsed_shell_integration = Some(parsed),
                 None => {
                     log::warn!(target: LOG_SCOPE, "unable to parse shell integration {v}: InvalidValue")
@@ -209,5 +220,15 @@ mod tests {
         assert_eq!(o.title.as_deref(), Some("tab"));
         assert_eq!(o.working_directory.as_deref(), Some("/tmp/y"));
         assert_eq!(o.shell_integration, Some(ShellIntegration::Bash));
+
+        // N477: an empty or all-whitespace value is `parseIntoField`'s
+        // "reset to default" (`cli/args.zig:326-339`), and the default is
+        // `null`: a later empty value clears an earlier parsed one.
+        let o = parse(&["--shell-integration=bash", "--shell-integration="]);
+        assert_eq!(o.shell_integration, None);
+        let o = parse(&["--shell-integration=zsh", "--shell-integration= \t\x0B"]);
+        assert_eq!(o.shell_integration, None);
+        let o = parse(&["--shell-integration=", "--shell-integration=fish"]);
+        assert_eq!(o.shell_integration, Some(ShellIntegration::Fish));
     }
 }

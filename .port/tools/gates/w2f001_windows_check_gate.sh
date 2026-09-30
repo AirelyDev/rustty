@@ -19,7 +19,8 @@
 # the check-only cross lane for hosts without a Windows toolchain.
 #
 # `RUSTTY_SYS_CHECK_ONLY=1` makes the vendored-C `-sys` build scripts
-# (highway/simdutf/zlib + rustty-simd's own cc build) skip their `cc`
+# (highway/simdutf/zlib + rustty-simd's own cc build, and since N480 wuffs-sys,
+# which still runs bindgen against its minimal libc headers) skip their `cc`
 # invocations: cross-compiling them to MSVC needs a sysroot this host does not
 # have, and `cargo check` never links, so the objects are pure waste here. The
 # switch is OPT-IN — step 2 below runs with it UNSET, so a wrongly-skipped native

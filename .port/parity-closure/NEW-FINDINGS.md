@@ -9764,3 +9764,72 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **host contract**: a host must not free the surface synchronously inside the close callback. The
   surface is touched after the callback returns, as in the reference: `keyCallback`'s `InspEvGuard`
   drop re-reads it, and a chained `close_surface > X` binding runs its next action on it.
+
+## N477 — GTK `--shell-integration=` with an empty value did not reset the override
+
+- **id**: N477. P7-W12 T3 (W12.T2 re-audit, ruling 63). **severity**: low (a GTK tab-override
+  argument). **state**: CLOSED by P7-W12 T3.
+- **finding**: `Overrides.parse` hands the trimmed value to `cli.args.parseIntoField`, which first
+  treats an empty value as "reset to the field default" (`src/cli/args.zig:326-339`); the anonymous
+  struct's `@"shell-integration"` defaults to `null`. The port called `string_to_enum` directly, so
+  an empty or all-whitespace `--shell-integration=` warned "unable to parse" and kept an earlier
+  value.
+- **fix**: `crates/rustty-apprt/src/gtk/class/overrides.rs` resets `parsed_shell_integration` to
+  `None` when the trimmed value is empty, with a PORT NOTE.
+- **test**: `parse_overrides_trims_ascii_whitespace_only` gains three arms: `bash` then empty ->
+  None, `zsh` then ASCII whitespace -> None, empty then `fish` -> Fish (rvm, `--features gtk`).
+
+## N478 — the `cursor_left` reference comment predated `d4f45bee3`
+
+- **id**: N478. P7-W12 T3. **severity**: low (comment fidelity). **state**: CLOSED by P7-W12 T3.
+- **finding**: the code already carried `d4f45bee3`'s `if (count == 0) return;` after clearing a
+  pending wrap, but the quoted reference block above it was the pre-`d4f45bee3` text.
+- **fix**: the quoted block in `crates/rustty-vt/src/terminal.rs` `cursor_left` now matches
+  `Terminal.zig` at `12752b2ac`. G3b stays GREEN.
+
+## N479 — the apprt-c C-ABI smoke needed a prior `cargo build`
+
+- **id**: N479. P7-W12 T3 (W12.T2 lane A). **severity**: low (test harness). **state**: CLOSED by
+  P7-W12 T3.
+- **finding**: `c_abi_smoke_compile_link_run` looked for `librustty_apprt_c.{dylib,so,a}` in
+  `target/<profile>/`. Under `cargo test` the library an integration test links against is not a
+  cargo root, so cargo builds its cdylib and staticlib into `target/<profile>/deps/` and does not
+  uplift them; only `cargo build` does. A plain `cargo test` in a fresh clone therefore panicked
+  "missing cdylib", and after a source edit the test could link a stale uplifted copy.
+- **fix**: `crates/rustty-apprt-c/tests/smoke.rs` links the `deps/` artifacts of the running build
+  (cargo names cdylib/staticlib outputs there without a metadata hash) and asserts the test binary
+  runs from `deps/`. No skip: a missing artifact still panics (R14).
+- **evidence**: macOS, fresh `target/`, `cargo test -p rustty-apprt-c --test smoke` with no
+  `target/debug/librustty_apprt_c*` present: 4/4 pass (the old lookup panics there). Linux: rvm
+  fresh clone, same command.
+
+## N480 — G-WINCHK red on macOS and Linux: wuffs-sys ignored `RUSTTY_SYS_CHECK_ONLY`
+
+- **id**: N480. P7-W12 T3 (W12.T2 lanes A2 and C2). **severity**: low (gate lane). **state**:
+  CLOSED by P7-W12 T3.
+- **finding**: G-WINCHK's step 1 runs `cargo check --target x86_64-pc-windows-msvc` with
+  `RUSTTY_SYS_CHECK_ONLY=1`, which highway/simdutf/zlib-sys and rustty-simd honour by skipping
+  their `cc` builds. wuffs-sys, a mandatory kitty dependency since P7-W5 T2, did not: its codec TU
+  failed on macOS (`'stdlib.h' file not found`, no Windows SDK) and on Linux aarch64 (`cc:
+  unrecognized '-m64'`).
+- **fix**: `crates-sys/wuffs-sys/build.rs` honours the switch. It skips the three `cc` archives but
+  still runs bindgen (the Rust side `include!`s it), with the reference's minimal libc headers on
+  the include path and Wuffs' public `WUFFS_CONFIG__AVOID_CPU_ARCH` defined; the latter only
+  changes `static inline` bodies, which bindgen never binds, and keeps clang's `<intrin.h>` from
+  including the SDK's `<malloc.h>`. The gate is unchanged; its step 2 still compiles wuffs natively
+  with the switch unset.
+- **evidence**: `bash .port/tools/gates/w2f001_windows_check_gate.sh` PASS on macOS and on rvm.
+
+## N481 — G2 WEAKENED `core::keyToMouseShape` (frozen 13, rust 12)
+
+- **id**: N481. P7-W12 T3 (W12.T2 lane C2). **severity**: low (gate bookkeeping). **state**: CLOSED
+  by P7-W12 T3.
+- **finding**: no assertion is missing. Upstream `0fb6d2940` ("SurfaceMouse: simplify
+  keyToMouseShape") deleted the duplicate "no override restores the application shape (mouse
+  tracking)" sub-block, so the live test has 12 `testing.expect`s and the port (P7-W8 T2) has the
+  same 12. G2 compares against the phase-0 inventory, frozen at 13.
+- **fix**: a row in `.port/audits/upstream-assertion-drift.tsv` (`core keyToMouseShape 13 12
+  0fb6d2940`). G2 re-verifies each row against the live oracle, so the bar is re-based to 12, not
+  removed.
+- **evidence**: G2 GREEN, `DRIFT-OK: core::keyToMouseShape — upstream shrank 13->12 in 0fb6d2940;
+  rust=12 >= live bar 12`; `check_assertions.py --self-test` PASS.

@@ -3101,6 +3101,7 @@ impl Terminal {
         // if (self.screens.active.cursor.pending_wrap) {
         //     count -= 1;
         //     self.screens.active.cursor.pending_wrap = false;
+        //     if (count == 0) return;
         // }
         if unsafe { (*self.screens.active).cursor.pending_wrap } {
             count -= 1;

@@ -42,16 +42,32 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// The `target/<profile>/` dir that holds this test binary and the built lib
-/// artifacts. Derived from the running test executable
-/// (`target/<profile>/deps/smoke-<hash>` → `target/<profile>`).
+/// The `target/<profile>/deps/` dir that holds this test binary and the lib
+/// artifacts THIS `cargo test` invocation built. Derived from the running test
+/// executable (`target/<profile>/deps/smoke-<hash>` → its parent).
+///
+/// PORT NOTE (N479): the lib unit an integration test links against is not a
+/// cargo "root" under `cargo test`, so cargo builds its cdylib and staticlib
+/// (the `[lib] crate-type` list) into `deps/` but does NOT uplift them to
+/// `target/<profile>/`; only a `cargo build` does. The earlier lookup in
+/// `target/<profile>/` therefore failed in a fresh clone under a plain
+/// `cargo test`, and could link a STALE uplifted copy after a source edit.
+/// Cargo names cdylib/staticlib outputs in `deps/` without a metadata hash, so
+/// the paths below are fixed, and they are always the current build's.
 #[cfg(not(windows))] // (only the C smoke uses it; task W-2)
-fn target_profile_dir() -> PathBuf {
+fn target_deps_dir() -> PathBuf {
     let exe = std::env::current_exe().expect("current_exe");
-    exe.parent()
-        .and_then(Path::parent)
+    let deps = exe
+        .parent()
         .expect("test exe under target/<profile>/deps")
-        .to_path_buf()
+        .to_path_buf();
+    assert_eq!(
+        deps.file_name().and_then(|n| n.to_str()),
+        Some("deps"),
+        "the smoke test binary must run from target/<profile>/deps, found {}",
+        deps.display()
+    );
+    deps
 }
 
 /// Pick a C compiler: `$CC`, else `cc`, else `clang`.
@@ -106,7 +122,7 @@ fn staticlib_name(name: &str) -> String {
 #[test]
 fn c_abi_smoke_compile_link_run() {
     let root = workspace_root();
-    let profile_dir = target_profile_dir();
+    let deps_dir = target_deps_dir();
     let include_dir = root.join("include");
     let header = include_dir.join("rustty-apprt.h");
     let smoke_c = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -123,9 +139,10 @@ fn c_abi_smoke_compile_link_run() {
     assert!(smoke_c.exists(), "missing {}", smoke_c.display());
 
     // Both published artifacts must have been built (they are, since the crate's
-    // [lib] crate-type lists rlib+cdylib+staticlib, so `cargo test` builds them).
-    let dylib = profile_dir.join(dylib_name("rustty_apprt_c"));
-    let staticlib = profile_dir.join(staticlib_name("rustty_apprt_c"));
+    // [lib] crate-type lists rlib+cdylib+staticlib, so `cargo test` builds them
+    // into `deps/`; see `target_deps_dir`).
+    let dylib = deps_dir.join(dylib_name("rustty_apprt_c"));
+    let staticlib = deps_dir.join(staticlib_name("rustty_apprt_c"));
     assert!(
         dylib.exists(),
         "missing cdylib {} — the C-ABI smoke needs the published shared library",
@@ -157,9 +174,9 @@ fn c_abi_smoke_compile_link_run() {
         .arg(&include_dir)
         .arg(&smoke_c)
         .arg("-L")
-        .arg(&profile_dir)
+        .arg(&deps_dir)
         .arg("-lrustty_apprt_c")
-        .arg(format!("-Wl,-rpath,{}", profile_dir.display()))
+        .arg(format!("-Wl,-rpath,{}", deps_dir.display()))
         .arg("-o")
         .arg(&bin);
     let compile = cmd.output().expect("spawn C compiler");
@@ -173,9 +190,9 @@ fn c_abi_smoke_compile_link_run() {
     // Run it, asserting exit 0. Point the dynamic loader at the profile dir.
     let mut run = Command::new(&bin);
     if cfg!(target_os = "macos") {
-        run.env("DYLD_LIBRARY_PATH", &profile_dir);
+        run.env("DYLD_LIBRARY_PATH", &deps_dir);
     } else {
-        run.env("LD_LIBRARY_PATH", &profile_dir);
+        run.env("LD_LIBRARY_PATH", &deps_dir);
     }
     let output = run.output().expect("run smoke binary");
     assert!(
