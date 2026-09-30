@@ -101,16 +101,22 @@ pub fn data_file(path_: Option<&[u8]>) -> io::Result<Option<DataFile>> {
 
 /// A cache-line-aligned 4096-byte scratch buffer.
 ///
-/// PORT NOTE (§8): reproduces `[4096]u8 align(std.atomic.cache_line)`. `64` is
-/// the `std.atomic.cache_line` value on the port's targets (x86-64 / aarch64).
-/// The alignment is a perf-fidelity detail, not correctness; the non-aligned
-/// `[4096]u8` scratch buffers stay plain arrays.
-#[repr(align(64))]
-pub struct CacheLineBuf(pub [u8; 4096]);
+/// PORT NOTE (§8): reproduces `[4096]u8 align(std.atomic.cache_line)`. The
+/// zero-sized `CacheLineAligned` field carries `std.atomic.cache_line` for the
+/// build target (`rustty_zigstd::atomic::CACHE_LINE`, the reference's
+/// per-arch table: 128 on x86-64 and aarch64). The alignment is a
+/// perf-fidelity detail, not correctness; the non-aligned `[4096]u8` scratch
+/// buffers stay plain arrays.
+//
+// (This used to be `#[repr(align(64))]` with a note that 64 was the
+// cache line on x86-64 / aarch64; Zig's value there is 128. Corrected by
+// P7-W1 T3.)
+#[repr(C)]
+pub struct CacheLineBuf(pub [u8; 4096], [rustty_zigstd::atomic::CacheLineAligned; 0]);
 
 impl CacheLineBuf {
     pub fn new() -> CacheLineBuf {
-        CacheLineBuf([0u8; 4096])
+        CacheLineBuf([0u8; 4096], [])
     }
 }
 
@@ -148,6 +154,23 @@ pub fn read_slice_short<R: Read>(r: &mut R, buf: &mut [u8]) -> io::Result<usize>
 mod tests {
     use super::*;
     use std::io::{self, Read};
+
+    // Rustty-only: `[4096]u8 align(std.atomic.cache_line)` — the buffer has
+    // the reference's cache-line alignment (128 on x86-64 and aarch64) and
+    // no padding past its 4,096 bytes.
+    #[test]
+    fn cache_line_buf_is_aligned_to_the_reference_cache_line() {
+        assert_eq!(
+            rustty_zigstd::atomic::CACHE_LINE,
+            core::mem::align_of::<CacheLineBuf>()
+        );
+        if cfg!(any(target_arch = "x86_64", target_arch = "aarch64")) {
+            assert_eq!(128, core::mem::align_of::<CacheLineBuf>());
+        }
+        assert_eq!(4096, core::mem::size_of::<CacheLineBuf>());
+        let b = CacheLineBuf::new();
+        assert_eq!(0, b.0.as_ptr() as usize % rustty_zigstd::atomic::CACHE_LINE);
+    }
 
     /// Returns `Interrupted` before every chunk, then the chunk.
     struct Interrupting<'a> {

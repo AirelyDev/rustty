@@ -2089,8 +2089,8 @@ mod tests {
 
     // rustty-only (R13, UPSTREAM-DEFECTS.md UD64): the decoder boundary must
     // not reject a capacity native Ghostty can itself produce and encode. A
-    // terminal wide enough to leave the standard capacity (in Ghostty 47,932
-    // columns or more in a shipped macOS arm64 build, 48,047 in a test build;
+    // terminal wide enough to leave the standard capacity (in Ghostty 47,919
+    // columns or more in a shipped macOS arm64 build, 48,034 in a test build;
     // 48,151 is above both; the port's thresholds are the same, N88)
     // (`initialCapacity`, `PageList.zig:535-540`) gets a page that is
     // `std_capacity` with only `cols` changed. `increaseCapacity`
@@ -2167,7 +2167,9 @@ mod tests {
     // at exactly 2^32 and one byte less at 2^32 - 16,384 (task R13-L2). The
     // constant was 1,382,748,161 before NEW-FINDINGS N88 laid the style set
     // out at the reference's item geometry, which moved the grapheme section's
-    // start by 1,024 bytes.
+    // start by 1,024 bytes. Re-measured at `12752b2ac` (P7-W1 T3): unchanged,
+    // on macOS and on Linux aarch64 (1,382,759,425), after `d2ff6d77a` moved
+    // the cells to a cache-line boundary.
     #[test]
     fn decode_rejects_a_capacity_whose_exact_layout_is_one_past_the_limit() {
         let native = TerminalPageCapacity {

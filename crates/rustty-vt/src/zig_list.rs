@@ -33,17 +33,10 @@ use allocator_api2::alloc::Allocator as ApiAllocator;
 use core::alloc::Layout;
 use core::ptr::NonNull;
 
-/// `std.atomic.cache_line` for the targets the port builds (the value
-/// `alloc::ArrayListUnmanaged` uses).
-const CACHE_LINE: usize = if cfg!(any(
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    target_arch = "powerpc64"
-)) {
-    128
-} else {
-    64
-};
+/// `std.atomic.cache_line` (`std/array_list.zig` and
+/// `std/multi_array_list.zig` size `init_capacity` with it): the reference's
+/// per-target table, the value `alloc::ArrayListUnmanaged` uses too.
+const CACHE_LINE: usize = rustty_zigstd::atomic::CACHE_LINE;
 
 /// `init_capacity` of `ArrayList(T)` / `MultiArrayList(T)` for a Zig element
 /// (or, for a `MultiArrayList`, largest field) of `zig_size` bytes.

@@ -375,12 +375,42 @@ mod tests {
     #[test]
     fn page_alignment_invariant() {
         // The reference `comptime` block on Page:
-        //   assert(page_size_min % @max(@alignOf(Row), @alignOf(Cell),
-        //          StyleSet.base_align.toByteUnits()) == 0);
+        //   assert(page_size_min % @max(@alignOf(Row), cells_align,
+        //          MetaLayout.alignment) == 0);
         let m = core::mem::align_of::<Row>()
-            .max(core::mem::align_of::<Cell>())
-            .max(StyleSet::base_align());
+            .max(CELLS_ALIGN)
+            .max(MetaLayout::ALIGNMENT);
         assert_eq!(0, PAGE_SIZE_MIN % m);
+    }
+
+    #[test]
+    fn cells_align_is_the_reference_cache_line() {
+        // `cells_align = @max(@alignOf(Cell), @min(std.atomic.cache_line,
+        // std.heap.page_size_min))`; the cache line is 128 on aarch64 and
+        // x86_64 (Zig 0.16.0 `std.atomic.cacheLineForCpu`).
+        if cfg!(any(target_arch = "aarch64", target_arch = "x86_64")) {
+            assert_eq!(128, CELLS_ALIGN);
+        }
+        assert_eq!(
+            core::mem::align_of::<Cell>()
+                .max(rustty_zigstd::atomic::CACHE_LINE.min(PAGE_SIZE_MIN)),
+            CELLS_ALIGN
+        );
+        // `MetaLayout.alignment`: the largest member base alignment (8 on
+        // 64-bit targets, from the style set's and grapheme map's headers).
+        assert_eq!(
+            StyleSet::base_align()
+                .max(GraphemeAlloc::BASE_ALIGN)
+                .max(GraphemeMap::base_align())
+                .max(StringAlloc::BASE_ALIGN)
+                .max(hyperlink::Set::base_align())
+                .max(hyperlink::Map::base_align()),
+            MetaLayout::ALIGNMENT
+        );
+        // Every page's cells start on a cache line.
+        for cap in [std_capacity(), Capacity::new(1, 1), Capacity::new(80, 591), Capacity::new(3, 7)] {
+            assert_eq!(0, Page::layout(cap).cells_start % CELLS_ALIGN);
+        }
     }
 
     #[test]
@@ -452,10 +482,12 @@ mod tests {
     }
 
     #[test]
-    fn available_bits_for_grid_invariant() {
-        // The reference `availableBitsForGrid` asserts
-        //   assert(@sizeOf(Row) % @alignOf(Cell) == 0);
-        assert_eq!(0, core::mem::size_of::<Row>() % core::mem::align_of::<Cell>());
+    fn available_bytes_for_grid_invariant() {
+        // The reference `availableBytesForGrid` asserts at comptime
+        //   assert(cells_align % Page.MetaLayout.alignment == 0);
+        //   assert(@sizeOf(Cell) % Page.MetaLayout.alignment == 0);
+        assert_eq!(0, CELLS_ALIGN % MetaLayout::ALIGNMENT);
+        assert_eq!(0, core::mem::size_of::<Cell>() % MetaLayout::ALIGNMENT);
     }
 
     #[test]
@@ -475,21 +507,28 @@ mod tests {
 
     // Rustty-only (NEW-FINDINGS N88): the page geometry equals the reference's.
     //
-    // Every number below was measured from the reference at `20abdb50a` by a
-    // Zig probe appended to a scratch copy of `page.zig` (`zig build
-    // test-lib-vt`, Zig 0.16.0): natively on macOS arm64 (`page_size_min`
-    // 16 KiB) and cross-compiled with `-Dtarget=aarch64-linux-gnu` and run on
-    // Linux aarch64 (4 KiB). The probe printed `Page.layout(cap).total_size`,
-    // `styles_layout.total_size`, `availableBitsForGrid`, `maxCols`, and
-    // `adjust(.{ .cols = c }).rows` of `std_capacity` with the grapheme budget
-    // set to 512 (the test build's) and 8,192 (the shipped build's), and the
-    // total size of an 80 x 591 page as its style capacity grows.
+    // Every number below was measured from the reference at `12752b2ac` (P7-W1
+    // T3, after `d2ff6d77a` cache-line aligned the cells and moved the metadata
+    // into one `MetaLayout` block, and `6112935a2` shrank the hash-map header)
+    // by the Zig probe `.port/phase-7/probes/p7w1t3_page_geometry_probe.zig`,
+    // appended to a scratch copy of `page.zig` (`zig build test-lib-vt`, Zig
+    // 0.16.0): natively on macOS arm64 (`page_size_min` 16 KiB) and
+    // cross-compiled with `-Dtarget=aarch64-linux-gnu` and run on Linux aarch64
+    // (4 KiB). The probe printed `Page.layout(cap).total_size`,
+    // `cells_start`, `styles_layout.total_size`, `availableBytesForGrid`,
+    // `maxCols`, and `adjust(.{ .cols = c }).rows` of `std_capacity` with the
+    // grapheme budget set to 512 (the test build's) and 8,192 (the shipped
+    // build's), and the total size of an 80 x 591 page as its style capacity
+    // grows. (First measured at `20abdb50a` for N88; there the cells started
+    // at 1,720, right after the row headers, and `maxCols` was 47,931 shipped
+    // on macOS.)
     //
     // NEGATIVE CONTROL: lay the style set out with the port's own
     // `size_of::<Item>()` / `align_of::<Item>()` again (`Layout::init`,
     // `ref_counted_set.rs`) and this goes red: the styles section is 3,168
-    // bytes against 4,000, and the port's old geometry holds 594 rows at 80
-    // columns against the reference's 593 (macOS, test build).
+    // bytes against 4,000. Align the cells to `align_of::<Cell>()` again (the
+    // pre-`d2ff6d77a` layout) and it goes red on `cells_start` (1,720 against
+    // 1,792) and on the available bytes.
     #[cfg(any(
         all(target_os = "macos", target_arch = "aarch64"),
         all(any(target_os = "linux", target_os = "android"), target_arch = "aarch64")
@@ -497,7 +536,7 @@ mod tests {
     struct RefGeometry {
         grapheme_bytes: u32,
         total_size: usize,
-        available_bits: usize,
+        available_bytes: usize,
         max_cols: u16,
         /// `(cols, rows)` of `std_capacity.adjust(.{ .cols = cols })`.
         rows: [(u16, u16); 13],
@@ -510,10 +549,10 @@ mod tests {
         RefGeometry {
             grapheme_bytes: 512,
             total_size: 393216,
-            available_bits: 3075008,
-            max_cols: 48046,
+            available_bytes: 384396,
+            max_cols: 48033,
             rows: [
-                (1, 24023),
+                (1, 24017),
                 (40, 1171),
                 (80, 593),
                 (100, 475),
@@ -524,7 +563,7 @@ mod tests {
                 (200, 239),
                 (215, 222),
                 (256, 186),
-                (1000, 47),
+                (1000, 48),
                 (10000, 4),
             ],
             non_std: [(256, 409600), (2048, 458752), (8192, 655360), (65535, 2441216)],
@@ -532,11 +571,11 @@ mod tests {
         RefGeometry {
             grapheme_bytes: 8192,
             total_size: 409600,
-            available_bits: 3067648,
-            max_cols: 47931,
+            available_bytes: 383476,
+            max_cols: 47918,
             rows: [
                 (1, 23966),
-                (40, 1169),
+                (40, 1168),
                 (80, 591),
                 (100, 474),
                 (119, 399),
@@ -558,10 +597,10 @@ mod tests {
         RefGeometry {
             grapheme_bytes: 512,
             total_size: 380928,
-            available_bits: 2976704,
-            max_cols: 46510,
+            available_bytes: 372108,
+            max_cols: 46497,
             rows: [
-                (1, 23255),
+                (1, 23249),
                 (40, 1134),
                 (80, 574),
                 (100, 460),
@@ -580,12 +619,12 @@ mod tests {
         RefGeometry {
             grapheme_bytes: 8192,
             total_size: 401408,
-            available_bits: 3002112,
-            max_cols: 46907,
+            available_bytes: 375284,
+            max_cols: 46894,
             rows: [
                 (1, 23454),
-                (40, 1144),
-                (80, 579),
+                (40, 1143),
+                (80, 578),
                 (100, 464),
                 (119, 390),
                 (120, 387),
@@ -612,9 +651,10 @@ mod tests {
             cap.grapheme_bytes = g.grapheme_bytes;
             let l = Page::layout(cap);
             let gb = g.grapheme_bytes;
+            assert_eq!(1792, l.cells_start, "gb={gb}: cells start on a 128-byte cache line");
             assert_eq!(4000, l.styles_layout.total_size, "gb={gb}: styles section");
             assert_eq!(g.total_size, l.total_size, "gb={gb}: std page size");
-            assert_eq!(g.available_bits, cap.available_bits_for_grid(), "gb={gb}: availableBitsForGrid");
+            assert_eq!(g.available_bytes, cap.available_bytes_for_grid(), "gb={gb}: availableBytesForGrid");
             assert_eq!(Some(g.max_cols), cap.max_cols(), "gb={gb}: maxCols");
             for &(cols, rows) in &g.rows {
                 let adjusted = cap.adjust(Adjustment { cols: Some(cols) }).unwrap();
@@ -629,6 +669,28 @@ mod tests {
                 assert_eq!(total, Page::layout(c).total_size, "gb={gb}: 80x591 page with {styles} styles");
             }
         }
+    }
+
+    // Rustty-only (R13, UPSTREAM-DEFECTS.md UD361, the `Capacity.adjust` row-count defect; see the PORT
+    // NOTE in `adjust`): adjusting a page that left the standard capacity to a
+    // narrow width must not overflow the `u16` row count. The reference panics
+    // ("integer does not fit in destination type", MEASURED at `12752b2ac`);
+    // the port clamps to the largest row count, and the page still fits the
+    // original size.
+    //
+    // NEGATIVE CONTROL: without the clamp the row count wraps (`as u16`) and
+    // the first assertion fails (1,655 rows against 65,535 on macOS arm64).
+    #[test]
+    fn capacity_adjust_clamps_rows_to_the_row_count_type() {
+        let wide = Capacity {
+            cols: 50_000,
+            ..std_capacity()
+        };
+        let total = Page::layout(wide).total_size;
+        let adjusted = wide.adjust(Adjustment { cols: Some(80) }).unwrap();
+        assert_eq!(size::CellCountInt::MAX, adjusted.rows);
+        assert_eq!(80, adjusted.cols);
+        assert!(Page::layout(adjusted).total_size <= total);
     }
 
     // =====================================================================
@@ -3554,13 +3616,10 @@ mod tests {
         assert!(c.has_text());
     }
 
-    /// `P3-W1 T4` (oracle c442eb4b3). A zero-row page would leave the pool's
-    /// stale free-list node in the first pointer-size bytes of a REUSED buffer,
-    /// because `init_buf`'s row loop — the only thing that overwrites those
-    /// bytes — would iterate zero times. rustty's `decommit_pool_item` makes
-    /// this live, and rustty skips the zeroing memset in release exactly as Zig
-    /// does, so without this assert the corruption would be release-only and
-    /// dependent on pool reuse order.
+    /// `P3-W1 T4` (oracle c442eb4b3): a page must always have at least one
+    /// row (`init_buf` asserts it). The pool-reuse reason that test first
+    /// recorded went away with `e01e75bbb` (the page pool no longer writes a
+    /// free-list node into its items); the assert stays.
     #[test]
     #[should_panic(expected = "cap.rows > 0")]
     fn page_init_buf_rejects_zero_rows() {
@@ -3632,6 +3691,40 @@ mod tests {
         fn drop(&mut self) {
             self.0.deinit();
         }
+    }
+
+    /// Rustty-only: `init_buf` requires zero-filled backing memory
+    /// (`d2ff6d77a`: every metadata member initializes from zeroed memory
+    /// without writing), and a debug build samples it. A page-aligned buffer
+    /// with one dirty word at the start of the metadata block trips the
+    /// sample; the same buffer zeroed builds a page. (`init_buf`'s callers are
+    /// each audited to hand it zeroed memory: `init`, `reinit`, the PageList's
+    /// `init_pages`, `create_page_ext`, the reflow recycle and the grow-prune
+    /// reuse.)
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "backing memory must be zero-filled (styles")]
+    fn page_initBuf_rejects_dirty_metadata_memory() {
+        struct PageAlignedBuf(*mut u8, std::alloc::Layout);
+        impl Drop for PageAlignedBuf {
+            fn drop(&mut self) {
+                // SAFETY: allocated below with this layout, freed once.
+                unsafe { std::alloc::dealloc(self.0, self.1) };
+            }
+        }
+        let l = Page::layout(Capacity::new(10, 10));
+        let layout = std::alloc::Layout::from_size_align(l.total_size, PAGE_SIZE_MIN).unwrap();
+        // SAFETY: non-zero size.
+        let buf = PageAlignedBuf(unsafe { std::alloc::alloc_zeroed(layout) }, layout);
+        assert!(!buf.0.is_null());
+
+        // Zeroed: a page.
+        let _ = Page::init_buf(OffsetBuf::init(buf.0), l);
+
+        // One dirty word where the style set's metadata starts.
+        // SAFETY: `styles_start + 8 <= total_size`, inside the allocation.
+        unsafe { (buf.0.add(l.styles_start) as *mut u64).write_unaligned(0xAAAA_AAAA) };
+        let _ = Page::init_buf(OffsetBuf::init(buf.0), l);
     }
 
     /// PORT NOTE: `initBuf` stores `@alignCast(buf.start()[0..l.total_size])`,

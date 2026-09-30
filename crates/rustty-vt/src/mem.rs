@@ -23,6 +23,13 @@
 //! `terminal_mem.decommit(.zero, ...)` / `terminal_mem.recommit(...)` calls
 //! (see `oracle@main:src/terminal/PageList.zig:690, :3897, :4379`), so the
 //! rustty helpers are now thin wrappers over this module.
+//!
+//! PORT NOTE (60b43068c, P7-W1 T6): adds the Windows `DiscardVirtualMemory`
+//! arm to `can_reclaim`/`decommit`, reached through `rustty_os::windows` the
+//! same way `page.rs`'s `AllocWindows` reaches `VirtualAlloc`/`VirtualFree`.
+//! `recommit` needs no Windows-specific operation: `DiscardVirtualMemory`
+//! leaves the range committed, so there is nothing to re-acquire before reuse
+//! (unlike Darwin's FREE_REUSABLE/FREE_REUSE pairing).
 
 use crate::page::PAGE_SIZE_MIN;
 
@@ -36,7 +43,8 @@ use crate::page::PAGE_SIZE_MIN;
         target_os = "macos",
         target_os = "ios",
         target_os = "linux",
-        target_os = "android"
+        target_os = "android",
+        windows
     )),
     allow(dead_code)
 )]
@@ -197,9 +205,9 @@ unsafe fn madvise(_ptr: *mut u8, _len: usize, _advice: i32) -> Result<(), Madvis
 ///
 /// Test builds support both modes because `decommit` simulates reclamation by
 /// clearing the supplied range. Runtime reclamation is intentionally limited
-/// to 64-bit Linux and Darwin. Other targets must leave strict callers' memory
-/// resident; zero mode still provides its documented memset fallback through
-/// `decommit` even when this function returns false.
+/// to 64-bit Linux, Darwin, and Windows. Other targets must leave strict
+/// callers' memory resident; zero mode still provides its documented memset
+/// fallback through `decommit` even when this function returns false.
 ///
 /// PORTS: oracle@main mem.zig `canReclaim`.
 #[inline]
@@ -231,6 +239,12 @@ pub fn can_reclaim(mode: DecommitMode) -> bool {
             // Darwin provides the paired MADV_FREE_REUSABLE/FREE_REUSE
             // operations used below.
             //
+            // Windows provides DiscardVirtualMemory, which releases the
+            // physical pages behind a committed range while keeping it
+            // committed, so nothing has to be committed again before reuse.
+            // Page memory is already a VirtualAlloc region (see `page.rs`'s
+            // `AllocWindows`) and kernel32 is linked by every Windows build.
+            //
             // Other targets have no retained-mapping reclamation contract in
             // this module. Zero mode can still clear through its memset
             // fallback, but strict callers must leave their mapping resident.
@@ -238,7 +252,8 @@ pub fn can_reclaim(mode: DecommitMode) -> bool {
                 target_os = "linux",
                 target_os = "android",
                 target_os = "macos",
-                target_os = "ios"
+                target_os = "ios",
+                windows
             ))
         }
     }
@@ -337,6 +352,38 @@ pub unsafe fn decommit(mode: DecommitMode, ptr: *mut u8, len: usize, dirty_len: 
         }
     }
 
+    // DiscardVirtualMemory releases the physical pages behind the range but
+    // leaves it committed, so the commit charge stays with the process and a
+    // later access finds a zero page or the old contents instead of faulting.
+    // Zero mode clears its dirty prefix first, as on Darwin: the bytes read
+    // as zero afterward whether or not the discard took. Strict mode skips
+    // that write because its caller replaces the entire mapping after
+    // recommit. The call reports failure through its return value rather
+    // than the thread's last error.
+    #[cfg(windows)]
+    {
+        use rustty_os::windows;
+
+        if matches!(mode, DecommitMode::Zero) {
+            // SAFETY: caller contract — `ptr` is live for `dirty_len` bytes.
+            unsafe { core::ptr::write_bytes(ptr, 0, dirty_len) };
+        }
+
+        // SAFETY: caller contract — `ptr` is a live page-aligned mapping of
+        // `len` bytes.
+        let rc =
+            unsafe { windows::exp::kernel32::DiscardVirtualMemory(ptr as windows::PVOID, len) };
+        if rc == windows::exp::ERROR_SUCCESS {
+            return true;
+        }
+
+        // Zero mode has already cleared its bytes and strict callers must
+        // leave the still-resident mapping alone, so there is nothing more
+        // to do for either mode.
+        log::warn!(target: LOG_SCOPE, "DiscardVirtualMemory failed err={rc}");
+        return false;
+    }
+
     #[allow(unreachable_code)]
     {
         if matches!(mode, DecommitMode::Zero) {
@@ -349,10 +396,11 @@ pub unsafe fn decommit(mode: DecommitMode, ptr: *mut u8, len: usize, dirty_len: 
 
 /// Prepare a mapping previously passed to [`decommit`] for reuse.
 ///
-/// Linux and test builds need no explicit operation. Darwin pairs
-/// FREE_REUSABLE with FREE_REUSE so pages touched by the caller are accounted
-/// to the process again. Failure does not invalidate the retained mapping, so
-/// reuse can continue after logging the accounting failure.
+/// Linux, Windows, and test builds need no explicit operation because their
+/// mappings stay committed through decommit. Darwin pairs FREE_REUSABLE with
+/// FREE_REUSE so pages touched by the caller are accounted to the process
+/// again. Failure does not invalidate the retained mapping, so reuse can
+/// continue after logging the accounting failure.
 ///
 /// PORTS: oracle@main mem.zig `recommit`.
 ///
@@ -466,6 +514,23 @@ mod tests {
     /// PORTS: oracle@main mem.zig `test "test builds can reclaim retained mappings"`
     #[test]
     fn mem_test_builds_can_reclaim_retained_mappings() {
+        assert!(can_reclaim(DecommitMode::Zero));
+        assert!(can_reclaim(DecommitMode::Strict));
+    }
+
+    /// PORT NOTE (R14, 60b43068c, P7-W1 T6): no reference `test {}` covers
+    /// Windows directly — `canReclaim`/`decommit` are exercised generically by
+    /// the tests above, which run under `cfg!(test)`'s simulate-by-memset arm
+    /// on every target and so can never reach the real `DiscardVirtualMemory`
+    /// call. This test only pins that `can_reclaim` reports Windows support at
+    /// all (the compile-time target-list arm this task adds); the syscall
+    /// itself is exercised by the non-test `examples/rss_probe.rs` release
+    /// build, whose working-set delta this task also makes non-zero on
+    /// Windows. `#[cfg(windows)]` compiles this out everywhere else — never a
+    /// silent skip on the one target it targets.
+    #[test]
+    #[cfg(windows)]
+    fn mem_windows_can_reclaim_reports_support() {
         assert!(can_reclaim(DecommitMode::Zero));
         assert!(can_reclaim(DecommitMode::Strict));
     }

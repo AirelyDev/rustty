@@ -233,6 +233,10 @@ pub mod exp {
     pub type HPCON = super::LPVOID;
 
     pub const CREATE_UNICODE_ENVIRONMENT: DWORD = 0x00000400;
+    /// PORT NOTE (60b43068c, P7-W1 T6): the success return value from
+    /// `DiscardVirtualMemory`, which reports failure through its return value
+    /// rather than `GetLastError`.
+    pub const ERROR_SUCCESS: DWORD = 0;
     pub const EXTENDED_STARTUPINFO_PRESENT: DWORD = 0x00080000;
     pub type LPPROC_THREAD_ATTRIBUTE_LIST = *mut c_void;
     pub const FILE_FLAG_FIRST_PIPE_INSTANCE: DWORD = 0x00080000;
@@ -334,6 +338,14 @@ pub mod exp {
                 dwSize: SIZE_T,
                 dwFreeType: DWORD,
             ) -> BOOL;
+            /// PORT NOTE (60b43068c, P7-W1 T6): the reference declares this
+            /// right after `VirtualFree` (`src/os/windows.zig:214-221`). Its
+            /// live caller is `terminal/mem.zig`'s `decommit`, reached as
+            /// `windows.exp.kernel32.DiscardVirtualMemory` — i.e. THROUGH this
+            /// module, exactly as this port's `rustty-vt/src/mem.rs` windows
+            /// arm reaches it.
+            /// https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-discardvirtualmemory
+            pub fn DiscardVirtualMemory(VirtualAddress: PVOID, Size: SIZE_T) -> DWORD;
             pub fn TerminateProcess(hProcess: HANDLE, uExitCode: super::super::UINT) -> BOOL;
             // Duplicated here because lpCommandLine is not marked optional in zig std
             pub fn CreateProcessW(

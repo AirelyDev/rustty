@@ -449,9 +449,21 @@ mod tests {
         assert!(ref_.is_null());
         assert_eq!(pins, tracked_pins(term));
         // The ref was created through the caller's allocator and destroyed.
-        assert_eq!(allocs + 1, stats.alloc_calls.get());
-        assert_eq!(frees + 1, stats.free_calls.get());
-        assert_eq!(live, stats.live_bytes.get());
+        // Tracking its pin also grew the tracked-pin set past the two entries
+        // it is sized for (P7-W1 T5, `35a6fb747`: `initTrackedPins` holds the
+        // viewport and cursor pins): its entries array was reallocated (one
+        // alloc, one free) from 2 to 4 entries (the vector's amortized
+        // doubling; the index reserved for 2 already has room for a third
+        // key). The larger capacity stays until `free`, so the live bytes are
+        // up by exactly the two extra entries.
+        assert_eq!(allocs + 2, stats.alloc_calls.get());
+        assert_eq!(frees + 2, stats.free_calls.get());
+        const GROWN_ENTRIES: usize = 4;
+        let entry_size = core::mem::size_of::<(*mut rustty_vt::pagelist::Pin, ())>();
+        assert_eq!(
+            live + (GROWN_ENTRIES - 2) * entry_size,
+            stats.live_bytes.get()
+        );
         assert!(unsafe { (*term).tracked_grid_refs.is_empty() });
 
         unsafe { terminal::free(term) };

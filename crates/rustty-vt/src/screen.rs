@@ -1194,6 +1194,22 @@ impl Screen {
         // is propagated unchanged instead.
         let mut pages = self.pages.clone(alloc, &mut opts)?;
         // errdefer pages.deinit();
+        //
+        // PORT NOTE: the errdefer is `errdefer_pages!` at every fallible step
+        // below. It is load-bearing since P7-W1 T5: the PageList's node and
+        // page pools assert that every node came back, so a PageList dropped
+        // without `deinit` aborts instead of leaking.
+        macro_rules! errdefer_pages {
+            ($e:expr) => {
+                match $e {
+                    Ok(v) => v,
+                    Err(e) => {
+                        pages.deinit();
+                        return Err(e.into());
+                    }
+                }
+            };
+        }
 
         let pin_remap = opts.tracked_pins.as_ref().unwrap();
 
@@ -1219,12 +1235,12 @@ impl Screen {
                 }
             }
 
-            let page_pin = pages.track_pin(Pin {
+            let page_pin = errdefer_pages!(pages.track_pin(Pin {
                 node: pages.pages.first,
                 x: 0,
                 y: 0,
                 garbage: false,
-            })?;
+            }));
             let page_rac = unsafe { (*page_pin).row_and_cell() };
             self.clone_cursor(0, 0, page_pin, page_rac.row, page_rac.cell)
         };
@@ -1310,7 +1326,7 @@ impl Screen {
                         // We move the top pin back in bounds to the top row.
                         // const node = pages.pages.first.?;
                         let node = pages.pages.first;
-                        break 'start pages.track_pin(Pin {
+                        break 'start errdefer_pages!(pages.track_pin(Pin {
                             node,
                             // .x = if (sel.rectangle) @min(ordered.tl.x, node.cols() - 1)
                             //      else 0
@@ -1322,7 +1338,7 @@ impl Screen {
                             },
                             y: 0,
                             garbage: false,
-                        })?;
+                        }));
                     }
                 };
 
@@ -1335,7 +1351,7 @@ impl Screen {
                         // const node = pages.pages.last.?;
                         let node = pages.pages.last;
                         let cols = unsafe { crate::pagelist::Node::cols(node) };
-                        pages.track_pin(Pin {
+                        errdefer_pages!(pages.track_pin(Pin {
                             node,
                             // .x = if (sel.rectangle) @min(ordered.br.x, node.cols() - 1)
                             //      else node.cols() - 1
@@ -1346,7 +1362,7 @@ impl Screen {
                             },
                             y: unsafe { crate::pagelist::Node::rows(node) } - 1,
                             garbage: false,
-                        })?
+                        }))
                     }
                 };
 
@@ -16808,5 +16824,78 @@ mod tests {
             set.deinit(alloc);
         });
         assert_eq!(0, counting.live_bytes.get(), "deinit returns every byte");
+    }
+
+    // P7-W1 T5 fix round 1 (Rust-only): `Screen.clone` fails at every
+    // allocation of its allocator in turn: the PageList clone, the pin remap,
+    // and the three fallback `trackPin`s (the cursor outside the cloned rows,
+    // and a selection clipped at both ends). Every failure returns the error
+    // with nothing live and no pool assert (`errdefer pages.deinit()`); since
+    // T5 a PageList dropped without `deinit` aborts on its node pool's
+    // `live == free.len` assert.
+    #[test]
+    fn screen_clone_allocation_failure_sweep_returns_everything() {
+        use crate::alloc::testing::{with_handle, Config, CountingAllocator, FailingAllocator};
+
+        let mut s = clone_clear_init(5, 4, 1);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL\n4ABCD").unwrap();
+        s.select(Some(Selection::init(
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+                .unwrap(),
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 0, y: 3 }))
+                .unwrap(),
+            false,
+        )))
+        .unwrap();
+
+        let mut failures = 0;
+        for n in 0.. {
+            let counting = CountingAllocator::over_heap();
+            // SAFETY: `counting` outlives `failing` (declared first).
+            let failing = unsafe {
+                FailingAllocator::init(
+                    counting.allocator(),
+                    Config {
+                        fail_index: n,
+                        ..Config::default()
+                    },
+                )
+            };
+            let c = failing.allocator();
+            let ok = with_handle(&c, |alloc| {
+                match s.clone(
+                    alloc,
+                    point::Point::Active(point::Coordinate { x: 0, y: 1 }),
+                    Some(point::Point::Active(point::Coordinate { x: 0, y: 2 })),
+                ) {
+                    Ok(mut s2) => {
+                        assert!(s2.selection.is_some());
+                        s2.deinit();
+                        true
+                    }
+                    Err(pagelist::access::CloneError::OutOfMemory) => false,
+                    Err(e) => panic!("unexpected {e:?}"),
+                }
+            });
+            assert_eq!(
+                0,
+                counting.live_bytes.get(),
+                "allocation {n} failing leaked {} bytes",
+                counting.live_bytes.get()
+            );
+            if !failing.has_induced_failure.get() {
+                assert!(ok);
+                break;
+            }
+            assert!(!ok, "allocation {n} failed, so the clone must fail");
+            failures += 1;
+        }
+        // The PageList clone's own allocations, the remap, and the tracked
+        // pins beyond the preheated two all fail somewhere in the sweep.
+        assert!(failures > 5, "{failures}");
+
+        s.deinit();
     }
 }

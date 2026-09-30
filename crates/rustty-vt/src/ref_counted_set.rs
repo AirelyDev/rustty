@@ -116,9 +116,9 @@ impl_refcount_int!(u8, u16, u32, u64, usize);
 // increments a reference count with an unguarded `item.meta.ref += 1` (`add`,
 // `addWithId`, `use`) or `+= n` (`useMultiple`), and the style set's
 // `RefCountInt` is `u16` (`style.zig:681-684`). A terminal wide enough to
-// leave the standard page capacity — in Ghostty, measured: 47,932 columns or
-// more in a shipped build on macOS arm64, 46,908 on Linux aarch64, 48,047 in
-// a macOS test build; it depends on the platform's page size (the port's
+// leave the standard page capacity — in Ghostty, measured at `12752b2ac`:
+// 47,919 columns or more in a shipped build on macOS arm64, 46,895 on Linux
+// aarch64, 48,034 in a macOS test build; it depends on the platform's page size (the port's
 // thresholds are the same since N88) — gets a page of 215 rows x cols
 // (`PageList.zig:535-540`), so ordinary styled output — the VT stream's
 // `printSliceFill` (`useMultiple`, `Terminal.zig:1114`), `printCell`
@@ -567,14 +567,28 @@ where
     Context: RefCountedSetContext<T>,
 {
     /// `pub const base_align: std.mem.Alignment = .fromByteUnits(@max(...))`
-    pub fn base_align() -> usize {
+    // PERF(port): `const fn` — comptime in the reference, and
+    // `Page::MetaLayout::ALIGNMENT` folds it into a `const`. `usize::max` is
+    // not `const`, hence the comparisons.
+    pub const fn base_align() -> usize {
         // @max(@alignOf(Context), @alignOf(Layout), @alignOf(Item), @alignOf(Id))
         //
         // `@alignOf(Item)` is the reference's (`ItemStride::ALIGN`, N88).
-        core::mem::align_of::<Context>()
-            .max(core::mem::align_of::<Layout<Id>>())
-            .max(ItemStride::<T, Id, RefCount>::ALIGN)
-            .max(core::mem::align_of::<Id>())
+        let aligns = [
+            core::mem::align_of::<Context>(),
+            core::mem::align_of::<Layout<Id>>(),
+            ItemStride::<T, Id, RefCount>::ALIGN,
+            core::mem::align_of::<Id>(),
+        ];
+        let mut max = 0;
+        let mut i = 0;
+        while i < aligns.len() {
+            if aligns[i] > max {
+                max = aligns[i];
+            }
+            i += 1;
+        }
+        max
     }
 
     /// This is the max load until the set returns OutOfMemory and
@@ -658,6 +672,43 @@ where
             }
         }
 
+        Self::init_from_parts(table, items, l, context)
+    }
+
+    /// Like `init`, but for backing memory that the caller guarantees
+    /// is already zero-filled (e.g. fresh OS pages). This writes
+    /// nothing to the backing buffer, so the OS pages behind the table
+    /// and items stay untouched until the first `add`.
+    ///
+    /// Behavior is undefined if the backing memory is not zero.
+    ///
+    /// # Safety
+    ///
+    /// As `init`, and every byte of the table and item arrays must be zero.
+    //
+    // PORT NOTE (P7-W1 T2): the lz4 uninit-read note on `init` does not apply
+    // here. This writes nothing, so no typed write can leave an uninitialized
+    // byte behind; the caller's zero-filled bytes (mmap, or `allocate_zeroed`
+    // under Miri) are every byte of the arrays. Zeroed items carry
+    // `meta.bucket = 0` rather than `init`'s `maxInt(Id)`: that is why the
+    // reference's `assertIntegrity` scans only `items[1..next_id]` (item 0 is
+    // reserved, and every item below `next_id` has been assigned by `insert`)
+    // and skips table id 0.
+    pub unsafe fn init_assume_zeroed(base: OffsetBuf, l: Layout<Id>, context: Context) -> Self {
+        Self::init_from_parts(
+            base.member(l.table_start),
+            base.member(l.items_start),
+            l,
+            context,
+        )
+    }
+
+    fn init_from_parts(
+        table: Offset<Id>,
+        items: Offset<Item<T, Id, RefCount>>,
+        l: Layout<Id>,
+        context: Context,
+    ) -> Self {
         RefCountedSet {
             table,
             max_psl: Id::ZERO,
@@ -1129,8 +1180,8 @@ where
     /// dimensions, so the snapshot grid decoder asks this before taking a
     /// reference; see `snapshot/grid.rs`. The native write path can reach the
     /// ceiling too: a terminal wide enough to leave the standard capacity
-    /// (in Ghostty 47,932 columns or more in a shipped macOS arm64 build,
-    /// 46,908 on Linux aarch64; the port's are the same since N88) gets a
+    /// (in Ghostty 47,919 columns or more in a shipped macOS arm64 build,
+    /// 46,895 on Linux aarch64; the port's are the same since N88) gets a
     /// page of 215 rows x cols (`PageList.zig:535-540`), and ordinary styled
     /// output on it overflows `useMultiple` from `printSliceFill` and `use`
     /// from `printCell` (UPSTREAM-DEFECTS.md UD80). Every
@@ -1502,7 +1553,9 @@ where
         //
         //     var psl_stats: [32]Id = @splat(0);
         //
-        //     for (items[0..self.layout.cap], 0..) |item, id| {
+        //     // Start at item 1 because item 0 is reserved and never
+        //     // assigned to. Its metadata doesn't matter.
+        //     for (items[1..self.next_id], 1..) |item, id| {
         //         if (item.meta.bucket < std.math.maxInt(Id)) {
         //             assert(table[item.meta.bucket] == id);
         //             psl_stats[item.meta.psl] += 1;
@@ -1516,6 +1569,7 @@ where
         //     psl_stats = @splat(0);
         //
         //     for (table[0..self.layout.table_cap], 0..) |id, bucket| {
+        //         if (id == 0) continue;
         //         const item = items[id];
         //         if (item.meta.bucket < std.math.maxInt(Id)) {
         //             assert(item.meta.bucket == bucket);
@@ -2070,6 +2124,56 @@ mod tests {
             assert_eq!(set.ref_count(base, d), u16::MAX, "pinned");
 
             std::alloc::dealloc(buf, alloc_layout);
+        }
+    }
+
+    // ADDITIVE (P7-W1 T2, `c0a4f80d8`; the reference adds no test):
+    // `initAssumeZeroed` writes nothing to a zero-filled buffer, and the set
+    // it returns behaves exactly like one from `init` on a dirty buffer: the
+    // same IDs for the same adds, releases, reaps and lookups.
+    #[test]
+    fn initAssumeZeroed_writes_nothing_and_matches_init() {
+        let layout: Layout<u16> = Layout::init::<u32, u16>(16);
+        let alloc_layout =
+            core::alloc::Layout::from_size_align(layout.total_size, TestSet::base_align()).unwrap();
+        // SAFETY: `total_size` for a cap-16 layout is non-zero.
+        let zeroed = unsafe { std::alloc::alloc_zeroed(alloc_layout) };
+        let dirty = unsafe { std::alloc::alloc(alloc_layout) };
+        assert!(!zeroed.is_null() && !dirty.is_null());
+        unsafe { core::ptr::write_bytes(dirty, 0xAA, layout.total_size) };
+        let zbase = OffsetBuf::init(zeroed);
+        let dbase = OffsetBuf::init(dirty);
+
+        // SAFETY: both buffers are live `base_align`-aligned allocations of
+        // `layout.total_size` bytes, each used as the base of its own set.
+        unsafe {
+            let mut zset: TestSet = TestSet::init_assume_zeroed(zbase, layout, TestContext);
+            let bytes = core::slice::from_raw_parts(zeroed, layout.total_size);
+            assert!(bytes.iter().all(|&b| b == 0));
+            let mut dset: TestSet = TestSet::init(dbase, layout, TestContext);
+
+            let mut ids: Vec<u16> = Vec::new();
+            for v in 1..=10u32 {
+                let z = zset.add(zbase, v * 7).unwrap();
+                let d = dset.add(dbase, v * 7).unwrap();
+                assert_eq!(d, z);
+                ids.push(z);
+            }
+            for &id in &ids[2..6] {
+                zset.release(zbase, id);
+                dset.release(dbase, id);
+            }
+            assert_eq!(dset.count(), zset.count());
+            for v in 20..=22u32 {
+                assert_eq!(dset.add(dbase, v).unwrap(), zset.add(zbase, v).unwrap());
+            }
+            for v in (1..=10u32).map(|v| v * 7).chain(20..=22) {
+                assert_eq!(dset.lookup(dbase, v), zset.lookup(zbase, v));
+            }
+            assert_eq!(dset.next_id, zset.next_id);
+
+            std::alloc::dealloc(zeroed, alloc_layout);
+            std::alloc::dealloc(dirty, alloc_layout);
         }
     }
 }

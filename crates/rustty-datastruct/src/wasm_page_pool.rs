@@ -39,9 +39,9 @@
 //! memory.grow are zero by the wasm spec; recycled items retain
 //! whatever the caller left, so zero either on destroy or on create).
 //!
-//! The API mirrors the subset of std.heap.memory_pool.AlignedManaged
-//! that callers use (initCapacity/deinit/reset/create/destroy plus the
-//! managed allocator field), so it can be swapped in comptime.
+//! The API mirrors the native page pool (datastruct.UntouchedPool:
+//! initCapacity/deinit/reset/create/destroy plus the allocator field),
+//! so PageList can swap them at comptime.
 //
 // PORT NOTE (structure): the Zig `WasmPagePool(comptime Item: type)` returns a
 // struct type whose `var free_list` static is per-monomorphization, i.e. one
@@ -169,10 +169,15 @@ pub struct WasmPagePool<Item: WasmPageItem, A> {
 impl<Item: WasmPageItem, A> WasmPagePool<Item, A> {
     pub const ITEM_SIZE: usize = core::mem::size_of::<Item>();
 
-    pub fn init_capacity(
+    pub fn init_capacity<G>(
+        gpa: G,
         allocator: A,
         preheat: usize,
     ) -> Result<WasmPagePool<Item, A>, OutOfMemory> {
+        // The free list is intrusive so we never allocate from the
+        // general purpose allocator.
+        let _ = gpa;
+
         // Preheating is intentionally a no-op: item creation is a
         // cheap memory.grow or free-list pop. And we want to avoid
         // the preallocation mem cost.
@@ -301,7 +306,8 @@ pub struct DynamicWasmPagePool<A> {
 impl<A> DynamicWasmPagePool<A> {
     /// `WasmPagePool.initCapacity`, plus the runtime `free_list`/`item_size`
     /// pair that the comptime instantiation carries in its type.
-    pub fn init_capacity(
+    pub fn init_capacity<G>(
+        gpa: G,
         allocator: A,
         free_list: &'static FreeList,
         item_size: usize,
@@ -317,6 +323,10 @@ impl<A> DynamicWasmPagePool<A> {
         // Free items store the intrusive node in their bytes.
         assert!(item_size >= core::mem::size_of::<Node>());
 
+        // The free list is intrusive so we never allocate from the
+        // general purpose allocator.
+        let _ = gpa;
+
         // Preheating is intentionally a no-op: item creation is a
         // cheap memory.grow or free-list pop. And we want to avoid
         // the preallocation mem cost.
@@ -331,6 +341,12 @@ impl<A> DynamicWasmPagePool<A> {
     /// `WasmPagePool.item_size` (the runtime value).
     pub fn item_size(&self) -> usize {
         self.item_size
+    }
+
+    /// `allocator`, spelled as the native pool's getter
+    /// (`UntouchedPoolBase::allocator`) so PageList reads either pool alike.
+    pub fn allocator(&self) -> &A {
+        &self.allocator
     }
 
     pub fn deinit(&mut self) {
@@ -423,7 +439,7 @@ mod tests {
             }
 
             type Pool = WasmPagePool<Page, ()>;
-            let mut pool: Pool = Pool::init_capacity((), 0).unwrap();
+            let mut pool: Pool = Pool::init_capacity((), (), 0).unwrap();
             // defer pool.deinit();
 
             let a = pool.create().unwrap();
@@ -435,7 +451,7 @@ mod tests {
             assert_eq!(b, pool.create().unwrap());
 
             // The free list is shared across pools of the same Item type.
-            let mut pool2: Pool = Pool::init_capacity((), 0).unwrap();
+            let mut pool2: Pool = Pool::init_capacity((), (), 0).unwrap();
             pool.destroy(a);
             assert_eq!(a, pool2.create().unwrap());
 
