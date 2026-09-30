@@ -323,7 +323,9 @@ impl<M: AppMailbox> StreamHandler<M> {
     fn messageWriter(&mut self, msg: Message<'static>) {
         // self.termio_mailbox.send(msg, self.renderer_state.mutex);
         let mutex = unsafe { (*self.renderer_state).mutex };
-        unsafe { &mut *self.termio_mailbox }.send(msg, Some(mutex));
+        // (N444: `Mailbox::send` is `&self`; no `&mut Mailbox` while the io
+        // writer thread drains it.)
+        unsafe { &*self.termio_mailbox }.send(msg, Some(mutex));
         // self.termio_messaged = true;
         self.termio_messaged = true;
     }

@@ -8883,7 +8883,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `api.deinit()` call.
 - **residual**: the same race class covers the other fields that other threads write through raw
   pointers into the surface: `io` (the inline terminal), `io_thread`, `renderer_thread` and
-  `renderer_state`. That is **N444**, OPEN → W7.T5c.
+  `renderer_state`. That is **N444**, CLOSED in W7.T5c (the same own-allocation shape, plus `search.state`).
 
 ## N442 — `performBindingAction(&mut self)` holds a protected `&mut Surface` across the host callback that re-enters the same surface
 
@@ -9030,25 +9030,105 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 ## N444 — the io thread's and render thread's inline state in the core `Surface` is covered by main-thread whole-`Surface` references
 
 - **id**: N444. P7-W7 T5b (found while fixing N441). **severity**: medium. It is aliasing-model UB
-  whenever a main-thread surface callback overlaps io or render thread work, which happens
+  whenever a main-thread surface callback overlaps io, render or search thread work, which happens
   constantly; no miscompile has been observed. **kind**: port soundness (Stacked and Tree Borrows).
-  **Not upstream**: Zig's `*Surface` has no aliasing rule. **state**: OPEN → follow-up task W7.T5c,
-  a Phase-7 exit item.
-- **finding**: N441's race class, beyond the renderer. The core `Surface` still embeds by value
-  several things that other threads access through raw pointers into the surface:
-  - `io: Termio`. The io thread writes `io.terminal` under `renderer_state.mutex`, through the
-    stream handler's `*mut Terminal`, and the render thread reads it.
-  - `io_thread` and `renderer_thread`. Their own threads write them.
-  - `renderer_state`. The render thread reads it under the mutex; the main thread writes it.
+  **Not upstream**: Zig's `*Surface` has no aliasing rule, so no UD. **state**: CLOSED (fixed,
+  P7-W7 T5c).
+- **finding**: N441's race class, beyond the renderer. The core `Surface` embedded by value five
+  blocks that other threads write through raw pointers into the surface:
+  - `io: Termio`. The io read thread writes `io.terminal` under `renderer_state.mutex`
+    (`processOutput`), and the render thread reads it.
+  - `io_thread` and `renderer_thread`. Their own threads write them (loop state).
+  - `renderer_state`. The io and render threads bump its D4 handoff atomics (`demand`,
+    `handoff_gen`); the render thread reads it under the mutex; the main thread writes it.
+  - `search.state` (found by T5c). The search thread writes its own loop state.
+  - The search callback (fix round 1, ruling 48). `searchCallback_` got the surface as its userdata
+    and read `renderer_thread`, `rt_app` and `app` through it on the search thread: non-atomic reads
+    of `Surface` bytes, racing a main-thread `&mut Surface` retag under SB.
 
   Every main-thread `&mut Surface` / `&Surface` retag (the same apprt entries N441 lists) covers
-  those bytes, so it races with those accesses.
-- **proof**: `.port/phase-2/mirihar-n441`. `n441_residual_terminal_inline` is UB under SB and TB.
-  `n441_residual_terminal_boxed` (the N441 fix shape applied to the terminal) is CLEAN under both.
-  LIFETIMES row `src/Surface.zig Surface [inline io / io_thread / renderer_thread / renderer_state]`.
-- **fix direction**: the N441 shape, one field group at a time. Give each cross-thread block its own
-  allocation behind a shared raw root (a `RendererBox`-style owner), and keep main-thread access to it
-  narrow and locked.
+  those bytes, so it races with those accesses. Two narrower main-thread shapes had the same class:
+  `queueIo` formed `&mut Termio` (`self.io.queueMessage(&mut self)`), and `Mailbox::send(&mut self)`
+  popped the io writer thread's drain tag under SB. `getForegroundPid` / `getTtyName` also formed
+  `&mut Termio`.
+- **fix** (P7-W7 T5c): the N441 shape for every block, plus narrow main-thread io entries.
+  - `rustty_core::thread_shared::ThreadSharedBox<T>`: each block in its own allocation, shared with
+    its thread through one raw root. The main thread reaches it by place through `as_ptr()`, locked
+    where the reference locks. The `Surface` fields keep their names and order.
+  - `Surface::init` allocates the `renderer_thread` / `renderer_state` slots uninitialized before
+    `Renderer::init` (their addresses are handed out first), and `io` uninitialized at the big write
+    (`renderer_state.terminal` takes `&self.io.terminal` while io is undefined, as the reference
+    does). `Termio::init` writes it in place.
+  - `rustty_termio::Termio::queueMessage`, `getForegroundPid` and `getTtyName` are raw-self (the
+    reference's `self: *Termio`). `Mailbox::send` / `notify` take `&self`, since every callee is
+    `&self`, and the stream handler sends through `&Mailbox`.
+- **teardown**: there is no `Drop`. Every path frees each new allocation exactly once:
+  - close → `Surface::deinit`: each block torn down as it was inline, then `dealloc` (no glue; the
+    inline field was never dropped either);
+  - `Renderer::init`, `renderer::Thread::init` and `termio::Thread::init` failures: the unwritten
+    `renderer_thread` / `renderer_state` slots are `dealloc`ed;
+  - `initErrdefers` (both `io_live` values): every block `dealloc`ed, io whether or not initialized;
+  - the owners' free of the surface itself is unchanged (embedded `ManuallyDrop`, GTK `dealloc`, the
+    `MaybeUninit` slot).
+  - `Search.state` keeps its normal drop after `state.deinit()` (`drop_and_dealloc`), because the
+    inline field was dropped with its `Search`.
+- **fix round 1** (ruling 48): the search callback's userdata is a boxed `SearchCallbackCtx<A>`
+  captured on the main thread at spawn (the renderer mailbox pointer, the renderer wakeup pointer, a
+  copy of the surface mailbox). `searchCallback_` reads only it, never the surface. It is freed
+  exactly once: by `Search::deinit` after the join, on the search `Thread::init` error, and on the
+  spawn failure.
+- **proof**: `.port/phase-2/mirihar-n444` (16 seeds, SB and TB).
+  - Shipped: `n444_inline_io_terminal`, `n444_inline_io_thread`,
+    `n444_inline_renderer_thread_state`, `n444_inline_renderer_state_atomics` and
+    `n444_inline_search_state` are UB under both; `n444_boxed_queue_io_termio_mut` is UB under both;
+    `n444_boxed_queue_io_send_mut` is UB under SB.
+  - Fixed: `n444_boxed_all` (every writer thread against every main-thread entry) is CLEAN under both.
+  - Teardown: `n444_teardown_all_paths` is CLEAN under both; the negative arms `n444_drop_box_leak`
+    and `n444_init_error_io_slot_leak` LEAK.
+  - Fix round 1: `n444_search_cb_reads_surface` (the round-0 callback) is UB under SB and CLEAN under
+    TB; `n444_search_cb_ctx` is CLEAN under both. LIFETIMES row
+    `src/Surface.zig Surface [self as search event_userdata]`; live test rustty-apprt-c
+    `macos_window_host::search_callback_context_lives_for_the_search_thread`.
+  - The superseded direction proof `.port/phase-2/mirihar-n441` `n441_residual_terminal_*` stays.
+  - LIFETIMES rows `src/Surface.zig Surface io / io_thread / renderer_thread / renderer_state`,
+    `src/Surface.zig Search state` and `src/termio/Termio.zig Termio [self in queueMessage]`.
+- **tests**: the macOS core, apprt, apprt-c and termio suites; the menu-shortcut parity harness; on
+  Linux the GTK build, the core, apprt and termio suites and the live `gtk_window_live` and
+  `gtk_first_light` tests. The fabricated-surface tests (`surface_visibility_kat`,
+  `clipboard_codepoint_map_fixture_is_miri_clean`, `surface_mok2_keypad_alt_ctrl_end_to_end`,
+  `queueIo_frees_allocated_writes_in_readonly_mode`) write and free the boxes and pass under Miri's
+  leak check.
+- **limit**: N449 below (the io writer thread's own `&mut Termio`) is independent of the surface
+  layout and stays OPEN.
+
+## N449 — the io writer thread's `&mut self` `Termio` methods cover the terminal the read thread writes
+
+- **id**: N449. P7-W7 T5c (found while proving N444). **severity**: medium. It is aliasing-model UB
+  whenever an io-thread message (focus, resize, config change, size report, clear screen, scroll,
+  write, ...) overlaps pty output, which is common; no miscompile has been observed. **kind**: port
+  soundness (Stacked and Tree Borrows). **Not upstream**: Zig's `*Termio` has no aliasing rule.
+  **state**: OPEN.
+- **finding**: the io writer thread's `drainMailbox` calls `&mut self` `Termio` methods:
+  `focusGained`, `resize`, `changeConfig`, `sizeReport`, `clearScreen`, `scrollViewport`,
+  `jumpToPrompt`, `colorSchemeReport`, `visibilityReport`, `queueWrite`, `kittyClipboardGrant`,
+  `resetSynchronizedOutput` and `threadExit`. Each is a protected Unique over the whole `Termio`,
+  terminal included. Meanwhile:
+  - the io read thread writes the terminal under `renderer_state.mutex` through `processOutput`
+    (raw-self);
+  - the main and render threads reach the terminal by place under the mutex;
+  - the main thread reads `mailbox` (`queueMessage`) and `backend` (`getForegroundPid`,
+    `getTtyName`, the close-confirm command read) by place.
+
+  A writer-thread retag of the whole `Termio` races with each of them. This is independent of where
+  the `Termio` lives, so N444's fix does not cover it.
+- **proof**: `.port/phase-2/mirihar-n444`: `n449_writer_termio_mut` is UB under SB and TB (a data race
+  between the writer's retag and the read thread's terminal write); `n449_writer_termio_raw`, the
+  same method raw-self with narrow access, is CLEAN under both. LIFETIMES row
+  `src/termio/Termio.zig Termio [self in io writer-thread methods]`.
+- **fix direction**: the `processOutput` shape. Make those methods raw-self
+  (`unsafe fn(self_: *mut Termio, ..)`), reaching only the fields each touches, by place, and never
+  holding a whole-`Termio` reference across the renderer-mutex sections or a backend call. The
+  backend's own `&mut` receivers (`Exec`, `Subprocess`, the pty's cached tty name) need the same audit.
 
 ## N448 — superseded: now UD366
 

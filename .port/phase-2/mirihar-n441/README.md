@@ -73,7 +73,7 @@ Each run explores 16 scheduler seeds (`-Zmiri-many-seeds=0..16`).
 |---|---|---|---|
 | `n441_inline_renderer` | whole-`&mut Surface` main callbacks vs render-thread locked writes to the INLINE renderer | **UB** | **UB** |
 | `n441_boxed_renderer` | the fix: the renderer out of line; main-thread locked narrow renderer entry included | **CLEAN** | **CLEAN** |
-| `n441_residual_terminal_inline` | N444 (OPEN → W7.T5c): the inline terminal vs io-thread locked writes | **UB** | **UB** |
+| `n441_residual_terminal_inline` | N444 (CLOSED in W7.T5c; full proof `../mirihar-n444`): the inline terminal vs io-thread locked writes | **UB** | **UB** |
 | `n441_residual_terminal_boxed` | the same fix shape applied to the terminal | **CLEAN** | **CLEAN** |
 | `n441_box_drop_leak` | round 0: the box freed in `Drop`, the surface freed through `ManuallyDrop` | **LEAK** | **LEAK** |
 | `n441_box_dealloc_after_deinit` | fix round 1: `deinit`, then `dealloc_after_deinit` | **CLEAN** | **CLEAN** |

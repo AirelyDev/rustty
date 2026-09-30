@@ -1068,18 +1068,38 @@ impl<M: AppMailbox> Termio<M> {
     /// This will also notify the mailbox thread to process the message. If
     /// you're sending a lot of messages, it may be more efficient to use
     /// the mailbox directly and then call notify separately.
-    pub fn queueMessage(&mut self, msg: Message<'static>, mutex: MutexState) {
+    //
+    // pub fn queueMessage(
+    //     self: *Termio,
+    //     msg: termio.Message,
+    //     mutex: MutexState,
+    // ) void {
+    //
+    // PORT NOTE (N444, P7-W7 T5c): raw-self, the reference's `self: *Termio`.
+    // The main thread calls this (core `Surface::queueIo`) while the io read
+    // thread writes `terminal` under the renderer mutex; a `&mut self` would be
+    // a protected Unique over the whole `Termio`, terminal included
+    // (`.port/phase-2/mirihar-n444` `n444_boxed_queue_io_termio_mut`, UB under
+    // SB and TB). Only the two fields the reference touches are reached, by
+    // place, and the mailbox only through `&self` (`Mailbox::send`'s note).
+    ///
+    /// # Safety
+    /// `self_` must point at a live, initialized `Termio<M>` whose
+    /// `renderer_state` is the live shared render state.
+    pub unsafe fn queueMessage(self_: *mut Termio<M>, msg: Message<'static>, mutex: MutexState) {
         // PORT NOTE: `self.renderer_state.mutex` is the raw shared-state read
         // (renderer state.rs precedent); the `*mut Mutex` is handed to the
         // mailbox untouched.
         let mutex_ptr = match mutex {
             // .locked => self.renderer_state.mutex,
-            MutexState::Locked => Some(unsafe { (*self.renderer_state).mutex }),
+            MutexState::Locked => Some(unsafe { (*(*self_).renderer_state).mutex }),
             // .unlocked => null,
             MutexState::Unlocked => None,
         };
-        self.mailbox.send(msg, mutex_ptr);
-        self.mailbox.notify();
+        // self.mailbox.send(msg, switch (mutex) { .. });
+        unsafe { (*self_).mailbox.send(msg, mutex_ptr) };
+        // self.mailbox.notify();
+        unsafe { (*self_).mailbox.notify() };
     }
 
     /// Queue a write directly to the pty.
@@ -1959,14 +1979,29 @@ impl<M: AppMailbox> Termio<M> {
     // ProcessInfo) ?ProcessInfo.Type(info) { return self.backend.getProcessInfo(info); }`
     // — split into the two concrete accessors (rustty-os `pty.rs` precedent;
     // see `Backend::getForegroundPid`).
-    pub fn getForegroundPid(&mut self) -> Option<u64> {
-        self.backend.getForegroundPid()
+    //
+    // PORT NOTE (N444, P7-W7 T5c): raw-self, the reference's `self: *Termio`.
+    // The main thread calls this (core `Surface::getForegroundPid`) while the
+    // io read thread writes `terminal`; a `&mut self` would be a protected
+    // Unique over the whole `Termio` (`.port/phase-2/mirihar-n444`
+    // `n444_boxed_queue_io_termio_mut`, the same shape). Only `backend` is
+    // reached, by place.
+    ///
+    /// # Safety
+    /// `self_` must point at a live, initialized `Termio<M>`.
+    pub unsafe fn getForegroundPid(self_: *mut Termio<M>) -> Option<u64> {
+        unsafe { (*self_).backend.getForegroundPid() }
     }
 
     /// See [`Termio::getForegroundPid`] (the `.tty_name` half of the reference
     /// `getProcessInfo`).
-    pub fn getTtyName(&mut self) -> Option<&std::ffi::CStr> {
-        self.backend.getTtyName()
+    ///
+    /// # Safety
+    /// As [`Termio::getForegroundPid`]; the returned name borrows the
+    /// backend's cached buffer, so the caller picks `'a` no longer than the
+    /// `Termio` lives.
+    pub unsafe fn getTtyName<'a>(self_: *mut Termio<M>) -> Option<&'a std::ffi::CStr> {
+        unsafe { (*self_).backend.getTtyName() }
     }
 }
 
