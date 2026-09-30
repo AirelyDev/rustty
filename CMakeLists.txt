@@ -383,7 +383,14 @@ else()
     install(FILES "${RUSTTY_VT_SHARED_LIBRARY}" TYPE LIB RENAME "${RUSTTY_VT_INSTALL_REALNAME}")
     # Resolved when the install script runs, so `cmake --install --prefix`
     # and DESTDIR are honoured.
-    set(_rvt_libdir "\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
+    # An ABSOLUTE CMAKE_INSTALL_LIBDIR (nixpkgs' split outputs pass one) is
+    # used as is, like install(TYPE LIB) does; prefixing it again nests the
+    # path (N488).
+    if(IS_ABSOLUTE "${CMAKE_INSTALL_LIBDIR}")
+        set(_rvt_libdir "\$ENV{DESTDIR}${CMAKE_INSTALL_LIBDIR}")
+    else()
+        set(_rvt_libdir "\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
+    endif()
     if(APPLE)
         # "Give framework consumers a stable runtime-relative identity."
         install(CODE "execute_process(COMMAND install_name_tool -id @rpath/${RUSTTY_VT_INSTALL_LINKNAME} \"${_rvt_libdir}/${RUSTTY_VT_INSTALL_REALNAME}\" COMMAND_ERROR_IS_FATAL ANY)")

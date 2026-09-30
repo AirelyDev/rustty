@@ -86,8 +86,12 @@ else
 fi
 
 echo "=== G-NIX 3/3 :: alejandra --check ==="
-if ! nix "${NIXFLAGS[@]}" develop --command alejandra --check . 2>&1 | tail -5; then
-  echo "G-NIX RED: Nix files are not alejandra-formatted (run 'nix develop -c alejandra .')" >&2
+# `nix fmt` runs the flake's own `formatter` output (alejandra). It is used instead of
+# `nix develop --command alejandra`, which realises the WHOLE dev shell (python wasmtime,
+# the GTK toolchain, ...): a dev-shell dependency failing to build reddened a formatting
+# check that never needed it (N488). Same tool, same files, same exit status.
+if ! nix "${NIXFLAGS[@]}" fmt -- --check . 2>&1 | tail -5; then
+  echo "G-NIX RED: Nix files are not alejandra-formatted (run 'nix fmt')" >&2
   exit 1
 fi
 

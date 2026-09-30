@@ -146,7 +146,7 @@ in
     # shared library, which is what a runtime closure should carry.
     postInstall = ''
       mkdir -p "$dev/lib" "$dev/share/pkgconfig"
-      mv "$out/lib/librustty_vt_c.a" "$dev/lib/"
+      mv "$out/lib/librustty-vt.a" "$dev/lib/"
       mv "$out/share/pkgconfig"/*.pc "$dev/share/pkgconfig/"
       mv "$out/lib/cmake" "$dev/lib/cmake"
       rmdir "$out/share/pkgconfig" "$out/share" 2>/dev/null || true
@@ -191,12 +191,12 @@ in
       sanity-check = runCommand "sanity-check" {} (builtins.concatStringsSep "\n" [
         ''
           set +o pipefail
-          ${lib.getExe' stdenv.cc "nm"} "${finalAttrs.finalPackage}/lib/librustty_vt_c${stdenv.hostPlatform.extensions.sharedLibrary}" | grep -qE 'T _?rustty_terminal_new'
-          ${lib.getExe' stdenv.cc "nm"} "${finalAttrs.finalPackage.dev}/lib/librustty_vt_c.a" | grep -qE 'T _?rustty_terminal_new'
+          ${lib.getExe' stdenv.cc "nm"} "${finalAttrs.finalPackage}/lib/librustty-vt${stdenv.hostPlatform.extensions.sharedLibrary}" | grep -qE 'T _?rustty_terminal_new'
+          ${lib.getExe' stdenv.cc "nm"} "${finalAttrs.finalPackage.dev}/lib/librustty-vt.a" | grep -qE 'T _?rustty_terminal_new'
         ''
         (lib.optionalString simd ''
-          ${lib.getExe' stdenv.cc "nm"} "${finalAttrs.finalPackage.dev}/lib/librustty_vt_c.a" | grep -q 'T .*simdutf'
-          ${lib.getExe' stdenv.cc "nm"} "${finalAttrs.finalPackage.dev}/lib/librustty_vt_c.a" | grep -q 'T .*3hwy'
+          ${lib.getExe' stdenv.cc "nm"} "${finalAttrs.finalPackage.dev}/lib/librustty-vt.a" | grep -q 'T .*simdutf'
+          ${lib.getExe' stdenv.cc "nm"} "${finalAttrs.finalPackage.dev}/lib/librustty-vt.a" | grep -q 'T .*3hwy'
         '')
         ''
           touch "$out"
@@ -216,8 +216,8 @@ in
         } ''
           export PKG_CONFIG_PATH="${finalAttrs.finalPackage}/share/pkgconfig:${finalAttrs.finalPackage.dev}/share/pkgconfig"
 
-          pkg-config --libs --static librustty-vt | grep -q -- '-lrustty_vt_c'
-          pkg-config --libs --static librustty-vt-static | grep -q -- 'librustty_vt_c.a'
+          pkg-config --libs --static librustty-vt | grep -q -- '-lrustty-vt'
+          pkg-config --libs --static librustty-vt-static | grep -q -- 'librustty-vt.a'
 
           touch "$out"
         '';
@@ -250,7 +250,7 @@ in
             then "yes"
             else "no"
           }"
-          ${linkCheck "$out/bin/test" "librustty_vt_c"}
+          ${linkCheck "$out/bin/test" "librustty-vt"}
           runHook postInstallCheckHooks
         '';
         meta.mainProgram = "test";
@@ -281,7 +281,7 @@ in
             then "yes"
             else "no"
           }"
-          ! ${linkCheck "$out/bin/test" "librustty_vt_c"}
+          ! ${linkCheck "$out/bin/test" "librustty-vt"}
           runHook postInstallCheckHooks
         '';
         meta.mainProgram = "test";

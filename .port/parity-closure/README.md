@@ -168,7 +168,7 @@ committed records named here.
   ids its brief assigned. N483 was reserved for P7-W12 T5 (gate portability).
 - **P7-W12 T5** (gate portability) used N483 (CLOSED) and N486 (OPEN: the Linux VT-headers
   gate and rvm's stale oracle `origin/main`) and N487 (CLOSED, the Nix bindgen hook).
-  **Next free: UD375, N488, V30.**
+  N488 (CLOSED, three more Nix-lane defects behind N487). **Next free: UD375, N489, V30.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.

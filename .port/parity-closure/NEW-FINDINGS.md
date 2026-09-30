@@ -9974,9 +9974,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   at `~/projects/p7-w12t5`: G1b, `restore_zig_deps.sh` (rc 0, and `--verify-only` rc 0), G-BENCH,
   G-LZ4, `check_symbol_manifest.sh`, `check_rustty_h_abi.sh`, `check_constants_parity.py`,
   `d6_cfg_mapping_audit.py`, `check_comment_coverage.py`, `cycle_check.py`, `reach_scc.py`,
-  `_oracle_root.sh --self-test`: PASS. These rvm runs were made with the two `/Users/gael`
-  convenience symlinks still present (another lane was using them); the touched scripts never read
-  them, and the symlink-free re-run is recorded by the controller. No touched script reads `/Users/gael` any more (the one
+  `_oracle_root.sh --self-test`: PASS. These rvm runs were first made with the two `/Users/gael`
+  convenience symlinks present; the symlinks and the `/Users/gael` directories were then removed and
+  the same gates re-run and passed (see N488's evidence). No touched script reads `/Users/gael` any more (the one
   remaining literal in `.port/tools` is `perf/ws10_suite.py`'s measurement-substrate path, a
   Mac-only perf tool, not a gate).
 
@@ -10006,4 +10006,32 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **fix**: `nix/librustty-vt.nix` takes `rustPlatform` and lists `rustPlatform.bindgenHook` in
   `nativeBuildInputs`, as `package.nix` does, with a PORTS note; the stale `package.nix` comment is
   corrected.
-- **evidence**: see the G-NIX result in the P7-W12 T5 report (rvm).
+- **evidence**: rvm (aarch64-linux): before, `nix flake check` failed on `checks.aarch64-linux.librustty-vt`
+  with the libclang error; with the hook the bindgen step passes. The derivation then exposed the three
+  defects recorded as N488, and G-NIX is GREEN with all of them fixed.
+
+## N488 — the Nix lane had three more defects behind N487: absolute libdir, stale library names, dev-shell-bound formatter check
+
+- **id**: N488. P7-W12 T5. **severity**: low (Nix lane; one CMake install defect). **state**: CLOSED
+  by P7-W12 T5.
+- **finding**: with N487 fixed, G-NIX failed in three further places, each hidden by the one before.
+  1. `CMakeLists.txt` built the soname symlink directory as `DESTDIR + CMAKE_INSTALL_PREFIX + "/" +
+     CMAKE_INSTALL_LIBDIR`. nixpkgs passes an ABSOLUTE `CMAKE_INSTALL_LIBDIR` for split outputs, so
+     the path nested (`/nix/store/x//nix/store/x/lib/...`) and `cmake --install` failed.
+  2. `nix/librustty-vt.nix` still used the old artifact names (`librustty_vt_c.a`, `-lrustty_vt_c`);
+     the CMake install ships `librustty-vt.a` and `librustty-vt.so*`, so `postInstall`, the
+     sanity-check and the pkg-config and link checks could not match.
+  3. G-NIX step 3 ran alejandra through `nix develop --command`, which realises the whole dev shell;
+     nixpkgs' `python3.14-wasmtime` fails its own tests on this host, so a formatting check went
+     RED for a reason unrelated to formatting.
+- **fix**: (1) an absolute libdir is used as is (DESTDIR prepended), a relative one keeps the
+  prefix-at-install-time form. (2) `nix/librustty-vt.nix` names follow the install. (3) step 3 runs
+  `nix fmt -- --check .`, the flake's own `formatter` (alejandra): same tool and files.
+- **evidence**: rvm, from `~/projects/p7-w12t5`: `check_nix.sh` GREEN (7 flake checks, alejandra
+  compliant); with a badly formatted `.nix` file added, `nix fmt -- --check .` exits 2 and names it.
+  macOS: `check_c_consumer.sh` GREEN after the CMake change (relative-libdir path unchanged).
+  Symlink-free proof, rvm (`/Users/gael` removed entirely): G1b and its `--self-test`,
+  `restore_zig_deps.sh` (rc 0, `--verify-only` rc 0), G-BENCH, G-LZ4, `check_symbol_manifest.sh`,
+  `check_rustty_h_abi.sh`, `check_constants_parity.py`, `d6_cfg_mapping_audit.py`,
+  `check_comment_coverage.py`, `cycle_check.py`, `reach_scc.py`, `_oracle_root.sh --self-test`: all
+  pass. This supersedes the N483 note that the symlinks were still present.
