@@ -6119,7 +6119,7 @@ mod tests {
         fn rt_app(&self) -> *mut Double {
             std::ptr::null_mut()
         }
-        fn close(&self, _process_alive: bool) {}
+        unsafe fn close(_self: *const Self, _process_alive: bool) {}
         fn deinit(&mut self) {}
         fn get_content_scale(&self) -> Result<apprt::ContentScale, apprt::ApprtError> {
             unimplemented!("test double: not exercised")

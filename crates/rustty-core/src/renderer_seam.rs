@@ -2606,7 +2606,7 @@ mod compression_tests {
             unimplemented!("test runtime: not driven by the compression tests")
         }
 
-        fn close(&self, _process_alive: bool) {}
+        unsafe fn close(_self: *const Self, _process_alive: bool) {}
 
         fn deinit(&mut self) {}
 

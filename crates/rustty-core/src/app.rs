@@ -606,7 +606,8 @@ where
         if !unsafe { (*self_).hasSurface(surface.cast_const()) } {
             return;
         }
-        unsafe { &mut *surface }.close();
+        // (N465: `Surface::close` is raw-self too.)
+        unsafe { Surface::close(surface) };
     }
 
     pub fn focusSurface(&mut self, surface: *mut Surface<A>) {
@@ -1523,7 +1524,7 @@ pub(crate) mod test_runtime {
             self.app
         }
 
-        fn close(&self, _process_alive: bool) {}
+        unsafe fn close(_self: *const Self, _process_alive: bool) {}
 
         fn deinit(&mut self) {}
 

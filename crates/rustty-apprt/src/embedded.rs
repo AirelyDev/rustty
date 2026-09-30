@@ -3319,12 +3319,17 @@ impl ApprtSurface for Surface {
     }
 
     // pub fn close(self: *const Surface, process_alive: bool) void { ... }
-    fn close(&self, process_alive: bool) {
+    //
+    // PORT NOTE (N465): raw-self (see the seam). `self_` is read by place for
+    // `app` and `userdata`; no reference to this surface (which holds the
+    // core surface inline) spans `func`, whose macOS handler may re-enter it.
+    unsafe fn close(self_: *const Self, process_alive: bool) {
         // const func = self.app.opts.close_surface orelse {
         //     log.info("runtime embedder does not support closing a surface", .{});
         //     return;
         // };
-        let func = match unsafe { (*self.app).opts.close_surface } {
+        let app = unsafe { (*self_).app };
+        let func = match unsafe { (*app).opts.close_surface } {
             Some(func) => func,
             None => {
                 // log.info("runtime embedder does not support closing a surface", .{});
@@ -3334,7 +3339,8 @@ impl ApprtSurface for Surface {
         };
 
         // func(self.userdata, process_alive);
-        func(self.userdata, process_alive);
+        let userdata = unsafe { (*self_).userdata };
+        func(userdata, process_alive);
     }
 
     // pub fn deinit(self: *Surface) void { ... }

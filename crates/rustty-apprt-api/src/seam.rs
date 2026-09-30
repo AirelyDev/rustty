@@ -160,7 +160,21 @@ pub trait Surface: Sized {
     //
     // PORT NOTE: `pub fn close(self: *const Surface, process_alive: bool) void`
     // — embedded.zig:641.
-    fn close(&self, process_alive: bool);
+    //
+    // PORT NOTE (N465, P7-W12 T1): raw-self, the reference's `*const Surface`.
+    // The close callback re-enters the surface synchronously (macOS: the
+    // close notification cancels a pending clipboard confirmation →
+    // `rustty_surface_deny_clipboard_request` → `&mut` embedded `Surface`;
+    // GTK: `close-request` → `SplitTree.surfaceCloseRequest` →
+    // `needsConfirmQuit` on the core surface). A `&self` receiver would be a
+    // protector over the whole runtime surface, and the embedded one holds
+    // the core surface inline.
+    ///
+    /// # Safety
+    /// `self_` is the live runtime surface allocation. No reference to it may
+    /// be live across the call, and the implementation reaches it only by
+    /// place, in reborrows that end before the host callback runs.
+    unsafe fn close(self_: *const Self, process_alive: bool);
 
     /// Deinitialize the runtime surface.
     //

@@ -315,6 +315,12 @@ thread_local! {
     static ACTIONS: core::cell::RefCell<Vec<(TargetKey, Recorded)>> =
         const { core::cell::RefCell::new(Vec::new()) };
     static CLOSES: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    /// N465: when set, `cb_close_surface` re-enters this surface with a write
+    /// (`rustty_surface_set_size`), as the macOS host's close notification
+    /// re-enters it through `rustty_surface_deny_clipboard_request`.
+    static CLOSE_REENTER: core::cell::Cell<*mut Surface> =
+        const { core::cell::Cell::new(core::ptr::null_mut()) };
+    static CLOSE_REENTERED: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
     static INHERITED: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
     static RESIZED: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
     static RELOADED: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
@@ -350,6 +356,12 @@ extern "C" fn cb_write_clipboard(
 }
 extern "C" fn cb_close_surface(_ud: *mut c_void, _p: bool) {
     CLOSES.with(|c| c.set(c.get() + 1));
+    let target = CLOSE_REENTER.with(|c| c.replace(core::ptr::null_mut()));
+    if !target.is_null() {
+        // SAFETY: `target` is the live surface the test armed, on its host thread.
+        unsafe { rustty_surface_set_size(target, 640, 480) };
+        CLOSE_REENTERED.with(|c| c.set(c.get() + 1));
+    }
 }
 
 fn test_options() -> Options {
@@ -735,6 +747,48 @@ fn split_and_close_exports_reach_the_host() {
         ACTIONS.with(|v| v.borrow().is_empty()),
         "close_surface dispatches no apprt action: {:?}",
         ACTIONS.with(|v| v.borrow().clone())
+    );
+}
+
+// N465 (P7-W12 T1): the runtime's close callback re-enters the closing surface
+// synchronously. On macOS the close notification removes the view from the split
+// tree, which cancels a pending clipboard confirmation and so calls
+// `rustty_surface_deny_clipboard_request` -> `denyClipboardRequest(&mut self)`,
+// a write to the surface `Surface::close(&mut self)` held protected (Stacked
+// Borrows UB). `close` is raw-self now, and the seam's `close` takes
+// `self_: *const Self`; proven on the isolated harness
+// `.port/phase-2/mirihar-n465`. Miri cannot see across this FFI: the test proves
+// the re-entrant write runs on the fixed routes (the C `request_close` fallback
+// is not reached here, because the binding handles the close).
+#[test]
+fn close_callback_reenters_the_closing_surface() {
+    let Some(host) = HostedSurface::spawn() else {
+        eprintln!("no Metal device / app_new failed; skipping");
+        return;
+    };
+    CLOSES.with(|c| c.set(0));
+    CLOSE_REENTERED.with(|c| c.set(0));
+    CLOSE_REENTER.with(|c| c.set(host.surface));
+
+    // SAFETY: `host.surface` is the live surface from `rustty_surface_new`, and this
+    // thread is the host's main thread for it.
+    unsafe { rustty_surface_request_close(host.surface) };
+    assert_eq!(
+        1,
+        CLOSES.with(|c| c.get()),
+        "request_close closes the surface once"
+    );
+    assert_eq!(
+        1,
+        CLOSE_REENTERED.with(|c| c.get()),
+        "the close callback re-entered the closing surface once (N465 shape)"
+    );
+    // SAFETY: as above; the surface is still live (the host frees it later).
+    let size = unsafe { rustty_surface_size(host.surface) };
+    assert_eq!(
+        (640, 480),
+        (size.width_px, size.height_px),
+        "the re-entrant write landed"
     );
 }
 

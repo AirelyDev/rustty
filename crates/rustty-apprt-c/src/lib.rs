@@ -2247,7 +2247,8 @@ pub unsafe extern "C" fn rustty_surface_request_close(ptr: *mut Surface) {
     };
     if !handled {
         // SAFETY: as above.
-        unsafe { (*ptr).core_surface.close() };
+        // (N465: raw-self through the embedded surface's raw root.)
+        unsafe { CoreSurface::close(&raw mut (*ptr).core_surface) };
     }
 }
 
@@ -3814,8 +3815,9 @@ mod binding_route_tests {
             c.contains("\"error requesting close err={err:?}\""),
             "request_close must log \"error requesting close\" (a1bf5b5e1):\n{c}"
         );
+        // (N465: the fallback is raw-self too.)
         assert!(
-            c.contains(".core_surface.close()"),
+            c.contains("CoreSurface::close(&raw mut (*ptr).core_surface)"),
             "request_close keeps close() as the unhandled fallback:\n{c}"
         );
     }
