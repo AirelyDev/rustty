@@ -55,6 +55,8 @@ States at the finale:
 
 ## Finale gates (at `12752b2ac`, on the finale head)
 
+Evidence: `w0/*-finale-at-12752b2ac.txt`; `w0/gates-finale-summary-at-12752b2ac.txt` is the one-line verdict of all 35 gate runs on the finale head (the post-merge set ran at `d36ddf38`, before the comment-only commit).
+
 | gate | result |
 |---|---|
 | G-TESTS (`audit_test_coverage.py`) and its self-test | GREEN: 4,188 live-oracle test blocks, 0 unexplained, 1 accepted. Self-test GREEN after its accepted-arm anchor moved off a row that W10 T2's `codepoint_width_unicode18_wide_ranges` now name-matches |

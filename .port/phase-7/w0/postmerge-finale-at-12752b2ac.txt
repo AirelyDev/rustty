@@ -1,0 +1,17 @@
+[0] build ::     Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.60s
+[0] clippy ::     Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.63s
+[0] fmt :: 
+[0] vt-headers :: VT-HEADERS: GREEN
+[0] embed-abi :: check_embed_h_abi: PASS — every by-value-return ABI type is frozen and matches the header.
+[0] rustty-h-abi :: >> Task-4 PASS: include/rustty-embed.h is exactly the pinned ghostty oracle header renamed ghostty->rustty (91 functions), zero ghostty_* left behind.
+[0] g-skip :: G-SKIP: 0 silent-skip site(s), 0 allow-list error(s); 248 guarded return(s) accepted
+[0] g-logfile :: GREEN: every reference file's port emits at least reference-minus-allowance diagnostics on every platform arm.
+[0] g-logfile-self :: off-pin or GIT_DIR-redirected oracle is BLOCKED.
+[0] oracle-self :: G-ORACLE-SH-SELF GREEN: the shell resolver, the pin, and every oracle reader hold.
+[0] test-counts :: TEST-COUNT GATE: GREEN — every module has rust #[test] >= zig test{} (minus apc-deferred)
+[0] acyclic :: GREEN: rustty crate graph is acyclic (G7)
+[0] vtalloc :: G-VTALLOC: PASS
+[0] phase2 :: PHASE-2 CLOSURE GATE: GREEN — 100 open-claim entries examined; every one is struck, reclassified, or owned by an OPEN workstream.
+[0] g3b-self ::   [ok ] not-carried: REAL: the committed MIXED-CARRIED row's phrase is in the apprt port
+[0] ud-docs :: CHECK PASS
+[0] g-parity :: GREEN: every audited parity finding is closed or waived-with-reason.

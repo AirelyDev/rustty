@@ -1,0 +1,28 @@
+== (a) headers compile ==
+  OK
+== (a2) EVERY published header compiles standalone as C11 and C++17 ==
+  OK  rustty.h (c11 + c++17)
+  OK  rustty-apprt.h (c11 + c++17)
+  OK  rustty-embed.h (c11 + c++17)
+  OK  rustty/vt.h (c++17; the (a) probe covers C)
+== (a3) include/rustty.h is byte-identical to a fresh cbindgen run ==
+  OK (regenerated and byte-identical)
+== (a3b) include/rustty-apprt.h is byte-identical to a fresh cbindgen run ==
+  OK (regenerated and byte-identical)
+== (a4) generated rustty_style_default pointee == curated RusttyStyle ==
+  OK (pointee is a 72-byte struct, == sizeof(RusttyStyle))
+== (b) every declared+cbindgen rustty_* symbol is a real export ==
+  OK (203 symbols cross-checked, floor 203; 6 documented non-ABI tokens)
+== (d) every ORACLE lib_vt.zig export has a rustty_* counterpart ==
+  OK (203 oracle exports checked; 0 documented residual(s), owner: P4-W5 T6 Bundle W)
+== (c) struct layouts match rustty_type_json() ==
+    63 sizeof + 252 offsetof asserts across 61 header aggregates OK [type_json registry vs oracle: 162 types, 0 residuals owned by the later P4-W5 bundles] (0 documented as not in type_json)
+== (e) enum discriminants and names match the curated headers ==
+    self-test PASS: matching fixture is green
+    self-test PASS: transposed fixture: value asserts alone stay green
+    self-test PASS: transposed fixture: the name arm is RED
+    self-test PASS: a suffix that is not at a `_` boundary is RED
+    self-test PASS: a stale NAME_ALIASES row is RED
+    SELF-TEST: PASS
+    683 enumerator discriminants and names across 71 enums OK (1 documented unmapped, 8 name alias(es))
+VT-HEADERS: GREEN
