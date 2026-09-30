@@ -3085,6 +3085,7 @@ mod tests {
                 rows: 1,
                 reflow: true,
                 prompt_redraw: terminal_osc::semantic_prompt::Redraw::False,
+                pull_scrollback: true,
             })
             .unwrap();
         // SAFETY: as above (the resize refreshed the cursor pointers).

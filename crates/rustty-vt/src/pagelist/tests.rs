@@ -8371,6 +8371,7 @@ fn pagelist_increaseCapacity_after_col_shrink() {
         rows: None,
         reflow: false,
         cursor: None,
+        pull_scrollback: true,
     })
     .unwrap();
     assert_eq!(5, s.cols);
@@ -12242,6 +12243,7 @@ fn pagelist_resize_less_rows_and_cols_cursor_at_bottom() {
             y: 23,
             pin: Some(cursor_pin),
         }),
+        pull_scrollback: true,
     })
     .unwrap();
     assert_eq!(79usize, s.cols as usize);
@@ -12308,6 +12310,7 @@ fn pagelist_resize_less_rows_and_cols_cursor_near_top_pushed_to_scrollback() {
             y: 0,
             pin: Some(cursor_pin),
         }),
+        pull_scrollback: true,
     })
     .unwrap();
     assert_eq!(79usize, s.cols as usize);
@@ -13304,6 +13307,7 @@ fn pagelist_resize_reflow_less_cols_wrap_across_page_boundary_cursor_in_second_p
             y: 5,
             pin: None,
         }),
+        pull_scrollback: true,
     })
     .unwrap();
     assert_eq!(4usize, s.cols as usize);
@@ -15431,6 +15435,62 @@ fn pagelist_resize_reflow_less_cols_cursor_not_on_last_line_preserves_location()
     s.deinit();
 }
 
+// ref: test "PageList resize reflow less cols no scrollback pull blank active"
+#[test]
+fn pagelist_resize_reflow_less_cols_no_scrollback_pull_blank_active() {
+    let mut s = PageList::init(
+        Global,
+        Options {
+            max_size: Some(1),
+            ..Options::new(5, 5)
+        },
+    )
+    .unwrap();
+    assert!(s.pages.first == s.pages.last);
+    let page = unsafe { super::Node::page(s.pages.first) };
+    for y in 0..s.rows {
+        for x in 0..2 {
+            let rac = unsafe { (*page).get_row_and_cell(x as usize, y as usize) };
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+
+    // Grow blank rows to push our rows back into scrollback
+    s.grow_rows(5).unwrap();
+    assert_eq!(10usize, s.total_rows());
+
+    let p = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+                .unwrap(),
+        )
+        .unwrap();
+    // defer s.untrackPin(p);
+
+    // Resize with no cursor. Normally the trailing blank rows would be
+    // trimmed and the active area would slide up over our history.
+    s.resize(Resize {
+        cols: Some(4),
+        reflow: true,
+        pull_scrollback: false,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(4usize, s.cols as usize);
+    assert_eq!(10usize, s.total_rows());
+
+    // The top of the active area should not move
+    assert_eq!(
+        point::Point::Active(point::Coordinate { x: 0, y: 0 }),
+        s.point_from_pin(point::Tag::Active, pin_copy(p)).unwrap()
+    );
+
+    s.untrack_pin(p);
+    s.deinit();
+}
+
 // =====================================================================
 // resize reflow (style / wide / grapheme / kitty placeholder), grapheme
 // map capacity, viewport-pin/backfill remap (batch vt-3c)
@@ -16844,6 +16904,7 @@ fn pagelist_pagepool_no_leak_resize_reflow() {
             rows: None,
             reflow: true,
             cursor: None,
+            pull_scrollback: true,
         })
         .unwrap();
         assert_eq!(40, s.cols);
@@ -16854,6 +16915,7 @@ fn pagelist_pagepool_no_leak_resize_reflow() {
             rows: None,
             reflow: true,
             cursor: None,
+            pull_scrollback: true,
         })
         .unwrap();
         assert_eq!(100, s.cols);

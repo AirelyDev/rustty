@@ -374,6 +374,14 @@ pub struct Flags {
     // visible: bool = true,
     pub visible: bool,
 
+    /// Whether a resize may pull rows out of scrollback back into the
+    /// active area. This should be false if the pty keeps its own screen
+    /// buffer without scrollback (e.g. Windows ConPTY) so that we stay in
+    /// sync with it. See PageList.Resize for details. This is configuration
+    /// rather than terminal state so it is preserved across a full reset.
+    // resize_pull_scrollback: bool = true,
+    pub resize_pull_scrollback: bool,
+
     /// True if the terminal is in a password entry mode. This is set
     /// to true based on termios state. This is set
     /// to true based on termios state.
@@ -406,6 +414,7 @@ impl Default for Flags {
             mouse_shift_capture: MouseShiftCapture::Null,
             focused: true,
             visible: true,
+            resize_pull_scrollback: true,
             password_input: false,
             selection_scroll: false,
             search_viewport_dirty: false,
@@ -6227,9 +6236,11 @@ impl Terminal {
         //     .rows = opts.rows,
         //     .reflow = self.modes.get(.wraparound),
         //     .prompt_redraw = self.flags.shell_redraws_prompt,
+        //     .pull_scrollback = self.flags.resize_pull_scrollback,
         // });
         let reflow = self.modes.get(modespkg::Mode::Wraparound);
         let prompt_redraw = self.flags.shell_redraws_prompt;
+        let pull_scrollback = self.flags.resize_pull_scrollback;
         let primary: *mut Screen = self.screens.get(crate::screen_set::Key::Primary).unwrap();
 
         #[cfg(test)]
@@ -6249,6 +6260,7 @@ impl Terminal {
                 rows,
                 reflow,
                 prompt_redraw,
+                pull_scrollback,
             })
         } {
             if let Some(v) = new_tabstops.take() {
@@ -6288,6 +6300,7 @@ impl Terminal {
                             // `.output`. Guarded by
                             // `terminal_resize_does_not_prompt_redraw_the_alternate_screen`.
                             prompt_redraw: osc::semantic_prompt::Redraw::False,
+                            pull_scrollback,
                         })
                     } {
                         Err(e) => break 'resize e.into(),
@@ -6963,18 +6976,28 @@ impl Terminal {
         // self.glyph_glossary.clearAndFree(self.gpa());
         // self.status_display = .main;
         // const visible = self.flags.visible;
+        // const resize_pull_scrollback = self.flags.resize_pull_scrollback;
         // self.modes.reset();
         // self.flags = .{
         //     // Visibility belongs to the view rather than terminal state, so a
         //     // terminal reset must not make a hidden view potentially visible.
         //     .visible = visible,
+        //
+        //     // This is configuration based on the pty rather than terminal
+        //     // state, so a terminal reset must not change it.
+        //     .resize_pull_scrollback = resize_pull_scrollback,
         // };
         let visible = self.flags.visible;
+        let resize_pull_scrollback = self.flags.resize_pull_scrollback;
         self.modes.reset();
         self.flags = Flags {
             // Visibility belongs to the view rather than terminal state, so a
             // terminal reset must not make a hidden view potentially visible.
             visible,
+
+            // This is configuration based on the pty rather than terminal
+            // state, so a terminal reset must not change it.
+            resize_pull_scrollback,
             ..Flags::default()
         };
         self.tabstops.reset(TABSTOP_INTERVAL as usize);
@@ -20021,6 +20044,39 @@ mod tests {
             },
         )
         .unwrap();
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: resize without scrollback pull"
+    #[test]
+    fn terminal_resize_without_scrollback_pull() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(5, 3)).unwrap();
+        // defer t.deinit(alloc);
+        t.flags.resize_pull_scrollback = false;
+
+        // This is configuration so it should survive a reset.
+        t.full_reset();
+        assert!(!t.flags.resize_pull_scrollback);
+
+        t.print_string(b"1\n2\n3\n4\n5").unwrap();
+        t.resize(
+            alloc,
+            Resize {
+                cols: 5,
+                rows: 5,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(2 as size::CellCountInt, unsafe {
+            (*t.screens.active).cursor.y
+        });
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "3\n4\n5".as_bytes());
+        }
 
         t.deinit(alloc);
     }

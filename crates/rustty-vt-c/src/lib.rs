@@ -1449,12 +1449,13 @@ pub unsafe extern "C" fn rustty_style_is_default(s: *const style::Style) -> bool
 // `terminal::TerminalData::from_c_int` under W35-B08 — `get_multi` must reach
 // the same guard per array element, so it can no longer live in this file.
 //
-// contiguous 0..=39 (27/28 = scrollback max bytes/lines; 29/30 = the
+// contiguous 0..=40 (27/28 = scrollback max bytes/lines; 29/30 = the
 // desktop-notification and progress-report effects, oracle c3655ba25 47d602c42;
 // 31 = continuation_max_bytes, Bundle S d7bb4b863, closing the hole Bundle M
 // reserved for it; 32..=37 = the Bundle M options; 38 = clipboard_read,
-// oracle e03475c0c; 39 = clipboard_write_max_bytes, oracle 5350d4a5f)
-const TERMINAL_OPTION_COUNT: c_int = 40;
+// oracle e03475c0c; 39 = clipboard_write_max_bytes, oracle 5350d4a5f;
+// 40 = resize_pull_scrollback, oracle c55f213aa)
+const TERMINAL_OPTION_COUNT: c_int = 41;
 fn terminal_option_from_c_int(v: c_int) -> Option<terminal::Option_> {
     if (0..TERMINAL_OPTION_COUNT).contains(&v) {
         // SAFETY: `v` is a valid terminal `Option` discriminant (range-checked).
