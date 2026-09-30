@@ -595,6 +595,9 @@ jobs:
       # ships on the Windows image, so its CMake install/pkg-config tests must
       # not skip either. `xgettext` is not on the image, so
       # RUSTTY_REQUIRE_XGETTEXT stays unset on this leg (the resource is absent).
+      # RUSTTY_REQUIRE_UNC_SHARE stays unset too (P7-W12 T0): the kitty UNC
+      # test needs the loopback administrative share (server service plus an
+      # administrative token), which the runner account is not guaranteed.
       - name: Require the mirrored fuzz corpus and cmake (repo checkout, R14)
         # Explicit, like the `test_dll_init` step below: this job's other steps
         # are bare `cargo` invocations that do not care which shell runs them.

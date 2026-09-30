@@ -1130,6 +1130,9 @@ GATE_REGISTRY=(
   # continuously layout-gated (the vt header declares no by-value struct returns,
   # so this covers field-offset drift rather than the A4 sret crash class).
   "A5|PROGRESS|sh $GATES/check_rustty_vt_headers.sh"
+  # A5-MASK-SELF (P7-W12 T0) — A5's negative control: a failing early arm must
+  # not hide the later ones (the gate used to stop at its first failing arm).
+  "A5-MASK-SELF|PROGRESS|sh $GATES/check_rustty_vt_headers.sh --self-test-masking"
   # G-VTFEAT (gap-close 2026-08-26, oracle 1fdbb8c91) — the `-Dvt-features`
   # trimming gate. The reference lets a LIB artifact drop optional features so
   # embedders can shrink the binary, and each feature gates a block of

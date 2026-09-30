@@ -125,6 +125,26 @@ fn require_dmabuf_or_skip_impl(required: bool, test_name: &str, err: &dyn std::f
     );
 }
 
+/// Stands up the offscreen `OpenGL` for a KAT, or `None` (after the strict-mode
+/// pivot) when the host has no GL 4.3 core context.
+///
+/// Lives here rather than in `target::tests` so every caller's let-else guard
+/// reaches the [`require_gl_or_skip`] pivot through a `test_support::` call,
+/// which G-SKIP resolves (R14; P7-W12 T0).
+pub(crate) fn offscreen_api(
+    test_name: &str,
+    blending: rustty_render_types::AlphaBlending,
+) -> Option<crate::opengl::opengl_impl::OpenGL> {
+    match crate::opengl::opengl_impl::OpenGL::init_offscreen(blending, 8, 8) {
+        Ok(api) => Some(api),
+        Err(err) => {
+            require_gl_or_skip(test_name, &err);
+            eprintln!("no headless OpenGL 4.3 core context ({err}); skipping {test_name}");
+            None
+        }
+    }
+}
+
 /// A live, GL-loaded context for one test, plus the [`gl_lock`] guard.
 pub(crate) struct GlTestContext {
     /// FIELD ORDER IS LOAD-BEARING: Rust drops fields in declaration order, so

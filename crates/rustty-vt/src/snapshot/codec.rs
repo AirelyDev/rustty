@@ -1784,12 +1784,21 @@ mod tests {
     // test "complete snapshot restores a canonical Stream continuation"
     #[test]
     fn complete_snapshot_restores_a_canonical_stream_continuation() {
+        // N455 (P7-W12 T0): each terminal is reached ONLY through one raw root
+        // (`&raw mut`), which is also the pointer its stream handler writes
+        // through. The handler used to hold a pointer derived from a `&mut`
+        // reborrow, so the test's shared reads of the owner in between
+        // (`encode(&source_terminal)`, `plain_string`) froze its tag and the
+        // next `next_slice` wrote through a frozen tag (Tree Borrows). The
+        // production `Terminal::vt_handler(&mut self) -> Handler<'_>` is
+        // lifetime-tied, so the compiler rejects that interleave there.
         let mut source_terminal =
             Terminal::init(Allocator, terminal_options(8, 2, DEFAULT_MSB, None)).unwrap();
+        let source_terminal: *mut Terminal = &raw mut source_terminal;
         // defer source_terminal.deinit(testing.allocator);
         let mut source_stream = TerminalStream::init(stream::Options {
             allocator: Some(cont_alloc()),
-            handler: Handler::init(&mut source_terminal as *mut Terminal),
+            handler: Handler::init(source_terminal),
             continuation_max_bytes: Some(1024),
         });
         // defer source_stream.deinit();
@@ -1804,7 +1813,8 @@ mod tests {
         encode(
             Allocator,
             &mut encoded,
-            &source_terminal,
+            // SAFETY: the live terminal, read for the duration of the call.
+            unsafe { &*source_terminal },
             EncodeOptions {
                 continuation: Continuation::Bytes(Cow::Borrowed(exported.buffered())),
             },
@@ -1828,11 +1838,12 @@ mod tests {
         );
 
         let mut restored_terminal = decoded.to_owned();
+        let restored_terminal: *mut Terminal = &raw mut restored_terminal;
         // defer restored_terminal.deinit(testing.allocator);
         assert!(decoded.terminal.is_none());
         let mut restored_stream = TerminalStream::init(stream::Options {
             allocator: Some(cont_alloc()),
-            handler: Handler::init(&mut restored_terminal as *mut Terminal),
+            handler: Handler::init(restored_terminal),
             continuation_max_bytes: Some(1024),
         });
         // defer restored_stream.deinit();
@@ -1848,24 +1859,26 @@ mod tests {
         source_stream.next_slice(b"mB");
         restored_stream.next(b'm');
         restored_stream.next(b'B');
-        let source_text = source_terminal.plain_string(Allocator).unwrap();
+        // SAFETY (this and the reads below): the live terminals, through their
+        // raw roots.
+        let source_text = unsafe { (*source_terminal).plain_string(Allocator) }.unwrap();
         // defer testing.allocator.free(source_text);
-        let restored_text = restored_terminal.plain_string(Allocator).unwrap();
+        let restored_text = unsafe { (*restored_terminal).plain_string(Allocator) }.unwrap();
         // defer testing.allocator.free(restored_text);
         assert_eq!(source_text, restored_text);
         // SAFETY: live active screens owned by their terminals; shared reads.
         unsafe {
             assert_eq!(
-                (*source_terminal.screens.active).cursor.style_id,
-                (*restored_terminal.screens.active).cursor.style_id,
+                (*(*source_terminal).screens.active).cursor.style_id,
+                (*(*restored_terminal).screens.active).cursor.style_id,
             );
         }
 
         restored_stream.deinit();
         source_stream.deinit();
         decoded.deinit(Allocator);
-        restored_terminal.deinit(Allocator);
-        source_terminal.deinit(Allocator);
+        unsafe { (*restored_terminal).deinit(Allocator) };
+        unsafe { (*source_terminal).deinit(Allocator) };
     }
 
     // test "complete snapshot validates continuation before writing"

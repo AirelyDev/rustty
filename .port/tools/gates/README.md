@@ -224,3 +224,4 @@ cannot execute (live-syscall binaries) are ROUTED to ASan per the 4-criterion
 rule in `.port/phase-2/MIRI_EXCEPTIONS.md`, never skipped.
 
 - `check_rustty_vt_headers.sh` — ABI-fidelity gate for the curated public C header family `include/rustty/vt.h` + `vt/*.h`: (a) compiles clean, (b) declared symbols are real exports (native ∪ wasm) cross-checked vs the cbindgen `rustty.h` ground-truth, (c) struct sizes/offsets match `rustty_type_json()`. Run after any C-ABI or header change.
+  Every arm runs and reports; the verdict is RED if any arm failed. `--self-test-masking` (ci.sh `A5-MASK-SELF`) is the negative control: a failing `cbindgen` shim fails (a3) and (a3b), and every later arm must still run (P7-W12 T0).
