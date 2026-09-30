@@ -3172,17 +3172,17 @@ mod tests {
     /// fails with "Undefined Behavior: constructing invalid value of type
     /// &[tmux::viewer::Window]: encountered a dangling reference
     /// (use-after-free)". Natively the
-    /// read is undefined behaviour, so outside Miri the test prints a skip.
+    /// read is undefined behaviour, so outside Miri the test FAILS before it
+    /// (R14: an `#[ignore]`d test run without what it needs fails, it does not
+    /// report `ok`; P7-W12 T0 replaced a printed skip).
     #[test]
     #[ignore = "negative control: reads a tmux .windows action after the next viewer mutation (UB by design); run under Miri with --ignored, where it must fail"]
     fn list_windows_action_read_after_session_change_is_ub_negative_control() {
-        if !cfg!(miri) {
-            eprintln!(
-                "SKIP list_windows_action_read_after_session_change_is_ub_negative_control: \
-                 only meaningful under Miri (natively the read is undefined behaviour)"
-            );
-            return;
-        }
+        assert!(
+            cfg!(miri),
+            "list_windows_action_read_after_session_change_is_ub_negative_control is only \
+             meaningful under Miri (natively the read is undefined behaviour)"
+        );
         let mut viewer = viewer_awaiting_list_windows();
         let actions = viewer.next(tmux(block_end(
             "$1 @0 83 44 027b,83x44,0,0[83x20,0,0,0,83x23,0,21,1]",

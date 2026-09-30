@@ -840,7 +840,7 @@ mod tests {
     #[test]
     fn present_reads_back_to_memory_when_presentation_is_unhealthy() {
         let _guard = test_support::gl_lock();
-        let Some(api) = crate::opengl::target::tests::api(
+        let Some(api) = test_support::offscreen_api(
             "present_reads_back_to_memory_when_presentation_is_unhealthy",
             AlphaBlending::LinearCorrected,
         ) else {
@@ -883,8 +883,7 @@ mod tests {
     fn present_exports_a_dmabuf_when_presentation_is_healthy() {
         const TEST: &str = "present_exports_a_dmabuf_when_presentation_is_healthy";
         let _guard = test_support::gl_lock();
-        let Some(api) = crate::opengl::target::tests::api(TEST, AlphaBlending::LinearCorrected)
-        else {
+        let Some(api) = test_support::offscreen_api(TEST, AlphaBlending::LinearCorrected) else {
             return;
         };
         let target = api.init_target(8, 4).expect("init_target");
@@ -936,7 +935,7 @@ mod tests {
             (AlphaBlending::Linear, 124),
             (AlphaBlending::LinearCorrected, 124),
         ] {
-            let Some(api) = crate::opengl::target::tests::api(
+            let Some(api) = test_support::offscreen_api(
                 "native_blending_target_stores_shader_output_verbatim",
                 blending,
             ) else {
@@ -971,7 +970,7 @@ mod tests {
     #[test]
     fn thread_enter_and_exit_move_the_gl_table_to_the_render_thread() {
         let _guard = test_support::gl_lock();
-        let Some(api) = crate::opengl::target::tests::api(
+        let Some(api) = test_support::offscreen_api(
             "thread_enter_and_exit_move_the_gl_table_to_the_render_thread",
             AlphaBlending::LinearCorrected,
         ) else {

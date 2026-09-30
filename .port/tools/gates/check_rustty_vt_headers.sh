@@ -55,6 +55,46 @@ if [ "${1:-}" = "--self-test-oracle" ]; then
   exit "$rc"
 fi
 
+# --self-test-masking (P7-W12 T0, R5 negative control for the every-arm-runs
+# verdict below): run THIS gate for real with a `cbindgen` shim first on PATH
+# that always fails, so arm (a3), the third arm, fails. Under the old
+# straight-line `set -e` the run ended there and printed nothing of (a4), (b),
+# (d), (c) or (e). The control passes only if every later arm still printed its
+# header, the summary names (a3) as failed, and the gate exits 1.
+if [ "${1:-}" = "--self-test-masking" ]; then
+  shim=$(mktemp -d "${TMPDIR:-/tmp}/a5_mask.XXXXXX")
+  printf '#!/bin/sh\necho "self-test-masking shim: cbindgen always fails" >&2\nexit 1\n' > "$shim/cbindgen"
+  chmod +x "$shim/cbindgen"
+  grc=0
+  out=$(PATH="$shim:$PATH" sh "$0" 2>&1) || grc=$?
+  rm -rf "$shim"
+  rc=0
+  for arm in "(a4)" "(b)" "(d)" "(c)" "(e)"; do
+    if printf '%s\n' "$out" | grep -qF "== $arm "; then
+      echo "  ok   arm $arm still ran after (a3) failed"
+    else
+      echo "  FAIL arm $arm did not run: an earlier failure masked it"; rc=1
+    fi
+  done
+  if printf '%s\n' "$out" | grep -qF "  -> arm (a3) FAILED"; then
+    echo "  ok   arm (a3) reported as FAILED"
+  else
+    echo "  FAIL arm (a3) was not reported as FAILED"; rc=1
+  fi
+  last=$(printf '%s\n' "$out" | tail -1)
+  case "$last" in
+    "VT-HEADERS: RED (failed arm(s):"*"(a3)"*) echo "  ok   the verdict line is RED and names (a3)" ;;
+    *) echo "  FAIL the verdict line is '$last', want a RED line naming (a3)"; rc=1 ;;
+  esac
+  if [ "$grc" -eq 1 ]; then
+    echo "  ok   the gate exits 1"
+  else
+    echo "  FAIL the gate exited $grc, want 1"; rc=1
+  fi
+  if [ "$rc" -eq 0 ]; then echo "SELF-TEST-MASKING: PASS"; else echo "SELF-TEST-MASKING: FAIL"; fi
+  exit "$rc"
+fi
+
 lib=target/release/librustty_vt_c.dylib
 # P3-W6: UNCONDITIONAL, same reason as the wasm build below. This was
 # `[ -f "$lib" ] || cargo build …`, which is the SAME stale-artifact vacuity —
@@ -95,10 +135,33 @@ SYSROOT=""
 sdk="$(xcrun --show-sdk-path 2>/dev/null || true)"
 [ -n "$sdk" ] && SYSROOT="-isysroot $sdk"
 
+# P7-W12 T0: EVERY ARM RUNS AND REPORTS. This script used to run its arms
+# straight-line under `set -e`, so the first failing arm ended the run and hid
+# every arm after it: a red (c) on the phase branch masked (e) entirely, and
+# (d) whenever an earlier arm failed. Each arm now runs in its own `set -e`
+# subshell; `record` notes its exit status, and the verdict at the end is RED
+# (exit 1) if ANY arm failed, else BLOCKED (exit 3) if any arm was blocked,
+# else GREEN. The two library builds above stay fatal: every arm from (b) on
+# reads their artifacts, so a failed build is not an arm result.
+# `--self-test-masking` (below) is the negative control.
+set +e
+FAILED_ARMS=""
+BLOCKED_ARMS=""
+record() {
+  case "$2" in
+    0) ;;
+    3) BLOCKED_ARMS="$BLOCKED_ARMS $1"; echo "  -> arm $1 BLOCKED (exit 3); continuing with the remaining arms" ;;
+    *) FAILED_ARMS="$FAILED_ARMS $1"; echo "  -> arm $1 FAILED (exit $2); continuing with the remaining arms" ;;
+  esac
+}
+
+( set -e
 echo "== (a) headers compile =="
 printf '#include <rustty/vt.h>\nint main(void){return 0;}\n' > "$T/vt_probe.c"
 "$CC" -fsyntax-only -Wall -Iinclude "$T/vt_probe.c"
 echo "  OK"
+)
+record "(a)" $?
 
 # WS19 T3 (audit row N2). The (a) probe above compiles only the CURATED
 # `rustty/vt.h`. `include/rustty.h` — the FULL cbindgen header we publish — had
@@ -108,6 +171,7 @@ echo "  OK"
 # `clang -fsyntax-only -I include` failed with 2 errors at :2455 and :2457.
 # A header we publish but never compile is an unproven artifact. Every published
 # header is now compiled as BOTH C11 and C++17 with -Wall -Wextra.
+( set -e
 echo "== (a2) EVERY published header compiles standalone as C11 and C++17 =="
 for h in rustty.h rustty-apprt.h rustty-embed.h; do
   printf '#include "%s"\nint main(void){return 0;}\n' "$h" > "$T/a2.c"
@@ -119,6 +183,8 @@ done
 printf '#include <rustty/vt.h>\nint main(){return 0;}\n' > "$T/a2vt.cpp"
 "$CXX" -std=c++17 -fsyntax-only -Wall -Wextra $SYSROOT -Iinclude "$T/a2vt.cpp"
 echo "  OK  rustty/vt.h (c++17; the (a) probe covers C)"
+)
+record "(a2)" $?
 
 # --- (a3) the checked-in cbindgen header is not STALE (W12-02) ---------------
 # `include/rustty.h` is GENERATED, but nothing regenerated it here, so it drifted
@@ -131,6 +197,7 @@ echo "  OK  rustty/vt.h (c++17; the (a) probe covers C)"
 # (docs/superpowers/specs/2026-07-15-rustty-c-header-family-design.md:54-66) asks
 # for a compatible SIGNATURE, not a compatible name list. Regenerate and diff:
 # that is the only check that binds every future drift at once.
+( set -e
 echo "== (a3) include/rustty.h is byte-identical to a fresh cbindgen run =="
 if ! command -v cbindgen >/dev/null 2>&1; then
   echo "  BLOCKED: cbindgen is not on PATH, so the generated header cannot be"
@@ -154,6 +221,8 @@ if ! diff -u include/rustty.h "$T/rustty_regen.h" > "$T/rustty_regen.diff"; then
   exit 1
 fi
 echo "  OK (regenerated and byte-identical)"
+)
+record "(a3)" $?
 
 # --- (a3b) the OTHER checked-in cbindgen header is not STALE (W92-B02-02) ----
 # Exactly the (a3) argument, for `include/rustty-apprt.h`: it is GENERATED but
@@ -162,6 +231,7 @@ echo "  OK (regenerated and byte-identical)"
 # the D11 `c_int` narrowing of `Point.tag`/`Point.coord_tag`/`KeyEvent.action`,
 # so the published header declared a surface the crate no longer had. Arm (a2)
 # only compiles it; a compile cannot see a MISSING declaration.
+( set -e
 echo "== (a3b) include/rustty-apprt.h is byte-identical to a fresh cbindgen run =="
 if ! cbindgen --config crates/rustty-apprt-c/cbindgen.toml \
               --crate rustty-apprt-c \
@@ -179,6 +249,8 @@ if ! diff -u include/rustty-apprt.h "$T/rustty_apprt_regen.h" > "$T/rustty_apprt
   exit 1
 fi
 echo "  OK (regenerated and byte-identical)"
+)
+record "(a3b)" $?
 
 # --- (a4) the generated header's `Style` pointee is the SIZED STRUCT (W12-02) -
 # C has ONE flat type namespace. `rustty-vt-c` exported TWO Rust types named
@@ -194,6 +266,7 @@ echo "  OK (regenerated and byte-identical)"
 # same-name-collision class — it re-derives the pointee type FROM the generated
 # header and requires it to be a struct whose size matches the curated
 # `RusttyStyle`.
+( set -e
 echo "== (a4) generated rustty_style_default pointee == curated RusttyStyle =="
 cat > "$T/a4_gen.cpp" <<'A4GEN'
 #include <cstdio>
@@ -225,7 +298,10 @@ if [ "$a4_gen_size" != "$a4_cur_size" ]; then
   exit 1
 fi
 echo "  OK (pointee is a $a4_gen_size-byte struct, == sizeof(RusttyStyle))"
+)
+record "(a4)" $?
 
+( set -e
 echo "== (b) every declared+cbindgen rustty_* symbol is a real export =="
 grep -rhoE 'rustty_[a-z0-9_]+' include/rustty/vt.h include/rustty/vt | sort -u > "$T/vt_decl.txt"
 wasm=target/wasm32-unknown-unknown/release/rustty_vt_c.wasm
@@ -324,6 +400,8 @@ if ! diff -q "$T/vt_nonabi.txt" "$T/vt_declonly.txt" >/dev/null; then
 fi
 echo "  OK ($both_n symbols cross-checked, floor $VT_BOTH_FLOOR; \
 $(wc -l < "$T/vt_nonabi.txt" | tr -d ' ') documented non-ABI tokens)"
+)
+record "(b)" $?
 
 # WS19 T3. Arm (b) is ONE-DIRECTIONAL: it asserts
 #   (vt.h ∩ cbindgen) ⊆ exports
@@ -348,6 +426,7 @@ $(wc -l < "$T/vt_nonabi.txt" | tr -d ' ') documented non-ABI tokens)"
 # NEVER `git checkout` in the oracle repo — `git show` only, through
 # `oracle_exports` (GIT_* stripped). `origin/main` rather than the pin is
 # deliberate (above), so no pin check applies to this arm.
+( set -e
 echo "== (d) every ORACLE lib_vt.zig export has a rustty_* counterpart =="
 GH="/Users/gael/projects/ghostty"
 if [ ! -d "$GH/.git" ]; then
@@ -415,9 +494,14 @@ if [ -n "$stale" ]; then
 fi
 echo "  OK ($(wc -l < "$T/a5_oracle.txt" | tr -d ' ') oracle exports checked; \
 $(wc -l < "$T/a5_allow.txt" | tr -d ' ') documented residual(s), owner: P4-W5 T6 Bundle W)"
+)
+record "(d)" $?
 
+( set -e
 echo "== (c) struct layouts match rustty_type_json() =="
 node .port/tools/check-vt-struct-layouts.mjs
+)
+record "(c)" $?
 
 # P3-W0 T2 step 5. The missing analogue of upstream's `checkGhosttyHEnum`
 # (`src/lib/enum.zig`): nothing in this port compared a Rust enum's
@@ -427,8 +511,19 @@ node .port/tools/check-vt-struct-layouts.mjs
 # NEW-FINDINGS N27: the arm also checks that each positional pair NAMES the
 # same thing (a transposition of implicit-value enumerators keeps every value
 # assert green); its self-test proves that on a fixture first.
+( set -e
 echo "== (e) enum discriminants and names match the curated headers =="
 node .port/tools/check-vt-enum-discriminants.mjs --self-test
 node .port/tools/check-vt-enum-discriminants.mjs
+)
+record "(e)" $?
 
+if [ -n "$FAILED_ARMS" ]; then
+  echo "VT-HEADERS: RED (failed arm(s):$FAILED_ARMS${BLOCKED_ARMS:+; blocked arm(s):$BLOCKED_ARMS})"
+  exit 1
+fi
+if [ -n "$BLOCKED_ARMS" ]; then
+  echo "VT-HEADERS: BLOCKED (arm(s):$BLOCKED_ARMS; never a pass)"
+  exit 3
+fi
 echo "VT-HEADERS: GREEN"

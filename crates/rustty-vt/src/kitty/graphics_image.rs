@@ -3620,6 +3620,23 @@ mod tests {
         tmp_dir.deinit();
     }
 
+    /// RUSTTY-ONLY strict mode (R14, P7-W12 T0): under
+    /// `RUSTTY_REQUIRE_UNC_SHARE=1` a host that cannot open the loopback
+    /// administrative share FAILS the UNC test instead of skipping it. A no-op
+    /// otherwise (the share needs the server service and an administrative
+    /// token, which a default Windows CI account lacks).
+    #[cfg(windows)]
+    #[track_caller]
+    fn require_unc_share_or_skip(test_name: &str, err: &dyn std::fmt::Display) {
+        let required = std::env::var_os("RUSTTY_REQUIRE_UNC_SHARE").as_deref()
+            == Some(std::ffi::OsStr::new("1"));
+        assert!(
+            !required,
+            "UNC loopback share required but unavailable (RUSTTY_REQUIRE_UNC_SHARE=1): \
+             {test_name} would have skipped: {err}"
+        );
+    }
+
     // test "image load: windows canonical path check rejects a file reached through a UNC share"
     #[cfg(windows)]
     #[test]
@@ -3645,10 +3662,15 @@ mod tests {
         //     return error.SkipZigTest;
         //
         // PORT NOTE (R14): a runtime skip, printed, since only the open's
-        // outcome decides it.
+        // outcome decides it, behind the `RUSTTY_REQUIRE_UNC_SHARE` strict-mode
+        // pivot (a host that is supposed to have the share fails instead).
         let file = match open_file(unc_path.as_bytes()) {
             Ok(f) => f,
             Err(err) => {
+                require_unc_share_or_skip(
+                    "image_load_windows_canonical_path_check_rejects_a_file_reached_through_a_unc_share",
+                    &err,
+                );
                 eprintln!(
                     "SKIP image_load_windows_canonical_path_check_rejects_a_file_reached_through_a_unc_share: \
                      cannot open {unc_path} ({err}); the loopback administrative share needs the \

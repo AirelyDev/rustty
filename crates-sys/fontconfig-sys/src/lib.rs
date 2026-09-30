@@ -179,13 +179,14 @@ mod tests {
     fn ud360_cache_stamped_by_fontconfig_2_18_3_is_rescanned_after_its_dir_changes() {
         const NAME: &str =
             "tests::ud360_cache_stamped_by_fontconfig_2_18_3_is_rescanned_after_its_dir_changes";
-        if std::env::var_os("UD360_CHILD").is_some() {
+        const CHILD: &str = "UD360_CHILD";
+        if std::env::var_os(CHILD).is_some() {
             ud360_scenario();
             return;
         }
         let out = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", NAME, "--nocapture", "--test-threads=1"])
-            .env("UD360_CHILD", "1")
+            .env(CHILD, "1")
             .env_remove("SOURCE_DATE_EPOCH")
             .env_remove("FONTCONFIG_NO_CHECK_CACHE_VERSION")
             .output()
