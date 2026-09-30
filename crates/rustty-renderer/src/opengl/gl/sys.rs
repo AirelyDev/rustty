@@ -472,10 +472,12 @@ impl Drop for OffscreenContext {
         //
         // NOTE: the table's pointers resolve through `self.egl`'s dlopen'd
         // libEGL, which is dlclosed when this drops, so a table left behind here
-        // can outlive the library it came from. Only tests reach that (the live
-        // path never drops an `OffscreenContext`): each test thread either calls
-        // `thread_exit` or makes no GL call after dropping its context, and
-        // libglvnd/Mesa stay mapped by the process in practice.
+        // can outlive the library it came from. The live path drops the context
+        // on the main thread at surface close (P7-W7 T5b), after the render
+        // thread's `thread_exit` has unloaded its table, and the main thread
+        // never loads one; each test thread either calls `thread_exit` or makes
+        // no GL call after dropping its context, and libglvnd/Mesa stay mapped
+        // by the process in practice.
 
         // // Do not destroy the EGL display here as
         // // it is shared across the entire process.
