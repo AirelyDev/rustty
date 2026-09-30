@@ -2499,11 +2499,14 @@ impl Drop for ThreadStateGuard {
 /// `if (insp_ev) |*ev| ev else null` argument sites are `.ev.as_mut()`
 /// reborrows) and holds a raw surface pointer for the drop-time inspector
 /// recheck. Reachability contract (CORE_BLUEPRINT §4): `ev` is `Some` ONLY
-/// when an inspector existed at keyCallback entry, which is impossible until
-/// Phase 3 (`Inspector` is uninhabited) — so the raw pointer is never
-/// dereferenced today; when it is (Phase 3), the deref happens strictly
-/// AFTER the method body's last `&mut self` use (the guard drops at return —
-/// the rust-mut-args raw-ptr discipline).
+/// when an inspector existed at keyCallback entry. The inspector is live
+/// (WS6), so the raw pointer IS dereferenced whenever an inspector is open;
+/// the deref happens strictly AFTER the body's last use of its local
+/// reborrow (the guard drops at return — the rust-mut-args raw-ptr
+/// discipline). That includes a key that closed the surface: the drop reads
+/// the surface after the close callback returned, as the reference's defer
+/// does, so a host must not free the surface synchronously inside that
+/// callback (N465).
 struct InspEvGuard<A: apprt::App + 'static> {
     surface: *mut Surface<A>,
     ev: Option<inspectorpkg::KeyEvent>,
@@ -5057,8 +5060,11 @@ where
                 //     log.err("error trying to show native child exited GUI err={}", .{err});
                 //     break :gui false;
                 // }) return;
-                if match unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::surface_ref(&*this),
+                //
+                // (N465, ruling 62: the host callback may re-enter this surface,
+                // so it runs by place through `self_`; `this` is re-taken after.)
+                if match unsafe { &*(*self_).rt_app }.perform_action(
+                    unsafe { apprt::Target::surface_ptr(self_) },
                     apprt::Action::ShowChildExited(info),
                 ) {
                     Ok(shown) => shown,
@@ -5074,6 +5080,7 @@ where
                 } {
                     return;
                 }
+                let this = unsafe { &mut *self_ };
 
                 // If a native GUI notification was not shown, update our terminal to
                 // note the abnormal exit.
@@ -5108,8 +5115,10 @@ where
             //     log.err("error trying to show native child exited GUI err={}", .{err});
             //     break :gui false;
             // }) break :terminal;
-            if match unsafe { &*this.rt_app }.perform_action(
-                apprt::Target::surface_ref(&*this),
+            //
+            // (N465, ruling 62: by place through `self_`, as above.)
+            if match unsafe { &*(*self_).rt_app }.perform_action(
+                unsafe { apprt::Target::surface_ptr(self_) },
                 apprt::Action::ShowChildExited(info),
             ) {
                 Ok(shown) => shown,
@@ -5125,6 +5134,7 @@ where
             } {
                 break 'terminal;
             }
+            let this = unsafe { &mut *self_ };
 
             // If the native GUI can't be shown, display a text message in the
             // terminal.
@@ -5177,6 +5187,9 @@ where
         // Waiting after command we stop here. The terminal is updated, our
         // state is updated, and now its up to the user to decide what to do.
         // if (self.config.wait_after_command) return;
+        //
+        // (N465: re-taken after the show_child_exited callback.)
+        let this = unsafe { &mut *self_ };
         if this.config.wait_after_command {
             return;
         }

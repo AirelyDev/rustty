@@ -9751,7 +9751,16 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `n465_shipped_gtk_child_exited` are UB under SB and TB. The negative `n465_core_only_macos_child_exited`
   (core raw-self, seam still `&self`) is UB under both, so both halves are needed. `n465_fixed_*`
   (`.close`, `.child_exited` and the C fallback on macOS; `.close` and `.child_exited` on GTK) is CLEAN
-  under both. LIFETIMES row `src/Surface.zig Surface [self across rt_surface.close]`.
+  under both. The negative row is macOS-only: "both halves are needed" holds for the embedded runtime,
+  whose surface holds the core inline. The GTK runtime surface is a separate allocation, so there the
+  core half is what matters, and no core-only GTK row was run. LIFETIMES row
+  `src/Surface.zig Surface [self across rt_surface.close]`.
+- **fix round (ruling 62)**: `childExited`'s two `show_child_exited` callbacks now run by place
+  (`Target::surface_ptr(self_)`), and `this` is re-taken after each, per N442's convention.
 - **test**: `crates/rustty-apprt-c/tests/macos_window_host.rs::close_callback_reenters_the_closing_surface`
-  arms `cb_close_surface` to write the closing surface (`rustty_surface_set_size`), as the macOS host's
-  deny path does, and checks the write landed. Miri cannot see across the FFI.
+  makes a real pending clipboard request (a `paste_from_clipboard` whose read callback starts it and
+  keeps the state), then `cb_close_surface` calls `rustty_surface_deny_clipboard_request` on the
+  closing surface, as the macOS host's close path does. Miri cannot see across the FFI.
+- **host contract**: a host must not free the surface synchronously inside the close callback. The
+  surface is touched after the callback returns, as in the reference: `keyCallback`'s `InspEvGuard`
+  drop re-reads it, and a chained `close_surface > X` binding runs its next action on it.

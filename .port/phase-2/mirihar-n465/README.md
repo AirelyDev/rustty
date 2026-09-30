@@ -43,7 +43,7 @@ Zig's `*Surface` carries no protector: port soundness only, no UD.
 |---|---|---|
 | `n465_shipped_macos_child_exited` | UB | UB |
 | `n465_shipped_gtk_child_exited` | UB | UB |
-| `n465_core_only_macos_child_exited` (negative: core raw-self, seam still `&self`) | UB | UB |
+| `n465_core_only_macos_child_exited` (negative, macOS only: core raw-self, seam still `&self`) | UB | UB |
 | `n465_fixed_macos_child_exited` | CLEAN | CLEAN |
 | `n465_fixed_gtk_child_exited` | CLEAN | CLEAN |
 | `n465_fixed_macos_all` (`.close`, `.child_exited`, the C request_close fallback) | CLEAN | CLEAN |
@@ -52,10 +52,13 @@ Zig's `*Surface` carries no protector: port soundness only, no UD.
 - Shipped, SB: `not granting access to tag .. because that would remove [Unique for ..] which is
   strongly protected`, at the host's `deny_clipboard_request` (macOS) and at the split tree's
   `&mut *core` (GTK). TB (GTK): `reborrow through .. is forbidden`.
-- The negative row: with the core half fixed but the seam still `&self`, SB reports `.. would remove
-  [SharedReadOnly for ..] which is strongly protected` at the host's `&mut` embedded surface. Both
-  halves are needed.
+- The negative row (macOS only): with the core half fixed but the seam still `&self`, SB reports `..
+  would remove [SharedReadOnly for ..] which is strongly protected` at the host's `&mut` embedded
+  surface. So both halves are needed **on the embedded runtime**, whose surface holds the core
+  inline. The GTK runtime surface is a separate allocation, so the seam's `&self` does not cover the
+  core there; no core-only GTK row was run, and the claim is not made for GTK.
 
 The live route is exercised by
-`crates/rustty-apprt-c/tests/macos_window_host.rs::close_callback_reenters_the_closing_surface`
-(Miri cannot see across that FFI).
+`crates/rustty-apprt-c/tests/macos_window_host.rs::close_callback_reenters_the_closing_surface`,
+which denies a real pending clipboard request from inside the close callback (Miri cannot see
+across that FFI).

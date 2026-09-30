@@ -66,12 +66,13 @@ use rustty_apprt_c::capi::Text;
 use rustty_apprt_c::{
     rustty_app_free, rustty_app_new, rustty_app_tick, rustty_app_update_config, rustty_init,
     rustty_set_window_background_blur, rustty_surface_binding_action, rustty_surface_config_new,
-    rustty_surface_free, rustty_surface_free_text, rustty_surface_ime_point,
-    rustty_surface_inherited_config, rustty_surface_mouse_scroll, rustty_surface_new,
-    rustty_surface_quicklook_font, rustty_surface_quicklook_word, rustty_surface_request_close,
-    rustty_surface_set_color_scheme, rustty_surface_set_content_scale,
-    rustty_surface_set_display_id, rustty_surface_set_size, rustty_surface_size,
-    rustty_surface_split, rustty_surface_split_focus, rustty_surface_update_config,
+    rustty_surface_deny_clipboard_request, rustty_surface_free, rustty_surface_free_text,
+    rustty_surface_ime_point, rustty_surface_inherited_config, rustty_surface_mouse_scroll,
+    rustty_surface_new, rustty_surface_quicklook_font, rustty_surface_quicklook_word,
+    rustty_surface_request_close, rustty_surface_set_color_scheme,
+    rustty_surface_set_content_scale, rustty_surface_set_display_id, rustty_surface_set_size,
+    rustty_surface_size, rustty_surface_split, rustty_surface_split_focus,
+    rustty_surface_update_config,
 };
 use rustty_config::value_types::BackgroundBlur;
 
@@ -315,11 +316,15 @@ thread_local! {
     static ACTIONS: core::cell::RefCell<Vec<(TargetKey, Recorded)>> =
         const { core::cell::RefCell::new(Vec::new()) };
     static CLOSES: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
-    /// N465: when set, `cb_close_surface` re-enters this surface with a write
-    /// (`rustty_surface_set_size`), as the macOS host's close notification
-    /// re-enters it through `rustty_surface_deny_clipboard_request`.
-    static CLOSE_REENTER: core::cell::Cell<*mut Surface> =
-        const { core::cell::Cell::new(core::ptr::null_mut()) };
+    /// N465: when set, `cb_close_surface` denies this pending clipboard request
+    /// on this surface (`rustty_surface_deny_clipboard_request`), as the macOS
+    /// host's close notification does when a confirmation is pending.
+    static CLOSE_REENTER: core::cell::Cell<(*mut Surface, *mut ClipboardRequest)> =
+        const { core::cell::Cell::new((core::ptr::null_mut(), core::ptr::null_mut())) };
+    /// N465: when true, `cb_read_clipboard` starts the request (returns
+    /// `STARTED`) and keeps its state here, leaving it pending.
+    static READ_PENDING: core::cell::Cell<Option<*mut ClipboardRequest>> =
+        const { core::cell::Cell::new(None) };
     static CLOSE_REENTERED: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
     static INHERITED: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
     static RESIZED: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
@@ -331,11 +336,16 @@ const RESET_SIZE_PX: (u32, u32) = (812, 522);
 extern "C" fn cb_read_clipboard(
     _ud: *mut c_void,
     _t: c_int,
-    _r: *mut ClipboardRequest,
+    r: *mut ClipboardRequest,
     _mimes: *const *const c_char,
     _mimes_len: usize,
     _list: bool,
 ) -> c_int {
+    // N465: an armed read is STARTED and left pending, its state kept.
+    if READ_PENDING.with(|p| p.get()).is_some() {
+        READ_PENDING.with(|p| p.set(Some(r)));
+        return 0;
+    }
     // GHOSTTY_CLIPBOARD_READ_UNSUPPORTED — the request is never started.
     2
 }
@@ -356,10 +366,12 @@ extern "C" fn cb_write_clipboard(
 }
 extern "C" fn cb_close_surface(_ud: *mut c_void, _p: bool) {
     CLOSES.with(|c| c.set(c.get() + 1));
-    let target = CLOSE_REENTER.with(|c| c.replace(core::ptr::null_mut()));
+    let (target, state) =
+        CLOSE_REENTER.with(|c| c.replace((core::ptr::null_mut(), core::ptr::null_mut())));
     if !target.is_null() {
-        // SAFETY: `target` is the live surface the test armed, on its host thread.
-        unsafe { rustty_surface_set_size(target, 640, 480) };
+        // SAFETY: `target` is the live surface the test armed, on its host thread,
+        // and `state` the pending request its read callback was handed.
+        unsafe { rustty_surface_deny_clipboard_request(target, state) };
         CLOSE_REENTERED.with(|c| c.set(c.get() + 1));
     }
 }
@@ -757,9 +769,11 @@ fn split_and_close_exports_reach_the_host() {
 // a write to the surface `Surface::close(&mut self)` held protected (Stacked
 // Borrows UB). `close` is raw-self now, and the seam's `close` takes
 // `self_: *const Self`; proven on the isolated harness
-// `.port/phase-2/mirihar-n465`. Miri cannot see across this FFI: the test proves
-// the re-entrant write runs on the fixed routes (the C `request_close` fallback
-// is not reached here, because the binding handles the close).
+// `.port/phase-2/mirihar-n465`. The test makes a real pending request (a paste
+// whose read callback starts it and keeps the state), then denies it from inside
+// the close callback, as the host does. Miri cannot see across this FFI: the
+// test proves the re-entrant deny runs on the fixed route (the C `request_close`
+// fallback is not reached here, because the binding handles the close).
 #[test]
 fn close_callback_reenters_the_closing_surface() {
     let Some(host) = HostedSurface::spawn() else {
@@ -768,10 +782,24 @@ fn close_callback_reenters_the_closing_surface() {
     };
     CLOSES.with(|c| c.set(0));
     CLOSE_REENTERED.with(|c| c.set(0));
-    CLOSE_REENTER.with(|c| c.set(host.surface));
 
+    // A pending clipboard read: the read callback starts it and keeps the state.
+    READ_PENDING.with(|p| p.set(Some(core::ptr::null_mut())));
+    let a = b"paste_from_clipboard";
     // SAFETY: `host.surface` is the live surface from `rustty_surface_new`, and this
-    // thread is the host's main thread for it.
+    // thread is the host's main thread for it; `a` is live for the call.
+    let handled = unsafe { rustty_surface_binding_action(host.surface, a.as_ptr(), a.len()) };
+    let state = READ_PENDING
+        .with(|p| p.replace(None))
+        .unwrap_or(core::ptr::null_mut());
+    assert!(handled, "paste_from_clipboard is performed");
+    assert!(
+        !state.is_null(),
+        "the read callback was handed a pending request"
+    );
+    CLOSE_REENTER.with(|c| c.set((host.surface, state)));
+
+    // SAFETY: as above.
     unsafe { rustty_surface_request_close(host.surface) };
     assert_eq!(
         1,
@@ -781,14 +809,7 @@ fn close_callback_reenters_the_closing_surface() {
     assert_eq!(
         1,
         CLOSE_REENTERED.with(|c| c.get()),
-        "the close callback re-entered the closing surface once (N465 shape)"
-    );
-    // SAFETY: as above; the surface is still live (the host frees it later).
-    let size = unsafe { rustty_surface_size(host.surface) };
-    assert_eq!(
-        (640, 480),
-        (size.width_px, size.height_px),
-        "the re-entrant write landed"
+        "the close callback denied the pending request on the closing surface once (N465 shape)"
     );
 }
 
