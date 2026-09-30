@@ -9833,3 +9833,30 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   removed.
 - **evidence**: G2 GREEN, `DRIFT-OK: core::keyToMouseShape — upstream shrank 13->12 in 0fb6d2940;
   rust=12 >= live bar 12`; `check_assertions.py --self-test` PASS.
+
+## N482 — G-REL red on macOS: xtask's CMake tests rebuilt the release lane's rlibs in place
+
+- **id**: N482. P7-W12 T3 (W12.T2 lane C2). **severity**: low (test harness; the release build
+  and every unit test were green). **state**: CLOSED by P7-W12 T3.
+- **finding**: `cargo test --release --workspace` failed 17 `--doc` targets on macOS with E0463
+  "can't find crate for `rustty_os`" (and `rustty_apprt_api`, `rustty_config`, `rustty_input`,
+  `rustty_vt`, `objc2_foundation`). The rlibs existed. Loading `librustty_os-<h>.rlib` by hand gave
+  E0460 "found possibly newer version of crate `objc2`": objc2 had been recompiled IN PLACE, same
+  file name, new crate hash. The cause is `xtask/tests/cmake_lib_vt.rs`
+  (`install_layout_is_versioned_like_the_reference`, `lib_version_string_versions_the_library`):
+  their `cmake --build` runs `cargo build -p rustty-vt-c --release` in the workspace `target/`
+  with `MACOSX_DEPLOYMENT_TARGET=13.0` (CMakeLists.txt, macOS only) and
+  `RUSTTY_LIB_VERSION_STRING`. Cargo tracks both variables (objc2, the `-sys` build scripts,
+  rustty-vt, rustty-vt-c) but keeps them out of file names, so that nested build recompiled those
+  crates over the outer run's copies after the outer run had built other rlibs against them. The
+  doctests run last and trip over the stale references. `cargo test --release --workspace --doc`
+  on its own showed `Dirty objc2: the environment variable MACOSX_DEPLOYMENT_TARGET changed`.
+  Why it was macOS-only in practice: the Linux lanes had no `cmake` (the tests skip), and per-crate
+  runs do not include the xtask tests. `CARGO_PROFILE_RELEASE_STRIP`, `--extern` paths, feature
+  unification and dylib naming were ruled out: the extern paths were right and the files present.
+- **fix**: `CMakeLists.txt` gains `RUSTTY_CARGO_TARGET_DIR` (default the workspace `target/`,
+  passed to cargo as `--target-dir`, and the directory the library is taken from). The two
+  building tests configure it to `<target>/cmake-lib-vt-tests`, a persistent directory of their
+  own. The gate is unchanged.
+- **evidence**: macOS, fresh `target/`, `bash .port/tools/gates/check_release_lane.sh` GREEN after
+  the fix; RED with the 17 doctest targets before it (same tree, same command).

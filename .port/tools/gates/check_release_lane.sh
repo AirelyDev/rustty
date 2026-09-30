@@ -27,10 +27,11 @@
 # Fail-point tests in crates that have not opted in yet (`rustty-font`,
 # `rustty-font-shaper`) keep the `not(debug_assertions)` ignore.
 #
-# The build step is not incidental: `rustty-apprt-c`'s C-ABI smoke asserts the
-# published cdylib/staticlib exist in `target/<profile>/`, and `cargo test`
-# alone leaves those artifacts un-uplifted in `deps/`. `cargo build` first is
-# the documented precondition, in BOTH profiles.
+# The build step proves the release build itself. It used to be a precondition
+# too: `rustty-apprt-c`'s C-ABI smoke looked for the published cdylib/staticlib
+# in `target/<profile>/`, which `cargo test` alone never uplifts from `deps/`.
+# Since N479 the smoke links the `deps/` copies its own `cargo test` built, so
+# it no longer depends on this step.
 #
 # The run is wrapped in a watchdog (default 45 min, `RELEASE_LANE_TIMEOUT`
 # seconds). A HANG is reported RED, never waited on forever — `rustty-termio`'s

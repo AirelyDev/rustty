@@ -150,7 +150,18 @@ message(STATUS "Found cargo: ${CARGO_EXECUTABLE}")
 # the Zig build, cargo emits a flat layout (no bin/ vs lib/ split) and no
 # versioned soname / symlinks — just librustty_vt_c.{dylib,so,a} (the crate is
 # `rustty-vt-c`, so the artifact stem is `rustty_vt_c`).
-set(RUSTTY_OUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/target/${_RUSTTY_CARGO_PROFILE}")
+#
+# RUSTTY_CARGO_TARGET_DIR (N482) moves that cargo target directory; the build
+# passes it as `--target-dir`. The default is the workspace's own `target/`.
+# A build whose cargo environment differs from the workspace's other builds
+# (this file sets MACOSX_DEPLOYMENT_TARGET on macOS, and RUSTTY_LIB_VERSION_STRING
+# when given) recompiles crates that track those variables IN PLACE: cargo
+# keeps their file names, so rlibs other builds in the same `target/` were
+# linked against change underneath them (xtask's CMake tests broke the
+# workspace's release doctests this way). Such builds use their own directory.
+set(RUSTTY_CARGO_TARGET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/target" CACHE PATH
+    "The cargo target directory the library is built in (--target-dir)")
+set(RUSTTY_OUT_DIR "${RUSTTY_CARGO_TARGET_DIR}/${_RUSTTY_CARGO_PROFILE}")
 
 # The public C headers are checked into the source tree (cbindgen output under
 # include/rustty/), not generated into target/.
@@ -273,7 +284,7 @@ if(RUSTTY_LIB_VERSION_STRING)
     list(APPEND _RUSTTY_CARGO_ENV "RUSTTY_LIB_VERSION_STRING=${RUSTTY_LIB_VERSION_STRING}")
 endif()
 add_custom_target(cargo_build_lib_vt ALL
-    COMMAND ${_RUSTTY_CARGO_ENV} "${CARGO_EXECUTABLE}" build -p rustty-vt-c ${_RUSTTY_PROFILE_FLAG} ${_RUSTTY_FEATURE_FLAGS} ${RUSTTY_CARGO_BUILD_FLAGS}
+    COMMAND ${_RUSTTY_CARGO_ENV} "${CARGO_EXECUTABLE}" build -p rustty-vt-c ${_RUSTTY_PROFILE_FLAG} ${_RUSTTY_FEATURE_FLAGS} --target-dir "${RUSTTY_CARGO_TARGET_DIR}" ${RUSTTY_CARGO_BUILD_FLAGS}
     ${_RUSTTY_SONAME_LINK_CMD}
     BYPRODUCTS ${_RUSTTY_CARGO_OUTPUTS}
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"

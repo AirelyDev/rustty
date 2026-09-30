@@ -53,6 +53,31 @@ fn configure(tag: &str) -> Option<PathBuf> {
 /// Serializes the tests that run `cmake --build` (see its users).
 static CMAKE_BUILD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// The `-DRUSTTY_CARGO_TARGET_DIR=` the `cmake --build` tests configure with:
+/// a cargo target directory of their own, `cmake-lib-vt-tests/` beside this
+/// test's `<profile>/` in the running build's target directory.
+///
+/// N482: the CMake build runs cargo with MACOSX_DEPLOYMENT_TARGET (macOS) and
+/// RUSTTY_LIB_VERSION_STRING set, so in the workspace's `target/` it
+/// recompiled objc2, the `-sys` crates, rustty-vt and rustty-vt-c IN PLACE
+/// (same file names, new crate hashes) in the middle of a
+/// `cargo test --release --workspace`. The rlibs that run had already built
+/// against the old ones then failed its doctests with E0463 "can't find
+/// crate". A separate directory keeps the test's cargo out of the outer run's
+/// artifacts; it persists, so later runs are incremental.
+fn cmake_cargo_target_dir_arg() -> String {
+    let exe = std::env::current_exe().expect("current_exe");
+    let target = exe
+        .parent() // deps/
+        .and_then(Path::parent) // <profile>/
+        .and_then(Path::parent) // the target directory
+        .expect("test exe under <target>/<profile>/deps");
+    format!(
+        "-DRUSTTY_CARGO_TARGET_DIR={}",
+        target.join("cmake-lib-vt-tests").display()
+    )
+}
+
 fn configure_with(tag: &str, extra: &[&str]) -> Option<PathBuf> {
     if let Err(e) = Command::new("cmake").arg("--version").output() {
         require_cmake_or_skip(tag, &e);
@@ -132,10 +157,10 @@ fn static_pc_needs_no_libintl_and_no_absolute_paths() {
 /// `.pc` links `-l<name>`. Builds and installs into a temporary prefix.
 #[test]
 fn install_layout_is_versioned_like_the_reference() {
-    // One cmake build at a time: they share the workspace `target/`, and the
-    // lib-version test below builds it with a different version (N424).
+    // One cmake build at a time: they share one cargo target directory, and
+    // the lib-version test below builds it with a different version (N424).
     let _serial = CMAKE_BUILD.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(dir) = configure("install") else {
+    let Some(dir) = configure_with("install", &[&cmake_cargo_target_dir_arg()]) else {
         return;
     };
     let prefix = dir.join("prefix");
@@ -289,8 +314,13 @@ fn install_layout_is_versioned_like_the_reference() {
 fn lib_version_string_versions_the_library() {
     const V: &str = "2.3.4-rc.1+b5";
     let _serial = CMAKE_BUILD.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(dir) = configure_with("libversion", &[&format!("-DRUSTTY_LIB_VERSION_STRING={V}")])
-    else {
+    let Some(dir) = configure_with(
+        "libversion",
+        &[
+            &format!("-DRUSTTY_LIB_VERSION_STRING={V}"),
+            &cmake_cargo_target_dir_arg(),
+        ],
+    ) else {
         return;
     };
     let pc = std::fs::read_to_string(dir.join("librustty-vt.pc")).unwrap();
