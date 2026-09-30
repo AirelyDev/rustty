@@ -49,7 +49,7 @@ mod tests {
         assert_eq!(case_folding_full(0x0130), ([0x0069, 0x0307, 0], 2));
         // 0049; T; 0131; only matters to Turkic folding. 'I' still has C.
         assert_eq!(case_folding_full(0x0049), ([0x0069, 0, 0], 1));
-        // New in 18.0.0: A7DD; C; 0277; and 1DF95; F; 0073 0073; (with S 00DF).
+        // New in 18.0.0: A7DD; C; 0277; 1DF40; C; 1DF41; and 1DF95; F; 0073 0073; (with S 00DF).
         assert_eq!(case_folding_full(0xA7DD), ([0x0277, 0, 0], 1));
         assert_eq!(case_folding_full(0x1DF40), ([0x1DF41, 0, 0], 1));
         assert_eq!(case_folding_full(0x1DF95), ([0x0073, 0x0073, 0], 2));
