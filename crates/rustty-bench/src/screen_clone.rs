@@ -764,11 +764,11 @@ mod tests {
 
     // PORT-SPECIFIC (P7-W3 T3): every `Mode` name parses to its variant, and a
     // benchmark in that mode runs one iteration (`RunMode::Once`: setup, one
-    // step, teardown) on a small terminal without failing. `loops = 0` keeps
-    // the step to its initial render-state update (with the mode's overscan
-    // request) and skips the timed inner loop, which is 50,000 to 3,000,000
-    // updates per mode and too slow for a debug test lane; the inner loops
-    // run as one `--loops=1` CLI iteration per mode in the task report.
+    // step, teardown) on a small terminal without failing. The --release arm
+    // of G-BENCH runs `loops = 1`, one real pass of every mode's timed loop
+    // (50,000 to 3,000,000 updates). Debug builds run `loops = 0` (setup and
+    // the initial render-state update with the mode's overscan request, no
+    // timed loop), which is too slow there, and say so at runtime (R14).
     #[test]
     #[cfg_attr(
         miri,
@@ -791,11 +791,18 @@ mod tests {
             (b"render-output-overscan", Mode::RenderOutputOverscan),
             (b"render-clean-overscan", Mode::RenderCleanOverscan),
         ];
+        let loops: &[u8] = if cfg!(debug_assertions) { b"0" } else { b"1" };
+        if cfg!(debug_assertions) {
+            eprintln!(
+                "NOTE (R14): screen_clone_every_mode_name_parses_and_runs_one_iteration skips the \
+                 timed inner loop in debug builds (loops = 0); the --release run covers it"
+            );
+        }
         for &(name, mode) in modes {
             let mut opts = Options::default();
             opts.parse_into_field(b"mode", Some(name)).unwrap();
             assert!(opts.mode == mode, "{}", String::from_utf8_lossy(name));
-            opts.parse_into_field(b"loops", Some(b"0")).unwrap();
+            opts.parse_into_field(b"loops", Some(loops)).unwrap();
             opts.parse_into_field(b"terminal-rows", Some(b"4")).unwrap();
             opts.parse_into_field(b"terminal-cols", Some(b"8")).unwrap();
 

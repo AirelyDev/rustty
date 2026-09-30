@@ -3839,11 +3839,11 @@ fn render_clean_interleaves_with_a_live_overscan_iterator() {
     });
 }
 
-// R13 (UD367), the C half: after an update fails with a raised overscan
+// R13 (UD369), the C half: after an update fails with a raised overscan
 // request, the row iterator stays inside `row_data`. The reference slices the
 // iterator with `rowDataRange()` and indexes out of bounds.
 #[test]
-fn ud367_row_iterator_after_failed_overscan_update_stays_in_bounds() {
+fn ud369_row_iterator_after_failed_overscan_update_stays_in_bounds() {
     use rustty_vt::alloc::testing::{Config, FailingAllocator};
 
     let failing = FailingAllocator::over_heap(Config::default());
@@ -3878,7 +3878,7 @@ fn ud367_row_iterator_after_failed_overscan_update_stays_in_bounds() {
     );
     assert_eq!(Overscan::default(), out, "nothing is reported captured");
 
-    // Reading the rows (for example to redraw the last frame) stays in bounds.
+    // Reading the rows after the failure stays in bounds (here: no rows).
     let mut it: RowIterator = std::ptr::null_mut();
     assert_eq!(Result::Success, unsafe { row_iterator_new(None, &mut it) });
     assert_eq!(Result::Success, unsafe {
@@ -3886,6 +3886,9 @@ fn ud367_row_iterator_after_failed_overscan_update_stays_in_bounds() {
     });
     let len = unsafe { (*state).state.row_data.len() };
     assert!(unsafe { (*it).rows.len() } <= len);
+    // The clamped range is empty: `viewport_start()` (30) is past the 10
+    // entries, so nothing of the stale layout is visited.
+    assert_eq!(0, unsafe { (*it).rows.len() });
     while unsafe { row_iterator_next(it) } {
         let mut raw: row::CRow = 0;
         assert_eq!(Result::Success, unsafe {

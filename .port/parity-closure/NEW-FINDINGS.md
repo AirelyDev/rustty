@@ -9197,7 +9197,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `rust-mut-args-strongly-protected`, `shaper-hook-sb-clean-interleave`). LIFETIMES rows first. The
   harness must be UB before and clean after, under SB and TB.
 
-## N453 — the overscan port's two reference defects: a stale `rowDataRange()` after a failed update, and `u16` style-run rows (UD367, UD368)
+## N453 — the overscan port's two reference defects: a stale `rowDataRange()` after a failed update, and `u16` style-run rows (UD369, UD370)
 
 - **id**: N453. Not a ledger row: found by task P7-W3 T1 while porting `ca4f719f7` (RenderState
   overscan). **severity**: low. **kind**: reference defects (crash; UB in ReleaseFast), reachable by
@@ -9205,8 +9205,8 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **what**: (1) `beginUpdate` writes `overscan` only after the fallible row loop, so after a failed
   update `rowDataRange()` mixes the previous update's `overscan` with the new request, rows and
   `row_data` length: it ends past `row_data` or underflows, and the C row iterator slices with it
-  (UD367). (2) `StyleRun.y` stays `u16` while it now holds a `row_data` index up to three `u16`
-  counts (UD368). Both MEASURED as panics at 12752b2ac (`.port/phase-7/probes/p7w3t1_overscan_probe.zig`).
+  (UD369). (2) `StyleRun.y` stays `u16` while it now holds a `row_data` index up to three `u16`
+  counts (UD370). Both MEASURED as panics at 12752b2ac (`.port/phase-7/probes/p7w3t1_overscan_probe.zig`).
 - **fix / proof**: `crates/rustty-vt/src/render.rs`: `begin_update` resets `overscan` on failure,
   `row_data_range`/`viewport_range` clamp to `row_data.len()`, `StyleRun.y` is `u32`. Tests
   `row_data_range_stays_in_bounds_after_a_failed_overscan_update` and

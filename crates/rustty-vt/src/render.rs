@@ -288,7 +288,7 @@ pub struct RenderState {
 pub struct StyleRun {
     /// The `row_data` index of the row.
     //
-    // PORT NOTE: reference defect (R13, UD368). The reference keeps
+    // PORT NOTE: reference defect (R13, UD370). The reference keeps
     // `y: size.CellCountInt` (`u16`) and fills it with `@intCast(vy)`, but
     // with overscan a `row_data` index reaches `above + rows + below - 1`
     // (up to 196,604 for three `u16` counts): a request of 65,535 rows above
@@ -296,7 +296,9 @@ pub struct StyleRun {
     // `@intCast` in safe builds and lands its style run on the wrong row in
     // ReleaseFast. The port widens the index to `u32`, which holds every
     // index; the element-count growth sizes keep the reference's
-    // `STYLE_RUN_ZIG_SIZE`.
+    // `STYLE_RUN_ZIG_SIZE`. Widening `y` takes the Rust `StyleRun` from 28 to
+    // 32 bytes, still under the reference's 36, and the element counts the
+    // allocator sees do not change (asserted below the struct).
     pub y: u32,
 
     /// Start (inclusive) x coordinate.
@@ -307,6 +309,9 @@ pub struct StyleRun {
     /// The style for this cell range.
     pub style: Style,
 }
+
+// UD370: the widened `StyleRun` stays within the reference's element size.
+const _: () = assert!(core::mem::size_of::<StyleRun>() <= STYLE_RUN_ZIG_SIZE);
 
 /// The color state for the terminal.
 ///
@@ -1101,7 +1106,7 @@ impl RenderState {
     // PORT NOTE: the reference slices `[vp_start..][0..self.rows]` inline in
     // `string` and `linkCells`. After a failed update `rows` may already be
     // the new height while `row_data` is still the old length (reference
-    // defect R13, UD367: a bounds panic in safe builds, an out-of-bounds read
+    // defect R13, UD369: a bounds panic in safe builds, an out-of-bounds read
     // in ReleaseFast), so the port clamps to `row_data.len()`. After a
     // successful update the clamp never binds.
     fn viewport_range(&self) -> core::ops::Range<usize> {
@@ -1119,7 +1124,7 @@ impl RenderState {
     /// uninitialized data and must not be read. Without overscan, this
     /// is always `0..rows`.
     //
-    // PORT NOTE: reference defect (R13, UD367). The reference computes
+    // PORT NOTE: reference defect (R13, UD369). The reference computes
     // `vp - overscan.above .. vp + rows + overscan.below` unchecked. After a
     // failed update those values can disagree with `row_data` (see
     // `begin_update`), and the range then underflows or ends past it. The
@@ -1228,7 +1233,7 @@ impl RenderState {
         if result.is_err() {
             self.rebuild_after_failure = true;
 
-            // PORT NOTE: reference defect (R13, UD367). `overscan` is only
+            // PORT NOTE: reference defect (R13, UD369). `overscan` is only
             // written after the row loop, so a failure leaves it describing
             // the previous update while `overscan_request`, `rows` and the
             // `row_data` length may already be the new ones. The reference's
@@ -1991,7 +1996,7 @@ impl RenderState {
         //
         // PORT NOTE: the reference compares against `self.rows`, the length
         // of its viewport slice; `viewport.len()` is that length (see
-        // `viewport_range`, UD367).
+        // `viewport_range`, UD369).
         if viewport_point.x >= self.cols || viewport_point.y as usize >= viewport.len() {
             return Ok(result);
         }
@@ -2170,7 +2175,7 @@ fn row_builder(
     page_row: *const page::Row,
     vy: usize,
 ) -> Result<(), OutOfMemory> {
-    // PORT NOTE: reference defect (R13, UD368): the style runs below record
+    // PORT NOTE: reference defect (R13, UD370): the style runs below record
     // `vy` (a `row_data` index, at most three `u16` counts) as a `u32`, where
     // the reference's `@intCast` to `u16` overflows with large overscan.
     debug_assert!(vy <= u32::MAX as usize);
@@ -4720,7 +4725,7 @@ mod tests {
         t.deinit(alloc);
     }
 
-    // R13 (UD367): an update that fails after the overscan request changed
+    // R13 (UD369): an update that fails after the overscan request changed
     // leaves `overscan` from the previous update. The reference's
     // `rowDataRange()` then describes entries `row_data` does not have: a
     // raised request whose `row_data` growth fails ends the range past the
@@ -4754,6 +4759,14 @@ mod tests {
             assert!(range.start <= range.end, "{range:?}");
             assert!(range.end <= state.row_data.len(), "{range:?}");
             assert!(state.overscan.eql(Overscan::default()));
+            // The viewport slices of `string` and `link_cells` start at the
+            // new `viewport_start()` (30), past the 10 entries.
+            let mut out = Vec::new();
+            state.string(alloc, &mut out, None).unwrap();
+            assert!(state
+                .link_cells(alloc, point::Coordinate { x: 0, y: 0 })
+                .unwrap()
+                .is_empty());
 
             failing.fail_index.set(usize::MAX);
             state.update(alloc, &mut t).unwrap();
@@ -4795,7 +4808,54 @@ mod tests {
         t.deinit(Global);
     }
 
-    // R13 (UD368): with overscan, a `row_data` index can pass `u16`. The
+    // R13 (UD369), without overscan: an update that fails growing
+    // `row_data` for a taller terminal has already stored the new `rows`, so
+    // the reference's `string`/`linkCells` viewport slice
+    // (`[vp_start..][0..self.rows]`) ends past `row_data`. Any failed update
+    // that grows the height reaches it.
+    #[test]
+    fn string_and_link_cells_stay_in_bounds_after_a_failed_height_growth() {
+        use crate::alloc::testing::{with_handle, Config, FailingAllocator};
+
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+        vt_write(&mut t, b"one\r\ntwo");
+
+        let failing = FailingAllocator::over_heap(Config::default());
+        let c = failing.allocator();
+        with_handle(&c, |alloc| {
+            let mut state = RenderState::empty();
+            state.update(alloc, &mut t).unwrap();
+            assert_eq!(5, state.row_data.len());
+
+            resize_terminal(&mut t, 10, 40);
+            failing.fail_index.set(failing.alloc_index.get());
+            assert!(state.update(alloc, &mut t).is_err());
+            assert_eq!(40, state.rows);
+            assert!(state.row_data.len() < 40, "the growth failed");
+
+            let mut out = Vec::new();
+            state.string(alloc, &mut out, None).unwrap();
+            assert!(state
+                .link_cells(alloc, point::Coordinate { x: 0, y: 20 })
+                .unwrap()
+                .is_empty());
+            let range = state.row_data_range();
+            assert!(range.end <= state.row_data.len(), "{range:?}");
+
+            failing.fail_index.set(usize::MAX);
+            state.update(alloc, &mut t).unwrap();
+            assert_eq!(Dirty::Full, state.dirty);
+            let mut fresh = RenderState::empty();
+            fresh.update(alloc, &mut t).unwrap();
+            test_compare_states(&state, &fresh);
+            fresh.deinit(alloc);
+            state.deinit(alloc);
+        });
+        assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+        t.deinit(Global);
+    }
+
+    // R13 (UD370): with overscan, a `row_data` index can pass `u16`. The
     // reference's style runs store it as a `u16` (`@intCast`), which panics
     // in safe builds and styles the wrong row in ReleaseFast. With 65,535
     // rows requested above and no scrollback, every viewport row is past

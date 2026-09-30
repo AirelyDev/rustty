@@ -1,9 +1,9 @@
-// P7-W3 T1 side probes (UD367, UD368): append to a SCRATCH copy of the
+// P7-W3 T1 side probes (UD369, UD370): append to a SCRATCH copy of the
 // oracle's `src/terminal/render.zig` at 12752b2ac and run
-//   zig build test-lib-vt -Dtest-filter="P7W3 UD368 probe"
-//   zig build test-lib-vt -Dtest-filter="P7W3 UD367 probe"
+//   zig build test-lib-vt -Dtest-filter="P7W3 UD370 probe"
+//   zig build test-lib-vt -Dtest-filter="P7W3 UD369 probe"
 
-test "P7W3 UD368 probe" {
+test "P7W3 UD370 probe" {
     const testing = std.testing;
     const alloc = testing.allocator;
     const io = testing.io;
@@ -15,17 +15,17 @@ test "P7W3 UD368 probe" {
     var state: RenderState = .empty;
     defer state.deinit(alloc);
     state.overscan_request = .{ .above = 65535, .below = 0 };
-    std.debug.print("\nPROBE UD368 before update\n", .{});
+    std.debug.print("\nPROBE UD370 before update\n", .{});
     try state.update(alloc, &t);
     const vp = state.viewportStart();
     const cells = state.row_data.items(.cells);
-    std.debug.print("PROBE UD368 row1 bold={} row2 italic={}\n", .{
+    std.debug.print("PROBE UD370 row1 bold={} row2 italic={}\n", .{
         cells[vp + 1].items(.style)[0].flags.bold,
         cells[vp + 2].items(.style)[0].flags.italic,
     });
 }
 
-test "P7W3 UD367 probe" {
+test "P7W3 UD369 probe" {
     const testing = std.testing;
     const alloc = testing.allocator;
     const io = testing.io;
@@ -46,9 +46,9 @@ test "P7W3 UD367 probe" {
     state.overscan_request = .{ .above = 30, .below = 30 };
     failing.fail_index = failing.alloc_index;
     const r = state.update(fa, &t);
-    std.debug.print("\nPROBE UD367 update result={any} len={d}\n", .{ r, state.row_data.len });
+    std.debug.print("\nPROBE UD369 update result={any} len={d}\n", .{ r, state.row_data.len });
     const range = state.rowDataRange();
-    std.debug.print("PROBE UD367 range={d}..{d} len={d}\n", .{ range.start, range.end, state.row_data.len });
+    std.debug.print("PROBE UD369 range={d}..{d} len={d}\n", .{ range.start, range.end, state.row_data.len });
     const raws = state.row_data.items(.raw)[range.start..range.end];
-    std.debug.print("PROBE UD367 sliced {d}\n", .{raws.len});
+    std.debug.print("PROBE UD369 sliced {d}\n", .{raws.len});
 }
