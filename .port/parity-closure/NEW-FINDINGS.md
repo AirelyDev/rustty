@@ -9925,3 +9925,70 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (6f72b5dd5 2026-07-22), still wrong: rustc emits `w0..w3` = the floats, `x4` = fmt,
   `w5` = 42, while clang 21 for the same C call emits `x0:x1` = the packed ImVec4, `x2` = fmt,
   `w3` = 42.
+
+## N483 — gates hardcoded the Mac paths of the oracle and the zig cache; Linux was BLOCKED without `/Users/gael` symlinks
+
+- **id**: N483. P7-W12 T5. **severity**: low (gate portability; no product defect).
+  **state**: CLOSED by P7-W12 T5.
+- **finding**: a dozen gate scripts named `/Users/gael/projects/ghostty` (the oracle) and
+  `/Users/gael/.cache/zig/p/...` (the zig package cache) as literals: `check_test_counts.py` (G1b,
+  about 30 paths), `ci.sh` (G1b's probe), `check_bench_tests.sh`, `check_lz4_byte_exact.sh`,
+  `check_rustty_vt_headers.sh`, `check-vt-struct-layouts.mjs`, `check_comment_coverage.py`,
+  `check_constants_parity.py`, `d6_cfg_mapping_audit.py`, `parity_names.env` (`ORACLE_TREE`,
+  `ORACLE_HEADER_PATH`), `cvt-parity.sh`, `wasm-parity.mjs`, and the `GHOSTTY_SRC` default of
+  `cycle_check.py` / `reach_scc.py`. On the Linux lane (rvm) they were BLOCKED until someone planted
+  symlinks at `/Users/gael/projects/ghostty` and `/Users/gael/.cache`. Separately,
+  `restore_zig_deps.sh` was stale against the pin: it restored zf 0.10.3 and vaxis 0.5.1, while G1b
+  reads zf 0.11.0 and vaxis 0.6.0 (its `--verify-only` therefore failed on a correct cache).
+- **design**: one rule, the one `_oracle_root.sh` already states. The oracle is `ghostty` BESIDE THE
+  MAIN checkout (the main repository's common git directory, so it works from a worktree), with no
+  environment override, so a stray checkout cannot stand in for it. Python gates call
+  `_gatelib.oracle_root()`, shell gates `rustty_oracle_root "$ROOT"`, the Node gates and
+  `cvt-parity.sh` call the shell twin through `bash -c`, and `ci.sh`'s G1b probe derives its `oracle`
+  the same way, so it still names the path `check_test_counts.py` reads. The gates that read the
+  oracle's working tree stay pin-checked: G1b now turns a missing, non-repository or off-pin oracle
+  into BLOCKED (exit 3) through the new `_gatelib.oracle_pin_problem` (the twin of
+  `rustty_oracle_pin_status`). The gates that read `origin/main` on purpose (G-BENCH, G-LZ4, the
+  VT-headers arms) keep their documented no-pin rule. The zig cache resolves the way zig does,
+  `_gatelib.zig_cache_root()`: `ZIG_GLOBAL_CACHE_DIR`, else `$XDG_CACHE_HOME/zig`, else `~/.cache/zig`
+  (zig's default on Linux and macOS). A package dir that is absent is still BLOCKED by G1b's
+  missing-reference guard.
+- **fix**: the sites above; `parity_names.env` no longer carries the oracle paths (its two consumers,
+  `check_symbol_manifest.sh` and `check_rustty_h_abi.sh`, derive them, and the latter now also hashes
+  its header with `sha256sum` when `shasum` is absent, where it used to skip the freeze check).
+  `restore_zig_deps.sh` restores zf 0.11.0 and vaxis 0.6.0 at the URLs and content hashes the oracle's
+  `build.zig.zon` names (tarball sha256 computed from the downloads), keeps the libxev that G1b's xev
+  rows read, checks the zf `clib.zig` and the vaxis `Vaxis.zig` / `vxfw/*` files G1b reads, and
+  reports the oracle's own `zig-pkg/` libxev (the `xev_file` row). It resolves the cache like zig.
+- **tests**: `check_test_counts.py --self-test` gains `self_test_paths`: the cache precedence, and the
+  R5 negative controls: a wrong-pin, a missing, a non-checkout oracle and a missing pin each yield a
+  refusal. `_oracle_root.sh --self-test` (G-ORACLE-SH-SELF) still passes; its per-file counts for
+  `check_rustty_vt_headers.sh` were kept by using one mention of `$GH`. An end-to-end copy of G1b
+  beside an absent, and beside a wrong-pin, oracle exits 3 on macOS.
+- **evidence**: macOS: G1b (`check_test_counts.py`, its `--self-test`, ci.sh's `run_test_counts`),
+  G-BENCH, G-LZ4, `check_symbol_manifest.sh`, `check_rustty_h_abi.sh`, VT-HEADERS (incl.
+  `check-vt-struct-layouts.mjs`), `check_constants_parity.py`, `d6_cfg_mapping_audit.py`,
+  `check_comment_coverage.py`, `_oracle_root.sh --self-test`: GREEN, as before.
+  `restore_zig_deps.sh` into an EMPTY `ZIG_GLOBAL_CACHE_DIR` fetched all three packages, matched every
+  tarball sha256 and every zig content hash, and ended with G1b GREEN (rc 0). rvm: from a fresh clone
+  at `~/projects/p7-w12t5`: G1b, `restore_zig_deps.sh` (rc 0, and `--verify-only` rc 0), G-BENCH,
+  G-LZ4, `check_symbol_manifest.sh`, `check_rustty_h_abi.sh`, `check_constants_parity.py`,
+  `d6_cfg_mapping_audit.py`, `check_comment_coverage.py`, `cycle_check.py`, `reach_scc.py`,
+  `_oracle_root.sh --self-test`: PASS. These rvm runs were made with the two `/Users/gael`
+  convenience symlinks still present (another lane was using them); the touched scripts never read
+  them, and the symlink-free re-run is recorded by the controller. No touched script reads `/Users/gael` any more (the one
+  remaining literal in `.port/tools` is `perf/ws10_suite.py`'s measurement-substrate path, a
+  Mac-only perf tool, not a gate).
+
+## N486 — VT-headers gate is macOS-only beyond its paths, and rvm's oracle `origin/main` is stale
+
+- **id**: N486. P7-W12 T5. **severity**: low (Linux gate portability). **state**: OPEN.
+- **finding**: found while validating N483 on rvm. `check_rustty_vt_headers.sh` arms (b), (c) and (d)
+  read `target/release/librustty_vt_c.dylib` and use macOS `nm -gjU`, and arms (a3) and (a3b) need
+  `cbindgen`, which rvm lacks: the gate is RED/BLOCKED on Linux whatever the oracle path is. Also the
+  rvm oracle's `origin/main` is `20abdb50a` (the Phase 6 pin), while macOS's is the pin; the gates that
+  read `origin/main` on purpose (`check-vt-struct-layouts.mjs`) therefore diverge from the oracle on
+  rvm (`RusttyMouseShape`, `RusttyRenderStateOverscan`, `RusttyRenderStateRowId` "absent from the
+  oracle registry"). N483's path fix is not the cause: arm (d) did read the oracle's exports on rvm.
+- **next**: make the gate's library and `nm` handling Linux-aware (or state it macOS-only), install
+  `cbindgen` on rvm, and move rvm's oracle `refs/remotes/origin/main` to the pin.
