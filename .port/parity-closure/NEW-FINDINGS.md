@@ -8719,7 +8719,8 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   are UB under both; two negatives (lock-first with the mutex inline; external lock with the frame slot inline)
   are UB under both; the fix against the macOS sync draw and against the GTK main thread is clean under both.
 - **residual** (not in N437's scope): the Metal completion handler is **N440**; the main thread's
-  whole-core-`Surface` references over the embedded renderer are **N441**. Both OPEN.
+  whole-core-`Surface` references over the embedded renderer are **N441**. Both OPEN. (N441 CLOSED
+  by P7-W7 T5b.)
 - **ruling 32 follow-up** (P7-W7 T2 fix round 1): `update_frame` keeps the reference's lock scopes;
   the unlocked part uses a narrow view, and the main thread's locked entries are narrow too
   (`display_realized_raw` / `display_unrealized_raw`, the sync draw's `*_raw` helpers). Harness
@@ -8782,7 +8783,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **id**: N441. P7-W7 T2 fix round 1 (review IMPORTANT 3, controller ruling 33). **severity**: medium
   (aliasing-model UB on every platform whenever a main-thread surface callback overlaps a render-thread
   locked write; no observed miscompile). **kind**: port soundness (Stacked and Tree Borrows).
-  **state**: OPEN; a follow-up task.
+  **state**: OPEN; a follow-up task. CLOSED (fixed, P7-W7 T5b).
 - **finding**: the core `Surface` embeds the renderer (`renderer: renderer_seam::Renderer`, whose `.0`
   is the `rustty_renderer::Renderer`). The GTK main thread calls core methods through a whole
   `&mut Surface`: `unsafe { &mut *core }.contentScaleCallback(..)` and `.sizeCallback(..)`
@@ -8796,6 +8797,26 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   thread and the surface share, as the terminal already is), or make the main-thread core entries
   raw-self with narrow access that never spans `renderer`. Harness first (`.port/phase-2/mirihar-*`),
   UB before and clean after under SB and TB.
+- **fix** (P7-W7 T5b): the first direction. The renderer lives in its own allocation,
+  `rustty_core::renderer_seam::RendererBox`. It is built with `Box::into_raw` right after
+  `Renderer::init`, before `Thread::init`, and the render thread and `Surface.renderer` share that
+  one raw root. A main-thread `&mut Surface` / `&Surface` now covers the pointer's bytes only. This
+  fixes every main-thread entry at once, with no change to them: GTK `render_surface_resize` →
+  `contentScaleCallback` / `sizeCallback`, the key, mouse, focus and clipboard callbacks, and the
+  embedded and C-API entries. The main-thread renderer entries were already raw after N437; they now
+  go through `RendererBox::as_ptr()`: `draw`, `displayRealized`, `displayUnrealized`, init's
+  `attachHostView`, the GTK `takeFrame`, and the C API's `font_grid` read. `RendererBox::Drop` frees
+  the box at the moment the inline field used to drop, so the renderer's own `Drop`s keep their
+  timing, and `deinit` stays explicit. No change to `crates/rustty-renderer`. The rejected direction
+  (raw-self main-thread entries) would touch every apprt-facing core method and all their `&mut self`
+  helpers.
+- **proof**: `.port/phase-2/mirihar-n441` (the real `Mutex` and `DrawMutex` by `#[path]`; 16 seeds,
+  SB and TB). `n441_inline_renderer` (whole-`&mut Surface` callbacks vs the render thread's locked
+  writes) is UB under both. `n441_boxed_renderer` (the fix, with a main-thread locked narrow renderer
+  entry) is CLEAN under both. LIFETIMES row `src/Surface.zig Surface renderer`.
+- **residual**: the same race class covers the other fields that other threads write through raw
+  pointers into the surface: `io` (the inline terminal), `io_thread`, `renderer_thread` and
+  `renderer_state`. That is **N444**, OPEN.
 
 ## N442 — `performBindingAction(&mut self)` holds a protected `&mut Surface` across the host callback that re-enters the same surface
 
@@ -8803,6 +8824,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (aliasing-model UB on every menu or keybind split/tab/window; no observed miscompile). **kind**: port
   soundness (Stacked Borrows; a function-argument protector). **Not upstream**: Zig's `*Surface` carries no
   aliasing rule and no protector, so the reference is sound. **state**: OPEN → P7-W7 T5 (lands with N441).
+  CLOSED (fixed, P7-W7 T5b).
 - **shape**: `rustty_core::Surface::performBindingAction(&mut self, ..)` (`crates/rustty-core/src/surface.rs:11270`)
   is a `&mut self` method, so `self` is a protected Unique for the whole call. Its `new_split`
   (`:12537`), `new_tab` (`:12426`) and `new_window` (`:11282`) arms call `rt_app.perform_action(..)`, which
@@ -8832,3 +8854,80 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   enter through the raw root. LIFETIMES row first (`.port/audits/GHOSTTY_LIFETIMES.tsv`, core `Surface`
   `[self across rt_app.perform_action]`), and an isolated harness under `.port/phase-2/mirihar-*` that is UB
   before (protected `&mut` + a re-entrant read through the parent pointer) and clean after, under SB and TB.
+- **fix** (P7-W7 T5b): `Surface::performBindingAction`, `keyCallback` and `maybeHandleBinding` are
+  raw-self (`unsafe fn(self_: *mut Surface, ..)`).
+  - Each takes an unprotected local reborrow `this` for its ordinary work. That reborrow is dead
+    before every call that can run the host callback and is taken afresh after it.
+    `maybeHandleBinding` re-takes it lazily after the dispatch, so the closing check touches no
+    surface byte.
+  - The `new_window`, `new_tab` and `new_split` arms touch the surface only by place through `self_`,
+    plus the shared `Target::Surface(&*self_)`. A read-only re-entry is sound under a shared
+    protector.
+  - `App::newWindow` takes `&self`: the host's `new_window` re-entry also reads `core_app.alloc`,
+    which a protected `&mut App` forbids under SB.
+  - The routes enter through the raw root: `rustty_surface_key` → `App::keyEvent` →
+    `Surface::keyCallback(&raw mut (*surface).core_surface, ..)`, and `rustty_surface_binding_action`,
+    `_split`, `_split_focus` and `_request_close` → `Surface::performBindingAction(&raw mut
+    (*ptr).core_surface, ..)`. `App::performAllAction` and the GTK callers use the same associated
+    fns.
+  - Two provenance cleanups in the rewritten bodies. The leader arm reads the trigger before
+    `encodeKey` reborrows the surface, because for the default set `entry.0` points into
+    `this.config`. The search arm's `surface_ptr` is `self_`.
+  - Behaviour is unchanged. The menu-shortcut parity harness passes (51 actions), and so does
+    `split_and_close_exports_reach_the_host`.
+- **audit** (which arms' host callbacks re-enter). The macOS host's action handlers
+  (`Rustty.App.swift`) call back into a surface only in `newWindow`, `newTab` and `newSplit`, which
+  call `rustty_surface_inherited_config`. The split tree's focus moves are `DispatchQueue.main.async`.
+  The GTK apprt's action handlers do not call back into the core surface. A host that WRITES the
+  target surface inside an action callback would still conflict with the shared `Target` protector.
+  None was found; the one candidate, `syncSurfaceTreeOcclusionState`'s `rustty_surface_set_occlusion`,
+  fires only for a view whose cached visibility differs.
+- **proof**: `.port/phase-2/mirihar-n441`.
+  - `n442_shipped_key_route` is UB under SB and TB.
+  - `n442_shipped_binding_new_{split,tab,window}` and `n442_new_window_app_mut` are UB under SB. They
+    are CLEAN under TB, because the protected Unique is not written before the callback.
+  - The negative `n442_raw_this_spans` (a local reborrow used after the callback) is UB under both.
+  - The fix, `n442_raw_key_route` and `n442_raw_binding_all`, is CLEAN under both.
+  - LIFETIMES row `src/Surface.zig Surface [self across rt_app.performAction]` is updated.
+- **residual**: the same protector shape on the core `App` for the `.quit` action is **N443**, OPEN.
+
+## N443 — `App::performAction(&mut self)` holds a protected `&mut App` across the quit callback that re-enters the app
+
+- **id**: N443. P7-W7 T5b (the N442 audit). **severity**: low. It is aliasing-model UB on every
+  `quit` keybind or menu quit on macOS when confirmation is needed; no miscompile has been observed.
+  **kind**: port soundness (Stacked Borrows; a function-argument protector). **Not upstream**: Zig's
+  `*App` has no protector. **state**: OPEN.
+- **shape**:
+  - `rustty_core::App::performAction(&mut self, ..)` (`crates/rustty-core/src/app.rs`, the `.quit`
+    arm) calls `rt_app.perform_action(Target::App, Quit)` while its `&mut self` protector is live.
+  - The macOS host's `quit` handler calls `NSApplication.terminate`, which runs
+    `applicationShouldTerminate` synchronously.
+  - That checks `rustty.needsConfirmQuit` → `rustty_app_needs_confirm_quit` →
+    `(*core_app).needsConfirmQuit()`, a read of the core app through the raw pointer.
+- **proof**: `.port/phase-2/mirihar-n441`. `n443_quit_app_mut` is UB under SB and CLEAN under TB (the
+  arm writes nothing first). The `&App` direction, `n443_quit_app_ref`, is CLEAN under both.
+  LIFETIMES row `src/App.zig App [self across rt_app.performAction(.quit)]`.
+- **fix direction**: the N442 shape. Either `performAction` becomes raw-self, or the `.quit` arm runs
+  under a shared borrow. Every other arm that mutates the app keeps its narrow `&mut`.
+
+## N444 — the io thread's and render thread's inline state in the core `Surface` is covered by main-thread whole-`Surface` references
+
+- **id**: N444. P7-W7 T5b (found while fixing N441). **severity**: medium. It is aliasing-model UB
+  whenever a main-thread surface callback overlaps io or render thread work, which happens
+  constantly; no miscompile has been observed. **kind**: port soundness (Stacked and Tree Borrows).
+  **Not upstream**: Zig's `*Surface` has no aliasing rule. **state**: OPEN.
+- **finding**: N441's race class, beyond the renderer. The core `Surface` still embeds by value
+  several things that other threads access through raw pointers into the surface:
+  - `io: Termio`. The io thread writes `io.terminal` under `renderer_state.mutex`, through the
+    stream handler's `*mut Terminal`, and the render thread reads it.
+  - `io_thread` and `renderer_thread`. Their own threads write them.
+  - `renderer_state`. The render thread reads it under the mutex; the main thread writes it.
+
+  Every main-thread `&mut Surface` / `&Surface` retag (the same apprt entries N441 lists) covers
+  those bytes, so it races with those accesses.
+- **proof**: `.port/phase-2/mirihar-n441`. `n441_residual_terminal_inline` is UB under SB and TB.
+  `n441_residual_terminal_boxed` (the N441 fix shape applied to the terminal) is CLEAN under both.
+  LIFETIMES row `src/Surface.zig Surface [inline io / io_thread / renderer_thread / renderer_state]`.
+- **fix direction**: the N441 shape, one field group at a time. Give each cross-thread block its own
+  allocation behind a shared raw root (a `RendererBox`-style owner), and keep main-thread access to it
+  narrow and locked.
