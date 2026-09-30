@@ -10,6 +10,8 @@
 //!       current surface size plus 100x60 points is performed (`true`) and the
 //!       surface ends up that size. The resize goes through `setDefaultSize`
 //!       and the `resize_requested` one-shot in `toplevelComputeSize`.
+//!   (b2) UD374: the same at a sway output scale of 1.25, where GTK's integer
+//!       scale factor is 2; the surface still ends up the requested size.
 //!   (c) UD372: a request of `u32::MAX` x `u32::MAX` points, which panics the
 //!       reference's `resizeDelta` (`@intFromFloat` to `c_int`), is clamped: the
 //!       action is performed, nothing panics, and the window stays within the
@@ -203,6 +205,57 @@ fn resize_window_refuses_tiled_resizes_floating_and_clamps_ud372() {
         "the surface is {after:?}, not the requested {expect_w}x{expect_h} device px"
     );
 
+    // ---- (b2) UD374: the same at a FRACTIONAL output scale (1.25). The
+    //      reference divides the device-pixel change by the integer
+    //      `getScaleFactor()` (2 at 1.25), so the window moved by 1.25/2 of
+    //      the request. The window no longer fits the smaller logical head
+    //      (1024x576 at 1.25), so the compositor caps its height; the shrink
+    //      is sized so that the requested window fits again. NEGATIVE
+    //      CONTROL (rvm, 2026-09-30, the reference's integer factor): from a
+    //      1125x713 surface a 820x450 pt request left it 1063x608, not
+    //      1025x563 (the width moved 62 of 100 device px). ----
+    eprintln!("RESIZE {}", swaymsg("output * scale 1.25"));
+    let surface_scale =
+        || rustty_apprt::gtk::scale::widget_surface_scale(window.upcast_ref::<gtk4::Widget>());
+    assert!(
+        pump_until(10, &|| (surface_scale() - 1.25).abs() < 1e-6),
+        "the window never reached surface scale 1.25 (now {})",
+        surface_scale()
+    );
+    // Let the render surface and the content scale follow the new scale.
+    pump_for(2000);
+    let scale = surface.get_content_scale();
+    let cur = surface.get_size();
+    let want_w = (cur.width as f32 / scale.x).round() as u32 - 80;
+    let want_h = (cur.height as f32 / scale.y).round() as u32 - 120;
+    let expect_w = (want_w as f32 * scale.x).round() as u32;
+    let expect_h = (want_h as f32 * scale.y).round() as u32;
+    let performed = resize_window(&application, core, want_w, want_h);
+    eprintln!(
+        "RESIZE 1.25: size={cur:?} scale={scale:?} surface_scale={} \
+         scale_factor={} request={want_w}x{want_h} pt -> performed={performed}",
+        surface_scale(),
+        window.scale_factor()
+    );
+    assert!(performed, "a lone floating terminal resizes at 1.25");
+    let reached = pump_until(10, &|| {
+        let s = surface.get_size();
+        s.width.abs_diff(expect_w) <= 2 && s.height.abs_diff(expect_h) <= 2
+    });
+    let after = surface.get_size();
+    eprintln!("RESIZE 1.25: now {after:?}, expected {expect_w}x{expect_h}");
+    assert!(
+        reached,
+        "at scale 1.25 the surface is {after:?}, not the requested \
+         {expect_w}x{expect_h} device px (from {cur:?})"
+    );
+    eprintln!("RESIZE {}", swaymsg("output * scale 1"));
+    assert!(
+        pump_until(10, &|| (surface_scale() - 1.0).abs() < 1e-6),
+        "the window never returned to surface scale 1"
+    );
+    pump_for(1000);
+
     // ---- (c) UD372: the largest request is clamped, not a panic. ----
     let head = {
         let display = gtk4::gdk::Display::default().expect("display");
@@ -251,7 +304,8 @@ fn resize_window_refuses_tiled_resizes_floating_and_clamps_ud372() {
     //      makes it step aside. ----
     let cur = surface.get_size();
     let scale = surface.get_content_scale();
-    let factor = window.scale_factor() as f32;
+    // UD374: the fractional surface scale, not the integer `scale_factor()`.
+    let factor = surface_scale() as f32;
     let (old_w, old_h) = (window.width(), window.height());
     // `resizeDelta`'s arithmetic, recomputed here from the same inputs, so the
     // default size the port set is checked to the pixel.

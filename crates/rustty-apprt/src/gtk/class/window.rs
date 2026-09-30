@@ -1803,7 +1803,18 @@ impl Window {
         // window by the change accounts for the headerbar and tab bar.
         let scale = surface.get_content_scale();
         let current = surface.get_size();
-        let factor = self.upcast_ref::<gtk4::Widget>().scale_factor() as f32;
+        // const factor: f32 = @floatFromInt(self.as(gtk.Widget).getScaleFactor());
+        //
+        // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD374).
+        // `current` is the render surface's size in device pixels at the
+        // FRACTIONAL surface scale, and `px` is in the same pixels, but the
+        // reference divides their difference by the INTEGER
+        // `getScaleFactor()` (rounded up: 2 at 1.25), so at 1.25 the window
+        // moves by 62.5% of the request. The logical-to-device ratio is
+        // `widgetSurfaceScale` (`scale.zig:32-43`), the scale
+        // `getContentScale` already uses for `scale`; divide by it.
+        let factor =
+            crate::gtk::scale::widget_surface_scale(self.upcast_ref::<gtk4::Widget>()) as f32;
         let dw = resize_delta(size.width, scale.x, current.width, factor);
         let dh = resize_delta(size.height, scale.y, current.height, factor);
 

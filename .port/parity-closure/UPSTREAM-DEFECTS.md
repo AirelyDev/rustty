@@ -3275,7 +3275,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 
 ### UD373 — an overscan request change that keeps the `row_data` length and the captured overscan is not a redraw (stale, shifted rows reported clean)
 
-- kind:            bug (breaks evident intent: wrong rows rendered, no crash)
+- kind:            non-crash (evident intent broken: wrong rows rendered)
 - upstream project: ghostty
 - severity:        low (an embedder that changes its overscan request between updates; reachable through the C API)
 - reference:       at 12752b2ac, `src/terminal/render.zig` `beginUpdate` (`:579-588`): the redraw check compares `self.row_data.len` with `above_req + rows + below_req` and the captured `self.overscan` with this update's `top.above`/`below`, but not the request itself. The request decides where the viewport sits in `row_data` (`viewportStart() == overscan_request.above`). Introduced by `ca4f719f7`; the `overscan_request` doc (`:165-173`) says changing it "causes the next update to be a full redraw".
@@ -3287,6 +3287,22 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - parity row(s):   none; found by the P7-W12 T2 re-audit (ruling 63).
 - test:            `render::tests::overscan_request_change_same_layout_forces_redraw` (rustty-vt): the probe's steps, expecting `.full`, three built viewport rows `A`/`B`/`C`, and `.false` for an unchanged request afterwards. NEGATIVE CONTROL (macOS, 2026-09-30): before the fix it fails "a moved viewport is a redraw" (`.false`).
 - proposed fix:    remember the request used by the last update and add `if (!std.meta.eql(self.last_overscan_request, self.overscan_request)) break :redraw true;`, or compare `viewportStart()` with the previous update's.
+- upstream status: NOT YET REPORTED
+
+### UD374 — GTK `resizeWindow` (CSI 8 t) divides the device-pixel change by the integer scale factor, so a fractional scale resizes the window by the wrong amount
+
+- kind:            non-crash (evident intent broken: the window does not reach the requested size)
+- upstream project: ghostty
+- severity:        low (GTK with `vt-window-resize-allowed = true`, a floating window, and a fractional output scale such as 1.25 or 1.5)
+- reference:       at 12752b2ac, `src/apprt/gtk/class/window.zig` `resizeSurface` (219cca932): `const factor: f32 = @floatFromInt(self.as(gtk.Widget).getScaleFactor());` (`:990`), passed to `resizeDelta` (`:1003-1009`) as the device-to-logical divisor. `current` is the render surface's size in device pixels at the fractional surface scale (`renderSurfaceResize`), and `scale` is `getContentScale`, built on `scale_util.widgetSurfaceScale` (the fractional `gdk_surface_get_scale`). `gtk_widget_get_scale_factor` is that scale rounded up to an integer.
+- defect:          the change in device pixels is converted to logical pixels with the wrong ratio. At 1.25 it divides by 2, so the window moves by 62.5% of the requested change; at 1.5 by 75%. Integer scales are unaffected.
+- ReleaseSafe:     no panic. MEASURED (task P7-W12 T3, rvm, headless sway 1.11, GTK 4.22.4, `swaymsg output * scale 1.25`: `getScaleFactor() == 2`, surface scale 1.25) through the port's verbatim transcription (`crates/rustty-apprt/tests/gtk_resize_window_live.rs` step (b2) before the fix): from a 1125x713 device-pixel surface, a request of 820x450 points (1025x563 device pixels) left it 1063 wide, a change of 62 device pixels for the 100 requested. No Zig toolchain on rvm, so the reference itself was not run; the expression is copied unchanged.
+- ReleaseFast:     the same.
+- reachability:    config plus program output: `vt-window-resize-allowed = true`, a floating window on a compositor at a fractional scale, and a program that sends CSI 8 t.
+- port handling:   `crates/rustty-apprt/src/gtk/class/window.rs` `resize_surface` divides by `scale::widget_surface_scale(window)` (`PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD374)`). The live test's own expected-default-size formula in step (d) uses the same scale. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; found by the P7-W12 T2 re-audit (ruling 67).
+- test:            `crates/rustty-apprt/tests/gtk_resize_window_live.rs` step (b2) (live, `.port/tools/gtk_live_headless_sway.sh`): at scale 1.25 the surface reaches the requested 1025x563 device pixels. NEGATIVE CONTROL (rvm, 2026-09-30): with the integer factor it fails, the surface is 1063x608.
+- proposed fix:    `const factor: f32 = @floatCast(scale_util.widgetSurfaceScale(self.as(gtk.Widget)));`.
 - upstream status: NOT YET REPORTED
 
 ## Candidates pending verification
