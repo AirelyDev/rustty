@@ -894,7 +894,7 @@ impl Thread {
         // the pools + detaches the joined read-thread placeholder.
         unsafe {
             let data_ptr = (*cb_ptr).data.as_mut_ptr();
-            (*io).threadExit(&mut *data_ptr);
+            Termio::threadExit(io, &mut *data_ptr);
             (*data_ptr).deinit();
             core::ptr::drop_in_place(data_ptr);
         }
@@ -946,18 +946,20 @@ impl Thread {
             log::debug!(target: LOG_SCOPE, "mailbox message={}", message.tagName());
             // switch (message) {
             //
-            // (PORT NOTE: each `io.method(data, ...)` forms a transient `&mut *io` +
-            // `&mut *data` — disjoint objects; the reference threads raw `io`/`data`.
-            // The borrow never outlives the handler call, so it does not cross a loop
-            // tick; shared terminal state is renderer-mutex-guarded inside each.)
+            // (PORT NOTE: each `io.method(data, ...)` passes the raw `io` (N449,
+            // P7-W7 T5d: the `Termio` methods are raw-self, the reference's
+            // `self: *Termio`, so the writer thread never holds a `&mut Termio`
+            // while the read thread writes the terminal) and a transient
+            // `&mut *data` (the writer thread's own `ThreadData`). Shared
+            // terminal state is renderer-mutex-guarded inside each.)
             match message {
                 // .color_scheme_report => |v| try io.colorSchemeReport(data, v.force),
                 Message::ColorSchemeReport { force } => {
-                    unsafe { (*io).colorSchemeReport(&mut *data, force) }?
+                    unsafe { Termio::colorSchemeReport(io, &mut *data, force) }?
                 }
                 // .visibility_report => |v| try io.visibilityReport(data, v.visible, v.force),
                 Message::VisibilityReport { visible, force } => {
-                    unsafe { (*io).visibilityReport(&mut *data, visible, force) }?
+                    unsafe { Termio::visibilityReport(io, &mut *data, visible, force) }?
                 }
                 // .crash => @panic("crash request, crashing intentionally"),
                 Message::Crash => panic!("crash request, crashing intentionally"),
@@ -969,20 +971,20 @@ impl Thread {
                     // (PORT NOTE: `config.alloc.destroy(config.ptr)` collapses into the
                     // `Box<DerivedConfig>` drop — `*ptr` moves the value into
                     // `changeConfig` (by value here) and frees the box.)
-                    unsafe { (*io).changeConfig(&mut *data, *ptr) }?
+                    unsafe { Termio::changeConfig(io, &mut *data, *ptr) }?
                 }
                 // .inspector => |v| self.flags.has_inspector = v,
                 Message::Inspector(v) => unsafe { (*self_).flags.has_inspector = v },
                 // .resize => |v| self.handleResize(cb, v),
                 Message::Resize(v) => Self::handleResize(self_, cb, v),
                 // .size_report => |v| try io.sizeReport(data, v),
-                Message::SizeReport(v) => unsafe { (*io).sizeReport(&mut *data, v) }?,
+                Message::SizeReport(v) => unsafe { Termio::sizeReport(io, &mut *data, v) }?,
                 // .clear_screen => |v| try io.clearScreen(data, v.history),
                 Message::ClearScreen { history } => {
-                    unsafe { (*io).clearScreen(&mut *data, history) }?
+                    unsafe { Termio::clearScreen(io, &mut *data, history) }?
                 }
                 // .scroll_viewport => |v| io.scrollViewport(v),
-                Message::ScrollViewport(v) => unsafe { (*io).scrollViewport(v) },
+                Message::ScrollViewport(v) => unsafe { Termio::scrollViewport(io, v) },
                 // .selection_scroll => |v| {
                 //     if (v) { self.startScrollTimer(cb); } else { self.stopScrollTimer(); }
                 // },
@@ -994,34 +996,42 @@ impl Thread {
                     }
                 }
                 // .jump_to_prompt => |v| try io.jumpToPrompt(v),
-                Message::JumpToPrompt(v) => unsafe { (*io).jumpToPrompt(v) }?,
+                Message::JumpToPrompt(v) => unsafe { Termio::jumpToPrompt(io, v) }?,
                 // .kitty_clipboard_grant_read => |v| {
                 //     defer v.alloc.free(v.pw);
                 //     try io.kittyClipboardGrant(v.pw, .read);
                 // },
                 // (the `defer free` is the owned `pw` Vec dropping at arm end.)
                 Message::KittyClipboardGrantRead(v) => unsafe {
-                    (*io).kittyClipboardGrant(&v.pw, rustty_vt::kitty::clipboard::Direction::Read)
+                    Termio::kittyClipboardGrant(
+                        io,
+                        &v.pw,
+                        rustty_vt::kitty::clipboard::Direction::Read,
+                    )
                 }?,
                 // .kitty_clipboard_grant_write => |v| { ... .write ... },
                 Message::KittyClipboardGrantWrite(v) => unsafe {
-                    (*io).kittyClipboardGrant(&v.pw, rustty_vt::kitty::clipboard::Direction::Write)
+                    Termio::kittyClipboardGrant(
+                        io,
+                        &v.pw,
+                        rustty_vt::kitty::clipboard::Direction::Write,
+                    )
                 }?,
                 // .start_synchronized_output => self.startSynchronizedOutput(cb),
                 Message::StartSynchronizedOutput => Self::startSynchronizedOutput(self_, cb),
                 // .linefeed_mode => |v| self.flags.linefeed_mode = v,
                 Message::LinefeedMode(v) => unsafe { (*self_).flags.linefeed_mode = v },
                 // .focused => |v| try io.focusGained(data, v),
-                Message::Focused(v) => unsafe { (*io).focusGained(&mut *data, v) }?,
+                Message::Focused(v) => unsafe { Termio::focusGained(io, &mut *data, v) }?,
                 // .write_small => |v| try io.queueWrite(data, v.data[0..v.len], self.flags.linefeed_mode),
                 Message::WriteSmall(v) => {
                     let linefeed = unsafe { (*self_).flags.linefeed_mode };
-                    unsafe { (*io).queueWrite(&mut *data, &v.data[..v.len], linefeed) }?
+                    unsafe { Termio::queueWrite(io, &mut *data, &v.data[..v.len], linefeed) }?
                 }
                 // .write_stable => |v| try io.queueWrite(data, v, self.flags.linefeed_mode),
                 Message::WriteStable(v) => {
                     let linefeed = unsafe { (*self_).flags.linefeed_mode };
-                    unsafe { (*io).queueWrite(&mut *data, v, linefeed) }?
+                    unsafe { Termio::queueWrite(io, &mut *data, v, linefeed) }?
                 }
                 // .write_alloc => |v| {
                 //     defer v.alloc.free(v.data);
@@ -1031,7 +1041,7 @@ impl Thread {
                     // (PORT NOTE: `v.alloc.free(v.data)` collapses into the `Box<[u8]>`
                     // drop — `v` drops at the end of this arm.)
                     let linefeed = unsafe { (*self_).flags.linefeed_mode };
-                    unsafe { (*io).queueWrite(&mut *data, &v.data, linefeed) }?
+                    unsafe { Termio::queueWrite(io, &mut *data, &v.data, linefeed) }?
                 }
             }
         }
@@ -1132,7 +1142,7 @@ impl Thread {
         }
         let cb = cb_;
         // cb.io.resetSynchronizedOutput();
-        unsafe { (*(*cb).io).resetSynchronizedOutput() };
+        unsafe { Termio::resetSynchronizedOutput((*cb).io) };
         // return .disarm;
         xev::CallbackAction::Disarm
     }
@@ -1174,7 +1184,7 @@ impl Thread {
         if let Some(v) = unsafe { (*self_).coalesce_data.resize.take() } {
             let io = unsafe { (*cb).io };
             let data = unsafe { (*cb).data.as_mut_ptr() };
-            if let Err(err) = unsafe { (*io).resize(&mut *data, v) } {
+            if let Err(err) = unsafe { Termio::resize(io, &mut *data, v) } {
                 // log.warn("error during resize err={}", .{err});
                 log::warn!(target: LOG_SCOPE, "error during resize err={err:?}");
             }

@@ -9118,7 +9118,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `queueIo_frees_allocated_writes_in_readonly_mode`) write and free the boxes and pass under Miri's
   leak check.
 - **limit**: N449 below (the io writer thread's own `&mut Termio`) is independent of the surface
-  layout and stays OPEN.
+  layout; it was OPEN here and is CLOSED by P7-W7 T5d.
 
 ## N449 — the io writer thread's `&mut self` `Termio` methods cover the terminal the read thread writes
 
@@ -9126,7 +9126,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   whenever an io-thread message (focus, resize, config change, size report, clear screen, scroll,
   write, ...) overlaps pty output, which is common; no miscompile has been observed. **kind**: port
   soundness (Stacked and Tree Borrows). **Not upstream**: Zig's `*Termio` has no aliasing rule.
-  **state**: OPEN.
+  **state**: CLOSED (P7-W7 T5d).
 - **finding**: the io writer thread's `drainMailbox` calls `&mut self` `Termio` methods:
   `focusGained`, `resize`, `changeConfig`, `sizeReport`, `clearScreen`, `scrollViewport`,
   `jumpToPrompt`, `colorSchemeReport`, `visibilityReport`, `queueWrite`, `kittyClipboardGrant`,
@@ -9148,6 +9148,36 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (`unsafe fn(self_: *mut Termio, ..)`), reaching only the fields each touches, by place, and never
   holding a whole-`Termio` reference across the renderer-mutex sections or a backend call. The
   backend's own `&mut` receivers (`Exec`, `Subprocess`, the pty's cached tty name) need the same audit.
+- **fix** (P7-W7 T5d, no behaviour change, no UD):
+  - `crates/rustty-termio/src/termio_impl.rs`: `threadExit`, `queueWrite`, `changeConfig`, `resize`,
+    `sizeReport(Locked)`, `resetSynchronizedOutput`, `clearScreen`, `scrollViewport`,
+    `jumpToPrompt`, `focusGained`, `kittyClipboardGrant`, `colorSchemeReport(Locked)` and
+    `visibilityReport(Locked)` are raw-self and reach only the fields the reference touches, by
+    place. The terminal, stream handler and config are borrowed only inside the renderer-mutex
+    section; `changeConfig` borrows the terminal only after the stream handler has written it through
+    its own pointer. `crates/rustty-termio/src/thread.rs` calls them as `Termio::m(io, ..)`.
+  - the backend chain: `Backend` is `#[repr(transparent)]` and `Backend::exec_ptr` is the
+    `.exec => |*exec|` projection as a pointer cast; the cross-thread `Backend`, `Exec` and
+    `Subprocess` methods are raw-self (`backend.rs`, `exec.rs`).
+  - `crates/rustty-os/src/pty.rs`: `setSize` / `getForegroundPid` / `getTtyName` take `&self` on every
+    pty; the `PosixPty` tty-name cache is `UnsafeCell` / `Cell`, the `WindowsPty` size a `Cell`.
+  - `crates/rustty-core/src/surface.rs` `childExitedAbnormally`: the close-confirm command read
+    borrows `subprocess.args` only, through `Backend::exec_ptr`.
+- **fix proof**: `.port/phase-2/mirihar-n444` (16 seeds, SB and TB, `bash run-all.sh`):
+  `n449_shipped` UB/UB, `n449_main_backend_mut` UB/UB, `n449_pty_set_size_mut` UB/UB,
+  `n449_close_confirm_backend_ref` UB/UB, `n449_change_config_terminal_early` UB/UB, `n449_fixed`
+  CLEAN/CLEAN; every N444 row is unchanged. LIFETIMES rows: `src/termio/Termio.zig Termio [self in io
+  writer-thread methods]` (FIXED), `src/termio/backend.zig Backend`, `src/termio/Exec.zig Exec` and
+  `Subprocess` `[self in cross-thread methods]`, `src/pty.zig PosixPty tty_name_buf / tty_name`.
+  Live: `RUSTTY_REQUIRE_METAL=1 cargo test -p rustty-termio -p rustty-core -p rustty-apprt -p
+  rustty-apprt-c -p rustty-os` on macOS; on Linux (rvm) the termio / core / apprt suites with GTK and
+  the live `gtk_window_live` / `gtk_first_light`.
+- **residual (not N449)**: `Exec::threadEnter` still runs `subprocess.start(&mut Subprocess)` on the io
+  thread, which publishes `pty` / `process`. A main-thread `getProcessInfo` in that window reads
+  `pty` while it is written; that is a plain data race in the reference too (not an aliasing-model
+  artefact). Ruling 52 confirmed it: now **UD367**, fixed in T5d fix round 1 (`Exec.pty_ready`). The
+  same review found **UD368** (`Termio.resize` stores `size` before the renderer mutex while the read
+  thread reads it under the mutex), also fixed in fix round 1.
 
 ## N448 — superseded: now UD366
 

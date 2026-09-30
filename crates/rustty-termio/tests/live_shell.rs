@@ -436,7 +436,7 @@ fn live_shell_echo_round_trips_into_the_screen() {
     // mailbox).
     // SAFETY: `td_ptr` is fully initialized; `io.backend` is disjoint from the
     // winding-down read thread's touched fields.
-    unsafe { (*io).backend.threadExit(&mut *td_ptr) };
+    unsafe { rustty_termio::Backend::threadExit(&raw mut (*io).backend, &mut *td_ptr) };
     // Close the pty master (never closed by deinit); the read thread — its sole
     // reader — is joined above.
     unsafe { libc::close(master) };

@@ -4675,15 +4675,23 @@ where
         // const command = try std.mem.join(alloc, " ", switch (self.io.backend) {
         //     .exec => |*exec| exec.subprocess.args,
         // });
-        let command: Vec<u8> = match unsafe { &(*self.io.as_ptr()).backend } {
-            termio::Backend::Exec(exec) => exec
-                .subprocess
-                .args
-                .iter()
-                .map(|arg| arg.to_bytes().to_vec())
-                .collect::<Vec<Vec<u8>>>()
-                .join(&b' '),
+        //
+        // PORT NOTE (N449, P7-W7 T5d): borrows `subprocess.args` only, through
+        // the raw `.exec => |*exec|` projection (`Backend::exec_ptr`). A
+        // `&Backend` covers the whole subprocess, whose `grid_size` /
+        // `screen_size` / `process` the io writer thread writes meanwhile
+        // (`resize`, `threadExit`): a race (`.port/phase-2/mirihar-n444`
+        // `n449_close_confirm_backend_ref`, UB under SB and TB). `args` is
+        // written only at init.
+        let args: &Vec<std::ffi::CString> = {
+            let exec = termio::Backend::exec_ptr(unsafe { &raw mut (*self.io.as_ptr()).backend });
+            unsafe { &(*exec).subprocess.args }
         };
+        let command: Vec<u8> = args
+            .iter()
+            .map(|arg| arg.to_bytes().to_vec())
+            .collect::<Vec<Vec<u8>>>()
+            .join(&b' ');
         // const runtime_str = try std.fmt.allocPrint(alloc, "{d} ms", .{info.runtime_ms});
         let runtime_str = format!("{} ms", info.runtime_ms);
 

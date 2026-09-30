@@ -3164,6 +3164,50 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    iterate a copy of the list (`const surfaces = try alloc.dupe(*apprt.Surface, self.surfaces.items)`), or iterate by index against the live `items` and stop at the length the loop started with.
 - upstream status: NOT YET REPORTED
 
+### UD367 — a main-thread process-info query reads the pty while the io thread's `Subprocess.start` writes it (data race)
+
+- kind:            UB (data race; R13)
+- upstream project: ghostty
+- severity:        low (a script or App Intent that asks for a new terminal's tty or pid right after creating it; the read sees a torn or stale `?Pty`)
+- reference:       at 12752b2ac:
+  - `src/termio/Exec.zig` `Subprocess.start` (io thread, from `Exec.threadEnter`): `self.pty = pty;` (`:911`) and its `errdefer ... self.pty = null;` (`:912-919`);
+  - `Subprocess.getProcessInfo` (`:1259-1262`): `const pty = &(self.pty orelse return null);`, reached on the main thread through `Exec.getProcessInfo` → `Termio.getProcessInfo` → `Surface.getProcessInfo` from the embedded `ghostty_surface_foreground_pid` / `ghostty_surface_tty_name` (`src/apprt/embedded.zig:1974`, `:1980`);
+  - the macOS callers: AppleScript `ScriptTerminal.pid` / `.tty` and the App Intents `TerminalEntity`.
+  Nothing orders the io thread's write of `self.pty` before the main thread's read: `Surface.init` spawns the io thread and returns, so the surface is scriptable while `start` runs.
+- defect:          an unsynchronized read of `Subprocess.pty` racing its write.
+- ReleaseSafe:     a data race is undefined behaviour; no safety check covers it. The read sees `null` (harmless), or a partly written optional whose `master` fd may be garbage (by reading; not measured).
+- ReleaseFast:     the same.
+- reachability:    macOS, e.g. an AppleScript `make new window` followed immediately by `tty of terminal 1` (or `pid of ...`), or the App Intents terminal entity read on a surface created a moment earlier.
+- output needed:   none reliably visible; a wrong or empty tty name or pid, or an `ioctl` on a stale fd.
+- port handling:
+  - `crates/rustty-termio/src/exec.rs`: `Exec.pty_ready: AtomicBool` (Rust-only). `Exec::threadEnter` stores it `Release` once `subprocess.start` has returned (its `&mut Subprocess` has ended; the slave is closed); `Exec::getForegroundPid` / `getTtyName` load it `Acquire` and answer `None` until then, which is what the reference answers before `start`. `Exec::deinit` clears it. The flag sits beside `subprocess`, not inside it: `start`'s `&mut Subprocess` retag covers every byte of the subprocess, so a flag inside it would race with the load.
+  - `PORT NOTE: reference defect (R13), UD367` at the field, the store and the accessors. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none. Found by P7-W7 T5d (N449 residual); confirmed reachable by the T5d review (ruling 52).
+- test:            `crates/rustty-termio/src/exec.rs` `ud367_process_info_waits_for_thread_enter_to_publish_the_pty` (macOS and Linux): a pty written into `subprocess.pty` but not yet published yields `None` from both accessors, and the tty name once published. NEGATIVE CONTROL (macOS, 2026-09-29): with the gate removed (`pty_published` always `true`, the reference's shape) it fails "the tty name must wait for threadEnter to publish the pty". The race itself: `.port/phase-2/mirihar-n444` `ud367_start_unordered` UB under SB and TB, `ud367_ready_in_subprocess` UB under SB, `ud367_ready_in_exec` CLEAN under both (16 seeds).
+- proposed fix:    publish the pty through an atomic flag (or take a lock around `self.pty` in `start` and `getProcessInfo`), set after `start` returns and read with acquire ordering before touching `self.pty`.
+- upstream status: NOT YET REPORTED
+
+### UD368 — `Termio.resize` writes `size` before taking the renderer mutex while the read thread reads it under the mutex (data race)
+
+- kind:            UB (data race; R13)
+- upstream project: ghostty
+- severity:        low (needs program output that sets DEC mode 3 while the window is being resized)
+- reference:       at 12752b2ac:
+  - `src/termio/Termio.zig` `resize` (io writer thread): `self.size = size;` (`:501`), then `try self.backend.resize(..)`, and only then `self.renderer_state.mutex.lock()`;
+  - `src/termio/stream_handler.zig` `.enable_mode_3` (`:694-695`, io read thread, under `renderer_state.mutex` via `processOutput`): `const grid_size = self.size.grid();`, where `StreamHandler.size` points at `Termio.size` (`Termio.zig` `.size = &self.size`).
+- defect:          the writer thread's store to `Termio.size` is outside the mutex that the reader's load is under, so the two are unordered.
+- ReleaseSafe:     a data race is undefined behaviour; no safety check covers it. The read can see a torn `renderer.Size` (by reading; not measured).
+- ReleaseFast:     the same.
+- reachability:    any platform: a program that enables DECCOLM (mode 3, with `enable_mode_3` allowed) while the user resizes the window.
+- output needed:   none reliably visible; the terminal resized to a mix of the old and new grid sizes.
+- port handling:
+  - `crates/rustty-termio/src/termio_impl.rs` `Termio::resize`: the store moves inside the renderer-mutex section. Nothing before it reads `size` (`backend.resize` takes the sizes as arguments), and a failing `backend.resize` still stores it (under the mutex) before returning, as the reference stores it before its `try`.
+  - `PORT NOTE: reference defect (R13), UD368` at the site. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none. Found by the P7-W7 T5d review (ruling 52).
+- test:            `.port/phase-2/mirihar-n444` `ud368_size_before_lock` (the reference's order) UB under SB and TB, `ud368_size_under_lock` CLEAN (16 seeds). No native test: the race has no deterministic trigger.
+- proposed fix:    move `self.size = size;` after `self.renderer_state.mutex.lock()` in `resize` (keeping it ahead of the `try` if the error path must still record the size).
+- upstream status: NOT YET REPORTED
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

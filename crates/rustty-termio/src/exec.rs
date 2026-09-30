@@ -261,6 +261,23 @@ pub enum ExecCommandError {
 pub struct Exec {
     // subprocess: Subprocess,
     pub subprocess: Subprocess,
+
+    // PORT NOTE: reference defect (R13), UD367. Not in the reference. The io
+    // thread's `threadEnter` runs `subprocess.start`, which writes
+    // `subprocess.pty`; the main thread's `getProcessInfo` (the embedded
+    // `rustty_surface_foreground_pid` / `rustty_surface_tty_name`, reached
+    // from AppleScript `pid` / `tty` and the App Intents terminal entity)
+    // reads it with no ordering, so a script asking for `tty of terminal 1`
+    // right after `make new window` races the write. `threadEnter` stores
+    // this flag `Release` once `start` has returned; the process-info
+    // accessors load it `Acquire` and answer `None` until then, as the
+    // reference does before `start`. It lives here, beside `subprocess`, not
+    // inside it: `start` takes `&mut Subprocess`, whose retag covers every
+    // byte of the subprocess, so a flag inside it would race with the main
+    // thread's load (`.port/phase-2/mirihar-n444` `ud367_ready_in_subprocess`
+    // UB under SB; `ud367_start_unordered` UB under SB and TB;
+    // `ud367_ready_in_exec` CLEAN under both).
+    pub pty_ready: core::sync::atomic::AtomicBool,
 }
 
 impl Exec {
@@ -278,11 +295,17 @@ impl Exec {
         let subprocess = Subprocess::init(alloc, cfg)?;
 
         // return .{ .subprocess = subprocess };
-        Ok(Exec { subprocess })
+        Ok(Exec {
+            subprocess,
+            pty_ready: core::sync::atomic::AtomicBool::new(false),
+        })
     }
 
     // pub fn deinit(self: *Exec) void {
     pub fn deinit(&mut self) {
+        // (UD367: the pty is closed below; no thread queries it any more.)
+        self.pty_ready
+            .store(false, core::sync::atomic::Ordering::Relaxed);
         self.subprocess.deinit();
     }
 
@@ -315,16 +338,21 @@ impl Exec {
         //     .width = term.width_px,
         //     .height = term.height_px,
         // }) catch unreachable;
-        self.resize(
-            GridSize {
-                columns: term.cols,
-                rows: term.rows,
-            },
-            ScreenSize {
-                width: term.width_px,
-                height: term.height_px,
-            },
-        )
+        //
+        // SAFETY: `self` is a live `&mut Exec` (N449: `resize` is raw-self).
+        unsafe {
+            Self::resize(
+                self,
+                GridSize {
+                    columns: term.cols,
+                    rows: term.rows,
+                },
+                ScreenSize {
+                    width: term.width_px,
+                    height: term.height_px,
+                },
+            )
+        }
         .unwrap();
     }
 
@@ -444,6 +472,10 @@ impl Exec {
     //     }
     // }
     //
+    // PORT NOTE (N449, P7-W7 T5d): `self_` is the raw `self: *Exec` (see
+    // `Backend`'s note). `subprocess.start` still takes `&mut Subprocess`: it
+    // runs before the read thread exists, and it is what publishes the pty.
+    //
     // PORT NOTE ([ADV-FIX F2], xev Milestone B): `io` is a RAW `*mut Termio<M>`
     // (the reference `io: *termio.Termio`) — it is handed to the spawned read
     // thread, which aliases `*io` concurrently under the renderer mutex; a `&mut`
@@ -454,10 +486,11 @@ impl Exec {
     // with `Thread::threadMain` in B4.
     ///
     /// # Safety
-    /// `io` must be a valid `Termio<M>` pointer that outlives the read thread;
-    /// `td` must be frame-pinned for the loop's life (see the blueprint §3).
+    /// `self_` must point at a live `Exec`; `io` must be a valid `Termio<M>`
+    /// pointer that outlives the read thread; `td` must be frame-pinned for
+    /// the loop's life (see the blueprint §3).
     pub unsafe fn threadEnter<M: rustty_apprt_api::surface::AppMailbox + 'static>(
-        &mut self,
+        self_: *mut Exec,
         alloc: Allocator,
         io: *mut crate::Termio<M>,
         td: &mut crate::termio_impl::ThreadData<M>,
@@ -484,12 +517,21 @@ impl Exec {
         // is known, since the opaque `crate::Error` cannot carry the discriminant
         // here; see start's PORT NOTE. Every error that reaches here is a parent
         // error and bubbles up.)
-        let pty_fds = match self.subprocess.start(alloc) {
+        let pty_fds = match unsafe { (*self_).subprocess.start(alloc) } {
             Ok(fds) => fds,
             Err(e) => {
                 note_thread_enter_failure!("subprocess.start", e);
                 return Err(e);
             }
+        };
+        // PORT NOTE: reference defect (R13), UD367. `start` has returned, so
+        // its `&mut Subprocess` has ended and the pty is fully written (the
+        // slave already closed); publish it to the main thread's
+        // process-info accessors (see `Exec::pty_ready`).
+        unsafe {
+            (*self_)
+                .pty_ready
+                .store(true, core::sync::atomic::Ordering::Release)
         };
         // errdefer self.subprocess.stop();
         // (PORT NOTE: no `errdefer`; each fallible step below runs the accumulated
@@ -514,7 +556,7 @@ impl Exec {
             Flatpak,
             ForkExec(Option<ChildPid>),
         }
-        let which = match &self.subprocess.process {
+        let which = match unsafe { &(*self_).subprocess.process } {
             None => ProcessWhich::NotStarted,
             Some(Process::Flatpak(_)) => ProcessWhich::Flatpak,
             Some(Process::ForkExec(cmd)) => ProcessWhich::ForkExec(cmd.pid),
@@ -529,7 +571,7 @@ impl Exec {
                 // `drain_pty_master_once`.
                 #[cfg(not(windows))]
                 let _ = drain_pty_master_once(pty_fds.read);
-                self.subprocess.stop();
+                unsafe { Subprocess::stop(&raw mut (*self_).subprocess) };
                 return Err(crate::Error);
             }
             // .flatpak => null (traditional process watching not possible)
@@ -544,7 +586,7 @@ impl Exec {
                 // `drain_pty_master_once`.
                 #[cfg(not(windows))]
                 let _ = drain_pty_master_once(pty_fds.read);
-                self.subprocess.stop();
+                unsafe { Subprocess::stop(&raw mut (*self_).subprocess) };
                 return Err(crate::Error);
             }
             ProcessWhich::ForkExec(Some(pid)) => match xev::Process::init(pid) {
@@ -557,7 +599,7 @@ impl Exec {
                     // `drain_pty_master_once`.
                     #[cfg(not(windows))]
                     let _ = drain_pty_master_once(pty_fds.read);
-                    self.subprocess.stop();
+                    unsafe { Subprocess::stop(&raw mut (*self_).subprocess) };
                     return Err(crate::Error);
                 }
             },
@@ -585,7 +627,7 @@ impl Exec {
                 // `drain_pty_master_once`.
                 #[cfg(not(windows))]
                 let _ = drain_pty_master_once(pty_fds.read);
-                self.subprocess.stop();
+                unsafe { Subprocess::stop(&raw mut (*self_).subprocess) };
                 return Err(crate::Error);
             }
         };
@@ -621,7 +663,7 @@ impl Exec {
                 // `drain_pty_master_once`.
                 #[cfg(not(windows))]
                 let _ = drain_pty_master_once(pty_fds.read);
-                self.subprocess.stop();
+                unsafe { Subprocess::stop(&raw mut (*self_).subprocess) };
                 return Err(crate::Error);
             }
         };
@@ -687,7 +729,7 @@ impl Exec {
                 // `drain_pty_master_once`.
                 #[cfg(not(windows))]
                 let _ = drain_pty_master_once(pty_fds.read);
-                self.subprocess.stop();
+                unsafe { Subprocess::stop(&raw mut (*self_).subprocess) };
                 return Err(crate::Error);
             }
         };
@@ -772,7 +814,7 @@ impl Exec {
         } else {
             #[cfg(feature = "flatpak")]
             // switch (self.subprocess.process orelse break :flatpak) { ... }
-            if let Some(proc) = self.subprocess.process.as_mut() {
+            if let Some(proc) = unsafe { (*self_).subprocess.process.as_mut() } {
                 match proc {
                     // If we're in flatpak and we have a flatpak command
                     // then we can run the special flatpak logic for watching.
@@ -855,8 +897,17 @@ impl Exec {
     //
     //     exec.read_thread.join();
     // }
-    pub fn threadExit<M: rustty_apprt_api::surface::AppMailbox>(
-        &mut self,
+    //
+    // PORT NOTE (N449, P7-W7 T5d): raw-self, the reference's `self: *Exec`.
+    // The io writer thread runs this while the read thread still writes the
+    // terminal (it is joined at the end) and the main thread may read the pty
+    // and `args`; a `&mut Exec` would be a Unique over the whole subprocess.
+    // Only `subprocess.process` is reached, by place (`externalExit`, `stop`).
+    ///
+    /// # Safety
+    /// `self_` must point at a live `Exec`.
+    pub unsafe fn threadExit<M: rustty_apprt_api::surface::AppMailbox>(
+        self_: *mut Exec,
         td: &mut crate::termio_impl::ThreadData<M>,
     ) {
         // assert(td.backend == .exec);
@@ -866,10 +917,10 @@ impl Exec {
 
         // if (exec.exited) self.subprocess.externalExit();
         if exec.exited {
-            self.subprocess.externalExit();
+            unsafe { Subprocess::externalExit(&raw mut (*self_).subprocess) };
         }
         // self.subprocess.stop();
-        self.subprocess.stop();
+        unsafe { Subprocess::stop(&raw mut (*self_).subprocess) };
 
         // Quit our read thread after exiting the subprocess so that
         // we don't get stuck waiting for data to stop flowing if it is
@@ -1027,14 +1078,17 @@ impl Exec {
     // }
     // (Windows returns before the termios half, as the reference's comptime
     // `return` does, so its locals go unused there.)
+    //
+    // PORT NOTE (N449, P7-W7 T5d): the receiver is the raw `self: *Exec` (see
+    // `Backend`'s note); the body never touches it.
     #[cfg_attr(windows, allow(unused_variables))]
     pub fn focusGained<M: rustty_apprt_api::surface::AppMailbox + 'static>(
-        &mut self,
+        self_: *mut Exec,
         td: &mut crate::termio_impl::ThreadData<M>,
         focused: bool,
     ) -> Result<(), crate::Error> {
         // _ = self;
-        let _ = self;
+        let _ = self_;
 
         // assert(td.backend == .exec);
         // const execdata = &td.backend.exec;
@@ -1098,13 +1152,18 @@ impl Exec {
     //     grid_size: renderer.GridSize,
     //     screen_size: renderer.ScreenSize,
     // ) !void {
-    pub fn resize(
-        &mut self,
+    //
+    // PORT NOTE (N449, P7-W7 T5d): raw-self (see `Subprocess::resize`).
+    ///
+    /// # Safety
+    /// `self_` must point at a live `Exec`.
+    pub unsafe fn resize(
+        self_: *mut Exec,
         grid_size: GridSize,
         screen_size: ScreenSize,
     ) -> Result<(), crate::Error> {
         // return try self.subprocess.resize(grid_size, screen_size);
-        self.subprocess.resize(grid_size, screen_size)
+        unsafe { Subprocess::resize(&raw mut (*self_).subprocess, grid_size, screen_size) }
     }
 
     // [WS20] STALE HEADER STRUCK: this said "DEFERRED (D6 — called only from the
@@ -1624,15 +1683,18 @@ impl Exec {
     //         );
     //     }
     // }
+    //
+    // PORT NOTE (N449, P7-W7 T5d): the receiver is the raw `self: *Exec` (see
+    // `Backend`'s note); the body never touches it.
     pub fn queueWrite<M: rustty_apprt_api::surface::AppMailbox>(
-        &mut self,
+        self_: *mut Exec,
         alloc: Allocator,
         td: &mut crate::termio_impl::ThreadData<M>,
         data: &[u8],
         linefeed: bool,
     ) -> Result<(), crate::Error> {
         // _ = self;
-        let _ = self;
+        let _ = self_;
         let _ = alloc;
         // const exec = &td.backend.exec;
         //
@@ -1854,14 +1916,47 @@ impl Exec {
     // ProcessInfo) ?ProcessInfo.Type(info) { return self.subprocess.getProcessInfo(info); }`
     // — split into the two concrete accessors (rustty-os pty.rs / backend.rs
     // precedent).
-    pub fn getForegroundPid(&mut self) -> Option<u64> {
-        self.subprocess.getForegroundPid()
+    //
+    // PORT NOTE (N449, P7-W7 T5d): raw-self, like every `Exec` method another
+    // thread's call overlaps (see `Backend`'s note).
+    ///
+    /// # Safety
+    /// `self_` must point at a live `Exec`.
+    pub unsafe fn getForegroundPid(self_: *mut Exec) -> Option<u64> {
+        // PORT NOTE: reference defect (R13), UD367: `None` until the io
+        // thread has published the pty (see `Exec::pty_ready`).
+        if !unsafe { Self::pty_published(self_) } {
+            return None;
+        }
+        unsafe { Subprocess::getForegroundPid(&raw mut (*self_).subprocess) }
+    }
+
+    /// Whether `threadEnter` has published the pty to the process-info
+    /// accessors (UD367; see [`Exec::pty_ready`]). Rust-only helper.
+    ///
+    /// # Safety
+    /// `self_` must point at a live `Exec`.
+    #[inline]
+    unsafe fn pty_published(self_: *const Exec) -> bool {
+        unsafe {
+            (*self_)
+                .pty_ready
+                .load(core::sync::atomic::Ordering::Acquire)
+        }
     }
 
     /// See [`Exec::getForegroundPid`] (the `.tty_name` half of the reference
     /// `getProcessInfo`).
-    pub fn getTtyName(&mut self) -> Option<&CStr> {
-        self.subprocess.getTtyName()
+    ///
+    /// # Safety
+    /// As [`Exec::getForegroundPid`]; the caller picks `'a` no longer than
+    /// the `Exec` lives.
+    pub unsafe fn getTtyName<'a>(self_: *mut Exec) -> Option<&'a CStr> {
+        // PORT NOTE: reference defect (R13), UD367 (see `getForegroundPid`).
+        if !unsafe { Self::pty_published(self_) } {
+            return None;
+        }
+        unsafe { Subprocess::getTtyName(&raw mut (*self_).subprocess) }
     }
 }
 
@@ -2790,7 +2885,7 @@ impl Subprocess {
     // pub fn deinit(self: *Subprocess) void {
     pub fn deinit(&mut self) {
         // self.stop();
-        self.stop();
+        unsafe { Self::stop(self) };
         // if (self.pty) |*pty| pty.deinit();
         // (PORT NOTE: `take()` — the reference's `self.* = undefined` after this
         // clears `pty`; nulling it here makes deinit idempotent, so a double
@@ -3702,8 +3797,15 @@ impl Subprocess {
     /// running state.
     //
     // pub fn externalExit(self: *Subprocess) void {
-    pub fn externalExit(&mut self) {
-        self.process = None;
+    //
+    // PORT NOTE (N449, P7-W7 T5d): raw-self; the io writer thread's
+    // `threadExit` calls it while the main thread may read the pty and args.
+    // Only `process` is reached, by place.
+    ///
+    /// # Safety
+    /// `self_` must point at a live `Subprocess`.
+    pub unsafe fn externalExit(self_: *mut Subprocess) {
+        unsafe { (*self_).process = None };
     }
 
     /// Stop the subprocess. This is safe to call anytime. This will wait
@@ -3712,13 +3814,19 @@ impl Subprocess {
     /// This does not close the pty.
     //
     // pub fn stop(self: *Subprocess) void {
-    pub fn stop(&mut self) {
+    //
+    // PORT NOTE (N449, P7-W7 T5d): raw-self, as `externalExit`; only `process`
+    // is reached, by place.
+    ///
+    /// # Safety
+    /// `self_` must point at a live `Subprocess`.
+    pub unsafe fn stop(self_: *mut Subprocess) {
         // (Test builds only: count the calls, so the UD102 test can check that
         // the drain ran before this.)
         #[cfg(test)]
         tests::STOP_CALLS.with(|c| c.set(c.get() + 1));
         // switch (self.process orelse return) {
-        if let Some(process) = &mut self.process {
+        if let Some(process) = unsafe { &mut (*self_).process } {
             match process {
                 // .fork_exec => |*cmd| {
                 Process::ForkExec(cmd) => {
@@ -3766,7 +3874,7 @@ impl Subprocess {
             return;
         }
 
-        self.process = None;
+        unsafe { (*self_).process = None };
     }
 
     /// Resize the pty subprocess. This is safe to call anytime.
@@ -3776,16 +3884,25 @@ impl Subprocess {
     //     grid_size: renderer.GridSize,
     //     screen_size: renderer.ScreenSize,
     // ) !void {
-    pub fn resize(
-        &mut self,
+    //
+    // PORT NOTE (N449, P7-W7 T5d): raw-self. The io writer thread resizes
+    // while the main thread reads `args` (close-confirm) and the pty
+    // (`getProcessInfo`), so only the fields the reference touches are
+    // reached, by place, and the pty through `&Pty` (`Pty::setSize` is `&self`;
+    // see its note).
+    ///
+    /// # Safety
+    /// `self_` must point at a live `Subprocess`.
+    pub unsafe fn resize(
+        self_: *mut Subprocess,
         grid_size: GridSize,
         screen_size: ScreenSize,
     ) -> Result<(), crate::Error> {
-        self.grid_size = grid_size;
-        self.screen_size = screen_size;
+        unsafe { (*self_).grid_size = grid_size };
+        unsafe { (*self_).screen_size = screen_size };
 
         // if (self.pty) |*pty| {
-        if let Some(pty) = &mut self.pty {
+        if let Some(pty) = unsafe { &(*self_).pty } {
             // It is theoretically possible for the grid or screen size to
             // exceed u16, although the terminal in that case isn't very
             // usable. This should be protected upstream but we still clamp
@@ -3822,14 +3939,25 @@ impl Subprocess {
     //
     // PORT NOTE: split into the two concrete accessors (rustty-os pty.rs
     // precedent; see `Exec::getForegroundPid`).
-    pub fn getForegroundPid(&mut self) -> Option<u64> {
-        let pty = self.pty.as_mut()?;
+    //
+    // PORT NOTE (N449, P7-W7 T5d): raw-self (the main thread's query overlaps
+    // the io writer thread's `resize` / `threadExit`); only `pty` is reached,
+    // through `&Pty` (the pty's process-info accessors are `&self`).
+    ///
+    /// # Safety
+    /// `self_` must point at a live `Subprocess`.
+    pub unsafe fn getForegroundPid(self_: *mut Subprocess) -> Option<u64> {
+        let pty = unsafe { (*self_).pty.as_ref() }?;
         pty.getForegroundPid()
     }
 
     /// See [`Subprocess::getForegroundPid`].
-    pub fn getTtyName(&mut self) -> Option<&CStr> {
-        let pty = self.pty.as_mut()?;
+    ///
+    /// # Safety
+    /// As [`Subprocess::getForegroundPid`]; the caller picks `'a` no longer
+    /// than the `Subprocess` (and its pty) lives.
+    pub unsafe fn getTtyName<'a>(self_: *mut Subprocess) -> Option<&'a CStr> {
+        let pty = unsafe { (*self_).pty.as_ref() }?;
         pty.getTtyName()
     }
 }
@@ -7043,7 +7171,7 @@ mod tests {
 
         // stop() sends SIGHUP to the child's process group and reaps it (must
         // NOT hang — the child setsid'd in childPreExec so getpgid resolves).
-        subprocess.stop();
+        unsafe { Subprocess::stop(&mut subprocess) };
         assert!(subprocess.process.is_none(), "stop() clears the process");
 
         // The child is reaped, so every slave fd is closed and the drainer has
@@ -7165,7 +7293,7 @@ mod tests {
             }
         });
 
-        exec.subprocess.stop();
+        unsafe { Subprocess::stop(&mut exec.subprocess) };
         drainer.join().expect("drainer join");
         // SAFETY: the master fd is ours and is closed exactly once.
         unsafe { libc::close(fds.read) };
@@ -7349,6 +7477,70 @@ mod tests {
     static KAT_POST_FORK_CALLS: std::sync::atomic::AtomicUsize =
         std::sync::atomic::AtomicUsize::new(0);
 
+    /// PORT NOTE: reference defect (R13), UD367. The process-info accessors
+    /// answer `None` while the io thread's `start` has written the pty but not
+    /// yet published it (`Exec::pty_ready`), and answer from the pty once it
+    /// is published. On the reference's shape (no flag, `getProcessInfo`
+    /// reads `self.pty` directly) the first assertions fail: the main thread
+    /// sees the pty mid-publication.
+    #[test]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg_attr(miri, ignore)] // opens a real pty
+    fn ud367_process_info_waits_for_thread_enter_to_publish_the_pty() {
+        use allocator_api2::alloc::Global;
+
+        let cfg = Config {
+            command: Some(configpkg::command::Command::Shell(b"exit 0".to_vec())),
+            env: EnvMap::new(),
+            env_override: configpkg::RepeatableStringMap::default(),
+            shell_integration: configpkg::value_types::ShellIntegration::None,
+            shell_integration_features: configpkg::value_types::ShellIntegrationFeatures::default(),
+            cursor_blink: None,
+            working_directory: None,
+            resources_dir: None,
+            term: b"xterm-256color".to_vec(),
+            rt_pre_exec_info: RtPreExecInfo::default(),
+            rt_post_fork_info: RtPostForkInfo::default(),
+        };
+        let mut exec = Exec::init(Global, cfg).expect("Exec::init");
+        let exec_ptr: *mut Exec = &mut exec;
+
+        // Before `start`: nothing to report (the reference agrees).
+        assert!(unsafe { Exec::getTtyName(exec_ptr) }.is_none());
+        assert!(unsafe { Exec::getForegroundPid(exec_ptr) }.is_none());
+
+        // `start` has written the pty (the part of `Subprocess.start` the
+        // main thread races), but `threadEnter` has not published it yet.
+        let ws = ptypkg::winsize {
+            ws_row: 24,
+            ws_col: 80,
+            ws_xpixel: 800,
+            ws_ypixel: 480,
+        };
+        exec.subprocess.pty = Some(ptypkg::Pty::open(ws).expect("Pty::open"));
+        assert!(
+            unsafe { Exec::getTtyName(exec_ptr) }.is_none(),
+            "the tty name must wait for threadEnter to publish the pty"
+        );
+        assert!(
+            unsafe { Exec::getForegroundPid(exec_ptr) }.is_none(),
+            "the foreground pid must wait for threadEnter to publish the pty"
+        );
+
+        // Published (`threadEnter`'s `Release` store after `start`): the
+        // accessors answer from the pty, as the reference does after `start`.
+        exec.pty_ready
+            .store(true, core::sync::atomic::Ordering::Release);
+        let name = unsafe { Exec::getTtyName(exec_ptr) }
+            .expect("the tty name once the pty is published")
+            .to_bytes()
+            .to_vec();
+        assert!(name.starts_with(b"/dev/"), "tty name {name:?}");
+
+        exec.deinit();
+        assert!(!exec.pty_ready.load(core::sync::atomic::Ordering::Relaxed));
+    }
+
     /// Stands in for `apprt.runtime.pre_exec.preExec` (`Exec.zig:1034`). Runs in
     /// the FORKED CHILD, so it does nothing observable and does not exit.
     #[cfg(target_os = "macos")]
@@ -7436,7 +7628,7 @@ mod tests {
             "the installed rt_post_fork hook must be called by Command::start"
         );
 
-        subprocess.stop();
+        unsafe { Subprocess::stop(&mut subprocess) };
         // SAFETY: `fds.read` is the live pty master this KAT owns; closing it
         // once, after `stop()` reaped the child, leaks nothing.
         unsafe {
@@ -7926,7 +8118,7 @@ mod tests {
         // Start the subprocess + wire the xev handles (+ spawn the REAL read
         // thread). SAFETY: `io_ptr` outlives the read thread (joined in threadExit);
         // `td` is frame-pinned for the loop's life.
-        unsafe { exec.threadEnter(Global, io_ptr, &mut td) }.expect("threadEnter");
+        unsafe { Exec::threadEnter(&mut exec, Global, io_ptr, &mut td) }.expect("threadEnter");
 
         // The pty master (parent side; both read + write ends of PtyFds). The read
         // thread is its sole reader now; we only keep it to close at teardown.
@@ -7939,8 +8131,7 @@ mod tests {
         // pools -> Stream::queue_write -> loop). cat echoes it back on the pty; the
         // read thread reads it and `processOutput` commits it to the Screen.
         const MARK: &[u8] = b"RUSTTY_B2_MARK\n";
-        exec.queueWrite(Global, &mut td, MARK, false)
-            .expect("queueWrite");
+        Exec::queueWrite(&mut exec, Global, &mut td, MARK, false).expect("queueWrite");
 
         // Bounded pump: NoWait ticks (to flush the write) + poll the Screen + a
         // wall-clock deadline.
@@ -7971,7 +8162,7 @@ mod tests {
 
         // Teardown: reap cat + write the quit pipe + join the read thread (so
         // nothing dereferences `io` after this).
-        exec.threadExit(&mut td);
+        unsafe { Exec::threadExit(&mut exec, &mut td) };
         // Close the pty master (never closed by deinit) and free the ThreadData.
         unsafe {
             libc::close(master);
@@ -8048,7 +8239,7 @@ mod tests {
         STOPS_BEFORE_DRAIN.with(|c| c.set(None));
         THREAD_ENTER_FAILURE.with(|f| f.borrow_mut().clear());
         FAIL_READ_THREAD_SPAWN.with(|f| f.set(true));
-        let result = unsafe { exec.threadEnter(Global, t.io, &mut td) };
+        let result = unsafe { Exec::threadEnter(&mut exec, Global, t.io, &mut td) };
         FAIL_READ_THREAD_SPAWN.with(|f| f.set(false));
 
         assert!(
@@ -8246,7 +8437,7 @@ mod tests {
             }),
             mailbox: std::ptr::null_mut(),
         };
-        unsafe { exec.threadEnter(Global, t.io, &mut td) }.expect("threadEnter");
+        unsafe { Exec::threadEnter(&mut exec, Global, t.io, &mut td) }.expect("threadEnter");
         let pid = match &exec.subprocess.process {
             Some(Process::ForkExec(cmd)) => cmd.pid.expect("spawned child has a pid"),
             _ => panic!("expected a fork/exec child"),
@@ -8272,7 +8463,7 @@ mod tests {
         let was_exited = exited(&td);
         let codes = CHILD_EXITED_CODES.with(|v| v.borrow().clone());
 
-        exec.threadExit(&mut td);
+        unsafe { Exec::threadExit(&mut exec, &mut td) };
         unsafe {
             libc::close(master);
         }
@@ -8768,16 +8959,19 @@ mod tests {
         let mut exec = Exec::init(Global, cfg).expect("Exec::init");
         // `initTerminalIo`'s initial resize from the terminal (80x24), which
         // runs before `threadEnter`; ConPTY rejects the default 0x0 size.
-        exec.resize(
-            GridSize {
-                columns: 80,
-                rows: 24,
-            },
-            ScreenSize {
-                width: 800,
-                height: 480,
-            },
-        )
+        unsafe {
+            Exec::resize(
+                &mut exec,
+                GridSize {
+                    columns: 80,
+                    rows: 24,
+                },
+                ScreenSize {
+                    width: 800,
+                    height: 480,
+                },
+            )
+        }
         .expect("resize");
         let mut loop_ = xev::Loop::init(xev::Options::default()).expect("Loop::init");
         let loop_ptr: *mut xev::Loop = std::ptr::addr_of_mut!(loop_);
@@ -8794,7 +8988,7 @@ mod tests {
 
         // N354: on failure, name the step that failed and its error.
         THREAD_ENTER_FAILURE.with(|f| f.borrow_mut().clear());
-        if let Err(e) = unsafe { exec.threadEnter(Global, io_ptr, &mut td) } {
+        if let Err(e) = unsafe { Exec::threadEnter(&mut exec, Global, io_ptr, &mut td) } {
             let steps = THREAD_ENTER_FAILURE.with(|f| f.borrow().clone());
             panic!("threadEnter: {e:?}; failed steps (innermost first): {steps:?}");
         }
@@ -8816,7 +9010,7 @@ mod tests {
         let screen = String::from_utf8_lossy(&t.screen_dump()).into_owned();
         eprintln!("screen: {screen:?}");
 
-        exec.threadExit(&mut td);
+        unsafe { Exec::threadExit(&mut exec, &mut td) };
         td.deinit();
         loop_.deinit();
         exec.deinit();

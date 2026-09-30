@@ -58,12 +58,33 @@ mailbox pointer, the renderer wakeup pointer, a copy of the surface mailbox) is 
 callback never dereferences the surface. `Search::deinit` frees it once after the join, and the
 `Thread::init` and spawn failure paths free it when no thread ran.
 
-## N449 (OPEN, not the Surface)
+## N449 (CLOSED in P7-W7 T5d, not the Surface)
 
-The io writer thread calls `&mut self` `Termio` methods (`focusGained`, `resize`, `changeConfig`,
-`sizeReport`, ...). Each is a protected Unique over the whole `Termio`, terminal included, while the
-io read thread writes the terminal under the mutex (`processOutput`, raw-self). This is independent
-of the surface layout. Fix direction: the `processOutput` shape (raw-self, narrow access).
+The io writer thread called `&mut self` `Termio` methods (`focusGained`, `resize`, `changeConfig`,
+`sizeReport`, `queueWrite`, ..., and `threadExit` after its loop). Each was a protected Unique over
+the whole `Termio`, terminal included, while the io read thread writes the terminal under the mutex
+(`processOutput`, raw-self). This is independent of the surface layout. The same methods reached the
+backend through `&mut Backend` -> `&mut Exec` -> `&mut Subprocess` -> `&mut Pty` (`resize` ->
+`setSize`, `threadExit` -> `stop`), while the main thread read the backend: `getForegroundPid`,
+`getTtyName` (which fills the pty's tty-name cache) and the close-confirm read of
+`subprocess.args` (a whole `&Backend`).
+
+The fix (T5d), modelled by `run_n449`:
+
+- every io writer-thread `Termio` method is raw-self (`self_: *mut Termio`) and reaches only the
+  fields the reference touches, by place; `changeConfig` borrows the terminal only after the stream
+  handler has written it through its own pointer;
+- `Backend` is `#[repr(transparent)]`, and `Backend::exec_ptr` is the `.exec => |*exec|` projection
+  as a pointer cast; the cross-thread `Backend` / `Exec` / `Subprocess` methods are raw-self;
+- the pty's `setSize` / `getForegroundPid` / `getTtyName` take `&self`, and its tty-name cache is
+  interior-mutable (`UnsafeCell` buffer, `Cell` length), so a shared pty reference covers none of
+  the bytes the main thread writes;
+- the close-confirm read borrows `subprocess.args` only.
+
+The partial arms each keep one shipped piece, to show every piece is needed:
+`n449_main_backend_mut` (the main thread's T5c `&mut Backend` chain), `n449_pty_set_size_mut`
+(`setSize(&mut self)`), `n449_close_confirm_backend_ref` (a whole `&Backend`), and
+`n449_change_config_terminal_early` (the terminal borrowed before the handler writes it).
 
 ## The model
 
@@ -97,6 +118,25 @@ each owner (ManuallyDrop, dealloc, MaybeUninit) and every init-error stage (`Ren
 | `n444_search_cb_ctx` (fix round 1: the spawn-time context) | CLEAN | CLEAN |
 | `n449_writer_termio_mut` | UB | UB |
 | `n449_writer_termio_raw` | CLEAN | CLEAN |
+| `n449_shipped` (T5d: the shipped writer methods, backend chain and close-confirm read) | UB | UB |
+| `n449_main_backend_mut` (T5d partial: main thread's `&mut Backend` chain) | UB | UB |
+| `n449_pty_set_size_mut` (T5d partial: `Pty::setSize(&mut self)`) | UB | UB |
+| `n449_close_confirm_backend_ref` (T5d partial: a whole `&Backend`) | UB | UB |
+| `n449_change_config_terminal_early` (T5d negative: terminal borrowed before the handler write) | UB | UB |
+| `n449_fixed` (T5d: the fix) | CLEAN | CLEAN |
+| `ud367_start_unordered` (T5d fix round 1: `start` writes the pty, main reads it) | UB | UB |
+| `ud367_ready_in_subprocess` (the flag inside `Subprocess`, under `start`'s `&mut`) | UB | CLEAN |
+| `ud367_ready_in_exec` (the fix: `Exec.pty_ready`, Release / Acquire) | CLEAN | CLEAN |
+| `ud368_size_before_lock` (T5d fix round 1: `resize` stores `size` before the mutex) | UB | UB |
+| `ud368_size_under_lock` (the fix: the store inside the mutex section) | CLEAN | CLEAN |
+
+UD367 and UD368 (fix round 1, ruling 52) are upstream data races, not aliasing artefacts: the
+unordered arms race on plain reads and writes. `run_ud367` models `Exec::threadEnter`'s
+`subprocess.start` against a main-thread `getTtyName` / `getForegroundPid`; `run_ud368` models
+`Termio::resize`'s `size` store against the read thread's `.enable_mode_3` read through the stream
+handler's `size` pointer, under the renderer mutex. `ud367_ready_in_subprocess` under SB: "Data race
+detected between (1) atomic load on thread `main` and (2) retag write of type `Ud367Subprocess`",
+which is why the flag lives in `Exec`.
 
 - The inline and `termio_mut` verdicts are data races between the main thread's retag and the
   other thread's access (SB: "retag write" vs a non-atomic read; TB: "retag read" vs a non-atomic
@@ -105,6 +145,13 @@ each owner (ManuallyDrop, dealloc, MaybeUninit) and every init-error stage (`Ren
   strongly protected". TB tolerates it: the protected `&mut Mailbox` is never written.
 - The N449 verdicts are the same data race, between the writer thread's `&mut Termio` retag and the
   read thread's terminal write.
+- T5d: `n449_shipped` under SB: "not granting access to tag … because that would remove
+  [SharedReadOnly …] which is strongly protected"; under TB a data race between the main thread's
+  terminal write and the writer's `N449Termio` retag. The three partial arms are data races between a
+  retag of `N449Backend` / `Option<N449Pty>` on one thread and a non-atomic access on the other.
+  `n449_change_config_terminal_early` is single-thread aliasing: the handler's write through its own
+  pointer invalidates the earlier terminal borrow (SB: "tag does not exist in the borrow stack"; TB:
+  "write access through … is forbidden").
 - `n444_search_cb_reads_surface` under SB: "Data race detected between (1) retag write on thread
   `main` and (2) retag read of type `ThreadSharedBox<RenderThread>` on thread `unnamed-1`".
 - One SB run of `n444_inline_search_state` printed a many-seeds child `Bus error: 10`; its log
