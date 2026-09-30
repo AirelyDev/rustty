@@ -256,6 +256,24 @@ extern "C" fn cb_action(_app: *mut App, t: TargetC, a: ActionC) -> bool {
             }
             Recorded::Other(ActionKey::ResetWindowSize)
         }
+        ActionKey::ResizeWindow => {
+            // SAFETY: the key names the live union arm.
+            let v = unsafe { a.value.resize_window };
+            // Resize the window the way the Swift host does, synchronously
+            // inside this callback: `resizeWindow(_:target:v:)` ->
+            // `TerminalController.resizeWindow(_:to:)` ->
+            // `window.setFrame(frame, display: true)`, whose layout pass calls
+            // `rustty_surface_set_size` on this same surface with the view's
+            // new backing size (points times the content scale, 2.0 here).
+            if t.key == TargetKey::Surface {
+                // SAFETY: a surface target carries the live embedded surface.
+                let surface = unsafe { t.value.surface } as *mut Surface;
+                // SAFETY: `surface` is live for the duration of the callback.
+                unsafe { rustty_surface_set_size(surface, v.width * 2, v.height * 2) };
+                RESIZED.with(|c| c.set(c.get() + 1));
+            }
+            Recorded::ResizeWindow(v.width, v.height)
+        }
         ActionKey::ReloadConfig => {
             // The Swift host's `configReload` -> `reloadConfig(surface:soft:)`
             // (Rustty.App.swift:164-168): for a surface target it calls
@@ -288,6 +306,8 @@ enum Recorded {
     GotoSplit(GotoSplit),
     /// `reload_config`, with its `soft` flag.
     ReloadConfig(bool),
+    /// `resize_window`, with its `width` and `height` in points.
+    ResizeWindow(u32, u32),
     Other(ActionKey),
 }
 
@@ -834,6 +854,95 @@ fn color_scheme_soft_reload_host_callback_updates_the_target_surface() {
         n,
         RELOADED.with(|c| c.get()),
         "an unchanged scheme does not reload"
+    );
+}
+
+// 714fe9b90 (P7-W9 T2): CSI 8 ; rows ; columns t performs `resize_window`,
+// and the macOS host's handler resizes the window synchronously inside the
+// action callback: `setFrame(display: true)` lays the view out, which calls
+// `rustty_surface_set_size` on the target surface (`updateSize` ->
+// `sizeCallback`, a write to the core surface the `Target` points at). Core
+// `resizeWindow` is raw-self and `Target::Surface` is a raw pointer, so no
+// reference is live across that write (N456, P7-W6 T3; proof
+// `.port/phase-2/mirihar-n456`, `n456_fixed_resize_window`). Miri cannot see
+// across this FFI; the test drives the real route (child output -> IO thread
+// -> surface mailbox -> `rustty_app_tick` -> `handleMessage`) and proves the
+// re-entrant write runs and lands: the grid ends at the requested size.
+#[test]
+fn resize_window_host_callback_resizes_the_target_surface() {
+    const ROWS: u16 = 30;
+    const COLUMNS: u16 = 100;
+    let cfg = make_config_transparent_blur();
+    // SAFETY: `cfg` is a live Config; `command` and `vt_window_resize_allowed`
+    // are plain pub fields.
+    unsafe {
+        (*cfg).vt_window_resize_allowed = true;
+        (*cfg).command = Some(rustty_config::Command::Direct(vec![
+            b"/bin/sh".to_vec(),
+            b"-c".to_vec(),
+            format!("printf '\\033[8;{ROWS};{COLUMNS}t'; exec /bin/sleep 600").into_bytes(),
+        ]));
+    }
+    let Some(host) = HostedSurface::spawn_with(cfg) else {
+        eprintln!("no Metal device / app_new failed; skipping");
+        return;
+    };
+    ACTIONS.with(|v| v.borrow_mut().clear());
+    RESIZED.with(|c| c.set(0));
+
+    // SAFETY: `host.surface` is the live surface from `rustty_surface_new`.
+    let before = unsafe { rustty_surface_size(host.surface) };
+    assert_ne!(
+        (before.columns, before.rows),
+        (COLUMNS, ROWS),
+        "the requested grid must differ from the initial one, or nothing is proven"
+    );
+
+    // The child's CSI 8 t reaches the surface mailbox from the IO thread; the
+    // host's tick drains it on this thread, which runs the action callback.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while RESIZED.with(|c| c.get()) == 0 && Instant::now() < deadline {
+        // SAFETY: `host.app` is live for the surface's lifetime, and this
+        // thread is the host's main thread for it.
+        unsafe { rustty_app_tick(host.app) };
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let got = ACTIONS.with(|v| v.borrow().clone());
+    let resizes: Vec<_> = got
+        .iter()
+        .filter(|(_, r)| matches!(r, Recorded::ResizeWindow(..)))
+        .collect();
+    assert_eq!(
+        1,
+        resizes.len(),
+        "CSI 8 t performs resize_window once: {got:?}"
+    );
+    let &&(key, Recorded::ResizeWindow(width, height)) = &resizes[0] else {
+        unreachable!()
+    };
+    assert_eq!(TargetKey::Surface, key, "resize_window targets the surface");
+    assert!(
+        width > 0 && height > 0,
+        "both dimensions were requested: {width}x{height}"
+    );
+    assert_eq!(
+        1,
+        RESIZED.with(|c| c.get()),
+        "the callback re-entered rustty_surface_set_size once (N456 shape)"
+    );
+
+    // SAFETY: as above.
+    let after = unsafe { rustty_surface_size(host.surface) };
+    assert_eq!(
+        (width * 2, height * 2),
+        (after.width_px, after.height_px),
+        "the re-entrant set_size reached sizeCallback on the core surface"
+    );
+    assert_eq!(
+        (COLUMNS, ROWS),
+        (after.columns, after.rows),
+        "the window was resized to the requested grid"
     );
 }
 
