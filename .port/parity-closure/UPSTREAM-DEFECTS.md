@@ -2889,6 +2889,22 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    in `adjust`, `var new_rows: usize = @min(@divFloor(available, bytes_per_row), std.math.maxInt(size.CellCountInt));`.
 - upstream status: not reported
 
+### UD364 — a failing `grow` in `PageList.clone`'s viewport fill tears down a stale copy of the clone's pool (assert panic in safe builds; use-after-free and double free in ReleaseFast)
+
+- kind:            crash (ReleaseFast: ub)
+- upstream project: ghostty
+- severity:        low (needs an allocation failure during a clone of a region shorter than the active area)
+- reference:       `src/terminal/PageList.zig` `clone` at 12752b2ac: the local `pool` (`:1106`), its errdefers `errdefer pool.deinit()` (`:1111`) and `errdefer releasePages(&pool, page_list)` (`:1121`), `var result: PageList = .{ .pool = pool, .pages = page_list, ... }` (`:1180`, a by-value copy of both), and the viewport fill `_ = try result.grow();` (`:1201`) with those errdefers still armed. `grow` reaches `createPage` -> `result.pool.nodes.create()` -> `self.free.ensureTotalCapacity(self.gpa, self.live + 1)` (`src/datastruct/untouched_pool.zig:119`). Introduced by `e01e75bbb`/`efa3c66ed` (the pools became `UntouchedPool`s); before them the same stale copy leaked arena memory instead.
+- defect:          `grow` mutates only `result.pool`: the node pool's `live` count and its free list, which `ensureTotalCapacity` may reallocate. If `grow` then fails, the errdefers run on the stale local `pool`. `releasePages(&pool, page_list)` walks from the old first node; the nodes `grow` added are reached through the old last node's `next`, so they are not missed, but every node goes to the stale node pool, whose `free.items` may point at the free list `result.pool` already reallocated (freed) and whose `live` is short of the nodes `grow` created. `pool.deinit()` then frees that list again. If `grow`'s prune branch ran, `page_list.first` is stale too. The reallocated free list and the nodes held by `result.pool` leak.
+- ReleaseSafe:     assert panic in the stale node pool: `assert(self.free.items.len < self.live)` in `destroy` (`untouched_pool.zig:126`) once more nodes come back than the stale `live` counts, or `assert(self.live == self.free.items.len)` in `deinit` (`:82`). Found by reading, confirmed by the P7-W1 T5 review; no Zig reproduction was run.
+- ReleaseFast:     `appendAssumeCapacity` writes through the stale free-list pointer (use-after-free, or a heap overflow past the stale capacity), and `pool.deinit()` frees the reallocated list a second time (double free).
+- reachability:    an allocation failure (OOM, or an embedder's allocator failing through the C API) while cloning a region shorter than the active area whose last page is full, so `grow` must create a page. `Screen.clone` reaches it when it clones a partial region.
+- port handling:   `crates/rustty-vt/src/pagelist/access.rs` `clone` (`PORT NOTE: reference defect (R13), UD364`): in Rust the pool and list MOVE into `result`, so there is no stale copy; a failing `result.grow()` tears down `result` itself (`release_pages(&mut result.pool, &result.pages)`, then `result` drops with its pools), returning every node and page and leaking nothing.
+- parity row(s):   none; found by task P7-W1 T5 while porting `e01e75bbb`/`efa3c66ed`.
+- test:            `pagelist::tests::pagelist_teardown_after_clone_grow_failure_returns_every_node` (`pagelist/tests.rs`): a list of two-row pages, cloned from its last row so the fill must grow new pages, under an allocator that fails each allocation in turn; every failure returns `OutOfMemory` with nothing live and no pool assert. NEGATIVE CONTROL (macOS, 2026-09-29): with the plain `let _ = result.grow()?;` (no teardown) it panics `assertion failed: self.live == self.free.len()` (`untouched_pool.rs:297`).
+- proposed fix:    arm the errdefers on `result` instead of the locals once `result` is built: `errdefer result.deinit();` right after `var result`, with the earlier errdefers scoped to end there (for example by building the pages in a helper that returns the list).
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

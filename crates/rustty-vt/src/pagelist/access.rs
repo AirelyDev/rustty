@@ -1031,13 +1031,16 @@ impl PageList {
             for _ in 0..len {
                 // _ = try result.grow();
                 //
-                // PORT NOTE: the reference's errdefers here still name the
-                // local `pool` and `page_list`, which were copied into
-                // `result`, so on a grow failure they would release a stale
-                // copy of the pool (and miss the pages `grow` added). The pool
-                // moved into `result` in Rust, so the failure path tears down
-                // `result` itself: every page and node back to `result.pool`,
-                // which then drops with the rest of `result`.
+                // PORT NOTE: reference defect (R13), UD364. The reference's
+                // errdefers here still name the local `pool` and `page_list`,
+                // which were copied into `result`, so on a grow failure they
+                // hand every node (the grown ones too, through the old last
+                // node's `next`) to a stale copy of the node pool whose free
+                // list `grow` may have reallocated: an assert panic in safe
+                // builds, a use-after-free and double free in ReleaseFast. The
+                // pool moved into `result` in Rust, so the failure path tears
+                // down `result` itself: every page and node back to
+                // `result.pool`, which then drops with the rest of `result`.
                 if let Err(e) = result.grow() {
                     Self::release_pages(&mut result.pool, &result.pages);
                     result.pages = List::default();
