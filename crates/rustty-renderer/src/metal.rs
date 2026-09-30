@@ -213,7 +213,7 @@ mod tests {
         // Target::init OFFSCREEN — exercises the IOSurface CFDictionary path.
         let w = 4usize;
         let h = 4usize;
-        let mut target = Target::init(TargetOptions {
+        let target = Target::init(TargetOptions {
             device: &device,
             width: w,
             height: h,
@@ -226,19 +226,17 @@ mod tests {
         assert_eq!(target.height, h);
 
         // A no-op completion fn (the Chunk-3 `drawFrame` installs the real one).
-        unsafe fn noop_completed(
+        fn noop_completed(
             _ctx: &CompletionContext,
             _buffer: &ProtocolObject<dyn MTLCommandBuffer>,
         ) {
         }
 
-        // Frame::begin: type-erased null renderer ptr; raw `*mut` target. The raw
-        // pointer does not hold the borrow, so `target` stays usable below.
-        let target_ptr: *mut Target = &mut target;
+        // Frame::begin over a context tied to no renderer (N440: the context
+        // carries clones, not pointers), so `target` stays usable below.
         let mut frame = Frame::begin(
             FrameOptions { queue: &queue },
-            core::ptr::null_mut(),
-            target_ptr,
+            CompletionContext::detached(&target.surface),
             noop_completed,
         )
         .expect("Frame::begin");
