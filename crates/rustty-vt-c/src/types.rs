@@ -798,6 +798,27 @@ static DECLS: &[TypeDecl] = {
                 ]
             )
         ),
+        // .initStruct("GhosttyRenderStateOverscan", render.Overscan),
+        struct_decl!(
+            "RusttyRenderStateOverscan",
+            crate::render::Overscan,
+            fields!(
+                crate::render::Overscan,
+                [
+                    ("above", u16, above, n("u16")),
+                    ("below", u16, below, n("u16")),
+                ]
+            )
+        ),
+        // .initStruct("GhosttyRenderStateRowId", render.RowId),
+        struct_decl!(
+            "RusttyRenderStateRowId",
+            crate::render::RowId,
+            fields!(
+                crate::render::RowId,
+                [("bits", [u64; 2], bits, Ty::Array("u64", 2)),]
+            )
+        ),
         // .initStruct("GhosttyRenderStateRowSelection", render.RowSelection),
         struct_decl!(
             "RusttyRenderStateRowSelection",
@@ -2005,6 +2026,8 @@ static DECLS: &[TypeDecl] = {
                     ("cursor_viewport_wide_tail", CursorViewportWideTail),
                     ("cursor", Cursor),
                     ("colors", Colors),
+                    ("overscan", Overscan),
+                    ("overscan_request", OverscanRequest),
                 ]
             )
         ),
@@ -2021,7 +2044,10 @@ static DECLS: &[TypeDecl] = {
         enum_decl!(
             "RusttyRenderStateOption",
             "RUSTTY_RENDER_STATE_OPTION_",
-            enum_values!(crate::render::SetOption, [("dirty", Dirty)])
+            enum_values!(
+                crate::render::SetOption,
+                [("dirty", Dirty), ("overscan", Overscan),]
+            )
         ),
         // .initEnum("GhosttyRenderStateRowCellsData", render.RowCellsData, "GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_"),
         enum_decl!(
@@ -2056,6 +2082,8 @@ static DECLS: &[TypeDecl] = {
                     ("cells", Cells),
                     ("selection", Selection),
                     ("cells_raw", CellsRaw),
+                    ("viewport_y", ViewportY),
+                    ("id", Id),
                 ]
             )
         ),
@@ -3442,6 +3470,68 @@ mod tests {
         );
         // try std.testing.expect(value.get("arms").?.object.get("NONE").? == .null);
         assert!(get(get(value, "arms").as_object(), "NONE").is_null());
+    }
+
+    // test "manifest describes render state overscan types" {
+    #[test]
+    fn manifest_describes_render_state_overscan_types() {
+        let root = parsed_json();
+        let types = manifest_types(&root);
+
+        // const overscan = manifest_types.get("GhosttyRenderStateOverscan").?.object;
+        let overscan = get(types, "RusttyRenderStateOverscan").as_object();
+        // try std.testing.expectEqual(@as(i64, 4), overscan.get("size").?.integer);
+        assert_eq!(4i64, get(overscan, "size").as_int());
+        // const overscan_fields = overscan.get("fields").?.object;
+        let overscan_fields = get(overscan, "fields").as_object();
+        // try std.testing.expectEqual(@as(i64, 0), overscan_fields.get("above").?.object.get("offset").?.integer);
+        assert_eq!(
+            0i64,
+            get(get(overscan_fields, "above").as_object(), "offset").as_int()
+        );
+        // try std.testing.expectEqual(@as(i64, 2), overscan_fields.get("below").?.object.get("offset").?.integer);
+        assert_eq!(
+            2i64,
+            get(get(overscan_fields, "below").as_object(), "offset").as_int()
+        );
+
+        // const row_id = manifest_types.get("GhosttyRenderStateRowId").?.object;
+        let row_id = get(types, "RusttyRenderStateRowId").as_object();
+        // try std.testing.expectEqual(@as(i64, 16), row_id.get("size").?.integer);
+        assert_eq!(16i64, get(row_id, "size").as_int());
+        // const bits = row_id.get("fields").?.object.get("bits").?.object;
+        let bits = get(get(row_id, "fields").as_object(), "bits").as_object();
+        // try std.testing.expectEqual(@as(i64, 0), bits.get("offset").?.integer);
+        assert_eq!(0i64, get(bits, "offset").as_int());
+        // try std.testing.expectEqualStrings("array", bits.get("type").?.string);
+        assert_eq!("array", get(bits, "type").as_str());
+        // try std.testing.expectEqual(@as(i64, 2), bits.get("count").?.integer);
+        assert_eq!(2i64, get(bits, "count").as_int());
+
+        // const data_values = manifest_types.get("GhosttyRenderStateData").?.object
+        //     .get("values").?.object;
+        let data_values =
+            get(get(types, "RusttyRenderStateData").as_object(), "values").as_object();
+        // try std.testing.expectEqual(@as(i64, 20), data_values.get("OVERSCAN").?.integer);
+        assert_eq!(20i64, get(data_values, "OVERSCAN").as_int());
+        // try std.testing.expectEqual(@as(i64, 21), data_values.get("OVERSCAN_REQUEST").?.integer);
+        assert_eq!(21i64, get(data_values, "OVERSCAN_REQUEST").as_int());
+
+        // const row_data_values = manifest_types.get("GhosttyRenderStateRowData").?.object
+        //     .get("values").?.object;
+        let row_data_values =
+            get(get(types, "RusttyRenderStateRowData").as_object(), "values").as_object();
+        // try std.testing.expectEqual(@as(i64, 6), row_data_values.get("VIEWPORT_Y").?.integer);
+        assert_eq!(6i64, get(row_data_values, "VIEWPORT_Y").as_int());
+        // try std.testing.expectEqual(@as(i64, 7), row_data_values.get("ID").?.integer);
+        assert_eq!(7i64, get(row_data_values, "ID").as_int());
+
+        // const option_values = manifest_types.get("GhosttyRenderStateOption").?.object
+        //     .get("values").?.object;
+        let option_values =
+            get(get(types, "RusttyRenderStateOption").as_object(), "values").as_object();
+        // try std.testing.expectEqual(@as(i64, 1), option_values.get("OVERSCAN").?.integer);
+        assert_eq!(1i64, get(option_values, "OVERSCAN").as_int());
     }
 
     // test "manifest describes the complete packed cell layout" {
