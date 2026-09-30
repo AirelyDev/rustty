@@ -9400,7 +9400,8 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **id**: N459. P7-W6 T3 fix round 1 (ruling 57, review minor 2). **severity**: low. It is
   aliasing-model UB only if the macOS `initial_size` handler re-enters the surface synchronously, which
   is unverified; no miscompile has been observed. **kind**: port soundness (a function-argument
-  protector). **Not upstream**: Zig's `*Surface` has no protector. **state**: OPEN → P7-W12 T0.
+  protector). **Not upstream**: Zig's `*Surface` has no protector. **state**: CLOSED by P7-W12 T0
+  (not re-entrant; evidence below).
 - **shape**:
   - `Surface::recomputeInitialSize(&mut self)` performs `initial_size` with the raw target (N456).
     Its receiver is a protected Unique across the callback.
@@ -9421,6 +9422,29 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   - If it is re-entrant, make `recomputeInitialSize` and its callers raw-self (`setCellSize`,
     `setFontSize` and their `&mut self` callers), and prove it on `.port/phase-2/mirihar-n456`.
   - If it is not re-entrant, close N459 with the evidence.
+- **closed (P7-W12 T0): no host re-enters the surface under `recomputeInitialSize` or its callers.**
+  Traced statically in the Swift and GTK sources:
+  - macOS `initial_size`: `Rustty.App.swift:2034` `setInitialSize` calls `surfaceView(from:)`
+    (`:580`, `rustty_surface_userdata`, which reads the embedded `Surface.userdata` field, outside the
+    core surface's bytes, like every surface-targeted action) and assigns `surfaceView.initialSize`.
+    That is a plain stored `var initialSize: NSSize?` (`SurfaceView_AppKit.swift:121`): no `didSet`,
+    not `@Published`, so the assignment runs no code and sends no `objectWillChange` (the class is an
+    `ObservableObject` through `OSSurfaceView`, but only `@Published` properties publish). The
+    `idealWidth`/`idealHeight` reads (`TerminalView.swift:104-105`) and `TerminalController`'s
+    `initialContentSize`/`defaultSize` reads (`:1119`, `:1781`) happen on SwiftUI's or AppKit's own
+    later passes, not inside the setter. So no `sizeDidChange` → `rustty_surface_set_size` can run
+    while the `&mut self` receiver is protected.
+  - macOS `cell_size` (the other host callback on the `setFontSize` → `setCellSize` →
+    `recomputeInitialSize` chain): `setCellSize` (`Rustty.App.swift:2074`) defers its only write,
+    `surfaceView.cellSize = ..`, with `DispatchQueue.main.async` (`:2087`), so the `@Published`
+    `cellSize` and its `onChange` observer run after the callback has returned.
+  - GTK `initial_size` (`application.rs` `action::initial_size`) sets the surface's `default-size`
+    GObject property. Nothing connects to `notify::default-size` (the only `connect_notify_local`
+    calls in `gtk/` watch `config`, `scale`, `label`, `focused`, `mapped`, `bell-ringing`, `zoom` and
+    the key-state overlay's own properties); the window reads the property when it is presented
+    (`window.rs:1387`, `application.rs:4520`).
+  - So the protector is never violated and no raw-self rewrite is needed; `presentSurface`, the other
+    case, was already made raw-self by P7-W6 T3.
 
 ## N452 — effect callbacks that re-enter the Terminal C API reach stream/handler bytes under the protected `&mut Stream`/`&mut Handler`
 
@@ -9573,7 +9597,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 
 - **id**: N455. P7-W2 T9 (implementer concerns 2 and 3; task review; controller ruling 54). **severity**:
   low (test code only; the production paths are lifetime-tied or never dereference the userdata).
-  **state**: OPEN → P7-W12 T0.
+  **state**: CLOSED by P7-W12 T0 (`16dfbab68`).
 - **tests**:
   - `paste::tests::terminal_paste_text_and_unsafe`: a test-only helper stores `self as *mut` as the
     userdata and dereferences it while a `&mut` is live (TB only).
@@ -9582,6 +9606,23 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
     self) -> Handler<'_>` is lifetime-tied, so the compiler rejects the same interleave (TB only).
 - **fix direction**: derive every pointer the test later uses from one raw root, then re-run both tests
   under Miri SB and TB.
+- **closed (P7-W12 T0, `16dfbab68`)**:
+  - the TB mechanism, from Miri: the pointer the callee writes through (the paste reader's userdata;
+    the stream handler's terminal pointer) was minted from a `&mut` reborrow, so the test's own read
+    through the OWNER in between (`contents.reads[0]`; `encode(&source_terminal)`, `plain_string`) was
+    a foreign read that froze that tag, and the next write through it (`(*this).reads[index] += 1` at
+    `paste.rs:776`; `self.previous_char = ..` at `terminal.rs:2022`) was a write through a Frozen tag.
+  - fix: each object is reached only through one `&raw mut` root, which is also the pointer the callee
+    writes through; the test reads and writes (`reads`, `fail`, `plain_string`, the active screens,
+    `deinit`) go through that root. `Contents::request_raw(*mut Contents)` builds the request from the
+    raw root (MIME list by `addr_of!`); `request(&mut self)` delegates to it. The paste test now reuses
+    `req` after `fail = true`, as the reference does, instead of re-minting it.
+  - Miri: `cargo +nightly miri test -p rustty-vt-c --lib -- --exact
+    paste::tests::terminal_paste_text_and_unsafe` and `cargo +nightly miri test -p rustty-vt --lib --
+    --exact snapshot::codec::tests::complete_snapshot_restores_a_canonical_stream_continuation`, each
+    plain (SB) and with `MIRIFLAGS=-Zmiri-tree-borrows`: 1 passed, no UB, all four runs. The pre-fix
+    tests under TB: "write access through <tag> ... is forbidden", state Frozen (paste) and a child of
+    the conflicting tag (codec).
 
 ## N458 — a port-only string-map test dropped its `Screen` without `deinit`, tripping the W1.T5 node-pool assert
 
