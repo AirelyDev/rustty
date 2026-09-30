@@ -92,6 +92,17 @@ reports through its build-info API, the versioned install names
 and the `<MAJOR>` soname link) and the pkg-config `Version:`. It must be a
 semantic version; empty (the default) keeps the built-in version.
 
+## Cargo target directory
+
+`-DRUSTTY_CARGO_TARGET_DIR=<path>` sets the cargo target directory the library
+is built in. The default is the source tree's `target/`. The build always passes
+it to cargo as `--target-dir`, so set this option rather than putting
+`--target-dir` in `RUSTTY_CARGO_BUILD_FLAGS`. Give the build its own directory
+when other cargo builds of the same tree use different environment variables
+(the build sets `MACOSX_DEPLOYMENT_TARGET` on macOS, and
+`RUSTTY_LIB_VERSION_STRING` when given). Otherwise cargo rebuilds shared crates
+in place, and the other builds' outputs change under them.
+
 ## Cross-compilation
 
 For cross-compiling to a different Rust target triple, use

@@ -160,7 +160,9 @@ committed records named here.
   need not look for them: **N439, N445, N446, N447, N457, N460.** UD352–UD372 and
   V27–V29 have no gaps.
 - **P7-W12 T3** (the W12.T2 long-run fixes) used UD373, UD374 and N477–N482,
-  the ids its brief assigned; N466–N476 were assigned outside that task.
+  the ids its brief assigned. N466–N476 were reserved for the W12.T2 long-run
+  lanes (A, B and C) and never used, because every finding the lanes raised was
+  recorded under W12.T3's ids. They are deliberate gaps, like the ones above.
   **Next free ids: UD375, N483, V30.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging

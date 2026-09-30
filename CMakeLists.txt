@@ -20,6 +20,13 @@
 #
 #   cmake -B build -DRUSTTY_CARGO_BUILD_FLAGS="--features simd"
 #
+# Choose the cargo target directory with RUSTTY_CARGO_TARGET_DIR (the default
+# is the source tree's `target/`). The build always passes it as
+# `--target-dir`, so set this option rather than putting `--target-dir` in
+# RUSTTY_CARGO_BUILD_FLAGS:
+#
+#   cmake -B build -DRUSTTY_CARGO_TARGET_DIR=/path/to/target
+#
 # Integrating into a downstream CMake project
 # -------------------------------------------
 #
