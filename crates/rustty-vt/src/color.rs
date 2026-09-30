@@ -22,6 +22,7 @@
 // `colorpkg` (a self-import used for `colorpkg.default`) maps to `crate::color`
 // in Rust; `assert` is the `inlineAssert` quirk in rustty-util.
 
+use crate::alloc::{ABox, Allocator, OutOfMemory};
 use crate::x11_color;
 
 // PORT NOTE: the reference `assert` is `quirks.inlineAssert`, but several call
@@ -417,33 +418,115 @@ pub fn generate_256_color(
 /// A palette that can have its colors changed and reset. Purposely built
 /// for terminal color operations.
 // PORT NOTE: PartialEq is derived for the snapshot TERMINAL codec's
-// round-trip tests (Zig: `std.testing.expectEqualDeep(palette, ...)`).
-#[derive(Clone, Copy, Debug, PartialEq)]
+// round-trip tests (Zig: `std.testing.expectEqualDeep(palette, ...)`, which
+// compares `original` through its pointer). Not `Copy` since d1cd56a56
+// (DECISIONS B7): `original` may own an allocation. `Clone` deep-copies an
+// owned original into the same allocator (Zig copies the pointer; a Rust
+// clone must not alias an owned box).
+#[derive(Clone, Debug, PartialEq)]
 pub struct DynamicPalette {
     /// The current palette including any user modifications.
     pub current: Palette,
 
-    /// The original/default palette values.
-    pub original: Palette,
+    /// The original/default palette values. This points at the shared
+    /// built-in default palette unless a different default was given
+    /// (see `changeDefault`), in which case it points at an
+    /// allocator-owned copy that `deinit` frees. Sharing the built-in
+    /// default saves a full palette copy for every terminal.
+    // PORT NOTE: Zig's `*const Palette`, distinguished from `&colorpkg.default`
+    // by address (`ownedOriginal`), is the owner enum [`PaletteOriginal`]
+    // (DECISIONS B7). Read it through [`DynamicPalette::original`].
+    pub original: PaletteOriginal,
 
     /// A bitset where each bit represents whether the corresponding
     /// palette index has been modified from its default value.
     pub mask: PaletteMask,
 }
 
-impl DynamicPalette {
-    // pub const default: DynamicPalette = .init(colorpkg.default);
-    pub fn default_palette() -> DynamicPalette {
-        DynamicPalette::init(DEFAULT)
-    }
+/// The owner of [`DynamicPalette::original`]: the shared built-in default
+/// palette, or an allocator-owned copy of a different default.
+///
+/// PORT NOTE: Rust-only (DECISIONS B7). The reference keeps a `*const Palette`
+/// and recovers ownership by comparing it with `&colorpkg.default`
+/// (`ownedOriginal`, which `@constCast`s the owned copy back). The enum keeps
+/// that ownership explicit. The owned arm is `alloc.create(Palette)`; dropping
+/// it is `alloc.destroy`, through the allocator that created it.
+#[derive(Clone, Debug)]
+pub enum PaletteOriginal {
+    /// The shared built-in default palette (`&colorpkg.default`).
+    Shared(&'static Palette),
+    /// An allocator-owned copy of a non-default palette.
+    Owned(ABox<Palette>),
+}
 
-    /// Initialize a dynamic palette with a default palette.
-    pub fn init(def: Palette) -> DynamicPalette {
+impl PaletteOriginal {
+    /// The palette this points at (Zig: `original.*`).
+    #[inline]
+    pub fn get(&self) -> &Palette {
+        match self {
+            PaletteOriginal::Shared(p) => p,
+            PaletteOriginal::Owned(p) => p,
+        }
+    }
+}
+
+impl core::ops::Deref for PaletteOriginal {
+    type Target = Palette;
+
+    #[inline]
+    fn deref(&self) -> &Palette {
+        self.get()
+    }
+}
+
+impl PartialEq for PaletteOriginal {
+    // PORT NOTE: `expectEqualDeep` compares the pointees, not the pointers.
+    fn eq(&self, other: &PaletteOriginal) -> bool {
+        self.get() == other.get()
+    }
+}
+
+impl DynamicPalette {
+    /// A dynamic palette using the built-in default palette. This owns
+    /// no memory, but `deinit` is still safe to call on it.
+    // pub const default: DynamicPalette = .{
+    //     .current = colorpkg.default,
+    //     .original = &colorpkg.default,
+    //     .mask = .initEmpty(),
+    // };
+    pub fn default_palette() -> DynamicPalette {
         DynamicPalette {
-            current: def,
-            original: def,
+            current: DEFAULT,
+            original: PaletteOriginal::Shared(&DEFAULT),
             mask: PaletteMask::init_empty(),
         }
+    }
+
+    /// Initialize a dynamic palette with a default palette. The result
+    /// must be released with `deinit`. No memory is allocated if `def`
+    /// is the built-in default palette.
+    pub fn init(alloc: Allocator, def: Palette) -> Result<DynamicPalette, OutOfMemory> {
+        let mut result: DynamicPalette = DynamicPalette::default_palette();
+        result.change_default(alloc, def)?;
+        Ok(result)
+    }
+
+    pub fn deinit(&mut self, alloc: Allocator) {
+        // if (self.ownedOriginal()) |owned| alloc.destroy(owned);
+        if let Some(owned) = self.owned_original() {
+            ABox::allocator(owned).debug_assert_same(alloc);
+        }
+        // self.* = undefined;
+        // PORT NOTE: `undefined` is the no-owner default here, so the value
+        // stays safe to drop (dropping the replaced owned box is the destroy).
+        *self = DynamicPalette::default_palette();
+    }
+
+    /// The original/default palette values (Zig: `self.original.*`; its
+    /// address is Zig's pointer, `&colorpkg.default` when shared).
+    #[inline]
+    pub fn original(&self) -> &Palette {
+        self.original.get()
     }
 
     /// Set a custom color at the given palette index.
@@ -454,22 +537,67 @@ impl DynamicPalette {
 
     /// Reset the color at the given palette index to its original value.
     pub fn reset(&mut self, idx: u8) {
-        self.current[idx as usize] = self.original[idx as usize];
+        self.current[idx as usize] = self.original()[idx as usize];
         self.mask.unset(idx as usize);
     }
 
     /// Reset all colors to their original values.
     pub fn reset_all(&mut self) {
-        *self = DynamicPalette::init(self.original);
+        self.current = *self.original();
+        self.mask = PaletteMask::init_empty();
     }
 
     /// Change the default palette, but preserve the changed values.
-    pub fn change_default(&mut self, def: Palette) {
-        self.original = def;
+    ///
+    /// The built-in default palette is shared rather than copied, so
+    /// changing back to it releases any owned copy (see `resetDefault`).
+    /// Any other default is copied into memory owned by this palette,
+    /// allocated on the first change and reused after that. On allocation
+    /// failure nothing changes.
+    pub fn change_default(&mut self, alloc: Allocator, def: Palette) -> Result<(), OutOfMemory> {
+        // if (std.meta.eql(def, colorpkg.default)) return self.resetDefault(alloc);
+        if def == DEFAULT {
+            self.reset_default(alloc);
+            return Ok(());
+        }
 
+        // const owned = self.ownedOriginal() orelse try alloc.create(Palette);
+        // owned.* = def;
+        // self.original = owned;
+        match self.owned_original() {
+            Some(owned) => {
+                ABox::allocator(owned).debug_assert_same(alloc);
+                **owned = def;
+            }
+            None => {
+                self.original = PaletteOriginal::Owned(crate::alloc::try_create(alloc, def)?);
+            }
+        }
+        self.apply_default(def);
+        Ok(())
+    }
+
+    /// Change the default palette back to the built-in default palette,
+    /// preserving the changed values. This releases any owned copy and
+    /// never allocates, so it is safe to use as the fallback when
+    /// `changeDefault` fails.
+    pub fn reset_default(&mut self, alloc: Allocator) {
+        // if (self.ownedOriginal()) |owned| alloc.destroy(owned);
+        // self.original = &colorpkg.default;
+        if let Some(owned) = self.owned_original() {
+            ABox::allocator(owned).debug_assert_same(alloc);
+        }
+        // Dropping the replaced owned box is `alloc.destroy(owned)`.
+        self.original = PaletteOriginal::Shared(&DEFAULT);
+        self.apply_default(DEFAULT);
+    }
+
+    /// Rebuild the current palette from a new default, preserving the
+    /// changed values.
+    fn apply_default(&mut self, def: Palette) {
         // Fast path, the palette is usually not changed.
         if self.mask.count() == 0 {
-            self.current = self.original;
+            self.current = def;
             return;
         }
 
@@ -480,6 +608,20 @@ impl DynamicPalette {
             current[idx] = self.current[idx];
         }
         self.current = current;
+    }
+
+    /// The allocator-owned copy of the original palette, or null if the
+    /// original is the shared built-in default.
+    fn owned_original(&mut self) -> Option<&mut ABox<Palette>> {
+        // if (self.original == &colorpkg.default) return null;
+        //
+        // // Only the shared built-in default is ever const; anything else
+        // // is a copy that we allocated ourselves.
+        // return @constCast(self.original);
+        match &mut self.original {
+            PaletteOriginal::Shared(_) => None,
+            PaletteOriginal::Owned(owned) => Some(owned),
+        }
     }
 }
 
@@ -1943,15 +2085,19 @@ mod tests {
 
     #[test]
     fn dynamic_palette_init() {
-        let p: DynamicPalette = DynamicPalette::init(DEFAULT);
+        // PORT NOTE: `testing.allocator` is the Rust heap handle.
+        let alloc = Allocator::GLOBAL;
+        let mut p: DynamicPalette = DynamicPalette::default_palette();
         assert_eq!(DEFAULT, p.current);
-        assert_eq!(DEFAULT, p.original);
+        assert_eq!(DEFAULT, *p.original());
+        assert!(core::ptr::eq(&DEFAULT, p.original()));
         assert_eq!(0_usize, p.mask.count());
+        p.deinit(alloc);
     }
 
     #[test]
     fn dynamic_palette_set() {
-        let mut p: DynamicPalette = DynamicPalette::init(DEFAULT);
+        let mut p: DynamicPalette = DynamicPalette::default_palette();
         let new_color = RGB { r: 255, g: 0, b: 0 };
 
         p.set(0, new_color);
@@ -1959,12 +2105,12 @@ mod tests {
         assert!(p.mask.is_set(0));
         assert_eq!(1_usize, p.mask.count());
 
-        assert_eq!(DEFAULT[0], p.original[0]);
+        assert_eq!(DEFAULT[0], p.original()[0]);
     }
 
     #[test]
     fn dynamic_palette_reset() {
-        let mut p: DynamicPalette = DynamicPalette::init(DEFAULT);
+        let mut p: DynamicPalette = DynamicPalette::default_palette();
         let new_color = RGB { r: 255, g: 0, b: 0 };
 
         p.set(0, new_color);
@@ -1978,7 +2124,7 @@ mod tests {
 
     #[test]
     fn dynamic_palette_reset_all() {
-        let mut p: DynamicPalette = DynamicPalette::init(DEFAULT);
+        let mut p: DynamicPalette = DynamicPalette::default_palette();
         let new_color = RGB { r: 255, g: 0, b: 0 };
 
         p.set(0, new_color);
@@ -1988,13 +2134,14 @@ mod tests {
 
         p.reset_all();
         assert_eq!(DEFAULT, p.current);
-        assert_eq!(DEFAULT, p.original);
+        assert_eq!(DEFAULT, *p.original());
         assert_eq!(0_usize, p.mask.count());
     }
 
     #[test]
     fn dynamic_palette_change_default_with_no_changes() {
-        let mut p: DynamicPalette = DynamicPalette::init(DEFAULT);
+        let alloc = Allocator::GLOBAL;
+        let mut p: DynamicPalette = DynamicPalette::default_palette();
         let mut new_palette = DEFAULT;
         new_palette[0] = RGB {
             r: 100,
@@ -2002,15 +2149,94 @@ mod tests {
             b: 100,
         };
 
-        p.change_default(new_palette);
-        assert_eq!(new_palette, p.original);
+        p.change_default(alloc, new_palette).unwrap();
+        assert_eq!(new_palette, *p.original());
         assert_eq!(new_palette, p.current);
         assert_eq!(0_usize, p.mask.count());
+        p.deinit(alloc);
+    }
+
+    #[test]
+    fn dynamic_palette_change_default_shares_the_built_in_default() {
+        use crate::alloc::testing::{with_handle, Config, FailingAllocator};
+
+        // PORT NOTE: `testing.allocator` reports leaks at the end of the
+        // test. A never-failing `FailingAllocator`, whose allocated and freed
+        // bytes must match at the end, stands in for it.
+        let testing = FailingAllocator::over_heap(Config::default());
+        let testing_c = testing.allocator();
+        with_handle(&testing_c, |alloc| {
+            let mut new_palette = DEFAULT;
+            new_palette[0] = RGB {
+                r: 100,
+                g: 100,
+                b: 100,
+            };
+
+            // A custom default is an owned copy.
+            let mut p: DynamicPalette = DynamicPalette::init(alloc, new_palette).unwrap();
+            assert!(!core::ptr::eq(p.original(), &DEFAULT));
+            assert_eq!(new_palette, *p.original());
+
+            // Changing the custom default reuses the copy.
+            let owned: *const Palette = p.original();
+            new_palette[1] = RGB {
+                r: 101,
+                g: 101,
+                b: 101,
+            };
+            p.change_default(alloc, new_palette).unwrap();
+            assert!(core::ptr::eq(owned, p.original()));
+            assert_eq!(new_palette, *p.original());
+
+            // Changing back to the built-in default releases the copy (the
+            // testing allocator would report the leak) and shares it again.
+            p.change_default(alloc, DEFAULT).unwrap();
+            assert!(core::ptr::eq(&DEFAULT, p.original()));
+            assert_eq!(DEFAULT, p.current);
+            assert_eq!(testing.allocated_bytes.get(), testing.freed_bytes.get());
+
+            // resetDefault does the same directly, preserving changed values,
+            // and never allocates.
+            p.change_default(alloc, new_palette).unwrap();
+            p.set(2, RGB { r: 1, g: 2, b: 3 });
+            // PORT NOTE: the reference hands `resetDefault` a second
+            // `FailingAllocator` (fail_index 0) wrapping `testing.allocator`,
+            // which forwards the free. The port's owned copy is bound to the
+            // allocator that created it, so the same effect is had by arming
+            // this allocator to fail its next allocation instead.
+            testing.fail_index.set(testing.alloc_index.get());
+            p.reset_default(alloc);
+            assert!(!testing.has_induced_failure.get());
+            testing.fail_index.set(usize::MAX);
+            assert!(core::ptr::eq(&DEFAULT, p.original()));
+            assert_eq!(DEFAULT[0], p.current[0]);
+            assert_eq!(RGB { r: 1, g: 2, b: 3 }, p.current[2]);
+            assert!(p.mask.is_set(2));
+
+            // The built-in default never allocates.
+            let failing = FailingAllocator::over_heap(Config {
+                fail_index: 0,
+                ..Config::default()
+            });
+            let failing_c = failing.allocator();
+            with_handle(&failing_c, |failing_alloc| {
+                let mut q: DynamicPalette = DynamicPalette::init(failing_alloc, DEFAULT).unwrap();
+                assert!(core::ptr::eq(&DEFAULT, q.original()));
+                assert!(!failing.has_induced_failure.get());
+                q.deinit(failing_alloc);
+            });
+
+            p.deinit(alloc);
+        });
+        assert_eq!(testing.allocated_bytes.get(), testing.freed_bytes.get());
+        assert_eq!(testing.allocations.get(), testing.deallocations.get());
     }
 
     #[test]
     fn dynamic_palette_change_default_preserves_changes() {
-        let mut p: DynamicPalette = DynamicPalette::init(DEFAULT);
+        let alloc = Allocator::GLOBAL;
+        let mut p: DynamicPalette = DynamicPalette::default_palette();
         let custom_color = RGB { r: 255, g: 0, b: 0 };
 
         p.set(5, custom_color);
@@ -2028,18 +2254,20 @@ mod tests {
             b: 50,
         };
 
-        p.change_default(new_palette);
+        p.change_default(alloc, new_palette).unwrap();
 
-        assert_eq!(new_palette, p.original);
+        assert_eq!(new_palette, *p.original());
         assert_eq!(new_palette[0], p.current[0]);
         assert_eq!(custom_color, p.current[5]);
         assert!(p.mask.is_set(5));
         assert_eq!(1_usize, p.mask.count());
+        p.deinit(alloc);
     }
 
     #[test]
     fn dynamic_palette_change_default_with_multiple_changes() {
-        let mut p: DynamicPalette = DynamicPalette::init(DEFAULT);
+        let alloc = Allocator::GLOBAL;
+        let mut p: DynamicPalette = DynamicPalette::default_palette();
         let red = RGB { r: 255, g: 0, b: 0 };
         let green = RGB { r: 0, g: 255, b: 0 };
         let blue = RGB { r: 0, g: 0, b: 255 };
@@ -2060,13 +2288,14 @@ mod tests {
             b: 60,
         };
 
-        p.change_default(new_palette);
+        p.change_default(alloc, new_palette).unwrap();
 
         assert_eq!(new_palette[0], p.current[0]);
         assert_eq!(red, p.current[1]);
         assert_eq!(green, p.current[2]);
         assert_eq!(blue, p.current[3]);
         assert_eq!(3_usize, p.mask.count());
+        p.deinit(alloc);
     }
 
     #[test]
