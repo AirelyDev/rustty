@@ -26,6 +26,10 @@
 //!       teardown that UNREALIZES the `RenderSurface` (the render thread then
 //!       releases its GPU resources on its own context) with no `thread 'renderer'
 //!       panicked` line.
+//!   (f) the surface then CLOSES the way the app closes it: the window is
+//!       destroyed, the `Surface` GObject is finalized (no leaked reference), its
+//!       `CoreSurface::deinit` joins the threads and reaps the shell, and the apps
+//!       tear down in `run_gtk`'s order (`terminate`, then `destroy`).
 //!
 //! TEST-ONLY SCAFFOLDING, deliberately (task brief R1): the KAT hosts the real
 //! `class::Surface` in a PLAIN `adw::ApplicationWindow` rather than the real
@@ -177,6 +181,10 @@ fn first_light_renders_a_live_terminal_frame() {
     window.set_default_size(800, 480);
     window.set_content(Some(&surface));
 
+    // Stops the render thread if an assertion unwinds past the close in section 7
+    // (P7-W7 T6, N450). Declared after `core_app` and `app`, so it drops first.
+    let render_threads = gtk_live::RenderThreadGuard::new(core_ptr, [&surface]);
+
     let render_surface = gtk_live::find_render_surface(surface.upcast_ref::<gtk4::Widget>())
         .expect("the surface template contains a RenderSurface");
 
@@ -235,6 +243,8 @@ fn first_light_renders_a_live_terminal_frame() {
         )
     });
     eprintln!("FIRST-LIGHT: {kind} texture {w}x{h}, {nonzero} non-zero bytes");
+    // SAFETY: `core` is the live core surface; its shell was started by init.
+    let shell_pid = unsafe { gtk_live::shell_pid(core) };
     assert!(w > 0 && h > 0, "the texture has an extent");
 
     // ---- 4. The live shell round-trip (d): write `echo rustty-first-light\n` into
@@ -311,20 +321,19 @@ fn first_light_renders_a_live_terminal_frame() {
          threads are joined — the render-thread soundness invariant)"
     );
 
-    // OUT-OF-SCOPE GAP (characterized, NOT owned by GL-ATTACH): a FULL `drop(surface)`
-    // here — which runs the GObject finalize → `CoreSurface::deinit` → the boxed
-    // `CoreSurface` drop — aborts with `free(): invalid size` deep inside
-    // `rustty_termio::exec::Subprocess`'s `Drop`, freeing its `Vec<CString>`
-    // (subprocess args/env) with a mismatched size. That is a TERMIO teardown
-    // double-free (an explicit `deinit` followed by a Rust `Drop` over the same
-    // buffers), entirely in `rustty-termio`, with NO GL / renderer / EGL frame on the
-    // aborting stack. It is left to its owner, so we `forget` the live objects
-    // (their threads + the `/bin/sh` reclaimed by the OS at process exit).
-    // SAFETY: `core` is the live core surface; stopped once, before exit.
-    unsafe { gtk_live::stop_render_thread(core) };
-    std::mem::forget(window);
-    std::mem::forget(surface);
-    std::mem::forget(application);
-    std::mem::forget(app);
-    std::mem::forget(core_app);
+    // ---- 7. (f) Close the surface the way the app does, then tear the apps down
+    //         in `run_gtk`'s order. Destroying the window and dropping the last
+    //         reference finalizes the `Surface` GObject: `deleteSurface`, then
+    //         `CoreSurface::deinit` (stop and join the render and io threads, kill
+    //         and reap the shell), then the core surface is freed without drop
+    //         glue. `close_surface` asserts the finalize happened and the shell is
+    //         gone. (This KAT used to `forget` everything here, to dodge a termio
+    //         `Subprocess` double-free on this path; that was fixed by the
+    //         consuming `Subprocess::deinit` and the free-without-drop in the GTK
+    //         finalize. P7-W7 T6 re-checked it and closes the surface normally.)
+    gtk_live::close_surface(&ctx, window, surface, shell_pid);
+    gtk_live::close_other_windows(&ctx);
+    drop(render_threads);
+    app.terminate();
+    core_app.destroy();
 }

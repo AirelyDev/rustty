@@ -104,6 +104,10 @@ fn glyph_dump() {
 
     window.present();
 
+    // Stops the render thread when it drops, also when an assertion panics
+    // (P7-W7 T6, N450). Declared after `core_app` and `app`, so it drops first.
+    let render_threads = gtk_live::RenderThreadGuard::new(core_ptr, [&surface]);
+
     let ctx = glib::MainContext::default();
     let keepalive =
         glib::timeout_add_local(Duration::from_millis(50), || glib::ControlFlow::Continue);
@@ -185,11 +189,13 @@ fn glyph_dump() {
         rgba.len()
     );
 
-    // Clean teardown (mirrors first_light).
+    // Clean teardown (mirrors first_light): run the loop to a scheduled quit,
+    // then close the surface the way the app does and tear the apps down in
+    // `run_gtk`'s order (P7-W7 T6).
+    // SAFETY: `core` is the live core surface; its shell was started by init.
+    let shell_pid = unsafe { gtk_live::shell_pid(core) };
     keepalive.remove();
     drop(render_surface);
-    // SAFETY: `core` is the live core surface; stopped once, after the last frame.
-    unsafe { gtk_live::stop_render_thread(core) };
     {
         let app_weak = application.downgrade();
         glib::timeout_add_local_once(Duration::from_millis(150), move || {
@@ -204,4 +210,9 @@ fn glyph_dump() {
         "App::run returns Ok: {:?}",
         run_result.err()
     );
+    gtk_live::close_surface(&ctx, window, surface, shell_pid);
+    gtk_live::close_other_windows(&ctx);
+    drop(render_threads);
+    app.terminate();
+    core_app.destroy();
 }

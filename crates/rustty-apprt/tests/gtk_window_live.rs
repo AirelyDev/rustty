@@ -21,6 +21,9 @@
 //!       render contract runs; P7-W7 T2, `2f0b65346`).
 //!   (d) the shell is LIVE — `echo rustty-window-live\n` written into the pty
 //!       round-trips through the io thread into the core `Screen`.
+//!   (e) the surface CLOSES the way the app closes it: the window is destroyed,
+//!       the `Surface` GObject is finalized (no leaked reference), and its shell
+//!       is killed and reaped.
 //!
 //! The texture inspection and the run notes are `gtk_first_light.rs`'s — see its
 //! module doc for the full rationale. Run with:
@@ -157,6 +160,10 @@ fn window_hosts_a_live_terminal() {
 
     window.present();
 
+    // Stops the render thread if an assertion unwinds past the close below
+    // (P7-W7 T6, N450). Declared after `core_app` and `app`, so it drops first.
+    let render_threads = gtk_live::RenderThreadGuard::new(core_ptr, [&surface]);
+
     // Keepalive + render pump (the first-light loop-driving discipline).
     let ctx = glib::MainContext::default();
     let keepalive =
@@ -244,21 +251,25 @@ fn window_hosts_a_live_terminal() {
         String::from_utf8_lossy(&unsafe { screen_dump(core) })
     );
 
-    // Teardown: stop the helper timers, then `forget` the live objects — the
-    // documented OUT-OF-SCOPE termio `Subprocess::drop` teardown gap
-    // (`gtk_first_light.rs` section 6): a full drop of a live-shell surface hits
-    // a pre-existing termio double-free entirely outside this tier. The OS
-    // reclaims the threads + `/bin/sh` at process exit.
+    // ---- 6. (e) Teardown: close the surface the way the app does. Stop the
+    //         helper timer, drop the KAT's other widget references, destroy the
+    //         window, and let the last reference finalize the `Surface`:
+    //         `deleteSurface`, then `CoreSurface::deinit` (stop and join the
+    //         threads, kill and reap the shell), then the core surface is freed.
+    //         `close_surface` asserts both. The apps then tear down in
+    //         `run_gtk`'s order. (This KAT used to `forget` everything here, to
+    //         dodge a termio `Subprocess` double-free that has since been fixed;
+    //         P7-W7 T6.) ----
+    // SAFETY: `core` is the live core surface; its shell was started by init.
+    let shell_pid = unsafe { gtk_live::shell_pid(core) };
     keepalive.remove();
     drop(render_surface);
-    // SAFETY: `core` is the live core surface; stopped once, before exit.
-    unsafe { gtk_live::stop_render_thread(core) };
-    std::mem::forget(surface);
-    std::mem::forget(tab);
-    std::mem::forget(page);
-    std::mem::forget(tab_view);
-    std::mem::forget(window);
-    std::mem::forget(application);
-    std::mem::forget(app);
-    std::mem::forget(core_app);
+    drop(tab);
+    drop(page);
+    drop(tab_view);
+    gtk_live::close_surface(&ctx, window, surface, shell_pid);
+    gtk_live::close_other_windows(&ctx);
+    drop(render_threads);
+    app.terminate();
+    core_app.destroy();
 }

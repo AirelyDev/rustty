@@ -80,6 +80,10 @@ fn placeholder_overlays_do_not_capture_input() {
         .expect("the surface template contains a RenderSurface");
     window.present();
 
+    // Stops the render thread when it drops, also when an assertion panics
+    // (P7-W7 T6, N450). Declared after `core_app` and `app`, so it drops first.
+    let render_threads = gtk_live::RenderThreadGuard::new(core_ptr, [&surface]);
+
     let ctx = glib::MainContext::default();
     let deadline = Instant::now() + Duration::from_secs(30);
     while surface.core().is_none() {
@@ -88,6 +92,9 @@ fn placeholder_overlays_do_not_capture_input() {
             break;
         }
     }
+    // SAFETY: the widget's live core surface; its shell was started by init.
+    let shell_pid =
+        unsafe { gtk_live::shell_pid(surface.core().expect("the core surface was built")) };
     for _ in 0..40 {
         gtk_live::iterate(&ctx, core_ptr, &app);
     }
@@ -170,8 +177,16 @@ fn placeholder_overlays_do_not_capture_input() {
     }
     let _ = app.run();
 
-    if let Some(core) = surface.core() {
-        // SAFETY: the widget's live core surface; stopped once, before exit.
-        unsafe { gtk_live::stop_render_thread(core) };
-    }
+    // Close the surface the way the app does (the window is destroyed, the
+    // `Surface` is finalized, its threads joined and its shell reaped), then tear
+    // the apps down in `run_gtk`'s order (P7-W7 T6).
+    drop(render_surface);
+    drop(surface_widget);
+    drop(popovers);
+    drop(child_exits);
+    gtk_live::close_surface(&ctx, window, surface, shell_pid);
+    gtk_live::close_other_windows(&ctx);
+    drop(render_threads);
+    app.terminate();
+    core_app.destroy();
 }

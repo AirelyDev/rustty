@@ -9157,6 +9157,88 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   only as a pointer, because the T5b fix-round-1 commits, the harness and the LIFETIMES row cite
   N448.
 
+## N450 — the live inspector KAT leaves both render threads running when an assertion panics, and the process then crashes at exit
+
+- **id**: N450. P7-W7 T6 (controller ruling 47). **severity**: low. Only the test harness is
+  affected; no product path is involved. **kind**: test-harness teardown order (a crash at process
+  exit after a failed assertion). **Not upstream**: `gtk_inspector_dump` is a Rustty KAT, and the
+  reference has no counterpart.
+- **rustty (pre-fix)**: `crates/rustty-apprt/tests/gtk_inspector_dump.rs`. `inspector_dump` stopped
+  its two render threads only through the trailing `gtk_live::stop_render_thread` loop, which runs
+  after `app.run()`. An assertion that panicked earlier skipped that loop.
+- **finding**: libtest catches the panic, prints the result and calls `exit`. The two `renderer`
+  threads are still in their xev loop at that point; gdb, breaking on `exit`, shows both threads plus
+  the `io` threads alive. Mesa's exit-time teardown then runs under them. The crash occurred in 3 of
+  8 runs of the pre-fix binary on rvm:
+  - SIGSEGV on a `renderer` thread in `glReadPixels`
+    (`OpenGL::present` → `Target::read_pixels_alloc` → `gl::draw::read_pixels`, from
+    `Frame::complete` → `draw_frame_locked`, in coredumpctl);
+  - once as a glibc `corrupted double-linked list` abort.
+
+  The llvmpipe worker threads exit just before the fault, which is the driver tearing down.
+- **how found**: the P7-W7 T5c report, which saw "SIGSEGV after the panic". It was reproduced with
+  the floating headless-sway launch, which always fails assertion (c); that assertion failure is a
+  recipe issue, not a defect (see below).
+- **fix**: a new `gtk_live::RenderThreadGuard`. It is declared after the core app and the apprt app,
+  so unwinding drops it first, while the core app is alive. Its `Drop`:
+  - sends each surface's render thread its stop;
+  - drains the core-app mailbox while it waits, because a `.forever` push from `frameCompleted`
+    must not block the join;
+  - joins the thread, and never panics.
+
+  `inspector_dump` uses the guard on both the pass path and the panic path.
+- **fail-first**: under the floating recipe, the pre-fix binary crashed in 3 of 8 runs (SIGSEGV
+  ×2, abort ×1). The fixed binary crashed in 0 of 16 runs: all 16 failed cleanly with exit 101 and
+  the new per-terminal diagnostic `[false, false]`.
+- **related, not a defect**: assertion (c), "both terminals kept presenting frames alongside the
+  inspector", fails only when the sway config floats windows (the v20b gate's `floating enable`
+  rule).
+  - sway centers floating windows, and the 1000x600 inspector then fully covers both terminals.
+  - A fully covered surface gets no `wl_surface.frame` callbacks, so GTK never snapshots its
+    `RenderSurface` and its texture never changes.
+  - The result is the same at `99f23b5ee` (T2, where the assertion was introduced), at `19cb14955`
+    (T5b) and at `f00301f28`: the test passes when windows tile and fails when they float.
+    Moving the inspector off the terminals over IPC makes the floating launch pass.
+  - The canonical recipe is now `.port/tools/gtk_live_headless_sway.sh` (tiling), cited from the
+    test headers.
+- **state**: CLOSED (P7-W7 T6, extended by Ruling 50). Every live KAT now uses the guard:
+  `gtk_inspector_dump`, `gtk_first_light`, `gtk_window_live`, `gtk_glyph_dump`, `gtk_input_focus`,
+  `gtk_render_surface` and `gtk_split_drop`.
+- **extension (Ruling 50)**. The live KATs now close their surfaces the way the app does and tear
+  the apps down in `run_gtk`'s order (`terminate`, then `destroy`). Three findings came out of that
+  work:
+  - **The termio `Subprocess` "double-free" is gone.** Five KATs `forget` their surfaces to avoid
+    a `free(): invalid size` abort in `Subprocess`'s `Drop`. The comment describing it dates from
+    `269845ec9`, and `f3bb00b5c` (consuming `Subprocess::deinit`) and `6fe5259bf` (GTK finalize
+    frees the `CoreSurface` box without drop glue) fixed the abort the same day. The workaround
+    and its comments were stale and are now removed.
+    - Each KAT now asserts, through `gtk_live::close_surface(s)`, that the `Surface` GObject was
+      finalized and its shell killed and reaped.
+    - This held for all 10 runnable live KATs on rvm under the canonical recipe, and for 20 more
+      repeat runs.
+    - No N451 is needed, because nothing was live.
+  - **A leftover app-created window crashed two KATs at exit, after they passed.**
+    `App::run` emits `activate`, and its `new_window_thunk` opens a second window with its own
+    terminal.
+    - `gtk_glyph_dump` and `gtk_input_focus` left that window's render thread running at exit,
+      and exited with SIGSEGV in 2 of 3 passing runs. This is the same mechanism as above, and a
+      `gtk_glyph_dump` core dump from W7b has the same shape.
+    - `gtk_live::close_other_windows` now closes every remaining toplevel, and asserts that each
+      `Surface` in it was finalized and its shell reaped.
+    - After the fix, all 20 repeat runs exited 0. Without that close, `CoreApp::deinit`'s
+      font-grid `debug_assert` fired.
+    - The guard's `Drop` also stops the render threads of surfaces in any toplevel still open.
+  - **`gtk_render_surface` left `rt_app` pointing at a moved value (test harness).** `boot()`
+    bound `rt_app` to a local `gtk::App` and then moved it into `Live`.
+    - The first real close, `deleteSurface` → the `quit_timer` action, read the stale address and
+      aborted with "misaligned pointer dereference" in `ObjectSubclassExt::from_obj`
+      (`application.rs` `action::quit_timer`).
+    - `Live.app` is now boxed, so the bound address stays stable.
+    - The product is not affected, because `gtk::App::run` re-binds `rt_app` to its own `self`.
+- **fail-cleanly check (Ruling 50)**. A temporary rvm-only patch panicked at the start of
+  `close_surfaces`, with every thread live. All seven close-path KATs then exited 101 twice each,
+  with no SIGSEGV and no abort.
+
 ## N452 — effect callbacks that re-enter the Terminal C API reach stream/handler bytes under the protected `&mut Stream`/`&mut Handler`
 
 - **id**: N452. P7-W2 T6 (implementer concern 4; task review, controller ruling 51). **severity**: medium

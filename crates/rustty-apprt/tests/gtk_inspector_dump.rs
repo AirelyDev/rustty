@@ -26,6 +26,14 @@
 //!         cargo test -p rustty-apprt --features gtk --test gtk_inspector_dump \
 //!         -- --ignored --exact inspector_dump
 //!
+//! On a host without a desktop session (rvm), use the CANONICAL recipe, a
+//! headless sway that TILES:
+//!   .port/tools/gtk_live_headless_sway.sh cargo test -p rustty-apprt \
+//!       --features gtk --test gtk_inspector_dump -- --ignored --exact inspector_dump
+//! Do not float the windows (the v20b gate's `floating enable` rule). The
+//! floating inspector window then covers both terminals. A covered window gets
+//! no frame callbacks, so assertion (c) fails every time (P7-W7 T6).
+//!
 //! R5: gated `all(any(linux, freebsd), feature = "gtk")` — compiles out off the gate.
 #![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]
 #![allow(non_snake_case)]
@@ -159,6 +167,11 @@ fn inspector_dump() {
     window2.set_content(Some(&surface2));
     window2.present();
 
+    // Stops both render threads when it drops, including when an assertion below
+    // panics. It is declared after `core_app` and `app`, so unwinding drops it
+    // first, while the core app is still alive (P7-W7 T6).
+    let render_threads = gtk_live::RenderThreadGuard::new(core_ptr, [&surface, &surface2]);
+
     let ctx = glib::MainContext::default();
     let keepalive =
         glib::timeout_add_local(Duration::from_millis(50), || glib::ControlFlow::Continue);
@@ -171,6 +184,13 @@ fn inspector_dump() {
     let core = surface
         .core()
         .expect("core surface built on first RenderSurface resize");
+    // SAFETY: both are live core surfaces whose shells were started by init.
+    let shell_pids = unsafe {
+        (
+            gtk_live::shell_pid(core),
+            gtk_live::shell_pid(surface2.core().expect("surface 2's core surface")),
+        )
+    };
 
     let render_surfaces = [
         gtk_live::find_render_surface(surface.upcast_ref::<gtk4::Widget>())
@@ -368,9 +388,20 @@ fn inspector_dump() {
             let _ = unsafe { CoreSurface::keyCallback(c, ev.clone()) };
         }
     }
+    // A terminal's texture changes only when GTK snapshots its window, and a
+    // compositor sends no frame callbacks to a window it has fully covered. The
+    // floating inspector window covers both terminals under a floating
+    // compositor, so this assertion needs the tiling recipe in the header.
     assert!(
         both_new,
-        "both terminals kept presenting frames alongside the inspector"
+        "both terminals kept presenting frames alongside the inspector (new texture \
+         per terminal: {:?}; is a window covering the terminals? run under the \
+         tiling headless-sway recipe in this file's header)",
+        render_surfaces
+            .iter()
+            .zip(&textures_before)
+            .map(|(rs, before)| rs.texture().is_some() && rs.texture() != *before)
+            .collect::<Vec<_>>()
     );
 
     eprintln!(
@@ -406,10 +437,14 @@ fn inspector_dump() {
         run_result.err()
     );
 
-    for s in [&surface, &surface2] {
-        if let Some(core) = s.core() {
-            // SAFETY: the widget's live core surface; stopped once, before exit.
-            unsafe { gtk_live::stop_render_thread(core) };
-        }
-    }
+    // Close both terminals the way the app does (each window destroyed, each
+    // `Surface` finalized, threads joined, shell reaped), then tear the apps down
+    // in `run_gtk`'s order (P7-W7 T6).
+    drop(imgui_widget);
+    gtk_live::close_surface(&ctx, window, surface, shell_pids.0);
+    gtk_live::close_surface(&ctx, window2, surface2, shell_pids.1);
+    gtk_live::close_other_windows(&ctx);
+    drop(render_threads);
+    app.terminate();
+    core_app.destroy();
 }

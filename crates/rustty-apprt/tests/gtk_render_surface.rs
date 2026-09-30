@@ -58,12 +58,21 @@ use rustty_core::app::App as CoreApp;
 mod gtk_live;
 
 /// The live app, its GTK half and the terminal widget, kept alive for the test
-/// (most fields only hold their object alive until `finish` forgets them).
+/// until `finish` closes the terminal and tears the apps down.
+///
+/// `render_threads` is the FIRST field. Struct fields drop in declaration order,
+/// so if an assertion unwinds past `finish`, the guard stops the render thread
+/// while `core_app` is still alive (P7-W7 T6, N450).
 #[allow(dead_code)]
 struct Live {
+    render_threads: gtk_live::RenderThreadGuard,
     core_app: Box<CoreApp<gtk::App>>,
     core_ptr: *mut CoreApp<gtk::App>,
-    app: gtk::App,
+    /// Boxed: the application's `rt_app` backref is this address, and `Live` is
+    /// moved out of `boot` after the bind (P7-W7 T6: an inline `gtk::App` left
+    /// `rt_app` dangling, which `deleteSurface`'s `quit_timer` action read once
+    /// `finish` began closing the surface).
+    app: Box<gtk::App>,
     application: Application,
     window: libadwaita::ApplicationWindow,
     surface: Surface,
@@ -80,16 +89,17 @@ fn boot(margin: i32) -> Live {
     let mut core_app: Box<CoreApp<gtk::App>> =
         CoreApp::<gtk::App>::create(Global).expect("core App::create");
     let core_ptr: *mut CoreApp<gtk::App> = &mut *core_app;
-    let app = match gtk::App::init(core_ptr.cast()) {
+    let app = Box::new(match gtk::App::init(core_ptr.cast()) {
         Ok(rt) => rt,
         Err(err) => match err {},
-    };
+    });
     let application: Application = app.application().clone();
     application.upcast_ref::<gio::Application>().set_default();
     application
         .register(gio::Cancellable::NONE)
         .expect("register the application");
-    let app_ptr: *mut std::ffi::c_void = std::ptr::from_ref(&app).cast_mut().cast();
+    // The boxed app's address, stable across the move of `Live` out of `boot`.
+    let app_ptr: *mut std::ffi::c_void = std::ptr::from_ref::<gtk::App>(&app).cast_mut().cast();
     application.bind_rt_app(app_ptr);
     application.bind_core_app::<gtk::App>();
     register_resources();
@@ -109,6 +119,10 @@ fn boot(margin: i32) -> Live {
         .expect("the surface template contains a RenderSurface");
     window.present();
 
+    // Declared after `core_app` and `app`, so an unwind out of `boot` drops it
+    // first (P7-W7 T6, N450).
+    let render_threads = gtk_live::RenderThreadGuard::new(core_ptr, [&surface]);
+
     let ctx = glib::MainContext::default();
     let deadline = Instant::now() + Duration::from_secs(30);
     while surface.core().is_none() {
@@ -120,6 +134,7 @@ fn boot(margin: i32) -> Live {
     }
     let core = surface.core().expect("core surface");
     Live {
+        render_threads,
         core_app,
         core_ptr,
         app,
@@ -171,13 +186,37 @@ fn type_into_shell(live: &Live, bytes: &[u8]) {
     pipe.flush().ok();
 }
 
-/// End the process without the out-of-scope termio teardown gap
-/// (`gtk_first_light.rs` section 6): the OS reclaims the threads and the shell.
+/// Close the terminal the way the app does, then tear the apps down in
+/// `run_gtk`'s order (`gtk_first_light.rs` section 7). `close_surface` asserts
+/// that the `Surface` was finalized and its shell reaped. (This used to
+/// `forget` the live objects, to dodge a termio `Subprocess` double-free that
+/// has since been fixed; P7-W7 T6.)
 fn finish(live: Live, keepalive: glib::SourceId) {
     keepalive.remove();
-    // SAFETY: `live.core` is the live core surface; stopped once, before exit.
-    unsafe { gtk_live::stop_render_thread(live.core) };
-    std::mem::forget(live);
+    let Live {
+        render_threads,
+        core_app,
+        app,
+        application,
+        window,
+        surface,
+        render_surface,
+        core,
+        ..
+    } = live;
+    // Re-bound after the others: locals drop in reverse declaration order, so an
+    // assertion that unwinds out of the close below drops the guard first, while
+    // `core_app` is still alive.
+    let render_threads = render_threads;
+    // SAFETY: `core` is the live core surface; its shell was started by init.
+    let shell_pid = unsafe { gtk_live::shell_pid(core) };
+    drop(render_surface);
+    drop(application);
+    gtk_live::close_surface(&glib::MainContext::default(), window, surface, shell_pid);
+    gtk_live::close_other_windows(&glib::MainContext::default());
+    drop(render_threads);
+    app.terminate();
+    core_app.destroy();
 }
 
 /// Whether the surfaceless EGL display the renderer uses can export DMA-BUFs
