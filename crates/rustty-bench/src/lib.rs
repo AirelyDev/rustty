@@ -423,7 +423,9 @@ mod log_site_census {
             "page compression report failed err={err:?}",
             1,
         ),
-        // ScreenClone.zig:129,143 + nine `error cloning screen` sites.
+        // ScreenClone.zig:209,223 + thirteen `error cloning screen` sites
+        // (nine before `ca4f719f7`; its renderScrollLoop and stepRenderOutput
+        // add four, P7-W3 T3), anchors at 12752b2ac.
         (
             "screen_clone.rs",
             "warn",
@@ -440,7 +442,7 @@ mod log_site_census {
             "screen_clone.rs",
             "warn",
             "error cloning screen err={err:?}",
-            9,
+            13,
         ),
         // ScrollbackCompression.zig:173
         (
