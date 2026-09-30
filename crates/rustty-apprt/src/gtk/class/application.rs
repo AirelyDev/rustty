@@ -73,7 +73,7 @@ use super::command_palette::ActionBoxed;
 use super::config::Config;
 use super::config_errors_dialog::ConfigErrorsDialog;
 use super::global_shortcuts::{BindFailed, GlobalShortcuts};
-use super::tab::TabOverrides;
+use super::overrides::{parse_overrides, TabOverrides};
 use super::window::Window;
 use crate::gtk::i18n::tr;
 use crate::gtk::portal::OpenUri;
@@ -2140,124 +2140,9 @@ fn action_new_tab(
     }
 }
 
-/// PORTS: `application.zig:2013-2098` `parseOverrides` (B5, 3650bef4e — the
-/// factored `new-window`/`new-tab` argv override parser; adds
-/// `--shell-integration=`). Returns `None` where the reference returns an
-/// error (`Allocator.Error || error{ValueRequired}`); the infallible-alloc
-/// arms keep only the shape.
-fn parse_overrides(arguments_it: glib::VariantIter) -> Option<TabOverrides> {
-    use rustty_config::command::Command;
-    use rustty_config::value_types::ShellIntegration;
-
-    // `var args: std.ArrayList([:0]const u8) = .empty;` (`:2019`).
-    let mut args: Vec<Vec<u8>> = Vec::new();
-
-    let mut working_directory: Option<String> = None;
-    let mut title: Option<String> = None;
-    let mut command: Option<Command> = None;
-    // `var parsed_shell_integration: struct { @"shell-integration":
-    // ?configpkg.Config.ShellIntegration = null } = .{};` (`:2024-2026`) — the
-    // one-field struct exists only to give `cli.args.parseIntoField` a target;
-    // the bare optional is its Rust collapse.
-    let mut parsed_shell_integration: Option<ShellIntegration> = None;
-
-    // `var e_seen: bool = false;` (`:2031`.)
-    let mut e_seen = false;
-
-    // `while (arguments_it.nextValue()) |value|` (`:2034`) — iterate the array
-    // elements.
-    for (i, value) in arguments_it.enumerate() {
-        // just to be sure (`:2037-2038`).
-        let Some(str) = value.str() else {
-            continue;
-        };
-
-        // `log.debug("argument: {d} {s}", .{ i, str });` (`:2044`).
-        log::debug!(target: LOG_SCOPE, "argument: {i} {str}");
-
-        if e_seen {
-            // `args.append(arena_alloc, copy)` (`:2046-2056`) — everything
-            // after `-e` is a direct-exec argument. The two alloc-failure
-            // `return err` arms (`:2048,2053`) are infallible here.
-            args.push(str.as_bytes().to_vec());
-            continue;
-        }
-
-        // `if (std.mem.eql(u8, str, "-e"))` (`:2058-2061`).
-        if str == "-e" {
-            e_seen = true;
-            continue;
-        }
-
-        // `if (std.mem.cutPrefix(u8, str, "--command="))` (`:2063-2071`) —
-        // a parse failure warns and RETURNS the error (the B5 rework; the old
-        // handler continued).
-        if let Some(v) = str.strip_prefix("--command=") {
-            let mut cmd = Command::Shell(Vec::new());
-            match cmd.parse_cli(Some(v.as_bytes())) {
-                Ok(()) => command = Some(cmd),
-                Err(err) => {
-                    log::warn!(target: LOG_SCOPE, "unable to parse command: {err:?}");
-                    return None;
-                }
-            }
-            continue;
-        }
-        // `if (std.mem.cutPrefix(u8, str, "--shell-integration="))`
-        // (`:2072-2084`): `cli.args.parseIntoField(..., "shell-integration",
-        // trim(v))` — for a bare optional enum field that is
-        // `std.meta.stringToEnum` (== `string_to_enum`, the config name-map);
-        // a parse failure warns and CONTINUES (`:2079-2082`), unlike the
-        // command arm.
-        if let Some(v) = str.strip_prefix("--shell-integration=") {
-            match ShellIntegration::string_to_enum(trim_ascii_whitespace(v).as_bytes()) {
-                Some(parsed) => parsed_shell_integration = Some(parsed),
-                None => {
-                    log::warn!(target: LOG_SCOPE, "unable to parse shell integration {v}: InvalidValue")
-                }
-            }
-            continue;
-        }
-        // `if (std.mem.cutPrefix(u8, str, "--working-directory="))`
-        // (`:2085-2091`).
-        if let Some(v) = str.strip_prefix("--working-directory=") {
-            working_directory = Some(trim_ascii_whitespace(v).to_string());
-            continue;
-        }
-        // `if (std.mem.cutPrefix(u8, str, "--title="))` (`:2092-2097`).
-        if let Some(v) = str.strip_prefix("--title=") {
-            title = Some(trim_ascii_whitespace(v).to_string());
-            continue;
-        }
-    }
-
-    // `if (args.items.len > 0) command = .{ .direct = args.items };`
-    // (`:2101-2105`).
-    if !args.is_empty() {
-        command = Some(Command::Direct(args));
-    }
-
-    // `return .{ .command, .shell_integration, .working_directory, .title };`
-    // (`:2107-2112`).
-    Some(TabOverrides {
-        command,
-        shell_integration: parsed_shell_integration,
-        working_directory,
-        title,
-    })
-}
-
-/// `std.mem.trim(u8, v, &std.ascii.whitespace)` — `parseOverrides`' trim of the
-/// `--shell-integration=`, `--working-directory=` and `--title=` values.
-///
-/// `std.ascii.whitespace` is `{ ' ', '\t', '\n', '\r', VT (0x0B), FF (0x0C) }`
-/// (Zig 0.16 `lib/std/ascii.zig:162`). CORRECTION (task T-D, S50-F2): the three
-/// sites used `str::trim()`, which also strips Unicode `White_Space` (U+00A0,
-/// U+0085, U+2028, U+3000, ...). `str::trim_ascii()` is not a substitute either:
-/// its set omits VT, which Zig's includes.
-fn trim_ascii_whitespace(v: &str) -> &str {
-    v.trim_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0B' | '\x0C'))
-}
+// `parseOverrides` (`application.zig:2013-2098` pre-refactor) moved to its own
+// file, 9fc8d9ebd: [`super::overrides::parse_overrides`] (imported above), and
+// its `TabOverrides` (formerly this file's `tab::TabOverrides`) with it.
 
 /// PORTS: `application.zig:2114-2148` `actionOpenConfig` (`open-config`;
 /// 0a183c923 — the string parameter selects the `os-open` / `new-window`
@@ -4029,9 +3914,10 @@ mod action {
     use rustty_apprt_api::{ApprtError, CoreSurfaceHandle, Surface as _, Target};
     use rustty_datastruct::split_tree::{Direction, Goto, SpatialDirection};
 
+    use super::super::overrides::TabOverrides;
     use super::super::split_tree::SplitTree;
     use super::super::surface::{CoreSurface, Size, Surface as GhosttySurface};
-    use super::super::tab::{Tab, TabOverrides};
+    use super::super::tab::Tab;
     use super::super::window::{SelectTab, Window};
     use super::{ext, AppTargetHandle, Application, Config, CoreConfig, LOG_SCOPE};
     use crate::gtk::i18n::tr;
@@ -6085,44 +5971,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// S50-F2: `parseOverrides` trims its three values with
-    /// `std.mem.trim(u8, v, &std.ascii.whitespace)` (`application.zig:2072-2097`):
-    /// ASCII space/TAB/LF/CR/VT/FF only. A value ending in U+00A0 (NO-BREAK SPACE)
-    /// or U+3000 keeps it; VT and FF are stripped. Display-free: the argv arrives
-    /// as a plain `as` variant.
-    #[test]
-    fn parse_overrides_trims_ascii_whitespace_only() {
-        use glib::prelude::*;
-        use rustty_config::value_types::ShellIntegration;
-
-        let parse = |args: &[&str]| {
-            let v = args.to_variant();
-            parse_overrides(v.iter()).expect("no --command, so parsing cannot fail")
-        };
-
-        // Unicode whitespace is NOT trimmed (the reference trims ASCII only).
-        let o = parse(&[
-            "--title=\u{a0}tab\u{a0}",
-            "--working-directory=/tmp/x\u{3000}",
-        ]);
-        assert_eq!(o.title.as_deref(), Some("\u{a0}tab\u{a0}"));
-        assert_eq!(o.working_directory.as_deref(), Some("/tmp/x\u{3000}"));
-
-        // ... so a NO-BREAK SPACE makes the shell-integration value unparseable
-        // (the reference warns and continues), where `str::trim` would parse it.
-        let o = parse(&["--shell-integration=\u{a0}bash"]);
-        assert_eq!(o.shell_integration, None);
-
-        // Every byte of `std.ascii.whitespace`, VT and FF included, IS trimmed.
-        let o = parse(&[
-            "--title= \t\n\r\x0B\x0Ctab\x0C\x0B\r\n\t ",
-            "--working-directory=\x0B/tmp/y\x0C",
-            "--shell-integration=\x0Bbash\x0C",
-        ]);
-        assert_eq!(o.title.as_deref(), Some("tab"));
-        assert_eq!(o.working_directory.as_deref(), Some("/tmp/y"));
-        assert_eq!(o.shell_integration, Some(ShellIntegration::Bash));
-    }
+    // `parse_overrides_trims_ascii_whitespace_only` (S50-F2) moved to
+    // [`super::overrides`]'s own test module, 9fc8d9ebd — it exercises
+    // [`super::overrides::parse_overrides`] directly, which now lives there.
 
     /// S50-F1: `gotoWindow`'s walk, pinned on plain integers so it needs no display.
     /// Each case lists the nodes `gotoWindowMaybe` was asked about, in order. The

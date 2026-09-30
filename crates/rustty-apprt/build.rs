@@ -3,22 +3,57 @@
 //! PORTS the reference's TWO build helper binaries plus its `SharedDeps`
 //! wiring, collapsed into one build script (behavior-preserving, not
 //! line-preserving):
-//!   * `src/apprt/gtk/build/blueprint.zig` — the adw-version gate (`:58-67`,
-//!     invariant 7), the `blueprint-compiler --version` gate (`:69-121`) and
-//!     `compile --output` (`:123-173`).
+//!   * `src/apprt/gtk/build/blueprint.zig` — the adw-version gate (`:55-69`,
+//!     invariant 7) and the `blueprint-compiler --version` gate (`:71-109`).
+//!     Pre-ef7edc4a2 this file also had the `compile --output` step
+//!     (`:123-173`); that commit dropped it (the wrapper now only writes a
+//!     cache stamp, see its module doc below) and moved the actual
+//!     `blueprint-compiler compile --output` invocation into
+//!     `src/build/SharedDeps.zig`'s `gtkNgDistResourcesUncached`
+//!     (`:1090-1105`) — this script already ran `blueprint-compiler` directly
+//!     rather than through a compiled wrapper (`compile_blueprint` below), so
+//!     upstream converged on the same shape here; no behaviour change.
 //!   * `src/apprt/gtk/build/gresource.zig` — `genRoot`/`genIcons`/`genUi`
-//!     (`:212-277`) reproduced verbatim in output *shape*
-//!     (`compressed="true"`, `preprocess="xml-stripblanks"`, the
-//!     `{size}x{size}@2` icon aliases).
-//!   * `src/build/SharedDeps.zig` `gtkNgDistResources` (`:870-967`) — the
+//!     (`:149-262` post-ef7edc4a2, was `:212-277`) reproduced verbatim in
+//!     output *shape* (`compressed="true"`, `preprocess="xml-stripblanks"`,
+//!     the `{size}x{size}@2` icon aliases). ef7edc4a2 also rewrote `genUi` to
+//!     drop its argv-supplied UI file list and per-file `error.BlueprintNotFound`
+//!     arm in favor of an `inline for` over the compile-time `blueprints` list
+//!     — again converging on what this script already did (see the PORT NOTE
+//!     at `compile_blueprint`'s call site below).
+//!   * `src/build/SharedDeps.zig` `gtkNgDistResources`/
+//!     `gtkNgDistResourcesUncached` (`:1005-1184` post-ef7edc4a2, was
+//!     `gtkNgDistResources` alone at `:870-967`) — the
 //!     `glib-compile-resources` `--generate-source`/`--generate-header` calls
-//!     and the `cc` link of the generated `*_resources.c`.
+//!     and the `cc` link of the generated `*_resources.c`. ef7edc4a2 also
+//!     memoized this function on the `*std.Build` (a file-scope
+//!     `AutoHashMapUnmanaged`) and switched the gresource XML's `<file>`
+//!     bodies from absolute Zig-cache paths to paths relative to a
+//!     `--sourcedir`, so repeated builds share one compiled-`.ui` directory
+//!     instead of invalidating on every unrelated cache-path shuffle — a
+//!     Zig-build-cache concern with no Cargo analogue (`cargo` already keys
+//!     this script's own outputs off `OUT_DIR` + `rerun-if-changed`, never off
+//!     an executable's link bytes), so nothing here changes.
 //!   * `src/build/GhosttyI18n.zig` (`:33-43`) — `msgfmt` of each `po/*.po` into
 //!     `share/locale/<locale>/LC_MESSAGES/<domain>.mo`.
 //!
 //! # The two helpers' own module docs
 //!
-//! `blueprint.zig:1-2`:
+//! `blueprint.zig:1-11` (post-ef7edc4a2; pre-ef7edc4a2 it was `:1-2` below):
+//! Checks that `libadwaita` is at least the given version and that
+//! `blueprint-compiler` is on the PATH and new enough. The blueprints
+//! themselves are compiled by `blueprint-compiler` directly from the build
+//! system; see `gtkNgDistResources` in `src/build/SharedDeps.zig`.
+//!
+//! Usage: blueprint.zig <major> <minor> <stamp>
+//!
+//! Example: blueprint.zig 1 5 blueprint-check.stamp
+//!
+//! `<stamp>` is written when every check passes, so the build system has an
+//! output to cache this step by.
+//!
+//! Pre-ef7edc4a2 this instead read:
+//!
 //! Compiles a blueprint file using `blueprint-compiler`. This performs
 //! additional checks to ensure that various minimum versions are met.
 //!
@@ -34,9 +69,12 @@
 //! Litmus test: `src/apprt/gtk` should exist relative to the pwd.
 //!
 //! (PORT NOTE: here both helpers run inside this build script rather than as
-//! separate binaries, so there is no argv — the `blueprint.zig:4-6`
+//! separate binaries, so there is no argv — the `blueprint.zig:6-8`
 //! `Usage:`/`Example:` lines above describe a command line rustty does not have;
-//! its `<major> <minor> <output> <input>` are `compile_blueprint`'s inputs here —
+//! its `<major> <minor> <stamp>` are `compile_blueprint`'s inputs here, minus
+//! the stamp file — this script has no separate cache-stamp step, since Cargo
+//! already caches the whole build script's output on `rerun-if-changed`, not
+//! on a compiled helper's link bytes (see the `SharedDeps.zig` bullet above) —
 //! and no cwd precondition: paths are resolved against `--sourcedir`, see
 //! "R2 / paths" below.)
 //!
@@ -196,12 +234,14 @@ const CSS: &[&str] = &[
 /// a 2x (`{size*2}.png`) source. Reference: `gresource.zig:24` (`icon_sizes`).
 const ICON_SIZES: &[u32] = &[16, 32, 128, 256, 512, 1024];
 
-/// Minimum `blueprint-compiler` version. Reference: `blueprint.zig:33-37`
-/// (`required_blueprint_version = 0.16.0`).
+/// Minimum `blueprint-compiler` version. Reference: `blueprint.zig:36-40`
+/// (`required_blueprint_version = 0.16.0`; `:36-40` post-ef7edc4a2 — the
+/// citation moved with the rewritten module doc above it, text unchanged).
 const REQUIRED_BLUEPRINT: (u64, u64, u64) = (0, 16, 0);
 
 /// Shared tail of the `blueprint-compiler` diagnostics. Reference:
-/// `blueprint.zig:14-26` (`blueprint_compiler_help`), rebranded to rustty.
+/// `blueprint.zig:16-28` (`blueprint_compiler_help`; `:16-28` post-ef7edc4a2,
+/// text unchanged), rebranded to rustty.
 const BLUEPRINT_HELP: &str = "\n\nWhen building from a source checkout, rustty requires \
 version 0.16 or newer of `blueprint-compiler` as a build-time dependency. Please install \
 it, ensure that it is available on your PATH, and then retry building rustty.";
@@ -283,21 +323,29 @@ fn main() {
     let resource_path = resource_path(base_app_id);
 
     // Version gates: the adw version backs invariant 7 (per-blueprint below);
-    // blueprint-compiler must be >= 0.16 (blueprint.zig:69-121).
+    // blueprint-compiler must be >= 0.16 (blueprint.zig:71-109 post-ef7edc4a2,
+    // was `:69-121` before that commit trimmed the wrapper down to a version
+    // check that writes a cache stamp — see BLUEPRINT_HELP/REQUIRED_BLUEPRINT
+    // above and `compile_blueprint` below for the compile step it used to gate).
     let adw = adw_version();
     blueprint_compiler_version_gate();
 
     // 1. Compile each `.blp` -> `OUT_DIR/ui/{maj}.{min}/{name}.ui`.
     //
     // Collect the UI files that are passed in as arguments.
-    // (gresource.zig:128. PORT NOTE: there are no arguments here — this script
-    // compiles every manifest blueprint itself and collects each output paired
-    // with its `Blueprint`, so `genUi`'s per-file manifest lookup and its
-    // `error.BlueprintNotFound` arm, `gresource.zig:252-269`, cannot miss.)
+    // (gresource.zig:128 pre-ef7edc4a2. PORT NOTE: there are no arguments here
+    // — this script compiles every manifest blueprint itself and collects each
+    // output paired with its `Blueprint`, so the pre-refactor `genUi`'s
+    // per-file manifest lookup and its `error.BlueprintNotFound` arm
+    // (`gresource.zig:252-269` pre-ef7edc4a2) could not miss. ef7edc4a2 later
+    // rewrote `genUi` (now `:228-262`) the same way: an `inline for` over the
+    // compile-time `blueprints` list with no argv and no `BlueprintNotFound`
+    // arm — upstream converged on what this script already did.)
     let mut ui_files: Vec<(&Blueprint, PathBuf)> = Vec::with_capacity(BLUEPRINTS.len());
     for bp in BLUEPRINTS {
-        // Invariant 7 (blueprint.zig:58-67): the installed adwaita must be new
-        // enough to compile this blueprint's `{major}.{minor}` dialect.
+        // Invariant 7 (blueprint.zig:55-69 post-ef7edc4a2, was `:58-67`): the
+        // installed adwaita must be new enough to compile this blueprint's
+        // `{major}.{minor}` dialect.
         if (u64::from(bp.major), u64::from(bp.minor)) > adw {
             panic!(
                 "`libadwaita` is too old: {}.{} required to compile ui/{}.{}/{}.blp, but the \
@@ -393,8 +441,9 @@ fn adw_version() -> (u64, u64) {
     (major, minor)
 }
 
-/// Port of `blueprint.zig:69-121`: require `blueprint-compiler >= 0.16`,
-/// with the reference's not-found and wrong-version diagnostics.
+/// Port of `blueprint.zig:71-109` (post-ef7edc4a2, was `:69-121`): require
+/// `blueprint-compiler >= 0.16`, with the reference's not-found and
+/// wrong-version diagnostics.
 fn blueprint_compiler_version_gate() {
     let out = match Command::new("blueprint-compiler").arg("--version").output() {
         Ok(out) => out,
@@ -418,7 +467,15 @@ fn blueprint_compiler_version_gate() {
     );
 }
 
-/// Port of `blueprint.zig:123-173`: `blueprint-compiler compile --output`.
+/// Port of `blueprint-compiler compile --output`. Pre-ef7edc4a2 this lived at
+/// `blueprint.zig:123-173`, in the same wrapper as the version gates above;
+/// that commit removed compilation from the wrapper entirely (it now only
+/// writes a cache stamp, see `blueprint.zig`'s module doc quoted above), and
+/// the reference now runs `blueprint-compiler compile --output` directly from
+/// the build graph in `SharedDeps.zig`'s `gtkNgDistResourcesUncached`
+/// (`:1090-1105`) — this script already called `blueprint-compiler` directly
+/// here rather than through a compiled wrapper, so upstream converged on the
+/// same shape; no behaviour change on rustty's side.
 fn compile_blueprint(input: &Path, output: &Path) {
     let out = match Command::new("blueprint-compiler")
         .arg("compile")
