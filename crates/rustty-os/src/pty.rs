@@ -179,7 +179,8 @@ impl NullPty {
         Ok(Mode::default())
     }
 
-    pub fn setSize(&mut self, size: winsize) -> Result<(), NullPtyError> {
+    // PORT NOTE (N449, P7-W7 T5d): `&self`, like `PosixPty::setSize`.
+    pub fn setSize(&self, size: winsize) -> Result<(), NullPtyError> {
         let _ = size;
         Ok(())
     }
@@ -191,11 +192,11 @@ impl NullPty {
     /// Get information about the process(es) attached to the PTY. Returns
     /// `null` if there was an error getting the information or the information
     /// is not available on a particular platform.
-    pub fn getForegroundPid(&mut self) -> Option<u64> {
+    pub fn getForegroundPid(&self) -> Option<u64> {
         None
     }
 
-    pub fn getTtyName(&mut self) -> Option<&std::ffi::CStr> {
+    pub fn getTtyName(&self) -> Option<&std::ffi::CStr> {
         None
     }
 }
@@ -214,14 +215,27 @@ pub struct PosixPty {
 
     /// Buffer for storage of slave tty name so that we don't have to recompute
     /// it every time we need it.
-    tty_name_buf: [u8; MAX_PATH_BYTES + 1],
+    //
+    // PORT NOTE (N449, P7-W7 T5d): the cache is interior-mutable (`UnsafeCell`
+    // buffer, `Cell` length), so `getTtyName` fills it through `&self`. The
+    // termio pty is shared by two threads through `*Pty` in the reference: the
+    // io writer thread calls `setSize` (reads `master`), and the main thread
+    // calls `getProcessInfo` (reads `master`, fills this cache). A `&mut self`
+    // on either side is a Unique over the whole struct, cache included, which
+    // races with the other thread's access. With `&self` receivers and the
+    // cache in cells, a shared reference covers none of the cache bytes
+    // (`.port/phase-2/mirihar-n444` `n449_pty_set_size_mut` UB under SB and TB,
+    // `n449_fixed` CLEAN). The cache is filled once, by the main thread, and
+    // never written again after its length is set, so the returned `&CStr`
+    // stays valid for the borrow.
+    tty_name_buf: std::cell::UnsafeCell<[u8; MAX_PATH_BYTES + 1]>,
     /// The name of slave tty. If `null` it has not yet been computed or
     /// may not be available. Should not be accessed directly, but through
     /// `self.getProcessInfo(.tty_name)`
     // PORT NOTE: the reference stores `?[:0]const u8` pointing into `tty_name_buf`. In
     // Rust we store the byte length (the NUL-terminated name is `&tty_name_buf[..len]`),
     // avoiding a self-referential pointer; `None` means not yet computed.
-    tty_name: Option<usize>,
+    tty_name: std::cell::Cell<Option<usize>>,
 }
 
 #[cfg(not(any(windows, target_os = "ios")))]
@@ -329,8 +343,8 @@ impl PosixPty {
         Ok(Pty {
             master: master_fd,
             slave: slave_fd,
-            tty_name_buf: [0; MAX_PATH_BYTES + 1],
-            tty_name: None,
+            tty_name_buf: std::cell::UnsafeCell::new([0; MAX_PATH_BYTES + 1]),
+            tty_name: std::cell::Cell::new(None),
         })
     }
 
@@ -357,8 +371,8 @@ impl PosixPty {
             master,
             // .slave = undefined — never read by `getMode`; a safe placeholder.
             slave: -1,
-            tty_name_buf: [0; MAX_PATH_BYTES + 1],
-            tty_name: None,
+            tty_name_buf: std::cell::UnsafeCell::new([0; MAX_PATH_BYTES + 1]),
+            tty_name: std::cell::Cell::new(None),
         }
     }
 
@@ -392,7 +406,11 @@ impl PosixPty {
     }
 
     /// Set the size of the pty.
-    pub fn setSize(&mut self, size: winsize) -> Result<(), PosixPtyError> {
+    //
+    // PORT NOTE (N449, P7-W7 T5d): `&self` (it reads only `master`), so the io
+    // writer thread's resize never covers the tty-name cache the main thread
+    // fills (see `tty_name_buf`).
+    pub fn setSize(&self, size: winsize) -> Result<(), PosixPtyError> {
         if unsafe {
             libc::ioctl(
                 self.master,
@@ -462,7 +480,9 @@ impl PosixPty {
     /// Get information about the process(es) attached to the PTY. Returns
     /// `null` if there was an error getting the information or the information
     /// is not available on a particular platform.
-    pub fn getForegroundPid(&mut self) -> Option<u64> {
+    //
+    // PORT NOTE (N449, P7-W7 T5d): `&self` (it reads only `master`).
+    pub fn getForegroundPid(&self) -> Option<u64> {
         #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             let mut pgrp: i32 = 0;
@@ -485,9 +505,13 @@ impl PosixPty {
         }
     }
 
-    pub fn getTtyName(&mut self) -> Option<&std::ffi::CStr> {
-        if let Some(len) = self.tty_name {
-            return std::ffi::CStr::from_bytes_with_nul(&self.tty_name_buf[..len + 1]).ok();
+    // PORT NOTE (N449, P7-W7 T5d): `&self`; the cache is interior-mutable (see
+    // `tty_name_buf`). `buf` is the cache's raw place: the ioctl / `ptsname_r`
+    // write through it, and every read borrows it only after the write.
+    pub fn getTtyName(&self) -> Option<&std::ffi::CStr> {
+        let buf: *mut [u8; MAX_PATH_BYTES + 1] = self.tty_name_buf.get();
+        if let Some(len) = self.tty_name.get() {
+            return std::ffi::CStr::from_bytes_with_nul(unsafe { &(&*buf)[..len + 1] }).ok();
         }
 
         #[cfg(target_os = "macos")]
@@ -495,18 +519,12 @@ impl PosixPty {
             // The macOS TIOCPTYGNAME ioctl does not allow us to
             // specify the length of the buffer passed to it, but
             // expects it to be at least 128 bytes long.
-            assert(self.tty_name_buf.len() >= 128);
-            let rc = unsafe {
-                libc::ioctl(
-                    self.master,
-                    libc::TIOCPTYGNAME as _,
-                    self.tty_name_buf.as_mut_ptr(),
-                )
-            };
+            assert(unsafe { (&*buf).len() } >= 128);
+            let rc = unsafe { libc::ioctl(self.master, libc::TIOCPTYGNAME as _, buf.cast::<u8>()) };
             if rc == 0 {
-                let len = sliceTo0(&self.tty_name_buf);
-                self.tty_name = Some(len);
-                std::ffi::CStr::from_bytes_with_nul(&self.tty_name_buf[..len + 1]).ok()
+                let len = sliceTo0(unsafe { &*buf });
+                self.tty_name.set(Some(len));
+                std::ffi::CStr::from_bytes_with_nul(unsafe { &(&*buf)[..len + 1] }).ok()
             } else {
                 // log.err("error getting name of slave PTY errno={t}", .{err});
                 log::error!(
@@ -522,16 +540,16 @@ impl PosixPty {
             let rc = unsafe {
                 libc::ptsname_r(
                     self.master,
-                    self.tty_name_buf.as_mut_ptr() as *mut std::os::raw::c_char,
-                    self.tty_name_buf.len(),
+                    buf.cast::<std::os::raw::c_char>(),
+                    MAX_PATH_BYTES + 1,
                 )
             };
             if rc != 0 {
                 return None;
             }
-            let len = sliceTo0(&self.tty_name_buf);
-            self.tty_name = Some(len);
-            std::ffi::CStr::from_bytes_with_nul(&self.tty_name_buf[..len + 1]).ok()
+            let len = sliceTo0(unsafe { &*buf });
+            self.tty_name.set(Some(len));
+            std::ffi::CStr::from_bytes_with_nul(unsafe { &(&*buf)[..len + 1] }).ok()
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
         {
@@ -580,7 +598,10 @@ pub struct WindowsPty {
     pub out_pipe_pty: crate::windows::HANDLE,
     pub in_pipe_pty: crate::windows::HANDLE,
     pub pseudo_console: crate::windows::exp::HPCON,
-    size: winsize,
+    // PORT NOTE (N449, P7-W7 T5d): a `Cell`, so `setSize` takes `&self` like
+    // `PosixPty::setSize`: the io writer thread resizes the pty while the main
+    // thread queries the process info through it.
+    size: std::cell::Cell<winsize>,
 }
 
 #[cfg(windows)]
@@ -661,7 +682,7 @@ impl WindowsPty {
             out_pipe_pty: std::ptr::null_mut(),
             in_pipe_pty: std::ptr::null_mut(),
             pseudo_console: std::ptr::null_mut(),
-            size,
+            size: std::cell::Cell::new(size),
         };
 
         let pipe_path = format!(
@@ -778,7 +799,7 @@ impl WindowsPty {
             }
         }
 
-        pty.size = size;
+        pty.size.set(size);
         errdefer.disarm();
         Ok(pty)
     }
@@ -796,11 +817,11 @@ impl WindowsPty {
 
     /// Return the size of the pty.
     pub fn getSize(&self) -> Result<winsize, WindowsPtyError> {
-        Ok(self.size)
+        Ok(self.size.get())
     }
 
     /// Set the size of the pty.
-    pub fn setSize(&mut self, size: winsize) -> Result<(), WindowsPtyError> {
+    pub fn setSize(&self, size: winsize) -> Result<(), WindowsPtyError> {
         use crate::windows;
         let result = unsafe {
             windows::exp::kernel32::ResizePseudoConsole(
@@ -815,18 +836,18 @@ impl WindowsPty {
         if result != windows::S_OK {
             return Err(WindowsPtyError::ResizeFailed);
         }
-        self.size = size;
+        self.size.set(size);
         Ok(())
     }
 
     /// Get information about the process(es) attached to the PTY. Returns
     /// `null` if there was an error getting the information or the information
     /// is not available on a particular platform.
-    pub fn getForegroundPid(&mut self) -> Option<u64> {
+    pub fn getForegroundPid(&self) -> Option<u64> {
         None
     }
 
-    pub fn getTtyName(&mut self) -> Option<&std::ffi::CStr> {
+    pub fn getTtyName(&self) -> Option<&std::ffi::CStr> {
         None
     }
 }
@@ -977,11 +998,11 @@ mod tests {
     fn pty_diagnostics_reach_the_log_facade_under_the_pty_scope() {
         use std::os::fd::IntoRawFd as _;
         let null = std::fs::File::open("/dev/null").unwrap().into_raw_fd();
-        let mut pty = PosixPty {
+        let pty = PosixPty {
             master: null,
             slave: -1,
-            tty_name_buf: [0; MAX_PATH_BYTES + 1],
-            tty_name: None,
+            tty_name_buf: std::cell::UnsafeCell::new([0; MAX_PATH_BYTES + 1]),
+            tty_name: std::cell::Cell::new(None),
         };
         let cap = crate::log_capture::start();
         assert!(pty.getTtyName().is_none());

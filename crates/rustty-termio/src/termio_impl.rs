@@ -929,15 +929,13 @@ impl<M: AppMailbox> Termio<M> {
             // Setup our backend
             // try self.backend.threadEnter(self.alloc, self, data);
             //
-            // SAFETY: forms the field-scoped `&mut (*self_).backend` receiver and
-            // hands the raw whole-Termio `self_` as `io` + the raw `data` — matching
-            // the reference `self.backend.threadEnter(self.alloc, self, data)`; the
-            // spawned read thread aliases `*self_`'s OTHER fields only, disjoint from
-            // the `.backend` receiver.
+            // SAFETY: hands the raw `&raw mut (*self_).backend` receiver (N449:
+            // `Backend::threadEnter` is raw-self, so no reference to the whole
+            // backend is formed), the raw whole-Termio `self_` as `io` and the
+            // raw `data` — matching the reference `self.backend.threadEnter(
+            // self.alloc, self, data)`.
             unsafe {
-                (*self_)
-                    .backend
-                    .threadEnter((*self_).alloc, self_, &mut *data)
+                Backend::threadEnter(&raw mut (*self_).backend, (*self_).alloc, self_, &mut *data)
             }?;
             // errdefer self.backend.threadExit(data);
             // (PORT NOTE: fired explicitly on each input-queue error below — the sole
@@ -952,7 +950,7 @@ impl<M: AppMailbox> Termio<M> {
                     //     return error.InputFailed;
                     // },
                     Input::String(v) => {
-                        let r = unsafe { (*self_).queueWrite(&mut *data, &v, false) };
+                        let r = unsafe { Self::queueWrite(self_, &mut *data, &v, false) };
                         if let Err(err) = &r {
                             log::warn!(
                                 target: LOG_SCOPE,
@@ -982,7 +980,7 @@ impl<M: AppMailbox> Termio<M> {
                     // at the end of this arm.)
                     Input::File(f) => match read_input_file(f, 10 * 1024 * 1024) {
                         Ok(bytes) => {
-                            let r = unsafe { (*self_).queueWrite(&mut *data, &bytes, false) };
+                            let r = unsafe { Self::queueWrite(self_, &mut *data, &bytes, false) };
                             if let Err(err) = &r {
                                 log::warn!(
                                     target: LOG_SCOPE,
@@ -1010,7 +1008,7 @@ impl<M: AppMailbox> Termio<M> {
                     // succeeded); the read thread has NOT yet been joined, so
                     // `threadExit` (which writes the quit pipe + joins) is the
                     // correct teardown.
-                    unsafe { (*self_).backend.threadExit(&mut *data) };
+                    unsafe { Backend::threadExit(&raw mut (*self_).backend, &mut *data) };
 
                     // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS UD290.
                     // The reference stops at the `errdefer` above. By now
@@ -1058,8 +1056,31 @@ impl<M: AppMailbox> Termio<M> {
         result
     }
 
-    pub fn threadExit(&mut self, data: &mut ThreadData<M>) {
-        self.backend.threadExit(data);
+    // pub fn threadExit(self: *Termio, data: *ThreadData) void {
+    //
+    // PORT NOTE (N449, P7-W7 T5d): raw-self, the reference's `self: *Termio`,
+    // like every io writer-thread method below (`queueWrite`, `changeConfig`,
+    // `resize`, `sizeReport`, `resetSynchronizedOutput`, `clearScreen`,
+    // `scrollViewport`, `jumpToPrompt`, `focusGained`, `kittyClipboardGrant`,
+    // `colorSchemeReport`, `visibilityReport`). The writer thread runs them
+    // while the io read thread writes `terminal` under the renderer mutex
+    // (`processOutput`, raw-self), the render and main threads reach the
+    // terminal by place under the same mutex, and the main thread reads
+    // `mailbox` and `backend`. A `&mut self` is a protected Unique over the
+    // whole `Termio`, terminal included, which races with each of them
+    // (`.port/phase-2/mirihar-n444` `n449_writer_termio_mut` and
+    // `n449_shipped`, UB under SB and TB). Each method reaches only the fields
+    // the reference touches, by place: the terminal and the stream handler
+    // only inside the renderer-mutex section, the backend only through the
+    // raw-self `Backend` methods. `threadExit` runs after the writer loop but
+    // before it joins the read thread.
+    ///
+    /// # Safety
+    /// `self_` must point at a live, initialized `Termio<M>`; the caller is
+    /// the io writer thread.
+    pub unsafe fn threadExit(self_: *mut Termio<M>, data: &mut ThreadData<M>) {
+        // self.backend.threadExit(data);
+        unsafe { Backend::threadExit(&raw mut (*self_).backend, data) };
     }
 
     /// Send a message to the mailbox. Depending on the mailbox type in use
@@ -1111,14 +1132,28 @@ impl<M: AppMailbox> Termio<M> {
     /// If you're not using termio.Thread, this is not threadsafe.
     //
     // PORT NOTE: reference `pub inline fn` -> `#[inline]`.
+    //
+    // PORT NOTE (N449, P7-W7 T5d): raw-self (see `threadExit`).
+    ///
+    /// # Safety
+    /// As [`Termio::threadExit`].
     #[inline]
-    pub fn queueWrite(
-        &mut self,
+    pub unsafe fn queueWrite(
+        self_: *mut Termio<M>,
         td: &mut ThreadData<M>,
         data: &[u8],
         linefeed: bool,
     ) -> Result<(), Error> {
-        self.backend.queueWrite(self.alloc, td, data, linefeed)
+        // try self.backend.queueWrite(self.alloc, td, data, linefeed);
+        unsafe {
+            Backend::queueWrite(
+                &raw mut (*self_).backend,
+                (*self_).alloc,
+                td,
+                data,
+                linefeed,
+            )
+        }
     }
 
     /// Update the configuration.
@@ -1133,8 +1168,15 @@ impl<M: AppMailbox> Termio<M> {
     // `self.config`. The renderer lock is the guard-less C0
     // `rustty_zigstd::thread::Mutex`; its `defer unlock` is the explicit unlock
     // before every return below.
-    pub fn changeConfig(
-        &mut self,
+    //
+    // PORT NOTE (N449, P7-W7 T5d): raw-self (see `threadExit`). `config`,
+    // `terminal_stream` and `terminal` are reached by place, inside the
+    // renderer-mutex section, as disjoint field borrows.
+    ///
+    /// # Safety
+    /// As [`Termio::threadExit`].
+    pub unsafe fn changeConfig(
+        self_: *mut Termio<M>,
         td: &mut ThreadData<M>,
         config: DerivedConfig,
     ) -> Result<(), Error> {
@@ -1146,22 +1188,31 @@ impl<M: AppMailbox> Termio<M> {
         //
         // SAFETY: `renderer_state` points at the live shared render State for
         // the Termio's lifetime; `.mutex` is the guard-less shared lock.
-        unsafe { (*(*self.renderer_state).mutex).lock() };
+        unsafe { (*(*(*self_).renderer_state).mutex).lock() };
+
+        // SAFETY: under the renderer mutex; the field borrows below are
+        // disjoint places of the live `Termio`, and none outlives the unlock.
+        // The terminal is borrowed only after the stream handler's
+        // `changeConfig`, which writes it through the handler's own pointer.
+        let this_config = unsafe { &mut (*self_).config };
+        let terminal_stream = unsafe { &mut (*self_).terminal_stream };
+        let alloc = unsafe { (*self_).alloc };
 
         // Deinit our old config. We do this in the lock because the
         // stream handler may be referencing the old config (i.e. enquiry resp)
         // self.config.deinit();
-        self.config.deinit();
+        this_config.deinit();
         // self.config = config.*;
-        self.config = config;
+        *this_config = config;
 
         // Update our stream handler. The stream handler uses the same
         // renderer mutex so this is safe to do despite being executed
         // from another thread.
         // self.terminal_stream.handler.changeConfig(&self.config);
-        self.terminal_stream.handler.changeConfig(&mut self.config);
+        terminal_stream.handler.changeConfig(this_config);
         // td.backend.changeConfig(&self.config);
-        td.backend.changeConfig(&mut self.config);
+        td.backend.changeConfig(this_config);
+        let terminal = unsafe { &mut (*self_).terminal };
 
         // Update the configuration that we know about.
         //
@@ -1171,24 +1222,20 @@ impl<M: AppMailbox> Termio<M> {
 
         // Update the default palette.
         // self.terminal.colors.palette.changeDefault(config.palette);
-        self.terminal
-            .colors
-            .palette
-            .change_default(self.config.palette);
+        terminal.colors.palette.change_default(this_config.palette);
         // self.terminal.flags.dirty.palette = true;
-        self.terminal.flags.dirty.palette = true;
+        terminal.flags.dirty.palette = true;
 
         // Update all our other colors
         // self.terminal.colors.background.default = config.background.toTerminalRGB();
-        self.terminal.colors.background.default = Some(self.config.background.to_terminal_rgb());
+        terminal.colors.background.default = Some(this_config.background.to_terminal_rgb());
         // self.terminal.colors.foreground.default = config.foreground.toTerminalRGB();
-        self.terminal.colors.foreground.default = Some(self.config.foreground.to_terminal_rgb());
+        terminal.colors.foreground.default = Some(this_config.foreground.to_terminal_rgb());
         // self.terminal.colors.cursor.default = cursor: {
         //     const color = config.cursor_color orelse break :cursor null;
         //     break :cursor color.toTerminalRGB() orelse break :cursor null;
         // };
-        self.terminal.colors.cursor.default = self
-            .config
+        terminal.colors.cursor.default = this_config
             .cursor_color
             .and_then(|color| color.to_terminal_rgb());
 
@@ -1196,17 +1243,16 @@ impl<M: AppMailbox> Termio<M> {
         // self.terminal.setKittyGraphicsSizeLimit(self.alloc, config.image_storage_limit);
         // (`4371871bc`: eviction no longer allocates, so this cannot fail — the
         // pre-range `try` and its early-return gate are gone upstream.)
-        self.terminal
-            .set_kitty_graphics_size_limit(self.alloc.into(), self.config.image_storage_limit);
+        terminal.set_kitty_graphics_size_limit(alloc.into(), this_config.image_storage_limit);
         // self.terminal.setKittyGraphicsLoadingLimits(.allWithTempDir(global.tmpDirPath()));
         // SAFETY: `rustty_global::tmp_dir_path()` is `&'static [u8]` — see
         // the `new`-time call site's note above.
-        self.terminal.set_kitty_graphics_loading_limits(unsafe {
+        terminal.set_kitty_graphics_loading_limits(unsafe {
             Limits::all_with_temp_dir(rustty_global::tmp_dir_path())
         });
 
         // (the deferred renderer-state unlock)
-        unsafe { (*(*self.renderer_state).mutex).unlock() };
+        unsafe { (*(*(*self_).renderer_state).mutex).unlock() };
         Ok(())
     }
 
@@ -1225,15 +1271,28 @@ impl<M: AppMailbox> Termio<M> {
     // mailing the renderer, exactly as the reference `try` inside the block. The
     // final `renderer_wakeup.notify()` is the xev placeholder leaf (D6): live
     // now, runtime-panics only once the render thread runs (CORE_BLUEPRINT §5).
-    pub fn resize(&mut self, td: &mut ThreadData<M>, size: Size) -> Result<(), Error> {
+    //
+    // PORT NOTE (N449, P7-W7 T5d): raw-self (see `threadExit`). `size` is
+    // written by place, before the lock, in the reference's order (the stream
+    // handler reads it through its `size` pointer under the lock); the pty
+    // through the raw-self `Backend::resize`; `terminal` only inside the mutex
+    // section.
+    ///
+    /// # Safety
+    /// As [`Termio::threadExit`].
+    pub unsafe fn resize(
+        self_: *mut Termio<M>,
+        td: &mut ThreadData<M>,
+        size: Size,
+    ) -> Result<(), Error> {
         // self.size = size;
-        self.size = size;
+        unsafe { (*self_).size = size };
         // const grid_size = size.grid();
         let grid_size = size.grid();
 
         // Update the size of our pty.
         // try self.backend.resize(grid_size, size.terminal());
-        self.backend.resize(grid_size, size.terminal())?;
+        unsafe { Backend::resize(&raw mut (*self_).backend, grid_size, size.terminal()) }?;
 
         // Enter the critical area that we want to keep small
         // {
@@ -1242,7 +1301,7 @@ impl<M: AppMailbox> Termio<M> {
         //
         // SAFETY: `renderer_state` points at the live shared render State for
         // the Termio's lifetime; `.mutex` is the guard-less shared lock.
-        unsafe { (*(*self.renderer_state).mutex).lock() };
+        unsafe { (*(*(*self_).renderer_state).mutex).lock() };
         let locked: Result<(), Error> = 'locked: {
             // Update the size of our terminal state
             // try self.terminal.resize(self.alloc, .{
@@ -1261,13 +1320,14 @@ impl<M: AppMailbox> Termio<M> {
             // grid dimensions are unchanged, and the clear must happen exactly
             // once (guarded by `modes::sync_output_clear_count`).
             let cell_size = rustty_vt::terminal::ResizeCellSize {
-                width: self.size.cell.width,
-                height: self.size.cell.height,
+                width: unsafe { (*self_).size.cell.width },
+                height: unsafe { (*self_).size.cell.height },
             };
-            if self
-                .terminal
+            // SAFETY: under the renderer mutex; a transient borrow of the
+            // `terminal` place only.
+            if unsafe { &mut (*self_).terminal }
                 .resize(
-                    self.alloc.into(),
+                    unsafe { (*self_).alloc }.into(),
                     rustty_vt::terminal::Resize {
                         cols: grid_size.columns,
                         rows: grid_size.rows,
@@ -1283,8 +1343,10 @@ impl<M: AppMailbox> Termio<M> {
             // if (self.terminal.modes.get(.in_band_size_reports)) {
             //     try self.sizeReportLocked(td, .mode_2048);
             // }
-            if self.terminal.modes.get(Mode::InBandSizeReports) {
-                if let Err(e) = self.sizeReportLocked(td, size_report::Style::Mode2048) {
+            if unsafe { (*self_).terminal.modes.get(Mode::InBandSizeReports) } {
+                if let Err(e) =
+                    unsafe { Self::sizeReportLocked(self_, td, size_report::Style::Mode2048) }
+                {
                     break 'locked Err(e);
                 }
             }
@@ -1293,24 +1355,29 @@ impl<M: AppMailbox> Termio<M> {
         };
         // }
         // (the deferred renderer-state unlock)
-        unsafe { (*(*self.renderer_state).mutex).unlock() };
+        unsafe { (*(*(*self_).renderer_state).mutex).unlock() };
         locked?;
 
         // Mail the renderer so that it can update the GPU and re-render
         // _ = self.renderer_mailbox.push(.{ .resize = size }, .{ .forever = {} });
         //
         // SAFETY: `renderer_mailbox` points at the live renderer thread mailbox.
-        let _ = unsafe { &*self.renderer_mailbox }
+        let _ = unsafe { &*(*self_).renderer_mailbox }
             .push(RendererMessage::Resize(size), Timeout::Forever);
         // self.renderer_wakeup.notify() catch {};
-        let _ = self.renderer_wakeup.notify();
+        let _ = unsafe { (*self_).renderer_wakeup.notify() };
         Ok(())
     }
 
     /// Make a size report.
     // pub fn sizeReport(self: *Termio, td: *ThreadData, style: termio.Message.SizeReport) !void {
-    pub fn sizeReport(
-        &mut self,
+    //
+    // PORT NOTE (N449, P7-W7 T5d): raw-self (see `threadExit`).
+    ///
+    /// # Safety
+    /// As [`Termio::threadExit`].
+    pub unsafe fn sizeReport(
+        self_: *mut Termio<M>,
         td: &mut ThreadData<M>,
         style: crate::message::SizeReport,
     ) -> Result<(), Error> {
@@ -1318,22 +1385,25 @@ impl<M: AppMailbox> Termio<M> {
         // defer self.renderer_state.mutex.unlock();
         //
         // SAFETY: guard-less shared renderer-state lock (see `changeConfig`).
-        unsafe { (*(*self.renderer_state).mutex).lock() };
+        unsafe { (*(*(*self_).renderer_state).mutex).lock() };
         // try self.sizeReportLocked(td, style);
-        let result = self.sizeReportLocked(td, style);
+        let result = unsafe { Self::sizeReportLocked(self_, td, style) };
         // (the deferred renderer-state unlock — fires on the `try` error too.)
-        unsafe { (*(*self.renderer_state).mutex).unlock() };
+        unsafe { (*(*(*self_).renderer_state).mutex).unlock() };
         result
     }
 
     // fn sizeReportLocked(self: *Termio, td: *ThreadData, style: termio.Message.SizeReport) !void {
-    fn sizeReportLocked(
-        &mut self,
+    //
+    // (N449: raw-self; `size` is copied out by place.)
+    unsafe fn sizeReportLocked(
+        self_: *mut Termio<M>,
         td: &mut ThreadData<M>,
         style: crate::message::SizeReport,
     ) -> Result<(), Error> {
+        let size = unsafe { (*self_).size };
         // const grid_size = self.size.grid();
-        let grid_size = self.size.grid();
+        let grid_size = size.grid();
         // const report_size: terminalpkg.size_report.Size = .{
         //     .rows = grid_size.rows,
         //     .columns = grid_size.columns,
@@ -1343,8 +1413,8 @@ impl<M: AppMailbox> Termio<M> {
         let report_size = size_report::Size {
             rows: grid_size.rows,
             columns: grid_size.columns,
-            cell_width: self.size.cell.width,
-            cell_height: self.size.cell.height,
+            cell_width: size.cell.width,
+            cell_height: size.cell.height,
         };
 
         // 1024 bytes should be enough for size report since report
@@ -1357,7 +1427,7 @@ impl<M: AppMailbox> Termio<M> {
         size_report::encode(&mut writer, style, report_size).map_err(|_| Error)?;
 
         // try self.queueWrite(td, writer.buffered(), false);
-        self.queueWrite(td, writer.buffered(), false)
+        unsafe { Self::queueWrite(self_, td, writer.buffered(), false) }
     }
 
     /// Reset the synchronized output mode. This is usually called by timer
@@ -1366,18 +1436,23 @@ impl<M: AppMailbox> Termio<M> {
     //
     // PORT NOTE (core C-T un-defer): guard-less C0 renderer lock; the final
     // `renderer_wakeup.notify()` is the xev placeholder leaf (D6, live-now).
-    pub fn resetSynchronizedOutput(&mut self) {
+    //
+    // PORT NOTE (N449, P7-W7 T5d): raw-self (see `threadExit`).
+    ///
+    /// # Safety
+    /// As [`Termio::threadExit`].
+    pub unsafe fn resetSynchronizedOutput(self_: *mut Termio<M>) {
         // self.renderer_state.mutex.lock();
         // defer self.renderer_state.mutex.unlock();
         //
         // SAFETY: guard-less shared renderer-state lock (see `changeConfig`).
-        unsafe { (*(*self.renderer_state).mutex).lock() };
+        unsafe { (*(*(*self_).renderer_state).mutex).lock() };
         // self.terminal.modes.set(.synchronized_output, false);
-        self.terminal.modes.set(Mode::SynchronizedOutput, false);
+        unsafe { (*self_).terminal.modes.set(Mode::SynchronizedOutput, false) };
         // self.renderer_wakeup.notify() catch {};
-        let _ = self.renderer_wakeup.notify();
+        let _ = unsafe { (*self_).renderer_wakeup.notify() };
         // (the deferred renderer-state unlock)
-        unsafe { (*(*self.renderer_state).mutex).unlock() };
+        unsafe { (*(*(*self_).renderer_state).mutex).unlock() };
     }
 
     /// Clear the screen.
@@ -1392,20 +1467,33 @@ impl<M: AppMailbox> Termio<M> {
     // terminal) with `&self.terminal`; as in vt's graphics_exec we MOVE the
     // storage out, run `delete` against the borrowed terminal, then move it back
     // (memory `rust-mut-args-strongly-protected`). Guard-less C0 renderer lock.
-    pub fn clearScreen(&mut self, td: &mut ThreadData<M>, history: bool) -> Result<(), Error> {
+    //
+    // PORT NOTE (N449, P7-W7 T5d): raw-self (see `threadExit`). The locked
+    // section borrows the `terminal` place once (`terminal` below) and ends
+    // that borrow at the unlock.
+    ///
+    /// # Safety
+    /// As [`Termio::threadExit`].
+    pub unsafe fn clearScreen(
+        self_: *mut Termio<M>,
+        td: &mut ThreadData<M>,
+        history: bool,
+    ) -> Result<(), Error> {
         // {
         //     self.renderer_state.mutex.lock();
         //     defer self.renderer_state.mutex.unlock();
         //
         // SAFETY: guard-less shared renderer-state lock (see `changeConfig`).
-        unsafe { (*(*self.renderer_state).mutex).lock() };
+        unsafe { (*(*(*self_).renderer_state).mutex).lock() };
         let send_form_feed: bool = 'locked: {
+            // SAFETY: under the renderer mutex; the `terminal` place only.
+            let terminal = unsafe { &mut (*self_).terminal };
             // If we're on the alternate screen, we do not clear. Since this is an
             // emulator-level screen clear, this messes up the running programs
             // knowledge of where the cursor is and causes rendering issues. So,
             // for alt screen, we do nothing.
             // if (self.terminal.screens.active_key == .alternate) return;
-            if self.terminal.screens.active_key == rustty_vt::screen_set::Key::Alternate {
+            if terminal.screens.active_key == rustty_vt::screen_set::Key::Alternate {
                 break 'locked false;
             }
 
@@ -1414,26 +1502,25 @@ impl<M: AppMailbox> Termio<M> {
             //
             // SAFETY: `screens.active` is the live active `*mut Screen` owned by
             // the terminal's screen set; the deref is short-lived.
-            unsafe { &mut *self.terminal.screens.active }.clear_selection();
+            unsafe { &mut *terminal.screens.active }.clear_selection();
 
             // Clear our scrollback
             // if (history) self.terminal.eraseDisplay(.scrollback, false);
             if history {
-                self.terminal
-                    .erase_display(rustty_vt::csi::EraseDisplay::Scrollback, false);
+                terminal.erase_display(rustty_vt::csi::EraseDisplay::Scrollback, false);
             }
 
             // If we're not at a prompt, we just delete above the cursor.
             // if (!self.terminal.cursorIsAtPrompt()) {
-            if !self.terminal.cursor_is_at_prompt() {
+            if !terminal.cursor_is_at_prompt() {
                 // if (self.terminal.screens.active.cursor.y > 0) {
                 //     self.terminal.screens.active.eraseActive(
                 //         self.terminal.screens.active.cursor.y - 1,
                 //     );
                 // }
-                let cursor_y = unsafe { (*self.terminal.screens.active).cursor.y };
+                let cursor_y = unsafe { (*terminal.screens.active).cursor.y };
                 if cursor_y > 0 {
-                    unsafe { &mut *self.terminal.screens.active }.erase_active(cursor_y - 1);
+                    unsafe { &mut *terminal.screens.active }.erase_active(cursor_y - 1);
                 }
 
                 // Clear all Kitty graphics state for this screen. This copies
@@ -1452,12 +1539,12 @@ impl<M: AppMailbox> Termio<M> {
                 // its `kitty_images` out (leaving a default), run `delete`
                 // against `&mut self.terminal` (no alias while the storage is
                 // moved out), then move the updated storage back.
-                let active = self.terminal.screens.active;
+                let active = terminal.screens.active;
                 let alloc = unsafe { (*active).alloc };
                 let mut storage = core::mem::take(unsafe { &mut (*active).kitty_images });
                 storage.delete(
                     alloc,
-                    &mut self.terminal,
+                    terminal,
                     rustty_vt::kitty::graphics_command::DeleteAction::All(true),
                 );
                 unsafe { (*active).kitty_images = storage };
@@ -1474,20 +1561,19 @@ impl<M: AppMailbox> Termio<M> {
             // self.terminal.markSemanticPrompt(.command);
             // assert(!self.terminal.cursorIsAtPrompt());
             // self.terminal.eraseDisplay(.complete, false);
-            self.terminal
-                .erase_display(rustty_vt::csi::EraseDisplay::Complete, false);
+            terminal.erase_display(rustty_vt::csi::EraseDisplay::Complete, false);
 
             // (fall-through: at a prompt — send the form-feed below)
             true
         };
         // }
         // (the deferred renderer-state unlock)
-        unsafe { (*(*self.renderer_state).mutex).unlock() };
+        unsafe { (*(*(*self_).renderer_state).mutex).unlock() };
 
         // If we reached here it means we're at a prompt, so we send a form-feed.
         // try self.queueWrite(td, &[_]u8{0x0C}, false);
         if send_form_feed {
-            self.queueWrite(td, &[0x0C], false)?;
+            unsafe { Self::queueWrite(self_, td, &[0x0C], false) }?;
         }
         Ok(())
     }
@@ -1499,16 +1585,24 @@ impl<M: AppMailbox> Termio<M> {
     // ) void {
     //
     // PORT NOTE (core C-T un-defer): guard-less C0 renderer lock.
-    pub fn scrollViewport(&mut self, scroll: rustty_vt::terminal::ScrollViewport) {
+    //
+    // PORT NOTE (N449, P7-W7 T5d): raw-self (see `threadExit`).
+    ///
+    /// # Safety
+    /// As [`Termio::threadExit`].
+    pub unsafe fn scrollViewport(
+        self_: *mut Termio<M>,
+        scroll: rustty_vt::terminal::ScrollViewport,
+    ) {
         // self.renderer_state.mutex.lock();
         // defer self.renderer_state.mutex.unlock();
         //
         // SAFETY: guard-less shared renderer-state lock (see `changeConfig`).
-        unsafe { (*(*self.renderer_state).mutex).lock() };
+        unsafe { (*(*(*self_).renderer_state).mutex).lock() };
         // self.terminal.scrollViewport(scroll);
-        self.terminal.scroll_viewport(scroll);
+        unsafe { (*self_).terminal.scroll_viewport(scroll) };
         // (the deferred renderer-state unlock)
-        unsafe { (*(*self.renderer_state).mutex).unlock() };
+        unsafe { (*(*(*self_).renderer_state).mutex).unlock() };
     }
 
     /// Jump the viewport to the prompt.
@@ -1516,24 +1610,29 @@ impl<M: AppMailbox> Termio<M> {
     //
     // PORT NOTE (core C-T un-defer): guard-less C0 renderer lock; the final
     // `renderer_wakeup.notify()` is the xev placeholder leaf (D6, live-now).
-    pub fn jumpToPrompt(&mut self, delta: isize) -> Result<(), Error> {
+    //
+    // PORT NOTE (N449, P7-W7 T5d): raw-self (see `threadExit`).
+    ///
+    /// # Safety
+    /// As [`Termio::threadExit`].
+    pub unsafe fn jumpToPrompt(self_: *mut Termio<M>, delta: isize) -> Result<(), Error> {
         // {
         //     self.renderer_state.mutex.lock();
         //     defer self.renderer_state.mutex.unlock();
         //
         // SAFETY: guard-less shared renderer-state lock (see `changeConfig`).
-        unsafe { (*(*self.renderer_state).mutex).lock() };
+        unsafe { (*(*(*self_).renderer_state).mutex).lock() };
         //     self.terminal.screens.active.scroll(.{ .delta_prompt = delta });
         //
         // SAFETY: `screens.active` is the live active `*mut Screen`.
-        unsafe { &mut *self.terminal.screens.active }
+        unsafe { &mut *(*self_).terminal.screens.active }
             .scroll(rustty_vt::screen::Scroll::DeltaPrompt(delta));
         // }
         // (the deferred renderer-state unlock)
-        unsafe { (*(*self.renderer_state).mutex).unlock() };
+        unsafe { (*(*(*self_).renderer_state).mutex).unlock() };
 
         // try self.renderer_wakeup.notify();
-        self.renderer_wakeup.notify().map_err(|_| Error)
+        unsafe { (*self_).renderer_wakeup.notify() }.map_err(|_| Error)
     }
 
     /// Called when focus is gained or lost (when focus events are enabled)
@@ -1543,7 +1642,16 @@ impl<M: AppMailbox> Termio<M> {
     // read through the shared `renderer_state.terminal` pointer (which aliases
     // `self.terminal`), exactly as the reference. The `focus.encode` uses a
     // stack `FixedWriter` (the `std.Io.Writer.fixed` analogue).
-    pub fn focusGained(&mut self, td: &mut ThreadData<M>, focused: bool) -> Result<(), Error>
+    //
+    // PORT NOTE (N449, P7-W7 T5d): raw-self (see `threadExit`).
+    ///
+    /// # Safety
+    /// As [`Termio::threadExit`].
+    pub unsafe fn focusGained(
+        self_: *mut Termio<M>,
+        td: &mut ThreadData<M>,
+        focused: bool,
+    ) -> Result<(), Error>
     where
         M: 'static,
     {
@@ -1551,15 +1659,12 @@ impl<M: AppMailbox> Termio<M> {
         //
         // SAFETY: guard-less shared renderer-state lock (see `changeConfig`);
         // `renderer_state.terminal` is the live terminal pointer.
-        unsafe { (*(*self.renderer_state).mutex).lock() };
+        let renderer_state = unsafe { (*self_).renderer_state };
+        unsafe { (*(*renderer_state).mutex).lock() };
         // const focus_event = self.renderer_state.terminal.modes.get(.focus_event);
-        let focus_event = unsafe {
-            (*(*self.renderer_state).terminal)
-                .modes
-                .get(Mode::FocusEvent)
-        };
+        let focus_event = unsafe { (*(*renderer_state).terminal).modes.get(Mode::FocusEvent) };
         // self.renderer_state.mutex.unlock();
-        unsafe { (*(*self.renderer_state).mutex).unlock() };
+        unsafe { (*(*renderer_state).mutex).unlock() };
 
         // If we have focus events enabled, we send the focus event.
         // if (focus_event) {
@@ -1583,12 +1688,12 @@ impl<M: AppMailbox> Termio<M> {
                 return Ok(());
             }
             // try self.queueWrite(td, writer.buffered(), false);
-            self.queueWrite(td, writer.buffered(), false)?;
+            unsafe { Self::queueWrite(self_, td, writer.buffered(), false) }?;
         }
 
         // We always notify our backend of focus changes.
         // try self.backend.focusGained(td, focused);
-        self.backend.focusGained(td, focused)
+        Backend::focusGained(unsafe { &raw mut (*self_).backend }, td, focused)
     }
 
     /// Process output from the pty. This is the manual API that users can
@@ -1844,15 +1949,26 @@ impl<M: AppMailbox> Termio<M> {
     // PORT NOTE: same raw shared-state seam as `colorSchemeReport` (guard-less
     // renderer lock). `error{OutOfMemory}` is `Error::OutOfMemory`; the unlock
     // runs before it propagates.
-    pub fn kittyClipboardGrant(
-        &mut self,
+    //
+    // PORT NOTE (N449, P7-W7 T5d): raw-self (see `threadExit`); the stream
+    // handler is reached by place under the mutex.
+    ///
+    /// # Safety
+    /// As [`Termio::threadExit`].
+    pub unsafe fn kittyClipboardGrant(
+        self_: *mut Termio<M>,
         pw: &[u8],
         dir: rustty_vt::kitty::clipboard::Direction,
     ) -> Result<(), crate::Error> {
         // SAFETY: guard-less shared renderer-state lock (see `changeConfig`).
-        unsafe { (*(*self.renderer_state).mutex).lock() };
-        let result = self.terminal_stream.handler.kittyClipboardGrant(pw, dir);
-        unsafe { (*(*self.renderer_state).mutex).unlock() };
+        unsafe { (*(*(*self_).renderer_state).mutex).lock() };
+        let result = unsafe {
+            (*self_)
+                .terminal_stream
+                .handler
+                .kittyClipboardGrant(pw, dir)
+        };
+        unsafe { (*(*(*self_).renderer_state).mutex).unlock() };
         result.map_err(|_| crate::Error::OutOfMemory)
     }
 
@@ -1860,22 +1976,36 @@ impl<M: AppMailbox> Termio<M> {
     // pub fn colorSchemeReport(self: *Termio, td: *ThreadData, force: bool) !void {
     //
     // PORT NOTE (core C-T un-defer): guard-less C0 renderer lock.
-    pub fn colorSchemeReport(&mut self, td: &mut ThreadData<M>, force: bool) -> Result<(), Error> {
+    //
+    // PORT NOTE (N449, P7-W7 T5d): raw-self (see `threadExit`).
+    ///
+    /// # Safety
+    /// As [`Termio::threadExit`].
+    pub unsafe fn colorSchemeReport(
+        self_: *mut Termio<M>,
+        td: &mut ThreadData<M>,
+        force: bool,
+    ) -> Result<(), Error> {
         // self.renderer_state.mutex.lock();
         // defer self.renderer_state.mutex.unlock();
         //
         // SAFETY: guard-less shared renderer-state lock (see `changeConfig`).
-        unsafe { (*(*self.renderer_state).mutex).lock() };
+        unsafe { (*(*(*self_).renderer_state).mutex).lock() };
         // try self.colorSchemeReportLocked(td, force);
-        let result = self.colorSchemeReportLocked(td, force);
+        let result = unsafe { Self::colorSchemeReportLocked(self_, td, force) };
         // (the deferred renderer-state unlock — fires on the `try` error too.)
-        unsafe { (*(*self.renderer_state).mutex).unlock() };
+        unsafe { (*(*(*self_).renderer_state).mutex).unlock() };
         result
     }
 
     // pub fn colorSchemeReportLocked(self: *Termio, td: *ThreadData, force: bool) !void {
-    pub fn colorSchemeReportLocked(
-        &mut self,
+    //
+    // (N449: raw-self, as `colorSchemeReport`.)
+    ///
+    /// # Safety
+    /// As [`Termio::threadExit`].
+    pub unsafe fn colorSchemeReportLocked(
+        self_: *mut Termio<M>,
         td: &mut ThreadData<M>,
         force: bool,
     ) -> Result<(), Error> {
@@ -1887,7 +2017,7 @@ impl<M: AppMailbox> Termio<M> {
         // the read happens under the caller-held lock (colorSchemeReport).
         if !force
             && !unsafe {
-                (*(*self.renderer_state).terminal)
+                (*(*(*self_).renderer_state).terminal)
                     .modes
                     .get(Mode::ReportColorScheme)
             }
@@ -1898,7 +2028,7 @@ impl<M: AppMailbox> Termio<M> {
         //     .light => "\x1B[?997;2n",
         //     .dark => "\x1B[?997;1n",
         // };
-        let scheme = match self.config.conditional_state.theme {
+        let scheme = match unsafe { (*self_).config.conditional_state.theme } {
             conditional::Theme::Light => device_status::ColorScheme::Light,
             conditional::Theme::Dark => device_status::ColorScheme::Dark,
         };
@@ -1910,14 +2040,19 @@ impl<M: AppMailbox> Termio<M> {
         let mut output = Vec::with_capacity(device_status::MAX_COLOR_SCHEME_REPORT_ENCODE_SIZE);
         device_status::encode_color_scheme_report(&mut output, scheme);
         // try self.queueWrite(td, output, false);
-        self.queueWrite(td, &output, false)
+        unsafe { Self::queueWrite(self_, td, &output, false) }
     }
 
     /// Sends a visibility report to the pty. Unforced reports are only sent
     /// while DEC mode 2033 is enabled.
     // pub fn visibilityReport(self: *Termio, td: *ThreadData, visible: bool, force: bool) !void {
-    pub fn visibilityReport(
-        &mut self,
+    //
+    // PORT NOTE (N449, P7-W7 T5d): raw-self (see `threadExit`).
+    ///
+    /// # Safety
+    /// As [`Termio::threadExit`].
+    pub unsafe fn visibilityReport(
+        self_: *mut Termio<M>,
         td: &mut ThreadData<M>,
         visible: bool,
         force: bool,
@@ -1926,17 +2061,17 @@ impl<M: AppMailbox> Termio<M> {
         // defer self.renderer_state.mutex.unlock(global.io());
         //
         // SAFETY: guard-less shared renderer-state lock (see `colorSchemeReport`).
-        unsafe { (*(*self.renderer_state).mutex).lock() };
-        let result = self.visibilityReportLocked(td, visible, force);
+        unsafe { (*(*(*self_).renderer_state).mutex).lock() };
+        let result = unsafe { Self::visibilityReportLocked(self_, td, visible, force) };
         // (the deferred renderer-state unlock — fires on the `try` error too.)
-        unsafe { (*(*self.renderer_state).mutex).unlock() };
+        unsafe { (*(*(*self_).renderer_state).mutex).unlock() };
         result
     }
 
     // (The body of `visibilityReport` inside its lock; split out so the
-    // guard-less unlock above is the single `defer`.)
-    fn visibilityReportLocked(
-        &mut self,
+    // guard-less unlock above is the single `defer`. N449: raw-self.)
+    unsafe fn visibilityReportLocked(
+        self_: *mut Termio<M>,
         td: &mut ThreadData<M>,
         visible: bool,
         force: bool,
@@ -1947,7 +2082,7 @@ impl<M: AppMailbox> Termio<M> {
         // the read happens under the caller-held lock.
         if !force
             && !unsafe {
-                (*(*self.renderer_state).terminal)
+                (*(*(*self_).renderer_state).terminal)
                     .modes
                     .get(Mode::ReportVisibility)
             }
@@ -1968,7 +2103,7 @@ impl<M: AppMailbox> Termio<M> {
                 device_status::Visibility::NotVisible
             },
         );
-        self.queueWrite(td, &buf, false)
+        unsafe { Self::queueWrite(self_, td, &buf, false) }
     }
 
     /// Get information about the process(es) attached to the backend. Returns
@@ -1990,7 +2125,8 @@ impl<M: AppMailbox> Termio<M> {
     /// # Safety
     /// `self_` must point at a live, initialized `Termio<M>`.
     pub unsafe fn getForegroundPid(self_: *mut Termio<M>) -> Option<u64> {
-        unsafe { (*self_).backend.getForegroundPid() }
+        // (N449: through the raw-self `Backend`, never a `&mut Backend`.)
+        unsafe { Backend::getForegroundPid(&raw mut (*self_).backend) }
     }
 
     /// See [`Termio::getForegroundPid`] (the `.tty_name` half of the reference
@@ -2001,7 +2137,8 @@ impl<M: AppMailbox> Termio<M> {
     /// backend's cached buffer, so the caller picks `'a` no longer than the
     /// `Termio` lives.
     pub unsafe fn getTtyName<'a>(self_: *mut Termio<M>) -> Option<&'a std::ffi::CStr> {
-        unsafe { (*self_).backend.getTtyName() }
+        // (N449: through the raw-self `Backend`, never a `&mut Backend`.)
+        unsafe { Backend::getTtyName(&raw mut (*self_).backend) }
     }
 }
 

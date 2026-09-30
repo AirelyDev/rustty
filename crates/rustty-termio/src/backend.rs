@@ -75,12 +75,36 @@ pub enum Config {
 //
 // PORT NOTE: reference `pub const Backend = union(Kind)`. Each method is the
 // reference's exhaustive `switch (self.*)` delegation.
+//
+// PORT NOTE (N449, P7-W7 T5d): every method another thread's access overlaps
+// is raw-self (`self_: *mut Backend`, the reference's `self: *Backend`) and
+// delegates to the raw-self `Exec` method through [`Backend::exec_ptr`]. The
+// io writer thread runs `threadEnter`, `threadExit`, `focusGained`, `resize`
+// and `queueWrite` while the main thread reads the pty (`getForegroundPid`,
+// `getTtyName`) and the close-confirm `args`; a `&mut Backend` on either side
+// is a Unique over the whole subprocess, pty included, which races with the
+// other (`.port/phase-2/mirihar-n444` `n449_main_backend_mut` UB under SB and
+// TB, `n449_fixed` CLEAN). `#[repr(transparent)]` makes the single-variant
+// projection a pointer cast, so no reference to the whole backend is formed.
+// `deinit` and `initTerminal` run while no other thread exists and stay
+// `&mut self`.
+#[repr(transparent)]
 pub enum Backend {
     // exec: termio.Exec,
     Exec(exec::Exec),
 }
 
 impl Backend {
+    /// The `.exec => |*exec|` payload of a raw `*mut Backend`, without forming
+    /// a reference to the backend.
+    ///
+    /// `Backend` is `#[repr(transparent)]` over its single `Exec` variant, so
+    /// the payload sits at the backend's own address.
+    #[inline]
+    pub fn exec_ptr(self_: *mut Backend) -> *mut exec::Exec {
+        self_.cast()
+    }
+
     pub fn deinit(&mut self) {
         match self {
             // .exec => |*exec| exec.deinit(),
@@ -105,55 +129,57 @@ impl Backend {
     // B4, per the blueprint).
     ///
     /// # Safety
-    /// `io` must be a valid `Termio<M>` pointer that outlives the read thread.
+    /// `self_` must point at a live `Backend`; `io` must be a valid `Termio<M>`
+    /// pointer that outlives the read thread.
     pub unsafe fn threadEnter<M: AppMailbox + 'static>(
-        &mut self,
+        self_: *mut Backend,
         alloc: Allocator,
         io: *mut Termio<M>,
         td: &mut termio_impl::ThreadData<M>,
     ) -> Result<(), Error> {
-        match self {
-            // .exec => |*exec| try exec.threadEnter(alloc, io, td),
-            Backend::Exec(exec) => unsafe { exec.threadEnter(alloc, io, td) },
-        }
+        // .exec => |*exec| try exec.threadEnter(alloc, io, td),
+        unsafe { exec::Exec::threadEnter(Self::exec_ptr(self_), alloc, io, td) }
     }
 
-    pub fn threadExit<M: AppMailbox>(&mut self, td: &mut termio_impl::ThreadData<M>) {
-        match self {
-            // .exec => |*exec| exec.threadExit(td),
-            Backend::Exec(exec) => exec.threadExit(td),
-        }
+    /// # Safety
+    /// `self_` must point at a live `Backend`.
+    pub unsafe fn threadExit<M: AppMailbox>(
+        self_: *mut Backend,
+        td: &mut termio_impl::ThreadData<M>,
+    ) {
+        // .exec => |*exec| exec.threadExit(td),
+        unsafe { exec::Exec::threadExit(Self::exec_ptr(self_), td) }
     }
 
     pub fn focusGained<M: AppMailbox + 'static>(
-        &mut self,
+        self_: *mut Backend,
         td: &mut termio_impl::ThreadData<M>,
         focused: bool,
     ) -> Result<(), Error> {
-        match self {
-            // .exec => |*exec| try exec.focusGained(td, focused),
-            Backend::Exec(exec) => exec.focusGained(td, focused),
-        }
+        // .exec => |*exec| try exec.focusGained(td, focused),
+        exec::Exec::focusGained(Self::exec_ptr(self_), td, focused)
     }
 
-    pub fn resize(&mut self, grid_size: GridSize, screen_size: ScreenSize) -> Result<(), Error> {
-        match self {
-            // .exec => |*exec| try exec.resize(grid_size, screen_size),
-            Backend::Exec(exec) => exec.resize(grid_size, screen_size),
-        }
+    /// # Safety
+    /// `self_` must point at a live `Backend`.
+    pub unsafe fn resize(
+        self_: *mut Backend,
+        grid_size: GridSize,
+        screen_size: ScreenSize,
+    ) -> Result<(), Error> {
+        // .exec => |*exec| try exec.resize(grid_size, screen_size),
+        unsafe { exec::Exec::resize(Self::exec_ptr(self_), grid_size, screen_size) }
     }
 
     pub fn queueWrite<M: AppMailbox>(
-        &mut self,
+        self_: *mut Backend,
         alloc: Allocator,
         td: &mut termio_impl::ThreadData<M>,
         data: &[u8],
         linefeed: bool,
     ) -> Result<(), Error> {
-        match self {
-            // .exec => |*exec| try exec.queueWrite(alloc, td, data, linefeed),
-            Backend::Exec(exec) => exec.queueWrite(alloc, td, data, linefeed),
-        }
+        // .exec => |*exec| try exec.queueWrite(alloc, td, data, linefeed),
+        exec::Exec::queueWrite(Self::exec_ptr(self_), alloc, td, data, linefeed)
     }
 
     // PORT NOTE (Zig lazy compilation, S212-F3): the reference delegates to
@@ -193,20 +219,23 @@ impl Backend {
     // concrete accessors below (`.foreground_pid` -> `u64`, `.tty_name` ->
     // `[:0]const u8` -> `&CStr`), exactly mirroring the rustty-os `pty.rs`
     // split of the same reference pattern.
-    pub fn getForegroundPid(&mut self) -> Option<u64> {
-        match self {
-            // .exec => |*exec| exec.getProcessInfo(info),
-            Backend::Exec(exec) => exec.getForegroundPid(),
-        }
+    ///
+    /// # Safety
+    /// `self_` must point at a live `Backend`.
+    pub unsafe fn getForegroundPid(self_: *mut Backend) -> Option<u64> {
+        // .exec => |*exec| exec.getProcessInfo(info),
+        unsafe { exec::Exec::getForegroundPid(Self::exec_ptr(self_)) }
     }
 
     /// See [`Backend::getForegroundPid`] (the `.tty_name` half of the
     /// reference `getProcessInfo`).
-    pub fn getTtyName(&mut self) -> Option<&std::ffi::CStr> {
-        match self {
-            // .exec => |*exec| exec.getProcessInfo(info),
-            Backend::Exec(exec) => exec.getTtyName(),
-        }
+    ///
+    /// # Safety
+    /// As [`Backend::getForegroundPid`]; the caller picks `'a` no longer than
+    /// the `Backend` lives.
+    pub unsafe fn getTtyName<'a>(self_: *mut Backend) -> Option<&'a std::ffi::CStr> {
+        // .exec => |*exec| exec.getProcessInfo(info),
+        unsafe { exec::Exec::getTtyName(Self::exec_ptr(self_)) }
     }
 }
 
