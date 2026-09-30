@@ -32,9 +32,17 @@ draw mutex when the frame begins (`draw_frame_locked`):
 - `surface`: a retain of the target's IOSurface, the only part of the `Target`
   `present` reads.
 
-The handler (`metal_buffer_completed` → `present_layer` + `frame_completed_on`) forms
-no reference to any renderer byte. It also releases the frame before the health push
-(UD362 (a)); the model does the same.
+- `health_retry: Arc<HealthReportRetry>`: the UD362 retry (a redraw flag and the render
+  thread's `draw_now` wakeup).
+
+The handler (`metal_buffer_completed` → `LayerCell::present` + `frame_completed_on`)
+forms no reference to any renderer byte. Fix round 1 (ruling 39): it keeps the
+reference's order (store, push, release) with an `.instant` push; a refused report is
+withdrawn (compare-exchange back) and a redraw requested (UD362). The model does the
+same, with a one-slot app mailbox so the refusal path runs, and it tears the renderer
+down (wait for every release, take the chain, free the box) BEFORE joining the
+completion thread, since after its release a completion may still be dropping its
+clones.
 
 ## The model
 
@@ -45,7 +53,8 @@ under the lock, waits on `frame_sema` in `next_frame` and hands the frame to Met
 the Metal completion thread (runs each committed frame's handler, unlocked), and, in
 `fixed_async_and_sync_draw`, the main thread's CoreAnimation sync draw (narrow, running
 the same handler inline under the lock). Two swap-chain frames and four rounds, so
-`next_frame` really waits for completions. The scheduler is explored over 16 seeds
+`next_frame` really waits for completions. The main thread's sync draw also drains the
+app mailbox between its draws. The scheduler is explored over 16 seeds
 (`-Zmiri-many-seeds=0..16`).
 
 ## Candidates & results
@@ -63,7 +72,8 @@ reverse); TB "Data race detected between (1) retag read on thread … and (2) no
 write …" / "(1) atomic store … and (2) retag read of type `Shipped`".
 
 Measured 2026-09-29, `miri 0.1.0 (6f72b5dd5f 2026-07-22)`, macOS host: the shipped candidate was run
-before the port change, the fixed candidates model the change as landed.
+before the port change, the fixed candidates model the change as landed; re-run after fix round 1
+(new order, refusal path, teardown before the join) with the same results.
 
 ## Run
 

@@ -33,7 +33,7 @@ pub mod thread;
 mod latest_frame;
 
 use latest_frame::DrawMutex;
-use std::sync::atomic::{AtomicI32, Ordering::SeqCst};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering::SeqCst};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex as StdMutex};
 use thread::Semaphore;
@@ -68,7 +68,25 @@ impl Mailbox {
     fn push(&self, health: i32) {
         self.0.lock().unwrap().push(health);
     }
+
+    /// `.instant`: refused (false) once `MAILBOX_CAPACITY` reports are queued.
+    fn push_instant(&self, health: i32) -> bool {
+        let mut q = self.0.lock().unwrap();
+        if q.len() >= MAILBOX_CAPACITY {
+            return false;
+        }
+        q.push(health);
+        true
+    }
+
+    /// The main thread drains the app mailbox.
+    fn drain(&self) {
+        self.0.lock().unwrap().clear();
+    }
 }
+
+/// A small app mailbox, so the fixed model also takes the refusal path.
+const MAILBOX_CAPACITY: usize = 1;
 
 fn health_of(round: usize) -> i32 {
     (round % 2) as i32
@@ -221,9 +239,15 @@ fn run_shipped() {
 // FIXED (N440, P7-W7 T5a): the completion context carries clones of what the
 // handler needs, each in its own allocation: `health: Arc<AtomicHealth>`,
 // `frame_sema: Arc<Semaphore>` (the swap chain's), a `SurfaceMailbox` clone,
-// the presenter cell `Arc<LayerCell>` (Metal's `layer`) and the
-// target's retained IOSurface. The handler forms no reference to any renderer
-// byte. The frame is released BEFORE the health push (UD362 (a)).
+// the presenter cell `Arc<LayerCell>` (Metal's `layer`), the health-report
+// retry (`Arc<HealthReportRetry>`) and the target's retained IOSurface. The
+// handler forms no reference to any renderer byte. Fix round 1 (ruling 39): the
+// reference's order, store → push → release, with an `.instant` push whose
+// refusal withdraws the report (compare-exchange back) and requests a redraw
+// (UD362), so `SwapChain::deinit`'s wait for every release also waits for every
+// push. Teardown (wait on the semaphore, take the chain, free the renderer)
+// happens BEFORE the completion thread is joined: after its release a
+// completion may only drop its clones.
 // ===========================================================================
 struct FixedApi {
     layer: Arc<Option<Layer>>,
@@ -239,6 +263,7 @@ struct FixedSwapChain {
 struct Fixed {
     draw_mutex: DrawMutex,
     health: Arc<AtomicI32>,
+    health_retry: Arc<AtomicBool>,
     surface_mailbox: Mailbox,
     api: FixedApi,
     swap_chain: Option<FixedSwapChain>,
@@ -249,6 +274,7 @@ struct Fixed {
 /// The fixed `CompletionContext`: owned clones only.
 struct FixedCtx {
     health: Arc<AtomicI32>,
+    health_retry: Arc<AtomicBool>,
     frame_sema: Arc<Semaphore>,
     surface_mailbox: Mailbox,
     layer: Arc<Option<Layer>>,
@@ -261,6 +287,7 @@ impl Fixed {
         Fixed {
             draw_mutex: DrawMutex::new(),
             health: Arc::new(AtomicI32::new(0)),
+            health_retry: Arc::new(AtomicBool::new(false)),
             surface_mailbox: Mailbox(Arc::new(StdMutex::new(Vec::new()))),
             api: FixedApi {
                 layer: Arc::new(Some(Layer {
@@ -302,6 +329,7 @@ impl Fixed {
             (*p).uniforms[1] += 1.0;
             FixedCtx {
                 health: (*p).health.clone(),
+                health_retry: (*p).health_retry.clone(),
                 frame_sema: (*chain).frame_sema.clone(),
                 surface_mailbox: (*p).surface_mailbox.clone(),
                 layer: (*p).api.layer.clone(),
@@ -319,19 +347,21 @@ fn fixed_buffer_completed(ctx: &FixedCtx, health: i32) {
             *layer.contents.lock().unwrap() = ctx.surface.len() + usize::from(ctx.sync);
         }
     }
-    let changed = ctx.health.load(SeqCst) != health;
-    if changed {
+    let previous = ctx.health.load(SeqCst);
+    if previous != health {
         ctx.health.store(health, SeqCst);
+        if !ctx.surface_mailbox.push_instant(health) {
+            let _ = ctx.health.compare_exchange(health, previous, SeqCst, SeqCst);
+            ctx.health_retry.store(true, SeqCst);
+        }
     }
     ctx.frame_sema.post();
-    if changed {
-        ctx.surface_mailbox.push(health);
-    }
 }
 
 fn run_fixed(with_main_sync_draw: bool) {
     let p = P(Box::into_raw(Box::new(Fixed::new())));
     let main_lock = unsafe { (*p.0).draw_mutex.clone() };
+    let mailbox = unsafe { (*p.0).surface_mailbox.clone() };
     let render_lock = main_lock.clone();
     let (tx, rx) = mpsc::channel::<FixedCtx>();
     let metal = std::thread::spawn(move || {
@@ -350,8 +380,9 @@ fn run_fixed(with_main_sync_draw: bool) {
                     r.api.blending ^= 1;
                     r.uniforms[0] += 1.0;
                 });
-                // `draw_frame_raw(sync = false)`.
+                // `draw_frame_raw(sync = false)`: the draw consumes a retry request.
                 render_lock.lock();
+                let _retry = (*p.0).health_retry.swap(false, SeqCst);
                 let ctx = Fixed::begin_frame(p.0, false);
                 tx.send(ctx).unwrap();
                 render_lock.unlock();
@@ -368,20 +399,27 @@ fn run_fixed(with_main_sync_draw: bool) {
             fixed_buffer_completed(&ctx, health_of(round + 1));
             main_lock.unlock();
             drop(ctx);
+            // The main thread drains the app mailbox between its draws.
+            mailbox.drain();
             std::thread::yield_now();
         }
     }
     render.join().unwrap();
-    metal.join().unwrap();
-    // `SwapChain::deinit`: every in-flight frame has completed.
+    // `SwapChain::deinit` (`Renderer::deinit`): wait for every in-flight frame's
+    // release, then free the chain and the renderer, all BEFORE the completion
+    // thread is joined: a completion that has released its frame may still be
+    // running, dropping its clones.
     unsafe {
         let chain = (*p.0).swap_chain.take().unwrap();
         for _ in 0..SWAP_CHAIN_COUNT {
             chain.frame_sema.wait();
         }
+        drop(chain);
     }
     drop(main_lock);
     drop(unsafe { Box::from_raw(p.0) });
+    metal.join().unwrap();
+    drop(mailbox);
 }
 
 fn main() {

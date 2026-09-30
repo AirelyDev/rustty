@@ -118,26 +118,62 @@ pub enum Error {
 //
 // PORT NOTE (N440, P7-W7 T5a): the reference's `layer: IOSurfaceLayer` field, moved
 // into its own allocation (`Metal::layer: Arc<LayerCell>`) so the frame completion
-// handler presents through its own clone instead of through the renderer.
-pub struct LayerCell(pub Option<IOSurfaceLayer>);
+// handler presents through its own clone instead of through the renderer. The
+// field is private: through a `&LayerCell` only `present` is reachable; `Metal`
+// reads the layer itself (`Metal::layer`) on the threads that own it.
+pub struct LayerCell(Option<IOSurfaceLayer>);
 
-// SAFETY: the cell is shared across exactly the threads the reference uses the
-// layer on: the render thread (`surfaceSize`, `loopEnter`), the Metal completion
-// thread (`present(sync = false)` → `setSurface`, which retains the layer and
-// dispatches the `contents` write to the main queue, and possibly the final
-// release), and the main thread (`present(sync = true)` → `setSurfaceSync` from a
-// sync draw, the display callback). The layer's own state that those paths
-// touch is its retain count (atomic in the ObjC runtime) and the display-callback
-// ivars (atomics).
+// SAFETY: a `&LayerCell` reaches the layer only through `present`, which is what
+// the completion handler calls on the Metal completion thread (async frames) or on
+// the drawing thread (sync frames, the main thread's sync draw):
+// - `present(sync = false)` → `IOSurfaceLayer::set_surface`: retains the layer and
+//   the surface and hops to the main queue for the `contents` write (it runs the
+//   write inline only when already on the main thread);
+// - `present(sync = true)` → `set_surface_sync`: the `contents` write on the
+//   calling thread, which for a sync frame is the drawing (main) thread, as in the
+//   reference;
+// - the final `Drop` of a cell whose last clone a completion held: the display-
+//   callback clear (atomic ivar stores) plus a CALayer release (the ObjC retain
+//   count is atomic).
+// Every other use of the layer goes through `Metal` (`surface_size`, `loop_enter`,
+// `attach_view`, `Drop`), on the threads the reference uses.
 unsafe impl Send for LayerCell {}
 // SAFETY: see the `Send` impl.
 unsafe impl Sync for LayerCell {}
 
-impl core::ops::Deref for LayerCell {
-    type Target = Option<IOSurfaceLayer>;
+impl LayerCell {
+    fn new(layer: Option<IOSurfaceLayer>) -> LayerCell {
+        LayerCell(layer)
+    }
 
-    fn deref(&self) -> &Option<IOSurfaceLayer> {
-        &self.0
+    /// An offscreen cell (no layer): `present` is a no-op.
+    pub(crate) fn offscreen() -> LayerCell {
+        LayerCell(None)
+    }
+
+    /// `Metal.present`'s body: presents `surface` on this cell's layer.
+    //
+    // PORT NOTE (N440, P7-W7 T5a): the frame completion handler calls this with its
+    // context's clones of the cell and of the target's IOSurface (the only part of
+    // the `Target` the reference's `present` reads), never through the renderer.
+    pub fn present(&self, surface: &IOSurfaceRef, sync: bool) -> Result<(), Error> {
+        match &self.0 {
+            Some(layer) => {
+                if sync {
+                    layer.set_surface_sync(surface);
+                } else {
+                    // try self.layer.setSurface(target.surface);  (Metal.zig:257)
+                    layer
+                        .set_surface(surface)
+                        .map_err(|iosurface_layer::Error::ObjCFailed| Error::ObjCFailed)?;
+                }
+                Ok(())
+            }
+            // OFFSCREEN (layer None): no layer to set; the completion path reads back
+            // via `Target::read_bgra` instead. Preserved no-op (never exercised
+            // on-screen).
+            None => Ok(()),
+        }
     }
 }
 
@@ -156,7 +192,7 @@ pub struct Metal {
     // in-flight frame's `CompletionContext` holds a clone, so presenting reads no
     // renderer byte. `attach_view` swaps in a new cell (before the render loop
     // starts); an in-flight frame keeps presenting through the cell it began with.
-    pub layer: Arc<LayerCell>,
+    layer: Arc<LayerCell>,
     /// MTLDevice
     pub device: Retained<ProtocolObject<dyn MTLDevice>>,
     /// MTLCommandQueue
@@ -343,7 +379,7 @@ impl Metal {
         // attach — see its verbatim body.
 
         Ok(Metal {
-            layer: Arc::new(LayerCell(None)),
+            layer: Arc::new(LayerCell::offscreen()),
             device,
             queue,
             blending,
@@ -485,7 +521,7 @@ impl Metal {
         layer.as_ca_layer().setNeedsDisplayOnBoundsChange(true);
 
         Ok(Metal {
-            layer: Arc::new(LayerCell(Some(layer))),
+            layer: Arc::new(LayerCell::new(Some(layer))),
             device,
             queue,
             blending,
@@ -501,6 +537,22 @@ impl Metal {
             },
             display_ctx: core::ptr::null_mut(),
         })
+    }
+
+    /// The layer frames are presented on (`None` offscreen).
+    pub fn layer(&self) -> Option<&IOSurfaceLayer> {
+        self.layer.0.as_ref()
+    }
+
+    /// The presenter cell, for a frame's completion context (N440).
+    pub(crate) fn presenter(&self) -> Arc<LayerCell> {
+        self.layer.clone()
+    }
+
+    /// Test-only: present on a headless layer without a host view.
+    #[cfg(test)]
+    pub(crate) fn set_layer_for_test(&mut self, layer: IOSurfaceLayer) {
+        self.layer = Arc::new(LayerCell::new(Some(layer)));
     }
 
     /// W-ATTACH (macos-swift-app tier): attach an already-offscreen `Metal` to a
@@ -530,7 +582,7 @@ impl Metal {
         }
         layer.as_ca_layer().setContentsScale(scale_factor);
         layer.as_ca_layer().setNeedsDisplayOnBoundsChange(true);
-        self.layer = Arc::new(LayerCell(Some(layer)));
+        self.layer = Arc::new(LayerCell::new(Some(layer)));
         Ok(())
     }
 
@@ -605,7 +657,8 @@ impl Metal {
         // OFFSCREEN divergence: `layer` is `Option`. On-screen (loopEnter's only real
         // caller) it is always `Some`; a defensive `if let` keeps the offscreen ctor
         // safe.
-        if let Some(layer) = unsafe { &**(*self_ptr).layer } {
+        let cell: &Arc<LayerCell> = unsafe { &(*self_ptr).layer };
+        if let Some(layer) = cell.0.as_ref() {
             // self.layer.setDisplayCallback(@ptrCast(&displayCallback), @ptrCast(renderer));
             //
             // PORT NOTE (N437): the context is a `DisplayCallbackCtx` carrying
@@ -833,7 +886,7 @@ impl Metal {
     //         .height = @min(@as(u32, @intFromFloat(bounds.size.height * scale)), self.max_texture_size),
     //     };
     pub fn surface_size(&self) -> Result<SurfaceSize, Error> {
-        match &**self.layer {
+        match self.layer() {
             Some(layer) => {
                 // bounds = layer.bounds; scale = layer.contentsScale (Metal.zig:217-218).
                 let bounds = layer.as_ca_layer().bounds(); // CGRect
@@ -969,40 +1022,11 @@ impl Metal {
     //         try self.layer.setSurface(target.surface);
     //     }
     pub fn present(&self, target: &Target, sync: bool) -> Result<(), Error> {
-        present_layer(&self.layer, &target.surface, sync)
+        self.layer.present(&target.surface, sync)
     }
 
     // P7-W7 T2 (`2f0b65346`): `presentLastTarget` (a no-op for Metal) is deleted
     // with the generic renderer's call to it.
-}
-
-/// `Metal.present`'s body over the presenter cell: presents `surface` on `layer`.
-//
-// PORT NOTE (N440, P7-W7 T5a): the frame completion handler calls this with its
-// context's clones of the layer cell and the target's IOSurface (the only part of
-// the `Target` the reference's `present` reads), never through the renderer.
-pub fn present_layer(
-    layer: &Option<IOSurfaceLayer>,
-    surface: &IOSurfaceRef,
-    sync: bool,
-) -> Result<(), Error> {
-    match layer {
-        Some(layer) => {
-            if sync {
-                layer.set_surface_sync(surface);
-            } else {
-                // try self.layer.setSurface(target.surface);  (Metal.zig:257)
-                layer
-                    .set_surface(surface)
-                    .map_err(|iosurface_layer::Error::ObjCFailed| Error::ObjCFailed)?;
-            }
-            Ok(())
-        }
-        // OFFSCREEN (layer None): no layer to set; the completion path reads back
-        // via `Target::read_bgra` instead. Preserved no-op (never exercised
-        // on-screen).
-        None => Ok(()),
-    }
 }
 
 // fn displayCallback(renderer: *Renderer) align(8) void {
@@ -1070,7 +1094,7 @@ impl Drop for Metal {
         if !self.display_ctx.is_null() {
             // (Explicitly: an in-flight frame's completion context may still hold
             // the layer cell, so its `IOSurfaceLayer` Drop can run later.)
-            if let Some(layer) = &**self.layer {
+            if let Some(layer) = self.layer() {
                 layer.set_display_callback(None, core::ptr::null_mut());
             }
             // SAFETY: `display_ctx` came from `Box::into_raw` in `loop_enter` and the

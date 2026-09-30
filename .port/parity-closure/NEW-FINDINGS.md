@@ -8790,7 +8790,11 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `fixed_async_and_sync_draw` CLEAN under SB and TB, 16 seeds each). LIFETIMES rows: `Frame.zig`
   `CompletionBlock.Context` `renderer`/`target`, `generic.zig` `Renderer.health`,
   `SwapChain.frame_sema`, `Metal.zig` `Metal.layer`. The two Metal deadlock variants are fixed in the
-  same task (UD362).
+  same task (UD362). Fix round 1 (ruling 39): the reference's order (store, push, release) is kept with
+  an `.instant` push plus withdrawal and a `HealthReportRetry` (redraw flag + `draw_now` wakeup, also in
+  the context), so no completion can outlive `SwapChain::deinit`; `LayerCell` is narrowed (private
+  field, only `present` reachable, `Metal::layer()` for the rest); the harness tears the renderer down
+  before joining the completion thread and models the new order (still UB / CLEAN / CLEAN).
 
 ## N441 — main-thread references to the whole core `Surface` cover the renderer the render thread writes under the draw mutex
 
