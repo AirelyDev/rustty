@@ -1086,6 +1086,20 @@ impl AtomicHealth {
     pub fn store(&self, health: Health) {
         self.raw.store(health as i32, Ordering::SeqCst);
     }
+
+    /// `cmpxchgStrong(current, new, .seq_cst, .seq_cst)`: stores `new` only if the
+    /// value is still `current`. Rustty-only: the Metal sync path's undelivered
+    /// health report is withdrawn with it (UD362).
+    pub fn compare_exchange(&self, current: Health, new: Health) -> bool {
+        self.raw
+            .compare_exchange(
+                current as i32,
+                new as i32,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+    }
 }
 
 // ===========================================================================
@@ -1624,7 +1638,12 @@ mod macos_impl {
         pub display_link: Option<DisplayLink>,
 
         /// Health of the most recently completed frame.
-        pub health: AtomicHealth,
+        //
+        // PORT NOTE (N440, P7-W7 T5a): behind an `Arc`, in its own allocation. The
+        // frame completion handler runs on a Metal-owned thread without the draw
+        // mutex; each in-flight frame's `CompletionContext` holds a clone, so the
+        // handler's load/store touch no renderer byte.
+        pub health: Arc<AtomicHealth>,
 
         /// Health of how well the apprt can present our frames.
         ///
@@ -1677,7 +1696,10 @@ mod macos_impl {
         // `self.overlay` in place without the draw mutex while the macOS main
         // thread's sync draw reads it under the mutex. The port builds the next
         // overlay into a local (reusing this one) without the lock and swaps it
-        // into `overlay` under the lock.
+        // into `overlay` under the lock. Cost: while the overlay is on, two
+        // terminal-sized overlay surfaces stay resident (`overlay` and this spare,
+        // where the reference keeps one); it is released when the overlay is
+        // turned off.
         pub overlay_spare: Option<Overlay>,
 
         /// The base timestamp for the Kitty graphics animation clock.
@@ -1757,7 +1779,13 @@ mod macos_impl {
         //
         // Zig `frame_sema: std.Thread.Semaphore = .{ .permits = buf_count }` ->
         // `Semaphore::with_permits(SWAP_CHAIN_COUNT)` (set in `init`).
-        pub frame_sema: Semaphore,
+        //
+        // PORT NOTE (N440, P7-W7 T5a): behind an `Arc`, in its own allocation: each
+        // in-flight frame's `CompletionContext` holds a clone and `releaseFrame`s
+        // through it from the completion handler, which runs without the draw
+        // mutex and must touch no renderer byte. A released chain's semaphore lives
+        // until the last in-flight completion drops its clone.
+        pub frame_sema: Arc<Semaphore>,
         // PORT NOTE (`c4e16970a`): the `defunct` flag is DELETED — the owner's
         // `swap_chain: ?SwapChain` (`Option`) now models torn-down state, so a
         // released/unrealized chain simply doesn't exist.
@@ -1790,7 +1818,7 @@ mod macos_impl {
                 frames,
                 // Zig field defaults (relied on by `.{ .frames = undefined }`):
                 frame_index: 0,
-                frame_sema: Semaphore::with_permits(SWAP_CHAIN_COUNT),
+                frame_sema: Arc::new(Semaphore::with_permits(SWAP_CHAIN_COUNT)),
             })
         }
 
@@ -2397,7 +2425,7 @@ mod macos_impl {
                 bg_image: None,
                 bg_image_changed: false,
                 bg_image_buffer_modified: 0,
-                health: AtomicHealth::new(crate::Health::Healthy),
+                health: Arc::new(AtomicHealth::new(crate::Health::Healthy)),
                 target_config_modified: 0,
                 terminal_state: RenderState::empty(),
                 terminal_state_frame_count: 0,
@@ -5620,7 +5648,7 @@ mod macos_impl {
             // Acquire the draw mutex for all remaining state updates.
             // (N437 / ruling 32: the whole `&mut` exists only here, under the
             // lock, after the last use of the unlocked view above.)
-            let (sync, old_overlay) = unsafe {
+            let (sync, old_overlay, overlay_off) = unsafe {
                 Self::with_locked(self_ptr, lock, move |r| {
                     // PORT NOTE: reference defect (R13), UD363. The overlay was built
                     // into `next_overlay` above, without the lock (as the reference
@@ -5705,13 +5733,14 @@ mod macos_impl {
                     // takes them after it, racing the main thread's `drawFrame(sync)`
                     // clearing `cells_rebuilt`. Reading here is the outcome where
                     // that draw comes after the resync.
-                    (r.display_link_sync(), old_overlay)
+                    (r.display_link_sync(), old_overlay, r.overlay.is_none())
                 })
             };
             // UD363: keep the replaced overlay for the next rebuild to reuse, or,
             // with no overlay configured, release it as the reference does.
+            // (`overlay_off` was read under the lock with the swap.)
             match old_overlay {
-                Some(mut old) if unsafe { (*self_ptr).overlay.is_none() } => old.deinit(),
+                Some(mut old) if overlay_off => old.deinit(),
                 old => unsafe { (*self_ptr).overlay_spare = old },
             }
 
@@ -6130,18 +6159,20 @@ mod macos_impl {
     // Chunk 4 — the offscreen draw path (GPU_RD_CHUNK4_DESIGN)
     // =======================================================================
 
-    /// `= Frame.zig` `bufferCompleted` (the `@fieldParentPtr` / container_of
-    /// re-entry). Matches `crate::metal::frame::CompletionFn`.
+    /// `= Frame.zig` `bufferCompleted`. Matches `crate::metal::frame::CompletionFn`.
     //
-    // PORT NOTE ([FIX-2] / `rust-mut-args-strongly-protected` / vtc-effects-trampoline-
-    // seam-d3): the renderer pointer is recovered as a RAW `*mut Renderer` (NOT
-    // `&mut`) and deref'd HERE — inside `Frame::complete`, which runs inside
-    // `draw_frame` while `draw_frame`'s `&mut self` (the raw root `self_ptr`) is still
-    // live on the stack. A `&mut` reborrow held across this callback would be UB. This
-    // exact structure (`&mut api.present` + `&self frame_completed` fired while the
-    // outer `self_ptr` + `frame` raw roots are live) is PROVEN clean under Stacked
-    // Borrows AND Tree Borrows on `.port/phase-2/mirihar-chunk3b` (`drawframe_shipped`).
-    unsafe fn metal_buffer_completed(
+    // PORT NOTE (N440, P7-W7 T5a): the reference reaches `block.renderer.api` and
+    // `block.renderer.frameCompleted(..)` through the context's `*Renderer`. On the
+    // async path this runs on a Metal-owned thread WITHOUT the draw mutex while the
+    // render thread may hold a whole-renderer `&mut` under it (`Renderer::with_locked`),
+    // which in Rust is an aliasing violation (a data race with that retag). The port's
+    // context carries clones of exactly what this body needs (the layer cell, the
+    // target's IOSurface, the health cell, the frame semaphore and the surface
+    // mailbox), taken under the draw mutex when the frame began, so it forms no
+    // reference to any renderer byte. `.port/phase-2/mirihar-n440`:
+    // `shipped_async_handler` UB, `fixed_async_handler` and
+    // `fixed_async_and_sync_draw` CLEAN, under SB and TB.
+    fn metal_buffer_completed(
         ctx: &CompletionContext,
         buffer: &ProtocolObject<dyn MTLCommandBuffer>,
     ) {
@@ -6154,8 +6185,6 @@ mod macos_impl {
             MTLCommandBufferStatus::Error => crate::Health::Unhealthy,
             _ => crate::Health::Healthy,
         };
-        // container_of: the type-erased renderer pointer back to *mut Renderer.
-        let renderer = ctx.renderer as *mut Renderer;
         // If the frame is healthy, present it.
         if health == crate::Health::Healthy {
             // block.renderer.api.present(block.target.*, block.sync) catch |err|
@@ -6166,9 +6195,11 @@ mod macos_impl {
             // `crate::metal::frame::LOG_SCOPE` even though the code lives here. It lives
             // here at all because the port inlines `Frame.zig`'s `bufferCompleted` into
             // this completion trampoline. We consume the now-fallible Result faithfully
-            // (the layer path can fail; W1-3). `&mut api` reborrow through the raw ptr;
-            // `&*ctx.target` is the `*mut Target` back to `&Target`.
-            if let Err(e) = unsafe { (*renderer).api.present(&*ctx.target, ctx.sync) } {
+            // (the layer path can fail; W1-3). N440: `Metal.present`'s body over the
+            // context's layer cell and IOSurface (`present_layer`).
+            if let Err(e) =
+                crate::metal::metal_impl::present_layer(&ctx.layer, &ctx.surface, ctx.sync)
+            {
                 // log.err("Failed to present render target: err={}", .{err});
                 log::error!(
                     target: crate::metal::frame::LOG_SCOPE,
@@ -6177,8 +6208,90 @@ mod macos_impl {
             }
         }
         // block.renderer.frameCompleted(health);
-        // (N437 / ruling 32: the raw, narrow form; see `frame_completed_raw`.)
-        unsafe { Renderer::frame_completed_raw(renderer, health) };
+        // (N440: over the context's clones; see `frame_completed_on`.)
+        frame_completed_on(
+            &ctx.health,
+            &ctx.frame_sema,
+            &ctx.surface_mailbox,
+            health,
+            ctx.sync,
+        );
+    }
+
+    /// `frameCompleted`'s body over the cells it touches: the renderer's `health`,
+    /// its swap chain's `frame_sema` and its surface mailbox. `sync` is true when
+    /// the frame completed synchronously on the thread that drew it (a sync draw:
+    /// the main thread).
+    //
+    // PORT NOTE (N440, P7-W7 T5a): the reference's `frameCompleted(self: *Self, ..)`
+    // reaches these through the renderer; the completion handler passes its
+    // context's clones instead (see `metal_buffer_completed`), and
+    // `Renderer::frame_completed` passes the renderer's own.
+    pub(crate) fn frame_completed_on(
+        health_cell: &AtomicHealth,
+        frame_sema: &Semaphore,
+        surface_mailbox: &SurfaceMailbox,
+        health: crate::Health,
+        sync: bool,
+    ) {
+        // If our health value hasn't changed, then we do nothing. We don't
+        // do a cmpxchg here because strict atomicity isn't important.
+        // if (self.health.load(.seq_cst) != health) {
+        let previous = health_cell.load();
+        let changed = previous != health;
+        if changed {
+            // self.health.store(health, .seq_cst);
+            health_cell.store(health);
+        }
+
+        // Always release our semaphore. The swap chain is
+        // guaranteed to exist here: it is only torn down after
+        // waiting for all in-flight frames to complete, and this
+        // callback is what signals that completion.
+        // self.swap_chain.?.releaseFrame();
+        //
+        // PORT NOTE: reference defect (R13), UD362 (Metal (a)). The reference
+        // releases the frame AFTER the `.forever` health push below. On the
+        // Metal completion thread, with every swap-chain frame in flight and the
+        // app mailbox full, that push blocks while the main thread's sync draw
+        // holds `draw_mutex` and waits in `nextFrame` for exactly this release:
+        // the mailbox's only drainer waits on the frame, the completion thread
+        // waits on the mailbox. The port releases first; the health store keeps
+        // its place before the release, so the order of reports is unchanged.
+        frame_sema.post();
+
+        if changed {
+            // Our health value changed, so we notify the surface so that it
+            // can do something about it.
+            // _ = self.surface_mailbox.push(.{ .renderer_health = health }, .{ .forever = {} });
+            //   — REAL (seam §B.2 resolved): core's sink re-wraps this into
+            //     `apprt::surface::Message::RendererHealth` and enqueues it.
+            //     Detached (offscreen) mailboxes still return 0.
+            if !sync {
+                let _ = surface_mailbox.push(
+                    SurfaceMessage::RendererHealth(health),
+                    MailboxTimeout::Forever,
+                );
+            } else if surface_mailbox.push(
+                SurfaceMessage::RendererHealth(health),
+                MailboxTimeout::Instant,
+            ) == 0
+                && surface_mailbox.is_attached()
+            {
+                // PORT NOTE: reference defect (R13), UD362 (Metal (b)). A sync
+                // frame completes on the thread that drew it: the main thread
+                // (CoreAnimation's display callback, `Surface.draw`), which is the
+                // app mailbox's only drainer, so a `.forever` push into a full
+                // mailbox would block it forever. It pushes `.instant` instead,
+                // and a report the full mailbox refused is withdrawn (the health
+                // goes back to what the surface was last told, unless another
+                // completion changed it meanwhile), so the next completed frame
+                // with this health reports it again. Deferring the push past the
+                // draw, as the OpenGL twin defers `.redraw`, would not help here:
+                // the pusher would still be the drainer.
+                let _ = health_cell.compare_exchange(health, previous);
+            }
+        }
     }
 
     impl Renderer {
@@ -6456,61 +6569,23 @@ mod macos_impl {
 
         /// Callback from the graphics API when a frame is completed.
         //
-        // PORT NOTE (`&self` narrowing, faithful): reference `pub fn frameCompleted(
-        // self: *Self, health)`. Every op it performs is `&self`-safe — `health.store`
-        // (AtomicHealth, &self), the `surface_mailbox.push` (`&self` — the sink is
-        // behind an `Arc`), and `swap_chain.release_frame` (&self, posts the
-        // semaphore). Narrowing `*Self →
-        // &self` is faithful (no mutation of a non-atomic field) AND makes the
-        // trampoline's reborrow a SHARED reborrow (SB/TB-cleaner; frame is unused after
-        // `complete()`, so the whole-`&self` reborrow is clean — mirihar).
+        // PORT NOTE (N440, P7-W7 T5a): the reference's `frameCompleted(self: *Self,
+        // health)`, over the renderer's own `health`, swap-chain semaphore and
+        // surface mailbox, as an asynchronously completed frame reports. The
+        // production completion handler (`metal_buffer_completed`) does not call
+        // this: it runs `frame_completed_on` over its context's clones, since it
+        // must not touch the renderer's bytes. Only the tests call this, with
+        // exclusive access to the renderer.
         pub fn frame_completed(&self, health: crate::Health) {
-            // SAFETY: `self` is a live renderer; the raw form only reads through it.
-            unsafe { Self::frame_completed_raw(self, health) }
-        }
-
-        /// [`Self::frame_completed`] through a raw root: it reaches only
-        /// `health`, `surface_mailbox` and `swap_chain`, through place
-        /// expressions, never a reference to the whole renderer.
-        //
-        // N437 / ruling 32 (P7-W7 T2 fix round 2): on a sync draw `Frame::complete`
-        // runs this on the MAIN thread (`metal/frame.rs`), under the draw mutex,
-        // while the render thread may be working on its own fields unlocked in
-        // `update_frame_raw`; a whole-renderer `&self` would race those writes
-        // (`.port/phase-2/mirihar-n437` `split_*_trampoline_*`). Off the sync path
-        // it runs on the Metal completion thread without the lock (N440).
-        ///
-        /// # Safety
-        /// `self_ptr` is a valid, whole-`Renderer`-provenance pointer whose
-        /// swap chain exists (a frame of it is completing).
-        pub unsafe fn frame_completed_raw(self_ptr: *const Renderer, health: crate::Health) {
-            unsafe {
-                // If our health value hasn't changed, then we do nothing. We don't
-                // do a cmpxchg here because strict atomicity isn't important.
-                // if (self.health.load(.seq_cst) != health) {
-                if (*self_ptr).health.load() != health {
-                    // self.health.store(health, .seq_cst);
-                    (*self_ptr).health.store(health);
-
-                    // Our health value changed, so we notify the surface so that it
-                    // can do something about it.
-                    // _ = self.surface_mailbox.push(.{ .renderer_health = health }, .{ .forever = {} });
-                    //   — REAL (seam §B.2 resolved): core's sink re-wraps this into
-                    //     `apprt::surface::Message::RendererHealth` and enqueues it.
-                    //     Detached (offscreen) mailboxes still return 0.
-                    let _ = (*self_ptr).surface_mailbox.push(
-                        SurfaceMessage::RendererHealth(health),
-                        MailboxTimeout::Forever,
-                    );
-                }
-
-                // Always release our semaphore. The swap chain is
-                // guaranteed to exist here: it is only torn down after
-                // waiting for all in-flight frames to complete, and this
-                // callback is what signals that completion.
-                // self.swap_chain.?.releaseFrame();
-                (*self_ptr).swap_chain.as_ref().unwrap().release_frame();
-            }
+            // The swap chain is guaranteed to exist here (see `frame_completed_on`).
+            let swap_chain = self.swap_chain.as_ref().unwrap();
+            frame_completed_on(
+                &self.health,
+                &swap_chain.frame_sema,
+                &self.surface_mailbox,
+                health,
+                false,
+            );
         }
 
         /// Draw the frame to the screen.
@@ -6795,6 +6870,9 @@ mod macos_impl {
                 armed: true,
             };
             let idx = unsafe { (*self_ptr).swap_chain.as_ref().unwrap().frame_index as usize };
+            // N440: the frame's completion releases it through its own clone of the
+            // semaphore (`CompletionContext`), taken here, before the frame root.
+            let frame_sema = unsafe { (*self_ptr).swap_chain.as_ref().unwrap().frame_sema.clone() };
             // log.debug("drawing frame index={}", .{swap_chain.frame_index});
 
             // If we need to reinitialize our shaders, do so.
@@ -7047,15 +7125,26 @@ mod macos_impl {
             // Get a frame context from the graphics API.
             // var frame_ctx = try self.api.beginFrame(self, &frame.target);
             // defer frame_ctx.complete(sync);
-            //   — `self` is the type-erased `*mut ()` renderer root; the target is the
-            //     raw `addr_of_mut!((*frame).target)`; the completion fn is the
-            //     trampoline. `begin_frame` is `&self.api` (narrow).
+            //   — N440: in place of `self` and `&frame.target`, the completion context
+            //     carries clones of what the completion handler needs (the health
+            //     cell, the frame semaphore, the surface mailbox, Metal's layer cell,
+            //     the target's IOSurface), taken here under the draw mutex through
+            //     narrow places; the completion fn is the trampoline. `begin_frame`
+            //     is `&self.api` (narrow).
+            let completion = unsafe {
+                CompletionContext {
+                    health: (*self_ptr).health.clone(),
+                    frame_sema,
+                    surface_mailbox: (*self_ptr).surface_mailbox.clone(),
+                    layer: (*self_ptr).api.layer.clone(),
+                    surface: (*frame).target.surface.clone(),
+                    sync: false,
+                }
+            };
             let mut frame_ctx: Frame = unsafe {
-                (*self_ptr).api.begin_frame(
-                    self_ptr as *mut (),
-                    addr_of_mut!((*frame).target),
-                    metal_buffer_completed,
-                )
+                (*self_ptr)
+                    .api
+                    .begin_frame(completion, metal_buffer_completed)
             }?;
 
             {
@@ -7956,7 +8045,7 @@ mod macos_impl {
                 bg_image_buffer_modified: 0,
                 api,
                 display_link: None,
-                health: AtomicHealth::new(crate::Health::Healthy),
+                health: Arc::new(AtomicHealth::new(crate::Health::Healthy)),
                 display_realized: true,
                 swap_chain: Some(swap_chain),
                 kitty_animation_clock: None,
@@ -8467,6 +8556,213 @@ mod macos_impl {
             }
         }
 
+        // UD362, Metal variants (P7-W7 T5a). These drive the production
+        // `frameCompleted` body (`frame_completed_on`, which the completion handler
+        // `metal_buffer_completed` runs over its context) with no GPU: the Metal
+        // callback plumbing around it only decides WHICH thread runs it (the Metal
+        // completion thread for an async frame, the drawing thread for a sync one).
+        mod metal_health_push_deadlocks {
+            use std::sync::atomic::{AtomicBool, Ordering};
+            use std::sync::{Arc, Condvar, Mutex};
+            use std::time::Duration;
+
+            use super::*;
+            use crate::generic::SurfaceMailboxSink;
+
+            /// An app mailbox that starts FULL. `.instant` is refused while full;
+            /// `.forever` waits (up to 3 s, then gives up and records it) for the
+            /// main thread to drain it.
+            struct FullMailbox {
+                full: Mutex<bool>,
+                cv: Condvar,
+                timed_out: AtomicBool,
+                delivered: Mutex<Vec<(SurfaceMessage, MailboxTimeout)>>,
+            }
+
+            impl FullMailbox {
+                fn new() -> Arc<FullMailbox> {
+                    Arc::new(FullMailbox {
+                        full: Mutex::new(true),
+                        cv: Condvar::new(),
+                        timed_out: AtomicBool::new(false),
+                        delivered: Mutex::new(Vec::new()),
+                    })
+                }
+
+                /// The main thread drains the mailbox: it has room again.
+                fn drain(&self) {
+                    *self.full.lock().unwrap() = false;
+                    self.cv.notify_all();
+                }
+
+                fn delivered(&self) -> Vec<(SurfaceMessage, MailboxTimeout)> {
+                    self.delivered.lock().unwrap().clone()
+                }
+            }
+
+            impl SurfaceMailboxSink for FullMailbox {
+                fn push(&self, msg: SurfaceMessage, timeout: MailboxTimeout) -> usize {
+                    let full = self.full.lock().unwrap();
+                    if *full {
+                        if timeout == MailboxTimeout::Instant {
+                            return 0;
+                        }
+                        let (full, res) = self
+                            .cv
+                            .wait_timeout_while(full, Duration::from_secs(3), |f| *f)
+                            .unwrap();
+                        drop(full);
+                        if res.timed_out() {
+                            self.timed_out.store(true, Ordering::SeqCst);
+                            return 0;
+                        }
+                    } else {
+                        drop(full);
+                    }
+                    self.delivered.lock().unwrap().push((msg, timeout));
+                    1
+                }
+            }
+
+            /// The completion context's cells, moved to the completion thread.
+            struct CompletionCells {
+                health: Arc<AtomicHealth>,
+                frame_sema: Arc<Semaphore>,
+                surface_mailbox: SurfaceMailbox,
+            }
+            // SAFETY: the mailbox's sink is `FullMailbox` (Sync); the renderer
+            // hands the same clones to the Metal completion thread.
+            unsafe impl Send for CompletionCells {}
+
+            /// UD362 (a): an async frame completes on the Metal completion thread
+            /// with a health change, while every swap-chain frame is in flight and
+            /// the app mailbox is full. The main thread's sync draw holds
+            /// `draw_mutex` and waits in `nextFrame` for a frame slot; only once it
+            /// has one can it finish the draw and drain the mailbox. With the
+            /// reference's order (the `.forever` push before `releaseFrame`) the two
+            /// threads wait on each other.
+            #[test]
+            fn metal_frame_completed_releases_frame_before_blocking_health_push() {
+                let mailbox = FullMailbox::new();
+                let health = Arc::new(AtomicHealth::new(crate::Health::Healthy));
+                // Every swap-chain frame in flight: no permit left.
+                let frame_sema = Arc::new(Semaphore::new());
+                let cells = CompletionCells {
+                    health: health.clone(),
+                    frame_sema: frame_sema.clone(),
+                    surface_mailbox: SurfaceMailbox::new(mailbox.clone()),
+                };
+
+                // The Metal completion thread.
+                let completion = std::thread::spawn(move || {
+                    let c = cells;
+                    frame_completed_on(
+                        &c.health,
+                        &c.frame_sema,
+                        &c.surface_mailbox,
+                        crate::Health::Unhealthy,
+                        false,
+                    );
+                });
+
+                // The main thread's sync draw: `nextFrame` → `frame_sema.wait()`
+                // under `draw_mutex`; with a slot it finishes, unlocks and drains.
+                frame_sema.wait();
+                mailbox.drain();
+                completion.join().expect("completion thread");
+
+                assert!(
+                    !mailbox.timed_out.load(Ordering::SeqCst),
+                    "the completion thread blocked in the `.forever` health push before \
+                     releasing the frame the mailbox's drainer was waiting for (UD362)"
+                );
+                assert_eq!(
+                    mailbox.delivered(),
+                    vec![(
+                        SurfaceMessage::RendererHealth(crate::Health::Unhealthy),
+                        MailboxTimeout::Forever
+                    )]
+                );
+                assert_eq!(health.load(), crate::Health::Unhealthy);
+            }
+
+            /// UD362 (b): a sync draw completes its frame on the main thread
+            /// itself, the app mailbox's only drainer. A health change must not
+            /// block it on its own full mailbox; the report that could not be
+            /// delivered is withdrawn, so the next completed frame reports it.
+            #[test]
+            fn metal_sync_frame_completed_never_blocks_the_mailbox_drainer() {
+                let mailbox = FullMailbox::new();
+                let surface_mailbox = SurfaceMailbox::new(mailbox.clone());
+                let health = AtomicHealth::new(crate::Health::Healthy);
+                let frame_sema = Semaphore::new();
+
+                frame_completed_on(
+                    &health,
+                    &frame_sema,
+                    &surface_mailbox,
+                    crate::Health::Unhealthy,
+                    true,
+                );
+                assert!(
+                    !mailbox.timed_out.load(Ordering::SeqCst),
+                    "the main thread blocked in a `.forever` push into the mailbox \
+                     only it drains (UD362)"
+                );
+                // The frame was released all the same.
+                assert!(frame_sema.timed_wait(0).is_ok());
+                // Not delivered: the transition is withdrawn.
+                assert!(mailbox.delivered().is_empty());
+                assert_eq!(health.load(), crate::Health::Healthy);
+
+                // The main thread drains; the next frame reports the transition.
+                mailbox.drain();
+                frame_completed_on(
+                    &health,
+                    &frame_sema,
+                    &surface_mailbox,
+                    crate::Health::Unhealthy,
+                    true,
+                );
+                assert_eq!(health.load(), crate::Health::Unhealthy);
+                // Identical health: no second report.
+                frame_completed_on(
+                    &health,
+                    &frame_sema,
+                    &surface_mailbox,
+                    crate::Health::Unhealthy,
+                    true,
+                );
+                assert_eq!(
+                    mailbox.delivered(),
+                    vec![(
+                        SurfaceMessage::RendererHealth(crate::Health::Unhealthy),
+                        MailboxTimeout::Instant
+                    )]
+                );
+                assert!(frame_sema.timed_wait(0).is_ok());
+                assert!(frame_sema.timed_wait(0).is_ok());
+                assert!(frame_sema.timed_wait(0).is_err());
+            }
+
+            /// A sync frame on an offscreen renderer (a DETACHED mailbox: nothing
+            /// to deliver to) keeps its health; there is no report to withdraw.
+            #[test]
+            fn metal_sync_frame_completed_detached_mailbox_keeps_health() {
+                let health = AtomicHealth::new(crate::Health::Healthy);
+                let frame_sema = Semaphore::new();
+                frame_completed_on(
+                    &health,
+                    &frame_sema,
+                    &SurfaceMailbox::DETACHED,
+                    crate::Health::Unhealthy,
+                    true,
+                );
+                assert_eq!(health.load(), crate::Health::Unhealthy);
+                assert!(frame_sema.timed_wait(0).is_ok());
+            }
+        }
+
         // F-014 PROVING TESTS: the surface-mailbox seam (GPU_RD_CHUNK3A_DESIGN §B.2)
         // is RESOLVED — the two `generic.zig` pushes actually reach the mailbox.
         // Before the fix `SurfaceMailbox::push` was a hard-coded `0`, so BOTH of
@@ -8815,7 +9111,7 @@ mod macos_impl {
                 CGPoint::new(0.0, 0.0),
                 CGSize::new(r.size.screen.width as f64, r.size.screen.height as f64),
             ));
-            r.api.layer = Some(layer);
+            r.api.layer = Arc::new(crate::metal::metal_impl::LayerCell(Some(layer)));
 
             // Install the display callback via the REAL seam (container_of +
             // set_display_callback). `loop_enter` needs a whole-`Renderer`-provenance
@@ -8833,7 +9129,7 @@ mod macos_impl {
             // Fire the ObjC `display` method — exactly what Core Animation sends on the
             // main thread during a needsDisplayOnBoundsChange commit. This drives
             // display_callback → draw_frame_raw(self_ptr, true).
-            let disp_layer = r.api.layer.as_ref().unwrap();
+            let disp_layer = (*r.api.layer).as_ref().unwrap();
             let _: () = unsafe { msg_send![&*disp_layer.layer, display] };
 
             // The trampoline ran a full sync frame: completion set health = Healthy …
@@ -8844,7 +9140,7 @@ mod macos_impl {
             );
             // … and present(sync) set the layer contents to the drawn IOSurface.
             let contents: Option<objc2::rc::Retained<objc2::runtime::AnyObject>> =
-                unsafe { r.api.layer.as_ref().unwrap().layer.contents() };
+                unsafe { (*r.api.layer).as_ref().unwrap().layer.contents() };
             assert!(
                 contents.is_some(),
                 "sync present must set the layer contents"
@@ -8997,8 +9293,8 @@ mod macos_impl {
             // MockHostView → NSObject → AnyObject) at the `Metal::init` call site.
             let view_any: &AnyObject = &view;
 
-            // `present` takes `&mut self` ⇒ `let mut onscreen`.
-            let mut onscreen = Metal::init(view_any, 1.0, AlphaBlending::Native)
+            // `present` takes `&self` (N440).
+            let onscreen = Metal::init(view_any, 1.0, AlphaBlending::Native)
                 .expect("Metal::init (Metal probed above)");
 
             // present(sync=true) → set_surface_sync → CALayer.setContents(surface).
@@ -9007,8 +9303,7 @@ mod macos_impl {
                 .expect("present");
 
             // --- (4) ASSERT the handshake.
-            let layer = onscreen
-                .layer
+            let layer = (*onscreen.layer)
                 .as_ref()
                 .expect("on-screen Metal has a layer");
             // (a) the layer's `contents` IS the exact IOSurface we drew. `contents()`
