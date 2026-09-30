@@ -3273,6 +3273,22 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    clamp the delta to `c_int` before `@intFromFloat` (`std.math.clamp` on the rounded float) and use `+|` for the two sums.
 - upstream status: NOT YET REPORTED
 
+### UD373 — an overscan request change that keeps the `row_data` length and the captured overscan is not a redraw (stale, shifted rows reported clean)
+
+- kind:            bug (breaks evident intent: wrong rows rendered, no crash)
+- upstream project: ghostty
+- severity:        low (an embedder that changes its overscan request between updates; reachable through the C API)
+- reference:       at 12752b2ac, `src/terminal/render.zig` `beginUpdate` (`:579-588`): the redraw check compares `self.row_data.len` with `above_req + rows + below_req` and the captured `self.overscan` with this update's `top.above`/`below`, but not the request itself. The request decides where the viewport sits in `row_data` (`viewportStart() == overscan_request.above`). Introduced by `ca4f719f7`; the `overscan_request` doc (`:165-173`) says changing it "causes the next update to be a full redraw".
+- defect:          two requests with the same sum and the same captured counts move the viewport inside `row_data` with no redraw. Only dirty rows are rebuilt, so the viewport reads entries laid out for the old request.
+- ReleaseSafe:     no panic. MEASURED at 12752b2ac (task P7-W12 T3, Zig 0.16.0 Debug test build on macOS arm64, `.port/phase-7/probes/p7w12t3_ud373_overscan_request_probe.zig`, test "P7W12T3 UD373 probe"): a 10x3 terminal with no scrollback showing `AAA`/`BBB`/`CCC`, request `{1,0}`, `update`, `clean()`, request `{0,1}`, `update`: `dirty=false len=4 overscan=(0,0) vp=0`, viewport row 0 has 0 cells (the never-built `above` entry), rows 1 and 2 read `AAA` and `BBB`.
+- ReleaseFast:     the same.
+- reachability:    an embedder only: `rustty_render_state_set(state, RUSTTY_RENDER_STATE_OPTION_OVERSCAN, ...)` from `{1,0}` to `{0,1}` (or any pair with the same `above + below` whose captured counts agree, e.g. at the top of the scrollback or on the active area), then an update. The renderer skips the frame (`.false`) or draws the viewport one row off with an empty row. The Ghostty app does not use overscan at 12752b2ac.
+- port handling:   `crates/rustty-vt/src/render.rs` keeps the request the last completed update applied (`applied_overscan_request`, set with `overscan`) and redraws when the current request differs (`PORT NOTE: reference defect (R13, UD373)`). A failed update already forces the next one to redraw (UD315). Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; found by the P7-W12 T2 re-audit (ruling 63).
+- test:            `render::tests::overscan_request_change_same_layout_forces_redraw` (rustty-vt): the probe's steps, expecting `.full`, three built viewport rows `A`/`B`/`C`, and `.false` for an unchanged request afterwards. NEGATIVE CONTROL (macOS, 2026-09-30): before the fix it fails "a moved viewport is a redraw" (`.false`).
+- proposed fix:    remember the request used by the last update and add `if (!std.meta.eql(self.last_overscan_request, self.overscan_request)) break :redraw true;`, or compare `viewportStart()` with the previous update's.
+- upstream status: NOT YET REPORTED
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

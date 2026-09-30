@@ -277,6 +277,11 @@ pub struct RenderState {
     // part way; the next `beginUpdate` then rebuilds every row. See
     // `begin_update`.
     rebuild_after_failure: bool,
+
+    // PORT NOTE: reference defect (R13, UD373). The `overscan_request` the
+    // last completed update laid `row_data` out for; `begin_update` redraws
+    // when the current request differs. Set with `overscan`.
+    applied_overscan_request: Overscan,
 }
 
 /// A run of cells within one row sharing one style, pending
@@ -942,6 +947,7 @@ impl RenderState {
             selection_cache: None,
             pending_styles: AVec::new_in(valloc::VtAllocator::GLOBAL),
             rebuild_after_failure: false,
+            applied_overscan_request: Overscan { above: 0, below: 0 },
         }
     }
 
@@ -1355,6 +1361,18 @@ impl RenderState {
                 break 'redraw true;
             }
 
+            // PORT NOTE: reference defect (R13, UD373). The two checks above
+            // miss a request change that keeps both the `row_data` length and
+            // the captured overscan, e.g. {1,0} -> {0,1} with no scrollback
+            // and the viewport on the active area: the viewport moves from
+            // `row_data[1..]` to `row_data[0..]`, so without a redraw the
+            // update reports no change while viewport row 0 is an entry that
+            // was never built and every row is off by one. The request lays
+            // out `row_data`, so any change to it rebuilds.
+            if !self.applied_overscan_request.eql(self.overscan_request) {
+                break 'redraw true;
+            }
+
             // If our viewport pin changed, we do a full rebuild.
             if let Some(old) = self.viewport_pin {
                 if !old.eql(viewport_pin) {
@@ -1684,6 +1702,8 @@ impl RenderState {
             above: top_above as size::CellCountInt,
             below: below as size::CellCountInt,
         };
+        // PORT NOTE: reference defect (R13, UD373). See the redraw check.
+        self.applied_overscan_request = self.overscan_request;
 
         // If our screen has a selection, then mark the rows with the
         // selection. We do this outside of the loop above because its unlikely
@@ -4887,6 +4907,51 @@ mod tests {
         assert!(!row1.style()[0].flags.italic);
         assert!(row2.style()[0].flags.italic, "row 2 keeps its italic run");
         assert!(!row2.style()[0].flags.bold);
+
+        state.deinit(alloc);
+        t.deinit(alloc);
+    }
+
+    // PORT NOTE: Rust-only test for a reference defect (R13, UD373). A new
+    // overscan request with the same `row_data` length and the same captured
+    // overscan moves the viewport inside `row_data` without a redraw. Here
+    // {1,0} and {0,1} both give 4 entries and capture {0,0} (no scrollback,
+    // the viewport follows the active area). The reference reports `.false`
+    // with viewport row 0 an entry that was never built and every row shifted
+    // down by one (measured, `.port/phase-7/probes/
+    // p7w12t3_ud373_overscan_request_probe.zig`).
+    #[test]
+    fn overscan_request_change_same_layout_forces_redraw() {
+        let alloc = Global;
+
+        let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();
+        vt_write(&mut t, b"AAA\r\nBBB\r\nCCC");
+
+        let mut state: RenderState = RenderState::empty();
+        state.overscan_request = Overscan { above: 1, below: 0 };
+        state.update(alloc, &mut t).unwrap();
+        assert_eq!(1, state.viewport_start());
+        assert!(state.overscan.eql(Overscan::default()));
+        state.clean();
+
+        state.overscan_request = Overscan { above: 0, below: 1 };
+        state.update(alloc, &mut t).unwrap();
+        assert_eq!(4, state.row_data.len());
+        assert!(state.overscan.eql(Overscan::default()));
+        assert_eq!(0, state.viewport_start());
+        assert_eq!(Dirty::Full, state.dirty, "a moved viewport is a redraw");
+
+        for (y, want) in [b'A', b'B', b'C'].into_iter().enumerate() {
+            let cells = state.row_data[y].cells.raw();
+            assert_eq!(10, cells.len(), "viewport row {y} is built");
+            assert_eq!(want as u32, cells[0].codepoint(), "viewport row {y}");
+            assert!(state.row_data[y].dirty, "viewport row {y} is dirty");
+        }
+
+        // The same request again is not a change.
+        state.clean();
+        state.update(alloc, &mut t).unwrap();
+        assert_eq!(Dirty::False, state.dirty);
 
         state.deinit(alloc);
         t.deinit(alloc);
