@@ -1448,12 +1448,12 @@ pub unsafe extern "C" fn rustty_surface_read_selection(
     // every scope exit — realized here by computing the result into a local and
     // unlocking once before the single return (both the no-selection and the
     // read arms flow through it).
-    let mutex = unsafe { (*core_surface).renderer_state.mutex };
+    let mutex = unsafe { (*(*core_surface).renderer_state.as_ptr()).mutex };
     unsafe { (*mutex).lock() };
 
     // If we don't have a selection, do nothing.
     // const core_sel = core_surface.io.terminal.screens.active.selection orelse return false;
-    let active = unsafe { (*core_surface).io.terminal.screens.active };
+    let active = unsafe { (*(*core_surface).io.as_ptr()).terminal.screens.active };
     let out = match unsafe { (*active).selection } {
         // (no selection → `orelse return false`)
         None => false,
@@ -1488,7 +1488,7 @@ pub unsafe extern "C" fn rustty_surface_read_text(
     // SAFETY: `surface` validity is the caller's contract.
     let core_surface: *mut CoreSurface =
         unsafe { core::ptr::addr_of_mut!((*surface).core_surface) };
-    let mutex = unsafe { (*core_surface).renderer_state.mutex };
+    let mutex = unsafe { (*(*core_surface).renderer_state.as_ptr()).mutex };
     unsafe { (*mutex).lock() };
 
     // const core_sel = sel.core(
@@ -1498,7 +1498,11 @@ pub unsafe extern "C" fn rustty_surface_read_text(
     // PORT NOTE: `sel.core` (E5 `Selection::core`) borrows the active screen through
     // `renderer_state.terminal` (a `*mut Terminal`); the `defer unlock` is realized
     // as in `rustty_surface_read_selection` (single unlock before return).
-    let active = unsafe { (*(*core_surface).renderer_state.terminal).screens.active };
+    let active = unsafe {
+        (*(*(*core_surface).renderer_state.as_ptr()).terminal)
+            .screens
+            .active
+    };
     let out = match sel.core(unsafe { &*active }) {
         None => false,
         // return readTextLocked(surface, core_sel, result);
@@ -2921,12 +2925,12 @@ pub unsafe extern "C" fn rustty_surface_set_display_id(ptr: *mut Surface, displa
     // `&*mailbox` while the render thread holds its own raw alias is the sanctioned
     // construct-then-spawn pattern (no `&mut *self` whole-struct reborrow).
     let surface = unsafe { &(*ptr).core_surface };
-    let _ = unsafe { &*surface.renderer_thread.mailbox }.push(
+    let _ = unsafe { &*(*surface.renderer_thread.as_ptr()).mailbox }.push(
         rustty_renderer::Message::MacosDisplayId(display_id),
         rustty_datastruct::blocking_queue::Timeout::Forever,
     );
     // surface.renderer_thread.wakeup.notify() catch {};
-    let _ = surface.renderer_thread.wakeup.notify();
+    let _ = unsafe { (*surface.renderer_thread.as_ptr()).wakeup.notify() };
 }
 
 /// C: rustty_surface_quicklook_font
@@ -3143,14 +3147,17 @@ pub unsafe extern "C" fn rustty_surface_quicklook_word(
     // its result into a local and unlocks once before the single return; each early
     // `orelse return false` unlocks first (the codebase's explicit-unlock precedent
     // for a multi-exit `defer`, e.g. `Surface::clickLeft`).
-    let mutex = unsafe { (*core_surface).renderer_state.mutex };
+    let mutex = unsafe { (*(*core_surface).renderer_state.as_ptr()).mutex };
     unsafe { (*mutex).lock() };
 
     // // Get our word selection
     // const sel = sel: {
     //     const screen: *terminal.Screen = surface.renderer_state.terminal.screens.active;
-    let screen: *mut rustty_vt::screen::Screen =
-        unsafe { (*(*core_surface).renderer_state.terminal).screens.active };
+    let screen: *mut rustty_vt::screen::Screen = unsafe {
+        (*(*(*core_surface).renderer_state.as_ptr()).terminal)
+            .screens
+            .active
+    };
 
     //     const pos = try ptr.getCursorPos();
     //
@@ -3209,7 +3216,7 @@ pub unsafe extern "C" fn rustty_surface_quicklook_word(
     //     ) orelse return false;
     // };
     let io_screen: *mut rustty_vt::screen::Screen =
-        unsafe { (*core_surface).io.terminal.screens.active };
+        unsafe { (*(*core_surface).io.as_ptr()).terminal.screens.active };
     let word_chars: &[u32] = &unsafe { &*core_surface }.config.selection_word_chars;
     let sel = match unsafe { &*io_screen }.select_word(pin, word_chars) {
         Some(v) => v,

@@ -72,7 +72,7 @@ fn find_inspector_window() -> Option<InspectorWindow> {
 }
 
 unsafe fn pty_master(core: *mut CoreSurface) -> std::os::fd::RawFd {
-    match unsafe { &(*core).io.backend } {
+    match unsafe { &(*(*core).io.as_ptr()).backend } {
         rustty_termio::Backend::Exec(exec) => {
             exec.subprocess.pty.as_ref().expect("pty started").master
         }

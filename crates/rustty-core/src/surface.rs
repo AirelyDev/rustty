@@ -202,6 +202,7 @@ use rustty_vt::input::paste;
 use rustty_vt::kitty::clipboard as kitty_clipboard;
 // const App = @import("App.zig");
 use crate::app::App;
+use crate::thread_shared::ThreadSharedBox;
 // const internal_os = @import("os/main.zig");
 use rustty_os as internal_os;
 // const inspectorpkg = @import("inspector/main.zig");
@@ -667,11 +668,23 @@ pub struct Surface<A: apprt::App + 'static> {
 
     /// The render state
     // renderer_state: rendererpkg.State,
-    pub renderer_state: rendererpkg::state::State,
+    //
+    // PORT NOTE (N444, P7-W7 T5c): the reference embeds this block by value;
+    // the port keeps it in its own allocation (`ThreadSharedBox`), shared with
+    // the thread that writes it through one raw root, so a main-thread
+    // `&mut Surface` / `&Surface` (every apprt callback) never covers its bytes.
+    // Reached by place through `as_ptr()`. Proof: `.port/phase-2/mirihar-n444`.
+    pub renderer_state: ThreadSharedBox<rendererpkg::state::State>,
 
     /// The renderer thread manager
     // renderer_thread: rendererpkg.Thread,
-    pub renderer_thread: crate::renderer_seam::Thread<A>,
+    //
+    // PORT NOTE (N444, P7-W7 T5c): the reference embeds this block by value;
+    // the port keeps it in its own allocation (`ThreadSharedBox`), shared with
+    // the thread that writes it through one raw root, so a main-thread
+    // `&mut Surface` / `&Surface` (every apprt callback) never covers its bytes.
+    // Reached by place through `as_ptr()`. Proof: `.port/phase-2/mirihar-n444`.
+    pub renderer_thread: ThreadSharedBox<crate::renderer_seam::Thread<A>>,
 
     /// The actual thread
     // renderer_thr: std.Thread,
@@ -724,8 +737,14 @@ pub struct Surface<A: apprt::App + 'static> {
     // core instantiates it at the concrete [`SurfaceMailbox<A>`] below
     // (CORE_BLUEPRINT §1). `io_thr` follows the `renderer_thr` Option shape
     // deviation (undefined-until-spawn `std.Thread`).
-    pub io: termio::Termio<SurfaceMailbox<A>>,
-    pub io_thread: termio::Thread,
+    //
+    // PORT NOTE (N444, P7-W7 T5c): the reference embeds `io` and `io_thread` by value;
+    // the port keeps it in its own allocation (`ThreadSharedBox`), shared with
+    // the thread that writes it through one raw root, so a main-thread
+    // `&mut Surface` / `&Surface` (every apprt callback) never covers its bytes.
+    // Reached by place through `as_ptr()`. Proof: `.port/phase-2/mirihar-n444`.
+    pub io: ThreadSharedBox<termio::Termio<SurfaceMailbox<A>>>,
+    pub io_thread: ThreadSharedBox<termio::Thread>,
     pub io_thr: Option<std::thread::JoinHandle<()>>,
 
     /// Terminal inspector
@@ -830,7 +849,14 @@ pub enum InputEffect {
 // `Surface.search` field (the termio "Zig-private widens" rule).
 pub struct Search {
     // state: terminal.search.Thread,
-    pub state: terminal::search::thread::Thread,
+    //
+    // PORT NOTE (N444, P7-W7 T5c): in its own allocation (`ThreadSharedBox`),
+    // not inline in the surface: the search thread writes it for its whole
+    // life, and every main-thread `&mut Surface` / `&Surface` would otherwise
+    // cover it (`.port/phase-2/mirihar-n444` `n444_inline_search_state`).
+    // `deinit` drops it normally after its explicit `deinit`, as the inline
+    // field was dropped with the `Search`.
+    pub state: ThreadSharedBox<terminal::search::thread::Thread>,
     // thread: std.Thread,
     //
     // PORT NOTE: retyped `JoinHandle` -> `Option<JoinHandle>` for the
@@ -860,6 +886,45 @@ pub struct Search {
     mailbox: *const terminal::search::thread::Mailbox,
     wakeup: terminal::search::thread::xev::Notifier,
     stop: terminal::search::thread::xev::Notifier,
+
+    // PORT-ONLY (N444 fix round 1, P7-W7 T5c): the search callback's userdata,
+    // a boxed `SearchCallbackCtx<A>` captured at spawn, and its typed free.
+    // `Search` is not generic over the apprt, so the pointer is erased; `deinit`
+    // frees it once, after the join (the callback's `Quit` runs before that).
+    callback_ctx: *mut core::ffi::c_void,
+    callback_ctx_free: unsafe fn(*mut core::ffi::c_void),
+}
+
+/// PORT-ONLY (N444 fix round 1, P7-W7 T5c): what `searchCallback_` needs,
+/// captured on the main thread when the search thread is spawned.
+///
+/// The reference passes the surface itself as `event_userdata` and reads
+/// `self.renderer_thread.mailbox` / `.wakeup` and `self.surfaceMailbox()`
+/// (`rt_app`, `app`) on the search thread. Those are the surface's own bytes:
+/// every main-thread `&mut Surface` retag races with the reads under Stacked
+/// Borrows (`.port/phase-2/mirihar-n444` `n444_search_cb_reads_surface`). The
+/// values never change for the surface's life, so the callback reads this copy
+/// instead and never dereferences the surface (`n444_search_cb_ctx`, CLEAN).
+struct SearchCallbackCtx<A: apprt::App + 'static> {
+    /// `self.renderer_thread.mailbox` (the renderer's queue, its own allocation).
+    renderer_mailbox: *mut rendererpkg::thread::Mailbox,
+    /// `&self.renderer_thread.wakeup`, inside the out-of-line render-thread block.
+    renderer_wakeup: *const rustty_xev::Async,
+    /// `self.surfaceMailbox()`: the surface pointer only as the envelope's
+    /// identity, and the app's own mailbox.
+    surface_mailbox: Mailbox<A>,
+}
+
+impl<A: apprt::App + 'static> SearchCallbackCtx<A> {
+    /// Free a context made by `Box::into_raw` (the `Search.callback_ctx_free`
+    /// entry).
+    ///
+    /// # Safety
+    /// `p` came from `Box::into_raw(Box<SearchCallbackCtx<A>>)`, the search
+    /// thread is joined or never started, and this is called once.
+    unsafe fn free(p: *mut core::ffi::c_void) {
+        unsafe { drop(Box::from_raw(p.cast::<SearchCallbackCtx<A>>())) };
+    }
 }
 
 impl Search {
@@ -900,7 +965,15 @@ impl Search {
             .unwrap();
 
         // Now it is safe to deinit the state
-        self.state.deinit();
+        //
+        // (N444: through the box's raw root; then the state is dropped and its
+        // allocation freed, where the inline field was dropped with `self`.)
+        unsafe {
+            (*self.state.as_ptr()).deinit();
+            self.state.drop_and_dealloc();
+            // (N444 fix round 1: the callback's context, once, after the join.)
+            (self.callback_ctx_free)(self.callback_ctx);
+        }
     }
 }
 
@@ -2006,7 +2079,7 @@ impl<A: apprt::App + 'static> Drop for InspEvGuard<A> {
                     // type bound the `impl Drop for InspEvGuard` cannot restate — a
                     // `Drop` impl must match the type's declared bounds exactly. The
                     // field-level notify needs no such bound. `catch {}` -> `let _`.)
-                    let _ = unsafe { &(*self.surface).renderer_thread.wakeup }.notify();
+                    let _ = unsafe { &(*(*self.surface).renderer_thread.as_ptr()).wakeup }.notify();
                 }
                 // } else |err| {
                 //     log.warn("error adding key event to inspector err={}", .{err});
@@ -2280,6 +2353,14 @@ where
                 return Err(err.into());
             }
         };
+        // PORT NOTE (N444, P7-W7 T5c): `&self.renderer_thread` (the renderer
+        // options just below) and `&self.renderer_state` (`Thread.init`) are
+        // handed out before either block exists. Each lives in its own
+        // allocation (`ThreadSharedBox`), so both are allocated UNINITIALIZED
+        // here and written in place at the big write; every error path until
+        // then frees them without glue (`dealloc`).
+        let renderer_thread_slot = ThreadSharedBox::<crate::renderer_seam::Thread<A>>::new_uninit();
+        let renderer_state_slot = ThreadSharedBox::<rendererpkg::state::State>::new_uninit();
         let renderer_impl = match Renderer::init(
             alloc,
             crate::renderer_seam::Options {
@@ -2291,11 +2372,17 @@ where
                     app: app_mailbox,
                 },
                 rt_surface,
-                thread: unsafe { &raw mut (*self_).renderer_thread },
+                // (N444: the out-of-line block's address.)
+                thread: renderer_thread_slot.as_ptr(),
             },
         ) {
             Ok(v) => v,
             Err(err) => {
+                // (N444: the two never-written slots.)
+                unsafe {
+                    renderer_state_slot.dealloc();
+                    renderer_thread_slot.dealloc();
+                }
                 // (errdefer app.font_grid_set.deref — UD115)
                 unsafe { (*app).font_grid_set.deref(font_grid_key) };
                 // (errdefer derived_config.deinit() — Surface.zig:490; the
@@ -2343,7 +2430,8 @@ where
             config,
             rt_surface,
             renderer_ptr,
-            unsafe { &raw mut (*self_).renderer_state },
+            // (N444: the out-of-line block's address.)
+            renderer_state_slot.as_ptr(),
             unsafe { (*renderer_ptr).1.draw_mutex.clone() },
         ) {
             Ok(v) => v,
@@ -2356,6 +2444,11 @@ where
                 unsafe {
                     (*renderer_ptr).deinit();
                     renderer_impl.dealloc_after_deinit();
+                }
+                // (N444: the two never-written slots, after the renderer.)
+                unsafe {
+                    renderer_state_slot.dealloc();
+                    renderer_thread_slot.dealloc();
                 }
                 // (errdefer app.font_grid_set.deref — UD115)
                 unsafe { (*app).font_grid_set.deref(font_grid_key) };
@@ -2411,6 +2504,11 @@ where
                 unsafe {
                     (*renderer_ptr).deinit();
                     renderer_impl.dealloc_after_deinit();
+                }
+                // (N444: the two never-written slots, after the renderer.)
+                unsafe {
+                    renderer_state_slot.dealloc();
+                    renderer_thread_slot.dealloc();
                 }
                 // (errdefer app.font_grid_set.deref — UD115)
                 unsafe { (*app).font_grid_set.deref(font_grid_key) };
@@ -2475,7 +2573,18 @@ where
             // .renderer = renderer_impl,
             std::ptr::write(&raw mut (*self_).renderer, renderer_impl);
             // .renderer_thread = render_thread,
-            std::ptr::write(&raw mut (*self_).renderer_thread, render_thread);
+            //
+            // (N444: into its out-of-line slot, then the owner into the field.)
+            renderer_thread_slot.as_ptr().write(render_thread);
+            std::ptr::write(&raw mut (*self_).renderer_thread, renderer_thread_slot);
+            // (N444: `io` is out of line too, allocated uninitialized here so
+            // that `renderer_state.terminal` below can take `&self.io.terminal`
+            // while io is still undefined, as the reference does; `Termio.init`
+            // writes it in place in the io block below.)
+            std::ptr::write(
+                &raw mut (*self_).io,
+                ThreadSharedBox::<termio::Termio<SurfaceMailbox<A>>>::new_uninit(),
+            );
             // .renderer_state = .{
             //     .mutex = mutex,
             //     .terminal = &self.io.terminal,
@@ -2485,11 +2594,13 @@ where
             // undefined — an address-only read, exactly the reference; the
             // State declaration defaults: inspector=null, preedit=null,
             // mouse=.{}.)
-            std::ptr::write(
-                &raw mut (*self_).renderer_state,
-                rendererpkg::state::State {
+            //
+            // (N444: into its out-of-line slot, then the owner into the field.)
+            renderer_state_slot
+                .as_ptr()
+                .write(rendererpkg::state::State {
                     mutex,
-                    terminal: &raw mut (*self_).io.terminal,
+                    terminal: &raw mut (*(*self_).io.as_ptr()).terminal,
                     inspector: None,
                     inspector_ptr: None,
                     preedit: None,
@@ -2498,8 +2609,8 @@ where
                     demand: Default::default(),
                     handoff_gen: Default::default(),
                     handoff_park: Default::default(),
-                },
-            );
+                });
+            std::ptr::write(&raw mut (*self_).renderer_state, renderer_state_slot);
             // .renderer_thr = undefined,
             // (§8.5 Option shape: None until the spawn below.)
             std::ptr::write(&raw mut (*self_).renderer_thr, None);
@@ -2508,9 +2619,12 @@ where
             // .keyboard = .{},
             std::ptr::write(&raw mut (*self_).keyboard, Keyboard::default());
             // .io = undefined,
-            // (placement-written by the io block below — no Rust `undefined`.)
+            // (placement-written by the io block below — no Rust `undefined`;
+            // N444: its out-of-line slot was written above.)
             // .io_thread = io_thread,
-            std::ptr::write(&raw mut (*self_).io_thread, io_thread);
+            //
+            // (N444: in its own allocation.)
+            std::ptr::write(&raw mut (*self_).io_thread, ThreadSharedBox::new(io_thread));
             // .io_thr = undefined,
             // (§8.5 Option shape: None until the spawn below.)
             std::ptr::write(&raw mut (*self_).io_thr, None);
@@ -2703,7 +2817,8 @@ where
             // infallible — the reference `try` collapses, its PORT NOTE.)
             match unsafe {
                 termio::Termio::init(
-                    &raw mut (*self_).io,
+                    // (N444: the out-of-line io block.)
+                    (*self_).io.as_ptr(),
                     alloc,
                     termio::Options {
                         size,
@@ -2711,7 +2826,7 @@ where
                         config: termio::DerivedConfig::init(config),
                         backend: termio::Backend::Exec(io_exec),
                         mailbox: io_mailbox,
-                        renderer_state: &raw mut (*self_).renderer_state,
+                        renderer_state: (*self_).renderer_state.as_ptr(),
                         renderer_wakeup,
                         renderer_mailbox,
                         surface_mailbox: SurfaceMailbox {
@@ -2843,7 +2958,8 @@ where
         // set via the pre-spawn `Builder` (Rust has no post-spawn setName),
         // whose naming cannot fail — the reference's ignored `setName`
         // failure (`catch {}`) collapses.
-        let arg = RendererThreadArg::<A>(unsafe { &raw mut (*self_).renderer_thread });
+        // (N444: the out-of-line block's raw root.)
+        let arg = RendererThreadArg::<A>(unsafe { (*self_).renderer_thread.as_ptr() });
         // Test-only (task R13-H2): observes the thread itself, independently
         // of the logged join (see `init_fault::ThreadProbe`). Not compiled
         // into production builds.
@@ -2881,9 +2997,10 @@ where
         // self.io_thr.setName("io") catch {};
         //
         // (same [ADV-FIX 6b] newtype + Builder-name mapping as above.)
+        // (N444: the out-of-line blocks' raw roots.)
         let args = IoThreadArgs::<A> {
-            thread: unsafe { &raw mut (*self_).io_thread },
-            io: unsafe { &raw mut (*self_).io },
+            thread: unsafe { (*self_).io_thread.as_ptr() },
+            io: unsafe { (*self_).io.as_ptr() },
         };
         let io_main = move || {
             // (whole-wrapper capture — same note as the renderer spawn
@@ -3109,7 +3226,7 @@ where
             // a spawned thread is still unjoined. Not compiled into production
             // builds.)
             if let Some(handle) = (*self_).renderer_thr.take() {
-                let _ = (*self_).renderer_thread.stop.notify();
+                let _ = (*(*self_).renderer_thread.as_ptr()).stop.notify();
                 #[cfg(feature = "init-fault-inject")]
                 crate::init_fault::record(crate::init_fault::Event::RendererStopped);
                 let _ = handle.join();
@@ -3119,7 +3236,7 @@ where
             // The io thread, if it was spawned (`io_thr` is stored straight
             // after its spawn succeeds), the same way `deinit` stops it.
             if let Some(handle) = (*self_).io_thr.take() {
-                let _ = (*self_).io_thread.stop.notify();
+                let _ = (*(*self_).io_thread.as_ptr()).stop.notify();
                 #[cfg(feature = "init-fault-inject")]
                 crate::init_fault::record(crate::init_fault::Event::IoStopped);
                 let _ = handle.join();
@@ -3132,13 +3249,18 @@ where
             if io_live {
                 #[cfg(feature = "init-fault-inject")]
                 crate::init_fault::before_free("io");
-                std::ptr::read(&raw const (*self_).io).deinit();
+                std::ptr::read((*self_).io.as_ptr()).deinit();
             }
+            // (N444: the io block's own allocation, initialized or not; the
+            // threads are joined above.)
+            (*self_).io.dealloc();
             // errdefer io_thread.deinit(); (Surface.zig:579 — consuming
             // receiver, read back out.)
             #[cfg(feature = "init-fault-inject")]
             crate::init_fault::before_free("io_thread");
-            std::ptr::read(&raw const (*self_).io_thread).deinit();
+            std::ptr::read((*self_).io_thread.as_ptr()).deinit();
+            // (N444: then its own allocation.)
+            (*self_).io_thread.dealloc();
             // errdefer render_thread.deinit(); (Surface.zig:575)
             //
             // The renderer child was stopped and joined at the top of this
@@ -3148,18 +3270,23 @@ where
             {
                 #[cfg(feature = "init-fault-inject")]
                 crate::init_fault::before_free("renderer_thread");
-                let mut rt = std::ptr::read(&raw const (*self_).renderer_thread);
+                let mut rt = std::ptr::read((*self_).renderer_thread.as_ptr());
                 rt.deinit();
             }
+            // (N444: then its own allocation; `rt` above was read out of it.)
+            (*self_).renderer_thread.dealloc();
             // errdefer alloc.destroy(mutex); (Surface.zig:564)
             #[cfg(feature = "init-fault-inject")]
             crate::init_fault::before_free("renderer_state.mutex");
-            drop(Box::from_raw((*self_).renderer_state.mutex));
+            drop(Box::from_raw((*(*self_).renderer_state.as_ptr()).mutex));
             // errdefer renderer_impl.deinit(); (Surface.zig:559)
             (*(*self_).renderer.as_ptr()).deinit();
             // (N441: then the renderer is dropped and its own allocation freed;
             // the caller frees the surface slot itself without glue.)
             (*self_).renderer.dealloc_after_deinit();
+            // (N444: then the state's own allocation, after the renderer, so
+            // its bytes outlive every teardown above as the inline field did.)
+            (*self_).renderer_state.dealloc();
             // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD115: the
             // missing `errdefer app.font_grid_set.deref(font_grid_key)` (see the
             // `ref` site). The by-value Key is read out of `self_`, as
@@ -3233,7 +3360,9 @@ where
         {
             // self.renderer_thread.stop.notify() catch |err|
             //     log.err("error notifying renderer thread to stop, may stall err={}", .{err});
-            if let Err(err) = self.renderer_thread.stop.notify() {
+            //
+            // (N444: the out-of-line block, by place; `notify` is `&self`.)
+            if let Err(err) = unsafe { (*self.renderer_thread.as_ptr()).stop.notify() } {
                 // log.err("error notifying renderer thread to stop, may stall err={}", .{err});
                 log::error!(
                     target: LOG_SCOPE,
@@ -3259,7 +3388,9 @@ where
         {
             // self.io_thread.stop.notify() catch |err|
             //     log.err("error notifying io thread to stop, may stall err={}", .{err});
-            if let Err(err) = self.io_thread.stop.notify() {
+            //
+            // (N444: the out-of-line block, by place; `notify` is `&self`.)
+            if let Err(err) = unsafe { (*self.io_thread.as_ptr()).stop.notify() } {
                 // log.err("error notifying io thread to stop, may stall err={}", .{err});
                 log::error!(
                     target: LOG_SCOPE,
@@ -3277,7 +3408,14 @@ where
         // We need to deinit AFTER everything is stopped, since there are
         // shared values between the two threads.
         // self.renderer_thread.deinit();
-        self.renderer_thread.deinit();
+        //
+        // (N444: the render thread is joined above; then the block's own
+        // allocation is freed without glue, as the inline field was never
+        // dropped.)
+        unsafe {
+            (*self.renderer_thread.as_ptr()).deinit();
+            self.renderer_thread.dealloc();
+        }
         // self.renderer.deinit();
         //
         // (N441: the render thread is joined above, so the exclusive borrow of
@@ -3291,13 +3429,24 @@ where
         // self.io_thread.deinit();
         //
         // (consuming receiver — read out of the invalidated-in-place self.)
-        unsafe { std::ptr::read(&raw const self.io_thread) }.deinit();
+        //
+        // (N444: read out of its own allocation, which is then freed.)
+        unsafe {
+            std::ptr::read(self.io_thread.as_ptr()).deinit();
+            self.io_thread.dealloc();
+        }
         // self.mouse.selection_gesture.deinit(&self.io.terminal);
-        self.mouse.selection_gesture.deinit(&mut self.io.terminal);
+        self.mouse
+            .selection_gesture
+            .deinit(unsafe { &mut (*self.io.as_ptr()).terminal });
         // self.io.deinit();
         //
-        // (consuming receiver — read out of the invalidated-in-place self.)
-        unsafe { std::ptr::read(&raw const self.io) }.deinit();
+        // (consuming receiver — read out of the invalidated-in-place self;
+        // N444: out of its own allocation, which is then freed.)
+        unsafe {
+            std::ptr::read(self.io.as_ptr()).deinit();
+            self.io.dealloc();
+        }
 
         // if (self.inspector) |v| {
         //     v.deinit(self.alloc);
@@ -3338,11 +3487,19 @@ where
 
         // Clean up our render state
         // if (self.renderer_state.preedit) |p| self.alloc.free(p.codepoints);
-        if let Some(p) = self.renderer_state.preedit.take() {
+        //
+        // (N444: the out-of-line state, by place; every thread is joined.)
+        if let Some(p) = unsafe { (*self.renderer_state.as_ptr()).preedit.take() } {
             drop(p.codepoints);
         }
         // self.alloc.destroy(self.renderer_state.mutex);
-        unsafe { drop(Box::from_raw(self.renderer_state.mutex)) };
+        //
+        // (N444: then the state's own allocation, without glue, as the inline
+        // field was never dropped.)
+        unsafe {
+            drop(Box::from_raw((*self.renderer_state.as_ptr()).mutex));
+            self.renderer_state.dealloc();
+        }
         // self.config.deinit();
         //
         // (explicit regex teardown + the collapsed-arena ownership drop —
@@ -3374,8 +3531,10 @@ where
     // PORT NOTE: reference `inline fn` -> `#[inline]`. The `&mut self` form is
     // preserved verbatim (R1) but currently dead — its sole reached caller,
     // `searchCallback_`, now uses the raw `surface_mailbox_raw` variant (§3.3a,
-    // to avoid a whole `&mut Surface` reborrow on the search thread). Future
-    // main-thread callers of other ported arms use this `&mut self` form.
+    // to avoid a whole `&mut Surface` reborrow on the search thread; since N444
+    // fix round 1 it is built on the main thread at search spawn and copied into
+    // `SearchCallbackCtx`). Future main-thread callers of other ported arms use
+    // this `&mut self` form.
     #[allow(dead_code)]
     #[inline]
     fn surfaceMailbox(&mut self) -> Mailbox<A> {
@@ -3453,7 +3612,10 @@ where
         }
 
         // self.io.queueMessage(msg, mutex);
-        self.io.queueMessage(msg, mutex);
+        //
+        // (N444: raw-self, through the io block's raw root: no `&mut Termio`
+        // while the io threads run.)
+        unsafe { termio::Termio::queueMessage(self.io.as_ptr(), msg, mutex) };
     }
 
     /// Forces the surface to render. This is useful for when the surface
@@ -3541,9 +3703,9 @@ where
         {
             // self.renderer_state.mutex.lock();
             // defer self.renderer_state.mutex.unlock();
-            unsafe { (*self.renderer_state.mutex).lock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
             // assert(self.renderer_state.inspector == null);
-            assert!(self.renderer_state.inspector.is_none());
+            assert!(unsafe { (*self.renderer_state.as_ptr()).inspector.is_none() });
             // self.renderer_state.inspector = self.inspector;
             //
             // R2 ACYCLIC OVERLAY EDGE (renderer `state.rs` Task-5 PORT NOTE): the
@@ -3558,19 +3720,19 @@ where
             let info_ref: &mut dyn rendererpkg::state::InspectorOverlay =
                 unsafe { &mut (*ptr).gui.renderer_info };
             let info_ptr: *mut rendererpkg::state::Inspector = info_ref;
-            self.renderer_state.inspector = Some(info_ptr);
+            unsafe { (*self.renderer_state.as_ptr()).inspector = Some(info_ptr) };
             // The SAME `ptr`, but type-erased (`rendererpkg::state::State::
             // inspector_ptr` PORT NOTE): termio's `recordPtyRead` (INV-8)
             // needs the WHOLE `Inspector`, unreachable through the narrow
             // `renderer_info` sub-object fat pointer above.
-            assert!(self.renderer_state.inspector_ptr.is_none());
-            self.renderer_state.inspector_ptr = Some(ptr as *mut ());
-            unsafe { (*self.renderer_state.mutex).unlock() };
+            assert!(unsafe { (*self.renderer_state.as_ptr()).inspector_ptr.is_none() });
+            unsafe { (*self.renderer_state.as_ptr()).inspector_ptr = Some(ptr as *mut ()) };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
         }
 
         // Notify our components we have an inspector active
         // _ = self.renderer_thread.mailbox.push(.{ .inspector = true }, .{ .forever = {} });
-        let _ = unsafe { &*self.renderer_thread.mailbox }
+        let _ = unsafe { &*(*self.renderer_thread.as_ptr()).mailbox }
             .push(rendererpkg::Message::Inspector(true), Timeout::Forever);
         // self.queueIo(.{ .inspector = true }, .unlocked);
         self.queueIo(
@@ -3603,11 +3765,11 @@ where
     /// `self_` is the stable Surface allocation; no protected `&mut Surface` may
     /// span the call.
     pub unsafe fn reportPresentationHealth(self_: *mut Surface<A>, health: rendererpkg::Health) {
-        let _ = unsafe { &*(*self_).renderer_thread.mailbox }.push(
+        let _ = unsafe { &*(*(*self_).renderer_thread.as_ptr()).mailbox }.push(
             rendererpkg::Message::PresentationHealth(health),
             Timeout::Forever,
         );
-        if let Err(err) = unsafe { (*self_).renderer_thread.wakeup.notify() } {
+        if let Err(err) = unsafe { (*(*self_).renderer_thread.as_ptr()).wakeup.notify() } {
             // log.warn("failed to wake up renderer err={}", .{err});
             log::warn!(target: LOG_SCOPE, "failed to wake up renderer err={err:?}");
         }
@@ -3651,21 +3813,21 @@ where
         {
             // self.renderer_state.mutex.lock();
             // defer self.renderer_state.mutex.unlock();
-            unsafe { (*self.renderer_state.mutex).lock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
             // assert(self.renderer_state.inspector != null);
-            assert!(self.renderer_state.inspector.is_some());
+            assert!(unsafe { (*self.renderer_state.as_ptr()).inspector.is_some() });
             // self.renderer_state.inspector = null;
-            self.renderer_state.inspector = None;
+            unsafe { (*self.renderer_state.as_ptr()).inspector = None };
             // Clear the type-erased alias in lock-step (see activateInspector's
             // `inspector_ptr` PORT NOTE).
-            assert!(self.renderer_state.inspector_ptr.is_some());
-            self.renderer_state.inspector_ptr = None;
-            unsafe { (*self.renderer_state.mutex).unlock() };
+            assert!(unsafe { (*self.renderer_state.as_ptr()).inspector_ptr.is_some() });
+            unsafe { (*self.renderer_state.as_ptr()).inspector_ptr = None };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
         }
 
         // Notify our components we have deactivated inspector
         // _ = self.renderer_thread.mailbox.push(.{ .inspector = false }, .{ .forever = {} });
-        let _ = unsafe { &*self.renderer_thread.mailbox }
+        let _ = unsafe { &*(*self.renderer_thread.as_ptr()).mailbox }
             .push(rendererpkg::Message::Inspector(false), Timeout::Forever);
         // self.queueIo(.{ .inspector = false }, .unlocked);
         self.queueIo(
@@ -3721,10 +3883,10 @@ where
                 //
                 // (guard-less zigstd Mutex — CORE_BLUEPRINT §3; the defer is
                 // the explicit unlock after the query.)
-                unsafe { (*self.renderer_state.mutex).lock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
                 // break :true !self.io.terminal.cursorIsAtPrompt();
-                let result = !self.io.terminal.cursor_is_at_prompt();
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                let result = !unsafe { (*self.io.as_ptr()).terminal.cursor_is_at_prompt() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                 result
             }
         }
@@ -4230,9 +4392,9 @@ where
         //
         // (guard-less zigstd Mutex — CORE_BLUEPRINT §3; the defer is the
         // explicit unlock at every exit below.)
-        unsafe { (*self.renderer_state.mutex).lock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
         // const t: *terminal.Terminal = self.renderer_state.terminal;
-        let t: *mut Terminal = self.renderer_state.terminal;
+        let t: *mut Terminal = unsafe { (*self.renderer_state.as_ptr()).terminal };
 
         // const selection = self.mouse.selection_gesture.autoscrollTick(t, .{
         //     .viewport = pos_vp,
@@ -4286,7 +4448,7 @@ where
         // if (self.mouse.selection_gesture.left_click_count == 0) return;
         if self.mouse.selection_gesture.left_click_count == 0 {
             // (the deferred mutex unlock)
-            unsafe { (*self.renderer_state.mutex).unlock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
             return Ok(());
         }
 
@@ -4295,18 +4457,18 @@ where
         // try self.setSelection(selection);
         if let Err(err) = self.setSelection(selection) {
             // (the deferred mutex unlock — the error exit)
-            unsafe { (*self.renderer_state.mutex).unlock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
             return Err(err);
         }
         // try self.queueRender();
         if let Err(err) = self.queueRender() {
             // (the deferred mutex unlock — the error exit)
-            unsafe { (*self.renderer_state.mutex).unlock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
             return Err(err.into());
         }
 
         // (the deferred mutex unlock — the normal exit)
-        unsafe { (*self.renderer_state.mutex).unlock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
         Ok(())
     }
 
@@ -4428,14 +4590,14 @@ where
             //
             // (guard-less zigstd Mutex — the defer is the explicit unlock at
             // every exit of this block.)
-            unsafe { (*self.renderer_state.mutex).lock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
             // const t: *terminal.Terminal = self.renderer_state.terminal;
-            let t: *mut Terminal = self.renderer_state.terminal;
+            let t: *mut Terminal = unsafe { (*self.renderer_state.as_ptr()).terminal };
             // t.carriageReturn();
             unsafe { (*t).carriage_return() };
             // t.linefeed() catch break :terminal;
             if unsafe { (*t).linefeed() }.is_err() {
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                 break 'terminal;
             }
             // t.printString("Process exited. Press any key to close the terminal.") catch
@@ -4443,7 +4605,7 @@ where
             if unsafe { (*t).print_string(b"Process exited. Press any key to close the terminal.") }
                 .is_err()
             {
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                 break 'terminal;
             }
             // t.modes.set(.cursor_visible, false);
@@ -4466,7 +4628,7 @@ where
             };
 
             // (the deferred mutex unlock — the normal exit of the block)
-            unsafe { (*self.renderer_state.mutex).unlock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
         }
 
         // Waiting after command we stop here. The terminal is updated, our
@@ -4513,7 +4675,7 @@ where
         // const command = try std.mem.join(alloc, " ", switch (self.io.backend) {
         //     .exec => |*exec| exec.subprocess.args,
         // });
-        let command: Vec<u8> = match &self.io.backend {
+        let command: Vec<u8> = match unsafe { &(*self.io.as_ptr()).backend } {
             termio::Backend::Exec(exec) => exec
                 .subprocess
                 .args
@@ -4532,9 +4694,9 @@ where
         // the single exit below; the `?`-propagating body is scoped in an
         // immediately-invoked closure so the unlock also runs on the error
         // paths — the vt search/screen.rs error-scoping precedent.)
-        unsafe { (*self.renderer_state.mutex).lock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
         // const t: *terminal.Terminal = self.renderer_state.terminal;
-        let t: *mut Terminal = self.renderer_state.terminal;
+        let t: *mut Terminal = unsafe { (*self.renderer_state.as_ptr()).terminal };
 
         let result = (|| -> Result<(), PrintStringError> {
             unsafe {
@@ -4658,7 +4820,7 @@ where
         })();
 
         // (the deferred mutex unlock — runs on both the Ok and Err paths)
-        unsafe { (*self.renderer_state.mutex).unlock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
         result
     }
 
@@ -4671,22 +4833,22 @@ where
             //
             // (guard-less zigstd Mutex — the defer is the explicit unlock at
             // both exits of this block.)
-            unsafe { (*self.renderer_state.mutex).lock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
 
             // If our password input state is unchanged then we don't
             // waste time doing anything more.
             // const old = self.io.terminal.flags.password_input;
-            let old = self.io.terminal.flags.password_input;
+            let old = unsafe { (*self.io.as_ptr()).terminal.flags.password_input };
             // if (old == v) return;
             if old == v {
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                 return Ok(());
             }
 
             // self.io.terminal.flags.password_input = v;
-            self.io.terminal.flags.password_input = v;
+            unsafe { (*self.io.as_ptr()).terminal.flags.password_input = v };
 
-            unsafe { (*self.renderer_state.mutex).unlock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
         }
 
         // Notify our apprt so it can do whatever it wants.
@@ -4730,7 +4892,10 @@ where
         //
         // (`ud.?` — the vt seam models the userdata as a bare pointer, so the
         // unwrap collapses into the non-null registration contract.)
-        let self_: *mut Surface<A> = ud.cast();
+        //
+        // PORT NOTE (N444 fix round 1): `ud` is the `SearchCallbackCtx<A>`
+        // captured at spawn, not the surface (see its doc).
+        let ctx: *const SearchCallbackCtx<A> = ud.cast_const().cast();
         // self.searchCallback_(event) catch |err| {
         //     log.warn("error in search callback err={}", .{err});
         // };
@@ -4738,7 +4903,7 @@ where
         // PORT NOTE (§3.3a): pass the RAW `self_` (NOT `&mut *self_`) — a whole
         // `&mut Surface` reborrow here, on the search thread, races the main
         // thread's `&mut self` = SB UB (mirihar `callback_naive`).
-        if let Err(err) = unsafe { Self::searchCallback_(self_, event) } {
+        if let Err(err) = unsafe { Self::searchCallback_(ctx, event) } {
             // log.warn("error in search callback err={}", .{err});
             //
             // NOTE (task 14d-1): this emission fires on the SEARCH THREAD, so
@@ -4760,8 +4925,14 @@ where
     // `self_` (never a whole `&mut Surface`/`&Surface`); verdict SB + TB clean
     // (mirihar `callback_shipped`). This preserves the reference's cross-thread
     // Surface access — only the Rust `&mut`-exclusivity narrowing changes.
+    //
+    // PORT NOTE (N444 fix round 1, P7-W7 T5c): the receiver is now the
+    // spawn-time `SearchCallbackCtx`, not the surface: even narrow field reads
+    // through the surface pointer (`renderer_thread`, `rt_app`, `app`) raced
+    // the main thread's `&mut Surface` retags under SB. The pushes and notifies
+    // are the same; only where their pointers are read from changes.
     unsafe fn searchCallback_(
-        self_: *mut Surface<A>,
+        ctx: *const SearchCallbackCtx<A>,
         event: SearchThreadEvent<'_>,
     ) -> Result<(), Error> {
         // NOTE: This runs on the search thread.
@@ -4798,14 +4969,14 @@ where
                 //     } },
                 //     .forever,
                 // );
-                let _ = unsafe { &*(*self_).renderer_thread.mailbox }.push(
+                let _ = unsafe { &*(*ctx).renderer_mailbox }.push(
                     rendererpkg::Message::SearchViewportMatches(
                         rendererpkg::message::SearchMatches { matches },
                     ),
                     Timeout::Forever,
                 );
                 // try self.renderer_thread.wakeup.notify();
-                unsafe { &(*self_).renderer_thread.wakeup }.notify()?;
+                unsafe { &*(*ctx).renderer_wakeup }.notify()?;
             }
 
             // .selected_match => |selected_| {
@@ -4829,7 +5000,7 @@ where
                     //     } },
                     //     .forever,
                     // );
-                    let _ = unsafe { &*(*self_).renderer_thread.mailbox }.push(
+                    let _ = unsafe { &*(*ctx).renderer_mailbox }.push(
                         rendererpkg::Message::SearchSelectedMatch(Some(
                             rendererpkg::message::SearchMatch { r#match: match_ },
                         )),
@@ -4841,7 +5012,7 @@ where
                     //     .{ .search_selected = sel.idx },
                     //     .forever,
                     // );
-                    let _ = unsafe { Self::surface_mailbox_raw(self_) }
+                    let _ = unsafe { &(*ctx).surface_mailbox }
                         .push(Message::SearchSelected(Some(sel.idx)), Timeout::Forever);
                 } else {
                     // Reset our selected match
@@ -4849,7 +5020,7 @@ where
                     //     .{ .search_selected_match = null },
                     //     .forever,
                     // );
-                    let _ = unsafe { &*(*self_).renderer_thread.mailbox }.push(
+                    let _ = unsafe { &*(*ctx).renderer_mailbox }.push(
                         rendererpkg::Message::SearchSelectedMatch(None),
                         Timeout::Forever,
                     );
@@ -4859,12 +5030,12 @@ where
                     //     .{ .search_selected = null },
                     //     .forever,
                     // );
-                    let _ = unsafe { Self::surface_mailbox_raw(self_) }
+                    let _ = unsafe { &(*ctx).surface_mailbox }
                         .push(Message::SearchSelected(None), Timeout::Forever);
                 }
 
                 // try self.renderer_thread.wakeup.notify();
-                unsafe { &(*self_).renderer_thread.wakeup }.notify()?;
+                unsafe { &*(*ctx).renderer_wakeup }.notify()?;
             }
 
             // .total_matches => |total| {
@@ -4875,7 +5046,7 @@ where
                 // );
                 //
                 // (Zig coerces the `usize` into the `?usize` payload.)
-                let _ = unsafe { Self::surface_mailbox_raw(self_) }
+                let _ = unsafe { &(*ctx).surface_mailbox }
                     .push(Message::SearchTotal(Some(total)), Timeout::Forever);
             }
 
@@ -4886,7 +5057,7 @@ where
                 //     .{ .search_selected_match = null },
                 //     .forever,
                 // );
-                let _ = unsafe { &*(*self_).renderer_thread.mailbox }.push(
+                let _ = unsafe { &*(*ctx).renderer_mailbox }.push(
                     rendererpkg::Message::SearchSelectedMatch(None),
                     Timeout::Forever,
                 );
@@ -4897,7 +5068,7 @@ where
                 //     } },
                 //     .forever,
                 // );
-                let _ = unsafe { &*(*self_).renderer_thread.mailbox }.push(
+                let _ = unsafe { &*(*ctx).renderer_mailbox }.push(
                     rendererpkg::Message::SearchViewportMatches(
                         rendererpkg::message::SearchMatches {
                             matches: Vec::new(),
@@ -4906,20 +5077,20 @@ where
                     Timeout::Forever,
                 );
                 // try self.renderer_thread.wakeup.notify();
-                unsafe { &(*self_).renderer_thread.wakeup }.notify()?;
+                unsafe { &*(*ctx).renderer_wakeup }.notify()?;
 
                 // Reset search totals in the surface
                 // _ = self.surfaceMailbox().push(
                 //     .{ .search_total = null },
                 //     .forever,
                 // );
-                let _ = unsafe { Self::surface_mailbox_raw(self_) }
+                let _ = unsafe { &(*ctx).surface_mailbox }
                     .push(Message::SearchTotal(None), Timeout::Forever);
                 // _ = self.surfaceMailbox().push(
                 //     .{ .search_selected = null },
                 //     .forever,
                 // );
-                let _ = unsafe { Self::surface_mailbox_raw(self_) }
+                let _ = unsafe { &(*ctx).surface_mailbox }
                     .push(Message::SearchSelected(None), Timeout::Forever);
             }
 
@@ -4960,19 +5131,27 @@ where
                 //
                 // (guard-less zigstd Mutex — CORE_BLUEPRINT §3; the defer is
                 // the explicit unlock at the block end.)
-                unsafe { (*self.renderer_state.mutex).lock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
                 // self.renderer_state.mouse.mods = self.mouseModsWithCapture(self.mouse.mods);
-                self.renderer_state.mouse.mods = self.mouseModsWithCapture(self.mouse.mods);
+                unsafe {
+                    (*self.renderer_state.as_ptr()).mouse.mods =
+                        self.mouseModsWithCapture(self.mouse.mods)
+                };
 
                 // We use the clear screen dirty flag to force a rebuild of all
                 // rows because changing mouse mods can affect the highlight state
                 // of a link. If there is no link this seems very wasteful but
                 // its really only one frame so it's not so bad.
                 // self.renderer_state.terminal.flags.dirty.clear = true;
-                unsafe { (*self.renderer_state.terminal).flags.dirty.clear = true };
+                unsafe {
+                    (*(*self.renderer_state.as_ptr()).terminal)
+                        .flags
+                        .dirty
+                        .clear = true
+                };
 
                 // (the deferred mutex unlock — block end)
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
             }
 
             // self.queueRender() catch |err| {
@@ -5053,7 +5232,10 @@ where
             if self.mouse.click_state[left_idx] == input_mouse::ButtonState::Press {
                 'click: {
                     // const pin = self.mouse.activeLeftClickPin(&self.io.terminal.screens) orelse break :click;
-                    let pin = match self.mouse.activeLeftClickPin(&self.io.terminal.screens) {
+                    let pin = match self
+                        .mouse
+                        .activeLeftClickPin(unsafe { &(*self.io.as_ptr()).terminal.screens })
+                    {
                         Some(v) => v,
                         None => break 'click,
                     };
@@ -5062,7 +5244,7 @@ where
                     //     pin.*,
                     // ) orelse break :click;
                     let click_pt = match unsafe {
-                        (*self.io.terminal.screens.active)
+                        (*(*self.io.as_ptr()).terminal.screens.active)
                             .pages
                             .point_from_pin(terminal::point::Tag::Viewport, *pin)
                     } {
@@ -5096,13 +5278,14 @@ where
                     //     .sel = link.selection,
                     //     .trim = false,
                     // });
-                    let str_ = unsafe { &mut *self.io.terminal.screens.active }.selection_string(
-                        alloc.into(),
-                        terminal::screen::SelectionString {
-                            sel: link.selection,
-                            trim: false,
-                        },
-                    )?;
+                    let str_ = unsafe { &mut *(*self.io.as_ptr()).terminal.screens.active }
+                        .selection_string(
+                            alloc.into(),
+                            terminal::screen::SelectionString {
+                                sel: link.selection,
+                                trim: false,
+                            },
+                        )?;
                     // break :link .{
                     //     .{ .url = str },
                     //     self.config.link_previews == .true,
@@ -5150,12 +5333,12 @@ where
         // if (link_) |link| {
         if let Some(link) = link_ {
             // self.renderer_state.mouse.point = pos_vp;
-            self.renderer_state.mouse.point = Some(pos_vp);
+            unsafe { (*self.renderer_state.as_ptr()).mouse.point = Some(pos_vp) };
             // self.mouse.over_link = true;
             self.mouse.over_link = true;
             // self.renderer_state.terminal.screens.active.dirty.hyperlink_hover = true;
             unsafe {
-                (*(*self.renderer_state.terminal).screens.active)
+                (*(*(*self.renderer_state.as_ptr()).terminal).screens.active)
                     .dirty
                     .hyperlink_hover = true;
             }
@@ -5199,7 +5382,7 @@ where
             // );
             let _ = unsafe { &*self.rt_app }.perform_action(
                 apprt::Target::Surface(&*self),
-                apprt::Action::MouseShape(self.io.terminal.mouse_shape),
+                apprt::Action::MouseShape(unsafe { (*self.io.as_ptr()).terminal.mouse_shape }),
             )?;
             // _ = try self.rt_app.performAction(
             //     .{ .surface = self },
@@ -5451,7 +5634,8 @@ where
             Box::new(termio::DerivedConfig::init(config));
 
         // _ = self.renderer_thread.mailbox.push(renderer_message, .{ .forever = {} });
-        let _ = unsafe { &*self.renderer_thread.mailbox }.push(renderer_message, Timeout::Forever);
+        let _ = unsafe { &*(*self.renderer_thread.as_ptr()).mailbox }
+            .push(renderer_message, Timeout::Forever);
         // self.queueIo(.{
         //     .change_config = .{
         //         .alloc = self.alloc,
@@ -5608,7 +5792,7 @@ where
         sel: terminal::selection::Selection,
     ) -> Result<Text, Error> {
         // self.renderer_state.mutex.lock();
-        unsafe { (*self.renderer_state.mutex).lock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
         // defer self.renderer_state.mutex.unlock();
         //
         // (guard-less zigstd Mutex — CORE_BLUEPRINT §3; the defer is the
@@ -5616,7 +5800,7 @@ where
         // return try self.dumpTextLocked(alloc, sel);
         let result = self.dumpTextLocked(alloc, sel);
         // (the deferred mutex unlock)
-        unsafe { (*self.renderer_state.mutex).unlock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
         result
     }
 
@@ -5637,7 +5821,7 @@ where
         //     .sel = sel,
         //     .trim = false,
         // });
-        let text = unsafe { &mut *self.io.terminal.screens.active }.selection_string(
+        let text = unsafe { &mut *(*self.io.as_ptr()).terminal.screens.active }.selection_string(
             alloc.into(),
             terminal::screen::SelectionString { sel, trim: false },
         )?;
@@ -5651,12 +5835,12 @@ where
             // possibly have this text be within the viewport.
             // const vp_tl_pin = self.io.terminal.screens.active.pages.getTopLeft(.viewport);
             let vp_tl_pin = unsafe {
-                (*self.io.terminal.screens.active)
+                (*(*self.io.as_ptr()).terminal.screens.active)
                     .pages
                     .get_top_left(terminal::point::Tag::Viewport)
             };
             // const br_pin = sel.bottomRight(self.io.terminal.screens.active);
-            let br_pin = sel.bottom_right(unsafe { &*self.io.terminal.screens.active });
+            let br_pin = sel.bottom_right(unsafe { &*(*self.io.as_ptr()).terminal.screens.active });
             // if (br_pin.before(vp_tl_pin)) break :viewport null;
             if br_pin.before(vp_tl_pin) {
                 break 'viewport None;
@@ -5666,7 +5850,7 @@ where
             // have this text be within the viewport.
             // const vp_br_pin = self.io.terminal.screens.active.pages.getBottomRight(.viewport) orelse {
             let vp_br_pin = match unsafe {
-                (*self.io.terminal.screens.active)
+                (*(*self.io.as_ptr()).terminal.screens.active)
                     .pages
                     .get_bottom_right(terminal::point::Tag::Viewport)
             } {
@@ -5680,7 +5864,7 @@ where
                 }
             };
             // const tl_pin = sel.topLeft(self.io.terminal.screens.active);
-            let tl_pin = sel.top_left(unsafe { &*self.io.terminal.screens.active });
+            let tl_pin = sel.top_left(unsafe { &*(*self.io.as_ptr()).terminal.screens.active });
             // if (vp_br_pin.before(tl_pin)) break :viewport null;
             if vp_br_pin.before(tl_pin) {
                 break 'viewport None;
@@ -5698,7 +5882,7 @@ where
             //     tl_pin,
             // ) orelse tl: {
             let tl_pt: terminal::point::Point = match unsafe {
-                (*self.io.terminal.screens.active)
+                (*(*self.io.as_ptr()).terminal.screens.active)
                     .pages
                     .point_from_pin(terminal::point::Tag::Viewport, tl_pin)
             } {
@@ -5724,7 +5908,7 @@ where
             //     br_pin,
             // ) orelse br: {
             let br_pt = match unsafe {
-                (*self.io.terminal.screens.active)
+                (*(*self.io.as_ptr()).terminal.screens.active)
                     .pages
                     .point_from_pin(terminal::point::Tag::Viewport, br_pin)
             } {
@@ -5740,7 +5924,7 @@ where
                     //     vp_br_pin,
                     // ).?;
                     unsafe {
-                        (*self.io.terminal.screens.active)
+                        (*(*self.io.as_ptr()).terminal.screens.active)
                             .pages
                             .point_from_pin(terminal::point::Tag::Viewport, vp_br_pin)
                     }
@@ -5802,11 +5986,11 @@ where
             // Utilize viewport sizing to convert to offsets
             // const start = tl_coord.y * self.io.terminal.screens.active.pages.cols + tl_coord.x;
             let start = tl_coord.y
-                * u32::from(unsafe { (*self.io.terminal.screens.active).pages.cols })
+                * u32::from(unsafe { (*(*self.io.as_ptr()).terminal.screens.active).pages.cols })
                 + u32::from(tl_coord.x);
             // const end = br_coord.y * self.io.terminal.screens.active.pages.cols + br_coord.x;
             let end = br_coord.y
-                * u32::from(unsafe { (*self.io.terminal.screens.active).pages.cols })
+                * u32::from(unsafe { (*(*self.io.as_ptr()).terminal.screens.active).pages.cols })
                 + u32::from(br_coord.x);
 
             // break :viewport .{
@@ -5834,14 +6018,14 @@ where
     // pub fn hasSelection(self: *const Surface) bool {
     pub fn hasSelection(&self) -> bool {
         // self.renderer_state.mutex.lock();
-        unsafe { (*self.renderer_state.mutex).lock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
         // defer self.renderer_state.mutex.unlock();
         //
         // (guard-less zigstd Mutex — the defer is the explicit unlock below.)
         // return self.io.terminal.screens.active.selection != null;
-        let result = unsafe { (*self.io.terminal.screens.active).selection }.is_some();
+        let result = unsafe { (*(*self.io.as_ptr()).terminal.screens.active).selection }.is_some();
         // (the deferred mutex unlock)
-        unsafe { (*self.renderer_state.mutex).unlock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
         result
     }
 
@@ -5852,17 +6036,17 @@ where
     // convention; the inferred `!` set is the screen's OOM.)
     pub fn selectionString(&mut self, alloc: Allocator) -> Result<Option<Vec<u8>>, Error> {
         // self.renderer_state.mutex.lock();
-        unsafe { (*self.renderer_state.mutex).lock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
         // defer self.renderer_state.mutex.unlock();
         //
         // (guard-less zigstd Mutex — the defer is the explicit unlock at
         // every exit below.)
         // const sel = self.io.terminal.screens.active.selection orelse return null;
-        let sel = match unsafe { (*self.io.terminal.screens.active).selection } {
+        let sel = match unsafe { (*(*self.io.as_ptr()).terminal.screens.active).selection } {
             Some(v) => v,
             None => {
                 // (the deferred mutex unlock — the null exit)
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                 return Ok(None);
             }
         };
@@ -5870,12 +6054,12 @@ where
         //     .sel = sel,
         //     .trim = false,
         // });
-        let result = unsafe { &mut *self.io.terminal.screens.active }.selection_string(
+        let result = unsafe { &mut *(*self.io.as_ptr()).terminal.screens.active }.selection_string(
             alloc.into(),
             terminal::screen::SelectionString { sel, trim: false },
         );
         // (the deferred mutex unlock)
-        unsafe { (*self.renderer_state.mutex).unlock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
         match result {
             Ok(v) => Ok(Some(v)),
             Err(err) => Err(err.into()),
@@ -5899,17 +6083,17 @@ where
         // allocator.)
         let _ = alloc;
         // self.renderer_state.mutex.lock();
-        unsafe { (*self.renderer_state.mutex).lock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
         // defer self.renderer_state.mutex.unlock();
         //
         // (guard-less zigstd Mutex — the defer is the explicit unlock at
         // every exit below.)
         // const terminal_pwd = self.io.terminal.getPwd() orelse return null;
-        let terminal_pwd = match self.io.terminal.get_pwd() {
+        let terminal_pwd = match unsafe { (*self.io.as_ptr()).terminal.get_pwd() } {
             Some(v) => v,
             None => {
                 // (the deferred mutex unlock — the null exit)
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                 return None;
             }
         };
@@ -5919,7 +6103,7 @@ where
         // collapses.)
         let result = terminal_pwd.to_vec();
         // (the deferred mutex unlock)
-        unsafe { (*self.renderer_state.mutex).unlock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
         Some(result)
     }
 
@@ -5938,7 +6122,7 @@ where
             // const terminal_pwd = self.io.terminal.getPwd() orelse {
             //     return null;
             // };
-            let terminal_pwd = match self.io.terminal.get_pwd() {
+            let terminal_pwd = match unsafe { (*self.io.as_ptr()).terminal.get_pwd() } {
                 Some(v) => v,
                 None => {
                     return None;
@@ -5976,19 +6160,21 @@ where
         // (guard-less zigstd Mutex — CORE_BLUEPRINT §3; the reference locks
         // and unlocks WITHOUT defer, and so does this body: the unlock below
         // pairs with this lock, verbatim.)
-        unsafe { (*self.renderer_state.mutex).lock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
         // const cursor = self.renderer_state.terminal.screens.active.cursor;
         //
         // (`Cursor` is `Copy` — the Zig value-copy, read under the lock.)
-        let cursor = unsafe { (*(*self.renderer_state.terminal).screens.active).cursor };
+        let cursor =
+            unsafe { (*(*(*self.renderer_state.as_ptr()).terminal).screens.active).cursor };
         // const preedit_width: usize = if (self.renderer_state.preedit) |preedit| preedit.width() else 0;
-        let preedit_width: usize = if let Some(preedit) = &self.renderer_state.preedit {
-            preedit.width()
-        } else {
-            0
-        };
+        let preedit_width: usize =
+            if let Some(preedit) = unsafe { &(*self.renderer_state.as_ptr()).preedit } {
+                preedit.width()
+            } else {
+                0
+            };
         // self.renderer_state.mutex.unlock();
-        unsafe { (*self.renderer_state.mutex).unlock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
 
         // TODO: need to handle when scrolling and the cursor is not
         // in the visible portion of the screen.
@@ -6219,11 +6405,13 @@ where
             // Clone PORT NOTE.)
             codepoint_map: Some(self.config.clipboard_codepoint_map.map.list.clone()),
             // .background = self.io.terminal.colors.background.get(),
-            background: self.io.terminal.colors.background.get(),
+            background: unsafe { (*self.io.as_ptr()).terminal.colors.background.get() },
             // .foreground = self.io.terminal.colors.foreground.get(),
-            foreground: self.io.terminal.colors.foreground.get(),
+            foreground: unsafe { (*self.io.as_ptr()).terminal.colors.foreground.get() },
             // .palette = &self.io.terminal.colors.palette.current,
-            palette: Some(&raw const self.io.terminal.colors.palette.current),
+            palette: Some(unsafe {
+                &raw const (*self.io.as_ptr()).terminal.colors.palette.current
+            }),
         };
 
         // const ScreenFormatter = terminal.formatter.ScreenFormatter;
@@ -6247,8 +6435,10 @@ where
             // .plain => {
             binding::CopyToClipboard::Plain => {
                 // var formatter: ScreenFormatter = .init(self.io.terminal.screens.active, opts);
-                let mut formatter: ScreenFormatter =
-                    ScreenFormatter::init(self.io.terminal.screens.active, copy_options(&opts));
+                let mut formatter: ScreenFormatter = ScreenFormatter::init(
+                    unsafe { (*self.io.as_ptr()).terminal.screens.active },
+                    copy_options(&opts),
+                );
                 // formatter.content = .{ .selection = sel };
                 formatter.content = terminal::formatter::Content::Selection(Some(sel));
                 // try formatter.format(&aw.writer);
@@ -6272,12 +6462,14 @@ where
                 //     copy.emit = .vt;
                 //     break :opts copy;
                 // });
-                let mut formatter: ScreenFormatter =
-                    ScreenFormatter::init(self.io.terminal.screens.active, {
+                let mut formatter: ScreenFormatter = ScreenFormatter::init(
+                    unsafe { (*self.io.as_ptr()).terminal.screens.active },
+                    {
                         let mut copy = copy_options(&opts);
                         copy.emit = terminal::formatter::Format::Vt;
                         copy
-                    });
+                    },
+                );
                 // formatter.content = .{ .selection = sel };
                 formatter.content = terminal::formatter::Content::Selection(Some(sel));
                 // try formatter.format(&aw.writer);
@@ -6301,12 +6493,14 @@ where
                 //     copy.emit = .html;
                 //     break :opts copy;
                 // });
-                let mut formatter: ScreenFormatter =
-                    ScreenFormatter::init(self.io.terminal.screens.active, {
+                let mut formatter: ScreenFormatter = ScreenFormatter::init(
+                    unsafe { (*self.io.as_ptr()).terminal.screens.active },
+                    {
                         let mut copy = copy_options(&opts);
                         copy.emit = terminal::formatter::Format::Html;
                         copy
-                    });
+                    },
+                );
                 // formatter.content = .{ .selection = sel };
                 formatter.content = terminal::formatter::Content::Selection(Some(sel));
                 // try formatter.format(&aw.writer);
@@ -6327,8 +6521,10 @@ where
             binding::CopyToClipboard::Mixed => {
                 // First, generate plain text with codepoint mappings applied
                 // var formatter: ScreenFormatter = .init(self.io.terminal.screens.active, opts);
-                let mut formatter: ScreenFormatter =
-                    ScreenFormatter::init(self.io.terminal.screens.active, copy_options(&opts));
+                let mut formatter: ScreenFormatter = ScreenFormatter::init(
+                    unsafe { (*self.io.as_ptr()).terminal.screens.active },
+                    copy_options(&opts),
+                );
                 // formatter.content = .{ .selection = sel };
                 formatter.content = terminal::formatter::Content::Selection(Some(sel));
                 // try formatter.format(&aw.writer);
@@ -6351,20 +6547,23 @@ where
                 //     ...
                 //     break :opts copy;
                 // });
-                formatter = ScreenFormatter::init(self.io.terminal.screens.active, {
-                    let mut copy = copy_options(&opts);
-                    copy.emit = terminal::formatter::Format::Html;
+                formatter = ScreenFormatter::init(
+                    unsafe { (*self.io.as_ptr()).terminal.screens.active },
+                    {
+                        let mut copy = copy_options(&opts);
+                        copy.emit = terminal::formatter::Format::Html;
 
-                    // We purposely don't emit background/foreground for mixed
-                    // mode because the HTML contents is often used for rich text
-                    // input and with trimmed spaces it looks pretty bad.
-                    // copy.background = null;
-                    copy.background = None;
-                    // copy.foreground = null;
-                    copy.foreground = None;
+                        // We purposely don't emit background/foreground for mixed
+                        // mode because the HTML contents is often used for rich text
+                        // input and with trimmed spaces it looks pretty bad.
+                        // copy.background = null;
+                        copy.background = None;
+                        // copy.foreground = null;
+                        copy.foreground = None;
 
-                    copy
-                });
+                        copy
+                    },
+                );
                 // formatter.content = .{ .selection = sel };
                 formatter.content = terminal::formatter::Content::Selection(Some(sel));
                 // try formatter.format(&aw.writer);
@@ -6427,7 +6626,7 @@ where
         // the previous selection's tracked pins; reading them after would be a
         // use-after-free.
         // const prev_ = self.io.terminal.screens.active.selection;
-        let prev_ = unsafe { (*self.io.terminal.screens.active).selection };
+        let prev_ = unsafe { (*(*self.io.as_ptr()).terminal.screens.active).selection };
         // const changed = changed: {
         //     const prev = prev_ orelse break :changed sel_ != null;
         //     const sel = sel_ orelse break :changed true;
@@ -6446,7 +6645,7 @@ where
         };
 
         // try self.io.terminal.screens.active.select(sel_);
-        unsafe { (*self.io.terminal.screens.active).select(sel_) }?;
+        unsafe { (*(*self.io.as_ptr()).terminal.screens.active).select(sel_) }?;
 
         // if (changed) {
         if changed {
@@ -6633,7 +6832,7 @@ where
         // message's copies are `Clone`s (the Key `Clone` PORT NOTE) and the
         // surface's old key value is dropped at the replacement below (a
         // plain free the reference doesn't need).
-        let _ = unsafe { &*self.renderer_thread.mailbox }.push(
+        let _ = unsafe { &*(*self.renderer_thread.as_ptr()).mailbox }.push(
             rendererpkg::Message::FontGrid {
                 grid: font_grid,
                 set: unsafe { &raw mut (*self.app).font_grid_set },
@@ -6667,7 +6866,7 @@ where
     // xev notify error (the CORE_BLUEPRINT §5 xev-blocked one-line leaf).
     fn queueRender(&mut self) -> Result<(), rustty_xev::NotifyError> {
         // try self.renderer_thread.wakeup.notify();
-        self.renderer_thread.wakeup.notify()?;
+        unsafe { (*self.renderer_thread.as_ptr()).wakeup.notify() }?;
         Ok(())
     }
 
@@ -6710,7 +6909,7 @@ where
 
         // Wake the render thread so it notices `display_realized` is now false
         // and releases GPU resources (swap chain and shaders).
-        if let Err(err) = unsafe { (*self_).renderer_thread.wakeup.notify() } {
+        if let Err(err) = unsafe { (*(*self_).renderer_thread.as_ptr()).wakeup.notify() } {
             // log.warn("failed to notify renderer thread of unrealize err={}", .{err});
             log::warn!(
                 target: LOG_SCOPE,
@@ -6804,7 +7003,7 @@ where
         // self.queueRender() catch |err| {
         //     log.warn("failed to notify renderer of resize err={}", .{err});
         // };   (`2f0b65346`, Surface.zig:2599-2608)
-        let _ = unsafe { &*self.renderer_thread.mailbox }
+        let _ = unsafe { &*(*self.renderer_thread.as_ptr()).mailbox }
             .push(rendererpkg::Message::Resize(self.size), Timeout::Forever);
         if let Err(err) = self.queueRender() {
             // log.warn("failed to notify renderer of resize err={}", .{err});
@@ -6870,7 +7069,7 @@ where
         //
         // (guard-less zigstd Mutex — CORE_BLUEPRINT §3; the defer is the
         // explicit unlock at every exit below.)
-        unsafe { (*self.renderer_state.mutex).lock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
 
         // We clear our selection when ANY OF:
         // 1. We have an existing preedit
@@ -6878,7 +7077,7 @@ where
         // if (self.renderer_state.preedit != null or
         //     preedit_ != null)
         // {
-        if self.renderer_state.preedit.is_some() || preedit_.is_some() {
+        if unsafe { (*self.renderer_state.as_ptr()).preedit.is_some() } || preedit_.is_some() {
             // if (self.config.selection_clear_on_typing) {
             if self.config.selection_clear_on_typing {
                 // self.setSelection(null) catch {};
@@ -6888,7 +7087,7 @@ where
 
         // We always clear our prior preedit
         // if (self.renderer_state.preedit) |p| {
-        if let Some(p) = self.renderer_state.preedit.take() {
+        if let Some(p) = unsafe { (*self.renderer_state.as_ptr()).preedit.take() } {
             // self.alloc.free(p.codepoints);
             drop(p.codepoints);
             // self.renderer_state.preedit = null;
@@ -6897,7 +7096,7 @@ where
 
         // Mark preedit dirty flag
         // self.io.terminal.flags.dirty.preedit = true;
-        self.io.terminal.flags.dirty.preedit = true;
+        unsafe { (*self.io.as_ptr()).terminal.flags.dirty.preedit = true };
 
         // If we have no text, we're done. We queue a render in case we cleared
         // a prior preedit (likely).
@@ -6910,7 +7109,7 @@ where
             None => {
                 let result = self.queueRender();
                 // (the deferred mutex unlock)
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                 return result.map_err(Error::from);
             }
         };
@@ -6922,7 +7121,7 @@ where
             Ok(v) => v,
             Err(err) => {
                 // (the deferred mutex unlock — the error exit)
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                 return Err(err.into());
             }
         };
@@ -6970,7 +7169,7 @@ where
             // try self.queueRender();
             let result = self.queueRender();
             // (the deferred mutex unlock)
-            unsafe { (*self.renderer_state.mutex).unlock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
             // return;
             return result.map_err(Error::from);
         }
@@ -6981,11 +7180,14 @@ where
         //
         // (`toOwnedSlice` — the `Vec` IS the owned slice; the state.rs
         // Preedit PORT NOTE.)
-        self.renderer_state.preedit = Some(rendererpkg::state::Preedit { codepoints });
+        unsafe {
+            (*self.renderer_state.as_ptr()).preedit =
+                Some(rendererpkg::state::Preedit { codepoints })
+        };
         // try self.queueRender();
         let result = self.queueRender();
         // (the deferred mutex unlock — the normal exit)
-        unsafe { (*self.renderer_state.mutex).unlock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
         result.map_err(Error::from)
     }
 
@@ -7181,21 +7383,19 @@ where
         // if (self.config.vt_kam_allowed) {
         if this.config.vt_kam_allowed {
             // self.renderer_state.mutex.lock();
-            unsafe { (*this.renderer_state.mutex).lock() };
+            unsafe { (*(*this.renderer_state.as_ptr()).mutex).lock() };
             // defer self.renderer_state.mutex.unlock();
             // if (self.io.terminal.modes.get(.disable_keyboard)) return .consumed;
-            if this
-                .io
-                .terminal
+            if unsafe { &(*this.io.as_ptr()).terminal }
                 .modes
                 .get(terminal::modes::Mode::DisableKeyboard)
             {
                 // (the deferred mutex unlock — the consumed return)
-                unsafe { (*this.renderer_state.mutex).unlock() };
+                unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                 return Ok(InputEffect::Consumed);
             }
             // (the deferred mutex unlock — the fall-through)
-            unsafe { (*this.renderer_state.mutex).unlock() };
+            unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
         }
 
         // If this input event has text, then we hide the mouse if configured.
@@ -7227,7 +7427,8 @@ where
                 // 2. mouse reporting is on and we are not reporting shift to the terminal
                 // if (self.io.terminal.flags.mouse_event == .none or
                 //     (self.mouse.mods.shift and !self.mouseShiftCapture(false)))
-                if this.io.terminal.flags.mouse_event == terminal::mouse::Event::None
+                if unsafe { (*this.io.as_ptr()).terminal.flags.mouse_event }
+                    == terminal::mouse::Event::None
                     || (this.mouse.mods.shift && !this.mouseShiftCapture(false))
                 {
                     // Refresh our link state
@@ -7237,7 +7438,7 @@ where
                         Err(_) => break 'mouse_mods,
                     };
                     // self.renderer_state.mutex.lock();
-                    unsafe { (*this.renderer_state.mutex).lock() };
+                    unsafe { (*(*this.renderer_state.as_ptr()).mutex).lock() };
                     // defer self.renderer_state.mutex.unlock();
                     // self.mouseRefreshLinks(
                     //     pos,
@@ -7255,13 +7456,14 @@ where
                         // log.warn("failed to refresh links err={}", .{err});
                         log::warn!(target: LOG_SCOPE, "failed to refresh links err={err:?}");
                         // (the deferred mutex unlock — the catch break)
-                        unsafe { (*this.renderer_state.mutex).unlock() };
+                        unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                         break 'mouse_mods;
                     }
                     // (the deferred mutex unlock — the normal exit)
-                    unsafe { (*this.renderer_state.mutex).unlock() };
+                    unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                 // } else if (self.io.terminal.flags.mouse_event != .none and !self.mouse.mods.shift) {
-                } else if this.io.terminal.flags.mouse_event != terminal::mouse::Event::None
+                } else if unsafe { (*this.io.as_ptr()).terminal.flags.mouse_event }
+                    != terminal::mouse::Event::None
                     && !this.mouse.mods.shift
                 {
                     // If we have mouse reports on and we don't have shift pressed, we reset state
@@ -7272,7 +7474,9 @@ where
                     // );
                     let _ = unsafe { &*this.rt_app }.perform_action(
                         apprt::Target::Surface(&*this),
-                        apprt::Action::MouseShape(this.io.terminal.mouse_shape),
+                        apprt::Action::MouseShape(unsafe {
+                            (*this.io.as_ptr()).terminal.mouse_shape
+                        }),
                     )?;
                     // _ = try self.rt_app.performAction(
                     //     .{ .surface = self },
@@ -7305,8 +7509,8 @@ where
         // );
         if let Some(shape) = (SurfaceMouse {
             physical_key: event.key,
-            mouse_event: this.io.terminal.flags.mouse_event,
-            mouse_shape: this.io.terminal.mouse_shape,
+            mouse_event: unsafe { (*this.io.as_ptr()).terminal.flags.mouse_event },
+            mouse_shape: unsafe { (*this.io.as_ptr()).terminal.mouse_shape },
             mods: this.mouse.mods,
             over_link: this.mouse.over_link,
             hidden: this.mouse.hidden,
@@ -7404,7 +7608,7 @@ where
         // if (!event.key.modifier()) {
         if !event.key.modifier() {
             // self.renderer_state.mutex.lock();
-            unsafe { (*this.renderer_state.mutex).lock() };
+            unsafe { (*(*this.renderer_state.as_ptr()).mutex).lock() };
             // defer self.renderer_state.mutex.unlock();
 
             // if (self.config.selection_clear_on_typing or
@@ -7413,22 +7617,21 @@ where
                 // try self.setSelection(null);
                 if let Err(err) = this.setSelection(None) {
                     // (the deferred mutex unlock — the error return)
-                    unsafe { (*this.renderer_state.mutex).unlock() };
+                    unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                     return Err(err);
                 }
             }
 
             // if (self.config.scroll_to_bottom.keystroke) self.io.terminal.scrollViewport(.bottom);
             if this.config.scroll_to_bottom.keystroke {
-                this.io
-                    .terminal
+                unsafe { &mut (*this.io.as_ptr()).terminal }
                     .scroll_viewport(terminal::terminal::ScrollViewport::Bottom);
             }
 
             // try self.queueRender();
             let result = this.queueRender();
             // (the deferred mutex unlock — the normal/error exit)
-            unsafe { (*this.renderer_state.mutex).unlock() };
+            unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
             result?;
         }
 
@@ -8189,10 +8392,10 @@ where
     // fn encodeKeyOpts(self: *const Surface) input.key_encode.Options {
     fn encodeKeyOpts(&self) -> key_encode::Options {
         // self.renderer_state.mutex.lock();
-        unsafe { (*self.renderer_state.mutex).lock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
         // defer self.renderer_state.mutex.unlock();
         // const t = &self.io.terminal;
-        let t = &self.io.terminal;
+        let t = unsafe { &(*self.io.as_ptr()).terminal };
 
         // var opts: input.key_encode.Options = .fromTerminal(t);
         let mut opts: key_encode::Options = key_encode::Options::from_terminal(t);
@@ -8202,7 +8405,7 @@ where
         // precedent.)
         if cfg!(not(target_os = "macos")) {
             // (the deferred mutex unlock — the non-macOS comptime return)
-            unsafe { (*self.renderer_state.mutex).unlock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
             return opts;
         }
 
@@ -8242,7 +8445,7 @@ where
 
         // return opts;
         // (the deferred mutex unlock — the macOS return)
-        unsafe { (*self.renderer_state.mutex).unlock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
         opts
     }
 
@@ -8322,13 +8525,13 @@ where
         //
         // SAFETY: `renderer_state.mutex` is the guard-less shared lock; `io` is
         // the live Termio owned by this Surface.
-        unsafe { (*self.renderer_state.mutex).lock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
         let report_visibility = unsafe {
-            let t = &raw mut self.io.terminal;
+            let t = &raw mut (*self.io.as_ptr()).terminal;
             (*t).flags.visible = visible;
             (*t).modes.get(rustty_vt::modes::Mode::ReportVisibility)
         };
-        unsafe { (*self.renderer_state.mutex).unlock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
         // if (report_visibility) {
         //     self.queueIo(.{ .visibility_report = .{ .visible = visible, .force = false } }, .unlocked);
         // }
@@ -8345,7 +8548,7 @@ where
         // _ = self.renderer_thread.mailbox.push(.{
         //     .visible = visible,
         // }, .{ .forever = {} });
-        let _ = unsafe { &*self.renderer_thread.mailbox }
+        let _ = unsafe { &*(*self.renderer_thread.as_ptr()).mailbox }
             .push(rendererpkg::Message::Visible(visible), Timeout::Forever);
 
         // try self.queueRender();
@@ -8382,7 +8585,7 @@ where
         // _ = self.renderer_thread.mailbox.push(.{
         //     .focus = focused,
         // }, .{ .forever = {} });
-        let _ = unsafe { &*self.renderer_thread.mailbox }
+        let _ = unsafe { &*(*self.renderer_thread.as_ptr()).mailbox }
             .push(rendererpkg::Message::Focus(focused), Timeout::Forever);
 
         // if (!focused) unfocused: {
@@ -8526,11 +8729,11 @@ where
         // Update the focus state and notify the terminal
         {
             // self.renderer_state.mutex.lock();
-            unsafe { (*self.renderer_state.mutex).lock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
             // self.io.terminal.flags.focused = focused;
-            self.io.terminal.flags.focused = focused;
+            unsafe { (*self.io.as_ptr()).terminal.flags.focused = focused };
             // self.renderer_state.mutex.unlock();
-            unsafe { (*self.renderer_state.mutex).unlock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
             // self.queueIo(.{ .focused = focused }, .unlocked);
             self.queueIo(
                 termio::Message::Focused(focused),
@@ -8625,7 +8828,7 @@ where
             //
             // (guard-less zigstd Mutex — CORE_BLUEPRINT §3; the defer is the
             // explicit unlock at every exit below.)
-            unsafe { (*self.renderer_state.mutex).lock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
 
             // If we have an active mouse reporting mode, clear the selection.
             // The selection can occur if the user uses the shift mod key to
@@ -8635,7 +8838,7 @@ where
                 // try self.setSelection(null);
                 if let Err(err) = self.setSelection(None) {
                     // (the deferred mutex unlock — the error exit)
-                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                     return Err(err);
                 }
             }
@@ -8648,11 +8851,11 @@ where
             //     self.io.terminal.flags.mouse_event == .none and
             //     self.io.terminal.modes.get(.mouse_alternate_scroll))
             // {
-            if self.io.terminal.screens.active_key == terminal::screen_set::Key::Alternate
-                && self.io.terminal.flags.mouse_event == terminal::mouse::Event::None
-                && self
-                    .io
-                    .terminal
+            if unsafe { (*self.io.as_ptr()).terminal.screens.active_key }
+                == terminal::screen_set::Key::Alternate
+                && unsafe { (*self.io.as_ptr()).terminal.flags.mouse_event }
+                    == terminal::mouse::Event::None
+                && unsafe { &(*self.io.as_ptr()).terminal }
                     .modes
                     .get(terminal::modes::Mode::MouseAlternateScroll)
             {
@@ -8663,7 +8866,7 @@ where
                     // try self.setSelection(null);
                     if let Err(err) = self.setSelection(None) {
                         // (the deferred mutex unlock — the error exit)
-                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                         return Err(err);
                     }
 
@@ -8682,9 +8885,7 @@ where
                     // };
                     //
                     // (the `[:0]const u8` literals are static byte strings.)
-                    let seq: &'static [u8] = if self
-                        .io
-                        .terminal
+                    let seq: &'static [u8] = if unsafe { &(*self.io.as_ptr()).terminal }
                         .modes
                         .get(terminal::modes::Mode::CursorKeys)
                     {
@@ -8712,7 +8913,7 @@ where
 
                 // return;
                 // (the deferred mutex unlock — the alternate-scroll return)
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                 return Ok(());
             }
 
@@ -8730,7 +8931,7 @@ where
                         Ok(v) => v,
                         Err(err) => {
                             // (the deferred mutex unlock — the error exit)
-                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                             return Err(err.into());
                         }
                     };
@@ -8756,7 +8957,7 @@ where
                         Ok(v) => v,
                         Err(err) => {
                             // (the deferred mutex unlock — the error exit)
-                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                             return Err(err.into());
                         }
                     };
@@ -8779,7 +8980,7 @@ where
                 // viewport.
                 // return;
                 // (the deferred mutex unlock — the mouse-report return)
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                 return Ok(());
             }
 
@@ -8789,13 +8990,12 @@ where
                 // rendering. We have to switch signs here because our delta
                 // is negative down but our viewport is positive down.
                 // self.io.terminal.scrollViewport(.{ .delta = y.delta * -1 });
-                self.io
-                    .terminal
+                unsafe { &mut (*self.io.as_ptr()).terminal }
                     .scroll_viewport(terminal::terminal::ScrollViewport::Delta(-y.delta));
             }
 
             // (the deferred mutex unlock — the block end)
-            unsafe { (*self.renderer_state.mutex).unlock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
         }
 
         // try self.queueRender();
@@ -8875,7 +9075,8 @@ where
         // return self.config.mouse_reporting and
         //     self.io.terminal.flags.mouse_event != .none;
         self.config.mouse_reporting
-            && self.io.terminal.flags.mouse_event != terminal::mouse::Event::None
+            && unsafe { (*self.io.as_ptr()).terminal.flags.mouse_event }
+                != terminal::mouse::Event::None
     }
 
     // pub fn mouseReportingActive(self: *Surface) bool {
@@ -8889,10 +9090,10 @@ where
         // (guard-less zigstd Mutex — the `lockUncancelable`/deferred-unlock
         // pair maps to the explicit lock/unlock around the read, the
         // `setVisible` precedent.)
-        unsafe { (*self.renderer_state.mutex).lock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
         // return self.isMouseReporting();
         let result = self.isMouseReporting();
-        unsafe { (*self.renderer_state.mutex).unlock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
         result
     }
 
@@ -8914,7 +9115,10 @@ where
         // assert(self.config.mouse_reporting);
         debug_assert!(self.config.mouse_reporting);
         // assert(self.io.terminal.flags.mouse_event != .none);
-        debug_assert!(self.io.terminal.flags.mouse_event != terminal::mouse::Event::None);
+        debug_assert!(
+            unsafe { (*self.io.as_ptr()).terminal.flags.mouse_event }
+                != terminal::mouse::Event::None
+        );
 
         // Build our encoding options.
         // const encoding_opts: input.mouse_encode.Options = opts: {
@@ -8928,8 +9132,8 @@ where
             // (the ported `from_terminal` takes the two terminal-flags reads
             // directly — the mouse_encode.rs constructor-seam note.)
             let mut opts: mouse_encode::Options<'_> = mouse_encode::Options::from_terminal(
-                self.io.terminal.flags.mouse_event,
-                self.io.terminal.flags.mouse_format,
+                unsafe { (*self.io.as_ptr()).terminal.flags.mouse_event },
+                unsafe { (*self.io.as_ptr()).terminal.flags.mouse_format },
                 self.size,
             );
 
@@ -9037,7 +9241,7 @@ where
 
         // if (lock) self.renderer_state.mutex.lock();
         if lock {
-            unsafe { (*self.renderer_state.mutex).lock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
         }
         // defer if (lock) self.renderer_state.mutex.unlock();
         //
@@ -9047,12 +9251,12 @@ where
         // If the terminal explicitly requests it then we always allow it
         // since we processed never/always at this point.
         // switch (self.io.terminal.flags.mouse_shift_capture) {
-        match self.io.terminal.flags.mouse_shift_capture {
+        match unsafe { (*self.io.as_ptr()).terminal.flags.mouse_shift_capture } {
             // .false => return false,
             terminal::terminal::MouseShiftCapture::False => {
                 // (the deferred conditional unlock — the false return)
                 if lock {
-                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                 }
                 return false;
             }
@@ -9060,7 +9264,7 @@ where
             terminal::terminal::MouseShiftCapture::True => {
                 // (the deferred conditional unlock — the true return)
                 if lock {
-                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                 }
                 return true;
             }
@@ -9081,7 +9285,7 @@ where
         };
         // (the deferred conditional unlock)
         if lock {
-            unsafe { (*self.renderer_state.mutex).unlock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
         }
         result
     }
@@ -9091,14 +9295,15 @@ where
     // pub fn mouseCaptured(self: *Surface) bool {
     pub fn mouseCaptured(&mut self) -> bool {
         // self.renderer_state.mutex.lock();
-        unsafe { (*self.renderer_state.mutex).lock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
         // defer self.renderer_state.mutex.unlock();
         //
         // (guard-less zigstd Mutex — the defer is the explicit unlock below.)
         // return self.io.terminal.flags.mouse_event != .none;
-        let result = self.io.terminal.flags.mouse_event != terminal::mouse::Event::None;
+        let result = unsafe { (*self.io.as_ptr()).terminal.flags.mouse_event }
+            != terminal::mouse::Event::None;
         // (the deferred mutex unlock)
-        unsafe { (*self.renderer_state.mutex).unlock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
         result
     }
 
@@ -9239,7 +9444,7 @@ where
             //
             // (guard-less zigstd Mutex — the defer is the explicit unlock at
             // every exit below.)
-            unsafe { (*self.renderer_state.mutex).lock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
 
             // The selection gesture tracks whether a press became a drag by
             // comparing the release cell to the original press cell. Resolve the
@@ -9277,26 +9482,25 @@ where
             //         .y = release_vp.y,
             //     } });
             // } else null;
-            let release_pin: Option<terminal::pagelist::Pin> =
-                if let Some(pos) = release_pos {
-                    let release_vp = self.posToViewport(f64::from(pos.x), f64::from(pos.y));
-                    unsafe {
-                        (*self.io.terminal.screens.active).pages.pin(
-                            terminal::point::Point::Viewport(terminal::point::Coordinate {
-                                x: release_vp.x,
-                                y: release_vp.y,
-                            }),
-                        )
-                    }
-                } else {
-                    None
-                };
+            let release_pin: Option<terminal::pagelist::Pin> = if let Some(pos) = release_pos {
+                let release_vp = self.posToViewport(f64::from(pos.x), f64::from(pos.y));
+                unsafe {
+                    (*(*self.io.as_ptr()).terminal.screens.active).pages.pin(
+                        terminal::point::Point::Viewport(terminal::point::Coordinate {
+                            x: release_vp.x,
+                            y: release_vp.y,
+                        }),
+                    )
+                }
+            } else {
+                None
+            };
             // self.mouse.selection_gesture.release(
             //     self.renderer_state.terminal,
             //     .{ .pin = release_pin },
             // );
             self.mouse.selection_gesture.release(
-                unsafe { &mut *self.renderer_state.terminal },
+                unsafe { &mut *(*self.renderer_state.as_ptr()).terminal },
                 terminal::selection_gesture::Release { pin: release_pin },
             );
 
@@ -9320,7 +9524,7 @@ where
             // if (self.config.copy_on_select != .none) {
             if self.config.copy_on_select != configpkg::value_types::CopyOnSelect::None {
                 // const prev_ = self.io.terminal.screens.active.selection;
-                let prev_ = unsafe { (*self.io.terminal.screens.active).selection };
+                let prev_ = unsafe { (*(*self.io.as_ptr()).terminal.screens.active).selection };
                 // if (prev_) |prev| {
                 if let Some(prev) = prev_ {
                     // try self.setSelectionAndCopy(terminal.Selection.init(
@@ -9336,7 +9540,7 @@ where
                         ))
                     {
                         // (the deferred mutex unlock — the error exit)
-                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                         return Err(err);
                     }
                 }
@@ -9356,7 +9560,7 @@ where
                         Ok(v) => v,
                         Err(err) => {
                             // (the deferred mutex unlock — the error exit)
-                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                             return Err(err.into());
                         }
                     },
@@ -9370,7 +9574,7 @@ where
                     Ok(processed) => {
                         if processed {
                             // (the deferred mutex unlock — the consumed return)
-                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                             return Ok(true);
                         }
                     }
@@ -9393,7 +9597,7 @@ where
                 Ok(handled) => {
                     if handled {
                         // (the deferred mutex unlock — the handled return)
-                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                         return Ok(true);
                     }
                 }
@@ -9404,7 +9608,7 @@ where
             }
 
             // (the deferred mutex unlock — the block end)
-            unsafe { (*self.renderer_state.mutex).unlock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
         }
 
         // Report mouse events if enabled
@@ -9414,7 +9618,7 @@ where
             //
             // (guard-less zigstd Mutex — the defer is the explicit unlock at
             // every exit below.)
-            unsafe { (*self.renderer_state.mutex).lock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
             // if (self.isMouseReporting()) report: {
             if self.isMouseReporting() {
                 'report: {
@@ -9431,7 +9635,7 @@ where
                     // try self.setSelection(null);
                     if let Err(err) = self.setSelection(None) {
                         // (the deferred mutex unlock — the error exit)
-                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                         return Err(err);
                     }
 
@@ -9441,14 +9645,14 @@ where
                     // self.mouse.selection_gesture.reset(self.renderer_state.terminal);
                     self.mouse
                         .selection_gesture
-                        .reset(unsafe { &mut *self.renderer_state.terminal });
+                        .reset(unsafe { &mut *(*self.renderer_state.as_ptr()).terminal });
 
                     // const pos = try self.rt_surface.getCursorPos();
                     let pos = match unsafe { &*self.rt_surface }.get_cursor_pos() {
                         Ok(v) => v,
                         Err(err) => {
                             // (the deferred mutex unlock — the error exit)
-                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                             return Err(err.into());
                         }
                     };
@@ -9474,12 +9678,12 @@ where
                     // selection or highlighting.
                     // return true;
                     // (the deferred mutex unlock — the reporting return)
-                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                     return Ok(true);
                 }
             }
             // (the deferred mutex unlock — the block end)
-            unsafe { (*self.renderer_state.mutex).unlock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
         }
 
         // For left button clicks we always record some information for
@@ -9492,19 +9696,19 @@ where
                 //
                 // (guard-less zigstd Mutex — the defer is the explicit unlock
                 // at every exit below.)
-                unsafe { (*self.renderer_state.mutex).lock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
                 // const t: *terminal.Terminal = self.renderer_state.terminal;
-                let t: *mut Terminal = self.renderer_state.terminal;
+                let t: *mut Terminal = unsafe { (*self.renderer_state.as_ptr()).terminal };
                 // const screen: *terminal.Screen = self.renderer_state.terminal.screens.active;
                 let screen: *mut terminal::screen::Screen =
-                    unsafe { (*self.renderer_state.terminal).screens.active };
+                    unsafe { (*(*self.renderer_state.as_ptr()).terminal).screens.active };
 
                 // const pos = try self.rt_surface.getCursorPos();
                 let pos = match unsafe { &*self.rt_surface }.get_cursor_pos() {
                     Ok(v) => v,
                     Err(err) => {
                         // (the deferred mutex unlock — the error exit)
-                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                         return Err(err.into());
                     }
                 };
@@ -9538,7 +9742,7 @@ where
                             }
                             // break :click;
                             // (the deferred mutex unlock — the break exit)
-                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                             break 'click;
                         }
                     };
@@ -9593,7 +9797,7 @@ where
                     Ok(v) => v,
                     Err(err) => {
                         // (the deferred mutex unlock — the error exit)
-                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                         return Err(err.into());
                     }
                 };
@@ -9645,37 +9849,37 @@ where
                     // try self.setSelection(selection);
                     if let Err(err) = self.setSelection(Some(selection)) {
                         // (the deferred mutex unlock — the error exit)
-                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                         return Err(err);
                     }
                     // try self.queueRender();
                     if let Err(err) = self.queueRender() {
                         // (the deferred mutex unlock — the error exit)
-                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                         return Err(err.into());
                     }
                 // } else if (self.mouse.selection_gesture.left_click_count == 1 and
                 //     self.io.terminal.screens.active.selection != null)
                 // {
                 } else if self.mouse.selection_gesture.left_click_count == 1
-                    && unsafe { (*self.io.terminal.screens.active).selection }.is_some()
+                    && unsafe { (*(*self.io.as_ptr()).terminal.screens.active).selection }.is_some()
                 {
                     // try self.setSelection(null);
                     if let Err(err) = self.setSelection(None) {
                         // (the deferred mutex unlock — the error exit)
-                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                         return Err(err);
                     }
                     // try self.queueRender();
                     if let Err(err) = self.queueRender() {
                         // (the deferred mutex unlock — the error exit)
-                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                         return Err(err.into());
                     }
                 }
 
                 // (the deferred mutex unlock — the block end)
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
             }
         }
 
@@ -9724,18 +9928,18 @@ where
                 //
                 // (guard-less zigstd Mutex — the defer is the explicit unlock
                 // at every exit below.)
-                unsafe { (*self.renderer_state.mutex).lock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
 
                 // Get our viewport pin
                 // const screen: *terminal.Screen = self.renderer_state.terminal.screens.active;
                 let screen: *mut terminal::screen::Screen =
-                    unsafe { (*self.renderer_state.terminal).screens.active };
+                    unsafe { (*(*self.renderer_state.as_ptr()).terminal).screens.active };
                 // const pos = try self.rt_surface.getCursorPos();
                 let pos = match unsafe { &*self.rt_surface }.get_cursor_pos() {
                     Ok(v) => v,
                     Err(err) => {
                         // (the deferred mutex unlock — the error exit)
-                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                         return Err(err.into());
                     }
                 };
@@ -9765,7 +9969,7 @@ where
                             }
                             // break :sel;
                             // (the deferred mutex unlock — the break exit)
-                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                             break 'sel;
                         }
                     };
@@ -9784,12 +9988,12 @@ where
                         // where we clicked then we don't want to modify the selection.
                         // if (self.io.terminal.screens.active.selection) |prev_sel| {
                         if let Some(prev_sel) =
-                            unsafe { (*self.io.terminal.screens.active).selection }
+                            unsafe { (*(*self.io.as_ptr()).terminal.screens.active).selection }
                         {
                             // if (prev_sel.contains(screen, pin)) break :sel;
                             if prev_sel.contains(unsafe { &*screen }, pin) {
                                 // (the deferred mutex unlock — the break exit)
-                                unsafe { (*self.renderer_state.mutex).unlock() };
+                                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                                 break 'sel;
                             }
 
@@ -9804,7 +10008,7 @@ where
                             Ok(v) => v,
                             Err(err) => {
                                 // (the deferred mutex unlock — the error exit)
-                                unsafe { (*self.renderer_state.mutex).unlock() };
+                                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                                 return Err(err);
                             }
                         };
@@ -9812,7 +10016,7 @@ where
                             // try self.setSelectionAndCopy(link.selection);
                             if let Err(err) = self.setSelectionAndCopy(link.selection) {
                                 // (the deferred mutex unlock — the error exit)
-                                unsafe { (*self.renderer_state.mutex).unlock() };
+                                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                                 return Err(err);
                             }
                         } else {
@@ -9827,34 +10031,36 @@ where
                                 None => {
                                     // (the deferred mutex unlock — the break
                                     // exit)
-                                    unsafe { (*self.renderer_state.mutex).unlock() };
+                                    unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                                     break 'sel;
                                 }
                             };
                             // try self.setSelectionAndCopy(sel);
                             if let Err(err) = self.setSelectionAndCopy(sel) {
                                 // (the deferred mutex unlock — the error exit)
-                                unsafe { (*self.renderer_state.mutex).unlock() };
+                                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                                 return Err(err);
                             }
                         }
                         // try self.queueRender();
                         if let Err(err) = self.queueRender() {
                             // (the deferred mutex unlock — the error exit)
-                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                             return Err(err.into());
                         }
 
                         // Don't consume so that we show the context menu in apprt.
                         // return false;
                         // (the deferred mutex unlock — the context-menu return)
-                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                         return Ok(false);
                     }
                     // .copy => {
                     configpkg::value_types::RightClickAction::Copy => {
                         // if (self.io.terminal.screens.active.selection) |sel| {
-                        if let Some(sel) = unsafe { (*self.io.terminal.screens.active).selection } {
+                        if let Some(sel) =
+                            unsafe { (*(*self.io.as_ptr()).terminal.screens.active).selection }
+                        {
                             // try self.copySelectionToClipboards(
                             //     sel,
                             //     &.{.standard},
@@ -9866,7 +10072,7 @@ where
                                 binding::CopyToClipboard::Mixed,
                             ) {
                                 // (the deferred mutex unlock — the error exit)
-                                unsafe { (*self.renderer_state.mutex).unlock() };
+                                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                                 return Err(err);
                             }
                         }
@@ -9874,19 +10080,21 @@ where
                         // try self.setSelection(null);
                         if let Err(err) = self.setSelection(None) {
                             // (the deferred mutex unlock — the error exit)
-                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                             return Err(err);
                         }
                         // try self.queueRender();
                         if let Err(err) = self.queueRender() {
                             // (the deferred mutex unlock — the error exit)
-                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                             return Err(err.into());
                         }
                     }
                     // .@"copy-or-paste" => if (self.io.terminal.screens.active.selection) |sel| {
                     configpkg::value_types::RightClickAction::CopyOrPaste => {
-                        if let Some(sel) = unsafe { (*self.io.terminal.screens.active).selection } {
+                        if let Some(sel) =
+                            unsafe { (*(*self.io.as_ptr()).terminal.screens.active).selection }
+                        {
                             // try self.copySelectionToClipboards(
                             //     sel,
                             //     &.{.standard},
@@ -9898,26 +10106,26 @@ where
                                 binding::CopyToClipboard::Mixed,
                             ) {
                                 // (the deferred mutex unlock — the error exit)
-                                unsafe { (*self.renderer_state.mutex).unlock() };
+                                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                                 return Err(err);
                             }
                             // try self.setSelection(null);
                             if let Err(err) = self.setSelection(None) {
                                 // (the deferred mutex unlock — the error exit)
-                                unsafe { (*self.renderer_state.mutex).unlock() };
+                                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                                 return Err(err);
                             }
                             // try self.queueRender();
                             if let Err(err) = self.queueRender() {
                                 // (the deferred mutex unlock — the error exit)
-                                unsafe { (*self.renderer_state.mutex).unlock() };
+                                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                                 return Err(err.into());
                             }
                         } else {
                             // Pasting can trigger a lock grab in complete clipboard
                             // request so we need to unlock.
                             // self.renderer_state.mutex.unlock();
-                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                             // defer self.renderer_state.mutex.lock();
                             //
                             // (the inverted defer — the explicit relock at
@@ -9932,13 +10140,13 @@ where
                                     // (the LIFO defers on the error exit —
                                     // the arm's relock, then the outer
                                     // unlock)
-                                    unsafe { (*self.renderer_state.mutex).lock() };
-                                    unsafe { (*self.renderer_state.mutex).unlock() };
+                                    unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
+                                    unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                                     return Err(err);
                                 }
                             }
                             // (the deferred relock — the arm end)
-                            unsafe { (*self.renderer_state.mutex).lock() };
+                            unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
 
                             // We don't need to clear selection because we didn't have
                             // one to begin with.
@@ -9951,20 +10159,20 @@ where
                         // try self.setSelection(null);
                         if let Err(err) = self.setSelection(None) {
                             // (the deferred mutex unlock — the error exit)
-                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                             return Err(err);
                         }
                         // try self.queueRender();
                         if let Err(err) = self.queueRender() {
                             // (the deferred mutex unlock — the error exit)
-                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                             return Err(err.into());
                         }
 
                         // Pasting can trigger a lock grab in complete clipboard
                         // request so we need to unlock.
                         // self.renderer_state.mutex.unlock();
-                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                         // defer self.renderer_state.mutex.lock();
                         //
                         // (the inverted defer — the explicit relock at every
@@ -9978,20 +10186,20 @@ where
                             Err(err) => {
                                 // (the LIFO defers on the error exit — the
                                 // arm's relock, then the outer unlock)
-                                unsafe { (*self.renderer_state.mutex).lock() };
-                                unsafe { (*self.renderer_state.mutex).unlock() };
+                                unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
+                                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                                 return Err(err);
                             }
                         }
                         // (the deferred relock — the arm end)
-                        unsafe { (*self.renderer_state.mutex).lock() };
+                        unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
                     }
                 }
 
                 // Consume the event such that the context menu is not displayed.
                 // return true;
                 // (the deferred mutex unlock — the consumed return)
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                 return Ok(true);
             }
         }
@@ -10006,7 +10214,7 @@ where
     // (the inferred `!bool` is the [`Error`] union.)
     fn maybePromptClick(&mut self) -> Result<bool, Error> {
         // const t: *terminal.Terminal = self.renderer_state.terminal;
-        let t: *mut Terminal = self.renderer_state.terminal;
+        let t: *mut Terminal = unsafe { (*self.renderer_state.as_ptr()).terminal };
         // const screen: *terminal.Screen = t.screens.active;
         let screen: *mut terminal::screen::Screen = unsafe { (*t).screens.active };
 
@@ -10261,7 +10469,7 @@ where
         // Convert our cursor position to a screen point.
         // const screen: *terminal.Screen = self.renderer_state.terminal.screens.active;
         let screen: *mut terminal::screen::Screen =
-            unsafe { (*self.renderer_state.terminal).screens.active };
+            unsafe { (*(*self.renderer_state.as_ptr()).terminal).screens.active };
         // const mouse_pin: terminal.Pin = mouse_pin: {
         let mouse_pin: terminal::pagelist::Pin = 'mouse_pin: {
             // const point = self.posToViewport(pos.x, pos.y);
@@ -10346,7 +10554,7 @@ where
 
         // const screen: *terminal.Screen = self.renderer_state.terminal.screens.active;
         let screen: *mut terminal::screen::Screen =
-            unsafe { (*self.renderer_state.terminal).screens.active };
+            unsafe { (*(*self.renderer_state.as_ptr()).terminal).screens.active };
         // const line = screen.selectLine(.{
         //     .pin = mouse_pin,
         //     .whitespace = null,
@@ -10468,7 +10676,8 @@ where
         // In any of these scenarios, whatever mods are set (even shift)
         // are preserved.
         // if (self.io.terminal.flags.mouse_event == .none) return mods;
-        if self.io.terminal.flags.mouse_event == terminal::mouse::Event::None {
+        if unsafe { (*self.io.as_ptr()).terminal.flags.mouse_event } == terminal::mouse::Event::None
+        {
             return mods;
         }
         // if (!mods.shift) return mods;
@@ -10512,13 +10721,14 @@ where
                 //     .sel = link.selection,
                 //     .trim = false,
                 // });
-                let str_ = unsafe { &mut *self.io.terminal.screens.active }.selection_string(
-                    self.alloc.into(),
-                    terminal::screen::SelectionString {
-                        sel: link.selection,
-                        trim: false,
-                    },
-                )?;
+                let str_ = unsafe { &mut *(*self.io.as_ptr()).terminal.screens.active }
+                    .selection_string(
+                        self.alloc.into(),
+                        terminal::screen::SelectionString {
+                            sel: link.selection,
+                            trim: false,
+                        },
+                    )?;
                 // defer self.alloc.free(str);
                 //
                 // (owned bytes — freed on drop at every exit.)
@@ -10709,14 +10919,14 @@ where
                 //
                 // (guard-less zigstd Mutex — the defer is the explicit unlock
                 // at every exit below.)
-                unsafe { (*self.renderer_state.mutex).lock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
 
                 // const sel = self.mouse.selection_gesture.deepPress(
                 //     self.renderer_state.terminal,
                 //     .{ .word_boundary_codepoints = self.config.selection_word_chars },
                 // );
                 let sel = self.mouse.selection_gesture.deep_press(
-                    unsafe { &mut *self.renderer_state.terminal },
+                    unsafe { &mut *(*self.renderer_state.as_ptr()).terminal },
                     terminal::selection_gesture::DeepPress {
                         word_boundary_codepoints: &self.config.selection_word_chars,
                     },
@@ -10741,24 +10951,24 @@ where
                     Some(v) => v,
                     None => {
                         // (the deferred mutex unlock — the labeled break)
-                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                         break 'select;
                     }
                 };
                 if let Err(err) = self.setSelection(Some(sel)) {
                     // (the deferred mutex unlock — the error exit)
-                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                     return Err(err);
                 }
                 // try self.queueRender();
                 if let Err(err) = self.queueRender() {
                     // (the deferred mutex unlock — the error exit)
-                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                     return Err(err.into());
                 }
 
                 // (the deferred mutex unlock — the block end)
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
             }
         }
 
@@ -10818,7 +11028,7 @@ where
                 // );
                 let _ = unsafe { &*self.rt_app }.perform_action(
                     apprt::Target::Surface(&*self),
-                    apprt::Action::MouseShape(self.io.terminal.mouse_shape),
+                    apprt::Action::MouseShape(unsafe { (*self.io.as_ptr()).terminal.mouse_shape }),
                 )?;
                 // _ = try self.rt_app.performAction(
                 //     .{ .surface = self },
@@ -10838,23 +11048,23 @@ where
             //
             // (guard-less zigstd Mutex — the defer is the explicit unlock at
             // this if-block's end.)
-            unsafe { (*self.renderer_state.mutex).lock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
 
             // No mouse point so we don't highlight links
             // self.renderer_state.mouse.point = null;
-            self.renderer_state.mouse.point = None;
+            unsafe { (*self.renderer_state.as_ptr()).mouse.point = None };
 
             // Mark the link's row as dirty, but continue with updating the
             // mouse state below so we can scroll when our position is negative.
             // self.renderer_state.terminal.screens.active.dirty.hyperlink_hover = true;
             unsafe {
-                (*(*self.renderer_state.terminal).screens.active)
+                (*(*(*self.renderer_state.as_ptr()).terminal).screens.active)
                     .dirty
                     .hyperlink_hover = true;
             }
 
             // (the deferred mutex unlock — the block end)
-            unsafe { (*self.renderer_state.mutex).unlock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
         }
 
         // Always show the mouse again if it is hidden
@@ -10887,13 +11097,13 @@ where
         //
         // (guard-less zigstd Mutex — the defer is the explicit unlock at
         // every exit below.)
-        unsafe { (*self.renderer_state.mutex).lock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
 
         // Update our mouse state. We set this to null initially because we only
         // want to set it when we're not selecting or doing any other mouse
         // event.
         // self.renderer_state.mouse.point = null;
-        self.renderer_state.mouse.point = None;
+        unsafe { (*self.renderer_state.as_ptr()).mouse.point = None };
 
         // If we have an inspector, we need to always record position information
         // if (self.inspector) |insp| {
@@ -10928,7 +11138,7 @@ where
             }
 
             // const screen: *terminal.Screen = self.renderer_state.terminal.screens.active;
-            let screen = unsafe { (*self.renderer_state.terminal).screens.active };
+            let screen = unsafe { (*(*self.renderer_state.as_ptr()).terminal).screens.active };
             // insp.mouse.last_point = screen.pages.pin(.{ .viewport = .{
             //     .x = pos_vp.x,
             //     .y = pos_vp.y,
@@ -10947,7 +11157,7 @@ where
             // (guard-less zigstd Mutex — every other exit in this function
             // unlocks explicitly before returning; do the same here.)
             if let Err(err) = self.queueRender() {
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                 return Err(err.into());
             }
         }
@@ -10976,7 +11186,8 @@ where
         if (over_link
             || self.mouse.link_point.is_none()
             || (self.mouse.link_point.is_some() && !self.mouse.link_point.unwrap().eql(pos_vp)))
-            && (self.io.terminal.flags.mouse_event == terminal::mouse::Event::None
+            && (unsafe { (*self.io.as_ptr()).terminal.flags.mouse_event }
+                == terminal::mouse::Event::None
                 || (self.mouse.mods.shift && !self.mouseShiftCapture(false)))
         {
             // If we were previously over a link, we always update. We do this so that if the text
@@ -10984,7 +11195,7 @@ where
             // try self.mouseRefreshLinks(pos, pos_vp, over_link);
             if let Err(err) = self.mouseRefreshLinks(pos, pos_vp, over_link) {
                 // (the deferred mutex unlock — the error exit)
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                 return Err(err);
             }
         }
@@ -11049,7 +11260,7 @@ where
                 // return;
                 //
                 // (the deferred mutex unlock — the return)
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                 return Ok(());
             }
         }
@@ -11074,7 +11285,7 @@ where
                 // because if the same screen switches back then we can continue our
                 // selection.
                 // const t: *terminal.Terminal = self.renderer_state.terminal;
-                let t: *mut Terminal = self.renderer_state.terminal;
+                let t: *mut Terminal = unsafe { (*self.renderer_state.as_ptr()).terminal };
                 // if (self.mouse.activeLeftClickPin(&t.screens) == null) break :select;
                 if self
                     .mouse
@@ -11088,7 +11299,7 @@ where
                 // try self.queueRender();
                 if let Err(err) = self.queueRender() {
                     // (the deferred mutex unlock — the error exit)
-                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                     return Err(err.into());
                 }
 
@@ -11121,7 +11332,7 @@ where
                         // return;
                         //
                         // (the deferred mutex unlock — the return)
-                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                         return Ok(());
                     }
                 };
@@ -11193,14 +11404,14 @@ where
                 // try self.setSelection(drag_selection);
                 if let Err(err) = self.setSelection(drag_selection) {
                     // (the deferred mutex unlock — the error exit)
-                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                     return Err(err);
                 }
             }
         }
 
         // (the deferred mutex unlock — the function end)
-        unsafe { (*self.renderer_state.mutex).unlock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
         Ok(())
     }
 
@@ -11284,8 +11495,7 @@ where
     // union.
     fn scrollToBottom(&mut self) -> Result<(), Error> {
         // self.io.terminal.scrollViewport(.{ .bottom = {} });
-        self.io
-            .terminal
+        unsafe { &mut (*self.io.as_ptr()).terminal }
             .scroll_viewport(terminal::terminal::ScrollViewport::Bottom);
         // try self.queueRender();
         self.queueRender()?;
@@ -11506,12 +11716,12 @@ where
                 //     };
                 // }
                 {
-                    unsafe { (*this.renderer_state.mutex).lock() };
+                    unsafe { (*(*this.renderer_state.as_ptr()).mutex).lock() };
                     if let Err(err) = this.scrollToBottom() {
                         // log.warn("error scrolling to bottom err={}", .{err});
                         log::warn!(target: LOG_SCOPE, "error scrolling to bottom err={err:?}");
                     }
-                    unsafe { (*this.renderer_state.mutex).unlock() };
+                    unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                 }
             }
 
@@ -11563,12 +11773,12 @@ where
                 //     };
                 // }
                 {
-                    unsafe { (*this.renderer_state.mutex).lock() };
+                    unsafe { (*(*this.renderer_state.as_ptr()).mutex).lock() };
                     if let Err(err) = this.scrollToBottom() {
                         // log.warn("error scrolling to bottom err={}", .{err});
                         log::warn!(target: LOG_SCOPE, "error scrolling to bottom err={err:?}");
                     }
-                    unsafe { (*this.renderer_state.mutex).unlock() };
+                    unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                 }
             }
 
@@ -11590,7 +11800,7 @@ where
                 //     break :normal !self.io.terminal.modes.get(.cursor_keys);
                 // };
                 let normal = {
-                    unsafe { (*this.renderer_state.mutex).lock() };
+                    unsafe { (*(*this.renderer_state.as_ptr()).mutex).lock() };
 
                     // With the lock held, we must scroll to the bottom.
                     // We always scroll to the bottom for these inputs.
@@ -11599,12 +11809,10 @@ where
                         log::warn!(target: LOG_SCOPE, "error scrolling to bottom err={err:?}");
                     }
 
-                    let normal = !this
-                        .io
-                        .terminal
+                    let normal = !unsafe { &(*this.io.as_ptr()).terminal }
                         .modes
                         .get(terminal::modes::Mode::CursorKeys);
-                    unsafe { (*this.renderer_state.mutex).unlock() };
+                    unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                     normal
                 };
 
@@ -11639,9 +11847,9 @@ where
                 // self.renderer_state.mutex.lock();
                 // defer self.renderer_state.mutex.unlock();
                 // self.renderer_state.terminal.fullReset();
-                unsafe { (*this.renderer_state.mutex).lock() };
-                unsafe { (*this.renderer_state.terminal).full_reset() };
-                unsafe { (*this.renderer_state.mutex).unlock() };
+                unsafe { (*(*this.renderer_state.as_ptr()).mutex).lock() };
+                unsafe { (*(*this.renderer_state.as_ptr()).terminal).full_reset() };
+                unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
             }
 
             // .start_search => {
@@ -11738,9 +11946,10 @@ where
                     }
 
                     // Stable base address of the pinned Surface: `init` writes it
-                    // through a `*mut Surface`, the same address `searchCallback`
-                    // casts `event_userdata` back to. The thread re-enters through
-                    // it via NARROW raw field projections only (§3.3a).
+                    // through a `*mut Surface`. (N444 fix round 1: the search
+                    // thread no longer re-enters through it; `searchCallback`
+                    // gets the spawn-time `SearchCallbackCtx` below, and the
+                    // surface pointer is only the surface mailbox's identity.)
                     //
                     // (N442: the caller's raw root itself, not a pointer derived
                     // from the local reborrow, which later reborrows retire.)
@@ -11766,19 +11975,43 @@ where
                     // the POST-MOVE `state_ptr` lineage below (a pre-move
                     // `addr_of!` alias would be popped by the child's
                     // `Box<Mailbox>` noalias — mirihar `search_shipped`).
-                    let mut state = terminal::search::thread::Thread::init(
+                    // PORT NOTE (N444 fix round 1, P7-W7 T5c): the callback's
+                    // userdata is a context captured here, on the main thread,
+                    // instead of the surface (`SearchCallbackCtx`'s doc). It is
+                    // freed once: on the `init` error just below, on the spawn
+                    // failure, or by `Search::deinit` after the join.
+                    let callback_ctx: *mut SearchCallbackCtx<A> = unsafe {
+                        let rt = (*surface_ptr).renderer_thread.as_ptr();
+                        Box::into_raw(Box::new(SearchCallbackCtx {
+                            renderer_mailbox: (*rt).mailbox,
+                            renderer_wakeup: &raw const (*rt).wakeup,
+                            surface_mailbox: Self::surface_mailbox_raw(surface_ptr),
+                        }))
+                    };
+                    let state_result = terminal::search::thread::Thread::init(
                         this.alloc.into(),
                         terminal::search::thread::Options {
                             // .mutex = self.renderer_state.mutex,
-                            mutex: this.renderer_state.mutex, // *mut -> *const (§1)
+                            mutex: unsafe { (*this.renderer_state.as_ptr()).mutex }, // *mut -> *const (§1)
                             // .terminal = self.renderer_state.terminal,
-                            terminal: this.renderer_state.terminal,
+                            terminal: unsafe { (*this.renderer_state.as_ptr()).terminal },
                             // .event_cb = &searchCallback,
                             event_cb: Some(Self::searchCallback),
                             // .event_userdata = self,
-                            event_userdata: surface_ptr as *mut core::ffi::c_void,
+                            //
+                            // (N444 fix round 1: the spawn-time context.)
+                            event_userdata: callback_ctx.cast::<core::ffi::c_void>(),
                         },
-                    )?; // needs From<..search::thread::xev::Error> (added above)
+                    );
+                    let mut state = match state_result {
+                        Ok(v) => v,
+                        Err(e) => {
+                            // (N444 fix round 1: nothing else holds the context.)
+                            unsafe { SearchCallbackCtx::<A>::free(callback_ctx.cast()) };
+                            // needs From<..search::thread::xev::Error> (added above)
+                            return Err(e.into());
+                        }
+                    };
 
                     // Arm the wakeup/stop waits ON THE LOCAL + capture the
                     // decoupled notifiers BEFORE the move (identical to the vt
@@ -11798,12 +12031,18 @@ where
                     let sn = state.stop.notifier();
 
                     // self.search = .{ .state = <local>, .thread = undefined };
+                    //
+                    // (N444: the state moves into its own allocation here, the
+                    // move `self.search = ..` made; `state_ptr` below is its raw
+                    // root, which the child and the decoupled mailbox share.)
                     this.search = Some(Search {
-                        state,
+                        state: ThreadSharedBox::new(state),
                         thread: None,               // == `.thread = undefined`
                         mailbox: core::ptr::null(), // set from state_ptr below
                         wakeup: wn,
                         stop: sn,
+                        callback_ctx: callback_ctx.cast(),
+                        callback_ctx_free: SearchCallbackCtx::<A>::free,
                     });
 
                     // const s: *Search = &self.search.?;   — ONE transient &mut,
@@ -11812,7 +12051,7 @@ where
                     // is ever formed again.
                     let search_ptr: *mut Search = &raw mut *this.search.as_mut().unwrap();
                     let state_ptr: *mut terminal::search::thread::Thread =
-                        unsafe { &raw mut (*search_ptr).state };
+                        unsafe { (*search_ptr).state.as_ptr() };
                     // Decoupled mailbox = the Box<Mailbox> pointee, via the
                     // POST-MOVE state_ptr lineage (mirihar `search_shipped`).
                     unsafe {
@@ -11845,8 +12084,15 @@ where
                             // deinit'd state + `thread: None` is a dangling hazard;
                             // `None` is the Rust empty. `Builder::spawn`'s
                             // `io::Error` already has `From` for surface `Error`.
+                            //
+                            // (N444: then the boxed state is dropped and freed,
+                            // where the inline field was dropped with the
+                            // `Search`; the child never started.)
                             unsafe {
                                 (*state_ptr).deinit();
+                                (*search_ptr).state.drop_and_dealloc();
+                                // (N444 fix round 1: the never-used context.)
+                                SearchCallbackCtx::<A>::free(callback_ctx.cast());
                             }
                             this.search = None;
                             return Err(e.into());
@@ -11943,10 +12189,12 @@ where
                 //
                 // (the deferred unlock at every exit — the selectionString C9
                 // convention; the fallible calls unlock before propagating.)
-                unsafe { (*this.renderer_state.mutex).lock() };
+                unsafe { (*(*this.renderer_state.as_ptr()).mutex).lock() };
 
                 // if (self.io.terminal.screens.active.selection) |sel| {
-                if let Some(sel) = unsafe { (*this.io.terminal.screens.active).selection } {
+                if let Some(sel) =
+                    unsafe { (*(*this.io.as_ptr()).terminal.screens.active).selection }
+                {
                     // try self.copySelectionToClipboards(
                     //     sel,
                     //     &.{.standard},
@@ -11955,7 +12203,7 @@ where
                     if let Err(err) =
                         this.copySelectionToClipboards(sel, &[apprt::Clipboard::Standard], format)
                     {
-                        unsafe { (*this.renderer_state.mutex).unlock() };
+                        unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                         return Err(err);
                     }
 
@@ -11990,12 +12238,12 @@ where
                     }
 
                     // return true;
-                    unsafe { (*this.renderer_state.mutex).unlock() };
+                    unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                     return Ok(true);
                 }
 
                 // return false;
-                unsafe { (*this.renderer_state.mutex).unlock() };
+                unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                 return Ok(false);
             }
 
@@ -12013,12 +12261,12 @@ where
                 // defer self.renderer_state.mutex.unlock();
                 //
                 // (the deferred unlock at every exit — the C9 convention.)
-                unsafe { (*this.renderer_state.mutex).lock() };
+                unsafe { (*(*this.renderer_state.as_ptr()).mutex).lock() };
                 // if (try self.linkAtPos(pos)) |link_info| {
                 let link_info = match this.linkAtPos(pos) {
                     Ok(v) => v,
                     Err(err) => {
-                        unsafe { (*this.renderer_state.mutex).unlock() };
+                        unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                         return Err(err);
                     }
                 };
@@ -12035,7 +12283,7 @@ where
                             //     log.err("error reading url string err={}", .{err});
                             //     return false;
                             // };
-                            let r = unsafe { &mut *this.io.terminal.screens.active }
+                            let r = unsafe { &mut *(*this.io.as_ptr()).terminal.screens.active }
                                 .selection_string(
                                     this.alloc.into(),
                                     terminal::screen::SelectionString {
@@ -12051,7 +12299,7 @@ where
                                         target: LOG_SCOPE,
                                         "error reading url string err={err:?}"
                                     );
-                                    unsafe { (*this.renderer_state.mutex).unlock() };
+                                    unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                                     return Ok(false);
                                 }
                             }
@@ -12072,7 +12320,7 @@ where
                                         target: LOG_SCOPE,
                                         "failed to get URI for OSC8 hyperlink"
                                     );
-                                    unsafe { (*this.renderer_state.mutex).unlock() };
+                                    unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                                     return Ok(false);
                                 }
                             };
@@ -12104,17 +12352,17 @@ where
                     ) {
                         // log.err("error copying url to clipboard err={}", .{err});
                         log::error!(target: LOG_SCOPE, "error copying url to clipboard err={err:?}");
-                        unsafe { (*this.renderer_state.mutex).unlock() };
+                        unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                         return Ok(false);
                     }
 
                     // return true;
-                    unsafe { (*this.renderer_state.mutex).unlock() };
+                    unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                     return Ok(true);
                 }
 
                 // return false;
-                unsafe { (*this.renderer_state.mutex).unlock() };
+                unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                 return Ok(false);
             }
 
@@ -12351,12 +12599,14 @@ where
                 //     if (self.io.terminal.screens.active_key == .alternate) return false;
                 // }
                 {
-                    unsafe { (*this.renderer_state.mutex).lock() };
-                    if this.io.terminal.screens.active_key == terminal::screen_set::Key::Alternate {
-                        unsafe { (*this.renderer_state.mutex).unlock() };
+                    unsafe { (*(*this.renderer_state.as_ptr()).mutex).lock() };
+                    if unsafe { (*this.io.as_ptr()).terminal.screens.active_key }
+                        == terminal::screen_set::Key::Alternate
+                    {
+                        unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                         return Ok(false);
                     }
-                    unsafe { (*this.renderer_state.mutex).unlock() };
+                    unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                 }
 
                 // self.queueIo(.{
@@ -12399,10 +12649,10 @@ where
                 //     t.screens.active.scroll(.{ .row = n });
                 // }
                 {
-                    unsafe { (*this.renderer_state.mutex).lock() };
-                    let t: *mut Terminal = this.renderer_state.terminal;
+                    unsafe { (*(*this.renderer_state.as_ptr()).mutex).lock() };
+                    let t: *mut Terminal = unsafe { (*this.renderer_state.as_ptr()).terminal };
                     unsafe { (*(*t).screens.active).scroll(terminal::screen::Scroll::Row(n)) };
-                    unsafe { (*this.renderer_state.mutex).unlock() };
+                    unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                 }
 
                 // try self.queueRender();
@@ -12419,19 +12669,21 @@ where
                 //     self.io.terminal.screens.active.scroll(.{ .pin = tl });
                 // }
                 {
-                    unsafe { (*this.renderer_state.mutex).lock() };
-                    let sel = match unsafe { (*this.io.terminal.screens.active).selection } {
-                        Some(sel) => sel,
-                        None => {
-                            unsafe { (*this.renderer_state.mutex).unlock() };
-                            return Ok(false);
-                        }
-                    };
-                    let tl = sel.top_left(unsafe { &*this.io.terminal.screens.active });
+                    unsafe { (*(*this.renderer_state.as_ptr()).mutex).lock() };
+                    let sel =
+                        match unsafe { (*(*this.io.as_ptr()).terminal.screens.active).selection } {
+                            Some(sel) => sel,
+                            None => {
+                                unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
+                                return Ok(false);
+                            }
+                        };
+                    let tl = sel.top_left(unsafe { &*(*this.io.as_ptr()).terminal.screens.active });
                     unsafe {
-                        (*this.io.terminal.screens.active).scroll(terminal::screen::Scroll::Pin(tl))
+                        (*(*this.io.as_ptr()).terminal.screens.active)
+                            .scroll(terminal::screen::Scroll::Pin(tl))
                     };
-                    unsafe { (*this.renderer_state.mutex).unlock() };
+                    unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                 }
 
                 // try self.queueRender();
@@ -12969,24 +13221,24 @@ where
             binding::ScopedSurface::SelectAll => {
                 // self.renderer_state.mutex.lock();
                 // defer self.renderer_state.mutex.unlock();
-                unsafe { (*this.renderer_state.mutex).lock() };
+                unsafe { (*(*this.renderer_state.as_ptr()).mutex).lock() };
 
                 // const sel = self.io.terminal.screens.active.selectAll();
-                let sel = unsafe { (*this.io.terminal.screens.active).select_all() };
+                let sel = unsafe { (*(*this.io.as_ptr()).terminal.screens.active).select_all() };
                 // if (sel) |s| {
                 if let Some(s) = sel {
                     // try self.setSelectionAndCopy(s);
                     if let Err(err) = this.setSelectionAndCopy(s) {
-                        unsafe { (*this.renderer_state.mutex).unlock() };
+                        unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                         return Err(err);
                     }
                     // try self.queueRender();
                     if let Err(err) = this.queueRender() {
-                        unsafe { (*this.renderer_state.mutex).unlock() };
+                        unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                         return Err(err.into());
                     }
                 }
-                unsafe { (*this.renderer_state.mutex).unlock() };
+                unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
             }
 
             // .inspector => |mode| return try self.rt_app.performAction(
@@ -13211,7 +13463,7 @@ where
                 // .render => {
                 binding::CrashThread::Render => {
                     // _ = self.renderer_thread.mailbox.push(.{ .crash = {} }, .{ .forever = {} });
-                    let _ = unsafe { &*this.renderer_thread.mailbox }
+                    let _ = unsafe { &*(*this.renderer_thread.as_ptr()).mailbox }
                         .push(rendererpkg::Message::Crash, Timeout::Forever);
                     // self.queueRender() catch |err| {
                     //     // Not a big deal if this fails.
@@ -13238,10 +13490,11 @@ where
             binding::ScopedSurface::AdjustSelection(direction) => {
                 // self.renderer_state.mutex.lock();
                 // defer self.renderer_state.mutex.unlock();
-                unsafe { (*this.renderer_state.mutex).lock() };
+                unsafe { (*(*this.renderer_state.as_ptr()).mutex).lock() };
 
                 // const screen: *terminal.Screen = self.io.terminal.screens.active;
-                let screen: *mut terminal::screen::Screen = this.io.terminal.screens.active;
+                let screen: *mut terminal::screen::Screen =
+                    unsafe { (*this.io.as_ptr()).terminal.screens.active };
                 // const sel = if (screen.selection) |*sel| sel else {
                 //     // If we don't have a selection we do not perform this
                 //     // action, allowing the keybind to fall through to the
@@ -13260,7 +13513,7 @@ where
                 let mut sel = match unsafe { (*screen).selection } {
                     Some(sel) => sel,
                     None => {
-                        unsafe { (*this.renderer_state.mutex).unlock() };
+                        unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                         return Ok(false);
                     }
                 };
@@ -13346,10 +13599,10 @@ where
                 unsafe { (*screen).dirty.selection = true };
                 // try self.queueRender();
                 if let Err(err) = this.queueRender() {
-                    unsafe { (*this.renderer_state.mutex).unlock() };
+                    unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                     return Err(err.into());
                 }
-                unsafe { (*this.renderer_state.mutex).unlock() };
+                unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
             }
         }
 
@@ -13477,13 +13730,13 @@ where
             //
             // (guard-less zigstd Mutex — the defer is the explicit unlock at
             // every exit below.)
-            unsafe { (*self.renderer_state.mutex).lock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
 
             // We only dump history if we have history. We still keep
             // the file and write the empty file to the pty so that this
             // command always works on the primary screen.
             // const pages = &self.io.terminal.screens.active.pages;
-            let pages = unsafe { &(*self.io.terminal.screens.active).pages };
+            let pages = unsafe { &(*(*self.io.as_ptr()).terminal.screens.active).pages };
             // const sel_: ?terminal.Selection = switch (loc) {
             let sel_: Option<terminal::selection::Selection> = match loc {
                 // .history => history: {
@@ -13493,7 +13746,9 @@ where
                     // if (self.io.terminal.screens.active_key == .alternate) {
                     //     break :history null;
                     // }
-                    if self.io.terminal.screens.active_key == terminal::screen_set::Key::Alternate {
+                    if unsafe { (*self.io.as_ptr()).terminal.screens.active_key }
+                        == terminal::screen_set::Key::Alternate
+                    {
                         break 'history None;
                     }
 
@@ -13535,7 +13790,7 @@ where
 
                 // .selection => self.io.terminal.screens.active.selection,
                 WriteScreenLoc::Selection => unsafe {
-                    (*self.io.terminal.screens.active).selection
+                    (*(*self.io.as_ptr()).terminal.screens.active).selection
                 },
             };
 
@@ -13550,7 +13805,7 @@ where
                     // (the null-selection exit: unlock, then return — `tmp_dir`
                     // drops with `retain` false, so its `Drop` runs the
                     // reference defer's `tmp_dir.deinit()` arm.)
-                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                     return Ok(());
                 }
             };
@@ -13559,7 +13814,7 @@ where
             use rustty_vt::formatter::ScreenFormatter;
             // var formatter: ScreenFormatter = .init(self.io.terminal.screens.active, .{
             let mut formatter: ScreenFormatter = ScreenFormatter::init(
-                self.io.terminal.screens.active,
+                unsafe { (*self.io.as_ptr()).terminal.screens.active },
                 terminal::formatter::Options {
                     // .emit = switch (write_screen.emit) {
                     //     .plain => .plain,
@@ -13580,11 +13835,13 @@ where
                     // `Options::base` note.)
                     codepoint_map: Some(Vec::new()),
                     // .background = self.io.terminal.colors.background.get(),
-                    background: self.io.terminal.colors.background.get(),
+                    background: unsafe { (*self.io.as_ptr()).terminal.colors.background.get() },
                     // .foreground = self.io.terminal.colors.foreground.get(),
-                    foreground: self.io.terminal.colors.foreground.get(),
+                    foreground: unsafe { (*self.io.as_ptr()).terminal.colors.foreground.get() },
                     // .palette = &self.io.terminal.colors.palette.current,
-                    palette: Some(&raw const self.io.terminal.colors.palette.current),
+                    palette: Some(unsafe {
+                        &raw const (*self.io.as_ptr()).terminal.colors.palette.current
+                    }),
                 },
             );
             // formatter.content = .{ .selection = sel.ordered(
@@ -13592,19 +13849,19 @@ where
             //     .forward,
             // ) };
             formatter.content = terminal::formatter::Content::Selection(Some(sel.ordered(
-                unsafe { &*self.io.terminal.screens.active },
+                unsafe { &*(*self.io.as_ptr()).terminal.screens.active },
                 terminal::selection::Order::Forward,
             )));
             // try formatter.format(buf_writer);
             if let Err(err) = formatter.format(&mut buf_writer) {
                 // (the deferred mutex unlock — the error exit; `tmp_dir` stays
                 // armed so its `Drop` reproduces `errdefer tmp_dir.deinit()`.)
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                 return Err(err.into());
             }
 
             // (the deferred mutex unlock — the normal block exit.)
-            unsafe { (*self.renderer_state.mutex).unlock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
         }
         // try buf_writer.flush();
         {
@@ -14007,13 +14264,11 @@ where
                 // self.renderer_state.mutex.lock();
                 // const event = self.io.terminal.modes.get(.kitty_paste_events);
                 // self.renderer_state.mutex.unlock();
-                unsafe { (*self.renderer_state.mutex).lock() };
-                let event = self
-                    .io
-                    .terminal
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
+                let event = unsafe { &(*self.io.as_ptr()).terminal }
                     .modes
                     .get(rustty_vt::modes::Mode::KittyPasteEvents);
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
 
                 // break :effective if (event) .{ .list = clipboard } else req;
                 if event {
@@ -14118,7 +14373,7 @@ where
         //
         // (guard-less zigstd Mutex — the defer is the explicit unlock at
         // every exit below.)
-        unsafe { (*self.renderer_state.mutex).lock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
 
         // const pasted = try terminal.paste.paste(.{
         //     .terminal = &self.io.terminal,
@@ -14135,16 +14390,21 @@ where
         // under the renderer/terminal mutex held above (the KittyClipboardGrant
         // mailbox-arm precedent), so the `&mut` cannot interleave with an IO
         // thread access.
-        let io = self.io.terminal.io;
+        let io = unsafe { (*self.io.as_ptr()).terminal.io };
         let pasted = match rustty_vt::paste::paste(
             rustty_vt::paste::Context {
-                terminal: &self.io.terminal,
+                terminal: unsafe { &(*self.io.as_ptr()).terminal },
                 // .alloc = self.alloc: the application's allocator, which is
                 // the terminal's (the Rust heap; the grants are freed with it).
                 alloc: rustty_vt::alloc::Global,
                 writer: &mut aw,
                 kitty_clipboard: Some(rustty_vt::paste::KittyClipboard {
-                    grants: &mut self.io.terminal_stream.handler.kitty_clipboard_grants,
+                    grants: unsafe {
+                        &mut (*self.io.as_ptr())
+                            .terminal_stream
+                            .handler
+                            .kitty_clipboard_grants
+                    },
                     io,
                 }),
             },
@@ -14162,7 +14422,7 @@ where
         ) {
             Ok(v) => v,
             Err(err) => {
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                 // (the reference propagates the inferred paste error union;
                 // the port folds it into the surface `Error` set:
                 // `UnsafePaste` keeps its distinguishable variant, the
@@ -14181,7 +14441,7 @@ where
         };
         // if (!pasted) return false;
         if !pasted {
-            unsafe { (*self.renderer_state.mutex).unlock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
             return Ok(false);
         }
 
@@ -14203,7 +14463,7 @@ where
             }),
             termio::termio_impl::MutexState::Locked,
         );
-        unsafe { (*self.renderer_state.mutex).unlock() };
+        unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
         Ok(true)
     }
 
@@ -14548,9 +14808,10 @@ where
             //
             // (guard-less zigstd Mutex — the defer is the explicit unlock at
             // every exit below.)
-            unsafe { (*self.renderer_state.mutex).lock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
             // const opts: input.paste.Options = .fromTerminal(&self.io.terminal);
-            let opts: paste::Options = paste::Options::from_terminal(&self.io.terminal);
+            let opts: paste::Options =
+                paste::Options::from_terminal(unsafe { &(*self.io.as_ptr()).terminal });
 
             // If we have paste protection enabled, we detect unsafe pastes and return
             // an error. The error approach allows apprt to attempt to complete the paste
@@ -14608,7 +14869,7 @@ where
                 // return error.UnsafePaste;
                 //
                 // (unlock before propagating — the explicit-unlock convention.)
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
                 return Err(Error::UnsafePaste);
             }
 
@@ -14623,7 +14884,7 @@ where
             }
 
             // break :encode_opts opts;
-            unsafe { (*self.renderer_state.mutex).unlock() };
+            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
             opts
         };
 
@@ -14912,13 +15173,15 @@ where
     // type-from-value, so the `info` selector splits into the two concrete
     // accessors (`.foreground_pid` -> `u64`, `.tty_name` -> `&CStr`).
     pub fn getForegroundPid(&mut self) -> Option<u64> {
-        self.io.getForegroundPid()
+        // (N444: raw-self, through the io block's raw root.)
+        unsafe { termio::Termio::getForegroundPid(self.io.as_ptr()) }
     }
 
     /// See [`Surface::getForegroundPid`] (the `.tty_name` half of the
     /// reference `getProcessInfo`).
     pub fn getTtyName(&mut self) -> Option<&std::ffi::CStr> {
-        self.io.getTtyName()
+        // (N444: raw-self, through the io block's raw root.)
+        unsafe { termio::Termio::getTtyName(self.io.as_ptr()) }
     }
 }
 
@@ -16598,14 +16861,18 @@ mod clipboard_codepoint_map_e2e {
         // Field-projected raw-pointer writes: only the three fields
         // `copySelectionToClipboards` reads (`io.terminal`, `config`,
         // `rt_surface`) — see the module doc above.
+        //
+        // (N444: `io` is out of line; its box is written first, then the
+        // terminal into the block by place.)
         unsafe {
-            std::ptr::addr_of_mut!((*sp).io.terminal).write(terminal);
+            std::ptr::addr_of_mut!((*sp).io).write(ThreadSharedBox::new_uninit());
+            std::ptr::addr_of_mut!((*(*sp).io.as_ptr()).terminal).write(terminal);
             std::ptr::addr_of_mut!((*sp).config).write(derived_config);
             std::ptr::addr_of_mut!((*sp).rt_surface).write(Box::into_raw(rt_surface));
         }
 
         let surface = unsafe { &mut *sp };
-        let pages = unsafe { &(*surface.io.terminal.screens.active).pages };
+        let pages = unsafe { &(*(*surface.io.as_ptr()).terminal.screens.active).pages };
         let sel = terminal::selection::Selection::init(
             pages.get_top_left(terminal::point::Tag::Screen),
             pages
@@ -16675,7 +16942,9 @@ mod clipboard_codepoint_map_e2e {
         // raw pointer), never through `surface`, for the Stacked-Borrows
         // reason noted above.
         unsafe {
-            (*sp).io.terminal.deinit(Allocator.into());
+            (*(*sp).io.as_ptr()).terminal.deinit(Allocator.into());
+            // (N444: then the io block's own allocation.)
+            (*sp).io.dealloc();
             (*sp).config.deinit();
             std::ptr::drop_in_place(std::ptr::addr_of_mut!((*sp).config));
             drop(Box::from_raw(rt_surface_ptr));
@@ -16753,9 +17022,12 @@ mod mok2_key_path_e2e {
 
         let mut mu: Box<MaybeUninit<Surface<TestApp>>> = Box::new(MaybeUninit::uninit());
         let sp = mu.as_mut_ptr();
+        // (N444: the out-of-line blocks' boxes first, then their fields.)
         unsafe {
-            std::ptr::addr_of_mut!((*sp).renderer_state.mutex).write(mutex);
-            std::ptr::addr_of_mut!((*sp).io.terminal).write(terminal);
+            std::ptr::addr_of_mut!((*sp).renderer_state).write(ThreadSharedBox::new_uninit());
+            std::ptr::addr_of_mut!((*sp).io).write(ThreadSharedBox::new_uninit());
+            std::ptr::addr_of_mut!((*(*sp).renderer_state.as_ptr()).mutex).write(mutex);
+            std::ptr::addr_of_mut!((*(*sp).io.as_ptr()).terminal).write(terminal);
             std::ptr::addr_of_mut!((*sp).config).write(derived_config);
         }
 
@@ -16817,7 +17089,9 @@ mod mok2_key_path_e2e {
         // Teardown through `sp` only (the `clipboard_codepoint_map_e2e`
         // Stacked-Borrows note); `mu` never drops its uninitialized fields.
         unsafe {
-            (*sp).io.terminal.deinit(Allocator.into());
+            (*(*sp).io.as_ptr()).terminal.deinit(Allocator.into());
+            (*sp).io.dealloc();
+            (*sp).renderer_state.dealloc();
             (*sp).config.deinit();
             std::ptr::drop_in_place(std::ptr::addr_of_mut!((*sp).config));
             drop(Box::from_raw(mutex));
@@ -17075,13 +17349,21 @@ mod paste_event_mutex_tests {
         let sp = mu.as_mut_ptr();
         unsafe {
             std::ptr::addr_of_mut!((*sp).readonly).write(false);
-            std::ptr::addr_of_mut!((*sp).renderer_state.mutex).write(renderer_mutex);
-            std::ptr::addr_of_mut!((*sp).io.renderer_state)
-                .write(std::ptr::addr_of_mut!((*sp).renderer_state));
-            std::ptr::addr_of_mut!((*sp).io.terminal).write(terminal);
-            std::ptr::addr_of_mut!((*sp).io.terminal_stream.handler.kitty_clipboard_grants)
-                .write(rustty_vt::kitty::clipboard::Grants::default());
-            std::ptr::addr_of_mut!((*sp).io.mailbox).write(mailbox);
+            // (N444: the out-of-line blocks' boxes first, then their fields.)
+            std::ptr::addr_of_mut!((*sp).renderer_state).write(ThreadSharedBox::new_uninit());
+            std::ptr::addr_of_mut!((*sp).io).write(ThreadSharedBox::new_uninit());
+            std::ptr::addr_of_mut!((*(*sp).renderer_state.as_ptr()).mutex).write(renderer_mutex);
+            std::ptr::addr_of_mut!((*(*sp).io.as_ptr()).renderer_state)
+                .write((*sp).renderer_state.as_ptr());
+            std::ptr::addr_of_mut!((*(*sp).io.as_ptr()).terminal).write(terminal);
+            std::ptr::addr_of_mut!(
+                (*(*sp).io.as_ptr())
+                    .terminal_stream
+                    .handler
+                    .kitty_clipboard_grants
+            )
+            .write(rustty_vt::kitty::clipboard::Grants::default());
+            std::ptr::addr_of_mut!((*(*sp).io.as_ptr()).mailbox).write(mailbox);
         }
 
         // The writer's wakeup: `Mailbox.send` notifies it on the slow path right
@@ -17093,7 +17375,7 @@ mod paste_event_mutex_tests {
         // registered in the copy it is called on (N343), so a copy's `wait` is
         // never woken by the mailbox's `notify`.
         let wakeup: *const rustty_xev::Async = unsafe {
-            match &(*sp).io.mailbox {
+            match &(*(*sp).io.as_ptr()).mailbox {
                 termio::mailbox::Mailbox::Spsc { wakeup, .. } => wakeup,
             }
         };
@@ -17236,11 +17518,16 @@ mod paste_event_mutex_tests {
 
         // Teardown.
         unsafe {
-            (*sp).io.terminal.deinit(Allocator.into());
+            (*(*sp).io.as_ptr()).terminal.deinit(Allocator.into());
             std::ptr::drop_in_place(std::ptr::addr_of_mut!(
-                (*sp).io.terminal_stream.handler.kitty_clipboard_grants
+                (*(*sp).io.as_ptr())
+                    .terminal_stream
+                    .handler
+                    .kitty_clipboard_grants
             ));
-            std::ptr::read(std::ptr::addr_of!((*sp).io.mailbox)).deinit();
+            std::ptr::read(std::ptr::addr_of!((*(*sp).io.as_ptr()).mailbox)).deinit();
+            (*sp).io.dealloc();
+            (*sp).renderer_state.dealloc();
             drop(Box::from_raw(renderer_mutex));
         }
 

@@ -2661,6 +2661,8 @@ pub enum Option_ {
     ClipboardRead = 38,
     /// Input type: `*const usize` (oracle 5350d4a5f/70f006575).
     ClipboardWriteMaxBytes = 39,
+    /// Input type: `*const bool` (oracle c55f213aa).
+    ResizePullScrollback = 40,
     // /// Input type expected for setting the option.
     // pub fn InType(comptime self: Option) type {
     //     return switch (self) {
@@ -2685,6 +2687,7 @@ pub enum Option_ {
     //         .kitty_image_medium_shared_mem,
     //         .glyph_protocol,
     //         .title_report,
+    //         .resize_pull_scrollback,
     //         => ?*const bool,
     //         .kitty_image_medium_temp_file => ?*const lib.String,
     //         .apc_max_bytes,
@@ -3492,6 +3495,21 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
             };
             // SAFETY: raw place write off the handle (no wrapper-level `&mut`).
             unsafe { (*terminal_).stream.handler.kitty_clipboard_write_max_bytes = v };
+        }
+
+        // .resize_pull_scrollback => wrapper.terminal.flags.resize_pull_scrollback =
+        //     if (value) |ptr| ptr.* else true,
+        Option_::ResizePullScrollback => {
+            let ptr = value as *const bool;
+            let v = if !ptr.is_null() {
+                // SAFETY: `value` points to a readable `bool` (caller contract).
+                unsafe { *ptr }
+            } else {
+                true
+            };
+            // SAFETY: raw place write through the handle's terminal pointer
+            // (no wrapper-level or terminal-level `&mut`).
+            unsafe { (*(*terminal_).terminal).flags.resize_pull_scrollback = v };
         }
 
         // .mode, .mode_default => {
@@ -7347,6 +7365,43 @@ mod tests {
                     (*(*(*t).terminal).screens.active).cursor.cursor_style
                 });
             }
+
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set resize pull scrollback"
+    #[test]
+    fn set_resize_pull_scrollback() {
+        with_test_allocator(|alloc| {
+            // var t: Terminal = null;
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &t, 80, 24));
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+            // defer free(t);
+            // try testing.expect(t.?.terminal.flags.resize_pull_scrollback);
+            assert!(unsafe { (*(*t).terminal).flags.resize_pull_scrollback });
+
+            // const disabled = false;
+            let disabled: bool = false;
+            // try testing.expectEqual(Result.success, set(t, .resize_pull_scrollback, &disabled));
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::ResizePullScrollback,
+                    &disabled as *const bool as *const c_void,
+                )
+            });
+            // try testing.expect(!t.?.terminal.flags.resize_pull_scrollback);
+            assert!(!unsafe { (*(*t).terminal).flags.resize_pull_scrollback });
+
+            // NULL restores the default.
+            // try testing.expectEqual(Result.success, set(t, .resize_pull_scrollback, null));
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ResizePullScrollback, std::ptr::null())
+            });
+            // try testing.expect(t.?.terminal.flags.resize_pull_scrollback);
+            assert!(unsafe { (*(*t).terminal).flags.resize_pull_scrollback });
 
             unsafe { free(t) };
         });

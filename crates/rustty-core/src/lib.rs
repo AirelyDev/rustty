@@ -60,6 +60,11 @@ pub mod renderer_seam;
 // function bodies land C6..C15 IN PLACE.
 pub mod surface;
 
+// PORT-ONLY (N444, P7-W7 T5c): the core `Surface`'s cross-thread blocks
+// (`io`, `io_thread`, `renderer_thread`, `renderer_state`, `Search.state`), each
+// in its own allocation.
+pub mod thread_shared;
+
 // Test-only fault injection and teardown-order probe for `Surface::init`'s
 // error path (UD104, task R13-D2). Behind a feature that only rustty-apprt-c's
 // `[dev-dependencies]` enable, so no production build compiles it.

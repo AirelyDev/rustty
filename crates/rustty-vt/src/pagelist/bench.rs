@@ -71,6 +71,7 @@ fn workload() {
         rows: None,
         reflow: true,
         cursor: None,
+        pull_scrollback: true,
     })
     .unwrap();
     s.resize(Resize {
@@ -78,6 +79,7 @@ fn workload() {
         rows: None,
         reflow: true,
         cursor: None,
+        pull_scrollback: true,
     })
     .unwrap();
 
@@ -214,6 +216,7 @@ fn run_workload_sampling_peak() -> usize {
         rows: None,
         reflow: true,
         cursor: None,
+        pull_scrollback: true,
     })
     .unwrap();
     sample(&mut peak);
@@ -222,6 +225,7 @@ fn run_workload_sampling_peak() -> usize {
         rows: None,
         reflow: true,
         cursor: None,
+        pull_scrollback: true,
     })
     .unwrap();
     sample(&mut peak);

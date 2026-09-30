@@ -1327,6 +1327,235 @@ mod tests {
         unsafe { (*t_ptr).deinit(alloc) };
     }
 
+    /// PORTS: oracle 06178eeaa (N435)
+    /// `test "feed after complete discovers prepended snapshot history"`
+    #[test]
+    fn feed_after_complete_discovers_prepended_snapshot_history() {
+        use crate::screen::Screen;
+        use crate::snapshot::{self, Continuation, DecodeOptions, EncodeOptions};
+
+        fn pump(search: &mut TerminalSearch, t_ptr: *mut Terminal) {
+            // while (search.status() != .complete) {
+            while search.status() != Status::Complete {
+                // switch (search.status()) {
+                //     .feed_required => search.feed(term, true),
+                //     .running => _ = search.tick(),
+                //     .complete => unreachable,
+                // }
+                match search.status() {
+                    Status::FeedRequired => search.feed(t_ptr, true),
+                    Status::Running => {
+                        let _ = search.tick();
+                    }
+                    Status::Complete => unreachable!(),
+                }
+            }
+        }
+
+        let alloc = Allocator;
+
+        // A source terminal with several pages of scrollback where every line
+        // is a match, so the expected total is simply the number of lines.
+        // var source: Terminal = try .init(io, alloc, .{
+        //     .cols = 10,
+        //     .rows = 2,
+        //     .max_scrollback_bytes = std.math.maxInt(usize),
+        // });
+        let mut source: Terminal = Terminal::init(alloc, terminal_opts(10, 2, usize::MAX)).unwrap();
+        let source_ptr: *mut Terminal = core::ptr::addr_of_mut!(source);
+        // var needle_count: usize = 0;
+        let mut needle_count: usize = 0;
+        {
+            // var stream = source.vtStream();
+            // defer stream.deinit();
+            let mut stream = unsafe { (*source_ptr).vt_stream() };
+            // const list = &source.screens.active.pages;
+            // while (list.totalPages() < 4) : (needle_count += 1) {
+            //     stream.nextSlice("needle\r\n");
+            // }
+            while unsafe { (*(*source_ptr).screens.active).pages.total_pages() } < 4 {
+                stream.next_slice(b"needle\r\n");
+                needle_count += 1;
+            }
+            stream.deinit();
+        }
+
+        // var encoded: std.Io.Writer.Allocating = .init(alloc);
+        // defer encoded.deinit();
+        // try snapshot.encode(alloc, &encoded.writer, &source, .{
+        //     .continuation = .ground,
+        // });
+        let mut encoded = snapshot::io::AllocatingWriter::new();
+        snapshot::encode(
+            alloc,
+            &mut encoded,
+            unsafe { &*source_ptr },
+            EncodeOptions {
+                continuation: Continuation::Ground,
+            },
+        )
+        .unwrap();
+
+        // Restore only through READY. The terminal is usable while its history
+        // pages are still in flight.
+        // var reader: std.Io.Reader = .fixed(encoded.written());
+        // var decoder: snapshot.Decoder = .init(&reader);
+        let encoded_bytes = encoded.written().to_vec();
+        let mut src_reader = snapshot::io::FixedReader::new(&encoded_bytes);
+        let mut decoder = snapshot::Decoder::init(&mut src_reader);
+        // var decoded = try decoder.ready(alloc, io, .{
+        //     .max_continuation_bytes = 0,
+        // });
+        // defer decoded.deinit(alloc);
+        let mut decoded = decoder
+            .ready(
+                alloc,
+                &DecodeOptions {
+                    max_continuation_bytes: 0,
+                },
+            )
+            .unwrap();
+        // var t = decoded.toOwned();
+        // defer t.deinit(alloc);
+        let mut t: Terminal = decoded.to_owned();
+        // SB: reach `t` only through this raw pointer from here on (never a
+        // fresh `&t`/`&mut t`), matching the discipline used throughout this
+        // file (rust-mut-args-strongly-protected).
+        let t_ptr: *mut Terminal = core::ptr::addr_of_mut!(t);
+        // const pages_at_ready = t.screens.active.pages.totalPages();
+        let pages_at_ready = unsafe { (*(*t_ptr).screens.active).pages.total_pages() };
+
+        // Search the READY state to completion and select the oldest match.
+        // var search: TerminalSearch = try .init(alloc, "needle");
+        // defer search.deinit(&t);
+        let mut search: TerminalSearch = TerminalSearch::init(alloc, b"needle").unwrap();
+        // Pump.run(&search, &t);
+        pump(&mut search, t_ptr);
+        // const partial = search.activeScreenSearch().?.matchesLen();
+        let partial = search.active_screen_search().unwrap().matches_len();
+        // try testing.expect(partial > 0);
+        assert!(partial > 0);
+        // try testing.expect(partial < needle_count);
+        assert!(partial < needle_count);
+        // try testing.expect(try search.select(&t, .prev, .none));
+        assert!(search
+            .select(t_ptr, Select::Prev, SelectScroll::None)
+            .unwrap());
+        // const selected_idx = search.activeScreenSearch().?.selected.?.idx;
+        let selected_idx = search
+            .active_screen_search()
+            .unwrap()
+            .selected
+            .as_ref()
+            .unwrap()
+            .idx;
+        // try testing.expectEqual(partial - 1, selected_idx);
+        assert_eq!(partial - 1, selected_idx);
+        // const selected_before = search.activeScreenSearch().?.selectedMatch().?.untracked();
+        let selected_before = search
+            .active_screen_search()
+            .unwrap()
+            .selected_match()
+            .unwrap()
+            .untracked();
+
+        // Restore every history page below the live terminal.
+        // var restored_pages: usize = 0;
+        let mut restored_pages: usize = 0;
+        // while (try decoder.next(alloc, &t)) |progress| : (restored_pages += 1) {
+        //     try testing.expect(progress.rows > 0);
+        // }
+        while let Some(progress) = decoder.next(alloc, unsafe { &mut *t_ptr }).unwrap() {
+            assert!(progress.rows > 0);
+            restored_pages += 1;
+        }
+        // try testing.expect(restored_pages > 0);
+        assert!(restored_pages > 0);
+        // try testing.expectEqual(
+        //     pages_at_ready + restored_pages,
+        //     t.screens.active.pages.totalPages(),
+        // );
+        assert_eq!(pages_at_ready + restored_pages, unsafe {
+            (*(*t_ptr).screens.active).pages.total_pages()
+        });
+
+        // Refresh the existing search the way ghostty_search_run does: feed,
+        // then tick to completion. It must now cover the restored history.
+        // search.feed(&t, true);
+        search.feed(t_ptr, true);
+        // Pump.run(&search, &t);
+        pump(&mut search, t_ptr);
+        // const screen_search = search.activeScreenSearch().?;
+        let screen_search = search.active_screen_search().unwrap();
+        // try testing.expectEqual(needle_count, screen_search.matchesLen());
+        assert_eq!(needle_count, screen_search.matches_len());
+
+        // Restored results are older than everything already cached, so the
+        // selection keeps both its index and its target.
+        // try testing.expectEqual(selected_idx, screen_search.selected.?.idx);
+        assert_eq!(selected_idx, screen_search.selected.as_ref().unwrap().idx);
+        // const selected_after = screen_search.selectedMatch().?.untracked();
+        let selected_after = screen_search.selected_match().unwrap().untracked();
+        // try testing.expect(selected_before.start.eql(selected_after.start));
+        assert!(selected_before.start.eql(selected_after.start));
+        // try testing.expect(selected_before.end.eql(selected_after.end));
+        assert!(selected_before.end.eql(selected_after.end));
+
+        // Results stay ordered newest to oldest, ending at the very first line.
+        // const matches = try screen_search.matches(alloc);
+        // defer alloc.free(matches);
+        let matches = screen_search.matches(alloc).unwrap();
+        // const pages = &t.screens.active.pages;
+        let active_ptr: *mut Screen = unsafe { (*t_ptr).screens.active };
+        // var prev_y: ?usize = null;
+        let mut prev_y: Option<usize> = None;
+        // for (matches) |hl| {
+        //     const pt = pages.pointFromPin(.screen, hl.startPin()).?;
+        //     if (prev_y) |y| try testing.expect(pt.screen.y < y);
+        //     prev_y = pt.screen.y;
+        // }
+        for hl in matches.iter() {
+            let pt = unsafe {
+                (*active_ptr)
+                    .pages
+                    .point_from_pin(point::Tag::Screen, hl.start_pin())
+            }
+            .unwrap();
+            let y = match pt {
+                Point::Screen(c) => c.y as usize,
+                _ => panic!("expected a screen point"),
+            };
+            if let Some(prev) = prev_y {
+                assert!(y < prev);
+            }
+            prev_y = Some(y);
+        }
+        // try testing.expectEqual(0, prev_y.?);
+        assert_eq!(0, prev_y.unwrap());
+        drop(matches);
+
+        // A search created after the restore agrees with the refreshed one.
+        // var fresh: TerminalSearch = try .init(alloc, "needle");
+        // defer fresh.deinit(&t);
+        let mut fresh: TerminalSearch = TerminalSearch::init(alloc, b"needle").unwrap();
+        // Pump.run(&fresh, &t);
+        pump(&mut fresh, t_ptr);
+        // try testing.expectEqual(
+        //     needle_count,
+        //     fresh.activeScreenSearch().?.matchesLen(),
+        // );
+        assert_eq!(
+            needle_count,
+            fresh.active_screen_search().unwrap().matches_len()
+        );
+
+        fresh.deinit(Some(t_ptr));
+        search.deinit(Some(t_ptr));
+        decoded.deinit(alloc);
+        unsafe { (*t_ptr).deinit(alloc) };
+        unsafe { (*source_ptr).deinit(alloc) };
+    }
+
     // ---------------------------------------------------------------------
     // Parity tail S7-6: allocator routing (S176-F1) and failure semantics.
     // Rust-only tests: the reference has no FailingAllocator test for

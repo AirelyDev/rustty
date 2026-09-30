@@ -73,7 +73,7 @@ const KITTY_PLACEHOLDER: crate::page::u21 = 0x10EEEE;
 // `Option<size::CellCountInt>`, the optional cursor becomes `Option<Cursor>`,
 // and `reflow` keeps its `true` default. A `Default` impl reproduces the
 // reference field defaults (`cols = null`, `rows = null`, `reflow = true`,
-// `cursor = null`).
+// `cursor = null`, `pull_scrollback = true`).
 //
 // PORT NOTE: the reference `Resize` is a by-value options struct that `resize`
 // copies (`var copy = opts`). We derive `Clone, Copy` so the same by-value copy
@@ -91,6 +91,18 @@ pub struct Resize {
     /// Set this to the current cursor position in the active area. Some
     /// resize/reflow behavior depends on the cursor position.
     pub cursor: Option<Cursor>,
+
+    /// Whether the resize may pull rows out of scrollback back into the
+    /// active area. If false, growing rows always appends blank rows at the
+    /// bottom and a column reflow keeps the top of the active area on the
+    /// same content, so a line that is fully in scrollback stays there.
+    /// A wrapped line with at least one row still in the active area may
+    /// still unwrap back into view.
+    ///
+    /// This should be false for ptys that keep their own screen buffer
+    /// without scrollback (e.g. Windows ConPTY), since they can't pull
+    /// rows back and would otherwise get out of sync with us.
+    pub pull_scrollback: bool,
 }
 
 impl Default for Resize {
@@ -100,6 +112,7 @@ impl Default for Resize {
             rows: None,
             reflow: true,
             cursor: None,
+            pull_scrollback: true,
         }
     }
 }
@@ -220,7 +233,7 @@ impl PageList {
             core::cmp::Ordering::Greater => {
                 // We grow rows after cols so that we can do our unwrapping/reflow
                 // before we do a no-reflow grow.
-                self.resize_cols(cols, opts.cursor)
+                self.resize_cols(cols, opts)
                     .and_then(|()| self.resize_without_reflow(opts))
             }
 
@@ -232,7 +245,7 @@ impl PageList {
                     copy.cols = Some(self.cols);
                     copy
                 })
-                .and_then(|()| self.resize_cols(cols, opts.cursor))
+                .and_then(|()| self.resize_cols(cols, opts))
             }
         };
         if let Err(e) = r {
@@ -265,10 +278,41 @@ impl PageList {
     fn resize_cols(
         &mut self,
         cols: size::CellCountInt,
-        cursor: Option<Cursor>,
+        opts: Resize,
     ) -> Result<(), super::OutOfMemory> {
         assert!(cols != self.cols);
+        let cursor = opts.cursor;
 
+        // The active area is always the last `rows` rows, so a reflow that
+        // changes the number of rows our text needs slides the active area
+        // over the content. If we aren't allowed to pull scrollback then we
+        // track the top of the active area so we can restore it afterwards.
+        let active_top: Option<*mut Pin> = if !opts.pull_scrollback {
+            Some(self.track_pin(self.get_top_left(point::Tag::Active))?)
+        } else {
+            None
+        };
+        // defer if (active_top) |p| self.untrackPin(p);
+        //
+        // PORT NOTE: Rust has no `defer`. The reference body after this point
+        // has a fallible `trackPin` (the preserved cursor below) and the
+        // fallible reflow tail; the untrack must run on every exit. We factor
+        // the rest of the body into `resize_cols_cursor` and run the untrack
+        // here after it returns, which is after the preserved-cursor untrack
+        // inside it (Zig defers run LIFO).
+        let result = self.resize_cols_cursor(cols, cursor, active_top);
+        if let Some(p) = active_top {
+            self.untrack_pin(p);
+        }
+        result
+    }
+
+    fn resize_cols_cursor(
+        &mut self,
+        cols: size::CellCountInt,
+        cursor: Option<Cursor>,
+        active_top: Option<*mut Pin>,
+    ) -> Result<(), super::OutOfMemory> {
         // If we have a cursor position (x,y), then we try under any col resizing
         // to keep the same number remaining active rows beneath it. This is a
         // very special case if you can imagine clearing the screen (i.e.
@@ -350,7 +394,7 @@ impl PageList {
         // fallible tail with several `try` points; on any error path the
         // untrack must still run. We factor the body into `resize_cols_inner`
         // and run the untrack here on every exit.
-        let result = self.resize_cols_inner(cols, preserved_cursor);
+        let result = self.resize_cols_inner(cols, preserved_cursor, active_top);
         if let Some(c) = preserved_cursor {
             if c.untrack {
                 self.untrack_pin(c.tracked_pin);
@@ -363,6 +407,7 @@ impl PageList {
         &mut self,
         cols: size::CellCountInt,
         preserved_cursor: Option<PreservedCursor>,
+        active_top: Option<*mut Pin>,
     ) -> Result<(), super::OutOfMemory> {
         // Update our cols. We have to do this early because grow() that we
         // may call below relies on this to calculate the proper page size, but
@@ -537,6 +582,26 @@ impl PageList {
                     self.viewport = super::Viewport::Active;
                 }
             }
+        }
+
+        // If we can't pull scrollback then pad the bottom with blank rows until
+        // the old top of the active area is back at the top. If the reflow
+        // instead pushed it into scrollback (the text needs more rows than
+        // we have) then there is nothing to do. This subsumes the preserved
+        // cursor logic below since that also only exists to avoid a pull.
+        if let Some(p) = active_top {
+            if let Some(pt) = self.point_from_pin(point::Tag::Active, unsafe { (*p).pin_copy() }) {
+                for _ in 0..pt.coord().y {
+                    if let Err(e) = self.grow() {
+                        errdefer_cleanup!();
+                        return Err(e);
+                    }
+                }
+            }
+            // defer replay (success path): a stashed node must not outlive
+            // the reflow.
+            defer_destroy_recycle_node!();
+            return Ok(());
         }
 
         // See preserved_cursor setup for why.
@@ -741,26 +806,32 @@ impl PageList {
                     // we want to try to preserve the y value of the old cursor.
                     // In other words, we don't want to "pull down" scrollback.
                     // This is purely a UX feature.
-                    if let Some(cursor) = opts.cursor {
-                        'cursor: {
-                            if cursor.y >= self.rows - 1 {
-                                break 'cursor;
-                            }
-
-                            // Cursor is not at the bottom, so we just grow our
-                            // rows and we're done. Cursor does NOT change for this
-                            // since we're not pulling down scrollback.
-                            let delta = rows - self.rows;
-                            self.rows = rows;
-                            for _ in 0..delta {
-                                if let Err(e) = self.grow() {
-                                    // errdefer self.limits = old_limits;
-                                    self.limits = old_limits;
-                                    return Err(e);
-                                }
-                            }
-                            break 'gt;
+                    //
+                    // If we're not allowed to pull scrollback at all then we
+                    // always do this regardless of the cursor.
+                    let pull = 'pull: {
+                        if !opts.pull_scrollback {
+                            break 'pull false;
                         }
+                        let Some(cursor) = opts.cursor else {
+                            break 'pull true;
+                        };
+                        break 'pull cursor.y >= self.rows - 1;
+                    };
+                    if !pull {
+                        // We just grow our rows and we're done. Cursor does
+                        // NOT change for this since we're not pulling down
+                        // scrollback.
+                        let delta = rows - self.rows;
+                        self.rows = rows;
+                        for _ in 0..delta {
+                            if let Err(e) = self.grow() {
+                                // errdefer self.limits = old_limits;
+                                self.limits = old_limits;
+                                return Err(e);
+                            }
+                        }
+                        break 'gt;
                     }
 
                     // This must be set BEFORE any calls to grow() so that

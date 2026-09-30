@@ -155,7 +155,7 @@ fn pump_until(live: &Live, secs: u64, mut pred: impl FnMut() -> bool) -> bool {
 /// # Safety
 /// `core` is a live, initialized core surface with a started `Exec` backend.
 unsafe fn pty_master(core: *mut CoreSurface) -> RawFd {
-    match unsafe { &(*core).io.backend } {
+    match unsafe { &(*(*core).io.as_ptr()).backend } {
         rustty_termio::Backend::Exec(exec) => {
             exec.subprocess.pty.as_ref().expect("pty started").master
         }

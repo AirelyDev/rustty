@@ -81,9 +81,11 @@ const NEEDLE: &[u8] = b"rustty-first-light";
 /// toucher (under the mutex).
 unsafe fn screen_dump(core: *mut CoreSurface) -> Vec<u8> {
     unsafe {
-        let mutex = (*core).renderer_state.mutex;
+        let mutex = (*(*core).renderer_state.as_ptr()).mutex;
         (*mutex).lock();
-        let active = (*(*core).renderer_state.terminal).screens.active;
+        let active = (*(*(*core).renderer_state.as_ptr()).terminal)
+            .screens
+            .active;
         let dump = (*active).dump_string_alloc(
             Global.into(),
             rustty_vt::point::Point::Active(rustty_vt::point::Coordinate::default()),
@@ -101,7 +103,7 @@ unsafe fn screen_dump(core: *mut CoreSurface) -> Vec<u8> {
 /// `core` must point at a live, initialized [`CoreSurface`] whose backend is a
 /// started `Exec` (post-`init_surface`, so `subprocess.pty` is `Some`).
 unsafe fn pty_master(core: *mut CoreSurface) -> RawFd {
-    match unsafe { &(*core).io.backend } {
+    match unsafe { &(*(*core).io.as_ptr()).backend } {
         rustty_termio::Backend::Exec(exec) => {
             exec.subprocess.pty.as_ref().expect("pty started").master
         }

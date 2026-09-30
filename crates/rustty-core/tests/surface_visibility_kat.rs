@@ -31,6 +31,7 @@ use allocator_api2::alloc::Global as Allocator;
 use rustty_apprt_api as apprt;
 use rustty_core::app::App;
 use rustty_core::surface::{Surface, SurfaceMailbox};
+use rustty_core::thread_shared::ThreadSharedBox;
 use rustty_termio as termio;
 use rustty_vt::modes::Mode;
 
@@ -239,24 +240,26 @@ impl TestSurface {
             },
         };
 
-        // The renderer State lives BY VALUE inside the Surface; both the
-        // Surface and the Termio reach it, the latter through a raw pointer, so
-        // it is written into the Surface first and pointed at afterwards.
+        // The renderer State lives in its own allocation (N444, P7-W7 T5c:
+        // `ThreadSharedBox`); both the Surface and the Termio reach it, the
+        // latter through a raw pointer, so its box is written into the Surface
+        // first and pointed at afterwards.
         unsafe {
-            std::ptr::addr_of_mut!((*sp).renderer_state).write(rustty_renderer::state::State {
-                mutex,
-                terminal: std::ptr::null_mut(),
-                inspector: None,
-                inspector_ptr: None,
-                preedit: None,
-                mouse: rustty_renderer::state::Mouse::default(),
-                demand: Default::default(),
-                handoff_gen: Default::default(),
-                handoff_park: Default::default(),
-            });
+            std::ptr::addr_of_mut!((*sp).renderer_state).write(ThreadSharedBox::new(
+                rustty_renderer::state::State {
+                    mutex,
+                    terminal: std::ptr::null_mut(),
+                    inspector: None,
+                    inspector_ptr: None,
+                    preedit: None,
+                    mouse: rustty_renderer::state::Mouse::default(),
+                    demand: Default::default(),
+                    handoff_gen: Default::default(),
+                    handoff_park: Default::default(),
+                },
+            ));
         }
-        let state: *mut rustty_renderer::state::State =
-            unsafe { std::ptr::addr_of_mut!((*sp).renderer_state) };
+        let state: *mut rustty_renderer::state::State = unsafe { (*sp).renderer_state.as_ptr() };
 
         // The stream handler and the Termio each hold a copy of the renderer
         // wakeup (`Termio.zig:296,316`). On IOCP (Windows) `xev.Async` is a
@@ -291,7 +294,9 @@ impl TestSurface {
             termio::stream_handler::Stream::init(rustty_vt::stream::Options::with_handler(handler));
 
         unsafe {
-            std::ptr::addr_of_mut!((*sp).io).write(termio::Termio {
+            // (N444: the io block's own allocation, written in place.)
+            std::ptr::addr_of_mut!((*sp).io).write(ThreadSharedBox::new_uninit());
+            (*sp).io.as_ptr().write(termio::Termio {
                 alloc: Allocator,
                 backend,
                 config: derived,
@@ -308,7 +313,7 @@ impl TestSurface {
             });
 
             // Re-seat the self-referential pointers at the FINAL address.
-            let io = std::ptr::addr_of_mut!((*sp).io);
+            let io = (*sp).io.as_ptr();
             (*io).terminal_stream.handler.terminal = std::ptr::addr_of_mut!((*io).terminal);
             (*io).terminal_stream.handler.size = std::ptr::addr_of_mut!((*io).size);
             (*io).terminal_stream.handler.termio_mailbox = std::ptr::addr_of_mut!((*io).mailbox);
@@ -321,14 +326,18 @@ impl TestSurface {
             std::ptr::addr_of_mut!((*sp).rt_surface).write(&raw mut *rt_surface);
             std::ptr::addr_of_mut!((*sp).visible).write(true);
             std::ptr::addr_of_mut!((*sp).readonly).write(false);
-            std::ptr::addr_of_mut!((*sp).renderer_thread.mailbox).write(renderer_mailbox);
-            std::ptr::addr_of_mut!((*sp).renderer_thread.wakeup)
+            // (N444: the renderer thread block's own allocation; only the two
+            // fields `occlusionCallback` reaches are written.)
+            std::ptr::addr_of_mut!((*sp).renderer_thread).write(ThreadSharedBox::new_uninit());
+            let rt = (*sp).renderer_thread.as_ptr();
+            std::ptr::addr_of_mut!((*rt).mailbox).write(renderer_mailbox);
+            std::ptr::addr_of_mut!((*rt).wakeup)
                 .write(rustty_xev::Async::init().expect("Async::init"));
         }
 
         TestSurface {
             surface: sp,
-            termio_mailbox: unsafe { std::ptr::addr_of_mut!((*sp).io.mailbox) },
+            termio_mailbox: unsafe { std::ptr::addr_of_mut!((*(*sp).io.as_ptr()).mailbox) },
             renderer_mailbox,
             mu,
             app,
@@ -359,8 +368,7 @@ impl TestSurface {
 
     fn set_report_visibility(&mut self, on: bool) {
         unsafe {
-            (*self.surface)
-                .io
+            (*(*self.surface).io.as_ptr())
                 .terminal
                 .modes
                 .set(Mode::ReportVisibility, on);
@@ -412,7 +420,7 @@ fn surface_occlusion_callback_dedups_and_reports() {
     }
     assert!(f.termio_pop().is_none());
     assert!(
-        !unsafe { (*f.surface).io.terminal.flags.visible },
+        !unsafe { (*(*f.surface).io.as_ptr()).terminal.flags.visible },
         "the terminal's flags.visible must be updated under the renderer lock"
     );
 
@@ -468,15 +476,19 @@ impl Drop for TestSurface {
     fn drop(&mut self) {
         unsafe {
             let sp = self.surface;
-            (*sp).renderer_thread.wakeup.deinit();
-            (*sp).io.renderer_wakeup.deinit();
+            (*(*sp).renderer_thread.as_ptr()).wakeup.deinit();
+            (*(*sp).io.as_ptr()).renderer_wakeup.deinit();
             // The whole Termio, as `Surface.deinit` does (`self.io.deinit()`):
             // the backend's command and environment, the terminal, the
             // mailbox's queue and the stream handler. Deiniting only the
             // terminal leaked the rest (G-VALGRIND, NEW-FINDINGS N415). The
             // Surface is a `MaybeUninit`, so the moved-out value is not dropped
             // again.
-            std::ptr::read(std::ptr::addr_of!((*sp).io)).deinit();
+            std::ptr::read((*sp).io.as_ptr()).deinit();
+            // (N444: then the three out-of-line blocks' allocations.)
+            (*sp).io.dealloc();
+            (*sp).renderer_thread.dealloc();
+            (*sp).renderer_state.dealloc();
             drop(Box::from_raw(self.mutex));
             Box::from_raw(self.renderer_mailbox).destroy();
             Box::from_raw(self.app).destroy();

@@ -124,11 +124,15 @@ impl Mailbox {
     // by the caller's frame). The reference passes `msg` by COPY and re-pushes
     // it after a failed instant push; Rust moves, so the failed instant push
     // hands `msg` BACK via `push_or_return` (the retain-on-failure primitive).
-    pub fn send(
-        &mut self,
-        msg: Message<'static>,
-        mutex: Option<*mut rustty_zigstd::thread::Mutex>,
-    ) {
+    //
+    // PORT NOTE (N444, P7-W7 T5c): `&self`, not the reference's `self: *Mailbox`
+    // as `&mut self`. Every callee is `&self` (`BlockingQueue::push_or_return`
+    // / `push`, `xev::Async::notify`), and the senders (the main thread's
+    // `queueIo`, the read thread's stream handler) run while the io writer
+    // thread drains through `&(*io).mailbox`: a `&mut Mailbox` retag there pops
+    // the drain's tag under Stacked Borrows (`.port/phase-2/mirihar-n444`
+    // `n444_boxed_queue_io_send_mut`).
+    pub fn send(&self, msg: Message<'static>, mutex: Option<*mut rustty_zigstd::thread::Mutex>) {
         // switch (self.*) {
         match self {
             // .spsc => |*mb| send: {
@@ -192,7 +196,9 @@ impl Mailbox {
 
     /// Notify that there are new messages. This may be a noop depending
     /// on the writer type.
-    pub fn notify(&mut self) {
+    //
+    // (PORT NOTE: `&self`, as `send` above — N444.)
+    pub fn notify(&self) {
         match self {
             // .spsc => |*v| v.wakeup.notify() catch |err| {
             //     log.warn("failed to notify writer, data will be dropped err={}", .{err});

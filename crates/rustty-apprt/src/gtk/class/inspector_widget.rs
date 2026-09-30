@@ -186,7 +186,7 @@ mod imp {
             // takes `renderer_state.mutex` internally, INV-1). `wakeup` replaces
             // `surface.renderer_thread` (INV-12).
             let data = rustty_inspector::widgets::surface::SurfaceData {
-                renderer_state: unsafe { &raw mut (*core_surface).renderer_state },
+                renderer_state: unsafe { (*core_surface).renderer_state.as_ptr() },
                 alloc: allocator_api2::alloc::Global,
                 size: unsafe { (*core_surface).size },
                 font_size_points: unsafe { (*core_surface).font_size.points },
@@ -202,7 +202,8 @@ mod imp {
                 rt_set_clipboard: CoreSurface::inspector_rt_set_clipboard,
                 rt_export_terminal_io: CoreSurface::inspector_rt_export_terminal_io,
             };
-            let wakeup: &rustty_xev::Async = unsafe { &(*core_surface).renderer_thread.wakeup };
+            let wakeup: &rustty_xev::Async =
+                unsafe { &(*(*core_surface).renderer_thread.as_ptr()).wakeup };
             // SAFETY: `inspector` is non-null (validated above) and owned by
             // `core_surface`'s renderer state for the duration of this call.
             unsafe { (*inspector).render(data, wakeup) };
