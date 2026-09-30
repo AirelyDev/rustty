@@ -204,6 +204,20 @@ pub struct Margin {
     pub bottom_right: u16,
 }
 
+/// `Action.ResizeWindow`
+///
+/// A request to resize the window's text area (CSI 8 t). A value
+/// of zero means the parameter was omitted or zero, and the current
+/// size for that dimension should be kept. xterm treats an explicit
+/// zero as the screen size, but we can't distinguish it from omitted.
+// pub const ResizeWindow = extern struct { rows: u16, columns: u16 };
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResizeWindow {
+    pub rows: u16,
+    pub columns: u16,
+}
+
 /// `Action.DeviceStatus`
 // pub const DeviceStatus = struct { request: device_status.Request };
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -721,6 +735,9 @@ pub trait Handler {
     // PORT NOTE (Action.KittyDnd = osc.Command.KittyDndProtocol): see
     // `kitty_clipboard` above.
     fn kitty_dnd(&mut self, _v: osc::KittyDndProtocol<'_>) {}
+
+    /// `resize_window` (XTWINOPS 8, 714fe9b90)
+    fn resize_window(&mut self, _v: ResizeWindow) {}
 }
 
 /// Returns a type that can process a stream of tty control characters.
@@ -3721,6 +3738,30 @@ impl<H: Handler> Stream<H> {
                     if input.params.len() > 0 {
                         // switch (input.params[0]) {
                         match input.params[0] {
+                            // 8 => if (input.params.len <= 3) { ... } else log.warn(...),
+                            8 => {
+                                if input.params.len() <= 3 {
+                                    // resize the text area in characters
+                                    self.handler.resize_window(ResizeWindow {
+                                        rows: if input.params.len() > 1 {
+                                            input.params[1]
+                                        } else {
+                                            0
+                                        },
+                                        columns: if input.params.len() > 2 {
+                                            input.params[2]
+                                        } else {
+                                            0
+                                        },
+                                    });
+                                } else {
+                                    // else log.warn("ignoring CSI 8 t with extra parameters: {f}", ...),
+                                    log::warn!(
+                                        target: LOG_SCOPE,
+                                        "ignoring CSI 8 t with extra parameters: {input:?}"
+                                    );
+                                }
+                            }
                             // 14 => if (input.params.len == 1) { ... } else log.warn(...),
                             14 => {
                                 if input.params.len() == 1 {
@@ -7057,6 +7098,43 @@ mod tests {
 
         s.next_slice(b"\x1b[21t");
         assert_eq!(Some(csi::SizeReportStyle::Csi21T), s.handler.style);
+    }
+
+    // test "stream: CSI 8 t resize window" { ... }
+    #[test]
+    fn stream_csi_8_t_resize_window() {
+        struct H {
+            size: Option<ResizeWindow>,
+        }
+        impl Handler for H {
+            fn resize_window(&mut self, v: ResizeWindow) {
+                self.size = Some(v);
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { size: None }));
+
+        s.next_slice(b"\x1b[8;40;120t");
+        assert_eq!(40, s.handler.size.unwrap().rows);
+        assert_eq!(120, s.handler.size.unwrap().columns);
+
+        // Omitted parameters keep the current size
+        s.next_slice(b"\x1b[8;;100t");
+        assert_eq!(0, s.handler.size.unwrap().rows);
+        assert_eq!(100, s.handler.size.unwrap().columns);
+
+        s.next_slice(b"\x1b[8;30t");
+        assert_eq!(30, s.handler.size.unwrap().rows);
+        assert_eq!(0, s.handler.size.unwrap().columns);
+
+        s.next_slice(b"\x1b[8t");
+        assert_eq!(0, s.handler.size.unwrap().rows);
+        assert_eq!(0, s.handler.size.unwrap().columns);
+
+        // Extra parameters are invalid
+        s.handler.size = None;
+        s.next_slice(b"\x1b[8;30;100;1t");
+        assert!(s.handler.size.is_none());
     }
 
     // test "stream: invalid CSI t" { ... }

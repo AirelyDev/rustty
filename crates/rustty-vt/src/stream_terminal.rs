@@ -3724,6 +3724,9 @@ impl<'a> stream::Handler for Handler<'a> {
     // .title_push, .title_pop => {} (have no terminal-modifying effect)
     fn title_pop(&mut self, v: u16) {}
 
+    // .resize_window => {} (has no terminal-modifying effect)
+    fn resize_window(&mut self, v: stream::ResizeWindow) {}
+
     // .xtversion => self.reportXtversion(),
     fn xtversion(&mut self) {
         self.report_xtversion();

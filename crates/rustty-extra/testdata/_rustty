@@ -178,6 +178,7 @@ _config() {
     "--command-palette-entry=-:::( )" \
     "--osc-color-report-format=-:::(none 8-bit 16-bit)" \
     "--vt-kam-allowed" \
+    "--vt-window-resize-allowed" \
     "--custom-shader=-:::_files" \
     "--custom-shader-animation=-:::(false true always)" \
     "--bell-features=-:::(system no-system audio no-audio attention no-attention title no-title border no-border)" \

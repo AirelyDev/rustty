@@ -803,6 +803,12 @@ typedef struct {
   uint32_t height;
 } rustty_action_initial_size_s;
 
+// apprt.action.ResizeWindow
+typedef struct {
+  uint32_t width;
+  uint32_t height;
+} rustty_action_resize_window_s;
+
 // apprt.action.CellSize
 typedef struct {
   uint32_t width;
@@ -1013,6 +1019,7 @@ typedef enum {
   RUSTTY_ACTION_READONLY,
   RUSTTY_ACTION_COPY_TITLE_TO_CLIPBOARD,
   RUSTTY_ACTION_MOVE_TAB_TO_NEW_WINDOW,
+  RUSTTY_ACTION_RESIZE_WINDOW,
 } rustty_action_tag_e;
 
 typedef union {
@@ -1025,6 +1032,7 @@ typedef union {
   rustty_action_resize_split_s resize_split;
   rustty_action_size_limit_s size_limit;
   rustty_action_initial_size_s initial_size;
+  rustty_action_resize_window_s resize_window;
   rustty_action_cell_size_s cell_size;
   rustty_action_scrollbar_s scrollbar;
   rustty_action_inspector_e inspector;

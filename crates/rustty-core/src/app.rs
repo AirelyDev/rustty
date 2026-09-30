@@ -367,7 +367,7 @@ where
         for &surface in self.surfaces.iter() {
             // try surface.core().handleMessage(.{ .change_config = config });
             let core = unsafe { &*surface }.core();
-            unsafe { &mut *core }.handleMessage(apprt::surface::Message::ChangeConfig(config))?;
+            unsafe { Surface::handleMessage(core, apprt::surface::Message::ChangeConfig(config)) }?;
         }
 
         // Apply our conditional state. If we fail to apply the conditional state
@@ -1056,7 +1056,7 @@ where
         // are quite rare and we normally don't have many windows so we do
         // a simple linear search here.
         if unsafe { (*self_).hasSurface(surface.cast_const()) } {
-            unsafe { &mut *surface }.handleMessage(msg)?;
+            unsafe { Surface::handleMessage(surface, msg) }?;
         }
 
         // Window was not found, it probably quit before we handled the message.

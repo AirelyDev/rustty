@@ -165,6 +165,7 @@ complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l shell-integ
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l command-palette-entry -r -f -d "Custom entries into the command palette."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l osc-color-report-format -r -f -a "none 8-bit 16-bit" -d "Sets the reporting format for OSC sequences that request color information."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l vt-kam-allowed  -f -d "If true, allows the \"KAM\" mode (ANSI mode 2) to be used within the terminal."
+complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l vt-window-resize-allowed  -f -d "If true, allows the running program to resize the window using the xterm `CSI 8 ; rows ; columns t` escape sequence."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l custom-shader -r -F -d "Custom shaders to run after the default shaders."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l custom-shader-animation -r -f -a "false true always" -d "If `true` (default), the focused terminal surface will run an animation loop when custom shaders are used."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l bell-features -r -f -a "system no-system audio no-audio attention no-attention title no-title border no-border" -d "Bell features to enable if bell support is available in your runtime."

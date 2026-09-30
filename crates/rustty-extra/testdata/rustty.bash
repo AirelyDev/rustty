@@ -216,6 +216,7 @@ _rustty() {
     config+=" --command-palette-entry="
     config+=" --osc-color-report-format="
     config+=" '--vt-kam-allowed '"
+    config+=" '--vt-window-resize-allowed '"
     config+=" --custom-shader="
     config+=" --custom-shader-animation="
     config+=" --bell-features="
@@ -427,6 +428,7 @@ _rustty() {
       --command-palette-entry) return ;;
       --osc-color-report-format) _compreply compgen -W "none 8-bit 16-bit" -- "$cur"; _add_spaces ;;
       --vt-kam-allowed) return ;;
+      --vt-window-resize-allowed) return ;;
       --custom-shader) _files ;;
       --custom-shader-animation) _compreply compgen -W "false true always" -- "$cur"; _add_spaces ;;
       --bell-features) _compreply compgen -W "system no-system audio no-audio attention no-attention title no-title border no-border" -- "$cur"; _add_spaces ;;

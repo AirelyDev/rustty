@@ -118,6 +118,10 @@ pub enum Message<'a> {
     /// Report the window title back to the terminal
     ReportTitle(ReportTitleStyle),
 
+    /// Resize the window to the given grid size, as requested by the
+    /// running program (CSI 8 t).
+    ResizeWindow(rustty_vt::stream::ResizeWindow),
+
     /// Set the mouse shape.
     SetMouseShape(MouseShape),
 

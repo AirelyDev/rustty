@@ -3208,6 +3208,22 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    move `self.size = size;` after `self.renderer_state.mutex.lock()` in `resize` (keeping it ahead of the `try` if the error path must still record the size).
 - upstream status: NOT YET REPORTED
 
+### UD371 — `resizeWindow` (CSI 8 t) overflows `u32` computing the window size for a wide or tall cell
+
+- kind:            crash (integer overflow panic; ReleaseFast: a wrong window size)
+- upstream project: ghostty
+- severity:        low (needs `vt-window-resize-allowed = true` and an `adjust-cell-width` / `adjust-cell-height` of at least 65528 px, or about 107 million px for any CSI 8 t)
+- reference:       at 12752b2ac, `src/Surface.zig` `resizeWindow` (714fe9b90): `@max(size.columns, min_resize_width_cells) * self.size.cell.width + padding.left + padding.right` and the height are unchecked `u32` arithmetic, then `@intFromFloat(@ceil(width / scale.x))`. `size.columns`/`size.rows` are the program's `u16` parameters (up to 65535); `cell.width`/`cell.height` take `adjust-cell-width`/`-height`, an `i32` added with saturation by `Metrics.Modifier.apply` (`src/font/Metrics.zig:528-541`), clamped only from below. The width is computed even when `size.columns` is 0 and then discarded.
+- defect:          65535 × a cell wider than 65537 px overflows the product (`adjust-cell-width = 65528` on a 10 px cell gives 65538); a 65537 px cell makes the product exactly `maxInt(u32)` and the padding sum overflows; a product that fits can still convert to more than `maxInt(u32)` points at a content scale below 1. A cell wider than 107374182 px (`adjust-cell-width = 2147483647`) overflows `40 × cell.width` for every CSI 8 t, including a bare `CSI 8 t` whose width is then thrown away.
+- ReleaseSafe:     panic "integer overflow" (product and padding sum) or "integer part of floating point value out of bounds" (conversion). Measured with Zig 0.16.0 on arm64, Debug and ReleaseSafe, by `.port/phase-7/probes/p7w6t1_resize_window_overflow_probe.zig`, which copies the two expressions and the modifier's `.absolute` arm verbatim: cases `mul`, `pad`, `float` and `min40` all panic; the positive control (`CSI 8;24;80 t`, 10x20 px cells, 2 px padding) gives 804x484.
+- ReleaseFast:     no panic for the integer cases: the size wraps (`mul`: width 65538 points for a 65535-column request; `pad`: width 3; `min40`: 0x0). The `float` case exited with signal 10 (SIGBUS) in the probe: the out-of-range `@intFromFloat` is illegal behaviour.
+- reachability:    config plus program output. The user sets `vt-window-resize-allowed = true` and `adjust-cell-width = 65528` (or `adjust-cell-height`); any program, including a remote one, then sends `CSI 8;65535;65535 t`. Only the arithmetic was measured: whether the rest of the app runs normally with a 65538 px cell up to this call was not (as UD59).
+- port handling:   `crates/rustty-core/src/surface.rs` `resize_window_pts` computes each requested dimension with checked multiplication and addition and the range-checked `u32_from_ceil` (UD59's helper). On overflow `resizeWindow` logs a warning and sends no `resize_window` action, UD59's skip. A zero (omitted) dimension is not computed, so a dimension the program did not ask for cannot fail the request. `PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD371)` at the helper and the call. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none. Found by the P7-W6 T1 M6 measurement (DECISIONS M6).
+- test:            `crates/rustty-core/src/surface.rs` `resize_window_tests::ud371_resize_window_overflow_takes_the_skip_path` (the four probe cases plus the height; config text through `Config::load_iter`/`finalize` gives the 65538 px and 2147483657 px cells) and `ud371_csi_8_t_overflow_returns_without_panicking` (`CSI 8;65535;65535 t` through the vt stream and `Surface::handleMessage` on a fabricated surface: no action, one warning, no panic). NEGATIVE CONTROL (macOS, 2026-09-29): with the reference's unchecked arithmetic both fail with "attempt to multiply with overflow" (surface.rs:389). Restored.
+- proposed fix:    use `std.math.mul`/`std.math.add` and check the float against `maxInt(u32)` before `@intFromFloat` (returning without the action, or clamping to `maxInt(u32)` so the apprt clamps to the screen), and compute each dimension only when it was requested.
+- upstream status: NOT YET REPORTED
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

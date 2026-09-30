@@ -178,6 +178,7 @@ syn keyword rusttyConfigKeyword
 	\ command-palette-entry
 	\ osc-color-report-format
 	\ vt-kam-allowed
+	\ vt-window-resize-allowed
 	\ custom-shader
 	\ custom-shader-animation
 	\ bell-features

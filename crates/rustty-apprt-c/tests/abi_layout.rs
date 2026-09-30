@@ -37,7 +37,7 @@ use rustty_apprt::embedded::{
     PlatformCIOS, PlatformCMacOS, PlatformTag, SurfaceOptions,
 };
 use rustty_apprt_api::action::{
-    ActionC, ActionCValue, ActionKey, TargetC, TargetCValue, TargetKey,
+    ActionC, ActionCValue, ActionKey, ResizeWindow, TargetC, TargetCValue, TargetKey,
 };
 use rustty_apprt_api::structs::{ClipboardRequestType, ColorScheme};
 use rustty_apprt_api::surface::NewSurfaceContext;
@@ -212,6 +212,17 @@ const _: () = assert!(core::mem::size_of::<ActionCValue>() == 24);
 const _: () = assert!(core::mem::size_of::<ActionC>() == 32);
 const _: () = assert!(core::mem::align_of::<ActionC>() == 8);
 
+// ── ghostty_action_resize_window_s (714fe9b90) ──
+// struct{ uint32_t width@0, uint32_t height@4 } → 8, align 4. Carried inside the
+// action value union the action_cb receives by value.
+// @embed-abi rustty_action_resize_window_s 8
+const _: () = assert!(core::mem::size_of::<ResizeWindow>() == 8);
+const _: () = assert!(core::mem::align_of::<ResizeWindow>() == 4);
+// @embed-abi-field rustty_action_resize_window_s width 0
+const _: () = assert!(core::mem::offset_of!(ResizeWindow, width) == 0);
+// @embed-abi-field rustty_action_resize_window_s height 4
+const _: () = assert!(core::mem::offset_of!(ResizeWindow, height) == 4);
+
 // ── Pinned enum widths (all C `enum`s are `int`-wide on this ABI) ──
 const _: () = assert!(core::mem::size_of::<PlatformTag>() == C_ENUM);
 const _: () = assert!(core::mem::size_of::<PointTag>() == C_ENUM);
@@ -264,7 +275,7 @@ const _: () = assert!(NewSurfaceContext::Split as c_int == 2);
 // `25b2d8a38` appended the new tail); the exhaustive positional map is
 // checked in `action_key_positional_ordinals` below.
 const _: () = assert!(ActionKey::Quit as c_int == 0);
-const _: () = assert!(ActionKey::MoveTabToNewWindow as c_int == 68);
+const _: () = assert!(ActionKey::ResizeWindow as c_int == 69);
 
 // ── Info.BuildMode (ghostty_info_s / ghostty_build_mode_e, ghostty.h:385-396) ──
 // `rustty_info()` and its `Info`/`BuildMode` types ARE ported (lib.rs:945-1040), so
@@ -369,6 +380,7 @@ const ACTION_KEY_ORDINALS: &[(ActionKey, c_int)] = &[
     (ActionKey::Readonly, 66),
     (ActionKey::CopyTitleToClipboard, 67),
     (ActionKey::MoveTabToNewWindow, 68),
+    (ActionKey::ResizeWindow, 69),
 ];
 
 #[test]
@@ -659,7 +671,7 @@ fn action_key_positional_ordinals() {
     // catches an append that forgets to update the header (and vice-versa).
     assert_eq!(
         ACTION_KEY_ORDINALS.len(),
-        69,
+        70,
         "ghostty_action_tag_e cardinality"
     );
     for &(key, ord) in ACTION_KEY_ORDINALS {
@@ -670,8 +682,8 @@ fn action_key_positional_ordinals() {
     }
     assert_eq!(ActionKey::Quit as c_int, 0, "GHOSTTY_ACTION_QUIT");
     assert_eq!(
-        ActionKey::MoveTabToNewWindow as c_int,
-        68,
-        "GHOSTTY_ACTION_MOVE_TAB_TO_NEW_WINDOW (positional ABI tail)"
+        ActionKey::ResizeWindow as c_int,
+        69,
+        "GHOSTTY_ACTION_RESIZE_WINDOW (positional ABI tail)"
     );
 }

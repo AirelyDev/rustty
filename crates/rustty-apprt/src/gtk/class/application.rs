@@ -3860,6 +3860,8 @@ impl Application {
             | Action::RendererHealth(_)
             | Action::ColorChange(_)
             | Action::ResetWindowSize
+            // (714fe9b90; implemented on GTK by 219cca932, P7-W6 T2.)
+            | Action::ResizeWindow(_)
             | Action::CheckForUpdates
             | Action::Undo
             | Action::Redo => {
