@@ -61,15 +61,16 @@ use rustty_apprt::embedded::{
     App, ClipboardContent, Options, PlatformC, PlatformCMacOS, Surface, SurfaceOptions,
 };
 use rustty_apprt_api::action::{ActionC, ActionKey, GotoSplit, SplitDirection, TargetC, TargetKey};
-use rustty_apprt_api::{ClipboardRequest, ClipboardRequestType};
+use rustty_apprt_api::{ClipboardRequest, ClipboardRequestType, NewSurfaceContext};
 use rustty_apprt_c::capi::Text;
 use rustty_apprt_c::{
     rustty_app_free, rustty_app_new, rustty_app_tick, rustty_app_update_config, rustty_init,
     rustty_set_window_background_blur, rustty_surface_config_new, rustty_surface_free,
-    rustty_surface_free_text, rustty_surface_ime_point, rustty_surface_mouse_scroll,
-    rustty_surface_new, rustty_surface_quicklook_font, rustty_surface_quicklook_word,
-    rustty_surface_request_close, rustty_surface_set_content_scale, rustty_surface_set_display_id,
-    rustty_surface_set_size, rustty_surface_split, rustty_surface_split_focus,
+    rustty_surface_free_text, rustty_surface_ime_point, rustty_surface_inherited_config,
+    rustty_surface_mouse_scroll, rustty_surface_new, rustty_surface_quicklook_font,
+    rustty_surface_quicklook_word, rustty_surface_request_close, rustty_surface_set_content_scale,
+    rustty_surface_set_display_id, rustty_surface_set_size, rustty_surface_split,
+    rustty_surface_split_focus,
 };
 use rustty_config::value_types::BackgroundBlur;
 
@@ -220,8 +221,22 @@ extern "C" fn cb_action(_app: *mut App, t: TargetC, a: ActionC) -> bool {
     // exports call back synchronously on the calling thread, so actions other
     // tests (or render/io threads) dispatch never land in this list.
     let rec = match a.key {
-        // SAFETY: the key names the live union arm.
-        ActionKey::NewSplit => Recorded::NewSplit(unsafe { a.value.new_split }),
+        ActionKey::NewSplit => {
+            // Re-enter the surface the way the Swift host's `newSplit` does
+            // (Rustty.App.swift: `rustty_surface_inherited_config(surface,
+            // RUSTTY_SURFACE_CONTEXT_SPLIT)` inside this callback), so the
+            // live test drives the N442 re-entrant read.
+            if t.key == TargetKey::Surface {
+                // SAFETY: a surface target carries the live embedded surface.
+                let surface = unsafe { t.value.surface } as *mut Surface;
+                // SAFETY: `surface` is live for the duration of the callback.
+                let _ =
+                    unsafe { rustty_surface_inherited_config(surface, NewSurfaceContext::Split) };
+                INHERITED.with(|c| c.set(c.get() + 1));
+            }
+            // SAFETY: the key names the live union arm.
+            Recorded::NewSplit(unsafe { a.value.new_split })
+        }
         // SAFETY: as above.
         ActionKey::GotoSplit => Recorded::GotoSplit(unsafe { a.value.goto_split }),
         other => Recorded::Other(other),
@@ -241,6 +256,7 @@ thread_local! {
     static ACTIONS: core::cell::RefCell<Vec<(TargetKey, Recorded)>> =
         const { core::cell::RefCell::new(Vec::new()) };
     static CLOSES: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    static INHERITED: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
 }
 extern "C" fn cb_read_clipboard(
     _ud: *mut c_void,
@@ -606,7 +622,11 @@ fn mouse_scroll_routes_each_offset_to_its_own_axis() {
 // surface's `performBindingAction`, the keybind path. Pins that the new route
 // reaches the host with the same surface-targeted action (and, for close, the
 // `close_surface` callback) on a live surface. The error-log half of the change is
-// unreachable here and is pinned in lib.rs `binding_route_tests`.
+// unreachable here and is pinned in lib.rs `binding_route_tests`. The NewSplit
+// callback re-enters `rustty_surface_inherited_config` as the Swift host does,
+// while `performBindingAction` holds `&mut` on the core surface: that is N442
+// (Stacked Borrows UB, OPEN -> W7.T5). Miri cannot see it across this FFI; the
+// test only proves the re-entry runs.
 #[test]
 fn split_and_close_exports_reach_the_host() {
     let Some(host) = HostedSurface::spawn() else {
@@ -615,6 +635,7 @@ fn split_and_close_exports_reach_the_host() {
     };
     ACTIONS.with(|v| v.borrow_mut().clear());
     CLOSES.with(|c| c.set(0));
+    INHERITED.with(|c| c.set(0));
 
     // SAFETY: `host.surface` is the live surface from `rustty_surface_new`, and this
     // thread is the host's main thread for it.
@@ -630,6 +651,11 @@ fn split_and_close_exports_reach_the_host() {
         ],
         got,
         "split and split_focus reach the host as one surface-targeted action each"
+    );
+    assert_eq!(
+        1,
+        INHERITED.with(|c| c.get()),
+        "the NewSplit callback re-entered rustty_surface_inherited_config once (N442 shape)"
     );
 
     ACTIONS.with(|v| v.borrow_mut().clear());

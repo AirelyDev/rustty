@@ -8796,3 +8796,39 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   thread and the surface share, as the terminal already is), or make the main-thread core entries
   raw-self with narrow access that never spans `renderer`. Harness first (`.port/phase-2/mirihar-*`),
   UB before and clean after under SB and TB.
+
+## N442 — `performBindingAction(&mut self)` holds a protected `&mut Surface` across the host callback that re-enters the same surface
+
+- **id**: N442. P7-W8 T2 fix round 1 (review IMPORTANT, controller ruling 37). **severity**: medium
+  (aliasing-model UB on every menu or keybind split/tab/window; no observed miscompile). **kind**: port
+  soundness (Stacked Borrows; a function-argument protector). **Not upstream**: Zig's `*Surface` carries no
+  aliasing rule and no protector, so the reference is sound. **state**: OPEN → P7-W7 T5 (lands with N441).
+- **shape**: `rustty_core::Surface::performBindingAction(&mut self, ..)` (`crates/rustty-core/src/surface.rs:11270`)
+  is a `&mut self` method, so `self` is a protected Unique for the whole call. Its `new_split`
+  (`:12537`), `new_tab` (`:12426`) and `new_window` (`:11282`) arms call `rt_app.perform_action(..)`, which
+  runs the embedder's C action callback synchronously while that protector is live.
+- **re-entrant reader**: the macOS host's action handlers call
+  `rustty_surface_inherited_config(surface, RUSTTY_SURFACE_CONTEXT_{SPLIT,TAB,WINDOW})` inside that
+  callback (`macos/Sources/RusttyKit/Rustty.App.swift:1004`, `:976`, `:940`). It reaches
+  `embedded::Surface::newSurfaceOptions(&self)` (`crates/rustty-apprt/src/embedded.rs:2096`), which reads
+  `self.core_surface.font_size` (and the working directory) through the parent embedded-surface pointer: a
+  read through a tag the protected Unique invalidates, which is UB under Stacked Borrows.
+- **routes** (all three reach `performBindingAction` with a `&mut` formed from the raw C pointer):
+  - the keybind path, `rustty_surface_key` (`crates/rustty-apprt-c/src/lib.rs:1878`) → `keyCallback` →
+    binding dispatch;
+  - `rustty_surface_binding_action` (`lib.rs:2390`);
+  - the menu path since a1bf5b5e1 (P7-W8 T2): `rustty_surface_split` (`lib.rs:2249`), and by the same shape
+    `rustty_surface_split_focus` (`:2286`) and `rustty_surface_request_close` (`:2214`). Before the port of
+    a1bf5b5e1 the menu split formed only a shared `&core_surface` for the `Target`, which a shared read
+    does not invalidate.
+- **reachability**: every menu or keybind split (Cmd-D), and every keybind or binding-action new tab and new
+  window, on macOS. The GTK apprt does not call back into the core surface from its action handler this way.
+- **test**: `crates/rustty-apprt-c/tests/macos_window_host.rs::split_and_close_exports_reach_the_host` —
+  its `cb_action` calls `rustty_surface_inherited_config` on `NewSplit`, so the re-entry is exercised on a
+  live surface. Miri cannot see it across the FFI; the test proves only that the re-entry runs.
+- **fix direction**: raw-self dispatch (`*mut Surface` with narrow field access, memory
+  `rust-mut-args-strongly-protected`) for the `performBindingAction` arms that call
+  `rt_app.perform_action`, so no protected `&mut Surface` spans the host callback; the three routes then
+  enter through the raw root. LIFETIMES row first (`.port/audits/GHOSTTY_LIFETIMES.tsv`, core `Surface`
+  `[self across rt_app.perform_action]`), and an isolated harness under `.port/phase-2/mirihar-*` that is UB
+  before (protected `&mut` + a re-entrant read through the parent pointer) and clean after, under SB and TB.

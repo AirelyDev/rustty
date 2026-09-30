@@ -3710,6 +3710,8 @@ mod tests {
 // pinned by scanning this file's own SOURCE (the `rustty-web-canvas`
 // `every_unmangled_export_installs_the_log_backend` precedent); the live routing
 // is pinned by `macos_window_host.rs::split_and_close_exports_reach_the_host`.
+// This scan becomes obsolete once the embedded `perform_action` can fail: then a
+// captured-log test on a live surface should replace it.
 #[cfg(test)]
 mod binding_route_tests {
     const SRC: &str = include_str!("lib.rs");
