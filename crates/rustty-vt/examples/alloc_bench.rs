@@ -97,6 +97,7 @@ fn workload() {
             rows: None,
             reflow: true,
             cursor: None,
+            pull_scrollback: true,
         })
         .expect("resize");
     }
@@ -187,6 +188,7 @@ fn workload_accounting(item_size: usize) -> usize {
             rows: None,
             reflow: true,
             cursor: None,
+            pull_scrollback: true,
         })
         .expect("resize");
         sample(&mut peak);

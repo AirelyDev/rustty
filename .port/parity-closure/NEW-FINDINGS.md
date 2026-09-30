@@ -9448,3 +9448,16 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
     self) -> Handler<'_>` is lifetime-tied, so the compiler rejects the same interleave (TB only).
 - **fix direction**: derive every pointer the test later uses from one raw root, then re-run both tests
   under Miri SB and TB.
+
+## N458 — a port-only string-map test dropped its `Screen` without `deinit`, tripping the W1.T5 node-pool assert
+
+- **id**: N458. P7-W1 T8 (controller ruling 56). **severity**: none in production (test only).
+  **state**: CLOSED by P7-W1 T8 (`29a4030f5`).
+- **finding**: `string_map_string_is_unsentineled_and_searchable` (rustty-vt, only built with
+  `--features oniguruma`) never called `deinit` on its `Screen`, `StringMap` or regex, where the
+  reference tests `defer` all three. Since P7-W1 T5, `UntouchedPool::drop` asserts that every node
+  went back to the pool, so the dropped `Screen` aborted the test.
+- **audit**: `StringMap`, `SearchIterator` and `Match` hold no `Screen` or `PageList`. The
+  production owners' error paths (`screen_set`, snapshot decode and codec, the tmux viewer pane sync,
+  termio init) never drop a live `PageList`.
+- **fix**: the test now deinits the three objects, as the reference does.
