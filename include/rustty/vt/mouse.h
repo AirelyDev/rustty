@@ -1,13 +1,13 @@
 /**
  * @file mouse.h
  *
- * Mouse encoding module - encode mouse events into terminal escape sequences.
+ * Mouse support module - encode mouse events and provide pointer shapes.
  */
 
 #ifndef RUSTTY_VT_MOUSE_H
 #define RUSTTY_VT_MOUSE_H
 
-/** @defgroup mouse Mouse Encoding
+/** @defgroup mouse Mouse Support
  *
  * Utilities for encoding mouse events into terminal escape sequences,
  * supporting X10, UTF-8, SGR, URxvt, and SGR-Pixels mouse protocols.
@@ -61,8 +61,55 @@
  * @{
  */
 
+#include <rustty/vt/types.h>
 #include <rustty/vt/mouse/event.h>
 #include <rustty/vt/mouse/encoder.h>
+
+/**
+ * Mouse pointer shapes based on the W3C cursor names.
+ *
+ * Hosts map these values to their native pointer shapes; not every platform
+ * supports every shape. These are pointer shapes, not terminal text cursors.
+ *
+ * @ingroup mouse
+ */
+typedef enum RUSTTY_ENUM_TYPED {
+  RUSTTY_MOUSE_SHAPE_DEFAULT = 0,
+  RUSTTY_MOUSE_SHAPE_CONTEXT_MENU = 1,
+  RUSTTY_MOUSE_SHAPE_HELP = 2,
+  RUSTTY_MOUSE_SHAPE_POINTER = 3,
+  RUSTTY_MOUSE_SHAPE_PROGRESS = 4,
+  RUSTTY_MOUSE_SHAPE_WAIT = 5,
+  RUSTTY_MOUSE_SHAPE_CELL = 6,
+  RUSTTY_MOUSE_SHAPE_CROSSHAIR = 7,
+  RUSTTY_MOUSE_SHAPE_TEXT = 8,
+  RUSTTY_MOUSE_SHAPE_VERTICAL_TEXT = 9,
+  RUSTTY_MOUSE_SHAPE_ALIAS = 10,
+  RUSTTY_MOUSE_SHAPE_COPY = 11,
+  RUSTTY_MOUSE_SHAPE_MOVE = 12,
+  RUSTTY_MOUSE_SHAPE_NO_DROP = 13,
+  RUSTTY_MOUSE_SHAPE_NOT_ALLOWED = 14,
+  RUSTTY_MOUSE_SHAPE_GRAB = 15,
+  RUSTTY_MOUSE_SHAPE_GRABBING = 16,
+  RUSTTY_MOUSE_SHAPE_ALL_SCROLL = 17,
+  RUSTTY_MOUSE_SHAPE_COL_RESIZE = 18,
+  RUSTTY_MOUSE_SHAPE_ROW_RESIZE = 19,
+  RUSTTY_MOUSE_SHAPE_N_RESIZE = 20,
+  RUSTTY_MOUSE_SHAPE_E_RESIZE = 21,
+  RUSTTY_MOUSE_SHAPE_S_RESIZE = 22,
+  RUSTTY_MOUSE_SHAPE_W_RESIZE = 23,
+  RUSTTY_MOUSE_SHAPE_NE_RESIZE = 24,
+  RUSTTY_MOUSE_SHAPE_NW_RESIZE = 25,
+  RUSTTY_MOUSE_SHAPE_SE_RESIZE = 26,
+  RUSTTY_MOUSE_SHAPE_SW_RESIZE = 27,
+  RUSTTY_MOUSE_SHAPE_EW_RESIZE = 28,
+  RUSTTY_MOUSE_SHAPE_NS_RESIZE = 29,
+  RUSTTY_MOUSE_SHAPE_NESW_RESIZE = 30,
+  RUSTTY_MOUSE_SHAPE_NWSE_RESIZE = 31,
+  RUSTTY_MOUSE_SHAPE_ZOOM_IN = 32,
+  RUSTTY_MOUSE_SHAPE_ZOOM_OUT = 33,
+  RUSTTY_MOUSE_SHAPE_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE,
+} RusttyMouseShape;
 
 /** @} */
 
