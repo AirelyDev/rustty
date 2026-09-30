@@ -54,8 +54,9 @@ const ns_per_ms: u64 = 1_000_000;
 macro_rules! log_warn {
     ($($t:tt)*) => {{
         // libxev_iocp scope. Debug-only, matching Zig's default log filtering.
-        #[cfg(debug_assertions)]
-        {
+        // `cfg!`, not `#[cfg]`: the arguments stay type-checked and used in
+        // release too, so a binding read only here does not warn unused (N463).
+        if cfg!(debug_assertions) {
             let _ = format_args!($($t)*);
         }
     }};

@@ -5128,9 +5128,18 @@ pub(crate) mod tests {
     fn ud351_osc7_percent_encoded_local_host_still_sets_the_pwd() {
         // Control: a short percent-encoded host that decodes to `localhost`
         // passes the same `getHost` decode and the pwd is set.
-        assert_eq!(
-            Some(b"/tmp".to_vec()),
-            osc7_pwd_after(b"file://local%68ost/tmp")
-        );
+        //
+        // PORT NOTE (N461): on Windows `reportPwd` returns before it parses
+        // the URL ("reportPwd unimplemented on windows", the reference's
+        // `stream_handler.zig:1486-1489`, ported as-is), so no OSC 7 sets the
+        // pwd there and the control expects `None`. It pins that early
+        // return; the `ud351_*` rejections above hold on Windows only through
+        // it, not through `getHost`.
+        let expected = if cfg!(windows) {
+            None
+        } else {
+            Some(b"/tmp".to_vec())
+        };
+        assert_eq!(expected, osc7_pwd_after(b"file://local%68ost/tmp"));
     }
 }

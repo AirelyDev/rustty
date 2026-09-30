@@ -4,6 +4,19 @@
 // properly supported by Dear Bindings yet. Namely:
 // https://github.com/dearimgui/dear_bindings/issues/55
 
+// RUSTTY-ONLY (N464): the C headers dcimgui.h includes, included here at
+// global scope first, so its includes inside the namespace below are no-ops.
+// Otherwise the first <stdint.h> of this TU lands inside `cimgui`, its include
+// guard is then set, and a later global user finds no `::uint64_t`. That user
+// is clang 23's <intrin.h>, which includes <arm_acle.h> on aarch64 (via
+// <windows.h> from the OpenGL3 loader below). The reference's pinned Zig 0.16
+// clang (21) has no such include; Rustty compiles with the host's clang-cl.
+#include <stdint.h>
+#include <stdbool.h>
+#include <stdarg.h>
+#include <stddef.h>
+#include <assert.h>
+
 // Wrap this in a namespace to keep it separate from the C++ API
 namespace cimgui
 {

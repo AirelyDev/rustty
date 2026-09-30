@@ -99,12 +99,17 @@ fn require_gl_or_skip_impl(required: bool, test_name: &str, err: &dyn std::fmt::
 /// FAILS when the display does not offer it, instead of skipping. Separate from
 /// [`gl_required`] because a host can have a perfectly good GL 4.3 context
 /// (llvmpipe) and still no DMA-BUF export, so the GL lane cannot demand it.
+///
+/// `cfg(unix)` like its only callers, the DMA-BUF KATs (DMA-BUF export is a
+/// unix-only arm); without it the Windows test build warns dead code (N462).
+#[cfg(unix)]
 pub(crate) fn dmabuf_required() -> bool {
     gl_required_from(std::env::var_os("RUSTTY_REQUIRE_DMABUF").as_deref())
 }
 
 /// The DMA-BUF strict-mode pivot: [`require_gl_or_skip`]'s twin over
 /// [`dmabuf_required`].
+#[cfg(unix)]
 #[track_caller]
 pub(crate) fn require_dmabuf_or_skip(test_name: &str, err: &dyn std::fmt::Display) {
     require_dmabuf_or_skip_impl(dmabuf_required(), test_name, err);

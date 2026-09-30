@@ -67,6 +67,7 @@ Helpers (not gates themselves):
   `#[should_panic]`), and comment-line census by class.
 - `cargo_cycle_check.py` — the real-rustty-Cargo-graph SCC checker that backs G7
   (dependency-free TOML scan + Tarjan; `--fail-on-scc` default on).
+- `../windows/exe-differential.ps1` — the Windows exe differential; its goldens come from a reference-exe build that needs the scratch patches in `../windows/ghostty-exe-at-pin.patch`, which must be re-checked (and the goldens recaptured) whenever the pin advances.
 
 ## G-P2 (`check_phase2_closure.py`) — the Phase 2 closure invariant (WS19 T19)
 

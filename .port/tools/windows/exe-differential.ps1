@@ -35,6 +35,14 @@
        in Zig 0.16. It becomes
        `var w = std.Io.File.stdout().writer(std.Io.Threaded.global_single_threaded.io(), &.{});
         const stdout = &w.interface;` (unbuffered, like 0.14's writer).
+  Since the Phase 7 pin (`12752b2ac`) a third one is needed (P7-W12 T1b):
+    3. src/build/SharedDeps.zig: the `posix_c` translate-c step includes
+       `pwd.h` on every target, and MinGW has none, so the exe's compile
+       stops there. On Windows it translates `errno.h` in its place.
+  With the three changes the exe builds; `ghostty-internal.dll` still fails
+  to compile (pkg/opengl and the Dmabuf renderer), which the exe does not
+  need. The goldens of that pin were captured from an exe cross-built on
+  macOS with `-Dtarget=x86_64-windows-gnu`, which is the same GNU ABI.
   With the reference's default MSVC ABI the exe then fails to link
   (`lld-link: undefined symbol: WinMain`). The GNU ABI is what the
   reference's own Windows CI builds (`build-libghostty-windows-gnu`), so:
@@ -51,6 +59,9 @@
     capture  run -Exe (the REFERENCE exe) and write its normalised results into
              -Golden (one .stdout/.stderr/.exit per case).
     check    run -Exe (rustty.exe) and compare with the goldens in -Golden (CI).
+    selftest run -Exe (rustty.exe) once; the real goldens must pass, and golden
+             copies with one show-config key or the R2-moved palette entry
+             dropped must fail (the R2 normalisers' negative controls, R5).
 
   NORMALISATION (only this, nothing else):
     * on the REFERENCE's output only, the ghostty -> rustty rename
@@ -81,7 +92,7 @@ param(
   [Parameter(Mandatory = $true)][string]$Exe,
   [string]$RefExe,
   [string]$Golden,
-  [ValidateSet("diff", "capture", "check")][string]$Mode = "diff",
+  [ValidateSet("diff", "capture", "check", "selftest")][string]$Mode = "diff",
   [string]$Work = (Join-Path ([IO.Path]::GetTempPath()) "rustty-exe-diff"),
   [int]$TimeoutSec = 60
 )
@@ -101,9 +112,32 @@ $Justified = @{
   "validate-config-valid"   = @{ Streams = @("exit"); Why = "UD341: the reference exits 1 on a pipe (File.Writer.end() -> FileTooBig)" }
   "list-fonts"              = @{ Streams = @("stdout"); Why = "UD344: the reference prints UTF-16BE family names raw (\0A\0r\0i\0a\0l)" }
   "list-fonts-family"       = @{ Streams = @("stdout"); Why = "UD344: the reference prints UTF-16BE family names raw (\0C\0o\0n\0s\0o\0l\0a\0s)" }
-  # R2 identity: what the rename changes beyond the normalised spelling.
-  "show-config-default"      = @{ Streams = @("stdout"); Why = "R2: the palette entry titled with the product name sorts under G in the reference, R in Rustty" }
-  "show-config-default-docs" = @{ Streams = @("stdout"); Why = "R2: the palette entry's sort position, and the class default com.mitchellh.ghostty vs io.airely.rustty" }
+}
+
+# R2 identity: what the rename changes beyond the normalised spelling, for the
+# two `+show-config --default` cases. These are NOT stream justifications: a
+# whole-stream justification let any other difference in the stream through
+# (P7-W12 T1b fix round 1: a missing `vt-window-resize-allowed` key passed).
+# Each normaliser rewrites ONLY the known R2 difference, on both sides, and the
+# normalised stdout must then be byte-equal; anything else is a DIFF. A
+# normaliser that no longer changes the reference's stdout is stale and fails,
+# like a stale justification.
+$R2PaletteLine = 'command-palette-entry = title:"Rustty",description:"Put a little Rustty in your terminal.",action:"text:' + [char]::ConvertFromUtf32(0x1F47B) + '"'
+function Move-R2PaletteLine([string]$Text) {
+  # The palette entry titled with the product name sorts under G in the
+  # reference and under R in Rustty: move every copy of it to the end.
+  $lines = [Collections.Generic.List[string]]($Text -split "`n")
+  $hits = @($lines | Where-Object { $_ -ceq $R2PaletteLine }).Count
+  if ($hits -eq 0) { return $Text }
+  [void]$lines.RemoveAll([Predicate[string]] { param($l) $l -ceq $R2PaletteLine })
+  return (($lines -join "`n") + ("`n<R2-MOVED>" + $R2PaletteLine) * $hits)
+}
+$R2Normalizers = @{
+  "show-config-default"      = @{ Why = "R2: the product-named palette entry's sort position"; Fn = { param($t) Move-R2PaletteLine $t } }
+  "show-config-default-docs" = @{ Why = "R2: the product-named palette entry's sort position, and the class default com.mitchellh.ghostty vs io.airely.rustty"; Fn = {
+      param($t)
+      (Move-R2PaletteLine $t).Replace('# The default is `com.mitchellh.rustty`.', '# The default is `io.airely.rustty`.')
+    } }
 }
 
 # ---------------------------------------------------------------- the matrix
@@ -341,6 +375,14 @@ function Compare-Results($Ref, $Got, [bool]$OtherHost = $false) {
   Write-Host ("{0,-30} {1,-6} {2,-6} {3,-12} {4}" -f "case", "stdout", "stderr", "exit(ref/rt)", "verdict")
   foreach ($name in $Cases.Keys) {
     $r = $Ref[$name]; $g = $Got[$name]
+    $staleNormalizer = $false
+    if ($R2Normalizers.ContainsKey($name)) {
+      $fn = $R2Normalizers[$name].Fn
+      $refOut = & $fn $r.Stdout
+      $staleNormalizer = $refOut -ceq $r.Stdout
+      $r = [pscustomobject]@{ Stdout = $refOut; Stderr = $r.Stderr; Exit = $r.Exit }
+      $g = [pscustomobject]@{ Stdout = (& $fn $g.Stdout); Stderr = $g.Stderr; Exit = $g.Exit }
+    }
     $crossHost = $OtherHost -and $HostDependentStdout -contains $name
     $o = ($r.Stdout -ceq $g.Stdout) -or $crossHost
     $hostCheckFailed = $false
@@ -358,7 +400,7 @@ function Compare-Results($Ref, $Got, [bool]$OtherHost = $false) {
     # list stays exactly the recorded differences. A justified stream that was
     # not compared (host-dependent stdout in check mode) cannot be stale.
     $compared = @(if ($Justified.ContainsKey($name)) { $Justified[$name].Streams | Where-Object { -not ($crossHost -and $_ -eq "stdout") } })
-    $verdict = if ($hostCheckFailed) { $bad++; "DIFF (stdout is empty or holds a NUL byte: UD344)" } elseif ($differs.Count -eq 0 -and $compared.Count -gt 0) { $bad++; "MATCH, but a justification is listed (stale)" } elseif ($differs.Count -eq 0) { "MATCH" } elseif ($covered) { "JUSTIFIED ($($differs -join ',')): $($Justified[$name].Why)" } else { $bad++; "DIFF" }
+    $verdict = if ($staleNormalizer) { $bad++; "R2 normaliser changes nothing in the reference's stdout (stale)" } elseif ($hostCheckFailed) { $bad++; "DIFF (stdout is empty or holds a NUL byte: UD344)" } elseif ($differs.Count -eq 0 -and $compared.Count -gt 0) { $bad++; "MATCH, but a justification is listed (stale)" } elseif ($differs.Count -eq 0 -and $R2Normalizers.ContainsKey($name)) { "MATCH after $($R2Normalizers[$name].Why)" } elseif ($differs.Count -eq 0) { "MATCH" } elseif ($covered) { "JUSTIFIED ($($differs -join ',')): $($Justified[$name].Why)" } else { $bad++; "DIFF" }
     Write-Host ("{0,-30} {1,-6} {2,-6} {3,-12} {4}" -f $name, $(if ($o) { "same" } else { "DIFF" }), $(if ($e) { "same" } else { "DIFF" }), "$($r.Exit)/$($g.Exit)", $verdict)
     if ($verdict -eq "DIFF") {
       if (-not $o) { Show-Diff "stdout" $r.Stdout $g.Stdout }
@@ -456,6 +498,41 @@ switch ($Mode) {
       if ($want[$k] -ne $b) { "FAIL: launch '$k': reference $($want[$k]), rustty $b"; $failed++ }
     }
     $failed += Compare-Results (Read-Golden $Golden) (Run-Matrix $Exe "rt" $false) $true
+  }
+  "selftest" {
+    # Negative controls for the R2 normalisers (R5): the real goldens pass,
+    # and a golden copy missing one key, or missing the moved palette entry,
+    # fails the check.
+    if (-not $Golden) { throw "-Golden is required with -Mode selftest" }
+    $got = Run-Matrix $Exe "rt" $false
+    $st = 0
+    $realBad = Compare-Results (Read-Golden $Golden) $got $true
+    if ($realBad -ne 0) { "SELFTEST FAIL: the real goldens give $realBad difference(s), expected 0"; $st++ }
+    else { "SELFTEST ok: the real goldens pass" }
+    $utf8 = New-Object Text.UTF8Encoding $false
+    $mutations = @(
+      @{ Case = "show-config-default";      Drop = "vt-window-resize-allowed = false" },
+      @{ Case = "show-config-default-docs"; Drop = "vt-window-resize-allowed = false" },
+      @{ Case = "show-config-default";      Drop = $R2PaletteLine },
+      @{ Case = "show-config-default-docs"; Drop = $R2PaletteLine }
+    )
+    $i = 0
+    foreach ($m in $mutations) {
+      $i++
+      $dir = Join-Path $Work "selftest-golden-$i"
+      if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
+      Copy-Item -Recurse $Golden $dir
+      $f = Join-Path $dir "$($m.Case).stdout"
+      $text = [IO.File]::ReadAllText($f, $utf8)
+      $kept = @($text -split "`n" | Where-Object { $_ -cne $m.Drop })
+      if ($kept.Count -ne ($text -split "`n").Count - 1) { "SELFTEST FAIL: '$($m.Drop)' is not exactly once in $($m.Case)"; $st++; continue }
+      [IO.File]::WriteAllText($f, ($kept -join "`n"), $utf8)
+      $bad = Compare-Results (Read-Golden $dir) $got $true
+      if ($bad -lt 1) { "SELFTEST FAIL: dropping '$($m.Drop)' from $($m.Case) still passes"; $st++ }
+      else { "SELFTEST ok: dropping '$($m.Drop)' from $($m.Case) fails ($bad difference(s))" }
+    }
+    if ($st) { "SELFTEST RESULT: FAIL ($st)"; exit 1 }
+    "SELFTEST RESULT: PASS"
   }
 }
 
