@@ -1,4 +1,6 @@
-//! N452: effect callbacks that re-enter the Terminal C API (P7-W2 T9).
+//! N452: effect callbacks that re-enter the Terminal C API (P7-W2 T9); N454:
+//! the C paste reader re-entering the terminal (P7-W2 T10, the `n454_*`
+//! candidates).
 //! Isolated, non-FFI model; see `README.md` for the candidates and results.
 //! Each candidate is one executed path (Miri checks only what runs), selected
 //! by argv[1].
@@ -55,12 +57,26 @@ static STASH: AtomicBool = AtomicBool::new(false);
 /// The C API reads stream-level state by place (fix part 3).
 static PLACE_READS: AtomicBool = AtomicBool::new(false);
 
+/// N454: `Handler::paste` is raw-self and vt-c publishes its pointer.
+static PASTE_RAW_SELF: AtomicBool = AtomicBool::new(false);
+/// N454: `paste.Context.terminal` is `*const Terminal`.
+static PASTE_RAW_TERMINAL: AtomicBool = AtomicBool::new(false);
+/// N454: `paste.Context.KittyClipboard.grants` is `*mut Grants`.
+static PASTE_RAW_GRANTS: AtomicBool = AtomicBool::new(false);
+
 const OP_RESIZE: u32 = 1 << 0;
 const OP_SET: u32 = 1 << 1;
 const OP_GET_GROUND: u32 = 1 << 2;
 const OP_GET_HANDLER: u32 = 1 << 3;
 const OP_CONTINUATION: u32 = 1 << 4;
 const OP_ALL: u32 = OP_RESIZE | OP_SET | OP_GET_GROUND | OP_GET_HANDLER | OP_CONTINUATION;
+
+// N454: what the paste reader re-enters.
+const OP_P_SET: u32 = 1 << 8;
+const OP_P_RESIZE: u32 = 1 << 9;
+const OP_P_RESET: u32 = 1 << 10;
+const OP_P_VT_WRITE: u32 = 1 << 11;
+const OP_P_ALL: u32 = OP_P_SET | OP_P_RESIZE | OP_P_RESET | OP_P_VT_WRITE;
 
 /// What the bell callback re-enters.
 static OPS: AtomicU32 = AtomicU32::new(0);
@@ -78,6 +94,8 @@ fn flag(f: &AtomicBool) -> bool {
 struct Terminal {
     rows: Vec<u32>,
     cols: u16,
+    /// Mode 2004, read by the paste before it reads the data.
+    bracketed: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -116,6 +134,8 @@ struct Handler {
     semantic_failure: bool,
     unknown_max_bytes: usize,
     bells: u32,
+    /// `kitty_clipboard_grants` (N454).
+    kitty_grants: Vec<u32>,
 }
 
 impl Handler {
@@ -143,6 +163,107 @@ impl Handler {
         }
         self.semantic_failure = false;
     }
+
+    /// `Handler::full_reset`: clears the Kitty clipboard grants and resets
+    /// the terminal through the raw alias.
+    fn full_reset(&mut self) {
+        self.kitty_grants.clear();
+        self.title_report = false;
+        // SAFETY: the terminal is a separate live allocation.
+        unsafe { (*self.terminal).bracketed = false };
+    }
+
+    /// N454 shipped: `Handler::paste(&mut self)` builds the paste `Context`
+    /// with `terminal: &Terminal` and `grants: &mut Grants`, runs the paste
+    /// (which calls the C reader), then delivers the queued pty chunks.
+    /// (`n454_raw_ctx_only_*` keeps `&mut self` with a raw `Context`.)
+    fn paste(&mut self, w: *mut Wrapper) -> bool {
+        let raw_t = flag(&PASTE_RAW_TERMINAL);
+        let raw_g = flag(&PASTE_RAW_GRANTS);
+        // SAFETY: the terminal alias (`term()`), as the shipped code.
+        let terminal: &Terminal = unsafe { &*self.terminal };
+        let mut pty = Vec::new();
+        let grants: *mut Vec<u32> = &mut self.kitty_grants;
+        let ok = paste_pkg(
+            PasteCtx {
+                terminal: if raw_t { None } else { Some(terminal) },
+                terminal_raw: self.terminal,
+                grants: if raw_g {
+                    None
+                } else {
+                    Some(unsafe { &mut *grants })
+                },
+                grants_raw: grants,
+                writer: &mut pty,
+            },
+            w,
+        );
+        if let Some(func) = self.effects.write_pty {
+            func(self, &pty);
+        }
+        ok
+    }
+
+    /// N454 fixed: raw-self (`self: *Handler`), place accesses, and a raw
+    /// `Context` (the reference's `*const Terminal` / `*Grants`). The
+    /// partial candidates keep one of the two Context fields a reference.
+    unsafe fn paste_raw(this: *mut Handler, w: *mut Wrapper) -> bool {
+        let raw_t = flag(&PASTE_RAW_TERMINAL);
+        let raw_g = flag(&PASTE_RAW_GRANTS);
+        let mut pty = Vec::new();
+        let ok = unsafe {
+            let terminal = (*this).terminal as *const Terminal;
+            let grants = addr_of_mut!((*this).kitty_grants);
+            paste_pkg(
+                PasteCtx {
+                    terminal: if raw_t { None } else { Some(&*terminal) },
+                    terminal_raw: terminal,
+                    grants: if raw_g { None } else { Some(&mut *grants) },
+                    grants_raw: grants,
+                    writer: &mut pty,
+                },
+                w,
+            )
+        };
+        if let Some(func) = unsafe { (*this).effects.write_pty } {
+            func(unsafe { &mut *this }, &pty);
+        }
+        ok
+    }
+}
+
+/// `paste.Context`: the terminal the modes come from, the grants a paste
+/// event records into (unused on the text path, but carried across the read),
+/// and the sink.
+struct PasteCtx<'a> {
+    terminal: Option<&'a Terminal>,
+    terminal_raw: *const Terminal,
+    grants: Option<&'a mut Vec<u32>>,
+    grants_raw: *mut Vec<u32>,
+    writer: &'a mut Vec<u8>,
+}
+
+/// `paste.paste`, text path: the mode read, then the reader (the C callback,
+/// which may re-enter the terminal), then the encode into the writer. Nothing
+/// touches the terminal or the grants after the read, as in the real code.
+fn paste_pkg(ctx: PasteCtx<'_>, w: *mut Wrapper) -> bool {
+    let bracketed = match ctx.terminal {
+        Some(t) => t.bracketed,
+        None => unsafe { (*ctx.terminal_raw).bracketed },
+    };
+    let mut aw = Vec::new();
+    if !reader_cb(w, &mut aw) {
+        return false;
+    }
+    if bracketed {
+        ctx.writer.extend_from_slice(b"\x1b[200~");
+    }
+    ctx.writer.extend_from_slice(&aw);
+    if bracketed {
+        ctx.writer.extend_from_slice(b"\x1b[201~");
+    }
+    let _ = (ctx.grants.is_some(), ctx.grants_raw);
+    true
 }
 
 // ===========================================================================
@@ -235,8 +356,7 @@ impl Stream {
                 }
                 b'0'..=b'9' => {
                     let i = (*this).parser.params_idx as usize;
-                    (*this).parser.params[i] =
-                        (*this).parser.params[i] * 10 + u16::from(c - b'0');
+                    (*this).parser.params[i] = (*this).parser.params[i] * 10 + u16::from(c - b'0');
                 }
                 0x07 => {
                     Self::execute(&mut (*this).handler, c);
@@ -342,6 +462,7 @@ unsafe fn c_new() -> *mut Wrapper {
     let terminal = Box::into_raw(Box::new(Terminal {
         rows: vec![0; 4],
         cols: 80,
+        bracketed: true,
     }));
     let w = Box::into_raw(Box::new(Wrapper {
         terminal,
@@ -356,6 +477,7 @@ unsafe fn c_new() -> *mut Wrapper {
                 semantic_failure: false,
                 unknown_max_bytes: 0,
                 bells: 0,
+                kitty_grants: vec![1],
             },
             parser: Parser {
                 state: State::Ground,
@@ -461,6 +583,26 @@ unsafe fn c_continuation(w: *mut Wrapper, max_bytes: usize) -> Vec<u8> {
     }
 }
 
+/// `reset`: `full_reset` through the handler.
+unsafe fn c_reset(w: *mut Wrapper) {
+    unsafe { (*handler_ptr(w)).full_reset() };
+}
+
+/// `terminal_paste`. Shipped: `(*handler_ptr(w)).paste(..)`, a protected
+/// `&mut Handler` for the whole paste. Fixed: `Handler::paste_raw` over the
+/// same pointer, published in `live_handler` for the paste's duration.
+unsafe fn c_paste(w: *mut Wrapper) -> bool {
+    let h = unsafe { handler_ptr(w) };
+    if flag(&PASTE_RAW_SELF) {
+        let prev = unsafe { std::ptr::replace(addr_of_mut!((*w).live_handler), h) };
+        let r = unsafe { Handler::paste_raw(h, w) };
+        unsafe { *addr_of_mut!((*w).live_handler) = prev };
+        r
+    } else {
+        unsafe { (*h).paste(w) }
+    }
+}
+
 // ----- the C callbacks --------------------------------------------------------
 
 extern "C" fn bell_cb(w: *mut Wrapper, _ud: *mut c_void) {
@@ -489,12 +631,39 @@ extern "C" fn bell_cb(w: *mut Wrapper, _ud: *mut c_void) {
     }
 }
 
+/// The C paste reader (`RusttyMimeReader`): re-enters the terminal, then
+/// streams the data.
+fn reader_cb(w: *mut Wrapper, out: &mut Vec<u8>) -> bool {
+    CALLS.fetch_add(1, Ordering::Relaxed);
+    let ops = OPS.load(Ordering::Relaxed);
+    unsafe {
+        if ops & OP_P_SET != 0 {
+            c_set(w, 3);
+            let _ = c_get_semantic_failure(w);
+        }
+        if ops & OP_P_RESIZE != 0 {
+            // Writes terminal bytes and fires a nested write_pty effect.
+            c_resize(w, 90);
+        }
+        if ops & OP_P_RESET != 0 {
+            c_reset(w);
+        }
+        if ops & OP_P_VT_WRITE != 0 {
+            // A nested feed whose BEL fires the bell effect.
+            c_vt_write(w, b"\x1b[5\x07m");
+        }
+    }
+    out.extend_from_slice(b"hi");
+    true
+}
+
 /// The nested effect (from `resize`) re-enters too.
 extern "C" fn write_pty_cb(w: *mut Wrapper, _ud: *mut c_void, ptr: *const u8, len: usize) {
     CALLS.fetch_add(1, Ordering::Relaxed);
     let data = unsafe { std::slice::from_raw_parts(ptr, len) };
     assert_eq!(b'\x1b', data[0]);
-    if OPS.load(Ordering::Relaxed) == OP_ALL {
+    let ops = OPS.load(Ordering::Relaxed);
+    if ops == OP_ALL || ops == OP_P_ALL {
         unsafe {
             c_set(w, 9);
             let _ = c_get_semantic_failure(w);
@@ -536,6 +705,46 @@ fn run(raw_stream: bool, stash: bool, place_reads: bool, ops: u32) {
     assert_eq!(expect, calls, "callbacks ran");
 }
 
+/// N454: a paste whose reader re-enters `ops`, with the N452 fix in place.
+fn run_paste(raw_self: bool, raw_terminal: bool, raw_grants: bool, ops: u32) {
+    RAW_STREAM.store(true, Ordering::Relaxed);
+    STASH.store(true, Ordering::Relaxed);
+    PLACE_READS.store(true, Ordering::Relaxed);
+    PASTE_RAW_SELF.store(raw_self, Ordering::Relaxed);
+    PASTE_RAW_TERMINAL.store(raw_terminal, Ordering::Relaxed);
+    PASTE_RAW_GRANTS.store(raw_grants, Ordering::Relaxed);
+    OPS.store(ops, Ordering::Relaxed);
+    unsafe {
+        let w = c_new();
+        assert!(c_paste(w));
+        // After the paste (live_handler null again): the by-place paths.
+        assert!((*w).live_handler.is_null());
+        c_set(w, 1);
+        assert!(c_get_ground(w));
+        if ops & OP_P_RESIZE != 0 {
+            assert_eq!(90, (*(*w).terminal).cols);
+        }
+        if ops & OP_P_RESET != 0 {
+            assert!((*w).stream.handler.kitty_grants.is_empty());
+        } else {
+            assert_eq!(vec![1], (*w).stream.handler.kitty_grants);
+        }
+        let bells = if ops & OP_P_VT_WRITE != 0 { 1 } else { 0 };
+        assert_eq!(bells, (*w).stream.handler.bells);
+        c_free(w);
+    }
+    // The reader and the paste's own write_pty chunk; the resize's nested
+    // write_pty; the nested feed's bell.
+    let mut expect = 2;
+    if ops & OP_P_RESIZE != 0 {
+        expect += 1;
+    }
+    if ops & OP_P_VT_WRITE != 0 {
+        expect += 1;
+    }
+    assert_eq!(expect, CALLS.load(Ordering::Relaxed), "callbacks ran");
+}
+
 fn main() {
     let arg = std::env::args().nth(1).unwrap_or_default();
     match arg.as_str() {
@@ -556,6 +765,22 @@ fn main() {
         "n452_fixed_get_handler" => run(true, true, true, OP_GET_HANDLER),
         "n452_fixed_continuation" => run(true, true, true, OP_CONTINUATION),
         "n452_fixed_all" => run(true, true, true, OP_ALL),
+        // N454: the paste reader re-enters. Shipped: protected `&mut Handler`
+        // (paste's `&mut self`), `&Terminal` and `&mut Grants` (Context).
+        "n454_shipped_set" => run_paste(false, false, false, OP_P_SET),
+        "n454_shipped_resize" => run_paste(false, false, false, OP_P_RESIZE),
+        "n454_shipped_reset" => run_paste(false, false, false, OP_P_RESET),
+        "n454_shipped_vt_write" => run_paste(false, false, false, OP_P_VT_WRITE),
+        // Each fix part alone is insufficient.
+        "n454_raw_ctx_only_set" => run_paste(false, true, true, OP_P_SET),
+        "n454_raw_self_ref_terminal_resize" => run_paste(true, false, true, OP_P_RESIZE),
+        "n454_raw_self_ref_grants_reset" => run_paste(true, true, false, OP_P_RESET),
+        // The fix, one class each, then all at once (nested effects).
+        "n454_fixed_set" => run_paste(true, true, true, OP_P_SET),
+        "n454_fixed_resize" => run_paste(true, true, true, OP_P_RESIZE),
+        "n454_fixed_reset" => run_paste(true, true, true, OP_P_RESET),
+        "n454_fixed_vt_write" => run_paste(true, true, true, OP_P_VT_WRITE),
+        "n454_fixed_all" => run_paste(true, true, true, OP_P_ALL),
         other => panic!("unknown candidate {other:?}"),
     }
 }

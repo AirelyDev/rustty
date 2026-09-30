@@ -9381,6 +9381,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **id**: N454. P7-W2 T9 task review (finding 1; controller ruling 54). **severity**: medium
   (aliasing-model UB in the port only). **kind**: port soundness (Stacked Borrows). **Not upstream**:
   Zig pointers carry no protector. **state**: OPEN → follow-up task P7-W2 T10 (a Phase-7 exit item).
+  CLOSED (fixed, P7-W2 T10).
 - **shape**: `paste_pkg::paste` (`crates/rustty-vt/src/stream_terminal.rs:683-711`, reached from
   `crates/rustty-vt-c/src/paste.rs:227`) holds `Context { terminal: &Terminal, kitty_clipboard: &mut
   grants }` under a protected `&mut Handler`, and pulls data synchronously through the embedder's
@@ -9391,6 +9392,39 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   trampolines do) and make `Context.terminal` a raw pointer, or rule that reader re-entry is out of
   contract and say so in the header, matching the reference's wording. Prove it on the `mirihar-n452`
   harness (a reader arm) and with a vt-c test whose reader re-enters `set(TITLE_REPORT)`.
+- **contract ruling** (P7-W2 T10): re-entry is IN contract, so it must be sound. At 12752b2ac the
+  reference's `include/ghostty/vt/io.h` (`GhosttyMimeReaderFn`: "invoked synchronously on the calling
+  thread") and `paste.h` (`GhosttyPaste::reader`, `ghostty_terminal_paste`) put no restriction on what
+  the reader may call. The only no-reentrancy wording in `terminal.h` (`:78-81`, `:2212-2215`) covers
+  effect callbacks calling `vt_write`/`vt_write_until_ground`, and the continuation writer (`:2290-2291`)
+  forbids terminal APIs only for itself. So a paste reader may call `set`, `resize`, `reset`, even
+  `vt_write`. No header change (the headers stay token renames of the reference).
+- **fix** (P7-W2 T10): no behaviour change; same calls, same order.
+  - rustty-vt `stream_terminal::Handler::paste_raw(this: *mut Self, req)`: the reference's
+    `self: *Handler`, with place accesses; the queued pty chunks go out through a narrow `&mut *this`
+    per `write_pty` call after the read. The safe `paste(&mut self)` forwards for Rust callers.
+  - rustty-vt `paste::Context.terminal: *const Terminal` and `KittyClipboard.grants: *mut Grants` (the
+    reference's `*const Terminal` / `*Grants`; `KittyClipboard` loses its lifetime). `paste::paste` is
+    `unsafe fn` with the pointer contract; mode reads are narrow reborrows that end before the read,
+    and the grants are dereferenced only on the paste-event path (no reader there). rustty-core
+    `completeClipboardPasteEvent` passes `addr_of!`/`addr_of_mut!` under its existing mutex.
+  - rustty-vt-c `terminal_paste` calls `Handler::paste_raw` over `handler_ptr(w)` and publishes that
+    pointer in `live_handler` (`LiveHandler`) for the call, as the effect trampolines do.
+  - LIFETIMES rows first: `src/terminal/paste.zig Context terminal`, `Context.KittyClipboard grants`,
+    `src/terminal/stream_terminal.zig Handler (self: *Handler) in paste`.
+- **proof**: `.port/phase-2/mirihar-n452` reader arm (16 seeds, SB+TB). `n454_shipped_{set,resize,reset,
+  vt_write}` UB under both; each fix part alone stays UB under both (`n454_raw_ctx_only_set`: raw
+  Context, `&mut self` paste; `n454_raw_self_ref_terminal_resize`: raw-self, `&Terminal` Context;
+  `n454_raw_self_ref_grants_reset`: raw-self, `&mut Grants` Context); `n454_fixed_{set,resize,reset,
+  vt_write}` and `n454_fixed_all` CLEAN under both. Real code: vt-c Miri target
+  `terminal::tests::reentrant_callback_paste_reader` (a reader that re-enters `set(TITLE_REPORT)`,
+  `resize` with mode 2048 (nested `write_pty`), a nested `vt_write` (title report + BEL), then RIS
+  through `vt_write` (clears the grants) and C `reset`), CLEAN under SB and TB; negative controls
+  (reverted): the `&mut self` paste without publication is UB at the `set(TITLE_REPORT)` write (SB and
+  TB); a protected `&Terminal` across the paste is UB at the resize (SB and TB); a protected
+  `&mut Grants` across the paste is UB (SB at the reader's `resize` retag, TB at the RIS grants deinit).
+  Also W2.T9 review minor 3: `reentrant_callback_resize`'s nested `write_pty` callback now re-enters
+  `set(TITLE_REPORT)` (nested `live_handler` publication on real code).
 
 ## N455 — two vt-c tests have test-side Tree Borrows UB
 

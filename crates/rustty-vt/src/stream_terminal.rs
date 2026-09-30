@@ -668,8 +668,32 @@ impl<'a> Handler<'a> {
     // too: "a partial paste has its frame closed") is unchanged, and no raw
     // Handler alias exists while the grants borrow is live.
     pub fn paste(&mut self, req: Paste<'_>) -> Result<bool, PasteError> {
+        // SAFETY: `self` is a live, exclusively borrowed handler.
+        unsafe { Self::paste_raw(self, req) }
+    }
+
+    /// [`Handler::paste`] over the reference's unprotected `self: *Handler`.
+    ///
+    /// PORT NOTE (N454, P7-W2 T10; LIFETIMES.tsv `stream_terminal.zig Handler
+    /// (self: *Handler) in paste`): the paste pulls the text through the
+    /// embedder's reader synchronously, and a C reader may re-enter the
+    /// owning terminal (the reference's `io.h`/`paste.h` forbid nothing
+    /// there): set a handler option, `resize`, `reset`, even `vt_write`. A
+    /// `&mut self` would be a protected borrow of every handler byte for the
+    /// whole call, so any of those would be Stacked/Tree Borrows UB. Here the
+    /// handler is reached by place, the paste `Context` carries raw pointers
+    /// (the reference's `*const Terminal` and `*Grants`), and the queued
+    /// chunks go out through a narrow `&mut *this` per `write_pty` call,
+    /// after the read. Behaviour is identical to the `&mut self` form.
+    /// rustty-vt-c `terminal_paste` calls this over its handler pointer.
+    ///
+    /// # Safety
+    /// `this` must point to a live handler whose `terminal` is live, and no
+    /// reference to the handler may be live across the call.
+    pub unsafe fn paste_raw(this: *mut Self, req: Paste<'_>) -> Result<bool, PasteError> {
         // if (self.effects.write_pty == null) return error.NoWritePty;
-        if self.effects.write_pty.is_none() {
+        // SAFETY: `this` is live (caller contract); place reads.
+        if unsafe { (*this).effects.write_pty }.is_none() {
             return Err(PasteError::NoWritePty);
         }
 
@@ -677,48 +701,56 @@ impl<'a> Handler<'a> {
         // var pty: PtyWriter = .init(self, &buf);
         let mut pty = PtyChunker::new();
 
-        // SAFETY: `self.terminal` aliases the Terminal that created this
-        // Handler (see `term()`); the shared borrow lives only for the paste
-        // call and does not overlap a `&mut Terminal`.
-        let terminal: &Terminal = unsafe { &*self.terminal };
-        let io = terminal.io;
+        // SAFETY: `(*this).terminal` aliases the Terminal that created this
+        // Handler (see `term()`); only raw pointers and place reads, so no
+        // borrow of it spans the reader call.
+        let terminal: *const Terminal = unsafe { (*this).terminal };
+        let io = unsafe { (*terminal).io };
 
         // .alloc = self.terminal.gpa(),
         // SAFETY: the active screen is live for the terminal's life; a raw
         // read of its allocator field (`Terminal::gpa` without `&mut`).
-        let alloc = unsafe { (*terminal.screens.active).alloc };
-        let result = paste_pkg::paste(
-            paste_pkg::Context {
-                terminal,
-                alloc,
-                // Paste events need the program's follow-up Kitty
-                // clipboard read served.
-                // .kitty_clipboard = if (self.effects.clipboard_read != null) .{
-                //     .grants = &self.kitty_clipboard_grants,
-                //     .io = self.terminal.io(),
-                // } else null,
-                kitty_clipboard: if self.effects.clipboard_read.is_some() {
-                    Some(paste_pkg::KittyClipboard {
-                        grants: &mut self.kitty_clipboard_grants,
-                        io,
-                    })
-                } else {
-                    None
+        let alloc = unsafe { (*(*terminal).screens.active).alloc };
+        // SAFETY: `terminal` is live for the call; `grants` is a place
+        // projection of the live handler and no reference to it is live
+        // across the call (this function's contract).
+        let result = unsafe {
+            paste_pkg::paste(
+                paste_pkg::Context {
+                    terminal,
+                    alloc,
+                    // Paste events need the program's follow-up Kitty
+                    // clipboard read served.
+                    // .kitty_clipboard = if (self.effects.clipboard_read != null) .{
+                    //     .grants = &self.kitty_clipboard_grants,
+                    //     .io = self.terminal.io(),
+                    // } else null,
+                    kitty_clipboard: if (*this).effects.clipboard_read.is_some() {
+                        Some(paste_pkg::KittyClipboard {
+                            grants: std::ptr::addr_of_mut!((*this).kitty_clipboard_grants),
+                            io,
+                        })
+                    } else {
+                        None
+                    },
+                    writer: &mut pty,
                 },
-                writer: &mut pty,
-            },
-            req,
-        );
+                req,
+            )
+        };
 
         // Delivered on error too: a partial paste has its frame closed
         // and the program must see that.
         // defer pty.writer.flush() catch unreachable;
         pty.flush();
         for chunk in &pty.chunks {
-            let Some(func) = self.effects.write_pty else {
+            // SAFETY: place read of the live handler.
+            let Some(func) = (unsafe { (*this).effects.write_pty }) else {
                 break;
             };
-            func(self, chunk);
+            // SAFETY: a narrow `&mut` for the effect call only (the
+            // trampoline publishes its own pointer, N452).
+            func(unsafe { &mut *this }, chunk);
         }
 
         // ... catch |err| switch (err) {

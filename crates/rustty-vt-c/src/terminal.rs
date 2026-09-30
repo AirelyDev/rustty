@@ -9015,14 +9015,24 @@ mod tests {
         clipboard_write_max: Vec<usize>,
         continuation_max: Vec<usize>,
         continuation_results: Vec<(Result, Vec<u8>)>,
+        /// `reentry_write_pty` also re-enters `set(TITLE_REPORT, true)`
+        /// (P7-W2 T10: nested `live_handler` publication on real code).
+        pty_sets_title_report: bool,
     }
 
-    extern "C" fn reentry_write_pty(_t: Terminal, ud: *mut c_void, ptr: *const u8, len: usize) {
+    extern "C" fn reentry_write_pty(t: Terminal, ud: *mut c_void, ptr: *const u8, len: usize) {
         // SAFETY: `ud` is the test's live `Reentry`; `ptr[0..len]` is the
         // borrowed response.
         unsafe {
             let data = std::slice::from_raw_parts(ptr, len);
             (*(ud as *mut Reentry)).pty.extend_from_slice(data);
+            if (*(ud as *mut Reentry)).pty_sets_title_report {
+                let yes = true;
+                assert_eq!(
+                    Result::Success,
+                    set(t, Option_::TitleReport, (&raw const yes).cast())
+                );
+            }
         }
     }
 
@@ -9065,8 +9075,15 @@ mod tests {
             let t = reentry_terminal(alloc, rp, on_bell);
 
             vtw(t, b"\x1b[?2048h");
-            unsafe { (*rp).pty.clear() };
+            unsafe {
+                (*rp).pty.clear();
+                // The nested `write_pty` re-enters too (P7-W2 T10): a
+                // handler-option `set` under two published trampolines.
+                (*rp).pty_sets_title_report = true;
+                assert!(!(*t).stream.handler.title_report);
+            }
             vtw(t, b"\x1b[2\x07;3H");
+            unsafe { assert!((*t).stream.handler.title_report) };
 
             let mut cols: size::CellCountInt = 0;
             let mut rows: size::CellCountInt = 0;
@@ -9309,6 +9326,182 @@ mod tests {
             // so the continuation is unavailable (`InvalidValue`).
             assert_eq!(16, after);
             assert_eq!(Result::InvalidValue, result);
+
+            unsafe { free(t) };
+        });
+    }
+
+    /// The paste reader's userdata (N454).
+    struct PasteReentry {
+        t: Terminal,
+        step: u32,
+        reads: usize,
+    }
+
+    extern "C" fn reentry_clipboard_read(
+        _t: Terminal,
+        _ud: *mut c_void,
+        _request: *const ClipboardRead,
+    ) {
+    }
+
+    /// A `RusttyMimeReader` that re-enters the terminal before it streams
+    /// the data.
+    extern "C" fn reentry_paste_read(
+        ud: *mut c_void,
+        _mime: LibString,
+        writer: crate::io::Writer,
+    ) -> bool {
+        let p = ud as *mut PasteReentry;
+        // SAFETY: `ud` is the test's live `PasteReentry`; `t` its live
+        // terminal; `writer` is valid for this call.
+        unsafe {
+            (*p).reads += 1;
+            let t = (*p).t;
+            let data: &[u8] = match (*p).step {
+                1 => {
+                    let yes = true;
+                    assert_eq!(
+                        Result::Success,
+                        set(t, Option_::TitleReport, (&raw const yes).cast())
+                    );
+                    // Mode 2048: a nested `write_pty` from inside the read.
+                    assert_eq!(Result::Success, resize(t, 20, 6, 9, 18));
+                    // A nested feed: the title report sees the `set`, and the
+                    // BEL fires an effect.
+                    vtw(t, b"\x1b]2;pt\x1b\\\x1b[21t\x07");
+                    b"hi"
+                }
+                2 => {
+                    // RIS resets the handler (its Kitty clipboard grants
+                    // too), then the C reset.
+                    vtw(t, b"\x1bc");
+                    reset(t);
+                    b"ok"
+                }
+                _ => b"ok",
+            };
+            (writer.write.unwrap())(writer.userdata, data.as_ptr(), data.len())
+        }
+    }
+
+    // Rust-only (P7-W2 T10, N454; a Miri target in the `vtc` group). The C
+    // paste reader runs synchronously inside `terminal_paste`, and the
+    // reference's `io.h`/`paste.h` do not forbid it from re-entering the
+    // terminal. Under Miri (SB and TB) this proves the raw-self
+    // `Handler::paste_raw`, the raw paste `Context` and the paste's published
+    // `live_handler` leave no protected borrow for the re-entry to
+    // invalidate (`.port/phase-2/mirihar-n452`, the `n454_*` candidates).
+    #[test]
+    fn reentrant_callback_paste_reader() {
+        extern "C" fn on_bell(_t: Terminal, ud: *mut c_void) {
+            // SAFETY: `ud` is the test's live `Reentry`.
+            unsafe { (*(ud as *mut Reentry)).bells += 1 };
+        }
+        with_test_allocator(|alloc| {
+            let mut r = Reentry::default();
+            let rp: *mut Reentry = &mut r;
+            let t = reentry_terminal(alloc, rp, on_bell);
+            // With a clipboard_read callback the paste carries the Kitty
+            // clipboard grants across the read.
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::ClipboardRead,
+                    reentry_clipboard_read as *const c_void,
+                )
+            });
+            vtw(t, b"\x1b[?2004h\x1b[?2048h");
+            unsafe { (*rp).pty.clear() };
+
+            let mut pr = PasteReentry {
+                t,
+                step: 1,
+                reads: 0,
+            };
+            let pp: *mut PasteReentry = &mut pr;
+            let mimes = [LibString::init(b"text/plain")];
+            let req = crate::paste::Request {
+                size: std::mem::size_of::<crate::paste::Request>(),
+                location: 0,
+                source: 0,
+                mimes: mimes.as_ptr(),
+                mimes_len: mimes.len(),
+                reader: crate::io::MimeReader {
+                    read: Some(reentry_paste_read),
+                    userdata: pp.cast(),
+                },
+                allow_unsafe: false,
+            };
+
+            // 1. The reader sets a handler option, resizes (a nested
+            // `write_pty`), and feeds a title report and a BEL.
+            let mut written = false;
+            assert_eq!(Result::Success, unsafe {
+                crate::paste::terminal_paste(t, &req, &mut written)
+            });
+            assert!(written);
+            let mut cols: size::CellCountInt = 0;
+            let mut rows: size::CellCountInt = 0;
+            unsafe {
+                assert_eq!(1, (*pp).reads);
+                assert_eq!(1, (*rp).bells);
+                assert!((*t).live_handler.is_null());
+                assert!((*t).stream.handler.title_report);
+                assert_eq!(
+                    b"\x1b[48;6;20;108;180t\x1b]lpt\x1b\\\x1b[200~hi\x1b[201~".as_slice(),
+                    (*rp).pty.as_slice()
+                );
+                assert_eq!(
+                    Result::Success,
+                    get(t, TerminalData::Cols, (&raw mut cols).cast())
+                );
+                assert_eq!(
+                    Result::Success,
+                    get(t, TerminalData::Rows, (&raw mut rows).cast())
+                );
+            }
+            assert_eq!((20, 6), (cols, rows));
+
+            // 2. The reader resets the terminal (RIS through a nested feed,
+            // which clears the grants, then the C reset). The framing was
+            // decided from mode 2004 before the read, as in the reference.
+            unsafe {
+                let gpa = (*(*(*t).terminal).screens.active).alloc;
+                assert!((*t)
+                    .stream
+                    .handler
+                    .kitty_clipboard_grants
+                    .grant(
+                        gpa,
+                        b"pw",
+                        rustty_vt::kitty::clipboard::Direction::Read,
+                        false
+                    )
+                    .is_ok());
+                assert_eq!(1, (*t).stream.handler.kitty_clipboard_grants.len());
+                (*rp).pty.clear();
+                (*pp).step = 2;
+            }
+            assert_eq!(Result::Success, unsafe {
+                crate::paste::terminal_paste(t, &req, &mut written)
+            });
+            unsafe {
+                assert_eq!(2, (*pp).reads);
+                assert_eq!(0, (*t).stream.handler.kitty_clipboard_grants.len());
+                assert_eq!(b"\x1b[200~ok\x1b[201~".as_slice(), (*rp).pty.as_slice());
+                (*rp).pty.clear();
+                (*pp).step = 0;
+            }
+
+            // 3. The reset took effect: no bracketing now.
+            assert_eq!(Result::Success, unsafe {
+                crate::paste::terminal_paste(t, &req, &mut written)
+            });
+            unsafe {
+                assert_eq!(3, (*pp).reads);
+                assert_eq!(b"ok".as_slice(), (*rp).pty.as_slice());
+            }
 
             unsafe { free(t) };
         });

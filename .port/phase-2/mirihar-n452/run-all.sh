@@ -15,7 +15,12 @@ for c in n452_shipped_resize n452_shipped_set n452_shipped_get_ground \
          n452_raw_stream_only_set n452_stash_only_get_ground \
          n452_raw_stream_whole_ground \
          n452_fixed_resize n452_fixed_set n452_fixed_get_ground \
-         n452_fixed_get_handler n452_fixed_continuation n452_fixed_all; do
+         n452_fixed_get_handler n452_fixed_continuation n452_fixed_all \
+         n454_shipped_set n454_shipped_resize n454_shipped_reset n454_shipped_vt_write \
+         n454_raw_ctx_only_set n454_raw_self_ref_terminal_resize \
+         n454_raw_self_ref_grants_reset \
+         n454_fixed_set n454_fixed_resize n454_fixed_reset n454_fixed_vt_write \
+         n454_fixed_all; do
   sbl="/tmp/mirihar-n452-$c-sb.log"; tbl="/tmp/mirihar-n452-$c-tb.log"
   MIRIFLAGS="-Zmiri-many-seeds=0..16" cargo +nightly miri run -q -- "$c" >"$sbl" 2>&1; sb=$?
   MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-many-seeds=0..16" cargo +nightly miri run -q -- "$c" >"$tbl" 2>&1; tb=$?
