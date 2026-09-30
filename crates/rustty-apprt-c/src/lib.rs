@@ -602,10 +602,11 @@ pub unsafe extern "C" fn rustty_app_tick(v: *mut App) {
     // };
     //
     // PORT NOTE: `core_app` (a separate heap allocation) and the rt-app `&*v` never
-    // alias, so the `&mut CoreApp` receiver + `&App` argument are sound.
+    // alias. The core app is entered raw-self (N443): a drained message can run
+    // the embedder's action callback, which re-enters the core app.
     // SAFETY: `v` validity is the caller's contract.
     let core_app = unsafe { (*v).core_app };
-    if let Err(err) = unsafe { (*core_app).tick(&*v) } {
+    if let Err(err) = unsafe { rustty_core::app::App::tick(core_app, &*v) } {
         log::error!(target: LOG_SCOPE, "error app tick err={err:?}");
     }
 }
@@ -686,7 +687,8 @@ pub unsafe extern "C" fn rustty_app_key(app: *mut App, event: KeyEvent) -> bool 
         }
     };
     // SAFETY: `app` validity is the caller's contract.
-    match unsafe { (*app).keyEvent(KeyTarget::App, kev) } {
+    // (N443: raw-self; a global keybind's host callback re-enters the app.)
+    match unsafe { App::keyEvent(app, KeyTarget::App, kev) } {
         Ok(v) => v,
         Err(err) => {
             log::warn!(target: LOG_SCOPE, "error processing key event err={err:?}");
@@ -870,7 +872,8 @@ pub unsafe extern "C" fn rustty_app_set_color_scheme(v: *mut App, scheme_raw: c_
     // };
     // SAFETY: `v` validity is the caller's contract.
     let core_app = unsafe { (*v).core_app };
-    if let Err(err) = unsafe { (*core_app).colorSchemeEvent(&*v, scheme) } {
+    // (N443: raw-self; the soft reload re-enters the core app.)
+    if let Err(err) = unsafe { rustty_core::app::App::colorSchemeEvent(core_app, &*v, scheme) } {
         log::error!(target: LOG_SCOPE, "error setting color scheme err={err:?}");
     }
 }
@@ -1291,7 +1294,8 @@ unsafe fn surface_new_(
     // (`ptr::read` — `SurfaceOptions` is `#[repr(C)]`, trivially copyable).
     // `App::newSurface` heap-boxes + pins the backend `Surface` (ADV-FIX 8).
     // SAFETY: `app`/`opts` validity is the caller's contract.
-    unsafe { (*app).newSurface(core::ptr::read(opts)) }
+    // (N443: raw-self; this is called from inside the app's action callbacks.)
+    unsafe { App::newSurface(app, core::ptr::read(opts)) }
 }
 
 /// C: rustty_surface_free
@@ -1895,7 +1899,8 @@ pub unsafe extern "C" fn rustty_surface_key(surface: *mut Surface, event: KeyEve
         }
     };
     // SAFETY: `surface`/`surface.app` validity is the caller's contract.
-    match unsafe { (*(*surface).app).keyEvent(KeyTarget::Surface(surface), kev) } {
+    // (N442/N443: raw-self through the embedded app and surface roots.)
+    match unsafe { App::keyEvent((*surface).app, KeyTarget::Surface(surface), kev) } {
         Ok(v) => v,
         Err(err) => {
             log::warn!(target: LOG_SCOPE, "error processing key event err={err:?}");
@@ -2221,11 +2226,13 @@ pub unsafe extern "C" fn rustty_surface_request_close(ptr: *mut Surface) {
     // Prefer the binding path so close goes through the same Surface
     // hook as a close-surface keybind, rather than a raw close() that
     // bypasses it.
-    // SAFETY: `ptr` validity is the caller's contract.
+    // SAFETY: `ptr` validity is the caller's contract. (N442: raw-self through
+    // the embedded surface's raw root; no protected `&mut` spans the dispatch.)
     let handled = match unsafe {
-        (*ptr)
-            .core_surface
-            .performBindingAction(binding::Action::CloseSurface)
+        CoreSurface::performBindingAction(
+            &raw mut (*ptr).core_surface,
+            binding::Action::CloseSurface,
+        )
     } {
         Ok(v) => v,
         Err(err) => {
@@ -2270,8 +2277,12 @@ pub unsafe extern "C" fn rustty_surface_split(ptr: *mut Surface, direction: Spli
         SplitDirection::Up => binding::SplitDirection::Up,
     });
     // PORT NOTE: the `bool` result is discarded (reference `_ =`).
-    // SAFETY: `ptr` validity is the caller's contract.
-    if let Err(err) = unsafe { (*ptr).core_surface.performBindingAction(action) } {
+    // SAFETY: `ptr` validity is the caller's contract. (N442: raw-self through
+    // the embedded surface's raw root; the host's `new_split` handler re-enters
+    // `rustty_surface_inherited_config` on this surface.)
+    if let Err(err) =
+        unsafe { CoreSurface::performBindingAction(&raw mut (*ptr).core_surface, action) }
+    {
         log::error!(target: LOG_SCOPE, "error creating new split err={err:?}");
     }
 }
@@ -2306,8 +2317,11 @@ pub unsafe extern "C" fn rustty_surface_split_focus(ptr: *mut Surface, direction
         GotoSplit::Left => binding::SplitFocusDirection::Left,
         GotoSplit::Right => binding::SplitFocusDirection::Right,
     });
-    // SAFETY: `ptr` validity is the caller's contract.
-    if let Err(err) = unsafe { (*ptr).core_surface.performBindingAction(action) } {
+    // SAFETY: `ptr` validity is the caller's contract. (N442: raw-self through
+    // the embedded surface's raw root.)
+    if let Err(err) =
+        unsafe { CoreSurface::performBindingAction(&raw mut (*ptr).core_surface, action) }
+    {
         log::error!(target: LOG_SCOPE, "error focusing split err={err:?}");
     }
 }
@@ -2421,12 +2435,14 @@ pub unsafe extern "C" fn rustty_surface_binding_action(
     //
     // PORT NOTE: Zig passes the `action` union to `performBindingAction` BY VALUE (a
     // copy), leaving the local `action` live for the `catch` error log. Rust's
-    // `performBindingAction(&mut self, action: binding::Action)` CONSUMES its arg, so
+    // `performBindingAction(self_, action: binding::Action)` CONSUMES its arg, so
     // `action.clone()` reproduces Zig's by-value copy and keeps `action` available for
     // the error branch's `action={f}` (rendered via `Debug`, the faithful analog of
     // the reference's custom `{f}` `Action.format`).
     // SAFETY: `ptr` validity is the caller's contract.
-    match unsafe { (*ptr).core_surface.performBindingAction(action.clone()) } {
+    // (N442: raw-self through the embedded surface's raw root.)
+    match unsafe { CoreSurface::performBindingAction(&raw mut (*ptr).core_surface, action.clone()) }
+    {
         Ok(v) => v,
         Err(err) => {
             log::error!(target: LOG_SCOPE, "error performing binding action action={action:?} err={err:?}");
@@ -2968,8 +2984,9 @@ pub unsafe extern "C" fn rustty_surface_quicklook_font(ptr: *mut Surface) -> *mu
     // we're loading the primary face.
     // const grid = ptr.core_surface.renderer.font_grid;
     // SAFETY: the renderer's `font_grid` is the shared `*mut SharedGrid` handle
-    // (`renderer_seam::Renderer` newtype `.0` → `rustty_renderer::Renderer`).
-    let grid: *mut SharedGrid = unsafe { (*ptr).core_surface.renderer.0.font_grid };
+    // (`renderer_seam::Renderer` newtype `.0` → `rustty_renderer::Renderer`),
+    // read by place through the out-of-line renderer's raw root (N441).
+    let grid: *mut SharedGrid = unsafe { (*(*ptr).core_surface.renderer.as_ptr()).0.font_grid };
     // grid.lock.lockShared();
     // defer grid.lock.unlockShared();
     //
@@ -3777,8 +3794,12 @@ mod binding_route_tests {
     #[test]
     fn request_close_routes_through_perform_binding_action() {
         let c = code(export_body("rustty_surface_request_close"));
+        // (N442: the dispatch is raw-self, `CoreSurface::performBindingAction(
+        // &raw mut (*ptr).core_surface, binding::Action::CloseSurface)`.)
         assert!(
-            c.contains("performBindingAction(binding::Action::CloseSurface)"),
+            c.contains("CoreSurface::performBindingAction(")
+                && c.contains("&raw mut (*ptr).core_surface,")
+                && c.contains("binding::Action::CloseSurface,"),
             "request_close must route through performBindingAction:\n{c}"
         );
         assert!(

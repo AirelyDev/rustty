@@ -611,7 +611,7 @@ mod imp {
             // SAFETY: `core` is the surface widget's boxed, initialized core surface
             // (published by `Surface::init`, cleared only after the render/io
             // threads join in finalize); this runs on the main thread.
-            if let Err(err) = unsafe { (*core).performBindingAction(action) } {
+            if let Err(err) = unsafe { CoreSurface::performBindingAction(core, action) } {
                 // log.warn("error performing binding action error={}", .{err});
                 log::warn!(target: LOG_SCOPE, "error performing binding action error={err:?}");
             }

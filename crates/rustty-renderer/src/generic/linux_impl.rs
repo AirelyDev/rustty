@@ -1200,11 +1200,14 @@ impl Renderer {
         self.config.deinit();
 
         // self.api.deinit(); — the owned `OpenGL` (its `OffscreenContext`) releases
-        // and destroys its EGL context on `Drop` when the `Renderer` value drops. A
-        // `&mut self` `deinit` cannot move `api` out; documented. (`OpenGL::deinit`
-        // consumes `self`, unreachable here — the field drop achieves the same.)
+        // and destroys its EGL context on `Drop`: the reference's `OpenGL.deinit`
+        // body, which has no ordering constraint against the teardown above. The
+        // owner drops the whole renderer on the main thread right after this
+        // `deinit` (core `RendererBox::dealloc_after_deinit`, P7-W7 T5b fix round
+        // 2), where the reference's `deinit` also runs. A `&mut self` `deinit`
+        // cannot move `api` out (`OpenGL::deinit` consumes `self`).
         //
-        // self.* = undefined; — no-op (Rust ownership handles teardown).
+        // self.* = undefined; — no-op (the owner drops the value next).
     }
 
     /// The soonest animation wake this renderer needs, if any:

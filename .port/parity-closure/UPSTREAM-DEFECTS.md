@@ -3118,6 +3118,52 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    arm the errdefers on `result` instead of the locals once `result` is built: `errdefer result.deinit();` right after `var result`, with the earlier errdefers scoped to end there (for example by building the pages in a helper that returns the list).
 - upstream status: not reported
 
+### UD365 — a chained keybind's action list is read after a chained `reload_config` has freed it (use-after-free)
+
+- kind:            UB (use-after-free; R13)
+- upstream project: ghostty
+- severity:        medium (a chained keybind that contains `reload_config` reads freed config memory on macOS: the actions after it, and the closing/ignore checks after the loop)
+- reference:       at 12752b2ac:
+  - `src/Surface.zig` `maybeHandleBinding` (`:2947`): `const actions = leaf.actionsSlice()` (`:3082`); for a `leaf_chained` entry `GenericLeaf.actions.many` is a slice into the entry's action list (`src/input/Binding.zig:2294-2310`), which lives in `self.config.keybind` — a clone made in the `DerivedConfig` arena (`Surface.zig:387`, `DerivedConfig.init` `:359-362`);
+  - the loop `for (actions) |action|` (`:3105`) performs each action; `reload_config` is app-scoped, so `performBindingAction` → `App.performAction` → `rt_app.performAction(.app, .reload_config)`;
+  - the macOS host's handler (`macos/Sources/Ghostty/Ghostty.App.swift` `configReload` `:2391-2411` → `reloadConfig` `:144-162`) calls `ghostty_app_update_config` synchronously; `App.updateConfig` (`src/App.zig:164-189`) sends every surface `.change_config`, handled synchronously (`Surface.zig:985`) by `updateConfig`, which runs `self.config.deinit()` (the arena, `:440-443`) and replaces it (`:1796-1797`);
+  - back in the loop, the next `action` and then `for (actions) |action| if (closingAction(action))` (`:3123`) and `if (action == .ignore)` (`:3130`) read the freed slice;
+  - the same shape for a global chained keybind: `App.keyEvent` takes `leaf.actionsSlice()` from the embedded app's config (`src/App.zig:369`) and iterates it in `performAllChainedAction` (`:378`), while the `config_change` action the reload triggers replaces that config (`src/apprt/embedded.zig:344-351`).
+- defect:          the action slice's storage is freed while the loop still iterates it.
+- ReleaseSafe:     no safety check covers a dangling slice; the read sees whatever the freed arena pages hold (by reading; not measured).
+- ReleaseFast:     the same.
+- reachability:    macOS, a user keybind whose chain contains `reload_config` before its last action, or any chained `reload_config` (the post-loop checks read the slice too); e.g. `keybind = super+r=reload_config` followed by `keybind = chain=text:x`. The default `super+shift+,` binding is a single leaf and is not affected (its action is a copy).
+- output needed:   none reliably visible; a crash or a wrong follow-up action depending on what reuses the pages.
+- port handling:
+  - `crates/rustty-input/src/binding.rs`: the port's `GenericLeaf` owns its actions (`GenericLeafActions::Many(Vec<Action>)`, cloned by `LeafChained::generic`), so `maybeHandleBinding` and `App::keyEvent` iterate a copy that outlives the replaced config. No code change was needed in P7-W7 T5b; the property is now pinned.
+  - `PORT NOTE: reference defect (R13), UD365` at the test and at both `let actions` sites (`crates/rustty-core/src/surface.rs` `maybeHandleBinding`, `crates/rustty-core/src/app.rs` `keyEvent`). Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none. Found by the P7-W7 T5b review (ruling 43, lead 6); traced in the oracle by P7-W7 T5b fix round 1.
+- test:            `crates/rustty-input/src/binding.rs` `ud365_generic_leaf_actions_outlive_a_replaced_set` (passes under Miri): the chained leaf's actions are read after the set is replaced. It fails on the reference's shape: a borrowed `many` slice cannot outlive the set (it does not compile), and an unchecked borrow is the use-after-free Miri reports.
+- proposed fix:    copy the actions before dispatch (`const actions = try alloc.dupe(input.Binding.Action, leaf.actionsSlice())`, freed after the checks), or make `updateConfig` defer freeing the old `DerivedConfig` until the current key event is done.
+- upstream status: NOT YET REPORTED
+
+### UD366 — `performAllAction` walks a surface list that the action's host callback appends to (use-after-free)
+
+- kind:            UB (use-after-free; R13)
+- upstream project: ghostty
+- severity:        medium (an `all:` surface-scoped binding whose action creates a surface reads the freed surface list once it grows past its capacity)
+- reference:       at 12752b2ac:
+  - `src/App.zig` `performAllAction` (`:486-511`): `.surface => for (self.surfaces.items) |surface| { _ = surface.core().performBindingAction(action) ... }` captures the slice once (`:502`);
+  - each surface's `performBindingAction` for `new_split` / `new_tab` / `new_window` calls `rt_app.performAction`; the macOS host's handlers post through `NotificationCenter`, whose observers run synchronously and build the new view: `TerminalController.newSplit` / `newTab` / `newWindow` → `SurfaceView` init → `ghostty_surface_new` → `App.addSurface` → `self.surfaces.append` (`:194-198`);
+  - once the list is full (its capacity is 16 on aarch64 for the first growth), that append reallocates and frees the buffer the loop's slice points into; the next iteration reads freed memory.
+- defect:          the loop's slice outlives the buffer it points into.
+- ReleaseSafe:     no safety check covers a dangling slice; the read sees whatever the freed memory holds (by reading; not measured).
+- ReleaseFast:     the same.
+- reachability:    macOS, a keybind such as `keybind = all:super+d=new_split:right` (or `global:`) with enough surfaces open that the appends outgrow the list's capacity.
+- output needed:   none reliably visible; a crash, a skipped surface, or an action sent to a stale pointer.
+- port handling:
+  - `crates/rustty-core/src/app.rs` `App::performAllAction` (P7-W7 T5b fix round 1): the surface arm iterates a snapshot of the list taken before the first action, the surfaces the reference means to visit, and skips a surface no longer in the list when its turn comes.
+  - `PORT NOTE: reference defect (R13), UD366` at the loop. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none. Found while making `performAllAction` raw-self (P7-W7 T5b fix round 1, recorded first as N448); confirmed by the round-1 re-review (ruling 46).
+- test:            `crates/rustty-core/src/app.rs` `ud366_perform_all_action_survives_a_host_append_that_reallocates` (a fake runtime whose `new_split` callback `addSurface`s onto a full list). It passes natively and under Miri; with the reference's live-list iteration restored it is UB under Miri ("alloc has been freed, so this pointer is dangling"). Also `.port/phase-2/mirihar-n441` `r0_all_new_split_live_iter` (UB, SB and TB) vs `fixed_all_new_split_snapshot` (CLEAN).
+- proposed fix:    iterate a copy of the list (`const surfaces = try alloc.dupe(*apprt.Surface, self.surfaces.items)`), or iterate by index against the live `items` and stop at the length the loop started with.
+- upstream status: NOT YET REPORTED
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

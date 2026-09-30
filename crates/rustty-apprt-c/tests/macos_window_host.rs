@@ -623,10 +623,11 @@ fn mouse_scroll_routes_each_offset_to_its_own_axis() {
 // reaches the host with the same surface-targeted action (and, for close, the
 // `close_surface` callback) on a live surface. The error-log half of the change is
 // unreachable here and is pinned in lib.rs `binding_route_tests`. The NewSplit
-// callback re-enters `rustty_surface_inherited_config` as the Swift host does,
-// while `performBindingAction` holds `&mut` on the core surface: that is N442
-// (Stacked Borrows UB, OPEN -> W7.T5). Miri cannot see it across this FFI; the
-// test only proves the re-entry runs.
+// callback re-enters `rustty_surface_inherited_config` as the Swift host does.
+// That re-entry was N442 (a protected `&mut` core surface across the callback,
+// Stacked Borrows UB); P7-W7 T5b made the dispatch raw-self, proven on the
+// isolated harness `.port/phase-2/mirihar-n441`. Miri cannot see it across this
+// FFI; the test proves the re-entry runs on the fixed route.
 #[test]
 fn split_and_close_exports_reach_the_host() {
     let Some(host) = HostedSurface::spawn() else {

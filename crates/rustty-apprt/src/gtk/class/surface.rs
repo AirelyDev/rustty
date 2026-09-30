@@ -3337,7 +3337,7 @@ impl Surface {
         };
         // SAFETY: `core` is the widget's boxed, initialized core surface; called
         // on the app/main thread from the key controller.
-        let effect = match unsafe { (*core).keyCallback(core_event) } {
+        let effect = match unsafe { CoreSurface::keyCallback(core, core_event) } {
             Ok(effect) => effect,
             Err(err) => {
                 // log.err("error in key callback err={}", .{err});
@@ -3729,9 +3729,9 @@ fn action_prompt_title(
         return;
     };
     // `surface.performBindingAction(.prompt_surface_title)` (`:2581`).
-    if let Err(err) = unsafe { &mut *core }
-        .performBindingAction(rustty_input::binding::Action::PromptSurfaceTitle)
-    {
+    if let Err(err) = unsafe {
+        CoreSurface::performBindingAction(core, rustty_input::binding::Action::PromptSurfaceTitle)
+    } {
         log::warn!(target: LOG_SCOPE, "unable to perform prompt title action err={err:?}");
     }
 }
@@ -4737,7 +4737,7 @@ impl Surface {
                 unshifted_codepoint: 0,
             };
             // SAFETY: `core` is the widget's boxed, initialized core surface.
-            if let Err(err) = unsafe { (*core).keyCallback(event) } {
+            if let Err(err) = unsafe { CoreSurface::keyCallback(core, event) } {
                 // log.warn("error in key callback err={}", .{err});
                 log::warn!(target: LOG_SCOPE, "error in key callback err={err:?}");
             }
@@ -4954,9 +4954,12 @@ impl Surface {
                 let row = adj.value().round() as usize;
                 // `surface.performBindingAction(.{ .scroll_to_row = row })`
                 // (`:2436-2438`).
-                if let Err(err) = unsafe { &mut *core }
-                    .performBindingAction(rustty_input::binding::Action::ScrollToRow(row))
-                {
+                if let Err(err) = unsafe {
+                    CoreSurface::performBindingAction(
+                        core,
+                        rustty_input::binding::Action::ScrollToRow(row),
+                    )
+                } {
                     log::warn!(target: LOG_SCOPE, "error performing scroll_to_row action err={err:?}");
                 }
                 None
@@ -5050,9 +5053,9 @@ impl Surface {
             return;
         };
         // `surface.performBindingAction(.end_search)` (`:3554`).
-        if let Err(err) =
-            unsafe { &mut *core }.performBindingAction(rustty_input::binding::Action::EndSearch)
-        {
+        if let Err(err) = unsafe {
+            CoreSurface::performBindingAction(core, rustty_input::binding::Action::EndSearch)
+        } {
             log::warn!(target: LOG_SCOPE, "unable to perform end_search action err={err:?}");
         }
         // `self.private().render_surface.as(gtk.Widget).grabFocus()` (`:3597`).
@@ -5070,9 +5073,12 @@ impl Surface {
         };
         // `.{ .search = std.mem.sliceTo(needle orelse "", 0) }` (`:3562`).
         let needle_bytes = needle.unwrap_or("").as_bytes().to_vec();
-        if let Err(err) = unsafe { &mut *core }
-            .performBindingAction(rustty_input::binding::Action::Search(needle_bytes))
-        {
+        if let Err(err) = unsafe {
+            CoreSurface::performBindingAction(
+                core,
+                rustty_input::binding::Action::Search(needle_bytes),
+            )
+        } {
             log::warn!(target: LOG_SCOPE, "unable to perform search action err={err:?}");
         }
     }
@@ -5085,11 +5091,14 @@ impl Surface {
             return;
         };
         // `.{ .navigate_search = .next }` (`:3569`).
-        if let Err(err) = unsafe { &mut *core }.performBindingAction(
-            rustty_input::binding::Action::NavigateSearch(
-                rustty_input::binding::NavigateSearch::Next,
-            ),
-        ) {
+        if let Err(err) = unsafe {
+            CoreSurface::performBindingAction(
+                core,
+                rustty_input::binding::Action::NavigateSearch(
+                    rustty_input::binding::NavigateSearch::Next,
+                ),
+            )
+        } {
             log::warn!(target: LOG_SCOPE, "unable to perform navigate_search action err={err:?}");
         }
     }
@@ -5102,11 +5111,14 @@ impl Surface {
             return;
         };
         // `.{ .navigate_search = .previous }` (`:3576`).
-        if let Err(err) = unsafe { &mut *core }.performBindingAction(
-            rustty_input::binding::Action::NavigateSearch(
-                rustty_input::binding::NavigateSearch::Previous,
-            ),
-        ) {
+        if let Err(err) = unsafe {
+            CoreSurface::performBindingAction(
+                core,
+                rustty_input::binding::Action::NavigateSearch(
+                    rustty_input::binding::NavigateSearch::Previous,
+                ),
+            )
+        } {
             log::warn!(target: LOG_SCOPE, "unable to perform navigate_search action err={err:?}");
         }
     }

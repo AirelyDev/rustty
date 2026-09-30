@@ -1083,25 +1083,47 @@ fn abort_on_unwind<R>(f: impl FnOnce() -> R) -> R {
     }
 }
 
-impl Drop for Metal {
+impl Metal {
     // pub fn deinit(self: *Metal) void {
     //     self.queue.release();
     //     self.device.release();
     //     self.layer.release();
     // }
-    fn drop(&mut self) {
-        // PORT-ONLY (N437): clear the display callback, then free its context.
+    //
+    // PORT NOTE (P7-W7 T5b fix round 2, ruling 46): the reference's
+    // `layer.release()` clears the layer's display callback first (upstream
+    // 4b4a5b241: the view may keep the layer alive, and a later Core Animation
+    // display pass must not reach the freed renderer). That clear, and freeing
+    // the port-only callback context (N437), are what must happen at `deinit`
+    // time, so they live here and `Renderer::deinit` calls it. The ARC releases
+    // of `queue`/`device`/`layer` are the value's drop, which the owner runs right
+    // after `deinit` (`rustty_core::renderer_seam::RendererBox::dealloc_after_deinit`).
+    // Idempotent: `Drop` calls it again.
+    pub fn deinit(&mut self) {
+        // The layer may be retained by the view after we release our reference:
+        // clear the callback so no later display pass reaches the renderer.
+        if let Some(layer) = self.layer() {
+            layer.set_display_callback(None, core::ptr::null_mut());
+        }
         if !self.display_ctx.is_null() {
-            // (Explicitly: an in-flight frame's completion context may still hold
-            // the layer cell, so its `IOSurfaceLayer` Drop can run later.)
-            if let Some(layer) = self.layer() {
-                layer.set_display_callback(None, core::ptr::null_mut());
-            }
             // SAFETY: `display_ctx` came from `Box::into_raw` in `loop_enter` and the
-            // layer no longer holds it.
+            // layer no longer holds it (cleared just above).
             drop(unsafe { Box::from_raw(self.display_ctx) });
             self.display_ctx = core::ptr::null_mut();
         }
+    }
+
+    /// Whether a display-callback context is installed (tests).
+    pub fn has_display_ctx(&self) -> bool {
+        !self.display_ctx.is_null()
+    }
+}
+
+impl Drop for Metal {
+    fn drop(&mut self) {
+        // PORT-ONLY (N437): clear the display callback, then free its context
+        // (a no-op when `deinit` already ran).
+        self.deinit();
 
         // ARC: `queue`/`device` (Retained) release automatically on drop; `layer`
         // (the `Option<IOSurfaceLayer>`) releases via `IOSurfaceLayer`'s

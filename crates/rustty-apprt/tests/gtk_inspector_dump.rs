@@ -302,7 +302,7 @@ fn inspector_dump() {
     };
     // SAFETY: `core` is the widget's boxed, initialized core surface; called on
     // the main thread, mirroring the apprt key controller.
-    let _ = unsafe { (*core).keyCallback(ev.clone()) };
+    let _ = unsafe { CoreSurface::keyCallback(core, ev.clone()) };
 
     // Also flush the pty so the shell's echo does not race the capture windows
     // (belt-and-braces; the key stream entry alone drives the assert).
@@ -365,7 +365,7 @@ fn inspector_dump() {
         }
         for c in [surface.core(), surface2.core()].into_iter().flatten() {
             // SAFETY: the widget's boxed, initialized core surface, main thread.
-            let _ = unsafe { (*c).keyCallback(ev.clone()) };
+            let _ = unsafe { CoreSurface::keyCallback(c, ev.clone()) };
         }
     }
     assert!(

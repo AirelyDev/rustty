@@ -317,6 +317,57 @@ pub struct RendererHandles {
     pub latest_frame: Arc<LatestFrame<ExportedFrame>>,
 }
 
+/// PORT-ONLY (N441): the core `Surface`'s renderer, in its own allocation.
+///
+/// The reference embeds the renderer by value (`Surface.renderer: Renderer`),
+/// and the render thread writes it (under `draw_mutex`) through the
+/// `*Renderer` it gets at `Thread.init`. In Rust, every main-thread
+/// `&mut Surface` / `&Surface` the apprt forms (`sizeCallback`,
+/// `contentScaleCallback`, key, mouse, focus, clipboard, ...) is a retag over
+/// every byte of the surface, which would race with those writes (Stacked and
+/// Tree Borrows; `.port/phase-2/mirihar-n441`). Out of line, a surface retag
+/// covers this pointer only. The render thread and the surface share the one
+/// raw root from `Box::into_raw`; nothing forms a `Box`/`&mut` from it while
+/// the render thread runs, except under the draw mutex (N437's discipline).
+///
+/// Freeing (P7-W7 T5b fix rounds 1 and 2): every owner of a core `Surface` frees
+/// it WITHOUT drop glue (embedded `closeSurface` through `ManuallyDrop`, GTK
+/// through `dealloc`, the init-error callers through the `MaybeUninit` slot), so a
+/// `Drop` here would never run. Each teardown site instead calls
+/// [`RendererBox::dealloc_after_deinit`] right after `Renderer::deinit`, which
+/// drops the renderer NORMALLY: its explicit `deinit` does the reference's
+/// ordered teardown (including `Metal::deinit`, which clears the layer's display
+/// callback), and the drop then releases what only `Drop` frees (the backend's
+/// queue/device/layer or EGL context, the search matches, the `Arc`s). Every
+/// explicit `deinit` leaves its field safe to drop (audit in the T5b report).
+pub struct RendererBox(*mut Renderer);
+
+impl RendererBox {
+    /// Move a freshly built renderer into its own allocation.
+    pub fn new(renderer: Renderer) -> RendererBox {
+        RendererBox(Box::into_raw(Box::new(renderer)))
+    }
+
+    /// The raw root the render thread and the surface share. Never null.
+    #[inline]
+    pub fn as_ptr(&self) -> *mut Renderer {
+        self.0
+    }
+
+    /// Drop the renderer and release its allocation, after `Renderer::deinit`.
+    ///
+    /// # Safety
+    /// `deinit` has run on the renderer; the render thread is joined or was
+    /// never spawned; this runs on the thread that owns the surface (the main
+    /// thread); nothing uses [`RendererBox::as_ptr`] afterwards, and this is
+    /// called once.
+    pub unsafe fn dealloc_after_deinit(&self) {
+        // SAFETY: `self.0` came from `Box::into_raw(Box::new(..))` in `new`, and
+        // the contract above makes this the last use.
+        unsafe { drop(Box::from_raw(self.0)) };
+    }
+}
+
 impl Renderer {
     // P7-W7 T2 (`2f0b65346`): `surfaceInit` (`Surface.zig:493` at the pin) is
     // deleted from `generic.zig` and its caller.
