@@ -64,7 +64,7 @@ mod action_tests;
 
 pub use runtime::Runtime;
 
-pub use action::{Action, Target};
+pub use action::{Action, SurfacePtr, Target};
 
 pub use seam::{App, ApprtError, CoreSurfaceHandle, Surface};
 

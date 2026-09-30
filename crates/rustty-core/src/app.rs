@@ -646,7 +646,7 @@ where
             };
             // if (self.hasSurface(parent)) break :target .{ .surface = parent };
             if unsafe { (*self_).hasSurface(parent.cast_const()) } {
-                break 'target apprt::Target::Surface(unsafe { &*parent });
+                break 'target unsafe { apprt::Target::surface_ptr(parent) };
             }
             // break :target .app;
             apprt::Target::App

@@ -690,6 +690,9 @@ extension Rustty {
             case RUSTTY_ACTION_RESET_WINDOW_SIZE:
                 resetWindowSize(app, target: target)
 
+            case RUSTTY_ACTION_RESIZE_WINDOW:
+                return resizeWindow(app, target: target, v: action.action.resize_window)
+
             case RUSTTY_ACTION_CELL_SIZE:
                 setCellSize(app, target: target, v: action.action.cell_size)
 
@@ -2068,6 +2071,30 @@ extension Rustty {
 
             default:
                 assertionFailure()
+            }
+        }
+
+        private static func resizeWindow(
+            _ app: rustty_app_t,
+            target: rustty_target_s,
+            v: rustty_action_resize_window_s) -> Bool {
+            switch target.tag {
+            case RUSTTY_TARGET_APP:
+                Rustty.logger.warning("resize window does nothing with an app target")
+                return false
+
+            case RUSTTY_TARGET_SURFACE:
+                guard let surface = target.target.surface else { return false }
+                guard let surfaceView = self.surfaceView(from: surface) else { return false }
+                guard let controller = surfaceView.window?.windowController as? TerminalController else { return false }
+                return controller.resizeWindow(
+                    surfaceView,
+                    to: NSSize(width: Double(v.width), height: Double(v.height))
+                )
+
+            default:
+                assertionFailure()
+                return false
             }
         }
 

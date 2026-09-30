@@ -3333,7 +3333,7 @@ where
                 self_,
                 true,
                 (*rt_app).perform_action(
-                    apprt::Target::Surface(&*self_),
+                    apprt::Target::surface_ptr(self_),
                     apprt::Action::CellSize(CellSize {
                         width: size.cell.width,
                         height: size.cell.height,
@@ -3370,7 +3370,7 @@ where
                     self_,
                     true,
                     (*rt_app).perform_action(
-                        apprt::Target::Surface(&*self_),
+                        apprt::Target::surface_ptr(self_),
                         apprt::Action::SizeLimit(SizeLimit {
                             min_width,
                             min_height,
@@ -3551,7 +3551,7 @@ where
                     self_,
                     true,
                     (*rt_app).perform_action(
-                        apprt::Target::Surface(&*self_),
+                        apprt::Target::surface_ptr(self_),
                         apprt::Action::SetTitle(SetTitle { title }),
                     ),
                 )
@@ -3592,7 +3592,7 @@ where
                         self_,
                         true,
                         (*rt_app).perform_action(
-                            apprt::Target::Surface(&*self_),
+                            apprt::Target::surface_ptr(self_),
                             apprt::Action::SetTitle(SetTitle { title: &title }),
                         ),
                     )
@@ -3616,7 +3616,7 @@ where
                                 self_,
                                 true,
                                 (*rt_app).perform_action(
-                                    apprt::Target::Surface(&*self_),
+                                    apprt::Target::surface_ptr(self_),
                                     apprt::Action::SetTitle(SetTitle { title: &cmd_str[0] }),
                                 ),
                             )
@@ -4381,6 +4381,11 @@ where
     // `self_`, so no protected `&mut Surface` spans the callback (N442's
     // shape). Every other arm runs in `handleMessageArms` on an unprotected
     // reborrow, as before.
+    //
+    // PORT NOTE (N459, P7-W6 T3 fix round 1): `.present_surface` is dispatched
+    // here raw-self too. Its macOS handler (`makeKeyAndOrderFront`) may fire the
+    // focus publishers synchronously and re-enter this surface
+    // (`SurfaceView.swift:40`); unverified, and cheap to make sound.
     ///
     /// # Safety
     /// `self_` is the stable Surface allocation (init's stability contract); no
@@ -4390,6 +4395,8 @@ where
         match msg {
             // .resize_window => |size| try self.resizeWindow(size),
             Message::ResizeWindow(size) => unsafe { Self::resizeWindow(self_, size) },
+            // .present_surface => try self.presentSurface(),
+            Message::PresentSurface => unsafe { Self::presentSurface(self_) },
             msg => unsafe { &mut *self_ }.handleMessageArms(msg),
         }
     }
@@ -4433,7 +4440,7 @@ where
                 //     .{ .title = slice },
                 // );
                 let _ = unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                    apprt::Target::surface_ref(&*self),
                     apprt::Action::SetTitle(SetTitle { title: slice }),
                 )?;
             }
@@ -4508,7 +4515,7 @@ where
                 //     .{ ... },
                 // );
                 let _ = unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                    apprt::Target::surface_ref(&*self),
                     apprt::Action::ColorChange(ColorChange {
                         // .kind = switch (change.target) {
                         kind: match change.target {
@@ -4550,7 +4557,7 @@ where
                 //     shape,
                 // );
                 let _ = unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                    apprt::Target::surface_ref(&*self),
                     apprt::Action::MouseShape(shape),
                 )?;
             }
@@ -4646,7 +4653,7 @@ where
                 // (performAction continues to borrow the value only for the
                 // duration of the call.)
                 let _ = unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                    apprt::Target::surface_ref(&*self),
                     apprt::Action::Pwd(Pwd { pwd: str_ }),
                 )?;
             }
@@ -4694,8 +4701,8 @@ where
             // .scrollbar => |scrollbar| self.updateScrollbar(scrollbar),
             Message::Scrollbar(scrollbar) => self.updateScrollbar(scrollbar),
 
-            // .present_surface => try self.presentSurface(),
-            Message::PresentSurface => self.presentSurface()?,
+            // (dispatched raw-self by `handleMessage`)
+            Message::PresentSurface => unreachable!("handleMessage dispatches present_surface"),
 
             // .password_input => |v| try self.passwordInput(v),
             Message::PasswordInput(v) => self.passwordInput(v)?,
@@ -4728,7 +4735,7 @@ where
                 //     log.warn("apprt failed to ring bell={}", .{err});
                 // };
                 if let Err(err) = unsafe { &*self.rt_app }
-                    .perform_action(apprt::Target::Surface(&*self), apprt::Action::RingBell)
+                    .perform_action(apprt::Target::surface_ref(&*self), apprt::Action::RingBell)
                 {
                     // log.warn("apprt failed to ring bell={}", .{err});
                     log::warn!(target: LOG_SCOPE, "apprt failed to ring bell={err:?}");
@@ -4745,7 +4752,7 @@ where
                 //     log.warn("apprt failed to report progress err={}", .{err});
                 // };
                 if let Err(err) = unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                    apprt::Target::surface_ref(&*self),
                     apprt::Action::ProgressReport(v),
                 ) {
                     // log.warn("apprt failed to report progress err={}", .{err});
@@ -4810,7 +4817,7 @@ where
                 //     log.warn("apprt failed to notify command finish={}", .{err});
                 // };
                 if let Err(err) = unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                    apprt::Target::surface_ref(&*self),
                     apprt::Action::CommandFinished(CommandFinished {
                         exit_code: v,
                         duration,
@@ -4829,7 +4836,7 @@ where
                 //     .{ .total = v },
                 // );
                 let _ = unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                    apprt::Target::surface_ref(&*self),
                     apprt::Action::SearchTotal(SearchTotal { total: v }),
                 )?;
             }
@@ -4842,7 +4849,7 @@ where
                 //     .{ .selected = v },
                 // );
                 let _ = unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                    apprt::Target::surface_ref(&*self),
                     apprt::Action::SearchSelected(SearchSelected { selected: v }),
                 )?;
             }
@@ -5012,7 +5019,7 @@ where
                 //     break :gui false;
                 // }) return;
                 if match unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                    apprt::Target::surface_ref(&*self),
                     apprt::Action::ShowChildExited(info),
                 ) {
                     Ok(shown) => shown,
@@ -5063,7 +5070,7 @@ where
             //     break :gui false;
             // }) break :terminal;
             if match unsafe { &*self.rt_app }.perform_action(
-                apprt::Target::Surface(&*self),
+                apprt::Target::surface_ref(&*self),
                 apprt::Action::ShowChildExited(info),
             ) {
                 Ok(shown) => shown,
@@ -5368,7 +5375,7 @@ where
         //     log.warn("apprt failed to set secure input state err={}", .{err});
         // };
         if let Err(err) = unsafe { &*self.rt_app }.perform_action(
-            apprt::Target::Surface(&*self),
+            apprt::Target::surface_ref(&*self),
             apprt::Action::SecureInput(if v { SecureInput::On } else { SecureInput::Off }),
         ) {
             // We ignore this error because we don't want to fail this
@@ -5853,7 +5860,7 @@ where
             //     .pointer,
             // );
             let _ = unsafe { &*self.rt_app }.perform_action(
-                apprt::Target::Surface(&*self),
+                apprt::Target::surface_ref(&*self),
                 apprt::Action::MouseShape(terminal::mouse::Shape::Pointer),
             )?;
 
@@ -5865,7 +5872,7 @@ where
                 //     link,
                 // );
                 let _ = unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                    apprt::Target::surface_ref(&*self),
                     apprt::Action::MouseOverLink(MouseOverLink { url: &link }),
                 )?;
             }
@@ -5886,7 +5893,7 @@ where
             //     self.io.terminal.mouse_shape,
             // );
             let _ = unsafe { &*self.rt_app }.perform_action(
-                apprt::Target::Surface(&*self),
+                apprt::Target::surface_ref(&*self),
                 apprt::Action::MouseShape(unsafe { (*self.io.as_ptr()).terminal.mouse_shape }),
             )?;
             // _ = try self.rt_app.performAction(
@@ -5895,7 +5902,7 @@ where
             //     .{ .url = "" },
             // );
             let _ = unsafe { &*self.rt_app }.perform_action(
-                apprt::Target::Surface(&*self),
+                apprt::Target::surface_ref(&*self),
                 apprt::Action::MouseOverLink(MouseOverLink { url: b"" }),
             )?;
             // try self.queueRender();
@@ -5920,7 +5927,7 @@ where
         //     log.warn("failed to notify app of renderer health change err={}", .{err});
         // };
         if let Err(err) = unsafe { &*self.rt_app }.perform_action(
-            apprt::Target::Surface(&*self),
+            apprt::Target::surface_ref(&*self),
             apprt::Action::RendererHealth(health),
         ) {
             // log.warn("failed to notify app of renderer health change err={}", .{err});
@@ -5942,7 +5949,7 @@ where
         //     log.warn("failed to notify app of scrollbar change err={}", .{err});
         // };
         if let Err(err) = unsafe { &*self.rt_app }.perform_action(
-            apprt::Target::Surface(&*self),
+            apprt::Target::surface_ref(&*self),
             apprt::Action::Scrollbar(scrollbar),
         ) {
             // log.warn("failed to notify app of scrollbar change err={}", .{err});
@@ -5962,7 +5969,7 @@ where
         //     log.warn("failed to notify app of frame present err={}", .{err});
         // };
         if let Err(err) = unsafe { &*self.rt_app }
-            .perform_action(apprt::Target::Surface(&*self), apprt::Action::Render)
+            .perform_action(apprt::Target::surface_ref(&*self), apprt::Action::Render)
         {
             // log.warn("failed to notify app of frame present err={}", .{err});
             log::warn!(target: LOG_SCOPE, "failed to notify app of frame present err={err:?}");
@@ -5974,7 +5981,19 @@ where
     // fn notifyConfigConditionalState(self: *Surface) void {
     //
     // PORT NOTE: the C13 colorSchemeCallback (:4720) callsite is live.
-    fn notifyConfigConditionalState(&mut self) {
+    //
+    // PORT NOTE (N456, ruling 57): raw-self. The host's soft `reload_config`
+    // handler re-enters this surface synchronously and writes it: macOS
+    // `reloadConfig(surface:soft:)` -> `rustty_surface_update_config` ->
+    // `updateConfig`, GTK `reload_config_inner` -> `updateConfig`. So no
+    // protected reference to the surface may span `perform_action`; it reads
+    // `rt_app` by place and passes `Target::surface_ptr(self_)`. Proof:
+    // `.port/phase-2/mirihar-n456`.
+    ///
+    /// # Safety
+    /// `self_` is the live, stable core surface; main thread; no protected
+    /// reference to it may span the call.
+    unsafe fn notifyConfigConditionalState(self_: *mut Self) {
         // _ = self.rt_app.performAction(
         //     .{ .surface = self },
         //     .reload_config,
@@ -5982,8 +6001,10 @@ where
         // ) catch |err| {
         //     log.warn("failed to notify app of config state change err={}", .{err});
         // };
-        if let Err(err) = unsafe { &*self.rt_app }.perform_action(
-            apprt::Target::Surface(&*self),
+        let rt_app: &A = unsafe { &*(*self_).rt_app };
+        if let Err(err) = rt_app.perform_action(
+            // SAFETY: `self_` is live for the call (this fn's contract).
+            unsafe { apprt::Target::surface_ptr(self_) },
             apprt::Action::ReloadConfig(ReloadConfig { soft: true }),
         ) {
             // log.warn("failed to notify app of config state change err={}", .{err});
@@ -6175,7 +6196,7 @@ where
         // );
         if let Some(title) = &config.title {
             let _ = unsafe { &*self.rt_app }.perform_action(
-                apprt::Target::Surface(&*self),
+                apprt::Target::surface_ref(&*self),
                 apprt::Action::SetTitle(SetTitle { title }),
             )?;
         }
@@ -6187,7 +6208,7 @@ where
         //     .{ .config = config },
         // );
         let _ = unsafe { &*self.rt_app }.perform_action(
-            apprt::Target::Surface(&*self),
+            apprt::Target::surface_ref(&*self),
             apprt::Action::ConfigChange(ConfigChange { config }),
         )?;
 
@@ -6264,7 +6285,7 @@ where
         //     .{ .width = final_width, .height = final_height },
         // ) catch return error.AppActionFailed;
         match unsafe { &*self.rt_app }.perform_action(
-            apprt::Target::Surface(&*self),
+            apprt::Target::surface_ref(&*self),
             apprt::Action::InitialSize(InitialSize {
                 width: final_width,
                 height: final_height,
@@ -6286,7 +6307,9 @@ where
     //
     // PORT NOTE (N456): raw-self. The surface is read in short reborrows that
     // end before `perform_action`, whose host callback resizes (so writes)
-    // this surface on macOS; the callback gets only the shared `Target`.
+    // this surface on macOS; the callback gets only the `Target`, a raw pointer
+    // with no protector (`Target::surface_ptr(self_)`, P7-W6 T3). Proof:
+    // `.port/phase-2/mirihar-n456`.
     ///
     /// # Safety
     /// As [`Surface::handleMessage`].
@@ -6346,7 +6369,7 @@ where
         // );
         let rt_app: &A = unsafe { &*(*self_).rt_app };
         let _ = rt_app.perform_action(
-            apprt::Target::Surface(unsafe { &*self_ }),
+            unsafe { apprt::Target::surface_ptr(self_) },
             apprt::Action::ResizeWindow(ResizeWindow { width, height }),
         )?;
         Ok(())
@@ -7237,7 +7260,7 @@ where
             //     log.warn("apprt failed selection_changed notification err={}", .{err});
             // };
             if let Err(err) = unsafe { &*self.rt_app }.perform_action(
-                apprt::Target::Surface(&*self),
+                apprt::Target::surface_ref(&*self),
                 apprt::Action::SelectionChanged,
             ) {
                 // log.warn("apprt failed selection_changed notification err={}", .{err});
@@ -7345,7 +7368,7 @@ where
         //     .{ .width = size.width, .height = size.height },
         // );
         let _ = unsafe { &*self.rt_app }.perform_action(
-            apprt::Target::Surface(&*self),
+            apprt::Target::surface_ref(&*self),
             apprt::Action::CellSize(CellSize {
                 width: size.width,
                 height: size.height,
@@ -8053,7 +8076,7 @@ where
                     //     self.io.terminal.mouse_shape,
                     // );
                     let _ = unsafe { &*this.rt_app }.perform_action(
-                        apprt::Target::Surface(&*this),
+                        apprt::Target::surface_ref(&*this),
                         apprt::Action::MouseShape(unsafe {
                             (*this.io.as_ptr()).terminal.mouse_shape
                         }),
@@ -8064,7 +8087,7 @@ where
                     //     .{ .url = "" },
                     // );
                     let _ = unsafe { &*this.rt_app }.perform_action(
-                        apprt::Target::Surface(&*this),
+                        apprt::Target::surface_ref(&*this),
                         apprt::Action::MouseOverLink(MouseOverLink { url: b"" }),
                     )?;
                     // try self.queueRender();
@@ -8098,7 +8121,7 @@ where
         .key_to_mouse_shape()
         {
             let _ = unsafe { &*this.rt_app }.perform_action(
-                apprt::Target::Surface(&*this),
+                apprt::Target::surface_ref(&*this),
                 apprt::Action::MouseShape(shape),
             )?;
         }
@@ -8416,7 +8439,7 @@ where
                 //
                 // (`trigger` is read at the top of this arm; PORT NOTE there.)
                 if let Err(err) = unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::KeySequence(KeySequence::Trigger(trigger)),
                 ) {
                     // log.warn("failed to notify app of key sequence err={}", .{err});
@@ -8671,7 +8694,7 @@ where
         //     );
         // };
         if let Err(err) = unsafe { &*self.rt_app }.perform_action(
-            apprt::Target::Surface(&*self),
+            apprt::Target::surface_ref(&*self),
             apprt::Action::KeyTable(KeyTable::DeactivateAll),
         ) {
             // log.warn("failed to notify app of key table err={}", .{err});
@@ -8765,7 +8788,7 @@ where
         //     );
         // };
         if let Err(err) = unsafe { &*self.rt_app }.perform_action(
-            apprt::Target::Surface(&*self),
+            apprt::Target::surface_ref(&*self),
             apprt::Action::KeySequence(KeySequence::End),
         ) {
             // log.warn("failed to notify app of key sequence end err={}", .{err});
@@ -11372,7 +11395,7 @@ where
         //     action,
         // )) return;
         if unsafe { &*self.rt_app }.perform_action(
-            apprt::Target::Surface(&*self),
+            apprt::Target::surface_ref(&*self),
             apprt::Action::OpenUrl(action),
         )? {
             return Ok(());
@@ -11607,7 +11630,7 @@ where
                 //     self.io.terminal.mouse_shape,
                 // );
                 let _ = unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                    apprt::Target::surface_ref(&*self),
                     apprt::Action::MouseShape(unsafe { (*self.io.as_ptr()).terminal.mouse_shape }),
                 )?;
                 // _ = try self.rt_app.performAction(
@@ -11616,7 +11639,7 @@ where
                 //     .{ .url = "" },
                 // );
                 let _ = unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                    apprt::Target::surface_ref(&*self),
                     apprt::Action::MouseOverLink(MouseOverLink { url: b"" }),
                 )?;
                 // try self.queueRender();
@@ -12000,10 +12023,23 @@ where
     // pub fn colorSchemeCallback(self: *Surface, scheme: apprt.ColorScheme) !void {
     //
     // (the inferred `!void` is the [`Error`] union.)
-    pub fn colorSchemeCallback(&mut self, scheme: apprt::ColorScheme) -> Result<(), Error> {
+    //
+    // PORT NOTE (N456, ruling 57): raw-self. `notifyConfigConditionalState`
+    // runs the host's soft `reload_config` handler, which writes this surface
+    // (`updateConfig`) synchronously. `this` is an unprotected local reborrow,
+    // dead across that call and taken afresh after it.
+    ///
+    /// # Safety
+    /// `self_` is the live, stable core surface; main thread; no protected
+    /// reference to it may span the call.
+    pub unsafe fn colorSchemeCallback(
+        self_: *mut Self,
+        scheme: apprt::ColorScheme,
+    ) -> Result<(), Error> {
+        let this = unsafe { &mut *self_ };
         // Crash metadata in case we crash in here
         // crash.sentry.thread_state = self.crashThreadState();
-        crash::sentry::setThreadState(self.crashThreadState());
+        crash::sentry::setThreadState(this.crashThreadState());
         // defer crash.sentry.thread_state = null;
         // ([ADV 6.1] — the Drop guard clears at every exit below.)
         let _thread_state = ThreadStateGuard;
@@ -12019,19 +12055,22 @@ where
 
         // If our scheme didn't change, then we don't do anything.
         // if (self.config_conditional_state.theme == new_scheme) return;
-        if self.config_conditional_state.theme == new_scheme {
+        if this.config_conditional_state.theme == new_scheme {
             return Ok(());
         }
 
         // Setup our conditional state which has the current color theme.
         // self.config_conditional_state.theme = new_scheme;
-        self.config_conditional_state.theme = new_scheme;
+        this.config_conditional_state.theme = new_scheme;
         // self.notifyConfigConditionalState();
-        self.notifyConfigConditionalState();
+        //
+        // (`this` is dead from here: the host callback writes the surface.)
+        unsafe { Self::notifyConfigConditionalState(self_) };
 
         // If mode 2031 is on, then we report the change live.
         // self.queueIo(.{ .color_scheme_report = .{ .force = false } }, .unlocked);
-        self.queueIo(
+        let this = unsafe { &mut *self_ };
+        this.queueIo(
             termio::Message::ColorSchemeReport { force: false },
             termio::termio_impl::MutexState::Unlocked,
         );
@@ -12098,7 +12137,7 @@ where
         //     log.warn("apprt failed to set mouse visibility err={}", .{err});
         // };
         if let Err(err) = unsafe { &*self.rt_app }.perform_action(
-            apprt::Target::Surface(&*self),
+            apprt::Target::surface_ref(&*self),
             apprt::Action::MouseVisibility(MouseVisibility::Hidden),
         ) {
             // log.warn("apprt failed to set mouse visibility err={}", .{err});
@@ -12122,7 +12161,7 @@ where
         //     log.warn("apprt failed to set mouse visibility err={}", .{err});
         // };
         if let Err(err) = unsafe { &*self.rt_app }.perform_action(
-            apprt::Target::Surface(&*self),
+            apprt::Target::surface_ref(&*self),
             apprt::Action::MouseVisibility(MouseVisibility::Visible),
         ) {
             // log.warn("apprt failed to set mouse visibility err={}", .{err});
@@ -12158,10 +12197,14 @@ where
     // surface synchronously (the macOS host calls
     // `rustty_surface_inherited_config` there, reading `font_size` and the pwd
     // through the parent pointer). Those three arms touch the surface only by
-    // place through `self_` and a shared `Target`; `this`, an unprotected local
+    // place through `self_` and the `Target`; `this`, an unprotected local
     // reborrow the other arms use, is dead in them. Audit of the other
     // `perform_action` arms: the macOS host's handlers re-enter no surface for
-    // them. Proof: `.port/phase-2/mirihar-n441`.
+    // them, except `reset_window_size`, whose handler resizes the window
+    // synchronously and so WRITES this surface (`rustty_surface_set_size` ->
+    // `sizeCallback`). That is sound because `Target::Surface` is a raw pointer
+    // with no protector (N456, P7-W6 T3) and `this` is dead once the arm has
+    // built the target. Proofs: `.port/phase-2/mirihar-n441`, `mirihar-n456`.
     ///
     /// # Safety
     /// `self_` is the stable Surface allocation (init's stability contract); no
@@ -12208,8 +12251,10 @@ where
                 //     {},
                 // ),
                 binding::ScopedApp::Undo => {
-                    return Ok(unsafe { &*this.rt_app }
-                        .perform_action(apprt::Target::Surface(&*this), apprt::Action::Undo)?);
+                    return Ok(unsafe { &*this.rt_app }.perform_action(
+                        apprt::Target::surface_ref(&*this),
+                        apprt::Action::Undo,
+                    )?);
                 }
 
                 // .redo => return try self.rt_app.performAction(
@@ -12218,8 +12263,10 @@ where
                 //     {},
                 // ),
                 binding::ScopedApp::Redo => {
-                    return Ok(unsafe { &*this.rt_app }
-                        .perform_action(apprt::Target::Surface(&*this), apprt::Action::Redo)?);
+                    return Ok(unsafe { &*this.rt_app }.perform_action(
+                        apprt::Target::surface_ref(&*this),
+                        apprt::Action::Redo,
+                    )?);
                 }
 
                 // else => try self.app.performAction(
@@ -12443,7 +12490,7 @@ where
                 //     .{ .needle = "" },
                 // );
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::StartSearch(StartSearch { needle: b"" }),
                 )?);
             }
@@ -12464,7 +12511,7 @@ where
                 //     .{ .needle = selection },
                 // );
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::StartSearch(StartSearch { needle: &selection }),
                 )?);
             }
@@ -12494,7 +12541,7 @@ where
                 //     {},
                 // );
                 let _ = unsafe { &*this.rt_app }
-                    .perform_action(apprt::Target::Surface(&*this), apprt::Action::EndSearch)?;
+                    .perform_action(apprt::Target::surface_ref(&*this), apprt::Action::EndSearch)?;
 
                 // return performed;
                 return Ok(performed);
@@ -12953,7 +13000,7 @@ where
             // ),
             binding::ScopedSurface::CopyTitleToClipboard => {
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::CopyTitleToClipboard,
                 )?);
             }
@@ -13078,7 +13125,7 @@ where
             // ),
             binding::ScopedSurface::PromptSurfaceTitle => {
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::PromptTitle(PromptTitle::Surface),
                 )?);
             }
@@ -13090,7 +13137,7 @@ where
             // ),
             binding::ScopedSurface::PromptTabTitle => {
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::PromptTitle(PromptTitle::Tab),
                 )?);
             }
@@ -13111,7 +13158,7 @@ where
                 //     .{ .title = title },
                 // );
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::SetTitle(SetTitle { title: v }),
                 )?);
             }
@@ -13123,7 +13170,7 @@ where
             // ),
             binding::ScopedSurface::PromptWindowTitle => {
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::PromptTitle(PromptTitle::Window),
                 )?);
             }
@@ -13142,7 +13189,7 @@ where
                 //     .{ .title = title },
                 // );
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::SetTabTitle(SetTitle { title: v }),
                 )?);
             }
@@ -13161,7 +13208,7 @@ where
                 //     .{ .title = title },
                 // );
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::SetWindowTitle(SetTitle { title: v }),
                 )?);
             }
@@ -13385,7 +13432,7 @@ where
             // (N442: re-entrant, so by place through `self_`.)
             binding::ScopedSurface::NewTab => {
                 return Ok(unsafe { &*(*self_).rt_app }.perform_action(
-                    apprt::Target::Surface(unsafe { &*self_ }),
+                    unsafe { apprt::Target::surface_ptr(self_) },
                     apprt::Action::NewTab,
                 )?);
             }
@@ -13401,7 +13448,7 @@ where
             // ),
             binding::ScopedSurface::CloseTab(v) => {
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::CloseTab(match v {
                         binding::CloseTabMode::This => apprt::action::CloseTabMode::This,
                         binding::CloseTabMode::Other => apprt::action::CloseTabMode::Other,
@@ -13433,7 +13480,7 @@ where
             | binding::ScopedSurface::LastTab
             | binding::ScopedSurface::GotoTab(_)) => {
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::GotoTab(match sfc {
                         binding::ScopedSurface::PreviousTab => apprt::action::GotoTab::PREVIOUS,
                         binding::ScopedSurface::NextTab => apprt::action::GotoTab::NEXT,
@@ -13465,7 +13512,7 @@ where
             // ),
             binding::ScopedSurface::MoveTab(position) => {
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::MoveTab(apprt::action::MoveTab { amount: position }),
                 )?);
             }
@@ -13477,7 +13524,7 @@ where
             // ),
             binding::ScopedSurface::MoveTabToNewWindow => {
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::MoveTabToNewWindow,
                 )?);
             }
@@ -13500,7 +13547,7 @@ where
             // (N442: re-entrant, so by place through `self_`.)
             binding::ScopedSurface::NewSplit(direction) => {
                 return Ok(unsafe { &*(*self_).rt_app }.perform_action(
-                    apprt::Target::Surface(unsafe { &*self_ }),
+                    unsafe { apprt::Target::surface_ptr(self_) },
                     apprt::Action::NewSplit(match direction {
                         binding::SplitDirection::Right => apprt::action::SplitDirection::Right,
                         binding::SplitDirection::Left => apprt::action::SplitDirection::Left,
@@ -13532,7 +13579,7 @@ where
             // binding tag onto the same-named apprt `GotoSplit` variant.)
             binding::ScopedSurface::GotoSplit(direction) => {
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::GotoSplit(match direction {
                         binding::SplitFocusDirection::Previous => {
                             apprt::action::GotoSplit::Previous
@@ -13556,7 +13603,7 @@ where
             // ),
             binding::ScopedSurface::GotoWindow(direction) => {
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::GotoWindow(match direction {
                         binding::GotoWindow::Previous => apprt::action::GotoWindow::Previous,
                         binding::GotoWindow::Next => apprt::action::GotoWindow::Next,
@@ -13579,7 +13626,7 @@ where
             // ),
             binding::ScopedSurface::ResizeSplit(value) => {
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::ResizeSplit(apprt::action::ResizeSplit {
                         amount: value.1,
                         direction: match value.0 {
@@ -13607,7 +13654,7 @@ where
             // ),
             binding::ScopedSurface::EqualizeSplits => {
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::EqualizeSplits,
                 )?);
             }
@@ -13619,7 +13666,7 @@ where
             // ),
             binding::ScopedSurface::ToggleSplitZoom => {
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::ToggleSplitZoom,
                 )?);
             }
@@ -13634,7 +13681,7 @@ where
                 //     if (self.readonly) .on else .off,
                 // );
                 let _ = unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::Readonly(if this.readonly {
                         apprt::action::Readonly::On
                     } else {
@@ -13652,7 +13699,7 @@ where
             // ),
             binding::ScopedSurface::ResetWindowSize => {
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::ResetWindowSize,
                 )?);
             }
@@ -13664,7 +13711,7 @@ where
             // ),
             binding::ScopedSurface::ToggleMaximize => {
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::ToggleMaximize,
                 )?);
             }
@@ -13681,7 +13728,7 @@ where
             // ),
             binding::ScopedSurface::ToggleFullscreen => {
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::ToggleFullscreen(
                         match this.config.macos_non_native_fullscreen {
                             configpkg::value_types::NonNativeFullscreen::False => {
@@ -13708,7 +13755,7 @@ where
             // ),
             binding::ScopedSurface::ToggleWindowDecorations => {
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::ToggleWindowDecorations,
                 )?);
             }
@@ -13720,7 +13767,7 @@ where
             // ),
             binding::ScopedSurface::ToggleTabOverview => {
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::ToggleTabOverview,
                 )?);
             }
@@ -13732,7 +13779,7 @@ where
             // ),
             binding::ScopedSurface::ToggleWindowFloatOnTop => {
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::FloatWindow(apprt::action::FloatWindow::Toggle),
                 )?);
             }
@@ -13744,7 +13791,7 @@ where
             // ),
             binding::ScopedSurface::ToggleSecureInput => {
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::SecureInput(SecureInput::Toggle),
                 )?);
             }
@@ -13768,7 +13815,7 @@ where
             // ),
             binding::ScopedSurface::ToggleCommandPalette => {
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::ToggleCommandPalette,
                 )?);
             }
@@ -13780,7 +13827,7 @@ where
             // ),
             binding::ScopedSurface::ToggleBackgroundOpacity => {
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::ToggleBackgroundOpacity,
                 )?);
             }
@@ -13792,7 +13839,7 @@ where
             // ),
             binding::ScopedSurface::ShowOnScreenKeyboard => {
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::ShowOnScreenKeyboard,
                 )?);
             }
@@ -13833,7 +13880,7 @@ where
             // ),
             binding::ScopedSurface::Inspector(mode) => {
                 return Ok(unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::Inspector(match mode {
                         binding::InspectorMode::Toggle => apprt::action::Inspector::Toggle,
                         binding::InspectorMode::Show => apprt::action::Inspector::Show,
@@ -13851,8 +13898,10 @@ where
             //     {},
             // ),
             binding::ScopedSurface::CloseWindow => {
-                return Ok(unsafe { &*this.rt_app }
-                    .perform_action(apprt::Target::Surface(&*this), apprt::Action::CloseWindow)?);
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::surface_ref(&*this),
+                    apprt::Action::CloseWindow,
+                )?);
             }
 
             // inline .activate_key_table,
@@ -13957,7 +14006,7 @@ where
                 //     );
                 // };
                 if let Err(err) = unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::KeyTable(KeyTable::Activate(name)),
                 ) {
                     // log.warn("failed to notify app of key table err={}", .{err});
@@ -14008,7 +14057,7 @@ where
                 //     );
                 // };
                 if let Err(err) = unsafe { &*this.rt_app }.perform_action(
-                    apprt::Target::Surface(&*this),
+                    apprt::Target::surface_ref(&*this),
                     apprt::Action::KeyTable(KeyTable::Deactivate),
                 ) {
                     // log.warn("failed to notify app of key table err={}", .{err});
@@ -15706,7 +15755,7 @@ where
         //     },
         // );
         let _ = unsafe { &*self.rt_app }.perform_action(
-            apprt::Target::Surface(&*self),
+            apprt::Target::surface_ref(&*self),
             apprt::Action::DesktopNotification(DesktopNotification { title, body }),
         )?;
         Ok(())
@@ -15734,14 +15783,21 @@ where
     //
     // (Surface.zig:6023 — the C10 range's 6014-end tail; the inferred
     // `!void` is the performAction error.)
-    fn presentSurface(&mut self) -> Result<(), Error> {
+    //
+    // PORT NOTE (N459): raw-self; see `handleMessage`.
+    ///
+    /// # Safety
+    /// As [`Surface::handleMessage`].
+    unsafe fn presentSurface(self_: *mut Self) -> Result<(), Error> {
         // _ = try self.rt_app.performAction(
         //     .{ .surface = self },
         //     .present_terminal,
         //     {},
         // );
-        let _ = unsafe { &*self.rt_app }.perform_action(
-            apprt::Target::Surface(&*self),
+        let rt_app: &A = unsafe { &*(*self_).rt_app };
+        let _ = rt_app.perform_action(
+            // SAFETY: `self_` is live for the call (this fn's contract).
+            unsafe { apprt::Target::surface_ptr(self_) },
             apprt::Action::PresentTerminal,
         )?;
         Ok(())
@@ -16341,7 +16397,7 @@ impl<A: apprt::App + 'static> Surface<A> {
         // callsites.
         unsafe {
             (*(*self_).rt_app).perform_action(
-                apprt::Target::Surface(&*self_),
+                apprt::Target::surface_ptr(self_),
                 apprt::Action::ExportTerminalIO(apprt::action::ExportTerminalIO { contents }),
             )
         }

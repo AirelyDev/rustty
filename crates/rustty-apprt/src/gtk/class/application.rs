@@ -3170,7 +3170,7 @@ impl Application {
                         //
                         // SAFETY: `findSurfaceByID`/`focusedSurface` return
                         // live app-thread surfaces (validated above).
-                        if !action::new_tab(Target::Surface(unsafe { &*surface }), overrides) {
+                        if !action::new_tab(unsafe { Target::surface_ptr(surface) }, overrides) {
                             log::warn!(target: LOG_SCOPE, "new-tab: unable to create tab");
                         }
                     } else {
@@ -3270,7 +3270,12 @@ impl Application {
                     // SAFETY: as above — app-thread-only access to the surface
                     // backrefs the core app owns.
                     let core = unsafe { &*surface }.core();
-                    if let Err(err) = unsafe { &mut *core }.colorSchemeCallback(scheme) {
+                    // N456 (ruling 57): raw-self, because the soft
+                    // `reload_config` it performs re-enters this surface
+                    // (`reload_config_inner` -> `updateConfig`).
+                    if let Err(err) =
+                        unsafe { rustty_core::surface::Surface::colorSchemeCallback(core, scheme) }
+                    {
                         // log.warn(
                         //     "unable to tell surface about color scheme change err={}",
                         //     .{err},
@@ -3913,7 +3918,7 @@ mod action {
         CloseTabMode, GotoSplit, GotoTab, GotoWindow, PromptTitle, ResizeSplitDirection,
         SplitDirection,
     };
-    use rustty_apprt_api::{ApprtError, CoreSurfaceHandle, Surface as _, Target};
+    use rustty_apprt_api::{ApprtError, CoreSurfaceHandle, Surface as _, SurfacePtr, Target};
     use rustty_datastruct::split_tree::{Direction, Goto, SpatialDirection};
 
     use super::super::overrides::TabOverrides;
@@ -3930,7 +3935,10 @@ mod action {
     /// is not yet wired (pre-`constructed`). Same liveness contract as
     /// [`action_render`](super::action_render): the widget is alive during the
     /// synchronous app-thread dispatch.
-    fn widget<C: CoreSurfaceHandle>(v: &C) -> Option<GhosttySurface> {
+    //
+    // PORT NOTE (N456): `v` is the target's raw `*CoreSurface`; only its
+    // `rt_surface` field is read (a transient reference, no host call inside).
+    fn widget<C: CoreSurfaceHandle>(v: SurfacePtr<'_, C>) -> Option<GhosttySurface> {
         let rt = v.rt_surface_ptr().cast::<ApprtSurface>();
         if rt.is_null() {
             return None;

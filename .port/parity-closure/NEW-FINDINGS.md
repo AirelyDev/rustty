@@ -9285,14 +9285,14 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (Ruling 55). **severity**: medium. It is aliasing-model UB today on every `reset_window_size`
   keybind on macOS; no miscompile has been observed. **kind**: port soundness (Stacked Borrows and
   Tree Borrows; a function-argument protector). **Not upstream**: Zig's `*Surface` has no protector.
-  **state**: PARTIAL. The protected `&mut Surface` on the `resize_window` path is gone (P7-W6 T1). The
-  shared `Target` protector is OPEN → P7-W6 T3.
+  **state**: CLOSED (fixed, P7-W6 T3); was PARTIAL (T1). Widened by T3 fix round 1 (ruling 57) to the
+  colour-scheme soft-reload chain, also fixed there. The residual receiver protectors are **N459**.
 - **shape**: an action whose host handler resizes the window writes the core surface inside the
   callback. That write happens while `perform_action`'s shared `apprt::Target::Surface(&Surface)`
   argument protects the whole surface.
   - `reset_window_size` (**live**):
     - core: `performBindingAction`'s arm passes `Target::Surface(&*this)`
-      (`crates/rustty-core/src/surface.rs:13606`).
+      (`crates/rustty-core/src/surface.rs:13700-13705` after T3; `:13606` at T1).
     - Swift: `Rustty.App.swift:2053` `resetWindowSize` posts a notification, and NotificationCenter
       runs its observers synchronously. `onResetWindowSize` → `returnToDefaultSize` →
       `apply(to:)` → `window.setFrame(rect, display: true)` (`TerminalController.swift:1762`).
@@ -9321,6 +9321,106 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   and `ud371_csi_8_t_overflow_returns_without_panicking` drive `Surface::handleMessage` through the raw
   root on a fabricated surface. Miri clean (SB), macOS 2026-09-29. Their test host does not re-enter,
   so they cover the raw-self half only; the protector half is for T3's harness.
+- **fix** (P7-W6 T3, ruling 55): `rustty_apprt_api::Target::Surface` carries a
+  `SurfacePtr<'s, C>` (`NonNull<C>` + `PhantomData<&'s C>`, re-exported from the crate root), not a
+  `&'s C`. It has no protector, like the reference's `*CoreSurface`.
+  - Constructors: `Target::surface_ref(&C)` (the reference is dead at return; used at the `&self` /
+    `&mut self` / local-reborrow `this` sites) and `unsafe Target::surface_ptr(*const C)` (the raw-self
+    sites keep the raw root's provenance: `resizeWindow`, `App::newWindow`'s parent, the search and
+    `performBindingAction` `self_` arms, `rustty_surface_split_resize` / `_split_equalize`, the GTK
+    `new-tab` IPC).
+  - Consumers read only `rt_surface`, through `SurfacePtr::rt_surface_ptr` (a transient `&C` for the
+    one trait call): `Target::cval`, the embedded `performPreAction` `set_title` arm, the GTK
+    `widget()` / `action_render` resolution. No consumer holds a reference across a host call.
+  - Every core, apprt-embedded, apprt-c, GTK and test constructor was updated (about 90 sites). The C
+    projection `rustty_target_s` / `TargetC` is unchanged: the embed-ABI gates pass, and
+    `target_surface_is_a_raw_pointer_to_the_core_surface` pins its size and the projected pointer.
+  - No behaviour change, no UD.
+- **proof**: `.port/phase-2/mirihar-n456` (16 seeds, SB and TB). `n456_shipped_*` (key-route and
+  binding-action `reset_window_size`, tick-route `resize_window`) are UB under both;
+  `n456_fixed_ref_held_*` (the raw target, but a whole `&C` held across the callback) are UB under
+  both; `n456_fixed_*` and `n456_fixed_all` are CLEAN under both. Live route:
+  `crates/rustty-apprt-c/tests/macos_window_host.rs::reset_window_size_host_callback_resizes_the_target_surface`
+  (its action callback calls `rustty_surface_set_size` on the target surface on `RESET_WINDOW_SIZE`;
+  passes with `RUSTTY_REQUIRE_METAL=1`). `target_surface_is_a_raw_pointer_to_the_core_surface`
+  (apprt-api) is Miri clean under SB and TB. LIFETIMES row
+  `src/apprt/action.zig Target surface`.
+- **widening, fix round 1 (ruling 57): the colour-scheme soft-reload chain** (live on macOS and GTK).
+  - **shape**: `colorSchemeCallback(&mut self)` (embedded and core) → `notifyConfigConditionalState(&mut
+    self)` performs `ReloadConfig { soft: true }` on the surface while both receiver protectors are
+    live. The raw target alone does not help.
+    - macOS: `rustty_surface_set_color_scheme` (every system appearance change,
+      `BaseTerminalController.swift:1535`). The host's `configReload` → `reloadConfig(surface:soft:)`
+      (`Rustty.App.swift:164-168`) calls `rustty_surface_update_config` →
+      `(*surface).core_surface.updateConfig(..)` synchronously, a write to the same surface.
+    - GTK: `handleStyleManagerDark` → `color_scheme_thunk`, per surface; `reload_config_inner` →
+      `(&mut *core).updateConfig(..)` on the target.
+  - **fix**: raw-self throughout.
+    - `rustty_surface_set_color_scheme` → embedded `Surface::colorSchemeCallback(self_: *mut, ..)` →
+      core `Surface::colorSchemeCallback(self_: *mut, ..)` (a local reborrow `this`, dead across the
+      notify and taken afresh for `queueIo`) → `notifyConfigConditionalState(self_: *mut)` (`rt_app`
+      by place, `Target::surface_ptr(self_)`).
+    - The GTK thunk calls `rustty_core::surface::Surface::colorSchemeCallback(core, ..)`.
+  - **proof**: `.port/phase-2/mirihar-n456`. `n456_t3_{macos,gtk}_color_scheme` (the T3 shape: raw
+    target, `&mut` receivers) are UB under SB and TB; `n456_fixed_{macos,gtk}_color_scheme` are CLEAN
+    under both. Live:
+    `macos_window_host::color_scheme_soft_reload_host_callback_updates_the_target_surface` (its
+    `cb_action` calls `rustty_surface_update_config` on `RELOAD_CONFIG` with a surface target; entered
+    through `rustty_surface_set_color_scheme`). LIFETIMES row
+    `src/Surface.zig Surface [self across rt_app.performAction: colorSchemeCallback]`.
+  - Also in fix round 1: `presentSurface` is raw-self, dispatched from the raw `handleMessage` (see
+    N459).
+- **known limits** (the `Target` is raw, but these methods still hold their own `&mut self` / `&self`
+  receiver protector across `perform_action`). The audit is of the Swift action handlers in
+  `Rustty.App.swift` and of their notification observers, plus the GTK handlers (N442's audit):
+  - **audited as not re-entrant** (the host handler writes no surface synchronously):
+    - the `handleMessageArms` arms: `set_title`, `pwd`, mouse shape and visibility, clipboard,
+      `child_exited`, bell, colour change, renderer health, scrollbar, search, progress, and the
+      rest. None of their Swift handlers calls a `rustty_surface_*` export; they set `SurfaceView`
+      properties or post notifications.
+    - `setCellSize`: `cell_size`, handled with `DispatchQueue.main.async`.
+    - `updateConfig`: `config_change`. The observers post `rusttyConfigDidChange`;
+      `syncAppearance` calls only the app-level `rustty_set_window_background_blur` or defers with
+      `DispatchQueue.main.async`.
+    - `mouseRefreshLinks`: `mouse_over_link` sets `hoverUrl`.
+    - `redraw`: `render`. It is a GTK `queue_draw`; the macOS host does not re-enter.
+    - `showDesktopNotification`: `UNUserNotificationCenter`.
+    - embedded `queueInspectorRender`: `render_inspector` posts `inspectorNeedsDisplay`.
+  - **unverified**, recorded as **N459**:
+    - `presentSurface` (`present_terminal`): `makeKeyAndOrderFront` may fire the focus publishers
+      synchronously (`SurfaceView.swift:40`). Made raw-self in fix round 1 (cheap: one
+      `handleMessage` arm), so it is no longer a limit.
+    - `recomputeInitialSize` (`initial_size`): the handler sets `surfaceView.initialSize`, which the
+      SwiftUI `idealWidth` binding reads. Whether that lays out and re-enters synchronously is not
+      verified. Its callers (`setCellSize` ← `setFontSize` ← many `&mut self` paths) make raw-self a
+      wide change, so it stays OPEN.
+
+## N459 — `recomputeInitialSize` holds a protected `&mut Surface` across the `initial_size` host callback (re-entry unverified)
+
+- **id**: N459. P7-W6 T3 fix round 1 (ruling 57, review minor 2). **severity**: low. It is
+  aliasing-model UB only if the macOS `initial_size` handler re-enters the surface synchronously, which
+  is unverified; no miscompile has been observed. **kind**: port soundness (a function-argument
+  protector). **Not upstream**: Zig's `*Surface` has no protector. **state**: OPEN → P7-W12 T0.
+- **shape**:
+  - `Surface::recomputeInitialSize(&mut self)` performs `initial_size` with the raw target (N456).
+    Its receiver is a protected Unique across the callback.
+  - The callers are `(*self_).recomputeInitialSize()` in init (a `&mut` receiver formed from the raw
+    root) and `setCellSize(&mut self)`, which is called from `setFontSize` (the font-size bindings,
+    `updateConfig`, content-scale changes).
+  - The macOS handler (`Rustty.App.swift:2034` `setInitialSize`) sets `surfaceView.initialSize`, a
+    property the SwiftUI view's `idealWidth` / `idealHeight` read. If that assignment synchronously
+    re-lays the view out (`SurfaceView.sizeDidChange` → `rustty_surface_set_size` →
+    `sizeCallback`), it writes the protected surface: UB under SB and TB.
+- **the second unverified case, `presentSurface`** (`present_terminal`: `makeKeyAndOrderFront` may fire
+  the focus publishers synchronously, `SurfaceView.swift:40`), is FIXED in fix round 1: it is
+  dispatched raw-self from `Surface::handleMessage` with `Target::surface_ptr(self_)`, like
+  `resize_window`.
+- **to do (P7-W12 T0)**:
+  - Verify the `initial_size` re-entry, for example with a breakpoint on `rustty_surface_set_size`
+    under `setInitialSize` in the running app.
+  - If it is re-entrant, make `recomputeInitialSize` and its callers raw-self (`setCellSize`,
+    `setFontSize` and their `&mut self` callers), and prove it on `.port/phase-2/mirihar-n456`.
+  - If it is not re-entrant, close N459 with the evidence.
 
 ## N452 — effect callbacks that re-enter the Terminal C API reach stream/handler bytes under the protected `&mut Stream`/`&mut Handler`
 
