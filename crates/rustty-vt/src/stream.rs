@@ -3931,7 +3931,7 @@ impl<H: Handler> Stream<H> {
                             8 => {
                                 if input.params.len() <= 3 {
                                     // resize the text area in characters
-                                    self.handler.resize_window(ResizeWindow {
+                                    handler.resize_window(ResizeWindow {
                                         rows: if input.params.len() > 1 {
                                             input.params[1]
                                         } else {
