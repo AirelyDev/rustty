@@ -9992,3 +9992,18 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   oracle registry"). N483's path fix is not the cause: arm (d) did read the oracle's exports on rvm.
 - **next**: make the gate's library and `nm` handling Linux-aware (or state it macOS-only), install
   `cbindgen` on rvm, and move rvm's oracle `refs/remotes/origin/main` to the pin.
+
+## N487 — G-NIX failed on Linux: `librustty-vt` built without libclang for the wuffs-sys bindgen script
+
+- **id**: N487. P7-W12 T5 (from the rvm gates lane). **severity**: low (Nix lane; no product defect).
+  **state**: CLOSED by P7-W12 T5.
+- **finding**: `nix flake check` failed on aarch64-linux with `failed to build attribute
+  'checks.aarch64-linux.librustty-vt' ... Unable to find libclang ... set LIBCLANG_PATH`, raised by
+  the `wuffs-sys` build script (bindgen), which `rustty-vt-c` pulls in. `nix/librustty-vt.nix` lacked
+  `rustPlatform.bindgenHook`; `nix/package.nix` had it, and its comment wrongly said librustty-vt needs
+  none. Port-only: the reference's `nix/libghostty-vt.nix` has no bindgen (zig builds its C
+  dependencies), so it has no equivalent.
+- **fix**: `nix/librustty-vt.nix` takes `rustPlatform` and lists `rustPlatform.bindgenHook` in
+  `nativeBuildInputs`, as `package.nix` does, with a PORTS note; the stale `package.nix` comment is
+  corrected.
+- **evidence**: see the G-NIX result in the P7-W12 T5 report (rvm).

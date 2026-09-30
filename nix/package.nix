@@ -123,8 +123,8 @@ in
         #    variable"
         # bindgenHook is nixpkgs' canonical fix — it exports LIBCLANG_PATH and
         # the BINDGEN_EXTRA_CLANG_ARGS the sandbox needs to find libc headers.
-        # librustty-vt.nix needs none of this: rustty-vt-c's closure has no
-        # bindgen consumer.
+        # librustty-vt.nix needs it too (N487): wuffs-sys, in rustty-vt-c's
+        # closure, runs bindgen.
         rustPlatform.bindgenHook
       ]
       ++ lib.optionals enableWayland [

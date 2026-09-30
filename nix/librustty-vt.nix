@@ -24,6 +24,7 @@
   cmake,
   pkg-config,
   craneLib,
+  rustPlatform,
   runCommand,
   testers,
   gettext,
@@ -89,6 +90,12 @@ in
         pkg-config
         craneLib.configureCargoVendoredDepsHook
         craneLib.cargo
+        # PORTS: RUSTTY-ONLY (N487). The reference (nix/libghostty-vt.nix) has no
+        # bindgen consumer because its C dependencies are built by zig. Here
+        # crates-sys/wuffs-sys (reached through rustty-vt-c) runs bindgen in
+        # its build script, which dlopens libclang; bindgenHook exports
+        # LIBCLANG_PATH and BINDGEN_EXTRA_CLANG_ARGS, as nix/package.nix does.
+        rustPlatform.bindgenHook
       ]
       ++ lib.optionals stdenv.hostPlatform.isDarwin [
         darwin.cctools
