@@ -2395,11 +2395,6 @@ where
         ) {
             Ok(v) => v,
             Err(err) => {
-                // (N444: the two never-written slots.)
-                unsafe {
-                    renderer_state_slot.dealloc();
-                    renderer_thread_slot.dealloc();
-                }
                 // (the armed errdefers, LIFO — Surface.zig:564/559/490)
                 // errdefer alloc.destroy(mutex);
                 unsafe { drop(Box::from_raw(mutex)) };
@@ -2408,6 +2403,11 @@ where
                 unsafe {
                     (*renderer_ptr).deinit();
                     renderer_impl.dealloc_after_deinit();
+                }
+                // (N444: the two never-written slots, after the renderer.)
+                unsafe {
+                    renderer_state_slot.dealloc();
+                    renderer_thread_slot.dealloc();
                 }
                 // (errdefer app.font_grid_set.deref — UD115)
                 unsafe { (*app).font_grid_set.deref(font_grid_key) };
@@ -2456,11 +2456,6 @@ where
                 // errdefer render_thread.deinit();
                 let mut render_thread = render_thread;
                 render_thread.deinit();
-                // (N444: the two never-written slots.)
-                unsafe {
-                    renderer_state_slot.dealloc();
-                    renderer_thread_slot.dealloc();
-                }
                 // errdefer alloc.destroy(mutex);
                 unsafe { drop(Box::from_raw(mutex)) };
                 // errdefer renderer_impl.deinit();
@@ -2468,6 +2463,11 @@ where
                 unsafe {
                     (*renderer_ptr).deinit();
                     renderer_impl.dealloc_after_deinit();
+                }
+                // (N444: the two never-written slots, after the renderer.)
+                unsafe {
+                    renderer_state_slot.dealloc();
+                    renderer_thread_slot.dealloc();
                 }
                 // (errdefer app.font_grid_set.deref — UD115)
                 unsafe { (*app).font_grid_set.deref(font_grid_key) };
@@ -3238,13 +3238,14 @@ where
             #[cfg(feature = "init-fault-inject")]
             crate::init_fault::before_free("renderer_state.mutex");
             drop(Box::from_raw((*(*self_).renderer_state.as_ptr()).mutex));
-            // (N444: then the state's own allocation.)
-            (*self_).renderer_state.dealloc();
             // errdefer renderer_impl.deinit(); (Surface.zig:559)
             (*(*self_).renderer.as_ptr()).deinit();
             // (N441: then the renderer is dropped and its own allocation freed;
             // the caller frees the surface slot itself without glue.)
             (*self_).renderer.dealloc_after_deinit();
+            // (N444: then the state's own allocation, after the renderer, so
+            // its bytes outlive every teardown above as the inline field did.)
+            (*self_).renderer_state.dealloc();
             // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD115: the
             // missing `errdefer app.font_grid_set.deref(font_grid_key)` (see the
             // `ref` site). The by-value Key is read out of `self_`, as
