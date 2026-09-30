@@ -166,9 +166,14 @@ committed records named here.
   **Next free ids: UD375, N483, V30.**
 - **P7-W12 T4** (the W12.T2 lane B2 Windows findings) used N484 and N485, the
   ids its brief assigned. N483 was reserved for P7-W12 T5 (gate portability).
-- **P7-W12 T5** (gate portability) used N483 (CLOSED) and N486 (OPEN: the Linux VT-headers
-  gate and rvm's stale oracle `origin/main`) and N487 (CLOSED, the Nix bindgen hook).
-  N488 (CLOSED, three more Nix-lane defects behind N487). **Next free: UD375, N489, V30.**
+- **P7-W12 T5** (gate portability) used four ids. N483 is CLOSED (the gate paths).
+  N486 is OPEN (the Linux VT-headers gate and rvm's stale oracle `origin/main`).
+  N487 is CLOSED (the Nix bindgen hook). N488 is CLOSED (three more Nix-lane
+  defects behind N487).
+- **P7-W12 T5 fix round 1** used UD375 (upstream's CMake soname links, the
+  reference side of N488 item 1), N489 (OPEN: nixpkgs' wasmtime blocks the dev
+  shell on aarch64-linux) and N490 (OPEN: `check_symbol_manifest.sh`'s header
+  override and WARNING). **Next free ids: UD376, N491, V30.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.

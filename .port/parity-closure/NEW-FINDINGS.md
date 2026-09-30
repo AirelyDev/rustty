@@ -9976,9 +9976,32 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `d6_cfg_mapping_audit.py`, `check_comment_coverage.py`, `cycle_check.py`, `reach_scc.py`,
   `_oracle_root.sh --self-test`: PASS. These rvm runs were first made with the two `/Users/gael`
   convenience symlinks present; the symlinks and the `/Users/gael` directories were then removed and
-  the same gates re-run and passed (see N488's evidence). No touched script reads `/Users/gael` any more (the one
-  remaining literal in `.port/tools` is `perf/ws10_suite.py`'s measurement-substrate path, a
-  Mac-only perf tool, not a gate).
+  the same gates re-run and passed (the symlink-free proof below). No touched script reads
+  `/Users/gael` any more (the one remaining literal in `.port/tools` is `perf/ws10_suite.py`'s
+  measurement-substrate path, a Mac-only perf tool, not a gate).
+- **symlink-free proof**: rvm, from `~/projects/p7-w12t5`, with `/Users/gael` removed entirely: G1b
+  and its `--self-test`, `restore_zig_deps.sh` (rc 0, `--verify-only` rc 0), G-BENCH, G-LZ4,
+  `check_symbol_manifest.sh`, `check_rustty_h_abi.sh`, `check_constants_parity.py`,
+  `d6_cfg_mapping_audit.py`, `check_comment_coverage.py`, `cycle_check.py`, `reach_scc.py`,
+  `_oracle_root.sh --self-test`: all pass. (Run during N488's lane; moved here in fix round 1.)
+- **fix round 1** (P7-W12 T5): G1b's `--self-test` gains `self_test_main_pin_arm`, which runs a copy
+  of `check_test_counts.py` end to end beside a missing and beside an off-pin fixture oracle and
+  requires exit 3 with the pin check's own reason (the at-pin fixture is its control). NEGATIVE
+  CONTROL (macOS): with the `oracle_pin_problem` call in `main()` replaced by `why = None`, both arms
+  FAIL and the self-test is RED (the copies still exit 3, but through the missing-reference guard).
+  G-ORACLE-SH-SELF enrols the five new resolver users: arm 5 runs `check_symbol_manifest.sh`,
+  `check_rustty_h_abi.sh`, `cvt-parity.sh`, `restore_zig_deps.sh` and (under node)
+  `wasm-parity.mjs` with `--print-oracle` beside the env and `GIT_DIR` decoys, and arm 10 scans the
+  four shell files and the Node file, with a 10s control for each (a plain oracle read added is
+  RED). Arm 5 found a real hole: `restore_zig_deps.sh` took `ROOT` from `git rev-parse
+  --show-toplevel`, which follows `GIT_DIR` + `GIT_WORK_TREE`, so a decoy moved its oracle; `ROOT` is
+  now script-relative. NEGATIVE CONTROLS (macOS): the old `ROOT` line, an env fallback in
+  `cvt-parity.sh` or `wasm-parity.mjs`, and a `git rev-parse` oracle in `check_rustty_h_abi.sh`
+  each turn G-ORACLE-SH-SELF RED. `restore_zig_deps.sh --verify-only` now names a missing oracle
+  `zig-pkg` libxev separately instead of printing "0 corpus/corpora absent". The wording that said
+  the oracle paths come from `parity_names.env` (`PARITY_NAMING.md`, `gates/README.md`,
+  `check_constants_parity.py`, `check_rustty_h_abi.sh`, `check_symbol_manifest.sh`) now says
+  `_oracle_root.sh` derives them.
 
 ## N486 — VT-headers gate is macOS-only beyond its paths, and rvm's oracle `origin/main` is stale
 
@@ -10030,8 +10053,60 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **evidence**: rvm, from `~/projects/p7-w12t5`: `check_nix.sh` GREEN (7 flake checks, alejandra
   compliant); with a badly formatted `.nix` file added, `nix fmt -- --check .` exits 2 and names it.
   macOS: `check_c_consumer.sh` GREEN after the CMake change (relative-libdir path unchanged).
-  Symlink-free proof, rvm (`/Users/gael` removed entirely): G1b and its `--self-test`,
-  `restore_zig_deps.sh` (rc 0, `--verify-only` rc 0), G-BENCH, G-LZ4, `check_symbol_manifest.sh`,
-  `check_rustty_h_abi.sh`, `check_constants_parity.py`, `d6_cfg_mapping_audit.py`,
-  `check_comment_coverage.py`, `cycle_check.py`, `reach_scc.py`, `_oracle_root.sh --self-test`: all
-  pass. This supersedes the N483 note that the symlinks were still present.
+  The symlink-free re-run of the N483 gates, made during this lane, is recorded under N483.
+- **upstream**: item 1 is also a Ghostty defect, recorded as UD375: upstream's `CMakeLists.txt`
+  nests the same path, and its `create_symlink` calls have no error check, so the links are
+  silently not made. Item 3's dev-shell failure is N489, and the dev-shell build it dropped from
+  step 3 is back as G-NIX step 4 (fix round 1).
+
+## N489 — the dev shell cannot be built on aarch64-linux: nixpkgs' `python3.14-wasmtime` fails its check phase
+
+- **id**: N489. P7-W12 T5 fix round 1. **severity**: low (Nix dev shell on aarch64-linux; no product
+  defect). **state**: OPEN (blocked on nixpkgs).
+- **finding**: `nix build .#devShells.aarch64-linux.default` fails on rvm (nix 2.35.2). The only
+  failing derivation is `python3.14-wasmtime-47.0.1`, whose `pytestCheckPhase` stops at collection
+  (`ci/cbindgen.py`: `RuntimeError: bindings need an update, run this script`); the python env and
+  the `rustty` shell derivation then fail as its dependents. The dev shell pulls it in through
+  `python3.withPackages (... python-pkgs.wasmtime ...)` in `nix/devShell.nix`, the same dependency as
+  upstream's `nix/devShell.nix:98` at the pin, so upstream's shell has the same exposure. Upstream's
+  alejandra job runs `nix develop -c alejandra --check .` (`test.yml:1920`), which realises the
+  whole shell. N488 moved G-NIX step 3 to `nix fmt -- --check .`, which stopped the formatter check
+  going RED on this failure but also stopped building the shell at all.
+- **gate**: `check_nix.sh` step 3 carries a PORT NOTE for the divergence from upstream's command.
+  Step 4 builds the shell explicitly (`nix build .#devShells.<system>.default --no-link
+  --keep-going`) and classifies the log (`classify_devshell_log`). Success is GREEN. A failure whose
+  only failing derivations are `python3.N-wasmtime-*` on aarch64-linux is BLOCKED (exit 3, citing
+  N489). Any other failing derivation, any non-build `error:` line (evaluation, hash mismatch), a
+  failure with no identifiable derivation, or the same wasmtime failure on another system is RED.
+  Dependency-propagation errors are not counted as failures of their own. Step 2's undefined `red`
+  helper (it would have printed "command not found" and carried on) is now defined.
+- **tests**: `check_nix.sh --self-test` (G-NIX-SELF, a new `ci.sh` entry; needs no nix) runs eleven
+  fixture logs built from the real rvm failure, in both nix log formats. NEGATIVE CONTROLS (macOS):
+  each of six classifier mutations turns it RED: dropping the system check (x86_64 and darwin go
+  BLOCKED), counting dependency failures as leaves (the real log goes RED), dropping the
+  other-derivation check, ignoring other `error:` lines (hash mismatch goes BLOCKED), dropping the
+  no-leaf check, and not parsing the old `builder for` format.
+- **evidence**: rvm (aarch64-linux, gawk 5.3.2), a temporary clone at `5033457bd`: G-NIX-SELF
+  GREEN (11/11; also on macOS's BSD awk). Step 4 was run on its own, from a copy of `check_nix.sh`
+  with steps 1-3 deleted (its step-4 text diffed identical to the gate's): it built the shell with
+  `--keep-going`, the only builder failure was `python3.14-wasmtime-47.0.1`, and it ended
+  `G-NIX BLOCKED ... (N489)`, exit 3. Steps 1-2 were not re-run, to keep the Nix work on the VM
+  small (they rebuild librustty-vt and the GTK app, and this round does not touch them); step 3,
+  `nix fmt -- --check .`, exit 0. The clone was deleted afterwards.
+- **next**: re-check when nixpkgs updates `python3Packages.wasmtime`; once the shell builds, step 4
+  is GREEN with no change to the gate.
+
+## N490 — `check_symbol_manifest.sh` takes its header from `GHOSTTY_H` and turns a missing header into a WARNING
+
+- **id**: N490. P7-W12 T5 fix round 1 (review of N483). **severity**: low (gate R5). **state**: OPEN
+  (recorded only; not fixed in this round).
+- **finding**: N483's rule is that the oracle is derived, never set by the environment, and that a
+  missing or off-pin oracle is BLOCKED. `check_symbol_manifest.sh` (gate A1) breaks both:
+  `GHOSTTY_H="${GHOSTTY_H:-$ORACLE_HEADER_PATH}"` (`:56` after fix round 1, `:53` before) lets the
+  environment substitute any header, and when the header is absent `run_check` prints `WARNING:
+  pinned header absent ... skipped header<->TSV coverage + count checks` (`:90-91`, was `:87-88`)
+  before returning 3. The exit status is BLOCKED, but the text reads as a skip, and the gate never
+  checks that the oracle is at the pin (`check_rustty_h_abi.sh` pins the same header's SHA-256).
+- **next**: drop the `GHOSTTY_H` override (the `--self-test` can build its fixture another way),
+  report the missing header as BLOCKED, and add the header SHA-256 pin or `rustty_oracle_pin_status`,
+  each with a negative control.

@@ -3305,6 +3305,22 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    `const factor: f32 = @floatCast(scale_util.widgetSurfaceScale(self.as(gtk.Widget)));`.
 - upstream status: NOT YET REPORTED
 
+### UD375 — the CMake install's soname and linkname symlinks are silently not created when `CMAKE_INSTALL_LIBDIR` is absolute
+
+- kind:            non-crash (evident intent broken: the install's "Install symlinks" step creates no links)
+- upstream project: ghostty
+- severity:        low (a packager that runs the libghostty-vt CMake install with an absolute `CMAKE_INSTALL_LIBDIR`, which nixpkgs' cmake hook passes for split outputs and a distro may pass as `/usr/lib64`)
+- reference:       at 12752b2ac, `CMakeLists.txt:213-224`, the non-Windows install branch: `install(FILES ... TYPE LIB)` installs the real name, then `install(CODE ...)` (`:216-223`) runs `execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink ...)` twice, each target spelled `$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/<name>`. Neither `execute_process` checks its result (no `RESULT_VARIABLE`, no `COMMAND_ERROR_IS_FATAL`).
+- defect:          with an absolute `CMAKE_INSTALL_LIBDIR` the prefix is prepended a second time, so the link path nests (`<prefix>//<prefix>/lib/libghostty-vt.so.0`) under a directory that does not exist. `create_symlink` fails, the failure is ignored, and the install succeeds with only the real-name file: no `libghostty-vt.so.0` (soname) and no `libghostty-vt.so` (linkname), so `-lghostty-vt` does not link and the loader cannot find the soname.
+- ReleaseSafe:     not applicable (a CMake install script). MEASURED (task P7-W12 T5 round 1, macOS, CMake 4.4.0): upstream's `CMakeLists.txt:206-224`, verbatim, with Linux names (`:112-114`) and a dummy library file. With `CMAKE_INSTALL_LIBDIR=lib`, `cmake --install` installs the file and both links. With `CMAKE_INSTALL_LIBDIR=<prefix>/lib` it prints `CMake Error: failed to create symbolic link '<prefix>//<prefix>/lib/libghostty-vt.so.0': No such file or directory` (and the same for `libghostty-vt.so`), exits 0, and `<prefix>/lib` holds only `libghostty-vt.so.0.1.0`.
+- ReleaseFast:     the same.
+- reachability:    build configuration only: `cmake -DCMAKE_INSTALL_LIBDIR=<absolute path>` then `cmake --install`. Upstream's own `nix/libghostty-vt.nix` builds with zig, not CMake, so its flake does not reach it.
+- port handling:   `CMakeLists.txt:384-398` uses an absolute `CMAKE_INSTALL_LIBDIR` as is (with `DESTDIR` prepended), as `install(TYPE LIB)` does, and keeps the prefix-at-install-time form for a relative one; the links are made with `file(CREATE_LINK ... SYMBOLIC)`, which fails the install on error instead of continuing. Fixed as N488 item 1 (P7-W12 T5), where Rustty's own CMake file had the same nesting. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; found while fixing N488 (P7-W12 T5 fix round 1).
+- test:            G-NIX (`.port/tools/gates/check_nix.sh`) on aarch64-linux: nixpkgs passes an absolute `CMAKE_INSTALL_LIBDIR`, and librustty-vt's `pkg-config`, `build-with-shared` and `sanity-check` passthru tests need the soname and linkname links. NEGATIVE CONTROL (rvm, P7-W12 T5): before the N488 fix, `cmake --install` failed on the nested path. G-CCONSUMER covers the relative-libdir path on macOS.
+- proposed fix:    compute the directory once, `if(IS_ABSOLUTE "${CMAKE_INSTALL_LIBDIR}")` use `$ENV{DESTDIR}${CMAKE_INSTALL_LIBDIR}`, else `$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}`, and add `COMMAND_ERROR_IS_FATAL ANY` to both `execute_process` calls (or use `file(CREATE_LINK ... SYMBOLIC)`).
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
