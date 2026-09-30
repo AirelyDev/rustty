@@ -403,6 +403,14 @@ typedef enum {
      * Output type: `usize` (oracle 5350d4a5f/70f006575).
      */
     TERMINAL_DATA_TERMINAL_DATA_CLIPBOARD_WRITE_MAX_BYTES = 40,
+    /**
+     * The mouse pointer shape requested by the application through OSC 22.
+     *
+     * Initially `mouse::Shape::Text`. Excludes host hover overrides.
+     *
+     * Output type: `mouse::Shape` (oracle 78494bad8/67fb0c940).
+     */
+    TERMINAL_DATA_TERMINAL_DATA_MOUSE_SHAPE = 41,
 } TerminalData;
 
 /**

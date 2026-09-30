@@ -1815,6 +1815,50 @@ static DECLS: &[TypeDecl] = {
                 ]
             )
         ),
+        // .initEnum("GhosttyMouseShape", mouse_pkg.Shape, "GHOSTTY_MOUSE_SHAPE_"),
+        enum_decl!(
+            "RusttyMouseShape",
+            "RUSTTY_MOUSE_SHAPE_",
+            enum_values!(
+                rustty_vt::mouse::Shape,
+                [
+                    ("default", Default),
+                    ("context_menu", ContextMenu),
+                    ("help", Help),
+                    ("pointer", Pointer),
+                    ("progress", Progress),
+                    ("wait", Wait),
+                    ("cell", Cell),
+                    ("crosshair", Crosshair),
+                    ("text", Text),
+                    ("vertical_text", VerticalText),
+                    ("alias", Alias),
+                    ("copy", Copy),
+                    ("move", Move),
+                    ("no_drop", NoDrop),
+                    ("not_allowed", NotAllowed),
+                    ("grab", Grab),
+                    ("grabbing", Grabbing),
+                    ("all_scroll", AllScroll),
+                    ("col_resize", ColResize),
+                    ("row_resize", RowResize),
+                    ("n_resize", NResize),
+                    ("e_resize", EResize),
+                    ("s_resize", SResize),
+                    ("w_resize", WResize),
+                    ("ne_resize", NeResize),
+                    ("nw_resize", NwResize),
+                    ("se_resize", SeResize),
+                    ("sw_resize", SwResize),
+                    ("ew_resize", EwResize),
+                    ("ns_resize", NsResize),
+                    ("nesw_resize", NeswResize),
+                    ("nwse_resize", NwseResize),
+                    ("zoom_in", ZoomIn),
+                    ("zoom_out", ZoomOut),
+                ]
+            )
+        ),
         // .initEnum("GhosttyMouseTrackingMode", mouse_pkg.Event, "GHOSTTY_MOUSE_TRACKING_"),
         enum_decl!(
             "RusttyMouseTrackingMode",
@@ -2436,6 +2480,7 @@ static DECLS: &[TypeDecl] = {
                     ("vt_ground", VtGround),
                     ("cursor_at_prompt", CursorAtPrompt),
                     ("clipboard_write_max_bytes", ClipboardWriteMaxBytes),
+                    ("mouse_shape", MouseShape),
                 ]
             )
         ),
@@ -3603,6 +3648,20 @@ mod tests {
         assert!(contains(osc_values, "TYPE_MAX_VALUE"));
         // try std.testing.expect(!osc_values.contains("MAX_VALUE"));
         assert!(!contains(osc_values, "MAX_VALUE"));
+
+        let mouse_shape_values =
+            get(get(types, "RusttyMouseShape").as_object(), "values").as_object();
+        // try std.testing.expectEqual(@as(i64, 8), mouse_shape_values.get("TEXT").?.integer);
+        assert_eq!(8i64, get(mouse_shape_values, "TEXT").as_int());
+        // try std.testing.expectEqual(@as(i64, 33), mouse_shape_values.get("ZOOM_OUT").?.integer);
+        assert_eq!(33i64, get(mouse_shape_values, "ZOOM_OUT").as_int());
+        // try std.testing.expect(mouse_shape_values.contains("MAX_VALUE"));
+        assert!(contains(mouse_shape_values, "MAX_VALUE"));
+
+        let terminal_data_values =
+            get(get(types, "RusttyTerminalData").as_object(), "values").as_object();
+        // try std.testing.expectEqual(@as(i64, 41), terminal_data_values.get("MOUSE_SHAPE").?.integer);
+        assert_eq!(41i64, get(terminal_data_values, "MOUSE_SHAPE").as_int());
 
         let key_values = get(get(types, "RusttyKey").as_object(), "values").as_object();
         // try std.testing.expect(key_values.contains("A"));

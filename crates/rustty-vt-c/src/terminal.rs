@@ -3903,6 +3903,12 @@ pub enum TerminalData {
     CursorAtPrompt = 39,
     /// Output type: `usize` (oracle 5350d4a5f/70f006575).
     ClipboardWriteMaxBytes = 40,
+    /// The mouse pointer shape requested by the application through OSC 22.
+    ///
+    /// Initially `mouse::Shape::Text`. Excludes host hover overrides.
+    ///
+    /// Output type: `mouse::Shape` (oracle 78494bad8/67fb0c940).
+    MouseShape = 41,
     // /// Output type expected for querying the data of the given kind.
     // pub fn OutType(comptime self: TerminalData) type {
     //     return switch (self) {
@@ -3916,6 +3922,7 @@ pub enum TerminalData {
     //         .vt_ground,
     //         .cursor_at_prompt,
     //         => bool,
+    //         .mouse_shape => mouse.Shape,
     //         .active_screen => TerminalScreen,
     //         .kitty_keyboard_flags => u8,
     //         .scrollbar => TerminalScrollbar,
@@ -4220,6 +4227,14 @@ unsafe fn get_typed(terminal_: Terminal, data: TerminalData, out: *mut c_void) -
         TerminalData::ClipboardWriteMaxBytes => unsafe {
             *(out as *mut usize) = (*terminal_).stream.handler.kitty_clipboard_write_max_bytes
         },
+
+        // .mouse_shape => out.* = t.mouse_shape,
+        TerminalData::MouseShape => {
+            // SAFETY: shared read of the owned heap terminal's mouse_shape
+            // field via the raw ptr (no `&mut` retag of the handler-aliased
+            // terminal).
+            unsafe { *(out as *mut rustty_vt::mouse::Shape) = (*t).mouse_shape };
+        }
 
         // .scrollbar => out.* = t.screens.active.pages.scrollbar().cval(),
         TerminalData::Scrollbar => unsafe {
@@ -7056,6 +7071,85 @@ mod tests {
                     std::ptr::null_mut(),
                 )
             });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "get mouse_shape"
+    #[test]
+    fn get_mouse_shape() {
+        with_test_allocator(|alloc| {
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &t, 80, 24));
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+
+            // var shape: mouse.Shape = undefined;
+            let mut shape: rustty_vt::mouse::Shape = rustty_vt::mouse::Shape::Default;
+            // try testing.expectEqual(Result.success, get(t, .mouse_shape, @ptrCast(&shape)));
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::MouseShape,
+                    &mut shape as *mut rustty_vt::mouse::Shape as *mut c_void,
+                )
+            });
+            // try testing.expectEqual(mouse.Shape.text, shape);
+            assert_eq!(rustty_vt::mouse::Shape::Text, shape);
+
+            // const cases = .{ ... };
+            let cases: &[(&[u8], rustty_vt::mouse::Shape)] = &[
+                (b"\x1b]22;pointer\x07", rustty_vt::mouse::Shape::Pointer),
+                (
+                    b"\x1b]22;crosshair\x1b\\",
+                    rustty_vt::mouse::Shape::Crosshair,
+                ),
+                // Invalid names leave the last accepted shape unchanged.
+                (
+                    b"\x1b]22;not-a-pointer-shape\x07",
+                    rustty_vt::mouse::Shape::Crosshair,
+                ),
+                // Hyperlinks don't override the application's requested shape.
+                (
+                    b"\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\",
+                    rustty_vt::mouse::Shape::Crosshair,
+                ),
+                (b"\x1b]22;default\x07", rustty_vt::mouse::Shape::Default),
+                (b"\x1b]22;text\x07", rustty_vt::mouse::Shape::Text),
+            ];
+            // inline for (cases) |case| { ... }
+            for (data, want) in cases {
+                unsafe { vt_write(t, data.as_ptr(), data.len()) };
+                assert_eq!(Result::Success, unsafe {
+                    get(
+                        t,
+                        TerminalData::MouseShape,
+                        &mut shape as *mut rustty_vt::mouse::Shape as *mut c_void,
+                    )
+                });
+                assert_eq!(*want, shape);
+            }
+
+            // An incomplete OSC must not update the shape before its terminator.
+            let prefix = b"\x1b]22;wait";
+            unsafe { vt_write(t, prefix.as_ptr(), prefix.len()) };
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::MouseShape,
+                    &mut shape as *mut rustty_vt::mouse::Shape as *mut c_void,
+                )
+            });
+            assert_eq!(rustty_vt::mouse::Shape::Text, shape);
+            let terminator = b"\x07";
+            unsafe { vt_write(t, terminator.as_ptr(), terminator.len()) };
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::MouseShape,
+                    &mut shape as *mut rustty_vt::mouse::Shape as *mut c_void,
+                )
+            });
+            assert_eq!(rustty_vt::mouse::Shape::Wait, shape);
             unsafe { free(t) };
         });
     }

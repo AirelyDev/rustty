@@ -1951,6 +1951,15 @@ typedef enum RUSTTY_ENUM_TYPED {
    * Output type: size_t *
    */
   RUSTTY_TERMINAL_DATA_CLIPBOARD_WRITE_MAX_BYTES = 40,
+
+  /**
+   * The mouse pointer shape requested by the application through OSC 22.
+   *
+   * Initially RUSTTY_MOUSE_SHAPE_TEXT. Excludes host hover overrides.
+   *
+   * Output type: RusttyMouseShape *
+   */
+  RUSTTY_TERMINAL_DATA_MOUSE_SHAPE = 41,
   RUSTTY_TERMINAL_DATA_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE,
 } RusttyTerminalData;
 
