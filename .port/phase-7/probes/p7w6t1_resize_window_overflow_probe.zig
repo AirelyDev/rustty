@@ -1,4 +1,4 @@
-// P7-W6 T1 M6 probe (UD369): does `Surface.resizeWindow`'s (714fe9b90,
+// P7-W6 T1 M6 probe (UD371): does `Surface.resizeWindow`'s (714fe9b90,
 // src/Surface.zig at 12752b2ac) size arithmetic trap for a reachable input?
 //
 // Standalone: the expressions below are copied verbatim from the oracle
@@ -7,7 +7,7 @@
 //   zig run -O Debug        p7w6t1_resize_window_overflow_probe.zig -- <case>
 //   zig run -O ReleaseSafe  p7w6t1_resize_window_overflow_probe.zig -- <case>
 //   zig run -O ReleaseFast  p7w6t1_resize_window_overflow_probe.zig -- <case>
-// Cases: ok | mul | pad | float | min40
+// Cases: ok | mul | pad | float | min40 | padsum
 const std = @import("std");
 
 const min_resize_width_cells: u32 = 40;
@@ -65,6 +65,11 @@ pub fn main(init: std.process.Init) !void {
         // No padding, product 65535 * 65536 = 4294901760 fits u32, but a
         // content scale of 0.5 makes the point size 8589803520 > maxInt(u32).
         resizeWindow(.{ .rows = 24, .columns = 65535 }, applyAbsolute(10, 65526), 20, .{ .top = 0, .bottom = 0, .left = 0, .right = 0 }, 0.5, 1)
+    else if (std.mem.eql(u8, case, "padsum"))
+        // Fix round 1: `window-padding-x = 2147483648` at 72 dpi (scale 1):
+        // `scaledPadding` gives 2^31 a side, which fits; the sum does not.
+        // Ordinary 10x20 px cells, CSI 8;24;80 t.
+        resizeWindow(.{ .rows = 24, .columns = 80 }, 10, 20, .{ .top = 0, .bottom = 0, .left = 1 << 31, .right = 1 << 31 }, 1, 1)
     else if (std.mem.eql(u8, case, "min40"))
         // `adjust-cell-width = 2147483647` (cell 2147483657 px), a bare
         // CSI 8 t (both zero): the width is discarded but still computed,

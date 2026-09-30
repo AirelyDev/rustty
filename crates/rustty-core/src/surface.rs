@@ -790,6 +790,52 @@ mod resize_window_tests {
             None,
             resize_window_pts(rw(65535, 0), cell(10, 65_538), pad(2), SCALE)
         );
+        // Fix round 1 (Ruling 55): padding only. `window-padding-x =
+        // 2147483648` at scale 1 is 2^31 a side (fits `u32`), and the sum of
+        // the two sides overflows with ordinary cells (probe case `padsum`).
+        let mut derived = DerivedConfig::init(Allocator, &load(b"window-padding-x = 2147483648\n"))
+            .expect("DerivedConfig::init");
+        let scaled = derived.scaledPadding(72.0, 72.0);
+        derived.deinit();
+        drop(derived);
+        assert_eq!(
+            (1 << 31, 1 << 31),
+            (scaled.left, scaled.right),
+            "the config reaches the padding"
+        );
+        assert_eq!(
+            None,
+            resize_window_pts(rw(24, 80), cell(10, 20), scaled, SCALE)
+        );
+        assert_eq!(
+            None,
+            resize_window_pts(
+                rw(24, 80),
+                cell(10, 20),
+                rendererpkg::size::Padding {
+                    left: 1 << 31,
+                    right: 1 << 31,
+                    top: 0,
+                    bottom: 0,
+                },
+                SCALE
+            )
+        );
+        // The same padding with the width omitted: the height is unaffected.
+        assert_eq!(
+            Some((0, 24 * 20)),
+            resize_window_pts(
+                rw(24, 0),
+                cell(10, 20),
+                rendererpkg::size::Padding {
+                    left: 1 << 31,
+                    right: 1 << 31,
+                    top: 0,
+                    bottom: 0,
+                },
+                SCALE
+            )
+        );
     }
 
     struct TestApp {
@@ -4327,7 +4373,7 @@ where
     // never queued (apprt-api `AppMailbox` note). The inferred `!void` is the
     // [`Error`] union.
     //
-    // PORT NOTE (N451, P7-W6 T1): raw-self. The `.resize_window` arm runs the
+    // PORT NOTE (N456, P7-W6 T1): raw-self. The `.resize_window` arm runs the
     // embedder's action callback, and the macOS host resizes the window inside
     // it (`TerminalController.resizeWindow` → `setFrame(display: true)`), which
     // lays the surface view out and so re-enters this surface through
@@ -4349,7 +4395,7 @@ where
     }
 
     /// The `handleMessage` arms that run no re-entrant host callback (see
-    /// `handleMessage`'s N451 note).
+    /// `handleMessage`'s N456 note).
     fn handleMessageArms(&mut self, msg: Message<'_>) -> Result<(), Error> {
         match msg {
             // (dispatched raw-self by `handleMessage`)
@@ -6238,7 +6284,7 @@ where
     //     size: terminal.StreamAction.ResizeWindow,
     // ) !void {
     //
-    // PORT NOTE (N451): raw-self. The surface is read in short reborrows that
+    // PORT NOTE (N456): raw-self. The surface is read in short reborrows that
     // end before `perform_action`, whose host callback resizes (so writes)
     // this surface on macOS; the callback gets only the shared `Target`.
     ///
