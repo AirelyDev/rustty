@@ -49,6 +49,7 @@ use rustty_font::glyph::{Glyph, RenderOptions};
 use rustty_font::metrics::Metrics;
 use rustty_render_types::CellSize;
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::sync::RwLock;
 
 // const log = std.log.scoped(.font_shared_grid);
@@ -58,12 +59,12 @@ use std::sync::RwLock;
 // it as a struct generic over the allocator `A` that its two `Atlas` grids use.
 pub struct SharedGrid<A: Allocator + Copy = allocator_api2::alloc::Global> {
     /// Cache for codepoints to font indexes in a group.
-    // codepoints: std.AutoHashMapUnmanaged(CodepointKey, ?Collection.Index) = .{},
-    codepoints: HashMap<CodepointKey, Option<collection::Index>>,
+    // codepoints: std.HashMapUnmanaged(CodepointKey, ?Collection.Index, CodepointKey.Context, 80) = .{},
+    codepoints: HashMap<CodepointKey, Option<collection::Index>, PackedKeyState>,
 
     /// Cache for glyph renders into the atlas.
     // glyphs: std.HashMapUnmanaged(GlyphKey, Render, GlyphKey.Context, 80) = .{},
-    glyphs: HashMap<GlyphKey, Render>,
+    glyphs: HashMap<GlyphKey, Render, PackedKeyState>,
 
     /// The texture atlas to store renders in. The Glyph data in the glyphs
     /// cache is dependent on the atlas matching.
@@ -274,8 +275,8 @@ impl<A: Allocator + Copy> SharedGrid<A> {
             lock: RwLock::new(()),
             // .metrics = undefined, // Loaded below
             metrics: UNDEFINED_METRICS,
-            codepoints: HashMap::new(),
-            glyphs: HashMap::new(),
+            codepoints: HashMap::default(),
+            glyphs: HashMap::default(),
         };
 
         match result.init_fill() {
@@ -382,11 +383,8 @@ impl<A: Allocator + Copy> SharedGrid<A> {
         style: Style,
         p: Option<Presentation>,
     ) -> Result<Option<collection::Index>, collection::Error> {
-        let key: CodepointKey = CodepointKey {
-            style,
-            codepoint: cp,
-            presentation: p,
-        };
+        // const key = CodepointKey.from(.{ .style = style, .codepoint = cp, .presentation = p });
+        let key = CodepointKey::from(style, cp, p);
 
         // Fast path: the cache has the value. This is almost always true and
         // only requires a read lock.
@@ -507,11 +505,8 @@ impl<A: Allocator + Copy> SharedGrid<A> {
     ) -> Result<Render, RenderError> {
         // const tw = renderGlyph_tw;
 
-        let key: GlyphKey = GlyphKey {
-            index,
-            glyph: glyph_index,
-            opts,
-        };
+        // const key = GlyphKey.from(.{ .index = index, .glyph = glyph_index, .opts = opts });
+        let key = GlyphKey::from(index, glyph_index, &opts);
 
         // Fast path: the cache has the value. This is almost always true and
         // only requires a read lock.
@@ -692,74 +687,156 @@ pub struct Render {
     pub presentation: Presentation,
 }
 
-// const CodepointKey = struct { style, codepoint, presentation };
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct CodepointKey {
-    style: Style,
-    codepoint: u32,
-    presentation: Option<Presentation>,
+// const CodepointKey = packed struct(u64) {
+//     codepoint: u32,
+//     style: Style,
+//     has_presentation: bool,
+//     presentation: Presentation,
+//     _padding: u27 = 0,
+//     ...
+// };
+//
+// PORT NOTE: Rust has no `packed struct(u64)`, so the key IS its backing `u64`
+// (Zig packed structs are LSB-first):
+//   codepoint: u32          bits  0..32
+//   style: Style (u3)       bits 32..35
+//   has_presentation: bool  bit  35
+//   presentation: u1        bit  36
+//   _padding: u27 = 0       bits 37..64
+// `#[derive(PartialEq, Eq)]` over the `u64` is the reference's `Context.eql`
+// (`@as(u64, @bitCast(a)) == @as(u64, @bitCast(b))`), and `Hash` feeds the
+// `u64` to `PackedKeyHasher`, which is the reference's `Context.hash`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(transparent)]
+struct CodepointKey(u64);
+
+impl CodepointKey {
+    // inline fn from(k: struct {
+    //     style: Style,
+    //     codepoint: u32,
+    //     presentation: ?Presentation,
+    // }) CodepointKey {
+    #[inline(always)]
+    fn from(style: Style, codepoint: u32, presentation: Option<Presentation>) -> Self {
+        // .codepoint = k.codepoint,
+        let codepoint = codepoint as u64;
+        // .style = k.style,
+        let style = (style as u64) & 0x7;
+        // .has_presentation = k.presentation != null,
+        let has_presentation = u64::from(presentation.is_some());
+        // .presentation = k.presentation orelse .text,
+        let presentation = (presentation.unwrap_or(Presentation::Text) as u64) & 0x1;
+        Self(codepoint | (style << 32) | (has_presentation << 35) | (presentation << 36))
+    }
 }
 
-// const GlyphKey = struct { index: Collection.Index, glyph: u32, opts: RenderOptions };
-//
-// PORT NOTE: the reference's `GlyphKey.Context` hashes/eqs via a `Packed`
-// `packed struct(u64)` that captures only `index`, `glyph`, and the four
-// render-opts fields (`cell_width`, `thicken`, `thicken_strength`,
-// `constraint_width`) — NOT `grid_metrics` or `constraint`. We reproduce that by
-// storing the full `opts` but implementing `Hash`/`PartialEq`/`Eq` over the same
-// packed `u64`, so two keys are equal iff their packed reps match (the reference's
-// `a.glyph == b.glyph and Packed.from(a) == Packed.from(b)`).
-#[derive(Clone, Copy)]
-struct GlyphKey {
-    index: collection::Index,
-    glyph: u32,
-    opts: RenderOptions,
+impl Hash for CodepointKey {
+    #[inline(always)]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.0);
+    }
 }
+
+/// Cache key for rendered glyphs. Packed to 8 bytes so HashMap stores
+/// and compares a u64 instead of a full RenderOptions (metrics,
+/// nerd-font constraint, etc. are not part of the identity).
+// const GlyphKey = packed struct(u64) {
+//     glyph: u32,
+//     index: Collection.Index,
+//     opts: packed struct(u16) {
+//         cell_width: u2,
+//         thicken: bool,
+//         thicken_strength: u8,
+//         constraint_width: u2,
+//         _padding: u3 = 0,
+//     },
+//     ...
+// };
+//
+// PORT NOTE: as for `CodepointKey`, the key IS its backing `u64` (LSB-first):
+//   glyph: u32                bits  0..32
+//   index: Collection.Index   bits 32..48 (its u16 backing, `Index.int()`)
+//   opts: packed(u16)         bits 48..64
+//     cell_width: u2             bits 48..50
+//     thicken: bool              bit  50
+//     thicken_strength: u8       bits 51..59
+//     constraint_width: u2       bits 59..61
+//     _padding: u3 = 0           bits 61..64
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(transparent)]
+struct GlyphKey(u64);
 
 impl GlyphKey {
-    // inline fn from(key: GlyphKey) Packed { ... }
+    // inline fn from(k: struct {
+    //     index: Collection.Index,
+    //     glyph: u32,
+    //     opts: RenderOptions,
+    // }) GlyphKey {
     //
-    // Packed(u64) layout (Zig packed-struct = LSB first):
-    //   index: u16            bits  0..16
-    //   glyph: u32            bits 16..48
-    //   opts: packed(u16)     bits 48..64
-    //     cell_width: u2         bits 48..50
-    //     thicken: bool          bit  50
-    //     thicken_strength: u8   bits 51..59
-    //     constraint_width: u2   bits 59..61
-    //     _padding: u3 = 0       bits 61..64
-    fn packed(&self) -> u64 {
-        let index = self.index.int() as u64; // bits 0..16
-        let glyph = (self.glyph as u64) << 16; // bits 16..48
-                                               // .cell_width = key.opts.cell_width orelse 0,
-        let cell_width = (self.opts.cell_width.unwrap_or(0) as u64) & 0x3;
-        let thicken = u64::from(self.opts.thicken);
-        let thicken_strength = (self.opts.thicken_strength as u64) & 0xFF;
-        let constraint_width = (self.opts.constraint_width as u64) & 0x3;
+    // PORT NOTE: `opts` is borrowed rather than copied; only four of its
+    // fields are read.
+    #[inline(always)]
+    fn from(index: collection::Index, glyph: u32, opts: &RenderOptions) -> Self {
+        // .glyph = k.glyph,
+        let glyph = glyph as u64;
+        // .index = k.index,
+        let index = index.int() as u64;
+        // .cell_width = k.opts.cell_width orelse 0,
+        let cell_width = (opts.cell_width.unwrap_or(0) as u64) & 0x3;
+        // .thicken = k.opts.thicken,
+        let thicken = u64::from(opts.thicken);
+        // .thicken_strength = k.opts.thicken_strength,
+        let thicken_strength = (opts.thicken_strength as u64) & 0xFF;
+        // .constraint_width = k.opts.constraint_width,
+        let constraint_width = (opts.constraint_width as u64) & 0x3;
         let opts = cell_width | (thicken << 2) | (thicken_strength << 3) | (constraint_width << 11);
-        index | glyph | (opts << 48)
+        Self(glyph | (index << 32) | (opts << 48))
     }
 }
 
-impl PartialEq for GlyphKey {
-    fn eq(&self, other: &Self) -> bool {
-        // Packed checks glyphs but in most cases the glyphs are NOT
-        // equal so the first check leads to increased throughput.
-        // return a.glyph == b.glyph and Packed.from(a) == Packed.from(b);
-        // (Packed already includes `glyph`, so packed equality is sufficient.)
-        self.packed() == other.packed()
+impl Hash for GlyphKey {
+    #[inline(always)]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.0);
     }
 }
-impl Eq for GlyphKey {}
 
-impl std::hash::Hash for GlyphKey {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        // Packed is a u64 but std.hash.int improves uniformity and
-        // avoids collisions in our hashmap.
-        // return std.hash.int(@as(u64, @bitCast(packed_key)));
-        state.write_u64(self.packed());
+// const Context = struct {
+//     pub fn hash(_: Context, key: CodepointKey) u64 {
+//         const x: u64 = @bitCast(key);
+//         return x ^ (x >> 32);
+//     }
+//
+//     pub fn eql(_: Context, a: CodepointKey, b: CodepointKey) bool {
+//         return @as(u64, @bitCast(a)) == @as(u64, @bitCast(b));
+//     }
+// };
+//
+// PORT NOTE: `CodepointKey.Context` and `GlyphKey.Context` have the same
+// `hash`, so both caches share this one hasher in place of std's SipHash.
+// Each key's `Hash` impl makes exactly one `write_u64` call with its packed
+// `u64`, and `finish` returns `x ^ (x >> 32)` of it. The reference's
+// `max_load_percentage` of 80 has no std `HashMap` counterpart.
+#[derive(Default)]
+struct PackedKeyHasher(u64);
+
+impl Hasher for PackedKeyHasher {
+    #[inline(always)]
+    fn write_u64(&mut self, x: u64) {
+        self.0 = x ^ (x >> 32);
+    }
+
+    fn write(&mut self, _bytes: &[u8]) {
+        unreachable!("PackedKeyHasher only hashes a packed u64 key via write_u64");
+    }
+
+    #[inline(always)]
+    fn finish(&self) -> u64 {
+        self.0
     }
 }
+
+type PackedKeyState = BuildHasherDefault<PackedKeyHasher>;
 
 #[cfg(test)]
 mod tests {
@@ -937,11 +1014,8 @@ mod tests {
             grid_metrics: grid.metrics,
             ..Default::default()
         };
-        let key: GlyphKey = GlyphKey {
-            index: idx,
-            glyph: glyph_index,
-            opts: render_opts,
-        };
+        // const key = GlyphKey.from(.{ .index = idx, .glyph = glyph_index, .opts = render_opts });
+        let key = GlyphKey::from(idx, glyph_index, &render_opts);
 
         // Verify the cache is empty for this glyph
         assert!(!grid.glyphs.contains_key(&key)); // grid.glyphs.get(key) == null
