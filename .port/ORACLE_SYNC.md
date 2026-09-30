@@ -103,6 +103,28 @@ false-RED on a passing test's stderr — all fixed and re-verified
 + the `phase-6/*` merge series. CI-lane results are recorded in `.port/phase-6/README.md`
 §"Finale".
 
+**PHASE-7 FINALE (2026-09-30): re-greened at `12752b2ac`.** Every workstream (W0–W11, W12 T0/T1b)
+is merged into `phase-7-upstream-resync`. The live per-test audit (`audit_test_coverage.py`) is
+GREEN: 4,188 live-oracle test blocks, 0 unexplained. The R5 checklist
+(`.port/phase-7/w0/tests-checklist.txt`) has the 112 added upstream tests present by name, the 40
+changed bodies re-aligned and the 2 removals dropped. G-FILES (557 files) and G-SYMS (2,890
+`pub fn`) have 0 unexplained. G1b is GREEN (the arrival RED on `input_key_encode` is closed).
+G3b is GREEN, and `--strict` is GREEN too, for the first time since the advance. G-LOGFILE (with
+its re-anchored `LOG-*.tsv`), G-CENSUS (ledger at 4,397 / 17,717 / 357 since P7-W0 T4), A3, A4,
+A5, G4 (drivers rebuilt at the pin), G-REFGEOM, G-EOL, G-I18N, G-THEMES, G-UDDOCS, G-PARITY, G7,
+G9 (693 / 693) and the whole post-merge set are GREEN.
+
+The phase fixed and documented 21 reference defects (UD352–UD372) and opened 25 port findings
+(N435–N465), all closed except the record-only N438. The targeted cross-host checks passed:
+
+- rvm: the GTK-feature workspace clippy, `cargo test -p` for the 29 touched crates, and the live
+  GTK KATs;
+- rwin: kitty/windows, memory reclaim, xev, and fontconfig GNU with the UD360 child-process test;
+- macOS: xcodebuild RusttyTests, 403 passed; menu-shortcut parity, 51 actions.
+
+The full lanes and the benches are P7-W12 T2. Records: `.port/phase-7/README.md` §"Finale table"
+and the `phase-7/*` merge series.
+
 The previous pin, `4749c4e93`, was a **stale baseline**: work from beyond it had been ported by
 WS5–WS8 and tracked in an ad-hoc "beyond-pin series" table (BL-1…BL-7) that existed only because the
 pin had not moved. That table is **gone**. Its contents were either absorbed by the advance (the
