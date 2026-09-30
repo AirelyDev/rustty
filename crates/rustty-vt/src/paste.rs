@@ -145,7 +145,17 @@ impl Contents<'_> {
 pub struct Context<'a> {
     /// The terminal whose modes decide the encoding.
     // terminal: *const Terminal,
-    pub terminal: &'a Terminal,
+    //
+    // PORT NOTE (N454, P7-W2 T10; LIFETIMES.tsv `paste.zig Context
+    // terminal`): a raw pointer, as the reference's `*const Terminal`, not a
+    // `&'a Terminal`. The paste calls the embedder's reader synchronously,
+    // and a C reader may re-enter the terminal (`resize`, `reset`, a nested
+    // `vt_write`), writing terminal bytes. A reference field of this
+    // by-value argument would be a protected shared borrow for the whole
+    // `paste` call, so that write would be Stacked/Tree Borrows UB. The
+    // modes are read through narrow reborrows that end before the read.
+    // Callers pass a pointer valid for the call.
+    pub terminal: *const Terminal,
 
     /// Allocator for transient state: the buffered read and a paste
     /// event's grant. Must be the allocator `kitty_clipboard.grants`
@@ -165,21 +175,31 @@ pub struct Context<'a> {
     /// program's follow-up read can be answered, since otherwise the
     /// read would be refused and the user's paste would vanish. With
     /// null, `paste` always writes text.
-    pub kitty_clipboard: Option<KittyClipboard<'a>>,
+    pub kitty_clipboard: Option<KittyClipboard>,
 }
 
 /// Kitty clipboard protocol session state for a paste event.
 // PORT NOTE: the reference nests this as `Context.KittyClipboard`; Rust
 // structs cannot nest type declarations, so it is flattened to module scope.
-// The reference `grants: *kitty_clipboard.Grants` is a mutable borrow here
-// (the grant/revoke calls mutate it), and `io: std.Io` is the sys.rs `Io`
-// entropy stand-in.
-pub struct KittyClipboard<'a> {
+// The reference `grants: *kitty_clipboard.Grants` is a raw pointer here too
+// (the grant/revoke calls mutate through it), and `io: std.Io` is the sys.rs
+// `Io` entropy stand-in.
+pub struct KittyClipboard {
     /// Session grants. A paste event records its one-time password
     /// here so the program's follow-up read is served without a
     /// prompt.
     // grants: *kitty_clipboard.Grants,
-    pub grants: &'a mut kitty_clipboard::Grants,
+    //
+    // PORT NOTE (N454, P7-W2 T10; LIFETIMES.tsv `paste.zig
+    // Context.KittyClipboard grants`): not a `&'a mut`. The grants ride in
+    // the `Context` for the whole paste, including the text path's reader
+    // call where they are unused, and a C reader that re-enters `reset`
+    // (which clears them) or a nested `vt_write` (a Kitty clipboard reply)
+    // writes them; a protected `&mut` field would make that UB. Dereferenced
+    // only on the paste-event path, where no reader runs, through a narrow
+    // reborrow per call. Callers pass a pointer valid and unaliased by any
+    // live reference for the `paste` call.
+    pub grants: *mut kitty_clipboard::Grants,
 
     /// Secure entropy for one-time passwords. See generateOtp for
     /// why there is no fallback when this has none.
@@ -234,14 +254,26 @@ pub enum Error {
 /// the source needs no stability across reads. Nothing reaches the
 /// writer until the read completed and the text passed the rule:
 /// every error writes nothing, and a failed event records no grant.
-pub fn paste(mut ctx: Context<'_>, req: Request<'_>) -> Result<bool, Error> {
+///
+/// # Safety
+/// `ctx.terminal` must point to a live `Terminal` for the whole call, and
+/// `ctx.kitty_clipboard`'s `grants`, when set, to live `Grants` that no
+/// live reference aliases while the call runs (see the field notes, N454).
+pub unsafe fn paste(mut ctx: Context<'_>, req: Request<'_>) -> Result<bool, Error> {
     // If the source is a clipboard and mode 5522 is enabled and
     // the caller can handle kitty events, then do a kitty event.
     //
     // if (req.source == .clipboard and
     //     ctx.terminal.modes.get(.kitty_paste_events))
+    //
+    // SAFETY: `ctx.terminal` is live (caller contract); the shared reborrow
+    // ends within the expression.
     if matches!(req.source, Source::Clipboard(_))
-        && ctx.terminal.modes.get(crate::modes::Mode::KittyPasteEvents)
+        && unsafe {
+            (*ctx.terminal)
+                .modes
+                .get(crate::modes::Mode::KittyPasteEvents)
+        }
     {
         // if (ctx.kitty_clipboard) |kitty| { ... }
         // PORT NOTE: `take()` because the Rust `KittyClipboard` carries a
@@ -263,7 +295,8 @@ pub fn paste(mut ctx: Context<'_>, req: Request<'_>) -> Result<bool, Error> {
             None => return Ok(false),
         };
 
-    let opts: input_paste::Options = input_paste::Options::from_terminal(ctx.terminal);
+    // SAFETY: as above; the reborrow ends before the reader runs.
+    let opts: input_paste::Options = input_paste::Options::from_terminal(unsafe { &*ctx.terminal });
 
     // In-memory contents are used directly to avoid a double copy but
     // reader-based contents are read into memory so we can do the unsafe
@@ -310,7 +343,7 @@ pub fn paste(mut ctx: Context<'_>, req: Request<'_>) -> Result<bool, Error> {
 // ) Error!void {
 fn paste_kitty_event(
     ctx: &mut Context<'_>,
-    kitty: KittyClipboard<'_>,
+    kitty: KittyClipboard,
     req: &Request<'_>,
 ) -> Result<(), Error> {
     // const otp = try kitty_clipboard.generateOtp(kitty.io);
@@ -335,8 +368,10 @@ fn paste_kitty_event(
     // leaves a grant for an event that was never sent. Using a
     // one-time grant consumes it, which is the revocation.
     // try kitty.grants.grant(ctx.alloc, &otp, .read, true);
-    kitty
-        .grants
+    //
+    // SAFETY: `kitty.grants` is live and unaliased for the paste call
+    // (`paste`'s contract); the `&mut` ends within the statement.
+    unsafe { &mut *kitty.grants }
         .grant(ctx.alloc, &otp, kitty_clipboard::Direction::Read, true)
         .map_err(|_| Error::OutOfMemory)?;
 
@@ -356,9 +391,9 @@ fn paste_kitty_event(
     // (errdefer: revoke the grant when the event was never sent.)
     if event.encode(ctx.writer).is_err() {
         // errdefer _ = kitty.grants.use(ctx.alloc, &otp, .read);
-        let _ = kitty
-            .grants
-            .use_(ctx.alloc, &otp, kitty_clipboard::Direction::Read);
+        // SAFETY: as for the grant above.
+        let _ =
+            unsafe { &mut *kitty.grants }.use_(ctx.alloc, &otp, kitty_clipboard::Direction::Read);
         return Err(Error::WriteFailed);
     }
     Ok(())

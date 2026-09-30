@@ -14970,36 +14970,43 @@ where
         // under the renderer/terminal mutex held above (the KittyClipboardGrant
         // mailbox-arm precedent), so the `&mut` cannot interleave with an IO
         // thread access.
+        //
+        // SAFETY (N454: `paste` takes raw `terminal`/`grants` pointers): both
+        // are live fields of the IO state for the call, reached under the
+        // mutex, and no reference to either is live across it; the contents
+        // are in memory, so no reader runs.
         let io = unsafe { (*self.io.as_ptr()).terminal.io };
-        let pasted = match rustty_vt::paste::paste(
-            rustty_vt::paste::Context {
-                terminal: unsafe { &(*self.io.as_ptr()).terminal },
-                // .alloc = self.alloc: the application's allocator, which is
-                // the terminal's (the Rust heap; the grants are freed with it).
-                alloc: rustty_vt::alloc::Global,
-                writer: &mut aw,
-                kitty_clipboard: Some(rustty_vt::paste::KittyClipboard {
-                    grants: unsafe {
-                        &mut (*self.io.as_ptr())
-                            .terminal_stream
-                            .handler
-                            .kitty_clipboard_grants
-                    },
-                    io,
-                }),
-            },
-            rustty_vt::paste::Request {
-                // .source = .{ .clipboard = location },
-                source: rustty_vt::paste::Source::Clipboard(location),
-                // .contents = .{ .memory = contents_buf[0..contents_len] },
-                contents: rustty_vt::paste::Contents::Memory(&contents_buf[..contents_len]),
-                // A paste event discloses no clipboard data, so unsafe-text
-                // confirmation does not apply. If mode 5522 is reset, the empty
-                // stand-in representations cause the shared helper to write nothing.
-                // .allow_unsafe = true,
-                allow_unsafe: true,
-            },
-        ) {
+        let pasted = match unsafe {
+            rustty_vt::paste::paste(
+                rustty_vt::paste::Context {
+                    terminal: std::ptr::addr_of!((*self.io.as_ptr()).terminal),
+                    // .alloc = self.alloc: the application's allocator, which is
+                    // the terminal's (the Rust heap; the grants are freed with it).
+                    alloc: rustty_vt::alloc::Global,
+                    writer: &mut aw,
+                    kitty_clipboard: Some(rustty_vt::paste::KittyClipboard {
+                        grants: std::ptr::addr_of_mut!(
+                            (*self.io.as_ptr())
+                                .terminal_stream
+                                .handler
+                                .kitty_clipboard_grants
+                        ),
+                        io,
+                    }),
+                },
+                rustty_vt::paste::Request {
+                    // .source = .{ .clipboard = location },
+                    source: rustty_vt::paste::Source::Clipboard(location),
+                    // .contents = .{ .memory = contents_buf[0..contents_len] },
+                    contents: rustty_vt::paste::Contents::Memory(&contents_buf[..contents_len]),
+                    // A paste event discloses no clipboard data, so unsafe-text
+                    // confirmation does not apply. If mode 5522 is reset, the empty
+                    // stand-in representations cause the shared helper to write nothing.
+                    // .allow_unsafe = true,
+                    allow_unsafe: true,
+                },
+            )
+        } {
             Ok(v) => v,
             Err(err) => {
                 unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };

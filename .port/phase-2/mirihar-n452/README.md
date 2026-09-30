@@ -81,3 +81,44 @@ Three switches select the shape: `RAW_STREAM` (fix 1), `STASH` (fix 2), `PLACE_R
 The real code is proven by the vt-c Miri targets `reentrant_callback_resize`,
 `reentrant_callback_set_handler_option`, `reentrant_callback_get_vt_ground` and
 `reentrant_callback_continuation` (`crates/rustty-vt-c/src/terminal.rs`).
+
+## N454: the C paste reader re-entering the terminal (P7-W2 T10)
+
+`rustty_terminal_paste` pulls the text through the embedder's `RusttyMimeReader` synchronously, and
+neither `io.h` nor `paste.h` (as the reference's at 12752b2ac) forbids that reader from re-entering the
+terminal. In the shipped port the paste held, across the reader call:
+
+- `Handler::paste(&mut self)`: a protected Unique over every handler byte;
+- `paste::Context { terminal: &Terminal, kitty_clipboard: Some(KittyClipboard { grants: &mut Grants }) }`,
+  a by-value argument of `paste::paste`, whose reference fields are protected for the whole call.
+
+The reader is not an effect trampoline, so `live_handler` was null. A reader calling `set`, `resize`,
+`reset` or `vt_write` wrote protected handler, terminal or grants bytes.
+
+The fix: `Handler::paste_raw(this: *mut Handler)` (the reference's `self: *Handler`) with place
+accesses; `Context.terminal: *const Terminal` and `KittyClipboard.grants: *mut Grants` (the
+reference's pointer types); vt-c publishes the paste's handler pointer in `live_handler` for the call.
+
+The model adds `Terminal.bracketed`, `Handler.kitty_grants`, a `full_reset`, `Handler::paste` /
+`paste_raw`, a `PasteCtx` whose `terminal`/`grants` are references or raw per switch, `paste_pkg` (mode
+read, reader, encode, as the real text path), `c_reset`, `c_paste` and a `reader_cb` that re-enters
+`set` (+`get`), `resize` (nested `write_pty`), `reset`, and `vt_write` (nested BEL). Switches:
+`PASTE_RAW_SELF`, `PASTE_RAW_TERMINAL`, `PASTE_RAW_GRANTS`; the N452 fix is on in every `n454_*` run.
+
+| candidate | SB | TB |
+|---|---|---|
+| `n454_shipped_set` | UB | UB |
+| `n454_shipped_resize` | UB | UB |
+| `n454_shipped_reset` | UB | UB |
+| `n454_shipped_vt_write` | UB | UB |
+| `n454_raw_ctx_only_set` (raw Context, `&mut self` paste) | UB | UB |
+| `n454_raw_self_ref_terminal_resize` (raw-self, `&Terminal` Context) | UB | UB |
+| `n454_raw_self_ref_grants_reset` (raw-self, `&mut Grants` Context) | UB | UB |
+| `n454_fixed_set` | CLEAN | CLEAN |
+| `n454_fixed_resize` | CLEAN | CLEAN |
+| `n454_fixed_reset` | CLEAN | CLEAN |
+| `n454_fixed_vt_write` | CLEAN | CLEAN |
+| `n454_fixed_all` (every class, nested effects) | CLEAN | CLEAN |
+
+The real code is proven by the vt-c Miri target `reentrant_callback_paste_reader`
+(`crates/rustty-vt-c/src/terminal.rs`).

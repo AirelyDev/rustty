@@ -30,7 +30,7 @@ use rustty_lib::String as LibString;
 use rustty_vt::clipboard;
 use rustty_vt::input::paste;
 use rustty_vt::paste as terminal_paste_pkg;
-use rustty_vt::stream_terminal::PasteError;
+use rustty_vt::stream_terminal::{Handler, PasteError};
 use std::ffi::c_void;
 use std::os::raw::c_int;
 
@@ -223,18 +223,33 @@ pub unsafe fn terminal_paste(
     //
     // (N452: the handler through `handler_ptr`, so a paste made from inside
     // an effect callback reaches it through the running trampoline's pointer.)
+    //
+    // PORT NOTE (N454, P7-W2 T10): the C reader runs synchronously inside this
+    // call and may re-enter this terminal (`io.h` and `paste.h` forbid nothing
+    // there, unlike the effect callbacks' `vt_write` rule): set a handler
+    // option, `resize`, `reset`, even `vt_write`. So the paste runs raw-self
+    // (`Handler::paste_raw`, the reference's `self: *Handler`; no protected
+    // `&mut Handler`, `&Terminal` or `&mut Grants` spans the reader), and its
+    // handler pointer is published in `live_handler` for the call, as the
+    // effect trampolines do, so a re-entrant C API reaches the handler
+    // through the paste's own pointer.
+    let handler = unsafe { crate::terminal::handler_ptr(terminal_) };
+    let _live = crate::terminal::LiveHandler::publish(terminal_, handler);
     let result = unsafe {
-        (*crate::terminal::handler_ptr(terminal_)).paste(terminal_paste_pkg::Request {
-            source,
-            contents: terminal_paste_pkg::Contents::Reader(terminal_paste_pkg::Reader {
-                mimes: &mimes,
-                read: clipboard::MimeReader {
-                    ctx: req_ as *mut Request as *mut c_void,
-                    read_fn: read_trampoline,
-                },
-            }),
-            allow_unsafe: req.allow_unsafe,
-        })
+        Handler::paste_raw(
+            handler,
+            terminal_paste_pkg::Request {
+                source,
+                contents: terminal_paste_pkg::Contents::Reader(terminal_paste_pkg::Reader {
+                    mimes: &mimes,
+                    read: clipboard::MimeReader {
+                        ctx: req_ as *mut Request as *mut c_void,
+                        read_fn: read_trampoline,
+                    },
+                }),
+                allow_unsafe: req.allow_unsafe,
+            },
+        )
     };
     let written = match result {
         Ok(written) => written,
