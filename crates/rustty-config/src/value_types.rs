@@ -6036,6 +6036,13 @@ impl RepeatableCommand {
     // clone in the same motion, exactly like `init`/`parse_cli` do — this
     // already matches upstream's fixed end state, so there is no behavior
     // change here, only the corrected rationale.
+    //
+    // Reference comment, carried:
+    //
+    // Cloning value_c directly would copy Command.C structs
+    // whose string pointers still reference the source config's
+    // memory — the clone must stay valid after the source is
+    // freed.
     pub fn clone_in(&self) -> RepeatableCommand {
         let value: Vec<rustty_input::command::Command> =
             self.value.iter().map(|item| item.clone_in()).collect();
