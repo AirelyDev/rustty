@@ -2547,6 +2547,13 @@ during task P7-W1 T2 (Ruling 18), over the 30-minute bound the parity-closure Mi
 tasks to. The group itself passed; nothing here suggests a real Miri finding, only that the group
 does not fit in a task's own Miri budget and has to be discharged by a lane built for long runs.
 
+```
+PORTED: crates/rustty-vt/src/page.rs
+```
+
+**Recipe:** `cargo +nightly miri test -p rustty-vt --lib -- page::`, run with no time bound; it
+took 52 minutes on macOS. Expected: every test passes and Miri reports no UB.
+
 **Discharged by:** the P7-W12 T2 Miri lane, together with V28.
 
 ## V28. The P7-W1 T5 Miri debt — **ENVIRONMENT-BLOCKED (time)** [P7-W1 T5, Ruling 40, 2026-09-29]
@@ -2556,6 +2563,16 @@ carried to completion under Miri during task P7-W1 T5 (Ruling 40): the idle-page
 failure sweep, and the clone_from test. Three more never ran under Miri at all in that task: the
 reset, init and clone_grow teardown tests. And the full `pagelist` group was never run as one
 group under Miri — only individual tests or sub-groups were tried, each against its own bound.
+
+```
+PORTED: crates/rustty-datastruct/src/untouched_pool.rs
+PORTED: crates/rustty-vt/src/pagelist/mod.rs
+PORTED: crates/rustty-vt/src/pagelist/access.rs
+```
+
+**Recipe:** `cargo +nightly miri test -p rustty-vt --lib -- pagelist` with no time bound, as one
+run over the whole group; that covers all six tests named above. Expected: every test passes and
+Miri reports no UB.
 
 **Discharged by:** the P7-W12 T2 Miri lane, together with V27.
 
@@ -2567,5 +2584,15 @@ The `search/screen` test hit the 30-minute bound, and the `search/terminal` test
 Both use the file's `&raw mut` idiom (no `&mut PageList`/`Screen`/`Terminal` held across a search
 call); the task review confirmed that by reading, not by a run. The brief's `pagelist::builder`
 filter matched no test path, so that sub-lane added no coverage either.
+
+```
+PORTED: crates/rustty-vt/src/search/pagelist.rs
+PORTED: crates/rustty-vt/src/search/screen.rs
+PORTED: crates/rustty-vt/src/search/terminal.rs
+```
+
+**Recipe:** `cargo +nightly miri test -p rustty-vt --lib -- search::` with no time bound. Run it
+twice: once under Stacked Borrows (the default), and once under Tree Borrows by setting
+`MIRIFLAGS=-Zmiri-tree-borrows`. Expected: the two prepend tests pass and Miri reports no UB.
 
 **Discharged by:** the P7-W12 T2 Miri lane, together with V27 and V28.
