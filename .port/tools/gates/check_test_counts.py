@@ -196,7 +196,7 @@ RSXEV = f"{RS_ROOT}/crates/rustty-xev/src"
 # tests); main.zig's only `test {}` is the anonymous refAllDecls (skipped by
 # zig_count); error.zig/swizzle.zig carry 0 (swizzle is an R5 seam). zig=6; the
 # Rust side adds the ref_all_decls compile-touch (rust=7 >= 6).
-# P7-W0 T4: zlib.zig (NEW at 12752b2ac, `4b86e3594`: kitty zlib through wuffs)
+# P7-W0 T4: zlib.zig (NEW at the Phase-7 pin, `4b86e3594`: kitty zlib through wuffs)
 # carries 5 named tests: the row reads zig 8 -> 13 at arrival (still GREEN by
 # slack, rust=20), so the 5 names are the per-test meter (DECISIONS B8).
 GHWUFFS = "/Users/gael/projects/ghostty/pkg/wuffs/src"
@@ -945,7 +945,7 @@ MAP = {
     # 0 `test{}`, and wasi.rs is a std.os.wasi/loop.zig-twin slice with no 1:1
     # reference oracle.
     # ---------------------------------------------------------------------
-    # P7-W0 T4 (Phase-7 start, pin 12752b2ac): test files the MAP could not see
+    # P7-W0 T4 (Phase-7 start, the Phase-7 pin): test files the MAP could not see
     # (R5 §3 G1b; R1 §3 "Gate bookkeeping"). A gate that cannot see a new file is
     # bookkeeping green (memory derived-gate-green-can-be-bookkeeping), so every
     # row lands at phase start, before its port. A not-yet-ported Rust file is

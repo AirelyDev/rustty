@@ -699,21 +699,7 @@ pub(crate) mod tests {
     use super::super::gl::framebuffer::Target as FbTarget;
     use super::super::gl::test_support;
     use super::super::gl::{draw, errors, glad};
-    use super::super::opengl_impl::OpenGL;
     use super::Target;
-
-    /// Stands up the offscreen `OpenGL` for a KAT, or `None` (after the strict-mode
-    /// pivot) when the host has no GL 4.3 core context.
-    pub(crate) fn api(test_name: &str, blending: AlphaBlending) -> Option<OpenGL> {
-        match OpenGL::init_offscreen(blending, 8, 8) {
-            Ok(api) => Some(api),
-            Err(err) => {
-                test_support::require_gl_or_skip(test_name, &err);
-                eprintln!("no headless OpenGL 4.3 core context ({err}); skipping {test_name}");
-                None
-            }
-        }
-    }
 
     /// Clears `target`'s render framebuffer to `rgba`, then clears the
     /// `scissor` rectangle `(x, y, w, h)` to `inner`.
@@ -751,7 +737,7 @@ pub(crate) mod tests {
     #[test]
     fn target_read_pixels_alloc_returns_tight_rgba_rows() {
         let _guard = test_support::gl_lock();
-        let Some(api) = api(
+        let Some(api) = test_support::offscreen_api(
             "target_read_pixels_alloc_returns_tight_rgba_rows",
             AlphaBlending::LinearCorrected,
         ) else {
@@ -795,7 +781,7 @@ pub(crate) mod tests {
         const DRM_FORMAT_ABGR8888: u32 = u32::from_le_bytes(*b"AB24");
 
         let _guard = test_support::gl_lock();
-        let Some(api) = api(TEST, AlphaBlending::LinearCorrected) else {
+        let Some(api) = test_support::offscreen_api(TEST, AlphaBlending::LinearCorrected) else {
             return;
         };
         let ctx = api.egl();

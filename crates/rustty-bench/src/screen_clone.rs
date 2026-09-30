@@ -764,17 +764,9 @@ mod tests {
 
     // PORT-SPECIFIC (P7-W3 T3): every `Mode` name parses to its variant, and a
     // benchmark in that mode runs one iteration (`RunMode::Once`: setup, one
-    // step, teardown) on a small terminal without failing. The --release arm
-    // of G-BENCH runs `loops = 1`, one real pass of every mode's timed loop
-    // (50,000 to 3,000,000 updates). Debug builds run `loops = 0` (setup and
-    // the initial render-state update with the mode's overscan request, no
-    // timed loop), which is too slow there, and say so at runtime (R14).
-    #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (rustty-bench, P7-W3 T3): tens of thousands of render-state updates per mode; runs natively in the G-BENCH lane (debug and --release)"
-    )]
-    fn screen_clone_every_mode_name_parses_and_runs_one_iteration() {
+    // step, teardown) on a small terminal without failing. `loops` is the
+    // number of passes of each mode's timed loop.
+    fn every_mode_name_parses_and_runs_one_iteration(loops: &[u8]) {
         use rustty_args::args::Target;
 
         let modes: &[(&[u8], Mode)] = &[
@@ -791,13 +783,6 @@ mod tests {
             (b"render-output-overscan", Mode::RenderOutputOverscan),
             (b"render-clean-overscan", Mode::RenderCleanOverscan),
         ];
-        let loops: &[u8] = if cfg!(debug_assertions) { b"0" } else { b"1" };
-        if cfg!(debug_assertions) {
-            eprintln!(
-                "NOTE (R14): screen_clone_every_mode_name_parses_and_runs_one_iteration skips the \
-                 timed inner loop in debug builds (loops = 0); the --release run covers it"
-            );
-        }
         for &(name, mode) in modes {
             let mut opts = Options::default();
             opts.parse_into_field(b"mode", Some(name)).unwrap();
@@ -812,5 +797,34 @@ mod tests {
             bench.destroy(Allocator);
         }
         assert!(Mode::from_name(b"render-overscan").is_none());
+    }
+
+    // `loops = 1`: one real pass of every mode's timed loop (50,000 to
+    // 3,000,000 updates). Too slow unoptimized, so a debug build reports it
+    // `ignored` (R14 compile-time scope); the --release arm of G-BENCH runs it.
+    // (P7-W12 T0 split the debug-only `loops = 0` arm out into the test below,
+    // replacing a runtime "skips the timed inner loop" note.)
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-bench, P7-W3 T3): tens of thousands of render-state updates per mode; runs natively in the G-BENCH lane (--release)"
+    )]
+    #[cfg_attr(
+        all(not(miri), debug_assertions),
+        ignore = "R14 compile-time scope: one pass of each mode's timed loop is too slow unoptimized; the --release arm of G-BENCH runs it, and screen_clone_every_mode_name_parses_and_runs_setup_with_zero_loops covers debug"
+    )]
+    fn screen_clone_every_mode_name_parses_and_runs_one_iteration() {
+        every_mode_name_parses_and_runs_one_iteration(b"1");
+    }
+
+    // `loops = 0`: setup and the initial render-state update with the mode's
+    // overscan request, no timed loop. Runs in every build profile.
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-bench, P7-W3 T3): a render-state update per mode on a live terminal; runs natively in the G-BENCH lane (debug and --release)"
+    )]
+    fn screen_clone_every_mode_name_parses_and_runs_setup_with_zero_loops() {
+        every_mode_name_parses_and_runs_one_iteration(b"0");
     }
 }

@@ -82,6 +82,7 @@ against pin `88f57ee66`).
 | `lib::cutPrefix` | `1d6bc6829` | — | *"lib: remove cutPrefix implementation"* — `src/lib/string.zig` deleted; callers use `std.mem.cutPrefix` (the port's callers use a local `cut_prefix` helper for the same reason) |
 | `vt::selectionString map allocation failure cleanup` | `f1948d505` | — | selection text is transferred into the string map rather than duplicated, so the failure path the test drove no longer exists |
 | `vt-c::struct sizes are non-zero` | `9673a22b0` | — | the size smoke test was superseded by the manifest's exact `@sizeOf` assertions (`manifest describes the complete packed cell layout`) |
+| `vt::parse mouse_any_flag` | `1ca2858d0` | — | *"tmux: map pane mouse flags to the selectors tmux reports"* — tmux has no `mouse_any_flag` format variable, so the variable and its parse test were removed (P7-W12 T0; the port removed `parse_mouse_any_flag` with it in P7-W5 T3) |
 
 ### Renamed upstream — the port carries the successor
 
@@ -99,6 +100,7 @@ against pin `88f57ee66`).
 | `vt-c::render: colors get` | `b4079f00c` | `render: colors data get` | *"libghostty: add render state structured cursor read"* — the colors snapshot moved under `ghostty_render_state_get` |
 | `vt-c::render: colors get invalid value` | `b4079f00c` | `render: aggregate get invalid value` | ditto |
 | `vt-c::render: colors get supports truncated sized struct` | `b4079f00c` | `render: colors data get supports truncated sized struct` | ditto |
+| `vt-c::set write_pty callback` | `9dc0d974e` | `set write_pty callback DECRQM` | *"terminal: answer ANSI DECRQM queries"* renamed the test with the DECRQM query it now drives (P7-W12 T0; ported as `set_write_pty_callback_decrqm`) |
 
 `e8525c0fd` is the same commit behind the `TERM_PROGRAM` / `containsUnemptyConstant`
 port fix, and `fedd42e8d` behind the `getOrPutAdapted` consolidation recorded in

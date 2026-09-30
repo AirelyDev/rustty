@@ -738,16 +738,32 @@ mod tests {
 
             // fn request(self: *Contents) Request { ... }
             pub fn request(&mut self) -> Request {
+                // SAFETY: `self` is a live, exclusive `Contents`.
+                unsafe { Self::request_raw(self) }
+            }
+
+            /// [`Self::request`] over a raw `*Contents`, the reference's
+            /// `self: *Contents`. Every pointer the returned request carries
+            /// (the MIME list and the reader's userdata) is `this` itself or a
+            /// raw field address of it, so a test that keeps `this` as its one
+            /// raw root and reads `reads`/writes `fail` through it touches the
+            /// same tag the reader writes through (N455: reading through the
+            /// owner in between froze the userdata's tag under Tree Borrows).
+            ///
+            /// # Safety
+            /// `this` must point to a live `Contents` for as long as the
+            /// request is used.
+            pub unsafe fn request_raw(this: *mut Contents) -> Request {
                 Request {
                     size: std::mem::size_of::<Request>(),
                     // .location = .standard, .source = .clipboard
                     location: 0,
                     source: 0,
-                    mimes: self.mimes.as_ptr(),
-                    mimes_len: self.len,
+                    mimes: unsafe { std::ptr::addr_of!((*this).mimes) } as *const LibString,
+                    mimes_len: unsafe { (*this).len },
                     reader: io::MimeReader {
                         read: Some(Self::read),
-                        userdata: self as *mut Contents as *mut c_void,
+                        userdata: this as *mut c_void,
                     },
                     allow_unsafe: false,
                 }
@@ -1034,30 +1050,41 @@ mod tests {
                 )
             });
 
+            // N455 (P7-W12 T0): each `Contents` is reached ONLY through one raw
+            // root (`&raw mut`), which is also the reader's userdata, so the
+            // test's own reads of `reads` and write of `fail` use the tag the
+            // reader writes through. Reading through the owner between two
+            // pastes used to freeze that tag (a Tree Borrows violation on the
+            // next read callback), and the `fail` write disabled it outright.
+            // Zig's pointers are unprotected, so the reference just uses
+            // `contents` and reuses `req`; so does this test now.
+            //
             // Plain text, NULL out_written pointer is fine. The text is read
             // once, the image never.
             let mut contents =
                 s::Contents::init(&[(b"image/png", b"\x89PNG"), (b"text/plain", b"hel\x1blo")]);
-            let req = contents.request();
+            let contents = &raw mut contents;
+            let req = unsafe { s::Contents::request_raw(contents) };
             assert_eq!(Result::Success, unsafe {
                 terminal_paste(t, &req, std::ptr::null_mut())
             });
             assert_eq!(b"hel lo".as_slice(), s::written_slice());
             assert_eq!(1, unsafe { s::WRITE_COUNT });
-            assert_eq!(0, contents.reads[0]);
-            assert_eq!(1, contents.reads[1]);
+            assert_eq!(0, unsafe { (*contents).reads[0] });
+            assert_eq!(1, unsafe { (*contents).reads[1] });
 
             // Unsafe is refused with nothing written, then allowed.
             s::reset();
             let mut written: bool = false;
             let mut unsafe_contents = s::Contents::init(&[(b"text/plain", b"rm -rf /\n")]);
-            let mut unsafe_req = unsafe_contents.request();
+            let unsafe_contents = &raw mut unsafe_contents;
+            let mut unsafe_req = unsafe { s::Contents::request_raw(unsafe_contents) };
             assert_eq!(Result::Rejected, unsafe {
                 terminal_paste(t, &unsafe_req, &mut written)
             });
             assert_eq!(0, unsafe { s::WRITE_COUNT });
             assert!(!written);
-            assert_eq!(1, unsafe_contents.reads[0]);
+            assert_eq!(1, unsafe { (*unsafe_contents).reads[0] });
 
             unsafe_req.allow_unsafe = true;
             assert_eq!(Result::Success, unsafe {
@@ -1065,7 +1092,7 @@ mod tests {
             });
             assert!(written);
             assert_eq!(b"rm -rf /\r".as_slice(), s::written_slice());
-            assert_eq!(2, unsafe_contents.reads[0]);
+            assert_eq!(2, unsafe { (*unsafe_contents).reads[0] });
 
             // Bracketed paste mode frames the text through the real mode path.
             s::reset();
@@ -1079,23 +1106,18 @@ mod tests {
             // No text representation writes nothing and reads nothing.
             s::reset();
             let mut image = s::Contents::init(&[(b"image/png", b"\x89PNG")]);
-            let image_req = image.request();
+            let image = &raw mut image;
+            let image_req = unsafe { s::Contents::request_raw(image) };
             assert_eq!(Result::Success, unsafe {
                 terminal_paste(t, &image_req, &mut written)
             });
             assert!(!written);
             assert_eq!(0, unsafe { s::WRITE_COUNT });
-            assert_eq!(0, image.reads[0]);
+            assert_eq!(0, unsafe { (*image).reads[0] });
 
             // A failing reader is an I/O error.
             s::reset();
-            contents.fail = true;
-            // SB (test-harness): the direct `contents.fail` write above retags
-            // the owner and invalidates the `userdata` raw pointer stored in
-            // the earlier `req` (`rust-mut-args-strongly-protected`; Zig's
-            // pointers are unprotected so the reference reuses `req`). Re-mint
-            // the request so its ctx pointer is derived AFTER the write.
-            let req = contents.request();
+            unsafe { (*contents).fail = true };
             assert_eq!(Result::IoError, unsafe {
                 terminal_paste(t, &req, &mut written)
             });

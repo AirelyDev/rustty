@@ -973,26 +973,28 @@ def self_test_not_carried():
     if not (getmut and dll and gag and adwc):
         print("  [FAIL] not-carried: the real control rows are missing from the ledger")
         return False
-    # The review's attacks, planted verbatim.
-    w883 = {"file": "apprt/gtk/class/window.zig", "line": 883, "class": "no-counterpart",
-            "decl": "priv", "text": oracle_text("apprt/gtk/class/window.zig", 883),
+    # The review's attacks, planted verbatim. Line numbers are at the Phase-7 ORACLE_PIN
+    # (P7-W12 T0 re-anchored them from the Phase-6 pin on the same comment text: window.zig 882/883 -> 862/863,
+    # lib_vt.zig 185 -> 186).
+    w863 = {"file": "apprt/gtk/class/window.zig", "line": 863, "class": "no-counterpart",
+            "decl": "priv", "text": oracle_text("apprt/gtk/class/window.zig", 863),
             "evidence": ".port/parity-closure/ADJUDICATION.md#priv.global_shortcuts.setDbusConnection",
             "reason": "review attack A-1: a tail-d MISSING comment on ported code", "lineno": 0}
-    check("REAL ATTACK A-1: window.zig:883 declared no-counterpart with decl `priv` is RED",
-          any("keyword or a common local name" in e for e in real([w883])[0]))
+    check("REAL ATTACK A-1: window.zig:863 declared no-counterpart with decl `priv` is RED",
+          any("keyword or a common local name" in e for e in real([w863])[0]))
     check("REAL ATTACK A-1': the same row with a non-denylisted used identifier is still RED "
           "(not declared / evidence names neither it nor window.zig)",
           any(("not DECLARED" in e) or ("does not name" in e)
-              for e in real([dict(w883, decl="surface_init")])[0]))
-    w882 = {"file": "apprt/gtk/class/window.zig", "line": 882, "class": "gag-prose", "decl": "-",
-            "text": oracle_text("apprt/gtk/class/window.zig", 882),
+              for e in real([dict(w863, decl="surface_init")])[0]))
+    w862 = {"file": "apprt/gtk/class/window.zig", "line": 862, "class": "gag-prose", "decl": "-",
+            "text": oracle_text("apprt/gtk/class/window.zig", 862),
             "evidence": ".port/phase-3/NON_PORTS.md#Two upstream bugs that must NOT be reproduced",
             "reason": "review attack A-2: plain-English technical text as gag prose", "lineno": 0}
-    e882 = real([w882])[0]
-    check("REAL ATTACK A-2: window.zig:882 as gag-prose citing a record that merely mentions "
+    e862 = real([w862])[0]
+    check("REAL ATTACK A-2: window.zig:862 as gag-prose citing a record that merely mentions "
           "the rule is RED (the record lists no such line; the text is technical)",
-          any("does not list this line" in e for e in e882)
-          and any("technical word" in e for e in e882))
+          any("does not list this line" in e for e in e862)
+          and any("technical word" in e for e in e862))
     with tempfile.TemporaryDirectory() as troot:
         for d in NC.EVIDENCE_DOCS:
             src = os.path.join(G.RUSTTY_ROOT, d)
@@ -1034,11 +1036,11 @@ def self_test_not_carried():
     check("REAL NEG: BlurRegion.zig:59 (\"~30% bigger\") can never be gag prose (digit)",
           any("digit" in e for e in real([blur59])[0]))
     # A real comment the port DOES carry, declared as a row, is STALE (rule 2).
-    carried_row = dict(dll, line=185, file="lib_vt.zig", decl="quirks_memset",
-                       text=oracle_text("lib_vt.zig", 185))
+    carried_row = dict(dll, line=186, file="lib_vt.zig", decl="quirks_memset",
+                       text=oracle_text("lib_vt.zig", 186))
     _, crs = real([carried_row])
     pool = _nc_port_pool("bin", idmap)
-    check("REAL NEG: lib_vt.zig:185 (carried by the port) declared as a row is STALE",
+    check("REAL NEG: lib_vt.zig:186 (carried by the port) declared as a row is STALE",
           crs[0]["norm"] and NC.stale_rows(crs, classify, pool) == crs)
     real_ok = [r for r in vrows if r["file"] == "lib_vt.zig"]
     check("REAL: the committed lib_vt.zig rows are NOT stale against the real bin pool",
