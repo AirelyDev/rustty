@@ -3081,8 +3081,9 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
         },
         // .color_palette => {
         //     wrapper.terminal.colors.palette.changeDefault(
+        //         wrapper.terminal.gpa(),
         //         if (value) |v| color.paletteZval(v) else color.default,
-        //     );
+        //     ) catch return .out_of_memory;
         //     wrapper.terminal.flags.dirty.palette = true;
         // },
         Option_::ColorPalette => unsafe {
@@ -3092,7 +3093,11 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
             } else {
                 rustty_vt::color::DEFAULT
             };
-            (*t).colors.palette.change_default(def);
+            // `wrapper.terminal.gpa()`, read raw (no `&mut Terminal`).
+            let gpa = (*(*t).screens.active).alloc;
+            if (*t).colors.palette.change_default(gpa, def).is_err() {
+                return Result::OutOfMemory;
+            }
             (*t).flags.dirty.palette = true;
         },
 
@@ -4401,10 +4406,10 @@ unsafe fn get_typed(terminal_: Terminal, data: TerminalData, out: *mut c_void) -
             *(out as *mut crate::color::PaletteC) =
                 crate::color::palette_cval(&(*t).colors.palette.current)
         },
-        // .color_palette_default => out.* = color.paletteCval(&t.colors.palette.original),
+        // .color_palette_default => out.* = color.paletteCval(t.colors.palette.original),
         TerminalData::ColorPaletteDefault => unsafe {
             *(out as *mut crate::color::PaletteC) =
-                crate::color::palette_cval(&(*t).colors.palette.original)
+                crate::color::palette_cval((*t).colors.palette.original())
         },
         // .kitty_image_storage_limit => {
         //     if (comptime !build_options.kitty_graphics) return .no_value;
@@ -11167,6 +11172,81 @@ mod tests {
             assert_eq!(rustty_vt::color::DEFAULT[0], palette[0]);
             unsafe { free(t) };
         });
+    }
+
+    // PORT NOTE: Rust-only (d1cd56a56, P7-W2 T7). A non-default palette is
+    // copied into memory from the terminal's allocator, so setting one can
+    // fail with `OUT_OF_MEMORY`, and then nothing changes. The copy is freed
+    // on replacement by the built-in default and in `free`.
+    #[test]
+    fn set_color_palette_out_of_memory() {
+        use rustty_vt::alloc::testing::{Config, FailingAllocator};
+
+        let failing = FailingAllocator::over_heap(Config::default());
+        let alloc = failing.allocator();
+        let (new_result, t) = new_t(&alloc, 80, 24);
+        assert_eq!(Result::Success, new_result);
+
+        let mut custom: crate::color::PaletteC =
+            unsafe { crate::color::palette_cval(&rustty_vt::color::DEFAULT) };
+        custom[0] = crate::color::RgbC {
+            r: 0x12,
+            g: 0x34,
+            b: 0x56,
+        };
+        let mut palette: crate::color::PaletteC = [crate::color::RgbC { r: 0, g: 0, b: 0 }; 256];
+
+        // The copy's allocation fails: out of memory, and nothing changes.
+        unsafe { (*zig_terminal(t)).flags.dirty.palette = false };
+        failing.fail_index.set(failing.alloc_index.get());
+        assert_eq!(Result::OutOfMemory, unsafe {
+            set(t, Option_::ColorPalette, custom.as_ptr() as *const c_void)
+        });
+        assert!(failing.has_induced_failure.get());
+        assert!(!unsafe { (*zig_terminal(t)).flags.dirty.palette });
+        for data in [
+            TerminalData::ColorPalette,
+            TerminalData::ColorPaletteDefault,
+        ] {
+            assert_eq!(Result::Success, unsafe {
+                get(t, data, palette.as_mut_ptr() as *mut c_void)
+            });
+            assert_eq!(rustty_vt::color::DEFAULT[0], palette[0]);
+        }
+
+        // The built-in default never allocates, even while failing.
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::ColorPalette, std::ptr::null())
+        });
+
+        // With memory, the custom palette is set; the built-in default then
+        // releases the copy, and a second custom palette is freed by `free`.
+        failing.fail_index.set(usize::MAX);
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::ColorPalette, custom.as_ptr() as *const c_void)
+        });
+        assert_eq!(Result::Success, unsafe {
+            get(
+                t,
+                TerminalData::ColorPaletteDefault,
+                palette.as_mut_ptr() as *mut c_void,
+            )
+        });
+        assert_eq!(custom[0], palette[0]);
+        let live = failing.allocated_bytes.get() - failing.freed_bytes.get();
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::ColorPalette, std::ptr::null())
+        });
+        assert_eq!(
+            live - core::mem::size_of::<rustty_vt::color::Palette>(),
+            failing.allocated_bytes.get() - failing.freed_bytes.get()
+        );
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::ColorPalette, custom.as_ptr() as *const c_void)
+        });
+        unsafe { free(t) };
+        assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+        assert_eq!(failing.allocations.get(), failing.deallocations.get());
     }
 
     // test "get color default vs effective with override"

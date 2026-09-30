@@ -818,7 +818,7 @@ impl Header {
 
 /// Allocator-owned semantic state decoded from one TERMINAL payload.
 ///
-/// The palette and fixed header are values. `tabstops`, `pwd`, and `title`
+/// The fixed header is a value. `tabstops`, `palette`, `pwd`, and `title`
 /// own allocations and are released by `deinit`.
 struct DecodedPayload {
     header: Header,
@@ -831,6 +831,8 @@ struct DecodedPayload {
 impl DecodedPayload {
     fn deinit(self, alloc: Allocator) {
         self.tabstops.deinit(alloc);
+        let mut palette = self.palette;
+        palette.deinit(alloc);
         // alloc.free(self.pwd); alloc.free(self.title); — the Vecs free on
         // drop. self.* = undefined;
     }
@@ -975,14 +977,32 @@ fn decode_payload(
         return Err(err.into());
     }
 
+    // var palette: terminal_color.DynamicPalette = try .init(alloc, original);
+    // errdefer palette.deinit(alloc);
+    //
+    // PORT NOTE: `init` allocates only for a non-default original, so the
+    // test allocation tripwire is consulted only then.
+    if original != terminal_color::DEFAULT {
+        if let Err(err) = decode_alloc_check() {
+            tabstops.deinit(alloc);
+            return Err(err);
+        }
+    }
     let mut palette: terminal_color::DynamicPalette =
-        terminal_color::DynamicPalette::init(original);
+        match terminal_color::DynamicPalette::init(alloc, original) {
+            Ok(palette) => palette,
+            Err(_) => {
+                tabstops.deinit(alloc);
+                return Err(PayloadDecodeError::OutOfMemory);
+            }
+        };
     for index in 0..256usize {
         let mask = 1u8 << (index % 8);
         if override_mask[index / 8] & mask != 0 {
             let rgb = match decode_rgb(reader) {
                 Ok(rgb) => rgb,
                 Err(err) => {
+                    palette.deinit(alloc);
                     tabstops.deinit(alloc);
                     return Err(err.into());
                 }
@@ -1028,6 +1048,7 @@ fn decode_payload(
     let pwd = match read_string(reader) {
         Ok(pwd) => pwd,
         Err(err) => {
+            palette.deinit(alloc);
             tabstops.deinit(alloc);
             return Err(err);
         }
@@ -1035,6 +1056,7 @@ fn decode_payload(
     let title = match read_string(reader) {
         Ok(title) => title,
         Err(err) => {
+            palette.deinit(alloc);
             tabstops.deinit(alloc);
             return Err(err);
         }
@@ -1226,6 +1248,15 @@ pub fn decode(source: &mut dyn io::Reader, alloc: Allocator) -> Result<Terminal,
         payload.deinit(alloc);
         return Err(DecodeError::OutOfMemory);
     }
+    // PORT NOTE: the reference copies `payload.palette` into the options and
+    // resets the payload's to `.default` once `Terminal.init` succeeds, so a
+    // failed init leaves it to the deferred `payload.deinit`. The port moves
+    // it out (leaving `.default`) instead: a failed `Terminal::init` drops
+    // its options, which releases the palette exactly once.
+    let palette = core::mem::replace(
+        &mut payload.palette,
+        terminal_color::DynamicPalette::default_palette(),
+    );
     let mut result = match Terminal::init(
         alloc,
         TerminalOptions {
@@ -1237,7 +1268,7 @@ pub fn decode(source: &mut dyn io::Reader, alloc: Allocator) -> Result<Terminal,
                 background: header.background,
                 foreground: header.foreground,
                 cursor: header.cursor_color,
-                palette: payload.palette,
+                palette,
             },
             default_modes: header.default_modes,
             default_cursor_style: header.cursor_default_style,
@@ -1253,6 +1284,11 @@ pub fn decode(source: &mut dyn io::Reader, alloc: Allocator) -> Result<Terminal,
         }
     };
     // errdefer result.deinit(alloc);
+
+    // The terminal owns the decoded palette now, so the payload must not
+    // release it.
+    // payload.palette = .default;
+    // PORT NOTE: done by the move above.
 
     // Recreate the optional screen now so ScreenSet routing is complete before
     // its empty screens are replaced by the following SCREEN records.
@@ -1859,7 +1895,7 @@ mod tests {
         tabstops.set(test_header().columns as usize - 1);
 
         // Use overrides at both ends of the palette to make ordering explicit.
-        let mut palette = terminal_color::DynamicPalette::init(terminal_color::DEFAULT);
+        let mut palette = terminal_color::DynamicPalette::default_palette();
         palette.set(0, RGB { r: 1, g: 2, b: 3 });
         palette.set(255, RGB { r: 4, g: 5, b: 6 });
 
@@ -1984,27 +2020,28 @@ mod tests {
         let after_title_len = title.len() as u32;
 
         // Each lie with the number of allocations the decode performs before
-        // the lying string's (the tab stops, then the pwd).
+        // the lying string's (the tab stops, the owned copy of the all-zero,
+        // non-default original palette (d1cd56a56), then the pwd).
         let lies: [(&str, Vec<u8>, usize); 4] = [
             (
                 "a 4 GiB pwd",
                 framed(u32::MAX, &pwd, after_title_len, title),
-                1,
+                2,
             ),
             (
                 "a pwd one byte longer than the record",
                 framed(after_pwd_len + 1, &pwd, after_title_len, title),
-                1,
+                2,
             ),
             (
                 "a 4 GiB title",
                 framed(pwd.len() as u32, &pwd, u32::MAX, title),
-                2,
+                3,
             ),
             (
                 "a title one byte longer than the record",
                 framed(pwd.len() as u32, &pwd, after_title_len + 1, title),
-                2,
+                3,
             ),
         ];
 
@@ -2052,10 +2089,10 @@ mod tests {
             let _ = tw::take_reached();
             let mut decoded = decode(source, Allocator)
                 .unwrap_or_else(|err| panic!("{route}: the honest record failed: {err:?}"));
-            // Seven: the payload's three (tab stops, pwd, title), then
-            // `Terminal.init`, the alternate screen, and the native pwd and
-            // title strings.
-            assert_eq!(7, tw::take_reached(), "{route}: allocations reached");
+            // Eight: the payload's four (tab stops, the owned palette copy,
+            // pwd, title), then `Terminal.init`, the alternate screen, and
+            // the native pwd and title strings.
+            assert_eq!(8, tw::take_reached(), "{route}: allocations reached");
             // `Terminal.pwd` keeps the NUL sentinel; `get_pwd` strips it.
             assert_eq!(Some(pwd.as_slice()), decoded.get_pwd(), "{route}");
             assert_eq!(Some(title.as_slice()), decoded.get_title(), "{route}");
@@ -2070,7 +2107,7 @@ mod tests {
         let mut tabstops =
             TerminalTabstops::init(Allocator, test_header().columns as usize - 1, 0).unwrap();
         // defer tabstops.deinit(testing.allocator);
-        let mut palette = terminal_color::DynamicPalette::init(terminal_color::DEFAULT);
+        let mut palette = terminal_color::DynamicPalette::default_palette();
         let mut encoded = [0u8; 2048];
         let mut writer = io::FixedWriter::new(&mut encoded);
         assert_eq!(
@@ -2098,7 +2135,7 @@ mod tests {
         let tabstops =
             TerminalTabstops::init(Allocator, test_header().columns as usize, 0).unwrap();
         // defer tabstops.deinit(testing.allocator);
-        let mut palette = terminal_color::DynamicPalette::init(terminal_color::DEFAULT);
+        let mut palette = terminal_color::DynamicPalette::default_palette();
         palette.set(1, RGB { r: 1, g: 2, b: 3 });
 
         let mut destination = io::AllocatingWriter::new();
@@ -2359,6 +2396,79 @@ mod tests {
             decode(&mut failing_source, Allocator).map(|mut t| t.deinit(Allocator)),
         );
         super::super::tw::end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+
+        terminal.deinit(Allocator);
+    }
+
+    // PORT NOTE: Rust-only (d1cd56a56, P7-W2 T7). A non-default original
+    // palette is an allocator-owned copy that the decoded payload holds until
+    // `Terminal.init` takes it. Every allocation of a decode is failed in turn
+    // through a real allocator, and each failure must return every byte: the
+    // copy is released exactly once whether the failure comes before, at or
+    // after the hand-off to the terminal. The success run then proves the
+    // terminal owns the copy and releases it in `deinit`.
+    #[test]
+    fn terminal_decode_releases_an_owned_palette_on_every_failure() {
+        use crate::alloc::testing::{with_handle, Config, FailingAllocator};
+
+        let mut terminal = Terminal::init(Allocator, terminal_options(10, 3, None, None)).unwrap();
+        let mut custom = terminal_color::DEFAULT;
+        custom[3] = RGB { r: 3, g: 4, b: 5 };
+        terminal
+            .colors
+            .palette
+            .change_default(Allocator, custom)
+            .unwrap();
+        terminal.colors.palette.set(9, RGB { r: 9, g: 8, b: 7 });
+
+        let mut destination = io::AllocatingWriter::new();
+        let mut stream = record::Writer::init(&mut destination);
+        encode(&terminal, &mut stream).unwrap();
+        let written = stream.destination().written().to_vec();
+        stream.deinit();
+
+        let mut n = 0usize;
+        loop {
+            let failing = FailingAllocator::over_heap(Config {
+                fail_index: n,
+                ..Config::default()
+            });
+            let c = failing.allocator();
+            let decoded = with_handle(&c, |alloc| {
+                let mut source = io::FixedReader::new(&written);
+                match decode(&mut source, alloc) {
+                    Ok(mut restored) => {
+                        assert_eq!(custom, *restored.colors.palette.original());
+                        assert_eq!(terminal.colors.palette, restored.colors.palette);
+                        restored.deinit(alloc);
+                        true
+                    }
+                    Err(err) => {
+                        assert_eq!(DecodeError::OutOfMemory, err, "n={n}");
+                        false
+                    }
+                }
+            });
+            assert_eq!(
+                failing.allocated_bytes.get(),
+                failing.freed_bytes.get(),
+                "n={n}: every byte is returned"
+            );
+            assert_eq!(
+                failing.allocations.get(),
+                failing.deallocations.get(),
+                "n={n}"
+            );
+            if decoded {
+                assert!(!failing.has_induced_failure.get());
+                break;
+            }
+            n += 1;
+            assert!(n < 10_000, "the sweep must terminate");
+        }
+        // The palette copy is the second allocation (after the tab stops),
+        // so the sweep covers failures on both sides of the hand-off.
+        assert!(n > 2, "only {n} allocations were swept");
 
         terminal.deinit(Allocator);
     }

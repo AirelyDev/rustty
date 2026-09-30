@@ -1061,6 +1061,8 @@ impl Terminal {
         // `self.tabstops.deinit(alloc)`.
         core::mem::take(&mut self.tabstops).deinit(alloc);
         self.screens.deinit(alloc);
+        // self.colors.palette.deinit(alloc);
+        self.colors.palette.deinit(alloc);
         // self.pwd.deinit(alloc); self.title.deinit(alloc);
         self.pwd.deinit(alloc);
         self.title.deinit(alloc);

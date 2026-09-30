@@ -598,8 +598,8 @@ impl<M: AppMailbox> Termio<M> {
                         };
                         color::DynamicRGB::init(rgb)
                     },
-                    // .palette = .init(opts.config.palette),
-                    palette: color::DynamicPalette::init(opts.config.palette),
+                    // .palette = .default,
+                    palette: color::DynamicPalette::default_palette(),
                 },
                 kitty_image_storage_limit: opts.config.image_storage_limit,
                 // .kitty_image_loading_limits = .allWithTempDir(global.tmpDirPath()),
@@ -626,9 +626,22 @@ impl<M: AppMailbox> Termio<M> {
         // `crate::Error` — the reference `try` bubbles the alloc failure.)
         .map_err(|_| Error)?;
         // errdefer term.deinit(alloc);
-        // (PORT NOTE: `Terminal::init` is the sole fallible step and runs BEFORE any
-        // write into `*self_`; on error we return before writing, so no
-        // partial-init cleanup is needed — the errdefer collapses.)
+        // (PORT NOTE: `Terminal::init` and the `changeDefault` below are the
+        // fallible steps, and both run BEFORE any write into `*self_`; the
+        // errdefer is the explicit `term.deinit` on the `changeDefault` error.)
+
+        // The default palette may be an allocator-owned copy, so it is set
+        // once the terminal owns its memory and can release it on deinit.
+        // try term.colors.palette.changeDefault(alloc, opts.config.palette);
+        if term
+            .colors
+            .palette
+            .change_default(alloc.into(), opts.config.palette)
+            .is_err()
+        {
+            term.deinit(alloc.into());
+            return Err(Error);
+        }
 
         // PORT NOTE (oracle c594031d5): the "Set our default cursor style"
         // poke at `term.screens.active.cursor.cursor_style` that used to live
@@ -1169,12 +1182,31 @@ impl<M: AppMailbox> Termio<M> {
         //   - command, working-directory: we never restart the underlying
         //   process so we don't care or need to know about these.
 
-        // Update the default palette.
-        // self.terminal.colors.palette.changeDefault(config.palette);
-        self.terminal
+        // Update the default palette. A config change must not fail here, so
+        // if we can't allocate the copy of the configured palette we fall back
+        // to the built-in default, which never allocates.
+        // self.terminal.colors.palette.changeDefault(
+        //     self.alloc,
+        //     config.palette,
+        // ) catch |err| {
+        //     log.warn("error changing default palette, using built-in default err={}", .{err});
+        //     self.terminal.colors.palette.resetDefault(self.alloc);
+        // };
+        if let Err(err) = self
+            .terminal
             .colors
             .palette
-            .change_default(self.config.palette);
+            .change_default(self.alloc.into(), self.config.palette)
+        {
+            log::warn!(
+                target: LOG_SCOPE,
+                "error changing default palette, using built-in default err={err:?}"
+            );
+            self.terminal
+                .colors
+                .palette
+                .reset_default(self.alloc.into());
+        }
         // self.terminal.flags.dirty.palette = true;
         self.terminal.flags.dirty.palette = true;
 
