@@ -1,95 +1,116 @@
-# N441 / N442: main-thread whole-core-`Surface` references
+# N441 / N442 / N443 / N448: main-thread references to the core `Surface` and `App`
 
-This is an isolated, **non-FFI** reproduction of the borrow shapes behind NEW-FINDINGS
-**N441** and **N442**, fixed in P7-W7 T5b. It is used to PROVE the fixes. It follows the
-doctrine in memories `rust-mut-args-strongly-protected` and `shaper-hook-sb-clean-interleave`,
-and the precedent in `../mirihar-n437`.
+This is an isolated, **non-FFI** reproduction of the borrow shapes behind NEW-FINDINGS **N441**,
+**N442**, **N443** and **N448**, fixed in P7-W7 T5b (round 0, then fix round 1 under ruling 43). It
+is used to PROVE the fixes. It follows the doctrine in memories `rust-mut-args-strongly-protected`
+and `shaper-hook-sb-clean-interleave`, and the precedent in `../mirihar-n437`.
 
 ## The bugs
 
 - **N441.** The core `Surface` embedded the renderer by value. The render thread writes it under
-  the draw mutex, through the `*mut Renderer` it gets at `Thread.init`. The main thread calls the
-  apprt's core entries through a whole `&mut Surface` or `&Surface`:
-  - GTK `render_surface_resize` → `contentScaleCallback` / `sizeCallback`;
-  - key, mouse, focus and clipboard callbacks;
-  - the embedded C API.
+  the draw mutex through its `*mut Renderer`. Every main-thread `&mut Surface` / `&Surface` the
+  apprt forms (`sizeCallback`, `contentScaleCallback`, key, mouse, focus, clipboard, ...) retags
+  every byte of the surface, so it races with those writes.
+  - **Fix round 1.** Round 0's out-of-line box was freed in a `Drop` that never runs, because every
+    owner frees the surface without drop glue. Every closed surface leaked its renderer allocation.
+- **N442.** `performBindingAction(&mut self)` and its callers `keyCallback` / `maybeHandleBinding`
+  held a protected Unique across `rt_app.perform_action`. The macOS host's `new_split` / `new_tab` /
+  `new_window` handlers re-enter the surface: `rustty_surface_inherited_config`, then
+  `rustty_surface_new`.
+- **N443.** The core `App` entries (`performAction`, `keyEvent`, `tick`, `newWindow`,
+  `colorSchemeEvent`, ...) held `&mut self` or `&self` across host callbacks that write the app:
+  - `reload_config` → `rustty_app_update_config` → `updateConfig(&mut self)`;
+  - `new_*` → `rustty_surface_new` → `addSurface`;
+  - `quit` → `needsConfirmQuit`.
 
-  Every such retag covers every byte of the surface, including the renderer. That makes it a data
-  race with the render thread's locked writes, under Stacked and Tree Borrows. The draw mutex does
-  not help, because the retag happens without it.
-- **N442.** `performBindingAction(&mut self)` and its callers `keyCallback(&mut self)` and
-  `maybeHandleBinding(&mut self)` held a protected Unique across `rt_app.perform_action`. The macOS
-  host's `new_split` / `new_tab` / `new_window` handlers call `rustty_surface_inherited_config`
-  inside that callback, which reads `core_surface.font_size` and the pwd through the parent
-  pointer. That is a foreign read of a protected Unique.
-
-  `App::newWindow(&mut self)` had the same shape: the host also reads `core_app.alloc`.
+  The embedded app had the same shape: `keyEvent(&self)` stayed protected across the whole key
+  event, and `newSurface(&mut self)` retagged the app under `perform_action(&self)`.
+- **N448.** `performAllAction` iterated the live surface list while each surface's host callback can
+  append to it. An append that reallocates the list frees the buffer under the loop.
 
 ## The fixes
 
-- **N441.** The renderer moves into its own allocation, `renderer_seam::RendererBox`, created with
-  `Box::into_raw` before `Thread::init`. The render thread and the surface share that one raw root,
-  so a whole-surface retag now covers only the pointer. Main-thread renderer entries go through
-  `RendererBox::as_ptr()` and lock first, per N437.
-- **N442.** `performBindingAction`, `keyCallback` and `maybeHandleBinding` are raw-self
-  (`self_: *mut Surface`).
-  - Each one takes an **unprotected** local reborrow, `this`. That reborrow is dead before any call
-    that can run the host callback, and it is taken afresh after.
-  - The re-entrant arms touch the surface only by place through `self_`, plus the shared
-    `Target::Surface(&*self_)`. A read-only re-entry is sound under a shared protector.
-  - `App::newWindow` takes `&self`.
-  - The C routes (`rustty_surface_key`, `_binding_action`, `_split`, `_split_focus`,
-    `_request_close`) enter through `&raw mut (*ptr).core_surface`.
+- **N441.** `renderer_seam::RendererBox`: the renderer in its own allocation, shared with the render
+  thread through one raw root. There is no `Drop`; `dealloc_after_deinit` frees the allocation
+  without drop glue, right after `Renderer::deinit`.
+- **N442.** The three surface entries are raw-self. Each uses an unprotected local reborrow that is
+  dead across any call that can reach the host, and the re-entrant arms work by place. The C routes
+  enter through `&raw mut (*ptr).core_surface`.
+- **N443.**
+  - The core `App` entries are raw-self (`self_: *mut App`), reaching the app only by place in short
+    reborrows.
+  - The embedded `keyEvent` / `newSurface` are raw-self.
+  - `rt_app: &A` stays a shared reference, because `perform_action` is a `&self` trait method.
+    Nothing writes the embedded app's non-`UnsafeCell` bytes during a callback.
+- **N448.** The surface arm iterates a snapshot of the list and skips a surface that is gone.
 
 ## The model
 
 `src/main.rs` includes the REAL `rustty_zigstd::thread::Mutex` and the REAL
-`rustty_renderer::latest_frame::DrawMutex` by `#[path]`. The N441 candidates run two threads. The
-N442 and N443 candidates are single-threaded and model the C routes, the embedded surface (with
-`core_surface` inline), the `Target` enum holding a shared reference, and the host callback that
-re-enters. Each run explores 16 scheduler seeds (`-Zmiri-many-seeds=0..16`).
+`rustty_renderer::latest_frame::DrawMutex` by `#[path]`.
 
-## Candidates and results
+- The N441 race candidates run two threads.
+- The leak arms rely on Miri's leak check.
+- The N442/N443/N448 candidates are single-threaded. They model the C routes, the embedded app and
+  surface (with `core_surface` inline), the `Target` enum holding a shared reference, and the macOS
+  host callback.
+  - The callback re-enters with the host's own app pointer, as `Rustty.App.app` does:
+    `inherited_config` then `rustty_surface_new` for `new_*`, `rustty_app_update_config` for
+    `reload_config`, and `rustty_app_needs_confirm_quit` for `quit`.
+  - A thread-local `Mode` selects the code: `Shipped` (before T5b), `Round0` (T5b round 0) or
+    `Fixed` (fix round 1).
+
+Each run explores 16 scheduler seeds (`-Zmiri-many-seeds=0..16`).
+
+## Candidates and results (fix round 1, 2026-09-29)
 
 | candidate | what it models | SB | TB |
 |---|---|---|---|
 | `n441_inline_renderer` | whole-`&mut Surface` main callbacks vs render-thread locked writes to the INLINE renderer | **UB** | **UB** |
-| `n441_boxed_renderer` | the fix: the renderer out of line (`RendererBox`); main-thread locked narrow renderer entry included | **CLEAN** | **CLEAN** |
-| `n441_residual_terminal_inline` | the same class beyond the renderer (N444): the inline terminal vs io-thread locked writes | **UB** | **UB** |
+| `n441_boxed_renderer` | the fix: the renderer out of line; main-thread locked narrow renderer entry included | **CLEAN** | **CLEAN** |
+| `n441_residual_terminal_inline` | N444 (OPEN → W7.T5c): the inline terminal vs io-thread locked writes | **UB** | **UB** |
 | `n441_residual_terminal_boxed` | the same fix shape applied to the terminal | **CLEAN** | **CLEAN** |
-| `n442_shipped_key_route` | `rustty_surface_key` → `keyCallback(&mut)` → `maybeHandleBinding(&mut)` → `performBindingAction(&mut)` → host → `inherited_config` | **UB** | **UB** |
-| `n442_shipped_binding_new_split` | `rustty_surface_split` / `_binding_action` → `performBindingAction(&mut)` `new_split` | **UB** | CLEAN |
+| `n441_box_drop_leak` | round 0: the box freed in `Drop`, the surface freed through `ManuallyDrop` | **LEAK** | **LEAK** |
+| `n441_box_dealloc_after_deinit` | fix round 1: `deinit`, then `dealloc_after_deinit` | **CLEAN** | **CLEAN** |
+| `n442_shipped_key_route` | before T5b: `rustty_surface_key` → `keyCallback(&mut)` → … → host | **UB** | **UB** |
+| `n442_shipped_binding_new_split` | before T5b: `performBindingAction(&mut)` `new_split` | **UB** | CLEAN |
 | `n442_shipped_binding_new_tab` | as above, `new_tab` | **UB** | CLEAN |
-| `n442_shipped_binding_new_window` | as above, `new_window` (with `App::newWindow(&mut)`) | **UB** | CLEAN |
-| `n442_new_window_app_mut` | raw-self surface, but `App::newWindow(&mut self)` while the host reads `core_app.alloc` | **UB** | CLEAN |
+| `n442_shipped_binding_new_window` | as above, `new_window` (with `App::newWindow(&mut)`) | **UB** | **UB** |
 | `n442_raw_this_spans` | NEGATIVE: raw-self, but the local `this` (written before) is used after the callback | **UB** | **UB** |
-| `n442_raw_key_route` | the fix: the key route, all four actions | **CLEAN** | **CLEAN** |
-| `n442_raw_binding_all` | the fix: the binding/menu routes, all four actions | **CLEAN** | **CLEAN** |
-| `n443_quit_app_mut` | N443 (OPEN): `App::performAction(&mut self)` `.quit` while the host reads `needsConfirmQuit` | **UB** | CLEAN |
-| `n443_quit_app_ref` | the N443 fix direction (`&App`) | **CLEAN** | **CLEAN** |
+| `r0_binding_new_window` | round 0: `App::newWindow(&self)` while `rustty_surface_new` appends to `surfaces` | **UB** | **UB** |
+| `r0_key_route_new_split` | round 0: embedded `keyEvent(&self)` + `newSurface(&mut self)` | **UB** | CLEAN |
+| `r0_binding_reload_config` | round 0: `App::performAction(&mut self)` `reload_config` → `updateConfig` | **UB** | **UB** |
+| `r0_binding_quit` | round 0: `App::performAction(&mut self)` `quit` → `needsConfirmQuit` | **UB** | CLEAN |
+| `r0_app_tick_reload_config` | round 0: `rustty_app_tick` → `performAction(&mut)` `reload_config` | **UB** | **UB** |
+| `r0_app_key_global_reload_config` | round 0: `rustty_app_key` → `App::keyEvent(&mut)` global `reload_config` | **UB** | **UB** |
+| `r0_all_new_split_live_iter` | N448: two surfaces, a full list, `all:new_split` over the live list | **UB** | **UB** |
+| `fixed_key_route_all` | the fix: the key route, every action | **CLEAN** | **CLEAN** |
+| `fixed_binding_all` | the fix: the binding/menu routes, every action | **CLEAN** | **CLEAN** |
+| `fixed_app_tick_all` | the fix: `rustty_app_tick` → `reload_config`, `quit`, `new_window` | **CLEAN** | **CLEAN** |
+| `fixed_app_key_global_all` | the fix: global keybinds `new_split`/`new_tab`/`new_window`/`reload_config`/`quit` | **CLEAN** | **CLEAN** |
+| `fixed_all_new_split_snapshot` | the N448 fix on the same full-list world | **CLEAN** | **CLEAN** |
 
-The N441 UB rows are data races between a main-thread retag and the other thread's access. Under
-SB Miri reports "retag write … retag write of type `Renderer`"; under TB it reports "retag read …
-non-atomic write". The N442 UB rows under SB say "not granting access to tag … because that would
-remove [Unique …] which is strongly protected".
+- **Messages behind each verdict.**
+  - N441 races: "Data race detected … retag".
+  - Protector rows under SB: "not granting access … strongly protected"; under TB: "write access
+    through … is forbidden".
+  - N448: "alloc has been freed, so this pointer is dangling".
+  - LEAK: Miri's "memory leaked" report.
+- **Why some rows are UB under SB but CLEAN under TB.** In those rows, the re-entry only reads, or
+  only retags `&mut` without writing. A TB `Reserved`/`Frozen` tag tolerates that. The SB verdict
+  alone makes each one a defect.
+- **Harness history.** The host model uses the host's own app pointer, not the callback's `app`
+  argument (the host only hands that to `rustty_app_userdata`). An earlier version of the model used
+  the callback's argument, which derives from `perform_action`'s `&self` and gave a spurious SB
+  report.
+- **Flaky exit.** Some runs print a many-seeds child `Bus error: 10` after their UB report. A rerun
+  reports the same UB with exit code 1.
 
-Several rows are **UB** under SB and **CLEAN** under TB. In those candidates the protected Unique
-has not been written before the callback, and a Tree Borrows `Reserved` tag tolerates a foreign
-read. The key route writes first (`keyCallback` / `maybeHandleBinding` reset `pressed_key`,
-`last_trigger` and `sequence_set`), so it is UB under both models. The Stacked Borrows verdict
-alone is enough to make it a defect.
-
-The negative `n442_raw_this_spans` shows that raw-self alone is not enough. The local reborrow must
-be dead across the callback. That is why `maybeHandleBinding` re-takes it lazily after the dispatch,
-once the closing check has run.
-
-Measured 2026-09-29 with `miri 0.1.0 (6f72b5dd5f 2026-07-22)` on a macOS host. One SB run of
-`n442_shipped_binding_new_tab` printed a `Bus error: 10` from a many-seeds child after its UB
-report. On rerun it reports the same UB with a clean exit code of 1.
+Measured with `miri 0.1.0 (6f72b5dd5f 2026-07-22)` on a macOS host.
 
 ## Run
 
 ```sh
-bash run-all.sh                                        # 14 candidates x SB/TB x 16 seeds
-cargo +nightly miri run -q -- n442_raw_key_route       # one candidate, SB
+bash run-all.sh                                   # every candidate x SB/TB x 16 seeds
+cargo +nightly miri run -q -- fixed_binding_all   # one candidate, SB
 ```

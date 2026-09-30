@@ -602,10 +602,11 @@ pub unsafe extern "C" fn rustty_app_tick(v: *mut App) {
     // };
     //
     // PORT NOTE: `core_app` (a separate heap allocation) and the rt-app `&*v` never
-    // alias, so the `&mut CoreApp` receiver + `&App` argument are sound.
+    // alias. The core app is entered raw-self (N443): a drained message can run
+    // the embedder's action callback, which re-enters the core app.
     // SAFETY: `v` validity is the caller's contract.
     let core_app = unsafe { (*v).core_app };
-    if let Err(err) = unsafe { (*core_app).tick(&*v) } {
+    if let Err(err) = unsafe { rustty_core::app::App::tick(core_app, &*v) } {
         log::error!(target: LOG_SCOPE, "error app tick err={err:?}");
     }
 }
@@ -686,7 +687,8 @@ pub unsafe extern "C" fn rustty_app_key(app: *mut App, event: KeyEvent) -> bool 
         }
     };
     // SAFETY: `app` validity is the caller's contract.
-    match unsafe { (*app).keyEvent(KeyTarget::App, kev) } {
+    // (N443: raw-self; a global keybind's host callback re-enters the app.)
+    match unsafe { App::keyEvent(app, KeyTarget::App, kev) } {
         Ok(v) => v,
         Err(err) => {
             log::warn!(target: LOG_SCOPE, "error processing key event err={err:?}");
@@ -870,7 +872,8 @@ pub unsafe extern "C" fn rustty_app_set_color_scheme(v: *mut App, scheme_raw: c_
     // };
     // SAFETY: `v` validity is the caller's contract.
     let core_app = unsafe { (*v).core_app };
-    if let Err(err) = unsafe { (*core_app).colorSchemeEvent(&*v, scheme) } {
+    // (N443: raw-self; the soft reload re-enters the core app.)
+    if let Err(err) = unsafe { rustty_core::app::App::colorSchemeEvent(core_app, &*v, scheme) } {
         log::error!(target: LOG_SCOPE, "error setting color scheme err={err:?}");
     }
 }
@@ -1291,7 +1294,8 @@ unsafe fn surface_new_(
     // (`ptr::read` — `SurfaceOptions` is `#[repr(C)]`, trivially copyable).
     // `App::newSurface` heap-boxes + pins the backend `Surface` (ADV-FIX 8).
     // SAFETY: `app`/`opts` validity is the caller's contract.
-    unsafe { (*app).newSurface(core::ptr::read(opts)) }
+    // (N443: raw-self; this is called from inside the app's action callbacks.)
+    unsafe { App::newSurface(app, core::ptr::read(opts)) }
 }
 
 /// C: rustty_surface_free
@@ -1895,7 +1899,8 @@ pub unsafe extern "C" fn rustty_surface_key(surface: *mut Surface, event: KeyEve
         }
     };
     // SAFETY: `surface`/`surface.app` validity is the caller's contract.
-    match unsafe { (*(*surface).app).keyEvent(KeyTarget::Surface(surface), kev) } {
+    // (N442/N443: raw-self through the embedded app and surface roots.)
+    match unsafe { App::keyEvent((*surface).app, KeyTarget::Surface(surface), kev) } {
         Ok(v) => v,
         Err(err) => {
             log::warn!(target: LOG_SCOPE, "error processing key event err={err:?}");

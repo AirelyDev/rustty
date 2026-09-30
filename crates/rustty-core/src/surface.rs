@@ -2352,7 +2352,11 @@ where
                 // errdefer alloc.destroy(mutex);
                 unsafe { drop(Box::from_raw(mutex)) };
                 // errdefer renderer_impl.deinit();
-                unsafe { (*renderer_ptr).deinit() };
+                // (N441: then its own allocation is released, no drop glue.)
+                unsafe {
+                    (*renderer_ptr).deinit();
+                    renderer_impl.dealloc_after_deinit();
+                }
                 // (errdefer app.font_grid_set.deref — UD115)
                 unsafe { (*app).font_grid_set.deref(font_grid_key) };
                 // errdefer derived_config.deinit();
@@ -2403,7 +2407,11 @@ where
                 // errdefer alloc.destroy(mutex);
                 unsafe { drop(Box::from_raw(mutex)) };
                 // errdefer renderer_impl.deinit();
-                unsafe { (*renderer_ptr).deinit() };
+                // (N441: then its own allocation is released, no drop glue.)
+                unsafe {
+                    (*renderer_ptr).deinit();
+                    renderer_impl.dealloc_after_deinit();
+                }
                 // (errdefer app.font_grid_set.deref — UD115)
                 unsafe { (*app).font_grid_set.deref(font_grid_key) };
                 // errdefer derived_config.deinit();
@@ -3149,6 +3157,9 @@ where
             drop(Box::from_raw((*self_).renderer_state.mutex));
             // errdefer renderer_impl.deinit(); (Surface.zig:559)
             (*(*self_).renderer.as_ptr()).deinit();
+            // (N441: then its own allocation is released, no drop glue; the
+            // caller frees the surface slot the same way.)
+            (*self_).renderer.dealloc_after_deinit();
             // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD115: the
             // missing `errdefer app.font_grid_set.deref(font_grid_key)` (see the
             // `ref` site). The by-value Key is read out of `self_`, as
@@ -3271,7 +3282,12 @@ where
         //
         // (N441: the render thread is joined above, so the exclusive borrow of
         // the out-of-line renderer overlaps nothing.)
-        unsafe { (*self.renderer.as_ptr()).deinit() };
+        unsafe {
+            (*self.renderer.as_ptr()).deinit();
+            // (N441: then its own allocation is released, no drop glue; the
+            // apprt frees the surface itself without glue too.)
+            self.renderer.dealloc_after_deinit();
+        }
         // self.io_thread.deinit();
         //
         // (consuming receiver — read out of the invalidated-in-place self.)
@@ -7665,6 +7681,11 @@ where
 
         // Setup our actions
         // const actions = leaf.actionsSlice();
+        //
+        // PORT NOTE: reference defect (R13), UD368. The reference's slice points
+        // into the config a chained `reload_config` frees mid-loop; `leaf` here
+        // owns a copy of the actions (`GenericLeaf`), so the loop and the checks
+        // after it never read the replaced config.
         let actions: &[binding::Action] = leaf.actions_slice();
 
         // Attempt to perform the action
@@ -7691,7 +7712,13 @@ where
                 //
                 // (N442: through the raw root; it performs on every surface,
                 // this one included.)
-                unsafe { (*(*self_).app).performAllChainedAction(&*(*self_).rt_app, actions) };
+                unsafe {
+                    crate::app::App::performAllChainedAction(
+                        (*self_).app,
+                        &*(*self_).rt_app,
+                        actions,
+                    )
+                };
 
                 // "All" actions are always performed since they are global.
                 // break :performed true;
@@ -11366,16 +11393,20 @@ where
                 //     .{ .parent = self },
                 // ),
                 //
-                // (N442: re-entrant, so by place through `self_`; `App::newWindow`
-                // takes `&self`, since the host also reads the core app.)
+                // (N442/N443: re-entrant, so by place through `self_`, and
+                // `App::newWindow` is raw-self: the host re-enters both this
+                // surface and the core app.)
                 binding::ScopedApp::NewWindow => {
                     let rt_app: &A = unsafe { &*(*self_).rt_app };
-                    unsafe { &*(*self_).app }.newWindow(
-                        rt_app,
-                        crate::app::NewWindow {
-                            parent: Some(self_),
-                        },
-                    )?;
+                    unsafe {
+                        crate::app::App::newWindow(
+                            (*self_).app,
+                            rt_app,
+                            crate::app::NewWindow {
+                                parent: Some(self_),
+                            },
+                        )
+                    }?;
                 }
 
                 // Undo and redo both support both surface and app targeting.
@@ -11408,9 +11439,13 @@ where
                 //
                 // (`app_action` IS `action.scoped(.app).?`, the value the
                 // reference re-derives here.)
+                //
+                // (N443: raw-self through `self_`; e.g. `reload_config`'s host
+                // callback rewrites the core app and every surface, this one
+                // included.)
                 _ => {
-                    let rt_app: &A = unsafe { &*this.rt_app };
-                    unsafe { &mut *this.app }.performAction(rt_app, app_action)?;
+                    let rt_app: &A = unsafe { &*(*self_).rt_app };
+                    unsafe { crate::app::App::performAction((*self_).app, rt_app, app_action) }?;
                 }
             }
             // return true;

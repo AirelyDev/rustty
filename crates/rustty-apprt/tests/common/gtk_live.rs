@@ -26,7 +26,7 @@ pub fn iterate(ctx: &glib::MainContext, core_app: *mut CoreApp<gtk::App>, app: &
     ctx.iteration(true);
     // SAFETY: `core_app` is the test's live boxed core app; the tick runs on the
     // main thread, as `App::run`'s does.
-    if let Err(err) = unsafe { (*core_app).tick(app) } {
+    if let Err(err) = unsafe { CoreApp::<gtk::App>::tick(core_app, app) } {
         panic!("core app tick failed: {err:?}");
     }
 }

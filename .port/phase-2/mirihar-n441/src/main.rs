@@ -304,22 +304,96 @@ fn run_terminal_boxed() {
     drop(unsafe { Box::from_raw(s.state_mutex) });
 }
 
+// ---------------------------------------------------------------------------
+// N441 fix round 1: freeing the out-of-line renderer. Every owner frees the
+// core `Surface` WITHOUT drop glue (embedded `closeSurface` via
+// `ManuallyDrop`, GTK via `dealloc`, init-error callers via the `MaybeUninit`
+// slot), so a `Drop` on the box never runs: a leak (Miri's leak check). The fix
+// frees the box explicitly right after `deinit`, also without drop glue.
+// ---------------------------------------------------------------------------
+struct RendererBoxDrop(*mut Renderer);
+impl Drop for RendererBoxDrop {
+    fn drop(&mut self) {
+        drop(unsafe { Box::from_raw(self.0) });
+    }
+}
+
+struct RendererBoxExplicit(*mut Renderer);
+impl RendererBoxExplicit {
+    unsafe fn dealloc_after_deinit(&self) {
+        drop(unsafe { Box::from_raw(self.0.cast::<std::mem::ManuallyDrop<Renderer>>()) });
+    }
+}
+
+/// `Renderer::deinit`: tears down what the renderer owns (the port frees the
+/// owned buffers explicitly; drop glue afterwards would free them twice).
+unsafe fn renderer_deinit(r: *mut Renderer) {
+    unsafe {
+        let cells = std::ptr::read(&raw const (*r).cells);
+        drop(cells);
+    }
+}
+
+struct SurfaceWithDropBox {
+    size: (u32, u32),
+    renderer: RendererBoxDrop,
+}
+
+struct SurfaceWithExplicitBox {
+    size: (u32, u32),
+    renderer: RendererBoxExplicit,
+}
+
+/// Round 0: `Surface::deinit` runs `renderer.deinit()`, then the owner frees
+/// the surface through `ManuallyDrop` (embedded `closeSurface`).
+fn run_box_drop_leak() {
+    let s = Box::into_raw(Box::new(SurfaceWithDropBox {
+        size: (1, 1),
+        renderer: RendererBoxDrop(Box::into_raw(Box::new(Renderer::new()))),
+    }));
+    unsafe {
+        (*s).size = (2, 2);
+        renderer_deinit((*s).renderer.0);
+        drop(Box::from_raw(
+            s.cast::<std::mem::ManuallyDrop<SurfaceWithDropBox>>(),
+        ));
+    }
+}
+
+/// Fix round 1: `deinit` then `dealloc_after_deinit`; the owner's
+/// `ManuallyDrop` free is unchanged.
+fn run_box_dealloc_after_deinit() {
+    let s = Box::into_raw(Box::new(SurfaceWithExplicitBox {
+        size: (1, 1),
+        renderer: RendererBoxExplicit(Box::into_raw(Box::new(Renderer::new()))),
+    }));
+    unsafe {
+        (*s).size = (2, 2);
+        renderer_deinit((*s).renderer.0);
+        (*s).renderer.dealloc_after_deinit();
+        drop(Box::from_raw(
+            s.cast::<std::mem::ManuallyDrop<SurfaceWithExplicitBox>>(),
+        ));
+    }
+}
+
 // ===========================================================================
-// N442
+// N442 / N443 / N448
 // ===========================================================================
 mod n442 {
-    use std::cell::UnsafeCell;
+    use std::cell::{Cell, UnsafeCell};
 
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
     pub enum Action {
         NewSplit,
         NewTab,
         NewWindow,
-        /// Any arm that does not call `rt_app.perform_action` with a
-        /// re-entrant host callback (`scroll_to_top`, `copy_to_clipboard`, ..).
-        Other,
-        /// N443: the app-scoped `quit` (`App::performAction`).
+        /// App-scoped `reload_config`.
+        ReloadConfig,
+        /// App-scoped `quit`.
         Quit,
+        /// Any arm whose host callback re-enters nothing.
+        Other,
     }
 
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -329,71 +403,55 @@ mod n442 {
         Window,
     }
 
-    /// The core `App` (`rustty_core::App`).
-    pub struct CoreApp {
-        pub alloc: u64,
-        pub surfaces: Vec<*mut Core>,
+    /// Which code the model runs.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub enum Mode {
+        /// Before P7-W7 T5b: `&mut self` everywhere.
+        Shipped,
+        /// T5b round 0: the surface entries raw-self; the app entries still
+        /// references (`App::newWindow(&self)`, `App::performAction(&mut
+        /// self)`, embedded `keyEvent(&self)` + `newSurface(&mut self)`).
+        Round0,
+        /// T5b fix round 1: the app entries raw-self too.
+        Fixed,
     }
 
-    /// `apprt.Target`: `Target::Surface(&C)` is a shared reference, as in the
-    /// port (`apprt::Target<'_, C>`).
+    thread_local! {
+        pub static MODE: Cell<Mode> = const { Cell::new(Mode::Fixed) };
+        /// The host's own app pointer (`Rustty.App.app`, the `rustty_app_new`
+        /// result). The host passes THIS to `rustty_surface_new`,
+        /// `rustty_app_update_config` and `rustty_app_needs_confirm_quit`, not
+        /// the callback's `app` argument (which it only hands to
+        /// `rustty_app_userdata`).
+        pub static ROOT: Cell<*mut RtApp> = const { Cell::new(core::ptr::null_mut()) };
+    }
+    fn mode() -> Mode {
+        MODE.with(|m| m.get())
+    }
+
+    // ------------------------------------------------------------------ types
+
+    /// The core `App`.
+    pub struct CoreApp {
+        pub alloc: u64,
+        pub focused: bool,
+        pub theme: u8,
+        pub surfaces: Vec<*mut Embedded>,
+    }
+
+    /// `apprt.Target`: the surface arm holds a shared reference, as the port's
+    /// `apprt::Target<'_, C>` does.
     pub enum Target<'a> {
         App,
         Surface(&'a Core),
     }
 
-    /// The embedded `App`: the C action callback and the core app pointer.
+    /// The embedded `App`: plain fields plus an `UnsafeCell` config (written
+    /// through `&self` by `config_change`).
     pub struct RtApp {
         pub core_app: *mut CoreApp,
         pub cb: unsafe fn(*const RtApp, *mut Embedded, Action) -> bool,
-    }
-
-    impl RtApp {
-        /// `perform_action(&self, target, action)`: `target.cval()` is the
-        /// core surface's `rt_surface` (the embedded surface pointer).
-        pub fn perform_action(&self, target: Target<'_>, action: Action) -> bool {
-            let t = match target {
-                Target::App => core::ptr::null_mut(),
-                Target::Surface(c) => c.rt_surface,
-            };
-            unsafe { (self.cb)(self, t, action) }
-        }
-    }
-
-    impl CoreApp {
-        /// SHIPPED `App::newWindow(&mut self, ..)`: reads only.
-        pub fn new_window_mut(&mut self, rt_app: &RtApp, parent: Option<*mut Core>) {
-            let target = match parent {
-                Some(p) if self.surfaces.contains(&p) => Target::Surface(unsafe { &*p }),
-                _ => Target::App,
-            };
-            let _ = rt_app.perform_action(target, Action::NewWindow);
-        }
-
-        /// `App::needsConfirmQuit(&self)`.
-        pub fn needs_confirm_quit(&self) -> bool {
-            !self.surfaces.is_empty() && self.alloc == 0
-        }
-
-        /// SHIPPED (N443, OPEN) `App::performAction(&mut self, ..)`'s `.quit`
-        /// arm.
-        pub fn perform_action_quit_mut(&mut self, rt_app: &RtApp) {
-            let _ = rt_app.perform_action(Target::App, Action::Quit);
-        }
-
-        /// N443 fix direction: the `.quit` arm without a protected `&mut App`.
-        pub fn perform_action_quit_ref(&self, rt_app: &RtApp) {
-            let _ = rt_app.perform_action(Target::App, Action::Quit);
-        }
-
-        /// FIXED `App::newWindow(&self, ..)`.
-        pub fn new_window_ref(&self, rt_app: &RtApp, parent: Option<*mut Core>) {
-            let target = match parent {
-                Some(p) if self.surfaces.contains(&p) => Target::Surface(unsafe { &*p }),
-                _ => Target::App,
-            };
-            let _ = rt_app.perform_action(target, Action::NewWindow);
-        }
+        pub config: UnsafeCell<u32>,
     }
 
     /// The core `Surface`.
@@ -409,12 +467,77 @@ mod n442 {
         pub rt_surface: *mut Embedded,
     }
 
-    /// The embedded `Surface`: `core_surface` inline, the handed-out working
-    /// directory in an `UnsafeCell` (written through `&self`).
+    /// The embedded `Surface`: `core_surface` inline.
     pub struct Embedded {
-        pub app: *const RtApp,
+        pub app: *mut RtApp,
         pub core_surface: Core,
         pub inherited_working_directory: UnsafeCell<Option<Vec<u8>>>,
+    }
+
+    // ----------------------------------------------------------- embedded app
+
+    impl RtApp {
+        /// `ApprtApp::perform_action(&self, ..)` (a trait method: `&self`).
+        pub fn perform_action(&self, target: Target<'_>, action: Action) -> bool {
+            let t = match target {
+                Target::App => core::ptr::null_mut(),
+                Target::Surface(c) => c.rt_surface,
+            };
+            unsafe { (self.cb)(self, t, action) }
+        }
+
+        /// SHIPPED / ROUND 0 `newSurface(&mut self, ..)`.
+        pub fn new_surface_mut(&mut self) -> *mut Embedded {
+            let app: *mut RtApp = self;
+            unsafe { new_surface_body(app) }
+        }
+
+        /// FIXED `newSurface(self_: *mut App, ..)`.
+        pub unsafe fn new_surface_raw(app: *mut RtApp) -> *mut Embedded {
+            unsafe { new_surface_body(app) }
+        }
+
+        /// SHIPPED / ROUND 0 `keyEvent(&self, target, ..)`.
+        pub fn key_event_ref(&self, surface: *mut Embedded, key: u32) -> bool {
+            if surface.is_null() {
+                return unsafe { (*self.core_app).key_event_mut(self, key) };
+            }
+            unsafe { surface_key_callback(&raw mut (*surface).core_surface, key) }
+        }
+
+        /// FIXED `keyEvent(self_: *const App, target, ..)`.
+        pub unsafe fn key_event_raw(app: *const RtApp, surface: *mut Embedded, key: u32) -> bool {
+            if surface.is_null() {
+                return unsafe { CoreApp::key_event_raw((*app).core_app, &*app, key) };
+            }
+            unsafe { surface_key_callback(&raw mut (*surface).core_surface, key) }
+        }
+    }
+
+    /// `newSurface`'s body: allocate, `Surface.init` (`app.core_app.addSurface`).
+    unsafe fn new_surface_body(app: *mut RtApp) -> *mut Embedded {
+        let core_app = unsafe { (*app).core_app };
+        let s = Box::into_raw(Box::new(Embedded {
+            app,
+            core_surface: Core {
+                font_size: 13.0,
+                pwd: b"/tmp".to_vec(),
+                last_trigger: None,
+                sequence_set: None,
+                size: (800, 600),
+                pressed_key: None,
+                rt_app: app,
+                app: core_app,
+                rt_surface: core::ptr::null_mut(),
+            },
+            inherited_working_directory: UnsafeCell::new(None),
+        }));
+        unsafe {
+            (*s).core_surface.rt_surface = s;
+            // `try app.core_app.addSurface(self)`: `&mut CoreApp`, a push.
+            (*core_app).add_surface(s);
+        }
+        s
     }
 
     impl Embedded {
@@ -422,7 +545,6 @@ mod n442 {
         pub fn new_surface_options(&self, context: Context) -> f32 {
             let font_size = self.core_surface.font_size;
             if context == Context::Window || context == Context::Tab {
-                // `self.core_surface.pwd(self.app.core_app.alloc)`
                 let _alloc = unsafe { (*(*self.app).core_app).alloc };
                 let cwd = self.core_surface.pwd.clone();
                 unsafe { *self.inherited_working_directory.get() = Some(cwd) };
@@ -431,41 +553,235 @@ mod n442 {
         }
     }
 
-    /// `rustty_app_needs_confirm_quit(app)`: `(*core_app).needsConfirmQuit()`.
-    pub unsafe fn c_app_needs_confirm_quit(app: *const RtApp) -> bool {
-        unsafe { (*(*app).core_app).needs_confirm_quit() }
+    // --------------------------------------------------------------- core app
+
+    impl CoreApp {
+        pub fn add_surface(&mut self, s: *mut Embedded) {
+            self.surfaces.push(s);
+        }
+
+        pub fn needs_confirm_quit(&self) -> bool {
+            !self.surfaces.is_empty() && self.alloc == 0
+        }
+
+        /// `updateConfig(&mut self, rt_app, config)`: every surface gets
+        /// `change_config` (writes it), then the app's own state.
+        pub fn update_config(&mut self, rt_app: &RtApp) {
+            for &s in self.surfaces.iter() {
+                unsafe { (*s).core_surface.font_size += 1.0 };
+            }
+            self.theme = self.theme.wrapping_add(1);
+            unsafe { *rt_app.config.get() += 1 };
+        }
+
+        /// SHIPPED / ROUND 0 `keyEvent(&mut self, rt_app, ..)` (global keybind).
+        pub fn key_event_mut(&mut self, rt_app: &RtApp, key: u32) -> bool {
+            let Some(action) = action_for(key) else {
+                return false;
+            };
+            if !self.focused {
+                return false;
+            }
+            self.perform_all_action_mut(rt_app, action);
+            true
+        }
+
+        /// FIXED `keyEvent(self_: *mut Self, rt_app, ..)`.
+        pub unsafe fn key_event_raw(self_: *mut CoreApp, rt_app: &RtApp, key: u32) -> bool {
+            let Some(action) = action_for(key) else {
+                return false;
+            };
+            if !unsafe { (*self_).focused } {
+                return false;
+            }
+            unsafe { CoreApp::perform_all_action_raw(self_, rt_app, action) };
+            true
+        }
+
+        /// SHIPPED / ROUND 0 `performAction(&mut self, ..)`.
+        pub fn perform_action_mut(&mut self, rt_app: &RtApp, action: Action) {
+            match action {
+                Action::NewWindow => {
+                    let _ = rt_app.perform_action(Target::App, Action::NewWindow);
+                }
+                a => {
+                    let _ = rt_app.perform_action(Target::App, a);
+                }
+            }
+        }
+
+        /// FIXED `performAction(self_: *mut Self, ..)`.
+        pub unsafe fn perform_action_raw(self_: *mut CoreApp, rt_app: &RtApp, action: Action) {
+            let _ = self_;
+            let _ = rt_app.perform_action(Target::App, action);
+        }
+
+        /// ROUND 0 `newWindow(&self, ..)`.
+        pub fn new_window_ref(&self, rt_app: &RtApp, parent: Option<*mut Core>) {
+            let target = match parent {
+                Some(p)
+                    if self
+                        .surfaces
+                        .iter()
+                        .any(|&s| unsafe { &raw mut (*s).core_surface } == p) =>
+                {
+                    Target::Surface(unsafe { &*p })
+                }
+                _ => Target::App,
+            };
+            let _ = rt_app.perform_action(target, Action::NewWindow);
+        }
+
+        /// SHIPPED `newWindow(&mut self, ..)`.
+        pub fn new_window_mut(&mut self, rt_app: &RtApp, parent: Option<*mut Core>) {
+            let target = match parent {
+                Some(p)
+                    if self
+                        .surfaces
+                        .iter()
+                        .any(|&s| unsafe { &raw mut (*s).core_surface } == p) =>
+                {
+                    Target::Surface(unsafe { &*p })
+                }
+                _ => Target::App,
+            };
+            let _ = rt_app.perform_action(target, Action::NewWindow);
+        }
+
+        /// FIXED `newWindow(self_: *mut Self, ..)`.
+        pub unsafe fn new_window_raw(
+            self_: *mut CoreApp,
+            rt_app: &RtApp,
+            parent: Option<*mut Core>,
+        ) {
+            let has = |p: *mut Core| unsafe {
+                (*self_)
+                    .surfaces
+                    .iter()
+                    .any(|&s| &raw mut (*s).core_surface == p)
+            };
+            let target = match parent {
+                Some(p) if has(p) => Target::Surface(unsafe { &*p }),
+                _ => Target::App,
+            };
+            let _ = rt_app.perform_action(target, Action::NewWindow);
+        }
+
+        /// SHIPPED `performAllAction(&mut self, ..)`: surface-scoped actions over
+        /// the live `surfaces` slice.
+        pub fn perform_all_action_mut(&mut self, rt_app: &RtApp, action: Action) {
+            if matches!(action, Action::ReloadConfig | Action::Quit) {
+                self.perform_action_mut(rt_app, action);
+                return;
+            }
+            for &s in self.surfaces.iter() {
+                unsafe { surface_perform_binding_action(&raw mut (*s).core_surface, action) };
+            }
+        }
+
+        /// ROUND 0 `performAllAction`: raw app, but iterating the live list.
+        pub unsafe fn perform_all_action_live_iter(
+            self_: *mut CoreApp,
+            rt_app: &RtApp,
+            action: Action,
+        ) {
+            if matches!(action, Action::ReloadConfig | Action::Quit) {
+                unsafe { CoreApp::perform_action_raw(self_, rt_app, action) };
+                return;
+            }
+            for &s in unsafe { (*self_).surfaces.iter() } {
+                unsafe { surface_perform_binding_action(&raw mut (*s).core_surface, action) };
+            }
+        }
+
+        /// FIXED `performAllAction(self_: *mut Self, ..)` (N448): a snapshot
+        /// of the list, skipping surfaces that are gone.
+        pub unsafe fn perform_all_action_raw(self_: *mut CoreApp, rt_app: &RtApp, action: Action) {
+            if matches!(action, Action::ReloadConfig | Action::Quit) {
+                unsafe { CoreApp::perform_action_raw(self_, rt_app, action) };
+                return;
+            }
+            let surfaces: Vec<*mut Embedded> = unsafe { (*self_).surfaces.clone() };
+            for s in surfaces {
+                if !unsafe { (*self_).surfaces.contains(&s) } {
+                    continue;
+                }
+                unsafe { surface_perform_binding_action(&raw mut (*s).core_surface, action) };
+            }
+        }
     }
+
+    // ------------------------------------------------------ the C exports
 
     /// `rustty_surface_inherited_config(surface, source)`.
     pub unsafe fn c_inherited_config(surface: *mut Embedded, source: Context) -> f32 {
         unsafe { (*surface).new_surface_options(source) }
     }
 
-    /// The macOS host's action callback (`Rustty.App.swift` `newSplit`,
-    /// `newTab`, `newWindow`): re-enters the target surface synchronously.
-    pub unsafe fn host_action(app: *const RtApp, surface: *mut Embedded, action: Action) -> bool {
-        if action == Action::Quit {
-            // `NSApplication.terminate` -> `applicationShouldTerminate` ->
-            // `rustty_app_needs_confirm_quit(app)` -> `core_app.needsConfirmQuit()`.
-            let _ = unsafe { c_app_needs_confirm_quit(app) };
-            return true;
+    /// `rustty_surface_new(app, opts)`.
+    pub unsafe fn c_surface_new(app: *mut RtApp) -> *mut Embedded {
+        match mode() {
+            Mode::Shipped | Mode::Round0 => unsafe { (*app).new_surface_mut() },
+            Mode::Fixed => unsafe { RtApp::new_surface_raw(app) },
         }
-        if surface.is_null() {
-            return true;
-        }
+    }
+
+    /// `rustty_app_update_config(app, config)`:
+    /// `(*core_app).updateConfig(&*app, config)`.
+    pub unsafe fn c_app_update_config(app: *const RtApp) {
+        unsafe { (*(*app).core_app).update_config(&*app) }
+    }
+
+    /// `rustty_app_needs_confirm_quit(app)`.
+    pub unsafe fn c_app_needs_confirm_quit(app: *const RtApp) -> bool {
+        unsafe { (*(*app).core_app).needs_confirm_quit() }
+    }
+
+    /// The macOS host's action callback (`Rustty.App.swift`).
+    /// - `new_split` / `new_tab` / `new_window`: `inherited_config` on the
+    ///   target surface, then the notification observers create the new view
+    ///   synchronously: `rustty_surface_new`.
+    /// - `reload_config`: `rustty_app_update_config`.
+    /// - `quit`: `NSApplication.terminate` -> `rustty_app_needs_confirm_quit`.
+    pub unsafe fn host_action(_app: *const RtApp, surface: *mut Embedded, action: Action) -> bool {
+        let app: *mut RtApp = ROOT.with(|r| r.get());
         let ctx = match action {
             Action::NewSplit => Context::Split,
             Action::NewTab => Context::Tab,
             Action::NewWindow => Context::Window,
-            Action::Other | Action::Quit => return true,
+            Action::ReloadConfig => {
+                unsafe { c_app_update_config(app) };
+                return true;
+            }
+            Action::Quit => {
+                let _ = unsafe { c_app_needs_confirm_quit(app) };
+                return true;
+            }
+            Action::Other => return true,
         };
-        let _ = unsafe { c_inherited_config(surface, ctx) };
+        if !surface.is_null() {
+            let _ = unsafe { c_inherited_config(surface, ctx) };
+        }
+        let _ = unsafe { c_surface_new(app) };
         true
     }
 
-    // ---------------------------------------------------------------- SHIPPED
+    pub fn action_for(key: u32) -> Option<Action> {
+        match key {
+            1 => Some(Action::NewSplit),
+            2 => Some(Action::NewTab),
+            3 => Some(Action::NewWindow),
+            4 => Some(Action::Other),
+            5 => Some(Action::ReloadConfig),
+            6 => Some(Action::Quit),
+            _ => None,
+        }
+    }
+
+    // ---------------------------------------------------------- core surface
+
+    /// SHIPPED core-surface methods (`&mut self`).
     impl Core {
-        /// `keyCallback(&mut self, ..)`.
         pub fn key_callback(&mut self, key: u32) -> bool {
             self.pressed_key = None;
             if let Some(v) = self.maybe_handle_binding(key) {
@@ -475,7 +791,6 @@ mod n442 {
             false
         }
 
-        /// `maybeHandleBinding(&mut self, ..)`.
         pub fn maybe_handle_binding(&mut self, key: u32) -> Option<bool> {
             let action = action_for(key)?;
             self.last_trigger = None;
@@ -487,7 +802,6 @@ mod n442 {
             Some(performed)
         }
 
-        /// `performBindingAction(&mut self, ..)`.
         pub fn perform_binding_action(&mut self, action: Action) -> bool {
             match action {
                 Action::NewWindow => {
@@ -504,7 +818,12 @@ mod n442 {
                     unsafe { &*self.rt_app }
                         .perform_action(Target::Surface(&*self), Action::NewSplit)
                 }
-                Action::Other | Action::Quit => {
+                Action::ReloadConfig | Action::Quit => {
+                    let rt_app = unsafe { &*self.rt_app };
+                    unsafe { &mut *self.app }.perform_action_mut(rt_app, action);
+                    true
+                }
+                Action::Other => {
                     self.size.0 += 1;
                     true
                 }
@@ -512,23 +831,7 @@ mod n442 {
         }
     }
 
-    pub fn action_for(key: u32) -> Option<Action> {
-        match key {
-            1 => Some(Action::NewSplit),
-            2 => Some(Action::NewTab),
-            3 => Some(Action::NewWindow),
-            4 => Some(Action::Other),
-            _ => None,
-        }
-    }
-
-    // ------------------------------------------------------------------ FIXED
-    // Raw-self dispatch: `*mut Core` receivers; each stretch of work takes a
-    // fresh, UNPROTECTED local `&mut` that is dead before the next call that
-    // can reach the host callback; the re-entrant arms touch the surface only
-    // through place expressions on the raw pointer and a shared `Target`.
-
-    /// `Surface::keyCallback(self_: *mut Self, ..)`.
+    /// `Surface::keyCallback(self_: *mut Self, ..)` (T5b, both rounds).
     pub unsafe fn key_callback_raw(self_: *mut Core, key: u32) -> bool {
         {
             let this = unsafe { &mut *self_ };
@@ -558,14 +861,18 @@ mod n442 {
         Some(performed)
     }
 
-    /// `Surface::performBindingAction(self_: *mut Self, ..)`: the body keeps a
-    /// local `this` for the non-re-entrant arms; the re-entrant arms never use
-    /// it (a local `&mut` is not protected, and it is dead after them).
+    /// `Surface::performBindingAction(self_: *mut Self, ..)`; the app-scoped
+    /// arms per `MODE` (round 0: app references; fixed: raw-self).
     pub unsafe fn perform_binding_action_raw(self_: *mut Core, action: Action) -> bool {
         let this = unsafe { &mut *self_ };
         match action {
             Action::NewWindow => unsafe {
-                (*(*self_).app).new_window_ref(&*(*self_).rt_app, Some(self_));
+                match mode() {
+                    Mode::Fixed => {
+                        CoreApp::new_window_raw((*self_).app, &*(*self_).rt_app, Some(self_))
+                    }
+                    _ => (*(*self_).app).new_window_ref(&*(*self_).rt_app, Some(self_)),
+                }
                 true
             },
             Action::NewTab => unsafe {
@@ -575,10 +882,33 @@ mod n442 {
                 let _right = (*self_).size.0 > (*self_).size.1;
                 (*(*self_).rt_app).perform_action(Target::Surface(&*self_), Action::NewSplit)
             },
-            Action::Other | Action::Quit => {
+            Action::ReloadConfig | Action::Quit => unsafe {
+                let rt_app = &*(*self_).rt_app;
+                match mode() {
+                    Mode::Fixed => CoreApp::perform_action_raw((*self_).app, rt_app, action),
+                    _ => (*(*self_).app).perform_action_mut(rt_app, action),
+                }
+                true
+            },
+            Action::Other => {
                 this.size.0 += 1;
                 true
             }
+        }
+    }
+
+    /// Dispatch into a surface per `MODE`.
+    unsafe fn surface_key_callback(s: *mut Core, key: u32) -> bool {
+        match mode() {
+            Mode::Shipped => unsafe { (*s).key_callback(key) },
+            _ => unsafe { key_callback_raw(s, key) },
+        }
+    }
+
+    unsafe fn surface_perform_binding_action(s: *mut Core, action: Action) -> bool {
+        match mode() {
+            Mode::Shipped => unsafe { (*s).perform_binding_action(action) },
+            _ => unsafe { perform_binding_action_raw(s, action) },
         }
     }
 
@@ -592,8 +922,11 @@ mod n442 {
         v
     }
 
-    /// Build one app + embedded surface as `rustty_app_new` +
-    /// `rustty_surface_new` do (the C host holds the raw roots).
+    // ------------------------------------------------------------- the world
+
+    /// `rustty_app_new` + one `rustty_surface_new` (with spare capacity 1 in
+    /// the surface list, so the first append reallocates it, as a grown list
+    /// eventually does).
     pub struct World {
         pub core_app: *mut CoreApp,
         pub rt_app: *mut RtApp,
@@ -601,34 +934,23 @@ mod n442 {
     }
 
     impl World {
-        pub fn new() -> World {
+        pub fn new(m: Mode) -> World {
+            MODE.with(|c| c.set(m));
+            let mut surfaces = Vec::with_capacity(1);
+            surfaces.shrink_to_fit();
             let core_app = Box::into_raw(Box::new(CoreApp {
                 alloc: 7,
-                surfaces: Vec::new(),
+                focused: true,
+                theme: 0,
+                surfaces,
             }));
             let rt_app = Box::into_raw(Box::new(RtApp {
                 core_app,
                 cb: host_action,
+                config: UnsafeCell::new(0),
             }));
-            let surface = Box::into_raw(Box::new(Embedded {
-                app: rt_app,
-                core_surface: Core {
-                    font_size: 13.0,
-                    pwd: b"/tmp".to_vec(),
-                    last_trigger: None,
-                    sequence_set: None,
-                    size: (800, 600),
-                    pressed_key: None,
-                    rt_app,
-                    app: core_app,
-                    rt_surface: core::ptr::null_mut(),
-                },
-                inherited_working_directory: UnsafeCell::new(None),
-            }));
-            unsafe {
-                (*surface).core_surface.rt_surface = surface;
-                (*core_app).surfaces.push(&raw mut (*surface).core_surface);
-            }
+            ROOT.with(|r| r.set(rt_app));
+            let surface = unsafe { new_surface_body(rt_app) };
             World {
                 core_app,
                 rt_app,
@@ -637,119 +959,173 @@ mod n442 {
         }
     }
 
+    impl World {
+        /// A second surface, with the list left exactly full (`len ==
+        /// capacity`), so the next append reallocates it.
+        pub fn add_surface_tight(&self) {
+            unsafe {
+                let _ = new_surface_body(self.rt_app);
+                (*self.core_app).surfaces.shrink_to_fit();
+            }
+        }
+    }
+
     impl Drop for World {
         fn drop(&mut self) {
             unsafe {
-                drop(Box::from_raw(self.surface));
+                for s in std::mem::take(&mut (*self.core_app).surfaces) {
+                    drop(Box::from_raw(s));
+                }
                 drop(Box::from_raw(self.rt_app));
                 drop(Box::from_raw(self.core_app));
             }
         }
     }
 
-    // --- the C routes -------------------------------------------------------
+    // --------------------------------------------------------- the C routes
 
-    /// SHIPPED `rustty_surface_key` → `App::keyEvent` → `keyCallback`.
+    /// `rustty_surface_key(surface, ev)` → `App::keyEvent(.surface)`.
     pub unsafe fn c_surface_key(surface: *mut Embedded, key: u32) -> bool {
-        unsafe { (*surface).core_surface.key_callback(key) }
+        unsafe {
+            match mode() {
+                Mode::Fixed => RtApp::key_event_raw((*surface).app, surface, key),
+                _ => (*(*surface).app).key_event_ref(surface, key),
+            }
+        }
     }
 
-    /// SHIPPED `rustty_surface_binding_action` / `rustty_surface_split`.
-    pub unsafe fn c_surface_binding_action(ptr: *mut Embedded, action: Action) -> bool {
-        unsafe { (*ptr).core_surface.perform_binding_action(action) }
+    /// `rustty_app_key(app, ev)` → `App::keyEvent(.app)` (global keybinds).
+    pub unsafe fn c_app_key(app: *mut RtApp, key: u32) -> bool {
+        unsafe {
+            match mode() {
+                Mode::Fixed => RtApp::key_event_raw(app, core::ptr::null_mut(), key),
+                _ => (*app).key_event_ref(core::ptr::null_mut(), key),
+            }
+        }
     }
 
-    /// FIXED `rustty_surface_key`.
-    pub unsafe fn c_surface_key_raw(surface: *mut Embedded, key: u32) -> bool {
-        unsafe { key_callback_raw(&raw mut (*surface).core_surface, key) }
-    }
-
-    /// FIXED `rustty_surface_binding_action` / `_split` / `_split_focus` /
+    /// `rustty_surface_binding_action` / `_split` / `_split_focus` /
     /// `_request_close`.
-    pub unsafe fn c_surface_binding_action_raw(ptr: *mut Embedded, action: Action) -> bool {
-        unsafe { perform_binding_action_raw(&raw mut (*ptr).core_surface, action) }
+    pub unsafe fn c_surface_binding_action(ptr: *mut Embedded, action: Action) -> bool {
+        unsafe { surface_perform_binding_action(&raw mut (*ptr).core_surface, action) }
+    }
+
+    /// `rustty_app_tick` draining an app-scoped message (`performAction`).
+    pub unsafe fn c_app_tick_perform(app: *mut RtApp, action: Action) {
+        unsafe {
+            let core_app = (*app).core_app;
+            match mode() {
+                Mode::Fixed => CoreApp::perform_action_raw(core_app, &*app, action),
+                _ => (*core_app).perform_action_mut(&*app, action),
+            }
+        }
+    }
+
+    /// `rustty_app_key` with a global surface-scoped binding (`all:`/`global:`)
+    /// in round-0 shape: raw app, live-list iteration (N448).
+    pub unsafe fn c_app_key_live_iter(app: *mut RtApp, action: Action) {
+        unsafe { CoreApp::perform_all_action_live_iter((*app).core_app, &*app, action) }
     }
 }
 
-fn n442_all(f: unsafe fn(*mut n442::Embedded, u32) -> bool) {
-    use n442::World;
-    for key in [4, 1, 2, 3] {
-        let w = World::new();
+fn n442_keys(m: n442::Mode, f: unsafe fn(*mut n442::Embedded, u32) -> bool, keys: &[u32]) {
+    for &key in keys {
+        let w = n442::World::new(m);
         unsafe { f(w.surface, key) };
         drop(w);
     }
 }
 
+fn n442_actions(m: n442::Mode, actions: &[n442::Action]) {
+    for &a in actions {
+        let w = n442::World::new(m);
+        unsafe { n442::c_surface_binding_action(w.surface, a) };
+        drop(w);
+    }
+}
+
 fn main() {
+    use n442::{Action as A, Mode as M};
     let which = std::env::args().nth(1).expect("candidate name");
     match which.as_str() {
         // ---- N441 ----
-        // UB expected: whole-`&mut Surface` main-thread callbacks over the
-        // inline renderer vs the render thread's locked writes.
         "n441_inline_renderer" => run_inline(),
-        // CLEAN expected: the renderer out of the `Surface` allocation.
         "n441_boxed_renderer" => run_boxed(),
-        // UB expected (residual class, a NEW finding): the inline terminal vs
-        // the io thread's locked writes.
         "n441_residual_terminal_inline" => run_terminal_inline(),
-        // CLEAN expected: the same shape of fix applied to the terminal.
         "n441_residual_terminal_boxed" => run_terminal_boxed(),
+        // Fix round 1: the box freed without drop glue.
+        "n441_box_drop_leak" => run_box_drop_leak(),
+        "n441_box_dealloc_after_deinit" => run_box_dealloc_after_deinit(),
 
-        // ---- N442 ----
-        // UB expected: the shipped protected `&mut` routes.
-        "n442_shipped_key_route" => n442_all(n442::c_surface_key),
-        "n442_shipped_binding_new_split" => {
-            let w = n442::World::new();
-            unsafe { n442::c_surface_binding_action(w.surface, n442::Action::NewSplit) };
-        }
-        "n442_shipped_binding_new_tab" => {
-            let w = n442::World::new();
-            unsafe { n442::c_surface_binding_action(w.surface, n442::Action::NewTab) };
-        }
-        "n442_shipped_binding_new_window" => {
-            let w = n442::World::new();
-            unsafe { n442::c_surface_binding_action(w.surface, n442::Action::NewWindow) };
-        }
-        // UB expected: the new-window arm raw-self, but `App::newWindow` still
-        // `&mut self` while the host reads `core_app.alloc`.
-        "n442_new_window_app_mut" => {
-            let w = n442::World::new();
-            unsafe {
-                let s: *mut n442::Core = &raw mut (*w.surface).core_surface;
-                (*(*s).app).new_window_mut(&*(*s).rt_app, Some(s));
-            }
-        }
-        // UB expected: raw-self, but a local `&mut` spans the callback.
+        // ---- N442: before T5b ----
+        "n442_shipped_key_route" => n442_keys(M::Shipped, n442::c_surface_key, &[4, 1, 2, 3]),
+        "n442_shipped_binding_new_split" => n442_actions(M::Shipped, &[A::NewSplit]),
+        "n442_shipped_binding_new_tab" => n442_actions(M::Shipped, &[A::NewTab]),
+        "n442_shipped_binding_new_window" => n442_actions(M::Shipped, &[A::NewWindow]),
+        // NEGATIVE: raw-self, but the local `this` spans the callback.
         "n442_raw_this_spans" => {
-            let w = n442::World::new();
+            let w = n442::World::new(M::Fixed);
             unsafe {
                 n442::perform_binding_action_this_spans(
                     &raw mut (*w.surface).core_surface,
-                    n442::Action::NewSplit,
+                    A::NewSplit,
                 )
             };
         }
-        // N443 (OPEN, recorded here): UB expected under SB with the shipped
-        // `&mut App` quit arm; CLEAN with the `&App` direction.
-        "n443_quit_app_mut" => {
-            let w = n442::World::new();
-            unsafe { (*w.core_app).perform_action_quit_mut(&*w.rt_app) };
+
+        // ---- fix round 1: round-0 shapes (app references) ----
+        // `App::newWindow(&self)` while the host's `rustty_surface_new` pushes
+        // to `surfaces`.
+        "r0_binding_new_window" => n442_actions(M::Round0, &[A::NewWindow]),
+        // embedded `keyEvent(&self)` + `newSurface(&mut self)` on the key route.
+        "r0_key_route_new_split" => n442_keys(M::Round0, n442::c_surface_key, &[1]),
+        // N443: `App::performAction(&mut self)`: reload_config / quit.
+        "r0_binding_reload_config" => n442_actions(M::Round0, &[A::ReloadConfig]),
+        "r0_binding_quit" => n442_actions(M::Round0, &[A::Quit]),
+        "r0_app_tick_reload_config" => {
+            let w = n442::World::new(M::Round0);
+            unsafe { n442::c_app_tick_perform(w.rt_app, A::ReloadConfig) };
         }
-        "n443_quit_app_ref" => {
-            let w = n442::World::new();
-            unsafe { (*w.core_app).perform_action_quit_ref(&*w.rt_app) };
+        "r0_app_key_global_reload_config" => {
+            let w = n442::World::new(M::Round0);
+            unsafe { n442::c_app_key(w.rt_app, 5) };
         }
-        // CLEAN expected: the fix, every arm, both route shapes.
-        "n442_raw_key_route" => n442_all(n442::c_surface_key_raw),
-        "n442_raw_binding_all" => {
-            for a in [
-                n442::Action::Other,
-                n442::Action::NewSplit,
-                n442::Action::NewTab,
-                n442::Action::NewWindow,
-            ] {
-                let w = n442::World::new();
-                unsafe { n442::c_surface_binding_action_raw(w.surface, a) };
+        // N448: the live-list iteration while a surface's host callback appends.
+        "r0_all_new_split_live_iter" => {
+            let w = n442::World::new(M::Fixed);
+            w.add_surface_tight();
+            unsafe { n442::c_app_key_live_iter(w.rt_app, A::NewSplit) };
+        }
+        // The fix for N448 on the same two-surface, full-list world.
+        "fixed_all_new_split_snapshot" => {
+            let w = n442::World::new(M::Fixed);
+            w.add_surface_tight();
+            unsafe { n442::c_app_key(w.rt_app, 1) };
+        }
+
+        // ---- the fix (round 1) ----
+        "fixed_key_route_all" => n442_keys(M::Fixed, n442::c_surface_key, &[4, 1, 2, 3, 5, 6]),
+        "fixed_binding_all" => n442_actions(
+            M::Fixed,
+            &[
+                A::Other,
+                A::NewSplit,
+                A::NewTab,
+                A::NewWindow,
+                A::ReloadConfig,
+                A::Quit,
+            ],
+        ),
+        "fixed_app_tick_all" => {
+            for a in [A::ReloadConfig, A::Quit, A::NewWindow] {
+                let w = n442::World::new(M::Fixed);
+                unsafe { n442::c_app_tick_perform(w.rt_app, a) };
+            }
+        }
+        "fixed_app_key_global_all" => {
+            for key in [1, 2, 3, 5, 6] {
+                let w = n442::World::new(M::Fixed);
+                unsafe { n442::c_app_key(w.rt_app, key) };
             }
         }
         other => panic!("unknown candidate {other}"),

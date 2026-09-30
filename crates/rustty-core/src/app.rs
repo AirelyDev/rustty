@@ -340,9 +340,23 @@ where
     // PORT NOTE: `rt_app: *apprt.App` -> `&A` on the app-thread entry points
     // (the whole trait surface is `&self`); the cross-thread [`Mailbox`]
     // handle keeps the raw `*mut A`.
-    pub fn tick(&mut self, rt_app: &A) -> Result<(), Error> {
+    //
+    // PORT NOTE (N443, P7-W7 T5b fix round 1): raw-self. `self: *App` has no
+    // aliasing rule in Zig; a Rust `&mut self` / `&self` receiver is protected
+    // for the whole call, and the embedder's action callback this path runs
+    // re-enters the core app synchronously (the macOS host's `new_*` handlers
+    // create a surface -> `addSurface` pushes to `surfaces`; `reload_config`
+    // calls `rustty_app_update_config` -> `updateConfig(&mut self)`; `quit`
+    // reads `needsConfirmQuit`). The app is reached only by place through
+    // `self_`, in short reborrows that never span a host callback. Proof:
+    // `.port/phase-2/mirihar-n441`.
+    ///
+    /// # Safety
+    /// `self_` is the live, pinned core app; main thread; no protected
+    /// reference to it may span the call.
+    pub unsafe fn tick(self_: *mut Self, rt_app: &A) -> Result<(), Error> {
         // Drain our mailbox
-        self.drainMailbox(rt_app)
+        unsafe { Self::drainMailbox(self_, rt_app) }
     }
 
     /// Update the configuration associated with the app. This can only be
@@ -495,8 +509,20 @@ where
     }
 
     /// Drain the mailbox.
-    fn drainMailbox(&mut self, rt_app: &A) -> Result<(), Error> {
-        while let Some(message) = self.mailbox.pop() {
+    //
+    // PORT NOTE (N443, P7-W7 T5b fix round 1): raw-self. `self: *App` has no
+    // aliasing rule in Zig; a Rust `&mut self` / `&self` receiver is protected
+    // for the whole call, and the embedder's action callback this path runs
+    // re-enters the core app synchronously (the macOS host's `new_*` handlers
+    // create a surface -> `addSurface` pushes to `surfaces`; `reload_config`
+    // calls `rustty_app_update_config` -> `updateConfig(&mut self)`; `quit`
+    // reads `needsConfirmQuit`). The app is reached only by place through
+    // `self_`, in short reborrows that never span a host callback. Proof:
+    // `.port/phase-2/mirihar-n441`.
+    /// # Safety
+    /// As [`App::tick`].
+    unsafe fn drainMailbox(self_: *mut Self, rt_app: &A) -> Result<(), Error> {
+        while let Some(message) = unsafe { (*self_).mailbox.pop() } {
             // if (comptime std.log.logEnabled(.debug, .app)) {
             //     switch (message) {
             //         // these tend to be way too verbose for normal debugging
@@ -537,16 +563,21 @@ where
                 //
                 // (`0a183c923`: the `App.Message.OpenConfig` payload maps
                 // arm-for-arm onto the binding `OpenConfig` enum.)
-                Message::OpenConfig(v) => self.performAction(
-                    rt_app,
-                    ScopedApp::OpenConfig(match v {
-                        OpenConfig::OsOpen => rustty_input::binding::OpenConfig::OsOpen,
-                        OpenConfig::NewWindow => rustty_input::binding::OpenConfig::NewWindow,
-                    }),
-                )?,
-                Message::NewWindow(msg) => self.newWindow(rt_app, msg)?,
-                Message::Close(surface) => self.closeSurface(surface),
-                Message::SurfaceMessage(msg) => self.surfaceMessage(msg.surface, msg.message)?,
+                Message::OpenConfig(v) => unsafe {
+                    Self::performAction(
+                        self_,
+                        rt_app,
+                        ScopedApp::OpenConfig(match v {
+                            OpenConfig::OsOpen => rustty_input::binding::OpenConfig::OsOpen,
+                            OpenConfig::NewWindow => rustty_input::binding::OpenConfig::NewWindow,
+                        }),
+                    )
+                }?,
+                Message::NewWindow(msg) => unsafe { Self::newWindow(self_, rt_app, msg) }?,
+                Message::Close(surface) => unsafe { Self::closeSurface(self_, surface) },
+                Message::SurfaceMessage(msg) => {
+                    unsafe { Self::surfaceMessage(self_, msg.surface, msg.message) }?
+                }
 
                 // If we're quitting, then we set the quit flag and stop
                 // draining the mailbox immediately. This lets us defer
@@ -558,7 +589,7 @@ where
                         target: LOG_SCOPE,
                         "quit message received, short circuiting mailbox drain"
                     );
-                    self.performAction(rt_app, ScopedApp::Quit)?;
+                    unsafe { Self::performAction(self_, rt_app, ScopedApp::Quit) }?;
                     return Ok(());
                 }
             }
@@ -566,8 +597,13 @@ where
         Ok(())
     }
 
-    pub fn closeSurface(&mut self, surface: *mut Surface<A>) {
-        if !self.hasSurface(surface.cast_const()) {
+    //
+    // PORT NOTE (N443): raw-self (`close` runs the embedder's close callback).
+    ///
+    /// # Safety
+    /// As [`App::tick`].
+    pub unsafe fn closeSurface(self_: *mut Self, surface: *mut Surface<A>) {
+        if !unsafe { (*self_).hasSurface(surface.cast_const()) } {
             return;
         }
         unsafe { &mut *surface }.close();
@@ -586,11 +622,21 @@ where
 
     /// Create a new window
     //
-    // PORT NOTE (N442, P7-W7 T5b): `&self`, not `&mut self`: the body only
-    // reads, and the embedder's `new_window` callback re-enters the core app
-    // (`rustty_surface_inherited_config` reads `core_app.alloc`), which a
-    // protected `&mut App` forbids.
-    pub fn newWindow(&self, rt_app: &A, msg: NewWindow<A>) -> Result<(), Error> {
+    //
+    // PORT NOTE (N442/N443, P7-W7 T5b fix round 1): raw-self. `self: *App` has no
+    // aliasing rule in Zig; a Rust `&mut self` / `&self` receiver is protected
+    // for the whole call, and the embedder's action callback this path runs
+    // re-enters the core app synchronously (the macOS host's `new_*` handlers
+    // create a surface -> `addSurface` pushes to `surfaces`; `reload_config`
+    // calls `rustty_app_update_config` -> `updateConfig(&mut self)`; `quit`
+    // reads `needsConfirmQuit`). The app is reached only by place through
+    // `self_`, in short reborrows that never span a host callback. Proof:
+    // `.port/phase-2/mirihar-n441`.
+    ///
+    /// # Safety
+    /// `self_` is the live, pinned core app; main thread; no protected
+    /// reference to it may span the call.
+    pub unsafe fn newWindow(self_: *mut Self, rt_app: &A, msg: NewWindow<A>) -> Result<(), Error> {
         // const target: apprt.Target = target: { ... };
         let target: apprt::Target<'_, Surface<A>> = 'target: {
             // const parent = msg.parent orelse break :target .app;
@@ -599,7 +645,7 @@ where
                 None => break 'target apprt::Target::App,
             };
             // if (self.hasSurface(parent)) break :target .{ .surface = parent };
-            if self.hasSurface(parent.cast_const()) {
+            if unsafe { (*self_).hasSurface(parent.cast_const()) } {
                 break 'target apprt::Target::Surface(unsafe { &*parent });
             }
             // break :target .app;
@@ -633,7 +679,21 @@ where
     /// If the app currently has focus then all key events are processed.
     /// If the app does not have focus then only global key events are
     /// processed.
-    pub fn keyEvent(&mut self, rt_app: &A, event: KeyEvent) -> bool {
+    //
+    // PORT NOTE (N443, P7-W7 T5b fix round 1): raw-self. `self: *App` has no
+    // aliasing rule in Zig; a Rust `&mut self` / `&self` receiver is protected
+    // for the whole call, and the embedder's action callback this path runs
+    // re-enters the core app synchronously (the macOS host's `new_*` handlers
+    // create a surface -> `addSurface` pushes to `surfaces`; `reload_config`
+    // calls `rustty_app_update_config` -> `updateConfig(&mut self)`; `quit`
+    // reads `needsConfirmQuit`). The app is reached only by place through
+    // `self_`, in short reborrows that never span a host callback. Proof:
+    // `.port/phase-2/mirihar-n441`.
+    ///
+    /// # Safety
+    /// `self_` is the live, pinned core app; main thread; no protected
+    /// reference to it may span the call.
+    pub unsafe fn keyEvent(self_: *mut Self, rt_app: &A, event: KeyEvent) -> bool {
         match event.action {
             // We don't care about key release events.
             key::Action::Release => return false,
@@ -663,23 +723,26 @@ where
             Value::Leaf(leaf) => leaf.generic(),
             Value::LeafChained(leaf) => leaf.generic(),
         };
+        // PORT NOTE: reference defect (R13), UD368: `leaf` owns a copy of the
+        // actions, so a chained `reload_config` (which replaces the embedded
+        // app's config) cannot free them under `performAllChainedAction`.
         let actions: &[BindingAction] = leaf.actions_slice();
         debug_assert!(!actions.is_empty());
 
         // If we aren't focused, then we only process global keybinds.
-        if !self.focused && !leaf.flags.global {
+        if !unsafe { (*self_).focused } && !leaf.flags.global {
             return false;
         }
 
         // Global keybinds are done using performAll so that they
         // can target all surfaces too.
         if leaf.flags.global {
-            self.performAllChainedAction(rt_app, actions);
+            unsafe { Self::performAllChainedAction(self_, rt_app, actions) };
             return true;
         }
 
         // Must be focused to process non-global keybinds
-        debug_assert!(self.focused);
+        debug_assert!(unsafe { (*self_).focused });
         debug_assert!(!leaf.flags.global);
 
         // If we are focused, then we process keybinds only if they are
@@ -693,7 +756,9 @@ where
         }
         for action in actions {
             // self.performAction(rt_app, action.scoped(.app).?) catch |err| {...};
-            if let Err(err) = self.performAction(rt_app, action.scoped_app().unwrap()) {
+            if let Err(err) =
+                unsafe { Self::performAction(self_, rt_app, action.scoped_app().unwrap()) }
+            {
                 // log.warn("error performing app keybind action action={s} err={}", .{
                 //     @tagName(action),
                 //     err,
@@ -711,8 +776,16 @@ where
 
     /// Call to notify Rustty that the color scheme for the app has changed.
     /// "Color scheme" in this case refers to system themes such as "light/dark".
-    pub fn colorSchemeEvent(
-        &mut self,
+    //
+    // PORT NOTE (N443, P7-W7 T5b fix round 1): raw-self. The `reload_config`
+    // action below runs the embedder's callback, whose soft reload calls
+    // `rustty_app_update_config` -> `updateConfig(&mut self)` on this app
+    // synchronously (macOS), so no protected reference to the app spans it.
+    ///
+    /// # Safety
+    /// As [`App::tick`].
+    pub unsafe fn colorSchemeEvent(
+        self_: *mut Self,
         rt_app: &A,
         scheme: apprt::ColorScheme,
     ) -> Result<(), Error> {
@@ -722,12 +795,12 @@ where
         };
 
         // If our scheme didn't change, then we don't do anything.
-        if self.config_conditional_state.theme == new_scheme {
+        if unsafe { (*self_).config_conditional_state.theme } == new_scheme {
             return Ok(());
         }
 
         // Setup our conditional state which has the current color theme.
-        self.config_conditional_state.theme = new_scheme;
+        unsafe { (*self_).config_conditional_state.theme = new_scheme };
 
         // Request our configuration be reloaded because the new scheme may
         // impact the colors of the app.
@@ -747,7 +820,25 @@ where
     //
     // PORT NOTE: `action: input.Binding.Action.Scoped(.app)` — the
     // hand-written `Scoped(.app)` instantiation (`ScopedApp`, binding.rs).
-    pub fn performAction(&mut self, rt_app: &A, action: ScopedApp) -> Result<(), Error> {
+    //
+    // PORT NOTE (N443, P7-W7 T5b fix round 1): raw-self. `self: *App` has no
+    // aliasing rule in Zig; a Rust `&mut self` / `&self` receiver is protected
+    // for the whole call, and the embedder's action callback this path runs
+    // re-enters the core app synchronously (the macOS host's `new_*` handlers
+    // create a surface -> `addSurface` pushes to `surfaces`; `reload_config`
+    // calls `rustty_app_update_config` -> `updateConfig(&mut self)`; `quit`
+    // reads `needsConfirmQuit`). The app is reached only by place through
+    // `self_`, in short reborrows that never span a host callback. Proof:
+    // `.port/phase-2/mirihar-n441`.
+    ///
+    /// # Safety
+    /// `self_` is the live, pinned core app; main thread; no protected
+    /// reference to it may span the call.
+    pub unsafe fn performAction(
+        self_: *mut Self,
+        rt_app: &A,
+        action: ScopedApp,
+    ) -> Result<(), Error> {
         match action {
             ScopedApp::Unbind => unreachable!(),
             ScopedApp::Ignore => {}
@@ -757,7 +848,7 @@ where
             }
             ScopedApp::NewWindow => {
                 // _ = try self.newWindow(rt_app, .{ .parent = null });
-                self.newWindow(rt_app, NewWindow { parent: None })?;
+                unsafe { Self::newWindow(self_, rt_app, NewWindow { parent: None }) }?;
             }
             // .open_config => |v| _ = try rt_app.performAction(
             //     .app,
@@ -832,11 +923,25 @@ where
 
     /// Performs a chained action. We will continue executing each action
     /// even if there is a failure in a prior action.
-    pub fn performAllChainedAction(&mut self, rt_app: &A, actions: &[BindingAction]) {
+    //
+    // PORT NOTE (N443, P7-W7 T5b fix round 1): raw-self. `self: *App` has no
+    // aliasing rule in Zig; a Rust `&mut self` / `&self` receiver is protected
+    // for the whole call, and the embedder's action callback this path runs
+    // re-enters the core app synchronously (the macOS host's `new_*` handlers
+    // create a surface -> `addSurface` pushes to `surfaces`; `reload_config`
+    // calls `rustty_app_update_config` -> `updateConfig(&mut self)`; `quit`
+    // reads `needsConfirmQuit`). The app is reached only by place through
+    // `self_`, in short reborrows that never span a host callback. Proof:
+    // `.port/phase-2/mirihar-n441`.
+    ///
+    /// # Safety
+    /// `self_` is the live, pinned core app; main thread; no protected
+    /// reference to it may span the call.
+    pub unsafe fn performAllChainedAction(self_: *mut Self, rt_app: &A, actions: &[BindingAction]) {
         for action in actions {
             // self.performAllAction(rt_app, action) catch |err| {...};
             // PORT NOTE: Zig copies the action by value per call -> `clone()`.
-            if let Err(err) = self.performAllAction(rt_app, action.clone()) {
+            if let Err(err) = unsafe { Self::performAllAction(self_, rt_app, action.clone()) } {
                 // log.warn("error performing chained action action={s} err={}", .{
                 //     @tagName(action),
                 //     err,
@@ -853,20 +958,54 @@ where
     /// Perform an app-wide binding action. If the action is surface-specific
     /// then it will be performed on all surfaces. To perform only app-scoped
     /// actions, use performAction.
-    pub fn performAllAction(&mut self, rt_app: &A, action: BindingAction) -> Result<(), Error> {
+    //
+    // PORT NOTE (N443, P7-W7 T5b fix round 1): raw-self. `self: *App` has no
+    // aliasing rule in Zig; a Rust `&mut self` / `&self` receiver is protected
+    // for the whole call, and the embedder's action callback this path runs
+    // re-enters the core app synchronously (the macOS host's `new_*` handlers
+    // create a surface -> `addSurface` pushes to `surfaces`; `reload_config`
+    // calls `rustty_app_update_config` -> `updateConfig(&mut self)`; `quit`
+    // reads `needsConfirmQuit`). The app is reached only by place through
+    // `self_`, in short reborrows that never span a host callback. Proof:
+    // `.port/phase-2/mirihar-n441`.
+    ///
+    /// # Safety
+    /// `self_` is the live, pinned core app; main thread; no protected
+    /// reference to it may span the call.
+    pub unsafe fn performAllAction(
+        self_: *mut Self,
+        rt_app: &A,
+        action: BindingAction,
+    ) -> Result<(), Error> {
         match action.scope() {
             // App-scoped actions are handled by the app so that they aren't
             // repeated for each surface (since each surface forwards
             // app-scoped actions back up).
-            Scope::App => self.performAction(
-                rt_app,
-                action.scoped_app().unwrap(), // asserted through the scope match
-            )?,
+            Scope::App => unsafe {
+                Self::performAction(
+                    self_,
+                    rt_app,
+                    action.scoped_app().unwrap(), // asserted through the scope match
+                )
+            }?,
 
             // Surface-scoped actions are performed on all surfaces. Errors
             // are logged but processing continues.
+            //
+            // PORT NOTE (N448, P7-W7 T5b fix round 1): the reference iterates the
+            // `surfaces.items` slice it read once, while each surface's action can
+            // run the embedder's callback, and the macOS host's `new_split` /
+            // `new_tab` / `new_window` handlers create a surface synchronously
+            // (`addSurface` appends, which may reallocate the list under the
+            // loop). The port iterates a snapshot of the list taken before the
+            // first action (the surfaces the reference means to visit) and skips a
+            // surface that is gone by the time its turn comes.
             Scope::Surface => {
-                for &surface in self.surfaces.iter() {
+                let surfaces: Vec<*mut A::Surface> = unsafe { (*self_).surfaces.clone() };
+                for surface in surfaces {
+                    if !unsafe { (*self_).surfaces.contains(&surface) } {
+                        continue;
+                    }
                     // _ = surface.core().performBindingAction(action) catch |err| {...};
                     let core = unsafe { &*surface }.core();
                     // PORT NOTE (task 14d-1): the surface id is READ BEFORE the
@@ -895,15 +1034,21 @@ where
     }
 
     /// Handle a window message
-    fn surfaceMessage(
-        &mut self,
+    //
+    // PORT NOTE (N443): raw-self (`handleMessage` can run the embedder's
+    // action callback).
+    ///
+    /// # Safety
+    /// As [`App::tick`].
+    unsafe fn surfaceMessage(
+        self_: *mut Self,
         surface: *mut Surface<A>,
         msg: apprt::surface::Message<'_>,
     ) -> Result<(), Error> {
         // We want to ensure our window is still active. Window messages
         // are quite rare and we normally don't have many windows so we do
         // a simple linear search here.
-        if self.hasSurface(surface.cast_const()) {
+        if unsafe { (*self_).hasSurface(surface.cast_const()) } {
             unsafe { &mut *surface }.handleMessage(msg)?;
         }
 
@@ -1472,7 +1617,7 @@ pub(crate) mod test_runtime {
         // Plain dispatch: open_config reaches the apprt.
         app.mailbox
             .push(Message::OpenConfig(OpenConfig::OsOpen), Timeout::Instant);
-        app.tick(&rt_app).unwrap();
+        unsafe { App::tick(&raw mut app, &rt_app) }.unwrap();
         assert_eq!(
             rt_app.recorded(),
             vec![(
@@ -1486,7 +1631,7 @@ pub(crate) mod test_runtime {
         app.mailbox.push(Message::Quit, Timeout::Instant);
         app.mailbox
             .push(Message::OpenConfig(OpenConfig::OsOpen), Timeout::Instant);
-        app.tick(&rt_app).unwrap();
+        unsafe { App::tick(&raw mut app, &rt_app) }.unwrap();
         assert_eq!(
             rt_app.recorded(),
             vec![(TargetKey::App, RecordedAction::Simple(ActionKey::Quit))]
@@ -1530,8 +1675,7 @@ pub(crate) mod test_runtime {
             conditional::Theme::Light
         );
 
-        app.colorSchemeEvent(&rt_app, apprt::ColorScheme::Dark)
-            .unwrap();
+        unsafe { App::colorSchemeEvent(&raw mut app, &rt_app, apprt::ColorScheme::Dark) }.unwrap();
         assert_eq!(app.config_conditional_state.theme, conditional::Theme::Dark);
         assert_eq!(
             rt_app.recorded(),
@@ -1549,8 +1693,7 @@ pub(crate) mod test_runtime {
         let mut app = App::<TestApp>::init(Allocator).unwrap();
 
         // The default conditional theme is light.
-        app.colorSchemeEvent(&rt_app, apprt::ColorScheme::Light)
-            .unwrap();
+        unsafe { App::colorSchemeEvent(&raw mut app, &rt_app, apprt::ColorScheme::Light) }.unwrap();
         assert_eq!(
             app.config_conditional_state.theme,
             conditional::Theme::Light
@@ -1656,7 +1799,7 @@ pub(crate) mod test_runtime {
             key: Key::KeyA,
             ..Default::default()
         };
-        assert!(!app.keyEvent(&rt_app, ev));
+        assert!(!unsafe { App::keyEvent(&raw mut app, &rt_app, ev) });
         assert!(rt_app.recorded().is_empty());
 
         app.deinit();
@@ -1683,7 +1826,7 @@ pub(crate) mod test_runtime {
             key: Key::KeyA,
             ..Default::default()
         };
-        assert!(!app.keyEvent(&rt_app, ev));
+        assert!(!unsafe { App::keyEvent(&raw mut app, &rt_app, ev) });
         assert!(rt_app.recorded().is_empty());
 
         app.deinit();
@@ -1708,7 +1851,7 @@ pub(crate) mod test_runtime {
             key: Key::KeyA,
             ..Default::default()
         };
-        assert!(app.keyEvent(&rt_app, ev));
+        assert!(unsafe { App::keyEvent(&raw mut app, &rt_app, ev) });
         assert_eq!(
             rt_app.recorded(),
             vec![(
@@ -1731,7 +1874,7 @@ pub(crate) mod test_runtime {
             key: Key::KeyB,
             ..Default::default()
         };
-        assert!(!app.keyEvent(&rt_app, ev));
+        assert!(!unsafe { App::keyEvent(&raw mut app, &rt_app, ev) });
         assert!(rt_app.recorded().is_empty());
 
         app.deinit();
@@ -1747,13 +1890,16 @@ pub(crate) mod test_runtime {
         rt_app.fail_key = Some(ActionKey::Quit);
         let mut app = App::<TestApp>::init(Allocator).unwrap();
 
-        app.performAllChainedAction(
-            &rt_app,
-            &[
-                BindingAction::Quit,
-                BindingAction::OpenConfig(rustty_input::binding::OpenConfig::DEFAULT),
-            ],
-        );
+        unsafe {
+            App::performAllChainedAction(
+                &raw mut app,
+                &rt_app,
+                &[
+                    BindingAction::Quit,
+                    BindingAction::OpenConfig(rustty_input::binding::OpenConfig::DEFAULT),
+                ],
+            )
+        };
         assert_eq!(
             rt_app.recorded(),
             vec![
@@ -1766,7 +1912,7 @@ pub(crate) mod test_runtime {
         );
 
         // Surface-scoped fan-out over zero surfaces is a quiet no-op.
-        app.performAllAction(&rt_app, BindingAction::ClearScreen)
+        unsafe { App::performAllAction(&raw mut app, &rt_app, BindingAction::ClearScreen) }
             .unwrap();
 
         app.deinit();
@@ -1838,7 +1984,7 @@ pub(crate) mod test_runtime {
         }
 
         let cap = crate::log_capture::start();
-        app.drainMailbox(&rt_app).unwrap();
+        unsafe { App::drainMailbox(&raw mut app, &rt_app) }.unwrap();
         let messages = cap.messages();
         drop(cap);
         app.deinit();
@@ -1876,13 +2022,16 @@ pub(crate) mod test_runtime {
         let mut app = App::<TestApp>::init(Allocator).unwrap();
 
         let cap = crate::log_capture::start();
-        app.performAllChainedAction(
-            &rt_app,
-            &[
-                BindingAction::Quit,
-                BindingAction::OpenConfig(rustty_input::binding::OpenConfig::DEFAULT),
-            ],
-        );
+        unsafe {
+            App::performAllChainedAction(
+                &raw mut app,
+                &rt_app,
+                &[
+                    BindingAction::Quit,
+                    BindingAction::OpenConfig(rustty_input::binding::OpenConfig::DEFAULT),
+                ],
+            )
+        };
         let messages = cap.messages();
         drop(cap);
         app.deinit();

@@ -3293,7 +3293,8 @@ impl Application {
             match rt_app {
                 // SAFETY: `core_app`/`rt_app` are the stable heap pointers the caller
                 // passed to `new`; the run loop drives this on the app thread only.
-                Some(rt_app) => unsafe { &mut *core_app }.tick(unsafe { &*rt_app }),
+                // (N443: raw-self; a drained message can re-enter the core app.)
+                Some(rt_app) => unsafe { rustty_core::app::App::tick(core_app, &*rt_app) },
                 None => Ok(()),
             }
         })));
@@ -3348,9 +3349,9 @@ impl Application {
                 // log.warn("error updating app color scheme err={}", ...)`.
                 if let Some(rt_app) = rt_app {
                     // SAFETY: as above — app-thread-only access to the two backrefs.
-                    if let Err(err) =
-                        unsafe { &mut *core_app }.colorSchemeEvent(unsafe { &*rt_app }, scheme)
-                    {
+                    if let Err(err) = unsafe {
+                        rustty_core::app::App::colorSchemeEvent(core_app, &*rt_app, scheme)
+                    } {
                         // log.warn("error updating app color scheme err={}", .{err});
                         // (task S-1c: ported live; it was a comment.)
                         log::warn!(
@@ -3383,7 +3384,7 @@ impl Application {
 
         // The global-shortcut dispatch (`globalShortcutTrigger`,
         // `application.zig:1655-1663`): `core_app.performAllAction(rt_app,
-        // action)`. `performAllAction` takes `&mut App<A>` and `rt_app: &A`; both
+        // action)`. `performAllAction` takes the raw `*mut App<A>` and `rt_app: &A`; both
         // are BACKREFs owned by libghostty-core / the apprt `App`, never freed
         // here. It runs on the app thread (the GTK main loop delivers the portal
         // `Activated` signal there).
@@ -3413,8 +3414,9 @@ impl Application {
                 // on the session bus, and the bound action is `new_window` — a
                 // window appearing entails `performAllAction` having run and
                 // returned Ok, so the retained assertion implies the removed one.
+                // (N443: raw-self; the action's host callback re-enters the app.)
                 if let Err(err) =
-                    unsafe { &mut *core_app }.performAllAction(unsafe { &*rt_app }, action)
+                    unsafe { rustty_core::app::App::performAllAction(core_app, &*rt_app, action) }
                 {
                     // log.warn("failed to perform action={}", .{err});
                     log::warn!(target: LOG_SCOPE, "failed to perform action={err:?}");

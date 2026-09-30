@@ -440,8 +440,17 @@ impl App {
     }
 
     /// See CoreApp.keyEvent.
-    pub fn keyEvent(
-        &self,
+    //
+    // PORT NOTE (N443, P7-W7 T5b fix round 1): raw-self. A key event can run a
+    // binding whose embedder action callback re-enters this app (the macOS
+    // host's `new_*` handlers call `rustty_surface_new` -> `newSurface`), so no
+    // protected reference to the app is held here; the core app is read out by
+    // place and entered raw-self too.
+    ///
+    /// # Safety
+    /// `self_` is the live embedded app; main thread.
+    pub unsafe fn keyEvent(
+        self_: *const App,
         target: KeyTarget,
         event: KeyEvent<'_>,
     ) -> Result<bool, CoreSurfaceError> {
@@ -457,7 +466,7 @@ impl App {
         let effect: InputEffect = match target {
             // .app => if (self.core_app.keyEvent(self, input_event)) .consumed else .ignored,
             KeyTarget::App => {
-                if unsafe { (*self.core_app).keyEvent(self, input_event) } {
+                if unsafe { CoreApp::keyEvent((*self_).core_app, &*self_, input_event) } {
                     InputEffect::Consumed
                 } else {
                     InputEffect::Ignored
@@ -575,7 +584,19 @@ impl App {
     }
 
     /// Create a new surface for the app.
-    pub fn newSurface(&mut self, opts: SurfaceOptions) -> Result<*mut Surface, ApprtError> {
+    //
+    // PORT NOTE (N443, P7-W7 T5b fix round 1): raw-self. The macOS host calls
+    // `rustty_surface_new` from inside action callbacks (`new_split`,
+    // `new_tab`, `new_window`), while the app's `perform_action(&self)` holds a
+    // shared protector on this app; a `&mut self` retag here would be a write
+    // under it (Stacked Borrows). The surface's `app` back-pointer is `self_`.
+    ///
+    /// # Safety
+    /// `self_` is the live embedded app; main thread.
+    pub unsafe fn newSurface(
+        self_: *mut App,
+        opts: SurfaceOptions,
+    ) -> Result<*mut Surface, ApprtError> {
         // Grab a surface allocation because we're going to need it.
         // var surface = try self.core_app.alloc.create(Surface);
         // errdefer self.core_app.alloc.destroy(surface);
@@ -602,7 +623,7 @@ impl App {
         // try surface.init(self, opts);
         // errdefer surface.deinit();
         unsafe {
-            if let Err(err) = Surface::init(surface, core::ptr::from_mut(self), opts) {
+            if let Err(err) = Surface::init(surface, self_, opts) {
                 // errdefer self.core_app.alloc.destroy(surface): free the raw slot
                 // WITHOUT running `Surface`'s drop (the memory is uninitialized on
                 // the init-error path). The second `errdefer surface.deinit()` never
