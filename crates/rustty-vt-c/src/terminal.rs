@@ -58,7 +58,7 @@ use rustty_lib::String as LibString;
 use rustty_vt::clipboard;
 use rustty_vt::device_attributes;
 use rustty_vt::device_status;
-use rustty_vt::kitty::graphics_image::TemporaryFileLimit;
+use rustty_vt::kitty::graphics_image::{DirBorrow, TemporaryFileLimit};
 use rustty_vt::modes;
 use rustty_vt::pagelist::grow::ScrollbarC;
 use rustty_vt::point::{Coordinate, Tag};
@@ -3243,7 +3243,16 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
                     unsafe {
                         (*screen).kitty_images.image_limits.temporary_file =
                             TemporaryFileLimit::Enabled {
-                                directory: std::ptr::slice_from_raw_parts(dir.ptr, dir.len),
+                                // SAFETY: `dir` is the wrapper's own copy,
+                                // stored into `(*terminal_).tmp_dir_path`
+                                // just below and kept alive until it is
+                                // replaced or freed by a LATER call (or by
+                                // `free`, which tears down every screen
+                                // first) — never while this screen still
+                                // holds this borrow.
+                                directory: DirBorrow::new(std::ptr::slice_from_raw_parts(
+                                    dir.ptr, dir.len,
+                                )),
                             };
                     }
                 }
@@ -4333,14 +4342,14 @@ unsafe fn get_typed(terminal_: Terminal, data: TerminalData, out: *mut c_void) -
             // documented as BORROWED — the pointer is valid for as long as the
             // producing object is unchanged. Here it points into
             // `wrapper.tmp_dir_path` (via the active screen's borrowed
-            // `*const [u8]`), exactly as upstream's does.
-            // SAFETY: the active screen's `directory` pointer, when present,
+            // `DirBorrow`), exactly as upstream's does. `DirBorrow::as_slice`
+            // is safe because the active screen's `directory`, when present,
             // borrows `(*terminal_).tmp_dir_path` (P7-W2 T3), which is still
             // live — nothing between the last `set` and this `get` can have
             // dropped or replaced it (the C API is single-threaded per
             // terminal, and only `set`/`free` touch that field).
             let dir: &[u8] = match unsafe { &(*active).kitty_images.image_limits.temporary_file } {
-                TemporaryFileLimit::Enabled { directory } => unsafe { &**directory },
+                TemporaryFileLimit::Enabled { directory } => directory.as_slice(),
                 TemporaryFileLimit::Disabled => b"",
             };
             unsafe { *(out as *mut LibString) = LibString::init(dir) };
@@ -11589,6 +11598,7 @@ mod tests {
 
         let dir = b"/shared/wrapper/copy";
         let v = LibString::init(dir);
+        let alloc_calls_before = stats.alloc_calls.get();
         assert_eq!(Result::Success, unsafe {
             set(
                 t,
@@ -11596,6 +11606,14 @@ mod tests {
                 core::ptr::addr_of!(v) as *const c_void,
             )
         });
+        // The wrapper allocates its ONE copy through the caller allocator —
+        // not one allocation per screen (there are `screen_count` screens,
+        // all sharing it).
+        assert_eq!(
+            alloc_calls_before + 1,
+            stats.alloc_calls.get(),
+            "setting the path must make exactly one allocation, shared by every screen"
+        );
 
         // Every screen's `directory` pointer must be the SAME address as the
         // wrapper's own copy — a shared borrow, not N independent clones.
@@ -11610,11 +11628,10 @@ mod tests {
                     TemporaryFileLimit::Enabled { directory } => {
                         assert_eq!(
                             wrapper_ptr as *const u8,
-                            (*directory).cast::<u8>(),
+                            directory.as_ptr(),
                             "every screen must borrow the wrapper's single copy"
                         );
-                        // SAFETY: the pointer borrows the wrapper's live copy.
-                        assert_eq!(dir.as_slice(), unsafe { &**directory });
+                        assert_eq!(dir.as_slice(), directory.as_slice());
                         checked += 1;
                     }
                     TemporaryFileLimit::Disabled => panic!("temp file medium was not enabled"),
@@ -11650,70 +11667,6 @@ mod tests {
         }
 
         unsafe { free(t) };
-    }
-
-    /// UD365 (P7-W2 T3): the oracle's `LoadingImage.temporary_directory`
-    /// borrows `Limits.temporary_file.enabled.directory`, which itself
-    /// borrows `wrapper.tmp_dir_path`. A chunked kitty transfer spans
-    /// multiple `vt_write` calls; if the embedder calls
-    /// `kitty_image_medium_temp_file` again (or clears it) BETWEEN chunks,
-    /// the oracle's in-flight `LoadingImage` keeps reading through a
-    /// dangling slice once the wrapper's old copy is freed/replaced — a
-    /// reachable use-after-free (R13). rustty's `LoadingImage::init` deep
-    /// copies the directory bytes up front (`graphics_image.rs`'s
-    /// `temporary_directory` PORT NOTE), so it is immune: this proves the
-    /// terminal survives (and later resolves) an option change mid-transfer.
-    #[test]
-    #[cfg_attr(
-        not(feature = "kitty-graphics"),
-        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
-    )]
-    fn kitty_image_medium_temp_file_change_mid_transfer_does_not_dangle() {
-        with_test_allocator(|alloc| {
-            let (r, t) = new_t(alloc, 80, 24);
-            assert_eq!(Result::Success, r);
-
-            let first_dir = b"/first/temp/dir";
-            let v = LibString::init(first_dir);
-            assert_eq!(Result::Success, unsafe {
-                set(
-                    t,
-                    Option_::KittyImageMediumTempFile,
-                    core::ptr::addr_of!(v) as *const c_void,
-                )
-            });
-
-            // Open a chunked kitty transmission (temp-file medium; `m=1`
-            // means "more chunks follow"). The exact payload is irrelevant —
-            // it is expected to fail validation (there is no such file) —
-            // what matters is that a `LoadingImage` starts accumulating
-            // while `first_dir` is the active wrapper copy.
-            vtw(t, b"\x1B_Gf=100,t=t,m=1,S=4;/no/such/file\x1B\\");
-
-            // Replace the wrapper's copy mid-transfer: this frees the copy
-            // the in-flight load (if any) captured a slice of, under the
-            // oracle's own design.
-            let second_dir = b"/second/temp/dir/longer";
-            let v = LibString::init(second_dir);
-            assert_eq!(Result::Success, unsafe {
-                set(
-                    t,
-                    Option_::KittyImageMediumTempFile,
-                    core::ptr::addr_of!(v) as *const c_void,
-                )
-            });
-
-            // Finish the chunked transfer. Under Miri this must not touch
-            // freed memory; functionally we only require the terminal keeps
-            // working afterward (the transfer's own outcome is unspecified —
-            // the file does not exist — so we don't assert success here).
-            vtw(t, b"\x1B_Gm=0;\x1B\\");
-
-            // The terminal must still be fully usable afterward.
-            assert_eq!(second_dir.to_vec(), temp_dir_data(t));
-
-            unsafe { free(t) };
-        });
     }
 
     /// The corpus the allocation-failure sweep drives through the C API: text

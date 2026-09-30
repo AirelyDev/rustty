@@ -3084,28 +3084,6 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    build the overlay into a local in `updateFrame` and assign `self.overlay` under `draw_mutex` (or take `draw_mutex` around `rebuildOverlay`).
 - upstream status: NOT YET REPORTED
 
-### UD365 — a chunked kitty temp-file transfer keeps a slice into `wrapper.tmp_dir_path` that a later `kitty_image_medium_temp_file` call can free out from under it (use-after-free)
-
-- kind:            UB (use-after-free; R13)
-- upstream project: ghostty
-- severity:        low (needs an embedder to call `rustty_terminal_set`/`ghostty_terminal_set` with `kitty_image_medium_temp_file` again — or clear it — between chunks of an in-flight kitty graphics temporary-file transmission; no ordinary terminal-only input sequence can trigger it)
-- reference:       `src/terminal/c/terminal.zig` at 12752b2ac (post-`105d0a545`):
-  - `setTyped`'s `.kitty_image_medium_temp_file` arm allocates ONE copy (`path`) through `wrapper.terminal.gpa()`, points every screen's `Limits.temporary_file.enabled.directory` at it, then `alloc.free`s the PREVIOUS copy (or, on a `null`/cleared value, disables every screen and frees the old copy) — `:1393-1421`;
-  - `src/terminal/kitty/graphics_image.zig`'s `LoadingImage.init` copies the SLICE (not the bytes) from `limits.temporary_file` into `self.temporary_directory` (`e8525c0fd`), which in turn is a borrow of `wrapper.tmp_dir_path`;
-  - a kitty graphics temporary-file transmission can span multiple `vt_write`/`ghostty_terminal_write` calls (chunked, `m=1` continuing to `m=0`); the `LoadingImage` accumulating those chunks lives in `Screen.kitty_images.loading`, untouched by `setTyped`.
-- defect:          if the embedder calls `kitty_image_medium_temp_file` again (a new directory, or `null` to disable) WHILE a chunked temp-file transmission is in flight, the wrapper frees or replaces its one copy; the `LoadingImage`'s `self.temporary_directory`, captured from the OLD copy when the transfer started, now dangles. Completing the transfer (`LoadingImage.complete` -> the temporary-file validation path) reads through it: a use-after-free.
-- ReleaseSafe:     no safety check sees it; behavior is whatever the freed page happens to hold (accepted or rejected for the wrong reason, or a crash if the page was unmapped).
-- ReleaseFast:     the same, silently.
-- reachability:    any embedder exposing both the kitty graphics protocol and a way to change `kitty_image_medium_temp_file` at runtime (e.g. a settings change) while a large/slow chunked temp-file transfer is still arriving.
-- output needed:   none reliably visible; a slow leak/crash class bug, not a byte-for-byte behavior difference.
-- port handling:
-  - `crates/rustty-vt/src/kitty/graphics_image.rs`: `LoadingImage::temporary_directory` is `Option<Vec<u8>>`, an OWNED deep copy taken (and documented) at `LoadingImage::init` time — never a borrow of `Limits.temporary_file`'s `TemporaryFileLimit::Enabled.directory: *const [u8]` (itself a raw-pointer borrow of `crates/rustty-vt-c/src/terminal.rs`'s `TerminalWrapper::tmp_dir_path`, DECISIONS B6). Once a load starts, later `kitty_image_medium_temp_file` calls cannot affect it.
-  - `PORT NOTE (..., UD365)` on `LoadingImage::temporary_directory` and its construction site in `LoadingImage::init` (P7-W2 T3).
-- parity row(s):   none (found while porting `105d0a545`, P7-W2 T3).
-- test:            `crates/rustty-vt-c/src/terminal.rs`'s `kitty_image_medium_temp_file_change_mid_transfer_does_not_dangle` opens a chunked kitty temp-file transmission, calls `set(.kitty_image_medium_temp_file, ...)` again mid-transfer, finishes the transfer, and asserts the terminal is still fully usable afterward (Miri-clean; no assertion on the oracle's own reachable UB is possible without the oracle binary).
-- proposed fix:    have `LoadingImage.init` `dupe` the directory bytes (through the transfer's own allocator) instead of aliasing `limits.temporary_file.enabled.directory`.
-- upstream status: NOT YET REPORTED
-
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

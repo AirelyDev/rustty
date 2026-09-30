@@ -173,22 +173,17 @@ pub struct LoadingImage {
 
     /// The temporary directory for file transmission (null means that
     /// temporary directory transmission is disabled).
-    // PORT NOTE (oracle `e8525c0fd`, amended `105d0a545`/P7-W2 T3, UD365):
+    // PORT NOTE (oracle `e8525c0fd`, amended `105d0a545`/P7-W2 T3):
     // `temporary_directory: ?[]const u8`. Zig stores a BORROW of
     // `Limits.temporary_file.enabled.directory`, which in turn borrows
     // `wrapper.tmp_dir_path` (post-`105d0a545`) or terminal-owned storage.
-    // Rust owns the bytes here instead — a DELIBERATE deviation, for two
-    // reasons: (1) tying `LoadingImage`'s lifetime to the `Limits` it was
-    // built from would infect `ImageStorage`, `Screen` and `Terminal` with a
-    // lifetime parameter for no observable gain; (2) it fixes UD365 — a
-    // chunked kitty transfer (multiple `vt_write` calls) that captured a
-    // BORROWED slice at its first chunk would read through a dangling
-    // pointer if the embedder called `kitty_image_medium_temp_file` again
-    // (or cleared it) before the transfer completed, since that replaces or
-    // frees the wrapper's copy the borrow pointed into. Deep-copying here, at
-    // `init` time, makes each in-flight load immune to a later option
-    // change, matching upstream's evident intent (concurrent transfers
-    // should not corrupt each other) without upstream's reachable UAF.
+    // Rust owns the bytes here instead: tying `LoadingImage`'s lifetime to
+    // the `Limits` it was built from would infect `ImageStorage`, `Screen`
+    // and `Terminal` with a lifetime parameter for no observable gain — the
+    // field is read only once, synchronously, inside `init` (`readFile` at
+    // oracle `graphics_image.zig:409`, called only from `:188-189`, both
+    // inside `LoadingImage.init`; `addData`/`complete` never touch it), so a
+    // deep copy there is free to make and removes any reason to borrow.
     // Byte-slice rule: `Vec<u8>`, never `String`.
     pub temporary_directory: Option<Vec<u8>>,
 }
@@ -211,45 +206,105 @@ pub struct FrameContext {
     pub image_generation: u64,
 }
 
+/// A borrowed byte slice whose owner is not tracked by the type system —
+/// the Rust analog of a Zig `[]const u8` that aliases memory the type has no
+/// lifetime parameter for.
+///
+/// # Safety invariant
+///
+/// Constructing a `DirBorrow` is an assertion, upheld by the caller of
+/// [`DirBorrow::new`], that the pointee stays valid (allocated, unchanged,
+/// and — unless the length is zero — dereferenceable for that many bytes)
+/// for as long as this value, or anything copied from it, might be read.
+/// Every safe method on this type (`as_slice`, `as_ptr`, `Clone`,
+/// `PartialEq`) trusts that invariant instead of re-checking it; only
+/// construction is `unsafe`. `TemporaryFileLimit::Enabled`'s field is this
+/// type rather than a raw `*const [u8]` specifically so that safe code
+/// cannot construct or widen the borrow — see its own PORT NOTE.
+#[derive(Debug, Clone, Copy)]
+pub struct DirBorrow(*const [u8]);
+
+impl DirBorrow {
+    /// # Safety
+    /// `ptr` must satisfy this type's safety invariant (see the type's
+    /// doc): the caller keeps the bytes it points at alive and unchanged for
+    /// as long as this value, or anything constructed from a
+    /// `Limits`/`TemporaryFileLimit` holding it, can still be read.
+    pub unsafe fn new(ptr: *const [u8]) -> DirBorrow {
+        DirBorrow(ptr)
+    }
+
+    /// Read the borrowed bytes. Safe because every existing `DirBorrow`
+    /// already upholds the type's safety invariant (see `new`).
+    pub fn as_slice(&self) -> &[u8] {
+        // SAFETY: the type's invariant guarantees `self.0` is valid for
+        // reads of its full length for as long as `self` exists.
+        unsafe { &*self.0 }
+    }
+
+    /// The borrowed data pointer, for identity comparisons (e.g. proving two
+    /// screens borrow the SAME underlying copy). Copying a pointer value
+    /// never requires re-validating it.
+    pub fn as_ptr(&self) -> *const u8 {
+        self.0.cast()
+    }
+}
+
+impl PartialEq for DirBorrow {
+    /// Compares the BORROWED BYTES, not the pointer — two `DirBorrow`s over
+    /// separate copies of the same content are equal, matching the oracle's
+    /// own `[]const u8` equality (`std.mem.eql`) wherever it compares
+    /// directories.
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+impl Eq for DirBorrow {}
+
+// SAFETY: nothing this type does depends on which thread constructed or
+// reads it; the type's invariant (see above) is upheld by the constructor's
+// caller regardless of thread, matching the oracle's plain `[]const u8`.
+unsafe impl Send for DirBorrow {}
+unsafe impl Sync for DirBorrow {}
+
 /// PORT NOTE (oracle `e8525c0fd`): the reference's anonymous
 /// `union(enum) { enabled: struct { directory: []const u8 }, disabled: void }`
 /// inside `Limits`. Named here because Rust has no anonymous enums.
 ///
 /// PORT NOTE (oracle `105d0a545`, P7-W2 T3, DECISIONS B6): `directory` is a
-/// raw-pointer BORROW (`*const [u8]`), not an owned `Vec<u8>` — the Zig field
-/// is a plain slice (`[]const u8`), a zero-copy view over whoever owns the
-/// bytes. The vt-c C-API wrapper (`crates/rustty-vt-c/src/terminal.rs`,
-/// `TerminalWrapper::tmp_dir_path`) is the only long-lived producer: it owns
-/// ONE heap copy and every screen's `Limits` borrows it, exactly like
-/// upstream's `wrapper.tmp_dir_path` and its screens. The native (non-C) path
-/// (`rustty-termio`) borrows `rustty_global::tmp_dir_path()`, a `'static`
-/// process-global slice, so the borrow is always sound there.
+/// borrow (`DirBorrow`, wrapping `*const [u8]`), not an owned `Vec<u8>` — the
+/// Zig field is a plain slice (`[]const u8`), a zero-copy view over whoever
+/// owns the bytes. The vt-c C-API wrapper (`crates/rustty-vt-c/src/
+/// terminal.rs`, `TerminalWrapper::tmp_dir_path`) is the only long-lived
+/// producer: it owns ONE heap copy and every screen's `Limits` borrows it,
+/// exactly like upstream's `wrapper.tmp_dir_path` and its screens. The
+/// native (non-C) path (`rustty-termio`) borrows `rustty_global::
+/// tmp_dir_path()`, a `'static` process-global slice, so the borrow is
+/// always sound there.
 ///
-/// SAFETY (Stacked Borrows discipline, `.port/audits/GHOSTTY_LIFETIMES.tsv`):
-/// a `Limits` value must not be read after whoever owns the bytes behind
-/// `directory` frees or replaces them. `LoadingImage::init` upholds this by
-/// deep-copying `directory` into `LoadingImage::temporary_directory` (an
-/// OWNED `Vec<u8>`) the moment a load starts (see that field's PORT NOTE) —
-/// this is a deliberate DEVIATION from upstream's own slice-copy, which
-/// fixes UD365 (a reachable oracle UAF: a chunked kitty transfer that starts
-/// before the embedder calls `kitty_image_medium_temp_file` again mid-transfer
-/// would otherwise keep reading through a dangling slice once the embedder's
-/// old copy is freed).
+/// SAFETY (soundness, Stacked Borrows discipline,
+/// `.port/audits/GHOSTTY_LIFETIMES.tsv`): `directory` is `DirBorrow`, not a
+/// bare `*const [u8]` — a `pub` raw-pointer field would let ANY safe code
+/// build a `Limits` from a temporary, drop it, and pass the `Limits` to
+/// `LoadingImage::init`, which dereferences the pointer: a soundness hole in
+/// safe code (ruling 44). `DirBorrow`'s private field makes it
+/// unconstructible outside this module except through its `unsafe fn new`,
+/// which carries the obligation; `Limits::all_with_temp_dir` is `unsafe` for
+/// the same reason and documents it. A `Limits` value must not be read after
+/// whoever owns the bytes behind `directory` frees or replaces them —
+/// `LoadingImage::init` reads it exactly once, synchronously, while building
+/// the `LoadingImage` (see `temporary_directory`'s PORT NOTE), matching the
+/// oracle's own read pattern (`readFile` at `graphics_image.zig:409`, called
+/// only from within `LoadingImage.init`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TemporaryFileLimit {
     Enabled {
         /// The directory to expect temporary files in. Borrowed — see the
-        /// enum's PORT NOTE.
-        directory: *const [u8],
+        /// enum's PORT NOTE and `DirBorrow`'s safety invariant.
+        directory: DirBorrow,
     },
     Disabled,
 }
-
-// SAFETY: `*const [u8]` is never dereferenced without first re-establishing
-// that its owner is still alive (see the PORT NOTE above); the type itself
-// carries no thread-affinity, matching upstream's plain `[]const u8`.
-unsafe impl Send for TemporaryFileLimit {}
-unsafe impl Sync for TemporaryFileLimit {}
 
 /// The limits of the Kitty Graphics protocol we should allow.
 ///
@@ -260,8 +315,9 @@ unsafe impl Sync for TemporaryFileLimit {}
 // PORT NOTE: the reference was a `packed struct` of three `bool`s;
 // `e8525c0fd` widened `temporary_file` into a tagged union and dropped
 // `packed`. The struct is only read field-wise, never bitcast, so a plain
-// struct preserves all observable behavior. It is no longer `Copy`, because
-// the enabled arm owns its directory bytes.
+// struct preserves all observable behavior. It is not `Copy` (though its
+// fields all are, post-P7-W2-T3's `DirBorrow`) to keep `Clone::clone()`
+// explicit at the handful of call sites that copy a whole `Limits`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Limits {
     pub file: bool,
@@ -278,16 +334,26 @@ impl Limits {
     // file medium without naming the directory it is restricted to.
     //
     // PORT NOTE (oracle `105d0a545`, P7-W2 T3): no allocation here — `path` is
-    // borrowed as-is (`TemporaryFileLimit`'s PORT NOTE). The caller must keep
-    // `path` alive for as long as the returned `Limits` (and anything a
-    // screen clones from it) may be read; `rustty-termio`'s only caller
-    // passes `rustty_global::tmp_dir_path()` (`'static`), and the vt-c C-API
-    // wrapper passes a slice into its own wrapper-owned copy.
-    pub fn all_with_temp_dir(path: &[u8]) -> Limits {
+    // borrowed as-is (`TemporaryFileLimit`'s PORT NOTE). `unsafe` (ruling 44):
+    // the caller must keep `path` alive and unchanged for as long as the
+    // returned `Limits` — and anything cloned from it, e.g. a screen's own
+    // `Limits` copy — may still be read by `LoadingImage::init`.
+    // `rustty-termio`'s only caller passes `rustty_global::tmp_dir_path()`
+    // (`'static`); the vt-c C-API wrapper does not call this (it builds
+    // `TemporaryFileLimit::Enabled` directly over its own wrapper-owned
+    // copy).
+    ///
+    /// # Safety
+    /// `path` must stay valid (allocated and unchanged) for as long as the
+    /// returned `Limits`, or any `Limits` cloned from it, might still be
+    /// read by `LoadingImage::init`.
+    pub unsafe fn all_with_temp_dir(path: &[u8]) -> Limits {
         Limits {
             file: true,
             temporary_file: TemporaryFileLimit::Enabled {
-                directory: path as *const [u8],
+                // SAFETY: forwarded from this function's own `# Safety`
+                // contract, which the caller upholds.
+                directory: unsafe { DirBorrow::new(path as *const [u8]) },
             },
             shared_memory: true,
         }
@@ -332,9 +398,10 @@ impl LoadingImage {
     /// If this is a multi-chunk image, this should only be the FIRST
     /// chunk.
     // PORT NOTE (oracle `e8525c0fd`): `limits: Limits` is taken by REFERENCE
-    // here. `Limits` stopped being `Copy` when `temporary_file` gained its
-    // owned directory bytes; upstream's by-value pass is free because the Zig
-    // union holds a borrowed slice.
+    // here, unlike upstream's by-value `limits: Limits`; `Limits` is not
+    // `Copy` in Rust (see its own PORT NOTE), so a reference avoids copying
+    // it at every `init` call for no observable difference — the callee only
+    // ever reads it.
     pub fn init(
         alloc: Allocator,
         cmd: &command::Command,
@@ -385,16 +452,14 @@ impl LoadingImage {
             //     .enabled => |d| d.directory,
             //     .disabled => null,
             // },
-            // PORT NOTE (`105d0a545`/UD365, see `temporary_directory`'s PORT
-            // NOTE): deep-copy out of the borrow NOW, while `limits` is a
-            // live argument the caller guarantees is valid for this call —
-            // never retain the raw pointer past this constructor.
-            // SAFETY: `directory` is live for the duration of this call (the
-            // caller's `&Limits` borrow contract); dereferencing it here,
-            // synchronously, to copy its bytes is sound regardless of what
-            // happens to its owner afterward.
+            // PORT NOTE (`105d0a545`/P7-W2 T3, see `temporary_directory`'s
+            // PORT NOTE): deep-copy out of the borrow here, the one place
+            // this field is ever read (matching the oracle's own `readFile`,
+            // called only from within `init`). `directory.as_slice()` is
+            // safe: `limits`'s caller guarantees `directory` is valid for
+            // this call (`Limits::all_with_temp_dir`'s `# Safety`).
             temporary_directory: match &limits.temporary_file {
-                TemporaryFileLimit::Enabled { directory } => Some(unsafe { &**directory }.to_vec()),
+                TemporaryFileLimit::Enabled { directory } => Some(directory.as_slice().to_vec()),
                 TemporaryFileLimit::Disabled => None,
             },
         };
@@ -2854,11 +2919,9 @@ mod tests {
         };
         assert_eq!(
             Err(Error::TemporaryFileNotNamedCorrectly),
-            LoadingImage::init(
-                crate::alloc::Global,
-                &cmd,
-                &Limits::all_with_temp_dir(&tmp_dir_realpath(&tmp_dir))
-            )
+            LoadingImage::init(crate::alloc::Global, &cmd, &unsafe {
+                Limits::all_with_temp_dir(&tmp_dir_realpath(&tmp_dir))
+            })
             .map(|_| ())
         );
 
@@ -2916,11 +2979,9 @@ mod tests {
         };
         assert_eq!(
             Err(Error::TemporaryFileNotInTempDir),
-            LoadingImage::init(
-                crate::alloc::Global,
-                &cmd,
-                &Limits::all_with_temp_dir(&path_to_bytes(&trusted_path))
-            )
+            LoadingImage::init(crate::alloc::Global, &cmd, &unsafe {
+                Limits::all_with_temp_dir(&path_to_bytes(&trusted_path))
+            })
             .map(|_| ())
         );
 
@@ -2960,11 +3021,9 @@ mod tests {
             quiet: command::Quiet::No,
             data: crate::alloc::heap_bytes(&path_bytes),
         };
-        let mut loading = LoadingImage::init(
-            crate::alloc::Global,
-            &cmd,
-            &Limits::all_with_temp_dir(&tmp_dir_realpath(&tmp_dir)),
-        )
+        let mut loading = LoadingImage::init(crate::alloc::Global, &cmd, &unsafe {
+            Limits::all_with_temp_dir(&tmp_dir_realpath(&tmp_dir))
+        })
         .unwrap();
         let img = loading.complete(crate::alloc::Global).unwrap();
         assert!(img.compression == command::Compression::None);
@@ -3000,11 +3059,9 @@ mod tests {
             quiet: command::Quiet::No,
             data: crate::alloc::heap_bytes(&path_bytes),
         };
-        let mut loading = LoadingImage::init(
-            crate::alloc::Global,
-            &cmd,
-            &Limits::all_with_temp_dir(&tmp_dir_realpath(&tmp_dir)),
-        )
+        let mut loading = LoadingImage::init(crate::alloc::Global, &cmd, &unsafe {
+            Limits::all_with_temp_dir(&tmp_dir_realpath(&tmp_dir))
+        })
         .unwrap();
         let img = loading.complete(crate::alloc::Global).unwrap();
         assert!(img.compression == command::Compression::None);
@@ -3056,11 +3113,9 @@ mod tests {
             quiet: command::Quiet::No,
             data: crate::alloc::heap_bytes(&path_to_bytes(&path)),
         };
-        let result = LoadingImage::init(
-            crate::alloc::Global,
-            &cmd,
-            &Limits::all_with_temp_dir(&tmp_dir_realpath(&tmp_dir)),
-        );
+        let result = LoadingImage::init(crate::alloc::Global, &cmd, &unsafe {
+            Limits::all_with_temp_dir(&tmp_dir_realpath(&tmp_dir))
+        });
         tmp_dir.deinit();
         result
     }
@@ -3406,7 +3461,10 @@ mod tests {
             for medium in mediums {
                 assert_eq!(
                     Some(Error::InvalidData),
-                    windows_load(&path, medium, &Limits::all_with_temp_dir(&dir_path)).err(),
+                    windows_load(&path, medium, &unsafe {
+                        Limits::all_with_temp_dir(&dir_path)
+                    })
+                    .err(),
                     "{} {medium:?}",
                     String::from_utf8_lossy(&path)
                 );
@@ -3420,7 +3478,7 @@ mod tests {
                 windows_load(
                     b"\\\\.\\pipe\\rustty-kitty-graphics-test",
                     command::Medium::File,
-                    &Limits::all_with_temp_dir(&dir_path),
+                    &unsafe { Limits::all_with_temp_dir(&dir_path) },
                 )
                 .err()
             );
@@ -3514,11 +3572,9 @@ mod tests {
         let path_upper = real_path.to_ascii_uppercase();
         assert!(!isPathInDir(&dir_upper, &real_path) || dir_upper == dir_path);
 
-        let mut loading = windows_load(
-            &path_upper,
-            command::Medium::TemporaryFile,
-            &Limits::all_with_temp_dir(&dir_upper),
-        )
+        let mut loading = windows_load(&path_upper, command::Medium::TemporaryFile, &unsafe {
+            Limits::all_with_temp_dir(&dir_upper)
+        })
         .unwrap();
         let img = loading.complete(crate::alloc::Global).unwrap();
         assert!(img.compression == command::Compression::None);
@@ -3660,11 +3716,9 @@ mod tests {
             quiet: command::Quiet::No,
             data: crate::alloc::heap_bytes(&path_bytes),
         };
-        let mut loading = LoadingImage::init(
-            crate::alloc::Global,
-            &cmd,
-            &Limits::all_with_temp_dir(&tmp_dir_realpath(&tmp_dir)),
-        )
+        let mut loading = LoadingImage::init(crate::alloc::Global, &cmd, &unsafe {
+            Limits::all_with_temp_dir(&tmp_dir_realpath(&tmp_dir))
+        })
         .unwrap();
         let img = loading.complete(crate::alloc::Global).unwrap();
         assert!(img.compression == command::Compression::None);
@@ -4146,7 +4200,10 @@ mod tests {
             &Limits {
                 file: false,
                 temporary_file: TemporaryFileLimit::Enabled {
-                    directory: dir_bytes.as_slice() as *const [u8],
+                    // SAFETY: `dir_bytes` outlives this statement (named
+                    // above), and `init` only reads through the borrow
+                    // synchronously, within this same call.
+                    directory: unsafe { DirBorrow::new(dir_bytes.as_slice() as *const [u8]) },
                 },
                 shared_memory: false,
             },

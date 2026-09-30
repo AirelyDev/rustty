@@ -19197,7 +19197,8 @@ mod tests {
 
         let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
 
-        t.set_kitty_graphics_loading_limits(Limits::all_with_temp_dir(temp_dir));
+        // SAFETY: `temp_dir` is `&'static [u8]`, live for the whole test.
+        t.set_kitty_graphics_loading_limits(unsafe { Limits::all_with_temp_dir(temp_dir) });
         for total_limit in [1234_usize, 0] {
             t.set_kitty_graphics_size_limit(Global, total_limit);
             t.full_reset();
@@ -19210,10 +19211,7 @@ mod tests {
             assert!(storage.image_limits.shared_memory);
             match &storage.image_limits.temporary_file {
                 TemporaryFileLimit::Enabled { directory } => {
-                    // SAFETY: `temp_dir` is `&'static [u8]`, which is what
-                    // `Limits::all_with_temp_dir` was given above, so the
-                    // borrow is live for the whole test.
-                    assert_eq!(temp_dir.as_slice(), unsafe { &**directory });
+                    assert_eq!(temp_dir.as_slice(), directory.as_slice());
                 }
                 TemporaryFileLimit::Disabled => panic!("temporary file limit was reset"),
             }

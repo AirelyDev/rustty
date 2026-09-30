@@ -567,64 +567,64 @@ impl<M: AppMailbox> Termio<M> {
         // Create our terminal
         // var term = try terminalpkg.Terminal.init(alloc, opts: { ... });
         let grid_size = opts.size.grid();
-        let mut term =
-            Terminal::init(
-                alloc.into(),
-                rustty_vt::terminal::Options {
-                    cols: grid_size.columns,
-                    rows: grid_size.rows,
-                    max_scrollback_bytes: scrollback_limits(opts.full_config).0,
-                    max_scrollback_lines: scrollback_limits(opts.full_config).1,
-                    default_modes,
-                    // .default_cursor_style = opts.config.cursor_style,
-                    // .default_cursor_blink = opts.config.cursor_blink,
-                    default_cursor_style: opts.config.cursor_style,
-                    default_cursor_blink: opts.config.cursor_blink,
-                    colors: rustty_vt::terminal::Colors {
-                        // .background = .init(opts.config.background.toTerminalRGB()),
-                        background: color::DynamicRGB::init(
-                            opts.config.background.to_terminal_rgb(),
-                        ),
-                        // .foreground = .init(opts.config.foreground.toTerminalRGB()),
-                        foreground: color::DynamicRGB::init(
-                            opts.config.foreground.to_terminal_rgb(),
-                        ),
-                        // .cursor = cursor: {
-                        //     const color = opts.config.cursor_color orelse break :cursor .unset;
-                        //     const rgb = color.toTerminalRGB() orelse break :cursor .unset;
-                        //     break :cursor .init(rgb);
-                        // },
-                        cursor: 'cursor: {
-                            let Some(cursor_color) = opts.config.cursor_color else {
-                                break 'cursor color::DynamicRGB::UNSET;
-                            };
-                            let Some(rgb) = cursor_color.to_terminal_rgb() else {
-                                break 'cursor color::DynamicRGB::UNSET;
-                            };
-                            color::DynamicRGB::init(rgb)
-                        },
-                        // .palette = .init(opts.config.palette),
-                        palette: color::DynamicPalette::init(opts.config.palette),
+        let mut term = Terminal::init(
+            alloc.into(),
+            rustty_vt::terminal::Options {
+                cols: grid_size.columns,
+                rows: grid_size.rows,
+                max_scrollback_bytes: scrollback_limits(opts.full_config).0,
+                max_scrollback_lines: scrollback_limits(opts.full_config).1,
+                default_modes,
+                // .default_cursor_style = opts.config.cursor_style,
+                // .default_cursor_blink = opts.config.cursor_blink,
+                default_cursor_style: opts.config.cursor_style,
+                default_cursor_blink: opts.config.cursor_blink,
+                colors: rustty_vt::terminal::Colors {
+                    // .background = .init(opts.config.background.toTerminalRGB()),
+                    background: color::DynamicRGB::init(opts.config.background.to_terminal_rgb()),
+                    // .foreground = .init(opts.config.foreground.toTerminalRGB()),
+                    foreground: color::DynamicRGB::init(opts.config.foreground.to_terminal_rgb()),
+                    // .cursor = cursor: {
+                    //     const color = opts.config.cursor_color orelse break :cursor .unset;
+                    //     const rgb = color.toTerminalRGB() orelse break :cursor .unset;
+                    //     break :cursor .init(rgb);
+                    // },
+                    cursor: 'cursor: {
+                        let Some(cursor_color) = opts.config.cursor_color else {
+                            break 'cursor color::DynamicRGB::UNSET;
+                        };
+                        let Some(rgb) = cursor_color.to_terminal_rgb() else {
+                            break 'cursor color::DynamicRGB::UNSET;
+                        };
+                        color::DynamicRGB::init(rgb)
                     },
-                    kitty_image_storage_limit: opts.config.image_storage_limit,
-                    // .kitty_image_loading_limits = .allWithTempDir(global.tmpDirPath()),
-                    // PORT NOTE (oracle `e8525c0fd`, `P3-W11 T1` / `P3-W6 T4`
-                    // Step 4): `Limits.all` no longer exists — enabling the kitty
-                    // temporary-file medium REQUIRES naming the directory it is
-                    // restricted to. This is the only producer of that directory in
-                    // the app: `rustty_global::tmp_dir_path()` is
-                    // `global.tmpDirPath()`, published once by the app initializer
-                    // from the CAPTURED environment. `rustty-vt` (the libghostty-vt
-                    // artifact) may not reach `global` itself, which is exactly why
-                    // upstream threads it in from here.
-                    kitty_image_loading_limits: Limits::all_with_temp_dir(
-                        rustty_global::tmp_dir_path(),
-                    ),
+                    // .palette = .init(opts.config.palette),
+                    palette: color::DynamicPalette::init(opts.config.palette),
                 },
-            )
-            // (PORT NOTE: `Terminal::init`'s `OutOfMemory` maps to the opaque termio
-            // `crate::Error` — the reference `try` bubbles the alloc failure.)
-            .map_err(|_| Error)?;
+                kitty_image_storage_limit: opts.config.image_storage_limit,
+                // .kitty_image_loading_limits = .allWithTempDir(global.tmpDirPath()),
+                // PORT NOTE (oracle `e8525c0fd`, `P3-W11 T1` / `P3-W6 T4`
+                // Step 4): `Limits.all` no longer exists — enabling the kitty
+                // temporary-file medium REQUIRES naming the directory it is
+                // restricted to. This is the only producer of that directory in
+                // the app: `rustty_global::tmp_dir_path()` is
+                // `global.tmpDirPath()`, published once by the app initializer
+                // from the CAPTURED environment. `rustty-vt` (the libghostty-vt
+                // artifact) may not reach `global` itself, which is exactly why
+                // upstream threads it in from here.
+                //
+                // SAFETY: `rustty_global::tmp_dir_path()` returns
+                // `&'static [u8]` (published once, never freed), so the
+                // borrow `Limits::all_with_temp_dir` takes is live for
+                // the whole process (P7-W2 T3, ruling 44).
+                kitty_image_loading_limits: unsafe {
+                    Limits::all_with_temp_dir(rustty_global::tmp_dir_path())
+                },
+            },
+        )
+        // (PORT NOTE: `Terminal::init`'s `OutOfMemory` maps to the opaque termio
+        // `crate::Error` — the reference `try` bubbles the alloc failure.)
+        .map_err(|_| Error)?;
         // errdefer term.deinit(alloc);
         // (PORT NOTE: `Terminal::init` is the sole fallible step and runs BEFORE any
         // write into `*self_`; on error we return before writing, so no
@@ -1179,10 +1179,11 @@ impl<M: AppMailbox> Termio<M> {
         self.terminal
             .set_kitty_graphics_size_limit(self.alloc.into(), self.config.image_storage_limit);
         // self.terminal.setKittyGraphicsLoadingLimits(.allWithTempDir(global.tmpDirPath()));
-        self.terminal
-            .set_kitty_graphics_loading_limits(Limits::all_with_temp_dir(
-                rustty_global::tmp_dir_path(),
-            ));
+        // SAFETY: `rustty_global::tmp_dir_path()` is `&'static [u8]` — see
+        // the `new`-time call site's note above.
+        self.terminal.set_kitty_graphics_loading_limits(unsafe {
+            Limits::all_with_temp_dir(rustty_global::tmp_dir_path())
+        });
 
         // (the deferred renderer-state unlock)
         unsafe { (*(*self.renderer_state).mutex).unlock() };
