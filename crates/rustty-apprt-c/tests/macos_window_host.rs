@@ -60,7 +60,7 @@ use objc2::{define_class, msg_send, AnyThread, DefinedClass};
 use rustty_apprt::embedded::{
     App, ClipboardContent, Options, PlatformC, PlatformCMacOS, Surface, SurfaceOptions,
 };
-use rustty_apprt_api::action::{ActionC, TargetC};
+use rustty_apprt_api::action::{ActionC, ActionKey, GotoSplit, SplitDirection, TargetC, TargetKey};
 use rustty_apprt_api::{ClipboardRequest, ClipboardRequestType};
 use rustty_apprt_c::capi::Text;
 use rustty_apprt_c::{
@@ -68,7 +68,8 @@ use rustty_apprt_c::{
     rustty_set_window_background_blur, rustty_surface_config_new, rustty_surface_free,
     rustty_surface_free_text, rustty_surface_ime_point, rustty_surface_mouse_scroll,
     rustty_surface_new, rustty_surface_quicklook_font, rustty_surface_quicklook_word,
-    rustty_surface_set_content_scale, rustty_surface_set_display_id, rustty_surface_set_size,
+    rustty_surface_request_close, rustty_surface_set_content_scale, rustty_surface_set_display_id,
+    rustty_surface_set_size, rustty_surface_split, rustty_surface_split_focus,
 };
 use rustty_config::value_types::BackgroundBlur;
 
@@ -214,8 +215,32 @@ extern "C" fn cb_wakeup(_ud: *mut c_void) {}
 // `Mods` (not yet byte-exact-C — the DOCUMENTED apprt-api deferral); silenced exactly
 // as the production `embedded::Options` callback table silences it.
 #[allow(improper_ctypes_definitions)]
-extern "C" fn cb_action(_app: *mut App, _t: TargetC, _a: ActionC) -> bool {
+extern "C" fn cb_action(_app: *mut App, t: TargetC, a: ActionC) -> bool {
+    // Record for `split_and_close_exports_reach_the_host`. Thread-local: the
+    // exports call back synchronously on the calling thread, so actions other
+    // tests (or render/io threads) dispatch never land in this list.
+    let rec = match a.key {
+        // SAFETY: the key names the live union arm.
+        ActionKey::NewSplit => Recorded::NewSplit(unsafe { a.value.new_split }),
+        // SAFETY: as above.
+        ActionKey::GotoSplit => Recorded::GotoSplit(unsafe { a.value.goto_split }),
+        other => Recorded::Other(other),
+    };
+    ACTIONS.with(|v| v.borrow_mut().push((t.key, rec)));
     true
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Recorded {
+    NewSplit(SplitDirection),
+    GotoSplit(GotoSplit),
+    Other(ActionKey),
+}
+
+thread_local! {
+    static ACTIONS: core::cell::RefCell<Vec<(TargetKey, Recorded)>> =
+        const { core::cell::RefCell::new(Vec::new()) };
+    static CLOSES: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
 }
 extern "C" fn cb_read_clipboard(
     _ud: *mut c_void,
@@ -243,7 +268,9 @@ extern "C" fn cb_write_clipboard(
     _cf: bool,
 ) {
 }
-extern "C" fn cb_close_surface(_ud: *mut c_void, _p: bool) {}
+extern "C" fn cb_close_surface(_ud: *mut c_void, _p: bool) {
+    CLOSES.with(|c| c.set(c.get() + 1));
+}
 
 fn test_options() -> Options {
     Options {
@@ -572,6 +599,51 @@ fn mouse_scroll_routes_each_offset_to_its_own_axis() {
         (xoff, yoff * precision),
         (core.mouse.pending_scroll_x, core.mouse.pending_scroll_y),
         "xoff reaches the x helper and yoff the y helper"
+    );
+}
+
+// a1bf5b5e1: the menu-facing split/close exports now route through the core
+// surface's `performBindingAction`, the keybind path. Pins that the new route
+// reaches the host with the same surface-targeted action (and, for close, the
+// `close_surface` callback) on a live surface. The error-log half of the change is
+// unreachable here and is pinned in lib.rs `binding_route_tests`.
+#[test]
+fn split_and_close_exports_reach_the_host() {
+    let Some(host) = HostedSurface::spawn() else {
+        eprintln!("no Metal device / app_new failed; skipping");
+        return;
+    };
+    ACTIONS.with(|v| v.borrow_mut().clear());
+    CLOSES.with(|c| c.set(0));
+
+    // SAFETY: `host.surface` is the live surface from `rustty_surface_new`, and this
+    // thread is the host's main thread for it.
+    unsafe {
+        rustty_surface_split(host.surface, SplitDirection::Left);
+        rustty_surface_split_focus(host.surface, GotoSplit::Next);
+    }
+    let got = ACTIONS.with(|v| v.borrow().clone());
+    assert_eq!(
+        vec![
+            (TargetKey::Surface, Recorded::NewSplit(SplitDirection::Left)),
+            (TargetKey::Surface, Recorded::GotoSplit(GotoSplit::Next)),
+        ],
+        got,
+        "split and split_focus reach the host as one surface-targeted action each"
+    );
+
+    ACTIONS.with(|v| v.borrow_mut().clear());
+    // SAFETY: as above.
+    unsafe { rustty_surface_request_close(host.surface) };
+    assert_eq!(
+        1,
+        CLOSES.with(|c| c.get()),
+        "request_close closes the surface exactly once (no fallback close after a handled binding)"
+    );
+    assert!(
+        ACTIONS.with(|v| v.borrow().is_empty()),
+        "close_surface dispatches no apprt action: {:?}",
+        ACTIONS.with(|v| v.borrow().clone())
     );
 }
 

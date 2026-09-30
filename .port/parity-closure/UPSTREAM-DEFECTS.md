@@ -561,9 +561,9 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - ReleaseSafe:     misleading logs only.
 - ReleaseFast:     same.
 - reachability:    embedder (a split focus failure) and GTK (an app-targeted `set_window_title`).
-- port handling:   faithful: `crates/rustty-apprt-c/src/lib.rs:2201-2211` (PORT NOTE naming the copy-paste) and `crates/rustty-apprt/src/gtk/class/application.rs:4682-4684`.
+- port handling:   embedded half: ported as upstream fixed it (P7-W8 T2, DECISIONS B13). `rustty_surface_split_focus` (`crates/rustty-apprt-c/src/lib.rs:2286-2313`) routes through `performBindingAction` and logs "error focusing split"; `rustty_surface_split` and `rustty_surface_request_close` ("error requesting close", `close()` fallback) take the same route; the copy-paste PORT NOTE is retired. GTK half: faithful at `crates/rustty-apprt/src/gtk/class/application.rs:5220-5222`.
 - parity row(s):   none; inventory M54.
-- test:            n/a.
+- test:            embedded half: `crates/rustty-apprt-c/src/lib.rs` `binding_route_tests::split_focus_logs_error_focusing_split` (with `split_routes_through_perform_binding_action` and `request_close_routes_through_perform_binding_action`; a source scan, since the embedded `perform_action` never errs), failing before P7-W8 T2; live routing in `tests/macos_window_host.rs::split_and_close_exports_reach_the_host`. GTK half: n/a.
 - proposed fix:    embedded.zig:2192 → "error focusing split err={}"; application.zig:3117 → "set_window_title to app is unexpected".
 - upstream status: partly fixed upstream in a1bf5b5e1 (the embedded half, with new routing through `performBindingAction` and a new close log, which Rustty ports: DECISIONS B13). Remaining: the GTK half (`setWindowTitle`'s "set_tab_title to app is unexpected", application.zig:3026 at 12752b2ac), kept faithful; not reported.
 
