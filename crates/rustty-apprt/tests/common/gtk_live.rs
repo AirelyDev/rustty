@@ -43,7 +43,7 @@ pub fn iterate(ctx: &glib::MainContext, core_app: *mut CoreApp<gtk::App>, app: &
 /// `core` is the widget's live core surface; the main thread calls this once.
 pub unsafe fn stop_render_thread(core: *mut rustty_apprt::gtk::class::surface::CoreSurface) {
     unsafe {
-        let _ = (*core).renderer_thread.stop.notify();
+        let _ = (*(*core).renderer_thread.as_ptr()).stop.notify();
         if let Some(handle) = (*core).renderer_thr.take() {
             handle.join().expect("the render thread exits cleanly");
         }

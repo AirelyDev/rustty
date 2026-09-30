@@ -737,7 +737,7 @@ fn surface_free_frees_the_last_inherited_working_directory() {
     // surface's own raw pointers, and the terminal is touched only under the
     // mutex.
     unsafe {
-        let rs = &raw const (*host.surface).core_surface.renderer_state;
+        let rs = (*host.surface).core_surface.renderer_state.as_ptr();
         (*(*rs).mutex).lock();
         (*(*rs).terminal).set_pwd(b"/tmp/r13c2-ud68").unwrap();
         (*(*rs).mutex).unlock();
@@ -801,7 +801,7 @@ fn ime_point_saturates_with_a_saturated_padding() {
     // renderer-state mutex the IO thread and `imePoint` take; `size` is
     // main-thread state and this thread is the one calling `imePoint`.
     unsafe {
-        let rs = &raw const (*host.surface).core_surface.renderer_state;
+        let rs = (*host.surface).core_surface.renderer_state.as_ptr();
         (*(*rs).mutex).lock();
         (*(*rs).terminal).set_cursor_pos(3, 4); // 1-based: row 3, column 4
         (*(*rs).mutex).unlock();
