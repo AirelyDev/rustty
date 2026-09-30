@@ -1386,6 +1386,199 @@ fn run_n449(shape: N449Shape) {
     }
 }
 
+// ===========================================================================
+// UD367 (P7-W7 T5d fix round 1): `Subprocess.start` on the io thread
+// publishes the pty while a main-thread `getProcessInfo` reads it
+// ===========================================================================
+//
+// `Exec::threadEnter` (io thread) runs `subprocess.start(&mut Subprocess)`,
+// which writes `pty` (and `process`). The embedded
+// `rustty_surface_foreground_pid` / `rustty_surface_tty_name` (AppleScript
+// `pid` / `tty`, App Intents) may run `getProcessInfo` on the main thread at
+// the same time: a read of `pty` racing its write, in the reference too.
+//
+// The fix: a `pty_ready: AtomicBool` the io thread stores `Release` after
+// `start` returns; the main thread's accessors load it `Acquire` and return
+// `None` (as before `start`) until it is set. It lives in `Exec`, beside
+// `subprocess`, not inside `Subprocess`: `start`'s `&mut Subprocess` retag
+// covers every byte of the subprocess, so a flag inside it races with the
+// main thread's load (the `ud367_ready_in_subprocess` arm).
+
+/// `termio::exec::Subprocess` (the startup fields).
+struct Ud367Subprocess {
+    pty: Option<N449Pty>,
+    process: Option<u32>,
+    /// Only the `ud367_ready_in_subprocess` arm uses this placement.
+    pty_ready_inner: AtomicBool,
+}
+
+impl Ud367Subprocess {
+    /// `start(&mut self, ..)`: opens the pty and spawns the child.
+    fn start(&mut self) {
+        self.pty = Some(N449Pty {
+            master: 9,
+            tty_name_buf: UnsafeCell::new([0; 8]),
+            tty_name: Cell::new(None),
+        });
+        std::thread::yield_now();
+        self.process = Some(7);
+    }
+}
+
+/// `termio::exec::Exec` with the fix's flag.
+struct Ud367Exec {
+    subprocess: Ud367Subprocess,
+    pty_ready: AtomicBool,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Ud367Shape {
+    /// SHIPPED (and the reference): no ordering.
+    Unordered,
+    /// The fix: `Exec.pty_ready`.
+    ReadyInExec,
+    /// A flag inside `Subprocess` (covered by `start`'s `&mut`).
+    ReadyInSubprocess,
+}
+
+fn run_ud367(shape: Ud367Shape) {
+    let exec = P(Box::into_raw(Box::new(Ud367Exec {
+        subprocess: Ud367Subprocess {
+            pty: None,
+            process: None,
+            pty_ready_inner: AtomicBool::new(false),
+        },
+        pty_ready: AtomicBool::new(false),
+    })));
+    // The io thread: `Exec::threadEnter(self_: *mut Exec, ..)`.
+    let io = std::thread::spawn(move || {
+        let exec = exec;
+        unsafe {
+            (*exec.0).subprocess.start();
+            match shape {
+                Ud367Shape::Unordered => {}
+                Ud367Shape::ReadyInExec => (*exec.0).pty_ready.store(true, Ordering::Release),
+                Ud367Shape::ReadyInSubprocess => {
+                    (*exec.0).subprocess.pty_ready_inner.store(true, Ordering::Release)
+                }
+            }
+        }
+    });
+    // The main thread: `getTtyName` / `getForegroundPid` (raw-self, through
+    // `&Pty`), as a script's `tty of terminal 1` right after `make new window`.
+    for _ in 0..ROUNDS {
+        unsafe {
+            let ready = match shape {
+                Ud367Shape::Unordered => true,
+                Ud367Shape::ReadyInExec => (*exec.0).pty_ready.load(Ordering::Acquire),
+                Ud367Shape::ReadyInSubprocess => {
+                    (*exec.0).subprocess.pty_ready_inner.load(Ordering::Acquire)
+                }
+            };
+            if ready {
+                if let Some(pty) = (*exec.0).subprocess.pty.as_ref() {
+                    let _ = pty.get_tty_name();
+                    let _ = pty.get_foreground_pid();
+                }
+            }
+        }
+        std::thread::yield_now();
+    }
+    io.join().unwrap();
+    drop(unsafe { Box::from_raw(exec.0) });
+}
+
+// ===========================================================================
+// UD368 (P7-W7 T5d fix round 1): `Termio.resize` writes `size` before it
+// takes the renderer mutex, while the read thread reads it under the mutex
+// ===========================================================================
+//
+// `resize` (io writer thread) does `self.size = size` before
+// `renderer_state.mutex.lock()`; the stream handler's `.enable_mode_3` (io
+// read thread, under the mutex) reads `self.size.*` through its `size`
+// pointer. Program output that sets mode 3 during a window resize races the
+// write, in the reference too. The fix: store `size` inside the mutex section.
+
+struct Ud368Size {
+    cols: u32,
+    rows: u32,
+}
+
+struct Ud368Termio {
+    size: Ud368Size,
+    /// `StreamHandler.size: *mut Size` (points at `Termio.size`).
+    handler_size: *mut Ud368Size,
+    renderer_state: *mut State,
+    terminal_cols: u32,
+}
+
+fn run_ud368(under_lock: bool) {
+    let m = Box::into_raw(Box::new(Mutex::new()));
+    let (_, _, _, state, _) = new_blocks(m);
+    let state_box = ThreadSharedBox::new(state);
+    let io_box = ThreadSharedBox::<Ud368Termio>::new_uninit();
+    unsafe {
+        let io = io_box.as_ptr();
+        io.write(Ud368Termio {
+            size: Ud368Size { cols: 80, rows: 24 },
+            handler_size: &raw mut (*io).size,
+            renderer_state: state_box.as_ptr(),
+            terminal_cols: 80,
+        });
+    }
+    let io = P(io_box.as_ptr());
+    // The read thread: `processOutput` -> `.enable_mode_3`, under the mutex.
+    let reader = std::thread::spawn(move || {
+        let io = io;
+        for _ in 0..ROUNDS {
+            unsafe {
+                let rs = (*io.0).renderer_state;
+                (*(*rs).mutex).lock();
+                let s = (*io.0).handler_size;
+                let cols = (*s).cols;
+                let _rows = (*s).rows;
+                (*io.0).terminal_cols = cols;
+                (*(*rs).mutex).unlock();
+            }
+            std::thread::yield_now();
+        }
+    });
+    // The writer thread: `Termio::resize(self_: *mut Termio, ..)`.
+    let writer = std::thread::spawn(move || {
+        let io = io;
+        for i in 0..ROUNDS as u32 {
+            unsafe {
+                let rs = (*io.0).renderer_state;
+                if !under_lock {
+                    (*io.0).size = Ud368Size {
+                        cols: 100 + i,
+                        rows: 30,
+                    };
+                }
+                // `Backend::resize(..)` with the size as arguments.
+                std::thread::yield_now();
+                (*(*rs).mutex).lock();
+                if under_lock {
+                    (*io.0).size = Ud368Size {
+                        cols: 100 + i,
+                        rows: 30,
+                    };
+                }
+                (*io.0).terminal_cols = (*io.0).size.cols;
+                (*(*rs).mutex).unlock();
+            }
+            std::thread::yield_now();
+        }
+    });
+    writer.join().unwrap();
+    reader.join().unwrap();
+    unsafe {
+        io_box.dealloc();
+        state_box.dealloc();
+        drop(Box::from_raw(m));
+    }
+}
+
 fn main() {
     let which = std::env::args().nth(1).expect("candidate name");
     let all = Which {
@@ -1504,6 +1697,12 @@ fn main() {
             close_confirm_narrow: true,
             terminal_early: true,
         }),
+        // ---- UD367 / UD368 (T5d fix round 1) ----
+        "ud367_start_unordered" => run_ud367(Ud367Shape::Unordered),
+        "ud367_ready_in_subprocess" => run_ud367(Ud367Shape::ReadyInSubprocess),
+        "ud367_ready_in_exec" => run_ud367(Ud367Shape::ReadyInExec),
+        "ud368_size_before_lock" => run_ud368(false),
+        "ud368_size_under_lock" => run_ud368(true),
         other => panic!("unknown candidate {other}"),
     }
 }

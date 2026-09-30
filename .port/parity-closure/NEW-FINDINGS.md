@@ -9156,7 +9156,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **residual (not N449)**: `Exec::threadEnter` still runs `subprocess.start(&mut Subprocess)` on the io
   thread, which publishes `pty` / `process`. A main-thread `getProcessInfo` in that window reads
   `pty` while it is written; that is a plain data race in the reference too (not an aliasing-model
-  artefact), left for the controller to rule on.
+  artefact). Ruling 52 confirmed it: now **UD367**, fixed in T5d fix round 1 (`Exec.pty_ready`). The
+  same review found **UD368** (`Termio.resize` stores `size` before the renderer mutex while the read
+  thread reads it under the mutex), also fixed in fix round 1.
 
 ## N448 — superseded: now UD366
 

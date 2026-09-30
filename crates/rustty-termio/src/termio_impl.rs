@@ -1273,8 +1273,7 @@ impl<M: AppMailbox> Termio<M> {
     // now, runtime-panics only once the render thread runs (CORE_BLUEPRINT §5).
     //
     // PORT NOTE (N449, P7-W7 T5d): raw-self (see `threadExit`). `size` is
-    // written by place, before the lock, in the reference's order (the stream
-    // handler reads it through its `size` pointer under the lock); the pty
+    // written by place inside the mutex section (UD368, below); the pty
     // through the raw-self `Backend::resize`; `terminal` only inside the mutex
     // section.
     ///
@@ -1286,13 +1285,26 @@ impl<M: AppMailbox> Termio<M> {
         size: Size,
     ) -> Result<(), Error> {
         // self.size = size;
-        unsafe { (*self_).size = size };
+        //
+        // PORT NOTE: reference defect (R13), UD368. The reference writes
+        // `self.size` here, before it takes the renderer mutex, while the io
+        // read thread reads it under that mutex through the stream handler's
+        // `size` pointer (`.enable_mode_3`): program output that sets mode 3
+        // during a window resize races the write. The store moves into the
+        // mutex section below. Nothing between here and there reads
+        // `self.size` (`backend.resize` takes the sizes as arguments), and a
+        // failing `backend.resize` still stores it before returning, as the
+        // reference does (`.port/phase-2/mirihar-n444`
+        // `ud368_size_before_lock` UB under SB and TB, `ud368_size_under_lock`
+        // CLEAN).
+        //
         // const grid_size = size.grid();
         let grid_size = size.grid();
 
         // Update the size of our pty.
         // try self.backend.resize(grid_size, size.terminal());
-        unsafe { Backend::resize(&raw mut (*self_).backend, grid_size, size.terminal()) }?;
+        let backend_resized =
+            unsafe { Backend::resize(&raw mut (*self_).backend, grid_size, size.terminal()) };
 
         // Enter the critical area that we want to keep small
         // {
@@ -1302,6 +1314,14 @@ impl<M: AppMailbox> Termio<M> {
         // SAFETY: `renderer_state` points at the live shared render State for
         // the Termio's lifetime; `.mutex` is the guard-less shared lock.
         unsafe { (*(*(*self_).renderer_state).mutex).lock() };
+        // (UD368: the reference's `self.size = size`, under the mutex.)
+        unsafe { (*self_).size = size };
+        if let Err(e) = backend_resized {
+            // (the reference's `try self.backend.resize(..)` returned here,
+            // before the critical area.)
+            unsafe { (*(*(*self_).renderer_state).mutex).unlock() };
+            return Err(e);
+        }
         let locked: Result<(), Error> = 'locked: {
             // Update the size of our terminal state
             // try self.terminal.resize(self.alloc, .{
