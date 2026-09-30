@@ -1238,6 +1238,10 @@
      "test_blocks": 0
     },
     {
+     "file": "apprt/gtk/class/Overrides.zig",
+     "test_blocks": 0
+    },
+    {
      "file": "apprt/gtk/class/render_surface.zig",
      "test_blocks": 0
     },
@@ -1375,7 +1379,7 @@
     }
    ],
    "test_blocks": 27,
-   "file_count": 59
+   "file_count": 60
   },
   "apprt-api": {
    "files": [
@@ -3410,6 +3414,7 @@
   "A1-hoist: moved terminal/size.zig (5 tests) from crate 'vt' to 'render-types' so render-types is a leaf (->util) and the vt<->render-types size cycle is broken. Total test_blocks unchanged (3234). Documented in PORT_PLAN A1.",
   "A5-resolution: split crate 'apprt' (was 47) into 'apprt' (27) + 'apprt-api' (20) \u2014 the break #8 interface crate carves apprt/{action,ipc,runtime,surface,structs}.zig (20 test_blocks: action 17, ipc 2, runtime 1) out of apprt. Total test_blocks unchanged (3234). Documented in PORT_PLAN A5.",
   "13b-relocation: moved Command.zig (10 tests) from crate 'core' to 'termio' per the ratified break #13b (PORT_PLAN crates 23/24: Command-in-core would cycle; termio contract 44 = 34 + 10). Total test_blocks unchanged (3234). Applied 2026-07-10 (phase-2 payoff; the map had missed the relocation the PORT_PLAN documents).",
-  "P7-W0-T4 phase-start map (pin 12752b2ac): added datastruct/{comptime_int_set,untouched_pool,wasm_page_pool}.zig to 'datastruct', lib/parse_int.zig to 'lib', apprt/gtk/scale.zig to 'apprt', and terminal/{kitty/windows,snapshot/terminal}.zig to 'vt', so G3b reads their comments (R1 \u00a73 'Gate bookkeeping', R5 \u00a73). lib/types.zig and font/nerd_font_attributes.zig were already mapped. Each new entry carries test_blocks 0: the per-crate test_blocks are G1's frozen 3234 contract (4749c4e93), which this amendment does not move. Their tests are counted by G1b's MAP rows and matched by name by audit_test_coverage.py."
+  "P7-W0-T4 phase-start map (pin 12752b2ac): added datastruct/{comptime_int_set,untouched_pool,wasm_page_pool}.zig to 'datastruct', lib/parse_int.zig to 'lib', apprt/gtk/scale.zig to 'apprt', and terminal/{kitty/windows,snapshot/terminal}.zig to 'vt', so G3b reads their comments (R1 \u00a73 'Gate bookkeeping', R5 \u00a73). lib/types.zig and font/nerd_font_attributes.zig were already mapped. Each new entry carries test_blocks 0: the per-crate test_blocks are G1's frozen 3234 contract (4749c4e93), which this amendment does not move. Their tests are counted by G1b's MAP rows and matched by name by audit_test_coverage.py.",
+  "P7-W7-T4: added apprt/gtk/class/Overrides.zig to crate 'apprt' (9fc8d9ebd factors TabOverrides/parseOverrides out of application.zig/tab.zig into their own file), so G3b reads its module doc and comments. test_blocks 0 (no test{} in Overrides.zig); the crate test_blocks contract (3234) is unchanged."
  ]
 }

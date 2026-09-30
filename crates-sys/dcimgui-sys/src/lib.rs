@@ -85,8 +85,13 @@ extern "C" {
 // Dear ImGui internal DockBuilder API.
 //
 // The docking-branch DockBuilder functions live in `dcimgui_internal.h`, which
-// the reference does NOT run through Dear Bindings (its bitfields cannot be
-// C-translated), so bindgen — which parses only the public `dcimgui.h` surface —
+// the reference does NOT run through Dear Bindings (its bitfields are ones
+// translate-c has trouble with — `pkg/dcimgui/main.zig`'s own comment on its
+// manual `pub extern fn` block for these said "cannot translate" pre-fe9cf6a26,
+// when the reference still used `@cImport`; that commit's migration to
+// translate-c reworded it to "has trouble with", since translate-c, like
+// `@cImport` before it, still cannot handle them), so bindgen — which parses
+// only the public `dcimgui.h` surface —
 // emits nothing for them. But they ARE compiled into the `dcimgui` archive
 // (docking build) and exported with C linkage, so we declare them directly here,
 // exactly mirroring the reference's own binding surface (ghostty

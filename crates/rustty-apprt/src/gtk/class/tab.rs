@@ -19,10 +19,9 @@ use gtk4::CompositeTemplate;
 use libadwaita as adw;
 
 use rustty_apprt_api::NewSurfaceContext;
-use rustty_config::command::Command;
-use rustty_config::value_types::ShellIntegration;
 
 use super::config::Config;
+use super::overrides::TabOverrides;
 use super::split_tree::{SplitTree, Tree};
 use super::surface::{CoreSurface, Surface, SurfaceOverrides};
 use crate::gtk::class::application::Application;
@@ -37,19 +36,6 @@ use crate::gtk::ext;
 /// into the text; they go through the `log` facade now, which is also what lets
 /// a test observe which of them fired (S57-F2).
 const LOG_SCOPE: &str = "gtk_rustty_window";
-
-/// PORTS: `tab.zig:190-196` the `new` overrides struct.
-#[derive(Default)]
-pub struct TabOverrides {
-    /// PORTS: `tab.zig:191` `command`.
-    pub command: Option<Command>,
-    /// PORTS: `tab.zig:192` `shell_integration` (B5, 3650bef4e).
-    pub shell_integration: Option<ShellIntegration>,
-    /// PORTS: `tab.zig:193` `working_directory`.
-    pub working_directory: Option<String>,
-    /// PORTS: `tab.zig:194` `title`.
-    pub title: Option<String>,
-}
 
 mod imp {
     use super::*;

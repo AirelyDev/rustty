@@ -30,8 +30,9 @@ use gio::prelude::*;
 use gtk4::prelude::*;
 
 use rustty_apprt::gtk::class::application::Application;
+use rustty_apprt::gtk::class::overrides::TabOverrides;
 use rustty_apprt::gtk::class::surface::{Surface, SurfaceOverrides};
-use rustty_apprt::gtk::class::tab::{Tab, TabOverrides};
+use rustty_apprt::gtk::class::tab::Tab;
 use rustty_apprt::gtk::class::window::Window;
 use rustty_apprt::gtk::{self, register_resources};
 use rustty_config::command::Command;

@@ -63,9 +63,10 @@ use super::close_confirmation_dialog::{CloseConfirmationDialog, Target};
 use super::command_palette::{ActionBoxed, CommandPalette};
 use super::config::Config;
 use super::debug_warning::DebugWarning;
+use super::overrides::TabOverrides;
 use super::split_tree::{SplitTree, Tree};
 use super::surface::Surface;
-use super::tab::{Tab, TabOverrides};
+use super::tab::Tab;
 
 use super::gtypes::{ClipboardEnum, GtkTitlebarStyleEnum};
 
