@@ -240,11 +240,12 @@ mod tests {
         // `scrollback-limit-bytes` + `scrollback-limit-lines`, and `P3-W9` T3
         // added `gtk-horizontal-tab-scroll`; 206 -> 208: Phase-4 w8-config
         // added `drag-handle` + `link-osc8`; 208 -> 209: Phase-5 p5-sys-config
-        // added `clipboard-write-limit-bytes`). Pinned so a table that silently
+        // added `clipboard-write-limit-bytes`; 209 -> 210: P7-W6 T1 added
+        // `vt-window-resize-allowed`). Pinned so a table that silently
         // shrinks cannot make the per-field loop below vacuous.
         assert_eq!(
             fields.len(),
-            209,
+            210,
             "the field table changed; update this count"
         );
         for (name, _key) in fields {

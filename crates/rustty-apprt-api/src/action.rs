@@ -412,6 +412,13 @@ pub enum Action<'a> {
 
     /// Move a tab to a new window.
     MoveTabToNewWindow,
+
+    /// Resize the window containing the target surface so that the
+    /// surface is the given size in points. A zero dimension should be
+    /// kept as is. This is requested by the running program (CSI 8 t)
+    /// and apprts may ignore it, for example if the surface is in a
+    /// split or the window is fullscreen.
+    ResizeWindow(ResizeWindow),
 }
 
 /// Sync with: rustty_action_tag_e
@@ -487,6 +494,7 @@ pub enum ActionKey {
     Readonly,
     CopyTitleToClipboard,
     MoveTabToNewWindow,
+    ResizeWindow,
 }
 
 /// Sync with: rustty_action_u
@@ -572,6 +580,7 @@ pub union ActionCValue {
     pub readonly: Readonly,
     pub copy_title_to_clipboard: (),
     pub move_tab_to_new_window: (),
+    pub resize_window: ResizeWindow,
 }
 
 /// Sync with: rustty_action_s
@@ -666,6 +675,7 @@ impl<'a> Action<'a> {
             Action::Readonly(_) => ActionKey::Readonly,
             Action::CopyTitleToClipboard => ActionKey::CopyTitleToClipboard,
             Action::MoveTabToNewWindow => ActionKey::MoveTabToNewWindow,
+            Action::ResizeWindow(_) => ActionKey::ResizeWindow,
         }
     }
 
@@ -828,6 +838,7 @@ impl<'a> Action<'a> {
             Action::MoveTabToNewWindow => ActionCValue {
                 move_tab_to_new_window: (),
             },
+            Action::ResizeWindow(v) => ActionCValue { resize_window: *v },
         };
 
         ActionC {
@@ -1075,6 +1086,13 @@ pub struct InitialSize {
     // PORT NOTE: reference `getGObjectType` (`gobject.ext.defineBoxed(...,
     // "GhosttyApprtInitialSize")`, gated on `app_runtime == .gtk`) is deferred to
     // rustty-apprt's gtk backend; this crate defines the plain struct only.
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
+pub struct ResizeWindow {
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -290,6 +290,7 @@ pub enum Key {
     CommandPaletteEntry,
     OscColorReportFormat,
     VtKamAllowed,
+    VtWindowResizeAllowed,
     CustomShader,
     CustomShaderAnimation,
     BellFeatures,
@@ -537,6 +538,7 @@ impl Key {
             b"unfocused-split-fill" => Some(Key::UnfocusedSplitFill),
             b"unfocused-split-opacity" => Some(Key::UnfocusedSplitOpacity),
             b"vt-kam-allowed" => Some(Key::VtKamAllowed),
+            b"vt-window-resize-allowed" => Some(Key::VtWindowResizeAllowed),
             b"wait-after-command" => Some(Key::WaitAfterCommand),
             b"window-colorspace" => Some(Key::WindowColorspace),
             b"window-decoration" => Some(Key::WindowDecoration),
@@ -766,6 +768,7 @@ pub fn value_type(key: Key) -> std::any::TypeId {
         Key::CommandPaletteEntry => TypeId::of::<RepeatableCommand>(),
         Key::OscColorReportFormat => TypeId::of::<OSCColorReportFormat>(),
         Key::VtKamAllowed => TypeId::of::<bool>(),
+        Key::VtWindowResizeAllowed => TypeId::of::<bool>(),
         Key::CustomShader => TypeId::of::<RepeatablePath>(),
         Key::CustomShaderAnimation => TypeId::of::<CustomShaderAnimation>(),
         Key::BellFeatures => TypeId::of::<BellFeatures>(),
@@ -4047,6 +4050,24 @@ pub struct Config {
     /// need KAM, you don't need it.
     pub vt_kam_allowed: bool,
 
+    // @"vt-window-resize-allowed": bool = false,
+    /// If true, allows the running program to resize the window using the
+    /// xterm `CSI 8 ; rows ; columns t` escape sequence. If a parameter is zero
+    /// or omitted, the current size of that dimension is kept. Sizes smaller
+    /// than 40 columns by 10 rows are raised to that size so that a program
+    /// can't shrink the window to hide its output.
+    ///
+    /// The request is ignored if the terminal is in a split, in a window with
+    /// multiple tabs, or the quick terminal, or if the window manager controls
+    /// the window size, such as when it is fullscreen, maximized, or tiled.
+    /// Sizes larger than the screen are clamped to the screen.
+    ///
+    /// This is disabled by default because it lets any program, including one
+    /// running on a remote machine, change the size of your window.
+    ///
+    /// Available since: 1.4.0
+    pub vt_window_resize_allowed: bool,
+
     // @"custom-shader": RepeatablePath = .{},
     /// Custom shaders to run after the default shaders. This is a file path
     /// to a GLSL-syntax shader for all platforms.
@@ -5202,6 +5223,7 @@ impl Default for Config {
             command_palette_entry: RepeatableCommand::default(),
             osc_color_report_format: OSCColorReportFormat::Bit16,
             vt_kam_allowed: false,
+            vt_window_resize_allowed: false,
             custom_shader: RepeatablePath::default(),
             custom_shader_animation: CustomShaderAnimation::True,
             bell_features: BellFeatures::default(),
@@ -8042,6 +8064,7 @@ impl Config {
             Key::CommandPaletteEntry => c!(command_palette_entry),
             Key::OscColorReportFormat => c!(osc_color_report_format),
             Key::VtKamAllowed => c!(vt_kam_allowed),
+            Key::VtWindowResizeAllowed => c!(vt_window_resize_allowed),
             Key::CustomShader => c!(custom_shader),
             Key::CustomShaderAnimation => c!(custom_shader_animation),
             Key::BellFeatures => c!(bell_features),
@@ -8342,6 +8365,7 @@ impl Config {
         ci!(command_palette_entry);
         cv!(osc_color_report_format);
         cv!(vt_kam_allowed);
+        cv!(vt_window_resize_allowed);
         // RepeatablePath (no derived `Clone`)
         ci!(custom_shader);
         cv!(custom_shader_animation);
@@ -8635,6 +8659,7 @@ pub(crate) const CONFIG_FIELDS: &[(&[u8], Key)] = &[
     (b"command-palette-entry", Key::CommandPaletteEntry),
     (b"osc-color-report-format", Key::OscColorReportFormat),
     (b"vt-kam-allowed", Key::VtKamAllowed),
+    (b"vt-window-resize-allowed", Key::VtWindowResizeAllowed),
     (b"custom-shader", Key::CustomShader),
     (b"custom-shader-animation", Key::CustomShaderAnimation),
     (b"bell-features", Key::BellFeatures),
@@ -9218,6 +9243,8 @@ impl Config {
             b"osc-color-report-format" => f_enum!(osc_color_report_format),
             // @"vt-kam-allowed": bool
             b"vt-kam-allowed" => f_display!(vt_kam_allowed),
+            // @"vt-window-resize-allowed": bool
+            b"vt-window-resize-allowed" => f_display!(vt_window_resize_allowed),
 
             // @"custom-shader": RepeatablePath (FormatEntry)
             b"custom-shader" => f_entry!(custom_shader),
@@ -10705,6 +10732,8 @@ impl Target for Config {
             }
             // @"vt-kam-allowed": bool
             b"vt-kam-allowed" => field_bool!(vt_kam_allowed),
+            // @"vt-window-resize-allowed": bool
+            b"vt-window-resize-allowed" => field_bool!(vt_window_resize_allowed),
 
             // @"custom-shader": RepeatablePath (parseCLI self)
             b"custom-shader" => field_parsecli_self_map!(custom_shader, path_parse_err),
@@ -11114,6 +11143,7 @@ mod parse_tests {
         b"unfocused-split-fill",
         b"unfocused-split-opacity",
         b"vt-kam-allowed",
+        b"vt-window-resize-allowed",
         b"wait-after-command",
         b"window-colorspace",
         b"window-decoration",
@@ -11155,7 +11185,9 @@ mod parse_tests {
         // 208 -> 209: Phase-5 p5-sys-config (oracle range `12967b68f..683d8db64`)
         // added `clipboard-write-limit-bytes` (`5350d4a5f`, default raised by
         // `70f006575`).
-        assert_eq!(CONFIG_FIELD_NAMES.len(), 209);
+        // 209 -> 210: Phase-7 W6 T1 added `vt-window-resize-allowed`
+        // (`714fe9b90`, moved next to `vt-kam-allowed` by `2a987d59d`).
+        assert_eq!(CONFIG_FIELD_NAMES.len(), 210);
     }
 
     /// Area G OQ-6: until `P3-W9 T3`, these three `204` assertions guarded rustty
@@ -11675,6 +11707,7 @@ mod clone_changed_tests {
         Key::CommandPaletteEntry,
         Key::OscColorReportFormat,
         Key::VtKamAllowed,
+        Key::VtWindowResizeAllowed,
         Key::CustomShader,
         Key::CustomShaderAnimation,
         Key::BellFeatures,
@@ -11759,8 +11792,11 @@ mod clone_changed_tests {
         //
         // 208 -> 209: Phase-5 p5-sys-config, from the `12967b68f..683d8db64`
         // oracle range — `clipboard-write-limit-bytes` (`5350d4a5f`/`70f006575`).
-        assert_eq!(ALL_KEYS.len(), 209);
-        assert_eq!(CONFIG_FIELDS.len(), 209);
+        //
+        // 209 -> 210: Phase-7 W6 T1 — `vt-window-resize-allowed` (`714fe9b90`,
+        // `2a987d59d`).
+        assert_eq!(ALL_KEYS.len(), 210);
+        assert_eq!(CONFIG_FIELDS.len(), 210);
 
         let default = Config::default();
 
@@ -12910,6 +12946,43 @@ mod integration_tests {
         //     cfg.@"clipboard-write-limit-bytes".value,
         // );
         assert_eq!(usize::MAX, cfg.clipboard_write_limit_bytes.value);
+    }
+
+    // rustty-only (P7-W6 T1, `714fe9b90` + `2a987d59d`; the reference adds the
+    // option without a `test {}`): `vt-window-resize-allowed` defaults to
+    // false, parses, formats, and sits right after `vt-kam-allowed` in the
+    // declaration (so `show-config`) order, where `2a987d59d` moved it.
+    #[test]
+    fn vt_window_resize_allowed_default_parse_and_order() {
+        let mut cfg = Config::default_config();
+        assert!(!cfg.vt_window_resize_allowed);
+        {
+            let mut buf = rustty_cfg_fmt::AllocatingWriter::init();
+            cfg.format_entry_field(b"vt-window-resize-allowed", &mut buf)
+                .unwrap();
+            assert_eq!(
+                b"vt-window-resize-allowed = false\n".as_slice(),
+                buf.written()
+            );
+        }
+
+        let mut it = TestIterator::new(&[b"--vt-window-resize-allowed=true"]);
+        cfg.load_iter(&mut it).unwrap();
+        assert!(cfg._diagnostics.empty());
+        assert!(cfg.vt_window_resize_allowed);
+        assert!(cfg.changed(&Config::default_config(), Key::VtWindowResizeAllowed));
+
+        let names: Vec<&[u8]> = CONFIG_FIELDS.iter().map(|(n, _)| *n).collect();
+        let at = names
+            .iter()
+            .position(|n| *n == b"vt-window-resize-allowed".as_slice())
+            .expect("vt-window-resize-allowed is a config field");
+        assert_eq!(b"vt-kam-allowed".as_slice(), names[at - 1]);
+        assert_eq!(b"custom-shader".as_slice(), names[at + 1]);
+        assert_eq!(
+            Some(Key::VtWindowResizeAllowed),
+            Key::string_to_enum(b"vt-window-resize-allowed")
+        );
     }
 
     // test "compatibility: scrollback-limit renamed to bytes" {

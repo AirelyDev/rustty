@@ -204,6 +204,7 @@ fn ghostty_h_action_key() {
             ("readonly", Readonly),
             ("copy_title_to_clipboard", CopyTitleToClipboard),
             ("move_tab_to_new_window", MoveTabToNewWindow),
+            ("resize_window", ResizeWindow),
         ]
     );
 }
@@ -543,6 +544,22 @@ fn ref_all_decls_recursive() {
         ActionKey::MoveTabToNewWindow
     );
     let _ = Action::MoveTabToNewWindow.cval();
+    assert_eq!(
+        Action::ResizeWindow(ResizeWindow {
+            width: 640,
+            height: 0,
+        })
+        .key(),
+        ActionKey::ResizeWindow
+    );
+    let rw = Action::ResizeWindow(ResizeWindow {
+        width: 640,
+        height: 0,
+    })
+    .cval();
+    assert_eq!(ActionKey::ResizeWindow, rw.key);
+    let v = unsafe { rw.value.resize_window };
+    assert_eq!((640, 0), (v.width, v.height));
 
     // Borrow-carrying payloads + their Display formatters + C projections.
     let st = SetTitle { title: b"title" };

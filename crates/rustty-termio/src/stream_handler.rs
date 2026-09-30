@@ -3547,6 +3547,11 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
         self.sendSizeReport(v);
     }
 
+    // .resize_window => self.surfaceMessageWriter(.{ .resize_window = value }),
+    fn resize_window(&mut self, v: stream::ResizeWindow) {
+        self.surfaceMessageWriter(SurfaceMessage::ResizeWindow(v));
+    }
+
     // .xtversion => try self.reportXtversion(),
     fn xtversion(&mut self) {
         let r = self.reportXtversion();
@@ -4189,6 +4194,7 @@ pub(crate) mod tests {
             "semantic_prompt",
             "kitty_clipboard",
             "kitty_dnd",
+            "resize_window",
         ];
 
         let src = include_str!("stream_handler.rs");
@@ -4442,6 +4448,78 @@ pub(crate) mod tests {
             drop(Box::from_raw(mailbox));
         }
         term.deinit(Global.into());
+    }
+
+    // P7-W6 T1 (714fe9b90): a program's `CSI 8 ; rows ; cols t` is forwarded
+    // to the surface as a `resize_window` message, unchanged (the surface
+    // decides whether it is allowed). Driven through the real vt stream.
+    #[test]
+    fn stream_handler_forwards_csi_8_t_as_a_resize_window_surface_message() {
+        struct RecordingMailbox(std::sync::Mutex<Vec<stream::ResizeWindow>>);
+        impl AppMailbox for RecordingMailbox {
+            type Surface = ();
+            #[allow(clippy::result_large_err)]
+            fn push_or_return(
+                &self,
+                msg: SurfaceMessage<'static>,
+                _timeout: Timeout,
+            ) -> Result<rustty_datastruct::blocking_queue::Size, SurfaceMessage<'static>>
+            {
+                if let SurfaceMessage::ResizeWindow(v) = msg {
+                    self.0.lock().unwrap().push(v);
+                }
+                Ok(1)
+            }
+            fn crash_surface(&self) -> *const dyn rustty_crash::sentry::ThreadStateSurface {
+                &crate::TEST_CRASH_SURFACE
+            }
+        }
+
+        let mut term = Terminal::init(Global.into(), terminal_opts(Some(false))).unwrap();
+        let n = handler_for(&raw mut term, std::ptr::null_mut(), std::ptr::null_mut());
+        let h = StreamHandler::<RecordingMailbox> {
+            alloc: n.alloc,
+            size: n.size,
+            terminal: n.terminal,
+            termio_mailbox: n.termio_mailbox,
+            surface_mailbox: RecordingMailbox(std::sync::Mutex::new(Vec::new())),
+            renderer_state: n.renderer_state,
+            renderer_mailbox: n.renderer_mailbox,
+            renderer_wakeup: n.renderer_wakeup,
+            enquiry_response: n.enquiry_response,
+            osc_color_report_format: n.osc_color_report_format,
+            clipboard_write: n.clipboard_write,
+            clipboard_write_limit: n.clipboard_write_limit,
+            kitty_clipboard_grants: n.kitty_clipboard_grants,
+            kitty_clipboard_write: n.kitty_clipboard_write,
+            apc: n.apc,
+            dcs: n.dcs,
+            tmux_viewer: n.tmux_viewer,
+            termio_messaged: n.termio_messaged,
+            seen_title: n.seen_title,
+        };
+        let mut s = stream::Stream::init(stream::Options::with_handler(h));
+        s.next_slice(b"\x1b[8;30;100t\x1b[8;;120t\x1b[8;30;100;1t");
+        let got = s.handler.surface_mailbox.0.lock().unwrap().clone();
+        s.handler.renderer_wakeup.deinit();
+        drop(s);
+        term.deinit(Global.into());
+
+        assert_eq!(
+            vec![
+                stream::ResizeWindow {
+                    rows: 30,
+                    columns: 100
+                },
+                stream::ResizeWindow {
+                    rows: 0,
+                    columns: 120
+                },
+            ],
+            got,
+            "each valid CSI 8 t is forwarded once, as parsed; the one with extra \
+             parameters is not"
+        );
     }
 
     // The `changeConfig` half of the same move: the handler no longer owns the

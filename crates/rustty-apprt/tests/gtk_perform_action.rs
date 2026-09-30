@@ -118,6 +118,7 @@ fn perform_action_arm_coverage() {
             Action::Readonly(_) => "readonly",
             Action::CopyTitleToClipboard => "copy_title_to_clipboard",
             Action::MoveTabToNewWindow => "move_tab_to_new_window",
+            Action::ResizeWindow(_) => "resize_window",
         }
     }
 
@@ -231,7 +232,7 @@ fn perform_action_unimplemented_returns_false() {
     let h = display_application();
 
     // The Unimplemented set, one variant per reference line (`:777-791`).
-    let unimplemented: [Action<'_>; 13] = [
+    let unimplemented: [Action<'_>; 14] = [
         Action::SecureInput(SecureInput::Toggle),
         Action::CloseAllWindows,
         Action::FloatWindow(FloatWindow::Toggle),
@@ -250,6 +251,10 @@ fn perform_action_unimplemented_returns_false() {
             b: 0,
         }),
         Action::ResetWindowSize,
+        Action::ResizeWindow(rustty_apprt_api::action::ResizeWindow {
+            width: 0,
+            height: 0,
+        }),
         Action::CheckForUpdates,
         Action::Undo,
         Action::Redo,

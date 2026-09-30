@@ -9279,6 +9279,49 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `close_surfaces`, with every thread live. All seven close-path KATs then exited 101 twice each,
   with no SIGSEGV and no abort.
 
+## N456 — host action callbacks that resize the window write the target surface under the shared `Target` protector (`reset_window_size` live, `resize_window` latent)
+
+- **id**: N456. P7-W6 T1 (the port of 714fe9b90); renumbered from N451 and widened by fix round 1
+  (Ruling 55). **severity**: medium. It is aliasing-model UB today on every `reset_window_size`
+  keybind on macOS; no miscompile has been observed. **kind**: port soundness (Stacked Borrows and
+  Tree Borrows; a function-argument protector). **Not upstream**: Zig's `*Surface` has no protector.
+  **state**: PARTIAL. The protected `&mut Surface` on the `resize_window` path is gone (P7-W6 T1). The
+  shared `Target` protector is OPEN → P7-W6 T3.
+- **shape**: an action whose host handler resizes the window writes the core surface inside the
+  callback. That write happens while `perform_action`'s shared `apprt::Target::Surface(&Surface)`
+  argument protects the whole surface.
+  - `reset_window_size` (**live**):
+    - core: `performBindingAction`'s arm passes `Target::Surface(&*this)`
+      (`crates/rustty-core/src/surface.rs:13606`).
+    - Swift: `Rustty.App.swift:2053` `resetWindowSize` posts a notification, and NotificationCenter
+      runs its observers synchronously. `onResetWindowSize` → `returnToDefaultSize` →
+      `apply(to:)` → `window.setFrame(rect, display: true)` (`TerminalController.swift:1762`).
+    - The frame change lays the surface view out synchronously (`SurfaceScrollView.layout` →
+      `synchronizeCoreSurface` → `SurfaceView.sizeDidChange` → `rustty_surface_set_size` →
+      `sizeCallback`), which writes the core surface. That conflicts with the shared protector under
+      both SB and TB.
+  - `resize_window` (**latent** until P7-W9 T2 ports the Swift handler):
+    - `Surface.resizeWindow` (from `handleMessage(.resize_window)`, a program's CSI 8 t) performs
+      `.resize_window`.
+    - The macOS handler (`TerminalController.resizeWindow`, 714fe9b90) calls
+      `window.setFrame(frame, display: true)` in the callback, which is the same write.
+- **P7-W6 T1 fix (partial)**: raw-self, as N442.
+  - `Surface::handleMessage(self_: *mut Surface, ..)` is an unsafe associated fn. It sends
+    `.resize_window` to `resizeWindow(self_: *mut Surface, ..)`, which reads `config`, `rt_surface`,
+    `size` and `rt_app` by place in short reborrows that end before `perform_action`.
+  - Every other arm runs in `handleMessageArms(&mut self)`, unchanged.
+  - Callers pass the pointer: `App::surfaceMessage` (raw-self) and `App::updateConfig`.
+  - LIFETIMES rows: `src/Surface.zig Surface [self across rt_app.performAction: handleMessage
+    .resize_window]` (new), and the N442 row's residual (amended).
+- **decision (Ruling 55)**: make `Target::Surface` a raw pointer (`*const`/`NonNull`: no protector,
+  the reference's `*Surface` semantics). The alternative, deferring the Swift `setFrame` with
+  `DispatchQueue.main.async`, is rejected as a behaviour change. This lands as **P7-W6 T3**, before
+  P7-W9 T2's Swift `resize_window` handler.
+- **test**: `crates/rustty-core/src/surface.rs` `resize_window_tests::csi_8_t_resizes_the_window_only_when_allowed`
+  and `ud371_csi_8_t_overflow_returns_without_panicking` drive `Surface::handleMessage` through the raw
+  root on a fabricated surface. Miri clean (SB), macOS 2026-09-29. Their test host does not re-enter,
+  so they cover the raw-self half only; the protector half is for T3's harness.
+
 ## N452 — effect callbacks that re-enter the Terminal C API reach stream/handler bytes under the protected `&mut Stream`/`&mut Handler`
 
 - **id**: N452. P7-W2 T6 (implementer concern 4; task review, controller ruling 51). **severity**: medium

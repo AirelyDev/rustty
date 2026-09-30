@@ -229,8 +229,8 @@ use rustty_datastruct::blocking_queue::{Size as QueueSize, Timeout};
 use rustty_apprt_api::action::{
     CellSize, ColorChange, ColorKind, CommandFinished, ConfigChange, DesktopNotification,
     InitialSize, KeySequence, KeyTable, MouseOverLink, MouseVisibility, OpenUrl, OpenUrlKind,
-    PromptTitle, Pwd, ReloadConfig, SearchSelected, SearchTotal, SecureInput, SetTitle, SizeLimit,
-    StartSearch,
+    PromptTitle, Pwd, ReloadConfig, ResizeWindow, SearchSelected, SearchTotal, SecureInput,
+    SetTitle, SizeLimit, StartSearch,
 };
 use rustty_apprt_api::Surface as ApprtSurface;
 
@@ -278,6 +278,14 @@ use crate::renderer_seam::Renderer;
 // pub const min_window_height_cells: u32 = 4;
 pub const MIN_WINDOW_WIDTH_CELLS: u32 = 10;
 pub const MIN_WINDOW_HEIGHT_CELLS: u32 = 4;
+
+/// Minimum size in cells that the running program can resize the window
+/// to (CSI 8 t). This is larger than the minimum window size so that a
+/// program can't shrink the window to hide its output.
+// const min_resize_width_cells: u32 = 40;
+// const min_resize_height_cells: u32 = 10;
+const MIN_RESIZE_WIDTH_CELLS: u32 = 40;
+const MIN_RESIZE_HEIGHT_CELLS: u32 = 10;
 
 /// `recomputeInitialSize`'s pixel computation (`Surface.zig:1866-1886`), checked.
 ///
@@ -345,6 +353,59 @@ pub(crate) fn size_limit_min(cell_width: u32, cell_height: u32) -> Option<(u32, 
         cell_width.checked_mul(MIN_WINDOW_WIDTH_CELLS)?,
         cell_height.checked_mul(MIN_WINDOW_HEIGHT_CELLS)?,
     ))
+}
+
+/// `resizeWindow`'s point-size computation (714fe9b90), checked: the
+/// `(width, height)` in points to send with the `resize_window` action, or
+/// `None` when a requested dimension does not fit a `u32`.
+///
+/// PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD371). The reference
+/// computes `@max(size.columns, 40) * cell.width + padding.left +
+/// padding.right` (and the height) in unchecked `u32`, then converts
+/// `@ceil(px / scale)` with `@intFromFloat`. A cell wider than 65537 px
+/// (`adjust-cell-width = 65528` on a 10 px cell) overflows the product for
+/// `CSI 8;65535;65535 t`, and one wider than 107374182 px overflows it for any
+/// CSI 8 t: ReleaseSafe panics "integer overflow" (or "integer part of floating
+/// point value out of bounds" for the conversion), ReleaseFast sends a wrapped
+/// size. The port checks each step; `None` makes `resizeWindow` skip the
+/// action, as UD59's `initial_size_px` does. A zero (omitted) dimension is not
+/// computed at all: the reference computes and then discards it, so a
+/// dimension the program did not ask for can no longer fail the request.
+pub(crate) fn resize_window_pts(
+    size: terminal::stream::ResizeWindow,
+    cell: rendererpkg::size::CellSize,
+    padding: rendererpkg::size::Padding,
+    scale: apprt::ContentScale,
+) -> Option<(u32, u32)> {
+    // const width: f32 = @floatFromInt(@max(size.columns, min_resize_width_cells) *
+    //     self.size.cell.width + padding.left + padding.right);
+    // const height: f32 = @floatFromInt(@max(size.rows, min_resize_height_cells) *
+    //     self.size.cell.height + padding.top + padding.bottom);
+    //
+    // A zero dimension is passed through so the apprt keeps it as is.
+    // .width = if (size.columns > 0) @intFromFloat(@ceil(width / scale.x)) else 0,
+    // .height = if (size.rows > 0) @intFromFloat(@ceil(height / scale.y)) else 0,
+    let width = if size.columns > 0 {
+        let px = u32::from(size.columns)
+            .max(MIN_RESIZE_WIDTH_CELLS)
+            .checked_mul(cell.width)?
+            .checked_add(padding.left)?
+            .checked_add(padding.right)?;
+        u32_from_ceil(px as f32 / scale.x)?
+    } else {
+        0
+    };
+    let height = if size.rows > 0 {
+        let px = u32::from(size.rows)
+            .max(MIN_RESIZE_HEIGHT_CELLS)
+            .checked_mul(cell.height)?
+            .checked_add(padding.top)?
+            .checked_add(padding.bottom)?;
+        u32_from_ceil(px as f32 / scale.y)?
+    } else {
+        0
+    };
+    Some((width, height))
 }
 
 // rustty-only (R13, UPSTREAM-DEFECTS.md UD59): the initial-size and
@@ -599,6 +660,412 @@ mod r13_window_size_overflow_tests {
         assert_eq!(Some((100, 80)), size_limit_min(10, 20));
         assert_eq!(Some((4_294_967_290, 80)), size_limit_min(u32::MAX / 10, 20));
         assert_eq!(None, size_limit_min(10, u32::MAX / 4 + 1));
+    }
+}
+
+// P7-W6 T1: CSI 8 t (714fe9b90). The arithmetic helper (R13, UD371) and the
+// `handleMessage(.resize_window)` arm on a fabricated surface: the action is
+// sent only when `vt-window-resize-allowed` is set, and an overflowing request
+// returns without panicking.
+#[cfg(test)]
+mod resize_window_tests {
+    use super::*;
+    use crate::log_capture;
+    use std::mem::MaybeUninit;
+    use std::sync::Mutex;
+
+    fn load(text: &[u8]) -> configpkg::Config {
+        let mut cfg = configpkg::Config::default_config();
+        let mut iter = rustty_args::args::LineIterator::init(text);
+        cfg.load_iter(&mut iter).unwrap();
+        cfg.finalize().unwrap();
+        assert!(cfg._diagnostics.empty(), "unexpected config diagnostics");
+        cfg
+    }
+
+    fn cell(width: u32, height: u32) -> rendererpkg::size::CellSize {
+        rendererpkg::size::CellSize { width, height }
+    }
+
+    fn pad(p: u32) -> rendererpkg::size::Padding {
+        rendererpkg::size::Padding {
+            top: p,
+            bottom: p,
+            right: p,
+            left: p,
+        }
+    }
+
+    fn rw(rows: u16, columns: u16) -> terminal::stream::ResizeWindow {
+        terminal::stream::ResizeWindow { rows, columns }
+    }
+
+    const SCALE: apprt::ContentScale = apprt::ContentScale { x: 1.0, y: 1.0 };
+
+    // UD371 (R13): the reference's unchecked `u32` arithmetic traps in
+    // ReleaseSafe for these inputs (measured, `.port/phase-7/probes/
+    // p7w6t1_resize_window_overflow_probe.zig`); the port returns `None`.
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-core, parity tail C-1): `Config::finalize` calls the foreign function `getppid`, which Miri cannot execute; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
+    fn ud371_resize_window_overflow_takes_the_skip_path() {
+        // Positive controls: CSI 8;24;80 t on 10x20 px cells with 2 px
+        // padding, the minimums, and zero (omitted) dimensions.
+        assert_eq!(
+            Some((80 * 10 + 4, 24 * 20 + 4)),
+            resize_window_pts(rw(24, 80), cell(10, 20), pad(2), SCALE)
+        );
+        assert_eq!(
+            Some((40 * 10 + 4, 10 * 20 + 4)),
+            resize_window_pts(rw(1, 1), cell(10, 20), pad(2), SCALE),
+            "requests below 40x10 cells are raised to it"
+        );
+        assert_eq!(
+            Some((0, 30 * 20 + 4)),
+            resize_window_pts(rw(30, 0), cell(10, 20), pad(2), SCALE)
+        );
+        assert_eq!(
+            Some(((80 * 10 + 4) / 2, (24 * 20 + 4) / 2)),
+            resize_window_pts(
+                rw(24, 80),
+                cell(10, 20),
+                pad(2),
+                apprt::ContentScale { x: 2.0, y: 2.0 }
+            ),
+            "pixels are converted to points"
+        );
+
+        // `adjust-cell-width = 65528` on a 10 px cell: 65535 * 65538 > u32.
+        let cfg = load(b"adjust-cell-width = 65528\n");
+        let cell_width = cfg
+            .adjust_cell_width
+            .expect("adjust-cell-width parsed")
+            .apply_u32(10);
+        assert_eq!(65_538, cell_width, "the modifier reaches the cell size");
+        assert_eq!(
+            None,
+            resize_window_pts(rw(65535, 65535), cell(cell_width, 20), pad(2), SCALE)
+        );
+        // 65535 * 65537 is exactly u32::MAX: the padding sum overflows.
+        assert_eq!(
+            None,
+            resize_window_pts(rw(24, 65535), cell(65_537, 20), pad(2), SCALE)
+        );
+        // No padding, the product fits, but the point size at scale 0.5 does
+        // not (the reference's "integer part ... out of bounds").
+        assert_eq!(
+            None,
+            resize_window_pts(
+                rw(24, 65535),
+                cell(65_536, 20),
+                pad(0),
+                apprt::ContentScale { x: 0.5, y: 1.0 }
+            )
+        );
+        // A cell so wide that even the 40-column minimum overflows: a bare
+        // CSI 8 t (both omitted) still succeeds, because the port does not
+        // compute a dimension the program did not ask for; asking for a
+        // width fails.
+        let huge = load(b"adjust-cell-width = 2147483647\n")
+            .adjust_cell_width
+            .expect("adjust-cell-width parsed")
+            .apply_u32(10);
+        assert_eq!(2_147_483_657, huge);
+        assert_eq!(
+            Some((0, 0)),
+            resize_window_pts(rw(0, 0), cell(huge, 20), pad(2), SCALE)
+        );
+        assert_eq!(
+            Some((0, 24 * 20 + 4)),
+            resize_window_pts(rw(24, 0), cell(huge, 20), pad(2), SCALE)
+        );
+        assert_eq!(
+            None,
+            resize_window_pts(rw(24, 1), cell(huge, 20), pad(2), SCALE)
+        );
+        // Heights overflow the same way.
+        assert_eq!(
+            None,
+            resize_window_pts(rw(65535, 0), cell(10, 65_538), pad(2), SCALE)
+        );
+        // Fix round 1 (Ruling 55): padding only. `window-padding-x =
+        // 2147483648` at scale 1 is 2^31 a side (fits `u32`), and the sum of
+        // the two sides overflows with ordinary cells (probe case `padsum`).
+        let mut derived = DerivedConfig::init(Allocator, &load(b"window-padding-x = 2147483648\n"))
+            .expect("DerivedConfig::init");
+        let scaled = derived.scaledPadding(72.0, 72.0);
+        derived.deinit();
+        drop(derived);
+        assert_eq!(
+            (1 << 31, 1 << 31),
+            (scaled.left, scaled.right),
+            "the config reaches the padding"
+        );
+        assert_eq!(
+            None,
+            resize_window_pts(rw(24, 80), cell(10, 20), scaled, SCALE)
+        );
+        assert_eq!(
+            None,
+            resize_window_pts(
+                rw(24, 80),
+                cell(10, 20),
+                rendererpkg::size::Padding {
+                    left: 1 << 31,
+                    right: 1 << 31,
+                    top: 0,
+                    bottom: 0,
+                },
+                SCALE
+            )
+        );
+        // The same padding with the width omitted: the height is unaffected.
+        assert_eq!(
+            Some((0, 24 * 20)),
+            resize_window_pts(
+                rw(24, 0),
+                cell(10, 20),
+                rendererpkg::size::Padding {
+                    left: 1 << 31,
+                    right: 1 << 31,
+                    top: 0,
+                    bottom: 0,
+                },
+                SCALE
+            )
+        );
+    }
+
+    struct TestApp {
+        config: configpkg::Config,
+        actions: Mutex<Vec<ResizeWindow>>,
+    }
+
+    impl apprt::App for TestApp {
+        type Surface = TestRtSurface;
+
+        fn perform_action<C: apprt::CoreSurfaceHandle>(
+            &self,
+            target: apprt::Target<'_, C>,
+            action: apprt::Action<'_>,
+        ) -> Result<bool, apprt::ApprtError> {
+            assert!(matches!(target, apprt::Target::Surface(_)));
+            match action {
+                apprt::Action::ResizeWindow(v) => self.actions.lock().unwrap().push(v),
+                other => panic!("unexpected action {:?}", other.key()),
+            }
+            Ok(true)
+        }
+
+        fn perform_ipc(
+            &self,
+            _target: apprt::ipc::Target<'_>,
+            _action: apprt::ipc::Action<'_>,
+        ) -> Result<bool, apprt::ipc::Errors> {
+            unimplemented!("resize_window KAT: not driven")
+        }
+
+        fn wakeup(&self) {}
+
+        fn config(&self) -> &configpkg::Config {
+            &self.config
+        }
+
+        fn keyboard_layout(&self) -> rustty_input::keyboard::Layout {
+            rustty_input::keyboard::Layout::Unknown
+        }
+    }
+
+    struct TestRtSurface {
+        core: *mut Surface<TestApp>,
+        app: *mut TestApp,
+        scale: apprt::ContentScale,
+    }
+
+    impl apprt::Surface for TestRtSurface {
+        type App = TestApp;
+        type Core = Surface<TestApp>;
+
+        fn core(&self) -> *mut Surface<TestApp> {
+            self.core
+        }
+        fn rt_app(&self) -> *mut TestApp {
+            self.app
+        }
+        fn close(&self, _process_alive: bool) {}
+        fn deinit(&mut self) {}
+        fn get_content_scale(&self) -> Result<apprt::ContentScale, apprt::ApprtError> {
+            Ok(self.scale)
+        }
+        fn get_size(&self) -> Result<apprt::SurfaceSize, apprt::ApprtError> {
+            unimplemented!("resize_window KAT: not driven")
+        }
+        fn get_title(&self) -> Option<&std::ffi::CStr> {
+            None
+        }
+        fn supports_clipboard(&self, _clipboard_type: apprt::Clipboard) -> bool {
+            unimplemented!("resize_window KAT: not driven")
+        }
+        fn clipboard_request(
+            &self,
+            _clipboard_type: apprt::Clipboard,
+            _state: apprt::ClipboardRequest,
+        ) -> Result<apprt::ClipboardReadResult, apprt::ApprtError> {
+            unimplemented!("resize_window KAT: not driven")
+        }
+        fn set_clipboard(
+            &self,
+            _clipboard_type: apprt::Clipboard,
+            _contents: &[apprt::ClipboardContent<'_>],
+            _confirm: bool,
+        ) -> Result<(), apprt::ApprtError> {
+            unimplemented!("resize_window KAT: not driven")
+        }
+        fn get_cursor_pos(&self) -> Result<apprt::CursorPos, apprt::ApprtError> {
+            unimplemented!("resize_window KAT: not driven")
+        }
+        fn default_termio_env(&self) -> Result<rustty_global::EnvMap, apprt::ApprtError> {
+            unimplemented!("resize_window KAT: not driven")
+        }
+    }
+
+    /// The `ResizeWindow` values a program's bytes parse to (the vt stream's
+    /// CSI t arm; termio forwards each unchanged, see its own test).
+    fn parse(bytes: &[u8]) -> Vec<terminal::stream::ResizeWindow> {
+        struct H(Vec<terminal::stream::ResizeWindow>);
+        impl terminal::stream::Handler for H {
+            fn resize_window(&mut self, v: terminal::stream::ResizeWindow) {
+                self.0.push(v);
+            }
+        }
+        let mut s =
+            terminal::stream::Stream::init(terminal::stream::Options::with_handler(H(Vec::new())));
+        s.next_slice(bytes);
+        std::mem::take(&mut s.handler.0)
+    }
+
+    /// Runs `bytes` through a fabricated surface (only `config`, `size`,
+    /// `rt_app` and `rt_surface` written; the arm reads nothing else) and
+    /// returns the recorded `resize_window` actions and log records.
+    fn run(
+        config_text: &[u8],
+        cell: rendererpkg::size::CellSize,
+        bytes: &[u8],
+    ) -> (Vec<ResizeWindow>, Vec<(log::Level, String, String)>) {
+        let mut full_config = configpkg::Config::default_config();
+        let mut iter = rustty_args::args::LineIterator::init(config_text);
+        full_config.load_iter(&mut iter).unwrap();
+        assert!(full_config._diagnostics.empty());
+        // No links => `DerivedConfig::init` never reaches oniguruma.
+        full_config.link.links.clear();
+        let derived = DerivedConfig::init(Allocator, &full_config).expect("DerivedConfig::init");
+
+        let mut mu: Box<MaybeUninit<Surface<TestApp>>> = Box::new(MaybeUninit::uninit());
+        let sp = mu.as_mut_ptr();
+        let rt_app: *mut TestApp = Box::into_raw(Box::new(TestApp {
+            config: full_config,
+            actions: Mutex::new(Vec::new()),
+        }));
+        let rt_surface: *mut TestRtSurface = Box::into_raw(Box::new(TestRtSurface {
+            core: sp,
+            app: rt_app,
+            scale: apprt::ContentScale { x: 1.0, y: 1.0 },
+        }));
+        unsafe {
+            std::ptr::addr_of_mut!((*sp).config).write(derived);
+            std::ptr::addr_of_mut!((*sp).rt_app).write(rt_app);
+            std::ptr::addr_of_mut!((*sp).rt_surface).write(rt_surface);
+            std::ptr::addr_of_mut!((*sp).size).write(rendererpkg::size::Size {
+                screen: rendererpkg::size::ScreenSize {
+                    width: 800,
+                    height: 600,
+                },
+                cell,
+                padding: pad(0),
+            });
+        }
+
+        let sizes = parse(bytes);
+        let cap = log_capture::start();
+        for size in sizes {
+            unsafe { Surface::handleMessage(sp, Message::ResizeWindow(size)) }
+                .expect("handleMessage");
+        }
+        let messages = cap.messages();
+        drop(cap);
+
+        let actions = std::mem::take(&mut *unsafe { &*rt_app }.actions.lock().unwrap());
+        unsafe {
+            (*sp).config.deinit();
+            std::ptr::drop_in_place(std::ptr::addr_of_mut!((*sp).config));
+            drop(Box::from_raw(rt_surface));
+            drop(Box::from_raw(rt_app));
+        }
+        (actions, messages)
+    }
+
+    #[test]
+    fn csi_8_t_resizes_the_window_only_when_allowed() {
+        // Disabled by default: logged, nothing performed.
+        let (actions, messages) = run(b"", cell(10, 20), b"\x1b[8;24;80t");
+        assert!(actions.is_empty());
+        assert_eq!(
+            vec![(
+                log::Level::Info,
+                "surface".to_string(),
+                "resize_window requested, but disabled via config".to_string()
+            )],
+            messages
+        );
+
+        // Allowed: the grid size in points, with the configured padding
+        // (`window-padding-x/y = 2` at 72 dpi × scale 1 → 2 px a side), the
+        // 40x10 minimum, and a zero (omitted) dimension passed through.
+        let (actions, messages) = run(
+            b"vt-window-resize-allowed = true\nwindow-padding-x = 2\nwindow-padding-y = 2\n",
+            cell(10, 20),
+            b"\x1b[8;24;80t\x1b[8;1;1t\x1b[8;;100t\x1b[8;30;100;1t",
+        );
+        assert!(messages.is_empty(), "{messages:?}");
+        assert_eq!(
+            vec![
+                ResizeWindow {
+                    width: 80 * 10 + 4,
+                    height: 24 * 20 + 4
+                },
+                ResizeWindow {
+                    width: 40 * 10 + 4,
+                    height: 10 * 20 + 4
+                },
+                ResizeWindow {
+                    width: 100 * 10 + 4,
+                    height: 0
+                },
+            ],
+            actions
+        );
+    }
+
+    // UD371 through the arm: the checked path returns without panicking and
+    // sends nothing.
+    #[test]
+    fn ud371_csi_8_t_overflow_returns_without_panicking() {
+        let (actions, messages) = run(
+            b"vt-window-resize-allowed = true\n",
+            cell(65_538, 20),
+            b"\x1b[8;65535;65535t",
+        );
+        assert!(actions.is_empty());
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                "surface".to_string(),
+                "resize_window requested, but the size does not fit a u32, ignoring".to_string()
+            )],
+            messages
+        );
     }
 }
 
@@ -1229,6 +1696,8 @@ pub struct DerivedConfig {
     pub title: Option<Vec<u8>>,
     // title_report: bool,
     pub title_report: bool,
+    // vt_window_resize_allowed: bool,
+    pub vt_window_resize_allowed: bool,
     // links: []DerivedConfig.Link,
     pub links: Vec<DerivedConfigLink>,
     // link_osc8: bool,
@@ -1422,6 +1891,8 @@ impl DerivedConfig {
             title: config.title.clone(),
             // .title_report = config.@"title-report",
             title_report: config.title_report,
+            // .vt_window_resize_allowed = config.@"vt-window-resize-allowed",
+            vt_window_resize_allowed: config.vt_window_resize_allowed,
             // .links = links,
             links,
             // .link_osc8 = config.@"link-osc8",
@@ -3901,9 +4372,35 @@ where
     // `ChangeConfig(&Config)`, is DIRECT-dispatched by `App.updateConfig`,
     // never queued (apprt-api `AppMailbox` note). The inferred `!void` is the
     // [`Error`] union.
-    pub fn handleMessage(&mut self, msg: Message<'_>) -> Result<(), Error> {
+    //
+    // PORT NOTE (N456, P7-W6 T1): raw-self. The `.resize_window` arm runs the
+    // embedder's action callback, and the macOS host resizes the window inside
+    // it (`TerminalController.resizeWindow` → `setFrame(display: true)`), which
+    // lays the surface view out and so re-enters this surface through
+    // `rustty_surface_set_size`. That arm is dispatched here, by place through
+    // `self_`, so no protected `&mut Surface` spans the callback (N442's
+    // shape). Every other arm runs in `handleMessageArms` on an unprotected
+    // reborrow, as before.
+    ///
+    /// # Safety
+    /// `self_` is the stable Surface allocation (init's stability contract); no
+    /// protected `&mut Surface` may span the call.
+    pub unsafe fn handleMessage(self_: *mut Self, msg: Message<'_>) -> Result<(), Error> {
         // switch (msg) {
         match msg {
+            // .resize_window => |size| try self.resizeWindow(size),
+            Message::ResizeWindow(size) => unsafe { Self::resizeWindow(self_, size) },
+            msg => unsafe { &mut *self_ }.handleMessageArms(msg),
+        }
+    }
+
+    /// The `handleMessage` arms that run no re-entrant host callback (see
+    /// `handleMessage`'s N456 note).
+    fn handleMessageArms(&mut self, msg: Message<'_>) -> Result<(), Error> {
+        match msg {
+            // (dispatched raw-self by `handleMessage`)
+            Message::ResizeWindow(_) => unreachable!("handleMessage dispatches resize_window"),
+
             // .change_config => |config| try self.updateConfig(config),
             Message::ChangeConfig(config) => self.updateConfig(config)?,
 
@@ -5777,6 +6274,81 @@ where
             Err(_) => return Err(InitialSizeError::AppActionFailed),
         }
 
+        Ok(())
+    }
+
+    /// Handle a request from the running program (CSI 8 t) to resize the
+    /// window to the given grid size.
+    // fn resizeWindow(
+    //     self: *Surface,
+    //     size: terminal.StreamAction.ResizeWindow,
+    // ) !void {
+    //
+    // PORT NOTE (N456): raw-self. The surface is read in short reborrows that
+    // end before `perform_action`, whose host callback resizes (so writes)
+    // this surface on macOS; the callback gets only the shared `Target`.
+    ///
+    /// # Safety
+    /// As [`Surface::handleMessage`].
+    unsafe fn resizeWindow(
+        self_: *mut Self,
+        size: terminal::stream::ResizeWindow,
+    ) -> Result<(), Error> {
+        // if (!self.config.vt_window_resize_allowed) {
+        if !unsafe { (*self_).config.vt_window_resize_allowed } {
+            // log.info("resize_window requested, but disabled via config", .{});
+            log::info!(
+                target: LOG_SCOPE,
+                "resize_window requested, but disabled via config"
+            );
+            // return;
+            return Ok(());
+        }
+
+        // Our cell size and padding are in pixels but the apprt expects
+        // points. We use the configured padding rather than the current
+        // padding since balanced padding depends on the size.
+        // const scale = try self.rt_surface.getContentScale();
+        let scale = unsafe { &*(*self_).rt_surface }.get_content_scale()?;
+        // const padding = self.config.scaledPadding(
+        //     scale.x * font.face.default_dpi,
+        //     scale.y * font.face.default_dpi,
+        // );
+        let padding = unsafe { &(*self_).config }.scaledPadding(
+            scale.x * f32::from(face::DEFAULT_DPI),
+            scale.y * f32::from(face::DEFAULT_DPI),
+        );
+        // const width: f32 = @floatFromInt(@max(size.columns, min_resize_width_cells) *
+        //     self.size.cell.width + padding.left + padding.right);
+        // const height: f32 = @floatFromInt(@max(size.rows, min_resize_height_cells) *
+        //     self.size.cell.height + padding.top + padding.bottom);
+        //
+        // PORT NOTE: reference defect (R13, UD371): the arithmetic, and the
+        // conversion below, are `resize_window_pts`, checked. On overflow no
+        // action is sent (UD59's skip).
+        let cell = unsafe { (*self_).size.cell };
+        let Some((width, height)) = resize_window_pts(size, cell, padding, scale) else {
+            log::warn!(
+                target: LOG_SCOPE,
+                "resize_window requested, but the size does not fit a u32, ignoring"
+            );
+            return Ok(());
+        };
+
+        // A zero dimension is passed through so the apprt keeps it as is.
+        // _ = try self.rt_app.performAction(
+        //     .{ .surface = self },
+        //     .resize_window,
+        //     .{
+        //         .width = if (size.columns > 0) @intFromFloat(@ceil(width / scale.x)) else 0,
+        //         .height = if (size.rows > 0) @intFromFloat(@ceil(height / scale.y)) else 0,
+        //     },
+        // );
+        let rt_app: &A = unsafe { &*(*self_).rt_app };
+        let _ = rt_app.perform_action(
+            apprt::Target::Surface(unsafe { &*self_ }),
+            apprt::Action::ResizeWindow(ResizeWindow { width, height }),
+        )?;
         Ok(())
     }
 
@@ -17242,13 +17814,17 @@ mod diagnostics_tests {
             c.title = Some(b"static".to_vec());
         });
         let cap = log_capture::start();
-        unsafe { &mut *mu.as_mut_ptr() }
-            .handleMessage(Message::SetTitle({
-                let mut t = [0u8; 256];
-                t[0] = b'x';
-                t
-            }))
-            .expect("handleMessage");
+        unsafe {
+            Surface::handleMessage(
+                mu.as_mut_ptr(),
+                Message::SetTitle({
+                    let mut t = [0u8; 256];
+                    t[0] = b'x';
+                    t
+                }),
+            )
+        }
+        .expect("handleMessage");
         let messages = cap.messages();
         drop(cap);
         teardown(mu);
