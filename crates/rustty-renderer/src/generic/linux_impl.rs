@@ -488,7 +488,10 @@ pub struct Renderer {
     // `self.overlay` in place without the draw mutex while the macOS main
     // thread's sync draw reads it under the mutex. The port builds the next
     // overlay into a local (reusing this one) without the lock and swaps it
-    // into `overlay` under the lock.
+    // into `overlay` under the lock. Cost: while the overlay is on, two
+    // terminal-sized overlay surfaces stay resident (`overlay` and this spare,
+    // where the reference keeps one); it is released when the overlay is
+    // turned off.
     pub overlay_spare: Option<Overlay>,
 
     /// The base timestamp for the Kitty graphics animation clock.
@@ -927,8 +930,10 @@ impl From<shape::harfbuzz::Error> for RebuildRowError {
 // recovered as a RAW `*mut Renderer` (never `&mut`) and deref'd HERE — inside
 // `Frame::complete`, which runs inside `draw_frame_raw` while its `self_ptr` raw root
 // is live. `present(&self)`, `push_frame(&self)`, the mailbox push and
-// `frame_completed(&self)` each reborrow only `&` (narrow), matching the Metal
-// lane's proven-clean shape.
+// `frame_completed(&self)` each reborrow only `&` (narrow). The whole-renderer
+// `&self` they form is sound because OpenGL frames complete synchronously, here on
+// the render thread with `draw_mutex` held, so no other thread touches the
+// renderer meanwhile (N437: every other entry locks first).
 //
 // # Safety
 // `renderer` must be a live, whole-`Renderer`-provenance `*mut ()` (the `self_ptr`
@@ -4226,7 +4231,7 @@ impl Renderer {
         // Acquire the draw mutex for all remaining state updates.
         // (N437 / ruling 32: the whole `&mut` exists only here, under the
         // lock, after the last use of the unlocked view above.)
-        let old_overlay = unsafe {
+        let (old_overlay, overlay_off) = unsafe {
             Self::with_locked(self_ptr, lock, move |r| {
                 // PORT NOTE: reference defect (R13), UD363. The overlay was built
                 // into `next_overlay` above, without the lock (as the reference
@@ -4295,13 +4300,14 @@ impl Renderer {
                 // Update custom shader uniforms that depend on terminal state.
                 // self.updateCustomShaderUniformsFromState();
                 r.update_custom_shader_uniforms_from_state();
-                old_overlay
+                (old_overlay, r.overlay.is_none())
             })
         };
         // UD363: keep the replaced overlay for the next rebuild to reuse, or,
         // with no overlay configured, release it as the reference does.
+        // (`overlay_off` was read under the lock with the swap.)
         match old_overlay {
-            Some(mut old) if unsafe { (*self_ptr).overlay.is_none() } => old.deinit(),
+            Some(mut old) if overlay_off => old.deinit(),
             old => unsafe { (*self_ptr).overlay_spare = old },
         }
 

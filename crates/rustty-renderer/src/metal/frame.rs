@@ -4,33 +4,38 @@
 //! render passes.` module doc is a copy-paste from `RenderPass.zig` in the
 //! reference; preserved verbatim per R1.)
 //!
-//! PORT NOTE (R3/objc2, HARD SPOT 2 [F6], `rust-mut-args-strongly-protected`):
-//! ghostty stashes an `objc.Block` (`CompletionBlock`) over a `Context {
-//! renderer: *Renderer, target: *Target, sync: bool }` and, on completion, derefs
-//! the stashed `*Renderer` to call `renderer.api.present(target, sync)` +
-//! `renderer.frameCompleted(health)`. Neither `GenericRenderer` nor
-//! `frameCompleted`/`present` exists until Chunk 2/3, so Frame is made
-//! 1b-compilable by a **forward-declared raw-pointer callback contract**: the
-//! renderer pointer is type-erased to `*mut ()` and the completion body is a
-//! plain-Rust `CompletionFn` fn-pointer that Chunk-3 `drawFrame` installs (the
-//! faithful analogue of Zig's type-erased `CompletionBlock`; R1 "no-loss, not
-//! no-addition"). The pointers are raw `*mut` (NEVER `&mut`) per
-//! `rust-mut-args-strongly-protected`: the completion trampoline re-enters the
-//! renderer while it is live inside `drawFrame` (the `@fieldParentPtr`/container_of
-//! precedent), so a `&mut` here would be UB.
+//! PORT NOTE (R3/objc2, HARD SPOT 2 [F6]): ghostty stashes an `objc.Block`
+//! (`CompletionBlock`) over a `Context { renderer: *Renderer, target: *Target,
+//! sync: bool }` and, on completion, derefs the stashed `*Renderer` to call
+//! `renderer.api.present(target, sync)` + `renderer.frameCompleted(health)`. The
+//! port's completion body is a plain-Rust `CompletionFn` fn-pointer that
+//! `drawFrame` installs (the faithful analogue of Zig's type-erased
+//! `CompletionBlock`; R1 "no-loss, not no-addition"), and its context carries
+//! owned clones of what that body needs instead of the renderer pointer (N440, see
+//! `CompletionContext`): the async body runs on a Metal-owned thread without the
+//! draw mutex, so it must not touch the renderer's bytes at all.
 //!
 //! The **sync path (the golden path) needs NO ObjC block**: `complete(true)` does
 //! commit → waitUntilCompleted → set `sync=true` → call the fn-pointer directly
 //! (Zig's `CompletionBlock.invoke`). The **async path**
 //! (`addCompletedHandler:` via a `block2::RcBlock`) installs the completion block
-//! over the by-value-`Copy` `CompletionContext` (W1-4).
+//! over its own clone of the `CompletionContext` (W1-4).
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLCommandBuffer, MTLCommandQueue};
 
+use std::sync::Arc;
+
+use objc2_core_foundation::CFRetained;
+#[cfg(test)]
+use objc2_core_foundation::Type;
+use objc2_io_surface::IOSurfaceRef;
+use rustty_zigstd::thread::Semaphore;
+
+use crate::generic::{AtomicHealth, HealthReport, SurfaceMailbox};
+use crate::metal::metal_impl::LayerCell;
 use crate::metal::render_pass::{Attachment, Options as RpOptions, RenderPass};
-use crate::metal::target::Target;
 
 // const log = std.log.scoped(.metal);
 // PORT NOTE (task-14c-2): `Frame.zig`'s ONE diagnostic — `log.err("Failed to
@@ -49,27 +54,62 @@ pub enum Error {
     MetalFailed,
 }
 
-/// The completion context ghostty stashes as `CompletionBlock.Context`. Raw `*mut`
-/// per `rust-mut-args-strongly-protected` (see the module PORT NOTE). `renderer` is
-/// type-erased (`*mut ()`) so Frame compiles in 1b — Chunk-3 casts it back to
-/// `*mut GenericRenderer` inside the installed callback.
-// `Clone, Copy`: all three fields (`*mut ()`, `*mut Target`, `bool`) are `Copy`. The
-// async `RcBlock` must own a BY-VALUE copy of this context (mirrors ghostty's
-// `CompletionBlock.init(.{…})` copying the `Context` INTO the block), so the async
-// body does not borrow `self.block` — which would dangle after `complete` returns.
-#[derive(Clone, Copy)]
+/// The completion context ghostty stashes as `CompletionBlock.Context`.
+//
+// PORT NOTE (N440, P7-W7 T5a): the reference's context is `{ renderer: *Renderer,
+// target: *Target, sync: bool }`, and `bufferCompleted` reaches `renderer.api`,
+// `renderer.health`, `renderer.surface_mailbox` and `renderer.swap_chain` through
+// it. On the async path that runs on a Metal-owned thread WITHOUT the draw mutex,
+// while the render thread may hold a whole-renderer `&mut` under it: an aliasing
+// violation in Rust (a data race with that retag). The port's context therefore
+// carries its own clones of exactly what the handler needs, each in an allocation
+// of its own, taken under the draw mutex when the frame begins, so the handler
+// forms no reference to any renderer byte (`.port/phase-2/mirihar-n440`):
+// - `health`: the renderer's `health` cell (`Arc<AtomicHealth>`);
+// - `frame_sema`: the swap chain's frame semaphore (`releaseFrame`);
+// - `surface_mailbox`: a clone of the renderer's surface mailbox handle;
+// - `health_report`: the renderer's health-report state (UD362);
+// - `layer`: Metal's presenter cell (`api.present` reads only the layer);
+// - `surface`: the target's IOSurface (`present` reads only `target.surface`; the
+//   frame slot is held by `frame_sema` until this completion, so it is the surface
+//   the reference copies out of `block.target.*`).
+// `Clone` (not `Copy`): the async block owns its own clone (ghostty's
+// `addCompletedHandler:` copies the block's context), so it never borrows
+// `self.block`, which would dangle after `complete` returns.
+#[derive(Clone)]
 pub struct CompletionContext {
-    pub renderer: *mut (),
-    pub target: *mut Target,
+    pub health: Arc<AtomicHealth>,
+    pub frame_sema: Arc<Semaphore>,
+    pub surface_mailbox: SurfaceMailbox,
+    pub health_report: Arc<HealthReport>,
+    pub layer: Arc<LayerCell>,
+    pub surface: CFRetained<IOSurfaceRef>,
     pub sync: bool,
 }
 
-/// The completion body. Chunk-3 supplies a concrete fn that casts `ctx.renderer`
-/// back to `*mut GenericRenderer` and runs `renderer.api.present(*ctx.target,
-/// ctx.sync)` (on healthy) + `renderer.frameCompleted(health)`. In 1b this is only
-/// stored/typed, never authored (= Zig's `&bufferCompleted`).
-pub type CompletionFn =
-    unsafe fn(ctx: &CompletionContext, buffer: &ProtocolObject<dyn MTLCommandBuffer>);
+/// The completion body (= Zig's `&bufferCompleted`): the generic renderer's
+/// `metal_buffer_completed`, which presents `ctx.surface` on a healthy frame and
+/// runs `frameCompleted(health)` over the context. A safe fn: the context holds
+/// no raw pointer (N440).
+pub type CompletionFn = fn(ctx: &CompletionContext, buffer: &ProtocolObject<dyn MTLCommandBuffer>);
+
+#[cfg(test)]
+impl CompletionContext {
+    /// A context tied to no renderer (a fresh health cell and semaphore, a
+    /// detached mailbox, no layer), for the frame tests that complete through a
+    /// no-op `CompletionFn`.
+    pub(crate) fn detached(surface: &IOSurfaceRef) -> CompletionContext {
+        CompletionContext {
+            health: Arc::new(AtomicHealth::new(crate::Health::Healthy)),
+            frame_sema: Arc::new(Semaphore::new()),
+            surface_mailbox: SurfaceMailbox::DETACHED,
+            health_report: Arc::new(HealthReport::new()),
+            layer: Arc::new(LayerCell::offscreen()),
+            surface: surface.retain(),
+            sync: false,
+        }
+    }
+}
 
 /// The `MTLCommandBufferHandler` closure shape `addCompletedHandler:` expects
 /// (`block2::RcBlock<CompletionHandler>` ⇒ `*const DynBlock<dyn Fn(NonNull<…>)>`).
@@ -97,15 +137,17 @@ pub struct Frame {
 impl Frame {
     /// Begin encoding a frame.
     ///
-    /// `renderer` is the type-erased `*mut GenericRenderer` (Chunk-3); once the
-    /// frame has been completed, the `frameCompleted` method on the renderer is
-    /// called with the health status of the frame. `target` is presented via the
-    /// provided renderer's API when completed. `on_completed` is the concrete
-    /// completion fn (Chunk-3 supplies it). Raw `*mut` per the aliasing model.
+    /// Once the frame has been completed, `on_completed` (the generic renderer's
+    /// `frameCompleted` path) is called with the health status of the frame. The
+    /// target (`completion.surface`) is presented through the context's layer when
+    /// completed.
+    //
+    // PORT NOTE (N440): the reference takes `renderer: *Renderer, target: *Target`;
+    // the port takes the context of clones the caller built under the draw mutex
+    // (see `CompletionContext`).
     pub fn begin(
         opts: Options<'_>,
-        renderer: *mut (),
-        target: *mut Target,
+        completion: CompletionContext,
         on_completed: CompletionFn,
     ) -> Result<Self, Error> {
         let buffer = opts.queue.commandBuffer().ok_or(Error::MetalFailed)?;
@@ -114,14 +156,13 @@ impl Frame {
         // The block is deallocated by the objC runtime on success.
         //
         // Frame.zig stashes `CompletionBlock.init(.{ renderer, target, sync = false
-        // }, &bufferCompleted)`; here the context is `{ renderer, target, sync =
-        // false }` plus the `on_completed` fn-pointer (the type-erased analogue).
+        // }, &bufferCompleted)`; here the context (with `sync = false`) plus the
+        // `on_completed` fn-pointer (the type-erased analogue).
         Ok(Self {
             buffer,
             block: CompletionContext {
-                renderer,
-                target,
                 sync: false,
+                ..completion
             },
             on_completed,
         })
@@ -136,10 +177,10 @@ impl Frame {
     //     objc.c.id, // MTLCommandBuffer
     // }, void);
     //
-    // PORT NOTE (HARD SPOT 2, deferred to Chunk 3): the completion body reproduces
-    // `Frame.zig:67 bufferCompleted` verbatim. It is authored in Chunk 3 (it needs
-    // `GenericRenderer`/`frameCompleted`/`api.present`, which do not exist in 1b);
-    // in 1b `on_completed: CompletionFn` is only stored + called (see `complete`).
+    // PORT NOTE (HARD SPOT 2): the completion body reproduces `Frame.zig:67
+    // bufferCompleted`; it lives in the generic renderer (`metal_buffer_completed`),
+    // and this module only stores + calls `on_completed: CompletionFn` (see
+    // `complete`).
     //
     //     fn bufferCompleted(
     //         block: *const CompletionBlock.Context,
@@ -167,19 +208,10 @@ impl Frame {
     //         block.renderer.frameCompleted(health);
     //     }
     //
-    // The Chunk-3 Rust shape (in the Metal/Renderer module):
-    //     unsafe fn metal_buffer_completed(ctx: &CompletionContext, buffer: &ProtocolObject<dyn MTLCommandBuffer>) {
-    //         let status = buffer.status();
-    //         let health = match status {
-    //             MTLCommandBufferStatus::Error => crate::Health::Unhealthy,
-    //             _ => crate::Health::Healthy,
-    //         };
-    //         let renderer = ctx.renderer as *mut GenericRenderer;  // container_of / @fieldParentPtr
-    //         if health == crate::Health::Healthy {
-    //             let _ = (*renderer).api.present(&*ctx.target, ctx.sync);
-    //         }
-    //         (*renderer).frame_completed(health);
-    //     }
+    // The Rust shape is `generic.rs` `metal_buffer_completed`, over the
+    // `CompletionContext` clones (N440): present `ctx.surface` through `ctx.layer`,
+    // then `frameCompleted` over `ctx.health`, `ctx.frame_sema` and
+    // `ctx.surface_mailbox`.
 
     /// Add a render pass to this frame with the provided attachments.
     /// Returns a RenderPass which allows render steps to be added.
@@ -204,21 +236,17 @@ impl Frame {
             // `MTLCommandBufferHandler` closure type (`*mut block2::DynBlock<dyn
             // Fn(NonNull<ProtocolObject<dyn MTLCommandBuffer>>)>`).
             //
-            // Copy the context by value + the fn-ptr by move (matches Zig's by-value
-            // Context copy — stays valid until Metal fires the handler). The block is
-            // copied when `addCompletedHandler:` retains it and dealloc'd by the objc
-            // runtime on completion (Frame.zig:106-108).
-            let ctx = self.block; // Copy
+            // Clone the context + copy the fn-ptr into the block (matches Zig's
+            // by-value Context copy — stays valid until Metal fires the handler). The
+            // block is copied when `addCompletedHandler:` retains it and dealloc'd by
+            // the objc runtime on completion (Frame.zig:106-108), dropping the clones.
+            let ctx = self.block.clone();
             let on_completed = self.on_completed;
             let handler: block2::RcBlock<CompletionHandler> = block2::RcBlock::new(
                 move |buf: core::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
                     // SAFETY: buf is a valid MTLCommandBuffer for the callback's
-                    // duration; ctx's raw ptrs are derefed NEVER as &mut (same
-                    // container_of discipline as the sync path /
-                    // metal_buffer_completed).
-                    unsafe {
-                        on_completed(&ctx, buf.as_ref());
-                    }
+                    // duration. The context holds only owned clones (N440).
+                    on_completed(&ctx, unsafe { buf.as_ref() });
                 },
             );
             // SAFETY: `handler` matches `MTLCommandBufferHandler`; `addCompletedHandler:`
@@ -240,13 +268,7 @@ impl Frame {
             // Zig `CompletionBlock.invoke(&self.block, .{self.buffer.value})` — a
             // direct call. Here the Rust fn-pointer IS the block body; no ObjC
             // roundtrip is needed on the sync path.
-            //
-            // SAFETY: the renderer pointer is live for the duration of `drawFrame`;
-            // single-threaded on the sync path (we just waited on the buffer); the
-            // context is a raw `*mut`, never aliased as `&mut`.
-            unsafe {
-                (self.on_completed)(&self.block, &self.buffer);
-            }
+            (self.on_completed)(&self.block, &self.buffer);
         }
     }
 }

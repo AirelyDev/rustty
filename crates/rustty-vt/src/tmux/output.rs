@@ -192,8 +192,6 @@ pub enum Variable {
     KeypadFlag,
     /// Pane mouse all flag.
     MouseAllFlag,
-    /// Pane mouse any flag.
-    MouseAnyFlag,
     /// Pane mouse button flag.
     MouseButtonFlag,
     /// Pane mouse SGR flag.
@@ -255,7 +253,6 @@ impl Variable {
             | Variable::KeypadCursorFlag
             | Variable::KeypadFlag
             | Variable::MouseAllFlag
-            | Variable::MouseAnyFlag
             | Variable::MouseButtonFlag
             | Variable::MouseSgrFlag
             | Variable::MouseStandardFlag
@@ -334,7 +331,6 @@ impl Variable {
             Variable::KeypadCursorFlag => "keypad_cursor_flag",
             Variable::KeypadFlag => "keypad_flag",
             Variable::MouseAllFlag => "mouse_all_flag",
-            Variable::MouseAnyFlag => "mouse_any_flag",
             Variable::MouseButtonFlag => "mouse_button_flag",
             Variable::MouseSgrFlag => "mouse_sgr_flag",
             Variable::MouseStandardFlag => "mouse_standard_flag",
@@ -658,14 +654,6 @@ mod tests {
         assert_eq!(false, pb(Variable::KeypadFlag, "0").unwrap());
         assert_eq!(false, pb(Variable::KeypadFlag, "").unwrap());
         assert_eq!(false, pb(Variable::KeypadFlag, "true").unwrap());
-    }
-
-    #[test]
-    fn parse_mouse_any_flag() {
-        assert_eq!(true, pb(Variable::MouseAnyFlag, "1").unwrap());
-        assert_eq!(false, pb(Variable::MouseAnyFlag, "0").unwrap());
-        assert_eq!(false, pb(Variable::MouseAnyFlag, "").unwrap());
-        assert_eq!(false, pb(Variable::MouseAnyFlag, "true").unwrap());
     }
 
     #[test]

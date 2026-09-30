@@ -8747,8 +8747,8 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 
 - **id**: N440. P7-W7 T2 fix round 1 (review IMPORTANT 3, controller ruling 33). **severity**: medium
   (aliasing-model UB on macOS on frames that complete while the render thread is inside a locked
-  entry; no observed miscompile). **kind**: port soundness (Stacked and Tree Borrows). **state**: OPEN;
-  a follow-up task.
+  entry; no observed miscompile). **kind**: port soundness (Stacked and Tree Borrows). **state**: CLOSED
+  by P7-W7 T5a (both halves; see "closure" below).
 - **finding**: Metal command buffers complete on a Metal-owned thread, which runs
   `metal_buffer_completed` (`crates/rustty-renderer/src/generic.rs`, the inlined
   `metal/Frame.zig:79-91` `bufferCompleted`). It recovers the renderer as a raw pointer and calls
@@ -8777,6 +8777,30 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   the mailbox only it drains. Fix direction: `release_frame` before the push, and never block the
   drainer on its own mailbox (defer the push past the draw, as the OpenGL twin does, or push
   `.instant` from the main thread).
+- **closure (P7-W7 T5a)**: the async half is fixed. `crate::metal::frame::CompletionContext` no longer
+  carries the renderer or target pointers; it carries owned clones, each in its own allocation, taken
+  under the draw mutex when the frame begins (`draw_frame_locked`): `health: Arc<AtomicHealth>` (the
+  renderer's `health` field is now that `Arc`), `frame_sema: Arc<Semaphore>` (the swap chain's
+  semaphore is now that `Arc`), a `SurfaceMailbox` clone, `layer: Arc<LayerCell>` (Metal's `layer`,
+  the presenter state, now in its own cell; `LayerCell` is `Send + Sync` by a documented SAFETY note)
+  and a retain of the target's IOSurface (all `present` reads of the `Target`). The handler
+  (`metal_buffer_completed` → `metal_impl::present_layer` + `frame_completed_on`) forms no reference
+  to any renderer byte, on either path. `frame_completed_raw` is gone; `Renderer::frame_completed`
+  is a test-only method over the renderer's own cells. Proof: `.port/phase-2/mirihar-n440`
+  (`shipped_async_handler` UB under SB and TB, run before the change; `fixed_async_handler` and
+  `fixed_async_and_sync_draw` CLEAN under SB and TB, 16 seeds each). LIFETIMES rows: `Frame.zig`
+  `CompletionBlock.Context` `renderer`/`target`, `generic.zig` `Renderer.health`,
+  `SwapChain.frame_sema`, `Metal.zig` `Metal.layer`. The two Metal deadlock variants are fixed in the
+  same task (UD362). Fix round 1 (ruling 39): the reference's order (store, push, release) is kept with
+  an `.instant` push plus withdrawal and a `HealthReportRetry` (redraw flag + `draw_now` wakeup, also in
+  the context), so no completion can outlive `SwapChain::deinit`; `LayerCell` is narrowed (private
+  field, only `present` reachable, `Metal::layer()` for the rest); the harness tears the renderer down
+  before joining the completion thread and models the new order (still UB / CLEAN / CLEAN). Fix round 2
+  (ruling 41): the retry state is `HealthReport` (`reported` under a mutex, `pending`, a paced `draw_now`
+  wakeup that skips while the display link runs), shared by the renderer (`health_report`) and the
+  context; the harness models `reported` (still UB / CLEAN / CLEAN). Fix round 3: the wake is sent only when a
+  report becomes owed, and core's `drawNowCallback` arms the animation timer while one is owed
+  (`Renderer::health_report_owed_raw`), so no refused report is stranded.
 
 ## N441 — main-thread references to the whole core `Surface` cover the renderer the render thread writes under the draw mutex
 
