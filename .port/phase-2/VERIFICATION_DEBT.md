@@ -2558,3 +2558,14 @@ reset, init and clone_grow teardown tests. And the full `pagelist` group was nev
 group under Miri — only individual tests or sub-groups were tried, each against its own bound.
 
 **Discharged by:** the P7-W12 T2 Miri lane, together with V27.
+
+## V29. The P7-W5 T4 search-prepend Miri debt — **ENVIRONMENT-BLOCKED (time)** [P7-W5 T4, Ruling 49, 2026-09-29]
+
+**Blocked on:** run time. Of the three tests ported from upstream `06178eeaa` (search resumes after
+history is prepended; N435), only the `search/pagelist` one ran to completion under Miri (clean).
+The `search/screen` test hit the 30-minute bound, and the `search/terminal` test was not reached.
+Both use the file's `&raw mut` idiom (no `&mut PageList`/`Screen`/`Terminal` held across a search
+call); the task review confirmed that by reading, not by a run. The brief's `pagelist::builder`
+filter matched no test path, so that sub-lane added no coverage either.
+
+**Discharged by:** the P7-W12 T2 Miri lane, together with V27 and V28.
