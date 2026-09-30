@@ -535,6 +535,9 @@ mod tests {
                 y: 720.0,
             };
             (*io).DeltaTime = 1.0 / 60.0;
+            // No settings file: `DestroyContext` would otherwise write
+            // `imgui.ini` into the crate directory (as `Inspector.rs` does).
+            (*io).IniFilename = ptr::null();
             // No renderer backend: declare texture ownership so `NewFrame`
             // builds the font atlas itself.
             (*io).BackendFlags |=
@@ -637,19 +640,32 @@ mod tests {
     /// format pointer (`STATUS_ACCESS_VIOLATION` in
     /// `ImFormatStringToTempBufferV`). Such functions are blocklisted in
     /// build.rs and reached through a pointer-taking shim in `ext.cpp`
-    /// ([`ImGui_TextColoredPtr`]). This test runs on every host, so a new
+    /// ([`ImGui_TextColoredPtr`]). This test scans both the generated bindings
+    /// and this file's hand-written `extern` blocks, on every host, so a new
     /// variadic with a by-value aggregate fails here rather than at run time on
     /// one target.
     #[test]
     fn no_variadic_binding_takes_an_aggregate_by_value() {
-        let src = include_str!(concat!(env!("OUT_DIR"), "/bindings.rs"));
-        assert!(
-            variadic_decls(src)
-                .iter()
-                .any(|(name, _)| name == "ImGui_Text"),
-            "the variadic scanner found no `ImGui_Text`; it is not reading the bindings"
+        // The generated bindings plus this file's hand-written `extern` blocks
+        // (everything above the test module, whose negative control would
+        // otherwise match).
+        let this_file = include_str!("lib.rs");
+        let hand_written = &this_file[..this_file
+            .find("#[cfg(test)]\nmod tests")
+            .expect("lib.rs has a test module")];
+        let src = format!(
+            "{}\n{hand_written}",
+            include_str!(concat!(env!("OUT_DIR"), "/bindings.rs"))
         );
-        let hits = variadic_by_value_aggregates(src);
+        let decls = variadic_decls(&src);
+        for expected in ["ImGui_Text", "ImGui_TextColoredPtr"] {
+            assert!(
+                decls.iter().any(|(name, _)| name == expected),
+                "the variadic scanner found no `{expected}`; it is not reading \
+                 the bindings and the hand-written blocks"
+            );
+        }
+        let hits = variadic_by_value_aggregates(&src);
         assert!(
             hits.is_empty(),
             "variadic bindings take aggregates by value (miscompiled on \

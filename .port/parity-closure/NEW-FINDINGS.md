@@ -9905,7 +9905,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (reference `cimgui.c.ImGui_TextColored(col, fmt, ...)`) pass `&col` to it. Uniform on every
   target, so no call site is cfg-split.
 - **tests**: `dcimgui-sys` `no_variadic_binding_takes_an_aggregate_by_value` scans the generated
-  bindings (following `pub type` aliases, since bindgen names the struct `ImVec4_t`) and fails on
+  bindings and the hand-written `extern` blocks of `src/lib.rs` (following `pub type` aliases, since bindgen names the struct `ImVec4_t`) and fails on
   any variadic with a by-value struct or union parameter. It failed before the fix on macOS
   (`["ImGui_TextColored(col: ImVec4)"]`), so the hazard is caught on every host.
   `variadic_aggregate_scanner_negative_control` is its R5 control.
@@ -9916,3 +9916,12 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   lane B2, plus `--test-threads=1`; reproduced under cdb). After, rwin native ARM64 and x64:
   `rustty-inspector --lib` 21/21 and `dcimgui-sys --lib` 8/8. macOS: the same two binaries
   21/21 and 8/8.
+- **toolchain note**: this looks like a rustc ABI-lowering bug on aarch64-pc-windows-msvc: a named
+  HFA argument of a C-variadic call is lowered as an HFA (`[4 x float]` in the IR). It has NOT been
+  reported upstream; whether to report it is the maintainer's decision. Minimal repro: a clang-cl
+  callee `void f(ImVec4 c, const char* fmt, ...)` (ImVec4 = four floats) called from Rust as
+  `extern "C" { fn f(c: ImVec4, fmt: *const u8, ...); }`, compiled with
+  `--target aarch64-pc-windows-msvc --emit=asm`. Re-tested on rustc 1.99.0-nightly
+  (6f72b5dd5 2026-07-22), still wrong: rustc emits `w0..w3` = the floats, `x4` = fmt,
+  `w5` = 42, while clang 21 for the same C call emits `x0:x1` = the packed ImVec4, `x2` = fmt,
+  `w3` = 42.

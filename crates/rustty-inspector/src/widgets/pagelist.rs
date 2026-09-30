@@ -2823,6 +2823,9 @@ mod ws7_tests {
                 y: 720.0,
             };
             (*io).DeltaTime = 1.0 / 60.0;
+            // No settings file: `DestroyContext` would otherwise write
+            // `imgui.ini` into the crate directory (as `Inspector.rs` does).
+            (*io).IniFilename = core::ptr::null();
             (*io).BackendPlatformName = c"rustty_headless_test".as_ptr();
             // No renderer backend here, so tell ImGui this "backend" owns
             // texture management; otherwise `NewFrame` asserts that the font
