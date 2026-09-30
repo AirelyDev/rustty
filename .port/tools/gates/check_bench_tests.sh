@@ -40,7 +40,10 @@ RUSTTY_ROOT="$(cd "$SELF_DIR/../../.." && pwd)"
 # drifted six compile errors away from the API that actually landed, which the
 # gate could not see precisely BECAUSE the feature was never enabled. The
 # module now compiles unconditionally and contributes its 3 test{}s.
-MIN_TESTS=27
+# Raised 27 -> 44 (P7-W3 T3): measured 44 passed in both profiles; the lane had
+# grown past the floor without raising it, and T3 adds the ScreenClone
+# every-mode test.
+MIN_TESTS=44
 
 # The oracle for the action-set arm, and the stripped git runner that reads it.
 # `rustty_oracle_git` removes every GIT_* variable: a plain `git -C "$ORACLE"

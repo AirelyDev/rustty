@@ -47,7 +47,8 @@ use rustty_vt::color::{Palette, RGB};
 use rustty_vt::cursor;
 use rustty_vt::page;
 use rustty_vt::render::{
-    CellList, Dirty as RenderDirty, RenderState as ZigRenderState, Row as RenderRow,
+    CellList, Dirty as RenderDirty, Overscan as RenderOverscan, RenderState as ZigRenderState,
+    Row as RenderRow, RowId as RenderRowId,
 };
 use rustty_vt::size;
 use rustty_vt::style::ColorTag;
@@ -73,12 +74,51 @@ pub(crate) const LOG_SCOPE: &str = "render_state_c";
 // reference. Parity tail S7-5 (S175-F1): the `renderpkg.RenderState` CONTENTS
 // grow through the same allocator (`update`/`beginUpdate`/`deinit` pass
 // `state.alloc`).
+//
+//     /// The overscan request set through the C API. This is copied into
+//     /// `state.overscan_request` at the start of each update rather than
+//     /// written there directly, because the render state reads its
+//     /// request to locate the rows of the last update. Changing it
+//     /// between an update and reading that update's rows would point the
+//     /// reads at the wrong entries.
+//     overscan_request: renderpkg.RenderState.Overscan = .{},
+//
+//     /// Apply any pending option changes to the render state. Called at
+//     /// the start of every update.
+//     fn applyOptions(self: *RenderStateWrapper) void {
+//         self.state.overscan_request = self.overscan_request;
+//     }
 pub struct RenderStateWrapper {
     // PORT NOTE: the reference `alloc: std.mem.Allocator` is the C-resolved
     // allocator, held as the runtime handle (`lib.alloc.default(alloc_)`):
     // the caller's `RusttyAllocator` must outlive the state (N260).
     pub alloc: rustty_vt::alloc::VtAllocator,
     pub state: ZigRenderState,
+
+    /// The overscan request set through the C API. This is copied into
+    /// `state.overscan_request` at the start of each update rather than
+    /// written there directly, because the render state reads its
+    /// request to locate the rows of the last update. Changing it
+    /// between an update and reading that update's rows would point the
+    /// reads at the wrong entries.
+    pub overscan_request: RenderOverscan,
+}
+
+impl RenderStateWrapper {
+    /// Apply any pending option changes to the render state. Called at
+    /// the start of every update.
+    //
+    // SB: a raw-self helper (memory `rust-mut-args-strongly-protected`): it
+    // writes one field through raw place projections off the handle, so no
+    // wrapper-level `&mut` is formed while a row iterator holds raw aliases
+    // into the wrapper.
+    ///
+    /// # Safety
+    /// `this` must be a live wrapper.
+    unsafe fn apply_options(this: *mut RenderStateWrapper) {
+        // SAFETY: `this` is live (caller contract); two place projections.
+        unsafe { (*this).state.overscan_request = (*this).overscan_request };
+    }
 }
 
 // /// The "before the first element" position for the iterator wrappers
@@ -93,16 +133,29 @@ pub const POSITION_NONE: usize = usize::MAX;
 // const RowIteratorWrapper = struct {
 //     alloc: std.mem.Allocator,
 //
-//     /// The current index (also y value) into the row list, or
-//     /// `position_none` if iteration hasn't started. Always validate
-//     /// against `raws.len` before use.
+//     /// The current index into the row slices below, or `position_none`
+//     /// if iteration hasn't started. Always validate against `raws.len`
+//     /// before use. Without overscan this is also the viewport y. With
+//     /// overscan, add `viewport_y_base` to get the viewport y.
 //     y: usize,
 //
-//     /// These are the raw pointers into the render state data.
+//     /// These are the raw pointers into the render state data. They are
+//     /// sliced to the rows the last update captured
+//     /// (`RenderState.rowDataRange`), so every index below `raws.len` is
+//     /// valid and no other bounds checks are needed.
 //     raws: []const page.Row,
 //     cells: []const std.MultiArrayList(renderpkg.RenderState.Cell),
 //     selection: []const ?[2]size.CellCountInt,
 //     dirty: []bool,
+//
+//     /// Pins and serials for row identity, sliced like the other fields.
+//     pins: []const PageList.Pin,
+//     serials: []const u64,
+//
+//     /// The viewport y of the first row in the slices. This is the
+//     /// negated count of overscan rows captured above the viewport, or
+//     /// zero without overscan.
+//     viewport_y_base: i32,
 //
 //     /// The global dirty state from the render state that populated this
 //     /// iterator. This has the same borrowed lifetime as the row slices.
@@ -118,14 +171,20 @@ pub const POSITION_NONE: usize = usize::MAX;
 pub struct RowIteratorWrapper {
     pub alloc: Box<dyn rustty_lib::allocator::ZigAllocator>,
 
-    /// The current index (also y value) into the row list, or
-    /// `POSITION_NONE` if iteration hasn't started. Always validate
-    /// against `raws.len` before use.
+    /// The current index into the row slices below, or `POSITION_NONE`
+    /// if iteration hasn't started. Always validate against `raws.len`
+    /// before use. Without overscan this is also the viewport y. With
+    /// overscan, add `viewport_y_base` to get the viewport y.
     pub y: usize,
 
-    /// These are the raw pointers into the render state data.
-    // PORT NOTE: `raws`/`cells`/`selection`/`dirty` collapse to a raw `*mut
-    // [Row]` (ptr+len) since rustty-vt's `RenderState` owns rows as `Vec<Row>`.
+    /// These are the raw pointers into the render state data. They are
+    /// sliced to the rows the last update captured
+    /// (`RenderState.rowDataRange`), so every index below `raws.len` is
+    /// valid and no other bounds checks are needed.
+    // PORT NOTE: `raws`/`cells`/`selection`/`dirty` and the row-identity
+    // `pins`/`serials` collapse to a raw `*mut [Row]` (ptr+len) since
+    // rustty-vt's `RenderState` owns rows as `Vec<Row>` (each `Row` carries its
+    // `pin` and `serial`).
     // MUT provenance is required: the reference MultiArrayList slices are
     // writable and `row_set(.dirty)` writes through this pointer — a
     // `*const`-derived (SharedReadOnly) tag cast to `*mut` still forbids the
@@ -141,7 +200,20 @@ pub struct RowIteratorWrapper {
     // in this module WOULD invalidate `state_dirty` below — which is why every
     // state access in this module goes through raw place projections off the
     // handle (the rust-mut-args-strongly-protected discipline).
+    //
+    // SB (P7-W3 T2, `2ea1eeae2`): the reference slices the columns to
+    // `rowDataRange()`. The sub-slice is built by raw pointer arithmetic off
+    // that same buffer root (`as_mut_ptr().add(start)` +
+    // `slice_from_raw_parts_mut`), never by indexing a `&mut [Row]`
+    // (`&mut row_data[range]`): a reference-derived sub-slice would carry a
+    // fresh child tag that `clean`'s later transient `&mut` over the rows
+    // invalidates (`render_clean_interleaves_with_a_live_overscan_iterator`).
     pub rows: *mut [RenderRow],
+
+    /// The viewport y of the first row in the slices. This is the
+    /// negated count of overscan rows captured above the viewport, or
+    /// zero without overscan.
+    pub viewport_y_base: i32,
 
     /// The global dirty state from the render state that populated this
     /// iterator. This has the same borrowed lifetime as the row slices.
@@ -288,6 +360,64 @@ impl Default for RowSelection {
     }
 }
 
+/// C: GhosttyRenderStateOverscan -> RusttyRenderStateOverscan (R2)
+///
+/// This uses `u16` rather than `size.CellCountInt` so that the C layout
+/// stays fixed even if the Zig type changes.
+// pub const Overscan = extern struct {
+//     above: u16 = 0,
+//     below: u16 = 0,
+//     fn init(v: renderpkg.RenderState.Overscan) Overscan { ... }
+// };
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Overscan {
+    /// Rows above the viewport.
+    pub above: u16,
+
+    /// Rows below the viewport.
+    pub below: u16,
+}
+
+impl Overscan {
+    // fn init(v: renderpkg.RenderState.Overscan) Overscan {
+    //     return .{ .above = v.above, .below = v.below };
+    // }
+    fn init(v: RenderOverscan) -> Overscan {
+        Overscan {
+            above: v.above,
+            below: v.below,
+        }
+    }
+}
+
+/// C: GhosttyRenderStateRowId -> RusttyRenderStateRowId (R2)
+///
+/// Opaque to C, where only equality is documented. The encoding is
+/// internal and may change: `bits[0]` is the page serial and `bits[1]`
+/// is the row index within the page plus one. The plus one guarantees
+/// that the all-zero value is never a valid id, which the C docs promise.
+/// The unused high bits of `bits[1]` are free for future use.
+// pub const RowId = extern struct {
+//     bits: [2]u64 = .{ 0, 0 },
+//     pub fn init(id: renderpkg.RenderState.Row.Id) RowId {
+//         return .{ .bits = .{ id.serial, @as(u64, id.y) + 1 } };
+//     }
+// };
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RowId {
+    pub bits: [u64; 2],
+}
+
+impl RowId {
+    pub fn init(id: RenderRowId) -> RowId {
+        RowId {
+            bits: [id.serial, id.y as u64 + 1],
+        }
+    }
+}
+
 /// C: GhosttyRenderStateCursorVisualStyle -> RusttyRenderStateCursorVisualStyle (R2)
 // pub const CursorVisualStyle = enum(c_int) { bar = 0, block = 1, underline = 2, block_hollow = 3 };
 #[repr(C)]
@@ -369,6 +499,8 @@ pub enum Data {
     CursorViewportWideTail = 17,
     Cursor = 18,
     Colors = 19,
+    Overscan = 20,
+    OverscanRequest = 21,
 }
 
 // D11 (P3-W6 T2): proves reading this value out of C memory as a `c_int` leaves
@@ -383,8 +515,8 @@ impl Data {
     // `std.enums.fromInt(Data, @intFromEnum(data))`; `Data` is a contiguous
     // `#[repr(C)]` enum here, so the range check IS `fromInt`.
     pub fn from_c_int(v: c_int) -> Option<Data> {
-        // contiguous 0..=19
-        if (0..=19).contains(&v) {
+        // contiguous 0..=21
+        if (0..=21).contains(&v) {
             // SAFETY: `v` is a valid `Data` discriminant (range-checked above).
             Some(unsafe { std::mem::transmute::<c_int, Data>(v) })
         } else {
@@ -408,19 +540,22 @@ impl Data {
 //     .cursor_viewport_x, .cursor_viewport_y => size.CellCountInt,
 //     .cursor => Cursor,
 //     .colors => Colors,
+//     .overscan, .overscan_request => Overscan,
 // In Rust the OutType mapping is preserved as the per-arm pointer cast in
 // `get_typed`.
 
 /// C: GhosttyRenderStateOption -> RusttyRenderStateOption (R2)
-// pub const SetOption = enum(c_int) { dirty = 0 };
+// pub const SetOption = enum(c_int) { dirty = 0, overscan = 1 };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SetOption {
     Dirty = 0,
+    Overscan = 1,
 }
 
 // Input type expected for setting the option.
-// PORT NOTE: `pub fn InType(comptime self: SetOption) type`: `.dirty => Dirty`.
+// PORT NOTE: `pub fn InType(comptime self: SetOption) type`: `.dirty => Dirty`,
+// `.overscan => Overscan`.
 
 /// C: GhosttyRenderStateColors -> RusttyRenderStateColors (R2)
 // pub const Colors = extern struct {
@@ -591,7 +726,7 @@ struct OutOfMemory;
 // fn new_(alloc_: ?*const CAllocator) error{OutOfMemory}!*RenderStateWrapper {
 //     const alloc = lib.alloc.default(alloc_);
 //     const ptr = alloc.create(RenderStateWrapper) catch return error.OutOfMemory;
-//     ptr.* = .{ .alloc = alloc };
+//     ptr.* = .{ .alloc = alloc };  (`overscan_request` takes its `.{}` default)
 //     return ptr;
 // }
 //
@@ -618,6 +753,7 @@ fn new_(alloc_: Option<&CAllocator>) -> std::result::Result<RenderState, OutOfMe
             RenderStateWrapper {
                 alloc,
                 state: ZigRenderState::empty(),
+                overscan_request: RenderOverscan::default(),
             },
         )
     };
@@ -663,6 +799,8 @@ pub unsafe fn free(state_: RenderState) {
 // pub fn update(state_: RenderState, terminal_: terminal_c.Terminal) ... Result {
 //     const state = state_ orelse return .invalid_value;
 //     const t: *ZigTerminal = (terminal_ orelse return .invalid_value).terminal;
+//
+//     state.applyOptions();
 //     state.state.update(state.alloc, t) catch return .out_of_memory;
 //     return .success;
 // }
@@ -680,6 +818,9 @@ pub unsafe fn update(state_: RenderState, terminal_: terminal_c::Terminal) -> Re
     // SAFETY: `terminal_` is a live wrapper; raw-ptr read of the sibling field.
     let t = unsafe { (*terminal_).terminal };
 
+    // state.applyOptions();
+    // SAFETY: `state_` is live (caller contract).
+    unsafe { RenderStateWrapper::apply_options(state_) };
     // state.state.update(state.alloc, t) catch return .out_of_memory;
     // SAFETY: `state_`/`t` are live (caller contract); `update` needs `&mut`
     // access to both. They are independent allocations, so the two `&mut`s do
@@ -699,6 +840,7 @@ pub unsafe fn update(state_: RenderState, terminal_: terminal_c::Terminal) -> Re
 //     const state = state_ orelse return .invalid_value;
 //     const t: *ZigTerminal = (terminal_ orelse return .invalid_value).terminal;
 //
+//     state.applyOptions();
 //     state.state.beginUpdate(state.alloc, t) catch return .out_of_memory;
 //     return .success;
 // }
@@ -714,6 +856,9 @@ pub unsafe fn begin_update(state_: RenderState, terminal_: terminal_c::Terminal)
     // SAFETY: `terminal_` is a live wrapper; raw-ptr read of the sibling field.
     let t = unsafe { (*terminal_).terminal };
 
+    // state.applyOptions();
+    // SAFETY: `state_` is live (caller contract).
+    unsafe { RenderStateWrapper::apply_options(state_) };
     // state.state.beginUpdate(state.alloc, t) catch return .out_of_memory;
     // SAFETY: `state_`/`t` are live (caller contract); they are independent
     // allocations, so the two `&mut`s do not alias.
@@ -994,12 +1139,28 @@ unsafe fn get_typed(state_: RenderState, data: Data, out: *mut c_void) -> Result
             // transient reborrows of the same rows (see the field's PORT NOTE).
             let row_data: *mut rustty_vt::alloc::AVec<RenderRow> =
                 unsafe { core::ptr::addr_of_mut!((*state_).state.row_data) };
+            //
+            // Only the captured rows hold data from the last update, so
+            // slice to them. Without overscan this is the whole list.
+            // const range = state.state.rowDataRange();
+            //
+            // PORT NOTE (UD369): `row_data_range` is clamped to `row_data`, so
+            // even after a failed update `range.start <= range.end <= len`.
+            let range = unsafe { (*state_).state.row_data_range() };
+            debug_assert!(range.start <= range.end);
+            debug_assert!(range.end <= unsafe { (*row_data).len() });
+            // SB: the sub-slice is raw pointer arithmetic off the buffer root,
+            // NEVER `&mut (*row_data)[range]` (see the field's SB note).
             // SAFETY: `row_data` is a live `Vec` field of the live wrapper; the
-            // autorefs below are transient and die within this statement.
-            it.rows =
-                core::ptr::slice_from_raw_parts_mut(unsafe { (*row_data).as_mut_ptr() }, unsafe {
-                    (*row_data).len()
-                });
+            // autoref below is transient and dies within this statement, and
+            // `range.start <= len` keeps `add` in bounds.
+            let base = unsafe { (*row_data).as_mut_ptr() };
+            it.rows = core::ptr::slice_from_raw_parts_mut(
+                unsafe { base.add(range.start) },
+                range.end - range.start,
+            );
+            // .viewport_y_base = -@as(i32, state.state.overscan.above),
+            it.viewport_y_base = -i32::from(unsafe { (*state_).state.overscan.above });
             // SB: raw projections off the wrapper base tag (`addr_of!`), never
             // through an intermediate reference, so they stay valid across the
             // transient borrows other exports create.
@@ -1107,6 +1268,16 @@ unsafe fn get_typed(state_: RenderState, data: Data, out: *mut c_void) -> Result
             // SAFETY: `out` points to a writable `Colors` (caller contract).
             return unsafe { write_colors(state_, out as *mut Colors) };
         }
+        // .overscan => out.* = .init(state.state.overscan),
+        Data::Overscan => {
+            // SAFETY: `out` points to a writable `Overscan`.
+            unsafe { *(out as *mut Overscan) = Overscan::init((*state_).state.overscan) };
+        }
+        // .overscan_request => out.* = .init(state.overscan_request),
+        Data::OverscanRequest => {
+            // SAFETY: `out` points to a writable `Overscan`.
+            unsafe { *(out as *mut Overscan) = Overscan::init((*state_).overscan_request) };
+        }
     }
 
     Result::Success
@@ -1130,13 +1301,13 @@ pub unsafe fn set(state_: RenderState, option: SetOption, value: *const c_void) 
     }
     match option {
         // SAFETY: `value` is non-null and of the type required by `option`.
-        SetOption::Dirty => unsafe { set_typed(state_, option, value) },
+        SetOption::Dirty | SetOption::Overscan => unsafe { set_typed(state_, option, value) },
     }
 }
 
 // fn setTyped(state_: RenderState, comptime option: SetOption, value: *const option.InType()) Result {
 //     const state = state_ orelse return .invalid_value;
-//     switch (option) { .dirty => state.state.dirty = value.* }
+//     switch (option) { .dirty => state.state.dirty = value.*, .overscan => ... }
 //     return .success;
 // }
 /// # Safety
@@ -1166,6 +1337,24 @@ unsafe fn set_typed(state_: RenderState, option: SetOption, value: *const c_void
             // (see `get_typed`'s SOUNDNESS note).
             // SAFETY: `state_` is a live wrapper (caller contract).
             unsafe { (*state_).state.dirty = dirty.into() };
+        }
+
+        // Applied by the next update. See the field docs for why.
+        // .overscan => state.overscan_request = .{
+        //     .above = value.above,
+        //     .below = value.below,
+        // },
+        SetOption::Overscan => {
+            // SAFETY: `value` points to a readable `Overscan` (caller contract).
+            let v = unsafe { *(value as *const Overscan) };
+            // SB: raw place write off the handle (see `get_typed`).
+            // SAFETY: `state_` is a live wrapper (caller contract).
+            unsafe {
+                (*state_).overscan_request = RenderOverscan {
+                    above: v.above,
+                    below: v.below,
+                }
+            };
         }
     }
     Result::Success
@@ -1343,7 +1532,7 @@ unsafe fn write_colors(state_: RenderState, out_colors_: *mut Colors) -> Result 
 // pub fn row_iterator_new(alloc_: ?*const CAllocator, result: *RowIterator) ... Result {
 //     const alloc = lib.alloc.default(alloc_);
 //     const ptr = alloc.create(RowIteratorWrapper) catch { result.* = null; return .out_of_memory; };
-//     ptr.* = .{ .alloc, .y = undefined, .raws = undefined, .cells = undefined, .selection = undefined, .dirty = undefined, .state_dirty = undefined, .palette = undefined };
+//     ptr.* = .{ .alloc, .y = undefined, .raws = undefined, .cells = undefined, .selection = undefined, .dirty = undefined, .pins = undefined, .serials = undefined, .state_dirty = undefined, .palette = undefined, .viewport_y_base = undefined };
 //     result.* = ptr;
 //     return .success;
 // }
@@ -1382,6 +1571,8 @@ pub unsafe fn row_iterator_new(alloc_: Option<&CAllocator>, result: *mut RowIter
                 ),
                 state_dirty: std::ptr::null(),
                 palette: std::ptr::null(),
+                // .viewport_y_base = undefined,
+                viewport_y_base: 0,
             },
         )
     };
@@ -2220,7 +2411,7 @@ unsafe fn row_cells_get_graphemes_utf8(
 }
 
 /// C: GhosttyRenderStateRowData -> RusttyRenderStateRowData (R2)
-// pub const RowData = enum(c_int) { invalid = 0, dirty = 1, raw = 2, cells = 3, selection = 4, cells_raw = 5 };
+// pub const RowData = enum(c_int) { invalid = 0, dirty = 1, raw = 2, cells = 3, selection = 4, cells_raw = 5, viewport_y = 6, id = 7 };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RowData {
@@ -2230,6 +2421,8 @@ pub enum RowData {
     Cells = 3,
     Selection = 4,
     CellsRaw = 5,
+    ViewportY = 6,
+    Id = 7,
 }
 
 // D11 (P3-W6 T2): see `Data::from_c_int`; same rule, same header hazard.
@@ -2239,8 +2432,8 @@ impl RowData {
     /// Narrow an inbound C integer to a `RowData`, mirroring
     /// `std.meta.intToEnum`; `None` outside the declared range.
     pub fn from_c_int(v: c_int) -> Option<RowData> {
-        // contiguous 0..=5
-        if (0..=5).contains(&v) {
+        // contiguous 0..=7
+        if (0..=7).contains(&v) {
             // SAFETY: `v` is a valid `RowData` discriminant (range-checked).
             Some(unsafe { std::mem::transmute::<c_int, RowData>(v) })
         } else {
@@ -2257,6 +2450,8 @@ impl RowData {
 //     .cells => RowCells,
 //     .selection => RowSelection,
 //     .cells_raw => cell_c.CellsView,
+//     .viewport_y => i32,
+//     .id => RowId,
 // In Rust the OutType mapping is preserved as the per-arm pointer cast in
 // `row_get_typed`.
 
@@ -2546,6 +2741,18 @@ unsafe fn row_get_typed(
                     len: raws.len(),
                 }
             };
+        }
+        // .viewport_y => out.* = it.viewport_y_base + @as(i32, @intCast(y)),
+        RowData::ViewportY => {
+            // `y` is below the slice length, at most three `u16` counts, so
+            // the conversion and the sum fit `i32`.
+            // SAFETY: `out` points to a writable `i32`.
+            unsafe { *(out as *mut i32) = it.viewport_y_base + y as i32 };
+        }
+        // .id => out.* = .init(.{ .serial = it.serials[y], .y = it.pins[y].y }),
+        RowData::Id => {
+            // SAFETY: `out` points to a writable `RowId`.
+            unsafe { *(out as *mut RowId) = RowId::init(row.id()) };
         }
     }
 

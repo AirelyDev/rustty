@@ -20,10 +20,10 @@ use core::ffi::c_void;
 use core::hint::black_box;
 use rustty_vt::pagelist::{OutOfMemory, PageList};
 use rustty_vt::point::{Coordinate, Point};
-use rustty_vt::render::RenderState;
+use rustty_vt::render::{Overscan, RenderState};
 use rustty_vt::screen::Screen;
 use rustty_vt::screen_set::Key;
-use rustty_vt::terminal::Terminal;
+use rustty_vt::terminal::{ScrollViewport, Terminal};
 
 const LOG_SCOPE: &str = "terminal-stream-bench";
 
@@ -119,7 +119,71 @@ pub enum Mode {
     // T12 recorded the three modes above as DEFERRED TO T19, because all three
     // call `RenderState::beginUpdate`, which did not exist yet. T19 landed the
     // begin/end split, so they are landed here — the deferral is discharged.
+    /// RenderState update after scrolling the viewport by one row.
+    /// This is the per-frame cost of user-driven scrolling through
+    /// scrollback (e.g. a trackpad fling), which today changes the
+    /// viewport pin and forces a full rebuild.
+    // @"render-scroll",
+    RenderScroll,
+
+    /// RenderState update after scrolling the viewport by half a
+    /// screen. This models paging (page up/down, wheel ticks with
+    /// large multipliers) rather than smooth scrolling.
+    // @"render-scroll-page",
+    RenderScrollPage,
+
+    /// RenderState update after one new line of output is written
+    /// while the viewport follows the active area. This models a
+    /// program streaming output. Each frame the viewport pin moves
+    /// down one row.
+    // @"render-output",
+    RenderOutput,
+
+    /// The render-scroll, render-output, and render-clean modes with
+    /// overscan (`RenderState.overscan_request`) of 4 rows above and 1
+    /// below. This models a renderer that captures extra rows so it can
+    /// draw partially visible rows while smooth scrolling.
+    // @"render-scroll-overscan",
+    // @"render-output-overscan",
+    // @"render-clean-overscan",
+    RenderScrollOverscan,
+    RenderOutputOverscan,
+    RenderCleanOverscan,
 }
+
+/// The overscan request used by the overscan modes.
+// const bench_overscan: terminalpkg.RenderState.Overscan = .{ .above = 4, .below = 1 };
+const BENCH_OVERSCAN: Overscan = Overscan { above: 4, below: 1 };
+
+/// The overscan request for the given mode.
+// fn overscanRequest(mode: Mode) terminalpkg.RenderState.Overscan {
+//     return switch (mode) {
+//         .@"render-scroll-overscan",
+//         .@"render-output-overscan",
+//         .@"render-clean-overscan",
+//         => bench_overscan,
+//         else => .{},
+//     };
+// }
+fn overscan_request(mode: Mode) -> Overscan {
+    match mode {
+        Mode::RenderScrollOverscan | Mode::RenderOutputOverscan | Mode::RenderCleanOverscan => {
+            BENCH_OVERSCAN
+        }
+        _ => Overscan { above: 0, below: 0 },
+    }
+}
+
+/// Number of scrollback lines written during setup so that the scroll
+/// modes have room to move in both directions.
+// const scroll_setup_lines = 4000;
+const SCROLL_SETUP_LINES: usize = 4000;
+
+/// Direction changes for the scroll modes, in iterations.
+// const scroll_reverse_interval = 2000;
+// const scroll_page_reverse_interval = 40;
+const SCROLL_REVERSE_INTERVAL: usize = 2000;
+const SCROLL_PAGE_REVERSE_INTERVAL: usize = 40;
 
 impl Mode {
     fn from_name(name: &[u8]) -> Option<Mode> {
@@ -130,6 +194,12 @@ impl Mode {
             b"render-locked" => Some(Mode::RenderLocked),
             b"render-clean" => Some(Mode::RenderClean),
             b"render-partial" => Some(Mode::RenderPartial),
+            b"render-scroll" => Some(Mode::RenderScroll),
+            b"render-scroll-page" => Some(Mode::RenderScrollPage),
+            b"render-output" => Some(Mode::RenderOutput),
+            b"render-scroll-overscan" => Some(Mode::RenderScrollOverscan),
+            b"render-output-overscan" => Some(Mode::RenderOutputOverscan),
+            b"render-clean-overscan" => Some(Mode::RenderCleanOverscan),
             _ => None,
         }
     }
@@ -174,20 +244,35 @@ impl ScreenClone {
     // pub fn create(alloc: Allocator, opts: Options) !*ScreenClone {
     //     const ptr = try alloc.create(ScreenClone);
     //     errdefer alloc.destroy(ptr);
+    //
+    //     var terminal_opts: Terminal.Options = .{
+    //         .rows = opts.@"terminal-rows",
+    //         .cols = opts.@"terminal-cols",
+    //     };
+    //
+    //     // The scroll modes need real scrollback to move through. ...
+    //     switch (opts.mode) { ... => terminal_opts.max_scrollback_bytes = 256 * 1024 * 1024, else => {} }
+    //
     //     ptr.* = .{
     //         .opts = opts,
-    //         .terminal = try .init(alloc, .{
-    //             .rows = opts.@"terminal-rows",
-    //             .cols = opts.@"terminal-cols",
-    //         }),
+    //         .terminal = try .init(global.io(), alloc, terminal_opts),
     //     };
     //     return ptr;
     // }
     pub fn create(alloc: Allocator, opts: Options) -> Result<Box<ScreenClone>, OutOfMemory> {
-        let terminal = Terminal::init(
-            alloc.into(),
-            terminal_options(opts.terminal_rows, opts.terminal_cols),
-        )?;
+        let mut terminal_opts = terminal_options(opts.terminal_rows, opts.terminal_cols);
+
+        // The scroll modes need real scrollback to move through. The
+        // default limit is small enough that the setup lines would be
+        // pruned immediately.
+        match opts.mode {
+            Mode::RenderScroll | Mode::RenderScrollPage | Mode::RenderScrollOverscan => {
+                terminal_opts.max_scrollback_bytes = Some(256 * 1024 * 1024);
+            }
+            _ => {}
+        }
+
+        let terminal = Terminal::init(alloc.into(), terminal_opts)?;
         Ok(Box::new(ScreenClone { opts, terminal }))
     }
 
@@ -213,8 +298,11 @@ impl ScreenClone {
                     Mode::Clone => Self::step_clone,
                     Mode::Render => Self::step_render,
                     Mode::RenderLocked => Self::step_render_locked,
-                    Mode::RenderClean => Self::step_render_clean,
+                    Mode::RenderClean | Mode::RenderCleanOverscan => Self::step_render_clean,
                     Mode::RenderPartial => Self::step_render_partial,
+                    Mode::RenderScroll | Mode::RenderScrollOverscan => Self::step_render_scroll,
+                    Mode::RenderScrollPage => Self::step_render_scroll_page,
+                    Mode::RenderOutput | Mode::RenderOutputOverscan => Self::step_render_output,
                 },
                 setup_fn: Some(Self::setup),
                 teardown_fn: Some(Self::teardown),
@@ -234,12 +322,30 @@ impl ScreenClone {
         // var s = self.terminal.vtStream();
         // defer s.deinit();
         // s.nextSlice("\x1b[48;2;20;40;60m");
+        //
+        // // The scroll modes need scrollback above the screen so the
+        // // viewport has somewhere to go.
+        // switch (self.opts.mode) { ... => for (0..scroll_setup_lines) |_| s.nextSlice("hello\r\n"), else => {} }
+        //
         // for (0..self.terminal.rows - 1) |_| s.nextSlice("hello\r\n");
         // s.nextSlice("hello");
         {
             let rows = self_.terminal.rows;
+            let mode = self_.opts.mode;
             let mut s = self_.terminal.vt_stream();
             s.next_slice(b"\x1b[48;2;20;40;60m");
+
+            // The scroll modes need scrollback above the screen so the
+            // viewport has somewhere to go.
+            match mode {
+                Mode::RenderScroll | Mode::RenderScrollPage | Mode::RenderScrollOverscan => {
+                    for _ in 0..SCROLL_SETUP_LINES {
+                        s.next_slice(b"hello\r\n");
+                    }
+                }
+                _ => {}
+            }
+
             for _ in 0..rows - 1 {
                 s.next_slice(b"hello\r\n");
             }
@@ -454,6 +560,8 @@ impl ScreenClone {
         // dirty, no rebuilds).
         let alloc = unsafe { (*self_.terminal.screens.active).alloc };
         let mut state: RenderState = RenderState::empty();
+        // state.overscan_request = overscanRequest(self.opts.mode);
+        state.overscan_request = overscan_request(self_.opts.mode);
         if let Err(err) = state.update(alloc, &mut self_.terminal) {
             // log.warn("error cloning screen err={}", .{err});
             log::warn!(target: LOG_SCOPE, "error cloning screen err={err:?}");
@@ -519,7 +627,122 @@ impl ScreenClone {
     }
 }
 
-// ScreenClone has NO test{} in the reference (§0/§9) — faithfully no `#[test]`.
+// ScreenClone has NO test{} in the reference (§0/§9). The one test below is
+// port-specific (P7-W3 T3): the six `ca4f719f7` mode names are bench-CLI
+// visible, so every mode name must parse and run one iteration.
+
+impl ScreenClone {
+    // fn stepRenderScroll(ptr: *anyopaque) Benchmark.Error!void {
+    //     const self: *ScreenClone = @ptrCast(@alignCast(ptr));
+    //     try renderScrollLoop(self, 1, scroll_reverse_interval);
+    // }
+    unsafe fn step_render_scroll(ptr: *mut c_void) -> Result<(), Error> {
+        let self_ = unsafe { &mut *(ptr as *mut ScreenClone) };
+        self_.render_scroll_loop(1, SCROLL_REVERSE_INTERVAL)
+    }
+
+    // fn stepRenderScrollPage(ptr: *anyopaque) Benchmark.Error!void {
+    //     const self: *ScreenClone = @ptrCast(@alignCast(ptr));
+    //     try renderScrollLoop(
+    //         self,
+    //         @intCast(@max(1, self.terminal.rows / 2)),
+    //         scroll_page_reverse_interval,
+    //     );
+    // }
+    unsafe fn step_render_scroll_page(ptr: *mut c_void) -> Result<(), Error> {
+        let self_ = unsafe { &mut *(ptr as *mut ScreenClone) };
+        let step = core::cmp::max(1, self_.terminal.rows / 2) as isize;
+        self_.render_scroll_loop(step, SCROLL_PAGE_REVERSE_INTERVAL)
+    }
+
+    /// Scroll the viewport by `step` rows per iteration, reversing
+    /// direction every `interval` iterations, and update the render state
+    /// after each scroll. The viewport starts at the bottom, so the first
+    /// stretch scrolls up into scrollback.
+    // fn renderScrollLoop(self: *ScreenClone, step: isize, interval: usize) Benchmark.Error!void {
+    fn render_scroll_loop(&mut self, step: isize, interval: usize) -> Result<(), Error> {
+        // const alloc = self.terminal.screens.active.alloc;
+        let alloc = unsafe { (*self.terminal.screens.active).alloc };
+        // var state: terminalpkg.RenderState = .empty;
+        let mut state: RenderState = RenderState::empty();
+        // state.overscan_request = overscanRequest(self.opts.mode);
+        state.overscan_request = overscan_request(self.opts.mode);
+        if let Err(err) = state.update(alloc, &mut self.terminal) {
+            // log.warn("error cloning screen err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "error cloning screen err={err:?}");
+            return Err(Error::BenchmarkFailed);
+        }
+
+        // var dir: isize = 1;
+        let mut dir: isize = 1;
+        // for (0..50_000 * @as(u64, self.opts.loops)) |i| {
+        for i in 0..(50_000u64 * u64::from(self.opts.loops)) {
+            // if (i % interval == 0) dir = -dir;
+            if i % interval as u64 == 0 {
+                dir = -dir;
+            }
+            // self.terminal.scrollViewport(.{ .delta = dir * step });
+            self.terminal
+                .scroll_viewport(ScrollViewport::Delta(dir * step));
+            if let Err(err) = state.update(alloc, &mut self.terminal) {
+                // log.warn("error cloning screen err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error cloning screen err={err:?}");
+                return Err(Error::BenchmarkFailed);
+            }
+            // std.mem.doNotOptimizeAway(&state);
+            black_box(&state);
+        }
+        Ok(())
+    }
+
+    // fn stepRenderOutput(ptr: *anyopaque) Benchmark.Error!void {
+    unsafe fn step_render_output(ptr: *mut c_void) -> Result<(), Error> {
+        let self_ = unsafe { &mut *(ptr as *mut ScreenClone) };
+
+        let alloc = unsafe { (*self_.terminal.screens.active).alloc };
+        let mut state: RenderState = RenderState::empty();
+        // state.overscan_request = overscanRequest(self.opts.mode);
+        state.overscan_request = overscan_request(self_.opts.mode);
+        if let Err(err) = state.update(alloc, &mut self_.terminal) {
+            // log.warn("error cloning screen err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "error cloning screen err={err:?}");
+            return Err(Error::BenchmarkFailed);
+        }
+
+        // Make sure the viewport follows the active area so each line
+        // written moves the viewport.
+        // self.terminal.scrollViewport(.bottom);
+        self_.terminal.scroll_viewport(ScrollViewport::Bottom);
+
+        // var stream = self.terminal.vtStream();
+        // defer stream.deinit();
+        // for (0..50_000 * @as(u64, self.opts.loops)) |_| {
+        //     stream.nextSlice("hello\r\n");
+        //     state.update(alloc, &self.terminal) catch |err| { ... };
+        //     std.mem.doNotOptimizeAway(&state);
+        // }
+        //
+        // PORT NOTE: the reference holds one stream across the loop while it
+        // also passes `&self.terminal` to `update`. In Rust the stream holds
+        // `&mut Terminal`, so each iteration opens and closes a stream around
+        // its write; `vt_stream`/`deinit` hold no state that outlives a
+        // complete "hello\r\n" (the parser returns to ground after it).
+        for _ in 0..(50_000u64 * u64::from(self_.opts.loops)) {
+            {
+                let mut stream = self_.terminal.vt_stream();
+                stream.next_slice(b"hello\r\n");
+                stream.deinit();
+            }
+            if let Err(err) = state.update(alloc, &mut self_.terminal) {
+                // log.warn("error cloning screen err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error cloning screen err={err:?}");
+                return Err(Error::BenchmarkFailed);
+            }
+            black_box(&state);
+        }
+        Ok(())
+    }
+}
 
 impl BenchmarkAction for ScreenClone {
     type Options = Options;
@@ -531,5 +754,63 @@ impl BenchmarkAction for ScreenClone {
     }
     fn benchmark(&mut self) -> Benchmark {
         ScreenClone::benchmark(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::benchmark::RunMode;
+
+    // PORT-SPECIFIC (P7-W3 T3): every `Mode` name parses to its variant, and a
+    // benchmark in that mode runs one iteration (`RunMode::Once`: setup, one
+    // step, teardown) on a small terminal without failing. The --release arm
+    // of G-BENCH runs `loops = 1`, one real pass of every mode's timed loop
+    // (50,000 to 3,000,000 updates). Debug builds run `loops = 0` (setup and
+    // the initial render-state update with the mode's overscan request, no
+    // timed loop), which is too slow there, and say so at runtime (R14).
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-bench, P7-W3 T3): tens of thousands of render-state updates per mode; runs natively in the G-BENCH lane (debug and --release)"
+    )]
+    fn screen_clone_every_mode_name_parses_and_runs_one_iteration() {
+        use rustty_args::args::Target;
+
+        let modes: &[(&[u8], Mode)] = &[
+            (b"noop", Mode::Noop),
+            (b"clone", Mode::Clone),
+            (b"render", Mode::Render),
+            (b"render-locked", Mode::RenderLocked),
+            (b"render-clean", Mode::RenderClean),
+            (b"render-partial", Mode::RenderPartial),
+            (b"render-scroll", Mode::RenderScroll),
+            (b"render-scroll-page", Mode::RenderScrollPage),
+            (b"render-output", Mode::RenderOutput),
+            (b"render-scroll-overscan", Mode::RenderScrollOverscan),
+            (b"render-output-overscan", Mode::RenderOutputOverscan),
+            (b"render-clean-overscan", Mode::RenderCleanOverscan),
+        ];
+        let loops: &[u8] = if cfg!(debug_assertions) { b"0" } else { b"1" };
+        if cfg!(debug_assertions) {
+            eprintln!(
+                "NOTE (R14): screen_clone_every_mode_name_parses_and_runs_one_iteration skips the \
+                 timed inner loop in debug builds (loops = 0); the --release run covers it"
+            );
+        }
+        for &(name, mode) in modes {
+            let mut opts = Options::default();
+            opts.parse_into_field(b"mode", Some(name)).unwrap();
+            assert!(opts.mode == mode, "{}", String::from_utf8_lossy(name));
+            opts.parse_into_field(b"loops", Some(loops)).unwrap();
+            opts.parse_into_field(b"terminal-rows", Some(b"4")).unwrap();
+            opts.parse_into_field(b"terminal-cols", Some(b"8")).unwrap();
+
+            let mut bench = ScreenClone::create(Allocator, opts).unwrap();
+            let result = bench.benchmark().run(RunMode::Once);
+            assert!(result.is_ok(), "{}", String::from_utf8_lossy(name));
+            bench.destroy(Allocator);
+        }
+        assert!(Mode::from_name(b"render-overscan").is_none());
     }
 }

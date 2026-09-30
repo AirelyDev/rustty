@@ -2,7 +2,11 @@
 //!
 //! PORTS: ghostty src/terminal/render.zig
 //!
-//! PORT STATUS: complete (vt-13). Every method + all 20 `test{}` blocks ported.
+//! PORT STATUS: complete (vt-13). Every method + all 28 `test{}` blocks ported.
+//
+// CORRECTION (P7-W3 T1, `ca4f719f7`): the overscan port brings `render.zig`
+// to 28 `test{}` blocks at 12752b2ac, all live here (39 `#[test]`, the
+// other eleven port-specific).
 //
 // CORRECTION (task-18, an unclaimed instance of the S139-F1 stale-count class —
 // see `NEW-FINDINGS.md` N33): this said "all 15 `test{}` blocks". `render.zig`
@@ -124,6 +128,58 @@ use crate::terminal::Terminal;
 /// The render state must be treated as incomplete between the two calls.
 /// `update` is a convenience that performs both phases in one call.
 ///
+/// ## Overscan
+///
+/// By default the render state captures exactly the rows of the viewport.
+/// A renderer that draws the grid at a fractional row offset, such as for
+/// smooth scrolling, also needs the rows just outside the viewport so that
+/// partially visible rows at the top and bottom edges can be drawn. Set
+/// `overscan_request` to ask for extra rows above and below the viewport:
+///
+/// ```text
+///     var state: RenderState = .empty;
+///     defer state.deinit(alloc);
+///     state.overscan_request = .{ .above = 1, .below = 1 };
+///     try state.update(alloc, &terminal);
+/// ```
+///
+/// With overscan, `row_data` holds more than `rows` entries, laid out
+/// like this for a request of one row above and one below:
+///
+/// ```text
+///     index 0            overscan above   (viewport y = -1)
+///     index 1            viewport row 0   <- viewportStart()
+///     ...
+///     index rows         viewport row rows - 1
+///     index rows + 1     overscan below   (viewport y = rows)
+/// ```
+///
+/// The viewport always begins at `viewportStart()`, so viewport rows never
+/// move within `row_data` from one update to the next. The overscan rows
+/// are only captured if they exist. There is nothing above the first row
+/// of scrollback, and nothing below the viewport while it follows the
+/// active area (the usual case when not scrolled). Missing rows leave
+/// their entries unused, and `overscan` reports how many rows were
+/// actually captured. Always read rows through `rowDataRange()`:
+///
+/// ```text
+///     const range = state.rowDataRange();
+///     const rows = state.row_data.slice();
+///     for (range.start..range.end) |i| {
+///         const y = state.viewportY(i); // negative above the viewport
+///         const cells = rows.items(.cells)[i];
+///         // draw `cells` at row `y` shifted by the scroll offset
+///     }
+/// ```
+///
+/// Overscan rows carry the same data as viewport rows (cells, styles,
+/// dirty flags, selection, and highlights). The cursor is only reported
+/// in `cursor.viewport` when it is inside the viewport itself. `string`
+/// and `linkCells` only look at the viewport.
+///
+/// With no overscan requested (the default), `row_data` holds exactly
+/// the viewport and indices are viewport y values, as before.
+///
 /// ## Memory
 ///
 /// Note: the render state retains as much memory as possible between updates
@@ -140,7 +196,7 @@ pub struct RenderState {
     /// handle.
     ///
     /// The viewport is always exactly equal to the active area size so this
-    /// is also the viewport size.
+    /// is also the viewport size. It does not include overscan rows.
     pub rows: size::CellCountInt,
     pub cols: size::CellCountInt,
 
@@ -150,7 +206,13 @@ pub struct RenderState {
     /// Cursor state within the viewport.
     pub cursor: Cursor,
 
-    /// The rows (y=0 is top) of the viewport. Guaranteed to be `rows` length.
+    /// The captured rows, from top to bottom.
+    ///
+    /// Without overscan this has exactly `rows` entries and the index is
+    /// the viewport y. With overscan it has room for the requested rows
+    /// above and below the viewport, and the viewport starts at
+    /// `viewportStart()`. Only the entries in `rowDataRange()` hold data
+    /// from the last update. See "Overscan" in the `RenderState` docs.
     ///
     /// This is a MultiArrayList because only the update cares about
     /// the allocators. Callers care about all the other properties, and
@@ -174,6 +236,28 @@ pub struct RenderState {
     /// a tracked pin and is generally NOT safe to read other than the direct
     /// values for comparison.
     pub viewport_pin: Option<Pin>,
+
+    /// The number of rows to capture above and below the viewport. This is
+    /// for renderers that draw partially visible rows, such as during
+    /// smooth scrolling. The default of zero captures only the viewport.
+    /// See "Overscan" in the `RenderState` docs.
+    ///
+    /// Only change this immediately before an update, because
+    /// `viewportStart()` reads it and `row_data` is laid out for it by the
+    /// update. Changing it causes the next update to be a full redraw.
+    pub overscan_request: Overscan,
+
+    /// The number of rows above and below the viewport that the last
+    /// update actually captured. This is never more than
+    /// `overscan_request`, and is less when those rows don't exist:
+    ///
+    ///   - `above` is less near the top of the scrollback.
+    ///   - `below` is less when the viewport is close to the bottom of
+    ///     the screen, and is zero when the viewport follows the active
+    ///     area.
+    ///
+    /// This is set by the update and should not be modified.
+    pub overscan: Overscan,
 
     /// The cached selection so we can avoid expensive selection calculations
     /// if possible.
@@ -202,8 +286,20 @@ pub struct RenderState {
 /// can happen outside of any terminal locks. See `beginUpdate`.
 #[derive(Clone, Copy, Debug)]
 pub struct StyleRun {
-    /// The viewport row.
-    pub y: size::CellCountInt,
+    /// The `row_data` index of the row.
+    //
+    // PORT NOTE: reference defect (R13, UD370). The reference keeps
+    // `y: size.CellCountInt` (`u16`) and fills it with `@intCast(vy)`, but
+    // with overscan a `row_data` index reaches `above + rows + below - 1`
+    // (up to 196,604 for three `u16` counts): a request of 65,535 rows above
+    // puts every viewport row past `u16`, so a styled row panics the
+    // `@intCast` in safe builds and lands its style run on the wrong row in
+    // ReleaseFast. The port widens the index to `u32`, which holds every
+    // index; the element-count growth sizes keep the reference's
+    // `STYLE_RUN_ZIG_SIZE`. Widening `y` takes the Rust `StyleRun` from 28 to
+    // 32 bytes, still under the reference's 36, and the element counts the
+    // allocator sees do not change (asserted below the struct).
+    pub y: u32,
 
     /// Start (inclusive) x coordinate.
     pub start: size::CellCountInt,
@@ -213,6 +309,9 @@ pub struct StyleRun {
     /// The style for this cell range.
     pub style: Style,
 }
+
+// UD370: the widened `StyleRun` stays within the reference's element size.
+const _: () = assert!(core::mem::size_of::<StyleRun>() <= STYLE_RUN_ZIG_SIZE);
 
 /// The color state for the terminal.
 ///
@@ -265,7 +364,82 @@ pub struct Viewport {
     pub wide_tail: bool,
 }
 
-/// A row within the viewport.
+/// A number of rows above and below the viewport. Used both to request
+/// overscan (`overscan_request`) and to report what was captured
+/// (`overscan`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Overscan {
+    /// Rows above the top of the viewport.
+    pub above: size::CellCountInt,
+
+    /// Rows below the bottom of the viewport.
+    pub below: size::CellCountInt,
+}
+
+impl Overscan {
+    pub fn eql(self, b: Overscan) -> bool {
+        self.above == b.above && self.below == b.below
+    }
+}
+
+/// A range of `row_data` indices. `start` is inclusive and `end` is
+/// exclusive, so it can be used directly as `range.start..range.end`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RowDataRange {
+    pub start: usize,
+    pub end: usize,
+}
+
+/// Identifies a row of terminal content across updates, independent
+/// of where the row is in `row_data`. Get it with `id`.
+///
+/// When the viewport scrolls, rows move to different `row_data`
+/// indices but keep their ids. This lets a renderer keep per-row
+/// work (such as shaped text or cached geometry) and look it up by
+/// id after each update rather than rebuilding everything:
+///
+/// ```text
+///     const range = state.rowDataRange();
+///     for (range.start..range.end) |i| {
+///         const row = state.row_data.get(i);
+///         if (!row.dirty) {
+///             if (cache.get(row.id())) |cached| {
+///                 // reuse `cached` at the new position
+///                 continue;
+///             }
+///         }
+///         // rebuild this row and cache it under row.id()
+///     }
+/// ```
+///
+/// The guarantee is: if a row has the same id as a row from the
+/// previous update of the same render state and is not marked dirty,
+/// its contents are unchanged. An id that no longer appears means
+/// the row scrolled out of the captured rows, was removed from
+/// scrollback, or was rearranged in place by the terminal (for
+/// example, scrolling within a scroll region). Ids are never reused,
+/// so a stale id never matches a different row.
+//
+// PORT NOTE: the reference nests this as `RenderState.Row.Id`; Rust has no
+// nested type declarations, so it is `RowId` beside `Row`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RowId {
+    /// The generation of the page holding the row
+    /// (`PageList.List.Node.serial`).
+    pub serial: u64,
+
+    /// The row index within its page.
+    pub y: size::CellCountInt,
+}
+
+impl RowId {
+    pub fn eql(self, b: RowId) -> bool {
+        self.serial == b.serial && self.y == b.y
+    }
+}
+
+/// A captured row. This is either a viewport row or an overscan row,
+/// depending on its index in `row_data`.
 //
 // PORT NOTE: the reference `arena: ArenaAllocator.State` field is dropped — see
 // the module note. Per-cell grapheme dupes live in the row's `CellList`
@@ -335,6 +509,19 @@ pub struct Row {
     /// allocate, so `beginUpdate` reserves the capacity.
     // applied_styles: std.ArrayList(StyleRun),
     pub applied_styles: AVec<StyleRun>,
+}
+
+impl Row {
+    /// Returns the identity of this row. See `Id`.
+    ///
+    /// This only reads values copied during the update, so it is safe
+    /// to call without access to the terminal.
+    pub fn id(&self) -> RowId {
+        RowId {
+            serial: self.serial,
+            y: self.pin.y,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -750,6 +937,8 @@ impl RenderState {
             dirty: Dirty::False,
             screen: crate::screen_set::Key::Primary,
             viewport_pin: None,
+            overscan_request: Overscan { above: 0, below: 0 },
+            overscan: Overscan { above: 0, below: 0 },
             selection_cache: None,
             pending_styles: AVec::new_in(valloc::VtAllocator::GLOBAL),
             rebuild_after_failure: false,
@@ -890,6 +1079,65 @@ impl RenderState {
         }
     }
 
+    /// Returns the `row_data` index of the top row of the viewport.
+    ///
+    /// This is `overscan_request.above`, so it is zero without overscan
+    /// and does not change from one update to the next. The viewport is
+    /// the `rows` entries starting here.
+    #[inline]
+    pub fn viewport_start(&self) -> usize {
+        self.overscan_request.above as usize
+    }
+
+    /// Converts a `row_data` index into a y position relative to the top
+    /// of the viewport. Rows above the viewport are negative, and rows
+    /// below it are `rows` or greater. For example, with one row of
+    /// overscan above, index 0 is y = -1 and index 1 is y = 0.
+    #[inline]
+    pub fn viewport_y(&self, index: usize) -> isize {
+        // PORT NOTE: the reference `@intCast`s both sides to `isize`; a
+        // `row_data` index is at most three `u16` counts, so both fit.
+        index as isize - self.viewport_start() as isize
+    }
+
+    /// The `row_data` indices of the viewport rows:
+    /// `viewportStart()..viewportStart() + rows`.
+    //
+    // PORT NOTE: the reference slices `[vp_start..][0..self.rows]` inline in
+    // `string` and `linkCells`. After a failed update `rows` may already be
+    // the new height while `row_data` is still the old length (reference
+    // defect R13, UD369: a bounds panic in safe builds, an out-of-bounds read
+    // in ReleaseFast), so the port clamps to `row_data.len()`. After a
+    // successful update the clamp never binds.
+    fn viewport_range(&self) -> core::ops::Range<usize> {
+        let len = self.row_data.len();
+        let start = core::cmp::min(self.viewport_start(), len);
+        let end = core::cmp::min(start + self.rows as usize, len);
+        start..end
+    }
+
+    /// Returns the range of `row_data` that holds rows from the last
+    /// update: the captured overscan rows above, the viewport, and the
+    /// captured overscan rows below.
+    ///
+    /// Entries outside this range are unused. They contain leftover or
+    /// uninitialized data and must not be read. Without overscan, this
+    /// is always `0..rows`.
+    //
+    // PORT NOTE: reference defect (R13, UD369). The reference computes
+    // `vp - overscan.above .. vp + rows + overscan.below` unchecked. After a
+    // failed update those values can disagree with `row_data` (see
+    // `begin_update`), and the range then underflows or ends past it. The
+    // port clamps both ends to `row_data.len()` with checked arithmetic.
+    // After a successful update the clamps never bind.
+    pub fn row_data_range(&self) -> RowDataRange {
+        let vp = self.viewport_start();
+        let len = self.row_data.len();
+        let end = core::cmp::min(vp + self.rows as usize + self.overscan.below as usize, len);
+        let start = core::cmp::min(vp.saturating_sub(self.overscan.above as usize), end);
+        RowDataRange { start, end }
+    }
+
     /// Fill a slice of styles with one value.
     ///
     /// This is equivalent to `@memset(dst, value)` but manually vectorized:
@@ -984,6 +1232,17 @@ impl RenderState {
         let result = self.begin_update_(alloc, t);
         if result.is_err() {
             self.rebuild_after_failure = true;
+
+            // PORT NOTE: reference defect (R13, UD369). `overscan` is only
+            // written after the row loop, so a failure leaves it describing
+            // the previous update while `overscan_request`, `rows` and the
+            // `row_data` length may already be the new ones. The reference's
+            // `rowDataRange()` then underflows (`vp - overscan.above` after a
+            // lowered request) or ends past `row_data` (a raised request whose
+            // growth failed), and the C row iterator slices out of bounds.
+            // Nothing was captured reliably, so report no overscan; the
+            // forced rebuild re-derives it. `row_data_range` also clamps.
+            self.overscan = Overscan::default();
         }
         result
     }
@@ -996,6 +1255,52 @@ impl RenderState {
 
         let s: *mut Screen = t.screens.active;
         let viewport_pin = unsafe { (*s).pages.get_top_left(point::Tag::Viewport) };
+
+        // The overscan rows to capture beyond the viewport. The request
+        // decides the layout of row_data, and the actual counts are
+        // limited to the rows that exist. With no request, everything
+        // below behaves exactly as it does without overscan.
+        let above_req: usize = self.overscan_request.above as usize;
+        let below_req: usize = self.overscan_request.below as usize;
+        let row_data_len: usize = above_req + unsafe { (*s).pages.rows } as usize + below_req;
+
+        // The first captured row and how many rows above the viewport
+        // we actually got.
+        //
+        // PORT NOTE: the reference's anonymous `struct { pin, above }` is a
+        // `(Pin, usize)` tuple.
+        let (top_pin, top_above): (Pin, usize) = if above_req == 0 {
+            (viewport_pin, 0)
+        } else {
+            match viewport_pin.up_overflow(above_req) {
+                pagelist::pin::PinOverflow::Offset(p) => (p, above_req),
+                pagelist::pin::PinOverflow::Overflow { end, remaining } => {
+                    (end, above_req - remaining)
+                }
+            }
+        };
+
+        // How many rows below the viewport we actually get. The page list
+        // ends at the last active row, so this is zero whenever the
+        // viewport follows the active area. This is computed before the
+        // loop below so that a change can force a redraw. When new output
+        // appears below a scrolled viewport, it can land in an entry that
+        // was never built or that held a different row.
+        let below: usize = if below_req == 0 {
+            0
+        } else {
+            let bottom = viewport_pin
+                .down(unsafe { (*s).pages.rows } as usize - 1)
+                .unwrap();
+            match bottom.down_overflow(below_req) {
+                pagelist::pin::PinOverflow::Offset(_) => below_req,
+                pagelist::pin::PinOverflow::Overflow { remaining, .. } => below_req - remaining,
+            }
+        };
+
+        // The index of top.pin in row_data.
+        let first: usize = above_req - top_above;
+
         let redraw: bool = 'redraw: {
             // PORT NOTE: reference defect (R13, UD315): see `begin_update`.
             if self.rebuild_after_failure {
@@ -1034,6 +1339,19 @@ impl RenderState {
 
             // If our dimensions changed, we do a full rebuild.
             if self.rows != unsafe { (*s).pages.rows } || self.cols != unsafe { (*s).pages.cols } {
+                break 'redraw true;
+            }
+
+            // If our row_data layout changed (overscan request changed),
+            // we do a full rebuild.
+            if self.row_data.len() != row_data_len {
+                break 'redraw true;
+            }
+
+            // If the captured overscan changed, rows may have entered
+            // row_data that were never built. This only happens when the
+            // viewport is scrolled, so it's cheap to be safe.
+            if self.overscan.above as usize != top_above || self.overscan.below as usize != below {
                 break 'redraw true;
             }
 
@@ -1100,24 +1418,24 @@ impl RenderState {
             }
         }
 
-        // Ensure our row length is exactly our height, freeing or allocating
-        // data as necessary. In most cases we'll have a perfectly matching
-        // size.
-        if self.row_data.len() != self.rows as usize {
+        // Ensure our row length is exactly our height plus requested
+        // overscan, freeing or allocating data as necessary. In
+        // most cases we'll have a perfectly matching size.
+        if self.row_data.len() != row_data_len {
             // @branchHint(.unlikely);
 
-            if self.row_data.len() < self.rows as usize {
+            if self.row_data.len() < row_data_len {
                 // Resize our rows to the desired length, marking any added
                 // values undefined.
                 let old_len = self.row_data.len();
                 // try self.row_data.resize(alloc, self.rows);
-                resize_rows_capacity(&mut self.row_data, self.rows as usize)?;
+                resize_rows_capacity(&mut self.row_data, row_data_len)?;
                 // Initialize all our values. Its faster to use slice() + set()
                 // because appendAssumeCapacity does this multiple times.
                 //
                 // PORT NOTE: the capacity is reserved above, so these pushes
                 // never allocate.
-                for _y in old_len..self.rows as usize {
+                for _y in old_len..row_data_len {
                     self.row_data.push(Row {
                         // .arena = .{},     (no arena in the Rust port)
                         pin: Pin {
@@ -1140,12 +1458,12 @@ impl RenderState {
                     });
                 }
             } else {
-                // For the rows beyond self.rows, free the arena, the cells and
-                // the applied styles, then shrinkRetainingCapacity.
+                // For the rows beyond row_data_len, free the arena, the cells
+                // and the applied styles, then shrinkRetainingCapacity.
                 //
                 // PORT NOTE: dropping the rows frees each one's lists through
                 // the allocator they were bound to (`alloc`).
-                self.row_data.truncate(self.rows as usize);
+                self.row_data.truncate(row_data_len);
             }
         }
 
@@ -1176,10 +1494,11 @@ impl RenderState {
         // borrow short-lived, so `self.cursor` stays writable in the same loop.
         let cols = self.cols;
         let rows = self.rows;
-        let mut y: usize = 0;
+        let row_data_end: usize = first + top_above + rows as usize + below;
+        let mut y: usize = first;
         let mut any_dirty: bool = false;
-        let mut page_it = viewport_pin.page_iterator(Direction::RightDown, None);
-        while y < rows as usize {
+        let mut page_it = top_pin.page_iterator(Direction::RightDown, None);
+        while y < row_data_end {
             let chunk = match page_it.next() {
                 Some(c) => c,
                 None => break,
@@ -1188,9 +1507,9 @@ impl RenderState {
             let p: *mut page::Page = unsafe { crate::pagelist::Node::page(node) };
 
             // The number of rows we consume from this chunk. The chunk
-            // may extend beyond the viewport (the viewport is always
-            // exactly `rows` tall) so we clamp.
-            let take: usize = core::cmp::min((chunk.end - chunk.start) as usize, rows as usize - y);
+            // may extend beyond what we capture (the viewport is always
+            // exactly `rows` tall, plus any overscan) so we clamp.
+            let take: usize = core::cmp::min((chunk.end - chunk.start) as usize, row_data_end - y);
 
             // Find our cursor if we haven't found it yet. We do this even
             // if rows are not dirty because the cursor is unrelated. We
@@ -1203,8 +1522,16 @@ impl RenderState {
                     if cy < chunk.start || (cy as usize) >= chunk.start as usize + take {
                         break 'cursor;
                     }
+
+                    // The cursor may be in an overscan row, in which case it
+                    // is not visible in the viewport.
+                    let idx = y + (cy - chunk.start) as usize;
+                    let vp_start = self.viewport_start();
+                    if idx < vp_start || idx >= vp_start + rows as usize {
+                        break 'cursor;
+                    }
                     self.cursor.viewport = Some(Viewport {
-                        y: (y + (cy - chunk.start) as usize) as size::CellCountInt,
+                        y: (idx - vp_start) as size::CellCountInt,
                         x: unsafe { (*s).cursor.x },
 
                         // Future: we should use our own state here to look this
@@ -1351,8 +1678,12 @@ impl RenderState {
 
             y += take;
         }
-        let y = y as size::CellCountInt;
-        assert!(y == self.rows);
+        assert!(y == row_data_end);
+
+        self.overscan = Overscan {
+            above: top_above as size::CellCountInt,
+            below: below as size::CellCountInt,
+        };
 
         // If our screen has a selection, then mark the rows with the
         // selection. We do this outside of the loop above because its unlikely
@@ -1433,8 +1764,9 @@ impl RenderState {
             // We need to determine if our selection is within the viewport.
             // The viewport is generally very small so the efficient way to
             // do this is to traverse the viewport pages and check for the
-            // matching selection pages.
-            for row in self.row_data.iter_mut() {
+            // matching selection pages. Unused entries are skipped.
+            let range = self.row_data_range();
+            for row in self.row_data[range.start..range.end].iter_mut() {
                 let pin = row.pin;
                 let p = unsafe { (*s).pages.point_from_pin(point::Tag::Screen, pin) }
                     .unwrap()
@@ -1510,7 +1842,8 @@ impl RenderState {
         let mut any_dirty: bool = false;
 
         let cols = self.cols;
-        for row in self.row_data.iter_mut() {
+        let range = self.row_data_range();
+        for row in self.row_data[range.start..range.end].iter_mut() {
             let row_pin = row.pin;
             let row_serial = row.serial;
             for hl in hls.iter() {
@@ -1573,6 +1906,9 @@ impl RenderState {
     /// blank lines. This is fine for our current usage (link search) but
     /// we can adjust this later.
     ///
+    /// Only viewport rows are included, never overscan rows. The `y`
+    /// values in `map` are viewport rows.
+    ///
     /// NOTE: There is a limitation in that wrapped lines before/after
     /// the top/bottom line of the viewport are not included, since
     /// the render state cuts them off.
@@ -1587,7 +1923,9 @@ impl RenderState {
         writer: &mut Vec<u8>,
         mut map: Option<&mut StringMap>,
     ) -> Result<(), StringError> {
-        for (y, row) in self.row_data.iter().enumerate() {
+        // This only covers the viewport, never overscan rows.
+        let viewport = &self.row_data[self.viewport_range()];
+        for (y, row) in viewport.iter().enumerate() {
             // PORT NOTE (reshape): `cells_slice.items(.raw)` / `.items(.grapheme)`
             // -> the SoA columns, indexed by `x`.
             let cells = &row.cells;
@@ -1638,6 +1976,9 @@ impl RenderState {
     ///
     /// For example, you may want to hold a lock for the duration of the
     /// update and hyperlink lookup to ensure no updates happen in between.
+    ///
+    /// Only viewport rows are searched, never overscan rows. Both the
+    /// given point and the returned cells use viewport coordinates.
     pub fn link_cells(
         &self,
         alloc: Allocator,
@@ -1646,15 +1987,22 @@ impl RenderState {
         let mut result: CellSet = CellSet::new();
         // errdefer result.deinit(alloc);
 
+        // This only covers the viewport, never overscan rows.
+        let viewport = &self.row_data[self.viewport_range()];
+
         // Our viewport point is sent in by the caller and can't be trusted.
         // If it is outside the valid area then just return empty because
         // we can't possibly have a link there.
-        if viewport_point.x >= self.cols || viewport_point.y >= self.row_data.len() as u32 {
+        //
+        // PORT NOTE: the reference compares against `self.rows`, the length
+        // of its viewport slice; `viewport.len()` is that length (see
+        // `viewport_range`, UD369).
+        if viewport_point.x >= self.cols || viewport_point.y as usize >= viewport.len() {
             return Ok(result);
         }
 
         // Grab our link ID
-        let link_pin: Pin = self.row_data[viewport_point.y as usize].pin;
+        let link_pin: Pin = viewport[viewport_point.y as usize].pin;
         let link_page: *mut page::Page = unsafe { crate::pagelist::Node::page(link_pin.node) };
         let link = 'link: {
             let rac = unsafe {
@@ -1677,7 +2025,7 @@ impl RenderState {
             };
         };
 
-        for (y, row) in self.row_data.iter().enumerate() {
+        for (y, row) in viewport.iter().enumerate() {
             let pin = row.pin;
             // PORT NOTE (reshape): `cells.items(.raw)` -> the SoA raw column.
             let raw_cells = row.cells.raw();
@@ -1827,6 +2175,11 @@ fn row_builder(
     page_row: *const page::Row,
     vy: usize,
 ) -> Result<(), OutOfMemory> {
+    // PORT NOTE: reference defect (R13, UD370): the style runs below record
+    // `vy` (a `row_data` index, at most three `u16` counts) as a `u32`, where
+    // the reference's `@intCast` to `u16` overflows with large overscan.
+    debug_assert!(vy <= u32::MAX as usize);
+
     // Reset our per-row state if we're rebuilding this row. A
     // non-zero cell length means the row was populated by a prior
     // update.
@@ -1958,7 +2311,7 @@ fn row_builder(
                 try_append::<_, STYLE_RUN_ZIG_SIZE>(
                     pending_styles,
                     StyleRun {
-                        y: vy as size::CellCountInt,
+                        y: vy as u32,
                         start: start as size::CellCountInt,
                         end: x as size::CellCountInt,
                         style: style_val,
@@ -1978,7 +2331,7 @@ fn row_builder(
                     try_append::<_, STYLE_RUN_ZIG_SIZE>(
                         pending_styles,
                         StyleRun {
-                            y: vy as size::CellCountInt,
+                            y: vy as u32,
                             start: x as size::CellCountInt,
                             end: (x + 1) as size::CellCountInt,
                             style: style_val,
@@ -2048,7 +2401,7 @@ fn row_builder(
                 try_append::<_, STYLE_RUN_ZIG_SIZE>(
                     pending_styles,
                     StyleRun {
-                        y: vy as size::CellCountInt,
+                        y: vy as u32,
                         start: start as size::CellCountInt,
                         end: x as size::CellCountInt,
                         style: style_val,
@@ -2073,19 +2426,19 @@ fn row_builder(
     Ok(())
 }
 
-/// `try self.row_data.resize(alloc, rows)`'s capacity: `ensureTotalCapacity`
-/// (`setCapacity(growCapacity(rows))` when short: a fresh allocation, the rows
-/// moved over, the old one freed, never `remap`). The caller then appends the
-/// new rows into the reserved capacity.
+/// `try self.row_data.resize(alloc, row_data_len)`'s capacity:
+/// `ensureTotalCapacity` (`setCapacity(growCapacity(row_data_len))` when
+/// short: a fresh allocation, the rows moved over, the old one freed, never
+/// `remap`). The caller then appends the new rows into the reserved capacity.
 #[cold]
 #[inline(never)]
-fn resize_rows_capacity(row_data: &mut AVec<Row>, rows: usize) -> Result<(), OutOfMemory> {
-    if row_data.capacity() >= rows {
+fn resize_rows_capacity(row_data: &mut AVec<Row>, row_data_len: usize) -> Result<(), OutOfMemory> {
+    if row_data.capacity() >= row_data_len {
         return Ok(());
     }
     let mut other: AVec<Row> = AVec::new_in(*row_data.allocator());
     other
-        .try_reserve_exact(grow_capacity::<ROW_ZIG_FIELD_MAX>(rows))
+        .try_reserve_exact(grow_capacity::<ROW_ZIG_FIELD_MAX>(row_data_len))
         .map_err(|_| OutOfMemory)?;
     other.extend(row_data.drain(..));
     *row_data = other;
@@ -3107,8 +3460,14 @@ mod tests {
             incremental.cursor.cell.to_bits()
         );
 
+        // Unused entries (outside rowDataRange) may hold anything, so
+        // we only compare the populated range.
+        assert_eq!(fresh.overscan, incremental.overscan);
+        assert_eq!(fresh.row_data_range(), incremental.row_data_range());
+        let range = fresh.row_data_range();
+
         assert_eq!(fresh.row_data.len(), incremental.row_data.len());
-        for y in 0..fresh.row_data.len() {
+        for y in range.start..range.end {
             let inc = &incremental.row_data[y];
             let new = &fresh.row_data[y];
 
@@ -3227,6 +3586,20 @@ mod tests {
         ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): past a 15-minute Miri bound in the debug-assertions-ON G6 lane, where `Page::assert_integrity` runs on nearly every page mutation (measured per test; see the C-1 table there). It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
     )]
     fn incremental_updates_match_full_rebuild() {
+        test_incremental_matches_fresh(Overscan::default());
+    }
+
+    // test "incremental updates match full rebuild with overscan"
+    #[test]
+    #[cfg_attr(
+        all(miri, debug_assertions),
+        ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'Parity tail C-1 — the G6 triage'): the same 300-round body as `incremental_updates_match_full_rebuild`, past its 15-minute Miri bound in the debug-assertions-ON G6 lane. It RUNS in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would drop the test from BOTH lanes."
+    )]
+    fn incremental_updates_match_full_rebuild_with_overscan() {
+        test_incremental_matches_fresh(Overscan { above: 2, below: 1 });
+    }
+
+    fn test_incremental_matches_fresh(request: Overscan) {
         let alloc = Global;
 
         // Deterministic so failures are reproducible.
@@ -3234,6 +3607,7 @@ mod tests {
 
         let mut t = Terminal::init(alloc, opts_sb(20, 8, 500)).unwrap();
         let mut inc: RenderState = RenderState::empty();
+        inc.overscan_request = request;
 
         for _ in 0..300 {
             // Perform a random batch of operations between updates.
@@ -3334,6 +3708,7 @@ mod tests {
             inc.update(alloc, &mut t).unwrap();
 
             let mut fresh: RenderState = RenderState::empty();
+            fresh.overscan_request = request;
             fresh.update(alloc, &mut t).unwrap();
 
             test_compare_states(&inc, &fresh);
@@ -3985,5 +4360,535 @@ mod tests {
         });
         assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
         t.deinit(Global);
+    }
+
+    /// Writes lines "0", "1", ... up to `n - 1` into the terminal, each
+    /// followed by a newline, so the cursor ends on an empty row below them.
+    fn test_write_numbered_lines(t: &mut Terminal, n: usize) {
+        let mut s = t.vt_stream();
+        for i in 0..n {
+            s.next_slice(format!("{i}\r\n").as_bytes());
+        }
+        s.deinit();
+    }
+
+    /// Returns the number written on the row at `row_data` index `idx` by
+    /// testWriteNumberedLines, or null if the row is empty.
+    fn test_row_number(state: &RenderState, idx: usize) -> Option<usize> {
+        let cells = state.row_data[idx].cells.raw();
+        let mut result: Option<usize> = None;
+        for cell in cells {
+            let cp = cell.codepoint();
+            if cp < '0' as u32 || cp > '9' as u32 {
+                break;
+            }
+            result = Some(result.unwrap_or(0) * 10 + (cp - '0' as u32) as usize);
+        }
+        result
+    }
+
+    // test "overscan zero request unchanged"
+    #[test]
+    fn overscan_zero_request_unchanged() {
+        let alloc = Global;
+
+        let mut t = Terminal::init(alloc, opts_sb(10, 10, 1_000_000)).unwrap();
+        test_write_numbered_lines(&mut t, 50);
+
+        let mut state: RenderState = RenderState::empty();
+
+        for scrolled in [false, true] {
+            if scrolled {
+                t.scroll_viewport(ScrollViewport::Delta(-5));
+            }
+            state.update(alloc, &mut t).unwrap();
+            assert_eq!(10, state.row_data.len());
+            assert_eq!(0, state.row_data_range().start);
+            assert_eq!(10, state.row_data_range().end);
+            assert!(state.overscan.eql(Overscan::default()));
+            assert_eq!(0, state.viewport_start());
+        }
+
+        // Viewport row 0 is at index 0.
+        assert_eq!(36, test_row_number(&state, 0).unwrap());
+
+        state.deinit(alloc);
+        t.deinit(alloc);
+    }
+
+    // test "overscan row_data layout"
+    #[test]
+    fn overscan_row_data_layout() {
+        let alloc = Global;
+
+        let mut t = Terminal::init(alloc, opts_sb(10, 10, 1_000_000)).unwrap();
+
+        // Screen rows 0..49 hold "0".."49" and screen row 50 is the empty
+        // cursor row. The active area (and bottom viewport) is 41..50.
+        test_write_numbered_lines(&mut t, 50);
+
+        let mut state: RenderState = RenderState::empty();
+        state.overscan_request = Overscan { above: 3, below: 2 };
+
+        // Viewport follows the active area: nothing exists below.
+        {
+            state.update(alloc, &mut t).unwrap();
+            assert!(state.overscan.eql(Overscan { above: 3, below: 0 }));
+            assert_eq!(15, state.row_data.len());
+            assert_eq!(0, state.row_data_range().start);
+            assert_eq!(13, state.row_data_range().end);
+            assert_eq!(3, state.viewport_start());
+            assert_eq!(-3, state.viewport_y(0));
+            assert_eq!(0, state.viewport_y(3));
+
+            // Viewport row 0 matches a state with no request.
+            let mut plain: RenderState = RenderState::empty();
+            plain.update(alloc, &mut t).unwrap();
+            let vp = state.viewport_start();
+            for y in 0..state.rows as usize {
+                let a = &state.row_data[vp + y];
+                let b = &plain.row_data[y];
+                assert!(core::ptr::eq(b.pin.node, a.pin.node));
+                assert_eq!(b.pin.y, a.pin.y);
+                assert_eq!(b.raw.to_bits(), a.raw.to_bits());
+                for (bc, ac) in b.cells.raw().iter().zip(a.cells.raw().iter()) {
+                    assert_eq!(bc.to_bits(), ac.to_bits());
+                }
+            }
+            assert_eq!(41, test_row_number(&state, vp).unwrap());
+            assert_eq!(38, test_row_number(&state, 0).unwrap());
+            assert_eq!(40, test_row_number(&state, vp - 1).unwrap());
+            plain.deinit(alloc);
+        }
+
+        // Scrolled into history: both sides are fully captured.
+        {
+            t.scroll_viewport(ScrollViewport::Delta(-5));
+            state.update(alloc, &mut t).unwrap();
+            assert!(state.overscan.eql(Overscan { above: 3, below: 2 }));
+            assert_eq!(15, state.row_data.len());
+            assert_eq!(0, state.row_data_range().start);
+            assert_eq!(15, state.row_data_range().end);
+
+            let vp = state.viewport_start();
+            let rows = state.rows as usize;
+            assert_eq!(36, test_row_number(&state, vp).unwrap());
+            assert_eq!(35, test_row_number(&state, vp - 1).unwrap());
+            assert_eq!(46, test_row_number(&state, vp + rows).unwrap());
+            assert_eq!(47, test_row_number(&state, vp + rows + 1).unwrap());
+        }
+
+        // At the top of history: nothing exists above.
+        {
+            t.scroll_viewport(ScrollViewport::Top);
+            state.update(alloc, &mut t).unwrap();
+            assert_eq!(0, state.overscan.above);
+            assert_eq!(2, state.overscan.below);
+            assert_eq!(state.viewport_start(), state.row_data_range().start);
+            assert_eq!(15, state.row_data.len());
+            assert_eq!(0, test_row_number(&state, state.viewport_start()).unwrap());
+
+            t.scroll_viewport(ScrollViewport::Row(1));
+            state.update(alloc, &mut t).unwrap();
+            assert_eq!(1, state.overscan.above);
+            assert_eq!(2, state.row_data_range().start);
+            assert_eq!(15, state.row_data.len());
+            assert_eq!(0, test_row_number(&state, 2).unwrap());
+            assert_eq!(1, test_row_number(&state, 3).unwrap());
+        }
+
+        // Partially scrolled: fewer rows below than requested.
+        {
+            t.scroll_viewport(ScrollViewport::Bottom);
+            t.scroll_viewport(ScrollViewport::Delta(-1));
+            state.update(alloc, &mut t).unwrap();
+            assert!(state.overscan.eql(Overscan { above: 3, below: 1 }));
+            assert_eq!(14, state.row_data_range().end);
+            assert_eq!(15, state.row_data.len());
+        }
+
+        state.deinit(alloc);
+        t.deinit(alloc);
+    }
+
+    // test "overscan request change forces redraw"
+    #[test]
+    fn overscan_request_change_forces_redraw() {
+        let alloc = Global;
+
+        let mut t = Terminal::init(alloc, opts_sb(10, 10, 1_000_000)).unwrap();
+        test_write_numbered_lines(&mut t, 50);
+
+        let mut state: RenderState = RenderState::empty();
+        state.update(alloc, &mut t).unwrap();
+        state.clean();
+
+        // No change is not dirty.
+        state.update(alloc, &mut t).unwrap();
+        assert_eq!(Dirty::False, state.dirty);
+
+        state.overscan_request = Overscan { above: 4, below: 1 };
+        state.update(alloc, &mut t).unwrap();
+        assert_eq!(Dirty::Full, state.dirty);
+        assert_eq!(15, state.row_data.len());
+        assert_eq!(4, state.viewport_start());
+        assert_eq!(41, test_row_number(&state, 4).unwrap());
+
+        // And back to nothing.
+        state.clean();
+        state.overscan_request = Overscan::default();
+        state.update(alloc, &mut t).unwrap();
+        assert_eq!(Dirty::Full, state.dirty);
+        assert_eq!(10, state.row_data.len());
+        assert_eq!(41, test_row_number(&state, 0).unwrap());
+
+        state.deinit(alloc);
+        t.deinit(alloc);
+    }
+
+    // test "overscan row ids stable"
+    #[test]
+    fn overscan_row_ids_stable() {
+        let alloc = Global;
+
+        let mut t = Terminal::init(alloc, opts_sb(10, 10, 1_000_000)).unwrap();
+        test_write_numbered_lines(&mut t, 50);
+
+        let mut state: RenderState = RenderState::empty();
+        state.overscan_request = Overscan { above: 3, below: 2 };
+        state.update(alloc, &mut t).unwrap();
+
+        // Record all populated ids.
+        let range = state.row_data_range();
+        assert_eq!(0, range.start);
+        assert_eq!(13, range.end);
+        let mut ids: [RowId; 13] = [RowId { serial: 0, y: 0 }; 13];
+        for (id, i) in ids.iter_mut().zip(range.start..) {
+            *id = state.row_data[i].id();
+        }
+
+        // Ids within one update are distinct.
+        for (i, a) in ids.iter().enumerate() {
+            for b in &ids[i + 1..] {
+                assert!(!RowId::eql(*a, *b));
+            }
+        }
+
+        // Write a line while following the active area. Every row moves up
+        // one index and the top row is no longer captured.
+        test_write_numbered_lines(&mut t, 1);
+        state.update(alloc, &mut t).unwrap();
+        assert_eq!(13, state.row_data_range().end);
+        for (i, id) in ids[1..].iter().enumerate() {
+            assert!(RowId::eql(*id, state.row_data[i].id()));
+        }
+
+        // Scroll up one row: the recorded ids are back at their original
+        // indices, and one more row is captured below.
+        t.scroll_viewport(ScrollViewport::Delta(-1));
+        state.update(alloc, &mut t).unwrap();
+        assert_eq!(14, state.row_data_range().end);
+        for (i, id) in ids.iter().enumerate() {
+            assert!(RowId::eql(*id, state.row_data[i].id()));
+        }
+
+        state.deinit(alloc);
+        t.deinit(alloc);
+    }
+
+    // test "overscan row ids and dirty on in-place rewrite"
+    #[test]
+    fn overscan_row_ids_and_dirty_on_in_place_rewrite() {
+        let alloc = Global;
+
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        // Alternate screen has no scrollback, so scrolling a region rewrites
+        // rows in place (eraseRowBounded) rather than moving the viewport.
+        let mut s = t.vt_stream();
+        s.next_slice(b"\x1b[?1049h");
+        s.next_slice(b"0\r\n1\r\n2\r\n3\r\n4");
+        s.next_slice(b"\x1b[2;5r\x1b[5;2H");
+        s.deinit();
+
+        let mut state: RenderState = RenderState::empty();
+        state.overscan_request = Overscan { above: 2, below: 2 };
+        state.update(alloc, &mut t).unwrap();
+        assert!(state.overscan.eql(Overscan::default()));
+
+        let vp = state.viewport_start();
+        let mut ids: [RowId; 5] = [RowId { serial: 0, y: 0 }; 5];
+        let mut nums: [Option<usize>; 5] = [None; 5];
+        for ((id, num), i) in ids.iter_mut().zip(nums.iter_mut()).zip(vp..) {
+            *id = state.row_data[i].id();
+            *num = test_row_number(&state, i);
+        }
+        state.clean();
+
+        // Scroll the region up one row.
+        vt_write(&mut t, b"\r\n5");
+        state.update(alloc, &mut t).unwrap();
+        assert!(state.dirty != Dirty::False);
+
+        // The id contract: a row with an unchanged id and no dirty mark has
+        // unchanged content, and every row whose content changed is dirty.
+        for ((id, num), i) in ids.iter().zip(nums.iter()).zip(vp..) {
+            let row = &state.row_data[i];
+            let new_num = test_row_number(&state, i);
+            assert_eq!(if i == vp { 0 } else { i - vp + 1 }, new_num.unwrap());
+            if RowId::eql(*id, row.id()) && !row.dirty {
+                assert_eq!(*num, new_num);
+            }
+            if *num != new_num {
+                assert!(row.dirty);
+            }
+        }
+
+        // At the time of writing, rotating rows in place invalidates the
+        // page serial (PageList.invalidateNodeLayout), so no id survives.
+        for (id, i) in ids.iter().zip(vp..) {
+            assert!(!RowId::eql(*id, state.row_data[i].id()));
+        }
+
+        state.deinit(alloc);
+        t.deinit(alloc);
+    }
+
+    // test "overscan cursor in overscan row"
+    #[test]
+    fn overscan_cursor_in_overscan_row() {
+        let alloc = Global;
+
+        let mut t = Terminal::init(alloc, opts_sb(10, 10, 1_000_000)).unwrap();
+
+        // The cursor is on the last active row.
+        test_write_numbered_lines(&mut t, 50);
+
+        let mut state: RenderState = RenderState::empty();
+        state.overscan_request = Overscan { above: 0, below: 2 };
+
+        t.scroll_viewport(ScrollViewport::Delta(-1));
+        state.update(alloc, &mut t).unwrap();
+        assert_eq!(1, state.overscan.below);
+        assert!(state.cursor.viewport.is_none());
+
+        t.scroll_viewport(ScrollViewport::Bottom);
+        state.update(alloc, &mut t).unwrap();
+        assert_eq!(state.rows - 1, state.cursor.viewport.as_ref().unwrap().y);
+        assert_eq!(0, state.cursor.viewport.as_ref().unwrap().x);
+
+        state.deinit(alloc);
+        t.deinit(alloc);
+    }
+
+    // test "overscan selection on overscan rows"
+    #[test]
+    fn overscan_selection_on_overscan_rows() {
+        let alloc = Global;
+
+        let mut t = Terminal::init(alloc, opts_sb(10, 10, 1_000_000)).unwrap();
+        test_write_numbered_lines(&mut t, 50);
+
+        // Select the last two active rows.
+        let screen: *mut Screen = t.screens.active;
+        unsafe {
+            (*screen)
+                .select(Some(Selection::init(
+                    (*screen)
+                        .pages
+                        .pin(point::Point::Active(point::Coordinate { x: 0, y: 8 }))
+                        .unwrap(),
+                    (*screen)
+                        .pages
+                        .pin(point::Point::Active(point::Coordinate { x: 2, y: 9 }))
+                        .unwrap(),
+                    false,
+                )))
+                .unwrap();
+        }
+
+        let mut state: RenderState = RenderState::empty();
+        state.overscan_request = Overscan { above: 0, below: 2 };
+
+        // Scroll so the last active row is overscan-below.
+        t.scroll_viewport(ScrollViewport::Delta(-1));
+        state.update(alloc, &mut t).unwrap();
+        assert_eq!(1, state.overscan.below);
+
+        let vp = state.viewport_start();
+        let rows = state.rows as usize;
+        assert_eq!([0, 9], state.row_data[vp + rows - 1].selection.unwrap());
+        assert_eq!([0, 2], state.row_data[vp + rows].selection.unwrap());
+        assert!(state.row_data[vp + rows - 2].selection.is_none());
+
+        state.deinit(alloc);
+        t.deinit(alloc);
+    }
+
+    // R13 (UD369): an update that fails after the overscan request changed
+    // leaves `overscan` from the previous update. The reference's
+    // `rowDataRange()` then describes entries `row_data` does not have: a
+    // raised request whose `row_data` growth fails ends the range past the
+    // list, and a lowered request underflows its start. The port reports no
+    // overscan after a failure and clamps the range, and the retry rebuilds.
+    #[test]
+    fn row_data_range_stays_in_bounds_after_a_failed_overscan_update() {
+        use crate::alloc::testing::{with_handle, Config, FailingAllocator};
+
+        let mut t = Terminal::init(Global, opts_sb(10, 10, 1_000_000)).unwrap();
+        test_write_numbered_lines(&mut t, 50);
+        t.scroll_viewport(ScrollViewport::Delta(-5));
+
+        let failing = FailingAllocator::over_heap(Config::default());
+        let c = failing.allocator();
+        with_handle(&c, |alloc| {
+            let mut state = RenderState::empty();
+            state.update(alloc, &mut t).unwrap();
+            assert_eq!(10, state.row_data.len());
+
+            // A raised request: the next allocation is the `row_data`
+            // growth, and it is refused.
+            state.overscan_request = Overscan {
+                above: 30,
+                below: 30,
+            };
+            failing.fail_index.set(failing.alloc_index.get());
+            assert!(state.update(alloc, &mut t).is_err());
+            assert_eq!(10, state.row_data.len(), "the growth failed");
+            let range = state.row_data_range();
+            assert!(range.start <= range.end, "{range:?}");
+            assert!(range.end <= state.row_data.len(), "{range:?}");
+            assert!(state.overscan.eql(Overscan::default()));
+            // The viewport slices of `string` and `link_cells` start at the
+            // new `viewport_start()` (30), past the 10 entries.
+            let mut out = Vec::new();
+            state.string(alloc, &mut out, None).unwrap();
+            assert!(state
+                .link_cells(alloc, point::Coordinate { x: 0, y: 0 })
+                .unwrap()
+                .is_empty());
+
+            failing.fail_index.set(usize::MAX);
+            state.update(alloc, &mut t).unwrap();
+            assert_eq!(Dirty::Full, state.dirty);
+            assert!(state.overscan.eql(Overscan {
+                above: 30,
+                below: 5
+            }));
+            let mut fresh = RenderState::empty();
+            fresh.overscan_request = state.overscan_request;
+            fresh.update(alloc, &mut t).unwrap();
+            test_compare_states(&state, &fresh);
+            fresh.deinit(alloc);
+
+            // A lowered request with a width change: the rows are rebuilt at
+            // the new width, and the first cell allocation is refused.
+            state.overscan_request = Overscan::default();
+            resize_terminal(&mut t, 80, 10);
+            failing.fail_index.set(failing.alloc_index.get());
+            assert!(state.update(alloc, &mut t).is_err());
+            assert_eq!(10, state.row_data.len());
+            let range = state.row_data_range();
+            assert!(range.start <= range.end, "{range:?}");
+            assert!(range.end <= state.row_data.len(), "{range:?}");
+            assert!(state.overscan.eql(Overscan::default()));
+            let mut out = Vec::new();
+            state.string(alloc, &mut out, None).unwrap();
+
+            failing.fail_index.set(usize::MAX);
+            state.update(alloc, &mut t).unwrap();
+            assert_eq!(Dirty::Full, state.dirty);
+            let mut fresh = RenderState::empty();
+            fresh.update(alloc, &mut t).unwrap();
+            test_compare_states(&state, &fresh);
+            fresh.deinit(alloc);
+            state.deinit(alloc);
+        });
+        assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+        t.deinit(Global);
+    }
+
+    // R13 (UD369), without overscan: an update that fails growing
+    // `row_data` for a taller terminal has already stored the new `rows`, so
+    // the reference's `string`/`linkCells` viewport slice
+    // (`[vp_start..][0..self.rows]`) ends past `row_data`. Any failed update
+    // that grows the height reaches it.
+    #[test]
+    fn string_and_link_cells_stay_in_bounds_after_a_failed_height_growth() {
+        use crate::alloc::testing::{with_handle, Config, FailingAllocator};
+
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+        vt_write(&mut t, b"one\r\ntwo");
+
+        let failing = FailingAllocator::over_heap(Config::default());
+        let c = failing.allocator();
+        with_handle(&c, |alloc| {
+            let mut state = RenderState::empty();
+            state.update(alloc, &mut t).unwrap();
+            assert_eq!(5, state.row_data.len());
+
+            resize_terminal(&mut t, 10, 40);
+            failing.fail_index.set(failing.alloc_index.get());
+            assert!(state.update(alloc, &mut t).is_err());
+            assert_eq!(40, state.rows);
+            assert!(state.row_data.len() < 40, "the growth failed");
+
+            let mut out = Vec::new();
+            state.string(alloc, &mut out, None).unwrap();
+            assert!(state
+                .link_cells(alloc, point::Coordinate { x: 0, y: 20 })
+                .unwrap()
+                .is_empty());
+            let range = state.row_data_range();
+            assert!(range.end <= state.row_data.len(), "{range:?}");
+
+            failing.fail_index.set(usize::MAX);
+            state.update(alloc, &mut t).unwrap();
+            assert_eq!(Dirty::Full, state.dirty);
+            let mut fresh = RenderState::empty();
+            fresh.update(alloc, &mut t).unwrap();
+            test_compare_states(&state, &fresh);
+            fresh.deinit(alloc);
+            state.deinit(alloc);
+        });
+        assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+        t.deinit(Global);
+    }
+
+    // R13 (UD370): with overscan, a `row_data` index can pass `u16`. The
+    // reference's style runs store it as a `u16` (`@intCast`), which panics
+    // in safe builds and styles the wrong row in ReleaseFast. With 65,535
+    // rows requested above and no scrollback, every viewport row is past
+    // `u16`, and each styled row must keep its own style.
+    #[test]
+    fn style_runs_address_rows_past_u16_with_large_overscan() {
+        let alloc = Global;
+
+        let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();
+        vt_write(&mut t, b"plain\r\n\x1b[1mbold\x1b[0m\r\n\x1b[3mital\x1b[0m");
+
+        let mut state: RenderState = RenderState::empty();
+        state.overscan_request = Overscan {
+            above: u16::MAX,
+            below: 0,
+        };
+        state.update(alloc, &mut t).unwrap();
+        assert!(state.overscan.eql(Overscan::default()));
+
+        let vp = state.viewport_start();
+        assert_eq!(65_535, vp);
+        let range = state.row_data_range();
+        assert_eq!((vp, vp + 3), (range.start, range.end));
+        let row0 = &state.row_data[vp].cells;
+        let row1 = &state.row_data[vp + 1].cells;
+        let row2 = &state.row_data[vp + 2].cells;
+        assert!(!row0.style()[0].flags.bold && !row0.style()[0].flags.italic);
+        assert!(row1.style()[0].flags.bold, "row 1 keeps its bold run");
+        assert!(!row1.style()[0].flags.italic);
+        assert!(row2.style()[0].flags.italic, "row 2 keeps its italic run");
+        assert!(!row2.style()[0].flags.bold);
+
+        state.deinit(alloc);
+        t.deinit(alloc);
     }
 }

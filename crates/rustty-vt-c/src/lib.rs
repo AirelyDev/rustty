@@ -2564,6 +2564,7 @@ pub unsafe extern "C" fn rustty_render_state_set(
     // _ = std.meta.intToEnum(SetOption, ...) catch { log.warn(...); return .invalid_value; }
     let opt = match option {
         0 => SetOption::Dirty,
+        1 => SetOption::Overscan,
         _ => {
             // log.warn("render_state_set invalid option value={d}", .{...});
             sys::log_fn(

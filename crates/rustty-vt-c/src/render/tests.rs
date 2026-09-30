@@ -3192,3 +3192,726 @@ fn render_state_allocation_failure_sweep_through_the_c_api() {
         assert!(failing.resize_index.get() <= n, "remap n={n}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// P7-W3 T2 (`2ea1eeae2`): RenderState overscan and row identity in the C API.
+// ---------------------------------------------------------------------------
+
+/// Test helper: a terminal of the given size with `lines` numbered lines
+/// written, so everything above the last `rows` lines is scrollback.
+fn test_terminal_with_lines(
+    alloc: &CAllocator,
+    cols: size::CellCountInt,
+    rows: size::CellCountInt,
+    lines: usize,
+) -> terminal_c::Terminal {
+    let mut terminal: terminal_c::Terminal = std::ptr::null_mut();
+    assert_eq!(Result::Success, unsafe {
+        terminal_c::new(alloc, &mut terminal, cols, rows)
+    });
+
+    for i in 0..lines {
+        let line = format!("{}line {i}", if i == 0 { "" } else { "\r\n" });
+        vtw(terminal, line.as_bytes());
+    }
+
+    terminal
+}
+
+/// Scroll the terminal's viewport (the reference calls
+/// `terminal.?.terminal.scrollViewport(...)` directly).
+fn test_scroll_viewport(
+    terminal: terminal_c::Terminal,
+    behavior: rustty_vt::terminal::ScrollViewport,
+) {
+    // SAFETY: `terminal` is a live handle; no other borrow of its terminal is live.
+    unsafe { (*(*terminal).terminal).scroll_viewport(behavior) };
+}
+
+fn set_overscan(state: RenderState, req: &Overscan) -> Result {
+    unsafe {
+        set(
+            state,
+            SetOption::Overscan,
+            req as *const Overscan as *const c_void,
+        )
+    }
+}
+
+fn get_overscan(state: RenderState, data: Data, out: &mut Overscan) -> Result {
+    unsafe { get(state, data, out as *mut Overscan as *mut c_void) }
+}
+
+/// Test helper: a row id and its viewport y from one iteration.
+#[derive(Clone, Copy, Debug)]
+struct TestRowEntry {
+    id: RowId,
+    viewport_y: i32,
+}
+
+/// Test helper: collect the id and viewport y of every captured row.
+fn test_collect_rows(alloc: &CAllocator, state: RenderState) -> Vec<TestRowEntry> {
+    let mut it: RowIterator = std::ptr::null_mut();
+    assert_eq!(Result::Success, unsafe {
+        row_iterator_new(Some(alloc), &mut it)
+    });
+    assert_eq!(Result::Success, unsafe {
+        get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+    });
+
+    let mut list = Vec::new();
+    while unsafe { row_iterator_next(it) } {
+        let mut entry = TestRowEntry {
+            id: RowId::default(),
+            viewport_y: 0,
+        };
+        assert_eq!(Result::Success, unsafe {
+            row_get(it, RowData::Id, &mut entry.id as *mut _ as *mut c_void)
+        });
+        assert_eq!(Result::Success, unsafe {
+            row_get(
+                it,
+                RowData::ViewportY,
+                &mut entry.viewport_y as *mut _ as *mut c_void,
+            )
+        });
+        list.push(entry);
+    }
+
+    unsafe { row_iterator_free(it) };
+    list
+}
+
+// test "render: overscan request applies on the next update"
+#[test]
+fn render_overscan_request_applies_on_the_next_update() {
+    with_test_allocator(|alloc| {
+        let rows: usize = 10;
+        let terminal = test_terminal_with_lines(alloc, 10, rows as u16, 50);
+        test_scroll_viewport(terminal, rustty_vt::terminal::ScrollViewport::Delta(-5));
+
+        let mut state: RenderState = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut state) });
+        let req = Overscan { above: 3, below: 2 };
+        assert_eq!(Result::Success, set_overscan(state, &req));
+        assert_eq!(Result::Success, unsafe { update(state, terminal) });
+
+        // Changing the request after an update must not affect reading the
+        // rows of that update.
+        let none = Overscan::default();
+        assert_eq!(Result::Success, set_overscan(state, &none));
+        let mut out = Overscan::default();
+        assert_eq!(
+            Result::Success,
+            get_overscan(state, Data::OverscanRequest, &mut out)
+        );
+        assert_eq!(none, out);
+        assert_eq!(
+            Result::Success,
+            get_overscan(state, Data::Overscan, &mut out)
+        );
+        assert_eq!(req, out);
+
+        let list = test_collect_rows(alloc, state);
+        assert_eq!(3 + rows + 2, list.len());
+        assert_eq!(-3i32, list[0].viewport_y);
+
+        // The next update uses the new request.
+        assert_eq!(Result::Success, unsafe { update(state, terminal) });
+        let list = test_collect_rows(alloc, state);
+        assert_eq!(rows, list.len());
+        assert_eq!(0i32, list[0].viewport_y);
+
+        unsafe { free(state) };
+        unsafe { terminal_c::free(terminal) };
+    });
+}
+
+// test "render: overscan option roundtrip"
+#[test]
+fn render_overscan_option_roundtrip() {
+    with_test_allocator(|alloc| {
+        let mut state: RenderState = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut state) });
+
+        let req = Overscan { above: 4, below: 1 };
+        assert_eq!(Result::Success, set_overscan(state, &req));
+
+        let mut out = Overscan {
+            above: 99,
+            below: 99,
+        };
+        assert_eq!(
+            Result::Success,
+            get_overscan(state, Data::OverscanRequest, &mut out)
+        );
+        assert_eq!(Overscan { above: 4, below: 1 }, out);
+
+        // Nothing is captured before an update.
+        assert_eq!(
+            Result::Success,
+            get_overscan(state, Data::Overscan, &mut out)
+        );
+        assert_eq!(Overscan::default(), out);
+
+        unsafe { free(state) };
+    });
+}
+
+// test "render: overscan clamps to existing rows"
+#[test]
+fn render_overscan_clamps_to_existing_rows() {
+    with_test_allocator(|alloc| {
+        let terminal = test_terminal_with_lines(alloc, 10, 10, 50);
+
+        let mut state: RenderState = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut state) });
+
+        let req = Overscan { above: 3, below: 2 };
+        assert_eq!(Result::Success, set_overscan(state, &req));
+
+        let mut out = Overscan::default();
+
+        // At the bottom there is nothing below the viewport.
+        assert_eq!(Result::Success, unsafe { update(state, terminal) });
+        assert_eq!(
+            Result::Success,
+            get_overscan(state, Data::Overscan, &mut out)
+        );
+        assert_eq!(Overscan { above: 3, below: 0 }, out);
+
+        // Scrolled up, both sides are available.
+        test_scroll_viewport(terminal, rustty_vt::terminal::ScrollViewport::Delta(-5));
+        assert_eq!(Result::Success, unsafe { update(state, terminal) });
+        assert_eq!(
+            Result::Success,
+            get_overscan(state, Data::Overscan, &mut out)
+        );
+        assert_eq!(Overscan { above: 3, below: 2 }, out);
+
+        // At the top there is nothing above the viewport.
+        test_scroll_viewport(terminal, rustty_vt::terminal::ScrollViewport::Top);
+        assert_eq!(Result::Success, unsafe { update(state, terminal) });
+        assert_eq!(
+            Result::Success,
+            get_overscan(state, Data::Overscan, &mut out)
+        );
+        assert_eq!(Overscan { above: 0, below: 2 }, out);
+
+        // The request is reported unchanged.
+        assert_eq!(
+            Result::Success,
+            get_overscan(state, Data::OverscanRequest, &mut out)
+        );
+        assert_eq!(req, out);
+
+        unsafe { free(state) };
+        unsafe { terminal_c::free(terminal) };
+    });
+}
+
+// test "render: row iterator unchanged without overscan"
+#[test]
+fn render_row_iterator_unchanged_without_overscan() {
+    with_test_allocator(|alloc| {
+        let rows: usize = 10;
+        let terminal = test_terminal_with_lines(alloc, 10, rows as u16, 50);
+        test_scroll_viewport(terminal, rustty_vt::terminal::ScrollViewport::Delta(-5));
+
+        let mut state: RenderState = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut state) });
+        assert_eq!(Result::Success, unsafe { update(state, terminal) });
+
+        let mut it: RowIterator = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            row_iterator_new(Some(alloc), &mut it)
+        });
+        assert_eq!(Result::Success, unsafe {
+            get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+        });
+
+        // The first update is a full redraw so next_dirty visits every row.
+        let mut count: usize = 0;
+        let mut y: size::CellCountInt = 0;
+        while unsafe { row_iterator_next_dirty(it, &mut y) } {
+            assert_eq!(count, y as usize);
+            let mut vy: i32 = 0;
+            assert_eq!(Result::Success, unsafe {
+                row_get(it, RowData::ViewportY, &mut vy as *mut _ as *mut c_void)
+            });
+            assert_eq!(i32::from(y), vy);
+            count += 1;
+        }
+        assert_eq!(rows, count);
+
+        unsafe { row_iterator_free(it) };
+        unsafe { free(state) };
+        unsafe { terminal_c::free(terminal) };
+    });
+}
+
+// test "render: row iterator covers overscan"
+#[test]
+fn render_row_iterator_covers_overscan() {
+    with_test_allocator(|alloc| {
+        let rows: usize = 10;
+        let terminal = test_terminal_with_lines(alloc, 10, rows as u16, 50);
+        test_scroll_viewport(terminal, rustty_vt::terminal::ScrollViewport::Delta(-5));
+
+        // A reference state with no overscan for comparison.
+        let mut plain: RenderState = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut plain) });
+        assert_eq!(Result::Success, unsafe { update(plain, terminal) });
+
+        let mut plain_it: RowIterator = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            row_iterator_new(Some(alloc), &mut plain_it)
+        });
+        assert_eq!(Result::Success, unsafe {
+            get(
+                plain,
+                Data::RowIterator,
+                &mut plain_it as *mut _ as *mut c_void,
+            )
+        });
+        assert!(unsafe { row_iterator_next(plain_it) });
+        let mut plain_raw: row::CRow = 0;
+        let mut plain_id = RowId::default();
+        assert_eq!(Result::Success, unsafe {
+            row_get(
+                plain_it,
+                RowData::Raw,
+                &mut plain_raw as *mut _ as *mut c_void,
+            )
+        });
+        assert_eq!(Result::Success, unsafe {
+            row_get(
+                plain_it,
+                RowData::Id,
+                &mut plain_id as *mut _ as *mut c_void,
+            )
+        });
+
+        let mut state: RenderState = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut state) });
+        let req = Overscan { above: 3, below: 2 };
+        assert_eq!(Result::Success, set_overscan(state, &req));
+        assert_eq!(Result::Success, unsafe { update(state, terminal) });
+
+        let mut it: RowIterator = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            row_iterator_new(Some(alloc), &mut it)
+        });
+        assert_eq!(Result::Success, unsafe {
+            get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+        });
+
+        let mut count: usize = 0;
+        let mut found_top = false;
+        while unsafe { row_iterator_next(it) } {
+            let mut vy: i32 = 0;
+            assert_eq!(Result::Success, unsafe {
+                row_get(it, RowData::ViewportY, &mut vy as *mut _ as *mut c_void)
+            });
+            assert_eq!(count as i32 - 3, vy);
+
+            if vy == 0 {
+                found_top = true;
+                let mut raw: row::CRow = 0;
+                let mut id = RowId::default();
+                assert_eq!(Result::Success, unsafe {
+                    row_get(it, RowData::Raw, &mut raw as *mut _ as *mut c_void)
+                });
+                assert_eq!(Result::Success, unsafe {
+                    row_get(it, RowData::Id, &mut id as *mut _ as *mut c_void)
+                });
+                assert_eq!(plain_raw, raw);
+                assert_eq!(plain_id, id);
+            }
+            count += 1;
+        }
+        assert_eq!(3 + rows + 2, count);
+        assert!(found_top);
+
+        unsafe { row_iterator_free(it) };
+        unsafe { free(state) };
+        unsafe { row_iterator_free(plain_it) };
+        unsafe { free(plain) };
+        unsafe { terminal_c::free(terminal) };
+    });
+}
+
+// test "render: row iterator overscan at the bottom"
+#[test]
+fn render_row_iterator_overscan_at_the_bottom() {
+    with_test_allocator(|alloc| {
+        let rows: usize = 10;
+        let terminal = test_terminal_with_lines(alloc, 10, rows as u16, 50);
+
+        let mut state: RenderState = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut state) });
+        let req = Overscan { above: 3, below: 2 };
+        assert_eq!(Result::Success, set_overscan(state, &req));
+        assert_eq!(Result::Success, unsafe { update(state, terminal) });
+
+        let list = test_collect_rows(alloc, state);
+        assert_eq!(3 + rows, list.len());
+        assert_eq!(-3i32, list[0].viewport_y);
+        assert_eq!(rows as i32 - 1, list[list.len() - 1].viewport_y);
+
+        unsafe { free(state) };
+        unsafe { terminal_c::free(terminal) };
+    });
+}
+
+// test "render: row ids stable across scroll"
+#[test]
+fn render_row_ids_stable_across_scroll() {
+    with_test_allocator(|alloc| {
+        let rows: i32 = 10;
+        let terminal = test_terminal_with_lines(alloc, 10, rows as u16, 50);
+        test_scroll_viewport(terminal, rustty_vt::terminal::ScrollViewport::Delta(-5));
+
+        let mut state: RenderState = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut state) });
+        let req = Overscan { above: 3, below: 2 };
+        assert_eq!(Result::Success, set_overscan(state, &req));
+        assert_eq!(Result::Success, unsafe { update(state, terminal) });
+
+        let before = test_collect_rows(alloc, state);
+
+        test_scroll_viewport(terminal, rustty_vt::terminal::ScrollViewport::Delta(-1));
+        assert_eq!(Result::Success, unsafe { update(state, terminal) });
+
+        let after = test_collect_rows(alloc, state);
+        assert_eq!(before.len(), after.len());
+
+        // Every row except the last one (which scrolled out of the captured
+        // rows at the bottom) is still present, one row further down.
+        for old in &before {
+            if old.viewport_y == rows + 1 {
+                continue;
+            }
+            let new_vy: Option<i32> = after
+                .iter()
+                .find(|cur| cur.id == old.id)
+                .map(|cur| cur.viewport_y);
+            assert_eq!(old.viewport_y + 1, new_vy.unwrap());
+        }
+
+        unsafe { free(state) };
+        unsafe { terminal_c::free(terminal) };
+    });
+}
+
+// test "render: row id without overscan"
+#[test]
+fn render_row_id_without_overscan() {
+    with_test_allocator(|alloc| {
+        let terminal = test_terminal_with_lines(alloc, 10, 5, 20);
+
+        let mut state: RenderState = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut state) });
+
+        assert_eq!(Result::Success, unsafe { update(state, terminal) });
+        let first = test_collect_rows(alloc, state);
+
+        assert_eq!(Result::Success, unsafe { update(state, terminal) });
+        let second = test_collect_rows(alloc, state);
+
+        assert_eq!(5, first.len());
+        assert_eq!(first.len(), second.len());
+        for (a, b) in first.iter().zip(second.iter()) {
+            assert_eq!(a.id, b.id);
+            assert!(a.id != RowId::default());
+        }
+
+        unsafe { free(state) };
+        unsafe { terminal_c::free(terminal) };
+    });
+}
+
+// test "render: overscan invalid values"
+#[test]
+fn render_overscan_invalid_values() {
+    with_test_allocator(|alloc| {
+        let mut state: RenderState = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut state) });
+
+        assert_eq!(Result::InvalidValue, unsafe {
+            get(state, Data::Overscan, std::ptr::null_mut())
+        });
+        assert_eq!(Result::InvalidValue, unsafe {
+            set(state, SetOption::Overscan, std::ptr::null())
+        });
+
+        let terminal = test_terminal_with_lines(alloc, 10, 5, 1);
+        assert_eq!(Result::Success, unsafe { update(state, terminal) });
+
+        let mut it: RowIterator = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            row_iterator_new(Some(alloc), &mut it)
+        });
+        assert_eq!(Result::Success, unsafe {
+            get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+        });
+
+        // Before the first next, there is no current row.
+        let mut id = RowId::default();
+        assert_eq!(Result::InvalidValue, unsafe {
+            row_get(it, RowData::Id, &mut id as *mut _ as *mut c_void)
+        });
+
+        unsafe { row_iterator_free(it) };
+        unsafe { terminal_c::free(terminal) };
+        unsafe { free(state) };
+    });
+}
+
+// test "render: overscan get_multi and row_get_multi"
+#[test]
+fn render_overscan_get_multi_and_row_get_multi() {
+    with_test_allocator(|alloc| {
+        let terminal = test_terminal_with_lines(alloc, 10, 5, 20);
+        test_scroll_viewport(terminal, rustty_vt::terminal::ScrollViewport::Delta(-5));
+
+        let mut state: RenderState = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut state) });
+        let req = Overscan { above: 1, below: 1 };
+        assert_eq!(Result::Success, set_overscan(state, &req));
+        assert_eq!(Result::Success, unsafe { update(state, terminal) });
+
+        let mut rows: u16 = 0;
+        let mut overscan = Overscan::default();
+        let mut overscan_req = Overscan::default();
+        let mut written: usize = 0;
+        let keys = [
+            Data::Rows as c_int,
+            Data::Overscan as c_int,
+            Data::OverscanRequest as c_int,
+        ];
+        let mut values: [*mut c_void; 3] = [
+            &mut rows as *mut _ as *mut c_void,
+            &mut overscan as *mut _ as *mut c_void,
+            &mut overscan_req as *mut _ as *mut c_void,
+        ];
+        assert_eq!(Result::Success, unsafe {
+            get_multi(
+                state,
+                keys.len(),
+                keys.as_ptr(),
+                values.as_mut_ptr(),
+                &mut written,
+            )
+        });
+        assert_eq!(keys.len(), written);
+        assert_eq!(5, rows);
+        assert_eq!(Overscan { above: 1, below: 1 }, overscan);
+        assert_eq!(req, overscan_req);
+
+        let mut it: RowIterator = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            row_iterator_new(Some(alloc), &mut it)
+        });
+        assert_eq!(Result::Success, unsafe {
+            get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+        });
+        assert!(unsafe { row_iterator_next(it) });
+
+        let mut dirty: bool = false;
+        let mut vy: i32 = 0;
+        let mut id = RowId::default();
+        let row_keys = [
+            RowData::Dirty as c_int,
+            RowData::ViewportY as c_int,
+            RowData::Id as c_int,
+        ];
+        let mut row_values: [*mut c_void; 3] = [
+            &mut dirty as *mut _ as *mut c_void,
+            &mut vy as *mut _ as *mut c_void,
+            &mut id as *mut _ as *mut c_void,
+        ];
+        assert_eq!(Result::Success, unsafe {
+            row_get_multi(
+                it,
+                row_keys.len(),
+                row_keys.as_ptr(),
+                row_values.as_mut_ptr(),
+                &mut written,
+            )
+        });
+        assert_eq!(row_keys.len(), written);
+        assert_eq!(-1i32, vy);
+        assert!(id != RowId::default());
+
+        unsafe { row_iterator_free(it) };
+        unsafe { free(state) };
+        unsafe { terminal_c::free(terminal) };
+    });
+}
+
+// PORT-SPECIFIC (P7-W3 T2, Stacked Borrows): the overscan iterator is a
+// SUB-slice of `row_data`. `rustty_render_state_clean` then mutates every row
+// through a fresh `&mut` while the iterator stays live (the "existing
+// iterators observe cleaning" contract), and the iterator is read and written
+// afterwards. The sub-slice must be built by raw pointer arithmetic off the
+// buffer root; a `&mut row_data[range]`-derived slice is invalidated by
+// `clean`'s reborrow, which Miri reports as UB here.
+#[test]
+fn render_clean_interleaves_with_a_live_overscan_iterator() {
+    with_test_allocator(|alloc| {
+        let terminal = test_terminal_with_lines(alloc, 10, 5, 20);
+        test_scroll_viewport(terminal, rustty_vt::terminal::ScrollViewport::Delta(-5));
+
+        let mut state: RenderState = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut state) });
+        let req = Overscan { above: 2, below: 1 };
+        assert_eq!(Result::Success, set_overscan(state, &req));
+        assert_eq!(Result::Success, unsafe { update(state, terminal) });
+
+        let mut it: RowIterator = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            row_iterator_new(Some(alloc), &mut it)
+        });
+        assert_eq!(Result::Success, unsafe {
+            get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+        });
+        assert_eq!(2 + 5 + 1, unsafe { (*it).rows.len() });
+
+        // Read one row, then clean the state under the live iterator.
+        assert!(unsafe { row_iterator_next(it) });
+        let mut dirty = false;
+        assert_eq!(Result::Success, unsafe {
+            row_get(it, RowData::Dirty, &mut dirty as *mut _ as *mut c_void)
+        });
+        assert!(dirty, "the first update is a full redraw");
+        assert_eq!(Result::Success, unsafe { clean(state) });
+
+        // The iterator observes the cleaning, reads every remaining row, and
+        // writes a row's dirty flag back through the sub-slice.
+        let mut vy: i32 = 0;
+        assert_eq!(Result::Success, unsafe {
+            row_get(it, RowData::Dirty, &mut dirty as *mut _ as *mut c_void)
+        });
+        assert!(!dirty);
+        assert_eq!(Result::Success, unsafe {
+            row_get(it, RowData::ViewportY, &mut vy as *mut _ as *mut c_void)
+        });
+        assert_eq!(-2, vy);
+        let set_dirty = true;
+        assert_eq!(Result::Success, unsafe {
+            row_set(
+                it,
+                RowOption::Dirty,
+                &set_dirty as *const bool as *const c_void,
+            )
+        });
+        let mut seen = 1;
+        while unsafe { row_iterator_next(it) } {
+            let mut id = RowId::default();
+            assert_eq!(Result::Success, unsafe {
+                row_get(it, RowData::Id, &mut id as *mut _ as *mut c_void)
+            });
+            assert!(id != RowId::default());
+            seen += 1;
+        }
+        assert_eq!(8, seen);
+        // The write through the iterator landed on the first captured row.
+        let range = unsafe { (*state).state.row_data_range() };
+        assert!(unsafe { &(*state).state.row_data }[range.start].dirty);
+
+        // A second clean and a second pass over the same iterator.
+        assert_eq!(Result::Success, unsafe { clean(state) });
+        unsafe { (*state).state.dirty = RenderDirty::Full };
+        let mut y: size::CellCountInt = 0;
+        let mut again = 0;
+        assert_eq!(Result::Success, unsafe {
+            get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+        });
+        while unsafe { row_iterator_next_dirty(it, &mut y) } {
+            again += 1;
+        }
+        assert_eq!(8, again);
+
+        unsafe { row_iterator_free(it) };
+        unsafe { free(state) };
+        unsafe { terminal_c::free(terminal) };
+    });
+}
+
+// R13 (UD369), the C half: after an update fails with a raised overscan
+// request, the row iterator stays inside `row_data`. The reference slices the
+// iterator with `rowDataRange()` and indexes out of bounds.
+#[test]
+fn ud369_row_iterator_after_failed_overscan_update_stays_in_bounds() {
+    use rustty_vt::alloc::testing::{Config, FailingAllocator};
+
+    let failing = FailingAllocator::over_heap(Config::default());
+    let calloc = failing.allocator();
+    let mut terminal: terminal_c::Terminal = std::ptr::null_mut();
+    assert_eq!(Result::Success, unsafe {
+        terminal_c::new(std::ptr::null(), &mut terminal, 10, 10)
+    });
+    for i in 0..50 {
+        vtw(terminal, format!("{i}\r\n").as_bytes());
+    }
+    test_scroll_viewport(terminal, rustty_vt::terminal::ScrollViewport::Delta(-5));
+
+    let mut state: RenderState = std::ptr::null_mut();
+    assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut state) });
+    assert_eq!(Result::Success, unsafe { update(state, terminal) });
+
+    // The next allocation is the `row_data` growth; refuse it.
+    let req = Overscan {
+        above: 30,
+        below: 30,
+    };
+    assert_eq!(Result::Success, set_overscan(state, &req));
+    failing.fail_index.set(failing.alloc_index.get());
+    assert_eq!(Result::OutOfMemory, unsafe { update(state, terminal) });
+    failing.fail_index.set(usize::MAX);
+
+    let mut out = Overscan::default();
+    assert_eq!(
+        Result::Success,
+        get_overscan(state, Data::Overscan, &mut out)
+    );
+    assert_eq!(Overscan::default(), out, "nothing is reported captured");
+
+    // Reading the rows after the failure stays in bounds (here: no rows).
+    let mut it: RowIterator = std::ptr::null_mut();
+    assert_eq!(Result::Success, unsafe { row_iterator_new(None, &mut it) });
+    assert_eq!(Result::Success, unsafe {
+        get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+    });
+    let len = unsafe { (*state).state.row_data.len() };
+    assert!(unsafe { (*it).rows.len() } <= len);
+    // The clamped range is empty: `viewport_start()` (30) is past the 10
+    // entries, so nothing of the stale layout is visited.
+    assert_eq!(0, unsafe { (*it).rows.len() });
+    while unsafe { row_iterator_next(it) } {
+        let mut raw: row::CRow = 0;
+        assert_eq!(Result::Success, unsafe {
+            row_get(it, RowData::Raw, &mut raw as *mut _ as *mut c_void)
+        });
+    }
+    unsafe { row_iterator_free(it) };
+
+    // The retry captures the request.
+    assert_eq!(Result::Success, unsafe { update(state, terminal) });
+    assert_eq!(
+        Result::Success,
+        get_overscan(state, Data::Overscan, &mut out)
+    );
+    assert_eq!(
+        Overscan {
+            above: 30,
+            below: 5
+        },
+        out
+    );
+
+    unsafe { free(state) };
+    unsafe { terminal_c::free(terminal) };
+    assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+}
