@@ -216,8 +216,9 @@ impl<Item: WasmPageItem, A> WasmPagePool<Item, A> {
     /// asserted — wasm rustty modules are single-threaded.)
     #[cfg(target_arch = "wasm32")]
     const COMPTIME_CHECKS: () = {
-        // The shared free list (and wasm's single linear memory) requires a
-        // single-threaded target (documented; see above).
+        // The shared free list (and wasm's single linear
+        // memory) requires a single-threaded target.
+        // (Documented, not asserted; see above.)
         // Items are whole wasm pages
         assert!(Self::ITEM_SIZE > 0);
         assert!(Self::ITEM_SIZE % PAGE_SIZE_MIN == 0);

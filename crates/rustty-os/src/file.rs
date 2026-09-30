@@ -594,6 +594,9 @@ mod win_cng {
     pub const FILE_SHARE_VALID_FLAGS: u32 = 0x0000_0007;
     /// `FILE.MODE.IO = .SYNCHRONOUS_NONALERT`
     pub const FILE_SYNCHRONOUS_IO_NONALERT: u32 = 0x0000_0020;
+    /// IOCTL that fills the output buffer with bytes from the kernel CSPRNG
+    /// behind `\Device\CNG` (what ProcessPrng and BCryptGenRandom draw from).
+    ///
     /// `IOCTL.KSEC.GEN_RANDOM`: `CTL_CODE{ .DeviceType = .KSEC (0x39),
     /// .Function = 2, .Method = .BUFFERED, .Access = .ANY }`.
     pub const IOCTL_KSEC_GEN_RANDOM: u32 = (0x39 << 16) | (2 << 2);
