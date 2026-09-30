@@ -57,6 +57,7 @@ pub enum Format {
     SgrPixels, // 1016
 }
 
+/// C: RusttyMouseShape (R2) — checked by the A5 enum-discriminant arm.
 /// The possible cursor shapes. Not all app runtimes support these shapes.
 /// The shapes are always based on the W3C supported cursor styles so we
 /// can have a cross platform list.
