@@ -39,12 +39,13 @@
 // `action_single` for infallible single-action returns). In Rust the faithful
 // equivalent is an owned `Vec<Action>` stored on the `Viewer` (`self.actions`),
 // cleared at the start of each `next()` and returned as `&[Action]` borrowing
-// from `self`. `Action` owns its payload (`Command(Vec<u8>)`, `Windows(Vec<
-// Window>)`), so there is no allocator to fail on for single-action returns —
-// the `action_single` infallibility guarantee is structural here. Because the
-// data is owned, the `.windows` action carries a CLONE of the window list rather
-// than a borrow (`[]const Window`); behavior (the caller sees the current window
-// set, empty on session change) is identical.
+// from `self`. The `.command` payload is owned (`Command(Vec<u8>)`), so there is
+// no allocator to fail on for single-action returns — the `action_single`
+// infallibility guarantee is structural here. The `.windows` payload borrows the
+// viewer's own window list exactly as the reference does (`windows = self.
+// windows.items`, `a41248013`): a `WindowSlice`, a raw view valid until the next
+// viewer mutation (see its PORT NOTE and the `Viewer.Action.windows` row in
+// `.port/audits/GHOSTTY_LIFETIMES.tsv`).
 
 use std::collections::VecDeque;
 
@@ -260,9 +261,11 @@ pub type PanesMap = AutoArrayHashMapUnmanaged<usize, Pane>;
 
 /// PORTS: ghostty `Viewer.Action`.
 //
-// PORT NOTE: the reference `command: []const u8` / `windows: []const Window`
-// borrow from the action arena; the owned port carries `Vec<u8>` / `Vec<Window>`
-// (see the action-arena PORT NOTE on `Viewer`).
+// PORT NOTE: the reference `command: []const u8` is carved from the action
+// arena; the port owns it as a `Vec<u8>` (see the action-arena PORT NOTE on
+// `Viewer`). The reference `windows: []const Window` is NOT arena memory: it is
+// `self.windows.items` (or the static `&.{}` on a session change), and the port
+// keeps that borrow as a `WindowSlice`.
 pub enum Action {
     /// Tmux has closed the control mode connection, we should end
     /// our viewer session in some way.
@@ -279,7 +282,72 @@ pub enum Action {
     /// the prior one. Remember that for a given Viewer, window IDs
     /// are guaranteed to be stable. Additionally, tmux (as of Dec 2025)
     /// never reuses window IDs within a server process lifetime.
-    Windows(Vec<Window>),
+    Windows(WindowSlice),
+}
+
+/// PORTS: the `[]const Window` payload of `Viewer.Action.windows`.
+//
+// PORT NOTE (DECISIONS B5, LIFETIMES row `Viewer.Action.windows`): upstream
+// points the action at the viewer's own window list (`self.windows.items`,
+// `a41248013`) and a test asserts that pointer identity (`9a4ba7d54`). The
+// slice stays valid until the next viewer mutation, as in Zig. The port holds
+// the same raw view: `ptr` comes from `Vec::as_ptr`, which materialises no
+// reference, so no Stacked Borrows tag is created that a later in-place write
+// through the `Vec` could pop. A reallocation, the list replacement in
+// `sync_layouts` or the viewer reset in `session_changed` frees or moves the
+// buffer, and after that the view must not be read.
+//
+// Soundness of the safe `Deref`: a caller only ever sees a `WindowSlice` through
+// the `&[Action]` that `Viewer::next` returns, which holds the `&mut Viewer`
+// borrow, so the viewer cannot be mutated or dropped while the view is
+// reachable. The type is neither `Clone` nor `Copy`, its fields are private,
+// and it has no public constructor, so it cannot outlive that borrow. Inside the
+// viewer every `next()` path clears `self.actions` before it mutates
+// `self.windows`; a `.windows` action is only pushed once the list is final for
+// that call (after `sync_layouts` in `received_list_windows`; in
+// `layout_changed` the following `sync_layouts` is told the list is the same one
+// and leaves it in place); and `deinit` clears the actions too.
+pub struct WindowSlice {
+    ptr: *const Window,
+    len: usize,
+}
+
+impl WindowSlice {
+    /// The empty slice (the reference's `&.{}`).
+    fn empty() -> WindowSlice {
+        WindowSlice {
+            ptr: std::ptr::NonNull::dangling().as_ptr(),
+            len: 0,
+        }
+    }
+
+    /// Borrow the viewer's window list (the reference's `self.windows.items`).
+    // `&Vec` rather than `&[Window]` on purpose: `Vec::as_ptr` does not
+    // materialise a reference to the elements (see the PORT NOTE above).
+    #[allow(clippy::ptr_arg)]
+    fn borrow(windows: &Vec<Window>) -> WindowSlice {
+        WindowSlice {
+            ptr: windows.as_ptr(),
+            len: windows.len(),
+        }
+    }
+
+    /// The first element's address (the reference's `windows.ptr`).
+    pub fn as_ptr(&self) -> *const Window {
+        self.ptr
+    }
+}
+
+impl std::ops::Deref for WindowSlice {
+    type Target = [Window];
+
+    fn deref(&self) -> &[Window] {
+        // SAFETY: `ptr`/`len` describe the viewer's live window list (or the
+        // dangling, empty slice). The list has not been mutated since the view
+        // was taken, because the `&[Action]` this view is reached through
+        // holds the `&mut Viewer` borrow (see the soundness note above).
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    }
 }
 
 impl Action {
@@ -313,22 +381,16 @@ pub enum ActionTag {
 // `testViewer`), so it is faithful to the output shape, not exercised by any
 // assertion.
 //
-// The three literal spellings below were MEASURED against zig 0.16 (the
+// The two literal spellings below were MEASURED against zig 0.16 (the
 // oracle's `minimum_zig_version`) rather than guessed, with a replica of this
 // file's directory layout:
 //
 //   @typeName  -> `terminal.tmux.viewer.Viewer.Action`
 //   `{any}` on the void `exit` payload -> `void`
-//   `{any}` on a `[]const Window`      -> `{ .{ .id = 1, .width = 2, … } }`
-//                                         (and `{  }` when empty)
 //
-// PARITY RESIDUAL (S209-F3): the `windows` arm can NOT be made byte-identical.
-// The reference's `Viewer.Window` carries a fifth field, `layout_arena:
-// ArenaAllocator.State`, which `{any}` prints as the arena's own bookkeeping
-// (a node list and an end index) — allocator internals whose value varies run
-// to run and which have NO counterpart here, because the port's `Layout` owns
-// its subtree (see the `Window` PORT NOTE). The struct SHAPE is reproduced and
-// `.layout` is rendered with Rust's `Debug`.
+// The `[]const Window` arm prints `[{d} windows]` (`a41248013`), so the output
+// is byte-identical to the reference's (this retires parity S209-F3, whose
+// residual was the reference's `{any}` dump of `Window.layout_arena`).
 impl std::fmt::Display for Action {
     fn fmt(&self, writer: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // try writer.writeAll(@typeName(T));
@@ -338,27 +400,15 @@ impl std::fmt::Display for Action {
         match self {
             // try writer.writeAll(@tagName(...)); try writer.writeAll(" = ");
             // []const u8 => try writer.print("\"{s}\"", .{trim(...)}),
+            // // Window embeds ArenaAllocator.State; dumping
+            // // `{any}` walks freed/poisoned arena nodes.
+            // []const Window => try writer.print("[{d} windows]", .{value.len}),
             // else => try writer.print("{any}", .{value}),
             Action::Exit => write!(writer, "exit = void }}"),
             Action::Command(v) => {
                 write!(writer, "command = \"{}\" }}", trim_display(v))
             }
-            Action::Windows(v) => {
-                // `{any}` over a slice is `"{ " ++ join(", ") ++ " }"`, which
-                // is `"{  }"` (two spaces) when the slice is empty.
-                writer.write_str("windows = { ")?;
-                for (i, w) in v.iter().enumerate() {
-                    if i > 0 {
-                        writer.write_str(", ")?;
-                    }
-                    write!(
-                        writer,
-                        ".{{ .id = {}, .width = {}, .height = {}, .layout = {:?} }}",
-                        w.id, w.width, w.height, w.layout
-                    )?;
-                }
-                writer.write_str(" } }")
-            }
+            Action::Windows(v) => write!(writer, "windows = [{} windows] }}", v.len()),
         }
     }
 }
@@ -461,6 +511,10 @@ impl Viewer {
         // PORT NOTE: `tmux_version` is an owned `Vec<u8>`; dropping it frees the
         // string (the `len > 0` guard is irrelevant for an owned vector).
         // self.action_arena.promote(self.alloc).deinit();
+        //
+        // PORT NOTE: the arena's counterpart is `self.actions`. Clearing it also
+        // drops any `.windows` view of the list cleared above.
+        self.actions.clear();
     }
 
     /// Send in an input event (such as a tmux protocol notification,
@@ -865,7 +919,12 @@ impl Viewer {
         // Our initial action is to definitely let the caller know that
         // some windows changed.
         // try actions.append(arena_alloc, .{ .windows = self.windows.items });
-        self.actions.push(Action::Windows(self.windows.clone()));
+        //
+        // PORT NOTE: the view stays valid across the `sync_layouts` below,
+        // which is told the list is the same one (`windows_same`) and so
+        // neither replaces nor reallocates `self.windows`.
+        self.actions
+            .push(Action::Windows(WindowSlice::borrow(&self.windows)));
 
         // Sync up our panes
         // try self.syncLayouts(self.windows.items);
@@ -1187,7 +1246,7 @@ impl Viewer {
         // var arena = replacement.action_arena.promote(replacement.alloc);
         // const arena_alloc = arena.allocator();
         // try actions.append(arena_alloc, .{ .windows = &.{} });
-        self.actions.push(Action::Windows(Vec::new()));
+        self.actions.push(Action::Windows(WindowSlice::empty()));
 
         // Setup our command queue and put ourselves in the command queue
         // state.
@@ -1353,15 +1412,23 @@ impl Viewer {
     // ) !void {
     fn received_list_windows(&mut self, content: &[u8]) -> Result<(), VtError> {
         // If there is an error, reset our actions to what it was before.
-        // errdefer actions.shrinkRetainingCapacity(actions.items.len);
+        // const actions_len = actions.items.len;
+        // errdefer actions.shrinkRetainingCapacity(actions_len);
         //
-        // PORT NOTE: the reference `shrinkRetainingCapacity(actions.items.len)`
-        // is a no-op (shrinking to the current length). It is preserved as a
-        // comment; no behavior to model.
+        // PORT NOTE: the errdefer is the `truncate(actions_len)` on the error
+        // return of `sync_layouts` below; the parse errors return before any
+        // action is appended, so there is nothing to shrink on those paths.
+        let actions_len = self.actions.len();
 
         // This stores our new window state from this list-windows output.
+        // Ownership of each Window's layout arena transfers into
+        // `self.windows` via syncLayouts; this list only owns the
+        // ArrayList buffer itself.
         // var windows: std.ArrayList(Window) = .empty;
         // defer windows.deinit(self.alloc);
+        //
+        // PORT NOTE: `windows` is moved into `sync_layouts`, which moves the
+        // windows (and their owned layouts) into `self.windows`.
         let mut windows: Vec<Window> = Vec::new();
 
         // Parse all our windows
@@ -1452,14 +1519,18 @@ impl Viewer {
             return Err(err);
         }
 
-        // Setup our windows action so the caller can process GUI
-        // window changes.
-        // try actions.append(arena_alloc, .{ .windows = windows.items });
-        self.actions.push(Action::Windows(windows.clone()));
-
-        // Sync up our layouts. This will populate unknown panes, prune, etc.
+        // Sync into self.windows first. The `.windows` action must point at
+        // `self.windows.items` (stable for the duration of next()), not the
+        // temporary list buffer which is freed by the defer above — otherwise
+        // logging/formatting the action is a use-after-free.
         // try self.syncLayouts(windows.items);
-        self.sync_layouts(windows, false)?;
+        // try actions.append(arena_alloc, .{ .windows = self.windows.items });
+        if let Err(err) = self.sync_layouts(windows, false) {
+            self.actions.truncate(actions_len);
+            return Err(err);
+        }
+        self.actions
+            .push(Action::Windows(WindowSlice::borrow(&self.windows)));
         Ok(())
     }
 
@@ -1652,15 +1723,12 @@ impl Viewer {
             // Mouse modes
             // t.modes.set(.mouse_event_any, data.mouse_all_flag);
             t.modes.set(modes::Mode::MouseEventAny, data.mouse_all_flag);
-            // t.modes.set(.mouse_event_button, data.mouse_any_flag);
+            // t.modes.set(.mouse_event_button, data.mouse_button_flag);
             t.modes
-                .set(modes::Mode::MouseEventButton, data.mouse_any_flag);
-            // t.modes.set(.mouse_event_normal, data.mouse_button_flag);
+                .set(modes::Mode::MouseEventButton, data.mouse_button_flag);
+            // t.modes.set(.mouse_event_normal, data.mouse_standard_flag);
             t.modes
-                .set(modes::Mode::MouseEventNormal, data.mouse_button_flag);
-            // t.modes.set(.mouse_event_x10, data.mouse_standard_flag);
-            t.modes
-                .set(modes::Mode::MouseEventX10, data.mouse_standard_flag);
+                .set(modes::Mode::MouseEventNormal, data.mouse_standard_flag);
             // t.modes.set(.mouse_format_utf8, data.mouse_utf8_flag);
             t.modes
                 .set(modes::Mode::MouseFormatUtf8, data.mouse_utf8_flag);
@@ -2298,7 +2366,6 @@ impl Format {
             Variable::OriginFlag,
             // Mouse modes
             Variable::MouseAllFlag,
-            Variable::MouseAnyFlag,
             Variable::MouseButtonFlag,
             Variable::MouseStandardFlag,
             Variable::MouseUtf8Flag,
@@ -2534,7 +2601,6 @@ struct ListPanes<'a> {
     keypad_cursor_flag: bool,
     origin_flag: bool,
     mouse_all_flag: bool,
-    mouse_any_flag: bool,
     mouse_button_flag: bool,
     mouse_standard_flag: bool,
     mouse_utf8_flag: bool,
@@ -2567,16 +2633,15 @@ impl<'a> ListPanes<'a> {
             keypad_cursor_flag: value_bool(&v[13]),
             origin_flag: value_bool(&v[14]),
             mouse_all_flag: value_bool(&v[15]),
-            mouse_any_flag: value_bool(&v[16]),
-            mouse_button_flag: value_bool(&v[17]),
-            mouse_standard_flag: value_bool(&v[18]),
-            mouse_utf8_flag: value_bool(&v[19]),
-            mouse_sgr_flag: value_bool(&v[20]),
-            focus_flag: value_bool(&v[21]),
-            bracketed_paste: value_bool(&v[22]),
-            scroll_region_upper: value_usize(&v[23]),
-            scroll_region_lower: value_usize(&v[24]),
-            pane_tabs: value_str(&v[25]),
+            mouse_button_flag: value_bool(&v[16]),
+            mouse_standard_flag: value_bool(&v[17]),
+            mouse_utf8_flag: value_bool(&v[18]),
+            mouse_sgr_flag: value_bool(&v[19]),
+            focus_flag: value_bool(&v[20]),
+            bracketed_paste: value_bool(&v[21]),
+            scroll_region_upper: value_usize(&v[22]),
+            scroll_region_lower: value_usize(&v[23]),
+            pane_tabs: value_str(&v[24]),
         }
     }
 }
@@ -2606,8 +2671,8 @@ mod tests {
     /// PORT NOTE: NOT a reference test (the reference's `Action.format` is
     /// covered only by `testViewer`'s failure log, which the port drops). It
     /// pins the three renderings against the shapes MEASURED from zig 0.16 —
-    /// see the `Display for Action` PORT NOTE, including the `windows` residual
-    /// (parity S209-F3).
+    /// see the `Display for Action` PORT NOTE. The `windows` arm prints the
+    /// window count (`[N windows]`, `a41248013`), which retires S209-F3.
     #[test]
     fn action_display_matches_the_reference_format_shape() {
         assert_eq!(
@@ -2619,10 +2684,10 @@ mod tests {
             "terminal.tmux.viewer.Viewer.Action{ .command = \"list-windows\" }",
             format!("{}", Action::Command(b"  list-windows\r\n".to_vec()))
         );
-        // `{any}` over an EMPTY slice is `{  }` — two spaces.
+        // `[]const Window` payloads print their length only.
         assert_eq!(
-            "terminal.tmux.viewer.Viewer.Action{ .windows = {  } }",
-            format!("{}", Action::Windows(Vec::new()))
+            "terminal.tmux.viewer.Viewer.Action{ .windows = [0 windows] }",
+            format!("{}", Action::Windows(WindowSlice::empty()))
         );
         let w = Window {
             id: 1,
@@ -2636,19 +2701,10 @@ mod tests {
                 content: crate::tmux::layout::Content::Pane(7),
             },
         };
-        let rendered = format!("{}", Action::Windows(vec![w.clone(), w]));
-        assert!(
-            rendered.starts_with(
-                "terminal.tmux.viewer.Viewer.Action{ .windows = { .{ .id = 1, .width = 2, .height = 3, .layout = "
-            ),
-            "got: {rendered}"
-        );
-        assert!(rendered.ends_with(" } }"), "got: {rendered}");
-        // Two elements are separated by ", " and each is a `.{ ... }` literal.
+        let windows = vec![w.clone(), w];
         assert_eq!(
-            2,
-            rendered.matches(".{ .id = 1,").count(),
-            "got: {rendered}"
+            "terminal.tmux.viewer.Viewer.Action{ .windows = [2 windows] }",
+            format!("{}", Action::Windows(WindowSlice::borrow(&windows)))
         );
     }
 
@@ -2805,11 +2861,17 @@ mod tests {
     }
 
     // A snapshot of an Action sufficient for the test harness's checks
-    // (tag + command bytes + windows-empty test).
+    // (tag + command bytes + the windows view).
+    //
+    // PORT NOTE: the reference hands `check` the viewer and the actions that
+    // borrow it at once. The harness copies the `.windows` view's raw parts out
+    // of the `next()` borrow and rebuilds it for `check`, so the pointer
+    // identity with `viewer.windows` is kept (`9a4ba7d54`). `check` runs before
+    // the next viewer mutation, as upstream requires.
     enum OwnedAction {
         Exit,
         Command(Vec<u8>),
-        Windows(Vec<Window>),
+        Windows(*const Window, usize),
     }
 
     impl OwnedAction {
@@ -2817,21 +2879,24 @@ mod tests {
             match a {
                 Action::Exit => OwnedAction::Exit,
                 Action::Command(c) => OwnedAction::Command(c.clone()),
-                Action::Windows(w) => OwnedAction::Windows(w.clone()),
+                Action::Windows(w) => OwnedAction::Windows(w.ptr, w.len),
             }
         }
         fn tag(&self) -> ActionTag {
             match self {
                 OwnedAction::Exit => ActionTag::Exit,
                 OwnedAction::Command(_) => ActionTag::Command,
-                OwnedAction::Windows(_) => ActionTag::Windows,
+                OwnedAction::Windows(..) => ActionTag::Windows,
             }
         }
         fn to_action(&self) -> Action {
             match self {
                 OwnedAction::Exit => Action::Exit,
                 OwnedAction::Command(c) => Action::Command(c.clone()),
-                OwnedAction::Windows(w) => Action::Windows(w.clone()),
+                OwnedAction::Windows(ptr, len) => Action::Windows(WindowSlice {
+                    ptr: *ptr,
+                    len: *len,
+                }),
             }
         }
     }
@@ -2987,6 +3052,155 @@ mod tests {
         );
     }
 
+    /// Feed empty block ends until the next queued command is `list-windows`
+    /// (drains the pane captures and the pane state a list-windows queued).
+    fn drain_to_list_windows(viewer: &mut Viewer) {
+        while !matches!(viewer.command_queue.front(), Some(Command::ListWindows)) {
+            assert!(!viewer.command_queue.is_empty());
+            let _ = viewer.next(tmux(block_end("")));
+        }
+    }
+
+    /// Start a viewer and answer its version query, leaving `list-windows`
+    /// in flight.
+    fn viewer_awaiting_list_windows() -> Viewer {
+        let mut viewer = Viewer::init(Global).unwrap();
+        let _ = viewer.next(tmux(block_end("")));
+        let _ = viewer.next(tmux(control::Notification::SessionChanged {
+            id: 1,
+            name: b"first".to_vec(),
+        }));
+        let _ = viewer.next(tmux(block_end("3.5a")));
+        assert!(matches!(
+            viewer.command_queue.front(),
+            Some(Command::ListWindows)
+        ));
+        viewer
+    }
+
+    /// The `.windows` action of an action list, as its raw parts.
+    fn windows_action(actions: &[Action]) -> &WindowSlice {
+        actions
+            .iter()
+            .find_map(|a| match a {
+                Action::Windows(w) => Some(w),
+                _ => None,
+            })
+            .expect("TestExpectedWindowsAction")
+    }
+
+    /// PORT NOTE: NOT a reference test. Miri target for DECISIONS B5 (the
+    /// `Viewer.Action.windows` row in `.port/audits/GHOSTTY_LIFETIMES.tsv`):
+    /// every `.windows` view is read, and formatted, after the `next()` that
+    /// produced it and before the next viewer mutation, on each path that
+    /// produces one: list-windows (view taken after `sync_layouts` replaced
+    /// the list), layout change (view taken before a `sync_layouts` that keeps
+    /// the list), a second list-windows that replaces the list, and a session
+    /// change (the empty view). Clean under Miri; the read-after-mutation
+    /// counterpart is `list_windows_action_read_after_session_change_is_ub_negative_control`.
+    #[test]
+    fn list_windows_action_borrow_is_valid_until_the_next_viewer_mutation() {
+        let mut viewer = viewer_awaiting_list_windows();
+
+        // list-windows
+        let actions = viewer.next(tmux(block_end(
+            "$1 @0 83 44 027b,83x44,0,0[83x20,0,0,0,83x23,0,21,1]",
+        )));
+        let w = windows_action(actions);
+        assert_eq!(1, w.len());
+        assert_eq!(0, w[0].id);
+        assert_eq!(83, w[0].width);
+        assert_eq!(44, w[0].height);
+        let (ptr, len) = (w.as_ptr(), w.len());
+        assert_eq!(
+            1,
+            actions
+                .iter()
+                .filter(|a| a.to_string()
+                    == "terminal.tmux.viewer.Viewer.Action{ .windows = [1 windows] }")
+                .count()
+        );
+        assert_eq!((viewer.windows.as_ptr(), viewer.windows.len()), (ptr, len));
+
+        // layout change of window 0
+        let actions = viewer.next(tmux(control::Notification::LayoutChange {
+            window_id: 0,
+            layout: b"e07b,83x44,0,0[83x22,0,0,0,83x21,0,23,2]".to_vec(),
+            visible_layout: b"e07b,83x44,0,0[83x22,0,0,0,83x21,0,23,2]".to_vec(),
+            raw_flags: b"*".to_vec(),
+        }));
+        let w = windows_action(actions);
+        assert_eq!(1, w.len());
+        assert_eq!(0, w[0].id);
+        assert!(format!("{:?}", w[0].layout).contains("Pane(2)"));
+        let (ptr, len) = (w.as_ptr(), w.len());
+        assert_eq!((viewer.windows.as_ptr(), viewer.windows.len()), (ptr, len));
+
+        // A window add queues another list-windows, whose reply replaces the
+        // list with three windows.
+        let _ = viewer.next(tmux(control::Notification::WindowAdd { id: 2 }));
+        drain_to_list_windows(&mut viewer);
+        let actions = viewer.next(tmux(block_end(
+            "$1 @0 83 44 027b,83x44,0,0[83x20,0,0,0,83x23,0,21,1]\n\
+             $1 @1 83 44 b7dd,83x44,0,0,0\n\
+             $1 @2 165 79 ca97,165x79,0,0[165x40,0,0,0,165x38,0,41,4]",
+        )));
+        let w = windows_action(actions);
+        assert_eq!(vec![0, 1, 2], w.iter().map(|w| w.id).collect::<Vec<_>>());
+        assert_eq!(165, w[2].width);
+        let (ptr, len) = (w.as_ptr(), w.len());
+        assert_eq!((viewer.windows.as_ptr(), viewer.windows.len()), (ptr, len));
+
+        // A session change: the empty view, with the old list gone.
+        let actions = viewer.next(tmux(control::Notification::SessionChanged {
+            id: 2,
+            name: b"second".to_vec(),
+        }));
+        let w = windows_action(actions);
+        assert!(w.is_empty());
+        assert_eq!(0, w.iter().count());
+        assert_eq!(0, viewer.windows.len());
+    }
+
+    /// PORT NOTE: NOT a reference test. The negative control for
+    /// `list_windows_action_borrow_is_valid_until_the_next_viewer_mutation`:
+    /// it keeps a list-windows view's raw parts past the next viewer mutation
+    /// (a session change, which frees the list) and reads through them. That
+    /// is the use-after-free the borrow forbids, so Miri must reject it:
+    /// `cargo +nightly miri test -p rustty-vt -- --ignored
+    /// list_windows_action_read_after_session_change_is_ub_negative_control`
+    /// fails with "Undefined Behavior: constructing invalid value of type
+    /// &[tmux::viewer::Window]: encountered a dangling reference
+    /// (use-after-free)". Natively the
+    /// read is undefined behaviour, so outside Miri the test prints a skip.
+    #[test]
+    #[ignore = "negative control: reads a tmux .windows action after the next viewer mutation (UB by design); run under Miri with --ignored, where it must fail"]
+    fn list_windows_action_read_after_session_change_is_ub_negative_control() {
+        if !cfg!(miri) {
+            eprintln!(
+                "SKIP list_windows_action_read_after_session_change_is_ub_negative_control: \
+                 only meaningful under Miri (natively the read is undefined behaviour)"
+            );
+            return;
+        }
+        let mut viewer = viewer_awaiting_list_windows();
+        let actions = viewer.next(tmux(block_end(
+            "$1 @0 83 44 027b,83x44,0,0[83x20,0,0,0,83x23,0,21,1]",
+        )));
+        let w = windows_action(actions);
+        let (ptr, len) = (w.as_ptr(), w.len());
+
+        // The next viewer mutation: the session change frees the list.
+        let _ = viewer.next(tmux(control::Notification::SessionChanged {
+            id: 2,
+            name: b"second".to_vec(),
+        }));
+
+        // SAFETY: none; this is the use-after-free Miri must report.
+        let stale = unsafe { std::slice::from_raw_parts(ptr, len) };
+        std::hint::black_box(stale[0].id);
+    }
+
     // test "session changed resets state"
     #[test]
     fn session_changed_resets_state() {
@@ -3012,11 +3226,23 @@ mod tests {
                 // Receive window layout with two panes (same format as "initial flow" test)
                 TestStep {
                     contains_tags: vec![ActionTag::Windows, ActionTag::Command],
-                    check: Some(Box::new(|v: &mut Viewer, _: &[Action]| {
+                    check: Some(Box::new(|v: &mut Viewer, actions: &[Action]| {
                         assert_eq!(1, v.session_id);
                         assert_eq!(1, v.windows.len());
                         assert_eq!(2, v.panes.count());
                         assert_eq!(b"3.5a".as_slice(), v.tmux_version.as_slice());
+
+                        for action in actions {
+                            if let Action::Windows(windows) = action {
+                                // The action must reference viewer-owned state,
+                                // not the temporary list used while parsing.
+                                assert_eq!(v.windows.as_ptr(), windows.as_ptr());
+                                assert_eq!(v.windows.len(), windows.len());
+                                assert_eq!(0usize, windows[0].id);
+                                return;
+                            }
+                        }
+                        panic!("TestExpectedWindowsAction");
                     })),
                     ..TestStep::new(tmux(block_end(
                         "$1 @0 83 44 027b,83x44,0,0[83x20,0,0,0,83x23,0,21,1]",
@@ -3614,6 +3840,9 @@ mod tests {
                             assert!(!t.modes.get(modes::Mode::Origin));
                             assert!(!t.modes.get(modes::Mode::KeypadKeys));
                             assert!(!t.modes.get(modes::Mode::CursorKeys));
+                            assert!(t.modes.get(modes::Mode::MouseEventButton));
+                            assert!(!t.modes.get(modes::Mode::MouseEventNormal));
+                            assert!(t.modes.get(modes::Mode::MouseFormatSgr));
                         }
                         // Pane 4: cursor at (10, 5), cursor visible, wraparound on
                         {
@@ -3633,7 +3862,7 @@ mod tests {
                         }
                     })),
                     ..TestStep::new(tmux(block_end(
-                        "%0;42;0;1;;;;0;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;;;0;39;8,16,24,32,40,48,56,64,72,80,88,96,104,112,120,128,136,144,152,160\n%4;10;5;1;;;;0;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;;;0;37;8,16,24,32,40,48,56,64,72,80,88,96,104,112,120,128,136,144,152,160",
+                        "%0;42;0;1;;;;0;4294967295;4294967295;0;1;0;0;0;0;1;0;0;1;;;0;39;8,16,24,32,40,48,56,64,72,80,88,96,104,112,120,128,136,144,152,160\n%4;10;5;1;;;;0;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;;;0;37;8,16,24,32,40,48,56,64,72,80,88,96,104,112,120,128,136,144,152,160",
                     )))
                 },
                 TestStep {
@@ -3892,8 +4121,8 @@ mod tests {
                 unsafe { &*primary }.cursor.y,
             )
         };
-        let state: &[u8] = b"%7;0;5;1;;;;0;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;;;2;20;8\n\
-              %8;0;23;1;;;;0;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;;;0;10;8";
+        let state: &[u8] = b"%7;0;5;1;;;;0;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;;;2;20;8\n\
+              %8;0;23;1;;;;0;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;;;0;10;8";
 
         // Pane 7's four captures, then the list-panes reply, which also carries
         // pane 8: pane 7 cursor row 5 and region 2-20, pane 8 cursor row 23 and
@@ -4057,7 +4286,7 @@ mod tests {
         }
         s.next_slice(&test_host::block(
             8,
-            b"%7;0;0;1;;;;0;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;;;0;23;8",
+            b"%7;0;0;1;;;;0;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;;;0;23;8",
         ));
         assert!(s.handler.viewer().command_queue.is_empty());
         s.next_slice(b"%output %7 after\n");
@@ -4146,9 +4375,7 @@ mod tests {
         use crate::tmux::test_host;
         assert!(matches!(regions.len(), 1 | 2));
         let pane7 = |(upper, lower): (usize, usize)| {
-            format!(
-                "%7;0;23;1;;;;1;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;;;{upper};{lower};8"
-            )
+            format!("%7;0;23;1;;;;1;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;;;{upper};{lower};8")
         };
         let pane7_region = |s: &mut test_host::HostStream| {
             let pane = s.handler.viewer().panes.get_ptr(&7).unwrap();
@@ -4180,7 +4407,7 @@ mod tests {
                 s.next_slice(&test_host::block(n, b""));
             }
             let state = pane7(second)
-                + "\n%8;0;0;1;;;;0;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;;;0;23;8";
+                + "\n%8;0;0;1;;;;0;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;;;0;23;8";
             s.next_slice(&test_host::block(13, state.as_bytes()));
             assert!(
                 s.handler.viewer().command_queue.is_empty(),
@@ -4232,7 +4459,7 @@ mod tests {
         }
         s.next_slice(&test_host::block(
             8,
-            b"%7;0;0;1;;;;0;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;;;0;23;1_0,2_0,3_,4",
+            b"%7;0;0;1;;;;0;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;;;0;23;1_0,2_0,3_,4",
         ));
         let pane = s.handler.viewer().panes.get_ptr(&7).unwrap();
         let tabs = &pane.terminal.tabstops;
