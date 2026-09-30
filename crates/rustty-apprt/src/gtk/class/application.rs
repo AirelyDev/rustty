@@ -295,7 +295,9 @@ mod imp {
         /// (Task 10). Control flag.
         pub running: Cell<bool>,
 
-        /// True once we've told systemd that startup is complete.
+        /// True once we've told systemd that startup is complete. Reloads
+        /// before then (e.g. syncing the color scheme during startup) must
+        /// not notify systemd, or it sees READY=1 before we're ready.
         ///
         /// PORTS: `application.zig:198-201` `systemd_ready: bool = false` (added
         /// `4eb308831`, P7-W8 T3). Reloads before then (e.g. syncing the color
@@ -4873,6 +4875,7 @@ mod action {
             rustty_os::systemd::notify::reloading();
         }
         let result = reload_config_inner(app, target, opts);
+        // When we exit this function tell systemd that reloading has finished.
         if notify_systemd {
             rustty_os::systemd::notify::ready();
         }
