@@ -9424,19 +9424,19 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   - If it is not re-entrant, close N459 with the evidence.
 - **closed (P7-W12 T0): no host re-enters the surface under `recomputeInitialSize` or its callers.**
   Traced statically in the Swift and GTK sources:
-  - macOS `initial_size`: `Rustty.App.swift:2034` `setInitialSize` calls `surfaceView(from:)`
+  - macOS `initial_size`: `Rustty.App.swift:2037` `setInitialSize` calls `surfaceView(from:)`
     (`:580`, `rustty_surface_userdata`, which reads the embedded `Surface.userdata` field, outside the
     core surface's bytes, like every surface-targeted action) and assigns `surfaceView.initialSize`.
     That is a plain stored `var initialSize: NSSize?` (`SurfaceView_AppKit.swift:121`): no `didSet`,
     not `@Published`, so the assignment runs no code and sends no `objectWillChange` (the class is an
     `ObservableObject` through `OSSurfaceView`, but only `@Published` properties publish). The
     `idealWidth`/`idealHeight` reads (`TerminalView.swift:104-105`) and `TerminalController`'s
-    `initialContentSize`/`defaultSize` reads (`:1119`, `:1781`) happen on SwiftUI's or AppKit's own
+    `initialContentSize`/`defaultSize` reads (`:1119`, `:1810`) happen on SwiftUI's or AppKit's own
     later passes, not inside the setter. So no `sizeDidChange` → `rustty_surface_set_size` can run
     while the `&mut self` receiver is protected.
   - macOS `cell_size` (the other host callback on the `setFontSize` → `setCellSize` →
-    `recomputeInitialSize` chain): `setCellSize` (`Rustty.App.swift:2074`) defers its only write,
-    `surfaceView.cellSize = ..`, with `DispatchQueue.main.async` (`:2087`), so the `@Published`
+    `recomputeInitialSize` chain): `setCellSize` (`Rustty.App.swift:2101`) defers its only write,
+    `surfaceView.cellSize = ..`, with `DispatchQueue.main.async` (`:2114`), so the `@Published`
     `cellSize` and its `onChange` observer run after the callback has returned.
   - GTK `initial_size` (`application.rs` `action::initial_size`) sets the surface's `default-size`
     GObject property. Nothing connects to `notify::default-size` (the only `connect_notify_local`
