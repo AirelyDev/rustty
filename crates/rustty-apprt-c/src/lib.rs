@@ -2191,7 +2191,9 @@ pub unsafe extern "C" fn rustty_surface_ime_point(
 // set_size / set_content_scale + mouse_button / mouse_pos / mouse_scroll / key /
 // text / set_focus). The surface-action exports forward to the backend `App`'s
 // `perform_action` (the apprt-api trait — E6 `open_config` precedent, here with a
-// `Target::Surface`) or the core surface directly; the clipboard sink forwards to
+// `Target::Surface`) or the core surface directly; since a1bf5b5e1 request_close /
+// split / split_focus go through the core surface's `performBindingAction`, the
+// keybind path, so menus and keybinds share one route; the clipboard sink forwards to
 // the backend `Surface::completeClipboardRequest` (E3); the inspector sinks forward
 // to the E4 `Inspector` methods. Every export here needs a LIVE surface (created via
 // `rustty_surface_new`), and the inspector sinks additionally need a LIVE
@@ -2210,9 +2212,31 @@ pub unsafe extern "C" fn rustty_surface_ime_point(
 /// `ptr` must be a valid pointer returned by [`rustty_surface_new`].
 #[no_mangle]
 pub unsafe extern "C" fn rustty_surface_request_close(ptr: *mut Surface) {
-    // ptr.core_surface.close();
+    // const handled = ptr.core_surface.performBindingAction(.{ .close_surface = {} }) catch |err| {
+    //     log.err("error requesting close err={}", .{err});
+    //     return;
+    // };
+    // if (!handled) ptr.core_surface.close();
+
+    // Prefer the binding path so close goes through the same Surface
+    // hook as a close-surface keybind, rather than a raw close() that
+    // bypasses it.
     // SAFETY: `ptr` validity is the caller's contract.
-    unsafe { (*ptr).core_surface.close() };
+    let handled = match unsafe {
+        (*ptr)
+            .core_surface
+            .performBindingAction(binding::Action::CloseSurface)
+    } {
+        Ok(v) => v,
+        Err(err) => {
+            log::error!(target: LOG_SCOPE, "error requesting close err={err:?}");
+            return;
+        }
+    };
+    if !handled {
+        // SAFETY: as above.
+        unsafe { (*ptr).core_surface.close() };
+    }
 }
 
 /// C: rustty_surface_split
@@ -2223,27 +2247,31 @@ pub unsafe extern "C" fn rustty_surface_request_close(ptr: *mut Surface) {
 /// `ptr` must be a valid pointer returned by [`rustty_surface_new`].
 #[no_mangle]
 pub unsafe extern "C" fn rustty_surface_split(ptr: *mut Surface, direction: SplitDirection) {
-    // _ = ptr.app.performAction(
-    //     .{ .surface = &ptr.core_surface },
-    //     .new_split,
-    //     direction,
-    // ) catch |err| {
+    // const action: input.Binding.Action = .{
+    //     .new_split = switch (direction) {
+    //         .right => .right,
+    //         .left => .left,
+    //         .down => .down,
+    //         .up => .up,
+    //     },
+    // };
+    // _ = ptr.core_surface.performBindingAction(action) catch |err| {
     //     log.err("error creating new split err={}", .{err});
     //     return;
     // };
-    //
-    // PORT NOTE: the reference `*App` method `performAction(.{ .surface =
-    // &ptr.core_surface }, .new_split, direction)` maps to the `apprt_api::App` trait
-    // `perform_action(Target::Surface(&core_surface), Action::NewSplit(direction))`
-    // (the E6 `open_config` precedent — here the `Target` carries the surface, so `C`
-    // is inferred as `CoreSurface`). The `bool` result is discarded (reference `_ =`).
+
+    // Menu shortcuts call this C API directly. Route through
+    // performBindingAction so menus and keybinds share one path,
+    // matching GTK.
+    let action = binding::Action::NewSplit(match direction {
+        SplitDirection::Right => binding::SplitDirection::Right,
+        SplitDirection::Left => binding::SplitDirection::Left,
+        SplitDirection::Down => binding::SplitDirection::Down,
+        SplitDirection::Up => binding::SplitDirection::Up,
+    });
+    // PORT NOTE: the `bool` result is discarded (reference `_ =`).
     // SAFETY: `ptr` validity is the caller's contract.
-    if let Err(err) = unsafe {
-        (*(*ptr).app).perform_action(
-            Target::Surface(&(*ptr).core_surface),
-            Action::NewSplit(direction),
-        )
-    } {
+    if let Err(err) = unsafe { (*ptr).core_surface.performBindingAction(action) } {
         log::error!(target: LOG_SCOPE, "error creating new split err={err:?}");
     }
 }
@@ -2256,25 +2284,31 @@ pub unsafe extern "C" fn rustty_surface_split(ptr: *mut Surface, direction: Spli
 /// `ptr` must be a valid pointer returned by [`rustty_surface_new`].
 #[no_mangle]
 pub unsafe extern "C" fn rustty_surface_split_focus(ptr: *mut Surface, direction: GotoSplit) {
-    // _ = ptr.app.performAction(
-    //     .{ .surface = &ptr.core_surface },
-    //     .goto_split,
-    //     direction,
-    // ) catch |err| {
-    //     log.err("error creating new split err={}", .{err});
+    // const action: input.Binding.Action = .{
+    //     .goto_split = switch (direction) {
+    //         .previous => .previous,
+    //         .next => .next,
+    //         .up => .up,
+    //         .down => .down,
+    //         .left => .left,
+    //         .right => .right,
+    //     },
+    // };
+    // _ = ptr.core_surface.performBindingAction(action) catch |err| {
+    //     log.err("error focusing split err={}", .{err});
     //     return;
     // };
-    //
-    // PORT NOTE: the reference log message is "error creating new split" verbatim —
-    // a copy-paste of `ghostty_surface_split`'s message; preserved faithfully (R3).
+    let action = binding::Action::GotoSplit(match direction {
+        GotoSplit::Previous => binding::SplitFocusDirection::Previous,
+        GotoSplit::Next => binding::SplitFocusDirection::Next,
+        GotoSplit::Up => binding::SplitFocusDirection::Up,
+        GotoSplit::Down => binding::SplitFocusDirection::Down,
+        GotoSplit::Left => binding::SplitFocusDirection::Left,
+        GotoSplit::Right => binding::SplitFocusDirection::Right,
+    });
     // SAFETY: `ptr` validity is the caller's contract.
-    if let Err(err) = unsafe {
-        (*(*ptr).app).perform_action(
-            Target::Surface(&(*ptr).core_surface),
-            Action::GotoSplit(direction),
-        )
-    } {
-        log::error!(target: LOG_SCOPE, "error creating new split err={err:?}");
+    if let Err(err) = unsafe { (*ptr).core_surface.performBindingAction(action) } {
+        log::error!(target: LOG_SCOPE, "error focusing split err={err:?}");
     }
 }
 
@@ -3662,6 +3696,98 @@ mod tests {
         assert!(
             stdout.contains(rustty_identity::VERSION),
             "version output missing from: {stdout}",
+        );
+    }
+}
+
+// a1bf5b5e1: `rustty_surface_request_close`, `_split` and `_split_focus` route
+// through the core surface's `performBindingAction`, so a menu item and a keybind
+// share one path, and each carries its own error log (UD31's embedded half).
+//
+// The error arms are unreachable from a live surface: the embedded
+// `App::perform_action` always returns `Ok` (the host callback's `bool`), and the
+// three binding arms fail only through it. So the routing and the log texts are
+// pinned by scanning this file's own SOURCE (the `rustty-web-canvas`
+// `every_unmangled_export_installs_the_log_backend` precedent); the live routing
+// is pinned by `macos_window_host.rs::split_and_close_exports_reach_the_host`.
+// This scan becomes obsolete once the embedded `perform_action` can fail: then a
+// captured-log test on a live surface should replace it.
+#[cfg(test)]
+mod binding_route_tests {
+    const SRC: &str = include_str!("lib.rs");
+
+    /// The body of `pub unsafe extern "C" fn <name>(`, up to the next export.
+    fn export_body(name: &str) -> &'static str {
+        let head = format!("pub unsafe extern \"C\" fn {name}(");
+        let start = SRC
+            .find(&head)
+            .unwrap_or_else(|| panic!("export {name} not found"));
+        let rest = &SRC[start + head.len()..];
+        let end = rest.find("#[no_mangle]").unwrap_or(rest.len());
+        &rest[..end]
+    }
+
+    /// The code of a body, with `//` comment lines dropped so a quoted
+    /// reference line cannot satisfy an assertion.
+    fn code(body: &str) -> std::string::String {
+        body.lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn split_focus_logs_error_focusing_split() {
+        let c = code(export_body("rustty_surface_split_focus"));
+        assert!(
+            c.contains("performBindingAction("),
+            "split_focus must route through performBindingAction:\n{c}"
+        );
+        assert!(
+            c.contains("\"error focusing split err={err:?}\""),
+            "split_focus must log \"error focusing split\" (a1bf5b5e1):\n{c}"
+        );
+        assert!(
+            !c.contains("error creating new split"),
+            "split_focus must not carry split's copy-pasted log (UD31):\n{c}"
+        );
+        assert!(
+            !c.contains("perform_action("),
+            "split_focus must not call the apprt perform_action directly:\n{c}"
+        );
+    }
+
+    #[test]
+    fn split_routes_through_perform_binding_action() {
+        let c = code(export_body("rustty_surface_split"));
+        assert!(
+            c.contains("performBindingAction("),
+            "split must route through performBindingAction:\n{c}"
+        );
+        assert!(
+            c.contains("\"error creating new split err={err:?}\""),
+            "split keeps its log text:\n{c}"
+        );
+        assert!(
+            !c.contains("perform_action("),
+            "split must not call the apprt perform_action directly:\n{c}"
+        );
+    }
+
+    #[test]
+    fn request_close_routes_through_perform_binding_action() {
+        let c = code(export_body("rustty_surface_request_close"));
+        assert!(
+            c.contains("performBindingAction(binding::Action::CloseSurface)"),
+            "request_close must route through performBindingAction:\n{c}"
+        );
+        assert!(
+            c.contains("\"error requesting close err={err:?}\""),
+            "request_close must log \"error requesting close\" (a1bf5b5e1):\n{c}"
+        );
+        assert!(
+            c.contains(".core_surface.close()"),
+            "request_close keeps close() as the unhandled fallback:\n{c}"
         );
     }
 }
