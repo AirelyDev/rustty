@@ -295,6 +295,15 @@ mod imp {
         /// (Task 10). Control flag.
         pub running: Cell<bool>,
 
+        /// True once we've told systemd that startup is complete.
+        ///
+        /// PORTS: `application.zig:198-201` `systemd_ready: bool = false` (added
+        /// `4eb308831`, P7-W8 T3). Reloads before then (e.g. syncing the color
+        /// scheme during startup) must not notify systemd, or it sees `READY=1`
+        /// before we're ready. Set true once, at the same point the reference
+        /// sets it (`:564`, right after the first `systemd.notify.ready()`).
+        pub systemd_ready: Cell<bool>,
+
         /// State and logic for the underlying windowing protocol.
         ///
         /// PORTS: `application.zig:176` `winproto: winprotopkg.App` — the
@@ -558,14 +567,21 @@ mod imp {
             //
             // (`:1311`.)
             self.startup_xev();
+            // Setup some signal handlers. This must happen before anything
+            // that might notify systemd, since with Type=notify-reload
+            // systemd refuses to start us if our reload signal has no
+            // handler.
+            //
+            // PORTS: `application.zig:1390` (order swapped with the style
+            // manager by `4eb308831`, P7-W8 T3): signals now install BEFORE
+            // the style manager, because syncing the color scheme during
+            // startup can trigger a config reload, which must not race
+            // ahead of the SIGUSR2 handler.
+            self.startup_signals();
             // Setup our style manager (light/dark mode)
             //
-            // (`:1314`.)
+            // (`:1314` before `4eb308831`; now runs after signals, `:1394`.)
             self.startup_style_manager();
-            // Setup some signal handlers
-            //
-            // (`:1317`.)
-            self.startup_signals();
             // Setup our action map (`:1320`).
             self.startup_action_map();
             // Setup our global shortcuts (`:1323`).
@@ -3577,6 +3593,11 @@ impl Application {
 
         // Tell systemd that we are ready (`:543`).
         rustty_os::systemd::notify::ready();
+        // PORTS: `application.zig:564` `priv.systemd_ready = true;` (added
+        // `4eb308831`, P7-W8 T3). Reloads before this point (e.g. syncing the
+        // color scheme during startup) must not notify systemd — see
+        // `reload_config`'s `systemd_ready` gate.
+        imp.systemd_ready.set(true);
 
         log::debug!(target: LOG_SCOPE, "entering runloop");
         imp.running.set(true);
@@ -4932,18 +4953,29 @@ mod action {
         target: Target<'_, C>,
         opts: rustty_apprt_api::action::ReloadConfig,
     ) -> Result<(), ReloadConfigError> {
-        // Tell systemd that reloading has started.
+        // Tell systemd that reloading has started, but only once startup is
+        // complete. A reload during startup is not a reload to systemd.
         //
-        // When we exit this function tell systemd that reloading has finished.
-        //
-        // (`:2448`, and — via the trailing `notify::ready()` after the body —
-        // `:2451`.) The reference's
-        // `defer systemd.notify.ready()` (`:2451`) must run on EVERY exit path
-        // (including the `?` early-returns of the hard-reload load), so the body runs
-        // in an inner closure and `ready()` fires unconditionally afterwards.
-        rustty_os::systemd::notify::reloading();
+        // (`:2445-2448`, and — via the trailing `notify::ready()` after the
+        // body — `:2451`. `notify_systemd`/the `systemd_ready` gate added by
+        // `4eb308831`, P7-W8 T3: syncing the color scheme during startup can
+        // trigger a config reload before `startup_signals` has installed the
+        // SIGUSR2 handler, and systemd 262+ refuses to start a
+        // `Type=notify-reload` unit whose reload signal has no handler if it
+        // sees `RELOADING=1`/`READY=1` that early.) The reference's
+        // `defer if (notify_systemd) systemd.notify.ready()` (`:2451`) must
+        // run on EVERY exit path (including the `?` early-returns of the
+        // hard-reload load), so the body runs in an inner closure and
+        // `ready()` fires unconditionally (subject to the same gate)
+        // afterwards.
+        let notify_systemd = app.imp().systemd_ready.get();
+        if notify_systemd {
+            rustty_os::systemd::notify::reloading();
+        }
         let result = reload_config_inner(app, target, opts);
-        rustty_os::systemd::notify::ready();
+        if notify_systemd {
+            rustty_os::systemd::notify::ready();
+        }
         result
     }
 
@@ -5853,6 +5885,93 @@ mod tests {
     // `adding_actions_to_an_object`". A skip that reports `1 passed` is not a
     // pattern to follow: every one of these now calls
     // `crate::gtk::init_for_display_test`, so the others FAIL, by name.
+
+    /// PORTS: `application.zig:201,564,1390,2445-2451` `systemd_ready`
+    /// (`4eb308831`, P7-W8 T3). A reload triggered before startup completes —
+    /// e.g. syncing the color scheme during startup — must send NO systemd
+    /// notify. With `Type=notify-reload`, systemd 262+ refuses to start a
+    /// unit whose reload signal has no handler if it observes
+    /// `RELOADING=1`/`READY=1` that early (upstream's motivating bug,
+    /// #14398). Drives a real [`action::reload_config`] through a fake
+    /// `NOTIFY_SOCKET` (a bound `AF_UNIX` `SOCK_DGRAM`, exactly what
+    /// `rustty_os::systemd::notify::send` connects to) and asserts the
+    /// socket receives nothing. `register()` runs the `startup` vfunc
+    /// synchronously but never enters the hand-rolled run loop, so
+    /// `systemd_ready` is exactly as it is "before startup completes": still
+    /// false, no `READY=1` sent yet.
+    ///
+    /// SAFETY: this test mutates the process-global `NOTIFY_SOCKET`
+    /// environment variable. Like every GTK test in this module it must run
+    /// alone (`xvfb-run -a cargo test -p rustty-apprt --features gtk --
+    /// --ignored --exact reload_config_before_startup_completes_sends_no_systemd_notify`;
+    /// see the module doc above), so no concurrent test observes the
+    /// mutation.
+    #[test]
+    #[ignore = "requires a display; run via xvfb-run -a cargo test -p rustty-apprt --features gtk -- --ignored --exact"]
+    fn reload_config_before_startup_completes_sends_no_systemd_notify() {
+        use gio::prelude::ApplicationExt as _;
+        use std::io::ErrorKind;
+        use std::os::unix::net::UnixDatagram;
+
+        crate::gtk::init_for_display_test(
+            "reload_config_before_startup_completes_sends_no_systemd_notify",
+        );
+        let _ = libadwaita::init();
+
+        // A fake systemd notify socket: a bound AF_UNIX SOCK_DGRAM, exactly
+        // what `sd_notify(3)` (and `rustty_os::systemd::notify::send`)
+        // connects to.
+        let dir =
+            std::env::temp_dir().join(format!("rustty-tg-systemd-ready-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let sock_path = dir.join("notify.sock");
+        let _ = std::fs::remove_file(&sock_path);
+        let socket = UnixDatagram::bind(&sock_path).expect("bind fake notify socket");
+        socket
+            .set_read_timeout(Some(std::time::Duration::from_millis(200)))
+            .expect("set read timeout");
+
+        // SAFETY: see the doc comment above — this GTK test runs alone.
+        unsafe { std::env::set_var("NOTIFY_SOCKET", &sock_path) };
+
+        let mut core_app: Box<CoreApp<Double>> =
+            CoreApp::<Double>::create(Global).expect("core app");
+        let core_ptr: *mut CoreApp<Double> = &mut *core_app;
+        let app = build_test_app(core_ptr.cast());
+
+        // `register` runs `startup` synchronously (installs signals, the
+        // style manager, actions, ...) but the run loop — and its
+        // `systemd.notify.ready(); systemd_ready = true;` — never executes.
+        app.register(gio::Cancellable::NONE).expect("register");
+        assert!(
+            !app.imp().systemd_ready.get(),
+            "setup: systemd_ready must still be false before the run loop's \
+             first notify::ready()"
+        );
+
+        let result = action::reload_config(
+            &app,
+            Target::<AppTargetHandle>::App,
+            rustty_apprt_api::action::ReloadConfig { soft: true },
+        );
+        assert!(result.is_ok(), "reload_config: {result:?}");
+
+        let mut buf = [0u8; 256];
+        let outcome = socket.recv(&mut buf);
+        // SAFETY: see the doc comment above — this GTK test runs alone.
+        unsafe { std::env::remove_var("NOTIFY_SOCKET") };
+        let _ = std::fs::remove_file(&sock_path);
+        let _ = std::fs::remove_dir_all(&dir);
+        match outcome {
+            Ok(n) => panic!(
+                "reload_config before startup completed must send NO systemd \
+                 notify, but the fake socket received {:?}",
+                String::from_utf8_lossy(&buf[..n])
+            ),
+            Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {}
+            Err(e) => panic!("unexpected recv error: {e}"),
+        }
+    }
 
     /// S49-F3: `loadCustomCss` (`application.zig:1119-1199`) against real files.
     ///
