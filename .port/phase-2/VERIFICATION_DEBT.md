@@ -2537,3 +2537,24 @@ for i in $(seq 1 500); do lldb --batch -o run -k 'thread backtrace all' -k quit 
 checking each run's output for `exited with status = 0` (lldb's own exit status does not say whether the process
 crashed), and alternate `--test-threads=1` runs to separate threading from Metal. A signal gives no Rust backtrace;
 the `thread backtrace all` of the stopped process is the evidence.
+
+---
+
+## V27. The `page::` Miri group exceeds the 30-minute bound — **ENVIRONMENT-BLOCKED (time)** [P7-W1 T2, Ruling 18, 2026-09-29]
+
+**Blocked on:** run time, not correctness. The `page::` Miri test group took 52 minutes on macOS
+during task P7-W1 T2 (Ruling 18), over the 30-minute bound the parity-closure Miri lanes hold
+tasks to. The group itself passed; nothing here suggests a real Miri finding, only that the group
+does not fit in a task's own Miri budget and has to be discharged by a lane built for long runs.
+
+**Discharged by:** the P7-W12 T2 Miri lane, together with V28.
+
+## V28. The P7-W1 T5 Miri debt — **ENVIRONMENT-BLOCKED (time)** [P7-W1 T5, Ruling 40, 2026-09-29]
+
+**Blocked on:** run time. Three tests each hit the 30-minute bound on their own and were not
+carried to completion under Miri during task P7-W1 T5 (Ruling 40): the idle-page test, the clone
+failure sweep, and the clone_from test. Three more never ran under Miri at all in that task: the
+reset, init and clone_grow teardown tests. And the full `pagelist` group was never run as one
+group under Miri — only individual tests or sub-groups were tried, each against its own bound.
+
+**Discharged by:** the P7-W12 T2 Miri lane, together with V27.
