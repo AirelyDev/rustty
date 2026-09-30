@@ -908,6 +908,484 @@ fn run_search_callback(fixed: bool) {
     }
 }
 
+// ===========================================================================
+// N449 (P7-W7 T5d): the io writer thread's `Termio` methods, the backend
+// chain, and the main thread's backend reads
+// ===========================================================================
+//
+// The io writer thread runs `Termio` methods (`focusGained`, `resize`,
+// `changeConfig`, `queueWrite`, ... and `threadExit` after its loop ends).
+// Shipped, each is `&mut self`: a protected Unique over the whole `Termio`,
+// terminal included, while the io read thread writes the terminal under the
+// renderer mutex. They reach the backend through `&mut Backend` -> `&mut Exec`
+// -> `&mut Subprocess` -> `&mut Pty` (`resize` -> `setSize`; `threadExit` ->
+// `stop`). The main thread meanwhile reads the backend: `getForegroundPid`,
+// `getTtyName` (which WRITES the pty's tty-name cache), and the close-confirm
+// `childExitedAbnormally` read of `subprocess.args`.
+//
+// The fix modelled here, as shipped in the port:
+// - every writer-thread `Termio` method is raw-self and reaches only the
+//   fields it touches, by place (the `processOutput` shape);
+// - the `Backend` / `Exec` / `Subprocess` cross-thread methods are raw-self
+//   (`Backend` is `#[repr(transparent)]`, so `*mut Backend` casts to
+//   `*mut Exec` without a retag);
+// - the pty's `setSize` / `getForegroundPid` / `getTtyName` take `&self`, and
+//   the tty-name cache is interior-mutable (`UnsafeCell` buffer, `Cell`
+//   length), so a shared pty reference covers none of the cache bytes;
+// - the close-confirm read borrows `subprocess.args` only.
+
+use std::cell::{Cell, UnsafeCell};
+
+/// `rustty_os::pty::PosixPty` (the fields the model's threads touch).
+struct N449Pty {
+    master: i32,
+    tty_name_buf: UnsafeCell<[u8; 8]>,
+    tty_name: Cell<Option<usize>>,
+}
+
+impl N449Pty {
+    /// SHIPPED `setSize(&mut self, ..)`: a protected Unique over the whole pty.
+    fn set_size_mut(&mut self, rows: u16) -> i32 {
+        std::hint::black_box(self.master) + i32::from(rows)
+    }
+    /// FIXED `setSize(&self, ..)`: reads `master` only.
+    fn set_size(&self, rows: u16) -> i32 {
+        std::hint::black_box(self.master) + i32::from(rows)
+    }
+    /// SHIPPED `getForegroundPid(&mut self)`.
+    fn get_foreground_pid_mut(&mut self) -> Option<u64> {
+        Some(self.master as u64)
+    }
+    /// FIXED `getForegroundPid(&self)`.
+    fn get_foreground_pid(&self) -> Option<u64> {
+        Some(self.master as u64)
+    }
+    /// SHIPPED `getTtyName(&mut self)`: fills the cache on first use.
+    fn get_tty_name_mut(&mut self) -> Option<usize> {
+        if let Some(len) = self.tty_name.get() {
+            return Some(len);
+        }
+        self.tty_name_buf.get_mut()[0] = b'p';
+        self.tty_name.set(Some(1));
+        Some(1)
+    }
+    /// FIXED `getTtyName(&self)`: the cache is interior-mutable.
+    fn get_tty_name(&self) -> Option<usize> {
+        if let Some(len) = self.tty_name.get() {
+            return Some(len);
+        }
+        unsafe { (*self.tty_name_buf.get())[0] = b'p' };
+        self.tty_name.set(Some(1));
+        Some(1)
+    }
+}
+
+/// `termio::exec::Subprocess`.
+struct N449Subprocess {
+    args: Vec<u32>,
+    grid_size: (u16, u16),
+    pty: Option<N449Pty>,
+    process: Option<u32>,
+}
+
+impl N449Subprocess {
+    fn resize_mut(&mut self, g: (u16, u16)) {
+        self.grid_size = g;
+        if let Some(pty) = &mut self.pty {
+            pty.set_size_mut(g.0);
+        }
+    }
+    /// FIXED raw-self; `pty_shared == false` keeps the shipped `&mut Pty`
+    /// `setSize` (a partial arm).
+    unsafe fn resize(self_: *mut Self, g: (u16, u16), pty_shared: bool) {
+        unsafe {
+            (*self_).grid_size = g;
+            if pty_shared {
+                if let Some(pty) = &(*self_).pty {
+                    pty.set_size(g.0);
+                }
+            } else if let Some(pty) = &mut (*self_).pty {
+                pty.set_size_mut(g.0);
+            }
+        }
+    }
+    fn get_foreground_pid_mut(&mut self) -> Option<u64> {
+        self.pty.as_mut()?.get_foreground_pid_mut()
+    }
+    unsafe fn get_foreground_pid(self_: *mut Self) -> Option<u64> {
+        unsafe { (*self_).pty.as_ref()?.get_foreground_pid() }
+    }
+    fn get_tty_name_mut(&mut self) -> Option<usize> {
+        self.pty.as_mut()?.get_tty_name_mut()
+    }
+    unsafe fn get_tty_name(self_: *mut Self) -> Option<usize> {
+        unsafe { (*self_).pty.as_ref()?.get_tty_name() }
+    }
+    fn stop_mut(&mut self) {
+        self.process = None;
+    }
+    unsafe fn stop(self_: *mut Self) {
+        unsafe { (*self_).process = None };
+    }
+}
+
+/// `termio::exec::Exec`.
+struct N449Exec {
+    subprocess: N449Subprocess,
+}
+
+/// `termio::backend::Backend` (`#[repr(transparent)]` in the fix).
+#[repr(transparent)]
+enum N449Backend {
+    Exec(N449Exec),
+}
+
+impl N449Backend {
+    /// FIXED: `Backend::exec_ptr`, the single-variant projection without a
+    /// retag (sound because of `#[repr(transparent)]`).
+    fn exec_ptr(self_: *mut Self) -> *mut N449Exec {
+        self_.cast()
+    }
+    // SHIPPED `&mut self` delegation (`match self { Backend::Exec(exec) => .. }`).
+    fn resize_mut(&mut self, g: (u16, u16)) {
+        match self {
+            N449Backend::Exec(exec) => exec.subprocess.resize_mut(g),
+        }
+    }
+    fn focus_gained_mut(&mut self) {
+        match self {
+            N449Backend::Exec(exec) => {
+                let _ = exec;
+            }
+        }
+    }
+    fn queue_write_mut(&mut self) {
+        match self {
+            N449Backend::Exec(exec) => {
+                let _ = exec;
+            }
+        }
+    }
+    fn thread_exit_mut(&mut self) {
+        match self {
+            N449Backend::Exec(exec) => exec.subprocess.stop_mut(),
+        }
+    }
+    fn get_foreground_pid_mut(&mut self) -> Option<u64> {
+        match self {
+            N449Backend::Exec(exec) => exec.subprocess.get_foreground_pid_mut(),
+        }
+    }
+    fn get_tty_name_mut(&mut self) -> Option<usize> {
+        match self {
+            N449Backend::Exec(exec) => exec.subprocess.get_tty_name_mut(),
+        }
+    }
+    // FIXED raw-self delegation.
+    unsafe fn resize(self_: *mut Self, g: (u16, u16), pty_shared: bool) {
+        let exec = Self::exec_ptr(self_);
+        unsafe { N449Subprocess::resize(&raw mut (*exec).subprocess, g, pty_shared) }
+    }
+    unsafe fn thread_exit(self_: *mut Self) {
+        let exec = Self::exec_ptr(self_);
+        unsafe { N449Subprocess::stop(&raw mut (*exec).subprocess) }
+    }
+    unsafe fn get_foreground_pid(self_: *mut Self) -> Option<u64> {
+        let exec = Self::exec_ptr(self_);
+        unsafe { N449Subprocess::get_foreground_pid(&raw mut (*exec).subprocess) }
+    }
+    unsafe fn get_tty_name(self_: *mut Self) -> Option<usize> {
+        let exec = Self::exec_ptr(self_);
+        unsafe { N449Subprocess::get_tty_name(&raw mut (*exec).subprocess) }
+    }
+}
+
+/// `StreamHandler`: holds the terminal pointer the read thread writes through.
+struct N449Handler {
+    terminal: *mut Terminal,
+    enquiry: u32,
+}
+
+/// `terminal_stream: Stream(StreamHandler)`.
+struct N449Stream {
+    handler: N449Handler,
+    parser: u32,
+}
+
+/// `termio::Termio` with the fields the writer, read and main threads touch.
+struct N449Termio {
+    terminal: Terminal,
+    backend: N449Backend,
+    config: u32,
+    terminal_stream: N449Stream,
+    mailbox: IoMailbox,
+    size: (u32, u32),
+    last_cursor_reset: u32,
+    renderer_state: *mut State,
+    renderer_wakeup: AtomicBool,
+}
+
+impl N449Termio {
+    /// `processOutput(io: *mut Termio, ..)`: the read thread (raw-self, as
+    /// shipped). The stream parses and its handler writes the terminal through
+    /// its own pointer, under the renderer mutex.
+    unsafe fn process_output(io: *mut Self) {
+        unsafe {
+            let rs = (*io).renderer_state;
+            (*(*rs).mutex).lock();
+            (*io).terminal_stream.parser += 1;
+            let t = (*io).terminal_stream.handler.terminal;
+            (*t).cursor += 1;
+            (&mut (*t).rows)[0] += 1;
+            (*io).last_cursor_reset += 1;
+            (*(*rs).mutex).unlock();
+        }
+    }
+
+    // ---- SHIPPED: `&mut self` writer-thread methods ----
+
+    fn focus_gained_mut(&mut self) {
+        unsafe {
+            let rs = self.renderer_state;
+            (*(*rs).mutex).lock();
+            let _mode = (*(*rs).terminal).cursor;
+            (*(*rs).mutex).unlock();
+        }
+        self.queue_write_mut();
+        self.backend.focus_gained_mut();
+    }
+    fn resize_mut(&mut self, g: (u16, u16)) {
+        self.size = (u32::from(g.0), u32::from(g.1));
+        self.backend.resize_mut(g);
+        unsafe { (*(*self.renderer_state).mutex).lock() };
+        self.terminal.rows[1] += 1;
+        unsafe { (*(*self.renderer_state).mutex).unlock() };
+        self.renderer_wakeup.store(true, Ordering::Release);
+    }
+    fn change_config_mut(&mut self, c: u32) {
+        unsafe { (*(*self.renderer_state).mutex).lock() };
+        self.config = c;
+        self.terminal_stream.handler.enquiry = self.config;
+        unsafe { (*self.terminal_stream.handler.terminal).cursor += 1 };
+        self.terminal.cursor = 0;
+        unsafe { (*(*self.renderer_state).mutex).unlock() };
+    }
+    fn queue_write_mut(&mut self) {
+        self.backend.queue_write_mut();
+    }
+    fn thread_exit_mut(&mut self) {
+        self.backend.thread_exit_mut();
+    }
+
+    // ---- FIXED: raw-self, narrow ----
+
+    unsafe fn focus_gained(self_: *mut Self) {
+        unsafe {
+            let rs = (*self_).renderer_state;
+            (*(*rs).mutex).lock();
+            let _mode = (*(*rs).terminal).cursor;
+            (*(*rs).mutex).unlock();
+            Self::queue_write(self_);
+            // `Backend::focusGained(&raw mut (*self_).backend, td, ..)`: the
+            // exec half touches only `td`.
+            let _ = N449Backend::exec_ptr(&raw mut (*self_).backend);
+        }
+    }
+    unsafe fn resize(self_: *mut Self, g: (u16, u16), pty_shared: bool) {
+        unsafe {
+            (*self_).size = (u32::from(g.0), u32::from(g.1));
+            N449Backend::resize(&raw mut (*self_).backend, g, pty_shared);
+            let rs = (*self_).renderer_state;
+            (*(*rs).mutex).lock();
+            (&mut (*self_).terminal.rows)[1] += 1;
+            (*(*rs).mutex).unlock();
+            (*self_).renderer_wakeup.store(true, Ordering::Release);
+        }
+    }
+    /// `terminal_early` borrows the terminal place BEFORE the handler writes
+    /// the terminal through its own pointer (a negative arm).
+    unsafe fn change_config(self_: *mut Self, c: u32, terminal_early: bool) {
+        unsafe {
+            let rs = (*self_).renderer_state;
+            (*(*rs).mutex).lock();
+            if terminal_early {
+                let t = &mut (*self_).terminal;
+                t.cursor = 1;
+                (*(*self_).terminal_stream.handler.terminal).cursor += 1;
+                t.cursor = 0;
+                (*(*rs).mutex).unlock();
+                return;
+            }
+            // As shipped: `config` and `terminal_stream` borrowed by place; the
+            // handler's `changeConfig` writes the terminal through its own
+            // pointer (`set_default_cursor_style`); the terminal place is
+            // borrowed only after it.
+            let this_config = &mut (*self_).config;
+            let terminal_stream = &mut (*self_).terminal_stream;
+            *this_config = c;
+            terminal_stream.handler.enquiry = *this_config;
+            (*terminal_stream.handler.terminal).cursor += 1;
+            let t = &mut (*self_).terminal;
+            t.cursor = 0;
+            (*(*rs).mutex).unlock();
+        }
+    }
+    unsafe fn queue_write(self_: *mut Self) {
+        // `Backend::queueWrite(&raw mut (*self_).backend, ..)`: the exec half
+        // touches only `td`.
+        let _ = N449Backend::exec_ptr(unsafe { &raw mut (*self_).backend });
+    }
+    unsafe fn thread_exit(self_: *mut Self) {
+        unsafe { N449Backend::thread_exit(&raw mut (*self_).backend) };
+    }
+}
+
+/// Which pieces of the fix are applied (all `true` is the shipped fix).
+#[derive(Clone, Copy)]
+struct N449Shape {
+    /// Writer-thread `Termio` methods raw-self (else `&mut self`).
+    termio_raw: bool,
+    /// The main thread's `getForegroundPid` / `getTtyName` reach the backend
+    /// raw-self (else the T5c `&mut Backend` -> `&mut Pty` chain). The raw
+    /// writer methods always use the raw backend chain.
+    backend_raw: bool,
+    /// The pty's `setSize` takes `&self` (else `&mut self`).
+    pty_shared: bool,
+    /// The close-confirm read borrows `subprocess.args` only (else a whole
+    /// `&Backend`).
+    close_confirm_narrow: bool,
+    /// `changeConfig` borrows the terminal before the stream handler writes
+    /// it through its own pointer (else after, as shipped).
+    terminal_early: bool,
+}
+
+fn run_n449(shape: N449Shape) {
+    let m = Box::into_raw(Box::new(Mutex::new()));
+    let (_, _, _, state, _) = new_blocks(m);
+    let state_box = ThreadSharedBox::new(state);
+    let io_box = ThreadSharedBox::<N449Termio>::new_uninit();
+    unsafe {
+        let io = io_box.as_ptr();
+        // `renderer_state.terminal = &self.io.terminal`, then `Termio.init`
+        // in place: the stream handler's terminal pointer is the same place.
+        (*state_box.as_ptr()).terminal = &raw mut (*io).terminal;
+        io.write(N449Termio {
+            terminal: Terminal {
+                rows: vec![0; 4],
+                cursor: 0,
+            },
+            backend: N449Backend::Exec(N449Exec {
+                subprocess: N449Subprocess {
+                    args: vec![1, 2, 3],
+                    grid_size: (80, 24),
+                    pty: Some(N449Pty {
+                        master: 7,
+                        tty_name_buf: UnsafeCell::new([0; 8]),
+                        tty_name: Cell::new(None),
+                    }),
+                    process: Some(42),
+                },
+            }),
+            config: 0,
+            terminal_stream: N449Stream {
+                handler: N449Handler {
+                    terminal: &raw mut (*io).terminal,
+                    enquiry: 0,
+                },
+                parser: 0,
+            },
+            mailbox: IoMailbox {
+                queue: Box::new(StdMutex::new(VecDeque::new())),
+                wakeup: AtomicBool::new(false),
+            },
+            size: (0, 0),
+            last_cursor_reset: 0,
+            renderer_state: state_box.as_ptr(),
+            renderer_wakeup: AtomicBool::new(false),
+        });
+    }
+    let io = P(io_box.as_ptr());
+
+    // The io read thread.
+    let reader = std::thread::spawn(move || {
+        let io = io;
+        for _ in 0..ROUNDS {
+            unsafe { N449Termio::process_output(io.0) };
+            std::thread::yield_now();
+        }
+    });
+    // The io writer thread: `drainMailbox` and the coalesce / sync-reset
+    // timers, then `threadExit` once its loop ends (the read thread still runs
+    // until `threadExit` joins it).
+    let writer = std::thread::spawn(move || {
+        let io = io;
+        for i in 0..ROUNDS as u16 {
+            unsafe {
+                if shape.termio_raw {
+                    N449Termio::focus_gained(io.0);
+                    N449Termio::resize(io.0, (80 + i, 24), shape.pty_shared);
+                    N449Termio::change_config(io.0, u32::from(i), shape.terminal_early);
+                    N449Termio::queue_write(io.0);
+                } else {
+                    (*io.0).focus_gained_mut();
+                    (*io.0).resize_mut((80 + i, 24));
+                    (*io.0).change_config_mut(u32::from(i));
+                    (*io.0).queue_write_mut();
+                }
+                while (*io.0).mailbox.pop().is_some() {}
+            }
+            std::thread::yield_now();
+        }
+        unsafe {
+            if shape.termio_raw {
+                N449Termio::thread_exit(io.0);
+            } else {
+                (*io.0).thread_exit_mut();
+            }
+        }
+    });
+    // The main thread: `queueIo`, `getForegroundPid` / `getTtyName` (the T5c
+    // raw-self `Termio` entries), the close-confirm command read, and a locked
+    // terminal write by place.
+    for i in 0..ROUNDS as u32 {
+        unsafe {
+            let io = io.0;
+            let rs = (*io).renderer_state;
+            (*io).mailbox.send(i);
+            if shape.backend_raw {
+                let _ = N449Backend::get_foreground_pid(&raw mut (*io).backend);
+                let _ = N449Backend::get_tty_name(&raw mut (*io).backend);
+            } else {
+                let _ = (*io).backend.get_foreground_pid_mut();
+                let _ = (*io).backend.get_tty_name_mut();
+            }
+            let n = if shape.close_confirm_narrow {
+                let exec = N449Backend::exec_ptr(&raw mut (*io).backend);
+                let args = &(*exec).subprocess.args;
+                args.len()
+            } else {
+                match &(*io).backend {
+                    N449Backend::Exec(exec) => exec.subprocess.args.len(),
+                }
+            };
+            std::hint::black_box(n);
+            (*(*rs).mutex).lock();
+            let t = &mut (*io).terminal;
+            t.rows[2] += 1;
+            (*(*rs).mutex).unlock();
+        }
+        std::thread::yield_now();
+    }
+    writer.join().unwrap();
+    reader.join().unwrap();
+    unsafe {
+        drop(std::ptr::read(io_box.as_ptr()));
+        io_box.dealloc();
+        state_box.dealloc();
+        drop(Box::from_raw(m));
+    }
+}
+
 fn main() {
     let which = std::env::args().nth(1).expect("candidate name");
     let all = Which {
@@ -982,6 +1460,50 @@ fn main() {
             },
             QueueIo::Skip,
         ),
+        // ---- N449 (P7-W7 T5d): the shipped writer-thread methods, the
+        // backend chain and the close-confirm read ----
+        "n449_shipped" => run_n449(N449Shape {
+            termio_raw: false,
+            backend_raw: false,
+            pty_shared: false,
+            close_confirm_narrow: false,
+            terminal_early: false,
+        }),
+        "n449_main_backend_mut" => run_n449(N449Shape {
+            termio_raw: true,
+            backend_raw: false,
+            pty_shared: true,
+            close_confirm_narrow: true,
+            terminal_early: false,
+        }),
+        "n449_pty_set_size_mut" => run_n449(N449Shape {
+            termio_raw: true,
+            backend_raw: true,
+            pty_shared: false,
+            close_confirm_narrow: true,
+            terminal_early: false,
+        }),
+        "n449_close_confirm_backend_ref" => run_n449(N449Shape {
+            termio_raw: true,
+            backend_raw: true,
+            pty_shared: true,
+            close_confirm_narrow: false,
+            terminal_early: false,
+        }),
+        "n449_fixed" => run_n449(N449Shape {
+            termio_raw: true,
+            backend_raw: true,
+            pty_shared: true,
+            close_confirm_narrow: true,
+            terminal_early: false,
+        }),
+        "n449_change_config_terminal_early" => run_n449(N449Shape {
+            termio_raw: true,
+            backend_raw: true,
+            pty_shared: true,
+            close_confirm_narrow: true,
+            terminal_early: true,
+        }),
         other => panic!("unknown candidate {other}"),
     }
 }
