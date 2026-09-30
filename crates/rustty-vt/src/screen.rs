@@ -555,6 +555,10 @@ pub struct Resize {
     /// currently at a prompt. This detects OSC133 prompts lines and clears
     /// them. If set to `.last`, only the most recent prompt line is cleared.
     pub prompt_redraw: osc::semantic_prompt::Redraw,
+
+    /// Whether the resize may pull rows out of scrollback back into the
+    /// active area. See PageList.Resize for details.
+    pub pull_scrollback: bool,
 }
 
 pub struct SelectionString {
@@ -3466,6 +3470,7 @@ impl Screen {
                 y: self.cursor.y,
                 pin: Some(self.cursor.page_pin),
             }),
+            pull_scrollback: opts.pull_scrollback,
         }) {
             self.resize_restore_cursor(
                 cursor_style,
@@ -7052,6 +7057,7 @@ mod tests {
             rows: 10,
             reflow: false,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
         {
@@ -7074,6 +7080,7 @@ mod tests {
             rows: 2,
             reflow: false,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -7120,6 +7127,7 @@ mod tests {
             rows: 2,
             reflow: false,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -7166,6 +7174,7 @@ mod tests {
             rows: 7,
             reflow: false,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -7191,6 +7200,7 @@ mod tests {
             rows: 3,
             reflow: false,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -7212,6 +7222,7 @@ mod tests {
             rows: 3,
             reflow: false,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -7233,12 +7244,155 @@ mod tests {
             rows: 10,
             reflow: false,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
         {
             let contents = dump(&s, vp());
             assert_eq!(contents, str);
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize (no reflow) more rows no scrollback pull"
+    #[test]
+    fn screen_resize_no_reflow_more_rows_no_scrollback_pull() {
+        let mut s = mkscreen(7, 3, 2);
+        let str = b"1ABCD\n2EFGH\n3IJKL\n4ABCD\n5EFGH";
+        s.test_write_string(str).unwrap();
+
+        // Cursor is at the bottom so this would normally pull scrollback.
+        assert_eq!(2 as size::CellCountInt, s.cursor.y);
+        s.resize(Resize {
+            cols: 7,
+            rows: 10,
+            reflow: false,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: false,
+        })
+        .unwrap();
+        assert_eq!(2 as size::CellCountInt, s.cursor.y);
+
+        {
+            let contents = dump(&s, act());
+            assert_eq!(contents, b"3IJKL\n4ABCD\n5EFGH");
+        }
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, str);
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize more cols no scrollback pull"
+    #[test]
+    fn screen_resize_more_cols_no_scrollback_pull() {
+        let mut s = mkscreen(5, 3, 2);
+        s.test_write_string(b"1AAAA\n2BBBB\n3CCCCDD\n4E").unwrap();
+        {
+            let contents = dump(&s, act());
+            assert_eq!(contents, b"3CCCC\nDD\n4E");
+        }
+
+        // The wrapped line in the active area unwraps, freeing up a row. This
+        // would normally pull "2BBBB" back but we should get a blank row at
+        // the bottom instead.
+        s.resize(Resize {
+            cols: 10,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: false,
+        })
+        .unwrap();
+        assert_eq!(2 as size::CellCountInt, s.cursor.x);
+        assert_eq!(1 as size::CellCountInt, s.cursor.y);
+
+        {
+            let contents = dump(&s, act());
+            assert_eq!(contents, b"3CCCCDD\n4E");
+        }
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"1AAAA\n2BBBB\n3CCCCDD\n4E");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize more cols no scrollback pull wrap straddles scrollback"
+    #[test]
+    fn screen_resize_more_cols_no_scrollback_pull_wrap_straddles_scrollback() {
+        let mut s = mkscreen(5, 3, 2);
+        s.test_write_string(b"1AAAA\n2BBBBXX\n3C\n4D").unwrap();
+        {
+            let contents = dump(&s, act());
+            assert_eq!(contents, b"XX\n3C\n4D");
+        }
+
+        // The line isn't fully in scrollback so it is allowed to unwrap
+        // back into view, but nothing above it is.
+        s.resize(Resize {
+            cols: 10,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: false,
+        })
+        .unwrap();
+        assert_eq!(2 as size::CellCountInt, s.cursor.y);
+
+        {
+            let contents = dump(&s, act());
+            assert_eq!(contents, b"2BBBBXX\n3C\n4D");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize more cols and rows no scrollback pull"
+    #[test]
+    fn screen_resize_more_cols_and_rows_no_scrollback_pull() {
+        let mut s = mkscreen(5, 3, 2);
+        s.test_write_string(b"1AAAA\n2BBBB\n3CCCCDD\n4E").unwrap();
+
+        s.resize(Resize {
+            cols: 10,
+            rows: 5,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: false,
+        })
+        .unwrap();
+        assert_eq!(1 as size::CellCountInt, s.cursor.y);
+
+        {
+            let contents = dump(&s, act());
+            assert_eq!(contents, b"3CCCCDD\n4E");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize less cols no scrollback pull"
+    #[test]
+    fn screen_resize_less_cols_no_scrollback_pull() {
+        let mut s = mkscreen(10, 3, 2);
+        s.test_write_string(b"0Z\n1AAAA\n2BBBBXX\n3C").unwrap();
+
+        // Wrapping needs more rows than we have so the top of the active
+        // area still scrolls off as usual.
+        s.resize(Resize {
+            cols: 5,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: false,
+        })
+        .unwrap();
+        assert_eq!(2 as size::CellCountInt, s.cursor.y);
+
+        {
+            let contents = dump(&s, act());
+            assert_eq!(contents, b"2BBBB\nXX\n3C");
         }
         s.deinit();
     }
@@ -7254,6 +7408,7 @@ mod tests {
             rows: 2,
             reflow: false,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -7281,6 +7436,7 @@ mod tests {
             rows: 2,
             reflow: false,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
         assert_eq!(cursor.x, s.cursor.x);
@@ -7319,6 +7475,7 @@ mod tests {
             rows: 10,
             reflow: false,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
         {
@@ -7353,6 +7510,7 @@ mod tests {
             rows: 10,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -7383,6 +7541,7 @@ mod tests {
             rows: 10,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -7431,6 +7590,7 @@ mod tests {
             rows: 10,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -7466,6 +7626,7 @@ mod tests {
             rows: 3,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -7496,6 +7657,7 @@ mod tests {
             rows: 3,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -7529,6 +7691,7 @@ mod tests {
             rows: 3,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
         {
@@ -7565,6 +7728,7 @@ mod tests {
             rows: 3,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
         {
@@ -7609,6 +7773,7 @@ mod tests {
             rows: 3,
             reflow: false,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -7681,6 +7846,7 @@ mod tests {
             rows: 3,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
         {
@@ -7726,6 +7892,7 @@ mod tests {
             rows: 3,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
         {
@@ -7779,6 +7946,7 @@ mod tests {
             rows: 3,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
         {
@@ -7824,6 +7992,7 @@ mod tests {
             rows: 3,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
         {
@@ -7867,6 +8036,7 @@ mod tests {
             rows: 3,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
         {
@@ -7965,6 +8135,7 @@ mod tests {
             rows,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -8011,6 +8182,7 @@ mod tests {
             rows: 3,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
         {
@@ -8129,6 +8301,7 @@ mod tests {
                     rows: 4,
                     reflow: true,
                     prompt_redraw: osc::semantic_prompt::Redraw::True,
+                    pull_scrollback: true,
                 }),
                 Err(OutOfMemory)
             ));
@@ -8259,6 +8432,7 @@ mod tests {
             rows: 4,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -8308,6 +8482,7 @@ mod tests {
             rows: 3,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -8343,6 +8518,7 @@ mod tests {
             rows: 10,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -8375,6 +8551,7 @@ mod tests {
             rows: 1,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -8421,6 +8598,7 @@ mod tests {
             rows: 1,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -8450,6 +8628,7 @@ mod tests {
             rows: 1,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -8481,6 +8660,7 @@ mod tests {
             rows: 1,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -8515,6 +8695,7 @@ mod tests {
             rows: 2,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -8548,6 +8729,7 @@ mod tests {
             rows: 3,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -8593,6 +8775,7 @@ mod tests {
             rows: 3,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
         {
@@ -8621,6 +8804,7 @@ mod tests {
             rows: 3,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -8646,6 +8830,7 @@ mod tests {
             rows: 3,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -8678,6 +8863,7 @@ mod tests {
             rows: 3,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -8721,6 +8907,7 @@ mod tests {
             rows: 3,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -8768,6 +8955,7 @@ mod tests {
             rows: 3,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -8816,6 +9004,7 @@ mod tests {
             rows: 3,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -8851,6 +9040,7 @@ mod tests {
             rows: 10,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -8881,6 +9071,7 @@ mod tests {
             rows: 10,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
         {
@@ -8898,6 +9089,7 @@ mod tests {
             rows: 3,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
         {
@@ -8915,6 +9107,7 @@ mod tests {
             rows: 10,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
         {
@@ -8955,6 +9148,7 @@ mod tests {
             rows: 1,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
         {
@@ -9007,6 +9201,7 @@ mod tests {
             rows: 3,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
         {
@@ -9061,6 +9256,7 @@ mod tests {
             rows: 2,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
         {
@@ -9087,6 +9283,7 @@ mod tests {
             rows: 7,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -9111,6 +9308,7 @@ mod tests {
             rows: 3,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -9165,6 +9363,7 @@ mod tests {
             rows: 2,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
         {
@@ -9237,6 +9436,7 @@ mod tests {
             rows: 2,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
         {
@@ -9300,6 +9500,7 @@ mod tests {
             rows: 2,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
         {
@@ -9360,6 +9561,7 @@ mod tests {
             rows: 3,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::True,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -9398,6 +9600,7 @@ mod tests {
             rows: 3,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::True,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -9439,6 +9642,7 @@ mod tests {
             rows: 4,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::Last,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -9480,6 +9684,7 @@ mod tests {
             rows: 5,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::Last,
+            pull_scrollback: true,
         })
         .unwrap();
 
@@ -9516,6 +9721,7 @@ mod tests {
             rows: 5,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::True,
+            pull_scrollback: true,
         })
         .unwrap();
         let messages = cap.messages();
@@ -15480,6 +15686,7 @@ mod tests {
             rows: 10,
             reflow: true,
             prompt_redraw: osc::semantic_prompt::Redraw::False,
+            pull_scrollback: true,
         })
         .unwrap();
         assert!(s.cursor.hyperlink_id != 0);
