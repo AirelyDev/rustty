@@ -60,9 +60,9 @@ def _parity_names(root):
     """Load the port<->oracle name map (rebrand Task 0,
     .port/tools/PARITY_NAMING.md) — the single sourced port<->oracle map so a
     rename never makes the port look artificially divergent from the oracle.
-    Falls back to the pre-Task-0 hardcoded default if the map is absent so
-    this loader can never turn a missing-map case into a crash."""
-    d = {"ORACLE_TREE": g.oracle_root()}
+    A missing map yields an empty dict rather than a crash. The oracle path is
+    NOT in the map (N483): see `ORACLE` below."""
+    d = {}
     try:
         with open(os.path.join(root, ".port/tools/parity_names.env")) as f:
             for line in f:
@@ -78,13 +78,12 @@ def _parity_names(root):
 PARITY_NAMES = _parity_names(g.RUSTTY_ROOT)
 
 # R3: the ghostty oracle is a read-only EXTERNAL reference, never shipped to CI.
-# Read from the checked-in .port/tools/parity_names.env (ORACLE_TREE) — NOT an
-# environment variable: this is still the one committed source of truth
-# ci.sh/check_test_counts.py mirror (no runtime env override; an override that
-# redirects the probe away from the greped path is a vacuous-green spoof hole;
-# see ci.sh header). Changing the oracle path still requires a repo edit to the
-# sourced map, same trust boundary as editing the script itself.
-ORACLE = PARITY_NAMES["ORACLE_TREE"]
+# Its location is DERIVED by `_gatelib.oracle_root()` (the twin of
+# `_oracle_root.sh`): `ghostty` beside the main rustty checkout, the rule
+# ci.sh/check_test_counts.py share (N483). It is NOT an environment variable (an
+# override that redirects the probe away from the greped path is a vacuous-green
+# spoof hole; see ci.sh header) and no longer an entry of parity_names.env.
+ORACLE = g.oracle_root()
 ORACLE_SRC = os.path.join(ORACLE, "src")
 
 # ---------------------------------------------------------------------------

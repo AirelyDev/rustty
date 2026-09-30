@@ -15,12 +15,12 @@ rebrand never makes the port look divergent from the oracle.
    (rebrand Task 1) — the Swift app links `rustty_*` directly.
 
 ## Stays ghostty (the oracle — never renamed)
-- `/Users/gael/projects/ghostty`                 — external read-only oracle tree
-- `/Users/gael/projects/ghostty/include/ghostty.h` — oracle C-ABI header
+- the oracle checkout (`ghostty` beside the main rustty checkout, derived by `_oracle_root.sh` / `_gatelib.oracle_root`) — external read-only oracle tree
+- its `include/ghostty.h`                         — oracle C-ABI header
 - `.port/phase-0/corpora/**`, `baseline/**`, `examples-out/**` — captured oracle golden bytes
 - `.port/audits/GHOSTTY_LIFETIMES.tsv`           — lifetime audit OF ghostty source
 - the `ghostty_name` column of `CABI_SYMBOLS.tsv` — the oracle symbol names
-- ghostty's upstream `include/ghostty.h` (via `ORACLE_HEADER_PATH`, SHA-256 pinned) — the oracle umbrella (product = include/rustty-embed.h); no longer vendored locally
+- ghostty's upstream `include/ghostty.h` (`ORACLE_HEADER_PATH`, derived from the oracle root `_oracle_root.sh` resolves; SHA-256 pinned) — the oracle umbrella (product = include/rustty-embed.h); no longer vendored locally
 
 ## Becomes rustty (the port — renamed by this plan)
 - all C exports: ghostty_* -> rustty_* (alias deleted, Task 1)
@@ -80,8 +80,8 @@ PORT_KIT=RusttyKit
 ORACLE_KIT=GhosttyKit
 PORT_HEADER=rustty.h
 ORACLE_HEADER=ghostty.h
-ORACLE_TREE=/Users/gael/projects/ghostty
-ORACLE_HEADER_PATH=/Users/gael/projects/ghostty/include/ghostty.h
+# ORACLE_TREE / ORACLE_HEADER_PATH are not in the map (N483): each consumer derives
+# them with _oracle_root.sh (`ghostty` beside the main checkout).
 CABI_MAP=.port/audits/CABI_SYMBOLS.tsv
 ```
 
@@ -91,8 +91,8 @@ CABI_MAP=.port/audits/CABI_SYMBOLS.tsv
 - **Python gates** (`check_parity_surface.py`, `check_constants_parity.py`)
   load it with a tiny same-shaped `_parity_names(root)` loader (parses
   `KEY=VALUE` lines, skips blanks/comments) into a `PARITY_NAMES` dict, and
-  read `PARITY_NAMES["PORT_NAME"]` / `PARITY_NAMES["ORACLE_TREE"]` instead of
-  a hardcoded string literal.
+  read `PARITY_NAMES["PORT_NAME"]` instead of a hardcoded string literal. The
+  oracle root comes from `_gatelib.oracle_root()`, not the map (N483).
 - This is a **behaviour-preserving** change: every value in the map is
   identical to what was previously hardcoded, so sourcing it changes no gate's
   pass/fail outcome — it only removes the duplicated literal so a future
@@ -100,18 +100,17 @@ CABI_MAP=.port/audits/CABI_SYMBOLS.tsv
   never changes).
 - `check_constants_parity.py`'s oracle path is still NOT an environment-variable
   override (that would reopen the vacuous-green spoof hole its header warns
-  about) — it is read from this checked-in, repo-committed file, which is the
-  same trust boundary as the script's own source.
-- `ci.sh`'s `run_test_counts()` intentionally keeps its own literal
-  `/Users/gael/projects/ghostty` (mirroring `check_test_counts.py`'s hardcode,
-  per that function's own "must stay identical" comment) — it is out of scope
-  for this task and is left untouched.
+  about). It is derived by `_gatelib.oracle_root()`, the Python twin of
+  `_oracle_root.sh` (N483), no longer read from this file.
+- `ci.sh`'s `run_test_counts()` derives its oracle probe the same way as
+  `check_test_counts.py` (`_oracle_root.sh`; N483), so both still name one path.
 - `check_ghostty_h_abi.sh` (the old external-oracle byte-freeze gate) was
   renamed `check_rustty_h_abi.sh`. It `source`s this file for `$PORT_UMBRELLA`
-  / `$ORACLE_HEADER_PATH` / `$CABI_MAP` and validates the PRODUCT umbrella
+  / `$CABI_MAP`, derives `$ORACLE_HEADER_PATH` from the oracle root
+  `_oracle_root.sh` resolves, and validates the PRODUCT umbrella
   (`include/rustty-embed.h`) against ghostty's upstream `include/ghostty.h` via
   `CABI_SYMBOLS.tsv`'s name-map. The oracle is read from `$ORACLE_HEADER_PATH`
-  (the pinned `/Users/gael/projects/ghostty` checkout) and pinned to an exact
+  (in the pinned oracle checkout `_oracle_root.sh` derives) and pinned to an exact
   version by a SHA-256 (`.port/tools/oracle-ghostty-h.sha256`). **Update
   (2026-07-15):** the previously-vendored local carve-out `include/ghostty.h`
   was removed — the gate references the pinned oracle checkout directly rather

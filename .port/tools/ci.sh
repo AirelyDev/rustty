@@ -74,7 +74,13 @@
 #                                    -> HARD-FAIL where nix exists, BLOCKED
 #                                    (exit 3) where it does not. The hermetic
 #                                    counterpart to G-CCONSUMER: same install,
-#                                    no ambient system libraries.
+#                                    no ambient system libraries. Step 4
+#                                    builds the dev shell: BLOCKED (N489)
+#                                    when only nixpkgs' wasmtime fails on
+#                                    aarch64-linux, RED on any other failure.
+#   G-NIX-SELF check_nix.sh --self-test
+#                                    the dev-shell log classifier over
+#                                    fixture logs (needs no nix) -> HARD-FAIL.
 #   G-XTARGET check_cross_targets.sh cross-target builds of rustty-vt-c
 #                                    (wasm32-unknown-unknown, wasm32-wasip1,
 #                                    x86_64-pc-windows-msvc,
@@ -545,6 +551,8 @@ GATE_REGISTRY=(
   # .pc files, and a C consumer linked BOTH ways). BLOCKED, never green, where
   # nix is absent — which is every macOS leg here.
   "G-NIX|HARD|bash $GATES/check_nix.sh"
+  # Its dev-shell classifier's self-test (N489), a separate entry like G-XCF-SELF.
+  "G-NIX-SELF|HARD|bash $GATES/check_nix.sh --self-test"
   # G-XTARGET (2026-08-26) — cross-target BUILDS of rustty-vt-c (the
   # reference's build-libghostty-vt-{wasm,windows,...} legs). G-WINCHK is
   # `cargo check`-level and never runs the crates-sys C compiles for the

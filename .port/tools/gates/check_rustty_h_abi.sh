@@ -50,6 +50,7 @@
 #
 # Usage:
 #   check_rustty_h_abi.sh
+#   check_rustty_h_abi.sh --print-oracle   # print the derived oracle root (G-ORACLE-SH-SELF arm 5)
 
 set -uo pipefail
 
@@ -70,9 +71,13 @@ source "$PARITY_ENV"
 source "$ROOT/.port/tools/gates/_oracle_root.sh" || { echo "BLOCKED: cannot source _oracle_root.sh"; exit 3; }
 ORACLE_TREE="$(rustty_oracle_root "$ROOT")"
 ORACLE_HEADER_PATH="$ORACLE_TREE/include/ghostty.h"
+if [ "${1:-}" = "--print-oracle" ]; then
+  printf '%s\n' "$ORACLE_TREE"
+  exit 0
+fi
 
 : "${PORT_UMBRELLA:?PORT_UMBRELLA not set by parity_names.env}"
-: "${ORACLE_HEADER_PATH:?ORACLE_HEADER_PATH not set by parity_names.env}"
+: "${ORACLE_HEADER_PATH:?ORACLE_HEADER_PATH not derived (the oracle root comes from _oracle_root.sh)}"
 : "${CABI_MAP:?CABI_MAP not set by parity_names.env}"
 : "${PORT_ENV_PREFIX:?PORT_ENV_PREFIX not set by parity_names.env}"
 : "${ORACLE_ENV_PREFIX:?ORACLE_ENV_PREFIX not set by parity_names.env}"
@@ -90,7 +95,7 @@ if [ ! -f "$TSV" ]; then
   exit 3
 fi
 if [ ! -f "$ORACLE" ]; then
-  echo "BLOCKED: ghostty oracle header not found at $ORACLE (external READ-ONLY pinned oracle; ORACLE_HEADER_PATH is set by the checked-in parity_names.env, not the environment — clone the pinned ghostty checkout there)"
+  echo "BLOCKED: ghostty oracle header not found at $ORACLE (external READ-ONLY pinned oracle; its location is derived by _oracle_root.sh as ghostty/ beside the main checkout, never set by the environment — clone the pinned ghostty checkout there)"
   exit 3
 fi
 # Freeze-pin: the oracle checkout must be the exact version this gate was pinned

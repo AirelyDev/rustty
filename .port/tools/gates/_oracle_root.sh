@@ -151,12 +151,26 @@ rustty_oracle_root() {
 }
 
 # The consumers, as paths relative to the checkout root. Each accepts
-# `--print-oracle`, prints the oracle it would read, and exits 0.
+# `--print-oracle`, prints the oracle it would read, and exits 0. A `.mjs`
+# consumer runs under node, every other one under bash.
+# The oracle readers that are NOT listed here and why (each is covered elsewhere):
+#   check_bench_tests.sh, check_lz4_byte_exact.sh, check_rustty_vt_headers.sh:
+#     arm 11 runs their own `--self-test-oracle` (fixture oracle + decoy) and arm 10
+#     scans them.
+#   check-vt-struct-layouts.mjs: A5's `--self-test-oracle` (arm 11, through
+#     check_rustty_vt_headers.sh) and arm 10's Node scan.
+#   The Python gates (_gatelib.oracle_root): arm 3 checks the Python resolver
+#     against this one, and arm 10's Python scans cover every `.py` under .port/tools.
 _RUSTTY_ORACLE_CONSUMERS=(
   ".port/tools/gates/check_eol_fidelity.sh"
   ".port/tools/gates/run_differential.sh"
   ".port/tools/macos-parity/menu-shortcut-parity.sh"
   ".port/tools/stb-resize-oracle/run.sh"
+  ".port/tools/gates/check_symbol_manifest.sh"
+  ".port/tools/gates/check_rustty_h_abi.sh"
+  ".port/tools/cvt-parity.sh"
+  ".port/tools/restore_zig_deps.sh"
+  ".port/tools/wasm-parity.mjs"
 )
 
 _rustty_oracle_self_test() {
@@ -296,12 +310,19 @@ _rustty_oracle_self_test() {
 
   # 5. every consumer, end to end, from a cwd OUTSIDE the fixture checkout,
   #    with each retired override variable and the GIT_* decoy set.
+  local runner
   for rel in "${_RUSTTY_ORACLE_CONSUMERS[@]}"; do
     copy="$wt/$rel"
+    case "$rel" in *.mjs) runner=node ;; *) runner=bash ;; esac
+    if ! command -v "$runner" >/dev/null 2>&1; then
+      blocked_arm "$(basename "$rel") ignores env overrides and GIT_*" "$runner not installed"
+      continue
+    fi
     got="$(cd "$decoy" && GHOSTTY_ORACLE="$decoy_oracle" GHOSTTY="$decoy_oracle" \
       GHOSTTY_ROOT="$decoy_oracle" ORACLE_TREE="$decoy_oracle" \
-      GIT_DIR="$decoy/.git" GIT_WORK_TREE="$decoy" \
-      bash "$copy" --print-oracle 2>&1)"
+      ORACLE_HEADER_PATH="$decoy_oracle/include/ghostty.h" ORACLE_DIR="$decoy_oracle" \
+      ORACLE="$decoy_oracle" GIT_DIR="$decoy/.git" GIT_WORK_TREE="$decoy" \
+      "$runner" "$copy" --print-oracle 2>&1)"
     if [ "$got" = "$oracle" ]; then r=0; else r=1; fi
     arm "$r" "$(basename "$rel") ignores env overrides and GIT_* (cwd outside the fixture)" \
       "got '$got', want '$oracle'"
@@ -549,17 +570,19 @@ _rustty_oracle_self_test() {
       sc_detail="$sc_detail. A new oracle read must go through rustty_oracle_git; if this change is intended, update the entry '$file $var $nmark $ngit $nbare' in arm 10's spec table in .port/tools/gates/_oracle_root.sh to '$file $var $marks $ngot $nbgot' in the same commit (plain git and escapes are never allowed)"
     fi
   }
-  # node_check <path>: the Node reader, likewise; sets sc_r, sc_detail.
+  # node_check <path> [var nspawn ngit]: a Node reader, likewise; sets sc_r,
+  # sc_detail. The defaults are check-vt-struct-layouts.mjs's (ORACLE, one git
+  # spawn site in oracleGit, three git words); wasm-parity.mjs reads no git.
   node_check() {
-    local body assigns plain ngot nesc joined
+    local body assigns plain ngot nesc joined var="${2:-ORACLE}" nspawn="${3:-1}" ngit="${4:-3}"
     body="$(grep -vE '^[[:space:]]*//' "$1")"
-    assigns="$(printf '%s\n' "$body" | grep -cE '(^|[^A-Za-z0-9_])ORACLE[[:space:]]*=[^=]')"
+    assigns="$(printf '%s\n' "$body" | grep -cE "(^|[^A-Za-z0-9_])${var}[[:space:]]*=[^=]")"
     plain="$(printf '%s\n' "$body" | grep -cE "(execFileSync|execSync|spawnSync|spawn|exec)\([[:space:]]*[\"'\`]git[\"'\`]")"
     ngot="$(printf '%s\n' "$body" | tok_count git)"
     nesc="$(printf '%s\n' "$body" | grep -cE "$esc_alnum")"
     joined="$(concat_git "$1" | head -3)"
-    sc_detail="assignments=$assigns (want 1), git spawn sites=$plain (want 1), git words=$ngot (want 3), letter/digit escapes=$nesc (want 0), git formed by joining literals: ${joined:-none}"
-    if [ "$assigns" = "1" ] && [ "$plain" = "1" ] && [ "$ngot" = "3" ] && [ "$nesc" = "0" ] &&
+    sc_detail="$var assignments=$assigns (want 1), git spawn sites=$plain (want $nspawn), git words=$ngot (want $ngit), letter/digit escapes=$nesc (want 0), git formed by joining literals: ${joined:-none}"
+    if [ "$assigns" = "1" ] && [ "$plain" = "$nspawn" ] && [ "$ngot" = "$ngit" ] && [ "$nesc" = "0" ] &&
       [ -z "$joined" ]; then
       sc_r=0
     else
@@ -576,6 +599,15 @@ _rustty_oracle_self_test() {
     done
   }
   local spec eol_spec=".port/tools/gates/check_eol_fidelity.sh ORACLE 0 12 1"
+  # The N483 resolver users (P7-W12 T5 fix round 1). 10s proves each goes RED
+  # with a plain oracle read added.
+  local new_sh_specs=(
+    ".port/tools/gates/check_symbol_manifest.sh ORACLE_TREE 0 0 1"
+    ".port/tools/gates/check_rustty_h_abi.sh ORACLE_TREE 0 0 1"
+    ".port/tools/cvt-parity.sh ORACLE 0 0 1"
+    ".port/tools/restore_zig_deps.sh ORACLE_DIR 0 0 1"
+  )
+  local wasm_node_spec=(GHOSTTY 0 0)
   for spec in \
     "$eol_spec" \
     ".port/tools/gates/run_differential.sh GHOSTTY 5 3 6" \
@@ -583,13 +615,16 @@ _rustty_oracle_self_test() {
     ".port/tools/stb-resize-oracle/run.sh ORACLE_REPO 0 1 1" \
     ".port/tools/gates/check_bench_tests.sh ORACLE 0 2 4" \
     ".port/tools/gates/check_lz4_byte_exact.sh ORACLE 0 3 3" \
-    ".port/tools/gates/check_rustty_vt_headers.sh GH 0 2 1"; do
+    ".port/tools/gates/check_rustty_vt_headers.sh GH 0 2 1" \
+    "${new_sh_specs[@]}"; do
     read -r file var _ <<<"$spec"
     struct_sh_check "$root/$file" "$spec"
     arm "$sc_r" "$(basename "$file"): \$$var assigned once; no plain \`git ... \$$var\` on one line; no letter escapes; git words and bare \$$var mentions at their fixed counts" "$sc_detail"
   done
   node_check "$root/.port/tools/check-vt-struct-layouts.mjs"
   arm "$sc_r" "check-vt-struct-layouts.mjs: ORACLE assigned once, git spawned (either quote style) only in oracleGit, git words at their fixed count, no joined or escaped git" "$sc_detail"
+  node_check "$root/.port/tools/wasm-parity.mjs" "${wasm_node_spec[@]}"
+  arm "$sc_r" "wasm-parity.mjs: GHOSTTY assigned once, no git spawn and no git word (the oracle comes from _oracle_root.sh), no joined or escaped git" "$sc_detail"
   plain="$(grep -rnE --include='*.py' "[\"']git[\"'],[[:space:]]*[\"']-C[\"']" "$root/.port/tools" | grep -vF "$here/_gatelib.py:")"
   others="$(grep -rnE --include='*.py' "[\"']git[\"'],[[:space:]]*[\"']-C[\"']" "$here/_gatelib.py" | wc -l | tr -d ' ')"
   if [ -z "$plain" ] && [ "$others" = "1" ]; then r=0; else r=1; fi
@@ -625,6 +660,22 @@ $'\x67it' -C "$ORACLE" rev-parse HEAD
 $'\147it' -C "$ORACLE" rev-parse HEAD
 eval "g""it -C \"\$ORACLE\" rev-parse HEAD"
 BYPASS_SH
+  # The N483 resolver users: each unmodified file passes (arm 10 above), and a
+  # copy with one plain oracle read of its variable added is RED.
+  local nspec nfile nvar
+  for nspec in "${new_sh_specs[@]}"; do
+    read -r nfile nvar _ <<<"$nspec"
+    cp "$root/$nfile" "$sd/new.sh"
+    printf 'git -C "$%s" rev-parse HEAD\n' "$nvar" >>"$sd/new.sh"
+    struct_sh_check "$sd/new.sh" "$nspec"
+    if [ "$sc_r" = "1" ]; then r=0; else r=1; fi
+    arm "$r" "10s. $(basename "$nfile") copy + a plain \`git -C \$$nvar\` is RED" "$sc_detail"
+  done
+  cp "$root/.port/tools/wasm-parity.mjs" "$sd/wasm.mjs"
+  printf '%s\n' "execFileSync('git', ['-C', GHOSTTY, 'rev-parse', 'HEAD']);" >>"$sd/wasm.mjs"
+  node_check "$sd/wasm.mjs" "${wasm_node_spec[@]}"
+  if [ "$sc_r" = "1" ]; then r=0; else r=1; fi
+  arm "$r" "10s. wasm-parity.mjs copy + a git spawn is RED" "$sc_detail"
   while IFS= read -r line; do
     cp "$root/.port/tools/check-vt-struct-layouts.mjs" "$sd/node.mjs"
     printf '%s\n' "$line" >>"$sd/node.mjs"

@@ -1102,7 +1102,66 @@ def self_test_paths():
             "NEGATIVE: a missing oracle is refused")
         arm(G.oracle_pin_problem(td, head) is not None, "NEGATIVE: a non-checkout directory is refused")
         arm(G.oracle_pin_problem(fx, "") is not None, "NEGATIVE: a missing pin is refused")
-    return not fails
+    return self_test_main_pin_arm(arm) and not fails
+
+
+def self_test_main_pin_arm(arm):
+    """N483 fix round: the pin check must be CALLED by `main()`, not only correct.
+
+    Runs a COPY of this script (and `_gatelib.py`) in a scratch checkout, end to end
+    in a fresh process, beside an off-pin and beside a missing fixture oracle; each
+    must exit 3 with the pin check's own reason. Either would also exit 3 through the
+    missing-reference guard (the fixture oracle has no `src/`), so the arm binds the
+    REASON: dropping the `oracle_pin_problem` call from `main()` turns it RED. The
+    at-pin run is the control that the fixture reaches that later guard."""
+    import shutil, subprocess, tempfile
+    ok_all = True
+
+    def run_copy(root):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        return subprocess.run([sys.executable, os.path.join(root, ".port", "tools", "gates",
+                                                           "check_test_counts.py")],
+                              cwd=root, env=env, capture_output=True, text=True)
+
+    def check(ok, label):
+        nonlocal ok_all
+        arm(ok, label)
+        ok_all = ok_all and ok
+
+    with tempfile.TemporaryDirectory() as td:
+        td = os.path.realpath(td)
+        rs = os.path.join(td, "rustty")
+        gates = os.path.join(rs, ".port", "tools", "gates")
+        os.makedirs(gates)
+        for f in ("check_test_counts.py", "_gatelib.py"):
+            shutil.copy2(os.path.join(GATES_DIR, f), gates)
+        ident = ["-c", "user.name=t", "-c", "user.email=t@invalid", "-c", "commit.gpgsign=false"]
+        G.oracle_git(rs, "init", "-q", check=True)
+        fx = os.path.join(td, "ghostty")
+        pin_file = os.path.join(gates, "ORACLE_PIN")
+
+        with open(pin_file, "w") as fh:
+            fh.write("0" * 40 + "\n")
+        r = run_copy(rs)
+        check(r.returncode == 3 and "no oracle checkout at" in r.stdout,
+              f"NEGATIVE: main() beside a MISSING oracle exits 3 on the pin check (rc {r.returncode})")
+
+        os.makedirs(fx)
+        G.oracle_git(fx, "init", "-q", check=True)
+        G.oracle_git(fx, *ident, "commit", "-q", "--allow-empty", "-m", "f", check=True)
+        head = G.oracle_git(fx, "rev-parse", "HEAD", check=True,
+                            capture_output=True, text=True).stdout.strip()
+        r = run_copy(rs)
+        check(r.returncode == 3 and f"not the pin {'0' * 40}" in r.stdout,
+              f"NEGATIVE: main() beside an OFF-PIN oracle exits 3 on the pin check (rc {r.returncode})")
+
+        with open(pin_file, "w") as fh:
+            fh.write(head + "\n")
+        r = run_copy(rs)
+        check(r.returncode == 3 and "missing zig reference file" in r.stdout
+              and "not the pin" not in r.stdout and "no oracle checkout" not in r.stdout,
+              f"control: main() beside an AT-PIN fixture passes the pin check (rc {r.returncode})")
+    return ok_all
 
 
 def self_test():

@@ -68,9 +68,21 @@
 #   bash .port/tools/restore_zig_deps.sh                 # fetch what is missing, then run G1b
 #   bash .port/tools/restore_zig_deps.sh --verify-only    # presence check only; no fetch
 #                                                         # (this is what ci.sh calls)
+#   bash .port/tools/restore_zig_deps.sh --print-oracle   # the derived oracle root
+#                                                         # (G-ORACLE-SH-SELF arm 5)
 set -euo pipefail
 
-ROOT="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
+# Script-relative, not `git rev-parse --show-toplevel`: that honours GIT_DIR +
+# GIT_WORK_TREE, which would move ROOT and, through it, the oracle (R5; the
+# rule G1b's RS_ROOT follows). G-ORACLE-SH-SELF arm 5 runs this with a decoy set.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=.port/tools/gates/_oracle_root.sh
+source "$ROOT/.port/tools/gates/_oracle_root.sh"
+ORACLE_DIR="$(rustty_oracle_root "$ROOT")"
+if [ "${1:-}" = "--print-oracle" ]; then
+  printf '%s\n' "$ORACLE_DIR"
+  exit 0
+fi
 # N483: the zig global cache is resolved the way zig (and `_gatelib.zig_cache_root`, which
 # G1b reads it through) does: ZIG_GLOBAL_CACHE_DIR, else $XDG_CACHE_HOME/zig, else
 # ~/.cache/zig. Never a fixed home directory. Packages live under <cache>/p/.
@@ -155,9 +167,7 @@ done
 
 # libxev at the oracle's own pin lives in the ORACLE's read-only `zig-pkg/` (G1b's `xev_file`
 # row). It cannot be restored from here; report it so a missing one is named, never silent.
-# shellcheck source=.port/tools/gates/_oracle_root.sh
-source "$ROOT/.port/tools/gates/_oracle_root.sh"
-ORACLE_DIR="$(rustty_oracle_root "$ROOT")"
+# ORACLE_DIR is resolved at the top.
 XEV_CUR_FILE="$ORACLE_DIR/zig-pkg/libxev-0.0.0-86vtcwIRFADbH4hk-EjROXxlrKIRPQdA41XiTSytYO-F/src/watcher/file.zig"
 oracle_missing=0
 if [ -f "$XEV_CUR_FILE" ]; then
@@ -169,8 +179,15 @@ fi
 
 if [ "$VERIFY_ONLY" -eq 1 ]; then
   if [ "${#missing[@]}" -gt 0 ] || [ "$oracle_missing" -eq 1 ]; then
-    echo "VERIFY-ONLY: ${#missing[@]} corpus/corpora absent or incomplete."
-    echo "Restore with: bash .port/tools/restore_zig_deps.sh"
+    if [ "${#missing[@]}" -gt 0 ]; then
+      echo "VERIFY-ONLY: ${#missing[@]} zig-cache corpus/corpora absent or incomplete."
+      echo "Restore with: bash .port/tools/restore_zig_deps.sh"
+    fi
+    if [ "$oracle_missing" -eq 1 ]; then
+      echo "VERIFY-ONLY: the oracle's own zig-pkg libxev is absent ($XEV_CUR_FILE)."
+      echo "It is part of the read-only oracle checkout at the pin, not the zig cache: this"
+      echo "script cannot restore it; check out the oracle at the pin (gates/ORACLE_PIN)."
+    fi
     exit 1
   fi
   echo "VERIFY-ONLY: all corpora present and complete."

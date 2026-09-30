@@ -10,7 +10,7 @@
 // can grow the table, insert a callback entry, and hand its index to
 // <prefix>_sys_set.
 //
-// Usage: node .port/tools/wasm-parity.mjs [--table-only]
+// Usage: node .port/tools/wasm-parity.mjs [--table-only | --print-oracle]
 //   --table-only runs ONLY the F-006 embedder-callback gate on both modules
 //   (compile + instantiate + grow + <prefix>_sys_set). That gate depends on
 //   nothing but the link/patch pipeline, so it stays runnable independently of
@@ -37,6 +37,12 @@ function resolveOracleRoot() {
       join(root, ".port/tools/gates/_oracle_root.sh"), root],
     { env, encoding: "utf8" },
   ).trim();
+}
+
+// `--print-oracle` prints the derived oracle root and exits (G-ORACLE-SH-SELF arm 5).
+if (process.argv.includes("--print-oracle")) {
+  console.log(resolveOracleRoot());
+  process.exit(0);
 }
 
 const REPO = resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..");

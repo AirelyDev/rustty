@@ -2,7 +2,9 @@
 # check_symbol_manifest.sh — GATE A1 (macOS Swift-app C-ABI symbol manifest + drift) [PROGRESS]
 #
 # DoP id:  A1  (2026-07-12-macos-swift-app-milestone.md, Task A1)
-# Reads:   $GHOSTTY_H (pinned upstream header; default $ORACLE_HEADER_PATH) — R3 external oracle
+# Reads:   $GHOSTTY_H (pinned upstream header; default <oracle>/include/ghostty.h, the oracle
+#          derived by `_oracle_root.sh` as `ghostty` beside the main checkout) — R3 external
+#          oracle. (The `GHOSTTY_H` override itself is N490, open.)
 #          .port/audits/CABI_SYMBOLS.tsv        (the committed manifest: ghostty_name<TAB>rustty_name
 #                                                 <TAB>signature<TAB>source_file<TAB>darwin_only)
 #          crates/**/*.rs                        (the LIVE rustty_* C-ABI exports)
@@ -29,6 +31,7 @@
 # Usage:
 #   check_symbol_manifest.sh                 # verify header <-> TSV <-> live exports
 #   check_symbol_manifest.sh --self-test     # prove the gate flips RED on an injected drift
+#   check_symbol_manifest.sh --print-oracle  # print the derived oracle root (G-ORACLE-SH-SELF arm 5)
 #
 # Exit 0 = GREEN (no drift), 1 = RED (drift), 3 = BLOCKED (pinned header unavailable).
 set -euo pipefail
@@ -173,8 +176,9 @@ self_test() {
 
 case "${1:-}" in
   --self-test) self_test; exit $? ;;
+  --print-oracle) printf '%s\n' "$ORACLE_TREE"; exit 0 ;;
   "" ) : ;;
-  * ) echo "usage: $0 [--self-test]" >&2; exit 2 ;;
+  * ) echo "usage: $0 [--self-test | --print-oracle]" >&2; exit 2 ;;
 esac
 
 set +e
