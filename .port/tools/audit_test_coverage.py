@@ -186,7 +186,14 @@ def self_test(zig, fns, cites, accepted):
 
     # 3. ACCEPTED arm: an absence recorded in TEST_AUDIT.md must come back as a
     #    GAP when the entry is withdrawn — otherwise the ledger is decorative.
-    key = "src/terminal/c/unicode.zig::codepoint_width wide"
+    #    Anchored on "codepoint_width out of range" since P7-W12 T1: the earlier
+    #    anchor, "codepoint_width wide", became name-matched by P7-W10 T2's
+    #    `codepoint_width_unicode18_wide_ranges` (rustty-unicode), so withdrawing
+    #    its entry could no longer produce a gap and this arm went RED. The
+    #    sibling "zero" row is masked the same way by
+    #    `terminal_caps_zero_width_codepoints_attached_to_one_cell`. No fn name
+    #    carries codepoint + width + out + range.
+    key = "src/terminal/c/unicode.zig::codepoint_width out of range"
     assert key in accepted, "self-test anchor gone: re-point arm 3"
     arm("accepted arm fires when the TEST_AUDIT.md entry is withdrawn",
         [z for z in zig if z.endswith("terminal/c/unicode.zig")],

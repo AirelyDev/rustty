@@ -1,0 +1,41 @@
+=== G4 :: differential VT clean (runner) ===
+--- REAL differential gate (port driver: /Users/gael/projects/rustty/.claude/worktrees/agent-a181f82dbf2874104/.port/phase-0/harness/bin/vt_driver_port) ---
+--- staleness guard: vt_driver.c compiles against the pinned oracle headers: OK ---
+--- leg A: comparator over 12 fixtures (ref vs port, byte-exact) ---
+    OK   fixture-basic_text
+    OK   fixture-clear_screen
+    OK   fixture-cursor_moves
+    OK   fixture-empty
+    OK   fixture-fuzz_01-plain-text-slice
+    OK   fixture-fuzz_03-csi-cursor-sgr
+    OK   fixture-fuzz_10-sgr-256-rgb
+    OK   fixture-fuzz_11-utf8-multibyte
+    OK   fixture-fuzz_16-c1-controls
+    OK   fixture-fuzz_17-tab-backspace
+    OK   fixture-fuzz_21-osc-hyperlink
+    OK   fixture-sgr_styles
+--- leg B: 23 c-vt golden cases (port example binary vs stored golden, byte-exact) ---
+    OK      c-vt-build-info
+    OK      c-vt-colors
+    OK      c-vt-effects
+    OK      c-vt-encode-focus
+    OK      c-vt-encode-key
+    OK      c-vt-encode-mouse
+    OK      c-vt-formatter
+    OK      c-vt-grid-ref-tracked
+    OK      c-vt-grid-traverse
+    OK      c-vt-kitty-graphics
+    OK      c-vt-modes
+    OK      c-vt-paste
+    OK      c-vt-render
+    OK      c-vt-search
+    OK      c-vt-selection-gesture
+    OK      c-vt-selection
+    OK      c-vt-sgr
+    OK      c-vt-size-report
+    OK      c-vt-snapshot
+    OK      c-vt-static
+    OK      c-vt-stream
+    OK      c-vt
+    OK      cpp-vt-stream
+GREEN: byte-exact across all fixtures and all cvt golden cases (G4)

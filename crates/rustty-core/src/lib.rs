@@ -218,7 +218,7 @@ mod type_core_prototype {
             self.app
         }
 
-        fn close(&self, _process_alive: bool) {}
+        unsafe fn close(_self: *const Self, _process_alive: bool) {}
 
         fn deinit(&mut self) {}
 

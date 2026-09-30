@@ -894,7 +894,7 @@ mod resize_window_tests {
         fn rt_app(&self) -> *mut TestApp {
             self.app
         }
-        fn close(&self, _process_alive: bool) {}
+        unsafe fn close(_self: *const Self, _process_alive: bool) {}
         fn deinit(&mut self) {}
         fn get_content_scale(&self) -> Result<apprt::ContentScale, apprt::ApprtError> {
             Ok(self.scale)
@@ -2499,11 +2499,14 @@ impl Drop for ThreadStateGuard {
 /// `if (insp_ev) |*ev| ev else null` argument sites are `.ev.as_mut()`
 /// reborrows) and holds a raw surface pointer for the drop-time inspector
 /// recheck. Reachability contract (CORE_BLUEPRINT §4): `ev` is `Some` ONLY
-/// when an inspector existed at keyCallback entry, which is impossible until
-/// Phase 3 (`Inspector` is uninhabited) — so the raw pointer is never
-/// dereferenced today; when it is (Phase 3), the deref happens strictly
-/// AFTER the method body's last `&mut self` use (the guard drops at return —
-/// the rust-mut-args raw-ptr discipline).
+/// when an inspector existed at keyCallback entry. The inspector is live
+/// (WS6), so the raw pointer IS dereferenced whenever an inspector is open;
+/// the deref happens strictly AFTER the body's last use of its local
+/// reborrow (the guard drops at return — the rust-mut-args raw-ptr
+/// discipline). That includes a key that closed the surface: the drop reads
+/// the surface after the close callback returned, as the reference's defer
+/// does, so a host must not free the surface synchronously inside that
+/// callback (N465).
 struct InspEvGuard<A: apprt::App + 'static> {
     surface: *mut Surface<A>,
     ev: Option<inspectorpkg::KeyEvent>,
@@ -3990,10 +3993,26 @@ where
     /// Close this surface. This will trigger the runtime to start the
     /// close process, which should ultimately deinitialize this surface.
     // pub fn close(self: *Surface) void {
-    pub fn close(&mut self) {
+    //
+    // PORT NOTE (N465, P7-W12 T1): raw-self. The runtime's close callback
+    // re-enters this surface synchronously: on macOS the close notification's
+    // handler removes the view from the split tree, which cancels a pending
+    // clipboard confirmation → `rustty_surface_deny_clipboard_request` →
+    // `denyClipboardRequest` (a `&mut` embedded surface, which holds this one
+    // inline); on GTK `close-request` → `SplitTree.surfaceCloseRequest` →
+    // `needsConfirmQuit` on this surface. So no protected `&mut Surface`
+    // spans `rt_surface.close`: `needsConfirmQuit`'s reborrow ends first, and
+    // the runtime surface is reached by place (N442's shape).
+    ///
+    /// # Safety
+    /// `self_` is the stable Surface allocation (init's stability contract); no
+    /// protected `&mut Surface` may span the call, and no reference to it may
+    /// be used after the call returns without being taken afresh.
+    pub unsafe fn close(self_: *mut Self) {
         // self.rt_surface.close(self.needsConfirmQuit());
-        let process_alive = self.needsConfirmQuit();
-        unsafe { &*self.rt_surface }.close(process_alive);
+        let process_alive = unsafe { &mut *self_ }.needsConfirmQuit();
+        let rt_surface = unsafe { (*self_).rt_surface };
+        unsafe { <A::Surface as apprt::Surface>::close(rt_surface, process_alive) };
     }
 
     /// Returns a mailbox that can be used to send messages to this surface.
@@ -4386,6 +4405,10 @@ where
     // here raw-self too. Its macOS handler (`makeKeyAndOrderFront`) may fire the
     // focus publishers synchronously and re-enter this surface
     // (`SurfaceView.swift:40`); unverified, and cheap to make sound.
+    //
+    // PORT NOTE (N465, P7-W12 T1): `.close` and `.child_exited` are dispatched
+    // here raw-self too: both reach `close`, whose runtime callback re-enters
+    // this surface synchronously (see `close`).
     ///
     /// # Safety
     /// `self_` is the stable Surface allocation (init's stability contract); no
@@ -4397,6 +4420,16 @@ where
             Message::ResizeWindow(size) => unsafe { Self::resizeWindow(self_, size) },
             // .present_surface => try self.presentSurface(),
             Message::PresentSurface => unsafe { Self::presentSurface(self_) },
+            // .close => self.close(),
+            Message::Close => {
+                unsafe { Self::close(self_) };
+                Ok(())
+            }
+            // .child_exited => |v| self.childExited(v),
+            Message::ChildExited(v) => {
+                unsafe { Self::childExited(self_, v) };
+                Ok(())
+            }
             msg => unsafe { &mut *self_ }.handleMessageArms(msg),
         }
     }
@@ -4659,10 +4692,11 @@ where
             }
 
             // .close => self.close(),
-            Message::Close => self.close(),
-
             // .child_exited => |v| self.childExited(v),
-            Message::ChildExited(v) => self.childExited(v),
+            //
+            // (dispatched raw-self by `handleMessage`, N465)
+            Message::Close => unreachable!("handleMessage dispatches close"),
+            Message::ChildExited(_) => unreachable!("handleMessage dispatches child_exited"),
 
             // .desktop_notification => |notification| {
             Message::DesktopNotification(notification) => {
@@ -4981,16 +5015,24 @@ where
     // PARITY: not `.unwrap_or(false)` on the two performAction results —
     // each Err arm IS the reference's labeled `catch |err| gui:` block with
     // its log site (the init conditional-state precedent).
+    //
+    // PORT NOTE (N465, P7-W12 T1): raw-self. The closing `self.close()` runs the
+    // runtime's close callback, which re-enters this surface (see `close`).
+    ///
+    /// # Safety
+    /// As [`Surface::handleMessage`].
     #[allow(clippy::manual_unwrap_or, clippy::manual_unwrap_or_default)]
-    fn childExited(&mut self, info: apprt::surface::ChildExited) {
+    unsafe fn childExited(self_: *mut Self, info: apprt::surface::ChildExited) {
+        // (N465: an unprotected local reborrow, dead before `close`.)
+        let this = unsafe { &mut *self_ };
         // Mark our flag that we exited immediately
         // self.child_exited = true;
-        self.child_exited = true;
+        this.child_exited = true;
 
         // If our runtime was below some threshold then we assume that this
         // was an abnormal exit and we show an error message.
         // if (info.runtime_ms <= self.config.abnormal_command_exit_runtime_ms) runtime: {
-        if info.runtime_ms <= u64::from(self.config.abnormal_command_exit_runtime_ms) {
+        if info.runtime_ms <= u64::from(this.config.abnormal_command_exit_runtime_ms) {
             'runtime: {
                 // On macOS, our exit code detection doesn't work, possibly
                 // because of our `login` wrapper. More investigation required.
@@ -5018,8 +5060,11 @@ where
                 //     log.err("error trying to show native child exited GUI err={}", .{err});
                 //     break :gui false;
                 // }) return;
-                if match unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::surface_ref(&*self),
+                //
+                // (N465, ruling 62: the host callback may re-enter this surface,
+                // so it runs by place through `self_`; `this` is re-taken after.)
+                if match unsafe { &*(*self_).rt_app }.perform_action(
+                    unsafe { apprt::Target::surface_ptr(self_) },
                     apprt::Action::ShowChildExited(info),
                 ) {
                     Ok(shown) => shown,
@@ -5035,6 +5080,7 @@ where
                 } {
                     return;
                 }
+                let this = unsafe { &mut *self_ };
 
                 // If a native GUI notification was not shown, update our terminal to
                 // note the abnormal exit.
@@ -5042,7 +5088,7 @@ where
                 //     log.err("error handling abnormal child exit err={}", .{err});
                 //     return;
                 // };
-                if let Err(err) = self.childExitedAbnormally(info) {
+                if let Err(err) = this.childExitedAbnormally(info) {
                     // log.err("error handling abnormal child exit err={}", .{err});
                     log::error!(target: LOG_SCOPE, "error handling abnormal child exit err={err:?}");
                     return;
@@ -5069,8 +5115,10 @@ where
             //     log.err("error trying to show native child exited GUI err={}", .{err});
             //     break :gui false;
             // }) break :terminal;
-            if match unsafe { &*self.rt_app }.perform_action(
-                apprt::Target::surface_ref(&*self),
+            //
+            // (N465, ruling 62: by place through `self_`, as above.)
+            if match unsafe { &*(*self_).rt_app }.perform_action(
+                unsafe { apprt::Target::surface_ptr(self_) },
                 apprt::Action::ShowChildExited(info),
             ) {
                 Ok(shown) => shown,
@@ -5086,6 +5134,7 @@ where
             } {
                 break 'terminal;
             }
+            let this = unsafe { &mut *self_ };
 
             // If the native GUI can't be shown, display a text message in the
             // terminal.
@@ -5094,14 +5143,14 @@ where
             //
             // (guard-less zigstd Mutex — the defer is the explicit unlock at
             // every exit of this block.)
-            unsafe { (*(*self.renderer_state.as_ptr()).mutex).lock() };
+            unsafe { (*(*this.renderer_state.as_ptr()).mutex).lock() };
             // const t: *terminal.Terminal = self.renderer_state.terminal;
-            let t: *mut Terminal = unsafe { (*self.renderer_state.as_ptr()).terminal };
+            let t: *mut Terminal = unsafe { (*this.renderer_state.as_ptr()).terminal };
             // t.carriageReturn();
             unsafe { (*t).carriage_return() };
             // t.linefeed() catch break :terminal;
             if unsafe { (*t).linefeed() }.is_err() {
-                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
+                unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                 break 'terminal;
             }
             // t.printString("Process exited. Press any key to close the terminal.") catch
@@ -5109,7 +5158,7 @@ where
             if unsafe { (*t).print_string(b"Process exited. Press any key to close the terminal.") }
                 .is_err()
             {
-                unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
+                unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
                 break 'terminal;
             }
             // t.modes.set(.cursor_visible, false);
@@ -5132,20 +5181,23 @@ where
             };
 
             // (the deferred mutex unlock — the normal exit of the block)
-            unsafe { (*(*self.renderer_state.as_ptr()).mutex).unlock() };
+            unsafe { (*(*this.renderer_state.as_ptr()).mutex).unlock() };
         }
 
         // Waiting after command we stop here. The terminal is updated, our
         // state is updated, and now its up to the user to decide what to do.
         // if (self.config.wait_after_command) return;
-        if self.config.wait_after_command {
+        //
+        // (N465: re-taken after the show_child_exited callback.)
+        let this = unsafe { &mut *self_ };
+        if this.config.wait_after_command {
             return;
         }
 
         // If we aren't waiting after the command, then we exit immediately
         // with no confirmation.
         // self.close();
-        self.close();
+        unsafe { Self::close(self_) };
     }
 
     /// Called when the child process exited abnormally.
@@ -8180,7 +8232,9 @@ where
                 //
                 // (Drop-owned `WriteReq` — freed by the return below.)
                 // self.close();
-                this.close();
+                //
+                // (N465: raw-self; `this` is dead from here on.)
+                unsafe { Self::close(self_) };
                 // return .closed;
                 return Ok(InputEffect::Closed);
             }
@@ -13890,7 +13944,9 @@ where
             }
 
             // .close_surface => self.close(),
-            binding::ScopedSurface::CloseSurface => this.close(),
+            //
+            // (N465: raw-self; `this` is dead in this arm and after the match.)
+            binding::ScopedSurface::CloseSurface => unsafe { Self::close(self_) },
 
             // .close_window => return try self.rt_app.performAction(
             //     .{ .surface = self },
@@ -17377,7 +17433,7 @@ mod clipboard_codepoint_map_e2e {
         fn rt_app(&self) -> *mut TestApp {
             self.app
         }
-        fn close(&self, _process_alive: bool) {}
+        unsafe fn close(_self: *const Self, _process_alive: bool) {}
         fn deinit(&mut self) {}
         fn get_content_scale(&self) -> Result<apprt::ContentScale, apprt::ApprtError> {
             unimplemented!("S151-F1 KAT: not driven")

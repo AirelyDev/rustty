@@ -168,10 +168,15 @@ impl ApprtSurface for Surface {
         }
     }
 
-    fn close(&self, _process_alive: bool) {
+    unsafe fn close(self_: *const Self, _process_alive: bool) {
         // PORTS: `Surface.zig:35-38`. The reference DISCARDS `process_active`
         // (`_ = process_active;`) and emits the widget's close-request signal.
-        if let Some(s) = self.gobj() {
+        //
+        // PORT NOTE (N465): raw-self (see the seam). The `&Self` reborrow ends
+        // with `gobj()`, before the emission, whose `SplitTree` handler reads
+        // the core surface (`needsConfirmQuit`).
+        let gobj = unsafe { &*self_ }.gobj();
+        if let Some(s) = gobj {
             s.close();
         }
     }

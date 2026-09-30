@@ -543,6 +543,27 @@ fn gen_xml(resource_path: &str, base_app_id: &str, ui_files: &[(&Blueprint, Path
     // blueprint files in `${ui_path}/{major}.{minor}/{name}.blp` and
     // assuming these will be
     //
+    // /// Generate all the UI resources.
+    // ///
+    // /// Each file is written as a *relative* path, `{major}.{minor}/{name}.ui`,
+    // /// which `glib-compile-resources` resolves against a `--sourcedir`. An
+    // /// absolute path into the Zig cache would change whenever the step that
+    // /// produced the `.ui` did, and this XML with it.
+    // ///
+    // /// The compiled `.ui` files are not inputs here for the same reason. We
+    // /// check that the blueprint *sources* exist instead, as `genRoot` and
+    // /// `genIcons` do for the CSS and icons.
+    // fn genUi(io: std.Io, writer: *std.Io.Writer) !void {
+    //     // Two `comptimePrint` calls per blueprint exceed the default quota.
+    //     @setEvalBranchQuota(100_000);
+    //
+    // PORT NOTE (gresource.zig:218-230 at the Phase-7 pin, ef7edc4a2): quoted, not
+    // followed. The relative-path form exists for the Zig build cache, whose step
+    // outputs move with their inputs; this build script compiles the blueprints
+    // into OUT_DIR itself, in the same run that writes this XML, so the absolute
+    // OUT_DIR body below is as stable as the XML (both are rewritten together).
+    // There is no comptime evaluation quota in Rust.
+    //
     // genUi (gresource.zig:242-277): each compiled .ui, compressed +
     // xml-stripblanks, aliased {maj}.{min}/{name}.ui; the body is the absolute
     // OUT_DIR path (outside --sourcedir). The reference's per-file manifest

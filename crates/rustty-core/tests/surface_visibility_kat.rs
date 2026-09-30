@@ -103,7 +103,7 @@ impl apprt::Surface for TestRtSurface {
     fn rt_app(&self) -> *mut TestApp {
         self.app
     }
-    fn close(&self, _process_alive: bool) {}
+    unsafe fn close(_self: *const Self, _process_alive: bool) {}
     fn deinit(&mut self) {}
     fn get_content_scale(&self) -> Result<apprt::ContentScale, apprt::ApprtError> {
         unimplemented!("V21 KAT: not driven")

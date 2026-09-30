@@ -1,0 +1,38 @@
+/dev/disk3s5   460Gi   419Gi    18Gi    96%    3.8M  184M    2%   /System/Volumes/Data
+G-TESTS-SELF rc=0 (1s) :: SELF-TEST GREEN: all 4 acceptance arms demonstrated reachable FAIL; the audit tools ignore GIT_* redirection.
+G-TESTS rc=0 (16s) :: GREEN: every live-oracle test has a counterpart or a written reason.
+G-FILES rc=0 (135s) :: GREEN: every oracle file has a counterpart or a written non-port.
+G-SYMS rc=0 (1s) :: GREEN: every oracle `pub fn` has a counterpart or a written reason.
+G-CENSUS-SELF rc=0 (2s) :: SELF-TEST GREEN: all 4 arms demonstrated reachable FAIL.
+G-CENSUS rc=0 (1s) :: GREEN: the frozen-vs-live census delta is recorded and current.
+G-PARITY-SELF rc=0 (0s) :: SELF-TEST GREEN: the gate flips RED on an open row, an unjustified waiver, and an unknown state.
+G-PARITY rc=0 (0s) :: GREEN: every audited parity finding is closed or waived-with-reason.
+G-UDDOCS-SELF rc=0 (0s) :: SELF-TEST GREEN: the gate flips RED on a missing/duplicated status line, an undocumented fix, a citation of a non-existent or non-fix-type UD, and a private-rep
+G-UDDOCS rc=0 (0s) :: CHECK PASS
+G-LOGFILE-SELF rc=0 (2s) :: off-pin or GIT_DIR-redirected oracle is BLOCKED.
+G-LOGFILE rc=0 (64s) :: GREEN: every reference file's port emits at least reference-minus-allowance diagnostics on every platform arm.
+G-REFGEOM-SELF rc=0 (1s) :: measured difference is RED.
+G-REFGEOM rc=0 (94s) :: G-REFGEOM GREEN: 36 lines, 3 targets, equal to the golden
+G-THEMES rc=0 (0s) :: G-THEMES: vendored theme corpus byte-exact (617 files)
+G3b rc=0 (87s) :: GREEN: every distinctive reference comment has a match in the port (G3b)
+G3b-SELF rc=0 (29s) ::   [ok ] not-carried: REAL: the committed MIXED-CARRIED row's phrase is in the apprt port
+G7 rc=0 (0s) :: GREEN: rustty crate graph is acyclic (G7)
+G-EOL rc=0 (13s) :: G-EOL GREEN (7 arm(s) clean).
+G-I18N rc=0 (1s) ::   Not checked: whether po/io.airely.rustty.pot itself is current — see the gate header.
+G1b-SELF rc=0 (0s) :: G1b SELF-TEST: GREEN
+G1b rc=0 (0s) :: TEST-COUNT GATE: GREEN — every module has rust #[test] >= zig test{} (minus apc-deferred)
+G1-SELF rc=0 (2s) :: SELF-TEST: PASS
+G1 rc=0 (5s) :: GREEN: progress 6109/3227; no claimed-done crate is short
+A3 rc=0 (0s) :: >> Task-4 PASS: include/rustty-embed.h is exactly the pinned ghostty oracle header renamed ghostty->rustty (91 functions), zero ghostty_* left behind.
+A4 rc=0 (2s) :: check_embed_h_abi: PASS — every by-value-return ABI type is frozen and matches the header.
+A5 rc=0 (13s) :: VT-HEADERS: GREEN
+A5-MASK-SELF rc=0 (1s) :: SELF-TEST-MASKING: PASS
+G-ORACLE-SH-SELF rc=0 (4s) :: G-ORACLE-SH-SELF GREEN: the shell resolver, the pin, and every oracle reader hold.
+G-P2-SELF rc=0 (1s) :: G-P2 SELF-TEST: GREEN — the ENVIRONMENT-BLOCKED arm accepts the shipped rows and rejects each requirement being broken.
+G-P2 rc=0 (0s) :: PHASE-2 CLOSURE GATE: GREEN — 100 open-claim entries examined; every one is struck, reclassified, or owned by an OPEN workstream.
+G9 rc=0 (11s) :: GREEN: progress 693/693; no claimed-done owner uncovered
+G4 rc=0 (2s) :: GREEN: byte-exact across all fixtures and all cvt golden cases (G4)
+G3b-STRICT rc=0 (120s) :: GREEN: every distinctive reference comment has a match in the port (G3b)
+G-SKIP rc=0 (7s) :: G-SKIP: 0 silent-skip site(s), 0 allow-list error(s); 248 guarded return(s) accepted
+
+[exited with code 0]

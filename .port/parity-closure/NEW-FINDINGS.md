@@ -8723,8 +8723,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 
 - **id**: N437. Phase 7 start (P7-W0 T4; the P7-W0 T1 review, controller ruling 7). **severity**: medium
   (aliasing-model UB on the macOS renderer every frame; no observed miscompile). **kind**: port soundness (Stacked
-  and Tree Borrows); pre-existing, not introduced by `72cf50855`. **state**: OPEN; owned by P7-W7 T2 (the
-  renderer-lifecycle rework). CLOSED (fixed, P7-W7 T2).
+  and Tree Borrows); pre-existing, not introduced by `72cf50855`. **state**: CLOSED (fixed, P7-W7 T2).
+- **state history**: opened OPEN at P7-W0 T4, owned by P7-W7 T2 (the renderer-lifecycle rework), which
+  closed it.
 - **finding**: on macOS CoreAnimation calls `draw_frame_raw(sync = true)` on the main thread
   (`crates/rustty-core/src/renderer_seam.rs:492`, `:496`), which reaches the renderer through a raw pointer and
   takes `draw_mutex`. Meanwhile the render thread calls whole-`Renderer` `&mut self` / `&self` methods through
@@ -8850,7 +8851,8 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **id**: N441. P7-W7 T2 fix round 1 (review IMPORTANT 3, controller ruling 33). **severity**: medium
   (aliasing-model UB on every platform whenever a main-thread surface callback overlaps a render-thread
   locked write; no observed miscompile). **kind**: port soundness (Stacked and Tree Borrows).
-  **state**: OPEN; a follow-up task. CLOSED (fixed, P7-W7 T5b).
+  **state**: CLOSED (fixed, P7-W7 T5b).
+- **state history**: opened OPEN at P7-W7 T2 fix round 1 as a follow-up task; P7-W7 T5b closed it.
 - **finding**: the core `Surface` embeds the renderer (`renderer: renderer_seam::Renderer`, whose `.0`
   is the `rustty_renderer::Renderer`). The GTK main thread calls core methods through a whole
   `&mut Surface`: `unsafe { &mut *core }.contentScaleCallback(..)` and `.sizeCallback(..)`
@@ -8919,8 +8921,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **id**: N442. P7-W8 T2 fix round 1 (review IMPORTANT, controller ruling 37). **severity**: medium
   (aliasing-model UB on every menu or keybind split/tab/window; no observed miscompile). **kind**: port
   soundness (Stacked Borrows; a function-argument protector). **Not upstream**: Zig's `*Surface` carries no
-  aliasing rule and no protector, so the reference is sound. **state**: OPEN → P7-W7 T5 (lands with N441).
-  CLOSED (fixed, P7-W7 T5b).
+  aliasing rule and no protector, so the reference is sound. **state**: CLOSED (fixed, P7-W7 T5b).
+- **state history**: opened OPEN at P7-W8 T2 fix round 1, owned by P7-W7 T5 (to land with N441); P7-W7
+  T5b closed it.
 - **shape**: `rustty_core::Surface::performBindingAction(&mut self, ..)` (`crates/rustty-core/src/surface.rs:11270`)
   is a `&mut self` method, so `self` is a protected Unique for the whole call. Its `new_split`
   (`:12537`), `new_tab` (`:12426`) and `new_window` (`:11282`) arms call `rt_app.perform_action(..)`, which
@@ -9014,6 +9017,10 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
     it runs. The core surface is freed only in the widget's finalize (`imp::Surface::drop` →
     `finalize_core_surface`), which runs at the last unref, after both have returned.
 - **residual**: the same protector shape on the core `App` is **N443**, CLOSED by fix round 1.
+- **residual (P7-W12 T1)**: the close callback itself re-enters the surface (it does not free it):
+  `close(&mut self)` was protected across `rt_surface.close`, and the macOS close notification can
+  write the surface through `rustty_surface_deny_clipboard_request`, while GTK's `close-request`
+  handler reads it (`needsConfirmQuit`). That is **N465**, CLOSED.
 
 ## N443 — `App::performAction`/`keyEvent` hold a protected reference to the app across any host callback that re-enters it
 
@@ -9392,8 +9399,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
       `handleMessage` arm), so it is no longer a limit.
     - `recomputeInitialSize` (`initial_size`): the handler sets `surfaceView.initialSize`, which the
       SwiftUI `idealWidth` binding reads. Whether that lays out and re-enters synchronously is not
-      verified. Its callers (`setCellSize` ← `setFontSize` ← many `&mut self` paths) make raw-self a
-      wide change, so it stays OPEN.
+      verified here. Its callers (`setCellSize` ← `setFontSize` ← many `&mut self` paths) make
+      raw-self a wide change, so it was left protected. N459 is CLOSED (P7-W12 T0): no host
+      re-enters the surface there, so no raw-self change is needed and it is no longer a limit.
 
 ## N459 — `recomputeInitialSize` holds a protected `&mut Surface` across the `initial_size` host callback (re-entry unverified)
 
@@ -9451,7 +9459,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **id**: N452. P7-W2 T6 (implementer concern 4; task review, controller ruling 51). **severity**: medium
   (aliasing-model UB in the port only; no observed miscompile). **kind**: port soundness (Stacked
   Borrows). **Not upstream**: Zig's `*Stream`/`*Handler` carry no protector, so the reference is sound.
-  **state**: OPEN → follow-up task P7-W2 T9 (a Phase-7 exit item). CLOSED (fixed, P7-W2 T9).
+  **state**: CLOSED (fixed, P7-W2 T9).
+- **state history**: opened OPEN at P7-W2 T6, owned by the follow-up task P7-W2 T9 (a Phase-7 exit
+  item), which closed it.
 - **shape**: `rustty_terminal_vt_write` runs `next_slice` with a protected `&mut Stream` (and the
   handler's `&mut self` below it) for the whole call, and effect callbacks (bell, title, clipboard,
   render_hold, …) run synchronously inside it. The reference headers
@@ -9547,8 +9557,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 
 - **id**: N454. P7-W2 T9 task review (finding 1; controller ruling 54). **severity**: medium
   (aliasing-model UB in the port only). **kind**: port soundness (Stacked Borrows). **Not upstream**:
-  Zig pointers carry no protector. **state**: OPEN → follow-up task P7-W2 T10 (a Phase-7 exit item).
-  CLOSED (fixed, P7-W2 T10).
+  Zig pointers carry no protector. **state**: CLOSED (fixed, P7-W2 T10).
+- **state history**: opened OPEN at the P7-W2 T9 task review, owned by the follow-up task P7-W2 T10 (a
+  Phase-7 exit item), which closed it.
 - **shape**: `paste_pkg::paste` (`crates/rustty-vt/src/stream_terminal.rs:683-711`, reached from
   `crates/rustty-vt-c/src/paste.rs:227`) holds `Context { terminal: &Terminal, kitty_clipboard: &mut
   grants }` under a protected `&mut Handler`, and pulls data synchronously through the embedder's
@@ -9694,3 +9705,62 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **resync note** (fix round 1): `ext.cpp` mirrors the reference's `pkg/dcimgui/ext.cpp`; a resync
   that copies it from upstream must re-apply the RUSTTY-ONLY global include block, or the native
   aarch64 Windows build breaks again.
+
+## N465 — `Surface::close(&mut self)` holds a protected `&mut Surface` across the runtime's close callback, which re-enters the surface
+
+- **id**: N465. P7-W12 T1 (the Phase-7 final review, controller ruling 61). **severity**: medium
+  (aliasing-model UB on every GTK close, and on a macOS close while a clipboard confirmation is
+  pending on the surface; no observed miscompile). **kind**: port soundness (Stacked and Tree Borrows;
+  a function-argument protector). **Not upstream**: Zig's `*Surface` and `*const apprt.Surface` carry no
+  protector, so the reference is sound; no UD. **state**: CLOSED (fixed, P7-W12 T1).
+- **shape**: `rustty_core::Surface::close(&mut self)` ran `self.rt_surface.close(self.needsConfirmQuit())`
+  with `self` protected for the whole runtime callback. It is reached from `childExited(&mut self)` and
+  `handleMessageArms(&mut self)` (`.close`, `.child_exited`), `keyCallback`'s child-exited close,
+  `performBindingAction`'s `.close_surface`, `App::closeSurface`, and `rustty_surface_request_close`'s
+  fallback. The seam's `fn close(&self, process_alive)` added a second protector: the embedded
+  `Surface` holds `core_surface` inline, so its `&self` covered the core bytes for the whole callback.
+- **host trace** (synchronous re-entry):
+  - macOS: `close_surface_cb` → `App.closeSurface` posts `rusttyCloseSurface` (`Rustty.App.swift:291`).
+    `NotificationCenter` delivers synchronously to `BaseTerminalController.rusttyDidCloseSurface`
+    (`:658`) → `closeSurface(node, withConfirmation: process_alive)` (`:469`). With
+    `withConfirmation == false` it runs `removeSurfaceNode` → `replaceSurfaceTree` → the `surfaceTree`
+    didSet (`:49-53`) → `surfaceTreeDidChange` (`:336`) → `cancelPendingClipboardConfirmation` (`:1660`)
+    → `pendingClipboardConfirmation = nil` → its didSet (`SurfaceView_AppKit.swift:113`,
+    `pendingClipboardConfirmationDidChange` `:1910`) → `previous.cancel(from:)` → the completion
+    (`Rustty.App.swift:411-423`) → `rustty_surface_deny_clipboard_request` → embedded
+    `denyClipboardRequest(&mut self)` → core `denyClipboardRequest`: a write. Only when a clipboard
+    confirmation is pending on that surface (an unfocused surface's OSC 52 read keeps it pending). The
+    focus move is `DispatchQueue.main.async` (`replaceSurfaceTree`), and `confirmClose` is an alert
+    (asynchronous). The surface is not freed synchronously (N442's audit: the notification object,
+    the tree node and the undo stack keep the view alive).
+  - GTK: `close` emits `close-request`; `SplitTree.surface_close_request`
+    (`crates/rustty-apprt/src/gtk/class/split_tree.rs:865`) takes `&mut *core` for
+    `needsConfirmQuit()` on every close, then `close_confirmation_close` replaces the tree. The widget
+    is not finalized during the emission (N442's audit).
+- **fix**: raw-self, N442's shape.
+  - Core `close(self_: *mut Surface)` and `childExited(self_: *mut Surface, ..)` are unsafe associated
+    fns. `handleMessage` dispatches `.close` and `.child_exited` raw (`handleMessageArms` marks them
+    unreachable). `close` ends `needsConfirmQuit`'s reborrow and reads `rt_surface` by place before the
+    callback; `childExited`'s unprotected local reborrow is dead before `close`.
+  - The seam is `unsafe fn close(self_: *const Self, process_alive)`. The embedded impl reads `app` and
+    `userdata` by place; the GTK impl's `&Self` ends with `gobj()`, before the emission.
+  - Callers: `keyCallback` and `performBindingAction` call `Surface::close(self_)` (their `this` is dead
+    after), `App::closeSurface` passes its surface pointer, and `rustty_surface_request_close` passes
+    `&raw mut (*ptr).core_surface`.
+- **proof**: `.port/phase-2/mirihar-n465` (16 seeds each). `n465_shipped_macos_child_exited` and
+  `n465_shipped_gtk_child_exited` are UB under SB and TB. The negative `n465_core_only_macos_child_exited`
+  (core raw-self, seam still `&self`) is UB under both, so both halves are needed. `n465_fixed_*`
+  (`.close`, `.child_exited` and the C fallback on macOS; `.close` and `.child_exited` on GTK) is CLEAN
+  under both. The negative row is macOS-only: "both halves are needed" holds for the embedded runtime,
+  whose surface holds the core inline. The GTK runtime surface is a separate allocation, so there the
+  core half is what matters, and no core-only GTK row was run. LIFETIMES row
+  `src/Surface.zig Surface [self across rt_surface.close]`.
+- **fix round (ruling 62)**: `childExited`'s two `show_child_exited` callbacks now run by place
+  (`Target::surface_ptr(self_)`), and `this` is re-taken after each, per N442's convention.
+- **test**: `crates/rustty-apprt-c/tests/macos_window_host.rs::close_callback_reenters_the_closing_surface`
+  makes a real pending clipboard request (a `paste_from_clipboard` whose read callback starts it and
+  keeps the state), then `cb_close_surface` calls `rustty_surface_deny_clipboard_request` on the
+  closing surface, as the macOS host's close path does. Miri cannot see across the FFI.
+- **host contract**: a host must not free the surface synchronously inside the close callback. The
+  surface is touched after the callback returns, as in the reference: `keyCallback`'s `InspEvGuard`
+  drop re-reads it, and a chained `close_surface > X` binding runs its next action on it.

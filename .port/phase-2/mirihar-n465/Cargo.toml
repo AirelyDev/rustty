@@ -1,0 +1,16 @@
+[package]
+name = "mirihar-n465"
+version = "0.0.0"
+edition = "2021"
+
+[[bin]]
+name = "mirihar-n465"
+path = "src/main.rs"
+
+# No dependencies: a self-contained model of the core `Surface::close` /
+# `childExited` receivers, the runtime `Surface::close` seam, the embedded and
+# GTK close paths, and the hosts' synchronous re-entry, reduced to the borrow
+# shapes N465 is about.
+
+# Standalone: not part of the rustty root workspace (this is a proof artifact).
+[workspace]

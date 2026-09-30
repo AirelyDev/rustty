@@ -1,0 +1,207 @@
+# P7-W12 T1 -- R5-upstream-tests.tsv checklist (200 rows) at 12752b2ac
+# Columns: change, upstream file, upstream test name, sha, disposition (Rust fn @ file:line).
+# PRESENT = ported by name; RE-ALIGNED = body checked against the upstream end-state diff
+#   (every added numeric/string literal and assertion present in the Rust body);
+# DROPPED = no counterpart left; NON-PORT = TinyIo non-port row.
+# Totals: add:ANON=1, add:NON-PORT=24, add:PRESENT=112, change:RE-ALIGNED=40, remove:DROPPED=2, remove:NON-PORT=21
+# Required by R5 §4: 112 named adds PRESENT, 40 changes RE-ALIGNED, 2 removals DROPPED -> all met, 0 gaps.
+add	pkg/wuffs/src/zlib.zig	zlib decode grows output	4b86e3594	PRESENT zlib_decode_grows_output @ crates/rustty-wuffs/src/zlib.rs:212
+add	pkg/wuffs/src/zlib.zig	zlib decode enforces output limit	4b86e3594	PRESENT zlib_decode_enforces_output_limit @ crates/rustty-wuffs/src/zlib.rs:224
+add	pkg/wuffs/src/zlib.zig	zlib decode accepts exact limit and rejects truncated input	4b86e3594	PRESENT zlib_decode_accepts_exact_limit_and_rejects_truncated_input @ crates/rustty-wuffs/src/zlib.rs:235
+add	pkg/wuffs/src/zlib.zig	zlib decode aligns decoder in an unaligned allocator buffer	42049f1c4	PRESENT zlib_decode_aligns_decoder_in_an_unaligned_allocator_buffer @ crates/rustty-wuffs/src/zlib.rs:323
+add	pkg/wuffs/src/zlib.zig	zlib decode rejects corrupted checksum	42049f1c4	PRESENT zlib_decode_rejects_corrupted_checksum @ crates/rustty-wuffs/src/zlib.rs:360
+change	src/apprt/gtk.zig	test {} (anonymous; import/refAllDecls block)	45013faf8	RE-ALIGNED pub mod scale (module inclusion) @ crates/rustty-apprt/src/gtk.rs:117
+add	src/apprt/gtk/scale.zig	deviceSize integer scale	45013faf8	PRESENT device_size_integer_scale @ crates/rustty-apprt/src/gtk/scale.rs:215
+add	src/apprt/gtk/scale.zig	deviceSize fractional scale	45013faf8	PRESENT device_size_fractional_scale @ crates/rustty-apprt/src/gtk/scale.rs:233
+add	src/apprt/gtk/scale.zig	deviceSize rejects non-positive inputs	45013faf8	PRESENT device_size_rejects_non_positive_inputs @ crates/rustty-apprt/src/gtk/scale.rs:258
+add	src/apprt/gtk/scale.zig	snapOffset aligns fractional device origins	9dc7408be	PRESENT snap_offset_aligns_fractional_device_origins @ crates/rustty-apprt/src/gtk/scale.rs:283
+add	src/apprt/gtk/scale.zig	snapOffset rejects non-positive scale	70a75ceb5	PRESENT snap_offset_rejects_non_positive_scale @ crates/rustty-apprt/src/gtk/scale.rs:291
+add	src/apprt/gtk/scale.zig	snappedDeviceSize uses origin-aware device spans	0070f9d0a	PRESENT snapped_device_size_uses_origin_aware_device_spans @ crates/rustty-apprt/src/gtk/scale.rs:297
+add	src/apprt/gtk/scale.zig	snappedDeviceSize integer scale with origin	70a75ceb5	PRESENT snapped_device_size_integer_scale_with_origin @ crates/rustty-apprt/src/gtk/scale.rs:323
+add	src/config/Config.zig	RepeatableCommand clone rebuilds the C mirror	5909690de	PRESENT repeatable_command_clone_rebuilds_the_c_mirror @ crates/rustty-config/src/value_types.rs:9847
+add	src/datastruct/comptime_int_set.zig	ComptimeIntSet: empty	079502e23	PRESENT comptime_int_set_empty @ crates/rustty-datastruct/src/comptime_int_set.rs:222
+add	src/datastruct/comptime_int_set.zig	ComptimeIntSet: single	079502e23	PRESENT comptime_int_set_single @ crates/rustty-datastruct/src/comptime_int_set.rs:230
+add	src/datastruct/comptime_int_set.zig	ComptimeIntSet: unsorted keys return original index	079502e23	PRESENT comptime_int_set_unsorted_keys_return_original_index @ crates/rustty-datastruct/src/comptime_int_set.rs:239
+add	src/datastruct/comptime_int_set.zig	ComptimeIntSet: exhaustive against linear scan	079502e23	PRESENT comptime_int_set_exhaustive_against_linear_scan @ crates/rustty-datastruct/src/comptime_int_set.rs:254
+add	src/datastruct/comptime_int_set.zig	ComptimeIntSet: signed	079502e23	PRESENT comptime_int_set_signed @ crates/rustty-datastruct/src/comptime_int_set.rs:304
+add	src/datastruct/untouched_pool.zig	UntouchedPool: create, destroy, reuse	e01e75bbb	PRESENT untouched_pool_create_destroy_reuse @ crates/rustty-datastruct/src/untouched_pool.rs:524
+add	src/datastruct/untouched_pool.zig	UntouchedPool: create and destroy never touch items	e01e75bbb	PRESENT untouched_pool_create_and_destroy_never_touch_items @ crates/rustty-datastruct/src/untouched_pool.rs:556
+add	src/datastruct/untouched_pool.zig	UntouchedPool: destroy never allocates from the general allocator	e01e75bbb	PRESENT untouched_pool_destroy_never_allocates_from_the_general_allocator @ crates/rustty-datastruct/src/untouched_pool.rs:616
+add	src/datastruct/untouched_pool.zig	UntouchedPool: reset retains at most the limit	e01e75bbb	PRESENT untouched_pool_reset_retains_at_most_the_limit @ crates/rustty-datastruct/src/untouched_pool.rs:650
+add	src/datastruct/untouched_pool.zig	UntouchedPool: release frees immediately	e01e75bbb	PRESENT untouched_pool_release_frees_immediately @ crates/rustty-datastruct/src/untouched_pool.rs:686
+change	src/datastruct/wasm_page_pool.zig	test WasmPagePool (decltest)	e01e75bbb	RE-ALIGNED wasm_page_pool @ crates/rustty-datastruct/src/wasm_page_pool.rs:421
+change	src/font/SharedGrid.zig	renderGlyph error after cache insert rolls back cache entry	f3276131f	RE-ALIGNED render_glyph_error_after_cache_insert_rolls_back_cache_entry @ crates/rustty-font-shaper/src/shared_grid.rs:989
+add	src/font/nerd_font_attributes.zig	Constraints lookup table	a3f3331d4	PRESENT constraints_lookup_table @ crates/rustty-font/src/nerd_font_attributes.rs:132
+add	src/input/key_encode.zig	legacy: alt+escape with modify other state 2	37e3cdd2d	PRESENT legacy_alt_escape_with_modify_other_state_2 @ crates/rustty-vt/src/input/key_encode.rs:2973
+add	src/input/key_encode.zig	legacy: alt+unicode	587e08f3f	PRESENT legacy_alt_unicode @ crates/rustty-vt/src/input/key_encode.rs:3105
+add	src/input/key_encode.zig	legacy: alt+unicode only unshifted	587e08f3f	PRESENT legacy_alt_unicode_only_unshifted @ crates/rustty-vt/src/input/key_encode.rs:3160
+add	src/input/key_encode.zig	legacy: alt+unicode without unshifted	587e08f3f	PRESENT legacy_alt_unicode_without_unshifted @ crates/rustty-vt/src/input/key_encode.rs:3184
+change	src/input/key_encode.zig	legacy: alt+ф	587e08f3f	RE-ALIGNED legacy_alt_f_cyrillic @ crates/rustty-vt/src/input/key_encode.rs:3325
+add	src/input/key_encode.zig	legacy: ctrl+char with modify other state 2	4406cea3e	PRESENT legacy_ctrl_char_with_modify_other_state_2 @ crates/rustty-vt/src/input/key_encode.rs:3515
+add	src/input/key_encode.zig	legacy: ctrl+char without modify other state 2	4406cea3e	PRESENT legacy_ctrl_char_without_modify_other_state_2 @ crates/rustty-vt/src/input/key_encode.rs:3538
+add	src/input/key_encode.zig	legacy: keypad 1 with modify other state 2	636a2f35b	PRESENT legacy_keypad_1_with_modify_other_state_2 @ crates/rustty-vt/src/input/key_encode.rs:3805
+add	src/input/key_encode.zig	legacy: f13 through f25	e7bdda991	PRESENT legacy_f13_through_f25 @ crates/rustty-vt/src/input/key_encode.rs:4026
+add	src/input/key_encode.zig	legacy: help and context menu	cc3fd8a77	PRESENT legacy_help_and_context_menu @ crates/rustty-vt/src/input/key_encode.rs:4127
+add	src/lib/TinyIo.zig	test {} (anonymous; import/refAllDecls block)	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+remove	src/lib/TinyIo.zig	read a file through File.Reader	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+remove	src/lib/TinyIo.zig	seek	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+remove	src/lib/TinyIo.zig	realPath and deleteFile	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+remove	src/lib/TinyIo.zig	openFile of a directory returns IsDir	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+remove	src/lib/TinyIo.zig	Io.Mutex through TinyIo	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+remove	src/lib/TinyIo.zig	randomSecure fills with fresh entropy	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+remove	src/lib/TinyIo.zig	unused operations fail gracefully	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+remove	src/lib/TinyIo.zig	openFile edge cases	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+remove	src/lib/TinyIo.zig	openFile symlink handling	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+remove	src/lib/TinyIo.zig	positional reads at and beyond EOF return zero	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+remove	src/lib/TinyIo.zig	vectored reads scatter across buffers	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+remove	src/lib/TinyIo.zig	streaming reads: EndOfStream and scatter	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+remove	src/lib/TinyIo.zig	pipes: streaming works, positional and seek are Unseekable	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+remove	src/lib/TinyIo.zig	operate delegates non-read operations to failing stubs	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+remove	src/lib/TinyIo.zig	dirRealPathFile edge cases	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+remove	src/lib/TinyIo.zig	deleteFile edge cases	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+remove	src/lib/TinyIo.zig	dirClose closes the descriptor	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+remove	src/lib/TinyIo.zig	cancel protection operations are benign	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+remove	src/lib/TinyIo.zig	async runs inline; concurrency is unavailable	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+remove	src/lib/TinyIo.zig	futex timed waits return	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+remove	src/lib/TinyIo.zig	Io.Mutex under real thread contention	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+add	src/lib/parse_int.zig	protocol integer parsing	500040d3b	PRESENT protocol_integer_parsing @ crates/rustty-lib/src/parse_int.rs:140
+add	src/lib/tinyio/test.zig	read a file through File.Reader	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+add	src/lib/tinyio/test.zig	seek	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+add	src/lib/tinyio/test.zig	realPath and deleteFile	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+add	src/lib/tinyio/test.zig	openFile of a directory returns IsDir	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+add	src/lib/tinyio/test.zig	Io.Mutex through TinyIo	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+add	src/lib/tinyio/test.zig	randomSecure fills with fresh entropy	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+add	src/lib/tinyio/test.zig	unused operations fail gracefully	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+add	src/lib/tinyio/test.zig	openFile edge cases	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+add	src/lib/tinyio/test.zig	openFile symlink handling	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+add	src/lib/tinyio/test.zig	positional reads at and beyond EOF return zero	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+add	src/lib/tinyio/test.zig	vectored reads scatter across buffers	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+add	src/lib/tinyio/test.zig	streaming reads: EndOfStream and scatter	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+add	src/lib/tinyio/test.zig	pipes: streaming works; positional and seek are Unseekable or ignored	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+add	src/lib/tinyio/test.zig	operate delegates non-read operations to failing stubs	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+add	src/lib/tinyio/test.zig	dirRealPathFile edge cases	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+add	src/lib/tinyio/test.zig	deleteFile edge cases	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+add	src/lib/tinyio/test.zig	dirClose closes the descriptor	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+add	src/lib/tinyio/test.zig	cancel protection operations are benign	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+add	src/lib/tinyio/test.zig	async runs inline; concurrency is unavailable	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+add	src/lib/tinyio/test.zig	futex timed waits return	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+add	src/lib/tinyio/test.zig	Io.Mutex under real thread contention	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+add	src/lib/tinyio/windows.zig	windows: path conversion	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+add	src/lib/tinyio/windows.zig	windows: realPath resolves through symlinks	f6cb8312b	NON-PORT (TinyIo non-port row, R5 §2.3; the 21 TinyIo.zig -> tinyio/test.zig moves are not new tests)
+add	src/lib/types.zig	String.init empty output	dd2edd760	PRESENT string_init_empty_output @ crates/rustty-lib/src/types.rs:70
+change	src/surface_mouse.zig	keyToMouseShape	6674aa3ba 0fb6d2940	RE-ALIGNED key_to_mouse_shape @ crates/rustty-core/src/surface_mouse.rs:157
+add	src/terminal/PageList.zig	PageList resize reflow less cols no scrollback pull blank active	c55f213aa	PRESENT pagelist_resize_reflow_less_cols_no_scrollback_pull_blank_active @ crates/rustty-vt/src/pagelist/tests.rs:15440
+add	src/terminal/PageList.zig	PageList memory pool never touches idle page memory	e01e75bbb	PRESENT pagelist_memory_pool_never_touches_idle_page_memory @ crates/rustty-vt/src/pagelist/tests.rs:19406
+add	src/terminal/PageList.zig	PageList memory pool fast path does not allocate	e01e75bbb	PRESENT pagelist_memory_pool_fast_path_does_not_allocate @ crates/rustty-vt/src/pagelist/tests.rs:19464
+add	src/terminal/Screen.zig	Screen: resize (no reflow) more rows no scrollback pull	c55f213aa	PRESENT screen_resize_no_reflow_more_rows_no_scrollback_pull @ crates/rustty-vt/src/screen.rs:7260
+add	src/terminal/Screen.zig	Screen: resize more cols no scrollback pull	c55f213aa	PRESENT screen_resize_more_cols_no_scrollback_pull @ crates/rustty-vt/src/screen.rs:7290
+add	src/terminal/Screen.zig	Screen: resize more cols no scrollback pull wrap straddles scrollback	c55f213aa	PRESENT screen_resize_more_cols_no_scrollback_pull_wrap_straddles_scrollback @ crates/rustty-vt/src/screen.rs:7325
+add	src/terminal/Screen.zig	Screen: resize more cols and rows no scrollback pull	c55f213aa	PRESENT screen_resize_more_cols_and_rows_no_scrollback_pull @ crates/rustty-vt/src/screen.rs:7354
+add	src/terminal/Screen.zig	Screen: resize less cols no scrollback pull	c55f213aa	PRESENT screen_resize_less_cols_no_scrollback_pull @ crates/rustty-vt/src/screen.rs:7377
+add	src/terminal/Screen.zig	Screen: selectWord at hard line breaks	c4f15c884	PRESENT screen_select_word_at_hard_line_breaks @ crates/rustty-vt/src/screen.rs:10612
+add	src/terminal/Screen.zig	Screen: selectWord across soft-wrap at right edge	c4f15c884	PRESENT screen_select_word_across_soft_wrap_at_right_edge @ crates/rustty-vt/src/screen.rs:10655
+add	src/terminal/Screen.zig	Screen: selectWord wide characters	a3e80a685	PRESENT screen_select_word_wide_characters @ crates/rustty-vt/src/screen.rs:10674
+add	src/terminal/Terminal.zig	Terminal: cursorLeft reverse wrap with pending wrap above top margin	d4f45bee3	PRESENT terminal_cursor_left_reverse_wrap_with_pending_wrap_above_top_margin @ crates/rustty-vt/src/terminal.rs:11103
+add	src/terminal/Terminal.zig	Terminal: printSlice charset batched fill	a4f0d9f4a	PRESENT terminal_print_slice_charset_batched_fill @ crates/rustty-vt/src/terminal.rs:17832
+add	src/terminal/Terminal.zig	Terminal: printSlice charset matches scalar printing	a4f0d9f4a	PRESENT terminal_print_slice_charset_matches_scalar_printing @ crates/rustty-vt/src/terminal.rs:17890
+add	src/terminal/Terminal.zig	Terminal: printSlice charset single shift and repeat	a4f0d9f4a	PRESENT terminal_print_slice_charset_single_shift_and_repeat @ crates/rustty-vt/src/terminal.rs:17951
+add	src/terminal/Terminal.zig	Terminal: resize without scrollback pull	c55f213aa	PRESENT terminal_resize_without_scrollback_pull @ crates/rustty-vt/src/terminal.rs:20057
+change	src/terminal/bitmap_allocator.zig	findFreeChunks single found	ffe015ee5	RE-ALIGNED findFreeChunks_single_found @ crates/rustty-vt/src/bitmap_allocator.rs:593
+change	src/terminal/bitmap_allocator.zig	findFreeChunks single not found	ffe015ee5	RE-ALIGNED findFreeChunks_single_not_found @ crates/rustty-vt/src/bitmap_allocator.rs:605
+change	src/terminal/bitmap_allocator.zig	findFreeChunks multiple found	ffe015ee5	RE-ALIGNED findFreeChunks_multiple_found @ crates/rustty-vt/src/bitmap_allocator.rs:613
+change	src/terminal/bitmap_allocator.zig	findFreeChunks exactly 64 chunks	ffe015ee5	RE-ALIGNED findFreeChunks_exactly_64_chunks @ crates/rustty-vt/src/bitmap_allocator.rs:627
+change	src/terminal/bitmap_allocator.zig	findFreeChunks larger than 64 chunks	ffe015ee5	RE-ALIGNED findFreeChunks_larger_than_64_chunks @ crates/rustty-vt/src/bitmap_allocator.rs:639
+change	src/terminal/bitmap_allocator.zig	findFreeChunks larger than 64 chunks not at beginning	ffe015ee5	RE-ALIGNED findFreeChunks_larger_than_64_chunks_not_at_beginning @ crates/rustty-vt/src/bitmap_allocator.rs:657
+change	src/terminal/bitmap_allocator.zig	findFreeChunks larger than 64 chunks exact	ffe015ee5	RE-ALIGNED findFreeChunks_larger_than_64_chunks_exact @ crates/rustty-vt/src/bitmap_allocator.rs:680
+change	src/terminal/bitmap_allocator.zig	BitmapAllocator alloc and free one bitmap	ffe015ee5	RE-ALIGNED BitmapAllocator_alloc_and_free_one_bitmap @ crates/rustty-vt/src/bitmap_allocator.rs:903
+change	src/terminal/bitmap_allocator.zig	BitmapAllocator alloc and free half bitmap	ffe015ee5	RE-ALIGNED BitmapAllocator_alloc_and_free_half_bitmap @ crates/rustty-vt/src/bitmap_allocator.rs:1016
+change	src/terminal/bitmap_allocator.zig	BitmapAllocator alloc and free two half bitmaps	ffe015ee5	RE-ALIGNED BitmapAllocator_alloc_and_free_two_half_bitmaps @ crates/rustty-vt/src/bitmap_allocator.rs:1048
+change	src/terminal/bitmap_allocator.zig	BitmapAllocator alloc and free 1.5 bitmaps	ffe015ee5	RE-ALIGNED BitmapAllocator_alloc_and_free_1_5_bitmaps @ crates/rustty-vt/src/bitmap_allocator.rs:1094
+change	src/terminal/bitmap_allocator.zig	BitmapAllocator alloc and free two 1.5 bitmaps	ffe015ee5	RE-ALIGNED BitmapAllocator_alloc_and_free_two_1_5_bitmaps @ crates/rustty-vt/src/bitmap_allocator.rs:1127
+change	src/terminal/bitmap_allocator.zig	BitmapAllocator alloc and free 1.5 bitmaps offset by 0.75	ffe015ee5	RE-ALIGNED BitmapAllocator_alloc_and_free_1_5_bitmaps_offset_by_0_75 @ crates/rustty-vt/src/bitmap_allocator.rs:1175
+change	src/terminal/bitmap_allocator.zig	BitmapAllocator alloc and free three 0.75 bitmaps	ffe015ee5	RE-ALIGNED BitmapAllocator_alloc_and_free_three_0_75_bitmaps @ crates/rustty-vt/src/bitmap_allocator.rs:1225
+change	src/terminal/bitmap_allocator.zig	BitmapAllocator alloc and free two 1.5 bitmaps offset 0.75	ffe015ee5	RE-ALIGNED BitmapAllocator_alloc_and_free_two_1_5_bitmaps_offset_0_75 @ crates/rustty-vt/src/bitmap_allocator.rs:1289
+change	src/terminal/c/allocator.zig	alloc zero length	dd2edd760	RE-ALIGNED alloc_zero_length @ crates/rustty-vt-c/src/allocator.rs:143
+add	src/terminal/c/formatter.zig	format_alloc empty output	dd2edd760	PRESENT format_alloc_empty_output @ crates/rustty-vt-c/src/formatter.rs:943
+add	src/terminal/c/render.zig	render: overscan request applies on the next update	2ea1eeae2	PRESENT render_overscan_request_applies_on_the_next_update @ crates/rustty-vt-c/src/render/tests.rs:3287
+add	src/terminal/c/render.zig	render: overscan option roundtrip	2ea1eeae2	PRESENT render_overscan_option_roundtrip @ crates/rustty-vt-c/src/render/tests.rs:3332
+add	src/terminal/c/render.zig	render: overscan clamps to existing rows	2ea1eeae2	PRESENT render_overscan_clamps_to_existing_rows @ crates/rustty-vt-c/src/render/tests.rs:3363
+add	src/terminal/c/render.zig	render: row iterator unchanged without overscan	2ea1eeae2	PRESENT render_row_iterator_unchanged_without_overscan @ crates/rustty-vt-c/src/render/tests.rs:3415
+add	src/terminal/c/render.zig	render: row iterator covers overscan	2ea1eeae2	PRESENT render_row_iterator_covers_overscan @ crates/rustty-vt-c/src/render/tests.rs:3455
+add	src/terminal/c/render.zig	render: row iterator overscan at the bottom	2ea1eeae2	PRESENT render_row_iterator_overscan_at_the_bottom @ crates/rustty-vt-c/src/render/tests.rs:3546
+add	src/terminal/c/render.zig	render: row ids stable across scroll	2ea1eeae2	PRESENT render_row_ids_stable_across_scroll @ crates/rustty-vt-c/src/render/tests.rs:3569
+add	src/terminal/c/render.zig	render: row id without overscan	2ea1eeae2	PRESENT render_row_id_without_overscan @ crates/rustty-vt-c/src/render/tests.rs:3609
+add	src/terminal/c/render.zig	render: overscan invalid values	2ea1eeae2	PRESENT render_overscan_invalid_values @ crates/rustty-vt-c/src/render/tests.rs:3636
+add	src/terminal/c/render.zig	render: overscan get_multi and row_get_multi	2ea1eeae2	PRESENT render_overscan_get_multi_and_row_get_multi @ crates/rustty-vt-c/src/render/tests.rs:3673
+change	src/terminal/c/search.zig	search free after terminal free	b1c264163	RE-ALIGNED search_free_after_terminal_free @ crates/rustty-vt-c/src/search.rs:2180
+add	src/terminal/c/search.zig	search tick after terminal free with history	b1c264163	PRESENT search_tick_after_terminal_free_with_history @ crates/rustty-vt-c/src/search.rs:2249
+add	src/terminal/c/selection.zig	selection_format_alloc empty output	dd2edd760	PRESENT selection_format_alloc_empty_output @ crates/rustty-vt-c/src/selection.rs:1291
+change	src/terminal/c/terminal.zig	continuation buffer and allocator export exact suffix	dd2edd760	RE-ALIGNED continuation_buffer_and_allocator_export_exact_suffix @ crates/rustty-vt-c/src/terminal.rs:5309
+add	src/terminal/c/terminal.zig	set resize pull scrollback	c55f213aa	PRESENT set_resize_pull_scrollback @ crates/rustty-vt-c/src/terminal.rs:7575
+add	src/terminal/c/terminal.zig	set write_pty callback DECRQM	9dc0d974e	PRESENT set_write_pty_callback_decrqm @ crates/rustty-vt-c/src/terminal.rs:8233
+change	src/terminal/c/terminal.zig	set write_pty without callback ignores queries	9dc0d974e	RE-ALIGNED set_write_pty_without_callback_ignores_queries @ crates/rustty-vt-c/src/terminal.rs:8375
+add	src/terminal/c/terminal.zig	set render_hold callback	e50779498	PRESENT set_render_hold_callback @ crates/rustty-vt-c/src/terminal.rs:8753
+add	src/terminal/c/terminal.zig	kitty_image_medium_temp_file empty output	dd2edd760	PRESENT kitty_image_medium_temp_file_empty_output @ crates/rustty-vt-c/src/terminal.rs:9512
+add	src/terminal/c/terminal.zig	get mouse_shape	78494bad8	PRESENT get_mouse_shape @ crates/rustty-vt-c/src/terminal.rs:7298
+remove	src/terminal/c/terminal.zig	set write_pty callback	9dc0d974e	DROPPED (renamed upstream to 'set write_pty callback DECRQM' -> set_write_pty_callback_decrqm; G1 CONTRACT_DELETIONS row)
+add	src/terminal/c/types.zig	manifest describes render state overscan types	2ea1eeae2	PRESENT manifest_describes_render_state_overscan_types @ crates/rustty-vt-c/src/types.rs:3477
+change	src/terminal/c/types.zig	manifest uses public enum names	78494bad8	RE-ALIGNED manifest_uses_public_enum_names @ crates/rustty-vt-c/src/types.rs:3684
+add	src/terminal/color.zig	RGB.parse rejects digit separators	73768913b	PRESENT rgb_parse_rejects_digit_separators @ crates/rustty-vt/src/color.rs:1969
+change	src/terminal/color.zig	DynamicPalette: init	d1cd56a56	RE-ALIGNED dynamic_palette_init @ crates/rustty-vt/src/color.rs:2087
+change	src/terminal/color.zig	DynamicPalette: set	d1cd56a56	RE-ALIGNED dynamic_palette_set @ crates/rustty-vt/src/color.rs:2099
+change	src/terminal/color.zig	DynamicPalette: reset	d1cd56a56	RE-ALIGNED dynamic_palette_reset @ crates/rustty-vt/src/color.rs:2112
+change	src/terminal/color.zig	DynamicPalette: resetAll	d1cd56a56	RE-ALIGNED dynamic_palette_reset_all @ crates/rustty-vt/src/color.rs:2126
+change	src/terminal/color.zig	DynamicPalette: changeDefault with no changes	d1cd56a56	RE-ALIGNED dynamic_palette_change_default_with_no_changes @ crates/rustty-vt/src/color.rs:2142
+add	src/terminal/color.zig	DynamicPalette: changeDefault shares the built-in default	d1cd56a56	PRESENT dynamic_palette_change_default_shares_the_built_in_default @ crates/rustty-vt/src/color.rs:2160
+change	src/terminal/color.zig	DynamicPalette: changeDefault preserves changes	d1cd56a56	RE-ALIGNED dynamic_palette_change_default_preserves_changes @ crates/rustty-vt/src/color.rs:2237
+change	src/terminal/color.zig	DynamicPalette: changeDefault with multiple changes	d1cd56a56	RE-ALIGNED dynamic_palette_change_default_with_multiple_changes @ crates/rustty-vt/src/color.rs:2268
+add	src/terminal/kitty/color.zig	OSC: kitty color indexes reject digit separators	73768913b	PRESENT osc_kitty_color_indexes_reject_digit_separators @ crates/rustty-vt/src/kitty/color.rs:227
+add	src/terminal/kitty/graphics_image.zig	test {} (anonymous; import/refAllDecls block)	0b5446364	ANON import block (no name to carry; module is compiled in)
+add	src/terminal/kitty/graphics_image.zig	image load: windows UNC path is rejected before open	0b5446364	PRESENT image_load_windows_unc_path_is_rejected_before_open @ crates/rustty-vt/src/kitty/graphics_image.rs:3420
+add	src/terminal/kitty/graphics_image.zig	image load: windows device namespace paths are rejected before open	0b5446364	PRESENT image_load_windows_device_namespace_paths_are_rejected_before_open @ crates/rustty-vt/src/kitty/graphics_image.rs:3443
+add	src/terminal/kitty/graphics_image.zig	image load: windows reserved device names are rejected before open	0b5446364	PRESENT image_load_windows_reserved_device_names_are_rejected_before_open @ crates/rustty-vt/src/kitty/graphics_image.rs:3499
+add	src/terminal/kitty/graphics_image.zig	image load: windows local file accepted in forward slash and upper case spellings	0b5446364	PRESENT image_load_windows_local_file_accepted_in_forward_slash_and_upper_case_spellings @ crates/rustty-vt/src/kitty/graphics_image.rs:3522
+add	src/terminal/kitty/graphics_image.zig	image load: windows temporary file with differently spelled directory	0b5446364	PRESENT image_load_windows_temporary_file_with_differently_spelled_directory @ crates/rustty-vt/src/kitty/graphics_image.rs:3559
+add	src/terminal/kitty/graphics_image.zig	image load: windows canonical path check accepts a local file opened through a device spelling	0b5446364	PRESENT image_load_windows_canonical_path_check_accepts_a_local_file_opened_through_a_device_spelling @ crates/rustty-vt/src/kitty/graphics_image.rs:3598
+add	src/terminal/kitty/graphics_image.zig	image load: windows canonical path check rejects a file reached through a UNC share	0b5446364	PRESENT image_load_windows_canonical_path_check_rejects_a_file_reached_through_a_unc_share @ crates/rustty-vt/src/kitty/graphics_image.rs:3644
+add	src/terminal/kitty/graphics_image.zig	image load: png, zlib compressed, direct	4b86e3594	PRESENT image_load_png_zlib_compressed_direct @ crates/rustty-vt/src/kitty/graphics_image.rs:3762
+add	src/terminal/kitty/windows.zig	checkPath rejects UNC paths	0b5446364	PRESENT check_path_rejects_unc_paths @ crates/rustty-vt/src/kitty/windows.rs:150
+add	src/terminal/kitty/windows.zig	checkPath rejects device and NT namespaces	0b5446364	PRESENT check_path_rejects_device_and_nt_namespaces @ crates/rustty-vt/src/kitty/windows.rs:166
+add	src/terminal/kitty/windows.zig	checkPath accepts plain local paths	0b5446364	PRESENT check_path_accepts_plain_local_paths @ crates/rustty-vt/src/kitty/windows.rs:188
+add	src/terminal/kitty/windows.zig	checkPath rejects reserved device names in any component	0b5446364	PRESENT check_path_rejects_reserved_device_names_in_any_component @ crates/rustty-vt/src/kitty/windows.rs:211
+add	src/terminal/kitty/windows.zig	checkCanonicalPath requires a drive-absolute local path	0b5446364	PRESENT check_canonical_path_requires_a_drive_absolute_local_path @ crates/rustty-vt/src/kitty/windows.rs:270
+add	src/terminal/kitty/windows.zig	test isDriveAbsolute (decltest)	0b5446364	PRESENT is_drive_absolute_test @ crates/rustty-vt/src/kitty/windows.rs:303
+change	src/terminal/modes.zig	test modeFromInt (decltest)	079502e23	RE-ALIGNED mode_from_int_test @ crates/rustty-vt/src/modes.rs:856
+add	src/terminal/modes.zig	modeFromInt matches entries exhaustively	079502e23	PRESENT mode_from_int_matches_entries_exhaustively @ crates/rustty-vt/src/modes.rs:875
+add	src/terminal/modes.zig	getReport large unknown modes	3beb6d717	PRESENT get_report_large_unknown_modes @ crates/rustty-vt/src/modes.rs:1111
+add	src/terminal/modes.zig	Report.encode maximum size	3beb6d717	PRESENT report_encode_maximum_size @ crates/rustty-vt/src/modes.rs:1133
+add	src/terminal/osc/parsers/color.zig	OSC color indexes reject digit separators	73768913b	PRESENT osc_color_indexes_reject_digit_separators @ crates/rustty-vt/src/osc/parsers/color.rs:674
+add	src/terminal/osc/parsers/context_signal.zig	OSC 3008: numeric fields reject non-digits	3822aa01d	PRESENT osc_3008_numeric_fields_reject_non_digits @ crates/rustty-vt/src/osc/parsers/context_signal.rs:600
+add	src/terminal/osc/parsers/kitty_desktop_notification.zig	OSC 99: w 5	73768913b	PRESENT osc_99_w_5 @ crates/rustty-vt/src/osc/parsers/kitty_desktop_notification.rs:1319
+add	src/terminal/osc/parsers/kitty_text_sizing.zig	OSC 66: numeric fields reject digit separators	73768913b	PRESENT osc_66_numeric_fields_reject_digit_separators @ crates/rustty-vt/src/osc/parsers/kitty_text_sizing.rs:440
+add	src/terminal/osc/parsers/osc9.zig	OSC 9: numeric fields reject digit separators	73768913b	PRESENT osc_9_numeric_fields_reject_digit_separators @ crates/rustty-vt/src/osc/parsers/osc9.rs:396
+add	src/terminal/osc/parsers/semantic_prompt.zig	OSC 133: exit codes reject digit separators	73768913b	PRESENT osc_133_exit_codes_reject_digit_separators @ crates/rustty-vt/src/osc/parsers/semantic_prompt.rs:1625
+change	src/terminal/render.zig	incremental updates match full rebuild	ca4f719f7	RE-ALIGNED incremental_updates_match_full_rebuild @ crates/rustty-vt/src/render.rs:3588
+add	src/terminal/render.zig	incremental updates match full rebuild with overscan	ca4f719f7	PRESENT incremental_updates_match_full_rebuild_with_overscan @ crates/rustty-vt/src/render.rs:3598
+add	src/terminal/render.zig	overscan zero request unchanged	ca4f719f7	PRESENT overscan_zero_request_unchanged @ crates/rustty-vt/src/render.rs:4392
+add	src/terminal/render.zig	overscan row_data layout	ca4f719f7	PRESENT overscan_row_data_layout @ crates/rustty-vt/src/render.rs:4421
+add	src/terminal/render.zig	overscan request change forces redraw	ca4f719f7	PRESENT overscan_request_change_forces_redraw @ crates/rustty-vt/src/render.rs:4516
+add	src/terminal/render.zig	overscan row ids stable	ca4f719f7	PRESENT overscan_row_ids_stable @ crates/rustty-vt/src/render.rs:4551
+add	src/terminal/render.zig	overscan row ids and dirty on in-place rewrite	ca4f719f7	PRESENT overscan_row_ids_and_dirty_on_in_place_rewrite @ crates/rustty-vt/src/render.rs:4601
+add	src/terminal/render.zig	overscan cursor in overscan row	ca4f719f7	PRESENT overscan_cursor_in_overscan_row @ crates/rustty-vt/src/render.rs:4659
+add	src/terminal/render.zig	overscan selection on overscan rows	ca4f719f7	PRESENT overscan_selection_on_overscan_rows @ crates/rustty-vt/src/render.rs:4686
+add	src/terminal/search/pagelist.zig	feed discovers pages prepended after exhaustion	06178eeaa	PRESENT feed_discovers_pages_prepended_after_exhaustion @ crates/rustty-vt/src/search/pagelist.rs:942
+add	src/terminal/search/screen.zig	feed after complete discovers prepended history pages	06178eeaa	PRESENT feed_after_complete_discovers_prepended_history_pages @ crates/rustty-vt/src/search/screen.rs:3425
+add	src/terminal/search/terminal.zig	feed after complete discovers prepended snapshot history	06178eeaa	PRESENT feed_after_complete_discovers_prepended_snapshot_history @ crates/rustty-vt/src/search/terminal.rs:1333
+change	src/terminal/snapshot/terminal.zig	TERMINAL payload round trip	d1cd56a56	RE-ALIGNED terminal_payload_round_trip @ crates/rustty-vt/src/snapshot/terminal.rs:1887
+change	src/terminal/snapshot/terminal.zig	TERMINAL payload rejects noncanonical state	d1cd56a56	RE-ALIGNED terminal_payload_rejects_noncanonical_state @ crates/rustty-vt/src/snapshot/terminal.rs:2105
+change	src/terminal/snapshot/terminal.zig	TERMINAL payload ignores tab-stop padding	d1cd56a56	RE-ALIGNED terminal_payload_ignores_tab_stop_padding @ crates/rustty-vt/src/snapshot/terminal.rs:2134
+add	src/terminal/stream.zig	stream: DECRQM dispatch	9dc0d974e	PRESENT stream_decrqm_dispatch @ crates/rustty-vt/src/stream.rs:6421
+add	src/terminal/stream.zig	stream: CSI 8 t resize window	714fe9b90	PRESENT stream_csi_8_t_resize_window @ crates/rustty-vt/src/stream.rs:7298
+add	src/terminal/stream_terminal.zig	render hold effect fires on synchronized output transitions only	e50779498	PRESENT render_hold_effect_fires_on_synchronized_output_transitions_only @ crates/rustty-vt/src/stream_terminal.rs:4129
+add	src/terminal/stream_terminal.zig	render hold effect can snapshot the frame when the hold begins	e50779498	PRESENT render_hold_effect_can_snapshot_the_frame_when_the_hold_begins @ crates/rustty-vt/src/stream_terminal.rs:4200
+change	src/terminal/stream_terminal.zig	request mode DECRQM with write_pty callback	9dc0d974e	RE-ALIGNED request_mode_decrqm_with_write_pty_callback @ crates/rustty-vt/src/stream_terminal.rs:6196
+add	src/terminal/stream_terminal.zig	request mode DECRQM ANSI responses	9dc0d974e	PRESENT request_mode_decrqm_ansi_responses @ crates/rustty-vt/src/stream_terminal.rs:6271
+remove	src/terminal/tmux/output.zig	parse mouse_any_flag	1ca2858d0	DROPPED (no fn parse_mouse_any_flag in crates/; G1 CONTRACT_DELETIONS row)
+change	src/terminal/tmux/viewer.zig	session changed resets state	9a4ba7d54	RE-ALIGNED session_changed_resets_state @ crates/rustty-vt/src/tmux/viewer.rs:3206
+change	src/terminal/tmux/viewer.zig	two pane flow with pane state	1ca2858d0	RE-ALIGNED two_pane_flow_with_pane_state @ crates/rustty-vt/src/tmux/viewer.rs:3742
