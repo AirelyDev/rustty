@@ -21,6 +21,14 @@
 //!   cargo run -p rustty-vt --example rss_probe --release
 //!
 //! Exit code is non-zero if the scrollback clear did not return at least 2 MiB.
+//!
+//! PORT NOTE (60b43068c, P7-W1 T6): this is also the Windows reclaim smoke run
+//! (DECISIONS D3) — `decommit`'s `DiscardVirtualMemory` arm is `#[cfg(windows)]`
+//! but still unreachable from any `cargo test` build (`cfg!(test)` always takes
+//! the simulate-by-memset arm first), so this release example is the only place
+//! that ever calls the real syscall. `rss_bytes` reads `WorkingSetSize` via
+//! `K32GetProcessMemoryInfo` on Windows, the resident-memory analog of Darwin's
+//! `phys_footprint` and Linux's `statm` resident field.
 
 use rustty_vt::pagelist::Options;
 use rustty_vt::PageList;
@@ -85,7 +93,59 @@ fn rss_bytes() -> u64 {
             .expect("resident pages");
         pages * 4096
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(windows)]
+    {
+        // PORT NOTE (60b43068c, P7-W1 T6): `WorkingSetSize` is the resident
+        // (physically backed) portion of the process's address space — the
+        // Windows analog of Darwin's `phys_footprint` and Linux's `statm`
+        // resident field. `DiscardVirtualMemory` releases physical pages
+        // while keeping the range committed, so it shows up here even though
+        // the commit charge (and thus `PagefileUsage`) does not move.
+        use std::os::raw::c_void;
+
+        #[repr(C)]
+        #[derive(Default)]
+        struct ProcessMemoryCountersEx {
+            cb: u32,
+            page_fault_count: u32,
+            peak_working_set_size: usize,
+            working_set_size: usize,
+            quota_peak_paged_pool_usage: usize,
+            quota_paged_pool_usage: usize,
+            quota_peak_non_paged_pool_usage: usize,
+            quota_non_paged_pool_usage: usize,
+            pagefile_usage: usize,
+            peak_pagefile_usage: usize,
+            private_usage: usize,
+        }
+
+        extern "system" {
+            fn GetCurrentProcess() -> *mut c_void;
+        }
+        // PORT NOTE: `K32GetProcessMemoryInfo` is exported by psapi.dll, not
+        // kernel32.dll, despite the `K32` prefix Microsoft gives the whole
+        // family — psapi.lib must be linked explicitly.
+        #[link(name = "psapi")]
+        extern "system" {
+            fn K32GetProcessMemoryInfo(
+                process: *mut c_void,
+                counters: *mut ProcessMemoryCountersEx,
+                size: u32,
+            ) -> i32;
+        }
+
+        let mut counters = ProcessMemoryCountersEx {
+            cb: std::mem::size_of::<ProcessMemoryCountersEx>() as u32,
+            ..Default::default()
+        };
+        // SAFETY: `counters` is live and correctly sized for the `cb` field
+        // it reports, matching the `PROCESS_MEMORY_COUNTERS_EX` contract.
+        let ok =
+            unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, counters.cb) };
+        assert_ne!(0, ok, "GetProcessMemoryInfo failed");
+        counters.working_set_size as u64
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     {
         0
     }
