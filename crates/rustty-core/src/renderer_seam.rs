@@ -317,6 +317,45 @@ pub struct RendererHandles {
     pub latest_frame: Arc<LatestFrame<ExportedFrame>>,
 }
 
+/// PORT-ONLY (N441): the core `Surface`'s renderer, in its own allocation.
+///
+/// The reference embeds the renderer by value (`Surface.renderer: Renderer`),
+/// and the render thread writes it (under `draw_mutex`) through the
+/// `*Renderer` it gets at `Thread.init`. In Rust, every main-thread
+/// `&mut Surface` / `&Surface` the apprt forms (`sizeCallback`,
+/// `contentScaleCallback`, key, mouse, focus, clipboard, ...) is a retag over
+/// every byte of the surface, which would race with those writes (Stacked and
+/// Tree Borrows; `.port/phase-2/mirihar-n441`). Out of line, a surface retag
+/// covers this pointer only. The render thread and the surface share the one
+/// raw root from `Box::into_raw`; nothing forms a `Box`/`&mut` from it while
+/// the render thread runs, except under the draw mutex (N437's discipline).
+///
+/// `Drop` frees the allocation at the moment the inline field used to drop, so
+/// the renderer's own `Drop`s keep their timing; `deinit` is still explicit.
+pub struct RendererBox(*mut Renderer);
+
+impl RendererBox {
+    /// Move a freshly built renderer into its own allocation.
+    pub fn new(renderer: Renderer) -> RendererBox {
+        RendererBox(Box::into_raw(Box::new(renderer)))
+    }
+
+    /// The raw root the render thread and the surface share. Never null.
+    #[inline]
+    pub fn as_ptr(&self) -> *mut Renderer {
+        self.0
+    }
+}
+
+impl Drop for RendererBox {
+    fn drop(&mut self) {
+        // SAFETY: `self.0` came from `Box::into_raw` in `new` and is freed only
+        // here; by the time the surface (or init's local) drops it, the render
+        // thread is joined (or was never spawned), so no other pointer is used.
+        unsafe { drop(Box::from_raw(self.0)) };
+    }
+}
+
 impl Renderer {
     // P7-W7 T2 (`2f0b65346`): `surfaceInit` (`Surface.zig:493` at the pin) is
     // deleted from `generic.zig` and its caller.

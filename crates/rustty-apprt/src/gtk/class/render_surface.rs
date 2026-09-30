@@ -203,9 +203,10 @@ impl RenderSurface {
             let core = core.as_ptr();
             // SAFETY: the apprt `Surface` sets `core_surface` to its live core
             // surface and clears it before freeing it; the latest-frame handle is
-            // read raw (N437: no reference to the renderer is formed).
+            // read raw (N437: no reference to the renderer is formed; N441: the
+            // renderer is out of line, reached through its raw root).
             let frame = unsafe {
-                rustty_core::renderer_seam::Renderer::takeFrame(&raw const (*core).renderer)
+                rustty_core::renderer_seam::Renderer::takeFrame((*core).renderer.as_ptr())
             };
             if let Some(frame) = frame {
                 // PORT NOTE: the reference's catch-all `else` arm (its

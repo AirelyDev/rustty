@@ -2221,11 +2221,13 @@ pub unsafe extern "C" fn rustty_surface_request_close(ptr: *mut Surface) {
     // Prefer the binding path so close goes through the same Surface
     // hook as a close-surface keybind, rather than a raw close() that
     // bypasses it.
-    // SAFETY: `ptr` validity is the caller's contract.
+    // SAFETY: `ptr` validity is the caller's contract. (N442: raw-self through
+    // the embedded surface's raw root; no protected `&mut` spans the dispatch.)
     let handled = match unsafe {
-        (*ptr)
-            .core_surface
-            .performBindingAction(binding::Action::CloseSurface)
+        CoreSurface::performBindingAction(
+            &raw mut (*ptr).core_surface,
+            binding::Action::CloseSurface,
+        )
     } {
         Ok(v) => v,
         Err(err) => {
@@ -2270,8 +2272,12 @@ pub unsafe extern "C" fn rustty_surface_split(ptr: *mut Surface, direction: Spli
         SplitDirection::Up => binding::SplitDirection::Up,
     });
     // PORT NOTE: the `bool` result is discarded (reference `_ =`).
-    // SAFETY: `ptr` validity is the caller's contract.
-    if let Err(err) = unsafe { (*ptr).core_surface.performBindingAction(action) } {
+    // SAFETY: `ptr` validity is the caller's contract. (N442: raw-self through
+    // the embedded surface's raw root; the host's `new_split` handler re-enters
+    // `rustty_surface_inherited_config` on this surface.)
+    if let Err(err) =
+        unsafe { CoreSurface::performBindingAction(&raw mut (*ptr).core_surface, action) }
+    {
         log::error!(target: LOG_SCOPE, "error creating new split err={err:?}");
     }
 }
@@ -2306,8 +2312,11 @@ pub unsafe extern "C" fn rustty_surface_split_focus(ptr: *mut Surface, direction
         GotoSplit::Left => binding::SplitFocusDirection::Left,
         GotoSplit::Right => binding::SplitFocusDirection::Right,
     });
-    // SAFETY: `ptr` validity is the caller's contract.
-    if let Err(err) = unsafe { (*ptr).core_surface.performBindingAction(action) } {
+    // SAFETY: `ptr` validity is the caller's contract. (N442: raw-self through
+    // the embedded surface's raw root.)
+    if let Err(err) =
+        unsafe { CoreSurface::performBindingAction(&raw mut (*ptr).core_surface, action) }
+    {
         log::error!(target: LOG_SCOPE, "error focusing split err={err:?}");
     }
 }
@@ -2421,12 +2430,14 @@ pub unsafe extern "C" fn rustty_surface_binding_action(
     //
     // PORT NOTE: Zig passes the `action` union to `performBindingAction` BY VALUE (a
     // copy), leaving the local `action` live for the `catch` error log. Rust's
-    // `performBindingAction(&mut self, action: binding::Action)` CONSUMES its arg, so
+    // `performBindingAction(self_, action: binding::Action)` CONSUMES its arg, so
     // `action.clone()` reproduces Zig's by-value copy and keeps `action` available for
     // the error branch's `action={f}` (rendered via `Debug`, the faithful analog of
     // the reference's custom `{f}` `Action.format`).
     // SAFETY: `ptr` validity is the caller's contract.
-    match unsafe { (*ptr).core_surface.performBindingAction(action.clone()) } {
+    // (N442: raw-self through the embedded surface's raw root.)
+    match unsafe { CoreSurface::performBindingAction(&raw mut (*ptr).core_surface, action.clone()) }
+    {
         Ok(v) => v,
         Err(err) => {
             log::error!(target: LOG_SCOPE, "error performing binding action action={action:?} err={err:?}");
@@ -2968,8 +2979,9 @@ pub unsafe extern "C" fn rustty_surface_quicklook_font(ptr: *mut Surface) -> *mu
     // we're loading the primary face.
     // const grid = ptr.core_surface.renderer.font_grid;
     // SAFETY: the renderer's `font_grid` is the shared `*mut SharedGrid` handle
-    // (`renderer_seam::Renderer` newtype `.0` → `rustty_renderer::Renderer`).
-    let grid: *mut SharedGrid = unsafe { (*ptr).core_surface.renderer.0.font_grid };
+    // (`renderer_seam::Renderer` newtype `.0` → `rustty_renderer::Renderer`),
+    // read by place through the out-of-line renderer's raw root (N441).
+    let grid: *mut SharedGrid = unsafe { (*(*ptr).core_surface.renderer.as_ptr()).0.font_grid };
     // grid.lock.lockShared();
     // defer grid.lock.unlockShared();
     //
@@ -3777,8 +3789,12 @@ mod binding_route_tests {
     #[test]
     fn request_close_routes_through_perform_binding_action() {
         let c = code(export_body("rustty_surface_request_close"));
+        // (N442: the dispatch is raw-self, `CoreSurface::performBindingAction(
+        // &raw mut (*ptr).core_surface, binding::Action::CloseSurface)`.)
         assert!(
-            c.contains("performBindingAction(binding::Action::CloseSurface)"),
+            c.contains("CoreSurface::performBindingAction(")
+                && c.contains("&raw mut (*ptr).core_surface,")
+                && c.contains("binding::Action::CloseSurface,"),
             "request_close must route through performBindingAction:\n{c}"
         );
         assert!(

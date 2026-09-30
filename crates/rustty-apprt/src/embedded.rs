@@ -465,8 +465,11 @@ impl App {
             }
 
             // .surface => |surface| try surface.core_surface.keyCallback(input_event),
+            //
+            // (N442: raw-self through the embedded surface's raw root, so no
+            // protected `&mut` spans a keybind's re-entrant host callback.)
             KeyTarget::Surface(surface) => unsafe {
-                (*surface).core_surface.keyCallback(input_event)?
+                CoreSurface::keyCallback(&raw mut (*surface).core_surface, input_event)?
             },
         };
 

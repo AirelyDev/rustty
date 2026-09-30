@@ -585,7 +585,12 @@ where
     // (`apprt.surface.Message.redraw`, `Surface.redraw`).
 
     /// Create a new window
-    pub fn newWindow(&mut self, rt_app: &A, msg: NewWindow<A>) -> Result<(), Error> {
+    //
+    // PORT NOTE (N442, P7-W7 T5b): `&self`, not `&mut self`: the body only
+    // reads, and the embedder's `new_window` callback re-enters the core app
+    // (`rustty_surface_inherited_config` reads `core_app.alloc`), which a
+    // protected `&mut App` forbids.
+    pub fn newWindow(&self, rt_app: &A, msg: NewWindow<A>) -> Result<(), Error> {
         // const target: apprt.Target = target: { ... };
         let target: apprt::Target<'_, Surface<A>> = 'target: {
             // const parent = msg.parent orelse break :target .app;
@@ -872,7 +877,8 @@ where
                     // and `id` is immutable for the lifetime of the surface, so
                     // the value logged is identical either way.
                     let id = unsafe { &*core }.id;
-                    if let Err(err) = unsafe { &mut *core }.performBindingAction(action.clone()) {
+                    if let Err(err) = unsafe { Surface::performBindingAction(core, action.clone()) }
+                    {
                         // log.warn("error performing binding action on surface id={x} err={}", .{
                         //     surface.core().id,
                         //     err,

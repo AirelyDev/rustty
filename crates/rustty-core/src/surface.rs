@@ -657,7 +657,13 @@ pub struct Surface<A: apprt::App + 'static> {
 
     /// The renderer for this surface.
     // renderer: Renderer,
-    pub renderer: Renderer,
+    //
+    // PORT NOTE (N441, P7-W7 T5b): the reference embeds the renderer by value;
+    // the port keeps it in its own allocation (`RendererBox`), shared with the
+    // render thread through one raw root, so a main-thread `&mut Surface` /
+    // `&Surface` (every apprt callback) never covers the bytes the render
+    // thread writes under the draw mutex. Proof: `.port/phase-2/mirihar-n441`.
+    pub renderer: crate::renderer_seam::RendererBox,
 
     /// The render state
     // renderer_state: rendererpkg.State,
@@ -2274,7 +2280,7 @@ where
                 return Err(err.into());
             }
         };
-        let mut renderer_impl = match Renderer::init(
+        let renderer_impl = match Renderer::init(
             alloc,
             crate::renderer_seam::Options {
                 config: renderer_config,
@@ -2300,6 +2306,12 @@ where
         };
         // errdefer renderer_impl.deinit();
         // (fired explicitly at the failure sites below / by initErrdefers.)
+        //
+        // PORT NOTE (N441): moved into its own allocation before the render
+        // thread gets its pointer (`RendererBox`); `renderer_ptr` is the raw
+        // root the thread and `self.renderer` share.
+        let renderer_impl = crate::renderer_seam::RendererBox::new(renderer_impl);
+        let renderer_ptr: *mut Renderer = renderer_impl.as_ptr();
 
         // The mutex used to protect our renderer state.
         // const mutex = try alloc.create(std.Thread.Mutex);
@@ -2324,14 +2336,15 @@ where
         // );
         // (`2f0b65346` dropped the `app_mailbox` argument. PORT-ONLY, N437: the
         // thread also gets its own handle to the renderer's draw mutex, taken from
-        // the local `renderer_impl` because `self.renderer` is not written yet.)
+        // the local `renderer_impl` because `self.renderer` is not written yet.
+        // N441: `&self.renderer` is the out-of-line renderer's raw root.)
         let render_thread = match crate::renderer_seam::Thread::<A>::init(
             alloc,
             config,
             rt_surface,
-            unsafe { &raw mut (*self_).renderer },
+            renderer_ptr,
             unsafe { &raw mut (*self_).renderer_state },
-            renderer_impl.1.draw_mutex.clone(),
+            unsafe { (*renderer_ptr).1.draw_mutex.clone() },
         ) {
             Ok(v) => v,
             Err(err) => {
@@ -2339,7 +2352,7 @@ where
                 // errdefer alloc.destroy(mutex);
                 unsafe { drop(Box::from_raw(mutex)) };
                 // errdefer renderer_impl.deinit();
-                renderer_impl.deinit();
+                unsafe { (*renderer_ptr).deinit() };
                 // (errdefer app.font_grid_set.deref — UD115)
                 unsafe { (*app).font_grid_set.deref(font_grid_key) };
                 // errdefer derived_config.deinit();
@@ -2390,7 +2403,7 @@ where
                 // errdefer alloc.destroy(mutex);
                 unsafe { drop(Box::from_raw(mutex)) };
                 // errdefer renderer_impl.deinit();
-                renderer_impl.deinit();
+                unsafe { (*renderer_ptr).deinit() };
                 // (errdefer app.font_grid_set.deref — UD115)
                 unsafe { (*app).font_grid_set.deref(font_grid_key) };
                 // errdefer derived_config.deinit();
@@ -2802,7 +2815,11 @@ where
         unsafe {
             let view = (*rt_surface).host_view();
             let scale = (*rt_surface).host_content_scale();
-            Self::initTry(self_, true, (*self_).renderer.attachHostView(view, scale))
+            Self::initTry(
+                self_,
+                true,
+                (*(*self_).renderer.as_ptr()).attachHostView(view, scale),
+            )
         }?;
 
         // Start our renderer thread
@@ -3131,7 +3148,7 @@ where
             crate::init_fault::before_free("renderer_state.mutex");
             drop(Box::from_raw((*self_).renderer_state.mutex));
             // errdefer renderer_impl.deinit(); (Surface.zig:559)
-            (*self_).renderer.deinit();
+            (*(*self_).renderer.as_ptr()).deinit();
             // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD115: the
             // missing `errdefer app.font_grid_set.deref(font_grid_key)` (see the
             // `ref` site). The by-value Key is read out of `self_`, as
@@ -3251,7 +3268,10 @@ where
         // self.renderer_thread.deinit();
         self.renderer_thread.deinit();
         // self.renderer.deinit();
-        self.renderer.deinit();
+        //
+        // (N441: the render thread is joined above, so the exclusive borrow of
+        // the out-of-line renderer overlaps nothing.)
+        unsafe { (*self.renderer.as_ptr()).deinit() };
         // self.io_thread.deinit();
         //
         // (consuming receiver — read out of the invalidated-in-place self.)
@@ -3441,7 +3461,7 @@ where
         // Renderers are required to support `drawFrame` being called from
         // the main thread, so that they can update contents during resize.
         // try self.renderer.drawFrame(true);
-        unsafe { crate::renderer_seam::Renderer::drawFrame(&raw mut (*self_).renderer, true)? };
+        unsafe { crate::renderer_seam::Renderer::drawFrame((*self_).renderer.as_ptr(), true)? };
         Ok(())
     }
 
@@ -6651,7 +6671,7 @@ where
     pub unsafe fn displayRealized(
         self_: *mut Surface<A>,
     ) -> Result<(), crate::renderer_seam::RendererError> {
-        unsafe { crate::renderer_seam::Renderer::displayRealized(&raw mut (*self_).renderer) }
+        unsafe { crate::renderer_seam::Renderer::displayRealized((*self_).renderer.as_ptr()) }
     }
 
     /// Called by the apprt when the surface's display is unrealized (the surface
@@ -6670,7 +6690,7 @@ where
     /// # Safety
     /// As [`Surface::displayRealized`].
     pub unsafe fn displayUnrealized(self_: *mut Surface<A>) {
-        unsafe { crate::renderer_seam::Renderer::displayUnrealized(&raw mut (*self_).renderer) };
+        unsafe { crate::renderer_seam::Renderer::displayUnrealized((*self_).renderer.as_ptr()) };
 
         // Wake the render thread so it notices `display_realized` is now false
         // and releases GPU resources (swap chain and shaders).
@@ -7052,7 +7072,22 @@ where
     // ) !InputEffect {
     //
     // (the inferred `!InputEffect` is the [`Error`] union.)
-    pub fn keyCallback(&mut self, event_orig: KeyEvent) -> Result<InputEffect, Error> {
+    //
+    // PORT NOTE (N442, P7-W7 T5b): raw-self (`self: *Surface` has no aliasing
+    // rule in Zig; a Rust `&mut self` receiver is a protected Unique for the
+    // whole call). A keybind can run the embedder's action callback, which
+    // re-enters this surface (`rustty_surface_inherited_config`); a protector
+    // spanning it is UB. `this` is an UNPROTECTED local reborrow, dead before the
+    // binding dispatch and taken afresh after it. Proof: `.port/phase-2/mirihar-n441`.
+    ///
+    /// # Safety
+    /// `self_` is the stable Surface allocation (init's stability contract); no
+    /// protected `&mut Surface` may span the call.
+    pub unsafe fn keyCallback(
+        self_: *mut Surface<A>,
+        event_orig: KeyEvent,
+    ) -> Result<InputEffect, Error> {
+        let this = unsafe { &mut *self_ };
         // log.warn("text keyCallback event={}", .{event_orig});
         // (COMMENT-ONLY BY DESIGN: commented out in the ORACLE too, Surface.zig:2666.)
 
@@ -7063,14 +7098,14 @@ where
         // (PORT NOTE: the keyEventIsBinding move-and-read note above.)
         let mut event = event_orig;
         // if (self.config.key_remaps.isRemapped(event_orig.mods)) {
-        if self.config.key_remaps.is_remapped(event.mods) {
+        if this.config.key_remaps.is_remapped(event.mods) {
             // event.mods = self.config.key_remaps.apply(event_orig.mods);
-            event.mods = self.config.key_remaps.apply(event.mods);
+            event.mods = this.config.key_remaps.apply(event.mods);
         }
 
         // Crash metadata in case we crash in here
         // crash.sentry.thread_state = self.crashThreadState();
-        crash::sentry::setThreadState(self.crashThreadState());
+        crash::sentry::setThreadState(this.crashThreadState());
         // defer crash.sentry.thread_state = null;
         //
         // ([ADV 6.1] — the Drop guard clears at every exit below; declared
@@ -7088,7 +7123,7 @@ where
         //
         // (the OOM-only `try alloc.dupe` collapses to the owned clone — the
         // inspector widgets/key.rs Event::init precedent.)
-        let insp_ev_: Option<inspectorpkg::KeyEvent> = if self.inspector.is_some() {
+        let insp_ev_: Option<inspectorpkg::KeyEvent> = if this.inspector.is_some() {
             let mut copy = event.clone();
             copy.utf8 = Vec::new();
             if !event.utf8.is_empty() {
@@ -7109,7 +7144,7 @@ where
         // 2674-2689 — is [`InspEvGuard`]'s `Drop`; the `if (insp_ev) |*ev| ev
         // else null` argument sites below are the `.ev.as_mut()` reborrows.)
         let mut insp_ev = InspEvGuard::<A> {
-            surface: self,
+            surface: self_,
             ev: insp_ev_,
         };
 
@@ -7120,29 +7155,31 @@ where
         //     event,
         //     if (insp_ev) |*ev| ev else null,
         // )) |v| return v;
-        if let Some(v) = self.maybeHandleBinding(&event, insp_ev.ev.as_mut())? {
+        if let Some(v) = unsafe { Self::maybeHandleBinding(self_, &event, insp_ev.ev.as_mut()) }? {
             return Ok(v);
         }
+        // (N442: a fresh reborrow; the binding dispatch may have re-entered.)
+        let this = unsafe { &mut *self_ };
 
         // If we allow KAM and KAM is enabled then we do nothing.
         // if (self.config.vt_kam_allowed) {
-        if self.config.vt_kam_allowed {
+        if this.config.vt_kam_allowed {
             // self.renderer_state.mutex.lock();
-            unsafe { (*self.renderer_state.mutex).lock() };
+            unsafe { (*this.renderer_state.mutex).lock() };
             // defer self.renderer_state.mutex.unlock();
             // if (self.io.terminal.modes.get(.disable_keyboard)) return .consumed;
-            if self
+            if this
                 .io
                 .terminal
                 .modes
                 .get(terminal::modes::Mode::DisableKeyboard)
             {
                 // (the deferred mutex unlock — the consumed return)
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*this.renderer_state.mutex).unlock() };
                 return Ok(InputEffect::Consumed);
             }
             // (the deferred mutex unlock — the fall-through)
-            unsafe { (*self.renderer_state.mutex).unlock() };
+            unsafe { (*this.renderer_state.mutex).unlock() };
         }
 
         // If this input event has text, then we hide the mouse if configured.
@@ -7152,21 +7189,21 @@ where
         //     event.action == .press and
         //     !self.mouse.hidden and
         //     event.utf8.len > 0)
-        if self.config.mouse_hide_while_typing
+        if this.config.mouse_hide_while_typing
             && event.action == key::Action::Press
-            && !self.mouse.hidden
+            && !this.mouse.hidden
             && !event.utf8.is_empty()
         {
-            self.hideMouse();
+            this.hideMouse();
         }
 
         // If our mouse modifiers change we may need to change our
         // link highlight state.
         // if (!self.mouse.mods.equal(event.mods)) mouse_mods: {
-        if !self.mouse.mods.equal(event.mods) {
+        if !this.mouse.mods.equal(event.mods) {
             'mouse_mods: {
                 // Update our modifiers, this will update mouse mods too
-                self.modsChanged(event.mods);
+                this.modsChanged(event.mods);
 
                 // We only refresh links if
                 // 1. mouse reporting is off
@@ -7174,17 +7211,17 @@ where
                 // 2. mouse reporting is on and we are not reporting shift to the terminal
                 // if (self.io.terminal.flags.mouse_event == .none or
                 //     (self.mouse.mods.shift and !self.mouseShiftCapture(false)))
-                if self.io.terminal.flags.mouse_event == terminal::mouse::Event::None
-                    || (self.mouse.mods.shift && !self.mouseShiftCapture(false))
+                if this.io.terminal.flags.mouse_event == terminal::mouse::Event::None
+                    || (this.mouse.mods.shift && !this.mouseShiftCapture(false))
                 {
                     // Refresh our link state
                     // const pos = self.rt_surface.getCursorPos() catch break :mouse_mods;
-                    let pos = match unsafe { &*self.rt_surface }.get_cursor_pos() {
+                    let pos = match unsafe { &*this.rt_surface }.get_cursor_pos() {
                         Ok(v) => v,
                         Err(_) => break 'mouse_mods,
                     };
                     // self.renderer_state.mutex.lock();
-                    unsafe { (*self.renderer_state.mutex).lock() };
+                    unsafe { (*this.renderer_state.mutex).lock() };
                     // defer self.renderer_state.mutex.unlock();
                     // self.mouseRefreshLinks(
                     //     pos,
@@ -7197,19 +7234,19 @@ where
                     //
                     // (Zig widens the f32 cursor coordinates to the f64
                     // params — the selectionScrollTick precedent.)
-                    let pos_vp = self.posToViewport(f64::from(pos.x), f64::from(pos.y));
-                    if let Err(err) = self.mouseRefreshLinks(pos, pos_vp, self.mouse.over_link) {
+                    let pos_vp = this.posToViewport(f64::from(pos.x), f64::from(pos.y));
+                    if let Err(err) = this.mouseRefreshLinks(pos, pos_vp, this.mouse.over_link) {
                         // log.warn("failed to refresh links err={}", .{err});
                         log::warn!(target: LOG_SCOPE, "failed to refresh links err={err:?}");
                         // (the deferred mutex unlock — the catch break)
-                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        unsafe { (*this.renderer_state.mutex).unlock() };
                         break 'mouse_mods;
                     }
                     // (the deferred mutex unlock — the normal exit)
-                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    unsafe { (*this.renderer_state.mutex).unlock() };
                 // } else if (self.io.terminal.flags.mouse_event != .none and !self.mouse.mods.shift) {
-                } else if self.io.terminal.flags.mouse_event != terminal::mouse::Event::None
-                    && !self.mouse.mods.shift
+                } else if this.io.terminal.flags.mouse_event != terminal::mouse::Event::None
+                    && !this.mouse.mods.shift
                 {
                     // If we have mouse reports on and we don't have shift pressed, we reset state
                     // _ = try self.rt_app.performAction(
@@ -7217,21 +7254,21 @@ where
                     //     .mouse_shape,
                     //     self.io.terminal.mouse_shape,
                     // );
-                    let _ = unsafe { &*self.rt_app }.perform_action(
-                        apprt::Target::Surface(&*self),
-                        apprt::Action::MouseShape(self.io.terminal.mouse_shape),
+                    let _ = unsafe { &*this.rt_app }.perform_action(
+                        apprt::Target::Surface(&*this),
+                        apprt::Action::MouseShape(this.io.terminal.mouse_shape),
                     )?;
                     // _ = try self.rt_app.performAction(
                     //     .{ .surface = self },
                     //     .mouse_over_link,
                     //     .{ .url = "" },
                     // );
-                    let _ = unsafe { &*self.rt_app }.perform_action(
-                        apprt::Target::Surface(&*self),
+                    let _ = unsafe { &*this.rt_app }.perform_action(
+                        apprt::Target::Surface(&*this),
                         apprt::Action::MouseOverLink(MouseOverLink { url: b"" }),
                     )?;
                     // try self.queueRender();
-                    self.queueRender()?;
+                    this.queueRender()?;
                 }
             }
         }
@@ -7252,16 +7289,16 @@ where
         // );
         if let Some(shape) = (SurfaceMouse {
             physical_key: event.key,
-            mouse_event: self.io.terminal.flags.mouse_event,
-            mouse_shape: self.io.terminal.mouse_shape,
-            mods: self.mouse.mods,
-            over_link: self.mouse.over_link,
-            hidden: self.mouse.hidden,
+            mouse_event: this.io.terminal.flags.mouse_event,
+            mouse_shape: this.io.terminal.mouse_shape,
+            mods: this.mouse.mods,
+            over_link: this.mouse.over_link,
+            hidden: this.mouse.hidden,
         })
         .key_to_mouse_shape()
         {
-            let _ = unsafe { &*self.rt_app }.perform_action(
-                apprt::Target::Surface(&*self),
+            let _ = unsafe { &*this.rt_app }.perform_action(
+                apprt::Target::Surface(&*this),
                 apprt::Action::MouseShape(shape),
             )?;
         }
@@ -7269,7 +7306,7 @@ where
         // We've processed a key event that produced some data so we want to
         // track the last pressed key.
         // self.pressed_key = event: {
-        self.pressed_key = 'event: {
+        this.pressed_key = 'event: {
             // We need to unset the allocated fields that will become invalid
             // var copy = event;
             // copy.utf8 = "";
@@ -7283,7 +7320,7 @@ where
                 // if we didn't have a previous event and this is a release
                 // event then we just want to set it to null.
                 // const prev = self.pressed_key orelse break :event null;
-                let prev = match &self.pressed_key {
+                let prev = match &this.pressed_key {
                     Some(v) => v,
                     None => break 'event None,
                 };
@@ -7310,17 +7347,17 @@ where
         //     event,
         //     if (insp_ev) |*ev| ev else null,
         // )) |write_req| {
-        if let Some(write_req) = self.encodeKey(&event, insp_ev.ev.as_mut())? {
+        if let Some(write_req) = this.encodeKey(&event, insp_ev.ev.as_mut())? {
             // If our process is exited and we press a key that results in
             // an encoded value, we close the surface. We want to eventually
             // move this behavior to the apprt probably.
             // if (self.child_exited) {
-            if self.child_exited {
+            if this.child_exited {
                 // write_req.deinit();
                 //
                 // (Drop-owned `WriteReq` — freed by the return below.)
                 // self.close();
-                self.close();
+                this.close();
                 // return .closed;
                 return Ok(InputEffect::Closed);
             }
@@ -7328,7 +7365,7 @@ where
             // (the reference's former `errdefer write_req.deinit()` is gone:
             // `queueIo` takes ownership of the message and cannot fail.)
             // self.queueIo(switch (write_req) {
-            self.queueIo(
+            this.queueIo(
                 match write_req {
                     // .small => |v| .{ .write_small = v },
                     MessageData::Small(v) => termio::Message::WriteSmall(v),
@@ -7351,31 +7388,31 @@ where
         // if (!event.key.modifier()) {
         if !event.key.modifier() {
             // self.renderer_state.mutex.lock();
-            unsafe { (*self.renderer_state.mutex).lock() };
+            unsafe { (*this.renderer_state.mutex).lock() };
             // defer self.renderer_state.mutex.unlock();
 
             // if (self.config.selection_clear_on_typing or
             //     event.key == .escape)
-            if self.config.selection_clear_on_typing || event.key == Key::Escape {
+            if this.config.selection_clear_on_typing || event.key == Key::Escape {
                 // try self.setSelection(null);
-                if let Err(err) = self.setSelection(None) {
+                if let Err(err) = this.setSelection(None) {
                     // (the deferred mutex unlock — the error return)
-                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    unsafe { (*this.renderer_state.mutex).unlock() };
                     return Err(err);
                 }
             }
 
             // if (self.config.scroll_to_bottom.keystroke) self.io.terminal.scrollViewport(.bottom);
-            if self.config.scroll_to_bottom.keystroke {
-                self.io
+            if this.config.scroll_to_bottom.keystroke {
+                this.io
                     .terminal
                     .scroll_viewport(terminal::terminal::ScrollViewport::Bottom);
             }
 
             // try self.queueRender();
-            let result = self.queueRender();
+            let result = this.queueRender();
             // (the deferred mutex unlock — the normal/error exit)
-            unsafe { (*self.renderer_state.mutex).unlock() };
+            unsafe { (*this.renderer_state.mutex).unlock() };
             result?;
         }
 
@@ -7395,11 +7432,20 @@ where
     // (by-value `event` -> `&KeyEvent` — the Rust KeyEvent owns its utf8
     // bytes, the inspector Event::init receiver precedent; the inferred
     // `!?InputEffect` is the [`Error`] union.)
-    fn maybeHandleBinding(
-        &mut self,
+    //
+    // PORT NOTE (N442, P7-W7 T5b): raw-self, as `keyCallback`. `this` is an
+    // unprotected local reborrow; it is taken afresh after every
+    // `performBindingAction` / `performAllChainedAction` call, since those can
+    // run the embedder's action callback, which re-enters this surface.
+    ///
+    /// # Safety
+    /// As [`Surface::keyCallback`].
+    unsafe fn maybeHandleBinding(
+        self_: *mut Surface<A>,
         event: &KeyEvent,
         mut insp_ev: Option<&mut inspectorpkg::KeyEvent>,
     ) -> Result<Option<InputEffect>, Error> {
+        let mut this = unsafe { &mut *self_ };
         // switch (event.action) {
         match event.action {
             // Release events never trigger a binding but we need to check if
@@ -7407,7 +7453,7 @@ where
             // .release => {
             key::Action::Release => {
                 // if (self.keyboard.last_trigger) |last| {
-                if let Some(last) = self.keyboard.last_trigger {
+                if let Some(last) = this.keyboard.last_trigger {
                     // if (last == event.bindingHash()) {
                     if last == event.binding_hash() {
                         // We don't reset the last trigger on release because
@@ -7434,7 +7480,7 @@ where
         let entry: (*const binding::Set, usize) = 'entry: {
             // Handle key sequences first.
             // if (self.keyboard.sequence_set) |set| {
-            if let Some(set) = self.keyboard.sequence_set {
+            if let Some(set) = this.keyboard.sequence_set {
                 // Get our entry from the set for the given event.
                 // if (set.getEvent(event)) |v| break :entry v;
                 if let Some(v) = unsafe { &*set }.get_event(event) {
@@ -7454,16 +7500,16 @@ where
                 // If we have a catch-all of ignore, then we special case our
                 // invalid sequence handling to ignore it.
                 // if (self.catchAllIsIgnore()) {
-                if self.catchAllIsIgnore() {
+                if this.catchAllIsIgnore() {
                     // self.endKeySequence(.drop, .retain);
-                    self.endKeySequence(KeySequenceQueued::Drop, KeySequenceMemory::Retain);
+                    this.endKeySequence(KeySequenceQueued::Drop, KeySequenceMemory::Retain);
                     // return .ignored;
                     return Ok(Some(InputEffect::Ignored));
                 }
 
                 // Encode everything up to this point
                 // self.endKeySequence(.flush, .retain);
-                self.endKeySequence(KeySequenceQueued::Flush, KeySequenceMemory::Retain);
+                this.endKeySequence(KeySequenceQueued::Flush, KeySequenceMemory::Retain);
 
                 // return null;
                 return Ok(None);
@@ -7480,14 +7526,14 @@ where
             // by the captured length and copies each element out; the
             // reference `const table = table_items[rev_i];` is a by-value
             // copy too.)
-            let table_items_len = self.keyboard.table_stack.len();
+            let table_items_len = this.keyboard.table_stack.len();
             if table_items_len > 0 {
                 // for (0..table_items.len) |i| {
                 for i in 0..table_items_len {
                     // const rev_i: usize = table_items.len - 1 - i;
                     let rev_i: usize = table_items_len - 1 - i;
                     // const table = table_items[rev_i];
-                    let table = self.keyboard.table_stack[rev_i];
+                    let table = this.keyboard.table_stack[rev_i];
                     // if (table.set.getEvent(event)) |v| {
                     if let Some(v) = unsafe { &*table.set }.get_event(event) {
                         // If this is a one-shot activation AND its the currently
@@ -7499,8 +7545,14 @@ where
                         //     .deactivate_key_table,
                         // );
                         if table.once && i == 0 {
-                            let _ =
-                                self.performBindingAction(binding::Action::DeactivateKeyTable)?;
+                            let _ = unsafe {
+                                Self::performBindingAction(
+                                    self_,
+                                    binding::Action::DeactivateKeyTable,
+                                )
+                            }?;
+                            // (N442: a fresh reborrow after the dispatch.)
+                            this = unsafe { &mut *self_ };
                         }
 
                         // break :entry v;
@@ -7512,8 +7564,8 @@ where
             // No table, use our default set
             // break :entry self.config.keybind.set.getEvent(event) orelse
             //     return null;
-            match self.config.keybind.set.get_event(event) {
-                Some(v) => break 'entry (&self.config.keybind.set as *const binding::Set, v),
+            match this.config.keybind.set.get_event(event) {
+                Some(v) => break 'entry (&this.config.keybind.set as *const binding::Set, v),
                 None => return Ok(None),
             }
         };
@@ -7523,6 +7575,13 @@ where
         let leaf: binding::GenericLeaf = match unsafe { &*entry.0 }.value_at(entry.1) {
             // .leader => |set| {
             binding::Value::Leader(set) => {
+                // PORT NOTE (N442): the trigger (`entry.key_ptr.*`, read for the
+                // `key_sequence` action below) is read here, before `encodeKey`
+                // reborrows the surface: for the default set `entry.0` points
+                // into `this.config`, and a later `&mut` reborrow of `this`
+                // would retire that pointer's tag. A pure read; order-neutral.
+                let trigger = *unsafe { &*entry.0 }.key_at(entry.1);
+
                 // Store this event so that we can drain and encode on invalid.
                 // We don't need to cap this because it is naturally capped by
                 // the config validation.
@@ -7536,13 +7595,13 @@ where
                 // (the append `catch` collapses: Vec `push` cannot fail, and
                 // `req` is Drop-owned so the reference's on-error `req.deinit()`
                 // has no counterpart.)
-                if let Some(req) = self.encodeKey(event, insp_ev.as_deref_mut())? {
-                    self.keyboard.sequence_queued.push(req);
+                if let Some(req) = this.encodeKey(event, insp_ev.as_deref_mut())? {
+                    this.keyboard.sequence_queued.push(req);
                 }
 
                 // Setup the next set we'll look at only after all fallible work.
                 // self.keyboard.sequence_set = set;
-                self.keyboard.sequence_set = Some(&**set as *const binding::Set);
+                this.keyboard.sequence_set = Some(&**set as *const binding::Set);
 
                 // Start or continue our key sequence
                 // _ = self.rt_app.performAction(
@@ -7555,9 +7614,10 @@ where
                 //         .{err},
                 //     );
                 // };
-                let trigger = *unsafe { &*entry.0 }.key_at(entry.1);
-                if let Err(err) = unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                //
+                // (`trigger` is read at the top of this arm; PORT NOTE there.)
+                if let Err(err) = unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::KeySequence(KeySequence::Trigger(trigger)),
                 ) {
                     // log.warn("failed to notify app of key sequence err={}", .{err});
@@ -7597,11 +7657,11 @@ where
         // we reset the last trigger to null. We only set this if we actually
         // perform an action (below)
         // self.keyboard.last_trigger = null;
-        self.keyboard.last_trigger = None;
+        this.keyboard.last_trigger = None;
 
         // An action also always resets the sequence set.
         // self.keyboard.sequence_set = null;
-        self.keyboard.sequence_set = None;
+        this.keyboard.sequence_set = None;
 
         // Setup our actions
         // const actions = leaf.actionsSlice();
@@ -7628,7 +7688,10 @@ where
                 //     self.rt_app,
                 //     actions,
                 // );
-                unsafe { (*self.app).performAllChainedAction(&*self.rt_app, actions) };
+                //
+                // (N442: through the raw root; it performs on every surface,
+                // this one included.)
+                unsafe { (*(*self_).app).performAllChainedAction(&*(*self_).rt_app, actions) };
 
                 // "All" actions are always performed since they are global.
                 // break :performed true;
@@ -7652,7 +7715,7 @@ where
                 //
                 // (Zig passes the action by value — the app.rs
                 // performAllChainedAction clone precedent.)
-                match self.performBindingAction(action.clone()) {
+                match unsafe { Self::performBindingAction(self_, action.clone()) } {
                     Ok(v) => performed = performed || v,
                     Err(err) => {
                         // log.info("key binding action failed action={t} err={}", .{ action, err });
@@ -7668,6 +7731,10 @@ where
             // break :performed performed;
             performed
         };
+        // (N442: from here the surface is reborrowed afresh at each use: the
+        // dispatch above may have re-entered it, and a closing binding may have
+        // freed it — the closing check below touches no surface byte.)
+        let this = || unsafe { &mut *self_ };
 
         // if (performed) {
         if performed {
@@ -7697,7 +7764,7 @@ where
                 if matches!(action, binding::Action::Ignore) {
                     // If we're in a sequence, clear it.
                     // self.endKeySequence(.drop, .retain);
-                    self.endKeySequence(KeySequenceQueued::Drop, KeySequenceMemory::Retain);
+                    this().endKeySequence(KeySequenceQueued::Drop, KeySequenceMemory::Retain);
 
                     // return .ignored;
                     return Ok(Some(InputEffect::Ignored));
@@ -7713,7 +7780,7 @@ where
             // that doesn't exist in the sequence. Reset our sequence and flush
             // any queued events.
             // self.endKeySequence(.flush, .retain);
-            self.endKeySequence(KeySequenceQueued::Flush, KeySequenceMemory::Retain);
+            this().endKeySequence(KeySequenceQueued::Flush, KeySequenceMemory::Retain);
 
             // return null;
             return Ok(None);
@@ -7726,11 +7793,11 @@ where
         if consumed {
             // If we had queued events, we deinit them since we consumed
             // self.endKeySequence(.drop, .retain);
-            self.endKeySequence(KeySequenceQueued::Drop, KeySequenceMemory::Retain);
+            this().endKeySequence(KeySequenceQueued::Drop, KeySequenceMemory::Retain);
 
             // Store our last trigger so we don't encode the release event
             // self.keyboard.last_trigger = event.bindingHash();
-            self.keyboard.last_trigger = Some(event.binding_hash());
+            this().keyboard.last_trigger = Some(event.binding_hash());
 
             // if (insp_ev) |ev| {
             if let Some(ev) = insp_ev {
@@ -7756,7 +7823,7 @@ where
         // If we didn't perform OR we didn't consume, then we want to
         // encode any queued events for a sequence.
         // self.endKeySequence(.flush, .retain);
-        self.endKeySequence(KeySequenceQueued::Flush, KeySequenceMemory::Retain);
+        this().endKeySequence(KeySequenceQueued::Flush, KeySequenceMemory::Retain);
 
         // return null;
         Ok(None)
@@ -8329,7 +8396,7 @@ where
                     // the reference logs. The `catch |err| err: { log.warn(...);
                     // break :err .ignored; }` block is restored whole — the
                     // fallback AND its diagnostic.
-                    let effect = match self.keyCallback(pressed_key.clone()) {
+                    let effect = match unsafe { Self::keyCallback(self, pressed_key.clone()) } {
                         Ok(v) => v,
                         Err(err) => {
                             // log.warn("error releasing key on focus loss err={}", .{err});
@@ -8394,7 +8461,7 @@ where
                                 if pressed_key.key != original_key {
                                     // (same restored catch block as the
                                     // release-the-full-key site above.)
-                                    let effect = match self.keyCallback(pressed_key.clone()) {
+                                    let effect = match unsafe { Self::keyCallback(self, pressed_key.clone()) } {
                                         Ok(v) => v,
                                         Err(err) => {
                                             // log.warn("error releasing key on focus loss err={}", .{err});
@@ -11267,7 +11334,26 @@ where
     // `*const std::sync::Mutex<()>` while the shared renderer mutex is the
     // guard-less `rustty_zigstd::thread::Mutex`) AND a self-referential
     // long-lived thread spawn (a stable pointer into `self.search.?.state`).
-    pub fn performBindingAction(&mut self, action: binding::Action) -> Result<bool, Error> {
+    //
+    // PORT NOTE (N442, P7-W7 T5b): raw-self. A `&mut self` receiver is a
+    // protected Unique for the whole call, and the `new_window`, `new_tab` and
+    // `new_split` arms run the embedder's action callback, which re-enters this
+    // surface synchronously (the macOS host calls
+    // `rustty_surface_inherited_config` there, reading `font_size` and the pwd
+    // through the parent pointer). Those three arms touch the surface only by
+    // place through `self_` and a shared `Target`; `this`, an unprotected local
+    // reborrow the other arms use, is dead in them. Audit of the other
+    // `perform_action` arms: the macOS host's handlers re-enter no surface for
+    // them. Proof: `.port/phase-2/mirihar-n441`.
+    ///
+    /// # Safety
+    /// `self_` is the stable Surface allocation (init's stability contract); no
+    /// protected `&mut Surface` may span the call.
+    pub unsafe fn performBindingAction(
+        self_: *mut Surface<A>,
+        action: binding::Action,
+    ) -> Result<bool, Error> {
+        let this = unsafe { &mut *self_ };
         // Forward app-scoped actions to the app. Some app-scoped actions are
         // special-cased here because they do some special things when performed
         // from the surface.
@@ -11279,13 +11365,15 @@ where
                 //     self.rt_app,
                 //     .{ .parent = self },
                 // ),
+                //
+                // (N442: re-entrant, so by place through `self_`; `App::newWindow`
+                // takes `&self`, since the host also reads the core app.)
                 binding::ScopedApp::NewWindow => {
-                    let self_ptr: *mut Surface<A> = self;
-                    let rt_app: &A = unsafe { &*self.rt_app };
-                    unsafe { &mut *self.app }.newWindow(
+                    let rt_app: &A = unsafe { &*(*self_).rt_app };
+                    unsafe { &*(*self_).app }.newWindow(
                         rt_app,
                         crate::app::NewWindow {
-                            parent: Some(self_ptr),
+                            parent: Some(self_),
                         },
                     )?;
                 }
@@ -11299,8 +11387,8 @@ where
                 //     {},
                 // ),
                 binding::ScopedApp::Undo => {
-                    return Ok(unsafe { &*self.rt_app }
-                        .perform_action(apprt::Target::Surface(&*self), apprt::Action::Undo)?);
+                    return Ok(unsafe { &*this.rt_app }
+                        .perform_action(apprt::Target::Surface(&*this), apprt::Action::Undo)?);
                 }
 
                 // .redo => return try self.rt_app.performAction(
@@ -11309,8 +11397,8 @@ where
                 //     {},
                 // ),
                 binding::ScopedApp::Redo => {
-                    return Ok(unsafe { &*self.rt_app }
-                        .perform_action(apprt::Target::Surface(&*self), apprt::Action::Redo)?);
+                    return Ok(unsafe { &*this.rt_app }
+                        .perform_action(apprt::Target::Surface(&*this), apprt::Action::Redo)?);
                 }
 
                 // else => try self.app.performAction(
@@ -11321,8 +11409,8 @@ where
                 // (`app_action` IS `action.scoped(.app).?`, the value the
                 // reference re-derives here.)
                 _ => {
-                    let rt_app: &A = unsafe { &*self.rt_app };
-                    unsafe { &mut *self.app }.performAction(rt_app, app_action)?;
+                    let rt_app: &A = unsafe { &*this.rt_app };
+                    unsafe { &mut *this.app }.performAction(rt_app, app_action)?;
                 }
             }
             // return true;
@@ -11369,7 +11457,7 @@ where
                 //     self.alloc,
                 //     full_data,
                 // ), .unlocked);
-                self.queueIo(
+                this.queueIo(
                     termio::Message::writeReq(full_data),
                     termio::termio_impl::MutexState::Unlocked,
                 );
@@ -11383,12 +11471,12 @@ where
                 //     };
                 // }
                 {
-                    unsafe { (*self.renderer_state.mutex).lock() };
-                    if let Err(err) = self.scrollToBottom() {
+                    unsafe { (*this.renderer_state.mutex).lock() };
+                    if let Err(err) = this.scrollToBottom() {
                         // log.warn("error scrolling to bottom err={}", .{err});
                         log::warn!(target: LOG_SCOPE, "error scrolling to bottom err={err:?}");
                     }
-                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    unsafe { (*this.renderer_state.mutex).unlock() };
                 }
             }
 
@@ -11426,7 +11514,7 @@ where
                 //     self.alloc,
                 //     text,
                 // ), .unlocked);
-                self.queueIo(
+                this.queueIo(
                     termio::Message::writeReq(text),
                     termio::termio_impl::MutexState::Unlocked,
                 );
@@ -11440,12 +11528,12 @@ where
                 //     };
                 // }
                 {
-                    unsafe { (*self.renderer_state.mutex).lock() };
-                    if let Err(err) = self.scrollToBottom() {
+                    unsafe { (*this.renderer_state.mutex).lock() };
+                    if let Err(err) = this.scrollToBottom() {
                         // log.warn("error scrolling to bottom err={}", .{err});
                         log::warn!(target: LOG_SCOPE, "error scrolling to bottom err={err:?}");
                     }
-                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    unsafe { (*this.renderer_state.mutex).unlock() };
                 }
             }
 
@@ -11467,21 +11555,21 @@ where
                 //     break :normal !self.io.terminal.modes.get(.cursor_keys);
                 // };
                 let normal = {
-                    unsafe { (*self.renderer_state.mutex).lock() };
+                    unsafe { (*this.renderer_state.mutex).lock() };
 
                     // With the lock held, we must scroll to the bottom.
                     // We always scroll to the bottom for these inputs.
-                    if let Err(err) = self.scrollToBottom() {
+                    if let Err(err) = this.scrollToBottom() {
                         // log.warn("error scrolling to bottom err={}", .{err});
                         log::warn!(target: LOG_SCOPE, "error scrolling to bottom err={err:?}");
                     }
 
-                    let normal = !self
+                    let normal = !this
                         .io
                         .terminal
                         .modes
                         .get(terminal::modes::Mode::CursorKeys);
-                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    unsafe { (*this.renderer_state.mutex).unlock() };
                     normal
                 };
 
@@ -11499,12 +11587,12 @@ where
                 // exists; `queueIo` requires a `Message<'static>`, so the bytes
                 // are COPIED via `writeReq` (write_small/write_alloc).
                 if normal {
-                    self.queueIo(
+                    this.queueIo(
                         termio::Message::writeReq(&ck.normal),
                         termio::termio_impl::MutexState::Unlocked,
                     );
                 } else {
-                    self.queueIo(
+                    this.queueIo(
                         termio::Message::writeReq(&ck.application),
                         termio::termio_impl::MutexState::Unlocked,
                     );
@@ -11516,9 +11604,9 @@ where
                 // self.renderer_state.mutex.lock();
                 // defer self.renderer_state.mutex.unlock();
                 // self.renderer_state.terminal.fullReset();
-                unsafe { (*self.renderer_state.mutex).lock() };
-                unsafe { (*self.renderer_state.terminal).full_reset() };
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*this.renderer_state.mutex).lock() };
+                unsafe { (*this.renderer_state.terminal).full_reset() };
+                unsafe { (*this.renderer_state.mutex).unlock() };
             }
 
             // .start_search => {
@@ -11531,8 +11619,8 @@ where
                 //     .start_search,
                 //     .{ .needle = "" },
                 // );
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::StartSearch(StartSearch { needle: b"" }),
                 )?);
             }
@@ -11543,7 +11631,7 @@ where
                 // defer self.alloc.free(selection);
                 //
                 // (the owned `Vec` drops at scope end.)
-                let selection = match self.selectionString(self.alloc)? {
+                let selection = match this.selectionString(this.alloc)? {
                     Some(s) => s,
                     None => return Ok(false),
                 };
@@ -11552,8 +11640,8 @@ where
                 //     .start_search,
                 //     .{ .needle = selection },
                 // );
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::StartSearch(StartSearch { needle: &selection }),
                 )?);
             }
@@ -11564,7 +11652,7 @@ where
                 // stopped a search, but we also send the apprt end_search so
                 // that GUIs can clean up stale stuff.
                 // const performed = self.search != null;
-                let performed = self.search.is_some();
+                let performed = this.search.is_some();
 
                 // if (self.search) |*s| {
                 //     s.deinit();
@@ -11573,7 +11661,7 @@ where
                 //
                 // (`take()` is the reference's `deinit` + `= null`; `deinit`
                 // consumes the by-value `Search`.)
-                if let Some(s) = self.search.take() {
+                if let Some(s) = this.search.take() {
                     s.deinit();
                 }
 
@@ -11582,8 +11670,8 @@ where
                 //     .end_search,
                 //     {},
                 // );
-                let _ = unsafe { &*self.rt_app }
-                    .perform_action(apprt::Target::Surface(&*self), apprt::Action::EndSearch)?;
+                let _ = unsafe { &*this.rt_app }
+                    .perform_action(apprt::Target::Surface(&*this), apprt::Action::EndSearch)?;
 
                 // return performed;
                 return Ok(performed);
@@ -11605,7 +11693,7 @@ where
             // `search_shipped`/`callback_shipped`).
             binding::ScopedSurface::Search(text) => {
                 // const s: *Search = if (self.search) |*s| s else init: {
-                if self.search.is_none() {
+                if this.search.is_none() {
                     // init: {
                     //     // If we're stopping the search and we had no prior search,
                     //     // then there is nothing to do.
@@ -11618,7 +11706,10 @@ where
                     // through a `*mut Surface`, the same address `searchCallback`
                     // casts `event_userdata` back to. The thread re-enters through
                     // it via NARROW raw field projections only (§3.3a).
-                    let surface_ptr: *mut Surface<A> = self;
+                    //
+                    // (N442: the caller's raw root itself, not a pointer derived
+                    // from the local reborrow, which later reborrows retire.)
+                    let surface_ptr: *mut Surface<A> = self_;
 
                     // We need to assign directly to self.search because we need
                     // a stable pointer back to the thread state.
@@ -11641,12 +11732,12 @@ where
                     // `addr_of!` alias would be popped by the child's
                     // `Box<Mailbox>` noalias — mirihar `search_shipped`).
                     let mut state = terminal::search::thread::Thread::init(
-                        self.alloc.into(),
+                        this.alloc.into(),
                         terminal::search::thread::Options {
                             // .mutex = self.renderer_state.mutex,
-                            mutex: self.renderer_state.mutex, // *mut -> *const (§1)
+                            mutex: this.renderer_state.mutex, // *mut -> *const (§1)
                             // .terminal = self.renderer_state.terminal,
-                            terminal: self.renderer_state.terminal,
+                            terminal: this.renderer_state.terminal,
                             // .event_cb = &searchCallback,
                             event_cb: Some(Self::searchCallback),
                             // .event_userdata = self,
@@ -11672,7 +11763,7 @@ where
                     let sn = state.stop.notifier();
 
                     // self.search = .{ .state = <local>, .thread = undefined };
-                    self.search = Some(Search {
+                    this.search = Some(Search {
                         state,
                         thread: None,               // == `.thread = undefined`
                         mailbox: core::ptr::null(), // set from state_ptr below
@@ -11684,7 +11775,7 @@ where
                     // taken at birth (nothing aliases `state` yet), lowered
                     // immediately to raw. After this NO &mut Search / &mut Thread
                     // is ever formed again.
-                    let search_ptr: *mut Search = &raw mut *self.search.as_mut().unwrap();
+                    let search_ptr: *mut Search = &raw mut *this.search.as_mut().unwrap();
                     let state_ptr: *mut terminal::search::thread::Thread =
                         unsafe { &raw mut (*search_ptr).state };
                     // Decoupled mailbox = the Box<Mailbox> pointee, via the
@@ -11722,7 +11813,7 @@ where
                             unsafe {
                                 (*state_ptr).deinit();
                             }
-                            self.search = None;
+                            this.search = None;
                             return Err(e.into());
                         }
                     };
@@ -11745,7 +11836,7 @@ where
                     // `take()` is the reference's `deinit` + `= null`; `deinit`
                     // stop-notifies (decoupled handle) THEN joins THEN frees the
                     // state (§3.3). After `take()` the child is dead — no alias.
-                    self.search.take().unwrap().deinit();
+                    this.search.take().unwrap().deinit();
                     // break :search
                 } else {
                     // _ = s.state.mailbox.push(
@@ -11761,7 +11852,7 @@ where
                     // DECOUPLED handles, NEVER `self.search.as_mut().state` (a
                     // &mut Thread reborrow while the child holds a live &mut self
                     // → SB UB; mirihar `search_naive`).
-                    let s = self.search.as_ref().unwrap(); // &Search: sibling handles only
+                    let s = this.search.as_ref().unwrap(); // &Search: sibling handles only
                     let mailbox = s.mailbox;
                     let wakeup = s.wakeup.clone();
                     let needle = terminal::search::thread::WriteReq::init(text);
@@ -11784,7 +11875,7 @@ where
                 // `s.mailbox`/`s.wakeup` handles, NEVER `s.state.mailbox`
                 // (a &mut Thread reborrow while the child holds a live &mut self
                 // → SB UB; mirihar `search_naive`).
-                let (mailbox, wakeup) = match self.search.as_ref() {
+                let (mailbox, wakeup) = match this.search.as_ref() {
                     Some(s) => (s.mailbox, s.wakeup.clone()),
                     None => return Ok(false),
                 };
@@ -11817,25 +11908,25 @@ where
                 //
                 // (the deferred unlock at every exit — the selectionString C9
                 // convention; the fallible calls unlock before propagating.)
-                unsafe { (*self.renderer_state.mutex).lock() };
+                unsafe { (*this.renderer_state.mutex).lock() };
 
                 // if (self.io.terminal.screens.active.selection) |sel| {
-                if let Some(sel) = unsafe { (*self.io.terminal.screens.active).selection } {
+                if let Some(sel) = unsafe { (*this.io.terminal.screens.active).selection } {
                     // try self.copySelectionToClipboards(
                     //     sel,
                     //     &.{.standard},
                     //     format,
                     // );
                     if let Err(err) =
-                        self.copySelectionToClipboards(sel, &[apprt::Clipboard::Standard], format)
+                        this.copySelectionToClipboards(sel, &[apprt::Clipboard::Standard], format)
                     {
-                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        unsafe { (*this.renderer_state.mutex).unlock() };
                         return Err(err);
                     }
 
                     // Clear the selection if configured to do so.
                     // if (self.config.selection_clear_on_copy) {
-                    if self.config.selection_clear_on_copy {
+                    if this.config.selection_clear_on_copy {
                         // if (self.setSelection(null)) {
                         //     self.queueRender() catch |err| {
                         //         log.warn("failed to queue render after clear selection err={}", .{err});
@@ -11843,9 +11934,9 @@ where
                         // } else |err| {
                         //     log.warn("failed to clear selection after copy err={}", .{err});
                         // }
-                        match self.setSelection(None) {
+                        match this.setSelection(None) {
                             Ok(()) => {
-                                if let Err(err) = self.queueRender() {
+                                if let Err(err) = this.queueRender() {
                                     // log.warn("failed to queue render after clear selection err={}", .{err});
                                     log::warn!(
                                         target: LOG_SCOPE,
@@ -11864,12 +11955,12 @@ where
                     }
 
                     // return true;
-                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    unsafe { (*this.renderer_state.mutex).unlock() };
                     return Ok(true);
                 }
 
                 // return false;
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*this.renderer_state.mutex).unlock() };
                 return Ok(false);
             }
 
@@ -11877,22 +11968,22 @@ where
             binding::ScopedSurface::CopyUrlToClipboard => {
                 // If the mouse isn't over a link, nothing we can do.
                 // if (!self.mouse.over_link) return false;
-                if !self.mouse.over_link {
+                if !this.mouse.over_link {
                     return Ok(false);
                 }
                 // const pos = try self.rt_surface.getCursorPos();
-                let pos = unsafe { &*self.rt_surface }.get_cursor_pos()?;
+                let pos = unsafe { &*this.rt_surface }.get_cursor_pos()?;
 
                 // self.renderer_state.mutex.lock();
                 // defer self.renderer_state.mutex.unlock();
                 //
                 // (the deferred unlock at every exit — the C9 convention.)
-                unsafe { (*self.renderer_state.mutex).lock() };
+                unsafe { (*this.renderer_state.mutex).lock() };
                 // if (try self.linkAtPos(pos)) |link_info| {
-                let link_info = match self.linkAtPos(pos) {
+                let link_info = match this.linkAtPos(pos) {
                     Ok(v) => v,
                     Err(err) => {
-                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        unsafe { (*this.renderer_state.mutex).unlock() };
                         return Err(err);
                     }
                 };
@@ -11909,12 +12000,12 @@ where
                             //     log.err("error reading url string err={}", .{err});
                             //     return false;
                             // };
-                            let r = unsafe { &mut *self.io.terminal.screens.active }
+                            let r = unsafe { &mut *this.io.terminal.screens.active }
                                 .selection_string(
-                                    self.alloc.into(),
+                                    this.alloc.into(),
                                     terminal::screen::SelectionString {
                                         sel: link_info.selection,
-                                        trim: self.config.clipboard_trim_trailing_spaces,
+                                        trim: this.config.clipboard_trim_trailing_spaces,
                                     },
                                 );
                             match r {
@@ -11925,7 +12016,7 @@ where
                                         target: LOG_SCOPE,
                                         "error reading url string err={err:?}"
                                     );
-                                    unsafe { (*self.renderer_state.mutex).unlock() };
+                                    unsafe { (*this.renderer_state.mutex).unlock() };
                                     return Ok(false);
                                 }
                             }
@@ -11938,7 +12029,7 @@ where
                             //     log.warn("failed to get URI for OSC8 hyperlink", .{});
                             //     return false;
                             // };
-                            let uri = match self.osc8URI(link_info.selection.start()) {
+                            let uri = match this.osc8URI(link_info.selection.start()) {
                                 Some(v) => v,
                                 None => {
                                     // log.warn("failed to get URI for OSC8 hyperlink", .{});
@@ -11946,7 +12037,7 @@ where
                                         target: LOG_SCOPE,
                                         "failed to get URI for OSC8 hyperlink"
                                     );
-                                    unsafe { (*self.renderer_state.mutex).unlock() };
+                                    unsafe { (*this.renderer_state.mutex).unlock() };
                                     return Ok(false);
                                 }
                             };
@@ -11968,7 +12059,7 @@ where
                     //     log.err("error copying url to clipboard err={}", .{err});
                     //     return false;
                     // };
-                    if let Err(err) = unsafe { &*self.rt_surface }.set_clipboard(
+                    if let Err(err) = unsafe { &*this.rt_surface }.set_clipboard(
                         apprt::Clipboard::Standard,
                         &[apprt::ClipboardContent {
                             mime: b"text/plain".as_slice(),
@@ -11978,17 +12069,17 @@ where
                     ) {
                         // log.err("error copying url to clipboard err={}", .{err});
                         log::error!(target: LOG_SCOPE, "error copying url to clipboard err={err:?}");
-                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        unsafe { (*this.renderer_state.mutex).unlock() };
                         return Ok(false);
                     }
 
                     // return true;
-                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    unsafe { (*this.renderer_state.mutex).unlock() };
                     return Ok(true);
                 }
 
                 // return false;
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*this.renderer_state.mutex).unlock() };
                 return Ok(false);
             }
 
@@ -11998,8 +12089,8 @@ where
             //     {},
             // ),
             binding::ScopedSurface::CopyTitleToClipboard => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::CopyTitleToClipboard,
                 )?);
             }
@@ -12009,7 +12100,7 @@ where
             //     .{ .paste = .standard },
             // )) == .started,
             binding::ScopedSurface::PasteFromClipboard => {
-                return Ok(self.startClipboardRequest(
+                return Ok(this.startClipboardRequest(
                     apprt::Clipboard::Standard,
                     apprt::ClipboardRequest::Paste(apprt::Clipboard::Standard),
                 )? == apprt::ClipboardReadResult::Started);
@@ -12020,7 +12111,7 @@ where
             //     .{ .paste = .selection },
             // )) == .started,
             binding::ScopedSurface::PasteFromSelection => {
-                return Ok(self.startClipboardRequest(
+                return Ok(this.startClipboardRequest(
                     apprt::Clipboard::Selection,
                     apprt::ClipboardRequest::Paste(apprt::Clipboard::Selection),
                 )? == apprt::ClipboardReadResult::Started);
@@ -12044,15 +12135,15 @@ where
 
                 // Max point size is somewhat arbitrary.
                 // var size = self.font_size;
-                let mut size = self.font_size;
+                let mut size = this.font_size;
                 // size.points = @min(size.points + clamped_delta, 255);
                 size.points = f32::min(size.points + clamped_delta, 255.0);
                 // try self.setFontSize(size);
-                self.setFontSize(size)?;
+                this.setFontSize(size)?;
 
                 // Mark that we manually adjusted the font size
                 // self.font_size_adjusted = true;
-                self.font_size_adjusted = true;
+                this.font_size_adjusted = true;
             }
 
             // .decrease_font_size => |delta| {
@@ -12072,15 +12163,15 @@ where
                 log::debug!(target: LOG_SCOPE, "decrease font size={clamped_delta}");
 
                 // var size = self.font_size;
-                let mut size = self.font_size;
+                let mut size = this.font_size;
                 // size.points = @max(1, size.points - clamped_delta);
                 size.points = f32::max(1.0, size.points - clamped_delta);
                 // try self.setFontSize(size);
-                self.setFontSize(size)?;
+                this.setFontSize(size)?;
 
                 // Mark that we manually adjusted the font size
                 // self.font_size_adjusted = true;
-                self.font_size_adjusted = true;
+                this.font_size_adjusted = true;
             }
 
             // .reset_font_size => {
@@ -12089,15 +12180,15 @@ where
                 log::debug!(target: LOG_SCOPE, "reset font size");
 
                 // var size = self.font_size;
-                let mut size = self.font_size;
+                let mut size = this.font_size;
                 // size.points = self.config.original_font_size;
-                size.points = self.config.original_font_size;
+                size.points = this.config.original_font_size;
                 // try self.setFontSize(size);
-                self.setFontSize(size)?;
+                this.setFontSize(size)?;
 
                 // Reset font size also resets the manual adjustment state
                 // self.font_size_adjusted = false;
-                self.font_size_adjusted = false;
+                this.font_size_adjusted = false;
             }
 
             // .set_font_size => |points| {
@@ -12106,15 +12197,15 @@ where
                 log::debug!(target: LOG_SCOPE, "set font size={points}");
 
                 // var size = self.font_size;
-                let mut size = self.font_size;
+                let mut size = this.font_size;
                 // size.points = std.math.clamp(points, 1.0, 255.0);
                 size.points = points.clamp(1.0, 255.0);
                 // try self.setFontSize(size);
-                self.setFontSize(size)?;
+                this.setFontSize(size)?;
 
                 // Mark that we manually adjusted the font size
                 // self.font_size_adjusted = true;
-                self.font_size_adjusted = true;
+                this.font_size_adjusted = true;
             }
 
             // .prompt_surface_title => return try self.rt_app.performAction(
@@ -12123,8 +12214,8 @@ where
             //     .surface,
             // ),
             binding::ScopedSurface::PromptSurfaceTitle => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::PromptTitle(PromptTitle::Surface),
                 )?);
             }
@@ -12135,8 +12226,8 @@ where
             //     .tab,
             // ),
             binding::ScopedSurface::PromptTabTitle => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::PromptTitle(PromptTitle::Tab),
                 )?);
             }
@@ -12156,8 +12247,8 @@ where
                 //     .set_title,
                 //     .{ .title = title },
                 // );
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::SetTitle(SetTitle { title: v }),
                 )?);
             }
@@ -12168,8 +12259,8 @@ where
             //     .window,
             // ),
             binding::ScopedSurface::PromptWindowTitle => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::PromptTitle(PromptTitle::Window),
                 )?);
             }
@@ -12187,8 +12278,8 @@ where
                 //     .set_tab_title,
                 //     .{ .title = title },
                 // );
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::SetTabTitle(SetTitle { title: v }),
                 )?);
             }
@@ -12206,8 +12297,8 @@ where
                 //     .set_window_title,
                 //     .{ .title = title },
                 // );
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::SetWindowTitle(SetTitle { title: v }),
                 )?);
             }
@@ -12225,18 +12316,18 @@ where
                 //     if (self.io.terminal.screens.active_key == .alternate) return false;
                 // }
                 {
-                    unsafe { (*self.renderer_state.mutex).lock() };
-                    if self.io.terminal.screens.active_key == terminal::screen_set::Key::Alternate {
-                        unsafe { (*self.renderer_state.mutex).unlock() };
+                    unsafe { (*this.renderer_state.mutex).lock() };
+                    if this.io.terminal.screens.active_key == terminal::screen_set::Key::Alternate {
+                        unsafe { (*this.renderer_state.mutex).unlock() };
                         return Ok(false);
                     }
-                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    unsafe { (*this.renderer_state.mutex).unlock() };
                 }
 
                 // self.queueIo(.{
                 //     .clear_screen = .{ .history = true },
                 // }, .unlocked);
-                self.queueIo(
+                this.queueIo(
                     termio::Message::ClearScreen { history: true },
                     termio::termio_impl::MutexState::Unlocked,
                 );
@@ -12247,7 +12338,7 @@ where
                 // self.queueIo(.{
                 //     .scroll_viewport = .{ .top = {} },
                 // }, .unlocked);
-                self.queueIo(
+                this.queueIo(
                     termio::Message::ScrollViewport(terminal::terminal::ScrollViewport::Top),
                     termio::termio_impl::MutexState::Unlocked,
                 );
@@ -12258,7 +12349,7 @@ where
                 // self.queueIo(.{
                 //     .scroll_viewport = .{ .bottom = {} },
                 // }, .unlocked);
-                self.queueIo(
+                this.queueIo(
                     termio::Message::ScrollViewport(terminal::terminal::ScrollViewport::Bottom),
                     termio::termio_impl::MutexState::Unlocked,
                 );
@@ -12273,14 +12364,14 @@ where
                 //     t.screens.active.scroll(.{ .row = n });
                 // }
                 {
-                    unsafe { (*self.renderer_state.mutex).lock() };
-                    let t: *mut Terminal = self.renderer_state.terminal;
+                    unsafe { (*this.renderer_state.mutex).lock() };
+                    let t: *mut Terminal = this.renderer_state.terminal;
                     unsafe { (*(*t).screens.active).scroll(terminal::screen::Scroll::Row(n)) };
-                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    unsafe { (*this.renderer_state.mutex).unlock() };
                 }
 
                 // try self.queueRender();
-                self.queueRender()?;
+                this.queueRender()?;
             }
 
             // .scroll_to_selection => {
@@ -12293,35 +12384,35 @@ where
                 //     self.io.terminal.screens.active.scroll(.{ .pin = tl });
                 // }
                 {
-                    unsafe { (*self.renderer_state.mutex).lock() };
-                    let sel = match unsafe { (*self.io.terminal.screens.active).selection } {
+                    unsafe { (*this.renderer_state.mutex).lock() };
+                    let sel = match unsafe { (*this.io.terminal.screens.active).selection } {
                         Some(sel) => sel,
                         None => {
-                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            unsafe { (*this.renderer_state.mutex).unlock() };
                             return Ok(false);
                         }
                     };
-                    let tl = sel.top_left(unsafe { &*self.io.terminal.screens.active });
+                    let tl = sel.top_left(unsafe { &*this.io.terminal.screens.active });
                     unsafe {
-                        (*self.io.terminal.screens.active).scroll(terminal::screen::Scroll::Pin(tl))
+                        (*this.io.terminal.screens.active).scroll(terminal::screen::Scroll::Pin(tl))
                     };
-                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    unsafe { (*this.renderer_state.mutex).unlock() };
                 }
 
                 // try self.queueRender();
-                self.queueRender()?;
+                this.queueRender()?;
             }
 
             // .scroll_page_up => {
             binding::ScopedSurface::ScrollPageUp => {
                 // const rows: isize = @intCast(self.size.grid().rows);
-                let rows: isize = self.size.grid().rows as isize;
+                let rows: isize = this.size.grid().rows as isize;
                 // self.queueIo(.{
                 //     .scroll_viewport = .{ .delta = -1 * rows },
                 // }, .unlocked);
                 //
                 // (`-1 * rows` -> `-rows`; clippy rejects the literal-multiply.)
-                self.queueIo(
+                this.queueIo(
                     termio::Message::ScrollViewport(terminal::terminal::ScrollViewport::Delta(
                         -rows,
                     )),
@@ -12332,11 +12423,11 @@ where
             // .scroll_page_down => {
             binding::ScopedSurface::ScrollPageDown => {
                 // const rows: isize = @intCast(self.size.grid().rows);
-                let rows: isize = self.size.grid().rows as isize;
+                let rows: isize = this.size.grid().rows as isize;
                 // self.queueIo(.{
                 //     .scroll_viewport = .{ .delta = rows },
                 // }, .unlocked);
-                self.queueIo(
+                this.queueIo(
                     termio::Message::ScrollViewport(terminal::terminal::ScrollViewport::Delta(
                         rows,
                     )),
@@ -12347,7 +12438,7 @@ where
             // .scroll_page_fractional => |fraction| {
             binding::ScopedSurface::ScrollPageFractional(fraction) => {
                 // const rows: f32 = @floatFromInt(self.size.grid().rows);
-                let rows: f32 = f32::from(self.size.grid().rows);
+                let rows: f32 = f32::from(this.size.grid().rows);
                 // const delta: isize = @intFromFloat(@trunc(fraction * rows));
                 // (f32 site: `f64::from` is exact, so the f64 helper checks the
                 // identical value.)
@@ -12360,7 +12451,7 @@ where
                 // self.queueIo(.{
                 //     .scroll_viewport = .{ .delta = delta },
                 // }, .unlocked);
-                self.queueIo(
+                this.queueIo(
                     termio::Message::ScrollViewport(terminal::terminal::ScrollViewport::Delta(
                         delta,
                     )),
@@ -12375,7 +12466,7 @@ where
                 // }, .unlocked);
                 //
                 // (`lines: i16` widens to the `delta: isize` field.)
-                self.queueIo(
+                this.queueIo(
                     termio::Message::ScrollViewport(terminal::terminal::ScrollViewport::Delta(
                         isize::from(lines),
                     )),
@@ -12388,7 +12479,7 @@ where
                 // self.queueIo(.{
                 //     .jump_to_prompt = @intCast(delta),
                 // }, .unlocked);
-                self.queueIo(
+                this.queueIo(
                     termio::Message::JumpToPrompt(isize::from(delta)),
                     termio::termio_impl::MutexState::Unlocked,
                 );
@@ -12399,7 +12490,7 @@ where
             //     v,
             // ),
             binding::ScopedSurface::WriteScreenFile(v) => {
-                self.writeScreenFile(WriteScreenLoc::Screen, v)?
+                this.writeScreenFile(WriteScreenLoc::Screen, v)?
             }
 
             // .write_scrollback_file => |v| try self.writeScreenFile(
@@ -12407,7 +12498,7 @@ where
             //     v,
             // ),
             binding::ScopedSurface::WriteScrollbackFile(v) => {
-                self.writeScreenFile(WriteScreenLoc::History, v)?
+                this.writeScreenFile(WriteScreenLoc::History, v)?
             }
 
             // .write_selection_file => |v| try self.writeScreenFile(
@@ -12415,7 +12506,7 @@ where
             //     v,
             // ),
             binding::ScopedSurface::WriteSelectionFile(v) => {
-                self.writeScreenFile(WriteScreenLoc::Selection, v)?
+                this.writeScreenFile(WriteScreenLoc::Selection, v)?
             }
 
             // .new_tab => return try self.rt_app.performAction(
@@ -12423,9 +12514,13 @@ where
             //     .new_tab,
             //     {},
             // ),
+            //
+            // (N442: re-entrant, so by place through `self_`.)
             binding::ScopedSurface::NewTab => {
-                return Ok(unsafe { &*self.rt_app }
-                    .perform_action(apprt::Target::Surface(&*self), apprt::Action::NewTab)?);
+                return Ok(unsafe { &*(*self_).rt_app }.perform_action(
+                    apprt::Target::Surface(unsafe { &*self_ }),
+                    apprt::Action::NewTab,
+                )?);
             }
 
             // .close_tab => |v| return try self.rt_app.performAction(
@@ -12438,8 +12533,8 @@ where
             //     },
             // ),
             binding::ScopedSurface::CloseTab(v) => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::CloseTab(match v {
                         binding::CloseTabMode::This => apprt::action::CloseTabMode::This,
                         binding::CloseTabMode::Other => apprt::action::CloseTabMode::Other,
@@ -12470,8 +12565,8 @@ where
             | binding::ScopedSurface::NextTab
             | binding::ScopedSurface::LastTab
             | binding::ScopedSurface::GotoTab(_)) => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::GotoTab(match sfc {
                         binding::ScopedSurface::PreviousTab => apprt::action::GotoTab::PREVIOUS,
                         binding::ScopedSurface::NextTab => apprt::action::GotoTab::NEXT,
@@ -12502,8 +12597,8 @@ where
             //     .{ .amount = position },
             // ),
             binding::ScopedSurface::MoveTab(position) => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::MoveTab(apprt::action::MoveTab { amount: position }),
                 )?);
             }
@@ -12514,8 +12609,8 @@ where
             //     {},
             // ),
             binding::ScopedSurface::MoveTabToNewWindow => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::MoveTabToNewWindow,
                 )?);
             }
@@ -12534,16 +12629,18 @@ where
             //             .down,
             //     },
             // ),
+            //
+            // (N442: re-entrant, so by place through `self_`.)
             binding::ScopedSurface::NewSplit(direction) => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*(*self_).rt_app }.perform_action(
+                    apprt::Target::Surface(unsafe { &*self_ }),
                     apprt::Action::NewSplit(match direction {
                         binding::SplitDirection::Right => apprt::action::SplitDirection::Right,
                         binding::SplitDirection::Left => apprt::action::SplitDirection::Left,
                         binding::SplitDirection::Down => apprt::action::SplitDirection::Down,
                         binding::SplitDirection::Up => apprt::action::SplitDirection::Up,
                         binding::SplitDirection::Auto => {
-                            if self.size.screen.width > self.size.screen.height {
+                            if unsafe { (*self_).size.screen.width > (*self_).size.screen.height } {
                                 apprt::action::SplitDirection::Right
                             } else {
                                 apprt::action::SplitDirection::Down
@@ -12567,8 +12664,8 @@ where
             // (`inline else => @field(GotoSplit, @tagName(tag))` maps each
             // binding tag onto the same-named apprt `GotoSplit` variant.)
             binding::ScopedSurface::GotoSplit(direction) => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::GotoSplit(match direction {
                         binding::SplitFocusDirection::Previous => {
                             apprt::action::GotoSplit::Previous
@@ -12591,8 +12688,8 @@ where
             //     },
             // ),
             binding::ScopedSurface::GotoWindow(direction) => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::GotoWindow(match direction {
                         binding::GotoWindow::Previous => apprt::action::GotoWindow::Previous,
                         binding::GotoWindow::Next => apprt::action::GotoWindow::Next,
@@ -12614,8 +12711,8 @@ where
             //     },
             // ),
             binding::ScopedSurface::ResizeSplit(value) => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::ResizeSplit(apprt::action::ResizeSplit {
                         amount: value.1,
                         direction: match value.0 {
@@ -12642,8 +12739,8 @@ where
             //     {},
             // ),
             binding::ScopedSurface::EqualizeSplits => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::EqualizeSplits,
                 )?);
             }
@@ -12654,8 +12751,8 @@ where
             //     {},
             // ),
             binding::ScopedSurface::ToggleSplitZoom => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::ToggleSplitZoom,
                 )?);
             }
@@ -12663,15 +12760,15 @@ where
             // .toggle_readonly => {
             binding::ScopedSurface::ToggleReadonly => {
                 // self.readonly = !self.readonly;
-                self.readonly = !self.readonly;
+                this.readonly = !this.readonly;
                 // _ = try self.rt_app.performAction(
                 //     .{ .surface = self },
                 //     .readonly,
                 //     if (self.readonly) .on else .off,
                 // );
-                let _ = unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
-                    apprt::Action::Readonly(if self.readonly {
+                let _ = unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
+                    apprt::Action::Readonly(if this.readonly {
                         apprt::action::Readonly::On
                     } else {
                         apprt::action::Readonly::Off
@@ -12687,8 +12784,8 @@ where
             //     {},
             // ),
             binding::ScopedSurface::ResetWindowSize => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::ResetWindowSize,
                 )?);
             }
@@ -12699,8 +12796,8 @@ where
             //     {},
             // ),
             binding::ScopedSurface::ToggleMaximize => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::ToggleMaximize,
                 )?);
             }
@@ -12716,10 +12813,10 @@ where
             //     },
             // ),
             binding::ScopedSurface::ToggleFullscreen => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::ToggleFullscreen(
-                        match self.config.macos_non_native_fullscreen {
+                        match this.config.macos_non_native_fullscreen {
                             configpkg::value_types::NonNativeFullscreen::False => {
                                 apprt::action::Fullscreen::Native
                             }
@@ -12743,8 +12840,8 @@ where
             //     {},
             // ),
             binding::ScopedSurface::ToggleWindowDecorations => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::ToggleWindowDecorations,
                 )?);
             }
@@ -12755,8 +12852,8 @@ where
             //     {},
             // ),
             binding::ScopedSurface::ToggleTabOverview => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::ToggleTabOverview,
                 )?);
             }
@@ -12767,8 +12864,8 @@ where
             //     .toggle,
             // ),
             binding::ScopedSurface::ToggleWindowFloatOnTop => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::FloatWindow(apprt::action::FloatWindow::Toggle),
                 )?);
             }
@@ -12779,8 +12876,8 @@ where
             //     .toggle,
             // ),
             binding::ScopedSurface::ToggleSecureInput => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::SecureInput(SecureInput::Toggle),
                 )?);
             }
@@ -12788,12 +12885,12 @@ where
             // .toggle_mouse_reporting => {
             binding::ScopedSurface::ToggleMouseReporting => {
                 // self.config.mouse_reporting = !self.config.mouse_reporting;
-                self.config.mouse_reporting = !self.config.mouse_reporting;
+                this.config.mouse_reporting = !this.config.mouse_reporting;
                 // log.debug("mouse reporting toggled: {}", .{self.config.mouse_reporting});
                 log::debug!(
                     target: LOG_SCOPE,
                     "mouse reporting toggled: {}",
-                    self.config.mouse_reporting
+                    this.config.mouse_reporting
                 );
             }
 
@@ -12803,8 +12900,8 @@ where
             //     {},
             // ),
             binding::ScopedSurface::ToggleCommandPalette => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::ToggleCommandPalette,
                 )?);
             }
@@ -12815,8 +12912,8 @@ where
             //     {},
             // ),
             binding::ScopedSurface::ToggleBackgroundOpacity => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::ToggleBackgroundOpacity,
                 )?);
             }
@@ -12827,8 +12924,8 @@ where
             //     {},
             // ),
             binding::ScopedSurface::ShowOnScreenKeyboard => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::ShowOnScreenKeyboard,
                 )?);
             }
@@ -12837,24 +12934,24 @@ where
             binding::ScopedSurface::SelectAll => {
                 // self.renderer_state.mutex.lock();
                 // defer self.renderer_state.mutex.unlock();
-                unsafe { (*self.renderer_state.mutex).lock() };
+                unsafe { (*this.renderer_state.mutex).lock() };
 
                 // const sel = self.io.terminal.screens.active.selectAll();
-                let sel = unsafe { (*self.io.terminal.screens.active).select_all() };
+                let sel = unsafe { (*this.io.terminal.screens.active).select_all() };
                 // if (sel) |s| {
                 if let Some(s) = sel {
                     // try self.setSelectionAndCopy(s);
-                    if let Err(err) = self.setSelectionAndCopy(s) {
-                        unsafe { (*self.renderer_state.mutex).unlock() };
+                    if let Err(err) = this.setSelectionAndCopy(s) {
+                        unsafe { (*this.renderer_state.mutex).unlock() };
                         return Err(err);
                     }
                     // try self.queueRender();
-                    if let Err(err) = self.queueRender() {
-                        unsafe { (*self.renderer_state.mutex).unlock() };
+                    if let Err(err) = this.queueRender() {
+                        unsafe { (*this.renderer_state.mutex).unlock() };
                         return Err(err.into());
                     }
                 }
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*this.renderer_state.mutex).unlock() };
             }
 
             // .inspector => |mode| return try self.rt_app.performAction(
@@ -12868,8 +12965,8 @@ where
             //     },
             // ),
             binding::ScopedSurface::Inspector(mode) => {
-                return Ok(unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                return Ok(unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::Inspector(match mode {
                         binding::InspectorMode::Toggle => apprt::action::Inspector::Toggle,
                         binding::InspectorMode::Show => apprt::action::Inspector::Show,
@@ -12879,7 +12976,7 @@ where
             }
 
             // .close_surface => self.close(),
-            binding::ScopedSurface::CloseSurface => self.close(),
+            binding::ScopedSurface::CloseSurface => this.close(),
 
             // .close_window => return try self.rt_app.performAction(
             //     .{ .surface = self },
@@ -12887,8 +12984,8 @@ where
             //     {},
             // ),
             binding::ScopedSurface::CloseWindow => {
-                return Ok(unsafe { &*self.rt_app }
-                    .perform_action(apprt::Target::Surface(&*self), apprt::Action::CloseWindow)?);
+                return Ok(unsafe { &*this.rt_app }
+                    .perform_action(apprt::Target::Surface(&*this), apprt::Action::CloseWindow)?);
             }
 
             // inline .activate_key_table,
@@ -12918,7 +13015,7 @@ where
                 // sufficient. The `Vec<u8>`-keyed map takes `&Vec<u8>`; the
                 // `[]const u8` name is copied into a lookup key (a small
                 // temporary, behavior-preserving).
-                let set: *const binding::Set = match self.config.keybind.tables.get(&name.to_vec())
+                let set: *const binding::Set = match this.config.keybind.tables.get(&name.to_vec())
                 {
                     Some(s) => s as *const binding::Set,
                     None => {
@@ -12935,10 +13032,10 @@ where
                 // If this is the same table as is currently active, then
                 // do nothing.
                 // if (self.keyboard.table_stack.items.len > 0) {
-                if !self.keyboard.table_stack.is_empty() {
+                if !this.keyboard.table_stack.is_empty() {
                     // const items = self.keyboard.table_stack.items;
                     // const active = items[items.len - 1].set;
-                    let active = self.keyboard.table_stack[self.keyboard.table_stack.len() - 1].set;
+                    let active = this.keyboard.table_stack[this.keyboard.table_stack.len() - 1].set;
                     // if (active == set) {
                     //     log.debug("ignoring duplicate activate table: {s}", .{name});
                     //     return false;
@@ -12962,7 +13059,7 @@ where
                 //     );
                 //     return false;
                 // }
-                if self.keyboard.table_stack.len() >= MAX_ACTIVE_KEY_TABLES {
+                if this.keyboard.table_stack.len() >= MAX_ACTIVE_KEY_TABLES {
                     // log.info("ignoring activate table, max depth reached: {s}", .{name});
                     log::info!(
                         target: LOG_SCOPE,
@@ -12977,7 +13074,7 @@ where
                 //     .set = set,
                 //     .once = tag == .activate_key_table_once,
                 // });
-                self.keyboard
+                this.keyboard
                     .table_stack
                     .push(TableStackEntry { set, once: is_once });
 
@@ -12992,8 +13089,8 @@ where
                 //         .{err},
                 //     );
                 // };
-                if let Err(err) = unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                if let Err(err) = unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::KeyTable(KeyTable::Activate(name)),
                 ) {
                     // log.warn("failed to notify app of key table err={}", .{err});
@@ -13011,7 +13108,7 @@ where
             // .deactivate_key_table => {
             binding::ScopedSurface::DeactivateKeyTable => {
                 // switch (self.keyboard.table_stack.items.len) {
-                match self.keyboard.table_stack.len() {
+                match this.keyboard.table_stack.len() {
                     // No key table active. This does nothing.
                     // 0 => return false,
                     0 => return Ok(false),
@@ -13021,14 +13118,14 @@ where
                     //
                     // (`clearAndFree` — drop the storage too, the deinit
                     // mem::take precedent.)
-                    1 => drop(std::mem::take(&mut self.keyboard.table_stack)),
+                    1 => drop(std::mem::take(&mut this.keyboard.table_stack)),
 
                     // Restore the prior key table. We don't free any memory in
                     // this case because we assume it will be freed later when
                     // we finish our key table.
                     // else => _ = self.keyboard.table_stack.pop(),
                     _ => {
-                        let _ = self.keyboard.table_stack.pop();
+                        let _ = this.keyboard.table_stack.pop();
                     }
                 }
 
@@ -13043,8 +13140,8 @@ where
                 //         .{err},
                 //     );
                 // };
-                if let Err(err) = unsafe { &*self.rt_app }.perform_action(
-                    apprt::Target::Surface(&*self),
+                if let Err(err) = unsafe { &*this.rt_app }.perform_action(
+                    apprt::Target::Surface(&*this),
                     apprt::Action::KeyTable(KeyTable::Deactivate),
                 ) {
                     // log.warn("failed to notify app of key table err={}", .{err});
@@ -13056,7 +13153,7 @@ where
             //     return try self.deactivateAllKeyTables();
             // },
             binding::ScopedSurface::DeactivateAllKeyTables => {
-                return self.deactivateAllKeyTables();
+                return this.deactivateAllKeyTables();
             }
 
             // .end_key_sequence => {
@@ -13066,7 +13163,7 @@ where
                 // will do that because leaf keys (keys with bindings) aren't
                 // in the queued encoding list.
                 // self.endKeySequence(.flush, .retain);
-                self.endKeySequence(KeySequenceQueued::Flush, KeySequenceMemory::Retain);
+                this.endKeySequence(KeySequenceQueued::Flush, KeySequenceMemory::Retain);
             }
 
             // .crash => |location| switch (location) {
@@ -13079,13 +13176,13 @@ where
                 // .render => {
                 binding::CrashThread::Render => {
                     // _ = self.renderer_thread.mailbox.push(.{ .crash = {} }, .{ .forever = {} });
-                    let _ = unsafe { &*self.renderer_thread.mailbox }
+                    let _ = unsafe { &*this.renderer_thread.mailbox }
                         .push(rendererpkg::Message::Crash, Timeout::Forever);
                     // self.queueRender() catch |err| {
                     //     // Not a big deal if this fails.
                     //     log.warn("failed to notify renderer of crash message err={}", .{err});
                     // };
-                    if let Err(err) = self.queueRender() {
+                    if let Err(err) = this.queueRender() {
                         // Not a big deal if this fails.
                         // log.warn("failed to notify renderer of crash message err={}", .{err});
                         log::warn!(
@@ -13096,7 +13193,7 @@ where
                 }
 
                 // .io => self.queueIo(.{ .crash = {} }, .unlocked),
-                binding::CrashThread::Io => self.queueIo(
+                binding::CrashThread::Io => this.queueIo(
                     termio::Message::Crash,
                     termio::termio_impl::MutexState::Unlocked,
                 ),
@@ -13106,10 +13203,10 @@ where
             binding::ScopedSurface::AdjustSelection(direction) => {
                 // self.renderer_state.mutex.lock();
                 // defer self.renderer_state.mutex.unlock();
-                unsafe { (*self.renderer_state.mutex).lock() };
+                unsafe { (*this.renderer_state.mutex).lock() };
 
                 // const screen: *terminal.Screen = self.io.terminal.screens.active;
-                let screen: *mut terminal::screen::Screen = self.io.terminal.screens.active;
+                let screen: *mut terminal::screen::Screen = this.io.terminal.screens.active;
                 // const sel = if (screen.selection) |*sel| sel else {
                 //     // If we don't have a selection we do not perform this
                 //     // action, allowing the keybind to fall through to the
@@ -13128,7 +13225,7 @@ where
                 let mut sel = match unsafe { (*screen).selection } {
                     Some(sel) => sel,
                     None => {
-                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        unsafe { (*this.renderer_state.mutex).unlock() };
                         return Ok(false);
                     }
                 };
@@ -13213,11 +13310,11 @@ where
                 // screen.dirty.selection = true;
                 unsafe { (*screen).dirty.selection = true };
                 // try self.queueRender();
-                if let Err(err) = self.queueRender() {
-                    unsafe { (*self.renderer_state.mutex).unlock() };
+                if let Err(err) = this.queueRender() {
+                    unsafe { (*this.renderer_state.mutex).unlock() };
                     return Err(err.into());
                 }
-                unsafe { (*self.renderer_state.mutex).unlock() };
+                unsafe { (*this.renderer_state.mutex).unlock() };
             }
         }
 
@@ -16860,9 +16957,13 @@ mod diagnostics_tests {
         // miss without touching the map at all.
         let mut mu = fabricate(|_c| {});
         let cap = log_capture::start();
-        let performed = unsafe { &mut *mu.as_mut_ptr() }
-            .performBindingAction(binding::Action::ActivateKeyTable(b"nav".to_vec()))
-            .expect("performBindingAction");
+        let performed = unsafe {
+            Surface::performBindingAction(
+                mu.as_mut_ptr(),
+                binding::Action::ActivateKeyTable(b"nav".to_vec()),
+            )
+        }
+        .expect("performBindingAction");
         let messages = cap.messages();
         drop(cap);
         teardown(mu);
