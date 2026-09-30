@@ -9691,3 +9691,6 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **evidence**: rwin, `cargo build -p dcimgui-sys --target aarch64-pc-windows-msvc` failed at
   `5da45a868` and passes after; the native ARM64 `cargo build --workspace --all-targets` and clippy
   `-D warnings` (the CI excludes) then pass. macOS and Linux rebuild `dcimgui-sys` clean.
+- **resync note** (fix round 1): `ext.cpp` mirrors the reference's `pkg/dcimgui/ext.cpp`; a resync
+  that copies it from upstream must re-apply the RUSTTY-ONLY global include block, or the native
+  aarch64 Windows build breaks again.
