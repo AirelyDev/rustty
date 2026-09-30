@@ -7682,7 +7682,7 @@ where
         // Setup our actions
         // const actions = leaf.actionsSlice();
         //
-        // PORT NOTE: reference defect (R13), UD368. The reference's slice points
+        // PORT NOTE: reference defect (R13), UD365. The reference's slice points
         // into the config a chained `reload_config` frees mid-loop; `leaf` here
         // owns a copy of the actions (`GenericLeaf`), so the loop and the checks
         // after it never read the replaced config.

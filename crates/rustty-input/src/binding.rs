@@ -6892,7 +6892,7 @@ mod tests {
             .is_some());
     }
 
-    // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD368. The
+    // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD365. The
     // reference's `GenericLeaf.actions.many` is a slice INTO the set's
     // `leaf_chained` list, which lives in the surface's (or the embedded
     // app's) config arena. A chained `reload_config` replaces that config
@@ -6905,7 +6905,7 @@ mod tests {
     // not outlive the set it borrows (`drop(s)` below would not compile), and
     // an unchecked borrow would be the use-after-free Miri reports.
     #[test]
-    fn ud368_generic_leaf_actions_outlive_a_replaced_set() {
+    fn ud365_generic_leaf_actions_outlive_a_replaced_set() {
         let mut s = Set::default();
         s.parse_and_put(b"a=reload_config").unwrap();
         s.parse_and_put(b"chain=text:world").unwrap();

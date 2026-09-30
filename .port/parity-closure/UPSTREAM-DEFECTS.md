@@ -3085,7 +3085,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    build the overlay into a local in `updateFrame` and assign `self.overlay` under `draw_mutex` (or take `draw_mutex` around `rebuildOverlay`).
 - upstream status: NOT YET REPORTED
 
-### UD368 — a chained keybind's action list is read after a chained `reload_config` has freed it (use-after-free)
+### UD365 — a chained keybind's action list is read after a chained `reload_config` has freed it (use-after-free)
 
 - kind:            UB (use-after-free; R13)
 - upstream project: ghostty
@@ -3103,9 +3103,9 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - output needed:   none reliably visible; a crash or a wrong follow-up action depending on what reuses the pages.
 - port handling:
   - `crates/rustty-input/src/binding.rs`: the port's `GenericLeaf` owns its actions (`GenericLeafActions::Many(Vec<Action>)`, cloned by `LeafChained::generic`), so `maybeHandleBinding` and `App::keyEvent` iterate a copy that outlives the replaced config. No code change was needed in P7-W7 T5b; the property is now pinned.
-  - `PORT NOTE: reference defect (R13), UD368` at the test and at both `let actions` sites (`crates/rustty-core/src/surface.rs` `maybeHandleBinding`, `crates/rustty-core/src/app.rs` `keyEvent`). Listed in `docs/ghostty-bug-fixes.md`.
+  - `PORT NOTE: reference defect (R13), UD365` at the test and at both `let actions` sites (`crates/rustty-core/src/surface.rs` `maybeHandleBinding`, `crates/rustty-core/src/app.rs` `keyEvent`). Listed in `docs/ghostty-bug-fixes.md`.
 - parity row(s):   none. Found by the P7-W7 T5b review (ruling 43, lead 6); traced in the oracle by P7-W7 T5b fix round 1.
-- test:            `crates/rustty-input/src/binding.rs` `ud368_generic_leaf_actions_outlive_a_replaced_set` (passes under Miri): the chained leaf's actions are read after the set is replaced. It fails on the reference's shape: a borrowed `many` slice cannot outlive the set (it does not compile), and an unchecked borrow is the use-after-free Miri reports.
+- test:            `crates/rustty-input/src/binding.rs` `ud365_generic_leaf_actions_outlive_a_replaced_set` (passes under Miri): the chained leaf's actions are read after the set is replaced. It fails on the reference's shape: a borrowed `many` slice cannot outlive the set (it does not compile), and an unchecked borrow is the use-after-free Miri reports.
 - proposed fix:    copy the actions before dispatch (`const actions = try alloc.dupe(input.Binding.Action, leaf.actionsSlice())`, freed after the checks), or make `updateConfig` defer freeing the old `DerivedConfig` until the current key event is done.
 - upstream status: NOT YET REPORTED
 

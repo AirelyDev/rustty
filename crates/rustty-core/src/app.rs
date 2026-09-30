@@ -723,7 +723,7 @@ where
             Value::Leaf(leaf) => leaf.generic(),
             Value::LeafChained(leaf) => leaf.generic(),
         };
-        // PORT NOTE: reference defect (R13), UD368: `leaf` owns a copy of the
+        // PORT NOTE: reference defect (R13), UD365: `leaf` owns a copy of the
         // actions, so a chained `reload_config` (which replaces the embedded
         // app's config) cannot free them under `performAllChainedAction`.
         let actions: &[BindingAction] = leaf.actions_slice();
