@@ -41,6 +41,20 @@ CIMGUI_API void ImGuiStyle_ImGuiStyle(cimgui::ImGuiStyle* self)
     *reinterpret_cast<::ImGuiStyle*>(self) = defaults;
 }
 
+// RUSTTY-ONLY (N485): `ImGui_TextColored` with the colour passed by pointer.
+// On aarch64-pc-windows-msvc every argument of a variadic function follows the
+// variadic convention, so clang-cl passes `ImGui_TextColored`'s `ImVec4` in
+// x0:x1 and `fmt` in x2, while rustc passes the HFA as four floats in w0..w3
+// and `fmt` in x4. A pointer travels the same way under both. The body is
+// Dear Bindings' `ImGui_TextColored` (dcimgui.cpp) with `*col` for `col`.
+CIMGUI_API void ImGui_TextColoredPtr(const cimgui::ImVec4* col, const char* fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    ::ImGui::TextColoredV(::ImVec4(col->x, col->y, col->z, col->w), fmt, args);
+    va_end(args);
+}
+
 // Perform the OpenGL3 backend shutdown and then zero out the imgl3w
 // function pointer table. ImGui_ImplOpenGL3_Shutdown() calls
 // imgl3wShutdown() which dlcloses the GL library handles but does not

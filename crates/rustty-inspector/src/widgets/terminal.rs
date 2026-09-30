@@ -555,8 +555,8 @@ fn screensTable(t: &mut Terminal, map: &mut ScreenMap) {
                 //         "active",
                 //     );
                 unsafe {
-                    dcimgui_sys::ImGui_TextColored(
-                        dcimgui_sys::ImVec4 {
+                    dcimgui_sys::ImGui_TextColoredPtr(
+                        &dcimgui_sys::ImVec4 {
                             x: 0.4,
                             y: 1.0,
                             z: 0.4,
@@ -572,8 +572,8 @@ fn screensTable(t: &mut Terminal, map: &mut ScreenMap) {
                 //         "initialized",
                 //     );
                 unsafe {
-                    dcimgui_sys::ImGui_TextColored(
-                        dcimgui_sys::ImVec4 {
+                    dcimgui_sys::ImGui_TextColoredPtr(
+                        &dcimgui_sys::ImVec4 {
                             x: 0.6,
                             y: 0.6,
                             z: 0.6,
@@ -589,8 +589,8 @@ fn screensTable(t: &mut Terminal, map: &mut ScreenMap) {
                 //         "(not initialized)",
                 //     );
                 unsafe {
-                    dcimgui_sys::ImGui_TextColored(
-                        dcimgui_sys::ImVec4 {
+                    dcimgui_sys::ImGui_TextColoredPtr(
+                        &dcimgui_sys::ImVec4 {
                             x: 0.4,
                             y: 0.4,
                             z: 0.4,

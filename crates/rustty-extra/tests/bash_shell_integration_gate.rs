@@ -26,13 +26,26 @@
 //! (macOS ships bash 3.2 as `/bin/bash`, which takes a different branch), so
 //! it exits 77 (the automake SKIP convention) when none is found, 0 on pass,
 //! and any other non-zero on failure.
+//!
+//! PORT NOTE (N484, R14): the behavioural test below is `#[cfg(unix)]`. It
+//! runs the `.sh` directly, which needs the kernel to honour its shebang, and
+//! Windows cannot (`%1 is not a valid Win32 application`, os error 193).
+//! Upstream runs its shell-integration tests
+//! (`src/termio/shell_integration.zig`) only in its Linux `test` and
+//! `test-macos` jobs. Its one Windows job (`build-libghostty-vt-windows`) runs
+//! `zig build test-lib-vt` alone, and the suite's XDG tests return
+//! `error.SkipZigTest` on Windows. The `RUSTTY_REQUIRE_BASH44` pivot tests at
+//! the bottom stay unconditional.
 
+#[cfg(unix)]
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::process::Command;
 
 /// Automake's convention exit code for "this test could not run", distinct
 /// from both success (0) and failure (anything else non-zero). The shell
 /// script under test uses it for exactly the "no bash >= 4.4" case.
+#[cfg(unix)]
 const SKIP_EXIT_CODE: i32 = 77;
 
 /// RUSTTY-ONLY strict mode (R14, follows the `RUSTTY_REQUIRE_GL`/
@@ -42,6 +55,7 @@ const SKIP_EXIT_CODE: i32 = 77;
 /// a CI leg that is SUPPOSED to provide bash >= 4.4 could skip this test
 /// forever and go green, proving nothing. Unset (the default, and any host
 /// without a Homebrew/pkg bash) preserves the clean-skip contract.
+#[cfg(unix)]
 fn bash44_required() -> bool {
     bash44_required_from(std::env::var_os("RUSTTY_REQUIRE_BASH44").as_deref())
 }
@@ -54,6 +68,8 @@ fn bash44_required_from(value: Option<&std::ffi::OsStr>) -> bool {
     value == Some(std::ffi::OsStr::new("1"))
 }
 
+// PORT NOTE (N484): Unix only; see the module header.
+#[cfg(unix)]
 #[test]
 fn declare_ax_prompt_command_is_installed_and_reports_status_correctly() {
     let script: PathBuf = [

@@ -247,8 +247,8 @@ pub fn treeNode(state: TreeNodeState) -> bool {
         unsafe { dcimgui_sys::ImGui_SameLine() };
         // cimgui.c.ImGui_TextColored(.{ .x = 0.4, .y = 0.9, .z = 0.4, .w = 1.0 }, "active");
         unsafe {
-            dcimgui_sys::ImGui_TextColored(
-                dcimgui_sys::ImVec4 {
+            dcimgui_sys::ImGui_TextColoredPtr(
+                &dcimgui_sys::ImVec4 {
                     x: 0.4,
                     y: 0.9,
                     z: 0.4,
@@ -264,8 +264,8 @@ pub fn treeNode(state: TreeNodeState) -> bool {
         unsafe { dcimgui_sys::ImGui_SameLine() };
         // cimgui.c.ImGui_TextColored(.{ .x = 0.4, .y = 0.8, .z = 1.0, .w = 1.0 }, "viewport");
         unsafe {
-            dcimgui_sys::ImGui_TextColored(
-                dcimgui_sys::ImVec4 {
+            dcimgui_sys::ImGui_TextColoredPtr(
+                &dcimgui_sys::ImVec4 {
                     x: 0.4,
                     y: 0.8,
                     z: 1.0,
@@ -281,8 +281,8 @@ pub fn treeNode(state: TreeNodeState) -> bool {
         unsafe { dcimgui_sys::ImGui_SameLine() };
         // cimgui.c.ImGui_TextColored(.{ .x = 0.8, .y = 0.6, .z = 1.0, .w = 1.0 }, "compressed");
         unsafe {
-            dcimgui_sys::ImGui_TextColored(
-                dcimgui_sys::ImVec4 {
+            dcimgui_sys::ImGui_TextColoredPtr(
+                &dcimgui_sys::ImVec4 {
                     x: 0.8,
                     y: 0.6,
                     z: 1.0,
@@ -303,8 +303,8 @@ pub fn treeNode(state: TreeNodeState) -> bool {
         unsafe { dcimgui_sys::ImGui_SameLine() };
         // cimgui.c.ImGui_TextColored(.{ .x = 1.0, .y = 0.4, .z = 0.4, .w = 1.0 }, "dirty");
         unsafe {
-            dcimgui_sys::ImGui_TextColored(
-                dcimgui_sys::ImVec4 {
+            dcimgui_sys::ImGui_TextColoredPtr(
+                &dcimgui_sys::ImVec4 {
                     x: 1.0,
                     y: 0.4,
                     z: 0.4,
@@ -1153,8 +1153,8 @@ fn flagCell(value: bool) {
     // }
     if value {
         unsafe {
-            dcimgui_sys::ImGui_TextColored(
-                dcimgui_sys::ImVec4 {
+            dcimgui_sys::ImGui_TextColoredPtr(
+                &dcimgui_sys::ImVec4 {
                     x: 0.4,
                     y: 0.9,
                     z: 0.4,

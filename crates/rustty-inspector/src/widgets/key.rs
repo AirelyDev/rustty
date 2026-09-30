@@ -904,8 +904,8 @@ impl Stream {
             };
             // cimgui.c.ImGui_TextColored(action_text_color, "%s", @tagName(ev.event.action).ptr);
             unsafe {
-                dcimgui_sys::ImGui_TextColored(
-                    action_text_color,
+                dcimgui_sys::ImGui_TextColoredPtr(
+                    &action_text_color,
                     c"%s".as_ptr(),
                     action_tag_name(ev.event.action).as_ptr(),
                 )
@@ -945,8 +945,8 @@ impl Stream {
             // cimgui.c.ImGui_TextColored(key_color, "%s", key_name.ptr);
             let mut key_name_buf = [0u8; 256];
             unsafe {
-                dcimgui_sys::ImGui_TextColored(
-                    key_color,
+                dcimgui_sys::ImGui_TextColoredPtr(
+                    &key_color,
                     c"%s".as_ptr(),
                     cstr_ptr(&mut key_name_buf, key_name),
                 )
@@ -959,8 +959,8 @@ impl Stream {
                 unsafe { dcimgui_sys::ImGui_SameLine() };
                 // cimgui.c.ImGui_TextColored(.{ .x = 1.0, .y = 0.6, .z = 0.0, .w = 1.0 }, "*");
                 unsafe {
-                    dcimgui_sys::ImGui_TextColored(
-                        dcimgui_sys::ImVec4 {
+                    dcimgui_sys::ImGui_TextColoredPtr(
+                        &dcimgui_sys::ImVec4 {
                             x: 1.0,
                             y: 0.6,
                             z: 0.0,

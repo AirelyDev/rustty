@@ -164,6 +164,9 @@ committed records named here.
   lanes (A, B and C) and never used, because every finding the lanes raised was
   recorded under W12.T3's ids. They are deliberate gaps, like the ones above.
   **Next free ids: UD375, N483, V30.**
+- **P7-W12 T4** (the W12.T2 lane B2 Windows findings) used N484 and N485, the
+  ids its brief assigned. N483 is reserved for P7-W12 T5 (gate portability).
+  **Next free: UD375, N486, V30.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.

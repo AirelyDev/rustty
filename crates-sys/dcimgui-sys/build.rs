@@ -308,6 +308,15 @@ fn main() {
         .allowlist_type("Im.*")
         .allowlist_var("ImGui.*")
         .allowlist_var("Im.*")
+        // RUSTTY-ONLY (N485): the one C-variadic function that takes an
+        // aggregate by value. rustc lowers the `ImVec4` HFA of this call
+        // differently from clang-cl on aarch64-pc-windows-msvc (where a
+        // variadic function's named composites go in general registers), so
+        // the format pointer arrived in the wrong register. Rust reaches it
+        // through ext.cpp's `ImGui_TextColoredPtr` instead (src/lib.rs); the
+        // test `no_variadic_binding_takes_an_aggregate_by_value` fails if
+        // another such binding appears.
+        .blocklist_function("ImGui_TextColored")
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .generate()
         .expect("unable to generate dcimgui-sys bindings");

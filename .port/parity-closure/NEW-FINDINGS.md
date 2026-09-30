@@ -9860,3 +9860,68 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   own. The gate is unchanged.
 - **evidence**: macOS, fresh `target/`, `bash .port/tools/gates/check_release_lane.sh` GREEN after
   the fix; RED with the 17 doctest targets before it (same tree, same command).
+
+## N484 — the bash shell-integration gate ran a `.sh` directly, which Windows cannot execute
+
+- **id**: N484. P7-W12 T4 (W12.T2 lane B2). **severity**: low (test portability; no product
+  defect). **state**: CLOSED by P7-W12 T4.
+- **finding**: `rustty-extra --test bash_shell_integration_gate`,
+  `declare_ax_prompt_command_is_installed_and_reports_status_correctly`, panicked on Windows x64 and
+  ARM64 with `%1 is not a valid Win32 application. (os error 193)`: it runs
+  `bash_shell_integration_exit_status.sh` through `Command::new(<script>)`, which needs a kernel
+  that honours the shebang. The test is Rustty-only; upstream's shell-integration tests
+  (`src/termio/shell_integration.zig`) run only in its Linux `test` and `test-macos` jobs, its one
+  Windows job (`build-libghostty-vt-windows`) runs `zig build test-lib-vt` alone, and the suite's
+  XDG tests return `error.SkipZigTest` on Windows.
+- **fix**: the test, its `SKIP_EXIT_CODE` and `bash44_required` are `#[cfg(unix)]`, with an R14
+  PORT NOTE in the module header. The `RUSTTY_REQUIRE_BASH44` pivot tests stay unconditional.
+  Running it through `bash` on Windows was rejected: `bash.exe` on PATH may be WSL's launcher or
+  Git's MSYS bash, neither of which is a host Rustty injects `rustty.bash` into.
+- **evidence**: rwin, ARM64 and x64: the gate binary passes 2/2 (the pivot tests; the behavioural
+  test is compiled out). macOS: 3/3, the behavioural test included.
+
+## N485 — `rustty-inspector` crashed on Windows ARM64: rustc and clang-cl disagree on a variadic HFA
+
+- **id**: N485. P7-W12 T4 (W12.T2 lane B2). **severity**: medium (any inspector draw that shows
+  coloured text crashed on native aarch64-pc-windows-msvc). **state**: CLOSED by P7-W12 T4.
+- **finding**: `rustty-inspector --lib` exited `STATUS_ACCESS_VIOLATION` on native ARM64 in
+  `widgets::pagelist::ws7_tests::pagelist_widget_draw_path_never_restores`; x64 passed. Under cdb
+  (WinDbg 1.2606 arm64) the fault is `ldrsb w8,[x8]` in `ImFormatStringToTempBufferV`
+  (imgui.cpp:2330) with `x8 = 0x3ecccccd`, called from `ImGui::TextColoredV` <-
+  `ImGui_TextColored` (dcimgui.cpp:1011) <- `widgets::page::treeNode` (page.rs:250). On Windows
+  ARM64 every argument of a variadic function, the named ones included, follows the variadic
+  convention: a composite is never an HFA and travels in general registers as its bytes.
+  clang-cl compiled `ImGui_TextColored(ImVec4 col, const char* fmt, ...)` that way: its prologue
+  spills `col` from x0:x1 and takes `fmt` from x2. rustc 1.93.1 set up the call as
+  `ldur w0..w3` (the four floats of the `ImVec4` HFA, one per register) and `mov x4,x0` (`fmt`),
+  so ImGui read `0.4f`'s bits from x2 as the format pointer. It is a rustc lowering defect for
+  aggregates passed to C-variadic functions on this target; scalars agree (LLVM's Win64 vararg
+  convention handles them for both front ends), and x64 passes a 16-byte struct by reference under
+  both. `ImGui_TextColored` is the only binding in `dcimgui.h` that is variadic and takes an
+  aggregate by value. Not an upstream defect: Ghostty does not build the inspector for Windows.
+- **fix**: `crates-sys/dcimgui-sys`: bindgen blocklists `ImGui_TextColored`; `ext.cpp` gains the
+  RUSTTY-ONLY `ImGui_TextColoredPtr(const cimgui::ImVec4* col, const char* fmt, ...)`, Dear
+  Bindings' body with `*col`; `src/lib.rs` declares it. The 22 `rustty-inspector` call sites
+  (reference `cimgui.c.ImGui_TextColored(col, fmt, ...)`) pass `&col` to it. Uniform on every
+  target, so no call site is cfg-split.
+- **tests**: `dcimgui-sys` `no_variadic_binding_takes_an_aggregate_by_value` scans the generated
+  bindings and the hand-written `extern` blocks of `src/lib.rs` (following `pub type` aliases, since bindgen names the struct `ImVec4_t`) and fails on
+  any variadic with a by-value struct or union parameter. It failed before the fix on macOS
+  (`["ImGui_TextColored(col: ImVec4)"]`), so the hazard is caught on every host.
+  `variadic_aggregate_scanner_negative_control` is its R5 control.
+  `kat_text_colored_ptr_formats_its_arguments` checks the shim lays out exactly
+  `CalcTextSize("active-42")` for `("%s-%d", "active", 42)`. The runtime fail-first is the
+  existing `pagelist_widget_draw_path_never_restores`.
+- **evidence**: rwin native ARM64, before: `rustty-inspector --lib` crash as above (3 of 3 in
+  lane B2, plus `--test-threads=1`; reproduced under cdb). After, rwin native ARM64 and x64:
+  `rustty-inspector --lib` 21/21 and `dcimgui-sys --lib` 8/8. macOS: the same two binaries
+  21/21 and 8/8.
+- **toolchain note**: this looks like a rustc ABI-lowering bug on aarch64-pc-windows-msvc: a named
+  HFA argument of a C-variadic call is lowered as an HFA (`[4 x float]` in the IR). It has NOT been
+  reported upstream; whether to report it is the maintainer's decision. Minimal repro: a clang-cl
+  callee `void f(ImVec4 c, const char* fmt, ...)` (ImVec4 = four floats) called from Rust as
+  `extern "C" { fn f(c: ImVec4, fmt: *const u8, ...); }`, compiled with
+  `--target aarch64-pc-windows-msvc --emit=asm`. Re-tested on rustc 1.99.0-nightly
+  (6f72b5dd5 2026-07-22), still wrong: rustc emits `w0..w3` = the floats, `x4` = fmt,
+  `w5` = 42, while clang 21 for the same C call emits `x0:x1` = the packed ImVec4, `x2` = fmt,
+  `w3` = 42.
