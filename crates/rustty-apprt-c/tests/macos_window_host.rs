@@ -65,12 +65,12 @@ use rustty_apprt_api::{ClipboardRequest, ClipboardRequestType, NewSurfaceContext
 use rustty_apprt_c::capi::Text;
 use rustty_apprt_c::{
     rustty_app_free, rustty_app_new, rustty_app_tick, rustty_app_update_config, rustty_init,
-    rustty_set_window_background_blur, rustty_surface_config_new, rustty_surface_free,
-    rustty_surface_free_text, rustty_surface_ime_point, rustty_surface_inherited_config,
-    rustty_surface_mouse_scroll, rustty_surface_new, rustty_surface_quicklook_font,
-    rustty_surface_quicklook_word, rustty_surface_request_close, rustty_surface_set_content_scale,
-    rustty_surface_set_display_id, rustty_surface_set_size, rustty_surface_split,
-    rustty_surface_split_focus,
+    rustty_set_window_background_blur, rustty_surface_binding_action, rustty_surface_config_new,
+    rustty_surface_free, rustty_surface_free_text, rustty_surface_ime_point,
+    rustty_surface_inherited_config, rustty_surface_mouse_scroll, rustty_surface_new,
+    rustty_surface_quicklook_font, rustty_surface_quicklook_word, rustty_surface_request_close,
+    rustty_surface_set_content_scale, rustty_surface_set_display_id, rustty_surface_set_size,
+    rustty_surface_split, rustty_surface_split_focus,
 };
 use rustty_config::value_types::BackgroundBlur;
 
@@ -913,6 +913,35 @@ fn set_display_id_pushes_to_render_thread_panic_free() {
     // SAFETY: `host.surface` is the live surface owning a running render thread.
     unsafe { rustty_surface_set_display_id(host.surface, display_id) };
     host.pump_bounded(); // drain runs
+    drop(host);
+}
+
+// --- N444 fix round 1 (P7-W7 T5c) ---
+// The search thread's callback now gets a spawn-time `SearchCallbackCtx` as its
+// userdata instead of the surface, and `Search::deinit` / the spawn-failure path
+// free it. This drives the live search arm end to end: start (spawn + callback
+// events to the renderer and the app mailbox), a needle change, `end_search`
+// (stop, join, free), a second start, and the surface's close with the search
+// still running (`Surface::deinit` → `Search::deinit`). A double free or a
+// callback through a freed context crashes the process.
+#[test]
+fn search_callback_context_lives_for_the_search_thread() {
+    let Some(host) = HostedSurface::spawn() else {
+        return; // no Metal => skip
+    };
+    let act = |a: &[u8]| {
+        // SAFETY: `host.surface` is the live surface; `a` is a valid slice.
+        unsafe { rustty_surface_binding_action(host.surface, a.as_ptr(), a.len()) }
+    };
+    assert!(act(b"search:a"), "search:a was not performed");
+    host.pump_bounded();
+    assert!(act(b"search:ab"), "search:ab was not performed");
+    host.pump_bounded();
+    assert!(act(b"end_search"), "end_search was not performed");
+    host.pump_bounded();
+    assert!(act(b"search:x"), "the second search:x was not performed");
+    host.pump_bounded();
+    // Close with the search thread still running.
     drop(host);
 }
 

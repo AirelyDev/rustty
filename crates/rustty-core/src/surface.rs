@@ -886,6 +886,45 @@ pub struct Search {
     mailbox: *const terminal::search::thread::Mailbox,
     wakeup: terminal::search::thread::xev::Notifier,
     stop: terminal::search::thread::xev::Notifier,
+
+    // PORT-ONLY (N444 fix round 1, P7-W7 T5c): the search callback's userdata,
+    // a boxed `SearchCallbackCtx<A>` captured at spawn, and its typed free.
+    // `Search` is not generic over the apprt, so the pointer is erased; `deinit`
+    // frees it once, after the join (the callback's `Quit` runs before that).
+    callback_ctx: *mut core::ffi::c_void,
+    callback_ctx_free: unsafe fn(*mut core::ffi::c_void),
+}
+
+/// PORT-ONLY (N444 fix round 1, P7-W7 T5c): what `searchCallback_` needs,
+/// captured on the main thread when the search thread is spawned.
+///
+/// The reference passes the surface itself as `event_userdata` and reads
+/// `self.renderer_thread.mailbox` / `.wakeup` and `self.surfaceMailbox()`
+/// (`rt_app`, `app`) on the search thread. Those are the surface's own bytes:
+/// every main-thread `&mut Surface` retag races with the reads under Stacked
+/// Borrows (`.port/phase-2/mirihar-n444` `n444_search_cb_reads_surface`). The
+/// values never change for the surface's life, so the callback reads this copy
+/// instead and never dereferences the surface (`n444_search_cb_ctx`, CLEAN).
+struct SearchCallbackCtx<A: apprt::App + 'static> {
+    /// `self.renderer_thread.mailbox` (the renderer's queue, its own allocation).
+    renderer_mailbox: *mut rendererpkg::thread::Mailbox,
+    /// `&self.renderer_thread.wakeup`, inside the out-of-line render-thread block.
+    renderer_wakeup: *const rustty_xev::Async,
+    /// `self.surfaceMailbox()`: the surface pointer only as the envelope's
+    /// identity, and the app's own mailbox.
+    surface_mailbox: Mailbox<A>,
+}
+
+impl<A: apprt::App + 'static> SearchCallbackCtx<A> {
+    /// Free a context made by `Box::into_raw` (the `Search.callback_ctx_free`
+    /// entry).
+    ///
+    /// # Safety
+    /// `p` came from `Box::into_raw(Box<SearchCallbackCtx<A>>)`, the search
+    /// thread is joined or never started, and this is called once.
+    unsafe fn free(p: *mut core::ffi::c_void) {
+        unsafe { drop(Box::from_raw(p.cast::<SearchCallbackCtx<A>>())) };
+    }
 }
 
 impl Search {
@@ -932,6 +971,8 @@ impl Search {
         unsafe {
             (*self.state.as_ptr()).deinit();
             self.state.drop_and_dealloc();
+            // (N444 fix round 1: the callback's context, once, after the join.)
+            (self.callback_ctx_free)(self.callback_ctx);
         }
     }
 }
@@ -3490,8 +3531,10 @@ where
     // PORT NOTE: reference `inline fn` -> `#[inline]`. The `&mut self` form is
     // preserved verbatim (R1) but currently dead — its sole reached caller,
     // `searchCallback_`, now uses the raw `surface_mailbox_raw` variant (§3.3a,
-    // to avoid a whole `&mut Surface` reborrow on the search thread). Future
-    // main-thread callers of other ported arms use this `&mut self` form.
+    // to avoid a whole `&mut Surface` reborrow on the search thread; since N444
+    // fix round 1 it is built on the main thread at search spawn and copied into
+    // `SearchCallbackCtx`). Future main-thread callers of other ported arms use
+    // this `&mut self` form.
     #[allow(dead_code)]
     #[inline]
     fn surfaceMailbox(&mut self) -> Mailbox<A> {
@@ -4849,7 +4892,10 @@ where
         //
         // (`ud.?` — the vt seam models the userdata as a bare pointer, so the
         // unwrap collapses into the non-null registration contract.)
-        let self_: *mut Surface<A> = ud.cast();
+        //
+        // PORT NOTE (N444 fix round 1): `ud` is the `SearchCallbackCtx<A>`
+        // captured at spawn, not the surface (see its doc).
+        let ctx: *const SearchCallbackCtx<A> = ud.cast_const().cast();
         // self.searchCallback_(event) catch |err| {
         //     log.warn("error in search callback err={}", .{err});
         // };
@@ -4857,7 +4903,7 @@ where
         // PORT NOTE (§3.3a): pass the RAW `self_` (NOT `&mut *self_`) — a whole
         // `&mut Surface` reborrow here, on the search thread, races the main
         // thread's `&mut self` = SB UB (mirihar `callback_naive`).
-        if let Err(err) = unsafe { Self::searchCallback_(self_, event) } {
+        if let Err(err) = unsafe { Self::searchCallback_(ctx, event) } {
             // log.warn("error in search callback err={}", .{err});
             //
             // NOTE (task 14d-1): this emission fires on the SEARCH THREAD, so
@@ -4879,8 +4925,14 @@ where
     // `self_` (never a whole `&mut Surface`/`&Surface`); verdict SB + TB clean
     // (mirihar `callback_shipped`). This preserves the reference's cross-thread
     // Surface access — only the Rust `&mut`-exclusivity narrowing changes.
+    //
+    // PORT NOTE (N444 fix round 1, P7-W7 T5c): the receiver is now the
+    // spawn-time `SearchCallbackCtx`, not the surface: even narrow field reads
+    // through the surface pointer (`renderer_thread`, `rt_app`, `app`) raced
+    // the main thread's `&mut Surface` retags under SB. The pushes and notifies
+    // are the same; only where their pointers are read from changes.
     unsafe fn searchCallback_(
-        self_: *mut Surface<A>,
+        ctx: *const SearchCallbackCtx<A>,
         event: SearchThreadEvent<'_>,
     ) -> Result<(), Error> {
         // NOTE: This runs on the search thread.
@@ -4917,14 +4969,14 @@ where
                 //     } },
                 //     .forever,
                 // );
-                let _ = unsafe { &*(*(*self_).renderer_thread.as_ptr()).mailbox }.push(
+                let _ = unsafe { &*(*ctx).renderer_mailbox }.push(
                     rendererpkg::Message::SearchViewportMatches(
                         rendererpkg::message::SearchMatches { matches },
                     ),
                     Timeout::Forever,
                 );
                 // try self.renderer_thread.wakeup.notify();
-                unsafe { &(*(*self_).renderer_thread.as_ptr()).wakeup }.notify()?;
+                unsafe { &*(*ctx).renderer_wakeup }.notify()?;
             }
 
             // .selected_match => |selected_| {
@@ -4948,7 +5000,7 @@ where
                     //     } },
                     //     .forever,
                     // );
-                    let _ = unsafe { &*(*(*self_).renderer_thread.as_ptr()).mailbox }.push(
+                    let _ = unsafe { &*(*ctx).renderer_mailbox }.push(
                         rendererpkg::Message::SearchSelectedMatch(Some(
                             rendererpkg::message::SearchMatch { r#match: match_ },
                         )),
@@ -4960,7 +5012,7 @@ where
                     //     .{ .search_selected = sel.idx },
                     //     .forever,
                     // );
-                    let _ = unsafe { Self::surface_mailbox_raw(self_) }
+                    let _ = unsafe { &(*ctx).surface_mailbox }
                         .push(Message::SearchSelected(Some(sel.idx)), Timeout::Forever);
                 } else {
                     // Reset our selected match
@@ -4968,7 +5020,7 @@ where
                     //     .{ .search_selected_match = null },
                     //     .forever,
                     // );
-                    let _ = unsafe { &*(*(*self_).renderer_thread.as_ptr()).mailbox }.push(
+                    let _ = unsafe { &*(*ctx).renderer_mailbox }.push(
                         rendererpkg::Message::SearchSelectedMatch(None),
                         Timeout::Forever,
                     );
@@ -4978,12 +5030,12 @@ where
                     //     .{ .search_selected = null },
                     //     .forever,
                     // );
-                    let _ = unsafe { Self::surface_mailbox_raw(self_) }
+                    let _ = unsafe { &(*ctx).surface_mailbox }
                         .push(Message::SearchSelected(None), Timeout::Forever);
                 }
 
                 // try self.renderer_thread.wakeup.notify();
-                unsafe { &(*(*self_).renderer_thread.as_ptr()).wakeup }.notify()?;
+                unsafe { &*(*ctx).renderer_wakeup }.notify()?;
             }
 
             // .total_matches => |total| {
@@ -4994,7 +5046,7 @@ where
                 // );
                 //
                 // (Zig coerces the `usize` into the `?usize` payload.)
-                let _ = unsafe { Self::surface_mailbox_raw(self_) }
+                let _ = unsafe { &(*ctx).surface_mailbox }
                     .push(Message::SearchTotal(Some(total)), Timeout::Forever);
             }
 
@@ -5005,7 +5057,7 @@ where
                 //     .{ .search_selected_match = null },
                 //     .forever,
                 // );
-                let _ = unsafe { &*(*(*self_).renderer_thread.as_ptr()).mailbox }.push(
+                let _ = unsafe { &*(*ctx).renderer_mailbox }.push(
                     rendererpkg::Message::SearchSelectedMatch(None),
                     Timeout::Forever,
                 );
@@ -5016,7 +5068,7 @@ where
                 //     } },
                 //     .forever,
                 // );
-                let _ = unsafe { &*(*(*self_).renderer_thread.as_ptr()).mailbox }.push(
+                let _ = unsafe { &*(*ctx).renderer_mailbox }.push(
                     rendererpkg::Message::SearchViewportMatches(
                         rendererpkg::message::SearchMatches {
                             matches: Vec::new(),
@@ -5025,20 +5077,20 @@ where
                     Timeout::Forever,
                 );
                 // try self.renderer_thread.wakeup.notify();
-                unsafe { &(*(*self_).renderer_thread.as_ptr()).wakeup }.notify()?;
+                unsafe { &*(*ctx).renderer_wakeup }.notify()?;
 
                 // Reset search totals in the surface
                 // _ = self.surfaceMailbox().push(
                 //     .{ .search_total = null },
                 //     .forever,
                 // );
-                let _ = unsafe { Self::surface_mailbox_raw(self_) }
+                let _ = unsafe { &(*ctx).surface_mailbox }
                     .push(Message::SearchTotal(None), Timeout::Forever);
                 // _ = self.surfaceMailbox().push(
                 //     .{ .search_selected = null },
                 //     .forever,
                 // );
-                let _ = unsafe { Self::surface_mailbox_raw(self_) }
+                let _ = unsafe { &(*ctx).surface_mailbox }
                     .push(Message::SearchSelected(None), Timeout::Forever);
             }
 
@@ -11894,9 +11946,10 @@ where
                     }
 
                     // Stable base address of the pinned Surface: `init` writes it
-                    // through a `*mut Surface`, the same address `searchCallback`
-                    // casts `event_userdata` back to. The thread re-enters through
-                    // it via NARROW raw field projections only (§3.3a).
+                    // through a `*mut Surface`. (N444 fix round 1: the search
+                    // thread no longer re-enters through it; `searchCallback`
+                    // gets the spawn-time `SearchCallbackCtx` below, and the
+                    // surface pointer is only the surface mailbox's identity.)
                     //
                     // (N442: the caller's raw root itself, not a pointer derived
                     // from the local reborrow, which later reborrows retire.)
@@ -11922,7 +11975,20 @@ where
                     // the POST-MOVE `state_ptr` lineage below (a pre-move
                     // `addr_of!` alias would be popped by the child's
                     // `Box<Mailbox>` noalias — mirihar `search_shipped`).
-                    let mut state = terminal::search::thread::Thread::init(
+                    // PORT NOTE (N444 fix round 1, P7-W7 T5c): the callback's
+                    // userdata is a context captured here, on the main thread,
+                    // instead of the surface (`SearchCallbackCtx`'s doc). It is
+                    // freed once: on the `init` error just below, on the spawn
+                    // failure, or by `Search::deinit` after the join.
+                    let callback_ctx: *mut SearchCallbackCtx<A> = unsafe {
+                        let rt = (*surface_ptr).renderer_thread.as_ptr();
+                        Box::into_raw(Box::new(SearchCallbackCtx {
+                            renderer_mailbox: (*rt).mailbox,
+                            renderer_wakeup: &raw const (*rt).wakeup,
+                            surface_mailbox: Self::surface_mailbox_raw(surface_ptr),
+                        }))
+                    };
+                    let state_result = terminal::search::thread::Thread::init(
                         this.alloc.into(),
                         terminal::search::thread::Options {
                             // .mutex = self.renderer_state.mutex,
@@ -11932,9 +11998,20 @@ where
                             // .event_cb = &searchCallback,
                             event_cb: Some(Self::searchCallback),
                             // .event_userdata = self,
-                            event_userdata: surface_ptr as *mut core::ffi::c_void,
+                            //
+                            // (N444 fix round 1: the spawn-time context.)
+                            event_userdata: callback_ctx.cast::<core::ffi::c_void>(),
                         },
-                    )?; // needs From<..search::thread::xev::Error> (added above)
+                    );
+                    let mut state = match state_result {
+                        Ok(v) => v,
+                        Err(e) => {
+                            // (N444 fix round 1: nothing else holds the context.)
+                            unsafe { SearchCallbackCtx::<A>::free(callback_ctx.cast()) };
+                            // needs From<..search::thread::xev::Error> (added above)
+                            return Err(e.into());
+                        }
+                    };
 
                     // Arm the wakeup/stop waits ON THE LOCAL + capture the
                     // decoupled notifiers BEFORE the move (identical to the vt
@@ -11964,6 +12041,8 @@ where
                         mailbox: core::ptr::null(), // set from state_ptr below
                         wakeup: wn,
                         stop: sn,
+                        callback_ctx: callback_ctx.cast(),
+                        callback_ctx_free: SearchCallbackCtx::<A>::free,
                     });
 
                     // const s: *Search = &self.search.?;   — ONE transient &mut,
@@ -12012,6 +12091,8 @@ where
                             unsafe {
                                 (*state_ptr).deinit();
                                 (*search_ptr).state.drop_and_dealloc();
+                                // (N444 fix round 1: the never-used context.)
+                                SearchCallbackCtx::<A>::free(callback_ctx.cast());
                             }
                             this.search = None;
                             return Err(e.into());

@@ -9042,6 +9042,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   - `renderer_state`. The io and render threads bump its D4 handoff atomics (`demand`,
     `handoff_gen`); the render thread reads it under the mutex; the main thread writes it.
   - `search.state` (found by T5c). The search thread writes its own loop state.
+  - The search callback (fix round 1, ruling 48). `searchCallback_` got the surface as its userdata
+    and read `renderer_thread`, `rt_app` and `app` through it on the search thread: non-atomic reads
+    of `Surface` bytes, racing a main-thread `&mut Surface` retag under SB.
 
   Every main-thread `&mut Surface` / `&Surface` retag (the same apprt entries N441 lists) covers
   those bytes, so it races with those accesses. Two narrower main-thread shapes had the same class:
@@ -9069,6 +9072,11 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
     `MaybeUninit` slot).
   - `Search.state` keeps its normal drop after `state.deinit()` (`drop_and_dealloc`), because the
     inline field was dropped with its `Search`.
+- **fix round 1** (ruling 48): the search callback's userdata is a boxed `SearchCallbackCtx<A>`
+  captured on the main thread at spawn (the renderer mailbox pointer, the renderer wakeup pointer, a
+  copy of the surface mailbox). `searchCallback_` reads only it, never the surface. It is freed
+  exactly once: by `Search::deinit` after the join, on the search `Thread::init` error, and on the
+  spawn failure.
 - **proof**: `.port/phase-2/mirihar-n444` (16 seeds, SB and TB).
   - Shipped: `n444_inline_io_terminal`, `n444_inline_io_thread`,
     `n444_inline_renderer_thread_state`, `n444_inline_renderer_state_atomics` and
@@ -9077,6 +9085,10 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   - Fixed: `n444_boxed_all` (every writer thread against every main-thread entry) is CLEAN under both.
   - Teardown: `n444_teardown_all_paths` is CLEAN under both; the negative arms `n444_drop_box_leak`
     and `n444_init_error_io_slot_leak` LEAK.
+  - Fix round 1: `n444_search_cb_reads_surface` (the round-0 callback) is UB under SB and CLEAN under
+    TB; `n444_search_cb_ctx` is CLEAN under both. LIFETIMES row
+    `src/Surface.zig Surface [self as search event_userdata]`; live test rustty-apprt-c
+    `macos_window_host::search_callback_context_lives_for_the_search_thread`.
   - The superseded direction proof `.port/phase-2/mirihar-n441` `n441_residual_terminal_*` stays.
   - LIFETIMES rows `src/Surface.zig Surface io / io_thread / renderer_thread / renderer_state`,
     `src/Surface.zig Search state` and `src/termio/Termio.zig Termio [self in queueMessage]`.

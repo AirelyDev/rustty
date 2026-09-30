@@ -43,6 +43,21 @@ Two narrower shapes on the main thread's own io entry (`queueIo`) had the same p
   `MaybeUninit` slot). Each teardown site tears the block down exactly as it did inline, then
   `ThreadSharedBox::dealloc` frees the allocation, also without glue.
 
+## Fix round 1 (ruling 48): the search thread's callback
+
+`searchCallback_` runs on the search thread with the raw `event_userdata`, which was the surface. It
+read the surface's own bytes: the `renderer_thread` box pointer (for the renderer mailbox and
+wakeup) and `rt_app` / `app` (through `surface_mailbox_raw`). Those are non-atomic reads of `Surface`
+bytes while the main thread forms `&mut Surface` (key, mouse, focus, `deinit` before
+`search.take()`). Under SB the main thread's Unique retag is a write, so this is a data race; under TB
+the retag is a read, so it is clean there. Each writer thread in the round-0 model read only its own
+box, so the model did not cover this.
+
+The fix: a small boxed `SearchCallbackCtx` captured on the main thread at spawn (the renderer
+mailbox pointer, the renderer wakeup pointer, a copy of the surface mailbox) is the userdata. The
+callback never dereferences the surface. `Search::deinit` frees it once after the join, and the
+`Thread::init` and spawn failure paths free it when no thread ran.
+
 ## N449 (OPEN, not the Surface)
 
 The io writer thread calls `&mut self` `Termio` methods (`focusGained`, `resize`, `changeConfig`,
@@ -78,6 +93,8 @@ each owner (ManuallyDrop, dealloc, MaybeUninit) and every init-error stage (`Ren
 | `n444_drop_box_leak` (negative) | LEAK | LEAK |
 | `n444_init_error_io_slot_leak` (negative) | LEAK | LEAK |
 | `n444_teardown_all_paths` (the fix) | CLEAN | CLEAN |
+| `n444_search_cb_reads_surface` (fix round 1: round-0 callback) | UB | CLEAN |
+| `n444_search_cb_ctx` (fix round 1: the spawn-time context) | CLEAN | CLEAN |
 | `n449_writer_termio_mut` | UB | UB |
 | `n449_writer_termio_raw` | CLEAN | CLEAN |
 
@@ -88,5 +105,7 @@ each owner (ManuallyDrop, dealloc, MaybeUninit) and every init-error stage (`Ren
   strongly protected". TB tolerates it: the protected `&mut Mailbox` is never written.
 - The N449 verdicts are the same data race, between the writer thread's `&mut Termio` retag and the
   read thread's terminal write.
+- `n444_search_cb_reads_surface` under SB: "Data race detected between (1) retag write on thread
+  `main` and (2) retag read of type `ThreadSharedBox<RenderThread>` on thread `unnamed-1`".
 - One SB run of `n444_inline_search_state` printed a many-seeds child `Bus error: 10`; its log
   carries the UB report, and the rerun gives the same verdict.

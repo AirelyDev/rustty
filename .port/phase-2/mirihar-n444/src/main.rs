@@ -795,6 +795,119 @@ fn run_teardown_all_paths() {
     }
 }
 
+
+// ===========================================================================
+// Fix round 1 (ruling 48): the search thread's callback (`searchCallback_`)
+// ===========================================================================
+//
+// `searchCallback_` runs on the SEARCH thread with the raw `event_userdata`.
+// Round 0 read the surface's own bytes through it: the `renderer_thread` box
+// pointer (for the renderer mailbox / wakeup) and `rt_app` / `app` (through
+// `surface_mailbox_raw`). Those are non-atomic reads of `Surface` bytes while
+// the main thread forms `&mut Surface`. The fix: a small boxed context captured
+// at spawn (the renderer mailbox and wakeup pointers, a copy of the surface
+// mailbox) is the userdata, so the callback never reads the surface.
+
+/// The core `App`: its mailbox is its own queue (outside the surface).
+struct AppModel {
+    mailbox: StdMutex<VecDeque<u32>>,
+}
+
+/// The core `Surface` with the fields the callback used to read.
+struct SurfaceCb {
+    size: (u32, u32),
+    focused: bool,
+    renderer_thread: ThreadSharedBox<RenderThread>,
+    rt_app: *mut AppModel,
+    app: *mut AppModel,
+    mouse_mods: u8,
+}
+
+impl SurfaceCb {
+    fn size_callback(&mut self, w: u32, h: u32) {
+        self.size = (w, h);
+        std::thread::yield_now();
+    }
+    fn focus_callback(&mut self, f: bool) {
+        self.focused = f;
+        self.mouse_mods = 0;
+    }
+}
+
+/// The fix's userdata: `SearchCallbackCtx { renderer_mailbox, renderer_wakeup,
+/// surface_mailbox }`, all raw pointers captured on the main thread at spawn.
+struct SearchCallbackCtx {
+    renderer_wakeup: *const AtomicBool,
+    surface_mailbox_app: *mut AppModel,
+}
+
+/// Round 0: `searchCallback_(self_: *mut Surface, ..)`.
+unsafe fn search_callback_surface(self_: *mut SurfaceCb) {
+    unsafe {
+        // `(*(*self_).renderer_thread.as_ptr()).wakeup.notify()`.
+        let rt = (*self_).renderer_thread.as_ptr();
+        (*rt).wakeup.store(true, Ordering::Release);
+        // `surface_mailbox_raw(self_)`: reads `rt_app` and `app`.
+        let _rt_app = (*self_).rt_app;
+        (*(*self_).app).mailbox.lock().unwrap().push_back(1);
+    }
+}
+
+/// The fix: `searchCallback_(ctx: *const SearchCallbackCtx, ..)`.
+unsafe fn search_callback_ctx(ctx: *const SearchCallbackCtx) {
+    unsafe {
+        (*(*ctx).renderer_wakeup).store(true, Ordering::Release);
+        (*(*ctx).surface_mailbox_app).mailbox.lock().unwrap().push_back(1);
+    }
+}
+
+fn run_search_callback(fixed: bool) {
+    let app = Box::into_raw(Box::new(AppModel {
+        mailbox: StdMutex::new(VecDeque::new()),
+    }));
+    let (_, _, renderer_thread, ..) = new_blocks(std::ptr::null_mut());
+    let s = P(Box::into_raw(Box::new(SurfaceCb {
+        size: (0, 0),
+        focused: true,
+        renderer_thread: ThreadSharedBox::new(renderer_thread),
+        rt_app: app,
+        app,
+        mouse_mods: 0,
+    })));
+    // The spawn (main thread): the context is captured here, before the
+    // search thread starts.
+    let ctx = P(Box::into_raw(Box::new(SearchCallbackCtx {
+        renderer_wakeup: unsafe { &raw const (*(*s.0).renderer_thread.as_ptr()).wakeup },
+        surface_mailbox_app: unsafe { (*s.0).app },
+    })));
+    let t = std::thread::spawn(move || {
+        let (s, ctx) = (s, ctx);
+        for _ in 0..ROUNDS {
+            unsafe {
+                if fixed {
+                    search_callback_ctx(ctx.0);
+                } else {
+                    search_callback_surface(s.0);
+                }
+            }
+            std::thread::yield_now();
+        }
+    });
+    for i in 0..ROUNDS as u32 {
+        unsafe { &mut *s.0 }.size_callback(i, i);
+        unsafe { &mut *s.0 }.focus_callback(i % 2 == 0);
+        std::thread::yield_now();
+    }
+    t.join().unwrap();
+    unsafe {
+        // `Search::deinit`: after the join, the context is freed once.
+        drop(Box::from_raw(ctx.0));
+        (*s.0).renderer_thread.dealloc();
+        drop(Box::from_raw(s.0));
+        drop(Box::from_raw(app));
+    }
+}
+
 fn main() {
     let which = std::env::args().nth(1).expect("candidate name");
     let all = Which {
@@ -850,6 +963,9 @@ fn main() {
         "n444_init_error_io_slot_leak" => run_init_error(Stage::ErrdefersIoDead, true),
         "n444_teardown_all_paths" => run_teardown_all_paths(),
         // ---- N449 (not the Surface): the io writer thread's `&mut Termio` ----
+        // ---- fix round 1: the search callback ----
+        "n444_search_cb_reads_surface" => run_search_callback(false),
+        "n444_search_cb_ctx" => run_search_callback(true),
         "n449_writer_termio_mut" => run_boxed(
             Which {
                 io_read: true,

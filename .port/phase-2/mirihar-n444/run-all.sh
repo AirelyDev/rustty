@@ -16,6 +16,7 @@ for c in n444_inline_io_terminal n444_inline_io_thread \
          n444_boxed_all \
          n444_boxed_queue_io_termio_mut n444_boxed_queue_io_send_mut \
          n444_drop_box_leak n444_init_error_io_slot_leak n444_teardown_all_paths \
+         n444_search_cb_reads_surface n444_search_cb_ctx \
          n449_writer_termio_mut n449_writer_termio_raw; do
   sbl="/tmp/mirihar-n444-$c-sb.log"; tbl="/tmp/mirihar-n444-$c-tb.log"
   MIRIFLAGS="-Zmiri-many-seeds=0..16" cargo +nightly miri run -q -- "$c" >"$sbl" 2>&1; sb=$?
