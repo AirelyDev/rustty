@@ -1761,8 +1761,9 @@ mod tests {
             // vendored Wuffs C kernels) are foreign calls it cannot make
             // (N494), so the Miri corpus sends RGBA pixels, whose "conversion"
             // is a plain dupe through the same allocator, and composes with
-            // `X=1` (overwrite, a plain copy): every routing count below is
-            // unchanged.
+            // `X=1` (overwrite, a plain copy). Every routing count below is
+            // unchanged except the frame's, which drops the two RGBA
+            // conversions an RGBA frame does not need.
             let (transmit, frame): (&[u8], &[u8]) = if cfg!(miri) {
                 (
                     b"a=t,f=32,s=1,v=1,i=1;/wAA/w==",
