@@ -18163,7 +18163,13 @@ fn pagelist_page_allocation_stays_detached_until_finalize() {
 
     // PORT NOTE (raw-self seam): see
     // `pagelist_page_allocation_finalizes_pages_and_preserves_live_state`.
-    let this: *mut PageList = &mut result;
+    //
+    // TB (N492): `this` is the one raw root (`&raw mut`, no retag), and every
+    // later access to `result` goes through it. A `&mut result` reborrow here
+    // was frozen by the later read through the owner (`result.assert_integrity()`),
+    // so the allocation's `deinit` (which returns its node to the pools through
+    // `this`) was a write through a Frozen tag: Tree Borrows UB.
+    let this: *mut PageList = &raw mut result;
 
     // Allocating and populating a detached page does not alter any live list
     // links or accounting. Deinit returns it to the same PageList pools.
@@ -18179,13 +18185,13 @@ fn pagelist_page_allocation_stays_detached_until_finalize() {
     }
     .unwrap();
     unsafe { (*detached.page()).size.rows = 1 };
-    assert_eq!(initial_first, result.pages.first);
-    assert_eq!(initial_last, result.pages.last);
-    assert_eq!(initial_total_rows, result.total_rows);
-    assert_eq!(initial_page_size, result.page_size);
-    result.assert_integrity();
+    assert_eq!(initial_first, unsafe { (*this).pages.first });
+    assert_eq!(initial_last, unsafe { (*this).pages.last });
+    assert_eq!(initial_total_rows, unsafe { (*this).total_rows });
+    assert_eq!(initial_page_size, unsafe { (*this).page_size });
+    unsafe { (*this).assert_integrity() };
     detached.deinit();
-    result.assert_integrity();
+    unsafe { (*this).assert_integrity() };
 
     // Invalid populated dimensions leave ownership with the allocation so it
     // can still be released normally.
@@ -18206,14 +18212,14 @@ fn pagelist_page_allocation_stays_detached_until_finalize() {
         Err(FinalizeError::InvalidPageDimensions)
     ));
 
-    assert_eq!(initial_first, result.pages.first);
-    assert_eq!(initial_last, result.pages.last);
-    assert_eq!(initial_total_rows, result.total_rows);
-    assert_eq!(initial_page_size, result.page_size);
-    result.assert_integrity();
+    assert_eq!(initial_first, unsafe { (*this).pages.first });
+    assert_eq!(initial_last, unsafe { (*this).pages.last });
+    assert_eq!(initial_total_rows, unsafe { (*this).total_rows });
+    assert_eq!(initial_page_size, unsafe { (*this).page_size });
+    unsafe { (*this).assert_integrity() };
 
     invalid.deinit();
-    result.deinit();
+    unsafe { (*this).deinit() };
 }
 
 // ref: test "PageList PageAllocation rejects limits before modifying the destination"
@@ -18235,7 +18241,13 @@ fn pagelist_page_allocation_rejects_limits_before_modifying_the_destination() {
 
     // PORT NOTE (raw-self seam): see
     // `pagelist_page_allocation_finalizes_pages_and_preserves_live_state`.
-    let this: *mut PageList = &mut result;
+    //
+    // TB (N492): `this` is the one raw root (`&raw mut`, no retag), and every
+    // later access to `result` goes through it. A `&mut result` reborrow here
+    // was frozen by the later read through the owner (`result.assert_integrity()`),
+    // so the allocation's `deinit` (which returns its node to the pools through
+    // `this`) was a write through a Frozen tag: Tree Borrows UB.
+    let this: *mut PageList = &raw mut result;
 
     // The effective minimum permits one complete page beyond the active page.
     // Fill that allowance so the following allocation exceeds the byte limit.
@@ -18257,9 +18269,9 @@ fn pagelist_page_allocation_rejects_limits_before_modifying_the_destination() {
         allocation.deinit();
     }
 
-    let before_first = result.pages.first;
-    let before_total_rows = result.total_rows;
-    let before_page_size = result.page_size;
+    let before_first = unsafe { (*this).pages.first };
+    let before_total_rows = unsafe { (*this).total_rows };
+    let before_page_size = unsafe { (*this).page_size };
 
     let mut allocation = unsafe {
         PageList::allocate_page(
@@ -18279,13 +18291,13 @@ fn pagelist_page_allocation_rejects_limits_before_modifying_the_destination() {
         Err(FinalizeError::MaxSizeExceeded)
     ));
 
-    assert_eq!(before_first, result.pages.first);
-    assert_eq!(before_total_rows, result.total_rows);
-    assert_eq!(before_page_size, result.page_size);
-    result.assert_integrity();
+    assert_eq!(before_first, unsafe { (*this).pages.first });
+    assert_eq!(before_total_rows, unsafe { (*this).total_rows });
+    assert_eq!(before_page_size, unsafe { (*this).page_size });
+    unsafe { (*this).assert_integrity() };
 
     allocation.deinit();
-    result.deinit();
+    unsafe { (*this).deinit() };
 }
 
 // ref: test "PageList PageAllocation allocation failure leaves list unchanged"

@@ -10172,6 +10172,55 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   12 s; their corpus writes one page under `cfg!(miri)`) and stay unannotated. No real Miri
   finding. Evidence: `.port/phase-2/MIRI_EXCEPTIONS.md`, "P7-W12 T6b".
 
+## N492 — five `rustty-vt` tests have test-side Tree Borrows UB: a `&mut` reborrow handed to a raw-pointer holder, then touched through the owner
+
+- **id**: N492. P7-W12 T7 (from the W12.T2 lane D V29 run under Tree Borrows). **severity**: low (test
+  code only; no production path has the shape). **state**: CLOSED by P7-W12 T7.
+- **finding**: V29 under `MIRIFLAGS=-Zmiri-tree-borrows` went RED after 38 s on
+  `search::pagelist::tests::simple_search`; Stacked Borrows was clean. Miri aborts the binary at the
+  first UB, so every test was then run on its own.
+- **mechanism (all five)**: the test minted the pointer that a long-lived holder later writes through
+  from a `&mut` reborrow (`PageListSearch::init(.., &mut active.pages, ..)`, `let this: *mut
+  PageList = &mut result`, `let p_ptr = &mut p`). The test then touched the owner directly: a read
+  (`active.pages.point_from_pin`, `active.selection_string`, `result.assert_integrity()`) froze
+  that tag, or a write (`p.grow()`) disabled it. The holder's next write (`untrack_pin` in
+  `PageListSearch::deinit`; the node returned to the pool in `PageAllocation::deinit`) was then a
+  write through a Frozen or Disabled tag. Zig has no borrow model, so the reference tests have no
+  counterpart; nothing to port or report upstream (N-only, not a UD).
+- **tests** (all test-side):
+  - `search::pagelist::tests::simple_search` (G6);
+  - `search::pagelist::tests::feed_with_match_spanning_page_boundary` (G6c);
+  - `search::pagelist::tests::feed_with_pruned_page` (G6c; `p.grow()`, the Disabled case);
+  - `pagelist::tests::pagelist_page_allocation_stays_detached_until_finalize` (G6);
+  - `pagelist::tests::pagelist_page_allocation_rejects_limits_before_modifying_the_destination` (G6).
+  - Same shape, not runnable under Miri (both-lanes exception), fixed by construction:
+    `search::pagelist::tests::feed_keeps_its_tracked_pin_within_a_shorter_page`.
+- **production audit**: clean. `ScreenSearch` hands `PageListSearch` a pointer built with
+  `addr_of_mut!((*self.screen).pages)` from the raw `*mut Screen`; `TerminalSearch` builds its
+  `ScreenSearch`es from the terminal's raw `screens.all` pointers and reads the active pages
+  through the same raw root; the search thread holds a raw `*mut Terminal`. The production
+  `allocate_page` callers (`snapshot/history.rs`) use `addr_of_mut!` too. No reborrow tag is ever
+  minted for the holder, so later accesses through the root are child accesses, not foreign ones.
+- **fix**: the established raw-root idiom (`search/screen.rs`, N455). Each object is reached
+  through one raw root that carries no retag (`&raw mut`, or a `list()` closure re-deriving `&raw
+  mut (*active_ptr).pages`). The holder gets that pointer, and every later test access goes
+  through it. No ignore added, no assertion changed, Zig reference comments kept.
+- **evidence** (G6 = `cargo +nightly miri test -p rustty-vt --lib`; G6c = the same with
+  `RUSTFLAGS="-C debug-assertions=off" MIRIFLAGS=-Zmiri-disable-isolation`; TB adds
+  `-Zmiri-tree-borrows`):
+  - enumeration, one test per process, `--exact`, under TB: all 52 G6 `search::` tests (1 UB) and
+    all 31 G6c ones (2 UB). The other 7 `search::` tests are ignored in both lanes.
+  - each fixed test, in its lane: passes under SB and TB.
+  - after rebasing onto `7ca5d9f9a`, the whole `search::` filter in one G6 process: TB 52 passed,
+    38 ignored, rc 0 (304 s); SB 52 passed, 38 ignored, rc 0 (143 s). Before the fix, TB aborted
+    at `simple_search` after 38 s.
+  - native `cargo test -p rustty-vt --lib search::`: 90 passed.
+- **`page::` and `pagelist` (V27/V28 scope) under TB, partial**: 383 tests run in G6 after removing
+  the `search::` ones. 329 of them ran one per process under TB: 327 ok and 2 UB (the two
+  `pagelist_page_allocation_*` tests above, fixed). Not reached, because the host slept: 54 G6
+  tests (28 `pagelist::tests`, 26 `snapshot::page::tests`) and the 96 G6-ignored (G6c or both-lanes)
+  tests. Lane D's SB runs of V27/V28 cover their SB side. Their TB side is still open.
+
 ## N493 — a Phase 7 test helper compared memory byte by byte: intractable under Miri
 
 - **id**: N493. P7-W12 T8. **severity**: low (gate G6 could not finish one test; no product defect).

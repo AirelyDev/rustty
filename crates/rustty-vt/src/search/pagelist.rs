@@ -298,10 +298,17 @@ mod tests {
         //     &t.screens.active.pages,
         //     t.screens.active.pages.pages.last.?,
         // );
-        let active = unsafe { &mut *active_ptr };
+        //
+        // TB (N492): `list()` re-derives the `*mut PageList` via `&raw mut` (no
+        // retag) from the one raw root, and both the searcher and the test's
+        // own `point_from_pin` reads go through it. A `&mut active.pages`
+        // handed to `init` minted a reborrow tag that the searcher later writes
+        // through (`untrack_pin` in `deinit`); the test's read through the
+        // owner `active.pages` in between was a foreign read that froze it,
+        // so that write was Tree Borrows UB (rust-mut-args-strongly-protected).
+        let list = || -> *mut PageList { unsafe { &raw mut (*active_ptr).pages } };
         let mut search: PageListSearch =
-            PageListSearch::init(alloc, b"Fizz", &mut active.pages, active.pages.pages.last)
-                .unwrap();
+            PageListSearch::init(alloc, b"Fizz", list(), unsafe { (*list()).pages.last }).unwrap();
         // defer search.deinit();
 
         {
@@ -311,11 +318,11 @@ mod tests {
             let sel = h.untracked();
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 0, y: 2 })),
-                active.pages.point_from_pin(point::Tag::Active, sel.start)
+                unsafe { (*list()).point_from_pin(point::Tag::Active, sel.start) }
             );
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 3, y: 2 })),
-                active.pages.point_from_pin(point::Tag::Active, sel.end)
+                unsafe { (*list()).point_from_pin(point::Tag::Active, sel.end) }
             );
         }
         {
@@ -323,11 +330,11 @@ mod tests {
             let sel = h.untracked();
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 0, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Active, sel.start)
+                unsafe { (*list()).point_from_pin(point::Tag::Active, sel.start) }
             );
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 3, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Active, sel.end)
+                unsafe { (*list()).point_from_pin(point::Tag::Active, sel.end) }
             );
         }
         // try testing.expect(search.next() == null);
@@ -568,10 +575,15 @@ mod tests {
             unsafe { (*active_ptr).pages.pages.last }
         ));
 
-        let active = unsafe { &mut *active_ptr };
+        // TB (N492): as in `simple_search`, the searcher's `*mut PageList` is
+        // re-derived via `&raw mut` from the one raw root, and the test's own
+        // `selection_string` goes through that root too. A `&mut active.pages`
+        // reborrow passed to `init` was frozen by the later read through the
+        // owner (`active.selection_string`), so `deinit`'s `untrack_pin` write
+        // through it was Tree Borrows UB.
+        let list = || -> *mut PageList { unsafe { &raw mut (*active_ptr).pages } };
         let mut search: PageListSearch =
-            PageListSearch::init(alloc, b"Test", &mut active.pages, active.pages.pages.last)
-                .unwrap();
+            PageListSearch::init(alloc, b"Test", list(), unsafe { (*list()).pages.last }).unwrap();
 
         // No complete match on last page alone (only has "st")
         assert!(search.next().is_none());
@@ -592,7 +604,7 @@ mod tests {
             //     .{ .sel = .init(sel.start, sel.end, false) },
             // );
             // defer alloc.free(str);
-            let str = active
+            let str = unsafe { &mut *active_ptr }
                 .selection_string(
                     alloc,
                     SelectionString {
@@ -842,8 +854,13 @@ mod tests {
         //     p.pages.last.?,
         // );
         // defer search.deinit();
-        let p_ptr: *mut PageList = &mut p;
-        let last = p.pages.last;
+        //
+        // TB (N492): from here on every access to `p` goes through `p_ptr`, the
+        // pointer the searcher itself holds. The later `p.grow()` was a sibling
+        // `&mut p` reborrow, a foreign write that disabled the searcher's tag,
+        // so `deinit`'s `untrack_pin` through it was Tree Borrows UB.
+        let p_ptr: *mut PageList = &raw mut p;
+        let last = unsafe { (*p_ptr).pages.last };
         let mut search: PageListSearch = PageListSearch::init(alloc, b"Test", p_ptr, last).unwrap();
         // try testing.expect(try search.feed());
         assert!(search.feed().unwrap());
@@ -853,22 +870,22 @@ mod tests {
         // Next should create a new page, but it should reuse our first
         // page since we're at max size.
         // const new = (try p.grow()).?;
-        let new = p.grow().unwrap().unwrap();
+        let new = unsafe { (*p_ptr).grow() }.unwrap().unwrap();
         // try testing.expect(p.pages.last.? == new);
-        assert!(core::ptr::eq(p.pages.last, new));
+        assert!(core::ptr::eq(unsafe { (*p_ptr).pages.last }, new));
 
         // Our first should now be page2 and our last should be page1
         // try testing.expectEqual(page2_node, p.pages.first.?);
-        assert!(core::ptr::eq(page2_node, p.pages.first));
+        assert!(core::ptr::eq(page2_node, unsafe { (*p_ptr).pages.first }));
         // try testing.expectEqual(page1_node, p.pages.last.?);
-        assert!(core::ptr::eq(page1_node, p.pages.last));
+        assert!(core::ptr::eq(page1_node, unsafe { (*p_ptr).pages.last }));
 
         // Feed should still do nothing
         // try testing.expect(!try search.feed());
         assert!(!search.feed().unwrap());
 
         search.deinit();
-        p.deinit();
+        unsafe { (*p_ptr).deinit() };
     }
     /// PORTS: oracle 5d8eb78b7
     /// `test "feed keeps its tracked pin within a shorter page"`
@@ -925,15 +942,22 @@ mod tests {
         let shorter = unsafe { (*first).next };
         assert!(unsafe { PlNode::rows(shorter) } < unsafe { PlNode::rows(second) });
 
+        // TB (N492): the same shape as `simple_search`. A `&mut pages` reborrow
+        // handed to `init`, then read through the owner (`pages.pin_is_valid`),
+        // is frozen before `deinit`'s `untrack_pin` writes through it. This test
+        // cannot run under Miri (see its annotation), so it takes the raw-root
+        // form by construction: every access after `init` goes through
+        // `pages_ptr`, the pointer the searcher holds.
+        let pages_ptr: *mut PageList = &raw mut pages;
         let mut search: PageListSearch =
-            PageListSearch::init(Allocator, b"x", &mut pages, second).unwrap();
+            PageListSearch::init(Allocator, b"x", pages_ptr, second).unwrap();
 
         assert!(search.feed().unwrap());
         assert!(core::ptr::eq(unsafe { (*search.pin).node }, shorter));
-        assert!(pages.pin_is_valid(unsafe { (*search.pin).pin_copy() }));
+        assert!(unsafe { (*pages_ptr).pin_is_valid((*search.pin).pin_copy()) });
 
         search.deinit();
-        pages.deinit();
+        unsafe { (*pages_ptr).deinit() };
     }
 
     /// PORTS: oracle 06178eeaa (N435)
