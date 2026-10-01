@@ -896,7 +896,7 @@ MAP = {
     # ---------------------------------------------------------------------
     # backend/epoll.zig: 12 quoted `test "epoll: ..."` → zig=12. epoll.rs ports all
     # 12 as live #[test] + rustty KATs → rust=15 >= 12.
-    "xev_epoll":         ([f"{GHXEV}/backend/epoll.zig"], [f"{RSXEV}/epoll.rs"], 0),
+    "xev_epoll":         ([f"{GHXEV}/backend/epoll.zig"], [f"{RSXEV}/epoll.rs", f"{RSXEV}/epoll/**/*.rs"], 0),
     # backend/io_uring.zig: 13 quoted `test "io_uring: ..."` → zig=13. io_uring.rs
     # ports all 13 as live #[test] + rustty KATs → rust=16 >= 13.
     "xev_io_uring":      ([f"{GHXEV}/backend/io_uring.zig"], [f"{RSXEV}/io_uring.rs", f"{RSXEV}/io_uring/**/*.rs"], 0),
@@ -930,7 +930,7 @@ MAP = {
     # jump past the combined backend total impossible to miss. Current pin zig=7
     # ("queuePWrite", "File: Stream decls", "kqueue: zero-length read for
     # readiness", "poll", "read/write", "pread/pwrite", "queued writes").
-    "xev_file":          ([f"{GHXEV_CUR}/watcher/file.zig"], [f"{RSXEV}/epoll.rs", f"{RSXEV}/io_uring.rs"], 0),
+    "xev_file":          ([f"{GHXEV_CUR}/watcher/file.zig"], [f"{RSXEV}/epoll.rs", f"{RSXEV}/epoll/**/*.rs", f"{RSXEV}/io_uring.rs", f"{RSXEV}/io_uring/**/*.rs"], 0),
     # ---------------------------------------------------------------------
     # WS20: the last two reference backends. These were previously UNMAPPED
     # because they were (wrongly) recorded as out-of-scope-by-platform. They are
