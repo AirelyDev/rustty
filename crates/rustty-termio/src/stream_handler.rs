@@ -3160,7 +3160,7 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     //
     // The behavioural equivalence IS pinned, one layer down where it is
     // falsifiable:
-    //   * `rustty_vt::terminal::tests::terminal_print_slice_differential_fuzz_vs_print`
+    //   * `rustty_vt::terminal::tests::attrs::terminal_print_slice_differential_fuzz_vs_print`
     //     — randomized differential, `print` vs `print_slice`, asserted after
     //     EVERY op;
     //   * `rustty_vt::stream::tests::stream_print_slice_matches_per_byte` —
