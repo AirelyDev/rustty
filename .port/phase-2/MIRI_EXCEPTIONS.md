@@ -2705,9 +2705,9 @@ terminal.
 
 | test | what makes it heavy |
 |---|---|
-| `terminal::tests::allocation_failure_sweep_through_the_c_api` | one sweep-corpus pass (above) per allocation, then per remap |
-| `terminal::tests::sweep_corpus_reaches_the_s7_4_families` | one sweep-corpus pass (above) |
-| `terminal::tests::compression_activity_and_incremental_scheduling` (reference test, oracle 172f15da3) | 4,000 lines of history, then an incremental compression pass |
+| `terminal::tests::alloc::allocation_failure_sweep_through_the_c_api` | one sweep-corpus pass (above) per allocation, then per remap |
+| `terminal::tests::alloc::sweep_corpus_reaches_the_s7_4_families` | one sweep-corpus pass (above) |
+| `terminal::tests::viewport_resize::compression_activity_and_incremental_scheduling` (reference test, oracle 172f15da3) | 4,000 lines of history, then an incremental compression pass |
 | `snapshot::tests::snapshot_incremental_decoder_exposes_ready_and_page_progress` | three pages of history at 215 columns, then an encode and a decode |
 | `render::tests::render_state_allocation_failure_sweep_through_the_c_api` | one render-state update per allocation of the sweep |
 | `search::tests::search_feed_and_run_report_out_of_memory_instead_of_spinning` | two pages of scrollback before the search |
@@ -2722,7 +2722,7 @@ the four sweeps assert, natively, that the `FailingAllocator` got every byte bac
 
 Criterion 3: the same code paths are Miri-verified by lighter `rustty-vt-c` tests that pass in the
 lane: `osc::tests::osc_allocation_failure_sweep_through_the_c_api`,
-`terminal::tests::allocation_failure_sweep_through_the_allocating_writers`,
+`terminal::tests::alloc::allocation_failure_sweep_through_the_allocating_writers`,
 `search::tests::search_allocation_failure_sweep_through_the_c_api`,
 `search::tests::search_shared_allocator_failure_sweep_through_the_c_api`,
 `snapshot::tests::allocation_failure_sweep_through_snapshot_decode`, the `*_route_through_*`
