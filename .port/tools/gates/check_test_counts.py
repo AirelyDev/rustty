@@ -844,7 +844,7 @@ MAP = {
     # backend/kqueue.zig: 12 quoted `test "kqueue: ..."` (incl. `file IO on thread
     # pool`, ported as a documented SkipZigTest-style skip-stub #[test] — ThreadPool
     # body deferred, DEFERRALS.md; the count still holds) → zig=12; kqueue.rs=12.
-    "xev_kqueue":        ([f"{GHXEV}/backend/kqueue.zig"], [f"{RSXEV}/kqueue.rs"], 0),
+    "xev_kqueue":        ([f"{GHXEV}/backend/kqueue.zig"], [f"{RSXEV}/kqueue.rs", f"{RSXEV}/kqueue/**/*.rs"], 0),
     # watcher/timer.zig: 5 quoted `test{}` (`timer`, `timer reset`, `timer reset
     # before tick`, `timer reset after trigger`, `timer cancel`, inside `TimerTests`;
     # the per-variant anon `test { _ = TimerTests(...); }` are refAllDecls, zig_count-

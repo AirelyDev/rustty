@@ -26,7 +26,15 @@ import re
 import subprocess
 import sys
 
-FILES = ["lib.rs", "kqueue.rs", "async.rs", "thread_pool.rs", "backend.rs"]
+FILES = [
+    "lib.rs",
+    "kqueue.rs",
+    "kqueue/completion.rs",
+    "kqueue/tests.rs",
+    "async.rs",
+    "thread_pool.rs",
+    "backend.rs",
+]
 CFG_ATTR = re.compile(r"^\s*#!?\[cfg[(!]")
 EXEMPT = "GATE-OK(darwin-set):"
 
