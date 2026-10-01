@@ -174,8 +174,10 @@ committed records named here.
   reference side of N488 item 1), N489 (OPEN: nixpkgs' wasmtime blocks the dev
   shell on aarch64-linux) and N490 (OPEN: `check_symbol_manifest.sh`'s header
   override and WARNING).
-- **P7-W12 T6** (Phase 7 Miri annotations) used N491 (OPEN, verification only: Phase 7 tests
-  missed the G6-only annotation; G6c self-test and native re-runs pending). **Next free ids: UD376, N492, V30.**
+- **P7-W12 T6** (Phase 7 Miri annotations) used N491 (CLOSED: Phase 7 tests missed the G6-only
+  annotation). **P7-W12 T6b** reopened and closed it again (one more missed Phase 7 test, now
+  excepted in both lanes; three S7-6 tests measured and kept in G6); no new id. **Next free ids:
+  UD376, N492, V30.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.

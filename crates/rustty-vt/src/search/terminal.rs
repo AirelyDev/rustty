@@ -1329,6 +1329,10 @@ mod tests {
 
     /// PORTS: oracle 06178eeaa (N435)
     /// `test "feed after complete discovers prepended snapshot history"`
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, P7-W12 T6b; .port/phase-2/MIRI_EXCEPTIONS.md, 'P7-W12 T6b'): past a 20-minute Miri bound with debug assertions on (G6) and past the same bound with them off (G6c, Stacked and Tree Borrows), each measured one test per process; it fills four pages of 10-column scrollback, snapshots, restores and searches every line. Runs natively in cargo test --workspace and under ASan; covered in Miri by search::screen::tests::feed_after_complete_discovers_prepended_history_pages (G6c), snapshot::codec::tests::incremental_decode_applies_history_below_live_pty_output (G6) and search::terminal::tests::starts_feed_required_and_runs_to_complete (G6)"
+    )]
     #[test]
     fn feed_after_complete_discovers_prepended_snapshot_history() {
         use crate::screen::Screen;

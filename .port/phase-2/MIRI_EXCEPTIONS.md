@@ -2902,6 +2902,57 @@ Honest limits: the inventory's triage measured every candidate over 0.3 s native
 page-filling ones, not all 304; the remaining tests (each under 0.07 s natively, none filling pages)
 were not run under Miri here. The full lane run that discharges V27–V29 covers them.
 
+### P7-W12 T6b — four unmarked slow `rustty-vt` tests (2026-09-30)
+
+The V29 re-run (Miri on `search::`) stalled for 34 minutes on a Phase 7 test that the T6 inventory
+missed. **Method:** a full native timing of EVERY `rustty-vt` lib test (3,313), one process per
+test, debug build, against the source's Miri annotations. Exactly four have no Miri annotation and
+take over 0.5 s; each was then measured under the exact G6 configuration and, if it timed out, under
+G6c with Stacked and Tree Borrows. Same conditions as T6: `cargo +nightly miri test -p rustty-vt
+--lib -- --exact <name> --test-threads=1`, one test per process, at most two Miri processes, 1,200 s
+hard bound with the process tree killed. Times are wall clock (Miri's isolated clock is virtual).
+
+| test | native, debug assertions on | G6 | G6c SB | G6c TB |
+|---|---|---|---|---|
+| `search::terminal::tests::feed_after_complete_discovers_prepended_snapshot_history` (P7-W5 T4, `4f144156c`) | 14.4 s (re-run 15.2 s) | TIMEOUT (1,200 s) | TIMEOUT (1,200 s) | TIMEOUT (1,200 s) |
+| `search::terminal::tests::terminal_search_allocation_failure_sweep` (S7-6, `b9b72bd23`) | 9.6 s | ok, 67 s | — (stays in G6) | — |
+| `search::terminal::tests::terminal_search_terminal_charged_allocation_failure_sweep` (S7-6) | 9.5 s | ok, 20 s | — (stays in G6) | — |
+| `search::terminal::tests::terminal_search_internals_route_through_the_allocator_handle` (S7-6) | 9.5 s | ok, 12 s | — (stays in G6) | — |
+
+The three S7-6 tests stay unannotated: their shared `write_search_corpus` writes one page under
+`cfg!(miri)` instead of three, which is why they are slow natively and fast in Miri.
+
+**`feed_after_complete_discovers_prepended_snapshot_history` takes the plain both-lanes form**
+(`cfg_attr(miri, ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, P7-W12 T6b; …)")`): unlike its
+`search/screen.rs` sibling (G6c, 38 s) it is not rescued by turning the integrity walks off. It
+fills four pages of 10-column scrollback with one match per line (a page holds about 4,600 rows),
+encodes a snapshot, restores it to READY and searches, then restores every history page and
+searches the whole history twice (the refreshed search and a fresh one). Which phase dominates under Miri was not profiled (UNVERIFIED). 4-criterion basis:
+
+1. **Intractable, measured per test in both lanes:** TIMEOUT at 1,200 s in G6, and in G6c under
+   both Stacked and Tree Borrows, one test per process. A re-run with the annotation reports it
+   `ignored` in G6 and G6c, as intended.
+2. **Passes natively** (15.2 s, debug build; in ci.sh's HARD `cargo test --workspace`) and under
+   AddressSanitizer (`sanitizers.sh rustty-vt feed_after_complete_discovers_prepended_snapshot_history
+   address`, 2026-09-30: 1 ran, passed, no finding; not repeated by a gate).
+3. **Its unsafe paths stay Miri-covered by lighter tests:**
+   `search::screen::tests::feed_after_complete_discovers_prepended_history_pages` (G6c, 38 s: the
+   same complete-then-prepend discovery in `ScreenSearch`, with the selection kept),
+   `snapshot::codec::tests::incremental_decode_applies_history_below_live_pty_output` (G6, ok in
+   31 s here: `Decoder::next` prepending history below a live terminal) and
+   `search::terminal::tests::starts_feed_required_and_runs_to_complete` (G6, 10 s: the
+   `TerminalSearch` feed/tick pump).
+4. **Documented here and at the source**, with the lanes named, so narrowing it back to G6-only
+   is a visible edit. The rest of `search::terminal` stays in G6.
+
+**Why T6's inventory missed it.** The inventory found test bodies by counting `{` and `}` per line,
+comments included. In `search/terminal.rs` the first changed test,
+`starts_feed_required_and_runs_to_complete`, carries the Zig reference as comments, and its
+`// while (search.status() != .complete) {` has no commented `// }` of its own, so the count never
+returned to zero: the scanner took the rest of the file (lines 970–1851) as that one test's body,
+and every later test in the file, including this new one, got no inventory row. The full native
+timing above does not depend on parsing source, so it closes that gap for `rustty-vt`.
+
 ### Isolation exception (C-1 basis)
 
 | crate | test | what Miri cannot do |
