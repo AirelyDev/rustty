@@ -265,7 +265,7 @@ MAP = {
     "string_map":      ([f"{GH}/StringMap.zig"], [f"{RS}/string_map.rs"], 0),
     "screen_set":      ([f"{GH}/ScreenSet.zig"], [f"{RS}/screen_set.rs"], 0),
     "formatter":       ([f"{GH}/formatter.zig"], [f"{RS}/formatter.rs", f"{RS}/formatter/**/*.rs"], 0),
-    "terminal":        ([f"{GH}/Terminal.zig"], [f"{RS}/terminal.rs"], 0),
+    "terminal":        ([f"{GH}/Terminal.zig"], [f"{RS}/terminal.rs", f"{RS}/terminal/**/*.rs"], 0),
     "stream_terminal": ([f"{GH}/stream_terminal.zig"], [f"{RS}/stream_terminal.rs", f"{RS}/stream_terminal/**/*.rs"], 0),  # apc now wired (font-decode mandatory, Stage A)
     # Stage A — apc multiplexer + glyph subprotocol (apc.zig + apc/glyph/{request,Glossary,execute,response}.zig).
     # Lives in rustty-vt and deps rustty-font DIRECTLY (glyf-decode mandatory, NOT a runtime hook).
