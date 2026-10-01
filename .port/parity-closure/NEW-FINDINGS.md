@@ -10127,8 +10127,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 
 ## N491 — Phase 7 tests missed the G6-only Miri annotation: the Phase 7 briefs ran no Miri
 
-- **id**: N491. P7-W12 T6. **severity**: medium (gate G6 cannot finish; no product defect found so far).
-  **state**: OPEN (G6c measurements pending; the run stopped at the host's disk floor).
+- **id**: N491. P7-W12 T6. **severity**: medium (gate G6 could not finish; no product defect found).
+  **state**: OPEN (verification only): the Miri work is done; the G6c `--self-test` and the native
+  re-runs of the touched tests are pending, both stopped at the host's 15 GB disk floor.
 - **finding**: the Phase 7 task briefs ran no Miri, so tests added since the Phase 7 base `284d59d62`
   never got the per-test G6 triage that parity tail C-1 gave earlier waves. Four `rustty-vt` tests
   run past G6's 1,200 s bound (debug assertions on, so `Page::assert_integrity` runs on nearly every
@@ -10141,9 +10142,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `bash_shell_integration_gate::declare_ax_prompt_command_is_installed_and_reports_status_correctly`
   (P7-W11) fails under G6 Miri at once: `stat` is forbidden under isolation, and the test spawns a
   shell script, which Miri cannot execute.
-- **fix so far**: the bash-gate test carries a C-1-style isolation exception
-  (`cfg_attr(miri, ignore = "MIRI EXCEPTION (rustty-extra, P7-W12 T6): …")`). The four TIMEOUTs are
-  NOT annotated yet: each must first pass in G6c conditions under Stacked Borrows and Tree Borrows.
+- **fix**: the bash-gate test carries a C-1-style isolation exception
+  (`cfg_attr(miri, ignore = "MIRI EXCEPTION (rustty-extra, P7-W12 T6): …")`). The four TIMEOUTs each
+  passed in G6c conditions under Stacked Borrows and Tree Borrows (10–38 s, no Miri warning) and now
+  carry the sibling's exact G6-only form, so they run in G6c. No real Miri finding. Five more
+  page-filling Phase 7 tests were measured in G6 (10–113 s) and stay there.
 - **evidence**: `.port/phase-2/MIRI_EXCEPTIONS.md`, "P7-W12 T6".
-- **next**: run the four in G6c (SB and TB); annotate each that passes with the sibling's exact
-  G6-only form, or report a Miri failure as a real finding; finish the G6 queue; then close.

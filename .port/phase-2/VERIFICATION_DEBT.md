@@ -2578,7 +2578,7 @@ Miri reports no UB.
 
 **Discharged by:** the P7-W12 T2 Miri lane, together with V27.
 
-**Note (P7-W12 T6, 2026-09-30):** T6 measured the Phase 7 tests one by one under G6 and moves the ones past its bound to G6c (NEW-FINDINGS N491; `.port/phase-2/MIRI_EXCEPTIONS.md`, "P7-W12 T6"). Three of its tests (`pagelist_teardown_after_clone_failure_returns_every_node`, `…_clone_from_failure_…`, `…_reset_…`) TIMEOUT in G6 and are being moved to G6c; `…_init_failure_…` passes in G6 (14 s). This does not discharge V28: a later full lane run does.
+**Note (P7-W12 T6, 2026-09-30):** T6 measured the Phase 7 tests one by one under G6 and moves the ones past its bound to G6c (NEW-FINDINGS N491; `.port/phase-2/MIRI_EXCEPTIONS.md`, "P7-W12 T6"). Three of its tests (`pagelist_teardown_after_clone_failure_returns_every_node`, `…_clone_from_failure_…`, `…_reset_…`) TIMEOUT in G6 and moved to G6c (they pass there under Stacked and Tree Borrows); `…_init_failure_…` passes in G6 (14 s). This does not discharge V28: a later full lane run does.
 
 ## V29. The P7-W5 T4 search-prepend Miri debt — **ENVIRONMENT-BLOCKED (time)** [P7-W5 T4, Ruling 49, 2026-09-29]
 
@@ -2601,4 +2601,4 @@ twice: once under Stacked Borrows (the default), and once under Tree Borrows by 
 
 **Discharged by:** the P7-W12 T2 Miri lane, together with V27 and V28.
 
-**Note (P7-W12 T6, 2026-09-30):** T6 measured the Phase 7 tests one by one under G6 and moves the ones past its bound to G6c (NEW-FINDINGS N491; `.port/phase-2/MIRI_EXCEPTIONS.md`, "P7-W12 T6"). The `search/screen` prepend test TIMEOUTs in G6 and is being moved to G6c. This does not discharge V29: a later full lane run does.
+**Note (P7-W12 T6, 2026-09-30):** T6 measured the Phase 7 tests one by one under G6 and moves the ones past its bound to G6c (NEW-FINDINGS N491; `.port/phase-2/MIRI_EXCEPTIONS.md`, "P7-W12 T6"). The `search/screen` prepend test TIMEOUTs in G6 and moved to G6c (it passes there under Stacked and Tree Borrows). This does not discharge V29: a later full lane run does.
