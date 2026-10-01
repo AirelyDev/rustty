@@ -2032,7 +2032,7 @@ return`), the `terminal.flags.visible` write under the renderer lock, and the
 unforced `queueIo(.visibility_report)`.
 
 **Verified elsewhere** (both executed, both with an observed-failing mutation):
-- vt: `rustty-vt` `stream_terminal::tests::visibility_reports` — mode 2033
+- vt: `rustty-vt` `stream_terminal::tests::effects::visibility_reports` — mode 2033
   exists, an explicit `CSI ? 998 n` answers without enabling it, ENABLING always
   emits (count assertion), DISABLING does not, and RIS PRESERVES
   `flags.visible`. Removing the RIS exemption makes it fail.

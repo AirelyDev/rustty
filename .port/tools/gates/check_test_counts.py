@@ -264,15 +264,15 @@ MAP = {
     "render":          ([f"{GH}/render.zig"], [f"{RS}/render.rs"], 0),
     "string_map":      ([f"{GH}/StringMap.zig"], [f"{RS}/string_map.rs"], 0),
     "screen_set":      ([f"{GH}/ScreenSet.zig"], [f"{RS}/screen_set.rs"], 0),
-    "formatter":       ([f"{GH}/formatter.zig"], [f"{RS}/formatter.rs"], 0),
+    "formatter":       ([f"{GH}/formatter.zig"], [f"{RS}/formatter.rs", f"{RS}/formatter/**/*.rs"], 0),
     "terminal":        ([f"{GH}/Terminal.zig"], [f"{RS}/terminal.rs"], 0),
-    "stream_terminal": ([f"{GH}/stream_terminal.zig"], [f"{RS}/stream_terminal.rs"], 0),  # apc now wired (font-decode mandatory, Stage A)
+    "stream_terminal": ([f"{GH}/stream_terminal.zig"], [f"{RS}/stream_terminal.rs", f"{RS}/stream_terminal/**/*.rs"], 0),  # apc now wired (font-decode mandatory, Stage A)
     # Stage A — apc multiplexer + glyph subprotocol (apc.zig + apc/glyph/{request,Glossary,execute,response}.zig).
     # Lives in rustty-vt and deps rustty-font DIRECTLY (glyf-decode mandatory, NOT a runtime hook).
     "apc":             ([f"{GH}/apc.zig", f"{GH}/apc/glyph/request.zig", f"{GH}/apc/glyph/Glossary.zig", f"{GH}/apc/glyph/execute.zig", f"{GH}/apc/glyph/response.zig"], [f"{RS}/apc/**/*.rs"], 0),
     "osc":             ([f"{GH}/osc.zig", f"{GH}/osc/encoding.zig", f"{GH}/osc/kitty_metadata.zig", f"{GH}/osc/parsers.zig"] + glob.glob(f"{GH}/osc/parsers/*.zig"), [f"{RS}/osc/**/*.rs"], 0),
     "parser":          ([f"{GH}/Parser.zig", f"{GH}/parse_table.zig"], [f"{RS}/parser.rs", f"{RS}/parse_table.rs"], 0),
-    "stream":          ([f"{GH}/stream.zig"], [f"{RS}/stream.rs"], 0),
+    "stream":          ([f"{GH}/stream.zig"], [f"{RS}/stream.rs", f"{RS}/stream/**/*.rs"], 0),
     "kitty":           ([f"{GH}/kitty.zig"] + glob.glob(f"{GH}/kitty/*.zig"), [f"{RS}/kitty/*.rs"], 0),
     "style":           ([f"{GH}/style.zig"], [f"{RS}/style.rs"], 0),
     "sgr":             ([f"{GH}/sgr.zig"], [f"{RS}/sgr.rs"], 0),
