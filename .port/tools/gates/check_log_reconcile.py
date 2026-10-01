@@ -907,6 +907,13 @@ def discover_emitters(sources):
     return emitters, defs, stubs
 
 
+def module_ancestors(path):
+    """The Rust 2018 module-root files above `path`: `a/foo/bar/x.rs` ->
+    [`a/foo/bar.rs`, `a/foo.rs`, `a.rs`] (a `foo.rs` + `foo/` split)."""
+    parts = path.split("/")
+    return ["/".join(parts[:i]) + ".rs" for i in range(len(parts) - 1, 0, -1)]
+
+
 def emission_sites(paths, sources, emitters, defs):
     """[(path, pos, line, what)] live emission sites across `paths`, with offsets.
 
@@ -920,7 +927,12 @@ def emission_sites(paths, sources, emitters, defs):
         code, nc = sources[path]
         # A DECLARED facade (LOG-ATTRIBUTION.tsv kind `facade`) is an emitter in its
         # own file only: its body is the sink, its call sites are the emissions.
+        # "Its own file" includes that file's child-module files (`foo.rs` ->
+        # `foo/**.rs`): a private helper in `foo.rs` is in scope there, and a
+        # file split (P7-W13) moves its callers into those children.
         local = {name for k, name, _d, _o, _c in defs[path] if k == "facade"}
+        for anc in module_ancestors(path):
+            local |= {name for k, name, _d, _o, _c in defs.get(anc, ()) if k == "facade"}
         spans = [
             (decl, bc) for k, name, decl, _bo, bc in defs[path]
             if name in emitters or k == "facade"
@@ -1808,12 +1820,13 @@ def arms_containing(portmap_row, port_file):
 #     is DEFINED in the named file's own arm (`application.rs` calling
 #     `gtk_version`'s `log_version`).
 #   * `facade` — function `name`, match `*`: `name` is a helper in `port_file`
-#     whose body holds the emission, so ITS CALL SITES in that file are the
-#     emissions and its body is not (what the gate already does for any `log_*`
-#     helper, for one that is not named `log_*`). Four reference sites that each
-#     say `unable to remove <what>` fold into `surface.rs`'s one
-#     `remove_source_id(id, what)`; counting the helper's body once reported
-#     three of them missing.
+#     whose body holds the emission, so ITS CALL SITES in that file (and in its
+#     child-module files, `foo.rs` -> `foo/**.rs`) are the emissions and its body
+#     is not (what the gate already does for any `log_*` helper, for one that is
+#     not named `log_*`). Four reference sites that each say `unable to remove
+#     <what>` fold into `surface.rs`'s one `remove_source_id(id, what)`; counting
+#     the helper's body once reported three of them missing. Since the P7-W13
+#     split its callers sit in `surface/imp.rs` and `surface/core_callbacks.rs`.
 ATTRIBUTION_KINDS = ("default-owner", "owner", "facade")
 ATTRIBUTION_DIRECTIVE = re.compile(r"^#!\s*attribution-cap\s+entries=(\d+)\s*$")
 ATTRIBUTION_COLS = ("kind", "oracle_file", "port_file", "function", "match", "reason")
@@ -4369,6 +4382,30 @@ def self_test():
                   run_fold("c/fold_stub.rs", [dict(FACADE, file="c/fold_stub.rs")]), 1))
     cases.append(("a facade naming a fn that does not exist is RED",
                   run_fold("c/fold.rs", [dict(FACADE, fn="gone")]), 1))
+    # A split moves the callers into the declaring file's child modules
+    # (`c/fold.rs` -> `c/fold/dispose.rs`); they are still the emissions there,
+    # but NOT in an unrelated file that happens to call a same-named fn.
+    rs["c/split.rs"] = (
+        'fn remove_id(id: u32, what: &str) {\n'
+        '    if !remove(id) { log::warn!(target: S, "unable to remove {what}"); }\n}\n'
+    )
+    rs["c/split/dispose.rs"] = (
+        'fn dispose() { remove_id(1, "timer"); remove_id(2, "idle source");'
+        ' remove_id(3, "reset source"); }\n'
+    )
+    rs["c/other.rs"] = rs["c/split/dispose.rs"]
+    SPLIT = dict(FACADE, file="c/split.rs")
+
+    def run_split(child):
+        pm = [{"oracle": "src/fold.zig", "excluded": False,
+               "arms": [["c/split.rs", child]], "allowance": "0", "bypass_cap": "0",
+               "reason": "", "lineno": 0}]
+        return verdict(pm, {}, zt, rt, attribution=[SPLIT], attribution_cap=1)[0]
+
+    cases.append(("a facade's call sites in its child-module file are the emissions",
+                  run_split("c/split/dispose.rs"), 0))
+    cases.append(("...but not in a file outside its module",
+                  run_split("c/other.rs"), 1))
     at_header = "kind\toracle_file\tport_file\tfunction\tmatch\treason\n"
     for name, text, want in (
         ("a well-formed LOG-ATTRIBUTION.tsv loads",

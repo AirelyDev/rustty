@@ -97,7 +97,7 @@ gtk-v4_20 = ["gtk", "gtk-v4_16", "gtk4/v4_20"]
 # 0)` fold ("if you compile Ghostty on an older GTK version, you won't get
 # blur", `surface.zig:2033-2037`). Turning this on raises the compile-time
 # ceiling and lights the `#[cfg(feature = "gtk-v4_22")]` blur push in
-# `class/surface.rs`; that push STILL carries the live runtime
+# `class/surface/imp.rs`; that push STILL carries the live runtime
 # `gtk_version::runtime_until(4, 23, 3)` guard, so it self-disables at runtime
 # on older loaded GTK. Same DEFERRALS row as `gtk-v4_20`.
 gtk-v4_22 = ["gtk", "gtk-v4_20", "gtk4/v4_22"]
