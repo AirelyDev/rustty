@@ -507,7 +507,7 @@ MAP = {
     "cfg_fmt_formatter": ([f"{GHCFG}/formatter.zig"], [f"{RSCF}/formatter.rs", f"{RSCF}/writer.rs", f"{RSCF}/lib.rs"], 0),
     # rustty-input — the non-vt half of src/input/.
     # Binding.zig: 85 quoted tests (the keybind grammar trigger>action parse).
-    "input_binding":     ([f"{GHI}/Binding.zig"], [f"{RSI}/binding.rs"], 0),
+    "input_binding":     ([f"{GHI}/Binding.zig"], [f"{RSI}/binding.rs", f"{RSI}/binding/**/*.rs"], 0),
     # command.zig: 1 quoted test.
     "input_command":     ([f"{GHI}/command.zig"], [f"{RSI}/command.rs"], 0),
     # config.zig: 0 tests (OptionAsAlt enum only).
