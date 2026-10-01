@@ -70,6 +70,10 @@ fn bash44_required_from(value: Option<&std::ffi::OsStr>) -> bool {
 
 // PORT NOTE (N484): Unix only; see the module header.
 #[cfg(unix)]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-extra, P7-W12 T6): `stat` is forbidden under Miri isolation (measured: `script.is_file()` stops the test in 1 s), and the test's whole purpose is then to spawn the shell script as a child process, which Miri cannot execute. Runs natively in ci.sh's HARD `cargo test --workspace`; .port/phase-2/MIRI_EXCEPTIONS.md, 'P7-W12 T6'."
+)]
 #[test]
 fn declare_ax_prompt_command_is_installed_and_reports_status_correctly() {
     let script: PathBuf = [

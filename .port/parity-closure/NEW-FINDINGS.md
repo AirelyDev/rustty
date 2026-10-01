@@ -10124,3 +10124,26 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **next**: drop the `GHOSTTY_H` override (the `--self-test` can build its fixture another way),
   report the missing header as BLOCKED, and add the header SHA-256 pin or `rustty_oracle_pin_status`,
   each with a negative control.
+
+## N491 — Phase 7 tests missed the G6-only Miri annotation: the Phase 7 briefs ran no Miri
+
+- **id**: N491. P7-W12 T6. **severity**: medium (gate G6 cannot finish; no product defect found so far).
+  **state**: OPEN (G6c measurements pending; the run stopped at the host's disk floor).
+- **finding**: the Phase 7 task briefs ran no Miri, so tests added since the Phase 7 base `284d59d62`
+  never got the per-test G6 triage that parity tail C-1 gave earlier waves. Four `rustty-vt` tests
+  run past G6's 1,200 s bound (debug assertions on, so `Page::assert_integrity` runs on nearly every
+  PageList mutation): `search::screen::tests::feed_after_complete_discovers_prepended_history_pages`
+  (W5.T4, `4f144156c`; 4.5+ hours in a G6 run, about 97% in `assert_integrity`, O(rows²) as a
+  10-column page fills one newline at a time) and three P7-W1 T5 teardown tests
+  (`pagelist_teardown_after_clone_failure_returns_every_node`, `…_clone_from_failure_…`,
+  `…_reset_…`). Their siblings carry the WS19 T6 `cfg_attr(all(miri, debug_assertions), ignore)`
+  form; these do not. Separately, `rustty-extra`'s
+  `bash_shell_integration_gate::declare_ax_prompt_command_is_installed_and_reports_status_correctly`
+  (P7-W11) fails under G6 Miri at once: `stat` is forbidden under isolation, and the test spawns a
+  shell script, which Miri cannot execute.
+- **fix so far**: the bash-gate test carries a C-1-style isolation exception
+  (`cfg_attr(miri, ignore = "MIRI EXCEPTION (rustty-extra, P7-W12 T6): …")`). The four TIMEOUTs are
+  NOT annotated yet: each must first pass in G6c conditions under Stacked Borrows and Tree Borrows.
+- **evidence**: `.port/phase-2/MIRI_EXCEPTIONS.md`, "P7-W12 T6".
+- **next**: run the four in G6c (SB and TB); annotate each that passes with the sibling's exact
+  G6-only form, or report a Miri failure as a real finding; finish the G6 queue; then close.
