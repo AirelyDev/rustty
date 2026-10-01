@@ -133,7 +133,7 @@ the pagelist module's bounded Miri lane (as part of proving I1) surfaced a
 real, reproducible Stacked-Borrows violation in that test, confirmed
 deterministic in isolation
 (`cargo +nightly miri test -p rustty-vt -- --exact
-pagelist::tests::pagelist_decommit_pool_item_zeroes_the_dirty_region
+pagelist::tests::compress::pagelist_decommit_pool_item_zeroes_the_dirty_region
 --test-threads=1`):
 
 ```
