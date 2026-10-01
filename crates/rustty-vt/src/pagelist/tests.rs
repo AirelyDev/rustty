@@ -19392,12 +19392,43 @@ unsafe impl allocator_api2::alloc::Allocator for FixedBufferAllocator {
 }
 
 /// `std.mem.allEqual(u8, bytes, value)` over `len` raw bytes.
+///
+/// Compares in `CHUNK`-byte pieces against a pre-filled buffer with slice
+/// `==` (one `memcmp` per chunk), not byte by byte: a byte loop over the
+/// multi-megabyte pool buffer is intractable under Miri (N493).
 fn raw_all_equal(ptr: *const u8, len: usize, value: u8) -> bool {
-    // SAFETY: the callers pass live, initialized pool items or buffers; the
-    // shared view ends before the bytes are next written.
-    unsafe { core::slice::from_raw_parts(ptr, len) }
-        .iter()
-        .all(|&b| b == value)
+    const CHUNK: usize = 4096;
+    let want = [value; CHUNK];
+    let mut off = 0;
+    while off < len {
+        let n = CHUNK.min(len - off);
+        // SAFETY: the callers pass live, initialized pool items or buffers
+        // reached only through raw pointers (no live `&mut` aliases them);
+        // each shared view ends before the bytes are next written.
+        let got = unsafe { core::slice::from_raw_parts(ptr.add(off), n) };
+        if got != &want[..n] {
+            return false;
+        }
+        off += n;
+    }
+    true
+}
+
+/// `raw_all_equal` is true only when every byte matches: a difference in
+/// the middle, in the last byte, or in a partial tail chunk is caught.
+#[test]
+fn raw_all_equal_detects_a_differing_byte() {
+    let mut buf = vec![7u8; 10_000];
+    assert!(raw_all_equal(buf.as_ptr(), buf.len(), 7));
+    assert!(raw_all_equal(buf.as_ptr(), 0, 1));
+    assert!(!raw_all_equal(buf.as_ptr(), buf.len(), 8));
+    buf[5_000] = 0;
+    assert!(!raw_all_equal(buf.as_ptr(), buf.len(), 7));
+    buf[5_000] = 7;
+    let last = buf.len() - 1;
+    buf[last] = 0;
+    assert!(!raw_all_equal(buf.as_ptr(), buf.len(), 7));
+    assert!(raw_all_equal(buf.as_ptr(), last, 7));
 }
 
 /// PORTS: oracle@main PageList.zig

@@ -10171,3 +10171,25 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   their `rustty-vt-c` counterparts but never these `rustty-vt` ones. They pass in G6 (67 s, 20 s,
   12 s; their corpus writes one page under `cfg!(miri)`) and stay unannotated. No real Miri
   finding. Evidence: `.port/phase-2/MIRI_EXCEPTIONS.md`, "P7-W12 T6b".
+
+## N493 — a Phase 7 test helper compared memory byte by byte: intractable under Miri
+
+- **id**: N493. P7-W12 T8. **severity**: low (gate G6 could not finish one test; no product defect).
+  **state**: CLOSED 2026-10-01.
+- **found**: the lane D V28 run sat on `pagelist_memory_pool_never_touches_idle_page_memory`
+  (P7-W1, `32d6c4b51`) for over 30 minutes under G6. The test lays a sentinel over
+  `PAGE_PREHEAT * std_size()` bytes and calls `raw_all_equal` over the whole buffer. The helper ran
+  `slice.iter().all(|&b| b == value)`, a per-byte interpreter loop under Miri. The page integrity
+  check is not involved, so G6c would not have helped.
+- **fix**: `raw_all_equal` (`crates/rustty-vt/src/pagelist/tests.rs`) now compares 4,096-byte chunks
+  against a pre-filled buffer with slice `==` (one `memcmp` per chunk, which Miri runs natively).
+  Same semantics: true iff every byte in `[ptr, ptr+len)` equals `value`; the Zig reference comment
+  (`std.mem.allEqual`) stays. The temporary `&[u8]` per chunk is sound: the test holds only raw
+  pointers, and each view ends before the next write. New negative test
+  `raw_all_equal_detects_a_differing_byte` (middle byte, last byte, partial tail chunk, zero length).
+- **measured**: native pass. Miri G6 config (`cargo +nightly miri test -p rustty-vt --lib -- --exact`),
+  Stacked Borrows: test 0.83 s (26 s wall with the build). Tree Borrows
+  (`-Zmiri-tree-borrows`): test 0.81 s (15 s wall). Both clean, no warning.
+- **scan**: `page_tests.rs` compares page memory with slice `==` already. `pagelist/tests.rs` still
+  has `from_raw_parts(..).iter().all(|&b| b == 0)` checks on decommitted pool items (about lines
+  2718, 3306, 3506, 3566, 4820, 4831); they were not reported slow in the V28 run and are left alone.

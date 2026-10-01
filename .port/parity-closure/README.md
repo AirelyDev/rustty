@@ -178,6 +178,9 @@ committed records named here.
   annotation). **P7-W12 T6b** reopened and closed it again (one more missed Phase 7 test, now
   excepted in both lanes; three S7-6 tests measured and kept in G6); no new id. **Next free ids:
   UD376, N492, V30.**
+- **P7-W12 T8** (a byte-wise Phase 7 test helper under Miri) used N493 (CLOSED: `raw_all_equal`
+  compared byte by byte). N492 belongs to T7 and is not used here. **Next free ids: UD376, N494,
+  V30.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.
