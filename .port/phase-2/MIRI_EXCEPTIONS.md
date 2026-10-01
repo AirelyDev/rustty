@@ -2800,9 +2800,9 @@ takes at most 0.3 s, cargo overhead included: the integrity walks are the cost.
 | `pagelist::tests::pagelist_set_max_lines_prunes_immediately_and_can_be_raised` | 4.96 s | 3 s |
 | `render::tests::incremental_updates_match_full_rebuild` | 0.30 s | 135 s |
 | `render::tests::incremental_updates_match_full_rebuild_with_overscan` | 0.3 s | 92 s (P7-W3 T1, 2026-09-29: the same 300-round body with a `{above 2, below 1}` request) |
-| `screen::tests::screen_scroll_above_hyperlink_dense_row_to_existing_page` | 16.40 s | 28 s |
-| `screen::tests::screen_scroll_above_hyperlink_dense_row_to_fresh_page` | 16.47 s | 26 s |
-| `screen::tests::screen_scrollback_bytes_zero_none_and_finite_are_distinct` | 32.70 s | 20 s |
+| `screen::tests::scroll::screen_scroll_above_hyperlink_dense_row_to_existing_page` | 16.40 s | 28 s |
+| `screen::tests::scroll::screen_scroll_above_hyperlink_dense_row_to_fresh_page` | 16.47 s | 26 s |
+| `screen::tests::basic::screen_scrollback_bytes_zero_none_and_finite_are_distinct` | 32.70 s | 20 s |
 | `snapshot::screen::tests::screen_encodes_the_minimal_complete_page_active_suffix` | 0.63 s | 18 s |
 | `terminal::tests::terminal_deleteLines_hyperlink_dense_row_crosses_page_boundary` | 20.33 s | 23 s |
 | `terminal::tests::terminal_insertLines_hyperlink_dense_row_crosses_page_boundary` | 20.49 s | 19 s |
@@ -2835,8 +2835,8 @@ The cost of the ud80/ud131 and compression members was not profiled further (UNV
 | `pagelist::tests::ud131_erase_row_loop_full_live_set_degrades_new_style_to_default` | 1.45 s |
 | `pagelist::tests::ud80_erase_row_into_a_page_full_of_orphaned_pinned_styles_reclaims_them` | 0.41 s |
 | `render::tests::render_state_allocation_failure_sweep` | 0.39 s |
-| `screen::tests::ud131_clone_partial_row_loop_degrades_only_new_styles_and_grows_the_other_dimensions` | 4.01 s |
-| `screen::tests::ud131_clone_partial_row_loop_full_live_set_degrades_new_style_to_default` | 1.46 s |
+| `screen::tests::upstream_defects::ud131_clone_partial_row_loop_degrades_only_new_styles_and_grows_the_other_dimensions` | 4.01 s |
+| `screen::tests::upstream_defects::ud131_clone_partial_row_loop_full_live_set_degrades_new_style_to_default` | 1.46 s |
 | `snapshot::history::tests::history_encodes_newest_first_and_restores_complete_history` | 1.20 s |
 | `snapshot::page::tests::decode_sparse_page_rejects_every_truncation` | 0.15 s |
 | `terminal::tests::terminal_compress_incremental_restarts_after_complete` | 3.66 s |

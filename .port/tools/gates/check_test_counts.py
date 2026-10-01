@@ -258,7 +258,7 @@ MAP = {
     "vaxis":           ([f"{GHVAXIS}/Cell.zig", f"{GHVAXIS}/Key.zig", f"{GHVAXIS}/Mouse.zig", f"{GHVAXIS}/GraphemeCache.zig", f"{GHVAXIS}/Image.zig", f"{GHVAXIS}/gwidth.zig", f"{GHVAXIS}/unicode.zig", f"{GHVAXIS}/Screen.zig", f"{GHVAXIS}/InternalScreen.zig", f"{GHVAXIS}/Window.zig", f"{GHVAXIS}/Parser.zig", f"{GHVAXIS}/event.zig", f"{GHVAXIS}/ctlseqs.zig", f"{GHVAXIS}/queue.zig", f"{GHVAXIS}/tty.zig", f"{GHVAXIS}/Loop.zig", f"{GHVAXIS}/widgets/TextInput.zig"] + [f"{GHVAXIS}/{f}" for f in VAXIS_VXFW_FILES], [f"{RSVAXIS}/*.rs", f"{RSVAXIS}/widgets/*.rs", f"{RSVAXIS}/vxfw/*.rs"], VAXIS_APC),
     "pagelist":        ([f"{GH}/PageList.zig"], [f"{RS}/pagelist/*.rs"], 0),
     "page":            ([f"{GH}/page.zig"], [f"{RS}/page_impl.rs", f"{RS}/page_tests.rs", f"{RS}/page.rs"], 0),
-    "screen":          ([f"{GH}/Screen.zig"], [f"{RS}/screen.rs"], 0),
+    "screen":          ([f"{GH}/Screen.zig"], [f"{RS}/screen.rs", f"{RS}/screen/**/*.rs"], 0),
     "selection":       ([f"{GH}/Selection.zig"], [f"{RS}/selection.rs"], 0),
     "selection_gesture":([f"{GH}/SelectionGesture.zig"], [f"{RS}/selection_gesture.rs"], 0),
     "render":          ([f"{GH}/render.zig"], [f"{RS}/render.rs"], 0),
