@@ -704,7 +704,7 @@ MAP = {
     # file. embedded.zig's `CAPI` block is split into the apprt-c top-sink crate:
     # the extern structs land in capi.rs (E5), the `ghostty_*` exports in E6..E10
     # (glob `{RSAPPRTC}/**/*.rs`). rust >= zig always holds (0-test reference).
-    "apprt_embedded":    ([f"{GHAP}/embedded.zig"], [f"{RSAPPRT}/embedded.rs", f"{RSAPPRTC}/**/*.rs"], 0),
+    "apprt_embedded":    ([f"{GHAP}/embedded.zig"], [f"{RSAPPRT}/embedded.rs", f"{RSAPPRT}/embedded/*.rs", f"{RSAPPRTC}/**/*.rs"], 0),
     # rustty-crash (integration-tier stage 1). dir.zig: no test{} -> zig=0.
     "crash_dir":         ([f"{GHCR}/dir.zig"], [f"{RSCR}/dir.rs"], 0),
     # sentry.zig: no test{} -> zig=0; the pkg/sentry binding package files are

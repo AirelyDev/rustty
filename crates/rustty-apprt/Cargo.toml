@@ -81,7 +81,7 @@ flatpak = ["gtk", "rustty-termio/flatpak"]
 # in `gtk_version.atLeast` collapses the branch, `gtk_version.zig:58-62`). Turning
 # this on selects gtk4-rs's `v4_20` API surface (raising the compile-time CEILING
 # so `gtk4::InterfaceColorScheme` exists) and lights the `#[cfg(feature =
-# "gtk-v4_20")]` push in `class/application.rs`; that push STILL carries the live
+# "gtk-v4_20")]` push in `class/application/imp.rs`; that push STILL carries the live
 # runtime `gtk_version::at_least(4, 20, 0)` guard, so it self-disables at runtime
 # on a < 4.20 shared library. Recorded in the `L5 GTK baseline pin` DEFERRALS row.
 # `gtk-v4_20` implies `gtk-v4_16`: a build box with >= 4.20 headers also has the
@@ -97,7 +97,7 @@ gtk-v4_20 = ["gtk", "gtk-v4_16", "gtk4/v4_20"]
 # 0)` fold ("if you compile Ghostty on an older GTK version, you won't get
 # blur", `surface.zig:2033-2037`). Turning this on raises the compile-time
 # ceiling and lights the `#[cfg(feature = "gtk-v4_22")]` blur push in
-# `class/surface.rs`; that push STILL carries the live runtime
+# `class/surface/imp.rs`; that push STILL carries the live runtime
 # `gtk_version::runtime_until(4, 23, 3)` guard, so it self-disables at runtime
 # on older loaded GTK. Same DEFERRALS row as `gtk-v4_20`.
 gtk-v4_22 = ["gtk", "gtk-v4_20", "gtk4/v4_22"]
@@ -112,7 +112,7 @@ gtk-v4_22 = ["gtk", "gtk-v4_20", "gtk4/v4_22"]
 # gtk_version.atLeast(4, 16, 0)) bytes: {...}` arm at `application.zig:1261`).
 # Turning this on selects gtk4-rs's `v4_16` API surface (raising the compile-time
 # CEILING so `CssSection::bytes` exists) and lights the `#[cfg(feature =
-# "gtk-v4_16")]` byte-dump in `class/application.rs`; that dump STILL carries the
+# "gtk-v4_16")]` byte-dump in `class/application/imp.rs`; that dump STILL carries the
 # live runtime `gtk_version::at_least(4, 16, 0)` guard, so it self-disables at
 # runtime on a < 4.16 shared library. Recorded in the same `L5 GTK baseline pin`
 # DEFERRALS row as `gtk-v4_20`.
@@ -241,7 +241,7 @@ rustty-xev = { workspace = true }
 # device/command_buffer/desc release balances) are Darwin-only, exactly like
 # rustty-renderer/rustty-apprt-c/rustty-os's own objc2 deps below. Darwin means
 # `macos || ios` (the reference's `isDarwin()`); task 20 (S46-F4) widened this from
-# macOS alone, with the Metal gates in `src/embedded.rs` that use it.
+# macOS alone, with the Metal gates in `src/embedded/inspector.rs` that use it.
 # The `dependency fontconfig=...` log line's library, kept off Windows as
 # `rustty-font-shaper`'s own fontconfig edge is: the reference's Windows
 # default backend is `freetype_windows` ("Avoid fontconfig on Windows because
