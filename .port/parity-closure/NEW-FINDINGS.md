@@ -10131,7 +10131,8 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   **state**: CLOSED 2026-09-30 (P7-W12 T2 lane D2): G6c `--self-test` GREEN (both arms; arm 1 took
   1,926 s, mostly libtest filtering under Miri), native re-runs GREEN (`pagelist_teardown_after`
   7/7, `feed_after_complete_discovers_prepended_history_pages` 1/1, `bash_shell_integration_gate`
-  3/3). Logs: `.superpowers/p7/laneD2-logs/s1*.log`.
+  3/3). Logs: `.superpowers/p7/laneD2-logs/s1*.log`. REOPENED and CLOSED again 2026-09-30 by
+  P7-W12 T6b (see "follow-up" below).
 - **finding**: the Phase 7 task briefs ran no Miri, so tests added since the Phase 7 base `284d59d62`
   never got the per-test G6 triage that parity tail C-1 gave earlier waves. Four `rustty-vt` tests
   run past G6's 1,200 s bound (debug assertions on, so `Page::assert_integrity` runs on nearly every
@@ -10150,3 +10151,23 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   carry the sibling's exact G6-only form, so they run in G6c. No real Miri finding. Five more
   page-filling Phase 7 tests were measured in G6 (10–113 s) and stay there.
 - **evidence**: `.port/phase-2/MIRI_EXCEPTIONS.md`, "P7-W12 T6".
+- **follow-up (P7-W12 T6b, 2026-09-30; REOPENED, then CLOSED)**: the V29 re-run (Miri on
+  `search::`) stalled for 34 minutes on
+  `search::terminal::tests::feed_after_complete_discovers_prepended_snapshot_history` (P7-W5 T4,
+  `4f144156c`), which T6's inventory missed. The inventory found test bodies by counting braces per
+  line, comments included; in `search/terminal.rs` the Zig-reference comment
+  `// while (search.status() != .complete) {` in `starts_feed_required_and_runs_to_complete` has no
+  commented `// }` of its own, so the scanner took the rest of the file as that test's body and
+  gave every later test in it no row. Method this time: a full native timing of every `rustty-vt`
+  lib test (3,313, one process each, debug build), which does not parse source. Exactly four
+  unannotated tests take over 0.5 s. The missed Phase 7 test TIMEOUTs at 1,200 s in G6 and in G6c
+  under both Stacked and Tree Borrows, so it takes the plain both-lanes form on the 4-criterion basis
+  (native 15 s and ASan green; covered in Miri by its `search/screen.rs` sibling in G6c,
+  `snapshot::codec::tests::incremental_decode_applies_history_below_live_pty_output` in G6 and
+  `starts_feed_required_and_runs_to_complete` in G6). The other three are pre-Phase-7 parity-tail
+  S7-6 tests (`b9b72bd23`): `terminal_search_allocation_failure_sweep`,
+  `terminal_search_terminal_charged_allocation_failure_sweep` and
+  `terminal_search_internals_route_through_the_allocator_handle`. Parity tail C-1's triage measured
+  their `rustty-vt-c` counterparts but never these `rustty-vt` ones. They pass in G6 (67 s, 20 s,
+  12 s; their corpus writes one page under `cfg!(miri)`) and stay unannotated. No real Miri
+  finding. Evidence: `.port/phase-2/MIRI_EXCEPTIONS.md`, "P7-W12 T6b".
