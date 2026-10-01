@@ -273,7 +273,7 @@ MAP = {
     "osc":             ([f"{GH}/osc.zig", f"{GH}/osc/encoding.zig", f"{GH}/osc/kitty_metadata.zig", f"{GH}/osc/parsers.zig"] + glob.glob(f"{GH}/osc/parsers/*.zig"), [f"{RS}/osc/**/*.rs"], 0),
     "parser":          ([f"{GH}/Parser.zig", f"{GH}/parse_table.zig"], [f"{RS}/parser.rs", f"{RS}/parse_table.rs"], 0),
     "stream":          ([f"{GH}/stream.zig"], [f"{RS}/stream.rs"], 0),
-    "kitty":           ([f"{GH}/kitty.zig"] + glob.glob(f"{GH}/kitty/*.zig"), [f"{RS}/kitty/*.rs"], 0),
+    "kitty":           ([f"{GH}/kitty.zig"] + glob.glob(f"{GH}/kitty/*.zig"), [f"{RS}/kitty/**/*.rs"], 0),
     "style":           ([f"{GH}/style.zig"], [f"{RS}/style.rs"], 0),
     "sgr":             ([f"{GH}/sgr.zig"], [f"{RS}/sgr.rs"], 0),
     "color":           ([f"{GH}/color.zig"], [f"{RS}/color.rs"], 0),
