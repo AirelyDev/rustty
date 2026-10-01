@@ -8,7 +8,7 @@
 //! Every line/comment/test{} of BOTH mapped reference files is ported (R1):
 //! `formatter.zig` in `formatter.rs` here, and `config/key.zig` — the `Key`
 //! enum, the `Value` fn and its `test "Value"` — in
-//! `rustty-config/src/config_struct.rs`, next to the `Config` struct they
+//! `rustty-config/src/config_struct/key.rs`, next to the `Config` struct they
 //! reflect over (R4: `formatter.zig`'s `key.zig` import names `Key` only on the
 //! import line — it is DEAD code in this module — so `Key` is not pulled in
 //! here, keeping this crate a near-leaf under the acyclicity gate). (CORRECTION,
@@ -16,7 +16,7 @@
 //! was ported with `Config`.)
 //!
 //! Every gate examines both files: `_gatelib.RELOCATIONS` names key.zig's three
-//! items inside `config_struct.rs` (`Key`, `value_type`, the `key_tests`
+//! items inside `config_struct/key.rs` (`Key`, `value_type`, the `key_tests`
 //! module), so G1/G2/G3/G3b/D3 scan exactly those items as this crate's port,
 //! and nothing else of that file. (Status `in progress` -> `done`, 2026-09-24,
 //! parity tail S-8c, once the relocation support landed and every gate's

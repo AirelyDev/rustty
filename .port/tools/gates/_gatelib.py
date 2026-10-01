@@ -301,10 +301,11 @@ RELOCATIONS = {
     # config/key.zig's `Key` enum and `Value` fn are ported with the `Config`
     # struct they reflect over (rustty-cfg-fmt stays a near-leaf, R4 break #6).
     # Only key.zig's three items count: `Key`, `value_type` (the `Value` port)
-    # and the `test "Value"` module — never the rest of config_struct.rs, which
-    # ports config/Config.zig for the `config` crate.
+    # and the `test "Value"` module — never the rest of config_struct/key.rs
+    # (split out of config_struct.rs by P7-W13 F), which ports config/Config.zig
+    # for the `config` crate.
     "cfg-fmt": (
-        {"path": "crates/rustty-config/src/config_struct.rs",
+        {"path": "crates/rustty-config/src/config_struct/key.rs",
          "items": (r"^pub enum Key\b", r"^pub fn value_type\b",
                    r"^mod key_tests\b")},
     ),
