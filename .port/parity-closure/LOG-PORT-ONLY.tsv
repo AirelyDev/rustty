@@ -1,7 +1,9 @@
 # LOG-PORT-ONLY.tsv - port log emissions with NO reference counterpart, subtracted from the port count.
 #
-# Read .port/tools/gates/check_log_reconcile.py first; this file is only data.
 #
+#
+#
+# Read .port/tools/gates/check_log_reconcile.py first; this file is only data.
 # WHY (NEW-FINDINGS.md N81). G-LOGFILE counts a reference file's live `log.*` sites against the
 # live emissions of the Rust files declared to port it, with deficit = max(0, reference - port).
 # A port emission with no reference counterpart is counted anyway, and because a surplus is clamped
@@ -10,7 +12,6 @@
 # port-only R13 degrade warning, and deleting the genuinely ported `PageList.zig:775` site left the
 # gate GREEN. Every row here is subtracted from the port count of EVERY portmap arm that contains its
 # port file, before any comparison. A declaration can only make the count stricter.
-#
 # oracle_file   the reference file this emission would otherwise be credited to. Its portmap arms
 #               MUST contain port_file, or the row is RED.
 # port_file     the Rust file holding the emission.
@@ -30,7 +31,6 @@
 #               drops it) while the port compiles its fn; VERIFIED: the match must be the
 #               message of a test-only site of oracle_file, or the row is RED.
 # reason        mandatory. A declaration with no reason is RED.
-#
 # Every row must resolve to EXACTLY ONE live production emission: none is RED (stale), more than one
 # is RED (ambiguous), two rows selecting one emission is RED. The row count is capped, two-way:
 # more rows than the budget is RED, fewer is RED (tighten it in the commit that removed a row). A
@@ -71,9 +71,9 @@ src/terminal/stream.zig	crates/rustty-vt/src/stream/csi_dispatch.rs	csi_dispatch
 src/terminal/stream.zig	crates/rustty-vt/src/stream/dispatch.rs	osc_dispatch	"OSC 1 (change icon) received and ignored	expansion	Inlined `logUnsupportedOnce` call (stream.zig:2611); an extra copy of the :3076 site.
 src/terminal/stream.zig	crates/rustty-vt/src/stream/dispatch.rs	esc_dispatch#1	"unimplemented ESC action:	expansion	Inlined `logUnsupportedOnce` call (stream.zig:2815); an extra copy of the :3076 site.
 src/terminal/stream.zig	crates/rustty-vt/src/stream/dispatch.rs	esc_dispatch#2	"unimplemented ESC action:	expansion	Inlined `logUnsupportedOnce` call (stream.zig:3013); an extra copy of the :3076 site.
-src/termio/Exec.zig	crates/rustty-termio/src/exec.rs	start	"error.BadPathName"	expansion	Exec.zig:984's one `cannot access cwd, ignoring` site. The port has three copies: one in each of the two mutually exclusive `start` arms, plus the `error.BadPathName` arm task R13-P added (N50) for the path Zig's `pathToPosix` rejects. The first copy stays counted.
-src/termio/Exec.zig	crates/rustty-termio/src/exec.rs	start#2	"cannot access cwd, ignoring: {}", std::io::Error::last_os_error()	expansion	The second-arm copy of Exec.zig:984 (see the error.BadPathName row).
-src/termio/Exec.zig	crates/rustty-termio/src/exec.rs	start#2	"started subcommand path=	expansion	Exec.zig:1080's one site, written once in each of the two mutually exclusive `start` arms (the row's own reason, task-14e-1). The first copy stays counted.
+src/termio/Exec.zig	crates/rustty-termio/src/exec/subprocess.rs	start	"error.BadPathName"	expansion	Exec.zig:984's one `cannot access cwd, ignoring` site. The port has three copies: one in each of the two mutually exclusive `start` arms, plus the `error.BadPathName` arm task R13-P added (N50) for the path Zig's `pathToPosix` rejects. The first copy stays counted.
+src/termio/Exec.zig	crates/rustty-termio/src/exec/subprocess.rs	start#2	"cannot access cwd, ignoring: {}", std::io::Error::last_os_error()	expansion	The second-arm copy of Exec.zig:984 (see the error.BadPathName row).
+src/termio/Exec.zig	crates/rustty-termio/src/exec/subprocess.rs	start#2	"started subcommand path=	expansion	Exec.zig:1080's one site, written once in each of the two mutually exclusive `start` arms (the row's own reason, task-14e-1). The first copy stays counted.
 src/terminal/tmux/viewer.zig	crates/rustty-vt/src/tmux/viewer.rs	next_command#2	"failed to process command output, becoming defunct"	expansion	viewer.zig:457 handles `.block_end` and `.block_err` in ONE inline switch prong; the port writes one arm per variant (PORT NOTE at the BlockErr arm). The BlockEnd copy stays counted.
 src/terminal/c/render.zig	crates/rustty-vt-c/src/render.rs	get_multi	"render_state_get invalid data value=	expansion	render.zig:297 sits in the `inline fn getDispatch` shared by `get` and `get_multi`; the port writes the guard in each caller. The `get_checked` copy stays counted.
 src/terminal/c/render.zig	crates/rustty-vt-c/src/render.rs	row_cells_get_multi	"render_state_row_cells_get invalid data value=	expansion	render.zig:730 sits in the `inline fn rowCellsGetDispatch` shared by the single and multi getters; the `row_cells_get_checked` copy stays counted.

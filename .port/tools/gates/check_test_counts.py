@@ -507,7 +507,7 @@ MAP = {
     "cfg_fmt_formatter": ([f"{GHCFG}/formatter.zig"], [f"{RSCF}/formatter.rs", f"{RSCF}/writer.rs", f"{RSCF}/lib.rs"], 0),
     # rustty-input — the non-vt half of src/input/.
     # Binding.zig: 85 quoted tests (the keybind grammar trigger>action parse).
-    "input_binding":     ([f"{GHI}/Binding.zig"], [f"{RSI}/binding.rs"], 0),
+    "input_binding":     ([f"{GHI}/Binding.zig"], [f"{RSI}/binding.rs", f"{RSI}/binding/**/*.rs"], 0),
     # command.zig: 1 quoted test.
     "input_command":     ([f"{GHI}/command.zig"], [f"{RSI}/command.rs"], 0),
     # config.zig: 0 tests (OptionAsAlt enum only).
@@ -753,7 +753,7 @@ MAP = {
     # SkipZigTest cfg-gating — stage-3 Command / F3 DirectWrite precedent). The
     # xev event-loop wiring + Subprocess.start are D6-deferred with verbatim
     # bodies (0 tests on those paths — DEFERRALS.md).
-    "termio_exec":       ([f"{GHTIO}/Exec.zig"], [f"{RSTIO}/exec.rs"], 0),
+    "termio_exec":       ([f"{GHTIO}/Exec.zig"], [f"{RSTIO}/exec.rs", f"{RSTIO}/exec/**/*.rs"], 0),
     # shell_integration.zig (stage 4): 20 quoted + 1 named-unquoted behavioral
     # (`test detectShell {`) = 21 -> 21 live #[test] (byte-exact per-shell
     # string/env generation; R1 contract).
@@ -761,7 +761,7 @@ MAP = {
     # stream_handler.zig (stage 4): no test{} -> zig=0 (the StreamHandler
     # vt-Handler impl in stream_handler.rs; the cross-thread writer slow paths
     # are deferred verbatim — DEFERRALS.md).
-    "termio_stream_handler": ([f"{GHTIO}/stream_handler.zig"], [f"{RSTIO}/stream_handler.rs"], 0),
+    "termio_stream_handler": ([f"{GHTIO}/stream_handler.zig"], [f"{RSTIO}/stream_handler.rs", f"{RSTIO}/stream_handler/**/*.rs"], 0),
     # src/Command.zig (RELOCATED, break #13b — blueprint §1): Command lives in
     # rustty-termio, NOT rustty-core (core placement would cycle: termio/Exec
     # constructs+starts Command while core already deps termio). The zig glob

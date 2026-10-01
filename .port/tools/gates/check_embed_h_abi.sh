@@ -41,7 +41,7 @@
 #       by-value-return class is hard-gated here.
 #
 # Rust freezes live at their definition sites (grep '@embed-abi'):
-#   rustty_input_trigger_s   crates/rustty-input/src/binding.rs
+#   rustty_input_trigger_s   crates/rustty-input/src/binding/trigger.rs
 #   rustty_diagnostic_s      crates/rustty-config/src/c_api.rs
 #   rustty_info_s            crates/rustty-apprt-c/src/lib.rs
 #   rustty_string_s / _surface_config_s / _surface_size_s
