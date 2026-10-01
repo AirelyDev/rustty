@@ -1757,9 +1757,23 @@ mod tests {
             let live = || counting.live_bytes.get();
             let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
             let (base_calls, base_live) = (calls(), live());
+            // Under Miri the RGB swizzles and the alpha-blend composite (the
+            // vendored Wuffs C kernels) are foreign calls it cannot make
+            // (N494), so the Miri corpus sends RGBA pixels, whose "conversion"
+            // is a plain dupe through the same allocator, and composes with
+            // `X=1` (overwrite, a plain copy): every routing count below is
+            // unchanged.
+            let (transmit, frame): (&[u8], &[u8]) = if cfg!(miri) {
+                (
+                    b"a=t,f=32,s=1,v=1,i=1;/wAA/w==",
+                    b"a=f,i=1,f=32,s=1,v=1,X=1;AAD/AA==",
+                )
+            } else {
+                (b"a=t,f=24,s=1,v=1,i=1;/wAA", b"a=f,i=1,f=24,s=1,v=1;AAD/")
+            };
 
             // The command: its payload list grows once (4 base64 bytes).
-            let cmd = command::Parser::parse_string(alloc, b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            let cmd = command::Parser::parse_string(alloc, transmit).unwrap();
             assert_eq!(base_calls + 1, calls(), "the command payload list");
             assert_eq!(
                 Some((8, 0)),
@@ -1784,13 +1798,16 @@ mod tests {
             // An RGB animation frame over the RGB image: the frame's payload
             // list, its loading data, its RGBA conversion, the image's RGBA
             // conversion, the animation box, the canvas and the frame list.
-            let cmd = command::Parser::parse_string(alloc, b"a=f,i=1,f=24,s=1,v=1;AAD/").unwrap();
+            let cmd = command::Parser::parse_string(alloc, frame).unwrap();
             let c2 = calls();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+            // An RGBA frame over an RGBA image needs no conversion (the two
+            // RGBA conversions are native-only, N494).
+            let expected = if cfg!(miri) { 4 } else { 6 };
             assert_eq!(
-                c2 + 6,
+                c2 + expected,
                 calls(),
-                "loading data, 2 RGBA conversions, box, canvas, frames"
+                "loading data, 2 RGBA conversions (native only), box, canvas, frames"
             );
             cmd.deinit(alloc);
             {
@@ -3657,6 +3674,10 @@ mod tests {
 
     // test "kittygfx animation: new frame with default gap responds with frame number"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs RGB-to-RGBA swizzler and src-over kernel, which every a=f / a=c frame step runs (C FFI, R14, N494) -- foreign function; covered natively + by ASan"
+    )]
     fn kittygfx_animation_new_frame_with_default_gap_responds_with_frame_number() {
         let alloc = crate::alloc::Global;
 
@@ -3705,6 +3726,10 @@ mod tests {
 
     // test "kittygfx animation: frame gap normalization on create"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs RGB-to-RGBA swizzler and src-over kernel, which every a=f / a=c frame step runs (C FFI, R14, N494) -- foreign function; covered natively + by ASan"
+    )]
     fn kittygfx_animation_frame_gap_normalization_on_create() {
         let alloc = crate::alloc::Global;
 
@@ -3739,6 +3764,10 @@ mod tests {
 
     // test "kittygfx animation: background fill and offset composition"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs RGB-to-RGBA swizzler and src-over kernel, which every a=f / a=c frame step runs (C FFI, R14, N494) -- foreign function; covered natively + by ASan"
+    )]
     fn kittygfx_animation_background_fill_and_offset_composition() {
         let alloc = crate::alloc::Global;
 
@@ -3782,6 +3811,10 @@ mod tests {
 
     // test "kittygfx animation: create from base frame with overwrite"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs RGB-to-RGBA swizzler and src-over kernel, which every a=f / a=c frame step runs (C FFI, R14, N494) -- foreign function; covered natively + by ASan"
+    )]
     fn kittygfx_animation_create_from_base_frame_with_overwrite() {
         let alloc = crate::alloc::Global;
 
@@ -3820,6 +3853,10 @@ mod tests {
 
     // test "kittygfx animation: alpha blend composes over base frame"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs RGB-to-RGBA swizzler and src-over kernel, which every a=f / a=c frame step runs (C FFI, R14, N494) -- foreign function; covered natively + by ASan"
+    )]
     fn kittygfx_animation_alpha_blend_composes_over_base_frame() {
         let alloc = crate::alloc::Global;
 
@@ -3868,6 +3905,10 @@ mod tests {
 
     // test "kittygfx animation: edit root frame bumps generation"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs RGB-to-RGBA swizzler and src-over kernel, which every a=f / a=c frame step runs (C FFI, R14, N494) -- foreign function; covered natively + by ASan"
+    )]
     fn kittygfx_animation_edit_root_frame_bumps_generation() {
         let alloc = crate::alloc::Global;
 
@@ -3902,6 +3943,10 @@ mod tests {
 
     // test "kittygfx animation: edit frame gap without data change"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs RGB-to-RGBA swizzler and src-over kernel, which every a=f / a=c frame step runs (C FFI, R14, N494) -- foreign function; covered natively + by ASan"
+    )]
     fn kittygfx_animation_edit_frame_gap_without_data_change() {
         let alloc = crate::alloc::Global;
 
@@ -3966,6 +4011,10 @@ mod tests {
 
     // test "kittygfx animation: frame errors"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs RGB-to-RGBA swizzler and src-over kernel, which every a=f / a=c frame step runs (C FFI, R14, N494) -- foreign function; covered natively + by ASan"
+    )]
     fn kittygfx_animation_frame_errors() {
         let alloc = crate::alloc::Global;
 
@@ -4012,6 +4061,10 @@ mod tests {
 
     // test "kittygfx animation: excess frame data is truncated"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs RGB-to-RGBA swizzler and src-over kernel, which every a=f / a=c frame step runs (C FFI, R14, N494) -- foreign function; covered natively + by ASan"
+    )]
     fn kittygfx_animation_excess_frame_data_is_truncated() {
         let alloc = crate::alloc::Global;
 
@@ -4043,6 +4096,10 @@ mod tests {
 
     // test "kittygfx animation: chunked frame transmission"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs RGB-to-RGBA swizzler and src-over kernel, which every a=f / a=c frame step runs (C FFI, R14, N494) -- foreign function; covered natively + by ASan"
+    )]
     fn kittygfx_animation_chunked_frame_transmission() {
         let alloc = crate::alloc::Global;
 
@@ -4101,6 +4158,10 @@ mod tests {
 
     // test "kittygfx animation: chunked frame continuation without a=f"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs RGB-to-RGBA swizzler and src-over kernel, which every a=f / a=c frame step runs (C FFI, R14, N494) -- foreign function; covered natively + by ASan"
+    )]
     fn kittygfx_animation_chunked_frame_continuation_without_a_f() {
         let alloc = crate::alloc::Global;
 
@@ -4147,6 +4208,10 @@ mod tests {
 
     // test "kittygfx animation: control command sets gap current state and loops"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs RGB-to-RGBA swizzler and src-over kernel, which every a=f / a=c frame step runs (C FFI, R14, N494) -- foreign function; covered natively + by ASan"
+    )]
     fn kittygfx_animation_control_command_sets_gap_current_state_and_loops() {
         let alloc = crate::alloc::Global;
 
@@ -4244,6 +4309,10 @@ mod tests {
 
     // test "kittygfx animation: compose frames"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs RGB-to-RGBA swizzler and src-over kernel, which every a=f / a=c frame step runs (C FFI, R14, N494) -- foreign function; covered natively + by ASan"
+    )]
     fn kittygfx_animation_compose_frames() {
         let alloc = crate::alloc::Global;
 
@@ -4356,6 +4425,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs RGB-to-RGBA swizzler and src-over kernel, which every a=f / a=c frame step runs (C FFI, R14, N494) -- foreign function; covered natively + by ASan"
+    )]
     fn kittygfx_animation_frame_rgba_conversion_oom_is_enomem() {
         // An RGB frame over an RGB image: the frame's own conversion and the
         // image's conversion (`convertImageToRgba`).
@@ -4371,6 +4444,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs RGB-to-RGBA swizzler and src-over kernel, which every a=f / a=c frame step runs (C FFI, R14, N494) -- foreign function; covered natively + by ASan"
+    )]
     fn kittygfx_animation_compose_rgba_conversion_oom_is_enomem() {
         rgba_oom_sweep(
             &[b"a=t,f=24,s=2,v=1,i=1;/wAAAAD/"],
@@ -4380,6 +4457,10 @@ mod tests {
 
     // test "kittygfx animation: compose current frame bumps generation"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs RGB-to-RGBA swizzler and src-over kernel, which every a=f / a=c frame step runs (C FFI, R14, N494) -- foreign function; covered natively + by ASan"
+    )]
     fn kittygfx_animation_compose_current_frame_bumps_generation() {
         let alloc = crate::alloc::Global;
 
@@ -4416,6 +4497,10 @@ mod tests {
 
     // test "kittygfx animation: compose errors"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs RGB-to-RGBA swizzler and src-over kernel, which every a=f / a=c frame step runs (C FFI, R14, N494) -- foreign function; covered natively + by ASan"
+    )]
     fn kittygfx_animation_compose_errors() {
         let alloc = crate::alloc::Global;
 
@@ -4458,6 +4543,10 @@ mod tests {
 
     // test "kittygfx animation: delete frame promotes root and fixes current"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs RGB-to-RGBA swizzler and src-over kernel, which every a=f / a=c frame step runs (C FFI, R14, N494) -- foreign function; covered natively + by ASan"
+    )]
     fn kittygfx_animation_delete_frame_promotes_root_and_fixes_current() {
         let alloc = crate::alloc::Global;
 
@@ -4563,6 +4652,10 @@ mod tests {
 
     // test "kittygfx animation: deleting current frame refreshes display"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs RGB-to-RGBA swizzler and src-over kernel, which every a=f / a=c frame step runs (C FFI, R14, N494) -- foreign function; covered natively + by ASan"
+    )]
     fn kittygfx_animation_deleting_current_frame_refreshes_display() {
         let alloc = crate::alloc::Global;
 
@@ -4609,6 +4702,10 @@ mod tests {
 
     // test "kittygfx animation: retransmitting base image resets animation"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs RGB-to-RGBA swizzler and src-over kernel, which every a=f / a=c frame step runs (C FFI, R14, N494) -- foreign function; covered natively + by ASan"
+    )]
     fn kittygfx_animation_retransmitting_base_image_resets_animation() {
         let alloc = crate::alloc::Global;
 
@@ -4648,6 +4745,10 @@ mod tests {
 
     // test "kittygfx animation: control negative gap makes frame gapless"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs RGB-to-RGBA swizzler and src-over kernel, which every a=f / a=c frame step runs (C FFI, R14, N494) -- foreign function; covered natively + by ASan"
+    )]
     fn kittygfx_animation_control_negative_gap_makes_frame_gapless() {
         let alloc = crate::alloc::Global;
 
