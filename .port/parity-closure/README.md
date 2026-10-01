@@ -181,6 +181,9 @@ committed records named here.
 - **P7-W12 T8** (a byte-wise Phase 7 test helper under Miri) used N493 (CLOSED: `raw_all_equal`
   compared byte by byte). N492 belongs to T7 and is not used here. **Next free ids: UD376, N494,
   V30.**
+- **P7-W12 T7** (Tree Borrows UB in the `rustty-vt` search tests) used N492 (CLOSED: five tests
+  with test-side Tree Borrows UB, plus one Miri-ignored test with the same shape, all fixed with
+  the raw-root idiom; no production UB, so no UD). **Next free ids: UD376, N494, V30.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.
