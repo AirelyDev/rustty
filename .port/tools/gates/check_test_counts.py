@@ -908,7 +908,7 @@ MAP = {
     # BOTH candidate arms → rust=14 >= 4. NOTE dynamic.zig is comptime-elided on
     # macOS (§0, single candidate), so this row is only meaningful for the Linux
     # surface — but the COUNT binds on either host, since both sides are static text.
-    "xev_dynamic":       ([f"{GHXEV}/dynamic.zig"], [f"{RSXEV}/dynamic.rs"], 0),
+    "xev_dynamic":       ([f"{GHXEV}/dynamic.zig"], [f"{RSXEV}/dynamic.rs", f"{RSXEV}/dynamic/**/*.rs"], 0),
     # linux/timerfd.zig: the timerfd binding the epoll backend's timers ride. 1
     # behavioral named-unquoted `test` → zig=1; linux/timerfd.rs=1. `linux/eventfd.rs`
     # + `linux/net.rs` + `linux.rs` are intentionally UNMAPPED for the same reason
