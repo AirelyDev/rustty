@@ -570,11 +570,13 @@ MAP = {
     # The 5 `RepeatableClipboardCodepointMap` tests (8352-8415) are also ported
     # (ClipboardCodepointMap is a landed C1 leaf type). need = 113; rust
     # = config_struct.rs + value_types.rs (>= 113, with rustty round-trip margin).
-    "config_struct":     ([f"{GHCFG}/Config.zig"], [f"{RSCG}/config_struct.rs", f"{RSCG}/value_types.rs"], 0),
+    # P7-W13 F split both into topic files under config_struct/ and value_types/
+    # (`**` recurses into their tests/ children).
+    "config_struct":     ([f"{GHCFG}/Config.zig"], [f"{RSCG}/config_struct.rs", f"{RSCG}/config_struct/**/*.rs", f"{RSCG}/value_types.rs", f"{RSCG}/value_types/**/*.rs"], 0),
     # rustty-config C2 — key.zig (the `Key` enum derived FROM the Config fields).
-    # 1 quoted test ("Value", key.zig:52), ported in config_struct.rs (the `value`
-    # test) alongside the `Key` enum it exercises.
-    "config_key":        ([f"{GHCFG}/key.zig"], [f"{RSCG}/config_struct.rs"], 0),
+    # 1 quoted test ("Value", key.zig:52), ported in config_struct/key.rs (the
+    # `value` test) alongside the `Key` enum it exercises.
+    "config_key":        ([f"{GHCFG}/key.zig"], [f"{RSCG}/config_struct/key.rs"], 0),
     # rustty-config C2 — theme.zig (0 behavioral tests: theme path resolution
     # using the REAL rustty-os ResourcesDir — see DEFERRALS.md, no .resources
     # deferral). Mapped for completeness/G3b tracking; 0 >= 0.
