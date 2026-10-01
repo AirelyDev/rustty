@@ -844,7 +844,7 @@ MAP = {
     # backend/kqueue.zig: 12 quoted `test "kqueue: ..."` (incl. `file IO on thread
     # pool`, ported as a documented SkipZigTest-style skip-stub #[test] — ThreadPool
     # body deferred, DEFERRALS.md; the count still holds) → zig=12; kqueue.rs=12.
-    "xev_kqueue":        ([f"{GHXEV}/backend/kqueue.zig"], [f"{RSXEV}/kqueue.rs"], 0),
+    "xev_kqueue":        ([f"{GHXEV}/backend/kqueue.zig"], [f"{RSXEV}/kqueue.rs", f"{RSXEV}/kqueue/**/*.rs"], 0),
     # watcher/timer.zig: 5 quoted `test{}` (`timer`, `timer reset`, `timer reset
     # before tick`, `timer reset after trigger`, `timer cancel`, inside `TimerTests`;
     # the per-variant anon `test { _ = TimerTests(...); }` are refAllDecls, zig_count-
@@ -896,10 +896,10 @@ MAP = {
     # ---------------------------------------------------------------------
     # backend/epoll.zig: 12 quoted `test "epoll: ..."` → zig=12. epoll.rs ports all
     # 12 as live #[test] + rustty KATs → rust=15 >= 12.
-    "xev_epoll":         ([f"{GHXEV}/backend/epoll.zig"], [f"{RSXEV}/epoll.rs"], 0),
+    "xev_epoll":         ([f"{GHXEV}/backend/epoll.zig"], [f"{RSXEV}/epoll.rs", f"{RSXEV}/epoll/**/*.rs"], 0),
     # backend/io_uring.zig: 13 quoted `test "io_uring: ..."` → zig=13. io_uring.rs
     # ports all 13 as live #[test] + rustty KATs → rust=16 >= 13.
-    "xev_io_uring":      ([f"{GHXEV}/backend/io_uring.zig"], [f"{RSXEV}/io_uring.rs"], 0),
+    "xev_io_uring":      ([f"{GHXEV}/backend/io_uring.zig"], [f"{RSXEV}/io_uring.rs", f"{RSXEV}/io_uring/**/*.rs"], 0),
     # dynamic.zig: the `Xev(bes)` multi-backend selector. 5 `test{}` total, of which
     # 4 are quoted (`completion is zero-able`, `detect`, `prefer`, `loop basics`)
     # and 1 is the anon `test { refAllDecls }` that zig_count skips → zig=4.
@@ -908,7 +908,7 @@ MAP = {
     # BOTH candidate arms → rust=14 >= 4. NOTE dynamic.zig is comptime-elided on
     # macOS (§0, single candidate), so this row is only meaningful for the Linux
     # surface — but the COUNT binds on either host, since both sides are static text.
-    "xev_dynamic":       ([f"{GHXEV}/dynamic.zig"], [f"{RSXEV}/dynamic.rs"], 0),
+    "xev_dynamic":       ([f"{GHXEV}/dynamic.zig"], [f"{RSXEV}/dynamic.rs", f"{RSXEV}/dynamic/**/*.rs"], 0),
     # linux/timerfd.zig: the timerfd binding the epoll backend's timers ride. 1
     # behavioral named-unquoted `test` → zig=1; linux/timerfd.rs=1. `linux/eventfd.rs`
     # + `linux/net.rs` + `linux.rs` are intentionally UNMAPPED for the same reason
@@ -930,7 +930,7 @@ MAP = {
     # jump past the combined backend total impossible to miss. Current pin zig=7
     # ("queuePWrite", "File: Stream decls", "kqueue: zero-length read for
     # readiness", "poll", "read/write", "pread/pwrite", "queued writes").
-    "xev_file":          ([f"{GHXEV_CUR}/watcher/file.zig"], [f"{RSXEV}/epoll.rs", f"{RSXEV}/io_uring.rs"], 0),
+    "xev_file":          ([f"{GHXEV_CUR}/watcher/file.zig"], [f"{RSXEV}/epoll.rs", f"{RSXEV}/epoll/**/*.rs", f"{RSXEV}/io_uring.rs", f"{RSXEV}/io_uring/**/*.rs"], 0),
     # ---------------------------------------------------------------------
     # WS20: the last two reference backends. These were previously UNMAPPED
     # because they were (wrongly) recorded as out-of-scope-by-platform. They are
