@@ -10124,3 +10124,27 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **next**: drop the `GHOSTTY_H` override (the `--self-test` can build its fixture another way),
   report the missing header as BLOCKED, and add the header SHA-256 pin or `rustty_oracle_pin_status`,
   each with a negative control.
+
+## N491 — Phase 7 tests missed the G6-only Miri annotation: the Phase 7 briefs ran no Miri
+
+- **id**: N491. P7-W12 T6. **severity**: medium (gate G6 could not finish; no product defect found).
+  **state**: OPEN (verification only): the Miri work is done; the G6c `--self-test` and the native
+  re-runs of the touched tests are pending, both stopped at the host's 15 GB disk floor.
+- **finding**: the Phase 7 task briefs ran no Miri, so tests added since the Phase 7 base `284d59d62`
+  never got the per-test G6 triage that parity tail C-1 gave earlier waves. Four `rustty-vt` tests
+  run past G6's 1,200 s bound (debug assertions on, so `Page::assert_integrity` runs on nearly every
+  PageList mutation): `search::screen::tests::feed_after_complete_discovers_prepended_history_pages`
+  (W5.T4, `4f144156c`; 4.5+ hours in a G6 run, about 97% in `assert_integrity`, O(rows²) as a
+  10-column page fills one newline at a time) and three P7-W1 T5 teardown tests
+  (`pagelist_teardown_after_clone_failure_returns_every_node`, `…_clone_from_failure_…`,
+  `…_reset_…`). Their siblings carry the WS19 T6 `cfg_attr(all(miri, debug_assertions), ignore)`
+  form; these do not. Separately, `rustty-extra`'s
+  `bash_shell_integration_gate::declare_ax_prompt_command_is_installed_and_reports_status_correctly`
+  (P7-W11) fails under G6 Miri at once: `stat` is forbidden under isolation, and the test spawns a
+  shell script, which Miri cannot execute.
+- **fix**: the bash-gate test carries a C-1-style isolation exception
+  (`cfg_attr(miri, ignore = "MIRI EXCEPTION (rustty-extra, P7-W12 T6): …")`). The four TIMEOUTs each
+  passed in G6c conditions under Stacked Borrows and Tree Borrows (10–38 s, no Miri warning) and now
+  carry the sibling's exact G6-only form, so they run in G6c. No real Miri finding. Five more
+  page-filling Phase 7 tests were measured in G6 (10–113 s) and stay there.
+- **evidence**: `.port/phase-2/MIRI_EXCEPTIONS.md`, "P7-W12 T6".

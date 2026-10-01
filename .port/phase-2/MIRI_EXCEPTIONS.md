@@ -2846,3 +2846,70 @@ The cost of the ud80/ud131 and compression members was not profiled further (UNV
 | `terminal::tests::ud80_wide_terminal_orphaned_pinned_styles_at_the_capacity_ceiling_are_reclaimed_not_split` | 1.81 s |
 | `tmux::layout::tests::dropping_a_very_deep_layout_does_not_recurse` | 0.11 s |
 
+
+## P7-W12 T6 — Phase 7 tests missing the G6-only annotation (2026-09-30)
+
+**Status: Miri work DONE; two verification steps pending (2026-09-30).** NEW-FINDINGS N491 (OPEN until
+they land). Pending, both stopped at the host's 15 GB disk floor: `check_leaks.sh --debug-assertions-off
+--self-test` (killed during arm 1) and the native re-runs of the five touched tests. The annotations
+add only `cfg_attr(miri …)` attributes, which a native build does not see. The Phase 7 task briefs ran no Miri, so tests
+added since the Phase 7 base `284d59d62` never had the G6 triage that parity tail C-1 gave the
+earlier waves. W5.T4's `search::screen::tests::feed_after_complete_discovers_prepended_history_pages`
+(commit `4f144156c`) is the case that showed it: under G6 it ran for 4.5+ hours, about 97% of it in
+`Page::assert_integrity` (O(page), called once per newline while a 10-column page of about 4,600 rows
+fills, so O(rows²)), while its sibling `reload_active_with_history_change`, with the same setup,
+carries the WS19 T6 G6-only annotation.
+
+**Method.** Inventory: every `#[test]` added or changed since `284d59d62` in the crates G6 runs under
+Miri (`check_leaks.sh --list`): 337 tests, 306 without a Miri ignore. Native triage: each timed
+alone in a debug build, one process per test; 304 passed, and the 2 not found are compiled only on
+other targets (`std_size_golden_aarch64_linux`, `mem_windows_can_reclaim_reports_support`). Only four
+take over 0.3 s. Those, plus the page-filling and `total_pages()` tests, were then measured under the
+exact G6 configuration (`cargo +nightly miri test`, no `MIRIFLAGS`, isolation on, debug assertions
+on), one test per process, at most four processes, 1,200 s hard bound with the process tree killed.
+
+The first pass was stopped at the host's disk floor (the Mac fell under 15 GB free, from growth
+outside Rustty). It resumed serially, ONE Miri process at a time, with a free-space check before
+each test. Each G6 TIMEOUT was then run in G6c conditions (`RUSTFLAGS="-C debug-assertions=off"`,
+`MIRIFLAGS=-Zmiri-disable-isolation`, one test per process, 1,200 s bound), once under Stacked
+Borrows and once with `-Zmiri-tree-borrows` added. All four passed both, UB- and leak-clean with no
+Miri warning, so each now carries the sibling's exact G6-only form
+(`cfg_attr(all(miri, debug_assertions), ignore = "MIRI EXCEPTION — G6 LANE ONLY …")`) and runs in
+G6c, whose test set is derived from those annotations (124 tests after this change). None needed
+the both-lanes form. A G6 re-run of the annotated `feed_after_complete_…` test reports it `ignored`
+with that reason, as intended.
+
+| test | native, debug assertions on | G6 | G6c SB | G6c TB |
+|---|---|---|---|---|
+| `pagelist::tests::pagelist_teardown_after_clone_failure_returns_every_node` | 16.6 s | TIMEOUT (1,200 s) | ok, 17 s | ok, 21 s |
+| `search::screen::tests::feed_after_complete_discovers_prepended_history_pages` | 4.7 s | TIMEOUT (1,200 s) | ok, 38 s | ok, 38 s |
+| `pagelist::tests::pagelist_teardown_after_clone_from_failure_returns_every_node` | 2.6 s | TIMEOUT (1,200 s) | ok, 10 s | ok, 13 s |
+| `pagelist::tests::pagelist_teardown_after_reset_returns_every_node` | 2.5 s | TIMEOUT (1,200 s) | ok, 10 s | ok, 13 s |
+| `pagelist::tests::pagelist_teardown_after_init_failure_returns_every_node` | 0.005 s | ok, 14 s | — (stays in G6) | — |
+
+Measured but not candidates: `pagelist::tests::pagelist_pagepool_no_leak_resize_reflow` (0.19 s)
+already carries the G6-only annotation; `tmux::viewer::tests::a_layout_nested_deeper_than_max_depth_makes_the_viewer_defunct`
+(0.15 s) is `#[cfg(feature = "oniguruma")]` and is not compiled in the Miri lane.
+
+Measured in the resumed pass, all ok in G6 and staying there (native time, then G6 time):
+`pagelist_teardown_after_clone_grow_failure_returns_every_node` (0.007 s, 26 s),
+`pagelist_teardown_after_builder_failure_returns_every_node` (0.004 s, 11 s),
+`pagelist_teardown_after_allocate_page_failure_returns_every_node` (0.005 s, 11 s),
+`pagelist_resize_reflow_less_cols_wrap_across_page_boundary_cursor_in_second_page` (0.012 s, 113 s),
+`search::terminal::tests::starts_feed_required_and_runs_to_complete` (0.005 s, 10 s).
+
+Honest limits: the inventory's triage measured every candidate over 0.3 s natively and the
+page-filling ones, not all 304; the remaining tests (each under 0.07 s natively, none filling pages)
+were not run under Miri here. The full lane run that discharges V27–V29 covers them.
+
+### Isolation exception (C-1 basis)
+
+| crate | test | what Miri cannot do |
+|---|---|---|
+| `rustty-extra` | `tests/bash_shell_integration_gate.rs` `declare_ax_prompt_command_is_installed_and_reports_status_correctly` | `stat` is forbidden under Miri isolation (measured: fails at `script.is_file()` in 1 s); past it the test exists to spawn the shell script as a child process, which Miri cannot execute |
+
+4-criterion basis, as in parity tail C-1: (1) impossible, not slow, measured in its own G6 Miri
+process; (2) passes natively in ci.sh's HARD `cargo test --workspace` (Unix only, N484); (3) the
+test's only code is the OS boundary (a file check and a process spawn) and the shell script it runs;
+it calls no `unsafe` Rust of the port; (4) the binary's other tests (the `RUSTTY_REQUIRE_BASH44`
+pivot tests) stay in the lane.
