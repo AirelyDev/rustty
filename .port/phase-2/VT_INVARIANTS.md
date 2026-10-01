@@ -91,10 +91,10 @@ creation.
   live reference in that page's `RefCountedSet` (`page.styles`); the last
   `release` drops the living count to 0. Ids and refcounts never drift (no leak,
   no double-free).
-- **Producer (rustty-vt):** `crates/rustty-vt/src/screen.rs:2779
+- **Producer (rustty-vt):** `crates/rustty-vt/src/screen/attrs.rs:205
   (fn manual_style_update)` → `page.styles.add`
-  (`crates/rustty-vt/src/screen.rs:2829`) / `page.styles.release`
-  (`crates/rustty-vt/src/screen.rs:2804`). The invariant IS asserted at the set:
+  (`crates/rustty-vt/src/screen/attrs.rs:255`) / `page.styles.release`
+  (`crates/rustty-vt/src/screen/attrs.rs:230`). The invariant IS asserted at the set:
   `crates/rustty-vt/src/ref_counted_set.rs:709 (assert(item.meta.ref_count >
   RefCount::ZERO))` in `fn release` (and the `> 0` / `>= n` asserts in
   `release_multiple`). *Producer assert status:* **already present and faithful**

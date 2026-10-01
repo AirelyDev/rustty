@@ -64,7 +64,7 @@ ANCHORS=(
   "crates/rustty-renderer/src/generic.rs|row_data"
   # INV-2 style-id refcount Page <-> style set
   "crates/rustty-vt/src/ref_counted_set.rs|item.meta.ref_count > RefCount::ZERO"
-  "crates/rustty-vt/src/screen.rs|fn manual_style_update"
+  "crates/rustty-vt/src/screen/attrs.rs|fn manual_style_update"
   # INV-3 kitty placements <-> renderer atlas
   "crates/rustty-vt/src/kitty/graphics_storage.rs|pub dirty"
   # `image.rs` became a dispatcher over a monomorphic twin pair (W2 F-005 added
