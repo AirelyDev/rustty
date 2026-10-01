@@ -61,7 +61,7 @@ ANCHORS=(
   # INV-1 dirty <-> renderer damage
   "crates/rustty-vt/src/page.rs|fn set_dirty"
   "crates/rustty-vt/src/pagelist/access.rs|fn clear_dirty"
-  "crates/rustty-renderer/src/generic.rs|row_data"
+  "crates/rustty-renderer/src/generic/macos_impl/cells.rs|row_data"
   # INV-2 style-id refcount Page <-> style set
   "crates/rustty-vt/src/ref_counted_set.rs|item.meta.ref_count > RefCount::ZERO"
   "crates/rustty-vt/src/screen/attrs.rs|fn manual_style_update"

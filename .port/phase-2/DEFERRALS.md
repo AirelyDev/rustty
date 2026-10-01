@@ -601,7 +601,7 @@ ARE genuinely non-reentrant) is intentionally retained.
 render-pass/target/frame), `SwapChain`/`FrameState`, `update_frame`, the
 `rebuild_cells` CPU cell-fill, the uniforms math, and `draw_frame` (Metal
 encode+submit → IOSurface readback) are ported and gated by the golden test
-`generic::macos_impl::tests::golden_renders_cursor_fg_bg` ("Ab" + cursor, real pixel
+`generic::macos_impl::tests::golden::golden_renders_cursor_fg_bg` ("Ab" + cursor, real pixel
 asserts). The `size_of::<CellText>()==32` un-defer landed. The `draw_frame` raw-ptr
 aliasing discipline is proven clean under **both** Stacked and Tree Borrows by
 `.port/phase-2/mirihar-chunk3b`.

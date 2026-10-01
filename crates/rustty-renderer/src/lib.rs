@@ -24,7 +24,7 @@
 //!   target/frame), `SwapChain`/`FrameState`, `update_frame`, the `rebuild_cells` CPU
 //!   cell-fill, the uniforms math, and `draw_frame` (Metal encode+submit -> IOSurface
 //!   readback) are ported and gated by the golden test
-//!   `generic::macos_impl::tests::golden_renders_cursor_fg_bg` ("Ab" + cursor, real
+//!   `generic::macos_impl::tests::golden::golden_renders_cursor_fg_bg` ("Ab" + cursor, real
 //!   pixel asserts). The `draw_frame` raw-ptr aliasing is proven clean under Stacked
 //!   AND Tree Borrows by `.port/phase-2/mirihar-chunk3b`.
 //!
