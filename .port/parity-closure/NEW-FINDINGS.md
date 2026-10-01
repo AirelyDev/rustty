@@ -10128,8 +10128,10 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 ## N491 — Phase 7 tests missed the G6-only Miri annotation: the Phase 7 briefs ran no Miri
 
 - **id**: N491. P7-W12 T6. **severity**: medium (gate G6 could not finish; no product defect found).
-  **state**: OPEN (verification only): the Miri work is done; the G6c `--self-test` and the native
-  re-runs of the touched tests are pending, both stopped at the host's 15 GB disk floor.
+  **state**: CLOSED 2026-09-30 (P7-W12 T2 lane D2): G6c `--self-test` GREEN (both arms; arm 1 took
+  1,926 s, mostly libtest filtering under Miri), native re-runs GREEN (`pagelist_teardown_after`
+  7/7, `feed_after_complete_discovers_prepended_history_pages` 1/1, `bash_shell_integration_gate`
+  3/3). Logs: `.superpowers/p7/laneD2-logs/s1*.log`.
 - **finding**: the Phase 7 task briefs ran no Miri, so tests added since the Phase 7 base `284d59d62`
   never got the per-test G6 triage that parity tail C-1 gave earlier waves. Four `rustty-vt` tests
   run past G6's 1,200 s bound (debug assertions on, so `Page::assert_integrity` runs on nearly every

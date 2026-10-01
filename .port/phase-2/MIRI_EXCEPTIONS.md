@@ -2849,9 +2849,9 @@ The cost of the ud80/ud131 and compression members was not profiled further (UNV
 
 ## P7-W12 T6 — Phase 7 tests missing the G6-only annotation (2026-09-30)
 
-**Status: Miri work DONE; two verification steps pending (2026-09-30).** NEW-FINDINGS N491 (OPEN until
-they land). Pending, both stopped at the host's 15 GB disk floor: `check_leaks.sh --debug-assertions-off
---self-test` (killed during arm 1) and the native re-runs of the five touched tests. The annotations
+**Status: DONE (2026-09-30, P7-W12 T2 lane D2).** NEW-FINDINGS N491 CLOSED. `check_leaks.sh
+--debug-assertions-off --self-test` GREEN (both arms) and the native re-runs of the touched tests GREEN
+(7/7, 1/1, 3/3). The annotations
 add only `cfg_attr(miri …)` attributes, which a native build does not see. The Phase 7 task briefs ran no Miri, so tests
 added since the Phase 7 base `284d59d62` never had the G6 triage that parity tail C-1 gave the
 earlier waves. W5.T4's `search::screen::tests::feed_after_complete_discovers_prepended_history_pages`
