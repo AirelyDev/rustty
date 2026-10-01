@@ -899,7 +899,7 @@ MAP = {
     "xev_epoll":         ([f"{GHXEV}/backend/epoll.zig"], [f"{RSXEV}/epoll.rs"], 0),
     # backend/io_uring.zig: 13 quoted `test "io_uring: ..."` → zig=13. io_uring.rs
     # ports all 13 as live #[test] + rustty KATs → rust=16 >= 13.
-    "xev_io_uring":      ([f"{GHXEV}/backend/io_uring.zig"], [f"{RSXEV}/io_uring.rs"], 0),
+    "xev_io_uring":      ([f"{GHXEV}/backend/io_uring.zig"], [f"{RSXEV}/io_uring.rs", f"{RSXEV}/io_uring/**/*.rs"], 0),
     # dynamic.zig: the `Xev(bes)` multi-backend selector. 5 `test{}` total, of which
     # 4 are quoted (`completion is zero-able`, `detect`, `prefer`, `loop basics`)
     # and 1 is the anon `test { refAllDecls }` that zig_count skips → zig=4.
