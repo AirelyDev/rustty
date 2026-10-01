@@ -25,7 +25,7 @@
 //! - The `Metal` impl (`metal_impl.rs`: `init_offscreen`/`init_shaders`/the
 //!   resource-option factories/the frame lifecycle, Chunk 2) + `gpu_abi` (the
 //!   byte-faithful GPU-struct ABI, Chunk 4). The offscreen draw path is LIVE and
-//!   golden-gated (`generic::macos_impl::tests::golden_renders_cursor_fg_bg`).
+//!   golden-gated (`generic::macos_impl::tests::golden::golden_renders_cursor_fg_bg`).
 //!
 //! DEFERRED (a later tier, `GPU_RD_BLUEPRINT.md`): the Frame async
 //! `addCompletedHandler` present + the real windowed layer-present path

@@ -664,7 +664,7 @@ The raw-ptr sites, per GPU_RD_CHUNK4_DESIGN §5.2 (H1/H2) + the mirihar evidence
   — it lives in the `*mut SharedGrid`, a SEPARATE allocation (no aliasing with `self`).
 
 **Why Miri can't run the actual test:** the ONLY test that exercises this code
-(`generic::macos_impl::tests::golden_renders_cursor_fg_bg`) is macOS/Metal-gated — it builds an
+(`generic::macos_impl::tests::golden::golden_renders_cursor_fg_bg`) is macOS/Metal-gated — it builds an
 offscreen `Metal` (`MTLCreateSystemDefaultDevice` + `newCommandQueue`), `init_shaders` (metallib
 load), a `SwapChain`, a CoreText `Shaper`/`SharedGrid`, and then ENCODES + SUBMITS a real GPU
 frame (`commit`/`waitUntilCompleted`) and reads the IOSurface back. Miri cannot execute the
@@ -696,7 +696,7 @@ Renderer` across the completion callback re-opens the hazard — re-run the harn
 ## macOS windowing W1-7 (Renderer windowed lifecycle: init/deinit) — MIRI exceptions
 
 - **`crates/rustty-renderer/src/generic.rs`**
-  (`generic::macos_impl::tests::windowed_lifecycle::windowed_renderer_init_then_deinit_round_trips`).
+  (`generic::macos_impl::tests::lifecycle::windowed_lifecycle::windowed_renderer_init_then_deinit_round_trips`).
   Builds an offscreen `Metal` (`MTLCreateSystemDefaultDevice` + `newCommandQueue`), `init_shaders`
   (metallib load), a `SwapChain`, a CoreText `Shaper`/`SharedGrid`, mints a real `NSObject` through
   the ObjC runtime (the `*mut S` for the generic surface hooks), runs `Renderer::surface_init` /
@@ -709,7 +709,7 @@ Renderer` across the completion callback re-opens the hazard — re-run the harn
 ## macOS windowing W1-6 (FIRST PIXELS: on-screen present of a golden frame) — MIRI exceptions
 
 - **`crates/rustty-renderer/src/generic.rs`**
-  (`generic::macos_impl::tests::golden_presents_frame_on_screen`). The culminating W1 KAT. Renders
+  (`generic::macos_impl::tests::golden::golden_presents_frame_on_screen`). The culminating W1 KAT. Renders
   one real terminal frame OFFSCREEN via the golden path (`MTLCreateSystemDefaultDevice` +
   `newCommandQueue` + `init_shaders` metallib load + CoreText `Shaper`/`SharedGrid` + a real GPU
   `commit`/`waitUntilCompleted` + IOSurface readback), then constructs a plain-`NSObject` layer-host

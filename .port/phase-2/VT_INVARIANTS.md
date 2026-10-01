@@ -70,15 +70,16 @@ creation.
   (`page.rs` bit 40) — there is no reference-implied predicate to assert at the
   setter (any row may be dirtied at any time), so **no debug_assert is added**
   (it would not be a faithful no-op). Documented only.
-- **Consumer (rustty-renderer):** `crates/rustty-renderer/src/generic.rs:2900
-  (if !rebuild && !...row_data[cvy].dirty)` and `:2948
+- **Consumer (rustty-renderer):** `crates/rustty-renderer/src/generic/macos_impl/cells.rs:196
+  (if !rebuild && !...row_data[cvy].dirty)` and `:245
   (row_data[y].dirty = false)` — the renderer reads the row dirty flag to skip
   clean rows and clears its own copy after rebuild. Graceful-degrade: a row seen
   dirty is simply rebuilt (never a crash); a missed dirty bit degrades to a
-  stale cell, self-healing on the next `Dirty::Full` (`:2356 mark_dirty`).
+  stale cell, self-healing on the next `Dirty::Full` (`generic/macos_impl/lifecycle.rs:891
+  mark_dirty`).
 - **Integration test through the seam:** **cross-crate** (VT produces, renderer
   consumes). A consumer-side integration test already exists in the renderer
-  crate — `crates/rustty-renderer/src/generic.rs` `rebuild_cells_*` /
+  crate — `crates/rustty-renderer/src/generic/macos_impl/tests.rs` `rebuild_cells_*` /
   `update_frame` tests exercise the row-dirty skip path. NEW dedicated end-to-end
   wiring (drive a real `Terminal` write → `update_frame` → assert only dirtied
   rows rebuilt) is tracked as cross-crate work; not added here to avoid editing
