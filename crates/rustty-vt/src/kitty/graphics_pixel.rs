@@ -350,6 +350,10 @@ mod tests {
 
     // test "rgba conversion"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs pixel swizzler (C FFI, R14, N494) -- foreign function; covered natively + by ASan"
+    )]
     fn rgba_conversion() {
         {
             let rgb = [1u8, 2, 3, 4, 5, 6];
@@ -458,6 +462,10 @@ mod tests {
 
     // test "alpha blend source-over semantics"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs pixel swizzler (C FFI, R14, N494) -- foreign function; covered natively + by ASan"
+    )]
     fn alpha_blend_source_over_semantics() {
         // Opaque source overwrites exactly.
         {
@@ -560,6 +568,10 @@ mod tests {
     // FFI kernel byte-for-byte. Runs only when both arms are available.
     #[cfg(rustty_kitty_graphics)]
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored Wuffs pixel swizzler (C FFI, R14, N494) -- foreign function; covered natively + by ASan"
+    )]
     fn wuffs_and_scalar_src_over_agree() {
         // Sweep alpha lanes exhaustively-ish and color lanes coarsely; every
         // (dst, src) pair must match the FFI kernel exactly.

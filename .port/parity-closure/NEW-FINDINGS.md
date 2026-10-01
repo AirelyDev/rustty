@@ -10242,3 +10242,34 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **scan**: `page_tests.rs` compares page memory with slice `==` already. `pagelist/tests.rs` still
   has `from_raw_parts(..).iter().all(|&b| b == 0)` checks on decommitted pool items (about lines
   2718, 3306, 3506, 3566, 4820, 4831); they were not reported slow in the V28 run and are left alone.
+
+## N494 — `rustty-vt` kitty tests reach the Wuffs C FFI under Miri and abort the whole G6 binary
+
+- **id**: N494. P7-W12 T9. **severity**: low (gate G6 aborted the `rustty-vt` lib binary, so every test
+  after the first one went unchecked; no product defect). **state**: CLOSED 2026-10-01.
+- **found**: the full G6 lane (`check_leaks.sh --all-done`) aborted at
+  `kitty::graphics_exec::tests::kitty_graphics_route_through_the_allocator_handle` with
+  `can't call foreign function rustty_wuffs_pixel_format__is_direct on OS macos`. Miri aborts the whole
+  binary on an unsupported foreign call; it does not fail the one test.
+- **origin**: parity tail S7-4 (`9f8a92741`, "kitty graphics, PNG decode and APC routing tests"), a
+  rustty-only routing test with no reference counterpart. Its sibling
+  `kitty_chunked_loading_routes_through_the_allocator_handle` passes because it only transmits (no
+  conversion runs). The routing test's animation frame converts an RGB image to RGBA, and the frame
+  composite runs the src-over kernel; both are Wuffs calls.
+- **enumeration** (code reading, then targeted G6 runs of `kitty::`, `sys::tests`, and the animation
+  tests one filter at a time): the Wuffs entry points in the vt lib are `rgba_from_format` (RGB, gray,
+  gray-alpha swizzles), `rgba_src_over` (alpha blend), `zlib::decode` and `png::decode`. Tests that reach
+  the first two without an ignore: 21 `kittygfx_animation_*` tests in `graphics_exec.rs` (every a=f / a=c
+  step converts the RGB base image) and 3 in `graphics_pixel.rs` (`rgba_conversion`,
+  `alpha_blend_source_over_semantics`, `wuffs_and_scalar_src_over_agree`). zlib tests were already excepted.
+  The PNG decode tests (`sys::tests::default_decoder_*`, `kitty_graphics_png_transmit_*`) are behind the
+  `wuffs` feature, which G6 does not enable. Every other `kitty::` test passes under Miri.
+- **fix**: (1) the routing test keeps running in G6 with a `cfg!(miri)` corpus: RGBA payloads (`f=32`)
+  and `X=1` (overwrite) on the frame, so no swizzle or blend runs. All routing counts hold except the two
+  RGBA conversions, which an RGBA frame over an RGBA image does not make: the Miri expectation is 4 calls
+  instead of 6, and those two conversions are asserted natively only. (2) The 24 tests above carry the
+  existing `MIRI EXCEPTION` annotation (rows in `MIRI_EXCEPTIONS.md`); their purpose is the Wuffs-backed
+  conversion and blend itself, so no input avoids the FFI.
+- **measured**: ASan lane (`gates/sanitizers.sh rustty-vt "kitty::graphics_exec kitty::graphics_pixel"
+  address`): 78 ran, all pass, no finding. Native: 32 passed. Miri G6 config
+  `cargo +nightly miri test -p rustty-vt --lib -- kitty::`: 344 passed, 47 ignored, no abort (509 s).
