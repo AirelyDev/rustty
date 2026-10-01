@@ -796,7 +796,7 @@ MAP = {
     # init spawns pty/renderer/io threads; ghostty has zero Surface tests for the
     # same reason), so rust=0 == zig=0; the G3b comment-coverage gate + per-chunk
     # review carry Surface's quality (0 missing over the full file, C-F sweep).
-    "core_surface":      ([f"{GHSRC}/Surface.zig"], [f"{RSCORE}/surface.rs"], 0),
+    "core_surface":      ([f"{GHSRC}/Surface.zig"], [f"{RSCORE}/surface.rs", f"{RSCORE}/surface/**/*.rs"], 0),
     # rustty-xev C1 (XEV_BLUEPRINT §8) — the intrusive data structures. queue.zig
     # (1 test `Intrusive`: singly-linked FIFO), queue_mpsc.zig (1 test `Intrusive`:
     # Vyukov MPSC), heap.zig (6 tests: heap; remove root; remove w/ children; equal
