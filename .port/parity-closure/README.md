@@ -63,7 +63,12 @@ pin), G-P2-SELF, G-KAITAI (now HARD).
 
 In ci.yml's `ci` job the three report BLOCKED (`RUSTTY_SANITIZERS_OWN_JOB`), naming the new `sanitizers`
 job (one leg per sanitizer on x86_64 Linux, never run yet: V30). Results of P7-W14's runs:
-SANITIZER_RESULTS_PLACEHOLDER
+G-SAN-SELF green on macOS and rvm (every arm on Linux); G-ASAN (macOS arm64, 2026-10-02) GREEN, 9,826
+tests over 61 members and the `rustty-vt:wuffs` lane, 117 of 117 ASan claims verified, 15 min with one
+shared target dir; G-LSAN (rvm) GREEN, 10,087 tests over 61 members and three feature lanes, 86 claims
+verified and 31 macOS-only, 20 min; G-MSAN (rvm) GREEN, 6,183 tests over 58 members, 50 min. The first
+runs found N495-N498 and UD376 (register below); the suppressions, lane options and exclusions are in
+`.port/phase-2/SANITIZER_SUPPRESSIONS.md`.
 
 ## Not verified here (long runs, deferred by the user on 2026-09-28)
 

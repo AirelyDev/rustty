@@ -2613,13 +2613,16 @@ aarch64-unknown-linux-gnu with `-Zbuild-std`, proven by G-SAN-SELF's uninitializ
 x86_64 job is the CI copy of those runs, and nothing about it has been executed.
 
 ```
-PORTED: .github/workflows/ci.yml (job `sanitizers`, matrix asan/lsan/msan; `required.needs`; the `ci` job's RUSTTY_SANITIZERS_OWN_JOB)
+PORTED: .github/workflows/ci.yml
 ```
+
+In that file: the `sanitizers` job (matrix asan/lsan/msan), its entry in `required.needs`, and the `ci`
+job's `RUSTTY_SANITIZERS_OWN_JOB`.
 
 What a first run must show, per matrix leg: G-SAN-SELF green (on Linux all its arms run, including the
 LSan and MSan defects); the gate's per-crate table with no BLOCKED row; the ASan-claim cross-check line
-(asan, lsan); and the wall time against the 360-minute job limit (rvm: G-LSAN about 2 h; the ubuntu
-runner's 14 GB of free disk against one instrumented target dir at a time). Unknowns: the x86_64 runner's
+(asan, lsan); and the wall time against the 360-minute job limit (rvm, one shared target dir per pass: G-LSAN 20 min, G-MSAN 50 min; the ubuntu
+job runs `--per-crate-target`, slower, because a shared pass needs 15-20 GB of disk). Unknowns: the x86_64 runner's
 Mesa (`lsan.supp` S1/S2 name Fedora's library names), GCC as `cc` for the C-ABI smoke under ASan (the
 test picks clang), and G-MSAN's scope on x86_64.
 

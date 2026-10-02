@@ -10335,6 +10335,14 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
      whose one native test is `#[ignore]`d, showed "1 test(s) ran"). It now sums `N passed; M failed`.
      Members with no test on a host OS by construction (`gettext-sys` on Linux, `rustty-wasm` everywhere)
      are listed in `NO_TESTS_ON` with the reason; a test appearing there makes the entry stale (RED).
+  9. G-MSAN: the classifier read MSan's informational "WARNING: MemorySanitizer failed to allocate" (the
+     out-of-memory tests under `allocator_may_return_null=1`) as a finding; it now matches only
+     `WARNING: <Sanitizer>: <kind>`. Plain `CFLAGS=-fsanitize=memory` also reached `rustty-cli`'s
+     `zlib-sys` build-dependency, whose uninstrumented build script then failed to link; the C/C++ now goes
+     through compiler wrappers keyed on `CARGO_CFG_SANITIZE`. Under MSan the C-ABI smoke program cannot
+     run (clang 22's MSan runtime does not match rustc's instrumentation: SEGV in the cdylib's first
+     constructor), so that one test is ignored under `cfg(rustty_msan)` with the reason; it runs natively
+     and under G-ASAN/G-LSAN. The rest of G-MSAN's first-run results are SANITIZER_SUPPRESSIONS.md M1-M5.
 - **records**: `.port/phase-2/SANITIZER_SUPPRESSIONS.md` lists the lane options with these reasons.
 
 ## N497 — a Miri exception claimed ASan coverage for a test no ASan run executed
@@ -10348,7 +10356,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   the `wuffs` feature, so "covered natively + by ASan" (MIRI_EXCEPTIONS.md, the zlib C FFI row) was never
   true for it under ASan. It is not run by `cargo test --workspace` either (the feature is off there).
 - **fix**: G-ASAN and G-LSAN run a `rustty-vt:wuffs` feature lane. Measured: macOS G-ASAN
-  `rustty-vt:wuffs` 3,360 tests, green; the cross-check then verifies all 116 claims on macOS.
+  `rustty-vt:wuffs` 3,360 tests, green; the cross-check then verified all 116 claims on macOS. Final G-ASAN (2026-10-02): 117 of 117 (P7-W14 added one), G-LSAN on rvm: 86 verified, 31 macOS-only.
 
 ## N498 — `rustty_app_free` leaked the app's whole cloned configuration
 

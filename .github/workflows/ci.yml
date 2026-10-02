@@ -572,10 +572,13 @@ jobs:
       - name: G-SAN-SELF (the sanitizers are RED on synthetic defects)
         run: bash .port/tools/gates/sanitizers.sh --self-test
 
+      # --per-crate-target: a whole pass in one target dir is 15-20 GB
+      # (measured on the aarch64 VM), more than a hosted runner reliably has
+      # free; per-crate dirs are slower but hold one crate's build at a time.
       - name: G-${{ matrix.sanitizer }} over the workspace
         env:
           SAN: ${{ matrix.sanitizer }}
-        run: bash .port/tools/gates/sanitizers.sh --gate "$SAN"
+        run: bash .port/tools/gates/sanitizers.sh --per-crate-target --gate "$SAN"
 
   # ── Windows ────────────────────────────────────────────────────────────────
   # PORTS the reference's Windows jobs (`.github/workflows/test.yml` at the pin):

@@ -2980,10 +2980,12 @@ sanitizer must appear as `test <path>::<name> ... ok` in that run's logs. A clai
 absent from a log that ran is cfg-gated off the host OS and is listed by name; it is checked on the other
 OS's lane (G-LSAN on Linux runs the same cross-check), and a crate none of whose claims compiled is RED.
 
-- **macOS (G-ASAN):** 116 annotations claim ASan coverage (`rustty-vt` 72, `rustty-xev` 32, `rustty-vt-c` 8,
-  `rustty-core` 3, `rustty-cli` 1); all 116 ran and passed.
-- **Linux (G-LSAN, rvm):** 85 ran and passed; 31 are not compiled on Linux (the `rustty-xev` kqueue, mach-port
-  and `EVFILT_*` tests, `cfg(target_vendor = "apple")`), and they are the ones verified on macOS.
+- **macOS (G-ASAN):** 117 annotations claim ASan coverage (`rustty-vt` 72, `rustty-xev` 32, `rustty-vt-c` 8,
+  `rustty-core` 3, `rustty-cli` 1, and P7-W14's own `rustty-bench` test); all 117 ran and passed
+  (macOS arm64, 2026-10-02, 9,826 tests, GREEN).
+- **Linux (G-LSAN, rvm, 2026-10-02):** 86 ran and passed; 31 are not compiled on Linux (the `rustty-xev`
+  kqueue, mach-port and `EVFILT_*` tests, `cfg(target_vendor = "apple")`), and they are the ones verified
+  on macOS.
 - **The one false claim it found (NEW-FINDINGS N497):** `kitty::graphics_image::image_load_png_zlib_compressed_direct`
   (the "zlib C FFI" row above) is ignored without the `wuffs` feature, which no ASan run had enabled. The
   `rustty-vt:wuffs` lane now runs it.
