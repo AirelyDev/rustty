@@ -31,7 +31,9 @@
 # probabilistic (two objects share a tag with probability 1/256), and it has no
 # redzones or quarantine, so it is cheaper in memory than ASan. Its C/C++ is
 # instrumented (clang -fsanitize=hwaddress through the cc wrappers), which
-# G-ASAN's is not (SANITIZER_SUPPRESSIONS.md "Known limits").
+# G-ASAN's is not (SANITIZER_SUPPRESSIONS.md "Known limits"), and that is
+# checked, not assumed: every -sys crate's lib*.a must reference __hwasan_*
+# (hwasan_archive_check), and G-SAN-SELF's A4 C arm overflows the heap in C.
 #
 # Design: docs/superpowers/specs/2026-10-01-memory-safety-lanes-design.md, section B.
 #
@@ -105,6 +107,16 @@ host_target() { rustc +nightly -vV 2>/dev/null | sed -n 's/host: //p'; }
 ASAN_EXCLUDES=(
 )
 LSAN_EXCLUDES=(
+)
+# G-HWASAN's C-instrumentation check (hwasan_archive_check): after each `-sys`
+# crate's build, every lib*.a its build script produced must reference
+# __hwasan_* (every instrumented object calls __hwasan_init from its module
+# constructor). An archive without, or a -sys crate that built no archive, is
+# RED: the cc wrapper was bypassed and HWASan would stay silent on that C.
+# Exceptions, by crate, with the reason: "<crate>|<reason>". An entry whose
+# crate DID build an instrumented archive is stale (RED).
+HWASAN_UNINSTRUMENTED=(
+  "gettext-sys|it compiles no C on Linux: libintl is part of glibc there (crates-sys/gettext-sys/build.rs builds the vendored gettext only on macOS), so its build produces no archive to check"
 )
 HWASAN_EXCLUDES=(
   "xtask|its tests run nested cargo builds that inherit RUSTFLAGS=-Zsanitizer=hwaddress without -Zbuild-std, which rustc rejects ('mixing -Zsanitizer will cause an ABI mismatch in crate rustty_util'; G-HWASAN's first run, rvm, P7-W16b: 38 nested builds, 2 tests failed); the same exclusion as G-MSAN's (SANITIZER_SUPPRESSIONS.md M4, H1)"
@@ -346,7 +358,7 @@ run_crate() {
       #                          `adrp` of HAVE_LSE_ATOMICS, which tagged globals
       #                          move out of ADRP range: "relocation truncated to
       #                          fit: R_AARCH64_ADR_PREL_PG_HI21" (ld.bfd and lld).
-      #                          Inline LSE atomics instead (rvm's CPU has them).
+      #                          Inline atomics instead (LL/SC on the baseline target).
       #   -fuse-ld=lld           GNU ld 2.46 links tagged globals but writes an
       #                          invalid instruction (`.inst 0xb2ea5fe8`, SIGILL
       #                          in std's args init before main).
@@ -479,6 +491,43 @@ skips_unmatched() {
   done
 }
 
+# hwasan_archive_check CRATE TD: the C-instrumentation check (see
+# HWASAN_UNINSTRUMENTED). Prints one line; returns 1 (RED) when a -sys crate's
+# build produced no archive or an archive without __hwasan_* references, or
+# when its exclusion is stale. Other crates: nothing to check, returns 0.
+hwasan_archive_check() {
+  local crate="$1" td="$2" a n=0 inst=0 bad="" ex="" e
+  case "$crate" in *-sys) ;; *) return 0 ;; esac
+  for e in ${HWASAN_UNINSTRUMENTED[@]+"${HWASAN_UNINSTRUMENTED[@]}"}; do
+    if [ "${e%%|*}" = "$crate" ]; then ex="${e#*|}"; fi
+  done
+  while IFS= read -r a; do
+    [ -n "$a" ] || continue
+    n=$((n + 1))
+    if nm "$a" 2>/dev/null | grep -q '__hwasan_'; then inst=$((inst + 1)); else bad="$bad ${a#"$td"/}"; fi
+  done <<EOF
+$(find "$td" -path "*/build/$crate-*/out/*" -name 'lib*.a' 2>/dev/null | sort)
+EOF
+  if [ -n "$ex" ]; then
+    if [ "$inst" -gt 0 ]; then
+      echo "  ❌ hwasan $crate: HWASAN_UNINSTRUMENTED lists it, but $inst of its archive(s) are instrumented — the entry is stale"
+      return 1
+    fi
+    echo "  ⏭  hwasan $crate: C archives not checked for instrumentation — $ex"
+    return 0
+  fi
+  if [ "$n" -eq 0 ]; then
+    echo "  ❌ hwasan $crate: its build produced no lib*.a, so no instrumented C was linked (add it to HWASAN_UNINSTRUMENTED with the reason if that is by design)"
+    return 1
+  fi
+  if [ -n "$bad" ]; then
+    echo "  ❌ hwasan $crate: $((n - inst)) of $n C archive(s) have no __hwasan_ reference (the cc wrapper was bypassed):$bad"
+    return 1
+  fi
+  echo "  ok hwasan $crate: $n C archive(s), all instrumented (__hwasan_ references)"
+  return 0
+}
+
 # Matrix result accumulators (globals: bash 3.2 has no namerefs).
 M_RED=0; M_BLOCKED=0; M_TOTAL=0; M_ROWS=""; M_WALL=0
 # TARGET DIRS. Default: ONE target dir per sanitizer pass, target/san-<san>,
@@ -531,6 +580,11 @@ matrix_run() {  # matrix_run SAN FILTER SPEC...
         M_RED=1
         echo "  ❌ $san $spec: MSAN_SKIPS filter(s) matching no test (stale): $(printf '%s' "$um" | tr '\n' ' ')"
       fi
+    fi
+    # G-HWASAN: a -sys crate's C must really be instrumented (before the
+    # target dir goes). A crate that did not build has nothing to inspect.
+    if [ "$san" = hwasan ] && [ "$v" != BUILD ]; then
+      hwasan_archive_check "$crate" "$td" || M_RED=1
     fi
     if [ -z "$shared" ]; then drop_target "$td"; fi
     local nt
@@ -697,6 +751,9 @@ gate_asan_like() {  # gate_asan_like asan|lsan|hwasan
 $excl
 EOF
   check_members "$id exclusion" ${check[@]+"${check[@]}"} || extra=1
+  if [ "$san" = hwasan ]; then
+    check_members "G-HWASAN uninstrumented" ${HWASAN_UNINSTRUMENTED[@]+"${HWASAN_UNINSTRUMENTED[@]}"} || extra=1
+  fi
   rm -rf -- "${SAN_LOG_ROOT:?}/$san"
   local -a specs_a=()
   while IFS= read -r e; do [ -n "$e" ] && specs_a+=("$e"); done <<EOF
@@ -898,7 +955,7 @@ RS
     else echo "  FAIL H $1 (rc=$r): $o" | head -5; fail=1; fi
   }
   hx "control: the real exclusions and feature lanes name workspace members" 0 "" \
-    'check_members x ${ASAN_EXCLUDES[@]+"${ASAN_EXCLUDES[@]}"} ${LSAN_EXCLUDES[@]+"${LSAN_EXCLUDES[@]}"} ${HWASAN_EXCLUDES[@]+"${HWASAN_EXCLUDES[@]}"} ${FEATURE_LANES[@]+"${FEATURE_LANES[@]}"} ${LINUX_FEATURE_LANES[@]+"${LINUX_FEATURE_LANES[@]}"} ${NO_TESTS_ON[@]+"${NO_TESTS_ON[@]}"} ${MSAN_EXCLUDES[@]+"${MSAN_EXCLUDES[@]}"}'
+    'check_members x ${ASAN_EXCLUDES[@]+"${ASAN_EXCLUDES[@]}"} ${LSAN_EXCLUDES[@]+"${LSAN_EXCLUDES[@]}"} ${HWASAN_EXCLUDES[@]+"${HWASAN_EXCLUDES[@]}"} ${HWASAN_UNINSTRUMENTED[@]+"${HWASAN_UNINSTRUMENTED[@]}"} ${FEATURE_LANES[@]+"${FEATURE_LANES[@]}"} ${LINUX_FEATURE_LANES[@]+"${LINUX_FEATURE_LANES[@]}"} ${NO_TESTS_ON[@]+"${NO_TESTS_ON[@]}"} ${MSAN_EXCLUDES[@]+"${MSAN_EXCLUDES[@]}"}'
   hx "a stale *_EXCLUDES entry is RED" 1 "'no-such-crate' is listed but is not a workspace member" \
     'ASAN_EXCLUDES=("no-such-crate|fixture"); check_members "G-ASAN exclusion" "${ASAN_EXCLUDES[@]}"'
   hx "a stale feature-lane entry is RED" 1 "'rustty-renamed' is listed but is not a workspace member" \
@@ -919,6 +976,37 @@ RS
     'MSAN_SKIPS=("x|opengl::tests::|r" "x|cell::|r"); [ -z "$(skips_unmatched x '"'$st/fixture.list'"')" ]'
   hx "an MSAN_SKIPS filter that matches no test is reported (RED in the matrix)" 1 "opengl::gone::" \
     'MSAN_SKIPS=("x|opengl::tests::|r" "x|opengl::gone::|r"); u="$(skips_unmatched x '"'$st/fixture.list'"')"; echo "$u"; [ -z "$u" ]'
+
+  # --- arm I: G-HWASAN's C-instrumentation check over fixture archives (any
+  # host: plain cc/ar; an object that calls __hwasan_init stands for an
+  # instrumented one) ---
+  local fx="$st/fx"
+  mkdir -p "$fx/t/debug/build/inst-sys-1/out" "$fx/t/debug/build/plain-sys-1/out" "$fx/t/debug/build/mixed-sys-1/out" "$fx/t/debug/build/none-sys-1/out" "$fx/src"
+  printf 'void __hwasan_init(void);\nvoid f(void) { __hwasan_init(); }\n' >"$fx/src/i.c"
+  printf 'int g(int x) { return x + 1; }\n' >"$fx/src/p.c"
+  if cc -c "$fx/src/i.c" -o "$fx/src/i.o" 2>/dev/null && cc -c "$fx/src/p.c" -o "$fx/src/p.o" 2>/dev/null; then
+    ar rcs "$fx/t/debug/build/inst-sys-1/out/libinst.a" "$fx/src/i.o"
+    ar rcs "$fx/t/debug/build/plain-sys-1/out/libplain.a" "$fx/src/p.o"
+    ar rcs "$fx/t/debug/build/mixed-sys-1/out/liba.a" "$fx/src/i.o"
+    ar rcs "$fx/t/debug/build/mixed-sys-1/out/libb.a" "$fx/src/p.o"
+    ic() {  # ic NAME WANT_RC MUST_GREP SNIPPET
+      local o r
+      o="$(bash -c '. "$0" --source-only; '"$4" "$GATES_DIR/sanitizers.sh" 2>&1)"; r=$?
+      if [ "$r" -eq "$2" ] && { if [ -z "$3" ]; then [ -z "$o" ]; else printf '%s' "$o" | grep -q -- "$3"; fi; }; then echo "  ok   I $1"
+      else echo "  FAIL I $1 (rc=$r): $o"; fail=1; fi
+    }
+    ic "control: a -sys crate whose archive is instrumented passes" 0 "all instrumented" "hwasan_archive_check inst-sys '$fx/t'"
+    ic "an uninstrumented archive is RED (the cc wrapper was bypassed)" 1 "have no __hwasan_ reference" "hwasan_archive_check plain-sys '$fx/t'"
+    ic "one uninstrumented archive among instrumented ones is RED" 1 "1 of 2 C archive(s)" "hwasan_archive_check mixed-sys '$fx/t'"
+    ic "a -sys crate that built no archive is RED" 1 "produced no lib\\*.a" "hwasan_archive_check none-sys '$fx/t'"
+    ic "a listed exception with no instrumented archive is a named skip" 0 "not checked for instrumentation — fixture" \
+      "HWASAN_UNINSTRUMENTED=('plain-sys|fixture'); hwasan_archive_check plain-sys '$fx/t'"
+    ic "a listed exception whose archive IS instrumented is stale (RED)" 1 "the entry is stale" \
+      "HWASAN_UNINSTRUMENTED=('inst-sys|fixture'); hwasan_archive_check inst-sys '$fx/t'"
+    ic "a crate that is not -sys is not checked (no output)" 0 "" "hwasan_archive_check rustty-x '$fx/t'"
+  else
+    echo "  FAIL I: cc could not compile the fixture objects"; fail=1
+  fi
 
   # --- arm F: the BLOCKED arms (no build) ---
   out="$(RUSTTY_SANITIZERS_OWN_JOB="the fixture job" bash "$GATES_DIR/sanitizers.sh" --gate asan 2>&1)"; rc=$?
@@ -1038,9 +1126,9 @@ RS
   local sroot="$st/target"
   arm() {  # arm NAME SAN FILTER WANT(RED|GREEN) MUST_GREP
     local name="$1" san="$2" filter="$3" want="$4" must="$5" o r
-    o="$(SAN_PER_CRATE_TARGET="${ARM_PER_CRATE:-0}" SAN_MANIFEST_PATH="$cr/Cargo.toml" SAN_TARGET_ROOT="$sroot" SAN_LOG_ROOT="$st/slogs-$name" SAN_MIN_FREE_GB=0 \
-         M_RED=0 M_BLOCKED=0 M_TOTAL=0 M_ROWS="" bash -c '. "$0" --source-only; matrix_run "$1" "$2" san-selftest; matrix_summary "$1"; gate_verdict SELF 0' \
-         "$GATES_DIR/sanitizers.sh" "$san" "$filter" 2>&1)"; r=$?
+    o="$(SAN_PER_CRATE_TARGET="${ARM_PER_CRATE:-0}" SAN_MANIFEST_PATH="${ARM_MANIFEST:-$cr/Cargo.toml}" SAN_TARGET_ROOT="$sroot" SAN_LOG_ROOT="$st/slogs-$name" SAN_MIN_FREE_GB=0 \
+         M_RED=0 M_BLOCKED=0 M_TOTAL=0 M_ROWS="" bash -c '. "$0" --source-only; matrix_run "$1" "$2" "$3"; matrix_summary "$1"; gate_verdict SELF 0' \
+         "$GATES_DIR/sanitizers.sh" "$san" "$filter" "${ARM_SPEC:-san-selftest}" 2>&1)"; r=$?
     local okv=0
     case "$want" in
       RED) [ $r -eq 1 ] && printf '%s' "$o" | grep -qE "$must" && okv=1 ;;
@@ -1107,6 +1195,71 @@ RS
     arm "A4 heap overflow" hwasan "tests::defect_heap_overflow --exact" RED "HWAddressSanitizer: tag-mismatch"
     arm "A4 wild index into a live block (what ASan cannot see)" hwasan "tests::defect_wild_index_into_live_block --exact" RED "HWAddressSanitizer: tag-mismatch"
     arm "A4 control: clean under HWASan" hwasan "tests::clean_control --exact" GREEN "1 test\\(s\\) ran"
+    # The C side: a -sys crate whose build script compiles C through $CC (the
+    # cc wrapper, as the cc crate does). Its heap overflow is in C, which HWASan
+    # sees only if that C is instrumented: RED here proves the wrapper path, and
+    # the clean control also passes hwasan_archive_check on a real archive.
+    local cc_cr="$st/ccrate"
+    mkdir -p "$cc_cr/src"
+    printf '[package]\nname = "san-selftest-c-sys"\nversion = "0.0.0"\nedition = "2021"\npublish = false\nbuild = "build.rs"\n\n[workspace]\n' >"$cc_cr/Cargo.toml"
+    cat >"$cc_cr/src/ovf.c" <<'C'
+#include <stdlib.h>
+/* Reads the granules after a 16-byte block: each belongs to another chunk
+   (tagged independently), so one of eight reads mismatches except with
+   probability 256^-8. */
+int ovf_read(void) {
+  volatile unsigned char *p = malloc(16);
+  int s = 0;
+  for (int i = 1; i <= 8; i++) s += p[16 * i];
+  free((void *)p);
+  return s;
+}
+int ovf_clean(void) {
+  unsigned char *p = malloc(16);
+  int s = 0;
+  for (int i = 0; i < 16; i++) p[i] = (unsigned char)i;
+  for (int i = 0; i < 16; i++) s += p[i];
+  free(p);
+  return s;
+}
+C
+    cat >"$cc_cr/build.rs" <<'RS'
+use std::{env, path::PathBuf, process::Command};
+fn main() {
+    let out = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let cc = env::var("CC").unwrap_or_else(|_| "cc".into());
+    let obj = out.join("ovf.o");
+    let ok = Command::new(&cc).args(["-c", "-O0", "-fPIC", "src/ovf.c", "-o"]).arg(&obj).status().unwrap();
+    assert!(ok.success(), "{cc} failed");
+    let ok = Command::new("ar").arg("rcs").arg(out.join("libovf.a")).arg(&obj).status().unwrap();
+    assert!(ok.success(), "ar failed");
+    println!("cargo:rustc-link-search=native={}", out.display());
+    println!("cargo:rustc-link-lib=static=ovf");
+    println!("cargo:rerun-if-changed=src/ovf.c");
+}
+RS
+    cat >"$cc_cr/src/lib.rs" <<'RS'
+//! G-SAN-SELF's C arm: a heap overflow inside C compiled through $CC.
+extern "C" {
+    fn ovf_read() -> i32;
+    fn ovf_clean() -> i32;
+}
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn c_heap_overflow() {
+        std::hint::black_box(unsafe { super::ovf_read() });
+    }
+    #[test]
+    fn c_clean_control() {
+        assert_eq!(unsafe { super::ovf_clean() }, 120);
+    }
+}
+RS
+    ARM_MANIFEST="$cc_cr/Cargo.toml" ARM_SPEC=san-selftest-c-sys \
+      arm "A4 heap overflow in C (the cc wrapper instruments it)" hwasan "tests::c_heap_overflow --exact" RED "HWAddressSanitizer: tag-mismatch"
+    ARM_MANIFEST="$cc_cr/Cargo.toml" ARM_SPEC=san-selftest-c-sys \
+      arm "A4 control: clean C under HWASan, its archive instrumented" hwasan "tests::c_clean_control --exact" GREEN "all instrumented"
   else
     echo "  skip A4 heap overflow under HWASan: aarch64 Linux only (rustc rejects -Zsanitizer=hwaddress on $OS/$ARCH); runs on rvm"
   fi
