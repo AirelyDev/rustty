@@ -101,11 +101,18 @@ LLVM 22.1.8): a heap read 8 bytes and 1 byte past a 16-byte block, and a use-aft
 | H0 | `-Zbuild-std -Ctarget-feature=+tagged-globals,-outline-atomics -Clink-arg=-fuse-ld=lld` | lane configuration | Each is needed: without `-Zbuild-std` rustc rejects the mix (`-Zsanitizer=hwaddress` is "incompatible with `-Zsanitizer` being unset in dependency `core`"); without `-outline-atomics`, compiler_builtins' outline-atomics asm takes `adrp` of a tagged global and the link fails (`relocation truncated to fit: R_AARCH64_ADR_PREL_PG_HI21 against ... HAVE_LSE_ATOMICS`, both ld.bfd and lld), so atomics are inlined instead (inline atomics, LL/SC on the baseline target); GNU ld 2.46 links tagged globals into a binary that dies with SIGILL before `main` (an invalid instruction, `.inst 0xb2ea5fe8`, in std's `args::really_init`), so the link uses lld. `+tagged-globals` is what clang turns on itself for `-fsanitize=hwaddress`; rustc warns that it is an "unknown and unstable feature". | probe crate on rvm, each failure reproduced one flag at a time |
 | H1 | exclude `xtask` | crate exclusion | Its tests run nested cargo builds that inherit `RUSTFLAGS=-Zsanitizer=hwaddress` without `-Zbuild-std`, which rustc rejects. The same reason as M4. | first G-HWASAN run (rvm, 2026-10-02): 38 nested builds failed with `mixing -Zsanitizer will cause an ABI mismatch in crate rustty_util`, so 2 tests failed (`install_layout_is_versioned_like_the_reference`, `lib_version_string_versions_the_library`); N504 |
 | H2 | the C-ABI smoke (`rustty-apprt-c` `c_abi_smoke_compile_link_run`) links its C program with `clang -fsanitize=hwaddress -fuse-ld=lld` under `cfg(rustty_hwasan)` | test-side configuration | The instrumented cdylib leaves `__hwasan_*` to the executable (as for ASan, N496 item 4). clang 22's HWASan runtime matches rustc's, so the test runs; under MSan it does not (the smoke is ignored there). | N504. First run: `undefined reference to __hwasan_init` (and 8 more) linking the smoke; with the flags it passes (rvm, 32 tests in the crate) |
+| H3 | `gettext-sys` in `HWASAN_UNINSTRUMENTED` | archive-check exception | It compiles no C on Linux (libintl is in glibc; `crates-sys/gettext-sys/build.rs` builds the vendored gettext only on macOS), so there is no archive to check. Stale (RED) if it ever builds an instrumented archive. | `build.rs:80-81` (`target_os != "macos"` returns early) |
 
 The C and C++ we compile through `cc` are instrumented with `clang -fsanitize=hwaddress -mno-outline-atomics`
 through the same kind of wrapper as G-MSAN's (only when the crate being built is instrumented): checked on
 `oniguruma-sys`, whose `libonig.a` has 438 `__hwasan_*` references and whose `onig_search` calls
-`__hwasan_check_*`. Uninstrumented code (system libraries, libstdc++, Mesa, GTK) needs nothing: it
+`__hwasan_check_*`. The gate checks this rather than assuming it: after each `-sys` crate's build, every
+`lib*.a` its build script produced must reference `__hwasan_*` (`hwasan_archive_check`), else RED, and
+G-SAN-SELF's A4 C arm overflows the heap inside C compiled through `$CC` and must go RED. The one named
+exception (`HWASAN_UNINSTRUMENTED`) is H3. Checked on rvm (2026-10-02, commit dcc2b2ad, one shared
+target): all 16 `-sys` members, 15 with every archive instrumented (17 archives; `glslang-sys` included,
+so it needs no exception) and `gettext-sys` the named skip, 59 tests GREEN; G-SAN-SELF GREEN with the C
+arm RED. Uninstrumented code (system libraries, libstdc++, Mesa, GTK) needs nothing: it
 receives tagged pointers from HWASan's `malloc` and the aarch64 Top-Byte-Ignore makes its loads and stores
 work, so it runs unchecked. HWASan replaces glibc's allocator through the same `malloc`/`free`
 interceptors ASan uses; the first run found no allocator or tagged-pointer breakage anywhere, including
