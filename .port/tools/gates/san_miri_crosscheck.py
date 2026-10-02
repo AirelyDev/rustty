@@ -72,6 +72,62 @@ def skip_balanced(s, i, open_c, close_c):
     return n
 
 
+def inline_mods(s, pos):
+    """The inline `mod name { ... }` blocks enclosing offset `pos` of file text
+    `s`, outermost first. Comments, strings and char literals are skipped so a
+    brace in them does not count."""
+    stack = []      # [(name or None, depth at which its body opened)]
+    depth = 0
+    i = 0
+    n = min(pos, len(s))
+    modre = re.compile(r'\bmod\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{')
+    pending = None  # (name, index of its "{")
+    while i < n:
+        if pending is None:
+            m = modre.match(s, i) if (i == 0 or not (s[i - 1].isalnum() or s[i - 1] == "_")) else None
+            if m and m.end() - 1 < n:
+                pending = (m.group(1), m.end() - 1)
+        c = s[i]
+        if s.startswith("//", i):
+            j = s.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        if s.startswith("/*", i):
+            j = s.find("*/", i)
+            i = n if j < 0 else j + 2
+            continue
+        rm = re.compile(r'r(#*)"').match(s, i) if c == "r" and (i == 0 or not (s[i - 1].isalnum() or s[i - 1] == "_")) else None
+        if rm:
+            close = '"' + rm.group(1)
+            j = s.find(close, rm.end())
+            i = n if j < 0 else j + len(close)
+            continue
+        if c == '"':
+            i += 1
+            while i < n and s[i] != '"':
+                i += 2 if s[i] == "\\" else 1
+            i += 1
+            continue
+        if c == "'":
+            cm = re.compile(r"'(?:\\.|[^\\'])'").match(s, i)
+            if cm:
+                i = cm.end()
+                continue
+        if c == "{":
+            depth += 1
+            if pending is not None and pending[1] == i:
+                stack.append((pending[0], depth))
+                pending = None
+            else:
+                stack.append((None, depth))
+        elif c == "}":
+            if stack:
+                stack.pop()
+            depth -= 1
+        i += 1
+    return [name for name, _ in stack if name is not None]
+
+
 def attached_fn(s, i):
     """From the end of an attribute, skip attributes/comments/qualifiers; return the fn name or None."""
     n = len(s)
@@ -192,7 +248,7 @@ for f in sorted(glob.glob(os.path.join(src_root, "**", "*.rs"), recursive=True))
             unattached.append("%s %s:%d" % (crate, rel, s.count("\n", 0, m.start()) + 1))
             continue
         tgt, mod = module_of(os.path.abspath(f), rel)
-        claims.append((crate, rel, tgt, mod, fn))
+        claims.append((crate, rel, tgt, mod, fn, inline_mods(s, m.start())))
 
 # Outcomes from the logs: crate -> list of (target, test path, status).
 outcomes = {}
@@ -215,9 +271,12 @@ for lg in sorted(glob.glob(os.path.join(a.logdir, "*.log"))):
             rows.append((target, m.group(1), m.group(2)))
 
 
-def status_of(crate, tgt, mod, fn):
-    pat = re.compile(r"^%s(?:::[A-Za-z0-9_]+)*::%s$" % (re.escape(mod), re.escape(fn)) if mod
-                     else r"^(?:[A-Za-z0-9_]+::)*%s$" % re.escape(fn))
+def status_of(crate, tgt, mod, fn, inl):
+    # The exact path: the file's module, then only the inline `mod`s that
+    # enclose the annotation in its own file, then the fn. A same-named test in
+    # another module (a child file, a sibling inline mod) cannot satisfy it.
+    want = "::".join([p for p in [mod] + inl + [fn] if p])
+    pat = re.compile(r"^%s$" % re.escape(want))
     best = None
     for t, path, st in outcomes.get(crate, []):
         if tgt.startswith("tests/") and not (t == tgt or t == tgt + ".rs" or t.startswith(tgt + "/")):
@@ -246,7 +305,7 @@ for i, line in enumerate(open(a.expected, encoding="utf-8")):
 red = []
 ok = 0
 absent_ok = 0
-for crate, rel, tgt, mod, fn in claims:
+for crate, rel, tgt, mod, fn, inl in claims:
     name = "%s::%s" % (mod, fn) if mod else fn
     exp = None
     for row in expected:
@@ -257,10 +316,12 @@ for crate, rel, tgt, mod, fn in claims:
     if crate not in outcomes:
         red.append("%s %s (%s): its crate has no %s log (excluded, or the pass did not run it)" % (crate, name, rel, label))
         continue
-    st = status_of(crate, tgt, mod, fn)
+    st = status_of(crate, tgt, mod, fn, inl)
     if exp is not None:
         if st == "ok":
             exp[4] += 1
+        elif st == "FAILED":
+            red.append("%s %s (%s): on the %s expected-absent list, but it ran and FAILED under %s" % (crate, name, rel, a.os, label))
         else:
             absent_ok += 1
         continue

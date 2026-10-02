@@ -135,7 +135,15 @@ MSAN_SCOPE=(
 MSAN_SKIPS=(
   "rustty-renderer|generic::linux_impl::tests|the golden-renderer tests drive EGL and OpenGL in the system's uninstrumented libEGL/Mesa; MSan reports reads of what libEGL wrote itself (eglQueryString under OffscreenContext::init, origin a malloc inside libEGL.so.1) (M3)"
   "rustty-renderer|image::linux_impl::tests|the kitty-image tests build their textures through the same offscreen EGL context (gl_api -> OpenGL::init_offscreen -> eglQueryString in libEGL) (M3)"
-  "rustty-renderer|opengl::|the OpenGL backend's tests: EGL contexts (gl::sys, gl::test_support, opengl_impl) and shader builds through glslang (uninstrumented libstdc++, M2); the module's few pure tests (gpu_abi layout checks) go with it, since --skip is a substring filter (M3)"
+  "rustty-renderer|opengl::tests::|opengl.rs's tests build buffers in an offscreen GL context (test_support::offscreen_gl) (M3)"
+  "rustty-renderer|opengl::gl::tests::|gl.rs's tests compile shaders in an offscreen GL context (M3)"
+  "rustty-renderer|opengl::gl::sys::|the EGL wrapper's own tests (OffscreenContext, eglQueryString) (M3)"
+  "rustty-renderer|opengl::gl::test_support::|the offscreen-GL helper's tests (M3)"
+  "rustty-renderer|opengl::gl::program::|program-link failure tests in an offscreen GL context (M3)"
+  "rustty-renderer|opengl::opengl_impl::|OpenGL::init_offscreen / present tests (M3)"
+  "rustty-renderer|opengl::shaders::|the five-pipeline shader build, in GL and through glslang (M2) (M3)"
+  "rustty-renderer|opengl::pipeline::|the framebuffer/vertex-array teardown test in an offscreen GL context (M3)"
+  "rustty-renderer|opengl::target::|render-target and dmabuf export tests on the offscreen EGL context (M3)"
   "rustty-renderer|shadertoy::|custom-shader translation through glslang and spirv-cross, whose glslang preprocessor reads libstdc++-constructed stream state (M2)"
 )
 MSAN_EXCLUDES=(
@@ -408,6 +416,18 @@ spec_skips() {  # spec_skips SAN SPEC -> " --skip F ..." for that sanitizer's na
   done
 }
 
+# skips_unmatched SPEC LISTLOG: print each MSAN_SKIPS filter of SPEC that
+# matches no test in LISTLOG (libtest `--list` output: "<path>: test"); a filter
+# that skips nothing is stale and RED, like any other stale entry.
+skips_unmatched() {
+  local e f
+  for e in ${MSAN_SKIPS[@]+"${MSAN_SKIPS[@]}"}; do
+    [ "${e%%|*}" = "$1" ] || continue
+    f="$(printf '%s' "$e" | cut -d'|' -f2)"
+    grep -E ': (test|bench)$' "$2" | grep -qF -- "$f" || printf '%s\n' "$f"
+  done
+}
+
 # Matrix result accumulators (globals: bash 3.2 has no namerefs).
 M_RED=0; M_BLOCKED=0; M_TOTAL=0; M_ROWS=""; M_WALL=0
 # TARGET DIRS. Default: ONE target dir per sanitizer pass, target/san-<san>,
@@ -450,6 +470,17 @@ matrix_run() {  # matrix_run SAN FILTER SPEC...
     run_crate "$san" "$spec" "$filter$(spec_skips "$san" "$spec")" "$td" "$log"; rc=$?
     t1=$(date +%s)
     v="$(classify "$log" "$rc")"
+    if [ -n "$(spec_skips "$san" "$spec")" ]; then
+      # Every named skip must match a test: list the same build's tests (no
+      # rebuild) and check each filter against the list.
+      local lst="${log%.log}.list" um
+      run_crate "$san" "$spec" "--list" "$td" "$lst" >/dev/null 2>&1
+      um="$(skips_unmatched "$spec" "$lst")"
+      if [ -n "$um" ]; then
+        M_RED=1
+        echo "  ❌ $san $spec: MSAN_SKIPS filter(s) matching no test (stale): $(printf '%s' "$um" | tr '\n' ' ')"
+      fi
+    fi
     if [ -z "$shared" ]; then drop_target "$td"; fi
     local nt
     nt="$(no_tests_reason "$spec")"
@@ -759,6 +790,17 @@ RS
   xe "an expected-absent row that matches nothing is stale (RED)" 1 "matches no Miri-excepted test (stale)"
   xc "${R}test b::tests::ran ... ok\ntest a::tests::ignored_one ... ok\ntest a::tests::absent_one ... ok\n" ""
   xe "an ok in another module (b::tests::ran) does not satisfy a::ran (module-path match)" 1 "a::ran (src/a.rs): Miri-excepted but absent"
+  # A same-named test in a CHILD file (a/b.rs -> a::b) or a sibling inline mod
+  # of a.rs must not satisfy a::tests::ran: only the inline mods enclosing the
+  # annotation in its own file may sit between the file module and the fn.
+  mkdir -p "$st/src/crates/foo/src/a"
+  printf '#[test]\nfn ran() {}\n' >"$st/src/crates/foo/src/a/b.rs"
+  xc "${R}test a::b::ran ... ok\ntest a::tests::ignored_one ... ok\ntest a::tests::absent_one ... ok\n" ""
+  xe "an ok in a child file (a::b::ran) does not satisfy a::tests::ran" 1 "a::ran (src/a.rs): Miri-excepted but absent"
+  xc "${R}test a::other::ran ... ok\ntest a::tests::ignored_one ... ok\ntest a::tests::absent_one ... ok\n" ""
+  xe "an ok in a sibling inline mod (a::other::ran) does not satisfy a::tests::ran" 1 "a::ran (src/a.rs): Miri-excepted but absent"
+  xc "${R}test a::tests::ran ... ok\ntest a::tests::ignored_one ... ok\ntest a::tests::absent_one ... FAILED\n" "*\tfoo\ta::absent_one\tfixture reason\n"
+  xe "an expected-absent test that ran and FAILED is RED" 1 "on the .* expected-absent list, but it ran and FAILED"
   printf '#[cfg_attr(miri, ignore)]\nconst X: u8 = 0;\n' >>"$st/src/crates/foo/src/a.rs"
   xc "${R}test a::tests::ran ... ok\ntest a::tests::ignored_one ... ok\ntest a::tests::absent_one ... ok\n" ""
   xe "an annotation followed by something other than a fn is RED (never attached to a later fn)" 1 "not attached to a fn: foo src/a.rs"
@@ -791,6 +833,11 @@ RS
     'M_RED=0; M_BLOCKED=0; M_TOTAL=5; gate_verdict G-X 0'
   hx "RED dominates BLOCKED" 1 "G-X: RED" \
     'M_RED=1; M_BLOCKED=1; M_TOTAL=5; gate_verdict G-X 0'
+  printf 'opengl::gl::glad::tests::loads: test\nopengl::tests::draws: test\ncell::tests::w: test\n\n3 tests, 0 benchmarks\n' >"$st/fixture.list"
+  hx "control: every MSAN_SKIPS filter matches a listed test" 0 "" \
+    'MSAN_SKIPS=("x|opengl::tests::|r" "x|cell::|r"); [ -z "$(skips_unmatched x '"'$st/fixture.list'"')" ]'
+  hx "an MSAN_SKIPS filter that matches no test is reported (RED in the matrix)" 1 "opengl::gone::" \
+    'MSAN_SKIPS=("x|opengl::tests::|r" "x|opengl::gone::|r"); u="$(skips_unmatched x '"'$st/fixture.list'"')"; echo "$u"; [ -z "$u" ]'
 
   # --- arm F: the BLOCKED arms (no build) ---
   out="$(RUSTTY_SANITIZERS_OWN_JOB="the fixture job" bash "$GATES_DIR/sanitizers.sh" --gate asan 2>&1)"; rc=$?
