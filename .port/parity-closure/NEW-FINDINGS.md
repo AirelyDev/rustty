@@ -10391,7 +10391,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **found**: G-LSAN's first run (rvm): `rustty-bench` 720,000 bytes in 6,000 allocations from
   `ScreenClone::step_clone`, under `screen_clone_every_mode_name_parses_and_runs_setup_with_zero_loops`.
 - **not a Ghostty defect**: the reference's benchmark CLI allocates with `c_allocator`, no leak checker
-  (`src/benchmark/cli.zig:56`), and `ScreenClone.zig:264-265` (also `:286-287`, `:315-316`) leaves the copies
+  (`src/benchmark/cli.zig:56`), and `ScreenClone.zig:265-266` (also `:295-296`, `:325-326`) leaves the copies
   to process exit on purpose ("we purposely do not free memory because we don't want to benchmark that").
   For a process that exits after the run that is sound. The port's problem is that its unit tests run the
   step inside the long-lived test process, so the copies are real leaks there.

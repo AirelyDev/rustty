@@ -66,7 +66,7 @@ job (one leg per sanitizer on x86_64 Linux, never run yet: V30). Results of P7-W
 G-SAN-SELF green on macOS and rvm (every arm on Linux); G-ASAN (macOS arm64, 2026-10-02) GREEN, 9,826
 tests over 61 members and the `rustty-vt:wuffs` lane, 117 of 117 ASan claims verified, 15 min with one
 shared target dir; G-LSAN (rvm) GREEN, 10,087 tests over 61 members and three feature lanes, 86 claims
-verified and 31 macOS-only, 20 min; G-MSAN (rvm) GREEN, 6,183 tests over 58 members, 50 min. Fix round 1 (2026-10-02): the cross-check covers all 468 Miri-excepted tests (macOS: 459 ran, 9 expected absent; Linux: 412 ran, 56 expected absent), G-ASAN GREEN with 9,850 tests including a `rustty-vt:wuffs,oniguruma` lane, and `rustty-renderer` joins G-MSAN (52 tests, its EGL/GL/glslang modules skipped by name). The first
+verified and 31 macOS-only, 20 min; G-MSAN (rvm) GREEN, 6,183 tests over 58 members, 50 min. Fix round 1 (2026-10-02): the cross-check covers all 468 Miri-excepted tests (macOS: 459 ran, 9 expected absent; Linux: 412 ran, 56 expected absent), G-ASAN GREEN with 9,850 tests including a `rustty-vt:wuffs,oniguruma` lane, and `rustty-renderer` joins G-MSAN (52 tests, its EGL/GL/glslang modules skipped by name). Fix round 2: the renderer's skips narrowed to the twelve modules or tests that create an EGL/GL context or run glslang (81 tests under MSan); the G-LSAN matrix of round 1 ran on 7ddf62ffd, and the full G-LSAN gate re-ran GREEN on 05478107 (10,111 tests, cross-check 412 ran / 56 expected absent / 0 problems). The first
 runs found N495-N499 (register below); the suppressions, lane options and exclusions are in
 `.port/phase-2/SANITIZER_SUPPRESSIONS.md`.
 
