@@ -474,6 +474,30 @@ def test_regions(path, clean, whole):
 # ---------------------------------------------------------------------------
 # Pivots and pivoting helpers
 # ---------------------------------------------------------------------------
+def module_ancestors(path, known):
+    """The Rust 2018 module-root files above `path` that are in `known`, nearest
+    first: `a/x/tests/y.rs` -> [`a/x/tests.rs`, `a/x.rs`, `a.rs`]. A test file
+    split out of `x/tests.rs` (P7-W13) reaches that file's helpers through
+    `use super::*`, so they are in scope for it exactly as same-file fns are."""
+    parts = path.split(os.sep)
+    out = []
+    for i in range(len(parts) - 1, 0, -1):
+        cand = os.sep.join(parts[:i]) + ".rs"
+        if cand in known:
+            out.append(cand)
+    return out
+
+
+def scoped_flags(flags, path):
+    """`path`'s helper flags plus those of its module ancestors; a same-file fn
+    shadows an ancestor's fn of the same name."""
+    merged = {}
+    for anc in reversed(module_ancestors(path, flags)):
+        merged.update(flags[anc])
+    merged.update(flags.get(path, {}))
+    return merged
+
+
 def local_call_rx(names):
     """A bare / `Self::` / `Type::` call to one of `names` (fns of the same
     file), capturing the name. Method calls (`.name(`) and other paths
@@ -525,7 +549,8 @@ def analyze_helpers(files, whole):
     # fn), ("p", pivot-named fn).
     calls = {}
     for p, fns in bodies.items():
-        rx = local_call_rx(fns)
+        rx = local_call_rx(set(fns) | {n for a in module_ancestors(p, bodies)
+                                         for n in bodies[a]})
         for name, (_raw, cl) in fns.items():
             cs = set()
             if rx:
@@ -551,7 +576,7 @@ def analyze_helpers(files, whole):
                     continue
                 for kind, other in calls[(p, name)]:
                     if kind == "l":
-                        g = fl.get(other, [False, False])
+                        g = scoped_flags(flags, p).get(other, [False, False])
                     elif kind == "s":
                         g = shared.get(other, [False, False])
                     else:
@@ -963,7 +988,7 @@ def scan(root):
 
     for p, (text, clean) in sorted(files.items()):
         rel = os.path.relpath(p, root)
-        local = flags.get(p, {})
+        local = scoped_flags(flags, p)
         local_rx = local_call_rx(local)
         for m in TEST_ATTR.finditer(clean):
             fm = FN_RE.search(clean, m.end())
@@ -1625,6 +1650,33 @@ FILESET_CASES = [
     ("B8 a cfg(any(test, ..)) item is test code", {
         "crates/x/src/lib.rs": "#[cfg(any(test, feature = \"testing\"))]\npub fn device() -> Option<u8> { eprintln!(\"skipping\"); None }\n",
     }, set(), "MSG"),
+    # P7-W13 split: a test in `m/tests/y.rs` reaches the pivoting helper in its
+    # parent `m/tests.rs` through `use super::*`, so the early return is pivoted.
+    ("split test file calling its parent module's pivoting helper is accepted", {
+        "crates/x/src/lib.rs": "pub mod m;\n",
+        "crates/x/src/m.rs": "#[cfg(test)]\nmod tests;\n",
+        "crates/x/src/m/tests.rs": (
+            "mod y;\n"
+            "fn dev() -> Option<u8> {\n"
+            "    if std::env::var(\"RUSTTY_REQUIRE_DEV\").is_ok() { panic!(\"no device\"); }\n"
+            "    None\n}\n"),
+        "crates/x/src/m/tests/y.rs": (
+            "use super::*;\n#[test]\nfn t() {\n"
+            "    let Some(d) = dev() else { return; };\n    assert!(d > 0);\n}\n"),
+    }, set(), False),
+    # ...but a same-named pivoting helper in an UNRELATED module does not count.
+    ("a pivoting helper outside the module ancestry does not count", {
+        "crates/x/src/lib.rs": "pub mod m;\npub mod other;\n",
+        "crates/x/src/m.rs": "#[cfg(test)]\nmod tests;\n",
+        "crates/x/src/m/tests.rs": "mod y;\nfn dev() -> Option<u8> { None }\n",
+        "crates/x/src/other.rs": (
+            "#[cfg(test)]\nfn dev() -> Option<u8> {\n"
+            "    if std::env::var(\"RUSTTY_REQUIRE_DEV\").is_ok() { panic!(\"no device\"); }\n"
+            "    None\n}\n"),
+        "crates/x/src/m/tests/y.rs": (
+            "use super::*;\n#[test]\nfn t() {\n"
+            "    let Some(d) = dev() else { return; };\n    assert!(d > 0);\n}\n"),
+    }, set(), "RET"),
 ]
 
 
