@@ -1,0 +1,10 @@
+# LeakSanitizer suppressions for G-LSAN (.port/tools/gates/sanitizers.sh --gate lsan).
+#
+# Every entry here is a THIRD-PARTY leak (a system library or vendored C we do
+# not own). Each one has a row in .port/phase-2/SANITIZER_SUPPRESSIONS.md with
+# its cited reason and evidence, and a WHY comment directly above it (D6 rule c,
+# d6_cfg_mapping_audit.py). A leak in Rustty code is never suppressed: it is a
+# finding (an N id, and a UD if Ghostty has it too).
+#
+# Format: one `leak:<pattern>` per line; the pattern matches a function, source
+# file or module name anywhere in the leaking allocation's stack.

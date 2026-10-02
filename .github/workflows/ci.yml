@@ -65,6 +65,7 @@ jobs:
     needs:
       - ci
       - valgrind
+      - sanitizers
       - windows
       - windows-examples-cmake
       - macos-app
@@ -448,6 +449,10 @@ jobs:
           # reference runs valgrind in a job of its own). Here the gate reports
           # BLOCKED, naming that job (NEW-FINDINGS N413).
           RUSTTY_VALGRIND_OWN_JOB: "ci.yml's valgrind job"
+          # G-ASAN, G-LSAN and G-MSAN run in the `sanitizers` job below, one
+          # job per sanitizer (each is hours: every crate is rebuilt
+          # instrumented). Here they report BLOCKED, naming that job.
+          RUSTTY_SANITIZERS_OWN_JOB: "ci.yml's sanitizers job"
         run: bash .port/tools/ci.sh
 
   # ── Valgrind ───────────────────────────────────────────────────────────────
@@ -514,6 +519,63 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
         run: bash .port/tools/gates/check_valgrind.sh --shard "$SHARD/4" --jobs 4
+
+  # ── Sanitizers ─────────────────────────────────────────────────────────────
+  # G-ASAN, G-LSAN and G-MSAN (P7-W14; docs/superpowers/specs/2026-10-01-
+  # memory-safety-lanes-design.md §B), one job per sanitizer on x86_64 Linux.
+  # The reference has no sanitizer job (Zig's runtime safety and its leak-
+  # checking test allocator play that role, plus the valgrind job); these are
+  # the port's own memory-safety lanes. G-MSAN runs here because x86_64 is
+  # where rustc's MemorySanitizer is supported best (V30 records whether the
+  # aarch64 VM can run it). Runtime on GitHub's runners: UNVERIFIED until the
+  # next push (V25).
+  sanitizers:
+    name: rustty-sanitizers (${{ matrix.sanitizer }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [asan, lsan, msan]
+    steps:
+      - name: Checkout (rustty only — ghostty is NOT a dependency, R3)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      # -Zsanitizer is nightly-only; MSan also needs -Zbuild-std (rust-src).
+      - name: Install nightly + rust-src
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup component add rust-src --toolchain nightly
+
+      # The same build dependencies as the valgrind job (the GTK apprt and
+      # flatpak feature lanes), Mesa llvmpipe for the live-GL tests, and
+      # clang for G-MSAN's instrumented C.
+      - name: Install clang, Mesa llvmpipe and the GTK build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm \
+            libegl1 libegl-mesa0 libgl1 libgl1-mesa-dri \
+            blueprint-compiler gettext libglib2.0-dev \
+            libgtk-4-dev libadwaita-1-dev libgtk4-layer-shell-dev
+
+      - name: Require live GL and the mirrored fuzz corpus (R14)
+        run: |
+          {
+            echo "RUSTTY_REQUIRE_GL=1"
+            echo "LIBGL_ALWAYS_SOFTWARE=1"
+            echo "RUSTTY_REQUIRE_FUZZ_CORPUS=1"
+          } >> "$GITHUB_ENV"
+
+      - name: G-SAN-SELF (the sanitizers are RED on synthetic defects)
+        run: bash .port/tools/gates/sanitizers.sh --self-test
+
+      - name: G-${{ matrix.sanitizer }} over the workspace
+        env:
+          SAN: ${{ matrix.sanitizer }}
+        run: bash .port/tools/gates/sanitizers.sh --gate "$SAN"
 
   # ── Windows ────────────────────────────────────────────────────────────────
   # PORTS the reference's Windows jobs (`.github/workflows/test.yml` at the pin):
