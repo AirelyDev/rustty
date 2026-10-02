@@ -106,16 +106,33 @@ LINUX_FEATURE_LANES=(
 # test binary links an uninstrumented C/C++ library cannot run under it at all.
 # Every workspace member must be either in MSAN_SCOPE or in MSAN_EXCLUDES (with
 # its reason); one in neither is RED.
+# Phase 1, measured on rvm (aarch64 Fedora, glibc 2.43) on 2026-10-01: every
+# member below passed under MSan with its own C/C++ instrumented.
 MSAN_SCOPE=(
+  breakpad-sys dcimgui-sys fontconfig-sys freetype-sys gettext-sys harfbuzz-sys
+  highway-sys libpng-sys libxml2-sys oniguruma-sys sentry-sys simdutf-sys
+  spirv-cross-sys wuffs-sys zlib-sys
+  rustty rustty-apprt rustty-apprt-api rustty-apprt-c rustty-args rustty-bench
+  rustty-build-config rustty-cfg-fmt rustty-cli rustty-config rustty-core
+  rustty-crash rustty-datastruct rustty-extra rustty-font rustty-font-shaper
+  rustty-global rustty-helpgen rustty-identity rustty-input rustty-inspector
+  rustty-lib rustty-oniguruma rustty-os rustty-render-types rustty-simd
+  rustty-synthetic rustty-terminfo rustty-termio rustty-unicode rustty-util
+  rustty-vaxis rustty-version rustty-vt rustty-vt-c rustty-wasm
+  rustty-web-canvas rustty-wuffs rustty-xev rustty-z2d rustty-zf rustty-zigimg
+  rustty-zigstd
 )
 MSAN_EXCLUDES=(
+  "glslang-sys|its test runs glslang's preprocessor, whose TPpContext holds a std::istringstream constructed and imbued by the uninstrumented libstdc++.so; MSan reports the stream's own fields as uninitialized (PpContext.cpp:98, origin: the stack allocation of 'ppContext'); needs an MSan-instrumented libstdc++/libc++ (SANITIZER_SUPPRESSIONS.md M2)"
+  "rustty-renderer|its Linux tests drive EGL and OpenGL in the system's uninstrumented libEGL/Mesa; MSan reports reads of what libEGL wrote itself (eglQueryString under OffscreenContext::init, origin: a malloc inside libEGL.so.1) (M3)"
+  "xtask|its tests run nested cargo and cmake builds that inherit RUSTFLAGS=-Zsanitizer=memory without -Zbuild-std, which rustc rejects ('mixing -Zsanitizer will cause an ABI mismatch'); it is the build driver, which G-VALGRIND leaves out for the same kind of reason (M4)"
 )
 
 # ---------------------------------------------------------------------------
 # Log classification. classify LOG RC -> prints one of
 #   FINDING | BUILD | FAIL | VACUOUS | GREEN  and, for GREEN, the test count.
 # ---------------------------------------------------------------------------
-FINDING_RE='ERROR: (Address|Thread|Leak|Memory|HWAddress)Sanitizer|WARNING: (MemorySanitizer|ThreadSanitizer)|SUMMARY: [A-Za-z]*Sanitizer|runtime error:'
+FINDING_RE='ERROR: (Address|Thread|Leak|Memory|HWAddress)Sanitizer|WARNING: (MemorySanitizer|ThreadSanitizer): |SUMMARY: [A-Za-z]*Sanitizer|runtime error:'
 # EXECUTED tests: the sum of every target's `N passed; M failed` (P7-W14).
 # Counting `running N tests` headers counted IGNORED tests as run, so a crate
 # whose only test is #[ignore]d (rustty-wasm natively) looked like "1 test ran".
@@ -155,7 +172,13 @@ classify() {
 # file: clean when clang links its own MSan runtime, RED when rustc links its
 # runtime (P7-W14; SANITIZER_SUPPRESSIONS.md M1). The shim unpoisons the
 # struct after a successful call, which is what the missing interceptor does.
+# Only for MSAN_STAT_SHIM_PKGS (cc runs the compiler with the build script's
+# CARGO_PKG_NAME): the shim includes <sys/stat.h> before the source's own
+# feature macros, which hid pthread_setname_np from sentry-native
+# (`#define _GNU_SOURCE` comes too late) when it was applied to every crate.
+# fontconfig-sys is the one crate the first run showed it is needed for.
 # ---------------------------------------------------------------------------
+MSAN_STAT_SHIM_PKGS="fontconfig-sys"
 write_msan_wrappers() {
   local d="$SAN_TARGET_ROOT/san-cc-wrappers"
   mkdir -p "$d" || return 1
@@ -191,8 +214,10 @@ SHIM
     if [ "$cc" = "c++" ]; then real=clang++; else shim="-include $d/msan-stat-shim.h"; fi
     cat >"$d/msan-$cc" <<WRAP
 #!/usr/bin/env bash
+shim=""
+case " $MSAN_STAT_SHIM_PKGS " in *" \${CARGO_PKG_NAME:-} "*) shim="$shim" ;; esac
 case ",\${CARGO_CFG_SANITIZE:-}," in
-  *,memory,*) exec $real -fsanitize=memory -fsanitize-memory-track-origins -fno-omit-frame-pointer -g $shim "\$@" ;;
+  *,memory,*) exec $real -fsanitize=memory -fsanitize-memory-track-origins -fno-omit-frame-pointer -g \$shim "\$@" ;;
   *) exec $real "\$@" ;;
 esac
 WRAP
@@ -669,7 +694,10 @@ self_test() {
     if [ "$got" = "$3" ]; then echo "  ok   C classifier: $1 (rc=$2) -> $got"; else echo "  FAIL C classifier: $1 (rc=$2) -> '$got', want '$3'"; fail=1; fi
   }
   ck finding 1 FINDING; ck build 101 BUILD; ck fail 101 FAIL; ck vacuous 0 VACUOUS
-  ck green 0 "GREEN 5"; ck msan 77 FINDING; ck leak 23 FINDING
+  # allocator_may_return_null=1 makes MSan/ASan print "failed to allocate" for
+  # the out-of-memory tests' huge requests: informational, not a finding.
+  printf 'running 1 test\n==9==WARNING: MemorySanitizer failed to allocate 0x7fffffffffffffff bytes\ntest result: ok. 1 passed; 0 failed; 0 ignored\n' >"$st/logs/oominfo.log"
+  ck green 0 "GREEN 5"; ck msan 77 FINDING; ck leak 23 FINDING; ck oominfo 0 "GREEN 1"
   ck allignored 0 VACUOUS; ck crash 101 FAIL
   # --- arm D: drop_target refuses anything but a san-<san>-<crate> dir ---
   if ( SAN_TARGET_ROOT="$st/t"; drop_target "$st" ) 2>/dev/null; then echo "  FAIL D drop_target accepted a non-sanitizer dir"; fail=1
