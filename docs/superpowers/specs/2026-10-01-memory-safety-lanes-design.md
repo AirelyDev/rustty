@@ -53,11 +53,11 @@ The problem is the shape and cost of the lanes, not their value:
 
 The lanes become:
 
-| Lane | Model | Debug assertions | Scope | Today | Target (estimate, to measure) |
-|---|---|---|---|---|---|
-| **G6** | Stacked Borrows | on | every crate the lane covers today (same crate list, same exceptions) | about 8 h for vt, serial | 1–2 h total |
-| **G6c** | Stacked Borrows | off | the 124 `all(miri, debug_assertions)` tests, still derived from the annotations | about 1.75 h, serial | 15–30 min |
-| **G6t** (new) | Tree Borrows | on, or off for the G6c set | pointer-heavy modules (below) | only by hand | under 1 h |
+| Lane          | Model           | Debug assertions           | Scope                                                                           | Today                    | Target (estimate, to measure) |
+| ------------- | --------------- | -------------------------- | ------------------------------------------------------------------------------- | ------------------------ | ----------------------------- |
+| **G6**        | Stacked Borrows | on                         | every crate the lane covers today (same crate list, same exceptions)            | about 8 h for vt, serial | 1–2 h total                   |
+| **G6c**       | Stacked Borrows | off                        | the 124 `all(miri, debug_assertions)` tests, still derived from the annotations | about 1.75 h, serial     | 15–30 min                     |
+| **G6t** (new) | Tree Borrows    | on, or off for the G6c set | pointer-heavy modules (below)                                                   | only by hand             | under 1 h                     |
 
 **G6t scope:** the modules that hold long-lived raw aliases. Defined as a filterset in one place, with a
 self-test that every listed module exists and matches more than 0 tests:
@@ -90,12 +90,12 @@ Two consequences:
 Platform support comes from the script's own probe plus rustc's supported-target list. Re-verify each entry
 when implementing.
 
-| Sanitizer | Catches | Where | Scope |
-|---|---|---|---|
-| **ASan** (G-ASAN) | OOB, use-after-free, double-free, stack and heap overflow, including the C `-sys` code | macOS and Linux | the whole workspace test suite, including the Miri-excepted tests. It becomes the everyday broad check. |
-| **LSan** (G-LSAN) | leaks, including leaks inside C | Linux only (rustc rejects it on macOS) | run as ASan with `detect_leaks=1` on rvm and in CI. A suppressions file for known third-party leaks is allowed only with a cited reason, in `SANITIZER_SUPPRESSIONS.md`, following MIRI_EXCEPTIONS-style rules. |
-| **TSan** (G-TSAN) | data races | macOS and Linux (`-Zbuild-std`) | the threaded crates: `rustty-core` (render thread, mailbox), `rustty-termio` (read thread, exec), `rustty-xev`, `rustty-renderer`, the vt search thread, `rustty-vt-c` |
-| **MSan** (G-MSAN) | reads of uninitialized memory | Linux only. rustc lists aarch64 and x86_64 Linux; the script's probe says x86_64 only, so verify on rvm (aarch64), otherwise run it in GitHub CI (x86_64). | needs `-Zbuild-std`, and every C dependency instrumented. Phase 1: pure-Rust crates, or crates whose C dependencies we compile ourselves with `CFLAGS=-fsanitize=memory` through `cc`. Crates with uninstrumentable C, such as system libraries (GTK, fontconfig), are excluded with a cited reason. |
+| Sanitizer         | Catches                                                                                | Where                                                                                                                                                      | Scope                                                                                                                                                                                                                                                                                                |
+| ----------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ASan** (G-ASAN) | OOB, use-after-free, double-free, stack and heap overflow, including the C `-sys` code | macOS and Linux                                                                                                                                            | the whole workspace test suite, including the Miri-excepted tests. It becomes the everyday broad check.                                                                                                                                                                                              |
+| **LSan** (G-LSAN) | leaks, including leaks inside C                                                        | Linux only (rustc rejects it on macOS)                                                                                                                     | run as ASan with `detect_leaks=1` on rvm and in CI. A suppressions file for known third-party leaks is allowed only with a cited reason, in `SANITIZER_SUPPRESSIONS.md`, following MIRI_EXCEPTIONS-style rules.                                                                                      |
+| **TSan** (G-TSAN) | data races                                                                             | macOS and Linux (`-Zbuild-std`)                                                                                                                            | the threaded crates: `rustty-core` (render thread, mailbox), `rustty-termio` (read thread, exec), `rustty-xev`, `rustty-renderer`, the vt search thread, `rustty-vt-c`                                                                                                                               |
+| **MSan** (G-MSAN) | reads of uninitialized memory                                                          | Linux only. rustc lists aarch64 and x86_64 Linux; the script's probe says x86_64 only, so verify on rvm (aarch64), otherwise run it in GitHub CI (x86_64). | needs `-Zbuild-std`, and every C dependency instrumented. Phase 1: pure-Rust crates, or crates whose C dependencies we compile ourselves with `CFLAGS=-fsanitize=memory` through `cc`. Crates with uninstrumentable C, such as system libraries (GTK, fontconfig), are excluded with a cited reason. |
 
 **Common rules,** following the existing `sanitizers.sh` rules:
 
@@ -112,11 +112,11 @@ every Miri-excepted test actually ran under G-ASAN.
 
 ### C. Cadence and where each lane runs
 
-| Tier | When | Lanes |
-|---|---|---|
-| **Per change** (the post-merge gates) | every task merge | the existing gates, plus G-ASAN scoped to the changed crates, plus G6 on the changed crates only, via nextest |
-| **Full** (`ci.sh`) | before merging to main, at phase finales | G6, G6c, G6t, G-ASAN, G-LSAN (rvm), G-TSAN, G-MSAN (rvm or CI) |
-| **Release / weekly** | release, upstream resync | everything above, plus G-VALGRIND (Ghostty parity) and a G5 fuzz session under ASan |
+| Tier                                  | When                                     | Lanes                                                                                                         |
+| ------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| **Per change** (the post-merge gates) | every task merge                         | the existing gates, plus G-ASAN scoped to the changed crates, plus G6 on the changed crates only, via nextest |
+| **Full** (`ci.sh`)                    | before merging to main, at phase finales | G6, G6c, G6t, G-ASAN, G-LSAN (rvm), G-TSAN, G-MSAN (rvm or CI)                                                |
+| **Release / weekly**                  | release, upstream resync                 | everything above, plus G-VALGRIND (Ghostty parity) and a G5 fuzz session under ASan                           |
 
 GitHub CI (after the next push, V25) gets ASan, LSan, TSan and MSan jobs on x86_64 Linux, plus the Miri lanes
 on a schedule.
@@ -130,6 +130,7 @@ on a schedule.
    - V29 `search::`: 52 tests, 289 s.
 
    Go ahead only if the gain is at least 3×.
+
 2. Rewrite `check_leaks.sh` around nextest (G6 and G6c), with its self-tests, and compare against the libtest
    results.
 3. Add G6t.

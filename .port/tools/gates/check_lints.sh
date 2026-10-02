@@ -65,10 +65,13 @@ run_shellcheck() {
   # checkouts of this repository living inside it. Linting them re-reports
   # every finding from whatever commit they are parked on, which is noise at
   # best and a RED for code that is not on this branch at worst.
+  # `.superpowers/` is the git-ignored, machine-local task ledger (briefs,
+  # reports, run logs and the throwaway scripts that drove long runs); it is
+  # never in a CI checkout, so linting it only reports local scratch files.
   find . \( -name '*.sh' -o -name '*.bash' \) -type f \
     ! -path './target/*' ! -path './zig-out/*' ! -path './macos/build/*' \
     ! -path './.git/*' ! -path '*/vendor/*' ! -path './build-cmake/*' \
-    ! -path './.claude/*' \
+    ! -path './.claude/*' ! -path './.superpowers/*' \
     | sort > "$list"
 
   # Split out anything whose shebang names zsh.
