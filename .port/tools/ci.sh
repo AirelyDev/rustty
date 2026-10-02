@@ -219,6 +219,11 @@
 #                                    the vt page-compression family under Miri
 #                                    with `Page::assert_integrity` off — the
 #                                    tests G6 cannot reach at all -> PROGRESS
+#   G6t check_leaks.sh --tree-borrows
+#                                    Miri Tree Borrows over the pointer-heavy
+#                                    scope (vt page/pagelist/search/render/
+#                                    screen/terminal/snapshot/kitty, vt-c,
+#                                    renderer, xev, core)        -> PROGRESS
 #
 #   D1-D9  Bun semantic-mismatch detectors (BUN_PORT_LEARNINGS §4) — each kills a
 #          class of invisible Zig->Rust divergence that slipped every Bun gate:
@@ -330,7 +335,7 @@ done
 # Gates skipped by --fast, by id. Deliberately a NAMED list rather than a
 # duration heuristic: a gate that becomes slow should be added here consciously,
 # with the cost written down, not silently dropped because it crossed a timeout.
-FAST_SKIP_IDS=" G4 G4-uni G5 G6 G6c G8 G8b G-ASAN G-LSAN G-MSAN "
+FAST_SKIP_IDS=" G4 G4-uni G5 G6 G6c G6t G8 G8b G-ASAN G-LSAN G-MSAN "
 
 skip_in_fast() {
   # usage: skip_in_fast <id> ; returns 0 (true) when --fast should skip it
@@ -1066,6 +1071,14 @@ GATE_REGISTRY=(
   # Miri lane on a shared host, so a loaded machine must not make CI
   # un-passable (R5). Promote to HARD once it has ridden clean.
   "G6c|PROGRESS|bash $GATES/check_leaks.sh --debug-assertions-off"
+  # G6t — Miri Tree Borrows over the pointer-heavy modules and crates (P7-W15;
+  # memory-safety-lanes design §A). ADDITIVE (R5): G6 stays the full Stacked
+  # Borrows lane; G6t runs the forward-looking model where long-lived raw
+  # aliases are dense (N492 was a TB-only finding), with G6/G6c's split on
+  # debug assertions. Its scope lives in one place (check_leaks.sh G6T_SCOPE)
+  # and `--tree-borrows --self-test` proves each entry matches tests, plus the
+  # UB/leak, vacuity and flag-loss arms. Same tier as G6.
+  "G6t|PROGRESS|bash $GATES/check_leaks.sh --tree-borrows"
   # D1-D9 — Bun semantic-mismatch detectors (.port/phase-2/BUN_PORT_LEARNINGS.md
   # §4). Each kills one class of the invisible Zig->Rust divergence that slipped
   # every Bun gate. They are ADDITIVE (weaken no existing gate, R5). Registered

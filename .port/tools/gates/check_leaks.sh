@@ -24,17 +24,39 @@
 # but they are enumerated, listed by --list, and gate automatically the moment
 # one claims a done-class status).
 #
+# RUNNER (P7-W15, 2026-10-02; memory-safety-lanes design §A): every Miri lane
+# runs on `cargo miri nextest run` through ONE helper, `run_miri_nextest
+# <crate> <model sb|tb> <debug-assertions on|off> <filterset> [scope args]`.
+# Each test is its own Miri process, so one UB stops one test, not the whole
+# binary (N494: a single finding used to hide every later vt test), and the
+# processes run in parallel (performance cores minus 2; MIRI_TEST_THREADS
+# overrides). Selection is a nextest filterset resolved from the binary's own
+# test list, never libtest's in-interpreter substring filter (the G6c Tree
+# Borrows stall). Miri's leak check still runs at every process exit — now per
+# test. Doc tests, which nextest does not run, keep a libtest `--doc` arm, so
+# G6's test set is unchanged (R5). The libtest runner stays for one release
+# behind `--libtest` (any mode below), so the two can be compared.
+#
 # Usage:
 #   check_leaks.sh                    same as --all-done (the G6 gate run)
 #   check_leaks.sh --all-done         run Miri/ASan for every claimed-done crate
 #   check_leaks.sh --crate <name>     run the right tool for that crate
 #   check_leaks.sh --list             enumerate crates + status + lane (no run)
-#   check_leaks.sh --self-test        prove Miri catches a leak and a UB
+#   check_leaks.sh --self-test        prove Miri catches a leak and a UB (libtest
+#                                     arms, kept) and that the nextest runner
+#                                     goes RED on UB under SB and TB, names the
+#                                     test, and calls an empty filterset vacuous
 #   check_leaks.sh --debug-assertions-off
 #                                     GATE G6c: the `-C debug-assertions=off`
 #                                     vt Miri lane (see the G6c block below)
 #   check_leaks.sh --debug-assertions-off --self-test
 #                                     prove G6c's FAIL arms are reachable
+#   check_leaks.sh --tree-borrows     GATE G6t: Tree Borrows over the pointer-
+#                                     heavy scope (see the G6t block below)
+#   check_leaks.sh --tree-borrows --self-test
+#                                     prove G6t's FAIL arms and its scope
+#   check_leaks.sh --libtest <mode>   the pre-nextest runner for G6 / G6c
+#                                     (`--all-done`, `--crate`, `--debug-assertions-off`)
 # Exit 0 = GREEN (clean) ; 3 = BLOCKED (miri toolchain missing — a tooling
 # input, surfaced by ci.sh as a WARNING per the CI.md exit contract, never a
 # silent green and never misclassified as a claimed-done regression) ; any
@@ -44,6 +66,10 @@ set -uo pipefail
 GATES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUSTTY_ROOT="$(cd "$GATES_DIR/../../.." && pwd)"
 cd "$RUSTTY_ROOT" || exit 1
+
+# `--libtest` selects the pre-nextest runner for the mode that follows.
+MIRI_RUNNER=nextest
+if [ "${1:-}" = "--libtest" ]; then MIRI_RUNNER=libtest; shift; fi
 
 # Crates whose tests cross into C (depend on a crates-sys/* crate) -> ASan, not Miri.
 # rustty-wuffs wraps wuffs-sys C FFI (H5: it was absent from this list while its
@@ -191,7 +217,40 @@ require_miri() {
   fi
 }
 
+require_nextest() {
+  # Same contract as require_miri: a missing runner is BLOCKED (exit 3), never
+  # a silent green. Install: https://nexte.st (prebuilt: get.nexte.st/latest/<os>).
+  if ! cargo nextest --version >/dev/null 2>&1; then
+    echo "G6 BLOCKED: cargo-nextest not available (install it, or pass --libtest)"; exit 3
+  fi
+}
+
 run_crate() {
+  if [ "$MIRI_RUNNER" = libtest ]; then run_crate_libtest "$1"; else run_crate_nextest "$1"; fi
+}
+
+live_binaries_routed() {  # $1 = crate, $2 = its live_ffi_tests list
+  # GUARD (tightening): with the Miri lane narrowed to --lib, EVERY
+  # integration-test binary (tests/*.rs) of this crate must be explicitly
+  # routed in live_ffi_tests(), otherwise a future unlisted binary would run
+  # under neither Miri nor ASan in G6 — that is a RED, not a silent escape.
+  local c="$1" live="$2" tf tb unrouted=""
+  for tf in "crates/$c"/tests/*.rs "crates-sys/$c"/tests/*.rs; do
+    [ -f "$tf" ] || continue
+    tb="$(basename "$tf" .rs)"
+    case " $live " in *" $tb "*) ;; *) unrouted="$unrouted $tb";; esac
+  done
+  if [ -n "$unrouted" ]; then
+    echo "G6 RED [$c]: unrouted integration-test binaries:$unrouted"
+    echo "  (this crate's Miri lane is --lib only; add each binary to live_ffi_tests()"
+    echo "   WITH a 4-criterion MIRI_EXCEPTIONS.md entry, or it escapes both lanes)"
+    return 1
+  fi
+  return 0
+}
+
+# The pre-nextest G6 crate runner (`--libtest`), unchanged.
+run_crate_libtest() {
   local c="$1"
   if is_ffi "$c"; then
     echo "=== G6 [$c] :: ASan (FFI crate; Miri can't run C) ==="
@@ -204,22 +263,7 @@ run_crate() {
   local live
   live="$(live_ffi_tests "$c")"
   if [ -n "$live" ]; then
-    # GUARD (tightening): with the Miri lane narrowed to --lib, EVERY
-    # integration-test binary (tests/*.rs) of this crate must be explicitly
-    # routed in live_ffi_tests(), otherwise a future unlisted binary would run
-    # under neither Miri nor ASan in G6 — that is a RED, not a silent escape.
-    local tf tb unrouted=""
-    for tf in "crates/$c"/tests/*.rs "crates-sys/$c"/tests/*.rs; do
-      [ -f "$tf" ] || continue
-      tb="$(basename "$tf" .rs)"
-      case " $live " in *" $tb "*) ;; *) unrouted="$unrouted $tb";; esac
-    done
-    if [ -n "$unrouted" ]; then
-      echo "G6 RED [$c]: unrouted integration-test binaries:$unrouted"
-      echo "  (this crate's Miri lane is --lib only; add each binary to live_ffi_tests()"
-      echo "   WITH a 4-criterion MIRI_EXCEPTIONS.md entry, or it escapes both lanes)"
-      return 1
-    fi
+    live_binaries_routed "$c" "$live" || return 1
     # ROUTED, not skipped (R5): Miri proves the crate's unit surface; each
     # live-syscall test binary (which Miri hard-errors on: "can't call foreign
     # function \`kqueue\`") runs under ASan. MIRI_EXCEPTIONS.md has the
@@ -240,7 +284,13 @@ run_crate() {
   require_miri
   local mrc=0
   cargo +nightly miri test -p "$c" 2>&1 || mrc=1
+  asan_companions "$c" || mrc=1
+  return $mrc
+}
 
+# The ASan arms that accompany a crate's Miri lane (both runners).
+asan_companions() {
+  local c="$1" mrc=0
   # ASan companion for in-lib live-syscall unit tests (see live_ffi_unit_filters).
   local ufilters floor sout uran
   ufilters="$(live_ffi_unit_filters "$c")"
@@ -349,7 +399,7 @@ G6C_FILTERS="${G6C_FILTERS:-}"
 # quietly stops running is a RED, not a smaller green. It is also the proof that
 # `-C debug-assertions=off` reached rustc, because every test it counts is
 # `cfg_attr(all(miri, debug_assertions), ignore)` and therefore CANNOT run
-# unless the flag took (see g6c_verdict).
+# unless the flag took (see g6c_verdict_libtest).
 G6C_MIN_PASSED="${G6C_MIN_PASSED:-$(printf '%s\n' $G6C_FILTERS | grep -c .)}"
 # Hard per-lane kill budget. macOS has no coreutils `timeout`; killtree, as in
 # .port/tools/miri-run.sh. The measured serial lane cost is tens of minutes
@@ -369,8 +419,8 @@ G6C_BOUND_SEC="${G6C_BOUND_SEC:-10800}"
 
 g6c_killtree() { local p=$1 c; for c in $(pgrep -P "$p" 2>/dev/null); do g6c_killtree "$c"; done; kill -9 "$p" 2>/dev/null; }
 
-# g6c_lane <extra-rustflags> <outfile> — run the lane once, hard-bounded.
-g6c_lane() {
+# g6c_lane_libtest <extra-rustflags> <outfile> — run the lane once, hard-bounded.
+g6c_lane_libtest() {
   local extra="$1" out="$2" cpid kpid rc
   ( cd "$G6C_DIR" && RUSTFLAGS="-C debug-assertions=off $extra" MIRIFLAGS="-Zmiri-disable-isolation" \
       cargo +nightly miri test -p "$G6C_PKG" --lib -- $G6C_FILTERS --test-threads=1 >"$out" 2>&1 ) &
@@ -386,8 +436,8 @@ g6c_lane() {
   return $rc
 }
 
-# g6c_verdict <outfile> — 0 only for a clean AND non-vacuous run.
-g6c_verdict() {
+# g6c_verdict_libtest <outfile> — 0 only for a clean AND non-vacuous run.
+g6c_verdict_libtest() {
   local out="$1" line passed failed
   if grep -qE 'Undefined Behavior|memory leaked|error: aborting' "$out"; then
     echo "G6c RED: Miri reported UB or a leak in the page-compression family:"
@@ -419,16 +469,16 @@ g6c_verdict() {
   return 0
 }
 
-run_g6c() {
+run_g6c_libtest() {
   require_miri
   echo "=== G6c [$G6C_PKG] :: Miri, -C debug-assertions=off ==="
   echo "    $G6C_MIN_PASSED test(s), derived from the cfg_attr(all(miri, debug_assertions)) annotations"
   echo "    (measured GREEN in 3092s serial on an M4 Pro, 2026-07-30, and 3952s for 83 tests at 9fd17d93; set G6C_FILTERS to narrow)"
   local out; out="$(mktemp "${TMPDIR:-/tmp}/g6c.XXXXXX")"
   local t0=$SECONDS
-  g6c_lane "" "$out"
+  g6c_lane_libtest "" "$out"
   local dur=$((SECONDS - t0))
-  if g6c_verdict "$out"; then
+  if g6c_verdict_libtest "$out"; then
     echo "G6c GREEN (${dur}s; debug assertions off, UB/leak-clean, non-vacuous)"
     rm -f "$out"; return 0
   fi
@@ -437,15 +487,15 @@ run_g6c() {
 }
 
 # --debug-assertions-off --self-test — prove BOTH of G6c's FAIL arms reachable.
-run_g6c_selftest() {
+run_g6c_selftest_libtest() {
   require_miri
   local rc=0 out
   echo "=== G6c --self-test arm 1: FLAG-LOSS (the vacuity arm, on the REAL crate) ==="
   echo "    re-runs the real lane with '-C debug-assertions=on' appended, which is"
   echo "    what a dropped RUSTFLAGS looks like; the family then reports 'ignored'."
   out="$(mktemp "${TMPDIR:-/tmp}/g6cst1.XXXXXX")"
-  g6c_lane "-C debug-assertions=on" "$out"
-  if g6c_verdict "$out"; then
+  g6c_lane_libtest "-C debug-assertions=on" "$out"
+  if g6c_verdict_libtest "$out"; then
     echo "  self-test FAIL: the lane stayed GREEN with debug assertions back ON —"
     echo "  the vacuity floor is not binding. ($out)"; rc=1
   else
@@ -469,9 +519,9 @@ run_g6c_selftest() {
   out="$(mktemp "${TMPDIR:-/tmp}/g6cst2.XXXXXX")"
   ( G6C_PKG=g6cscratch G6C_DIR="$D" G6C_FILTERS="pagelist::tests::pagelist_compress_page" \
     G6C_MIN_PASSED=4 G6C_BOUND_SEC=300
-    g6c_lane "" "$out"
-    if g6c_verdict "$out" >/dev/null 2>&1; then exit 1; fi
-    g6c_verdict "$out" 2>&1 | head -4
+    g6c_lane_libtest "" "$out"
+    if g6c_verdict_libtest "$out" >/dev/null 2>&1; then exit 1; fi
+    g6c_verdict_libtest "$out" 2>&1 | head -4
     exit 0 )
   if [ $? -eq 0 ]; then
     echo "  arm 2 OK: G6c goes RED and names the UB."
@@ -480,6 +530,459 @@ run_g6c_selftest() {
   fi
   rm -rf "$D"; rm -f "$out"
   [ $rc = 0 ] && echo "G6c --self-test: BOTH FAIL ARMS REACHABLE"
+  return $rc
+}
+
+# ===========================================================================
+# THE NEXTEST RUNNER (P7-W15) — shared by G6, G6c and G6t.
+# ===========================================================================
+
+# Parallel Miri processes: performance cores minus 2 (at least 1). Each Miri
+# process is single-threaded, so this leaves two cores for the host.
+miri_threads() {
+  if [ -n "${MIRI_TEST_THREADS:-}" ]; then echo "$MIRI_TEST_THREADS"; return; fi
+  local p
+  p="$(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || nproc 2>/dev/null || echo 3)"
+  p=$((p - 2)); [ "$p" -ge 1 ] || p=1
+  echo "$p"
+}
+
+mn_killtree() { local p=$1 c; for c in $(pgrep -P "$p" 2>/dev/null); do mn_killtree "$c"; done; kill -9 "$p" 2>/dev/null; }
+
+# mn_verdict <outfile> <label> <exit-code> — 0 only for a clean, non-vacuous run.
+# Reads (optional) MN_EXPECT: a file of "<crate> <test path>" lines, every one
+# of which must have PASSED; MN_MIN_PASSED: a floor on the passed count.
+# Writes the passed count to <outfile>.passed.
+#
+# RED when: the build failed; the run never printed its summary (killed at the
+# hang bound, or crashed); any Miri `Undefined Behavior` or `memory leaked`
+# report, attributed to the test whose output carries it; any test that did not
+# PASS; zero tests passed (vacuous); an expected test that did not pass; or a
+# non-zero exit nothing above explains.
+mn_verdict() {
+  python3 - "$1" "$2" "$3" "${MN_EXPECT:-}" "${MN_MIN_PASSED:-0}" <<'PY'
+import re, sys
+out, label, rc, expect, floor = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], int(sys.argv[5])
+lines = open(out, errors='replace').read().split('\n')
+# `        PASS [   1.234s] ( 3/52) rustty-vt search::x::tests::y`
+status_re = re.compile(r'^\s+(PASS|FAIL|ABORT|TIMEOUT|LEAK|LEAK-FAIL|FLAKY|SIG[A-Z]+|EXIT \d+|TRY \d+ [A-Z-]+)\s+\[[^\]]*\]\s+(?:\([^)]*\)\s+)?(\S+)\s+(\S+)\s*$')
+header_re = re.compile(r'STD(?:OUT|ERR):\s+(\S+)\s+(\S+?)\s*-*\s*$')
+final, cur, findings = {}, None, {}
+for i, l in enumerate(lines):
+    m = status_re.match(l)
+    if m:
+        cur = m.group(2) + ' ' + m.group(3)
+        final[cur] = m.group(1)
+        continue
+    m = header_re.search(l)
+    if m:
+        cur = m.group(1) + ' ' + m.group(2)
+        continue
+    if re.search(r'error: (Undefined Behavior|memory leaked)', l):
+        ex = [l.strip()]
+        for k in lines[i + 1:i + 15]:
+            if '-->' in k:
+                ex.append(k.strip()); break
+        findings.setdefault(cur or '<output not attributable to a test>', [])
+        if ex not in findings[cur or '<output not attributable to a test>']:
+            findings[cur or '<output not attributable to a test>'].append(ex)
+summary = [l for l in lines if re.match(r'^\s*Summary \[', l)]
+passed = sorted(t for t, s in final.items() if s == 'PASS')
+failed = sorted(t for t, s in final.items() if s != 'PASS')
+open(out + '.passed', 'w').write(str(len(passed)))
+red = []
+if any(re.search(r'^error\[E\d+\]|error: could not compile', l) for l in lines):
+    red.append('the Miri test build FAILED:')
+    red += ['    ' + l for l in lines if re.search(r'^error', l)][:6]
+elif not summary:
+    red.append('no nextest summary: the run did not finish (hang bound, crash or kill). Last lines:')
+    red += ['    ' + l for l in lines[-6:]]
+for t, exs in sorted(findings.items()):
+    for ex in exs[:2]:
+        red.append('Miri finding in %s:' % t)
+        red += ['    ' + e for e in ex]
+if failed:
+    red.append('%d test(s) did not pass:' % len(failed))
+    red += ['    %s %s' % (final[t], t) for t in failed[:25]]
+    if len(failed) > 25:
+        red.append('    ... and %d more' % (len(failed) - 25))
+if summary and not passed:
+    red.append('VACUOUS: 0 tests passed (the filterset matched nothing runnable, or everything was skipped).')
+if passed and len(passed) < floor:
+    red.append('only %d test(s) passed, expected at least %d.' % (len(passed), floor))
+if expect:
+    want = [w.strip() for w in open(expect) if w.strip()]
+    missing = [w for w in want if final.get(w) != 'PASS']
+    if missing:
+        red.append('%d of %d expected test(s) did not PASS (skipped as ignored, absent, or failed):' % (len(missing), len(want)))
+        red += ['    %s (%s)' % (w, final.get(w, 'not run')) for w in missing[:15]]
+if rc != 0 and not red:
+    red.append('nextest exited %d with no failure in its output.' % rc)
+if red:
+    print('  RED [%s]:' % label)
+    for r in red:
+        print('    ' + r)
+    sys.exit(1)
+print('    %s' % summary[-1].strip())
+PY
+}
+
+# run_miri_nextest <crate> <model sb|tb> <debug-assertions on|off> <filterset> [cargo scope args...]
+#   The one Miri runner. Env: MN_OUT (output file, required), MN_DIR (workspace,
+#   default the repo), MN_MIRIFLAGS / MN_RUSTFLAGS (extra flags), MN_BOUND_SEC
+#   (hang bound for the whole invocation, 0 = none), MN_EXPECT / MN_MIN_PASSED
+#   (see mn_verdict). Ignored tests stay ignored: nextest runs only the tests the
+#   binary does not report as ignored, and the binary is the Miri-compiled one,
+#   so `cfg_attr(miri, ignore)` and `cfg_attr(all(miri, debug_assertions),
+#   ignore)` decide exactly as they did under libtest. Leak checking is Miri's
+#   default and is never turned off here (no -Zmiri-ignore-leaks).
+run_miri_nextest() {
+  local crate="$1" model="$2" da="$3" fs="$4"; shift 4
+  local mf="${MN_MIRIFLAGS:-}" rf="${MN_RUSTFLAGS:-}" out="${MN_OUT:?run_miri_nextest needs MN_OUT}"
+  local bound="${MN_BOUND_SEC:-0}" cpid kpid="" rc t0=$SECONDS
+  case "$model" in
+    sb) ;;
+    tb) mf="$mf -Zmiri-tree-borrows" ;;
+    *) echo "run_miri_nextest: model must be sb or tb, got '$model'"; return 2 ;;
+  esac
+  case "$da" in
+    on) ;;
+    off) rf="-C debug-assertions=off $rf" ;;
+    *) echo "run_miri_nextest: debug assertions must be on or off, got '$da'"; return 2 ;;
+  esac
+  mf="$(printf '%s' "$mf" | sed 's/^ *//; s/ *$//')"; rf="$(printf '%s' "$rf" | sed 's/^ *//; s/ *$//')"
+  echo "    [$crate] Miri $( [ "$model" = tb ] && echo 'Tree' || echo 'Stacked') Borrows, debug assertions $da, $(miri_threads) processes, MIRIFLAGS='$mf'${rf:+, RUSTFLAGS='$rf'}"
+  echo "    filterset: $(printf '%s' "$fs" | cut -c1-160)$( [ ${#fs} -gt 160 ] && echo " ... (${#fs} chars)")"
+  (
+    cd "${MN_DIR:-$RUSTTY_ROOT}" || exit 2
+    [ -n "$rf" ] && export RUSTFLAGS="$rf"
+    export MIRIFLAGS="$mf"
+    exec cargo +nightly miri nextest run -p "$crate" "$@" -E "$fs" \
+      --test-threads "$(miri_threads)" --no-fail-fast --no-tests=pass --color never \
+      --failure-output immediate-final --success-output never >"$out" 2>&1
+  ) &
+  cpid=$!
+  if [ "$bound" -gt 0 ]; then ( sleep "$bound"; mn_killtree "$cpid" 2>/dev/null ) & kpid=$!; fi
+  wait "$cpid" 2>/dev/null; rc=$?
+  # killtree the watchdog too: a bare kill orphans its `sleep`, which holds the
+  # inherited stdout open and hangs any consumer for the full bound (G6c, 2026-07).
+  [ -n "$kpid" ] && { mn_killtree "$kpid" 2>/dev/null; wait "$kpid" 2>/dev/null; }
+  MN_SECS=$((SECONDS - t0))
+  echo "    [$crate] ${MN_SECS}s"
+  mn_verdict "$out" "$crate" "$rc"
+}
+
+mn_tmp() { mktemp "${TMPDIR:-/tmp}/mn.$1.XXXXXX"; }
+
+# Doc tests: nextest does not run them, `cargo miri test` did, so G6 keeps a
+# libtest `--doc` arm per crate (same set as before, R5).
+miri_doctests() {
+  local c="$1" d r line
+  d="$(mn_tmp doc)"
+  cargo +nightly miri test -p "$c" --doc >"$d" 2>&1; r=$?
+  if grep -q 'no library targets found' "$d"; then
+    echo "    [$c] doc tests: none (no library target)"; rm -f "$d"; return 0
+  fi
+  if [ "$r" -ne 0 ] || grep -qE 'Undefined Behavior|memory leaked' "$d"; then
+    echo "  RED [$c]: Miri doc tests (exit $r):"
+    grep -nE 'Undefined Behavior|memory leaked|^test .* FAILED|^error' "$d" | head -8 | sed 's/^/    /'
+    echo "    full output: $d"; return 1
+  fi
+  line="$(grep -E '^test result:' "$d" | tail -1)"
+  echo "    [$c] doc tests: ${line:-no doc-test summary}"; rm -f "$d"; return 0
+}
+
+run_crate_nextest() {
+  local c="$1" live out rc=0
+  if is_ffi "$c"; then run_crate_libtest "$c"; return $?; fi   # ASan lane: no Miri
+  require_miri; require_nextest
+  out="$(mn_tmp "$c")"
+  live="$(live_ffi_tests "$c")"
+  if [ -n "$live" ]; then
+    live_binaries_routed "$c" "$live" || return 1
+    echo "=== G6 [$c] :: Miri via nextest (unit surface --lib; live-FFI test binaries routed to ASan per MIRI_EXCEPTIONS.md) ==="
+    MN_OUT="$out" run_miri_nextest "$c" sb on 'all()' --lib || rc=1
+    local t
+    for t in $live; do
+      echo "=== G6 [$c --test $t] :: ASan (live syscalls; Miri cannot execute them) ==="
+      RUSTFLAGS="-Zsanitizer=address" RUSTDOCFLAGS="-Zsanitizer=address" \
+        cargo +nightly test -p "$c" --test "$t" --target "$(rustc -vV | sed -n 's/host: //p')" 2>&1 || rc=1
+    done
+  else
+    echo "=== G6 [$c] :: Miri via nextest (UB + leaks, one process per test) ==="
+    MN_OUT="$out" run_miri_nextest "$c" sb on 'all()' || rc=1
+    miri_doctests "$c" || rc=1
+    asan_companions "$c" || rc=1
+  fi
+  if [ "$rc" = 0 ]; then rm -f "$out" "$out.passed"; else echo "    full output: $out"; fi
+  return $rc
+}
+
+# ---- G6c on nextest ---------------------------------------------------------
+# The test set is still DERIVED from the annotations (g6c_names). Each derived
+# fn name is resolved to its full test path(s) from the crate's NATIVE test list
+# (a native `--list` is instant; libtest's filter under Miri was not), and the
+# lane selects exactly those paths: `test(=<path>) | ...`. A derived name with
+# no test path is RED (the annotation sits on something that is not a test in
+# this build). Every resolved path must PASS.
+g6c_paths() {  # prints "<pkg> <path>" lines; exit 1 if a derived name has no test
+  local list; list="$(mn_tmp g6clist)"
+  ( cd "$G6C_DIR" && cargo test -q -p "$G6C_PKG" --lib -- --list 2>/dev/null ) | sed -n 's/: test$//p' >"$list"
+  python3 - "$list" "$G6C_PKG" $G6C_FILTERS <<'PY'
+import sys
+paths = [p.strip() for p in open(sys.argv[1]) if p.strip()]
+pkg, names, bad = sys.argv[2], sys.argv[3:], []
+for n in names:
+    hits = [p for p in paths if p.rsplit('::', 1)[-1] == n]
+    if not hits:
+        bad.append(n)
+    for h in hits:
+        print(pkg, h)
+for b in bad:
+    print('G6c: annotated name has no test in the native list: %s' % b, file=sys.stderr)
+sys.exit(1 if bad or not names else 0)
+PY
+  local r=$?; rm -f "$list"; return $r
+}
+
+# exact_filterset <file of "<crate> <path>"> — `test(=a) | test(=b) | ...`
+exact_filterset() { awk '{printf "%stest(=%s)", (NR>1 ? " | " : ""), $2}' "$1"; }
+
+# g6c_lane_nextest <extra-rustflags> <outfile>
+g6c_lane_nextest() {
+  local extra="$1" out="$2" exp n
+  exp="$(mn_tmp g6cexp)"
+  if ! g6c_paths >"$exp"; then echo "  RED [G6c]: the annotation-derived set does not resolve (above)"; rm -f "$exp"; return 1; fi
+  n="$(grep -c . "$exp")"
+  echo "    $n test path(s) from $(printf '%s\n' $G6C_FILTERS | grep -c .) annotated name(s)"
+  MN_DIR="$G6C_DIR" MN_MIRIFLAGS="-Zmiri-disable-isolation" MN_RUSTFLAGS="$extra" \
+    MN_BOUND_SEC="$G6C_BOUND_SEC" MN_EXPECT="$exp" MN_MIN_PASSED="$G6C_MIN_PASSED" MN_OUT="$out" \
+    run_miri_nextest "$G6C_PKG" sb off "$(exact_filterset "$exp")" --lib
+  local r=$?; rm -f "$exp"; return $r
+}
+
+run_g6c() {
+  if [ "$MIRI_RUNNER" = libtest ]; then run_g6c_libtest; return $?; fi
+  require_miri; require_nextest
+  echo "=== G6c [$G6C_PKG] :: Miri via nextest, -C debug-assertions=off ==="
+  echo "    $G6C_MIN_PASSED test(s), derived from the cfg_attr(all(miri, debug_assertions)) annotations"
+  local out; out="$(mn_tmp g6c)"
+  if g6c_lane_nextest "" "$out"; then
+    echo "G6c GREEN (${MN_SECS:-?}s; debug assertions off, UB/leak-clean, non-vacuous)"
+    rm -f "$out" "$out.passed"; return 0
+  fi
+  echo "    full output: $out"; return 1
+}
+
+# A synthetic crate for the runner's FAIL arms: three passing tests, an
+# out-of-bounds read, an aliasing violation (UB under BOTH models: the second
+# `&mut x` invalidates the raw pointer's tag under SB, and disables it under TB
+# once the raw write lands), and a leak.
+mn_fixture() {  # prints the crate dir
+  local D; D="$(mktemp -d "${TMPDIR:-/tmp}/mnfix.XXXXXX")"
+  ( cd "$D" && cargo init --lib --name mnfixture -q 2>/dev/null
+    cat > src/lib.rs <<'RS'
+#[cfg(test)]
+mod fixture {
+    #[test] fn ok_1() { assert_eq!(2 + 2, 4); }
+    #[test] fn ok_2() { assert_eq!(2 + 2, 4); }
+    #[test] fn ok_3() { assert_eq!(2 + 2, 4); }
+    #[test] fn ub_out_of_bounds() { let v = [0u8; 3]; let p = v.as_ptr(); let _x = unsafe { *p.add(9) }; }
+    #[test] fn ub_aliasing() {
+        let mut x = 0u8;
+        let p = &mut x as *mut u8;
+        let r = &mut x;
+        unsafe { *p = 1; }
+        *r = 2;
+    }
+    #[test] fn leaks() { let _ = Box::leak(Box::new(1u32)); }
+}
+RS
+  )
+  echo "$D"
+}
+
+# mn_fixture_selftest <model> — the runner goes RED on the fixture, names each
+# bad test, and still runs the three good ones (one UB no longer hides the rest).
+mn_fixture_selftest() {
+  local model="$1" D out v rc=0 t
+  D="$(mn_fixture)"; out="$(mn_tmp fix)"
+  v="$(MN_DIR="$D" MN_OUT="$out" run_miri_nextest mnfixture "$model" on 'all()' 2>&1)"
+  printf '%s\n' "$v" | sed 's/^/  | /' | head -24
+  if ! printf '%s' "$v" | grep -q 'RED \[mnfixture\]'; then
+    echo "  self-test FAIL ($model): the UB/leak fixture was not RED"; rc=1
+  fi
+  for t in ub_out_of_bounds ub_aliasing leaks; do
+    if ! printf '%s' "$v" | grep -q "Miri finding in mnfixture fixture::$t"; then
+      echo "  self-test FAIL ($model): the report does not name fixture::$t"; rc=1
+    fi
+  done
+  if [ "$(cat "$out.passed" 2>/dev/null)" != 3 ]; then
+    echo "  self-test FAIL ($model): expected the 3 good tests to pass alongside the bad ones, got $(cat "$out.passed" 2>/dev/null)"; rc=1
+  fi
+  [ $rc = 0 ] && echo "  arm OK ($model): UB (out of bounds, aliasing) and the leak are RED, each named; the good tests still ran"
+  rm -rf "$D"; rm -f "$out" "$out.passed"
+  return $rc
+}
+
+mn_vacuous_selftest() {
+  local D out v rc=0
+  D="$(mn_fixture)"; out="$(mn_tmp vac)"
+  v="$(MN_DIR="$D" MN_OUT="$out" run_miri_nextest mnfixture sb on 'test(=fixture::no_such_test)' 2>&1)"
+  printf '%s\n' "$v" | sed 's/^/  | /' | tail -3
+  if printf '%s' "$v" | grep -q 'VACUOUS'; then echo "  arm OK: an empty filterset is a vacuous RED"
+  else echo "  self-test FAIL: an empty filterset was not a vacuous RED"; rc=1; fi
+  rm -rf "$D"; rm -f "$out" "$out.passed"
+  return $rc
+}
+
+run_g6c_selftest() {
+  if [ "$MIRI_RUNNER" = libtest ]; then run_g6c_selftest_libtest; return $?; fi
+  require_miri; require_nextest
+  local rc=0 out
+  echo "=== G6c --self-test arm 1: FLAG-LOSS (on the REAL crate and the REAL derived set) ==="
+  echo "    re-runs the lane with '-C debug-assertions=on' appended; the family then reports 'ignored'."
+  out="$(mn_tmp g6cst1)"
+  if g6c_lane_nextest "-C debug-assertions=on" "$out" >"$out.v" 2>&1; then
+    cat "$out.v"; echo "  self-test FAIL: the lane stayed GREEN with debug assertions back ON"; rc=1
+  else
+    tail -6 "$out.v"; echo "  arm 1 OK: G6c goes RED when the flag is lost."
+  fi
+  rm -f "$out" "$out.v" "$out.passed"
+  echo "=== G6c --self-test arm 2: UB DETECTION through the G6c lane (synthetic crate) ==="
+  local D; D="$(mktemp -d "${TMPDIR:-/tmp}/g6cfix.XXXXXX")"
+  ( cd "$D" && cargo init --lib --name g6cscratch -q 2>/dev/null
+    { echo 'pub mod pagelist { #[cfg(test)] pub mod tests {'
+      for i in 1 2 3 4; do
+        echo "#[test] fn pagelist_compress_page_ok_$i() { assert_eq!(2 + 2, 4); }"
+      done
+      echo '#[test] fn pagelist_compress_page_selftest_ub() {'
+      echo '  let v = [0u8; 3]; let p = v.as_ptr(); let _x = unsafe { *p.add(9) };'
+      echo '}'
+      echo '} }'; } > src/lib.rs )
+  out="$(mn_tmp g6cst2)"
+  ( G6C_PKG=g6cscratch G6C_DIR="$D" G6C_MIN_PASSED=4 G6C_BOUND_SEC=600 \
+    G6C_FILTERS="pagelist_compress_page_ok_1 pagelist_compress_page_ok_2 pagelist_compress_page_ok_3 pagelist_compress_page_ok_4 pagelist_compress_page_selftest_ub"
+    g6c_lane_nextest "" "$out" ) >"$out.v" 2>&1
+  if grep -q 'RED \[g6cscratch\]' "$out.v" && grep -q 'Miri finding in g6cscratch pagelist::tests::pagelist_compress_page_selftest_ub' "$out.v"; then
+    grep -A3 'RED \[' "$out.v" | head -6; echo "  arm 2 OK: G6c goes RED and names the UB test."
+  else
+    cat "$out.v"; echo "  self-test FAIL: injected UB did not turn G6c RED with the test named"; rc=1
+  fi
+  rm -rf "$D"; rm -f "$out" "$out.v" "$out.passed"
+  [ $rc = 0 ] && echo "G6c --self-test: BOTH FAIL ARMS REACHABLE"
+  return $rc
+}
+
+# ---------------------------------------------------------------------------
+# GATE G6t — Tree Borrows over the pointer-heavy scope (P7-W15; design §A).
+#
+# ADDITIVE (R5): G6 stays the full-coverage Stacked Borrows lane. Tree Borrows
+# is the forward-looking model and accepts/rejects different patterns (N492
+# was TB-only), so G6t runs it where long-lived raw aliases are dense. Same
+# split as G6/G6c: the G6c-annotated tests (`cfg_attr(all(miri,
+# debug_assertions), ignore)`) run with debug assertions OFF and isolation
+# disabled, exactly as in G6c; everything else with them ON, as in G6.
+#
+# THE SCOPE, defined here and nowhere else. `<crate>` = the whole crate (every
+# test target, as G6 runs it); `<crate>:<module>` = that crate's tests under
+# `<module>::`. `--tree-borrows --self-test` proves every entry exists and
+# matches more than 0 tests.
+G6T_SCOPE="${G6T_SCOPE:-rustty-vt:page rustty-vt:pagelist rustty-vt:search rustty-vt:render rustty-vt:screen rustty-vt:terminal rustty-vt:snapshot rustty-vt:kitty rustty-vt-c rustty-renderer rustty-xev rustty-core}"
+G6T_BOUND_SEC="${G6T_BOUND_SEC:-14400}"
+
+g6t_crates() { printf '%s\n' $G6T_SCOPE | sed 's/:.*//' | awk '!seen[$0]++'; }
+g6t_modules() { printf '%s\n' $G6T_SCOPE | sed -n "s/^$1:\(.*\)/\1/p"; }
+g6t_filterset() {  # $1 = crate
+  local mods; mods="$(g6t_modules "$1" | paste -sd'|' -)"
+  if [ -z "$mods" ]; then echo 'all()'; else echo "test(/^($mods)::/)"; fi
+}
+
+# g6t_crate <crate> <extra-rustflags-for-the-off-half> — one crate's G6t run.
+g6t_crate() {
+  local c="$1" extra="$2" fs out rc=0 exp mods
+  fs="$(g6t_filterset "$c")"
+  out="$(mn_tmp "g6t.$c")"
+  if [ -z "$extra" ]; then
+    MN_BOUND_SEC="$G6T_BOUND_SEC" MN_OUT="$out" run_miri_nextest "$c" tb on "$fs" || rc=1
+    if [ "$rc" = 0 ]; then rm -f "$out" "$out.passed"; else echo "    full output: $out"; fi
+  fi
+  if [ "$c" = "$G6C_PKG" ]; then
+    exp="$(mn_tmp g6texp)"
+    mods="$(g6t_modules "$c" | paste -sd'|' -)"
+    if ! g6c_paths >"$exp.all"; then echo "  RED [G6t]: the G6c-derived set does not resolve"; rm -f "$exp" "$exp.all"; return 1; fi
+    if [ -n "$mods" ]; then grep -E "^$c ($mods)::" "$exp.all" >"$exp"; else cp "$exp.all" "$exp"; fi
+    rm -f "$exp.all"
+    if [ -s "$exp" ]; then
+      out="$(mn_tmp "g6t.$c.off")"
+      echo "    [$c] the $(grep -c . "$exp") G6c-annotated test(s) in scope, debug assertions off:"
+      MN_MIRIFLAGS="-Zmiri-disable-isolation" MN_RUSTFLAGS="$extra" MN_BOUND_SEC="$G6T_BOUND_SEC" \
+        MN_EXPECT="$exp" MN_MIN_PASSED="$(grep -c . "$exp")" MN_OUT="$out" \
+        run_miri_nextest "$c" tb off "$(exact_filterset "$exp")" --lib || rc=1
+      if [ "$rc" = 0 ]; then rm -f "$out" "$out.passed"; else echo "    full output: $out"; fi
+    fi
+    rm -f "$exp"
+  fi
+  return $rc
+}
+
+run_g6t() {
+  require_miri; require_nextest
+  local c rc=0 t0=$SECONDS
+  echo "=== G6t :: Miri Tree Borrows via nextest over: $G6T_SCOPE ==="
+  for c in $(g6t_crates); do
+    echo "=== G6t [$c] ==="
+    g6t_crate "$c" "" || rc=1
+  done
+  if [ "$rc" = 0 ]; then echo "G6t GREEN ($((SECONDS - t0))s; Tree Borrows, UB/leak-clean, non-vacuous)"
+  else echo "G6t RED ($((SECONDS - t0))s)"; fi
+  return $rc
+}
+
+# Scope check: every entry names an existing crate (and module), and matches
+# more than 0 runnable tests under Miri.
+g6t_scope_selftest() {
+  local e c m dir n rc=0 fs
+  for e in $G6T_SCOPE; do
+    c="${e%%:*}"; m=""; [ "$e" != "$c" ] && m="${e#*:}"
+    dir="crates/$c"
+    if [ ! -f "$dir/Cargo.toml" ]; then echo "  scope FAIL: $e — no crate at $dir"; rc=1; continue; fi
+    if [ -n "$m" ] && [ ! -f "$dir/src/$m.rs" ] && [ ! -f "$dir/src/$m/mod.rs" ]; then
+      echo "  scope FAIL: $e — no module $dir/src/$m{.rs,/mod.rs}"; rc=1; continue
+    fi
+    if [ -n "$m" ]; then fs="test(/^$m::/)"; else fs='all()'; fi
+    n="$(cargo +nightly miri nextest list -p "$c" -E "$fs" --message-format json 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin); n = 0
+for s in d.get("rust-suites", {}).values():
+    for t in s.get("testcases", {}).values():
+        if t.get("filter-match", {}).get("status") == "matches" and not t.get("ignored"):
+            n += 1
+print(n)' 2>/dev/null)"
+    if [ "${n:-0}" -gt 0 ]; then echo "  scope ok: $e — $n test(s)"
+    else echo "  scope FAIL: $e — matches ${n:-0} runnable test(s)"; rc=1; fi
+  done
+  return $rc
+}
+
+run_g6t_selftest() {
+  require_miri; require_nextest
+  local rc=0 out
+  echo "=== G6t --self-test arm 1: the scope (every entry exists and matches > 0 tests) ==="
+  g6t_scope_selftest || rc=1
+  echo "=== G6t --self-test arm 2: deliberate UB and a leak are RED under Tree Borrows ==="
+  mn_fixture_selftest tb || rc=1
+  echo "=== G6t --self-test arm 3: an empty filterset is a vacuous RED ==="
+  mn_vacuous_selftest || rc=1
+  echo "=== G6t --self-test arm 4: FLAG-LOSS on the debug-assertions-off half (real crate) ==="
+  out="$(mn_tmp g6tst4)"
+  if g6t_crate "$G6C_PKG" "-C debug-assertions=on" >"$out" 2>&1; then
+    cat "$out"; echo "  self-test FAIL: the off half stayed GREEN with debug assertions back ON"; rc=1
+  else
+    tail -5 "$out"; echo "  arm 4 OK: the G6c-annotated half goes RED when the flag is lost."
+  fi
+  rm -f "$out"
+  [ $rc = 0 ] && echo "G6t --self-test: ALL ARMS REACHABLE"
   return $rc
 }
 
@@ -505,12 +1008,31 @@ case "${1:---all-done}" in
       printf '%s' "$lk_out" | grep -qiE 'memory leaked' && echo "self-test: leak DETECTED ok" || { echo "self-test FAIL: leak not detected"; exit 1; }
       ub_out="$(cargo +nightly miri test ub 2>&1 || true)"
       printf '%s' "$ub_out" | grep -qiE 'Undefined Behavior' && echo "self-test: UB DETECTED ok" || { echo "self-test FAIL: UB not detected"; exit 1; } )
-    rc=$?; rm -rf "$D"; exit $rc ;;
+    rc=$?; rm -rf "$D"
+    [ "$rc" = 0 ] || exit $rc
+    [ "$MIRI_RUNNER" = libtest ] && exit 0
+    # The nextest runner's arms (the libtest arms above are kept).
+    require_nextest
+    echo "=== G6 --self-test: the nextest runner, Stacked Borrows ==="
+    mn_fixture_selftest sb || rc=1
+    echo "=== G6 --self-test: the nextest runner, Tree Borrows ==="
+    mn_fixture_selftest tb || rc=1
+    echo "=== G6 --self-test: an empty filterset ==="
+    mn_vacuous_selftest || rc=1
+    [ "$rc" = 0 ] && echo "G6 --self-test: ALL ARMS REACHABLE"
+    exit $rc ;;
   --debug-assertions-off)
     case "${2:-}" in
       --self-test) run_g6c_selftest; exit $? ;;
       "") run_g6c; exit $? ;;
       *) echo "usage: check_leaks.sh --debug-assertions-off [--self-test]"; exit 2 ;;
+    esac ;;
+  --tree-borrows)
+    [ "$MIRI_RUNNER" = libtest ] && { echo "G6t runs on nextest only (it is new; there is no libtest G6t)"; exit 2; }
+    case "${2:-}" in
+      --self-test) run_g6t_selftest; exit $? ;;
+      "") run_g6t; exit $? ;;
+      *) echo "usage: check_leaks.sh --tree-borrows [--self-test]"; exit 2 ;;
     esac ;;
   --crate)
     [ -n "${2:-}" ] || { echo "usage: --crate <name>"; exit 2; }
@@ -558,5 +1080,5 @@ case "${1:---all-done}" in
     fi
     [ "$rc" = 0 ] && echo "G6 GREEN ($ran done crate(s) clean)"; exit $rc ;;
   *)
-    echo "usage: check_leaks.sh [--crate <name> | --all-done (default) | --list | --self-test | --debug-assertions-off [--self-test]]"; exit 2 ;;
+    echo "usage: check_leaks.sh [--libtest] [--crate <name> | --all-done (default) | --list | --self-test | --debug-assertions-off [--self-test] | --tree-borrows [--self-test]]"; exit 2 ;;
 esac
