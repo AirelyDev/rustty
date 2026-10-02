@@ -10453,6 +10453,11 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `rustty-font-shaper` (S9's third frame, found by the narrowing; added) and `rustty-apprt-c` (an
   ASan-runtime `fork` deadlock, killed by PID; SANITIZER_SUPPRESSIONS.md "Known limits"); both re-ran
   GREEN (141 and 51 tests). G-SAN-SELF GREEN (58 arms).
+- **fix round 2**: `sanitizers.sh` bounds every crate (N506's hang is RED, never a stalled pass);
+  S9's third frame became `XTCopyPropertiesForFont`, covering the per-font property query a second
+  intermittent `rustty-font-shaper` report showed, with a derived-character-set arm added to G-SAN-SELF.
+  Final full Mac pass (2026-10-02, with the bound in place): **G-LSAN GREEN**, 9,850 tests, 0 findings,
+  29 min, cross-check 459 ran / 9 expected absent / 0 problems. G-SAN-SELF GREEN (63 arms).
 - **still Linux-only**: G-MSAN (no Darwin MSan in compiler-rt) and HWASan (not a gate; Linux task).
 
 ## N502 — leaks behind every closed surface, on every platform (only macOS tests reached them): the render thread's and renderer state's Rust-owned heap was never dropped
@@ -10529,9 +10534,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **evidence**: native `rustty-renderer` lib 140 passed; Apple `leaks` on that binary: 0 leaks; G-LSAN
   on macOS `rustty-renderer`: only S15/S16 (ColorSync caches) remained, now suppressed.
 
-## N505 — macOS ASan runtime can deadlock in `fork` while another thread frees: an intermittent hang in G-ASAN / G-LSAN
+## N506 — macOS ASan runtime can deadlock in `fork` while another thread frees: an intermittent hang in G-ASAN / G-LSAN
 
-- **id**: N505 (provisional; P7-W16a fix round 2). **severity**: low (sanitizer lanes only; no product
+- **id**: N506 (provisional; P7-W16a fix round 2). **severity**: low (sanitizer lanes only; no product
   defect). **state**: OPEN (mitigated: the gate now bounds each crate and reports a hang RED).
 - **found**: one Mac G-LSAN pass under heavy load (load average ≈ 30) hung for an hour in
   `rustty-apprt-c`'s `tests/macos_window_host.rs` at ~740% CPU. Sample: an io thread in

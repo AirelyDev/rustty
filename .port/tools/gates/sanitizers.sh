@@ -191,7 +191,7 @@ tests_ran() {
 # ---------------------------------------------------------------------------
 # The per-crate hang bound (P7-W16a fix round 2). A sanitizer runtime can
 # deadlock (ASan's allocator lock around `fork` on macOS: SANITIZER_SUPPRESSIONS.md
-# "Known limits", NEW-FINDINGS N505), and a HARD gate that waits forever gives
+# "Known limits", NEW-FINDINGS N506), and a HARD gate that waits forever gives
 # neither GREEN nor RED. Each crate's build-and-test run is bounded; past the
 # bound its process tree is killed by explicit PIDs and the crate is RED with
 # "HANG after Ns (no verdict)". SAN_CRATE_TIMEOUT_S overrides the default:
@@ -1133,6 +1133,24 @@ mod darwin {
         }
         unsafe { CFRelease(n) };
     }
+    extern "C" {
+        fn CTFontCopyCharacterSet(font: *const c_void) -> *const c_void;
+        fn CFCharacterSetCreateMutableCopy(a: *const c_void, s: *const c_void) -> *const c_void;
+    }
+    #[test]
+    fn leak_charset_derived() {
+        let n = menlo();
+        let f = unsafe { CTFontCreateWithName(n, 25.0, core::ptr::null()) };
+        let cs = unsafe { CTFontCopyCharacterSet(f) };
+        for _ in 0..4 {
+            sink(unsafe { CFCharacterSetCreateMutableCopy(core::ptr::null(), cs) });
+        }
+        unsafe {
+            CFRelease(cs);
+            CFRelease(f);
+            CFRelease(n);
+        }
+    }
     #[test]
     fn leak_cgfont() {
         let n = menlo();
@@ -1229,6 +1247,7 @@ RS
       arm "A2d leaked CTFont (S9, S10, S13)" lsan "darwin::leak_ctfont --exact" RED "LeakSanitizer: detected memory leaks"
       arm "A2d leaked CTFontDescriptor, created (S10)" lsan "darwin::leak_font_descriptor_created --exact" RED "LeakSanitizer: detected memory leaks"
       arm "A2d leaked CTFontDescriptor, copied from a font (S10)" lsan "darwin::leak_font_descriptor_copied --exact" RED "LeakSanitizer: detected memory leaks"
+      arm "A2d leaked character set derived from a font's (S9)" lsan "darwin::leak_charset_derived --exact" RED "LeakSanitizer: detected memory leaks"
       arm "A2d leaked CGFont (S13)" lsan "darwin::leak_cgfont --exact" RED "LeakSanitizer: detected memory leaks"
       arm "A2d leaked MTLCopyAllDevices array (S17, S18)" lsan "darwin::leak_mtl_device_array --exact" RED "LeakSanitizer: detected memory leaks"
     fi

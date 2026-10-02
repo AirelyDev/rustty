@@ -231,9 +231,9 @@ committed records named here.
   coverage gap, no Linux test closing a core `Surface`, stays OPEN; the render-thread and renderer-state blocks are
   now dropped after their `deinit`, proven on `mirihar-n444`; port-only, Ghostty allocates none of it,
   so no UD), N503 (CLOSED: the renderer's macOS test helpers, N411's twins) and, in fix round 2,
-  N505 (OPEN, mitigated: an intermittent ASan-runtime deadlock in `fork` on macOS; the gate now bounds
-  each crate and reports a hang RED). N504 belongs to the P7-W16b HWASan task. No V id.
-  **Next free ids: UD377, N506, V31** (after HWASan's own ids).
+  N506 (OPEN, mitigated: an intermittent ASan-runtime deadlock in `fork` on macOS; the gate now bounds
+  each crate and reports a hang RED). N504 belongs to the P7-W16b HWASan task and N505 to P7-W15. No V id.
+  **Next free ids: UD377, N507, V31** (after HWASan's own ids).
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.
