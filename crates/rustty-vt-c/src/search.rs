@@ -1913,7 +1913,7 @@ mod tests {
             let mut idx: usize = 0;
             let mut status: SearchStatus = SearchStatus::Running;
             // var values = [_]?*anyopaque{ &total, &idx, &status };
-            // N501 (P7-W15): `&raw mut` out-pointers, no reborrow tag, so the
+            // N505 (P7-W15): `&raw mut` out-pointers, no reborrow tag, so the
             // test's direct reads of `total`/`idx`/`status` between calls do
             // not freeze the pointers `get_multi` writes through (Tree Borrows).
             let mut values: [*mut c_void; 3] = [

@@ -10453,9 +10453,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   run, 1 failed); `rustty-vt-c`, `rustty-renderer`, `rustty-xev`, `rustty-core` and the vt
   debug-assertions-off half did not run under G6t, and the full G6 run did not start.
 
-## N501 — seven `rustty-vt-c` and `rustty-core` tests have test-side Tree Borrows UB: an out-pointer or handle minted from a `&mut` reborrow, then the owner read directly
+## N505 — seven `rustty-vt-c` and `rustty-core` tests have test-side Tree Borrows UB: an out-pointer or handle minted from a `&mut` reborrow, then the owner read directly
 
-- **id**: N501. P7-W15 (the second, complete G6t run, 2026-10-02). **severity**: low (test code only).
+- **id**: N505 (renumbered from a draft N501; N501-N503 are reserved for P7-W16a). P7-W15 (the second, complete G6t run, 2026-10-02). **severity**: low (test code only).
   **state**: CLOSED 2026-10-02 (fixed test-side, never annotated).
 - **finding**: G6t (Tree Borrows, debug assertions on): `rustty-vt-c` 565 of 570 passed, 5 failed; `rustty-core`
   65 of 67 passed, 2 failed. Stacked Borrows accepts all seven. Each excerpt has one form:

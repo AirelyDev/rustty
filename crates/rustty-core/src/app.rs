@@ -1606,7 +1606,7 @@ pub(crate) mod test_runtime {
         let mut rt_app = TestApp::new();
         let mut app = App::<TestApp>::init(Allocator).unwrap();
 
-        // N501 (P7-W15): `&raw mut`, not a `&mut` reborrow, so the test's
+        // N505 (P7-W15): `&raw mut`, not a `&mut` reborrow, so the test's
         // direct reads of `rt_app.wakeups` between pushes do not freeze the
         // pointer `push` writes through (Tree Borrows). Same in the
         // `TestSurface { app, .. }` and mailbox handles below.

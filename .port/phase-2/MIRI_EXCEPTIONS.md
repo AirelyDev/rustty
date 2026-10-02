@@ -3067,7 +3067,7 @@ average 18-26 on 14 cores, so wall times are upper bounds):**
 **Second G6t run (2026-10-02, head `b2c119aba`, 6 processes, 4 h 12 min):** `rustty-vt` GREEN (1,597 of 1,597
 with debug assertions on, 11,726 s; the 119 G6c-annotated scope tests with them off, 1,843 s);
 `rustty-xev` GREEN (22); `rustty-vt-c` 565 of 570 and `rustty-core` 65 of 67, the seven failures test-side
-Tree Borrows UB of N500's shape, fixed as NEW-FINDINGS **N501** (both crates then GREEN under SB and TB).
+Tree Borrows UB of N500's shape, fixed as NEW-FINDINGS **N505** (both crates then GREEN under SB and TB).
 **`rustty-renderer` is not runnable under Miri as a whole crate:** 66 of 143 passed and 77 failed, none
 with UB; every failure is `unsupported operation` (Metal, Objective-C, glslang, SPIRV-Cross and Oniguruma
 FFI; `clock_gettime(REALTIME)` and `open` under isolation). G6 runs it under ASan as an FFI crate, so
