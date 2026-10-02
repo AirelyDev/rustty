@@ -10322,7 +10322,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   5. `rustty-vt` `hyperlink::hyperlink_dupe_tests::try_dupe_bytes_reports_allocation_failure` asks for
      `isize::MAX` bytes to test `try_reserve` failure; ASan aborts on a request over its 1 TiB maximum
      ("allocation-size-too-big") where the system malloc returns NULL. Lane fix:
-     `allocator_may_return_null=1`, which changes no detector.
+     `allocator_may_return_null=1`. That does turn off three ASan reports (corrected in fix round 1): allocation-size-too-big, calloc-overflow and out-of-memory, each of which becomes a NULL return instead of an abort; memory-error, leak and uninitialized-read detection are unaffected.
   6. `rustty-vt` `tmux::layout::tests::deeply_nested_layout_is_a_syntax_error_beyond_max_depth` parses
      MAX_DEPTH (1000) levels on a default 2 MiB thread: 1.25-1.5 MiB natively (debug; measured with
      `RUST_MIN_STACK`), a stack overflow under ASan, whose redzones grow every frame. Lane fix:
@@ -10375,3 +10375,23 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `terminate()` and before releasing the box.
 - **regression test**: `crates/rustty-apprt-c/tests/smoke.rs` `c_abi_smoke_compile_link_run` under G-LSAN,
   whose C program creates and frees an app; it is RED without the fix.
+
+## N499 — the `screen-clone` benchmark's in-process tests leaked every `clone`-mode copy
+
+- **id**: N499. P7-W14 (fix round 1 reclassified it from a draft UD). **severity**: low (tests only; the
+  benchmark CLI behaves as the reference). **state**: CLOSED 2026-10-02.
+- **found**: G-LSAN's first run (rvm): `rustty-bench` 720,000 bytes in 6,000 allocations from
+  `ScreenClone::step_clone`, under `screen_clone_every_mode_name_parses_and_runs_setup_with_zero_loops`.
+- **not a Ghostty defect**: the reference's benchmark CLI allocates with `c_allocator`, no leak checker
+  (`src/benchmark/cli.zig:56`), and `ScreenClone.zig:264-265` (also `:286-287`, `:315-316`) leaves the copies
+  to process exit on purpose ("we purposely do not free memory because we don't want to benchmark that").
+  For a process that exits after the run that is sound. The port's problem is that its unit tests run the
+  step inside the long-lived test process, so the copies are real leaks there.
+- **fix**: `crates/rustty-bench/src/screen_clone.rs`: `stepClone` puts its 1,000 copies in a fresh
+  `Vec::with_capacity(1000)` chunk per step (`clones: Vec<Vec<Screen>>`), so the timed loop never reallocates
+  and no earlier copy is ever moved (a first draft reserved on one growing `Vec<Screen>`, which copied every
+  earlier `Screen` on growth inside the timed step); `teardown`, which runs after `Benchmark::run` takes its
+  end time, and `destroy` free them.
+- **regression test**: `screen_clone::tests::screen_clone_clone_mode_frees_its_copies_at_teardown` (two
+  steps give two full chunks that never grew; teardown and a full run leave none); G-LSAN's `rustty-bench`
+  lane is the leak check.

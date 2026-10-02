@@ -3321,22 +3321,6 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    compute the directory once, `if(IS_ABSOLUTE "${CMAKE_INSTALL_LIBDIR}")` use `$ENV{DESTDIR}${CMAKE_INSTALL_LIBDIR}`, else `$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}`, and add `COMMAND_ERROR_IS_FATAL ANY` to both `execute_process` calls (or use `file(CREATE_LINK ... SYMBOLIC)`).
 - upstream status: not reported
 
-### UD376 — the `screen-clone` benchmark's `clone` mode never frees its copies ("We'll free when the benchmark exits" is never done)
-
-- kind:            leak (evident intent broken: the step says the copies are freed when the benchmark exits, and nothing frees them)
-- upstream project: ghostty
-- severity:        low (the `ghostty-bench +screen-clone --mode=clone` developer tool only; every step leaks 1,000 screen clones until the process exits, so a `--duration` run grows without bound)
-- reference:       at 12752b2ac, `src/benchmark/ScreenClone.zig:247-268` `stepClone`: `const copy = s.clone(...)`, `std.mem.doNotOptimizeAway(copy)`, then "Note: we purposely do not free memory because we don't want to benchmark that. We'll free when the benchmark exits." `teardown` (`:231-234`) is empty and `destroy` (`:152-155`) deinits only the terminal. The render steps (`stepRender`, `stepRenderLocked`, `:270-328`) likewise never `deinit` their local `RenderState`.
-- defect:          no code path ever deinits a clone; the comment's promise is not implemented.
-- ReleaseSafe:     the same (a leak; nothing checks it in a release build). In a Debug build under a leak-checking allocator it would be reported at exit.
-- ReleaseFast:     the same.
-- reachability:    `ghostty-bench +screen-clone --mode=clone` (any `--data`, any duration).
-- port handling:   `crates/rustty-bench/src/screen_clone.rs`: `stepClone` keeps each copy in a `clones` vector (reserved before the timed loop, so the loop itself never reallocates), `teardown` deinits them (outside the timing: `Benchmark::run` takes its end time before the teardown guard runs) and `destroy` frees any left. The render steps need no change in the port: Rust drops the local `RenderState` at the end of the step.
-- parity row(s):   none; found by G-LSAN's first run (P7-W14): 720,000 bytes in 6,000 allocations from `ScreenClone::step_clone` under `screen_clone_every_mode_name_parses_and_runs_setup_with_zero_loops`.
-- test:            `screen_clone::tests::screen_clone_clone_mode_frees_its_copies_at_teardown` (the step keeps 1,000 copies; teardown and a full run leave none); G-LSAN's `rustty-bench` lane is the leak check.
-- proposed fix:    keep the copies in an `ArrayList(Screen)` on `ScreenClone` and deinit them in `teardown`, or deinit each copy after `doNotOptimizeAway` if freeing may be timed.
-- upstream status: not reported
-
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

@@ -525,10 +525,9 @@ jobs:
   # memory-safety-lanes-design.md §B), one job per sanitizer on x86_64 Linux.
   # The reference has no sanitizer job (Zig's runtime safety and its leak-
   # checking test allocator play that role, plus the valgrind job); these are
-  # the port's own memory-safety lanes. G-MSAN runs here because x86_64 is
-  # where rustc's MemorySanitizer is supported best (V30 records whether the
-  # aarch64 VM can run it). Runtime on GitHub's runners: UNVERIFIED until the
-  # next push (V25).
+  # the port's own memory-safety lanes. All three also run on the aarch64
+  # Fedora VM (rvm), including G-MSAN; this job is their x86_64 copy. Runtime
+  # on GitHub's runners: UNVERIFIED until the next push (V30).
   sanitizers:
     name: rustty-sanitizers (${{ matrix.sanitizer }})
     runs-on: ubuntu-latest

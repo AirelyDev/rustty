@@ -32,10 +32,13 @@ const LOG_SCOPE: &str = "terminal-stream-bench";
 pub struct ScreenClone {
     opts: Options,
     terminal: Terminal,
-    /// UD376: the `clone` mode's copies, kept so teardown can free them. The
-    /// reference says "We'll free when the benchmark exits" but never does:
-    /// every step leaks 1000 screens until the process ends.
-    clones: Vec<Screen>,
+    /// N499: the `clone` mode's copies, one 1,000-slot chunk per step, kept
+    /// so teardown can free them. The reference (`benchmark/cli.zig:56`,
+    /// `c_allocator`) leaves them to process exit on purpose, which is fine
+    /// for the CLI; the port's in-process tests run the step, so under G-LSAN
+    /// the dropped copies were leaks. A chunk per step means no earlier copy is
+    /// ever moved: only the chunk's 24-byte header joins the outer vector.
+    clones: Vec<Vec<Screen>>,
 }
 
 // pub const Options = struct {
@@ -289,8 +292,8 @@ impl ScreenClone {
     //     alloc.destroy(self);
     // }
     pub fn destroy(mut self: Box<ScreenClone>, alloc: Allocator) {
-        // UD376: any copies a run left behind (teardown normally frees them).
-        for mut copy in self.clones.drain(..) {
+        // N499: any copies a run left behind (teardown normally frees them).
+        for mut copy in self.clones.drain(..).flatten() {
             copy.deinit();
         }
         self.terminal.deinit(alloc.into());
@@ -417,13 +420,12 @@ impl ScreenClone {
     //     _ = self;
     // }
     //
-    // UD376: the `clone` step's copies are freed here, outside the timed loop
-    // (`Benchmark::run` takes its end time before the teardown guard runs). This
-    // is the "We'll free when the benchmark exits" that `stepClone` promises and
-    // the reference never does.
+    // N499: the `clone` step's copies are freed here, outside the timed loop
+    // (`Benchmark::run` takes its end time before the teardown guard runs),
+    // instead of at process exit as in the reference's CLI.
     unsafe fn teardown(ptr: *mut c_void) {
         let self_ = unsafe { &mut *(ptr as *mut ScreenClone) };
-        for mut copy in self_.clones.drain(..) {
+        for mut copy in self_.clones.drain(..).flatten() {
             copy.deinit();
         }
     }
@@ -455,9 +457,10 @@ impl ScreenClone {
     unsafe fn step_clone(ptr: *mut c_void) -> Result<(), Error> {
         let self_ = unsafe { &mut *(ptr as *mut ScreenClone) };
 
-        // UD376: room for this step's copies, reserved before the loop so the
-        // loop itself never reallocates.
-        self_.clones.reserve(1000);
+        // N499: this step's copies go into a fresh 1,000-slot chunk,
+        // allocated before the loop: the loop never reallocates, and no copy
+        // from an earlier step is moved.
+        let mut chunk: Vec<Screen> = Vec::with_capacity(1000);
 
         // We loop because its so fast that a single benchmark run doesn't
         // properly capture our speeds.
@@ -485,10 +488,11 @@ impl ScreenClone {
             // Note: we purposely do not free memory because we don't want
             // to benchmark that. We'll free when the benchmark exits.
             //
-            // UD376: the reference never does free them (it drops the copy on
-            // the floor); here the copy is kept and `teardown` frees it.
-            self_.clones.push(copy);
+            // N499: the reference leaves the copy to process exit; here it is
+            // kept and `teardown` frees it.
+            chunk.push(copy);
         }
+        self_.clones.push(chunk);
         Ok(())
     }
 
@@ -825,9 +829,9 @@ mod tests {
         assert!(Mode::from_name(b"render-overscan").is_none());
     }
 
-    // UD376: the `clone` step keeps its 1000 copies (the reference drops them
-    // on the floor until the process exits), and the teardown frees them, so
-    // a finished run holds none. G-LSAN found the leak (P7-W14).
+    // N499: the `clone` step keeps its 1000 copies (the reference leaves them
+    // to process exit), and the teardown frees them, so a finished run holds
+    // none. G-LSAN found the in-process tests leaking them (P7-W14).
     #[test]
     #[cfg_attr(
         miri,
@@ -843,7 +847,15 @@ mod tests {
         let mut bench = ScreenClone::create(Allocator, opts).unwrap();
         let ptr = &mut *bench as *mut ScreenClone as *mut c_void;
         unsafe { ScreenClone::step_clone(ptr) }.unwrap();
-        assert_eq!(1000, bench.clones.len(), "the step keeps every copy");
+        unsafe { ScreenClone::step_clone(ptr) }.unwrap();
+        assert_eq!(2, bench.clones.len(), "one chunk per step");
+        assert!(
+            bench
+                .clones
+                .iter()
+                .all(|c| c.len() == 1000 && c.capacity() == 1000),
+            "the step keeps every copy, in a chunk that never grew"
+        );
         unsafe { ScreenClone::teardown(ptr) };
         assert!(bench.clones.is_empty(), "teardown frees every copy");
         // A whole run, too: setup, one step, teardown.

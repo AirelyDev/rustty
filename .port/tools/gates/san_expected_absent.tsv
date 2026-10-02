@@ -1,0 +1,8 @@
+# Miri-excepted tests (`#[cfg_attr(miri|all(miri,..)|any(miri,..), ignore...)]`) that cannot run
+# under G-ASAN / G-LSAN on a given host OS. Read by san_miri_crosscheck.py; see its header.
+# Columns (TAB-separated): OS (`uname -s`, or * for every OS), crate, a glob over
+# "<module path>::<fn>" (the module path is derived from the file, inline `mod`s excluded),
+# and the reason. A row that matches nothing, or whose tests ran and passed, is stale (RED).
+*	rustty-bench	screen_clone::screen_clone_every_mode_name_parses_and_runs_one_iteration	ignored in debug builds (R14 compile-time scope: one pass of every mode is too slow unoptimized); the --release arm of G-BENCH runs it, and its loops=0 sibling runs under the sanitizers
+*	rustty-vt	kitty::graphics_image::image_load_windows_*	#[cfg(windows)]: Windows path-spelling checks, not compiled on Unix; they run in the Windows lanes (rwin, ci.yml windows)
+Darwin	rustty-os	kernel_info::read_proc_sys_kernel_osrelease	ignored off Linux ("reads /proc: Linux only (R14)"); G-LSAN runs it on Linux

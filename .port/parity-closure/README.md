@@ -67,7 +67,7 @@ G-SAN-SELF green on macOS and rvm (every arm on Linux); G-ASAN (macOS arm64, 202
 tests over 61 members and the `rustty-vt:wuffs` lane, 117 of 117 ASan claims verified, 15 min with one
 shared target dir; G-LSAN (rvm) GREEN, 10,087 tests over 61 members and three feature lanes, 86 claims
 verified and 31 macOS-only, 20 min; G-MSAN (rvm) GREEN, 6,183 tests over 58 members, 50 min. The first
-runs found N495-N498 and UD376 (register below); the suppressions, lane options and exclusions are in
+runs found N495-N499 (register below); the suppressions, lane options and exclusions are in
 `.port/phase-2/SANITIZER_SUPPRESSIONS.md`.
 
 ## Not verified here (long runs, deferred by the user on 2026-09-28)
@@ -212,12 +212,14 @@ committed records named here.
   the raw-root idiom; no production UB, so no UD).
 - **P7-W12 T9** (Wuffs FFI under Miri in the `rustty-vt` kitty tests) used N494 (CLOSED: one test
   given a Miri corpus, 24 excepted). **Next free ids: UD376, N495, V30.**
-- **P7-W14** (the G-ASAN, G-LSAN and G-MSAN gates) used UD376 (the `screen-clone` benchmark never frees
-  its clones), N495 (CLOSED: `rustty-cli`'s Mach-O constructor could not link under ASan), N496 (CLOSED:
-  the first sanitizer runs' test-side defects and lane configuration), N497 (CLOSED: a Miri exception
-  claimed ASan coverage for a test no ASan run executed), N498 (CLOSED: `rustty_app_free` leaked the
-  cloned configuration) and V30 (the new `sanitizers` CI job, never run on GitHub).
-  **Next free ids: UD377, N499, V31.**
+- **P7-W14** (the G-ASAN, G-LSAN and G-MSAN gates) used N495 (CLOSED: `rustty-cli`'s Mach-O constructor
+  could not link under ASan), N496 (CLOSED: the first sanitizer runs' test-side defects and lane
+  configuration), N497 (CLOSED: a Miri exception claimed ASan coverage for a test no ASan run executed),
+  N498 (CLOSED: `rustty_app_free` leaked the cloned configuration), N499 (CLOSED: the `screen-clone`
+  benchmark's in-process tests leaked the `clone` step's copies) and V30 (the new `sanitizers` CI job,
+  never run on GitHub). No UD: fix round 1 found the benchmark's process-exit freeing deliberate in the
+  reference, so the UD376 first drafted for it was withdrawn and never merged.
+  **Next free ids: UD376, N500, V31.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.

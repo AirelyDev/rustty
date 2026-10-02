@@ -2992,3 +2992,19 @@ OS's lane (G-LSAN on Linux runs the same cross-check), and a crate none of whose
 
 `check_leaks.sh`'s G6 ASan companion arm for `rustty-xev` stays (it runs on every G6), but the claim is now
 also verified by a gate that does not depend on G6.
+
+### P7-W14 additions
+
+| crate | test | what Miri cannot do | compensating control |
+|---|---|---|---|
+| `rustty-bench` | `screen_clone::tests::screen_clone_clone_mode_frees_its_copies_at_teardown` (N499) | finish in the lane's bound: two benchmark steps of 1,000 `Screen::clone`s of a live terminal each, then a full run (the same workload class as the P7-W3 T3 `screen_clone` exceptions) | runs natively in ci.sh's HARD `cargo test --workspace`; under G-ASAN and G-LSAN (the leak the test pins is an LSan question, not a Miri one), both of which verify it ran through the Miri-exception cross-check; the clone path itself is Miri-covered by `rustty-vt`'s `screen::tests` clone tests |
+
+### Fix round 1: the cross-check covers every Miri exception
+
+The first version checked only annotations whose reason mentions ASan (117). Since P7-W14 fix round 1,
+`san_miri_crosscheck.py` checks every test carrying `#[cfg_attr(miri | all(miri, ..) | any(miri, ..),
+ignore...)]`, with or without a reason: 468 on the current tree. Matching is by module path, the annotation
+must sit directly on its `fn`, and the tests that cannot run on a host OS are listed per OS, with reasons,
+in `.port/tools/gates/san_expected_absent.tsv` (a stale row is RED). That widening found one more test no
+lane compiled: `rustty-vt` `tmux::control::concurrent_first_notifications_do_not_race_oniguruma_init`
+(behind the `oniguruma` feature), now run by the `rustty-vt:wuffs,oniguruma` lane.

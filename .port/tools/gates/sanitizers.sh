@@ -93,7 +93,7 @@ LSAN_EXCLUDES=(
 # Feature lanes G-ASAN and G-LSAN add on top of the members (a plain
 # `cargo test -p` never turns them on). Format: "<crate>:<features>|<reason>".
 FEATURE_LANES=(
-  "rustty-vt:wuffs|the PNG decode tests (\`image_load_png_zlib_compressed_direct\`, \`sys::tests::default_decoder_*\`) are ignored without the wuffs feature, and one of them is a Miri exception whose stated compensating control is ASan; found by G-ASAN's claim cross-check on its first run (P7-W14)"
+  "rustty-vt:wuffs,oniguruma|the PNG decode tests (\`image_load_png_zlib_compressed_direct\`, \`sys::tests::default_decoder_*\`) are ignored without the wuffs feature, and one of them is a Miri exception whose stated compensating control is ASan; found by G-ASAN's claim cross-check on its first run (P7-W14); and the oniguruma feature's tests, e.g. the Miri-excepted tmux::control::concurrent_first_notifications_do_not_race_oniguruma_init, which no lane compiled until the cross-check covered every Miri exception (fix round 1)"
 )
 # Members with NO test on a host OS, so the per-crate non-vacuity rule would
 # be RED by construction. Format: "<crate>|<uname -s, or *>|<reason>". Such a crate
@@ -123,15 +123,21 @@ MSAN_SCOPE=(
   rustty-build-config rustty-cfg-fmt rustty-cli rustty-config rustty-core
   rustty-crash rustty-datastruct rustty-extra rustty-font rustty-font-shaper
   rustty-global rustty-helpgen rustty-identity rustty-input rustty-inspector
-  rustty-lib rustty-oniguruma rustty-os rustty-render-types rustty-simd
+  rustty-lib rustty-oniguruma rustty-os rustty-render-types rustty-renderer rustty-simd
   rustty-synthetic rustty-terminfo rustty-termio rustty-unicode rustty-util
   rustty-vaxis rustty-version rustty-vt rustty-vt-c rustty-wasm
   rustty-web-canvas rustty-wuffs rustty-xev rustty-z2d rustty-zf rustty-zigimg
   rustty-zigstd
 )
+# Tests skipped inside an in-scope crate, by libtest `--skip` filter (a
+# substring of the test path). Format: "<crate>|<filter>|<reason>". Each is in
+# SANITIZER_SUPPRESSIONS.md; a crate not in MSAN_SCOPE is stale (RED).
+MSAN_SKIPS=(
+  "rustty-renderer|generic::linux_impl::tests|the golden-renderer tests drive EGL and OpenGL in the system's uninstrumented libEGL/Mesa; MSan reports reads of what libEGL wrote itself (eglQueryString under OffscreenContext::init, origin a malloc inside libEGL.so.1) (M3)"
+  "rustty-renderer|opengl::|the OpenGL backend's own tests, which need the same EGL context (M3)"
+)
 MSAN_EXCLUDES=(
   "glslang-sys|its test runs glslang's preprocessor, whose TPpContext holds a std::istringstream constructed and imbued by the uninstrumented libstdc++.so; MSan reports the stream's own fields as uninitialized (PpContext.cpp:98, origin: the stack allocation of 'ppContext'); needs an MSan-instrumented libstdc++/libc++ (SANITIZER_SUPPRESSIONS.md M2)"
-  "rustty-renderer|its Linux tests drive EGL and OpenGL in the system's uninstrumented libEGL/Mesa; MSan reports reads of what libEGL wrote itself (eglQueryString under OffscreenContext::init, origin: a malloc inside libEGL.so.1) (M3)"
   "xtask|its tests run nested cargo and cmake builds that inherit RUSTFLAGS=-Zsanitizer=memory without -Zbuild-std, which rustc rejects ('mixing -Zsanitizer will cause an ABI mismatch'); it is the build driver, which G-VALGRIND leaves out for the same kind of reason (M4)"
 )
 
@@ -260,8 +266,10 @@ run_crate() {
   # port's out-of-memory tests rely on that NULL (`Vec::try_reserve_exact`
   # reporting failure, the faithful port of Zig's error.OutOfMemory paths; e.g.
   # rustty-vt's hyperlink `try_dupe_bytes_reports_allocation_failure` asks for
-  # isize::MAX bytes). It changes no detector: every memory error is still
-  # reported. First seen as G-ASAN's first-run "allocation-size-too-big" (P7-W14).
+  # isize::MAX bytes). It DOES turn off three reports: allocation-size-too-big,
+  # calloc-overflow and out-of-memory (each becomes a NULL return instead of an
+  # abort). OOB, use-after-free, double-free, leak and uninit detection are
+  # unaffected. First seen as G-ASAN's first-run "allocation-size-too-big" (P7-W14).
   case "$san" in
     asan|address)
       rflags="-Zsanitizer=address"
@@ -339,7 +347,8 @@ legacy_main() {
     # NON-VACUITY + HONEST REPORTING (miri-reaudit, 2026-07-31): the green line
     # once echoed the LAST `test result` (the empty Doc-tests summary), so a
     # filter matching nothing looked identical to a real pass. The count is the
-    # sum of every target's `running N tests` header; zero is RED.
+    # number of tests EXECUTED, summed over every target's `N passed; M failed`
+    # (tests_ran; ignored tests do not count since P7-W14); zero is RED.
     case "$v" in
       FINDING) echo "  ❌ $s: SANITIZER FINDING"; grep -E 'ERROR:|SUMMARY:|runtime error:' "$log" | head -4; fail=1 ;;
       BUILD|FAIL) echo "  ⚠️  $s: build/test failed rc=$rc — $(grep -m1 -iE 'error(\[|:)' "$log" | head -c 100)"; fail=1 ;;
@@ -388,6 +397,14 @@ no_tests_reason() {  # no_tests_reason SPEC -> the NO_TESTS_ON reason for this O
   done
 }
 
+spec_skips() {  # spec_skips SAN SPEC -> " --skip F ..." for that sanitizer's named skips
+  local e
+  [ "$1" = msan ] || return 0
+  for e in ${MSAN_SKIPS[@]+"${MSAN_SKIPS[@]}"}; do
+    if [ "${e%%|*}" = "$2" ]; then printf ' --skip %s' "$(printf '%s' "$e" | cut -d'|' -f2)"; fi
+  done
+}
+
 # Matrix result accumulators (globals: bash 3.2 has no namerefs).
 M_RED=0; M_BLOCKED=0; M_TOTAL=0; M_ROWS=""; M_WALL=0
 # TARGET DIRS. Default: ONE target dir per sanitizer pass, target/san-<san>,
@@ -427,7 +444,7 @@ matrix_run() {  # matrix_run SAN FILTER SPEC...
       return
     fi
     t0=$(date +%s)
-    run_crate "$san" "$spec" "$filter" "$td" "$log"; rc=$?
+    run_crate "$san" "$spec" "$filter$(spec_skips "$san" "$spec")" "$td" "$log"; rc=$?
     t1=$(date +%s)
     v="$(classify "$log" "$rc")"
     if [ -z "$shared" ]; then drop_target "$td"; fi
@@ -498,91 +515,13 @@ check_members() {
   return $bad
 }
 
-# The Miri-exception cross-check: every test whose `cfg_attr(miri, ignore =
-# "...")` reason claims ASan coverage must appear as `test <path> ... ok` in
-# this sanitizer's logs. Ignored or failed = RED; a claimed crate whose log is
-# missing = RED; a test absent from a log that ran (cfg-gated off this host OS,
-# e.g. kqueue tests on Linux) is listed BY NAME, and RED if it is every claim
-# of its crate (a broken parse, not a platform gate).
+# The Miri-exception cross-check (design §B: "every Miri-excepted test actually
+# ran under G-ASAN"): san_miri_crosscheck.py, over this pass's logs, with the
+# per-OS expected-absent list san_expected_absent.tsv. See the script's header.
 asan_claims_crosscheck() {  # SAN
-  ROOT="$ROOT" LOGDIR="$SAN_LOG_ROOT/$1" "$PY" - <<'PYEOF'
-import glob, json, os, re, subprocess, sys
-root, logdir = os.environ["ROOT"], os.environ["LOGDIR"]
-src_root = os.environ.get("SAN_CLAIMS_SRC", root)
-attr = re.compile(r'#\[cfg_attr\(\s*miri\s*,\s*ignore\s*=\s*"((?:[^"\\]|\\.)*)"\s*\)\]', re.S)
-claim = re.compile(r'ASan|AddressSanitizer|sanitizer', re.I)
-fnre = re.compile(r'\bfn\s+([A-Za-z0-9_]+)')
-# crate dir -> package name, from the manifests (the dir name is not always the package name).
-dir2pkg = {}
-for man in glob.glob(os.path.join(src_root, "crates", "**", "Cargo.toml"), recursive=True):
-    if "/vendor/" in man or "/target/" in man:
-        continue
-    m = re.search(r'^\[package\][^\[]*?^name\s*=\s*"([^"]+)"', open(man, encoding="utf-8").read(), re.M | re.S)
-    if m:
-        dir2pkg[os.path.dirname(man)] = m.group(1)
-def pkg_of(path):
-    d = os.path.dirname(path)
-    while d.startswith(src_root) and d != src_root:
-        if d in dir2pkg:
-            return dir2pkg[d]
-        d = os.path.dirname(d)
-    return None
-claims = []
-for f in sorted(glob.glob(os.path.join(src_root, "crates", "**", "*.rs"), recursive=True)):
-    if "/vendor/" in f or "/target/" in f:
-        continue
-    s = open(f, encoding="utf-8", errors="replace").read()
-    for m in attr.finditer(s):
-        if not claim.search(m.group(1)):
-            continue
-        fm = fnre.search(s, m.end())
-        if fm:
-            claims.append((pkg_of(f), os.path.relpath(f, src_root), fm.group(1)))
-# Per-crate test outcomes from the logs (feature-lane logs fold into their crate).
-outcome = {}
-logs_seen = set()
-for lg in glob.glob(os.path.join(logdir, "*.log")):
-    # Log names are `<crate>` or `<crate>_<features>` (':' and ',' became '_');
-    # workspace crate names use '-' only, so the first '_' starts the features.
-    crate = os.path.basename(lg)[:-4].split("_", 1)[0]
-    logs_seen.add(crate)
-    for line in open(lg, encoding="utf-8", errors="replace"):
-        m = re.match(r'^test (\S+) \.\.\. (ok|ignored|FAILED)', line)
-        if m:
-            name = m.group(1).rsplit("::", 1)[-1]
-            prev = outcome.setdefault(crate, {}).get(name)
-            if prev != "ok":
-                outcome[crate][name] = m.group(2)
-red, ok, absent = [], 0, []
-by_crate = {}
-for pkg, path, fn in claims:
-    by_crate.setdefault(pkg, []).append((path, fn))
-for pkg, items in sorted(by_crate.items(), key=lambda kv: str(kv[0])):
-    if pkg not in logs_seen:
-        red.append(f"{pkg}: {len(items)} ASan-claiming Miri exception(s) but the crate has no {os.path.basename(logdir)} log (excluded or not run): e.g. {items[0][0]}::{items[0][1]}")
-        continue
-    seen_here = 0
-    for path, fn in items:
-        st = outcome.get(pkg, {}).get(fn)
-        if st == "ok":
-            ok += 1; seen_here += 1
-        elif st is None:
-            absent.append(f"{pkg} {path}::{fn}")
-        else:
-            seen_here += 1
-            red.append(f"{pkg} {path}::{fn} claims ASan coverage but was {st} under {os.path.basename(logdir)}")
-    if seen_here == 0:
-        red.append(f"{pkg}: none of its {len(items)} ASan-claiming tests appear in its log (a broken claim parse, or every claim cfg-gated off this host)")
-print(f"  ASan-claim cross-check: {len(claims)} cfg_attr(miri, ignore) annotation(s) claim ASan coverage; {ok} ran and passed here; {len(absent)} not compiled on this host OS; {len(red)} problem(s)")
-for a in absent:
-    print(f"     not compiled on this host OS (cfg-gated; checked on the other OS's lane): {a}")
-for r in red:
-    print(f"  ❌ {r}")
-if not claims:
-    print("  ❌ no ASan-claiming annotations parsed at all (the annotation grammar changed?)")
-    sys.exit(1)
-sys.exit(1 if red else 0)
-PYEOF
+  "$PY" "$GATES_DIR/san_miri_crosscheck.py" --root "$ROOT" --src "${SAN_CLAIMS_SRC:-$ROOT}" \
+    --logdir "$SAN_LOG_ROOT/$1" --os "$OS" --label "$1" \
+    --expected "${SAN_EXPECTED_ABSENT:-$GATES_DIR/san_expected_absent.tsv}"
 }
 
 gate_verdict() {  # gate_verdict ID EXTRA_RED
@@ -667,9 +606,31 @@ EOF
   fi
   matrix_run "$san" "" ${specs_a[@]+"${specs_a[@]}"}
   matrix_summary "$san"
-  asan_claims_crosscheck "$san" || extra=1
-  if [ -n "${SAN_ONLY:-}" ]; then M_BLOCKED=1; fi
+  if [ -n "${SAN_ONLY:-}" ]; then
+    # A narrowed run cannot verify the Miri exceptions of the crates it left
+    # out; it reports BLOCKED, never GREEN.
+    echo "  BLOCKED: SAN_ONLY narrowed the run; the Miri-exception cross-check needs the whole pass"
+    M_BLOCKED=1
+  else
+    asan_claims_crosscheck "$san" || extra=1
+  fi
   gate_verdict "$id" "$extra"
+}
+
+# Every member in exactly one of MSAN_SCOPE / MSAN_EXCLUDES, no stale entry,
+# and every MSAN_SKIPS crate in scope. Returns 1 (and prints why) otherwise.
+msan_partition_check() {
+  local bad=0 m listed e
+  check_members "G-MSAN scope" ${MSAN_SCOPE[@]+"${MSAN_SCOPE[@]}"} || bad=1
+  check_members "G-MSAN exclusion" ${MSAN_EXCLUDES[@]+"${MSAN_EXCLUDES[@]}"} || bad=1
+  listed="$(printf '%s\n' ${MSAN_SCOPE[@]+"${MSAN_SCOPE[@]}"} ${MSAN_EXCLUDES[@]+"${MSAN_EXCLUDES[@]}"} | sed 's/[|:].*//')"
+  for m in $(workspace_members); do
+    printf '%s\n' "$listed" | grep -qx "$m" || { echo "  ❌ G-MSAN: workspace member '$m' is in neither MSAN_SCOPE nor MSAN_EXCLUDES (add it, or record why not)"; bad=1; }
+  done
+  for e in ${MSAN_SKIPS[@]+"${MSAN_SKIPS[@]}"}; do
+    case " ${MSAN_SCOPE[*]:-} " in *" ${e%%|*} "*) ;; *) echo "  ❌ G-MSAN: MSAN_SKIPS names '${e%%|*}', which is not in MSAN_SCOPE (stale)"; bad=1 ;; esac
+  done
+  return $bad
 }
 
 MSAN_AARCH64_NOTE=""
@@ -696,13 +657,8 @@ gate_msan() {
   local e extra=0
   echo "excluded (link uninstrumented C/C++; MSan cannot run them):"
   for e in ${MSAN_EXCLUDES[@]+"${MSAN_EXCLUDES[@]}"}; do printf '  - %s: %s\n' "${e%%|*}" "${e#*|}"; done
-  check_members "G-MSAN scope" ${MSAN_SCOPE[@]+"${MSAN_SCOPE[@]}"} || extra=1
-  check_members "G-MSAN exclusion" ${MSAN_EXCLUDES[@]+"${MSAN_EXCLUDES[@]}"} || extra=1
-  local m listed
-  listed="$(printf '%s\n' ${MSAN_SCOPE[@]+"${MSAN_SCOPE[@]}"} ${MSAN_EXCLUDES[@]+"${MSAN_EXCLUDES[@]}"} | sed 's/[|:].*//')"
-  for m in $(workspace_members); do
-    printf '%s\n' "$listed" | grep -qx "$m" || { echo "  ❌ G-MSAN: workspace member '$m' is in neither MSAN_SCOPE nor MSAN_EXCLUDES (add it, or record why not)"; extra=1; }
-  done
+  msan_partition_check || extra=1
+  for e in ${MSAN_SKIPS[@]+"${MSAN_SKIPS[@]}"}; do printf '  skipped in %s: tests matching %s — %s\n' "${e%%|*}" "$(printf '%s' "$e" | cut -d'|' -f2)" "${e##*|}"; done
   rm -rf -- "${SAN_LOG_ROOT:?}/msan"
   matrix_run msan "" ${MSAN_SCOPE[@]+"${MSAN_SCOPE[@]}"}
   matrix_summary msan
@@ -712,6 +668,7 @@ gate_msan() {
 # ---------------------------------------------------------------------------
 # SELF-TEST (G-SAN-SELF).
 # ---------------------------------------------------------------------------
+# shellcheck disable=SC2016  # the arms hand single-quoted shell snippets to a sourced copy
 self_test() {
   need_nightly
   local st fail=0 out rc
@@ -748,35 +705,88 @@ self_test() {
   elif ! ( SAN_TARGET_ROOT="$st/t"; drop_target "$st/t/san-asan" && drop_target "$st/t/san-asan-foo" ) || [ -d "$st/t/san-asan" ] || [ -d "$st/t/san-asan-foo" ]; then
     echo "  FAIL D drop_target did not remove the shared and the per-crate dir"; fail=1
   else echo "  ok   D drop_target removes san-asan and san-asan-<crate>, refuses anything else"; fi
-  # --- arm E: the ASan-claim cross-check over a synthetic source + logs ---
+  # --- arm E: the Miri-exception cross-check over a synthetic source + logs ---
   mkdir -p "$st/src/crates/foo/src" "$st/xlogs/asan"
   printf '[package]\nname = "foo"\n' >"$st/src/crates/foo/Cargo.toml"
-  cat >"$st/src/crates/foo/src/lib.rs" <<'RS'
-#[test]
-#[cfg_attr(miri, ignore = "foreign function -- runs natively + the G-ASAN lane")]
-fn claimed_and_ran() {}
-#[test]
-#[cfg_attr(
-    miri,
-    ignore = "foreign function -- covered by AddressSanitizer"
-)]
-fn claimed_but_ignored() {}
-#[test]
-#[cfg_attr(miri, ignore = "reads a file")]
-fn not_a_claim() {}
+  printf 'mod a;\n' >"$st/src/crates/foo/src/lib.rs"
+  cat >"$st/src/crates/foo/src/a.rs" <<'RS'
+// A comment that quotes `#[cfg_attr(miri, ignore)]` is not an annotation.
+#[cfg(test)]
+mod tests {
+    #[test]
+    #[cfg_attr(miri, ignore = "foreign function")]
+    fn ran() {}
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "multi-line attribute"
+    )]
+    fn ignored_one() {}
+    #[test]
+    #[cfg_attr(all(miri, debug_assertions), ignore = "G6c only")]
+    fn absent_one() {}
+    #[test]
+    #[cfg_attr(not(miri), ignore = "not a Miri exception")]
+    fn not_excepted() {}
+}
 RS
-  printf 'running 3 tests\ntest tests::claimed_and_ran ... ok\ntest claimed_but_ignored ... ignored\ntest not_a_claim ... ok\n' >"$st/xlogs/asan/foo.log"
-  out="$(SAN_CLAIMS_SRC="$st/src" SAN_LOG_ROOT="$st/xlogs" asan_claims_crosscheck asan 2>&1)"; rc=$?
-  if [ $rc -eq 1 ] && printf '%s' "$out" | grep -q 'claimed_but_ignored claims ASan coverage but was ignored' && printf '%s' "$out" | grep -q '2 cfg_attr(miri, ignore) annotation(s) claim ASan coverage; 1 ran and passed'; then
-    echo "  ok   E cross-check: an ignored ASan-claiming test is RED; the multi-line attribute parses; a non-claim is not counted"
-  else echo "  FAIL E cross-check (rc=$rc): $out"; fail=1; fi
-  printf 'running 3 tests\ntest tests::claimed_and_ran ... ok\ntest claimed_but_ignored ... ok\n' >"$st/xlogs/asan/foo.log"
-  out="$(SAN_CLAIMS_SRC="$st/src" SAN_LOG_ROOT="$st/xlogs" asan_claims_crosscheck asan 2>&1)"; rc=$?
-  if [ $rc -eq 0 ]; then echo "  ok   E control: both claims ran and passed -> GREEN"; else echo "  FAIL E control (rc=$rc): $out"; fail=1; fi
+  : >"$st/exp-empty.tsv"
+  xc() {  # xc LOGTEXT EXPECTED-TSV-TEXT -> sets out, rc
+    printf '%b' "$1" >"$st/xlogs/asan/foo.log"
+    printf '%b' "$2" >"$st/exp.tsv"
+    out="$(SAN_CLAIMS_SRC="$st/src" SAN_LOG_ROOT="$st/xlogs" SAN_EXPECTED_ABSENT="$st/exp.tsv" asan_claims_crosscheck asan 2>&1)"; rc=$?
+  }
+  xe() {  # xe NAME WANT_RC MUST_GREP
+    if [ "$rc" -eq "$2" ] && printf '%s' "$out" | grep -q -- "$3"; then echo "  ok   E $1"
+    else echo "  FAIL E $1 (rc=$rc): $out"; fail=1; fi
+  }
+  R='     Running unittests src/lib.rs (x)\n'
+  xc "${R}test a::tests::ran ... ok\ntest a::tests::ignored_one ... ok\ntest a::tests::absent_one ... ok\ntest a::tests::not_excepted ... ignored\n" ""
+  xe "control: all 3 Miri-excepted tests ran and passed -> GREEN (comment and not(miri) not counted)" 0 "3 Miri-excepted test(s); 3 ran and passed"
+  xc "${R}test a::tests::ran ... ok\ntest a::tests::ignored_one ... ignored\ntest a::tests::absent_one ... ok\n" ""
+  xe "an ignored Miri-excepted test is RED (multi-line attribute parsed)" 1 "ignored_one (src/a.rs): Miri-excepted but ignored"
+  xc "${R}test a::tests::ran ... ok\ntest a::tests::ignored_one ... ok\n" ""
+  xe "an absent Miri-excepted test (all(miri, ..) form) is RED" 1 "a::absent_one (src/a.rs): Miri-excepted but absent"
+  xc "${R}test a::tests::ran ... ok\ntest a::tests::ignored_one ... ok\n" "*\tfoo\ta::absent_one\tfixture reason\n"
+  xe "the same absence on the expected-absent list is GREEN" 0 "1 expected absent"
+  xc "${R}test a::tests::ran ... ok\ntest a::tests::ignored_one ... ok\ntest a::tests::absent_one ... ok\n" "*\tfoo\ta::absent_one\tfixture reason\n"
+  xe "an expected-absent row whose test ran and passed is stale (RED)" 1 "ran and passed here (stale)"
+  xc "${R}test a::tests::ran ... ok\ntest a::tests::ignored_one ... ok\ntest a::tests::absent_one ... ok\n" "*\tfoo\tz::nothing\tfixture reason\n"
+  xe "an expected-absent row that matches nothing is stale (RED)" 1 "matches no Miri-excepted test (stale)"
+  xc "${R}test b::tests::ran ... ok\ntest a::tests::ignored_one ... ok\ntest a::tests::absent_one ... ok\n" ""
+  xe "an ok in another module (b::tests::ran) does not satisfy a::ran (module-path match)" 1 "a::ran (src/a.rs): Miri-excepted but absent"
+  printf '#[cfg_attr(miri, ignore)]\nconst X: u8 = 0;\n' >>"$st/src/crates/foo/src/a.rs"
+  xc "${R}test a::tests::ran ... ok\ntest a::tests::ignored_one ... ok\ntest a::tests::absent_one ... ok\n" ""
+  xe "an annotation followed by something other than a fn is RED (never attached to a later fn)" 1 "not attached to a fn: foo src/a.rs"
   rm -f "$st/xlogs/asan/foo.log"
-  out="$(SAN_CLAIMS_SRC="$st/src" SAN_LOG_ROOT="$st/xlogs" asan_claims_crosscheck asan 2>&1)"; rc=$?
-  if [ $rc -eq 1 ] && printf '%s' "$out" | grep -q 'has no asan log'; then echo "  ok   E a claimed crate with no log (excluded) is RED"
-  else echo "  FAIL E missing-log (rc=$rc): $out"; fail=1; fi
+  xc "" ""; rm -f "$st/xlogs/asan/foo.log"
+  out="$(SAN_CLAIMS_SRC="$st/src" SAN_LOG_ROOT="$st/xlogs" SAN_EXPECTED_ABSENT="$st/exp-empty.tsv" asan_claims_crosscheck asan 2>&1)"; rc=$?
+  xe "a crate with Miri-excepted tests but no log (excluded) is RED" 1 "its crate has no asan log"
+
+  # --- arm H: scope bookkeeping and verdicts over the REAL workspace (no build) ---
+  hx() {  # hx NAME WANT_RC MUST_GREP SHELL-SNIPPET (run after sourcing this script)
+    local o r
+    o="$(bash -c '. "$0" --source-only; '"$4" "$GATES_DIR/sanitizers.sh" 2>&1)"; r=$?
+    if [ "$r" -eq "$2" ] && { [ -z "$3" ] || printf "%s" "$o" | grep -q -- "$3"; }; then echo "  ok   H $1"
+    else echo "  FAIL H $1 (rc=$r): $o" | head -5; fail=1; fi
+  }
+  hx "control: the real exclusions and feature lanes name workspace members" 0 "" \
+    'check_members x ${ASAN_EXCLUDES[@]+"${ASAN_EXCLUDES[@]}"} ${LSAN_EXCLUDES[@]+"${LSAN_EXCLUDES[@]}"} ${FEATURE_LANES[@]+"${FEATURE_LANES[@]}"} ${LINUX_FEATURE_LANES[@]+"${LINUX_FEATURE_LANES[@]}"} ${NO_TESTS_ON[@]+"${NO_TESTS_ON[@]}"} ${MSAN_EXCLUDES[@]+"${MSAN_EXCLUDES[@]}"}'
+  hx "a stale *_EXCLUDES entry is RED" 1 "'no-such-crate' is listed but is not a workspace member" \
+    'ASAN_EXCLUDES=("no-such-crate|fixture"); check_members "G-ASAN exclusion" "${ASAN_EXCLUDES[@]}"'
+  hx "a stale feature-lane entry is RED" 1 "'rustty-renamed' is listed but is not a workspace member" \
+    'FEATURE_LANES=("rustty-renamed:wuffs|fixture"); check_members "G-ASAN feature lane" "${FEATURE_LANES[@]}"'
+  hx "control: the real MSAN_SCOPE/MSAN_EXCLUDES/MSAN_SKIPS partition is complete" 0 "" 'msan_partition_check'
+  hx "a member in neither MSAN_SCOPE nor MSAN_EXCLUDES is RED" 1 "workspace member 'rustty-zf' is in neither" \
+    'n=(); for c in "${MSAN_SCOPE[@]}"; do [ "$c" = rustty-zf ] || n+=("$c"); done; MSAN_SCOPE=("${n[@]}"); msan_partition_check'
+  hx "an MSAN_SKIPS entry for a crate out of scope is stale (RED)" 1 "MSAN_SKIPS names 'xtask'" \
+    'MSAN_SKIPS+=("xtask|x|fixture"); msan_partition_check'
+  hx "a BUILD row makes gate_verdict BLOCKED (exit 3)" 3 "G-X: BLOCKED" \
+    'M_RED=0; M_BLOCKED=1; M_TOTAL=5; gate_verdict G-X 0'
+  hx "control: a clean matrix makes gate_verdict GREEN" 0 "G-X: GREEN" \
+    'M_RED=0; M_BLOCKED=0; M_TOTAL=5; gate_verdict G-X 0'
+  hx "RED dominates BLOCKED" 1 "G-X: RED" \
+    'M_RED=1; M_BLOCKED=1; M_TOTAL=5; gate_verdict G-X 0'
 
   # --- arm F: the BLOCKED arms (no build) ---
   out="$(RUSTTY_SANITIZERS_OWN_JOB="the fixture job" bash "$GATES_DIR/sanitizers.sh" --gate asan 2>&1)"; rc=$?
@@ -879,6 +889,26 @@ RS
   ARM_PER_CRATE=1 arm "A0 per-crate target dirs (--per-crate-target)" asan "tests::defect_heap_overflow --exact" RED "per-crate target dirs"
   if [ -d "$sroot/san-asan-san-selftest" ]; then echo "  FAIL A0: the per-crate target dir outlived its crate"; fail=1; fi
   arm "B  empty filter" asan "no_such_test_anywhere" RED "VACUOUS"
+  # BUILD: a crate that does not compile is BLOCKED (exit 3), never GREEN or RED.
+  local bc="$st/badcrate"
+  mkdir -p "$bc/src"
+  printf '[package]\nname = "san-selftest-bad"\nversion = "0.0.0"\nedition = "2021"\npublish = false\n\n[workspace]\n' >"$bc/Cargo.toml"
+  printf '#[test]\nfn t() { let x: u8 = "not a number"; }\n' >"$bc/src/lib.rs"
+  o="$(SAN_PER_CRATE_TARGET=0 SAN_MANIFEST_PATH="$bc/Cargo.toml" SAN_TARGET_ROOT="$sroot" SAN_LOG_ROOT="$st/slogs-bad" SAN_MIN_FREE_GB=0 \
+       bash -c '. "$0" --source-only; matrix_run asan "" san-selftest-bad; gate_verdict SELF 0' "$GATES_DIR/sanitizers.sh" 2>&1)"; r=$?
+  if [ $r -eq 3 ] && printf '%s' "$o" | grep -q 'BLOCKED — did not build'; then echo "  ok   H a crate that does not build is BLOCKED (exit 3)"
+  else echo "  FAIL H build failure (rc=$r):"; printf '%s\n' "$o" | tail -5; fail=1; fi
+  # The disk floor: BLOCKED before building anything.
+  o="$(SAN_PER_CRATE_TARGET=0 SAN_MANIFEST_PATH="$cr/Cargo.toml" SAN_TARGET_ROOT="$sroot" SAN_LOG_ROOT="$st/slogs-disk" SAN_MIN_FREE_GB=999999 \
+       bash -c '. "$0" --source-only; matrix_run asan "" san-selftest; gate_verdict SELF 0' "$GATES_DIR/sanitizers.sh" 2>&1)"; r=$?
+  if [ $r -eq 3 ] && printf '%s' "$o" | grep -q 'below the SAN_MIN_FREE_GB=999999 floor'; then echo "  ok   H the disk floor stops the pass BLOCKED (exit 3)"
+  else echo "  FAIL H disk floor (rc=$r):"; printf '%s\n' "$o" | tail -5; fail=1; fi
+  # SAN_ONLY: a narrowed gate is never GREEN, even when what it ran is clean.
+  o="$(SAN_PER_CRATE_TARGET=0 SAN_TARGET_ROOT="$sroot" SAN_LOG_ROOT="$st/slogs-only" SAN_ONLY=rustty-identity \
+       bash "$GATES_DIR/sanitizers.sh" --gate asan 2>&1)"; r=$?
+  if [ $r -eq 3 ] && printf '%s' "$o" | grep -q 'asan rustty-identity: 1 test(s) ran' && printf '%s' "$o" | grep -q 'G-ASAN: BLOCKED'; then
+    echo "  ok   H SAN_ONLY=rustty-identity: its 1 test GREEN, the gate BLOCKED (exit 3), never GREEN"
+  else echo "  FAIL H SAN_ONLY (rc=$r):"; printf '%s\n' "$o" | tail -6; fail=1; fi
   # NO_TESTS_ON: a listed crate with zero tests is a named skip, not RED; a
   # listed crate where a test DID run is a stale entry, RED.
   local nto nrc
