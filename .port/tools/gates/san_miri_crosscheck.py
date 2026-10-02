@@ -266,7 +266,13 @@ for lg in sorted(glob.glob(os.path.join(a.logdir, "*.log"))):
         if re.match(r"^\s+Doc-tests ", line):
             target = "doc"
             continue
-        m = re.match(r"^test (\S+)(?: - should panic)? \.\.\. (ok|ignored|FAILED)", line)
+        # Not anchored at the line start: a test that writes to the real fd 1
+        # without a newline (rustty-cli's `pager_default_writer` writes "hello",
+        # as the reference's test does) glues its text in front of libtest's
+        # next line, e.g. `hellotest new_window::tests::x ... ok` (G-HWASAN's
+        # first run, P7-W16b). The path must still be a Rust path. A line glued
+        # the other way (`test x ... hellook`) stays unmatched: absent, RED.
+        m = re.search(r"test ([A-Za-z_][A-Za-z0-9_:]*)(?: - should panic)? \.\.\. (ok|ignored|FAILED)", line)
         if m:
             rows.append((target, m.group(1), m.group(2)))
 

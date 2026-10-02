@@ -15,8 +15,23 @@
 #                   2026-10-01), needs -Zbuild-std + instrumented C -> G-MSAN
 #                   (MSAN_AARCH64_NOTE turns aarch64 into BLOCKED if that regresses)
 #   thread  (TSan)  ✅ macOS + Linux  (needs -Zbuild-std)  -> G-TSAN, not yet a gate
-#   hwaddress(HWASan)❌ macOS ; aarch64-Linux/Android only -> not a gate
+#   hwaddress(HWASan)❌ macOS, ❌ x86_64 Linux (rustc: "not supported for this
+#                   target") ; ✅ aarch64 Linux (verified on rvm, P7-W16b,
+#                   2026-10-02), needs -Zbuild-std, +tagged-globals,
+#                   -outline-atomics and lld (see run_crate) -> G-HWASAN
 #   cfi             mitigation, not a bug-checker; needs -Clto -> optional Goal-2 hardening
+#
+# Why G-HWASAN next to G-ASAN (P7-W16b). HWASan tags every heap/stack/global
+# object (an 8-bit tag in the pointer's top byte, one shadow byte per 16-byte
+# granule) instead of
+# poisoning redzones around it. So it also catches an access that lands INSIDE
+# another live object (a wild index past the redzone: ASan reports nothing,
+# HWASan a tag-mismatch; G-SAN-SELF's A4 wild-index arm), and a use-after-free
+# long after ASan's quarantine has recycled the block. Detection is
+# probabilistic (two objects share a tag with probability 1/256), and it has no
+# redzones or quarantine, so it is cheaper in memory than ASan. Its C/C++ is
+# instrumented (clang -fsanitize=hwaddress through the cc wrappers), which
+# G-ASAN's is not (SANITIZER_SUPPRESSIONS.md "Known limits").
 #
 # Design: docs/superpowers/specs/2026-10-01-memory-safety-lanes-design.md, section B.
 #
@@ -25,7 +40,7 @@
 #       LEGACY single-crate run (check_leaks.sh's G6 ASan companion arms call it
 #       this way). Sanitizers are rustc names: address thread leak memory hwaddress.
 #       Prints "SANITIZERS: GREEN|PROBLEM"; exit 0 / 1.
-#   sanitizers.sh --matrix --san <asan|lsan|msan> (--crates <a,b c> | --workspace)
+#   sanitizers.sh --matrix --san <asan|lsan|msan|hwasan> (--crates <a,b c> | --workspace)
 #                 [--filter <f>] [--exclude <crate>]...
 #       The MATRIX runner: one crate at a time, all in ONE target dir per
 #       sanitizer (target/san-<san>), deleted when the pass ends. A crate spec
@@ -36,14 +51,15 @@
 #       (target/san-<san>-<crate>), deleted after that crate, so the disk holds
 #       one crate's instrumented build at a time (slower: every crate rebuilds
 #       its instrumented dependencies). Same as SAN_PER_CRATE_TARGET=1.
-#   sanitizers.sh --gate <asan|lsan|msan>
-#       The ci.sh gates G-ASAN / G-LSAN / G-MSAN: the matrix over the workspace
-#       minus that sanitizer's cited exclusions, plus (asan, lsan) the Miri-
-#       exception cross-check (every `cfg_attr(miri, ignore = "...")` test whose
-#       reason claims ASan coverage must have RUN and PASSED here).
+#   sanitizers.sh --gate <asan|lsan|msan|hwasan>
+#       The ci.sh gates G-ASAN / G-LSAN / G-MSAN / G-HWASAN: the matrix over the
+#       workspace minus that sanitizer's cited exclusions, plus (asan, lsan,
+#       hwasan) the Miri-exception cross-check (every `cfg_attr(miri, ignore =
+#       "...")` test must have RUN and PASSED here, or be expected absent).
 #   sanitizers.sh --self-test
 #       G-SAN-SELF: a synthetic crate with a deliberate heap overflow (RED under
-#       ASan), leak (RED under LSan), and uninitialized read (RED under MSan); a
+#       ASan and, on aarch64 Linux, under HWASan, plus HWASan's wild-index arm),
+#       leak (RED under LSan), and uninitialized read (RED under MSan); a
 #       clean control (GREEN); an empty filter (vacuous RED); and the log
 #       classifier and cross-check over canned logs.
 #
@@ -90,7 +106,10 @@ ASAN_EXCLUDES=(
 )
 LSAN_EXCLUDES=(
 )
-# Feature lanes G-ASAN and G-LSAN add on top of the members (a plain
+HWASAN_EXCLUDES=(
+  "xtask|its tests run nested cargo builds that inherit RUSTFLAGS=-Zsanitizer=hwaddress without -Zbuild-std, which rustc rejects ('mixing -Zsanitizer will cause an ABI mismatch in crate rustty_util'; G-HWASAN's first run, rvm, P7-W16b: 38 nested builds, 2 tests failed); the same exclusion as G-MSAN's (SANITIZER_SUPPRESSIONS.md M4, H1)"
+)
+# Feature lanes G-ASAN, G-LSAN and G-HWASAN add on top of the members (a plain
 # `cargo test -p` never turns them on). Format: "<crate>:<features>|<reason>".
 FEATURE_LANES=(
   "rustty-vt:wuffs,oniguruma|the PNG decode tests (\`image_load_png_zlib_compressed_direct\`, \`sys::tests::default_decoder_*\`) are ignored without the wuffs feature, and one of them is a Miri exception whose stated compensating control is ASan; found by G-ASAN's claim cross-check on its first run (P7-W14); and the oniguruma feature's tests, e.g. the Miri-excepted tmux::control::concurrent_first_notifications_do_not_race_oniguruma_init, which no lane compiled until the cross-check covered every Miri exception (fix round 1)"
@@ -210,11 +229,11 @@ classify() {
 # ---------------------------------------------------------------------------
 MSAN_STAT_SHIM_PKGS="fontconfig-sys freetype-sys"
 MSAN_DECL_PKGS="sentry-sys"
-write_msan_wrappers() {
+write_san_wrappers() {
   local d="$SAN_TARGET_ROOT/san-cc-wrappers"
   mkdir -p "$d" || return 1
   cat >"$d/msan-stat-shim.h" <<'SHIM'
-/* G-MSAN (sanitizers.sh): see write_msan_wrappers. */
+/* G-MSAN (sanitizers.sh): see write_san_wrappers. */
 #ifndef RUSTTY_MSAN_STAT_SHIM_H
 #define RUSTTY_MSAN_STAT_SHIM_H
 #include <sys/stat.h>
@@ -240,7 +259,7 @@ static inline int rustty_msan_fstat(int fd, struct stat *b) {
 #endif
 SHIM
   cat >"$d/msan-decl.h" <<'DECL'
-/* G-MSAN (sanitizers.sh): see write_msan_wrappers (M5). */
+/* G-MSAN (sanitizers.sh): see write_san_wrappers (M5). */
 void __msan_unpoison(const volatile void *a, unsigned long size);
 DECL
   local cc
@@ -258,6 +277,18 @@ case ",\${CARGO_CFG_SANITIZE:-}," in
 esac
 WRAP
     chmod +x "$d/msan-$cc" || return 1
+    # G-HWASAN (P7-W16b): -fsanitize=hwaddress exactly when the crate being
+    # compiled is instrumented (as above). -mno-outline-atomics: the C must not
+    # call the __aarch64_* helpers, which the Rust side does not provide under
+    # -outline-atomics (see run_crate) and rustc links no libgcc.a.
+    cat >"$d/hwasan-$cc" <<WRAP
+#!/usr/bin/env bash
+case ",\${CARGO_CFG_SANITIZE:-}," in
+  *,hwaddress,*) exec $real -fsanitize=hwaddress -mno-outline-atomics -fno-omit-frame-pointer -g "\$@" ;;
+  *) exec $real "\$@" ;;
+esac
+WRAP
+    chmod +x "$d/hwasan-$cc" || return 1
   done
 }
 
@@ -292,19 +323,39 @@ run_crate() {
       rflags="-Zsanitizer=memory -Zsanitizer-memory-track-origins ${SAN_MSAN_DIAG:+-Zsanitizer-recover=memory}"
       build_std="-Zbuild-std"
       # The C/C++ we compile ourselves through `cc` is instrumented too, through
-      # the msan-cc wrappers (see write_msan_wrappers): plain CFLAGS would also
+      # the msan-cc wrappers (see write_san_wrappers): plain CFLAGS would also
       # reach build-dependencies compiled for the build script, which is not
       # instrumented, and fail to link (`undefined reference to __msan_init`,
       # rustty-cli's zlib-sys build-dependency, P7-W14).
-      write_msan_wrappers || return 2
+      write_san_wrappers || return 2
       envs+=("CC=$SAN_TARGET_ROOT/san-cc-wrappers/msan-cc" "CXX=$SAN_TARGET_ROOT/san-cc-wrappers/msan-c++")
       envs+=("MSAN_OPTIONS=poison_in_dtor=1:allocator_may_return_null=1${SAN_MSAN_DIAG:+:halt_on_error=0}") ;;  # SAN_MSAN_DIAG=1: a diagnosis run that reports every use instead of stopping at the first (never a gate setting; the verdict is still RED on any report)
     thread)
       rflags="-Zsanitizer=thread"; build_std="-Zbuild-std" ;;
     leak)
       rflags="-Zsanitizer=leak" ;;
-    hwaddress)
-      rflags="-Zsanitizer=hwaddress" ;;
+    hwasan|hwaddress)
+      # Every flag here is load-bearing; each was a failure on rvm (P7-W16b):
+      #   -Zbuild-std            without it rustc rejects the mix ("-Zsanitizer=
+      #                          hwaddress in this crate is incompatible with
+      #                          -Zsanitizer being unset in dependency core").
+      #   +tagged-globals        the HWASan ABI for globals on aarch64 (clang
+      #                          turns it on itself for -fsanitize=hwaddress;
+      #                          rustc does not, and warns it is "unknown").
+      #   -outline-atomics      compiler_builtins' outline-atomics asm takes
+      #                          `adrp` of HAVE_LSE_ATOMICS, which tagged globals
+      #                          move out of ADRP range: "relocation truncated to
+      #                          fit: R_AARCH64_ADR_PREL_PG_HI21" (ld.bfd and lld).
+      #                          Inline LSE atomics instead (rvm's CPU has them).
+      #   -fuse-ld=lld           GNU ld 2.46 links tagged globals but writes an
+      #                          invalid instruction (`.inst 0xb2ea5fe8`, SIGILL
+      #                          in std's args init before main).
+      rflags="-Zsanitizer=hwaddress -Ctarget-feature=+tagged-globals,-outline-atomics -Clink-arg=-fuse-ld=lld"
+      build_std="-Zbuild-std"
+      # Our cc-built C/C++ is instrumented too (the same wrappers as G-MSAN).
+      write_san_wrappers || return 2
+      envs+=("CC=$SAN_TARGET_ROOT/san-cc-wrappers/hwasan-cc" "CXX=$SAN_TARGET_ROOT/san-cc-wrappers/hwasan-c++")
+      envs+=("HWASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1") ;;  # WHY: detect_leaks=0, G-LSAN is the leak lane (HWASan carries LSan on Linux); allocator_may_return_null=1 as for G-ASAN (the out-of-memory tests rely on malloc's NULL)
     *) echo "sanitizers.sh: unknown sanitizer '$san'" >&2; return 2 ;;
   esac
   # RUST_MIN_STACK (std's default spawn stack, 2 MiB otherwise): ASan and MSan
@@ -317,7 +368,7 @@ run_crate() {
   # under ASan. 8 MiB keeps that headroom; unbounded recursion still overflows,
   # and the native bound stays checked by `cargo test --workspace`. Threads
   # that set an explicit stack size are unaffected.
-  if [ "$san" != leak ] && [ "$san" != hwaddress ]; then envs+=("RUST_MIN_STACK=8388608"); fi
+  if [ "$san" != leak ]; then envs+=("RUST_MIN_STACK=8388608"); fi
   # Line tables only: sanitizer reports still name every function, file and
   # line, but the instrumented debug binaries link in a fraction of the memory
   # and disk. With full debuginfo the GTK apprt lane's test links (ld.bfd, 8 at
@@ -381,8 +432,8 @@ free_gb() { df -Pk "$1" 2>/dev/null | awk 'NR==2 {printf "%d", $4/1048576}'; }
 drop_target() {
   local td="$1"
   case "$td" in
-    "$SAN_TARGET_ROOT"/san-asan|"$SAN_TARGET_ROOT"/san-lsan|"$SAN_TARGET_ROOT"/san-msan) ;;
-    "$SAN_TARGET_ROOT"/san-asan-*|"$SAN_TARGET_ROOT"/san-lsan-*|"$SAN_TARGET_ROOT"/san-msan-*) ;;
+    "$SAN_TARGET_ROOT"/san-asan|"$SAN_TARGET_ROOT"/san-lsan|"$SAN_TARGET_ROOT"/san-msan|"$SAN_TARGET_ROOT"/san-hwasan) ;;
+    "$SAN_TARGET_ROOT"/san-asan-*|"$SAN_TARGET_ROOT"/san-lsan-*|"$SAN_TARGET_ROOT"/san-msan-*|"$SAN_TARGET_ROOT"/san-hwasan-*) ;;
     *) echo "sanitizers.sh: refusing to delete '$td' (not a san-<san>[-<crate>] dir)" >&2; return 1 ;;
   esac
   case "$td" in *..*|*' '*) echo "sanitizers.sh: refusing to delete '$td'" >&2; return 1 ;; esac
@@ -592,9 +643,32 @@ scope_minus() {  # scope_minus "excl entries" -> stdout specs
   done
 }
 
-gate_asan_like() {  # gate_asan_like asan|lsan
+# G-HWASAN's host requirements, checked first so the BLOCKED reason names the
+# host. HWAddressSanitizer exists for aarch64 Linux (and Android) only: rustc
+# rejects -Zsanitizer=hwaddress for aarch64-apple-darwin and
+# x86_64-unknown-linux-gnu ("hwaddress sanitizer is not supported for this
+# target"; P7-W16b, nightly 2026-07-22). It relies on the aarch64 Top-Byte-
+# Ignore and the kernel's tagged-address ABI (PR_SET_TAGGED_ADDR_CTRL,
+# CONFIG_ARM64_TAGGED_ADDR_ABI), which the runtime turns on at init.
+hwasan_host_blocked() {
+  if [ "$OS" != "Linux" ] || [ "$ARCH" != "aarch64" ]; then
+    echo "BLOCKED: G-HWASAN needs HWAddressSanitizer, which exists on aarch64 Linux only (rustc: 'hwaddress sanitizer is not supported for this target' on $OS/$ARCH). It runs on the aarch64 Linux VM (rvm)."
+    exit 3
+  fi
+  if ! rustup +nightly component list --installed 2>/dev/null | grep -q '^rust-src'; then
+    echo "BLOCKED: G-HWASAN needs -Zbuild-std, which needs the nightly rust-src component (rustup component add rust-src --toolchain nightly)"
+    exit 3
+  fi
+  if ! command -v clang >/dev/null 2>&1 || ! command -v ld.lld >/dev/null 2>&1; then
+    echo "BLOCKED: G-HWASAN links with lld (GNU ld mislinks tagged globals) and compiles the vendored C with clang -fsanitize=hwaddress; clang or ld.lld is not on PATH"
+    exit 3
+  fi
+}
+
+gate_asan_like() {  # gate_asan_like asan|lsan|hwasan
   local san="$1" id excl extra=0 e
-  if [ "$san" = asan ]; then id="G-ASAN"; else id="G-LSAN"; fi
+  case "$san" in asan) id="G-ASAN" ;; lsan) id="G-LSAN" ;; hwasan) id="G-HWASAN" ;; esac
+  if [ "$san" = hwasan ]; then hwasan_host_blocked; fi
   own_job_blocked "$id"
   need_nightly
   if [ "$san" = lsan ] && [ "$OS" != "Linux" ]; then
@@ -605,12 +679,15 @@ gate_asan_like() {  # gate_asan_like asan|lsan
     echo "$id: RED — $LSAN_SUPP is missing (SANITIZER_SUPPRESSIONS.md's file)"; exit 1
   fi
   excl=""
-  if [ "$san" = asan ]; then
-    for e in ${ASAN_EXCLUDES[@]+"${ASAN_EXCLUDES[@]}"}; do excl="$excl$e"$'\n'; done
-  else
-    for e in ${LSAN_EXCLUDES[@]+"${LSAN_EXCLUDES[@]}"}; do excl="$excl$e"$'\n'; done
-  fi
-  echo "### $id: AddressSanitizer$( [ "$san" = lsan ] && echo ' + LeakSanitizer (detect_leaks=1)') over the workspace test suites ($OS/$ARCH) ###"
+  case "$san" in
+    asan) for e in ${ASAN_EXCLUDES[@]+"${ASAN_EXCLUDES[@]}"}; do excl="$excl$e"$'\n'; done ;;
+    lsan) for e in ${LSAN_EXCLUDES[@]+"${LSAN_EXCLUDES[@]}"}; do excl="$excl$e"$'\n'; done ;;
+    hwasan) for e in ${HWASAN_EXCLUDES[@]+"${HWASAN_EXCLUDES[@]}"}; do excl="$excl$e"$'\n'; done ;;
+  esac
+  case "$san" in
+    hwasan) echo "### $id: HWAddressSanitizer (-Zbuild-std, tagged globals, lld; C via cc with -fsanitize=hwaddress) over the workspace test suites ($OS/$ARCH) ###" ;;
+    *) echo "### $id: AddressSanitizer$( [ "$san" = lsan ] && echo ' + LeakSanitizer (detect_leaks=1)') over the workspace test suites ($OS/$ARCH) ###" ;;
+  esac
   if [ -n "$excl" ]; then
     echo "excluded (cannot run under the sanitizer):"
     printf '%s' "$excl" | awk -F'|' 'NF {printf "  - %s: %s\n", $1, $2}'
@@ -733,6 +810,8 @@ self_test() {
   printf 'running 1 test\n==9==WARNING: MemorySanitizer failed to allocate 0x7fffffffffffffff bytes\ntest result: ok. 1 passed; 0 failed; 0 ignored\n' >"$st/logs/oominfo.log"
   ck green 0 "GREEN 5"; ck msan 77 FINDING; ck leak 23 FINDING; ck oominfo 0 "GREEN 1"
   ck allignored 0 VACUOUS; ck crash 101 FAIL
+  printf 'running 1 test\n==5==ERROR: HWAddressSanitizer: tag-mismatch on address 0xec0dfffe01e8\nSUMMARY: HWAddressSanitizer: tag-mismatch\n' >"$st/logs/hwasan.log"
+  ck hwasan 99 FINDING
   # --- arm D: drop_target removes only san-<san> and san-<san>-<crate> dirs ---
   mkdir -p "$st/t/san-asan" "$st/t/san-asan-foo" "$st/t/san-other"
   if ( SAN_TARGET_ROOT="$st/t"; drop_target "$st" ) 2>/dev/null; then echo "  FAIL D drop_target accepted a non-sanitizer dir"; fail=1
@@ -778,6 +857,8 @@ RS
   R='     Running unittests src/lib.rs (x)\n'
   xc "${R}test a::tests::ran ... ok\ntest a::tests::ignored_one ... ok\ntest a::tests::absent_one ... ok\ntest a::tests::not_excepted ... ignored\n" ""
   xe "control: all 3 Miri-excepted tests ran and passed -> GREEN (comment and not(miri) not counted)" 0 "3 Miri-excepted test(s); 3 ran and passed"
+  xc "${R}test a::tests::ran ... ok\nhellotest a::tests::ignored_one ... ok\ntest a::tests::absent_one ... ok\n" ""
+  xe "a result line with another test's unterminated stdout glued in front still counts (P7-W16b)" 0 "3 Miri-excepted test(s); 3 ran and passed"
   xc "${R}test a::tests::ran ... ok\ntest a::tests::ignored_one ... ignored\ntest a::tests::absent_one ... ok\n" ""
   xe "an ignored Miri-excepted test is RED (multi-line attribute parsed)" 1 "ignored_one (src/a.rs): Miri-excepted but ignored"
   xc "${R}test a::tests::ran ... ok\ntest a::tests::ignored_one ... ok\n" ""
@@ -817,7 +898,7 @@ RS
     else echo "  FAIL H $1 (rc=$r): $o" | head -5; fail=1; fi
   }
   hx "control: the real exclusions and feature lanes name workspace members" 0 "" \
-    'check_members x ${ASAN_EXCLUDES[@]+"${ASAN_EXCLUDES[@]}"} ${LSAN_EXCLUDES[@]+"${LSAN_EXCLUDES[@]}"} ${FEATURE_LANES[@]+"${FEATURE_LANES[@]}"} ${LINUX_FEATURE_LANES[@]+"${LINUX_FEATURE_LANES[@]}"} ${NO_TESTS_ON[@]+"${NO_TESTS_ON[@]}"} ${MSAN_EXCLUDES[@]+"${MSAN_EXCLUDES[@]}"}'
+    'check_members x ${ASAN_EXCLUDES[@]+"${ASAN_EXCLUDES[@]}"} ${LSAN_EXCLUDES[@]+"${LSAN_EXCLUDES[@]}"} ${HWASAN_EXCLUDES[@]+"${HWASAN_EXCLUDES[@]}"} ${FEATURE_LANES[@]+"${FEATURE_LANES[@]}"} ${LINUX_FEATURE_LANES[@]+"${LINUX_FEATURE_LANES[@]}"} ${NO_TESTS_ON[@]+"${NO_TESTS_ON[@]}"} ${MSAN_EXCLUDES[@]+"${MSAN_EXCLUDES[@]}"}'
   hx "a stale *_EXCLUDES entry is RED" 1 "'no-such-crate' is listed but is not a workspace member" \
     'ASAN_EXCLUDES=("no-such-crate|fixture"); check_members "G-ASAN exclusion" "${ASAN_EXCLUDES[@]}"'
   hx "a stale feature-lane entry is RED" 1 "'rustty-renamed' is listed but is not a workspace member" \
@@ -849,6 +930,13 @@ RS
       if [ $rc -eq 3 ] && printf '%s' "$out" | grep -q 'exists on Linux only'; then echo "  ok   F --gate $g on $OS is BLOCKED (exit 3), Linux-only"
       else echo "  FAIL F --gate $g on $OS (rc=$rc): $out"; fail=1; fi
     done
+  fi
+  if [ "$OS" != "Linux" ] || [ "$ARCH" != "aarch64" ]; then
+    # Even with RUSTTY_SANITIZERS_OWN_JOB set, the host reason comes first: no
+    # job of ci.yml runs G-HWASAN, so deferring to one would be a false claim.
+    out="$(RUSTTY_SANITIZERS_OWN_JOB="the fixture job" bash "$GATES_DIR/sanitizers.sh" --gate hwasan 2>&1)"; rc=$?
+    if [ $rc -eq 3 ] && printf '%s' "$out" | grep -q 'exists on aarch64 Linux only'; then echo "  ok   F --gate hwasan on $OS/$ARCH is BLOCKED (exit 3), aarch64-Linux-only"
+    else echo "  FAIL F --gate hwasan on $OS/$ARCH (rc=$rc): $out"; fail=1; fi
   fi
 
   # --- arms A/B: the synthetic crate under the real sanitizers ---
@@ -910,6 +998,34 @@ mod tests {
         if uninit_byte() == 7 {
             println!("seven");
         }
+    }
+
+    // A wild index from one heap block straight into the INTERIOR of another
+    // live block: no redzone is touched, so ASan cannot see it; HWASan does
+    // (the two blocks' tags differ, except with probability 1/256 per run, so
+    // the arm retags by allocating a fresh pair until the tags differ).
+    #[test]
+    fn defect_wild_index_into_live_block() {
+        let m = 0x00ff_ffff_ffff_ffffusize;
+        let mut tries = 0;
+        let (a, b) = loop {
+            let a = Box::new([1u8; 64]);
+            let b = Box::new([2u8; 64]);
+            let (ta, tb) = (&*a as *const _ as usize >> 56, &*b as *const _ as usize >> 56);
+            tries += 1;
+            // Untagged builds (tags always 0) stop after the first pair.
+            if ta != tb || tries == 64 {
+                break (a, b);
+            }
+            std::mem::forget((a, b));
+        };
+        let pa = std::hint::black_box(&*a as *const [u8; 64] as *const u8);
+        let pb = &*b as *const [u8; 64] as *const u8;
+        let d = ((pb as usize & m) as isize) - ((pa as usize & m) as isize) + 16;
+        // SAFETY: deliberately NOT safe; this crate exists only for the self-test.
+        let v = unsafe { pa.wrapping_offset(std::hint::black_box(d)).read_volatile() };
+        assert_eq!(v, 2);
+        std::hint::black_box((&a, &b));
     }
 
     #[test]
@@ -987,6 +1103,13 @@ RS
     echo "  skip A2 leak under LSan: Linux-only (rustc rejects -Zsanitizer=leak on $OS); runs on rvm / ci.yml"
     echo "  skip A3 uninit read under MSan: Linux-only; runs on rvm / ci.yml"
   fi
+  if [ "$OS" = "Linux" ] && [ "$ARCH" = "aarch64" ]; then
+    arm "A4 heap overflow" hwasan "tests::defect_heap_overflow --exact" RED "HWAddressSanitizer: tag-mismatch"
+    arm "A4 wild index into a live block (what ASan cannot see)" hwasan "tests::defect_wild_index_into_live_block --exact" RED "HWAddressSanitizer: tag-mismatch"
+    arm "A4 control: clean under HWASan" hwasan "tests::clean_control --exact" GREEN "1 test\\(s\\) ran"
+  else
+    echo "  skip A4 heap overflow under HWASan: aarch64 Linux only (rustc rejects -Zsanitizer=hwaddress on $OS/$ARCH); runs on rvm"
+  fi
   # The synthetic crate's own build dirs (san-<san>-san-selftest) are dropped by
   # matrix_run; remove the work dir itself.
   rm -rf -- "${st:?}"
@@ -1004,14 +1127,15 @@ case "${1:-}" in
   --self-test) self_test; exit $? ;;
   --crosscheck)
     # Re-run only the ASan-claim cross-check over an existing run's logs.
-    case "${2:-}" in asan|lsan) asan_claims_crosscheck "$2"; exit $? ;; esac
-    echo "usage: sanitizers.sh --crosscheck asan|lsan" >&2; exit 2 ;;
+    case "${2:-}" in asan|lsan|hwasan) asan_claims_crosscheck "$2"; exit $? ;; esac
+    echo "usage: sanitizers.sh --crosscheck asan|lsan|hwasan" >&2; exit 2 ;;
   --gate)
     case "${2:-}" in
       asan) gate_asan_like asan; exit $? ;;
       lsan) gate_asan_like lsan; exit $? ;;
+      hwasan) gate_asan_like hwasan; exit $? ;;
       msan) gate_msan; exit $? ;;
-      *) echo "usage: sanitizers.sh --gate asan|lsan|msan" >&2; exit 2 ;;
+      *) echo "usage: sanitizers.sh --gate asan|lsan|msan|hwasan" >&2; exit 2 ;;
     esac ;;
   --matrix)
     shift
@@ -1036,7 +1160,7 @@ case "${1:-}" in
         *) echo "sanitizers.sh --matrix: unknown argument '$1'" >&2; exit 2 ;;
       esac
     done
-    case "$SAN" in asan|lsan|msan) ;; *) echo "sanitizers.sh --matrix: --san asan|lsan|msan" >&2; exit 2 ;; esac
+    case "$SAN" in asan|lsan|msan|hwasan) ;; *) echo "sanitizers.sh --matrix: --san asan|lsan|msan|hwasan" >&2; exit 2 ;; esac
     if [ "$WS" -eq 1 ]; then LIST="$LIST $(scope_minus "$EXCL" | tr '\n' ' ')"; fi
     # shellcheck disable=SC2086  # LIST is a word list of crate specs
     set -- $LIST

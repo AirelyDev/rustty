@@ -80,7 +80,7 @@ fn c_compiler() -> String {
     // An ASan build on Linux links the smoke program with -fsanitize=address,
     // which must be clang's (compiler-rt, the runtime rustc instruments for),
     // not GCC's libasan.
-    let cands: &[&str] = if cfg!(all(rustty_asan, target_os = "linux")) {
+    let cands: &[&str] = if cfg!(all(any(rustty_asan, rustty_hwasan), target_os = "linux")) {
         &["clang"]
     } else {
         &["cc", "clang"]
@@ -198,6 +198,11 @@ fn c_abi_smoke_compile_link_run() {
     // is ignored; see its attribute.)
     #[cfg(all(rustty_asan, target_os = "linux"))]
     cmd.arg("-fsanitize=address");
+    // Under G-HWASAN (aarch64 Linux, P7-W16b) the same holds for `__hwasan_*`:
+    // clang links its HWASan runtime into the executable, and lld, because GNU
+    // ld mislinks tagged globals (see sanitizers.sh's run_crate).
+    #[cfg(all(rustty_hwasan, target_os = "linux"))]
+    cmd.args(["-fsanitize=hwaddress", "-fuse-ld=lld"]);
     let compile = cmd.output().expect("spawn C compiler");
     assert!(
         compile.status.success(),

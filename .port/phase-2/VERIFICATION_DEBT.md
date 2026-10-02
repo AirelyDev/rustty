@@ -2629,3 +2629,29 @@ test picks clang), and G-MSAN's scope on x86_64.
 **Recipe:** push, then read `ci.yml` › `rustty-sanitizers (asan|lsan|msan)`.
 
 **Discharged by:** the first green run of all three legs.
+
+## V31. G-HWASAN has no hosted CI copy (aarch64 Linux only; runs on rvm) — **ENVIRONMENT-BLOCKED** [P7-W16b, 2026-10-02]
+
+**Blocked on:** an aarch64 Linux CI runner and a push (the maintainer's call, as V25 and V30).
+HWAddressSanitizer exists for aarch64 Linux only: rustc rejects `-Zsanitizer=hwaddress` for
+`x86_64-unknown-linux-gnu` and `aarch64-apple-darwin`. ci.yml's `sanitizers` job is x86_64, so it does not
+run G-HWASAN, and in every `ci` leg (macOS, x86_64 Ubuntu) the gate reports BLOCKED naming the host,
+before the `RUSTTY_SANITIZERS_OWN_JOB` deferral (no job of ci.yml runs it, so deferring to one would be
+false). G-HWASAN has run only on the aarch64 Fedora VM `rvm`.
+
+```
+PORTED: .port/tools/gates/sanitizers.sh
+```
+
+In that file: `gate_asan_like hwasan`, `hwasan_host_blocked` and `run_crate`'s `hwasan` arm.
+
+What a hosted run must show: an `ubuntu-24.04-arm` leg (nightly + rust-src, clang and lld matching
+rustc's LLVM major, since the vendored C is compiled with `clang -fsanitize=hwaddress` against rustc's
+runtime and the C-ABI smoke links clang's runtime; Ubuntu's default clang may be older than rustc's LLVM
+22), a kernel with `CONFIG_ARM64_TAGGED_ADDR_ABI`, G-SAN-SELF's A4 arms RED/RED/GREEN, and the gate's
+per-crate table with no BLOCKED row.
+
+**Recipe:** add `hwasan` to the `sanitizers` job's matrix on `runs-on: ubuntu-24.04-arm` with
+`clang`/`lld` of rustc's LLVM major, push, and read `ci.yml` › `rustty-sanitizers (hwasan)`.
+
+**Discharged by:** the first green hosted run of G-HWASAN.
