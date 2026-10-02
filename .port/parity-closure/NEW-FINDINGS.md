@@ -10403,3 +10403,36 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **regression test**: `screen_clone::tests::screen_clone_clone_mode_frees_its_copies_at_teardown` (two
   steps give two full chunks that never grew; teardown and a full run leave none); G-LSAN's `rustty-bench`
   lane is the leak check.
+
+## N500 — `snapshot::codec::tests::complete_snapshot_preserves_every_supported_continuation_cut` has Tree Borrows UB (test-side shape)
+
+- **id**: N500. P7-W15 (the first G6t run, `check_leaks.sh --tree-borrows`, 2026-10-02, head `5e8cbd918`).
+  **severity**: low (the mechanism is in the test body; no production path was shown to have it).
+  **state**: OPEN — reported, not fixed or annotated (the task's rule: a G6t finding is reported, not
+  annotated away).
+- **finding**: under `-Zmiri-tree-borrows` (debug assertions on, isolation on, one Miri process per
+  test) the test FAILs in 40 s:
+
+  ```
+  error: Undefined Behavior: write access through <2560804> at alloc678209[0x40] is forbidden
+      --> crates/rustty-vt/src/terminal/print.rs:958:17
+       |  self.previous_char = Some(cps[printed + k / cells_per_cp - 1]);
+       = help: the accessed tag <2560804> is a child of the conflicting tag <2078210>
+       = help: the conflicting tag <2078210> has state Frozen which forbids this child write access
+  help: the accessed tag <2560804> was created here  --> crates/rustty-vt/src/terminal/print.rs:616:9 (&mut self)
+  help: the conflicting tag <2078210> was created here, in the initial state Reserved
+      --> crates/rustty-vt/src/snapshot/codec.rs:2000:44
+       |  handler: Handler::init(&mut source_terminal as *mut Terminal),
+  help: the conflicting tag <2078210> later transitioned to Frozen due to a reborrow (acting as a foreign read access)
+      --> crates/rustty-vt/src/snapshot/codec.rs:2019:21
+       |  &source_terminal,
+  backtrace: Terminal::print_slice_fill_inner <- print_slice_fill <- print_slice_fast <- ... (the stream's handler)
+  ```
+- **mechanism**: N492's shape. The test mints the stream handler's `*mut Terminal` from a `&mut
+  source_terminal` reborrow, then reads the owner directly (`encode(.., &source_terminal, ..)`), which
+  freezes that tag; the stream's next write through the handler is a write through a Frozen tag.
+  Stacked Borrows accepts it. The likely fix is N492's raw-root idiom (one `*mut Terminal` root, every
+  later access through it); not applied here.
+- **coverage left open**: G6t was stopped at this finding (1,018 of the 1,597 `rustty-vt` scope tests had
+  run, 1 failed); `rustty-vt-c`, `rustty-renderer`, `rustty-xev`, `rustty-core` and the vt
+  debug-assertions-off half did not run under G6t, and the full G6 run did not start.

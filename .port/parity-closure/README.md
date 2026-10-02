@@ -70,6 +70,22 @@ verified and 31 macOS-only, 20 min; G-MSAN (rvm) GREEN, 6,183 tests over 58 memb
 runs found N495-N499 (register below); the suppressions, lane options and exclusions are in
 `.port/phase-2/SANITIZER_SUPPRESSIONS.md`.
 
+## Miri lanes on nextest (P7-W15, 2026-10-02)
+
+`check_leaks.sh` runs its Miri lanes on `cargo miri nextest` through `run_miri_nextest` (one Miri process
+per test, performance cores minus 2 in parallel; `--libtest` keeps the old runner for one release):
+
+| gate | tier | what |
+|---|---|---|
+| G6 | PROGRESS | Stacked Borrows over every claimed-done crate's tests (same crate list, exceptions and pass criteria), plus a libtest `--doc` arm and the ASan arms |
+| G6c | PROGRESS | the 124 `cfg_attr(all(miri, debug_assertions), ignore)` tests, debug assertions off, each resolved to an exact path that must PASS |
+| G6t | PROGRESS (new) | Tree Borrows over `G6T_SCOPE` (vt `page`, `pagelist`, `search`, `render`, `screen`, `terminal`, `snapshot`, `kitty`; `rustty-vt-c`, `rustty-renderer`, `rustty-xev`, `rustty-core`), G6/G6c's debug-assertions split |
+
+Measured against libtest on V27-V29's groups: 11,722 s down to 1,687 s (6.9x). G6c GREEN in 1,110 s; G6t
+RED at its first finding (N500); G6 not yet run on the new runner. Self-tests (`--self-test`,
+`--debug-assertions-off --self-test`, `--tree-borrows --self-test`) GREEN. Details:
+`.port/phase-2/MIRI_EXCEPTIONS.md`, "P7-W15".
+
 ## Not verified here (long runs, deferred by the user on 2026-09-28)
 
 These were deliberately not run to finish the closure. Each has an exact
@@ -79,8 +95,9 @@ command in `.port/phase-2/VERIFICATION_DEBT.md` or the named record.
 |---|---|---|
 | Full `ci.sh` end to end on macOS and Linux (Task 41 step 4) | here | `bash .port/tools/ci.sh`; on Linux `ssh rvm 'cd ~/projects/rustty && bash .port/tools/ci.sh'` |
 | G-REL: 17 release doc-test targets failed with "can't find crate" in the last full run, and pass when run alone; cause unknown | task-C-1 report | `bash .port/tools/gates/check_release_lane.sh` |
-| G6 Miri as one continuous lane (verified crate by crate only; about 8 h for rustty-vt) | `MIRI_EXCEPTIONS.md` | `bash .port/tools/gates/check_leaks.sh --all-done` |
-| G6c as the gate runs it (119 tests, about 105 min; its hang limit was raised from 5400 s to 10800 s, pass criteria unchanged) | task-C-1 report | `bash .port/tools/gates/check_leaks.sh --debug-assertions-off` |
+| G6 Miri as one continuous lane (verified crate by crate only; about 8 h for rustty-vt under libtest; not yet run on the nextest runner, P7-W15) | `MIRI_EXCEPTIONS.md` | `bash .port/tools/gates/check_leaks.sh --all-done` |
+| G6t to completion (stopped RED at N500 on its first run, P7-W15) | `MIRI_EXCEPTIONS.md` "P7-W15" | `bash .port/tools/gates/check_leaks.sh --tree-borrows` |
+| ~~G6c as the gate runs it~~ DONE on nextest, P7-W15: 124 of 124 GREEN in 1,110 s (libtest: 119 tests, about 105 min) | `MIRI_EXCEPTIONS.md` "P7-W15" | `bash .port/tools/gates/check_leaks.sh --debug-assertions-off` |
 | Re-audit of the most-changed areas (Task 41 step 3) | here | the parity audit workflow over `src/terminal`, `src/apprt`, `pkg`, `include` |
 | Idle-machine performance runs and a new G8 baseline | V16–V18 | see `task-S-4-report.md` |
 | The 16 new CI jobs and release-workflow changes on GitHub's runners | V25 | push, then read the run |
@@ -220,6 +237,9 @@ committed records named here.
   never run on GitHub). No UD: fix round 1 found the benchmark's process-exit freeing deliberate in the
   reference, so the UD376 first drafted for it was withdrawn and never merged.
   **Next free ids: UD376, N500, V31.**
+- **P7-W15** (the Miri lanes on `cargo miri nextest`, plus G6t) used N500 (OPEN: Tree Borrows UB in
+  `snapshot::codec::tests::complete_snapshot_preserves_every_supported_continuation_cut`, the N492
+  shape; found by G6t's first run, which stopped there). **Next free ids: UD376, N501, V31.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.

@@ -242,6 +242,9 @@ with a hard timeout; if a test stops timing out, it leaves the list automaticall
   these 23 via ASan + tracking allocator; `.port/tools/gates/sanitizers.sh`
   (ASan + TSan; LSan/MSan/HWASan = Linux-CI lanes).
 - Result: **0 PageList unsafe path is unverified.**
+- **Runner (P7-W15, 2026-10-02):** the Miri lanes (G6, G6c and the new Tree Borrows lane G6t) run on
+  `cargo miri nextest`; see "P7-W15 — the Miri lanes on nextest" at the end of this file for how the
+  libtest recipes in this file translate.
 
 ---
 
@@ -3008,3 +3011,55 @@ must sit directly on its `fn`, and the tests that cannot run on a host OS are li
 in `.port/tools/gates/san_expected_absent.tsv` (a stale row is RED). That widening found one more test no
 lane compiled: `rustty-vt` `tmux::control::concurrent_first_notifications_do_not_race_oniguruma_init`
 (behind the `oniguruma` feature), now run by the `rustty-vt:wuffs,oniguruma` lane.
+
+## P7-W15 — the Miri lanes on nextest (2026-10-02)
+
+Design: `docs/superpowers/specs/2026-10-01-memory-safety-lanes-design.md` §A. `check_leaks.sh` runs every
+Miri lane through one helper, `run_miri_nextest <crate> <sb|tb> <on|off> <filterset>`, on `cargo miri
+nextest run` (cargo-nextest 0.9.146): one Miri process per test, `--test-threads` = performance cores
+minus 2 (8 on the M4 Pro), Miri's leak check at every process exit. The exceptions in this file are
+unchanged: nextest runs exactly the tests the Miri-compiled binary does not report as ignored, so
+`cfg_attr(miri, ignore)` and `cfg_attr(all(miri, debug_assertions), ignore)` decide as they did under
+libtest. Doc tests, which nextest does not run, keep a libtest `cargo miri test --doc` arm in G6.
+
+**Translating the libtest recipes in this file:**
+
+| libtest | nextest |
+|---|---|
+| `cargo +nightly miri test -p <c> --lib -- <substring>` | `cargo +nightly miri nextest run -p <c> --lib -E 'test(<substring>)'` (`test()` is a substring match by default) |
+| `... -- --exact <path>` | `... -E 'test(=<path>)'` |
+| `... -- --ignored ...` | `... --run-ignored only ...` |
+| `--test-threads=1` (one process, serial) | `--test-threads N` (N processes; each test is still alone in its own Miri process) |
+| G6c: `RUSTFLAGS="-C debug-assertions=off" MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly miri test -p rustty-vt --lib -- <124 names>` | `bash .port/tools/gates/check_leaks.sh --debug-assertions-off` (the names resolve to exact paths: `test(=a) \| test(=b) \| ...`) |
+
+`.port/tools/miri-run.sh` (G-MIRIRUN-SELF) is **not folded in**. It overlaps with nextest only in running
+one test per process in parallel; its job is triage for criterion 1 above (a hard per-test kill budget and
+the ok / UB / LEAK / INTERP / BUILD / TIMEOUT buckets), which a gate verdict deliberately does not produce.
+
+**Step 1, measured first (2026-10-02, M4 Pro, 8 processes, the exact G6 configuration: Stacked Borrows,
+no `MIRIFLAGS`, debug assertions on, `--lib`).** Go-ahead rule: at least 3x.
+
+| group | tests run / ignored | libtest (2026-10-01) | nextest | gain |
+|---|---|---|---|---|
+| V27 `page::` | 116 / 1 | 3,054 s | 705 s (critical path: `page_cloneFrom_hyperlinks_exact_capacity`, about 660 s alone) | 4.3x |
+| V28 `pagelist` | 277 / 103 | 8,379 s (270 tests, an earlier tree; libtest's `--list` at this head also selects 277) | 847 s | 9.9x |
+| V29 `search::` | 52 / 38 | 289 s | 135 s (critical path: one 63 s test) | 2.1x |
+| total | | 11,722 s | 1,687 s | 6.9x |
+
+Every run passed every test, and the ignored counts equal libtest's. Each Miri process pays 10-15 s
+of start-up on the `rustty-vt` test binary, so a group's floor is its slowest test plus that.
+
+**Lane runs on the new runner (head `5e8cbd918`; the host was shared with other sessions' builds, load
+average 18-26 on 14 cores, so wall times are upper bounds):**
+
+- **G6c** GREEN: 124 of 124 tests passed, 1,110 s wall (the libtest lane took 6,272 s for 119). The 124
+  annotation-derived names resolve to exactly 124 paths, the same set libtest's substring filter selected.
+- **V29 `search::`** (G6 configuration): Stacked Borrows 52 passed, 150 s; Tree Borrows 52 passed, 210 s.
+- **`search::terminal::tests::feed_after_complete_discovers_prepended_snapshot_history`** (excepted from
+  both lanes, P7-W12 T6b), run unbounded in G6c conditions: Stacked Borrows PASS in 2,636 s, Tree Borrows
+  PASS in 3,946 s, no UB, no leak. The exception's criterion 1 stands (both are past the 1,200 s bound).
+- **G6t** RED, stopped at the first finding: NEW-FINDINGS **N500**, Tree Borrows UB in
+  `snapshot::codec::tests::complete_snapshot_preserves_every_supported_continuation_cut` (N492's shape:
+  a handler pointer minted from a `&mut` reborrow, then a direct read of the owner). By then 1,017 of the
+  1,597 `rustty-vt` scope tests had finished in 3 h 5 min, 1,017 passed and 1 failed; the rest of the scope did not run.
+- **G6** (all crates): not run, because the task stops at a G6t finding.

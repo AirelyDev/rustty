@@ -903,8 +903,13 @@ g6t_crate() {
   local c="$1" extra="$2" fs out rc=0 exp mods
   fs="$(g6t_filterset "$c")"
   out="$(mn_tmp "g6t.$c")"
+  # Module entries name library modules (the scope self-test checks src/<m>),
+  # so a module-scoped crate runs --lib: without it nextest builds and lists
+  # every integration-test binary under Miri for zero matches (measured on
+  # the first G6t run: 1,597 tests, all in the lib, across 11 binaries).
+  local scope_args=""; [ -n "$(g6t_modules "$c")" ] && scope_args="--lib"
   if [ -z "$extra" ]; then
-    MN_BOUND_SEC="$G6T_BOUND_SEC" MN_OUT="$out" run_miri_nextest "$c" tb on "$fs" || rc=1
+    MN_BOUND_SEC="$G6T_BOUND_SEC" MN_OUT="$out" run_miri_nextest "$c" tb on "$fs" $scope_args || rc=1
     if [ "$rc" = 0 ]; then rm -f "$out" "$out.passed"; else echo "    full output: $out"; fi
   fi
   if [ "$c" = "$G6C_PKG" ]; then
