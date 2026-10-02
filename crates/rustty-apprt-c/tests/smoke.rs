@@ -77,10 +77,10 @@ fn c_compiler() -> String {
             return cc;
         }
     }
-    // A sanitizer build on Linux links the smoke program with -fsanitize=,
+    // An ASan build on Linux links the smoke program with -fsanitize=address,
     // which must be clang's (compiler-rt, the runtime rustc instruments for),
-    // not GCC's libasan (GCC has no MemorySanitizer at all).
-    let cands: &[&str] = if cfg!(all(any(rustty_asan, rustty_msan), target_os = "linux")) {
+    // not GCC's libasan.
+    let cands: &[&str] = if cfg!(all(rustty_asan, target_os = "linux")) {
         &["clang"]
     } else {
         &["cc", "clang"]
@@ -128,6 +128,10 @@ fn staticlib_name(name: &str) -> String {
 // return through the DLL), which the CI Windows leg builds and runs.
 #[cfg(not(windows))]
 #[test]
+#[cfg_attr(
+    rustty_msan,
+    ignore = "G-MSAN (P7-W14): the C program would need an MSan runtime matching rustc's instrumentation; clang 22's crashes in the cdylib's first constructor (shadow-mapping mismatch, SEGV in std_detect). It runs natively and under G-ASAN/G-LSAN (R14)"
+)]
 fn c_abi_smoke_compile_link_run() {
     let root = workspace_root();
     let deps_dir = target_deps_dir();
@@ -187,14 +191,13 @@ fn c_abi_smoke_compile_link_run() {
         .arg(format!("-Wl,-rpath,{}", deps_dir.display()))
         .arg("-o")
         .arg(&bin);
-    // Under G-ASAN / G-LSAN / G-MSAN on Linux the cdylib is instrumented and
-    // its `__asan_*` / `__msan_*` references resolve against the runtime the
-    // EXECUTABLE links (on macOS the dylib carries the runtime itself).
-    // `c_compiler` picks clang there, whose compiler-rt runtime matches rustc's.
+    // Under G-ASAN / G-LSAN on Linux the cdylib is instrumented and its
+    // `__asan_*` references resolve against the runtime the EXECUTABLE links
+    // (on macOS the dylib carries the runtime itself). `c_compiler` picks clang
+    // there, whose compiler-rt runtime matches rustc's. (Under G-MSAN the test
+    // is ignored; see its attribute.)
     #[cfg(all(rustty_asan, target_os = "linux"))]
     cmd.arg("-fsanitize=address");
-    #[cfg(all(rustty_msan, target_os = "linux"))]
-    cmd.arg("-fsanitize=memory");
     let compile = cmd.output().expect("spawn C compiler");
     assert!(
         compile.status.success(),
