@@ -10349,3 +10349,21 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   true for it under ASan. It is not run by `cargo test --workspace` either (the feature is off there).
 - **fix**: G-ASAN and G-LSAN run a `rustty-vt:wuffs` feature lane. Measured: macOS G-ASAN
   `rustty-vt:wuffs` 3,360 tests, green; the cross-check then verifies all 116 claims on macOS.
+
+## N498 — `rustty_app_free` leaked the app's whole cloned configuration
+
+- **id**: N498. P7-W14. **severity**: low (a leak of one configuration per `rustty_app_free`; the macOS app
+  frees its app once, at exit). **state**: CLOSED 2026-10-01.
+- **found**: G-LSAN (rvm), once the C-ABI smoke program linked under ASan (N496 item 4): 19 leak reports,
+  47,322 bytes in 559 allocations, every stack under `Config::clone_config` from `embedded::App::init`
+  (`crates/rustty-apprt/src/embedded.rs:386`) through `rustty_app_new`. `smoke.c` frees the app and its
+  own config.
+- **cause**: the reference's `App.terminate` calls `self.config.deinit()`, which frees the clone's arena and
+  with it every value. The port's `Config::deinit` only clears the arena flag, because each value owns its
+  bytes and frees them on drop, and `rustty_app_free` releases the box as `ManuallyDrop<App>` (so the
+  already-terminated keymap is not dropped twice), which never drops the config either. Port-only: Ghostty
+  frees the arena, so no UD.
+- **fix**: `rustty_app_free` (`crates/rustty-apprt-c/src/lib.rs`) drops the config in place after
+  `terminate()` and before releasing the box.
+- **regression test**: `crates/rustty-apprt-c/tests/smoke.rs` `c_abi_smoke_compile_link_run` under G-LSAN,
+  whose C program creates and frees an app; it is RED without the fix.

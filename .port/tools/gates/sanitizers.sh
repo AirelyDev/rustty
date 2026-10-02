@@ -142,6 +142,65 @@ classify() {
 }
 
 # ---------------------------------------------------------------------------
+# G-MSAN's C/C++ compiler wrappers. cc runs the compiler from the build script,
+# whose environment carries CARGO_CFG_SANITIZE only when that build script
+# builds for the instrumented target (cargo applies RUSTFLAGS to the target, not
+# to build-dependencies when --target is given). So: -fsanitize=memory exactly
+# when the crate being compiled is instrumented.
+#
+# C files also get msan-stat-shim.h (-include): rustc's MemorySanitizer runtime
+# does not mark stat(2)'s output initialized for C callers on this glibc (2.43,
+# aarch64), so every `stat` in vendored C is a false "use-of-uninitialized-value"
+# (fontconfig's FcFileIsDir on G-MSAN's first run). Reproduced on a 2-line C
+# file: clean when clang links its own MSan runtime, RED when rustc links its
+# runtime (P7-W14; SANITIZER_SUPPRESSIONS.md M1). The shim unpoisons the
+# struct after a successful call, which is what the missing interceptor does.
+# ---------------------------------------------------------------------------
+write_msan_wrappers() {
+  local d="$SAN_TARGET_ROOT/san-cc-wrappers"
+  mkdir -p "$d" || return 1
+  cat >"$d/msan-stat-shim.h" <<'SHIM'
+/* G-MSAN (sanitizers.sh): see write_msan_wrappers. */
+#ifndef RUSTTY_MSAN_STAT_SHIM_H
+#define RUSTTY_MSAN_STAT_SHIM_H
+#include <sys/stat.h>
+#include <sanitizer/msan_interface.h>
+static inline int rustty_msan_stat(const char *p, struct stat *b) {
+  int r = stat(p, b);
+  if (r == 0) __msan_unpoison(b, sizeof *b);
+  return r;
+}
+static inline int rustty_msan_lstat(const char *p, struct stat *b) {
+  int r = lstat(p, b);
+  if (r == 0) __msan_unpoison(b, sizeof *b);
+  return r;
+}
+static inline int rustty_msan_fstat(int fd, struct stat *b) {
+  int r = fstat(fd, b);
+  if (r == 0) __msan_unpoison(b, sizeof *b);
+  return r;
+}
+#define stat(p, b) rustty_msan_stat(p, b)
+#define lstat(p, b) rustty_msan_lstat(p, b)
+#define fstat(fd, b) rustty_msan_fstat(fd, b)
+#endif
+SHIM
+  local cc
+  for cc in cc c++; do
+    local real=clang shim=""
+    if [ "$cc" = "c++" ]; then real=clang++; else shim="-include $d/msan-stat-shim.h"; fi
+    cat >"$d/msan-$cc" <<WRAP
+#!/usr/bin/env bash
+case ",\${CARGO_CFG_SANITIZE:-}," in
+  *,memory,*) exec $real -fsanitize=memory -fsanitize-memory-track-origins -fno-omit-frame-pointer -g $shim "\$@" ;;
+  *) exec $real "\$@" ;;
+esac
+WRAP
+    chmod +x "$d/msan-$cc" || return 1
+  done
+}
+
+# ---------------------------------------------------------------------------
 # One crate under one sanitizer. run_crate SAN SPEC FILTER TD LOG
 # SAN is a matrix id (asan|lsan|msan) or a legacy rustc name.
 # ---------------------------------------------------------------------------
@@ -169,10 +228,13 @@ run_crate() {
     msan|memory)
       rflags="-Zsanitizer=memory -Zsanitizer-memory-track-origins"
       build_std="-Zbuild-std"
-      # The C we compile ourselves through `cc` is instrumented too; anything
-      # uninstrumented (system libraries) is out of MSan scope by construction.
-      envs+=("CC=clang" "CXX=clang++" "CFLAGS=-fsanitize=memory -fsanitize-memory-track-origins -fno-omit-frame-pointer -g")
-      envs+=("CXXFLAGS=-fsanitize=memory -fsanitize-memory-track-origins -fno-omit-frame-pointer -g")
+      # The C/C++ we compile ourselves through `cc` is instrumented too, through
+      # the msan-cc wrappers (see write_msan_wrappers): plain CFLAGS would also
+      # reach build-dependencies compiled for the build script, which is not
+      # instrumented, and fail to link (`undefined reference to __msan_init`,
+      # rustty-cli's zlib-sys build-dependency, P7-W14).
+      write_msan_wrappers || return 2
+      envs+=("CC=$SAN_TARGET_ROOT/san-cc-wrappers/msan-cc" "CXX=$SAN_TARGET_ROOT/san-cc-wrappers/msan-c++")
       envs+=("MSAN_OPTIONS=poison_in_dtor=1:allocator_may_return_null=1") ;;
     thread)
       rflags="-Zsanitizer=thread"; build_std="-Zbuild-std" ;;

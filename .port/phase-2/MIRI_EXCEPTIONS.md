@@ -2965,3 +2965,28 @@ process; (2) passes natively in ci.sh's HARD `cargo test --workspace` (Unix only
 test's only code is the OS boundary (a file check and a process spawn) and the shell script it runs;
 it calls no `unsafe` Rust of the port; (4) the binary's other tests (the `RUSTTY_REQUIRE_BASH44`
 pivot tests) stay in the lane.
+
+## The ASan claims are gate-verified (P7-W14, 2026-10-01)
+
+Many exceptions above give "runs natively + ASan" (or "the G6 ASan companion arm") as their compensating
+control. Until now only `rustty-xev`'s 30 were checked by a gate (`check_leaks.sh`'s companion arm); the
+rest rested on hand runs of `sanitizers.sh`.
+
+**G-ASAN** (`.port/tools/gates/sanitizers.sh --gate asan`, a HARD gate in `ci.sh`) now runs AddressSanitizer
+over every workspace member's tests, plus the `rustty-vt:wuffs` feature lane, and then cross-checks the
+claims: every `#[cfg_attr(miri, ignore = "...")]` whose reason mentions ASan, AddressSanitizer or a
+sanitizer must appear as `test <path>::<name> ... ok` in that run's logs. A claimed test that is
+`ignored` or failed there is RED, and so is a claiming crate with no log (excluded or not run). A test
+absent from a log that ran is cfg-gated off the host OS and is listed by name; it is checked on the other
+OS's lane (G-LSAN on Linux runs the same cross-check), and a crate none of whose claims compiled is RED.
+
+- **macOS (G-ASAN):** 116 annotations claim ASan coverage (`rustty-vt` 72, `rustty-xev` 32, `rustty-vt-c` 8,
+  `rustty-core` 3, `rustty-cli` 1); all 116 ran and passed.
+- **Linux (G-LSAN, rvm):** 85 ran and passed; 31 are not compiled on Linux (the `rustty-xev` kqueue, mach-port
+  and `EVFILT_*` tests, `cfg(target_vendor = "apple")`), and they are the ones verified on macOS.
+- **The one false claim it found (NEW-FINDINGS N497):** `kitty::graphics_image::image_load_png_zlib_compressed_direct`
+  (the "zlib C FFI" row above) is ignored without the `wuffs` feature, which no ASan run had enabled. The
+  `rustty-vt:wuffs` lane now runs it.
+
+`check_leaks.sh`'s G6 ASan companion arm for `rustty-xev` stays (it runs on every G6), but the claim is now
+also verified by a gate that does not depend on G6.
