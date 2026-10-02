@@ -479,7 +479,7 @@ mod tests {
         // const keys = [_]CellData{ .codepoint, .invalid };
         let keys: [c_int; 2] = [CellData::Codepoint as c_int, CellData::Invalid as c_int];
         // var values = [_]?*anyopaque{ @ptrCast(&cp), @ptrCast(&cp) };
-        let cp_ptr = &mut cp as *mut u32 as *mut c_void;
+        let cp_ptr = (&raw mut cp).cast::<c_void>();
         let mut values = [cp_ptr, cp_ptr];
         // try testing.expectEqual(Result.invalid_value, get_multi(cell, keys.len, &keys, &values, &written));
         assert_eq!(Result::InvalidValue, unsafe {

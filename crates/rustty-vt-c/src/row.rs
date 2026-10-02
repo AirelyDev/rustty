@@ -379,7 +379,7 @@ mod tests {
         // const keys = [_]RowData{ .wrap, .invalid };
         let keys: [c_int; 2] = [RowData::Wrap as c_int, RowData::Invalid as c_int];
         // var values = [_]?*anyopaque{ @ptrCast(&wrap), @ptrCast(&wrap) };
-        let wrap_ptr = &mut wrap as *mut bool as *mut c_void;
+        let wrap_ptr = (&raw mut wrap).cast::<c_void>();
         let mut values = [wrap_ptr, wrap_ptr];
         // try testing.expectEqual(Result.invalid_value, get_multi(row_val, keys.len, &keys, &values, &written));
         assert_eq!(Result::InvalidValue, unsafe {

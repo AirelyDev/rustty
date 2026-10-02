@@ -1606,8 +1606,12 @@ pub(crate) mod test_runtime {
         let mut rt_app = TestApp::new();
         let mut app = App::<TestApp>::init(Allocator).unwrap();
 
+        // N501 (P7-W15): `&raw mut`, not a `&mut` reborrow, so the test's
+        // direct reads of `rt_app.wakeups` between pushes do not freeze the
+        // pointer `push` writes through (Tree Borrows). Same in the
+        // `TestSurface { app, .. }` and mailbox handles below.
         let mailbox = Mailbox::<TestApp> {
-            rt_app: &mut rt_app,
+            rt_app: &raw mut rt_app,
             mailbox: &mut app.mailbox,
         };
         // The reference passes App.Mailbox around by value — exercise the
@@ -1738,7 +1742,7 @@ pub(crate) mod test_runtime {
         let core = fabricateSurface(&mut core_mu, 1);
         let mut rt_surface = TestSurface {
             core,
-            app: &mut rt_app,
+            app: &raw mut rt_app,
         };
         unsafe { std::ptr::addr_of_mut!((*core).rt_surface).write(&mut rt_surface) };
 
@@ -1853,7 +1857,7 @@ pub(crate) mod test_runtime {
         let core = fabricateSurface(&mut core_mu, 7);
         let mut rt_surface = TestSurface {
             core,
-            app: &mut rt_app,
+            app: &raw mut rt_app,
         };
         unsafe { std::ptr::addr_of_mut!((*core).rt_surface).write(&mut rt_surface) };
 
@@ -2070,7 +2074,7 @@ pub(crate) mod test_runtime {
         let unknown: *mut Surface<TestApp> = std::ptr::NonNull::dangling().as_ptr();
         {
             let mailbox = Mailbox::<TestApp> {
-                rt_app: &mut rt_app,
+                rt_app: &raw mut rt_app,
                 mailbox: &mut app.mailbox,
             };
             mailbox.push(Message::Close(unknown), Timeout::Instant);

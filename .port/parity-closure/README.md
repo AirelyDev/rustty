@@ -239,7 +239,7 @@ committed records named here.
   **Next free ids: UD376, N500, V31.**
 - **P7-W15** (the Miri lanes on `cargo miri nextest`, plus G6t) used N500 (CLOSED: test-side Tree Borrows UB in
   `snapshot::codec::tests::complete_snapshot_preserves_every_supported_continuation_cut`, the N492
-  shape, found by G6t's first run, fixed with the raw-root idiom). **Next free ids: UD376, N501, V31.**
+  shape, found by G6t's first run, fixed with the raw-root idiom) and N501 (CLOSED: the same shape in seven `rustty-vt-c` and `rustty-core` tests, found by the second G6t run). **Next free ids: UD376, N502, V31.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.

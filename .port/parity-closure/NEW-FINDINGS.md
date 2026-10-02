@@ -10452,3 +10452,38 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **coverage left open**: G6t was stopped at this finding (1,018 of the 1,597 `rustty-vt` scope tests had
   run, 1 failed); `rustty-vt-c`, `rustty-renderer`, `rustty-xev`, `rustty-core` and the vt
   debug-assertions-off half did not run under G6t, and the full G6 run did not start.
+
+## N501 — seven `rustty-vt-c` and `rustty-core` tests have test-side Tree Borrows UB: an out-pointer or handle minted from a `&mut` reborrow, then the owner read directly
+
+- **id**: N501. P7-W15 (the second, complete G6t run, 2026-10-02). **severity**: low (test code only).
+  **state**: CLOSED 2026-10-02 (fixed test-side, never annotated).
+- **finding**: G6t (Tree Borrows, debug assertions on): `rustty-vt-c` 565 of 570 passed, 5 failed; `rustty-core`
+  65 of 67 passed, 2 failed. Stacked Borrows accepts all seven. Each excerpt has one form:
+
+  ```
+  error: Undefined Behavior: write access through <609206> at alloc285872[0x0] is forbidden
+      --> crates/rustty-vt-c/src/search.rs:1042:22   unsafe { *(out as *mut usize) = total };
+  help: the accessed tag <609206> was created here, in the initial state Reserved
+      --> crates/rustty-vt-c/src/search.rs:1500:29   let total_ptr = &mut total as *mut usize as *mut c_void;
+  help: ... later transitioned to Frozen due to a reborrow (acting as a foreign read access)
+      --> crates/rustty-vt-c/src/search.rs:1505:13   assert_eq!(2usize, total);
+  ```
+  and in `rustty-core`: the handle `rt_app: &mut rt_app` (`app.rs:1610`, `:1741`), frozen by
+  `rt_app.wakeups.load(..)` / `rt_app.recorded()`, then written by `TestApp::wakeup` or `actions.clear()`.
+- **tests**: `rustty-vt-c` `search::tests::{search_alt_screen_flip_and_return_retains_results,
+  search_get_multi_returns_first_failing_index, search_needle_change_and_clear, search_select_scroll_option,
+  search_select_wraps_in_both_directions}`; `rustty-core` `app::test_runtime::{mailbox_push_wakes_rt_app_and_returns_size,
+  add_and_delete_surface_drive_the_quit_timer}`.
+- **mechanism**: N492/N500's shape. The test keeps a pointer derived from a `&mut x` reborrow (a C-API
+  out-pointer, or the `Mailbox`/`TestSurface` handle), reads `x` directly between calls, which freezes
+  that tag, and the next call writes through it. Zig has no borrow model (N-only, not a UD).
+- **fix**: the pointer is `&raw mut x` (no reborrow tag), so the direct reads of `x` no longer freeze it:
+  every stored out-pointer in the `rustty-vt-c` tests (`search.rs` 8, including one `values` array,
+  `cell.rs` 1, `row.rs` 1) and the four `&mut rt_app` handles in `rustty-core`'s `app::test_runtime`.
+  Out-pointers passed inline to a single call are untouched (a fresh reborrow per call).
+- **production**: no instance. The C-API functions write through caller-provided pointers, which is
+  their contract; `Mailbox::rt_app` is built by the apprt from a long-lived app pointer, not from a test
+  local the caller later reads.
+- **proof**: `rustty-vt-c` `search::`/`cell::`/`row::` tests under nextest: Stacked Borrows 38 passed,
+  Tree Borrows 38 passed; `rustty-core` all 67 under Stacked and Tree Borrows passed; natively
+  `rustty-vt-c` 583 and `rustty-core` `app::` 17 pass.
