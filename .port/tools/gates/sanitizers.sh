@@ -798,7 +798,16 @@ case "${1:-}" in
     while [ "$#" -gt 0 ]; do
       case "$1" in
         --san) SAN="$2"; shift 2 ;;
-        --crates) LIST="$LIST $(printf '%s' "$2" | tr ',' ' ')"; shift 2 ;;
+        --crates)
+          # Space- or comma-separated; a spec with features (`crate:a,b`) keeps
+          # its commas, so separate such specs with spaces.
+          for tok in $2; do
+            case "$tok" in
+              *:*) LIST="$LIST $tok" ;;
+              *) LIST="$LIST $(printf '%s' "$tok" | tr ',' ' ')" ;;
+            esac
+          done
+          shift 2 ;;
         --workspace) WS=1; shift ;;
         --filter) FILTER="$2"; shift 2 ;;
         --exclude) EXCL="$EXCL$2|"$'\n'; shift 2 ;;

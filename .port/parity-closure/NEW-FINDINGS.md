@@ -10273,3 +10273,79 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **measured**: ASan lane (`gates/sanitizers.sh rustty-vt "kitty::graphics_exec kitty::graphics_pixel"
   address`): 78 ran, all pass, no finding. Native: 32 passed. Miri G6 config
   `cargo +nightly miri test -p rustty-vt --lib -- kitty::`: 344 passed, 47 ignored, no abort (509 s).
+
+## N495 — `rustty-cli`'s Mach-O constructor cannot link under AddressSanitizer
+
+- **id**: N495. P7-W14. **severity**: low (every crate that links `rustty-cli` failed to BUILD under
+  `-Zsanitizer=address` on macOS, so G-ASAN could not run `rustty`, `rustty-cli` or `rustty-apprt-c`; no
+  effect on a normal build). **state**: CLOSED 2026-10-01.
+- **found**: G-ASAN's first run (`sanitizers.sh --gate asan`, macOS arm64): `rustty` and `rustty-apprt-c`
+  BLOCKED with `ld: initializer pointer has no target in ... librustty_cli-*.rlib`.
+- **cause**: `io_file.rs`'s pre-main probe is a `#[used] #[link_section = "__DATA,__mod_init_func"]`
+  function-pointer static (W-4b, N365). ASan instruments globals by wrapping each in a larger object with a
+  trailing redzone. LLVM exempts globals in the ELF `.init_array`/`.fini_array` sections, but not Mach-O's
+  `__mod_init_func`, so the redzone's zero bytes become extra "initializer pointers" and ld64 rejects the
+  object. Reproduced on a 10-line crate (with and without the fix). Rust-only: Ghostty has no ASan build and
+  registers no constructor this way, so no UD.
+- **fix**: `crates/rustty-cli/build.rs` sets `cfg(rustty_asan)` when cargo reports `CARGO_CFG_SANITIZE`
+  containing `address` (`cfg(sanitize)` itself is unstable), and the Apple static carries
+  `#[cfg_attr(rustty_asan, sanitize(address = "off"))]`, with `#![cfg_attr(rustty_asan, feature(sanitize))]`
+  in `lib.rs`. Both only exist in a sanitizer build, which needs nightly anyway; stable builds are unchanged.
+- **measured**: G-ASAN after the fix: `rustty` 17 tests, `rustty-cli` 123, `rustty-apprt-c` 52, all green.
+  The regression test is `io_file::tests::a_write_to_a_stdout_closed_at_exec_fails_with_ebadf`, which passes
+  under G-ASAN only if the constructor both links and runs.
+
+## N496 — first sanitizer-lane runs: test-side defects and lane configuration
+
+- **id**: N496. P7-W14. **severity**: low (tests and gate configuration; no product defect). **state**:
+  CLOSED 2026-10-01.
+- **found**: the first G-ASAN (macOS) and G-LSAN (rvm, aarch64 Fedora) runs. Each item below was RED or
+  BLOCKED for a reason that is not a memory error in product code:
+  1. `rustty-vt` `terminal::tests::attrs::terminal_print_slice_charset_matches_scalar_printing` leaked both
+     terminals of each of its 4 iterations (LSan: 12,544 bytes in 56 allocations): the port dropped the
+     reference's `defer scalar.deinit(alloc); defer batched.deinit(alloc);`. Fixed: the test deinits both.
+  2. `rustty-os` `homedir::tests::home_from_shell_returns_the_spawn_error_when_no_pipe_can_be_created`: its
+     child lowers `RLIMIT_NOFILE` to 3, and LSan's exit-time scan cannot open `/proc/<pid>/task` with 3
+     descriptors ("LeakSanitizer has encountered a fatal error"). Fixed: the child restores the limit
+     after the check, before exiting.
+  3. `rustty-termio` `command::tests::command_{os,rt}_pre_exec_{1,2}` and
+     `exec_failure_in_child_reports_the_errno_tag`: their forked children leave through `posix_exit` (libc
+     `exit(3)`, the reference's `posix.exit`), so LSan scans them; a child of a multithreaded process keeps
+     only the forking thread, and every block the parent's other test threads hold is reported as leaked
+     (4 reports, each the parent's heap, plus the 5 tests failing on the child's exit code 23). Fixed: the
+     test module defines LSan's documented `__lsan_is_turned_off` hook, non-zero only in a forked child of
+     the test binary (pid recorded by `fork_serial`); the test binary itself is still checked.
+  4. `rustty-apprt-c` `tests/smoke.rs` `c_abi_smoke_compile_link_run` (Linux): an instrumented cdylib leaves
+     the `__asan_*` runtime to the executable, so the C program failed to link. Fixed: under
+     `cfg(rustty_asan)` (new `build.rs`) on Linux the program is linked by clang with
+     `-fsanitize=address`. Once it linked, it found N498.
+  5. `rustty-vt` `hyperlink::hyperlink_dupe_tests::try_dupe_bytes_reports_allocation_failure` asks for
+     `isize::MAX` bytes to test `try_reserve` failure; ASan aborts on a request over its 1 TiB maximum
+     ("allocation-size-too-big") where the system malloc returns NULL. Lane fix:
+     `allocator_may_return_null=1`, which changes no detector.
+  6. `rustty-vt` `tmux::layout::tests::deeply_nested_layout_is_a_syntax_error_beyond_max_depth` parses
+     MAX_DEPTH (1000) levels on a default 2 MiB thread: 1.25-1.5 MiB natively (debug; measured with
+     `RUST_MIN_STACK`), a stack overflow under ASan, whose redzones grow every frame. Lane fix:
+     `RUST_MIN_STACK=8388608` (threads with an explicit stack size are unaffected; unbounded recursion still
+     overflows; the native bound stays checked by `cargo test --workspace`).
+  7. G-LSAN's GTK apprt lane: ld.bfd died with SIGBUS linking 8 instrumented test binaries at once with full
+     debuginfo, after the 10 GB VM stopped answering for about 25 minutes. Lane fix: line-tables-only
+     debuginfo (`CARGO_PROFILE_{DEV,TEST}_DEBUG`), which keeps every function, file and line in reports.
+  8. The non-vacuity count summed `running N tests` headers, so ignored tests counted as run (`rustty-wasm`,
+     whose one native test is `#[ignore]`d, showed "1 test(s) ran"). It now sums `N passed; M failed`.
+     Members with no test on a host OS by construction (`gettext-sys` on Linux, `rustty-wasm` everywhere)
+     are listed in `NO_TESTS_ON` with the reason; a test appearing there makes the entry stale (RED).
+- **records**: `.port/phase-2/SANITIZER_SUPPRESSIONS.md` lists the lane options with these reasons.
+
+## N497 — a Miri exception claimed ASan coverage for a test no ASan run executed
+
+- **id**: N497. P7-W14. **severity**: low (a compensating control that did not run; no product defect).
+  **state**: CLOSED 2026-10-01.
+- **found**: G-ASAN's new cross-check (every `#[cfg_attr(miri, ignore = "...")]` whose reason claims ASan
+  coverage must appear as `test ... ok` in the G-ASAN logs) on its first complete run: 116 claims, 115
+  verified, and `rustty-vt` `kitty::graphics_image::image_load_png_zlib_compressed_direct` reported
+  `ignored`. The test is also `#[cfg_attr(not(feature = "wuffs"), ignore)]`, and no ASan lane ever enabled
+  the `wuffs` feature, so "covered natively + by ASan" (MIRI_EXCEPTIONS.md, the zlib C FFI row) was never
+  true for it under ASan. It is not run by `cargo test --workspace` either (the feature is off there).
+- **fix**: G-ASAN and G-LSAN run a `rustty-vt:wuffs` feature lane. Measured: macOS G-ASAN
+  `rustty-vt:wuffs` 3,360 tests, green; the cross-check then verifies all 116 claims on macOS.

@@ -37,3 +37,38 @@ uninstrumented code the sanitizer cannot model), and the evidence.
   arrays in `sanitizers.sh`, each `"<crate>|<reason>"`. An entry naming a crate
   that is no longer a workspace member is RED. G-MSAN's scope is an allow-list:
   every member must be in `MSAN_SCOPE` or `MSAN_EXCLUDES`.
+
+## LeakSanitizer suppressions (`lsan.supp`)
+
+| id | pattern | library | reason | evidence |
+|---|---|---|---|---|
+| S1 | `leak:libEGL_mesa.so` | Mesa EGL (system, uninstrumented) | `eglInitialize` on the surfaceless platform allocates per-process display state inside Mesa that is never freed. The port, like Ghostty (`OpenGL.zig:113-115`, "Do not destroy the EGL display here as it is shared across the entire process"; DECISIONS B10), never terminates the shared display. | G-LSAN, rvm, 2026-10-01, `rustty-renderer`: 28 leak reports, every one with its first non-allocator frame in `/lib64/libEGL_mesa.so.0` (5) or `/lib64/libgallium-26.1.4.so` (23), the Rust frames below it ending at `OffscreenContext::init` (`crates/rustty-renderer/src/opengl/gl/sys.rs:214`, the `egl.initialize(display)` call), reached from `generic::linux_impl::tests::golden_renderer`. |
+| S2 | `leak:libgallium` | Mesa gallium/llvmpipe driver (system) | Loaded by the same `eglInitialize`; its screen and shader-cache allocations live for the process. | as S1 |
+
+## Sanitizer runtime options set by the lanes
+
+Not suppressions, but they change what a lane does, so each is recorded with its reason (also next to
+the option in `sanitizers.sh`).
+
+| option | lanes | reason | evidence |
+|---|---|---|---|
+| `detect_leaks=0` | G-ASAN | Apple's ASan has no leak checker (rustc rejects `-Zsanitizer=leak` on Darwin); on Linux G-LSAN is the leak lane, so G-ASAN's verdict stays memory errors. | design §B |
+| `allocator_may_return_null=1` | G-ASAN, G-LSAN, G-MSAN | ASan's malloc aborts on a request above its 1 TiB maximum, where the system malloc returns NULL; the port's out-of-memory tests rely on that NULL (`try_reserve` reporting failure, the port of Zig's `error.OutOfMemory` paths). Changes no detector. | NEW-FINDINGS N496 item 5 |
+| `RUST_MIN_STACK=8388608` | all three | Instrumented frames are 2-3x their native size; a test that checks a recursion bound fits the default 2 MiB stack overflows under ASan with no memory error. Unbounded recursion still overflows 8 MiB; the native bound is checked by `cargo test --workspace`. | N496 item 6 |
+| line-tables-only debuginfo | all three | Full debuginfo made the GTK lane's instrumented test links exhaust the 10 GB VM (ld SIGBUS). Reports keep every function, file and line. | N496 item 7 |
+
+## Test-binary hooks
+
+| where | what | reason | evidence |
+|---|---|---|---|
+| `crates/rustty-termio/src/command.rs` tests module | defines `__lsan_is_turned_off`, non-zero only in a forked child of the test binary | The `Command` tests' forked children exit through libc `exit(3)` (faithful to the reference's `posix.exit`), so LSan scans them; with only the forking thread left, everything the parent's other test threads hold looks leaked. The scan of a fork is not a leak check of anything; the test binary itself is still checked in full. | N496 item 3: 4 reports, each consisting of the parent's heap (libtest's `main`, other tests' threads) |
+
+## Crate exclusions and empty lanes
+
+No workspace member is excluded from G-ASAN or G-LSAN. `NO_TESTS_ON` in `sanitizers.sh` lists the members
+that have no test on a host OS by construction (they are still built under the sanitizer):
+
+| crate | OS | reason |
+|---|---|---|
+| `gettext-sys` | Linux | libintl is part of glibc there; the crate compiles no C and every test is `#[cfg(all(test, target_os = "macos"))]`. |
+| `rustty-wasm` | all | its one native test (`tests/artifact_shape.rs`) is `#[ignore]`d: it inspects the wasm32 artifact the `--webgl` lane builds; the exports are `cfg(target_arch = "wasm32")`. |

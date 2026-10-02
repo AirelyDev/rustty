@@ -636,6 +636,17 @@ pub unsafe extern "C" fn rustty_app_free(v: *mut App) {
     let core_app = unsafe { (*v).core_app };
     // v.terminate();
     unsafe { (*v).terminate() };
+    // N498: the reference's `self.config.deinit()` (in `terminate`) frees the
+    // config clone's arena, i.e. every value. The port's `Config::deinit` only
+    // clears the arena flag, because each value owns its bytes and frees them
+    // on DROP, and the `ManuallyDrop` below never drops the field: every
+    // `rustty_app_free` leaked the whole cloned config (G-LSAN, the C smoke
+    // program: 19 leaks, all under `Config::clone_config` from `App::init`).
+    // Drop it here, after `terminate`; nothing reads it afterwards.
+    //
+    // SAFETY: `v` is a live `App` (the caller's contract); `config` is a
+    // valid, initialized `Config` that is dropped exactly once, here.
+    unsafe { core::ptr::drop_in_place((*v).config.get()) };
     // global.alloc.destroy(v);
     //
     // PORT NOTE: `terminate()` already tore down the App's keymap+config; Zig's
