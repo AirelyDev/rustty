@@ -1,0 +1,24 @@
+# Miri-excepted tests (`#[cfg_attr(miri|all(miri,..)|any(miri,..), ignore...)]`) that cannot run
+# under G-ASAN / G-LSAN on a given host OS. Read by san_miri_crosscheck.py; see its header.
+# Columns (TAB-separated): OS (`uname -s`, or * for every OS), crate, a glob over
+# "<module path>::<fn>" (the module path is derived from the file, inline `mod`s excluded),
+# and the reason. A row that matches nothing, or whose tests ran and passed, is stale (RED).
+*	rustty-bench	screen_clone::screen_clone_every_mode_name_parses_and_runs_one_iteration	ignored in debug builds (R14 compile-time scope: one pass of every mode is too slow unoptimized); the --release arm of G-BENCH runs it, and its loops=0 sibling runs under the sanitizers
+*	rustty-vt	kitty::graphics_image::image_load_windows_*	#[cfg(windows)]: Windows path-spelling checks, not compiled on Unix; they run in the Windows lanes (rwin, ci.yml windows)
+Darwin	rustty-os	kernel_info::read_proc_sys_kernel_osrelease	ignored off Linux ("reads /proc: Linux only (R14)"); G-LSAN runs it on Linux
+Linux	rustty-os	autorelease::pool_drains_autoreleased_references	#[cfg(target_os = "macos")]: drives the real Objective-C runtime
+Linux	rustty-os	cf_release_thread::*	#[cfg(all(test, target_os = "macos"))]: CoreFoundation release thread
+Linux	rustty-os	i18n::canonicalizeLocale_darwin	ignored off macOS ("macOS only (R14)"): the Darwin locale canonicalizer
+Linux	rustty-os	i18n::gettext_resolves_from_vendored_libintl	ignored off macOS ("macOS only (R14)"): Linux uses glibc's libintl, not the vendored one
+Linux	rustty-os	locale::the_nslocale_class_lookup_resolves	NSLocale (Foundation): macOS-only test
+Linux	rustty-os	locale::preferred_languages_are_bounded_by_the_fixed_buffer_and_nul	NSLocale preferred languages (Foundation): macOS-only test
+Linux	rustty-os	macos::*	the macOS module (os_signpost, NSFileManager): compiled for macOS only
+Linux	rustty-os	pipe::failing_setfd_closes_both_descriptors	the pipe + fcntl(F_SETFD) fallback, compiled only where pipe2 is absent (not Linux/Android/FreeBSD)
+Linux	rustty-os	pipe::fallback_sets_cloexec_on_both_and_closes_nothing	the same pipe + fcntl fallback
+Linux	rustty-os	pty::pty_diagnostics_reach_the_log_facade_under_the_pty_scope	#[cfg(target_os = "macos")]
+Linux	rustty-termio	command::setup_fd_*	#[cfg(any(target_os = "freebsd", target_os = "ios", target_os = "macos"))]: the posix_spawn-free setup_fd path
+Linux	rustty-xev	async_watcher::*	the kqueue async watcher (mach ports), compiled on macOS/iOS/visionOS/FreeBSD only
+Linux	rustty-xev	kqueue::*	the kqueue backend, compiled on Apple targets and FreeBSD only
+Linux	rustty-xev	process::*	the kqueue EVFILT_PROC process watcher (Apple/FreeBSD backend)
+Linux	rustty-xev	stream::*	the kqueue EVFILT_READ/WRITE stream tests (Apple/FreeBSD backend)
+Linux	rustty-xev	timer::*	the kqueue timer tests (Apple/FreeBSD backend)

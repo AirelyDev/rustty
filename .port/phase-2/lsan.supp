@@ -1,0 +1,21 @@
+# LeakSanitizer suppressions for G-LSAN (.port/tools/gates/sanitizers.sh --gate lsan).
+#
+# Every entry here is a THIRD-PARTY leak (a system library or vendored C we do
+# not own). Each one has a row in .port/phase-2/SANITIZER_SUPPRESSIONS.md with
+# its cited reason and evidence, and a WHY comment directly above it (D6 rule c,
+# d6_cfg_mapping_audit.py). A leak in Rustty code is never suppressed: it is a
+# finding (an N id, and a UD if Ghostty has it too).
+#
+# Format: one `leak:<pattern>` per line; the pattern matches a function, source
+# file or module name anywhere in the leaking allocation's stack.
+
+# S1 (SANITIZER_SUPPRESSIONS.md): Mesa's EGL loader. eglInitialize on the
+# surfaceless platform allocates its per-process display state inside
+# libEGL_mesa and never frees it; the port, like Ghostty (OpenGL.zig:113-115),
+# never terminates the shared display. Every frame below our eglInitialize call
+# (rustty-renderer opengl/gl/sys.rs OffscreenContext::init) is Mesa's.
+leak:libEGL_mesa.so
+# S2 (SANITIZER_SUPPRESSIONS.md): Mesa's gallium driver (llvmpipe), loaded by
+# the same eglInitialize; its screen and shader-cache allocations live for the
+# process. Same evidence as S1.
+leak:libgallium

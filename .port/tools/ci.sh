@@ -108,6 +108,17 @@
 #                                    CI" FFI-leak note. Its --self-test
 #                                    (G-VALGRIND-SELF) runs on every leg
 #                                    against a fake valgrind and cargo.
+#   G-ASAN / G-LSAN / G-MSAN sanitizers.sh --gate asan|lsan|msan
+#                                    the workspace test suites under
+#                                    AddressSanitizer (macOS + Linux),
+#                                    ASan+LeakSanitizer and MemorySanitizer
+#                                    (Linux; BLOCKED elsewhere), one crate at
+#                                    a time            -> HARD-FAIL.
+#                                    G-ASAN and G-LSAN also check that every
+#                                    Miri-excepted test ran under them (or is
+#                                    on the per-OS expected-absent list).
+#                                    G-SAN-SELF (--self-test) proves each
+#                                    sanitizer RED on a synthetic defect.
 #   G-XCF check_xcframework.sh       dist/rustty-vt.xcframework is well-formed:
 #                                    bundle shape, slice arch, _rustty_* export
 #                                    floor, no _ghostty_* leak (R2), and a
@@ -319,7 +330,7 @@ done
 # Gates skipped by --fast, by id. Deliberately a NAMED list rather than a
 # duration heuristic: a gate that becomes slow should be added here consciously,
 # with the cost written down, not silently dropped because it crossed a timeout.
-FAST_SKIP_IDS=" G4 G4-uni G5 G6 G6c G8 G8b "
+FAST_SKIP_IDS=" G4 G4-uni G5 G6 G6c G8 G8b G-ASAN G-LSAN G-MSAN "
 
 skip_in_fast() {
   # usage: skip_in_fast <id> ; returns 0 (true) when --fast should skip it
@@ -587,6 +598,31 @@ GATE_REGISTRY=(
   # DEFAULT_SCOPE rows, the workspace-member and feature-lane checks.
   "G-VALGRIND-SELF|HARD|bash $GATES/check_valgrind.sh --self-test"
   "G-VALGRIND|HARD|bash $GATES/check_valgrind.sh"
+  # G-ASAN / G-LSAN / G-MSAN (P7-W14, 2026-10-01) — the sanitizer matrix of the
+  # memory-safety-lanes design (docs/superpowers/specs/2026-10-01-memory-
+  # safety-lanes-design.md §B). sanitizers.sh existed as a one-crate harness
+  # that no gate ran over the workspace; these run it one crate at a time in
+  # one target dir per sanitizer (target/san-<san>), deleted when the pass
+  # ends (`--per-crate-target` deletes after each crate, for low-disk hosts).
+  #   G-ASAN  AddressSanitizer over every workspace member's tests (macOS and
+  #           Linux; detect_leaks=0), minus cited exclusions, and the cross-
+  #           check that every `cfg_attr(miri, ignore = "...")` test claiming
+  #           ASan coverage really ran and passed under it.
+  #   G-LSAN  ASan with detect_leaks=1 (LeakSanitizer) on Linux, suppressions
+  #           only per .port/phase-2/SANITIZER_SUPPRESSIONS.md. BLOCKED on macOS.
+  #   G-MSAN  MemorySanitizer (-Zbuild-std, our cc-built C instrumented) over
+  #           an allow-list scope; every member is scoped or excluded with a
+  #           reason. Linux only; BLOCKED elsewhere.
+  # Hours each, so --fast skips them. In ci.yml's `ci` job they report BLOCKED
+  # (RUSTTY_SANITIZERS_OWN_JOB), naming its `sanitizers` job, which runs them.
+  # G-SAN-SELF needs only nightly: a synthetic crate's heap overflow, leak and
+  # uninitialized read must each turn its sanitizer RED, a clean control GREEN,
+  # a filter matching nothing a vacuous RED, plus the classifier, the cross-
+  # check and the BLOCKED arms over fixtures.
+  "G-SAN-SELF|HARD|bash $GATES/sanitizers.sh --self-test"
+  "G-ASAN|HARD|bash $GATES/sanitizers.sh --gate asan"
+  "G-LSAN|HARD|bash $GATES/sanitizers.sh --gate lsan"
+  "G-MSAN|HARD|bash $GATES/sanitizers.sh --gate msan"
   # G-XCF (2026-08-26) — the XCFramework structure/ABI lane, the adapted port
   # of the reference's check-apple-libghostty-vt.nu. Adapted because rustty
   # ships a STATIC ARCHIVE where the reference ships a dylib: no Mach-O dylib

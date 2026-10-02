@@ -2604,3 +2604,28 @@ twice: once under Stacked Borrows (the default), and once under Tree Borrows by 
 **Note (P7-W12 T6, 2026-09-30):** T6 measured the Phase 7 tests one by one under G6 and moves the ones past its bound to G6c (NEW-FINDINGS N491; `.port/phase-2/MIRI_EXCEPTIONS.md`, "P7-W12 T6"). The `search/screen` prepend test TIMEOUTs in G6 and moved to G6c (it passes there under Stacked and Tree Borrows). This does not discharge V29: a later full lane run does.
 
 **Note (P7-W12 T6b, 2026-09-30):** the `search/terminal` prepend test, `feed_after_complete_discovers_prepended_snapshot_history`, TIMEOUTs at 1,200 s in G6 and in G6c under both Stacked and Tree Borrows, so it is now excepted from both lanes (`.port/phase-2/MIRI_EXCEPTIONS.md`, "P7-W12 T6b"; NEW-FINDINGS N491 follow-up). V29's recipe now reports it `ignored`; its arm needs an unbounded run of that one test with `-- --ignored --exact search::terminal::tests::feed_after_complete_discovers_prepended_snapshot_history` (it was past 20 minutes in every lane). Its prepend path stays covered by the `search/screen` sibling in G6c, and the test runs natively and under ASan. This does not discharge V29.
+
+## V30. The `sanitizers` CI job (G-ASAN, G-LSAN, G-MSAN on x86_64 Linux): written, never run on GitHub's runners — **ENVIRONMENT-BLOCKED** [P7-W14, 2026-10-01]
+
+**Blocked on:** a push (the maintainer's call, as V25). P7-W14 ran the three gates on the macOS dev box
+(G-ASAN) and on the aarch64 Fedora VM `rvm` (G-LSAN, G-MSAN; MemorySanitizer works on
+aarch64-unknown-linux-gnu with `-Zbuild-std`, proven by G-SAN-SELF's uninitialized-read arm there). The
+x86_64 job is the CI copy of those runs, and nothing about it has been executed.
+
+```
+PORTED: .github/workflows/ci.yml
+```
+
+In that file: the `sanitizers` job (matrix asan/lsan/msan), its entry in `required.needs`, and the `ci`
+job's `RUSTTY_SANITIZERS_OWN_JOB`.
+
+What a first run must show, per matrix leg: G-SAN-SELF green (on Linux all its arms run, including the
+LSan and MSan defects); the gate's per-crate table with no BLOCKED row; the ASan-claim cross-check line
+(asan, lsan); and the wall time against the 360-minute job limit (rvm, one shared target dir per pass: G-LSAN 20 min, G-MSAN 50 min; the ubuntu
+job runs `--per-crate-target`, slower, because a shared pass needs 15-20 GB of disk). Unknowns: the x86_64 runner's
+Mesa (`lsan.supp` S1/S2 name Fedora's library names), GCC as `cc` for the C-ABI smoke under ASan (the
+test picks clang), and G-MSAN's scope on x86_64.
+
+**Recipe:** push, then read `ci.yml` › `rustty-sanitizers (asan|lsan|msan)`.
+
+**Discharged by:** the first green run of all three legs.

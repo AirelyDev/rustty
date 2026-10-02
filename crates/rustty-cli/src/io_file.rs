@@ -129,8 +129,16 @@ extern "C" fn probe_closed_std_fds() {
 #[link_section = ".init_array"]
 static PROBE_CLOSED_STD_FDS: extern "C" fn() = probe_closed_std_fds;
 
+// N495: under AddressSanitizer LLVM wraps an instrumented global in a larger
+// object with a trailing redzone. `.init_array` is exempt from that (LLVM skips
+// globals in the ELF init/fini sections), but `__mod_init_func` is not, so the
+// redzone becomes extra zero "initializer pointers" and ld64 refuses to link
+// ("initializer pointer has no target"). The attribute keeps this one global
+// uninstrumented; G-ASAN's `a_write_to_a_stdout_closed_at_exec_fails_with_ebadf`
+// proves the constructor still runs in the ASan build.
 #[cfg(target_vendor = "apple")]
 #[used]
+#[cfg_attr(rustty_asan, sanitize(address = "off"))]
 #[link_section = "__DATA,__mod_init_func"]
 static PROBE_CLOSED_STD_FDS: extern "C" fn() = probe_closed_std_fds;
 

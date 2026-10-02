@@ -644,11 +644,19 @@ mod tests {
             };
             // SAFETY: `lim` is a valid rlimit that outlives both calls.
             assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) }, 0);
+            let original = lim.rlim_cur;
             lim.rlim_cur = 3;
             // SAFETY: as above.
             assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &lim) }, 0);
             let mut buf = [0u8; 1024];
             let r = home_from_shell(&env_with_home(b"/"), &mut buf);
+            // Restore the limit before exiting: LeakSanitizer's exit-time scan
+            // opens /proc/<pid>/task, and with 3 descriptors it cannot, which
+            // fails the child under G-LSAN (P7-W14) for a reason unrelated to
+            // what this test checks.
+            lim.rlim_cur = original;
+            // SAFETY: as above.
+            assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &lim) }, 0);
             assert!(matches!(r, Err(Error::Spawn(_))), "got {r:?}");
             println!("{MARKER}");
             return;

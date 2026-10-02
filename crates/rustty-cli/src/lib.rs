@@ -34,6 +34,12 @@
 //! note was a mis-attribution (that subsystem lives in the shaper crate, not
 //! rustty-font) — see DEFERRALS.md "cli C2".
 
+// RUSTTY-ONLY (N495): `rustty_asan` is set by build.rs only when the crate is
+// compiled with `-Zsanitizer=address`, which already requires nightly, so the
+// feature gate never reaches a stable build. It lets `io_file`'s Mach-O
+// constructor opt out of ASan's global redzones (see `PROBE_CLOSED_STD_FDS`).
+#![cfg_attr(rustty_asan, feature(sanitize))]
+
 // cli.zig:
 //   const diags = @import("cli/diagnostics.zig");
 //   pub const args = @import("cli/args.zig");

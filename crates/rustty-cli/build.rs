@@ -27,6 +27,19 @@ fn main() {
     gen_action_help();
     gen_framedata();
     font_backend();
+    asan_cfg();
+}
+
+/// RUSTTY-ONLY (N495): `cfg(rustty_asan)` when this build runs under
+/// `-Zsanitizer=address` (cargo exposes rustc's `sanitize="address"` cfg to
+/// build scripts as `CARGO_CFG_SANITIZE`). `cfg(sanitize)` itself is unstable,
+/// so the crate cannot test it directly on the pinned stable toolchain.
+fn asan_cfg() {
+    println!("cargo::rustc-check-cfg=cfg(rustty_asan)");
+    println!("cargo::rerun-if-env-changed=CARGO_CFG_SANITIZE");
+    if std::env::var("CARGO_CFG_SANITIZE").is_ok_and(|v| v.split(',').any(|s| s == "address")) {
+        println!("cargo::rustc-cfg=rustty_asan");
+    }
 }
 
 fn gen_action_help() {
