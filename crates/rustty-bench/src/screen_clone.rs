@@ -32,6 +32,10 @@ const LOG_SCOPE: &str = "terminal-stream-bench";
 pub struct ScreenClone {
     opts: Options,
     terminal: Terminal,
+    /// UD376: the `clone` mode's copies, kept so teardown can free them. The
+    /// reference says "We'll free when the benchmark exits" but never does:
+    /// every step leaks 1000 screens until the process ends.
+    clones: Vec<Screen>,
 }
 
 // pub const Options = struct {
@@ -273,7 +277,11 @@ impl ScreenClone {
         }
 
         let terminal = Terminal::init(alloc.into(), terminal_opts)?;
-        Ok(Box::new(ScreenClone { opts, terminal }))
+        Ok(Box::new(ScreenClone {
+            opts,
+            terminal,
+            clones: Vec::new(),
+        }))
     }
 
     // pub fn destroy(self: *ScreenClone, alloc: Allocator) void {
@@ -281,6 +289,10 @@ impl ScreenClone {
     //     alloc.destroy(self);
     // }
     pub fn destroy(mut self: Box<ScreenClone>, alloc: Allocator) {
+        // UD376: any copies a run left behind (teardown normally frees them).
+        for mut copy in self.clones.drain(..) {
+            copy.deinit();
+        }
         self.terminal.deinit(alloc.into());
         drop(self);
     }
@@ -404,9 +416,16 @@ impl ScreenClone {
     //     const self: *ScreenClone = @ptrCast(@alignCast(ptr));
     //     _ = self;
     // }
+    //
+    // UD376: the `clone` step's copies are freed here, outside the timed loop
+    // (`Benchmark::run` takes its end time before the teardown guard runs). This
+    // is the "We'll free when the benchmark exits" that `stepClone` promises and
+    // the reference never does.
     unsafe fn teardown(ptr: *mut c_void) {
         let self_ = unsafe { &mut *(ptr as *mut ScreenClone) };
-        let _ = self_;
+        for mut copy in self_.clones.drain(..) {
+            copy.deinit();
+        }
     }
 
     // fn stepNoop(ptr: *anyopaque) Benchmark.Error!void {
@@ -436,6 +455,10 @@ impl ScreenClone {
     unsafe fn step_clone(ptr: *mut c_void) -> Result<(), Error> {
         let self_ = unsafe { &mut *(ptr as *mut ScreenClone) };
 
+        // UD376: room for this step's copies, reserved before the loop so the
+        // loop itself never reallocates.
+        self_.clones.reserve(1000);
+
         // We loop because its so fast that a single benchmark run doesn't
         // properly capture our speeds.
         // for (0..1000) |_| {
@@ -461,7 +484,10 @@ impl ScreenClone {
 
             // Note: we purposely do not free memory because we don't want
             // to benchmark that. We'll free when the benchmark exits.
-            core::mem::forget(copy);
+            //
+            // UD376: the reference never does free them (it drops the copy on
+            // the floor); here the copy is kept and `teardown` frees it.
+            self_.clones.push(copy);
         }
         Ok(())
     }
@@ -797,6 +823,33 @@ mod tests {
             bench.destroy(Allocator);
         }
         assert!(Mode::from_name(b"render-overscan").is_none());
+    }
+
+    // UD376: the `clone` step keeps its 1000 copies (the reference drops them
+    // on the floor until the process exits), and the teardown frees them, so
+    // a finished run holds none. G-LSAN found the leak (P7-W14).
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-bench, P7-W14): 1000 screen clones of a live terminal; runs natively and under G-ASAN/G-LSAN"
+    )]
+    fn screen_clone_clone_mode_frees_its_copies_at_teardown() {
+        use rustty_args::args::Target;
+
+        let mut opts = Options::default();
+        opts.parse_into_field(b"mode", Some(b"clone")).unwrap();
+        opts.parse_into_field(b"terminal-rows", Some(b"4")).unwrap();
+        opts.parse_into_field(b"terminal-cols", Some(b"8")).unwrap();
+        let mut bench = ScreenClone::create(Allocator, opts).unwrap();
+        let ptr = &mut *bench as *mut ScreenClone as *mut c_void;
+        unsafe { ScreenClone::step_clone(ptr) }.unwrap();
+        assert_eq!(1000, bench.clones.len(), "the step keeps every copy");
+        unsafe { ScreenClone::teardown(ptr) };
+        assert!(bench.clones.is_empty(), "teardown frees every copy");
+        // A whole run, too: setup, one step, teardown.
+        assert!(bench.benchmark().run(RunMode::Once).is_ok());
+        assert!(bench.clones.is_empty(), "a finished run holds no copy");
+        bench.destroy(Allocator);
     }
 
     // `loops = 1`: one real pass of every mode's timed loop (50,000 to

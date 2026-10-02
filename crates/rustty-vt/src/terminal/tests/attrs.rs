@@ -778,6 +778,12 @@ fn terminal_print_slice_charset_matches_scalar_printing() {
                 );
                 assert_eq!(scalar.previous_char, batched.previous_char);
             }
+
+            // defer scalar.deinit(alloc); defer batched.deinit(alloc);
+            // (missed by the port until G-LSAN reported both terminals leaked,
+            // P7-W14 / N496)
+            batched.deinit(Global);
+            scalar.deinit(Global);
         }
     }
 }

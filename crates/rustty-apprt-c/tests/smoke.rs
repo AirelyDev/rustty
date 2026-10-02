@@ -77,7 +77,15 @@ fn c_compiler() -> String {
             return cc;
         }
     }
-    for cand in ["cc", "clang"] {
+    // An ASan build on Linux links the smoke program with -fsanitize=address,
+    // which must be clang's (compiler-rt, the runtime rustc instruments for),
+    // not GCC's libasan.
+    let cands: &[&str] = if cfg!(all(rustty_asan, target_os = "linux")) {
+        &["clang"]
+    } else {
+        &["cc", "clang"]
+    };
+    for &cand in cands {
         if Command::new(cand)
             .arg("--version")
             .output()
@@ -179,6 +187,12 @@ fn c_abi_smoke_compile_link_run() {
         .arg(format!("-Wl,-rpath,{}", deps_dir.display()))
         .arg("-o")
         .arg(&bin);
+    // Under G-ASAN / G-LSAN on Linux the cdylib is instrumented and its
+    // `__asan_*` references resolve against the runtime the EXECUTABLE links
+    // (on macOS the dylib carries the runtime itself). `c_compiler` picks clang
+    // there, whose compiler-rt runtime matches rustc's.
+    #[cfg(all(rustty_asan, target_os = "linux"))]
+    cmd.arg("-fsanitize=address");
     let compile = cmd.output().expect("spawn C compiler");
     assert!(
         compile.status.success(),

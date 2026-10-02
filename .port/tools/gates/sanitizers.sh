@@ -88,6 +88,14 @@ LSAN_EXCLUDES=(
 FEATURE_LANES=(
   "rustty-vt:wuffs|the PNG decode tests (\`image_load_png_zlib_compressed_direct\`, \`sys::tests::default_decoder_*\`) are ignored without the wuffs feature, and one of them is a Miri exception whose stated compensating control is ASan; found by G-ASAN's claim cross-check on its first run (P7-W14)"
 )
+# Members with NO test on a host OS, so the per-crate non-vacuity rule would
+# be RED by construction. Format: "<crate>|<uname -s, or *>|<reason>". Such a crate
+# still BUILDS under the sanitizer; zero tests is reported by name, and any
+# test appearing there makes the entry stale (RED).
+NO_TESTS_ON=(
+  "rustty-wasm|*|its one native test, tests/artifact_shape.rs, is #[ignore]d: it inspects the wasm32 artifact that .port/tools/build-main-wasm.sh builds (the --webgl lane), and its exports are cfg(target_arch = \"wasm32\")"
+  "gettext-sys|Linux|libintl is part of glibc on Linux, so the crate compiles no C there and every test is #[cfg(all(test, target_os = \"macos\"))] (crates-sys/gettext-sys/src/lib.rs)"
+)
 # Linux-only feature lanes: the same set G-VALGRIND keeps (N413).
 LINUX_FEATURE_LANES=(
   "rustty-apprt:gtk,wayland,x11|GTK is the reference's Linux runtime, so its test executable there compiles the GTK apprt; cargo test --workspace does not"
@@ -108,18 +116,23 @@ MSAN_EXCLUDES=(
 #   FINDING | BUILD | FAIL | VACUOUS | GREEN  and, for GREEN, the test count.
 # ---------------------------------------------------------------------------
 FINDING_RE='ERROR: (Address|Thread|Leak|Memory|HWAddress)Sanitizer|WARNING: (MemorySanitizer|ThreadSanitizer)|SUMMARY: [A-Za-z]*Sanitizer|runtime error:'
-tests_ran() { awk '/^running [0-9]+ tests?$/ {s+=$2} END {print s+0}' "$1"; }
+# EXECUTED tests: the sum of every target's `N passed; M failed` (P7-W14).
+# Counting `running N tests` headers counted IGNORED tests as run, so a crate
+# whose only test is #[ignore]d (rustty-wasm natively) looked like "1 test ran".
+tests_ran() {
+  awk '/^test result: / {
+         for (i = 1; i <= NF; i++) if ($i == "passed;" || $i == "failed;") s += $(i - 1)
+       } END {print s+0}' "$1"
+}
 classify() {
   local log="$1" rc="$2" ran
   if grep -qE "$FINDING_RE" "$log"; then echo FINDING; return; fi
   ran="$(tests_ran "$log")"
   if [ "$rc" -ne 0 ]; then
-    # Tests that ran and failed are RED; a run that never reached a test
-    # binary (compile/link error) is BLOCKED.
-    if grep -qE '^test result: FAILED|^error: test failed|^failures:$|process didn.t exit successfully: .*(signal|exit status)' "$log" && [ "$ran" -gt 0 ]; then
-      echo FAIL; return
-    fi
-    if grep -qE 'error(\[E[0-9]+\])?: |could not compile|linking with .* failed' "$log"; then
+    # A compile or link error that never reached a test binary: BLOCKED.
+    # Anything else (a failed test, a crashed binary) is RED.
+    if grep -qE 'could not compile|linking with .* failed|^error\[E[0-9]+\]' "$log" &&
+      ! grep -qE '^ *Running (unittests|tests/|benches/)' "$log"; then
       echo BUILD; return
     fi
     echo FAIL; return
@@ -180,6 +193,11 @@ run_crate() {
   # and the native bound stays checked by `cargo test --workspace`. Threads
   # that set an explicit stack size are unaffected.
   if [ "$san" != leak ] && [ "$san" != hwaddress ]; then envs+=("RUST_MIN_STACK=8388608"); fi
+  # Line tables only: sanitizer reports still name every function, file and
+  # line, but the instrumented debug binaries link in a fraction of the memory
+  # and disk. With full debuginfo the GTK apprt lane's test links (ld.bfd, 8 at
+  # once) exhausted the 10 GB Linux VM and ld died with SIGBUS (P7-W14).
+  envs+=("CARGO_PROFILE_DEV_DEBUG=line-tables-only" "CARGO_PROFILE_TEST_DEBUG=line-tables-only")
   if [ -n "$SAN_MANIFEST_PATH" ]; then cargo_args+=(--manifest-path "$SAN_MANIFEST_PATH"); fi
   cargo_args+=(-p "$crate" --target "$tgt" --no-fail-fast)
   if [ -n "$feats" ]; then cargo_args+=(--features "$feats"); fi
@@ -252,6 +270,16 @@ workspace_members() {
     "$PY" -c 'import json,sys; print("\n".join(sorted(p["name"] for p in json.load(sys.stdin)["packages"])))'
 }
 
+no_tests_reason() {  # no_tests_reason SPEC -> the NO_TESTS_ON reason for this OS, or ""
+  local e
+  for e in ${NO_TESTS_ON[@]+"${NO_TESTS_ON[@]}"}; do
+    if [ "${e%%|*}" = "$1" ]; then
+      local rest="${e#*|}"
+      if [ "${rest%%|*}" = "$OS" ] || [ "${rest%%|*}" = "*" ]; then printf '%s' "${rest#*|}"; return; fi
+    fi
+  done
+}
+
 # Matrix result accumulators (globals: bash 3.2 has no namerefs).
 M_RED=0; M_BLOCKED=0; M_TOTAL=0; M_ROWS=""
 matrix_run() {  # matrix_run SAN FILTER SPEC...
@@ -276,6 +304,21 @@ matrix_run() {  # matrix_run SAN FILTER SPEC...
     t1=$(date +%s)
     v="$(classify "$log" "$rc")"
     drop_target "$td"
+    local nt
+    nt="$(no_tests_reason "$spec")"
+    if [ -n "$nt" ]; then
+      case "$v" in
+        VACUOUS)
+          echo "  ⏭  $san $spec: 0 tests on $OS by construction — $nt"
+          M_ROWS="$M_ROWS$spec|NO-TESTS($OS)|0|$((t1 - t0))"$'\n'
+          continue ;;
+        GREEN*)
+          M_RED=1
+          echo "  ❌ $san $spec: NO_TESTS_ON says '$spec' has no test on $OS, but ${v#GREEN } ran — the entry is stale"
+          M_ROWS="$M_ROWS$spec|STALE-NO-TESTS|${v#GREEN }|$((t1 - t0))"$'\n'
+          continue ;;
+      esac
+    fi
     case "$v" in
       GREEN*)
         M_TOTAL=$((M_TOTAL + ${v#GREEN }))
@@ -485,6 +528,7 @@ EOF
     for e in ${LINUX_FEATURE_LANES[@]+"${LINUX_FEATURE_LANES[@]}"}; do specs_a+=("${e%%|*}"); echo "feature lane: ${e%%|*} — ${e#*|}"; done
   fi
   check_members "$id feature lane" ${FEATURE_LANES[@]+"${FEATURE_LANES[@]}"} ${LINUX_FEATURE_LANES[@]+"${LINUX_FEATURE_LANES[@]}"} || extra=1
+  check_members "NO_TESTS_ON" ${NO_TESTS_ON[@]+"${NO_TESTS_ON[@]}"} || extra=1
   if [ -n "${SAN_ONLY:-}" ]; then
     # Debug aid: SAN_ONLY="a b" narrows the run (the verdict says so: never a full green).
     local -a narrowed=()
@@ -552,7 +596,10 @@ self_test() {
   # shellcheck disable=SC2016  # literal backticks, as cargo prints them
   printf 'running 2 tests\ntest a ... ok\ntest b ... FAILED\nfailures:\ntest result: FAILED. 1 passed; 1 failed\nerror: test failed, to rerun pass `--lib`\n' >"$st/logs/fail.log"
   printf 'running 0 tests\ntest result: ok. 0 passed; 0 failed\n' >"$st/logs/vacuous.log"
-  printf 'running 4 tests\ntest result: ok. 4 passed\nrunning 1 test\ntest result: ok. 1 passed\n' >"$st/logs/green.log"
+  printf 'running 4 tests\ntest result: ok. 4 passed; 0 failed; 1 ignored\nrunning 1 test\ntest result: ok. 1 passed; 0 failed; 0 ignored\n' >"$st/logs/green.log"
+  printf 'running 1 test\ntest result: ok. 0 passed; 0 failed; 1 ignored\n' >"$st/logs/allignored.log"
+  # shellcheck disable=SC2016  # literal backticks, as cargo prints them
+  printf '     Running unittests src/lib.rs\nrunning 3 tests\nerror: test failed, to rerun pass `--lib`\nprocess did not exit successfully: `x` (signal: 11, SIGSEGV)\n' >"$st/logs/crash.log"
   printf 'running 1 test\n==9==WARNING: MemorySanitizer: use-of-uninitialized-value\n' >"$st/logs/msan.log"
   printf 'running 2 tests\n=================================================================\n==7==ERROR: LeakSanitizer: detected memory leaks\nSUMMARY: AddressSanitizer: 64 byte(s) leaked in 1 allocation(s).\n' >"$st/logs/leak.log"
   ck() {  # ck NAME RC WANT
@@ -561,6 +608,7 @@ self_test() {
   }
   ck finding 1 FINDING; ck build 101 BUILD; ck fail 101 FAIL; ck vacuous 0 VACUOUS
   ck green 0 "GREEN 5"; ck msan 77 FINDING; ck leak 23 FINDING
+  ck allignored 0 VACUOUS; ck crash 101 FAIL
   # --- arm D: drop_target refuses anything but a san-<san>-<crate> dir ---
   if ( SAN_TARGET_ROOT="$st/t"; drop_target "$st" ) 2>/dev/null; then echo "  FAIL D drop_target accepted a non-sanitizer dir"; fail=1
   else echo "  ok   D drop_target refuses a non-sanitizer dir"; fi
@@ -691,6 +739,20 @@ RS
   arm "A1 heap overflow" asan "tests::defect_heap_overflow --exact" RED "heap-buffer-overflow"
   arm "A0 clean control" asan "tests::clean_control --exact" GREEN "1 test\\(s\\) ran"
   arm "B  empty filter" asan "no_such_test_anywhere" RED "VACUOUS"
+  # NO_TESTS_ON: a listed crate with zero tests is a named skip, not RED; a
+  # listed crate where a test DID run is a stale entry, RED.
+  local nto nrc
+  for nrc in "no_such_test_anywhere|0 tests on $OS by construction" "tests::clean_control --exact|the entry is stale"; do
+    nto="$(SAN_MANIFEST_PATH="$cr/Cargo.toml" SAN_TARGET_ROOT="$sroot" SAN_LOG_ROOT="$st/slogs-nt" SAN_MIN_FREE_GB=0 \
+         bash -c '. "$0" --source-only; NO_TESTS_ON=("san-selftest|$(uname -s)|fixture"); matrix_run asan "$1" san-selftest; echo "M_RED=$M_RED"' \
+         "$GATES_DIR/sanitizers.sh" "${nrc%%|*}" 2>&1)"
+    case "${nrc#*|}" in
+      "the entry is stale") want="M_RED=1" ;;
+      *) want="M_RED=0" ;;
+    esac
+    if printf '%s' "$nto" | grep -q "${nrc#*|}" && printf '%s' "$nto" | grep -q "$want"; then echo "  ok   G NO_TESTS_ON, filter '${nrc%%|*}': ${nrc#*|} ($want)"
+    else echo "  FAIL G NO_TESTS_ON, filter '${nrc%%|*}':"; printf '%s\n' "$nto" | tail -5 | sed 's/^/       /'; fail=1; fi
+  done
   if [ "$OS" = "Linux" ]; then
     arm "A2 leak" lsan "tests::defect_leak --exact" RED "LeakSanitizer: detected memory leaks"
     arm "A2 control: the leak under G-ASAN (leak checker off)" asan "tests::defect_leak --exact" GREEN "1 test\\(s\\) ran"

@@ -2220,6 +2220,32 @@ impl Drop for CloseHandleGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// G-LSAN (P7-W14, N496): the pid of the test binary, recorded by
+    /// `fork_serial` before a test forks through `Command::start`.
+    #[cfg(target_os = "linux")]
+    static LSAN_TEST_PROCESS_PID: std::sync::atomic::AtomicI32 =
+        std::sync::atomic::AtomicI32::new(0);
+
+    /// LeakSanitizer's documented opt-out hook (`__lsan_is_turned_off`,
+    /// sanitizer/lsan_interface.h): LSan skips its exit-time check when the
+    /// program defines it and it returns non-zero. It returns non-zero only in
+    /// a FORKED CHILD of this test binary. The `Command` tests' children leave
+    /// through `posix_exit` (libc `exit(3)`, the reference's `posix.exit`), so
+    /// LSan scans them at exit; a child of a multithreaded process has only
+    /// the forking thread, so every block the parent's other test threads hold
+    /// looks unreachable and is reported as "leaked" (G-LSAN's first run: four
+    /// such reports, each the parent's heap, and five failed tests). The test
+    /// binary itself is still checked in full. Only in this crate's test build;
+    /// in a non-sanitizer build nothing calls it.
+    #[cfg(target_os = "linux")]
+    #[no_mangle]
+    extern "C" fn __lsan_is_turned_off() -> core::ffi::c_int {
+        let parent = LSAN_TEST_PROCESS_PID.load(std::sync::atomic::Ordering::Relaxed);
+        // SAFETY: getpid(2) has no preconditions.
+        core::ffi::c_int::from(parent != 0 && parent != unsafe { libc::getpid() })
+    }
+
     use rustty_os::tempdir::TempDir;
     use std::io::{Read as _, Seek as _, SeekFrom};
 
@@ -2660,6 +2686,12 @@ mod tests {
     // serialization: every test still runs unchanged.
     #[cfg(not(windows))]
     fn fork_serial() -> std::sync::MutexGuard<'static, ()> {
+        #[cfg(target_os = "linux")]
+        LSAN_TEST_PROCESS_PID.store(
+            // SAFETY: getpid(2) has no preconditions.
+            unsafe { libc::getpid() },
+            std::sync::atomic::Ordering::Relaxed,
+        );
         crate::FORK_KAT_SERIAL
             .lock()
             .unwrap_or_else(|e| e.into_inner())
