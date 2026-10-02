@@ -222,6 +222,10 @@ committed records named here.
   never run on GitHub). No UD: fix round 1 found the benchmark's process-exit freeing deliberate in the
   reference, so the UD376 first drafted for it was withdrawn and never merged.
   **Next free ids: UD376, N500, V31.**
+- **P7-W15 / P7-W16** (Miri on nextest; the macOS leak lane; HWASan) ran in parallel and were
+  given id ranges up front: P7-W15 N500; P7-W16a UD376 and N501–N503; P7-W16b N504 and V31
+  (merged first: G-HWASAN, N504 the gate's first runs, V31 no hosted aarch64 CI job).
+  **Next free ids once all three land: UD377, N505, V32.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.
