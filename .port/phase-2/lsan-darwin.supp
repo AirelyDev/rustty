@@ -59,6 +59,14 @@ leak:TGlobalFontRegistry::CreateRegistry
 # S9 (second frame): the same registry's request cache, filled by later lookups
 # (TGlobalFontRegistry::CopyFontForName) outside CreateRegistry.
 leak:TRequestCache::AddResultForRequest
+# S9 (third frame): the NSXPC-decoded reply of the registry's font-matching
+# request (-[XTypeXPCClient XTCopyPropertiesForFontsMatchingRequest:...]),
+# which CoreText keeps; seen in rustty-font-shaper's discovery tests (fix
+# round 1, once the whole-library pattern was narrowed). A descriptor built
+# from that reply is allocated outside this frame and stays reported
+# (G-SAN-SELF's descriptor arms); Apple's `leaks` on the natively built
+# rustty-font-shaper tests: 0 leaks.
+leak:XTCopyPropertiesForFontsMatchingRequest
 # S10: CoreText's font-descriptor cache (TDescriptorSource::CopyDescriptorUncached
 # fills it); same probe and evidence as S9. A CTFont Rustty fails to release
 # would be reported through TCFBase_NEW<CTFont>, which this does not match, and

@@ -10445,6 +10445,14 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   The cross-check's parser now searches result lines instead of anchoring them, since a test's
   unterminated stdout can prefix one (rustty-cli's pager and picker tests). G-SAN-SELF GREEN on macOS
   (52 arms, the leak arms included).
+- **fix round 1** (review): S9 narrowed from the whole `libFontRegistry.dylib` to three registry frames,
+  S4 anchored, and six Darwin G-SAN-SELF arms keep the patterns honest (a leaked CTFont, a created and a
+  copied CTFontDescriptor, a CGFont and an `MTLCopyAllDevices` array must each be RED under the real
+  file, a CoreText create-and-release control GREEN). Full Mac pass under heavy load (97 min, 9,658
+  tests, cross-check 459 ran / 9 expected absent / 0 problems): every crate GREEN except
+  `rustty-font-shaper` (S9's third frame, found by the narrowing; added) and `rustty-apprt-c` (an
+  ASan-runtime `fork` deadlock, killed by PID; SANITIZER_SUPPRESSIONS.md "Known limits"); both re-ran
+  GREEN (141 and 51 tests). G-SAN-SELF GREEN (58 arms).
 - **still Linux-only**: G-MSAN (no Darwin MSan in compiler-rt) and HWASan (not a gate; Linux task).
 
 ## N502 — leaks behind every closed surface, on every platform (only macOS tests reached them): the render thread's and renderer state's Rust-owned heap was never dropped
