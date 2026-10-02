@@ -168,7 +168,8 @@ macro_rules! note_thread_enter_failure {
 /// The `rustty-cli` `errno_suffix` helper is the precedent, including its
 /// lesson: the numbers differ per target (its first draft had Linux's `EAGAIN`,
 /// which is `EDEADLK` on Darwin), so the table is asserted against the HOST's
-/// own `strerror` by `errno_tests` below rather than trusted.
+/// own `strerror` by the tests in `exec/tests/child_raw_errno.rs` rather than
+/// trusted.
 #[cfg(not(windows))]
 fn errno_tag_name(code: i32) -> std::borrow::Cow<'static, str> {
     // The errnos `write(2)` and `fcntl(2)` can set, per POSIX.1-2024.
