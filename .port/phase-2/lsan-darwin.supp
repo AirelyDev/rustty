@@ -4,7 +4,7 @@
 #
 # Same rules as lsan.supp: every entry is a THIRD-PARTY allocation (here: Apple
 # system libraries), each with a row in .port/phase-2/SANITIZER_SUPPRESSIONS.md
-# (S3-S17) giving the reason and evidence, and a WHY comment directly above it
+# (S3-S18) giving the reason and evidence, and a WHY comment directly above it
 # (D6 rule c). A leak in Rustty code is never suppressed.
 #
 # Why macOS needs its own file: LeakSanitizer on Darwin takes its roots from
@@ -15,7 +15,7 @@
 # data, and SkyLight state reached from dispatch sources, are not among them,
 # so those blocks are reported as leaked while their owners are alive. Apple's
 # `leaks` tool, which does see those roots, reports 0 leaks for the same test
-# binaries built natively (SANITIZER_SUPPRESSIONS.md, S3-S17). Each pattern below
+# binaries built natively (SANITIZER_SUPPRESSIONS.md, S3-S18). Each pattern below
 # names the allocating system function, so an object that Rustty allocates and
 # fails to release (its stack runs through our code, or through
 # _objc_rootAllocWithZone under our call) is still reported: G-LSAN's first
@@ -98,3 +98,12 @@ leak:CGCMSConverterCreateCachedCGvImageConverter
 # -[AGX...Device newCommandQueue]'s alloc, outside it, and stays reported.
 # Apple's `leaks` on each init-fault child, run directly: 0 leaks (9 runs).
 leak:-[_MTLCommandQueue initWithDevice:descriptor:]
+# S18: Metal's process-wide device registry. The first MTLCopyAllDevices
+# registers the devices (MTLRegisterDevices -> -[MTLIOAccelServiceGlobalContext
+# init]), whose global context keeps its dispatch queues and sources for the
+# life of the process. Only allocations made INSIDE that registration: the
+# device array MTLCopyAllDevices returns (which Rustty must release) is
+# created outside it and stays reported. Timing-dependent under LSan on Darwin
+# (rustty-apprt-c macos_window_host, Metal::warmup's thread); Apple's `leaks`
+# on the same binary built natively: 0 leaks.
+leak:MTLRegisterDevices

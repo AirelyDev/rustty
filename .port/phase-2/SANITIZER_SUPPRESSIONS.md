@@ -77,6 +77,7 @@ agreed (54 leaks, 10,416 bytes, before the fix).
 | S15 | `leak:CGColorSyncTransformCacheGetRetained` | CoreGraphics / ColorSync | the ColorSync transform cache (libcache-backed), filled by the first conversion between two colour spaces and held for the process | `rustty-renderer` `preedit_glyph_uses_font_thicken` (`ColorSyncTransformCreate` and `colorsync_transform_data_key_retain` ← `CGColorSyncTransformCacheGetRetained` ← `CGCMSConverterCreate`); Apple `leaks` on the natively built renderer tests: 0 leaks (140 tests) |
 | S16 | `leak:CGCMSConverterCreateCachedCGvImageConverter` | CoreGraphics | the cached vImage converter kept with an S15 transform | as S15 (824 bytes) |
 | S17 | `leak:-[_MTLCommandQueue initWithDevice:descriptor:]` | Metal / libdispatch | the private dispatch queue a Metal command queue creates inside its `init`, disposed of asynchronously by libdispatch after the command queue is released; a process exiting right after freeing its renderer can still hold it at the scan (timing-dependent). Allocations of the command queue object itself happen in `newCommandQueue`'s alloc, outside this frame, so a leaked command queue stays reported | `rustty-apprt-c` `macos_window_host` `init_error_path_joins_both_threads_before_freeing_their_state` child (128 bytes, `_os_object_alloc_realized` ← `_dispatch_lane_create_with_target` ← `-[_MTLCommandQueue initWithDevice:descriptor:]` ← `Metal::init_device`); Apple `leaks` on each of its three fault children run directly: 0 leaks in 9 runs |
+| S18 | `leak:MTLRegisterDevices` | Metal | Metal's process-wide device registry: the first `MTLCopyAllDevices` runs `MTLRegisterDevices` → `-[MTLIOAccelServiceGlobalContext init]`, whose global context keeps its dispatch queues and sources for the process; the device array `MTLCopyAllDevices` returns is created outside this frame, so an unreleased array stays reported | `rustty-apprt-c` `macos_window_host` (`Metal::warmup` → `choose_device` → `MTLCopyAllDevices`; 2 × 512 bytes of dispatch lanes and a 320-byte dispatch unote; timing-dependent); Apple `leaks` on the natively built binary: 0 leaks in every run |
 
 ## Sanitizer runtime options set by the lanes
 
@@ -148,7 +149,7 @@ Leak-checking alternatives evaluated (P7-W16a):
   (64 ROOT LEAKs, exit 1), GREEN on the clean test (exit 0); quiet on `rustty-font` (89 tests) and the
   `rustty-apprt` unit tests (0 leaks); about 1.3x native wall time (`rustty-font`: 6.6 s native, 8.5 s
   under `leaks`, 10.0 s with `MallocStackLogging=1`). It scans only the main process at exit (not forked
-  children) and needs `MallocStackLogging` for allocation stacks. Used here as the ARBITER for the S3-S17
+  children) and needs `MallocStackLogging` for allocation stacks. Used here as the ARBITER for the S3-S18
   suppressions, not as a separate gate: G-LSAN already gives the same detection, stacks, the
   suppression file, the Miri-exception cross-check and the existing self-tests.
 - **Homebrew LLVM compiler-rt**: not usable on macOS 26 (above).

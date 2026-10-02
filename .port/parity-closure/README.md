@@ -58,7 +58,7 @@ pin), G-P2-SELF, G-KAITAI (now HARD).
 |---|---|---|---|
 | G-SAN-SELF | HARD | everywhere (needs nightly) | a synthetic crate's heap overflow, leak and uninitialized read are RED under ASan, LSan and MSan (the last two on Linux only), a clean control GREEN, a filter matching nothing a vacuous RED; plus the classifier, cross-check, `NO_TESTS_ON` and BLOCKED arms over fixtures |
 | G-ASAN | HARD (`--fast` skips it) | macOS and Linux | AddressSanitizer over every workspace member's tests plus the `rustty-vt:wuffs` lane, then the cross-check that every Miri-excepted test (468) ran and passed, or is on the per-OS expected-absent list |
-| G-LSAN | HARD (`--fast` skips it) | macOS (since P7-W16a) and Linux; BLOCKED elsewhere | ASan with `detect_leaks=1` (rustc's ASan runtime has a working leak checker on Apple Silicon; the standalone `-Zsanitizer=leak` and Apple clang's runtime do not), the same scope plus, on Linux, the GTK apprt and Flatpak feature lanes; suppressions only through `.port/phase-2/SANITIZER_SUPPRESSIONS.md`: `lsan.supp` on Linux (two, both Mesa), `lsan-darwin.supp` on macOS (fifteen: libobjc, CoreFoundation, SkyLight, CoreText, CoreAnimation, ColorSync, Metal and dyld TLV state LSan on Darwin does not see as roots; Apple's `leaks` reports 0 for the same binaries) |
+| G-LSAN | HARD (`--fast` skips it) | macOS (since P7-W16a) and Linux; BLOCKED elsewhere | ASan with `detect_leaks=1` (rustc's ASan runtime has a working leak checker on Apple Silicon; the standalone `-Zsanitizer=leak` and Apple clang's runtime do not), the same scope plus, on Linux, the GTK apprt and Flatpak feature lanes; suppressions only through `.port/phase-2/SANITIZER_SUPPRESSIONS.md`: `lsan.supp` on Linux (two, both Mesa), `lsan-darwin.supp` on macOS (sixteen: libobjc, CoreFoundation, SkyLight, CoreText, CoreAnimation, ColorSync, Metal and dyld TLV state LSan on Darwin does not see as roots; Apple's `leaks` reports 0 for the same binaries) |
 | G-MSAN | HARD (`--fast` skips it) | Linux; BLOCKED elsewhere (compiler-rt has no MSan for Darwin) | MemorySanitizer with `-Zbuild-std` and our C/C++ instrumented, over an allow-list of 59 members (rustty-renderer with its EGL/GL/glslang test modules skipped by name); 2 excluded with reasons (glslang-sys, xtask) |
 
 In ci.yml's `ci` job the three report BLOCKED (`RUSTTY_SANITIZERS_OWN_JOB`), naming the new `sanitizers`
@@ -68,10 +68,10 @@ tests over 61 members and the `rustty-vt:wuffs` lane, 117 of 117 ASan claims ver
 shared target dir; G-LSAN (rvm) GREEN, 10,087 tests over 61 members and three feature lanes, 86 claims
 verified and 31 macOS-only, 20 min; G-MSAN (rvm) GREEN, 6,183 tests over 58 members, 50 min. Fix round 1 (2026-10-02): the cross-check covers all 468 Miri-excepted tests (macOS: 459 ran, 9 expected absent; Linux: 412 ran, 56 expected absent), G-ASAN GREEN with 9,850 tests including a `rustty-vt:wuffs,oniguruma` lane, and `rustty-renderer` joins G-MSAN (52 tests, its EGL/GL/glslang modules skipped by name). Fix round 2: the renderer's skips narrowed to the twelve modules or tests that create an EGL/GL context or run glslang (81 tests under MSan); the G-LSAN matrix of round 1 ran on 7ddf62ffd, and the full G-LSAN gate re-ran GREEN on 05478107 (10,111 tests, cross-check 412 ran / 56 expected absent / 0 problems). The first
 runs found N495-N499 (register below); the suppressions, lane options and exclusions are in
-`.port/phase-2/SANITIZER_SUPPRESSIONS.md`. P7-W16a (2026-10-02) enabled G-LSAN on macOS (N501): its first
-pass ran 9,397 tests in 57 min and is RED on two OPEN findings, N502 (per-surface macOS-only leaks in the
-renderer thread's and renderer's teardown) and N503 (the renderer's macOS test helpers, N411's twins);
-it also found UD376 (fixed). Every other crate is GREEN there.
+`.port/phase-2/SANITIZER_SUPPRESSIONS.md`. P7-W16a (2026-10-02) enabled G-LSAN on macOS (N501). Its first
+pass found UD376, N502 (per-surface macOS-only leaks in the render thread's and renderer state's teardown)
+and N503 (the renderer's macOS test helpers, N411's twins), all fixed; after them G-LSAN on macOS is GREEN:
+9,850 tests, 0 findings, 33 min, cross-check 459 ran / 9 expected absent / 0 problems.
 
 ## Not verified here (long runs, deferred by the user on 2026-09-28)
 

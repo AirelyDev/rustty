@@ -271,7 +271,8 @@ for lg in sorted(glob.glob(os.path.join(a.logdir, "*.log"))):
         # newline lands on the front of libtest's next result line (P7-W16a:
         # rustty-cli's `pager_default_writer` writes "hello" to stdout, as the
         # reference test does, which made "hellotest new_window::tests::... ok").
-        m = re.search(r"(?:^|(?<=[^ ]))test (\S+)(?: - should panic)? \.\.\. (ok|ignored|FAILED)", line)
+        # (Any prefix, a space included: rustty-cli's picker tests leave " ".)
+        m = re.search(r"test (\S+)(?: - should panic)? \.\.\. (ok|ignored|FAILED)", line)
         if m:
             rows.append((target, m.group(1), m.group(2)))
 

@@ -10420,7 +10420,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   "Platform support on macOS".
 - **fix**:
   1. G-LSAN runs on macOS (`gate_asan_like`: BLOCKED only on a host other than Linux and macOS, which is
-     unverified), with its own suppression file `.port/phase-2/lsan-darwin.supp` (S3-S17: libobjc,
+     unverified), with its own suppression file `.port/phase-2/lsan-darwin.supp` (S3-S18: libobjc,
      CoreFoundation, SkyLight, CoreText, CoreAnimation, ColorSync, Metal and dyld thread-local state that LSan on Darwin does
      not see as roots; Apple's `leaks` reports 0 leaks for the same binaries, and a CoreText probe with no
      Rustty code reproduces S9/S10 exactly).
@@ -10437,14 +10437,14 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **first findings on macOS**: UD376 (the inspector's Metal backend built without ARC; fixed in
   `crates-sys/dcimgui-sys/build.rs`). The `rustty` crate's `cli_log_facade` test failed only because the
   CLI child's exit status carried LSan's libobjc reports (S3/S4); with `lsan-darwin.supp` the CLI exits 0.
-- **result** (macOS arm64, 2026-10-02, `--per-crate-target`): the full G-LSAN pass ran 9,397 tests over the
-  workspace and the `rustty-vt:wuffs,oniguruma` lane in 57 min (`rustty-wasm` no tests by construction);
-  Miri-exception cross-check 457 ran and passed, 9 expected absent, 2 problems (the `rustty-cli` picker
-  children, S12). After S9-S14 and the two test-side fixes (N502 item 1, the `rustty-font-shaper`
-  `recording_allocator` CFAllocator), re-runs: `rustty-cli` 118 GREEN, `rustty-font-shaper` 141 GREEN,
-  `rustty-apprt-c` RED with N502 item 2 only. **G-LSAN on macOS is RED** on `rustty-apprt-c` (N502) and
-  `rustty-renderer` (N503) until those are fixed; every other crate is GREEN. G-SAN-SELF: GREEN on macOS
-  (51 arms, the leak arms included).
+- **result** (macOS arm64, 2026-10-02, `--per-crate-target`): the first full pass (9,397 tests, 57 min)
+  was RED and found UD376, N502 and N503, all fixed, plus the system-library reports suppressed as
+  S3-S18 (each arbitrated with Apple `leaks`). After the fixes: **G-LSAN on macOS GREEN**, 9,850 tests
+  over the workspace and the `rustty-vt:wuffs,oniguruma` lane, 0 findings, 33 min (`rustty-wasm` no
+  tests by construction); Miri-exception cross-check 459 ran and passed, 9 expected absent, 0 problems.
+  The cross-check's parser now searches result lines instead of anchoring them, since a test's
+  unterminated stdout can prefix one (rustty-cli's pager and picker tests). G-SAN-SELF GREEN on macOS
+  (52 arms, the leak arms included).
 - **still Linux-only**: G-MSAN (no Darwin MSan in compiler-rt) and HWASan (not a gate; Linux task).
 
 ## N502 — macOS-only leaks behind every closed surface: the render thread's and renderer state's Rust-owned heap was never dropped
