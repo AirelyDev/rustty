@@ -174,8 +174,9 @@ Leak-checking alternatives evaluated (P7-W16a):
   on the same kind of lock in `wrap_free` → `__asan::Allocator::QuarantineChunk`, and the other test
   threads waited behind them. No Rustty frame holds a lock there; the related mechanism is the
   sanitizers locking their allocator before `fork` (LLVM D33325). The process was killed by PID, the
-  crate re-run, and every other pass (five through that binary) completed. The gate has no per-crate
-  timeout, so such a hang stalls the pass instead of turning RED; adding one is a follow-up.
+  crate re-run, and every other pass through that binary completed (1 hang in about 33 runs; NEW-FINDINGS
+  N505). Since fix round 2 the gate bounds each crate (`SAN_CRATE_TIMEOUT_S`, default 1200 s, 2400 s
+  for MSan): a hang is killed by explicit PIDs and reported RED, "HANG after Ns (no verdict)".
 
 - **G-ASAN and G-LSAN compile the vendored C/C++ without `-fsanitize=address`.** ASan still sees that
   code's heap through its `malloc`/`free`/`mem*`/`str*` interceptors (so a C buffer freed twice, or leaked,

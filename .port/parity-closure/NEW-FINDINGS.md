@@ -10528,3 +10528,33 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `draw_one_frame` / `update_and_draw` `deinit` their terminals.
 - **evidence**: native `rustty-renderer` lib 140 passed; Apple `leaks` on that binary: 0 leaks; G-LSAN
   on macOS `rustty-renderer`: only S15/S16 (ColorSync caches) remained, now suppressed.
+
+## N505 — macOS ASan runtime can deadlock in `fork` while another thread frees: an intermittent hang in G-ASAN / G-LSAN
+
+- **id**: N505 (provisional; P7-W16a fix round 2). **severity**: low (sanitizer lanes only; no product
+  defect). **state**: OPEN (mitigated: the gate now bounds each crate and reports a hang RED).
+- **found**: one Mac G-LSAN pass under heavy load (load average ≈ 30) hung for an hour in
+  `rustty-apprt-c`'s `tests/macos_window_host.rs` at ~740% CPU. Sample: an io thread in
+  `Exec::threadEnter` → `Subprocess::start` → `Command::startPosix` → `fork` → `libSystem_atfork_prepare`
+  → `_malloc_fork_prepare` → `__sanitizer::StaticSpinMutex::LockSlow`, and a libdispatch worker in
+  `wrap_free` → `__asan::Allocator::QuarantineChunk` → `StaticSpinMutex::LockSlow`, both spinning, with
+  the remaining test threads waiting behind them (`os_unfair_lock`, `pthread_join` in
+  `Surface::deinit`). No Rustty frame holds a lock: the two spinning threads are inside the ASan
+  runtime's allocator/quarantine locking around `fork` (the mechanism of LLVM D33325's
+  `BeforeFork` allocator locking), a lock-order problem in the runtime, not in the port.
+- **which test forks**: every `macos_window_host` test that creates a surface. `Surface::init` starts
+  the io thread, whose `Exec` backend spawns the shell with `fork` (`crates/rustty-termio/src/command.rs`
+  `startPosix`, `libc::fork()`, the reference's `Command.zig` `fork()`), while the binary's other
+  test threads, their surfaces' render/io threads and libdispatch workers allocate and free.
+- **rate**: 1 hang in about 33 runs of that binary under the sanitizer (the hung pass; 6 other full
+  passes; 2 re-runs; 25 back-to-back runs on 2026-10-02 at load ≈ 12, all GREEN, 51 tests each).
+  Load-dependent and intermittent.
+- **mitigation (applied)**: `sanitizers.sh` bounds every crate (`SAN_CRATE_TIMEOUT_S`, default 1200 s;
+  2400 s for MSan): past it the process tree is killed by explicit PIDs and the crate is RED with "HANG
+  after Ns (no verdict)", the pass continues, and a hang can never be GREEN (G-SAN-SELF arm).
+- **proposed fix (not applied)**: (a) under `cfg(rustty_asan)` on macOS, have `Command::startPosix`
+  spawn with `posix_spawn` instead of `fork` (no atfork handlers run in the parent). That is a product
+  code change behind a sanitizer cfg and drifts from the reference's `fork`, so it needs a ruling;
+  (b) test-only: run `macos_window_host` with `--test-threads=1` under the sanitizer lanes, which
+  narrows the window (fewer concurrent frees) but cannot close it (each surface's own render/io threads
+  and libdispatch still free during the fork), so it is not clearly correct and was not applied.

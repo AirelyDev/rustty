@@ -68,7 +68,8 @@
 #       classifier and cross-check over canned logs.
 #
 # EXIT CONTRACT (ci.sh): 0 GREEN ; 1 RED (a sanitizer finding, a test failure,
-# zero tests run, a stale exclusion, an unverified ASan claim) ; 3 BLOCKED (no
+# zero tests run, a stale exclusion, an unverified ASan claim, a crate that
+# HANGs past SAN_CRATE_TIMEOUT_S, see crate_timeout) ; 3 BLOCKED (no
 # nightly, wrong host OS for the sanitizer, a crate that failed to BUILD, or the
 # disk floor reached). RED dominates BLOCKED. A build failure is BLOCKED, never
 # GREEN (design §B "common rules").
@@ -187,8 +188,43 @@ tests_ran() {
          for (i = 1; i <= NF; i++) if ($i == "passed;" || $i == "failed;") s += $(i - 1)
        } END {print s+0}' "$1"
 }
+# ---------------------------------------------------------------------------
+# The per-crate hang bound (P7-W16a fix round 2). A sanitizer runtime can
+# deadlock (ASan's allocator lock around `fork` on macOS: SANITIZER_SUPPRESSIONS.md
+# "Known limits", NEW-FINDINGS N505), and a HARD gate that waits forever gives
+# neither GREEN nor RED. Each crate's build-and-test run is bounded; past the
+# bound its process tree is killed by explicit PIDs and the crate is RED with
+# "HANG after Ns (no verdict)". SAN_CRATE_TIMEOUT_S overrides the default:
+#   asan / lsan / leak / thread / hwaddress: 1200 s, about 4x the slowest crate
+#     measured (rustty-vt, 253-294 s per-crate including its build, on a loaded
+#     Mac, P7-W16a), leaving room for a shared target dir's first crate, which
+#     builds every dependency;
+#   msan: 2400 s (-Zbuild-std rebuilds std for the instrumented target).
+# ---------------------------------------------------------------------------
+HANG_MARK="SANITIZERS-HANG"
+crate_timeout() {  # crate_timeout SAN -> seconds
+  if [ -n "${SAN_CRATE_TIMEOUT_S:-}" ]; then printf '%s' "$SAN_CRATE_TIMEOUT_S"; return; fi
+  case "$1" in msan|memory) printf 2400 ;; *) printf 1200 ;; esac
+}
+# Every descendant of PID, deepest first, then PID itself (explicit PIDs only).
+tree_pids() {
+  local c
+  for c in $(pgrep -P "$1" 2>/dev/null); do tree_pids "$c"; done
+  printf '%s\n' "$1"
+}
+kill_tree() {  # kill_tree PID: TERM the whole tree, then KILL what is left
+  local pids p
+  pids="$(tree_pids "$1")"
+  for p in $pids; do kill -TERM "$p" 2>/dev/null; done
+  sleep 2
+  for p in $pids; do kill -0 "$p" 2>/dev/null && kill -KILL "$p" 2>/dev/null; done
+  return 0
+}
+
 classify() {
   local log="$1" rc="$2" ran
+  # A hang has no verdict: RED, before anything the log may also hold.
+  if grep -q "^$HANG_MARK after " "$log"; then echo HANG; return; fi
   if grep -qE "$FINDING_RE" "$log"; then echo FINDING; return; fi
   ran="$(tests_ran "$log")"
   if [ "$rc" -ne 0 ]; then
@@ -382,9 +418,26 @@ run_crate() {
   if [ -n "$feats" ]; then cargo_args+=(--features "$feats"); fi
   if [ -n "$build_std" ]; then cargo_args+=("$build_std"); fi
   mkdir -p "$(dirname "$log")"
+  # The hang bound (fix round 2): the crate's whole build-and-test run gets
+  # SAN_CRATE_TIMEOUT_S seconds; past it the process tree is killed by PID,
+  # the log gets a HANG line, and classify reports HANG (RED), never GREEN.
+  local bound
+  bound="$(crate_timeout "$san")"
   # shellcheck disable=SC2086  # FILTER is an intentional word list (libtest takes several)
   env "${envs[@]}" RUSTFLAGS="$rflags" RUSTDOCFLAGS="$rflags" CARGO_TARGET_DIR="$td" \
-    cargo +nightly test "${cargo_args[@]}" -- $filter >"$log" 2>&1
+    cargo +nightly test "${cargo_args[@]}" -- $filter >"$log" 2>&1 &
+  local cpid=$! waited=0
+  while kill -0 "$cpid" 2>/dev/null; do
+    if [ "$waited" -ge "$bound" ]; then
+      kill_tree "$cpid"
+      wait "$cpid" 2>/dev/null
+      printf '\n%s after %ss (no verdict)\n' "$HANG_MARK" "$bound" >>"$log"
+      break
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  wait "$cpid" 2>/dev/null
   rc=$?
   if [ -n "$san_rt_base" ]; then
     local rtf
@@ -424,6 +477,7 @@ legacy_main() {
     # number of tests EXECUTED, summed over every target's `N passed; M failed`
     # (tests_ran; ignored tests do not count since P7-W14); zero is RED.
     case "$v" in
+      HANG) echo "  ❌ $s: $(grep -m1 "^$HANG_MARK after " "$log" | sed "s/^$HANG_MARK/HANG/")"; fail=1 ;;
       FINDING) echo "  ❌ $s: SANITIZER FINDING"; grep -E 'ERROR:|SUMMARY:|runtime error:' "$log" | head -4; fail=1 ;;
       BUILD|FAIL) echo "  ⚠️  $s: build/test failed rc=$rc — $(grep -m1 -iE 'error(\[|:)' "$log" | head -c 100)"; fail=1 ;;
       VACUOUS) echo "  ❌ $s: VACUOUS — 0 tests ran (filter '${FILTER:-<none>}' matched nothing); a green over an empty set is not a pass"; fail=1 ;;
@@ -576,6 +630,10 @@ matrix_run() {  # matrix_run SAN FILTER SPEC...
         echo "  ❌ $san $spec: tests FAILED under the sanitizer, rc=$rc ($((t1 - t0))s) — log $log"
         grep -E '^test .* FAILED$|^error: test failed|signal:' "$log" | head -6 | sed 's/^/       /'
         M_ROWS="$M_ROWS$spec|FAIL|$(tests_ran "$log")|$((t1 - t0))"$'\n' ;;
+      HANG)
+        M_RED=1
+        echo "  ❌ $san $spec: $(grep -m1 "^$HANG_MARK after " "$log" | sed "s/^$HANG_MARK/HANG/") — the process tree was killed; log $log"
+        M_ROWS="$M_ROWS$spec|HANG|$(tests_ran "$log")|$((t1 - t0))"$'\n' ;;
       VACUOUS)
         M_RED=1
         echo "  ❌ $san $spec: VACUOUS — 0 tests ran (filter '${filter:-<none>}'); a green over an empty set is not a pass"
@@ -800,6 +858,9 @@ self_test() {
   printf 'running 1 test\n==9==WARNING: MemorySanitizer failed to allocate 0x7fffffffffffffff bytes\ntest result: ok. 1 passed; 0 failed; 0 ignored\n' >"$st/logs/oominfo.log"
   ck green 0 "GREEN 5"; ck msan 77 FINDING; ck leak 23 FINDING; ck oominfo 0 "GREEN 1"
   ck allignored 0 VACUOUS; ck crash 101 FAIL
+  # A hang is RED even when the part of the log written before it looks clean.
+  printf 'running 4 tests\ntest result: ok. 4 passed; 0 failed; 0 ignored\n\nSANITIZERS-HANG after 9s (no verdict)\n' >"$st/logs/hang.log"
+  ck hang 0 HANG; ck hang 143 HANG
   # --- arm D: drop_target removes only san-<san> and san-<san>-<crate> dirs ---
   mkdir -p "$st/t/san-asan" "$st/t/san-asan-foo" "$st/t/san-other"
   if ( SAN_TARGET_ROOT="$st/t"; drop_target "$st" ) 2>/dev/null; then echo "  FAIL D drop_target accepted a non-sanitizer dir"; fail=1
@@ -990,6 +1051,12 @@ mod tests {
         let v: Vec<u8> = (0u8..16).collect();
         assert_eq!(v.iter().map(|&b| b as u32).sum::<u32>(), 120);
     }
+
+    // The hang arm: sleeps far past the arm's bound, so only the bound ends it.
+    #[test]
+    fn slow_hang() {
+        std::thread::sleep(std::time::Duration::from_secs(900));
+    }
 }
 
 /// LeakSanitizer's opt-out hook, only with the `hook` feature (arm "A2 opt-out
@@ -1085,7 +1152,7 @@ RS
   local sroot="$st/target"
   arm() {  # arm NAME SAN FILTER WANT(RED|GREEN) MUST_GREP [SPEC]
     local name="$1" san="$2" filter="$3" want="$4" must="$5" spec="${6:-san-selftest}" o r
-    o="$(SAN_PER_CRATE_TARGET="${ARM_PER_CRATE:-0}" SAN_MANIFEST_PATH="$cr/Cargo.toml" SAN_TARGET_ROOT="$sroot" SAN_LOG_ROOT="$st/slogs-$name" SAN_MIN_FREE_GB=0 \
+    o="$(SAN_CRATE_TIMEOUT_S="${ARM_TIMEOUT:-}" SAN_PER_CRATE_TARGET="${ARM_PER_CRATE:-0}" SAN_MANIFEST_PATH="$cr/Cargo.toml" SAN_TARGET_ROOT="$sroot" SAN_LOG_ROOT="$st/slogs-$name" SAN_MIN_FREE_GB=0 \
          M_RED=0 M_BLOCKED=0 M_TOTAL=0 M_ROWS="" bash -c '. "$0" --source-only; matrix_run "$1" "$2" "$3"; matrix_summary "$1"; gate_verdict SELF 0' \
          "$GATES_DIR/sanitizers.sh" "$san" "$filter" "$spec" 2>&1)"; r=$?
     local okv=0
@@ -1103,6 +1170,13 @@ RS
   ARM_PER_CRATE=1 arm "A0 per-crate target dirs (--per-crate-target)" asan "tests::defect_heap_overflow --exact" RED "per-crate target dirs"
   if [ -d "$sroot/san-asan-san-selftest" ]; then echo "  FAIL A0: the per-crate target dir outlived its crate"; fail=1; fi
   arm "B  empty filter" asan "no_such_test_anywhere" RED "VACUOUS"
+  # The hang bound: a test that never finishes is RED (HANG), the pass goes
+  # on, and nothing of the killed tree is left running. 60 s covers the
+  # synthetic crate's instrumented build on a loaded host; the test sleeps 900.
+  ARM_TIMEOUT=60 arm "B  hang past the bound" asan "tests::slow_hang --exact" RED "HANG after 60s \\(no verdict\\)"
+  if pgrep -f 'tests::slow_hang' >/dev/null 2>&1; then
+    echo "  FAIL B  the killed test is still running: $(pgrep -f 'tests::slow_hang' | tr '\n' ' ')"; fail=1
+  else echo "  ok   B  the hung test's process tree is gone after the kill"; fi
   # BUILD: a crate that does not compile is BLOCKED (exit 3), never GREEN or RED.
   local bc="$st/badcrate"
   mkdir -p "$bc/src"
