@@ -362,6 +362,37 @@ fn golden_renderer(cols: CellCountInt, rows: CellCountInt) -> Option<Renderer> {
     Some(Renderer::init(Global, opts).expect("Renderer::init (Metal probed above)"))
 }
 
+/// N503 (G-LSAN on macOS, P7-W16a): the macOS twin of N411's Linux helper.
+/// Frees a grid built by `test_font_grid_and_size` or `test_renderer`: the
+/// grid's `deinit`, the box, then the library (the order `shared_grid`'s own
+/// tests use).
+fn free_test_font_grid(font_grid: *mut SharedGrid) {
+    // SAFETY: `font_grid` came from `Box::leak` in `test_font_grid_and_size` /
+    // `test_renderer`, and its only borrower (the renderer) is torn down.
+    let mut grid = unsafe { Box::from_raw(font_grid) };
+    let mut lib = grid
+        .resolver
+        .collection
+        .load_options
+        .as_ref()
+        .expect("the test grid sets the load options")
+        .library;
+    grid.deinit();
+    drop(grid);
+    lib.deinit();
+}
+
+/// `threadExit` + `deinit` for a renderer built on a test grid (every
+/// `test_renderer` / `golden_renderer`), then the grid itself: the reference
+/// tests' `defer` order, renderer before the grid it borrows. The value is
+/// dropped by its owner afterwards, as `RendererBox` does.
+fn deinit_test_renderer(r: &mut Renderer) {
+    let font_grid = r.font_grid;
+    r.thread_exit();
+    r.deinit();
+    free_test_font_grid(font_grid);
+}
+
 mod display_link;
 mod golden;
 mod health;
@@ -466,6 +497,7 @@ fn rebuild_cells_fills_bg_fg_cursor() {
     assert_eq!(r.uniforms.cursor_pos, [2, 0]);
 
     t.deinit(Global.into());
+    deinit_test_renderer(&mut r);
 }
 
 // 5beb94c16: the preedit glyph is rendered with `font-thicken` and
@@ -538,6 +570,7 @@ fn preedit_glyph_uses_font_thicken() {
     );
 
     t.deinit(Global.into());
+    deinit_test_renderer(&mut r);
 }
 
 #[test]
@@ -563,6 +596,7 @@ fn rebuild_overlay_builds_and_clears() {
     // and clearing removes it
     r.rebuild_overlay(&[]).unwrap();
     assert!(r.overlay.is_none());
+    deinit_test_renderer(&mut r);
 }
 
 // ===================================================================
@@ -622,6 +656,7 @@ fn update_frame_fills_cells_uniforms_scrollbar() {
     assert!(r.scrollbar.eql(expected_scrollbar));
 
     t.deinit(Global.into());
+    deinit_test_renderer(&mut r);
 }
 
 // Parity S115-F1: `defer self.font_shaper.endFrame()` is updateFrame's
@@ -683,6 +718,7 @@ fn update_frame_ends_the_shaper_frame_on_the_sync_output_return() {
     assert_eq!(0, r.font_shaper.release_pool_len());
 
     t.deinit(Global.into());
+    deinit_test_renderer(&mut r);
 }
 
 // 9e6e2ea96 — renderer: reset terminal state cleanup counter. The frame
@@ -722,6 +758,7 @@ fn update_frame_resets_terminal_state_frame_count() {
     assert_eq!(r.terminal_state_frame_count, 2);
 
     t.deinit(Global.into());
+    deinit_test_renderer(&mut r);
 }
 
 // §F.2(2) — direct: `screen_size`/`grid_padding`/`projection_matrix`.
@@ -754,6 +791,7 @@ fn update_screen_size_uniforms_projection() {
         -1.0 * r.size.padding.top as f32,
     );
     assert_eq!(r.uniforms.projection_matrix, expected);
+    deinit_test_renderer(&mut r);
 }
 
 // §F.2(3) — direct: `cell_size`.
@@ -836,6 +874,7 @@ fn update_custom_shader_uniforms_from_state_cell_relative_colors() {
     );
 
     t.deinit(Global.into());
+    deinit_test_renderer(&mut r);
 }
 
 #[test]
@@ -852,6 +891,7 @@ fn update_font_grid_uniforms_cell_size() {
             r.grid_metrics.cell_height as f32
         ]
     );
+    deinit_test_renderer(&mut r);
 }
 
 // §F.2(4) — direct: config → bg-image-buffer mapping + the modified counter.
@@ -869,6 +909,7 @@ fn update_bg_image_buffer_maps_config() {
     assert_eq!(r.bg_image_buffer.info.fit, BgImageInfoFit::Cover);
     assert!(r.bg_image_buffer.info.repeat);
     assert_eq!(r.bg_image_buffer_modified, 1);
+    deinit_test_renderer(&mut r);
 }
 
 // §F.2(5) — direct: custom-shader-from-state palette/colors/cursor.
@@ -925,6 +966,7 @@ fn update_custom_shader_uniforms_from_state_palette() {
     );
 
     t.deinit(Global.into());
+    deinit_test_renderer(&mut r);
 }
 
 // §F.2(6) — direct: per-frame timing/resolution/focus. Per §RISK-7 the
@@ -957,6 +999,7 @@ fn update_custom_shader_uniforms_for_frame_timing() {
     assert_eq!(r.custom_shader_uniforms.focus, 1);
     assert!(r.first_frame_time.is_some());
     assert!(r.last_frame_time.is_some());
+    deinit_test_renderer(&mut r);
 }
 
 // UD76 (R13, task R13-C2): a saturated padding (UD71, stored by
@@ -992,6 +1035,7 @@ fn custom_shader_cursor_uniform_saturates_with_a_saturated_padding() {
     let c = r.custom_shader_uniforms.current_cursor.0;
     assert_eq!(u32::MAX as f32, c[0], "x saturates: {c:?}");
     assert!(c[1] >= u32::MAX as f32, "y saturates: {c:?}");
+    deinit_test_renderer(&mut r);
 }
 
 // RESIZE (§5): `set_screen_size` stores the new padding + recomputes the
@@ -1030,6 +1074,7 @@ fn set_screen_size_updates_padding_and_uniforms() {
         -1.0 * r.size.padding.top as f32,
     );
     assert_eq!(r.uniforms.projection_matrix, expected);
+    deinit_test_renderer(&mut r);
 }
 
 // RESIZE (§5): `set_font_grid` swaps the grid handle, resets each frame's
@@ -1064,6 +1109,7 @@ fn set_font_grid_swaps_grid_and_resets_modified() {
         [m.cell_width as f32, m.cell_height as f32]
     );
     assert_eq!(r.terminal_state.dirty, Dirty::Full); // mark_dirty
+    deinit_test_renderer(&mut r);
 }
 
 // CONFIG-SWAP (§5): `change_config` reinits the shaper, updates the
@@ -1086,4 +1132,5 @@ fn change_config_updates_blending_uniforms() {
     assert!(r.reinitialize_shaders); // blending changed
     assert_eq!(r.target_config_modified, 1); // +%= 1
     assert_eq!(r.terminal_state.dirty, Dirty::Full);
+    deinit_test_renderer(&mut r);
 }

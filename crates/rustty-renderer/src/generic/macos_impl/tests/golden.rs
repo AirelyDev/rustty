@@ -70,8 +70,7 @@ fn draw_frame_bounded_pump() {
         assert_eq!(r.health.load(), crate::Health::Healthy);
     }
     // deinit path clean.
-    r.thread_exit();
-    r.deinit();
+    deinit_test_renderer(&mut r);
 }
 
 #[test]
@@ -166,6 +165,7 @@ fn golden_renders_cursor_fg_bg() {
     );
 
     t.deinit(Global.into());
+    deinit_test_renderer(&mut r);
 }
 
 // W5 HEADLESS KAT (`W5_DESIGN §5`): prove the display-callback trampoline
@@ -258,8 +258,7 @@ fn loop_enter_display_callback_draws_a_frame() {
         "sync present must set the layer contents"
     );
 
-    r.thread_exit();
-    r.deinit();
+    deinit_test_renderer(&mut r);
     t.deinit(Global.into());
 }
 
@@ -298,8 +297,7 @@ fn deinit_clears_the_layer_display_callback() {
     // The host view's retention of the backing CALayer, outliving the renderer.
     let host_retained = r.api.layer().unwrap().layer.clone();
 
-    r.thread_exit();
-    r.deinit();
+    deinit_test_renderer(&mut r);
 
     assert!(
         !r.api.has_display_ctx(),
@@ -495,6 +493,7 @@ fn golden_presents_frame_on_screen() {
     );
 
     t.deinit(Global.into());
+    deinit_test_renderer(&mut r);
 }
 
 // T3 (RENDERER_BG_IMAGE_DESIGN §4) — the offscreen proof that the whole
@@ -577,6 +576,7 @@ fn golden_renders_background_image() {
         // Sample the center of an empty cell on the bottom row (grid (5,2)).
         let out = px_at(&px, w, 5 * cw + cw / 2, 2 * ch + ch / 2);
         t.deinit(Global.into());
+        deinit_test_renderer(&mut r);
         Some(out)
     }
 
@@ -727,6 +727,7 @@ fn golden_renders_custom_shader() {
 
     t.deinit(Global.into());
     let _ = std::fs::remove_file(&path);
+    deinit_test_renderer(&mut r);
 }
 
 // RENDERER_KITTY_IMAGE_PATH_DESIGN §4 — the offscreen APC-driven proof that
@@ -820,4 +821,5 @@ fn kitty_image_pixel_path() {
     );
 
     t.deinit(Global.into());
+    deinit_test_renderer(&mut r);
 }

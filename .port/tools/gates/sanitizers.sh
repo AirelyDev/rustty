@@ -857,6 +857,8 @@ RS
   xe "an expected-absent row that matches nothing is stale (RED)" 1 "matches no Miri-excepted test (stale)"
   xc "${R}test b::tests::ran ... ok\ntest a::tests::ignored_one ... ok\ntest a::tests::absent_one ... ok\n" ""
   xe "an ok in another module (b::tests::ran) does not satisfy a::ran (module-path match)" 1 "a::ran (src/a.rs): Miri-excepted but absent"
+  xc "${R}test a::tests::ran ... ok\nhellotest a::tests::ignored_one ... ok\ntest a::tests::absent_one ... ok\n" ""
+  xe "a result line prefixed by a test's unterminated stdout still counts" 0 "3 Miri-excepted test(s); 3 ran and passed"
   # A same-named test in a CHILD file (a/b.rs -> a::b) or a sibling inline mod
   # of a.rs must not satisfy a::tests::ran: only the inline mods enclosing the
   # annotation in its own file may sit between the file module and the fn.

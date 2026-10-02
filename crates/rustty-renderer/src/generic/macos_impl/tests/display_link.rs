@@ -28,8 +28,7 @@ mod display_link_sync {
         let draw_now = Async::init().expect("xev Async");
         r.sync_display_link(None, Some(draw_now));
         assert!(r.display_link.is_none());
-        r.thread_exit();
-        r.deinit();
+        deinit_test_renderer(&mut r);
     }
 
     /// `const callback = draw_now orelse return;` — a sync with no
@@ -50,8 +49,7 @@ mod display_link_sync {
         // barred while there is nothing to call back into.
         r.sync_display_link(Some(1), None);
         assert!(r.display_link.is_none());
-        r.thread_exit();
-        r.deinit();
+        deinit_test_renderer(&mut r);
     }
 
     /// `self.visible = visible;` — the field the pre-refactor port dropped.
@@ -77,8 +75,7 @@ mod display_link_sync {
 
         r.set_visible(true);
         assert!(r.visible);
-        r.thread_exit();
-        r.deinit();
+        deinit_test_renderer(&mut r);
     }
 
     /// PORT-SIDE REGRESSION (`97f57edcc` + `6688aa072`, phase-6): the
@@ -110,8 +107,7 @@ mod display_link_sync {
             // fallback-rendering arm, covered by the guard tests above.
             // R14: a skip here is visible, and a failure under
             // `RUSTTY_REQUIRE_DISPLAY=1`.
-            r.thread_exit();
-            r.deinit();
+            deinit_test_renderer(&mut r);
             crate::metal::test_support::require_display_or_skip(
                 "sync_parks_the_link_while_idle_and_runs_it_while_dirty",
                 &"createWithActiveCGDisplays failed (no active display)",
@@ -163,8 +159,7 @@ mod display_link_sync {
         r.set_visible(true);
         assert_eq!(running(&r), Some(true));
 
-        r.thread_exit();
-        r.deinit();
+        deinit_test_renderer(&mut r);
     }
 
     /// UD362 fix round 3, gap (b): a no-redraw draw decides, under the
@@ -185,8 +180,7 @@ mod display_link_sync {
         let draw_now = Async::init().expect("xev Async");
         r.sync_display_link(None, Some(draw_now));
         if r.display_link.is_none() {
-            r.thread_exit();
-            r.deinit();
+            deinit_test_renderer(&mut r);
             crate::metal::test_support::require_display_or_skip(
                 "owed_report_refused_while_the_link_parks_is_not_stranded",
                 &"createWithActiveCGDisplays failed (no active display)",
@@ -248,8 +242,7 @@ mod display_link_sync {
         );
 
         r.health_report.arm(None);
-        r.thread_exit();
-        r.deinit();
+        deinit_test_renderer(&mut r);
     }
 }
 
@@ -386,7 +379,6 @@ mod display_link_draw_mutex {
             main_draw.get(),
             "a sync draw must take draw_mutex between the unlock and the resync"
         );
-        r.thread_exit();
-        r.deinit();
+        deinit_test_renderer(&mut r);
     }
 }

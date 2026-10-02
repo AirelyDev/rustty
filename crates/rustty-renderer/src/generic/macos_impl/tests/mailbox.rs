@@ -47,6 +47,8 @@ mod surface_mailbox_routing {
         );
         let scrollbar = r.scrollbar;
         r.draw_frame(true).unwrap();
+        // N503: the reference's `defer t.deinit(alloc)`.
+        t.deinit(Global.into());
         scrollbar
     }
 
@@ -78,6 +80,7 @@ mod surface_mailbox_routing {
                 MailboxTimeout::Instant
             )]
         );
+        deinit_test_renderer(&mut r);
     }
 
     /// generic.zig:1449-1456 — the `drawFrame` `defer` pushes `.scrollbar`
@@ -104,6 +107,7 @@ mod surface_mailbox_routing {
             !r.scrollbar_dirty,
             "a landed scrollbar push must clear scrollbar_dirty"
         );
+        deinit_test_renderer(&mut r);
     }
 
     /// The other arm of the same `if (... > 0)`: "Fail instantly if the
@@ -131,5 +135,6 @@ mod surface_mailbox_routing {
             r.scrollbar_dirty,
             "a refused scrollbar push must keep scrollbar_dirty set"
         );
+        deinit_test_renderer(&mut r);
     }
 }

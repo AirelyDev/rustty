@@ -4,7 +4,7 @@
 #
 # Same rules as lsan.supp: every entry is a THIRD-PARTY allocation (here: Apple
 # system libraries), each with a row in .port/phase-2/SANITIZER_SUPPRESSIONS.md
-# (S3-S14) giving the reason and evidence, and a WHY comment directly above it
+# (S3-S17) giving the reason and evidence, and a WHY comment directly above it
 # (D6 rule c). A leak in Rustty code is never suppressed.
 #
 # Why macOS needs its own file: LeakSanitizer on Darwin takes its roots from
@@ -15,7 +15,7 @@
 # data, and SkyLight state reached from dispatch sources, are not among them,
 # so those blocks are reported as leaked while their owners are alive. Apple's
 # `leaks` tool, which does see those roots, reports 0 leaks for the same test
-# binaries built natively (SANITIZER_SUPPRESSIONS.md, S3-S14). Each pattern below
+# binaries built natively (SANITIZER_SUPPRESSIONS.md, S3-S17). Each pattern below
 # names the allocating system function, so an object that Rustty allocates and
 # fails to release (its stack runs through our code, or through
 # _objc_rootAllocWithZone under our call) is still reported: G-LSAN's first
@@ -79,3 +79,22 @@ leak:TCGFontCache::CopyFont
 # data until thread exit; Apple's `leaks` lists no CA::Transaction for the same
 # test binary (rustty-apprt-c macos_window_host) built natively.
 leak:CA::Transaction::create
+# S15: CoreGraphics' ColorSync transform cache (CGColorSyncTransformCacheGetRetained,
+# backed by libcache), filled the first time a colour conversion between two
+# colour spaces runs and held for the process. Apple's `leaks` reports 0 for
+# rustty-renderer's tests built natively.
+leak:CGColorSyncTransformCacheGetRetained
+# S16: CoreGraphics' cached vImage converter for a colour conversion
+# (CGCMSConverterCreateCachedCGvImageConverter, "Cached" in its name), kept with
+# the S15 transform; same evidence as S15.
+leak:CGCMSConverterCreateCachedCGvImageConverter
+# S17: the private dispatch queue a Metal command queue creates inside its own
+# init (-[_MTLCommandQueue initWithDevice:descriptor:] ->
+# _dispatch_lane_create_with_target). libdispatch disposes of it asynchronously
+# once the command queue is released, so a process that exits right after
+# freeing its renderer can still hold it at the scan (rustty-apprt-c's
+# init-fault children; timing-dependent). Only allocations made INSIDE that
+# init: a command queue Rustty fails to release is allocated by
+# -[AGX...Device newCommandQueue]'s alloc, outside it, and stays reported.
+# Apple's `leaks` on each init-fault child, run directly: 0 leaks (9 runs).
+leak:-[_MTLCommandQueue initWithDevice:descriptor:]

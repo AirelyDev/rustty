@@ -94,6 +94,14 @@ custom reimplementation:
   crash, inspector).
 - **FFI leak detection → Linux CI** (LSan/valgrind): unavailable on arm64 macOS, so
   deferred to the Linux CI box — documented, never skipped.
+  *Amended 2026-10-02 (P7-W16a, N501):* "unavailable on arm64 macOS" is no longer true
+  for LSan. The standalone `-Zsanitizer=leak` is still rejected for aarch64-apple-darwin
+  and Apple clang's ASan runtime has no leak checker, but rustc's own ASan runtime runs
+  LeakSanitizer there with `detect_leaks=1`, so G-LSAN (`sanitizers.sh --gate lsan`) runs
+  on macOS as well as Linux (its Darwin suppressions are in
+  `.port/phase-2/SANITIZER_SUPPRESSIONS.md`). Valgrind is still Linux-only. The rule's
+  substance stands: FFI leak detection is a sanitizer/valgrind lane, documented, never
+  skipped.
 - The tracking-allocator approach is **removed** — it was a wrong default chosen
   only because Miri appeared uninstalled. Gate runner: `.port/tools/gates/check_leaks.sh`.
 - Miri is slow (interpreted): it gates per-crate completion + CI; fast native

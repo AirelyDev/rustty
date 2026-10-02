@@ -444,6 +444,11 @@ impl<T> ThreadSharedBox<T> {
     unsafe fn dealloc(&self) {
         drop(unsafe { Box::from_raw(self.0.cast::<MaybeUninit<T>>()) });
     }
+    /// N502: drop the block normally and free it (`rustty_core`'s
+    /// `ThreadSharedBox::drop_and_dealloc`), after its explicit teardown.
+    unsafe fn drop_and_dealloc(&self) {
+        drop(unsafe { Box::from_raw(self.0) });
+    }
 }
 
 struct SurfaceBoxed {
@@ -1703,6 +1708,151 @@ fn main() {
         "ud367_ready_in_exec" => run_ud367(Ud367Shape::ReadyInExec),
         "ud368_size_before_lock" => run_ud368(false),
         "ud368_size_under_lock" => run_ud368(true),
+        // ---- N502 (P7-W16a): drop the render-thread and state blocks ----
+        "n502_teardown_glueless_leak" => run_n502(false),
+        "n502_teardown_drop_and_dealloc" => run_n502(true),
         other => panic!("unknown candidate {other}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// N502 (P7-W16a): `Surface::deinit` tore the render-thread block and the
+// renderer-state block down with their explicit `deinit` and then freed them
+// WITHOUT drop glue, so the Rust-owned heap only `Drop` frees leaked with every
+// closed surface (G-LSAN on macOS): the xev loop's boxed
+// `thread_pool_completions` queue, the thread's `DrawMutex` handle (an `Arc`
+// clone of the renderer's), and the state's D4 `HandoffPark` std
+// `Mutex`/`Condvar` (boxed pthread objects on Darwin). The fix drops each block
+// after its teardown (`drop_and_dealloc`).
+//
+// The model keeps the shapes that matter for soundness: the render thread
+// reaches both blocks only through the raw roots the surface hands it, the
+// main thread forms `&mut` to the surface (which holds the boxes' pointers
+// only) while that thread runs, and the teardown runs on the main thread
+// after the join, inside a `&mut self` method (the shipped `deinit`).
+// ---------------------------------------------------------------------------
+
+/// The backend loop: fds closed by `deinit`; a port-owned box only `Drop` frees.
+struct N502Loop {
+    fd: i32,
+    thread_pool_completions: Box<[u64; 4]>,
+}
+
+/// The render thread's block (`renderer_seam::Thread`).
+struct N502Thread {
+    loop_: N502Loop,
+    /// `Mailbox.create(alloc)` / `destroy`: a raw-owned allocation.
+    mailbox: *mut u64,
+    /// N437's handle to the renderer's draw mutex.
+    draw_mutex: std::sync::Arc<std::sync::Mutex<u64>>,
+    ticks: u64,
+}
+
+impl N502Thread {
+    /// The reference's `Thread.deinit`: the loop's fds, the mailbox.
+    fn deinit(&mut self) {
+        self.loop_.fd = -1;
+        // SAFETY: `mailbox` came from `Box::into_raw`; freed once, here.
+        unsafe { drop(Box::from_raw(self.mailbox)) };
+    }
+}
+
+/// The renderer-state block (`rustty_renderer::state::State`).
+struct N502State {
+    mutex: *mut std::sync::Mutex<()>,
+    preedit: Option<Vec<u32>>,
+    demand: AtomicU32,
+    handoff_park: (std::sync::Mutex<()>, std::sync::Condvar),
+}
+
+struct N502Surface {
+    size: (u32, u32),
+    renderer_draw_mutex: std::sync::Arc<std::sync::Mutex<u64>>,
+    renderer_thread: ThreadSharedBox<N502Thread>,
+    renderer_state: ThreadSharedBox<N502State>,
+}
+
+impl N502Surface {
+    /// The shipped `Surface::deinit` order for these two blocks.
+    fn deinit(&mut self, drop_blocks: bool) {
+        unsafe {
+            (*self.renderer_thread.as_ptr()).deinit();
+            if drop_blocks {
+                self.renderer_thread.drop_and_dealloc();
+            } else {
+                self.renderer_thread.dealloc();
+            }
+            if let Some(p) = (*self.renderer_state.as_ptr()).preedit.take() {
+                drop(p);
+            }
+            drop(Box::from_raw((*self.renderer_state.as_ptr()).mutex));
+            if drop_blocks {
+                self.renderer_state.drop_and_dealloc();
+            } else {
+                self.renderer_state.dealloc();
+            }
+        }
+    }
+}
+
+struct N502Roots {
+    thread: *mut N502Thread,
+    state: *mut N502State,
+}
+unsafe impl Send for N502Roots {}
+
+fn run_n502(drop_blocks: bool) {
+    let renderer_draw_mutex = std::sync::Arc::new(std::sync::Mutex::new(0u64));
+    let thread = N502Thread {
+        loop_: N502Loop {
+            fd: 3,
+            thread_pool_completions: Box::new([0; 4]),
+        },
+        mailbox: Box::into_raw(Box::new(0u64)),
+        draw_mutex: renderer_draw_mutex.clone(),
+        ticks: 0,
+    };
+    let state = N502State {
+        mutex: Box::into_raw(Box::new(std::sync::Mutex::new(()))),
+        preedit: Some(vec![0x61]),
+        demand: AtomicU32::new(0),
+        handoff_park: (std::sync::Mutex::new(()), std::sync::Condvar::new()),
+    };
+    let mut surface = Box::new(N502Surface {
+        size: (1, 1),
+        renderer_draw_mutex,
+        renderer_thread: ThreadSharedBox::new(thread),
+        renderer_state: ThreadSharedBox::new(state),
+    });
+    let roots = N502Roots {
+        thread: surface.renderer_thread.as_ptr(),
+        state: surface.renderer_state.as_ptr(),
+    };
+    let render = std::thread::spawn(move || {
+        let r = roots;
+        for _ in 0..3 {
+            unsafe {
+                // Narrow per-field places through the raw roots only.
+                (*r.thread).ticks += 1;
+                (*r.thread).loop_.thread_pool_completions[0] += 1;
+                *(*r.thread).mailbox += 1;
+                *(*r.thread).draw_mutex.lock().unwrap() += 1;
+                (*r.state).demand.fetch_add(1, Ordering::SeqCst);
+                let _g = (*r.state).handoff_park.0.lock().unwrap();
+                (*r.state).handoff_park.1.notify_all();
+                let _m = (*(*r.state).mutex).lock().unwrap();
+            }
+        }
+    });
+    // Main-thread whole-surface retags while the render thread runs.
+    for i in 0..3 {
+        let s: &mut N502Surface = &mut surface;
+        s.size = (i, i);
+        *s.renderer_draw_mutex.lock().unwrap() += 1;
+    }
+    render.join().unwrap();
+    surface.deinit(drop_blocks);
+    // The renderer's own handle, as `RendererBox::dealloc_after_deinit` drops it.
+    assert_eq!(*surface.renderer_draw_mutex.lock().unwrap(), 6);
+    drop(surface);
 }

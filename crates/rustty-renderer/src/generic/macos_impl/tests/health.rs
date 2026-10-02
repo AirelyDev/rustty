@@ -512,7 +512,6 @@ mod metal_health_push_deadlocks {
         r.draw_frame(false).expect("idle draw");
         assert_eq!(index(&r), after);
 
-        r.thread_exit();
-        r.deinit();
+        deinit_test_renderer(&mut r);
     }
 }
