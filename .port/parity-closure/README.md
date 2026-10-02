@@ -59,6 +59,7 @@ pin), G-P2-SELF, G-KAITAI (now HARD).
 | G-SAN-SELF | HARD | everywhere (needs nightly) | a synthetic crate's heap overflow, leak and uninitialized read are RED under ASan, LSan and MSan (the last two on Linux only), a clean control GREEN, a filter matching nothing a vacuous RED; plus the classifier, cross-check, `NO_TESTS_ON` and BLOCKED arms over fixtures |
 | G-ASAN | HARD (`--fast` skips it) | macOS and Linux | AddressSanitizer over every workspace member's tests plus the `rustty-vt:wuffs` lane, then the cross-check that every Miri-excepted test (468) ran and passed, or is on the per-OS expected-absent list |
 | G-LSAN | HARD (`--fast` skips it) | Linux; BLOCKED elsewhere | ASan with `detect_leaks=1`, the same scope plus the GTK apprt and Flatpak feature lanes; suppressions only through `.port/phase-2/SANITIZER_SUPPRESSIONS.md` / `lsan.supp` (two, both Mesa) |
+| G-HWASAN (P7-W16b) | HARD (`--fast` skips it) | aarch64 Linux (rvm); BLOCKED elsewhere | HWAddressSanitizer (`-Zbuild-std`, tagged globals, lld) with our C/C++ instrumented, over G-ASAN's scope plus the GTK and Flatpak lanes, minus `xtask` (H1), and the same Miri-exception cross-check. Its pointer tags catch an access landing inside another live block, which ASan's redzones miss (G-SAN-SELF A4). No hosted job yet (V31) |
 | G-MSAN | HARD (`--fast` skips it) | Linux; BLOCKED elsewhere | MemorySanitizer with `-Zbuild-std` and our C/C++ instrumented, over an allow-list of 59 members (rustty-renderer with its EGL/GL/glslang test modules skipped by name); 2 excluded with reasons (glslang-sys, xtask) |
 
 In ci.yml's `ci` job the three report BLOCKED (`RUSTTY_SANITIZERS_OWN_JOB`), naming the new `sanitizers`
@@ -128,7 +129,8 @@ Code gaps left after the final triage, none a ledger row:
   (ASan sees its heap through the allocator interceptors, not its own loads and stores), and G-MSAN
   excludes `glslang-sys` and `xtask` and skips `rustty-renderer`'s EGL/GL/glslang test modules. Both are in
   `.port/phase-2/SANITIZER_SUPPRESSIONS.md` "Known limits". TSan (G-TSAN) and the Miri-on-nextest
-  work are later steps of the same design.
+  work are later steps of the same design. G-HWASAN (P7-W16b) instruments that C/C++ on aarch64
+  Linux, but runs on rvm only (V31).
 - **V27–V29**: Phase-7 Miri runs over the 30-minute task bound
   (ENVIRONMENT-BLOCKED on time), with runnable recipes, deferred to P7-W12 T2.
 

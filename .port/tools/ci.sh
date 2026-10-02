@@ -108,11 +108,13 @@
 #                                    CI" FFI-leak note. Its --self-test
 #                                    (G-VALGRIND-SELF) runs on every leg
 #                                    against a fake valgrind and cargo.
-#   G-ASAN / G-LSAN / G-MSAN sanitizers.sh --gate asan|lsan|msan
+#   G-ASAN / G-LSAN / G-MSAN / G-HWASAN sanitizers.sh --gate asan|lsan|msan|hwasan
 #                                    the workspace test suites under
 #                                    AddressSanitizer (macOS + Linux),
 #                                    ASan+LeakSanitizer and MemorySanitizer
-#                                    (Linux; BLOCKED elsewhere), one crate at
+#                                    (Linux; BLOCKED elsewhere) and
+#                                    HWAddressSanitizer (aarch64 Linux; BLOCKED
+#                                    elsewhere), one crate at
 #                                    a time            -> HARD-FAIL.
 #                                    G-ASAN and G-LSAN also check that every
 #                                    Miri-excepted test ran under them (or is
@@ -330,7 +332,7 @@ done
 # Gates skipped by --fast, by id. Deliberately a NAMED list rather than a
 # duration heuristic: a gate that becomes slow should be added here consciously,
 # with the cost written down, not silently dropped because it crossed a timeout.
-FAST_SKIP_IDS=" G4 G4-uni G5 G6 G6c G8 G8b G-ASAN G-LSAN G-MSAN "
+FAST_SKIP_IDS=" G4 G4-uni G5 G6 G6c G8 G8b G-ASAN G-LSAN G-MSAN G-HWASAN "
 
 skip_in_fast() {
   # usage: skip_in_fast <id> ; returns 0 (true) when --fast should skip it
@@ -623,6 +625,14 @@ GATE_REGISTRY=(
   "G-ASAN|HARD|bash $GATES/sanitizers.sh --gate asan"
   "G-LSAN|HARD|bash $GATES/sanitizers.sh --gate lsan"
   "G-MSAN|HARD|bash $GATES/sanitizers.sh --gate msan"
+  # G-HWASAN (P7-W16b, 2026-10-02) — HWAddressSanitizer (-Zbuild-std, tagged
+  # globals, lld; the cc-built C instrumented) over the same scope as G-ASAN,
+  # with the same Miri-exception cross-check. Its pointer tags also catch an
+  # access that lands inside another live object, which ASan's redzones miss.
+  # aarch64 Linux only (rustc rejects hwaddress elsewhere): runs on rvm; on
+  # macOS and x86_64 Linux, including every ci.yml leg, it is BLOCKED naming
+  # the host (no hosted job runs it yet: V31). Hours, so --fast skips it.
+  "G-HWASAN|HARD|bash $GATES/sanitizers.sh --gate hwasan"
   # G-XCF (2026-08-26) — the XCFramework structure/ABI lane, the adapted port
   # of the reference's check-apple-libghostty-vt.nu. Adapted because rustty
   # ships a STATIC ARCHIVE where the reference ships a dylib: no Mach-O dylib

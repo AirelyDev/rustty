@@ -10403,3 +10403,42 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **regression test**: `screen_clone::tests::screen_clone_clone_mode_frees_its_copies_at_teardown` (two
   steps give two full chunks that never grew; teardown and a full run leave none); G-LSAN's `rustty-bench`
   lane is the leak check.
+
+## N504 — G-HWASAN's first run: a C-ABI smoke link, `xtask`'s nested builds, and a cross-check parser defect
+
+- **id**: N504. P7-W16b. **severity**: low (gate and test configuration; no product defect). **state**:
+  CLOSED 2026-10-02.
+- **found**: the first `sanitizers.sh --per-crate-target --gate hwasan` run on rvm (aarch64 Fedora 44,
+  2026-10-02, 77 min): 9,955 tests GREEN over 61 members and three feature lanes, zero HWASan reports, and
+  a RED verdict for three reasons:
+  1. `rustty-apprt-c` `c_abi_smoke_compile_link_run`: the C smoke program did not link
+     (`undefined reference to __hwasan_init`, `__hwasan_tls`, ...): the instrumented cdylib leaves the
+     runtime to the executable, as under ASan (N496 item 4).
+  2. `xtask`: 2 tests failed because 38 nested cargo builds inherited `RUSTFLAGS=-Zsanitizer=hwaddress`
+     without `-Zbuild-std` (`mixing -Zsanitizer will cause an ABI mismatch in crate rustty_util`), the
+     same as G-MSAN's M4.
+  3. the Miri-exception cross-check reported `rustty-cli`
+     `new_window::tests::error_parsing_args_prints_the_zig_error_name` absent. It ran and passed: its
+     result line read `hellotest new_window::tests::error_parsing_args_prints_the_zig_error_name ... ok`,
+     because `pager::tests::pager_default_writer` writes `hello` to the real stdout without a newline
+     (faithful to the reference's test) and the interleaving glued it in front. `san_miri_crosscheck.py`
+     only parsed lines starting with `test `, so the same interleaving could turn G-ASAN or G-LSAN RED.
+- **fix**: (1) `crates/rustty-apprt-c/build.rs` sets `cfg(rustty_hwasan)`, and `tests/smoke.rs` links the
+  smoke with `clang -fsanitize=hwaddress -fuse-ld=lld` under it; clang 22's runtime matches rustc's and
+  the test passes. (2) `xtask` is in `HWASAN_EXCLUDES` with that reason
+  (`.port/phase-2/SANITIZER_SUPPRESSIONS.md` H1). (3) the cross-check finds libtest's result anywhere in
+  the line, the test path restricted to a Rust path; a line glued the other way (`test x ... hellook`)
+  stays unmatched, which is RED, never a false pass.
+- **regression test**: G-SAN-SELF's arm E "a result line with another test's unterminated stdout glued in
+  front still counts"; the cross-check over the first run's logs went from 1 problem to 0 (412 ran, 56
+  expected absent); the `rustty-apprt-c` lane re-ran GREEN (32 tests). A second whole-workspace run with
+  the three fixes was stopped at the Mac's 15 GB disk floor (the VM image lives on the Mac) after 45 of its
+  63 specs: 44 GREEN (2,029 tests, `rustty-apprt-c` included), `gettext-sys` NO-TESTS, 0 RED. The 18 specs
+  it did not reach (`rustty-vt` and the rest, and the three feature lanes) were GREEN in the first run, and
+  `xtask` is now excluded. The complete run on the fixed tree (commit 1529049d9, rebased onto
+  `phase-7-longruns` 0cbd9422c; rvm, 2026-10-02, `--per-crate-target --gate hwasan`): **G-HWASAN GREEN**,
+  9,987 tests over all 63 specs (58 members GREEN, `gettext-sys` and `rustty-wasm` NO-TESTS, and the
+  `rustty-vt:wuffs,oniguruma` 3,364, `rustty-apprt:gtk,wayland,x11` 174 and `rustty-os:flatpak` 110 feature
+  lanes GREEN), zero HWASan reports, cross-check 468 Miri-excepted / 412 ran and passed / 56 expected
+  absent / 0 problems, 56 min wall. G-SAN-SELF GREEN on rvm on the same tree (54 arms, A4 included).
+- **not a Ghostty defect**: all three are in the port's own gates and test harness.
