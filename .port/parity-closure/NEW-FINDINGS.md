@@ -10408,8 +10408,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 
 - **id**: N500. P7-W15 (the first G6t run, `check_leaks.sh --tree-borrows`, 2026-10-02, head `5e8cbd918`).
   **severity**: low (the mechanism is in the test body; no production path was shown to have it).
-  **state**: OPEN — reported, not fixed or annotated (the task's rule: a G6t finding is reported, not
-  annotated away).
+  **state**: CLOSED 2026-10-02 (P7-W15 step 2; reported first, then fixed test-side, never annotated).
 - **finding**: under `-Zmiri-tree-borrows` (debug assertions on, isolation on, one Miri process per
   test) the test FAILs in 40 s:
 
@@ -10431,8 +10430,25 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **mechanism**: N492's shape. The test mints the stream handler's `*mut Terminal` from a `&mut
   source_terminal` reborrow, then reads the owner directly (`encode(.., &source_terminal, ..)`), which
   freezes that tag; the stream's next write through the handler is a write through a Frozen tag.
-  Stacked Borrows accepts it. The likely fix is N492's raw-root idiom (one `*mut Terminal` root, every
-  later access through it); not applied here.
+  Stacked Borrows accepts it. Zig has no borrow model, so the reference test has no counterpart
+  (N-only, not a UD).
+- **fix**: N455's raw-root idiom (the same file's `complete_snapshot_restores_a_canonical_stream_continuation`
+  already used it). Each terminal the test hands to a stream handler is shadowed by one raw root,
+  `let x: *mut Terminal = &raw mut x;`; the handler gets that root and every later access goes through it
+  (`encode(.., unsafe { &*x }, ..)`, `unsafe { (*x).deinit(..) }`). Applied to all three such sites in the
+  `snapshot/codec.rs` tests: `source_terminal` and `restored_terminal` in
+  `complete_snapshot_preserves_every_supported_continuation_cut`, and `t` in
+  `complete_snapshot_waits_for_continuation_tracking_recovery` (no Miri failure there; same shape). No
+  `Handler::init(&mut ..)` or `&mut x as *mut Terminal` handler site is left in the G6t scope. A wider
+  scan for a pointer minted from `&mut x` followed by direct uses of `x` found only teardown uses (the
+  owner's `deinit` after the holder's last use, e.g. the `stream_terminal` and `search::thread` tests) or
+  tests that already passed Tree Borrows in the first G6t run (`page_tests`, `pagelist::tests::builder`).
+- **production**: no instance. `Terminal::vt_handler(&mut self) -> Handler<'_>` is lifetime-tied, so the
+  compiler rejects reading the owner while the handler lives; `Screen::init` and the snapshot screen
+  restore pass `&mut result as *mut _` to `ImageStorage::set_limit`, which uses it only for that call.
+- **proof**: `cargo +nightly miri nextest run -p rustty-vt --lib -E '<the three codec handler tests>'
+  --test-threads 6`, G6 configuration: Stacked Borrows 3 passed (the cut test 632 s), Tree Borrows 3
+  passed (the cut test 1,506 s, previously UB at 40 s); natively all 18 `snapshot::codec` tests pass.
 - **coverage left open**: G6t was stopped at this finding (1,018 of the 1,597 `rustty-vt` scope tests had
   run, 1 failed); `rustty-vt-c`, `rustty-renderer`, `rustty-xev`, `rustty-core` and the vt
   debug-assertions-off half did not run under G6t, and the full G6 run did not start.

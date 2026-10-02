@@ -1934,11 +1934,14 @@ mod tests {
     // test "complete snapshot waits for continuation tracking recovery"
     #[test]
     fn complete_snapshot_waits_for_continuation_tracking_recovery() {
+        // N500 (P7-W15): `t` is reached ONLY through one raw root, which is
+        // also the pointer the stream handler writes through (N455's idiom).
         let mut t = Terminal::init(Allocator, terminal_options(2, 1, DEFAULT_MSB, None)).unwrap();
+        let t: *mut Terminal = &raw mut t;
         // defer t.deinit(testing.allocator);
         let mut stream_value = TerminalStream::init(stream::Options {
             allocator: Some(cont_alloc()),
-            handler: Handler::init(&mut t as *mut Terminal),
+            handler: Handler::init(t),
             continuation_max_bytes: Some(4),
         });
         // defer stream.deinit();
@@ -1963,7 +1966,7 @@ mod tests {
         encode(
             Allocator,
             &mut encoded,
-            &t,
+            unsafe { &*t },
             EncodeOptions {
                 continuation: Continuation::Bytes(Cow::Borrowed(recovered.buffered())),
             },
@@ -1971,7 +1974,7 @@ mod tests {
         .unwrap();
 
         stream_value.deinit();
-        t.deinit(Allocator);
+        unsafe { (*t).deinit(Allocator) };
     }
 
     // test "complete snapshot preserves every supported continuation cut"
@@ -1992,12 +1995,20 @@ mod tests {
 
         for corpus in corpora {
             for cut in 0..corpus.len() + 1 {
+                // N500 (P7-W15): each terminal is reached ONLY through one raw
+                // root (`&raw mut`), which is also the pointer its stream
+                // handler writes through (N455's idiom). The handler used to
+                // hold a pointer derived from a `&mut` reborrow, so
+                // `encode(&source_terminal)` froze its tag and the next
+                // `source_stream.next_slice` wrote through a frozen tag (Tree
+                // Borrows UB; Stacked Borrows accepts it).
                 let mut source_terminal =
                     Terminal::init(Allocator, terminal_options(20, 4, DEFAULT_MSB, None)).unwrap();
+                let source_terminal: *mut Terminal = &raw mut source_terminal;
                 // defer source_terminal.deinit(testing.allocator);
                 let mut source_stream = TerminalStream::init(stream::Options {
                     allocator: Some(cont_alloc()),
-                    handler: Handler::init(&mut source_terminal as *mut Terminal),
+                    handler: Handler::init(source_terminal),
                     continuation_max_bytes: Some(4096),
                 });
                 // defer source_stream.deinit();
@@ -2016,7 +2027,7 @@ mod tests {
                 encode(
                     Allocator,
                     &mut snapshot_bytes,
-                    &source_terminal,
+                    unsafe { &*source_terminal },
                     EncodeOptions {
                         continuation: cut_continuation,
                     },
@@ -2035,10 +2046,11 @@ mod tests {
                 .unwrap();
                 // defer decoded.deinit(testing.allocator);
                 let mut restored_terminal = decoded.to_owned();
+                let restored_terminal: *mut Terminal = &raw mut restored_terminal;
                 // defer restored_terminal.deinit(testing.allocator);
                 let mut restored_stream = TerminalStream::init(stream::Options {
                     allocator: Some(cont_alloc()),
-                    handler: Handler::init(&mut restored_terminal as *mut Terminal),
+                    handler: Handler::init(restored_terminal),
                     continuation_max_bytes: Some(4096),
                 });
                 // defer restored_stream.deinit();
@@ -2083,7 +2095,7 @@ mod tests {
                 encode(
                     Allocator,
                     &mut source_final_snapshot,
-                    &source_terminal,
+                    unsafe { &*source_terminal },
                     EncodeOptions {
                         continuation: if source_final_writer.end == 0 {
                             Continuation::Ground
@@ -2097,7 +2109,7 @@ mod tests {
                 encode(
                     Allocator,
                     &mut restored_final_snapshot,
-                    &restored_terminal,
+                    unsafe { &*restored_terminal },
                     EncodeOptions {
                         continuation: if source_final_writer.end == 0 {
                             Continuation::Ground
@@ -2115,8 +2127,8 @@ mod tests {
                 restored_stream.deinit();
                 source_stream.deinit();
                 decoded.deinit(Allocator);
-                restored_terminal.deinit(Allocator);
-                source_terminal.deinit(Allocator);
+                unsafe { (*restored_terminal).deinit(Allocator) };
+                unsafe { (*source_terminal).deinit(Allocator) };
             }
         }
     }
