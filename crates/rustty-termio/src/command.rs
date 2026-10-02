@@ -2223,7 +2223,7 @@ mod tests {
 
     /// G-LSAN (P7-W14, N496): the pid of the test binary, recorded by
     /// `fork_serial` before a test forks through `Command::start`.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     static LSAN_TEST_PROCESS_PID: std::sync::atomic::AtomicI32 =
         std::sync::atomic::AtomicI32::new(0);
 
@@ -2237,8 +2237,11 @@ mod tests {
     /// looks unreachable and is reported as "leaked" (G-LSAN's first run: four
     /// such reports, each the parent's heap, and five failed tests). The test
     /// binary itself is still checked in full. Only in this crate's test build;
-    /// in a non-sanitizer build nothing calls it.
-    #[cfg(target_os = "linux")]
+    /// in a non-sanitizer build nothing calls it. macOS too since P7-W16a
+    /// (G-LSAN runs there): the macOS ASan runtime is a dylib that looks this
+    /// hook up dynamically, so G-LSAN builds with `-Zexport-executable-symbols`
+    /// there (sanitizers.sh run_crate); without it the hook is never seen.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[no_mangle]
     extern "C" fn __lsan_is_turned_off() -> core::ffi::c_int {
         let parent = LSAN_TEST_PROCESS_PID.load(std::sync::atomic::Ordering::Relaxed);
@@ -2686,7 +2689,7 @@ mod tests {
     // serialization: every test still runs unchanged.
     #[cfg(not(windows))]
     fn fork_serial() -> std::sync::MutexGuard<'static, ()> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         LSAN_TEST_PROCESS_PID.store(
             // SAFETY: getpid(2) has no preconditions.
             unsafe { libc::getpid() },

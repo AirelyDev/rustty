@@ -1196,8 +1196,10 @@ where
             // the caller frees the surface slot itself without glue.)
             (*self_).renderer.dealloc_after_deinit();
             // (N444: then the state's own allocation, after the renderer, so
-            // its bytes outlive every teardown above as the inline field did.)
-            (*self_).renderer_state.dealloc();
+            // its bytes outlive every teardown above as the inline field did.
+            // N502: dropped, as in `deinit`; its `mutex` is freed above and its
+            // `preedit` is still `None` here.)
+            (*self_).renderer_state.drop_and_dealloc();
             // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD115: the
             // missing `errdefer app.font_grid_set.deref(font_grid_key)` (see the
             // `ref` site). The by-value Key is read out of `self_`, as
@@ -1320,12 +1322,20 @@ where
         // shared values between the two threads.
         // self.renderer_thread.deinit();
         //
-        // (N444: the render thread is joined above; then the block's own
-        // allocation is freed without glue, as the inline field was never
-        // dropped.)
+        // (N444: the render thread is joined above. N502: then the block is
+        // DROPPED and freed. `deinit` is the reference's whole teardown (the
+        // xev handles, the loop's fds, the mailbox); what only Rust's `Drop`
+        // frees is port-owned heap the reference's `Thread` does not have: the
+        // loop's boxed `thread_pool_completions` queue (kqueue's, or the dynamic
+        // `Loop`'s N406 `Drop` on Linux) and this thread's `DrawMutex` handle
+        // (N437). No field's `Drop` repeats a `deinit` (rustty-xev has no `Drop`
+        // but the dynamic `Loop`'s, which drops only the live arm's heap), and
+        // `initErrdefers` already drops its read-out copy after `deinit` the
+        // same way. Freed without glue, every closed surface leaked them
+        // (G-LSAN on macOS, P7-W16a).)
         unsafe {
             (*self.renderer_thread.as_ptr()).deinit();
-            self.renderer_thread.dealloc();
+            self.renderer_thread.drop_and_dealloc();
         }
         // self.renderer.deinit();
         //
@@ -1405,11 +1415,15 @@ where
         }
         // self.alloc.destroy(self.renderer_state.mutex);
         //
-        // (N444: then the state's own allocation, without glue, as the inline
-        // field was never dropped.)
+        // (N444: then the state's own allocation. N502: dropped, not freed
+        // without glue: after the two frees above (`preedit` taken, `mutex`
+        // freed through its raw pointer) the rest of `State` is raw pointers,
+        // atomics and plain data, except the D4 `handoff_park`'s std
+        // `Mutex`/`Condvar`, which box their pthread objects on Darwin and
+        // leaked with every closed surface (G-LSAN on macOS, P7-W16a).)
         unsafe {
             drop(Box::from_raw((*self.renderer_state.as_ptr()).mutex));
-            self.renderer_state.dealloc();
+            self.renderer_state.drop_and_dealloc();
         }
         // self.config.deinit();
         //

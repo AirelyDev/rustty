@@ -10404,6 +10404,136 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   steps give two full chunks that never grew; teardown and a full run leave none); G-LSAN's `rustty-bench`
   lane is the leak check.
 
+## N501 — macOS had no leak lane because of a wrong premise: G-LSAN runs there
+
+- **id**: N501 (provisional; P7-W16a, another task may take ids in parallel). **severity**: medium (gate
+  coverage: every leak in code that only runs on macOS went unchecked, and one real reference leak, UD376,
+  was hidden by it). **state**: CLOSED 2026-10-02.
+- **found**: P7-W16a's probe of the BLOCKED sanitizer gates. `sanitizers.sh` reported G-LSAN BLOCKED on
+  macOS because "rustc rejects -Zsanitizer=leak on Darwin and Apple's ASan has no leak checker", and
+  `check_leaks.sh`, `check_valgrind.sh`, `ci.sh`, `HACKING.md` and PORT_RULES R6 repeated it. Both halves
+  are true and neither applies: the STANDALONE `-Zsanitizer=leak` is rejected for aarch64-apple-darwin, and
+  APPLE CLANG's ASan runtime aborts on `detect_leaks=1` ("detect_leaks is not supported on this
+  platform"), but G-LSAN is ASan with `detect_leaks=1` (design §B), and RUSTC's ASan runtime (its own
+  compiler-rt, LLVM 22.1.8) runs the leak checker on Apple Silicon: a probe's deliberate leak is RED
+  (64 allocations reported), a clean test GREEN. Evidence and citations: SANITIZER_SUPPRESSIONS.md,
+  "Platform support on macOS".
+- **fix**:
+  1. G-LSAN runs on macOS (`gate_asan_like`: BLOCKED only on a host other than Linux and macOS, which is
+     unverified), with its own suppression file `.port/phase-2/lsan-darwin.supp` (S3-S18: libobjc,
+     CoreFoundation, SkyLight, CoreText, CoreAnimation, ColorSync, Metal and dyld thread-local state that LSan on Darwin does
+     not see as roots; Apple's `leaks` reports 0 leaks for the same binaries, and a CoreText probe with no
+     Rustty code reproduces S9/S10 exactly).
+  2. `rustty-termio`'s fork-child `__lsan_is_turned_off` hook (N496 item 3) is compiled on macOS too, and
+     G-LSAN builds with `-Zexport-executable-symbols` on macOS: the ASan runtime there is a dylib that
+     looks the hook up dynamically, and a Rust executable exports nothing by default, so without the flag
+     the hook was never called (measured: an always-1 hook did not stop a probe's leak report; the forked
+     children of `rustty-termio`'s Command tests reported the parent's heap, 537 allocations).
+  3. G-SAN-SELF runs the leak arms on macOS: the deliberate leak RED, a clean control GREEN, the leak
+     GREEN under G-ASAN (checker off), and an "opt-out hook reaches the runtime" arm (GREEN; RED in a
+     mutation run without `-Zexport-executable-symbols`).
+  4. G-MSAN's BLOCKED message on macOS now cites why (compiler-rt has no Darwin MSan; rustc and Apple
+     clang reject it) and names the coverage that exists (Miri's uninit checks; G-MSAN on Linux).
+- **first findings on macOS**: UD376 (the inspector's Metal backend built without ARC; fixed in
+  `crates-sys/dcimgui-sys/build.rs`). The `rustty` crate's `cli_log_facade` test failed only because the
+  CLI child's exit status carried LSan's libobjc reports (S3/S4); with `lsan-darwin.supp` the CLI exits 0.
+- **result** (macOS arm64, 2026-10-02, `--per-crate-target`): the first full pass (9,397 tests, 57 min)
+  was RED and found UD376, N502 and N503, all fixed, plus the system-library reports suppressed as
+  S3-S18 (each arbitrated with Apple `leaks`). After the fixes: **G-LSAN on macOS GREEN**, 9,850 tests
+  over the workspace and the `rustty-vt:wuffs,oniguruma` lane, 0 findings, 33 min (`rustty-wasm` no
+  tests by construction); Miri-exception cross-check 459 ran and passed, 9 expected absent, 0 problems.
+  The cross-check's parser now searches result lines instead of anchoring them, since a test's
+  unterminated stdout can prefix one (rustty-cli's pager and picker tests). G-SAN-SELF GREEN on macOS
+  (52 arms, the leak arms included).
+- **fix round 1** (review): S9 narrowed from the whole `libFontRegistry.dylib` to three registry frames,
+  S4 anchored, and six Darwin G-SAN-SELF arms keep the patterns honest (a leaked CTFont, a created and a
+  copied CTFontDescriptor, a CGFont and an `MTLCopyAllDevices` array must each be RED under the real
+  file, a CoreText create-and-release control GREEN). Full Mac pass under heavy load (97 min, 9,658
+  tests, cross-check 459 ran / 9 expected absent / 0 problems): every crate GREEN except
+  `rustty-font-shaper` (S9's third frame, found by the narrowing; added) and `rustty-apprt-c` (an
+  ASan-runtime `fork` deadlock, killed by PID; SANITIZER_SUPPRESSIONS.md "Known limits"); both re-ran
+  GREEN (141 and 51 tests). G-SAN-SELF GREEN (58 arms).
+- **fix round 2**: `sanitizers.sh` bounds every crate (N506's hang is RED, never a stalled pass);
+  S9's third frame became `XTCopyPropertiesForFont`, covering the per-font property query a second
+  intermittent `rustty-font-shaper` report showed, with a derived-character-set arm added to G-SAN-SELF.
+  Final full Mac pass (2026-10-02, with the bound in place): **G-LSAN GREEN**, 9,850 tests, 0 findings,
+  29 min, cross-check 459 ran / 9 expected absent / 0 problems. G-SAN-SELF GREEN (63 arms).
+- **still Linux-only**: G-MSAN (no Darwin MSan in compiler-rt) and HWASan (not a gate; Linux task).
+
+## N502 — leaks behind every closed surface, on every platform (only macOS tests reached them): the render thread's and renderer state's Rust-owned heap was never dropped
+
+- **id**: N502 (provisional; P7-W16a). **severity**: low (a few hundred bytes per closed surface;
+  port-only). **state**: CLOSED 2026-10-02 (the fix is platform-independent); the Linux test coverage gap
+  below stays OPEN.
+- **found**: G-LSAN's first macOS run (P7-W16a), `rustty-apprt-c` `tests/macos_window_host.rs`, confirmed
+  independently by Apple `leaks --atExit` (`MallocStackLogging=1`) on a native build of the same test
+  binary. Two items:
+  1. **Test-side**: `app_new_serialized` handed `rustty_app_new` a fresh config and never freed it
+     (`App::init` clones it), and one `rustty_app_update_config` call did the same: 14 configs per run,
+     about 800 KB with their keybind tables. Fixed: the helper consumes and frees the config, as the
+     Swift host's `Config` frees its own after `ghostty_app_new`; the update call frees its config.
+  2. **Product**: `Surface::deinit` tore the render thread's block and the renderer-state block down with
+     their explicit `deinit`, then freed both allocations WITHOUT drop glue (`ThreadSharedBox::dealloc`,
+     N444), so the Rust-owned heap that only `Drop` frees leaked with every closed surface:
+     - the xev loop's boxed `thread_pool_completions` queue (`Box<TaskCompletionQueue>`, 280 bytes,
+       `crates/rustty-xev/src/kqueue.rs:571`; `Loop::deinit` closes the fds only);
+     - the render thread's `DrawMutex` handle (N437), an `Arc` clone of the renderer's, with the boxed
+       `pthread_mutex_t`/`pthread_cond_t` std uses on Darwin;
+     - the renderer state's D4 `HandoffPark` std `Mutex`/`Condvar`, boxed lazily on Darwin.
+     **Platforms (fix round 1 correction):** the teardown is shared, so the leak was not macOS-only. On
+     Linux the same glue-less free leaked the `DrawMutex` `Arc` clone and the loop's box (the dynamic
+     `Loop`'s epoll/io_uring arm; its N406 `Drop` never ran); only the `HandoffPark` boxes are
+     Darwin-specific (Linux std mutexes are futexes). Linux G-LSAN stayed GREEN only because no Linux test
+     closes a core `Surface`.
+     Measured before the fix: LSan, 14 surfaces → 14 of each; Apple `leaks`, same binary natively (item 1
+     fixed): 83 leaks, 9,344 bytes, every stack through `renderer_seam::Thread::init`, `DrawMutex::new`
+     or `HandoffPark::gate`.
+- **Linux coverage gap (OPEN)**: no test that G-LSAN (or G-VALGRIND) runs on Linux creates and closes a
+  core `Surface`. On Linux a surface comes only from the GTK runtime (the embedded platform is macOS/iOS,
+  as in Ghostty), and the GTK tests that open one (`crates/rustty-apprt/tests/gtk_*_live.rs`) are
+  `#[ignore]`d live tests run through `.port/tools/gtk_live_headless_sway.sh`; no sanitizer lane runs
+  them. Closing it needs a lane that runs one of them (e.g. `gtk_window_live`) under ASan with
+  `detect_leaks=1` inside the headless-sway wrapper on rvm, with `lsan.supp`'s Mesa entries; not done in
+  P7-W16a.
+- **not a Ghostty defect**: the reference keeps the queue inline (libxev `backend/kqueue.zig:87`
+  `thread_pool_completions: TaskCompletionQueue`), the draw mutex inline (`generic.zig:113`
+  `draw_mutex: std.Io.Mutex = .init`), and the state's handoff is atomics only (`renderer/State.zig:40-45`);
+  none of them allocates. Port-only, so no UD.
+- **fix**: `crates/rustty-core/src/surface/lifecycle.rs` `Surface::deinit` frees both blocks with
+  `ThreadSharedBox::drop_and_dealloc` after their teardown (the render thread: `deinit`, then drop;
+  the state: `preedit` taken and `mutex` freed as before, then drop), and `initErrdefers` drops the state
+  block the same way (it already dropped its read-out render-thread copy after `deinit`). No field's
+  `Drop` repeats a `deinit`: rustty-xev has no `Drop` except the dynamic `Loop`'s (N406), which drops only
+  the live arm's heap; `Compression`, the completions, the raw pointers, the atomics and `Mouse` own
+  nothing.
+- **proof (soundness)**: `.port/phase-2/mirihar-n444` (non-FFI model of the two blocks: the render thread
+  writes them through the raw roots while the main thread retags the whole surface, then `deinit` runs
+  inside `&mut self` after the join): `n502_teardown_glueless_leak` (the old teardown) LEAK under SB and
+  TB, `n502_teardown_drop_and_dealloc` (the fix) CLEAN under SB and TB, 16 seeds each.
+- **regression test**: G-LSAN on macOS over `rustty-apprt-c` (`macos_window_host`), RED before the fix;
+  Apple `leaks` on the native `macos_window_host` binary after the fix: 0 leaks (was 83). Native
+  `rustty-core` lib 79 passed, `macos_window_host` 18 passed.
+
+## N503 — rustty-renderer's macOS test helpers leaked their renderers and font grids (N411's macOS twins)
+
+- **id**: N503 (provisional; P7-W16a). **severity**: low (tests only). **state**: CLOSED 2026-10-02.
+- **found**: G-LSAN's first macOS run (P7-W16a), `rustty-renderer` lib tests. N411 fixed the Linux
+  helpers (`generic/linux_impl/tests.rs`: `free_test_font_grid`, `deinit_test_renderer`) under memcheck
+  and recorded that the macOS twins leak the same way with no leak detector to report them. G-LSAN did:
+  direct leaks under `generic/macos_impl/tests.rs` `test_font_grid_and_size` (21), `golden_renderer` (20)
+  and `test_renderer` (20), about 38 KB direct and 51 MB indirect (the grids' atlases, the shaper cache,
+  the terminals' pages), plus three terminals that `lifecycle::offscreen_resize::draw_one_frame` and
+  `mailbox::update_and_draw` never `deinit`ed.
+- **fix**: `generic/macos_impl/tests.rs` gains the Linux helpers' twins, `free_test_font_grid` (grid
+  `deinit`, the box, the library) and `deinit_test_renderer` (`thread_exit`, `deinit`, then the grid:
+  the reference tests' `defer` order). Every macOS test that builds a renderer from `test_renderer` /
+  `golden_renderer` / `test_font_grid_and_size` ends with it (the existing
+  `thread_exit`/`deinit` pairs became the helper call), the two helpers that return early
+  (`golden.rs` `draw_center`, `lifecycle.rs` `prep_with_bg_file`) call it before returning, and
+  `draw_one_frame` / `update_and_draw` `deinit` their terminals.
+- **evidence**: native `rustty-renderer` lib 140 passed; Apple `leaks` on that binary: 0 leaks; G-LSAN
+  on macOS `rustty-renderer`: only S15/S16 (ColorSync caches) remained, now suppressed.
+
 ## N504 — G-HWASAN's first run: a C-ABI smoke link, `xtask`'s nested builds, and a cross-check parser defect
 
 - **id**: N504. P7-W16b. **severity**: low (gate and test configuration; no product defect). **state**:
@@ -10442,3 +10572,33 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   lanes GREEN), zero HWASan reports, cross-check 468 Miri-excepted / 412 ran and passed / 56 expected
   absent / 0 problems, 56 min wall. G-SAN-SELF GREEN on rvm on the same tree (54 arms, A4 included).
 - **not a Ghostty defect**: all three are in the port's own gates and test harness.
+
+## N506 — macOS ASan runtime can deadlock in `fork` while another thread frees: an intermittent hang in G-ASAN / G-LSAN
+
+- **id**: N506 (provisional; P7-W16a fix round 2). **severity**: low (sanitizer lanes only; no product
+  defect). **state**: OPEN (mitigated: the gate now bounds each crate and reports a hang RED).
+- **found**: one Mac G-LSAN pass under heavy load (load average ≈ 30) hung for an hour in
+  `rustty-apprt-c`'s `tests/macos_window_host.rs` at ~740% CPU. Sample: an io thread in
+  `Exec::threadEnter` → `Subprocess::start` → `Command::startPosix` → `fork` → `libSystem_atfork_prepare`
+  → `_malloc_fork_prepare` → `__sanitizer::StaticSpinMutex::LockSlow`, and a libdispatch worker in
+  `wrap_free` → `__asan::Allocator::QuarantineChunk` → `StaticSpinMutex::LockSlow`, both spinning, with
+  the remaining test threads waiting behind them (`os_unfair_lock`, `pthread_join` in
+  `Surface::deinit`). No Rustty frame holds a lock: the two spinning threads are inside the ASan
+  runtime's allocator/quarantine locking around `fork` (the mechanism of LLVM D33325's
+  `BeforeFork` allocator locking), a lock-order problem in the runtime, not in the port.
+- **which test forks**: every `macos_window_host` test that creates a surface. `Surface::init` starts
+  the io thread, whose `Exec` backend spawns the shell with `fork` (`crates/rustty-termio/src/command.rs`
+  `startPosix`, `libc::fork()`, the reference's `Command.zig` `fork()`), while the binary's other
+  test threads, their surfaces' render/io threads and libdispatch workers allocate and free.
+- **rate**: 1 hang in about 33 runs of that binary under the sanitizer (the hung pass; 6 other full
+  passes; 2 re-runs; 25 back-to-back runs on 2026-10-02 at load ≈ 12, all GREEN, 51 tests each).
+  Load-dependent and intermittent.
+- **mitigation (applied)**: `sanitizers.sh` bounds every crate (`SAN_CRATE_TIMEOUT_S`, default 1200 s;
+  2400 s for MSan): past it the process tree is killed by explicit PIDs and the crate is RED with "HANG
+  after Ns (no verdict)", the pass continues, and a hang can never be GREEN (G-SAN-SELF arm).
+- **proposed fix (not applied)**: (a) under `cfg(rustty_asan)` on macOS, have `Command::startPosix`
+  spawn with `posix_spawn` instead of `fork` (no atfork handlers run in the parent). That is a product
+  code change behind a sanitizer cfg and drifts from the reference's `fork`, so it needs a ruling;
+  (b) test-only: run `macos_window_host` with `--test-threads=1` under the sanitizer lanes, which
+  narrows the window (fewer concurrent frees) but cannot close it (each surface's own render/io threads
+  and libdispatch still free during the fork), so it is not clearly correct and was not applied.

@@ -22,7 +22,8 @@ for c in n444_inline_io_terminal n444_inline_io_thread \
          n449_close_confirm_backend_ref n449_change_config_terminal_early \
          n449_fixed \
          ud367_start_unordered ud367_ready_in_subprocess ud367_ready_in_exec \
-         ud368_size_before_lock ud368_size_under_lock; do
+         ud368_size_before_lock ud368_size_under_lock \
+         n502_teardown_glueless_leak n502_teardown_drop_and_dealloc; do
   sbl="/tmp/mirihar-n444-$c-sb.log"; tbl="/tmp/mirihar-n444-$c-tb.log"
   MIRIFLAGS="-Zmiri-many-seeds=0..16" cargo +nightly miri run -q -- "$c" >"$sbl" 2>&1; sb=$?
   MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-many-seeds=0..16" cargo +nightly miri run -q -- "$c" >"$tbl" 2>&1; tb=$?

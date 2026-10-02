@@ -3,14 +3,15 @@
 #
 # PORTS: ghostty `.github/workflows/test.yml`'s `valgrind` job
 # (`zig build test-valgrind`, `build.zig:411-422`), and it CLOSES A DEFERRAL
-# rustty already wrote down. check_leaks.sh says, in its header and again at
-# line ~201:
+# rustty already wrote down. check_leaks.sh said, in its header and again at
+# line ~201 (until P7-W16a, which found the premise wrong for LSan):
 #
 #   "FFI *leak* detection: LSan/valgrind are unavailable on arm64 macOS, so
 #    FFI leak checks are deferred to Linux CI — see DoP §G6."
 #
 # G6 covers UB across the FFI boundary with AddressSanitizer, which on macOS is
-# built with `detect_leaks=0` because Apple's ASan has no leak detector. So the
+# built with `detect_leaks=0` (Apple clang's ASan runtime has no leak checker;
+# rustc's does, which is how G-LSAN runs on macOS since P7-W16a). So the
 # crates that cross into C had NO leak coverage anywhere. This is that lane,
 # and Linux CI is where it runs.
 #

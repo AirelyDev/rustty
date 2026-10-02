@@ -58,7 +58,7 @@ run_canary() {
   log="/tmp/d6-canary-$$.log"
   td="/tmp/d6-canary-asan"
   echo "### D6 canary: rustty-d6-canary under -Zsanitizer=address (target=$tgt) ###"
-  local asan_opts="detect_leaks=0"   # WHY: macOS ASan has no LSan; this keeps the ASan header clean so ONLY the heap-overflow canary can turn the lane red (the LSan leak canary fires on the Linux leak lane)
+  local asan_opts="detect_leaks=0"   # WHY: leak checking is G-LSAN's job (sanitizers.sh --gate lsan, macOS and Linux); this keeps the ASan header clean so ONLY the heap-overflow canary can turn the lane red (the LSan leak canary fires on the Linux leak lane)
   env ASAN_OPTIONS="$asan_opts" RUSTFLAGS="-Zsanitizer=address" \
       CARGO_TARGET_DIR="$td" \
       cargo +nightly test --manifest-path "$CANARY_DIR/Cargo.toml" --target "$tgt" \

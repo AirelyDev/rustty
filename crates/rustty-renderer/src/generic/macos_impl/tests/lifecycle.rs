@@ -57,6 +57,7 @@ mod restored_log_sites {
         drop(cap);
 
         let _ = std::fs::remove_file(&path);
+        deinit_test_renderer(&mut r);
         Some((records, path_display))
     }
 
@@ -180,6 +181,7 @@ mod restored_log_sites {
                 format!("error opening background image file \"{path_display}\": {expected_err}"),
             )],
         );
+        deinit_test_renderer(&mut r);
     }
 }
 
@@ -239,9 +241,8 @@ mod windowed_lifecycle {
 
         r.thread_enter(view_ptr).expect("thread_enter (no-op)");
 
-        // The windowed teardown must not panic/leak.
-        r.thread_exit();
-        r.deinit();
+        // The windowed teardown must not panic/leak (N503: the grid too).
+        deinit_test_renderer(&mut r);
     }
 }
 
@@ -272,6 +273,8 @@ mod offscreen_resize {
         };
         r.update_frame(&st, true).unwrap();
         r.draw_frame(true).unwrap();
+        // N503: the reference's `defer t.deinit(alloc)`.
+        t.deinit(Global.into());
     }
 
     /// The target an embedder reads (`swap_chain.frames[frame_index].target`).
@@ -325,8 +328,7 @@ mod offscreen_resize {
             "the swap-chain target must follow the new offscreen size"
         );
 
-        r.thread_exit();
-        r.deinit();
+        deinit_test_renderer(&mut r);
     }
 
     /// `set_screen_size` (the reference's `setScreenSize`) owns
@@ -363,7 +365,6 @@ mod offscreen_resize {
             "and must not discard the padding `set_screen_size` set"
         );
 
-        r.thread_exit();
-        r.deinit();
+        deinit_test_renderer(&mut r);
     }
 }

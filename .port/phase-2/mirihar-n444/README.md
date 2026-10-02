@@ -129,6 +129,8 @@ each owner (ManuallyDrop, dealloc, MaybeUninit) and every init-error stage (`Ren
 | `ud367_ready_in_exec` (the fix: `Exec.pty_ready`, Release / Acquire) | CLEAN | CLEAN |
 | `ud368_size_before_lock` (T5d fix round 1: `resize` stores `size` before the mutex) | UB | UB |
 | `ud368_size_under_lock` (the fix: the store inside the mutex section) | CLEAN | CLEAN |
+| `n502_teardown_glueless_leak` (P7-W16a, N502: the render-thread and state blocks freed without drop glue after `deinit`; the loop's box, the draw-mutex `Arc` clone and the state's std `Mutex`/`Condvar` leak) | LEAK | LEAK |
+| `n502_teardown_drop_and_dealloc` (the fix: `deinit`, then `drop_and_dealloc`, after the join, inside `&mut self`, with main-thread whole-surface retags while the render thread ran) | CLEAN | CLEAN |
 
 UD367 and UD368 (fix round 1, ruling 52) are upstream data races, not aliasing artefacts: the
 unordered arms race on plain reads and writes. `run_ud367` models `Exec::threadEnter`'s

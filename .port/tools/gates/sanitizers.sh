@@ -6,19 +6,39 @@
 # real memory CORRUPTION (UAF/OOB/double-free) + races across ALL tests incl. the
 # Miri-intractable ones, and cover the C-FFI boundary Miri can't model.
 #
-# Platform support (re-verified P7-W14, 2026-10-01; aarch64-apple-darwin dev box
+# Platform support (re-verified P7-W14, 2026-10-01, and for macOS P7-W16a,
+# 2026-10-02: aarch64-apple-darwin, macOS 26.5, nightly 2026-07-22 / LLVM 22.1.8;
 # and the aarch64 Fedora VM `rvm`):
 #   address (ASan)  ✅ macOS + Linux                         -> G-ASAN
-#   leak    (LSan)  ❌ macOS (rustc-rejected; Apple ASan has no leak checker)
-#                   ✅ Linux, run as ASan with detect_leaks=1 -> G-LSAN
-#   memory  (MSan)  ❌ macOS ; ✅ Linux x86_64 and aarch64 (verified on rvm,
-#                   2026-10-01), needs -Zbuild-std + instrumented C -> G-MSAN
-#                   (MSAN_AARCH64_NOTE turns aarch64 into BLOCKED if that regresses)
+#   leak    (LSan)  ✅ macOS + Linux, run as ASan with detect_leaks=1 -> G-LSAN
+#                   The STANDALONE -Zsanitizer=leak is rejected on
+#                   aarch64-apple-darwin ("leak sanitizer is not supported for
+#                   this target"; rustc's target spec omits it, FIXME
+#                   rust-lang/rust#88132, the standalone LSan test hung on arm64
+#                   macOS), but rustc's ASan runtime (its own compiler-rt, where
+#                   lsan_common.h sets CAN_SANITIZE_LEAKS for SANITIZER_APPLE +
+#                   __aarch64__) runs the leak checker when detect_leaks=1 is
+#                   set; compiler-rt only defaults it off on Apple
+#                   (sanitizer_flags.inc: detect_leaks default !SANITIZER_APPLE).
+#                   A probe's deliberate leak is RED, a clean test GREEN. It is
+#                   APPLE CLANG's runtime that has no leak checker ("detect_leaks
+#                   is not supported on this platform", abort), and Homebrew
+#                   LLVM 21's runtimes hang on macOS 26 (ASan in its own init,
+#                   standalone LSan in StopTheWorld): neither is used here.
+#   memory  (MSan)  ❌ macOS: compiler-rt builds MSan for Linux|FreeBSD|NetBSD only
+#                   (config-ix.cmake COMPILER_RT_HAS_MSAN); rustc and Apple clang
+#                   both reject it ("memory sanitizer is not supported for this
+#                   target"; "unsupported option '-fsanitize=memory'").
+#                   ✅ Linux x86_64 and aarch64 (verified on rvm, 2026-10-01),
+#                   needs -Zbuild-std + instrumented C -> G-MSAN (the only MSan
+#                   lane; MSAN_AARCH64_NOTE turns aarch64 into BLOCKED if that regresses)
 #   thread  (TSan)  ✅ macOS + Linux  (needs -Zbuild-std)  -> G-TSAN, not yet a gate
-#   hwaddress(HWASan)❌ macOS, ❌ x86_64 Linux (rustc: "not supported for this
-#                   target") ; ✅ aarch64 Linux (verified on rvm, P7-W16b,
-#                   2026-10-02), needs -Zbuild-std, +tagged-globals,
-#                   -outline-atomics and lld (see run_crate) -> G-HWASAN
+#   hwaddress(HWASan)❌ macOS: compiler-rt builds it for Linux|Android|Fuchsia only
+#                   (COMPILER_RT_HAS_HWASAN); rustc and Apple clang reject it.
+#                   ❌ x86_64 Linux (rustc: "not supported for this target") ;
+#                   ✅ aarch64 Linux (verified on rvm, P7-W16b, 2026-10-02),
+#                   needs -Zbuild-std, +tagged-globals, -outline-atomics and
+#                   lld (see run_crate) -> G-HWASAN
 #   cfi             mitigation, not a bug-checker; needs -Clto -> optional Goal-2 hardening
 #
 # Why G-HWASAN next to G-ASAN (P7-W16b). HWASan tags every heap/stack/global
@@ -66,7 +86,8 @@
 #       classifier and cross-check over canned logs.
 #
 # EXIT CONTRACT (ci.sh): 0 GREEN ; 1 RED (a sanitizer finding, a test failure,
-# zero tests run, a stale exclusion, an unverified ASan claim) ; 3 BLOCKED (no
+# zero tests run, a stale exclusion, an unverified ASan claim, a crate that
+# HANGs past SAN_CRATE_TIMEOUT_S, see crate_timeout) ; 3 BLOCKED (no
 # nightly, wrong host OS for the sanitizer, a crate that failed to BUILD, or the
 # disk floor reached). RED dominates BLOCKED. A build failure is BLOCKED, never
 # GREEN (design §B "common rules").
@@ -87,7 +108,10 @@ OS="$(uname -s)"
 ARCH="$(uname -m)"
 PY="${PYTHON:-python3}"
 SUPP_DIR="$ROOT/.port/phase-2"
-LSAN_SUPP="$SUPP_DIR/lsan.supp"
+# G-LSAN's suppressions, per host OS: Darwin's are libobjc/CoreFoundation
+# per-thread data that LSan cannot see as roots there (lsan-darwin.supp's
+# header); Linux's are Mesa's (lsan.supp). SANITIZER_SUPPRESSIONS.md has both.
+if [ "$OS" = "Darwin" ]; then LSAN_SUPP="$SUPP_DIR/lsan-darwin.supp"; else LSAN_SUPP="$SUPP_DIR/lsan.supp"; fi
 SAN_TARGET_ROOT="${SAN_TARGET_ROOT:-$ROOT/target}"
 SAN_LOG_ROOT="${SAN_LOG_ROOT:-$ROOT/target/san-logs}"
 SAN_MIN_FREE_GB="${SAN_MIN_FREE_GB:-15}"
@@ -195,8 +219,43 @@ tests_ran() {
          for (i = 1; i <= NF; i++) if ($i == "passed;" || $i == "failed;") s += $(i - 1)
        } END {print s+0}' "$1"
 }
+# ---------------------------------------------------------------------------
+# The per-crate hang bound (P7-W16a fix round 2). A sanitizer runtime can
+# deadlock (ASan's allocator lock around `fork` on macOS: SANITIZER_SUPPRESSIONS.md
+# "Known limits", NEW-FINDINGS N506), and a HARD gate that waits forever gives
+# neither GREEN nor RED. Each crate's build-and-test run is bounded; past the
+# bound its process tree is killed by explicit PIDs and the crate is RED with
+# "HANG after Ns (no verdict)". SAN_CRATE_TIMEOUT_S overrides the default:
+#   asan / lsan / leak / thread / hwaddress: 1200 s, about 4x the slowest crate
+#     measured (rustty-vt, 253-294 s per-crate including its build, on a loaded
+#     Mac, P7-W16a), leaving room for a shared target dir's first crate, which
+#     builds every dependency;
+#   msan: 2400 s (-Zbuild-std rebuilds std for the instrumented target).
+# ---------------------------------------------------------------------------
+HANG_MARK="SANITIZERS-HANG"
+crate_timeout() {  # crate_timeout SAN -> seconds
+  if [ -n "${SAN_CRATE_TIMEOUT_S:-}" ]; then printf '%s' "$SAN_CRATE_TIMEOUT_S"; return; fi
+  case "$1" in msan|memory) printf 2400 ;; *) printf 1200 ;; esac
+}
+# Every descendant of PID, deepest first, then PID itself (explicit PIDs only).
+tree_pids() {
+  local c
+  for c in $(pgrep -P "$1" 2>/dev/null); do tree_pids "$c"; done
+  printf '%s\n' "$1"
+}
+kill_tree() {  # kill_tree PID: TERM the whole tree, then KILL what is left
+  local pids p
+  pids="$(tree_pids "$1")"
+  for p in $pids; do kill -TERM "$p" 2>/dev/null; done
+  sleep 2
+  for p in $pids; do kill -0 "$p" 2>/dev/null && kill -KILL "$p" 2>/dev/null; done
+  return 0
+}
+
 classify() {
   local log="$1" rc="$2" ran
+  # A hang has no verdict: RED, before anything the log may also hold.
+  if grep -q "^$HANG_MARK after " "$log"; then echo HANG; return; fi
   if grep -qE "$FINDING_RE" "$log"; then echo FINDING; return; fi
   ran="$(tests_ran "$log")"
   if [ "$rc" -ne 0 ]; then
@@ -310,7 +369,7 @@ WRAP
 # ---------------------------------------------------------------------------
 run_crate() {
   local san="$1" spec="$2" filter="$3" td="$4" log="$5"
-  local crate="${spec%%:*}" feats="" tgt rflags="" build_std="" rc
+  local crate="${spec%%:*}" feats="" tgt rflags="" build_std="" rc san_rt_base=""
   case "$spec" in *:*) feats="${spec#*:}" ;; esac
   tgt="$(host_target)"
   local -a envs=() cargo_args=()
@@ -326,11 +385,42 @@ run_crate() {
   case "$san" in
     asan|address)
       rflags="-Zsanitizer=address"
-      envs+=("ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1") ;;  # WHY: Apple ASan has no leak checker (rustc rejects -Zsanitizer=leak on Darwin); on Linux, G-LSAN is the leak lane, so G-ASAN keeps its verdict to memory errors only
+      envs+=("ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1") ;;  # WHY: not suppressive of anything another lane misses — G-LSAN (the same ASan build with detect_leaks=1, macOS and Linux) is the leak lane, so G-ASAN keeps its verdict to memory errors only
     lsan)
       rflags="-Zsanitizer=address"
       envs+=("ASAN_OPTIONS=detect_leaks=1:allocator_may_return_null=1")      # WHY: not suppressive — turns the leak checker ON; this IS G-LSAN (design §B: LSan run as ASan with detect_leaks=1)
-      envs+=("LSAN_OPTIONS=suppressions=$LSAN_SUPP:print_suppressions=1") ;;  # WHY: every entry in lsan.supp is a third-party leak with a cited reason in .port/phase-2/SANITIZER_SUPPRESSIONS.md; print_suppressions=1 lists every match in the log so a suppression is never silent
+      envs+=("LSAN_OPTIONS=suppressions=$LSAN_SUPP:print_suppressions=1")    # WHY: every entry in lsan.supp / lsan-darwin.supp is a third-party leak with a cited reason in .port/phase-2/SANITIZER_SUPPRESSIONS.md; print_suppressions=1 lists every match in the log so a suppression is never silent
+      # macOS: the ASan runtime is a dylib that looks the user hooks
+      # (__lsan_is_turned_off, __lsan_default_suppressions) up DYNAMICALLY
+      # (`nm -m librustc-nightly_rt.asan.dylib`: "weak external
+      # ___lsan_is_turned_off (dynamically looked up)"), so a hook a test binary
+      # defines is seen only when the executable exports it, and rustc exports
+      # nothing from an executable by default. Measured (P7-W16a): a probe whose
+      # hook always returns 1 still reported its leak without this flag, and
+      # did not with it. rustty-termio's fork-child hook (N496 item 3) needs it.
+      # On Linux the runtime is linked statically and the hook resolves at link
+      # time, so the flag is Darwin-only.
+      # macOS: the runtime's own output goes to per-process files in a private
+      # temp dir (appended to the crate log after the run, below), not to each process's
+      # stderr. With lsan-darwin.supp, print_suppressions=1 prints its table on
+      # the stderr of EVERY process in which a suppression matched, including
+      # the CLI children that tests run and whose stderr they assert on
+      # (rustty's cli_log_facade asserts `+show-config` prints nothing; P7-W16a
+      # run 2: its stderr was only the S3/S4 table). A child that really leaks
+      # still fails its test (exit 23), and every report and table still lands
+      # in the crate log the classifier reads. Linux keeps stderr: no Linux
+      # suppression matches in a child, and that lane is verified as is.
+      if [ "$OS" = "Darwin" ]; then
+        rflags="$rflags -Zexport-executable-symbols"
+        # A private temp dir: ASAN_OPTIONS splits on ':' and whitespace, so the
+        # path must hold neither (the crate log's path may: the self-test's
+        # arm names do).
+        local san_rt_dir
+        san_rt_dir="$(mktemp -d "${TMPDIR:-/tmp}/san-rt.XXXXXX")" || return 2
+        case "$san_rt_dir" in *:*|*' '*) echo "sanitizers.sh: runtime log dir '$san_rt_dir' holds ':' or a space" >&2; rmdir -- "$san_rt_dir"; return 2 ;; esac
+        san_rt_base="$san_rt_dir/rt"
+        envs+=("ASAN_OPTIONS=detect_leaks=1:allocator_may_return_null=1:log_path=$san_rt_base")  # WHY: not suppressive — the same options as above plus log_path (reports go to files that run_crate appends to the crate log)
+      fi ;;
     msan|memory)
       rflags="-Zsanitizer=memory -Zsanitizer-memory-track-origins ${SAN_MSAN_DIAG:+-Zsanitizer-recover=memory}"
       build_std="-Zbuild-std"
@@ -391,10 +481,37 @@ run_crate() {
   if [ -n "$feats" ]; then cargo_args+=(--features "$feats"); fi
   if [ -n "$build_std" ]; then cargo_args+=("$build_std"); fi
   mkdir -p "$(dirname "$log")"
+  # The hang bound (fix round 2): the crate's whole build-and-test run gets
+  # SAN_CRATE_TIMEOUT_S seconds; past it the process tree is killed by PID,
+  # the log gets a HANG line, and classify reports HANG (RED), never GREEN.
+  local bound
+  bound="$(crate_timeout "$san")"
   # shellcheck disable=SC2086  # FILTER is an intentional word list (libtest takes several)
   env "${envs[@]}" RUSTFLAGS="$rflags" RUSTDOCFLAGS="$rflags" CARGO_TARGET_DIR="$td" \
-    cargo +nightly test "${cargo_args[@]}" -- $filter >"$log" 2>&1
+    cargo +nightly test "${cargo_args[@]}" -- $filter >"$log" 2>&1 &
+  local cpid=$! waited=0
+  while kill -0 "$cpid" 2>/dev/null; do
+    if [ "$waited" -ge "$bound" ]; then
+      kill_tree "$cpid"
+      wait "$cpid" 2>/dev/null
+      printf '\n%s after %ss (no verdict)\n' "$HANG_MARK" "$bound" >>"$log"
+      break
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  wait "$cpid" 2>/dev/null
   rc=$?
+  if [ -n "$san_rt_base" ]; then
+    local rtf
+    for rtf in "$san_rt_base".*; do
+      [ -f "$rtf" ] || continue
+      printf '\n===== sanitizer runtime output (%s) =====\n' "${rtf##*/}" >>"$log"
+      cat "$rtf" >>"$log"
+      rm -f -- "$rtf"
+    done
+    rmdir -- "${san_rt_base%/rt}" 2>/dev/null
+  fi
   return $rc
 }
 
@@ -411,7 +528,7 @@ legacy_main() {
   local fail=0 s
   for s in $SANS; do
     case "$s" in
-      leak|hwaddress) if [ "$OS" = "Darwin" ]; then echo "  ⏭  $s: skipped (Linux-only)"; continue; fi ;;
+      leak|hwaddress) if [ "$OS" = "Darwin" ]; then echo "  ⏭  $s: skipped (rustc rejects -Zsanitizer=$s for aarch64-apple-darwin; macOS leak checking is --gate lsan, ASan with detect_leaks=1)"; continue; fi ;;
     esac
     local td="/tmp/san-gate-$CRATE-$s" log="/tmp/san-gate-$CRATE-$s.log" rc v
     echo "### sanitizer=$s crate=$CRATE ###"
@@ -423,6 +540,7 @@ legacy_main() {
     # number of tests EXECUTED, summed over every target's `N passed; M failed`
     # (tests_ran; ignored tests do not count since P7-W14); zero is RED.
     case "$v" in
+      HANG) echo "  ❌ $s: $(grep -m1 "^$HANG_MARK after " "$log" | sed "s/^$HANG_MARK/HANG/")"; fail=1 ;;
       FINDING) echo "  ❌ $s: SANITIZER FINDING"; grep -E 'ERROR:|SUMMARY:|runtime error:' "$log" | head -4; fail=1 ;;
       BUILD|FAIL) echo "  ⚠️  $s: build/test failed rc=$rc — $(grep -m1 -iE 'error(\[|:)' "$log" | head -c 100)"; fail=1 ;;
       VACUOUS) echo "  ❌ $s: VACUOUS — 0 tests ran (filter '${FILTER:-<none>}' matched nothing); a green over an empty set is not a pass"; fail=1 ;;
@@ -617,6 +735,10 @@ matrix_run() {  # matrix_run SAN FILTER SPEC...
         echo "  ❌ $san $spec: tests FAILED under the sanitizer, rc=$rc ($((t1 - t0))s) — log $log"
         grep -E '^test .* FAILED$|^error: test failed|signal:' "$log" | head -6 | sed 's/^/       /'
         M_ROWS="$M_ROWS$spec|FAIL|$(tests_ran "$log")|$((t1 - t0))"$'\n' ;;
+      HANG)
+        M_RED=1
+        echo "  ❌ $san $spec: $(grep -m1 "^$HANG_MARK after " "$log" | sed "s/^$HANG_MARK/HANG/") — the process tree was killed; log $log"
+        M_ROWS="$M_ROWS$spec|HANG|$(tests_ran "$log")|$((t1 - t0))"$'\n' ;;
       VACUOUS)
         M_RED=1
         echo "  ❌ $san $spec: VACUOUS — 0 tests ran (filter '${filter:-<none>}'); a green over an empty set is not a pass"
@@ -725,8 +847,11 @@ gate_asan_like() {  # gate_asan_like asan|lsan|hwasan
   if [ "$san" = hwasan ]; then hwasan_host_blocked; fi
   own_job_blocked "$id"
   need_nightly
-  if [ "$san" = lsan ] && [ "$OS" != "Linux" ]; then
-    echo "BLOCKED: $id needs LeakSanitizer, which exists on Linux only (rustc rejects -Zsanitizer=leak on $OS and Apple's ASan has no leak checker). It runs on the Linux VM (rvm) and in ci.yml's sanitizers job."
+  # G-LSAN runs where rustc's ASan runtime carries a working leak checker:
+  # Linux and macOS (verified P7-W16a; see the platform table at the top).
+  # Anywhere else it is unverified, so BLOCKED, never GREEN.
+  if [ "$san" = lsan ] && [ "$OS" != "Linux" ] && [ "$OS" != "Darwin" ]; then
+    echo "BLOCKED: $id needs LeakSanitizer through rustc's ASan runtime (detect_leaks=1), verified on Linux and macOS only, not on $OS. It runs on the Mac, on the Linux VM (rvm) and in ci.yml's sanitizers job."
     exit 3
   fi
   if [ "$san" = lsan ] && [ ! -r "$LSAN_SUPP" ]; then
@@ -806,7 +931,7 @@ gate_msan() {
   own_job_blocked G-MSAN
   need_nightly
   if [ "$OS" != "Linux" ]; then
-    echo "BLOCKED: G-MSAN needs MemorySanitizer, which exists on Linux only (not on $OS). It runs on the Linux VM (rvm) and in ci.yml's sanitizers job."
+    echo "BLOCKED: G-MSAN needs MemorySanitizer, which exists on Linux only (not on $OS: compiler-rt builds MSan for Linux/FreeBSD/NetBSD only, and rustc rejects -Zsanitizer=memory for this target). It runs on the Linux VM (rvm) and in ci.yml's sanitizers job; on macOS the uninitialized-read coverage is Miri's (G6/G6c) plus that Linux lane."
     exit 3
   fi
   if [ -n "$MSAN_AARCH64_NOTE" ] && [ "$ARCH" = "aarch64" ]; then
@@ -869,6 +994,9 @@ self_test() {
   ck allignored 0 VACUOUS; ck crash 101 FAIL
   printf 'running 1 test\n==5==ERROR: HWAddressSanitizer: tag-mismatch on address 0xec0dfffe01e8\nSUMMARY: HWAddressSanitizer: tag-mismatch\n' >"$st/logs/hwasan.log"
   ck hwasan 99 FINDING
+  # A hang is RED even when the part of the log written before it looks clean.
+  printf 'running 4 tests\ntest result: ok. 4 passed; 0 failed; 0 ignored\n\nSANITIZERS-HANG after 9s (no verdict)\n' >"$st/logs/hang.log"
+  ck hang 0 HANG; ck hang 143 HANG
   # --- arm D: drop_target removes only san-<san> and san-<san>-<crate> dirs ---
   mkdir -p "$st/t/san-asan" "$st/t/san-asan-foo" "$st/t/san-other"
   if ( SAN_TARGET_ROOT="$st/t"; drop_target "$st" ) 2>/dev/null; then echo "  FAIL D drop_target accepted a non-sanitizer dir"; fail=1
@@ -928,6 +1056,8 @@ RS
   xe "an expected-absent row that matches nothing is stale (RED)" 1 "matches no Miri-excepted test (stale)"
   xc "${R}test b::tests::ran ... ok\ntest a::tests::ignored_one ... ok\ntest a::tests::absent_one ... ok\n" ""
   xe "an ok in another module (b::tests::ran) does not satisfy a::ran (module-path match)" 1 "a::ran (src/a.rs): Miri-excepted but absent"
+  xc "${R}test a::tests::ran ... ok\nhellotest a::tests::ignored_one ... ok\n test a::tests::absent_one ... ok\n" ""
+  xe "a result line prefixed by a test's unterminated stdout still counts" 0 "3 Miri-excepted test(s); 3 ran and passed"
   # A same-named test in a CHILD file (a/b.rs -> a::b) or a sibling inline mod
   # of a.rs must not satisfy a::tests::ran: only the inline mods enclosing the
   # annotation in its own file may sit between the file module and the fn.
@@ -1013,11 +1143,9 @@ RS
   if [ $rc -eq 3 ] && printf '%s' "$out" | grep -q 'defers to the fixture job'; then echo "  ok   F RUSTTY_SANITIZERS_OWN_JOB is BLOCKED (exit 3), naming the job"
   else echo "  FAIL F OWN_JOB (rc=$rc): $out"; fail=1; fi
   if [ "$OS" != "Linux" ]; then
-    for g in lsan msan; do
-      out="$(env -u RUSTTY_SANITIZERS_OWN_JOB bash "$GATES_DIR/sanitizers.sh" --gate "$g" 2>&1)"; rc=$?
-      if [ $rc -eq 3 ] && printf '%s' "$out" | grep -q 'exists on Linux only'; then echo "  ok   F --gate $g on $OS is BLOCKED (exit 3), Linux-only"
-      else echo "  FAIL F --gate $g on $OS (rc=$rc): $out"; fail=1; fi
-    done
+    out="$(env -u RUSTTY_SANITIZERS_OWN_JOB bash "$GATES_DIR/sanitizers.sh" --gate msan 2>&1)"; rc=$?
+    if [ $rc -eq 3 ] && printf '%s' "$out" | grep -q 'exists on Linux only'; then echo "  ok   F --gate msan on $OS is BLOCKED (exit 3), Linux-only"
+    else echo "  FAIL F --gate msan on $OS (rc=$rc): $out"; fail=1; fi
   fi
   if [ "$OS" != "Linux" ] || [ "$ARCH" != "aarch64" ]; then
     # Even with RUSTTY_SANITIZERS_OWN_JOB set, the host reason comes first: no
@@ -1026,6 +1154,9 @@ RS
     if [ $rc -eq 3 ] && printf '%s' "$out" | grep -q 'exists on aarch64 Linux only'; then echo "  ok   F --gate hwasan on $OS/$ARCH is BLOCKED (exit 3), aarch64-Linux-only"
     else echo "  FAIL F --gate hwasan on $OS/$ARCH (rc=$rc): $out"; fail=1; fi
   fi
+  # G-LSAN runs on Linux and macOS; any other host is BLOCKED (unverified there).
+  hx "--gate lsan on a host other than Linux/macOS is BLOCKED (exit 3)" 3 "verified on Linux and macOS only, not on FreeBSD" \
+    'unset RUSTTY_SANITIZERS_OWN_JOB; OS=FreeBSD; gate_asan_like lsan'
 
   # --- arms A/B: the synthetic crate under the real sanitizers ---
   local cr="$st/crate"
@@ -1036,6 +1167,9 @@ name = "san-selftest"
 version = "0.0.0"
 edition = "2021"
 publish = false
+
+[features]
+hook = []
 
 [workspace]
 TOML
@@ -1121,14 +1255,128 @@ mod tests {
         let v: Vec<u8> = (0u8..16).collect();
         assert_eq!(v.iter().map(|&b| b as u32).sum::<u32>(), 120);
     }
+
+    // The hang arm: sleeps far past the arm's bound, so only the bound ends it.
+    #[test]
+    fn slow_hang() {
+        std::thread::sleep(std::time::Duration::from_secs(900));
+    }
+}
+
+/// LeakSanitizer's opt-out hook, only with the `hook` feature (arm "A2 opt-out
+/// hook"): returning 1 turns the exit-time leak check off.
+#[cfg(all(test, feature = "hook"))]
+#[no_mangle]
+extern "C" fn __lsan_is_turned_off() -> core::ffi::c_int {
+    1
+}
+
+/// Darwin negative controls for lsan-darwin.supp (fix round 1): each `leak_*`
+/// test leaks one object Rustty could leak through the system APIs whose
+/// internals the file suppresses, and must stay RED under the real file; the
+/// create-and-release control must be GREEN (the suppressions cover exactly
+/// the system's own state).
+#[cfg(all(test, target_os = "macos"))]
+mod darwin {
+    use core::ffi::{c_char, c_void};
+    #[link(name = "CoreFoundation", kind = "framework")]
+    #[link(name = "CoreText", kind = "framework")]
+    #[link(name = "CoreGraphics", kind = "framework")]
+    #[link(name = "Metal", kind = "framework")]
+    extern "C" {
+        fn CFStringCreateWithCString(a: *const c_void, s: *const c_char, enc: u32) -> *const c_void;
+        fn CFRelease(p: *const c_void);
+        fn CTFontCreateWithName(name: *const c_void, size: f64, m: *const c_void) -> *const c_void;
+        fn CTFontDescriptorCreateWithNameAndSize(name: *const c_void, size: f64) -> *const c_void;
+        fn CTFontCopyFontDescriptor(font: *const c_void) -> *const c_void;
+        fn CGFontCreateWithFontName(name: *const c_void) -> *const c_void;
+        fn MTLCopyAllDevices() -> *const c_void;
+    }
+    fn menlo() -> *const c_void {
+        // kCFStringEncodingUTF8
+        unsafe { CFStringCreateWithCString(core::ptr::null(), c"Menlo-Regular".as_ptr(), 0x0800_0100) }
+    }
+    #[inline(never)]
+    fn sink(p: *const c_void) {
+        std::hint::black_box(p);
+    }
+    #[test]
+    fn create_release_control() {
+        let n = menlo();
+        let f = unsafe { CTFontCreateWithName(n, 12.0, core::ptr::null()) };
+        let d = unsafe { CTFontCopyFontDescriptor(f) };
+        unsafe {
+            CFRelease(d);
+            CFRelease(f);
+            CFRelease(n);
+        }
+    }
+    #[test]
+    fn leak_ctfont() {
+        let n = menlo();
+        for i in 0..4 {
+            sink(unsafe { CTFontCreateWithName(n, 13.0 + i as f64, core::ptr::null()) });
+        }
+        unsafe { CFRelease(n) };
+    }
+    #[test]
+    fn leak_font_descriptor_created() {
+        let n = menlo();
+        for i in 0..4 {
+            sink(unsafe { CTFontDescriptorCreateWithNameAndSize(n, 13.0 + i as f64) });
+        }
+        unsafe { CFRelease(n) };
+    }
+    #[test]
+    fn leak_font_descriptor_copied() {
+        let n = menlo();
+        for i in 0..4 {
+            let f = unsafe { CTFontCreateWithName(n, 17.0 + i as f64, core::ptr::null()) };
+            sink(unsafe { CTFontCopyFontDescriptor(f) });
+            unsafe { CFRelease(f) };
+        }
+        unsafe { CFRelease(n) };
+    }
+    extern "C" {
+        fn CTFontCopyCharacterSet(font: *const c_void) -> *const c_void;
+        fn CFCharacterSetCreateMutableCopy(a: *const c_void, s: *const c_void) -> *const c_void;
+    }
+    #[test]
+    fn leak_charset_derived() {
+        let n = menlo();
+        let f = unsafe { CTFontCreateWithName(n, 25.0, core::ptr::null()) };
+        let cs = unsafe { CTFontCopyCharacterSet(f) };
+        for _ in 0..4 {
+            sink(unsafe { CFCharacterSetCreateMutableCopy(core::ptr::null(), cs) });
+        }
+        unsafe {
+            CFRelease(cs);
+            CFRelease(f);
+            CFRelease(n);
+        }
+    }
+    #[test]
+    fn leak_cgfont() {
+        let n = menlo();
+        for _ in 0..4 {
+            sink(unsafe { CGFontCreateWithFontName(n) });
+        }
+        unsafe { CFRelease(n) };
+    }
+    #[test]
+    fn leak_mtl_device_array() {
+        for _ in 0..4 {
+            sink(unsafe { MTLCopyAllDevices() });
+        }
+    }
 }
 RS
   local sroot="$st/target"
-  arm() {  # arm NAME SAN FILTER WANT(RED|GREEN) MUST_GREP
-    local name="$1" san="$2" filter="$3" want="$4" must="$5" o r
-    o="$(SAN_PER_CRATE_TARGET="${ARM_PER_CRATE:-0}" SAN_MANIFEST_PATH="${ARM_MANIFEST:-$cr/Cargo.toml}" SAN_TARGET_ROOT="$sroot" SAN_LOG_ROOT="$st/slogs-$name" SAN_MIN_FREE_GB=0 \
+  arm() {  # arm NAME SAN FILTER WANT(RED|GREEN) MUST_GREP [SPEC]
+    local name="$1" san="$2" filter="$3" want="$4" must="$5" spec="${6:-${ARM_SPEC:-san-selftest}}" o r
+    o="$(SAN_CRATE_TIMEOUT_S="${ARM_TIMEOUT:-}" SAN_PER_CRATE_TARGET="${ARM_PER_CRATE:-0}" SAN_MANIFEST_PATH="${ARM_MANIFEST:-$cr/Cargo.toml}" SAN_TARGET_ROOT="$sroot" SAN_LOG_ROOT="$st/slogs-$name" SAN_MIN_FREE_GB=0 \
          M_RED=0 M_BLOCKED=0 M_TOTAL=0 M_ROWS="" bash -c '. "$0" --source-only; matrix_run "$1" "$2" "$3"; matrix_summary "$1"; gate_verdict SELF 0' \
-         "$GATES_DIR/sanitizers.sh" "$san" "$filter" "${ARM_SPEC:-san-selftest}" 2>&1)"; r=$?
+         "$GATES_DIR/sanitizers.sh" "$san" "$filter" "$spec" 2>&1)"; r=$?
     local okv=0
     case "$want" in
       RED) [ $r -eq 1 ] && printf '%s' "$o" | grep -qE "$must" && okv=1 ;;
@@ -1144,6 +1392,13 @@ RS
   ARM_PER_CRATE=1 arm "A0 per-crate target dirs (--per-crate-target)" asan "tests::defect_heap_overflow --exact" RED "per-crate target dirs"
   if [ -d "$sroot/san-asan-san-selftest" ]; then echo "  FAIL A0: the per-crate target dir outlived its crate"; fail=1; fi
   arm "B  empty filter" asan "no_such_test_anywhere" RED "VACUOUS"
+  # The hang bound: a test that never finishes is RED (HANG), the pass goes
+  # on, and nothing of the killed tree is left running. 60 s covers the
+  # synthetic crate's instrumented build on a loaded host; the test sleeps 900.
+  ARM_TIMEOUT=60 arm "B  hang past the bound" asan "tests::slow_hang --exact" RED "HANG after 60s \\(no verdict\\)"
+  if pgrep -f 'tests::slow_hang' >/dev/null 2>&1; then
+    echo "  FAIL B  the killed test is still running: $(pgrep -f 'tests::slow_hang' | tr '\n' ' ')"; fail=1
+  else echo "  ok   B  the hung test's process tree is gone after the kill"; fi
   # BUILD: a crate that does not compile is BLOCKED (exit 3), never GREEN or RED.
   local bc="$st/badcrate"
   mkdir -p "$bc/src"
@@ -1178,9 +1433,32 @@ RS
     if printf '%s' "$nto" | grep -q "${nrc#*|}" && printf '%s' "$nto" | grep -q "$want"; then echo "  ok   G NO_TESTS_ON, filter '${nrc%%|*}': ${nrc#*|} ($want)"
     else echo "  FAIL G NO_TESTS_ON, filter '${nrc%%|*}':"; printf '%s\n' "$nto" | tail -5 | sed 's/^/       /'; fail=1; fi
   done
-  if [ "$OS" = "Linux" ]; then
+  if [ "$OS" = "Linux" ] || [ "$OS" = "Darwin" ]; then
     arm "A2 leak" lsan "tests::defect_leak --exact" RED "LeakSanitizer: detected memory leaks"
+    arm "A2 control: clean under LSan" lsan "tests::clean_control --exact" GREEN "1 test\\(s\\) ran"
     arm "A2 control: the leak under G-ASAN (leak checker off)" asan "tests::defect_leak --exact" GREEN "1 test\\(s\\) ran"
+    # The documented opt-out hook (__lsan_is_turned_off) that rustty-termio's
+    # fork-child tests define must reach the runtime: with the `hook` feature
+    # the synthetic crate's hook returns 1, so its deliberate leak is NOT
+    # reported. On macOS that holds only because run_crate exports the
+    # executable's symbols (-Zexport-executable-symbols); without the flag this
+    # arm is RED (measured P7-W16a).
+    arm "A2 opt-out hook reaches the runtime" "lsan" "tests::defect_leak --exact" GREEN "1 test\\(s\\) ran" "san-selftest:hook"
+    if [ "$OS" = "Darwin" ]; then
+      # lsan-darwin.supp's negative controls (fix round 1): the system state the
+      # file suppresses must not hide an object Rustty leaks through those APIs.
+      arm "A2d control: CoreText create and release, clean under lsan-darwin.supp" lsan "darwin::create_release_control --exact" GREEN "1 test\\(s\\) ran"
+      arm "A2d leaked CTFont (S9, S10, S13)" lsan "darwin::leak_ctfont --exact" RED "LeakSanitizer: detected memory leaks"
+      arm "A2d leaked CTFontDescriptor, created (S10)" lsan "darwin::leak_font_descriptor_created --exact" RED "LeakSanitizer: detected memory leaks"
+      arm "A2d leaked CTFontDescriptor, copied from a font (S10)" lsan "darwin::leak_font_descriptor_copied --exact" RED "LeakSanitizer: detected memory leaks"
+      arm "A2d leaked character set derived from a font's (S9)" lsan "darwin::leak_charset_derived --exact" RED "LeakSanitizer: detected memory leaks"
+      arm "A2d leaked CGFont (S13)" lsan "darwin::leak_cgfont --exact" RED "LeakSanitizer: detected memory leaks"
+      arm "A2d leaked MTLCopyAllDevices array (S17, S18)" lsan "darwin::leak_mtl_device_array --exact" RED "LeakSanitizer: detected memory leaks"
+    fi
+  else
+    echo "  skip A2 leak under LSan: verified on Linux and macOS only, not on $OS"
+  fi
+  if [ "$OS" = "Linux" ]; then
     if [ -n "$MSAN_AARCH64_NOTE" ] && [ "$ARCH" = "aarch64" ]; then
       echo "  skip A3 uninit read under MSan: BLOCKED on $ARCH ($MSAN_AARCH64_NOTE)"
     else
@@ -1188,8 +1466,7 @@ RS
       arm "A3 control: clean under MSan" msan "tests::clean_control --exact" GREEN "1 test\\(s\\) ran"
     fi
   else
-    echo "  skip A2 leak under LSan: Linux-only (rustc rejects -Zsanitizer=leak on $OS); runs on rvm / ci.yml"
-    echo "  skip A3 uninit read under MSan: Linux-only; runs on rvm / ci.yml"
+    echo "  skip A3 uninit read under MSan: Linux-only (compiler-rt has no MSan for $OS); runs on rvm / ci.yml"
   fi
   if [ "$OS" = "Linux" ] && [ "$ARCH" = "aarch64" ]; then
     arm "A4 heap overflow" hwasan "tests::defect_heap_overflow --exact" RED "HWAddressSanitizer: tag-mismatch"
