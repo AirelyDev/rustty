@@ -57,16 +57,16 @@ pin), G-P2-SELF, G-KAITAI (now HARD).
 | gate | tier | where | what |
 |---|---|---|---|
 | G-SAN-SELF | HARD | everywhere (needs nightly) | a synthetic crate's heap overflow, leak and uninitialized read are RED under ASan, LSan and MSan (the last two on Linux only), a clean control GREEN, a filter matching nothing a vacuous RED; plus the classifier, cross-check, `NO_TESTS_ON` and BLOCKED arms over fixtures |
-| G-ASAN | HARD (`--fast` skips it) | macOS and Linux | AddressSanitizer over every workspace member's tests plus the `rustty-vt:wuffs` lane, then the cross-check that every Miri exception claiming ASan coverage ran and passed |
+| G-ASAN | HARD (`--fast` skips it) | macOS and Linux | AddressSanitizer over every workspace member's tests plus the `rustty-vt:wuffs` lane, then the cross-check that every Miri-excepted test (468) ran and passed, or is on the per-OS expected-absent list |
 | G-LSAN | HARD (`--fast` skips it) | Linux; BLOCKED elsewhere | ASan with `detect_leaks=1`, the same scope plus the GTK apprt and Flatpak feature lanes; suppressions only through `.port/phase-2/SANITIZER_SUPPRESSIONS.md` / `lsan.supp` (two, both Mesa) |
-| G-MSAN | HARD (`--fast` skips it) | Linux; BLOCKED elsewhere | MemorySanitizer with `-Zbuild-std` and our C/C++ instrumented, over an allow-list of 58 members; 3 excluded with reasons (glslang-sys, rustty-renderer, xtask) |
+| G-MSAN | HARD (`--fast` skips it) | Linux; BLOCKED elsewhere | MemorySanitizer with `-Zbuild-std` and our C/C++ instrumented, over an allow-list of 59 members (rustty-renderer with its EGL/GL/glslang test modules skipped by name); 2 excluded with reasons (glslang-sys, xtask) |
 
 In ci.yml's `ci` job the three report BLOCKED (`RUSTTY_SANITIZERS_OWN_JOB`), naming the new `sanitizers`
 job (one leg per sanitizer on x86_64 Linux, never run yet: V30). Results of P7-W14's runs:
 G-SAN-SELF green on macOS and rvm (every arm on Linux); G-ASAN (macOS arm64, 2026-10-02) GREEN, 9,826
 tests over 61 members and the `rustty-vt:wuffs` lane, 117 of 117 ASan claims verified, 15 min with one
 shared target dir; G-LSAN (rvm) GREEN, 10,087 tests over 61 members and three feature lanes, 86 claims
-verified and 31 macOS-only, 20 min; G-MSAN (rvm) GREEN, 6,183 tests over 58 members, 50 min. The first
+verified and 31 macOS-only, 20 min; G-MSAN (rvm) GREEN, 6,183 tests over 58 members, 50 min. Fix round 1 (2026-10-02): the cross-check covers all 468 Miri-excepted tests (macOS: 459 ran, 9 expected absent; Linux: 412 ran, 56 expected absent), G-ASAN GREEN with 9,850 tests including a `rustty-vt:wuffs,oniguruma` lane, and `rustty-renderer` joins G-MSAN (52 tests, its EGL/GL/glslang modules skipped by name). The first
 runs found N495-N499 (register below); the suppressions, lane options and exclusions are in
 `.port/phase-2/SANITIZER_SUPPRESSIONS.md`.
 
@@ -126,7 +126,7 @@ Code gaps left after the final triage, none a ledger row:
   record-only (not a UD, unreachable).
 - **Sanitizer lane limits (P7-W14)**: G-ASAN and G-LSAN compile the vendored C/C++ uninstrumented
   (ASan sees its heap through the allocator interceptors, not its own loads and stores), and G-MSAN
-  excludes `glslang-sys`, `rustty-renderer` and `xtask`. Both are in
+  excludes `glslang-sys` and `xtask` and skips `rustty-renderer`'s EGL/GL/glslang test modules. Both are in
   `.port/phase-2/SANITIZER_SUPPRESSIONS.md` "Known limits". TSan (G-TSAN) and the Miri-on-nextest
   work are later steps of the same design.
 - **V27–V29**: Phase-7 Miri runs over the 30-minute task bound

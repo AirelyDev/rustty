@@ -68,13 +68,13 @@ the option in `sanitizers.sh`).
 MSan works on aarch64-unknown-linux-gnu with `-Zbuild-std` (verified on rvm, 2026-10-01: G-SAN-SELF's
 uninitialized-read arm is RED, its clean control GREEN). It has no runtime suppressions file; a read of
 memory written by uninstrumented code is reported, so its scope is an allow-list (`MSAN_SCOPE`) measured
-by a probe of every workspace member (rvm, glibc 2.43, clang 22): 58 members in scope, 3 excluded.
+by a probe of every workspace member (rvm, glibc 2.43, clang 22): 59 members in scope (one with named test skips), 2 excluded.
 
 | id | what | kind | reason | evidence |
 |---|---|---|---|---|
 | M1 | `msan-stat-shim.h`, forced into the C of `fontconfig-sys` and `freetype-sys` only | tool workaround | rustc's MSan runtime does not mark `stat(2)`'s output initialized for a C caller on this glibc; clang's own runtime does. The shim calls the real `stat`/`lstat`/`fstat` and unpoisons the struct on success, which is what the interceptor does. Applied to two crates because it includes `<sys/stat.h>` ahead of the source's feature macros (applied everywhere, it hid `pthread_setname_np` from sentry-native). | Probe 1: `fontconfig-sys` RED in `FcFileIsDir` (`fcdir.c:47`, origin: the stack `statb`, filled by `stat`). Reproduced with a 2-line C function `stat("/")` + `S_ISDIR`: clean linked by `clang -fsanitize=memory`, RED linked by rustc. With the shim: 4 tests green. `fontconfig-sys`'s test also reaches freetype's `FT_Stream_Open` `fstat` (`builds/unix/ftsystem.c:279`, RED at `:300` without the shim), hence `freetype-sys`. |
 | M2 | exclude `glslang-sys` | crate exclusion | Its test runs glslang's preprocessor, whose `TPpContext` holds a `std::istringstream` constructed and imbued (`std::locale::classic()`) inside the uninstrumented `libstdc++.so`. | Probe: `PpContext.cpp:98`, origin "allocation of 'ppContext' in the stack frame" of `InitializeSymbolTable`. Needs an MSan-instrumented C++ standard library. |
-| M3 | exclude `rustty-renderer` | crate exclusion | Its Linux tests drive EGL/OpenGL in the system's uninstrumented `libEGL`/Mesa. | Probe: `eglQueryString` under `OffscreenContext::init` (`opengl/gl/sys.rs:195`), origin a `malloc` inside `/lib64/libEGL.so.1`. |
+| M3 | `rustty-renderer` in scope with four named skips (`MSAN_SKIPS`): `generic::linux_impl::tests`, `image::linux_impl::tests`, `opengl::`, `shadertoy::` | test skips | Those modules drive EGL/OpenGL in the system's uninstrumented `libEGL`/Mesa, or translate shaders through glslang (M2). Fix round 1 replaced the first draft's whole-crate exclusion: 52 renderer tests (cell, cursor, dmabuf, derived config, message, thread, image layout, and the integration targets) now run under MSan; 102 are skipped by these filters. `--skip` is a substring filter, so `opengl::`'s few pure tests (`gpu_abi`) go with it. | Probe: `eglQueryString` under `OffscreenContext::init` (`opengl/gl/sys.rs:195`), origin a `malloc` inside `/lib64/libEGL.so.1`, reached from `generic::linux_impl` and `image::linux_impl::tests::gl_api`; a `SAN_MSAN_DIAG=1` run (recover mode, every report) also hit glslang's `PpContext.cpp:98` from the renderer's shader builds. With the four skips: 52 passed, 0 findings (rvm, 2026-10-02). |
 | M4 | exclude `xtask` | crate exclusion | Its tests run nested `cargo`/`cmake` builds that inherit `RUSTFLAGS=-Zsanitizer=memory` without `-Zbuild-std`, which rustc rejects. It is the build driver (G-VALGRIND leaves it out too). | Probe: `error: mixing -Zsanitizer will cause an ABI mismatch in crate rustty_util` from `xtask/tests/cmake_lib_vt.rs`. |
 | M5 | `msan-decl.h` (one prototype, no includes), forced into `sentry-sys`'s C | third-party build defect | sentry-native calls `__msan_unpoison` under `__has_feature(memory_sanitizer)` without including `<sanitizer/msan_interface.h>` (`src/sentry_unix_pageallocator.c:65`), so it does not compile under MSan. | rvm, 2026-10-01: `error: call to undeclared function '__msan_unpoison'`. Not ours; an upstream sentry-native fix would be the missing include. |
 
@@ -103,5 +103,15 @@ that have no test on a host OS by construction (they are still built under the s
   The design (§B) asks for the C instrumented too. G-MSAN already does it through compiler wrappers; doing
   the same for ASan needs a clang whose ASan ABI matches rustc's runtime, which holds for Fedora's clang 22
   but is unverified for Apple clang on macOS. Not done in P7-W14.
-- MSan's scope excludes the three crates above until an instrumented C++ standard library and EGL are
+- MSan's scope excludes the two crates above and skips rustty-renderer's EGL/GL/glslang test modules until an instrumented C++ standard library and EGL are
   available (an x86_64 CI image could provide an MSan-built libc++).
+
+## Miri-excepted tests expected absent from a sanitizer pass
+
+G-ASAN and G-LSAN check that every Miri-excepted test ran and passed under them
+(`san_miri_crosscheck.py`). The ones that cannot run on a host OS (cfg-gated off it, or natively
+`#[ignore]`d there) are listed, per OS and with reasons, in `.port/tools/gates/san_expected_absent.tsv`:
+9 on macOS (7 Windows-only kitty path tests, one Linux-only `/proc` test, one release-only benchmark
+test) and 56 on Linux (the `rustty-xev` kqueue backend, the `rustty-os` macOS modules, the non-pipe2
+fallback, two termio `setup_fd` tests, and the same Windows and benchmark rows). A row whose tests
+ran, or that matches nothing, is RED.

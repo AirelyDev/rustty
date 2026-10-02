@@ -134,7 +134,9 @@ MSAN_SCOPE=(
 # SANITIZER_SUPPRESSIONS.md; a crate not in MSAN_SCOPE is stale (RED).
 MSAN_SKIPS=(
   "rustty-renderer|generic::linux_impl::tests|the golden-renderer tests drive EGL and OpenGL in the system's uninstrumented libEGL/Mesa; MSan reports reads of what libEGL wrote itself (eglQueryString under OffscreenContext::init, origin a malloc inside libEGL.so.1) (M3)"
-  "rustty-renderer|opengl::|the OpenGL backend's own tests, which need the same EGL context (M3)"
+  "rustty-renderer|image::linux_impl::tests|the kitty-image tests build their textures through the same offscreen EGL context (gl_api -> OpenGL::init_offscreen -> eglQueryString in libEGL) (M3)"
+  "rustty-renderer|opengl::|the OpenGL backend's tests: EGL contexts (gl::sys, gl::test_support, opengl_impl) and shader builds through glslang (uninstrumented libstdc++, M2); the module's few pure tests (gpu_abi layout checks) go with it, since --skip is a substring filter (M3)"
+  "rustty-renderer|shadertoy::|custom-shader translation through glslang and spirv-cross, whose glslang preprocessor reads libstdc++-constructed stream state (M2)"
 )
 MSAN_EXCLUDES=(
   "glslang-sys|its test runs glslang's preprocessor, whose TPpContext holds a std::istringstream constructed and imbued by the uninstrumented libstdc++.so; MSan reports the stream's own fields as uninitialized (PpContext.cpp:98, origin: the stack allocation of 'ppContext'); needs an MSan-instrumented libstdc++/libc++ (SANITIZER_SUPPRESSIONS.md M2)"
@@ -279,7 +281,7 @@ run_crate() {
       envs+=("ASAN_OPTIONS=detect_leaks=1:allocator_may_return_null=1")      # WHY: not suppressive — turns the leak checker ON; this IS G-LSAN (design §B: LSan run as ASan with detect_leaks=1)
       envs+=("LSAN_OPTIONS=suppressions=$LSAN_SUPP:print_suppressions=1") ;;  # WHY: every entry in lsan.supp is a third-party leak with a cited reason in .port/phase-2/SANITIZER_SUPPRESSIONS.md; print_suppressions=1 lists every match in the log so a suppression is never silent
     msan|memory)
-      rflags="-Zsanitizer=memory -Zsanitizer-memory-track-origins"
+      rflags="-Zsanitizer=memory -Zsanitizer-memory-track-origins ${SAN_MSAN_DIAG:+-Zsanitizer-recover=memory}"
       build_std="-Zbuild-std"
       # The C/C++ we compile ourselves through `cc` is instrumented too, through
       # the msan-cc wrappers (see write_msan_wrappers): plain CFLAGS would also
@@ -288,7 +290,7 @@ run_crate() {
       # rustty-cli's zlib-sys build-dependency, P7-W14).
       write_msan_wrappers || return 2
       envs+=("CC=$SAN_TARGET_ROOT/san-cc-wrappers/msan-cc" "CXX=$SAN_TARGET_ROOT/san-cc-wrappers/msan-c++")
-      envs+=("MSAN_OPTIONS=poison_in_dtor=1:allocator_may_return_null=1") ;;
+      envs+=("MSAN_OPTIONS=poison_in_dtor=1:allocator_may_return_null=1${SAN_MSAN_DIAG:+:halt_on_error=0}") ;;  # SAN_MSAN_DIAG=1: a diagnosis run that reports every use instead of stopping at the first (never a gate setting; the verdict is still RED on any report)
     thread)
       rflags="-Zsanitizer=thread"; build_std="-Zbuild-std" ;;
     leak)
@@ -400,6 +402,7 @@ no_tests_reason() {  # no_tests_reason SPEC -> the NO_TESTS_ON reason for this O
 spec_skips() {  # spec_skips SAN SPEC -> " --skip F ..." for that sanitizer's named skips
   local e
   [ "$1" = msan ] || return 0
+  [ -z "${SAN_MSAN_DIAG:-}" ] || return 0  # a diagnosis run lists every MSan report, so it skips nothing
   for e in ${MSAN_SKIPS[@]+"${MSAN_SKIPS[@]}"}; do
     if [ "${e%%|*}" = "$2" ]; then printf ' --skip %s' "$(printf '%s' "$e" | cut -d'|' -f2)"; fi
   done
@@ -662,6 +665,7 @@ gate_msan() {
   rm -rf -- "${SAN_LOG_ROOT:?}/msan"
   matrix_run msan "" ${MSAN_SCOPE[@]+"${MSAN_SCOPE[@]}"}
   matrix_summary msan
+  if [ -n "${SAN_MSAN_DIAG:-}" ]; then echo "  BLOCKED: SAN_MSAN_DIAG ran without the named skips (a diagnosis run)"; M_BLOCKED=1; fi
   gate_verdict "G-MSAN" "$extra"
 }
 
@@ -904,7 +908,7 @@ RS
   if [ $r -eq 3 ] && printf '%s' "$o" | grep -q 'below the SAN_MIN_FREE_GB=999999 floor'; then echo "  ok   H the disk floor stops the pass BLOCKED (exit 3)"
   else echo "  FAIL H disk floor (rc=$r):"; printf '%s\n' "$o" | tail -5; fail=1; fi
   # SAN_ONLY: a narrowed gate is never GREEN, even when what it ran is clean.
-  o="$(SAN_PER_CRATE_TARGET=0 SAN_TARGET_ROOT="$sroot" SAN_LOG_ROOT="$st/slogs-only" SAN_ONLY=rustty-identity \
+  o="$(SAN_PER_CRATE_TARGET=0 SAN_TARGET_ROOT="$sroot" SAN_LOG_ROOT="$st/slogs-only" SAN_ONLY=rustty-identity SAN_MIN_FREE_GB=0 \
        bash "$GATES_DIR/sanitizers.sh" --gate asan 2>&1)"; r=$?
   if [ $r -eq 3 ] && printf '%s' "$o" | grep -q 'asan rustty-identity: 1 test(s) ran' && printf '%s' "$o" | grep -q 'G-ASAN: BLOCKED'; then
     echo "  ok   H SAN_ONLY=rustty-identity: its 1 test GREEN, the gate BLOCKED (exit 3), never GREEN"

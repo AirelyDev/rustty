@@ -114,8 +114,9 @@
 #                                    ASan+LeakSanitizer and MemorySanitizer
 #                                    (Linux; BLOCKED elsewhere), one crate at
 #                                    a time            -> HARD-FAIL.
-#                                    G-ASAN also checks every Miri exception
-#                                    that claims ASan coverage ran under it.
+#                                    G-ASAN and G-LSAN also check that every
+#                                    Miri-excepted test ran under them (or is
+#                                    on the per-OS expected-absent list).
 #                                    G-SAN-SELF (--self-test) proves each
 #                                    sanitizer RED on a synthetic defect.
 #   G-XCF check_xcframework.sh       dist/rustty-vt.xcframework is well-formed:

@@ -10357,6 +10357,14 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   true for it under ASan. It is not run by `cargo test --workspace` either (the feature is off there).
 - **fix**: G-ASAN and G-LSAN run a `rustty-vt:wuffs` feature lane. Measured: macOS G-ASAN
   `rustty-vt:wuffs` 3,360 tests, green; the cross-check then verified all 116 claims on macOS. Final G-ASAN (2026-10-02): 117 of 117 (P7-W14 added one), G-LSAN on rvm: 86 verified, 31 macOS-only.
+- **fix round 1**: the review held that design §B means every Miri-excepted test, not only those whose
+  reason mentions ASan. The check (`san_miri_crosscheck.py`) now covers all 468 tests carrying
+  `cfg_attr(miri | all(miri, ..) | any(miri, ..), ignore...)`, matches by module path, attaches an
+  annotation only to the `fn` directly after it, and reads the per-OS expected-absent list
+  (`san_expected_absent.tsv`; stale rows RED). It found one more test no lane compiled,
+  `tmux::control::concurrent_first_notifications_do_not_race_oniguruma_init` (feature `oniguruma`); the
+  lane is now `rustty-vt:wuffs,oniguruma`. Measured: macOS G-ASAN 459 ran, 9 expected absent, 0 problems;
+  Linux G-LSAN logs 412 ran, 56 expected absent, 0 problems.
 
 ## N498 — `rustty_app_free` leaked the app's whole cloned configuration
 
