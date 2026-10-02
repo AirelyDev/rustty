@@ -49,6 +49,22 @@ Gates fixed during the final tail (task C-1) with targeted runs: G-LINT, G-REL
 (which had been passing against stale driver binaries; goldens re-based on the
 pin), G-P2-SELF, G-KAITAI (now HARD).
 
+## Sanitizer gates (P7-W14, 2026-10-01)
+
+`.port/tools/gates/sanitizers.sh` became the sanitizer matrix of the memory-safety-lanes design
+(`docs/superpowers/specs/2026-10-01-memory-safety-lanes-design.md` §B), registered in `ci.sh`:
+
+| gate | tier | where | what |
+|---|---|---|---|
+| G-SAN-SELF | HARD | everywhere (needs nightly) | a synthetic crate's heap overflow, leak and uninitialized read are RED under ASan, LSan and MSan (the last two on Linux only), a clean control GREEN, a filter matching nothing a vacuous RED; plus the classifier, cross-check, `NO_TESTS_ON` and BLOCKED arms over fixtures |
+| G-ASAN | HARD (`--fast` skips it) | macOS and Linux | AddressSanitizer over every workspace member's tests plus the `rustty-vt:wuffs` lane, then the cross-check that every Miri exception claiming ASan coverage ran and passed |
+| G-LSAN | HARD (`--fast` skips it) | Linux; BLOCKED elsewhere | ASan with `detect_leaks=1`, the same scope plus the GTK apprt and Flatpak feature lanes; suppressions only through `.port/phase-2/SANITIZER_SUPPRESSIONS.md` / `lsan.supp` (two, both Mesa) |
+| G-MSAN | HARD (`--fast` skips it) | Linux; BLOCKED elsewhere | MemorySanitizer with `-Zbuild-std` and our C/C++ instrumented, over an allow-list of 58 members; 3 excluded with reasons (glslang-sys, rustty-renderer, xtask) |
+
+In ci.yml's `ci` job the three report BLOCKED (`RUSTTY_SANITIZERS_OWN_JOB`), naming the new `sanitizers`
+job (one leg per sanitizer on x86_64 Linux, never run yet: V30). Results of P7-W14's runs:
+SANITIZER_RESULTS_PLACEHOLDER
+
 ## Not verified here (long runs, deferred by the user on 2026-09-28)
 
 These were deliberately not run to finish the closure. Each has an exact
@@ -103,6 +119,11 @@ Code gaps left after the final triage, none a ledger row:
     overlapped the main thread's sync draw (aliasing-model UB; closed by P7-W7 T2).
 - Phase 7's other findings (N438–N465) are all CLOSED except **N438**, which is
   record-only (not a UD, unreachable).
+- **Sanitizer lane limits (P7-W14)**: G-ASAN and G-LSAN compile the vendored C/C++ uninstrumented
+  (ASan sees its heap through the allocator interceptors, not its own loads and stores), and G-MSAN
+  excludes `glslang-sys`, `rustty-renderer` and `xtask`. Both are in
+  `.port/phase-2/SANITIZER_SUPPRESSIONS.md` "Known limits". TSan (G-TSAN) and the Miri-on-nextest
+  work are later steps of the same design.
 - **V27–V29**: Phase-7 Miri runs over the 30-minute task bound
   (ENVIRONMENT-BLOCKED on time), with runnable recipes, deferred to P7-W12 T2.
 
@@ -186,6 +207,12 @@ committed records named here.
   the raw-root idiom; no production UB, so no UD).
 - **P7-W12 T9** (Wuffs FFI under Miri in the `rustty-vt` kitty tests) used N494 (CLOSED: one test
   given a Miri corpus, 24 excepted). **Next free ids: UD376, N495, V30.**
+- **P7-W14** (the G-ASAN, G-LSAN and G-MSAN gates) used UD376 (the `screen-clone` benchmark never frees
+  its clones), N495 (CLOSED: `rustty-cli`'s Mach-O constructor could not link under ASan), N496 (CLOSED:
+  the first sanitizer runs' test-side defects and lane configuration), N497 (CLOSED: a Miri exception
+  claimed ASan coverage for a test no ASan run executed), N498 (CLOSED: `rustty_app_free` leaked the
+  cloned configuration) and V30 (the new `sanitizers` CI job, never run on GitHub).
+  **Next free ids: UD377, N499, V31.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.

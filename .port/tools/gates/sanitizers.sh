@@ -183,9 +183,17 @@ classify() {
 # CARGO_PKG_NAME): the shim includes <sys/stat.h> before the source's own
 # feature macros, which hid pthread_setname_np from sentry-native
 # (`#define _GNU_SOURCE` comes too late) when it was applied to every crate.
-# fontconfig-sys is the one crate the first run showed it is needed for.
+# fontconfig-sys (FcFileIsDir's stat) and freetype-sys (FT_Stream_Open's
+# fstat, reached from fontconfig-sys's test) are the crates the runs needed it
+# for.
+#
+# sentry-sys gets msan-decl.h: sentry-native calls __msan_unpoison under
+# __has_feature(memory_sanitizer) without including <sanitizer/msan_interface.h>
+# (src/sentry_unix_pageallocator.c:65), so it does not compile under MSan
+# (M5). The header declares only that function and includes nothing.
 # ---------------------------------------------------------------------------
-MSAN_STAT_SHIM_PKGS="fontconfig-sys"
+MSAN_STAT_SHIM_PKGS="fontconfig-sys freetype-sys"
+MSAN_DECL_PKGS="sentry-sys"
 write_msan_wrappers() {
   local d="$SAN_TARGET_ROOT/san-cc-wrappers"
   mkdir -p "$d" || return 1
@@ -215,14 +223,19 @@ static inline int rustty_msan_fstat(int fd, struct stat *b) {
 #define fstat(fd, b) rustty_msan_fstat(fd, b)
 #endif
 SHIM
+  cat >"$d/msan-decl.h" <<'DECL'
+/* G-MSAN (sanitizers.sh): see write_msan_wrappers (M5). */
+void __msan_unpoison(const volatile void *a, unsigned long size);
+DECL
   local cc
   for cc in cc c++; do
-    local real=clang shim=""
-    if [ "$cc" = "c++" ]; then real=clang++; else shim="-include $d/msan-stat-shim.h"; fi
+    local real=clang shim="" decl=""
+    if [ "$cc" = "c++" ]; then real=clang++; else shim="-include $d/msan-stat-shim.h"; decl="-include $d/msan-decl.h"; fi
     cat >"$d/msan-$cc" <<WRAP
 #!/usr/bin/env bash
 shim=""
 case " $MSAN_STAT_SHIM_PKGS " in *" \${CARGO_PKG_NAME:-} "*) shim="$shim" ;; esac
+case " $MSAN_DECL_PKGS " in *" \${CARGO_PKG_NAME:-} "*) shim="$decl" ;; esac
 case ",\${CARGO_CFG_SANITIZE:-}," in
   *,memory,*) exec $real -fsanitize=memory -fsanitize-memory-track-origins -fno-omit-frame-pointer -g \$shim "\$@" ;;
   *) exec $real "\$@" ;;
@@ -393,6 +406,9 @@ matrix_run() {  # matrix_run SAN FILTER SPEC...
     echo "=== sanitizer matrix: $san over $# crate spec(s); per-crate target dirs $SAN_TARGET_ROOT/san-$san-<crate>, each deleted after its crate ==="
   else
     shared="$SAN_TARGET_ROOT/san-$san"
+    # A pass starts clean: a dir an aborted pass left behind may hold C built
+    # by an older compiler wrapper, which cargo would not notice.
+    drop_target "$shared"
     echo "=== sanitizer matrix: $san over $# crate spec(s); one shared target dir $shared, deleted when the pass ends ==="
   fi
   for spec in "$@"; do
