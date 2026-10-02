@@ -885,17 +885,55 @@ run_g6c_selftest() {
 # disabled, exactly as in G6c; everything else with them ON, as in G6.
 #
 # THE SCOPE, defined here and nowhere else. `<crate>` = the whole crate (every
-# test target, as G6 runs it); `<crate>:<module>` = that crate's tests under
-# `<module>::`. `--tree-borrows --self-test` proves every entry exists and
-# matches more than 0 tests.
-G6T_SCOPE="${G6T_SCOPE:-rustty-vt:page rustty-vt:pagelist rustty-vt:search rustty-vt:render rustty-vt:screen rustty-vt:terminal rustty-vt:snapshot rustty-vt:kitty rustty-vt-c rustty-renderer rustty-xev rustty-core}"
+# test target, as G6 runs it); `<crate>:<module path>` = that crate's lib tests
+# under `<module path>::`; `<crate>:-<test path>` = one named test taken back
+# out of a module entry, each with its reason below. `--tree-borrows
+# --self-test` proves every module entry exists and matches more than 0 tests,
+# and every exclusion names exactly one test.
+#
+# `rustty-renderer` is an FFI crate (G6 runs it under ASan, not Miri), so it is
+# scoped to the modules whose tests run under Miri (measured, P7-W15: 66 of its
+# 143 tests). EXCLUDED, with the reason "FFI (Metal/ObjC/glslang/SPIRV/onig/
+# wuffs) — covered by G-ASAN/G-LSAN": `generic::macos_impl`, `metal::buffer`,
+# `metal::iosurface_layer`, `metal::metal_impl`, `metal::pipeline`,
+# `metal::shaders::post_pipeline_error_tests`, `metal::target`, `metal::tests`,
+# `link`, `shadertoy`, `opengl`, and the integration-test binaries; each fails
+# under Miri with `unsupported operation` (a foreign call), never with UB. The
+# three `-` exclusions are the same: one FFI-bound test in an otherwise
+# Miri-runnable module (Metal device, Wuffs PNG decoder, Oniguruma). The fourth,
+# `state::tests::renderer_state_yield_to_demand_is_free_without_demand`, asserts
+# a 500 ms wall-clock bound over 10,000 calls, which the interpreter cannot
+# meet: not a memory-safety property; it runs natively and under G-ASAN/G-LSAN.
+# A test inside an included module that fails, for any reason, stays RED.
+# Details: .port/phase-2/MIRI_EXCEPTIONS.md, "P7-W15", G6t scope.
+G6T_SCOPE="${G6T_SCOPE:-
+rustty-vt:page rustty-vt:pagelist rustty-vt:search rustty-vt:render
+rustty-vt:screen rustty-vt:terminal rustty-vt:snapshot rustty-vt:kitty
+rustty-vt-c
+rustty-renderer:cell rustty-renderer:cursor rustty-renderer:dmabuf
+rustty-renderer:generic::surface_mailbox_tests rustty-renderer:generic::derived_config_tests
+rustty-renderer:health_tests rustty-renderer:image::macos_impl rustty-renderer:latest_frame
+rustty-renderer:log_capture rustty-renderer:message::change_config_tests
+rustty-renderer:metal::gpu_abi rustty-renderer:metal::shaders::metallib_tests
+rustty-renderer:metal::test_support rustty-renderer:overlay rustty-renderer:state
+rustty-renderer:thread rustty-renderer:undefined rustty-renderer:webgl
+rustty-renderer:-generic::derived_config_tests::decoded_bg_image_len_is_wh4
+rustty-renderer:-image::macos_impl::tests::image_empty_lifecycle
+rustty-renderer:-message::change_config_tests::change_config_deinit_frees_links
+rustty-renderer:-state::tests::renderer_state_yield_to_demand_is_free_without_demand
+rustty-xev
+rustty-core
+}"
 G6T_BOUND_SEC="${G6T_BOUND_SEC:-14400}"
 
 g6t_crates() { printf '%s\n' $G6T_SCOPE | sed 's/:.*//' | awk '!seen[$0]++'; }
-g6t_modules() { printf '%s\n' $G6T_SCOPE | sed -n "s/^$1:\(.*\)/\1/p"; }
+g6t_modules() { printf '%s\n' $G6T_SCOPE | sed -n "s/^$1:\([^-].*\)/\1/p"; }
+g6t_excludes() { printf '%s\n' $G6T_SCOPE | sed -n "s/^$1:-\(.*\)/\1/p"; }
 g6t_filterset() {  # $1 = crate
-  local mods; mods="$(g6t_modules "$1" | paste -sd'|' -)"
-  if [ -z "$mods" ]; then echo 'all()'; else echo "test(/^($mods)::/)"; fi
+  local mods x fs; mods="$(g6t_modules "$1" | paste -sd'|' -)"
+  if [ -z "$mods" ]; then fs='all()'; else fs="test(/^($mods)::/)"; fi
+  for x in $(g6t_excludes "$1"); do fs="$fs - test(=$x)"; done
+  echo "$fs"
 }
 
 # g6t_crate <crate> <extra-rustflags-for-the-off-half> — one crate's G6t run.
@@ -947,24 +985,36 @@ run_g6t() {
 # Scope check: every entry names an existing crate (and module), and matches
 # more than 0 runnable tests under Miri.
 g6t_scope_selftest() {
-  local e c m dir n rc=0 fs
+  local e c m dir n rc=0 fs top want
   for e in $G6T_SCOPE; do
     c="${e%%:*}"; m=""; [ "$e" != "$c" ] && m="${e#*:}"
     dir="crates/$c"
     if [ ! -f "$dir/Cargo.toml" ]; then echo "  scope FAIL: $e — no crate at $dir"; rc=1; continue; fi
-    if [ -n "$m" ] && [ ! -f "$dir/src/$m.rs" ] && [ ! -f "$dir/src/$m/mod.rs" ]; then
-      echo "  scope FAIL: $e — no module $dir/src/$m{.rs,/mod.rs}"; rc=1; continue
+    top="${m#-}"; top="${top%%::*}"
+    if [ -n "$m" ] && [ ! -f "$dir/src/$top.rs" ] && [ ! -f "$dir/src/$top/mod.rs" ] \
+       && ! grep -qE "^\s*(pub(\(crate\))? )?mod $top\b" "$dir/src/lib.rs"; then
+      echo "  scope FAIL: $e — no module $top in $dir/src"; rc=1; continue
     fi
-    if [ -n "$m" ]; then fs="test(/^$m::/)"; else fs='all()'; fi
-    n="$(cargo +nightly miri nextest list -p "$c" -E "$fs" --message-format json 2>/dev/null | python3 -c '
-import json, sys
+    # A module entry must match > 0 runnable tests; an exclusion exactly one
+    # test (ignored or not), so a renamed test cannot leave a dead exclusion.
+    case "$m" in
+      "") fs='all()'; want=gt0 ;;
+      -*) fs="test(=${m#-})"; want=one ;;
+      *) fs="test(/^$m::/)"; want=gt0 ;;
+    esac
+    n="$(cargo +nightly miri nextest list -p "$c" -E "$fs" --message-format json 2>/dev/null | WANT="$want" python3 -c '
+import json, os, sys
 d = json.load(sys.stdin); n = 0
+one = os.environ.get("WANT") == "one"
 for s in d.get("rust-suites", {}).values():
     for t in s.get("testcases", {}).values():
-        if t.get("filter-match", {}).get("status") == "matches" and not t.get("ignored"):
+        if t.get("filter-match", {}).get("status") == "matches" and (one or not t.get("ignored")):
             n += 1
 print(n)' 2>/dev/null)"
-    if [ "${n:-0}" -gt 0 ]; then echo "  scope ok: $e — $n test(s)"
+    if [ "$want" = one ]; then
+      if [ "${n:-0}" = 1 ]; then echo "  scope ok: $e — names 1 test"
+      else echo "  scope FAIL: $e — names ${n:-0} test(s), expected exactly 1"; rc=1; fi
+    elif [ "${n:-0}" -gt 0 ]; then echo "  scope ok: $e — $n test(s)"
     else echo "  scope FAIL: $e — matches ${n:-0} runnable test(s)"; rc=1; fi
   done
   return $rc
