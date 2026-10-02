@@ -63,6 +63,27 @@ the option in `sanitizers.sh`).
 |---|---|---|---|
 | `crates/rustty-termio/src/command.rs` tests module | defines `__lsan_is_turned_off`, non-zero only in a forked child of the test binary | The `Command` tests' forked children exit through libc `exit(3)` (faithful to the reference's `posix.exit`), so LSan scans them; with only the forking thread left, everything the parent's other test threads hold looks leaked. The scan of a fork is not a leak check of anything; the test binary itself is still checked in full. | N496 item 3: 4 reports, each consisting of the parent's heap (libtest's `main`, other tests' threads) |
 
+## MemorySanitizer (G-MSAN)
+
+MSan works on aarch64-unknown-linux-gnu with `-Zbuild-std` (verified on rvm, 2026-10-01: G-SAN-SELF's
+uninitialized-read arm is RED, its clean control GREEN). It has no runtime suppressions file; a read of
+memory written by uninstrumented code is reported, so its scope is an allow-list (`MSAN_SCOPE`) measured
+by a probe of every workspace member (rvm, glibc 2.43, clang 22): 58 members in scope, 3 excluded.
+
+| id | what | kind | reason | evidence |
+|---|---|---|---|---|
+| M1 | `msan-stat-shim.h`, forced into `fontconfig-sys`'s C only | tool workaround | rustc's MSan runtime does not mark `stat(2)`'s output initialized for a C caller on this glibc; clang's own runtime does. The shim calls the real `stat`/`lstat`/`fstat` and unpoisons the struct on success, which is what the interceptor does. Applied to one crate because it includes `<sys/stat.h>` ahead of the source's feature macros (applied everywhere, it hid `pthread_setname_np` from sentry-native). | Probe 1: `fontconfig-sys` RED in `FcFileIsDir` (`fcdir.c:47`, origin: the stack `statb`, filled by `stat`). Reproduced with a 2-line C function `stat("/")` + `S_ISDIR`: clean linked by `clang -fsanitize=memory`, RED linked by rustc. With the shim: 4 tests green. |
+| M2 | exclude `glslang-sys` | crate exclusion | Its test runs glslang's preprocessor, whose `TPpContext` holds a `std::istringstream` constructed and imbued (`std::locale::classic()`) inside the uninstrumented `libstdc++.so`. | Probe: `PpContext.cpp:98`, origin "allocation of 'ppContext' in the stack frame" of `InitializeSymbolTable`. Needs an MSan-instrumented C++ standard library. |
+| M3 | exclude `rustty-renderer` | crate exclusion | Its Linux tests drive EGL/OpenGL in the system's uninstrumented `libEGL`/Mesa. | Probe: `eglQueryString` under `OffscreenContext::init` (`opengl/gl/sys.rs:195`), origin a `malloc` inside `/lib64/libEGL.so.1`. |
+| M4 | exclude `xtask` | crate exclusion | Its tests run nested `cargo`/`cmake` builds that inherit `RUSTFLAGS=-Zsanitizer=memory` without `-Zbuild-std`, which rustc rejects. It is the build driver (G-VALGRIND leaves it out too). | Probe: `error: mixing -Zsanitizer will cause an ABI mismatch in crate rustty_util` from `xtask/tests/cmake_lib_vt.rs`. |
+
+The other C++ `-sys` crates (`harfbuzz-sys`, `highway-sys`, `simdutf-sys`, `dcimgui-sys`, `breakpad-sys`,
+`sentry-sys`, `spirv-cross-sys`) passed with their C++ instrumented, as did every crate that links them.
+The GTK and Flatpak feature lanes are not in G-MSAN's scope (they link the uninstrumented GTK/GLib stack).
+The C compilers are wrappers that add `-fsanitize=memory` only when the crate being built is instrumented
+(`CARGO_CFG_SANITIZE`), because plain `CFLAGS` also reached `rustty-cli`'s `zlib-sys` build-dependency
+and its build script failed to link (`undefined reference to __msan_init`).
+
 ## Crate exclusions and empty lanes
 
 No workspace member is excluded from G-ASAN or G-LSAN. `NO_TESTS_ON` in `sanitizers.sh` lists the members
@@ -72,3 +93,14 @@ that have no test on a host OS by construction (they are still built under the s
 |---|---|---|
 | `gettext-sys` | Linux | libintl is part of glibc there; the crate compiles no C and every test is `#[cfg(all(test, target_os = "macos"))]`. |
 | `rustty-wasm` | all | its one native test (`tests/artifact_shape.rs`) is `#[ignore]`d: it inspects the wasm32 artifact the `--webgl` lane builds; the exports are `cfg(target_arch = "wasm32")`. |
+
+## Known limits (open)
+
+- **G-ASAN and G-LSAN compile the vendored C/C++ without `-fsanitize=address`.** ASan still sees that
+  code's heap through its `malloc`/`free`/`mem*`/`str*` interceptors (so a C buffer freed twice, or leaked,
+  is reported), but not the C code's own loads and stores (an out-of-bounds read inside harfbuzz is not).
+  The design (§B) asks for the C instrumented too. G-MSAN already does it through compiler wrappers; doing
+  the same for ASan needs a clang whose ASan ABI matches rustc's runtime, which holds for Fedora's clang 22
+  but is unverified for Apple clang on macOS. Not done in P7-W14.
+- MSan's scope excludes the three crates above until an instrumented C++ standard library and EGL are
+  available (an x86_64 CI image could provide an MSan-built libc++).

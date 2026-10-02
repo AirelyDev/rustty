@@ -600,8 +600,9 @@ GATE_REGISTRY=(
   # G-ASAN / G-LSAN / G-MSAN (P7-W14, 2026-10-01) — the sanitizer matrix of the
   # memory-safety-lanes design (docs/superpowers/specs/2026-10-01-memory-
   # safety-lanes-design.md §B). sanitizers.sh existed as a one-crate harness
-  # that no gate ran over the workspace; these run it one crate at a time, each
-  # in its own target dir deleted after it (target/san-<san>-<crate>).
+  # that no gate ran over the workspace; these run it one crate at a time in
+  # one target dir per sanitizer (target/san-<san>), deleted when the pass
+  # ends (`--per-crate-target` deletes after each crate, for low-disk hosts).
   #   G-ASAN  AddressSanitizer over every workspace member's tests (macOS and
   #           Linux; detect_leaks=0), minus cited exclusions, and the cross-
   #           check that every `cfg_attr(miri, ignore = "...")` test claiming

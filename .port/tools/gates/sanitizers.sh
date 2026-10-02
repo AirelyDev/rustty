@@ -11,8 +11,9 @@
 #   address (ASan)  ✅ macOS + Linux                         -> G-ASAN
 #   leak    (LSan)  ❌ macOS (rustc-rejected; Apple ASan has no leak checker)
 #                   ✅ Linux, run as ASan with detect_leaks=1 -> G-LSAN
-#   memory  (MSan)  ❌ macOS ; Linux, needs -Zbuild-std + instrumented C -> G-MSAN
-#                   (aarch64: see MSAN_AARCH64_NOTE below)
+#   memory  (MSan)  ❌ macOS ; ✅ Linux x86_64 and aarch64 (verified on rvm,
+#                   2026-10-01), needs -Zbuild-std + instrumented C -> G-MSAN
+#                   (MSAN_AARCH64_NOTE turns aarch64 into BLOCKED if that regresses)
 #   thread  (TSan)  ✅ macOS + Linux  (needs -Zbuild-std)  -> G-TSAN, not yet a gate
 #   hwaddress(HWASan)❌ macOS ; aarch64-Linux/Android only -> not a gate
 #   cfi             mitigation, not a bug-checker; needs -Clto -> optional Goal-2 hardening
@@ -26,10 +27,15 @@
 #       Prints "SANITIZERS: GREEN|PROBLEM"; exit 0 / 1.
 #   sanitizers.sh --matrix --san <asan|lsan|msan> (--crates <a,b c> | --workspace)
 #                 [--filter <f>] [--exclude <crate>]...
-#       The MATRIX runner: one crate at a time, each in its OWN target dir
+#       The MATRIX runner: one crate at a time, all in ONE target dir per
+#       sanitizer (target/san-<san>), deleted when the pass ends. A crate spec
+#       may carry features: `rustty-apprt:gtk,wayland,x11`. Per-crate logs stay
+#       in target/san-logs/<san>/.
+#   sanitizers.sh --per-crate-target <any mode above or below>
+#       Low-disk hosts: each crate in its OWN target dir
 #       (target/san-<san>-<crate>), deleted after that crate, so the disk holds
-#       one sanitizer build at a time. A crate spec may carry features:
-#       `rustty-apprt:gtk,wayland,x11`. Per-crate logs stay in target/san-logs/<san>/.
+#       one crate's instrumented build at a time (slower: every crate rebuilds
+#       its instrumented dependencies). Same as SAN_PER_CRATE_TARGET=1.
 #   sanitizers.sh --gate <asan|lsan|msan>
 #       The ci.sh gates G-ASAN / G-LSAN / G-MSAN: the matrix over the workspace
 #       minus that sanitizer's cited exclusions, plus (asan, lsan) the Miri-
@@ -47,8 +53,9 @@
 # disk floor reached). RED dominates BLOCKED. A build failure is BLOCKED, never
 # GREEN (design §B "common rules").
 #
-# DISK. Every sanitizer build is a full dependency rebuild (5-15 GB for the
-# heavy crates). Before each crate the runner checks the free space on the
+# DISK. A sanitizer pass rebuilds every dependency instrumented (one shared
+# target/san-<san> of tens of GB for a whole workspace pass; 5-15 GB per heavy
+# crate with --per-crate-target). Before each crate the runner checks the free space on the
 # target dir's volume against SAN_MIN_FREE_GB (default 15) and stops BLOCKED
 # below it, rather than filling the disk mid-build.
 #
@@ -336,14 +343,15 @@ legacy_main() {
 # ---------------------------------------------------------------------------
 free_gb() { df -Pk "$1" 2>/dev/null | awk 'NR==2 {printf "%d", $4/1048576}'; }
 
-# Delete one crate's sanitizer target dir. Guarded: only a path of the exact
-# shape <SAN_TARGET_ROOT>/san-<san>-<crate> is ever removed (no variable can
-# widen this to the repository or the shared target dir).
+# Delete a sanitizer target dir. Guarded: only a path of the exact shape
+# <SAN_TARGET_ROOT>/san-<san> or <SAN_TARGET_ROOT>/san-<san>-<crate> is ever
+# removed (no variable can widen this to the repository or the main target dir).
 drop_target() {
   local td="$1"
   case "$td" in
+    "$SAN_TARGET_ROOT"/san-asan|"$SAN_TARGET_ROOT"/san-lsan|"$SAN_TARGET_ROOT"/san-msan) ;;
     "$SAN_TARGET_ROOT"/san-asan-*|"$SAN_TARGET_ROOT"/san-lsan-*|"$SAN_TARGET_ROOT"/san-msan-*) ;;
-    *) echo "sanitizers.sh: refusing to delete '$td' (not a san-<san>-<crate> dir)" >&2; return 1 ;;
+    *) echo "sanitizers.sh: refusing to delete '$td' (not a san-<san>[-<crate>] dir)" >&2; return 1 ;;
   esac
   case "$td" in *..*|*' '*) echo "sanitizers.sh: refusing to delete '$td'" >&2; return 1 ;; esac
   [ -d "$td" ] && rm -rf -- "$td"
@@ -368,15 +376,29 @@ no_tests_reason() {  # no_tests_reason SPEC -> the NO_TESTS_ON reason for this O
 }
 
 # Matrix result accumulators (globals: bash 3.2 has no namerefs).
-M_RED=0; M_BLOCKED=0; M_TOTAL=0; M_ROWS=""
+M_RED=0; M_BLOCKED=0; M_TOTAL=0; M_ROWS=""; M_WALL=0
+# TARGET DIRS. Default: ONE target dir per sanitizer pass, target/san-<san>,
+# shared by every crate of the pass (each instrumented dependency, the C -sys
+# builds and MSan's -Zbuild-std std are built once, not once per crate), and
+# deleted when the pass ends. SAN_PER_CRATE_TARGET=1 (or --per-crate-target)
+# is the low-disk mode: target/san-<san>-<crate>, deleted after each crate, so
+# the disk never holds more than one crate's instrumented build (P7-W14's
+# first passes ran that way, on a Mac with 26 GB free).
+SAN_PER_CRATE_TARGET="${SAN_PER_CRATE_TARGET:-0}"
 matrix_run() {  # matrix_run SAN FILTER SPEC...
   local san="$1" filter="$2"; shift 2
-  local spec crate td log rc v t0 t1 safe fg
-  echo "=== sanitizer matrix: $san over $# crate spec(s); target dirs under $SAN_TARGET_ROOT/san-$san-<crate>, deleted after each ==="
+  local spec crate td log rc v t0 t1 safe fg shared="" m0
+  m0=$(date +%s)
+  if [ "$SAN_PER_CRATE_TARGET" = 1 ]; then
+    echo "=== sanitizer matrix: $san over $# crate spec(s); per-crate target dirs $SAN_TARGET_ROOT/san-$san-<crate>, each deleted after its crate ==="
+  else
+    shared="$SAN_TARGET_ROOT/san-$san"
+    echo "=== sanitizer matrix: $san over $# crate spec(s); one shared target dir $shared, deleted when the pass ends ==="
+  fi
   for spec in "$@"; do
     crate="${spec%%:*}"
     safe="$(printf '%s' "$spec" | tr ':,' '__')"
-    td="$SAN_TARGET_ROOT/san-$san-$safe"
+    td="${shared:-$SAN_TARGET_ROOT/san-$san-$safe}"
     log="$SAN_LOG_ROOT/$san/$safe.log"
     mkdir -p "$SAN_TARGET_ROOT"
     fg="$(free_gb "$SAN_TARGET_ROOT")"
@@ -384,13 +406,15 @@ matrix_run() {  # matrix_run SAN FILTER SPEC...
       echo "  ⛔ BLOCKED: $fg GB free under $SAN_TARGET_ROOT, below the SAN_MIN_FREE_GB=$SAN_MIN_FREE_GB floor; stopping before $spec"
       M_BLOCKED=1
       M_ROWS="$M_ROWS$spec|BLOCKED(disk)|0|0"$'\n'
+      if [ -n "$shared" ]; then drop_target "$shared"; fi
+      M_WALL=$(($(date +%s) - m0))
       return
     fi
     t0=$(date +%s)
     run_crate "$san" "$spec" "$filter" "$td" "$log"; rc=$?
     t1=$(date +%s)
     v="$(classify "$log" "$rc")"
-    drop_target "$td"
+    if [ -z "$shared" ]; then drop_target "$td"; fi
     local nt
     nt="$(no_tests_reason "$spec")"
     if [ -n "$nt" ]; then
@@ -432,10 +456,12 @@ matrix_run() {  # matrix_run SAN FILTER SPEC...
         M_ROWS="$M_ROWS$spec|BLOCKED(build)|0|$((t1 - t0))"$'\n' ;;
     esac
   done
+  if [ -n "$shared" ]; then drop_target "$shared"; fi
+  M_WALL=$(($(date +%s) - m0))
 }
 
 matrix_summary() {  # matrix_summary SAN
-  echo "--- $1 matrix summary: $M_TOTAL test(s) ran ---"
+  echo "--- $1 matrix summary: $M_TOTAL test(s) ran, wall ${M_WALL}s ($((M_WALL / 60)) min) ---"
   printf '%s' "$M_ROWS" | awk -F'|' 'NF {printf "  %-36s %-15s %6s tests %6ss\n", $1, $2, $3, $4}'
 }
 
@@ -699,9 +725,13 @@ self_test() {
   printf 'running 1 test\n==9==WARNING: MemorySanitizer failed to allocate 0x7fffffffffffffff bytes\ntest result: ok. 1 passed; 0 failed; 0 ignored\n' >"$st/logs/oominfo.log"
   ck green 0 "GREEN 5"; ck msan 77 FINDING; ck leak 23 FINDING; ck oominfo 0 "GREEN 1"
   ck allignored 0 VACUOUS; ck crash 101 FAIL
-  # --- arm D: drop_target refuses anything but a san-<san>-<crate> dir ---
+  # --- arm D: drop_target removes only san-<san> and san-<san>-<crate> dirs ---
+  mkdir -p "$st/t/san-asan" "$st/t/san-asan-foo" "$st/t/san-other"
   if ( SAN_TARGET_ROOT="$st/t"; drop_target "$st" ) 2>/dev/null; then echo "  FAIL D drop_target accepted a non-sanitizer dir"; fail=1
-  else echo "  ok   D drop_target refuses a non-sanitizer dir"; fi
+  elif ( SAN_TARGET_ROOT="$st/t"; drop_target "$st/t/san-other" ) 2>/dev/null; then echo "  FAIL D drop_target accepted san-other"; fail=1
+  elif ! ( SAN_TARGET_ROOT="$st/t"; drop_target "$st/t/san-asan" && drop_target "$st/t/san-asan-foo" ) || [ -d "$st/t/san-asan" ] || [ -d "$st/t/san-asan-foo" ]; then
+    echo "  FAIL D drop_target did not remove the shared and the per-crate dir"; fail=1
+  else echo "  ok   D drop_target removes san-asan and san-asan-<crate>, refuses anything else"; fi
   # --- arm E: the ASan-claim cross-check over a synthetic source + logs ---
   mkdir -p "$st/src/crates/foo/src" "$st/xlogs/asan"
   printf '[package]\nname = "foo"\n' >"$st/src/crates/foo/Cargo.toml"
@@ -815,7 +845,7 @@ RS
   local sroot="$st/target"
   arm() {  # arm NAME SAN FILTER WANT(RED|GREEN) MUST_GREP
     local name="$1" san="$2" filter="$3" want="$4" must="$5" o r
-    o="$(SAN_MANIFEST_PATH="$cr/Cargo.toml" SAN_TARGET_ROOT="$sroot" SAN_LOG_ROOT="$st/slogs-$name" SAN_MIN_FREE_GB=0 \
+    o="$(SAN_PER_CRATE_TARGET="${ARM_PER_CRATE:-0}" SAN_MANIFEST_PATH="$cr/Cargo.toml" SAN_TARGET_ROOT="$sroot" SAN_LOG_ROOT="$st/slogs-$name" SAN_MIN_FREE_GB=0 \
          M_RED=0 M_BLOCKED=0 M_TOTAL=0 M_ROWS="" bash -c '. "$0" --source-only; matrix_run "$1" "$2" san-selftest; matrix_summary "$1"; gate_verdict SELF 0' \
          "$GATES_DIR/sanitizers.sh" "$san" "$filter" 2>&1)"; r=$?
     local okv=0
@@ -828,6 +858,10 @@ RS
   }
   arm "A1 heap overflow" asan "tests::defect_heap_overflow --exact" RED "heap-buffer-overflow"
   arm "A0 clean control" asan "tests::clean_control --exact" GREEN "1 test\\(s\\) ran"
+  if [ -d "$sroot/san-asan" ]; then echo "  FAIL A0: the shared target dir $sroot/san-asan outlived its pass"; fail=1
+  else echo "  ok   A0 the shared target dir is deleted when the pass ends"; fi
+  ARM_PER_CRATE=1 arm "A0 per-crate target dirs (--per-crate-target)" asan "tests::defect_heap_overflow --exact" RED "per-crate target dirs"
+  if [ -d "$sroot/san-asan-san-selftest" ]; then echo "  FAIL A0: the per-crate target dir outlived its crate"; fail=1; fi
   arm "B  empty filter" asan "no_such_test_anywhere" RED "VACUOUS"
   # NO_TESTS_ON: a listed crate with zero tests is a named skip, not RED; a
   # listed crate where a test DID run is a stale entry, RED.
@@ -868,6 +902,7 @@ RS
 # ---------------------------------------------------------------------------
 # shellcheck disable=SC2317  # `exit` is reached only when run, not sourced
 if [ "${1:-}" = "--source-only" ]; then return 0 2>/dev/null || exit 0; fi
+if [ "${1:-}" = "--per-crate-target" ]; then SAN_PER_CRATE_TARGET=1; shift; fi
 case "${1:-}" in
   --self-test) self_test; exit $? ;;
   --crosscheck)
