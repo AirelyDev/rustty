@@ -29,10 +29,10 @@ uninstrumented code the sanitizer cannot model), and the evidence.
 
 ## Mechanics
 
-- G-LSAN reads `.port/phase-2/lsan.supp` through
-  `LSAN_OPTIONS=suppressions=…:print_suppressions=1`, so every suppressed leak
-  is listed in the run's log. Each line in `lsan.supp` has a WHY comment above
-  it (D6 rule c, `d6_cfg_mapping_audit.py`) pointing at its row here.
+- G-LSAN reads `.port/phase-2/lsan.supp` (Linux) or `.port/phase-2/lsan-darwin.supp`
+  (macOS) through `LSAN_OPTIONS=suppressions=…:print_suppressions=1`, so every
+  suppressed leak is listed in the run's log. Each line in either file has a WHY
+  comment above it (D6 rule c, `d6_cfg_mapping_audit.py`) pointing at its row here.
 - Crate exclusions are the `ASAN_EXCLUDES`, `LSAN_EXCLUDES` and `MSAN_EXCLUDES`
   arrays in `sanitizers.sh`, each `"<crate>|<reason>"`. An entry naming a crate
   that is no longer a workspace member is RED. G-MSAN's scope is an allow-list:
@@ -45,6 +45,36 @@ uninstrumented code the sanitizer cannot model), and the evidence.
 | S1 | `leak:libEGL_mesa.so` | Mesa EGL (system, uninstrumented) | `eglInitialize` on the surfaceless platform allocates per-process display state inside Mesa that is never freed. The port, like Ghostty (`OpenGL.zig:113-115`, "Do not destroy the EGL display here as it is shared across the entire process"; DECISIONS B10), never terminates the shared display. | G-LSAN, rvm, 2026-10-01, `rustty-renderer`: 28 leak reports, every one with its first non-allocator frame in `/lib64/libEGL_mesa.so.0` (5) or `/lib64/libgallium-26.1.4.so` (23), the Rust frames below it ending at `OffscreenContext::init` (`crates/rustty-renderer/src/opengl/gl/sys.rs:214`, the `egl.initialize(display)` call), reached from `generic::linux_impl::tests::golden_renderer`. |
 | S2 | `leak:libgallium` | Mesa gallium/llvmpipe driver (system) | Loaded by the same `eglInitialize`; its screen and shader-cache allocations live for the process. | as S1. The final G-LSAN run (rvm, 2026-10-02) lists what both matched (`print_suppressions=1`): S1 139 leaks, 28,395 bytes; S2 940 leaks, 132,019 bytes; all in `rustty-renderer`, nothing anywhere else. |
 
+### macOS (Darwin) entries (`lsan-darwin.supp`, P7-W16a)
+
+G-LSAN runs on macOS since P7-W16a (see "Platform support" below). LeakSanitizer on Darwin takes its
+roots from thread stacks and registers, the writable sections of loaded modules and three VM-tagged
+regions (compiler-rt `lib/lsan/lsan_common_mac.cpp`, `ProcessGlobalRegions` and
+`ProcessPlatformSpecificAllocations`). Per-thread data that libobjc and CoreFoundation reach only
+through pthread thread-specific data, and SkyLight state held by its dispatch sources, are not
+roots there, so they are reported while their owners are alive. The arbiter is Apple's `leaks`
+(`leaks --atExit`, with `MallocStackLogging=1`), which knows those roots: on the natively built test
+binaries that reported them (`rustty_apprt` unit tests, `dcimgui-sys`'s `metal_offscreen` after the
+UD376 fix) it reports **0 leaks**. Each pattern names the allocating system function, so a block whose
+allocation runs through our code (or through `_objc_rootAllocWithZone` below our call) is still
+reported; the Dear ImGui Metal backend's leaks (UD376) were found that way, and Apple's `leaks`
+agreed (54 leaks, 10,416 bytes, before the fix).
+
+| id | pattern | library | reason | evidence |
+|---|---|---|---|---|
+| S3 | `leak:_fetchInitializingClassList` | libobjc | the per-thread list of classes being `+initialize`d, owned by the thread's objc TSD | G-LSAN macOS survey run (P7-W16a, no Darwin suppressions): every crate that touches Objective-C (`dcimgui-sys`, `rustty-apprt` lib and `global_init_resyncs_environ`, `rustty`'s CLI), frames `_fetchInitializingClassList` / `_setThisThreadIsInitializingClass` / `initializeNonMetaClass`, all in `libobjc.A.dylib`; `leaks`: 0 |
+| S4 | `leak:fetch_cache` | libobjc | the per-thread `@synchronized` lock cache (`objc_sync_enter` → `id2data` → `fetch_cache`), owned by objc TSD | as S3 |
+| S5 | `leak:__CFTSDGetTable` | CoreFoundation | CF's per-thread TSD table, created on a thread's first CF call and freed by CF's TSD destructor at thread exit | `dcimgui-sys` (a libdispatch worker thread under Metal's telemetry block), `rustty-apprt` lib; `leaks`: 0 |
+| S6 | `leak:AutoreleasePoolPage::autoreleaseNoPage` | libobjc | the autorelease-pool PAGE a thread gets when it autoreleases with no pool; drained and freed by libobjc's TSD destructor. The autoreleased objects themselves are allocated elsewhere and are not matched | `dcimgui-sys` `metal_offscreen` (Foundation `bytesInEncoding`); `leaks`: 0 |
+| S7 | `leak:RunElsewhere::create_source` | SkyLight | a `mach_msg` receive buffer allocated inside SkyLight's `RunElsewhere` dispatch-source handler, held by that source | `rustty-apprt` lib: `mach_msg_overwrite` ← `mach_msg` ← `(anonymous namespace)::RunElsewhere::create_source()` block (`SkyLight`) on a libdispatch worker; `leaks`: 0 |
+| S8 | `leak:update_devices_from_data_internal` | SkyLight | SkyLight's display-device cache (CFNumbers and CFData decoded by `CGSPropertyListCreateWithSerializedBytes`), built when the display configuration is first read, held for the process | `rustty-apprt` lib: `CFNumberCreate` ← `CGSPropertyListCreateWithSerializedBytes` ← `update_devices_from_data_internal` ← `devices_connection_change_handler` (`SkyLight`); `leaks`: 0 |
+| S9 | `leak:libFontRegistry.dylib` | libFontRegistry (CoreText) | the process-wide font registry created once under `pthread_once` (`TGlobalFontRegistry::CreateRegistry`) caches the font server's rendezvous reply (NSXPC-decoded dictionaries, CFURLs, strings) for the life of the process | `rustty-apprt-c` (lib tests, the C smoke binary, `macos_window_host`): `CTFontCreateWithName` → `XTCopyFontWithName` → `TGlobalFontRegistry::CreateRegistry` → `RendezvousWithServer` → `TRequestCache::AddResultForRequest` / NSXPC decode, within the 30 recorded frames. Reproduced with no Rustty code: a probe that creates and releases one CTFont (on a thread and on the main thread) reports exactly this set (286 allocations, 21,472 bytes) under G-LSAN, and Apple `leaks` reports 0 for the same sequence in C. Negative control: the probe that does NOT release its CTFont is still RED (`TCFRef<CTFont>`, 2,432 bytes) with S9/S10 in place |
+| S10 | `leak:TDescriptorSource::CopyDescriptorUncached` | CoreText | CoreText's font-descriptor cache, filled by `TDescriptorSource::CopyDescriptorUncached` under `CTFontCreateWithName`; an unreleased CTFont is reported through `TCFBase_NEW<CTFont>`, which this does not match | as S9 (96 bytes, one descriptor) |
+| S11 | `leak:dyld::ThreadLocalVariables::instantiateVariable` | dyld | the thread-local-variable block dyld allocates on a thread's first TLV access and frees from its TSD destructor at thread exit; reported for a test child that calls `exit(3)` from its test thread, which is still alive at the scan | `rustty-apprt-c` `cli_try_action_version_runs_and_exits` child (400 bytes, `_tlv_get_addr` ← std `thread_start`), `rustty-cli` picker children (192 bytes) |
+| S12 | `leak:dyld::ThreadLocalVariables::addTermFunc` | dyld | dyld's per-thread list of thread-local destructors (`_tlv_atexit`), run and freed at thread exit; same situation as S11 | `rustty-cli` `list_themes::picker_tests` children (128 bytes each, ← std `thread_start`) |
+| S13 | `leak:TCGFontCache::CopyFont` | CoreText / CoreGraphics | CoreText's CGFont cache (`TCGFontCache::CopyFont` → `CGFontCreateWithPathAndName`), filled when a font file's tables are first read, with its data provider and file reference beneath; an unreleased CTFont is reported through `TCFBase_NEW<CTFont>`, which this does not match | `rustty-font-shaper` lib tests (`discovery::coretext_impl::Score::score` → `CTFontCreateWithFontDescriptor`); Apple `leaks` on the natively built test binary: 0 leaks (141 tests) |
+| S14 | `leak:CA::Transaction::create` | QuartzCore (CoreAnimation) | CoreAnimation's per-thread transaction, created on a thread's first layer change and kept in CA's thread-specific data until thread exit | `rustty-apprt-c` `macos_window_host` (8,192 bytes); Apple `leaks` on the same binary built natively lists no `CA::Transaction` (its 83 leaks are N501's) |
+
 ## Sanitizer runtime options set by the lanes
 
 Not suppressions, but they change what a lane does, so each is recorded with its reason (also next to
@@ -52,7 +82,9 @@ the option in `sanitizers.sh`).
 
 | option | lanes | reason | evidence |
 |---|---|---|---|
-| `detect_leaks=0` | G-ASAN | Apple's ASan has no leak checker (rustc rejects `-Zsanitizer=leak` on Darwin); on Linux G-LSAN is the leak lane, so G-ASAN's verdict stays memory errors. | design §B |
+| `detect_leaks=0` | G-ASAN | G-LSAN (the same ASan build with `detect_leaks=1`, on macOS and Linux) is the leak lane, so G-ASAN's verdict stays memory errors. (Until P7-W16a this row said Apple's ASan has no leak checker: true of Apple clang's runtime, not of rustc's, which G-LSAN uses.) | design §B; P7-W16a |
+| `-Zexport-executable-symbols` | G-LSAN on macOS | The macOS ASan runtime is a dylib that looks the user hooks (`__lsan_is_turned_off`, `__lsan_default_suppressions`) up dynamically (`nm -m librustc-nightly_rt.asan.dylib`: "weak external `___lsan_is_turned_off` (dynamically looked up)"), and rustc exports nothing from an executable by default, so `rustty-termio`'s fork-child hook (below) was never seen. Not suppressive: it only makes the documented hook visible. On Linux the runtime is static and the hook resolves at link time. | P7-W16a: a probe whose hook always returns 1 reported its leak without the flag and not with it; G-SAN-SELF's "opt-out hook" arm is RED without the flag (mutation run) |
+| `log_path=<private temp dir>/rt` (runtime output to per-process files, appended to the crate log after the run) | G-LSAN on macOS | With `lsan-darwin.supp`, `print_suppressions=1` prints its table on the stderr of every process in which a suppression matched, including CLI children whose stderr a test asserts on (`rustty`'s `cli_log_facade`: `+show-config` must print nothing). Not suppressive: every report and table still reaches the crate log the classifier reads, and a child that leaks still fails its test (exit 23). Linux keeps stderr (no Linux suppression matches in a child). | P7-W16a: run 2's `cli_log_facade` failure, stderr = the S3/S4 table only; with `log_path` the crate is GREEN (17 tests) and both tables are in its log; the probe's leak is still RED |
 | `allocator_may_return_null=1` | G-ASAN, G-LSAN, G-MSAN | ASan's malloc aborts on a request above its 1 TiB maximum, where the system malloc returns NULL; the port's out-of-memory tests rely on that NULL (`try_reserve` reporting failure, the port of Zig's `error.OutOfMemory` paths). It does turn off three ASan reports: allocation-size-too-big (a request over the allocator's maximum), calloc-overflow (count x size overflowing) and out-of-memory (the allocator failing): each now returns NULL to the caller instead of aborting with a report. Out-of-bounds, use-after-free, double-free, leak and uninitialized-read detection are unaffected, and a NULL the code does not handle still crashes visibly. | NEW-FINDINGS N496 item 5 |
 | `RUST_MIN_STACK=8388608` | all three | Instrumented frames are 2-3x their native size; a test that checks a recursion bound fits the default 2 MiB stack overflows under ASan with no memory error. Unbounded recursion still overflows 8 MiB; the native bound is checked by `cargo test --workspace`. | N496 item 6 |
 | line-tables-only debuginfo | all three | Full debuginfo made the GTK lane's instrumented test links exhaust the 10 GB VM (ld SIGBUS). Reports keep every function, file and line. | N496 item 7 |
@@ -61,7 +93,7 @@ the option in `sanitizers.sh`).
 
 | where | what | reason | evidence |
 |---|---|---|---|
-| `crates/rustty-termio/src/command.rs` tests module | defines `__lsan_is_turned_off`, non-zero only in a forked child of the test binary | The `Command` tests' forked children exit through libc `exit(3)` (faithful to the reference's `posix.exit`), so LSan scans them; with only the forking thread left, everything the parent's other test threads hold looks leaked. The scan of a fork is not a leak check of anything; the test binary itself is still checked in full. | N496 item 3: 4 reports, each consisting of the parent's heap (libtest's `main`, other tests' threads) |
+| `crates/rustty-termio/src/command.rs` tests module | defines `__lsan_is_turned_off`, non-zero only in a forked child of the test binary (Linux and, since P7-W16a, macOS) | The `Command` tests' forked children exit through libc `exit(3)` (faithful to the reference's `posix.exit`), so LSan scans them; with only the forking thread left, everything the parent's other test threads hold looks leaked. The scan of a fork is not a leak check of anything; the test binary itself is still checked in full. | N496 item 3: 4 reports, each consisting of the parent's heap (libtest's `main`, other tests' threads) |
 
 ## MemorySanitizer (G-MSAN)
 
@@ -94,6 +126,31 @@ that have no test on a host OS by construction (they are still built under the s
 |---|---|---|
 | `gettext-sys` | Linux | libintl is part of glibc there; the crate compiles no C and every test is `#[cfg(all(test, target_os = "macos"))]`. |
 | `rustty-wasm` | all | its one native test (`tests/artifact_shape.rs`) is `#[ignore]`d: it inspects the wasm32 artifact the `--webgl` lane builds; the exports are `cfg(target_arch = "wasm32")`. |
+
+## Platform support on macOS (P7-W16a, 2026-10-02)
+
+Measured on the aarch64-apple-darwin dev box (macOS 26.5, nightly 2026-07-22 with LLVM 22.1.8, Apple
+clang 21.0.0, Homebrew LLVM 21), with a two-test probe crate (64 leaked boxes; a clean control).
+
+| sanitizer | macOS verdict | evidence |
+|---|---|---|
+| LeakSanitizer | **runs** as G-LSAN: ASan with `detect_leaks=1` | The standalone `-Zsanitizer=leak` fails to COMPILE: "leak sanitizer is not supported for this target" (rustc's `aarch64_apple_darwin.rs` lists ADDRESS, CFI, THREAD, REALTIME, with "FIXME: The leak sanitizer currently fails the tests, see #88132", where the standalone LSan UI test hung on arm64 macOS; the unstable book lists LSan for `x86_64-apple-darwin` only). rustc's ASan runtime (its own compiler-rt, where `lsan_common.h` sets `CAN_SANITIZE_LEAKS` for `SANITIZER_APPLE` on `__aarch64__`, and `sanitizer_flags.inc` only defaults `detect_leaks` to `!SANITIZER_APPLE`) reports the probe's leak ("LeakSanitizer: detected memory leaks … 16384 byte(s) leaked in 64 allocation(s)", exit 1) and passes the clean test. Apple clang's own ASan runtime aborts at RUNTIME with "AddressSanitizer: detect_leaks is not supported on this platform" (exit 134), and Apple clang rejects `-fsanitize=leak` at compile time; that runtime is what earlier notes meant by "Apple's ASan has no leak checker". Homebrew LLVM 21: its ASan deadlocks in its own init on macOS 26 (`AsanInitInternal` → `get_dyld_hdr` → `dyld_shared_cache_iterate_text_swift` → `_Block_copy` → malloc), and its standalone `-fsanitize=leak` binary spins in `CheckForLeaksCallback` under `StopTheWorld`; not usable. |
+| MemorySanitizer | **unsupported**; Linux-only G-MSAN is the lane | compiler-rt builds MSan for `Linux|FreeBSD|NetBSD` only (`cmake/config-ix.cmake`, `COMPILER_RT_HAS_MSAN`); rustc: "memory sanitizer is not supported for this target"; Apple clang: "unsupported option '-fsanitize=memory'". Valgrind does not run on Apple Silicon (not installed, no arm64-darwin port). The macOS uninitialized-read coverage is Miri (G6/G6c: uninit reads are UB it reports) for pure Rust, plus G-MSAN on Linux for the C/C++ the port compiles; nothing comparable for C on macOS. |
+| ThreadSanitizer | supported (`-Zsanitizer=thread` with `-Zbuild-std`; rustc's target spec and the unstable book list `aarch64-apple-darwin`; compiler-rt `COMPILER_RT_HAS_TSAN` includes Darwin) | not yet a gate (G-TSAN, design §B) |
+| HWAddressSanitizer | **unsupported** | compiler-rt builds it for `Linux|Android|Fuchsia` only (`COMPILER_RT_HAS_HWASAN`); rustc: "hwaddress sanitizer is not supported for this target"; Apple clang: "unsupported option '-fsanitize=hwaddress'". Handled on Linux by a separate task. |
+
+Leak-checking alternatives evaluated (P7-W16a):
+
+- **Apple `leaks --atExit -- <test binary>`** works on native test binaries: RED on the probe's leak
+  (64 ROOT LEAKs, exit 1), GREEN on the clean test (exit 0); quiet on `rustty-font` (89 tests) and the
+  `rustty-apprt` unit tests (0 leaks); about 1.3x native wall time (`rustty-font`: 6.6 s native, 8.5 s
+  under `leaks`, 10.0 s with `MallocStackLogging=1`). It scans only the main process at exit (not forked
+  children) and needs `MallocStackLogging` for allocation stacks. Used here as the ARBITER for the S3-S14
+  suppressions, not as a separate gate: G-LSAN already gives the same detection, stacks, the
+  suppression file, the Miri-exception cross-check and the existing self-tests.
+- **Homebrew LLVM compiler-rt**: not usable on macOS 26 (above).
+- **A tracking allocator**: PORT_RULES R6 removed that approach in favour of Miri plus the sanitizers;
+  with a working LSan on macOS it is not needed.
 
 ## Known limits (open)
 

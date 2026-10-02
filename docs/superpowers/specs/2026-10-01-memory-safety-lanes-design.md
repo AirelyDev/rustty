@@ -97,6 +97,11 @@ when implementing.
 | **TSan** (G-TSAN) | data races | macOS and Linux (`-Zbuild-std`) | the threaded crates: `rustty-core` (render thread, mailbox), `rustty-termio` (read thread, exec), `rustty-xev`, `rustty-renderer`, the vt search thread, `rustty-vt-c` |
 | **MSan** (G-MSAN) | reads of uninitialized memory | Linux only. rustc lists aarch64 and x86_64 Linux; the script's probe says x86_64 only, so verify on rvm (aarch64), otherwise run it in GitHub CI (x86_64). | needs `-Zbuild-std`, and every C dependency instrumented. Phase 1: pure-Rust crates, or crates whose C dependencies we compile ourselves with `CFLAGS=-fsanitize=memory` through `cc`. Crates with uninstrumentable C, such as system libraries (GTK, fontconfig), are excluded with a cited reason. |
 
+**Update (P7-W16a, 2026-10-02):** the LSan row's "Linux only (rustc rejects it on macOS)" holds for the
+standalone `-Zsanitizer=leak` only. Run as ASan with `detect_leaks=1`, rustc's ASan runtime has a working
+leak checker on aarch64-apple-darwin, so G-LSAN runs on macOS too, with its own suppression file
+(`.port/phase-2/SANITIZER_SUPPRESSIONS.md`, "Platform support on macOS"). MSan and HWASan stay Linux-only.
+
 **Common rules,** following the existing `sanitizers.sh` rules:
 
 - The non-vacuity rule: zero tests run is RED.

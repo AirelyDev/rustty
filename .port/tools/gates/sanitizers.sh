@@ -6,16 +6,36 @@
 # real memory CORRUPTION (UAF/OOB/double-free) + races across ALL tests incl. the
 # Miri-intractable ones, and cover the C-FFI boundary Miri can't model.
 #
-# Platform support (re-verified P7-W14, 2026-10-01; aarch64-apple-darwin dev box
+# Platform support (re-verified P7-W14, 2026-10-01, and for macOS P7-W16a,
+# 2026-10-02: aarch64-apple-darwin, macOS 26.5, nightly 2026-07-22 / LLVM 22.1.8;
 # and the aarch64 Fedora VM `rvm`):
 #   address (ASan)  ✅ macOS + Linux                         -> G-ASAN
-#   leak    (LSan)  ❌ macOS (rustc-rejected; Apple ASan has no leak checker)
-#                   ✅ Linux, run as ASan with detect_leaks=1 -> G-LSAN
-#   memory  (MSan)  ❌ macOS ; ✅ Linux x86_64 and aarch64 (verified on rvm,
-#                   2026-10-01), needs -Zbuild-std + instrumented C -> G-MSAN
-#                   (MSAN_AARCH64_NOTE turns aarch64 into BLOCKED if that regresses)
+#   leak    (LSan)  ✅ macOS + Linux, run as ASan with detect_leaks=1 -> G-LSAN
+#                   The STANDALONE -Zsanitizer=leak is rejected on
+#                   aarch64-apple-darwin ("leak sanitizer is not supported for
+#                   this target"; rustc's target spec omits it, FIXME
+#                   rust-lang/rust#88132, the standalone LSan test hung on arm64
+#                   macOS), but rustc's ASan runtime (its own compiler-rt, where
+#                   lsan_common.h sets CAN_SANITIZE_LEAKS for SANITIZER_APPLE +
+#                   __aarch64__) runs the leak checker when detect_leaks=1 is
+#                   set; compiler-rt only defaults it off on Apple
+#                   (sanitizer_flags.inc: detect_leaks default !SANITIZER_APPLE).
+#                   A probe's deliberate leak is RED, a clean test GREEN. It is
+#                   APPLE CLANG's runtime that has no leak checker ("detect_leaks
+#                   is not supported on this platform", abort), and Homebrew
+#                   LLVM 21's runtimes hang on macOS 26 (ASan in its own init,
+#                   standalone LSan in StopTheWorld): neither is used here.
+#   memory  (MSan)  ❌ macOS: compiler-rt builds MSan for Linux|FreeBSD|NetBSD only
+#                   (config-ix.cmake COMPILER_RT_HAS_MSAN); rustc and Apple clang
+#                   both reject it ("memory sanitizer is not supported for this
+#                   target"; "unsupported option '-fsanitize=memory'").
+#                   ✅ Linux x86_64 and aarch64 (verified on rvm, 2026-10-01),
+#                   needs -Zbuild-std + instrumented C -> G-MSAN (the only MSan
+#                   lane; MSAN_AARCH64_NOTE turns aarch64 into BLOCKED if that regresses)
 #   thread  (TSan)  ✅ macOS + Linux  (needs -Zbuild-std)  -> G-TSAN, not yet a gate
-#   hwaddress(HWASan)❌ macOS ; aarch64-Linux/Android only -> not a gate
+#   hwaddress(HWASan)❌ macOS: compiler-rt builds it for Linux|Android|Fuchsia only
+#                   (COMPILER_RT_HAS_HWASAN); rustc and Apple clang reject it.
+#                   aarch64-Linux/Android only -> not a gate
 #   cfi             mitigation, not a bug-checker; needs -Clto -> optional Goal-2 hardening
 #
 # Design: docs/superpowers/specs/2026-10-01-memory-safety-lanes-design.md, section B.
@@ -69,7 +89,10 @@ OS="$(uname -s)"
 ARCH="$(uname -m)"
 PY="${PYTHON:-python3}"
 SUPP_DIR="$ROOT/.port/phase-2"
-LSAN_SUPP="$SUPP_DIR/lsan.supp"
+# G-LSAN's suppressions, per host OS: Darwin's are libobjc/CoreFoundation
+# per-thread data that LSan cannot see as roots there (lsan-darwin.supp's
+# header); Linux's are Mesa's (lsan.supp). SANITIZER_SUPPRESSIONS.md has both.
+if [ "$OS" = "Darwin" ]; then LSAN_SUPP="$SUPP_DIR/lsan-darwin.supp"; else LSAN_SUPP="$SUPP_DIR/lsan.supp"; fi
 SAN_TARGET_ROOT="${SAN_TARGET_ROOT:-$ROOT/target}"
 SAN_LOG_ROOT="${SAN_LOG_ROOT:-$ROOT/target/san-logs}"
 SAN_MIN_FREE_GB="${SAN_MIN_FREE_GB:-15}"
@@ -267,7 +290,7 @@ WRAP
 # ---------------------------------------------------------------------------
 run_crate() {
   local san="$1" spec="$2" filter="$3" td="$4" log="$5"
-  local crate="${spec%%:*}" feats="" tgt rflags="" build_std="" rc
+  local crate="${spec%%:*}" feats="" tgt rflags="" build_std="" rc san_rt_base=""
   case "$spec" in *:*) feats="${spec#*:}" ;; esac
   tgt="$(host_target)"
   local -a envs=() cargo_args=()
@@ -283,11 +306,42 @@ run_crate() {
   case "$san" in
     asan|address)
       rflags="-Zsanitizer=address"
-      envs+=("ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1") ;;  # WHY: Apple ASan has no leak checker (rustc rejects -Zsanitizer=leak on Darwin); on Linux, G-LSAN is the leak lane, so G-ASAN keeps its verdict to memory errors only
+      envs+=("ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1") ;;  # WHY: not suppressive of anything another lane misses — G-LSAN (the same ASan build with detect_leaks=1, macOS and Linux) is the leak lane, so G-ASAN keeps its verdict to memory errors only
     lsan)
       rflags="-Zsanitizer=address"
       envs+=("ASAN_OPTIONS=detect_leaks=1:allocator_may_return_null=1")      # WHY: not suppressive — turns the leak checker ON; this IS G-LSAN (design §B: LSan run as ASan with detect_leaks=1)
-      envs+=("LSAN_OPTIONS=suppressions=$LSAN_SUPP:print_suppressions=1") ;;  # WHY: every entry in lsan.supp is a third-party leak with a cited reason in .port/phase-2/SANITIZER_SUPPRESSIONS.md; print_suppressions=1 lists every match in the log so a suppression is never silent
+      envs+=("LSAN_OPTIONS=suppressions=$LSAN_SUPP:print_suppressions=1")    # WHY: every entry in lsan.supp / lsan-darwin.supp is a third-party leak with a cited reason in .port/phase-2/SANITIZER_SUPPRESSIONS.md; print_suppressions=1 lists every match in the log so a suppression is never silent
+      # macOS: the ASan runtime is a dylib that looks the user hooks
+      # (__lsan_is_turned_off, __lsan_default_suppressions) up DYNAMICALLY
+      # (`nm -m librustc-nightly_rt.asan.dylib`: "weak external
+      # ___lsan_is_turned_off (dynamically looked up)"), so a hook a test binary
+      # defines is seen only when the executable exports it, and rustc exports
+      # nothing from an executable by default. Measured (P7-W16a): a probe whose
+      # hook always returns 1 still reported its leak without this flag, and
+      # did not with it. rustty-termio's fork-child hook (N496 item 3) needs it.
+      # On Linux the runtime is linked statically and the hook resolves at link
+      # time, so the flag is Darwin-only.
+      # macOS: the runtime's own output goes to per-process files in a private
+      # temp dir (appended to the crate log after the run, below), not to each process's
+      # stderr. With lsan-darwin.supp, print_suppressions=1 prints its table on
+      # the stderr of EVERY process in which a suppression matched, including
+      # the CLI children that tests run and whose stderr they assert on
+      # (rustty's cli_log_facade asserts `+show-config` prints nothing; P7-W16a
+      # run 2: its stderr was only the S3/S4 table). A child that really leaks
+      # still fails its test (exit 23), and every report and table still lands
+      # in the crate log the classifier reads. Linux keeps stderr: no Linux
+      # suppression matches in a child, and that lane is verified as is.
+      if [ "$OS" = "Darwin" ]; then
+        rflags="$rflags -Zexport-executable-symbols"
+        # A private temp dir: ASAN_OPTIONS splits on ':' and whitespace, so the
+        # path must hold neither (the crate log's path may: the self-test's
+        # arm names do).
+        local san_rt_dir
+        san_rt_dir="$(mktemp -d "${TMPDIR:-/tmp}/san-rt.XXXXXX")" || return 2
+        case "$san_rt_dir" in *:*|*' '*) echo "sanitizers.sh: runtime log dir '$san_rt_dir' holds ':' or a space" >&2; rmdir -- "$san_rt_dir"; return 2 ;; esac
+        san_rt_base="$san_rt_dir/rt"
+        envs+=("ASAN_OPTIONS=detect_leaks=1:allocator_may_return_null=1:log_path=$san_rt_base")  # WHY: not suppressive — the same options as above plus log_path (reports go to files that run_crate appends to the crate log)
+      fi ;;
     msan|memory)
       rflags="-Zsanitizer=memory -Zsanitizer-memory-track-origins ${SAN_MSAN_DIAG:+-Zsanitizer-recover=memory}"
       build_std="-Zbuild-std"
@@ -332,6 +386,16 @@ run_crate() {
   env "${envs[@]}" RUSTFLAGS="$rflags" RUSTDOCFLAGS="$rflags" CARGO_TARGET_DIR="$td" \
     cargo +nightly test "${cargo_args[@]}" -- $filter >"$log" 2>&1
   rc=$?
+  if [ -n "$san_rt_base" ]; then
+    local rtf
+    for rtf in "$san_rt_base".*; do
+      [ -f "$rtf" ] || continue
+      printf '\n===== sanitizer runtime output (%s) =====\n' "${rtf##*/}" >>"$log"
+      cat "$rtf" >>"$log"
+      rm -f -- "$rtf"
+    done
+    rmdir -- "${san_rt_base%/rt}" 2>/dev/null
+  fi
   return $rc
 }
 
@@ -348,7 +412,7 @@ legacy_main() {
   local fail=0 s
   for s in $SANS; do
     case "$s" in
-      leak|hwaddress) if [ "$OS" = "Darwin" ]; then echo "  ⏭  $s: skipped (Linux-only)"; continue; fi ;;
+      leak|hwaddress) if [ "$OS" = "Darwin" ]; then echo "  ⏭  $s: skipped (rustc rejects -Zsanitizer=$s for aarch64-apple-darwin; macOS leak checking is --gate lsan, ASan with detect_leaks=1)"; continue; fi ;;
     esac
     local td="/tmp/san-gate-$CRATE-$s" log="/tmp/san-gate-$CRATE-$s.log" rc v
     echo "### sanitizer=$s crate=$CRATE ###"
@@ -597,8 +661,11 @@ gate_asan_like() {  # gate_asan_like asan|lsan
   if [ "$san" = asan ]; then id="G-ASAN"; else id="G-LSAN"; fi
   own_job_blocked "$id"
   need_nightly
-  if [ "$san" = lsan ] && [ "$OS" != "Linux" ]; then
-    echo "BLOCKED: $id needs LeakSanitizer, which exists on Linux only (rustc rejects -Zsanitizer=leak on $OS and Apple's ASan has no leak checker). It runs on the Linux VM (rvm) and in ci.yml's sanitizers job."
+  # G-LSAN runs where rustc's ASan runtime carries a working leak checker:
+  # Linux and macOS (verified P7-W16a; see the platform table at the top).
+  # Anywhere else it is unverified, so BLOCKED, never GREEN.
+  if [ "$san" = lsan ] && [ "$OS" != "Linux" ] && [ "$OS" != "Darwin" ]; then
+    echo "BLOCKED: $id needs LeakSanitizer through rustc's ASan runtime (detect_leaks=1), verified on Linux and macOS only, not on $OS. It runs on the Mac, on the Linux VM (rvm) and in ci.yml's sanitizers job."
     exit 3
   fi
   if [ "$san" = lsan ] && [ ! -r "$LSAN_SUPP" ]; then
@@ -672,7 +739,7 @@ gate_msan() {
   own_job_blocked G-MSAN
   need_nightly
   if [ "$OS" != "Linux" ]; then
-    echo "BLOCKED: G-MSAN needs MemorySanitizer, which exists on Linux only (not on $OS). It runs on the Linux VM (rvm) and in ci.yml's sanitizers job."
+    echo "BLOCKED: G-MSAN needs MemorySanitizer, which exists on Linux only (not on $OS: compiler-rt builds MSan for Linux/FreeBSD/NetBSD only, and rustc rejects -Zsanitizer=memory for this target). It runs on the Linux VM (rvm) and in ci.yml's sanitizers job; on macOS the uninitialized-read coverage is Miri's (G6/G6c) plus that Linux lane."
     exit 3
   fi
   if [ -n "$MSAN_AARCH64_NOTE" ] && [ "$ARCH" = "aarch64" ]; then
@@ -844,12 +911,13 @@ RS
   if [ $rc -eq 3 ] && printf '%s' "$out" | grep -q 'defers to the fixture job'; then echo "  ok   F RUSTTY_SANITIZERS_OWN_JOB is BLOCKED (exit 3), naming the job"
   else echo "  FAIL F OWN_JOB (rc=$rc): $out"; fail=1; fi
   if [ "$OS" != "Linux" ]; then
-    for g in lsan msan; do
-      out="$(env -u RUSTTY_SANITIZERS_OWN_JOB bash "$GATES_DIR/sanitizers.sh" --gate "$g" 2>&1)"; rc=$?
-      if [ $rc -eq 3 ] && printf '%s' "$out" | grep -q 'exists on Linux only'; then echo "  ok   F --gate $g on $OS is BLOCKED (exit 3), Linux-only"
-      else echo "  FAIL F --gate $g on $OS (rc=$rc): $out"; fail=1; fi
-    done
+    out="$(env -u RUSTTY_SANITIZERS_OWN_JOB bash "$GATES_DIR/sanitizers.sh" --gate msan 2>&1)"; rc=$?
+    if [ $rc -eq 3 ] && printf '%s' "$out" | grep -q 'exists on Linux only'; then echo "  ok   F --gate msan on $OS is BLOCKED (exit 3), Linux-only"
+    else echo "  FAIL F --gate msan on $OS (rc=$rc): $out"; fail=1; fi
   fi
+  # G-LSAN runs on Linux and macOS; any other host is BLOCKED (unverified there).
+  hx "--gate lsan on a host other than Linux/macOS is BLOCKED (exit 3)" 3 "verified on Linux and macOS only, not on FreeBSD" \
+    'unset RUSTTY_SANITIZERS_OWN_JOB; OS=FreeBSD; gate_asan_like lsan'
 
   # --- arms A/B: the synthetic crate under the real sanitizers ---
   local cr="$st/crate"
@@ -860,6 +928,9 @@ name = "san-selftest"
 version = "0.0.0"
 edition = "2021"
 publish = false
+
+[features]
+hook = []
 
 [workspace]
 TOML
@@ -918,13 +989,21 @@ mod tests {
         assert_eq!(v.iter().map(|&b| b as u32).sum::<u32>(), 120);
     }
 }
+
+/// LeakSanitizer's opt-out hook, only with the `hook` feature (arm "A2 opt-out
+/// hook"): returning 1 turns the exit-time leak check off.
+#[cfg(all(test, feature = "hook"))]
+#[no_mangle]
+extern "C" fn __lsan_is_turned_off() -> core::ffi::c_int {
+    1
+}
 RS
   local sroot="$st/target"
-  arm() {  # arm NAME SAN FILTER WANT(RED|GREEN) MUST_GREP
-    local name="$1" san="$2" filter="$3" want="$4" must="$5" o r
+  arm() {  # arm NAME SAN FILTER WANT(RED|GREEN) MUST_GREP [SPEC]
+    local name="$1" san="$2" filter="$3" want="$4" must="$5" spec="${6:-san-selftest}" o r
     o="$(SAN_PER_CRATE_TARGET="${ARM_PER_CRATE:-0}" SAN_MANIFEST_PATH="$cr/Cargo.toml" SAN_TARGET_ROOT="$sroot" SAN_LOG_ROOT="$st/slogs-$name" SAN_MIN_FREE_GB=0 \
-         M_RED=0 M_BLOCKED=0 M_TOTAL=0 M_ROWS="" bash -c '. "$0" --source-only; matrix_run "$1" "$2" san-selftest; matrix_summary "$1"; gate_verdict SELF 0' \
-         "$GATES_DIR/sanitizers.sh" "$san" "$filter" 2>&1)"; r=$?
+         M_RED=0 M_BLOCKED=0 M_TOTAL=0 M_ROWS="" bash -c '. "$0" --source-only; matrix_run "$1" "$2" "$3"; matrix_summary "$1"; gate_verdict SELF 0' \
+         "$GATES_DIR/sanitizers.sh" "$san" "$filter" "$spec" 2>&1)"; r=$?
     local okv=0
     case "$want" in
       RED) [ $r -eq 1 ] && printf '%s' "$o" | grep -qE "$must" && okv=1 ;;
@@ -974,9 +1053,21 @@ RS
     if printf '%s' "$nto" | grep -q "${nrc#*|}" && printf '%s' "$nto" | grep -q "$want"; then echo "  ok   G NO_TESTS_ON, filter '${nrc%%|*}': ${nrc#*|} ($want)"
     else echo "  FAIL G NO_TESTS_ON, filter '${nrc%%|*}':"; printf '%s\n' "$nto" | tail -5 | sed 's/^/       /'; fail=1; fi
   done
-  if [ "$OS" = "Linux" ]; then
+  if [ "$OS" = "Linux" ] || [ "$OS" = "Darwin" ]; then
     arm "A2 leak" lsan "tests::defect_leak --exact" RED "LeakSanitizer: detected memory leaks"
+    arm "A2 control: clean under LSan" lsan "tests::clean_control --exact" GREEN "1 test\\(s\\) ran"
     arm "A2 control: the leak under G-ASAN (leak checker off)" asan "tests::defect_leak --exact" GREEN "1 test\\(s\\) ran"
+    # The documented opt-out hook (__lsan_is_turned_off) that rustty-termio's
+    # fork-child tests define must reach the runtime: with the `hook` feature
+    # the synthetic crate's hook returns 1, so its deliberate leak is NOT
+    # reported. On macOS that holds only because run_crate exports the
+    # executable's symbols (-Zexport-executable-symbols); without the flag this
+    # arm is RED (measured P7-W16a).
+    arm "A2 opt-out hook reaches the runtime" "lsan" "tests::defect_leak --exact" GREEN "1 test\\(s\\) ran" "san-selftest:hook"
+  else
+    echo "  skip A2 leak under LSan: verified on Linux and macOS only, not on $OS"
+  fi
+  if [ "$OS" = "Linux" ]; then
     if [ -n "$MSAN_AARCH64_NOTE" ] && [ "$ARCH" = "aarch64" ]; then
       echo "  skip A3 uninit read under MSan: BLOCKED on $ARCH ($MSAN_AARCH64_NOTE)"
     else
@@ -984,8 +1075,7 @@ RS
       arm "A3 control: clean under MSan" msan "tests::clean_control --exact" GREEN "1 test\\(s\\) ran"
     fi
   else
-    echo "  skip A2 leak under LSan: Linux-only (rustc rejects -Zsanitizer=leak on $OS); runs on rvm / ci.yml"
-    echo "  skip A3 uninit read under MSan: Linux-only; runs on rvm / ci.yml"
+    echo "  skip A3 uninit read under MSan: Linux-only (compiler-rt has no MSan for $OS); runs on rvm / ci.yml"
   fi
   # The synthetic crate's own build dirs (san-<san>-san-selftest) are dropped by
   # matrix_run; remove the work dir itself.

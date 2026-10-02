@@ -103,12 +103,23 @@ static APP_NEW_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// All `rustty_app_new` calls in this binary go through here.
 ///
+/// It CONSUMES `config`: `rustty_app_new` clones it (`App::init`), so the
+/// caller's copy is freed here, as the Swift host's `Config` frees its own
+/// after `ghostty_app_new`. Every caller passes a config made for this call.
+/// (G-LSAN's first macOS run, P7-W16a: without the free each `HostedSurface`
+/// leaked its whole config, 14 configs and ~800 KB of keybind tables.)
+///
 /// # Safety
-/// Same contract as `rustty_app_new`: `opts`/`config` live for the call.
+/// Same contract as `rustty_app_new`: `opts`/`config` live for the call, and
+/// `config` came from `rustty_config_new` and is not used afterwards.
 unsafe fn app_new_serialized(opts: &Options, config: *mut rustty_config::Config) -> *mut App {
     let _guard = APP_NEW_LOCK.lock().unwrap();
     // SAFETY: forwarded caller contract (see doc above).
-    unsafe { rustty_app_new(opts, config) }
+    let app = unsafe { rustty_app_new(opts, config) };
+    // SAFETY: `config` is the caller's live Config, cloned by `rustty_app_new`
+    // and never used again (see doc above).
+    unsafe { rustty_config::c_api::rustty_config_free(config) };
+    app
 }
 
 // R14 strict-mode pivot for this binary: the sibling of the renderer's
@@ -1237,8 +1248,11 @@ fn set_window_background_blur_is_panic_free_on_transparent_config() {
     unsafe { rustty_set_window_background_blur(app, wptr) };
     // DRIFT FIX (§6): the reference `ghostty_config_replace` does not exist here;
     // the real export is `rustty_app_update_config`.
+    let opaque = make_config_opaque();
     // SAFETY: `app` is live; the opaque config lives for the update call.
-    unsafe { rustty_app_update_config(app, make_config_opaque()) };
+    unsafe { rustty_app_update_config(app, opaque) };
+    // SAFETY: allocated above; `updateConfig` clones it and keeps no pointer.
+    unsafe { rustty_config::c_api::rustty_config_free(opaque) };
     // SAFETY: `app` is live; opacity 1.0 => the blur early-return path.
     unsafe { rustty_set_window_background_blur(app, wptr) };
     // SAFETY: `app` is the live pointer from `rustty_app_new`.

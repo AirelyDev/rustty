@@ -7,8 +7,9 @@
 #       This is the PRIMARY gate and supersedes any tracking-allocator approach.
 #   * Rust<->C FFI crates -> AddressSanitizer (`-Zsanitizer=address`):
 #       Miri cannot execute foreign C, so FFI crates use ASan for UB across the
-#       boundary. (FFI *leak* detection: LSan/valgrind are unavailable on arm64
-#       macOS, so FFI leak checks are deferred to Linux CI — see DoP §G6.)
+#       boundary. (FFI *leak* detection is G-LSAN, `sanitizers.sh --gate lsan`:
+#       ASan with detect_leaks=1, on macOS and Linux since P7-W16a; G-VALGRIND
+#       on Linux.)
 #   * live-syscall test binaries in otherwise-pure crates -> ASan:
 #       a test whose PURPOSE is a real syscall loop (kqueue/mach-port) cannot
 #       execute under Miri at all ("can't call foreign function `kqueue`");
@@ -198,7 +199,7 @@ run_crate() {
     RUSTFLAGS="-Zsanitizer=address" RUSTDOCFLAGS="-Zsanitizer=address" \
       cargo +nightly test -p "$c" --target "$(rustc -vV | sed -n 's/host: //p')" 2>&1
     local rc=$?
-    echo "(FFI leak detection for $c is deferred to Linux CI: LSan/valgrind unavailable on arm64 macOS)"
+    echo "(FFI leak detection for $c is G-LSAN's job: sanitizers.sh --gate lsan, ASan with detect_leaks=1, macOS and Linux)"
     return $rc
   fi
   local live

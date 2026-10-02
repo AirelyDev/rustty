@@ -2321,7 +2321,7 @@ fn recording_allocator() -> *const c_void {
         preferred_size: core::ptr::null(),
     };
     // SAFETY: a valid context; the allocator itself comes from the default
-    // allocator. It is never released (one per test run).
+    // allocator. The caller releases it once everything made with it is freed.
     let a = unsafe { CFAllocatorCreate(core::ptr::null(), &mut ctx) };
     assert!(!a.is_null());
     a
@@ -2394,6 +2394,10 @@ fn end_frame_releases_the_pool_on_the_cf_release_thread() {
     shaper.deinit();
     assert!(shaper.cf_release_thread.is_null() && shaper.cf_release_thr.is_none());
     shaper.deinit();
+    // The CFData made with `alloc` is freed (recorded above), so the test's
+    // reference is the allocator's last (G-LSAN, macOS, P7-W16a: it leaked).
+    // SAFETY: `alloc` is the live CFAllocator from `recording_allocator`.
+    unsafe { CFRelease(alloc.cast_mut()) };
 }
 
 /// S94-F2: `Shaper.init` spawns the release thread with `try`

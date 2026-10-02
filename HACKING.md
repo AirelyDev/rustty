@@ -357,8 +357,10 @@ what it would run with `check_leaks.sh --list`.
 
 ### Valgrind (Linux, FFI/C paths)
 
-LeakSanitizer and Valgrind are unavailable on arm64 macOS, so FFI _leak_
-detection is deferred to Linux. On Linux, Valgrind remains the recommended tool
+Valgrind is unavailable on arm64 macOS. FFI _leak_ detection on macOS is
+G-LSAN (`.port/tools/gates/sanitizers.sh --gate lsan`: rustc's AddressSanitizer
+runtime with `detect_leaks=1`, which works on Apple Silicon; Apple clang's own
+ASan runtime has no leak checker). On Linux, Valgrind remains the recommended tool
 for checking the FFI/C code paths for leaks that ASan's leak checking or Miri
 cannot reach. Build a debug binary and run it under Valgrind with suppressions
 for known false positives:

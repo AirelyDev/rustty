@@ -110,8 +110,8 @@
 #                                    against a fake valgrind and cargo.
 #   G-ASAN / G-LSAN / G-MSAN sanitizers.sh --gate asan|lsan|msan
 #                                    the workspace test suites under
-#                                    AddressSanitizer (macOS + Linux),
-#                                    ASan+LeakSanitizer and MemorySanitizer
+#                                    AddressSanitizer and ASan+LeakSanitizer
+#                                    (macOS + Linux), MemorySanitizer
 #                                    (Linux; BLOCKED elsewhere), one crate at
 #                                    a time            -> HARD-FAIL.
 #                                    G-ASAN and G-LSAN also check that every
@@ -586,9 +586,10 @@ GATE_REGISTRY=(
   # blueprint-compiler is absent (every macOS host).
   "G-BLUEPRINT|HARD|bash $GATES/check_blueprints.sh"
   # G-VALGRIND (2026-08-26) — the reference's `valgrind` job, and the closure of
-  # a deferral check_leaks.sh names in its own header: FFI *leak* detection is
-  # impossible on arm64 macOS (no LSan, no valgrind), so the crates that cross
-  # into C had no leak coverage anywhere. It started as that FFI-leak lane; since
+  # a deferral check_leaks.sh named in its own header: FFI *leak* detection was
+  # thought impossible on arm64 macOS (no valgrind; LSan believed absent, which
+  # P7-W16a disproved: G-LSAN runs there), so the crates that cross into C had
+  # no leak coverage anywhere. It started as that FFI-leak lane; since
   # N413 (L-6) it runs every workspace crate's test binaries, sharded into
   # ci.yml's own `valgrind` job (here it reports BLOCKED, naming that job).
   # BLOCKED where valgrind is absent. G-VALGRIND-SELF (review L-6 F1) runs first
@@ -608,11 +609,16 @@ GATE_REGISTRY=(
   #           Linux; detect_leaks=0), minus cited exclusions, and the cross-
   #           check that every `cfg_attr(miri, ignore = "...")` test claiming
   #           ASan coverage really ran and passed under it.
-  #   G-LSAN  ASan with detect_leaks=1 (LeakSanitizer) on Linux, suppressions
-  #           only per .port/phase-2/SANITIZER_SUPPRESSIONS.md. BLOCKED on macOS.
+  #   G-LSAN  ASan with detect_leaks=1 (LeakSanitizer) on macOS and Linux,
+  #           suppressions only per .port/phase-2/SANITIZER_SUPPRESSIONS.md.
+  #           macOS since P7-W16a: rustc's ASan runtime carries a working leak
+  #           checker on Apple Silicon (Apple clang's does not, and rustc
+  #           rejects the standalone -Zsanitizer=leak there); BLOCKED on any
+  #           other host OS.
   #   G-MSAN  MemorySanitizer (-Zbuild-std, our cc-built C instrumented) over
   #           an allow-list scope; every member is scoped or excluded with a
-  #           reason. Linux only; BLOCKED elsewhere.
+  #           reason. Linux only (compiler-rt has no Darwin MSan); BLOCKED
+  #           elsewhere, where Miri's uninit checks are the coverage.
   # Hours each, so --fast skips them. In ci.yml's `ci` job they report BLOCKED
   # (RUSTTY_SANITIZERS_OWN_JOB), naming its `sanitizers` job, which runs them.
   # G-SAN-SELF needs only nightly: a synthetic crate's heap overflow, leak and

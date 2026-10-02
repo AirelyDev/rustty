@@ -1,0 +1,81 @@
+# LeakSanitizer suppressions for G-LSAN on macOS (.port/tools/gates/sanitizers.sh
+# --gate lsan; run_crate picks this file when `uname -s` is Darwin, lsan.supp
+# elsewhere).
+#
+# Same rules as lsan.supp: every entry is a THIRD-PARTY allocation (here: Apple
+# system libraries), each with a row in .port/phase-2/SANITIZER_SUPPRESSIONS.md
+# (S3-S14) giving the reason and evidence, and a WHY comment directly above it
+# (D6 rule c). A leak in Rustty code is never suppressed.
+#
+# Why macOS needs its own file: LeakSanitizer on Darwin takes its roots from
+# thread stacks and registers, the writable sections of loaded modules, and
+# three VM-tagged regions (compiler-rt lsan_common_mac.cpp:
+# ProcessGlobalRegions, ProcessPlatformSpecificAllocations). Per-thread data
+# that libobjc and CoreFoundation reach only through pthread thread-specific
+# data, and SkyLight state reached from dispatch sources, are not among them,
+# so those blocks are reported as leaked while their owners are alive. Apple's
+# `leaks` tool, which does see those roots, reports 0 leaks for the same test
+# binaries built natively (SANITIZER_SUPPRESSIONS.md, S3-S14). Each pattern below
+# names the allocating system function, so an object that Rustty allocates and
+# fails to release (its stack runs through our code, or through
+# _objc_rootAllocWithZone under our call) is still reported: G-LSAN's first
+# macOS run found the Dear ImGui Metal backend's real leaks that way (UD376).
+
+# S3 (SANITIZER_SUPPRESSIONS.md): libobjc's per-thread "classes being
+# initialized" list, created by +initialize on each thread that first touches
+# a class; owned by the thread's objc TSD.
+leak:_fetchInitializingClassList
+# S4: libobjc's per-thread @synchronized lock cache (objc_sync_enter's
+# fetch_cache), owned by the thread's objc TSD.
+leak:fetch_cache
+# S5: CoreFoundation's per-thread TSD table (__CFTSDGetTable), created the first
+# time a thread calls into CF; freed by CF's TSD destructor at thread exit.
+leak:__CFTSDGetTable
+# S6: libobjc's per-thread autorelease-pool page, created when a thread
+# autoreleases with no pool in place; drained and freed by libobjc's TSD
+# destructor at thread exit. Only the PAGE (the allocation inside
+# autoreleaseNoPage); the objects autoreleased into it are not matched.
+leak:AutoreleasePoolPage::autoreleaseNoPage
+# S7: SkyLight (the window-server client under CoreGraphics/AppKit) receives a
+# mach message into a malloc'd buffer inside its RunElsewhere dispatch source
+# handler; the buffer is held by SkyLight's own source state.
+leak:RunElsewhere::create_source
+# S8: SkyLight's display-device cache: the plist (CFNumbers, CFData) it builds
+# in update_devices_from_data_internal when the display configuration is first
+# read or changes, held for the process.
+leak:update_devices_from_data_internal
+# S9: libFontRegistry (CoreText's font registry client): the process-wide
+# registry it creates once (TGlobalFontRegistry::CreateRegistry under
+# pthread_once) caches the server's rendezvous reply (dictionaries, CFURLs and
+# strings decoded by NSXPC) for the life of the process. A CoreText
+# create-then-release probe with no Rustty code reproduces these reports
+# exactly, and Apple's `leaks` reports 0 for the same sequence.
+leak:libFontRegistry.dylib
+# S10: CoreText's font-descriptor cache (TDescriptorSource::CopyDescriptorUncached
+# fills it); same probe and evidence as S9. A CTFont Rustty fails to release
+# would be reported through TCFBase_NEW<CTFont>, which this does not match.
+leak:TDescriptorSource::CopyDescriptorUncached
+# S11: dyld's thread-local-variable storage block for a thread that is still
+# alive when LSan scans at exit (here a test child that calls exit(3) from its
+# test thread). dyld allocates it on the thread's first TLV access
+# (_tlv_get_addr -> instantiateVariable) and frees it from its TSD destructor
+# at thread exit; like S3-S6 it is reachable only through pthread TSD. Only the
+# block itself; heap that thread-locals own is allocated elsewhere.
+leak:dyld::ThreadLocalVariables::instantiateVariable
+# S12: dyld's per-thread list of thread-local destructors, which std registers
+# (_tlv_atexit -> addTermFunc) when a thread first touches a thread-local with a
+# destructor; dyld runs and frees it at thread exit. Seen when a test child
+# calls exit(3) from its test thread, so that thread is alive at the scan
+# (rustty-cli's list_themes picker children). Same class as S11.
+leak:dyld::ThreadLocalVariables::addTermFunc
+# S13: CoreText's CGFont cache (TCGFontCache::CopyFont -> CGFontCreateWithPathAndName),
+# filled the first time a font file's tables are read and held for the process,
+# with the font's data provider and file reference beneath it. A CTFont Rustty
+# fails to release is reported through TCFBase_NEW<CTFont>, which this does not
+# match; Apple's `leaks` reports 0 for rustty-font-shaper's tests built natively.
+leak:TCGFontCache::CopyFont
+# S14: CoreAnimation's per-thread transaction (CA::Transaction::create, 8 KB),
+# created on a thread's first layer change and kept in CA's thread-specific
+# data until thread exit; Apple's `leaks` lists no CA::Transaction for the same
+# test binary (rustty-apprt-c macos_window_host) built natively.
+leak:CA::Transaction::create

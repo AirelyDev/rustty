@@ -219,21 +219,33 @@ fn main() {
     // `.mm` with the same "flags common to all" TUs. It is Objective-C++, so it
     // cannot share the C++ `cc::Build` above (which would force `-x
     // objective-c++` onto every pure-C++ TU); compile it as its own archive.
-    // Zig compiles `.mm` files ARC-off, so pass `-fno-objc-arc` to match. The
-    // `.mm` `#include`s "imgui.h" (vendor/imgui) and "imgui_impl_metal.h"
-    // (vendor/imgui/backends) and `#import`s <Metal/Metal.h> +
-    // <QuartzCore/CAMetalLayer.h>.
+    // Zig compiles `.mm` files ARC-off (clang's default), but this backend is
+    // written for ARC: its object-ownership code is ARC idiom
+    // (`__bridge_retained` / `__bridge_transfer` for the texture user data) and
+    // its manual `release`s exist only under IMGUI_IMPL_METAL_CPP. Compiled
+    // ARC-off it never frees the Metal library, shader functions, pipeline
+    // descriptor and pipeline state it creates, retains every cached pipeline
+    // twice, leaks a `FramebufferDescriptor` on EVERY `ImGui_ImplMetal_NewFrame`
+    // (two per inspector frame) and every texture wrapper. PORT NOTE:
+    // reference defect (R13, UPSTREAM-DEFECTS.md UD376). A reachable leak in
+    // the reference (UD376, provisional; found by G-LSAN's first macOS run,
+    // P7-W16a; confirmed by Apple's `leaks`), so per the "never port a
+    // reference defect" rule the port compiles it with `-fobjc-arc`, as Dear
+    // ImGui's own Metal example builds it (examples/example_glfw_metal/Makefile:
+    // `-ObjC++ -fobjc-weak -fobjc-arc`). The `.mm` `#include`s "imgui.h"
+    // (vendor/imgui) and "imgui_impl_metal.h" (vendor/imgui/backends) and
+    // `#import`s <Metal/Metal.h> + <QuartzCore/CAMetalLayer.h>.
     if is_darwin {
         let backends = imgui.join("backends");
         let mut metal = cc::Build::new();
         metal
             .cpp(true)
             .std("c++17")
-            // Compile as Objective-C++ with ARC disabled (the reference relies
-            // on Zig's default ARC-off `.mm` compilation).
+            // Compile as Objective-C++ with ARC on (UD376: the reference's
+            // ARC-off build leaks; see above).
             .flag("-x")
             .flag("objective-c++")
-            .flag("-fno-objc-arc")
+            .flag("-fobjc-arc")
             // Include paths: vendor/imgui (for "imgui.h") and vendor/imgui/
             // backends (for the sibling "imgui_impl_metal.h").
             .include(&imgui)
