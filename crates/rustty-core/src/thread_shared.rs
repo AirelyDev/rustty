@@ -29,14 +29,22 @@ use std::mem::MaybeUninit;
 ///
 /// There is no `Drop`: every owner of a core `Surface` frees it without drop
 /// glue (embedded `closeSurface` through `ManuallyDrop`, GTK through
-/// `dealloc`, the init-error callers through the `MaybeUninit` slot), exactly
-/// as the inline field was never dropped. Each teardown site tears the block
-/// down as it did inline (`deinit`, or `ptr::read(..).deinit()` for a
-/// consuming one), then calls [`dealloc`], which frees the allocation, also
-/// without drop glue.
+/// `dealloc`, the init-error callers through the `MaybeUninit` slot), so each
+/// teardown site frees its block explicitly. It tears the block down as it
+/// did inline (`deinit`, or `ptr::read(..).deinit()` for a consuming one),
+/// then either
+/// - calls [`drop_and_dealloc`] when the block is initialized and its
+///   remaining fields own Rust heap that no `deinit` releases (N502: the
+///   render thread's block, whose loop box and `DrawMutex` handle leaked with
+///   every closed surface, and the renderer-state block, whose std
+///   `Mutex`/`Condvar` box their pthread objects on Darwin), or
+/// - calls [`dealloc`], without drop glue, when the block was never
+///   initialized (an init-error slot) or was read out and dropped by value
+///   already (`ptr::read(..).deinit()`, whose copy drops itself).
 ///
 /// [`as_ptr`]: ThreadSharedBox::as_ptr
 /// [`dealloc`]: ThreadSharedBox::dealloc
+/// [`drop_and_dealloc`]: ThreadSharedBox::drop_and_dealloc
 pub struct ThreadSharedBox<T>(*mut T);
 
 impl<T> ThreadSharedBox<T> {
@@ -74,9 +82,13 @@ impl<T> ThreadSharedBox<T> {
         unsafe { drop(Box::from_raw(self.0.cast::<MaybeUninit<T>>())) };
     }
 
-    /// Drop the block NORMALLY and free the allocation, for a block whose
-    /// inline owner did run its drop glue after its explicit `deinit` (the
-    /// search state: `Search` values are dropped normally, unlike the surface).
+    /// Drop the block NORMALLY and free the allocation, after its explicit
+    /// `deinit`: for a block whose fields still own Rust heap that `deinit`
+    /// leaves (N502: the core `Surface`'s render-thread and renderer-state
+    /// blocks, in `Surface::deinit` and `initErrdefers`), and for one whose
+    /// inline owner was dropped normally (the search state: `Search` values are
+    /// dropped normally, unlike the surface). No field's `Drop` may repeat a
+    /// teardown `deinit` already did.
     ///
     /// # Safety
     /// The block is initialized and its explicit teardown has run, leaving it

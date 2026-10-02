@@ -26,8 +26,9 @@
 # a class; owned by the thread's objc TSD.
 leak:_fetchInitializingClassList
 # S4: libobjc's per-thread @synchronized lock cache (objc_sync_enter's
-# fetch_cache), owned by the thread's objc TSD.
-leak:fetch_cache
+# fetch_cache), owned by the thread's objc TSD. Anchored to that one libobjc
+# function (fix round 1).
+leak:^fetch_cache(bool)$
 # S5: CoreFoundation's per-thread TSD table (__CFTSDGetTable), created the first
 # time a thread calls into CF; freed by CF's TSD destructor at thread exit.
 leak:__CFTSDGetTable
@@ -49,11 +50,21 @@ leak:update_devices_from_data_internal
 # pthread_once) caches the server's rendezvous reply (dictionaries, CFURLs and
 # strings decoded by NSXPC) for the life of the process. A CoreText
 # create-then-release probe with no Rustty code reproduces these reports
-# exactly, and Apple's `leaks` reports 0 for the same sequence.
-leak:libFontRegistry.dylib
+# exactly, and Apple's `leaks` reports 0 for the same sequence. Two frames, not
+# the whole library (fix round 1): the registry's creation, which also covers
+# the NSXPC-decoded reply (its stacks reach CreateRegistry within the 30 frames
+# LSan records), and the registry's request cache, which a later lookup
+# (TGlobalFontRegistry::CopyFontForName) fills without passing CreateRegistry.
+leak:TGlobalFontRegistry::CreateRegistry
+# S9 (second frame): the same registry's request cache, filled by later lookups
+# (TGlobalFontRegistry::CopyFontForName) outside CreateRegistry.
+leak:TRequestCache::AddResultForRequest
 # S10: CoreText's font-descriptor cache (TDescriptorSource::CopyDescriptorUncached
 # fills it); same probe and evidence as S9. A CTFont Rustty fails to release
-# would be reported through TCFBase_NEW<CTFont>, which this does not match.
+# would be reported through TCFBase_NEW<CTFont>, which this does not match, and
+# a descriptor Rustty creates or copies and fails to release is allocated
+# outside it (CTFontDescriptorCreateWithNameAndSize, TFont::CopyDescriptor):
+# G-SAN-SELF's Darwin arms keep both RED under this file.
 leak:TDescriptorSource::CopyDescriptorUncached
 # S11: dyld's thread-local-variable storage block for a thread that is still
 # alive when LSan scans at exit (here a test child that calls exit(3) from its
@@ -73,6 +84,11 @@ leak:dyld::ThreadLocalVariables::addTermFunc
 # with the font's data provider and file reference beneath it. A CTFont Rustty
 # fails to release is reported through TCFBase_NEW<CTFont>, which this does not
 # match; Apple's `leaks` reports 0 for rustty-font-shaper's tests built natively.
+# A CGFont Rustty creates and fails to release (CGFontCreateWithFontName) is
+# allocated outside it and stays RED (G-SAN-SELF Darwin arm). An extra retain
+# on the CACHED CGFont that CTFontCopyGraphicsFont returns is invisible to LSan
+# with or without this entry (the object stays reachable from the cache;
+# measured without S13: GREEN), so this entry hides nothing there.
 leak:TCGFontCache::CopyFont
 # S14: CoreAnimation's per-thread transaction (CA::Transaction::create, 8 KB),
 # created on a thread's first layer change and kept in CA's thread-specific

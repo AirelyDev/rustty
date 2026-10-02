@@ -999,6 +999,88 @@ mod tests {
 extern "C" fn __lsan_is_turned_off() -> core::ffi::c_int {
     1
 }
+
+/// Darwin negative controls for lsan-darwin.supp (fix round 1): each `leak_*`
+/// test leaks one object Rustty could leak through the system APIs whose
+/// internals the file suppresses, and must stay RED under the real file; the
+/// create-and-release control must be GREEN (the suppressions cover exactly
+/// the system's own state).
+#[cfg(all(test, target_os = "macos"))]
+mod darwin {
+    use core::ffi::{c_char, c_void};
+    #[link(name = "CoreFoundation", kind = "framework")]
+    #[link(name = "CoreText", kind = "framework")]
+    #[link(name = "CoreGraphics", kind = "framework")]
+    #[link(name = "Metal", kind = "framework")]
+    extern "C" {
+        fn CFStringCreateWithCString(a: *const c_void, s: *const c_char, enc: u32) -> *const c_void;
+        fn CFRelease(p: *const c_void);
+        fn CTFontCreateWithName(name: *const c_void, size: f64, m: *const c_void) -> *const c_void;
+        fn CTFontDescriptorCreateWithNameAndSize(name: *const c_void, size: f64) -> *const c_void;
+        fn CTFontCopyFontDescriptor(font: *const c_void) -> *const c_void;
+        fn CGFontCreateWithFontName(name: *const c_void) -> *const c_void;
+        fn MTLCopyAllDevices() -> *const c_void;
+    }
+    fn menlo() -> *const c_void {
+        // kCFStringEncodingUTF8
+        unsafe { CFStringCreateWithCString(core::ptr::null(), c"Menlo-Regular".as_ptr(), 0x0800_0100) }
+    }
+    #[inline(never)]
+    fn sink(p: *const c_void) {
+        std::hint::black_box(p);
+    }
+    #[test]
+    fn create_release_control() {
+        let n = menlo();
+        let f = unsafe { CTFontCreateWithName(n, 12.0, core::ptr::null()) };
+        let d = unsafe { CTFontCopyFontDescriptor(f) };
+        unsafe {
+            CFRelease(d);
+            CFRelease(f);
+            CFRelease(n);
+        }
+    }
+    #[test]
+    fn leak_ctfont() {
+        let n = menlo();
+        for i in 0..4 {
+            sink(unsafe { CTFontCreateWithName(n, 13.0 + i as f64, core::ptr::null()) });
+        }
+        unsafe { CFRelease(n) };
+    }
+    #[test]
+    fn leak_font_descriptor_created() {
+        let n = menlo();
+        for i in 0..4 {
+            sink(unsafe { CTFontDescriptorCreateWithNameAndSize(n, 13.0 + i as f64) });
+        }
+        unsafe { CFRelease(n) };
+    }
+    #[test]
+    fn leak_font_descriptor_copied() {
+        let n = menlo();
+        for i in 0..4 {
+            let f = unsafe { CTFontCreateWithName(n, 17.0 + i as f64, core::ptr::null()) };
+            sink(unsafe { CTFontCopyFontDescriptor(f) });
+            unsafe { CFRelease(f) };
+        }
+        unsafe { CFRelease(n) };
+    }
+    #[test]
+    fn leak_cgfont() {
+        let n = menlo();
+        for _ in 0..4 {
+            sink(unsafe { CGFontCreateWithFontName(n) });
+        }
+        unsafe { CFRelease(n) };
+    }
+    #[test]
+    fn leak_mtl_device_array() {
+        for _ in 0..4 {
+            sink(unsafe { MTLCopyAllDevices() });
+        }
+    }
+}
 RS
   local sroot="$st/target"
   arm() {  # arm NAME SAN FILTER WANT(RED|GREEN) MUST_GREP [SPEC]
@@ -1066,6 +1148,16 @@ RS
     # executable's symbols (-Zexport-executable-symbols); without the flag this
     # arm is RED (measured P7-W16a).
     arm "A2 opt-out hook reaches the runtime" "lsan" "tests::defect_leak --exact" GREEN "1 test\\(s\\) ran" "san-selftest:hook"
+    if [ "$OS" = "Darwin" ]; then
+      # lsan-darwin.supp's negative controls (fix round 1): the system state the
+      # file suppresses must not hide an object Rustty leaks through those APIs.
+      arm "A2d control: CoreText create and release, clean under lsan-darwin.supp" lsan "darwin::create_release_control --exact" GREEN "1 test\\(s\\) ran"
+      arm "A2d leaked CTFont (S9, S10, S13)" lsan "darwin::leak_ctfont --exact" RED "LeakSanitizer: detected memory leaks"
+      arm "A2d leaked CTFontDescriptor, created (S10)" lsan "darwin::leak_font_descriptor_created --exact" RED "LeakSanitizer: detected memory leaks"
+      arm "A2d leaked CTFontDescriptor, copied from a font (S10)" lsan "darwin::leak_font_descriptor_copied --exact" RED "LeakSanitizer: detected memory leaks"
+      arm "A2d leaked CGFont (S13)" lsan "darwin::leak_cgfont --exact" RED "LeakSanitizer: detected memory leaks"
+      arm "A2d leaked MTLCopyAllDevices array (S17, S18)" lsan "darwin::leak_mtl_device_array --exact" RED "LeakSanitizer: detected memory leaks"
+    fi
   else
     echo "  skip A2 leak under LSan: verified on Linux and macOS only, not on $OS"
   fi

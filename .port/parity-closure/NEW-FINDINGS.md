@@ -10447,10 +10447,11 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (52 arms, the leak arms included).
 - **still Linux-only**: G-MSAN (no Darwin MSan in compiler-rt) and HWASan (not a gate; Linux task).
 
-## N502 — macOS-only leaks behind every closed surface: the render thread's and renderer state's Rust-owned heap was never dropped
+## N502 — leaks behind every closed surface, on every platform (only macOS tests reached them): the render thread's and renderer state's Rust-owned heap was never dropped
 
-- **id**: N502 (provisional; P7-W16a). **severity**: low (a few hundred bytes per closed surface on macOS;
-  port-only). **state**: CLOSED 2026-10-02.
+- **id**: N502 (provisional; P7-W16a). **severity**: low (a few hundred bytes per closed surface;
+  port-only). **state**: CLOSED 2026-10-02 (the fix is platform-independent); the Linux test coverage gap
+  below stays OPEN.
 - **found**: G-LSAN's first macOS run (P7-W16a), `rustty-apprt-c` `tests/macos_window_host.rs`, confirmed
   independently by Apple `leaks --atExit` (`MallocStackLogging=1`) on a native build of the same test
   binary. Two items:
@@ -10466,9 +10467,21 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
      - the render thread's `DrawMutex` handle (N437), an `Arc` clone of the renderer's, with the boxed
        `pthread_mutex_t`/`pthread_cond_t` std uses on Darwin;
      - the renderer state's D4 `HandoffPark` std `Mutex`/`Condvar`, boxed lazily on Darwin.
+     **Platforms (fix round 1 correction):** the teardown is shared, so the leak was not macOS-only. On
+     Linux the same glue-less free leaked the `DrawMutex` `Arc` clone and the loop's box (the dynamic
+     `Loop`'s epoll/io_uring arm; its N406 `Drop` never ran); only the `HandoffPark` boxes are
+     Darwin-specific (Linux std mutexes are futexes). Linux G-LSAN stayed GREEN only because no Linux test
+     closes a core `Surface`.
      Measured before the fix: LSan, 14 surfaces → 14 of each; Apple `leaks`, same binary natively (item 1
      fixed): 83 leaks, 9,344 bytes, every stack through `renderer_seam::Thread::init`, `DrawMutex::new`
      or `HandoffPark::gate`.
+- **Linux coverage gap (OPEN)**: no test that G-LSAN (or G-VALGRIND) runs on Linux creates and closes a
+  core `Surface`. On Linux a surface comes only from the GTK runtime (the embedded platform is macOS/iOS,
+  as in Ghostty), and the GTK tests that open one (`crates/rustty-apprt/tests/gtk_*_live.rs`) are
+  `#[ignore]`d live tests run through `.port/tools/gtk_live_headless_sway.sh`; no sanitizer lane runs
+  them. Closing it needs a lane that runs one of them (e.g. `gtk_window_live`) under ASan with
+  `detect_leaks=1` inside the headless-sway wrapper on rvm, with `lsan.supp`'s Mesa entries; not done in
+  P7-W16a.
 - **not a Ghostty defect**: the reference keeps the queue inline (libxev `backend/kqueue.zig:87`
   `thread_pool_completions: TaskCompletionQueue`), the draw mutex inline (`generic.zig:113`
   `draw_mutex: std.Io.Mutex = .init`), and the state's handoff is atomics only (`renderer/State.zig:40-45`);

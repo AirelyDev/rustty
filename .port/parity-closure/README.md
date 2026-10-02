@@ -69,7 +69,8 @@ shared target dir; G-LSAN (rvm) GREEN, 10,087 tests over 61 members and three fe
 verified and 31 macOS-only, 20 min; G-MSAN (rvm) GREEN, 6,183 tests over 58 members, 50 min. Fix round 1 (2026-10-02): the cross-check covers all 468 Miri-excepted tests (macOS: 459 ran, 9 expected absent; Linux: 412 ran, 56 expected absent), G-ASAN GREEN with 9,850 tests including a `rustty-vt:wuffs,oniguruma` lane, and `rustty-renderer` joins G-MSAN (52 tests, its EGL/GL/glslang modules skipped by name). Fix round 2: the renderer's skips narrowed to the twelve modules or tests that create an EGL/GL context or run glslang (81 tests under MSan); the G-LSAN matrix of round 1 ran on 7ddf62ffd, and the full G-LSAN gate re-ran GREEN on 05478107 (10,111 tests, cross-check 412 ran / 56 expected absent / 0 problems). The first
 runs found N495-N499 (register below); the suppressions, lane options and exclusions are in
 `.port/phase-2/SANITIZER_SUPPRESSIONS.md`. P7-W16a (2026-10-02) enabled G-LSAN on macOS (N501). Its first
-pass found UD376, N502 (per-surface macOS-only leaks in the render thread's and renderer state's teardown)
+pass found UD376, N502 (per-surface leaks in the render thread's and renderer state's teardown, on every
+platform; only macOS tests reached them, no Linux test closes a core `Surface`: an open coverage gap)
 and N503 (the renderer's macOS test helpers, N411's twins), all fixed; after them G-LSAN on macOS is GREEN:
 9,850 tests, 0 findings, 33 min, cross-check 459 ran / 9 expected absent / 0 problems.
 
@@ -226,7 +227,8 @@ committed records named here.
 - **P7-W16a** (why sanitizers were BLOCKED on macOS) used, provisionally (other tasks may take ids in
   parallel; N500 is P7-W15's), N501 (CLOSED: G-LSAN was BLOCKED on macOS on a wrong premise; it runs there now) and UD376
   (the inspector's Dear ImGui Metal backend built without ARC leaks per frame; fixed with `-fobjc-arc`),
-  N502 (CLOSED: macOS-only per-surface teardown leaks; the render-thread and renderer-state blocks are
+  N502 (CLOSED: per-surface teardown leaks on every platform, reached only by macOS tests; the Linux
+  coverage gap, no Linux test closing a core `Surface`, stays OPEN; the render-thread and renderer-state blocks are
   now dropped after their `deinit`, proven on `mirihar-n444`; port-only, Ghostty allocates none of it,
   so no UD) and N503 (CLOSED: the renderer's macOS test helpers, N411's twins). No V id.
   **Next free ids: UD377, N504, V31.**
