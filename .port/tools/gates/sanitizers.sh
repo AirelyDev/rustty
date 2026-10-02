@@ -83,9 +83,15 @@ ASAN_EXCLUDES=(
 )
 LSAN_EXCLUDES=(
 )
-# Feature lanes the Linux gates add on top of the members (cargo test
-# --workspace never builds them). Same set G-VALGRIND keeps (N413).
+# Feature lanes G-ASAN and G-LSAN add on top of the members (a plain
+# `cargo test -p` never turns them on). Format: "<crate>:<features>|<reason>".
+FEATURE_LANES=(
+  "rustty-vt:wuffs|the PNG decode tests (\`image_load_png_zlib_compressed_direct\`, \`sys::tests::default_decoder_*\`) are ignored without the wuffs feature, and one of them is a Miri exception whose stated compensating control is ASan; found by G-ASAN's claim cross-check on its first run (P7-W14)"
+)
+# Linux-only feature lanes: the same set G-VALGRIND keeps (N413).
 LINUX_FEATURE_LANES=(
+  "rustty-apprt:gtk,wayland,x11|GTK is the reference's Linux runtime, so its test executable there compiles the GTK apprt; cargo test --workspace does not"
+  "rustty-os:flatpak|the Flatpak arm of rustty-os (links gio-2.0, Linux/FreeBSD only); cargo test --workspace does not build it"
 )
 # MSan phase-1 scope is an ALLOW-list, not workspace-minus-excludes: MSan
 # reports any read of memory written by uninstrumented code, so a crate whose
@@ -132,13 +138,20 @@ run_crate() {
   case "$spec" in *:*) feats="${spec#*:}" ;; esac
   tgt="$(host_target)"
   local -a envs=() cargo_args=()
+  # allocator_may_return_null=1: ASan's malloc otherwise ABORTS on a request
+  # larger than its 1 TiB maximum, where the system malloc returns NULL. The
+  # port's out-of-memory tests rely on that NULL (`Vec::try_reserve_exact`
+  # reporting failure, the faithful port of Zig's error.OutOfMemory paths; e.g.
+  # rustty-vt's hyperlink `try_dupe_bytes_reports_allocation_failure` asks for
+  # isize::MAX bytes). It changes no detector: every memory error is still
+  # reported. First seen as G-ASAN's first-run "allocation-size-too-big" (P7-W14).
   case "$san" in
     asan|address)
       rflags="-Zsanitizer=address"
-      envs+=("ASAN_OPTIONS=detect_leaks=0") ;;  # WHY: Apple ASan has no leak checker (rustc rejects -Zsanitizer=leak on Darwin); on Linux, G-LSAN is the leak lane, so G-ASAN keeps its verdict to memory errors only
+      envs+=("ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1") ;;  # WHY: Apple ASan has no leak checker (rustc rejects -Zsanitizer=leak on Darwin); on Linux, G-LSAN is the leak lane, so G-ASAN keeps its verdict to memory errors only
     lsan)
       rflags="-Zsanitizer=address"
-      envs+=("ASAN_OPTIONS=detect_leaks=1")      # WHY: not suppressive — turns the leak checker ON; this IS G-LSAN (design §B: LSan run as ASan with detect_leaks=1)
+      envs+=("ASAN_OPTIONS=detect_leaks=1:allocator_may_return_null=1")      # WHY: not suppressive — turns the leak checker ON; this IS G-LSAN (design §B: LSan run as ASan with detect_leaks=1)
       envs+=("LSAN_OPTIONS=suppressions=$LSAN_SUPP:print_suppressions=1") ;;  # WHY: every entry in lsan.supp is a third-party leak with a cited reason in .port/phase-2/SANITIZER_SUPPRESSIONS.md; print_suppressions=1 lists every match in the log so a suppression is never silent
     msan|memory)
       rflags="-Zsanitizer=memory -Zsanitizer-memory-track-origins"
@@ -147,7 +160,7 @@ run_crate() {
       # uninstrumented (system libraries) is out of MSan scope by construction.
       envs+=("CC=clang" "CXX=clang++" "CFLAGS=-fsanitize=memory -fsanitize-memory-track-origins -fno-omit-frame-pointer -g")
       envs+=("CXXFLAGS=-fsanitize=memory -fsanitize-memory-track-origins -fno-omit-frame-pointer -g")
-      envs+=("MSAN_OPTIONS=poison_in_dtor=1") ;;
+      envs+=("MSAN_OPTIONS=poison_in_dtor=1:allocator_may_return_null=1") ;;
     thread)
       rflags="-Zsanitizer=thread"; build_std="-Zbuild-std" ;;
     leak)
@@ -156,6 +169,17 @@ run_crate() {
       rflags="-Zsanitizer=hwaddress" ;;
     *) echo "sanitizers.sh: unknown sanitizer '$san'" >&2; return 2 ;;
   esac
+  # RUST_MIN_STACK (std's default spawn stack, 2 MiB otherwise): ASan and MSan
+  # put redzones and shadow bookkeeping in every frame, so instrumented debug
+  # frames are 2-3x their native size. A test that checks a recursion bound
+  # FITS the default stack is checking native frame sizes; under ASan it
+  # overflows without any memory error. Measured (P7-W14): rustty-vt's
+  # `deeply_nested_layout_is_a_syntax_error_beyond_max_depth` parses MAX_DEPTH
+  # (1000) levels in 1.25-1.5 MiB natively (debug) and overflows the 2 MiB stack
+  # under ASan. 8 MiB keeps that headroom; unbounded recursion still overflows,
+  # and the native bound stays checked by `cargo test --workspace`. Threads
+  # that set an explicit stack size are unaffected.
+  if [ "$san" != leak ] && [ "$san" != hwaddress ]; then envs+=("RUST_MIN_STACK=8388608"); fi
   if [ -n "$SAN_MANIFEST_PATH" ]; then cargo_args+=(--manifest-path "$SAN_MANIFEST_PATH"); fi
   cargo_args+=(-p "$crate" --target "$tgt" --no-fail-fast)
   if [ -n "$feats" ]; then cargo_args+=(--features "$feats"); fi
@@ -456,9 +480,11 @@ EOF
   while IFS= read -r e; do [ -n "$e" ] && specs_a+=("$e"); done <<EOF
 $(scope_minus "$excl")
 EOF
+  for e in ${FEATURE_LANES[@]+"${FEATURE_LANES[@]}"}; do specs_a+=("${e%%|*}"); echo "feature lane: ${e%%|*} — ${e#*|}"; done
   if [ "$OS" = "Linux" ]; then
-    for e in ${LINUX_FEATURE_LANES[@]+"${LINUX_FEATURE_LANES[@]}"}; do specs_a+=("${e%%|*}"); done
+    for e in ${LINUX_FEATURE_LANES[@]+"${LINUX_FEATURE_LANES[@]}"}; do specs_a+=("${e%%|*}"); echo "feature lane: ${e%%|*} — ${e#*|}"; done
   fi
+  check_members "$id feature lane" ${FEATURE_LANES[@]+"${FEATURE_LANES[@]}"} ${LINUX_FEATURE_LANES[@]+"${LINUX_FEATURE_LANES[@]}"} || extra=1
   if [ -n "${SAN_ONLY:-}" ]; then
     # Debug aid: SAN_ONLY="a b" narrows the run (the verdict says so: never a full green).
     local -a narrowed=()
@@ -692,6 +718,10 @@ RS
 if [ "${1:-}" = "--source-only" ]; then return 0 2>/dev/null || exit 0; fi
 case "${1:-}" in
   --self-test) self_test; exit $? ;;
+  --crosscheck)
+    # Re-run only the ASan-claim cross-check over an existing run's logs.
+    case "${2:-}" in asan|lsan) asan_claims_crosscheck "$2"; exit $? ;; esac
+    echo "usage: sanitizers.sh --crosscheck asan|lsan" >&2; exit 2 ;;
   --gate)
     case "${2:-}" in
       asan) gate_asan_like asan; exit $? ;;
