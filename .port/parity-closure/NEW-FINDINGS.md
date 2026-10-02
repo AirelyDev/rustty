@@ -10435,6 +10435,10 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   the three fixes was stopped at the Mac's 15 GB disk floor (the VM image lives on the Mac) after 45 of its
   63 specs: 44 GREEN (2,029 tests, `rustty-apprt-c` included), `gettext-sys` NO-TESTS, 0 RED. The 18 specs
   it did not reach (`rustty-vt` and the rest, and the three feature lanes) were GREEN in the first run, and
-  `xtask` is now excluded. A complete GREEN gate run on the fixed tree is still owed (the next rvm
-  session: `bash .port/tools/gates/sanitizers.sh --per-crate-target --gate hwasan`).
+  `xtask` is now excluded. The complete run on the fixed tree (commit 1529049d9, rebased onto
+  `phase-7-longruns` 0cbd9422c; rvm, 2026-10-02, `--per-crate-target --gate hwasan`): **G-HWASAN GREEN**,
+  9,987 tests over all 63 specs (58 members GREEN, `gettext-sys` and `rustty-wasm` NO-TESTS, and the
+  `rustty-vt:wuffs,oniguruma` 3,364, `rustty-apprt:gtk,wayland,x11` 174 and `rustty-os:flatpak` 110 feature
+  lanes GREEN), zero HWASan reports, cross-check 468 Miri-excepted / 412 ran and passed / 56 expected
+  absent / 0 problems, 56 min wall. G-SAN-SELF GREEN on rvm on the same tree (54 arms, A4 included).
 - **not a Ghostty defect**: all three are in the port's own gates and test harness.

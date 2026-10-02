@@ -133,7 +133,9 @@ blocks with redzones and quarantines freed memory. So:
 and the three feature lanes, zero HWASan reports; RED on H1, H2 and a cross-check parser defect (N504),
 all fixed; the cross-check over its logs then read 468 Miri-excepted, 412 ran and passed, 56 expected
 absent, 0 problems. A second run on the fixed tree stopped at the Mac's 15 GB disk floor after 45 of 63
-specs (44 GREEN, 2,029 tests, 0 RED); a complete GREEN run is still owed (N504).
+specs (44 GREEN, 2,029 tests, 0 RED). The complete run on the fixed tree (1529049d9): G-HWASAN GREEN,
+9,987 tests over all 63 specs including the three feature lanes, 0 reports, cross-check 412 ran / 56
+expected absent / 0 problems, 56 min (N504).
 
 So G-HWASAN is a complement to G-ASAN, not a replacement: G-ASAN stays the everyday lane (macOS and Linux,
 deterministic), and G-HWASAN adds the wild-pointer class and instrumented C on rvm.
