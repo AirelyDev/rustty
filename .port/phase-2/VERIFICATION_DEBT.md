@@ -1298,7 +1298,7 @@ remove`); the pinned working tree was never touched — no `checkout` was run in
 Owner is Phase 3 because `origin/main` **is** the upstream resync range:
 `BEYOND-PIN`.
 
-## V16. The binary-size axis of `BASELINE.json` is unmeasured, so G8 runs without `--strict` — **DISCHARGED 2026-10-07 (P7-W22, head `9ca310b46`); the size defects it found are N520**
+## V16. The binary-size axis of `BASELINE.json` is unmeasured, so G8 runs without `--strict` — **DISCHARGED 2026-10-07 (P7-W22, head `9ca310b46`); the size defects it found are N512**
 
 **DISCHARGED 2026-10-07 (P7-W22, head `9ca310b46`).** The user's ruling was to
 treat the dylib's 1.30x as a possible defect: find what inflates it, shrink
@@ -1308,13 +1308,13 @@ like: Ghostty's `libghostty-vt` rebuilt ReleaseFast at the pin
 `GhosttyLibVt.zig`: `-dead_strip`, exports `_ghostty_*`, not stripped) against
 `cargo build -p rustty-vt-c --release` (exports 198 `rustty_*`, `strip =
 "debuginfo"`, no LTO per PERF_LOG's measured ban). Attribution with a linker
-map (`-Wl,-map`) and per-object content hashes found two real defects (N520):
+map (`-Wl,-map`) and per-object content hashes found two real defects (N512):
 
 | step | `librustty_vt_c.dylib` | / Ghostty 1,924,784 |
 |---|--:|--:|
 | P7-W19 | 2,498,112 | 1.30 |
-| N520(a): the props table and grapheme precompute were `const` arrays, so each crate that inlined their reader got its own copy (3x 80 KB props, 2x 16 KB grapheme; Zig emits one object) -> `static` | 2,315,616 | 1.20 |
-| N520(b): `[profile.release] panic = "abort"` (a Zig panic never unwinds; the unwind tables and landing pads served a path that already ended in an abort) | **2,071,760** | **1.076** |
+| N512(a): the props table and grapheme precompute were `const` arrays, so each crate that inlined their reader got its own copy (3x 80 KB props, 2x 16 KB grapheme; Zig emits one object) -> `static` | 2,315,616 | 1.20 |
+| N512(b): `[profile.release] panic = "abort"` (a Zig panic never unwinds; the unwind tables and landing pads served a path that already ended in an abort) | **2,071,760** | **1.076** |
 
 The remaining +147 KB is itemized in BASELINE.json: `overflow-checks` (DG2,
 kept) 55 KB, std's panic/backtrace runtime that std's default hook links

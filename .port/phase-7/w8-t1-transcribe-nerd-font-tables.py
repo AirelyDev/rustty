@@ -126,7 +126,7 @@ def emit(header, stage1, stage2, stage3):
     out.append("// PARITY: the reference emits these as container-level `pub const stageN`")
     out.append("// arrays, which Zig materialises as ONE global object each. A Rust `const`")
     out.append("// array is instead inlined into every use, so they are `static`, as")
-    out.append("// rustty-unicode's `props_data` is (P7-W22, N520).")
+    out.append("// rustty-unicode's `props_data` is (P7-W22, N512).")
     out.append("")
     out.append("use crate::glyph::{Align, Constraint, ConstraintSize, Height};")
     out.append("")

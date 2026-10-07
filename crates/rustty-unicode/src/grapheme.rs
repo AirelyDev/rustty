@@ -268,7 +268,7 @@ struct Precompute;
 
 /// The one shipped copy of `Precompute::DATA`, which `grapheme_break` reads.
 ///
-/// PORT NOTE (P7-W22, N520): the reference's `Precompute.data` is a
+/// PORT NOTE (P7-W22, N512): the reference's `Precompute.data` is a
 /// container-level `const`, which Zig emits as ONE global object. A Rust
 /// `const` array is instead inlined into every use, so the `#[inline]`
 /// `grapheme_break` stamped a private 16 KiB copy into each crate that inlined

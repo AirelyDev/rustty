@@ -15,7 +15,7 @@
 // PARITY: the reference emits these as container-level `pub const stageN`
 // arrays, which Zig materialises as ONE global object each. A Rust `const`
 // array is instead inlined into every use, which put three copies of these
-// tables into librustty_vt_c.dylib (P7-W22, N520), so they are `static`: the
+// tables into librustty_vt_c.dylib (P7-W22, N512), so they are `static`: the
 // same values, laid out once, as in the reference.
 
 use crate::props::GraphemeBreakNoControl;

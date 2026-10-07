@@ -21,7 +21,7 @@
 // PARITY: the reference emits these as container-level `pub const stageN`
 // arrays, which Zig materialises as ONE global object each. A Rust `const`
 // array is instead inlined into every use, so they are `static`, as
-// rustty-unicode's `props_data` is (P7-W22, N520).
+// rustty-unicode's `props_data` is (P7-W22, N512).
 
 use crate::glyph::{Align, Constraint, ConstraintSize, Height};
 

@@ -77,7 +77,7 @@ def ints(body, n):
 
 
 def arr(name, ty, vals, kw="static"):
-    # `static` for the runtime lookup tables (one object, as Zig emits; N520);
+    # `static` for the runtime lookup tables (one object, as Zig emits; N512);
     # the grapheme byte table stays `const`: it is only read at compile time.
     return f"pub {kw} {name}: [{ty}; {len(vals)}] = [\n" + "".join(
         f"    {v},\n" for v in vals
@@ -109,7 +109,7 @@ def props(text):
 // PARITY: the reference emits these as container-level `pub const stageN`
 // arrays, which Zig materialises as ONE global object each. A Rust `const`
 // array is instead inlined into every use, which put three copies of these
-// tables into librustty_vt_c.dylib (P7-W22, N520), so they are `static`: the
+// tables into librustty_vt_c.dylib (P7-W22, N512), so they are `static`: the
 // same values, laid out once, as in the reference.
 
 use crate::props::GraphemeBreakNoControl;

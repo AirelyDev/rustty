@@ -10894,9 +10894,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `get_index` loop (a `cset`/`tbnz` probe-loop exit where Zig's LLVM fuses `ccmp`; `mov`+`bfi` for the key
   widening), not a source difference; the two `get_row_and_cell` asserts are hoisted out of the loop.
 
-## N520 — `librustty_vt_c.dylib` was 1.30x Ghostty's dylib: triplicated `const` lookup tables and unwind data for a path that always aborts
+## N512 — `librustty_vt_c.dylib` was 1.30x Ghostty's dylib: triplicated `const` lookup tables and unwind data for a path that always aborts
 
-- **id**: N520. P7-W22 (V16). **severity**: low (size parity; no behaviour change). **kind**: port
+- **id**: N512. P7-W22 (V16). **severity**: low (size parity; no behaviour change). **kind**: port
   representation defect (a) and build-profile divergence (b). **state**: CLOSED.
 - **oracle**: `src/unicode/props_uucode.zig`/`lut.zig` (`pub const stage1/2/3`, container-level: one
   global object each), `src/unicode/grapheme.zig` `Precompute.data` (one 8 KB object), `src/lib_vt.zig`
