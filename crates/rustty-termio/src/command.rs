@@ -619,6 +619,21 @@ impl<'a> Command<'a> {
             None => environ(),
         };
 
+        // RUSTTY-ONLY (N506): AddressSanitizer builds on macOS spawn the pty
+        // child with posix_spawn instead of fork when the child's setup can be
+        // expressed that way; every other build, and every case it cannot
+        // express, runs the reference's fork path below unchanged. See
+        // `asan_posix_spawn`.
+        #[cfg(all(rustty_asan, target_os = "macos"))]
+        if let Some(pid) = self.asan_posix_spawn(argsZ.as_ptr(), envp) {
+            // The parent half of the fork path, as below.
+            self.pid = Some(pid);
+            if let Some(f) = self.rt_post_fork {
+                f(self).map_err(|_| Error::PostForkError)?;
+            }
+            return Ok(());
+        }
+
         // Fork.
         //
         // Wrapper for the raw fork syscall. This preserves the error handling from
@@ -721,6 +736,194 @@ impl<'a> Command<'a> {
         // We return a very specific error that can be detected to determine
         // we're in the child.
         Err(Error::ExecFailedInChild)
+    }
+
+    /// RUSTTY-ONLY (N506), compiled only into AddressSanitizer builds on macOS
+    /// (`cfg(rustty_asan)`, set by this crate's build.rs from
+    /// `CARGO_CFG_SANITIZE`). Normal builds have only the fork path.
+    ///
+    /// # Why
+    ///
+    /// Under the macOS ASan runtime, `fork` can deadlock: libSystem's atfork
+    /// prepare (`_malloc_fork_prepare`) and ASan's allocator quarantine
+    /// (`wrap_free` on another thread) spin on each other's allocator locks,
+    /// and the forking io thread never returns (NEW-FINDINGS N506: about 1
+    /// `rustty-apprt-c` `macos_window_host` run in 33 hung). `posix_spawn`
+    /// creates the child in the kernel and runs no atfork handler, so no
+    /// allocator lock is taken.
+    ///
+    /// # What it reproduces of the fork child
+    ///
+    /// Only the shape `Subprocess::start` builds: `os_pre_exec` is
+    /// `subprocess_pre_exec` (the pty `childPreExec`), no `rt_pre_exec` (only
+    /// the GTK apprt sets one), stdin/stdout/stderr all the pty slave, and no
+    /// rlimit to restore. For it:
+    ///
+    /// * `setupFd` x3: `adddup2(slave, 0..=2)` (dup2 leaves the targets
+    ///   without CLOEXEC, as `setupFd` does);
+    /// * `chdir(cwd)`: `addchdir_np`;
+    /// * `childPreExec`'s 13 signal resets: `POSIX_SPAWN_SETSIGDEF` over the
+    ///   same 13 signals; its `setsid`: `POSIX_SPAWN_SETSID`; its close of
+    ///   the slave: `addclose(slave)` (the master is CLOEXEC from `Pty::open`);
+    /// * `execvpe`: the same PATH search (`execvpe_search` over the same
+    ///   `getenv("PATH")`), one `posix_spawn` per candidate.
+    ///
+    /// # Divergence (ASan builds only)
+    ///
+    /// `childPreExec`'s `ioctl(slave, TIOCSCTTY)` has no posix_spawn
+    /// equivalent on macOS: XNU runs the file actions before
+    /// `POSIX_SPAWN_SETSID`, so even an `addopen` of the tty does not make it
+    /// the controlling terminal (measured: a child spawned so has
+    /// `tcgetsid(0) == -1` and cannot open `/dev/tty`). The child is a session
+    /// and process-group leader with the pty on fds 0-2 but no controlling
+    /// terminal, the state the reference's own child is in when that ioctl
+    /// fails (it logs and execs anyway). Teardown is unaffected: `killPid`
+    /// signals the process group, and the child leads its own.
+    ///
+    /// Anything else returns `None` and the caller runs the fork path
+    /// unchanged: another shape (the `Command` unit tests, a GTK
+    /// `rt_pre_exec`, an rlimit to restore), or ANY `posix_spawn` failure.
+    /// The fork path then reproduces the reference exactly, including its
+    /// ignored `chdir` failure and its in-child "exec failed" message and
+    /// exit, so only a successful spawn takes this path.
+    #[cfg(all(rustty_asan, target_os = "macos"))]
+    fn asan_posix_spawn(
+        &self,
+        argv: *const *const c_char,
+        envp: *const *const c_char,
+    ) -> Option<libc::pid_t> {
+        // <sys/spawn.h> `POSIX_SPAWN_SETSID` (macOS 10.15+); the libc crate
+        // does not bind it, nor `posix_spawn_file_actions_addchdir_np`.
+        const POSIX_SPAWN_SETSID: libc::c_int = 0x0400;
+        extern "C" {
+            fn posix_spawn_file_actions_addchdir_np(
+                actions: *mut libc::posix_spawn_file_actions_t,
+                path: *const c_char,
+            ) -> libc::c_int;
+        }
+
+        // The shape check (see the doc comment).
+        let pre_exec: PreExecFn = crate::exec::subprocess_pre_exec;
+        if !self
+            .os_pre_exec
+            .is_some_and(|f| std::ptr::fn_addr_eq(f, pre_exec))
+            || self.rt_pre_exec.is_some()
+        {
+            return None;
+        }
+        let slave = self.stdin?.as_raw_fd();
+        if slave <= libc::STDERR_FILENO
+            || self.stdout?.as_raw_fd() != slave
+            || self.stderr?.as_raw_fd() != slave
+        {
+            return None;
+        }
+        if rustty_global::STATE
+            .get()
+            .is_some_and(|state| state.rlimits.nofile.is_some())
+        {
+            return None;
+        }
+
+        // `posix_chdir`'s path: the bytes up to the first NUL (what chdir(2)
+        // sees from its buffer), skipped when too long, which the reference
+        // ignores like any other chdir failure.
+        let cwd: Option<std::ffi::CString> = match self.cwd {
+            Some(cwd) if cwd.len() < libc::PATH_MAX as usize => {
+                let end = cwd.iter().position(|&b| b == 0).unwrap_or(cwd.len());
+                Some(std::ffi::CString::new(&cwd[..end]).ok()?)
+            }
+            _ => None,
+        };
+
+        // SAFETY: plain libc calls on locals; every object is initialised
+        // before use and destroyed before return. `argv`/`envp` are the
+        // NULL-terminated arrays `startPosix` built, live for this call.
+        unsafe {
+            let mut actions: libc::posix_spawn_file_actions_t = std::ptr::null_mut();
+            let mut attr: libc::posix_spawnattr_t = std::ptr::null_mut();
+            if libc::posix_spawn_file_actions_init(&mut actions) != 0 {
+                return None;
+            }
+            if libc::posix_spawnattr_init(&mut attr) != 0 {
+                libc::posix_spawn_file_actions_destroy(&mut actions);
+                return None;
+            }
+
+            let mut sigdef: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut sigdef);
+            // `PosixPty::childPreExec`'s list, in its order.
+            for sig in [
+                libc::SIGABRT,
+                libc::SIGALRM,
+                libc::SIGBUS,
+                libc::SIGCHLD,
+                libc::SIGFPE,
+                libc::SIGHUP,
+                libc::SIGILL,
+                libc::SIGINT,
+                libc::SIGPIPE,
+                libc::SIGSEGV,
+                libc::SIGTRAP,
+                libc::SIGTERM,
+                libc::SIGQUIT,
+            ] {
+                libc::sigaddset(&mut sigdef, sig);
+            }
+
+            let mut ok =
+                libc::posix_spawn_file_actions_adddup2(&mut actions, slave, libc::STDIN_FILENO)
+                    == 0
+                    && libc::posix_spawn_file_actions_adddup2(
+                        &mut actions,
+                        slave,
+                        libc::STDOUT_FILENO,
+                    ) == 0
+                    && libc::posix_spawn_file_actions_adddup2(
+                        &mut actions,
+                        slave,
+                        libc::STDERR_FILENO,
+                    ) == 0
+                    && libc::posix_spawn_file_actions_addclose(&mut actions, slave) == 0
+                    && libc::posix_spawnattr_setflags(
+                        &mut attr,
+                        (POSIX_SPAWN_SETSID | libc::POSIX_SPAWN_SETSIGDEF) as libc::c_short,
+                    ) == 0
+                    && libc::posix_spawnattr_setsigdefault(&mut attr, &sigdef) == 0;
+            if let Some(cwd) = &cwd {
+                ok = ok && posix_spawn_file_actions_addchdir_np(&mut actions, cwd.as_ptr()) == 0;
+            }
+
+            let mut pid: libc::pid_t = 0;
+            let mut spawn = |path: *const c_char| -> i32 {
+                libc::posix_spawn(
+                    &mut pid,
+                    path,
+                    &actions,
+                    &attr,
+                    argv as *const *mut c_char,
+                    envp as *const *mut c_char,
+                )
+            };
+            let err = if !ok {
+                -1
+            } else if self.path.to_bytes().contains(&b'/') {
+                spawn(self.path.as_ptr())
+            } else {
+                // `execvpe`'s search, over the same PATH.
+                let path_env = libc::getenv(c"PATH".as_ptr());
+                let path_bytes: &[u8] = if path_env.is_null() {
+                    b"/usr/local/bin:/bin/:/usr/bin"
+                } else {
+                    CStr::from_ptr(path_env).to_bytes()
+                };
+                execvpe_search(self.path.to_bytes(), path_bytes, &mut spawn)
+            };
+
+            libc::posix_spawnattr_destroy(&mut attr);
+            libc::posix_spawn_file_actions_destroy(&mut actions);
+            (err == 0).then_some(pid)
+        }
     }
 
     // PORT NOTE: `fn startWindows(self: *Command, arena: Allocator) !void` — the

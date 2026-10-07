@@ -124,7 +124,7 @@ impl core::fmt::Display for ArgsFormatter<'_> {
 //         },
 //     },
 #[cfg(not(windows))]
-fn subprocess_pre_exec(cmd: &mut Command) -> Option<u8> {
+pub(crate) fn subprocess_pre_exec(cmd: &mut Command) -> Option<u8> {
     // const sp = cmd.getData(Subprocess) orelse unreachable;
     let sp = cmd.getData::<Subprocess>().expect("getData(Subprocess)");
     // sp.childPreExec() catch |err| log.err("error initializing child: {}", .{err});

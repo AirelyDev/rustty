@@ -279,8 +279,8 @@ committed records named here.
   coverage gap, no Linux test closing a core `Surface`, stays OPEN; the render-thread and renderer-state blocks are
   now dropped after their `deinit`, proven on `mirihar-n444`; port-only, Ghostty allocates none of it,
   so no UD), N503 (CLOSED: the renderer's macOS test helpers, N411's twins) and, in fix round 2,
-  N506 (OPEN, mitigated: an intermittent ASan-runtime deadlock in `fork` on macOS; the gate now bounds
-  each crate and reports a hang RED). No V id.
+  N506 (an intermittent ASan-runtime deadlock in `fork` on macOS; the gate bounds each crate and
+  reports a hang RED; CLOSED in P7-W21: ASan builds on macOS spawn the pty child with `posix_spawn`). No V id.
 - **P7-W15** (the Miri lanes on `cargo miri nextest`, plus G6t) used N500 (CLOSED: test-side Tree Borrows UB in
   `snapshot::codec::tests::complete_snapshot_preserves_every_supported_continuation_cut`, the N492
   shape, found by G6t's first run, fixed with the raw-root idiom), N505 (CLOSED: the same shape in seven `rustty-vt-c` and `rustty-core` tests, found by the second G6t run; drafted as N501 and renumbered, since N501-N503 are reserved for P7-W16a) and N507 (CLOSED, gate-side: two G6 arms of the nextest port were stricter than the libtest lane, on `rustty-cli`'s disabled doc tests and `rustty-wasm`'s source-ignored test). P7-W15 discharged V27, V28 and V29.

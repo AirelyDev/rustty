@@ -254,9 +254,9 @@ tests_ran() {
 }
 # ---------------------------------------------------------------------------
 # The per-crate hang bound (P7-W16a fix round 2). A sanitizer runtime can
-# deadlock (ASan's allocator lock around `fork` on macOS: SANITIZER_SUPPRESSIONS.md
-# "Known limits", NEW-FINDINGS N506), and a HARD gate that waits forever gives
-# neither GREEN nor RED. Each crate's build-and-test run is bounded; past the
+# deadlock (as ASan's allocator locks around `fork` on macOS did, NEW-FINDINGS
+# N506, closed in P7-W21: ASan builds spawn the pty child with posix_spawn), and
+# a HARD gate that waits forever gives neither GREEN nor RED. Each crate's build-and-test run is bounded; past the
 # bound its process tree is killed by explicit PIDs and the crate is RED with
 # "HANG after Ns (no verdict)". SAN_CRATE_TIMEOUT_S overrides the default:
 #   asan / lsan / leak / thread / hwaddress: 1200 s, about 4x the slowest crate

@@ -493,6 +493,10 @@ pub use exec_command::*;
 pub use kill::*;
 pub use read_thread::*;
 pub use subprocess::*;
+// RUSTTY-ONLY (N506): `Command::asan_posix_spawn` recognises the pty child
+// setup by this hook's address (AddressSanitizer builds on macOS only).
+#[cfg(all(rustty_asan, target_os = "macos"))]
+pub(crate) use subprocess::subprocess_pre_exec;
 /// The read thread works with a companion gather thread to form a two-stage
 /// pipeline that moves pty output into the terminal:
 ///

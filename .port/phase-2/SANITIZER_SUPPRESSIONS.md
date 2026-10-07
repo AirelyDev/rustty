@@ -274,18 +274,20 @@ Leak-checking alternatives evaluated (P7-W16a):
 - **A tracking allocator**: PORT_RULES R6 removed that approach in favour of Miri plus the sanitizers;
   with a working LSan on macOS it is not needed.
 
-## Known limits (open)
+## Closed limit: the ASan deadlock around `fork` on macOS (N506)
 
-- **An ASan-runtime deadlock around `fork` on macOS (observed once, P7-W16a fix round 1).** Under heavy
-  machine load (load average ≈ 30) one G-LSAN pass hung in `rustty-apprt-c`'s `macos_window_host` for an
-  hour at ~740% CPU: an io thread in `Command::startPosix` → `fork` → `libSystem_atfork_prepare` →
-  `_malloc_fork_prepare` spun in `__sanitizer::StaticSpinMutex::LockSlow`, while a libdispatch worker spun
-  on the same kind of lock in `wrap_free` → `__asan::Allocator::QuarantineChunk`, and the other test
-  threads waited behind them. No Rustty frame holds a lock there; the related mechanism is the
-  sanitizers locking their allocator before `fork` (LLVM D33325). The process was killed by PID, the
-  crate re-run, and every other pass through that binary completed (1 hang in about 33 runs; NEW-FINDINGS
-  N506). Since fix round 2 the gate bounds each crate (`SAN_CRATE_TIMEOUT_S`, default 1200 s, 2400 s
-  for MSan): a hang is killed by explicit PIDs and reported RED, "HANG after Ns (no verdict)".
+Under load, `rustty-apprt-c`'s `macos_window_host` could hang forever under G-ASAN / G-LSAN: the io
+thread's `Command::startPosix` → `fork` → `libSystem_atfork_prepare` → `_malloc_fork_prepare` spun in
+`__sanitizer::StaticSpinMutex::LockSlow` while another thread spun on the same kind of lock in
+`wrap_free` → `__asan::Allocator::QuarantineChunk` (NEW-FINDINGS N506; LLVM D33325's allocator locking
+around `fork`). Closed in P7-W21: in ASan builds on macOS (`cfg(rustty_asan)`, set by
+`rustty-termio`'s build.rs from `CARGO_CFG_SANITIZE`), `Command::startPosix` spawns the pty child with
+`posix_spawn`, which runs no atfork handler. Normal builds keep the reference's `fork`. The ASan child
+has no controlling terminal (macOS has no `posix_spawn` form of `TIOCSCTTY`); see
+`Command::asan_posix_spawn`. The per-crate hang bound (`SAN_CRATE_TIMEOUT_S`) stays as a general safety
+net.
+
+## Known limits (open)
 
 - **G-ASAN and G-LSAN compile the vendored C/C++ without `-fsanitize=address`.** ASan still sees that
   code's heap through its `malloc`/`free`/`mem*`/`str*` interceptors (so a C buffer freed twice, or leaked,
