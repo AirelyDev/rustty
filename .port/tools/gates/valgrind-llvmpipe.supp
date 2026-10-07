@@ -1,13 +1,13 @@
 # Rustty-only Valgrind suppressions for G-VALGRIND (check_valgrind.sh), kept
 # apart from `valgrind.supp`, which stays the reference's file verbatim.
 #
-# Scope: Mesa's llvmpipe, the software OpenGL driver the renderer's live-GL
-# tests run on (LIBGL_ALWAYS_SOFTWARE=1, RUSTTY_REQUIRE_GL=1). The reference's
+# Scope: Mesa's llvmpipe and EGL, the software OpenGL driver and display
+# layer the renderer's live-GL tests run on (LIBGL_ALWAYS_SOFTWARE=1, RUSTTY_REQUIRE_GL=1). The reference's
 # `valgrind.supp` hides graphics-driver noise the same way, by naming the
 # driver's own frames (its "Mesa", "Graphics Driver dri", "i965 addr4/addr8" and
 # "mesa memcpy/memcmp" entries). The reference runs no test that draws, so it
 # has no llvmpipe entries; these are the port's, one group per finding
-# (NEW-FINDINGS N412), each measured on the Fedora 44 aarch64 VM (Mesa 26.1.4,
+# (NEW-FINDINGS N412, N520), each measured on the Fedora 44 aarch64 VM (Mesa 26.1.4,
 # LLVM 22.1.8, valgrind 3.27.1).
 
 # llvmpipe compiles its shaders with LLVM (gallivm) at draw time; memcheck
@@ -36,3 +36,44 @@
 # `read_rgba()`, so every other value they branch on stays checked. Until
 # review L-6 F2 five entries here anchored on the test bodies instead, which
 # also hid conditional jumps on renderer state.
+
+# Mesa EGL's driver state for a display that is never terminated (N520).
+# The port, like the reference, never calls eglTerminate on the shared
+# surfaceless display (`OpenGL.zig:113-115`, "Do not destroy the EGL display
+# here as it is shared across the entire process. It will get automatically
+# torn down by the OS."; DECISIONS B10, `OffscreenContext`'s Drop). At process
+# exit Mesa's own teardown of its display list frees each `_EGLDisplay` but not
+# the driver data hung off an initialized one, so memcheck's end-of-process
+# scan finds the dri2 display (`dri2_display_create`) and its config array
+# (`_eglLinkConfig`) with no pointer left: "definitely lost". Reproduced with
+# no Rustty code: a 10-line C program that calls eglGetPlatformDisplayEXT
+# (surfaceless) + eglInitialize and returns reports exactly these two records
+# (384 and 32 direct bytes); the same program with eglTerminate before return
+# reports 0 errors (`.port/tools/valgrind-llvmpipe-probe/egl-no-terminate.c`).
+# Both entries need every frame from the allocator up to
+# `eglInitialize` to be Mesa's, and match `definite` leaks only. (LSan's
+# twins: SANITIZER_SUPPRESSIONS.md S1/S2.)
+{
+   mesa-egl-dri2-display-not-terminated
+   Memcheck:Leak
+   match-leak-kinds: definite
+   fun:calloc
+   fun:dri2_display_create
+   fun:dri2_initialize
+   ...
+   fun:eglInitialize
+}
+# The config array of the same display; see the group comment above (N520).
+{
+   mesa-egl-dri2-configs-not-terminated
+   Memcheck:Leak
+   match-leak-kinds: definite
+   fun:calloc
+   fun:_eglCreateArray
+   fun:_eglLinkConfig
+   fun:dri2_add_config
+   ...
+   fun:dri2_initialize
+   ...
+   fun:eglInitialize
+}
