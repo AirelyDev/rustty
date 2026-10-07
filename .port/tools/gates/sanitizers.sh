@@ -1162,8 +1162,8 @@ SWAY_WRAPPER="${SWAY_WRAPPER:-$ROOT/.port/tools/gtk_live_headless_sway.sh}"
 # count>", the pattern as the file spells it after `leak:`), read from LSan's
 # "Suppressions used" table (print_suppressions=1). A match count above its
 # ceiling is RED, and so is an entry with no ceiling (unpinned) or a ceiling
-# whose entry is gone (stale). Ceilings: rvm P7-W25 matched 6,913 and 2,197
-# (the same counts in every run so far), plus about 10% (see
+# whose entry is gone (stale). Ceilings: rvm P7-W25 matched 6,913 and 2,197-2,199
+# over four runs, plus about 10% (see
 # SANITIZER_SUPPRESSIONS.md, G-LSAN-GTK).
 LSAN_GTK_CEILINGS=(
   "libpangoft2-1.0.so|7600"
