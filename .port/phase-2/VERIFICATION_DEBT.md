@@ -1339,13 +1339,15 @@ sha256): tolerance = max(0, ceil(measured gap % + 2)) / 100.
 | `ghostty-bench (ReleaseFast)` | 4,029,184 | `target/release-fast/rustty-bench` | 2,957,840 | -26.6% | 0% |
 | `ghostty-gen (ReleaseFast)` | 464,408 | `target/release-fast/rustty-gen` | 505,296 | +8.8% | 11% |
 | `libghostty-vt.0.1.0.dylib (shared)` | 1,924,784 | `target/release/librustty_vt_c.dylib` | 2,071,760 | +7.6% | 10% |
-| `libghostty-vt.a (static)` | 10,901,856 | `target/release/librustty_vt_c.a` | 26,562,616 | +143.7% | 146% |
+| ~~`libghostty-vt.a (static)`~~ dropped (review, below) | 10,901,856 | `target/release/librustty_vt_c.a` | 26,562,616 | +143.7% | — |
 
 `ghostty-gen`'s gap is unwind data (`release-fast` keeps `unwind`) and symbol
 table; its `__text` is 8 KB smaller than Ghostty's. The `.a` gap is Rust's
 packaging: a staticlib archives std, core, compiler_builtins and every
 dependency whole (13.6 MB of it is the toolchain's), which a final link
-dead-strips; the dylib label fences the linked size of the same code. Dropped,
+dead-strips; the dylib label fences the linked size of the same code, so the
+P7-W22 review moved the `.a` label to `binary_sizes_dropped` too: a 146%
+tolerance fenced almost nothing (three labels are fenced now). Dropped,
 by parity, into `binary_sizes_dropped` with reasons: the never-measured GUI
 binary, the two Debug bench/gen labels (the pin's `GhosttyBench.zig` builds
 them ReleaseFast only) and the three Zig test-runner executables (Cargo has no
@@ -1359,6 +1361,19 @@ arm. `ci.sh` now runs G8 with `--strict`. Confirmed with a real metrics file:
 `size ... ok` on all four labels, `missing-from-candidate 0`. G8 as a whole is
 still RED, on the timing axis only (`codepoint-width.wcwidth`, V17's retired
 series basis; the run was also provisional at load 77): that re-base is V17's.
+
+**P7-W22 review fixes.** (1) Nothing in `ci.sh` built the counterparts before
+G8 (the release-fast bench and rustty-gen, the vt-c release libraries), so G8
+could measure a stale artifact or none. `check_perf_fence.sh --build` (which
+`ci.sh` now passes to G8b) checks the substrate first (`ws10_suite.py
+--preflight`, so CI still BLOCKs without paying for builds), then runs each live
+label's `rustty_build` (`ws10_suite.py --print-size-builds`, deduplicated) at
+the repo root with `CARGO_TARGET_DIR` unset; a failed build is RED. It also
+removes the `--emit-metrics` file first, so a BLOCKED run cannot leave an
+earlier run's metrics for G8. (2) The static `.a` label moved to
+`binary_sizes_dropped` (reason above); the ws10 self-test's arm (g) now also
+checks `size_builds` (dedup, prose keys and dropped labels ignored, every live
+build a `cargo build`).
 
 **P7-W19 (2026-10-07, head `f31fcc032`): still OPEN; the mapping was measured
 and `--strict` would be RED on real size gaps, not on missing labels.** The

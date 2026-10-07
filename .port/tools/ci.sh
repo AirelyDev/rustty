@@ -1060,16 +1060,19 @@ GATE_REGISTRY=(
   # G8b — the real perf regression fence (paired, same-session, vs a stored
   # binary). BLOCKS (2/3) rather than passing when the box is loaded or the
   # untracked oracle binary/corpora are absent. MUST precede G8: it emits the
-  # metrics file G8 consumes.
-  "G8b|PERF-FENCE|bash $GATES/check_perf_fence.sh --emit-metrics $PERF_METRICS"
+  # metrics file G8 consumes. --build (P7-W22 review): once the substrate is
+  # present, G8b first runs every size label's `rustty_build` from BASELINE.json
+  # (the release-fast bench and rustty-gen, the vt-c release libraries; nothing
+  # earlier in this script builds them), so G8 never measures a stale artifact.
+  "G8b|PERF-FENCE|bash $GATES/check_perf_fence.sh --build --emit-metrics $PERF_METRICS"
   # G8 is ARMED once G8b has emitted that metrics file; with no substrate
   # present G8b BLOCKs, the file is absent, and G8 falls back to progress mode.
   # --strict (P7-W22, V16 DISCHARGED): G8b's metrics file now carries the size
   # axis too, i.e. the bytes of each size label's Rustty counterpart as
-  # BASELINE.json maps them (four oracle artifacts at the pin, each with its own
-  # tolerance; the retired series' Debug/test-exe labels were dropped with
-  # reasons). A counterpart that is not built is reported NOT-MEASURED, so
-  # build the four artifacts (`rustty_build` in BASELINE.json) before G8b.
+  # BASELINE.json maps them (three oracle artifacts at the pin, each with its own
+  # tolerance; the retired series' Debug/test-exe labels and the static .a were
+  # dropped with reasons). G8b --build builds the counterparts; one that is
+  # still absent is reported NOT-MEASURED, never passed.
   # The timing axis still compares against the retired 4749c4e93 series until
   # V17's idle re-base; --strict adds no timing check that was not already run.
   "G8|ARMED|$PY $GATES/check_baseline_regression.py --strict --metrics $PERF_METRICS"

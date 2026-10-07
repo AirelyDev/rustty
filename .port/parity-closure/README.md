@@ -301,7 +301,8 @@ committed records named here.
 - **Next free ids: UD378, N512, V33.**
 - **P7-W22** (V16, binary size) used N520 (CLOSED: `librustty_vt_c.dylib` 1.30x -> 1.076x Ghostty's, by
   `static` lookup tables and `[profile.release] panic = "abort"`). V16 DISCHARGED: BASELINE.json's size axis
-  is the oracle at the pin, four labels mapped with per-label tolerances, G8 runs `--strict`.
+  is the oracle at the pin, three labels mapped with per-label tolerances (the static `.a` dropped), G8b builds
+  the counterparts (`--build`) and G8 runs `--strict`.
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.

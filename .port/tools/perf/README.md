@@ -82,25 +82,28 @@ has.
 
 ## The size axis (G8, V16)
 
-BASELINE.json's `binary_sizes_bytes` are four oracle artifacts built ReleaseFast
-at the pin (P7-W22; the two libraries with `zig build -Demit-lib-vt=true
+BASELINE.json's `binary_sizes_bytes` are three oracle artifacts built
+ReleaseFast at the pin (P7-W22; the library with `zig build -Demit-lib-vt=true
 -Doptimize=ReleaseFast`, kept in `~/rustty-oracle-artifacts/` as
-`libghostty-vt.0.1.0.dylib-<9 hex>` and `libghostty-vt.a-<9 hex>`, sha256 in
-BASELINE.json). Each names its Rustty counterpart (`rustty_counterpart`, built
-by `rustty_build`) and its own `tolerance`, set as the measured gap plus 2
-points; the gap is itemized in `gap_attribution`. `ws10_suite.py
---emit-metrics` measures the counterparts (the bench label: the `--rust`
-candidate), so build them before G8b:
+`libghostty-vt.0.1.0.dylib-<9 hex>`, sha256 in BASELINE.json). Each names its
+Rustty counterpart (`rustty_counterpart`, built by `rustty_build`) and its own
+`tolerance`, set as the measured gap plus 2 points; the gap is itemized in
+`gap_attribution`. The static `libghostty-vt.a` is in `binary_sizes_dropped`:
+a Rust staticlib archives std and every dependency unpruned, so the dylib is
+the size fence for that code. `ws10_suite.py --emit-metrics` measures the
+counterparts (the bench label: the `--rust` candidate). `check_perf_fence.sh
+--build` (what `ci.sh` runs as G8b) builds them first, once the substrate is
+present, from the labels' `rustty_build` (`ws10_suite.py --print-size-builds`):
 
 ```bash
 cargo build -p rustty-bench --profile release-fast --bin rustty-bench
 cargo build -p rustty-synthetic --profile release-fast --bin rustty-gen
-cargo build -p rustty-vt-c --release        # .dylib and .a
+cargo build -p rustty-vt-c --release
 ```
 
 An unbuilt counterpart is left out of the metrics, and G8 (`--strict`) reports
 it NOT-MEASURED. Sizes are deterministic, so they need no idle host. When the
-pin advances, rebuild the four oracle artifacts and re-base the bytes, the
+pin advances, rebuild the oracle artifacts and re-base the bytes, the
 counterparts' `rustty_bytes_at_rebase` and the tolerances by the same rule.
 
 ## The two fences

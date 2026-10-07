@@ -337,6 +337,26 @@ def size_metrics(rust_bin, baseline=None, root=None):
     return out, absent
 
 
+def size_builds(baseline=None):
+    """The `rustty_build` commands of the live size labels, in label order,
+    each once (the .dylib and the gen/bench share none, but a command named
+    by two labels is run once). `binary_sizes_dropped` is not read: a dropped
+    label is not fenced, so G8b does not build for it. check_perf_fence.sh
+    --build runs these before measuring, so a fresh tree measures fresh
+    artifacts and a stale one is never measured silently (P7-W22 review).
+    """
+    if baseline is None:
+        baseline = _gatelib.load_baseline()
+    out = []
+    for label, info in (baseline.get("binary_sizes_bytes") or {}).items():
+        if label.startswith("_") or not isinstance(info, dict):
+            continue
+        cmd = info.get("rustty_build")
+        if cmd and cmd not in out:
+            out.append(cmd)
+    return out
+
+
 def emit_metrics(path, rust_med, reps, n, rust_bin=None):
     benches = []
     for bid, corpus, basis, _args in CONFIGS:
@@ -525,6 +545,23 @@ def self_test():
               f"(expect True)")
         ok &= g_live
         cases["g"] += 1
+        # size_builds: deduplicated, label order, "_" prose and the dropped
+        # labels ignored; every live label's build is a `cargo build`.
+        fake["binary_sizes_bytes"]["dylib"]["rustty_build"] = "cargo build -p a"
+        fake["binary_sizes_bytes"]["gen"]["rustty_build"] = "cargo build -p b"
+        fake["binary_sizes_bytes"]["bench"]["rustty_build"] = "cargo build -p a"
+        fake["binary_sizes_dropped"] = {"x.a": {"rustty_build": "cargo build -p z"}}
+        b = size_builds(fake)
+        g_b = b == ["cargo build -p a", "cargo build -p b"]
+        print(f"[g] size_builds {b} -> {g_b} (expect True)")
+        ok &= g_b
+        cases["g"] += 1
+        live_b = size_builds()
+        g_lb = bool(live_b) and all(c.split()[:2] == ["cargo", "build"] for c in live_b)
+        print(f"[g] live size_builds are cargo builds ({len(live_b)}) -> {g_lb} "
+              f"(expect True)")
+        ok &= g_lb
+        cases["g"] += 1
 
     empty = [arm for arm, n in cases.items() if n == 0]
     if empty:
@@ -594,11 +631,18 @@ def main():
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("--no-oracle", action="store_true",
                     help="run Fence 2 only")
+    ap.add_argument("--print-size-builds", action="store_true",
+                    help="print the size labels' rustty_build commands, one per line")
+    ap.add_argument("--preflight", action="store_true",
+                    help="only check the measurement substrate (exit 3 if absent)")
     args = ap.parse_args()
 
     if args.self_test:
         sys.exit(self_test())
-    if not args.rust:
+    if args.print_size_builds:
+        print("\n".join(size_builds()))
+        sys.exit(0)
+    if not args.rust and not args.preflight:
         ap.error("--rust is required")
 
     need_oracle = not args.no_oracle
@@ -615,6 +659,9 @@ def main():
             print(f"BLOCKED: {why}. Numbers against any other binary are not "
                   f"comparable; see README.md for the rebuild recipe.")
             sys.exit(3)
+    if args.preflight:
+        print("preflight: measurement substrate present")
+        sys.exit(0)
 
     load1 = os.getloadavg()[0]
     provisional = load1 > IDLE_MAX

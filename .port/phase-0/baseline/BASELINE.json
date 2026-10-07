@@ -20,7 +20,7 @@
   },
   "methodology": "Performance baseline for the ghostty reference oracle on Apple M4 Pro (arm64), captured in isolation (no other heavy work concurrent). BENCHMARKS: the build stage produced a single multiplexed `ghostty-bench` runner (NOT separate ghostty-bench-* binaries); it dispatches by a `+<action>` subcommand (actions: terminal-parser, terminal-stream, codepoint-width, grapheme-break, is-symbol, osc-parser, screen-clone). Each action reads a `--data <file>` corpus, runs its step EXACTLY ONCE (Benchmark.RunMode .once), and PRINTS NOTHING (the internal RunResult is discarded). The only measurable signal is therefore the end-to-end process wall-clock, which we measure with time.monotonic() deltas around subprocess.run INSIDE one Python process (run_benchmarks.py). [A first bash attempt that spawned a separate `python -c time.monotonic()` for the start and end timestamps produced garbage/negative durations because monotonic clocks are not comparable across processes; that data was discarded and the harness rewritten.] Corpora were pre-generated once with `ghostty-gen` (deterministic seed=42 for utf8) and truncated to fixed sizes (64 MiB for data-throughput benches; 256 KiB for screen-clone). Per AGENTS.md, generation is NOT piped into benchmarking. stderr is discarded (terminal stream/parser emit per-byte warn logs on control bytes; we use clean printable ASCII for the stream benches and utf8 for the unicode benches). Each config: 1 warmup (discarded) + N timed reps; median reported (also min/max and all reps). OPTIMIZE MODE: the build stage built bench binaries with default optimize = DEBUG (`zig build -Demit-bench=true`, no -Doptimize). AGENTS.md explicitly warns Debug benchmarks are 'very slow and not representative'. We therefore report BOTH: (a) ReleaseFast (N=7) as the REPRESENTATIVE HEADLINE baseline, built isolated under phase-0 with `-Doptimize=ReleaseFast -Demit-macos-app=false` (ghostty tree untouched), and (b) Debug (N=5) as the literal as-built-in-build-stage numbers. Use ReleaseFast for any parity/perf comparison; Debug is recorded for completeness only. STARTUP: the main GUI `ghostty` binary was NOT built in the build stage, so `ghostty +version` cannot be timed here (documented TODO). The available proxy is the no-arg `ghostty-bench` invocation (process spawn + Zig runtime init + arg parse + immediate NoAction exit), median of 15 runs after 3 warmups; this is dominated by macOS process-spawn overhead and should not be read as terminal GUI startup. hyperfine is NOT installed on this machine; the Python harness substitutes for it.",
   "binary_sizes_bytes": {
-    "_rule": "Re-based 2026-10-07 by P7-W22 (V16, N520) to the oracle at the pin 12752b2ac, built ReleaseFast (`zig build -Demit-lib-vt=true -Doptimize=ReleaseFast` for the two libraries; the perf README recipe for ghostty-bench/ghostty-gen) and preserved in ~/rustty-oracle-artifacts/<name>-12752b2ac. Each label names the Rustty artifact that plays the same role (`rustty_counterpart`, a path under the repo root, built with `rustty_build`) and carries its own `tolerance` (a fraction; G8 falls back to 0 for a label without one). tolerance = max(0, ceil(measured_gap_percent + 2)) / 100, where measured_gap is (rustty_bytes - bytes) / bytes after the P7-W22 reductions; the 2 points are headroom for toolchain/codegen jitter, the gap itself is itemized in `gap_attribution`. The labels the retired 4749c4e93 series carried with no Rustty counterpart are in `binary_sizes_dropped` with the reason. Like the timing axis, this is an oracle-parity fence, not a self-regression fence.",
+    "_rule": "Re-based 2026-10-07 by P7-W22 (V16, N520) to the oracle at the pin 12752b2ac, built ReleaseFast (`zig build -Demit-lib-vt=true -Doptimize=ReleaseFast` for the two libraries; the perf README recipe for ghostty-bench/ghostty-gen) and preserved in ~/rustty-oracle-artifacts/<name>-12752b2ac. Each label names the Rustty artifact that plays the same role (`rustty_counterpart`, a path under the repo root, built with `rustty_build`) and carries its own `tolerance` (a fraction; G8 falls back to 0 for a label without one). tolerance = max(0, ceil(measured_gap_percent + 2)) / 100, where measured_gap is (rustty_bytes - bytes) / bytes after the P7-W22 reductions; the 2 points are headroom for toolchain/codegen jitter, the gap itself is itemized in `gap_attribution`. The labels the retired 4749c4e93 series carried with no Rustty counterpart, and the static `libghostty-vt.a` (an unpruned Rust staticlib is not like-for-like; the dylib is its linked size), are in `binary_sizes_dropped` with the reason. Like the timing axis, this is an oracle-parity fence, not a self-regression fence.",
     "ghostty-bench (ReleaseFast)": {
       "path": "~/rustty-oracle-artifacts/ghostty-bench-12752b2ac",
       "sha256": "79a642786cc3f9e6be52a9104b01c684387364a8c99d871b200a4decb8fb0d79",
@@ -56,22 +56,10 @@
       "tolerance": 0.1,
       "gap_attribution": "+7.6% (+146,976 B) after N520 took it from 2,498,112 B (1.30x): __text 1,270 KB vs 1,081 KB. Itemized: `overflow-checks = true` (DG2, the release profile's ReleaseSafe trap parity) 55 KB; std's panic/backtrace runtime, linked by std's default panic hook even though panic.rs replaces it at run time (gimli 29 KB, rustc_demangle 19 KB, addr2line 11 KB, object 3 KB of __text, plus their std glue; removable only with nightly build-std); the grapheme precompute table is 16 KB (2-byte Value) against the oracle's 8 KB; the rest is codegen.",
       "retired_4749c4e93_bytes": 5742200
-    },
-    "libghostty-vt.a (static)": {
-      "path": "~/rustty-oracle-artifacts/libghostty-vt.a-12752b2ac",
-      "sha256": "18d080b7e69e4e0c43dc56cfeac80b3d43e0a276a2d35705be31451c2b8283ce",
-      "oracle_pin": "12752b2ac1bb05ce53402ed8c853ed1f96eef0b1",
-      "bytes": 10901856,
-      "rustty_counterpart": "target/release/librustty_vt_c.a",
-      "rustty_build": "cargo build -p rustty-vt-c --release",
-      "rustty_bytes_at_rebase": 26562616,
-      "tolerance": 1.46,
-      "gap_attribution": "+143.7%: a Rust staticlib archives the Rust toolchain's rlibs and every dependency's objects whole, unpruned (std 8.4 MB, compiler_builtins 2.8 MB, core 2.4 MB, alloc 0.6 MB, objc2_foundation 4.0 MB, almost none of which reaches the linked dylib); a consumer's final link dead-strips them, and the linked size of the same code is the dylib label. The fence still catches a newly bundled dependency or growth past +2 points.",
-      "retired_4749c4e93_bytes": 12065920
     }
   },
   "binary_sizes_dropped": {
-    "_rule": "Labels of the retired 4749c4e93 series with no Rustty counterpart at the pin, dropped from the fence by P7-W22 (V16). Values kept for the record.",
+    "_rule": "Labels of the retired 4749c4e93 series with no Rustty counterpart at the pin, dropped from the fence by P7-W22 (V16), and the pin's `libghostty-vt.a (static)`, dropped by the P7-W22 review (its reason below). Values kept for the record.",
     "ghostty (main GUI binary)": {
       "path": "/Users/gael/projects/ghostty/zig-out/bin/ghostty",
       "bytes": null,
@@ -106,6 +94,19 @@
       "bytes": 30947912,
       "note": ".zig-cache artifact, content-addressed.",
       "dropped_reason": "as ghostty-test: a .zig-cache test runner, no Rustty counterpart."
+    },
+    "libghostty-vt.a (static)": {
+      "path": "~/rustty-oracle-artifacts/libghostty-vt.a-12752b2ac",
+      "sha256": "18d080b7e69e4e0c43dc56cfeac80b3d43e0a276a2d35705be31451c2b8283ce",
+      "oracle_pin": "12752b2ac1bb05ce53402ed8c853ed1f96eef0b1",
+      "bytes": 10901856,
+      "rustty_counterpart": "target/release/librustty_vt_c.a",
+      "rustty_build": "cargo build -p rustty-vt-c --release",
+      "rustty_bytes_at_rebase": 26562616,
+      "tolerance": 1.46,
+      "gap_attribution": "+143.7%: a Rust staticlib archives the Rust toolchain's rlibs and every dependency's objects whole, unpruned (std 8.4 MB, compiler_builtins 2.8 MB, core 2.4 MB, alloc 0.6 MB, objc2_foundation 4.0 MB, almost none of which reaches the linked dylib); a consumer's final link dead-strips them, and the linked size of the same code is the dylib label. The fence still catches a newly bundled dependency or growth past +2 points.",
+      "retired_4749c4e93_bytes": 12065920,
+      "dropped_reason": "dropped by the P7-W22 review: a Rust staticlib archives the toolchain's rlibs and every dependency's objects whole and unpruned (std, compiler_builtins, core, alloc, objc2_foundation), so the +143.7% gap is archive packaging, not code, and its 146% tolerance would fence almost nothing. The linked size of the same code is the `libghostty-vt.0.1.0.dylib (shared)` label, which is the real size fence; `cargo build -p rustty-vt-c --release` still builds the .a, it is just not measured."
     }
   },
   "startup": {

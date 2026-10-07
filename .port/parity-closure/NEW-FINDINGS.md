@@ -10884,3 +10884,6 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **left as measured, not defects**: `overflow-checks` (DG2) 55 KB; std's backtrace/symbolizer runtime that
   std's default panic hook links (nightly-only to remove); the 2-byte grapheme entries (8 KB). They are the
   dylib label's itemized 7.6% gap in BASELINE.json.
+- **fence (review)**: G8 fences three labels (bench, gen, dylib). The static `libghostty-vt.a` label was moved to
+  `binary_sizes_dropped`: an unpruned Rust staticlib (+143.7%) is not like-for-like and a 146% tolerance fenced
+  almost nothing; the dylib is the linked size of the same code. G8b `--build` builds the counterparts first.
