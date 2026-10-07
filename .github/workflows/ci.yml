@@ -534,8 +534,8 @@ jobs:
   # The reference has no sanitizer job (Zig's runtime safety and its leak-
   # checking test allocator play that role, plus the valgrind job); these are
   # the port's own memory-safety lanes. G-TSAN (P7-W17) joined the matrix: the
-  # threaded crates only, so it is the shortest leg; its Linux run is
-  # UNVERIFIED until the next push or an rvm run (V32). All three also run on the aarch64
+  # threaded crates only, so it is the shortest leg; it ran GREEN on rvm
+  # (P7-W24, V32), and this x86_64 leg is UNVERIFIED until the next push. All of them also run on the aarch64
   # Fedora VM (rvm), including G-MSAN; this job is their x86_64 copy. Runtime
   # on GitHub's runners: UNVERIFIED until the next push (V30).
   sanitizers:

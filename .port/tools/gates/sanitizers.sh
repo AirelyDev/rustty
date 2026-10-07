@@ -33,8 +33,8 @@
 #                   needs -Zbuild-std + instrumented C -> G-MSAN (the only MSan
 #                   lane; MSAN_AARCH64_NOTE turns aarch64 into BLOCKED if that regresses)
 #   thread  (TSan)  ✅ macOS (verified P7-W17, 2026-10-06: a deliberate race is
-#                   RED, the Mutex-ordered control GREEN) + Linux (rustc's
-#                   target specs; the rvm run is V32). Needs -Zbuild-std
+#                   RED, the Mutex-ordered control GREEN) + Linux (verified
+#                   on rvm, P7-W24, 2026-10-07; V32). Needs -Zbuild-std
 #                   (without it: "mixing -Zsanitizer will cause an ABI
 #                   mismatch"); the cc-built C is instrumented through the
 #                   tsan-cc wrapper and checked (tsan_archive_check) -> G-TSAN,
@@ -230,6 +230,14 @@ TSAN_SCOPE=(
   "rustty-vt:wuffs,oniguruma|the vt search thread (search/thread.rs), the tmux control/viewer threads and the oniguruma first-use init race test (tmux::control::concurrent_first_notifications_do_not_race_oniguruma_init, needs the oniguruma feature; G-ASAN's FEATURE_LANES spec, so the default-feature tests run too)"
   "rustty-vt-c|the C API's handles used from embedders' threads (search ticks, terminal effects)"
   "highway-sys|the vendored Highway runtime's dispatch state, shared by every thread that runs a SIMD routine; holds UD377's regression test (concurrent_supported_targets_calls_agree)"
+)
+# G-TSAN specs whose tests run one at a time (`--test-threads=1`; P7-W24,
+# NEW-FINDINGS N514). Threads a test starts are still checked against each
+# other; only libtest's running of DIFFERENT tests side by side is dropped,
+# which the reference's Zig test runner never does. Format: "<spec>|<reason>";
+# a spec not in TSAN_SCOPE is stale (RED).
+TSAN_SERIAL=(
+  "rustty-xev|TSan models each fd as a word written by the call that opens it and by close; it sees neither the io_uring arm's close ops (the kernel closes the socket) nor fds opened by raw syscalls (SYS_pidfd_open, io_uring_setup), so when one test's closed socket number is reopened by another test running beside it, the reuse is reported as a race (epoll_ctl, mmap or close against the first test's socket(); rvm, P7-W24, no suppressions: in parallel, 59 and 26 reports in 24 and 15 of two sets of 25 runs; one at a time, 0 in 25 runs). No memory is shared; Linux only (macOS's kqueue arm has no such path)"
 )
 # G-TSAN's C-instrumentation check (tsan_archive_check): after each crate,
 # every lib*.a that a build script compiled for the instrumented target (under
@@ -674,6 +682,14 @@ spec_skips() {  # spec_skips SAN SPEC -> " --skip F ..." for that sanitizer's na
   done
 }
 
+spec_args() {  # spec_args SAN SPEC -> extra libtest arguments for that spec (G-TSAN: TSAN_SERIAL)
+  local e
+  [ "$1" = tsan ] || return 0
+  for e in ${TSAN_SERIAL[@]+"${TSAN_SERIAL[@]}"}; do
+    if [ "${e%%|*}" = "$2" ]; then printf ' --test-threads=1'; fi
+  done
+}
+
 # skips_unmatched SPEC LISTLOG: print each MSAN_SKIPS filter of SPEC that
 # matches no test in LISTLOG (libtest `--list` output: "<path>: test"); a filter
 # that skips nothing is stale and RED, like any other stale entry.
@@ -813,7 +829,7 @@ matrix_run() {  # matrix_run SAN FILTER SPEC...
       return
     fi
     t0=$(date +%s)
-    run_crate "$san" "$spec" "$filter$(spec_skips "$san" "$spec")" "$td" "$log"; rc=$?
+    run_crate "$san" "$spec" "$filter$(spec_skips "$san" "$spec")$(spec_args "$san" "$spec")" "$td" "$log"; rc=$?
     t1=$(date +%s)
     v="$(classify "$log" "$rc")"
     if [ -n "$(spec_skips "$san" "$spec")" ]; then
@@ -1058,6 +1074,19 @@ msan_partition_check() {
   return $bad
 }
 
+# Every TSAN_SERIAL spec must be a TSAN_SCOPE spec (else stale, RED); each is
+# printed with its reason.
+tsan_serial_check() {
+  local e s bad=0 found
+  for e in ${TSAN_SERIAL[@]+"${TSAN_SERIAL[@]}"}; do
+    found=0
+    for s in ${TSAN_SCOPE[@]+"${TSAN_SCOPE[@]}"}; do [ "${s%%|*}" = "${e%%|*}" ] && found=1; done
+    if [ "$found" -eq 1 ]; then printf '  tests one at a time: %s — %s\n' "${e%%|*}" "${e#*|}"
+    else echo "  ❌ G-TSAN: TSAN_SERIAL names '${e%%|*}', which is not a TSAN_SCOPE spec (stale)"; bad=1; fi
+  done
+  return $bad
+}
+
 # G-TSAN (P7-W17): ThreadSanitizer over TSAN_SCOPE. Hosts: macOS and Linux
 # (rustc's target specs for aarch64-apple-darwin, x86_64-apple-darwin and the
 # Linux gnu targets carry THREAD; verified on aarch64-apple-darwin, P7-W17).
@@ -1090,6 +1119,7 @@ gate_tsan() {
   for e in ${TSAN_UNINSTRUMENTED[@]+"${TSAN_UNINSTRUMENTED[@]}"}; do printf '  C not instrumented: %s — %s\n' "${e%%|*}" "${e#*|}"; done
   check_members "G-TSAN scope" ${TSAN_SCOPE[@]+"${TSAN_SCOPE[@]}"} || extra=1
   check_members "NO_TESTS_ON" ${NO_TESTS_ON[@]+"${NO_TESTS_ON[@]}"} || extra=1
+  tsan_serial_check || extra=1
   rm -rf -- "${SAN_LOG_ROOT:?}/tsan"
   if [ -n "${SAN_ONLY:-}" ]; then
     # Debug aid, as for the ASan-like gates: the verdict is BLOCKED, never GREEN.
@@ -1337,6 +1367,11 @@ RS
     'check_members "G-TSAN scope" "${TSAN_SCOPE[@]}"'
   hx "a stale TSAN_SCOPE entry is RED" 1 "'rustty-gone' is listed but is not a workspace member" \
     'TSAN_SCOPE+=("rustty-gone|fixture"); check_members "G-TSAN scope" "${TSAN_SCOPE[@]}"'
+  hx "control: every TSAN_SERIAL spec is a TSAN_SCOPE spec" 0 "tests one at a time: rustty-xev" 'tsan_serial_check'
+  hx "a TSAN_SERIAL spec outside TSAN_SCOPE is stale (RED)" 1 "TSAN_SERIAL names 'rustty-gone'" \
+    'TSAN_SERIAL+=("rustty-gone|fixture"); tsan_serial_check'
+  hx "spec_args: --test-threads=1 for a TSAN_SERIAL spec under tsan only" 0 "" \
+    '[ "$(spec_args tsan rustty-xev)" = " --test-threads=1" ] && [ -z "$(spec_args asan rustty-xev)" ] && [ -z "$(spec_args tsan rustty-core)" ]'
   hx "a stale feature-lane entry is RED" 1 "'rustty-renamed' is listed but is not a workspace member" \
     'FEATURE_LANES=("rustty-renamed:wuffs|fixture"); check_members "G-ASAN feature lane" "${FEATURE_LANES[@]}"'
   hx "control: the real MSAN_SCOPE/MSAN_EXCLUDES/MSAN_SKIPS partition is complete" 0 "" 'msan_partition_check'
@@ -1475,8 +1510,17 @@ TOML
 mod tests {
     #[inline(never)]
     fn oob_read(v: &[u8]) -> u8 {
-        // 8 bytes past a 16-byte heap allocation: inside ASan's redzone.
-        unsafe { *v.as_ptr().add(v.len() + 8) }
+        // 8 bytes past a 16-byte heap allocation: inside ASan's redzone, so
+        // ASan stops at the first read. HWASan compares tags per 16-byte
+        // granule, and one neighbouring granule shares the block's tag with
+        // probability 1/256 (G-SAN-SELF's A4 went GREEN once on rvm, P7-W24,
+        // N513), so the read walks eight granules, as the C arm does: all
+        // eight match with probability 256^-8.
+        let mut s = 0u8;
+        for k in 0..8 {
+            s = s.wrapping_add(unsafe { v.as_ptr().add(v.len() + 8 + 16 * k).read_volatile() });
+        }
+        s
     }
     #[test]
     fn defect_heap_overflow() {
@@ -1602,11 +1646,17 @@ mod glib_leaks {
     use core::ffi::{c_char, c_void};
     #[link(name = "glib-2.0")]
     #[link(name = "gobject-2.0")]
+    #[link(name = "fontconfig")]
     extern "C" {
         fn g_strdup(s: *const c_char) -> *mut c_char;
         fn g_free(p: *mut c_void);
         fn g_object_new(t: usize, first_property: *const c_char, ...) -> *mut c_void;
         fn g_object_unref(o: *mut c_void);
+        fn g_closure_new_simple(sizeof_closure: u32, data: *mut c_void) -> *mut c_void;
+        fn g_closure_ref(c: *mut c_void) -> *mut c_void;
+        fn g_closure_sink(c: *mut c_void);
+        fn FcNameParse(name: *const u8) -> *mut c_void;
+        fn FcPatternDestroy(p: *mut c_void);
     }
     // G_TYPE_OBJECT = G_TYPE_MAKE_FUNDAMENTAL(20) = 20 << 2 (gtype.h).
     const G_TYPE_OBJECT: usize = 20 << 2;
@@ -1633,6 +1683,28 @@ mod glib_leaks {
     fn leak_gobject() {
         for _ in 0..8 {
             sink(unsafe { g_object_new(G_TYPE_OBJECT, core::ptr::null()) });
+        }
+    }
+    // lsan-gtk.supp G1's control: a fontconfig pattern Rust code leaks has no
+    // libpangoft2 frame, so it stays RED.
+    #[test]
+    fn leak_fcpattern() {
+        unsafe { FcPatternDestroy(FcNameParse(c"Monospace:size=11".as_ptr().cast())) };
+        for _ in 0..8 {
+            sink(unsafe { FcNameParse(c"Monospace:size=12:weight=200".as_ptr().cast()) });
+        }
+    }
+    // G2's control: a GClosure leaked outside gtk4-rs's BuilderRustScope
+    // (sunk and referenced, the shape gtk4-rs returns) stays RED.
+    #[test]
+    fn leak_gclosure() {
+        for _ in 0..8 {
+            let c = unsafe { g_closure_new_simple(64, core::ptr::null_mut()) };
+            unsafe {
+                g_closure_ref(c);
+                g_closure_sink(c);
+            }
+            sink(c);
         }
     }
 }
@@ -1824,6 +1896,10 @@ RS
         arm "A2g leaked g_strdup string" lsan "glib_leaks::leak_gstrdup --exact" RED "LeakSanitizer: detected memory leaks" "san-selftest:glib"
       ARM_LSAN_SUPP="$st/lsan-gtk-combined.supp" \
         arm "A2g leaked GObject" lsan "glib_leaks::leak_gobject --exact" RED "LeakSanitizer: detected memory leaks" "san-selftest:glib"
+      ARM_LSAN_SUPP="$st/lsan-gtk-combined.supp" \
+        arm "A2g leaked FcPattern (lsan-gtk.supp G1)" lsan "glib_leaks::leak_fcpattern --exact" RED "LeakSanitizer: detected memory leaks" "san-selftest:glib"
+      ARM_LSAN_SUPP="$st/lsan-gtk-combined.supp" \
+        arm "A2g leaked GClosure, not from BuilderRustScope (lsan-gtk.supp G2)" lsan "glib_leaks::leak_gclosure --exact" RED "LeakSanitizer: detected memory leaks" "san-selftest:glib"
     fi
     if [ "$OS" = "Darwin" ]; then
       # lsan-darwin.supp's negative controls (fix round 1): the system state the
@@ -1926,6 +2002,9 @@ RS
     # under a Mutex GREEN.
     arm "A5 data race" tsan "tests::defect_data_race --exact" RED "ThreadSanitizer: data race"
     arm "A5 control: Mutex-ordered writes, clean under TSan" tsan "tests::synchronized_control --exact" GREEN "1 test\\(s\\) ran"
+    # TSAN_SERIAL (P7-W24, N514): tests run one at a time still have their own
+    # threads checked against each other; the race stays RED.
+    arm "A5s data race between one test's threads, tests run one at a time (TSAN_SERIAL)" tsan "tests::defect_data_race --exact --test-threads=1" RED "ThreadSanitizer: data race"
     # The C side: a race between two threads inside C compiled through $CC
     # (the tsan-cc wrapper). TSan sees it only if that C is instrumented, so
     # RED here proves the wrapper path; the clean control also passes
