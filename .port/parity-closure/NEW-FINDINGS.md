@@ -10660,7 +10660,8 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 ## N506 — macOS ASan runtime can deadlock in `fork` while another thread frees: an intermittent hang in G-ASAN / G-LSAN
 
 - **id**: N506 (provisional; P7-W16a fix round 2). **severity**: low (sanitizer lanes only; no product
-  defect). **state**: OPEN (mitigated: the gate now bounds each crate and reports a hang RED).
+  defect). **state**: CLOSED 2026-10-07 (P7-W21: ASan builds on macOS spawn the pty child with
+  `posix_spawn`; the per-crate hang bound stays as a general safety net).
 - **found**: one Mac G-LSAN pass under heavy load (load average ≈ 30) hung for an hour in
   `rustty-apprt-c`'s `tests/macos_window_host.rs` at ~740% CPU. Sample: an io thread in
   `Exec::threadEnter` → `Subprocess::start` → `Command::startPosix` → `fork` → `libSystem_atfork_prepare`
@@ -10680,12 +10681,42 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **mitigation (applied)**: `sanitizers.sh` bounds every crate (`SAN_CRATE_TIMEOUT_S`, default 1200 s;
   2400 s for MSan): past it the process tree is killed by explicit PIDs and the crate is RED with "HANG
   after Ns (no verdict)", the pass continues, and a hang can never be GREEN (G-SAN-SELF arm).
-- **proposed fix (not applied)**: (a) under `cfg(rustty_asan)` on macOS, have `Command::startPosix`
-  spawn with `posix_spawn` instead of `fork` (no atfork handlers run in the parent). That is a product
-  code change behind a sanitizer cfg and drifts from the reference's `fork`, so it needs a ruling;
-  (b) test-only: run `macos_window_host` with `--test-threads=1` under the sanitizer lanes, which
-  narrows the window (fewer concurrent frees) but cannot close it (each surface's own render/io threads
-  and libdispatch still free during the fork), so it is not clearly correct and was not applied.
+- **ruling** (user, P7-W21): option (a), `posix_spawn` in ASan builds only; normal builds keep the
+  reference's `fork` path unchanged. Option (b) (`--test-threads=1`) was not taken.
+- **fix** (`crates/rustty-termio/src/command.rs` `Command::asan_posix_spawn`, new `crates/rustty-termio/build.rs`):
+  build.rs sets `cfg(rustty_asan)` from `CARGO_CFG_SANITIZE` (the `rustty-cli` N495 shape; no
+  sanitizers.sh change). Under `cfg(all(rustty_asan, target_os = "macos"))`, `startPosix` first tries
+  `posix_spawn`, which runs no atfork handler, so no allocator lock is taken. It applies only to the shape
+  `Subprocess::start` builds (`os_pre_exec` is `subprocess_pre_exec`, compared with `ptr::fn_addr_eq`; no
+  `rt_pre_exec`; stdin/stdout/stderr all the pty slave, fd > 2; no rlimit to restore) and maps the fork
+  child's work one to one: `setupFd` x3 → `adddup2(slave, 0..=2)`; `chdir(cwd)` → `addchdir_np` (same
+  bytes up to the first NUL; too long → skipped, as the reference ignores it); `childPreExec`'s 13 signal
+  resets → `POSIX_SPAWN_SETSIGDEF` over the same set; `setsid` → `POSIX_SPAWN_SETSID`; the slave close →
+  `addclose(slave)` (the master is CLOEXEC from `Pty::open`); `execvpe` → the same `execvpe_search` over the
+  same `getenv("PATH")`, one `posix_spawn` per candidate; then the parent half (`pid`, `rt_post_fork`) as
+  after `fork`. Any other shape (the `Command` unit tests, a GTK `rt_pre_exec`) and ANY `posix_spawn`
+  failure fall back to the unchanged fork path, so the reference's ignored `chdir` failure and its
+  in-child "exec failed" message and exit(1) are reproduced exactly; only a successful spawn diverges.
+- **divergence (ASan builds on macOS only; documented at the fn)**: no controlling terminal. macOS has no
+  `posix_spawn` form of `TIOCSCTTY`, and XNU runs file actions before `POSIX_SPAWN_SETSID`, so an `addopen`
+  of the tty does not acquire it either (measured with a C probe: `tcgetsid(0) == -1`, `/dev/tty` fails).
+  The child is a session and process-group leader with the pty on fds 0-2, i.e. the state the
+  reference's own child is in when that ioctl fails (it logs and execs anyway). Teardown is unaffected
+  (`killPid` signals the child's own process group). `ps` during a run shows the change: the base binary's
+  `login` children are on `ttys030`, the fixed binary's on `??`.
+- **proof** (Mac, nightly ASan, `macos_window_host` test binary, `detect_leaks=0`, each run bounded at
+  90 s, a hung run `sample`d then killed by PID; 12 or 16 runs at once, load average 25-70):
+  - baseline (head 9ca310b46, cfg off): 6 HANG in 700 runs (5/300 at 12-way, 1/400 at 16-way); all six
+    samples show `fork` → `libSystem_atfork_prepare` → `_malloc_fork_prepare` →
+    `StaticSpinMutex::LockSlow`, five with the `QuarantineChunk` spinner too: N506 reproduced.
+  - fixed: 0 HANG in 1,500 runs (300 at 12-way, 1,000 at 16-way, 200 at 4-way).
+  - Both binaries also fail `resize_window_host_callback_resizes_the_target_surface` under that load
+    (baseline 6/700, fixed 19/1,500; 0/200 at 4-way): its 10 s wait for the child's `CSI 8 t` expires on
+    a machine at load ≈ 70. A load-timing flake of the test, present before the change, not a hang.
+  - `sanitizers.sh --matrix` asan and lsan over `rustty-termio` and `rustty-apprt-c` GREEN (177 tests
+    each), asan over `rustty-core` and `rustty-apprt` GREEN (124); natively `cargo test -p rustty-termio
+    -p rustty-apprt-c` passes; clippy `-D warnings` clean with and without `--cfg rustty_asan`;
+    `sanitizers.sh --self-test` GREEN.
 
 ## N507 — G6 on nextest went RED on two crates the libtest lane passed: `rustty-cli`'s disabled doc tests and `rustty-wasm`'s source-ignored test (gate-side)
 
