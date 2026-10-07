@@ -123,6 +123,11 @@
 #                                    on the per-OS expected-absent list).
 #                                    G-SAN-SELF (--self-test) proves each
 #                                    sanitizer RED on a synthetic defect.
+#   G-LSAN-GTK sanitizers.sh --gate lsan-gtk
+#                                    one live GTK test that creates and
+#                                    closes a core Surface, under ASan +
+#                                    LeakSanitizer in a headless sway
+#                                    (Linux; BLOCKED elsewhere) -> HARD-FAIL.
 #   G-XCF check_xcframework.sh       dist/rustty-vt.xcframework is well-formed:
 #                                    bundle shape, slice arch, _rustty_* export
 #                                    floor, no _ghostty_* leak (R2), and a
@@ -339,7 +344,7 @@ done
 # Gates skipped by --fast, by id. Deliberately a NAMED list rather than a
 # duration heuristic: a gate that becomes slow should be added here consciously,
 # with the cost written down, not silently dropped because it crossed a timeout.
-FAST_SKIP_IDS=" G4 G4-uni G5 G6 G6c G6t G8 G8b G-ASAN G-LSAN G-MSAN G-HWASAN G-TSAN "
+FAST_SKIP_IDS=" G4 G4-uni G5 G6 G6c G6t G8 G8b G-ASAN G-LSAN G-MSAN G-HWASAN G-TSAN G-LSAN-GTK "
 
 skip_in_fast() {
   # usage: skip_in_fast <id> ; returns 0 (true) when --fast should skip it
@@ -654,6 +659,16 @@ GATE_REGISTRY=(
   # RED; suppressions only in .port/phase-2/tsan.supp with a cited reason.
   # macOS and Linux; BLOCKED on any other host. Long, so --fast skips it.
   "G-TSAN|HARD|bash $GATES/sanitizers.sh --gate tsan"
+  # G-LSAN-GTK (P7-W24) — N502's Linux coverage gap: no test G-LSAN runs on
+  # Linux creates and closes a core Surface (on Linux one comes only from the
+  # GTK runtime, whose live tests need a compositor). This runs one,
+  # gtk_window_live, under ASan with detect_leaks=1 inside the headless-sway
+  # wrapper (.port/tools/gtk_live_headless_sway.sh), with lsan.supp plus
+  # lsan-gtk.supp (each entry cited in SANITIZER_SUPPRESSIONS.md, G-SAN-SELF
+  # negative controls). Linux only; BLOCKED elsewhere, without sway, and in
+  # ci.yml (no hosted job: V33). Builds the GTK apprt instrumented, so --fast
+  # skips it.
+  "G-LSAN-GTK|HARD|bash $GATES/sanitizers.sh --gate lsan-gtk"
   # G-XCF (2026-08-26) — the XCFramework structure/ABI lane, the adapted port
   # of the reference's check-apple-libghostty-vt.nu. Adapted because rustty
   # ships a STATIC ARCHIVE where the reference ships a dylib: no Mach-O dylib

@@ -1,0 +1,13 @@
+# LeakSanitizer suppressions for G-LSAN-GTK (.port/tools/gates/sanitizers.sh
+# --gate lsan-gtk), read AFTER lsan.supp (the lane concatenates the two).
+#
+# The lane runs one live GTK test (gtk_window_live: a real Window with a core
+# Surface, created and closed) under ASan with detect_leaks=1 inside a headless
+# sway. Same rules as lsan.supp: every entry is THIRD-PARTY process-lifetime
+# state (the GTK/GLib/fontconfig stack below a call we make), each with a row in
+# .port/phase-2/SANITIZER_SUPPRESSIONS.md (G ids) giving the reason, the
+# evidence and the negative control that keeps a Rust leak RED, and a WHY
+# comment directly above it (D6 rule c). A leak in Rustty code is never
+# suppressed: it is a finding.
+#
+# Format: one `leak:<pattern>` per line, as lsan.supp.

@@ -85,6 +85,11 @@
 #       G-TSAN: their allow-list scopes), plus (asan, lsan, hwasan) the
 #       Miri-exception cross-check (every `cfg_attr(miri, ignore = "...")`
 #       test must have RUN and PASSED here, or be expected absent).
+#   sanitizers.sh --gate lsan-gtk
+#       The ci.sh gate G-LSAN-GTK (P7-W24, N502's Linux coverage gap): one live
+#       GTK test that creates and closes a core Surface (gtk_window_live), under
+#       ASan with detect_leaks=1 inside the headless-sway wrapper, with
+#       lsan.supp plus lsan-gtk.supp. Linux only (see gate_lsan_gtk).
 #   sanitizers.sh --self-test
 #       G-SAN-SELF: a synthetic crate with a deliberate heap overflow (RED under
 #       ASan and, on aarch64 Linux, under HWASan, plus HWASan's wild-index arm),
@@ -542,6 +547,8 @@ run_crate() {
   envs+=("CARGO_PROFILE_DEV_DEBUG=line-tables-only" "CARGO_PROFILE_TEST_DEBUG=line-tables-only")
   if [ -n "$SAN_MANIFEST_PATH" ]; then cargo_args+=(--manifest-path "$SAN_MANIFEST_PATH"); fi
   cargo_args+=(-p "$crate" --target "$tgt" --no-fail-fast)
+  # SAN_TEST_TARGET: one integration-test target only (`--test NAME`; G-LSAN-GTK).
+  if [ -n "${SAN_TEST_TARGET:-}" ]; then cargo_args+=(--test "$SAN_TEST_TARGET"); fi
   if [ -n "$feats" ]; then cargo_args+=(--features "$feats"); fi
   if [ -n "$build_std" ]; then cargo_args+=("$build_std"); fi
   mkdir -p "$(dirname "$log")"
@@ -550,8 +557,14 @@ run_crate() {
   # the log gets a HANG line, and classify reports HANG (RED), never GREEN.
   local bound
   bound="$(crate_timeout "$san")"
+  # SAN_WRAP: a launcher the whole cargo run executes under (G-LSAN-GTK: the
+  # headless-sway wrapper, .port/tools/gtk_live_headless_sway.sh, which runs
+  # its arguments against a private compositor). It inherits this shell's
+  # environment, not envs, so the compositor itself is not instrumented.
+  local -a wrap=()
+  if [ -n "${SAN_WRAP:-}" ]; then wrap=("$SAN_WRAP"); fi
   # shellcheck disable=SC2086  # FILTER is an intentional word list (libtest takes several)
-  env "${envs[@]}" RUSTFLAGS="$rflags" RUSTDOCFLAGS="$rflags" CARGO_TARGET_DIR="$td" \
+  ${wrap[@]+"${wrap[@]}"} env "${envs[@]}" RUSTFLAGS="$rflags" RUSTDOCFLAGS="$rflags" CARGO_TARGET_DIR="$td" \
     cargo +nightly test "${cargo_args[@]}" -- $filter >"$log" 2>&1 &
   local cpid=$! waited=0
   while kill -0 "$cpid" 2>/dev/null; do
@@ -1091,6 +1104,73 @@ gate_tsan() {
   gate_verdict "G-TSAN" "$extra"
 }
 
+# G-LSAN-GTK (P7-W24; NEW-FINDINGS N502's Linux coverage gap). No test G-LSAN
+# runs on Linux creates and closes a core Surface: on Linux a surface comes
+# only from the GTK runtime, and the GTK tests that open one are #[ignore]d
+# live tests that need a compositor. So the per-surface teardown leaks N502
+# fixed were reachable on Linux, and only macOS tests saw them. This lane runs
+# one such test, gtk_window_live (a real Window, a tab, a live core Surface
+# drawing frames and running /bin/sh, then the window destroyed, the Surface
+# finalized and the shell reaped), under ASan with detect_leaks=1 inside
+# .port/tools/gtk_live_headless_sway.sh, with lsan.supp (S1/S2, Mesa) plus
+# lsan-gtk.supp (the GTK stack's own process-lifetime state, each entry cited
+# in SANITIZER_SUPPRESSIONS.md with a negative control). Linux only: the GTK
+# runtime is Linux/FreeBSD's, and only Linux is verified. Exactly one test must
+# run and pass (non-vacuous).
+GTK_LSAN_SPEC="rustty-apprt:gtk,wayland,x11"
+GTK_LSAN_TEST="gtk_window_live"
+GTK_LSAN_FILTER="window_hosts_a_live_terminal --exact --ignored"
+LSAN_GTK_SUPP="${LSAN_GTK_SUPP:-$SUPP_DIR/lsan-gtk.supp}"
+SWAY_WRAPPER="${SWAY_WRAPPER:-$ROOT/.port/tools/gtk_live_headless_sway.sh}"
+gate_lsan_gtk() {
+  if [ "$OS" != "Linux" ]; then
+    echo "BLOCKED: G-LSAN-GTK runs a live GTK surface test, and the GTK runtime is Linux's (as in Ghostty; not verified on $OS). It runs on the Linux VM (rvm); on macOS, G-LSAN's macos_window_host tests close core Surfaces."
+    exit 3
+  fi
+  # No hosted job runs this lane (it needs a headless sway; V33), so it does
+  # not defer to RUSTTY_SANITIZERS_OWN_JOB's job: that would be a false claim.
+  if [ -n "${RUSTTY_SANITIZERS_OWN_JOB:-}" ]; then
+    echo "BLOCKED: G-LSAN-GTK has no hosted CI job (it needs a headless sway compositor; VERIFICATION_DEBT V33); it runs on the Linux VM (rvm)"
+    exit 3
+  fi
+  need_nightly
+  if ! command -v "${SWAY_BIN:-sway}" >/dev/null 2>&1; then
+    echo "BLOCKED: G-LSAN-GTK runs its test inside a headless sway (.port/tools/gtk_live_headless_sway.sh); sway is not installed"
+    exit 3
+  fi
+  if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+    echo "BLOCKED: G-LSAN-GTK needs XDG_RUNTIME_DIR for the headless sway's sockets; it is unset"
+    exit 3
+  fi
+  local f
+  for f in "$LSAN_SUPP" "$LSAN_GTK_SUPP"; do
+    if [ ! -r "$f" ]; then echo "G-LSAN-GTK: RED — $f is missing (SANITIZER_SUPPRESSIONS.md's file)"; exit 1; fi
+  done
+  echo "### G-LSAN-GTK: ASan + LeakSanitizer (detect_leaks=1) over a live GTK surface, created and closed ($OS/$ARCH) ###"
+  echo "  test: $GTK_LSAN_SPEC --test $GTK_LSAN_TEST -- $GTK_LSAN_FILTER, inside ${SWAY_WRAPPER#"$ROOT"/}"
+  # One suppressions file (LSAN_OPTIONS takes one): lsan.supp, then
+  # lsan-gtk.supp, concatenated into the lane's own dir.
+  local lroot="$SAN_TARGET_ROOT/lsan-gtk" comb
+  mkdir -p "$lroot" || exit 1
+  comb="$lroot/lsan-combined.supp"
+  case "$comb" in *:*|*' '*) echo "G-LSAN-GTK: RED — the suppressions path '$comb' holds ':' or a space (LSAN_OPTIONS splits on them)"; exit 1 ;; esac
+  cat "$LSAN_SUPP" "$LSAN_GTK_SUPP" >"$comb" || exit 1
+  rm -rf -- "${SAN_LOG_ROOT:?}/lsan-gtk"
+  # The first crate of a fresh target dir builds every instrumented
+  # dependency of the GTK apprt: bound it at 2400 s unless overridden.
+  LSAN_SUPP="$comb" SAN_TEST_TARGET="$GTK_LSAN_TEST" SAN_WRAP="$SWAY_WRAPPER" \
+    SAN_CRATE_TIMEOUT_S="${SAN_CRATE_TIMEOUT_S:-2400}" SAN_TARGET_ROOT="$lroot" SAN_LOG_ROOT="$SAN_LOG_ROOT/lsan-gtk" \
+    matrix_run lsan "$GTK_LSAN_FILTER" "$GTK_LSAN_SPEC"
+  matrix_summary lsan
+  local extra=0
+  if [ "$M_RED" -eq 0 ] && [ "$M_BLOCKED" -eq 0 ] && [ "$M_TOTAL" -ne 1 ]; then
+    echo "  ❌ G-LSAN-GTK: $M_TOTAL test(s) ran; exactly 1 ($GTK_LSAN_TEST::window_hosts_a_live_terminal) must run"
+    extra=1
+  fi
+  rm -f -- "$comb"; rmdir -- "$lroot" 2>/dev/null
+  gate_verdict "G-LSAN-GTK" "$extra"
+}
+
 MSAN_AARCH64_NOTE=""
 gate_msan() {
   own_job_blocked G-MSAN
@@ -1358,6 +1438,19 @@ RS
     'RUSTTY_SANITIZERS_OWN_JOB="the fixture job"; gate_tsan'
   hx "--gate tsan with its suppressions file missing is RED" 1 "tsan-missing.supp is missing" \
     'unset RUSTTY_SANITIZERS_OWN_JOB; TSAN_SUPP=/nonexistent/tsan-missing.supp; gate_tsan'
+  # G-LSAN-GTK (P7-W24): Linux only; no hosted job, so OWN_JOB is BLOCKED
+  # naming V33, never a deferral; no sway or no XDG_RUNTIME_DIR is BLOCKED; a
+  # missing suppressions file is RED. Each checked before anything builds.
+  hx "--gate lsan-gtk on a host other than Linux is BLOCKED (exit 3)" 3 "the GTK runtime is Linux's" \
+    'unset RUSTTY_SANITIZERS_OWN_JOB; OS=Darwin; gate_lsan_gtk'
+  hx "--gate lsan-gtk under RUSTTY_SANITIZERS_OWN_JOB is BLOCKED (exit 3), naming V33, not the job" 3 "has no hosted CI job.*V33" \
+    'OS=Linux; RUSTTY_SANITIZERS_OWN_JOB="the fixture job"; gate_lsan_gtk'
+  hx "--gate lsan-gtk without sway is BLOCKED (exit 3)" 3 "sway is not installed" \
+    'unset RUSTTY_SANITIZERS_OWN_JOB; OS=Linux; SWAY_BIN=no-such-sway-fixture; gate_lsan_gtk'
+  hx "--gate lsan-gtk without XDG_RUNTIME_DIR is BLOCKED (exit 3)" 3 "XDG_RUNTIME_DIR" \
+    'unset RUSTTY_SANITIZERS_OWN_JOB XDG_RUNTIME_DIR; OS=Linux; SWAY_BIN=true; gate_lsan_gtk'
+  hx "--gate lsan-gtk with lsan-gtk.supp missing is RED" 1 "lsan-gtk-missing.supp is missing" \
+    'unset RUSTTY_SANITIZERS_OWN_JOB; OS=Linux; XDG_RUNTIME_DIR=/tmp; SWAY_BIN=true; LSAN_GTK_SUPP=/nonexistent/lsan-gtk-missing.supp; gate_lsan_gtk'
 
   # --- arms A/B: the synthetic crate under the real sanitizers ---
   local cr="$st/crate"
@@ -1371,6 +1464,7 @@ publish = false
 
 [features]
 hook = []
+glib = []
 
 [workspace]
 TOML
@@ -1499,6 +1593,50 @@ extern "C" fn __lsan_is_turned_off() -> core::ffi::c_int {
     1
 }
 
+/// Linux negative controls for G-LSAN-GTK's lsan-gtk.supp (P7-W24), with the
+/// `glib` feature: objects Rustty could leak through GLib and GObject (a
+/// g_strdup'd string, a GObject never unreffed) must stay RED under lsan.supp +
+/// lsan-gtk.supp; the allocate-and-free control must be GREEN.
+#[cfg(all(test, target_os = "linux", feature = "glib"))]
+mod glib_leaks {
+    use core::ffi::{c_char, c_void};
+    #[link(name = "glib-2.0")]
+    #[link(name = "gobject-2.0")]
+    extern "C" {
+        fn g_strdup(s: *const c_char) -> *mut c_char;
+        fn g_free(p: *mut c_void);
+        fn g_object_new(t: usize, first_property: *const c_char, ...) -> *mut c_void;
+        fn g_object_unref(o: *mut c_void);
+    }
+    // G_TYPE_OBJECT = G_TYPE_MAKE_FUNDAMENTAL(20) = 20 << 2 (gtype.h).
+    const G_TYPE_OBJECT: usize = 20 << 2;
+    #[inline(never)]
+    fn sink(p: *mut c_void) {
+        std::hint::black_box(p);
+    }
+    #[test]
+    fn glib_clean_control() {
+        for _ in 0..4 {
+            unsafe {
+                g_free(g_strdup(c"rustty".as_ptr()).cast());
+                g_object_unref(g_object_new(G_TYPE_OBJECT, core::ptr::null()));
+            }
+        }
+    }
+    #[test]
+    fn leak_gstrdup() {
+        for _ in 0..16 {
+            sink(unsafe { g_strdup(c"rustty-leaked-string".as_ptr()) }.cast());
+        }
+    }
+    #[test]
+    fn leak_gobject() {
+        for _ in 0..8 {
+            sink(unsafe { g_object_new(G_TYPE_OBJECT, core::ptr::null()) });
+        }
+    }
+}
+
 /// Darwin negative controls for lsan-darwin.supp (fix round 1): each `leak_*`
 /// test leaks one object Rustty could leak through the system APIs whose
 /// internals the file suppresses, and must stay RED under the real file; the
@@ -1602,8 +1740,8 @@ RS
   local sroot="$st/target"
   arm() {  # arm NAME SAN FILTER WANT(RED|GREEN) MUST_GREP [SPEC]
     local name="$1" san="$2" filter="$3" want="$4" must="$5" spec="${6:-${ARM_SPEC:-san-selftest}}" o r
-    o="$(SAN_CRATE_TIMEOUT_S="${ARM_TIMEOUT:-}" SAN_PER_CRATE_TARGET="${ARM_PER_CRATE:-0}" SAN_MANIFEST_PATH="${ARM_MANIFEST:-$cr/Cargo.toml}" SAN_TARGET_ROOT="$sroot" SAN_LOG_ROOT="$st/slogs-$name" SAN_MIN_FREE_GB=0 \
-         M_RED=0 M_BLOCKED=0 M_TOTAL=0 M_ROWS="" bash -c '. "$0" --source-only; matrix_run "$1" "$2" "$3"; matrix_summary "$1"; gate_verdict SELF 0' \
+    o="$(ARM_LSAN_SUPP="${ARM_LSAN_SUPP:-}" SAN_CRATE_TIMEOUT_S="${ARM_TIMEOUT:-}" SAN_PER_CRATE_TARGET="${ARM_PER_CRATE:-0}" SAN_MANIFEST_PATH="${ARM_MANIFEST:-$cr/Cargo.toml}" SAN_TARGET_ROOT="$sroot" SAN_LOG_ROOT="$st/slogs-$name" SAN_MIN_FREE_GB=0 \
+         M_RED=0 M_BLOCKED=0 M_TOTAL=0 M_ROWS="" bash -c '. "$0" --source-only; [ -z "${ARM_LSAN_SUPP:-}" ] || LSAN_SUPP="$ARM_LSAN_SUPP"; matrix_run "$1" "$2" "$3"; matrix_summary "$1"; gate_verdict SELF 0' \
          "$GATES_DIR/sanitizers.sh" "$san" "$filter" "$spec" 2>&1)"; r=$?
     local okv=0
     case "$want" in
@@ -1672,6 +1810,21 @@ RS
     # executable's symbols (-Zexport-executable-symbols); without the flag this
     # arm is RED (measured P7-W16a).
     arm "A2 opt-out hook reaches the runtime" "lsan" "tests::defect_leak --exact" GREEN "1 test\\(s\\) ran" "san-selftest:hook"
+    if [ "$OS" = "Linux" ]; then
+      # G-LSAN-GTK's suppressions (P7-W24): the lane's own combined file
+      # (lsan.supp + lsan-gtk.supp, as gate_lsan_gtk builds it) must not hide a
+      # Rust leak, nor a GLib string or a GObject that Rust code leaks; the
+      # GLib allocate-and-free control must be GREEN.
+      cat "$LSAN_SUPP" "$LSAN_GTK_SUPP" >"$st/lsan-gtk-combined.supp"
+      ARM_LSAN_SUPP="$st/lsan-gtk-combined.supp" \
+        arm "A2g Rust leak under lsan.supp + lsan-gtk.supp" lsan "tests::defect_leak --exact" RED "LeakSanitizer: detected memory leaks"
+      ARM_LSAN_SUPP="$st/lsan-gtk-combined.supp" \
+        arm "A2g control: GLib/GObject allocate and free, clean under lsan-gtk.supp" lsan "glib_leaks::glib_clean_control --exact" GREEN "1 test\\(s\\) ran" "san-selftest:glib"
+      ARM_LSAN_SUPP="$st/lsan-gtk-combined.supp" \
+        arm "A2g leaked g_strdup string" lsan "glib_leaks::leak_gstrdup --exact" RED "LeakSanitizer: detected memory leaks" "san-selftest:glib"
+      ARM_LSAN_SUPP="$st/lsan-gtk-combined.supp" \
+        arm "A2g leaked GObject" lsan "glib_leaks::leak_gobject --exact" RED "LeakSanitizer: detected memory leaks" "san-selftest:glib"
+    fi
     if [ "$OS" = "Darwin" ]; then
       # lsan-darwin.supp's negative controls (fix round 1): the system state the
       # file suppresses must not hide an object Rustty leaks through those APIs.
@@ -1859,7 +2012,8 @@ case "${1:-}" in
       hwasan) gate_asan_like hwasan; exit $? ;;
       msan) gate_msan; exit $? ;;
       tsan) gate_tsan; exit $? ;;
-      *) echo "usage: sanitizers.sh --gate asan|lsan|msan|hwasan|tsan" >&2; exit 2 ;;
+      lsan-gtk) gate_lsan_gtk; exit $? ;;
+      *) echo "usage: sanitizers.sh --gate asan|lsan|msan|hwasan|tsan|lsan-gtk" >&2; exit 2 ;;
     esac ;;
   --matrix)
     shift
