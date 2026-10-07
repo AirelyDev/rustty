@@ -15,8 +15,10 @@ Two things make that insufficient as the primary fence:
      the 5-25% regressions this workstream can introduce.
 
   2. Until WS10 T2, G8's `bench_index()` keyed on `id` alone while BASELINE.json
-     carries each id TWICE (ReleaseFast + Debug), so the Debug rows silently
-     overwrote the ReleaseFast ones. Fixed, but see the docstring there.
+     carried each id TWICE (ReleaseFast + Debug), so the Debug rows silently
+     overwrote the ReleaseFast ones. Fixed, but see the docstring there. Since
+     P7-W23 (V17) BASELINE.json's rows are this oracle at the pin, ReleaseFast
+     only, measured on an idle host.
 
 This harness removes session variance instead of budgeting for it: it measures
 BOTH binaries alternately WITHIN ONE PROCESS, so the only noise left is the

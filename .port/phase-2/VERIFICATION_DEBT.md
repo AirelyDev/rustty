@@ -1360,7 +1360,8 @@ label's `tolerance` (`--tol-size` still overrides); both self-tests gained an
 arm. `ci.sh` now runs G8 with `--strict`. Confirmed with a real metrics file:
 `size ... ok` on all four labels, `missing-from-candidate 0`. G8 as a whole is
 still RED, on the timing axis only (`codepoint-width.wcwidth`, V17's retired
-series basis; the run was also provisional at load 77): that re-base is V17's.
+series basis; the run was also provisional at load 77): that re-base is V17's
+(done by P7-W23; G8 `--strict` is GREEN on both axes).
 
 **P7-W22 review fixes.** (1) Nothing in `ci.sh` built the counterparts before
 G8 (the release-fast bench and rustty-gen, the vt-c release libraries), so G8
@@ -1457,7 +1458,99 @@ decision, not a measurement.
 additionally emit `binary_sizes_bytes` for the mapped rustty artifacts, then
 restore `--strict` on the G8 line in `.port/tools/ci.sh` and confirm GREEN.
 
-## V17. The oracle-anchored perf measurement campaign — **OWNER: Phase 3 — `BEYOND-PIN`**
+## V17. The oracle-anchored perf measurement campaign — **DISCHARGED 2026-10-07 (P7-W23, head `ad5c0040e`); the drift bisection (item 2) closed as outside the parity scope**
+
+**DISCHARGED 2026-10-07 (P7-W23, measured at head `ad5c0040e`).** The Linux VM
+was stopped (no `com.apple.Virtualization.VirtualMachine` process), nothing was
+building, and the host's CPU use was under one core of 14 (desktop apps). The
+1-minute load still idles at 1.6-3 on this host (it counts the desktop apps'
+threads), so each run started only when it was under `IDLE_MAX` 2.0:
+
+| run | load at start | load at end | result |
+|---|--:|--:|---|
+| V17 recipe, `ws10_suite.py ... -n 9 --emit-metrics` | 1.65 | 2.28 | exit 0 (not provisional), Fence 1 GREEN 14/14 |
+| V17 recipe, `run_benchmarks.py <oracle> <out> 7` (`rf3`, the re-base) | 1.85 | 2.55 | the BASELINE.json rows |
+| `ci.sh` G8b, `check_perf_fence.sh --build --emit-metrics` | 1.80 | 2.20 | exit 0, Fence 1 GREEN 14/14 |
+| `ci.sh` G8, `check_baseline_regression.py --strict` on G8b's file | n/a | n/a | GREEN, 17 metrics (14 timing, 3 size), 0 missing |
+
+Two oracle runs started above 2.0 (2.28 just after the ws10 run, 2.47) were
+not used; their medians are within 4.5% of `rf3` (7.7% on the 8 ms
+`screen-clone.noop`), and the ws10 run's oracle column within 0.4-2.4% (4.2% and 8.0% on the two 6-9 ms spawn-floor
+configs), so the load band did not move the numbers.
+
+Rustty / Ghostty, wall-clock medians, paired in one process (ws10 Fence 1,
+N=9); the second figure is the G8b run:
+
+| config | Ghostty ms | Rustty ms | ratio | G8b ratio |
+|---|--:|--:|--:|--:|
+| terminal-parser | 591.25 | 130.51 | 0.221 | 0.222 |
+| terminal-stream | 47.27 | 46.50 | **0.984** | 0.969 |
+| codepoint-width.noop | 5.85 | 3.54 | 0.606 | 0.616 |
+| codepoint-width.table | 214.03 | 185.14 | 0.865 | 0.868 |
+| codepoint-width.simd | 458.52 | 401.35 | 0.875 | 0.878 |
+| codepoint-width.wcwidth | 704.14 | 646.71 | 0.918 | 0.923 |
+| grapheme-break.noop | 212.99 | 190.95 | 0.897 | 0.900 |
+| grapheme-break.table | 237.58 | 196.55 | 0.827 | 0.835 |
+| is-symbol.table | 218.19 | 179.91 | 0.825 | 0.828 |
+| is-symbol.uucode | 213.20 | 187.81 | 0.881 | 0.888 |
+| osc-parser | 177.16 | 45.11 | 0.255 | 0.251 |
+| screen-clone.noop | 8.18 | 4.50 | 0.550 | 0.508 |
+| screen-clone.clone | 47.54 | 17.99 | 0.378 | 0.388 |
+| screen-clone.render | 145.09 | 127.62 | 0.880 | 0.905 |
+| **sum of the 14 medians** | 3,281 | 2,364 | **-27.9%** | -27.6% |
+
+14/14 wins in both runs, no loss. The thinnest is still `terminal-stream`
+(-1.6% / -3.1%), then `screen-clone.render` and `codepoint-width.wcwidth`. The
+P7-W19 provisional figures stand: their wall sum was -27.8% (CPU -28.3%), and
+every per-config ratio is within 0.045 of this run's (the largest gap is the
+6 ms `codepoint-width.noop`, 0.564 then, 0.606 now).
+
+**Re-base.** BASELINE.json's `benchmarks` are now the 14 `rf3` rows (the oracle
+at the pin, ReleaseFast, N=7; `benchmarks_rule` records the method and load).
+The retired `4749c4e93` ReleaseFast rows moved to `benchmarks_retired_4749c4e93`
+(kept, not compared), which ends the `codepoint-width.wcwidth` RED that P7-W19
+found (now 91.7 MiB/s against Rustty's ~99). `BASIS_CHANGED` is empty: its
+`screen-clone.render` entry ended as written, since the pin's oracle runs the
+same 50_000 stepRender iterations.
+
+**The Debug rows: dropped, by parity.** The pin's `src/build/GhosttyBench.zig`
+builds the bench ReleaseFast whatever `-Doptimize` says, so no Debug oracle
+exists to re-base them, and G8 had not compared them since WS10 T2 (the
+candidate is always release-fast). They are kept in `benchmarks_dropped_debug`
+with that reason, the same decision P7-W22 took for the size axis's Debug
+labels. Self-test arm [f], which pinned two values of the old ReleaseFast rows to
+catch the `(id, optimize)` keying bug, is replaced by two checks that are at
+least as strong: (1) a synthetic baseline with a ReleaseFast row and a Debug row
+second for the same id, where a candidate 50% below the ReleaseFast row must be
+RED (it is 25x above the Debug row) and an equal one GREEN under `--strict` with
+the Debug row neither compared nor NOT-MEASURED; (2) the live BASELINE.json must
+have exactly 14 rows, 14 distinct ids, all ReleaseFast, with two values pinned to
+the re-base (`REBASE_PIN_TS`, `REBASE_PIN_SC`). Arm [e2] runs against a copy of
+the script with a synthetic `BASIS_CHANGED` entry while the live set is empty,
+and checks that the live (empty) set excludes nothing. Controls, each on a
+mutated copy, all FAIL the self-test: keying on `id` alone (the T2 bug); the
+exclusion ignored; Debug rows counted as missing; the 14 Debug rows put back
+into the live `benchmarks`.
+
+**Items 2 and 3 above.** Item 3 (V15's comparison "once the benches are
+comparable") is this run: the oracle is built at the pin and `rustty-bench` is
+1:1 with the pin's `src/benchmark/` (V15), and comparing past the pin is outside
+the parity scope. Item 2, the bisection of the `a3a2b23`..2026-07-30 Rustty-side
+drift (`terminal-parser` +17.8%, `screen-clone.clone` +20.0% against Rustty's own
+r5-SHIP record), is closed by the user's scope rule (parity with Ghostty at the
+pin, never beyond it): it was a Rustty-against-Rustty question, and at the pin
+Rustty runs both configs at 0.22x and 0.38x of Ghostty's time, the two widest
+margins after `osc-parser`. It cannot be measured at head either: both configs'
+workloads changed with the pin advances (Ghostty's own `terminal-parser` went
+from 266 ms to 591 ms), so a head figure is not a ratio against r5-SHIP, and the
+bisection would be over code since rewritten by the Phase 6 and 7 resyncs. The
+degraded `.perf-bins` entry anchor it warned about no longer exists, so Fence 2
+(the self-regression fence) runs only once an entry binary is stashed there;
+none is today, and G8b runs Fence 1 alone. If a future perf lane wants the
+historical answer, the recipe below still runs on the July refs.
+
+Raw data was kept only in the session scratchpad (deleted); the recipe below
+reproduces it.
 
 **P7-W19 (2026-10-07, head `f31fcc032`): still OPEN. The idle run was attempted
 and the host never went idle.** Done: the oracle was rebuilt at the pin
@@ -1630,7 +1723,7 @@ generators are not the cause. All three losses are real and are recorded as
 **N511** (OPEN) with the root cause found for `apc-parser`; no perf work was done
 here. **P7-W20 closed N511** (the APC group test now compiles to the reference's
 NEON loop; the hyperlink path's missing inlining fixed): `apc-parser` 1.10x,
-churn 0.94x, lookup 1.09x CPU (1.05x instructions), same recipe; see N511. Raw logs were not kept (scratch); the recipe below with `--loops` added
+churn 0.94x, lookup 1.09x CPU (1.05x instructions), same recipe; see N511. **Idle re-measure (P7-W23, load 1.73 and 1.82 at the start of two runs of 9 shuffled rounds):** `apc-parser` 1.11x and lookup 1.10x confirmed; churn is 0.99x-1.03x, parity rather than P7-W20's provisional 0.94x win (N511). Raw logs were not kept (scratch); the recipe below with `--loops` added
 reproduces them.
 
 **Re-verified after pin advance:** 2026-07-31 — **PREMISE REFUTED.** This row's

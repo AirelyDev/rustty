@@ -4,11 +4,13 @@
 ORACLE PIN** (`.port/tools/gates/ORACLE_PIN`), and every number it produces is
 comparable to that binary only. Before task S-4 (2026-09-23) the oracle was the
 older `4749c4e93` binary (sha256 `0fb47d26…`); the series recorded against it
-(PERF_LOG.md, BASELINE.json, which G8 still reads) is a different baseline, and
-a ratio between the two series means nothing. P7-W19 (2026-10-07) found G8 RED
-on that account: `codepoint-width.wcwidth` against the retired oracle's 0.254 s,
-which ran without `ensureLocale` (N173), while Fence 1 holds it against the pin.
-Re-basing BASELINE.json is owed to an idle run (V17).
+(PERF_LOG.md, BASELINE.json's `benchmarks_retired_4749c4e93`) is a different
+baseline, and a ratio between the two series means nothing. P7-W19 (2026-10-07)
+found G8 RED on that account: `codepoint-width.wcwidth` against the retired
+oracle's 0.254 s, which ran without `ensureLocale` (N173), while Fence 1 holds it
+against the pin. P7-W23 (V17, 2026-10-07) re-based BASELINE.json's `benchmarks`
+to the pinned oracle on an idle host (`run_benchmarks.py <oracle> <out> 7`, load
+1.85; see `benchmarks_rule` there), so G8 and Fence 1 now read the same oracle.
 
 ## The measurement substrate is UNTRACKED
 
@@ -197,5 +199,8 @@ python3 .port/tools/perf/headroom_probe.py /tmp/ws10-metrics.json
 ```
 
 Rebuilding the oracle binary: see "The oracle binary: provenance and rebuild"
-above. BASELINE.json's second 14 rows are Debug builds of the retired oracle;
-a re-base cannot reproduce them, since the pin builds no Debug bench.
+above. The retired series' 14 Debug rows are in BASELINE.json's
+`benchmarks_dropped_debug` (P7-W23): the pin builds no Debug bench, so a
+re-base cannot reproduce them. When the pin advances, re-run the recipe in
+`benchmarks_rule` on an idle host and update the two values
+`check_baseline_regression.py` pins (`REBASE_PIN_TS`, `REBASE_PIN_SC`).

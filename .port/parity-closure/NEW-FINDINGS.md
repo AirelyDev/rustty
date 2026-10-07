@@ -10857,7 +10857,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 
 - **id**: N511. P7-W19 (V18's paired oracle measurement). **severity**: medium (perf parity: three bench configs
   Ghostty wins; no behaviour change). **kind**: port performance gap. **state**: CLOSED (P7-W20: both causes
-  fixed; `apc-parser` from 1.8x to 1.10x, churn now 0.94x, lookup from 1.17x to 1.05x instructions / 1.09x CPU;
+  fixed; `apc-parser` from 1.8x to 1.10x, churn now 0.94x (idle, P7-W23: 0.99-1.03x), lookup from 1.17x to 1.05x instructions / 1.09x CPU;
   the residuals are explained below).
 - **finding**: against `ghostty-bench` built ReleaseFast at the pin `12752b2ac`, interleaved in one process
   (V18 has the table and method): `+apc-parser` 1.81x CPU on Ghostty's 64 MiB `+kitty` corpus and 1.75x on
@@ -10919,6 +10919,12 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   shuffled rounds + 1 warm-up, child CPU from `wait4`, median per-round ratio; load 6-8.5, so PROVISIONAL):
   `apc-parser` on 512 MiB (the corpus x8) before 2.25x -> after 1.10x; churn 1.25x -> 0.94x; lookup 1.11x ->
   1.09x. ws10 Fence 1 with the candidate: 14/14 PASS (load 7.2, provisional, exit 2 by design).
+- **idle re-measure (P7-W23, V17's idle window)**: the same paired CPU recipe (child CPU from `wait4`, shuffled
+  rounds, 1 warm-up, median per-round ratio) in two runs of 9 rounds, 1-minute load 1.73 and 1.82 at the start
+  (Linux VM stopped): `apc-parser` on 512 MiB 1.106x and 1.108x (1.14x and 1.15x above the empty-file floor); churn x5000
+  1.028x and 0.993x (per-loop slope 1.04x and 1.02x); lookup x20000 1.095x and 1.097x. So the `apc-parser` and
+  lookup residuals stand at about 1.10x, and churn is parity within 3%, not the 0.94x win the loaded run read.
+  Nothing new to fix: the residuals below are unchanged.
 - **residuals (not porting artefacts)**: `apc-parser`'s scan is now the reference's code; the other ~10% is
   outside it (the per-byte state machine around the string and simdutf's base64 decode, the 13% item above),
   and cycles above the floor are 1.04x. Lookup's 2.4 instructions per lookup are LLVM's lowering of the same

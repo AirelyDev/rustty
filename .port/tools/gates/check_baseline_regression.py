@@ -84,32 +84,41 @@ CANDIDATE_OPTIMIZE = "ReleaseFast"
 #:
 #: The set is REPORTED on every run (never silently skipped) and is exercised by
 #: --self-test, which asserts that a listed id cannot turn the gate red no matter
-#: how large the raw delta is, AND that an unlisted id still can.
-BASIS_CHANGED = {
-    "screen-clone.render/small":
-        "WS10 T12 ported 446f80f4e's bench hunk: stepRender went from 1_000 to "
-        "50_000 x --loops iterations. BASELINE.json's row is the PINNED oracle "
-        "(4749c4e93) at 1_000. rustty therefore does 50x the work in this "
-        "config: 0.0163 s baseline vs 0.385 s candidate is 0.0077 s normalized, "
-        "i.e. -53% -- a WIN reported as +2258% by a raw ratio. Re-base when the "
-        "oracle pin advances past 446f80f4e (Phase 3).",
-}
+#: how large the raw delta is, AND that an unlisted id still can. While the set
+#: is empty the self-test runs that arm over a synthetic entry, so it is never
+#: vacuous.
+#:
+#: Empty since P7-W23 (V17, 2026-10-07). Its one entry, `screen-clone.render/small`
+#: (WS10 T12's port of 446f80f4e's 50x stepRender re-scale, against a row of the
+#: retired 4749c4e93 oracle still at 1_000 iterations), ended as its text said it
+#: would: BASELINE.json's benchmark rows are now the oracle at the pin, which
+#: contains 446f80f4e, so both sides run the same 50_000 iterations.
+BASIS_CHANGED: "dict[str, str]" = {}
+
+#: Two values of the V17 re-base (P7-W23: the oracle at the pin, idle) that
+#: --self-test [f] pins in the live BASELINE.json, so a silent edit of the rows
+#: or a reverted re-base fails the self-test. Re-base them with the rows.
+REBASE_PIN_TS = 1373.6     # terminal-stream/ascii, throughput_MiB_per_s
+REBASE_PIN_SC = 0.04694    # screen-clone.clone/small, median_s
 
 
 def bench_index(obj):
     """{(id, optimize): (metric_key, value, direction)} for a benchmarks[] list.
 
     The key is a TUPLE, and that is load-bearing (fixed WS10 T2, June-2026 bug).
-    `.port/phase-0/baseline/BASELINE.json` carries 28 rows: each of the 14
-    benchmark ids appears TWICE, once with `"optimize": "ReleaseFast"` and once
-    with `"optimize": "Debug"`. This function previously keyed on `id` alone, so
+    `.port/phase-0/baseline/BASELINE.json` carried 28 rows until P7-W23 (V17's
+    re-base kept the ReleaseFast half only): each of the 14 benchmark ids
+    appeared TWICE, once with `"optimize": "ReleaseFast"` and once with
+    `"optimize": "Debug"`. This function previously keyed on `id` alone, so
     the Debug rows -- which come second in the array -- silently overwrote the
     ReleaseFast ones, and the gate ended up comparing release-fast candidates
     against Debug oracle numbers. The effect was a gate that could not fail:
     `terminal-stream/ascii` was fenced at 2.073 MiB/s instead of 118.8 (a 57x
     loose band) and `screen-clone.clone/small` at 5.486 s instead of 0.0493 s
     (111x). Keying on (id, optimize) keeps both halves addressable; `run()` then
-    compares only the CANDIDATE_OPTIMIZE half.
+    compares only the CANDIDATE_OPTIMIZE half. The key stays a tuple after the
+    re-base, so a Debug row can never again shadow a ReleaseFast one;
+    --self-test [f] proves it on a synthetic baseline.
 
     Rows with no `optimize` field default to CANDIDATE_OPTIMIZE, so candidate
     metrics files -- which only ever measure the release-fast binary and do not
@@ -405,8 +414,34 @@ def self_test():
             }, fh)
         return p
 
-    if BASIS_CHANGED:
-        listed = sorted(BASIS_CHANGED)[0]
+    # While the live set is empty (P7-W23), the arm runs against a copy of this
+    # script whose BASIS_CHANGED lists one synthetic entry, so the exclusion
+    # path is still exercised end to end and the arm is never vacuous.
+    basis_script = script
+    if not BASIS_CHANGED:
+        import re
+        # The module-level declaration only (column 0), not this line.
+        live_decl = re.compile(r'^BASIS_CHANGED: "dict\[str, str\]" = \{\}$', re.M)
+        with open(script, encoding="utf-8") as fh:
+            src = fh.read()
+        n_decl = len(live_decl.findall(src))
+        if n_decl != 1:
+            print(f"[e2] cannot find the BASIS_CHANGED declaration to patch "
+                  f"({n_decl} matches) -> FAIL")
+            ok = False
+        basis_script = os.path.join(gates, "check_baseline_regression_e2.py")
+        with open(basis_script, "w", encoding="utf-8") as fh:
+            fh.write(live_decl.sub(
+                'BASIS_CHANGED: "dict[str, str]" = '
+                '{"screen-clone.render/small": "self-test"}', src, count=1))
+
+    def invoke_basis(*extra):
+        return subprocess.run([sys.executable, basis_script, *extra],
+                              capture_output=True, text=True)
+
+    synthetic_basis = dict(BASIS_CHANGED) or {"screen-clone.render/small": "self-test"}
+    if synthetic_basis:
+        listed = sorted(synthetic_basis)[0]
         # Rewrite the synthetic baseline so the listed id exists in it.
         baseline["benchmarks"] = [
             {"id": listed, "optimize": "ReleaseFast",
@@ -418,19 +453,27 @@ def self_test():
             json.dump(baseline, fh)
 
         m = write_basis_metrics(listed, 5.0)          # 50x worse
-        r = invoke("--metrics", m)
+        r = invoke_basis("--metrics", m)
         shown = "BASIS-CHANGED" in r.stdout
         print(f"[e2] listed id 50x worse -> exit {r.returncode} (expect 0), "
               f"reported={shown} (expect True)")
         ok &= (r.returncode == 0 and shown)
 
         m = write_basis_metrics("terminal-parser/utf8", 5.0)  # same delta, unlisted
-        r = invoke("--metrics", m)
+        r = invoke_basis("--metrics", m)
         print(f"[e2] UNLISTED id 50x worse -> exit {r.returncode} "
               f"(expect non-zero)")
         ok &= (r.returncode != 0 and "REGRESS" in r.stdout)
-    else:
-        print("[e2] BASIS_CHANGED empty -> nothing to exercise")
+
+        if basis_script != script:
+            # ... and the LIVE (empty) set excludes nothing: the same 50x on
+            # the synthetic id is RED through the unpatched script.
+            m = write_basis_metrics(listed, 5.0)
+            r = invoke("--metrics", m)
+            print(f"[e2] live set (empty): {listed} 50x worse -> exit "
+                  f"{r.returncode} (expect non-zero)")
+            ok &= (r.returncode != 0 and "REGRESS" in r.stdout
+                   and "BASIS-CHANGED" not in r.stdout)
 
     # (g) PER-LABEL SIZE TOLERANCE (P7-W22). A label's own `tolerance` admits
     #     growth up to it and no further; a label WITHOUT one still REDs on a
@@ -476,25 +519,59 @@ def self_test():
           f"(expect non-zero)")
     ok &= (r.returncode != 0 and "REGRESS size tol.dylib" in r.stdout)
 
+    # (f) THE (id, optimize) KEY (WS10 T2). Before that fix bench_index() keyed
+    #     on `id` alone, so a Debug row that came second in the array silently
+    #     overwrote the ReleaseFast one and the gate compared release-fast
+    #     candidates against Debug oracle numbers (a gate that could not fail).
+    #     Until P7-W23 this arm pinned two values of the real BASELINE.json,
+    #     which then carried both halves. V17's re-base dropped the Debug rows
+    #     (the pin builds no Debug bench), so the real file can no longer show
+    #     the bug; this synthetic baseline does, with the Debug row second:
+    #     a candidate 50% below the ReleaseFast row is RED (it would be GREEN
+    #     against the Debug row it is 25x above), and an equal one is GREEN under
+    #     --strict with the Debug row neither compared nor NOT-MEASURED.
+    baseline["benchmarks"] = [
+        {"id": "terminal-parser/utf8", "optimize": "ReleaseFast",
+         "metric": "throughput_MiB_per_s", "throughput_MiB_per_s": 250.0},
+        {"id": "terminal-parser/utf8", "optimize": "Debug",
+         "metric": "throughput_MiB_per_s", "throughput_MiB_per_s": 5.0},
+    ]
+    baseline["binary_sizes_bytes"] = {"libvt.a": {"bytes": 1000000}}
+    with open(os.path.join(bdir, "BASELINE.json"), "w") as fh:
+        json.dump(baseline, fh)
+    r = invoke("--metrics", write_metrics(125.0, 1000000))
+    print(f"[f] RF row 250, Debug row 5 (second); candidate 125 -> exit "
+          f"{r.returncode} (expect non-zero)")
+    ok &= (r.returncode != 0 and "REGRESS bench terminal-parser/utf8" in r.stdout)
+    r = invoke("--strict", "--metrics", write_metrics(250.0, 1000000))
+    print(f"[f] candidate 250, strict -> exit {r.returncode} (expect 0)")
+    ok &= (r.returncode == 0 and "NOT-MEASURED" not in r.stdout
+           and "compared 2 metrics" in r.stdout)
+
     shutil.rmtree(tmp, ignore_errors=True)
 
-    # (f) REAL-BASELINE ARM (WS10 T2). BASELINE.json carries each of the 14 ids
-    # TWICE -- once "ReleaseFast", once "Debug". Before the (id, optimize) fix,
-    # bench_index() keyed on `id` alone and the Debug rows (which come second in
-    # the array) silently overwrote the ReleaseFast ones, so the gate compared
-    # release-fast candidates against Debug oracle numbers. This arm pins the
-    # ReleaseFast row and would have caught that bug.
+    # (f) REAL-BASELINE ARM. The live BASELINE.json is the V17 re-base (P7-W23,
+    #     the oracle at the pin, idle): exactly the 14 suite ids, each once and
+    #     ReleaseFast, and two rows pinned to the recorded values so a silent
+    #     edit or a reverted re-base shows up here.
     try:
         real = G.load_baseline()
+        rows = real.get("benchmarks", [])
+        ids = [b.get("id") for b in rows]
+        opts = {b.get("optimize") for b in rows}
         ridx = bench_index(real)
         ts = ridx[("terminal-stream/ascii", "ReleaseFast")]
         sc = ridx[("screen-clone.clone/small", "ReleaseFast")]
-        ok_f = (abs(ts[1] - 118.8) / 118.8 < 0.01) and (abs(sc[1] - 0.0493) / 0.0493 < 0.01)
-        detail = f"terminal-stream={ts[1]:.4g} screen-clone.clone={sc[1]:.4g}"
+        ok_f = (len(ids) == 14 and len(set(ids)) == 14
+                and opts == {"ReleaseFast"}
+                and abs(ts[1] - REBASE_PIN_TS) / REBASE_PIN_TS < 0.01
+                and abs(sc[1] - REBASE_PIN_SC) / REBASE_PIN_SC < 0.01)
+        detail = (f"{len(ids)} rows, {len(set(ids))} ids, optimize={sorted(opts)}; "
+                  f"terminal-stream={ts[1]:.4g} screen-clone.clone={sc[1]:.4g}")
     except Exception as e:  # noqa: BLE001
         ok_f = False
         detail = f"{type(e).__name__}: {e}"
-    print(f"[f] ReleaseFast row preferred -> {ok_f} (expect True) [{detail}]")
+    print(f"[f] live BASELINE is the V17 re-base -> {ok_f} (expect True) [{detail}]")
     ok &= ok_f
 
     print("SELF-TEST:", "PASS" if ok else "FAIL")
