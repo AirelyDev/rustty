@@ -1115,8 +1115,18 @@ fn dynamic_pty_queued_writes() {
 // needs its OWN port so concurrent tests never race a bind/connect. This is
 // the `dynamic.rs`-local twin of that registry (3131-3136 are claimed by
 // kqueue.rs/epoll.rs/io_uring.rs — including epoll.rs's `PORT_UDP_READ_WRITE`
-// = 3135; 3137 by `dynamic_udp_read_write` below).
+// = 3135; 3137 and 3139 by `dynamic_udp_read_write` below).
 const PORT_DYNAMIC_TCP_ROUNDTRIP: u16 = 3138;
+// `dynamic_udp_read_write`'s port PER BACKEND iteration (N515, P7-W24). One
+// port for both iterations lost the epoll iteration's datagram in about 1-6% of
+// whole-crate runs on Linux (rvm): the server binds with SO_REUSEPORT
+// (`UDP::bind`, as the reference), and the io_uring iteration's server, closed
+// by an io_uring close op, can stay in 3137's reuseport group until the kernel
+// finishes releasing it, so the hash could route the datagram to that dying
+// socket and the read waited forever. The reference shares 3132 across its UDP
+// test instantiations, run one after another by Zig's serial test runner.
+const PORT_DYNAMIC_UDP_IO_URING: u16 = 3137;
+const PORT_DYNAMIC_UDP_EPOLL: u16 = 3139;
 
 // KAT — TCP accept/connect/send/recv/close round-trip through the Dynamic
 // union, on BOTH candidate backends. This is the reference's `TCPDynamic`
@@ -1351,7 +1361,11 @@ fn dynamic_udp_read_write() {
         })
         .unwrap();
 
-        let address = net::Address::parse_ip4(b"127.0.0.1", 3137).unwrap();
+        let port = match be {
+            Backend::IoUring => PORT_DYNAMIC_UDP_IO_URING,
+            _ => PORT_DYNAMIC_UDP_EPOLL,
+        };
+        let address = net::Address::parse_ip4(b"127.0.0.1", port).unwrap();
         let server = UDP::init(address).unwrap();
         let client = UDP::init(address).unwrap();
 
