@@ -2656,6 +2656,12 @@ impl Page {
     /// Caller is responsible for updating the refcount in the hyperlink
     /// set as necessary by calling `use` if the id was not acquired with
     /// `add`.
+    // PERF(port, N511): `#[inline]` — see `get_row_and_cell`. The reference
+    // inlines `setHyperlink` into its callers (the hyperlink-map bench's churn
+    // step among them, leaving only `getOrPut` out of line); without the hint
+    // a cross-crate caller pays a call, a full register save/restore and a
+    // second call into the map.
+    #[inline]
     pub fn set_hyperlink(
         &mut self,
         row: *mut Row,
@@ -2668,6 +2674,9 @@ impl Page {
         result
     }
 
+    // PERF(port, N511): `#[inline]` with `set_hyperlink` (it is that
+    // function's body; the split only carries the `defer assertIntegrity`).
+    #[inline]
     fn set_hyperlink_inner(
         &mut self,
         row: *mut Row,

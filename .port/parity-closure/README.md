@@ -299,6 +299,9 @@ committed records named here.
   V18 DISCHARGED; V16 and V17 stay open (V16: two of three mapped sizes larger than Ghostty's at 0% tolerance;
   V17: no idle window, so BASELINE.json was not re-based and G8 is RED on the retired series' `wcwidth` row).
 - **Next free ids: UD378, N512, V33.**
+- **P7-W20** (N511's perf work) CLOSED N511: `consume_apc_string`'s group test spelled with the NEON
+  intrinsics the reference's `@Vector(16, u8)` lowers to (portable form elsewhere and under Miri), and four
+  `#[inline]` hints plus a register sink for the hyperlink map. No new id. **Next free ids: UD378, N512, V33.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.

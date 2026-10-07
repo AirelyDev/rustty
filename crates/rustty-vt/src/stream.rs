@@ -101,6 +101,93 @@ const APC_SCAN_LANES: Option<usize> = match rustty_simd::native_vector_bits() {
     None => None,
 };
 
+/// `APC_SCAN_LANES` as a plain length for the fixed-size `[u8; N]` group the
+/// scan tests (the `ByteVector` of the reference). Unused (the scan is skipped)
+/// when `APC_SCAN_LANES` is `None`; 1 keeps the array type well-formed then.
+const APC_SCAN_N: usize = match APC_SCAN_LANES {
+    Some(n) => n,
+    None => 1,
+};
+
+/// One group of `consume_apc_string`'s vector scan: true iff some byte is not
+/// an `apc_put` byte (CAN 0x18, SUB 0x1A, ESC 0x1B, or `>= 0x80`).
+///
+/// PERF(port, N511): the reference's
+/// `(bytes == 0x18) | (bytes == 0x1A) | (bytes == 0x1B) | (bytes >= 0x80)` on a
+/// `@Vector(16, u8)` and its `@reduce(.Or, invalid)` lower on aarch64 to
+/// `and`/`cmeq`/`cmeq`/`cmlt`/`orr`/`orr`/`umaxv`: 14 instructions a group with
+/// the loop. The first port looped over `input[end + j]` with short-circuit
+/// `||` and a `bool` accumulator, which LLVM kept scalar (a branch and a
+/// bounds check per byte; 1.8x the reference's time on `+apc-parser`). A
+/// fixed-size array with the reduction spelled as an unsigned max does
+/// vectorize, but on NEON LLVM's SLP vectorizer turns the max of 0/0xFF masks
+/// back into an `.Or` reduction, which NEON has no instruction for, and lowers
+/// it (with two `tbl` shuffles) to about 27 instructions a group. So aarch64
+/// spells the reference's vector expression with the NEON intrinsics it
+/// compiles to, the same thing `@Vector(16, u8)` is there; every other target
+/// (x86-64 lowers the portable form to `pcmpeqb` + `pmovmskb`, which is the
+/// reference's own x86 lowering) and Miri, which the intrinsic path is not
+/// built for (the `crc32c.rs` precedent), use the portable form.
+/// `apc_group_invalid_matches_the_portable_test` holds the two to the same
+/// answer.
+#[inline(always)]
+fn apc_group_invalid(bytes: &[u8; APC_SCAN_N]) -> bool {
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon", not(miri)))]
+    {
+        apc_group_invalid_neon(bytes)
+    }
+    #[cfg(not(all(target_arch = "aarch64", target_feature = "neon", not(miri))))]
+    {
+        apc_group_invalid_portable(bytes)
+    }
+}
+
+/// `apc_group_invalid` on NEON: the reference's `@Vector(16, u8)` lowering.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon", not(miri)))]
+#[inline(always)]
+fn apc_group_invalid_neon(bytes: &[u8; APC_SCAN_N]) -> bool {
+    use core::arch::aarch64::{vceqq_u8, vcgeq_u8, vdupq_n_u8, vld1q_u8, vmaxvq_u8, vorrq_u8};
+    // `native_vector_bits` is 128 on aarch64, so a group is one Q register.
+    const _: () = assert!(APC_SCAN_N == 16);
+    // SAFETY: this function is only compiled with `target_feature = "neon"`
+    // (softfloat aarch64 targets fall back to the portable form), and
+    // `vld1q_u8` reads exactly the 16 bytes
+    // of `bytes`, an initialised `[u8; 16]` borrowed for the whole call.
+    unsafe {
+        // const bytes: ByteVector = input[end..][0..vector_len].*;
+        let v = vld1q_u8(bytes.as_ptr());
+        // const invalid = (bytes == @as(ByteVector, @splat(0x18))) |
+        //     (bytes == @as(ByteVector, @splat(0x1A))) |
+        //     (bytes == @as(ByteVector, @splat(0x1B))) |
+        //     (bytes >= @as(ByteVector, @splat(0x80)));
+        let invalid = vorrq_u8(
+            vorrq_u8(vceqq_u8(v, vdupq_n_u8(0x18)), vceqq_u8(v, vdupq_n_u8(0x1A))),
+            vorrq_u8(vceqq_u8(v, vdupq_n_u8(0x1B)), vcgeq_u8(v, vdupq_n_u8(0x80))),
+        );
+        // @reduce(.Or, invalid): every lane is 0x00 or 0xFF, so the
+        // across-lanes max is nonzero iff some lane is set.
+        vmaxvq_u8(invalid) != 0
+    }
+}
+
+/// `apc_group_invalid` in portable Rust: the per-lane test with the
+/// non-short-circuit `|` over a fixed-size array (no bounds checks), the
+/// `.Or` reduction as an unsigned max of 0/0xFF lane masks. Safe code, so
+/// Miri runs it as is.
+#[cfg_attr(
+    all(target_arch = "aarch64", target_feature = "neon", not(miri), not(test)),
+    allow(dead_code)
+)]
+#[inline(always)]
+fn apc_group_invalid_portable<const N: usize>(bytes: &[u8; N]) -> bool {
+    let mut any: u8 = 0;
+    for &b in bytes {
+        let invalid = (b == 0x18) | (b == 0x1A) | (b == 0x1B) | (b >= 0x80);
+        any = any.max(u8::from(invalid).wrapping_neg());
+    }
+    any != 0
+}
+
 /// `std.simd.suggestVectorLength(u8)` for `8c5bc3d29`'s OSC payload scan —
 /// the same NATIVE width the APC scan uses (see `APC_SCAN_LANES`'s note; the
 /// reference calls `suggestVectorLength` directly here too).
@@ -1649,20 +1736,19 @@ impl<H: Handler> Stream<H> {
             // scalar loop below as the tail and as the whole scan on targets with
             // no recommended vector width.
             // if (comptime std.simd.suggestVectorLength(u8)) |vector_len| { ... }
-            if let Some(vector_len) = APC_SCAN_LANES {
-                while end + vector_len <= input.len() {
+            if APC_SCAN_LANES.is_some() {
+                // const ByteVector = @Vector(vector_len, u8);
+                // while (end + vector_len <= input.len) {
+                while let Some(bytes) = input[end..].first_chunk::<APC_SCAN_N>() {
+                    // const bytes: ByteVector = input[end..][0..vector_len].*;
                     // const invalid = (bytes == 0x18) | (bytes == 0x1A)
                     //               | (bytes == 0x1B) | (bytes >= 0x80);
                     // if (@reduce(.Or, invalid)) break;
-                    let mut invalid = false;
-                    for j in 0..vector_len {
-                        let b = input[end + j];
-                        invalid |= b == 0x18 || b == 0x1A || b == 0x1B || b >= 0x80;
-                    }
-                    if invalid {
+                    if apc_group_invalid(bytes) {
                         break;
                     }
-                    end += vector_len;
+                    // end += vector_len;
+                    end += APC_SCAN_N;
                 }
             }
 

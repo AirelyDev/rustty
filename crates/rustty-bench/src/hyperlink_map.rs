@@ -15,7 +15,6 @@ use crate::benchmark::{Benchmark, Error, VTable};
 use crate::cli::{BenchmarkAction, CreateError};
 use allocator_api2::alloc::Global as Allocator;
 use core::ffi::c_void;
-use core::hint::black_box;
 use rustty_vt::hyperlink;
 use rustty_vt::page::{hyperlink_set_item_size, Capacity, Page};
 
@@ -275,7 +274,11 @@ impl HyperlinkMap {
                     return Err(Error::BenchmarkFailed);
                 };
                 // std.mem.doNotOptimizeAway(id);
-                black_box(&id);
+                //
+                // PERF(port, N511): `id` is a register-width integer, so the
+                // reference's sink is a register operand; `black_box(&id)`
+                // spilled the id AND its address to the stack every lookup.
+                crate::do_not_optimize_away(id);
             }
         }
         Ok(())
