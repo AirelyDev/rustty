@@ -137,7 +137,7 @@ mod imp {
         /// bind the `search_entry` child + the seven template callbacks.
         fn class_init(klass: &mut Self::Class) {
             klass.bind_template();
-            klass.bind_template_instance_callbacks();
+            super::SearchOverlay::bind_template_callbacks(klass);
         }
 
         /// PORTS: `search_overlay.zig:229-231` `init` — `gtk.Widget.initTemplate`.
@@ -255,42 +255,63 @@ impl Default for SearchOverlay {
     }
 }
 
-#[gtk4::template_callbacks]
+impl SearchOverlay {
+    /// PORTS: `search_overlay.zig` `Class.init` — the `bindTemplateCallback` calls of `Class.init`,
+    /// bound through GTK's C builder scope (NEW-FINDINGS N516; see
+    /// [`template_callback`](crate::gtk::class::template_callback)).
+    fn bind_template_callbacks(klass: &mut <imp::SearchOverlay as ObjectSubclass>::Class) {
+        crate::gtk::class::template_callback::bind_template_callbacks!(klass;
+            c"stop_search" => SearchOverlay::stop_search, (emitter: obj(gtk4::Widget), this: obj(SearchOverlay));
+            c"search_changed" => SearchOverlay::search_changed, (entry: obj(gtk4::SearchEntry), this: obj(SearchOverlay));
+            c"match_label_closure" => SearchOverlay::match_label_closure, (
+                this: obj(SearchOverlay), has_selected: boolean(), selected: prim(u64),
+                has_total: boolean(), total: prim(u64),
+            ) -> string();
+            c"next_match" => SearchOverlay::next_match, (emitter: obj(gtk4::Widget), this: obj(SearchOverlay));
+            c"previous_match" => SearchOverlay::previous_match, (emitter: obj(gtk4::Widget), this: obj(SearchOverlay));
+            c"search_entry_key_pressed" => SearchOverlay::search_entry_key_pressed, (
+                ec: obj(gtk4::EventControllerKey), keyval: prim(u32), keycode: prim(u32),
+                mods: glib(gdk4::ModifierType), this: obj(SearchOverlay),
+            ) -> glib(bool);
+            c"on_drag_end" => SearchOverlay::on_drag_end, (
+                gesture: obj(gtk4::GestureDrag), offset_x: prim(f64), offset_y: prim(f64),
+                this: obj(SearchOverlay),
+            );
+        );
+    }
+}
+
 impl SearchOverlay {
     // -- outward-signal emitters (search-overlay.blp) ----------------------
     // NOTE: The callbacks below use anyopaque for the first parameter
     // because they're shared with multiple widgets in the template.
     //
     // PORT NOTE (arg order): these are connected NON-swapped in the blueprint,
-    // so gtk4-rs delivers `[emitter, ...signal_args, this]` — the template
-    // instance (`this: &SearchOverlay`) LAST, matching the reference's
+    // so GTK's C scope calls them with the emitter first and the template
+    // instance (`this: &SearchOverlay`) LAST, the reference's
     // callconv(.c) signatures (`search_overlay.zig:323-361`). The `stop_search`
     // /`next_match`/`previous_match` callbacks are shared between a `SearchEntry`
     // signal and a `Button.clicked`, so the reference types the emitter as
     // `*anyopaque` (`:331,335,339`); here it is the common `&gtk4::Widget`.
 
     /// PORTS: `search_overlay.zig:331-333` `stopSearch`. Emit `stop-search`.
-    #[template_callback]
     fn stop_search(_emitter: &gtk4::Widget, this: &SearchOverlay) {
         this.emit_by_name::<()>("stop-search", &[]);
     }
 
     /// PORTS: `search_overlay.zig:323-326` `searchChanged`. On entry-text change,
     /// emit `search-changed` with the entry's current text.
-    #[template_callback]
     fn search_changed(entry: &gtk4::SearchEntry, this: &SearchOverlay) {
         let text = entry.text();
         this.emit_by_name::<()>("search-changed", &[&text.as_str()]);
     }
 
     /// PORTS: `search_overlay.zig:335-337` `nextMatch`. Emit `next-match`.
-    #[template_callback]
     fn next_match(_emitter: &gtk4::Widget, this: &SearchOverlay) {
         this.emit_by_name::<()>("next-match", &[]);
     }
 
     /// PORTS: `search_overlay.zig:339-341` `previousMatch`. Emit `previous-match`.
-    #[template_callback]
     fn previous_match(_emitter: &gtk4::Widget, this: &SearchOverlay) {
         this.emit_by_name::<()>("previous-match", &[]);
     }
@@ -299,7 +320,6 @@ impl SearchOverlay {
     /// navigates matches (Shift → previous, else next), consuming the event; other
     /// keys pass through. Bound on the entry's capture-phase `EventControllerKey`
     /// (`search-overlay.blp:31-35`).
-    #[template_callback]
     fn search_entry_key_pressed(
         _ec: &gtk4::EventControllerKey,
         keyval: u32,
@@ -324,7 +344,6 @@ impl SearchOverlay {
     /// PORTS: `search_overlay.zig:363-404` `onDragEnd`. On drag end, flip the
     /// overlay's `halign-target`/`valign-target` to whichever corner the overlay's
     /// center crossed, so it can be dragged between corners of the parent.
-    #[template_callback]
     fn on_drag_end(
         _gesture: &gtk4::GestureDrag,
         offset_x: f64,
@@ -390,7 +409,6 @@ impl SearchOverlay {
     /// PORTS: `search_overlay.zig:304-318` `closureMatchLabel`. The match-count
     /// label bind-closure (`search-overlay.blp:44`). `"0/0"` when no total; else
     /// `"{selected+1}/{total}"` (`0` selected when none).
-    #[template_callback]
     fn match_label_closure(
         &self,
         has_selected: bool,

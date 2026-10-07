@@ -900,15 +900,15 @@ fn surface_core_is_none_before_first_resize() {
 }
 
 /// **Invariant 3 — the resize DRIVER.** Emits a real `resize` on the child
-/// `RenderSurface`, exercising the `swapped` template-callback trampoline end
-/// to end (`surface.blp` → [`Surface::render_surface_resize`]). This is the
-/// regression guard for the argument-order defect: gtk4-rs delivers the swapped
-/// vector `[self, width, height, RenderSurface]` (self first, emitting widget
-/// LAST), so a leading widget param reads `values[1]` (an `i32`) and the nounwind
-/// FFI trampoline ABORTS the process (SIGABRT) on the first resize — before
-/// this test any real GTK resize killed first-light. Here we assert (a) the
-/// signal reaches the handler at all (no abort) and (b) the emitted dimensions
-/// are cached, proving width/height unpacked in the right slots.
+/// `RenderSurface`, exercising the template-callback trampoline end to end
+/// (`surface.blp` → [`Surface::render_surface_resize`]). This is the regression
+/// guard for the argument-order defect: the callback is connected NON-swapped,
+/// as in the reference, so GTK's C scope calls it with `(RenderSurface, width,
+/// height, Surface)`; a trampoline that read the arguments in another order
+/// would cache the wrong size or crash (before this test, under gtk4-rs's
+/// scope, any real GTK resize aborted first-light). Here we assert (a) the
+/// signal reaches the handler at all and (b) the emitted dimensions are cached,
+/// proving width/height arrive in the right slots.
 ///
 /// On first resize with no core surface, `render_surface_resize` falls through to
 /// `init_surface` (invariant 3 — lazy on first RESIZE, not realize). This
@@ -925,20 +925,20 @@ fn surface_init_on_first_resize() {
 
     assert!(surface.core().is_none(), "no core surface before resize");
 
-    // Drive the real signal through the swapped trampoline. With the buggy
-    // `(&self, _area, width, height)` order this line SIGABRTs.
+    // Drive the real signal through the C-scope trampoline (gtk4-rs's scope
+    // SIGABRTed here with a mis-ordered handler).
     let (w, h) = (640_i32, 480_i32);
     imp.render_surface.emit_by_name::<()>("resize", &[&w, &h]);
 
     // The handler cached exactly what we emitted — width/height came from
-    // `values[1]`/`values[2]`, not the trailing RenderSurface.
+    // the signal's width/height arguments, not the emitting RenderSurface.
     assert_eq!(
         imp.size.get(),
         SurfaceSize {
             width: 640,
             height: 480
         },
-        "render_surface_resize cached the emitted width/height (correct swapped-arg order)"
+        "render_surface_resize cached the emitted width/height (correct argument order)"
     );
 
     // Lazy init was reached but bails (no core app bound in this harness), so

@@ -117,7 +117,7 @@ mod imp {
             SplitTree::ensure_type();
             Surface::ensure_type();
             klass.bind_template();
-            klass.bind_template_instance_callbacks();
+            super::Tab::bind_template_callbacks(klass);
         }
 
         fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {
@@ -173,7 +173,25 @@ glib::wrapper! {
         @implements gtk4::Accessible, gtk4::Buildable, gtk4::ConstraintTarget, gtk4::Orientable;
 }
 
-#[gtk4::template_callbacks]
+impl Tab {
+    /// PORTS: `tab.zig` `Class.init` — the `bindTemplateCallback` calls of `Class.init`,
+    /// bound through GTK's C builder scope (NEW-FINDINGS N516; see
+    /// [`template_callback`](crate::gtk::class::template_callback)).
+    fn bind_template_callbacks(klass: &mut <imp::Tab as ObjectSubclass>::Class) {
+        crate::gtk::class::template_callback::bind_template_callbacks!(klass;
+            c"computed_title" => Tab::computed_title, (
+                this: obj(Tab), config: opt_obj(Config), terminal: opt_string(),
+                surface_override: opt_string(), tab_override: opt_string(), zoomed: boolean(),
+                bell_ringing: boolean(),
+            ) -> string();
+            c"notify_active_surface" => Tab::on_notify_active_surface,
+                (split_tree: obj(SplitTree), pspec: obj(glib::ParamSpec), this: obj(Tab));
+            c"notify_tree" => Tab::on_notify_tree,
+                (split_tree: obj(SplitTree), pspec: obj(glib::ParamSpec), this: obj(Tab));
+        );
+    }
+}
+
 impl Tab {
     /// PORTS: `tab.zig:190-227` `new`.
     #[must_use]
@@ -350,13 +368,11 @@ impl Tab {
     // Template callbacks
 
     /// PORTS: `tab.zig:388-394` `propActiveSurface`.
-    #[template_callback(name = "notify_active_surface")]
     fn on_notify_active_surface(_split_tree: &SplitTree, _pspec: &glib::ParamSpec, this: &Tab) {
         this.notify("active-surface");
     }
 
     /// PORTS: `tab.zig:368-386` `propSplitTree`.
-    #[template_callback(name = "notify_tree")]
     fn on_notify_tree(_split_tree: &SplitTree, _pspec: &glib::ParamSpec, this: &Tab) {
         this.notify("surface-tree");
 
@@ -370,7 +386,6 @@ impl Tab {
 
     /// PORTS: `tab.zig:480-536` `closureComputedTitle`. The template scope passes
     /// the instance first.
-    #[template_callback(name = "computed_title")]
     #[allow(clippy::too_many_arguments)]
     fn computed_title(
         _this: &Tab,

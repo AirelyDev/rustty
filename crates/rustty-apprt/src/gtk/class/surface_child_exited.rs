@@ -12,7 +12,7 @@
 //! child whose title reflects the exit code, plus the `data` boxed property that
 //! drives it (`notify::data`) and the `close-request` outward signal.
 //!
-//! Mirrors the `CompositeTemplate` + `#[gtk4::template_callbacks]` idiom of
+//! Mirrors the `CompositeTemplate` + C-scope template-callback idiom of
 //! `search_overlay.rs` (the `clicked` signal callback is NON-swapped, so `this`
 //! comes LAST; the `notify_data` handler's arg0 genuinely IS Self, so it is
 //! `&self`).
@@ -97,7 +97,7 @@ mod imp {
         /// template, bind the `banner` child + the two template callbacks.
         fn class_init(klass: &mut Self::Class) {
             klass.bind_template();
-            klass.bind_template_instance_callbacks();
+            super::SurfaceChildExited::bind_template_callbacks(klass);
         }
 
         /// PORTS: `surface_child_exited.zig:72-74` `init` — `initTemplate`.
@@ -145,7 +145,18 @@ impl Default for SurfaceChildExited {
     }
 }
 
-#[gtk4::template_callbacks]
+impl SurfaceChildExited {
+    /// PORTS: `surface_child_exited.zig` `Class.init` — the `bindTemplateCallback` calls of `Class.init`,
+    /// bound through GTK's C builder scope (NEW-FINDINGS N516; see
+    /// [`template_callback`](crate::gtk::class::template_callback)).
+    fn bind_template_callbacks(klass: &mut <imp::SurfaceChildExited as ObjectSubclass>::Class) {
+        crate::gtk::class::template_callback::bind_template_callbacks!(klass;
+            c"clicked" => SurfaceChildExited::clicked, (banner: obj(libadwaita::Banner), this: obj(SurfaceChildExited));
+            c"notify_data" => SurfaceChildExited::on_notify_data, (this: obj(SurfaceChildExited));
+        );
+    }
+}
+
 impl SurfaceChildExited {
     /// PORTS: `surface_child_exited.zig:96-117` `propData`. Update the banner
     /// title (and the widget's `normal`/`abnormal` CSS classes) from the current
@@ -153,7 +164,6 @@ impl SurfaceChildExited {
     /// `&self` (`surface-child-exited.blp:9` `notify::data => $notify_data()`).
     /// Renamed `on_notify_data` (blueprint name kept via `name = …`) so it does
     /// not clash with the `glib::Properties`-generated `notify_data()` emitter.
-    #[template_callback(name = "notify_data")]
     fn on_notify_data(&self) {
         let imp = self.imp();
         let banner = &imp.banner;
@@ -185,7 +195,6 @@ impl SurfaceChildExited {
     /// `close-request` so the surface closes. NON-swapped signal
     /// (`surface-child-exited.blp:13` `button-clicked => $clicked()`): the emitting
     /// `adw.Banner` is arg 0, `this: &SurfaceChildExited` is LAST.
-    #[template_callback]
     fn clicked(_banner: &libadwaita::Banner, this: &SurfaceChildExited) {
         this.emit_by_name::<()>("close-request", &[]);
     }

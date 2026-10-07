@@ -324,6 +324,15 @@ committed records named here.
   gtk4-rs's `BuilderRustScope` leaks every template-callback closure; suppressed in the GTK lane only, as
   `lsan-gtk.supp` G2, until fixed) and V33 (G-LSAN-GTK has no hosted job). No UD.
 - **Next free ids: UD378, N517, V34.**
+- **P7-W25** CLOSED N516: the GTK apprt binds its 111 template callbacks through GTK's C builder scope
+  (`gtk_widget_class_bind_template_callback_full` with `extern "C"` trampolines,
+  `gtk/class/template_callback.rs`), as the reference does, instead of gtk4-rs's leaking
+  `BuilderRustScope`; `surface.blp` is the reference's again (no `swapped`). `lsan-gtk.supp` G2 removed;
+  G-LSAN-GTK GREEN without it on rvm (the base with only G2 removed: RED, 279 allocations); the live GTK KATs
+  pass. Also: G-LSAN-GTK pins each remaining suppression's match count under a ceiling
+  (`LSAN_GTK_CEILINGS`; LSan treats suppressed blocks as live), the live KATs' `close_surfaces` asserts the
+  window and every Rustty widget in it are finalized, and `TSAN_SERIAL` applies on Linux only (N514's
+  record updated). No new id. **Next free ids: UD378, N517, V34.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.

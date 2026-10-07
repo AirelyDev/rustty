@@ -10566,7 +10566,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `/bin/sh`, then the window destroyed, the `Surface` finalized, `CoreSurface::deinit` run and the shell
   reaped) under ASan with `detect_leaks=1` inside `.port/tools/gtk_live_headless_sway.sh`, with
   `lsan.supp` (S1/S2, Mesa) plus `lsan-gtk.supp` (G1/G1b, the system Pango's fontconfig results; G2, a
-  gtk4-rs closure leak, N516); exactly one test must run. Linux only; no hosted job (V33).
+  gtk4-rs closure leak, N516, removed in P7-W25 with N516's fix); exactly one test must run. Linux only; no hosted job (V33).
   **Proof** (rvm, 2026-10-07): with `Surface::deinit`'s two `drop_and_dealloc` calls reverted locally to
   `dealloc` (not committed), the lane is **RED** with exactly one report, `Direct leak of 32 byte(s) in 1
   object(s)`: the `Arc<Mutex>` of `DrawMutex::new` ← `linux_impl::Renderer::init` ← `renderer_seam::Renderer::init`
@@ -11042,7 +11042,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   matches the raw interceptor name, `___interceptor_mmap`); a working `close` entry would also hide a real
   double close.
 - **fix**: `sanitizers.sh` `TSAN_SERIAL` ("rustty-xev|<reason>"): G-TSAN runs that spec's tests one at a time
-  (`--test-threads=1`, via `spec_args`). Only libtest's side-by-side running of different tests goes, which
+  (`--test-threads=1`, via `spec_args`, on Linux only: P7-W25 guarded it with `[ "$OS" = Linux ]`, since the
+  cause is Linux's and macOS's kqueue arm keeps libtest's parallel runner; H arms for both hosts). Only
+  libtest's side-by-side running of different tests goes, which
   the reference's serial Zig test runner never does; the threads a test starts are still checked against
   each other. A `TSAN_SERIAL` spec outside `TSAN_SCOPE` is RED (`tsan_serial_check`). G-SAN-SELF: H arms
   for the bookkeeping and `spec_args`, and A5s (a race between one test's own threads is RED with
@@ -11077,7 +11079,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 ## N516 — gtk4-rs's `BuilderRustScope` leaks every template-callback closure (each GTK widget template instantiation)
 
 - **id**: N516. P7-W24 (G-LSAN-GTK's first run). **severity**: low (a few KB per window/surface/tab created;
-  third-party crate). **state**: OPEN.
+  third-party crate). **state**: CLOSED 2026-10-07 (P7-W25).
 - **found**: G-LSAN-GTK's first run on rvm: 93 `Direct leak` reports of `GClosure`s allocated by
   `<glib::closure::Closure>::new_local::<<gtk4::builder_rust_scope::imp::BuilderRustScope as
   BuilderScopeImpl>::create_closure::{closure#1}::{closure#N}>` under the `instance_init` (`init_template`) of
@@ -11091,9 +11093,44 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   the handler at finalize drops one reference; the other is never released. GTK's own C scope returns a
   floating closure, so Ghostty (`gtk_widget_class_bind_template_callback`) does not leak. gtk4-rs `main` has
   the same code (checked 2026-10-07). Not a Ghostty defect, so no UD.
-- **lane handling**: `lsan-gtk.supp` G2, anchored to that one allocating frame (SANITIZER_SUPPRESSIONS.md),
-  to be removed when this is fixed.
-- **next**: fix in the port, not by suppression: a patched gtk4 (`[patch.crates-io]`, returning a closure
-  whose extra reference GTK's sink consumes) or template callbacks bound through GTK's C scope as the
-  reference does; then remove G2 and confirm G-LSAN-GTK GREEN without it. No upstream issue is filed
-  (project rule).
+- **lane handling (P7-W24, until the fix)**: `lsan-gtk.supp` G2, anchored to that one allocating frame
+  (SANITIZER_SUPPRESSIONS.md).
+- **fix** (P7-W25; parity rule: Ghostty binds its callbacks through GTK's C scope and does not leak): the
+  port binds every template callback as the reference does, `gtk_widget_class_bind_template_callback_full`
+  with an `unsafe extern "C"` trampoline per callback (`rustty-apprt` `gtk/class/template_callback.rs`,
+  `bind_template_callbacks!`: each line is the reference callback's C signature, the trampoline borrows the
+  C arguments as the Rust types the ported handler takes and calls it). GTK's `GtkBuilderCScope` then makes
+  the closures (`g_cclosure_new_object[_swap]`, floating, sunk by the connection), so nothing leaks. All
+  `#[gtk4::template_callbacks]` / `bind_template_instance_callbacks` uses are gone: 111 callbacks in 13
+  classes (`Surface` 45, `Window` 22, `ImguiWidget` 13, `SearchOverlay` 7, `KeyStateOverlay` 5,
+  `CommandPalette` 4, `ClipboardConfirmationDialog` 4, `Tab` 3, `SplitTree` 1, `SplitTreeSplit` 2,
+  `SurfaceChildExited` 2, `SurfaceScrolledWindow` 2, `InspectorWindow` 1), the reference's list except
+  `CommandPalette`'s `notify_config`, which `command-palette.blp` never references (the port connects
+  `notify::config` in `constructed`, unchanged). Consequences, each back to the reference's shape:
+  `surface.blp`'s five `render_surface_*` connections lose the `swapped` the port had added for gtk4-rs's
+  `&self` handlers (the file is the reference's again), and those handlers take
+  `(_: &RenderSurface, this: &Surface)` as `surface.zig` does; the `drop` / `surface_drop` handlers get the
+  dropped `GValue` itself, as the reference's C callbacks do (GTK's C marshaller peeks the `G_TYPE_VALUE`
+  parameter), so `ext::drop_target_value` (N338's unboxing of glib-rs's parameter box) is deleted; the
+  `TemplateCallbackReturn` alias (N336, glib-rs's `GValue` return check) is deleted, the gboolean return
+  being the trampoline's `gboolean`. Small differences from the Zig signatures, none observable: boolean
+  closure parameters are read as `gboolean` (the reference's `bool` reads one byte of the `int` libffi
+  passes); `im_commit`'s text is read as UTF-8 with invalid sequences replaced (the reference uses bytes;
+  the port's handler took `&str` before and glib-rs aborted on invalid UTF-8); a handler omits trailing C
+  parameters it does not use, as the reference's `closureComputedTitle` callers and GTK allow.
+- **evidence** (rvm, aarch64 Fedora 44, GTK 4.22.4): G-LSAN-GTK GREEN with `lsan-gtk.supp` G2 REMOVED (1
+  test, 0 reports; suppressions matched: G1 6,913, G1b 2,197, lsan.supp's Mesa entries 215 + 940, no
+  closure). Negative control: the base `4a32358ae` with only G2 removed is RED, 279 allocations, 16,144
+  bytes, 15 direct-leak stacks, 219 `BuilderRustScope` frames. The live GTK KATs pass: every `#[ignore]`d
+  `rustty-apprt` test one by one under `gtk_live_headless_sway.sh` with `--features gtk` (74 PASS:
+  `gtk_window_live`, `gtk_first_light`, `gtk_input_focus`, `gtk_split_drop`, `gtk_parity_callbacks`,
+  `gtk_clipboard_confirm`, `gtk_inspector_dump`, `gtk_glyph_dump`, `gtk_resize_window_live`,
+  `gtk_close_confirmation`, `gtk_title_dialog`, the five `gtk_perform_action` KATs, the lib's live tests,
+  ...), the five `gtk_render_surface` KATs with their module-doc recipes (fault-inject, DMA-BUF pivot,
+  UD356 error page, 1.25x scale), and the non-ignored suite. Not passing, the same at the base:
+  `gtk_clipboard` (forces `GDK_BACKEND=x11`; the headless sway has no X server) and
+  `gtk_portal_openuri_live` (needs a real portal). The `close_surfaces` helper now also asserts that the
+  window and every Rustty widget in it are finalized (P7-W25), and passes for every KAT that uses it.
+- **lane handling**: `lsan-gtk.supp` G2 deleted; its self-test arm is now a regression arm ("A2g leaked
+  GClosure, sunk and referenced (the N516 shape; no entry may hide it)", RED). SANITIZER_SUPPRESSIONS.md G2
+  struck. No upstream issue is filed (project rule).

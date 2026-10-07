@@ -92,7 +92,7 @@ mod imp {
             InspectorWidget::ensure_type();
 
             klass.bind_template();
-            klass.bind_template_instance_callbacks();
+            super::InspectorWindow::bind_template_callbacks(klass);
         }
 
         fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {
@@ -210,11 +210,21 @@ impl InspectorWindow {
     // `imp::set_surface`; wiring seams and `dispose` use that / the imp method.
 }
 
-#[gtk4::template_callbacks]
+impl InspectorWindow {
+    /// PORTS: `inspector_window.zig` `Class.init` — the `bindTemplateCallback` calls of `Class.init`,
+    /// bound through GTK's C builder scope (NEW-FINDINGS N516; see
+    /// [`template_callback`](crate::gtk::class::template_callback)).
+    fn bind_template_callbacks(klass: &mut <imp::InspectorWindow as ObjectSubclass>::Class) {
+        crate::gtk::class::template_callback::bind_template_callbacks!(klass;
+            c"notify_inspector_surface" => InspectorWindow::on_notify_inspector_surface,
+                (inspector: obj(InspectorWidget), pspec: obj(glib::ParamSpec), this: obj(InspectorWindow));
+        );
+    }
+}
+
 impl InspectorWindow {
     /// PORTS: `inspector_window.zig:160-171` `propInspectorSurface`. Bound to the
     /// embedded widget's `notify::surface` (`inspector-window.blp:33`).
-    #[template_callback(name = "notify_inspector_surface")]
     fn on_notify_inspector_surface(
         inspector: &InspectorWidget,
         _pspec: &glib::ParamSpec,

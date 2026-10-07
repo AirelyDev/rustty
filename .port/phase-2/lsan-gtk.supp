@@ -8,7 +8,13 @@
 # .port/phase-2/SANITIZER_SUPPRESSIONS.md (G ids) giving the reason, the
 # evidence and the negative control that keeps a Rust leak RED, and a WHY
 # comment directly above it (D6 rule c). A leak in Rustty code is never
-# suppressed: it is a finding.
+# suppressed: it is a finding. LSan treats a suppressed block as live, so an
+# entry also hides what that block points to: each entry has a ceiling on its
+# match count (sanitizers.sh LSAN_GTK_CEILINGS; RED above it).
+#
+# G2 (gtk4-rs's BuilderRustScope template-callback closures, NEW-FINDINGS N516)
+# was removed in P7-W25: the port binds template callbacks through GTK's C
+# builder scope, as the reference does, and nothing leaks there.
 #
 # Format: one `leak:<pattern>` per line, as lsan.supp.
 
@@ -23,17 +29,3 @@ leak:libpangoft2-1.0.so
 # patterns through its cairo layer (libpangocairo calls FcConfigSubstitute on
 # a pattern it keeps); no Rustty frame. Same negative control as G1.
 leak:libpangocairo-1.0.so
-# G2 (SANITIZER_SUPPRESSIONS.md; OPEN finding N516): gtk4-rs's
-# BuilderRustScope::create_closure returns an already-sunk GClosure, and GTK's
-# gtk_builder_connect_signals connects it (g_closure_sink adds a reference)
-# without an unref, so every template-callback closure, and what it captures,
-# outlives its widget. Third-party code (gtk4 0.11.4, unchanged on gtk4-rs
-# main); remove this entry when N516 is fixed.
-# ANCHORED to the one frame that allocates the closure (glib's
-# Closure::new_local instantiated with a BuilderRustScope callback, a name that
-# ends in `>`). An unanchored `...BuilderRustScope...::create_closure` also
-# matched every allocation made INSIDE a template callback (the invocation
-# frames carry the same names, ending in `::{closure#0}`), and so hid N502's
-# leaked DrawMutex Arc, allocated under the RenderSurface resize callback
-# (P7-W24; NEW-FINDINGS N502, N516).
-leak:^<glib::closure::Closure>::new_local::<<gtk4::builder_rust_scope::imp::BuilderRustScope as gtk4::subclass::builder_scope::BuilderScopeImpl>::create_closure::*>$

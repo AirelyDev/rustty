@@ -12,7 +12,7 @@
 //! keyboard icon + `tables_label` + chevron + `sequence_label` + pending spinner,
 //! whose visibility/text is driven by the bind-closures below.
 //!
-//! Mirrors the `CompositeTemplate` + `#[gtk4::template_callbacks]` idiom of
+//! Mirrors the `CompositeTemplate` + C-scope template-callback idiom of
 //! `search_overlay.rs` (bind-closures take `&self` first; the `drag-end` signal
 //! callback is NON-swapped, so `this` comes LAST).
 
@@ -100,7 +100,7 @@ mod imp {
         /// and bind the five template callbacks.
         fn class_init(klass: &mut Self::Class) {
             klass.bind_template();
-            klass.bind_template_instance_callbacks();
+            super::KeyStateOverlay::bind_template_callbacks(klass);
         }
 
         /// PORTS: `key_state_overlay.zig:133-135` `init` — `gtk.Widget.initTemplate`.
@@ -191,7 +191,28 @@ impl Default for KeyStateOverlay {
     }
 }
 
-#[gtk4::template_callbacks]
+impl KeyStateOverlay {
+    /// PORTS: `key_state_overlay.zig` `Class.init` — the `bindTemplateCallback` calls of `Class.init`,
+    /// bound through GTK's C builder scope (NEW-FINDINGS N516; see
+    /// [`template_callback`](crate::gtk::class::template_callback)).
+    fn bind_template_callbacks(klass: &mut <imp::KeyStateOverlay as ObjectSubclass>::Class) {
+        crate::gtk::class::template_callback::bind_template_callbacks!(klass;
+            c"on_drag_end" => KeyStateOverlay::on_drag_end, (
+                gesture: obj(gtk4::GestureDrag), offset_x: prim(f64), offset_y: prim(f64),
+                this: obj(KeyStateOverlay),
+            );
+            c"show_chevron" => KeyStateOverlay::show_chevron,
+                (this: obj(KeyStateOverlay), has_tables: boolean(), has_sequence: boolean()) -> glib(bool);
+            c"has_state" => KeyStateOverlay::has_state,
+                (this: obj(KeyStateOverlay), has_tables: boolean(), has_sequence: boolean()) -> glib(bool);
+            c"tables_text" => KeyStateOverlay::tables_text,
+                (this: obj(KeyStateOverlay), tables: opt_boxed(StringList)) -> string();
+            c"sequence_text" => KeyStateOverlay::sequence_text,
+                (this: obj(KeyStateOverlay), sequence: opt_boxed(StringList)) -> string();
+        );
+    }
+}
+
 impl KeyStateOverlay {
     // -- bind-closures (key-state-overlay.blp) -----------------------------
     // PORT NOTE (arg order): these are GtkExpression bind-closures, so gtk4-rs
@@ -201,7 +222,6 @@ impl KeyStateOverlay {
 
     /// PORTS: `key_state_overlay.zig:191-197` `closureHasState`. The overlay is
     /// visible when there is any key state (`key-state-overlay.blp:5`).
-    #[template_callback]
     fn has_state(&self, has_tables: bool, has_sequence: bool) -> bool {
         has_tables || has_sequence
     }
@@ -209,14 +229,12 @@ impl KeyStateOverlay {
     /// PORTS: `key_state_overlay.zig:183-189` `closureShowChevron`. The chevron
     /// separator shows only when both a table AND a sequence are present
     /// (`key-state-overlay.blp:38`).
-    #[template_callback]
     fn show_chevron(&self, has_tables: bool, has_sequence: bool) -> bool {
         has_tables && has_sequence
     }
 
     /// PORTS: `key_state_overlay.zig:199-215` `closureTablesText`. Joins the key
     /// table stack with `" > "` (`key-state-overlay.blp:33`); `None` when empty.
-    #[template_callback]
     fn tables_text(&self, tables: Option<StringList>) -> Option<String> {
         let list = tables?;
         if list.is_empty() {
@@ -228,7 +246,6 @@ impl KeyStateOverlay {
     /// PORTS: `key_state_overlay.zig:217-233` `closureSequenceText`. Joins the
     /// pending key sequence with `" "` (`key-state-overlay.blp:48`); `None` when
     /// empty.
-    #[template_callback]
     fn sequence_text(&self, sequence: Option<StringList>) -> Option<String> {
         let list = sequence?;
         if list.is_empty() {
@@ -244,7 +261,6 @@ impl KeyStateOverlay {
     /// center crossed. NON-swapped signal (`key-state-overlay.blp:13`
     /// `drag-end => $on_drag_end()`): the emitting `GestureDrag` is arg 0, `this:
     /// &KeyStateOverlay` is LAST (a wrong `&self` shape aborts at runtime).
-    #[template_callback]
     fn on_drag_end(
         _gesture: &gtk4::GestureDrag,
         _offset_x: f64,

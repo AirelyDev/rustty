@@ -146,7 +146,7 @@ mod imp {
 
         fn class_init(klass: &mut Self::Class) {
             klass.bind_template();
-            klass.bind_template_instance_callbacks();
+            super::ImguiWidget::bind_template_callbacks(klass);
 
             // Initialize our virtual methods with default functions
             // (`imgui_widget.zig:519-520`).
@@ -434,10 +434,49 @@ fn translate_mouse_button(button: u32) -> Option<c_int> {
 // LAST (sourced from the instance-callback user data), matching how the
 // non-swapped `Surface` controller callbacks are ported.
 
-#[gtk4::template_callbacks]
+impl ImguiWidget {
+    /// PORTS: `imgui_widget.zig` `Class.init` — the `bindTemplateCallback` calls of `Class.init`,
+    /// bound through GTK's C builder scope (NEW-FINDINGS N516; see
+    /// [`template_callback`](crate::gtk::class::template_callback)).
+    fn bind_template_callbacks(klass: &mut <imp::ImguiWidget as ObjectSubclass>::Class) {
+        crate::gtk::class::template_callback::bind_template_callbacks!(klass;
+            c"realize" => ImguiWidget::realize, (area: obj(gtk4::GLArea), this: obj(ImguiWidget));
+            c"unrealize" => ImguiWidget::unrealize, (area: obj(gtk4::GLArea), this: obj(ImguiWidget));
+            c"resize" => ImguiWidget::resize,
+                (area: obj(gtk4::GLArea), width: prim(i32), height: prim(i32), this: obj(ImguiWidget));
+            c"render" => ImguiWidget::render,
+                (area: obj(gtk4::GLArea), context: obj(gdk4::GLContext), this: obj(ImguiWidget)) -> glib(bool);
+            c"focus_enter" => ImguiWidget::focus_enter, (ec: obj(gtk4::EventControllerFocus), this: obj(ImguiWidget));
+            c"focus_leave" => ImguiWidget::focus_leave, (ec: obj(gtk4::EventControllerFocus), this: obj(ImguiWidget));
+            c"key_pressed" => ImguiWidget::key_pressed, (
+                ec: obj(gtk4::EventControllerKey), keyval: prim(u32), keycode: prim(u32),
+                mods: glib(gdk4::ModifierType), this: obj(ImguiWidget),
+            ) -> glib(bool);
+            c"key_released" => ImguiWidget::key_released, (
+                ec: obj(gtk4::EventControllerKey), keyval: prim(u32), keycode: prim(u32),
+                mods: glib(gdk4::ModifierType), this: obj(ImguiWidget),
+            );
+            c"mouse_pressed" => ImguiWidget::mouse_pressed, (
+                gesture: obj(gtk4::GestureClick), n_press: prim(i32), x: prim(f64), y: prim(f64),
+                this: obj(ImguiWidget),
+            );
+            c"mouse_released" => ImguiWidget::mouse_released, (
+                gesture: obj(gtk4::GestureClick), n_press: prim(i32), x: prim(f64), y: prim(f64),
+                this: obj(ImguiWidget),
+            );
+            c"mouse_motion" => ImguiWidget::mouse_motion,
+                (ec: obj(gtk4::EventControllerMotion), x: prim(f64), y: prim(f64), this: obj(ImguiWidget));
+            c"scroll" => ImguiWidget::scroll,
+                (ec: obj(gtk4::EventControllerScroll), x: prim(f64), y: prim(f64), this: obj(ImguiWidget))
+                -> glib(bool);
+            c"im_commit" => ImguiWidget::im_commit,
+                (ctx: obj(gtk4::IMMulticontext), bytes: str(), this: obj(ImguiWidget));
+        );
+    }
+}
+
 impl ImguiWidget {
     /// PORTS: `imgui_widget.zig:214-247` `glAreaRealize`.
-    #[template_callback]
     fn realize(_area: &gtk4::GLArea, this: &ImguiWidget) {
         let imp = this.imp();
         debug_assert!(imp.ig_context.get().is_null());
@@ -505,7 +544,6 @@ impl ImguiWidget {
 
     /// Handle a request to unrealize the GLArea. PORTS:
     /// `imgui_widget.zig:250-272` `glAreaUnrealize`.
-    #[template_callback]
     fn unrealize(_area: &gtk4::GLArea, this: &ImguiWidget) {
         let imp = this.imp();
         debug_assert!(!imp.ig_context.get().is_null());
@@ -536,7 +574,6 @@ impl ImguiWidget {
 
     /// Handle a request to resize the GLArea. PORTS: `imgui_widget.zig:275-293`
     /// `glAreaResize`.
-    #[template_callback]
     fn resize(area: &gtk4::GLArea, width: i32, height: i32, this: &ImguiWidget) {
         if this.set_current_context().is_err() {
             return;
@@ -575,7 +612,6 @@ impl ImguiWidget {
     ///
     /// GTK guarantees the GL context is current for the `render` signal, so —
     /// unlike realize/unrealize — we do NOT call `make_current` here (`:296`).
-    #[template_callback]
     fn render(_area: &gtk4::GLArea, _context: &gdk4::GLContext, this: &ImguiWidget) -> bool {
         if this.set_current_context().is_err() {
             return false;
@@ -611,7 +647,6 @@ impl ImguiWidget {
     }
 
     /// PORTS: `imgui_widget.zig:326-331` `ecFocusEnter`.
-    #[template_callback]
     fn focus_enter(_ec: &gtk4::EventControllerFocus, this: &ImguiWidget) {
         if this.set_current_context().is_err() {
             return;
@@ -623,7 +658,6 @@ impl ImguiWidget {
     }
 
     /// PORTS: `imgui_widget.zig:333-338` `ecFocusLeave`.
-    #[template_callback]
     fn focus_leave(_ec: &gtk4::EventControllerFocus, this: &ImguiWidget) {
         if this.set_current_context().is_err() {
             return;
@@ -635,7 +669,6 @@ impl ImguiWidget {
     }
 
     /// PORTS: `imgui_widget.zig:340-354` `ecKeyPressed`.
-    #[template_callback]
     fn key_pressed(
         ec_key: &gtk4::EventControllerKey,
         keyval: u32,
@@ -647,7 +680,6 @@ impl ImguiWidget {
     }
 
     /// PORTS: `imgui_widget.zig:356-370` `ecKeyReleased`.
-    #[template_callback]
     fn key_released(
         ec_key: &gtk4::EventControllerKey,
         keyval: u32,
@@ -659,7 +691,6 @@ impl ImguiWidget {
     }
 
     /// PORTS: `imgui_widget.zig:372-386` `ecMousePressed`.
-    #[template_callback]
     fn mouse_pressed(
         gesture: &gtk4::GestureClick,
         _n_press: i32,
@@ -680,7 +711,6 @@ impl ImguiWidget {
     }
 
     /// PORTS: `imgui_widget.zig:388-402` `ecMouseReleased`.
-    #[template_callback]
     fn mouse_released(
         gesture: &gtk4::GestureClick,
         _n_press: i32,
@@ -701,7 +731,6 @@ impl ImguiWidget {
     }
 
     /// PORTS: `imgui_widget.zig:404-419` `ecMouseMotion`.
-    #[template_callback]
     fn mouse_motion(_ec: &gtk4::EventControllerMotion, x: f64, y: f64, this: &ImguiWidget) {
         this.queue_render();
         if this.set_current_context().is_err() {
@@ -720,7 +749,6 @@ impl ImguiWidget {
     }
 
     /// PORTS: `imgui_widget.zig:421-436` `ecMouseScroll`.
-    #[template_callback]
     fn scroll(_ec: &gtk4::EventControllerScroll, x: f64, y: f64, this: &ImguiWidget) -> bool {
         this.queue_render();
         if this.set_current_context().is_err() {
@@ -733,7 +761,6 @@ impl ImguiWidget {
     }
 
     /// PORTS: `imgui_widget.zig:438-447` `imCommit`.
-    #[template_callback]
     fn im_commit(_ctx: &gtk4::IMMulticontext, bytes: &str, this: &ImguiWidget) {
         this.queue_render();
         if this.set_current_context().is_err() {

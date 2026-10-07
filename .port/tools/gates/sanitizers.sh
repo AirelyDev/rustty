@@ -235,7 +235,9 @@ TSAN_SCOPE=(
 # NEW-FINDINGS N514). Threads a test starts are still checked against each
 # other; only libtest's running of DIFFERENT tests side by side is dropped,
 # which the reference's Zig test runner never does. Format: "<spec>|<reason>";
-# a spec not in TSAN_SCOPE is stale (RED).
+# a spec not in TSAN_SCOPE is stale (RED). Applied on Linux only (spec_args):
+# the reason is Linux's (io_uring, pidfd); on macOS the specs keep libtest's
+# parallel runner (P7-W25).
 TSAN_SERIAL=(
   "rustty-xev|TSan models each fd as a word written by the call that opens it and by close; it sees neither the io_uring arm's close ops (the kernel closes the socket) nor fds opened by raw syscalls (SYS_pidfd_open, io_uring_setup), so when one test's closed socket number is reopened by another test running beside it, the reuse is reported as a race (epoll_ctl, mmap or close against the first test's socket(); rvm, P7-W24, no suppressions: in parallel, 59 and 26 reports in 24 and 15 of two sets of 25 runs; one at a time, 0 in 25 runs). No memory is shared; Linux only (macOS's kqueue arm has no such path)"
 )
@@ -682,9 +684,10 @@ spec_skips() {  # spec_skips SAN SPEC -> " --skip F ..." for that sanitizer's na
   done
 }
 
-spec_args() {  # spec_args SAN SPEC -> extra libtest arguments for that spec (G-TSAN: TSAN_SERIAL)
+spec_args() {  # spec_args SAN SPEC -> extra libtest arguments for that spec (G-TSAN: TSAN_SERIAL, Linux only)
   local e
   [ "$1" = tsan ] || return 0
+  [ "$OS" = Linux ] || return 0
   for e in ${TSAN_SERIAL[@]+"${TSAN_SERIAL[@]}"}; do
     if [ "${e%%|*}" = "$2" ]; then printf ' --test-threads=1'; fi
   done
@@ -1081,7 +1084,7 @@ tsan_serial_check() {
   for e in ${TSAN_SERIAL[@]+"${TSAN_SERIAL[@]}"}; do
     found=0
     for s in ${TSAN_SCOPE[@]+"${TSAN_SCOPE[@]}"}; do [ "${s%%|*}" = "${e%%|*}" ] && found=1; done
-    if [ "$found" -eq 1 ]; then printf '  tests one at a time: %s — %s\n' "${e%%|*}" "${e#*|}"
+    if [ "$found" -eq 1 ]; then printf '  tests one at a time on Linux: %s — %s\n' "${e%%|*}" "${e#*|}"
     else echo "  ❌ G-TSAN: TSAN_SERIAL names '${e%%|*}', which is not a TSAN_SCOPE spec (stale)"; bad=1; fi
   done
   return $bad
@@ -1152,6 +1155,48 @@ GTK_LSAN_TEST="gtk_window_live"
 GTK_LSAN_FILTER="window_hosts_a_live_terminal --exact --ignored"
 LSAN_GTK_SUPP="${LSAN_GTK_SUPP:-$SUPP_DIR/lsan-gtk.supp}"
 SWAY_WRAPPER="${SWAY_WRAPPER:-$ROOT/.port/tools/gtk_live_headless_sway.sh}"
+# Ceilings on lsan-gtk.supp's matches (P7-W25). LSan treats a suppressed block
+# as live, so whatever it points to is not reported either: a suppression can
+# hide more than its own allocation. Each lsan-gtk.supp entry therefore has a
+# ceiling on the allocations it may match in the lane's run ("<pattern>|<max
+# count>", the pattern as the file spells it after `leak:`), read from LSan's
+# "Suppressions used" table (print_suppressions=1). A match count above its
+# ceiling is RED, and so is an entry with no ceiling (unpinned) or a ceiling
+# whose entry is gone (stale). Ceilings: rvm P7-W25 matched 6,913 and 2,197
+# (the same counts in every run so far), plus about 10% (see
+# SANITIZER_SUPPRESSIONS.md, G-LSAN-GTK).
+LSAN_GTK_CEILINGS=(
+  "libpangoft2-1.0.so|7600"
+  "libpangocairo-1.0.so|2420"
+)
+# lsan_gtk_ceiling_check LOG [SUPP]: RED (1) on any ceiling breach, unpinned
+# entry or stale ceiling; prints one line per entry.
+lsan_gtk_ceiling_check() {
+  local log="$1" supp="${2:-$LSAN_GTK_SUPP}" bad=0 pat e max n found
+  while IFS= read -r pat; do
+    found=""
+    for e in ${LSAN_GTK_CEILINGS[@]+"${LSAN_GTK_CEILINGS[@]}"}; do
+      [ "${e%|*}" = "$pat" ] && found="${e##*|}"
+    done
+    if [ -z "$found" ]; then
+      echo "  ❌ G-LSAN-GTK: lsan-gtk.supp entry '$pat' has no LSAN_GTK_CEILINGS row (unpinned)"; bad=1; continue
+    fi
+    # LSan's table rows: "<count> <bytes> <template>".
+    n="$(awk -v p="$pat" '/^Suppressions used:/ {t=1; next} t && $3 == p {s += $1} t && /^-+$/ {t=0} END {print s + 0}' "$log")"
+    if [ "$n" -gt "$found" ]; then
+      echo "  ❌ G-LSAN-GTK: '$pat' matched $n allocations, above its ceiling $found (a leak may be growing under it)"; bad=1
+    else
+      echo "  suppression '$pat': $n allocations matched (ceiling $found)"
+    fi
+  done < <(sed -n 's/^leak://p' "$supp")
+  for e in ${LSAN_GTK_CEILINGS[@]+"${LSAN_GTK_CEILINGS[@]}"}; do
+    max="${e%|*}"
+    if ! sed -n 's/^leak://p' "$supp" | grep -qxF -- "$max"; then
+      echo "  ❌ G-LSAN-GTK: LSAN_GTK_CEILINGS names '$max', which is not a lsan-gtk.supp entry (stale)"; bad=1
+    fi
+  done
+  return $bad
+}
 gate_lsan_gtk() {
   if [ "$OS" != "Linux" ]; then
     echo "BLOCKED: G-LSAN-GTK runs a live GTK surface test, and the GTK runtime is Linux's (as in Ghostty; not verified on $OS). It runs on the Linux VM (rvm); on macOS, G-LSAN's macos_window_host tests close core Surfaces."
@@ -1196,6 +1241,9 @@ gate_lsan_gtk() {
   if [ "$M_RED" -eq 0 ] && [ "$M_BLOCKED" -eq 0 ] && [ "$M_TOTAL" -ne 1 ]; then
     echo "  ❌ G-LSAN-GTK: $M_TOTAL test(s) ran; exactly 1 ($GTK_LSAN_TEST::window_hosts_a_live_terminal) must run"
     extra=1
+  fi
+  if [ "$M_BLOCKED" -eq 0 ]; then
+    lsan_gtk_ceiling_check "$SAN_LOG_ROOT/lsan-gtk/lsan/$(printf '%s' "$GTK_LSAN_SPEC" | tr ':,' '__').log" || extra=1
   fi
   rm -f -- "$comb"; rmdir -- "$lroot" 2>/dev/null
   gate_verdict "G-LSAN-GTK" "$extra"
@@ -1367,11 +1415,13 @@ RS
     'check_members "G-TSAN scope" "${TSAN_SCOPE[@]}"'
   hx "a stale TSAN_SCOPE entry is RED" 1 "'rustty-gone' is listed but is not a workspace member" \
     'TSAN_SCOPE+=("rustty-gone|fixture"); check_members "G-TSAN scope" "${TSAN_SCOPE[@]}"'
-  hx "control: every TSAN_SERIAL spec is a TSAN_SCOPE spec" 0 "tests one at a time: rustty-xev" 'tsan_serial_check'
+  hx "control: every TSAN_SERIAL spec is a TSAN_SCOPE spec" 0 "tests one at a time on Linux: rustty-xev" 'tsan_serial_check'
   hx "a TSAN_SERIAL spec outside TSAN_SCOPE is stale (RED)" 1 "TSAN_SERIAL names 'rustty-gone'" \
     'TSAN_SERIAL+=("rustty-gone|fixture"); tsan_serial_check'
-  hx "spec_args: --test-threads=1 for a TSAN_SERIAL spec under tsan only" 0 "" \
-    '[ "$(spec_args tsan rustty-xev)" = " --test-threads=1" ] && [ -z "$(spec_args asan rustty-xev)" ] && [ -z "$(spec_args tsan rustty-core)" ]'
+  hx "spec_args: --test-threads=1 for a TSAN_SERIAL spec under tsan on Linux only" 0 "" \
+    'OS=Linux; [ "$(spec_args tsan rustty-xev)" = " --test-threads=1" ] && [ -z "$(spec_args asan rustty-xev)" ] && [ -z "$(spec_args tsan rustty-core)" ]'
+  hx "spec_args: no --test-threads=1 for a TSAN_SERIAL spec on macOS" 0 "" \
+    'OS=Darwin; [ -z "$(spec_args tsan rustty-xev)" ]'
   hx "a stale feature-lane entry is RED" 1 "'rustty-renamed' is listed but is not a workspace member" \
     'FEATURE_LANES=("rustty-renamed:wuffs|fixture"); check_members "G-ASAN feature lane" "${FEATURE_LANES[@]}"'
   hx "control: the real MSAN_SCOPE/MSAN_EXCLUDES/MSAN_SKIPS partition is complete" 0 "" 'msan_partition_check'
@@ -1484,6 +1534,19 @@ RS
     'unset RUSTTY_SANITIZERS_OWN_JOB; OS=Linux; SWAY_BIN=no-such-sway-fixture; gate_lsan_gtk'
   hx "--gate lsan-gtk without XDG_RUNTIME_DIR is BLOCKED (exit 3)" 3 "XDG_RUNTIME_DIR" \
     'unset RUSTTY_SANITIZERS_OWN_JOB XDG_RUNTIME_DIR; OS=Linux; SWAY_BIN=true; gate_lsan_gtk'
+  # LSAN_GTK_CEILINGS (P7-W25): the real ceilings pin exactly the real
+  # entries; a fixture log within its ceilings is GREEN, one above a ceiling,
+  # an unpinned entry and a stale ceiling are RED.
+  hx "control: the real LSAN_GTK_CEILINGS pin every lsan-gtk.supp entry" 0 "allocations matched" \
+    'lsan_gtk_ceiling_check /dev/null'
+  hx "lsan_gtk_ceiling_check: matches within their ceilings are GREEN" 0 "a.so': 5 allocations matched (ceiling 5)" \
+    'd="$(mktemp -d)"; printf "leak:a.so\nleak:b.so\n" >"$d/s"; printf "Suppressions used:\n  count      bytes template\n      5        100 a.so\n      2         10 b.so\n-----\n" >"$d/l"; LSAN_GTK_CEILINGS=("a.so|5" "b.so|3"); lsan_gtk_ceiling_check "$d/l" "$d/s"; r=$?; rm -rf -- "$d"; exit $r'
+  hx "lsan_gtk_ceiling_check: a match count above its ceiling is RED" 1 "matched 5 allocations, above its ceiling 4" \
+    'd="$(mktemp -d)"; printf "leak:a.so\n" >"$d/s"; printf "Suppressions used:\n  count      bytes template\n      5        100 a.so\n-----\n" >"$d/l"; LSAN_GTK_CEILINGS=("a.so|4"); lsan_gtk_ceiling_check "$d/l" "$d/s"; r=$?; rm -rf -- "$d"; exit $r'
+  hx "lsan_gtk_ceiling_check: an entry with no ceiling is RED" 1 "'b.so' has no LSAN_GTK_CEILINGS row" \
+    'd="$(mktemp -d)"; printf "leak:a.so\nleak:b.so\n" >"$d/s"; : >"$d/l"; LSAN_GTK_CEILINGS=("a.so|4"); lsan_gtk_ceiling_check "$d/l" "$d/s"; r=$?; rm -rf -- "$d"; exit $r'
+  hx "lsan_gtk_ceiling_check: a ceiling with no entry is stale (RED)" 1 "names 'gone.so', which is not a lsan-gtk.supp entry" \
+    'd="$(mktemp -d)"; printf "leak:a.so\n" >"$d/s"; : >"$d/l"; LSAN_GTK_CEILINGS=("a.so|4" "gone.so|1"); lsan_gtk_ceiling_check "$d/l" "$d/s"; r=$?; rm -rf -- "$d"; exit $r'
   hx "--gate lsan-gtk with lsan-gtk.supp missing is RED" 1 "lsan-gtk-missing.supp is missing" \
     'unset RUSTTY_SANITIZERS_OWN_JOB; OS=Linux; XDG_RUNTIME_DIR=/tmp; SWAY_BIN=true; LSAN_GTK_SUPP=/nonexistent/lsan-gtk-missing.supp; gate_lsan_gtk'
 
@@ -1694,8 +1757,10 @@ mod glib_leaks {
             sink(unsafe { FcNameParse(c"Monospace:size=12:weight=200".as_ptr().cast()) });
         }
     }
-    // G2's control: a GClosure leaked outside gtk4-rs's BuilderRustScope
-    // (sunk and referenced, the shape gtk4-rs returns) stays RED.
+    // N516's shape: a sunk GClosure with a reference nobody drops (what
+    // gtk4-rs's BuilderRustScope left behind for every template callback,
+    // until P7-W25 bound them through GTK's C scope and removed lsan-gtk.supp
+    // G2) stays RED under the lane's suppressions.
     #[test]
     fn leak_gclosure() {
         for _ in 0..8 {
@@ -1899,7 +1964,7 @@ RS
       ARM_LSAN_SUPP="$st/lsan-gtk-combined.supp" \
         arm "A2g leaked FcPattern (lsan-gtk.supp G1)" lsan "glib_leaks::leak_fcpattern --exact" RED "LeakSanitizer: detected memory leaks" "san-selftest:glib"
       ARM_LSAN_SUPP="$st/lsan-gtk-combined.supp" \
-        arm "A2g leaked GClosure, not from BuilderRustScope (lsan-gtk.supp G2)" lsan "glib_leaks::leak_gclosure --exact" RED "LeakSanitizer: detected memory leaks" "san-selftest:glib"
+        arm "A2g leaked GClosure, sunk and referenced (the N516 shape; no entry may hide it)" lsan "glib_leaks::leak_gclosure --exact" RED "LeakSanitizer: detected memory leaks" "san-selftest:glib"
     fi
     if [ "$OS" = "Darwin" ]; then
       # lsan-darwin.supp's negative controls (fix round 1): the system state the

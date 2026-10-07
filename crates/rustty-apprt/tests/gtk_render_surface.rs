@@ -278,6 +278,7 @@ fn render_surface_falls_back_to_cpu_when_dmabuf_import_fails_body(TEST: &str) {
         "the RenderSurface never showed a CPU-readback texture (last: {kind:?})"
     );
     eprintln!("{TEST}: broadway fell back to a memory texture");
+    drop(rs); // the close below asserts the RenderSurface is finalized
     finish(live, ka);
 }
 
@@ -317,6 +318,7 @@ fn render_surface_dmabuf_build_failure_skips_the_destroy_notify_body(TEST: &str)
             TEST,
             &format!("no DMA-BUF texture was built and released (last texture: {kind:?})"),
         );
+        drop(rs);
         finish(live, ka);
         return;
     }
@@ -352,6 +354,7 @@ fn render_surface_dmabuf_build_failure_skips_the_destroy_notify_body(TEST: &str)
         "{TEST}: {} failed build(s), 0 notifies for them",
         dmabuf_witness::BUILD_FAILURES.load(SeqCst)
     );
+    drop(rs); // the close below asserts the RenderSurface is finalized
     finish(live, ka);
 }
 
@@ -389,12 +392,14 @@ fn render_surface_presents_dmabuf_on_wayland() {
             TEST,
             &format!("GDK on this display did not import the DMA-BUF ({kind} texture)"),
         );
+        drop(rs);
         finish(live, ka);
         return;
     }
     let (w, h, _) = gtk_live::texture_rgba(&texture);
     let device = rs.device_size();
     assert_eq!((w as u32, h as u32), (device.width, device.height));
+    drop(rs); // the close below asserts the RenderSurface is finalized
     finish(live, ka);
 }
 
@@ -599,5 +604,6 @@ fn fractional_scale_cells_land_on_device_pixels() {
          half-covered px above={above} below={below} left={left})",
         edge_bad
     );
+    drop((widget, rs)); // the close below asserts the RenderSurface is finalized
     finish(live, ka);
 }

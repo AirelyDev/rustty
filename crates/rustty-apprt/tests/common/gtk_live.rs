@@ -181,7 +181,12 @@ pub fn close_surface(
 /// frees the core surface without drop glue.
 ///
 /// It asserts, for every surface, that the finalize happened (no leaked
-/// reference) and that its shell is gone (killed and reaped).
+/// reference) and that its shell is gone (killed and reaped). It also asserts
+/// that the window and every Rustty widget in it (the `Ghostty*` GTypes:
+/// `Window`, `Tab`, `SplitTree`, `SurfaceScrolledWindow`, `RenderSurface`,
+/// `SearchOverlay`, ...) were finalized, so a reference leaked on any of them
+/// (a template-callback closure that keeps its widget, NEW-FINDINGS N516) is
+/// RED here whatever a leak checker's suppressions hide (P7-W25).
 pub fn close_surfaces(
     ctx: &glib::MainContext,
     window: impl IsA<gtk4::Window>,
@@ -191,9 +196,20 @@ pub fn close_surfaces(
         .into_iter()
         .map(|(surface, pid)| (surface.downgrade(), pid))
         .collect();
+    let mut widgets: Vec<(String, glib::WeakRef<gtk4::Widget>)> = Vec::new();
+    collect_rustty_widgets(
+        window.upcast_ref::<gtk4::Window>().upcast_ref(),
+        &mut widgets,
+    );
+    let window_weak = window.upcast_ref::<gtk4::Window>().downgrade();
+    let window_type = window.type_().name().to_owned();
     window.upcast_ref::<gtk4::Window>().destroy();
     drop(window);
-    let alive = || watched.iter().any(|(weak, _)| weak.upgrade().is_some());
+    let alive = || {
+        watched.iter().any(|(weak, _)| weak.upgrade().is_some())
+            || widgets.iter().any(|(_, weak)| weak.upgrade().is_some())
+            || window_weak.upgrade().is_some()
+    };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while alive() && std::time::Instant::now() < deadline {
         ctx.iteration(false);
@@ -208,6 +224,34 @@ pub fn close_surfaces(
             process_gone(*pid),
             "surface {i}'s shell (pid {pid}) outlived the surface's close"
         );
+    }
+    assert!(
+        window_weak.upgrade().is_none(),
+        "the window ({window_type}) was not finalized after it was destroyed (a leaked reference)"
+    );
+    for (type_name, weak) in &widgets {
+        assert!(
+            weak.upgrade().is_none(),
+            "a {type_name} was not finalized after its window was destroyed (a leaked reference)"
+        );
+    }
+}
+
+/// Weak references to every Rustty widget in `widget`'s tree (itself
+/// included): the GTypes the port registers under the reference's names,
+/// `Ghostty*` (and the reference's `GhostttySurfaceScrolledWindow`).
+fn collect_rustty_widgets(
+    widget: &gtk4::Widget,
+    out: &mut Vec<(String, glib::WeakRef<gtk4::Widget>)>,
+) {
+    let name = widget.type_().name();
+    if name.starts_with("Ghostt") {
+        out.push((name.to_owned(), widget.downgrade()));
+    }
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        collect_rustty_widgets(&c, out);
+        child = c.next_sibling();
     }
 }
 
