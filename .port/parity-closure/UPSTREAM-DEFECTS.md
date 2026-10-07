@@ -3338,6 +3338,23 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    add `"-fobjc-arc"` to the flags of the `imgui_impl_metal.mm` `addCSourceFiles` call in `pkg/dcimgui/build.zig` (the `imgui_impl_osx.mm` call beside it compiles the same way; the port does not build that backend, so it was not checked here).
 - upstream status: not reported
 
+### UD377 — Highway's chosen-target mask is a plain `int64_t` under `HWY_NO_LIBCXX`, so concurrent first SIMD dispatches race (C++ UB)
+
+- id:              UD377 (P7-W17)
+- kind:            ub
+- upstream project: google-highway (the non-atomic `HWY_NO_LIBCXX` branch; still on highway master, fetched 2026-10-07); ghostty makes it reachable by always defining `HWY_NO_LIBCXX` (`pkg/highway/build.zig:51`)
+- severity:        low (no observed misbehaviour: on aarch64 and x86_64 an aligned 64-bit plain load or store is one instruction, and every racing writer stores the same value; but it is a data race, undefined behaviour in the C++ memory model, and the compiler is entitled to assume it away)
+- reference:       at 12752b2ac, highway 1.2.0 (`pkg/highway/build.zig.zon`) `hwy/targets.h:347-351`: `struct ChosenTarget` keeps `int64_t mask_{1}` with `LoadMask() { return mask_; }` / `StoreMask(m) { mask_ = m; }` when `HWY_NO_LIBCXX` is defined, `std::atomic<int64_t>` otherwise. Ghostty's `pkg/highway/src/cpp/targets.cpp:59-67` `SupportedTargets()` calls `GetChosenTarget().Update(targets)` (`:63`, a `StoreMask`) on every call, and each `HWY_DYNAMIC_DISPATCH` (`src/simd/vt.cpp:387`, `codepoint_width.cpp:506`, `index_of.cpp:37`) reads it through `GetIndex()` (a `LoadMask`); until the first update the index is 0, the `FunctionCache::ChooseAndCall` trampoline, which calls `SupportedTargets()`.
+- defect:          two threads whose first dispatched SIMD call overlaps both enter the trampoline: each stores the mask while the other loads or stores it, with no synchronization. Highway's own comment calls the struct "thread-safe except on RVV", which holds only for its `std::atomic` branch.
+- ReleaseSafe:     no Zig safety check covers C++; the race is formal UB with no observed effect.
+- ReleaseFast:     the same.
+- reachability:    two threads making their first SIMD call at once: two surfaces' IO threads decoding their first output (UTF-8 decode, code point width), e.g. several windows restored or opened together; in the port's tests, parallel test threads.
+- port handling:   `crates-sys/highway-sys/vendor/hwy/targets.h` (`PORT NOTE` in `ChosenTarget`'s private section): with `HWY_NO_LIBCXX` on GCC or clang (every target the port builds, clang-cl included), `LoadMask`/`StoreMask` use `__atomic_load_n`/`__atomic_store_n` with `__ATOMIC_RELAXED`, which need no C++ library. Relaxed suffices: the mask publishes no other data (the dispatch tables are static). Other compilers keep the upstream branch.
+- parity row(s):   NEW-FINDINGS N508 (G-TSAN's first runs).
+- test:            `crates-sys/highway-sys/src/lib.rs` `tests::concurrent_supported_targets_calls_agree` (four threads released by a barrier call `hwy_supported_targets()`) under G-TSAN (`sanitizers.sh --gate tsan`, `highway-sys` is in its scope): RED with the upstream header (`SUMMARY: ThreadSanitizer: data race targets.h:349 in hwy::ChosenTarget::StoreMask`), GREEN with the fix (19 tests). First seen as a race between two `rustty-vt-c` formatter tests (`hwy::ChosenTarget::LoadMask` under `rustty::DecodeUTF8UntilControlSeq` against `StoreMask` under `hwy::SupportedTargets`).
+- proposed fix:    in highway, use `__atomic_load_n`/`__atomic_store_n` (relaxed) for `mask_` in the `HWY_NO_LIBCXX` branch when the compiler is GCC or clang; or, in Ghostty, call the dispatch initialisation once under a lock before any thread can dispatch.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

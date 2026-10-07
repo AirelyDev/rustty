@@ -2698,3 +2698,32 @@ per-crate table with no BLOCKED row.
 `clang`/`lld` of rustc's LLVM major, push, and read `ci.yml` › `rustty-sanitizers (hwasan)`.
 
 **Discharged by:** the first green hosted run of G-HWASAN.
+
+## V32. G-TSAN has run on macOS only; its Linux run (rvm, and ci.yml's `tsan` leg) is pending — **ENVIRONMENT-BLOCKED** [P7-W17, 2026-10-07]
+
+**Blocked on:** the aarch64 Fedora VM `rvm`, which another task held for Valgrind while P7-W17 ran (the
+task brief forbade using it), and a push for the hosted leg (the maintainer's call, as V25 and V30).
+G-TSAN (`sanitizers.sh --gate tsan`) ran GREEN on the macOS dev box (aarch64-apple-darwin) only. Its
+Linux arm is configured, not executed: rustc's Linux gnu target specs carry THREAD, and the lane
+uses the same `-Zbuild-std` and `tsan-cc` wrapper there, but no Linux host has built or run it, nor
+G-SAN-SELF's A5 arms (Rust and C data races RED, their controls GREEN).
+
+```
+PORTED: .port/tools/gates/sanitizers.sh
+```
+
+In that file: `gate_tsan`, `run_crate`'s `tsan|thread` arm and the `tsan-cc` wrapper. And in
+`.github/workflows/ci.yml`: `tsan` in the `sanitizers` job's matrix.
+
+What a Linux run must show: G-SAN-SELF's A5 arms RED/GREEN/RED/GREEN; the gate's per-crate table over
+TSAN_SCOPE with no BLOCKED row; `tsan C archives: ... instrumented` lines with no uninstrumented archive
+(Linux builds `gettext-sys`'s libintl from glibc, so the archive set differs from macOS); and any race
+report triaged as on macOS (a Linux-only race, e.g. in the GTK-free termio or EGL renderer paths, is a
+new finding). Unknowns: whether Fedora's clang matches rustc's LLVM closely enough for instrumented C
+(G-HWASAN and G-MSAN needed none beyond the wrapper), and TSan's memory use on the 10 GB VM.
+
+**Recipe:** on rvm, `bash .port/tools/gates/sanitizers.sh --self-test` then `bash
+.port/tools/gates/sanitizers.sh --gate tsan` (one shared target, about 10-15 GB); delete the clone and
+trim the VM disk after (VM-disk rules). Hosted: push, then read `ci.yml` › `rustty-sanitizers (tsan)`.
+
+**Discharged by:** a GREEN G-TSAN run on Linux (rvm or the hosted leg).

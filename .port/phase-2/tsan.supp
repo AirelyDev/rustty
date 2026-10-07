@@ -1,0 +1,12 @@
+# ThreadSanitizer suppressions for G-TSAN (.port/tools/gates/sanitizers.sh
+# --gate tsan; run_crate passes it through TSAN_OPTIONS=suppressions=...:
+# print_suppressions=1, so every match is listed in the crate log).
+#
+# Same rules as lsan.supp: every entry is a THIRD-PARTY race (a system
+# framework or vendored C/C++), each with a row in
+# .port/phase-2/SANITIZER_SUPPRESSIONS.md (ThreadSanitizer section, T ids)
+# giving the reason and evidence, and a WHY comment directly above it (D6 rule
+# c). A race in Rustty code is never suppressed: it is a finding (an N id, and
+# a UD when Ghostty has it too), fixed with a regression test.
+#
+# No entry: G-TSAN's first runs (P7-W17) needed none.

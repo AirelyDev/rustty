@@ -1,10 +1,11 @@
-# Sanitizer suppressions and exclusions (G-ASAN, G-LSAN, G-MSAN, G-HWASAN)
+# Sanitizer suppressions and exclusions (G-ASAN, G-LSAN, G-MSAN, G-HWASAN, G-TSAN)
 
-The sanitizer gates (`.port/tools/gates/sanitizers.sh --gate asan|lsan|msan|hwasan`,
+The sanitizer gates (`.port/tools/gates/sanitizers.sh --gate asan|lsan|msan|hwasan|tsan`,
 registered in `.port/tools/ci.sh`; design:
 `docs/superpowers/specs/2026-10-01-memory-safety-lanes-design.md` §B) run every
 workspace crate's tests under AddressSanitizer, ASan + LeakSanitizer,
-MemorySanitizer and (aarch64 Linux, P7-W16b) HWAddressSanitizer. This file is the register of everything those gates do NOT
+MemorySanitizer and (aarch64 Linux, P7-W16b) HWAddressSanitizer, and the threaded crates under
+ThreadSanitizer (P7-W17). This file is the register of everything those gates do NOT
 check, in the same spirit as `MIRI_EXCEPTIONS.md`: each entry has a cited
 reason and evidence, and nothing is suppressed or excluded silently.
 
@@ -33,6 +34,8 @@ uninstrumented code the sanitizer cannot model), and the evidence.
   (macOS) through `LSAN_OPTIONS=suppressions=…:print_suppressions=1`, so every
   suppressed leak is listed in the run's log. Each line in either file has a WHY
   comment above it (D6 rule c, `d6_cfg_mapping_audit.py`) pointing at its row here.
+- G-TSAN reads `.port/phase-2/tsan.supp` through `TSAN_OPTIONS=suppressions=…:print_suppressions=1`
+  (empty so far; ThreadSanitizer section, T3).
 - Crate exclusions are the `ASAN_EXCLUDES`, `LSAN_EXCLUDES`, `HWASAN_EXCLUDES` and `MSAN_EXCLUDES`
   arrays in `sanitizers.sh`, each `"<crate>|<reason>"`. An entry naming a crate
   that is no longer a workspace member is RED. G-MSAN's scope is an allow-list:
@@ -99,9 +102,9 @@ the option in `sanitizers.sh`).
 | `detect_leaks=0` | G-HWASAN | HWASan carries LeakSanitizer on Linux; G-LSAN is the leak lane, so G-HWASAN's verdict stays memory errors (as G-ASAN's). | P7-W16b |
 | `-Zexport-executable-symbols` | G-LSAN on macOS | The macOS ASan runtime is a dylib that looks the user hooks (`__lsan_is_turned_off`, `__lsan_default_suppressions`) up dynamically (`nm -m librustc-nightly_rt.asan.dylib`: "weak external `___lsan_is_turned_off` (dynamically looked up)"), and rustc exports nothing from an executable by default, so `rustty-termio`'s fork-child hook (below) was never seen. Not suppressive: it only makes the documented hook visible. On Linux the runtime is static and the hook resolves at link time. | P7-W16a: a probe whose hook always returns 1 reported its leak without the flag and not with it; G-SAN-SELF's "opt-out hook" arm is RED without the flag (mutation run) |
 | `log_path=<private temp dir>/rt` (runtime output to per-process files, appended to the crate log after the run) | G-LSAN on macOS | With `lsan-darwin.supp`, `print_suppressions=1` prints its table on the stderr of every process in which a suppression matched, including CLI children whose stderr a test asserts on (`rustty`'s `cli_log_facade`: `+show-config` must print nothing). Not suppressive: every report and table still reaches the crate log the classifier reads, and a child that leaks still fails its test (exit 23). Linux keeps stderr (no Linux suppression matches in a child). | P7-W16a: run 2's `cli_log_facade` failure, stderr = the S3/S4 table only; with `log_path` the crate is GREEN (17 tests) and both tables are in its log; the probe's leak is still RED |
-| `allocator_may_return_null=1` | G-ASAN, G-LSAN, G-MSAN, G-HWASAN | ASan's malloc aborts on a request above its 1 TiB maximum, where the system malloc returns NULL; the port's out-of-memory tests rely on that NULL (`try_reserve` reporting failure, the port of Zig's `error.OutOfMemory` paths). It does turn off three ASan reports: allocation-size-too-big (a request over the allocator's maximum), calloc-overflow (count x size overflowing) and out-of-memory (the allocator failing): each now returns NULL to the caller instead of aborting with a report. Out-of-bounds, use-after-free, double-free, leak and uninitialized-read detection are unaffected, and a NULL the code does not handle still crashes visibly. | NEW-FINDINGS N496 item 5 |
-| `RUST_MIN_STACK=8388608` | all four | Instrumented frames are 2-3x their native size; a test that checks a recursion bound fits the default 2 MiB stack overflows under ASan with no memory error. Unbounded recursion still overflows 8 MiB; the native bound is checked by `cargo test --workspace`. | N496 item 6 |
-| line-tables-only debuginfo | all four | Full debuginfo made the GTK lane's instrumented test links exhaust the 10 GB VM (ld SIGBUS). Reports keep every function, file and line. | N496 item 7 |
+| `allocator_may_return_null=1` | G-ASAN, G-LSAN, G-MSAN, G-HWASAN, G-TSAN | ASan's malloc aborts on a request above its 1 TiB maximum, where the system malloc returns NULL; the port's out-of-memory tests rely on that NULL (`try_reserve` reporting failure, the port of Zig's `error.OutOfMemory` paths). It does turn off three ASan reports: allocation-size-too-big (a request over the allocator's maximum), calloc-overflow (count x size overflowing) and out-of-memory (the allocator failing): each now returns NULL to the caller instead of aborting with a report. Out-of-bounds, use-after-free, double-free, leak and uninitialized-read detection are unaffected, and a NULL the code does not handle still crashes visibly. | NEW-FINDINGS N496 item 5 |
+| `RUST_MIN_STACK=8388608` | all five | Instrumented frames are 2-3x their native size; a test that checks a recursion bound fits the default 2 MiB stack overflows under ASan with no memory error. Unbounded recursion still overflows 8 MiB; the native bound is checked by `cargo test --workspace`. | N496 item 6 |
+| line-tables-only debuginfo | all five | Full debuginfo made the GTK lane's instrumented test links exhaust the 10 GB VM (ld SIGBUS). Reports keep every function, file and line. | N496 item 7 |
 
 ## Test-binary hooks
 
@@ -192,6 +195,35 @@ expected absent / 0 problems, 56 min (N504).
 So G-HWASAN is a complement to G-ASAN, not a replacement: G-ASAN stays the everyday lane (macOS and Linux,
 deterministic), and G-HWASAN adds the wild-pointer class and instrumented C on rvm.
 
+## ThreadSanitizer (G-TSAN, P7-W17)
+
+G-TSAN (`sanitizers.sh --gate tsan`) runs ThreadSanitizer (`-Zsanitizer=thread -Zbuild-std`) over the
+design's threaded crates (`TSAN_SCOPE`, design §B TSan row): `rustty-core` (render thread, mailbox,
+surface lifecycle threads), `rustty-termio` (pty read thread, exec), `rustty-xev`, `rustty-renderer`,
+`rustty-vt` with `wuffs,oniguruma` (the vt search thread, the tmux threads, the oniguruma first-use init
+race test; the default-feature tests run too), `rustty-vt-c` and `highway-sys` (the SIMD dispatch state
+every thread shares; UD377's regression test). Its scope is an allow-list because a race needs two
+threads: the rest of the workspace runs its threads (if any) through these crates or not at all.
+macOS and Linux; BLOCKED on any other host. It has run on macOS only (the Linux run is V32).
+
+| id | what | kind | reason | evidence |
+|---|---|---|---|---|
+| T0 | `-Zbuild-std`; the cc-built C/C++ compiled with `clang -fsanitize=thread` through the `tsan-cc`/`tsan-c++` wrappers (only when the crate being built is instrumented) | lane configuration | Without `-Zbuild-std` rustc refuses the mix ("mixing `-Zsanitizer` will cause an ABI mismatch"). Uninstrumented C would hide both its own races and its synchronization (a lock taken in C is invisible to TSan, so Rust accesses ordered only by it would be reported). The gate checks the C is instrumented rather than assuming it: after each crate every `lib*.a` built for the instrumented target must reference `__tsan_*` (`tsan_archive_check`; exceptions `TSAN_UNINSTRUMENTED`, none so far), else RED. | P7-W17 probe crate (macOS); the gate run: 20 archives, all instrumented. G-SAN-SELF's A5 C arm (a race between two threads inside C compiled through `$CC`) is RED, which it could not be with uninstrumented C. |
+| T1 | `allocator_may_return_null=1` | runtime option | TSan's `malloc` aborts on a request above its 1 TiB maximum like ASan's; the port's out-of-memory tests rely on the NULL (as for the other lanes, N496 item 5). | first G-TSAN pass, `rustty-vt`: `ThreadSanitizer: requested allocation size 0x7fffffffffffffff exceeds maximum supported size` (`allocation-size-too-big`), stopping the binary after 41 tests. |
+| T2 | `second_deadlock_stack=1` | runtime option | Not suppressive: a lock-order-inversion report shows both acquisitions. | — |
+| T3 | `.port/phase-2/tsan.supp` through `suppressions=…:print_suppressions=1` | suppressions file | **Empty.** Every entry needs the criteria at the top of this file plus a negative control (a race of ours through the same API must stay RED). The first runs needed none: the only report was UD377, a real race in vendored Highway, fixed rather than suppressed. | — |
+
+No Metal, CoreText, libdispatch or other system-framework report appeared on macOS, so nothing is
+suppressed there.
+
+**Runs (macOS, aarch64-apple-darwin, nightly 2026-07-22 / LLVM 22.1.8, Apple clang 21, one shared
+target dir).** The first pass (P7-W17) found UD377 in `rustty-vt-c` (a data race between two formatter
+tests' first SIMD dispatch, `hwy::ChosenTarget::LoadMask` against `StoreMask`, vendored Highway) and T1
+in `rustty-vt`; `rustty-core` (82), `rustty-termio` (126), `rustty-xev` (54) and `rustty-renderer` (143)
+were GREEN. With both fixed, the gate: **G-TSAN GREEN, 4,380 tests, 0 reports, 38 min** (`rustty-vt`
+3,370 in 1,781 s, `rustty-vt-c` 586, `highway-sys` 19, `rustty-termio` 126 in 339 s; 20 C archives
+instrumented). The per-crate hang bound for TSan is 3,600 s, 2x the slowest crate. NEW-FINDINGS N508.
+
 ## Crate exclusions and empty lanes
 
 No workspace member is excluded from G-ASAN or G-LSAN; G-HWASAN excludes `xtask` (H1). The G-LSAN matrix behind fix round 1's numbers ran on commit 7ddf62ffd (10,111 tests; its cross-check RED only for the then-missing Linux expected-absent rows); the full G-LSAN gate re-ran GREEN on 05478107 (10,111 tests, 18 min, cross-check 412 ran / 56 expected absent / 0 problems). `NO_TESTS_ON` in `sanitizers.sh` lists the members
@@ -211,7 +243,7 @@ clang 21.0.0, Homebrew LLVM 21), with a two-test probe crate (64 leaked boxes; a
 |---|---|---|
 | LeakSanitizer | **runs** as G-LSAN: ASan with `detect_leaks=1` | The standalone `-Zsanitizer=leak` fails to COMPILE: "leak sanitizer is not supported for this target" (rustc's `aarch64_apple_darwin.rs` lists ADDRESS, CFI, THREAD, REALTIME, with "FIXME: The leak sanitizer currently fails the tests, see #88132", where the standalone LSan UI test hung on arm64 macOS; the unstable book lists LSan for `x86_64-apple-darwin` only). rustc's ASan runtime (its own compiler-rt, where `lsan_common.h` sets `CAN_SANITIZE_LEAKS` for `SANITIZER_APPLE` on `__aarch64__`, and `sanitizer_flags.inc` only defaults `detect_leaks` to `!SANITIZER_APPLE`) reports the probe's leak ("LeakSanitizer: detected memory leaks … 16384 byte(s) leaked in 64 allocation(s)", exit 1) and passes the clean test. Apple clang's own ASan runtime aborts at RUNTIME with "AddressSanitizer: detect_leaks is not supported on this platform" (exit 134), and Apple clang rejects `-fsanitize=leak` at compile time; that runtime is what earlier notes meant by "Apple's ASan has no leak checker". Homebrew LLVM 21: its ASan deadlocks in its own init on macOS 26 (`AsanInitInternal` → `get_dyld_hdr` → `dyld_shared_cache_iterate_text_swift` → `_Block_copy` → malloc), and its standalone `-fsanitize=leak` binary spins in `CheckForLeaksCallback` under `StopTheWorld`; not usable. |
 | MemorySanitizer | **unsupported**; Linux-only G-MSAN is the lane | compiler-rt builds MSan for `Linux|FreeBSD|NetBSD` only (`cmake/config-ix.cmake`, `COMPILER_RT_HAS_MSAN`); rustc: "memory sanitizer is not supported for this target"; Apple clang: "unsupported option '-fsanitize=memory'". Valgrind does not run on Apple Silicon (not installed, no arm64-darwin port). The macOS uninitialized-read coverage is Miri (G6/G6c: uninit reads are UB it reports) for pure Rust, plus G-MSAN on Linux for the C/C++ the port compiles; nothing comparable for C on macOS. |
-| ThreadSanitizer | supported (`-Zsanitizer=thread` with `-Zbuild-std`; rustc's target spec and the unstable book list `aarch64-apple-darwin`; compiler-rt `COMPILER_RT_HAS_TSAN` includes Darwin) | not yet a gate (G-TSAN, design §B) |
+| ThreadSanitizer | **runs** as G-TSAN (P7-W17; see "ThreadSanitizer (G-TSAN)" below) | `-Zsanitizer=thread` with `-Zbuild-std` (rustc's target spec and the unstable book list `aarch64-apple-darwin`; compiler-rt `COMPILER_RT_HAS_TSAN` includes Darwin). Probe (P7-W17, nightly 2026-07-22): a deliberate race is reported (`WARNING: ThreadSanitizer: data race`, exit 66), a Mutex-ordered control passes; without `-Zbuild-std` rustc refuses ("mixing `-Zsanitizer` will cause an ABI mismatch"). |
 | HWAddressSanitizer | **unsupported** | compiler-rt builds it for `Linux|Android|Fuchsia` only (`COMPILER_RT_HAS_HWASAN`); rustc: "hwaddress sanitizer is not supported for this target"; Apple clang: "unsupported option '-fsanitize=hwaddress'". Handled on Linux by a separate task. |
 
 Leak-checking alternatives evaluated (P7-W16a):

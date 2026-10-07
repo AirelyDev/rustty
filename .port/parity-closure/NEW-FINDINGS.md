@@ -10733,3 +10733,38 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
     operation`, never UB. Renderer G6t: 66 of 66 GREEN, 218 s.
   - The N507 self-test's `sed -i ''` (BSD-only) is replaced with a portable write-to-temp-and-`mv`.
 - **production**: none (gate script only). Zig has no counterpart (N-only, not a UD).
+
+## N508 — G-TSAN's first runs: a data race in vendored Highway's SIMD dispatch (UD377) and TSan's allocator limit
+
+- **id**: N508. P7-W17. **severity**: low (UD377 is formal C++ UB with no observed effect; the rest is lane
+  configuration). **state**: CLOSED 2026-10-07 (macOS); the Linux run is V32.
+- **found**: the first ThreadSanitizer pass over the design's threaded crates on the Mac (P7-W17,
+  `sanitizers.sh --matrix --san tsan`), which made G-TSAN a gate. Two reports:
+  1. `rustty-vt-c`: `WARNING: ThreadSanitizer: data race` between two formatter tests' first SIMD
+     calls: `hwy::ChosenTarget::LoadMask` (under `rustty::DecodeUTF8UntilControlSeq` →
+     `HWY_DYNAMIC_DISPATCH`) against `hwy::ChosenTarget::StoreMask` (under `hwy::SupportedTargets` →
+     `Update`), on the global `hwy::GetChosenTarget()::chosen_target`. Highway keeps that mask in a plain
+     `int64_t` when `HWY_NO_LIBCXX` is defined, which Ghostty's `pkg/highway/build.zig` always does and
+     the port mirrors. A reference defect, reachable in Ghostty when two IO threads make their first SIMD
+     call at once: **UD377**.
+  2. `rustty-vt` (`wuffs,oniguruma`): `ERROR: ThreadSanitizer: requested allocation size
+     0x7fffffffffffffff exceeds maximum supported size` (`allocation-size-too-big`) in an out-of-memory
+     test, the same allocator limit G-ASAN met (N496 item 5).
+- **fix**:
+  1. `crates-sys/highway-sys/vendor/hwy/targets.h`: under `HWY_NO_LIBCXX` with GCC or clang,
+     `LoadMask`/`StoreMask` use relaxed `__atomic_load_n`/`__atomic_store_n` (PORT NOTE, UD377).
+     Regression test `highway-sys` `tests::concurrent_supported_targets_calls_agree` (four threads
+     released by a barrier call `hwy_supported_targets()`); `highway-sys` joined `TSAN_SCOPE` so G-TSAN
+     runs it. Negative control: with the upstream header it is RED on every run
+     (`data race targets.h:349 in hwy::ChosenTarget::StoreMask`), GREEN with the fix.
+  2. `TSAN_OPTIONS` carries `allocator_may_return_null=1` (SANITIZER_SUPPRESSIONS.md T1).
+  3. Gate: `sanitizers.sh --gate tsan` (G-TSAN, registered in `ci.sh`, skipped by `--fast`; `tsan` added
+     to ci.yml's `sanitizers` matrix), the `tsan-cc` C wrappers and `tsan_archive_check` (T0), an empty
+     cited `tsan.supp` (T3), the per-crate bound 3,600 s, and G-SAN-SELF arms: A5 Rust data race RED, its
+     Mutex control GREEN, a race inside cc-built C RED, its clean C control GREEN with the archive
+     instrumented; scope bookkeeping, BLOCKED-host, OWN_JOB and missing-suppressions arms; archive-check
+     fixture arms.
+- **proof**: G-TSAN GREEN on the Mac, 4,380 tests over 7 specs, 0 reports, 38 min (SANITIZER_SUPPRESSIONS.md,
+  ThreadSanitizer section, has the per-crate table). No race in Rust code was reported anywhere in the
+  scope (render thread, mailbox, read thread, exec, xev, search thread, vt-c).
+- **production**: the Highway header change (UD377). Nothing in Rust code.

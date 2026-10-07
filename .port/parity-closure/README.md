@@ -61,6 +61,7 @@ pin), G-P2-SELF, G-KAITAI (now HARD).
 | G-LSAN | HARD (`--fast` skips it) | macOS (since P7-W16a) and Linux; BLOCKED elsewhere | ASan with `detect_leaks=1` (rustc's ASan runtime has a working leak checker on Apple Silicon; the standalone `-Zsanitizer=leak` and Apple clang's runtime do not), the same scope plus, on Linux, the GTK apprt and Flatpak feature lanes; suppressions only through `.port/phase-2/SANITIZER_SUPPRESSIONS.md`: `lsan.supp` on Linux (two, both Mesa), `lsan-darwin.supp` on macOS (sixteen: libobjc, CoreFoundation, SkyLight, CoreText, CoreAnimation, ColorSync, Metal and dyld TLV state LSan on Darwin does not see as roots; Apple's `leaks` reports 0 for the same binaries) |
 | G-HWASAN (P7-W16b) | HARD (`--fast` skips it) | aarch64 Linux (rvm); BLOCKED elsewhere | HWAddressSanitizer (`-Zbuild-std`, tagged globals, lld) with our C/C++ instrumented, over G-ASAN's scope plus the GTK and Flatpak lanes, minus `xtask` (H1), and the same Miri-exception cross-check. Its pointer tags catch an access landing inside another live block, which ASan's redzones miss (G-SAN-SELF A4). No hosted job yet (V31) |
 | G-MSAN | HARD (`--fast` skips it) | Linux; BLOCKED elsewhere (compiler-rt has no MSan for Darwin) | MemorySanitizer with `-Zbuild-std` and our C/C++ instrumented, over an allow-list of 59 members (rustty-renderer with its EGL/GL/glslang test modules skipped by name); 2 excluded with reasons (glslang-sys, xtask) |
+| G-TSAN (P7-W17) | HARD (`--fast` skips it) | macOS (run) and Linux (V32); BLOCKED elsewhere | ThreadSanitizer (`-Zbuild-std`, our C/C++ instrumented and checked for `__tsan_` references) over the threaded crates (`TSAN_SCOPE`: core, termio, xev, renderer, vt with `wuffs,oniguruma`, vt-c, highway-sys); empty `tsan.supp`. First runs found UD377 (N508); GREEN on the Mac, 4,380 tests, 38 min. G-SAN-SELF A5 makes a Rust and a C data race RED |
 
 In ci.yml's `ci` job the three report BLOCKED (`RUSTTY_SANITIZERS_OWN_JOB`), naming the new `sanitizers`
 job (one leg per sanitizer on x86_64 Linux, never run yet: V30). Results of P7-W14's runs:
@@ -151,8 +152,8 @@ Code gaps left after the final triage, none a ledger row:
 - **Sanitizer lane limits (P7-W14)**: G-ASAN and G-LSAN compile the vendored C/C++ uninstrumented
   (ASan sees its heap through the allocator interceptors, not its own loads and stores), and G-MSAN
   excludes `glslang-sys` and `xtask` and skips `rustty-renderer`'s EGL/GL/glslang test modules. Both are in
-  `.port/phase-2/SANITIZER_SUPPRESSIONS.md` "Known limits". TSan (G-TSAN) and the Miri-on-nextest
-  work are later steps of the same design. G-HWASAN (P7-W16b) instruments that C/C++ on aarch64
+  `.port/phase-2/SANITIZER_SUPPRESSIONS.md` "Known limits". G-TSAN (P7-W17) runs ThreadSanitizer
+  over the threaded crates, macOS only so far (V32). G-HWASAN (P7-W16b) instruments that C/C++ on aarch64
   Linux, but runs on rvm only (V31).
 - **V27–V29**: Phase-7 Miri runs over the 30-minute task bound. DISCHARGED 2026-10-06 by P7-W15
   (G6, G6c and G6t GREEN at `04f0a894c`).
@@ -261,6 +262,11 @@ committed records named here.
   `snapshot::codec::tests::complete_snapshot_preserves_every_supported_continuation_cut`, the N492
   shape, found by G6t's first run, fixed with the raw-root idiom), N505 (CLOSED: the same shape in seven `rustty-vt-c` and `rustty-core` tests, found by the second G6t run; drafted as N501 and renumbered, since N501-N503 are reserved for P7-W16a) and N507 (CLOSED, gate-side: two G6 arms of the nextest port were stricter than the libtest lane, on `rustty-cli`'s disabled doc tests and `rustty-wasm`'s source-ignored test). P7-W15 discharged V27, V28 and V29.
 - **Next free ids: UD377, N508, V32.** (P7-W15 and P7-W16a/b merged; P7-W15 took no UD or V id.)
+- **P7-W17** (G-TSAN, ThreadSanitizer over the threaded crates) used UD377 (vendored Highway's
+  chosen-target mask is a plain `int64_t` under `HWY_NO_LIBCXX`, so concurrent first SIMD dispatches race;
+  fixed with relaxed atomic builtins), N508 (CLOSED: G-TSAN's first runs, UD377 and TSan's allocator
+  limit) and V32 (G-TSAN has run on macOS only; the Linux run on rvm and the hosted `tsan` leg are pending).
+- **Next free ids: UD378, N509, V33.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.

@@ -344,7 +344,20 @@ struct ChosenTarget {
   }
 
  private:
-#if defined(HWY_NO_LIBCXX)
+#if defined(HWY_NO_LIBCXX) && (defined(__GNUC__) || defined(__clang__))
+  // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS UD377. Upstream (and
+  // the copy Ghostty pins) reads and writes the plain int64_t below. With
+  // HWY_NO_LIBCXX, which Ghostty's pkg/highway/build.zig always sets, two
+  // threads whose first HWY_DYNAMIC_DISPATCH call overlaps both run
+  // FunctionCache::ChooseAndCall -> SupportedTargets -> Update (a store) and
+  // GetIndex (a load): a C++ data race (UB), reported by G-TSAN. Relaxed
+  // atomic builtins need no libc++ and keep the same values; the dispatch
+  // tables are static, so no ordering is needed beyond atomicity.
+  int64_t LoadMask() const { return __atomic_load_n(&mask_, __ATOMIC_RELAXED); }
+  void StoreMask(int64_t mask) { __atomic_store_n(&mask_, mask, __ATOMIC_RELAXED); }
+
+  int64_t mask_{1};  // Initialized to 1 so GetIndex() returns 0.
+#elif defined(HWY_NO_LIBCXX)
   int64_t LoadMask() const { return mask_; }
   void StoreMask(int64_t mask) { mask_ = mask; }
 
