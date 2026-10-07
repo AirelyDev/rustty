@@ -523,7 +523,7 @@ vg_opts=(
   --error-exitcode=1
   --num-callers=50
   --suppressions="$SUPP" # WHY: valgrind.supp is the reference's file, applied as the reference applies it: its 233 entries name GTK/GLib/GDK/fontconfig frames, Mesa DRI driver objects, or DRD-only kinds (audited 2026-09-27, N403), and the GTK apprt lane runs the same GTK/GLib code the reference's test executable runs them over, so there they can match, exactly as in the reference (review L-6 F4); none names a Rust or vendored-C frame of the port.
-  --suppressions="$PORT_SUPP" # WHY: llvmpipe (Mesa's software GL) noise only, justified in the file (N412): one entry, LLVM codegen frames under gallivm_jit_function; the golden tests' read-back pixels are declared defined in the tests instead (make_mem_defined, review L-6 F2).
+  --suppressions="$PORT_SUPP" # WHY: Mesa (llvmpipe software GL and EGL) noise only, justified in the file: one entry for LLVM codegen frames under gallivm_jit_function (N412), two for the never-terminated EGL display's driver data Mesa drops at exit, every frame Mesa's up to eglInitialize, definite leaks only (N509); the tests' read-back pixels are declared defined in the tests instead (make_mem_defined, review L-6 F2, N510).
 )
 
 # Run one memcheck process and classify it. $1 = display name, $2 = package

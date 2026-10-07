@@ -94,6 +94,29 @@ V27, V28 and V29 discharged. Self-tests (`--self-test`,
 `--debug-assertions-off --self-test`, `--tree-borrows --self-test`) GREEN. Details:
 `.port/phase-2/MIRI_EXCEPTIONS.md`, "P7-W15".
 
+## G-VALGRIND full run (P7-W18, 2026-10-07)
+
+The parity counterpart of the reference's `valgrind` job (`test.yml`, `zig build test-valgrind`,
+`build.zig:412-423`: the whole test executable under `valgrind --leak-check=full --error-exitcode=1
+--num-callers=50 --suppressions=valgrind.supp`). `check_valgrind.sh`'s default scope: all 62 entries
+(every workspace member but `xtask`, plus the `rustty-apprt:gtk,wayland,x11` and `rustty-os:flatpak`
+lanes), run on `rvm` (Fedora 44 aarch64, valgrind 3.27.1, Mesa 26.1.4 llvmpipe) at `1e84e3ff5` as
+ci.yml's four shards (`--shard K/4 --jobs 4`, two shards at a time) with `RUSTTY_REQUIRE_GL=1
+LIBGL_ALWAYS_SOFTWARE=1 RUSTTY_REQUIRE_FUZZ_CORPUS=1`:
+
+- 914 memcheck processes (377 + 208 + 181 + 148), 6,614 tests passed, 156 ignored (as in every lane),
+  0 failed; the one N416 named skip; 50 `harness = false` binaries run whole.
+- Wall time 13,451 s (3 h 44 min): prebuild 324 s, then shards 1+2 (3,923 s and 8,793 s) and 3+4
+  (3,250 s and 4,214 s).
+- RED on one crate only, `rustty-renderer`'s lib (16 parts): N509 (Mesa EGL's driver data of the
+  never-terminated display, two definite leaks per process: suppressed, VG2/VG3 in
+  `.port/phase-2/SANITIZER_SUPPRESSIONS.md`, C reproducer with no Rustty code) and N510 (one read-back
+  test compared llvmpipe pixels memcheck marks undefined: fixed in the test with `make_mem_defined`). No
+  invalid access, no uninitialised value and no leak in Rustty code anywhere; no production change; no UD.
+- After the fixes `check_valgrind.sh rustty-renderer --jobs 4` is GREEN (7 memcheck processes, 151 + 3
+  tests); the other 61 entries were GREEN in the full run, and the change touches only the renderer's
+  test and Mesa-only suppressions, so the gate is **GREEN** at the P7-W18 head.
+
 ## Not verified here (long runs, deferred by the user on 2026-09-28)
 
 These were deliberately not run to finish the closure. Each has an exact
@@ -266,7 +289,11 @@ committed records named here.
   chosen-target mask is a plain `int64_t` under `HWY_NO_LIBCXX`, so concurrent first SIMD dispatches race;
   fixed with relaxed atomic builtins), N508 (CLOSED: G-TSAN's first runs, UD377 and TSan's allocator
   limit) and V32 (G-TSAN has run on macOS only; the Linux run on rvm and the hosted `tsan` leg are pending).
-- **Next free ids: UD378, N509, V33.**
+- **P7-W18** (the full G-VALGRIND run on `rvm`) used N509 (CLOSED: Mesa EGL's driver data of the
+  never-terminated display, suppressed with evidence) and N510 (CLOSED: a renderer read-back test,
+  fixed in the test); no UD, no V id. Drafted as N520/N521 from a range set aside while P7-W17 (TSan)
+  took ids in parallel, and renumbered at review to follow P7-W17's N508.
+- **Next free ids: UD378, N511, V33.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.

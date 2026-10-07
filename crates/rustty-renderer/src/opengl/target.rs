@@ -753,6 +753,15 @@ pub(crate) mod tests {
         );
 
         let pixels = target.read_pixels_alloc().expect("read_pixels_alloc");
+        // llvmpipe's pixels, declared defined for memcheck (a no-op natively).
+        // Under G-VALGRIND the comparison below was reported as a conditional
+        // jump on uninitialised bytes whose origin is a stack slot of llvmpipe's
+        // JIT-compiled code, although every byte holds its expected value
+        // (NEW-FINDINGS N510; the C program
+        // `.port/tools/valgrind-llvmpipe-probe/readback-clear.c` gets the same
+        // report for the same scissored clears and read-back, with no Rustty
+        // code). Only these bytes are exempted, as in the golden tests (N412).
+        rustty_zigstd::valgrind::memcheck::make_mem_defined(&pixels);
         const R: [u8; 4] = [255, 0, 0, 255];
         const G: [u8; 4] = [0, 255, 0, 255];
         #[rustfmt::skip]

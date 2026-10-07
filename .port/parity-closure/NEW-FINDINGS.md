@@ -10768,3 +10768,56 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   ThreadSanitizer section, has the per-crate table). No race in Rust code was reported anywhere in the
   scope (render thread, mailbox, read thread, exec, xev, search thread, vt-c).
 - **production**: the Highway header change (UD377). Nothing in Rust code.
+
+## N509 — G-VALGRIND: Mesa EGL drops a never-terminated display's driver data at exit (two definite leaks per renderer process)
+
+- **id**: N509. P7-W18 (full G-VALGRIND run on `rvm`). **severity**: none (tool noise; memory reclaimed at
+  exit). **kind**: gate fidelity (system-library noise). **state**: CLOSED (suppressed, with evidence).
+- **finding**: every memcheck process of `rustty-renderer`'s lib that creates an `OffscreenContext` (16 parts of
+  the full run, 4 per shard) reported 2 definite leaks: 384 direct bytes (132,429 with indirect) from
+  `dri2_display_create` and 32 (28,000) from `_eglCreateArray` under `_eglLinkConfig`/`dri2_add_config`, both
+  under `eglInitialize` from `OffscreenContext::init` (`crates/rustty-renderer/src/opengl/gl/sys.rs:214`).
+  New since N413's GREEN run (at `f4540223`): P7-W7 T1 (DECISIONS B10) stopped calling `eglTerminate` in
+  `OffscreenContext`'s `Drop`, as the reference never terminates the shared display (`OpenGL.zig:113-115`,
+  "Do not destroy the EGL display here as it is shared across the entire process. It will get automatically
+  torn down by the OS.").
+- **cause**: Mesa's at-exit teardown of its display list frees each `_EGLDisplay` but not the driver data of
+  one still initialized, so memcheck's end-of-process scan finds the dri2 display and its config array
+  unreferenced. Not a dlclose effect of the port's per-context `DynamicInstance`: with `libEGL.so.1`
+  preloaded (never unloaded) the same two records appear.
+- **bounded**: one display per process, not per context or surface: `eglGetPlatformDisplay` returns the
+  same `_EGLDisplay` for the same platform and native display, and `eglInitialize` on an initialized
+  display allocates nothing new. Each of the 16 parts (which split the lib's GL tests, and so its
+  `OffscreenContext`s, between them) reported the same 384 direct bytes, the same figure as the single-`eglInitialize` C
+  probe below. So it is process-lifetime state reclaimed by the OS, by design, not a growing leak and not
+  a reference defect to fix (the "never copy reference leaks" rule targets leaks that grow or are lost
+  before exit).
+- **evidence**: `.port/tools/valgrind-llvmpipe-probe/egl-no-terminate.c`, a C program with no Rustty code
+  (surfaceless display, `eglInitialize`, return): `keep` reports exactly these two records; `terminate`
+  (eglTerminate first) reports 0 errors. Fedora 44 aarch64, mesa-libEGL 26.1.4, libglvnd-egl 1.7.0, valgrind
+  3.27.1. Not a reference defect: the reference's no-terminate design is intended, and Ghostty's own
+  test executable creates no EGL display, so its Valgrind job never meets this. Not ported differently: the
+  port keeps the reference's behaviour (B10).
+- **handling**: two entries in `.port/tools/gates/valgrind-llvmpipe.supp` (`mesa-egl-dri2-display-not-terminated`,
+  `mesa-egl-dri2-configs-not-terminated`), `Memcheck:Leak`, `match-leak-kinds: definite`, every frame Mesa's
+  from `calloc` up to `eglInitialize`; register rows VG2/VG3 in `.port/phase-2/SANITIZER_SUPPRESSIONS.md`
+  (G-LSAN's twins are S1/S2). Negative control: the C probe with a 4 KiB `malloc` leaked after
+  `eglInitialize` is still reported (1 error, suppressed: 2). After: `check_valgrind.sh rustty-renderer
+  --jobs 4` GREEN (7 memcheck runs, 151 + 3 tests).
+
+## N510 — G-VALGRIND: a target read-back test compared llvmpipe pixels memcheck marks undefined
+
+- **id**: N510. P7-W18. **severity**: none (tool noise). **kind**: test-side (N412's class, a test N412 did not
+  cover). **state**: CLOSED (fixed in the test).
+- **finding**: `opengl::target::tests::target_read_pixels_alloc_returns_tight_rgba_rows` (added by P7-W7 T1,
+  after N412) reported "Conditional jump or move depends on uninitialised value(s)" at its `assert_eq!(pixels,
+  expected)` (`bcmp` ← `Vec::eq` ← `target.rs:764`), origin "created by a stack allocation" at an address with
+  no symbol (llvmpipe's JIT-compiled code). The test passed: every byte held its expected value.
+- **evidence**: `.port/tools/valgrind-llvmpipe-probe/readback-clear.c`, the test's C twin with no Rustty code
+  (3x2 sRGB RGBA8 texture FBO, red clear, green scissored clear, `glReadPixels`, `memcmp`): prints `same=1`
+  and memcheck reports the same conditional jump with the same JIT-stack origin. Unlike N412's case no
+  blending is involved: llvmpipe's clear/read-back path alone taints the shadow state.
+- **fix**: the test declares exactly the read-back bytes defined with
+  `rustty_zigstd::valgrind::memcheck::make_mem_defined(&pixels)` right after `read_pixels_alloc()`, as the
+  golden tests do (review L-6 F2): no suppression, every other value the test branches on stays checked; a
+  no-op natively. Under the gate: 0 errors (the rerun above). Production: none.
