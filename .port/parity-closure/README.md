@@ -130,7 +130,7 @@ command in `.port/phase-2/VERIFICATION_DEBT.md` or the named record.
 | ~~G6t to completion~~ DONE, P7-W15: GREEN after N500 and N505 (`rustty-vt` 1,597 + 119, `rustty-xev` 22, `rustty-vt-c` 570, `rustty-renderer` 60, `rustty-core` 67) | `MIRI_EXCEPTIONS.md` "P7-W15" | `bash .port/tools/gates/check_leaks.sh --tree-borrows` |
 | ~~G6c as the gate runs it~~ DONE on nextest, P7-W15: 124 of 124 GREEN in 1,110 s (libtest: 119 tests, about 105 min) | `MIRI_EXCEPTIONS.md` "P7-W15" | `bash .port/tools/gates/check_leaks.sh --debug-assertions-off` |
 | Re-audit of the most-changed areas (Task 41 step 3) | here | the parity audit workflow over `src/terminal`, `src/apprt`, `pkg`, `include` |
-| Idle-machine performance runs and a new G8 baseline | V16–V18 | see `task-S-4-report.md` |
+| Idle-machine performance runs and a new G8 baseline (P7-W19: oracle rebuilt at the pin, 14/14 held provisionally, V18 DISCHARGED with N511; the idle run and the BASELINE.json re-base are still owed, the host's Linux VM kept the load above 2.0) | V16, V17 | V17's P7-W19 recipe |
 | The 16 new CI jobs and release-workflow changes on GitHub's runners | V25 | push, then read the run |
 | Windows full-workspace tests on the clang-cl-built C/C++ dependencies | V26 | `cargo test --workspace --exclude libxml2-sys --exclude fontconfig-sys --exclude sentry-sys --target x86_64-pc-windows-msvc` |
 | Nix and Snap packaging | V24 | user-deferred |
@@ -294,6 +294,11 @@ committed records named here.
   fixed in the test); no UD, no V id. Drafted as N520/N521 from a range set aside while P7-W17 (TSan)
   took ids in parallel, and renumbered at review to follow P7-W17's N508.
 - **Next free ids: UD378, N511, V33.**
+- **P7-W19** (lane E of P7-W12 T2: idle perf, G8 baseline, V16-V18) used N511 (OPEN: `apc-parser` 1.8x and
+  `hyperlink-map` churn/lookup 1.26x/1.17x slower than Ghostty; the APC scan is a scalar port of a vector scan).
+  V18 DISCHARGED; V16 and V17 stay open (V16: two of three mapped sizes larger than Ghostty's at 0% tolerance;
+  V17: no idle window, so BASELINE.json was not re-based and G8 is RED on the retired series' `wcwidth` row).
+- **Next free ids: UD378, N512, V33.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.

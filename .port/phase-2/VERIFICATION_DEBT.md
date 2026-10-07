@@ -1300,6 +1300,28 @@ Owner is Phase 3 because `origin/main` **is** the upstream resync range:
 
 ## V16. The binary-size axis of `BASELINE.json` is unmeasured, so G8 runs without `--strict` — **OWNER: Phase 3 — `BEYOND-PIN`**
 
+**P7-W19 (2026-10-07, head `f31fcc032`): still OPEN; the mapping was measured
+and `--strict` would be RED on real size gaps, not on missing labels.** The
+oracle at the pin `12752b2ac` (built ReleaseFast as V17 records) against the
+Rustty artifact that plays the same role (sizes in bytes):
+
+| Ghostty artifact | bytes | Rustty counterpart | bytes | Rustty / Ghostty |
+|---|--:|---|--:|--:|
+| `ghostty-bench` | 4,029,184 | `rustty-bench` (`release-fast`) | 3,138,576 | 0.78 |
+| `ghostty-gen` | 464,408 | `rustty-gen` (`release-fast`) | 505,296 | **1.09** |
+| `libghostty-vt.0.1.0.dylib` | 1,924,864 | `librustty_vt_c.dylib` (`release`) | 2,498,112 | **1.30** (`__TEXT` 1,998,848 vs 1,458,176: 1.37) |
+| `libghostty-vt.a` | 10,902,072 | `librustty_vt_c.a` (`release`) | 27,416,528 | 2.51 (a Rust staticlib bundles `std`; not like-for-like) |
+
+The four test-executable and Debug labels have no Rustty counterpart: Cargo
+builds one test binary per crate and target, and the pin builds no Debug bench.
+So an honest mapping covers at most the first three rows, and at 0% tolerance two
+of them fail. Arming `--strict` therefore needs a decision this lane cannot take:
+either a justified size tolerance per label, or treating the dylib's 37% larger
+`__TEXT` as a parity defect to fix (or both). Measuring it is done; the decision
+and the `--emit-metrics` sizes wiring remain. The `release` profile keeps
+`overflow-checks = true`, which is one candidate contributor and is not measured
+here.
+
 **Re-verified after pin advance:** 2026-07-31 — **PREMISE REFUTED.** This row's
 blocker was "the pinned oracle needs Zig 0.15.2 and this host has 0.16.0, so it
 cannot be rebuilt, and `origin/main` cannot be built at all". The pin advanced to
@@ -1361,6 +1383,47 @@ additionally emit `binary_sizes_bytes` for the mapped rustty artifacts, then
 restore `--strict` on the G8 line in `.port/tools/ci.sh` and confirm GREEN.
 
 ## V17. The oracle-anchored perf measurement campaign — **OWNER: Phase 3 — `BEYOND-PIN`**
+
+**P7-W19 (2026-10-07, head `f31fcc032`): still OPEN. The idle run was attempted
+and the host never went idle.** Done: the oracle was rebuilt at the pin
+`12752b2ac` (README recipe; `ghostty-bench-12752b2ac`, sha256 `79a64278…`) and
+`ws10_suite.py`'s `ORACLE_SHA256` / `ORACLE_SHA256_PIN_DIGEST` were updated, so
+Fence 1 runs again (before this every oracle run at the new pin BLOCKED). Not
+done: the 1-minute load stayed 3.0-5.4 from 03:20 to 05:40 except for one dip to
+1.94 at 03:49, and the run started in it read 2.10. The load comes from the
+Linux VM (`com.apple.Virtualization.VirtualMachine`, 45-190% CPU; inside it only
+a GNOME session and a GTK Ghostty, guest load 1.1), which the brief said not to
+stop. Every figure below is therefore PROVISIONAL (exit 2) and BASELINE.json was
+not re-based, as the harness forbids.
+
+Fence 1, N=9, three provisional runs (loads 2.10, 4.25, and an interleaved
+CPU-time A/B with 11 rounds at 4.5): **14/14 hold in every run.** Paired CPU
+ratios (Rustty / Ghostty): terminal-parser 0.215, terminal-stream **0.977**
+(thinnest; wall 0.986-0.994), cw.noop 0.564, cw.table 0.878, cw.simd 0.881,
+cw.wcwidth 0.919, gb.noop 0.881, gb.table 0.823, is-symbol.table 0.833,
+is-symbol.uucode 0.881, osc-parser 0.251, sc.noop 0.520, sc.clone 0.399,
+sc.render 0.860. Sum of the 14 per-config CPU medians: Ghostty 3,423 ms, Rustty
+2,456 ms (-28.3%; wall -27.8%). Oracle-side note: at this pin Ghostty's
+`terminal-parser` takes 604-629 ms (266 ms at `4749c4e93`), so its bench measures
+different work and the cross-series ratio is meaningless, as this row warns.
+
+**G8 against the existing BASELINE.json is RED, and it is not a Rustty
+regression:** `REGRESS codepoint-width.wcwidth/utf8: baseline=251.6 now=95.75
+MiB/s (-61.9%)`. The baseline row is the retired `4749c4e93` oracle, which did
+not run `ensureLocale`; since N173 both benches do, so libc `wcwidth` runs under
+the UTF-8 locale and costs about 2.7x more on both sides. Against the oracle at
+the pin Rustty wins it (0.919). The cure is the re-base this row owes; nothing to
+fix in Rustty. Items 2 and 3 above are unchanged.
+
+**Recipe for the remaining step (load ≤ 2.0; stop or pause the VM first):**
+`python3 .port/tools/perf/ws10_suite.py --rust target/release-fast/rustty-bench
+-n 9 --emit-metrics <m.json>`, then `python3 .port/phase-0/baseline/run_benchmarks.py
+~/rustty-oracle-artifacts/ghostty-bench-12752b2ac <rf.jsonl> 7` and build
+BASELINE.json's ReleaseFast rows from it. The pin builds no Debug bench
+(`src/build/GhosttyBench.zig` forces ReleaseFast), so the Debug rows and
+`check_baseline_regression.py --self-test` arm [f] (which pins two values of the
+old series) need a decision at the re-base, and `BASIS_CHANGED`'s
+`screen-clone.render` entry ends with it.
 
 **Scope decision (user, 2026-07-30): perf *measurement/verification* may be
 deferred until after Phase 3; perf *implementation* may not.** This row is the
@@ -1467,7 +1530,31 @@ traceable.
 
 ---
 
-## V18. `f2a7652ab`'s two BL-4 perf configs have no paired oracle number — **OWNER: Phase 3 — `BEYOND-PIN`** [WS10 T11/T16/T17, 2026-07-30]
+## V18. `f2a7652ab`'s two BL-4 perf configs have no paired oracle number — **DISCHARGED 2026-10-07 (P7-W19, head `f31fcc032`); the losses it found are N511** [WS10 T11/T16/T17, 2026-07-30]
+
+**DISCHARGED 2026-10-07 (P7-W19, head `f31fcc032`).** Both configs now have a
+paired number against Ghostty's `ghostty-bench` built ReleaseFast at the pin
+`12752b2ac` (sha256 `79a64278…`, the ws10 oracle). Method: one process
+interleaves both binaries in shuffled rounds (7 rounds, 1 warm-up), wall and
+child CPU (`wait4`) medians plus the median per-round ratio; instructions and
+cycles from `/usr/bin/time -l`, which do not depend on load. The 1-minute load
+was 4.4-5.1 throughout: the host's Linux VM kept it above `IDLE_MAX` for over two
+hours (see V17), so wall and CPU are provisional, and the counters carry the
+verdict.
+
+| config | Ghostty | Rustty | Rustty / Ghostty |
+|---|--:|--:|--:|
+| `apc-parser`, Ghostty's corpus (64 MiB, `ghostty-gen +kitty`) | 20.45 ms CPU | 36.61 ms | **1.81** (instructions 943M vs 241M above the empty-file floor) |
+| `apc-parser`, Rustty's corpus (`rustty-gen +kitty`) | 21.05 ms | 36.35 ms | **1.75** |
+| `hyperlink-map --mode=churn`, per loop (slope of `--loops` 1→5000) | 37.7 µs | 47.5 µs | **1.26** (5000 loops: instructions 1.19, cycles 1.25) |
+| `hyperlink-map --mode=lookup`, per loop | 6.0 µs | 7.0 µs | **1.17** (20000 loops: instructions 1.14, cycles 1.13) |
+
+The row's pre-stated reading applies: "a large oracle win on either would mean a
+porting gap, not measurement noise". The two corpora give the same ratio, so the
+generators are not the cause. All three losses are real and are recorded as
+**N511** (OPEN) with the root cause found for `apc-parser`; no perf work was done
+here. Raw logs were not kept (scratch); the recipe below with `--loops` added
+reproduces them.
 
 **Re-verified after pin advance:** 2026-07-31 — **PREMISE REFUTED.** This row's
 blocker was "the pinned oracle needs Zig 0.15.2 and this host has 0.16.0, so it

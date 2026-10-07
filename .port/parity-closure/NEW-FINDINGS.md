@@ -10821,3 +10821,31 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `rustty_zigstd::valgrind::memcheck::make_mem_defined(&pixels)` right after `read_pixels_alloc()`, as the
   golden tests do (review L-6 F2): no suppression, every other value the test branches on stays checked; a
   no-op natively. Under the gate: 0 errors (the rerun above). Production: none.
+
+## N511 — `apc-parser` runs 1.8x slower than Ghostty; `hyperlink-map` churn and lookup 1.26x and 1.17x (V18's first paired numbers)
+
+- **id**: N511. P7-W19 (V18's paired oracle measurement). **severity**: medium (perf parity: three bench configs
+  Ghostty wins; no behaviour change). **kind**: port performance gap. **state**: OPEN (measured and classified;
+  no perf work in this lane).
+- **finding**: against `ghostty-bench` built ReleaseFast at the pin `12752b2ac`, interleaved in one process
+  (V18 has the table and method): `+apc-parser` 1.81x CPU on Ghostty's 64 MiB `+kitty` corpus and 1.75x on
+  Rustty's, so the generators are not the cause; `+hyperlink-map --mode=churn` 1.26x per loop (slope of
+  `--loops` 1 to 5000) and `--mode=lookup` 1.17x. Load 4.4-5.1, so the deterministic counters decide:
+  `apc-parser` 943M vs 241M instructions above the empty-file floor (cycles 1.73x); churn instructions 1.19x,
+  cycles 1.25x (5000 loops); lookup instructions 1.14x, cycles 1.13x (20000 loops). All three are real.
+- **cause (`apc-parser`, found)**: `Stream::consume_apc_string` (`crates/rustty-vt/src/stream.rs:1652-1666`)
+  ports `8c523ed03`'s vector scan as a scalar `for j in 0..vector_len` over `input[end + j]` with
+  short-circuit `||`. The reference's `@Vector(16, u8)` compares and `@reduce(.Or)` compile to NEON
+  `cmeq`/`cmhs` + `umaxv`; Rust's loop does not vectorize (the whole of `consume_until_ground` in an unstripped
+  `release-fast` build has 3 NEON vector instructions, a `< 0x20` compare and its `umaxv`, none of them the
+  APC set 0x18/0x1A/0x1B/`>= 0x80`). A Time Profiler sample of
+  a 512 MiB run puts 60% of samples in `consume_until_ground`'s own code; simdutf's base64 decode, the other
+  big item, is 13%. This is the comptime-flattening class: Zig's vector type has no direct spelling here.
+- **cause (`hyperlink-map`, not pinned)**: the samples are all in `Page::clear_hyperlink`,
+  `Page::set_hyperlink` and the ported `HashMapUnmanaged`'s `remove_by_ptr_context` / `get_or_put_context_adapted`
+  (`crates/rustty-vt/src/hash_map.rs`); no algorithmic difference was found at this depth, so the gap is in the
+  generated code of the map and the page hyperlink path. Needs a per-function instruction comparison.
+- **not affected**: the 14 ws10 configs, which hold 14/14 in the same session (V17).
+- **next**: make `consume_apc_string`'s scan compile to the vector compare-and-reduce (as N215 did for the
+  printable-run scan), check the disassembly, then re-measure with V18's recipe; profile the
+  hyperlink map per function. Both need a fail-first perf check, so neither is done here.
