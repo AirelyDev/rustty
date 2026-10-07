@@ -646,6 +646,105 @@ fn stream_apc_vector_invalid_branch_matches_scalar_path() {
     }
 }
 
+/// The APC byte classes `consume_apc_string` stops on (the scalar tail's
+/// `0x18 | 0x1A | 0x1B | 0x80..=0xFF`), as an independent oracle.
+fn apc_stop_byte(b: u8) -> bool {
+    matches!(b, 0x18 | 0x1A | 0x1B | 0x80..=0xFF)
+}
+
+/// RUSTTY-SIDE (N511): one vector group of `consume_apc_string` must flag
+/// exactly the stop bytes, whichever lane they sit in. Every byte value at
+/// every lane offset, over several all-valid backgrounds (including the
+/// near misses 0x17, 0x19, 0x1C and 0x7F). On aarch64 this holds the NEON
+/// spelling and the portable one to the same answer; under Miri (and on
+/// other targets) `apc_group_invalid` IS the portable one.
+#[test]
+fn apc_group_invalid_matches_the_portable_test() {
+    use crate::stream::{apc_group_invalid, apc_group_invalid_portable, APC_SCAN_N};
+
+    // Miri runs the portable form only and is ~1000x slower: two
+    // backgrounds there (every byte value at every lane still).
+    let fills: &[u8] = if cfg!(miri) {
+        &[0x19, 0x7F]
+    } else {
+        &[0x00, 0x07, 0x17, 0x19, 0x1C, 0x41, 0x7F]
+    };
+    for &fill in fills {
+        let group = [fill; APC_SCAN_N];
+        assert!(!apc_group_invalid(&group), "fill={fill:#x}");
+        assert!(!apc_group_invalid_portable(&group), "fill={fill:#x}");
+        for lane in 0..APC_SCAN_N {
+            for b in 0..=u8::MAX {
+                let mut group = [fill; APC_SCAN_N];
+                group[lane] = b;
+                let want = apc_stop_byte(b);
+                assert_eq!(
+                    want,
+                    apc_group_invalid(&group),
+                    "fill={fill:#x} lane={lane} byte={b:#x}"
+                );
+                assert_eq!(
+                    want,
+                    apc_group_invalid_portable(&group),
+                    "portable: fill={fill:#x} lane={lane} byte={b:#x}"
+                );
+            }
+        }
+    }
+}
+
+/// RUSTTY-SIDE (N511): `consume_apc_string` returns the offset of the first
+/// stop byte for a stop at EVERY offset of the first three vector groups and
+/// in every scalar tail length (inputs of 0 to 3 groups + 1 bytes), and
+/// consumes the whole input when there is no stop byte. The payload bytes
+/// cycle through every non-stop value so each lane sees varied data, and the
+/// one `apc_put_slice` delivered is exactly the bytes before the stop.
+#[test]
+fn consume_apc_string_stops_at_every_offset() {
+    use crate::stream::APC_SCAN_N;
+
+    let payload: Vec<u8> = (0..=u8::MAX).filter(|&b| !apc_stop_byte(b)).collect();
+    // Miri: every offset and tail length still, with two stop bytes and one
+    // payload phase (the byte classes are covered by
+    // `apc_group_invalid_matches_the_portable_test`).
+    let stops: &[u8] = if cfg!(miri) {
+        &[0x1B, 0x80]
+    } else {
+        &[0x18, 0x1A, 0x1B, 0x80, 0x9C, 0xA0, 0xFF]
+    };
+    let shifts: &[usize] = if cfg!(miri) { &[0] } else { &[0, 7] };
+    let mut s: Stream<ApcTestHandler> =
+        Stream::init(Options::with_handler(ApcTestHandler::default()));
+
+    for len in 0..=3 * APC_SCAN_N + 1 {
+        for &shift in shifts {
+            let base: Vec<u8> = (0..len)
+                .map(|i| payload[(i + shift) % payload.len()])
+                .collect();
+            // `stop_at == len` is the no-stop case.
+            for stop_at in 0..=len {
+                for &stop in stops {
+                    let mut input = base.clone();
+                    if stop_at < len {
+                        input[stop_at] = stop;
+                    }
+                    s.handler = ApcTestHandler::default();
+                    s.parser.state = parser::State::SosPmApcString;
+                    let end = unsafe { Stream::consume_apc_string(&mut s, &input) };
+                    let ctx = format!("len={len} shift={shift} stop_at={stop_at} stop={stop:#x}");
+                    assert_eq!(stop_at, end, "{ctx}");
+                    assert_eq!(usize::from(stop_at > 0), s.handler.slices, "{ctx}");
+                    assert_eq!(&input[..stop_at], &s.handler.buf[..s.handler.len], "{ctx}");
+                    if stop_at == len {
+                        // Every stop byte gives the same no-stop result.
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn stream_csi_bulk_params_match_per_byte() {
     for input in CSI_DIFFERENTIAL_CORPUS {

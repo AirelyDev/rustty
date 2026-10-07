@@ -10825,8 +10825,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 ## N511 — `apc-parser` runs 1.8x slower than Ghostty; `hyperlink-map` churn and lookup 1.26x and 1.17x (V18's first paired numbers)
 
 - **id**: N511. P7-W19 (V18's paired oracle measurement). **severity**: medium (perf parity: three bench configs
-  Ghostty wins; no behaviour change). **kind**: port performance gap. **state**: OPEN (measured and classified;
-  no perf work in this lane).
+  Ghostty wins; no behaviour change). **kind**: port performance gap. **state**: CLOSED (P7-W20: both causes
+  fixed; `apc-parser` from 1.8x to 1.10x, churn now 0.94x, lookup from 1.17x to 1.05x instructions / 1.09x CPU;
+  the residuals are explained below).
 - **finding**: against `ghostty-bench` built ReleaseFast at the pin `12752b2ac`, interleaved in one process
   (V18 has the table and method): `+apc-parser` 1.81x CPU on Ghostty's 64 MiB `+kitty` corpus and 1.75x on
   Rustty's, so the generators are not the cause; `+hyperlink-map --mode=churn` 1.26x per loop (slope of
@@ -10846,6 +10847,49 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (`crates/rustty-vt/src/hash_map.rs`); no algorithmic difference was found at this depth, so the gap is in the
   generated code of the map and the page hyperlink path. Needs a per-function instruction comparison.
 - **not affected**: the 14 ws10 configs, which hold 14/14 in the same session (V17).
-- **next**: make `consume_apc_string`'s scan compile to the vector compare-and-reduce (as N215 did for the
-  printable-run scan), check the disassembly, then re-measure with V18's recipe; profile the
+- **next** (P7-W19): make `consume_apc_string`'s scan compile to the vector compare-and-reduce (as N215 did for
+  the printable-run scan), check the disassembly, then re-measure with V18's recipe; profile the
   hyperlink map per function. Both need a fail-first perf check, so neither is done here.
+- **fix (P7-W20), `apc-parser`**: the group test is `apc_group_invalid` over a fixed-size `[u8; APC_SCAN_N]`
+  (`first_chunk`, no bounds checks). A portable spelling (non-short-circuit `|`, `.Or` as an unsigned max)
+  vectorizes but NOT to the reference's code: on NEON LLVM's SLP vectorizer turns the max of 0/0xFF masks back
+  into an `.Or` reduction, which NEON has no instruction for, and emits two `tbl` shuffles plus a scalar OR tree,
+  about 27 instructions a group (that build: 943M -> 310M instructions above the floor). So aarch64 (not Miri)
+  spells the reference's `@Vector(16, u8)` expression with the NEON intrinsics it lowers to (`vceqq_u8` x3,
+  `vcgeq_u8`, `vorrq_u8`, `vmaxvq_u8`; the `crc32c.rs` `cfg(all(target_arch, not(miri)))` precedent); the
+  disassembly is now the reference's loop instruction for instruction (`and`, 2x `cmeq`, `cmlt`, 2x `orr`,
+  `umaxv`, `fmov`, branch: 14 a group with the loop). Every other target and Miri use the portable form, which
+  on x86-64 lowers to `pcmpeqb` + `pmovmskb` (the reference's own x86 shape). Behaviour is unchanged.
+  Tests: `apc_group_invalid_matches_the_portable_test` (every byte value at every lane over seven valid
+  backgrounds, NEON vs portable vs the scalar class) and `consume_apc_string_stops_at_every_offset` (a stop at
+  every offset of three groups and every tail length 0..=49, seven stop bytes, plus the no-stop case, checking
+  the return value and the one `apc_put_slice`). Controls: NEON's 0x1A compare changed to 0x18 -> both new
+  tests and `stream_apc_vector_invalid_branch_matches_scalar_path` fail; the vector `break` changed to
+  `end += 1; break` -> `consume_apc_string_stops_at_every_offset` and the invalid-branch test fail. Miri
+  (`cargo +nightly miri nextest`, the ten `parser_utf8_simd` APC tests plus every `hash_map::` and
+  `hyperlink` test, 131 in all): clean; the two new tests use a
+  reduced set under `cfg!(miri)` (all offsets and lanes kept).
+- **fix (P7-W20), `hyperlink-map`** (per-function disassembly of both binaries, `objdump -d`): inlining, not the
+  map's algorithm or hash (the Wyhash sequence is the same instructions on both sides).
+  1. churn: Ghostty's single-CU build inlines `removeByPtr` into `Page.clearHyperlink` and `setHyperlink` into
+     the caller, leaving only `getOrPut` out of line. Rust left `remove_by_ptr_context` out of line (the caller
+     spilled the map's four fields for the call and the callee re-materialized the Wyhash constants) and
+     `Page::set_hyperlink` / `set_hyperlink_inner` out of line from the bench crate (an extra call and full
+     register save/restore). Fix: `#[inline]` on `remove_by_ptr_context`, `remove_by_index_context`,
+     `Page::set_hyperlink` and `set_hyperlink_inner` (the `get_row_and_cell` precedent: no LTO, so
+     cross-crate inlining needs the hint).
+  2. lookup: the bench sank the id with `black_box(&id)`, which stores the id AND its address each lookup;
+     Zig's `doNotOptimizeAway(id)` on an integer is a register operand. Fix: the crate's existing
+     `do_not_optimize_away(id)` (bench-only).
+- **measured (P7-W20)**, against `ghostty-bench-12752b2ac`, release-fast. Instructions (deterministic,
+  `/usr/bin/time -l`, median of 3-5; floor = empty corpus / `--loops=1`): `apc-parser` (Ghostty's 64 MiB
+  `+kitty` corpus) 943M -> 273M above the floor, Ghostty 245M (1.11x); churn x5000 6,738M -> 5,345M, Ghostty
+  5,634M (0.95x); lookup x20000 4,568M -> 4,158M, Ghostty 3,958M (1.05x). CPU, paired and interleaved (7
+  shuffled rounds + 1 warm-up, child CPU from `wait4`, median per-round ratio; load 6-8.5, so PROVISIONAL):
+  `apc-parser` on 512 MiB (the corpus x8) before 2.25x -> after 1.10x; churn 1.25x -> 0.94x; lookup 1.11x ->
+  1.09x. ws10 Fence 1 with the candidate: 14/14 PASS (load 7.2, provisional, exit 2 by design).
+- **residuals (not porting artefacts)**: `apc-parser`'s scan is now the reference's code; the other ~10% is
+  outside it (the per-byte state machine around the string and simdutf's base64 decode, the 13% item above),
+  and cycles above the floor are 1.04x. Lookup's 2.4 instructions per lookup are LLVM's lowering of the same
+  `get_index` loop (a `cset`/`tbnz` probe-loop exit where Zig's LLVM fuses `ccmp`; `mov`+`bfi` for the key
+  widening), not a source difference; the two `get_row_and_cell` asserts are hoisted out of the loop.

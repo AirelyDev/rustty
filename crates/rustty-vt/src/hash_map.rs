@@ -1122,6 +1122,14 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
     // CONTRACT: this moves other entries within the probe cluster, so every key
     // and value pointer the map has handed out is invalidated. Caller audit:
     // `.port/phase-3/HASHMAP_CALLER_AUDIT.md` (12/12 rows resolved).
+    //
+    // PERF(port, N511): `#[inline]` here and on `remove_by_ptr_context`. The
+    // reference's single-CU ReleaseFast build inlines `removeByPtr` and this
+    // body into `Page.clearHyperlink`; rustc's LLVM left them out of line,
+    // which made the caller spill the map's four fields to the stack for the
+    // call and re-materialize the Wyhash constants inside it (part of the
+    // `+hyperlink-map --mode=churn` gap).
+    #[inline]
     fn remove_by_index_context(&mut self, idx: usize, ctx: &Context) {
         let mask: usize = (self.cap - 1) as usize;
         let metadata = self.metadata;
@@ -1194,6 +1202,8 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
     /// # Safety
     ///
     /// `key_ptr` must be a key pointer into this map's keys array.
+    // PERF(port, N511): `#[inline]`, see `remove_by_index_context`.
+    #[inline]
     pub unsafe fn remove_by_ptr_context(&mut self, key_ptr: *mut K, ctx: &Context) {
         // TODO: replace with pointer subtraction once supported by zig
         // if @sizeOf(K) == 0 then there is at most one item in the hash

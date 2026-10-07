@@ -1553,7 +1553,9 @@ The row's pre-stated reading applies: "a large oracle win on either would mean a
 porting gap, not measurement noise". The two corpora give the same ratio, so the
 generators are not the cause. All three losses are real and are recorded as
 **N511** (OPEN) with the root cause found for `apc-parser`; no perf work was done
-here. Raw logs were not kept (scratch); the recipe below with `--loops` added
+here. **P7-W20 closed N511** (the APC group test now compiles to the reference's
+NEON loop; the hyperlink path's missing inlining fixed): `apc-parser` 1.10x,
+churn 0.94x, lookup 1.09x CPU (1.05x instructions), same recipe; see N511. Raw logs were not kept (scratch); the recipe below with `--loops` added
 reproduces them.
 
 **Re-verified after pin advance:** 2026-07-31 — **PREMISE REFUTED.** This row's
