@@ -144,6 +144,14 @@ jobs:
           rustup component add miri rust-src --toolchain nightly
           cargo +nightly miri setup
 
+      # G6/G6c/G6t run Miri through `cargo miri nextest` (P7-W15); without
+      # cargo-nextest they exit 3 BLOCKED. The prebuilt binary from nexte.st.
+      - name: Install cargo-nextest (G6/G6c/G6t Miri runner)
+        run: |
+          case "$RUNNER_OS" in Linux) os=linux ;; macOS) os=mac ;; esac
+          curl -LsSf "https://get.nexte.st/latest/$os" | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+          cargo nextest --version
+
       # G4-uni (run_unicode_diff.sh) builds the uucode oracle with zig; the
       # version is pinned to match the harness requirement (0.16.0 — the
       # harness build.zig.zon's minimum_zig_version, the reference's own

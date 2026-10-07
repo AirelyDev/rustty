@@ -42,8 +42,9 @@ local iteration.
 | **G9** | `check_parity_surface.py` | `_gatelib.py` | PROGRESS* |
 | **G8** | `check_baseline_regression.py` | `_gatelib.py` | PROGRESS* |
 | **G5** | `run_fuzz_smoke.sh` | harness `FUZZ-INVENTORY.md`, `comparator.py` | PROGRESS* |
-| **G6** | `check_leaks.sh` | Miri (pure) / ASan (FFI + live-syscall tests), `_gatelib` done-detection; missing miri ⇒ exit 3 BLOCKED | PROGRESS* |
-| **G6c** | `check_leaks.sh --debug-assertions-off` | Miri with `Page::assert_integrity` off — runs the vt page-level compression tests G6 can only TIMEOUT on; vacuity floor doubles as the proof the flag took (WS19 T6) | PROGRESS |
+| **G6** | `check_leaks.sh` | Miri (pure) / ASan (FFI + live-syscall tests), `_gatelib` done-detection; Miri runs on `cargo miri nextest` (one process per test, P7-W15; `--libtest` keeps the old runner for one release) plus a libtest `--doc` arm; missing miri or cargo-nextest ⇒ exit 3 BLOCKED | PROGRESS* |
+| **G6c** | `check_leaks.sh --debug-assertions-off` | Miri with `Page::assert_integrity` off — runs the vt page-level compression tests G6 can only TIMEOUT on; the annotation-derived names resolve to exact nextest paths, each of which must PASS, so a lost flag is RED (WS19 T6, P7-W15) | PROGRESS |
+| **G6t** | `check_leaks.sh --tree-borrows` | Miri Tree Borrows over the pointer-heavy scope (`G6T_SCOPE`), with G6/G6c's split on debug assertions; `--self-test` checks every scope entry matches tests (P7-W15) | PROGRESS |
 | **D1** | `check_slice_reinterpret.sh` | `.port/audits/slice-reinterpret.tsv` | PROGRESS |
 | **D2** | `check_capacity_saturation.sh` | `.port/audits/capacity-saturation.tsv` | PROGRESS |
 | **D3** | `check_constants_parity.py` | port markers + ghostty oracle | PROGRESS |

@@ -50,8 +50,9 @@ States at the finale:
   row (G-UDDOCS GREEN). None has been reported upstream.
 - **Ns.** All are CLOSED except N438, which is record-only (not a UD, unreachable). N448 is
   superseded by UD366, and N453 is the record of UD369/UD370.
-- **Vs.** V27–V29 stay ENVIRONMENT-BLOCKED (time). They are Miri runs over the 30-minute task
-  bound, deferred to P7-W12 T2 with runnable recipes.
+- **Vs.** V27–V29 stayed ENVIRONMENT-BLOCKED (time) at the finale. They are Miri runs over the 30-minute task
+  bound, deferred to P7-W12 T2 with runnable recipes. P7-W15 discharged all three on 2026-10-06 (G6, G6c and G6t
+  GREEN at `04f0a894c`).
 
 ## Finale gates (at `12752b2ac`, on the finale head)
 

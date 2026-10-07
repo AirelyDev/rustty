@@ -242,6 +242,9 @@ with a hard timeout; if a test stops timing out, it leaves the list automaticall
   these 23 via ASan + tracking allocator; `.port/tools/gates/sanitizers.sh`
   (ASan + TSan; LSan/MSan/HWASan = Linux-CI lanes).
 - Result: **0 PageList unsafe path is unverified.**
+- **Runner (P7-W15, 2026-10-02):** the Miri lanes (G6, G6c and the new Tree Borrows lane G6t) run on
+  `cargo miri nextest`; see "P7-W15 — the Miri lanes on nextest" at the end of this file for how the
+  libtest recipes in this file translate.
 
 ---
 
@@ -3008,3 +3011,134 @@ must sit directly on its `fn`, and the tests that cannot run on a host OS are li
 in `.port/tools/gates/san_expected_absent.tsv` (a stale row is RED). That widening found one more test no
 lane compiled: `rustty-vt` `tmux::control::concurrent_first_notifications_do_not_race_oniguruma_init`
 (behind the `oniguruma` feature), now run by the `rustty-vt:wuffs,oniguruma` lane.
+
+## P7-W15 — the Miri lanes on nextest (2026-10-02)
+
+Design: `docs/superpowers/specs/2026-10-01-memory-safety-lanes-design.md` §A. `check_leaks.sh` runs every
+Miri lane through one helper, `run_miri_nextest <crate> <sb|tb> <on|off> <filterset>`, on `cargo miri
+nextest run` (cargo-nextest 0.9.146): one Miri process per test, `--test-threads` = performance cores
+minus 2 (8 on the M4 Pro), Miri's leak check at every process exit. The exceptions in this file are
+unchanged: nextest runs exactly the tests the Miri-compiled binary does not report as ignored, so
+`cfg_attr(miri, ignore)` and `cfg_attr(all(miri, debug_assertions), ignore)` decide as they did under
+libtest. Doc tests, which nextest does not run, keep a libtest `cargo miri test --doc` arm in G6.
+
+**Translating the libtest recipes in this file:**
+
+| libtest | nextest |
+|---|---|
+| `cargo +nightly miri test -p <c> --lib -- <substring>` | `cargo +nightly miri nextest run -p <c> --lib -E 'test(<substring>)'` (`test()` is a substring match by default) |
+| `... -- --exact <path>` | `... -E 'test(=<path>)'` |
+| `... -- --ignored ...` | `... --run-ignored only ...` |
+| `--test-threads=1` (one process, serial) | `--test-threads N` (N processes; each test is still alone in its own Miri process) |
+| G6c: `RUSTFLAGS="-C debug-assertions=off" MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly miri test -p rustty-vt --lib -- <124 names>` | `bash .port/tools/gates/check_leaks.sh --debug-assertions-off` (the names resolve to exact paths: `test(=a) \| test(=b) \| ...`) |
+
+`.port/tools/miri-run.sh` (G-MIRIRUN-SELF) is **not folded in**. It overlaps with nextest only in running
+one test per process in parallel; its job is triage for criterion 1 above (a hard per-test kill budget and
+the ok / UB / LEAK / INTERP / BUILD / TIMEOUT buckets), which a gate verdict deliberately does not produce.
+
+**Step 1, measured first (2026-10-02, M4 Pro, 8 processes, the exact G6 configuration: Stacked Borrows,
+no `MIRIFLAGS`, debug assertions on, `--lib`).** Go-ahead rule: at least 3x.
+
+| group | tests run / ignored | libtest (2026-10-01) | nextest | gain |
+|---|---|---|---|---|
+| V27 `page::` | 116 / 1 | 3,054 s | 705 s (critical path: `page_cloneFrom_hyperlinks_exact_capacity`, about 660 s alone) | 4.3x |
+| V28 `pagelist` | 277 / 103 | 8,379 s (270 tests, an earlier tree; libtest's `--list` at this head also selects 277) | 847 s | 9.9x |
+| V29 `search::` | 52 / 38 | 289 s | 135 s (critical path: one 63 s test) | 2.1x |
+| total | | 11,722 s | 1,687 s | 6.9x |
+
+Every run passed every test, and the ignored counts equal libtest's. Each Miri process pays 10-15 s
+of start-up on the `rustty-vt` test binary, so a group's floor is its slowest test plus that.
+
+**Lane runs on the new runner (head `5e8cbd918`; the host was shared with other sessions' builds, load
+average 18-26 on 14 cores, so wall times are upper bounds):**
+
+- **G6c** GREEN: 124 of 124 tests passed, 1,110 s wall (the libtest lane took 6,272 s for 119). The 124
+  annotation-derived names resolve to exactly 124 paths, the same set libtest's substring filter selected.
+- **V29 `search::`** (G6 configuration): Stacked Borrows 52 passed, 150 s; Tree Borrows 52 passed, 210 s.
+- **`search::terminal::tests::feed_after_complete_discovers_prepended_snapshot_history`** (excepted from
+  both lanes, P7-W12 T6b), run unbounded in G6c conditions: Stacked Borrows PASS in 2,636 s, Tree Borrows
+  PASS in 3,946 s, no UB, no leak. The exception's criterion 1 stands (both are past the 1,200 s bound).
+- **G6t** RED, stopped at the first finding: NEW-FINDINGS **N500**, Tree Borrows UB in
+  `snapshot::codec::tests::complete_snapshot_preserves_every_supported_continuation_cut` (N492's shape:
+  a handler pointer minted from a `&mut` reborrow, then a direct read of the owner). By then 1,017 of the
+  1,597 `rustty-vt` scope tests had finished in 3 h 5 min, 1,017 passed and 1 failed; the rest of the scope did not run.
+- **G6** (all crates): not run, because the task stops at a G6t finding.
+
+**Second G6t run (2026-10-02, head `b2c119aba`, 6 processes, 4 h 12 min):** `rustty-vt` GREEN (1,597 of 1,597
+with debug assertions on, 11,726 s; the 119 G6c-annotated scope tests with them off, 1,843 s);
+`rustty-xev` GREEN (22); `rustty-vt-c` 565 of 570 and `rustty-core` 65 of 67, the seven failures test-side
+Tree Borrows UB of N500's shape, fixed as NEW-FINDINGS **N505** (both crates then GREEN under SB and TB).
+**`rustty-renderer` is not runnable under Miri as a whole crate:** 66 of 143 passed and 77 failed, none
+with UB; every failure is `unsupported operation` (Metal, Objective-C, glslang, SPIRV-Cross and Oniguruma
+FFI; `clock_gettime(REALTIME)` and `open` under isolation). G6 runs it under ASan as an FFI crate, so
+G6t's whole-crate entry for it needs narrowing to the modules that run under Miri (an open scope decision).
+G6 was stopped after its first two crates (`rustty-apprt-api` 28, `rustty-args` 78, both GREEN) pending
+that decision.
+
+**G6t scope for `rustty-renderer` (P7-W15, 2026-10-02; corrected 2026-10-06).** The renderer is an FFI crate:
+G6 runs it under ASan. Run as a whole crate under Tree Borrows, 66 of its 143 runnable tests pass and 77 fail,
+none with UB. 76 of the failures are `unsupported operation`: a Metal, Objective-C, glslang, SPIRV-Cross or
+Oniguruma foreign call, or `clock_gettime(REALTIME)`, `open`, `opendir` or `_NSGetExecutablePath` under
+isolation. The 77th is the wall-clock test below, which fails its assertion. G6t runs exactly the 66
+(`G6T_SCOPE` in `check_leaks.sh`, the single definition).
+
+- **Modules:** `cell`, `cursor`, `dmabuf`, `generic::surface_mailbox_tests`, `generic::derived_config_tests`,
+  `health_tests`, `image::macos_impl`, `latest_frame`, `log_capture`, `message::change_config_tests`,
+  `metal::gpu_abi`, `metal::shaders::metallib_tests`, `metal::test_support`, `overlay`, `state`, `thread`,
+  `undefined`, `webgl` (60 tests).
+- **Six single tests (`=` entries), from modules otherwise excluded:** the five pure-Rust mailbox and
+  health-push tests in `generic::macos_impl::tests::health::metal_health_push_deadlocks`
+  (`metal_async_frame_completed_never_blocks_on_a_full_mailbox`,
+  `metal_health_report_concurrent_completions_stay_consistent`,
+  `metal_health_report_never_restores_an_undelivered_health`,
+  `metal_sync_frame_completed_detached_mailbox_keeps_health`,
+  `metal_sync_frame_completed_never_blocks_the_mailbox_drainer`; the module's other two tests create a Metal
+  device), and `shadertoy::tests::uniforms_match_the_std140_block_in_shadertoy_prefix_glsl`. The first
+  version of this scope excluded them with their modules under a reason that did not hold for them. A Tree
+  Borrows run of everything excluded (2026-10-06) found that they pass.
+- **Excluded modules**, reason **"FFI (Metal/ObjC/glslang/SPIRV-Cross/Oniguruma) or an isolation-blocked
+  syscall; covered by G-ASAN/G-LSAN"**: `generic::macos_impl`, `metal::buffer`, `metal::iosurface_layer`,
+  `metal::metal_impl`, `metal::pipeline`, `metal::shaders::post_pipeline_error_tests`, `metal::target`,
+  `metal::tests`, `link`, `shadertoy`, `opengl`, and the integration-test binaries. Measured on the same run:
+  their 73 tests outside the six fail with `unsupported operation`, never with UB.
+- **Excluded single tests (`-` entries) in included modules:** three FFI-bound tests, for the same reason:
+  `generic::derived_config_tests::decoded_bg_image_len_is_wh4` (Wuffs),
+  `image::macos_impl::tests::image_empty_lifecycle` (Metal) and
+  `message::change_config_tests::change_config_deinit_frees_links` (Oniguruma). One more,
+  `state::tests::renderer_state_yield_to_demand_is_free_without_demand`, has a different reason. It asserts
+  a 500 ms wall-clock bound over 10,000 calls, which the interpreter does not meet: it fails the assertion
+  with no UB. That is a speed property, not a memory-safety one, and the test runs natively and under
+  G-ASAN/G-LSAN.
+
+Every G6t run first checks the scope against the Miri test list, using the run's own target args, and goes
+RED naming any entry that has gone dead. A module entry must match more than 0 runnable tests, a `=` entry
+exactly one runnable test, and a `-` entry exactly one test inside a module entry (NEW-FINDINGS N507,
+review follow-up). Any failure inside an included module, `unsupported operation` included, stays RED.
+Renderer G6t at the corrected scope: 66 of 66 GREEN in 218 s (2026-10-06).
+
+**Final lane runs (2026-10-06, head `04f0a894c`, `MIRI_TEST_THREADS=6`).** The host also ran a UTM VM and
+other sessions' work, so wall times are upper bounds.
+
+- **G6t**, completed on the final head. The `rustty-vt-c`, narrowed `rustty-renderer` and `rustty-core`
+  part was rerun at `04f0a894c`: `rustty-vt-c` 570 of 570 (1,051 s), `rustty-renderer` 60 of 60 (209 s),
+  `rustty-core` 67 of 67 (36 s), GREEN in 1,296 s. `rustty-vt` (1,597, plus 119 with debug assertions off)
+  and `rustty-xev` (22) are GREEN from the second run at `b2c119aba`. No `rustty-vt` or `rustty-xev` source
+  changed between `b2c119aba` and `04f0a894c`.
+- **G6c**: GREEN, 124 of 124, at `5e8cbd918`. The only `rustty-vt` change since then is test code in
+  `snapshot/codec.rs` (N500), which holds no G6c test.
+- **G6** (`check_leaks.sh --all-done`), 38 claimed-done crates, 13,354 s (3 h 43 min). All 28 Miri-lane crates
+  passed every test they ran, with no UB and no leak. All 10 ASan-lane crates passed, and the log has no
+  `test result: FAILED` line. Miri pass counts: `rustty-vt` 3,104 (251 skipped; 9,525 s) and its 2 doc tests,
+  `rustty-vt-c` 570 (692 s), `rustty-vaxis` 159, `rustty-datastruct` 97, `rustty-z2d` 91, `rustty-cli` 88,
+  `rustty-zigstd` 86, `rustty-os` 79 (`--lib`, plus `cf_release_live` under ASan), `rustty-args` 78,
+  `rustty-core` 67, `rustty-lib` 42, `rustty-bench` 38 (1,117 s), `rustty-extra` 33, `rustty-apprt-api` 28,
+  `rustty-synthetic` 26, `rustty-unicode` 23, `rustty-xev` 22 (plus its ASan companions, 35 and 4),
+  `rustty-global` 13, `rustty-render-types` 12, `rustty-zf` 11, `rustty-cfg-fmt` 9, `rustty-terminfo` 7,
+  `rustty-helpgen` 6, `rustty-util` 6, `rustty-build-config` 5, `rustty-version` 5, `rustty-identity` 1.
+  Two crates went RED on gate wiring, not on Miri (NEW-FINDINGS **N507**). In `rustty-cli`, the doc arm's
+  `--doc` overrode `[lib] doctest = false`. In `rustty-wasm`, the VACUOUS rule fired on a crate whose only
+  test is `#[ignore]`d in source. Both arms were fixed and proven by a new `--self-test` arm, then
+  `--crate rustty-cli` (88 passed, 119 s) and `--crate rustty-wasm` (0 run, native build also 0 runnable,
+  20 s) reran GREEN. The fix changes no other crate's verdict: only `rustty-cli` among the Miri-lane crates
+  disables doc tests, and the waiver applies only to a run of 0 tests.
+

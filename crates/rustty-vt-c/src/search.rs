@@ -1497,7 +1497,7 @@ mod tests {
 
             assert_eq!(Result::Success, run(search));
             let mut total: usize = 0;
-            let total_ptr = &mut total as *mut usize as *mut c_void;
+            let total_ptr = (&raw mut total).cast::<c_void>();
             assert_eq!(
                 Result::Success,
                 get(search, SearchData::TotalMatches, total_ptr)
@@ -1554,7 +1554,7 @@ mod tests {
 
             // No selection yet.
             let mut idx: usize = 999;
-            let idx_ptr = &mut idx as *mut usize as *mut c_void;
+            let idx_ptr = (&raw mut idx).cast::<c_void>();
             assert_eq!(
                 Result::NoValue,
                 get(search, SearchData::SelectedIndex, idx_ptr)
@@ -1666,7 +1666,7 @@ mod tests {
             // defer free(search);
 
             let mut scroll: SearchScroll = SearchScroll::None;
-            let scroll_ptr = &mut scroll as *mut SearchScroll as *mut c_void;
+            let scroll_ptr = (&raw mut scroll).cast::<c_void>();
             assert_eq!(
                 Result::Success,
                 get(search, SearchData::SelectScroll, scroll_ptr)
@@ -1741,7 +1741,7 @@ mod tests {
             assert_eq!(Result::Success, run(search));
             // var match: selection_c.CSelection = undefined;
             let mut match_: CSelection = CSelection::default();
-            let match_ptr = &mut match_ as *mut CSelection as *mut c_void;
+            let match_ptr = (&raw mut match_).cast::<c_void>();
             assert_eq!(
                 Result::Success,
                 get(search, SearchData::SelectedMatch, match_ptr)
@@ -1913,10 +1913,13 @@ mod tests {
             let mut idx: usize = 0;
             let mut status: SearchStatus = SearchStatus::Running;
             // var values = [_]?*anyopaque{ &total, &idx, &status };
+            // N505 (P7-W15): `&raw mut` out-pointers, no reborrow tag, so the
+            // test's direct reads of `total`/`idx`/`status` between calls do
+            // not freeze the pointers `get_multi` writes through (Tree Borrows).
             let mut values: [*mut c_void; 3] = [
-                &mut total as *mut usize as *mut c_void,
-                &mut idx as *mut usize as *mut c_void,
-                &mut status as *mut SearchStatus as *mut c_void,
+                (&raw mut total).cast::<c_void>(),
+                (&raw mut idx).cast::<c_void>(),
+                (&raw mut status).cast::<c_void>(),
             ];
             let mut written: usize = 999;
             assert_eq!(
@@ -2090,7 +2093,7 @@ mod tests {
             );
 
             let mut total: usize = 0;
-            let total_ptr = &mut total as *mut usize as *mut c_void;
+            let total_ptr = (&raw mut total).cast::<c_void>();
             assert_eq!(
                 Result::Success,
                 get(search, SearchData::TotalMatches, total_ptr)
@@ -2111,11 +2114,11 @@ mod tests {
             );
             // var needle_out: lib.String = undefined;
             let mut needle_out: LibString = LibString::init(&[]);
-            let needle_ptr = &mut needle_out as *mut LibString as *mut c_void;
+            let needle_ptr = (&raw mut needle_out).cast::<c_void>();
             assert_eq!(Result::Success, get(search, SearchData::Needle, needle_ptr));
             assert_eq!(b"Fizz", needle_bytes(&needle_out));
             let mut idx: usize = 999;
-            let idx_ptr = &mut idx as *mut usize as *mut c_void;
+            let idx_ptr = (&raw mut idx).cast::<c_void>();
             assert_eq!(
                 Result::Success,
                 get(search, SearchData::SelectedIndex, idx_ptr)
@@ -2134,7 +2137,7 @@ mod tests {
                 )
             );
             let mut status: SearchStatus = SearchStatus::Complete;
-            let status_ptr = &mut status as *mut SearchStatus as *mut c_void;
+            let status_ptr = (&raw mut status).cast::<c_void>();
             assert_eq!(Result::Success, get(search, SearchData::Status, status_ptr));
             assert_eq!(SearchStatus::FeedRequired, status);
             assert_eq!(

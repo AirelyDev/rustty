@@ -10404,6 +10404,55 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   steps give two full chunks that never grew; teardown and a full run leave none); G-LSAN's `rustty-bench`
   lane is the leak check.
 
+## N500 — `snapshot::codec::tests::complete_snapshot_preserves_every_supported_continuation_cut` has Tree Borrows UB (test-side shape)
+
+- **id**: N500. P7-W15 (the first G6t run, `check_leaks.sh --tree-borrows`, 2026-10-02, head `5e8cbd918`).
+  **severity**: low (the mechanism is in the test body; no production path was shown to have it).
+  **state**: CLOSED 2026-10-02 (P7-W15 step 2; reported first, then fixed test-side, never annotated).
+- **finding**: under `-Zmiri-tree-borrows` (debug assertions on, isolation on, one Miri process per
+  test) the test FAILs in 40 s:
+
+  ```
+  error: Undefined Behavior: write access through <2560804> at alloc678209[0x40] is forbidden
+      --> crates/rustty-vt/src/terminal/print.rs:958:17
+       |  self.previous_char = Some(cps[printed + k / cells_per_cp - 1]);
+       = help: the accessed tag <2560804> is a child of the conflicting tag <2078210>
+       = help: the conflicting tag <2078210> has state Frozen which forbids this child write access
+  help: the accessed tag <2560804> was created here  --> crates/rustty-vt/src/terminal/print.rs:616:9 (&mut self)
+  help: the conflicting tag <2078210> was created here, in the initial state Reserved
+      --> crates/rustty-vt/src/snapshot/codec.rs:2000:44
+       |  handler: Handler::init(&mut source_terminal as *mut Terminal),
+  help: the conflicting tag <2078210> later transitioned to Frozen due to a reborrow (acting as a foreign read access)
+      --> crates/rustty-vt/src/snapshot/codec.rs:2019:21
+       |  &source_terminal,
+  backtrace: Terminal::print_slice_fill_inner <- print_slice_fill <- print_slice_fast <- ... (the stream's handler)
+  ```
+- **mechanism**: N492's shape. The test mints the stream handler's `*mut Terminal` from a `&mut
+  source_terminal` reborrow, then reads the owner directly (`encode(.., &source_terminal, ..)`), which
+  freezes that tag; the stream's next write through the handler is a write through a Frozen tag.
+  Stacked Borrows accepts it. Zig has no borrow model, so the reference test has no counterpart
+  (N-only, not a UD).
+- **fix**: N455's raw-root idiom (the same file's `complete_snapshot_restores_a_canonical_stream_continuation`
+  already used it). Each terminal the test hands to a stream handler is shadowed by one raw root,
+  `let x: *mut Terminal = &raw mut x;`; the handler gets that root and every later access goes through it
+  (`encode(.., unsafe { &*x }, ..)`, `unsafe { (*x).deinit(..) }`). Applied to all three such sites in the
+  `snapshot/codec.rs` tests: `source_terminal` and `restored_terminal` in
+  `complete_snapshot_preserves_every_supported_continuation_cut`, and `t` in
+  `complete_snapshot_waits_for_continuation_tracking_recovery` (no Miri failure there; same shape). No
+  `Handler::init(&mut ..)` or `&mut x as *mut Terminal` handler site is left in the G6t scope. A wider
+  scan for a pointer minted from `&mut x` followed by direct uses of `x` found only teardown uses (the
+  owner's `deinit` after the holder's last use, e.g. the `stream_terminal` and `search::thread` tests) or
+  tests that already passed Tree Borrows in the first G6t run (`page_tests`, `pagelist::tests::builder`).
+- **production**: no instance. `Terminal::vt_handler(&mut self) -> Handler<'_>` is lifetime-tied, so the
+  compiler rejects reading the owner while the handler lives; `Screen::init` and the snapshot screen
+  restore pass `&mut result as *mut _` to `ImageStorage::set_limit`, which uses it only for that call.
+- **proof**: `cargo +nightly miri nextest run -p rustty-vt --lib -E '<the three codec handler tests>'
+  --test-threads 6`, G6 configuration: Stacked Borrows 3 passed (the cut test 632 s), Tree Borrows 3
+  passed (the cut test 1,506 s, previously UB at 40 s); natively all 18 `snapshot::codec` tests pass.
+- **coverage left open**: G6t was stopped at this finding (1,018 of the 1,597 `rustty-vt` scope tests had
+  run, 1 failed); `rustty-vt-c`, `rustty-renderer`, `rustty-xev`, `rustty-core` and the vt
+  debug-assertions-off half did not run under G6t, and the full G6 run did not start.
+
 ## N501 — macOS had no leak lane because of a wrong premise: G-LSAN runs there
 
 - **id**: N501 (provisional; P7-W16a, another task may take ids in parallel). **severity**: medium (gate
@@ -10573,6 +10622,41 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   absent / 0 problems, 56 min wall. G-SAN-SELF GREEN on rvm on the same tree (54 arms, A4 included).
 - **not a Ghostty defect**: all three are in the port's own gates and test harness.
 
+## N505 — seven `rustty-vt-c` and `rustty-core` tests have test-side Tree Borrows UB: an out-pointer or handle minted from a `&mut` reborrow, then the owner read directly
+
+- **id**: N505 (renumbered from a draft N501; N501-N503 are reserved for P7-W16a). P7-W15 (the second, complete G6t run, 2026-10-02). **severity**: low (test code only).
+  **state**: CLOSED 2026-10-02 (fixed test-side, never annotated).
+- **finding**: G6t (Tree Borrows, debug assertions on): `rustty-vt-c` 565 of 570 passed, 5 failed; `rustty-core`
+  65 of 67 passed, 2 failed. Stacked Borrows accepts all seven. Each excerpt has one form:
+
+  ```
+  error: Undefined Behavior: write access through <609206> at alloc285872[0x0] is forbidden
+      --> crates/rustty-vt-c/src/search.rs:1042:22   unsafe { *(out as *mut usize) = total };
+  help: the accessed tag <609206> was created here, in the initial state Reserved
+      --> crates/rustty-vt-c/src/search.rs:1500:29   let total_ptr = &mut total as *mut usize as *mut c_void;
+  help: ... later transitioned to Frozen due to a reborrow (acting as a foreign read access)
+      --> crates/rustty-vt-c/src/search.rs:1505:13   assert_eq!(2usize, total);
+  ```
+  and in `rustty-core`: the handle `rt_app: &mut rt_app` (`app.rs:1610`, `:1741`), frozen by
+  `rt_app.wakeups.load(..)` / `rt_app.recorded()`, then written by `TestApp::wakeup` or `actions.clear()`.
+- **tests**: `rustty-vt-c` `search::tests::{search_alt_screen_flip_and_return_retains_results,
+  search_get_multi_returns_first_failing_index, search_needle_change_and_clear, search_select_scroll_option,
+  search_select_wraps_in_both_directions}`; `rustty-core` `app::test_runtime::{mailbox_push_wakes_rt_app_and_returns_size,
+  add_and_delete_surface_drive_the_quit_timer}`.
+- **mechanism**: N492/N500's shape. The test keeps a pointer derived from a `&mut x` reborrow (a C-API
+  out-pointer, or the `Mailbox`/`TestSurface` handle), reads `x` directly between calls, which freezes
+  that tag, and the next call writes through it. Zig has no borrow model (N-only, not a UD).
+- **fix**: the pointer is `&raw mut x` (no reborrow tag), so the direct reads of `x` no longer freeze it:
+  every stored out-pointer in the `rustty-vt-c` tests (`search.rs` 8, including one `values` array,
+  `cell.rs` 1, `row.rs` 1) and the four `&mut rt_app` handles in `rustty-core`'s `app::test_runtime`.
+  Out-pointers passed inline to a single call are untouched (a fresh reborrow per call).
+- **production**: no instance. The C-API functions write through caller-provided pointers, which is
+  their contract; `Mailbox::rt_app` is built by the apprt from a long-lived app pointer, not from a test
+  local the caller later reads.
+- **proof**: `rustty-vt-c` `search::`/`cell::`/`row::` tests under nextest: Stacked Borrows 38 passed,
+  Tree Borrows 38 passed; `rustty-core` all 67 under Stacked and Tree Borrows passed; natively
+  `rustty-vt-c` 583 and `rustty-core` `app::` 17 pass.
+
 ## N506 — macOS ASan runtime can deadlock in `fork` while another thread frees: an intermittent hang in G-ASAN / G-LSAN
 
 - **id**: N506 (provisional; P7-W16a fix round 2). **severity**: low (sanitizer lanes only; no product
@@ -10602,3 +10686,50 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (b) test-only: run `macos_window_host` with `--test-threads=1` under the sanitizer lanes, which
   narrows the window (fewer concurrent frees) but cannot close it (each surface's own render/io threads
   and libdispatch still free during the fork), so it is not clearly correct and was not applied.
+
+## N507 — G6 on nextest went RED on two crates the libtest lane passed: `rustty-cli`'s disabled doc tests and `rustty-wasm`'s source-ignored test (gate-side)
+
+- **id**: N507. P7-W15 (the first full G6 on the nextest runner, `check_leaks.sh --all-done`, 2026-10-06, head
+  `04f0a894c`). **severity**: low (lane wiring only; no Miri finding). **state**: CLOSED 2026-10-06.
+- **finding**: every Miri test of all 28 Miri-lane crates passed with no UB or leak, and two crates still came out
+  RED:
+  - `rustty-cli` (88 of 88 passed): the doc arm failed to compile two `///` blocks,
+    `ssh.rs - ssh::run (line 324)` and `ssh_cache.rs - ssh_cache::run (line 142)`, with
+    `error: unknown start of token: \``. They are the ported shell examples (`rustty +ssh user@example.com`)
+    that the crate's `[lib] doctest = false` exists to keep out of rustdoc.
+  - `rustty-wasm`: `VACUOUS: 0 tests passed`. Its only test, `artifact_shape`, is `#[ignore]`d in source
+    (it needs the built `.wasm`; the WS14 browser gate runs it).
+- **mechanism**: both are P7-W15's nextest port. `miri_doctests` runs `cargo miri test -p <c> --doc`, and an
+  explicit `--doc` overrides `doctest = false`, which the libtest lane's plain `cargo miri test -p <c>` honoured.
+  The VACUOUS rule, meant for filtersets, also fired on a whole crate whose tests are all ignored in source,
+  which libtest reported as `ok. 0 passed; 1 ignored`.
+- **fix** (`.port/tools/gates/check_leaks.sh`): `miri_doctests` reads the lib target's `doctest` flag from
+  `cargo metadata` and skips a crate that disables it, naming why. G6's whole-crate arms set
+  `MN_NATIVE_IGNORED_OK`. When a run reports `0 tests run`, the runner lists the same selection in the
+  NATIVE build, and it waives VACUOUS only if that build has no runnable test either, so a test skipped
+  only by `cfg_attr(miri, ignore)` stays VACUOUS. Filterset lanes (G6c, G6t, the self-test's empty filterset)
+  never set it. Of the Miri-lane crates, only `rustty-cli` disables doc tests; the other four that do
+  (`rustty-config`, `rustty-font`, `rustty-font-shaper`, `rustty-oniguruma`) are ASan crates and never reach the arm.
+- **proof**: G6 `--self-test` gained an N507 arm on a scratch crate, and all four checks pass. A crate whose only
+  test is `#[ignore]`d in source is not vacuous. The same test as `cfg_attr(miri, ignore)` is VACUOUS. With
+  `doctest = false` the doc arm is skipped. Without it, the same non-Rust block is RED. Rerun with the fix:
+  `--crate rustty-cli` GREEN (88 passed, doc arm skipped, 119 s) and `--crate rustty-wasm` GREEN (0 run,
+  1 skipped, native build also 0 runnable, 20 s).
+- **review follow-up** (2026-10-06, gate-side, same script; folded here, no new id):
+  - G6t's scope could shrink silently: the check that each entry matches its tests ran only under
+    `--tree-borrows --self-test`, which `ci.sh` does not register. Now every G6t run lists each crate's
+    tests from the Miri build, with the run's own target args (`--lib` for a module-scoped crate), before
+    running. It goes RED and names the entry unless each module matches more than 0 runnable tests, each
+    `=` entry names one runnable test, and each `-` entry names one test inside a module entry. The
+    self-test runs the same check, so the same target args are used in both places and an ignored test
+    counts as named. Before this, nextest reported an ignored test as `filter-match: mismatch (ignored)`,
+    so an exclusion that named an ignored test counted 0. New self-test arm 5: dead entries are named and
+    no Miri run starts.
+  - `rustty-renderer` scope: MIRI_EXCEPTIONS.md recorded 66 of 143 renderer tests passing under Miri, but
+    only 60 ran. A Tree Borrows run of the excluded modules found 6 passing tests (5 in
+    `generic::macos_impl::tests::health::metal_health_push_deadlocks`, 1 in `shadertoy::tests`). The
+    stated reason for excluding them ("each fails with `unsupported operation`") was false for those 6.
+    They are now `=` single-test inclusions. The other 73 excluded tests do fail with `unsupported
+    operation`, never UB. Renderer G6t: 66 of 66 GREEN, 218 s.
+  - The N507 self-test's `sed -i ''` (BSD-only) is replaced with a portable write-to-temp-and-`mv`.
+- **production**: none (gate script only). Zig has no counterpart (N-only, not a UD).
