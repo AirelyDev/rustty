@@ -2956,7 +2956,27 @@ per-crate table with no BLOCKED row.
 
 **Discharged by:** the first green hosted run of G-HWASAN.
 
-## V32. G-TSAN has run on macOS only; its Linux run (rvm, and ci.yml's `tsan` leg) is pending — **ENVIRONMENT-BLOCKED** [P7-W17, 2026-10-07]
+## V32. G-TSAN has run on macOS only; its Linux run (rvm, and ci.yml's `tsan` leg) is pending — **DISCHARGED 2026-10-07 (P7-W24, rvm); the hosted `tsan` leg waits on a push, as V30's legs do**
+
+**DISCHARGED (P7-W24, rvm: aarch64 Fedora 44, nightly 2026-07-17, clang 22).** Per the row's own criterion
+("a GREEN G-TSAN run on Linux (rvm or the hosted leg)"):
+
+- G-SAN-SELF GREEN on rvm (102 arms): A5 Rust data race RED, its Mutex control GREEN, the race inside cc-built
+  C RED, its clean C control GREEN with `tsan C archives: 1 built for the instrumented target, 1
+  instrumented`; A5s (P7-W24) RED. Fedora's clang 22 needed nothing beyond the `tsan-cc` wrapper.
+- `sanitizers.sh --gate tsan`: **G-TSAN GREEN, 4,428 tests over the 7 TSAN_SCOPE specs, 0 reports, 20.75 min**
+  (`rustty-vt:wuffs,oniguruma` 3,366 in 1,059 s, `rustty-vt-c` 586, `rustty-renderer` 154, `rustty-xev` 111,
+  `rustty-termio` 109, `rustty-core` 83, `highway-sys` 19); no BLOCKED row; every crate's line `tsan C
+  archives: 17 built for the instrumented target, 17 instrumented`. Memory stayed within the 10 GB VM at the
+  default test threads.
+- The first run was RED on `rustty-xev` only: TSan's fd model, with tests run side by side (NEW-FINDINGS N514;
+  SANITIZER_SUPPRESSIONS.md T4). Not a race in the port; that crate's tests now run one at a time under
+  G-TSAN (`TSAN_SERIAL`). Triaging it also found the test hang N515 (fixed). No production race; no UD.
+
+The hosted `tsan` leg of ci.yml's `sanitizers` job is still unrun: it needs a push (the maintainer's call),
+the same blocker as V30, whose first run covers it.
+
+Original row, kept for the record:
 
 **Blocked on:** the aarch64 Fedora VM `rvm`, which another task held for Valgrind while P7-W17 ran (the
 task brief forbade using it), and a push for the hosted leg (the maintainer's call, as V25 and V30).
@@ -2984,3 +3004,31 @@ new finding). Unknowns: whether Fedora's clang matches rustc's LLVM closely enou
 trim the VM disk after (VM-disk rules). Hosted: push, then read `ci.yml` › `rustty-sanitizers (tsan)`.
 
 **Discharged by:** a GREEN G-TSAN run on Linux (rvm or the hosted leg).
+
+## V33. G-LSAN-GTK has no hosted CI copy (it needs a headless sway); it runs on rvm — **ENVIRONMENT-BLOCKED** [P7-W24, 2026-10-07]
+
+**Blocked on:** a hosted Linux job with sway, GTK 4 and the GTK apprt's build dependencies, and a push
+(the maintainer's call, as V25, V30 and V31). G-LSAN-GTK (`sanitizers.sh --gate lsan-gtk`; NEW-FINDINGS
+N502's Linux coverage gap) runs one live GTK test that creates and closes a core `Surface`
+(`gtk_window_live`) under ASan with `detect_leaks=1` inside `.port/tools/gtk_live_headless_sway.sh`. It has
+run only on the aarch64 Fedora VM `rvm` (GREEN with the N502 fix, RED without it). No ci.yml job runs it,
+so under `RUSTTY_SANITIZERS_OWN_JOB` the gate reports BLOCKED naming this row instead of deferring to the
+`sanitizers` job (which would be a false claim), and on any host without sway it is BLOCKED.
+
+```
+PORTED: .port/tools/gates/sanitizers.sh
+```
+
+In that file: `gate_lsan_gtk`, and `run_crate`'s `SAN_TEST_TARGET` / `SAN_WRAP`. And `.port/phase-2/lsan-gtk.supp`.
+
+What a hosted run must show: G-SAN-SELF's A2g arms (on Linux) RED/GREEN as on rvm; the lane's one test
+run and passed with 0 reports; `print_suppressions` listing only S1/S2 and G1/G1b/G2 (the runner's Mesa,
+Pango and GTK are other builds than Fedora's, so the library names in S1/S2/G1/G1b may differ: check each
+pattern still names the library it means, and that nothing else is needed); and N502's revert RED there too.
+
+**Recipe:** a `sanitizers` matrix leg `lsan-gtk` on `ubuntu-24.04` (or the arm runner) that installs sway,
+GTK 4, libadwaita and the GTK apprt's `-dev` packages and runs
+`bash .port/tools/gates/sanitizers.sh --gate lsan-gtk` without `RUSTTY_SANITIZERS_OWN_JOB`; push, then read
+`ci.yml` › `rustty-sanitizers (lsan-gtk)`.
+
+**Discharged by:** the first green hosted run of G-LSAN-GTK.

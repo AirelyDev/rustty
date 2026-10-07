@@ -32,7 +32,8 @@ uninstrumented code the sanitizer cannot model), and the evidence.
 
 - G-LSAN reads `.port/phase-2/lsan.supp` (Linux) or `.port/phase-2/lsan-darwin.supp`
   (macOS) through `LSAN_OPTIONS=suppressions=…:print_suppressions=1`, so every
-  suppressed leak is listed in the run's log. Each line in either file has a WHY
+  suppressed leak is listed in the run's log. G-LSAN-GTK (P7-W24) reads `lsan.supp` followed by
+  `.port/phase-2/lsan-gtk.supp`, concatenated (LSan takes one file). Each line in any of them has a WHY
   comment above it (D6 rule c, `d6_cfg_mapping_audit.py`) pointing at its row here.
 - G-TSAN reads `.port/phase-2/tsan.supp` through `TSAN_OPTIONS=suppressions=…:print_suppressions=1`
   (empty so far; ThreadSanitizer section, T3).
@@ -90,6 +91,31 @@ reachability-based checker and so is not an arm: an extra retain on the CACHED C
 | S16 | `leak:CGCMSConverterCreateCachedCGvImageConverter` | CoreGraphics | the cached vImage converter kept with an S15 transform | as S15 (824 bytes) |
 | S17 | `leak:-[_MTLCommandQueue initWithDevice:descriptor:]` | Metal / libdispatch | the private dispatch queue a Metal command queue creates inside its `init`, disposed of asynchronously by libdispatch after the command queue is released; a process exiting right after freeing its renderer can still hold it at the scan (timing-dependent). Allocations of the command queue object itself happen in `newCommandQueue`'s alloc, outside this frame, so a leaked command queue stays reported | `rustty-apprt-c` `macos_window_host` `init_error_path_joins_both_threads_before_freeing_their_state` child (128 bytes, `_os_object_alloc_realized` ← `_dispatch_lane_create_with_target` ← `-[_MTLCommandQueue initWithDevice:descriptor:]` ← `Metal::init_device`); Apple `leaks` on each of its three fault children run directly: 0 leaks in 9 runs |
 | S18 | `leak:MTLRegisterDevices` | Metal | Metal's process-wide device registry: the first `MTLCopyAllDevices` runs `MTLRegisterDevices` → `-[MTLIOAccelServiceGlobalContext init]`, whose global context keeps its dispatch queues and sources for the process; the device array `MTLCopyAllDevices` returns is created outside this frame, so an unreleased array stays reported | `rustty-apprt-c` `macos_window_host` (`Metal::warmup` → `choose_device` → `MTLCopyAllDevices`; 2 × 512 bytes of dispatch lanes and a 320-byte dispatch unote; timing-dependent); Apple `leaks` on the natively built binary: 0 leaks in every run |
+
+### G-LSAN-GTK entries (`lsan-gtk.supp`, P7-W24)
+
+G-LSAN-GTK (`sanitizers.sh --gate lsan-gtk`; NEW-FINDINGS N502's Linux coverage gap) runs one live GTK
+test that creates and closes a core `Surface` (`rustty-apprt:gtk,wayland,x11` `gtk_window_live`) under ASan
+with `detect_leaks=1` inside `.port/tools/gtk_live_headless_sway.sh`, on Linux only. LSan reads ONE file,
+so the lane concatenates `lsan.supp` (S1/S2 apply: the renderer's EGL) and `lsan-gtk.supp` into its own
+directory. Entries here may name a third-party Rust crate as well as a system library, under the same
+criteria; G2 is a known product leak in a dependency, tracked as an OPEN finding.
+
+**Negative controls.** G-SAN-SELF (Linux) runs the synthetic crate under the lane's combined file and
+requires RED for a Rust `Box` leak, a `g_strdup` string, a `GObject`, an `FcPattern` from `FcNameParse` (G1)
+and a sunk-and-referenced `GClosure` made outside gtk4-rs (G2), and GREEN for a GLib allocate-and-free
+control. The standing control for G2's anchoring is N502's: with `Surface::deinit`'s fix reverted, the lane
+is RED with the leaked `DrawMutex` Arc, which was allocated under a template callback.
+
+| id | pattern | library | reason | evidence |
+|---|---|---|---|---|
+| G1 | `leak:libpangoft2-1.0.so` | Pango (system), with fontconfig below it | GTK's widgets lay out text through the system Pango, whose fontconfig font map enumerates and matches fonts (`FcFontSetList`, `FcFontSetMatch`); the result patterns are unreachable at exit. Pango's calls land in the port's vendored fontconfig (the frames are `crates-sys/fontconfig-sys/vendor/src/*.c`), but no frame is Rustty's: Rustty's own font code does not go through Pango. | G-LSAN-GTK first run, rvm, 2026-10-07: 542 direct `FcPatternObjectInsertElt` reports (fcpat.c:514/506) ← `FcListAppend`/`FcFontRenderPrepare` ← `FcFontSetList`/`FcFontSetMatch` ← `libpangoft2-1.0.so.0`, plus their indirect `FcValueListCreate`/`FcStrCopy`/`FcConfigValues`/`FcRangeCreateDouble`/`FcLangSetCreate`; matched 6,913 allocations, 306,067 bytes. |
+| G1b | `leak:libpangocairo-1.0.so` | Pango (system) | the same font map's patterns through its cairo layer: `libpangocairo` calls `FcConfigSubstitute` on a pattern it keeps. | second run, with G1: 10 direct `FcPatternObjectInsertElt` ← `FcConfigPatternAdd` ← `FcConfigSubstituteWithPat` ← `libpangocairo-1.0.so.0`, plus indirect; matched 2,197 allocations, 54,516 bytes. |
+| G2 | `leak:^<glib::closure::Closure>::new_local::<<gtk4::builder_rust_scope::imp::BuilderRustScope as gtk4::subclass::builder_scope::BuilderScopeImpl>::create_closure::*>$` | gtk4-rs 0.11.4 (Rust crate) | gtk4-rs's `BuilderRustScope` returns already-sunk template-callback closures, and GTK's builder adds a reference when it connects them and never drops it: every widget template instantiation leaks its callback closures. A real leak in a dependency, Ghostty has none (its C builder scope returns floating closures): **NEW-FINDINGS N516, OPEN**; remove this row when it is fixed. Anchored to the one frame that allocates the closure: the callback-invocation frames carry the same names (ending `::{closure#0}`), and the unanchored first draft hid N502's leak, allocated inside the `RenderSurface` resize callback. | G-LSAN-GTK first run: 93 direct `GClosure` reports (`g_malloc0` ← that frame, `closure.rs:201`) under `Surface`, `Window`, `SearchOverlay`, `Tab` and other `instance_init`s, with the captured `Rc` callbacks and widget data indirect; with the anchored entry, 186 allocations, 8,928 bytes. |
+
+Results (rvm, aarch64 Fedora 44, GTK 4.22.4, GLib 2.88.2, Pango system build; 2026-10-07): G-LSAN-GTK GREEN
+with the N502 fix (1 test, 0 reports, 65 s for the instrumented build and the run), RED without it (one
+32-byte `ArcInner` from `DrawMutex::new`).
 
 ## Valgrind suppressions (`.port/tools/gates/valgrind-llvmpipe.supp`, G-VALGRIND)
 
@@ -219,14 +245,16 @@ surface lifecycle threads), `rustty-termio` (pty read thread, exec), `rustty-xev
 race test; the default-feature tests run too), `rustty-vt-c` and `highway-sys` (the SIMD dispatch state
 every thread shares; UD377's regression test). Its scope is an allow-list because a race needs two
 threads: the rest of the workspace runs its threads (if any) through these crates or not at all.
-macOS and Linux; BLOCKED on any other host. It has run on macOS only (the Linux run is V32).
+macOS and Linux; BLOCKED on any other host. It has run on macOS (P7-W17) and on the aarch64 Fedora VM
+`rvm` (P7-W24, V32's Linux half).
 
 | id | what | kind | reason | evidence |
 |---|---|---|---|---|
 | T0 | `-Zbuild-std`; the cc-built C/C++ compiled with `clang -fsanitize=thread` through the `tsan-cc`/`tsan-c++` wrappers (only when the crate being built is instrumented) | lane configuration | Without `-Zbuild-std` rustc refuses the mix ("mixing `-Zsanitizer` will cause an ABI mismatch"). Uninstrumented C would hide both its own races and its synchronization (a lock taken in C is invisible to TSan, so Rust accesses ordered only by it would be reported). The gate checks the C is instrumented rather than assuming it: after each crate every `lib*.a` built for the instrumented target must reference `__tsan_*` (`tsan_archive_check`; exceptions `TSAN_UNINSTRUMENTED`, none so far), else RED. | P7-W17 probe crate (macOS); the gate run: 20 archives, all instrumented. G-SAN-SELF's A5 C arm (a race between two threads inside C compiled through `$CC`) is RED, which it could not be with uninstrumented C. |
 | T1 | `allocator_may_return_null=1` | runtime option | TSan's `malloc` aborts on a request above its 1 TiB maximum like ASan's; the port's out-of-memory tests rely on the NULL (as for the other lanes, N496 item 5). | first G-TSAN pass, `rustty-vt`: `ThreadSanitizer: requested allocation size 0x7fffffffffffffff exceeds maximum supported size` (`allocation-size-too-big`), stopping the binary after 41 tests. |
 | T2 | `second_deadlock_stack=1` | runtime option | Not suppressive: a lock-order-inversion report shows both acquisitions. | — |
-| T3 | `.port/phase-2/tsan.supp` through `suppressions=…:print_suppressions=1` | suppressions file | **Empty.** Every entry needs the criteria at the top of this file plus a negative control (a race of ours through the same API must stay RED). The first runs needed none: the only report was UD377, a real race in vendored Highway, fixed rather than suppressed. | — |
+| T3 | `.port/phase-2/tsan.supp` through `suppressions=…:print_suppressions=1` | suppressions file | **Empty.** Every entry needs the criteria at the top of this file plus a negative control (a race of ours through the same API must stay RED). The first runs needed none: the only report on macOS was UD377, a real race in vendored Highway, fixed rather than suppressed; the first Linux run's reports are T4's. | — |
+| T4 | `rustty-xev`'s tests run one at a time (`TSAN_SERIAL`; `--test-threads=1` for that spec only) | lane configuration (Linux reports; P7-W24, NEW-FINDINGS N514) | TSan models every fd as a word written by the call that opens it (`socket`, `open`, ...) and by `close`, and checks `epoll_ctl`, `mmap`, `close` and the rest against it. It sees neither the io_uring arm's close ops (the kernel closes the socket) nor fds opened by raw syscalls (`SYS_pidfd_open` in the epoll arm's `Process`, `io_uring_setup`). With libtest running tests side by side, one test's socket number, closed unseen, is reopened unseen by another, and the second test's `epoll_ctl`/`mmap`/`close` on it is reported against the first test's `socket()`. No memory is shared. A suppression was tried and rejected: TSan matches `race_top` against the raw interceptor name (`___interceptor_mmap`, not the printed `mmap`), and covering `close` would also hide a real double close. Running that crate's tests one at a time removes only libtest's side-by-side running of DIFFERENT tests, which the reference's serial Zig test runner never does; the threads a test starts (thread pool, async wakeups, the pty and process watchers) are still checked against each other. Linux only in effect: macOS's kqueue arm has no unseen close or raw-syscall fd. A `TSAN_SERIAL` spec outside `TSAN_SCOPE` is RED. | rvm, P7-W24, the TSan `rustty-xev` lib test binary with an EMPTY suppressions file: run in parallel, 59 reports in 24 of 25 runs and 26 in 15 of 25 in a second set (shapes: `epoll_ctl` ← `epoll::Loop::epoll_register` and `mmap` ← `io_uring::ring::Sq::init`, each against `socket` ← `io_uring::{udp::UDP,tcp::TCP}::init` of another test; `close` against `socket`); one at a time, 0 reports in 25 runs. G-SAN-SELF "A5s": a race between one test's own threads is RED with `--test-threads=1`. |
 
 No Metal, CoreText, libdispatch or other system-framework report appeared on macOS, so nothing is
 suppressed there.
@@ -238,6 +266,13 @@ in `rustty-vt`; `rustty-core` (82), `rustty-termio` (126), `rustty-xev` (54) and
 were GREEN. With both fixed, the gate: **G-TSAN GREEN, 4,380 tests, 0 reports, 38 min** (`rustty-vt`
 3,370 in 1,781 s, `rustty-vt-c` 586, `highway-sys` 19, `rustty-termio` 126 in 339 s; 20 C archives
 instrumented). The per-crate hang bound for TSan is 3,600 s, 2x the slowest crate. NEW-FINDINGS N508.
+
+**Runs (Linux, rvm: aarch64 Fedora 44, glibc 2.43, nightly 2026-07-17, clang 22; P7-W24, V32).** The first
+pass was RED on `rustty-xev` only (T4's fd-model reports, N514); every other spec GREEN. With `TSAN_SERIAL`:
+**G-TSAN GREEN, 4,428 tests, 0 reports, 20.75 min** (`rustty-vt` 3,366 in 1,059 s, `rustty-vt-c` 586,
+`rustty-renderer` 154, `rustty-xev` 111 one at a time in 11 s, `rustty-termio` 109, `rustty-core` 83,
+`highway-sys` 19; 17 C archives instrumented, Linux's set: `gettext-sys` builds no libintl there). No
+system-library report on Linux either, so `tsan.supp` stays empty.
 
 ## Crate exclusions and empty lanes
 
