@@ -3075,24 +3075,46 @@ G6t's whole-crate entry for it needs narrowing to the modules that run under Mir
 G6 was stopped after its first two crates (`rustty-apprt-api` 28, `rustty-args` 78, both GREEN) pending
 that decision.
 
-**G6t scope for `rustty-renderer` (P7-W15, 2026-10-02).** The renderer is an FFI crate: G6 runs it under
-ASan, and as a whole crate under Miri 77 of its 143 tests fail with `unsupported operation`, none with UB.
-G6t therefore names only the renderer modules whose tests run under Miri (`G6T_SCOPE` in `check_leaks.sh`,
-the single definition): `cell`, `cursor`, `dmabuf`, `generic::surface_mailbox_tests`,
-`generic::derived_config_tests`, `health_tests`, `image::macos_impl`, `latest_frame`, `log_capture`,
-`message::change_config_tests`, `metal::gpu_abi`, `metal::shaders::metallib_tests`, `metal::test_support`,
-`overlay`, `state`, `thread`, `undefined`, `webgl` (60 tests run). Excluded, with the reason **"FFI
-(Metal/ObjC/glslang/SPIRV/onig/wuffs) — covered by G-ASAN/G-LSAN"**: `generic::macos_impl`, `metal::buffer`,
-`metal::iosurface_layer`, `metal::metal_impl`, `metal::pipeline`, `metal::shaders::post_pipeline_error_tests`,
-`metal::target`, `metal::tests`, `link`, `shadertoy`, `opengl`, the integration-test binaries, and three
-single tests in included modules (`generic::derived_config_tests::decoded_bg_image_len_is_wh4`, Wuffs;
-`image::macos_impl::tests::image_empty_lifecycle`, Metal; `message::change_config_tests::change_config_deinit_frees_links`,
-Oniguruma). One more single test is excluded for a different reason:
-`state::tests::renderer_state_yield_to_demand_is_free_without_demand` asserts a 500 ms wall-clock bound over
-10,000 calls, which the interpreter does not meet (it fails the assertion, no UB); it is a speed property,
-not a memory-safety one, and runs natively and under G-ASAN/G-LSAN. The scope self-test proves each module
-entry matches more than 0 tests and each single-test exclusion names exactly one test; any failure inside an
-included module, `unsupported operation` included, stays RED.
+**G6t scope for `rustty-renderer` (P7-W15, 2026-10-02; corrected 2026-10-06).** The renderer is an FFI crate:
+G6 runs it under ASan. Run as a whole crate under Tree Borrows, 66 of its 143 runnable tests pass and 77 fail,
+none with UB. 76 of the failures are `unsupported operation`: a Metal, Objective-C, glslang, SPIRV-Cross or
+Oniguruma foreign call, or `clock_gettime(REALTIME)`, `open`, `opendir` or `_NSGetExecutablePath` under
+isolation. The 77th is the wall-clock test below, which fails its assertion. G6t runs exactly the 66
+(`G6T_SCOPE` in `check_leaks.sh`, the single definition).
+
+- **Modules:** `cell`, `cursor`, `dmabuf`, `generic::surface_mailbox_tests`, `generic::derived_config_tests`,
+  `health_tests`, `image::macos_impl`, `latest_frame`, `log_capture`, `message::change_config_tests`,
+  `metal::gpu_abi`, `metal::shaders::metallib_tests`, `metal::test_support`, `overlay`, `state`, `thread`,
+  `undefined`, `webgl` (60 tests).
+- **Six single tests (`=` entries), from modules otherwise excluded:** the five pure-Rust mailbox and
+  health-push tests in `generic::macos_impl::tests::health::metal_health_push_deadlocks`
+  (`metal_async_frame_completed_never_blocks_on_a_full_mailbox`,
+  `metal_health_report_concurrent_completions_stay_consistent`,
+  `metal_health_report_never_restores_an_undelivered_health`,
+  `metal_sync_frame_completed_detached_mailbox_keeps_health`,
+  `metal_sync_frame_completed_never_blocks_the_mailbox_drainer`; the module's other two tests create a Metal
+  device), and `shadertoy::tests::uniforms_match_the_std140_block_in_shadertoy_prefix_glsl`. The first
+  version of this scope excluded them with their modules under a reason that did not hold for them. A Tree
+  Borrows run of everything excluded (2026-10-06) found that they pass.
+- **Excluded modules**, reason **"FFI (Metal/ObjC/glslang/SPIRV-Cross/Oniguruma) or an isolation-blocked
+  syscall; covered by G-ASAN/G-LSAN"**: `generic::macos_impl`, `metal::buffer`, `metal::iosurface_layer`,
+  `metal::metal_impl`, `metal::pipeline`, `metal::shaders::post_pipeline_error_tests`, `metal::target`,
+  `metal::tests`, `link`, `shadertoy`, `opengl`, and the integration-test binaries. Measured on the same run:
+  their 73 tests outside the six fail with `unsupported operation`, never with UB.
+- **Excluded single tests (`-` entries) in included modules:** three FFI-bound tests, for the same reason:
+  `generic::derived_config_tests::decoded_bg_image_len_is_wh4` (Wuffs),
+  `image::macos_impl::tests::image_empty_lifecycle` (Metal) and
+  `message::change_config_tests::change_config_deinit_frees_links` (Oniguruma). One more,
+  `state::tests::renderer_state_yield_to_demand_is_free_without_demand`, has a different reason. It asserts
+  a 500 ms wall-clock bound over 10,000 calls, which the interpreter does not meet: it fails the assertion
+  with no UB. That is a speed property, not a memory-safety one, and the test runs natively and under
+  G-ASAN/G-LSAN.
+
+Every G6t run first checks the scope against the Miri test list, using the run's own target args, and goes
+RED naming any entry that has gone dead. A module entry must match more than 0 runnable tests, a `=` entry
+exactly one runnable test, and a `-` entry exactly one test inside a module entry (NEW-FINDINGS N507,
+review follow-up). Any failure inside an included module, `unsupported operation` included, stays RED.
+Renderer G6t at the corrected scope: 66 of 66 GREEN in 218 s (2026-10-06).
 
 **Final lane runs (2026-10-06, head `04f0a894c`, `MIRI_TEST_THREADS=6`).** The host also ran a UTM VM and
 other sessions' work, so wall times are upper bounds.

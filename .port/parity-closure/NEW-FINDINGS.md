@@ -10516,4 +10516,21 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `doctest = false` the doc arm is skipped. Without it, the same non-Rust block is RED. Rerun with the fix:
   `--crate rustty-cli` GREEN (88 passed, doc arm skipped, 119 s) and `--crate rustty-wasm` GREEN (0 run,
   1 skipped, native build also 0 runnable, 20 s).
+- **review follow-up** (2026-10-06, gate-side, same script; folded here, no new id):
+  - G6t's scope could shrink silently: the check that each entry matches its tests ran only under
+    `--tree-borrows --self-test`, which `ci.sh` does not register. Now every G6t run lists each crate's
+    tests from the Miri build, with the run's own target args (`--lib` for a module-scoped crate), before
+    running. It goes RED and names the entry unless each module matches more than 0 runnable tests, each
+    `=` entry names one runnable test, and each `-` entry names one test inside a module entry. The
+    self-test runs the same check, so the same target args are used in both places and an ignored test
+    counts as named. Before this, nextest reported an ignored test as `filter-match: mismatch (ignored)`,
+    so an exclusion that named an ignored test counted 0. New self-test arm 5: dead entries are named and
+    no Miri run starts.
+  - `rustty-renderer` scope: MIRI_EXCEPTIONS.md recorded 66 of 143 renderer tests passing under Miri, but
+    only 60 ran. A Tree Borrows run of the excluded modules found 6 passing tests (5 in
+    `generic::macos_impl::tests::health::metal_health_push_deadlocks`, 1 in `shadertoy::tests`). The
+    stated reason for excluding them ("each fails with `unsupported operation`") was false for those 6.
+    They are now `=` single-test inclusions. The other 73 excluded tests do fail with `unsupported
+    operation`, never UB. Renderer G6t: 66 of 66 GREEN, 218 s.
+  - The N507 self-test's `sed -i ''` (BSD-only) is replaced with a portable write-to-temp-and-`mv`.
 - **production**: none (gate script only). Zig has no counterpart (N-only, not a UD).

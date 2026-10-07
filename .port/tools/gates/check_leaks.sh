@@ -901,14 +901,14 @@ RS
   v="$(MN_DIR="$D" MN_OUT="$out" MN_NATIVE_IGNORED_OK=1 run_miri_nextest mnn507 sb on 'all()' 2>&1)"; printf '%s\n' "$v" | sed 's/^/  | /' | tail -2
   if printf '%s' "$v" | grep -q 'NATIVE build either' && ! printf '%s' "$v" | grep -q 'RED'; then echo "  arm OK: all tests #[ignore]d in source is not vacuous"
   else echo "  self-test FAIL: a crate with only source-ignored tests was RED"; rc=1; fi
-  sed -i '' 's/#\[ignore = "needs an external artifact"\]/#[cfg_attr(miri, ignore)]/' "$D/src/lib.rs"
+  sed 's/#\[ignore = "needs an external artifact"\]/#[cfg_attr(miri, ignore)]/' "$D/src/lib.rs" >"$D/lib.rs.new" && mv "$D/lib.rs.new" "$D/src/lib.rs"
   v="$(MN_DIR="$D" MN_OUT="$out" MN_NATIVE_IGNORED_OK=1 run_miri_nextest mnn507 sb on 'all()' 2>&1)"; printf '%s\n' "$v" | sed 's/^/  | /' | tail -2
   if printf '%s' "$v" | grep -q 'VACUOUS'; then echo "  arm OK: a test skipped only under Miri still leaves the run VACUOUS"
   else echo "  self-test FAIL: a Miri-only skip passed as non-vacuous"; rc=1; fi
   v="$(MN_DIR="$D" miri_doctests mnn507 2>&1)"; printf '%s\n' "$v" | sed 's/^/  | /' | head -2
   if printf '%s' "$v" | grep -q 'doctest = false' && ! printf '%s' "$v" | grep -q RED; then echo "  arm OK: [lib] doctest = false skips the doc arm"
   else echo "  self-test FAIL: doctest = false was not honoured"; rc=1; fi
-  sed -i '' '/^\[lib\]$/d; /^doctest = false$/d' "$D/Cargo.toml"
+  sed '/^\[lib\]$/d; /^doctest = false$/d' "$D/Cargo.toml" >"$D/Cargo.toml.new" && mv "$D/Cargo.toml.new" "$D/Cargo.toml"
   v="$(MN_DIR="$D" miri_doctests mnn507 2>&1)"; printf '%s\n' "$v" | sed 's/^/  | /' | head -2
   if printf '%s' "$v" | grep -q 'RED \[mnn507\]: Miri doc tests'; then echo "  arm OK: with doc tests enabled, the non-Rust block is RED"
   else echo "  self-test FAIL: the enabled doc arm did not go RED on a non-Rust block"; rc=1; fi
@@ -966,25 +966,41 @@ run_g6c_selftest() {
 #
 # THE SCOPE, defined here and nowhere else. `<crate>` = the whole crate (every
 # test target, as G6 runs it); `<crate>:<module path>` = that crate's lib tests
-# under `<module path>::`; `<crate>:-<test path>` = one named test taken back
-# out of a module entry, each with its reason below. `--tree-borrows
-# --self-test` proves every module entry exists and matches more than 0 tests,
-# and every exclusion names exactly one test.
+# under `<module path>::`; `<crate>:=<test path>` = one named lib test added
+# from a module that is otherwise out of scope; `<crate>:-<test path>` = one
+# named test taken back out of a module entry, each with its reason below.
+# Every G6t run first lists the crate's tests under Miri (the same build and
+# target args the run uses) and goes RED, naming the entry, unless every module
+# entry matches more than 0 runnable tests, every `=` entry names exactly one
+# runnable test, and every `-` entry names exactly one test (ignored or not)
+# inside a module entry. So the scope cannot shrink silently when a module or
+# test is renamed or turns `cfg_attr(miri, ignore)`. `--tree-borrows
+# --self-test` runs the same check plus the source-level existence checks.
 #
-# `rustty-renderer` is an FFI crate (G6 runs it under ASan, not Miri), so it is
-# scoped to the modules whose tests run under Miri (measured, P7-W15: 66 of its
-# 143 tests). EXCLUDED, with the reason "FFI (Metal/ObjC/glslang/SPIRV/onig/
-# wuffs) — covered by G-ASAN/G-LSAN": `generic::macos_impl`, `metal::buffer`,
+# `rustty-renderer` is an FFI crate (G6 runs it under ASan, not Miri). Measured
+# as a whole crate under Tree Borrows (P7-W15, 2026-10-06): 143 runnable tests,
+# 66 pass, 77 fail, none with UB: 76 with `unsupported operation` (a foreign
+# call or an isolation-blocked syscall) and the wall-clock test below on its
+# assertion. The scope runs exactly those 66: the
+# modules below whose tests pass under Miri, plus six single tests from modules
+# otherwise excluded. EXCLUDED modules: `generic::macos_impl`, `metal::buffer`,
 # `metal::iosurface_layer`, `metal::metal_impl`, `metal::pipeline`,
 # `metal::shaders::post_pipeline_error_tests`, `metal::target`, `metal::tests`,
-# `link`, `shadertoy`, `opengl`, and the integration-test binaries; each fails
-# under Miri with `unsupported operation` (a foreign call), never with UB. The
-# three `-` exclusions are the same: one FFI-bound test in an otherwise
-# Miri-runnable module (Metal device, Wuffs PNG decoder, Oniguruma). The fourth,
-# `state::tests::renderer_state_yield_to_demand_is_free_without_demand`, asserts
-# a 500 ms wall-clock bound over 10,000 calls, which the interpreter cannot
-# meet: not a memory-safety property; it runs natively and under G-ASAN/G-LSAN.
-# A test inside an included module that fails, for any reason, stays RED.
+# `link`, `shadertoy`, `opengl`, and the integration-test binaries. Reason: each
+# of their tests except the six `=` entries fails under Miri with `unsupported
+# operation` (Metal/ObjC/glslang/SPIRV-Cross/Oniguruma FFI, or `clock_gettime
+# (REALTIME)`/`open`/`opendir`/`_NSGetExecutablePath` under isolation), never
+# with UB; that FFI is covered by G-ASAN/G-LSAN. The six `=` entries are pure
+# Rust and pass: five mailbox/health-push tests in
+# `generic::macos_impl::tests::health::metal_health_push_deadlocks` (its other
+# two tests create a Metal device) and `shadertoy`'s std140 uniform-layout test.
+# The `-` exclusions: three FFI-bound tests in otherwise Miri-runnable modules
+# (Wuffs PNG decoder, Metal device, Oniguruma), same reason; and
+# `state::tests::renderer_state_yield_to_demand_is_free_without_demand`, which
+# asserts a 500 ms wall-clock bound over 10,000 calls that the interpreter
+# cannot meet: not a memory-safety property; it runs natively and under
+# G-ASAN/G-LSAN. A test inside an included module that fails, for any reason,
+# stays RED.
 # Details: .port/phase-2/MIRI_EXCEPTIONS.md, "P7-W15", G6t scope.
 G6T_SCOPE="${G6T_SCOPE:-
 rustty-vt:page rustty-vt:pagelist rustty-vt:search rustty-vt:render
@@ -997,6 +1013,12 @@ rustty-renderer:log_capture rustty-renderer:message::change_config_tests
 rustty-renderer:metal::gpu_abi rustty-renderer:metal::shaders::metallib_tests
 rustty-renderer:metal::test_support rustty-renderer:overlay rustty-renderer:state
 rustty-renderer:thread rustty-renderer:undefined rustty-renderer:webgl
+rustty-renderer:=generic::macos_impl::tests::health::metal_health_push_deadlocks::metal_async_frame_completed_never_blocks_on_a_full_mailbox
+rustty-renderer:=generic::macos_impl::tests::health::metal_health_push_deadlocks::metal_health_report_concurrent_completions_stay_consistent
+rustty-renderer:=generic::macos_impl::tests::health::metal_health_push_deadlocks::metal_health_report_never_restores_an_undelivered_health
+rustty-renderer:=generic::macos_impl::tests::health::metal_health_push_deadlocks::metal_sync_frame_completed_detached_mailbox_keeps_health
+rustty-renderer:=generic::macos_impl::tests::health::metal_health_push_deadlocks::metal_sync_frame_completed_never_blocks_the_mailbox_drainer
+rustty-renderer:=shadertoy::tests::uniforms_match_the_std140_block_in_shadertoy_prefix_glsl
 rustty-renderer:-generic::derived_config_tests::decoded_bg_image_len_is_wh4
 rustty-renderer:-image::macos_impl::tests::image_empty_lifecycle
 rustty-renderer:-message::change_config_tests::change_config_deinit_frees_links
@@ -1007,13 +1029,72 @@ rustty-core
 G6T_BOUND_SEC="${G6T_BOUND_SEC:-14400}"
 
 g6t_crates() { printf '%s\n' $G6T_SCOPE | sed 's/:.*//' | awk '!seen[$0]++'; }
-g6t_modules() { printf '%s\n' $G6T_SCOPE | sed -n "s/^$1:\([^-].*\)/\1/p"; }
+g6t_entries() { printf '%s\n' $G6T_SCOPE | sed -n "s/^$1:\(.*\)/\1/p"; }
+g6t_modules() { printf '%s\n' $G6T_SCOPE | sed -n "s/^$1:\([^=-].*\)/\1/p"; }
+g6t_includes() { printf '%s\n' $G6T_SCOPE | sed -n "s/^$1:=\(.*\)/\1/p"; }
 g6t_excludes() { printf '%s\n' $G6T_SCOPE | sed -n "s/^$1:-\(.*\)/\1/p"; }
 g6t_filterset() {  # $1 = crate
-  local mods x fs; mods="$(g6t_modules "$1" | paste -sd'|' -)"
-  if [ -z "$mods" ]; then fs='all()'; else fs="test(/^($mods)::/)"; fi
+  local mods x fs=""; mods="$(g6t_modules "$1" | paste -sd'|' -)"
+  [ -n "$mods" ] && fs="test(/^($mods)::/)"
+  for x in $(g6t_includes "$1"); do fs="${fs:+$fs | }test(=$x)"; done
+  if [ -z "$fs" ]; then fs='all()'; elif [ -n "$(g6t_excludes "$1")" ]; then fs="($fs)"; fi
   for x in $(g6t_excludes "$1"); do fs="$fs - test(=$x)"; done
   echo "$fs"
+}
+# The target args a crate's G6t run uses. Module and `=` entries name library
+# tests (the scope self-test checks src/<m>), so a module-scoped crate runs
+# --lib: without it nextest builds and lists every integration-test binary
+# under Miri for zero matches (measured on the first G6t run: 1,597 tests, all
+# in the lib, across 11 binaries). A whole-crate entry runs every target.
+g6t_scope_args() { if [ -n "$(g6t_entries "$1")" ]; then echo "--lib"; fi; }
+
+# g6t_scope_counts <crate> — the per-entry check every G6t run (and the scope
+# self-test) makes before running anything. Lists the crate's tests from the
+# Miri build (shared with the run, so `cfg_attr(miri, ignore)` counts as not
+# runnable) with the run's own target args, then checks each entry: the whole
+# crate and each module match > 0 runnable tests; each `=` entry names exactly
+# one runnable test; each `-` entry names exactly one test, ignored or not,
+# that lies inside a module entry (else it excludes nothing). Prints one line
+# per entry; non-zero when any entry fails.
+g6t_scope_counts() {
+  local c="$1" list rc
+  list="$(mn_tmp "g6tlist.$c")"
+  # shellcheck disable=SC2046  # g6t_scope_args prints nothing or one word
+  ( cd "${MN_DIR:-$RUSTTY_ROOT}" && cargo +nightly miri nextest list -p "$c" $(g6t_scope_args "$c") \
+      -E 'all()' --message-format json 2>/dev/null ) >"$list"
+  G6T_ENTRIES="$(g6t_entries "$c")" python3 - "$c" "$list" <<'PYEOF'
+import json, os, sys
+c, path = sys.argv[1], sys.argv[2]
+try:
+    d = json.load(open(path))
+except Exception:
+    print("  scope FAIL: %s — the Miri test list did not load (build or list failed)" % c); sys.exit(1)
+tests = {}  # test path -> ignored in the Miri build
+for s in d.get("rust-suites", {}).values():
+    for n, t in s.get("testcases", {}).items():
+        tests[n] = bool(t.get("ignored"))
+entries = [e for e in os.environ.get("G6T_ENTRIES", "").split("\n") if e]
+mods = [e for e in entries if e[0] not in "=-"]
+def runnable(pred): return sum(1 for n, ign in tests.items() if pred(n) and not ign)
+bad = 0
+if not entries:
+    n = runnable(lambda n: True)
+    print("  scope %s: %s — %d runnable test(s)" % ("ok" if n else "FAIL", c, n)); bad += n == 0
+for e in entries:
+    if e[0] == "=":
+        t = e[1:]; ok = t in tests and not tests[t]
+        why = "names 1 runnable test" if ok else ("names a test ignored under Miri" if t in tests else "names no test")
+    elif e[0] == "-":
+        t = e[1:]; ok = t in tests and any(t.startswith(m + "::") for m in mods)
+        why = "names 1 test" if ok else ("names no test" if t not in tests else "lies in no module entry, so it excludes nothing")
+    else:
+        n = runnable(lambda n: n.startswith(e + "::")); ok = n > 0
+        why = "%d runnable test(s)" % n
+    print("  scope %s: %s:%s — %s" % ("ok" if ok else "FAIL", c, e, why))
+    bad += not ok
+sys.exit(1 if bad else 0)
+PYEOF
+  rc=$?; rm -f "$list"; return $rc
 }
 
 # g6t_crate <crate> <extra-rustflags-for-the-off-half> — one crate's G6t run.
@@ -1021,12 +1102,15 @@ g6t_crate() {
   local c="$1" extra="$2" fs out rc=0 exp mods
   fs="$(g6t_filterset "$c")"
   out="$(mn_tmp "g6t.$c")"
-  # Module entries name library modules (the scope self-test checks src/<m>),
-  # so a module-scoped crate runs --lib: without it nextest builds and lists
-  # every integration-test binary under Miri for zero matches (measured on
-  # the first G6t run: 1,597 tests, all in the lib, across 11 binaries).
-  local scope_args=""; [ -n "$(g6t_modules "$c")" ] && scope_args="--lib"
+  local scope_args; scope_args="$(g6t_scope_args "$c")"
   if [ -z "$extra" ]; then
+    echo "    [$c] scope check (Miri test list, ${scope_args:-all targets}):"
+    g6t_scope_counts "$c" >"$out.scope"; rc=$?
+    sed 's/^ */      /' "$out.scope"; rm -f "$out.scope"
+    if [ "$rc" != 0 ]; then
+      echo "  RED [G6t]: a $c scope entry no longer matches what it names (above); fix G6T_SCOPE"
+      rm -f "$out"; return 1
+    fi
     MN_BOUND_SEC="$G6T_BOUND_SEC" MN_OUT="$out" run_miri_nextest "$c" tb on "$fs" $scope_args || rc=1
     if [ "$rc" = 0 ]; then rm -f "$out" "$out.passed"; else echo "    full output: $out"; fi
   fi
@@ -1062,48 +1146,29 @@ run_g6t() {
   return $rc
 }
 
-# Scope check: every entry names an existing crate (and module), and matches
-# more than 0 runnable tests under Miri.
+# Scope check: every entry names an existing crate (and, for an entry with a
+# path, a module of its src), then g6t_scope_counts, exactly as a G6t run makes
+# it (same Miri list, same target args, ignored tests counted for exclusions).
 g6t_scope_selftest() {
-  local e c m dir n rc=0 fs top want
+  local e c m dir rc=0 top
   for e in $G6T_SCOPE; do
     c="${e%%:*}"; m=""; [ "$e" != "$c" ] && m="${e#*:}"
     dir="crates/$c"
     if [ ! -f "$dir/Cargo.toml" ]; then echo "  scope FAIL: $e — no crate at $dir"; rc=1; continue; fi
-    top="${m#-}"; top="${top%%::*}"
+    top="${m#[=-]}"; top="${top%%::*}"
     if [ -n "$m" ] && [ ! -f "$dir/src/$top.rs" ] && [ ! -f "$dir/src/$top/mod.rs" ] \
        && ! grep -qE "^\s*(pub(\(crate\))? )?mod $top\b" "$dir/src/lib.rs"; then
-      echo "  scope FAIL: $e — no module $top in $dir/src"; rc=1; continue
+      echo "  scope FAIL: $e — no module $top in $dir/src"; rc=1
     fi
-    # A module entry must match > 0 runnable tests; an exclusion exactly one
-    # test (ignored or not), so a renamed test cannot leave a dead exclusion.
-    case "$m" in
-      "") fs='all()'; want=gt0 ;;
-      -*) fs="test(=${m#-})"; want=one ;;
-      *) fs="test(/^$m::/)"; want=gt0 ;;
-    esac
-    n="$(cargo +nightly miri nextest list -p "$c" -E "$fs" --message-format json 2>/dev/null | WANT="$want" python3 -c '
-import json, os, sys
-d = json.load(sys.stdin); n = 0
-one = os.environ.get("WANT") == "one"
-for s in d.get("rust-suites", {}).values():
-    for t in s.get("testcases", {}).values():
-        if t.get("filter-match", {}).get("status") == "matches" and (one or not t.get("ignored")):
-            n += 1
-print(n)' 2>/dev/null)"
-    if [ "$want" = one ]; then
-      if [ "${n:-0}" = 1 ]; then echo "  scope ok: $e — names 1 test"
-      else echo "  scope FAIL: $e — names ${n:-0} test(s), expected exactly 1"; rc=1; fi
-    elif [ "${n:-0}" -gt 0 ]; then echo "  scope ok: $e — $n test(s)"
-    else echo "  scope FAIL: $e — matches ${n:-0} runnable test(s)"; rc=1; fi
   done
+  for c in $(g6t_crates); do g6t_scope_counts "$c" || rc=1; done
   return $rc
 }
 
 run_g6t_selftest() {
   require_miri; require_nextest
   local rc=0 out
-  echo "=== G6t --self-test arm 1: the scope (every entry exists and matches > 0 tests) ==="
+  echo "=== G6t --self-test arm 1: the scope (every entry exists and matches what it names) ==="
   g6t_scope_selftest || rc=1
   echo "=== G6t --self-test arm 2: deliberate UB and a leak are RED under Tree Borrows ==="
   mn_fixture_selftest tb || rc=1
@@ -1115,6 +1180,21 @@ run_g6t_selftest() {
     cat "$out"; echo "  self-test FAIL: the off half stayed GREEN with debug assertions back ON"; rc=1
   else
     tail -5 "$out"; echo "  arm 4 OK: the G6c-annotated half goes RED when the flag is lost."
+  fi
+  rm -f "$out"
+  echo "=== G6t --self-test arm 5: a G6t run with a dead scope entry is RED before running anything ==="
+  out="$(mn_tmp g6tst5)"
+  if G6T_SCOPE="rustty-renderer:cell rustty-renderer:no_such_module
+rustty-renderer:=cell::no_such_test rustty-renderer:-no_such_module::no_such_test" \
+     g6t_crate rustty-renderer "" >"$out" 2>&1; then
+    cat "$out"; echo "  self-test FAIL: G6t stayed GREEN with dead scope entries"; rc=1
+  elif grep -q 'scope FAIL: rustty-renderer:no_such_module — 0 runnable' "$out" \
+       && grep -q 'scope FAIL: rustty-renderer:=cell::no_such_test — names no test' "$out" \
+       && grep -q 'scope FAIL: rustty-renderer:-no_such_module::no_such_test — names no test' "$out" \
+       && grep -q 'scope ok: rustty-renderer:cell' "$out" && ! grep -q 'Miri Tree Borrows' "$out"; then
+    grep -E 'scope FAIL|RED' "$out"; echo "  arm 5 OK: each dead entry is named, and no Miri run started."
+  else
+    cat "$out"; echo "  self-test FAIL: the dead entries were not each named, or the run started"; rc=1
   fi
   rm -f "$out"
   [ $rc = 0 ] && echo "G6t --self-test: ALL ARMS REACHABLE"
