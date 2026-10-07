@@ -397,9 +397,12 @@ WRAP
     chmod +x "$d/hwasan-$cc" || return 1
     # G-TSAN (P7-W17): -fsanitize=thread exactly when the crate being compiled
     # is instrumented (as above), so the C/C++ we build ourselves reports its
-    # own races and its own synchronization is visible to the runtime. clang
-    # only instruments here (-c); rustc links its own TSan runtime, which
-    # resolves the __tsan_* calls (tsan_archive_check verifies them).
+    # own races and its own synchronization is visible to the runtime. The
+    # wrapper adds -fsanitize=thread to EVERY invocation it sees, but cc only
+    # calls it to compile (-c) and archives with ar, so in practice it
+    # instruments objects; the final link is rustc's, which links its own TSan
+    # runtime and resolves the __tsan_* calls (tsan_archive_check verifies
+    # them).
     cat >"$d/tsan-$cc" <<WRAP
 #!/usr/bin/env bash
 case ",\${CARGO_CFG_SANITIZE:-}," in
@@ -715,8 +718,18 @@ EOF
 # target dir holds only that crate's dependencies).
 # Build scripts of host build-dependencies write under <td>/debug/build, which
 # is not instrumented and not looked at.
+# Non-vacuity: zero archives is RED when it cannot be right, i.e. when the
+# instrumented build dir is missing (the crate was not built for TRIPLE, so
+# nothing was looked at) or when a build script there declared a static
+# library (cargo:rustc-link-lib=static=..., what cc prints for each archive it
+# builds) yet no lib*.a was found (the find looked in the wrong place). Zero
+# archives with no such declaration is a crate that compiles no C: GREEN.
 tsan_archive_check() {
-  local td="$1" tgt="${2:-$(host_target)}" a n=0 inst=0 pkg dir e ex rc=0
+  local td="$1" tgt="${2:-$(host_target)}" a n=0 inst=0 pkg dir e ex rc=0 decl
+  if [ ! -d "$td/$tgt/debug/build" ]; then
+    echo "  ❌ tsan C archives: no ${td##*/}/$tgt/debug/build — nothing was built for the instrumented target, so nothing could be checked"
+    return 1
+  fi
   while IFS= read -r a; do
     [ -n "$a" ] || continue
     dir="${a#"$td/$tgt/debug/build/"}"; dir="${dir%%/*}"; pkg="${dir%-*}"
@@ -737,6 +750,13 @@ tsan_archive_check() {
   done <<EOF
 $(find "$td/$tgt/debug/build" -path '*/out/*' -name 'lib*.a' 2>/dev/null | sort)
 EOF
+  if [ "$n" -eq 0 ]; then
+    decl="$(grep -lE '^cargo::?rustc-link-lib=static[:=]' "$td/$tgt/debug/build"/*/output 2>/dev/null | wc -l | tr -d ' ')"
+    if [ "$decl" -gt 0 ]; then
+      echo "  ❌ tsan C archives: $decl build script(s) declared a static C library, but no lib*.a was found under $tgt/debug/build/*/out — the check would pass vacuously"
+      return 1
+    fi
+  fi
   if [ "$rc" -eq 0 ]; then echo "  ok tsan C archives: $n built for the instrumented target, $inst instrumented (__tsan_ references), the rest named exceptions"; fi
   return $rc
 }
@@ -1298,6 +1318,14 @@ RS
         "TSAN_UNINSTRUMENTED=('plain-sys|fixture'); tsan_archive_check '$fx/tt' trip"
       ic "tsan: a listed exception whose archive IS instrumented is stale (RED)" 1 "the entry is stale" \
         "TSAN_UNINSTRUMENTED=('inst-sys|fixture'); tsan_archive_check '$fx/tu' trip"
+      # Non-vacuity: zero archives where C was declared, or nothing built for
+      # the triple, is RED; zero archives with no C declared passes.
+      mkdir -p "$fx/tz/trip/debug/build/c-sys-1/out" "$fx/tn/trip/debug/build/pure-1/out"
+      printf 'cargo:rustc-link-search=native=%s\ncargo:rustc-link-lib=static=c\n' "$fx/tz/trip/debug/build/c-sys-1/out" >"$fx/tz/trip/debug/build/c-sys-1/output"
+      printf 'cargo:rerun-if-changed=build.rs\n' >"$fx/tn/trip/debug/build/pure-1/output"
+      ic "tsan: zero archives although a build script declared a static C library is RED" 1 "1 build script(s) declared a static C library" "tsan_archive_check '$fx/tz' trip"
+      ic "tsan: nothing built for the instrumented triple is RED" 1 "nothing was built for the instrumented target" "tsan_archive_check '$fx/tz' other-trip"
+      ic "tsan control: zero archives and no C declared passes" 0 "0 built for the instrumented target" "tsan_archive_check '$fx/tn' trip"
     else
       echo "  FAIL I: cc could not compile the tsan fixture object"; fail=1
     fi
