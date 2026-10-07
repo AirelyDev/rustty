@@ -2540,7 +2540,7 @@ the `thread backtrace all` of the stopped process is the evidence.
 
 ---
 
-## V27. The `page::` Miri group exceeds the 30-minute bound — **ENVIRONMENT-BLOCKED (time)** [P7-W1 T2, Ruling 18, 2026-09-29]
+## V27. The `page::` Miri group exceeds the 30-minute bound — **DISCHARGED 2026-10-06 (P7-W15, head `04f0a894c`)** [P7-W1 T2, Ruling 18, 2026-09-29]
 
 **Blocked on:** run time, not correctness. The `page::` Miri test group took 52 minutes on macOS
 during task P7-W1 T2 (Ruling 18), over the 30-minute bound the parity-closure Miri lanes hold
@@ -2561,7 +2561,9 @@ UB. The libtest form, `cargo +nightly miri test -p rustty-vt --lib -- page::`, t
 
 **Note (P7-W12 T6, 2026-09-30):** T6 measured the Phase 7 tests one by one under G6 and moves the ones past its bound to G6c (NEW-FINDINGS N491; `.port/phase-2/MIRI_EXCEPTIONS.md`, "P7-W12 T6"). This does not discharge V27: a later full lane run does.
 
-## V28. The P7-W1 T5 Miri debt — **ENVIRONMENT-BLOCKED (time)** [P7-W1 T5, Ruling 40, 2026-09-29]
+**DISCHARGED 2026-10-06 (P7-W15, head `04f0a894c`):** by the full G6, G6c and G6t runs. The evidence is in V29's discharge note, which covers V27, V28 and V29 together.
+
+## V28. The P7-W1 T5 Miri debt — **DISCHARGED 2026-10-06 (P7-W15, head `04f0a894c`)** [P7-W1 T5, Ruling 40, 2026-09-29]
 
 **Blocked on:** run time. Three tests each hit the 30-minute bound on their own and were not
 carried to completion under Miri during task P7-W1 T5 (Ruling 40): the idle-page test, the clone
@@ -2585,7 +2587,9 @@ test passes and Miri reports no UB.
 
 **Note (P7-W12 T6, 2026-09-30):** T6 measured the Phase 7 tests one by one under G6 and moves the ones past its bound to G6c (NEW-FINDINGS N491; `.port/phase-2/MIRI_EXCEPTIONS.md`, "P7-W12 T6"). Three of its tests (`pagelist_teardown_after_clone_failure_returns_every_node`, `…_clone_from_failure_…`, `…_reset_…`) TIMEOUT in G6 and moved to G6c (they pass there under Stacked and Tree Borrows); `…_init_failure_…` passes in G6 (14 s). This does not discharge V28: a later full lane run does.
 
-## V29. The P7-W5 T4 search-prepend Miri debt — **ENVIRONMENT-BLOCKED (time)** [P7-W5 T4, Ruling 49, 2026-09-29]
+**DISCHARGED 2026-10-06 (P7-W15, head `04f0a894c`):** by the full G6, G6c and G6t runs. The evidence is in V29's discharge note, which covers V27, V28 and V29 together.
+
+## V29. The P7-W5 T4 search-prepend Miri debt — **DISCHARGED 2026-10-06 (P7-W15, head `04f0a894c`)** [P7-W5 T4, Ruling 49, 2026-09-29]
 
 **Blocked on:** run time. Of the three tests ported from upstream `06178eeaa` (search resumes after
 history is prepended; N435), only the `search/pagelist` one ran to completion under Miri (clean).
@@ -2624,6 +2628,25 @@ and Tree Borrows (3,946 s). **None is discharged**: the discharge rule needs G6 
 G6t over `page`/`pagelist`/`search` all GREEN, and G6t stopped RED at its first finding (NEW-FINDINGS
 N500, in `snapshot::codec`, outside the three groups) before G6 ran. Next: fix N500, then run
 `check_leaks.sh --tree-borrows` and `check_leaks.sh --all-done` to completion.
+
+**DISCHARGED 2026-10-06 (P7-W15, head `04f0a894c`, `MIRI_TEST_THREADS=6`; V27, V28 and V29 together).** The
+discharge rule holds: G6 on `rustty-vt`, G6c, and G6t over `page`/`pagelist`/`search` are all GREEN.
+
+- **G6** (`check_leaks.sh --all-done`, 38 crates, 13,354 s, run on `04f0a894c`). `rustty-vt` passed 3,104 of
+  3,104 tests (251 skipped) in 9,525 s, plus 2 doc tests, under Stacked Borrows with no UB and no leak. That
+  covers V27's `page::` group, V28's whole `pagelist` group in one run, and V29's `search::` group. Every
+  other crate is also GREEN, after the N507 gate fix (`rustty-cli` and `rustty-wasm` reran GREEN).
+- **G6c** (124 of 124, 1,110 s, `5e8cbd918`). This covers V28's three teardown tests and V29's `search/screen`
+  prepend test with debug assertions off. The only `rustty-vt` change since is N500's test code in
+  `snapshot/codec.rs`, which holds no G6c test.
+- **G6t** (Tree Borrows, complete). `rustty-vt` passed 1,597 of 1,597 in scope, which includes `page`,
+  `pagelist` and `search`, plus the 119 G6c-annotated tests with debug assertions off, at `b2c119aba` in
+  11,726 s + 1,843 s. No `rustty-vt` source changed after that. `rustty-xev` passed 22. At `04f0a894c`,
+  `rustty-vt-c` passed 570, the narrowed `rustty-renderer` 60 and `rustty-core` 67, in 1,296 s.
+- V29's both-lanes-excepted `search/terminal` prepend test passed unbounded at `5e8cbd918`: Stacked
+  Borrows in 2,636 s and Tree Borrows in 3,946 s, with no UB and no leak.
+
+Records: `.port/phase-2/MIRI_EXCEPTIONS.md`, "P7-W15", "Final lane runs".
 
 ## V30. The `sanitizers` CI job (G-ASAN, G-LSAN, G-MSAN on x86_64 Linux): written, never run on GitHub's runners — **ENVIRONMENT-BLOCKED** [P7-W14, 2026-10-01]
 

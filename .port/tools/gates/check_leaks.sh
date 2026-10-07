@@ -606,7 +606,11 @@ if failed:
     red += ['    %s %s' % (final[t], t) for t in failed[:25]]
     if len(failed) > 25:
         red.append('    ... and %d more' % (len(failed) - 25))
-if summary and not passed:
+import os
+native = os.environ.get('MN_NATIVE_RUNNABLE', '')
+if summary and not passed and not failed and not findings and native == '0':
+    print('    %s: no runnable test in the NATIVE build either (every test is #[ignore]d in source, not by a Miri cfg)' % label)
+elif summary and not passed:
     red.append('VACUOUS: 0 tests passed (the filterset matched nothing runnable, or everything was skipped).')
 if passed and len(passed) < floor:
     red.append('only %d test(s) passed, expected at least %d.' % (len(passed), floor))
@@ -669,17 +673,53 @@ run_miri_nextest() {
   [ -n "$kpid" ] && { mn_killtree "$kpid" 2>/dev/null; wait "$kpid" 2>/dev/null; }
   MN_SECS=$((SECONDS - t0))
   echo "    [$crate] ${MN_SECS}s"
-  mn_verdict "$out" "$crate" "$rc"
+  # MN_NATIVE_IGNORED_OK (G6's whole-crate arms only): a crate whose every test
+  # is `#[ignore]`d in source (rustty-wasm: its one test needs the wasm artifact)
+  # runs 0 tests, which libtest's lane reported as `ok. 0 passed; 1 ignored`. The
+  # VACUOUS rule is waived only when the NATIVE build of the same selection also
+  # has no runnable test, so a test skipped by `cfg_attr(miri, ignore)` still
+  # leaves the run VACUOUS (NEW-FINDINGS N507).
+  local native=""
+  if [ -n "${MN_NATIVE_IGNORED_OK:-}" ] && grep -qE '^ *Summary \[[^]]*\] 0 tests run' "$out"; then
+    native="$( ( cd "${MN_DIR:-$RUSTTY_ROOT}" && cargo +nightly nextest list -p "$crate" "$@" -E "$fs" --message-format json 2>/dev/null ) | python3 -c '
+import json, sys
+try: d = json.load(sys.stdin)
+except Exception: print("unknown"); sys.exit(0)
+print(sum(1 for s in d.get("rust-suites", {}).values() for t in s.get("testcases", {}).values()
+          if t.get("filter-match", {}).get("status") == "matches" and not t.get("ignored")))')"
+  fi
+  MN_NATIVE_RUNNABLE="$native" mn_verdict "$out" "$crate" "$rc"
 }
 
 mn_tmp() { mktemp "${TMPDIR:-/tmp}/mn.$1.XXXXXX"; }
 
 # Doc tests: nextest does not run them, `cargo miri test` did, so G6 keeps a
 # libtest `--doc` arm per crate (same set as before, R5).
+#
+# A crate whose `[lib]` sets `doctest = false` has no doc tests: `cargo miri
+# test -p <c>` (the libtest lane) honours that, but an explicit `--doc` overrides
+# it and compiles every `///` code block anyway (found by the first full G6 on
+# nextest: rustty-cli's ported shell-example comments, NEW-FINDINGS N507). So the
+# arm reads the flag from `cargo metadata` and skips such a crate, naming why.
+lib_doctest_disabled() {  # $1 = crate; 0 = its lib target has doctest = false
+  ( cd "${MN_DIR:-$RUSTTY_ROOT}" && cargo metadata --no-deps --format-version 1 2>/dev/null ) \
+    | python3 -c '
+import json, sys
+c = sys.argv[1]
+for p in json.load(sys.stdin)["packages"]:
+    if p["name"] != c: continue
+    for t in p["targets"]:
+        if "lib" in t["kind"] or "rlib" in t["kind"] or "cdylib" in t["kind"]:
+            sys.exit(0 if t.get("doctest") is False else 1)
+sys.exit(1)' "$1"
+}
 miri_doctests() {
   local c="$1" d r line
+  if lib_doctest_disabled "$c"; then
+    echo "    [$c] doc tests: none ([lib] doctest = false, which cargo miri test honours)"; return 0
+  fi
   d="$(mn_tmp doc)"
-  cargo +nightly miri test -p "$c" --doc >"$d" 2>&1; r=$?
+  ( cd "${MN_DIR:-$RUSTTY_ROOT}" && cargo +nightly miri test -p "$c" --doc ) >"$d" 2>&1; r=$?
   if grep -q 'no library targets found' "$d"; then
     echo "    [$c] doc tests: none (no library target)"; rm -f "$d"; return 0
   fi
@@ -701,7 +741,7 @@ run_crate_nextest() {
   if [ -n "$live" ]; then
     live_binaries_routed "$c" "$live" || return 1
     echo "=== G6 [$c] :: Miri via nextest (unit surface --lib; live-FFI test binaries routed to ASan per MIRI_EXCEPTIONS.md) ==="
-    MN_OUT="$out" run_miri_nextest "$c" sb on 'all()' --lib || rc=1
+    MN_OUT="$out" MN_NATIVE_IGNORED_OK=1 run_miri_nextest "$c" sb on 'all()' --lib || rc=1
     local t
     for t in $live; do
       echo "=== G6 [$c --test $t] :: ASan (live syscalls; Miri cannot execute them) ==="
@@ -710,7 +750,7 @@ run_crate_nextest() {
     done
   else
     echo "=== G6 [$c] :: Miri via nextest (UB + leaks, one process per test) ==="
-    MN_OUT="$out" run_miri_nextest "$c" sb on 'all()' || rc=1
+    MN_OUT="$out" MN_NATIVE_IGNORED_OK=1 run_miri_nextest "$c" sb on 'all()' || rc=1
     miri_doctests "$c" || rc=1
     asan_companions "$c" || rc=1
   fi
@@ -832,6 +872,46 @@ mn_vacuous_selftest() {
   printf '%s\n' "$v" | sed 's/^/  | /' | tail -3
   if printf '%s' "$v" | grep -q 'VACUOUS'; then echo "  arm OK: an empty filterset is a vacuous RED"
   else echo "  self-test FAIL: an empty filterset was not a vacuous RED"; rc=1; fi
+  rm -rf "$D"; rm -f "$out" "$out.passed"
+  return $rc
+}
+
+# N507's two G6 arms, proven both ways on a scratch crate: (a) a crate whose
+# every test is #[ignore]d in source passes, but one skipped only by
+# cfg_attr(miri, ignore) stays VACUOUS; (b) `[lib] doctest = false` skips the doc
+# arm, and without it the same non-Rust code block is RED.
+mn_n507_selftest() {
+  local D out v rc=0
+  D="$(mktemp -d "${TMPDIR:-/tmp}/mnn507.XXXXXX")"; out="$(mn_tmp n507)"
+  ( cd "$D" && cargo init --lib --name mnn507 -q 2>/dev/null
+    printf '\n[lib]\ndoctest = false\n' >> Cargo.toml
+    cat > src/lib.rs <<'RS'
+/// Examples:
+///
+///     mnn507 +ssh user@example.com
+pub fn run() {}
+#[cfg(test)]
+mod t {
+    #[test]
+    #[ignore = "needs an external artifact"]
+    fn source_ignored() {}
+}
+RS
+  )
+  v="$(MN_DIR="$D" MN_OUT="$out" MN_NATIVE_IGNORED_OK=1 run_miri_nextest mnn507 sb on 'all()' 2>&1)"; printf '%s\n' "$v" | sed 's/^/  | /' | tail -2
+  if printf '%s' "$v" | grep -q 'NATIVE build either' && ! printf '%s' "$v" | grep -q 'RED'; then echo "  arm OK: all tests #[ignore]d in source is not vacuous"
+  else echo "  self-test FAIL: a crate with only source-ignored tests was RED"; rc=1; fi
+  sed -i '' 's/#\[ignore = "needs an external artifact"\]/#[cfg_attr(miri, ignore)]/' "$D/src/lib.rs"
+  v="$(MN_DIR="$D" MN_OUT="$out" MN_NATIVE_IGNORED_OK=1 run_miri_nextest mnn507 sb on 'all()' 2>&1)"; printf '%s\n' "$v" | sed 's/^/  | /' | tail -2
+  if printf '%s' "$v" | grep -q 'VACUOUS'; then echo "  arm OK: a test skipped only under Miri still leaves the run VACUOUS"
+  else echo "  self-test FAIL: a Miri-only skip passed as non-vacuous"; rc=1; fi
+  v="$(MN_DIR="$D" miri_doctests mnn507 2>&1)"; printf '%s\n' "$v" | sed 's/^/  | /' | head -2
+  if printf '%s' "$v" | grep -q 'doctest = false' && ! printf '%s' "$v" | grep -q RED; then echo "  arm OK: [lib] doctest = false skips the doc arm"
+  else echo "  self-test FAIL: doctest = false was not honoured"; rc=1; fi
+  sed -i '' '/^\[lib\]$/d; /^doctest = false$/d' "$D/Cargo.toml"
+  v="$(MN_DIR="$D" miri_doctests mnn507 2>&1)"; printf '%s\n' "$v" | sed 's/^/  | /' | head -2
+  if printf '%s' "$v" | grep -q 'RED \[mnn507\]: Miri doc tests'; then echo "  arm OK: with doc tests enabled, the non-Rust block is RED"
+  else echo "  self-test FAIL: the enabled doc arm did not go RED on a non-Rust block"; rc=1; fi
   rm -rf "$D"; rm -f "$out" "$out.passed"
   return $rc
 }
@@ -1074,6 +1154,8 @@ case "${1:---all-done}" in
     mn_fixture_selftest tb || rc=1
     echo "=== G6 --self-test: an empty filterset ==="
     mn_vacuous_selftest || rc=1
+    echo "=== G6 --self-test: N507 (source-ignored crate; [lib] doctest = false) ==="
+    mn_n507_selftest || rc=1
     [ "$rc" = 0 ] && echo "G6 --self-test: ALL ARMS REACHABLE"
     exit $rc ;;
   --debug-assertions-off)

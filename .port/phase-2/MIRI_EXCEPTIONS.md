@@ -3081,7 +3081,7 @@ G6t therefore names only the renderer modules whose tests run under Miri (`G6T_S
 the single definition): `cell`, `cursor`, `dmabuf`, `generic::surface_mailbox_tests`,
 `generic::derived_config_tests`, `health_tests`, `image::macos_impl`, `latest_frame`, `log_capture`,
 `message::change_config_tests`, `metal::gpu_abi`, `metal::shaders::metallib_tests`, `metal::test_support`,
-`overlay`, `state`, `thread`, `undefined`, `webgl` (63 tests run). Excluded, with the reason **"FFI
+`overlay`, `state`, `thread`, `undefined`, `webgl` (60 tests run). Excluded, with the reason **"FFI
 (Metal/ObjC/glslang/SPIRV/onig/wuffs) — covered by G-ASAN/G-LSAN"**: `generic::macos_impl`, `metal::buffer`,
 `metal::iosurface_layer`, `metal::metal_impl`, `metal::pipeline`, `metal::shaders::post_pipeline_error_tests`,
 `metal::target`, `metal::tests`, `link`, `shadertoy`, `opengl`, the integration-test binaries, and three
@@ -3093,3 +3093,30 @@ Oniguruma). One more single test is excluded for a different reason:
 not a memory-safety one, and runs natively and under G-ASAN/G-LSAN. The scope self-test proves each module
 entry matches more than 0 tests and each single-test exclusion names exactly one test; any failure inside an
 included module, `unsupported operation` included, stays RED.
+
+**Final lane runs (2026-10-06, head `04f0a894c`, `MIRI_TEST_THREADS=6`).** The host also ran a UTM VM and
+other sessions' work, so wall times are upper bounds.
+
+- **G6t**, completed on the final head. The `rustty-vt-c`, narrowed `rustty-renderer` and `rustty-core`
+  part was rerun at `04f0a894c`: `rustty-vt-c` 570 of 570 (1,051 s), `rustty-renderer` 60 of 60 (209 s),
+  `rustty-core` 67 of 67 (36 s), GREEN in 1,296 s. `rustty-vt` (1,597, plus 119 with debug assertions off)
+  and `rustty-xev` (22) are GREEN from the second run at `b2c119aba`. No `rustty-vt` or `rustty-xev` source
+  changed between `b2c119aba` and `04f0a894c`.
+- **G6c**: GREEN, 124 of 124, at `5e8cbd918`. The only `rustty-vt` change since then is test code in
+  `snapshot/codec.rs` (N500), which holds no G6c test.
+- **G6** (`check_leaks.sh --all-done`), 38 claimed-done crates, 13,354 s (3 h 43 min). All 28 Miri-lane crates
+  passed every test they ran, with no UB and no leak. All 10 ASan-lane crates passed, and the log has no
+  `test result: FAILED` line. Miri pass counts: `rustty-vt` 3,104 (251 skipped; 9,525 s) and its 2 doc tests,
+  `rustty-vt-c` 570 (692 s), `rustty-vaxis` 159, `rustty-datastruct` 97, `rustty-z2d` 91, `rustty-cli` 88,
+  `rustty-zigstd` 86, `rustty-os` 79 (`--lib`, plus `cf_release_live` under ASan), `rustty-args` 78,
+  `rustty-core` 67, `rustty-lib` 42, `rustty-bench` 38 (1,117 s), `rustty-extra` 33, `rustty-apprt-api` 28,
+  `rustty-synthetic` 26, `rustty-unicode` 23, `rustty-xev` 22 (plus its ASan companions, 35 and 4),
+  `rustty-global` 13, `rustty-render-types` 12, `rustty-zf` 11, `rustty-cfg-fmt` 9, `rustty-terminfo` 7,
+  `rustty-helpgen` 6, `rustty-util` 6, `rustty-build-config` 5, `rustty-version` 5, `rustty-identity` 1.
+  Two crates went RED on gate wiring, not on Miri (NEW-FINDINGS **N507**). In `rustty-cli`, the doc arm's
+  `--doc` overrode `[lib] doctest = false`. In `rustty-wasm`, the VACUOUS rule fired on a crate whose only
+  test is `#[ignore]`d in source. Both arms were fixed and proven by a new `--self-test` arm, then
+  `--crate rustty-cli` (88 passed, 119 s) and `--crate rustty-wasm` (0 run, native build also 0 runnable,
+  20 s) reran GREEN. The fix changes no other crate's verdict: only `rustty-cli` among the Miri-lane crates
+  disables doc tests, and the waiver applies only to a run of 0 tests.
+

@@ -81,8 +81,10 @@ per test, performance cores minus 2 in parallel; `--libtest` keeps the old runne
 | G6c | PROGRESS | the 124 `cfg_attr(all(miri, debug_assertions), ignore)` tests, debug assertions off, each resolved to an exact path that must PASS |
 | G6t | PROGRESS (new) | Tree Borrows over `G6T_SCOPE` (vt `page`, `pagelist`, `search`, `render`, `screen`, `terminal`, `snapshot`, `kitty`; `rustty-vt-c`, `rustty-renderer`, `rustty-xev`, `rustty-core`), G6/G6c's debug-assertions split |
 
-Measured against libtest on V27-V29's groups: 11,722 s down to 1,687 s (6.9x). G6c GREEN in 1,110 s; G6t
-RED at its first finding (N500); G6 not yet run on the new runner. Self-tests (`--self-test`,
+Measured against libtest on V27-V29's groups: 11,722 s down to 1,687 s (6.9x). All three lanes GREEN at
+`04f0a894c` (2026-10-06, 6 processes): G6 over 38 crates in 13,354 s (`rustty-vt` 3,104 tests in 9,525 s;
+two gate-side REDs fixed and rerun GREEN, N507); G6c 124 of 124 in 1,110 s; G6t complete (N500, N505 fixed).
+V27, V28 and V29 discharged. Self-tests (`--self-test`,
 `--debug-assertions-off --self-test`, `--tree-borrows --self-test`) GREEN. Details:
 `.port/phase-2/MIRI_EXCEPTIONS.md`, "P7-W15".
 
@@ -95,8 +97,8 @@ command in `.port/phase-2/VERIFICATION_DEBT.md` or the named record.
 |---|---|---|
 | Full `ci.sh` end to end on macOS and Linux (Task 41 step 4) | here | `bash .port/tools/ci.sh`; on Linux `ssh rvm 'cd ~/projects/rustty && bash .port/tools/ci.sh'` |
 | G-REL: 17 release doc-test targets failed with "can't find crate" in the last full run, and pass when run alone; cause unknown | task-C-1 report | `bash .port/tools/gates/check_release_lane.sh` |
-| G6 Miri as one continuous lane (verified crate by crate only; about 8 h for rustty-vt under libtest; not yet run on the nextest runner, P7-W15) | `MIRI_EXCEPTIONS.md` | `bash .port/tools/gates/check_leaks.sh --all-done` |
-| G6t to completion (stopped RED at N500 on its first run, P7-W15) | `MIRI_EXCEPTIONS.md` "P7-W15" | `bash .port/tools/gates/check_leaks.sh --tree-borrows` |
+| ~~G6 Miri as one continuous lane~~ DONE on nextest, P7-W15: 38 crates in 13,354 s at `04f0a894c`, GREEN after N507 (`rustty-vt` 3,104 tests in 9,525 s; about 8 h under libtest) | `MIRI_EXCEPTIONS.md` "P7-W15" | `bash .port/tools/gates/check_leaks.sh --all-done` |
+| ~~G6t to completion~~ DONE, P7-W15: GREEN after N500 and N505 (`rustty-vt` 1,597 + 119, `rustty-xev` 22, `rustty-vt-c` 570, `rustty-renderer` 60, `rustty-core` 67) | `MIRI_EXCEPTIONS.md` "P7-W15" | `bash .port/tools/gates/check_leaks.sh --tree-borrows` |
 | ~~G6c as the gate runs it~~ DONE on nextest, P7-W15: 124 of 124 GREEN in 1,110 s (libtest: 119 tests, about 105 min) | `MIRI_EXCEPTIONS.md` "P7-W15" | `bash .port/tools/gates/check_leaks.sh --debug-assertions-off` |
 | Re-audit of the most-changed areas (Task 41 step 3) | here | the parity audit workflow over `src/terminal`, `src/apprt`, `pkg`, `include` |
 | Idle-machine performance runs and a new G8 baseline | V16–V18 | see `task-S-4-report.md` |
@@ -105,7 +107,7 @@ command in `.port/phase-2/VERIFICATION_DEBT.md` or the named record.
 | Nix and Snap packaging | V24 | user-deferred |
 | FreeBSD, flatpak execution, macOS 27 AppKit, Windows console/font discovery | V10–V12, V19, V23 | environment-blocked |
 | The new Valgrind CI job's runtime and software-GL noise on GitHub's x86_64 runners | N412, N413 | the `valgrind` job |
-| Phase 7 deferrals: the paired benches against a zigbench built at `12752b2ac` (alloc, `sc.clone`, `render-*`, mode lookup, print, nerd-font lookup, `grapheme_break`), the full Linux lane, and the V27–V29 Miri debt | P7-W12 T2, V27–V29 | `docs/superpowers/plans/2026-09-28-phase7-upstream-resync.md` §P7-W12 Task 2 |
+| Phase 7 deferrals: the paired benches against a zigbench built at `12752b2ac` (alloc, `sc.clone`, `render-*`, mode lookup, print, nerd-font lookup, `grapheme_break`), and the full Linux lane (the V27–V29 Miri debt was DISCHARGED by P7-W15 on 2026-10-06) | P7-W12 T2 | `docs/superpowers/plans/2026-09-28-phase7-upstream-resync.md` §P7-W12 Task 2 |
 
 ## Still open
 
@@ -146,8 +148,8 @@ Code gaps left after the final triage, none a ledger row:
   excludes `glslang-sys` and `xtask` and skips `rustty-renderer`'s EGL/GL/glslang test modules. Both are in
   `.port/phase-2/SANITIZER_SUPPRESSIONS.md` "Known limits". TSan (G-TSAN) and the Miri-on-nextest
   work are later steps of the same design.
-- **V27–V29**: Phase-7 Miri runs over the 30-minute task bound
-  (ENVIRONMENT-BLOCKED on time), with runnable recipes, deferred to P7-W12 T2.
+- **V27–V29**: Phase-7 Miri runs over the 30-minute task bound. DISCHARGED 2026-10-06 by P7-W15
+  (G6, G6c and G6t GREEN at `04f0a894c`).
 
 ## Continuing this work
 
@@ -239,7 +241,7 @@ committed records named here.
   **Next free ids: UD376, N500, V31.**
 - **P7-W15** (the Miri lanes on `cargo miri nextest`, plus G6t) used N500 (CLOSED: test-side Tree Borrows UB in
   `snapshot::codec::tests::complete_snapshot_preserves_every_supported_continuation_cut`, the N492
-  shape, found by G6t's first run, fixed with the raw-root idiom) and N501 (CLOSED: the same shape in seven `rustty-vt-c` and `rustty-core` tests, found by the second G6t run). **Next free ids: UD376, N502, V31.**
+  shape, found by G6t's first run, fixed with the raw-root idiom) N505 (CLOSED: the same shape in seven `rustty-vt-c` and `rustty-core` tests, found by the second G6t run; drafted as N501 and renumbered, since N501-N503 are reserved for P7-W16a) and N507 (CLOSED, gate-side: two G6 arms of the nextest port were stricter than the libtest lane, on `rustty-cli`'s disabled doc tests and `rustty-wasm`'s source-ignored test). P7-W15 discharged V27, V28 and V29. **Next free ids: UD376, N508, V31.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.

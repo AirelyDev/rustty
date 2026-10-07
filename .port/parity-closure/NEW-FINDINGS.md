@@ -10487,3 +10487,33 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **proof**: `rustty-vt-c` `search::`/`cell::`/`row::` tests under nextest: Stacked Borrows 38 passed,
   Tree Borrows 38 passed; `rustty-core` all 67 under Stacked and Tree Borrows passed; natively
   `rustty-vt-c` 583 and `rustty-core` `app::` 17 pass.
+
+## N507 — G6 on nextest went RED on two crates the libtest lane passed: `rustty-cli`'s disabled doc tests and `rustty-wasm`'s source-ignored test (gate-side)
+
+- **id**: N507. P7-W15 (the first full G6 on the nextest runner, `check_leaks.sh --all-done`, 2026-10-06, head
+  `04f0a894c`). **severity**: low (lane wiring only; no Miri finding). **state**: CLOSED 2026-10-06.
+- **finding**: every Miri test of all 28 Miri-lane crates passed with no UB or leak, and two crates still came out
+  RED:
+  - `rustty-cli` (88 of 88 passed): the doc arm failed to compile two `///` blocks,
+    `ssh.rs - ssh::run (line 324)` and `ssh_cache.rs - ssh_cache::run (line 142)`, with
+    `error: unknown start of token: \``. They are the ported shell examples (`rustty +ssh user@example.com`)
+    that the crate's `[lib] doctest = false` exists to keep out of rustdoc.
+  - `rustty-wasm`: `VACUOUS: 0 tests passed`. Its only test, `artifact_shape`, is `#[ignore]`d in source
+    (it needs the built `.wasm`; the WS14 browser gate runs it).
+- **mechanism**: both are P7-W15's nextest port. `miri_doctests` runs `cargo miri test -p <c> --doc`, and an
+  explicit `--doc` overrides `doctest = false`, which the libtest lane's plain `cargo miri test -p <c>` honoured.
+  The VACUOUS rule, meant for filtersets, also fired on a whole crate whose tests are all ignored in source,
+  which libtest reported as `ok. 0 passed; 1 ignored`.
+- **fix** (`.port/tools/gates/check_leaks.sh`): `miri_doctests` reads the lib target's `doctest` flag from
+  `cargo metadata` and skips a crate that disables it, naming why. G6's whole-crate arms set
+  `MN_NATIVE_IGNORED_OK`. When a run reports `0 tests run`, the runner lists the same selection in the
+  NATIVE build, and it waives VACUOUS only if that build has no runnable test either, so a test skipped
+  only by `cfg_attr(miri, ignore)` stays VACUOUS. Filterset lanes (G6c, G6t, the self-test's empty filterset)
+  never set it. Of the Miri-lane crates, only `rustty-cli` disables doc tests; the other four that do
+  (`rustty-config`, `rustty-font`, `rustty-font-shaper`, `rustty-oniguruma`) are ASan crates and never reach the arm.
+- **proof**: G6 `--self-test` gained an N507 arm on a scratch crate, and all four checks pass. A crate whose only
+  test is `#[ignore]`d in source is not vacuous. The same test as `cfg_attr(miri, ignore)` is VACUOUS. With
+  `doctest = false` the doc arm is skipped. Without it, the same non-Rust block is RED. Rerun with the fix:
+  `--crate rustty-cli` GREEN (88 passed, doc arm skipped, 119 s) and `--crate rustty-wasm` GREEN (0 run,
+  1 skipped, native build also 0 runnable, 20 s).
+- **production**: none (gate script only). Zig has no counterpart (N-only, not a UD).
