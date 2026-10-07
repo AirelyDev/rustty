@@ -172,6 +172,32 @@ mod tests {
         assert_ne!(mask, 0);
     }
 
+    /// UD377 regression (G-TSAN): `SupportedTargets()` stores the chosen-target
+    /// mask on every call, and `HWY_DYNAMIC_DISPATCH` loads it, from whichever
+    /// threads dispatch. With `HWY_NO_LIBCXX` upstream keeps that mask in a
+    /// plain `int64_t`, so two threads released together by the barrier made
+    /// an unsynchronized store/store pair, which ThreadSanitizer reports on
+    /// every run. The vendored `targets.h` now uses relaxed atomic builtins;
+    /// natively this checks that the concurrent calls agree.
+    #[test]
+    fn concurrent_supported_targets_calls_agree() {
+        let barrier = std::sync::Barrier::new(4);
+        let masks: Vec<c_longlong> = std::thread::scope(|s| {
+            let hs: Vec<_> = (0..4)
+                .map(|_| {
+                    s.spawn(|| {
+                        barrier.wait();
+                        // SAFETY: no arguments; reads/initializes the static
+                        // dispatch state (now atomically) and returns the mask.
+                        unsafe { hwy_supported_targets() }
+                    })
+                })
+                .collect();
+            hs.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        assert!(masks.iter().all(|&m| m != 0 && m == masks[0]), "{masks:?}");
+    }
+
     /// Link test for the C-ported detection symbol the runtime depends on. On
     /// every supported CPU the reference detection sets at least one bit; the
     /// fallback path returns baseline NEON / 0 only on unsupported arches, so we

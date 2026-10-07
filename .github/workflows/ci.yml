@@ -457,7 +457,7 @@ jobs:
           # reference runs valgrind in a job of its own). Here the gate reports
           # BLOCKED, naming that job (NEW-FINDINGS N413).
           RUSTTY_VALGRIND_OWN_JOB: "ci.yml's valgrind job"
-          # G-ASAN, G-LSAN and G-MSAN run in the `sanitizers` job below, one
+          # G-ASAN, G-LSAN, G-MSAN and G-TSAN run in the `sanitizers` job below, one
           # job per sanitizer (each is hours: every crate is rebuilt
           # instrumented). Here they report BLOCKED, naming that job.
           RUSTTY_SANITIZERS_OWN_JOB: "ci.yml's sanitizers job"
@@ -533,7 +533,9 @@ jobs:
   # memory-safety-lanes-design.md §B), one job per sanitizer on x86_64 Linux.
   # The reference has no sanitizer job (Zig's runtime safety and its leak-
   # checking test allocator play that role, plus the valgrind job); these are
-  # the port's own memory-safety lanes. All three also run on the aarch64
+  # the port's own memory-safety lanes. G-TSAN (P7-W17) joined the matrix: the
+  # threaded crates only, so it is the shortest leg; its Linux run is
+  # UNVERIFIED until the next push or an rvm run (V32). All three also run on the aarch64
   # Fedora VM (rvm), including G-MSAN; this job is their x86_64 copy. Runtime
   # on GitHub's runners: UNVERIFIED until the next push (V30).
   sanitizers:
@@ -543,7 +545,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sanitizer: [asan, lsan, msan]
+        sanitizer: [asan, lsan, msan, tsan]
     steps:
       - name: Checkout (rustty only — ghostty is NOT a dependency, R3)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

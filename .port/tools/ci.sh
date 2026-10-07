@@ -108,14 +108,16 @@
 #                                    CI" FFI-leak note. Its --self-test
 #                                    (G-VALGRIND-SELF) runs on every leg
 #                                    against a fake valgrind and cargo.
-#   G-ASAN / G-LSAN / G-MSAN / G-HWASAN sanitizers.sh --gate asan|lsan|msan|hwasan
+#   G-ASAN / G-LSAN / G-MSAN / G-HWASAN / G-TSAN
+#                                    sanitizers.sh --gate asan|lsan|msan|hwasan|tsan
 #                                    the workspace test suites under
 #                                    AddressSanitizer and ASan+LeakSanitizer
 #                                    (macOS + Linux), MemorySanitizer
 #                                    (Linux; BLOCKED elsewhere) and
 #                                    HWAddressSanitizer (aarch64 Linux; BLOCKED
-#                                    elsewhere), one crate at
-#                                    a time            -> HARD-FAIL.
+#                                    elsewhere), and ThreadSanitizer over
+#                                    the threaded crates (macOS + Linux),
+#                                    one crate at a time  -> HARD-FAIL.
 #                                    G-ASAN, G-LSAN and G-HWASAN also check that
 #                                    every Miri-excepted test ran under them (or is
 #                                    on the per-OS expected-absent list).
@@ -337,7 +339,7 @@ done
 # Gates skipped by --fast, by id. Deliberately a NAMED list rather than a
 # duration heuristic: a gate that becomes slow should be added here consciously,
 # with the cost written down, not silently dropped because it crossed a timeout.
-FAST_SKIP_IDS=" G4 G4-uni G5 G6 G6c G6t G8 G8b G-ASAN G-LSAN G-MSAN G-HWASAN "
+FAST_SKIP_IDS=" G4 G4-uni G5 G6 G6c G6t G8 G8b G-ASAN G-LSAN G-MSAN G-HWASAN G-TSAN "
 
 skip_in_fast() {
   # usage: skip_in_fast <id> ; returns 0 (true) when --fast should skip it
@@ -644,6 +646,14 @@ GATE_REGISTRY=(
   # macOS and x86_64 Linux, including every ci.yml leg, it is BLOCKED naming
   # the host (no hosted job runs it yet: V31). Hours, so --fast skips it.
   "G-HWASAN|HARD|bash $GATES/sanitizers.sh --gate hwasan"
+  # G-TSAN (P7-W17, 2026-10-06) — ThreadSanitizer (-Zbuild-std; the cc-built
+  # C instrumented through the tsan-cc wrapper and checked for __tsan_
+  # references) over the design's threaded crates (TSAN_SCOPE in
+  # sanitizers.sh: rustty-core, rustty-termio, rustty-xev, rustty-renderer,
+  # rustty-vt with the vt search thread, rustty-vt-c). Every race report is
+  # RED; suppressions only in .port/phase-2/tsan.supp with a cited reason.
+  # macOS and Linux; BLOCKED on any other host. Long, so --fast skips it.
+  "G-TSAN|HARD|bash $GATES/sanitizers.sh --gate tsan"
   # G-XCF (2026-08-26) — the XCFramework structure/ABI lane, the adapted port
   # of the reference's check-apple-libghostty-vt.nu. Adapted because rustty
   # ships a STATIC ARCHIVE where the reference ships a dylib: no Mach-O dylib

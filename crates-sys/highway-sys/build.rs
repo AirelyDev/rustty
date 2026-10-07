@@ -149,6 +149,13 @@ fn main() {
     println!("cargo:rerun-if-changed=cpp/detect.c");
     cbuild.compile("hwy_detect");
 
+    // The vendored Highway header tree every unit above includes (`hwy/...`,
+    // e.g. `hwy/targets.h`, which carries UD377's patch). Cargo scans a
+    // directory recursively, so an edit to any vendored header reruns this
+    // script and recompiles the archive (without it, a stale target dir keeps
+    // the old code).
+    println!("cargo:rerun-if-changed=vendor/hwy");
+
     // Export the vendored header dir so dependent crates (rustty-simd) can add
     // it to their own C++ include path (Cargo sets DEP_HWY_INCLUDE for any
     // crate that depends on this `links = "hwy"` crate).

@@ -32,7 +32,13 @@
 #                   ✅ Linux x86_64 and aarch64 (verified on rvm, 2026-10-01),
 #                   needs -Zbuild-std + instrumented C -> G-MSAN (the only MSan
 #                   lane; MSAN_AARCH64_NOTE turns aarch64 into BLOCKED if that regresses)
-#   thread  (TSan)  ✅ macOS + Linux  (needs -Zbuild-std)  -> G-TSAN, not yet a gate
+#   thread  (TSan)  ✅ macOS (verified P7-W17, 2026-10-06: a deliberate race is
+#                   RED, the Mutex-ordered control GREEN) + Linux (rustc's
+#                   target specs; the rvm run is V32). Needs -Zbuild-std
+#                   (without it: "mixing -Zsanitizer will cause an ABI
+#                   mismatch"); the cc-built C is instrumented through the
+#                   tsan-cc wrapper and checked (tsan_archive_check) -> G-TSAN,
+#                   over the threaded crates only (TSAN_SCOPE)
 #   hwaddress(HWASan)❌ macOS: compiler-rt builds it for Linux|Android|Fuchsia only
 #                   (COMPILER_RT_HAS_HWASAN); rustc and Apple clang reject it.
 #                   ❌ x86_64 Linux (rustc: "not supported for this target") ;
@@ -62,7 +68,7 @@
 #       LEGACY single-crate run (check_leaks.sh's G6 ASan companion arms call it
 #       this way). Sanitizers are rustc names: address thread leak memory hwaddress.
 #       Prints "SANITIZERS: GREEN|PROBLEM"; exit 0 / 1.
-#   sanitizers.sh --matrix --san <asan|lsan|msan|hwasan> (--crates <a,b c> | --workspace)
+#   sanitizers.sh --matrix --san <asan|lsan|msan|hwasan|tsan> (--crates <a,b c> | --workspace)
 #                 [--filter <f>] [--exclude <crate>]...
 #       The MATRIX runner: one crate at a time, all in ONE target dir per
 #       sanitizer (target/san-<san>), deleted when the pass ends. A crate spec
@@ -73,15 +79,17 @@
 #       (target/san-<san>-<crate>), deleted after that crate, so the disk holds
 #       one crate's instrumented build at a time (slower: every crate rebuilds
 #       its instrumented dependencies). Same as SAN_PER_CRATE_TARGET=1.
-#   sanitizers.sh --gate <asan|lsan|msan|hwasan>
-#       The ci.sh gates G-ASAN / G-LSAN / G-MSAN / G-HWASAN: the matrix over the
-#       workspace minus that sanitizer's cited exclusions, plus (asan, lsan,
-#       hwasan) the Miri-exception cross-check (every `cfg_attr(miri, ignore =
-#       "...")` test must have RUN and PASSED here, or be expected absent).
+#   sanitizers.sh --gate <asan|lsan|msan|hwasan|tsan>
+#       The ci.sh gates G-ASAN / G-LSAN / G-MSAN / G-HWASAN / G-TSAN: the matrix
+#       over the workspace minus that sanitizer's cited exclusions (G-MSAN and
+#       G-TSAN: their allow-list scopes), plus (asan, lsan, hwasan) the
+#       Miri-exception cross-check (every `cfg_attr(miri, ignore = "...")`
+#       test must have RUN and PASSED here, or be expected absent).
 #   sanitizers.sh --self-test
 #       G-SAN-SELF: a synthetic crate with a deliberate heap overflow (RED under
 #       ASan and, on aarch64 Linux, under HWASan, plus HWASan's wild-index arm),
-#       leak (RED under LSan), and uninitialized read (RED under MSan); a
+#       leak (RED under LSan), uninitialized read (RED under MSan) and data
+#       race, in Rust and in cc-built C (RED under TSan); a
 #       clean control (GREEN); an empty filter (vacuous RED); and the log
 #       classifier and cross-check over canned logs.
 #
@@ -112,6 +120,9 @@ SUPP_DIR="$ROOT/.port/phase-2"
 # per-thread data that LSan cannot see as roots there (lsan-darwin.supp's
 # header); Linux's are Mesa's (lsan.supp). SANITIZER_SUPPRESSIONS.md has both.
 if [ "$OS" = "Darwin" ]; then LSAN_SUPP="$SUPP_DIR/lsan-darwin.supp"; else LSAN_SUPP="$SUPP_DIR/lsan.supp"; fi
+# G-TSAN's suppressions (one file for every host; each entry cited in
+# SANITIZER_SUPPRESSIONS.md, ThreadSanitizer section).
+TSAN_SUPP="${TSAN_SUPP:-$SUPP_DIR/tsan.supp}"
 SAN_TARGET_ROOT="${SAN_TARGET_ROOT:-$ROOT/target}"
 SAN_LOG_ROOT="${SAN_LOG_ROOT:-$ROOT/target/san-logs}"
 SAN_MIN_FREE_GB="${SAN_MIN_FREE_GB:-15}"
@@ -201,6 +212,28 @@ MSAN_SKIPS=(
   "rustty-renderer|opengl::target::|render-target and dmabuf export tests on the offscreen EGL context (M3)"
   "rustty-renderer|shadertoy::|custom-shader translation through glslang and spirv-cross, whose glslang preprocessor reads libstdc++-constructed stream state (M2)"
 )
+# G-TSAN's scope (P7-W17) is the design's allow-list of THREADED crates
+# (design §B, TSan row), not the workspace: a data race needs two threads, and
+# the crates below are where the port runs its own. Format: "<spec>|<why>".
+# A spec naming a non-member is RED (check_members), as is a spec with zero
+# tests (the per-crate non-vacuity rule).
+TSAN_SCOPE=(
+  "rustty-core|the render thread, the surface mailbox and the app/surface lifecycle threads (surface/lifecycle.rs, app.rs)"
+  "rustty-termio|the pty read thread, the exec/Command fork paths and the termio mailbox"
+  "rustty-xev|the libxev port's thread pool, async wakeups and intrusive queues"
+  "rustty-renderer|the renderer Thread and its cross-thread draw/sync state (N437's area)"
+  "rustty-vt:wuffs,oniguruma|the vt search thread (search/thread.rs), the tmux control/viewer threads and the oniguruma first-use init race test (tmux::control::concurrent_first_notifications_do_not_race_oniguruma_init, needs the oniguruma feature; G-ASAN's FEATURE_LANES spec, so the default-feature tests run too)"
+  "rustty-vt-c|the C API's handles used from embedders' threads (search ticks, terminal effects)"
+  "highway-sys|the vendored Highway runtime's dispatch state, shared by every thread that runs a SIMD routine; holds UD377's regression test (concurrent_supported_targets_calls_agree)"
+)
+# G-TSAN's C-instrumentation check (tsan_archive_check): after each crate,
+# every lib*.a that a build script compiled for the instrumented target (under
+# <target dir>/<triple>/debug/build/<pkg>-<hash>/out) must reference __tsan_*.
+# One without is RED: the cc wrapper was bypassed, so TSan would neither see
+# that C's races nor its synchronization. Exceptions: "<pkg>|<reason>"; an
+# entry whose package built an instrumented archive is stale (RED).
+TSAN_UNINSTRUMENTED=(
+)
 MSAN_EXCLUDES=(
   "glslang-sys|its test runs glslang's preprocessor, whose TPpContext holds a std::istringstream constructed and imbued by the uninstrumented libstdc++.so; MSan reports the stream's own fields as uninitialized (PpContext.cpp:98, origin: the stack allocation of 'ppContext'); needs an MSan-instrumented libstdc++/libc++ (SANITIZER_SUPPRESSIONS.md M2)"
   "xtask|its tests run nested cargo and cmake builds that inherit RUSTFLAGS=-Zsanitizer=memory without -Zbuild-std, which rustc rejects ('mixing -Zsanitizer will cause an ABI mismatch'); it is the build driver, which G-VALGRIND leaves out for the same kind of reason (M4)"
@@ -230,12 +263,14 @@ tests_ran() {
 #     measured (rustty-vt, 253-294 s per-crate including its build, on a loaded
 #     Mac, P7-W16a), leaving room for a shared target dir's first crate, which
 #     builds every dependency;
-#   msan: 2400 s (-Zbuild-std rebuilds std for the instrumented target).
+#   msan: 2400 s (-Zbuild-std rebuilds std for the instrumented target);
+#   tsan: 3600 s, 2x its slowest crate (rustty-vt with wuffs,oniguruma:
+#     1781 s on the Mac, P7-W17; its 3,339 lib tests alone 1,394 s).
 # ---------------------------------------------------------------------------
 HANG_MARK="SANITIZERS-HANG"
 crate_timeout() {  # crate_timeout SAN -> seconds
   if [ -n "${SAN_CRATE_TIMEOUT_S:-}" ]; then printf '%s' "$SAN_CRATE_TIMEOUT_S"; return; fi
-  case "$1" in msan|memory) printf 2400 ;; *) printf 1200 ;; esac
+  case "$1" in msan|memory) printf 2400 ;; tsan|thread) printf 3600 ;; *) printf 1200 ;; esac
 }
 # Every descendant of PID, deepest first, then PID itself (explicit PIDs only).
 tree_pids() {
@@ -360,6 +395,22 @@ case ",\${CARGO_CFG_SANITIZE:-}," in
 esac
 WRAP
     chmod +x "$d/hwasan-$cc" || return 1
+    # G-TSAN (P7-W17): -fsanitize=thread exactly when the crate being compiled
+    # is instrumented (as above), so the C/C++ we build ourselves reports its
+    # own races and its own synchronization is visible to the runtime. The
+    # wrapper adds -fsanitize=thread to EVERY invocation it sees, but cc only
+    # calls it to compile (-c) and archives with ar, so in practice it
+    # instruments objects; the final link is rustc's, which links its own TSan
+    # runtime and resolves the __tsan_* calls (tsan_archive_check verifies
+    # them).
+    cat >"$d/tsan-$cc" <<WRAP
+#!/usr/bin/env bash
+case ",\${CARGO_CFG_SANITIZE:-}," in
+  *,thread,*) exec $real -fsanitize=thread -fno-omit-frame-pointer -g "\$@" ;;
+  *) exec $real "\$@" ;;
+esac
+WRAP
+    chmod +x "$d/tsan-$cc" || return 1
   done
 }
 
@@ -432,8 +483,21 @@ run_crate() {
       write_san_wrappers || return 2
       envs+=("CC=$SAN_TARGET_ROOT/san-cc-wrappers/msan-cc" "CXX=$SAN_TARGET_ROOT/san-cc-wrappers/msan-c++")
       envs+=("MSAN_OPTIONS=poison_in_dtor=1:allocator_may_return_null=1${SAN_MSAN_DIAG:+:halt_on_error=0}") ;;  # SAN_MSAN_DIAG=1: a diagnosis run that reports every use instead of stopping at the first (never a gate setting; the verdict is still RED on any report)
-    thread)
-      rflags="-Zsanitizer=thread"; build_std="-Zbuild-std" ;;
+    tsan|thread)
+      # -Zbuild-std: without it rustc rejects the mix ("mixing -Zsanitizer will
+      # cause an ABI mismatch"; P7-W17 probe), as for MSan and HWASan.
+      rflags="-Zsanitizer=thread"; build_std="-Zbuild-std"
+      # Our cc-built C/C++ is instrumented too (the same wrappers as G-MSAN).
+      write_san_wrappers || return 2
+      envs+=("CC=$SAN_TARGET_ROOT/san-cc-wrappers/tsan-cc" "CXX=$SAN_TARGET_ROOT/san-cc-wrappers/tsan-c++")
+      # halt_on_error=0 (the default) lists every race of the run; the binary
+      # still exits 66 after a report, and the classifier is RED on any.
+      # second_deadlock_stack=1: a lock-order-inversion report names both
+      # acquisitions. allocator_may_return_null=1: TSan's malloc aborts above
+      # 1 TiB like ASan's, and the port's OOM tests rely on the NULL (P7-W17,
+      # rustty-vt's first G-TSAN run). Suppressions: TSAN_SUPP, every entry cited in
+      # SANITIZER_SUPPRESSIONS.md; print_suppressions=1 lists each match.
+      envs+=("TSAN_OPTIONS=second_deadlock_stack=1:allocator_may_return_null=1:suppressions=$TSAN_SUPP:print_suppressions=1") ;;  # WHY: allocator_may_return_null=1 as for G-ASAN (the out-of-memory tests rely on malloc's NULL; first G-TSAN run, rustty-vt: allocation-size-too-big); the suppressions are not suppressive by themselves — each TSAN_SUPP entry is a third-party race with a cited reason in .port/phase-2/SANITIZER_SUPPRESSIONS.md (T rows), and print_suppressions=1 lists every match in the log
     leak)
       rflags="-Zsanitizer=leak" ;;
     hwasan|hwaddress)
@@ -562,8 +626,8 @@ free_gb() { df -Pk "$1" 2>/dev/null | awk 'NR==2 {printf "%d", $4/1048576}'; }
 drop_target() {
   local td="$1"
   case "$td" in
-    "$SAN_TARGET_ROOT"/san-asan|"$SAN_TARGET_ROOT"/san-lsan|"$SAN_TARGET_ROOT"/san-msan|"$SAN_TARGET_ROOT"/san-hwasan) ;;
-    "$SAN_TARGET_ROOT"/san-asan-*|"$SAN_TARGET_ROOT"/san-lsan-*|"$SAN_TARGET_ROOT"/san-msan-*|"$SAN_TARGET_ROOT"/san-hwasan-*) ;;
+    "$SAN_TARGET_ROOT"/san-asan|"$SAN_TARGET_ROOT"/san-lsan|"$SAN_TARGET_ROOT"/san-msan|"$SAN_TARGET_ROOT"/san-hwasan|"$SAN_TARGET_ROOT"/san-tsan) ;;
+    "$SAN_TARGET_ROOT"/san-asan-*|"$SAN_TARGET_ROOT"/san-lsan-*|"$SAN_TARGET_ROOT"/san-msan-*|"$SAN_TARGET_ROOT"/san-hwasan-*|"$SAN_TARGET_ROOT"/san-tsan-*) ;;
     *) echo "sanitizers.sh: refusing to delete '$td' (not a san-<san>[-<crate>] dir)" >&2; return 1 ;;
   esac
   case "$td" in *..*|*' '*) echo "sanitizers.sh: refusing to delete '$td'" >&2; return 1 ;; esac
@@ -646,6 +710,57 @@ EOF
   return 0
 }
 
+# tsan_archive_check TD [TRIPLE]: G-TSAN's C-instrumentation check (see
+# TSAN_UNINSTRUMENTED). Every lib*.a a build script compiled for the
+# instrumented target must reference __tsan_*. Prints one line per problem plus
+# a summary; returns 1 (RED) on an uninstrumented archive or an exception
+# whose archive is instrumented (stale). Runs after each crate (a per-crate
+# target dir holds only that crate's dependencies).
+# Build scripts of host build-dependencies write under <td>/debug/build, which
+# is not instrumented and not looked at.
+# Non-vacuity: zero archives is RED when it cannot be right, i.e. when the
+# instrumented build dir is missing (the crate was not built for TRIPLE, so
+# nothing was looked at) or when a build script there declared a static
+# library (cargo:rustc-link-lib=static=..., what cc prints for each archive it
+# builds) yet no lib*.a was found (the find looked in the wrong place). Zero
+# archives with no such declaration is a crate that compiles no C: GREEN.
+tsan_archive_check() {
+  local td="$1" tgt="${2:-$(host_target)}" a n=0 inst=0 pkg dir e ex rc=0 decl
+  if [ ! -d "$td/$tgt/debug/build" ]; then
+    echo "  ❌ tsan C archives: no ${td##*/}/$tgt/debug/build — nothing was built for the instrumented target, so nothing could be checked"
+    return 1
+  fi
+  while IFS= read -r a; do
+    [ -n "$a" ] || continue
+    dir="${a#"$td/$tgt/debug/build/"}"; dir="${dir%%/*}"; pkg="${dir%-*}"
+    ex=""
+    for e in ${TSAN_UNINSTRUMENTED[@]+"${TSAN_UNINSTRUMENTED[@]}"}; do
+      if [ "${e%%|*}" = "$pkg" ]; then ex="${e#*|}"; fi
+    done
+    n=$((n + 1))
+    if nm "$a" 2>/dev/null | grep -q '__tsan_'; then
+      inst=$((inst + 1))
+      if [ -n "$ex" ]; then echo "  ❌ tsan $pkg: TSAN_UNINSTRUMENTED lists it, but ${a#"$td"/} is instrumented — the entry is stale"; rc=1; fi
+    elif [ -n "$ex" ]; then
+      echo "  ⏭  tsan $pkg: ${a##*/} not checked for instrumentation — $ex"
+    else
+      echo "  ❌ tsan $pkg: ${a#"$td"/} has no __tsan_ reference (the cc wrapper was bypassed)"
+      rc=1
+    fi
+  done <<EOF
+$(find "$td/$tgt/debug/build" -path '*/out/*' -name 'lib*.a' 2>/dev/null | sort)
+EOF
+  if [ "$n" -eq 0 ]; then
+    decl="$(grep -lE '^cargo::?rustc-link-lib=static[:=]' "$td/$tgt/debug/build"/*/output 2>/dev/null | wc -l | tr -d ' ')"
+    if [ "$decl" -gt 0 ]; then
+      echo "  ❌ tsan C archives: $decl build script(s) declared a static C library, but no lib*.a was found under $tgt/debug/build/*/out — the check would pass vacuously"
+      return 1
+    fi
+  fi
+  if [ "$rc" -eq 0 ]; then echo "  ok tsan C archives: $n built for the instrumented target, $inst instrumented (__tsan_ references), the rest named exceptions"; fi
+  return $rc
+}
+
 # Matrix result accumulators (globals: bash 3.2 has no namerefs).
 M_RED=0; M_BLOCKED=0; M_TOTAL=0; M_ROWS=""; M_WALL=0
 # TARGET DIRS. Default: ONE target dir per sanitizer pass, target/san-<san>,
@@ -703,6 +818,10 @@ matrix_run() {  # matrix_run SAN FILTER SPEC...
     # target dir goes). A crate that did not build has nothing to inspect.
     if [ "$san" = hwasan ] && [ "$v" != BUILD ]; then
       hwasan_archive_check "$crate" "$td" || M_RED=1
+    fi
+    # G-TSAN: the same for every C archive built for the instrumented target.
+    if [ "$san" = tsan ] && [ "$v" != BUILD ]; then
+      tsan_archive_check "$td" || M_RED=1
     fi
     if [ -z "$shared" ]; then drop_target "$td"; fi
     local nt
@@ -926,6 +1045,52 @@ msan_partition_check() {
   return $bad
 }
 
+# G-TSAN (P7-W17): ThreadSanitizer over TSAN_SCOPE. Hosts: macOS and Linux
+# (rustc's target specs for aarch64-apple-darwin, x86_64-apple-darwin and the
+# Linux gnu targets carry THREAD; verified on aarch64-apple-darwin, P7-W17).
+# Anywhere else it is unverified, so BLOCKED, never GREEN.
+gate_tsan() {
+  own_job_blocked G-TSAN
+  need_nightly
+  if [ "$OS" != "Darwin" ] && [ "$OS" != "Linux" ]; then
+    echo "BLOCKED: G-TSAN needs ThreadSanitizer, verified on macOS and Linux only, not on $OS. It runs on the Mac and on the Linux VM (rvm)."
+    exit 3
+  fi
+  if ! rustup +nightly component list --installed 2>/dev/null | grep -q '^rust-src'; then
+    echo "BLOCKED: G-TSAN needs -Zbuild-std, which needs the nightly rust-src component (rustup component add rust-src --toolchain nightly)"
+    exit 3
+  fi
+  if ! command -v clang >/dev/null 2>&1; then
+    echo "BLOCKED: G-TSAN compiles the vendored C with clang -fsanitize=thread; clang is not on PATH"
+    exit 3
+  fi
+  if [ ! -r "$TSAN_SUPP" ]; then
+    echo "G-TSAN: RED — $TSAN_SUPP is missing (SANITIZER_SUPPRESSIONS.md's file)"; exit 1
+  fi
+  echo "### G-TSAN: ThreadSanitizer (-Zbuild-std; C via cc with -fsanitize=thread) over the threaded crates ($OS/$ARCH) ###"
+  local e extra=0
+  local -a specs_t=()
+  for e in ${TSAN_SCOPE[@]+"${TSAN_SCOPE[@]}"}; do
+    specs_t+=("${e%%|*}")
+    printf '  scope: %s — %s\n' "${e%%|*}" "${e#*|}"
+  done
+  for e in ${TSAN_UNINSTRUMENTED[@]+"${TSAN_UNINSTRUMENTED[@]}"}; do printf '  C not instrumented: %s — %s\n' "${e%%|*}" "${e#*|}"; done
+  check_members "G-TSAN scope" ${TSAN_SCOPE[@]+"${TSAN_SCOPE[@]}"} || extra=1
+  check_members "NO_TESTS_ON" ${NO_TESTS_ON[@]+"${NO_TESTS_ON[@]}"} || extra=1
+  rm -rf -- "${SAN_LOG_ROOT:?}/tsan"
+  if [ -n "${SAN_ONLY:-}" ]; then
+    # Debug aid, as for the ASan-like gates: the verdict is BLOCKED, never GREEN.
+    local -a narrowed=()
+    for e in ${specs_t[@]+"${specs_t[@]}"}; do case " $SAN_ONLY " in *" ${e%%:*} "*) narrowed+=("$e") ;; esac; done
+    specs_t=(${narrowed[@]+"${narrowed[@]}"})
+    echo "NOTE: SAN_ONLY narrows this run to: ${specs_t[*]:-<nothing>} — the verdict is BLOCKED, never GREEN"
+  fi
+  matrix_run tsan "" ${specs_t[@]+"${specs_t[@]}"}
+  matrix_summary tsan
+  if [ -n "${SAN_ONLY:-}" ]; then echo "  BLOCKED: SAN_ONLY narrowed the run"; M_BLOCKED=1; fi
+  gate_verdict "G-TSAN" "$extra"
+}
+
 MSAN_AARCH64_NOTE=""
 gate_msan() {
   own_job_blocked G-MSAN
@@ -1088,6 +1253,10 @@ RS
     'check_members x ${ASAN_EXCLUDES[@]+"${ASAN_EXCLUDES[@]}"} ${LSAN_EXCLUDES[@]+"${LSAN_EXCLUDES[@]}"} ${HWASAN_EXCLUDES[@]+"${HWASAN_EXCLUDES[@]}"} ${HWASAN_UNINSTRUMENTED[@]+"${HWASAN_UNINSTRUMENTED[@]}"} ${FEATURE_LANES[@]+"${FEATURE_LANES[@]}"} ${LINUX_FEATURE_LANES[@]+"${LINUX_FEATURE_LANES[@]}"} ${NO_TESTS_ON[@]+"${NO_TESTS_ON[@]}"} ${MSAN_EXCLUDES[@]+"${MSAN_EXCLUDES[@]}"}'
   hx "a stale *_EXCLUDES entry is RED" 1 "'no-such-crate' is listed but is not a workspace member" \
     'ASAN_EXCLUDES=("no-such-crate|fixture"); check_members "G-ASAN exclusion" "${ASAN_EXCLUDES[@]}"'
+  hx "control: the real TSAN_SCOPE names workspace members" 0 "" \
+    'check_members "G-TSAN scope" "${TSAN_SCOPE[@]}"'
+  hx "a stale TSAN_SCOPE entry is RED" 1 "'rustty-gone' is listed but is not a workspace member" \
+    'TSAN_SCOPE+=("rustty-gone|fixture"); check_members "G-TSAN scope" "${TSAN_SCOPE[@]}"'
   hx "a stale feature-lane entry is RED" 1 "'rustty-renamed' is listed but is not a workspace member" \
     'FEATURE_LANES=("rustty-renamed:wuffs|fixture"); check_members "G-ASAN feature lane" "${FEATURE_LANES[@]}"'
   hx "control: the real MSAN_SCOPE/MSAN_EXCLUDES/MSAN_SKIPS partition is complete" 0 "" 'msan_partition_check'
@@ -1134,6 +1303,32 @@ RS
     ic "a listed exception whose archive IS instrumented is stale (RED)" 1 "the entry is stale" \
       "HWASAN_UNINSTRUMENTED=('inst-sys|fixture'); hwasan_archive_check inst-sys '$fx/t'"
     ic "a crate that is not -sys is not checked (no output)" 0 "" "hwasan_archive_check rustty-x '$fx/t'"
+    # G-TSAN's check (tsan_archive_check): every archive built for the
+    # instrumented target (<td>/<triple>/debug/build), whatever the package.
+    mkdir -p "$fx/tt/trip/debug/build/inst-sys-1/out" "$fx/tt/trip/debug/build/plain-sys-1/out" "$fx/tt/debug/build/host-sys-1/out" "$fx/tu/trip/debug/build/inst-sys-1/out"
+    printf 'void __tsan_init(void);\nvoid f(void) { __tsan_init(); }\n' >"$fx/src/t.c"
+    if cc -c "$fx/src/t.c" -o "$fx/src/t.o" 2>/dev/null; then
+      ar rcs "$fx/tt/trip/debug/build/inst-sys-1/out/libinst.a" "$fx/src/t.o"
+      ar rcs "$fx/tu/trip/debug/build/inst-sys-1/out/libinst.a" "$fx/src/t.o"
+      ar rcs "$fx/tt/trip/debug/build/plain-sys-1/out/libplain.a" "$fx/src/p.o"
+      ar rcs "$fx/tt/debug/build/host-sys-1/out/libhost.a" "$fx/src/p.o"
+      ic "tsan control: instrumented target archives pass (a host build-dependency's is not looked at)" 0 "1 built for the instrumented target, 1 instrumented" "tsan_archive_check '$fx/tu' trip"
+      ic "tsan: an uninstrumented target archive is RED" 1 "plain-sys: trip/debug/build/plain-sys-1/out/libplain.a has no __tsan_ reference" "tsan_archive_check '$fx/tt' trip"
+      ic "tsan: a listed exception is a named skip" 0 "libplain.a not checked for instrumentation — fixture" \
+        "TSAN_UNINSTRUMENTED=('plain-sys|fixture'); tsan_archive_check '$fx/tt' trip"
+      ic "tsan: a listed exception whose archive IS instrumented is stale (RED)" 1 "the entry is stale" \
+        "TSAN_UNINSTRUMENTED=('inst-sys|fixture'); tsan_archive_check '$fx/tu' trip"
+      # Non-vacuity: zero archives where C was declared, or nothing built for
+      # the triple, is RED; zero archives with no C declared passes.
+      mkdir -p "$fx/tz/trip/debug/build/c-sys-1/out" "$fx/tn/trip/debug/build/pure-1/out"
+      printf 'cargo:rustc-link-search=native=%s\ncargo:rustc-link-lib=static=c\n' "$fx/tz/trip/debug/build/c-sys-1/out" >"$fx/tz/trip/debug/build/c-sys-1/output"
+      printf 'cargo:rerun-if-changed=build.rs\n' >"$fx/tn/trip/debug/build/pure-1/output"
+      ic "tsan: zero archives although a build script declared a static C library is RED" 1 "1 build script(s) declared a static C library" "tsan_archive_check '$fx/tz' trip"
+      ic "tsan: nothing built for the instrumented triple is RED" 1 "nothing was built for the instrumented target" "tsan_archive_check '$fx/tz' other-trip"
+      ic "tsan control: zero archives and no C declared passes" 0 "0 built for the instrumented target" "tsan_archive_check '$fx/tn' trip"
+    else
+      echo "  FAIL I: cc could not compile the tsan fixture object"; fail=1
+    fi
   else
     echo "  FAIL I: cc could not compile the fixture objects"; fail=1
   fi
@@ -1157,6 +1352,12 @@ RS
   # G-LSAN runs on Linux and macOS; any other host is BLOCKED (unverified there).
   hx "--gate lsan on a host other than Linux/macOS is BLOCKED (exit 3)" 3 "verified on Linux and macOS only, not on FreeBSD" \
     'unset RUSTTY_SANITIZERS_OWN_JOB; OS=FreeBSD; gate_asan_like lsan'
+  hx "--gate tsan on a host other than Linux/macOS is BLOCKED (exit 3)" 3 "verified on macOS and Linux only, not on FreeBSD" \
+    'unset RUSTTY_SANITIZERS_OWN_JOB; OS=FreeBSD; gate_tsan'
+  hx "--gate tsan under RUSTTY_SANITIZERS_OWN_JOB is BLOCKED (exit 3), naming the job" 3 "defers to the fixture job" \
+    'RUSTTY_SANITIZERS_OWN_JOB="the fixture job"; gate_tsan'
+  hx "--gate tsan with its suppressions file missing is RED" 1 "tsan-missing.supp is missing" \
+    'unset RUSTTY_SANITIZERS_OWN_JOB; TSAN_SUPP=/nonexistent/tsan-missing.supp; gate_tsan'
 
   # --- arms A/B: the synthetic crate under the real sanitizers ---
   local cr="$st/crate"
@@ -1248,6 +1449,33 @@ mod tests {
         let v = unsafe { pa.wrapping_offset(std::hint::black_box(d)).read_volatile() };
         assert_eq!(v, 2);
         std::hint::black_box((&a, &b));
+    }
+
+    // G-TSAN's negative control: two threads write one static with no
+    // happens-before edge between them (a sleep orders them in time, but is
+    // not synchronization), so TSan reports it however the threads interleave.
+    static mut RACY: u64 = 0;
+    #[inline(never)]
+    fn racy_write(v: u64) {
+        // SAFETY: deliberately NOT safe (a data race); self-test only.
+        unsafe { (&raw mut RACY).write_volatile(v) }
+    }
+    #[test]
+    fn defect_data_race() {
+        let t = std::thread::spawn(|| racy_write(1));
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        racy_write(2);
+        t.join().unwrap();
+    }
+    // Its control: the same two writes ordered by a Mutex.
+    #[test]
+    fn synchronized_control() {
+        let m = std::sync::Arc::new(std::sync::Mutex::new(0u64));
+        let m2 = std::sync::Arc::clone(&m);
+        let t = std::thread::spawn(move || *m2.lock().unwrap() = 1);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        *m.lock().unwrap() = 2;
+        t.join().unwrap();
     }
 
     #[test]
@@ -1540,6 +1768,71 @@ RS
   else
     echo "  skip A4 heap overflow under HWASan: aarch64 Linux only (rustc rejects -Zsanitizer=hwaddress on $OS/$ARCH); runs on rvm"
   fi
+  if [ "$OS" = "Linux" ] || [ "$OS" = "Darwin" ]; then
+    # G-TSAN (P7-W17): the deliberate data race must be RED, the same writes
+    # under a Mutex GREEN.
+    arm "A5 data race" tsan "tests::defect_data_race --exact" RED "ThreadSanitizer: data race"
+    arm "A5 control: Mutex-ordered writes, clean under TSan" tsan "tests::synchronized_control --exact" GREEN "1 test\\(s\\) ran"
+    # The C side: a race between two threads inside C compiled through $CC
+    # (the tsan-cc wrapper). TSan sees it only if that C is instrumented, so
+    # RED here proves the wrapper path; the clean control also passes
+    # tsan_archive_check on the real archive.
+    local tc="$st/tcrate"
+    mkdir -p "$tc/src"
+    printf '[package]\nname = "san-selftest-tsan-c-sys"\nversion = "0.0.0"\nedition = "2021"\npublish = false\nbuild = "build.rs"\n\n[workspace]\n' >"$tc/Cargo.toml"
+    cat >"$tc/src/race.c" <<'C'
+/* A plain global written from two threads with no synchronization. */
+static volatile long racy;
+void race_write(long v) { racy = v; }
+long clean_sum(void) {
+  long s = 0;
+  for (long i = 0; i < 16; i++) s += i;
+  return s;
+}
+C
+    cat >"$tc/build.rs" <<'RS'
+use std::{env, path::PathBuf, process::Command};
+fn main() {
+    let out = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let cc = env::var("CC").unwrap_or_else(|_| "cc".into());
+    let obj = out.join("race.o");
+    let ok = Command::new(&cc).args(["-c", "-O0", "-fPIC", "src/race.c", "-o"]).arg(&obj).status().unwrap();
+    assert!(ok.success(), "{cc} failed");
+    let ok = Command::new("ar").arg("rcs").arg(out.join("librace.a")).arg(&obj).status().unwrap();
+    assert!(ok.success(), "ar failed");
+    println!("cargo:rustc-link-search=native={}", out.display());
+    println!("cargo:rustc-link-lib=static=race");
+    println!("cargo:rerun-if-changed=src/race.c");
+}
+RS
+    cat >"$tc/src/lib.rs" <<'RS'
+//! G-SAN-SELF's TSan C arm: a data race inside C compiled through $CC.
+extern "C" {
+    fn race_write(v: core::ffi::c_long);
+    fn clean_sum() -> core::ffi::c_long;
+}
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn c_data_race() {
+        let t = std::thread::spawn(|| unsafe { super::race_write(1) });
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        unsafe { super::race_write(2) };
+        t.join().unwrap();
+    }
+    #[test]
+    fn c_clean_control() {
+        assert_eq!(unsafe { super::clean_sum() }, 120);
+    }
+}
+RS
+    ARM_MANIFEST="$tc/Cargo.toml" ARM_SPEC=san-selftest-tsan-c-sys \
+      arm "A5 data race in C (the cc wrapper instruments it)" tsan "tests::c_data_race --exact" RED "ThreadSanitizer: data race"
+    ARM_MANIFEST="$tc/Cargo.toml" ARM_SPEC=san-selftest-tsan-c-sys \
+      arm "A5 control: clean C under TSan, its archive instrumented" tsan "tests::c_clean_control --exact" GREEN "tsan C archives: 1 built for the instrumented target, 1 instrumented"
+  else
+    echo "  skip A5 data race under TSan: verified on Linux and macOS only, not on $OS"
+  fi
   # The synthetic crate's own build dirs (san-<san>-san-selftest) are dropped by
   # matrix_run; remove the work dir itself.
   rm -rf -- "${st:?}"
@@ -1565,7 +1858,8 @@ case "${1:-}" in
       lsan) gate_asan_like lsan; exit $? ;;
       hwasan) gate_asan_like hwasan; exit $? ;;
       msan) gate_msan; exit $? ;;
-      *) echo "usage: sanitizers.sh --gate asan|lsan|msan|hwasan" >&2; exit 2 ;;
+      tsan) gate_tsan; exit $? ;;
+      *) echo "usage: sanitizers.sh --gate asan|lsan|msan|hwasan|tsan" >&2; exit 2 ;;
     esac ;;
   --matrix)
     shift
@@ -1590,7 +1884,7 @@ case "${1:-}" in
         *) echo "sanitizers.sh --matrix: unknown argument '$1'" >&2; exit 2 ;;
       esac
     done
-    case "$SAN" in asan|lsan|msan|hwasan) ;; *) echo "sanitizers.sh --matrix: --san asan|lsan|msan|hwasan" >&2; exit 2 ;; esac
+    case "$SAN" in asan|lsan|msan|hwasan|tsan) ;; *) echo "sanitizers.sh --matrix: --san asan|lsan|msan|hwasan|tsan" >&2; exit 2 ;; esac
     if [ "$WS" -eq 1 ]; then LIST="$LIST $(scope_minus "$EXCL" | tr '\n' ' ')"; fi
     # shellcheck disable=SC2086  # LIST is a word list of crate specs
     set -- $LIST

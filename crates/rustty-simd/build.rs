@@ -78,10 +78,15 @@ fn main() {
     // Vendored highway + simdutf headers, exported by the -sys crates via
     // `cargo:include=` (Cargo sets DEP_HWY_INCLUDE / DEP_SIMDUTF_INCLUDE for
     // dependents of those `links` crates).
+    // The kernels include those headers (Highway's `hwy/` tree, including
+    // `hwy/targets.h` with UD377's patch, and simdutf's), so a header edit must
+    // rerun this script: Cargo scans a directory recursively.
     if let Ok(dir) = std::env::var("DEP_HWY_INCLUDE") {
+        println!("cargo:rerun-if-changed={dir}/hwy");
         build.include(dir);
     }
     if let Ok(dir) = std::env::var("DEP_SIMDUTF_INCLUDE") {
+        println!("cargo:rerun-if-changed={dir}");
         build.include(dir);
     }
 
