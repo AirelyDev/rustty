@@ -10849,3 +10849,38 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **next**: make `consume_apc_string`'s scan compile to the vector compare-and-reduce (as N215 did for the
   printable-run scan), check the disassembly, then re-measure with V18's recipe; profile the
   hyperlink map per function. Both need a fail-first perf check, so neither is done here.
+
+## N520 — `librustty_vt_c.dylib` was 1.30x Ghostty's dylib: triplicated `const` lookup tables and unwind data for a path that always aborts
+
+- **id**: N520. P7-W22 (V16). **severity**: low (size parity; no behaviour change). **kind**: port
+  representation defect (a) and build-profile divergence (b). **state**: CLOSED.
+- **oracle**: `src/unicode/props_uucode.zig`/`lut.zig` (`pub const stage1/2/3`, container-level: one
+  global object each), `src/unicode/grapheme.zig` `Precompute.data` (one 8 KB object), `src/lib_vt.zig`
+  `pub const panic` / `tinyPanicImpl` (print, then `@trap()`; Zig never unwinds),
+  `src/build/GhosttyLibVt.zig` `initLibApple` (the dylib link).
+- **rustty (pre-fix)**: `crates/rustty-unicode/src/generated/props_data.rs`, `symbols_data.rs`
+  (`pub const STAGEn`), `crates/rustty-unicode/src/grapheme.rs` (`Precompute::DATA` read by the `#[inline]`
+  `grapheme_break`), `crates/rustty-font/src/generated/nerd_font_tables.rs` (same shape), root `Cargo.toml`
+  `[profile.release]` (default `panic = "unwind"`).
+- **finding (a)**: a Rust `const` array is inlined into every use, so each crate (and codegen unit) that
+  inlined `props_table::table()` or `grapheme_break` emitted its own copy: the 80 KB props table three times
+  (rustty-vt once, rustty-unicode twice) and the 16 KB grapheme precompute twice, 180 KB of duplicate
+  `__TEXT,__const` found by hashing the linker map's objects. The generated files' PARITY note kept `const`
+  "to preserve the reference's const tables", but Zig's container-level `const` is one object, so `static` is
+  the faithful spelling. Fixed: the generated tables are `static` (and the two generator scripts emit
+  `static`), `grapheme_break` reads a `static PRECOMPUTE_DATA`. Same values; same address load.
+- **finding (b)**: the release profile unwound, but no unwind could complete: `panic.rs`'s hook aborts, and
+  an unwind cannot leave an `extern "C"` fn. Its tables and landing pads were 244 KB (`__eh_frame` 145 -> 27 KB,
+  `__gcc_except_tab` 36 -> 4 KB, `__text` -29 KB, link-edit -49 KB). Fixed: `[profile.release] panic =
+  "abort"`, Zig's contract for every release artifact; `release-fast` restates `unwind` because `abort` there
+  costs the bench's terminal-parser loop +2.2% instructions (in `release` it is 9% fewer). Cost: Cargo
+  builds test targets `unwind`, so a `--release` test run and a `--release` build no longer share their
+  dependency artifacts (more build time and target/ space when a lane does both).
+- **effect**: 2,498,112 -> 2,071,760 bytes (1.30x -> 1.076x Ghostty's 1,924,784); `__TEXT` 1,998,848 ->
+  1,622,016 (1.37x -> 1.11x). rustty-bench 3,138,576 -> 2,957,840 (statics only).
+- **how found**: V16's ruling (treat 1.30x as a possible defect); `cargo rustc -p rustty-vt-c --release --lib
+  --crate-type cdylib -- -C link-arg=-Wl,-map,<file>`, then grouping the map's symbols by object and hashing
+  each `__const` atom's bytes in the dylib.
+- **left as measured, not defects**: `overflow-checks` (DG2) 55 KB; std's backtrace/symbolizer runtime that
+  std's default panic hook links (nightly-only to remove); the 2-byte grapheme entries (8 KB). They are the
+  dylib label's itemized 7.6% gap in BASELINE.json.

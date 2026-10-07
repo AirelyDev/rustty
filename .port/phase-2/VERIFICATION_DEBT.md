@@ -1298,7 +1298,67 @@ remove`); the pinned working tree was never touched — no `checkout` was run in
 Owner is Phase 3 because `origin/main` **is** the upstream resync range:
 `BEYOND-PIN`.
 
-## V16. The binary-size axis of `BASELINE.json` is unmeasured, so G8 runs without `--strict` — **OWNER: Phase 3 — `BEYOND-PIN`**
+## V16. The binary-size axis of `BASELINE.json` is unmeasured, so G8 runs without `--strict` — **DISCHARGED 2026-10-07 (P7-W22, head `9ca310b46`); the size defects it found are N520**
+
+**DISCHARGED 2026-10-07 (P7-W22, head `9ca310b46`).** The user's ruling was to
+treat the dylib's 1.30x as a possible defect: find what inflates it, shrink
+what is honest, then set per-label tolerances from the result. Done, like for
+like: Ghostty's `libghostty-vt` rebuilt ReleaseFast at the pin
+(`zig build -Demit-lib-vt=true -Doptimize=ReleaseFast`, the Apple-ld path of
+`GhosttyLibVt.zig`: `-dead_strip`, exports `_ghostty_*`, not stripped) against
+`cargo build -p rustty-vt-c --release` (exports 198 `rustty_*`, `strip =
+"debuginfo"`, no LTO per PERF_LOG's measured ban). Attribution with a linker
+map (`-Wl,-map`) and per-object content hashes found two real defects (N520):
+
+| step | `librustty_vt_c.dylib` | / Ghostty 1,924,784 |
+|---|--:|--:|
+| P7-W19 | 2,498,112 | 1.30 |
+| N520(a): the props table and grapheme precompute were `const` arrays, so each crate that inlined their reader got its own copy (3x 80 KB props, 2x 16 KB grapheme; Zig emits one object) -> `static` | 2,315,616 | 1.20 |
+| N520(b): `[profile.release] panic = "abort"` (a Zig panic never unwinds; the unwind tables and landing pads served a path that already ended in an abort) | **2,071,760** | **1.076** |
+
+The remaining +147 KB is itemized in BASELINE.json: `overflow-checks` (DG2,
+kept) 55 KB, std's panic/backtrace runtime that std's default hook links
+(gimli, rustc_demangle, addr2line, object; removable only with nightly
+build-std), the grapheme table's 2-byte entries (+8 KB), codegen. Perf, by
+instructions retired (the host's load was 56-87): the static tables are neutral
+on all 14 ws10 configs (total 0.9998x); `abort` with the `release` profile is
+0.991x overall (terminal-parser 0.910x, osc-parser 0.960x, none worse), but on
+the `release-fast` bench profile it costs terminal-parser +2.2%, so
+`release-fast` restates `panic = "unwind"` and rustty-bench is byte-identical to
+the statics-only build. Tests: rustty-unicode (debug and `--release`),
+rustty-font, rustty-vt-c `--release` (583 + doc/integration), a release
+`catch_unwind` test (Cargo builds tests `unwind` whatever the profile says),
+`cargo check --workspace --all-targets`, the wasm32 build of rustty-vt-c.
+
+**Mapping and tolerances** (BASELINE.json `binary_sizes_bytes`, re-based to the
+pin; the oracle artifacts preserved in `~/rustty-oracle-artifacts/` with
+sha256): tolerance = max(0, ceil(measured gap % + 2)) / 100.
+
+| label (oracle at the pin) | bytes | Rustty counterpart | bytes | gap | tolerance |
+|---|--:|---|--:|--:|--:|
+| `ghostty-bench (ReleaseFast)` | 4,029,184 | `target/release-fast/rustty-bench` | 2,957,840 | -26.6% | 0% |
+| `ghostty-gen (ReleaseFast)` | 464,408 | `target/release-fast/rustty-gen` | 505,296 | +8.8% | 11% |
+| `libghostty-vt.0.1.0.dylib (shared)` | 1,924,784 | `target/release/librustty_vt_c.dylib` | 2,071,760 | +7.6% | 10% |
+| `libghostty-vt.a (static)` | 10,901,856 | `target/release/librustty_vt_c.a` | 26,562,616 | +143.7% | 146% |
+
+`ghostty-gen`'s gap is unwind data (`release-fast` keeps `unwind`) and symbol
+table; its `__text` is 8 KB smaller than Ghostty's. The `.a` gap is Rust's
+packaging: a staticlib archives std, core, compiler_builtins and every
+dependency whole (13.6 MB of it is the toolchain's), which a final link
+dead-strips; the dylib label fences the linked size of the same code. Dropped,
+by parity, into `binary_sizes_dropped` with reasons: the never-measured GUI
+binary, the two Debug bench/gen labels (the pin's `GhosttyBench.zig` builds
+them ReleaseFast only) and the three Zig test-runner executables (Cargo has no
+1:1 artifact; tests are not shipped).
+
+**Wiring:** `ws10_suite.py --emit-metrics` now writes `binary_sizes_bytes` for
+each label's counterpart (the bench label measures the `--rust` candidate; an
+unbuilt counterpart is left out, so G8 says NOT-MEASURED); G8 applies each
+label's `tolerance` (`--tol-size` still overrides); both self-tests gained an
+arm. `ci.sh` now runs G8 with `--strict`. Confirmed with a real metrics file:
+`size ... ok` on all four labels, `missing-from-candidate 0`. G8 as a whole is
+still RED, on the timing axis only (`codepoint-width.wcwidth`, V17's retired
+series basis; the run was also provisional at load 77): that re-base is V17's.
 
 **P7-W19 (2026-10-07, head `f31fcc032`): still OPEN; the mapping was measured
 and `--strict` would be RED on real size gaps, not on missing labels.** The

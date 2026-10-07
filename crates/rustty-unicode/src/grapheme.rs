@@ -108,7 +108,7 @@ impl BreakState {
 // without LTO — #[inline] restores the idiom.
 #[inline]
 pub fn grapheme_break(cp1: u32, cp2: u32, state: &mut BreakState) -> bool {
-    let value = Precompute::DATA[Key {
+    let value = PRECOMPUTE_DATA[Key {
         gb1: table().get(cp1).grapheme_break,
         gb2: table().get(cp2).grapheme_break,
         state: *state,
@@ -266,6 +266,16 @@ pub fn grapheme_width(cps: &[u32]) -> GraphemeWidth {
 /// table is 8KB.
 struct Precompute;
 
+/// The one shipped copy of `Precompute::DATA`, which `grapheme_break` reads.
+///
+/// PORT NOTE (P7-W22, N520): the reference's `Precompute.data` is a
+/// container-level `const`, which Zig emits as ONE global object. A Rust
+/// `const` array is instead inlined into every use, so the `#[inline]`
+/// `grapheme_break` stamped a private 16 KiB copy into each crate that inlined
+/// it (`librustty_vt_c.dylib` carried two). A `static` is the faithful
+/// spelling of the single object; the read is the same address load.
+static PRECOMPUTE_DATA: [Value; 8192] = Precompute::DATA;
+
 /// PARITY: the reference `Key` is a `packed struct(u13)` laid out as
 /// `{ state: u3, gb1: u5, gb2: u5 }` (least-significant field first), bitcast
 /// to a u13 to index the table. We compute the same index arithmetically.
@@ -329,7 +339,7 @@ impl Precompute {
 }
 
 /// Harness accessor: re-encode rustty's RUNTIME grapheme precompute
-/// (`Precompute::DATA`, the table `grapheme_break` actually reads) back into the
+/// (`PRECOMPUTE_DATA`, the table `grapheme_break` actually reads) back into the
 /// `result | state<<1` byte form, for the unicode differential gate (ORACLE #2,
 /// `.port/phase-0/harness/unicode/`). This is harness-only glue (R1: adds
 /// nothing-lost) — it lets the harness diff rustty's live table against an
@@ -340,7 +350,7 @@ pub fn harness_precompute_bytes() -> [u8; 8192] {
     let mut out = [0u8; 8192];
     let mut i = 0;
     while i < 8192 {
-        let v = Precompute::DATA[i];
+        let v = PRECOMPUTE_DATA[i];
         out[i] = u8::from(v.result) | ((v.state.table_index() as u8) << 1);
         i += 1;
     }

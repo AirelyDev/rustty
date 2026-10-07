@@ -1064,10 +1064,15 @@ GATE_REGISTRY=(
   "G8b|PERF-FENCE|bash $GATES/check_perf_fence.sh --emit-metrics $PERF_METRICS"
   # G8 is ARMED once G8b has emitted that metrics file; with no substrate
   # present G8b BLOCKs, the file is absent, and G8 falls back to progress mode.
-  # NOT run with --strict: this harness measures the 14 benchmarks but NOT the
-  # binary-size axis BASELINE.json also carries, and --strict would RED on those
-  # 9 absent size labels. That axis is verification debt, not faked green.
-  "G8|ARMED|$PY $GATES/check_baseline_regression.py --metrics $PERF_METRICS"
+  # --strict (P7-W22, V16 DISCHARGED): G8b's metrics file now carries the size
+  # axis too, i.e. the bytes of each size label's Rustty counterpart as
+  # BASELINE.json maps them (four oracle artifacts at the pin, each with its own
+  # tolerance; the retired series' Debug/test-exe labels were dropped with
+  # reasons). A counterpart that is not built is reported NOT-MEASURED, so
+  # build the four artifacts (`rustty_build` in BASELINE.json) before G8b.
+  # The timing axis still compares against the retired 4749c4e93 series until
+  # V17's idle re-base; --strict adds no timing check that was not already run.
+  "G8|ARMED|$PY $GATES/check_baseline_regression.py --strict --metrics $PERF_METRICS"
   "G5|PROGRESS|bash $GATES/run_fuzz_smoke.sh"
   "G6|PROGRESS|bash $GATES/check_leaks.sh --all-done"
   # G6b — PageList compressed-page encodings are not leaked (WS7 Phase E).

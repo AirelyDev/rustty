@@ -12,17 +12,16 @@
 //! 9d555245 (UCD 18.0.0) with that pin's `uucode_config.zig`
 //! (`.port/phase-7/w10-t2-regen-unicode.py`).
 
-// PARITY: the reference emits these as `pub const stageN` arrays (Zig comptime
-// constants). Clippy's `large_const_arrays` would have us switch to `static`,
-// which would change the artifact shape away from the reference's const tables;
-// we keep `const` to preserve parity (R5: never change a value/shape to silence
-// a lint).
-#![allow(clippy::large_const_arrays)]
+// PARITY: the reference emits these as container-level `pub const stageN`
+// arrays, which Zig materialises as ONE global object each. A Rust `const`
+// array is instead inlined into every use, which put three copies of these
+// tables into librustty_vt_c.dylib (P7-W22, N520), so they are `static`: the
+// same values, laid out once, as in the reference.
 
 use crate::props::GraphemeBreakNoControl;
 use crate::props::Properties;
 
-pub const STAGE1: [u16; 8192] = [
+pub static STAGE1: [u16; 8192] = [
     0, 256, 256, 512, 768, 1024, 1280, 1536, 1792, 2048, 2304, 2560, 2816, 3072, 3328, 3584, 3840,
     4096, 256, 4352, 256, 256, 256, 4608, 4864, 5120, 5376, 5632, 5888, 6144, 256, 256, 6400, 6656,
     256, 6912, 7168, 7424, 7680, 7936, 256, 8192, 256, 8448, 8704, 8960, 9216, 9472, 9728, 9984,
@@ -569,7 +568,7 @@ pub const STAGE1: [u16; 8192] = [
     31744, 31744, 31744, 31744, 31744, 31744, 31744, 31744, 31744, 31744, 31744, 31744, 31744,
     31744, 31744,
 ];
-pub const STAGE2: [u16; 32000] = [
+pub static STAGE2: [u16; 32000] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1,
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
@@ -1655,7 +1654,7 @@ pub const STAGE2: [u16; 32000] = [
     30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30,
     30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30,
 ];
-pub const STAGE3: [Properties; 31] = [
+pub static STAGE3: [Properties; 31] = [
     Properties {
         width: 0,
         width_zero_in_grapheme: true,

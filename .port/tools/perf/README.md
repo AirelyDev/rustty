@@ -80,6 +80,29 @@ delete or overwrite it: it is the anchor of the historical series and of G8's
 BASELINE.json, and that revision needs Zig 0.15.2, which this host no longer
 has.
 
+## The size axis (G8, V16)
+
+BASELINE.json's `binary_sizes_bytes` are four oracle artifacts built ReleaseFast
+at the pin (P7-W22; the two libraries with `zig build -Demit-lib-vt=true
+-Doptimize=ReleaseFast`, kept in `~/rustty-oracle-artifacts/` as
+`libghostty-vt.0.1.0.dylib-<9 hex>` and `libghostty-vt.a-<9 hex>`, sha256 in
+BASELINE.json). Each names its Rustty counterpart (`rustty_counterpart`, built
+by `rustty_build`) and its own `tolerance`, set as the measured gap plus 2
+points; the gap is itemized in `gap_attribution`. `ws10_suite.py
+--emit-metrics` measures the counterparts (the bench label: the `--rust`
+candidate), so build them before G8b:
+
+```bash
+cargo build -p rustty-bench --profile release-fast --bin rustty-bench
+cargo build -p rustty-synthetic --profile release-fast --bin rustty-gen
+cargo build -p rustty-vt-c --release        # .dylib and .a
+```
+
+An unbuilt counterpart is left out of the metrics, and G8 (`--strict`) reports
+it NOT-MEASURED. Sizes are deterministic, so they need no idle host. When the
+pin advances, rebuild the four oracle artifacts and re-base the bytes, the
+counterparts' `rustty_bytes_at_rebase` and the tolerances by the same rule.
+
 ## The two fences
 
 ### Fence 1 — ORACLE ("hold the 14/14 wins")

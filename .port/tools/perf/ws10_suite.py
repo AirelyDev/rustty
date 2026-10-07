@@ -308,7 +308,36 @@ def failing_ids(lines):
 # --------------------------------------------------------------------------
 # Metrics emission (BASELINE.json shape, so G8 --metrics consumes it directly)
 # --------------------------------------------------------------------------
-def emit_metrics(path, rust_med, reps, n):
+def size_metrics(rust_bin, baseline=None, root=None):
+    """`binary_sizes_bytes` for the Rustty counterparts BASELINE.json names.
+
+    V16 (P7-W22): each size label of BASELINE.json is an oracle artifact at
+    the pin with a `rustty_counterpart` path under the repo root. The bench
+    label's counterpart is the candidate actually measured (`--rust`), not
+    whatever sits at the default path. A counterpart that is not built is
+    LEFT OUT, so G8 --strict reports it NOT-MEASURED rather than passing.
+    Sizes are deterministic, so unlike the timings they need no idle host.
+    -> ({label: {"bytes", "path"}}, [absent label notes])
+    """
+    if baseline is None:
+        baseline = _gatelib.load_baseline()
+    root = root or _gatelib.RUSTTY_ROOT
+    out, absent = {}, []
+    for label, info in (baseline.get("binary_sizes_bytes") or {}).items():
+        if label.startswith("_") or not isinstance(info, dict):
+            continue
+        rel = info.get("rustty_counterpart")
+        if not rel:
+            continue
+        path = rust_bin if os.path.basename(rel) == "rustty-bench" else os.path.join(root, rel)
+        if os.path.isfile(path):
+            out[label] = {"bytes": os.path.getsize(path), "path": path}
+        else:
+            absent.append(f"{label}: {path} not built ({info.get('rustty_build', '?')})")
+    return out, absent
+
+
+def emit_metrics(path, rust_med, reps, n, rust_bin=None):
     benches = []
     for bid, corpus, basis, _args in CONFIGS:
         if bid not in rust_med:
@@ -338,9 +367,16 @@ def emit_metrics(path, rust_med, reps, n):
             rec["metric"] = "clones_per_s (fixed 1000-iteration step loop; data-independent)"
             rec["clones_per_s"] = 1000.0 / med
         benches.append(rec)
+    doc = {"benchmarks": benches}
+    if rust_bin:
+        sizes, absent = size_metrics(rust_bin)
+        doc["binary_sizes_bytes"] = sizes
+        for a in absent:
+            print(f"NOTE: size counterpart absent -> NOT-MEASURED in G8 --strict: {a}")
     with open(path, "w", encoding="utf-8") as fh:
-        json.dump({"benchmarks": benches}, fh, indent=2)
-    print(f"metrics written: {path} ({len(benches)} benchmarks)")
+        json.dump(doc, fh, indent=2)
+    print(f"metrics written: {path} ({len(benches)} benchmarks, "
+          f"{len(doc.get('binary_sizes_bytes', {}))} sizes)")
 
 
 # --------------------------------------------------------------------------
@@ -352,7 +388,7 @@ def self_test():
     base = {bid: 0.100 for bid in ALL_IDS}
     # Cases run per arm. An arm that runs zero cases is a FAIL: a vacuous arm
     # (arm [e] over an empty INCOMPARABLE, before review S-4 F1) is not a pass.
-    cases = {arm: 0 for arm in "abcdef"}
+    cases = {arm: 0 for arm in "abcdefg"}
 
     # (a) rust uniformly 0.9x zig -> green
     lines, good = evaluate_oracle(base, {k: v * 0.9 for k, v in base.items()})
@@ -459,6 +495,36 @@ def self_test():
               f"(expect True)")
         ok &= live
         cases["f"] += 1
+
+    # (g) size counterparts (V16): a built counterpart is measured, the bench
+    #     label measures the --rust candidate, an unbuilt one is LEFT OUT (so
+    #     G8 --strict says NOT-MEASURED), and "_" prose keys are skipped.
+    with tempfile.TemporaryDirectory() as td:
+        os.makedirs(os.path.join(td, "target", "release"))
+        with open(os.path.join(td, "target", "release", "lib.dylib"), "wb") as fh:
+            fh.write(b"x" * 123)
+        cand = os.path.join(td, "cand-bench")
+        with open(cand, "wb") as fh:
+            fh.write(b"y" * 45)
+        fake = {"binary_sizes_bytes": {
+            "_rule": "prose",
+            "dylib": {"bytes": 1, "rustty_counterpart": "target/release/lib.dylib"},
+            "bench": {"bytes": 1, "rustty_counterpart": "target/release-fast/rustty-bench"},
+            "gen": {"bytes": 1, "rustty_counterpart": "target/release-fast/rustty-gen"},
+        }}
+        sizes, absent = size_metrics(cand, fake, td)
+        got = {k: v["bytes"] for k, v in sizes.items()}
+        g_ok = got == {"dylib": 123, "bench": 45} and len(absent) == 1 and "gen" in absent[0]
+        print(f"[g] sizes {got}, absent {len(absent)} -> {g_ok} (expect True)")
+        ok &= g_ok
+        cases["g"] += 1
+        live, _a = size_metrics(cand)
+        g_live = set(live) | {a.split(":")[0] for a in _a} == {
+            k for k in _gatelib.load_baseline()["binary_sizes_bytes"] if not k.startswith("_")}
+        print(f"[g] every live BASELINE size label has a counterpart -> {g_live} "
+              f"(expect True)")
+        ok &= g_live
+        cases["g"] += 1
 
     empty = [arm for arm, n in cases.items() if n == 0]
     if empty:
@@ -596,7 +662,7 @@ def main():
         if not ok:
             rc = 1
         if args.emit_metrics:
-            emit_metrics(args.emit_metrics, rust_med, reps, args.n)
+            emit_metrics(args.emit_metrics, rust_med, reps, args.n, args.rust)
 
     if args.self_bin:
         print(f"\n=== FENCE 2: SELF (candidate vs entry binary, N={args.n}) ===")
