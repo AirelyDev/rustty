@@ -132,25 +132,26 @@ const APC_SCAN_N: usize = match APC_SCAN_LANES {
 /// answer.
 #[inline(always)]
 fn apc_group_invalid(bytes: &[u8; APC_SCAN_N]) -> bool {
-    #[cfg(all(target_arch = "aarch64", not(miri)))]
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon", not(miri)))]
     {
         apc_group_invalid_neon(bytes)
     }
-    #[cfg(not(all(target_arch = "aarch64", not(miri))))]
+    #[cfg(not(all(target_arch = "aarch64", target_feature = "neon", not(miri))))]
     {
         apc_group_invalid_portable(bytes)
     }
 }
 
 /// `apc_group_invalid` on NEON: the reference's `@Vector(16, u8)` lowering.
-#[cfg(all(target_arch = "aarch64", not(miri)))]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon", not(miri)))]
 #[inline(always)]
 fn apc_group_invalid_neon(bytes: &[u8; APC_SCAN_N]) -> bool {
     use core::arch::aarch64::{vceqq_u8, vcgeq_u8, vdupq_n_u8, vld1q_u8, vmaxvq_u8, vorrq_u8};
     // `native_vector_bits` is 128 on aarch64, so a group is one Q register.
     const _: () = assert!(APC_SCAN_N == 16);
-    // SAFETY: NEON is part of the aarch64 base ISA (every aarch64 target
-    // Rust supports enables it), and `vld1q_u8` reads exactly the 16 bytes
+    // SAFETY: this function is only compiled with `target_feature = "neon"`
+    // (softfloat aarch64 targets fall back to the portable form), and
+    // `vld1q_u8` reads exactly the 16 bytes
     // of `bytes`, an initialised `[u8; 16]` borrowed for the whole call.
     unsafe {
         // const bytes: ByteVector = input[end..][0..vector_len].*;
@@ -173,7 +174,10 @@ fn apc_group_invalid_neon(bytes: &[u8; APC_SCAN_N]) -> bool {
 /// non-short-circuit `|` over a fixed-size array (no bounds checks), the
 /// `.Or` reduction as an unsigned max of 0/0xFF lane masks. Safe code, so
 /// Miri runs it as is.
-#[cfg_attr(all(target_arch = "aarch64", not(miri), not(test)), allow(dead_code))]
+#[cfg_attr(
+    all(target_arch = "aarch64", target_feature = "neon", not(miri), not(test)),
+    allow(dead_code)
+)]
 #[inline(always)]
 fn apc_group_invalid_portable<const N: usize>(bytes: &[u8; N]) -> bool {
     let mut any: u8 = 0;
