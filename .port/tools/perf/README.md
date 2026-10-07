@@ -5,7 +5,10 @@ ORACLE PIN** (`.port/tools/gates/ORACLE_PIN`), and every number it produces is
 comparable to that binary only. Before task S-4 (2026-09-23) the oracle was the
 older `4749c4e93` binary (sha256 `0fb47d26…`); the series recorded against it
 (PERF_LOG.md, BASELINE.json, which G8 still reads) is a different baseline, and
-a ratio between the two series means nothing.
+a ratio between the two series means nothing. P7-W19 (2026-10-07) found G8 RED
+on that account: `codepoint-width.wcwidth` against the retired oracle's 0.254 s,
+which ran without `ensureLocale` (N173), while Fence 1 holds it against the pin.
+Re-basing BASELINE.json is owed to an idle run (V17).
 
 ## The measurement substrate is UNTRACKED
 
@@ -15,7 +18,7 @@ artifact directory:
 
 | what | path | size |
 |---|---|---|
-| oracle bench binary (the pin) | `~/rustty-oracle-artifacts/ghostty-bench-<first 9 hex of ORACLE_PIN>` | 4 071 728 B |
+| oracle bench binary (the pin) | `~/rustty-oracle-artifacts/ghostty-bench-<first 9 hex of ORACLE_PIN>` | 4 029 184 B |
 | corpus (utf8) | `.port/phase-0/baseline/corpora/utf8.bin` | 67 108 864 B |
 | corpus (ascii) | `.port/phase-0/baseline/corpora/ascii.bin` | 67 108 864 B |
 | corpus (osc) | `.port/phase-0/baseline/corpora/osc-parser.bin` | 67 108 864 B |
@@ -29,9 +32,14 @@ green pass.
 
 ## The oracle binary: provenance and rebuild
 
-The stored binary (sha256 `46b5adfb6cd4bfcde6a693a3a6d0cc8c94c6cd825ff66e98c6c6b79d1d95fa2a`,
-`ghostty-gen` beside it as `ghostty-gen-<9 hex>`) was built by task S-4 with Zig
-0.16.0 from a `git archive` of the pin, so the oracle checkout was not touched:
+The stored binary (sha256 `79a642786cc3f9e6be52a9104b01c684387364a8c99d871b200a4decb8fb0d79`,
+`otool -X -t` sha256 `301f3e9b…`; `ghostty-gen` beside it as `ghostty-gen-<9 hex>`,
+sha256 `47b6257a…`) was rebuilt at the current pin by P7-W19 (2026-10-07) with
+Zig 0.16.0 from a `git archive` of the pin, so the oracle checkout was not
+touched. The previous pin's binary (task S-4, sha256 `46b5adfb…`) stays beside it
+as `ghostty-bench-20abdb50a`. At this pin `src/build/GhosttyBench.zig` builds
+`ghostty-bench` and `ghostty-gen` ReleaseFast whatever `-Doptimize` says, so there
+is no Debug oracle bench any more. The recipe:
 
 ```sh
 PIN=$(cat .port/tools/gates/ORACLE_PIN)
@@ -163,4 +171,5 @@ python3 .port/tools/perf/headroom_probe.py /tmp/ws10-metrics.json
 ```
 
 Rebuilding the oracle binary: see "The oracle binary: provenance and rebuild"
-above. BASELINE.json's second 14 rows are Debug builds of the retired oracle.
+above. BASELINE.json's second 14 rows are Debug builds of the retired oracle;
+a re-base cannot reproduce them, since the pin builds no Debug bench.
