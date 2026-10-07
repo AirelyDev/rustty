@@ -10734,9 +10734,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   - The N507 self-test's `sed -i ''` (BSD-only) is replaced with a portable write-to-temp-and-`mv`.
 - **production**: none (gate script only). Zig has no counterpart (N-only, not a UD).
 
-## N520 — G-VALGRIND: Mesa EGL drops a never-terminated display's driver data at exit (two definite leaks per renderer process)
+## N509 — G-VALGRIND: Mesa EGL drops a never-terminated display's driver data at exit (two definite leaks per renderer process)
 
-- **id**: N520. P7-W18 (full G-VALGRIND run on `rvm`). **severity**: none (tool noise; memory reclaimed at
+- **id**: N509. P7-W18 (full G-VALGRIND run on `rvm`). **severity**: none (tool noise; memory reclaimed at
   exit). **kind**: gate fidelity (system-library noise). **state**: CLOSED (suppressed, with evidence).
 - **finding**: every memcheck process of `rustty-renderer`'s lib that creates an `OffscreenContext` (16 parts of
   the full run, 4 per shard) reported 2 definite leaks: 384 direct bytes (132,429 with indirect) from
@@ -10750,6 +10750,13 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   one still initialized, so memcheck's end-of-process scan finds the dri2 display and its config array
   unreferenced. Not a dlclose effect of the port's per-context `DynamicInstance`: with `libEGL.so.1`
   preloaded (never unloaded) the same two records appear.
+- **bounded**: one display per process, not per context or surface: `eglGetPlatformDisplay` returns the
+  same `_EGLDisplay` for the same platform and native display, and `eglInitialize` on an initialized
+  display allocates nothing new. Each of the 16 parts (which split the lib's GL tests, and so its
+  `OffscreenContext`s, between them) reported the same 384 direct bytes, the same figure as the single-`eglInitialize` C
+  probe below. So it is process-lifetime state reclaimed by the OS, by design, not a growing leak and not
+  a reference defect to fix (the "never copy reference leaks" rule targets leaks that grow or are lost
+  before exit).
 - **evidence**: `.port/tools/valgrind-llvmpipe-probe/egl-no-terminate.c`, a C program with no Rustty code
   (surfaceless display, `eglInitialize`, return): `keep` reports exactly these two records; `terminate`
   (eglTerminate first) reports 0 errors. Fedora 44 aarch64, mesa-libEGL 26.1.4, libglvnd-egl 1.7.0, valgrind
@@ -10763,9 +10770,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `eglInitialize` is still reported (1 error, suppressed: 2). After: `check_valgrind.sh rustty-renderer
   --jobs 4` GREEN (7 memcheck runs, 151 + 3 tests).
 
-## N521 — G-VALGRIND: a target read-back test compared llvmpipe pixels memcheck marks undefined
+## N510 — G-VALGRIND: a target read-back test compared llvmpipe pixels memcheck marks undefined
 
-- **id**: N521. P7-W18. **severity**: none (tool noise). **kind**: test-side (N412's class, a test N412 did not
+- **id**: N510. P7-W18. **severity**: none (tool noise). **kind**: test-side (N412's class, a test N412 did not
   cover). **state**: CLOSED (fixed in the test).
 - **finding**: `opengl::target::tests::target_read_pixels_alloc_returns_tight_rgba_rows` (added by P7-W7 T1,
   after N412) reported "Conditional jump or move depends on uninitialised value(s)" at its `assert_eq!(pixels,

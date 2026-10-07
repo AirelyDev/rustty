@@ -97,11 +97,11 @@ criteria as above apply.
 | id | entry | library | reason | evidence |
 |---|---|---|---|---|
 | VG1 | `llvmpipe-gallivm-llvm-codegen` (`Memcheck:Cond`, `...`, `fun:gallivm_jit_function`) | Mesa llvmpipe / LLVM | conditional jumps inside LLVM's code generator while llvmpipe JIT-compiles a shader, on a stack slot of `lp_build_create_jit_compiler_for_module` | NEW-FINDINGS N412; `.port/tools/valgrind-llvmpipe-probe/probe.c` reproduces it with no Rustty code |
-| VG2 | `mesa-egl-dri2-display-not-terminated` (`Memcheck:Leak`, definite only; `calloc` ← `dri2_display_create` ← `dri2_initialize` ← ... ← `eglInitialize`) | Mesa EGL | the port, like the reference (`OpenGL.zig:113-115`; DECISIONS B10), never terminates the shared surfaceless display; Mesa's at-exit teardown frees the `_EGLDisplay` but not an initialized display's driver data | NEW-FINDINGS N520. G-VALGRIND full run (rvm, P7-W18, 2026-10-07, `1e84e3ff5`): 16 `rustty-renderer` lib parts, 384 direct bytes each, under `OffscreenContext::init` (`opengl/gl/sys.rs:214`). `.port/tools/valgrind-llvmpipe-probe/egl-no-terminate.c`: `keep` 2 records, `terminate` 0; a planted 4 KiB leak stays reported with the entries loaded |
+| VG2 | `mesa-egl-dri2-display-not-terminated` (`Memcheck:Leak`, definite only; `calloc` ← `dri2_display_create` ← `dri2_initialize` ← ... ← `eglInitialize`) | Mesa EGL | the port, like the reference (`OpenGL.zig:113-115`; DECISIONS B10), never terminates the shared surfaceless display; Mesa's at-exit teardown frees the `_EGLDisplay` but not an initialized display's driver data | NEW-FINDINGS N509. G-VALGRIND full run (rvm, P7-W18, 2026-10-07, `1e84e3ff5`): 16 `rustty-renderer` lib parts, 384 direct bytes each, under `OffscreenContext::init` (`opengl/gl/sys.rs:214`). `.port/tools/valgrind-llvmpipe-probe/egl-no-terminate.c`: `keep` 2 records, `terminate` 0; a planted 4 KiB leak stays reported with the entries loaded |
 | VG3 | `mesa-egl-dri2-configs-not-terminated` (`Memcheck:Leak`, definite only; `calloc` ← `_eglCreateArray` ← `_eglLinkConfig` ← `dri2_add_config` ← ... ← `dri2_initialize` ← ... ← `eglInitialize`) | Mesa EGL | the config array of the same display, as VG2 | as VG2 (32 direct bytes, 28,000 with indirect) |
 
 The read-back pixels of the renderer's GL tests are not suppressed: the tests that compare them declare
-exactly those bytes defined (`make_mem_defined`; N412, N521).
+exactly those bytes defined (`make_mem_defined`; N412, N510).
 
 ## Sanitizer runtime options set by the lanes
 

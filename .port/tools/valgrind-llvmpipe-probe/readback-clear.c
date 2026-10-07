@@ -1,4 +1,4 @@
-// NEW-FINDINGS N521: memcheck reports the read-back pixels of llvmpipe's
+// NEW-FINDINGS N510: memcheck reports the read-back pixels of llvmpipe's
 // scissored clears as undefined, with no Rustty code in the process. The C
 // twin of `opengl::target::tests::target_read_pixels_alloc_returns_tight_rgba_rows`
 // (a 3x2 sRGB RGBA8 texture FBO cleared red, its bottom-left texel cleared
@@ -13,7 +13,7 @@
 // uninitialised value(s)" at the memcmp of the pixels, origin "created by a
 // stack allocation" at an address with no symbol (code llvmpipe
 // JIT-compiled), the origin N412 found for blended pixels. The display is
-// terminated, so N520's leak records do not appear.
+// terminated, so N509's leak records do not appear.
 #define GL_GLEXT_PROTOTYPES 1
 #include <EGL/egl.h>
 #include <EGL/eglext.h>

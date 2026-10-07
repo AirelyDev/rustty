@@ -107,9 +107,9 @@ LIBGL_ALWAYS_SOFTWARE=1 RUSTTY_REQUIRE_FUZZ_CORPUS=1`:
   0 failed; the one N416 named skip; 50 `harness = false` binaries run whole.
 - Wall time 13,451 s (3 h 44 min): prebuild 324 s, then shards 1+2 (3,923 s and 8,793 s) and 3+4
   (3,250 s and 4,214 s).
-- RED on one crate only, `rustty-renderer`'s lib (16 parts): N520 (Mesa EGL's driver data of the
+- RED on one crate only, `rustty-renderer`'s lib (16 parts): N509 (Mesa EGL's driver data of the
   never-terminated display, two definite leaks per process: suppressed, VG2/VG3 in
-  `.port/phase-2/SANITIZER_SUPPRESSIONS.md`, C reproducer with no Rustty code) and N521 (one read-back
+  `.port/phase-2/SANITIZER_SUPPRESSIONS.md`, C reproducer with no Rustty code) and N510 (one read-back
   test compared llvmpipe pixels memcheck marks undefined: fixed in the test with `make_mem_defined`). No
   invalid access, no uninitialised value and no leak in Rustty code anywhere; no production change; no UD.
 - After the fixes `check_valgrind.sh rustty-renderer --jobs 4` is GREEN (7 memcheck processes, 151 + 3
@@ -283,10 +283,10 @@ committed records named here.
 - **P7-W15** (the Miri lanes on `cargo miri nextest`, plus G6t) used N500 (CLOSED: test-side Tree Borrows UB in
   `snapshot::codec::tests::complete_snapshot_preserves_every_supported_continuation_cut`, the N492
   shape, found by G6t's first run, fixed with the raw-root idiom), N505 (CLOSED: the same shape in seven `rustty-vt-c` and `rustty-core` tests, found by the second G6t run; drafted as N501 and renumbered, since N501-N503 are reserved for P7-W16a) and N507 (CLOSED, gate-side: two G6 arms of the nextest port were stricter than the libtest lane, on `rustty-cli`'s disabled doc tests and `rustty-wasm`'s source-ignored test). P7-W15 discharged V27, V28 and V29.
-- **P7-W18** (the full G-VALGRIND run on `rvm`) drew from a range set aside because P7-W17 (TSan) took ids
-  in parallel: N520 upward, UD380 upward, V35 upward. It used N520 (CLOSED: Mesa EGL's driver data of the
-  never-terminated display, suppressed with evidence) and N521 (CLOSED: a renderer read-back test,
-  fixed in the test); no UD, no V id. The next-free line below is reconciled at merge.
+- **P7-W18** (the full G-VALGRIND run on `rvm`) used N509 (CLOSED: Mesa EGL's driver data of the
+  never-terminated display, suppressed with evidence) and N510 (CLOSED: a renderer read-back test,
+  fixed in the test); no UD, no V id. Drafted as N520/N521 from a range set aside while P7-W17 (TSan)
+  took ids in parallel, and renumbered at review to follow P7-W17's N508.
 - **Next free ids: UD377, N508, V32.** (P7-W15 and P7-W16a/b merged; P7-W15 took no UD or V id.)
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging

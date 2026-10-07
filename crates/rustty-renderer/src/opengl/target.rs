@@ -757,7 +757,7 @@ pub(crate) mod tests {
         // Under G-VALGRIND the comparison below was reported as a conditional
         // jump on uninitialised bytes whose origin is a stack slot of llvmpipe's
         // JIT-compiled code, although every byte holds its expected value
-        // (NEW-FINDINGS N521; the C program
+        // (NEW-FINDINGS N510; the C program
         // `.port/tools/valgrind-llvmpipe-probe/readback-clear.c` gets the same
         // report for the same scissored clears and read-back, with no Rustty
         // code). Only these bytes are exempted, as in the golden tests (N412).

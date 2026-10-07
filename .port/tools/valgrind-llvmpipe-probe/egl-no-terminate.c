@@ -1,4 +1,4 @@
-// NEW-FINDINGS N520: Mesa's EGL leaves a never-terminated display's driver
+// NEW-FINDINGS N509: Mesa's EGL leaves a never-terminated display's driver
 // data "definitely lost" at process exit, with no Rustty code in the process.
 // The evidence behind the two `mesa-egl-dri2-*-not-terminated` entries of
 // `.port/tools/gates/valgrind-llvmpipe.supp`.

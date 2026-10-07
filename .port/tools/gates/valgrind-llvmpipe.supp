@@ -7,7 +7,7 @@
 # driver's own frames (its "Mesa", "Graphics Driver dri", "i965 addr4/addr8" and
 # "mesa memcpy/memcmp" entries). The reference runs no test that draws, so it
 # has no llvmpipe entries; these are the port's, one group per finding
-# (NEW-FINDINGS N412, N520), each measured on the Fedora 44 aarch64 VM (Mesa 26.1.4,
+# (NEW-FINDINGS N412, N509), each measured on the Fedora 44 aarch64 VM (Mesa 26.1.4,
 # LLVM 22.1.8, valgrind 3.27.1).
 
 # llvmpipe compiles its shaders with LLVM (gallivm) at draw time; memcheck
@@ -37,7 +37,7 @@
 # review L-6 F2 five entries here anchored on the test bodies instead, which
 # also hid conditional jumps on renderer state.
 
-# Mesa EGL's driver state for a display that is never terminated (N520).
+# Mesa EGL's driver state for a display that is never terminated (N509).
 # The port, like the reference, never calls eglTerminate on the shared
 # surfaceless display (`OpenGL.zig:113-115`, "Do not destroy the EGL display
 # here as it is shared across the entire process. It will get automatically
@@ -63,7 +63,7 @@
    ...
    fun:eglInitialize
 }
-# The config array of the same display; see the group comment above (N520).
+# The config array of the same display; see the group comment above (N509).
 {
    mesa-egl-dri2-configs-not-terminated
    Memcheck:Leak
