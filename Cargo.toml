@@ -466,6 +466,21 @@ overflow-checks = true
 # (`GhosttyExe.zig:20`) and the embedding library (`GhosttyLib.zig:31,102`)
 # only, so the other linked artifacts keep Cargo's release default below.
 strip = true
+# A Zig panic never unwinds, in any build mode: ReleaseFast/ReleaseSmall
+# `lib_vt.zig`'s `tinyPanicImpl` prints and `@trap()`s, Debug/ReleaseSafe's
+# `defaultPanic` prints a trace and aborts. `abort` is that contract for every
+# release artifact (P7-W22, N520): before it, a panic in librustty-vt already
+# ended in an abort (`panic.rs`'s hook aborts, and an unwind cannot leave an
+# `extern "C"` fn), but the unwind tables and landing pads for a path that
+# could never complete were 244 KB of the 2.3 MB dylib (`__eh_frame` 145 KB ->
+# 27 KB, `__gcc_except_tab` 36 KB -> 4 KB, `__text` -29 KB, link-edit
+# -49 KB). Measured against `unwind` on the 14 ws10 configs built with this
+# profile (instructions retired):
+# instructions -0.9% overall, terminal-parser -9.0%, osc-parser -4.0%, none
+# worse. Tests, benches, build scripts and proc macros ignore this setting
+# (Cargo builds them `unwind`), so `#[should_panic]` and the `catch_unwind`
+# test harnesses are untouched; `release-fast` keeps `unwind`, see there.
+panic = "abort"
 
 # The artifacts `-Dstrip` does not reach (N422): librustty-vt
 # (`GhosttyLibVt.zig` sets no `.strip`), the bench and gen tools
@@ -491,9 +506,15 @@ strip = "debuginfo"
 # (-16%) but pessimized terminal-parser by ~60% (322ms -> 531ms; over-inlining/
 # register pressure in the per-byte Parser::next loop). Plain overflow-checks=false
 # is the empirical optimum across the 14-bench suite on this codebase.
+# PERF(port): `panic = "unwind"` is restated against `release`'s `abort`
+# (P7-W22, N520): measured on rustty-bench, `abort` here costs terminal-parser
+# +2.2% instructions (its `parse_all`/`Parser::next` inlining shifts; the same
+# loop that LTO pessimised above) while saving osc-parser 4.0%, so this bench
+# profile keeps its measured codegen. No product artifact is built with it.
 [profile.release-fast]
 inherits = "release"
 overflow-checks = false
+panic = "unwind"
 
 # DG4: differential harness + CI test lane run the oracle's ReleaseSafe
 # assert semantics (std.debug.assert active) against ported debug_assert!.
@@ -516,6 +537,9 @@ strip = false
 # exactly like Zig's ReleaseSafe trap — and an unwind can never cross the extern "C"
 # boundary into Swift. A DEDICATED profile (not [profile.release]) so the workspace
 # test build keeps panic = "unwind" (catch_unwind harnesses / #[should_panic]).
+# (CORRECTION, P7-W22: Cargo builds tests unwind whatever the profile says, and
+# `[profile.release]` is now `abort` too; this profile is kept because the
+# xcframework build (`xtask/src/main.rs`, `archives.rs`) names it.)
 [profile.xcframework]
 inherits = "release"
 panic = "abort"

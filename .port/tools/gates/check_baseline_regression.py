@@ -13,8 +13,12 @@ Metric model:
     * benchmarks[]: each {id, metric, throughput_MiB_per_s | <metric-key>, median_s}
         - throughput metrics: HIGHER is better (regression = lower)
         - time metrics (median_s, *_s): LOWER is better (regression = higher)
-    * binary_sizes_bytes{}: {label: {bytes}}  (LOWER-or-equal is the fence;
-        default 0% tolerance for size per DoP)
+    * binary_sizes_bytes{}: {label: {bytes, tolerance?}}  (LOWER-or-equal is
+        the fence; a label's own `tolerance` fraction applies when present,
+        else the default 0% for size per DoP. Keys starting with "_" are
+        prose, not labels. P7-W22 / V16: the labels are the oracle artifacts
+        at the pin, each with its Rustty counterpart and a tolerance set from
+        the measured, itemized gap -- see BASELINE.json `_rule`)
   The METRICS file (produced by the future rustty bench/size run) uses the SAME
   shape: {"benchmarks": [...], "binary_sizes_bytes": {...}, "memory": {...},
           "startup": {...}}. Only metrics present in BOTH files are compared
@@ -135,15 +139,34 @@ def bench_index(obj):
 
 
 def size_index(obj):
-    """{label: bytes} from binary_sizes_bytes."""
+    """{label: bytes} from binary_sizes_bytes ("_"-prefixed keys are prose)."""
     out = {}
     for label, info in (obj.get("binary_sizes_bytes", {}) or {}).items():
+        if label.startswith("_"):
+            continue
         if isinstance(info, dict):
             b = info.get("bytes")
         else:
             b = info
         if isinstance(b, (int, float)):
             out[label] = float(b)
+    return out
+
+
+def size_tolerances(obj):
+    """{label: fraction} for the labels that carry their own `tolerance`.
+
+    A per-label tolerance is a documented property of the BASELINE row (set
+    from the measured gap, P7-W22), not a waiver: `--tol-size` still
+    overrides every label, and a label without one keeps the 0% default.
+    """
+    out = {}
+    for label, info in (obj.get("binary_sizes_bytes", {}) or {}).items():
+        if label.startswith("_") or not isinstance(info, dict):
+            continue
+        t = info.get("tolerance")
+        if isinstance(t, (int, float)) and not isinstance(t, bool):
+            out[label] = float(t)
     return out
 
 
@@ -172,6 +195,7 @@ def run(args):
 
     base_bench = bench_index(baseline)
     base_size = size_index(baseline)
+    size_tol = {} if args.tol_size is not None else size_tolerances(baseline)
 
     if not args.metrics or not os.path.exists(args.metrics):
         # progress mode: nothing to compare
@@ -232,15 +256,21 @@ def run(args):
             if cval > bval * (1 + t):
                 regressions.append((f"bench {bid} ({mkey})", bval, cval, pct(bval, cval)))
 
-    # sizes (0% tolerance default)
+    # sizes (the label's own tolerance, else the 0% default)
     for label, bbytes in base_size.items():
         if label not in cand_size:
             missing.append(("size", label))
             continue
         cbytes = cand_size[label]
         compared += 1
-        if cbytes > bbytes * (1 + tol["size"]):
-            regressions.append((f"size {label}", bbytes, cbytes, pct(bbytes, cbytes)))
+        t = size_tol.get(label, tol["size"])
+        verdict = "ok"
+        if cbytes > bbytes * (1 + t):
+            regressions.append((f"size {label} (tolerance {t*100:+.0f}%)",
+                                bbytes, cbytes, pct(bbytes, cbytes)))
+            verdict = "REGRESS"
+        print(f"  size {label}: oracle={int(bbytes)} rustty={int(cbytes)} "
+              f"({pct(bbytes, cbytes)*100:+.2f}%; tolerance {t*100:+.0f}%) {verdict}")
 
     # optional memory / startup top-level scalar maps {name: value} (lower better)
     for axis, key in (("rss", "memory"), ("startup", "startup")):
@@ -401,6 +431,50 @@ def self_test():
         ok &= (r.returncode != 0 and "REGRESS" in r.stdout)
     else:
         print("[e2] BASIS_CHANGED empty -> nothing to exercise")
+
+    # (g) PER-LABEL SIZE TOLERANCE (P7-W22). A label's own `tolerance` admits
+    #     growth up to it and no further; a label WITHOUT one still REDs on a
+    #     single byte; `--tol-size` overrides it; a "_" prose key is not a
+    #     label (so never NOT-MEASURED under --strict).
+    baseline["benchmarks"] = [
+        {"id": "terminal-parser/utf8", "metric": "throughput_MiB_per_s",
+         "throughput_MiB_per_s": 250.0, "median_s": 0.25},
+    ]
+    baseline["binary_sizes_bytes"] = {
+        "_rule": "prose",
+        "tol.dylib": {"bytes": 1000000, "tolerance": 0.10},
+        "zero.a": {"bytes": 1000000},
+    }
+    with open(os.path.join(bdir, "BASELINE.json"), "w") as fh:
+        json.dump(baseline, fh)
+
+    def write_sizes(tol_bytes, zero_bytes):
+        p = os.path.join(tmp, "metrics_sizes.json")
+        with open(p, "w") as fh:
+            json.dump({
+                "benchmarks": [
+                    {"id": "terminal-parser/utf8", "metric": "throughput_MiB_per_s",
+                     "throughput_MiB_per_s": 250.0, "median_s": 0.25},
+                ],
+                "binary_sizes_bytes": {"tol.dylib": {"bytes": tol_bytes},
+                                       "zero.a": {"bytes": zero_bytes}},
+            }, fh)
+        return p
+
+    r = invoke("--strict", "--metrics", write_sizes(1100000, 1000000))
+    print(f"[g] +10% on a 10% label, strict -> exit {r.returncode} (expect 0)")
+    ok &= (r.returncode == 0 and "NOT-MEASURED" not in r.stdout)
+    r = invoke("--metrics", write_sizes(1100001, 1000000))
+    print(f"[g] +10.0001% on a 10% label -> exit {r.returncode} (expect non-zero)")
+    ok &= (r.returncode != 0 and "REGRESS size tol.dylib" in r.stdout)
+    r = invoke("--metrics", write_sizes(1000000, 1000001))
+    print(f"[g] +1 B on a label without a tolerance -> exit {r.returncode} "
+          f"(expect non-zero)")
+    ok &= (r.returncode != 0 and "REGRESS size zero.a" in r.stdout)
+    r = invoke("--tol-size", "0", "--metrics", write_sizes(1000001, 1000000))
+    print(f"[g] --tol-size 0 overrides the label's 10% -> exit {r.returncode} "
+          f"(expect non-zero)")
+    ok &= (r.returncode != 0 and "REGRESS size tol.dylib" in r.stdout)
 
     shutil.rmtree(tmp, ignore_errors=True)
 

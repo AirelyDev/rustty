@@ -130,7 +130,7 @@ command in `.port/phase-2/VERIFICATION_DEBT.md` or the named record.
 | ~~G6t to completion~~ DONE, P7-W15: GREEN after N500 and N505 (`rustty-vt` 1,597 + 119, `rustty-xev` 22, `rustty-vt-c` 570, `rustty-renderer` 60, `rustty-core` 67) | `MIRI_EXCEPTIONS.md` "P7-W15" | `bash .port/tools/gates/check_leaks.sh --tree-borrows` |
 | ~~G6c as the gate runs it~~ DONE on nextest, P7-W15: 124 of 124 GREEN in 1,110 s (libtest: 119 tests, about 105 min) | `MIRI_EXCEPTIONS.md` "P7-W15" | `bash .port/tools/gates/check_leaks.sh --debug-assertions-off` |
 | Re-audit of the most-changed areas (Task 41 step 3) | here | the parity audit workflow over `src/terminal`, `src/apprt`, `pkg`, `include` |
-| Idle-machine performance runs and a new G8 baseline (P7-W19: oracle rebuilt at the pin, 14/14 held provisionally, V18 DISCHARGED with N511; the idle run and the BASELINE.json re-base are still owed, the host's Linux VM kept the load above 2.0) | V16, V17 | V17's P7-W19 recipe |
+| Idle-machine performance runs and a new G8 baseline (P7-W19: oracle rebuilt at the pin, 14/14 held provisionally, V18 DISCHARGED with N511; the idle run and the timing re-base are still owed, the host's Linux VM kept the load above 2.0. P7-W22: the size axis is re-based at the pin with per-label tolerances and G8 runs `--strict`, V16 DISCHARGED with N520) | V17 | V17's P7-W19 recipe |
 | The 16 new CI jobs and release-workflow changes on GitHub's runners | V25 | push, then read the run |
 | Windows full-workspace tests on the clang-cl-built C/C++ dependencies | V26 | `cargo test --workspace --exclude libxml2-sys --exclude fontconfig-sys --exclude sentry-sys --target x86_64-pc-windows-msvc` |
 | Nix and Snap packaging | V24 | user-deferred |
@@ -302,6 +302,10 @@ committed records named here.
 - **P7-W20** (N511's perf work) CLOSED N511: `consume_apc_string`'s group test spelled with the NEON
   intrinsics the reference's `@Vector(16, u8)` lowers to (portable form elsewhere and under Miri), and four
   `#[inline]` hints plus a register sink for the hyperlink map. No new id. **Next free ids: UD378, N512, V33.**
+- **P7-W22** (V16, binary size) used N520 (CLOSED: `librustty_vt_c.dylib` 1.30x -> 1.076x Ghostty's, by
+  `static` lookup tables and `[profile.release] panic = "abort"`). V16 DISCHARGED: BASELINE.json's size axis
+  is the oracle at the pin, three labels mapped with per-label tolerances (the static `.a` dropped), G8b builds
+  the counterparts (`--build`) and G8 runs `--strict`.
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.

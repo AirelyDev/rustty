@@ -18,18 +18,17 @@
 // PORT NOTE: the float literals are copied verbatim from the generated
 // reference; some carry more digits than the shortest f64 round-trip.
 #![allow(clippy::excessive_precision)]
-// PARITY: the reference emits these as `pub const stageN` arrays (Zig comptime
-// constants). Clippy's `large_const_arrays` would have us switch to `static`;
-// they stay `const`, as rustty-unicode's `props_data` does (R5: never change a
-// value/shape to silence a lint).
-#![allow(clippy::large_const_arrays)]
+// PARITY: the reference emits these as container-level `pub const stageN`
+// arrays, which Zig materialises as ONE global object each. A Rust `const`
+// array is instead inlined into every use, so they are `static`, as
+// rustty-unicode's `props_data` is (P7-W22, N520).
 
 use crate::glyph::{Align, Constraint, ConstraintSize, Height};
 
 // pub fn Tables(comptime Elem: type) type {
 //     return struct {
 //         pub const stage1: [8192]u16 = .{ ... };
-pub const STAGE1: [u16; 8192] = [
+pub static STAGE1: [u16; 8192] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 256, 0, 0, 512, 768, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -291,7 +290,7 @@ pub const STAGE1: [u16; 8192] = [
 ];
 
 //         pub const stage2: [6400]u16 = .{ ... };
-pub const STAGE2: [u16; 6400] = [
+pub static STAGE2: [u16; 6400] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -502,7 +501,7 @@ pub const STAGE2: [u16; 6400] = [
 ];
 
 //         pub const stage3: [277]Elem = .{ ... };
-pub const STAGE3: [Option<Constraint>; 277] = [
+pub static STAGE3: [Option<Constraint>; 277] = [
     None,
     Some(Constraint {
         size: ConstraintSize::FitCover1,

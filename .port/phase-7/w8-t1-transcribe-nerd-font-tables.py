@@ -123,24 +123,23 @@ def emit(header, stage1, stage2, stage3):
     out.append("// PORT NOTE: the float literals are copied verbatim from the generated")
     out.append("// reference; some carry more digits than the shortest f64 round-trip.")
     out.append("#![allow(clippy::excessive_precision)]")
-    out.append("// PARITY: the reference emits these as `pub const stageN` arrays (Zig comptime")
-    out.append("// constants). Clippy's `large_const_arrays` would have us switch to `static`;")
-    out.append("// they stay `const`, as rustty-unicode's `props_data` does (R5: never change a")
-    out.append("// value/shape to silence a lint).")
-    out.append("#![allow(clippy::large_const_arrays)]")
+    out.append("// PARITY: the reference emits these as container-level `pub const stageN`")
+    out.append("// arrays, which Zig materialises as ONE global object each. A Rust `const`")
+    out.append("// array is instead inlined into every use, so they are `static`, as")
+    out.append("// rustty-unicode's `props_data` is (P7-W22, N520).")
     out.append("")
     out.append("use crate::glyph::{Align, Constraint, ConstraintSize, Height};")
     out.append("")
     out.append("// pub fn Tables(comptime Elem: type) type {")
     out.append("//     return struct {")
     out.append("//         pub const stage1: [8192]u16 = .{ ... };")
-    out.append("pub const STAGE1: [u16; %d] = [%s];" % (len(stage1), ", ".join(map(str, stage1))))
+    out.append("pub static STAGE1: [u16; %d] = [%s];" % (len(stage1), ", ".join(map(str, stage1))))
     out.append("")
     out.append("//         pub const stage2: [6400]u16 = .{ ... };")
-    out.append("pub const STAGE2: [u16; %d] = [%s];" % (len(stage2), ", ".join(map(str, stage2))))
+    out.append("pub static STAGE2: [u16; %d] = [%s];" % (len(stage2), ", ".join(map(str, stage2))))
     out.append("")
     out.append("//         pub const stage3: [277]Elem = .{ ... };")
-    out.append("pub const STAGE3: [Option<Constraint>; %d] = [" % len(stage3))
+    out.append("pub static STAGE3: [Option<Constraint>; %d] = [" % len(stage3))
     for e in stage3:
         if e is None:
             out.append("    None,")
@@ -164,13 +163,13 @@ def reparse_rust(rs):
            "Height": {v: k for k, v in HEIGHT.items()}}
 
     def arr(name):
-        m = re.search(r"pub const %s: \[u16; (\d+)\] = \[([0-9,\s]+)\];" % name, rs)
+        m = re.search(r"pub (?:const|static) %s: \[u16; (\d+)\] = \[([0-9,\s]+)\];" % name, rs)
         vals = [int(v) for v in m.group(2).replace("\n", " ").split(",") if v.strip()]
         assert len(vals) == int(m.group(1))
         return vals
 
     s3 = []
-    m = re.search(r"pub const STAGE3: \[Option<Constraint>; (\d+)\] = \[\n(.*?)\n\];", rs, re.S)
+    m = re.search(r"pub (?:const|static) STAGE3: \[Option<Constraint>; (\d+)\] = \[\n(.*?)\n\];", rs, re.S)
     cur = None
     for ln in m.group(2).split("\n"):
         s = ln.strip()

@@ -76,8 +76,10 @@ def ints(body, n):
     return vals
 
 
-def arr(name, ty, vals):
-    return f"pub const {name}: [{ty}; {len(vals)}] = [\n" + "".join(
+def arr(name, ty, vals, kw="static"):
+    # `static` for the runtime lookup tables (one object, as Zig emits; N520);
+    # the grapheme byte table stays `const`: it is only read at compile time.
+    return f"pub {kw} {name}: [{ty}; {len(vals)}] = [\n" + "".join(
         f"    {v},\n" for v in vals
     ) + "];\n"
 
@@ -104,12 +106,11 @@ def props(text):
 //!
 {REGEN_NOTE}
 
-// PARITY: the reference emits these as `pub const stageN` arrays (Zig comptime
-// constants). Clippy's `large_const_arrays` would have us switch to `static`,
-// which would change the artifact shape away from the reference's const tables;
-// we keep `const` to preserve parity (R5: never change a value/shape to silence
-// a lint).
-#![allow(clippy::large_const_arrays)]
+// PARITY: the reference emits these as container-level `pub const stageN`
+// arrays, which Zig materialises as ONE global object each. A Rust `const`
+// array is instead inlined into every use, which put three copies of these
+// tables into librustty_vt_c.dylib (P7-W22, N520), so they are `static`: the
+// same values, laid out once, as in the reference.
 
 use crate::props::GraphemeBreakNoControl;
 use crate::props::Properties;
@@ -117,7 +118,7 @@ use crate::props::Properties;
 """
     out += arr("STAGE1", "u16", s1)
     out += arr("STAGE2", "u16", s2)
-    out += f"pub const STAGE3: [Properties; {n3}] = [\n"
+    out += f"pub static STAGE3: [Properties; {n3}] = [\n"
     for w, wzg, gb, evb in elems:
         out += (
             "    Properties {\n"
@@ -148,7 +149,7 @@ def symbols(text):
 """
     out += arr("STAGE1", "u16", ints(b1, n1))
     out += arr("STAGE2", "u16", ints(b2, n2))
-    out += f"pub const STAGE3: [bool; {n3}] = [{', '.join(s3)}];\n"
+    out += f"pub static STAGE3: [bool; {n3}] = [{', '.join(s3)}];\n"
     return out
 
 
@@ -169,7 +170,7 @@ def grapheme(data):
 {REGEN_NOTE}
 
 """
-    out += arr("DATA", "u8", list(data))
+    out += arr("DATA", "u8", list(data), kw="const")
     return out
 
 

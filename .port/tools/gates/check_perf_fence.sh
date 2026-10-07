@@ -34,24 +34,74 @@
 #              is the normal state inside a fresh worktree or on CI).
 #
 # Usage:
-#   check_perf_fence.sh [--rust PATH] [--self PATH] [--emit-metrics PATH] [-n N]
+#   check_perf_fence.sh [--build] [--rust PATH] [--self PATH]
+#                       [--emit-metrics PATH] [-n N]
+#
+# --build (what ci.sh passes; P7-W22 review): once the substrate is known to be
+# present, run every size label's `rustty_build` from BASELINE.json (ws10_suite
+# --print-size-builds: the bench, rustty-gen and the vt-c release libraries, the
+# perf README's list) at the repo root, so a fresh tree measures fresh artifacts
+# and a stale one is never measured silently. CARGO_TARGET_DIR is unset for
+# those builds because the counterparts are measured under <root>/target. A
+# failed build is RED (exit 1). CI_SKIP_CARGO=1 skips them with a NOTE.
+# --emit-metrics PATH is removed first, so a BLOCKED run leaves no earlier run's
+# file behind for G8 to read.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$HERE/../../.." && pwd)"
 SUITE="$HERE/../perf/ws10_suite.py"
-RUST="${RUSTTY_BENCH_BIN:-target/release-fast/rustty-bench}"
+RUST="${RUSTTY_BENCH_BIN:-$ROOT/target/release-fast/rustty-bench}"
 ENTRY=".perf-bins/rustty-bench-ws10-entry-RF"
+BUILD=0
+EMIT=""
 ARGS=()
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --rust) RUST="$2"; shift 2 ;;
     --self) ENTRY="$2"; shift 2 ;;
+    --build) BUILD=1; shift ;;
+    --emit-metrics) EMIT="$2"; ARGS+=("$1" "$2"); shift 2 ;;
     *) ARGS+=("$1"); shift ;;
   esac
 done
 
 echo "=== G8b :: paired same-session perf fence (the pinned oracle only) ==="
+
+if [ -n "$EMIT" ]; then
+  rm -f -- "$EMIT"
+fi
+
+if [ "$BUILD" = 1 ]; then
+  # Substrate first: on CI (no oracle) this BLOCKs without paying for builds.
+  set +e
+  python3 "$SUITE" --preflight
+  rc=$?
+  set -e
+  if [ "$rc" -ne 0 ]; then
+    [ "$rc" -eq 3 ] && echo "BLOCKED: measurement substrate absent (untracked oracle binary/corpora)"
+    exit "$rc"
+  fi
+  if [ "${CI_SKIP_CARGO:-0}" = "1" ]; then
+    echo "NOTE: CI_SKIP_CARGO=1 -> size counterparts NOT rebuilt; measuring what is on disk"
+  else
+    builds="$(python3 "$SUITE" --print-size-builds)"
+    while IFS= read -r cmd; do
+      [ -n "$cmd" ] || continue
+      read -r -a argv <<<"$cmd"
+      if [ "${argv[0]}" != "cargo" ] || [ "${argv[1]:-}" != "build" ]; then
+        echo "RED: BASELINE.json rustty_build is not a cargo build: $cmd"
+        exit 1
+      fi
+      echo "+ $cmd"
+      if ! (cd "$ROOT" && env -u CARGO_TARGET_DIR "${argv[@]}"); then
+        echo "RED: size counterpart build failed: $cmd"
+        exit 1
+      fi
+    done <<<"$builds"
+  fi
+fi
 
 if [ ! -x "$RUST" ]; then
   echo "BLOCKED: candidate bench binary not found: $RUST"
