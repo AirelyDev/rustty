@@ -108,11 +108,15 @@ allocation. G2 (below, removed) showed the risk: its closures captured `Rc`s of 
 by nothing. Two guards stand against that now: (1) every `lsan-gtk.supp` entry has a ceiling on the
 allocations it may match in the lane's run (`sanitizers.sh` `LSAN_GTK_CEILINGS`, read from LSan's
 `Suppressions used` table; above the ceiling is RED, an entry without a ceiling or a ceiling without an entry
-is RED; G-SAN-SELF H arms for each); (2) the live KATs' `close_surfaces` (`tests/common/gtk_live.rs`)
+is RED; once the test has run, a log without that table, or G1, which matches in every run, matching
+nothing, is RED too, so the check is never vacuous; G-SAN-SELF H arms for each); (2) the live KATs' `close_surfaces` (`tests/common/gtk_live.rs`)
 asserts that the window and every Rustty widget in it (the `Ghostty*` GTypes: `Window`, `Tab`, `SplitTree`,
 `SurfaceScrolledWindow`, `Surface`, `RenderSurface`, `SearchOverlay`, ...) are finalized, so a refcount leak
 on any of them is RED whatever LSan's suppressions hide. G1 and G1b match fontconfig patterns, which point
-only to other fontconfig data, never to Rustty objects.
+only to other fontconfig data, never to Rustty objects. The lane also loads `lsan.supp`, whose Mesa entries
+(S1/S2: `libEGL_mesa.so`, 215 allocations, and `libgallium`, 940, in this lane) carry the same caveat: they
+are driver state of the renderer's EGL display and point into Mesa only. They have no ceiling here; guard
+(2) covers what a Rustty object leaked beneath them would be.
 
 **Negative controls.** G-SAN-SELF (Linux) runs the synthetic crate under the lane's combined file and
 requires RED for a Rust `Box` leak, a `g_strdup` string, a `GObject`, an `FcPattern` from `FcNameParse` (G1)

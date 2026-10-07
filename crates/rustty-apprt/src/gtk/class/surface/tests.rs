@@ -265,7 +265,7 @@ fn key_press_routes_through_im_context_first() {
     // buffered for the key encoder — NOT sent to the core surface — so the
     // key event can carry the text alongside the keycode.
     imp.ime.borrow_mut().in_keyevent = ImKeyEvent::True;
-    Surface::im_commit(&imp.im_context, "a", &surface);
+    Surface::im_commit(&imp.im_context, b"a", &surface);
     {
         let ime = imp.ime.borrow();
         assert_eq!(
@@ -280,7 +280,7 @@ fn key_press_routes_through_im_context_first() {
     // length stays 0.
     imp.ime.borrow_mut().im_len = 0;
     imp.ime.borrow_mut().in_keyevent = ImKeyEvent::False;
-    Surface::im_commit(&imp.im_context, "b", &surface);
+    Surface::im_commit(&imp.im_context, b"b", &surface);
     assert_eq!(
         imp.ime.borrow().im_len,
         0,
@@ -304,7 +304,7 @@ fn a_128_byte_commit_during_a_keypress_is_buffered_whole() {
     let text = "\u{e9}".repeat(64);
     assert_eq!(128, text.len());
     imp.ime.borrow_mut().in_keyevent = ImKeyEvent::True;
-    Surface::im_commit(&imp.im_context, &text, &surface);
+    Surface::im_commit(&imp.im_context, text.as_bytes(), &surface);
     {
         let ime = imp.ime.borrow();
         assert_eq!(128, ime.im_len, "the whole commit is buffered");
@@ -314,7 +314,7 @@ fn a_128_byte_commit_during_a_keypress_is_buffered_whole() {
     // One byte more is the reference's own "not enough buffer space" arm.
     imp.ime.borrow_mut().im_len = 0;
     let long = format!("{text}a");
-    Surface::im_commit(&imp.im_context, &long, &surface);
+    Surface::im_commit(&imp.im_context, long.as_bytes(), &surface);
     assert_eq!(0, imp.ime.borrow().im_len, "129 bytes are not buffered");
 }
 

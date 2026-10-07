@@ -68,7 +68,7 @@ impl Surface {
             c"im_preedit_end" => Surface::im_preedit_end,
                 (ctx: obj(gtk4::IMMulticontext), this: obj(Surface));
             c"im_commit" => Surface::im_commit,
-                (ctx: obj(gtk4::IMMulticontext), bytes: str(), this: obj(Surface));
+                (ctx: obj(gtk4::IMMulticontext), bytes: bytes(), this: obj(Surface));
             c"url_mouse_enter" => Surface::url_mouse_enter,
                 (ec: obj(gtk4::EventControllerMotion), x: prim(f64), y: prim(f64), this: obj(Surface));
             c"url_mouse_leave" => Surface::url_mouse_leave,
@@ -893,9 +893,10 @@ impl Surface {
     /// event is handled depends on the current `in_keyevent` state — during a
     /// keypress a simple commit (e.g. "a") is BUFFERED for the key encoder rather
     /// than committed as IME text.
-    pub(super) fn im_commit(_ctx: &gtk4::IMMulticontext, bytes: &str, this: &Surface) {
+    pub(super) fn im_commit(_ctx: &gtk4::IMMulticontext, bytes: &[u8], this: &Surface) {
         let imp = this.imp();
-        let str_bytes = bytes.as_bytes();
+        // `bytes: [*:0]u8`: the commit's raw bytes, passed through unchanged.
+        let str_bytes = bytes;
 
         // log.debug("GTKIM: input commit composing={} keyevent={} str={s}", .{
         //     self.im_composing,

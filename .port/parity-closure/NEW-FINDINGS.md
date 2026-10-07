@@ -11113,11 +11113,13 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   dropped `GValue` itself, as the reference's C callbacks do (GTK's C marshaller peeks the `G_TYPE_VALUE`
   parameter), so `ext::drop_target_value` (N338's unboxing of glib-rs's parameter box) is deleted; the
   `TemplateCallbackReturn` alias (N336, glib-rs's `GValue` return check) is deleted, the gboolean return
-  being the trampoline's `gboolean`. Small differences from the Zig signatures, none observable: boolean
-  closure parameters are read as `gboolean` (the reference's `bool` reads one byte of the `int` libffi
-  passes); `im_commit`'s text is read as UTF-8 with invalid sequences replaced (the reference uses bytes;
-  the port's handler took `&str` before and glib-rs aborted on invalid UTF-8); a handler omits trailing C
-  parameters it does not use, as the reference's `closureComputedTitle` callers and GTK allow.
+  being the trampoline's `gboolean`. Both `im_commit` handlers (`Surface`, `ImguiWidget`) now take the
+  commit's raw bytes (`&[u8]`, the reference's `[*:0]u8`): they took `&str` under gtk4-rs, where invalid
+  UTF-8 aborted in glib-rs's marshaller; a lossy conversion would have changed the bytes sent to the pty
+  and inflated the 128-byte `im_buf` check, so the bytes pass through unchanged (review of `72e943c14`).
+  Differences from the Zig signatures that remain, neither observable: boolean closure parameters are read
+  as `gboolean` (the reference's `bool` reads one byte of the `int` libffi passes); a handler omits
+  trailing C parameters it does not use, as GTK's C calling conventions allow.
 - **evidence** (rvm, aarch64 Fedora 44, GTK 4.22.4): G-LSAN-GTK GREEN with `lsan-gtk.supp` G2 REMOVED (1
   test, 0 reports; suppressions matched: G1 6,913, G1b 2,197, lsan.supp's Mesa entries 215 + 940, no
   closure). Negative control: the base `4a32358ae` with only G2 removed is RED, 279 allocations, 16,144

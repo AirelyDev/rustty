@@ -1169,10 +1169,22 @@ LSAN_GTK_CEILINGS=(
   "libpangoft2-1.0.so|7600"
   "libpangocairo-1.0.so|2420"
 )
-# lsan_gtk_ceiling_check LOG [SUPP]: RED (1) on any ceiling breach, unpinned
-# entry or stale ceiling; prints one line per entry.
+# The entry that matches in every run (G1: the Pango font map's patterns,
+# 6,913 allocations each run on rvm). After a run, a missing "Suppressions
+# used" table or a zero count for it means the ceilings checked nothing (the
+# log moved, print_suppressions was dropped, LSan never ran): RED, never a
+# vacuous GREEN.
+LSAN_GTK_MUST_MATCH="libpangoft2-1.0.so"
+# lsan_gtk_ceiling_check LOG [SUPP] [RAN]: RED (1) on any ceiling breach,
+# unpinned entry or stale ceiling; with RAN=1 (the lane's test ran) also when
+# the log has no "Suppressions used" table or LSAN_GTK_MUST_MATCH matched
+# nothing. Prints one line per entry.
 lsan_gtk_ceiling_check() {
-  local log="$1" supp="${2:-$LSAN_GTK_SUPP}" bad=0 pat e max n found
+  local log="$1" supp="${2:-$LSAN_GTK_SUPP}" ran="${3:-0}" bad=0 pat e max n found
+  if [ "$ran" = 1 ] && { [ ! -r "$log" ] || ! grep -q '^Suppressions used:' "$log"; }; then
+    echo "  ❌ G-LSAN-GTK: the test ran but its log ($log) has no LSan \"Suppressions used\" table: the ceilings checked nothing"
+    return 1
+  fi
   while IFS= read -r pat; do
     found=""
     for e in ${LSAN_GTK_CEILINGS[@]+"${LSAN_GTK_CEILINGS[@]}"}; do
@@ -1185,6 +1197,8 @@ lsan_gtk_ceiling_check() {
     n="$(awk -v p="$pat" '/^Suppressions used:/ {t=1; next} t && $3 == p {s += $1} t && /^-+$/ {t=0} END {print s + 0}' "$log")"
     if [ "$n" -gt "$found" ]; then
       echo "  ❌ G-LSAN-GTK: '$pat' matched $n allocations, above its ceiling $found (a leak may be growing under it)"; bad=1
+    elif [ "$ran" = 1 ] && [ "$pat" = "$LSAN_GTK_MUST_MATCH" ] && [ "$n" -eq 0 ]; then
+      echo "  ❌ G-LSAN-GTK: '$pat' matched nothing, though it matches in every run: the ceilings checked nothing"; bad=1
     else
       echo "  suppression '$pat': $n allocations matched (ceiling $found)"
     fi
@@ -1243,7 +1257,9 @@ gate_lsan_gtk() {
     extra=1
   fi
   if [ "$M_BLOCKED" -eq 0 ]; then
-    lsan_gtk_ceiling_check "$SAN_LOG_ROOT/lsan-gtk/lsan/$(printf '%s' "$GTK_LSAN_SPEC" | tr ':,' '__').log" || extra=1
+    local ran=0
+    [ "$M_TOTAL" -ge 1 ] && ran=1
+    lsan_gtk_ceiling_check "$SAN_LOG_ROOT/lsan-gtk/lsan/$(printf '%s' "$GTK_LSAN_SPEC" | tr ':,' '__').log" "$LSAN_GTK_SUPP" "$ran" || extra=1
   fi
   rm -f -- "$comb"; rmdir -- "$lroot" 2>/dev/null
   gate_verdict "G-LSAN-GTK" "$extra"
@@ -1547,6 +1563,12 @@ RS
     'd="$(mktemp -d)"; printf "leak:a.so\nleak:b.so\n" >"$d/s"; : >"$d/l"; LSAN_GTK_CEILINGS=("a.so|4"); lsan_gtk_ceiling_check "$d/l" "$d/s"; r=$?; rm -rf -- "$d"; exit $r'
   hx "lsan_gtk_ceiling_check: a ceiling with no entry is stale (RED)" 1 "names 'gone.so', which is not a lsan-gtk.supp entry" \
     'd="$(mktemp -d)"; printf "leak:a.so\n" >"$d/s"; : >"$d/l"; LSAN_GTK_CEILINGS=("a.so|4" "gone.so|1"); lsan_gtk_ceiling_check "$d/l" "$d/s"; r=$?; rm -rf -- "$d"; exit $r'
+  hx "lsan_gtk_ceiling_check: the test ran but the log has no Suppressions used table (RED)" 1 "has no LSan \"Suppressions used\" table" \
+    'd="$(mktemp -d)"; printf "leak:a.so\n" >"$d/s"; printf "running 1 test\n" >"$d/l"; LSAN_GTK_MUST_MATCH=a.so; LSAN_GTK_CEILINGS=("a.so|4"); lsan_gtk_ceiling_check "$d/l" "$d/s" 1; r=$?; rm -rf -- "$d"; exit $r'
+  hx "lsan_gtk_ceiling_check: the test ran but the always-matching entry matched nothing (RED)" 1 "'a.so' matched nothing" \
+    'd="$(mktemp -d)"; printf "leak:a.so\nleak:b.so\n" >"$d/s"; printf "Suppressions used:\n  count      bytes template\n      2         10 b.so\n-----\n" >"$d/l"; LSAN_GTK_MUST_MATCH=a.so; LSAN_GTK_CEILINGS=("a.so|4" "b.so|3"); lsan_gtk_ceiling_check "$d/l" "$d/s" 1; r=$?; rm -rf -- "$d"; exit $r'
+  hx "control: the real LSAN_GTK_MUST_MATCH is a lsan-gtk.supp entry" 0 "" \
+    'sed -n "s/^leak://p" "$LSAN_GTK_SUPP" | grep -qxF -- "$LSAN_GTK_MUST_MATCH"'
   hx "--gate lsan-gtk with lsan-gtk.supp missing is RED" 1 "lsan-gtk-missing.supp is missing" \
     'unset RUSTTY_SANITIZERS_OWN_JOB; OS=Linux; XDG_RUNTIME_DIR=/tmp; SWAY_BIN=true; LSAN_GTK_SUPP=/nonexistent/lsan-gtk-missing.supp; gate_lsan_gtk'
 

@@ -470,7 +470,7 @@ impl ImguiWidget {
                 (ec: obj(gtk4::EventControllerScroll), x: prim(f64), y: prim(f64), this: obj(ImguiWidget))
                 -> glib(bool);
             c"im_commit" => ImguiWidget::im_commit,
-                (ctx: obj(gtk4::IMMulticontext), bytes: str(), this: obj(ImguiWidget));
+                (ctx: obj(gtk4::IMMulticontext), bytes: bytes(), this: obj(ImguiWidget));
         );
     }
 }
@@ -761,7 +761,7 @@ impl ImguiWidget {
     }
 
     /// PORTS: `imgui_widget.zig:438-447` `imCommit`.
-    fn im_commit(_ctx: &gtk4::IMMulticontext, bytes: &str, this: &ImguiWidget) {
+    fn im_commit(_ctx: &gtk4::IMMulticontext, bytes: &[u8], this: &ImguiWidget) {
         this.queue_render();
         if this.set_current_context().is_err() {
             return;

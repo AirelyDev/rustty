@@ -78,7 +78,7 @@ where
 /// | `opt_obj(T)`      | nullable instance pointer      | `Option<T>` (a new reference) |
 /// | `opt_obj_ref(T)`  | nullable instance pointer      | `Option<&T>` |
 /// | `value()`         | `const GValue *`               | `&glib::Value` |
-/// | `str()`           | `const char *`, UTF-8          | `&str` (invalid UTF-8 replaced) |
+/// | `bytes()`         | `const char *`, NUL-terminated | `&[u8]` (the raw bytes, as the reference's `[*:0]u8`) |
 /// | `opt_str()`       | nullable `const char *`        | `Option<&str>` |
 /// | `opt_string()`    | nullable `const char *`        | `Option<String>` |
 /// | `opt_boxed(T)`    | nullable `T *` (Rust boxed)    | `Option<T>` (a clone, the boxed copy) |
@@ -132,7 +132,7 @@ macro_rules! tcb_c_ty {
     (opt_obj($($t:tt)*)) => { <$($t)* as ::glib::translate::GlibPtrDefault>::GlibType };
     (opt_obj_ref($($t:tt)*)) => { <$($t)* as ::glib::translate::GlibPtrDefault>::GlibType };
     (value()) => { *const ::glib::gobject_ffi::GValue };
-    (str()) => { *const ::core::ffi::c_char };
+    (bytes()) => { *const ::core::ffi::c_char };
     (opt_str()) => { *const ::core::ffi::c_char };
     (opt_string()) => { *const ::core::ffi::c_char };
     (opt_boxed($($t:tt)*)) => { *const $($t)* };
@@ -158,8 +158,8 @@ macro_rules! tcb_from_c {
     (value() $a:ident) => {
         ::glib::Value::from_glib_ptr_borrow($a)
     };
-    (str() $a:ident) => {
-        ::core::ffi::CStr::from_ptr($a).to_string_lossy()
+    (bytes() $a:ident) => {
+        ::core::ffi::CStr::from_ptr($a).to_bytes()
     };
     (opt_str() $a:ident) => {
         if $a.is_null() {
@@ -195,9 +195,6 @@ macro_rules! tcb_pass {
     };
     (opt_obj_ref $a:ident) => {
         $a.as_deref()
-    };
-    (str $a:ident) => {
-        &*$a
     };
     (opt_str $a:ident) => {
         $a.as_deref()
