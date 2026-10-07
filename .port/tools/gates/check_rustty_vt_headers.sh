@@ -97,7 +97,27 @@ if [ "${1:-}" = "--self-test-masking" ]; then
   exit "$rc"
 fi
 
-lib=target/release/librustty_vt_c.dylib
+# N486 (P7-W24): the native library and its export list, per host. Arms (b)
+# and (d) read the exports, arm (c) links the library. macOS: the `.dylib`,
+# whose external defined symbols `nm -gjU` lists with Mach-O's leading `_`.
+# Linux and FreeBSD (ELF): the `.so`, whose dynamic symbol table
+# `nm -D --defined-only` lists (`<addr> <type> <name>`, no prefix). The same
+# set on both: the library's defined, exported symbols, filtered to `rustty_*`
+# in arm (b). Any other host is unverified, so arm (b), and arm (d) with it,
+# is BLOCKED there (exit 3), never a pass.
+case "$(uname -s)" in
+  Darwin) lib=target/release/librustty_vt_c.dylib ;;
+  Linux|FreeBSD) lib=target/release/librustty_vt_c.so ;;
+  *) lib="" ;;
+esac
+# native_exports: the native library's defined, exported symbol names, one per
+# line, without Mach-O's `_` prefix.
+native_exports() {
+  case "$(uname -s)" in
+    Darwin) nm -gjU "$lib" | sed 's/^_//' ;;
+    *) nm -D --defined-only "$lib" | awk 'NF >= 3 {print $3}' ;;
+  esac
+}
 # P3-W6: UNCONDITIONAL, same reason as the wasm build below. This was
 # `[ -f "$lib" ] || cargo build …`, which is the SAME stale-artifact vacuity —
 # and it bit immediately: arm (c) reads the struct registry by running
@@ -303,16 +323,34 @@ echo "  OK (pointee is a $a4_gen_size-byte struct, == sizeof(RusttyStyle))"
 )
 record "(a4)" $?
 
+# Arm (d) reads the export list arm (b) writes: drop any list an earlier run
+# left in $T, so (d) never reads a stale one when (b) stops before writing it.
+rm -f "$T/vt_exp.txt" "$T/vt_native_exp.txt"
 ( set -e
 echo "== (b) every declared+cbindgen rustty_* symbol is a real export =="
+if [ -z "$lib" ]; then
+  echo "  BLOCKED: no native-library export reader for $(uname -s) (verified on"
+  echo "           macOS and Linux only); arm (d) reads this arm's list. This is NOT a pass."
+  exit 3
+fi
+if [ ! -f "$lib" ]; then
+  echo "  FAIL — $lib is missing after \`cargo build -p rustty-vt-c --release\`."
+  exit 1
+fi
+native_exports | grep '^rustty_' | sort -u > "$T/vt_native_exp.txt"
+if [ ! -s "$T/vt_native_exp.txt" ]; then
+  echo "  FAIL — read 0 rustty_* exports from $lib; an empty native side would make"
+  echo "  this arm and arm (d) vacuous (R5)."
+  exit 1
+fi
 grep -rhoE 'rustty_[a-z0-9_]+' include/rustty/vt.h include/rustty/vt | sort -u > "$T/vt_decl.txt"
 wasm=target/wasm32-unknown-unknown/release/rustty_vt_c.wasm
-{ nm -gjU "$lib" | sed 's/^_//' | grep '^rustty_'; \
+{ cat "$T/vt_native_exp.txt"; \
   node -e 'const{readFileSync}=require("fs");WebAssembly.compile(readFileSync(process.argv[1])).then(m=>WebAssembly.Module.exports(m).forEach(e=>console.log(e.name)))' "$wasm"; \
 } | grep '^rustty_' | sort -u > "$T/vt_exp.txt"
 grep -oE 'rustty_[a-z0-9_]+' include/rustty.h | sort -u > "$T/vt_cbindgen.txt"
 missing=$(comm -23 "$(comm -12 "$T/vt_decl.txt" "$T/vt_cbindgen.txt" > "$T/vt_both.txt"; echo "$T/vt_both.txt")" "$T/vt_exp.txt")
-if [ -n "$missing" ]; then echo "  MISMATCH — declared+cbindgen but NOT exported:"; echo "$missing" | sed 's/^/    /'; exit 1; fi
+if [ -n "$missing" ]; then echo "  MISMATCH — declared+cbindgen but NOT exported:"; printf '%s\n' "$missing" | sed 's/^/    /'; exit 1; fi
 
 # --- (b') the vacuous-shrink guard (P3-W0 T2 step 3) ------------------------
 # Arm (b) asserts `(vt.h ∩ cbindgen) ⊆ exports`, and an INTERSECTION can be made
@@ -446,6 +484,11 @@ if [ ! -s "$T/a5_oracle.txt" ]; then
   exit 3
 fi
 # The published artifact surface = native exports ∪ wasm exports.
+if [ ! -s "$T/vt_exp.txt" ]; then
+  echo "  BLOCKED: arm (b) wrote no export list (it stopped before reading the"
+  echo "           library), so this arm has no rustty side to compare. NOT a pass."
+  exit 3
+fi
 cp "$T/vt_exp.txt" "$T/a5_have.txt"
 # Documented residuals. Each MUST carry an owner and a trigger; the gate FAILS on
 # anything not listed here, so this list can only shrink. Do NOT add a row to make

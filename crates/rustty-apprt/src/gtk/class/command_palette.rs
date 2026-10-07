@@ -164,7 +164,7 @@ mod imp {
             // `setTemplateFromResource(gresource.blueprint(1, 5,
             // "command-palette"))` + the child/callback bindings (`:380-401`).
             klass.bind_template();
-            klass.bind_template_instance_callbacks();
+            super::CommandPalette::bind_template_callbacks(klass);
         }
 
         /// PORTS: `command_palette.zig:105-118` `init` — `initTemplate`. The
@@ -424,25 +424,37 @@ impl Default for CommandPalette {
     }
 }
 
-// Template callbacks bound in `class_init` via `bind_template_instance_callbacks`.
-//
-// SIGNATURE GOTCHA: these are NON-swapped (the `.blp` callbacks carry no
-// `swapped`), so gtk4-rs delivers `[emitter, ...signal_args, this]` — the emitting
-// widget FIRST and the template instance (`this`) LAST, matching the reference's
+// Template callbacks, bound in `class_init` through GTK's C builder scope
+// (`bind_template_callbacks`, NEW-FINDINGS N516). They are NON-swapped (the
+// `.blp` callbacks carry no `swapped`), so GTK calls them with the emitting
+// widget FIRST and the template instance (`this`) LAST: the reference's
 // callconv(.c) signatures (`dialogClosed(_: *adw.Dialog, self: *CommandPalette)`,
-// `rowActivated(_: *gtk.ListView, pos: c_uint, self: *CommandPalette)`). Writing
-// these as `&self` compiles but ABORTS at runtime with a WrongValueType.
-#[gtk4::template_callbacks]
+// `rowActivated(_: *gtk.ListView, pos: c_uint, self: *CommandPalette)`). The
+// reference also binds `notify_config` (`:398`), which `command-palette.blp`
+// never references; the port connects `notify::config` in `constructed`.
+impl CommandPalette {
+    /// PORTS: `command_palette.zig:395-401` — the `bindTemplateCallback` calls of `Class.init`,
+    /// bound through GTK's C builder scope (NEW-FINDINGS N516; see
+    /// [`template_callback`](crate::gtk::class::template_callback)).
+    fn bind_template_callbacks(klass: &mut <imp::CommandPalette as ObjectSubclass>::Class) {
+        crate::gtk::class::template_callback::bind_template_callbacks!(klass;
+            c"closed" => CommandPalette::closed, (dialog: obj(libadwaita::Dialog), this: obj(CommandPalette));
+            c"search_stopped" => CommandPalette::search_stopped, (entry: obj(gtk4::SearchEntry), this: obj(CommandPalette));
+            c"search_activated" => CommandPalette::search_activated, (entry: obj(gtk4::SearchEntry), this: obj(CommandPalette));
+            c"row_activated" => CommandPalette::row_activated,
+                (view: obj(gtk4::ListView), pos: prim(u32), this: obj(CommandPalette));
+        );
+    }
+}
+
 impl CommandPalette {
     /// PORTS: `command_palette.zig:289-291` `dialogClosed` — the reference `unref`s
     /// itself here; this port drops the self-owned keepalive ref (its equivalent).
-    #[template_callback]
     fn closed(_dialog: &libadwaita::Dialog, this: &CommandPalette) {
         this.imp().keepalive.replace(None);
     }
 
     /// PORTS: `command_palette.zig:293-296` `searchStopped` — ESC closes the palette.
-    #[template_callback]
     fn search_stopped(_entry: &gtk4::SearchEntry, this: &CommandPalette) {
         // ESC was pressed - close the palette
         this.close();
@@ -450,7 +462,6 @@ impl CommandPalette {
 
     /// PORTS: `command_palette.zig:298-302` `searchActivated` — Enter activates the
     /// selected entry.
-    #[template_callback]
     fn search_activated(_entry: &gtk4::SearchEntry, this: &CommandPalette) {
         // If Enter is pressed, activate the selected entry
         let pos = this.imp().model.selected();
@@ -458,7 +469,6 @@ impl CommandPalette {
     }
 
     /// PORTS: `command_palette.zig:304-306` `rowActivated`.
-    #[template_callback]
     fn row_activated(_view: &gtk4::ListView, pos: u32, this: &CommandPalette) {
         this.activated(pos);
     }

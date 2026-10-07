@@ -81,7 +81,7 @@ mod imp {
 
         fn class_init(klass: &mut Self::Class) {
             klass.bind_template();
-            klass.bind_template_instance_callbacks();
+            super::SurfaceScrolledWindow::bind_template_callbacks(klass);
         }
 
         fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {
@@ -144,7 +144,20 @@ glib::wrapper! {
         @implements gtk4::Accessible, gtk4::Buildable, gtk4::ConstraintTarget;
 }
 
-#[gtk4::template_callbacks]
+impl SurfaceScrolledWindow {
+    /// PORTS: `surface_scrolled_window.zig` `Class.init` — the `bindTemplateCallback` calls of `Class.init`,
+    /// bound through GTK's C builder scope (NEW-FINDINGS N516; see
+    /// [`template_callback`](crate::gtk::class::template_callback)).
+    fn bind_template_callbacks(klass: &mut <imp::SurfaceScrolledWindow as ObjectSubclass>::Class) {
+        crate::gtk::class::template_callback::bind_template_callbacks!(klass;
+            c"scrollbar_policy" => SurfaceScrolledWindow::closure_scrollbar_policy,
+                (this: obj(SurfaceScrolledWindow), config: opt_obj(Config)) -> glib(gtk4::PolicyType);
+            c"notify_surface" => SurfaceScrolledWindow::on_notify_surface,
+                (emitter: obj(libadwaita::Bin), pspec: obj(glib::ParamSpec), this: obj(SurfaceScrolledWindow));
+        );
+    }
+}
+
 impl SurfaceScrolledWindow {
     /// PORTS: `surface_scrolled_window.zig:133-135` `getSurface`. This does not
     /// add a ref beyond the property clone.
@@ -198,7 +211,6 @@ impl SurfaceScrolledWindow {
     /// PORTS: `surface_scrolled_window.zig:149-158` `closureScrollbarPolicy`.
     /// Bound in the template (`surface-scrolled-window.blp:13`). The template
     /// scope passes the instance first.
-    #[template_callback(name = "scrollbar_policy")]
     fn closure_scrollbar_policy(
         _this: &SurfaceScrolledWindow,
         config: Option<Config>,
@@ -214,7 +226,6 @@ impl SurfaceScrolledWindow {
 
     /// PORTS: `surface_scrolled_window.zig:160-184` `propSurface`. Reparents the
     /// surface into the scrolled window and (re)binds `config` from the surface.
-    #[template_callback(name = "notify_surface")]
     fn on_notify_surface(
         _emitter: &libadwaita::Bin,
         _pspec: &glib::ParamSpec,

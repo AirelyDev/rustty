@@ -265,7 +265,7 @@ fn key_press_routes_through_im_context_first() {
     // buffered for the key encoder — NOT sent to the core surface — so the
     // key event can carry the text alongside the keycode.
     imp.ime.borrow_mut().in_keyevent = ImKeyEvent::True;
-    Surface::im_commit(&imp.im_context, "a", &surface);
+    Surface::im_commit(&imp.im_context, b"a", &surface);
     {
         let ime = imp.ime.borrow();
         assert_eq!(
@@ -280,7 +280,7 @@ fn key_press_routes_through_im_context_first() {
     // length stays 0.
     imp.ime.borrow_mut().im_len = 0;
     imp.ime.borrow_mut().in_keyevent = ImKeyEvent::False;
-    Surface::im_commit(&imp.im_context, "b", &surface);
+    Surface::im_commit(&imp.im_context, b"b", &surface);
     assert_eq!(
         imp.ime.borrow().im_len,
         0,
@@ -304,7 +304,7 @@ fn a_128_byte_commit_during_a_keypress_is_buffered_whole() {
     let text = "\u{e9}".repeat(64);
     assert_eq!(128, text.len());
     imp.ime.borrow_mut().in_keyevent = ImKeyEvent::True;
-    Surface::im_commit(&imp.im_context, &text, &surface);
+    Surface::im_commit(&imp.im_context, text.as_bytes(), &surface);
     {
         let ime = imp.ime.borrow();
         assert_eq!(128, ime.im_len, "the whole commit is buffered");
@@ -314,7 +314,7 @@ fn a_128_byte_commit_during_a_keypress_is_buffered_whole() {
     // One byte more is the reference's own "not enough buffer space" arm.
     imp.ime.borrow_mut().im_len = 0;
     let long = format!("{text}a");
-    Surface::im_commit(&imp.im_context, &long, &surface);
+    Surface::im_commit(&imp.im_context, long.as_bytes(), &surface);
     assert_eq!(0, imp.ime.borrow().im_len, "129 bytes are not buffered");
 }
 
@@ -900,15 +900,15 @@ fn surface_core_is_none_before_first_resize() {
 }
 
 /// **Invariant 3 — the resize DRIVER.** Emits a real `resize` on the child
-/// `RenderSurface`, exercising the `swapped` template-callback trampoline end
-/// to end (`surface.blp` → [`Surface::render_surface_resize`]). This is the
-/// regression guard for the argument-order defect: gtk4-rs delivers the swapped
-/// vector `[self, width, height, RenderSurface]` (self first, emitting widget
-/// LAST), so a leading widget param reads `values[1]` (an `i32`) and the nounwind
-/// FFI trampoline ABORTS the process (SIGABRT) on the first resize — before
-/// this test any real GTK resize killed first-light. Here we assert (a) the
-/// signal reaches the handler at all (no abort) and (b) the emitted dimensions
-/// are cached, proving width/height unpacked in the right slots.
+/// `RenderSurface`, exercising the template-callback trampoline end to end
+/// (`surface.blp` → [`Surface::render_surface_resize`]). This is the regression
+/// guard for the argument-order defect: the callback is connected NON-swapped,
+/// as in the reference, so GTK's C scope calls it with `(RenderSurface, width,
+/// height, Surface)`; a trampoline that read the arguments in another order
+/// would cache the wrong size or crash (before this test, under gtk4-rs's
+/// scope, any real GTK resize aborted first-light). Here we assert (a) the
+/// signal reaches the handler at all and (b) the emitted dimensions are cached,
+/// proving width/height arrive in the right slots.
 ///
 /// On first resize with no core surface, `render_surface_resize` falls through to
 /// `init_surface` (invariant 3 — lazy on first RESIZE, not realize). This
@@ -925,20 +925,20 @@ fn surface_init_on_first_resize() {
 
     assert!(surface.core().is_none(), "no core surface before resize");
 
-    // Drive the real signal through the swapped trampoline. With the buggy
-    // `(&self, _area, width, height)` order this line SIGABRTs.
+    // Drive the real signal through the C-scope trampoline (gtk4-rs's scope
+    // SIGABRTed here with a mis-ordered handler).
     let (w, h) = (640_i32, 480_i32);
     imp.render_surface.emit_by_name::<()>("resize", &[&w, &h]);
 
     // The handler cached exactly what we emitted — width/height came from
-    // `values[1]`/`values[2]`, not the trailing RenderSurface.
+    // the signal's width/height arguments, not the emitting RenderSurface.
     assert_eq!(
         imp.size.get(),
         SurfaceSize {
             width: 640,
             height: 480
         },
-        "render_surface_resize cached the emitted width/height (correct swapped-arg order)"
+        "render_surface_resize cached the emitted width/height (correct argument order)"
     );
 
     // Lazy init was reached but bails (no core app bound in this harness), so

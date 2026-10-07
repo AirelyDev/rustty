@@ -466,8 +466,9 @@ impl ObjectSubclass for Surface {
         // `setTemplateFromResource(gresource.blueprint(1,2,"surface"))`
         // (`:3598-3605`) + the 13 `bindTemplateChildPrivate` (`:3608-3620`).
         klass.bind_template();
-        // The 39 `bindTemplateCallback`s (`:3623-3661`).
-        klass.bind_template_instance_callbacks();
+        // The 45 `bindTemplateCallback`s (`:3838-3882`), through GTK's C
+        // builder scope (NEW-FINDINGS N516).
+        super::Surface::bind_template_callbacks(klass);
     }
 
     fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {

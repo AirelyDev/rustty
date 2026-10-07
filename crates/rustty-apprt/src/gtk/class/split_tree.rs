@@ -243,7 +243,7 @@ mod imp {
         fn class_init(klass: &mut Self::Class) {
             Surface::ensure_type();
             klass.bind_template();
-            klass.bind_template_instance_callbacks();
+            super::SplitTree::bind_template_callbacks(klass);
         }
 
         fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {
@@ -336,7 +336,18 @@ glib::wrapper! {
         @implements gtk4::Accessible, gtk4::Buildable, gtk4::ConstraintTarget, gtk4::Orientable;
 }
 
-#[gtk4::template_callbacks]
+impl SplitTree {
+    /// PORTS: `split_tree.zig` `Class.init` (`SplitTree`) — the `bindTemplateCallback` calls of `Class.init`,
+    /// bound through GTK's C builder scope (NEW-FINDINGS N516; see
+    /// [`template_callback`](crate::gtk::class::template_callback)).
+    fn bind_template_callbacks(klass: &mut <imp::SplitTree as ObjectSubclass>::Class) {
+        crate::gtk::class::template_callback::bind_template_callbacks!(klass;
+            c"notify_tree" => SplitTree::on_notify_tree,
+                (emitter: obj(gtk4::Box), pspec: obj(glib::ParamSpec), this: obj(SplitTree));
+        );
+    }
+}
+
 impl SplitTree {
     /// PORTS: `split_tree.zig:186-200` `initActionMap`.
     fn init_action_map(&self) {
@@ -1005,7 +1016,6 @@ impl SplitTree {
 
     /// PORTS: `split_tree.zig:817-861` `propTree`. Template callback on the
     /// `notify::tree` of the template itself.
-    #[template_callback(name = "notify_tree")]
     fn on_notify_tree(_emitter: &gtk4::Box, _pspec: &glib::ParamSpec, this: &SplitTree) {
         let imp = this.imp();
 
@@ -1359,7 +1369,7 @@ mod split_imp {
 
         fn class_init(klass: &mut Self::Class) {
             klass.bind_template();
-            klass.bind_template_instance_callbacks();
+            super::SplitTreeSplit::bind_template_callbacks(klass);
         }
 
         fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {
@@ -1397,7 +1407,20 @@ enum SyncDirection {
     WidgetToTree,
 }
 
-#[gtk4::template_callbacks]
+impl SplitTreeSplit {
+    /// PORTS: `split_tree.zig` `Class.init` (`SplitTreeSplit`) — the `bindTemplateCallback` calls of `Class.init`,
+    /// bound through GTK's C builder scope (NEW-FINDINGS N516; see
+    /// [`template_callback`](crate::gtk::class::template_callback)).
+    fn bind_template_callbacks(klass: &mut <split_imp::SplitTreeSplit as ObjectSubclass>::Class) {
+        crate::gtk::class::template_callback::bind_template_callbacks!(klass;
+            c"notify_max_position" => SplitTreeSplit::on_notify_max_position,
+                (paned: obj(gtk4::Paned), pspec: obj(glib::ParamSpec), this: obj(SplitTreeSplit));
+            c"notify_position" => SplitTreeSplit::on_notify_position,
+                (paned: obj(gtk4::Paned), pspec: obj(glib::ParamSpec), this: obj(SplitTreeSplit));
+        );
+    }
+}
+
 impl SplitTreeSplit {
     /// Create a new split.
     ///
@@ -1578,7 +1601,6 @@ impl SplitTreeSplit {
 
     /// PORTS: `split_tree.zig:1388-1434` `propMaxPosition` (90da3aba5 end
     /// state).
-    #[template_callback(name = "notify_max_position")]
     fn on_notify_max_position(
         _paned: &gtk4::Paned,
         _pspec: &glib::ParamSpec,
@@ -1624,7 +1646,6 @@ impl SplitTreeSplit {
     }
 
     /// PORTS: `split_tree.zig:1436-1450` `propPosition`.
-    #[template_callback(name = "notify_position")]
     fn on_notify_position(_paned: &gtk4::Paned, _pspec: &glib::ParamSpec, this: &SplitTreeSplit) {
         this.imp().pos_changed.set(true);
         this.schedule_idle();

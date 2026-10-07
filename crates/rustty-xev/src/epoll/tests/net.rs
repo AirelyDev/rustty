@@ -755,7 +755,7 @@ fn epoll_tcp_queued_writes() {
 //
 // Named in the const-registry style (mirrors io_uring.rs's `PORT_*` block)
 // so the loopback port is greppable and non-colliding: 3131 is this module's
-// `epoll_socket_roundtrip`; 3132-3134/3136 are io_uring.rs's; 3137/3138 are
+// `epoll_socket_roundtrip`; 3132-3134/3136 are io_uring.rs's; 3137-3139 are
 // dynamic.rs's. 3135 is THIS test — was a bare literal, now registered here.
 const PORT_UDP_READ_WRITE: u16 = 3135;
 

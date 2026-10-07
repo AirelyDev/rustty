@@ -313,6 +313,26 @@ committed records named here.
   G8 `--strict` GREEN. V17's drift bisection closed as outside the parity scope. N511's residuals re-measured idle
   (`apc-parser` and lookup about 1.10x stand; churn is parity, 0.99-1.03x). No new id.
 - **Next free ids: UD378, N513, V33.**
+- **P7-W24** (the three rvm items) CLOSED N486 (the VT-headers gate reads the `.so` with `nm -D` on Linux;
+  `cbindgen` on rvm; rvm's oracle `origin/main` was already the pin; GREEN on the Mac and rvm), DISCHARGED
+  V32 (G-TSAN GREEN on rvm; the hosted `tsan` leg waits on a push, as V30) and CLOSED N502's Linux coverage
+  gap (new gate G-LSAN-GTK: a live GTK surface created and closed under ASan + LSan in a headless sway; RED
+  with N502's fix reverted, GREEN with it). It used N513 (CLOSED: G-SAN-SELF's A4 Rust overflow arm could go
+  GREEN under HWASan, 1 in 256), N514 (CLOSED: TSan's fd model reported `rustty-xev` tests run side by
+  side; that crate's tests run one at a time under G-TSAN, `TSAN_SERIAL`), N515 (CLOSED: `rustty-xev`'s
+  `dynamic_udp_read_write` could hang, one SO_REUSEPORT port for both backend iterations), N516 (OPEN:
+  gtk4-rs's `BuilderRustScope` leaks every template-callback closure; suppressed in the GTK lane only, as
+  `lsan-gtk.supp` G2, until fixed) and V33 (G-LSAN-GTK has no hosted job). No UD.
+- **Next free ids: UD378, N517, V34.**
+- **P7-W25** CLOSED N516: the GTK apprt binds its 111 template callbacks through GTK's C builder scope
+  (`gtk_widget_class_bind_template_callback_full` with `extern "C"` trampolines,
+  `gtk/class/template_callback.rs`), as the reference does, instead of gtk4-rs's leaking
+  `BuilderRustScope`; `surface.blp` is the reference's again (no `swapped`). `lsan-gtk.supp` G2 removed;
+  G-LSAN-GTK GREEN without it on rvm (the base with only G2 removed: RED, 279 allocations); the live GTK KATs
+  pass. Also: G-LSAN-GTK pins each remaining suppression's match count under a ceiling
+  (`LSAN_GTK_CEILINGS`; LSan treats suppressed blocks as live), the live KATs' `close_surfaces` asserts the
+  window and every Rustty widget in it are finalized, and `TSAN_SERIAL` applies on Linux only (N514's
+  record updated). No new id. **Next free ids: UD378, N517, V34.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.

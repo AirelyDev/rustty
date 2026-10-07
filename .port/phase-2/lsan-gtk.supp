@@ -1,0 +1,31 @@
+# LeakSanitizer suppressions for G-LSAN-GTK (.port/tools/gates/sanitizers.sh
+# --gate lsan-gtk), read AFTER lsan.supp (the lane concatenates the two).
+#
+# The lane runs one live GTK test (gtk_window_live: a real Window with a core
+# Surface, created and closed) under ASan with detect_leaks=1 inside a headless
+# sway. Same rules as lsan.supp: every entry is THIRD-PARTY process-lifetime
+# state (the GTK/GLib/fontconfig stack below a call we make), each with a row in
+# .port/phase-2/SANITIZER_SUPPRESSIONS.md (G ids) giving the reason, the
+# evidence and the negative control that keeps a Rust leak RED, and a WHY
+# comment directly above it (D6 rule c). A leak in Rustty code is never
+# suppressed: it is a finding. LSan treats a suppressed block as live, so an
+# entry also hides what that block points to: each entry has a ceiling on its
+# match count (sanitizers.sh LSAN_GTK_CEILINGS; RED above it).
+#
+# G2 (gtk4-rs's BuilderRustScope template-callback closures, NEW-FINDINGS N516)
+# was removed in P7-W25: the port binds template callbacks through GTK's C
+# builder scope, as the reference does, and nothing leaks there.
+#
+# Format: one `leak:<pattern>` per line, as lsan.supp.
+
+# G1 (SANITIZER_SUPPRESSIONS.md): the system Pango's fontconfig font-set
+# results. libpangoft2 enumerates and matches fonts (FcFontSetList,
+# FcFontSetMatch) for GTK's widgets, and the FcPatterns it gets back are
+# unreachable at exit; every report has libpangoft2 below the fontconfig
+# allocation and no Rustty frame. A pattern Rustty's own font code leaks has no
+# libpangoft2 frame (G-SAN-SELF A2g "leaked FcPattern" stays RED).
+leak:libpangoft2-1.0.so
+# G1b (SANITIZER_SUPPRESSIONS.md, with G1): the same Pango font map's
+# patterns through its cairo layer (libpangocairo calls FcConfigSubstitute on
+# a pattern it keeps); no Rustty frame. Same negative control as G1.
+leak:libpangocairo-1.0.so

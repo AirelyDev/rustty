@@ -21,11 +21,11 @@ Overlay terminal_page {
     vexpand: true;
 
     $GhosttyRenderSurface render_surface {
-      realize => $render_surface_realize() swapped;
-      unrealize => $render_surface_unrealize() swapped;
-      map => $render_surface_map() swapped;
-      unmap => $render_surface_unmap() swapped;
-      resize => $render_surface_resize() swapped;
+      realize => $render_surface_realize();
+      unrealize => $render_surface_unrealize();
+      map => $render_surface_map();
+      unmap => $render_surface_unmap();
+      resize => $render_surface_resize();
       hexpand: true;
       vexpand: true;
       focusable: true;

@@ -9,4 +9,7 @@
 # c). A race in Rustty code is never suppressed: it is a finding (an N id, and
 # a UD when Ghostty has it too), fixed with a regression test.
 #
-# No entry: G-TSAN's first runs (P7-W17) needed none.
+# No entry: G-TSAN's first runs (P7-W17, macOS; P7-W24, Linux) needed none.
+# The first Linux run's rustty-xev reports (TSan's fd model, NEW-FINDINGS
+# N514) are handled by running that crate's tests one at a time
+# (TSAN_SERIAL in sanitizers.sh), not by a suppression.

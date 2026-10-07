@@ -10005,7 +10005,8 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 
 ## N486 — VT-headers gate is macOS-only beyond its paths, and rvm's oracle `origin/main` is stale
 
-- **id**: N486. P7-W12 T5. **severity**: low (Linux gate portability). **state**: OPEN.
+- **id**: N486. P7-W12 T5. **severity**: low (Linux gate portability). **state**: CLOSED by P7-W24
+  (2026-10-07).
 - **finding**: found while validating N483 on rvm. `check_rustty_vt_headers.sh` arms (b), (c) and (d)
   read `target/release/librustty_vt_c.dylib` and use macOS `nm -gjU`, and arms (a3) and (a3b) need
   `cbindgen`, which rvm lacks: the gate is RED/BLOCKED on Linux whatever the oracle path is. Also the
@@ -10015,6 +10016,21 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   oracle registry"). N483's path fix is not the cause: arm (d) did read the oracle's exports on rvm.
 - **next**: make the gate's library and `nm` handling Linux-aware (or state it macOS-only), install
   `cbindgen` on rvm, and move rvm's oracle `refs/remotes/origin/main` to the pin.
+- **fix (P7-W24)**: `check_rustty_vt_headers.sh` picks the native library per host: `librustty_vt_c.dylib`
+  read with `nm -gjU` (leading `_` stripped) on macOS, `librustty_vt_c.so` read with
+  `nm -D --defined-only` on Linux and FreeBSD; the same set (the library's defined, exported symbols).
+  Any other host makes arm (b) BLOCKED (exit 3), and arm (d) with it. Two R5 guards came with it: an
+  empty `rustty_*` export list is RED, not a vacuous pass, and arm (d) is BLOCKED when arm (b) stopped
+  before writing its list (it used to `cp` whatever list an earlier run left in `$TMPDIR`). Arm (c)'s
+  `rustty_type_json()` runner gets `LD_LIBRARY_PATH` beside `DYLD_LIBRARY_PATH`
+  (`check-vt-struct-layouts.mjs`), since on Linux `-lrustty_vt_c` links the `.so`. On rvm, `cbindgen`
+  0.29.4 (the Mac's version) was installed with `cargo install --locked`. rvm's oracle
+  `refs/remotes/origin/main` was already `12752b2ac` (the pin): its reflog shows the move on 2026-09-30,
+  during the Phase 7 resync, so no `update-ref` was needed.
+- **evidence (P7-W24)**: VT-HEADERS GREEN on both hosts, every arm run: (a3)/(a3b) byte-identical
+  regenerations, (b) 203 symbols at floor 203, (d) 203 oracle exports with 0 residuals, (c) 63 sizeof + 252
+  offsetof asserts over 61 aggregates against a 162-type oracle registry. Arm (c)'s output is
+  byte-identical on the Mac and rvm. `--self-test-masking` and `--self-test-oracle` PASS on both.
 
 ## N487 — G-NIX failed on Linux: `librustty-vt` built without libclang for the wuffs-sys bindgen script
 
@@ -10513,7 +10529,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 
 - **id**: N502 (provisional; P7-W16a). **severity**: low (a few hundred bytes per closed surface;
   port-only). **state**: CLOSED 2026-10-02 (the fix is platform-independent); the Linux test coverage gap
-  below stays OPEN.
+  below CLOSED 2026-10-07 by P7-W24 (G-LSAN-GTK).
 - **found**: G-LSAN's first macOS run (P7-W16a), `rustty-apprt-c` `tests/macos_window_host.rs`, confirmed
   independently by Apple `leaks --atExit` (`MallocStackLogging=1`) on a native build of the same test
   binary. Two items:
@@ -10544,6 +10560,29 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   them. Closing it needs a lane that runs one of them (e.g. `gtk_window_live`) under ASan with
   `detect_leaks=1` inside the headless-sway wrapper on rvm, with `lsan.supp`'s Mesa entries; not done in
   P7-W16a.
+- **Linux coverage gap CLOSED (P7-W24)**: G-LSAN-GTK (`sanitizers.sh --gate lsan-gtk`, registered in
+  `ci.sh`, skipped by `--fast`) runs `rustty-apprt:gtk,wayland,x11`'s `gtk_window_live`
+  (`window_hosts_a_live_terminal`: a real `Window`, a tab, a live core `Surface` drawing frames and running
+  `/bin/sh`, then the window destroyed, the `Surface` finalized, `CoreSurface::deinit` run and the shell
+  reaped) under ASan with `detect_leaks=1` inside `.port/tools/gtk_live_headless_sway.sh`, with
+  `lsan.supp` (S1/S2, Mesa) plus `lsan-gtk.supp` (G1/G1b, the system Pango's fontconfig results; G2, a
+  gtk4-rs closure leak, N516, removed in P7-W25 with N516's fix); exactly one test must run. Linux only; no hosted job (V33).
+  **Proof** (rvm, 2026-10-07): with `Surface::deinit`'s two `drop_and_dealloc` calls reverted locally to
+  `dealloc` (not committed), the lane is **RED** with exactly one report, `Direct leak of 32 byte(s) in 1
+  object(s)`: the `Arc<Mutex>` of `DrawMutex::new` ← `linux_impl::Renderer::init` ← `renderer_seam::Renderer::init`
+  ← `Surface::init` ← the GTK `RenderSurface` resize callback; with the fix, **GREEN** (1 test, 0 reports,
+  65 s). A probe in the reverted build showed `Surface::deinit` runs in this test, with the `DrawMutex`'s
+  strong count at 3 at the render thread block's free.
+  **Correction to the Linux list above (measured)**: on Linux the glue-less free leaked the render thread's
+  `DrawMutex` handle (one 32-byte `ArcInner` per closed surface); no box of the xev loop leaked: the render
+  thread's loop is the io_uring arm here (`libxev default backend=io_uring`), and the reverted run reports
+  nothing else.
+  **What the first draft of the lane got wrong**: an unanchored suppression for the gtk4-rs closure leak
+  (`leak:...BuilderRustScope...::create_closure`) also matched every allocation made INSIDE a template
+  callback, whose frames carry the same names; the core surface is created under the `RenderSurface`
+  resize callback, so it hid exactly this leak (the reverted build was GREEN, with the suppression's count up
+  by one 32-byte allocation). G2 is now anchored to the frame that allocates the closure, and this revert
+  is its standing negative control.
 - **not a Ghostty defect**: the reference keeps the queue inline (libxev `backend/kqueue.zig:87`
   `thread_pool_completions: TaskCompletionQueue`), the draw mutex inline (`generic.zig:113`
   `draw_mutex: std.Io.Mutex = .init`), and the state's handoff is atomics only (`renderer/State.zig:40-45`);
@@ -10768,7 +10807,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 ## N508 — G-TSAN's first runs: a data race in vendored Highway's SIMD dispatch (UD377) and TSan's allocator limit
 
 - **id**: N508. P7-W17. **severity**: low (UD377 is formal C++ UB with no observed effect; the rest is lane
-  configuration). **state**: CLOSED 2026-10-07 (macOS); the Linux run is V32.
+  configuration). **state**: CLOSED 2026-10-07 (macOS); the Linux run (V32) was GREEN in P7-W24 (N514).
 - **found**: the first ThreadSanitizer pass over the design's threaded crates on the Mac (P7-W17,
   `sanitizers.sh --matrix --san tsan`), which made G-TSAN a gate. Two reports:
   1. `rustty-vt-c`: `WARNING: ThreadSanitizer: data race` between two formatter tests' first SIMD
@@ -10968,3 +11007,132 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **fence (review)**: G8 fences three labels (bench, gen, dylib). The static `libghostty-vt.a` label was moved to
   `binary_sizes_dropped`: an unpruned Rust staticlib (+143.7%) is not like-for-like and a 146% tolerance fenced
   almost nothing; the dylib is the linked size of the same code. G8b `--build` builds the counterparts first.
+
+## N513 — G-SAN-SELF's A4 Rust heap-overflow arm could go GREEN under HWASan (1 in 256)
+
+- **id**: N513. P7-W24. **severity**: low (gate self-test flake; no product code). **state**: CLOSED 2026-10-07.
+- **found**: the first P7-W24 G-SAN-SELF run on rvm: `FAIL A4 heap overflow: hwasan
+  'tests::defect_heap_overflow --exact' wanted RED ... got rc=0`. The same build re-run 200 times was RED
+  200 times.
+- **cause**: the synthetic test reads ONE byte 8 bytes past a 16-byte block. That is inside ASan's redzone
+  (A1, deterministic), but HWASan compares tags per 16-byte granule, and the neighbouring granule carries the
+  same tag with probability 1/256 (the C arm already walked eight granules for exactly this reason).
+- **fix**: `sanitizers.sh`'s synthetic `oob_read` reads eight granules (`len + 8 + 16k`, k = 0..7); ASan
+  still stops at the first read (A1 RED), HWASan misses all eight with probability 256^-8.
+- **evidence**: rvm, the revised test 100 of 100 RED under HWASan; G-SAN-SELF GREEN on rvm and the Mac after
+  the change (A1 and A4 arms RED as required).
+
+## N514 — G-TSAN's first Linux run: `rustty-xev` reports from TSan's fd model (tests run side by side)
+
+- **id**: N514. P7-W24 (V32). **severity**: low (tool model vs the harness; no shared memory, no product
+  change). **state**: CLOSED 2026-10-07.
+- **found**: `sanitizers.sh --gate tsan` on rvm (aarch64 Fedora 44, 2026-10-07): every spec GREEN except
+  `rustty-xev`, two `WARNING: ThreadSanitizer: data race` reports on a file descriptor: `epoll_ctl` ←
+  `epoll::Loop::epoll_register` (test `epoll_process_wait_with_non_zero_exit_code`) and `mmap` ←
+  `io_uring::ring::Sq::init` (`io_uring_udp_read_write`), each against `socket` ←
+  `io_uring::{udp::UDP,tcp::TCP}::init` in ANOTHER test (`dynamic_udp_read_write`,
+  `io_uring_tcp_accept_connect_send_recv_close`), "Location is file descriptor 5".
+- **cause**: TSan models every fd as a word written by the call that opens it and by `close`. It sees
+  neither the io_uring arm's close ops (the kernel closes the socket) nor fds opened by raw syscalls
+  (`SYS_pidfd_open` in the epoll arm's `Process::init`, `io_uring_setup`). When libtest runs two tests side by
+  side, one test's socket number, closed unseen, is reopened unseen by the other, and the second test's
+  `epoll_ctl`/`mmap` (or `close`) on it is checked against the first test's `socket()`. No memory is shared;
+  macOS's kqueue arm has no such path, which is why P7-W17's run was clean.
+- **not a suppression**: `race_top:^epoll_ctl$` / `race_top:^mmap$` were tried and matched nothing (TSan
+  matches the raw interceptor name, `___interceptor_mmap`); a working `close` entry would also hide a real
+  double close.
+- **fix**: `sanitizers.sh` `TSAN_SERIAL` ("rustty-xev|<reason>"): G-TSAN runs that spec's tests one at a time
+  (`--test-threads=1`, via `spec_args`, on Linux only: P7-W25 guarded it with `[ "$OS" = Linux ]`, since the
+  cause is Linux's and macOS's kqueue arm keeps libtest's parallel runner; H arms for both hosts). Only
+  libtest's side-by-side running of different tests goes, which
+  the reference's serial Zig test runner never does; the threads a test starts are still checked against
+  each other. A `TSAN_SERIAL` spec outside `TSAN_SCOPE` is RED (`tsan_serial_check`). G-SAN-SELF: H arms
+  for the bookkeeping and `spec_args`, and A5s (a race between one test's own threads is RED with
+  `--test-threads=1`). SANITIZER_SUPPRESSIONS.md T4.
+- **evidence**: the TSan `rustty-xev` lib test binary on rvm with an empty suppressions file: in parallel,
+  59 reports in 24 of 25 runs and 26 in 15 of 25; one at a time, 0 in 25 runs. G-TSAN GREEN on rvm with
+  `TSAN_SERIAL` (V32).
+- **also found while triaging**: the hang N515.
+
+## N515 — `rustty-xev` `dynamic_udp_read_write` could hang: one UDP port for both backend iterations, with SO_REUSEPORT
+
+- **id**: N515. P7-W24. **severity**: low (test-side; an intermittent hang of a crate's unit tests).
+  **state**: CLOSED 2026-10-07.
+- **found**: while measuring N514, the native (uninstrumented) `rustty-xev` lib tests on rvm hung in 4 of 200
+  runs; every captured hang was `dynamic::tests::dynamic_udp_read_write` in its SECOND (epoll) iteration,
+  blocked in `epoll_wait`. At the hang the server socket on 127.0.0.1:3137 was registered for `EPOLLIN`
+  with an empty receive queue and no drops, and the client was bound (its `sendmsg` had run): the datagram
+  went to another socket. Run alone (only `dynamic::` tests), 0 hangs in 600 runs.
+- **cause** (inferred from the captures, and borne out by the fix; the dying socket itself was gone by the
+  time a hang was seen): both iterations (io_uring, then epoll) bound 3137, and `UDP::bind` sets `SO_REUSEPORT` (as the
+  reference's `UDP.bind`). The io_uring iteration closes its server with an io_uring close op, and the kernel
+  can finish releasing that socket after the epoll iteration's server has joined 3137's reuseport group
+  (later under load, hence only with the whole crate running); the group's hash could then route the
+  datagram to the dying socket, and the read waited forever. The reference shares one port (3132) across its
+  UDP test instantiations, run one after another by Zig's serial runner; not demonstrated there, so no UD.
+- **fix**: `dynamic/tests.rs`: a port per backend iteration (`PORT_DYNAMIC_UDP_IO_URING` 3137,
+  `PORT_DYNAMIC_UDP_EPOLL` 3139), registered beside the crate's other test ports.
+- **evidence**: rvm, the native `rustty-xev` lib test binary, each run bounded at 75 s: before the fix 4 hangs
+  in 200 runs and, in later capture loops, 1 in 17, 23 and 153 runs; after it, **0 hangs in 1,000 runs**
+  (with the rvm self-test running beside it for part of the time).
+
+## N516 — gtk4-rs's `BuilderRustScope` leaks every template-callback closure (each GTK widget template instantiation)
+
+- **id**: N516. P7-W24 (G-LSAN-GTK's first run). **severity**: low (a few KB per window/surface/tab created;
+  third-party crate). **state**: CLOSED 2026-10-07 (P7-W25).
+- **found**: G-LSAN-GTK's first run on rvm: 93 `Direct leak` reports of `GClosure`s allocated by
+  `<glib::closure::Closure>::new_local::<<gtk4::builder_rust_scope::imp::BuilderRustScope as
+  BuilderScopeImpl>::create_closure::{closure#1}::{closure#N}>` under the `instance_init` (`init_template`) of
+  `Surface`, `Window`, `SearchOverlay`, `Tab`, `SplitTree`, `KeyStateOverlay`, `SurfaceScrolledWindow` and
+  `SurfaceChildExited`, with what the closures capture as indirect leaks. They leak although the test
+  asserts the `Surface` is finalized.
+- **cause**: gtk4 0.11.4 `subclass/builder_scope.rs` `builder_scope_create_closure` returns
+  `closure.into_glib_ptr()`, a closure glib-rs has already sunk (one owned reference, not floating). GTK's
+  `gtk_builder_connect_signals` (gtk 4.22) passes it to `g_signal_connect_closure_by_id`, whose
+  `g_closure_sink` adds a reference because the closure is not floating, and never unrefs it. Disconnecting
+  the handler at finalize drops one reference; the other is never released. GTK's own C scope returns a
+  floating closure, so Ghostty (`gtk_widget_class_bind_template_callback`) does not leak. gtk4-rs `main` has
+  the same code (checked 2026-10-07). Not a Ghostty defect, so no UD.
+- **lane handling (P7-W24, until the fix)**: `lsan-gtk.supp` G2, anchored to that one allocating frame
+  (SANITIZER_SUPPRESSIONS.md).
+- **fix** (P7-W25; parity rule: Ghostty binds its callbacks through GTK's C scope and does not leak): the
+  port binds every template callback as the reference does, `gtk_widget_class_bind_template_callback_full`
+  with an `unsafe extern "C"` trampoline per callback (`rustty-apprt` `gtk/class/template_callback.rs`,
+  `bind_template_callbacks!`: each line is the reference callback's C signature, the trampoline borrows the
+  C arguments as the Rust types the ported handler takes and calls it). GTK's `GtkBuilderCScope` then makes
+  the closures (`g_cclosure_new_object[_swap]`, floating, sunk by the connection), so nothing leaks. All
+  `#[gtk4::template_callbacks]` / `bind_template_instance_callbacks` uses are gone: 111 callbacks in 13
+  classes (`Surface` 45, `Window` 22, `ImguiWidget` 13, `SearchOverlay` 7, `KeyStateOverlay` 5,
+  `CommandPalette` 4, `ClipboardConfirmationDialog` 4, `Tab` 3, `SplitTree` 1, `SplitTreeSplit` 2,
+  `SurfaceChildExited` 2, `SurfaceScrolledWindow` 2, `InspectorWindow` 1), the reference's list except
+  `CommandPalette`'s `notify_config`, which `command-palette.blp` never references (the port connects
+  `notify::config` in `constructed`, unchanged). Consequences, each back to the reference's shape:
+  `surface.blp`'s five `render_surface_*` connections lose the `swapped` the port had added for gtk4-rs's
+  `&self` handlers (the file is the reference's again), and those handlers take
+  `(_: &RenderSurface, this: &Surface)` as `surface.zig` does; the `drop` / `surface_drop` handlers get the
+  dropped `GValue` itself, as the reference's C callbacks do (GTK's C marshaller peeks the `G_TYPE_VALUE`
+  parameter), so `ext::drop_target_value` (N338's unboxing of glib-rs's parameter box) is deleted; the
+  `TemplateCallbackReturn` alias (N336, glib-rs's `GValue` return check) is deleted, the gboolean return
+  being the trampoline's `gboolean`. Both `im_commit` handlers (`Surface`, `ImguiWidget`) now take the
+  commit's raw bytes (`&[u8]`, the reference's `[*:0]u8`): they took `&str` under gtk4-rs, where invalid
+  UTF-8 aborted in glib-rs's marshaller; a lossy conversion would have changed the bytes sent to the pty
+  and inflated the 128-byte `im_buf` check, so the bytes pass through unchanged (review of `72e943c14`).
+  Differences from the Zig signatures that remain, neither observable: boolean closure parameters are read
+  as `gboolean` (the reference's `bool` reads one byte of the `int` libffi passes); a handler omits
+  trailing C parameters it does not use, as GTK's C calling conventions allow.
+- **evidence** (rvm, aarch64 Fedora 44, GTK 4.22.4): G-LSAN-GTK GREEN with `lsan-gtk.supp` G2 REMOVED (1
+  test, 0 reports; suppressions matched: G1 6,913, G1b 2,197, lsan.supp's Mesa entries 215 + 940, no
+  closure). Negative control: the base `4a32358ae` with only G2 removed is RED, 279 allocations, 16,144
+  bytes, 15 direct-leak stacks, 219 `BuilderRustScope` frames. The live GTK KATs pass: every `#[ignore]`d
+  `rustty-apprt` test one by one under `gtk_live_headless_sway.sh` with `--features gtk` (74 PASS:
+  `gtk_window_live`, `gtk_first_light`, `gtk_input_focus`, `gtk_split_drop`, `gtk_parity_callbacks`,
+  `gtk_clipboard_confirm`, `gtk_inspector_dump`, `gtk_glyph_dump`, `gtk_resize_window_live`,
+  `gtk_close_confirmation`, `gtk_title_dialog`, the five `gtk_perform_action` KATs, the lib's live tests,
+  ...), the five `gtk_render_surface` KATs with their module-doc recipes (fault-inject, DMA-BUF pivot,
+  UD356 error page, 1.25x scale), and the non-ignored suite. Not passing, the same at the base:
+  `gtk_clipboard` (forces `GDK_BACKEND=x11`; the headless sway has no X server) and
+  `gtk_portal_openuri_live` (needs a real portal). The `close_surfaces` helper now also asserts that the
+  window and every Rustty widget in it are finalized (P7-W25), and passes for every KAT that uses it.
+- **lane handling**: `lsan-gtk.supp` G2 deleted; its self-test arm is now a regression arm ("A2g leaked
+  GClosure, sunk and referenced (the N516 shape; no entry may hide it)", RED). SANITIZER_SUPPRESSIONS.md G2
+  struck. No upstream issue is filed (project rule).

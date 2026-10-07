@@ -1,32 +1,138 @@
 //! PORTS: ghostty src/apprt/gtk/class/surface.zig — the template callbacks
-//! (`surface.zig:3623-3661`). `#[gtk4::template_callbacks]` allows ONE such
-//! block per type, so they all stay in this one `impl Surface`.
+//! (`surface.zig:3623-3661`), bound through GTK's C builder scope by
+//! [`Surface::bind_template_callbacks`] (NEW-FINDINGS N516).
 
 use super::*;
 
-#[gtk4::template_callbacks]
 impl Surface {
+    /// PORTS: `surface.zig:3838-3882` — the 45 `bindTemplateCallback` calls of
+    /// `Class.init`, bound through GTK's C builder scope (NEW-FINDINGS N516; see
+    /// [`template_callback`](crate::gtk::class::template_callback)). Each line
+    /// is the reference callback's C signature.
+    pub(super) fn bind_template_callbacks(klass: &mut <imp::Surface as ObjectSubclass>::Class) {
+        crate::gtk::class::template_callback::bind_template_callbacks!(klass;
+            c"focus_enter" => Surface::focus_enter,
+                (ec: obj(gtk4::EventControllerFocus), this: obj(Surface));
+            c"focus_leave" => Surface::focus_leave,
+                (ec: obj(gtk4::EventControllerFocus), this: obj(Surface));
+            c"key_pressed" => Surface::key_pressed, (
+                ec: obj(gtk4::EventControllerKey), keyval: prim(u32), keycode: prim(u32),
+                mods: glib(gdk4::ModifierType), this: obj(Surface),
+            ) -> glib(bool);
+            c"key_released" => Surface::key_released, (
+                ec: obj(gtk4::EventControllerKey), keyval: prim(u32), keycode: prim(u32),
+                mods: glib(gdk4::ModifierType), this: obj(Surface),
+            );
+            c"mouse_down" => Surface::mouse_down, (
+                gesture: obj(gtk4::GestureClick), n_press: prim(i32), x: prim(f64), y: prim(f64),
+                this: obj(Surface),
+            );
+            c"mouse_up" => Surface::mouse_up, (
+                gesture: obj(gtk4::GestureClick), n_press: prim(i32), x: prim(f64), y: prim(f64),
+                this: obj(Surface),
+            );
+            c"mouse_motion" => Surface::mouse_motion,
+                (ec: obj(gtk4::EventControllerMotion), x: prim(f64), y: prim(f64), this: obj(Surface));
+            c"mouse_leave" => Surface::mouse_leave,
+                (ec: obj(gtk4::EventControllerMotion), this: obj(Surface));
+            c"scroll_vertical" => Surface::scroll_vertical,
+                (ec: obj(gtk4::EventControllerScroll), x: prim(f64), y: prim(f64), this: obj(Surface))
+                -> glib(bool);
+            c"scroll_vertical_begin" => Surface::scroll_vertical_begin,
+                (ec: obj(gtk4::EventControllerScroll), this: obj(Surface));
+            c"scroll_vertical_end" => Surface::scroll_vertical_end,
+                (ec: obj(gtk4::EventControllerScroll), this: obj(Surface));
+            c"scroll_horizontal" => Surface::scroll_horizontal,
+                (ec: obj(gtk4::EventControllerScroll), x: prim(f64), y: prim(f64), this: obj(Surface))
+                -> glib(bool);
+            c"drop" => Surface::drop, (
+                target: obj(gtk4::DropTarget), value: value(), x: prim(f64), y: prim(f64),
+                this: obj(Surface),
+            ) -> glib(bool);
+            c"render_surface_realize" => Surface::render_surface_realize,
+                (render_surface: obj(RenderSurface), this: obj(Surface));
+            c"render_surface_unrealize" => Surface::render_surface_unrealize,
+                (render_surface: obj(RenderSurface), this: obj(Surface));
+            c"render_surface_map" => Surface::render_surface_map,
+                (render_surface: obj(RenderSurface), this: obj(Surface));
+            c"render_surface_unmap" => Surface::render_surface_unmap,
+                (render_surface: obj(RenderSurface), this: obj(Surface));
+            c"render_surface_resize" => Surface::render_surface_resize, (
+                render_surface: obj(RenderSurface), width: prim(i32), height: prim(i32),
+                this: obj(Surface),
+            );
+            c"im_preedit_start" => Surface::im_preedit_start,
+                (ctx: obj(gtk4::IMMulticontext), this: obj(Surface));
+            c"im_preedit_changed" => Surface::im_preedit_changed,
+                (ctx: obj(gtk4::IMMulticontext), this: obj(Surface));
+            c"im_preedit_end" => Surface::im_preedit_end,
+                (ctx: obj(gtk4::IMMulticontext), this: obj(Surface));
+            c"im_commit" => Surface::im_commit,
+                (ctx: obj(gtk4::IMMulticontext), bytes: bytes(), this: obj(Surface));
+            c"url_mouse_enter" => Surface::url_mouse_enter,
+                (ec: obj(gtk4::EventControllerMotion), x: prim(f64), y: prim(f64), this: obj(Surface));
+            c"url_mouse_leave" => Surface::url_mouse_leave,
+                (ec: obj(gtk4::EventControllerMotion), this: obj(Surface));
+            c"child_exited_close" => Surface::child_exited_close,
+                (child_exited: obj(SurfaceChildExited), this: obj(Surface));
+            c"context_menu_closed" => Surface::context_menu_closed,
+                (popover: obj(gtk4::PopoverMenu), this: obj(Surface));
+            c"notify_config" => Surface::on_notify_config, (this: obj(Surface));
+            c"notify_error" => Surface::on_notify_error, (this: obj(Surface));
+            c"notify_mouse_hover_url" => Surface::on_notify_mouse_hover_url, (this: obj(Surface));
+            c"notify_mouse_hidden" => Surface::on_notify_mouse_hidden, (this: obj(Surface));
+            c"notify_mouse_shape" => Surface::on_notify_mouse_shape, (this: obj(Surface));
+            c"notify_vadjustment" => Surface::on_notify_vadjustment, (this: obj(Surface));
+            c"should_border_be_shown" => Surface::should_border_be_shown,
+                (this: obj(Surface), config: opt_obj(Config), bell_ringing: boolean()) -> glib(bool);
+            c"should_unfocused_split_be_shown" => Surface::should_unfocused_split_be_shown, (
+                this: obj(Surface), search_active: boolean(), focused: boolean(), is_split: boolean(),
+            ) -> glib(bool);
+            c"search_stop" => Surface::search_stop, (overlay: obj(SearchOverlay), this: obj(Surface));
+            c"search_changed" => Surface::search_changed,
+                (overlay: obj(SearchOverlay), needle: opt_str(), this: obj(Surface));
+            c"search_next_match" => Surface::search_next_match,
+                (overlay: obj(SearchOverlay), this: obj(Surface));
+            c"search_previous_match" => Surface::search_previous_match,
+                (overlay: obj(SearchOverlay), this: obj(Surface));
+            c"should_drag_handle_be_shown" => Surface::should_drag_handle_be_shown,
+                (this: obj(Surface), config: opt_obj(Config), is_split: boolean()) -> glib(bool);
+            c"surface_drag_prepare" => Surface::surface_drag_prepare,
+                (src: obj(gtk4::DragSource), x: prim(f64), y: prim(f64), this: obj(Surface))
+                -> full(gdk4::ContentProvider);
+            c"surface_drag_begin" => Surface::surface_drag_begin,
+                (src: obj(gtk4::DragSource), drag: obj(gdk4::Drag), this: obj(Surface));
+            c"surface_drop" => Surface::surface_drop, (
+                target: obj(gtk4::DropTarget), value: value(), x: prim(f64), y: prim(f64),
+                this: obj(Surface),
+            ) -> glib(bool);
+            c"surface_drop_leave" => Surface::surface_drop_leave,
+                (target: obj(gtk4::DropTarget), this: obj(Surface));
+            c"surface_drop_motion" => Surface::surface_drop_motion,
+                (target: obj(gtk4::DropTarget), x: prim(f64), y: prim(f64), this: obj(Surface))
+                -> glib(gdk4::DragAction);
+            c"notify_drop_value" => Surface::notify_drop_value,
+                (target: obj(gtk4::DropTarget), pspec: obj(glib::ParamSpec), this: obj(Surface));
+        );
+    }
+
     // -- EventControllerFocus (surface.blp:47-50) --------------------------
     // PORT NOTE (arg order): these controllers are connected NON-swapped in the
-    // blueprint (unlike the `swapped` `render_surface_*` callbacks), so gtk4-rs
-    // delivers the vector `[emitter, ...signal_args, this]` — the EMITTING
-    // controller first and the template instance (`this: &Surface`) LAST. This
-    // matches the reference's Zig callback signatures exactly (e.g.
+    // blueprint, so GTK calls the C callback with the EMITTING controller
+    // first, the signal arguments, and the template instance (`this: &Surface`)
+    // LAST, the reference's Zig callback signatures (e.g.
     // `ecKeyPressed(ec_key, keyval, keycode, gtk_mods, self)`).
     /// PORTS: `surface.zig:2746-2748` `ecFocusEnter`.
-    #[template_callback]
     fn focus_enter(_ec: &gtk4::EventControllerFocus, this: &Surface) {
         this.update_focus(true);
     }
     /// PORTS: `surface.zig:2750-2752` `ecFocusLeave`.
-    #[template_callback]
     fn focus_leave(_ec: &gtk4::EventControllerFocus, this: &Surface) {
         this.update_focus(false);
     }
 
     // -- EventControllerKey (surface.blp:52-55) ----------------------------
     /// PORTS: `surface.zig:2714-2728` `ecKeyPressed`.
-    #[template_callback]
     fn key_pressed(
         ec_key: &gtk4::EventControllerKey,
         keyval: u32,
@@ -37,7 +143,6 @@ impl Surface {
         this.key_event(Action::Press, ec_key, keyval, keycode, gtk_mods)
     }
     /// PORTS: `surface.zig:2730-2744` `ecKeyReleased`.
-    #[template_callback]
     fn key_released(
         ec_key: &gtk4::EventControllerKey,
         keyval: u32,
@@ -50,7 +155,6 @@ impl Surface {
 
     // -- GestureClick (surface.blp:74-78) ----------------------------------
     /// PORTS: `surface.zig:2785-2857` `gcMouseDown`.
-    #[template_callback]
     fn mouse_down(gesture: &gtk4::GestureClick, _n_press: i32, x: f64, y: f64, this: &Surface) {
         let imp = this.imp();
         let Some(event) = gesture.current_event() else {
@@ -119,7 +223,6 @@ impl Surface {
         }
     }
     /// PORTS: `surface.zig:2859-2902` `gcMouseUp`.
-    #[template_callback]
     fn mouse_up(gesture: &gtk4::GestureClick, _n_press: i32, _x: f64, _y: f64, this: &Surface) {
         let imp = this.imp();
         let Some(event) = gesture.current_event() else {
@@ -176,7 +279,6 @@ impl Surface {
 
     // -- EventControllerMotion (surface.blp:69-72) -------------------------
     /// PORTS: `surface.zig:2904-2953` `ecMouseMotion`.
-    #[template_callback]
     fn mouse_motion(ec: &gtk4::EventControllerMotion, x: f64, y: f64, this: &Surface) {
         let imp = this.imp();
         let Some(event) = ec.current_event() else {
@@ -230,7 +332,6 @@ impl Surface {
         }
     }
     /// PORTS: `surface.zig:2955-2976` `ecMouseLeave`.
-    #[template_callback]
     fn mouse_leave(ec_motion: &gtk4::EventControllerMotion, this: &Surface) {
         let Some(event) = ec_motion.current_event() else {
             return;
@@ -252,7 +353,6 @@ impl Surface {
 
     // -- EventControllerScroll (surface.blp:57-67) -------------------------
     /// PORTS: `surface.zig:2992-3023` `ecMouseScrollVertical`.
-    #[template_callback]
     fn scroll_vertical(_ec: &gtk4::EventControllerScroll, x: f64, y: f64, this: &Surface) -> bool {
         let imp = this.imp();
         let Some(core) = this.core() else {
@@ -286,12 +386,10 @@ impl Surface {
         true
     }
     /// PORTS: `surface.zig:2978-2983` `ecMouseScrollVerticalPrecisionBegin`.
-    #[template_callback]
     fn scroll_vertical_begin(_ec: &gtk4::EventControllerScroll, this: &Surface) {
         this.imp().precision_scroll.set(true);
     }
     /// PORTS: `surface.zig:2985-2990` `ecMouseScrollVerticalPrecisionEnd`.
-    #[template_callback]
     fn scroll_vertical_end(_ec: &gtk4::EventControllerScroll, this: &Surface) {
         this.imp().precision_scroll.set(false);
     }
@@ -307,7 +405,6 @@ impl Surface {
     /// [`Self::horizontal_tab_scroll_applies`] so it is testable without a
     /// widget — a test of only the accumulator arm passes without the new
     /// behaviour.
-    #[template_callback]
     fn scroll_horizontal(
         ec: &gtk4::EventControllerScroll,
         x: f64,
@@ -421,7 +518,6 @@ impl Surface {
     /// CORRECTION (task L-4b): the line numbers in this handler's comments
     /// predated the pin (`:2627-2718`, `:1818-1826`, `:2636`, `:2678`, `:2703`,
     /// ...); they are now the lines at `20abdb50a`.
-    #[template_callback]
     fn drop(
         _target: &gtk4::DropTarget,
         value: &glib::Value,
@@ -433,11 +529,9 @@ impl Surface {
         use rustty_os::ShellEscapeWriter;
         use std::os::unix::ffi::OsStrExt;
 
-        // `value: *gobject.Value` — see [`ext::drop_target_value`] (N338).
-        let Some(value) = ext::drop_target_value(value) else {
-            return false;
-        };
-        let value = &value;
+        // `value: *gobject.Value`: GTK's C marshaller hands the C callback the
+        // dropped value itself (the signal's `G_TYPE_VALUE` parameter, peeked
+        // as a pointer), as in the reference (N338, N516).
 
         // gdk.FileList: shell-escape each file path and join with newlines, then
         // paste the whole blob (`:2701-2741`).
@@ -589,43 +683,42 @@ impl Surface {
     }
 
     // -- RenderSurface lifecycle (surface.blp:23-32) -----------------------
-    // These are the RenderSurface CHILD's signals, connected `swapped` in the
-    // blueprint, so gtk4-rs delivers `[self, ...signal_args, RenderSurface]` —
-    // the template instance first, the emitting widget LAST (builder_rust_scope
-    // pushes `self` then swaps index 0 with the tail). The handlers take `&self`
-    // and the signal arguments only; the trailing widget is ignored
-    // positionally. Ported from `surface.zig:3305-3437` (`2f0b65346`).
+    // These are the RenderSurface CHILD's signals, connected NON-swapped as in
+    // the reference's blueprint: the emitting RenderSurface first, the signal
+    // arguments, then the template instance (`this`), the reference's
+    // `renderSurfaceRealize(_: *RenderSurface, self: *Self)` signatures. (The
+    // port's blueprint carried `swapped` for gtk4-rs's `&self` handlers until
+    // N516 moved the callbacks to GTK's C scope.) Ported from
+    // `surface.zig:3305-3437` (`2f0b65346`).
 
     /// PORTS: `surface.zig:3305-3324` `renderSurfaceRealize`.
-    #[template_callback]
-    fn render_surface_realize(&self) {
+    fn render_surface_realize(_render_surface: &RenderSurface, this: &Surface) {
         log::debug!(target: LOG_SCOPE, "render surface realize");
 
         // Notify our core surface that it should realize.
-        let imp = self.imp();
-        if let Some(core) = self.core() {
+        let imp = this.imp();
+        if let Some(core) = this.core() {
             // SAFETY: `core` is the widget's boxed, initialized core surface; the
-            // renderer is aliased raw by the render thread (W5), so use raw-self.
+            // renderer is aliased raw by the render thread (W5), so use raw-this.
             if let Err(err) = unsafe { CoreSurface::displayRealized(core) } {
                 // log.warn("core displayRealized failed err={}", .{err});
                 log::warn!(target: LOG_SCOPE, "core displayRealized failed err={err:?}");
             }
-            self.redraw();
+            this.redraw();
         }
 
         // Setup our input method. We do this here because this will
         // create a strong reference back to ourself and we want to be
         // able to release that in unrealize.
-        imp.im_context.set_client_widget(Some(self));
+        imp.im_context.set_client_widget(Some(this));
     }
 
     /// PORTS: `surface.zig:3326-3341` `renderSurfaceUnrealize`.
-    #[template_callback]
-    fn render_surface_unrealize(&self) {
+    fn render_surface_unrealize(_render_surface: &RenderSurface, this: &Surface) {
         log::debug!(target: LOG_SCOPE, "render surface unrealize");
 
-        let imp = self.imp();
-        if let Some(core) = self.core() {
+        let imp = this.imp();
+        if let Some(core) = this.core() {
             // SAFETY: as in `render_surface_realize`.
             unsafe { CoreSurface::displayUnrealized(core) };
         }
@@ -635,17 +728,15 @@ impl Surface {
     }
 
     /// PORTS: `surface.zig:3343-3349` `renderSurfaceMap`.
-    #[template_callback]
-    fn render_surface_map(&self) {
-        self.update_mapped(true);
-        self.update_occlusion();
+    fn render_surface_map(_render_surface: &RenderSurface, this: &Surface) {
+        this.update_mapped(true);
+        this.update_occlusion();
     }
 
     /// PORTS: `surface.zig:3351-3357` `renderSurfaceUnmap`.
-    #[template_callback]
-    fn render_surface_unmap(&self) {
-        self.update_mapped(false);
-        self.update_occlusion();
+    fn render_surface_unmap(_render_surface: &RenderSurface, this: &Surface) {
+        this.update_mapped(false);
+        this.update_occlusion();
     }
 
     // (`2f0b65346` deleted `glareaRender`: nothing draws on this thread.)
@@ -678,12 +769,16 @@ impl Surface {
     /// otherwise LAZILY builds the core surface (**invariant 3** — on first
     /// resize, not realize, so we have proper initial dimensions). The size is in
     /// device pixels (`RenderSurface`'s `resize` signal).
-    #[template_callback]
-    fn render_surface_resize(&self, width: i32, height: i32) {
-        let imp = self.imp();
+    fn render_surface_resize(
+        _render_surface: &RenderSurface,
+        width: i32,
+        height: i32,
+        this: &Surface,
+    ) {
+        let imp = this.imp();
 
         // Some debug output to help understand what GTK is telling us.
-        self.render_surface_resize_debug_log(width, height);
+        this.render_surface_resize_debug_log(width, height);
 
         // Store our cached size
         // PORT NOTE (R7): `@intCast(width)` of a `c_int` into `u32` traps on a
@@ -696,11 +791,11 @@ impl Surface {
         imp.size.set(new_size);
 
         // If our surface is initialized, we send callbacks.
-        if let Some(core) = self.core() {
+        if let Some(core) = this.core() {
             // We also update the content scale because there is no signal for
             // content scale change and it seems to trigger a resize event.
             // SAFETY: `core` is the widget's boxed, initialized core surface.
-            if let Err(err) = unsafe { &mut *core }.contentScaleCallback(self.get_content_scale()) {
+            if let Err(err) = unsafe { &mut *core }.contentScaleCallback(this.get_content_scale()) {
                 // log.warn("error in content scale callback err={}", .{err});
                 log::warn!(target: LOG_SCOPE, "error in content scale callback err={err:?}");
             }
@@ -712,7 +807,7 @@ impl Surface {
                     log::warn!(target: LOG_SCOPE, "error in size callback err={err:?}");
                 }
                 // Setup our resize overlay if configured
-                self.resize_overlay_schedule();
+                this.resize_overlay_schedule();
             }
         } else {
             // If we haven't initalized a surface yet, now's the time to
@@ -722,7 +817,7 @@ impl Surface {
             // `initSurface` will start the core surface in an unrealized
             // state and wait for the `realize` signal, unless the widget
             // is somehow realized before the first resize signal ever fires.
-            if let Err(err) = self.init_surface() {
+            if let Err(err) = this.init_surface() {
                 // log.warn("surface failed to initialize err={}", .{err});
                 log::warn!(target: LOG_SCOPE, "surface failed to initialize err={err:?}");
 
@@ -731,14 +826,13 @@ impl Surface {
                 // surface whose renderer cannot initialize (no EGL, no 4.3 core
                 // context) is left blank; the error page exists to report exactly
                 // that. The port shows it here, where the failure lands.
-                self.set_error(true);
+                this.set_error(true);
             }
         }
     }
 
     // -- IMMulticontext (surface.blp:253-256) ------------------------------
     /// PORTS: `surface.zig:3076-3087` `imPreeditStart`.
-    #[template_callback]
     fn im_preedit_start(_ctx: &gtk4::IMMulticontext, this: &Surface) {
         // log.warn("GTKIM: preedit start", .{});
 
@@ -749,7 +843,6 @@ impl Surface {
         ime.im_len = 0;
     }
     /// PORTS: `surface.zig:3089-3126` `imPreeditChanged`.
-    #[template_callback]
     fn im_preedit_changed(ctx: &gtk4::IMMulticontext, this: &Surface) {
         // Any preedit change should mark that we're composing. Its possible this
         // is false using fcitx5-hangul and typing "dkssud<space>" ("안녕"). The
@@ -779,7 +872,6 @@ impl Surface {
         }
     }
     /// PORTS: `surface.zig:3128-3143` `imPreeditEnd`.
-    #[template_callback]
     fn im_preedit_end(_ctx: &gtk4::IMMulticontext, this: &Surface) {
         // log.warn("GTKIM: preedit end", .{});
 
@@ -801,10 +893,10 @@ impl Surface {
     /// event is handled depends on the current `in_keyevent` state — during a
     /// keypress a simple commit (e.g. "a") is BUFFERED for the key encoder rather
     /// than committed as IME text.
-    #[template_callback]
-    pub(super) fn im_commit(_ctx: &gtk4::IMMulticontext, bytes: &str, this: &Surface) {
+    pub(super) fn im_commit(_ctx: &gtk4::IMMulticontext, bytes: &[u8], this: &Surface) {
         let imp = this.imp();
-        let str_bytes = bytes.as_bytes();
+        // `bytes: [*:0]u8`: the commit's raw bytes, passed through unchanged.
+        let str_bytes = bytes;
 
         // log.debug("GTKIM: input commit composing={} keyevent={} str={s}", .{
         //     self.im_composing,
@@ -906,26 +998,23 @@ impl Surface {
 
     // -- URL hover (surface.blp:171-174) -----------------------------------
     // PORT NOTE (arg order): the `url_ec_motion` EventControllerMotion is connected
-    // NON-swapped in the blueprint (`surface.blp:172-173`), so gtk4-rs delivers
-    // `[emitter, ...args, this]` — the emitting controller first, `this: &Surface`
-    // LAST — matching the reference `callconv(.c)` signatures (`ecUrlMouseEnter`
+    // NON-swapped in the blueprint (`surface.blp:172-173`), so GTK calls the
+    // callbacks with the emitting controller first and `this: &Surface` LAST,
+    // the reference `callconv(.c)` signatures (`ecUrlMouseEnter`
     // takes `(_: *EventControllerMotion, _: f64, _: f64, self)`).
     /// PORTS: `surface.zig:3523-3532` `ecUrlMouseEnter`. When the pointer enters the
     /// `url_left` overlay label (bottom-left), reveal `url_right` (bottom-right) so
     /// the URL text moves to the opposite corner, out from under the cursor.
-    #[template_callback]
     fn url_mouse_enter(_ec: &gtk4::EventControllerMotion, _x: f64, _y: f64, this: &Surface) {
         this.imp().url_right.set_visible(true);
     }
     /// PORTS: `surface.zig:3534-3537` `ecUrlMouseLeave`. Hide `url_right` again when
     /// the pointer leaves `url_left`.
-    #[template_callback]
     fn url_mouse_leave(_ec: &gtk4::EventControllerMotion, this: &Surface) {
         this.imp().url_right.set_visible(false);
     }
 
     // -- child-exited / context menu ---------------------------------------
-    #[template_callback]
     fn child_exited_close(_child_exited: &SurfaceChildExited, this: &Surface) {
         // PORTS: `surface.zig:2600-2603` `childExitedClose(_: *ChildExited, self)`.
         // This closes the surface with no confirmation.
@@ -933,7 +1022,6 @@ impl Surface {
         // ChildExited overlay is arg 0, `this: &Surface` is last (PORT NOTE above).
         this.close();
     }
-    #[template_callback]
     fn context_menu_closed(_popover: &gtk4::PopoverMenu, this: &Surface) {
         // PORTS: `surface.zig:2608-2618` `contextMenuClosed(_: *gtk.PopoverMenu, self)`.
         // When the context menu closes, it moves focus back to the tab
@@ -949,7 +1037,6 @@ impl Surface {
     /// `resize-overlay-position` from the config onto the `resize_overlay`.
     // Renamed `on_notify_*` (blueprint name kept via `name = …`) so they don't
     // clash with the `glib::Properties`-generated `notify_<prop>()` emitters.
-    #[template_callback(name = "notify_config")]
     pub(super) fn on_notify_config(&self) {
         use rustty_config::value_types::ResizeOverlayPosition;
 
@@ -982,7 +1069,6 @@ impl Surface {
     /// from [`Surface::set_error`]** (the GL-error path), so this must not panic.
     /// Toggles the opaque-background CSS (`:2316-2326`) and schedules an idle-tick
     /// child swap between the `terminal_page` and the `error_page` (`:2328-2348`).
-    #[template_callback(name = "notify_error")]
     fn on_notify_error(&self) {
         let widget = self.upcast_ref::<gtk4::Widget>();
         if self.imp().error.get() {
@@ -1026,7 +1112,6 @@ impl Surface {
     /// PORTS: `surface.zig:2350-2358` `propMouseHoverUrl`. Reveal `url_left` (the
     /// bottom-left URL overlay label, whose text is bound to `mouse-hover-url` in the
     /// blueprint) when the hovered URL is non-empty, hide it otherwise.
-    #[template_callback(name = "notify_mouse_hover_url")]
     fn on_notify_mouse_hover_url(&self) {
         let visible = self
             .imp()
@@ -1039,7 +1124,6 @@ impl Surface {
     /// PORTS: `surface.zig:2360-2376` `propMouseHidden`. When the mouse is hidden set
     /// the widget cursor to `"none"`; otherwise re-run the mouse-shape logic to
     /// restore the proper cursor.
-    #[template_callback(name = "notify_mouse_hidden")]
     fn on_notify_mouse_hidden(&self) {
         // If we're hidden we set it to "none" (`:2367-2371`).
         if self.imp().mouse_hidden.get() {
@@ -1053,7 +1137,6 @@ impl Surface {
     }
     /// PORTS: `surface.zig:2378-2429` `propMouseShape`. Set the widget cursor
     /// from the `mouse-shape` property (a no-op while the mouse is hidden).
-    #[template_callback(name = "notify_mouse_shape")]
     fn on_notify_mouse_shape(&self) {
         self.apply_mouse_shape_cursor();
     }
@@ -1064,7 +1147,6 @@ impl Surface {
     /// to [`vadjValueChanged`](Self::on_notify_vadjustment) (dragging the
     /// scrollbar performs `.scroll_to_row`), and points the group at the current
     /// adjustment. Idempotent: the group is built once, then re-targeted.
-    #[template_callback(name = "notify_vadjustment")]
     fn on_notify_vadjustment(&self) {
         let imp = self.imp();
 
@@ -1159,7 +1241,6 @@ impl Surface {
     ///
     /// PORTS: `surface.zig:829-848` `closureShouldBorderBeShown`. `false` unless
     /// the bell is ringing AND the config's `bell-features.border` is set.
-    #[template_callback]
     fn should_border_be_shown(&self, config: Option<Config>, bell_ringing: bool) -> bool {
         // If the bell isn't ringing exit early because when the surface is
         // first created there's a race between this code being run and the
@@ -1185,7 +1266,6 @@ impl Surface {
     /// should be applied to the surface
     ///
     /// PORTS: `surface.zig:853-860` `closureShouldUnfocusedSplitBeShown`.
-    #[template_callback]
     fn should_unfocused_split_be_shown(
         &self,
         search_active: bool,
@@ -1197,17 +1277,13 @@ impl Surface {
 
     // -- SearchOverlay (surface.blp:192-195) -------------------------------
     // PORT NOTE (arg order): these four signals are connected NON-swapped in the
-    // blueprint (unlike the `swapped` `render_surface_*` callbacks), so gtk4-rs
-    // delivers `[emitter, ...signal_args, this]` — the emitting `SearchOverlay`
-    // FIRST and the template instance (`this: &Surface`) LAST — matching the
-    // reference callconv(.c) signatures (`surface.zig:3552-3577`,
-    // `fn searchStop(_: *SearchOverlay, self: *Self)` etc.). A wrong (`&self`)
-    // signature COMPILES but aborts at runtime (WrongValueType) when the signal
-    // fires, so the shape is copied verbatim from `focus_enter`/`mouse_down`.
+    // blueprint, so GTK calls them with the emitting `SearchOverlay` FIRST and
+    // the template instance (`this: &Surface`) LAST, the reference callconv(.c)
+    // signatures (`surface.zig:3552-3577`, `fn searchStop(_: *SearchOverlay,
+    // self: *Self)` etc.).
 
     /// PORTS: `surface.zig:3552-3558` `searchStop`. Perform the `end_search`
     /// binding action on the core surface, then return focus to the RenderSurface.
-    #[template_callback]
     fn search_stop(_o: &SearchOverlay, this: &Surface) {
         let Some(core) = this.core() else {
             return;
@@ -1226,7 +1302,6 @@ impl Surface {
     /// action with the (nullable) needle. `needle` is the debounced search-entry
     /// text; a null needle is treated as the empty string (`std.mem.sliceTo(needle
     /// orelse "", 0)`), which the core search arm interprets as "stop search".
-    #[template_callback]
     fn search_changed(_o: &SearchOverlay, needle: Option<&str>, this: &Surface) {
         let Some(core) = this.core() else {
             return;
@@ -1245,7 +1320,6 @@ impl Surface {
 
     /// PORTS: `surface.zig:3567-3572` `searchNextMatch`. Drive
     /// `navigate_search = .next` on the core surface.
-    #[template_callback]
     fn search_next_match(_o: &SearchOverlay, this: &Surface) {
         let Some(core) = this.core() else {
             return;
@@ -1265,7 +1339,6 @@ impl Surface {
 
     /// PORTS: `surface.zig:3574-3579` `searchPreviousMatch`. Drive
     /// `navigate_search = .previous` on the core surface.
-    #[template_callback]
     fn search_previous_match(_o: &SearchOverlay, this: &Surface) {
         let Some(core) = this.core() else {
             return;
@@ -1288,7 +1361,6 @@ impl Surface {
 
     /// PORTS: `surface.zig:3671-3684` `closureShouldDragHandleBeShown` (bind-time
     /// closure; `&self` first like the other closures).
-    #[template_callback]
     fn should_drag_handle_be_shown(&self, config: Option<Config>, is_split: bool) -> bool {
         let Some(config) = config else {
             return false;
@@ -1306,7 +1378,6 @@ impl Surface {
     /// PORTS: `surface.zig:3686-3699` `surfaceDragPrepare` — the DragSource
     /// `prepare` closure: a uint64 content provider carrying this surface's
     /// core id.
-    #[template_callback]
     fn surface_drag_prepare(
         _src: &gtk4::DragSource,
         _x: f64,
@@ -1326,7 +1397,6 @@ impl Surface {
 
     /// PORTS: `surface.zig:3701-3745` `surfaceDragBegin` — set a 0.2×-scaled
     /// `WidgetPaintable` snapshot of the surface as the drag icon.
-    #[template_callback]
     fn surface_drag_begin(src: &gtk4::DragSource, _drag: &gdk4::Drag, this: &Surface) {
         // The scale of the preview
         const PREVIEW_SCALE: f32 = 0.2;
@@ -1376,7 +1446,6 @@ impl Surface {
     /// then "panic in a function that cannot unwind"). The port returns `true`
     /// when the split was moved and `false` on every early return, the signal's
     /// documented meaning.
-    #[template_callback]
     fn surface_drop(
         _tgt: &gtk4::DropTarget,
         v: &glib::Value,
@@ -1384,10 +1453,7 @@ impl Surface {
         y: f64,
         this: &Surface,
     ) -> bool {
-        // `v: *const gobject.Value` — see [`ext::drop_target_value`] (N338).
-        let Some(v) = ext::drop_target_value(v) else {
-            return false;
-        };
+        // `v: *const gobject.Value`: the dropped value itself, as in `drop`.
         // `v.getUint64()`.
         let Ok(dropped_id) = v.get::<u64>() else {
             return false;
@@ -1425,7 +1491,6 @@ impl Surface {
     }
 
     /// PORTS: `surface.zig:3776-3781` `surfaceDropLeave`.
-    #[template_callback]
     fn surface_drop_leave(_tgt: &gtk4::DropTarget, this: &Surface) {
         // Hide overlay
         this.set_drop_overlay_direction(None);
@@ -1433,7 +1498,6 @@ impl Surface {
 
     /// PORTS: `surface.zig:3783-3793` `surfaceDropMotion` — recalculate the
     /// drop region and light the overlay gradient.
-    #[template_callback]
     fn surface_drop_motion(
         _tgt: &gtk4::DropTarget,
         x: f64,
@@ -1454,7 +1518,6 @@ impl Surface {
     /// since the decision of whether to accept or deny a drop is dependent
     /// on the payload (i.e. the surface being dropped). This is
     /// well-documented in GTK docs.
-    #[template_callback]
     fn notify_drop_value(tgt: &gtk4::DropTarget, _pspec: &glib::ParamSpec, this: &Surface) {
         let Some(core_surface) = this.core() else {
             return;

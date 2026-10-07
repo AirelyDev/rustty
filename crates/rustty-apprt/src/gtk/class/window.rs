@@ -278,7 +278,7 @@ mod imp {
             Tab::ensure_type();
 
             klass.bind_template();
-            klass.bind_template_instance_callbacks();
+            super::Window::bind_template_callbacks(klass);
         }
 
         fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {
@@ -2057,16 +2057,72 @@ pub enum SelectTab {
 }
 
 // -- Template callbacks (window.zig:2132-2152 bindTemplateCallback) ----------
-#[gtk4::template_callbacks]
+impl Window {
+    /// PORTS: `window.zig` `Class.init` — the `bindTemplateCallback` calls of `Class.init`,
+    /// bound through GTK's C builder scope (NEW-FINDINGS N516; see
+    /// [`template_callback`](crate::gtk::class::template_callback)).
+    fn bind_template_callbacks(klass: &mut <imp::Window as ObjectSubclass>::Class) {
+        crate::gtk::class::template_callback::bind_template_callbacks!(klass;
+            c"realize" => Window::on_realize, (widget: obj(gtk4::Widget), this: obj(Window));
+            c"new_tab" => Window::on_new_tab, (button: obj(adw::SplitButton), this: obj(Window));
+            c"overview_create_tab" => Window::on_overview_create_tab,
+                (overview: obj(adw::TabOverview), this: obj(Window)) -> none(adw::TabPage);
+            c"overview_notify_open" => Window::on_overview_notify_open,
+                (overview: obj(adw::TabOverview), pspec: obj(glib::ParamSpec), this: obj(Window));
+            c"close_request" => Window::on_close_request,
+                (window: obj(gtk4::Window), this: obj(Window)) -> glib(glib::Propagation);
+            c"close_page" => Window::on_close_page,
+                (tab_view: obj(adw::TabView), page: obj(adw::TabPage), this: obj(Window))
+                -> glib(glib::Propagation);
+            c"page_attached" => Window::on_page_attached, (
+                tab_view: obj(adw::TabView), page: obj(adw::TabPage), position: prim(i32),
+                this: obj(Window),
+            );
+            c"page_detached" => Window::on_page_detached, (
+                tab_view: obj(adw::TabView), page: obj(adw::TabPage), position: prim(i32),
+                this: obj(Window),
+            );
+            c"setup_tab_menu" => Window::on_setup_tab_menu,
+                (tab_view: obj(adw::TabView), page: opt_obj_ref(adw::TabPage), this: obj(Window));
+            c"tab_create_window" => Window::on_tab_create_window,
+                (tab_view: obj(adw::TabView), this: obj(Window)) -> none(adw::TabView);
+            c"notify_n_pages" => Window::on_notify_n_pages,
+                (tab_view: obj(adw::TabView), pspec: obj(glib::ParamSpec), this: obj(Window));
+            c"notify_selected_page" => Window::on_notify_selected_page,
+                (tab_view: obj(adw::TabView), pspec: obj(glib::ParamSpec), this: obj(Window));
+            c"notify_config" => Window::on_notify_config,
+                (window: obj(adw::ApplicationWindow), pspec: obj(glib::ParamSpec), this: obj(Window));
+            c"notify_fullscreened" => Window::on_notify_fullscreened,
+                (window: obj(adw::ApplicationWindow), pspec: obj(glib::ParamSpec), this: obj(Window));
+            c"notify_is_active" => Window::on_notify_is_active,
+                (window: obj(gtk4::Window), pspec: obj(glib::ParamSpec), this: obj(Window));
+            c"notify_maximized" => Window::on_notify_maximized,
+                (window: obj(adw::ApplicationWindow), pspec: obj(glib::ParamSpec), this: obj(Window));
+            c"notify_menu_active" => Window::on_notify_menu_active,
+                (button: obj(gtk4::MenuButton), pspec: obj(glib::ParamSpec), this: obj(Window));
+            c"notify_quick_terminal" => Window::on_notify_quick_terminal,
+                (window: obj(adw::ApplicationWindow), pspec: obj(glib::ParamSpec), this: obj(Window));
+            c"notify_scale_factor" => Window::on_notify_scale_factor,
+                (window: obj(adw::ApplicationWindow), pspec: obj(glib::ParamSpec), this: obj(Window));
+            c"titlebar_style_is_tabs" => Window::closure_titlebar_style_is_tabs,
+                (this: obj(Window), value: glib(GtkTitlebarStyleEnum)) -> glib(bool);
+            c"computed_title" => Window::closure_computed_title, (
+                this: obj(Window), config: opt_obj(Config), title: opt_string(),
+                title_override: opt_string(),
+            ) -> string();
+            c"computed_subtitle" => Window::closure_computed_subtitle,
+                (this: obj(Window), config: opt_obj(Config), pwd: opt_string()) -> string();
+        );
+    }
+}
+
 impl Window {
     /// PORTS: `window.zig:1301-1338` `windowRealize`.
-    #[template_callback(name = "realize")]
     fn on_realize(_widget: &gtk4::Widget, this: &Window) {
         this.imp().realize();
     }
 
     /// PORTS: `window.zig:1340-1342` `btnNewTab`.
-    #[template_callback(name = "new_tab")]
     fn on_new_tab(_button: &adw::SplitButton, this: &Window) {
         this.imp().perform_binding_action(binding::Action::NewTab);
     }
@@ -2074,7 +2130,6 @@ impl Window {
     /// PORTS: `window.zig:1344-1349` `tabOverviewCreateTab`. Creates a fresh tab
     /// page for the overview's "new tab" button — `newTabPage(active.core(),
     /// .tab, .none)`.
-    #[template_callback(name = "overview_create_tab")]
     fn on_overview_create_tab(_overview: &adw::TabOverview, this: &Window) -> adw::TabPage {
         let parent = this.get_active_surface().and_then(|s| s.core());
         this.imp()
@@ -2083,7 +2138,6 @@ impl Window {
 
     /// PORTS: `window.zig:1351-1381` `tabOverviewOpen`. On overview CLOSE, arm a
     /// 500ms timer to refocus the selected tab (libadwaita focus-loss workaround).
-    #[template_callback(name = "overview_notify_open")]
     fn on_overview_notify_open(
         overview: &adw::TabOverview,
         _pspec: &glib::ParamSpec,
@@ -2128,7 +2182,6 @@ impl Window {
     }
 
     /// PORTS: `window.zig:1400-1422` `windowCloseRequest`.
-    #[template_callback(name = "close_request")]
     fn on_close_request(_window: &gtk4::Window, this: &Window) -> glib::Propagation {
         if this.imp().get_needs_confirm_quit() {
             // Show a confirmation dialog (`window.zig:1404-1417`). The
@@ -2151,7 +2204,6 @@ impl Window {
     }
 
     /// PORTS: `window.zig:1459-1496` `tabViewClosePage`.
-    #[template_callback(name = "close_page")]
     fn on_close_page(
         _tab_view: &adw::TabView,
         page: &adw::TabPage,
@@ -2197,7 +2249,6 @@ impl Window {
 
     /// PORTS: `window.zig:1522-1563` `tabViewPageAttached`. Connects the tab's
     /// `close-request` + its surface tree's window-level signals.
-    #[template_callback(name = "page_attached")]
     fn on_page_attached(
         _tab_view: &adw::TabView,
         page: &adw::TabPage,
@@ -2250,7 +2301,6 @@ impl Window {
 
     /// PORTS: `window.zig:1565-1588` `tabViewPageDetached`. Disconnects the tab's
     /// handlers + its surface tree's window-level handlers.
-    #[template_callback(name = "page_detached")]
     fn on_page_detached(
         _tab_view: &adw::TabView,
         page: &adw::TabPage,
@@ -2290,14 +2340,12 @@ impl Window {
 
     /// PORTS: `window.zig:1637-1643` `setupTabMenu`. Records the page the context
     /// menu was opened for.
-    #[template_callback(name = "setup_tab_menu")]
     fn on_setup_tab_menu(_tab_view: &adw::TabView, page: Option<&adw::TabPage>, this: &Window) {
         this.imp().context_menu_page.replace(page.cloned());
     }
 
     /// PORTS: `window.zig:1590-1607` `tabViewCreateWindow`. Opens a fresh window
     /// (no new tab) and hands back its tab view for the dragged-out page.
-    #[template_callback(name = "tab_create_window")]
     fn on_tab_create_window(_tab_view: &adw::TabView, _this: &Window) -> adw::TabView {
         // Create a new window without creating a new tab.
         let win = Window::new(&Application::default(), None);
@@ -2309,7 +2357,6 @@ impl Window {
 
     /// PORTS: `window.zig:1619-1636` `tabViewNPages`. Close the window when the
     /// last page is gone (unless the overview is open).
-    #[template_callback(name = "notify_n_pages")]
     fn on_notify_n_pages(_tab_view: &adw::TabView, _pspec: &glib::ParamSpec, this: &Window) {
         let imp = this.imp();
         if imp.tab_view.n_pages() == 0 {
@@ -2328,7 +2375,6 @@ impl Window {
 
     /// PORTS: `window.zig:1498-1520` `tabViewSelectedPage`. Rebind the tab
     /// BindingGroup source to the newly selected tab.
-    #[template_callback(name = "notify_selected_page")]
     fn on_notify_selected_page(_tab_view: &adw::TabView, _pspec: &glib::ParamSpec, this: &Window) {
         let imp = this.imp();
         // Always reset our binding source in case we have no pages.
@@ -2352,7 +2398,6 @@ impl Window {
 
     /// PORTS: `window.zig:1093-1107` `propConfig`. Toast on config reload, then
     /// resync appearance.
-    #[template_callback(name = "notify_config")]
     fn on_notify_config(_window: &adw::ApplicationWindow, _pspec: &glib::ParamSpec, this: &Window) {
         let imp = this.imp();
         {
@@ -2369,7 +2414,6 @@ impl Window {
     }
 
     /// PORTS: `window.zig:1159-1165` `propFullscreened`.
-    #[template_callback(name = "notify_fullscreened")]
     fn on_notify_fullscreened(
         _window: &adw::ApplicationWindow,
         _pspec: &glib::ParamSpec,
@@ -2380,7 +2424,6 @@ impl Window {
 
     /// PORTS: `window.zig:1109-1142` `propIsActive`. Debounce active-state changes
     /// with a 50ms idle-priority timeout.
-    #[template_callback(name = "notify_is_active")]
     fn on_notify_is_active(_window: &gtk4::Window, _pspec: &glib::ParamSpec, this: &Window) {
         let imp = this.imp();
         // Use a timeout callback to wait for focus state to settle,
@@ -2418,7 +2461,6 @@ impl Window {
     }
 
     /// PORTS: `window.zig:1167-1173` `propMaximized`.
-    #[template_callback(name = "notify_maximized")]
     fn on_notify_maximized(
         _window: &adw::ApplicationWindow,
         _pspec: &glib::ParamSpec,
@@ -2429,7 +2471,6 @@ impl Window {
 
     /// PORTS: `window.zig:1175-1189` `propMenuActive`. On menu activation, re-check
     /// action validity.
-    #[template_callback(name = "notify_menu_active")]
     fn on_notify_menu_active(button: &gtk4::MenuButton, _pspec: &glib::ParamSpec, this: &Window) {
         // Debian 12 is stuck on GTK 4.8
         //
@@ -2448,7 +2489,6 @@ impl Window {
 
     /// PORTS: `window.zig:1191-1209` `propQuickTerminal`. Initialize the quick
     /// terminal at the app layer when the property turns on.
-    #[template_callback(name = "notify_quick_terminal")]
     fn on_notify_quick_terminal(
         _window: &adw::ApplicationWindow,
         _pspec: &glib::ParamSpec,
@@ -2481,7 +2521,6 @@ impl Window {
 
     /// PORTS: `window.zig:1211-1227` `propScaleFactor`. Refresh winproto appearance
     /// on scale-factor changes (X11 needs it).
-    #[template_callback(name = "notify_scale_factor")]
     fn on_notify_scale_factor(
         _window: &adw::ApplicationWindow,
         _pspec: &glib::ParamSpec,
@@ -2502,7 +2541,6 @@ impl Window {
 
     /// PORTS: `window.zig:1229-1237` `closureTitlebarStyleIsTab`. Closure: `this`
     /// FIRST (the GtkBuilder expression scope), then the titlebar-style value.
-    #[template_callback(name = "titlebar_style_is_tabs")]
     fn closure_titlebar_style_is_tabs(_this: &Window, value: GtkTitlebarStyleEnum) -> bool {
         value == GtkTitlebarStyleEnum::Tabs
     }
@@ -2515,7 +2553,6 @@ impl Window {
     /// hardcoded `"Ghostty"` (the `tab.rs` `computed_title` precedent). The
     /// `config` parameter is unused (a notify subscription only), exactly the
     /// reference's `_: ?*Config`.
-    #[template_callback(name = "computed_title")]
     fn closure_computed_title(
         _this: &Window,
         _config: Option<Config>,
@@ -2534,7 +2571,6 @@ impl Window {
     /// PORTS: `window.zig:1380-1393` `closureSubtitle`. Closure: `this` FIRST, then
     /// the config + the active surface pwd. Returns the working-directory subtitle
     /// when configured, else `None`.
-    #[template_callback(name = "computed_subtitle")]
     fn closure_computed_subtitle(
         _this: &Window,
         config: Option<Config>,

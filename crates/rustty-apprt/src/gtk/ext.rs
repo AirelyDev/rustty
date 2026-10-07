@@ -112,46 +112,9 @@ pub fn g_value_holds(value: &glib::Value, g_type: glib::Type) -> bool {
     value.is_type(g_type)
 }
 
-/// The dropped value a `GtkDropTarget::drop` handler receives.
-///
-/// The reference's handlers take `value: *gobject.Value`: GTK calls them with
-/// the `const GValue *` it holds. A `#[template_callback]` is reached through
-/// glib-rs's closure marshaller instead, which hands it the signal's PARAMETER
-/// `GValue`, and `drop`'s parameter is declared `G_TYPE_VALUE`, so that value is
-/// a box around the dropped one, not the dropped one itself.
-///
-/// NEW-FINDINGS N338 (task L-4): the port read the box as if it were the
-/// dropped value, so `G_VALUE_HOLDS(value, GdkFileList / GFile / gchararray)`
-/// was false for every real drop and `getUint64` always failed: dropping files
-/// or text never pasted, and dragging a split onto another surface never moved
-/// it (MEASURED on the VM: `drop_pastes_a_non_utf8_string_verbatim` found the
-/// string branch unreached). `None` only if the box is empty, which GTK never
-/// emits.
-#[must_use]
-pub fn drop_target_value(param: &glib::Value) -> Option<glib::Value> {
-    param
-        .get::<glib::value::BoxedValue>()
-        .ok()
-        .map(|boxed| boxed.0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// N338: the `G_TYPE_VALUE` parameter a `drop` handler receives is unboxed to
-    /// the dropped value, whose type the handler branches on.
-    #[test]
-    fn drop_target_value_unboxes_the_signal_parameter() {
-        let param = glib::value::BoxedValue(42u64.to_value()).to_value();
-        assert!(
-            !g_value_holds(&param, glib::Type::U64),
-            "the parameter is the box"
-        );
-        let inner = drop_target_value(&param).expect("a boxed value");
-        assert!(g_value_holds(&inner, glib::Type::U64));
-        assert_eq!(inner.get::<u64>(), Ok(42));
-    }
 
     /// PORTS: `ext.zig:67` `test { _ = actions; _ = slice; }` — a compile-touch
     /// that forces the submodules and this module's public helpers to type-check.

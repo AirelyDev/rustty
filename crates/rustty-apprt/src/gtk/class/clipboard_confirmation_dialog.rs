@@ -146,7 +146,7 @@ mod imp {
             // Bind the template children + the reveal/hide/notify callbacks
             // (`:315-328`).
             klass.bind_template();
-            klass.bind_template_instance_callbacks();
+            super::ClipboardConfirmationDialog::bind_template_callbacks(klass);
         }
 
         /// PORTS: `clipboard_confirmation_dialog.zig:144-150` `init` —
@@ -311,15 +311,30 @@ impl Default for ClipboardConfirmationDialog {
     }
 }
 
-// Template callbacks bound in `class_init` via `bind_template_instance_callbacks`.
-//
-// SIGNATURE GOTCHA: these are NON-swapped (the `.blp` callbacks carry no
-// `swapped`), so gtk4-rs delivers `[emitter, ...signal_args, this]` — the
-// emitting widget FIRST and the template instance (`this`) LAST, matching the
-// reference's Zig callback signatures (`revealButtonClicked(_: *gtk.Button,
-// self: *Self)`, `propBlur(self, _: *ParamSpec, _: ?*anyopaque)`). Writing these
-// as `&self` compiles but ABORTS at runtime with a WrongValueType.
-#[gtk4::template_callbacks]
+// Template callbacks, bound in `class_init` through GTK's C builder scope
+// (`bind_template_callbacks`, NEW-FINDINGS N516). They are NON-swapped (the
+// `.blp` callbacks carry no `swapped`), so GTK calls them with the emitting
+// widget FIRST and the template instance (`this`) LAST: the reference's Zig
+// callback signatures (`revealButtonClicked(_: *gtk.Button, self: *Self)`,
+// `propBlur(self, _: *ParamSpec, _: ?*anyopaque)`).
+impl ClipboardConfirmationDialog {
+    /// PORTS: `clipboard_confirmation_dialog.zig` `Class.init` — the `bindTemplateCallback` calls of `Class.init`,
+    /// bound through GTK's C builder scope (NEW-FINDINGS N516; see
+    /// [`template_callback`](crate::gtk::class::template_callback)).
+    fn bind_template_callbacks(
+        klass: &mut <imp::ClipboardConfirmationDialog as ObjectSubclass>::Class,
+    ) {
+        crate::gtk::class::template_callback::bind_template_callbacks!(klass;
+            c"reveal_clicked" => ClipboardConfirmationDialog::reveal_clicked, (btn: obj(gtk4::Button), this: obj(ClipboardConfirmationDialog));
+            c"hide_clicked" => ClipboardConfirmationDialog::hide_clicked, (btn: obj(gtk4::Button), this: obj(ClipboardConfirmationDialog));
+            c"notify_blur" => ClipboardConfirmationDialog::on_notify_blur,
+                (obj: obj(ClipboardConfirmationDialog), pspec: obj(glib::ParamSpec), this: obj(ClipboardConfirmationDialog));
+            c"notify_request" => ClipboardConfirmationDialog::on_notify_request,
+                (obj: obj(ClipboardConfirmationDialog), pspec: obj(glib::ParamSpec), this: obj(ClipboardConfirmationDialog));
+        );
+    }
+}
+
 impl ClipboardConfirmationDialog {
     /// PORTS: `clipboard_confirmation_dialog.zig:327` `notify_blur` → `propBlur`.
     /// The `notify::blur` handler shape is `(emitter, pspec, this)` (see
@@ -327,7 +342,6 @@ impl ClipboardConfirmationDialog {
     // Renamed `on_notify_*` (blueprint name kept via `name = …`) so they don't
     // clash with the `glib::Properties`-generated `notify_<prop>()` emitters (the
     // same collision handled in `surface.rs` `on_notify_config`).
-    #[template_callback(name = "notify_blur")]
     fn on_notify_blur(
         _obj: &ClipboardConfirmationDialog,
         _pspec: &glib::ParamSpec,
@@ -338,7 +352,6 @@ impl ClipboardConfirmationDialog {
 
     /// PORTS: `clipboard_confirmation_dialog.zig:328` `notify_request` →
     /// `propRequest`.
-    #[template_callback(name = "notify_request")]
     fn on_notify_request(
         _obj: &ClipboardConfirmationDialog,
         _pspec: &glib::ParamSpec,
@@ -348,7 +361,6 @@ impl ClipboardConfirmationDialog {
     }
 
     /// PORTS: `clipboard_confirmation_dialog.zig:211-217` `revealButtonClicked`.
-    #[template_callback(name = "reveal_clicked")]
     fn reveal_clicked(_btn: &gtk4::Button, this: &ClipboardConfirmationDialog) {
         let imp = this.imp();
         imp.text_view_scroll
@@ -366,7 +378,6 @@ impl ClipboardConfirmationDialog {
     }
 
     /// PORTS: `clipboard_confirmation_dialog.zig:219-225` `hideButtonClicked`.
-    #[template_callback(name = "hide_clicked")]
     fn hide_clicked(_btn: &gtk4::Button, this: &ClipboardConfirmationDialog) {
         let imp = this.imp();
         imp.text_view_scroll
