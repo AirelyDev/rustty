@@ -124,7 +124,13 @@ execFileSync(CC, [
 ]);
 const MANIFEST = JSON.parse(
   execFileSync(runnerBin, [], {
-    env: { ...process.env, DYLD_LIBRARY_PATH: `${ROOT}/target/release` },
+    // DYLD_ on macOS; LD_ on Linux, where `-lrustty_vt_c` links the `.so`
+    // (N486, P7-W24).
+    env: {
+      ...process.env,
+      DYLD_LIBRARY_PATH: `${ROOT}/target/release`,
+      LD_LIBRARY_PATH: `${ROOT}/target/release`,
+    },
   }).toString(),
 );
 // P4-W5 Bundle T: `rustty_type_json` now returns the versioned ABI manifest
