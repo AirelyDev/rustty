@@ -130,7 +130,7 @@ command in `.port/phase-2/VERIFICATION_DEBT.md` or the named record.
 | ~~G6t to completion~~ DONE, P7-W15: GREEN after N500 and N505 (`rustty-vt` 1,597 + 119, `rustty-xev` 22, `rustty-vt-c` 570, `rustty-renderer` 60, `rustty-core` 67) | `MIRI_EXCEPTIONS.md` "P7-W15" | `bash .port/tools/gates/check_leaks.sh --tree-borrows` |
 | ~~G6c as the gate runs it~~ DONE on nextest, P7-W15: 124 of 124 GREEN in 1,110 s (libtest: 119 tests, about 105 min) | `MIRI_EXCEPTIONS.md` "P7-W15" | `bash .port/tools/gates/check_leaks.sh --debug-assertions-off` |
 | Re-audit of the most-changed areas (Task 41 step 3) | here | the parity audit workflow over `src/terminal`, `src/apprt`, `pkg`, `include` |
-| Idle-machine performance runs and a new G8 baseline (P7-W19: oracle rebuilt at the pin, 14/14 held provisionally, V18 DISCHARGED with N511; the idle run and the timing re-base are still owed, the host's Linux VM kept the load above 2.0. P7-W22: the size axis is re-based at the pin with per-label tolerances and G8 runs `--strict`, V16 DISCHARGED with N512) | V17 | V17's P7-W19 recipe |
+| ~~Idle-machine performance runs and a new G8 baseline~~ DONE, P7-W23 (V17 DISCHARGED): idle run (load 1.65-1.85 at each start, Linux VM stopped) 14/14 wins, suite -27.9% wall; BASELINE.json's timing rows re-based to the pinned oracle, the Debug rows dropped by parity; G8b and G8 (`--strict`) GREEN. (P7-W19: oracle rebuilt at the pin, V18 DISCHARGED with N511. P7-W22: the size axis, V16 DISCHARGED with N512) | V17 | V17's P7-W19 recipe |
 | The 16 new CI jobs and release-workflow changes on GitHub's runners | V25 | push, then read the run |
 | Windows full-workspace tests on the clang-cl-built C/C++ dependencies | V26 | `cargo test --workspace --exclude libxml2-sys --exclude fontconfig-sys --exclude sentry-sys --target x86_64-pc-windows-msvc` |
 | Nix and Snap packaging | V24 | user-deferred |
@@ -306,6 +306,12 @@ committed records named here.
   `static` lookup tables and `[profile.release] panic = "abort"`). V16 DISCHARGED: BASELINE.json's size axis
   is the oracle at the pin, three labels mapped with per-label tolerances (the static `.a` dropped), G8b builds
   the counterparts (`--build`) and G8 runs `--strict`.
+- **Next free ids: UD378, N513, V33.**
+- **P7-W23** (V17, the idle perf run) DISCHARGED V17: 14/14 wins idle (suite -27.9% wall), BASELINE.json's
+  `benchmarks` re-based to the oracle at the pin (Debug rows and the retired series kept beside them, not
+  compared), `BASIS_CHANGED` emptied, G8 self-test arms [e2]/[f] made synthetic so they stay non-vacuous, G8b and
+  G8 `--strict` GREEN. V17's drift bisection closed as outside the parity scope. N511's residuals re-measured idle
+  (`apc-parser` and lookup about 1.10x stand; churn is parity, 0.99-1.03x). No new id.
 - **Next free ids: UD378, N513, V33.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
