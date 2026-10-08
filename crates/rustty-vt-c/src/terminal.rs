@@ -664,6 +664,12 @@ unsafe fn wrap(
         progress_report: Some(Effects::progress_report_trampoline),
         size: Some(Effects::size_trampoline),
         render_hold: Some(Effects::render_hold_trampoline),
+        // PORT NOTE (P8-W5 T2): the vt `semantic_prompt`, `reset` and
+        // `program_status` effects exist; their C trampolines and options
+        // (42, 43, 46) land with P8-W5 T3, so nothing is installed yet.
+        semantic_prompt: None,
+        reset: None,
+        program_status: None,
 
         // Installed dynamically when the callback is set; see Effects.
         clipboard_write: None,
@@ -704,6 +710,7 @@ unsafe fn wrap(
                     allocator: Some(capture_alloc),
                     handler,
                     continuation_max_bytes: Some(continuation_max_bytes),
+                    osc_unknown_max_bytes: 0,
                 }),
                 effects: Effects::default(),
                 // .tmp_dir_path = undefined -> None: the reference leaves it

@@ -638,6 +638,7 @@ fn stream_osc_52_large_payload_in_chunks() {
         },
         allocator: Some(testing_allocator()),
         continuation_max_bytes: None,
+        osc_unknown_max_bytes: 0,
     });
 
     let mut i: usize = 0;
@@ -793,6 +794,7 @@ fn stream_osc_bulk_path_matches_per_byte_path() {
             handler: H::default(),
             allocator: Some(testing_allocator()),
             continuation_max_bytes: None,
+            osc_unknown_max_bytes: 0,
         });
         for &c in case.iter() {
             r.next(c);
@@ -804,6 +806,7 @@ fn stream_osc_bulk_path_matches_per_byte_path() {
                 handler: H::default(),
                 allocator: Some(testing_allocator()),
                 continuation_max_bytes: None,
+                osc_unknown_max_bytes: 0,
             });
             s.next_slice(case);
             // try testing.expectEqualSlices(u8, ref.handler.journal.items, s.handler.journal.items);
@@ -818,6 +821,7 @@ fn stream_osc_bulk_path_matches_per_byte_path() {
                 handler: H::default(),
                 allocator: Some(testing_allocator()),
                 continuation_max_bytes: None,
+                osc_unknown_max_bytes: 0,
             });
             s.next_slice(&case[..split]);
             s.next_slice(&case[split..]);

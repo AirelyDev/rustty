@@ -85,6 +85,14 @@ pub struct Options {
     // @"continuation-max-bytes": usize = 1024 * 1024,
     continuation_max_bytes: usize,
 
+    /// The most bytes to keep from each OSC sequence whose number the
+    /// parser does not implement. Zero, the default, discards them. Any
+    /// other value also installs an `unknown_sequence` callback that does
+    /// nothing, so the benchmark measures the whole path from input to
+    /// callback.
+    // @"osc-unknown-max-bytes": usize = 0,
+    osc_unknown_max_bytes: usize,
+
     /// Pre-generated data from rustty-gen. If this is "-" then
     /// we will read stdin. If this is unset, then we will
     /// do nothing (benchmark is a noop). It'd be more unixy to
@@ -101,6 +109,7 @@ impl Default for Options {
             terminal_cols: 120,
             continuation_enabled: false,
             continuation_max_bytes: 1024 * 1024,
+            osc_unknown_max_bytes: 0,
             data: None,
         }
     }
@@ -129,12 +138,33 @@ impl rustty_args::args::Target for Options {
                 self.continuation_max_bytes = rustty_args::args::parse_field_int(value)?;
                 Ok(())
             }
+            b"osc-unknown-max-bytes" => {
+                self.osc_unknown_max_bytes = rustty_args::args::parse_field_int(value)?;
+                Ok(())
+            }
             b"data" => {
                 self.data = Some(rustty_args::args::parse_field_string(value)?);
                 Ok(())
             }
             _ => Err(rustty_args::args::Error::InvalidField),
         }
+    }
+}
+
+/// Stands in for an application that receives every unknown sequence
+/// and does nothing with it.
+// fn unknownSequence(
+//     _: *Stream.Handler,
+//     value: terminalpkg.UnknownSequence,
+// ) void {
+//     switch (value) {
+//         inline else => |v| std.mem.doNotOptimizeAway(v.content.len),
+//     }
+// }
+fn unknown_sequence(_: &mut Handler, value: rustty_vt::UnknownSequence) {
+    match value {
+        rustty_vt::UnknownSequence::Apc(v) => crate::do_not_optimize_away(v.content.len()),
+        rustty_vt::UnknownSequence::Osc(v) => crate::do_not_optimize_away(v.content.len()),
     }
 }
 
@@ -165,10 +195,18 @@ impl TerminalStream {
         //     ptr.stream = .init(.{
         //         .allocator = alloc,
         //         .handler = .init(&ptr.terminal),
+        //     var handler: Stream.Handler = .init(&ptr.terminal);
+        //     if (opts.@"osc-unknown-max-bytes" > 0) {
+        //         handler.unknown_sequence = &unknownSequence;
+        //     }
+        //     ptr.stream = .init(.{
+        //         .allocator = alloc,
+        //         .handler = handler,
         //         .continuation_max_bytes = if (opts.@"continuation-enabled")
         //             opts.@"continuation-max-bytes"
         //         else
         //             null,
+        //         .osc_unknown_max_bytes = opts.@"osc-unknown-max-bytes",
         //     });
         // (The `errdefer` is subsumed: nothing after boxing can fail.)
         let continuation_max_bytes = if opts.continuation_enabled {
@@ -176,14 +214,20 @@ impl TerminalStream {
         } else {
             None
         };
+        let osc_unknown_max_bytes = opts.osc_unknown_max_bytes;
         let tptr: *mut Terminal = Box::into_raw(Box::new(terminal));
+        let mut handler = Handler::init(tptr);
+        if osc_unknown_max_bytes > 0 {
+            handler.unknown_sequence = Some(unknown_sequence);
+        }
         Ok(Box::new(TerminalStream {
             opts,
             terminal: tptr,
             stream: Stream::init(rustty_vt::stream::Options {
                 allocator: Some(rustty_vt::alloc::Global),
-                handler: Handler::init(tptr),
+                handler,
                 continuation_max_bytes,
+                osc_unknown_max_bytes,
             }),
             data_f: None,
         }))

@@ -1234,6 +1234,11 @@ impl Effects {
                     },
                 },
             },
+            // PORT NOTE (P8-W5 T2): the `.osc` arm and
+            // `RUSTTY_TERMINAL_UNKNOWN_SEQUENCE_OSC` land with P8-W5 T3. Until
+            // then nothing sets the C stream's `osc_unknown_max_bytes` (it
+            // stays 0), so the OSC parser never reports an unknown OSC here.
+            rustty_vt::stream_terminal::UnknownSequence::Osc(_) => return,
         };
         let _live = LiveHandler::publish(wrapper, handler);
         func(wrapper, userdata, &value);

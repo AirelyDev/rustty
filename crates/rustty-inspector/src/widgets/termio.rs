@@ -146,6 +146,7 @@ impl Stream {
                 allocator: Some(rustty_vt::alloc::Global),
                 handler,
                 continuation_max_bytes: None,
+                osc_unknown_max_bytes: 0,
             }),
             selected_event_seq: None,
             need_scroll_to_selected: false,

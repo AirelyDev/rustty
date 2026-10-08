@@ -396,6 +396,9 @@ pub struct ColorOperation<'a> {
 /// `Action.SemanticPrompt = osc.Command.SemanticPrompt`
 pub type SemanticPrompt<'p> = osc::SemanticPrompt<'p>;
 
+/// `Action.ProgramStatus = osc.Command.ProgramStatus` (`bae2c3cdb`)
+pub type ProgramStatus<'p> = osc::ProgramStatus<'p>;
+
 /// Returns a type that can process a stream of tty control characters.
 ///
 /// PORT NOTE: the reference `Stream(comptime H: type)` calls handler methods
@@ -828,6 +831,21 @@ pub trait Handler {
 
     /// `resize_window` (XTWINOPS 8, 714fe9b90)
     fn resize_window(&mut self, _v: ResizeWindow) {}
+
+    /// `osc_unknown` (an OSC whose number the parser does not implement,
+    /// `7b11f3dca`)
+    // osc_unknown: osc.Command.Unknown,
+    // PORT NOTE: the payload borrows the OSC parser's capture, so it is only
+    // valid for the duration of the call (the `kitty_clipboard` shape).
+    fn osc_unknown(&mut self, _v: osc::Unknown<'_>) {}
+
+    /// `mouse_shape_reset` (an empty OSC 22, `b1bfd1d9c`)
+    // mouse_shape_reset,
+    fn mouse_shape_reset(&mut self) {}
+
+    /// `program_status` (OSC 7501, `bae2c3cdb`)
+    // program_status: ProgramStatus,
+    fn program_status(&mut self, _v: ProgramStatus<'_>) {}
 }
 
 /// Returns a type that can process a stream of tty control characters.
@@ -905,17 +923,31 @@ pub struct Options<H> {
     /// Continuation tracking is only supported by TerminalStream.
     // continuation_max_bytes: ?usize = null,
     pub continuation_max_bytes: Option<usize>,
+
+    /// The most bytes to keep from each OSC sequence whose number
+    /// the OSC parser does not implement. Zero, the default,
+    /// discards these sequences. Any other value sends them to the
+    /// handler as `osc_unknown` actions. See
+    /// `osc.Parser.unknown_max_bytes` for how the limit behaves.
+    ///
+    /// This only affects OSC. Other kinds of unknown sequences,
+    /// such as APC, are collected by the handler and have their own
+    /// limits there.
+    // osc_unknown_max_bytes: usize = 0,
+    pub osc_unknown_max_bytes: usize,
 }
 
 impl<H> Options<H> {
     /// `.{ .handler = h }` — the reference's Zig field defaults
-    /// (`allocator = null`, `continuation_max_bytes = null`) have no Rust
-    /// struct-literal equivalent, so this constructor fills them.
+    /// (`allocator = null`, `continuation_max_bytes = null`,
+    /// `osc_unknown_max_bytes = 0`) have no Rust struct-literal equivalent,
+    /// so this constructor fills them.
     pub fn with_handler(handler: H) -> Options<H> {
         Options {
             handler,
             allocator: None,
             continuation_max_bytes: None,
+            osc_unknown_max_bytes: 0,
         }
     }
 }
@@ -953,6 +985,8 @@ impl<H: Handler> Stream<H> {
         if let Some(alloc) = options.allocator {
             parser.osc_parser.alloc = Some(alloc);
         }
+        // parser.osc_parser.unknown_max_bytes = options.osc_unknown_max_bytes;
+        parser.osc_parser.unknown_max_bytes = options.osc_unknown_max_bytes;
 
         // Initialize the continuation tracker if one is requested.
         // var tracker: ?continuationpkg.Tracker = null;

@@ -1822,6 +1822,7 @@ mod tests {
             allocator: Some(cont_alloc()),
             handler: Handler::init(source_terminal),
             continuation_max_bytes: Some(1024),
+            osc_unknown_max_bytes: 0,
         });
         // defer source_stream.deinit();
 
@@ -1868,6 +1869,7 @@ mod tests {
             allocator: Some(cont_alloc()),
             handler: Handler::init(restored_terminal),
             continuation_max_bytes: Some(1024),
+            osc_unknown_max_bytes: 0,
         });
         // defer restored_stream.deinit();
 
@@ -1966,6 +1968,7 @@ mod tests {
             allocator: Some(cont_alloc()),
             handler: Handler::init(t),
             continuation_max_bytes: Some(4),
+            osc_unknown_max_bytes: 0,
         });
         // defer stream.deinit();
 
@@ -2033,6 +2036,7 @@ mod tests {
                     allocator: Some(cont_alloc()),
                     handler: Handler::init(source_terminal),
                     continuation_max_bytes: Some(4096),
+                    osc_unknown_max_bytes: 0,
                 });
                 // defer source_stream.deinit();
                 source_stream.next_slice(&corpus[0..cut]);
@@ -2076,6 +2080,7 @@ mod tests {
                     allocator: Some(cont_alloc()),
                     handler: Handler::init(restored_terminal),
                     continuation_max_bytes: Some(4096),
+                    osc_unknown_max_bytes: 0,
                 });
                 // defer restored_stream.deinit();
                 match &decoded.continuation {

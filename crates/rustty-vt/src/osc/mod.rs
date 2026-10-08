@@ -2657,6 +2657,7 @@ mod s7_7_tests {
             handler: Titles::default(),
             allocator: Some(crate::alloc::Global),
             continuation_max_bytes: None,
+            osc_unknown_max_bytes: 0,
         });
         // (Compared as addresses, so no integer is cast back to a pointer:
         // strict provenance, S7-9.)

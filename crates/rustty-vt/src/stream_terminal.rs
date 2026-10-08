@@ -161,15 +161,54 @@ pub struct Handler<'a> {
     // kitty_clipboard_write_max_bytes: usize = kitty_clipboard.max_write_size,
     pub kitty_clipboard_write_max_bytes: usize,
 
-    /// Called for sequence identifiers not supported by this library.
-    /// Currently, only APC is reported. Content is borrowed and only valid
-    /// for the duration of the callback. Set `apc_handler.unknown_max_bytes`
-    /// before starting the Stream to enable APC capture.
+    /// Called for escape sequences this library does not implement, so you
+    /// can implement them yourself. See `UnknownSequence` for the kinds of
+    /// sequences that are reported.
+    ///
+    /// Nothing is reported until you also set a byte limit for each kind
+    /// you want. The limits default to zero, which turns reporting off:
+    ///
+    ///   - APC: `apc_handler.unknown_max_bytes`
+    ///   - OSC: `Stream.Options.osc_unknown_max_bytes` when creating the
+    ///     stream, or `stream.parser.osc_parser.unknown_max_bytes` later.
+    ///
+    /// This example handles a made-up OSC 7400 and ignores everything
+    /// else:
+    ///
+    /// ```ignore
+    /// fn on_unknown(handler: &mut Handler, seq: UnknownSequence) {
+    ///     let v = match seq {
+    ///         UnknownSequence::Osc(v) => v,
+    ///         _ => return,
+    ///     };
+    ///
+    ///     // Match the number and its ";" so "74000;" is not included.
+    ///     let prefix = b"7400;";
+    ///     if v.truncated || !v.content.starts_with(prefix) {
+    ///         return;
+    ///     }
+    ///     handle_status(handler, &v.content[prefix.len()..]);
+    /// }
+    ///
+    /// let mut handler = terminal.vt_handler();
+    /// handler.unknown_sequence = Some(on_unknown);
+    /// let mut stream = Stream::init(stream::Options {
+    ///     allocator: Some(alloc),
+    ///     handler,
+    ///     continuation_max_bytes: None,
+    ///     osc_unknown_max_bytes: 4096,
+    /// });
+    /// ```
+    ///
+    /// The callback runs while the stream processes input. It may write a
+    /// reply to the pty, and the reply stays in order with the terminal's
+    /// own replies. It must not feed more input to the same stream.
     // unknown_sequence: ?*const fn (*Handler, UnknownSequence) void = null,
     //
     // PORT NOTE: the `for<'b>` is the same "borrowed and only valid for the
     // duration of the callback" spelling the `desktop_notification` effect
-    // uses — the content slice points into the APC handler's own buffer.
+    // uses — the content slice points into the APC handler's own buffer, or
+    // into the OSC parser's capture for `UnknownSequence::Osc`.
     pub unknown_sequence: Option<for<'b> fn(&mut Handler<'a>, UnknownSequence<'b>)>,
 
     /// The name of the terminfo entry this terminal runs as, reported in
@@ -190,20 +229,32 @@ pub struct Handler<'a> {
     _phantom: PhantomData<&'a ()>,
 }
 
-/// A sequence unsupported by the active handler. Payload data is borrowed
-/// only for the duration of the handler callback.
+/// A sequence this library does not implement, passed to the
+/// `unknown_sequence` callback. The data is only valid until the
+/// callback returns. Copy it if you need it later.
+///
+/// More kinds of sequences may be added later, so switch on this with
+/// an `else` branch that ignores kinds you don't handle.
 // pub const UnknownSequence = union(enum) {
 //     apc: String,
+//     osc: Osc,
 //     ...
 // };
 // PORT NOTE: the reference nests this type (and its `String` payload struct)
 // inside `Handler`; Rust types cannot nest in a struct, so both live at module
 // scope with the `Handler.`-qualified names flattened (`UnknownSequenceString`
 // for `UnknownSequence.String` — `String` alone would collide with
-// `std::string::String`).
+// `std::string::String`). `UnknownSequence.Osc = osc.Command.Unknown` is used
+// directly. Not `#[non_exhaustive]` (DECISIONS P7): the "keep an else branch"
+// advice above is the reference's contract for callers, and the crate's own
+// matches are exhaustive so a new kind fails to compile here first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnknownSequence<'b> {
+    /// An APC sequence (`ESC _`) whose identifier is not implemented.
     Apc(UnknownSequenceString<'b>),
+
+    /// An OSC sequence (`ESC ]`) whose number is not implemented.
+    Osc(osc::Unknown<'b>),
 }
 
 /// Content between a string sequence's introducer and terminator.
@@ -215,6 +266,148 @@ pub enum UnknownSequence<'b> {
 pub struct UnknownSequenceString<'b> {
     pub content: &'b [u8],
     pub truncated: bool,
+}
+
+/// A shell integration event, passed to the `semantic_prompt` effect.
+///
+/// Many shells tell the terminal where each prompt, command, and
+/// command output begins. Each command goes through four steps, and
+/// the effect is called once for each step the shell reports:
+///
+///   1. `prompt_start`: the shell starts drawing a prompt.
+///   2. `input_start`: the prompt is drawn and the user can type.
+///   3. `output_start`: the user submitted the command and it runs.
+///   4. `command_end`: the command finished.
+///
+/// Then the shell draws the next prompt and the steps start over.
+///
+/// Shells differ in what they report. Many don't send the command
+/// line or the exit code, and some skip steps, so handle each event
+/// on its own instead of expecting a strict order. A shell may also
+/// start the same prompt more than once, for example when it redraws
+/// the prompt after a resize, so treat a repeated `prompt_start` as
+/// harmless.
+///
+/// The event describes what happened, not how the shell said it.
+/// Today events come from OSC 133. More shell integration protocols
+/// may report through this same type later.
+///
+/// The strings are only valid until the callback returns. Copy them
+/// if you need them later.
+///
+/// This example logs each command's result:
+///
+/// ```ignore
+/// fn on_semantic_prompt(handler: &mut Handler, event: SemanticPrompt) {
+///     let _ = handler;
+///     match event.kind {
+///         SemanticPromptKind::CommandEnd => match event.exit_code {
+///             Some(code) => log::info!("command exited with {code}"),
+///             None => log::info!("command finished"),
+///         },
+///         _ => {}
+///     }
+/// }
+///
+/// let mut handler = terminal.vt_handler();
+/// handler.effects.semantic_prompt = Some(on_semantic_prompt);
+/// ```
+// pub const SemanticPrompt = struct { ... };
+//
+// PORT NOTE: nested `Handler.SemanticPrompt`, flattened to module scope (the
+// `UnknownSequence` precedent); its nested `Kind` / `PromptKind` become
+// `SemanticPromptKind` / `SemanticPromptPromptKind`, the C names. The crate
+// root re-exports this as `SemanticPrompt` (`main.zig:64`, DECISIONS P9);
+// `stream::SemanticPrompt` stays the OSC command alias. The Zig field
+// defaults are `SemanticPrompt::init`. `'b` is "only valid until the
+// callback returns" (the `UnknownSequence` spelling).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SemanticPrompt<'b> {
+    /// Which step of the command this event reports.
+    // kind: Kind,
+    pub kind: SemanticPromptKind,
+
+    /// Which prompt is starting, for `prompt_start`. Always
+    /// `primary` for other kinds.
+    // prompt_kind: PromptKind = .primary,
+    pub prompt_kind: SemanticPromptPromptKind,
+
+    /// The command's exit code, for `command_end` when the shell
+    /// reported one. Null otherwise.
+    // exit_code: ?i32 = null,
+    pub exit_code: Option<i32>,
+
+    /// The command line about to run, for `output_start`. The shell
+    /// sends it encoded, and this is the decoded text. Empty if the
+    /// shell didn't send one or it couldn't be decoded.
+    // command: []const u8 = "",
+    pub command: &'b [u8],
+
+    /// A description of what went wrong, for `command_end` when the
+    /// shell sent one. Empty otherwise. Few shells send this, and the
+    /// exit code is the usual way to tell whether a command failed.
+    // err: []const u8 = "",
+    pub err: &'b [u8],
+}
+
+impl<'b> SemanticPrompt<'b> {
+    /// `.{ .kind = kind }` with every other field at its Zig default.
+    pub const fn init(kind: SemanticPromptKind) -> SemanticPrompt<'b> {
+        SemanticPrompt {
+            kind,
+            prompt_kind: SemanticPromptPromptKind::Primary,
+            exit_code: None,
+            command: b"",
+            err: b"",
+        }
+    }
+}
+
+/// C: RusttySemanticPromptKind
+// pub const Kind = lib.Enum(lib.target, &.{ ... });
+// PORT NOTE: `lib.Enum`'s `.c` target is a `c_int` enum numbered in
+// declaration order, hence `repr(i32)` (the `program_status::State` shape).
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticPromptKind {
+    // Never reported. This exists so that a zeroed C value is not
+    // mistaken for a real event.
+    Invalid,
+
+    // The shell started drawing a prompt.
+    PromptStart,
+
+    // The prompt is drawn and the user can start typing.
+    InputStart,
+
+    // The user submitted the command and it started running.
+    OutputStart,
+
+    // The command finished running.
+    CommandEnd,
+}
+
+/// C: RusttySemanticPromptPromptKind
+// pub const PromptKind = lib.Enum(lib.target, &.{ ... });
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticPromptPromptKind {
+    // The main prompt shown before each command. This is used
+    // when the shell doesn't say which prompt it is drawing.
+    Primary,
+
+    // A prompt drawn at the right edge of the line.
+    Right,
+
+    // A prompt at the start of an extra line of a command that
+    // spans several lines.
+    Continuation,
+
+    // Another prompt for an extra line of input, such as bash's
+    // PS2. Shells differ in whether they report extra lines as
+    // continuation or secondary prompts, so most callers should
+    // treat the two the same.
+    Secondary,
 }
 
 /// Maximum byte length accepted for `terminfo_name`.
@@ -375,6 +568,64 @@ pub struct Effects<'a> {
     // progress_report: ?*const fn (*Handler, osc.Command.ProgressReport) void
     pub progress_report: Option<fn(&mut Handler<'a>, osc::ProgressReport)>,
 
+    /// Called when the running program sends a program status report
+    /// (OSC 7501). Programs use these to say what they are doing, such
+    /// as working, done, or waiting on the user. The report's
+    /// text is only valid until this returns, so copy what you keep.
+    ///
+    /// A full reset (RIS) removes every record. When that happens, the
+    /// terminal calls this with a `clear` report without an id, and
+    /// then calls `reset`.
+    ///
+    /// Setting this also makes the terminal answer the support query,
+    /// `OSC 7501 ; ?`, through `write_pty`. While this is null, the
+    /// query gets no reply, so programs know not to send reports.
+    // program_status: ?*const fn (*Handler, osc.Command.ProgramStatus.Report) void,
+    //
+    // PORT NOTE (SB, LIFETIMES.tsv `Handler.Effects program_status`): the
+    // report borrows the OSC parser's capture (`for<'b>`, the
+    // `desktop_notification` spelling). The callback may re-enter the
+    // terminal through the handler's raw `terminal` alias; no `term()`
+    // borrow is live across it.
+    pub program_status:
+        Option<for<'b> fn(&mut Handler<'a>, osc::parsers::program_status::Report<'b>)>,
+
+    /// Called when the shell reports a step of a command through
+    /// shell integration: a prompt starts, input starts, output
+    /// starts, or the command ends. See `SemanticPrompt` for the
+    /// steps and an example.
+    ///
+    /// The terminal has already applied the sequence when this is
+    /// called. A sequence the terminal rejects is never reported.
+    // semantic_prompt: ?*const fn (*Handler, SemanticPrompt) void,
+    //
+    // PORT NOTE (SB, LIFETIMES.tsv `Handler.Effects semantic_prompt`): `err`
+    // borrows the OSC parser's capture and `command` a gpa buffer freed when
+    // the callback returns (`for<'b>`). The terminal call that applies the
+    // sequence ends before the callback runs, so no `&mut Terminal` is live
+    // across it.
+    pub semantic_prompt: Option<for<'b> fn(&mut Handler<'a>, SemanticPrompt<'b>)>,
+
+    /// Called after the running program performs a full reset (RIS,
+    /// `ESC c`). The terminal has already reset itself, which clears
+    /// the screen, scrollback, title, and pwd. `title_changed` and
+    /// `pwd_changed` are not called for this, so update anything that
+    /// shows them here.
+    ///
+    /// A full reset also removes the progress report and program
+    /// status records, and `progress_report` and `program_status` are
+    /// called for that before this is called. A soft reset (DECSTR)
+    /// doesn't call this.
+    ///
+    /// Shells don't report the end of a command that a reset
+    /// interrupts, so clear any state you keep for the current
+    /// command here.
+    // reset: ?*const fn (*Handler) void,
+    //
+    // PORT NOTE (SB, LIFETIMES.tsv `Handler.Effects reset`): `full_reset`
+    // drops every `term()` borrow before this runs (the `render_hold` rule).
+    pub reset: Option<fn(&mut Handler<'a>)>,
+
     /// Called in response to an XTVERSION query. Returns the version
     /// string to report (e.g. "ghostty 1.2.3"). The returned memory
     /// must be valid for the lifetime of the call. The maximum length
@@ -432,6 +683,9 @@ impl<'a> Effects<'a> {
         drag_and_drop: None,
         enquiry: None,
         progress_report: None,
+        program_status: None,
+        reset: None,
+        semantic_prompt: None,
         size: None,
         render_hold: None,
         title_changed: None,
@@ -475,6 +729,20 @@ impl<'a> Handler<'a> {
             terminfo_name: None,
             _phantom: PhantomData,
         }
+    }
+
+    // fn programStatusReport(
+    //     self: *Handler,
+    //     report: osc.Command.ProgramStatus.Report,
+    // ) void {
+    //     const func = self.effects.program_status orelse return;
+    //     func(self, report);
+    // }
+    fn program_status_report(&mut self, report: osc::parsers::program_status::Report<'_>) {
+        let Some(func) = self.effects.program_status else {
+            return;
+        };
+        func(self, report);
     }
 
     // fn unknownSequence(self: *Handler, value: UnknownSequence) void {
@@ -984,12 +1252,20 @@ impl<'a> stream::Handler for Handler<'a> {
     //     self.kitty_clipboard_grants.deinit(self.terminal.gpa());
     //     self.kitty_clipboard_grants = .{};
     //
-    //     // Clear the progress bar
+    //     // Clear the progress bar and program status records
     //     self.progressReport(.{ .state = .remove });
+    //     self.programStatusReport(.{ .state = .clear });
+    //
+    //     if (self.effects.reset) |func| func(self);
     // },
     //
     // PORT NOTE (oracle c594031d5): `Terminal::full_reset` now performs the
     // cursor-default restore itself (`setCursorStyle(.default)`).
+    //
+    // PORT NOTE (SB): every `term()` borrow above ends before the
+    // `progress_report`, `program_status` and `reset` effects run, so a
+    // callback that re-enters the terminal through `handler.terminal` holds
+    // the only live reference (the `render_hold` rule).
     fn full_reset(&mut self) {
         // A reset turns off synchronized output, ending its hold.
         let sync = self.term().modes.get(modes::Mode::SynchronizedOutput);
@@ -1003,9 +1279,9 @@ impl<'a> stream::Handler for Handler<'a> {
         self.kitty_clipboard_grants.deinit(gpa);
         self.kitty_clipboard_grants = kitty::clipboard::Grants::default();
 
-        // Clear the progress bar (eeab85b96; the b56c6d88f "only if there is
-        // one" guard was reverted in-range by b7ee3ab6b — end state is the
-        // unconditional remove).
+        // Clear the progress bar and program status records (eeab85b96; the
+        // b56c6d88f "only if there is one" guard was reverted in-range by
+        // b7ee3ab6b — end state is the unconditional remove).
         if let Some(func) = self.effects.progress_report {
             func(
                 self,
@@ -1014,6 +1290,16 @@ impl<'a> stream::Handler for Handler<'a> {
                     progress: None,
                 },
             );
+        }
+        // self.programStatusReport(.{ .state = .clear });
+        self.program_status_report(osc::parsers::program_status::Report {
+            state: osc::parsers::program_status::State::Clear,
+            data: b"",
+        });
+
+        // if (self.effects.reset) |func| func(self);
+        if let Some(func) = self.effects.reset {
+            func(self);
         }
     }
 
@@ -1393,6 +1679,11 @@ impl<'a> stream::Handler for Handler<'a> {
         self.term().mouse_shape = v;
     }
 
+    // .mouse_shape_reset => self.terminal.mouse_shape = .text,
+    fn mouse_shape_reset(&mut self) {
+        self.term().mouse_shape = crate::mouse::Shape::Text;
+    }
+
     // .configure_charset => self.terminal.configureCharset(value.slot, value.charset),
     fn configure_charset(&mut self, v: stream::ConfigureCharset) {
         self.term().configure_charset(v.slot, v.charset);
@@ -1443,9 +1734,149 @@ impl<'a> stream::Handler for Handler<'a> {
         }
     }
 
-    // .semantic_prompt => try self.terminal.semanticPrompt(value),
-    fn semantic_prompt(&mut self, v: stream::SemanticPrompt) {
-        self.vt("semantic_prompt", |t| t.semantic_prompt(v));
+    // .semantic_prompt => try self.semanticPrompt(value),
+    //
+    // fn semanticPrompt(self: *Handler, cmd: osc.Command.SemanticPrompt) !void {
+    //     try self.terminal.semanticPrompt(cmd);
+    //     const func = self.effects.semantic_prompt orelse return;
+    //     switch (cmd.action) { ... }
+    // }
+    //
+    // PORT NOTE (7bb45ba34): the effect fires only when the terminal accepted
+    // the sequence. The `vt` helper logs and swallows the `Result`, so the
+    // body branches on it itself: an `Err` takes the shared catch
+    // (`vt_catch`, which sets `semantic_failure` and logs) and returns before
+    // the effect, as the reference's `try` does. `cmd` is `Copy`, so the
+    // terminal call takes a copy and the effect still reads the options.
+    fn semantic_prompt(&mut self, cmd: stream::SemanticPrompt) {
+        use crate::osc::semantic_prompt::{option, Action, PromptKind};
+
+        // try self.terminal.semanticPrompt(cmd);
+        let r = self.term().semantic_prompt(cmd);
+        if r.is_err() {
+            self.vt_catch("semantic_prompt", r);
+            return;
+        }
+        // const func = self.effects.semantic_prompt orelse return;
+        let Some(func) = self.effects.semantic_prompt else {
+            return;
+        };
+        match cmd.action {
+            Action::FreshLine => {}
+
+            // A and N accept the same k= option as P, and the terminal
+            // applies it, so report it for all three.
+            Action::FreshLineNewPrompt | Action::NewCommand | Action::PromptStart => func(
+                self,
+                SemanticPrompt {
+                    prompt_kind: match cmd.read_option(option::PROMPT_KIND) {
+                        Some(PromptKind::Initial) => SemanticPromptPromptKind::Primary,
+                        Some(PromptKind::Right) => SemanticPromptPromptKind::Right,
+                        Some(PromptKind::Continuation) => SemanticPromptPromptKind::Continuation,
+                        Some(PromptKind::Secondary) => SemanticPromptPromptKind::Secondary,
+                        None => SemanticPromptPromptKind::Primary,
+                    },
+                    ..SemanticPrompt::init(SemanticPromptKind::PromptStart)
+                },
+            ),
+
+            Action::EndPromptStartInput | Action::EndPromptStartInputTerminateEol => {
+                func(self, SemanticPrompt::init(SemanticPromptKind::InputStart))
+            }
+
+            Action::EndInputStartOutput => {
+                // Decoding never makes the command line longer, so a
+                // buffer the size of the raw options always fits it. If
+                // the buffer can't be allocated or the command line
+                // can't be decoded, we still report the step with an
+                // empty command.
+                // const alloc = self.terminal.gpa();
+                // const buf = alloc.alloc(u8, cmd.options_unvalidated.len) catch |err| { ... };
+                // defer alloc.free(buf);
+                let alloc = self.term().gpa();
+                let mut buf =
+                    match kitty::clipboard_command::alloc_buf(alloc, cmd.options_unvalidated.len())
+                    {
+                        Ok(buf) => buf,
+                        Err(err) => {
+                            // log.warn("error allocating semantic prompt command line err={}", .{err});
+                            log::warn!(
+                                target: LOG_SCOPE,
+                                "error allocating semantic prompt command line err={err:?}"
+                            );
+                            func(self, SemanticPrompt::init(SemanticPromptKind::OutputStart));
+                            return;
+                        }
+                    };
+                // var writer: std.Io.Writer = .fixed(buf);
+                // const command: []const u8 = if (cmd.writeCommandLine(&writer))
+                //     writer.buffered()
+                // else |_|
+                //     "";
+                let mut writer = rustty_os::string_encoding::FixedWriter::fixed(&mut buf);
+                let command: &[u8] = match cmd.write_command_line(&mut writer) {
+                    Ok(()) => writer.buffered(),
+                    Err(_) => b"",
+                };
+                func(
+                    self,
+                    SemanticPrompt {
+                        command,
+                        ..SemanticPrompt::init(SemanticPromptKind::OutputStart)
+                    },
+                );
+            }
+
+            Action::EndCommand => func(
+                self,
+                SemanticPrompt {
+                    exit_code: cmd.read_option(option::EXIT_CODE),
+                    err: cmd.read_option(option::ERR).unwrap_or(b""),
+                    ..SemanticPrompt::init(SemanticPromptKind::CommandEnd)
+                },
+            ),
+        }
+    }
+
+    // Unrecognized OSC. The OSC parser already dropped aborted
+    // sequences, so everything that reaches here is reported.
+    // .osc_unknown => self.unknownSequence(.{ .osc = value }),
+    fn osc_unknown(&mut self, v: osc::Unknown<'_>) {
+        Handler::unknown_sequence(self, UnknownSequence::Osc(v));
+    }
+
+    // .program_status => self.programStatus(value),
+    //
+    // fn programStatus(self: *Handler, cmd: osc.Command.ProgramStatus) void {
+    fn program_status(&mut self, cmd: stream::ProgramStatus<'_>) {
+        use crate::osc::parsers::program_status::Command;
+        match cmd {
+            // .report => |report| self.programStatusReport(report),
+            Command::Report(report) => self.program_status_report(report),
+
+            // Only claim support when something handles the reports. The
+            // reply is always the same fixed bytes. The specification
+            // never allows sending report contents back to the program.
+            // .query => |terminator| if (self.effects.program_status != null) {
+            //     switch (terminator) {
+            //         inline else => |t| self.writePty(
+            //             "\x1b]7501;?" ++ comptime t.string(),
+            //         ),
+            //     }
+            // },
+            Command::Query(terminator) => {
+                if self.effects.program_status.is_some() {
+                    // PORT NOTE: the comptime `++` concatenation, as a
+                    // `const` per terminator.
+                    const ST: &[u8] = b"\x1b]7501;?\x1b\\";
+                    const BEL: &[u8] = b"\x1b]7501;?\x07";
+                    self.write_pty(match terminator {
+                        osc::Terminator::St => ST,
+                        osc::Terminator::Bel => BEL,
+                    });
+                }
+            }
+        }
     }
 }
 
