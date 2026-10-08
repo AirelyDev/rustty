@@ -11136,3 +11136,27 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **lane handling**: `lsan-gtk.supp` G2 deleted; its self-test arm is now a regression arm ("A2g leaked
   GClosure, sunk and referenced (the N516 shape; no entry may hide it)", RED). SANITIZER_SUPPRESSIONS.md G2
   struck. No upstream issue is filed (project rule).
+
+## N517 — the parity-surface generator reads phase-0 line windows of `stream.zig`: 13 CSI finals missing, 5 ESC rows are CSI arms
+
+- **id**: N517. P8-W0 T2 (R4 §5.3, DECISIONS D3). **severity**: medium (a silent shrink of gate G9's CSI/ESC
+  surface at the next regeneration). **state**: CLOSED 2026-10-07 (P8-W0 T2; the regeneration of
+  `parity-surface.json` is P8-W0 T3).
+- **found**: Phase 8's delta review of the range `12752b2ac..a60e9e2a5`. `parse_csi.py` read lines 807-1943 and
+  `parse_esc.py` lines 2105-2376 of `src/terminal/stream.zig`, windows fixed at phase 0. At the pin `csiDispatch`
+  starts at line 1410 and `escDispatch` at 2762, so the windows no longer held the functions: the CSI set missed
+  13 finals (`e g h l m n p q r s t u @`) and the ESC set recorded `n p q r s`, which are CSI arms. G9 stayed
+  GREEN only because the frozen `parity-surface.json` was never regenerated across the earlier pins.
+- **fix**: both scripts locate `fn csiDispatch(` / `fn escDispatch(` by header, brace-match to the function end
+  (the shared `_zigspan.py` skips comments, strings, char literals and `\\` lines), find the function's
+  top-level `switch (input.final)` / `switch (action.final)` and brace-match that, then read its 16-space arms;
+  the output format is unchanged. `--self-test` (with `--path` to point at another `stream.zig`) asserts the
+  required CSI/ESC finals, that no arm lies outside its function, and that a header move or a +500-line shift
+  does not change the result. Negative control: `.port/tools/gates/fixtures/parity-surface/stream_no_csi_m.zig`
+  (a trimmed `stream.zig` without `'m'` in `csiDispatch`) makes the CSI self-test arm report `'m'` missing; a
+  `stream.zig` without `escDispatch` is refused. `check_parity_surface.py` does not invoke the generator, so
+  it is unchanged.
+- **evidence**: at `12752b2ac` the regenerated CSI set is 37 arms (`A k B C D j E F G \` H f I J K L M P S T W X
+  Z a b c d e g h l m n p q r s t u @ }` plus `else`) and the ESC set 23 arms (`B A 0 7 8 D E H M N O V W Z c n o
+  ~ } | = > \\` plus `else`); `a60e9e2a5` gives the same sets (both self-tests PASS at both revisions). G9
+  against the frozen surface stays GREEN (693/693).
