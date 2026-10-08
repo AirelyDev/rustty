@@ -67,3 +67,10 @@ Font binaries under `crates/rustty-font/res/` (JetBrains Mono, Julia Mono, Noto 
 Emoji, Symbols Nerd Font, and others) are distributed under their own licenses (SIL
 Open Font License and similar); accompanying license/attribution files ship alongside
 them in that directory.
+
+Artwork
+-------
+Ferris the Rustacean (the crab in every Rustty icon) is from rustacean.net and is
+dedicated to the public domain under CC0 1.0. See `images/ferris/PROVENANCE.md`.
+The icon backgrounds (frames, screens, alternate-icon plates) derive from Ghostty's
+icon artwork (MIT, see above).

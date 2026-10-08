@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from iconlib import paths, tools  # noqa: E402
-from iconlib import alternates, flats, mascot, official, plates, review  # noqa: E402
+from iconlib import alternates, flats, mascot, official, plates, review, verify  # noqa: E402
 
 
 def cmd_paths(args) -> int:
@@ -25,6 +25,10 @@ COMMANDS["plate"] = plates.run
 COMMAND_TOOLS["plate"] = []
 COMMANDS["alternates"] = alternates.run
 COMMAND_TOOLS["alternates"] = ["resvg"]
+COMMANDS["all"] = verify.run_all
+COMMAND_TOOLS["all"] = ["resvg", "ictool", "icotool"]
+COMMANDS["verify"] = verify.run
+COMMAND_TOOLS["verify"] = ["resvg", "ictool", "icotool"]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -41,6 +45,8 @@ def build_parser() -> argparse.ArgumentParser:
     pl.add_argument("name", choices=list(paths.ALT_NAMES))
     al = sub.add_parser("alternates", help="compose alternate icons from plates + styled Ferris")
     al.add_argument("names", nargs="*", default=[])
+    sub.add_parser("all", help="rebuild every derived icon from committed sources")
+    sub.add_parser("verify", help="no-ghost check + run `all` twice and require byte-identical output")
     return p
 
 
