@@ -5,8 +5,9 @@ Closure of the functional-parity audit of Rustty against Ghostty at pin
 `docs/superpowers/plans/2026-09-08-parity-defect-closure.md`. Work ran from
 2026-09-08 to 2026-09-28.
 
-**Current pin: `12752b2ac`** (Phase 7 upstream resync, 2026-09-28 to 2026-09-30;
-`.port/phase-7/README.md`). The records below were carried forward through Phase 7, and the
+**Current pin: `a60e9e2a5`** (Phase 8 upstream resync, started 2026-10-07; the advance is `P8-W0 T3`,
+evidence in `.port/phase-8/w0/README.md`). It was `12752b2ac` through Phase 7 (2026-09-28 to
+2026-09-30; `.port/phase-7/README.md`). The records below were carried forward through Phase 7, and the
 counts are as of its finale. Phase 7 added UD352–UD372, N435–N465 and V27–V29.
 
 ## Result
@@ -333,6 +334,14 @@ committed records named here.
   (`LSAN_GTK_CEILINGS`; LSan treats suppressed blocks as live), the live KATs' `close_surfaces` asserts the
   window and every Rustty widget in it are finalized, and `TSAN_SERIAL` applies on Linux only (N514's
   record updated). No new id. **Next free ids: UD378, N517, V34.**
+- **Phase 8 start (P8-W0, pin `a60e9e2a5`).** N517 (the parity-surface generator's stale line windows, P8-W0 T2)
+  and N518 (a non-reflow narrow leaves a wide head in the last column, P8-W0 T1) are CLOSED. N519 (G-TESTS' four-token
+  matcher masks 17 of the 90 added tests) is RECORD-ONLY (P8-W0 T4). N520 (the snapshot omits `flags.xt_checksum`),
+  N521 (`rustty_terminal_paste` kept writing after a refused write) and N522 (the render `Device` lives in its own
+  allocation) are reserved for their owners and not yet opened. N523, N524 and N525 are reserved for the gate defects
+  P8-W0 T3 found; P8-W0 T5 opens and closes them. UD20 and UD312 are "fixed upstream" (their `docs/ghostty-bug-fixes.md`
+  rows are gone); the reference fields of R4 Appendix A's 50 UDs are re-anchored at `a60e9e2a5` (UD32, UD250 and UD343 only in part: their old lines are history anchors of deleted code). No UD or V id is taken yet.
+  **Next free ids: UD378, N526, V34.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.

@@ -1,0 +1,18 @@
+G-LOGFILE: 176 reference file(s) — 1404 live reference log site(s), 1326 live port emission(s) on the thinnest arm (8 of them BYPASSING the facade — N14), 28 log facade name(s) resolved
+           3 reference file(s) DECLARED-EXCLUDED holding 4 site(s) (budget 3 file(s) / 4 site(s)): 2 build-tooling, 1 unresolved
+           80 reference `pub fn`(s) are referenced only from test code tree-wide, so their sites are test-only (task S-1c): addCodepoints, addLang, addLatin1, addPendingImage, addRect, addUTF16, addUTF32, addUTF8, changeIterator, checkGhosttyHEnum, clearClippingRegions, clientAccepted ...
+           15 DEAD reference site(s) subtracted from the inventory (budget 15): 5 dead-branch, 9 unreachable-private, 1 unreferenced-pub — the reference contains these calls and never reaches them
+           51 PORT-ONLY emission(s) declared and subtracted from the port count of 24 reference file(s) (budget 51): 3 abi-guard, 31 expansion, 3 instrumentation, 3 r13-handling, 9 rust-only-path, 1 test-only-reference, 1 transport — diagnostics with no reference counterpart, which would otherwise over-credit their file and mask a real loss (N81)
+           94 ABSENT reference site(s) declared per arm (budget 94): 72 infallible-call, 6 platform-gated, 16 unrepresentable-state — the reference reaches these, on a condition the port (or that arm) cannot produce; none may be emitted by an arm it excuses
+           29 ATTRIBUTION row(s) (budget 29): 8 default-owner, 3 facade, 18 owner — 8 shared port file(s) credit each emission to ONE reference file, not to every arm that holds the file
+           coverage: 165 of 168 reference file(s) with live log sites reconciled (+3 excluded), 1404 of 1408 site(s) (99%)
+           message content: 988 of 1412 LIVE EMISSION(S) (every shape: log::, macro/fn facade, and facade-bypassing print) have a preserved reference comment to check against (69%). The rest are UNCHECKED — this pass can only compare what the port wrote down.
+           message content: 1 crate(s) have live emissions and NOT ONE checkable pair, so the check cannot see them at all: crates/rustty-config
+           message content: 3 crate(s) emit NOTHING at all, so they are outside the ratio entirely, not merely unchecked: crates/rustty-build-config, crates/rustty-lib, crates/rustty-unicode
+           message content: unchecked sites are CONCENTRATED, not random — 11% of the 424 unchecked sites are in crates/rustty-apprt/src/gtk/class/application/action.rs (32) and crates/rustty-apprt/src/gtk/class/application.rs (18)
+           message content: 13 divergence(s) and 18 stale preserved comment(s), 28 declared (cap 28)
+           message content: 1 emission(s) (0 undeclared) HAVE a candidate reference comment in their block and match none of it above the 0.55 similarity floor (budget 0). This is NOT the same state as having no comment at all — that is the honest unknown; this is the suspicious one.
+NOTE: 1 `log_*` definition(s) never reach the log facade (no-op stubs; their call sites are counted as dropped, not emitted):
+       crates/rustty-vt/src/stream.rs:2505 log_unsupported_once
+GREEN: every reference file's port emits at least reference-minus-allowance diagnostics on every platform arm.
+logfile exit=0

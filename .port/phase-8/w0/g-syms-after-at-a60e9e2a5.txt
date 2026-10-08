@@ -1,0 +1,13 @@
+indexing port symbols…
+ABSENT  src/cli/ssh-cache/DiskCache.zig                      pub fn splitHostPort
+ABSENT  src/datastruct/untouched_pool.zig                    pub fn freeCount
+ABSENT  src/datastruct/wasm_page_pool.zig                    pub fn freeCount
+ABSENT  src/lib/windows_dll.zig                              pub fn DllMain
+ABSENT  src/terminal/PageList.zig                            pub fn memoryUsage
+ABSENT  src/terminal/Screen.zig                              pub fn memoryUsage
+ABSENT  src/terminal/Terminal.zig                            pub fn setDefaultXtChecksum
+ABSENT  src/terminal/Terminal.zig                            pub fn rectXtChecksum
+
+SYMBOL AUDIT: 2911 oracle `pub fn` checked across 544 files; 8 unexplained, 7 accepted with a written reason
+RED: an oracle `pub fn` has no counterpart and no SYMBOL_AUDIT.md entry.
+syms exit=1

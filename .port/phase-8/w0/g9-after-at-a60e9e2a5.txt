@@ -1,0 +1,19 @@
+=== G9 :: full surface coverage (config/keybind/action/terminfo) ===
+config    : covered 216/218  owners=config (done)  -> RED
+    UNCOVERED config: vt-xt-checksum-report
+    UNCOVERED config: vt-xt-checksum-extension
+keybind   : covered 88/88  owners=input (done)  -> done
+cli       : covered 19/19  owners=cli (done)  -> done
+terminfo  : covered 270/270  owners=terminfo (done)  -> done
+modes     : covered 42/42  owners=vt (done)  -> done
+sgr       : covered 31/31  owners=vt (done)  -> done
+osc       : covered 28/29  owners=vt (done)  -> RED
+    UNCOVERED osc: program_status
+csi       : (no ids in parity-surface.json)
+esc       : (no ids in parity-surface.json)
+c0        : (no ids in parity-surface.json)
+terminfo  : infocmp-parity: rustty terminfo entry not compiled/installed yet
+
+PROGRESS: surface ids covered 694/697
+RED: a claimed-done owner crate has uncovered surface ids
+g9 exit=1

@@ -1,0 +1,10 @@
+MISSING  src/lib/windows_dll.zig                                      zig=81
+MISSING  src/renderer/metal/Device.zig                                zig=125
+MISSING  src/renderer/opengl/Device.zig                               zig=82
+MISSING  src/terminal/osc/parsers/program_status.zig                  zig=628
+MISSING  src/terminal/osc/parsers/unknown.zig                         zig=297
+MISSING  src/terminal/xt_checksum.zig                                 zig=422
+
+AUDIT: 562 oracle files examined (6 MISSING, 0 THIN, 18 recorded NON-PORT, 538 OK)
+RED: an oracle file has no counterpart and no NON_PORTS.md entry.
+files exit=1

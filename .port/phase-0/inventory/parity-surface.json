@@ -1,15 +1,15 @@
 {
   "_meta": {
     "reference": "/Users/gael/projects/ghostty",
-    "reference_rev": "12752b2ac1bb05ce53402ed8c853ed1f96eef0b1",
+    "reference_rev": "a60e9e2a57f73e1eef2bd1cf2995a467f69e7fb0",
     "zig_version": "0.16.0",
     "generated_for": "phase-0 parity surface census",
     "note": "All counts parsed directly from reference source; no fabrication."
   },
   "summary": {
-    "config_options_user_facing": 210,
+    "config_options_user_facing": 212,
     "config_fields_internal": 6,
-    "config_fields_total": 216,
+    "config_fields_total": 218,
     "keybind_actions": 88,
     "keybind_actions_void": 55,
     "keybind_actions_with_payload": 33,
@@ -26,11 +26,11 @@
     "terminal_modes_ansi": 4,
     "terminal_modes_dec": 38,
     "sgr_attributes": 31,
-    "osc_command_kinds": 27,
-    "osc_subparsers": 17,
-    "osc_numeric_codes_referenced": 12,
-    "csi_final_byte_handlers": 24,
-    "esc_final_byte_handlers": 5,
+    "osc_command_kinds": 29,
+    "osc_subparsers": 19,
+    "osc_numeric_codes_referenced": 14,
+    "csi_final_byte_handlers": 38,
+    "esc_final_byte_handlers": 23,
     "dcs_command_kinds": 3,
     "dcs_decrqss_subvalues": 5,
     "dcs_recognized_hook_sequences": 3,
@@ -1024,280 +1024,292 @@
         "line": 3071
       },
       {
+        "name": "vt-xt-checksum-report",
+        "type": "bool",
+        "default": "false",
+        "line": 3086
+      },
+      {
+        "name": "vt-xt-checksum-extension",
+        "type": "XtChecksumExtension",
+        "default": ".{}",
+        "line": 3124
+      },
+      {
         "name": "custom-shader",
         "type": "RepeatablePath",
         "default": ".{}",
-        "line": 3192
+        "line": 3245
       },
       {
         "name": "custom-shader-animation",
         "type": "CustomShaderAnimation",
         "default": ".true",
-        "line": 3210
+        "line": 3263
       },
       {
         "name": "bell-features",
         "type": "BellFeatures",
         "default": ".{}",
-        "line": 3265
+        "line": 3318
       },
       {
         "name": "bell-audio-path",
         "type": "?Path",
         "default": "null",
-        "line": 3274
+        "line": 3327
       },
       {
         "name": "bell-audio-volume",
         "type": "f64",
         "default": "0.5",
-        "line": 3281
+        "line": 3334
       },
       {
         "name": "app-notifications",
         "type": "AppNotifications",
         "default": ".{}",
-        "line": 3310
+        "line": 3363
       },
       {
         "name": "macos-non-native-fullscreen",
         "type": "NonNativeFullscreen",
         "default": ".false",
-        "line": 3341
+        "line": 3394
       },
       {
         "name": "macos-window-buttons",
         "type": "MacWindowButtons",
         "default": ".visible",
-        "line": 3362
+        "line": 3415
       },
       {
         "name": "macos-titlebar-style",
         "type": "MacTitlebarStyle",
         "default": ".transparent",
-        "line": 3404
+        "line": 3457
       },
       {
         "name": "macos-titlebar-proxy-icon",
         "type": "MacTitlebarProxyIcon",
         "default": ".visible",
-        "line": 3425
+        "line": 3478
       },
       {
         "name": "macos-dock-drop-behavior",
         "type": "MacOSDockDropBehavior",
         "default": ".@\"new-tab\"",
-        "line": 3440
+        "line": 3493
       },
       {
         "name": "macos-option-as-alt",
         "type": "?inputpkg.OptionAsAlt",
         "default": "null",
-        "line": 3474
+        "line": 3527
       },
       {
         "name": "macos-window-shadow",
         "type": "bool",
         "default": "true",
-        "line": 3479
+        "line": 3532
       },
       {
         "name": "macos-hidden",
         "type": "MacHidden",
         "default": ".never",
-        "line": 3501
+        "line": 3554
       },
       {
         "name": "macos-auto-secure-input",
         "type": "bool",
         "default": "true",
-        "line": 3519
+        "line": 3572
       },
       {
         "name": "macos-secure-input-indication",
         "type": "bool",
         "default": "true",
-        "line": 3529
+        "line": 3582
       },
       {
         "name": "macos-applescript",
         "type": "bool",
         "default": "true",
-        "line": 3539
+        "line": 3592
       },
       {
         "name": "macos-icon",
         "type": "MacAppIcon",
         "default": ".official",
-        "line": 3574
+        "line": 3627
       },
       {
         "name": "macos-custom-icon",
         "type": "?[:0]const u8",
         "default": "null",
-        "line": 3580
+        "line": 3633
       },
       {
         "name": "macos-icon-frame",
         "type": "MacAppIconFrame",
         "default": ".aluminum",
-        "line": 3593
+        "line": 3646
       },
       {
         "name": "macos-icon-ghost-color",
         "type": "?Color",
         "default": "null",
-        "line": 3601
+        "line": 3654
       },
       {
         "name": "macos-icon-screen-color",
         "type": "?ColorList",
         "default": "null",
-        "line": 3613
+        "line": 3666
       },
       {
         "name": "macos-shortcuts",
         "type": "MacShortcuts",
         "default": ".ask",
-        "line": 3637
+        "line": 3690
       },
       {
         "name": "linux-cgroup",
         "type": "LinuxCgroup",
         "default": "if (builtin.os.tag == .linux) .@\"single-instance\" else .never",
-        "line": 3666
+        "line": 3719
       },
       {
         "name": "linux-cgroup-memory-limit",
         "type": "?u64",
         "default": "null",
-        "line": 3684
+        "line": 3737
       },
       {
         "name": "linux-cgroup-processes-limit",
         "type": "?u64",
         "default": "null",
-        "line": 3697
+        "line": 3750
       },
       {
         "name": "linux-cgroup-hard-fail",
         "type": "bool",
         "default": "false",
-        "line": 3710
+        "line": 3763
       },
       {
         "name": "gtk-opengl-debug",
         "type": "bool",
         "default": "builtin.mode == .Debug",
-        "line": 3716
+        "line": 3769
       },
       {
         "name": "gtk-single-instance",
         "type": "GtkSingleInstance",
         "default": ".default",
-        "line": 3746
+        "line": 3799
       },
       {
         "name": "gtk-titlebar",
         "type": "bool",
         "default": "true",
-        "line": 3754
+        "line": 3807
       },
       {
         "name": "gtk-tabs-location",
         "type": "GtkTabsLocation",
         "default": ".top",
-        "line": 3764
+        "line": 3817
       },
       {
         "name": "gtk-titlebar-hide-when-maximized",
         "type": "bool",
         "default": "false",
-        "line": 3770
+        "line": 3823
       },
       {
         "name": "gtk-toolbar-style",
         "type": "GtkToolbarStyle",
         "default": ".raised",
-        "line": 3780
+        "line": 3833
       },
       {
         "name": "gtk-titlebar-style",
         "type": "GtkTitlebarStyle",
         "default": ".native",
-        "line": 3795
+        "line": 3848
       },
       {
         "name": "gtk-wide-tabs",
         "type": "bool",
         "default": "true",
-        "line": 3801
+        "line": 3854
       },
       {
         "name": "gtk-horizontal-tab-scroll",
         "type": "bool",
         "default": "true",
-        "line": 3809
+        "line": 3862
       },
       {
         "name": "gtk-custom-css",
         "type": "RepeatablePath",
         "default": ".{}",
-        "line": 3832
+        "line": 3885
       },
       {
         "name": "desktop-notifications",
         "type": "bool",
         "default": "true",
-        "line": 3836
+        "line": 3889
       },
       {
         "name": "progress-style",
         "type": "bool",
         "default": "true",
-        "line": 3841
+        "line": 3894
       },
       {
         "name": "bold-color",
         "type": "?BoldColor",
         "default": "null",
-        "line": 3860
+        "line": 3913
       },
       {
         "name": "faint-opacity",
         "type": "f64",
         "default": "0.5",
-        "line": 3867
+        "line": 3920
       },
       {
         "name": "term",
         "type": "[]const u8",
         "default": "\"xterm-ghostty\"",
-        "line": 3875
+        "line": 3928
       },
       {
         "name": "enquiry-response",
         "type": "[]const u8",
         "default": "\"\"",
-        "line": 3879
+        "line": 3932
       },
       {
         "name": "async-backend",
         "type": "AsyncBackend",
         "default": ".auto",
-        "line": 3909
+        "line": 3962
       },
       {
         "name": "auto-update",
         "type": "?AutoUpdate",
         "default": "null",
-        "line": 3934
+        "line": 3987
       },
       {
         "name": "auto-update-channel",
         "type": "?build_config.ReleaseChannel",
         "default": "null",
-        "line": 3956
+        "line": 4009
       }
     ],
     "internal": [
@@ -1305,37 +1317,37 @@
         "name": "_arena",
         "type": "?ArenaAllocator",
         "default": "null",
-        "line": 3959
+        "line": 4012
       },
       {
         "name": "_diagnostics",
         "type": "cli.DiagnosticList",
         "default": ".{}",
-        "line": 3963
+        "line": 4016
       },
       {
         "name": "_conditional_state",
         "type": "conditional.State",
         "default": ".{}",
-        "line": 3967
+        "line": 4020
       },
       {
         "name": "_conditional_set",
         "type": "std.EnumSet(conditional.Key)",
         "default": ".{}",
-        "line": 3971
+        "line": 4024
       },
       {
         "name": "_replay_steps",
         "type": "std.ArrayList(Replay.Step)",
         "default": ".empty",
-        "line": 3976
+        "line": 4029
       },
       {
         "name": "_xdg-terminal-exec",
         "type": "bool",
         "default": "false",
-        "line": 3979
+        "line": 4032
       }
     ]
   },
@@ -4038,7 +4050,9 @@
       "kitty_clipboard_protocol",
       "kitty_dnd_protocol",
       "context_signal",
-      "kitty_desktop_notification"
+      "kitty_desktop_notification",
+      "unknown",
+      "program_status"
     ],
     "subparsers": [
       "change_window_icon",
@@ -4055,11 +4069,14 @@
       "kitty_text_sizing",
       "mouse_shape",
       "osc9",
+      "program_status",
       "report_pwd",
       "rxvt_extension",
-      "semantic_prompt"
+      "semantic_prompt",
+      "unknown"
     ],
     "numeric_codes_referenced": [
+      2,
       7,
       8,
       9,
@@ -4071,7 +4088,8 @@
       77,
       99,
       777,
-      3008
+      3008,
+      7501
     ]
   },
   "csi_handlers": {
@@ -4081,46 +4099,25 @@
     "arms": [
       {
         "finals": [
-          ";"
-        ],
-        "comment": "An empty first parameter.",
-        "line": 962
-      },
-      {
-        "finals": [
-          "else"
-        ],
-        "comment": "Defer to the state machine for anything else | (C0 controls, intermediates, colon).",
-        "line": 976
-      },
-      {
-        "finals": [
-          "else"
-        ],
-        "comment": null,
-        "line": 1406
-      },
-      {
-        "finals": [
           "A",
           "k"
         ],
         "comment": "CUU - Cursor Up",
-        "line": 1437
+        "line": 1472
       },
       {
         "finals": [
           "B"
         ],
         "comment": "CUD - Cursor Down",
-        "line": 1460
+        "line": 1495
       },
       {
         "finals": [
           "C"
         ],
         "comment": "CUF - Cursor Right",
-        "line": 1480
+        "line": 1515
       },
       {
         "finals": [
@@ -4128,21 +4125,21 @@
           "j"
         ],
         "comment": "CUB - Cursor Left",
-        "line": 1503
+        "line": 1538
       },
       {
         "finals": [
           "E"
         ],
         "comment": "CNL - Cursor Next Line",
-        "line": 1523
+        "line": 1558
       },
       {
         "finals": [
           "F"
         ],
         "comment": "CPL - Cursor Previous Line",
-        "line": 1546
+        "line": 1581
       },
       {
         "finals": [
@@ -4150,7 +4147,7 @@
           "`"
         ],
         "comment": "HPA - Cursor Horizontal Position Absolute | TODO: test",
-        "line": 1570
+        "line": 1605
       },
       {
         "finals": [
@@ -4158,153 +4155,398 @@
           "f"
         ],
         "comment": "CUP - Set Cursor Position. | TODO: test",
-        "line": 1591
+        "line": 1626
       },
       {
         "finals": [
           "I"
         ],
         "comment": "CHT - Cursor Horizontal Tabulation",
-        "line": 1616
+        "line": 1651
       },
       {
         "finals": [
           "J"
         ],
         "comment": "Erase Display",
-        "line": 1633
+        "line": 1668
       },
       {
         "finals": [
           "K"
         ],
         "comment": "Erase Line",
-        "line": 1666
+        "line": 1701
       },
       {
         "finals": [
           "L"
         ],
         "comment": "IL - Insert Lines | TODO: test",
-        "line": 1706
+        "line": 1741
       },
       {
         "finals": [
           "M"
         ],
         "comment": "DL - Delete Lines | TODO: test",
-        "line": 1724
+        "line": 1759
       },
       {
         "finals": [
           "P"
         ],
         "comment": "Delete Character (DCH)",
-        "line": 1741
+        "line": 1776
       },
       {
         "finals": [
           "S"
         ],
         "comment": null,
-        "line": 1759
+        "line": 1794
       },
       {
         "finals": [
           "T"
         ],
         "comment": "Scroll Down (SD)",
-        "line": 1776
+        "line": 1811
       },
       {
         "finals": [
           "W"
         ],
         "comment": "Cursor Tabulation Control",
-        "line": 1793
+        "line": 1828
       },
       {
         "finals": [
           "X"
         ],
         "comment": "Erase Characters (ECH)",
-        "line": 1836
+        "line": 1871
       },
       {
         "finals": [
           "Z"
         ],
         "comment": "CHT - Cursor Horizontal Tabulation Back",
-        "line": 1857
+        "line": 1892
       },
       {
         "finals": [
           "a"
         ],
         "comment": "HPR - Cursor Horizontal Position Relative",
-        "line": 1874
+        "line": 1909
       },
       {
         "finals": [
           "b"
         ],
         "comment": "Repeat Previous Char (REP)",
-        "line": 1893
+        "line": 1928
       },
       {
         "finals": [
           "c"
         ],
         "comment": "c - Device Attributes (DA1)",
-        "line": 1910
+        "line": 1945
       },
       {
         "finals": [
           "d"
         ],
         "comment": "VPA - Cursor Vertical Position Absolute",
-        "line": 1934
-      }
-    ]
-  },
-  "esc_handlers": {
-    "source": "src/terminal/stream.zig escDispatch (switch on action.final)",
-    "has_else_unimplemented": false,
-    "arms": [
+        "line": 1969
+      },
+      {
+        "finals": [
+          "e"
+        ],
+        "comment": "VPR - Cursor Vertical Position Relative",
+        "line": 1988
+      },
+      {
+        "finals": [
+          "g"
+        ],
+        "comment": "TBC - Tab Clear | TODO: test",
+        "line": 2008
+      },
+      {
+        "finals": [
+          "h"
+        ],
+        "comment": "SM - Set Mode",
+        "line": 2034
+      },
+      {
+        "finals": [
+          "l"
+        ],
+        "comment": "RM - Reset Mode",
+        "line": 2055
+      },
+      {
+        "finals": [
+          "m"
+        ],
+        "comment": "SGR - Select Graphic Rendition",
+        "line": 2076
+      },
       {
         "finals": [
           "n"
         ],
         "comment": "TODO: test",
-        "line": 2125
+        "line": 2160
       },
       {
         "finals": [
           "p"
         ],
         "comment": "DECRQM - Request Mode",
-        "line": 2180
+        "line": 2215
       },
       {
         "finals": [
           "q"
         ],
         "comment": null,
-        "line": 2220
+        "line": 2255
       },
       {
         "finals": [
           "r"
         ],
         "comment": null,
-        "line": 2288
+        "line": 2323
       },
       {
         "finals": [
           "s"
         ],
         "comment": null,
-        "line": 2330
+        "line": 2365
+      },
+      {
+        "finals": [
+          "t"
+        ],
+        "comment": "XTWINOPS",
+        "line": 2426
+      },
+      {
+        "finals": [
+          "u"
+        ],
+        "comment": null,
+        "line": 2506
+      },
+      {
+        "finals": [
+          "@"
+        ],
+        "comment": "ICH - Insert Blanks",
+        "line": 2580
+      },
+      {
+        "finals": [
+          "y"
+        ],
+        "comment": null,
+        "line": 2597
+      },
+      {
+        "finals": [
+          "}"
+        ],
+        "comment": "DECSASD - Select Active Status Display",
+        "line": 2645
+      },
+      {
+        "finals": [
+          "else"
+        ],
+        "comment": null,
+        "line": 2668
+      }
+    ]
+  },
+  "esc_handlers": {
+    "source": "src/terminal/stream.zig escDispatch (switch on action.final)",
+    "has_else_unimplemented": true,
+    "arms": [
+      {
+        "finals": [
+          "B"
+        ],
+        "comment": "Charsets",
+        "line": 2887
+      },
+      {
+        "finals": [
+          "A"
+        ],
+        "comment": null,
+        "line": 2891
+      },
+      {
+        "finals": [
+          "0"
+        ],
+        "comment": null,
+        "line": 2892
+      },
+      {
+        "finals": [
+          "7"
+        ],
+        "comment": "DECSC - Save Cursor",
+        "line": 2898
+      },
+      {
+        "finals": [
+          "8"
+        ],
+        "comment": null,
+        "line": 2910
+      },
+      {
+        "finals": [
+          "D"
+        ],
+        "comment": "IND - Index",
+        "line": 2940
+      },
+      {
+        "finals": [
+          "E"
+        ],
+        "comment": "NEL - Next Line",
+        "line": 2950
+      },
+      {
+        "finals": [
+          "H"
+        ],
+        "comment": "HTS - Horizontal Tab Set",
+        "line": 2960
+      },
+      {
+        "finals": [
+          "M"
+        ],
+        "comment": "RI - Reverse Index",
+        "line": 2970
+      },
+      {
+        "finals": [
+          "N"
+        ],
+        "comment": "SS2 - Single Shift 2",
+        "line": 2983
+      },
+      {
+        "finals": [
+          "O"
+        ],
+        "comment": "SS3 - Single Shift 3",
+        "line": 2997
+      },
+      {
+        "finals": [
+          "V"
+        ],
+        "comment": "SPA - Start of Guarded Area",
+        "line": 3011
+      },
+      {
+        "finals": [
+          "W"
+        ],
+        "comment": "EPA - End of Guarded Area",
+        "line": 3017
+      },
+      {
+        "finals": [
+          "Z"
+        ],
+        "comment": "DECID",
+        "line": 3023
+      },
+      {
+        "finals": [
+          "c"
+        ],
+        "comment": "RIS - Full Reset",
+        "line": 3028
+      },
+      {
+        "finals": [
+          "n"
+        ],
+        "comment": "LS2 - Locking Shift 2",
+        "line": 3037
+      },
+      {
+        "finals": [
+          "o"
+        ],
+        "comment": "LS3 - Locking Shift 3",
+        "line": 3051
+      },
+      {
+        "finals": [
+          "~"
+        ],
+        "comment": "LS1R - Locking Shift 1 Right",
+        "line": 3065
+      },
+      {
+        "finals": [
+          "}"
+        ],
+        "comment": "LS2R - Locking Shift 2 Right",
+        "line": 3079
+      },
+      {
+        "finals": [
+          "|"
+        ],
+        "comment": "LS3R - Locking Shift 3 Right",
+        "line": 3093
+      },
+      {
+        "finals": [
+          "="
+        ],
+        "comment": "Set application keypad mode",
+        "line": 3107
+      },
+      {
+        "finals": [
+          ">"
+        ],
+        "comment": "Reset application keypad mode",
+        "line": 3116
+      },
+      {
+        "finals": [
+          "\\\\"
+        ],
+        "comment": "Sets ST (string terminator). We don't have to do anything | because our parser always accepts ST.",
+        "line": 3126
+      },
+      {
+        "finals": [
+          "else"
+        ],
+        "comment": null,
+        "line": 3130
       }
     ]
   },
