@@ -11206,3 +11206,78 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   comments describe. At the finale every row of `.port/phase-8/delta-review/R4-upstream-tests.tsv` is ticked by
   exact name (Phase 7's `w0/tests-checklist.txt` precedent), and each ported test keeps upstream's name so the
   checklist can be read by grep.
+
+## N523 — G9 never checked CSI, ESC or C0: the kinds were registered but `surface_ids` gave them no ids
+
+- **id**: N523. P8-W0 T5 (`.port/phase-8/w0/README.md` F2). **severity**: medium (a gate that cannot go RED on
+  a whole surface). **kind**: gate vacuity. **state**: OPEN — the gate is fixed (P8-W0 T5); the one real gap it
+  now shows, CSI `y` (DECRQCRA / XTCHECKSUM), closes with P8-W3 T1.
+- **cause**: `check_parity_surface.py` listed `csi`, `esc` and `c0` in `OWNERS`, but `surface_ids()` read none of
+  `csi_handlers`, `esc_handlers` or `c0_controls`, so each printed "(no ids in parity-surface.json)" and
+  could never turn G9 RED. A token search would not have helped: a final is one character.
+- **fix**: `surface_ids()` yields each final of each `csi_handlers.arms` / `esc_handlers.arms` row (once, plus
+  `else` when `has_else_unimplemented`) and the `c0_controls` names. Coverage is structural: `dispatch_arms`
+  locates `fn csi_dispatch` (`crates/rustty-vt/src/stream/csi_dispatch.rs`), `fn esc_dispatch` and `fn execute`
+  (`stream/dispatch.rs`), then the one `match input.final_` / `match action.final_` / `match c0` in each, and
+  reads its top-level arm patterns (`b'm'`, `b'A' | b'k'`, `b'\\'`, integer literals, `..=` ranges, `_` as
+  `else`, `ansi::C0::NUL` paths for C0; nested matches inside an arm are skipped). A missing fn or match, or a
+  pattern spelling the matcher cannot read (a named constant), is BLOCKED (exit 3). `csi_dispatch_final` has no
+  match on the final (it forwards every final to `csi_dispatch`), so it adds nothing. The kinds carry no
+  `--require-tests` arm; their line says so.
+- **negative controls** (`--self-test` arms i-q, on copies of the real files): the `b'm'` arm removed makes `csi`
+  RED on exactly `m` although `b'm'` stays in `csi_dispatch_final`; the `b'\\'` ESC arm removed, RED on `\`;
+  the `ansi::C0::BEL` arm removed, RED on `BEL`; the top-level `_` arm removed, RED on `else` (the nested `_`
+  arms do not count); `fn esc_dispatch` renamed, BLOCKED; `b'm'` respelled as `FINAL_M`, BLOCKED.
+- **result at `a60e9e2a5`**: csi 42/43, UNCOVERED `y` only (real: not yet ported; P8-W3 T1); esc 24/24; c0
+  13/13. No final was a spelling miss. `.port/phase-8/w0/g9-after-gate-repair-at-a60e9e2a5.txt`.
+- **also fixed** (minor, same task): the ESC `\` final was stored in its Zig-source spelling (JSON `"\\\\"`, two
+  characters). `_zigspan.py` now decodes each Zig char literal (`zig_char`); `parse_esc.py`'s required set names
+  the one-character final, and its self-test was RED on `\` before the decoder (`missing required ESC finals:
+  ['\\']`). Regenerated with `build_parity_surface.py`: the only change in `parity-surface.json` is that line.
+
+## N524 — G9 counted OSC kind `unknown` as ported because the word `unknown` occurs in `rustty-vt`
+
+- **id**: N524. P8-W0 T5 (`.port/phase-8/w0/README.md` F3). **severity**: low (under-reports by one id).
+  **kind**: gate false positive. **state**: OPEN — the gate is fixed (P8-W0 T5); `unknown` closes with P8-W4 T2
+  (`osc::Command::Unknown`), `program_status` with P8-W4 T3.
+- **cause**: `present()` accepted any whole-word match of an id variant (or the raw substring) in the owner
+  crate's token corpus. `unknown` is a common word in `rustty-vt`, so the unported `unknown` kind read covered
+  (osc 28/29 at T3). Any kind named by a common word was exposed the same way (`invalid`, `hyperlink_end`).
+- **fix**: for `osc`, an id is covered iff the `osc::Command` enum (`crates/rustty-vt/src/osc/mod.rs`) has a
+  variant matching it under G1's convention (`_gatelib.name_candidates`, either direction), read from the enum
+  body (`osc_enum_variants`). The `--require-tests` arm is unchanged. A missing enum is BLOCKED.
+- **negative control**: `--self-test` arm m, a fixture enum without `Unknown` while the word `unknown` stays in a
+  comment, a string, a fn name and a const name: RED on exactly `unknown`. Arm p: no `enum Command`, BLOCKED.
+- **other kinds**: every single-word id of `modes`, `sgr`, `keybind`, `cli` and `config` (48 ids, e.g. `insert`,
+  `unknown` in sgr, `quit`, `help`, `title`) has a defining site in its owner crate (a field, a variant or a
+  string literal), so the false positive is not shown to affect them; their matching is unchanged.
+- **result at `a60e9e2a5`**: osc 27/29, UNCOVERED `unknown` and `program_status` (both real).
+
+## N525 — the c-vt corpus scripts wrote into the main checkout, and the examples' `zig build` fails on macOS
+
+- **id**: N525. P8-W0 T5 (`.port/phase-8/w0/README.md` F1). **severity**: low (tooling; the goldens were
+  re-captured by hand in T3). **kind**: harness portability. **state**: CLOSED 2026-10-07 (P8-W0 T5).
+- **cause**: `.port/phase-0/run-cvt-corpora.sh` and `build-examples.sh` hard-coded
+  `/Users/gael/projects/rustty/.port/phase-0/{examples-out,corpora/cvt}` and the oracle path, so from a worktree
+  they read and wrote the main checkout, and `examples-out` existed in neither checkout.
+- **oracle build failure**: `zig build` of an example (`cd example/c-vt-effects && zig build --prefix …
+  --cache-dir …`) panics at `a60e9e2a5` on macOS with "unable to find artifact 'ghostty-vt'" (reproduced in T5;
+  "available artifact: 'ghostty-vt-static'"). Cause: since upstream `d65cb5128` (2026-07-23, before both Phase
+  8 pins), `GhosttyLibVt.initShared` links the Darwin shared library with Apple's linker (`initLibApple`), a Run
+  step that registers no Compile artifact named `ghostty-vt`, so every example's `dep.artifact("ghostty-vt")`
+  finds nothing. Upstream CI builds the Zig examples on Linux only, where `initLib` still registers it. This is
+  an oracle-side build issue (a candidate upstream-defect row for the controller; not recorded here), not a
+  Rustty one.
+- **fix**: both scripts derive the repository root from their own location. `build-examples.sh` (bash now)
+  resolves the oracle with `rustty_oracle_root`, is BLOCKED (exit 3) unless the oracle is at `ORACLE_PIN` with
+  `example/` and `include/` clean, its `zig-out/include/ghostty` equals `include/ghostty`, and a Mach-O
+  `libghostty-vt.a` exists, then builds each example with the supported method (N395/T3: the example's
+  `src/main.c`, `main.cpp` for `cpp-vt-stream`, compiled with Xcode clang against that library; `-DGHOSTTY_STATIC`
+  and libc++ as the examples' `build.zig` set them) into `.port/phase-0/examples-out/` (git-ignored). It is a
+  G-ORACLE-SH-SELF consumer (`--print-oracle`, arm 5) with an arm-10 spec (`GHOSTTY 0 0 1`; 10s RED with a
+  plain `git -C "$GHOSTTY"`). `run-cvt-corpora.sh` reads its own `examples-out/`, writes its own
+  `corpora/cvt/`, compares under N395's `pw=` mask (the `cvt_normalize` sed), and keeps a stored file that is
+  equal under the mask, so a re-run does not churn `c-vt-paste`.
+- **proof**: from this worktree, 23/23 built and exited 0; after `run-cvt-corpora.sh` (exit 0, 23 determinism
+  rows OK) `git status` shows no change under `corpora/cvt/`; a raw re-run is byte-identical to the committed
+  goldens for 22 cases and equal under the mask for `c-vt-paste`. Nothing was written to the main checkout.

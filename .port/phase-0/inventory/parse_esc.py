@@ -18,8 +18,9 @@ PATH = C.PATH
 FN_RE = r"^\s*(?:pub )?(?:inline )?fn escDispatch\("
 SWITCH_RE = r"^            switch \(action\.final\) \{\s*$"
 # Finals the ESC dispatch must carry (charsets, DECSC/DECRC, IND/NEL/HTS/RI,
-# SS2/SS3, RIS, LS2/LS3, DECKPAM/DECKPNM, and the backslash final).
-REQUIRED = set("B A 0 7 8 D E H M N O V W Z c n o ~ } | = > \\\\".split())
+# SS2/SS3, RIS, LS2/LS3, DECKPAM/DECKPNM, and the backslash final). The
+# backslash is the decoded final, one character (Zig source spells it `'\\'`).
+REQUIRED = set("B A 0 7 8 D E H M N O V W Z c n o ~ } | = > \\".split())
 
 
 def parse(path):

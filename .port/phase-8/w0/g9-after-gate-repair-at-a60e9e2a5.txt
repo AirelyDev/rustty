@@ -1,0 +1,43 @@
+=== G9 :: full surface coverage (config/keybind/action/terminfo) ===
+config    : covered 216/218  owners=config (done)  -> RED
+    UNCOVERED config: vt-xt-checksum-report
+    UNCOVERED config: vt-xt-checksum-extension
+keybind   : covered 88/88  owners=input (done)  -> done
+cli       : covered 19/19  owners=cli (done)  -> done
+terminfo  : covered 270/270  owners=terminfo (done)  -> done
+modes     : covered 42/42  owners=vt (done)  -> done
+sgr       : covered 31/31  owners=vt (done)  -> done
+osc       : covered 27/29  owners=vt (done)  -> RED  [structural: osc::Command variants]
+    UNCOVERED osc: unknown
+    UNCOVERED osc: program_status
+csi       : covered 42/43  owners=vt (done)  -> RED  [structural: dispatch match arms; test-reference n/a]
+    UNCOVERED csi: y
+esc       : covered 24/24  owners=vt (done)  -> done  [structural: dispatch match arms; test-reference n/a]
+c0        : covered 13/13  owners=vt (done)  -> done  [structural: dispatch match arms; test-reference n/a]
+terminfo  : infocmp-parity: rustty terminfo entry not compiled/installed yet
+
+PROGRESS: surface ids covered 772/777
+RED: a claimed-done owner crate has uncovered surface ids
+g9 exit=1
+
+=== --self-test ===
+=== G9 SELF-TEST ===
+[a] stub 0/2 progress -> exit 0 (expect 0)
+[b] done 1/2 -> exit 1 (expect non-zero), UNCOVERED: True
+[c] done 2/2 -> exit 0 (expect 0)
+[d] strict stub 1/2 -> exit 1 (expect non-zero)
+[e] done, id only in relocated file, no relocation -> exit 1 (expect non-zero)
+[f] same + relocation -> exit 0/0 (expect 0/0)
+[g] relocation present, 'font-size' dropped -> exit 1 (expect non-zero)
+[h] relocation path missing -> exit 3 (expect 3)
+[i] real csi/esc/c0 copies + osc fixture -> exit 0/0/0/0 (expect 0/0/0/0)
+[j] csi copy without the b'm' arm -> exit 1, UNCOVERED ['m'] (expect non-zero, ['m']); token kept elsewhere: True
+[k] esc copy without the b'\\' arm -> exit 1, UNCOVERED ['\\'] (expect non-zero, ['\\']); token kept elsewhere: True
+[l] c0 copy without the ansi::C0::BEL arm -> exit 1, UNCOVERED ['BEL'] (expect non-zero, ['BEL']); token kept elsewhere: True
+[m] osc enum without Unknown -> exit 1, UNCOVERED ['unknown'] (expect non-zero, ['unknown'])
+[n] esc dispatch fn renamed -> exit 3 (expect 3)
+[o] csi arm spelled as a named const -> exit 3 (expect 3)
+[p] osc enum Command missing -> exit 3 (expect 3)
+[q] csi copy without the top-level _ arm -> exit 1, UNCOVERED ['else'] (expect non-zero, ['else'])
+SELF-TEST: PASS
+g9 self-test exit=0
