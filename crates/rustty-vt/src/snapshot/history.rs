@@ -79,7 +79,7 @@ use super::io;
 use super::page;
 use super::record;
 use crate::page::Page as TerminalPage;
-use crate::pagelist::builder::{FinalizeError, Location, PageAllocation};
+use crate::pagelist::builder::{FinalizeError, FinalizeOptions, Location, PageAllocation};
 use crate::pagelist::PageList as TerminalPageList;
 use crate::screen::Screen as TerminalScreen;
 use crate::screen_set::Key as TerminalScreenKey;
@@ -404,6 +404,16 @@ impl From<FinalizeError> for DecodePageError {
     }
 }
 
+/// Options for restoring history PAGE records.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DecodeOptions {
+    /// Compress each page right after it is added to the screen, so that
+    /// at most one restored history page is uncompressed at a time. A page
+    /// that is visible in the viewport stays uncompressed. This is the
+    /// same as `PageList.PageAllocation.FinalizeOptions.compress`.
+    pub compress: bool,
+}
+
 /// Restore the next history PAGE record and prepend it to the native Screen.
 ///
 /// Returns the number of rows added above the screen's existing content.
@@ -411,9 +421,13 @@ impl From<FinalizeError> for DecodePageError {
 /// and prepended only after its record validates, so a failure leaves the
 /// screen unchanged. A limit failure from `finalize` occurs after the record
 /// bytes were fully consumed, leaving `source` aligned on the next record.
+///
+/// With `options.compress`, the page is compressed after it is added. A
+/// page that cannot be compressed is kept uncompressed and is not an error.
 pub fn decode_page(
     source: &mut dyn io::Reader,
     terminal_screen: &mut TerminalScreen,
+    options: DecodeOptions,
 ) -> Result<usize, DecodePageError> {
     // PAGE exposes its exact capacity before decoding the payload, allowing
     // the destination PageList to allocate the final backing memory once.
@@ -440,7 +454,7 @@ pub fn decode_page(
         unsafe { TerminalPageList::allocate_page(pages_ptr, decoder.capacity()) }
             .map_err(|_| DecodePageError::OutOfMemory)?;
     // defer allocation.deinit();
-    let result = decode_page_inner(&mut decoder, &mut allocation, screen_ptr);
+    let result = decode_page_inner(&mut decoder, &mut allocation, screen_ptr, options);
     allocation.deinit();
     result
 }
@@ -451,6 +465,7 @@ fn decode_page_inner(
     // PORT NOTE: raw, not `&mut` — see the Stacked Borrows note in
     // `decode_page` (`allocation` aliases this screen's PageList).
     terminal_screen: *mut TerminalScreen,
+    options: DecodeOptions,
 ) -> Result<usize, DecodePageError> {
     // SAFETY: `allocation.page()` is the freshly allocated detached page; the
     // exclusive borrow lives only for this decode call.
@@ -464,7 +479,12 @@ fn decode_page_inner(
             has_semantic_prompt(&*decoded_page),
         )
     };
-    allocation.finalize(Location::Prepend)?;
+    allocation.finalize(
+        Location::Prepend,
+        FinalizeOptions {
+            compress: options.compress,
+        },
+    )?;
     if contains_prompt {
         // SAFETY: `terminal_screen` is live (decode_page's argument); a raw
         // field write that forms no reference over the finalized list.
@@ -548,7 +568,11 @@ impl<'s> Decoder<'s> {
     // pub const RestoreError = DecodePageError || error{ExistingHistory};
     // (flattened into `DecodeError`; `decode` returns the page error type
     // plus `ExistingHistory` through it.)
-    pub fn decode(&mut self, terminal_screen: &mut TerminalScreen) -> Result<(), DecodeError> {
+    pub fn decode(
+        &mut self,
+        terminal_screen: &mut TerminalScreen,
+        options: DecodeOptions,
+    ) -> Result<(), DecodeError> {
         use crate::point;
 
         // A freshly restored SCREEN may carry overlap inside its first page,
@@ -561,7 +585,7 @@ impl<'s> Decoder<'s> {
 
         // Native row totals remain derived from the actual PAGE dimensions.
         for _ in 0..self.header.page_count {
-            let _ = decode_page(&mut *self.source, terminal_screen)?;
+            let _ = decode_page(&mut *self.source, terminal_screen, options)?;
         }
 
         terminal_screen.pages.assert_integrity();
@@ -580,12 +604,13 @@ pub fn decode(
     source: &mut dyn io::Reader,
     expected_key: TerminalScreenKey,
     terminal_screen: &mut TerminalScreen,
+    options: DecodeOptions,
 ) -> Result<(), DecodeError> {
     let mut decoder = Decoder::init(source)?;
     if decoder.header.key != expected_key {
         return Err(DecodeError::UnexpectedScreenKey);
     }
-    decoder.decode(terminal_screen)
+    decoder.decode(terminal_screen, options)
 }
 
 fn has_semantic_prompt(terminal_page: &TerminalPage) -> bool {
@@ -816,7 +841,13 @@ mod tests {
         );
         let restored = &mut decoded_screen.screen;
         assert!(!restored.semantic_prompt.seen);
-        decode(&mut restore_source, TerminalScreenKey::Primary, restored).unwrap();
+        decode(
+            &mut restore_source,
+            TerminalScreenKey::Primary,
+            restored,
+            DecodeOptions::default(),
+        )
+        .unwrap();
 
         assert_eq!(
             source_screen.pages.total_pages(),
@@ -875,7 +906,12 @@ mod tests {
             let truncated_screen_page_count = truncated.pages.total_pages();
             assert_eq!(
                 Err(DecodeError::EndOfStream),
-                decode(&mut truncated_source, TerminalScreenKey::Primary, truncated),
+                decode(
+                    &mut truncated_source,
+                    TerminalScreenKey::Primary,
+                    truncated,
+                    DecodeOptions::default(),
+                ),
             );
             assert_eq!(truncated_screen_page_count, truncated.pages.total_pages(),);
             assert_eq!(
@@ -910,7 +946,12 @@ mod tests {
             let screen_page_count = partial.pages.total_pages();
             assert_eq!(
                 Err(DecodeError::UnexpectedRecordTag),
-                decode(&mut partial_source, TerminalScreenKey::Primary, partial),
+                decode(
+                    &mut partial_source,
+                    TerminalScreenKey::Primary,
+                    partial,
+                    DecodeOptions::default(),
+                ),
             );
             assert_eq!(screen_page_count + 1, partial.pages.total_pages());
             // SAFETY: live top-left page of the partially restored screen.
@@ -925,6 +966,117 @@ mod tests {
             partial.assert_integrity();
         }
         decoded_partial.deinit();
+
+        source_screen.deinit();
+    }
+
+    // test "HISTORY decode compresses history pages when requested"
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, P8-W5 T1; sibling of history_encodes_newest_first_and_restores_complete_history, .port/phase-2/MIRI_EXCEPTIONS.md): MEASURED 2026-10-08 under `cargo +nightly miri nextest run -p rustty-vt --lib` with `-C debug-assertions=off` (the G6c lane), single test, 3 test threads: still running at the 30-minute bound (killed by PID); the debug-assertions-on G6 lane is slower still. The test writes ~5 pages of numbered lines through the full print path before encoding. The prepend-and-compress path it drives (`PageAllocation::finalize(.prepend, .{ .compress = true })` through the allocation's raw PageList pointer) runs UB-clean under Miri in `pagelist_page_allocation_compresses_prepended_pages_unless_visible` (G6c, 311 s); this test runs natively in cargo test --workspace and under ASan"
+    )]
+    fn history_decode_compresses_history_pages_when_requested() {
+        use crate::pagelist::{Node, Storage};
+        use crate::point;
+        use crate::snapshot::screen;
+
+        let screen_options = || ScreenOptions {
+            cols: 80,
+            rows: 24,
+            max_scrollback_bytes: None,
+            ..ScreenOptions::default()
+        };
+
+        // Write numbered lines until there are several pages of history, so the
+        // content comparison also checks that pages are restored in order.
+        let mut source_screen = TerminalScreen::init(Allocator, screen_options()).unwrap();
+        let mut line: usize = 0;
+        while source_screen.pages.total_pages() < 5 {
+            source_screen
+                .test_write_string(format!("line {line}\n").as_bytes())
+                .unwrap();
+            line += 1;
+        }
+        let expected = source_screen
+            .dump_string_alloc(
+                Allocator,
+                point::Point::Screen(point::Coordinate::default()),
+            )
+            .unwrap();
+
+        let mut destination = io::AllocatingWriter::new();
+        let mut stream = record::Writer::init(&mut destination);
+        screen::encode(&source_screen, TerminalScreenKey::Primary, &mut stream).unwrap();
+        encode(&source_screen, TerminalScreenKey::Primary, &mut stream).unwrap();
+        let written = stream.destination().written().to_vec();
+        stream.deinit();
+
+        for compress in [false, true] {
+            let mut restore_source = io::FixedReader::new(&written);
+            let mut decoded_screen =
+                screen::decode(&mut restore_source, Allocator, screen_options()).unwrap();
+            let restored = &mut decoded_screen.screen;
+            decode(
+                &mut restore_source,
+                TerminalScreenKey::Primary,
+                restored,
+                DecodeOptions { compress },
+            )
+            .unwrap();
+            assert_eq!(
+                source_screen.pages.total_pages(),
+                restored.pages.total_pages(),
+            );
+
+            // The viewport shows the active area, so every history page is off
+            // screen and can be compressed. Pages in the active area are never
+            // compressed.
+            let active = restored.pages.get_top_left(point::Tag::Active).node;
+            let mut history_pages: usize = 0;
+            let mut current = restored.pages.pages.first;
+            // SAFETY: live nodes of the restored screen's PageList; `storage`
+            // reads only the representation tag and never restores a page.
+            unsafe {
+                while !current.is_null() {
+                    if current == active {
+                        break;
+                    }
+                    history_pages += 1;
+                    let expected_storage = if compress {
+                        Storage::Compressed
+                    } else {
+                        Storage::Resident
+                    };
+                    assert_eq!(expected_storage, Node::storage(current));
+                    current = (*current).next;
+                }
+            }
+            assert!(history_pages >= 3);
+            current = active;
+            // SAFETY: as above.
+            unsafe {
+                while !current.is_null() {
+                    assert_eq!(Storage::Resident, Node::storage(current));
+                    current = (*current).next;
+                }
+            }
+            assert_eq!(
+                if compress { history_pages } else { 0 },
+                restored.pages.memory_stats().compressed_pages,
+            );
+
+            // Formatting restores compressed pages on access, so compare
+            // contents only after the storage checks.
+            let actual = restored
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Screen(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(expected, actual);
+            decoded_screen.deinit();
+        }
 
         source_screen.deinit();
     }
@@ -954,8 +1106,10 @@ mod tests {
             &mut decode_source,
             TerminalScreenKey::Primary,
             &mut terminal_screen,
+            DecodeOptions { compress: true },
         )
         .unwrap();
+        assert_eq!(0, terminal_screen.pages.memory_stats().compressed_pages);
         assert_eq!(
             initial_first,
             terminal_screen
@@ -1013,6 +1167,7 @@ mod tests {
                     &mut source,
                     TerminalScreenKey::Primary,
                     &mut terminal_screen,
+                    DecodeOptions::default(),
                 ),
             );
             terminal_screen.pages.assert_integrity();

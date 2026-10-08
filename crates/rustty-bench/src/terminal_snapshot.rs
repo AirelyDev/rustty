@@ -443,6 +443,7 @@ impl TerminalSnapshot {
                 self_.alloc.into(),
                 &snapshot::DecodeOptions {
                     max_continuation_bytes: 1024 * 1024,
+                    compress_history: false,
                 },
             ) {
                 Ok(d) => d,
@@ -483,6 +484,7 @@ impl TerminalSnapshot {
                 self_.alloc.into(),
                 &snapshot::DecodeOptions {
                     max_continuation_bytes: 1024 * 1024,
+                    compress_history: false,
                 },
             ) {
                 Ok(d) => d,

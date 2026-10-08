@@ -393,6 +393,21 @@ pub struct DecodeOptions {
     /// Largest non-ground continuation the decoder may allocate and return.
     /// Set this to zero when only ground-state snapshots are acceptable.
     pub max_continuation_bytes: usize,
+
+    /// Compress each history page as soon as it is restored.
+    ///
+    /// Without this, restored history stays uncompressed until the caller
+    /// runs `Terminal.compress`. With it, the decode holds at most one
+    /// uncompressed history page at a time and the restored terminal starts
+    /// out compressed.
+    ///
+    /// A page that is on screen when it is restored stays uncompressed.
+    /// This only happens with `Decoder` if the caller scrolls the viewport
+    /// to the top of the scrollback between `next` calls.
+    ///
+    /// The snapshot format is unchanged, so this works with any snapshot.
+    /// It has no effect on platforms that do not support compression.
+    pub compress_history: bool,
 }
 
 /// PORT NOTE: `std.EnumMap(TerminalScreenKey, u64)` — a per-key array of
@@ -563,6 +578,9 @@ struct History {
     /// Terminal width at READY. Encoded pages assume this width and are
     /// dropped rather than mixed into a screen reflowed to another.
     cols: size::CellCountInt,
+
+    /// Options for each history page, taken from `ready`.
+    page_options: history::DecodeOptions,
 }
 
 struct Sequence {
@@ -1006,6 +1024,9 @@ impl<'s> Decoder<'s> {
             pending: screen_count,
             current: None,
             cols: result.cols,
+            page_options: history::DecodeOptions {
+                compress: options.compress_history,
+            },
         });
         Ok(Decoded {
             terminal: Some(result),
@@ -1189,7 +1210,7 @@ fn next_page(
         //
         // SAFETY: `restored` is a live screen owned by `t`; the exclusive
         // borrow lives only for this decode call.
-        match history::decode_page(source, unsafe { &mut *restored }) {
+        match history::decode_page(source, unsafe { &mut *restored }, state.page_options) {
             Ok(rows) => rows,
             // The page no longer fits the screen's scrollback limits,
             // e.g. because post-cut output consumed the budget, so it
@@ -1333,6 +1354,7 @@ mod tests {
     fn test_decode_options() -> DecodeOptions {
         DecodeOptions {
             max_continuation_bytes: 1024,
+            compress_history: false,
         }
     }
 
@@ -1828,6 +1850,7 @@ mod tests {
             Allocator,
             &DecodeOptions {
                 max_continuation_bytes: 1024,
+                compress_history: false,
             },
         )
         .unwrap();
@@ -2041,6 +2064,7 @@ mod tests {
                     Allocator,
                     &DecodeOptions {
                         max_continuation_bytes: 4096,
+                        compress_history: false,
                     },
                 )
                 .unwrap();

@@ -2,7 +2,7 @@
 //! `PageAllocation` tests, the recycled/retired-row default-state tests, and
 //! the UD80/UD131 `eraseRow` style-degrade tests.
 
-use super::{cell_codepoint, compressed_encoded_for_test};
+use super::{cell_codepoint, compressed_encoded_for_test, grow_cold_pages_for_test};
 use crate::alloc::testing::{with_handle, Config as FailingConfig, FailingAllocator};
 use crate::alloc::Global;
 use crate::page::{Capacity, Cell, ContentTag, Page, SemanticPrompt};
@@ -221,7 +221,7 @@ fn pagelist_builder_finish_is_transactional_on_allocation_failure() {
 // ref: test "PageList PageAllocation finalizes pages and preserves live state"
 #[test]
 fn pagelist_page_allocation_finalizes_pages_and_preserves_live_state() {
-    use crate::pagelist::builder::Location;
+    use crate::pagelist::builder::{FinalizeOptions, Location};
     use crate::pagelist::Builder;
 
     // Build an existing list with history, a two-row active area, an external
@@ -302,7 +302,9 @@ fn pagelist_page_allocation_finalizes_pages_and_preserves_live_state() {
             (*page).size.rows = 1;
             *(*page).get_row_and_cell(0, 0).cell = Cell::init('B' as u32);
         }
-        allocation.finalize(Location::Prepend).unwrap();
+        allocation
+            .finalize(Location::Prepend, FinalizeOptions::default())
+            .unwrap();
         allocation.deinit();
     }
     {
@@ -323,7 +325,9 @@ fn pagelist_page_allocation_finalizes_pages_and_preserves_live_state() {
             (*page).size.rows = 2;
             *(*page).get_row_and_cell(0, 0).cell = Cell::init('A' as u32);
         }
-        allocation.finalize(Location::Prepend).unwrap();
+        allocation
+            .finalize(Location::Prepend, FinalizeOptions::default())
+            .unwrap();
         allocation.deinit();
     }
 
@@ -362,10 +366,113 @@ fn pagelist_page_allocation_finalizes_pages_and_preserves_live_state() {
     result.deinit();
 }
 
+// ref: test "PageList PageAllocation compresses prepended pages unless visible"
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
+)]
+#[test]
+fn pagelist_page_allocation_compresses_prepended_pages_unless_visible() {
+    use crate::pagelist::builder::{FinalizeOptions, Location};
+    use crate::pagelist::Storage;
+
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    enum Vp {
+        Active,
+        Pin,
+        Top,
+    }
+    struct Case {
+        /// How to position the viewport before prepending.
+        viewport: Vp,
+
+        /// Whether the prepended page should end up compressed.
+        compressed: bool,
+    }
+    let cases = [
+        // The viewport shows the active area, far below the new page.
+        Case {
+            viewport: Vp::Active,
+            compressed: true,
+        },
+        // The viewport is pinned to existing history, which is still below
+        // the new page.
+        Case {
+            viewport: Vp::Pin,
+            compressed: true,
+        },
+        // The viewport follows the top of the scrollback, so the new page
+        // becomes the first visible page.
+        Case {
+            viewport: Vp::Top,
+            compressed: false,
+        },
+    ];
+
+    for case in cases {
+        let mut s = PageList::init(Global, Options::new(80, 24)).unwrap();
+        grow_cold_pages_for_test(&mut s, 1);
+        match case.viewport {
+            Vp::Active => {}
+            Vp::Pin => s.scroll(Scroll::Row(1)),
+            Vp::Top => s.scroll(Scroll::Top),
+        }
+        // (`Viewport` has no `Debug`, so compare with `assert!`.)
+        assert!(
+            match case.viewport {
+                Vp::Active => Viewport::Active,
+                Vp::Pin => Viewport::Pin,
+                Vp::Top => Viewport::Top,
+            } == s.viewport
+        );
+
+        // A full-size page so compression is worthwhile.
+        //
+        // PORT NOTE (raw-self seam): see the note on `PageList::allocate_page`.
+        let capacity = unsafe { crate::pagelist::Node::capacity(s.pages.first) };
+        let this: *mut PageList = &mut s;
+        let mut allocation = unsafe { PageList::allocate_page(this, capacity) }.unwrap();
+        // defer allocation.deinit();
+        let page = allocation.page();
+        unsafe {
+            (*page).size.rows = capacity.rows;
+            *(*page).get_row_and_cell(0, 0).cell = Cell::init('X' as u32);
+        }
+        allocation
+            .finalize(Location::Prepend, FinalizeOptions { compress: true })
+            .unwrap();
+        allocation.deinit();
+
+        let node = s.pages.first;
+        assert_eq!(case.compressed, unsafe {
+            crate::pagelist::Node::is_compressed(node)
+        });
+        assert_eq!(
+            if case.compressed { 1 } else { 0 },
+            s.memory_stats().compressed_pages
+        );
+        if case.compressed {
+            assert_eq!(Storage::Compressed, unsafe {
+                crate::pagelist::Node::storage(node)
+            });
+        }
+
+        // Reading the page uncompresses it with its contents intact.
+        assert_eq!('X' as u32, unsafe {
+            (*(*crate::pagelist::Node::page(node))
+                .get_row_and_cell(0, 0)
+                .cell)
+                .codepoint()
+        });
+        s.assert_integrity();
+        s.deinit();
+    }
+}
+
 // ref: test "PageList PageAllocation stays detached until finalize"
 #[test]
 fn pagelist_page_allocation_stays_detached_until_finalize() {
-    use crate::pagelist::builder::{FinalizeError, Location};
+    use crate::pagelist::builder::{FinalizeError, FinalizeOptions, Location};
 
     let mut result = PageList::init(
         Global,
@@ -431,7 +538,7 @@ fn pagelist_page_allocation_stays_detached_until_finalize() {
     .unwrap();
     // defer invalid.deinit();
     assert!(matches!(
-        invalid.finalize(Location::Prepend),
+        invalid.finalize(Location::Prepend, FinalizeOptions::default()),
         Err(FinalizeError::InvalidPageDimensions)
     ));
 
@@ -448,7 +555,7 @@ fn pagelist_page_allocation_stays_detached_until_finalize() {
 // ref: test "PageList PageAllocation rejects limits before modifying the destination"
 #[test]
 fn pagelist_page_allocation_rejects_limits_before_modifying_the_destination() {
-    use crate::pagelist::builder::{FinalizeError, Location};
+    use crate::pagelist::builder::{FinalizeError, FinalizeOptions, Location};
 
     let mut result = PageList::init(
         Global,
@@ -488,7 +595,9 @@ fn pagelist_page_allocation_rejects_limits_before_modifying_the_destination() {
         .unwrap();
         // defer allocation.deinit();
         unsafe { (*allocation.page()).size.rows = 1 };
-        allocation.finalize(Location::Prepend).unwrap();
+        allocation
+            .finalize(Location::Prepend, FinalizeOptions::default())
+            .unwrap();
         allocation.deinit();
     }
 
@@ -510,7 +619,7 @@ fn pagelist_page_allocation_rejects_limits_before_modifying_the_destination() {
     // defer allocation.deinit();
     unsafe { (*allocation.page()).size.rows = 1 };
     assert!(matches!(
-        allocation.finalize(Location::Prepend),
+        allocation.finalize(Location::Prepend, FinalizeOptions::default()),
         Err(FinalizeError::MaxSizeExceeded)
     ));
 

@@ -858,6 +858,8 @@ unsafe fn decoder_ready_terminal(
     // decoder field dies with this statement.
     let options = snapshot_core::DecodeOptions {
         max_continuation_bytes: unsafe { (*decoder).max_continuation_bytes },
+        // PORT NOTE: wired to the C option by P8-W5 T3.
+        compress_history: false,
     };
     // SAFETY: `decoder` is live (caller contract).
     let gpa = unsafe { decoder_gpa(decoder) };

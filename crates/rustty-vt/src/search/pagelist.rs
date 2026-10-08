@@ -965,7 +965,7 @@ mod tests {
     #[test]
     fn feed_discovers_pages_prepended_after_exhaustion() {
         use crate::page::{Capacity, Cell};
-        use crate::pagelist::builder::Location;
+        use crate::pagelist::builder::{FinalizeOptions, Location};
         use crate::pagelist::PageList;
 
         let alloc = Allocator;
@@ -1046,8 +1046,10 @@ mod tests {
                     *(*page).get_row_and_cell(x, 1).cell = Cell::init(*c as u32);
                 }
             }
-            // try allocation.finalize(.prepend);
-            allocation.finalize(Location::Prepend).unwrap();
+            // try allocation.finalize(.prepend, .{});
+            allocation
+                .finalize(Location::Prepend, FinalizeOptions::default())
+                .unwrap();
             allocation.deinit();
         }
         // const prepended = pages.pages.first.?;
