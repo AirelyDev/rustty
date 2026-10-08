@@ -11449,3 +11449,29 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `include/rustty.h`, links the native library and checks the bytes `rustty_size_report_encode` writes for a
   `SizeReportSize` value (RED against the old header: `SizeReportSize` is undeclared there). Arm (f)'s negative
   control still fires (a duplicate `SizeReportSize` -> `NEW COLLISION`).
+
+## N530 — gate drift at the a60e9e2a5 advance: G3b self-test line anchor, G4 leg B not runnable on macOS, two examples off upstream
+
+- **id**: N530 (used directly; reserved for P8-W0 T7). **status**: CLOSED. **severity**: medium (two gates unable to vote, two examples unfaithful).
+- **G3b self-test.** `--self-test` had one failing arm, `REAL NEG: lib_vt.zig:186 ... STALE`: its negative control was
+  anchored by line number and the advance moved the comment (186 -> 189). Fix: the control finds the line by the comment's
+  text (`Force-reference our memset override`), so the next advance cannot break it this way. It stays a real control: with
+  the anchor text changed to a string absent from the oracle (copy of the script), the arm dies with `StopIteration`
+  instead of silently passing; `--self-test` is GREEN with the real text. R5/R14 kept.
+- **G4 leg B (`.port/tools/cvt-parity.sh`).** It built the oracle twin with the example's own `zig build run`, which aborts
+  on macOS at the pin (N525, upstream `d65cb5128`), so the verdict was BLOCKED. It now builds the oracle example source
+  with Xcode clang in a scratch dir against the oracle's `zig-out` lib/headers (the N395 method `build-examples.sh`
+  documents), with the same BLOCKED (exit 3) checks `build-examples.sh` has (oracle at the pin and clean under `example/`
+  and `include/`, built headers equal the pin's, Mach-O lib present) and the N395 `pw=` mask `cvt_normalize` applies. Leg B's
+  meaning (Rustty example stdout byte-equal to the oracle's) is unchanged. Negative control: one expected line of
+  `c-vt-sgr` perturbed in the Rustty source -> `DIFFERS`, exit 1. Verdict over all 25 examples that have a Rustty twin:
+  GREEN, byte-identical (`.port/phase-8/w0/cvt-parity-at-a60e9e2a5.txt`); the 3 CMake examples have no `build.sh` and are
+  not run.
+- **Example divergences found by the run (2, not 1).** (1) `c-vt-effects`: Rustty-only "6. Desktop notification" /
+  "7. Progress report" sections, callbacks and `rustty_terminal_set` calls added by `384d62995` (P3-W6 T3, which ported
+  upstream `c3655ba25`/`47d602c42`/`628adaf30`; those exposed the effects in the C API but not in the example). No
+  recorded decision keeps them (searched NEW-FINDINGS, DECISIONS, NON_PORTS, the Phase 3 plan); removed, `main.c` is now
+  upstream's with the names mapped (R1). The C API is untouched. (2) `c-vt-formatter`: upstream `924c8a90d` (formatter
+  streams through a `GhosttyWriter`) changed the example to stream through a writer and print `(N bytes)` after the
+  output; the Rustty example still used `rustty_formatter_format_alloc` and printed `Formatted output (N bytes):`. The
+  writer API was already ported (`rustty_formatter_format`), so the example was brought to upstream's.
