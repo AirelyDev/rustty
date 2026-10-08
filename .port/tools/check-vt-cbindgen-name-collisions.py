@@ -34,26 +34,13 @@ import tempfile
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
-# Pre-existing collisions at P8-W5 T3 (2026-10-08). Each is recorded in
-# NEW-FINDINGS N551; the list can only shrink.
+# The pre-existing collisions of P8-W5 T3 (N551) were all fixed by P8-W5 T5;
+# the list can only shrink, so it stays empty.
 BASELINE = {
     # name: (reason, the exact set of "file (kind)" items that define it). A
     # name whose item set differs from its row (a third definition, or one
-    # gone) is RED, so the baseline cannot absorb a new collision.
-    "Data": ("render/kitty_graphics/selection_gesture `Data` enums; c_int-sized, the curated headers name each (N551)",
-             {"render.rs (enum)", "kitty_graphics.rs (enum)", "selection_gesture.rs (enum)"}),
-    "Encoder": ("key_encode/mouse_encode opaque handle aliases; pointer-sized, rustty.h names the key encoder for both (N551)",
-                {"mouse_encode.rs (type)", "key_encode.rs (type)"}),
-    "Event": ("key/mouse/selection-gesture opaque handle aliases; pointer-sized (N551)",
-              {"key_event.rs (type)", "selection_gesture.rs (type)", "mouse_event.rs (type)"}),
-    "KittyGraphics": ("terminal::KittyGraphics is an alias of kitty_graphics::KittyGraphics, the same type (N551)",
-                      {"kitty_graphics.rs (type)", "terminal/data.rs (type)"}),
-    "Parser": ("osc/sgr opaque handle aliases; pointer-sized, rustty.h names the OSC wrapper for both (N551)",
-               {"sgr.rs (type)", "osc.rs (type)"}),
-    "RowData": ("render/row `RowData` enums; c_int-sized (N551)",
-                {"render.rs (enum)", "row.rs (enum)"}),
-    "Size": ("size_report::Size vs mouse_encode::Size: DIFFERENT layouts; rustty.h declares rustty_size_report_encode with the mouse layout (N551, open)",
-             {"size_report.rs (struct)", "mouse_encode.rs (struct)"}),
+    # gone) is RED, so the baseline cannot absorb a new collision. EMPTY since
+    # P8-W5 T5 (N551 closed): every vt-c type carries its upstream C name.
 }
 
 ITEM_RE = re.compile(r"^\s*pub (struct|enum|union|type) ([A-Za-z_][A-Za-z0-9_]*)")

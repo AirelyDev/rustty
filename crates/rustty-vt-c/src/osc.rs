@@ -79,7 +79,7 @@ impl OscParserWrapper {
 
 /// C: RusttyOscParser (R2)
 // pub const Parser = ?*osc.Parser;
-pub type Parser = *mut OscParserWrapper;
+pub type OscParser = *mut OscParserWrapper;
 
 /// C: RusttyOscCommand (R2)
 // pub const Command = ?*osc.Command;
@@ -165,7 +165,7 @@ impl UnknownOscSequence {
 /// # Safety
 /// `alloc_`, if non-null, must point to a valid `CAllocator`; `result` must be
 /// writable storage for one `Parser`.
-pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut Parser) -> Result {
+pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut OscParser) -> Result {
     // const alloc = lib.alloc.default(alloc_);
     // SAFETY: a non-NULL `alloc_` is valid for the parser's life (the C API's
     // contract, N260).
@@ -204,7 +204,7 @@ pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut Parser) -> Result {
 //
 /// # Safety
 /// `parser_`, if non-null, must be a handle returned by `new`, not yet freed.
-pub unsafe fn free(parser_: Parser) {
+pub unsafe fn free(parser_: OscParser) {
     // C-built parsers always have an associated allocator.
     // const parser = parser_ orelse return;
     if parser_.is_null() {
@@ -229,7 +229,7 @@ pub unsafe fn free(parser_: Parser) {
 //
 /// # Safety
 /// `parser_` must be a non-null handle returned by `new`.
-pub unsafe fn reset(parser_: Parser) {
+pub unsafe fn reset(parser_: OscParser) {
     // parser_.?.reset();
     // SAFETY: `parser_` is non-null per the caller contract (`.?`); the last
     // command's borrow ends first.
@@ -245,7 +245,7 @@ pub unsafe fn reset(parser_: Parser) {
 //
 /// # Safety
 /// `parser_` must be a non-null handle returned by `new`.
-pub unsafe fn next(parser_: Parser, byte: u8) {
+pub unsafe fn next(parser_: OscParser, byte: u8) {
     // parser_.?.next(byte);
     // SAFETY: `parser_` is non-null per the caller contract (`.?`); the last
     // command's borrow ends first.
@@ -261,7 +261,7 @@ pub unsafe fn next(parser_: Parser, byte: u8) {
 //
 /// # Safety
 /// `parser_` must be a non-null handle returned by `new`.
-pub unsafe fn end(parser_: Parser, terminator: u8) -> Command {
+pub unsafe fn end(parser_: OscParser, terminator: u8) -> Command {
     // return parser_.?.end(terminator);
     // PORT NOTE: `osc::Parser::end` takes `Option<u8>` (the reference passes the
     // raw `u8` terminator; rustty wraps it in `Some`). It returns the command
@@ -340,7 +340,7 @@ const _: () = assert!(std::mem::size_of::<Option_>() == std::mem::size_of::<c_in
 /// `parser_`, if non-null, must be a handle returned by `new`; `value`, if
 /// non-null, must point to the option's input type (`size_t` for
 /// `UnknownMaxBytes`).
-pub unsafe fn set(parser_: Parser, option: c_int, value: *const c_void) -> Result {
+pub unsafe fn set(parser_: OscParser, option: c_int, value: *const c_void) -> Result {
     // _ = std.enums.fromInt(Option, @intFromEnum(option)) orelse { log.warn(...); return .invalid_value; };
     let Some(option) = Option_::from_c_int(option) else {
         crate::sys::log_fn(
@@ -607,7 +607,7 @@ mod tests {
     fn alloc() {
         with_test_allocator(|calloc| {
             // var p: Parser = undefined;
-            let mut p: Parser = std::ptr::null_mut();
+            let mut p: OscParser = std::ptr::null_mut();
             // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &p));
             assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut p) });
             // free(p);
@@ -624,7 +624,7 @@ mod tests {
     fn c_parser_captures_through_the_caller_allocator() {
         let counting = crate::test_util::CountingCAllocator::new();
         let calloc = counting.c_allocator();
-        let mut p: Parser = std::ptr::null_mut();
+        let mut p: OscParser = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut p) });
         let after_new = counting.alloc_calls.get();
         assert_eq!(1, after_new, "only the parser wrapper itself");
@@ -660,7 +660,7 @@ mod tests {
     fn c_parser_capture_falls_back_to_fixed_when_the_caller_allocator_fails() {
         let counting = crate::test_util::CountingCAllocator::new();
         let calloc = counting.c_allocator();
-        let mut p: Parser = std::ptr::null_mut();
+        let mut p: OscParser = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut p) });
         counting.reject.set(true);
 
@@ -715,7 +715,7 @@ mod tests {
     fn c_parser_capture_grows_by_remap_like_zig_realloc() {
         use rustty_vt::alloc::testing::{Config, CountingAllocator, FailingAllocator};
 
-        let feed_long_osc52 = |p: Parser| {
+        let feed_long_osc52 = |p: OscParser| {
             for &b in b"52;c;" {
                 unsafe { next(p, b) };
             }
@@ -730,7 +730,7 @@ mod tests {
 
         let counting = CountingAllocator::over_heap();
         let calloc = counting.allocator();
-        let mut p: Parser = std::ptr::null_mut();
+        let mut p: OscParser = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut p) });
         assert_eq!(
             1,
@@ -754,7 +754,7 @@ mod tests {
             ..Config::default()
         });
         let calloc = failing.allocator();
-        let mut p: Parser = std::ptr::null_mut();
+        let mut p: OscParser = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut p) });
         feed_long_osc52(p);
         assert!(
@@ -767,7 +767,7 @@ mod tests {
         assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
 
         // NULL: the Rust heap (`lib.alloc.default(null)`), same result.
-        let mut p: Parser = std::ptr::null_mut();
+        let mut p: OscParser = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(None, &mut p) });
         feed_long_osc52(p);
         unsafe { free(p) };
@@ -801,7 +801,7 @@ mod tests {
             )
         });
 
-        let mut p: Parser = std::ptr::null_mut();
+        let mut p: OscParser = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(None, &mut p) });
         unsafe { next(p, b'2') };
         let cmd = unsafe { end(p, 0x07) };
@@ -824,7 +824,7 @@ mod tests {
     fn change_window_title() {
         with_test_allocator(|calloc| {
             // var p: Parser = undefined;
-            let mut p: Parser = std::ptr::null_mut();
+            let mut p: OscParser = std::ptr::null_mut();
             // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &p));
             assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut p) });
             // defer free(p);
@@ -866,7 +866,7 @@ mod tests {
     fn unknown() {
         with_test_allocator(|calloc| {
             // var p: Parser = undefined;
-            let mut p: Parser = std::ptr::null_mut();
+            let mut p: OscParser = std::ptr::null_mut();
             // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &p));
             assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut p) });
             // defer free(p);
@@ -986,7 +986,7 @@ mod tests {
     // allocator and is truncated at the limit.
     #[test]
     fn osc_set_clears_the_command_and_checks_the_option() {
-        let mut p: Parser = std::ptr::null_mut();
+        let mut p: OscParser = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(None, &mut p) });
         let max_bytes: usize = 8;
         assert_eq!(Result::InvalidValue, unsafe {
@@ -1154,7 +1154,7 @@ mod tests {
 
         let counting = CountingAllocator::over_heap();
         let calloc = counting.allocator();
-        let mut p: Parser = std::ptr::null_mut();
+        let mut p: OscParser = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut p) });
         assert_eq!(1, counting.alloc_calls.get(), "the parser itself");
 
@@ -1236,7 +1236,7 @@ mod tests {
         for input in [&b"4;1;?;2;?;3;?"[..], &b"21;foreground=?;background=?"[..]] {
             let counting = CountingAllocator::over_heap();
             let calloc = counting.allocator();
-            let mut p: Parser = std::ptr::null_mut();
+            let mut p: OscParser = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut p) });
             for &b in input {
                 unsafe { next(p, b) };
@@ -1269,7 +1269,7 @@ mod tests {
 
         let counting = CountingAllocator::over_heap();
         let calloc = counting.allocator();
-        let mut p: Parser = std::ptr::null_mut();
+        let mut p: OscParser = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut p) });
         for &b in b"2;a borrowed title" {
             unsafe { next(p, b) };
@@ -1305,7 +1305,7 @@ mod tests {
     /// failed.
     fn osc_sweep_once(failing: &rustty_vt::alloc::testing::FailingAllocator, what: &str) -> bool {
         let calloc = failing.allocator();
-        let mut p: Parser = std::ptr::null_mut();
+        let mut p: OscParser = std::ptr::null_mut();
         match unsafe { new(Some(&calloc), &mut p) } {
             Result::Success => {}
             Result::OutOfMemory => {

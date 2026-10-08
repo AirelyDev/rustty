@@ -11402,7 +11402,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **id**: N551 (P8-W5 provisional range). Found in the review of P8-W5 T3 (fix round 1). **severity**: medium for
   the regression (the published full header declared wrong by-value layouts), low to medium for the
   pre-existing rows below. **kind**: port defect (Rustty only; Zig exports carry their own C names).
-  **status**: the T3 regression CLOSED; the pre-existing collisions OPEN, baselined.
+  **status**: CLOSED (the T3 regression by P8-W5 T3; the 7 pre-existing collisions by P8-W5 T5).
 - **cause**: cbindgen keys types by their bare Rust name, not by module path. P8-W5 T3 added
   `rustty_vt_c::osc::UnknownC` (the OSC `Unknown.C` projection) beside `rustty_vt_c::sgr::UnknownC`. cbindgen kept
   one `UnknownC`, the OSC one, so `include/rustty.h` declared `rustty_sgr_unknown_full`,
@@ -11429,3 +11429,23 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (pointer- or c_int-sized) but name the wrong types. Fixing them means renaming Rust types across vt-c, which is
   outside P8-W5 T3; owner: the coordinator to schedule. Each fix removes its baseline row (the arm goes RED on a
   stale row).
+
+- **closure (P8-W5 T5)**: each colliding Rust type now carries its upstream C name (`Rustty` + the C name,
+  minus the prefix), by renaming the Rust type (cbindgen has no per-item rename, and `[export.rename]` is keyed by
+  the bare name that collides). No layout, symbol or discriminant moved; `include/rustty.h` was regenerated with
+  `cargo run -p xtask -- header-gen`. A5 arm (f)'s BASELINE is EMPTY.
+
+  | old name (modules) | new name | wrong declaration in rustty.h before | correct after |
+  | --- | --- | --- | --- |
+  | `Size` (`size_report`, `mouse_encode`) | `SizeReportSize`, `MouseEncoderSize` | `rustty_size_report_encode(int, Size, ...)` over the 9-field mouse layout `{size, screen_*, cell_*, padding_*}` (real ABI defect) | `SizeReportSize {rows, columns, cell_width, cell_height}` |
+  | `Parser` (`osc`, `sgr`) | `OscParser`, `SgrParser` | all `rustty_sgr_*` over `OscParserWrapper *` | `SgrParser` = `ParserWrapper *`; `rustty_osc_*` over `OscParser` |
+  | `Event` (`key_event`, `mouse_event`, `selection_gesture`) | `KeyEvent`, `MouseEvent`, `SelectionGestureEvent` | `rustty_mouse_event_*` and `rustty_selection_gesture_event_*` over `KeyEventWrapper *` | each over its own wrapper pointer |
+  | `Encoder` (`key_encode`, `mouse_encode`) | `KeyEncoder`, `MouseEncoder` | `rustty_mouse_encoder_*` over `KeyEncoderWrapper *` | `MouseEncoder` = `MouseEncoderWrapper *` |
+  | `Data` (`render`, `kitty_graphics`, `selection_gesture`) | `RenderStateData`, `KittyGraphicsData`, `SelectionGestureData` | `rustty_render_state_get_multi` and the selection-gesture getter over the kitty-graphics `Data` (3 enumerators) | each over its own enum |
+  | `RowData` (`render`, `row`) | `RenderStateRowData` (render), `RowData` (row) | `rustty_row_get_multi` over the render row enum | `RowData` is the `row` enum (wrap, grapheme, ...); the render getter uses `RenderStateRowData` |
+  | `KittyGraphics` (`kitty_graphics`, `terminal::data` alias) | one type; `terminal::data` re-exports it | two typedefs of one type | one typedef |
+
+  Guard: arm (a5) of `check_rustty_vt_headers.sh` compiles `test/rustty-h/size_report_abi.c` against the generated
+  `include/rustty.h`, links the native library and checks the bytes `rustty_size_report_encode` writes for a
+  `SizeReportSize` value (RED against the old header: `SizeReportSize` is undeclared there). Arm (f)'s negative
+  control still fires (a duplicate `SizeReportSize` -> `NEW COLLISION`).

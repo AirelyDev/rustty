@@ -73,7 +73,7 @@ pub type Gesture = *mut GestureWrapper;
 
 /// C: GhosttySelectionGestureEvent -> RusttySelectionGestureEvent (R2)
 // pub const Event = ?*EventWrapper;
-pub type Event = *mut EventWrapper;
+pub type SelectionGestureEvent = *mut EventWrapper;
 
 // const GestureWrapper = struct {
 //     alloc: std.mem.Allocator,
@@ -544,7 +544,7 @@ const _: () = assert!(std::mem::align_of::<BehaviorsRaw>() == std::mem::align_of
 // pub const Data = enum(c_int) { click_count = 0, dragged = 1, autoscroll = 2, behavior = 3, anchor = 4 };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Data {
+pub enum SelectionGestureData {
     ClickCount = 0,
     Dragged = 1,
     Autoscroll = 2,
@@ -556,20 +556,20 @@ pub enum Data {
 // (`include/rustty/vt/selection.h`: `RUSTTY_SELECTION_GESTURE_DATA_MAX_VALUE =
 // RUSTTY_ENUM_MAX_VALUE`), which is what makes reading a `get_multi` key array
 // element as a raw `c_int` ABI-neutral.
-const _: () = assert!(std::mem::size_of::<Data>() == std::mem::size_of::<c_int>());
+const _: () = assert!(std::mem::size_of::<SelectionGestureData>() == std::mem::size_of::<c_int>());
 
-impl Data {
+impl SelectionGestureData {
     /// Narrow an inbound C integer to a `Data`, mirroring `std.enums.fromInt`;
     /// `None` outside the declared range.
     // PORT NOTE: this is the reference's
     // `std.enums.fromInt(Data, @intFromEnum(data))` guard from `get`
     // (`selection_gesture.zig:361-373`); `Data` is a contiguous `#[repr(C)]`
     // enum here, so the range check IS `fromInt`.
-    pub fn from_c_int(v: c_int) -> Option<Data> {
+    pub fn from_c_int(v: c_int) -> Option<SelectionGestureData> {
         // contiguous 0..=4
         if (0..=4).contains(&v) {
             // SAFETY: `v` is a valid `Data` discriminant (range-checked above).
-            Some(unsafe { std::mem::transmute::<c_int, Data>(v) })
+            Some(unsafe { std::mem::transmute::<c_int, SelectionGestureData>(v) })
         } else {
             None
         }
@@ -741,7 +741,7 @@ pub unsafe fn new(alloc_: Option<&CAllocator>, out_gesture: *mut Gesture) -> Res
 /// non-null, must be a valid writable pointer to an `Event`.
 pub unsafe fn event_new(
     alloc_: Option<&CAllocator>,
-    out_event: *mut Event,
+    out_event: *mut SelectionGestureEvent,
     event_type: EventType,
 ) -> Result {
     // const out = out_event orelse return .invalid_value;
@@ -841,7 +841,7 @@ pub unsafe fn free(gesture_: Gesture, terminal: terminal_c::Terminal) {
 // }
 /// # Safety
 /// `event_`, if non-null, must be a handle returned by `event_new`.
-pub unsafe fn event_free(event_: Event) {
+pub unsafe fn event_free(event_: SelectionGestureEvent) {
     // const event = event_ orelse return;
     if event_.is_null() {
         return;
@@ -908,7 +908,7 @@ pub unsafe fn reset(gesture_: Gesture, terminal: terminal_c::Terminal) {
 pub unsafe fn handle_event(
     gesture_: Gesture,
     terminal: terminal_c::Terminal,
-    event_: Event,
+    event_: SelectionGestureEvent,
     out_selection: *mut selection_c::CSelection,
 ) -> Result {
     // const wrapper = gesture_ orelse return .invalid_value;
@@ -1049,7 +1049,11 @@ unsafe fn handle_selection_result(
 // wrapper in `lib.rs`.
 /// # Safety
 /// `value`, if non-null, must point to a value of the type required by `option`.
-pub unsafe fn event_set(event_: Event, option: EventOption, value: *const c_void) -> Result {
+pub unsafe fn event_set(
+    event_: SelectionGestureEvent,
+    option: EventOption,
+    value: *const c_void,
+) -> Result {
     // SAFETY: `value` validity/type is the caller's contract per `option`.
     unsafe { event_set_typed(event_, option, value) }
 }
@@ -1070,7 +1074,7 @@ pub unsafe fn event_set(event_: Event, option: EventOption, value: *const c_void
 pub unsafe fn get(
     gesture_: Gesture,
     terminal: terminal_c::Terminal,
-    data: Data,
+    data: SelectionGestureData,
     out: *mut c_void,
 ) -> Result {
     // const out_ptr = out orelse return .invalid_value;
@@ -1096,7 +1100,7 @@ pub unsafe fn get_checked(
     data: c_int,
     out: *mut c_void,
 ) -> Result {
-    let Some(d) = Data::from_c_int(data) else {
+    let Some(d) = SelectionGestureData::from_c_int(data) else {
         // log.warn("selection_gesture_get invalid data value={d}", .{...});
         crate::sys::log_fn(
             crate::sys::StdLevel::Warn,
@@ -1168,7 +1172,7 @@ pub unsafe fn get_multi(
 unsafe fn get_typed(
     gesture_: Gesture,
     terminal: terminal_c::Terminal,
-    data: Data,
+    data: SelectionGestureData,
     out: *mut c_void,
 ) -> Result {
     // const wrapper = gesture_ orelse return .invalid_value;
@@ -1186,17 +1190,17 @@ unsafe fn get_typed(
 
     match data {
         // .click_count => out.* = wrapper.gesture.left_click_count,
-        Data::ClickCount => {
+        SelectionGestureData::ClickCount => {
             // SAFETY: `out` points to a writable `u8`.
             unsafe { *(out as *mut u8) = wrapper.gesture.left_click_count };
         }
         // .dragged => out.* = wrapper.gesture.left_click_dragged,
-        Data::Dragged => {
+        SelectionGestureData::Dragged => {
             // SAFETY: `out` points to a writable `bool`.
             unsafe { *(out as *mut bool) = wrapper.gesture.left_click_dragged };
         }
         // .autoscroll => out.* = wrapper.gesture.left_drag_autoscroll,
-        Data::Autoscroll => {
+        SelectionGestureData::Autoscroll => {
             // SAFETY: `out` points to a writable `Autoscroll`.
             unsafe {
                 *(out as *mut Autoscroll) =
@@ -1204,7 +1208,7 @@ unsafe fn get_typed(
             };
         }
         // .behavior => out.* = wrapper.gesture.left_click_behavior,
-        Data::Behavior => {
+        SelectionGestureData::Behavior => {
             // SAFETY: `out` points to a writable `Behavior`.
             unsafe {
                 *(out as *mut Behavior) = Behavior::from_zig(wrapper.gesture.left_click_behavior)
@@ -1214,7 +1218,7 @@ unsafe fn get_typed(
         //     const pin = wrapper.gesture.validatedLeftClickPin(&t.screens) orelse return .no_value;
         //     out.* = .fromPin(pin.*);
         // },
-        Data::Anchor => {
+        SelectionGestureData::Anchor => {
             // SAFETY: `t` is a live `ZigTerminal`; raw-ptr read of `screens`.
             let screens = unsafe { &(*t).screens };
             let pin = match wrapper.gesture.validated_left_click_pin(screens) {
@@ -1243,7 +1247,11 @@ unsafe fn get_typed(
 // }
 /// # Safety
 /// `value`, if non-null, must point to a value of the type required by `option`.
-unsafe fn event_set_typed(event_: Event, option: EventOption, value: *const c_void) -> Result {
+unsafe fn event_set_typed(
+    event_: SelectionGestureEvent,
+    option: EventOption,
+    value: *const c_void,
+) -> Result {
     // const event = event_ orelse return .invalid_value;
     if event_.is_null() {
         return Result::InvalidValue;

@@ -274,7 +274,7 @@ static DECLS: &[TypeDecl] = {
     use crate::formatter::{ScreenOptionsExtra, TerminalOptions, TerminalOptionsExtra};
     use crate::grid_ref::CGridRef;
     use crate::kitty_graphics::PlacementRenderInfo;
-    use crate::mouse_encode::Size as MouseEncoderSize;
+    use crate::mouse_encode::MouseEncoderSize;
     use crate::mouse_event::Position as MousePosition;
     use crate::point::{PointC, PointCValue};
     use crate::render::Colors;
@@ -282,7 +282,7 @@ static DECLS: &[TypeDecl] = {
     use crate::selection::{SelectWordBetweenOptions, SelectWordOptions};
     use crate::selection_gesture::{Behaviors, Geometry};
     use crate::sgr::{AttributeC, CValue as SgrCValue, UnknownC};
-    use crate::size_report::Size as SizeReportSize;
+    use crate::size_report::SizeReportSize;
     use crate::style::{Color as StyleColor, ColorValue as StyleColorValue, Style};
     use crate::sys::Image as SysImage;
     use crate::terminal::{DesktopNotification, ProgressReport, TerminalScrollbar};
@@ -1816,7 +1816,7 @@ static DECLS: &[TypeDecl] = {
             "RusttyKittyGraphicsData",
             "RUSTTY_KITTY_GRAPHICS_DATA_",
             enum_values!(
-                crate::kitty_graphics::Data,
+                crate::kitty_graphics::KittyGraphicsData,
                 [
                     ("invalid", Invalid),
                     ("placement_iterator", PlacementIterator),
@@ -2208,7 +2208,7 @@ static DECLS: &[TypeDecl] = {
             "RusttyRenderStateData",
             "RUSTTY_RENDER_STATE_DATA_",
             enum_values!(
-                crate::render::Data,
+                crate::render::RenderStateData,
                 [
                     ("invalid", Invalid),
                     ("cols", Cols),
@@ -2278,7 +2278,7 @@ static DECLS: &[TypeDecl] = {
             "RusttyRenderStateRowData",
             "RUSTTY_RENDER_STATE_ROW_DATA_",
             enum_values!(
-                crate::render::RowData,
+                crate::render::RenderStateRowData,
                 [
                     ("invalid", Invalid),
                     ("dirty", Dirty),
@@ -2428,7 +2428,7 @@ static DECLS: &[TypeDecl] = {
             "RusttySelectionGestureData",
             "RUSTTY_SELECTION_GESTURE_DATA_",
             enum_values!(
-                crate::selection_gesture::Data,
+                crate::selection_gesture::SelectionGestureData,
                 [
                     ("click_count", ClickCount),
                     ("dragged", Dragged),
@@ -3685,7 +3685,7 @@ mod tests {
         // try std.testing.expectEqual(@as(i64, @intFromEnum(render.Data.dirty)),
         //     data.get("values").?.object.get("DIRTY").?.integer);
         assert_eq!(
-            crate::render::Data::Dirty as i64,
+            crate::render::RenderStateData::Dirty as i64,
             get(get(data, "values").as_object(), "DIRTY").as_int()
         );
 

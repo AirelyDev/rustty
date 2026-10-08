@@ -24,28 +24,28 @@ fn active_point(x: u16, y: u16) -> PointC {
 // `event.?.event.press.<field>` directly off the active union member; in Rust
 // the payload is the `EventPayload::Press` variant and the borrowed
 // `word_boundary_codepoints`/`behaviors` are rebuilt from event-owned storage.
-fn press_xpos(event: Event) -> f64 {
+fn press_xpos(event: SelectionGestureEvent) -> f64 {
     match &unsafe { &*event }.event {
         EventPayload::Press(p) => p.xpos,
         _ => unreachable!(),
     }
 }
 
-fn press_ypos(event: Event) -> f64 {
+fn press_ypos(event: SelectionGestureEvent) -> f64 {
     match &unsafe { &*event }.event {
         EventPayload::Press(p) => p.ypos,
         _ => unreachable!(),
     }
 }
 
-fn press_max_distance(event: Event) -> f64 {
+fn press_max_distance(event: SelectionGestureEvent) -> f64 {
     match &unsafe { &*event }.event {
         EventPayload::Press(p) => p.max_distance,
         _ => unreachable!(),
     }
 }
 
-fn press_word_boundaries(event: Event) -> Vec<u32> {
+fn press_word_boundaries(event: SelectionGestureEvent) -> Vec<u32> {
     let ev = unsafe { &*event };
     match &ev.event {
         EventPayload::Press(_) => ev.word_boundaries().to_vec(),
@@ -53,7 +53,7 @@ fn press_word_boundaries(event: Event) -> Vec<u32> {
     }
 }
 
-fn press_behaviors(event: Event) -> [sg::Behavior; 3] {
+fn press_behaviors(event: SelectionGestureEvent) -> [sg::Behavior; 3] {
     unsafe { &*event }.behaviors
 }
 
@@ -77,7 +77,7 @@ fn selection_gesture_lifecycle_and_get() {
             get(
                 gesture,
                 terminal,
-                Data::ClickCount,
+                SelectionGestureData::ClickCount,
                 &mut click_count as *mut _ as *mut c_void,
             )
         });
@@ -90,7 +90,7 @@ fn selection_gesture_lifecycle_and_get() {
             get(
                 gesture,
                 terminal,
-                Data::Dragged,
+                SelectionGestureData::Dragged,
                 &mut dragged as *mut _ as *mut c_void,
             )
         });
@@ -102,7 +102,7 @@ fn selection_gesture_lifecycle_and_get() {
             get(
                 gesture,
                 terminal,
-                Data::Autoscroll,
+                SelectionGestureData::Autoscroll,
                 &mut autoscroll as *mut _ as *mut c_void,
             )
         });
@@ -115,7 +115,7 @@ fn selection_gesture_lifecycle_and_get() {
             get(
                 gesture,
                 terminal,
-                Data::Behavior,
+                SelectionGestureData::Behavior,
                 &mut behavior as *mut _ as *mut c_void,
             )
         });
@@ -129,7 +129,7 @@ fn selection_gesture_lifecycle_and_get() {
             get(
                 gesture,
                 terminal,
-                Data::Anchor,
+                SelectionGestureData::Anchor,
                 &mut anchor as *mut _ as *mut c_void,
             )
         });
@@ -153,10 +153,10 @@ fn selection_gesture_get_multi() {
 
         // const keys = [_]Data{ .click_count, .dragged, .autoscroll, .behavior };
         let keys = [
-            Data::ClickCount,
-            Data::Dragged,
-            Data::Autoscroll,
-            Data::Behavior,
+            SelectionGestureData::ClickCount,
+            SelectionGestureData::Dragged,
+            SelectionGestureData::Autoscroll,
+            SelectionGestureData::Behavior,
         ];
         let mut click_count: u8 = 255;
         let mut dragged = true;
@@ -207,7 +207,11 @@ fn selection_gesture_get_multi_returns_first_failing_index() {
         assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut gesture) });
 
         // const keys = [_]Data{ .click_count, .anchor, .dragged };
-        let keys = [Data::ClickCount, Data::Anchor, Data::Dragged];
+        let keys = [
+            SelectionGestureData::ClickCount,
+            SelectionGestureData::Anchor,
+            SelectionGestureData::Dragged,
+        ];
         let mut click_count: u8 = 255;
         let mut anchor: grid_ref::CGridRef = grid_ref::CGridRef::default();
         let mut dragged = true;
@@ -246,7 +250,7 @@ fn selection_gesture_get_multi_returns_first_failing_index() {
 #[test]
 fn selection_gesture_event_set_clear_and_free() {
     with_test_allocator(|alloc| {
-        let mut event: Event = std::ptr::null_mut();
+        let mut event: SelectionGestureEvent = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
             event_new(Some(alloc), &mut event, EventType::Press)
         });
@@ -297,7 +301,7 @@ fn selection_gesture_event_set_clear_and_free() {
 #[test]
 fn selection_gesture_event_copies_clears_and_frees_codepoints() {
     with_test_allocator(|alloc| {
-        let mut event: Event = std::ptr::null_mut();
+        let mut event: SelectionGestureEvent = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
             event_new(Some(alloc), &mut event, EventType::Press)
         });
@@ -374,7 +378,7 @@ fn selection_gesture_event_copies_clears_and_frees_codepoints() {
 #[test]
 fn selection_gesture_event_behaviors() {
     with_test_allocator(|alloc| {
-        let mut event: Event = std::ptr::null_mut();
+        let mut event: SelectionGestureEvent = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
             event_new(Some(alloc), &mut event, EventType::Press)
         });
@@ -415,7 +419,7 @@ fn selection_gesture_event_applies_press() {
         let mut gesture: Gesture = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut gesture) });
 
-        let mut press_event: Event = std::ptr::null_mut();
+        let mut press_event: SelectionGestureEvent = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
             event_new(Some(alloc), &mut press_event, EventType::Press)
         });
@@ -481,7 +485,7 @@ fn selection_gesture_event_press_requires_ref() {
         let mut gesture: Gesture = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut gesture) });
 
-        let mut press_event: Event = std::ptr::null_mut();
+        let mut press_event: SelectionGestureEvent = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
             event_new(Some(alloc), &mut press_event, EventType::Press)
         });
@@ -510,7 +514,7 @@ fn selection_gesture_event_null_output_still_reports_no_selection() {
         let mut gesture: Gesture = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut gesture) });
 
-        let mut press_event: Event = std::ptr::null_mut();
+        let mut press_event: SelectionGestureEvent = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
             event_new(Some(alloc), &mut press_event, EventType::Press)
         });
@@ -550,12 +554,12 @@ fn selection_gesture_event_applies_release() {
         let mut gesture: Gesture = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut gesture) });
 
-        let mut press_event: Event = std::ptr::null_mut();
+        let mut press_event: SelectionGestureEvent = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
             event_new(Some(alloc), &mut press_event, EventType::Press)
         });
 
-        let mut release_event: Event = std::ptr::null_mut();
+        let mut release_event: SelectionGestureEvent = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
             event_new(Some(alloc), &mut release_event, EventType::Release)
         });
@@ -591,7 +595,7 @@ fn selection_gesture_event_applies_release() {
             get(
                 gesture,
                 terminal,
-                Data::Dragged,
+                SelectionGestureData::Dragged,
                 &mut dragged as *mut _ as *mut c_void,
             )
         });
@@ -627,12 +631,12 @@ fn selection_gesture_release_without_ref_marks_dragged() {
         let mut gesture: Gesture = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut gesture) });
 
-        let mut press_event: Event = std::ptr::null_mut();
+        let mut press_event: SelectionGestureEvent = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
             event_new(Some(alloc), &mut press_event, EventType::Press)
         });
 
-        let mut release_event: Event = std::ptr::null_mut();
+        let mut release_event: SelectionGestureEvent = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
             event_new(Some(alloc), &mut release_event, EventType::Release)
         });
@@ -661,7 +665,7 @@ fn selection_gesture_release_without_ref_marks_dragged() {
             get(
                 gesture,
                 terminal,
-                Data::Dragged,
+                SelectionGestureData::Dragged,
                 &mut dragged as *mut _ as *mut c_void,
             )
         });
@@ -689,12 +693,12 @@ fn selection_gesture_event_applies_drag() {
         let mut gesture: Gesture = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut gesture) });
 
-        let mut press_event: Event = std::ptr::null_mut();
+        let mut press_event: SelectionGestureEvent = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
             event_new(Some(alloc), &mut press_event, EventType::Press)
         });
 
-        let mut drag_event: Event = std::ptr::null_mut();
+        let mut drag_event: SelectionGestureEvent = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
             event_new(Some(alloc), &mut drag_event, EventType::Drag)
         });
@@ -769,7 +773,7 @@ fn selection_gesture_event_applies_drag() {
             get(
                 gesture,
                 terminal,
-                Data::Dragged,
+                SelectionGestureData::Dragged,
                 &mut dragged as *mut _ as *mut c_void,
             )
         });
@@ -794,7 +798,7 @@ fn selection_gesture_drag_requires_ref_and_geometry() {
         let mut gesture: Gesture = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut gesture) });
 
-        let mut drag_event: Event = std::ptr::null_mut();
+        let mut drag_event: SelectionGestureEvent = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
             event_new(Some(alloc), &mut drag_event, EventType::Drag)
         });
@@ -856,17 +860,17 @@ fn selection_gesture_event_applies_autoscroll_tick() {
         let mut gesture: Gesture = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut gesture) });
 
-        let mut press_event: Event = std::ptr::null_mut();
+        let mut press_event: SelectionGestureEvent = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
             event_new(Some(alloc), &mut press_event, EventType::Press)
         });
 
-        let mut drag_event: Event = std::ptr::null_mut();
+        let mut drag_event: SelectionGestureEvent = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
             event_new(Some(alloc), &mut drag_event, EventType::Drag)
         });
 
-        let mut tick_event: Event = std::ptr::null_mut();
+        let mut tick_event: SelectionGestureEvent = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
             event_new(Some(alloc), &mut tick_event, EventType::AutoscrollTick)
         });
@@ -937,7 +941,7 @@ fn selection_gesture_event_applies_autoscroll_tick() {
             get(
                 gesture,
                 terminal,
-                Data::Autoscroll,
+                SelectionGestureData::Autoscroll,
                 &mut autoscroll as *mut _ as *mut c_void,
             )
         });
@@ -992,7 +996,7 @@ fn selection_gesture_autoscroll_tick_requires_viewport_and_geometry() {
         let mut gesture: Gesture = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut gesture) });
 
-        let mut tick_event: Event = std::ptr::null_mut();
+        let mut tick_event: SelectionGestureEvent = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
             event_new(Some(alloc), &mut tick_event, EventType::AutoscrollTick)
         });
@@ -1048,12 +1052,12 @@ fn selection_gesture_event_applies_deep_press() {
         let mut gesture: Gesture = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut gesture) });
 
-        let mut press_event: Event = std::ptr::null_mut();
+        let mut press_event: SelectionGestureEvent = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
             event_new(Some(alloc), &mut press_event, EventType::Press)
         });
 
-        let mut deep_press_event: Event = std::ptr::null_mut();
+        let mut deep_press_event: SelectionGestureEvent = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
             event_new(Some(alloc), &mut deep_press_event, EventType::DeepPress)
         });
@@ -1085,7 +1089,7 @@ fn selection_gesture_event_applies_deep_press() {
             get(
                 gesture,
                 terminal,
-                Data::Dragged,
+                SelectionGestureData::Dragged,
                 &mut dragged as *mut _ as *mut c_void,
             )
         });
@@ -1121,7 +1125,7 @@ fn selection_gesture_deep_press_without_active_anchor_returns_no_value() {
         let mut gesture: Gesture = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut gesture) });
 
-        let mut deep_press_event: Event = std::ptr::null_mut();
+        let mut deep_press_event: SelectionGestureEvent = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
             event_new(Some(alloc), &mut deep_press_event, EventType::DeepPress)
         });
@@ -1186,7 +1190,7 @@ fn gesture_new_rejecting_allocator_out_of_memory() {
 fn event_new_free_uses_caller_allocator() {
     let stats = crate::test_util::CountingCAllocator::new();
     let calloc = stats.c_allocator();
-    let mut event: Event = std::ptr::null_mut();
+    let mut event: SelectionGestureEvent = std::ptr::null_mut();
     assert_eq!(Result::Success, unsafe {
         event_new(Some(&calloc), &mut event, EventType::Press)
     });
@@ -1202,7 +1206,7 @@ fn event_new_rejecting_allocator_out_of_memory() {
     let stats = crate::test_util::CountingCAllocator::new();
     stats.reject.set(true);
     let calloc = stats.c_allocator();
-    let mut event: Event = std::ptr::null_mut();
+    let mut event: SelectionGestureEvent = std::ptr::null_mut();
     assert_eq!(Result::OutOfMemory, unsafe {
         event_new(Some(&calloc), &mut event, EventType::Press)
     });
@@ -1225,7 +1229,7 @@ fn event_set_behaviors_rejects_out_of_range_c_values() {
     const OPT_BEHAVIORS: c_int = EventOption::Behaviors as c_int;
 
     with_test_allocator(|alloc| {
-        let mut event: Event = std::ptr::null_mut();
+        let mut event: SelectionGestureEvent = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
             event_new(Some(alloc), &mut event, EventType::Press)
         });
@@ -1299,7 +1303,7 @@ fn get_multi_rejects_out_of_range_c_keys() {
 
         // [ .click_count, <raw 99> ]: the valid prefix is processed first, then
         // the bad key stops the walk at index 1.
-        let keys: [c_int; 2] = [Data::ClickCount as c_int, 99];
+        let keys: [c_int; 2] = [SelectionGestureData::ClickCount as c_int, 99];
         let mut click_count: u8 = 255;
         let mut dragged = true;
         let mut values = [
@@ -1347,7 +1351,7 @@ fn get_multi_rejects_out_of_range_c_keys() {
 // the invalid-codepoint leak (UD314).
 // ---------------------------------------------------------------------------
 
-fn set_codepoints(event: Event, values: &[u32]) -> Result {
+fn set_codepoints(event: SelectionGestureEvent, values: &[u32]) -> Result {
     let in_ = Codepoints {
         ptr: values.as_ptr(),
         len: values.len(),
@@ -1368,7 +1372,7 @@ fn event_codepoints_route_through_the_event_allocator() {
     let calloc = counting.allocator();
     let wrapper_len = std::mem::size_of::<EventWrapper>();
 
-    let mut event: Event = std::ptr::null_mut();
+    let mut event: SelectionGestureEvent = std::ptr::null_mut();
     assert_eq!(Result::Success, unsafe {
         event_new(Some(&calloc), &mut event, EventType::Press)
     });
@@ -1457,7 +1461,7 @@ fn event_codepoints_allocation_failure_is_out_of_memory() {
         ..Config::default()
     });
     let calloc = failing.allocator();
-    let mut event: Event = std::ptr::null_mut();
+    let mut event: SelectionGestureEvent = std::ptr::null_mut();
     assert_eq!(Result::Success, unsafe {
         event_new(Some(&calloc), &mut event, EventType::Drag)
     });
@@ -1487,7 +1491,7 @@ fn event_invalid_codepoint_frees_the_copy() {
     let counting = CountingAllocator::over_heap();
     let calloc = counting.allocator();
     let wrapper_len = std::mem::size_of::<EventWrapper>();
-    let mut event: Event = std::ptr::null_mut();
+    let mut event: SelectionGestureEvent = std::ptr::null_mut();
     assert_eq!(Result::Success, unsafe {
         event_new(Some(&calloc), &mut event, EventType::Press)
     });
@@ -1556,7 +1560,7 @@ fn selection_gesture_allocation_failure_sweep() {
         let mut results = Vec::new();
         let mut gesture: Gesture = std::ptr::null_mut();
         results.push(unsafe { new(Some(&calloc), &mut gesture) });
-        let mut event: Event = std::ptr::null_mut();
+        let mut event: SelectionGestureEvent = std::ptr::null_mut();
         results.push(unsafe { event_new(Some(&calloc), &mut event, EventType::Press) });
         if !event.is_null() {
             results.push(set_codepoints(event, &[' ' as u32, '\t' as u32]));

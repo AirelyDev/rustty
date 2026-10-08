@@ -64,7 +64,7 @@ pub struct KeyEventWrapper {
 /// C: RusttyKeyEvent (R2)
 // PORT NOTE: `pub const Event = ?*KeyEventWrapper;` — a nullable raw pointer to
 // the heap wrapper. The C ABI passes this as an opaque `*mut KeyEventWrapper`.
-pub type Event = *mut KeyEventWrapper;
+pub type KeyEvent = *mut KeyEventWrapper;
 
 // PORT NOTE (sibling-module access): `key_encode.zig` reads `event_.?.event`
 // directly (same package). rustty keeps `KeyEventWrapper.event` private to this
@@ -73,7 +73,7 @@ pub type Event = *mut KeyEventWrapper;
 //
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer (the reference's `event_.?`).
-pub(crate) unsafe fn event_ref<'a>(event_: Event) -> &'a key::KeyEvent {
+pub(crate) unsafe fn event_ref<'a>(event_: KeyEvent) -> &'a key::KeyEvent {
     // PORT NOTE (W80-B02-01): the reference reads `event_.?.event.utf8`, which
     // IS the caller's live slice. rustty-vt's `KeyEvent` owns its `utf8`, so
     // refresh that owned copy from the borrowed ptr/len first — otherwise the
@@ -92,7 +92,7 @@ pub(crate) unsafe fn event_ref<'a>(event_: Event) -> &'a key::KeyEvent {
 /// `event_` must be a valid `new`-returned pointer, and its stored
 /// `utf8_ptr`/`utf8_len` must still describe a readable region (the caller's
 /// borrow contract, exactly as in the reference).
-unsafe fn sync_utf8(event_: Event) {
+unsafe fn sync_utf8(event_: KeyEvent) {
     // SAFETY: `event_` validity is the caller's contract.
     let ptr = unsafe { (*event_).utf8_ptr };
     let len = unsafe { (*event_).utf8_len };
@@ -116,7 +116,7 @@ unsafe fn sync_utf8(event_: Event) {
 /// # Safety
 /// `alloc_`, if non-null, must point to a valid `CAllocator`; `result` must be
 /// a valid, writable pointer to `Event`.
-pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut Event) -> Result {
+pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut KeyEvent) -> Result {
     // const ptr = alloc.create(KeyEventWrapper) catch return .out_of_memory;
     // ptr.* = .{ .alloc = alloc };
     let ptr = unsafe {
@@ -145,7 +145,7 @@ pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut Event) -> Result {
 ///
 /// # Safety
 /// `event_`, if non-null, must be a pointer returned by `new`, not yet freed.
-pub unsafe fn free(event_: Event) {
+pub unsafe fn free(event_: KeyEvent) {
     // const wrapper = event_ orelse return;
     if event_.is_null() {
         return;
@@ -164,7 +164,7 @@ pub unsafe fn free(event_: Event) {
 ///
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer.
-pub unsafe fn set_action(event_: Event, action: key::Action) {
+pub unsafe fn set_action(event_: KeyEvent, action: key::Action) {
     // const event: *key.KeyEvent = &event_.?.event;
     // event.action = action;
     // SAFETY: `event_` validity is the caller's contract.
@@ -173,7 +173,7 @@ pub unsafe fn set_action(event_: Event, action: key::Action) {
 
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer.
-pub unsafe fn get_action(event_: Event) -> key::Action {
+pub unsafe fn get_action(event_: KeyEvent) -> key::Action {
     // const event: *key.KeyEvent = &event_.?.event;
     // return event.action;
     unsafe { (*event_).event.action }
@@ -183,53 +183,53 @@ pub unsafe fn get_action(event_: Event) -> key::Action {
 ///
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer.
-pub unsafe fn set_key(event_: Event, k: key::Key) {
+pub unsafe fn set_key(event_: KeyEvent, k: key::Key) {
     // event.key = k;
     unsafe { (*event_).event.key = k };
 }
 
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer.
-pub unsafe fn get_key(event_: Event) -> key::Key {
+pub unsafe fn get_key(event_: KeyEvent) -> key::Key {
     unsafe { (*event_).event.key }
 }
 
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer.
-pub unsafe fn set_mods(event_: Event, mods: key::Mods) {
+pub unsafe fn set_mods(event_: KeyEvent, mods: key::Mods) {
     // event.mods = mods;
     unsafe { (*event_).event.mods = mods };
 }
 
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer.
-pub unsafe fn get_mods(event_: Event) -> key::Mods {
+pub unsafe fn get_mods(event_: KeyEvent) -> key::Mods {
     unsafe { (*event_).event.mods }
 }
 
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer.
-pub unsafe fn set_consumed_mods(event_: Event, consumed_mods: key::Mods) {
+pub unsafe fn set_consumed_mods(event_: KeyEvent, consumed_mods: key::Mods) {
     // event.consumed_mods = consumed_mods;
     unsafe { (*event_).event.consumed_mods = consumed_mods };
 }
 
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer.
-pub unsafe fn get_consumed_mods(event_: Event) -> key::Mods {
+pub unsafe fn get_consumed_mods(event_: KeyEvent) -> key::Mods {
     unsafe { (*event_).event.consumed_mods }
 }
 
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer.
-pub unsafe fn set_composing(event_: Event, composing: bool) {
+pub unsafe fn set_composing(event_: KeyEvent, composing: bool) {
     // event.composing = composing;
     unsafe { (*event_).event.composing = composing };
 }
 
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer.
-pub unsafe fn get_composing(event_: Event) -> bool {
+pub unsafe fn get_composing(event_: KeyEvent) -> bool {
     unsafe { (*event_).event.composing }
 }
 
@@ -242,7 +242,7 @@ pub unsafe fn get_composing(event_: Event) -> bool {
 /// `event_` must be a valid `new`-returned pointer; `utf8`, if non-null, must
 /// point to `len` readable bytes, and — per the published header contract —
 /// must remain valid for as long as the event may be read or encoded.
-pub unsafe fn set_utf8(event_: Event, utf8: *const u8, len: usize) {
+pub unsafe fn set_utf8(event_: KeyEvent, utf8: *const u8, len: usize) {
     // event.utf8 = if (utf8) |ptr| ptr[0..len] else "";
     unsafe {
         if utf8.is_null() {
@@ -267,7 +267,7 @@ pub unsafe fn set_utf8(event_: Event, utf8: *const u8, len: usize) {
 /// a valid, writable pointer to `usize`. The returned pointer is the CALLER's
 /// own `set_utf8` pointer (the reference's borrow), valid for exactly as long
 /// as the caller keeps that buffer alive.
-pub unsafe fn get_utf8(event_: Event, len: *mut usize) -> *const u8 {
+pub unsafe fn get_utf8(event_: KeyEvent, len: *mut usize) -> *const u8 {
     // const event: *key.KeyEvent = &event_.?.event;
     // PORT NOTE (W80-B02-01): the reference's `event.utf8` IS the caller's
     // borrowed slice, so both the reported length and the returned pointer come
@@ -297,7 +297,7 @@ pub unsafe fn get_utf8(event_: Event, len: *mut usize) -> *const u8 {
 ///
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer.
-pub unsafe fn set_unshifted_codepoint(event_: Event, codepoint: u32) {
+pub unsafe fn set_unshifted_codepoint(event_: KeyEvent, codepoint: u32) {
     // event.unshifted_codepoint = @truncate(codepoint);
     // PORT NOTE: `key::u21` is a `u32` modeling a 21-bit value; `@truncate` to
     // `u21` keeps the low 21 bits.
@@ -306,7 +306,7 @@ pub unsafe fn set_unshifted_codepoint(event_: Event, codepoint: u32) {
 
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer.
-pub unsafe fn get_unshifted_codepoint(event_: Event) -> u32 {
+pub unsafe fn get_unshifted_codepoint(event_: KeyEvent) -> u32 {
     // return event.unshifted_codepoint;
     unsafe { (*event_).event.unshifted_codepoint }
 }
@@ -320,7 +320,7 @@ mod tests {
     fn alloc() {
         with_test_allocator(|ta| {
             // var e: Event = undefined;
-            let mut e: Event = std::ptr::null_mut();
+            let mut e: KeyEvent = std::ptr::null_mut();
             // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &e));
             assert_eq!(Result::Success, unsafe { new(Some(ta), &mut e) });
             // free(e);
@@ -331,7 +331,7 @@ mod tests {
     #[test]
     fn set() {
         with_test_allocator(|ta| {
-            let mut e: Event = std::ptr::null_mut();
+            let mut e: KeyEvent = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe { new(Some(ta), &mut e) });
             // defer free(e);
 
@@ -407,7 +407,7 @@ mod tests {
     #[test]
     fn get() {
         with_test_allocator(|ta| {
-            let mut e: Event = std::ptr::null_mut();
+            let mut e: KeyEvent = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe { new(Some(ta), &mut e) });
             // defer free(e);
 
@@ -491,7 +491,7 @@ mod tests {
     #[test]
     fn complete_key_event() {
         with_test_allocator(|ta| {
-            let mut e: Event = std::ptr::null_mut();
+            let mut e: KeyEvent = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe { new(Some(ta), &mut e) });
             // defer free(e);
 
@@ -579,7 +579,7 @@ mod tests {
     #[test]
     fn get_utf8_returns_the_borrowed_caller_pointer_and_observes_mutation() {
         with_test_allocator(|ta| {
-            let mut e: Event = std::ptr::null_mut();
+            let mut e: KeyEvent = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe { new(Some(ta), &mut e) });
 
             let mut text = *b"hi";

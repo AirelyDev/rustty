@@ -323,6 +323,25 @@ echo "  OK (pointee is a $a4_gen_size-byte struct, == sizeof(RusttyStyle))"
 )
 record "(a4)" $?
 
+# --- (a5) rustty.h's rustty_size_report_encode takes the REAL size_report Size -
+# P8-W5 T5 (NEW-FINDINGS N551): `rustty_size_report_encode(int, Size, ...)` was
+# declared over `mouse_encode::Size` (a different layout) because cbindgen keys
+# types by bare name. Arm (f) bars the name collision; this arm pins the ABI
+# end to end: a C program built from the generated `include/rustty.h` passes a
+# `SizeReportSize` by value to the native library and checks the bytes.
+( set -e
+echo "== (a5) rustty.h: rustty_size_report_encode(SizeReportSize) encodes the reference vector =="
+if [ -z "$lib" ]; then
+  echo "  BLOCKED: no native library for $(uname -s). This is NOT a pass."
+  exit 3
+fi
+"$CC" -std=c11 -Wall -Wextra -Werror $SYSROOT -Iinclude test/rustty-h/size_report_abi.c \
+  "$lib" -Wl,-rpath,"$PWD/$(dirname "$lib")" -o "$T/a5_size_report"
+"$T/a5_size_report"
+echo "  OK (rustty.h's SizeReportSize round-trips through the library)"
+)
+record "(a5)" $?
+
 # Arm (d) reads the export list arm (b) writes: drop any list an earlier run
 # left in $T, so (d) never reads a stale one when (b) stops before writing it.
 rm -f "$T/vt_exp.txt" "$T/vt_native_exp.txt"
