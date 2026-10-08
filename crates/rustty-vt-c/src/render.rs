@@ -478,7 +478,7 @@ pub struct Cursor {
 // pub const Data = enum(c_int) { invalid = 0, ... };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Data {
+pub enum RenderStateData {
     Invalid = 0,
     Cols = 1,
     Rows = 2,
@@ -505,20 +505,20 @@ pub enum Data {
 
 // D11 (P3-W6 T2): proves reading this value out of C memory as a `c_int` leaves
 // the ABI unchanged (the header declares `const RusttyRenderStateData *keys`).
-const _: () = assert!(std::mem::size_of::<Data>() == std::mem::size_of::<c_int>());
+const _: () = assert!(std::mem::size_of::<RenderStateData>() == std::mem::size_of::<c_int>());
 
-impl Data {
+impl RenderStateData {
     /// Narrow an inbound C integer to a `Data`, mirroring `std.meta.intToEnum`;
     /// `None` outside the declared range. `Invalid = 0` is IN range and keeps
     /// its `.invalid_value` disposition inside `get`.
     // PORT NOTE: the reference's guard is
     // `std.enums.fromInt(Data, @intFromEnum(data))`; `Data` is a contiguous
     // `#[repr(C)]` enum here, so the range check IS `fromInt`.
-    pub fn from_c_int(v: c_int) -> Option<Data> {
+    pub fn from_c_int(v: c_int) -> Option<RenderStateData> {
         // contiguous 0..=21
         if (0..=21).contains(&v) {
             // SAFETY: `v` is a valid `Data` discriminant (range-checked above).
-            Some(unsafe { std::mem::transmute::<c_int, Data>(v) })
+            Some(unsafe { std::mem::transmute::<c_int, RenderStateData>(v) })
         } else {
             None
         }
@@ -921,7 +921,7 @@ pub unsafe fn clean(state_: RenderState) -> Result {
 // }
 /// # Safety
 /// `out` must point to writable storage of the type required by `data`.
-pub unsafe fn get(state_: RenderState, data: Data, out: *mut c_void) -> Result {
+pub unsafe fn get(state_: RenderState, data: RenderStateData, out: *mut c_void) -> Result {
     // const state = state_ orelse return .invalid_value;
     if state_.is_null() {
         return Result::InvalidValue;
@@ -949,7 +949,7 @@ pub unsafe fn get_checked(state_: RenderState, data: c_int, out: *mut c_void) ->
     //     log.warn("render_state_get invalid data value={d}", .{@intFromEnum(data)});
     //     return .invalid_value;
     // };
-    let Some(d) = Data::from_c_int(data) else {
+    let Some(d) = RenderStateData::from_c_int(data) else {
         crate::sys::log_fn(
             crate::sys::StdLevel::Warn,
             LOG_SCOPE,
@@ -977,14 +977,14 @@ pub unsafe fn get_checked(state_: RenderState, data: c_int, out: *mut c_void) ->
 /// `state_` must be non-null and live; `out` must point to writable storage of
 /// the type required by `data`.
 #[inline]
-unsafe fn get_dispatch(state_: RenderState, data: Data, out: *mut c_void) -> Result {
+unsafe fn get_dispatch(state_: RenderState, data: RenderStateData, out: *mut c_void) -> Result {
     // const out_ptr = out orelse return .invalid_value;
     if out.is_null() {
         return Result::InvalidValue;
     }
     match data {
         // .invalid => .invalid_value,
-        Data::Invalid => Result::InvalidValue,
+        RenderStateData::Invalid => Result::InvalidValue,
         // SAFETY: `out` validity/type is the caller's contract per `data`.
         _ => unsafe { get_typed(state_, data, out) },
     }
@@ -1044,7 +1044,7 @@ pub unsafe fn get_multi(
         // possibly-invalid Zig enum and guards it; rustty narrows the raw
         // `c_int` per element (with the same `log.warn`) before dispatching.
         let result = if !state.is_null() {
-            let Some(d) = Data::from_c_int(key) else {
+            let Some(d) = RenderStateData::from_c_int(key) else {
                 crate::sys::log_fn(
                     crate::sys::StdLevel::Warn,
                     LOG_SCOPE,
@@ -1089,22 +1089,22 @@ pub unsafe fn get_multi(
 /// # Safety
 /// `state_` must be non-null and live; `out` must point to writable storage of
 /// the type required by `data`.
-unsafe fn get_typed(state_: RenderState, data: Data, out: *mut c_void) -> Result {
+unsafe fn get_typed(state_: RenderState, data: RenderStateData, out: *mut c_void) -> Result {
     match data {
         // .invalid => return .invalid_value,
-        Data::Invalid => return Result::InvalidValue,
+        RenderStateData::Invalid => return Result::InvalidValue,
         // .cols => out.* = state.state.cols,
-        Data::Cols => {
+        RenderStateData::Cols => {
             // SAFETY: `out` points to a writable `size::CellCountInt`.
             unsafe { *(out as *mut size::CellCountInt) = (*state_).state.cols };
         }
         // .rows => out.* = state.state.rows,
-        Data::Rows => {
+        RenderStateData::Rows => {
             // SAFETY: `out` points to a writable `size::CellCountInt`.
             unsafe { *(out as *mut size::CellCountInt) = (*state_).state.rows };
         }
         // .dirty => out.* = state.state.dirty,
-        Data::Dirty => {
+        RenderStateData::Dirty => {
             // SAFETY: `out` points to a writable `Dirty` — the int-sized C
             // projection (W34-B03), so the caller's full slot is written.
             unsafe { *(out as *mut Dirty) = Dirty::from((*state_).state.dirty) };
@@ -1116,7 +1116,7 @@ unsafe fn get_typed(state_: RenderState, data: Data, out: *mut c_void) -> Result
         //               .selection = ..., .dirty = ..., .state_dirty = &state.state.dirty,
         //               .palette = &state.state.colors.palette };
         // },
-        Data::RowIterator => {
+        RenderStateData::RowIterator => {
             // const it = out.* orelse return .invalid_value;
             // PORT NOTE: `out` points to a `RowIterator` (a `*mut
             // RowIteratorWrapper`); the reference dereferences it (`out.*`) to
@@ -1168,12 +1168,12 @@ unsafe fn get_typed(state_: RenderState, data: Data, out: *mut c_void) -> Result
             it.palette = unsafe { core::ptr::addr_of!((*state_).state.colors.palette) };
         }
         // .color_background => out.* = state.state.colors.background.cval(),
-        Data::ColorBackground => {
+        RenderStateData::ColorBackground => {
             // SAFETY: `out` points to a writable `RGB`.
             unsafe { *(out as *mut RGB) = (*state_).state.colors.background };
         }
         // .color_foreground => out.* = state.state.colors.foreground.cval(),
-        Data::ColorForeground => {
+        RenderStateData::ColorForeground => {
             // SAFETY: `out` points to a writable `RGB`.
             unsafe { *(out as *mut RGB) = (*state_).state.colors.foreground };
         }
@@ -1181,7 +1181,7 @@ unsafe fn get_typed(state_: RenderState, data: Data, out: *mut c_void) -> Result
         //     const cursor = state.state.colors.cursor orelse return .invalid_value;
         //     out.* = cursor.cval();
         // },
-        Data::ColorCursor => {
+        RenderStateData::ColorCursor => {
             let cursor = match unsafe { (*state_).state.colors.cursor } {
                 Some(cursor) => cursor,
                 None => return Result::InvalidValue,
@@ -1190,12 +1190,12 @@ unsafe fn get_typed(state_: RenderState, data: Data, out: *mut c_void) -> Result
             unsafe { *(out as *mut RGB) = cursor };
         }
         // .color_cursor_has_value => out.* = state.state.colors.cursor != null,
-        Data::ColorCursorHasValue => {
+        RenderStateData::ColorCursorHasValue => {
             // SAFETY: `out` points to a writable `bool`.
             unsafe { *(out as *mut bool) = (*state_).state.colors.cursor.is_some() };
         }
         // .color_palette => out.* = colorpkg.paletteCval(&state.state.colors.palette),
-        Data::ColorPalette => {
+        RenderStateData::ColorPalette => {
             // SAFETY: `out` points to a writable `PaletteC` (`[RGB; 256]`); the
             // shared reborrow of the palette is transient.
             unsafe {
@@ -1204,7 +1204,7 @@ unsafe fn get_typed(state_: RenderState, data: Data, out: *mut c_void) -> Result
             };
         }
         // .cursor_visual_style => out.* = CursorVisualStyle.fromCursorStyle(state.state.cursor.visual_style),
-        Data::CursorVisualStyle => {
+        RenderStateData::CursorVisualStyle => {
             // SAFETY: `out` points to a writable `CursorVisualStyle`.
             unsafe {
                 *(out as *mut CursorVisualStyle) =
@@ -1212,27 +1212,27 @@ unsafe fn get_typed(state_: RenderState, data: Data, out: *mut c_void) -> Result
             };
         }
         // .cursor_visible => out.* = state.state.cursor.visible,
-        Data::CursorVisible => {
+        RenderStateData::CursorVisible => {
             // SAFETY: `out` points to a writable `bool`.
             unsafe { *(out as *mut bool) = (*state_).state.cursor.visible };
         }
         // .cursor_blinking => out.* = state.state.cursor.blinking,
-        Data::CursorBlinking => {
+        RenderStateData::CursorBlinking => {
             // SAFETY: `out` points to a writable `bool`.
             unsafe { *(out as *mut bool) = (*state_).state.cursor.blinking };
         }
         // .cursor_password_input => out.* = state.state.cursor.password_input,
-        Data::CursorPasswordInput => {
+        RenderStateData::CursorPasswordInput => {
             // SAFETY: `out` points to a writable `bool`.
             unsafe { *(out as *mut bool) = (*state_).state.cursor.password_input };
         }
         // .cursor_viewport_has_value => out.* = state.state.cursor.viewport != null,
-        Data::CursorViewportHasValue => {
+        RenderStateData::CursorViewportHasValue => {
             // SAFETY: `out` points to a writable `bool`.
             unsafe { *(out as *mut bool) = (*state_).state.cursor.viewport.is_some() };
         }
         // .cursor_viewport_x => { const vp = state.state.cursor.viewport orelse return .invalid_value; out.* = vp.x; },
-        Data::CursorViewportX => {
+        RenderStateData::CursorViewportX => {
             let vp = match unsafe { &(*state_).state.cursor.viewport } {
                 Some(vp) => vp,
                 None => return Result::InvalidValue,
@@ -1241,7 +1241,7 @@ unsafe fn get_typed(state_: RenderState, data: Data, out: *mut c_void) -> Result
             unsafe { *(out as *mut size::CellCountInt) = vp.x };
         }
         // .cursor_viewport_y => { const vp = ... orelse return .invalid_value; out.* = vp.y; },
-        Data::CursorViewportY => {
+        RenderStateData::CursorViewportY => {
             let vp = match unsafe { &(*state_).state.cursor.viewport } {
                 Some(vp) => vp,
                 None => return Result::InvalidValue,
@@ -1250,7 +1250,7 @@ unsafe fn get_typed(state_: RenderState, data: Data, out: *mut c_void) -> Result
             unsafe { *(out as *mut size::CellCountInt) = vp.y };
         }
         // .cursor_viewport_wide_tail => { const vp = ... orelse return .invalid_value; out.* = vp.wide_tail; },
-        Data::CursorViewportWideTail => {
+        RenderStateData::CursorViewportWideTail => {
             let vp = match unsafe { &(*state_).state.cursor.viewport } {
                 Some(vp) => vp,
                 None => return Result::InvalidValue,
@@ -1259,22 +1259,22 @@ unsafe fn get_typed(state_: RenderState, data: Data, out: *mut c_void) -> Result
             unsafe { *(out as *mut bool) = vp.wide_tail };
         }
         // .cursor => return writeCursor(state, out),
-        Data::Cursor => {
+        RenderStateData::Cursor => {
             // SAFETY: `out` points to a writable `Cursor` (caller contract).
             return unsafe { write_cursor(state_, out as *mut Cursor) };
         }
         // .colors => return writeColors(state, out),
-        Data::Colors => {
+        RenderStateData::Colors => {
             // SAFETY: `out` points to a writable `Colors` (caller contract).
             return unsafe { write_colors(state_, out as *mut Colors) };
         }
         // .overscan => out.* = .init(state.state.overscan),
-        Data::Overscan => {
+        RenderStateData::Overscan => {
             // SAFETY: `out` points to a writable `Overscan`.
             unsafe { *(out as *mut Overscan) = Overscan::init((*state_).state.overscan) };
         }
         // .overscan_request => out.* = .init(state.overscan_request),
-        Data::OverscanRequest => {
+        RenderStateData::OverscanRequest => {
             // SAFETY: `out` points to a writable `Overscan`.
             unsafe { *(out as *mut Overscan) = Overscan::init((*state_).overscan_request) };
         }
@@ -2414,7 +2414,7 @@ unsafe fn row_cells_get_graphemes_utf8(
 // pub const RowData = enum(c_int) { invalid = 0, dirty = 1, raw = 2, cells = 3, selection = 4, cells_raw = 5, viewport_y = 6, id = 7 };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RowData {
+pub enum RenderStateRowData {
     Invalid = 0,
     Dirty = 1,
     Raw = 2,
@@ -2426,16 +2426,16 @@ pub enum RowData {
 }
 
 // D11 (P3-W6 T2): see `Data::from_c_int`; same rule, same header hazard.
-const _: () = assert!(std::mem::size_of::<RowData>() == std::mem::size_of::<c_int>());
+const _: () = assert!(std::mem::size_of::<RenderStateRowData>() == std::mem::size_of::<c_int>());
 
-impl RowData {
+impl RenderStateRowData {
     /// Narrow an inbound C integer to a `RowData`, mirroring
     /// `std.meta.intToEnum`; `None` outside the declared range.
-    pub fn from_c_int(v: c_int) -> Option<RowData> {
+    pub fn from_c_int(v: c_int) -> Option<RenderStateRowData> {
         // contiguous 0..=7
         if (0..=7).contains(&v) {
             // SAFETY: `v` is a valid `RowData` discriminant (range-checked).
-            Some(unsafe { std::mem::transmute::<c_int, RowData>(v) })
+            Some(unsafe { std::mem::transmute::<c_int, RenderStateRowData>(v) })
         } else {
             None
         }
@@ -2474,7 +2474,11 @@ pub enum RowOption {
 // }
 /// # Safety
 /// `out` must point to writable storage of the type required by `data`.
-pub unsafe fn row_get(iterator_: RowIterator, data: RowData, out: *mut c_void) -> Result {
+pub unsafe fn row_get(
+    iterator_: RowIterator,
+    data: RenderStateRowData,
+    out: *mut c_void,
+) -> Result {
     // const it = iterator_ orelse return .invalid_value;
     if iterator_.is_null() {
         return Result::InvalidValue;
@@ -2510,7 +2514,7 @@ pub unsafe fn row_get_checked(iterator_: RowIterator, data: c_int, out: *mut c_v
     //     log.warn("render_state_row_get invalid data value={d}", .{...});
     //     return .invalid_value;
     // };
-    let Some(d) = RowData::from_c_int(data) else {
+    let Some(d) = RenderStateRowData::from_c_int(data) else {
         crate::sys::log_fn(
             crate::sys::StdLevel::Warn,
             LOG_SCOPE,
@@ -2583,7 +2587,7 @@ pub unsafe fn row_get_multi(
         let value = unsafe { *values.add(i) };
         // const result = if (unwrapped) |u| rowGetDispatch(u[0], u[1], k[i], v[i]) else Result.invalid_value;
         let result = if let Some((it, y)) = unwrapped {
-            let Some(d) = RowData::from_c_int(key) else {
+            let Some(d) = RenderStateRowData::from_c_int(key) else {
                 crate::sys::log_fn(
                     crate::sys::StdLevel::Warn,
                     LOG_SCOPE,
@@ -2634,12 +2638,12 @@ pub unsafe fn row_get_multi(
 unsafe fn row_get_dispatch(
     iterator_: RowIterator,
     y: usize,
-    data: RowData,
+    data: RenderStateRowData,
     out: *mut c_void,
 ) -> Result {
     match data {
         // .invalid => .invalid_value,
-        RowData::Invalid => Result::InvalidValue,
+        RenderStateRowData::Invalid => Result::InvalidValue,
         // SAFETY: `out` validity/type is the caller's contract per `data`.
         _ => unsafe { row_get_typed(iterator_, y, data, out) },
     }
@@ -2655,7 +2659,7 @@ unsafe fn row_get_dispatch(
 unsafe fn row_get_typed(
     iterator_: RowIterator,
     y: usize,
-    data: RowData,
+    data: RenderStateRowData,
     out: *mut c_void,
 ) -> Result {
     // SAFETY: `iterator_` is a live wrapper (caller contract).
@@ -2665,14 +2669,14 @@ unsafe fn row_get_typed(
     let row = unsafe { &(*it.rows)[y] };
     match data {
         // .invalid => return .invalid_value,
-        RowData::Invalid => return Result::InvalidValue,
+        RenderStateRowData::Invalid => return Result::InvalidValue,
         // .dirty => out.* = it.dirty[y],
-        RowData::Dirty => {
+        RenderStateRowData::Dirty => {
             // SAFETY: `out` points to a writable `bool`.
             unsafe { *(out as *mut bool) = row.dirty };
         }
         // .raw => out.* = it.raws[y].cval(),
-        RowData::Raw => {
+        RenderStateRowData::Raw => {
             // SAFETY: `out` points to a writable `row.CRow` (`u64`).
             unsafe { *(out as *mut row::CRow) = row.raw.cval() };
         }
@@ -2681,7 +2685,7 @@ unsafe fn row_get_typed(
         //     const cell_data = it.cells[y].slice();
         //     cells.* = .{ .alloc = cells.alloc, .x = position_none, .raws = ..., .graphemes = ..., .styles = ..., .selection = it.selection[y], .palette = it.palette };
         // },
-        RowData::Cells => {
+        RenderStateRowData::Cells => {
             // const cells = out.* orelse return .invalid_value;
             // SAFETY: `out` points to a writable `RowCells`.
             let cells_ptr = unsafe { *(out as *mut RowCells) };
@@ -2703,7 +2707,7 @@ unsafe fn row_get_typed(
         //     out.start_x = sel[0];
         //     out.end_x = sel[1];
         // },
-        RowData::Selection => {
+        RenderStateRowData::Selection => {
             // SAFETY: `out` points to a writable `RowSelection`.
             let out_sel = unsafe { &mut *(out as *mut RowSelection) };
             // const out_size = out.size;
@@ -2729,7 +2733,7 @@ unsafe fn row_get_typed(
         //         .len = raws.len,
         //     };
         // },
-        RowData::CellsRaw => {
+        RenderStateRowData::CellsRaw => {
             // PORT NOTE (reshape): the raw column is the row's `CellList.raw()`
             // slice; `page.Cell` is `#[repr(transparent)]` over the `u64` cval
             // (`CCell`), so `@ptrCast(raws.ptr)` is the pointer cast below.
@@ -2743,14 +2747,14 @@ unsafe fn row_get_typed(
             };
         }
         // .viewport_y => out.* = it.viewport_y_base + @as(i32, @intCast(y)),
-        RowData::ViewportY => {
+        RenderStateRowData::ViewportY => {
             // `y` is below the slice length, at most three `u16` counts, so
             // the conversion and the sum fit `i32`.
             // SAFETY: `out` points to a writable `i32`.
             unsafe { *(out as *mut i32) = it.viewport_y_base + y as i32 };
         }
         // .id => out.* = .init(.{ .serial = it.serials[y], .y = it.pins[y].y }),
-        RowData::Id => {
+        RenderStateRowData::Id => {
             // SAFETY: `out` points to a writable `RowId`.
             unsafe { *(out as *mut RowId) = RowId::init(row.id()) };
         }

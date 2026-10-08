@@ -47,7 +47,6 @@
 // const Handler = @import("../stream_terminal.zig").Handler;
 use crate::grid_ref::CGridRef;
 use crate::grid_ref_tracked::{CTrackedGridRef, TrackedGridRef};
-use crate::kitty_graphics::KittyGraphics as KittyGraphicsHandle;
 use crate::point::PointC;
 use crate::result::Result;
 use crate::search::SearchWrapper;

@@ -27,7 +27,7 @@
 // scope constant, the `@tagName` of the reference's
 // `std.log.scoped(.key_encode)`.
 pub(crate) const LOG_SCOPE: &str = "key_encode";
-use crate::key_event::{self, Event as KeyEvent};
+use crate::key_event::{self, KeyEvent};
 use crate::result::Result;
 use crate::terminal as terminal_c;
 use crate::writer::{CountingWriter, FixedWriter};
@@ -51,7 +51,7 @@ pub struct KeyEncoderWrapper {
 
 /// C: RusttyKeyEncoder (R2)
 // pub const Encoder = ?*KeyEncoderWrapper;
-pub type Encoder = *mut KeyEncoderWrapper;
+pub type KeyEncoder = *mut KeyEncoderWrapper;
 
 // pub fn new(alloc_: ?*const CAllocator, result: *Encoder) ... Result {
 //     const alloc = lib.alloc.default(alloc_);
@@ -64,7 +64,7 @@ pub type Encoder = *mut KeyEncoderWrapper;
 /// # Safety
 /// `alloc_`, if non-null, must point to a valid `CAllocator`; `result` must be
 /// writable storage for one `Encoder`.
-pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut Encoder) -> Result {
+pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut KeyEncoder) -> Result {
     // const ptr = alloc.create(KeyEncoderWrapper) catch return .out_of_memory;
     // ptr.* = .{ .opts = .{}, .alloc = alloc };
     let ptr = unsafe {
@@ -95,7 +95,7 @@ pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut Encoder) -> Result {
 //
 /// # Safety
 /// `encoder_`, if non-null, must be a handle returned by `new`, not yet freed.
-pub unsafe fn free(encoder_: Encoder) {
+pub unsafe fn free(encoder_: KeyEncoder) {
     // const wrapper = encoder_ orelse return;
     if encoder_.is_null() {
         return;
@@ -160,7 +160,7 @@ pub enum Option_ {
 /// # Safety
 /// `encoder_`, if non-null, must be a `new` handle; `value`, if non-null, must
 /// point to a readable value of the option's in-type.
-pub unsafe fn setopt(encoder_: Encoder, option: c_int, value: *const c_void) {
+pub unsafe fn setopt(encoder_: KeyEncoder, option: c_int, value: *const c_void) {
     // if (comptime std.debug.runtime_safety) {
     //     _ = std.meta.intToEnum(Option, ...) catch { log.warn(...); return; };
     // }
@@ -202,7 +202,7 @@ pub unsafe fn setopt(encoder_: Encoder, option: c_int, value: *const c_void) {
 /// # Safety
 /// `encoder_` must be non-null (`encoder_.?`); `value` must point to a readable
 /// value of `option`'s in-type.
-unsafe fn setopt_typed(encoder_: Encoder, option: Option_, value: *const c_void) {
+unsafe fn setopt_typed(encoder_: KeyEncoder, option: Option_, value: *const c_void) {
     // const opts = &encoder_.?.opts;
     // SAFETY: `encoder_` is non-null per the caller contract (`.?`).
     let opts = unsafe { &mut (*encoder_).opts };
@@ -272,7 +272,7 @@ unsafe fn setopt_typed(encoder_: Encoder, option: Option_, value: *const c_void)
 //
 /// # Safety
 /// `encoder_`/`terminal_`, if non-null, must be live handles.
-pub unsafe fn setopt_from_terminal(encoder_: Encoder, terminal_: terminal_c::Terminal) {
+pub unsafe fn setopt_from_terminal(encoder_: KeyEncoder, terminal_: terminal_c::Terminal) {
     // const wrapper = encoder_ orelse return;
     if encoder_.is_null() {
         return;
@@ -306,7 +306,7 @@ pub unsafe fn setopt_from_terminal(encoder_: Encoder, terminal_: terminal_c::Ter
 /// `encoder_`/`event_` must be non-null `new` handles; `out_` (if non-null) must
 /// point to `out_len` writable bytes; `out_written` must be writable.
 pub unsafe fn encode(
-    encoder_: Encoder,
+    encoder_: KeyEncoder,
     event_: KeyEvent,
     out_: *mut u8,
     out_len: usize,
@@ -363,7 +363,7 @@ mod tests {
     fn alloc() {
         with_test_allocator(|calloc| {
             // var e: Encoder = undefined;
-            let mut e: Encoder = std::ptr::null_mut();
+            let mut e: KeyEncoder = std::ptr::null_mut();
             // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &e));
             assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut e) });
             // free(e);
@@ -373,7 +373,7 @@ mod tests {
 
     // PORT NOTE: setopt takes the option as the raw `c_int` discriminant (the
     // lib.rs `extern "C"` wrapper guards the range); the tests pass it directly.
-    unsafe fn setopt_bool(e: Encoder, option: Option_, v: &bool) {
+    unsafe fn setopt_bool(e: KeyEncoder, option: Option_, v: &bool) {
         unsafe { setopt(e, option as c_int, v as *const bool as *const c_void) };
     }
 
@@ -381,7 +381,7 @@ mod tests {
     #[test]
     fn setopt_bool_test() {
         with_test_allocator(|calloc| {
-            let mut e: Encoder = std::ptr::null_mut();
+            let mut e: KeyEncoder = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut e) });
 
             // Test setting bool options
@@ -412,7 +412,7 @@ mod tests {
     #[test]
     fn setopt_kitty_flags() {
         with_test_allocator(|calloc| {
-            let mut e: Encoder = std::ptr::null_mut();
+            let mut e: KeyEncoder = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut e) });
 
             // Test setting kitty flags
@@ -447,7 +447,7 @@ mod tests {
     #[test]
     fn setopt_macos_option_as_alt() {
         with_test_allocator(|calloc| {
-            let mut e: Encoder = std::ptr::null_mut();
+            let mut e: KeyEncoder = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut e) });
 
             // Test setting option as alt
@@ -488,7 +488,7 @@ mod tests {
     fn setopt_from_terminal_test() {
         with_test_allocator(|calloc| {
             // Create encoder
-            let mut e: Encoder = std::ptr::null_mut();
+            let mut e: KeyEncoder = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut e) });
 
             // Create terminal
@@ -535,7 +535,7 @@ mod tests {
             unsafe { setopt_from_terminal(std::ptr::null_mut(), t) };
 
             // Valid encoder with null terminal
-            let mut e: Encoder = std::ptr::null_mut();
+            let mut e: KeyEncoder = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut e) });
             // setopt_from_terminal(e, null);
             unsafe { setopt_from_terminal(e, std::ptr::null_mut()) };
@@ -550,7 +550,7 @@ mod tests {
     fn encode_kitty_ctrl_release_with_ctrl_mod_set() {
         with_test_allocator(|calloc| {
             // Create encoder
-            let mut encoder: Encoder = std::ptr::null_mut();
+            let mut encoder: KeyEncoder = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut encoder) });
 
             // Set kitty flags with all features enabled
@@ -641,7 +641,7 @@ mod tests {
     #[test]
     fn encode_out_of_space_leaves_the_fitting_prefix_in_the_caller_buffer() {
         with_test_allocator(|calloc| {
-            let mut encoder: Encoder = std::ptr::null_mut();
+            let mut encoder: KeyEncoder = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut encoder) });
 
             let mut event: KeyEvent = std::ptr::null_mut();
@@ -693,7 +693,7 @@ mod tests {
     #[test]
     fn encode_reads_the_live_caller_utf8_buffer() {
         with_test_allocator(|calloc| {
-            let mut encoder: Encoder = std::ptr::null_mut();
+            let mut encoder: KeyEncoder = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut encoder) });
 
             let mut event: KeyEvent = std::ptr::null_mut();
@@ -768,7 +768,7 @@ mod tests {
         CAPTURED.lock().unwrap().clear();
 
         with_test_allocator(|calloc| {
-            let mut e: Encoder = std::ptr::null_mut();
+            let mut e: KeyEncoder = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut e) });
 
             assert_eq!(Result::Success, unsafe {

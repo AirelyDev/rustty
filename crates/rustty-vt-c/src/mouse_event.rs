@@ -40,7 +40,7 @@ pub struct MouseEventWrapper {
 }
 
 /// C: RusttyMouseEvent (R2)
-pub type Event = *mut MouseEventWrapper;
+pub type MouseEvent = *mut MouseEventWrapper;
 
 // PORT NOTE (sibling-module access): `mouse_encode.zig` reads `event.event`
 // directly (same package). rustty keeps `MouseEventWrapper.event` private to
@@ -50,7 +50,7 @@ pub type Event = *mut MouseEventWrapper;
 //
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer (the reference's `event_.?`).
-pub(crate) unsafe fn event_value(event_: Event) -> mouse_encode::Event {
+pub(crate) unsafe fn event_value(event_: MouseEvent) -> mouse_encode::Event {
     // event.event
     // SAFETY: `event_` validity is the caller's contract.
     unsafe { (*event_).event }
@@ -77,7 +77,7 @@ pub use key::Mods;
 /// # Safety
 /// `alloc_`, if non-null, must point to a valid `CAllocator`; `result` must be
 /// a valid, writable pointer to `Event`.
-pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut Event) -> Result {
+pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut MouseEvent) -> Result {
     // const ptr = alloc.create(MouseEventWrapper) catch return .out_of_memory;
     // ptr.* = .{ .alloc = alloc };
     let ptr = unsafe {
@@ -102,7 +102,7 @@ pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut Event) -> Result {
 ///
 /// # Safety
 /// `event_`, if non-null, must be a pointer returned by `new`, not yet freed.
-pub unsafe fn free(event_: Event) {
+pub unsafe fn free(event_: MouseEvent) {
     // const wrapper = event_ orelse return;
     if event_.is_null() {
         return;
@@ -119,14 +119,14 @@ pub unsafe fn free(event_: Event) {
 ///
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer.
-pub unsafe fn set_action(event_: Event, action: Action) {
+pub unsafe fn set_action(event_: MouseEvent, action: Action) {
     // event_.?.event.action = action;
     unsafe { (*event_).event.action = action };
 }
 
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer.
-pub unsafe fn get_action(event_: Event) -> Action {
+pub unsafe fn get_action(event_: MouseEvent) -> Action {
     // return event_.?.event.action;
     unsafe { (*event_).event.action }
 }
@@ -135,14 +135,14 @@ pub unsafe fn get_action(event_: Event) -> Action {
 ///
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer.
-pub unsafe fn set_button(event_: Event, button: Button) {
+pub unsafe fn set_button(event_: MouseEvent, button: Button) {
     // event_.?.event.button = button;
     unsafe { (*event_).event.button = Some(button) };
 }
 
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer.
-pub unsafe fn clear_button(event_: Event) {
+pub unsafe fn clear_button(event_: MouseEvent) {
     // event_.?.event.button = null;
     unsafe { (*event_).event.button = None };
 }
@@ -153,7 +153,7 @@ pub unsafe fn clear_button(event_: Event) {
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer; `out`, if non-null, must be
 /// a valid, writable pointer to `Button`.
-pub unsafe fn get_button(event_: Event, out: *mut Button) -> bool {
+pub unsafe fn get_button(event_: MouseEvent, out: *mut Button) -> bool {
     // if (event_.?.event.button) |button| {
     if let Some(button) = unsafe { (*event_).event.button } {
         // if (out) |ptr| ptr.* = button;
@@ -170,28 +170,28 @@ pub unsafe fn get_button(event_: Event, out: *mut Button) -> bool {
 
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer.
-pub unsafe fn set_mods(event_: Event, mods: Mods) {
+pub unsafe fn set_mods(event_: MouseEvent, mods: Mods) {
     // event_.?.event.mods = mods;
     unsafe { (*event_).event.mods = mods };
 }
 
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer.
-pub unsafe fn get_mods(event_: Event) -> Mods {
+pub unsafe fn get_mods(event_: MouseEvent) -> Mods {
     // return event_.?.event.mods;
     unsafe { (*event_).event.mods }
 }
 
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer.
-pub unsafe fn set_position(event_: Event, pos: Position) {
+pub unsafe fn set_position(event_: MouseEvent, pos: Position) {
     // event_.?.event.pos = pos;
     unsafe { (*event_).event.pos = pos };
 }
 
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer.
-pub unsafe fn get_position(event_: Event) -> Position {
+pub unsafe fn get_position(event_: MouseEvent) -> Position {
     // return event_.?.event.pos;
     unsafe { (*event_).event.pos }
 }
@@ -205,7 +205,7 @@ mod tests {
     fn alloc() {
         with_test_allocator(|ta| {
             // var e: Event = undefined;
-            let mut e: Event = std::ptr::null_mut();
+            let mut e: MouseEvent = std::ptr::null_mut();
             // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &e));
             assert_eq!(Result::Success, unsafe { new(Some(ta), &mut e) });
             // free(e);
@@ -222,7 +222,7 @@ mod tests {
     #[test]
     fn set_get() {
         with_test_allocator(|ta| {
-            let mut e: Event = std::ptr::null_mut();
+            let mut e: MouseEvent = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe { new(Some(ta), &mut e) });
             // defer free(e);
 

@@ -6,7 +6,7 @@ use super::*;
 
 /// C: GhosttyKittyGraphics -> RusttyKittyGraphics (R2)
 // pub const KittyGraphics = kitty_gfx_c.KittyGraphics;
-pub type KittyGraphics = KittyGraphicsHandle;
+pub use crate::kitty_graphics::KittyGraphics;
 
 /// C: GhosttyTerminalScreen -> RusttyTerminalScreen (R2)
 // pub const TerminalScreen = ScreenSet.Key;
