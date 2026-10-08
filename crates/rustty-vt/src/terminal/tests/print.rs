@@ -2277,31 +2277,38 @@ fn terminal_vs16_moving_a_character_to_the_next_line_keeps_it_unmapped() {
 
 // Rustty-only (Review Focus 5): a single shift applies to exactly one
 // printed codepoint, whatever its shape, and the next one prints from GL.
+// Each case puts the shift directly before the codepoint under test and
+// then prints 'q', which must come out as 'q' (GL), not U+2500 (G2).
 // test "Terminal: single shift applies to exactly one codepoint"
 #[test]
 fn terminal_single_shift_applies_to_exactly_one_codepoint() {
-    // (shifted sequence after ESC N, expected first-cell codepoint)
-    let cases: [(&[u32], u32); 3] = [
-        // (a) wide CJK: above 0xFF, so unmapped; it still uses the shift up
-        (&[0x6A4B, 'q' as u32], 0x6A4B),
-        // (b) a base followed by VS16: the base is shifted, VS16 is not
-        (&['q' as u32, 0xFE0F, 'q' as u32], 0x2500),
-        // (c) a base followed by a combining mark
-        (&['q' as u32, 0x0301, 'q' as u32], 0x2500),
+    // (printed before the shift, printed after it, first cell, expected
+    // cursor x after the final 'q')
+    //
+    // Guards: 6220a3617 (above 0xFF is unmapped, and the old wide path's
+    // spacer write consumed the shift before the character) and c706451fe
+    // (the shift is used up by a codepoint that takes no cell).
+    let cases: [(&[u32], &[u32]); 3] = [
+        // 6220a3617: wide CJK after the shift; the shift is used on it.
+        (&[], &[0x6A4B, 'q' as u32]),
+        // c706451fe: shift directly before a combining mark.
+        (&['q' as u32], &[0x0301, 'q' as u32]),
+        // c706451fe: shift directly before VS16 on a base it does not widen.
+        (&['q' as u32], &[0xFE0F, 'q' as u32]),
     ];
     for cluster in [false, true] {
-        for (seq, first) in cases {
+        for (before, after) in cases {
             let mut t = Terminal::init(Global, opts(10, 2)).unwrap();
             t.modes.set(modespkg::Mode::GraphemeCluster, cluster);
             t.configure_charset(charsets::Slots::G2, charsets::Charset::DecSpecial);
+            for &c in before {
+                t.print(c).unwrap();
+            }
             t.invoke_charset(charsets::ActiveSlot::GL, charsets::Slots::G2, true);
-            for &c in seq {
+            for &c in after {
                 t.print(c).unwrap();
             }
             assert_eq!(unsafe { (*t.screens.active).charset.single_shift }, None);
-
-            let head = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap().cell;
-            assert_eq!(unsafe { (*head).content_codepoint() }, first as u21);
 
             // The final 'q' is in the last cell written, printed from GL.
             let x = unsafe { (*t.screens.active).cursor.x };

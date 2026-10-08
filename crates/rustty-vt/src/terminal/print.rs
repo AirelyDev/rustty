@@ -1574,7 +1574,7 @@ impl Terminal {
                 if right_limit == self.cols {
                     // Special-case: we need to set wrap to true even
                     // though we call printWrap below because if there is
-                    // a page resize during writeCell then it'll fail
+                    // a page resize during printCell then it'll fail
                     // integrity checks.
                     unsafe { (*(*active).cursor.page_row).set_wrap(true) };
                     self.write_cell(0, pagepkg::Wide::SpacerHead);
@@ -1623,12 +1623,19 @@ impl Terminal {
             table[unmapped_c as usize] as u32
         };
 
-        self.write_cell(c, wide);
+        self.write_cell_inline(c, wide);
     }
 
     /// Writes c into the cell under the cursor as it is, without a charset.
-    #[inline(always)]
     fn write_cell(&mut self, c: u32, wide: pagepkg::Wide) {
+        self.write_cell_inline(c, wide);
+    }
+
+    // PORT NOTE: Rust has no call-site `@call(.always_inline, ...)`. The body
+    // lives here, always inlined into `print_cell` (the reference's only
+    // always-inline caller); the other `write_cell` callers use the plain fn.
+    #[inline(always)]
+    fn write_cell_inline(&mut self, c: u32, wide: pagepkg::Wide) {
         // defer self.screens.active.assertIntegrity();
 
         // TODO: spacers should use a bgcolor only cell
