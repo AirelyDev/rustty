@@ -1176,3 +1176,37 @@ fn finalize_joins_threads_before_clearing_core_surface() {
          the teardown cleared the pointer before joining (invariant 5 violated)"
     );
 }
+
+/// `0d82239b5`: `logWarnOnce` — the missing / invalid `gtk-xft-dpi` warnings are logged once per
+/// call site, however often `getContentScale` runs. `-1` stays silent (a valid "default" value).
+#[test]
+fn xft_dpi_warnings_log_once() {
+    use super::core_callbacks::xft_dpi_scale;
+
+    let cap = crate::log_capture::start();
+    assert_eq!(xft_dpi_scale(Some(-1)), 1.0);
+    assert_eq!(xft_dpi_scale(Some(-5)), 1.0);
+    assert_eq!(xft_dpi_scale(Some(-5)), 1.0);
+    assert_eq!(xft_dpi_scale(Some(0)), 1.0);
+    assert_eq!(xft_dpi_scale(None), 1.0);
+    assert_eq!(xft_dpi_scale(None), 1.0);
+    assert_eq!(xft_dpi_scale(Some(96 * 1024)), 1.0);
+    assert_eq!(xft_dpi_scale(Some(192 * 1024)), 2.0);
+    let messages = cap.messages();
+    drop(cap);
+
+    let warn = |m: &str| {
+        (
+            log::Level::Warn,
+            "gtk_rustty_surface".to_string(),
+            m.to_string(),
+        )
+    };
+    assert_eq!(
+        messages,
+        vec![
+            warn("gtk-xft-dpi has invalid value (-5), using default"),
+            warn("gtk-xft-dpi was not set, using default value"),
+        ]
+    );
+}

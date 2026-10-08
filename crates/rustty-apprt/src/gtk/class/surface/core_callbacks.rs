@@ -14,6 +14,61 @@ use super::*;
 // (`:1497-...`) and the RenderSurface lifecycle (`:3305-3528`).
 // ===========================================================================
 
+/// Logs a warning once-ish for the given format string and arguments. It may log duplicates if called from
+/// multiple threads but will eventually stop.
+///
+/// PORTS: `surface.zig:3948-3963` `logWarnOnce`. The reference keeps a per-(format, argument type)
+/// `var flag` in a comptime-instantiated container; here the flag is a per-call-site `static ONCE`
+/// (the three call sites have distinct formats, so the two keyings coincide).
+///
+/// PORT NOTE: the reference's flag is a plain non-atomic `bool`, which would be UB as a Rust
+/// `static`. It is an `AtomicBool` with `Relaxed` loads and stores: "Don't care about load/store
+/// orders here. A few duplicates aren't critical."
+macro_rules! log_warn_once {
+    ($($arg:tt)+) => {{
+        static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if ONCE.load(std::sync::atomic::Ordering::Relaxed) {
+        } else {
+            // Don't care about load/store orders here. A few duplicates aren't critical.
+            ONCE.store(true, std::sync::atomic::Ordering::Relaxed);
+            log::warn!(target: LOG_SCOPE, $($arg)+);
+        }
+    }};
+}
+
+/// The `gtk-xft-dpi` font-DPI scale of `getContentScale` (`surface.zig:1548-1572`), split out of
+/// [`Surface::get_content_scale`] so the three DPI cases are testable without a display.
+///
+/// gtk-xft-dpi is the font DPI multiplied by 1024. See
+/// <https://docs.gtk.org/gtk4/property.Settings.gtk-xft-dpi.html>
+pub(super) fn xft_dpi_scale(gtk_xft_dpi: Option<i32>) -> f32 {
+    let Some(gtk_xft_dpi) = gtk_xft_dpi else {
+        // logWarnOnce("gtk-xft-dpi was not set, using default value", .{});
+        log_warn_once!("gtk-xft-dpi was not set, using default value");
+        return 1.0;
+    };
+
+    // Use a value of 1.0 for the XFT DPI scale if the setting is <= 0
+    // See:
+    // https://gitlab.gnome.org/GNOME/libadwaita/-/commit/a7738a4d269bfdf4d8d5429ca73ccdd9b2450421
+    // https://gitlab.gnome.org/GNOME/libadwaita/-/commit/9759d3fd81129608dd78116001928f2aed974ead
+    if gtk_xft_dpi <= 0 {
+        // -1 is a valid value which specifies default scale.
+        // https://docs.gtk.org/gtk4/property.Settings.gtk-xft-dpi.html
+        if gtk_xft_dpi != -1 {
+            // logWarnOnce("gtk-xft-dpi has invalid value ({}), using default", .{gtk_xft_dpi});
+            log_warn_once!("gtk-xft-dpi has invalid value ({gtk_xft_dpi}), using default");
+        }
+        return 1.0;
+    }
+
+    // As noted above gtk-xft-dpi is multiplied by 1024, so we divide by
+    // 1024, then divide by the default value (96) to derive a scale. Note
+    // gtk-xft-dpi can be fractional, so we use floating point math here.
+    let xft_dpi = gtk_xft_dpi as f32 / 1024.0;
+    xft_dpi / 96.0
+}
+
 impl Surface {
     // PORTS: `surface.zig:2225-2229` `setError`. The `glib::Properties`-generated
     // `set_error(bool)` setter for the `error` property already does the reference's
@@ -472,8 +527,8 @@ impl Surface {
         // The GdkSurface scale (`:1543-1550`, fractional since `45013faf8`).
         let surface_scale = scale::widget_surface_scale(widget);
         let gtk_scale: f32 = if surface_scale <= 0.0 {
-            // log.warn("widget surface scale was non-positive: {d}", .{surface_scale});
-            log::warn!(target: LOG_SCOPE, "widget surface scale was non-positive: {surface_scale}");
+            // logWarnOnce("widget surface scale was non-positive: {d}", .{surface_scale});
+            log_warn_once!("widget surface scale was non-positive: {surface_scale}");
             1.0
         } else {
             surface_scale as f32
@@ -481,34 +536,7 @@ impl Surface {
 
         // Also scale using font-specific DPI, which is often exposed to the user
         // via DE accessibility settings (see https://docs.gtk.org/gtk4/class.Settings.html).
-        //
-        // gtk-xft-dpi is font DPI multiplied by 1024. See
-        // https://docs.gtk.org/gtk4/property.Settings.gtk-xft-dpi.html
-        //
-        // The gtk-xft-dpi font-DPI scale (`:1548-1572`). gtk-xft-dpi is the font
-        // DPI × 1024; divide by 1024 then by the 96 default to derive a scale.
-        let xft_dpi_scale: f32 = match gsettings::get_c_int(gsettings::Key::GtkXftDpi) {
-            None => {
-                log::warn!(target: LOG_SCOPE, "gtk-xft-dpi was not set, using default value");
-                1.0
-            }
-            // Use a value of 1.0 for the XFT DPI scale if the setting is <= 0
-            // See:
-            // https://gitlab.gnome.org/GNOME/libadwaita/-/commit/a7738a4d269bfdf4d8d5429ca73ccdd9b2450421
-            // https://gitlab.gnome.org/GNOME/libadwaita/-/commit/9759d3fd81129608dd78116001928f2aed974ead
-            Some(dpi) if dpi <= 0 => {
-                // -1 is a valid value which specifies default scale.
-                // https://docs.gtk.org/gtk4/property.Settings.gtk-xft-dpi.html
-                if dpi != -1 {
-                    log::warn!(target: LOG_SCOPE, "gtk-xft-dpi has invalid value ({dpi}), using default");
-                }
-                1.0
-            }
-            // As noted above gtk-xft-dpi is multiplied by 1024, so we divide by
-            // 1024, then divide by the default value (96) to derive a scale. Note
-            // gtk-xft-dpi can be fractional, so we use floating point math here.
-            Some(dpi) => (dpi as f32 / 1024.0) / 96.0,
-        };
+        let xft_dpi_scale = xft_dpi_scale(gsettings::get_c_int(gsettings::Key::GtkXftDpi));
 
         let scale = gtk_scale * xft_dpi_scale;
         ContentScale { x: scale, y: scale }
