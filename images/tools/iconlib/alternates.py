@@ -13,15 +13,25 @@ from . import paths, raster, styles
 SCREEN_BBOX_DEFAULT = (174, 174, 849, 849)
 SCREEN_BBOX: dict[str, tuple] = {}
 SEED = 20261008
+# Explicit per-icon nudge applied after the D2 placement (controller ruling R8). Microchip:
+# the orange trace (y 520-591) is the icon's focal bar, so Ferris sits just above it.
+PLACEMENT_OFFSET: dict[str, tuple[int, int]] = {"Microchip": (0, -103)}
 
 
 def screen_bbox(name: str) -> tuple:
     return SCREEN_BBOX.get(name, SCREEN_BBOX_DEFAULT)
 
 
+def placement(name: str) -> tuple:
+    """Ferris's (x, y, w, h): the D2 box moved by PLACEMENT_OFFSET."""
+    x, y, w, h = raster.ferris_box(screen_bbox(name))
+    dx, dy = PLACEMENT_OFFSET.get(name, (0, 0))
+    return (x + dx, y + dy, w, h)
+
+
 def compose(name: str) -> Image.Image:
     plate = Image.open(paths.plate_path(name)).convert("RGBA")
-    x, y, w, h = raster.ferris_box(screen_bbox(name))
+    x, y, w, h = placement(name)
     f = raster.ferris_at(w)
     rng = np.random.default_rng([SEED, paths.ALT_NAMES.index(name)])
     layer = styles.STYLES[name](f, raster.classify(f), rng)

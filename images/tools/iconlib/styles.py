@@ -137,19 +137,29 @@ def xray(f, m, rng):
 
 
 def glass(f, m, rng):
-    """Glass: frosted translucent fill, bright rim, dark eyes, white highlights."""
+    """Glass: frosted translucent fill, bright rim, dark eyes, white highlights, soft dark edge."""
     h, w = m.alpha.shape
     solid = m.body | m.shade
-    k = max(3, (w // 50) | 1)
+    k = max(3, (w // 30) | 1)
     inner = Image.fromarray((solid * 255).astype(np.uint8), "L").filter(ImageFilter.MinFilter(k))
     rim = solid & ~(np.asarray(inner) > 127)
-    a = np.where(m.shade, 0.22, 0.34) * solid
-    a = np.where(rim, 0.85, a)
-    a = np.where(m.dark, 0.9, a)
+    a = np.where(m.shade, 0.5, 0.62) * solid
+    a = np.where(rim, 1.0, a)
+    a = np.where(m.dark, 0.95, a)
     a = np.where(m.white, 1.0, a)
-    rgb = np.full((h, w, 3), 245.0)
+    rgb = np.full((h, w, 3), (232.0, 242.0, 255.0))
     rgb[m.dark] = (20, 20, 24)
-    return _pad(_rgba(rgb, a * (m.alpha > 0)), (255, 255, 255), w / 70, 0.6)
+    body = _pad(_rgba(rgb, a * (m.alpha > 0)), (255, 255, 255), w / 70, 0.6)
+    # Soft darker outer edge (like the glass ghost's rim shadow), outside the silhouette only.
+    sil = Image.new("L", body.size, 0)
+    sil.paste(Image.fromarray(((m.alpha > 0) * 255).astype(np.uint8), "L"), (PAD, PAD))
+    edge = raster.glow(sil, (45, 60, 90), max(2.0, w / 50), 3.5)
+    ea = np.asarray(edge.getchannel("A")).astype(float) * (1 - np.asarray(sil) / 255.0)
+    edge.putalpha(Image.fromarray(ea.round().astype(np.uint8), "L"))
+    out = Image.new("RGBA", body.size, (0, 0, 0, 0))
+    out.alpha_composite(edge)
+    out.alpha_composite(body)
+    return out
 
 
 STYLES = {

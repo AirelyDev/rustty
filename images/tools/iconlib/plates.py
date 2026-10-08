@@ -22,7 +22,7 @@ INSET = 12
 # Batch 2. Holographic: its ghost drop shadow reaches y 560, so the box is taller. Glass:
 # smooth gradient, one tall mirror box. Microchip: the orange trace starts at y 520, so the
 # mirror stops at y 520 and a second mirror (x >= 335 only) plus a shift from the clean
-# board below clear the ghost's bottom lip without touching the trace. Xray: the board is
+# board below clear the ghost's bottom lip without touching the trace. Two shifts from the board to the left (bounded at y 523, just above the trace) soften the last ghost-lip shadow now that the trace's left end is visible. Xray: the board is
 # not symmetric (the left pad has two circles, the right one), so the mirror starts at
 # x 226, a shift repairs the pad's right edge, and a mirror about x = 225 (dx = 573)
 # re-creates the hidden right half of the left pad. Two more shifts take board from clean
@@ -36,6 +36,8 @@ PASSES: dict[str, list[tuple]] = {
         ("mirror", (190, 180, 520, 520), 7),
         ("shift", (235, 470, 340, 540), 0, 60),
         ("mirror", (335, 490, 520, 546), 7),
+        ("shift", (296, 470, 396, 523), -66, 0),
+        ("shift", (336, 470, 440, 523), -126, 0),
     ],
     "Paper": [("mirror", (198, 222, 505, 548), 7), ("mirror", (228, 203, 505, 270), 7)],
     "Retro": [("shift", (460, 150, 625, 620), 150, 0), ("mirror", (150, 140, 512, 620), 7)],
