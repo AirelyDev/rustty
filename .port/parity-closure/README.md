@@ -352,6 +352,10 @@ committed records named here.
   N529 CLOSED (cbindgen same-name collisions made `include/rustty.h` declare wrong layouts, incl.
   `rustty_size_report_encode`; provisional N551; A5 arm (f) + arm (a5) guard it). No UD taken.
   **Next free ids: UD378, N530, V34.**
+- **P8-W8 + P8-W0 T7 merged** (`334dec755`): UD378 (upstream's esctest runner writes its log to a predictable
+  `/tmp` name; Rustty uses a private mkdtemp directory) FIXED; N530 CLOSED (G3b self-test and G4 leg B drifted at the
+  pin advance; `c-vt-effects` and `c-vt-formatter` brought back to upstream's examples). **Next free ids: UD379, N531,
+  V34.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.
