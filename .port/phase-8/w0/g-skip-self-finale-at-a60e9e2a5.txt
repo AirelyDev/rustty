@@ -1,0 +1,65 @@
+=== G-SKIP :: no silent skips in test code (R14) ===
+  [PASS] silent let-else: expected RED RET, got RED RET
+  [PASS] silent comptime guard: expected RED RET, got RED RET
+  [PASS] silent match arm: expected RED RET, got RED RET
+  [PASS] cfg-only body: expected RED EMPTY, got RED EMPTY
+  [PASS] ignored but still silent: expected RED RET, got RED RET
+  [PASS] inverted skip (all assertions under one if): expected RED WRAP, got RED WRAP
+  [PASS] helper that skips silently: expected RED MSG, got RED MSG
+  [PASS] pivot before return: expected GREEN, got GREEN
+  [PASS] pivoting helper: expected GREEN, got GREEN
+  [PASS] same-named fn elsewhere is not the helper: expected RED RET, got RED RET
+  [PASS] production fn is never a helper: expected RED RET, got RED RET
+  [PASS] assertion arm: expected GREEN, got GREEN
+  [PASS] child arm: expected GREEN, got GREEN
+  [PASS] closure returning a value is not a skip: expected GREEN, got GREEN
+  [PASS] cfg-only body with a scoped ignore: expected GREEN, got GREEN
+  [PASS] a Miri-only ignore does not scope a cfg-only body: expected RED EMPTY, got RED EMPTY
+  [PASS] attribute scope is fine: expected GREEN, got GREEN
+  [PASS] B1 an earlier assertion does not excuse a later top-level return: expected RED RET, got RED RET
+  [PASS] B1 an earlier arm's assertion does not excuse a None => return: expected RED RET, got RED RET
+  [PASS] B1 a trivially-true assertion does not excuse a return: expected RED RET, got RED RET
+  [PASS] B1 a debug_assert does not excuse a return: expected RED RET, got RED RET
+  [PASS] B1 clean: a real assertion in the guard block: expected GREEN, got GREEN
+  [PASS] B2 a match with an empty None arm: expected RED ARM, got RED ARM
+  [PASS] B2 a match with a print-only Err arm: expected RED ARM, got RED ARM
+  [PASS] B2 clean: the None arm asserts: expected GREEN, got GREEN
+  [PASS] B3 an else that only prints, without the word skip: expected RED WRAP, got RED WRAP
+  [PASS] B3 an if-let wrapper plus a trivial assertion outside it: expected RED WRAP, got RED WRAP
+  [PASS] B3 clean: both branches assert: expected GREEN, got GREEN
+  [PASS] B3 clean: an if that is itself a failure check: expected GREEN, got GREEN
+  [PASS] B4 a bare return inside a closure that is the whole test: expected RED RET, got RED RET
+  [PASS] B4 a bare return inside a nested fn that is the whole test: expected RED RET, got RED RET
+  [PASS] B4 clean: a closure's return after a pivot: expected GREEN, got GREEN
+  [PASS] B5 a no-op named require_x_or_skip is not a pivot: expected RED PIVOT,RET, got RED PIVOT,RET
+  [PASS] B5 a pivot that reads the variable but never fails: expected RED PIVOT, got RED PIVOT
+  [PASS] B5 clean: split pivot (reader + failing impl) through a helper: expected GREEN, got GREEN
+  [PASS] B6 every assertion inside a for over a probe result: expected RED LOOP, got RED LOOP
+  [PASS] B6 every assertion inside .map over an Option: expected RED LOOP, got RED LOOP
+  [PASS] B6 clean: a for over a literal table: expected GREEN, got GREEN
+  [PASS] B6 clean: the probe result is asserted non-empty first: expected GREEN, got GREEN
+  [PASS] B7 an #[rstest] test is scanned: expected RED RET, got RED RET
+  [PASS] B7 a #[test_case(..)] test is scanned: expected RED RET, got RED RET
+  [PASS] B1 an assertion inside a conditional in the guard does not excuse the return: expected RED RET, got RED RET
+  [PASS] B4 clean: a callback's bare return that skips no assertion: expected GREEN, got GREEN
+  [PASS] B2 clean: an Err arm that is an accepted outcome in a test that asserts elsewhere: expected GREEN, got GREEN
+  [PASS] B6 clean: a literal table whose rows call a fn: expected GREEN, got GREEN
+  [PASS] MSG accept: a pivot before the skip line: expected GREEN, got GREEN
+  [PASS] WRAP accept: an if-wrapped test with a scoped ignore: expected GREEN, got GREEN
+  [PASS] B8 an untracked scratch file is not scanned: expected GREEN, got GREEN
+  [PASS] B8 a tracked file with a skip is scanned: expected RED RET, got RED RET
+  [PASS] B8 a production file NAMED like a test file is not test code: expected GREEN, got GREEN
+  [PASS] B8 a file loaded by a #[cfg(test)] mod decl IS test code: expected RED MSG, got RED MSG
+  [PASS] B8 a #[path]-loaded test module IS test code: expected RED MSG, got RED MSG
+  [PASS] B8 a cfg(any(test, ..)) item is test code: expected RED MSG, got RED MSG
+  [PASS] split test file calling its parent module's pivoting helper is accepted: expected GREEN, got GREEN
+  [PASS] a pivoting helper outside the module ancestry does not count: expected RED RET, got RED RET
+  RED  ERROR `git ls-files` failed in /var/folders/3z/vhbmzwg50g96n2644l_pz4nh0000gn/T/gskip_hmkj75n5 (exit 128): fatal: not a git repository (or any of the parent directories): .git -- G-SKIP scans tracked files only and needs a git work tree
+G-SKIP: ERROR (no verdict)
+  [PASS] B8 a root that is not a git work tree: expected an ERROR (exit 1), got ERROR
+  [PASS] verified dead guard: expected GREEN
+  [PASS] guard whose constant flipped: expected RED
+  [PASS] stale allow-site: expected RED
+  [PASS] ALLOW_SITES over its cap: expected RED
+  [PASS] ALLOW_GUARDS over its cap: expected RED
+SELF-TEST: PASS

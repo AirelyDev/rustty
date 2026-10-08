@@ -1,0 +1,35 @@
+G-LOGFILE: 179 reference file(s) — 1415 live reference log site(s), 1332 live port emission(s) on the thinnest arm (8 of them BYPASSING the facade — N14), 29 log facade name(s) resolved
+           3 reference file(s) DECLARED-EXCLUDED holding 4 site(s) (budget 3 file(s) / 4 site(s)): 2 build-tooling, 1 unresolved
+           79 reference `pub fn`(s) are referenced only from test code tree-wide, so their sites are test-only (task S-1c): addCodepoints, addLang, addLatin1, addPendingImage, addRect, addUTF16, addUTF32, addUTF8, changeIterator, checkGhosttyHEnum, clearClippingRegions, clientAccepted ...
+           15 DEAD reference site(s) subtracted from the inventory (budget 15): 5 dead-branch, 9 unreachable-private, 1 unreferenced-pub — the reference contains these calls and never reaches them
+           51 PORT-ONLY emission(s) declared and subtracted from the port count of 24 reference file(s) (budget 51): 3 abi-guard, 31 expansion, 3 instrumentation, 3 r13-handling, 9 rust-only-path, 1 test-only-reference, 1 transport — diagnostics with no reference counterpart, which would otherwise over-credit their file and mask a real loss (N81)
+           94 ABSENT reference site(s) declared per arm (budget 94): 72 infallible-call, 6 platform-gated, 16 unrepresentable-state — the reference reaches these, on a condition the port (or that arm) cannot produce; none may be emitted by an arm it excuses
+           29 ATTRIBUTION row(s) (budget 29): 8 default-owner, 3 facade, 18 owner — 8 shared port file(s) credit each emission to ONE reference file, not to every arm that holds the file
+           coverage: 168 of 171 reference file(s) with live log sites reconciled (+3 excluded), 1415 of 1419 site(s) (99%)
+RED: 18 LOG-ABSENT-SITES.tsv declaration(s) name a line that is not a live PRODUCTION reference log site at the pin:
+       :56 src/renderer/generic.zig:1051 -> crates/rustty-renderer/src/generic/linux_impl/lifecycle.rs fn loop_enter  (not a live production reference log site at the pin)
+       :57 src/renderer/generic.zig:1237 -> crates/rustty-renderer/src/generic/linux_impl/lifecycle.rs fn set_macos_display_id  (not a live production reference log site at the pin)
+       :59 src/renderer/generic.zig:1251 -> crates/rustty-renderer/src/generic/linux_impl/lifecycle.rs fn set_macos_display_id  (not a live production reference log site at the pin)
+       :60 src/renderer/generic.zig:1256 -> crates/rustty-renderer/src/generic/linux_impl/lifecycle.rs fn set_macos_display_id  (not a live production reference log site at the pin)
+       :61 src/renderer/generic.zig:1258 -> crates/rustty-renderer/src/generic/linux_impl/lifecycle.rs fn set_macos_display_id  (not a live production reference log site at the pin)
+       :62 src/renderer/generic.zig:1626 -> crates/rustty-renderer/src/generic/macos_impl/frame.rs fn update_frame  (not a live production reference log site at the pin)
+       :63 src/renderer/generic.zig:1626 -> crates/rustty-renderer/src/generic/linux_impl/frame.rs fn update_frame  (not a live production reference log site at the pin)
+       :64 src/renderer/generic.zig:3000 -> crates/rustty-renderer/src/generic/macos_impl/cells.rs fn rebuild_row  (not a live production reference log site at the pin)
+RED: 3 reference file(s) whose port emits fewer diagnostics than the allowance permits:
+       src/Surface.zig: reference=108 port=106 deficit=2 allowance=0
+           arms: crates/rustty-core/src/surface.rs+crates/rustty-core/src/surface/lifecycle.rs+crates/rustty-core/src/surface/message.rs+crates/rustty-core/src/surface/text_font.rs+crates/rustty-core/src/surface/key_input.rs+crates/rustty-core/src/surface/mouse_input.rs+crates/rustty-core/src/surface/binding_action.rs+crates/rustty-core/src/surface/clipboard.rs=106
+           rows: ['S41-F1(WAIVED)', 'S42-F2(CLOSED)']
+       src/config/Config.zig: reference=29 port=26 deficit=3 allowance=0
+           arms: crates/rustty-config/src/config_struct.rs+crates/rustty-config/src/config_struct/support.rs+crates/rustty-config/src/config_struct/load.rs+crates/rustty-config/src/config_struct/finalize_clone.rs+crates/rustty-config/src/value_types.rs+crates/rustty-config/src/value_types/repeatable.rs+crates/rustty-config/src/value_types/keybinds.rs=26
+           rows: ['S74-F5(CLOSED)', 'S75-F1(CLOSED)', 'S75-F2(CLOSED)']
+       src/renderer/generic.zig: reference=33 port=24 deficit=8 allowance=0
+           arms: crates/rustty-renderer/src/generic.rs+crates/rustty-renderer/src/generic/macos_impl.rs+crates/rustty-renderer/src/generic/macos_impl/lifecycle.rs+crates/rustty-renderer/src/generic/macos_impl/cells.rs+crates/rustty-renderer/src/generic/macos_impl/frame.rs+crates/rustty-renderer/src/generic/macos_impl/draw.rs+crates/rustty-renderer/src/generic/macos_impl/cross_thread.rs+crates/rustty-renderer/src/metal/cvdisplaylink.rs=31 | crates/rustty-renderer/src/generic/linux_impl.rs+crates/rustty-renderer/src/generic/linux_impl/lifecycle.rs+crates/rustty-renderer/src/generic/linux_impl/cells.rs+crates/rustty-renderer/src/generic/linux_impl/frame.rs+crates/rustty-renderer/src/generic/linux_impl/draw.rs+crates/rustty-renderer/src/generic/linux_impl/cross_thread.rs=24 (expects 32 after declared-absent sites)
+           rows: ['S113-F1(CLOSED)', 'S115-F2(CLOSED)', 'S115-F4(WAIVED)', 'S116-F2(WAIVED)']
+           message content: 994 of 1425 LIVE EMISSION(S) (every shape: log::, macro/fn facade, and facade-bypassing print) have a preserved reference comment to check against (69%). The rest are UNCHECKED — this pass can only compare what the port wrote down.
+           message content: 1 crate(s) have live emissions and NOT ONE checkable pair, so the check cannot see them at all: crates/rustty-config
+           message content: 3 crate(s) emit NOTHING at all, so they are outside the ratio entirely, not merely unchecked: crates/rustty-build-config, crates/rustty-lib, crates/rustty-unicode
+           message content: unchecked sites are CONCENTRATED, not random — 11% of the 431 unchecked sites are in crates/rustty-apprt/src/gtk/class/application/action.rs (32) and crates/rustty-apprt/src/gtk/class/application.rs (18)
+           message content: 13 divergence(s) and 18 stale preserved comment(s), 28 declared (cap 28)
+           message content: 1 emission(s) (0 undeclared) HAVE a candidate reference comment in their block and match none of it above the 0.55 similarity floor (budget 0). This is NOT the same state as having no comment at all — that is the honest unknown; this is the suspicious one.
+NOTE: 1 `log_*` definition(s) never reach the log facade (no-op stubs; their call sites are counted as dropped, not emitted):
+       crates/rustty-vt/src/stream.rs:2570 log_unsupported_once

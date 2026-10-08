@@ -1,0 +1,8 @@
+  ok   name arm fires when the ported fn is renamed away
+  ok   citation arm fires when the PORT NOTE citation is removed
+  ok   accepted arm fires when the TEST_AUDIT.md entry is withdrawn
+  ok   vacuity arm trips on an empty oracle read
+  ok   audit_file_coverage: GIT_DIR + GIT_WORK_TREE redirect neither ROOT, ORACLE nor the oracle file list
+  ok   audit_symbol_coverage: GIT_DIR + GIT_WORK_TREE redirect neither ROOT, ORACLE nor the oracle file list
+  ok   audit_test_coverage: GIT_DIR + GIT_WORK_TREE redirect neither ROOT, ORACLE nor the oracle file list
+SELF-TEST GREEN: all 4 acceptance arms demonstrated reachable FAIL; the audit tools ignore GIT_* redirection.

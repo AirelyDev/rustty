@@ -1,0 +1,12 @@
+  ok   arm (a3b) still ran after (a3) failed
+  ok   arm (a4) still ran after (a3) failed
+  ok   arm (b) still ran after (a3) failed
+  ok   arm (d) still ran after (a3) failed
+  ok   arm (c) still ran after (a3) failed
+  ok   arm (e) still ran after (a3) failed
+  ok   arm (f) still ran after (a3) failed
+  ok   arm (a3) reported as FAILED
+  ok   arm (a3b) reported as FAILED
+  ok   the verdict line is RED and names (a3)
+  ok   the gate exits 1
+SELF-TEST-MASKING: PASS

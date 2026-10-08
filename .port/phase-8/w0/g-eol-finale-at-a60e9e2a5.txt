@@ -1,0 +1,18 @@
+=== G-EOL 1/3 :: no-conversion attributes are in force ===
+  ok      .port/phase-0/corpora/cvt (400 sampled, none convertible)
+  ok      .port/phase-0/corpora/terminfo/compiled (2 sampled, none convertible)
+  ok      .port/phase-0/harness/fixtures (12 sampled, none convertible)
+  ok      crates-sys/*/vendor/** (400 sampled, none convertible)
+  ok      dist/windows (3 sampled, none convertible)
+=== G-EOL 2/3 :: index bytes == worktree bytes ===
+  ok      6208 tracked file(s), no index/worktree divergence
+=== G-EOL 3/3 :: seed corpora vs the reference ===
+  reference: /Users/gael/projects/ghostty @ a60e9e2a5 (the pin; test/fuzz-libghostty/corpus clean)
+  ok      osc-initial (20 seed(s) byte-identical to the reference)
+  ok      parser-initial (50 seed(s) byte-identical to the reference)
+  ok      stream-initial (24 seed(s) byte-identical to the reference)
+  ok      osc-cmin (20 seed(s) byte-identical to the reference)
+  ok      parser-cmin (616 seed(s) byte-identical to the reference)
+  ok      stream-cmin (3271 seed(s) byte-identical to the reference)
+--- G-EOL summary: 7 arm(s) ran ---
+G-EOL GREEN (7 arm(s) clean).

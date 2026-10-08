@@ -1,0 +1,83 @@
+self-test: dropped-comment detected = True (missing=['returns a circular buffer containing type t'])
+self-test: relocation covers the moved comment, drop still caught = True (own-only missing=2, with relocation=['a comment the port genuinely dropped on the floor'])
+self-test: item-scoped relocation covers only the item = True (missing=['zebra quartz banjo lighthouse mercury volcano outside'])
+self-test: missing relocation path is an error = True
+self-test: missing relocation item is an error = True
+self-test: [font] real row font/Collection.zig MISSING without relocation, covered with it = True (in oracle=True, before=1, after=0)
+self-test: [input] real row input/function_keys.zig MISSING without relocation, covered with it = True (in oracle=True, before=1, after=0)
+self-test: [cfg-fmt] real row config/key.zig MISSING without relocation, covered with it = True (in oracle=True, before=1, after=0)
+self-test: relocations covered-only-via-entry=True dropped-still-missing=True missing-target-blocks=True real-entries-valid=True
+  [ok ] not-carried: ACCEPT: valid no-counterpart (doc above / inside span / qualified) and gag rows prove themselves (errors=[])
+  [ok ] not-carried: REJECT: cap below the row count
+  [ok ] not-carried: REJECT: cap above the row count (stale ratchet)
+  [ok ] not-carried: REJECT: missing cap directive
+  [ok ] not-carried: REJECT: text differs from the oracle line (stale in oracle)
+  [ok ] not-carried: REJECT: row points at a non-distinctive comment
+  [ok ] not-carried: REJECT: unknown class
+  [ok ] not-carried: REJECT: reason too short
+  [ok ] not-carried: REJECT: oracle file not in the crate map
+  [ok ] not-carried: REJECT: oracle file absent at the pin
+  [ok ] not-carried: REJECT: duplicate row
+  [ok ] not-carried: REJECT: comment not attached to decl
+  [ok ] not-carried: REJECT (W1, A-1 synthetic): decl `priv` (a local binding) is denylisted
+  [ok ] not-carried: REJECT (W1): decl `orelse` is denylisted
+  [ok ] not-carried: REJECT (W1): decl `comptime` is denylisted
+  [ok ] not-carried: REJECT (W1): decl `errdefer` is denylisted
+  [ok ] not-carried: REJECT (W1): decl `try` is denylisted
+  [ok ] not-carried: REJECT (W1): decl `self` is denylisted
+  [ok ] not-carried: REJECT (W1): decl `alloc` is denylisted
+  [ok ] not-carried: REJECT (W1): a used-but-not-declared identifier (`wibble`) is not a decl
+  [ok ] not-carried: REJECT: declared decl has a Rust ITEM anywhere in the workspace
+  [ok ] not-carried: REJECT (W1): declared decl has a Rust FIELD of that name
+  [ok ] not-carried: REJECT (W1, renamed counterpart): a `///` doc cites the decl
+  [ok ] not-carried: REJECT (W1, renamed counterpart): a `// PORTS:` comment cites the decl
+  [ok ] not-carried: ACCEPT: a declared decl merely USED in Rust code (not an item) does not count
+  [ok ] not-carried: REJECT: qualified member declared inside `impl Container`
+  [ok ] not-carried: REJECT: evidence doc outside the allowed records
+  [ok ] not-carried: REJECT: evidence needle not found
+  [ok ] not-carried: REJECT (W4): an ambiguous evidence needle
+  [ok ] not-carried: REJECT: evidence record does not name the decl
+  [ok ] not-carried: REJECT (W1): evidence record does not name the ORACLE FILE
+  [ok ] not-carried: REJECT: struck evidence record cannot vote
+  [ok ] not-carried: REJECT (W3, A-3 synthetic): RESOLVED/PORTED in the record BODY cannot vote
+  [ok ] not-carried: REJECT (W4): a heading needle whose record exceeds the size cap
+  [ok ] not-carried: REJECT: gag evidence record that does not name the rule
+  [ok ] not-carried: REJECT (W2, A-2 synthetic): gag evidence that names the rule but not this line
+  [ok ] not-carried: REJECT: gag row with a decl
+  [ok ] not-carried: REJECT (W2): gag text with technical words (flag, handler)
+  [ok ] not-carried: ACCEPT (W2): a MIXED-CARRIED gag row whose phrase carries the technical words
+  [ok ] not-carried: REJECT (W2): a MIXED-CARRIED phrase missing a technical word
+  [ok ] not-carried: REJECT (W2): MIXED-CARRIED phrase absent from the port pool is unproven; present, it is proven
+  [ok ] not-carried: REJECT: gag text containing a digit (technical content)
+  [ok ] not-carried: REJECT: gag text containing a snake_case (technical content)
+  [ok ] not-carried: REJECT: gag text containing a camelCase (technical content)
+  [ok ] not-carried: REJECT: gag text containing a backtick (technical content)
+  [ok ] not-carried: REJECT: gag text containing a ALL-CAPS (technical content)
+  [ok ] not-carried: REJECT (W2): gag text using a word of the surrounding oracle code
+  [ok ] not-carried: ACCEPT: gag text with only allowlisted capitals (NOTE, XDG, GNOME)
+  [ok ] not-carried: ACCEPT: gag text naming the proper noun X11 (whole token)
+  [ok ] not-carried: REJECT: proper-noun allowance is exact-token only (X11R6)
+  [ok ] not-carried: REJECT: proper-noun allowance is exact-token only (X11_ATOM)
+  [ok ] not-carried: REJECT: proper-noun allowance is exact-token only (X12)
+  [ok ] not-carried: REJECT: proper-noun allowance is exact-token only (XA_ATOM)
+  [ok ] not-carried: REJECT: gag text over the word limit
+  [ok ] not-carried: ACCEPT: over the limit with a JUSTIFIED-LONG: reason
+  [ok ] not-carried: APPLY: a valid row excuses its MISSING and REVIEW comment; others stay
+  [ok ] not-carried: APPLY: an invalid row excuses nothing
+  [ok ] not-carried: APPLY: a text that also occurs at an uncovered site stays MISSING
+  [ok ] not-carried: STALE: a row whose comment the port pool now carries is stale
+  [ok ] not-carried: REAL: all 79 committed rows prove themselves (errors=0)
+  [ok ] not-carried: REAL ATTACK A-1: window.zig:863 declared no-counterpart with decl `priv` is RED
+  [ok ] not-carried: REAL ATTACK A-1': the same row with a non-denylisted used identifier is still RED (not declared / evidence names neither it nor window.zig)
+  [ok ] not-carried: REAL ATTACK A-2: window.zig:862 as gag-prose citing a record that merely mentions the rule is RED (the record lists no such line; the text is technical)
+  [ok ] not-carried: REAL ATTACK A-3: RESOLVED appended to the BODY of the AD-3 anchor paragraph stops it voting (and the unmodified copy votes)
+  [ok ] not-carried: REAL NEG (W1 renamed counterpart): adw_version.zig:50 as a `comptime_version` row is RED — `BASELINE`'s doc cites it
+  [ok ] not-carried: REAL NEG (W4): a heading needle on the big `L5 GTK baseline pin (AD-3)` section is over the record cap
+  [ok ] not-carried: REAL NEG: mutated text of a real row is STALE
+  [ok ] not-carried: REAL NEG: the getMut row unqualified hits `ScreenMap::get_mut` (qualification is what proves absence, per Config)
+  [ok ] not-carried: REAL NEG: a real row whose evidence record does not name its decl
+  [ok ] not-carried: REAL NEG: a real row re-pointed at a decl it is not attached to (DllMain's doc claimed for `ghostty_string_free`, the fn just above it)
+  [ok ] not-carried: REAL NEG: BlurRegion.zig:59 ("~30% bigger") can never be gag prose (digit)
+  [ok ] not-carried: REAL NEG: lib_vt.zig `Force-reference our memset override` (carried by the port) declared as a row is STALE
+  [ok ] not-carried: REAL: the committed lib_vt.zig rows are NOT stale against the real bin pool
+  [ok ] not-carried: REAL: the committed MIXED-CARRIED row's phrase is in the apprt port

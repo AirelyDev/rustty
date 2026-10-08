@@ -1,0 +1,16 @@
+=== G7 :: crate graph acyclic ===
+--- rustty Cargo dependency graph (binding) ---
+rustty workspace crates parsed: 44
+inter-crate runtime edges: 259
+cross-crate SCCs (size>1): 0
+
+GREEN: no cross-crate cycle in the rustty Cargo graph
+
+--- layering assertion: rustty-font has NO rustty-vt edge (prod/dev/build) ---
+  GREEN: rustty-font declares no rustty-vt dependency
+
+--- lib-vt assertion: rustty-vt / rustty-vt-c have NO rustty-global edge (prod/dev/build) ---
+  GREEN: rustty-vt declares no rustty-global dependency
+  GREEN: rustty-vt-c declares no rustty-global dependency
+
+GREEN: rustty crate graph is acyclic (G7)
