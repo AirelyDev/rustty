@@ -11307,3 +11307,21 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `cargo build --workspace`; documented in `.port/tools/CI.md`), BLOCKED (a WARNINGS row, not a skip) when the rustup
   target is absent. Negative control: replacing the wrapper with a bare `rustty_os::path::realpath` call made the
   check RED (E0433), reverted.
+
+## N520 — `flags.xt_checksum` is not carried by the snapshot TERMINAL record
+
+- **id**: N520. P8-W3 T1 (R1 §2.5 risk 3, R1 §4 Q2, DECISIONS N520). **severity**: low (opt-in feature, no crash).
+  **kind**: upstream format gap, carried for byte parity. **state**: RECORD-ONLY.
+- **what**: XTCHECKSUM (`CSI Ps # y`) sets `Terminal.flags.xt_checksum`, which is program state. Upstream's
+  TERMINAL record (`snapshot/terminal.zig`, the flag list at `:392-402`, unchanged in `12752b2ac..a60e9e2a5`)
+  encodes `shell_redraw`, `modify_other_keys_2`, the mouse flags and `password_input`, but not `xt_checksum`, and
+  `default_xt_checksum` is not encoded either. Rustty's `snapshot/terminal.rs` mirrors the record byte for byte, so
+  a restored terminal comes back from `Terminal::init` with `flags.xt_checksum = Options.default_xt_checksum` (the
+  restore path builds its `Options` with the zero value, the DEC checksum) and answers DECRQCRA with that variant
+  instead of the one the program selected.
+- **why not a UD**: it is reachable only with `xt_checksum_report` on (off by default in the vt handler, the config
+  and the C surface), it cannot crash or corrupt state, and fixing it is a change to a documented binary format
+  whose goldens are cross-checked against Ghostty's. A Rustty-only field would break that byte identity. Upstream
+  is the right place to extend the record.
+- **revisit**: if upstream adds `xt_checksum` (or `default_xt_checksum`) to the TERMINAL record, port it with the
+  record change and retire this entry.

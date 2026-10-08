@@ -162,6 +162,10 @@ pub struct Flags {
     /// if the configuration allows it.
     pub mouse_shift_capture: MouseShiftCapture,
 
+    /// The checksum variant DECRQCRA computes, set via XTCHECKSUM.
+    // xt_checksum: xt_checksum.Flags = .{},
+    pub xt_checksum: crate::xt_checksum::Flags,
+
     /// True if the window is focused.
     pub focused: bool,
 
@@ -208,6 +212,7 @@ impl Default for Flags {
             mouse_event: mouse::Event::None,
             mouse_format: mouse::Format::X10,
             mouse_shift_capture: MouseShiftCapture::Null,
+            xt_checksum: crate::xt_checksum::Flags::default(),
             focused: true,
             visible: true,
             resize_pull_scrollback: true,
@@ -317,6 +322,10 @@ pub struct Options {
     // default_cursor_blink: ?bool = false,
     pub default_cursor_style: crate::screen::CursorStyle,
     pub default_cursor_blink: Option<bool>,
+
+    /// The checksum variant DECRQCRA computes after RIS.
+    // default_xt_checksum: xt_checksum.Flags = .{},
+    pub default_xt_checksum: crate::xt_checksum::Flags,
 
     /// The total storage limit for Kitty images in bytes. Has no effect
     /// if kitty images are disabled at build-time.
@@ -631,6 +640,11 @@ pub struct Terminal {
     // cursor: Cursor = .{}
     pub cursor: Cursor,
 
+    /// The checksum variant DECRQCRA computes after RIS. The current variant
+    /// is in `flags.xt_checksum`.
+    // default_xt_checksum: xt_checksum.Flags = .{},
+    pub default_xt_checksum: crate::xt_checksum::Flags,
+
     /// The most recently set mouse shape for the terminal.
     pub mouse_shape: mouse::Shape,
 
@@ -840,12 +854,15 @@ impl Terminal {
                 default_blink: opts.default_cursor_blink,
                 ..Cursor::default()
             },
+            default_xt_checksum: opts.default_xt_checksum,
             mouse_shape: mouse::Shape::Text,
             glyph_glossary: glyph::Glossary::empty_in(alloc),
             kitty_dnd: None,
             io: crate::sys::io_native,
             flags: Flags::default(),
         };
+        // result.flags.xt_checksum = opts.default_xt_checksum;
+        result.flags.xt_checksum = opts.default_xt_checksum;
         result.set_cursor_style(ansi::CursorStyle::Default);
         Ok(result)
     }
@@ -912,6 +929,37 @@ impl Terminal {
         // return .init(self);
         let self_ptr: *mut Terminal = self;
         Handler::init(self_ptr)
+    }
+
+    /// Set the checksum variant restored by RIS. Like `ModeState.setDefault`,
+    /// this also changes the current variant.
+    pub fn set_default_xt_checksum(&mut self, flags: crate::xt_checksum::Flags) {
+        self.default_xt_checksum = flags;
+        self.flags.xt_checksum = flags;
+    }
+
+    /// Compute the DECRQCRA checksum of a rectangle of the active area,
+    /// using the variant selected by XTCHECKSUM.
+    pub fn rect_xt_checksum(&self, req: crate::xt_checksum::Request) -> u16 {
+        // const origin: ?ScrollingRegion = if (self.modes.get(.origin))
+        //     self.scrolling_region
+        // else
+        //     null;
+        let origin: Option<ScrollingRegion> = if self.modes.get(modespkg::Mode::Origin) {
+            Some(self.scrolling_region)
+        } else {
+            None
+        };
+        // const screen = self.screens.active;
+        // SAFETY: `screens.active` is a stable heap pointer owned by
+        // `self.screens`; the shared borrow lives only for this read-only
+        // computation, during which nothing writes through `self`.
+        let screen: &Screen = unsafe { &*self.screens.active };
+        crate::xt_checksum::compute(
+            screen,
+            req.selection(&screen.pages, origin),
+            self.flags.xt_checksum,
+        )
     }
 
     /// Change the cursor's current shape and blink behavior.

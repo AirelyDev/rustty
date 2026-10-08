@@ -1802,6 +1802,7 @@ mod tests {
             default_modes: modespkg::ModePacked::default(),
             default_cursor_style: crate::screen::CursorStyle::Block,
             default_cursor_blink: Some(false),
+            default_xt_checksum: Default::default(),
             kitty_image_storage_limit: 320 * 1000 * 1000,
             kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
         }

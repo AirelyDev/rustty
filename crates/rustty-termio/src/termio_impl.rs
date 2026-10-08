@@ -579,6 +579,7 @@ impl<M: AppMailbox> Termio<M> {
                 // .default_cursor_blink = opts.config.cursor_blink,
                 default_cursor_style: opts.config.cursor_style,
                 default_cursor_blink: opts.config.cursor_blink,
+                default_xt_checksum: Default::default(),
                 colors: rustty_vt::terminal::Colors {
                     // .background = .init(opts.config.background.toTerminalRGB()),
                     background: color::DynamicRGB::init(opts.config.background.to_terminal_rgb()),
@@ -2344,6 +2345,7 @@ mod scrollback_limit_handoff_tests {
                 default_modes: rustty_vt::modes::ModePacked::default(),
                 default_cursor_style: rustty_vt::screen::CursorStyle::Block,
                 default_cursor_blink: Some(false),
+                default_xt_checksum: Default::default(),
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
             },

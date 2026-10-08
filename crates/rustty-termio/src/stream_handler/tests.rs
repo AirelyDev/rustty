@@ -36,6 +36,7 @@ pub(crate) fn terminal_opts(default_cursor_blink: Option<bool>) -> rustty_vt::te
         default_modes: rustty_vt::modes::ModePacked::default(),
         default_cursor_style: rustty_vt::screen::CursorStyle::Block,
         default_cursor_blink,
+        default_xt_checksum: Default::default(),
         colors: rustty_vt::terminal::Colors {
             background: color::DynamicRGB::UNSET,
             foreground: color::DynamicRGB::UNSET,
