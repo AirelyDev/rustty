@@ -707,8 +707,17 @@ impl PageList {
                         let rows = unsafe { (*page).rows.ptr(base) };
                         for i in 0..unsafe { (*page).size.rows } {
                             let row = unsafe { rows.add(i as usize) };
+                            // If the cut splits a wide char, clear its head too.
+                            let cells = unsafe { (*row).cells().ptr(base) };
+                            let start = if unsafe { (*cells.add(cols as usize - 1)).wide() }
+                                == crate::page::Wide::Wide
+                            {
+                                cols as usize - 1
+                            } else {
+                                cols as usize
+                            };
                             unsafe {
-                                (*page).clear_cells(row, cols as usize, self.cols as usize);
+                                (*page).clear_cells(row, start, self.cols as usize);
                             }
                         }
 

@@ -11160,3 +11160,25 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   Z a b c d e g h l m n p q r s t u @ }` plus `else`) and the ESC set 23 arms (`B A 0 7 8 D E H M N O V W Z c n o
   ~ } | = > \\` plus `else`); `a60e9e2a5` gives the same sets (both self-tests PASS at both revisions). G9
   against the frozen surface stays GREEN (693/693).
+
+## N518 — A non-reflow narrow leaves a wide head in the new last column (ICH / EL 1 / row shift reach past the row)
+
+- **id**: N518. P8-W0 T1 (Phase 8 delta review R1 §2.1). **severity**: medium (reachable crash from program
+  output). **state**: CLOSED 2026-10-07 (P8-W0 T1).
+- **found**: Phase 8 delta review of upstream `e6db5b633` ("terminal: fix crash after shrinking columns splits
+  a wide char"); the Rustty port at `401b95b0e` carried the same defect in `resize_without_reflow`.
+- **cause**: narrowing without reflow (`PageList.resizeWithoutReflow`, the cols-less arm) cleared only
+  `[cols, old_cols)`. When the cut fell between a wide head and its spacer tail the head stayed in the new last
+  column, and every operation that pairs a head with the following cell reached past the row end:
+  `insert_blanks` and `erase_line(.left)` in `Screen::clear_cells` (debug assertion; release writes out of row),
+  and the row-shift path writing `cells[cols]`.
+- **reachable recipe**: alt screen (`CSI ? 1049 h`, no reflow), print a wide character whose head is at column
+  `cols - 1` after the next step, resize one column narrower, then `CSI @` or `CSI 1 K` at the last column.
+- **fix** (`vt: clear a wide head cut by a non-reflow narrow (e6db5b633) (P8-W0 T1)`): the arm now starts the
+  clear at `cols - 1` when the cell there is `Wide::Wide`, reading it through the raw row pointer. Tests:
+  `terminal_resize_less_cols_without_reflow_cutting_wide_char_tail` (upstream's test) and the Rustty-only
+  stream-level `terminal_resize_less_cols_on_alt_screen_then_ich_and_el1_with_a_cut_wide_char`; both RED before
+  the fix (observed: the upstream test fails its `is_empty` assertion in debug, not run in release; the alt-screen
+  test fails "no wide head in the last column" right after the resize in debug and release, and with that assertion disabled the
+  release build still fails "cell 9 written", because a background SGR makes the stray blank non-empty), GREEN
+  after in debug (206 resize tests), release (17) and Miri (17, no UB).
