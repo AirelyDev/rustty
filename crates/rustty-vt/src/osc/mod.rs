@@ -322,6 +322,39 @@ pub enum Command<'p> {
 
     /// Kitty desktop notifications (OSC 99)
     KittyDesktopNotification(KittyDesktopNotification<'p>),
+
+    /// An OSC sequence whose number this parser does not implement. Only
+    /// produced when `Parser.unknown_max_bytes` is nonzero.
+    Unknown(Unknown<'p>),
+}
+
+/// An OSC sequence whose number this parser does not implement. For
+/// the sequence `ESC ] 7400;status=busy BEL`, `content` is
+/// "7400;status=busy" and `terminator` is `.bel`.
+// PORT NOTE: `Command.Unknown`, hoisted to module level like the other
+// payload types. `Unknown.C` and `cval()` belong to the C API (P8-W5 T3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unknown<'p> {
+    /// Every byte fed to the parser for this sequence, including the
+    /// number at the start. Owned by the parser and only valid until
+    /// the next parser call.
+    ///
+    /// When the bytes come from the VT stream, this never contains
+    /// control characters (bytes below 0x20). Those end the sequence,
+    /// cancel it, or are dropped before they reach the OSC parser.
+    // PORT NOTE (N263): borrowed from the parser's buffer or capture, as
+    // the reference's slice is ("only valid until the next parser call" is
+    // the borrow).
+    pub content: &'p [u8],
+
+    /// True if the sequence was longer than `Parser.unknown_max_bytes`,
+    /// or memory ran out while reading it. In that case `content`
+    /// holds only the beginning of the sequence.
+    pub truncated: bool,
+
+    /// How the program ended the sequence. If you send a reply, end it
+    /// the same way.
+    pub terminator: Terminator,
 }
 
 // PORT NOTE: `conemu_change_tab_title: union(enum) { reset, value: [:0]const u8 }`
@@ -349,7 +382,7 @@ impl Command<'_> {
     // conemu_guimacro, conemu_run_process, conemu_output_environment_variable,
     // conemu_xterm_emulation, conemu_comment, kitty_text_sizing,
     // kitty_clipboard_protocol, kitty_dnd_protocol, context_signal,
-    // kitty_desktop_notification).
+    // kitty_desktop_notification, unknown).
     // NOTE: Order matters, see LibEnum documentation.
 
     // comptime {
@@ -400,6 +433,7 @@ impl Command<'_> {
             Command::KittyDndProtocol(_) => CommandKey::KittyDndProtocol,
             Command::ContextSignal(_) => CommandKey::ContextSignal,
             Command::KittyDesktopNotification(_) => CommandKey::KittyDesktopNotification,
+            Command::Unknown(_) => CommandKey::Unknown,
         }
     }
 }
@@ -441,6 +475,7 @@ pub enum CommandKey {
     KittyDndProtocol,
     ContextSignal,
     KittyDesktopNotification,
+    Unknown,
 }
 
 /// PORT NOTE: `parsers.semantic_prompt.Command` re-exported as
@@ -710,6 +745,36 @@ pub struct Parser {
     /// smaller policy than the default.
     pub max_allocating_bytes: usize,
 
+    /// The most bytes to keep from each OSC sequence whose number this
+    /// parser does not implement.
+    ///
+    /// Zero, the default, discards these sequences. The parser stops
+    /// reading one as soon as it sees a number it doesn't know, and `end`
+    /// returns null. Any other value makes `end` return `Command.unknown`
+    /// with the sequence's bytes, so you can implement the sequence
+    /// yourself:
+    ///
+    /// ```zig
+    /// var p: Parser = .init(alloc);
+    /// defer p.deinit();
+    /// p.unknown_max_bytes = 1024;
+    ///
+    /// p.nextSlice("7400;status=busy");
+    /// const cmd = p.end(0x07).?; // .unknown, content "7400;status=busy"
+    /// ```
+    ///
+    /// A sequence longer than the limit is still returned, with the
+    /// first bytes up to the limit and `truncated` set to true.
+    ///
+    /// Limits up to `MAX_BUF` use a buffer inside the parser and never
+    /// allocate. Larger limits allocate for each unknown sequence. Without
+    /// an allocator, a larger limit behaves like `MAX_BUF`. If memory runs
+    /// out partway through a sequence, it is returned truncated.
+    ///
+    /// Sequences with a number the parser does implement are not affected,
+    /// even when their contents are malformed.
+    pub unknown_max_bytes: usize,
+
     /// Current state of the parser.
     pub state: State,
 
@@ -742,9 +807,24 @@ pub enum State {
     Start,
     Invalid,
 
+    /// Collecting the bytes of a sequence whose number is not
+    /// implemented, to return as `Command.unknown`. Only entered when
+    /// `unknown_max_bytes` is nonzero.
+    Unknown,
+
+    /// Like `unknown`, but the byte limit has been reached. Later bytes
+    /// are dropped and the command is returned with `truncated` set.
+    UnknownTruncated,
+
     // OSC command prefixes. Not all of these are valid OSCs, but may be
     // needed to "bridge" to a valid OSC (e.g. to support OSC 777 we need to
     // have a state "77" even though there is no OSC 77).
+    //
+    // The name of each prefix state must be exactly the bytes consumed
+    // to reach it. `beginUnknown` relies on this to recover the prefix.
+    // PORT NOTE: the Rust names carry an `S` (an identifier cannot start
+    // with a digit), so the consumed bytes are `State::prefix`, a `const`
+    // table kept next to this list, not the variant name.
     S0,
     S1,
     S2,
@@ -802,10 +882,79 @@ impl State {
     // identifier cannot start with a digit); the tag is the variant name with
     // that `S` removed, or the lower-cased name for the two word tags.
     pub fn tag_name(self) -> String {
+        // (`unknown_truncated` is the one multi-word tag.)
+        if self == State::UnknownTruncated {
+            return "unknown_truncated".to_string();
+        }
         let name = format!("{self:?}");
         match name.strip_prefix('S') {
             Some(digits) if digits.bytes().all(|b| b.is_ascii_digit()) => digits.to_string(),
             _ => name.to_ascii_lowercase(),
+        }
+    }
+
+    /// The bytes consumed to reach this prefix state: `@tagName(state)` for
+    /// a prefix state (`.@"13"` after reading "13"), and "" for `start`.
+    ///
+    /// PORT NOTE (P8 DECISIONS P4): the reference recovers the prefix with
+    /// `inline else => |s| @tagName(s)`, a comptime table of static strings.
+    /// This is that table as a `const` match: no allocation, no formatting,
+    /// unlike `tag_name` (which allocates and must never be used on the
+    /// unknown-capture path). `invalid`, `unknown` and `unknown_truncated`
+    /// are not prefix states and are unreachable here, as in the reference.
+    #[inline]
+    pub const fn prefix(self) -> &'static [u8] {
+        match self {
+            State::Start => b"",
+            State::Invalid | State::Unknown | State::UnknownTruncated => unreachable!(),
+            State::S0 => b"0",
+            State::S1 => b"1",
+            State::S2 => b"2",
+            State::S3 => b"3",
+            State::S4 => b"4",
+            State::S5 => b"5",
+            State::S6 => b"6",
+            State::S7 => b"7",
+            State::S8 => b"8",
+            State::S9 => b"9",
+            State::S30 => b"30",
+            State::S300 => b"300",
+            State::S3008 => b"3008",
+            State::S10 => b"10",
+            State::S11 => b"11",
+            State::S12 => b"12",
+            State::S13 => b"13",
+            State::S14 => b"14",
+            State::S15 => b"15",
+            State::S16 => b"16",
+            State::S17 => b"17",
+            State::S18 => b"18",
+            State::S19 => b"19",
+            State::S21 => b"21",
+            State::S22 => b"22",
+            State::S52 => b"52",
+            State::S55 => b"55",
+            State::S66 => b"66",
+            State::S72 => b"72",
+            State::S77 => b"77",
+            State::S99 => b"99",
+            State::S104 => b"104",
+            State::S105 => b"105",
+            State::S110 => b"110",
+            State::S111 => b"111",
+            State::S112 => b"112",
+            State::S113 => b"113",
+            State::S114 => b"114",
+            State::S115 => b"115",
+            State::S116 => b"116",
+            State::S117 => b"117",
+            State::S118 => b"118",
+            State::S119 => b"119",
+            State::S133 => b"133",
+            State::S552 => b"552",
+            State::S777 => b"777",
+            State::S1337 => b"1337",
+            State::S5522 => b"5522",
         }
     }
 }
@@ -823,8 +972,11 @@ impl State {
 pub struct Capture {
     pub backing: CaptureBacking,
     /// `max_bytes: usize` — the byte bound this capture may not grow beyond
-    /// (for the fixed backing this is the buffer length; for the allocating
-    /// backing it is the parser's `max_allocating_bytes` policy).
+    /// (for the fixed backing this is the buffer length: `MAX_BUF`, or the
+    /// shorter `@min(unknown_max_bytes, MAX_BUF)` slice of an unknown capture;
+    /// for the allocating backing it is the parser's `max_allocating_bytes`
+    /// policy, or `unknown_max_bytes`). `captureFailed` pins it to the
+    /// retained length once an unknown capture is truncated.
     pub max_bytes: usize,
 }
 
@@ -1068,12 +1220,24 @@ impl Parser {
         Parser {
             alloc,
             max_allocating_bytes: MAX_ALLOCATING_BUF,
+            unknown_max_bytes: 0,
             state: State::Start,
             capture: None,
             color_requests: None,
             kitty_color: None,
             buffer: [0u8; MAX_BUF],
         }
+    }
+
+    /// Set `unknown_max_bytes`: the most bytes to keep from each OSC
+    /// sequence whose number this parser does not implement. Zero, the
+    /// default, discards them. See [`Parser::unknown_max_bytes`].
+    // PORT NOTE: the reference assigns the field (`p.unknown_max_bytes =
+    // 64`); the field is `pub` here too, and this setter is the named entry
+    // point the stream and C API use.
+    #[inline]
+    pub fn set_unknown_max_bytes(&mut self, max_bytes: usize) {
+        self.unknown_max_bytes = max_bytes;
     }
 
     /// This must be called to clean up any allocated memory.
@@ -1104,7 +1268,7 @@ impl Parser {
         //     .hyperlink_start, .invalid, .mouse_shape, .report_pwd,
         //     .semantic_prompt, .show_desktop_notification, .kitty_text_sizing,
         //     .kitty_clipboard_protocol, .kitty_dnd_protocol,
-        //     .kitty_desktop_notification, .context_signal,
+        //     .kitty_desktop_notification, .context_signal, .unknown,
         //     => {},
         // }
         // PORT NOTE (parity tail S7-7): the lists the command owned are the
@@ -1209,6 +1373,112 @@ impl Parser {
         }
     }
 
+    /// Called when the sequence's number turns out not to be one this
+    /// parser implements, either at byte c or at the end of the sequence
+    /// (c is null). Supported OSCs never reach this.
+    ///
+    /// With `unknown_max_bytes` at zero, this marks the sequence invalid,
+    /// exactly as the parser did before unknown sequences were supported.
+    /// Otherwise it starts collecting the sequence's bytes. The digits read
+    /// so far are not stored anywhere, but the current state's name is
+    /// exactly those digits (state `.@"13"` after reading "13"). So the
+    /// state name is written first, then c, and the collected bytes hold
+    /// the whole sequence from its first byte.
+    ///
+    /// This is deliberately not inline. It is referenced from every
+    /// prefix state in `next`, and inlining it there grows the state
+    /// machine enough to measurably slow per-byte parsing of supported
+    /// OSCs (about 4% in the osc-parser benchmark).
+    #[inline(never)]
+    fn unknown_or_invalid(&mut self, c: Option<u8>) {
+        let max_bytes = self.unknown_max_bytes;
+        if max_bytes == 0 {
+            // @branchHint(.likely);
+            self.state = State::Invalid;
+            return;
+        }
+
+        // assert(self.capture == null);
+        assert!(self.capture.is_none());
+        // const prefix: []const u8 = switch (self.state) {
+        //     .start => "",
+        //     .invalid, .unknown, .unknown_truncated => unreachable,
+        //     inline else => |s| @tagName(s),
+        // };
+        // PORT NOTE (P8 DECISIONS P4): `State::prefix` is the comptime
+        // `@tagName` table as a `const` match (never `tag_name`, which
+        // allocates).
+        let prefix: &'static [u8] = self.state.prefix();
+        self.state = State::Unknown;
+
+        // Limits past the fixed buffer need an allocation. Without an
+        // allocator, or if allocating fails, the fixed buffer is used and
+        // longer sequences are reported as truncated.
+        let alloc = if max_bytes > MAX_BUF {
+            self.alloc
+        } else {
+            None
+        };
+        let fixed = |max_bytes: usize| Capture {
+            backing: CaptureBacking::Fixed(0),
+            max_bytes,
+        };
+        self.capture = Some(match alloc {
+            // Capture.allocating(&self.capture, a, max_bytes) catch
+            //     Capture.fixed(&self.capture, &self.buffer);
+            Some(a) => {
+                let mut w = allocator_api2::vec::Vec::new_in(a);
+                if w.try_reserve_exact(MAX_BUF.min(max_bytes)).is_ok() {
+                    Capture {
+                        backing: CaptureBacking::Allocating(w),
+                        max_bytes,
+                    }
+                } else {
+                    fixed(MAX_BUF)
+                }
+            }
+            // Capture.fixed(&self.capture, self.buffer[0..@min(max_bytes, MAX_BUF)]);
+            None => fixed(max_bytes.min(MAX_BUF)),
+        });
+
+        let cap = self.capture.as_mut().unwrap();
+        // cap.writeSlice(prefix) catch return self.captureFailed();
+        if !cap.write_slice(&mut self.buffer, prefix) {
+            return self.capture_failed();
+        }
+        // if (c) |byte| cap.writeByte(byte) catch return self.captureFailed();
+        if let Some(byte) = c {
+            if !cap.write_byte(&mut self.buffer, byte) {
+                self.capture_failed();
+            }
+        }
+    }
+
+    /// Handle a failed capture write, either from reaching the capture's
+    /// limit or from an allocation failure. Supported OSCs become invalid.
+    /// Unknown OSCs keep what was captured and are reported as truncated.
+    ///
+    /// This is inline so the supported-OSC overflow path stays a single
+    /// store, as it was before unknown capture existed.
+    #[inline(always)]
+    fn capture_failed(&mut self) {
+        match self.state {
+            State::Unknown => {
+                // Pin the limit to what was retained so every later write
+                // fails at the first bounds check. Without this, a later
+                // allocating write could succeed after an allocation
+                // failure and leave a gap in the content.
+                let cap = self.capture.as_mut().unwrap();
+                cap.max_bytes = cap.trailing(&self.buffer).len();
+                self.state = State::UnknownTruncated;
+            }
+            // Already truncated: the write failed at the first bounds
+            // check and there is nothing more to do.
+            State::UnknownTruncated => {}
+            _ => self.state = State::Invalid,
+        }
+    }
+
     /// Consume a slice of bytes, advancing the parser state. This is
     /// equivalent to calling `next` for each byte in order, but is much
     /// faster once a data capture is active because the remaining bytes
@@ -1241,15 +1511,15 @@ impl Parser {
             return;
         }
         // self.capture.?.writeSlice(rem) catch |err| switch (err) {
-        //     // We have overflowed our buffer or had some other error, set
-        //     // the state to invalid so that we discard any further input.
-        //     error.WriteFailed => self.state = .invalid,
+        //     // We have overflowed our buffer or had some other error.
+        //     // Discard any further input.
+        //     error.WriteFailed => self.captureFailed(),
         // };
         let cap = self.capture.as_mut().unwrap();
         if !cap.write_slice(&mut self.buffer, rem) {
-            // We have overflowed our buffer or had some other error, set
-            // the state to invalid so that we discard any further input.
-            self.state = State::Invalid;
+            // We have overflowed our buffer or had some other error.
+            // Discard any further input.
+            self.capture_failed();
         }
     }
 
@@ -1271,24 +1541,30 @@ impl Parser {
             // cap.writer.writeByte(c) catch ... => self.state = .invalid;
             // PERF(port): the fixed arm is the Zig fixed writer's `writeByte`
             // (bounds check + store into `self.buffer`, osc.zig:543-549);
-            // no Vec, no grow check — the `len < MAX_BUF` guard also lets the
-            // indexing bounds check fold away.
+            // no Vec, no grow check.
             //
             // PORT NOTE (reshape): the success store is written as the
-            // fall-through arm (`len < MAX_BUF` first) — the same shape as the
+            // fall-through arm (`len < max_bytes` first) — the same shape as the
             // Zig writer's `if (end < buffer.len)` fast path — so the per-byte
             // loop takes 2 taken branches instead of 3 (measured: the fat-LTO
             // build's only osc win over release-fast was exactly this block
             // layout; see PERF_LOG.md osc-parser entry).
+            //
+            // PORT NOTE (P8 DECISIONS P4): the reference's fixed unknown
+            // capture is a shorter slice of the buffer
+            // (`self.buffer[0..@min(max_bytes, MAX_BUF)]`), so the bound is the
+            // capture's `max_bytes`, not `MAX_BUF`. Every supported fixed
+            // capture has `max_bytes == MAX_BUF`, so their branch is unchanged;
+            // `max_bytes <= MAX_BUF` always holds for the fixed backing.
             match &mut cap.backing {
                 CaptureBacking::Fixed(len) => {
-                    if *len < MAX_BUF {
+                    if *len < cap.max_bytes {
                         self.buffer[*len] = c;
                         *len += 1;
                     } else {
-                        // We have overflowed our buffer or had some other error, set the
-                        // state to invalid so that we discard any further input.
-                        self.state = State::Invalid;
+                        // We have overflowed our buffer or had some other error.
+                        // Discard any further input.
+                        self.capture_failed();
                     }
                 }
                 CaptureBacking::Allocating(w) => {
@@ -1301,18 +1577,18 @@ impl Parser {
                     // `Capture::write_byte`'s allocating arm (the fixed arm
                     // above keeps its measured inline layout).
                     if w.len() >= cap.max_bytes {
-                        // We have overflowed our buffer or had some other error, set the
-                        // state to invalid so that we discard any further input.
-                        self.state = State::Invalid;
+                        // We have overflowed our buffer or had some other error.
+                        // Discard any further input.
+                        self.capture_failed();
                     } else {
                         if w.len() >= w.capacity() {
                             // R7: `*|` saturating multiply, `@max(.., 1)` floor.
                             let new_capacity =
                                 cap.max_bytes.min(w.capacity().saturating_mul(2).max(1));
                             // `realloc(..) catch return error.WriteFailed`,
-                            // which `next` turns into `.invalid` (S174-F3).
+                            // which `next` turns into `captureFailed` (S174-F3).
                             if w.try_reserve_exact(new_capacity - w.len()).is_err() {
-                                self.state = State::Invalid;
+                                self.capture_failed();
                                 return;
                             }
                         }
@@ -1327,6 +1603,9 @@ impl Parser {
             // handled above, so should never be here
             State::Invalid => unreachable!(),
 
+            // unknown states always have an active capture
+            State::Unknown | State::UnknownTruncated => unreachable!(),
+
             State::Start => match c {
                 b'0' => self.state = State::S0,
                 b'1' => self.state = State::S1,
@@ -1338,27 +1617,27 @@ impl Parser {
                 b'7' => self.state = State::S7,
                 b'8' => self.state = State::S8,
                 b'9' => self.state = State::S9,
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
 
             State::S3 => match c {
                 b'0' => self.state = State::S30,
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
 
             State::S30 => match c {
                 b'0' => self.state = State::S300,
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
 
             State::S300 => match c {
                 b'8' => self.state = State::S3008,
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
 
             State::S3008 => match c {
                 b';' => self.capture_trailing(CaptureMode::Fixed),
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
 
             State::S1 => match c {
@@ -1373,7 +1652,7 @@ impl Parser {
                 b'7' => self.state = State::S17,
                 b'8' => self.state = State::S18,
                 b'9' => self.state = State::S19,
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
 
             State::S10 => match c {
@@ -1384,7 +1663,7 @@ impl Parser {
                 }
                 b'4' => self.state = State::S104,
                 b'5' => self.state = State::S105,
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
 
             State::S11 => match c {
@@ -1403,7 +1682,7 @@ impl Parser {
                 b'7' => self.state = State::S117,
                 b'8' => self.state = State::S118,
                 b'9' => self.state = State::S119,
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
 
             State::S4
@@ -1432,7 +1711,7 @@ impl Parser {
                         self.capture_trailing(CaptureMode::Fixed)
                     }
                 }
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
 
             State::S13 => match c {
@@ -1442,14 +1721,14 @@ impl Parser {
                     }
                 }
                 b'3' => self.state = State::S133,
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
 
             State::S2 => match c {
                 b';' => self.capture_trailing(CaptureMode::Fixed),
                 b'1' => self.state = State::S21,
                 b'2' => self.state = State::S22,
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
 
             State::S5 => match c {
@@ -1460,29 +1739,29 @@ impl Parser {
                 }
                 b'2' => self.state = State::S52,
                 b'5' => self.state = State::S55,
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
 
             State::S6 => match c {
                 b'6' => self.state = State::S66,
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
 
             State::S52 | State::S66 => match c {
                 b';' => self.capture_trailing(CaptureMode::Allocating),
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
 
             State::S55 => match c {
                 b'2' => self.state = State::S552,
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
 
             State::S7 => match c {
                 b';' => self.capture_trailing(CaptureMode::Fixed),
                 b'2' => self.state = State::S72,
                 b'7' => self.state = State::S77,
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
 
             // The oracle uses allocating-mode capture here — same as
@@ -1490,50 +1769,50 @@ impl Parser {
             // 4096 bytes per chunk plus metadata, exceeding the fixed buffer.
             State::S72 => match c {
                 b';' => self.capture_trailing(CaptureMode::Allocating),
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
 
             State::S77 => match c {
                 b'7' => self.state = State::S777,
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
 
             State::S133 => match c {
                 b';' => self.capture_trailing(CaptureMode::Fixed),
                 b'7' => self.state = State::S1337,
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
 
             State::S552 => match c {
                 b'2' => self.state = State::S5522,
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
 
             State::S1337 => match c {
                 b';' => self.capture_trailing(CaptureMode::Fixed),
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
 
             State::S5522 => match c {
                 b';' => self.capture_trailing(CaptureMode::Allocating),
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
 
             State::S9 => match c {
                 b';' => self.capture_trailing(CaptureMode::Fixed),
                 b'9' => self.state = State::S99,
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
 
             State::S99 => match c {
                 // OSC 99 encoded payloads can exceed the fixed buffer.
                 b';' => self.capture_trailing(CaptureMode::Allocating),
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
 
             State::S0 | State::S22 | State::S777 | State::S8 => match c {
                 b';' => self.capture_trailing(CaptureMode::Fixed),
-                _ => self.state = State::Invalid,
+                _ => self.unknown_or_invalid(Some(c)),
             },
         }
     }
@@ -1572,6 +1851,26 @@ impl Parser {
             State::Start => None,
 
             State::Invalid => None,
+
+            State::Unknown | State::UnknownTruncated => {
+                parsers::unknown::parse(self, terminator_ch)
+            }
+
+            // These states only lead to longer numbers (3 leads to 3008)
+            // and are not OSCs themselves, so ending on one is unknown.
+            State::S3
+            | State::S30
+            | State::S300
+            | State::S55
+            | State::S552
+            | State::S6
+            | State::S77 => {
+                self.unknown_or_invalid(None);
+                if self.state == State::Invalid {
+                    return None;
+                }
+                parsers::unknown::parse(self, terminator_ch)
+            }
 
             State::S0 | State::S2 => parsers::change_window_title::parse(self, terminator_ch),
 
@@ -1614,25 +1913,15 @@ impl Parser {
 
             State::S52 => parsers::clipboard_operation::parse(self, terminator_ch),
 
-            State::S55 => None,
-
-            State::S3 | State::S30 | State::S300 => None,
-
             State::S3008 => parsers::context_signal::parse(self, terminator_ch),
-
-            State::S6 => None,
 
             State::S66 => parsers::kitty_text_sizing::parse(self, terminator_ch),
 
             State::S72 => parsers::kitty_dnd_protocol::parse(self, terminator_ch),
 
-            State::S77 => None,
-
             State::S99 => parsers::kitty_desktop_notification::parse(self, terminator_ch),
 
             State::S133 => parsers::semantic_prompt::parse(self, terminator_ch),
-
-            State::S552 => None,
 
             State::S777 => parsers::rxvt_extension::parse(self, terminator_ch),
 

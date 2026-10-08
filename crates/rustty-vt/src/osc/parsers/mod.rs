@@ -28,6 +28,7 @@ pub mod osc9;
 pub mod report_pwd;
 pub mod rxvt_extension;
 pub mod semantic_prompt;
+pub mod unknown;
 
 // test {
 //     std.testing.refAllDecls(@This());
@@ -63,5 +64,6 @@ mod tests {
         let _ = super::report_pwd::parse as fn(_, _) -> _;
         let _ = super::rxvt_extension::parse as fn(_, _) -> _;
         let _ = super::semantic_prompt::parse as fn(_, _) -> _;
+        let _ = super::unknown::parse as fn(_, _) -> _;
     }
 }

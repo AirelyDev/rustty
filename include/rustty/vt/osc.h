@@ -29,7 +29,8 @@
  * 3. Finalize parsing with rustty_osc_end() to get the command
  * 4. Query command type and extract data using rustty_osc_command_type()
  *    and rustty_osc_command_data()
- * 5. Free the parser with rustty_osc_free() when done
+ * 5. Call rustty_osc_reset() before parsing the next sequence
+ * 6. Free the parser with rustty_osc_free() when done
  *
  * ## Ending a Sequence
  *
@@ -52,6 +53,8 @@
  *
  * RusttyOscCommand command = rustty_osc_end(parser, 0x18);
  * // command is NULL, so the window title does not change.
+ *
+ * rustty_osc_reset(parser);
  * @endcode
  *
  * @{
@@ -90,6 +93,15 @@ typedef enum RUSTTY_ENUM_TYPED {
   RUSTTY_OSC_COMMAND_KITTY_DND_PROTOCOL = 24,
   RUSTTY_OSC_COMMAND_CONTEXT_SIGNAL = 25,
   RUSTTY_OSC_COMMAND_KITTY_DESKTOP_NOTIFICATION = 26,
+
+  /**
+   * An OSC sequence whose number the parser does not implement. Read it
+   * with the RUSTTY_OSC_DATA_UNKNOWN_* data types.
+   *
+   * Only produced when RUSTTY_OSC_OPT_UNKNOWN_MAX_BYTES is nonzero.
+   * Otherwise these sequences are RUSTTY_OSC_COMMAND_INVALID.
+   */
+  RUSTTY_OSC_COMMAND_UNKNOWN = 27,
   RUSTTY_OSC_COMMAND_TYPE_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE,
 } RusttyOscCommandType;
 
