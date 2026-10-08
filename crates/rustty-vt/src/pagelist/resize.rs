@@ -1519,6 +1519,13 @@ impl ReflowCursor {
         // compressed nodes purely for a comparison.
         let mut row_has_pins = false;
         {
+            // Deferred line breaks and pending wrap reset the destination column.
+            let dst_x = if self.new_rows > 0 || self.pending_wrap {
+                0
+            } else {
+                self.x
+            };
+
             for p in list.tracked_pins.keys() {
                 let p: *mut Pin = *p;
                 if !core::ptr::eq(unsafe { (*p).node } as *const _, row.node as *const _)
@@ -1539,7 +1546,7 @@ impl ReflowCursor {
                 // col width instead.
                 if unsafe { (*p).x } >= cols_len {
                     unsafe {
-                        (*p).x = core::cmp::min((*p).x, (*self.page).size.cols - 1 - self.x);
+                        (*p).x = core::cmp::min((*p).x, (*self.page).size.cols - 1 - dst_x);
                     }
                 }
 

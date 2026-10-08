@@ -722,6 +722,13 @@ impl Screen {
         // state is correct.
         self.cursor_reload();
 
+        // If resize moved a cursor with pending wrap away from the right edge,
+        // advance to the next cell instead of wrapping on the next print.
+        if self.cursor.pending_wrap && self.cursor.x != opts.cols - 1 {
+            self.cursor.pending_wrap = false;
+            self.cursor_right(1);
+        }
+
         // Clear any redrawable prompt after the fallible resize but before
         // restoring the cursor style and hyperlink, so cleared cells retain the
         // same default styling they had with the previous ordering.
