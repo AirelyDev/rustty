@@ -15,10 +15,9 @@
     NOT-CARRIED (gag-prose, was MISSING): apprt/gtk/winproto/BlurRegion.zig:58 NOTE(pluiedev): CSDs are a f--king mistake.
     NOT-CARRIED (gag-prose, was MISSING): apprt/gtk/winproto/x11.zig:482 I know this is really ugly. X11 is ugly. I consider it apropos.
     (16 reference comment(s) excused by COMMENT-NOT-CARRIED.tsv; each row is validated above)
-G3b [apprt]: distinctive ref comments=2623 missing=1 review=2
+G3b [apprt]: distinctive ref comments=2623 missing=0 review=2
     REVIEW (ratio 0.7): destroy callback for the `gbytes` backing a `gdkmemorytexture`.
     REVIEW (ratio 0.69): we own the pixels; make sure they don't leak.
-    MISSING ref comment: key forces the compiler to instantiate this container per (format, argument type) i.e. roughly per c
 G3b [apprt-api]: distinctive ref comments=330 missing=0 review=0
 G3b [args]: distinctive ref comments=186 missing=0 review=1
     REVIEW (ratio 0.79): returns true if this type can track diagnostics.
@@ -141,7 +140,7 @@ G3b [termio]: distinctive ref comments=1228 missing=0 review=6
     REVIEW (ratio 0.78): version of the exec bits with path search so that we can just
 G3b [unicode]: distinctive ref comments=124 missing=0 review=0
 G3b [util]: distinctive ref comments=146 missing=0 review=0
-G3b [vt]: distinctive ref comments=14929 missing=2 review=64
+G3b [vt]: distinctive ref comments=14929 missing=0 review=62
     REVIEW (ratio 0.74): (markmutated sets both); dirty set without a generation change
     REVIEW (ratio 0.63): .command_end => if (event.exit_code) |code| {
     REVIEW (ratio 0.79): `page_serial`. consequently, every previously captured pointer-plus-serial
@@ -152,8 +151,6 @@ G3b [vt]: distinctive ref comments=14929 missing=2 review=64
     REVIEW (ratio 0.72): behind the raw mapping is discarded. however, we retain the
     REVIEW (ratio 0.75): both states retain the same `page.memory` virtual mapping and the same
     REVIEW (ratio 0.75): buffered bytes go first to keep the order.
-    MISSING ref comment: if (report.readoption(.progress)) |percent| showprogress(percent);
-    MISSING ref comment: if (v.truncated or !std.mem.startswith(u8, v.content, prefix)) return;
 G3b [vt-c]: distinctive ref comments=797 missing=0 review=1
     REVIEW (ratio 0.62): the caller owns the returned slice and must free it with `alloc`.
-RED: dropped reference comment(s) or an invalid NOT-CARRIED row — see MISSING / NOT-CARRIED-INVALID above (R1 violation)
+GREEN: every distinctive reference comment has a match in the port (G3b)

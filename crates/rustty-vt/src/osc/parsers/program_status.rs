@@ -184,12 +184,16 @@ impl Kind {
 /// A key the program didn't send reads as null. A report replaces its
 /// record completely, so a null value means the record no longer has
 /// that value, not that the old value should be kept.
-// PORT NOTE: the example above is the reference's, verbatim (`readOption` is
-// `read_option` and `writeText` is `write_text` here). In Rust the same two
-// reads are:
-//   if let OptionValue::Progress(Some(percent)) = report.read_option(OptionKey::Progress) { .. }
-//   let mut buf = Vec::new();
-//   report.write_text(OptionKey::Msg, &mut buf)?;
+///
+/// PORT NOTE: the example above is the reference's, verbatim (`readOption` is
+/// `read_option` and `writeText` is `write_text` here). In Rust the same two
+/// reads are:
+///
+/// ```text
+/// if let OptionValue::Progress(Some(percent)) = report.read_option(OptionKey::Progress) { .. }
+/// let mut buf = Vec::new();
+/// report.write_text(OptionKey::Msg, &mut buf)?;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Report<'p> {
     /// What the program is doing.

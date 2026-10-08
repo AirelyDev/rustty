@@ -94,7 +94,7 @@ G3b [termio]: distinctive ref comments=1228 missing=0 review=6
     REVIEW (ratio 0.78): version of the exec bits with path search so that we can just
 G3b [unicode]: distinctive ref comments=124 missing=0 review=0
 G3b [util]: distinctive ref comments=146 missing=0 review=0
-G3b [vt]: distinctive ref comments=14929 missing=2 review=64
+G3b [vt]: distinctive ref comments=14929 missing=0 review=62
     REVIEW (ratio 0.74): (markmutated sets both); dirty set without a generation change
     REVIEW (ratio 0.63): .command_end => if (event.exit_code) |code| {
     REVIEW (ratio 0.79): `page_serial`. consequently, every previously captured pointer-plus-serial
@@ -105,11 +105,9 @@ G3b [vt]: distinctive ref comments=14929 missing=2 review=64
     REVIEW (ratio 0.72): behind the raw mapping is discarded. however, we retain the
     REVIEW (ratio 0.75): both states retain the same `page.memory` virtual mapping and the same
     REVIEW (ratio 0.75): buffered bytes go first to keep the order.
-    MISSING ref comment: if (report.readoption(.progress)) |percent| showprogress(percent);
-    MISSING ref comment: if (v.truncated or !std.mem.startswith(u8, v.content, prefix)) return;
 G3b [vt-c]: distinctive ref comments=797 missing=0 review=1
     REVIEW (ratio 0.62): the caller owns the returned slice and must free it with `alloc`.
 
 G3b SCOPE: 3 crate(s) SKIPPED (PORT STATUS not done) = 105 oracle file(s) unexamined: apprt, bin, renderer
   The verdict below covers the EXAMINED crates only. Use --strict or --crate <name> to include a skipped crate.
-RED: dropped reference comment(s) or an invalid NOT-CARRIED row — see MISSING / NOT-CARRIED-INVALID above (R1 violation)
+GREEN: every distinctive reference comment has a match in the port (G3b)

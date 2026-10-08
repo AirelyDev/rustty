@@ -61,21 +61,21 @@ add	src/terminal/c/terminal.zig	set program_status callback	bae2c3cdb	PRESENT se
 add	src/terminal/c/terminal.zig	set reset callback	7bb45ba34	PRESENT set_reset_callback @ crates/rustty-vt-c/src/terminal/tests/effects.rs:2100  [N519 masked by G-TESTS; ticked by hand]
 add	src/terminal/c/terminal.zig	set semantic_prompt callback	7bb45ba34	PRESENT set_semantic_prompt_callback @ crates/rustty-vt-c/src/terminal/tests/effects.rs:1997  [N519 masked by G-TESTS; ticked by hand]
 add	src/terminal/osc.zig	Parser end with CAN or SUB cancels the command	520d8f55a	PRESENT parser_end_with_can_or_sub_cancels_the_command @ crates/rustty-vt/src/osc/mod.rs:2028
-add	src/terminal/osc/parsers/program_status.zig	OSC 7501: all keys	bae2c3cdb	PRESENT osc_7501_all_keys @ crates/rustty-vt/src/osc/parsers/program_status.rs:626
-add	src/terminal/osc/parsers/program_status.zig	OSC 7501: base64 padding is optional	bae2c3cdb	PRESENT osc_7501_base64_padding_is_optional @ crates/rustty-vt/src/osc/parsers/program_status.rs:650
-add	src/terminal/osc/parsers/program_status.zig	OSC 7501: discarded reports	bae2c3cdb	PRESENT osc_7501_discarded_reports @ crates/rustty-vt/src/osc/parsers/program_status.rs:847
-add	src/terminal/osc/parsers/program_status.zig	OSC 7501: empty text is absent	bae2c3cdb	PRESENT osc_7501_empty_text_is_absent @ crates/rustty-vt/src/osc/parsers/program_status.rs:835
-add	src/terminal/osc/parsers/program_status.zig	OSC 7501: ids	bae2c3cdb	PRESENT osc_7501_ids @ crates/rustty-vt/src/osc/parsers/program_status.rs:760
-add	src/terminal/osc/parsers/program_status.zig	OSC 7501: invalid app is ignored	bae2c3cdb	PRESENT osc_7501_invalid_app_is_ignored @ crates/rustty-vt/src/osc/parsers/program_status.rs:749
-add	src/terminal/osc/parsers/program_status.zig	OSC 7501: kind and progress only apply to some states	bae2c3cdb	PRESENT osc_7501_kind_and_progress_only_apply_to_some_states @ crates/rustty-vt/src/osc/parsers/program_status.rs:697
-add	src/terminal/osc/parsers/program_status.zig	OSC 7501: last value wins	bae2c3cdb	PRESENT osc_7501_last_value_wins @ crates/rustty-vt/src/osc/parsers/program_status.rs:673
-add	src/terminal/osc/parsers/program_status.zig	OSC 7501: malformed pairs and unknown keys are skipped	bae2c3cdb	PRESENT osc_7501_malformed_pairs_and_unknown_keys_are_skipped @ crates/rustty-vt/src/osc/parsers/program_status.rs:685
-add	src/terminal/osc/parsers/program_status.zig	OSC 7501: minimal report	bae2c3cdb	PRESENT osc_7501_minimal_report @ crates/rustty-vt/src/osc/parsers/program_status.rs:609
-add	src/terminal/osc/parsers/program_status.zig	OSC 7501: no allocator	bae2c3cdb	PRESENT osc_7501_no_allocator @ crates/rustty-vt/src/osc/parsers/program_status.rs:919
-add	src/terminal/osc/parsers/program_status.zig	OSC 7501: out of range progress is absent	bae2c3cdb	PRESENT osc_7501_out_of_range_progress_is_absent @ crates/rustty-vt/src/osc/parsers/program_status.rs:720
-add	src/terminal/osc/parsers/program_status.zig	OSC 7501: query	bae2c3cdb	PRESENT osc_7501_query @ crates/rustty-vt/src/osc/parsers/program_status.rs:589
-add	src/terminal/osc/parsers/program_status.zig	OSC 7501: text must decode to safe UTF-8	bae2c3cdb	PRESENT osc_7501_text_must_decode_to_safe_utf8 @ crates/rustty-vt/src/osc/parsers/program_status.rs:804
-add	src/terminal/osc/parsers/program_status.zig	OSC 7501: whitespace around keys and values	bae2c3cdb	PRESENT osc_7501_whitespace_around_keys_and_values @ crates/rustty-vt/src/osc/parsers/program_status.rs:661
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: all keys	bae2c3cdb	PRESENT osc_7501_all_keys @ crates/rustty-vt/src/osc/parsers/program_status.rs:639
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: base64 padding is optional	bae2c3cdb	PRESENT osc_7501_base64_padding_is_optional @ crates/rustty-vt/src/osc/parsers/program_status.rs:663
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: discarded reports	bae2c3cdb	PRESENT osc_7501_discarded_reports @ crates/rustty-vt/src/osc/parsers/program_status.rs:860
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: empty text is absent	bae2c3cdb	PRESENT osc_7501_empty_text_is_absent @ crates/rustty-vt/src/osc/parsers/program_status.rs:848
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: ids	bae2c3cdb	PRESENT osc_7501_ids @ crates/rustty-vt/src/osc/parsers/program_status.rs:773
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: invalid app is ignored	bae2c3cdb	PRESENT osc_7501_invalid_app_is_ignored @ crates/rustty-vt/src/osc/parsers/program_status.rs:762
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: kind and progress only apply to some states	bae2c3cdb	PRESENT osc_7501_kind_and_progress_only_apply_to_some_states @ crates/rustty-vt/src/osc/parsers/program_status.rs:710
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: last value wins	bae2c3cdb	PRESENT osc_7501_last_value_wins @ crates/rustty-vt/src/osc/parsers/program_status.rs:686
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: malformed pairs and unknown keys are skipped	bae2c3cdb	PRESENT osc_7501_malformed_pairs_and_unknown_keys_are_skipped @ crates/rustty-vt/src/osc/parsers/program_status.rs:698
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: minimal report	bae2c3cdb	PRESENT osc_7501_minimal_report @ crates/rustty-vt/src/osc/parsers/program_status.rs:622
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: no allocator	bae2c3cdb	PRESENT osc_7501_no_allocator @ crates/rustty-vt/src/osc/parsers/program_status.rs:932
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: out of range progress is absent	bae2c3cdb	PRESENT osc_7501_out_of_range_progress_is_absent @ crates/rustty-vt/src/osc/parsers/program_status.rs:733
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: query	bae2c3cdb	PRESENT osc_7501_query @ crates/rustty-vt/src/osc/parsers/program_status.rs:602
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: text must decode to safe UTF-8	bae2c3cdb	PRESENT osc_7501_text_must_decode_to_safe_utf8 @ crates/rustty-vt/src/osc/parsers/program_status.rs:817
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: whitespace around keys and values	bae2c3cdb	PRESENT osc_7501_whitespace_around_keys_and_values @ crates/rustty-vt/src/osc/parsers/program_status.rs:674
 add	src/terminal/osc/parsers/unknown.zig	OSC unknown: aborted sequences are dropped	7b11f3dca	PRESENT osc_unknown_aborted_sequences_are_dropped @ crates/rustty-vt/src/osc/parsers/unknown.rs:312
 add	src/terminal/osc/parsers/unknown.zig	OSC unknown: allocating tier	7b11f3dca	PRESENT osc_unknown_allocating_tier @ crates/rustty-vt/src/osc/parsers/unknown.rs:422
 add	src/terminal/osc/parsers/unknown.zig	OSC unknown: allocation failure falls back to fixed buffer	7b11f3dca	PRESENT osc_unknown_allocation_failure_falls_back_to_fixed_buffer @ crates/rustty-vt/src/osc/parsers/unknown.rs:478

@@ -35,17 +35,17 @@ columns list the ids each workstream opened; an id another workstream closed is 
 | W6 | WebGL stub removed; app-scoped render `Device`; EGL surfaceless diagnostics; render-thread exit unrealizes; GTK DPI warn-once (`05392dcc9`, `40d5b860d`, `2e36658c6`, `140feb86a`, `80456f057`, `0d82239b5`) | 6 | `56a2d7ef8` | — | N522 (PORT-ONLY record) | — |
 | W7 | ssh-terminfo cache port key, macOS restoration/clipboard/compiler checks, iTerm2 themes (657), `build-rustty.sh` LDFLAGS (`6fbb560cd`, `dfd7bafcd`, `136029788`, `934ef8140`, `0e75d015f`, `e2721d093`, `be595d8f0`, `406f2e544`) | 4 | `83c2ac178` | — | N527 | — |
 | W8 | esctest harness against librustty-vt, report-only CI job, G-ESCTEST differential gate (`438d584f0`, `edcaf6670`) | 3 | `9cc2640b7` | UD378 | — | — |
-| W9 | T1 finale: gates, tests checklist, targeted cross-host checks, records | finale | on `phase-8/w9` | — | — | — |
+| W9 | T1 finale: gates, tests checklist, targeted cross-host checks, records; T1a `rustty-extra` goldens and three carried comments | finale | on `phase-8/w9` | — | N531 (opened and closed in T1a) | — |
 | — | plan and phase-branch records | 2 | `5e969a4bb` (plan), `0d73a3075` (register) | — | — | — |
 
-Totals: UD378 (1 reference defect, fixed and documented), N517–N530 (14 entries), no V. Next free
-ids at the finale: **UD379, N531, V34**.
+Totals: UD378 (1 reference defect, fixed and documented), N517–N531 (15 entries), no V. Next free
+ids at the finale: **UD379, N532, V34**.
 
 States at the finale:
 
 - **UD378** has one `- upstream status:` line and a `docs/ghostty-bug-fixes.md` row (G-UDDOCS PASS);
   not reported upstream. UD20 and UD312 became "fixed upstream" at the advance (P8-W0 T4).
-- **Ns.** CLOSED: N517, N518, N521, N523–N530. RECORD-ONLY: N519 (G-TESTS' four-token matcher; the
+- **Ns.** CLOSED: N517, N518, N521, N523–N531. RECORD-ONLY: N519 (G-TESTS' four-token matcher; the
   checklist is the meter), N520 (the snapshot TERMINAL record omits `flags.xt_checksum`, for byte parity),
   N522 (PORT-ONLY `DeviceBox`). None is open.
 - **Vs.** None opened this phase.
@@ -53,7 +53,7 @@ States at the finale:
 ## Finale gates (at `a60e9e2a5`, on the finale head)
 
 Evidence: `w0/*-finale-at-a60e9e2a5.txt`; `w0/gates-finale-summary-at-a60e9e2a5.txt` is the one-line
-verdict of all 43 gate runs (the re-runs after the finale's own fixes replace the first runs; the first
+verdict of all 42 gate runs, plus the `cargo test -p rustty-extra` line (the re-runs after the finale's own fixes replace the first runs; the first
 runs of the gates that were RED are kept as `*-finale-before-*-at-a60e9e2a5.txt`).
 
 | gate | result |
@@ -63,7 +63,7 @@ runs of the gates that were RED are kept as `*-finale-before-*-at-a60e9e2a5.txt`
 | G-FILES | GREEN: 562 oracle files, 0 missing, 20 non-port |
 | G-SYMS | GREEN: 2,908 `pub fn`, 0 unexplained, 7 accepted |
 | G1b (+self), G1 (+self) | GREEN (every module rust ≥ zig, the `xt_checksum` row included; G1 6,229 / 3,227) |
-| G3b default scope, `--crate vt`, `--strict` | **RED: 2 vt comments (default and `--crate vt`), + 1 apprt (`--strict`)** — see "Open at the finale". Self-test GREEN; `--not-carried-check` GREEN (79 rows) |
+| G3b default scope, `--crate vt`, `--strict` | GREEN after P8-W9 T1a (RED before: 2 vt comments in default and `--crate vt`, plus 1 apprt under `--strict`; kept as `w0/g3b*-finale-before-t1a-at-a60e9e2a5.txt`). Self-test GREEN; `--not-carried-check` GREEN (79 rows) |
 | G-LOGFILE and self-test | GREEN after the finale re-anchored 19 `LOG-ABSENT-SITES.tsv` rows (RED before: 18 off-line rows, 3 files short) |
 | G-CENSUS and self-test | GREEN: ledger 4,487 / 18,258 / 360 since P8-W0 T3 |
 | A3, A4 | GREEN |
@@ -88,7 +88,7 @@ runs of the gates that were RED are kept as `*-finale-before-*-at-a60e9e2a5.txt`
 | host | check | result |
 |---|---|---|
 | rvm (Linux aarch64) | `cargo clippy --workspace --all-targets --features rustty/gtk,rustty/x11,rustty/wayland -- -D warnings` | PASS |
-| rvm | `cargo test -p` for the 18 touched packages (vt 3,373: 3,372 in the first run, plus the G-REFGEOM golden test re-run once `.port` was on the VM; vt-c 604; apprt `--features gtk,x11,wayland` 173; renderer and core with `RUSTTY_REQUIRE_GL=1` 158 / 87; config 273; termio 112; cli 124; font-shaper 133; datastruct 100; bench 52; apprt-c 32; inspector 23; crash 20; rustty 15; build-config 5; xtask 83, the two `dist::` tests re-run in a git checkout) | PASS except **rustty-extra: 6 failed** (see "Open at the finale"); the same 6 fail on the Mac |
+| rvm | `cargo test -p` for the 18 touched packages (vt 3,373: 3,372 in the first run, plus the G-REFGEOM golden test re-run once `.port` was on the VM; vt-c 604; apprt `--features gtk,x11,wayland` 173; renderer and core with `RUSTTY_REQUIRE_GL=1` 158 / 87; config 273; termio 112; cli 124; font-shaper 133; datastruct 100; bench 52; apprt-c 32; inspector 23; crash 20; rustty 15; build-config 5; xtask 83, the two `dist::` tests re-run in a git checkout) | PASS. At the T1 head `rustty-extra` failed 6 tests (on the Mac too); P8-W9 T1a fixed them (N531), and `cargo test -p rustty-extra` passes at the finale head on the Mac (`w0/rustty-extra-tests-finale-at-a60e9e2a5.txt`) |
 | rvm | P8-W6 T2's env-gated `app_init_without_an_egl_driver_fails_with_device_failed_and_says_why` (`__EGL_VENDOR_LIBRARY_FILENAMES=/nonexistent.json`) | PASS |
 | rvm | live GTK KATs through `.port/tools/gtk_live_headless_sway.sh`: `gtk_first_light`, `gtk_input_focus`, `gtk_resize_window_live`, `gtk_inspector_dump`, `gtk_glyph_dump`, `gtk_window_live`, `gtk_close_confirmation`, `gtk_split_drop`; the five `gtk_perform_action` KATs (`--exact`); the five `gtk_render_surface` KATs with their recipes (CPU fallback under broadway with `render-surface-fault-inject`; DMA-BUF and the build-failure destroy-notify under `RUSTTY_REQUIRE_DMABUF=1`; the UD356 error page with `MESA_GL_VERSION_OVERRIDE=4.1`; 1.25x via `swaymsg`) | PASS, 18 of 18 |
 | rwin (Windows 11 ARM64, x64 MSVC) | `cargo build -p rustty-vt-c --release --target x86_64-pc-windows-msvc`; `example/c-vt-effects` built with clang against `rustty_vt_c.dll.lib` and run | PASS: exit 0, output byte-identical to `.port/phase-0/corpora/cvt/c-vt-effects.golden` after CRLF → LF |
@@ -111,25 +111,20 @@ runs of the gates that were RED are kept as `*-finale-before-*-at-a60e9e2a5.txt`
   `windows_dll.zig` rows but not these, because `bin` is outside G3b's default scope. Cap 76 → 79.
 - **A5 arm (b)** floor 203 → 204 (the P8-W5 T3 review's deferred minor), negative control RED at 205.
 
-## Open at the finale
+## Finale fixes (P8-W9 T1a)
 
-Both are code (test data and comments), not records, so the finale did not change them:
+Both items T1 left open (code, not records) are fixed, recorded as N531 (CLOSED):
 
-1. **`rustty-extra` goldens were not regenerated for P8-W3 T2's two config keys.** `cargo test -p
-   rustty-extra` fails 6 tests on the Mac and on rvm: `bash`, `fish`, `zsh` `completions_match_golden`,
-   `sublime` and `vim` `syntax_matches_golden` (the generated files now carry `vt-xt-checksum-report` and
-   `vt-xt-checksum-extension`; the committed `crates/rustty-extra/testdata/*` do not), and
-   `mdgen::tests::gen_config_covers_every_field_and_honors_the_cli_flag` (field count 212, test expects 210).
-   Upstream generates these files from `Config` at build time, so its output carries the keys. Fix:
-   regenerate the testdata from the port (checked against the reference's generated output) and bump the count,
-   as P7-W6 T1 did for `vt-window-resize-allowed`.
-2. **G3b: three reference comments in translated doc examples are not quoted.** Default scope and `--crate vt`:
-   `osc/parsers/program_status.zig:141` (`if (report.readOption(.progress)) |percent| showProgress(percent);`,
-   Rust `osc/parsers/program_status.rs:172` paraphrases it in Rust) and `stream_terminal.zig:126`
-   (`if (v.truncated or !std.mem.startsWith(u8, v.content, prefix)) return;`, Rust `stream_terminal.rs:195`).
-   `--strict` adds `apprt/gtk/class/surface.zig:3952` (the `Static.key` doc of `logWarnOnce`, P8-W6 T4;
-   Rust `gtk/class/surface/core_callbacks.rs:17-26` paraphrases it). The `COMMENT-NOT-CARRIED.tsv` header
-   rules out a row where a Rust site exists; the fix is to quote each line at its Rust site with a PORT NOTE.
+1. **`rustty-extra` goldens.** P8-W3 T2's two config keys (`vt-xt-checksum-report`,
+   `vt-xt-checksum-extension`) were missing from `crates/rustty-extra/testdata/*` (bash, fish, zsh,
+   sublime, vim) and the mdgen field count (210 → 212). The goldens are regenerated; `cargo test -p
+   rustty-extra` passes.
+2. **G3b: three reference comments in translated doc examples are now quoted verbatim** at their Rust sites:
+   `osc/parsers/program_status.zig:141` (`program_status.rs`), `stream_terminal.zig:126`
+   (`stream_terminal.rs`) and, under `--strict`, `apprt/gtk/class/surface.zig:3952` (the `Static.key` doc of
+   `logWarnOnce`, `gtk/class/surface/core_callbacks.rs`). G3b default, `--crate vt` and `--strict` are GREEN.
+
+Nothing is owed before the merge to `main`.
 
 The deferred review minors of the phase are listed in the SDD ledger (`minor (deferred)` lines) for the
 final whole-branch review. Everything else is P8-W9 T2: the benches against a zigbench at `a60e9e2a5`,
