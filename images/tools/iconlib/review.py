@@ -84,6 +84,26 @@ def custom() -> list[Path]:
 SHEETS["custom"] = lambda args: custom()
 
 
+def alternate_sheets(names) -> list[Path]:
+    from . import alternates, plates
+    names = names or [n for n in paths.ALT_NAMES if paths.plate_path(n).is_file()]
+    cell = 300
+    out = Image.new("RGBA", (cell * 3 + 120, (cell + 50) * len(names)), LIGHT)
+    for r, n in enumerate(names):
+        y = r * (cell + 50)
+        final = alternates.compose(n)
+        for c, img in enumerate((plates.original(n), Image.open(paths.plate_path(n)).convert("RGBA"), final)):
+            out.alpha_composite(img.resize((cell, cell), Image.LANCZOS), (c * cell, y))
+        out.alpha_composite(final.resize((32, 32), Image.LANCZOS), (3 * cell + 10, y + 10))
+        out.alpha_composite(final.resize((16, 16), Image.LANCZOS), (3 * cell + 52, y + 18))
+    p = paths.REVIEW_DIR / f"alternates-{'-'.join(n.lower() for n in names)}.png"
+    raster.save_png(out, p)
+    return [p]
+
+
+SHEETS["alternates"] = lambda args: alternate_sheets(args.names)
+
+
 def run(args) -> int:
     for p in SHEETS[args.what](args):
         print(f"wrote {paths.rel(p)}")
