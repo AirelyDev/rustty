@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -42,6 +43,10 @@ def _actool_256() -> Image.Image:
 
 
 def official() -> list[Path]:
+    tools.require(["ictool"])
+    for extra in ("xcrun", "iconutil"):
+        if shutil.which(extra) is None:
+            raise tools.ToolMissing(f"{extra} not found on PATH (review official needs Xcode command line tools)")
     from . import flats
     master = flats.build_master()
     flat_1024 = flats.downscale(master, 1024)

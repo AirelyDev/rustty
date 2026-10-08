@@ -1,3 +1,5 @@
+import contextlib
+import io
 import os
 import subprocess
 import sys
@@ -30,6 +32,28 @@ class CliTest(unittest.TestCase):
                 del os.environ["ICTOOL"]
             else:
                 os.environ["ICTOOL"] = old
+
+    def test_runtime_error_is_reported_not_raised(self):
+        import build_icons
+        def boom(args):
+            raise RuntimeError("boom")
+        build_icons.COMMANDS["_boom"] = boom
+        build_icons.COMMAND_TOOLS["_boom"] = []
+        orig = build_icons.build_parser
+        build_icons.build_parser = lambda: type("P", (), {"parse_args": lambda self, argv: type("A", (), {"cmd": "_boom"})()})()
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err):
+                rc = build_icons.main([])
+        finally:
+            build_icons.build_parser = orig
+            del build_icons.COMMANDS["_boom"], build_icons.COMMAND_TOOLS["_boom"]
+        self.assertEqual(rc, 1)
+        self.assertIn("error: boom", err.getvalue())
+
+    def test_review_requirements_depend_on_target(self):
+        import build_icons
+        self.assertEqual(build_icons.COMMAND_TOOLS["review"], ["resvg"])
 
     def test_git_blob_reads_pre_rebrand(self):
         data = tools.git_blob(paths.PRE_REBRAND_REV, "images/gnome/16.png")

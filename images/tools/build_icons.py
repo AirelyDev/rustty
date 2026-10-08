@@ -20,7 +20,7 @@ def cmd_paths(args) -> int:
 COMMANDS = {"paths": cmd_paths, "mascot": mascot.run_mascot, "official": official.run,
             "flats": flats.run, "review": review.run}
 COMMAND_TOOLS = {"paths": [], "mascot": ["resvg"], "official": [],
-                 "flats": ["ictool", "icotool"], "review": ["resvg", "ictool"]}
+                 "flats": ["ictool", "icotool"], "review": ["resvg"]}
 COMMANDS["plate"] = plates.run
 COMMAND_TOOLS["plate"] = []
 COMMANDS["alternates"] = alternates.run
@@ -54,10 +54,13 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     try:
         tools.require(COMMAND_TOOLS[args.cmd])
+        return COMMANDS[args.cmd](args)
     except tools.ToolMissing as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
-    return COMMANDS[args.cmd](args)
+    except RuntimeError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

@@ -41,7 +41,7 @@ FAVICON_SIZE = 32
 
 ALT_NAMES = ("Blueprint", "Chalkboard", "Glass", "Holographic", "Microchip", "Paper", "Retro", "Xray")
 
-PRE_REBRAND_REV = "401b95b0e"
+PRE_REBRAND_REV = "401b95b0eee7ae6788f54c9b89400477d7b35390"
 REVIEW_DIR = REPO / "target" / "icon-review"
 
 

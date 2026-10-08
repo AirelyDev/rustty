@@ -8,6 +8,13 @@ from iconlib import paths, plates, tools
 
 
 class PlatesTest(unittest.TestCase):
+    def test_draft_plate_reproduces_committed_plates(self):
+        for n in paths.ALT_NAMES:
+            with self.subTest(n):
+                got = np.asarray(plates.draft_plate(n).convert("RGBA"))
+                want = np.asarray(Image.open(paths.plate_path(n)).convert("RGBA"))
+                self.assertTrue(np.array_equal(got, want))
+
     def test_original_comes_from_git_history(self):
         blob = tools.git_blob(paths.PRE_REBRAND_REV, paths.rel(paths.alt_output("Retro")))
         expect = np.asarray(Image.open(io.BytesIO(blob)).convert("RGBA"))

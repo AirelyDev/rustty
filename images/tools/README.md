@@ -36,10 +36,14 @@ After regenerating the GTK icons, refresh the sha256 table in
 ## Notes
 
 - Alternate plates (`images/alternates/<name>/plate.png`) are the original
-  icon backgrounds with the ghost removed. They were drafted once with
-  `plate <Name>` (from the pre-rebrand revision `401b95b0e`), then retouched
-  by hand and reviewed. `all` never re-runs ghost removal; it only composes
-  the committed plates with a style-matched Ferris.
+  icon backgrounds with the ghost removed. They are drafted reproducibly by
+  `plate <Name>` from the pre-rebrand originals in git (revision
+  `401b95b0eee7ae6788f54c9b89400477d7b35390`), using the reviewed `PASSES` in
+  `iconlib/plates.py`, and the result is committed. A unit test checks that
+  `draft_plate` reproduces every committed plate pixel for pixel. **`plate <Name>`
+  overwrites the committed plate**, so only run it deliberately. `all` never
+  re-runs ghost removal; it only composes the committed plates with a
+  style-matched Ferris.
 - Ferris is placed at 0.68 of the screen width, centred horizontally and 1.2%
   of the screen height above the screen centre. `PLACEMENT_OFFSET` in
   `iconlib/alternates.py` holds explicit per-icon nudges applied after that
@@ -47,3 +51,14 @@ After regenerating the GTK icons, refresh the sha256 table in
 - Randomness uses fixed seeds and PNGs carry no text, time or ICC chunks, so
   two runs are byte-identical. `verify` checks this, and also that every
   derived asset differs from the pre-rebrand revision.
+
+## Tool versions used for the committed assets
+
+- resvg 0.47.0
+- Pillow 12.3.0, numpy 2.5.2
+- icoutils (icotool) 0.32.3
+- Xcode 26.6 (build 17F113), which provides `ictool`
+
+`verify` reports `in-sync with committed: OK` only when a fresh `all` run
+reproduces the committed assets byte for byte. A `CHANGED:` result after a
+tool upgrade is how you detect a toolchain change.

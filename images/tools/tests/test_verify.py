@@ -10,6 +10,11 @@ class VerifyTest(unittest.TestCase):
         self.assertIn("dist/windows/rustty.ico", outs)
         self.assertIn("crates/rustty-apprt/assets/images/gnome/2048.png", outs)
 
+    def test_diff_snapshots(self):
+        a = {"x": "1", "y": "2", "z": "3"}
+        self.assertEqual(verify.diff_snapshots(a, dict(a)), [])
+        self.assertEqual(verify.diff_snapshots(a, {"x": "1", "y": "9", "w": "4"}), ["w", "y", "z"])
+
     def test_no_ghost_left(self):
         self.assertEqual(verify.no_ghost_left(), [])
 
