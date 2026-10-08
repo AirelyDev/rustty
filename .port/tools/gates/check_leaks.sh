@@ -1013,7 +1013,7 @@ rustty-renderer:health_tests rustty-renderer:image::macos_impl rustty-renderer:l
 rustty-renderer:log_capture rustty-renderer:message::change_config_tests
 rustty-renderer:metal::gpu_abi rustty-renderer:metal::shaders::metallib_tests
 rustty-renderer:metal::test_support rustty-renderer:overlay rustty-renderer:state
-rustty-renderer:thread rustty-renderer:undefined rustty-renderer:webgl
+rustty-renderer:thread rustty-renderer:undefined
 rustty-renderer:=generic::macos_impl::tests::health::metal_health_push_deadlocks::metal_async_frame_completed_never_blocks_on_a_full_mailbox
 rustty-renderer:=generic::macos_impl::tests::health::metal_health_push_deadlocks::metal_health_report_concurrent_completions_stay_consistent
 rustty-renderer:=generic::macos_impl::tests::health::metal_health_push_deadlocks::metal_health_report_never_restores_an_undelivered_health

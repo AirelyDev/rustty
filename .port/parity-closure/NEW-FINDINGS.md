@@ -11307,3 +11307,30 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `cargo build --workspace`; documented in `.port/tools/CI.md`), BLOCKED (a WARNINGS row, not a skip) when the rustup
   target is absent. Negative control: replacing the wrapper with a bare `rustty_os::path::realpath` call made the
   check RED (E0433), reverted.
+
+## N522 — PORT-ONLY: the app-scoped render `Device` lives in its own allocation (`DeviceBox`), not by value in `App`
+
+- **id**: N522. P8-W6 T2 (R3 §2.2 and Q1, DECISIONS P10/P11/P12, N522). **severity**: none (a layout choice the
+  port needs; no behavioural difference). **kind**: PORT-ONLY. **state**: RECORD-ONLY.
+- **upstream** (`40d5b860d`): `App.device: renderer.Device` by value (`App.zig:57-58`), initialized in `App.init`
+  (`:133-142`) and torn down last in `App.deinit` (`:157-159`, "This must happen after all surfaces are gone since
+  their renderers borrow it."); every surface renderer is created with `.device = &app.device` (`Surface.zig:564`)
+  and reads it on its render thread (`Metal.zig` `self.device.*`, `OpenGL.zig` `self.device.display`).
+- **why the port differs**: by value, every main-thread `&mut App` (`addSurface`, `deleteSurface`, `updateConfig`,
+  `deinit`, ...) is a protected `Unique` over the device bytes while render threads read them: Stacked Borrows UB,
+  the N441/N444 class. Proven on `.port/phase-2/mirihar-device-box`: `inline_device` UB under SB (TB clean,
+  per-byte), `boxed_device` and `boxed_device_lifecycle` clean under SB and TB, and the negative control
+  `boxed_device_freed_before_surfaces` (device freed before the surviving render thread stops) UB under both.
+- **the port**: `rustty_core::app::DeviceBox(*mut rustty_renderer::Device)` from `Box::into_raw`, created in
+  `App::init` at the reference's point (logging `failed to initialize render device err={}` and returning
+  `CreateError::DeviceFailed` on error), freed in `App::deinit` after the surface loop and the grid-set assert;
+  `Options.device` is the `*const Device` from `DeviceBox::as_ptr`. No `Arc`: a surface must not keep the device
+  alive past `App::deinit`. The thread-safety argument is written at the type (MTLDevice thread-safe; EGL 1.5
+  display calls thread-safe; fields written once before any surface). `Device::init` writes a
+  `MaybeUninit<Device>` slot (the reference's in-place `init(self: *Device)` over an `undefined` field).
+- **tests without a GPU** (DECISIONS P11): `App::init_null_device` (`#[cfg(test)]`) builds the app with a null
+  box that `deinit` skips; the 16 App seam tests use it and stay Miri-checked (17 passed under Miri with the new
+  null-device test). Real-device tests: `app_init_creates_and_deinit_frees_the_render_device`,
+  `app::device_tests::two_surfaces_share_the_device_destroy_one_draw_the_other_then_deinit` (Review Focus 4: two
+  real surfaces, destroy one, draw the other, deinit; a `#[cfg(test)]` drop-order probe asserts the device is freed
+  after both renderers).

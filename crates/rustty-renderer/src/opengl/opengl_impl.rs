@@ -41,6 +41,11 @@
 //! (`init_offscreen` for the tests, `init` for GDK's borrowed context): there is
 //! one context model now, the reference's.
 //!
+//! P8-W6 T2 (`40d5b860d`): the EGL display and config are the app-scoped
+//! `opengl::device::Device` (`opengl/Device.zig`), which the core `App` creates
+//! once and every renderer borrows (`device: *const Device`). `init` only binds
+//! the API and creates this surface's context.
+//!
 //! DROPPED: the `alloc: std.mem.Allocator` field (OpenGL.zig:40) — the Rust port
 //! does not thread an allocator (the leaves are `Vec`-managed), exactly as
 //! `metal_impl` dropped it.
@@ -53,6 +58,8 @@ use rustty_render_types::AlphaBlending; // ← Part A hoist (no config edge)
 use super::gl::buffer as glbuf;
 use super::gl::glad;
 use super::gl::sys::{self, OffscreenContext};
+// `pub const Device = @import("opengl/Device.zig");` (OpenGL.zig:15, `40d5b860d`).
+pub use super::device::Device;
 use super::gl::texture as gltex;
 use super::gl::{draw, errors};
 
@@ -84,7 +91,8 @@ pub struct SurfaceSize {
 ///
 /// PORT NOTE: `OpenGL.init` returns Zig's inferred set of the `egl.load`/
 /// `initPlatform`/`bindApi`/`Config.choose`/`Context.create`/`makeCurrent`
-/// failures; the port's EGL half ([`OffscreenContext`]) folds them into
+/// failures; the port's EGL half ([`OffscreenContext`] and, app-scoped since
+/// `40d5b860d`, [`Device`]) folds them into
 /// [`Error::Context`]. `threadEnter`'s `makeCurrent` is [`Error::Egl`] and its
 /// `prepareContext` [`Error::Context`]; `present`'s readback is [`Error::Gl`].
 #[derive(Debug)]
@@ -193,14 +201,20 @@ pub struct OpenGL {
     // internal-format selection in `init_target` (UD354).
     pub blending: AlphaBlending,
 
-    // egl_display: *gl.egl.Display,
-    // egl_context: *gl.egl.Context,   (OpenGL.zig:45-46)
+    /// The shared render device.
     //
-    // PORT NOTE: the pair is the port's `OffscreenContext`, which also owns the
-    // dlopen'd `libEGL.so.1` the two handles are only valid through (the
-    // reference's `egl.load()` is process-global). It never terminates the display
-    // (DECISIONS B10).
-    egl: OffscreenContext,
+    // `device: *const Device` (OpenGL.zig:47-48, `40d5b860d`): the app-scoped EGL
+    // display and config (and the dlopen'd libEGL), owned by the core `App`
+    // (`DeviceBox`, N522), which frees it after every surface. Read through
+    // [`OpenGL::device`].
+    device: *const Device,
+
+    // egl_context: *gl.egl.Context,   (OpenGL.zig:50)
+    //
+    // PORT NOTE: the port's `OffscreenContext`, the surface-scoped context on the
+    // device's display. Its `Drop` is `deinit`'s release + destroy; it never
+    // terminates the display (DECISIONS B10).
+    egl_context: OffscreenContext,
 }
 
 impl OpenGL {
@@ -214,24 +228,23 @@ impl OpenGL {
     // OpenGL.zig:31-33 `pub const swap_chain_count = 3;`
     pub const SWAP_CHAIN_COUNT: usize = 3;
 
-    /// PORTS: `OpenGL.zig:49-104` — `init`.
+    /// PORTS: `OpenGL.zig:52-90` — `init`.
     ///
     /// ```zig
-    /// pub fn init(alloc: Allocator, opts: rendererpkg.Options) !OpenGL {
-    ///     try egl.load();
+    /// pub fn init(
+    ///     alloc: Allocator,
+    ///     device: *const Device,
+    ///     opts: rendererpkg.Options,
+    /// ) !OpenGL {
+    ///     const display = device.display;
     ///
-    ///     const display: *egl.Display = try .initPlatform(
-    ///         egl.c.EGL_PLATFORM_SURFACELESS_MESA,
-    ///         egl.c.EGL_DEFAULT_DISPLAY,
-    ///         null,
-    ///     );
-    ///
-    ///     log.info("EGL vendor={s}", ...);
-    ///     log.info("EGL extensions={s}", ...);
-    ///
+    ///     // Bind to OpenGL API explicitly before we create the context,
+    ///     // as otherwise it might fallback to OpenGL ES
     ///     try egl.bindApi(egl.c.EGL_OPENGL_API);
-    ///     const config = egl.Config.choose(display, &.{ ... }) catch |err| { ... };
-    ///     const context = egl.Context.create(display, config, null, &.{ ... }) catch |err| { ... };
+    ///
+    ///     // Create our context. Contexts are surface-scoped because a
+    ///     // context can only be current on one thread at a time.
+    ///     const context = egl.Context.create(display, device.config, null, &.{ ... }) catch |err| { ... };
     ///     errdefer context.destroy(display) catch {};
     ///
     ///     display.makeCurrent(null, null, context) catch |err| { ... };
@@ -244,63 +257,84 @@ impl OpenGL {
     /// }
     /// ```
     ///
-    /// The display/config/context/current half, with its log lines, is
+    /// The bind/context/current half, with its log lines, is
     /// [`OffscreenContext::init`]. PORT NOTE: the reference takes the whole
     /// `rendererpkg.Options` and reads only `opts.config.blending`; the port takes
     /// that one value (the renderer crate's `Options` is the caller's).
     ///
+    /// # Safety
+    /// `device` points at a live, initialized [`Device`] that outlives the
+    /// returned `OpenGL` (`Options.device`; the core `App` frees it after every
+    /// surface, `App.zig` `deinit`).
+    ///
     /// # Errors
-    /// [`Error::Context`] when EGL, the surfaceless platform, an `EGL_OPENGL_BIT`
-    /// config or a 4.3 core context is unavailable.
-    pub fn init(blending: AlphaBlending) -> Result<OpenGL, Error> {
-        let egl = OffscreenContext::init()?;
+    /// [`Error::Context`] when the API cannot be bound or a 4.3 core context
+    /// cannot be created or made current on the device's display.
+    pub unsafe fn init(device: *const Device, blending: AlphaBlending) -> Result<OpenGL, Error> {
+        // SAFETY: the caller's contract.
+        let egl_context = unsafe { OffscreenContext::init(device) }?;
 
         // Release current so that the main thread
         // doesn't hold onto the GL context forever.
-        egl.release_current();
+        egl_context.release_current();
 
-        Ok(OpenGL { blending, egl })
+        Ok(OpenGL {
+            blending,
+            device,
+            egl_context,
+        })
     }
 
-    /// TEST-ONLY (RUSTTY): [`Self::init`], then [`Self::thread_enter`] on the
-    /// calling thread and [`Self::set_viewport`] to `width x height` — what the
-    /// render thread does before its first draw (`threadEnter`, then the first
-    /// `.resize` message). The renderer's own KATs run on the test thread, with no
-    /// render thread, so they stand the context up here.
+    /// TEST-ONLY (RUSTTY): [`Self::init`] on the process's test device
+    /// (`gl::test_support::device`), then [`Self::thread_enter`] on the calling
+    /// thread and [`Self::set_viewport`] to `width x height` — what the render
+    /// thread does before its first draw (`threadEnter`, then the first `.resize`
+    /// message). The renderer's own KATs run on the test thread, with no render
+    /// thread, so they stand the context up here.
     #[cfg(test)]
     pub(crate) fn init_offscreen(
         blending: AlphaBlending,
         width: u32,
         height: u32,
     ) -> Result<OpenGL, Error> {
-        let api = Self::init(blending)?;
+        let device = super::gl::test_support::device().map_err(|e| {
+            // The test device's init error, re-wrapped (it is not `Clone`).
+            Error::Context(sys::Error::EglUnavailable(e.to_string()))
+        })?;
+        // SAFETY: the test device is process-lived.
+        let api = unsafe { Self::init(device, blending) }?;
         api.thread_enter()?;
         api.set_viewport(width, height);
         Ok(api)
     }
 
-    /// The owned EGL display + context, which the DMA-BUF export takes where the
-    /// reference takes `self.egl_display`/`self.egl_context` (`OpenGL.zig:306`).
-    pub fn egl(&self) -> &OffscreenContext {
-        &self.egl
+    /// The shared render device (`self.device.*`).
+    #[inline]
+    pub fn device(&self) -> &Device {
+        // SAFETY: `init`'s contract: the device outlives this `OpenGL`. It is only
+        // read, on any thread (see `opengl::device`'s sharing note).
+        unsafe { &*self.device }
     }
 
-    /// PORTS: `OpenGL.zig:106-114` — `deinit`.
+    /// The surface's EGL context, which the DMA-BUF export takes where the
+    /// reference takes `self.device.display`/`self.egl_context`
+    /// (`OpenGL.zig:285`).
+    pub fn egl_context(&self) -> &OffscreenContext {
+        &self.egl_context
+    }
+
+    /// PORTS: `OpenGL.zig:92-96` — `deinit`.
     ///
     /// ```zig
     /// pub fn deinit(self: *OpenGL) void {
-    ///     self.egl_display.releaseCurrent();
-    ///     self.egl_context.destroy(self.egl_display) catch {};
-    ///
-    ///     // Do not destroy the EGL display here as
-    ///     // it is shared across the entire process.
-    ///     // It will get automatically torn down by the OS.
+    ///     self.device.display.releaseCurrent();
+    ///     self.egl_context.destroy(self.device.display) catch {};
     ///     self.* = undefined;
     /// }
     /// ```
     ///
-    /// Consuming: `OffscreenContext`'s `Drop` is that body (release, destroy, no
-    /// terminate).
+    /// Consuming: `OffscreenContext`'s `Drop` is that body (release, destroy).
+    /// The display is the device's and is never terminated (`Device.zig:91-96`).
     pub fn deinit(self) {}
 
     /// Callback called by renderer.Thread when it begins. Called on the render
@@ -313,15 +347,15 @@ impl OpenGL {
     /// ```zig
     /// pub fn threadEnter(self: *OpenGL, surface: *apprt.Surface) !void {
     ///     _ = surface;
-    ///     try self.egl_display.makeCurrent(null, null, self.egl_context);
+    ///     try self.device.display.makeCurrent(null, null, self.egl_context);
     ///     // Load our function pointers for this thread's threadlocal.
     ///     try prepareContext(&gl.egl.getProcAddress);
     /// }
     /// ```
     pub fn thread_enter(&self) -> Result<(), Error> {
-        self.egl.make_current()?;
+        self.egl_context.make_current()?;
         // Load our function pointers for this thread's threadlocal.
-        sys::load_gl(&self.egl)?;
+        sys::load_gl(&self.egl_context)?;
         Ok(())
     }
 
@@ -333,12 +367,12 @@ impl OpenGL {
     ///
     /// ```zig
     /// pub fn threadExit(self: *OpenGL) void {
-    ///     self.egl_display.releaseCurrent();
+    ///     self.device.display.releaseCurrent();
     ///     gl.glad.unload();
     /// }
     /// ```
     pub fn thread_exit(&self) {
-        self.egl.release_current();
+        self.egl_context.release_current();
         glad::unload();
     }
 
@@ -477,7 +511,7 @@ impl OpenGL {
     ///     // We only export DMABUFs when the apprt can present them.
     ///     // Otherwise, use CPU buffers.
     ///     if (presentation_health == .healthy) {
-    ///         if (target.exportDmabuf(self.egl_display, self.egl_context)) |dmabuf| {
+    ///         if (target.exportDmabuf(self.device.display, self.egl_context)) |dmabuf| {
     ///             return .{ .dmabuf = dmabuf };
     ///         } else |_| {
     ///             log.warn("failed to export DMABUF, falling back to CPU presentation", .{});
@@ -510,7 +544,7 @@ impl OpenGL {
         // (UD359), so there is no reference behaviour to follow there.
         #[cfg(unix)]
         if presentation_health == crate::Health::Healthy {
-            if let Ok(dmabuf) = target.export_dmabuf(&self.egl) {
+            if let Ok(dmabuf) = target.export_dmabuf(&self.egl_context) {
                 return Ok(ExportedFrame::Dmabuf(dmabuf));
             } else {
                 log::warn!(
@@ -798,7 +832,16 @@ mod tests {
     fn init_releases_the_context_and_loads_no_table() {
         let _guard = test_support::gl_lock();
         glad::unload();
-        let api = match OpenGL::init(AlphaBlending::LinearCorrected) {
+        let device = match test_support::device() {
+            Ok(d) => d,
+            Err(e) => {
+                test_support::require_gl_or_skip("init_releases_the_context_and_loads_no_table", e);
+                eprintln!("no EGL ({e}); skipping init_releases_the_context_and_loads_no_table");
+                return;
+            }
+        };
+        // SAFETY: the test device is process-lived.
+        let api = match unsafe { OpenGL::init(device, AlphaBlending::LinearCorrected) } {
             Ok(api) => api,
             Err(e) => {
                 test_support::require_gl_or_skip(
@@ -894,7 +937,7 @@ mod tests {
         let records = capture.messages();
         drop(capture);
 
-        if api.egl().has_dmabuf_export() {
+        if api.device().has_dmabuf_export() {
             match frame {
                 ExportedFrame::Dmabuf(d) => assert_eq!((d.width, d.height), (8, 4)),
                 ExportedFrame::Memory(_) => panic!("a healthy presentation fell back to memory"),

@@ -2162,7 +2162,6 @@ fn free_data<A: Allocator>(alloc: A, p: Pending) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metal::metal_impl::Metal;
     use crate::size::AlphaBlending;
     use rustty_vt::alloc::Global;
 
@@ -2171,7 +2170,7 @@ mod tests {
         let alloc = Global;
         // Need a live `Metal` for `upload`'s signature; the empty-map loop body
         // never touches it. Skip cleanly on headless CI.
-        let metal = match Metal::init_offscreen(AlphaBlending::Native, 4, 4) {
+        let metal = match crate::metal::test_support::offscreen_metal(AlphaBlending::Native, 4, 4) {
             Ok(m) => m,
             Err(e) => {
                 // F5 strict-mode pivot (metal::test_support).

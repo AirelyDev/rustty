@@ -2427,7 +2427,8 @@ Miri-cannot-model case.
 | crate | test(s) | class | final lane |
 |---|---|---|---|
 | `rustty-cli` | `ssh_cache::…run_inner_fails_cleanly_when_the_cache_is_unusable` | `mkdir` under isolation | 55 passed, 17 ignored |
-| `rustty-core` | `app::test_runtime::app_create_and_destroy_empty` | CoreText warmup thread → `CFStringCreateWithBytes` | see below |
+| `rustty-core` | `app::test_runtime::app_create_and_destroy_empty` | CoreText warmup thread → `CFStringCreateWithBytes`; since P8-W6 T2 (`40d5b860d`) also the render device `App.init` creates (`MTLCopyAllDevices` / dlopen libEGL) | see below |
+| `rustty-core` | `app::test_runtime::app_init_creates_and_deinit_frees_the_render_device`, `app::device_tests::two_surfaces_share_the_device_destroy_one_draw_the_other_then_deinit` (P8-W6 T2) | real render device (Metal / EGL); the second also render and io threads and a pty | the device's lifetime is Miri-proven instead by `.port/phase-2/mirihar-device-box` (inline UB under SB, `DeviceBox` clean under SB and TB) and by the App tests on the `#[cfg(test)]` null-device constructor (DECISIONS P11), 17 passed under Miri |
 | `rustty-global` | `environ::…global_environ_map_reflects_the_process`, `rlimit_tests::restore_round_trips_nofile` | empty environ under isolation; `getrlimit` | 8 passed, 2 ignored |
 | `rustty-vaxis` | `recover_tests::{recover_writes_exact_reset_bundle_to_stored_fd, recover_restores_saved_termios_on_a_pty, install_panic_recovery_runs_recover_then_chains_previous_hook}` | real pty + `tcsetattr` | 98 passed, 3 ignored |
 | `rustty-vt` | `hyperlink::…try_dupe_bytes_reports_allocation_failure` | Miri hard-errors instead of failing an allocation | — |

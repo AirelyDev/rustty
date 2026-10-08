@@ -14,7 +14,58 @@
 
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
+use crate::opengl::device::Device;
 use crate::opengl::gl::sys::{self, OffscreenContext};
+
+/// The process's test render device (P8-W6 T2): what the core `App` owns in the
+/// product (`App.device`, `40d5b860d`), shared by every GL test as every surface
+/// renderer shares the app's. Created once and never freed (the EGL display is
+/// process-wide and never terminated anyway, DECISIONS B10), so the
+/// `*const Device` the tests hand to `OffscreenContext::init`/`OpenGL::init` (and
+/// to `generic::Options.device`) is valid for the whole process. Each test still
+/// gets its OWN context on it (see the module docs).
+pub(crate) fn device() -> Result<*const Device, &'static sys::Error> {
+    /// The device holds raw EGL handles, so it is not `Sync`; the tests only
+    /// hand out `*const Device` and call EGL through it, which EGL allows from any
+    /// thread (`opengl::device`'s sharing note).
+    struct SharedDevice(Device);
+    // SAFETY: see above; never written after `init`.
+    unsafe impl Sync for SharedDevice {}
+    // SAFETY: see above.
+    unsafe impl Send for SharedDevice {}
+
+    static DEVICE: OnceLock<Result<SharedDevice, sys::Error>> = OnceLock::new();
+    DEVICE
+        .get_or_init(|| {
+            let mut slot = std::mem::MaybeUninit::<Device>::uninit();
+            // SAFETY: `init` wrote the slot when it returned Ok.
+            Device::init(&mut slot).map(|()| SharedDevice(unsafe { slot.assume_init() }))
+        })
+        .as_ref()
+        .map(|d| &d.0 as *const Device)
+}
+
+/// [`device`], or `None` after the [`require_gl_or_skip`] pivot and a
+/// `skipping <test_name>` line when this host has no EGL device.
+#[track_caller]
+pub(crate) fn device_or_skip(test_name: &str) -> Option<*const Device> {
+    match device() {
+        Ok(d) => Some(d),
+        Err(err) => {
+            require_gl_or_skip(test_name, err);
+            eprintln!("no EGL render device ({err}); skipping {test_name}");
+            None
+        }
+    }
+}
+
+/// A context on the test [`device`], current on the calling thread (what the
+/// tests used to get from the former all-in-one `OffscreenContext::init()`).
+pub(crate) fn offscreen_context() -> Result<OffscreenContext, String> {
+    let device = device().map_err(|e| e.to_string())?;
+    // SAFETY: the test device is process-lived.
+    unsafe { OffscreenContext::init(device) }.map_err(|e| e.to_string())
+}
 
 /// The process-wide GL-test lock. Every test that stands up an
 /// [`OffscreenContext`] MUST hold it for the context's whole lifetime.
@@ -167,7 +218,7 @@ pub(crate) struct GlTestContext {
 pub(crate) fn offscreen_gl(test_name: &str) -> Option<GlTestContext> {
     let guard = gl_lock();
 
-    let ctx = match OffscreenContext::init() {
+    let ctx = match offscreen_context() {
         Ok(ctx) => ctx,
         Err(err) => {
             require_gl_or_skip(test_name, &err);

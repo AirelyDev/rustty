@@ -55,15 +55,14 @@ pub struct Options {}
 
 /// The renderer type name, exactly as the reference prints it: `{}` on the
 /// comptime type `renderer.Renderer` is `@typeName`, and renderer.zig:38-42
-/// selects `.metal => GenericRenderer(Metal)`, `.opengl => GenericRenderer(OpenGL)`,
-/// `.webgl => WebGL`. Derived from `build_config::renderer()` — the SAME
+/// selects `.metal => GenericRenderer(Metal)`, `.opengl => GenericRenderer(OpenGL)`.
+/// Derived from `build_config::renderer()` — the SAME
 /// `build_config.renderer` the reference switch reads — so the CLI keeps no
 /// rustty-renderer edge.
 fn renderer_type_name() -> &'static str {
     match build_config::renderer() {
         build_config::renderer::Backend::Metal => "renderer.generic.Renderer(renderer.Metal)",
         build_config::renderer::Backend::Opengl => "renderer.generic.Renderer(renderer.OpenGL)",
-        build_config::renderer::Backend::Webgl => "renderer.WebGL",
     }
 }
 

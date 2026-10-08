@@ -227,9 +227,15 @@ fn enter_test_renderer(r: &mut Renderer) {
 #[test]
 fn linux_opengl_renderer_init_then_deinit_round_trips() {
     let _guard = test_support::gl_lock();
+    let Some(device) =
+        test_support::device_or_skip("linux_opengl_renderer_init_then_deinit_round_trips")
+    else {
+        return;
+    };
 
     let (font_grid, size) = test_font_grid_and_size(10, 3);
     let opts = Options {
+        device,
         config: derived_config_for_test(),
         font_grid,
         size,
@@ -347,6 +353,39 @@ fn linux_opengl_display_unrealize_then_realize_releases_and_rebuilds_on_the_rend
     unsafe { Renderer::display_unrealized_raw(rp, &lock) };
     assert!(unsafe { Renderer::release_if_unrealized_raw(rp, &lock) });
     assert!(r.swap_chain.is_none());
+
+    deinit_test_renderer(&mut r);
+}
+
+/// `140feb86a`: `threadExit` marks the display unrealized before
+/// `releaseGpuResources`, so the shaders are freed even for an apprt that never
+/// unrealizes (macOS), and no later draw rebuilds resources after the render
+/// thread is gone. Plays the render thread with its own lock handle (N437).
+#[test]
+fn linux_opengl_thread_exit_unrealizes_the_display() {
+    let _guard = test_support::gl_lock();
+    let Some(mut r) = golden_renderer(10, 3) else {
+        return;
+    };
+    r.draw_frame(false).expect("first draw");
+    assert!(r.display_realized);
+    assert!(r.swap_chain.is_some());
+    assert!(!r.shaders.defunct);
+
+    // The `draw_mutex` block of `threadExit` (the API teardown is left to
+    // `deinit_test_renderer`'s own `thread_exit`).
+    let lock = r.draw_mutex.clone();
+    lock.lock();
+    r.thread_exit_locked();
+    lock.unlock();
+    assert!(!r.display_realized, "threadExit unrealizes the display");
+    assert!(r.swap_chain.is_none());
+    assert!(r.shaders.defunct, "the shaders are released on thread exit");
+
+    // A later draw returns early and rebuilds nothing.
+    r.draw_frame(true).expect("draw after thread exit");
+    assert!(r.swap_chain.is_none());
+    assert!(r.shaders.defunct);
 
     deinit_test_renderer(&mut r);
 }
@@ -569,9 +608,15 @@ fn term_opts(cols: CellCountInt, rows: CellCountInt) -> TermOptions {
 #[test]
 fn linux_opengl_rebuild_cells_places_ab_and_cursor() {
     let _guard = test_support::gl_lock();
+    let Some(device) =
+        test_support::device_or_skip("linux_opengl_rebuild_cells_places_ab_and_cursor")
+    else {
+        return;
+    };
 
     let (font_grid, size) = test_font_grid_and_size(10, 3);
     let opts = Options {
+        device,
         config: derived_config_for_test(),
         font_grid,
         size,
@@ -657,6 +702,7 @@ fn golden_renderer(cols: CellCountInt, rows: CellCountInt) -> Option<Renderer> {
 
     let (font_grid, size) = test_font_grid_and_size(cols, rows);
     let opts = Options {
+        device: test_support::device().expect("the test device (GL probed above)"),
         config: derived_config_for_test(),
         font_grid,
         size,

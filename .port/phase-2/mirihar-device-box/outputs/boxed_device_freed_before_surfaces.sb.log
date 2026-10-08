@@ -1,0 +1,196 @@
+Trying seed: 0
+Trying seed: 6
+Trying seed: 1
+Trying seed: 4
+Trying seed: 5
+Trying seed: 3
+Trying seed: 2
+Trying seed: 7
+error: Undefined Behavior: not granting access to tag <2058> because that would remove [SharedReadOnly for <5768>] which is strongly protected
+    --> /Users/gael/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/boxed.rs:1562:9
+     |
+1562 |         Box(unsafe { Unique::new_unchecked(raw) }, alloc)
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Undefined Behavior occurred here
+     |
+     = help: this indicates a potential bug in the program: it performed an invalid operation, but the Stacked Borrows rules it violated are still experimental
+     = help: see https://github.com/rust-lang/unsafe-code-guidelines/blob/master/wip/stacked-borrows.md for further information
+help: <2058> was created by a SharedReadWrite retag at offsets [0x0..0x10]
+    --> src/main.rs:137:19
+     |
+ 137 |         DeviceBox(Box::into_raw(Box::new(Device::init())))
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: <5768> is this argument
+    --> src/main.rs:57:13
+     |
+  57 |     fn read(&self) -> u64 {
+     |             ^^^^^
+     = note: this is on thread `main`
+     = note: stack backtrace:
+             0: std::boxed::Box::<Device>::from_raw_in
+                 at /Users/gael/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/boxed.rs:1562:9: 1562:58
+             1: std::boxed::Box::<Device>::from_raw
+                 at /Users/gael/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/boxed.rs:1325:18: 1325:48
+             2: DeviceBox::deinit
+                 at src/main.rs:150:27: 150:48
+             3: BoxedApp::deinit_device_first
+                 at src/main.rs:240:18: 240:38
+             4: boxed_device_freed_before_surfaces
+                 at src/main.rs:314:9: 314:37
+             5: main
+                 at src/main.rs:326:49: 326:85
+
+error: Undefined Behavior: constructing invalid value of type &Device: encountered a dangling reference (use-after-free)
+   --> src/main.rs:175:49
+    |
+175 |                 acc = acc.wrapping_add(unsafe { (*dev.0).read() });
+    |                                                 ^^^^^^^^ Undefined Behavior occurred here
+    |
+    = help: this indicates a bug in the program: it performed an invalid operation, and caused Undefined Behavior
+    = help: see https://doc.rust-lang.org/nightly/reference/behavior-considered-undefined.html for further information
+    = note: this is on thread `unnamed-1`
+note: the current function got called indirectly due to this code
+   --> src/main.rs:169:22
+    |
+169 |           let render = thread::spawn(move || {
+    |  ______________________^
+170 | |             let dev = dev;
+171 | |             let mut acc = 0u64;
+...   |
+181 | |             acc
+182 | |         });
+    | |__________^
+
+note: some details are omitted, run with `MIRIFLAGS=-Zmiri-backtrace=full` for a verbose backtrace
+
+error: Undefined Behavior: not granting access to tag <2055> because that would remove [SharedReadOnly for <5848>] which is strongly protected
+    --> /Users/gael/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/boxed.rs:1562:9
+     |
+1562 |         Box(unsafe { Unique::new_unchecked(raw) }, alloc)
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Undefined Behavior occurred here
+     |
+     = help: this indicates a potential bug in the program: it performed an invalid operation, but the Stacked Borrows rules it violated are still experimental
+     = help: see https://github.com/rust-lang/unsafe-code-guidelines/blob/master/wip/stacked-borrows.md for further information
+help: <2055> was created by a SharedReadWrite retag at offsets [0x0..0x10]
+    --> src/main.rs:137:19
+     |
+ 137 |         DeviceBox(Box::into_raw(Box::new(Device::init())))
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: <5848> is this argument
+    --> src/main.rs:57:13
+     |
+  57 |     fn read(&self) -> u64 {
+     |             ^^^^^
+     = note: this is on thread `main`
+     = note: stack backtrace:
+             0: std::boxed::Box::<Device>::from_raw_in
+                 at /Users/gael/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/boxed.rs:1562:9: 1562:58
+             1: std::boxed::Box::<Device>::from_raw
+                 at /Users/gael/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/boxed.rs:1325:18: 1325:48
+             2: DeviceBox::deinit
+                 at src/main.rs:150:27: 150:48
+             3: BoxedApp::deinit_device_first
+                 at src/main.rs:240:18: 240:38
+             4: boxed_device_freed_before_surfaces
+                 at src/main.rs:314:9: 314:37
+             5: main
+                 at src/main.rs:326:49: 326:85
+
+FAILING SEED: 3
+error: Undefined Behavior: Data race detected between (1) non-atomic read on thread `unnamed-1` and (2) retag write of type `Device` on thread `main` at alloc6247
+    --> /Users/gael/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/boxed.rs:1562:9
+     |
+1562 |         Box(unsafe { Unique::new_unchecked(raw) }, alloc)
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (2) just happened here
+     |
+help: and (1) occurred earlier here
+    --> src/main.rs:58:9
+     |
+  58 |         self.handle + u64::from(self.default_storage_mode) + u64::from(self.max_texture_size)
+     |         ^^^^^^^^^^^
+     = help: retags occur on all (re)borrows and as well as when references are copied or moved
+     = help: retags permit optimizations that insert speculative reads or writes
+     = help: therefore from the perspective of data races, a retag has the same implications as a read or write
+     = help: this indicates a bug in the program: it performed an invalid operation, and caused Undefined Behavior
+     = help: see https://doc.rust-lang.org/nightly/reference/behavior-considered-undefined.html for further information
+     = note: this is on thread `main`
+     = note: stack backtrace:
+             0: std::boxed::Box::<Device>::from_raw_in
+                 at /Users/gael/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/boxed.rs:1562:9: 1562:58
+             1: std::boxed::Box::<Device>::from_raw
+                 at /Users/gael/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/boxed.rs:1325:18: 1325:48
+             2: DeviceBox::deinit
+                 at src/main.rs:150:27: 150:48
+             3: BoxedApp::deinit_device_first
+                 at src/main.rs:240:18: 240:38
+             4: boxed_device_freed_before_surfaces
+                 at src/main.rs:314:9: 314:37
+             5: main
+                 at src/main.rs:326:49: 326:85
+
+note: some details are omitted, run with `MIRIFLAGS=-Zmiri-backtrace=full` for a verbose backtrace
+  |
+  = note: duplicate diagnostic emitted due to `-Z deduplicate-diagnostics=no`
+
+error: Undefined Behavior: Data race detected between (1) non-atomic read on thread `unnamed-1` and (2) retag write of type `Device` on thread `main` at alloc6287
+    --> /Users/gael/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/boxed.rs:1562:9
+     |
+1562 |         Box(unsafe { Unique::new_unchecked(raw) }, alloc)
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (2) just happened here
+     |
+help: and (1) occurred earlier here
+    --> src/main.rs:58:9
+     |
+  58 |         self.handle + u64::from(self.default_storage_mode) + u64::from(self.max_texture_size)
+     |         ^^^^^^^^^^^
+     = help: retags occur on all (re)borrows and as well as when references are copied or moved
+     = help: retags permit optimizations that insert speculative reads or writes
+     = help: therefore from the perspective of data races, a retag has the same implications as a read or write
+     = help: this indicates a bug in the program: it performed an invalid operation, and caused Undefined Behavior
+     = help: see https://doc.rust-lang.org/nightly/reference/behavior-considered-undefined.html for further information
+     = note: this is on thread `main`
+     = note: stack backtrace:
+             0: std::boxed::Box::<Device>::from_raw_in
+                 at /Users/gael/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/boxed.rs:1562:9: 1562:58
+             1: std::boxed::Box::<Device>::from_raw
+                 at /Users/gael/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/boxed.rs:1325:18: 1325:48
+             2: DeviceBox::deinit
+                 at src/main.rs:150:27: 150:48
+             3: BoxedApp::deinit_device_first
+                 at src/main.rs:240:18: 240:38
+             4: boxed_device_freed_before_surfaces
+                 at src/main.rs:314:9: 314:37
+             5: main
+                 at src/main.rs:326:49: 326:85
+
+FAILING SEED: 5
+error: Undefined Behavior: Data race detected between (1) non-atomic read on thread `unnamed-1` and (2) retag write of type `Device` on thread `main` at alloc6285
+    --> /Users/gael/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/boxed.rs:1562:9
+     |
+1562 |         Box(unsafe { Unique::new_unchecked(raw) }, alloc)
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (2) just happened here
+     |
+help: and (1) occurred earlier here
+    --> src/main.rs:58:9
+     |
+  58 |         self.handle + u64::from(self.default_storage_mode) + u64::from(self.max_texture_size)
+     |         ^^^^^^^^^^^
+     = help: retags occur on all (re)borrows and as well as when references are copied or moved
+     = help: retags permit optimizations that insert speculative reads or writes
+     = help: therefore from the perspective of data races, a retag has the same implications as a read or write
+     = help: this indicates a bug in the program: it performed an invalid operation, and caused Undefined Behavior
+     = help: see https://doc.rust-lang.org/nightly/reference/behavior-considered-undefined.html for further information
+     = note: this is on thread `main`
+     = note: stack backtrace:
+             0: std::boxed::Box::<Device>::from_raw_in
+                 at /Users/gael/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/boxed.rs:1562:9: 1562:58
+             1: std::boxed::Box::<Device>::from_raw
+                 at /Users/gael/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/boxed.rs:1325:18: 1325:48
+             2: DeviceBox::deinit
+                 at src/main.rs:150:27: 150:48
+             3: BoxedApp::deinit_device_first
+                 at src/main.rs:240:18: 240:38
+             4: boxed_device_freed_before_surfaces
+                 at src/main.rs:314:9: 314:37
+             5: main
+                 at src/main.rs:326:49: 326:85
+

@@ -581,8 +581,9 @@ mod export {
         /// }
         /// ```
         ///
-        /// PORT NOTE (`display, context`): the [`OffscreenContext`] that owns both
-        /// (see its docs; stage S2 moves them into `OpenGL`).
+        /// PORT NOTE (`display, context`): the [`OffscreenContext`], which owns the
+        /// context and reaches the display through its app-scoped device
+        /// (`40d5b860d`; see its docs).
         ///
         /// PORT NOTE (the `defer` order): Zig runs `defer`s in reverse, so the
         /// image is destroyed, then the draw and read bindings are restored, then
@@ -793,8 +794,8 @@ pub(crate) mod tests {
         let Some(api) = test_support::offscreen_api(TEST, AlphaBlending::LinearCorrected) else {
             return;
         };
-        let ctx = api.egl();
-        if !ctx.has_dmabuf_export() {
+        let ctx = api.egl_context();
+        if !api.device().has_dmabuf_export() {
             let why = "the surfaceless EGL display has no EGL_MESA_image_dma_buf_export";
             test_support::require_dmabuf_or_skip(TEST, &why);
             eprintln!("{why}; skipping {TEST}");

@@ -238,7 +238,6 @@ fn zig_renderer(r: rustty_build_config::renderer::Backend) -> &'static str {
     match r {
         Backend::Metal => "renderer.generic.Renderer(renderer.Metal)",
         Backend::Opengl => "renderer.generic.Renderer(renderer.OpenGL)",
-        Backend::Webgl => "renderer.WebGL",
     }
 }
 
@@ -725,7 +724,6 @@ mod bootstrap_tests {
             [
                 "renderer=renderer.generic.Renderer(renderer.Metal)",
                 "renderer=renderer.generic.Renderer(renderer.OpenGL)",
-                "renderer=renderer.WebGL",
             ]
             .contains(&renderer_line().as_str()),
             "{}",
