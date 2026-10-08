@@ -17,7 +17,9 @@
 # (`example/<dir>/src/main.c`, `main.cpp` for cpp-vt-stream) compiled with
 # Xcode clang against the oracle's libghostty-vt, which must be built first
 # with `zig build -Demit-lib-vt=true` in the oracle (zig-out/include,
-# zig-out/lib/libghostty-vt.a). The flags mirror each example's build.zig:
+# zig-out/lib/libghostty-vt.a). Only the built HEADERS are checked against the
+# pin (zig-out/include/ghostty vs include/ghostty); the library's staleness is
+# NOT checked, so rebuild it after moving the oracle. The flags mirror each example's build.zig:
 # `GHOSTTY_STATIC` for c-vt-static and c-vt-snapshot, libc++ for cpp-vt-stream,
 # Zig's default Debug build (-O0 -g).
 #

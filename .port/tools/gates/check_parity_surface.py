@@ -348,7 +348,11 @@ def _byte_value(tok):
 def pattern_values(pattern):
     """Alternatives of one arm pattern: a list of ints (byte/integer literals,
     inclusive ranges expanded), path strings (`ansi::C0::NUL`) and "else" (`_`).
-    A guard (`if ...`) is ignored. Anything else raises ValueError."""
+    A guard (`if ...`) is ignored, so a guarded arm counts as handling its
+    final(s). A binding catch-all (`other =>`) reads as a path: for c0 it would
+    add its binding name as a control name (matching no surface id), and for
+    csi/esc it is BLOCKED as an unresolvable name. Anything else raises
+    ValueError."""
     toks = []
     pos = 0
     while pos < len(pattern):
@@ -745,9 +749,12 @@ def self_test():
 def _self_test_structural(tmp, gates, inv, here, surface, script):
     """Arms (i)-(q): the structural kinds (N523 csi/esc/c0, N524 osc) on COPIES
     of the REAL Rust dispatch files and on an osc enum fixture. Each negative
-    control removes one arm (or one variant) and must turn exactly that id RED,
-    while the removed final's token stays elsewhere in the file, so a token
-    match could not have caught it."""
+    control removes one arm (or one variant) and must turn exactly that id RED.
+    Where the removed final's token still occurs elsewhere in the file (arm j:
+    `b'm'` in `csi_dispatch_final`; arm m and m-real: the kind's word), the arm
+    checks it, so a token match could not have caught the removal; arms k and l
+    have no such occurrence and print `n/a` (no claim). Arm m-real runs the
+    variant reader on a copy of the REAL osc/mod.rs."""
     import json
 
     ok = True
@@ -834,10 +841,11 @@ def _self_test_structural(tmp, gates, inv, here, surface, script):
         write_tree({rel: mutated})
         r = kind_run(kind)
         got = uncovered(r, kind)
-        still = token is None or token in mutated
+        # Only a checked claim prints True/False; with no token to check: n/a.
+        still = "n/a" if token is None else (token in mutated)
         print(f"[{tag}] {kind} copy without the {pattern} arm -> exit {r.returncode}, "
               f"UNCOVERED {got} (expect non-zero, [{want!r}]); token kept elsewhere: {still}")
-        ok &= (r.returncode == 1 and got == [want] and still)
+        ok &= (r.returncode == 1 and got == [want] and still is not False)
         write_tree({rel: copies[rel]})
 
     # (m) osc: an enum body without `Unknown` => RED on `unknown`, although the
@@ -848,6 +856,46 @@ def _self_test_structural(tmp, gates, inv, here, surface, script):
     print(f"[m] osc enum without Unknown -> exit {r.returncode}, UNCOVERED {got} "
           f"(expect non-zero, ['unknown'])")
     ok &= (r.returncode == 1 and got == ["unknown"])
+    write_tree({osc_rel: osc_enum})
+
+    # (m-real) the variant reader on a copy of the REAL osc/mod.rs (its
+    #     lifetimes, doc comments, attributes, tuple and struct variants), with
+    #     the real surface's osc kinds: unmodified -> the real gaps only (not
+    #     pinned here, so the arm survives the W4 ports; `hyperlink_end` must
+    #     be covered); the unit variant `HyperlinkEnd` dropped -> exactly
+    #     `hyperlink_end` added to the UNCOVERED set,
+    #     although `HyperlinkEnd` stays in the file (Command::HyperlinkEnd uses).
+    with open(os.path.join(real_root, osc_rel), encoding="utf-8") as fh:
+        real_osc = fh.read()
+    with open(os.path.join(real_root, ".port", "phase-0", "inventory", "parity-surface.json"),
+              encoding="utf-8") as fh:
+        real_kinds = json.load(fh)["osc_handlers"]["command_kinds"]
+    sf_real = dict(sf)
+    sf_real["osc_handlers"] = {"command_kinds": real_kinds}
+    with open(os.path.join(inv, "parity-surface.json"), "w") as fh:
+        json.dump(sf_real, fh)
+    write_tree({osc_rel: real_osc})
+    r = kind_run("osc")
+    base = uncovered(r, "osc")
+    enum_at = real_osc.find("pub enum Command<")
+    enum_end = real_osc.find("\n}\n", enum_at)
+    drop_at = real_osc.find("\n    HyperlinkEnd,\n", enum_at)
+    if enum_at == -1 or not (enum_at < drop_at < enum_end):
+        print("[m-real] could not locate `HyperlinkEnd,` inside the real enum Command (expect one)")
+        ok = False
+    else:
+        mutated = real_osc[:drop_at] + real_osc[drop_at + len("\n    HyperlinkEnd,"):]
+        write_tree({osc_rel: mutated})
+        r2 = kind_run("osc")
+        got = uncovered(r2, "osc")
+        still = "HyperlinkEnd" in mutated
+        print(f"[m-real] real osc/mod.rs: UNCOVERED {base} (the real gaps; expect no 'hyperlink_end'); "
+              f"without HyperlinkEnd -> exit {r2.returncode}, UNCOVERED {got} (expect non-zero, "
+              f"+ 'hyperlink_end'); HyperlinkEnd kept elsewhere: {still}")
+        ok &= ("hyperlink_end" not in base and r2.returncode == 1
+               and got == sorted(base + ["hyperlink_end"]) and still)
+    with open(os.path.join(inv, "parity-surface.json"), "w") as fh:
+        json.dump(sf, fh)
     write_tree({osc_rel: osc_enum})
 
     # (n) a dispatch fn that cannot be found => BLOCKED (never a silent pass).

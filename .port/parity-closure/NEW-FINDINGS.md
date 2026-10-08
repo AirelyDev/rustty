@@ -11225,7 +11225,8 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   match on the final (it forwards every final to `csi_dispatch`), so it adds nothing. The kinds carry no
   `--require-tests` arm; their line says so.
 - **negative controls** (`--self-test` arms i-q, on copies of the real files): the `b'm'` arm removed makes `csi`
-  RED on exactly `m` although `b'm'` stays in `csi_dispatch_final`; the `b'\\'` ESC arm removed, RED on `\`;
+  RED on exactly `m` although `b'm'` stays in `csi_dispatch_final` (checked; arms k and l have no other
+  occurrence of their token and print `n/a`); the `b'\\'` ESC arm removed, RED on `\`;
   the `ansi::C0::BEL` arm removed, RED on `BEL`; the top-level `_` arm removed, RED on `else` (the nested `_`
   arms do not count); `fn esc_dispatch` renamed, BLOCKED; `b'm'` respelled as `FINAL_M`, BLOCKED.
 - **result at `a60e9e2a5`**: csi 42/43, UNCOVERED `y` only (real: not yet ported; P8-W3 T1); esc 24/24; c0
@@ -11247,7 +11248,10 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   variant matching it under G1's convention (`_gatelib.name_candidates`, either direction), read from the enum
   body (`osc_enum_variants`). The `--require-tests` arm is unchanged. A missing enum is BLOCKED.
 - **negative control**: `--self-test` arm m, a fixture enum without `Unknown` while the word `unknown` stays in a
-  comment, a string, a fn name and a const name: RED on exactly `unknown`. Arm p: no `enum Command`, BLOCKED.
+  comment, a string, a fn name and a const name: RED on exactly `unknown`. Arm m-real, a copy of the REAL
+  `osc/mod.rs` with the real surface's kinds: unmodified, UNCOVERED is the real gaps only; with the `HyperlinkEnd`
+  variant dropped (its `Command::HyperlinkEnd` uses stay), exactly `hyperlink_end` is added. Arm p: no
+  `enum Command`, BLOCKED.
 - **other kinds**: every single-word id of `modes`, `sgr`, `keybind`, `cli` and `config` (48 ids, e.g. `insert`,
   `unknown` in sgr, `quit`, `help`, `title`) has a defining site in its owner crate (a field, a variant or a
   string literal), so the false positive is not shown to affect them; their matching is unchanged.
