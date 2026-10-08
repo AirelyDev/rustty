@@ -63,6 +63,12 @@ pub enum Option_ {
     ResizePullScrollback = 40,
     /// Input type: `RenderHoldFn` (oracle e50779498).
     RenderHold = 41,
+    // PORT NOTE: 42 (semantic_prompt), 43 (reset) and 46 (program_status) are
+    // appended by P8-W5 T3 at upstream's numbers; 44/45 land first (P8-W3 T3).
+    /// Input type: `*const bool` (oracle 9272a2f7c).
+    XtChecksumReport = 44,
+    /// Input type: `*const u8` (oracle 7e2d1793d).
+    XtChecksumExtension = 45,
     // /// Input type expected for setting the option.
     // pub fn InType(comptime self: Option) type {
     //     return switch (self) {
@@ -84,10 +90,12 @@ pub enum Option_ {
     //         .color_foreground, .color_background, .color_cursor => ?*const color.RGB.C,
     //         .color_palette => ?*const color.PaletteC,
     //         .kitty_image_storage_limit => ?*const u64,
+    //         .xt_checksum_extension => ?*const u8,
     //         .kitty_image_medium_file,
     //         .kitty_image_medium_shared_mem,
     //         .glyph_protocol,
     //         .title_report,
+    //         .xt_checksum_report,
     //         .resize_pull_scrollback,
     //         => ?*const bool,
     //         .kitty_image_medium_temp_file => ?*const lib.String,
@@ -919,6 +927,43 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
             // SAFETY: raw place write through the handle's terminal pointer
             // (no wrapper-level or terminal-level `&mut`).
             unsafe { (*(*terminal_).terminal).flags.resize_pull_scrollback = v };
+        }
+
+        // .xt_checksum_report => wrapper.stream.handler.xt_checksum_report = if (value) |ptr|
+        //     ptr.*
+        // else
+        //     false,
+        Option_::XtChecksumReport => {
+            let ptr = value as *const bool;
+            let v = if !ptr.is_null() {
+                // SAFETY: `value` points to a readable `bool` (caller contract).
+                unsafe { *ptr }
+            } else {
+                false
+            };
+            // SAFETY: raw place write off the handle (no wrapper-level `&mut`).
+            unsafe { (*handler_ptr(terminal_)).xt_checksum_report = v };
+        }
+
+        // .xt_checksum_extension => {
+        //     const bits = if (value) |ptr| ptr.* else 0;
+        //     const flags = std.math.cast(u5, bits) orelse return .invalid_value;
+        //     wrapper.terminal.setDefaultXtChecksum(@bitCast(flags));
+        // },
+        Option_::XtChecksumExtension => {
+            let ptr = value as *const u8;
+            let bits = if !ptr.is_null() {
+                // SAFETY: `value` points to a readable `u8` (caller contract).
+                unsafe { *ptr }
+            } else {
+                0
+            };
+            // std.math.cast(u5, bits) orelse return .invalid_value
+            if bits > 0x1F {
+                return Result::InvalidValue;
+            }
+            // SAFETY: raw place access to the owned heap terminal.
+            unsafe { (*t).set_default_xt_checksum(rustty_vt::xt_checksum::Flags::from_bits(bits)) };
         }
 
         // .mode, .mode_default => {
