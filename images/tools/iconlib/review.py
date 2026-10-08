@@ -1,0 +1,70 @@
+"""Review sheets for the user gates, written to target/icon-review/ (git-ignored)."""
+from __future__ import annotations
+
+import io
+import subprocess
+import tempfile
+from pathlib import Path
+
+from PIL import Image
+
+from . import paths, raster, tools
+
+LIGHT = (242, 242, 242, 255)
+DARK = (30, 30, 30, 255)
+
+
+def sheet_sizes(icon: Image.Image, sizes=(256, 64, 32, 16)) -> Image.Image:
+    w = sum(sizes) + 12 * (len(sizes) + 1)
+    out = Image.new("RGBA", (w, 2 * (max(sizes) + 24)), (0, 0, 0, 0))
+    for row, bg in enumerate((LIGHT, DARK)):
+        y0 = row * (max(sizes) + 24)
+        out.paste(bg, (0, y0, w, y0 + max(sizes) + 24))
+        x = 12
+        for s in sizes:
+            out.alpha_composite(icon.resize((s, s), Image.LANCZOS), (x, y0 + 12 + max(sizes) - s))
+            x += s + 12
+    return out
+
+
+def _actool_256() -> Image.Image:
+    """The dock icon as Xcode compiles it (actool), for comparison with the ictool flats."""
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        subprocess.run(["xcrun", "actool", str(paths.ICON_DIR), "--compile", str(t), "--app-icon", "Rustty",
+                        "--platform", "macosx", "--minimum-deployment-target", "13.0",
+                        "--output-partial-info-plist", str(t / "info.plist")], check=True, capture_output=True)
+        subprocess.run(["iconutil", "-c", "iconset", str(t / "Rustty.icns"), "-o", str(t / "x.iconset")],
+                       check=True, capture_output=True)
+        img = Image.open(t / "x.iconset" / "icon_128x128@2x.png").convert("RGBA")
+        img.load()
+    return img
+
+
+def official() -> list[Path]:
+    from . import flats
+    master = flats.build_master()
+    flat_1024 = flats.downscale(master, 1024)
+    before = Image.open(io.BytesIO(tools.git_blob(paths.PRE_REBRAND_REV, "images/gnome/1024.png"))).convert("RGBA")
+    pair = Image.new("RGBA", (1024 + 256 + 24, 1024), LIGHT)
+    pair.alpha_composite(flat_1024, (0, 0))
+    pair.alpha_composite(_actool_256(), (1024 + 12, 0))
+    outs = {
+        "official-1024-vs-actool.png": pair,
+        "official-sizes.png": sheet_sizes(flat_1024),
+        "official-before-sizes.png": sheet_sizes(before),
+    }
+    written = []
+    for name, img in outs.items():
+        raster.save_png(img, paths.REVIEW_DIR / name)
+        written.append(paths.REVIEW_DIR / name)
+    return written
+
+
+SHEETS = {"official": lambda args: official()}
+
+
+def run(args) -> int:
+    for p in SHEETS[args.what](args):
+        print(f"wrote {paths.rel(p)}")
+    return 0

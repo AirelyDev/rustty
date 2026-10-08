@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from iconlib import paths, tools  # noqa: E402
-from iconlib import mascot, official  # noqa: E402
+from iconlib import flats, mascot, official, review  # noqa: E402
 
 
 def cmd_paths(args) -> int:
@@ -17,8 +17,10 @@ def cmd_paths(args) -> int:
     return 0 if paths.FERRIS_SVG.is_file() and paths.ICON_JSON.is_file() else 1
 
 
-COMMANDS = {"paths": cmd_paths, "mascot": mascot.run_mascot, "official": official.run}
-COMMAND_TOOLS = {"paths": [], "mascot": ["resvg"], "official": []}
+COMMANDS = {"paths": cmd_paths, "mascot": mascot.run_mascot, "official": official.run,
+            "flats": flats.run, "review": review.run}
+COMMAND_TOOLS = {"paths": [], "mascot": ["resvg"], "official": [],
+                 "flats": ["ictool", "icotool"], "review": ["resvg", "ictool"]}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -27,6 +29,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("paths", help="print the repo root and check inputs")
     sub.add_parser("mascot", help="write the Ferris mascot layers")
     sub.add_parser("official", help="centre the mascot and tint the glass in Rustty.icon/icon.json")
+    sub.add_parser("flats", help="render Rustty.icon and write every flat export")
+    rv = sub.add_parser("review", help="write review sheets to target/icon-review/")
+    rv.add_argument("what", choices=["official", "custom", "alternates"])
+    rv.add_argument("names", nargs="*")
     return p
 
 

@@ -43,7 +43,7 @@
 //! `.port/tools/oracle-ghostty-h.sha256` precedent. `cmp` reported 0 diffs.
 //!
 //! `images/gnome` is the ONE deliberate byte deviation (W14-01): the icons are
-//! byte-copies of the committed RUSTTY artwork at `<repo>/images/gnome`, NOT
+//! byte-copies of the committed Rustty (Ferris) artwork at `<repo>/images/gnome`, NOT
 //! the oracle's PNGs. The gresource aliases (`build.rs`) serve these bytes
 //! under `rustty_identity::BUNDLE_ID` — Rustty's application identity — so the
 //! R2 identity fork requires Rustty art here, exactly as the oracle serves
@@ -75,14 +75,14 @@
 //! css/style-dark.css                     2a31164b2b601c8b875c4c0cb25c5a34fdae64b5d696c932f744acd05b2eed7e
 //! css/style-hc.css                       45c9c179c042b2f0ef7147b3a250ef159a50916abf107d33dfa4eaf3512504bc
 //! css/style-hc-dark.css                  45c9c179c042b2f0ef7147b3a250ef159a50916abf107d33dfa4eaf3512504bc
-//! images/gnome/16.png                    9dcea9e0c499930871c9278d1628fe45e52eefd3f20ab597d3c6c0cec0f425ac  (rustty art)
-//! images/gnome/32.png                    0a6a4e0d148b19c8489d30f304c2a5a69a58755d5e7502e70662d3cdca5a7f64  (rustty art)
-//! images/gnome/64.png                    3207a731ecbd0e9e47b3f8ca93340eee9ddc9b112d4694642670d4a3cbe1e514  (rustty art)
-//! images/gnome/128.png                   cdddfc86ca696ad65a39da85d856172bb326279e8bcce6561d1fff19e991418e  (rustty art)
-//! images/gnome/256.png                   755aa39a43df0bfae9feb0e4a57b5e20694b2eeaeb6b9ef75b53154e9c01ccaf  (rustty art)
-//! images/gnome/512.png                   55970c4441f0196b57ce4bd4d0d0acbd83d463a8fff5fdd9ea01a35d21a30c40  (rustty art)
-//! images/gnome/1024.png                  a4597f2fe758e643533b3f55cc144bc872ba1a48cc37f4171370b1a33b6ee0ee  (rustty art)
-//! images/gnome/2048.png                  2e753310f80e7b0ce75f260411c29d28445740c7622a5962020cfd34703e3fc1  (rustty art)
+//! images/gnome/16.png                    a8d0d1495bcb3e6cdde65d3fd0d643ba2e19d0da4761ee9c1b97beff2a631021  (Ferris art)
+//! images/gnome/32.png                    2d751bb44cf99e6d32a454fe03f324c15514a7494ea8cd5315b701d4a89ef81d  (Ferris art)
+//! images/gnome/64.png                    104ed0a4e3052b05bcaf296f96dfd81fe15374c3651f48d7bfe9995d9c86e71f  (Ferris art)
+//! images/gnome/128.png                   e209c6a3edb2055f2dd4d609361937d13d1ea7f5229a31c1ae6ac3790758e293  (Ferris art)
+//! images/gnome/256.png                   49787cae52325ea97b93f587f16b089055d6508c92b48ffa2a9f3fe22fcbb050  (Ferris art)
+//! images/gnome/512.png                   6eb9df5d84c166426898cbfc4b07baf37a0bd568861c3c17a4c7b58c68b23f07  (Ferris art)
+//! images/gnome/1024.png                  02ff691d5d67b7974126fa66d74bd94153dd9ff8166712b9a8dfb66e48acc9c2  (Ferris art)
+//! images/gnome/2048.png                  434273e916aac6c84e6720a682f53b22be14013dcd35c724235258de860c9c0b  (Ferris art)
 //! ```
 
 #![allow(clippy::doc_markdown)]
