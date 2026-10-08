@@ -107,6 +107,8 @@ pub enum Command<'p> {
 /// - `error`: failed and stopped.
 /// - `clear`: not a real state. Removes the addressed record and every
 ///   record beneath it. Without an id, it removes every record.
+///
+/// C: RusttyProgramStatusState
 // PORT NOTE: `lib.Enum(lib.target, ...)`; the `.c` target is a `c_int` enum
 // numbered in declaration order, hence `repr(i32)`.
 #[repr(i32)]

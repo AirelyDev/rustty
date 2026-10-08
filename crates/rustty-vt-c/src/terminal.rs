@@ -665,16 +665,13 @@ unsafe fn wrap(
         progress_report: Some(Effects::progress_report_trampoline),
         size: Some(Effects::size_trampoline),
         render_hold: Some(Effects::render_hold_trampoline),
-        // PORT NOTE (P8-W5 T2): the vt `semantic_prompt`, `reset` and
-        // `program_status` effects exist; their C trampolines and options
-        // (42, 43, 46) land with P8-W5 T3, so nothing is installed yet.
-        semantic_prompt: None,
-        reset: None,
-        program_status: None,
+        semantic_prompt: Some(Effects::semantic_prompt_trampoline),
+        reset: Some(Effects::reset_trampoline),
 
         // Installed dynamically when the callback is set; see Effects.
         clipboard_write: None,
         clipboard_read: None,
+        program_status: None,
     };
 
     // wrapper.* = .{
@@ -1017,7 +1014,8 @@ pub const SCROLL_VIEWPORT_C_FIELD_ARMS: &[(&str, Option<&str>)] = &[
 
 /// `cFieldRename` arms for the `UnknownSequence` tagged value field (the
 /// `types.zig` `.generated` union arms; consumed by the ABI manifest rows).
-pub const UNKNOWN_SEQUENCE_C_FIELD_ARMS: &[(&str, Option<&str>)] = &[("apc", Some("apc"))];
+pub const UNKNOWN_SEQUENCE_C_FIELD_ARMS: &[(&str, Option<&str>)] =
+    &[("apc", Some("apc")), ("osc", Some("osc"))];
 
 /// C: GhosttyTerminalScrollViewport -> RusttyTerminalScrollViewport (R2) — the hand-authored tagged union.
 #[repr(C)]

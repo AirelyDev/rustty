@@ -160,6 +160,39 @@ typedef enum RUSTTY_ENUM_TYPED {
    */
   RUSTTY_SNAPSHOT_DECODER_OPT_RETAIN_CONTINUATION = 1,
 
+  /**
+   * Compress scrollback history while it is restored.
+   *
+   * By default, restoring a snapshot leaves all of its scrollback history
+   * uncompressed, even if the terminal that produced the snapshot had
+   * compressed it. The history stays that size until the application calls
+   * rustty_terminal_compress(). For a terminal with a lot of scrollback,
+   * that can be many times more memory than the terminal needed before.
+   *
+   * When this option is true, the decoder compresses each history page right
+   * after restoring it. The restored terminal starts out compressed, and the
+   * decode never holds more than one uncompressed history page at a time.
+   * The result is the same as decoding normally and then calling
+   * rustty_terminal_compress() with RUSTTY_TERMINAL_COMPRESSION_MODE_FULL,
+   * without the memory spike in between.
+   *
+   * A history page that is on screen when it is restored stays uncompressed.
+   * This only happens if the viewport is scrolled to the top of the
+   * scrollback during an incremental decode. Compressed history is
+   * uncompressed automatically when it is accessed later, for example by
+   * scrolling or searching.
+   *
+   * This only changes how the restored terminal stores its history in
+   * memory. The snapshot format is unchanged, so it works with any snapshot.
+   * On platforms that do not support scrollback compression, this option is
+   * accepted and has no effect.
+   *
+   * This is false by default.
+   *
+   * Input type: bool *
+   */
+  RUSTTY_SNAPSHOT_DECODER_OPT_COMPRESS_HISTORY = 2,
+
   RUSTTY_SNAPSHOT_DECODER_OPT_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE,
 } RusttySnapshotDecoderOption;
 
@@ -252,6 +285,16 @@ typedef enum RUSTTY_ENUM_TYPED {
    * Output type: bool *
    */
   RUSTTY_SNAPSHOT_DECODER_DATA_RETAIN_CONTINUATION = 8,
+
+  /**
+   * Whether history is compressed while it is restored.
+   *
+   * See RUSTTY_SNAPSHOT_DECODER_OPT_COMPRESS_HISTORY. This value is
+   * available in every non-failed decoder state.
+   *
+   * Output type: bool *
+   */
+  RUSTTY_SNAPSHOT_DECODER_DATA_COMPRESS_HISTORY = 9,
 
   RUSTTY_SNAPSHOT_DECODER_DATA_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE,
 } RusttySnapshotDecoderData;
@@ -471,6 +514,10 @@ RUSTTY_API RusttyResult rustty_snapshot_decoder_ready(
  * If a history page can no longer be applied safely, it is still consumed and
  * validated and progress reports zero rows. The decoder applies history
  * to the caller-owned terminal produced by its READY operation.
+ *
+ * If RUSTTY_SNAPSHOT_DECODER_OPT_COMPRESS_HISTORY is true, the page is
+ * compressed before this function returns, unless it is visible in the
+ * terminal's viewport.
  *
  * A decoding error invalidates the decoder's source position. The terminal
  * remains caller-owned and usable with its already-restored history, but only

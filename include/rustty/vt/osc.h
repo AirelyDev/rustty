@@ -57,6 +57,49 @@
  * rustty_osc_reset(parser);
  * @endcode
  *
+ * ## Unknown Commands
+ *
+ * Every OSC sequence starts with a number that says what it is, such as
+ * 2 for the window title or 8 for a hyperlink. By default, a sequence whose
+ * number the parser does not implement produces
+ * RUSTTY_OSC_COMMAND_INVALID, and its data is discarded.
+ *
+ * To implement such a sequence yourself, set
+ * RUSTTY_OSC_OPT_UNKNOWN_MAX_BYTES with rustty_osc_set(). The parser
+ * then produces RUSTTY_OSC_COMMAND_UNKNOWN for these sequences, and you
+ * can read the raw sequence with RUSTTY_OSC_DATA_UNKNOWN_CONTENT.
+ *
+ * @code{.c}
+ * RusttyOscParser parser;
+ * rustty_osc_new(NULL, &parser);
+ *
+ * // Keep up to 1 KiB of each unknown sequence.
+ * size_t max_bytes = 1024;
+ * rustty_osc_set(parser, RUSTTY_OSC_OPT_UNKNOWN_MAX_BYTES, &max_bytes);
+ *
+ * // Feed the bytes between ESC ] and the terminator. OSC 7400 is made up
+ * // for this example, so the parser does not implement it.
+ * const char* input = "7400;status=busy";
+ * for (size_t i = 0; input[i] != '\0'; i++) {
+ *   rustty_osc_next(parser, (uint8_t)input[i]);
+ * }
+ *
+ * // This sequence ended with BEL (0x07).
+ * RusttyOscCommand command = rustty_osc_end(parser, 0x07);
+ * if (rustty_osc_command_type(command) == RUSTTY_OSC_COMMAND_UNKNOWN) {
+ *   RusttyString content;
+ *   rustty_osc_command_data(command, RUSTTY_OSC_DATA_UNKNOWN_CONTENT,
+ *                            &content);
+ *   // content now holds "7400;status=busy".
+ * }
+ *
+ * rustty_osc_free(parser);
+ * @endcode
+ *
+ * Only numbers the parser does not implement are reported this way. A
+ * sequence with a number the parser does implement stays
+ * RUSTTY_OSC_COMMAND_INVALID when its contents are malformed.
+ *
  * @{
  */
 
@@ -116,6 +159,53 @@ typedef enum RUSTTY_ENUM_TYPED {
 } RusttyOscCommandType;
 
 /**
+ * How an OSC sequence was ended.
+ *
+ * Programs can end an OSC sequence in two ways. When you reply to a
+ * sequence, end the reply the same way the program ended its request.
+ * Some programs only recognize replies that match.
+ *
+ * @ingroup osc
+ */
+typedef enum RUSTTY_ENUM_TYPED {
+  /** The string terminator (ST): ESC followed by a backslash (0x1B 0x5C). */
+  RUSTTY_OSC_TERMINATOR_ST = 0,
+
+  /** The bell character, BEL (byte 0x07). */
+  RUSTTY_OSC_TERMINATOR_BEL = 1,
+  RUSTTY_OSC_TERMINATOR_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE,
+} RusttyOscTerminator;
+
+/**
+ * OSC parser options, set with rustty_osc_set().
+ *
+ * @ingroup osc
+ */
+typedef enum RUSTTY_ENUM_TYPED {
+  /**
+   * The most bytes to keep from each OSC sequence whose number the parser
+   * does not implement.
+   *
+   * Zero, the default, discards these sequences and they produce
+   * RUSTTY_OSC_COMMAND_INVALID. Any other value makes them produce
+   * RUSTTY_OSC_COMMAND_UNKNOWN. A NULL value pointer sets the limit back
+   * to zero.
+   *
+   * A sequence longer than the limit is still reported. Its content holds
+   * the first bytes up to the limit, and RUSTTY_OSC_DATA_UNKNOWN_TRUNCATED
+   * is true.
+   *
+   * Limits up to 2048 bytes use a buffer the parser already owns and never
+   * allocate memory. Larger limits allocate memory from the parser's
+   * allocator for each unknown sequence.
+   *
+   * Input type: size_t*
+   */
+  RUSTTY_OSC_OPT_UNKNOWN_MAX_BYTES = 0,
+  RUSTTY_OSC_OPT_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE,
+} RusttyOscOption;
+
+/**
  * OSC command data types.
  * 
  * These values specify what type of data to extract from an OSC command
@@ -138,6 +228,43 @@ typedef enum RUSTTY_ENUM_TYPED {
    * the same parser instance. Memory is owned by the parser.
    */
   RUSTTY_OSC_DATA_CHANGE_WINDOW_TITLE_STR = 1,
+
+  /**
+   * The raw bytes of an unknown sequence: everything that was passed to
+   * rustty_osc_next(), including the number at the start. For example,
+   * the sequence `ESC ] 7400;status=busy BEL` gives
+   * `7400;status=busy`. The bytes are not null-terminated.
+   *
+   * Valid for: RUSTTY_OSC_COMMAND_UNKNOWN
+   *
+   * Output type: RusttyString *
+   *
+   * Lifetime: Valid until the next call to any rustty_osc_* function with
+   * the same parser instance. Memory is owned by the parser.
+   */
+  RUSTTY_OSC_DATA_UNKNOWN_CONTENT = 2,
+
+  /**
+   * True if the unknown sequence was longer than
+   * RUSTTY_OSC_OPT_UNKNOWN_MAX_BYTES, or memory ran out while reading it.
+   * In that case the content holds only the beginning of the sequence.
+   *
+   * Valid for: RUSTTY_OSC_COMMAND_UNKNOWN
+   *
+   * Output type: bool *
+   */
+  RUSTTY_OSC_DATA_UNKNOWN_TRUNCATED = 3,
+
+  /**
+   * How the unknown sequence was ended, based on the terminator passed to
+   * rustty_osc_end(). If you reply to the sequence, end the reply the same
+   * way.
+   *
+   * Valid for: RUSTTY_OSC_COMMAND_UNKNOWN
+   *
+   * Output type: RusttyOscTerminator *
+   */
+  RUSTTY_OSC_DATA_UNKNOWN_TERMINATOR = 4,
   RUSTTY_OSC_DATA_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE,
 } RusttyOscCommandData;
 
@@ -180,6 +307,29 @@ RUSTTY_API void rustty_osc_free(RusttyOscParser parser);
  * @ingroup osc
  */
 RUSTTY_API void rustty_osc_reset(RusttyOscParser parser);
+
+/**
+ * Set an option on an OSC parser.
+ *
+ * `value` points to the option's input type, which is listed in the
+ * documentation for each RusttyOscOption value. Pass NULL to restore the
+ * option's default.
+ *
+ * Options stay set across rustty_osc_reset(). You can change an option
+ * at any time, but a sequence that is already being parsed may keep the
+ * old setting. It is simplest to set options before the first sequence.
+ *
+ * @param parser The parser handle
+ * @param option The option to set
+ * @param value Pointer to the new value, or NULL to restore the default
+ * @return RUSTTY_SUCCESS on success, or RUSTTY_INVALID_VALUE if the parser
+ *         is NULL
+ *
+ * @ingroup osc
+ */
+RUSTTY_API RusttyResult rustty_osc_set(RusttyOscParser parser,
+                                          RusttyOscOption option,
+                                          const void* value);
 
 /**
  * Parse the next byte in an OSC sequence.

@@ -1191,6 +1191,80 @@ static DECLS: &[TypeDecl] = {
                 ]
             )
         ),
+        // .initStruct("GhosttyTerminalMemoryUsage", terminal.TerminalMemoryUsage),
+        struct_decl!(
+            "RusttyTerminalMemoryUsage",
+            crate::terminal::TerminalMemoryUsage,
+            fields!(
+                crate::terminal::TerminalMemoryUsage,
+                [
+                    ("size", usize, size, usize_ty()),
+                    (
+                        "compression_supported",
+                        bool,
+                        compression_supported,
+                        n("bool")
+                    ),
+                    ("primary_pages", u64, primary_pages, n("u64")),
+                    (
+                        "primary_virtual_bytes",
+                        u64,
+                        primary_virtual_bytes,
+                        n("u64")
+                    ),
+                    (
+                        "primary_resident_bytes",
+                        u64,
+                        primary_resident_bytes,
+                        n("u64")
+                    ),
+                    (
+                        "primary_compressed_pages",
+                        u64,
+                        primary_compressed_pages,
+                        n("u64")
+                    ),
+                    (
+                        "primary_compressed_bytes",
+                        u64,
+                        primary_compressed_bytes,
+                        n("u64")
+                    ),
+                    ("primary_image_bytes", u64, primary_image_bytes, n("u64")),
+                    ("alternate_pages", u64, alternate_pages, n("u64")),
+                    (
+                        "alternate_virtual_bytes",
+                        u64,
+                        alternate_virtual_bytes,
+                        n("u64")
+                    ),
+                    (
+                        "alternate_resident_bytes",
+                        u64,
+                        alternate_resident_bytes,
+                        n("u64")
+                    ),
+                    (
+                        "alternate_compressed_pages",
+                        u64,
+                        alternate_compressed_pages,
+                        n("u64")
+                    ),
+                    (
+                        "alternate_compressed_bytes",
+                        u64,
+                        alternate_compressed_bytes,
+                        n("u64")
+                    ),
+                    (
+                        "alternate_image_bytes",
+                        u64,
+                        alternate_image_bytes,
+                        n("u64")
+                    ),
+                ]
+            )
+        ),
         // .initStruct("GhosttyTerminalModeConfig", terminal.ModeConfig),
         struct_decl!(
             "RusttyTerminalModeConfig",
@@ -1206,6 +1280,34 @@ static DECLS: &[TypeDecl] = {
                         n("RusttyMode")
                     ),
                     ("value", bool, value, n("bool")),
+                ]
+            )
+        ),
+        // .initStruct("GhosttyTerminalProgramStatus", terminal.ProgramStatus),
+        struct_decl!(
+            "RusttyTerminalProgramStatus",
+            crate::terminal::ProgramStatus,
+            fields!(
+                crate::terminal::ProgramStatus,
+                [
+                    ("size", usize, size, usize_ty()),
+                    (
+                        "state",
+                        crate::terminal::ProgramStatusState,
+                        state,
+                        n("RusttyProgramStatusState")
+                    ),
+                    (
+                        "kind",
+                        crate::terminal::ProgramStatusKind,
+                        kind,
+                        n("RusttyProgramStatusKind")
+                    ),
+                    ("progress", i8, progress, n("i8")),
+                    ("id", LibString, id, n("RusttyString")),
+                    ("app", LibString, app, n("RusttyString")),
+                    ("title", LibString, title, n("RusttyString")),
+                    ("message", LibString, message, n("RusttyString")),
                 ]
             )
         ),
@@ -1237,6 +1339,33 @@ static DECLS: &[TypeDecl] = {
                     ("total", u64, total, n("u64")),
                     ("offset", u64, offset, n("u64")),
                     ("len", u64, len, n("u64")),
+                ]
+            )
+        ),
+        // .initStruct("GhosttyTerminalSemanticPrompt", terminal.SemanticPrompt),
+        struct_decl!(
+            "RusttyTerminalSemanticPrompt",
+            crate::terminal::SemanticPrompt,
+            fields!(
+                crate::terminal::SemanticPrompt,
+                [
+                    ("size", usize, size, usize_ty()),
+                    (
+                        "kind",
+                        crate::terminal::SemanticPromptKind,
+                        kind,
+                        n("RusttySemanticPromptKind")
+                    ),
+                    (
+                        "prompt_kind",
+                        crate::terminal::SemanticPromptPromptKind,
+                        prompt_kind,
+                        n("RusttySemanticPromptPromptKind")
+                    ),
+                    ("has_exit_code", bool, has_exit_code, n("bool")),
+                    ("exit_code", i32, exit_code, n("i32")),
+                    ("command", LibString, command, n("RusttyString")),
+                    ("error", LibString, error, n("RusttyString")),
                 ]
             )
         ),
@@ -1371,6 +1500,24 @@ static DECLS: &[TypeDecl] = {
                 },
             ],
         },
+        // .initStruct("GhosttyTerminalUnknownOscSequence", terminal.UnknownOscSequence),
+        struct_decl!(
+            "RusttyTerminalUnknownOscSequence",
+            crate::terminal::UnknownOscSequence,
+            fields!(
+                crate::terminal::UnknownOscSequence,
+                [
+                    ("truncated", bool, truncated, n("bool")),
+                    ("content", LibString, content, n("RusttyString")),
+                    (
+                        "terminator",
+                        crate::osc::Terminator,
+                        terminator,
+                        n("RusttyOscTerminator")
+                    ),
+                ]
+            )
+        ),
         // .initStruct("GhosttyTerminalUnknownStringSequence", terminal.UnknownStringSequence),
         struct_decl!(
             "RusttyTerminalUnknownStringSequence",
@@ -1398,6 +1545,13 @@ static DECLS: &[TypeDecl] = {
                     offset: 0,
                     size: size_of::<crate::terminal::UnknownStringSequence>(),
                     ty: Ty::Named("RusttyTerminalUnknownStringSequence"),
+                    tagged: None,
+                },
+                Field {
+                    name: "osc",
+                    offset: 0,
+                    size: size_of::<crate::terminal::UnknownOscSequence>(),
+                    ty: Ty::Named("RusttyTerminalUnknownOscSequence"),
                     tagged: None,
                 },
                 Field {
@@ -1918,8 +2072,26 @@ static DECLS: &[TypeDecl] = {
                 [
                     ("invalid", Invalid),
                     ("change_window_title_str", ChangeWindowTitleStr),
+                    ("unknown_content", UnknownContent),
+                    ("unknown_truncated", UnknownTruncated),
+                    ("unknown_terminator", UnknownTerminator),
                 ]
             )
+        ),
+        // .initEnum("GhosttyOscOption", osc.Option, "GHOSTTY_OSC_OPT_"),
+        enum_decl!(
+            "RusttyOscOption",
+            "RUSTTY_OSC_OPT_",
+            enum_values!(
+                crate::osc::Option_,
+                [("unknown_max_bytes", UnknownMaxBytes)]
+            )
+        ),
+        // .initEnum("GhosttyOscTerminator", osc.Terminator, "GHOSTTY_OSC_TERMINATOR_"),
+        enum_decl!(
+            "RusttyOscTerminator",
+            "RUSTTY_OSC_TERMINATOR_",
+            enum_values!(crate::osc::Terminator, [("st", St), ("bel", Bel)])
         ),
         // .initEnumSentinel("GhosttyOscCommandType", osc.CommandType, "GHOSTTY_OSC_COMMAND_", "TYPE_MAX_VALUE"),
         enum_decl!(
@@ -1984,6 +2156,36 @@ static DECLS: &[TypeDecl] = {
                     ("viewport", Viewport),
                     ("screen", Screen),
                     ("history", History),
+                ]
+            )
+        ),
+        // .initEnum("GhosttyProgramStatusKind", terminal.ProgramStatusKind, "GHOSTTY_PROGRAM_STATUS_KIND_"),
+        enum_decl!(
+            "RusttyProgramStatusKind",
+            "RUSTTY_PROGRAM_STATUS_KIND_",
+            enum_values!(
+                crate::terminal::ProgramStatusKind,
+                [
+                    ("none", None),
+                    ("permission", Permission),
+                    ("question", Question),
+                    ("auth", Auth),
+                ]
+            )
+        ),
+        // .initEnum("GhosttyProgramStatusState", terminal.ProgramStatusState, "GHOSTTY_PROGRAM_STATUS_STATE_"),
+        enum_decl!(
+            "RusttyProgramStatusState",
+            "RUSTTY_PROGRAM_STATUS_STATE_",
+            enum_values!(
+                crate::terminal::ProgramStatusState,
+                [
+                    ("idle", Idle),
+                    ("working", Working),
+                    ("done", Done),
+                    ("blocked", Blocked),
+                    ("error", Error),
+                    ("clear", Clear),
                 ]
             )
         ),
@@ -2285,6 +2487,35 @@ static DECLS: &[TypeDecl] = {
                 ]
             )
         ),
+        // .initEnum("GhosttySemanticPromptKind", terminal.SemanticPromptKind, "GHOSTTY_SEMANTIC_PROMPT_"),
+        enum_decl!(
+            "RusttySemanticPromptKind",
+            "RUSTTY_SEMANTIC_PROMPT_",
+            enum_values!(
+                crate::terminal::SemanticPromptKind,
+                [
+                    ("invalid", Invalid),
+                    ("prompt_start", PromptStart),
+                    ("input_start", InputStart),
+                    ("output_start", OutputStart),
+                    ("command_end", CommandEnd),
+                ]
+            )
+        ),
+        // .initEnum("GhosttySemanticPromptPromptKind", terminal.SemanticPromptPromptKind, "GHOSTTY_SEMANTIC_PROMPT_PROMPT_"),
+        enum_decl!(
+            "RusttySemanticPromptPromptKind",
+            "RUSTTY_SEMANTIC_PROMPT_PROMPT_",
+            enum_values!(
+                crate::terminal::SemanticPromptPromptKind,
+                [
+                    ("primary", Primary),
+                    ("right", Right),
+                    ("continuation", Continuation),
+                    ("secondary", Secondary),
+                ]
+            )
+        ),
         // .initEnum("GhosttySgrAttributeTag", sgr.Attribute.Tag, "GHOSTTY_SGR_ATTR_"),
         enum_decl!(
             "RusttySgrAttributeTag",
@@ -2373,6 +2604,7 @@ static DECLS: &[TypeDecl] = {
                     ("progress_rows", ProgressRows),
                     ("progress_remaining", ProgressRemaining),
                     ("retain_continuation", RetainContinuation),
+                    ("compress_history", CompressHistory),
                 ]
             )
         ),
@@ -2385,6 +2617,7 @@ static DECLS: &[TypeDecl] = {
                 [
                     ("max_continuation_bytes", MaxContinuationBytes),
                     ("retain_continuation", RetainContinuation),
+                    ("compress_history", CompressHistory),
                 ]
             )
         ),
@@ -2511,6 +2744,7 @@ static DECLS: &[TypeDecl] = {
                     ("cursor_at_prompt", CursorAtPrompt),
                     ("clipboard_write_max_bytes", ClipboardWriteMaxBytes),
                     ("mouse_shape", MouseShape),
+                    ("memory_usage", MemoryUsage),
                 ]
             )
         ),
@@ -2564,8 +2798,11 @@ static DECLS: &[TypeDecl] = {
                     ("clipboard_write_max_bytes", ClipboardWriteMaxBytes),
                     ("resize_pull_scrollback", ResizePullScrollback),
                     ("render_hold", RenderHold),
+                    ("semantic_prompt", SemanticPrompt),
+                    ("reset", Reset),
                     ("xt_checksum_report", XtChecksumReport),
                     ("xt_checksum_extension", XtChecksumExtension),
+                    ("program_status", ProgramStatus),
                 ]
             )
         ),
@@ -2611,7 +2848,10 @@ static DECLS: &[TypeDecl] = {
         enum_decl!(
             "RusttyTerminalUnknownSequenceTag",
             "RUSTTY_TERMINAL_UNKNOWN_SEQUENCE_",
-            enum_values!(crate::terminal::UnknownSequenceTag, [("apc", Apc)])
+            enum_values!(
+                crate::terminal::UnknownSequenceTag,
+                [("apc", Apc), ("osc", Osc)]
+            )
         ),
         // .initPacked("GhosttyCell", page.Cell.CLayout),
         TypeDecl::Packed {
@@ -3728,6 +3968,27 @@ mod tests {
         assert_eq!(6i64, get(terminal_values, "SIZE").as_int());
         // try std.testing.expect(!terminal_values.contains("SIZE_CB"));
         assert!(!contains(terminal_values, "SIZE_CB"));
+        // try std.testing.expectEqual(@as(i64, 42), terminal_values.get("SEMANTIC_PROMPT").?.integer);
+        assert_eq!(42i64, get(terminal_values, "SEMANTIC_PROMPT").as_int());
+        // try std.testing.expectEqual(@as(i64, 43), terminal_values.get("RESET").?.integer);
+        assert_eq!(43i64, get(terminal_values, "RESET").as_int());
+
+        // const semantic_prompt_values = manifest_types.get("GhosttySemanticPromptKind").?.object.get("values").?.object;
+        let semantic_prompt_values =
+            get(get(types, "RusttySemanticPromptKind").as_object(), "values").as_object();
+        // try std.testing.expectEqual(@as(i64, 0), semantic_prompt_values.get("INVALID").?.integer);
+        assert_eq!(0i64, get(semantic_prompt_values, "INVALID").as_int());
+        // try std.testing.expectEqual(@as(i64, 4), semantic_prompt_values.get("COMMAND_END").?.integer);
+        assert_eq!(4i64, get(semantic_prompt_values, "COMMAND_END").as_int());
+
+        // const prompt_kind_values = manifest_types.get("GhosttySemanticPromptPromptKind").?.object.get("values").?.object;
+        let prompt_kind_values = get(
+            get(types, "RusttySemanticPromptPromptKind").as_object(),
+            "values",
+        )
+        .as_object();
+        // try std.testing.expectEqual(@as(i64, 3), prompt_kind_values.get("SECONDARY").?.integer);
+        assert_eq!(3i64, get(prompt_kind_values, "SECONDARY").as_int());
 
         let osc_values = get(get(types, "RusttyOscCommandType").as_object(), "values").as_object();
         // try std.testing.expectEqual(@as(i64, 22), osc_values.get("KITTY_TEXT_SIZING").?.integer);
