@@ -1036,11 +1036,15 @@ def self_test_not_carried():
     check("REAL NEG: BlurRegion.zig:59 (\"~30% bigger\") can never be gag prose (digit)",
           any("digit" in e for e in real([blur59])[0]))
     # A real comment the port DOES carry, declared as a row, is STALE (rule 2).
-    carried_row = dict(dll, line=186, file="lib_vt.zig", decl="quirks_memset",
-                       text=oracle_text("lib_vt.zig", 186))
+    # Anchored by CONTENT (P8-W0 T7), not line number, so a pin advance that shifts lines
+    # cannot break this control; the lookup itself fails loudly if the comment is gone.
+    memset_ln = next(i + 1 for i, l in enumerate(reader("lib_vt.zig"))
+                     if "Force-reference our memset override" in l)
+    carried_row = dict(dll, line=memset_ln, file="lib_vt.zig", decl="quirks_memset",
+                       text=oracle_text("lib_vt.zig", memset_ln))
     _, crs = real([carried_row])
     pool = _nc_port_pool("bin", idmap)
-    check("REAL NEG: lib_vt.zig:186 (carried by the port) declared as a row is STALE",
+    check("REAL NEG: lib_vt.zig `Force-reference our memset override` (carried by the port) declared as a row is STALE",
           crs[0]["norm"] and NC.stale_rows(crs, classify, pool) == crs)
     real_ok = [r for r in vrows if r["file"] == "lib_vt.zig"]
     check("REAL: the committed lib_vt.zig rows are NOT stale against the real bin pool",
