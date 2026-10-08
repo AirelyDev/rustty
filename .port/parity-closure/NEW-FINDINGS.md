@@ -11307,3 +11307,18 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `cargo build --workspace`; documented in `.port/tools/CI.md`), BLOCKED (a WARNINGS row, not a skip) when the rustup
   target is absent. Negative control: replacing the wrapper with a bare `rustty_os::path::realpath` call made the
   check RED (E0433), reverted.
+
+## N527 — `build-rustty.sh` overrode the project's `OTHER_LDFLAGS` and RusttyTests failed to link
+
+- **status**: CLOSED (P8-W7 T4).
+- **cause**: `macos/build-rustty.sh` passed `OTHER_LDFLAGS="-lstdc++"` on the `xcodebuild` command line. A command-line
+  build setting overrides every project-level value, so it dropped the project's
+  `"OTHER_LDFLAGS[arch=*]" = "-lstdc++ -Wl,-u,_rustty_benchmark_cli"` (Debug and Release configurations,
+  `project.pbxproj`). RusttyTests built through that invocation failed with
+  `Undefined symbols for architecture arm64: "_rustty_benchmark_cli", referenced from: RusttyTests.BenchmarkTests.example()`.
+- **fix**: the override is removed. Every configuration (Debug, Release, ReleaseLocal) already carries `-lstdc++` in the
+  project, so nothing is lost; `project.pbxproj` is unchanged. The script comment now says why it is not passed.
+- **evidence**: RED: the script's exact invocation plus `-only-testing:RusttyTests test` ended with the undefined
+  `_rustty_benchmark_cli` link error. GREEN: the same invocation without the override gives `** TEST SUCCEEDED **`;
+  `bash macos/build-rustty.sh` gives `** BUILD SUCCEEDED **`; `.port/tools/macos-parity/menu-shortcut-parity.sh` prints
+  `menu-shortcut parity OK — 51 actions resolve byte-identically`.
