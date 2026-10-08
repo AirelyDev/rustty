@@ -30,5 +30,11 @@ class StylesTest(unittest.TestCase):
                 self.assertLess((orange & solid).sum(), 0.05 * solid.sum())
 
 
+class CoverageTest(unittest.TestCase):
+    def test_all_alternates_have_styles(self):
+        from iconlib import paths
+        self.assertEqual(set(styles.STYLES), set(paths.ALT_NAMES))
+
+
 if __name__ == "__main__":
     unittest.main()

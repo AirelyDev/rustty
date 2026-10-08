@@ -19,15 +19,33 @@ INSET = 12
 # covers the ghost's top scribble. Retro has a wide gloss highlight whose lower edge
 # is an ellipse, so the ghost's right-hand glow tail (x 500-600) is first replaced by a
 # horizontal shift (the gloss is uniform there), then the left half is mirrored.
+# Batch 2. Holographic: its ghost drop shadow reaches y 560, so the box is taller. Glass:
+# smooth gradient, one tall mirror box. Microchip: the orange trace starts at y 520, so the
+# mirror stops at y 520 and a second mirror (x >= 335 only) plus a shift from the clean
+# board below clear the ghost's bottom lip without touching the trace. Xray: the board is
+# not symmetric (the left pad has two circles, the right one), so the mirror starts at
+# x 226, a shift repairs the pad's right edge, and a mirror about x = 225 (dx = 573)
+# re-creates the hidden right half of the left pad. Two more shifts take board from clean
+# neighbours: one clears the ghost's left rim below the pad, one removes a spurious fourth cap.
 PASSES: dict[str, list[tuple]] = {
     "Blueprint": [("mirror", GHOST_BOX, 5)],
     "Chalkboard": [("mirror", GHOST_BOX, 7)],
-    "Glass": [("mirror", GHOST_BOX)],
-    "Holographic": [("mirror", GHOST_BOX)],
-    "Microchip": [("mirror", GHOST_BOX)],
+    "Glass": [("mirror", (190, 180, 520, 590), 7)],
+    "Holographic": [("mirror", (190, 180, 505, 590))],
+    "Microchip": [
+        ("mirror", (190, 180, 520, 520), 7),
+        ("shift", (235, 470, 340, 540), 0, 60),
+        ("mirror", (335, 490, 520, 546), 7),
+    ],
     "Paper": [("mirror", (198, 222, 505, 548), 7), ("mirror", (228, 203, 505, 270), 7)],
     "Retro": [("shift", (460, 150, 625, 620), 150, 0), ("mirror", (150, 140, 512, 620), 7)],
-    "Xray": [("mirror", GHOST_BOX)],
+    "Xray": [
+        ("mirror", (226, 180, 520, 545), 0),
+        ("shift", (254, 196, 310, 356), 44, 0),
+        ("shift", (214, 380, 286, 504), -40, 0),
+        ("shift", (256, 190, 330, 282), 0, 70),
+        ("mirror", (214, 236, 276, 412), 573),
+    ],
 }
 
 

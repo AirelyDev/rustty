@@ -96,4 +96,63 @@ def pixel(f, m, rng):
     return _pad(px, (70, 255, 130), w / 30, 0.8)
 
 
-STYLES = {"Blueprint": blueprint, "Chalkboard": chalk, "Paper": ink, "Retro": pixel}
+def chrome(f, m, rng, rim=None, eye_rainbow=False):
+    """Brushed chrome like the Microchip/Xray/Holographic ghosts; optional iridescent rim."""
+    h, w = m.alpha.shape
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float64)
+    cy, cx = h * 0.52, w / 2
+    ang = np.arctan2(yy - cy, xx - cx)
+    r2 = ((yy - cy) ** 2 + (xx - cx) ** 2) / (w * 0.42) ** 2
+    lum = 175 + 70 * np.cos(ang * 6) * np.exp(-r2) + 20 * np.sin(ang * 2)
+    lum = np.where(m.shade, lum * 0.72, lum)
+    rgb = np.dstack([lum, lum, lum * 1.03])
+    if eye_rainbow:
+        hue = (ang + np.pi) / (2 * np.pi)
+        rainbow = np.dstack([127 + 127 * np.cos(2 * np.pi * (hue + k / 3)) for k in range(3)])
+        eye = 0.35 * np.array([60, 20, 90]) + 0.65 * rainbow
+    else:
+        eye = np.broadcast_to(np.array([20.0, 20.0, 24.0]), rgb.shape)
+    rgb = np.where(m.dark[..., None], eye, rgb)
+    rgb = np.where(m.white[..., None], 255.0, rgb)
+    body = _pad(_rgba(rgb, m.alpha))
+    if rim is None:
+        return body
+    edge = body.getchannel("A").filter(ImageFilter.GaussianBlur(max(2.0, w / 45)))
+    halo = Image.new("RGBA", body.size, tuple(rim) + (0,))
+    halo.putalpha(edge.point(lambda v: int(min(255, min(v, 255 - v) * 2.4))))
+    halo.alpha_composite(body)
+    return halo
+
+
+def holographic(f, m, rng):
+    return chrome(f, m, rng, rim=(255, 60, 200), eye_rainbow=True)
+
+
+def microchip(f, m, rng):
+    return chrome(f, m, rng)
+
+
+def xray(f, m, rng):
+    return chrome(f, m, rng)
+
+
+def glass(f, m, rng):
+    """Glass: frosted translucent fill, bright rim, dark eyes, white highlights."""
+    h, w = m.alpha.shape
+    solid = m.body | m.shade
+    k = max(3, (w // 50) | 1)
+    inner = Image.fromarray((solid * 255).astype(np.uint8), "L").filter(ImageFilter.MinFilter(k))
+    rim = solid & ~(np.asarray(inner) > 127)
+    a = np.where(m.shade, 0.22, 0.34) * solid
+    a = np.where(rim, 0.85, a)
+    a = np.where(m.dark, 0.9, a)
+    a = np.where(m.white, 1.0, a)
+    rgb = np.full((h, w, 3), 245.0)
+    rgb[m.dark] = (20, 20, 24)
+    return _pad(_rgba(rgb, a * (m.alpha > 0)), (255, 255, 255), w / 70, 0.6)
+
+
+STYLES = {
+    "Blueprint": blueprint, "Chalkboard": chalk, "Glass": glass, "Holographic": holographic,
+    "Microchip": microchip, "Paper": ink, "Retro": pixel, "Xray": xray,
+}
