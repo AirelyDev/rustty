@@ -1042,6 +1042,32 @@ mod tests {
         page.deinit();
     }
 
+    // test "Page clearCells full row clears kitty placeholder flag"
+    #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
+    fn page_clear_cells_full_row_clears_kitty_placeholder_flag() {
+        let mut page = Page::init(Capacity {
+            styles: 8,
+            ..Capacity::new(10, 10)
+        })
+        .unwrap();
+
+        let rac = page.get_row_and_cell(0, 0);
+        unsafe {
+            *rac.cell = cell_codepoint(KITTY_PLACEHOLDER);
+            (*rac.row).set_kitty_virtual_placeholder(true);
+        }
+
+        let cols = page.size.cols as usize;
+        page.clear_cells(rac.row, 0, cols);
+        assert!(!unsafe { (*rac.row).kitty_virtual_placeholder() });
+
+        page.deinit();
+    }
+
     #[test]
     fn page_clone() {
         let mut page = Page::init(Capacity {

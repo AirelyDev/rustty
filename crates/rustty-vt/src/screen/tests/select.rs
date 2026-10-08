@@ -280,6 +280,31 @@ fn screen_select_line_with_scrollback() {
     s.deinit();
 }
 
+// test "Screen: selectLine semantic boundary around unwritten cells"
+#[test]
+fn screen_select_line_semantic_boundary_around_unwritten_cells() {
+    let mut s = mkscreen(5, 1, 0);
+    s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+        osc::semantic_prompt::PromptKind::Initial,
+    ));
+    s.test_write_string(b"x").unwrap();
+    s.cursor_right(2);
+    s.test_write_string(b"m").unwrap();
+
+    for x in 1..3 {
+        let pin = spin(&s, pactive(x, 0));
+        assert!(s
+            .select_line(SelectLine {
+                pin,
+                whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                semantic_prompt_boundary: true,
+            })
+            .is_none());
+    }
+
+    s.deinit();
+}
+
 // test "Screen: selectLine semantic prompt boundary"
 #[test]
 fn screen_select_line_semantic_prompt_boundary() {

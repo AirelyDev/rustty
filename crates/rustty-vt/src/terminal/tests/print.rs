@@ -2261,53 +2261,6 @@ fn terminal_print_kitty_unicode_placeholder() {
     t.deinit(Global);
 }
 
-/// PORT NOTE: NOT a reference test. The reference's `Screen.clearCells`
-/// kitty block (`Screen.zig:1818-1828`) was carried only as a comment, and
-/// nothing in either tree exercised it. It clears
-/// `row.kitty_virtual_placeholder` on a FULL-row clear only when no cell in
-/// the row still carries the placeholder codepoint (the Zig `for ... else`
-/// runs its `else` when the loop did not `break`), so both arms are pinned
-/// here.
-#[test]
-#[cfg_attr(
-    not(all(feature = "kitty-graphics", not(target_os = "none"))),
-    ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
-)]
-fn terminal_erase_line_clears_the_kitty_virtual_placeholder_flag() {
-    let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
-    let flag = |t: &mut Terminal| -> bool {
-        let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
-        unsafe { (*list_cell.row).kitty_virtual_placeholder() }
-    };
-
-    // Printing the placeholder marks the row.
-    t.print(kitty::graphics_unicode::PLACEHOLDER).unwrap();
-    assert!(flag(&mut t));
-
-    // Overwriting the only placeholder cell does NOT clear the flag (the
-    // reference never clears it on print either), so the row is now marked
-    // but holds no placeholder.
-    t.set_cursor_pos(1, 1);
-    t.print('A' as u32).unwrap();
-    assert!(flag(&mut t));
-
-    // A full-row clear with no placeholder left in the row clears the flag.
-    t.set_cursor_pos(1, 1);
-    t.erase_line(csi::EraseLine::Complete, false);
-    assert!(!flag(&mut t));
-
-    // The `break` arm: a row that still holds a placeholder keeps the flag,
-    // because the loop breaks before the `else`.
-    t.set_cursor_pos(1, 1);
-    t.print(kitty::graphics_unicode::PLACEHOLDER).unwrap();
-    assert!(flag(&mut t));
-    t.set_cursor_pos(1, 1);
-    t.erase_line(csi::EraseLine::Complete, false);
-    assert!(flag(&mut t));
-
-    t.deinit(Global);
-}
-
 // test "Terminal: soft wrap"
 #[test]
 fn terminal_soft_wrap() {

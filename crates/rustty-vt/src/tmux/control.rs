@@ -173,11 +173,6 @@ impl Parser {
             return Ok(None);
         }
 
-        if self.buffer.len() >= self.max_bytes {
-            self.broken();
-            return Err(OutOfMemory);
-        }
-
         match self.state {
             // Drop because we're in a broken state.
             State::Broken => return Ok(None),
@@ -258,6 +253,13 @@ impl Parser {
                     // Didn't end the block, continue accumulating.
                 }
             }
+        }
+
+        // Only enforce the limit on bytes we actually store, so a line
+        // filling the buffer exactly can still be terminated.
+        if self.buffer.len() >= self.max_bytes {
+            self.broken();
+            return Err(OutOfMemory);
         }
 
         // self.buffer.writer.writeByte(byte) catch |err| switch (err) {
@@ -1462,6 +1464,59 @@ mod tests {
              whose silence it asserts"
         );
         assert_eq!(Vec::<crate::log_capture::CapturedRecord>::new(), messages);
+    }
+
+    // test "tmux notification exactly max_bytes"
+    #[test]
+    fn tmux_notification_exactly_max_bytes() {
+        let line = b"%sessions-changed";
+        let mut c = Parser::init();
+        c.max_bytes = line.len();
+
+        // Twice, because the second '%' arrives while the buffer is still
+        // full from the first notification.
+        for _ in 0..2 {
+            for &byte in line {
+                assert!(c.put(byte).unwrap().is_none());
+            }
+            let n = c.put(b'\n').unwrap().unwrap();
+            assert!(matches!(n, Notification::SessionsChanged));
+        }
+        c.deinit();
+    }
+
+    // test "tmux block terminator exactly max_bytes"
+    #[test]
+    fn tmux_block_terminator_exactly_max_bytes() {
+        let block = b"hello\n%end 1578922740 269 1";
+        let mut c = Parser::init();
+        c.max_bytes = block.len();
+        for &byte in b"%begin 1578922740 269 1\n" {
+            assert!(c.put(byte).unwrap().is_none());
+        }
+        for &byte in block {
+            assert!(c.put(byte).unwrap().is_none());
+        }
+        let n = c.put(b'\n').unwrap().unwrap();
+        let Notification::BlockEnd(v) = &n else {
+            panic!("expected block_end")
+        };
+        assert_eq!(b"hello" as &[u8], v.as_slice());
+        c.deinit();
+    }
+
+    // test "tmux exceeding max_bytes"
+    #[test]
+    fn tmux_exceeding_max_bytes() {
+        let line = b"%sessions-changed";
+        let mut c = Parser::init();
+        c.max_bytes = line.len() - 1;
+        for &byte in &line[0..line.len() - 1] {
+            assert!(c.put(byte).unwrap().is_none());
+        }
+        assert!(c.put(line[line.len() - 1]).is_err());
+        assert!(c.put(b'\n').unwrap().is_none());
+        c.deinit();
     }
 
     // test "tmux begin/end empty"
