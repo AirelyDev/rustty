@@ -192,9 +192,6 @@ impl TerminalStream {
         // pointer. This is the port's spelling of the reference's `.stream = undefined;`
         // followed by:
         //     errdefer ptr.terminal.deinit(alloc);
-        //     ptr.stream = .init(.{
-        //         .allocator = alloc,
-        //         .handler = .init(&ptr.terminal),
         //     var handler: Stream.Handler = .init(&ptr.terminal);
         //     if (opts.@"osc-unknown-max-bytes" > 0) {
         //         handler.unknown_sequence = &unknownSequence;

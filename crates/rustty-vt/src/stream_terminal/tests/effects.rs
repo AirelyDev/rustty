@@ -575,6 +575,64 @@ fn semantic_prompt_effect_callback() {
     t.deinit(Global);
 }
 
+// Rust-only (P8-W5 T3, carried from the T2 review): the reference's
+// `try self.terminal.semanticPrompt(cmd)` returns before the effect when the
+// terminal fails, and the shared catch records the failure. `A` does a fresh
+// line first, and at the bottom of a full page the fresh line's index has to
+// grow the page list, which allocates. With every allocation refused from
+// then on, that `A` sets `semantic_failure` and reports nothing, while every
+// earlier `A` was reported.
+#[test]
+fn semantic_prompt_effect_not_called_when_the_terminal_fails() {
+    let failing = crate::alloc::testing::FailingAllocator::over_heap(
+        crate::alloc::testing::Config::default(),
+    );
+    let failing_c = failing.allocator();
+    // SAFETY: `failing_c` and `failing` outlive `t`, deinited below.
+    let alloc = unsafe { crate::alloc::VtAllocator::from_c(core::ptr::NonNull::from(&failing_c)) };
+    // Unlimited scrollback, so a full page is never reused and the page
+    // list has to allocate to grow.
+    let mut t = Terminal::init(
+        alloc,
+        Options {
+            max_scrollback_bytes: None,
+            ..opts(10, 2)
+        },
+    )
+    .unwrap();
+
+    SP_COUNT.with(|c| c.set(0));
+    {
+        let mut s = t.vt_stream();
+        s.handler.effects.semantic_prompt = Some(sp_semantic_prompt);
+
+        failing.fail_index.set(failing.alloc_index.get());
+        let mut reported = 0;
+        while !failing.has_induced_failure.get() {
+            assert!(reported < 100_000, "the page list never allocated");
+            assert!(!s.handler.semantic_failure);
+            // The cursor is not at the left margin, so `A` moves to a new
+            // line.
+            s.next_slice(b"x\x1B]133;A\x07");
+            if !failing.has_induced_failure.get() {
+                reported += 1;
+                assert_eq!(reported, sp_count());
+            }
+        }
+
+        // The refused `A` was not reported, and the failure was recorded.
+        assert_eq!(reported, sp_count());
+        assert!(s.handler.semantic_failure);
+
+        failing.fail_index.set(usize::MAX);
+        s.next_slice(b"x\x1B]133;A\x07");
+        assert_eq!(reported + 1, sp_count());
+        s.deinit();
+    }
+
+    t.deinit(alloc);
+}
+
 // Capture cells for the reset effect test (the reference's `S`).
 thread_local! {
     static RESET_EVENTS: core::cell::RefCell<Vec<u8>> =
