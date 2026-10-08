@@ -8,9 +8,26 @@
 # (built first with `zig build -Demit-lib-vt=true` in the oracle). The oracle tree is
 # only read. A missing/stale oracle build is BLOCKED (exit 3), never a skip. The one
 # nondeterministic field (the OSC 5522 `pw=` token, N395) is masked on both sides,
-# exactly as run_differential.sh `cvt_normalize` does. Usage: .port/tools/cvt-parity.sh <example-name>
+# exactly as run_differential.sh `cvt_normalize` does.
+# Exit codes: 0 identical; 1 differs / a build or run failed; 2 usage; 3 BLOCKED (oracle
+# absent, off the pin or not built); 4 NOT COVERED (the example has no Rustty `build.sh`,
+# i.e. the CMake examples: leg B has no Rustty twin to run for it; this is reported, never
+# counted as a pass).
+# Usage: .port/tools/cvt-parity.sh <example-name>
+#        .port/tools/cvt-parity.sh --all   (every example/c-vt* + cpp-vt*; prints the verdict
+#          file's body; exit 0 only if every covered example is identical and none is
+#          BLOCKED/failed; NOT COVERED examples are listed and do not fail the run)
 #        .port/tools/cvt-parity.sh --print-oracle   (the derived oracle root; G-ORACLE-SH-SELF arm 5)
 set -e
+if [ "${1:-}" = "--all" ]; then
+  self="$0"; rootd=$(cd "$(dirname "$0")/../.." && pwd); fail=0; ran=0; nc=0
+  for d in $(ls "$rootd/example" | grep -E '^(c|cpp)-vt'); do
+    sh "$self" "$d" && rc=0 || rc=$?
+    case $rc in 0) ran=$((ran + 1)) ;; 4) nc=$((nc + 1)) ;; *) fail=1 ;; esac
+  done
+  echo "VERDICT: $([ $fail = 0 ] && echo GREEN || echo RED) (identical: $ran, not covered: $nc)"
+  exit $fail
+fi
 name="${1:-}"; [ -n "$name" ] || { echo "usage: cvt-parity.sh <c-vt-example>"; exit 2; }
 root=$(cd "$(dirname "$0")/../.." && pwd)
 # N483: the oracle is `ghostty` beside the main checkout (`rustty_oracle_root`), not a fixed path.
@@ -22,6 +39,7 @@ T="$(mktemp -d "${TMPDIR:-/tmp}/cvt-parity.XXXXXX")" || exit 3
 trap 'rm -rf "$T"' EXIT
 [ -d "$gdir" ] || { echo "BLOCKED: ghostty example $gdir absent"; exit 3; }
 [ -d "$rdir" ] || { echo "$name: rustty port missing ($rdir)"; exit 1; }
+[ -f "$rdir/build.sh" ] || { echo "$name: NOT COVERED (no Rustty build.sh: no twin to run in leg B)"; exit 4; }
 # The oracle must be at the pin with example/ and include/ clean, and its built headers the pin's.
 if ! why="$(bash -c '. "$1" || exit 3; rustty_oracle_pin_status "$2" "$(rustty_oracle_pin)" example include' pin_status "$root/.port/tools/gates/_oracle_root.sh" "$ORACLE")"; then
   echo "BLOCKED: $why"; exit 3
