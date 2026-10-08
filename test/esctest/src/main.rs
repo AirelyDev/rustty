@@ -37,9 +37,10 @@ fn main() -> std::process::ExitCode {
 
 #[cfg(unix)]
 mod unix {
-    use std::ffi::{CStr, CString};
+    use std::ffi::CString;
     use std::io::Write as _;
     use std::os::raw::{c_char, c_int};
+    use std::os::unix::ffi::OsStringExt;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
@@ -174,11 +175,14 @@ sequence it ignores.
 
         // esctest writes its log to a file rather than the terminal, so we
         // give it one to copy from afterwards.
-        // SAFETY: getpid has no preconditions.
-        let log_path = format!("/tmp/esctest-librustty-{}.log", unsafe { libc::getpid() });
-        let log_path_c = CString::new(log_path.clone()).map_err(|_| "InvalidPath".to_string())?;
-        // defer _ = std.c.unlink(log_path);
-        let _unlink = Unlink(&log_path_c);
+        // PORT NOTE (UD378): upstream uses the fixed name
+        // `/tmp/esctest-libghostty-{pid}.log` in the shared /tmp, where another
+        // local user can create it first, or a symlink by that name, so the
+        // log is written (and later unlinked) through it (CWE-377). The port
+        // puts the log in a fresh private directory from mkdtemp (mode 0700),
+        // checks it, and removes both afterwards, on every return path.
+        let log_dir = LogDir::create()?;
+        let log_path = log_dir.log_path();
 
         let mut argv_owned: Vec<CString> = Vec::new();
         let cstr = |s: &str| CString::new(s).map_err(|_| "InvalidArgument".to_string());
@@ -242,14 +246,75 @@ sequence it ignores.
         Ok(exit_status as u8)
     }
 
-    /// `defer _ = std.c.unlink(log_path);`
-    struct Unlink<'a>(&'a CStr);
+    /// The private directory holding esctest's log (UD378). Dropping it is
+    /// upstream's `defer _ = std.c.unlink(log_path);`, plus removing the
+    /// directory.
+    struct LogDir {
+        dir: PathBuf,
+    }
 
-    impl Drop for Unlink<'_> {
-        fn drop(&mut self) {
-            // SAFETY: a NUL-terminated path.
-            unsafe { libc::unlink(self.0.as_ptr()) };
+    impl LogDir {
+        /// The log file's name inside the directory.
+        const LOG_NAME: &'static str = "esctest.log";
+
+        /// A new directory `$TMPDIR/esctest-librustty-XXXXXX` (`/tmp` when
+        /// TMPDIR is unset), made by mkdtemp and checked by `check_private`.
+        fn create() -> Result<LogDir, String> {
+            let base = std::env::var_os("TMPDIR")
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("/tmp"));
+            let template = base.join("esctest-librustty-XXXXXX");
+            let mut template = CString::new(template.into_os_string().into_encoded_bytes())
+                .map_err(|_| "InvalidPath".to_string())?
+                .into_bytes_with_nul();
+            // SAFETY: `template` is a writable NUL-terminated buffer ending in
+            // `XXXXXX`, which mkdtemp replaces in place.
+            let made = unsafe { libc::mkdtemp(template.as_mut_ptr().cast()) };
+            if made.is_null() {
+                return Err(format!(
+                    "MakeLogDirFailed: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            template.pop(); // the NUL
+            let dir = PathBuf::from(std::ffi::OsString::from_vec(template));
+            let log_dir = LogDir { dir };
+            check_private(&log_dir.dir)?;
+            Ok(log_dir)
         }
+
+        fn log_path(&self) -> String {
+            self.dir.join(Self::LOG_NAME).to_string_lossy().into_owned()
+        }
+    }
+
+    impl Drop for LogDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(self.dir.join(Self::LOG_NAME));
+            let _ = std::fs::remove_dir(&self.dir);
+        }
+    }
+
+    /// The directory is a real directory (not a symlink), owned by this
+    /// user, with mode 0700, so nobody else can create or replace the log
+    /// inside it (UD378).
+    fn check_private(dir: &Path) -> Result<(), String> {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let meta = std::fs::symlink_metadata(dir)
+            .map_err(|err| format!("LogDirUnchecked: {}: {err}", dir.display()))?;
+        // SAFETY: geteuid has no preconditions.
+        let uid = unsafe { libc::geteuid() };
+        let mode = meta.permissions().mode() & 0o777;
+        if !meta.file_type().is_dir() || meta.uid() != uid || mode != 0o700 {
+            return Err(format!(
+                "LogDirNotPrivate: {} (directory={}, owner={}, mode={mode:o})",
+                dir.display(),
+                meta.file_type().is_dir(),
+                meta.uid()
+            ));
+        }
+        Ok(())
     }
 
     /// `std.process.executableDirPathAlloc`: the directory of this
@@ -423,5 +488,51 @@ sequence it ignores.
             .flush()
             .map_err(|err| format!("WriteFailed: {err}"))?;
         Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::os::unix::fs::PermissionsExt;
+
+        // UD378: the log is not a fixed name in the shared temporary
+        // directory but a file inside a fresh 0700 directory of its own,
+        // and both are gone afterwards.
+        #[test]
+        fn log_path_is_inside_a_fresh_private_directory() {
+            let a = LogDir::create().unwrap();
+            let b = LogDir::create().unwrap();
+            assert_ne!(a.dir, b.dir);
+            for d in [&a, &b] {
+                let mode = std::fs::metadata(&d.dir).unwrap().permissions().mode() & 0o777;
+                assert_eq!(mode, 0o700);
+                let path = PathBuf::from(d.log_path());
+                assert_eq!(path.parent(), Some(d.dir.as_path()));
+                let name = d.dir.file_name().unwrap().to_string_lossy().into_owned();
+                assert!(name.starts_with("esctest-librustty-"), "{name}");
+            }
+            std::fs::write(a.log_path(), b"log").unwrap();
+            let dir = a.dir.clone();
+            drop(a);
+            assert!(!dir.exists());
+        }
+
+        // The check refuses a directory others can write to, and a symlink
+        // to a private directory.
+        #[test]
+        fn check_private_rejects_shared_directories_and_symlinks() {
+            let d = LogDir::create().unwrap();
+            let shared = d.dir.join("shared");
+            std::fs::create_dir(&shared).unwrap();
+            std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o777)).unwrap();
+            assert!(check_private(&shared).is_err());
+            std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert!(check_private(&shared).is_ok());
+            let link = d.dir.join("link");
+            std::os::unix::fs::symlink(&shared, &link).unwrap();
+            assert!(check_private(&link).is_err());
+            std::fs::remove_file(&link).unwrap();
+            std::fs::remove_dir(&shared).unwrap();
+        }
     }
 }

@@ -84,6 +84,7 @@ parse_log() {
       gsub(/\t/, "\\t", s)
       gsub(/[^ "\047]*\/share\/esctest\//, "<esctest>/", s)
       gsub(/\/tmp\/esctest-lib(ghostty|rustty)-[0-9]+\.log/, "<log>", s)
+      gsub(/[^ "\047]*\/esctest-librustty-[A-Za-z0-9]+\/esctest\.log/, "<log>", s)
       return s
     }
     /^Run test: / { flush(); name = substr($0, 11); st = ""; blk = ""; next }
