@@ -977,6 +977,17 @@ MAP = {
     "apprt_gtk_scale":   ([f"{GHAP}/gtk/scale.zig"], [f"{RSAPPRT}/gtk/scale*.rs"], 0),
     "font_nerd_font_attributes":([f"{GHF}/nerd_font_attributes.zig"], [f"{RSF}/nerd_font_attributes.rs"], 0),
     "snapshot_terminal": ([f"{GH}/snapshot/terminal.zig"], [f"{RS}/snapshot/terminal.rs"], 0),
+    # ---------------------------------------------------------------------
+    # P8-W0 T4 (Phase-8 start, pin a60e9e2a5): terminal/xt_checksum.zig (NEW in the
+    # range, `9272a2f7c`; DECRQCRA/XTCHECKSUM) carries 12 named tests and sits in no
+    # other row, so the honest meter is its own row. Same one-file glob rule as the
+    # P7-W0 T4 rows above: the Rust file does not exist yet, so the row counts rust=0
+    # and reads RED with the upstream count until the port lands (R4 §5, §6 R4-B).
+    # The `osc` row globs `osc/parsers/*` and already counts program_status and
+    # unknown (28 tests), green by slack only. Arrival state is in
+    # `.port/phase-8/w0/README.md`.
+    # ---------------------------------------------------------------------
+    "xt_checksum":       ([f"{GH}/xt_checksum.zig"], [f"{RS}/xt_checksum*.rs"], 0),
 }
 
 def expand(globs):
