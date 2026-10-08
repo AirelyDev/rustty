@@ -531,6 +531,7 @@ fn screen_resize_more_rows_with_populated_scrollback() {
 
     // Set our cursor to be on the "4"
     s.cursor_absolute(0, 1);
+    s.cursor.pending_wrap = false;
     {
         let list_cell = s
             .pages
@@ -588,8 +589,9 @@ fn screen_resize_more_cols_no_reflow() {
     })
     .unwrap();
 
-    // Cursor should not move
-    assert_eq!(cursor.x, s.cursor.x);
+    // Pending wrap becomes the next insertion position.
+    assert!(!s.cursor.pending_wrap);
+    assert_eq!(cursor.x + 1, s.cursor.x);
     assert_eq!(cursor.y, s.cursor.y);
 
     {
@@ -785,6 +787,7 @@ fn screen_resize_more_cols_with_reflow_that_fits_full_width() {
 
     // Let's put our cursor on row 2, where the soft wrap is
     s.cursor_absolute(0, 1);
+    s.cursor.pending_wrap = false;
     {
         let list_cell = s
             .pages
@@ -879,6 +882,7 @@ fn screen_resize_more_cols_with_reflow_that_forces_more_wrapping() {
 
     // Let's put our cursor on row 2, where the soft wrap is
     s.cursor_absolute(0, 1);
+    s.cursor.pending_wrap = false;
     {
         let list_cell = s
             .pages
@@ -925,6 +929,7 @@ fn screen_resize_more_cols_with_reflow_that_unwraps_multiple_times() {
 
     // Let's put our cursor on row 2, where the soft wrap is
     s.cursor_absolute(0, 2);
+    s.cursor.pending_wrap = false;
     {
         let list_cell = s
             .pages
@@ -975,6 +980,7 @@ fn screen_resize_more_cols_with_populated_scrollback() {
 
     // // Set our cursor to be on the "5"
     s.cursor_absolute(0, 2);
+    s.cursor.pending_wrap = false;
     {
         let list_cell = s
             .pages
@@ -1113,6 +1119,7 @@ fn screen_resize_more_cols_with_reflow() {
 
     // Let's put our cursor on row 2, where the soft wrap is
     s.cursor_absolute(0, 2);
+    s.cursor.pending_wrap = false;
     {
         let list_cell = s
             .pages
@@ -1478,8 +1485,9 @@ fn screen_resize_more_rows_and_cols_with_wrapping() {
     })
     .unwrap();
 
-    // Cursor should move due to wrapping
-    assert_eq!(3 as size::CellCountInt, s.cursor.x);
+    // Reflow leaves room after the last printed cell.
+    assert!(!s.cursor.pending_wrap);
+    assert_eq!(4 as size::CellCountInt, s.cursor.x);
     assert_eq!(1 as size::CellCountInt, s.cursor.y);
 
     {
@@ -1501,6 +1509,7 @@ fn screen_resize_less_rows_no_scrollback() {
     s.test_write_string(str).unwrap();
 
     s.cursor_absolute(0, 0);
+    s.cursor.pending_wrap = false;
     let cursor = s.cursor;
     s.resize(Resize {
         cols: 5,
@@ -1535,6 +1544,7 @@ fn screen_resize_less_rows_moving_cursor() {
 
     // Put our cursor on the last line
     s.cursor_absolute(1, 2);
+    s.cursor.pending_wrap = false;
     {
         let list_cell = s
             .pages
@@ -1713,6 +1723,7 @@ fn screen_resize_less_cols_with_reflow_but_row_space() {
 
     // Put our cursor on the end
     s.cursor_absolute(4, 0);
+    s.cursor.pending_wrap = false;
     {
         let list_cell = s
             .pages
@@ -1893,6 +1904,7 @@ fn screen_resize_less_cols_with_reflow_previously_wrapped_and_scrollback() {
 
     // Put our cursor on the end
     s.cursor_absolute(s.pages.cols - 1, s.pages.rows - 1);
+    s.cursor.pending_wrap = false;
     {
         let list_cell = s
             .pages

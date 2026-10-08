@@ -1450,6 +1450,133 @@ fn terminal_resize_with_reflow_and_saved_cursor_pending_wrap() {
     t.deinit(alloc);
 }
 
+// test "Terminal: saved cursor survives repeated widening"
+#[test]
+fn terminal_saved_cursor_survives_repeated_widening() {
+    let alloc = Global;
+    let mut t = Terminal::init(alloc, opts(4, 5)).unwrap();
+
+    t.print_string("abc\nAAA|".as_bytes()).unwrap();
+    t.save_cursor();
+    for cols in [5, 6] {
+        t.resize(
+            alloc,
+            Resize {
+                cols,
+                rows: 5,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
+    }
+    t.restore_cursor();
+    t.print('X' as u32).unwrap();
+
+    {
+        let str = t.plain_string(Global).unwrap();
+        assert_eq!(str.as_slice(), "abc\nAAA|X".as_bytes());
+    }
+
+    t.deinit(alloc);
+}
+
+// test "Terminal: resize pending wrap live and saved cursors"
+#[test]
+fn terminal_resize_pending_wrap_live_and_saved_cursors() {
+    let alloc = Global;
+    struct Case {
+        text: &'static str,
+        cols: u16,
+        pending_wrap: bool,
+        expected: &'static str,
+    }
+    let cases = [
+        // Widening leaves room after the formerly full line.
+        Case {
+            text: "ABCD",
+            cols: 6,
+            pending_wrap: false,
+            expected: "ABCDX",
+        },
+        // Narrowing can move the last character into the middle of a row.
+        Case {
+            text: "ABCD",
+            cols: 3,
+            pending_wrap: false,
+            expected: "ABC\nDX",
+        },
+        // Keep pending wrap when the last character still fills a row.
+        Case {
+            text: "ABCD",
+            cols: 2,
+            pending_wrap: true,
+            expected: "AB\nCD\nX",
+        },
+        // A height-only resize also preserves pending wrap.
+        Case {
+            text: "ABCD",
+            cols: 4,
+            pending_wrap: true,
+            expected: "ABCD\nX",
+        },
+        // Reflow can merge previously wrapped rows.
+        Case {
+            text: "ABCDEFGH",
+            cols: 6,
+            pending_wrap: false,
+            expected: "ABCDEF\nGHX",
+        },
+        // A wide character at the old right edge must not be overwritten.
+        Case {
+            text: "AB界",
+            cols: 6,
+            pending_wrap: false,
+            expected: "AB界X",
+        },
+        // A cursor without pending wrap must not advance an extra cell.
+        Case {
+            text: "ABC",
+            cols: 6,
+            pending_wrap: false,
+            expected: "ABCX",
+        },
+    ];
+
+    for case in cases {
+        for restore in [false, true] {
+            let mut t = Terminal::init(alloc, opts(4, 5)).unwrap();
+            t.print_string(case.text.as_bytes()).unwrap();
+            if restore {
+                t.save_cursor();
+            }
+
+            t.resize(
+                alloc,
+                Resize {
+                    cols: case.cols as _,
+                    rows: 6,
+                    cell_size_px: None,
+                },
+            )
+            .unwrap();
+            if restore {
+                t.restore_cursor();
+            }
+            assert_eq!(case.pending_wrap, unsafe {
+                (*t.screens.active).cursor.pending_wrap
+            });
+
+            t.print('X' as u32).unwrap();
+            {
+                let str = t.plain_string(Global).unwrap();
+                assert_eq!(str.as_slice(), case.expected.as_bytes());
+            }
+
+            t.deinit(alloc);
+        }
+    }
+}
+
 // test "Terminal: DECCOLM without DEC mode 40"
 #[test]
 fn terminal_deccolm_without_dec_mode_40() {
