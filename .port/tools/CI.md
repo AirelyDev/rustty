@@ -18,8 +18,9 @@ G1–G9). `ci.sh` **runs the canonical Phase-0 gate suite already present in
 1. `cargo fmt --check`
 2. `cargo clippy --workspace --all-targets -- -D warnings`
 3. `cargo build --workspace`
-4. `cargo test --workspace`
-5. the parity gates (hard-fail gates first, then progress)
+4. `cargo check -p rustty-wasm --target wasm32-unknown-unknown` (N526; BLOCKED, not skipped, when the rustup target is missing)
+5. `cargo test --workspace`
+6. the parity gates (hard-fail gates first, then progress)
 
 CI exits **non-zero iff any *non-progress* check is red.**
 
@@ -123,6 +124,7 @@ crate being ported.
 |---|---|---|
 | `cargo fmt --check` | formatting | scaffold + every future file must be `rustfmt`-clean |
 | `cargo clippy --workspace -D warnings` | lint cleanliness | warnings are errors; the scaffold compiles clean and must stay so |
+| `cargo check -p rustty-wasm --target wasm32-unknown-unknown` | the freestanding wasm build compiles (N526) | the `--webgl` lane is opt-in, so a wasm-only break (ca2ef434b) went unseen; BLOCKED when the target is not installed |
 | `cargo build --workspace` | the workspace compiles | also the **live R4/G7 proof** — Cargo refuses a normal-dependency cycle, so a clean build *is* hard acyclicity |
 | `cargo test --workspace` | every present test passes | PASS/FAIL oracle for all ported tests (R1/G1). Zero ported tests now ⇒ trivially passes; each ported test must pass as it lands |
 | **G7** `check_acyclic.sh` | crate graph acyclic (R4) | parses the **real rustty Cargo graph** (`crates/*/Cargo.toml`): 29 crates, 93 inter-crate edges, **0 cross-crate SCCs** today (the workspace is wired in leaves-first topological order). `--self-test` proves it flips RED on an injected cycle. `--with-reference` additionally prints the reference structural pre-check (informational; `.port/tools/cycle_check.py` models the *un-broken* ghostty mapping and prints non-zero SCCs by design — the binding G7 result is the rustty Cargo graph) |

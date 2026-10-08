@@ -942,8 +942,8 @@ impl Config {
         // `realPathFile(".")` on `cwd()` is libc `realpath(".")`
         // (`Io/Threaded.zig` `dirRealPathFilePosix`, the `AT.FDCWD` arm), which
         // is what `canonicalize` calls.
-        // (`rustty_os::path::realpath`: the DOS form on Windows, task W-2.)
-        let cwd = path_to_bytes(&rustty_os::path::realpath(std::path::Path::new("."))?);
+        // (`crate::path::realpath` -> `rustty_os::path::realpath`: the DOS form on Windows, task W-2; wasm32 stand-in N526.)
+        let cwd = path_to_bytes(&crate::path::realpath(std::path::Path::new("."))?);
         self.expand_paths(&cwd)?;
 
         Ok(())

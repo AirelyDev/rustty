@@ -1419,6 +1419,21 @@ fi
 run_cargo "cargo fmt --check"        cargo fmt --check
 run_cargo "cargo clippy -D warnings" cargo clippy --workspace --all-targets -- -D warnings
 run_cargo "cargo build --workspace"  cargo build --workspace
+# N526: the freestanding wasm build (`main_wasm.zig`'s artifact) broke at ca2ef434b and went
+# unseen for 10 days because its only check lived in the opt-in `--webgl` lane. This is the
+# cheap default-set guard. BLOCKED (a WARNINGS row, never a silent skip) when the rustup
+# target is missing; a compile error is a HARD-FAIL.
+if [ "${CI_SKIP_CARGO:-0}" != "1" ] &&
+   ! rustup target list --installed 2>/dev/null | grep -qx 'wasm32-unknown-unknown'; then
+  section "cargo check -p rustty-wasm --target wasm32-unknown-unknown  (BLOCKED)"
+  echo "BLOCKED: the wasm32-unknown-unknown target is not installed." >&2
+  echo "         Install it with: rustup target add wasm32-unknown-unknown" >&2
+  WARNINGS+=("cargo check -p rustty-wasm --target wasm32-unknown-unknown BLOCKED (target not installed)
+      reason: rustup target add wasm32-unknown-unknown")
+else
+  run_cargo "cargo check -p rustty-wasm --target wasm32-unknown-unknown" \
+    cargo check -p rustty-wasm --target wasm32-unknown-unknown
+fi
 # WS19 T1 (N5): --no-fail-fast. Bare `cargo test --workspace` STOPS at the first failing
 # test target, so every crate ordered after it is never run and its failures are MASKED.
 # That is how `rustty-extra`'s golden failures hid behind `rustty-apprt-c --test smoke`.

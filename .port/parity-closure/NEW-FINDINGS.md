@@ -11206,3 +11206,25 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   comments describe. At the finale every row of `.port/phase-8/delta-review/R4-upstream-tests.tsv` is ticked by
   exact name (Phase 7's `w0/tests-checklist.txt` precedent), and each ported test keeps upstream's name so the
   checklist can be read by grep.
+
+## N526 — the freestanding `rustty_wasm` build was broken since ca2ef434b and nothing noticed
+
+- **id**: N526. P8-W0 T6. **severity**: medium (a whole deliverable, the `main_wasm.zig` artifact, did not build for
+  10 days). **kind**: regression + gate gap. **state**: CLOSED.
+- **cause**: `ca2ef434b` (2026-09-27, "parity tail W-2: the application tier compiles and runs on Windows (N351)")
+  changed two `rustty-config` sites (`config_struct/load.rs`, the cwd expansion in `load_cli_args`; `path.rs`, the
+  `expand` realpath) to call `rustty_os::path::realpath`. `rustty_os::path` is `cfg(not(target_arch = "wasm32"))`, so
+  `cargo build -p rustty-wasm --target wasm32-unknown-unknown` failed with E0433 (x2) plus two follow-on errors
+  (E0277, E0282). The only check of that build was the opt-in `ci.sh --webgl` lane.
+- **fix**: `rustty_config::path::realpath`, a crate-local wrapper: `rustty_os::path::realpath` on every non-wasm32
+  target (unchanged, Windows DOS form kept), `std::fs::canonicalize` on wasm32 (unsupported there, the pre-W-2
+  behaviour). Reference: `main_wasm.zig` retains only `os/wasm.zig`, `font`, `terminal`, `config.Wasm`, `App.Wasm`;
+  Zig's lazy analysis never reaches `Config.loadCliArgs` / `path.expand` on wasm32-freestanding, so no filesystem
+  behaviour exists to mirror.
+- **residual check**: after the fix `bash .port/tools/ci.sh --webgl` is PASS (release wasm build, log-emission gate,
+  web_canvas font check, WebGL2 browser gate in headless Chrome) and `cargo test -p rustty-wasm -- --ignored` is
+  green; nothing else had rotted.
+- **guard**: a `cargo check -p rustty-wasm --target wasm32-unknown-unknown` step in the default `ci.sh` set (after
+  `cargo build --workspace`; documented in `.port/tools/CI.md`), BLOCKED (a WARNINGS row, not a skip) when the rustup
+  target is absent. Negative control: replacing the wrapper with a bare `rustty_os::path::realpath` call made the
+  check RED (E0433), reverted.
