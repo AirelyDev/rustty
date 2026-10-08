@@ -1304,7 +1304,7 @@ fn xt_checksum_default_config_never_replies() {
 // (`Config` has 200+ fields, so the field assignments stay.)
 #[allow(clippy::field_reassign_with_default)]
 #[test]
-fn xt_checksum_report_enabled_replies_with_the_rect_checksum() {
+fn xt_checksum_report_enabled_replies_with_xterms_checksum() {
     let (mut term, mailbox, mutex, state) = xt_checksum_fixture();
     let mut h = handler_for(&raw mut *term, mailbox, state);
 
@@ -1337,40 +1337,59 @@ fn xt_checksum_report_enabled_replies_with_the_rect_checksum() {
     ));
 
     let mut s = stream::Stream::init(stream::Options::with_handler(h));
+    // Grapheme clustering (mode 2027), so the ZWJ family below is ONE cell.
+    s.next_slice(b"\x1b[?2027h");
     // Row 1: wide characters; row 2: a ZWJ emoji cluster; row 3: a bold
     // red cell.
     s.next_slice("a橋a橋\r\n".as_bytes());
     s.next_slice("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}x\r\n".as_bytes());
     s.next_slice(b"\x1b[1;31mR\x1b[0m");
 
-    let req = rustty_vt::xt_checksum::Request {
-        id: 7,
-        top: 1,
-        left: 1,
-        bottom: 3,
-        right: 10,
+    // The expected values below are hard-coded, NOT computed by
+    // `rect_xt_checksum`: they come from the reference's own
+    // `xt_checksum.compute` (Ghostty a60e9e2a5), fed the same cells in a
+    // scratch harness (see the P8-W3 T2 fix report for the source).
+    //
+    // The cells: `a`, wide `橋` (0x6A4B), `a`, wide `橋`; the family
+    // emoji as one wide cluster cell (U+1F468) and `x`; bold red `R`.
+    let ask = |s: &mut stream::Stream<StreamHandler<NullMailbox>>, seq: &[u8]| -> Vec<u8> {
+        s.next_slice(seq);
+        let msg = mailbox_pop(mailbox).expect("DECRQCRA is answered when reporting is on");
+        let bytes = write_bytes(&msg);
+        assert!(mailbox_pop(mailbox).is_none(), "exactly one reply");
+        bytes
     };
-    let want = term.rect_xt_checksum(req);
-    s.next_slice(b"\x1b[7;1;1;1;3;10*y");
-    let msg = mailbox_pop(mailbox).expect("DECRQCRA is answered when reporting is on");
+    // esctest's `--xterm-checksum` flags (the configured extension): no
+    // negation, no attributes, no trim, full codepoints.
     assert_eq!(
-        format!("\x1bP7!~{want:04X}\x1b\\").into_bytes(),
-        write_bytes(&msg)
+        b"\x1bP7!~CD0A\x1b\\".to_vec(),
+        ask(&mut s, b"\x1b[7;1;1;1;3;10*y")
     );
-    assert!(mailbox_pop(mailbox).is_none(), "exactly one reply");
 
-    // XTCHECKSUM now takes effect (and so changes the calculation).
+    // XTCHECKSUM now takes effect: `CSI 0 # y` selects the DEC calculation
+    // (negated, attributes counted, trimmed, DEC 8-bit values).
     s.next_slice(b"\x1b[0#y");
     assert_eq!(
         rustty_vt::xt_checksum::Flags::default(),
         term.flags.xt_checksum
     );
-    let want = term.rect_xt_checksum(req);
-    s.next_slice(b"\x1b[7;1;1;1;3;10*y");
-    let msg = mailbox_pop(mailbox).expect("the second reply");
+    let dec = ask(&mut s, b"\x1b[7;1;1;1;3;10*y");
+    assert_eq!(b"\x1bP7!~FD52\x1b\\".to_vec(), dec);
+    // Row 3 alone (the bold red cell).
     assert_eq!(
-        format!("\x1bP7!~{want:04X}\x1b\\").into_bytes(),
-        write_bytes(&msg)
+        b"\x1bP7!~FF2E\x1b\\".to_vec(),
+        ask(&mut s, b"\x1b[7;1;3;1;3;10*y")
+    );
+
+    // `CSI 2 # y` is the same DEC calculation without attributes: the bold
+    // cell stops counting, so the styled cell changes the reply.
+    s.next_slice(b"\x1b[2#y");
+    let no_attributes = ask(&mut s, b"\x1b[7;1;1;1;3;10*y");
+    assert_eq!(b"\x1bP7!~FDD2\x1b\\".to_vec(), no_attributes);
+    assert_ne!(dec, no_attributes, "the bold cell must count");
+    assert_eq!(
+        b"\x1bP7!~FFAE\x1b\\".to_vec(),
+        ask(&mut s, b"\x1b[7;1;3;1;3;10*y")
     );
 
     s.handler.renderer_wakeup.deinit();
