@@ -1,0 +1,26 @@
+=== G1 SELF-TEST ===
+[a] stub 0/2 progress -> exit 0 (expect 0)
+[b] done 0/2 progress -> exit 1 (expect non-zero)
+[c] done 2/2 progress -> exit 0 (expect 0)
+[c'] done 2/2 --crate demo --strict -> exit 0 (expect 0)
+[d] stub 1/2 progress -> exit 0 (expect 0)
+[e] done 3/2 --crate demo --strict -> exit 0 (expect 0)
+[f] done 1/2 --crate demo --strict -> exit 1 (expect non-zero)
+[g] done, both names bound -> exit 0 (expect 0)
+[g'] done, one fn renamed to unrelated (count constant) -> exit 1 (expect non-zero), MISSING caught: True
+[h] relocated test, no relocation -> exit 1 (expect non-zero, MISSING case two): True
+[i] same + relocation -> exit 0 (expect 0), global counted once (3/3): True
+[j] relocation present, case one dropped -> exit 1 (expect non-zero, MISSING case one): True
+[k] item-scoped relocation -> exit 1 (expect non-zero, only case one MISSING): True
+[l] relocation path missing -> exit 3 (expect 3): True
+[l] relocation item missing -> exit 3 (expect 3): True
+=== G1 LEDGER SELF-TEST ===
+  ok   [l1] control (a real deletion) accepted -> accepted
+  ok   [l2] name still exists upstream -> rejected: the test still exists upstream
+  ok   [l3] sha not an ancestor -> rejected: 0000000 is not an ancestor of the oracle HEAD
+  ok   [l4] sha did not remove the declaration -> rejected: 88f57ee66 does not remove `test "HashMap ensureUnusedCapacity with tombstones"`
+  ok   [l5] successor absent upstream -> rejected: successor `no such upstream test` does not exist upstream
+  ok   [l6] successor not added by that commit -> rejected: fedd42e8d does not add successor `storage: delete all placements`
+  ok   [l7] successor unported -> refused; ported -> excused
+  ok   [l8] control accepted under a GIT_DIR + GIT_WORK_TREE decoy -> accepted
+SELF-TEST: PASS

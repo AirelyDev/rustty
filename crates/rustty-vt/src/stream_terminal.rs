@@ -192,6 +192,8 @@ pub struct Handler<'a> {
     ///
     ///     // Match the number and its ";" so "74000;" is not included.
     ///     let prefix = b"7400;";
+    ///     // PORT NOTE: the reference line is
+    ///     // if (v.truncated or !std.mem.startsWith(u8, v.content, prefix)) return;
     ///     if v.truncated || !v.content.starts_with(prefix) {
     ///         return;
     ///     }

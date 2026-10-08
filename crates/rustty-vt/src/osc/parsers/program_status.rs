@@ -165,14 +165,17 @@ impl Kind {
 
 /// A status report that passed every check in the specification.
 ///
-/// `state` is always present. Read everything else with `read_option`,
-/// and the text values with `write_text`:
+/// `state` is always present. Read everything else with `readOption`,
+/// and the text values with `writeText`:
 ///
 /// ```text
-/// if let OptionValue::Progress(Some(percent)) = report.read_option(OptionKey::Progress) { .. }
+/// const report = cmd.program_status.report;
+/// if (report.readOption(.progress)) |percent| showProgress(percent);
 ///
-/// let mut buf = Vec::new();
-/// report.write_text(OptionKey::Msg, &mut buf)?;
+/// var buf: [program_status.max_msg_bytes]u8 = undefined;
+/// var writer: std.Io.Writer = .fixed(&buf);
+/// try report.writeText(.msg, &writer);
+/// showMessage(writer.buffered());
 /// ```
 ///
 /// The values point into the parser's buffer, so they are only valid
@@ -181,6 +184,16 @@ impl Kind {
 /// A key the program didn't send reads as null. A report replaces its
 /// record completely, so a null value means the record no longer has
 /// that value, not that the old value should be kept.
+///
+/// PORT NOTE: the example above is the reference's, verbatim (`readOption` is
+/// `read_option` and `writeText` is `write_text` here). In Rust the same two
+/// reads are:
+///
+/// ```text
+/// if let OptionValue::Progress(Some(percent)) = report.read_option(OptionKey::Progress) { .. }
+/// let mut buf = Vec::new();
+/// report.write_text(OptionKey::Msg, &mut buf)?;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Report<'p> {
     /// What the program is doing.

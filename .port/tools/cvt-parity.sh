@@ -1,7 +1,7 @@
 #!/bin/sh
 # c-vt example parity gate (G4 leg B, per example): diff a rustty c-vt example's
 # stdout against its ghostty twin. The twin is NOT built with the example's own
-# `zig build run`: on a macOS host at a60e9e2a5 that aborts (N525, upstream
+# `zig build run`: on a macOS host at the pin (`gates/ORACLE_PIN`) that aborts (N525, upstream
 # d65cb5128). It is built the way .port/phase-0/build-examples.sh documents
 # (N395, P8-W0 T3/T7): the oracle's own `example/<name>/src/main.c[pp]` compiled
 # with Xcode clang, in a scratch dir, against the oracle's `zig-out` libghostty-vt
