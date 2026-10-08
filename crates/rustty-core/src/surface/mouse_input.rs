@@ -1889,7 +1889,10 @@ where
                 // This matches what Kitty sends.
                 // const key: u8, const y: u32 = switch (v) {
                 //     .absolute => .{ 1, pos_vp.y +| 1 },
-                //     .relative => .{ 2, pos_vp.y -| prompt_pin.y +| 1 },
+                //     .relative => .{
+                //         2,
+                //         promptClickRelativeRow(&screen.pages, prompt_pin, click_pin),
+                //     },
                 // };
                 let (key, y): (u8, u32) = match v {
                     terminal::osc::semantic_prompt::ClickEvents::Absolute => {
@@ -1897,10 +1900,11 @@ where
                     }
                     terminal::osc::semantic_prompt::ClickEvents::Relative => (
                         2,
-                        pos_vp
-                            .y
-                            .saturating_sub(u32::from(prompt_pin.y))
-                            .saturating_add(1),
+                        prompt_click_relative_row(
+                            unsafe { &(*screen).pages },
+                            prompt_pin,
+                            click_pin,
+                        ),
                     ),
                 };
                 // var data: termio.Message.WriteReq.Small.Array = undefined;
@@ -3111,4 +3115,37 @@ where
             log::warn!(target: LOG_SCOPE, "apprt failed to set mouse visibility err={err:?}");
         }
     }
+}
+
+/// Returns the one-based SGR row for a click at or below the prompt.
+//
+// fn promptClickRelativeRow(
+//     pages: *const terminal.PageList,
+//     prompt_pin: terminal.Pin,
+//     click_pin: terminal.Pin,
+// ) u32 {
+//     const prompt_y = pages.pointFromPin(.screen, prompt_pin).?.screen.y;
+//     const click_y = pages.pointFromPin(.screen, click_pin).?.screen.y;
+//     return click_y - prompt_y + 1;
+// }
+//
+// PORT NOTE: the `.?` unwraps are `.expect`; the subtraction is the reference's
+// plain `-` (the caller guarantees the click is at or below the prompt, so
+// `click_y >= prompt_y`), which Rust traps on underflow in debug.
+pub(super) fn prompt_click_relative_row(
+    pages: &terminal::pagelist::PageList,
+    prompt_pin: terminal::pagelist::Pin,
+    click_pin: terminal::pagelist::Pin,
+) -> u32 {
+    let prompt_y = pages
+        .point_from_pin(terminal::point::Tag::Screen, prompt_pin)
+        .expect("prompt pin is in the screen")
+        .coord()
+        .y;
+    let click_y = pages
+        .point_from_pin(terminal::point::Tag::Screen, click_pin)
+        .expect("click pin is in the screen")
+        .coord()
+        .y;
+    click_y - prompt_y + 1
 }

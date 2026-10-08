@@ -334,6 +334,11 @@ impl Screen {
             let mut it =
                 start_pin.cell_iterator(pagelist::iter::Direction::RightDown, Some(end_pin));
             while let Some(p) = it.next() {
+                // CellIterator only limits the row, so bound the column too.
+                if end_pin.before(p) {
+                    return None;
+                }
+
                 let cell = p.row_and_cell().cell;
                 if !unsafe { (*cell).has_text() } {
                     continue;

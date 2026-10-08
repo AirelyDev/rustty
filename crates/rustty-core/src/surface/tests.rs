@@ -2117,3 +2117,136 @@ mod paste_event_mutex_tests {
         );
     }
 }
+
+// test "promptClickRelativeRow" {
+//
+// (`5170b06f6`; the helper is `mouse_input::prompt_click_relative_row`.)
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod prompt_click_relative_row_tests {
+    use super::*;
+    use rustty_vt::alloc::Global;
+    use rustty_vt::point;
+
+    #[test]
+    fn promptClickRelativeRow() {
+        // const testing = std.testing;
+        // const Case = struct {
+        //     layout: enum { no_history, offset, cross_page, prompt_above_viewport },
+        //     click_y: u32,
+        //     expected: u32,
+        // };
+        #[derive(PartialEq, Eq)]
+        enum Layout {
+            NoHistory,
+            Offset,
+            CrossPage,
+            PromptAboveViewport,
+        }
+        struct Case {
+            layout: Layout,
+            click_y: u32,
+            expected: u32,
+        }
+        // const cases = [_]Case{
+        //     .{ .layout = .no_history, .click_y = 1, .expected = 1 },
+        //     .{ .layout = .offset, .click_y = 3, .expected = 3 },
+        //     .{ .layout = .cross_page, .click_y = 3, .expected = 3 },
+        //     .{ .layout = .prompt_above_viewport, .click_y = 0, .expected = 3 },
+        // };
+        let cases = [
+            Case {
+                layout: Layout::NoHistory,
+                click_y: 1,
+                expected: 1,
+            },
+            Case {
+                layout: Layout::Offset,
+                click_y: 3,
+                expected: 3,
+            },
+            Case {
+                layout: Layout::CrossPage,
+                click_y: 3,
+                expected: 3,
+            },
+            Case {
+                layout: Layout::PromptAboveViewport,
+                click_y: 0,
+                expected: 3,
+            },
+        ];
+        // for (cases) |case| {
+        for case in cases {
+            // var pages = try terminal.PageList.init(testing.allocator, .{
+            //     .cols = 80,
+            //     .rows = 5,
+            // });
+            // defer pages.deinit();
+            let mut pages =
+                terminal::pagelist::PageList::init(Global, terminal::pagelist::Options::new(80, 5))
+                    .unwrap();
+            // const scroll_rows: u32 = switch (case.layout) {
+            //     .no_history => 0,
+            //     .offset, .prompt_above_viewport => 10,
+            //     .cross_page => pages.pages.first.?.capacity().rows - 2,
+            // };
+            let scroll_rows: u32 = match case.layout {
+                Layout::NoHistory => 0,
+                Layout::Offset | Layout::PromptAboveViewport => 10,
+                Layout::CrossPage => {
+                    u32::from(unsafe { terminal::pagelist::Node::capacity(pages.pages.first) }.rows)
+                        - 2
+                }
+            };
+            // for (0..scroll_rows) |_| _ = try pages.grow();
+            for _ in 0..scroll_rows {
+                pages.grow().unwrap();
+            }
+
+            // const prompt_y = if (case.layout == .prompt_above_viewport)
+            //     scroll_rows - 2
+            // else
+            //     scroll_rows + 1;
+            let prompt_y = if case.layout == Layout::PromptAboveViewport {
+                scroll_rows - 2
+            } else {
+                scroll_rows + 1
+            };
+            // const prompt = pages.pin(.{ .screen = .{ .y = prompt_y } }).?;
+            let prompt = pages
+                .pin(point::Point::Screen(point::Coordinate {
+                    x: 0,
+                    y: prompt_y,
+                }))
+                .unwrap();
+            // const click = pages.pin(.{ .viewport = .{ .x = 7, .y = case.click_y } }).?;
+            let click = pages
+                .pin(point::Point::Viewport(point::Coordinate {
+                    x: 7,
+                    y: case.click_y,
+                }))
+                .unwrap();
+            // try testing.expectEqual(case.layout == .cross_page, prompt.node != click.node);
+            assert_eq!(
+                case.layout == Layout::CrossPage,
+                !std::ptr::eq(prompt.node, click.node)
+            );
+            // try testing.expectEqual(
+            //     case.layout == .prompt_above_viewport,
+            //     pages.pointFromPin(.viewport, prompt) == null,
+            // );
+            assert_eq!(
+                case.layout == Layout::PromptAboveViewport,
+                pages.point_from_pin(point::Tag::Viewport, prompt).is_none()
+            );
+            // try testing.expectEqual(case.expected, promptClickRelativeRow(&pages, prompt, click));
+            assert_eq!(
+                case.expected,
+                mouse_input::prompt_click_relative_row(&pages, prompt, click)
+            );
+
+            pages.deinit();
+        }
+    }
+}

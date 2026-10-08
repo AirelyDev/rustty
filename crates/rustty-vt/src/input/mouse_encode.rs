@@ -239,6 +239,7 @@ pub fn encode<W: std::io::Write>(
 
         terminal_mouse::Format::Utf8 => {
             let mut buf: [u8; 4] = [0; 4];
+            let b_cp: u32 = 32 + (button_code as u32);
             let x_cp: u32 = (cell.x as u32) + 33;
             let y_cp: u32 = (cell.y as u32) + 33;
 
@@ -255,14 +256,23 @@ pub fn encode<W: std::io::Write>(
             // before anything is written, so no partial `ESC [ M` reaches the
             // writer. The X10 arm's `log.info` text is specific to X10, so no
             // message is logged here.
-            let (Some(x_ch), Some(y_ch)) = (char::from_u32(x_cp), char::from_u32(y_cp)) else {
+            //
+            // The button is UTF-8 encoded like the coordinates (xterm does the
+            // same), so values from 128 (buttons 8 and 9) take two bytes. It is
+            // at most 32 + 255, so it is always a scalar value; it joins the
+            // coordinates in the check so nothing is written on any failure.
+            let (Some(b_ch), Some(x_ch), Some(y_ch)) = (
+                char::from_u32(b_cp),
+                char::from_u32(x_cp),
+                char::from_u32(y_cp),
+            ) else {
                 return Ok(());
             };
 
             writer.write_all(b"\x1B[M")?;
 
-            // The button code always fits in a single byte.
-            writer.write_all(&[32 + button_code])?;
+            let b_len = b_ch.encode_utf8(&mut buf).len();
+            writer.write_all(&buf[0..b_len])?;
 
             let x_len = x_ch.encode_utf8(&mut buf).len();
             writer.write_all(&buf[0..x_len])?;
@@ -922,6 +932,29 @@ mod tests {
         assert_eq!(333u32, it.next().unwrap() as u32);
         assert_eq!(433u32, it.next().unwrap() as u32);
         assert_eq!(None, it.next());
+    }
+
+    #[test]
+    fn utf8_encodes_extended_mouse_buttons() {
+        let mut data: Vec<u8> = Vec::new();
+        encode(
+            &mut data,
+            Event {
+                button: Some(mouse::Button::Eight),
+                action: mouse::Action::Press,
+                pos: Pos { x: 2.0, y: 3.0 },
+                ..Default::default()
+            },
+            Options {
+                event: terminal_mouse::Event::Any,
+                format: terminal_mouse::Format::Utf8,
+                size: test_size(),
+                ..opts_defaults()
+            },
+        )
+        .unwrap();
+
+        assert_eq!("\x1B[M\u{A0}#$", std::str::from_utf8(&data).unwrap());
     }
 
     #[test]
