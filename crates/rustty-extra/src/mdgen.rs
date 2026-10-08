@@ -241,11 +241,12 @@ mod tests {
         // added `gtk-horizontal-tab-scroll`; 206 -> 208: Phase-4 w8-config
         // added `drag-handle` + `link-osc8`; 208 -> 209: Phase-5 p5-sys-config
         // added `clipboard-write-limit-bytes`; 209 -> 210: P7-W6 T1 added
-        // `vt-window-resize-allowed`). Pinned so a table that silently
+        // `vt-window-resize-allowed`; 210 -> 212: P8-W3 T2 added
+        // `vt-xt-checksum-report` + `vt-xt-checksum-extension`). Pinned so a table that silently
         // shrinks cannot make the per-field loop below vacuous.
         assert_eq!(
             fields.len(),
-            210,
+            212,
             "the field table changed; update this count"
         );
         for (name, _key) in fields {

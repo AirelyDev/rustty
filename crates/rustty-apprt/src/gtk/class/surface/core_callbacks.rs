@@ -26,6 +26,12 @@ use super::*;
 /// orders here. A few duplicates aren't critical."
 macro_rules! log_warn_once {
     ($($arg:tt)+) => {{
+        // key forces the compiler to instantiate this container per (format, argument type) i.e. roughly per call
+        // site.
+        //
+        // PORT NOTE: the reference's `const key = .{ format, @TypeOf(args) };` has no Rust
+        // counterpart; the `static` below is instantiated once per macro expansion, which is
+        // per call site.
         static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         if ONCE.load(std::sync::atomic::Ordering::Relaxed) {
         } else {

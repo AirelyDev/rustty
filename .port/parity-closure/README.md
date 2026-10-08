@@ -362,7 +362,7 @@ committed records named here.
   symbolically in `cvt-parity.sh` (G-ORACLE-SH-SELF GREEN) and added three `COMMENT-NOT-CARRIED.tsv` rows for
   `lib_vt.zig`'s `DllMain` doc (cap 79), with no new id. Owed before the merge to `main` (code, not records; see
   `.port/phase-8/README.md` §"Open at the finale"): the `rustty-extra` goldens for the two `vt-xt-checksum-*` keys,
-  and three doc-example comments G3b reports. **Next free ids: UD379, N531, V34.**
+  and three doc-example comments G3b reports (both done in P8-W9 T1a, N531). **Next free ids: UD379, N532, V34.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.

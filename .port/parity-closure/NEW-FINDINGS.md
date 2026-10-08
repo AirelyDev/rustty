@@ -11475,3 +11475,15 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   streams through a `GhosttyWriter`) changed the example to stream through a writer and print `(N bytes)` after the
   output; the Rustty example still used `rustty_formatter_format_alloc` and printed `Formatted output (N bytes):`. The
   writer API was already ported (`rustty_formatter_format`), so the example was brought to upstream's.
+
+- **N531 (CLOSED, P8-W9 T1a): the `rustty-extra` goldens were not regenerated for `vt-xt-checksum-report` and
+  `vt-xt-checksum-extension`, and three upstream comments were paraphrased.** P8-W3 T2 added the two config keys
+  (a60e9e2a5 `Config.zig:3086`, `:3124`) but did not touch `crates/rustty-extra`, so `cargo test -p rustty-extra` failed 6
+  tests (bash, zsh, fish, sublime, vim goldens and the mdgen field count 212 vs 210) on Mac and rvm. There is no golden
+  update switch: the fixtures in `crates/rustty-extra/testdata` are upstream's generated output with the brand tokens
+  flipped, kept by hand. The generators (ports of `src/extra/*.zig`) were run for the current field table, and the
+  only differences from the committed fixtures were the lines for the two keys (bash 4, zsh 2, fish 2, vim 2, sublime
+  keyword list 1); the generator output was committed and the mdgen literal went 210 -> 212. Also carried verbatim
+  (G3b): `program_status.zig:141` (the `Report` doc example, `readOption`/`writeText` spelled as upstream, the Rust
+  form moved to a PORT NOTE), `stream_terminal.zig:126` (the `startsWith` line, as a PORT NOTE in the doc example) and
+  `surface.zig:3952` (the `key` comment in `log_warn_once!`). G3b is GREEN with and without `--strict`.
