@@ -1,6 +1,6 @@
 //! rustty-renderer
 //!
-//! PORTS: ghostty src/renderer/ minus size.zig (renderer.zig, Metal, OpenGL, WebGL, Options,
+//! PORTS: ghostty src/renderer/ minus size.zig (renderer.zig, Metal, OpenGL, Options,
 //! Overlay, State, Thread, backend, cell, cursor, generic, ...); links
 //! glslang/spirv-cross/wuffs/libpng/zlib-sys; apprt via surface trait (breaks #10, #11).
 //!
@@ -59,11 +59,6 @@
 //!     (F-005), background image (F-012) and the inspector overlay (F-020) — so
 //!     `linux_impl` carries no `MILESTONE-SCOPE-CUT` markers (DEFERRALS.md
 //!     "rustty-renderer L4 (OpenGL `linux_impl`) draw-path scope cuts").
-//!     The **WebGL** backend is NOT in this list
-//!     any more: WS14 established that the reference `src/renderer/WebGL.zig` is a
-//!     2-line placeholder (no fields, no methods, no shaders, no tests, identical
-//!     on the oracle's `origin/main`), and it is ported COMPLETE at
-//!     [`crate::webgl`].
 //!
 //! G3b comment-coverage SKIPS this crate while it is marked `in progress` (only a
 //! `done` status activates the whole-crate fuzzy match), but `--crate renderer`
@@ -162,12 +157,6 @@ pub mod dmabuf;
 //     //! APIs. The renderers in this package assume that the renderer is already
 //     //! setup (OpenGL has a context, Vulkan has a surface, etc.)
 
-// PORT: `pub const WebGL = @import("renderer/WebGL.zig");` (renderer.zig:20).
-// NOT target-gated: the reference re-export is unconditional, and the type is a
-// zero-sized placeholder that names nothing target-specific (WS14 T2).
-pub mod webgl;
-pub use webgl::WebGL;
-
 // GPU R-d Chunk-3 prerequisites: the Kitty-graphics + overlay image render state
 // (`image.zig`) and the CPU/z2d debug overlay (`Overlay.zig`). Neither names
 // `GenericRenderer`, so both compile standalone before Chunk 3 (GPU_RD_P1_DESIGN.md
@@ -226,7 +215,6 @@ pub use message::Message;
 //     pub const Renderer = switch (build_config.renderer) {
 //         .metal => GenericRenderer(Metal),
 //         .opengl => GenericRenderer(OpenGL),
-//         .webgl => WebGL,
 //     };
 //
 // Ported MONOMORPHICALLY (GPU_RD_TRAIT_DESIGN.md §D): a set of one per target —
@@ -255,15 +243,6 @@ pub use generic::Renderer;
 // its runtime is `.none`, so it builds the `apprt.embedded` arms of `OpenGL.zig`.
 #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
 pub use generic::Renderer;
-
-// PORT: `.webgl => WebGL` (renderer.zig:41) — the ONLY arm that is NOT
-// `GenericRenderer(Backend)`: the reference selects the bare `WebGL` type. With
-// this arm the port's switch is complete for all three reference arms
-// (`.metal` macOS, `.opengl` Linux, `.webgl` wasm32). `renderer/backend.zig`
-// returns `.webgl` for `wasm32` + `WasmTarget.browser`, which is why the cfg is
-// `target_arch = "wasm32"` (WS14 T2).
-#[cfg(target_arch = "wasm32")]
-pub use webgl::WebGL as Renderer;
 
 // The `renderer.Renderer.DerivedConfig` nested config, named by the cross-thread
 // message surface (`Message::ChangeConfig`). It names no Metal type (its 9

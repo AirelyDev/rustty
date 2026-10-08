@@ -270,7 +270,7 @@ audit rows O13a/O14/O15/O16 — so it is scheduled work, not an out-of-scope dec
 **[WS14 sharpening, 2026-07-30: what remains out of scope is the browser *apprt
 runtime* — a full `apprt` App/Surface over the browser. `apprt/browser.zig` ITSELF is
 4 loc and is ported at `crates/rustty-apprt/src/browser.rs`. This exclusion does NOT
-cover WS14, which is DONE: it ports the `renderer/WebGL.zig` placeholder, the
+cover WS14, which is DONE: it ported the `renderer/WebGL.zig` placeholder (**[P8-W6 T1: upstream removed that stub in 05392dcc9 and Rustty's `webgl.rs` went with it; the wasm module and its browser gate are unaffected]**), the
 `main_wasm.zig` module as a real freestanding `rustty_wasm.wasm` cdylib, `App.Wasm`
 and `Atlas.Wasm` (all 4 reference asserts live), and gates browser rendering with a
 falsifiable pixel assertion whose two negative controls must FAIL on every run

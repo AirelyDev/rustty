@@ -249,7 +249,7 @@ where
         //
         // PORT NOTE: same `@hasDecl` fold — `renderer.Renderer.API` is the
         // comptime graphics API (`Metal` on macOS, which declares `warmup`;
-        // OpenGL/WebGL do not), so the probe folds to the same macOS cfg.
+        // OpenGL does not), so the probe folds to the same macOS cfg.
         #[cfg(target_os = "macos")]
         {
             if let Err(err) = rustty_zigstd::thread::spawn_config()

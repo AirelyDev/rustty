@@ -792,7 +792,6 @@ const fn tagNameRenderer(v: build_config::renderer::Backend) -> &'static str {
     match v {
         build_config::renderer::Backend::Opengl => "opengl",
         build_config::renderer::Backend::Metal => "metal",
-        build_config::renderer::Backend::Webgl => "webgl",
     }
 }
 
