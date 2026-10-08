@@ -1,0 +1,47 @@
+# P8-W9 T1b cross-host build check at a60e9e2a5 (base 3b6e760f2); all legs RC=0, zero warnings
+
+## rvm (Fedora aarch64, fresh git-archive clone /home/gael/projects/rustty-p8w9b; tar -m, VM clock is skewed)
+### cargo build --workspace --all-targets --features rustty/gtk,rustty/x11,rustty/wayland
+   Compiling rustty-extra v0.1.0 (/home/gael/projects/rustty-p8w9b/crates/rustty-extra)
+   Compiling xtask v0.1.0 (/home/gael/projects/rustty-p8w9b/xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3m 11s
+RC=0
+### cargo clippy --workspace --all-targets --features rustty/gtk,rustty/x11,rustty/wayland -- -D warnings
+    Checking rustty-extra v0.1.0 (/home/gael/projects/rustty-p8w9b/crates/rustty-extra)
+    Checking xtask v0.1.0 (/home/gael/projects/rustty-p8w9b/xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 54.20s
+RC=0
+### cargo build --release -p rustty
+   Compiling rustty-inspector v0.1.0 (/home/gael/projects/rustty-p8w9b/crates/rustty-inspector)
+   Compiling rustty-apprt-api v0.1.0 (/home/gael/projects/rustty-p8w9b/crates/rustty-apprt-api)
+    Finished `release` profile [optimized] target(s) in 1m 50s
+RC=0
+
+## rwin (Windows 11 ARM64, fresh clone C:\Users\gael\projects\rustty-p8w9b; PATH prefixed with C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64 for rc.exe, which the rustty build.rs needs)
+### cargo build --workspace --all-targets --target x86_64-pc-windows-msvc --exclude libxml2-sys --exclude fontconfig-sys --exclude sentry-sys
+   Compiling xtask v0.1.0 (C:\Users\Gael\projects\rustty-p8w9b\xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 37s
+RC=0
+### cargo clippy (same flags) -- -D warnings
+    Checking xtask v0.1.0 (C:\Users\Gael\projects\rustty-p8w9b\xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 52s
+RC=0
+### cargo build --release -p rustty-vt-c --target x86_64-pc-windows-msvc
+   Compiling rustty-wuffs v0.1.0 (C:\Users\Gael\projects\rustty-p8w9b\crates\rustty-wuffs)
+    Finished `release` profile [optimized] target(s) in 36.15s
+RC=0
+### cargo build -p rustty-font-shaper --features rustty-build-config/font-backend-fontconfig-freetype --target x86_64-pc-windows-gnu (fontconfig_freetype backend; needed mingw gcc, installed WinLibs POSIX.MSVCRT via winget user scope; first attempt without gcc failed on cc-rs ToolNotFound, an environment gap, not code)
+   Compiling harfbuzz-sys v0.1.0 (C:\Users\Gael\projects\rustty-p8w9b\crates-sys\harfbuzz-sys)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 56s
+RC=0
+
+## macOS (worktree p8-w9b)
+### cargo build --workspace --all-targets
+   Compiling xtask v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9b/xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 49.60s
+RC=0
+### XCFRAMEWORK_TARGET=native bash macos/build-rustty.sh (xtask xcframework + resources + xcodebuild Debug)
+** BUILD SUCCEEDED **
+
+copied /Users/gael/Library/Developer/Xcode/DerivedData/Rustty-amuoywpzhxhjisebverpzkbqotev/Build/Products/Debug/Rustty.app to /Users/gael/projects/rustty/.claude/worktrees/p8-w9b/zig-out
+RC=0
