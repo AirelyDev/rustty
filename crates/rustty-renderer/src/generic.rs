@@ -1029,6 +1029,13 @@ pub struct Options {
     // allocation, N522) and frees after every surface. A raw `*const`: render
     // threads only read it, and a reference here would tie the renderer to a
     // borrow of the app (see `.port/phase-2/mirihar-device-box`).
+    //
+    // # Safety
+    //
+    // Must point to a live `Device` for the renderer's whole life: `Renderer::init`
+    // (a safe fn) dereferences it, and the renderer reads it until `deinit`. It is
+    // asserted non-null at `init`; the core `App` guarantees the rest by freeing
+    // the device only after every surface.
     pub device: *const crate::Device,
 
     /// The derived configuration for this renderer implementation.

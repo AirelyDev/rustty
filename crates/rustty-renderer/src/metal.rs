@@ -33,7 +33,8 @@
 pub mod api;
 pub mod buffer;
 pub mod cvdisplaylink; // W2 — the CoreVideo CVDisplayLink loop driver
-                       // P8-W6 T2 (`40d5b860d`): `metal/Device.zig`, the app-scoped render device.
+
+// P8-W6 T2 (`40d5b860d`): `metal/Device.zig`, the app-scoped render device.
 pub mod device;
 pub mod frame;
 pub mod gpu_abi;
