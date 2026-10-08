@@ -45,7 +45,7 @@ class CustomMascotTest(unittest.TestCase):
         x, y, w, h = raster.ferris_box(mascot.CUSTOM_SCREEN_BBOX)
         m = raster.classify(raster.ferris_at(w))
         lum = np.asarray(img)[y:y + h, x:x + w, 0].astype(int)
-        self.assertTrue(225 <= lum[m.body].mean() <= 245)
+        self.assertTrue(125 <= lum[m.body].mean() <= 145)
         self.assertLess(lum[m.dark].mean(), 60)
 
 

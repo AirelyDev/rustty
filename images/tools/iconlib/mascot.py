@@ -26,7 +26,7 @@ def icon_mascot() -> Image.Image:
 
 # The screen-mask layer's opaque bbox is 174..848 inclusive (half-open 849).
 CUSTOM_SCREEN_BBOX = (174, 174, 849, 849)
-CUSTOM_LEVELS = {"body": 235, "shade": 170, "dark": 25, "white": 255}
+CUSTOM_LEVELS = {"body": 135, "shade": 85, "dark": 20, "white": 255}
 CUSTOM_GLOW_RADIUS = 14
 CUSTOM_GLOW_STRENGTH = 0.5
 
