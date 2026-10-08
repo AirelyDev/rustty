@@ -43,11 +43,12 @@ write touches only the limit's bytes; the retag reads the buffer bytes but does 
 the content stays readable. The SB result is the one the port must satisfy (the N441/N522
 precedent).
 
-**The FFI tests do not separate them either.** `reentrant_callback_unknown_osc` (rustty-vt-c) runs
-clean with the shipped write, and also with the `&mut osc::Parser` write (checked in P8-W5 T3). The
-likely reason (not proven here): in the shipped trampoline the content reaches the trampoline inside
-the `UnknownSequence<'_>` value rather than as a bare `&[u8]` argument, so no protector covers it.
-This harness, where the trampoline takes the content as a reference argument, is the evidence for
-the shape.
+**The FFI test separates them under SB as well.** In rustty-vt-c, `reentrant_callback_unknown_osc`
+runs clean with the shipped raw place write, and with the write replaced by
+`let p: &mut rustty_vt::osc::Parser = &mut (*terminal_).stream.parser.osc_parser; p.unknown_max_bytes = max_bytes;`
+Miri SB reports `not granting access to tag <wildcard> because that would remove [SharedReadOnly for <…>]
+which is strongly protected` at that line (`options.rs:951`; P8-W5 T3 fix 2, reverted). Writing the
+limit through the `set_unknown_max_bytes(max_bytes)` method instead (an autoref `&mut self`) was not
+flagged by the same test. This harness and that FFI test are both negative controls for the seam.
 
 Toolchain: miri 0.1.0 (6f72b5dd5f 2026-07-22), rustc 1.99.0-nightly (6f72b5dd5 2026-07-22); run 2026-10-08.

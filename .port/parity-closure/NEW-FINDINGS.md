@@ -11413,7 +11413,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `terminal::UnknownOscSequence`; `include/rustty.h` regenerated and declares the SGR layout again.
 - **guard (R5)**: A5 arm (f), `.port/tools/check-vt-cbindgen-name-collisions.py`. It fails when two non-test
   `pub struct|enum|union|type` items in rustty-vt-c share a name that `include/rustty.h` uses as a type, unless the
-  name is in its baseline, and fails on a stale baseline row. Negative controls: its `--self-test` (an unlisted
+  name is in its baseline WITH exactly that set of defining items (a third definition of a baselined name is RED),
+  and fails on a stale baseline row. `#[cfg(test)]` items are skipped by brace matching, so items after a test
+  module are still read (fix round 2; live control: a third `Size` in `focus.rs` -> `CHANGED COLLISION \`Size\``). Negative controls: its `--self-test` (an unlisted
   duplicate RED, a stale row RED, a clean fixture GREEN), and reintroducing the OSC `UnknownC` turned it RED
   (`NEW COLLISION \`UnknownC\`: sgr.rs:73 (struct), osc.rs:133 (struct)`).
 - **pre-existing collisions (OPEN, baselined in the checker)**: `Data` (render, kitty_graphics, selection_gesture
