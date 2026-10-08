@@ -9,17 +9,29 @@ self-contained) and no network fetch of the upstream tarball.
 
 Vendored byte-for-byte from ghostty's `iterm2_themes` build dependency:
 
-- Upstream tarball: `ghostty-themes-release-20260921-150923-0b55a9e.tgz`
+- Upstream tarball: `ghostty-themes-release-20260928-151043-99d9701.tgz`
   (`https://deps.files.ghostty.org/`), pinned in ghostty's `build.zig.zon`
   under the `iterm2_themes` dependency
-  (zig hash `N-V-__8AAM94BAAFk_hn4UW0x_OBD2g0vOwexeAAyWNNo4eB`; the tarball
+  (zig hash `N-V-__8AAAfDBACe1jGqjr9jIG3UAK8KbzJKQ7xrzYoau-_a`; the tarball
   file's own SHA-256 is
-  `da83fb32fcef53c8cb1dca868fb700a904d5d86420d7588e574a0f81a75008d5`,
+  `072d88d0f6a3561c01ee7fa11b0eec018c24f26f2fa461a67660277fea4e32c9`,
   which is exactly the `sha256` ghostty records for it in
   `flatpak/zig-packages.json` — verified on the downloaded file with
   `shasum -a 256`; `zig fetch` was not run, so the zig hash is cited from the
   oracle, not reproduced).
-  Re-vendored by phase-7 `w10` T3 (oracle `12752b2ac`, range
+  Re-vendored by phase-8 `w7` T3 (oracle `a60e9e2a5`, upstream `406f2e544`,
+  range `12752b2ac..a60e9e2a5`) from `…20260921-150923-0b55a9e`: **+40 themes**
+  (`After Hours`, `Arizona Monsoon`, `Blueprint`, `Charcoal`, `CRT Afterglow`,
+  `Dark 2026`, `Deep Current`, `Ember`, `Emberglass`, `EVH FrankenTone`,
+  `Golden Retriever Cream`/`Honey`/`Red`, `High Desert Snow`, `Hyper`,
+  `Light 2026`, `Madman's Diary`, `Nightfall`, `Ozz's Blizzard`,
+  `Prince of Darkness`, `RadicalReborn`, `Rhoads Concord`/`Insipired`/`Legacy`/
+  `LP`/`RR Black`, `Sonoran Dusk`, `Syncopation`, and `X`, `X Berlin`,
+  `X Bogota`, `X Helsinki`, `X Lahabana`, `X London`, `X Madrid`, `X Miami`,
+  `X Oslo`, `X Paris`, `X Praha`, `X Tokio`), **1 content update**
+  (`Dark Modern`), 0 removals (617 -> 657; the tarball's SHA-256 was verified
+  with `shasum -a 256` against `flatpak/zig-packages.json` at the oracle).
+  Previous hop, phase-7 `w10` T3 (oracle `12752b2ac`, range
   `20abdb50a..12752b2ac`) from `…20260824-153547-75c93ee`: **+11 themes**
   (`Catthode`, `Earl Grey`, `Isocon Dark`, `Isocon Light`, `Lemon Graphite`,
   `Nachtschicht`, `SilkCircuit Dawn`, `SilkCircuit Glow`, `SilkCircuit Neon`,
@@ -43,13 +55,13 @@ Vendored byte-for-byte from ghostty's `iterm2_themes` build dependency:
   4 content updates (the four `Catppuccin *` files), 0 removals.
 - Ghostty installs it via `src/build/GhosttyResources.zig` (the `emit_themes`
   block) into `share/ghostty/themes`, `exclude_extensions = &.{".md"}`.
-- **617** theme files, byte-identical to the upstream set (`README.md` and
+- **657** theme files, byte-identical to the upstream set (`README.md` and
   `LICENSE.md` are the only non-theme files here and are **excluded on emit** —
-  mirroring ghostty's `.md` exclusion, so the shipped count stays exactly 617).
+  mirroring ghostty's `.md` exclusion, so the shipped count stays exactly 657).
 
 ## The digest gate (`G-THEMES`) — read this before re-vendoring
 
-`xtask/src/res_themes.rs` asserts the emitted corpus has exactly 617 files.
+`xtask/src/res_themes.rs` asserts the emitted corpus has exactly 657 files.
 That catches an added or deleted theme and **nothing else** — content drift
 inside an existing theme file is invisible to a count, and only ONE theme body
 is ever read by a test (`0x96f`, spot-checked for `palette = 0=`). Content
@@ -94,6 +106,6 @@ only `Ghostty Default Style Dark`, bodies matched nothing).
 The corpus derives from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes)
 (MIT); the upstream license text is vendored verbatim in `LICENSE.md` in this
 directory (repo-side attribution — excluded from the app bundle by the `.md`
-emit filter, keeping the shipped set exactly 617 files like ghostty's).
+emit filter, keeping the shipped set exactly 657 files like ghostty's).
 Per-theme copyright belongs to each theme's author (see the upstream license's
 final clause).
