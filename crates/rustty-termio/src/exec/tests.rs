@@ -253,6 +253,7 @@ impl TestTermio {
             #[allow(clippy::clone_on_copy)]
             renderer_wakeup: renderer_wakeup.clone(),
             enquiry_response: derived.enquiry_response.clone(),
+            xt_checksum_report: derived.xt_checksum_report,
             osc_color_report_format: derived.osc_color_report_format,
             clipboard_write: derived.clipboard_write,
             clipboard_write_limit: derived.clipboard_write_limit,

@@ -66,6 +66,7 @@ pub(crate) fn handler_for(
         renderer_mailbox: std::ptr::null_mut(),
         renderer_wakeup: xev::Async::init().expect("Async::init"),
         enquiry_response: Vec::new(),
+        xt_checksum_report: false,
         osc_color_report_format: OSCColorReportFormat::Bit16,
         clipboard_write: ClipboardAccess::Deny,
         clipboard_write_limit: rustty_vt::kitty::clipboard::max_write_size,
@@ -567,6 +568,7 @@ fn stream_handler_forwards_csi_8_t_as_a_resize_window_surface_message() {
         renderer_mailbox: n.renderer_mailbox,
         renderer_wakeup: n.renderer_wakeup,
         enquiry_response: n.enquiry_response,
+        xt_checksum_report: n.xt_checksum_report,
         osc_color_report_format: n.osc_color_report_format,
         clipboard_write: n.clipboard_write,
         clipboard_write_limit: n.clipboard_write_limit,
@@ -1221,4 +1223,162 @@ fn ud351_osc7_percent_encoded_local_host_still_sets_the_pwd() {
         Some(b"/tmp".to_vec())
     };
     assert_eq!(expected, osc7_pwd_after(b"file://local%68ost/tmp"));
+}
+
+// Review Focus 2 (P8-W3 T2; rustty-only, the reference adds no termio test):
+// a handler built from the DEFAULT `DerivedConfig` must never write a
+// DECRQCRA reply, and must ignore XTCHECKSUM. A screen read-back is a
+// disclosure channel, so reporting is opt-in via `vt-xt-checksum-report`.
+fn xt_checksum_fixture() -> (
+    Box<Terminal>,
+    *mut Mailbox,
+    *mut rustty_zigstd::thread::Mutex,
+    *mut State,
+) {
+    let mut term = Box::new(Terminal::init(Global.into(), terminal_opts(Some(false))).unwrap());
+    let mailbox: *mut Mailbox = Box::into_raw(Box::new(
+        crate::mailbox::Mailbox::initSPSC().expect("Mailbox::initSPSC"),
+    ));
+    let mutex: *mut rustty_zigstd::thread::Mutex =
+        Box::into_raw(Box::new(rustty_zigstd::thread::Mutex::new()));
+    let state: *mut State = Box::into_raw(Box::new(State {
+        mutex,
+        terminal: &raw mut *term,
+        inspector: None,
+        inspector_ptr: None,
+        preedit: None,
+        mouse: rustty_renderer::state::Mouse::default(),
+        demand: Default::default(),
+        handoff_gen: Default::default(),
+        handoff_park: Default::default(),
+    }));
+    (term, mailbox, mutex, state)
+}
+
+#[test]
+fn xt_checksum_default_config_never_replies() {
+    let (mut term, mailbox, mutex, state) = xt_checksum_fixture();
+    let mut h = handler_for(&raw mut *term, mailbox, state);
+
+    // The default config: reporting off, DEC checksum calculation.
+    let mut cfg = DerivedConfig::init(&rustty_config::Config::default());
+    assert!(!cfg.xt_checksum_report);
+    h.changeConfig(&mut cfg);
+    // `changeConfig` ends with the mode-2031 color scheme report.
+    assert!(matches!(
+        mailbox_pop(mailbox),
+        Some(Message::ColorSchemeReport { .. })
+    ));
+    assert!(mailbox_pop(mailbox).is_none());
+
+    let before = unsafe { (*h.terminal).flags.xt_checksum };
+    let mut s = stream::Stream::init(stream::Options::with_handler(h));
+    s.next_slice(b"hello");
+    // DECRQCRA over the whole screen, one cell, and with an id; then
+    // XTCHECKSUM with every bit set and with none.
+    s.next_slice(b"\x1b[1;1;1;1;24;80*y");
+    s.next_slice(b"\x1b[7;1;1;1;1;1*y");
+    s.next_slice(b"\x1b[31#y");
+    s.next_slice(b"\x1b[0#y");
+    s.next_slice(b"\x1b[#y");
+
+    assert!(
+        mailbox_pop(mailbox).is_none(),
+        "the default config must never answer DECRQCRA"
+    );
+    assert_eq!(
+        before, term.flags.xt_checksum,
+        "XTCHECKSUM is ignored while reporting is disabled"
+    );
+
+    s.handler.renderer_wakeup.deinit();
+    drop(s);
+    unsafe {
+        drop(Box::from_raw(state));
+        drop(Box::from_raw(mutex));
+        drop(Box::from_raw(mailbox));
+    }
+    term.deinit(Global.into());
+}
+
+// (`Config` has 200+ fields, so the field assignments stay.)
+#[allow(clippy::field_reassign_with_default)]
+#[test]
+fn xt_checksum_report_enabled_replies_with_the_rect_checksum() {
+    let (mut term, mailbox, mutex, state) = xt_checksum_fixture();
+    let mut h = handler_for(&raw mut *term, mailbox, state);
+
+    // `vt-xt-checksum-report = true` with esctest's `--xterm-checksum`
+    // extension (xterm's `checksumExtension: 23`).
+    let mut config = rustty_config::Config::default();
+    config.vt_xt_checksum_report = true;
+    config.vt_xt_checksum_extension = rustty_config::XtChecksumExtension {
+        negate: false,
+        attributes: false,
+        trim: false,
+        undrawn: false,
+        full: true,
+    };
+    let mut cfg = DerivedConfig::init(&config);
+    assert!(cfg.xt_checksum_report);
+    h.changeConfig(&mut cfg);
+    let configured = rustty_vt::xt_checksum::Flags::default()
+        .with_positive(true)
+        .with_no_attributes(true)
+        .with_no_trim(true)
+        .with_full(true);
+    assert_eq!(configured, cfg.xt_checksum_extension);
+    // `changeConfig` applied it to the terminal (and to its RIS default).
+    assert_eq!(configured, term.flags.xt_checksum);
+    assert_eq!(configured, term.default_xt_checksum);
+    assert!(matches!(
+        mailbox_pop(mailbox),
+        Some(Message::ColorSchemeReport { .. })
+    ));
+
+    let mut s = stream::Stream::init(stream::Options::with_handler(h));
+    // Row 1: wide characters; row 2: a ZWJ emoji cluster; row 3: a bold
+    // red cell.
+    s.next_slice("a橋a橋\r\n".as_bytes());
+    s.next_slice("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}x\r\n".as_bytes());
+    s.next_slice(b"\x1b[1;31mR\x1b[0m");
+
+    let req = rustty_vt::xt_checksum::Request {
+        id: 7,
+        top: 1,
+        left: 1,
+        bottom: 3,
+        right: 10,
+    };
+    let want = term.rect_xt_checksum(req);
+    s.next_slice(b"\x1b[7;1;1;1;3;10*y");
+    let msg = mailbox_pop(mailbox).expect("DECRQCRA is answered when reporting is on");
+    assert_eq!(
+        format!("\x1bP7!~{want:04X}\x1b\\").into_bytes(),
+        write_bytes(&msg)
+    );
+    assert!(mailbox_pop(mailbox).is_none(), "exactly one reply");
+
+    // XTCHECKSUM now takes effect (and so changes the calculation).
+    s.next_slice(b"\x1b[0#y");
+    assert_eq!(
+        rustty_vt::xt_checksum::Flags::default(),
+        term.flags.xt_checksum
+    );
+    let want = term.rect_xt_checksum(req);
+    s.next_slice(b"\x1b[7;1;1;1;3;10*y");
+    let msg = mailbox_pop(mailbox).expect("the second reply");
+    assert_eq!(
+        format!("\x1bP7!~{want:04X}\x1b\\").into_bytes(),
+        write_bytes(&msg)
+    );
+
+    s.handler.renderer_wakeup.deinit();
+    drop(s);
+    unsafe {
+        drop(Box::from_raw(state));
+        drop(Box::from_raw(mutex));
+        drop(Box::from_raw(mailbox));
+    }
+    term.deinit(Global.into());
 }

@@ -226,6 +226,8 @@ impl Default for Config {
             osc_color_report_format: OSCColorReportFormat::Bit16,
             vt_kam_allowed: false,
             vt_window_resize_allowed: false,
+            vt_xt_checksum_report: false,
+            vt_xt_checksum_extension: XtChecksumExtension::default(),
             custom_shader: RepeatablePath::default(),
             custom_shader_animation: CustomShaderAnimation::True,
             bell_features: BellFeatures::default(),
