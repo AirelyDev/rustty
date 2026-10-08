@@ -777,6 +777,7 @@ pub enum State {
     S77,
     S99,
     S104,
+    S105,
     S110,
     S111,
     S112,
@@ -1382,15 +1383,7 @@ impl Parser {
                     }
                 }
                 b'4' => self.state = State::S104,
-                _ => self.state = State::Invalid,
-            },
-
-            State::S104 => match c {
-                b';' => {
-                    if self.ensure_allocator() {
-                        self.capture_trailing(CaptureMode::Fixed)
-                    }
-                }
+                b'5' => self.state = State::S105,
                 _ => self.state = State::Invalid,
             },
 
@@ -1422,6 +1415,8 @@ impl Parser {
             | State::S18
             | State::S19
             | State::S21
+            | State::S104
+            | State::S105
             | State::S110
             | State::S111
             | State::S112
@@ -1543,17 +1538,36 @@ impl Parser {
         }
     }
 
-    /// End the sequence and return the command, if any. If the return value
-    /// is null, then no valid command was found. The optional terminator_ch
-    /// is the final character in the OSC sequence. This is used to determine
-    /// the response terminator.
+    /// End the sequence and return the command it contains, or null if it
+    /// isn't a valid command.
+    ///
+    /// `terminator_ch` is the byte that ended the sequence. Commands that
+    /// reply to the program end their reply the same way: BEL (0x07) gets
+    /// a BEL reply, and any other byte, or null, gets an ST reply.
+    ///
+    /// A program can also cancel a sequence partway through by sending CAN
+    /// or SUB instead of a terminator. Pass that byte as `terminator_ch`.
+    /// The sequence is then discarded and this returns null, whatever
+    /// command it contained. This matches xterm.
+    ///
+    /// ```zig
+    /// p.nextSlice("2;hello");
+    ///
+    /// // The program sent CAN instead of BEL, so the title never changes.
+    /// const cmd = p.end(std.ascii.control_code.can); // null
+    /// ```
     ///
     /// The returned pointer is only valid until the next call to the parser.
-    /// Callers should copy out any data they wish to retain across calls.
+    /// Copy out any data you need to keep.
     // PORT NOTE (parity tail S7-7): `?*Command` into `self.command` becomes
     // the command by value, borrowing `self` (see `Command`); "only valid
     // until the next call to the parser" is the borrow.
     pub fn end(&mut self, terminator_ch: Option<u8>) -> Option<Command<'_>> {
+        // std.ascii.control_code.can, std.ascii.control_code.sub
+        if matches!(terminator_ch, Some(0x18 | 0x1A)) {
+            return None;
+        }
+
         match self.state {
             State::Start => None,
 
@@ -1576,6 +1590,7 @@ impl Parser {
             | State::S18
             | State::S19
             | State::S104
+            | State::S105
             | State::S110
             | State::S111
             | State::S112
@@ -1677,6 +1692,36 @@ mod capture_tests {
             )],
             messages
         );
+    }
+
+    // test "Parser end with CAN or SUB cancels the command"
+    #[test]
+    fn parser_end_with_can_or_sub_cancels_the_command() {
+        let mut p: Parser = Parser::init(Some(crate::alloc::Global));
+
+        // A fixed capture (OSC 2) cancelled by CAN.
+        for ch in b"2;title" {
+            p.next(*ch);
+        }
+        assert!(p.end(Some(0x18)).is_none());
+
+        // An allocating capture (OSC 52) cancelled by SUB.
+        p.reset();
+        for ch in b"52;c;Zm9v" {
+            p.next(*ch);
+        }
+        assert!(p.end(Some(0x1A)).is_none());
+
+        // The parser still works normally after a cancel.
+        p.reset();
+        for ch in b"2;title" {
+            p.next(*ch);
+        }
+        let cmd = p.end(Some(0x07)).unwrap();
+        match cmd {
+            Command::ChangeWindowTitle(title) => assert_eq!(title, b"title"),
+            _ => panic!("expected change_window_title"),
+        }
     }
 
     // test "Parser allocating captures have a hard limit"

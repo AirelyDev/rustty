@@ -596,6 +596,52 @@ fn window_title_effect_with_empty_title() {
     t.deinit(Global);
 }
 
+// test "window_title not changed by cancelled OSC"
+#[test]
+fn window_title_not_changed_by_cancelled_osc() {
+    let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+    fn title_changed(_: &mut Handler) {
+        COUNTER.with(|c| c.set(c.get() + 1));
+    }
+
+    cap_reset();
+    let mut s = t.vt_stream();
+    s.handler.effects.title_changed = Some(title_changed);
+
+    s.next_slice(b"\x1b]2;before\x07");
+    assert_eq!(s.handler.term().get_title().unwrap(), b"before");
+    assert_eq!(1_usize, COUNTER.with(|c| c.get()));
+
+    // Cancelled with CAN and SUB, fed in one slice.
+    s.next_slice(b"\x1b]2;can\x18");
+    assert_eq!(s.handler.term().get_title().unwrap(), b"before");
+    assert_eq!(1_usize, COUNTER.with(|c| c.get()));
+    s.next_slice(b"\x1b]2;sub\x1a");
+    assert_eq!(s.handler.term().get_title().unwrap(), b"before");
+    assert_eq!(1_usize, COUNTER.with(|c| c.get()));
+
+    // Cancelled with CAN and SUB, fed one byte at a time.
+    for c in b"\x1b]2;can\x18" {
+        s.next(*c);
+    }
+    assert_eq!(s.handler.term().get_title().unwrap(), b"before");
+    assert_eq!(1_usize, COUNTER.with(|c| c.get()));
+    for c in b"\x1b]2;sub\x1a" {
+        s.next(*c);
+    }
+    assert_eq!(s.handler.term().get_title().unwrap(), b"before");
+    assert_eq!(1_usize, COUNTER.with(|c| c.get()));
+
+    // An OSC that ends normally after a cancel still takes effect.
+    s.next_slice(b"\x1b]2;after\x1b\\");
+    assert_eq!(s.handler.term().get_title().unwrap(), b"after");
+    assert_eq!(2_usize, COUNTER.with(|c| c.get()));
+
+    drop(s);
+    t.deinit(Global);
+}
+
 // S166-F3: `do_window_title` logs `log.warn("title length {d} exceeds max
 // length {d}, truncating", .{...})` (stream_terminal.zig:1471-1474) when
 // the OSC 2 title payload exceeds 1024 bytes.
