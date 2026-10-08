@@ -9,7 +9,27 @@ import json
 import re
 import sys
 
-ARM_RE = re.compile(r"^                ((?:'[^']*'(?:, '[^']*')*)|else)\s*=>")
+# A Zig char literal: one char or one backslash escape (`'\\'`, `'\''`, `'\x1b'`).
+_CHAR_LIT = r"'(?:\\(?:x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f]+\}|.)|[^'\\])'"
+ARM_RE = re.compile(r"^                ((?:" + _CHAR_LIT + r"(?:, " + _CHAR_LIT + r")*)|else)\s*=>")
+_ZIG_ESCAPES = {"n": "\n", "r": "\r", "t": "\t", "\\": "\\", "'": "'", '"': '"'}
+
+
+def zig_char(lit):
+    """The character a Zig char literal denotes: `'\\\\'` -> `\\`, `'\\''` -> `'`,
+    `'\\x1b'` -> ESC. The surface stores the decoded final, never the source
+    spelling (a `'\\\\'` arm used to land in the JSON as two backslashes)."""
+    body = lit[1:-1]
+    if not body.startswith("\\"):
+        return body
+    esc = body[1:]
+    if esc.startswith("x"):
+        return chr(int(esc[1:], 16))
+    if esc.startswith("u{"):
+        return chr(int(esc[2:-1], 16))
+    if esc in _ZIG_ESCAPES:
+        return _ZIG_ESCAPES[esc]
+    raise SystemExit(f"unknown Zig escape in char literal {lit!r}")
 
 
 def _brace_delta(line):
@@ -86,7 +106,7 @@ def dispatch_arms(lines, fn_header_re, switch_re):
                 k -= 1
             else:
                 break
-        finals = re.findall(r"'([^']*)'", label)
+        finals = [zig_char(lit) for lit in re.findall(_CHAR_LIT, label)]
         arms.append({
             "finals": finals if finals else ["else"],
             "comment": " | ".join(comments) if comments else None,

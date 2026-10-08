@@ -8,18 +8,46 @@
 # byte-for-byte) and ALSO keep stdout/stderr separately plus the exit code, so a
 # later reviewer can see exactly where each byte came from.
 #
-# Reproduce a single golden:
-#   /Users/gael/projects/rustty/.port/phase-0/examples-out/<dir>/zig-out/bin/<exe> \
-#     > /Users/gael/projects/rustty/.port/phase-0/corpora/cvt/<name>.golden 2>&1
+# Build the binaries first with .port/phase-0/build-examples.sh (the supported
+# method, and why the examples' own `zig build` is not used: see that script).
 #
-# NOTE: the binaries are prebuilt (see build-summary.md). This script only RUNS
-# them; it never touches the ghostty reference tree.
+# Paths (N525): the repository root is derived from this script's location, so
+# a worktree reads its own examples-out/ (git-ignored) and writes its own
+# corpora/cvt/; nothing outside this checkout is written.
+#
+# Reproduce a single golden (from the repository root):
+#   .port/phase-0/examples-out/<dir>/zig-out/bin/<exe> \
+#     > .port/phase-0/corpora/cvt/<name>.golden 2>&1
+#
+# c-vt-paste (N395): the reference draws a fresh OSC 5522 clipboard-read
+# password (`pw=<base64>`) on every run, so its output never repeats byte for
+# byte. The comparisons below mask exactly that token (the same `sed` as
+# `cvt_normalize` in .port/tools/gates/run_differential.sh, G4 leg B), and a
+# capture that equals the stored file under the mask keeps the stored bytes,
+# so a re-run does not churn the committed corpus.
+#
+# NOTE: this script only RUNS the prebuilt binaries; it never touches the
+# ghostty reference tree.
 
 set -u
 
-EX=/Users/gael/projects/rustty/.port/phase-0/examples-out
-OUT=/Users/gael/projects/rustty/.port/phase-0/corpora/cvt
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+EX="$ROOT/.port/phase-0/examples-out"
+OUT="$ROOT/.port/phase-0/corpora/cvt"
 mkdir -p "$OUT"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/run-cvt-corpora.XXXXXX")" || exit 3
+trap 'rm -rf "$TMP"' EXIT
+
+# The N395 mask (run_differential.sh `cvt_normalize`), file -> stdout.
+mask() { LC_ALL=C sed -E 's#(pw=)[A-Za-z0-9+/]+=*#\1<PW>#g' "$1"; }
+# Move a fresh capture into place unless the stored file equals it under the mask.
+store() { # store <fresh> <stored>
+  if [ -f "$2" ] && cmp -s <(mask "$1") <(mask "$2"); then
+    rm -f "$1"
+  else
+    mv "$1" "$2"
+  fi
+}
 
 # dir:exe pairs (exe basename under <dir>/zig-out/bin/)
 PAIRS=(
@@ -63,11 +91,14 @@ for p in "${PAIRS[@]}"; do
     continue
   fi
   # Combined golden (stdout+stderr, in arrival order) — the diff target.
-  "$bin" > "$OUT/$name.golden" 2>&1
+  "$bin" > "$TMP/$name.golden" 2>&1
   ec=$?
   # Separate streams for provenance.
-  "$bin" > "$OUT/$name.stdout" 2>"$OUT/$name.stderr"
+  "$bin" > "$TMP/$name.stdout" 2>"$TMP/$name.stderr"
   ec2=$?
+  for ext in golden stdout stderr; do
+    store "$TMP/$name.$ext" "$OUT/$name.$ext"
+  done
   comb=$(wc -c < "$OUT/$name.golden" | tr -d ' ')
   ob=$(wc -c < "$OUT/$name.stdout" | tr -d ' ')
   eb=$(wc -c < "$OUT/$name.stderr" | tr -d ' ')
@@ -79,15 +110,16 @@ for p in "${PAIRS[@]}"; do
   fi
 done
 
-# Determinism check: run twice, compare combined goldens via sha256.
+# Determinism check: run again, compare combined goldens via sha256 (N395 mask applied).
 echo ""
-echo "=== determinism re-run (sha256 of combined golden, run #2 vs stored) ==="
+echo "=== determinism re-run (sha256 of masked combined golden, run #2 vs stored) ==="
 for p in "${PAIRS[@]}"; do
   dir="${p%%:*}"; exe="${p##*:}"
   bin="$EX/$dir/zig-out/bin/$exe"
   [ -x "$bin" ] || continue
-  h1=$(shasum -a 256 "$OUT/$dir.golden" | awk '{print $1}')
-  h2=$("$bin" 2>&1 | shasum -a 256 | awk '{print $1}')
+  "$bin" > "$TMP/rerun" 2>&1
+  h1=$(mask "$OUT/$dir.golden" | shasum -a 256 | awk '{print $1}')
+  h2=$(mask "$TMP/rerun" | shasum -a 256 | awk '{print $1}')
   if [ "$h1" == "$h2" ]; then st="OK"; else st="MISMATCH"; fail=1; fi
   printf '%-26s %s %s\n' "$dir" "$st" "$h1"
 done

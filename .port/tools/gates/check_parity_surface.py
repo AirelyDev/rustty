@@ -32,6 +32,21 @@ in the owning crate's ported Rust as an identifier (snake/camel tolerant). This
 is a coverage floor, not a semantic check — the byte-exact behaviour is proven by
 G4 differential. For terminfo, when `infocmp rustty` is available the gate also
 diffs the compiled cap set against the surface (R2-terminfo-cap-parity).
+
+STRUCTURAL KINDS (N523, N524). A token search cannot prove these, so they are
+read from the Rust structure instead:
+  csi / esc / c0: the ids are the finals of `csi_handlers.arms` / `esc_handlers.arms`
+    (plus `else` when `has_else_unimplemented`) and the `c0_controls` names. An id
+    is covered iff it is a top-level arm pattern of the Rust dispatch match named in
+    DISPATCH_SPECS (`csi_dispatch`, `esc_dispatch`, `execute`), read by
+    `dispatch_arms`. They carry no test-reference arm (a final byte has no name a
+    test could reference; G4 proves the behaviour); their line says so.
+  osc: an id is covered iff the Rust `osc::Command` enum (OSC_ENUM_SPEC) has a
+    variant matching it under `_gatelib.name_candidates` (a common word such as
+    `unknown` elsewhere in the crate no longer counts). Its --require-tests arm is
+    unchanged.
+A dispatch fn, match, enum or arm pattern the matcher cannot read is BLOCKED
+(exit 3), never a silent pass.
 """
 import argparse
 import os
@@ -97,6 +112,19 @@ def surface_ids(surface):
     out["sgr"] = [str(a.get("name", a)) for a in surface.get("sgr_attributes", {}).get("attributes", [])]
     osc = surface.get("osc_handlers", {})
     out["osc"] = [str(k) for k in osc.get("command_kinds", [])] if isinstance(osc.get("command_kinds", []), list) else []
+    # N523: the CSI / ESC finals (each final of each top-level dispatch arm, in
+    # arm order, once; `else` for the fallback arm) and the C0 control names.
+    for kind, key in (("csi", "csi_handlers"), ("esc", "esc_handlers")):
+        sec = surface.get(key, {})
+        finals = []
+        for arm in sec.get("arms", []):
+            for f in arm.get("finals", []):
+                if f not in finals:
+                    finals.append(f)
+        if sec.get("has_else_unimplemented") and "else" not in finals:
+            finals.append("else")
+        out[kind] = finals
+    out["c0"] = [c["name"] for c in surface.get("c0_controls", {}).get("controls", [])]
     return out
 
 
@@ -190,6 +218,264 @@ def present(name, blob):
     return name in blob
 
 
+# ---------------------------------------------------------------------------
+# Structural kinds (N523 csi/esc/c0, N524 osc)
+# ---------------------------------------------------------------------------
+# A final byte is one character, so a token search proves nothing (`m` occurs
+# everywhere). These kinds are checked against the Rust dispatch STRUCTURE:
+# kind -> [(file relative to the repository root, fn name, match scrutinee)].
+# `csi_dispatch_final` (the parser fast path in the same file) has no switch
+# on the final: it forwards every final to `csi_dispatch`, so only
+# `csi_dispatch`'s match is read.
+DISPATCH_SPECS = {
+    "csi": [("crates/rustty-vt/src/stream/csi_dispatch.rs", "csi_dispatch", "input.final_")],
+    "esc": [("crates/rustty-vt/src/stream/dispatch.rs", "esc_dispatch", "action.final_")],
+    "c0": [("crates/rustty-vt/src/stream/dispatch.rs", "execute", "c0")],
+}
+# The osc kinds are the variants of this enum (file, enum name).
+OSC_ENUM_SPEC = ("crates/rustty-vt/src/osc/mod.rs", "Command")
+
+_PAT_TOKEN = re.compile(r"""
+    (?P<byte>b'(?:\\x[0-9A-Fa-f]{2}|\\.|[^'\\])')
+  | (?P<int>(?:0x[0-9A-Fa-f_]+|0o[0-7_]+|0b[01_]+|[0-9][0-9_]*)(?:u8|u16|u32|u64|usize|i32)?)
+  | (?P<range>\.\.=)
+  | (?P<bar>\|)
+  | (?P<path>[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)
+  | (?P<ws>\s+)
+""", re.X)
+_BYTE_ESCAPES = {"n": 0x0A, "r": 0x0D, "t": 0x09, "0": 0x00, "\\": 0x5C, "'": 0x27, '"': 0x22}
+
+
+def _line_of(text, offset):
+    return text.count("\n", 0, offset) + 1
+
+
+def _find_unique(clean, regex, what, rel, lo=0, hi=None):
+    hits = list(re.compile(regex).finditer(clean, lo, len(clean) if hi is None else hi))
+    if len(hits) != 1:
+        raise G.Blocked(f"{rel}: expected exactly one {what}, found {len(hits)} "
+                        "(the G9 structural matcher must be updated with the code)")
+    return hits[0]
+
+
+def dispatch_arms(text, rel, fn_name, scrutinee):
+    """THE structural matcher for G9's csi/esc/c0 kinds (N523).
+
+    Reads the Rust source `text` (of `rel`): locates `fn <fn_name>` (exactly
+    one), then inside its body `match <scrutinee> {` (exactly one), and returns
+    that match's TOP-LEVEL arms, in order, as dicts
+    {pattern, start, end, line}: `pattern` is the arm's pattern source (comments
+    removed, literals kept), `start`/`end` the arm's offsets (pattern start to
+    just past the arm and its comma). Arms of a match nested inside an arm body
+    (the per-final `match input.intermediates.len()` and so on) are not arms of
+    the dispatch and are skipped by construction. Structure is read on the
+    fully-stripped text (char literals such as `b'{'` blanked, so braces and
+    `|`/`,` inside them cannot desync it); the pattern text comes from the
+    strings-kept text (both strippers preserve offsets). Missing fn or match:
+    G.Blocked."""
+    clean, _ = G._strip_rust(text)
+    kept, _ = G._strip_rust(text, keep_strings=True)
+    fm = _find_unique(clean, r"\bfn\s+" + re.escape(fn_name) + r"\b", f"`fn {fn_name}`", rel)
+    fopen = clean.find("{", fm.end())
+    if fopen == -1:
+        raise G.Blocked(f"{rel}: `fn {fn_name}` has no body")
+    fend = G._find_balanced_block(clean, fopen)
+    scrut = r"\s*\.\s*".join(re.escape(p) for p in scrutinee.split("."))
+    mm = _find_unique(clean, r"\bmatch\s+" + scrut + r"\s*\{", f"`match {scrutinee}` in `fn {fn_name}`",
+                      rel, fopen, fend)
+    mopen = mm.end() - 1
+    mend = G._find_balanced_block(clean, mopen) - 1  # index of the closing `}`
+    arms = []
+    i = mopen + 1
+    while True:
+        while i < mend and clean[i].isspace():
+            i += 1
+        if i >= mend:
+            break
+        # Pattern: up to `=>` at depth 0.
+        j, depth = i, 0
+        while j < mend:
+            ch = clean[j]
+            if ch in "([{":
+                depth += 1
+            elif ch in ")]}":
+                depth -= 1
+            elif depth == 0 and clean.startswith("=>", j):
+                break
+            j += 1
+        if j >= mend:
+            raise G.Blocked(f"{rel}:{_line_of(text, i)}: unparsable arm in `match {scrutinee}`")
+        pattern = kept[i:j]
+        # Body: an expression ends at `,` at depth 0; a block-like body ends at
+        # its closing `}` unless `.`/`?`/`else`/`as` continues the expression.
+        k, depth = j + 2, 0
+        while k < mend:
+            ch = clean[k]
+            if ch in "([{":
+                depth += 1
+            elif ch in ")]}":
+                depth -= 1
+                if depth == 0 and ch == "}":
+                    m = k + 1
+                    while m < mend and clean[m].isspace():
+                        m += 1
+                    if m < mend and clean[m] == ",":
+                        k = m + 1
+                        break
+                    if not (clean[m:m + 1] in (".", "?") or re.match(r"(else|as)\b", clean[m:])):
+                        k += 1
+                        break
+            elif depth == 0 and ch == ",":
+                k += 1
+                break
+            k += 1
+        arms.append({"pattern": pattern, "start": i, "end": k, "line": _line_of(text, i)})
+        i = k
+    return arms
+
+
+def _byte_value(tok):
+    body = tok[2:-1]
+    if not body.startswith("\\"):
+        return ord(body)
+    if body[1] == "x":
+        return int(body[2:], 16)
+    if body[1:] in _BYTE_ESCAPES:
+        return _BYTE_ESCAPES[body[1:]]
+    raise ValueError(tok)
+
+
+def pattern_values(pattern):
+    """Alternatives of one arm pattern: a list of ints (byte/integer literals,
+    inclusive ranges expanded), path strings (`ansi::C0::NUL`) and "else" (`_`).
+    A guard (`if ...`) is ignored, so a guarded arm counts as handling its
+    final(s). A binding catch-all (`other =>`) reads as a path: for c0 it would
+    add its binding name as a control name (matching no surface id), and for
+    csi/esc it is BLOCKED as an unresolvable name. Anything else raises
+    ValueError."""
+    toks = []
+    pos = 0
+    while pos < len(pattern):
+        m = _PAT_TOKEN.match(pattern, pos)
+        if not m:
+            raise ValueError(pattern)
+        pos = m.end()
+        kind = m.lastgroup
+        if kind == "ws":
+            continue
+        if kind == "path" and m.group() == "if":
+            break
+        toks.append((kind, m.group()))
+    out = []
+    alt = []
+    for kind, tok in toks + [("bar", "|")]:
+        if kind != "bar":
+            alt.append((kind, tok))
+            continue
+        if len(alt) == 1:
+            k, t = alt[0]
+            if k == "byte":
+                out.append(_byte_value(t))
+            elif k == "int":
+                out.append(int(re.sub(r"(u8|u16|u32|u64|usize|i32)$", "", t).replace("_", ""), 0))
+            elif k == "path" and t == "_":
+                out.append("else")
+            elif k == "path":
+                out.append(t)
+            else:
+                raise ValueError(pattern)
+        elif len(alt) == 3 and alt[1][0] == "range" and {alt[0][0], alt[2][0]} <= {"byte", "int"}:
+            lo, hi = (pattern_values(alt[0][1])[0], pattern_values(alt[2][1])[0])
+            out.extend(range(lo, hi + 1))
+        elif alt or out:
+            raise ValueError(pattern)
+        alt = []
+    if not out:
+        raise ValueError(pattern)
+    return out
+
+
+def structural_finals(kind, surface):
+    """The set of ids of `kind` (csi/esc: final characters and "else"; c0:
+    control names) that the Rust dispatch handles, per DISPATCH_SPECS, read by
+    dispatch_arms. A pattern the matcher cannot read is G.Blocked, never a
+    silent miss: extend pattern_values to the spelling the code uses."""
+    c0_names = {}
+    if kind == "c0":
+        for c in surface.get("c0_controls", {}).get("controls", []):
+            c0_names[int(c["value"], 16)] = c["name"]
+    handled = set()
+    for rel, fn_name, scrutinee in DISPATCH_SPECS[kind]:
+        path = os.path.join(G.RUSTTY_ROOT, rel)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError as e:
+            raise G.Blocked(f"{rel}: cannot read ({e})")
+        for arm in dispatch_arms(text, rel, fn_name, scrutinee):
+            try:
+                values = pattern_values(arm["pattern"])
+            except ValueError:
+                raise G.Blocked(f"{rel}:{arm['line']}: arm pattern {arm['pattern'].strip()!r} "
+                                f"is not a spelling the G9 matcher reads for {kind}")
+            for v in values:
+                if v == "else":
+                    handled.add("else")
+                elif isinstance(v, int):
+                    handled.add(c0_names.get(v, f"0x{v:02X}") if kind == "c0" else chr(v))
+                elif kind == "c0":
+                    handled.add(v.rsplit("::", 1)[-1])
+                else:
+                    raise G.Blocked(f"{rel}:{arm['line']}: arm pattern {v!r} is a named "
+                                    f"constant the G9 matcher cannot resolve for {kind}")
+    return handled
+
+
+def osc_enum_variants():
+    """N524: the variant names of the Rust `osc::Command` enum
+    (OSC_ENUM_SPEC), read from the enum body: each top-level comma-separated
+    item's leading identifier, attributes and comments skipped."""
+    rel, enum_name = OSC_ENUM_SPEC
+    try:
+        with open(os.path.join(G.RUSTTY_ROOT, rel), encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError as e:
+        raise G.Blocked(f"{rel}: cannot read ({e})")
+    clean, _ = G._strip_rust(text)
+    em = _find_unique(clean, r"\benum\s+" + re.escape(enum_name) + r"\b", f"`enum {enum_name}`", rel)
+    eopen = clean.find("{", em.end())
+    eend = G._find_balanced_block(clean, eopen) - 1
+    variants = []
+    item_start = eopen + 1
+    depth = 0
+    for i in range(eopen + 1, eend + 1):
+        ch = clean[i]
+        if ch in "([{<":
+            depth += 1
+        elif ch in ")]}>" and i < eend:
+            depth -= 1
+        if (ch == "," and depth == 0) or i == eend:
+            item = re.sub(r"#\s*\[[^\]]*\]", " ", clean[item_start:i])
+            m = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)", item)
+            if m:
+                variants.append(m.group(1))
+            item_start = i + 1
+    if not variants:
+        raise G.Blocked(f"{rel}: `enum {enum_name}` has no variants the G9 matcher can read")
+    return variants
+
+
+def osc_variant_for(kind_id, variants):
+    """The osc::Command variant that ports kind `kind_id`: the one whose name
+    matches it under G1's naming convention (_gatelib.name_candidates, either
+    direction), or None. An osc kind is covered iff this is not None."""
+    cands = G.name_candidates(kind_id)
+    for v in variants:
+        if v in cands or kind_id in G.name_candidates(v):
+            return v
+    return None
+
+
 def check_terminfo_infocmp(surface):
     """If `infocmp <PORT_NAME>` is available, diff its cap set against the
     surface (R2-terminfo-cap-parity). Returns (available, missing_caps_list, note)."""
@@ -249,14 +535,37 @@ def run(args):
             print(f"{kind:<10}: (no ids in parity-surface.json)")
             continue
         owners_done = all(G.is_claimed_done(o) for o in owners)
-        blob = crate_token_corpus(owners)
-        test_blob = crate_test_corpus(owners) if require_tests else ""
+        # Structural kinds (N523, N524): presence is read from the dispatch
+        # match arms / the osc::Command enum, never from a token search.
+        handled = variants = None
+        try:
+            if kind in DISPATCH_SPECS:
+                handled = structural_finals(kind, surface)
+            elif kind == "osc":
+                variants = osc_enum_variants()
+        except G.Blocked as b:
+            G.emit(G.BLOCKED_STATE, str(b))
+            return 3
+        blob = crate_token_corpus(owners) if handled is None and variants is None else ""
+        # A final byte has no name a test could reference, so the csi/esc/c0
+        # kinds carry no test-reference arm (stated on their line, not
+        # skipped silently); their behaviour is G4's differential.
+        kind_tests = require_tests and handled is None
+        test_blob = crate_test_corpus(owners) if kind_tests else ""
 
         uncovered = []
         covered = 0
         for name in kind_ids:
-            is_present = present(name, blob)
-            is_tested = (not require_tests) or present(name, test_blob)
+            if handled is not None:
+                is_present = name in handled
+            elif variants is not None:
+                variant = osc_variant_for(name, variants)
+                is_present = variant is not None
+            else:
+                is_present = present(name, blob)
+            # The --require-tests arm is unchanged (token in a #[test] body);
+            # only presence is structural (N524).
+            is_tested = (not kind_tests) or present(name, test_blob)
             if is_present and is_tested:
                 covered += 1
             else:
@@ -275,8 +584,13 @@ def run(args):
             red = True
 
         state = "RED" if kind_red else ("done" if owners_done else "progress")
+        how = ""
+        if handled is not None:
+            how = "  [structural: dispatch match arms; test-reference n/a]"
+        elif variants is not None:
+            how = "  [structural: osc::Command variants]"
         print(f"{kind:<10}: covered {covered}/{len(kind_ids)}  owners={','.join(owners)} "
-              f"({'done' if owners_done else 'stub'})  -> {state}")
+              f"({'done' if owners_done else 'stub'})  -> {state}{how}")
         if kind_red:
             for nm in uncovered[:40]:
                 print(f"    UNCOVERED {kind}: {nm}")
@@ -425,9 +739,204 @@ def self_test():
     print(f"[h] relocation path missing -> exit {r.returncode} (expect 3)")
     ok &= (r.returncode == 3 and "BLOCKED" in r.stdout)
 
+    ok &= _self_test_structural(tmp, gates, inv, here, surface, script)
+
     shutil.rmtree(tmp, ignore_errors=True)
     print("SELF-TEST:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
+
+
+def _self_test_structural(tmp, gates, inv, here, surface, script):
+    """Arms (i)-(q): the structural kinds (N523 csi/esc/c0, N524 osc) on COPIES
+    of the REAL Rust dispatch files and on an osc enum fixture. Each negative
+    control removes one arm (or one variant) and must turn exactly that id RED.
+    Where the removed final's token still occurs elsewhere in the file (arm j:
+    `b'm'` in `csi_dispatch_final`; arm m and m-real: the kind's word), the arm
+    checks it, so a token match could not have caught the removal; arms k and l
+    have no such occurrence and print `n/a` (no claim). Arm m-real runs the
+    variant reader on a copy of the REAL osc/mod.rs."""
+    import json
+
+    ok = True
+    real_root = os.path.abspath(os.path.join(here, "..", "..", ".."))
+    # Relocations off: the synthetic tree carries none of the real ones.
+    G.selftest_install_gatelib(gates, {})
+    vt_src = os.path.join(tmp, "crates", "rustty-vt", "src")
+    os.makedirs(os.path.join(vt_src, "stream"))
+    os.makedirs(os.path.join(vt_src, "osc"))
+    with open(os.path.join(vt_src, "lib.rs"), "w") as fh:
+        fh.write("//! vt\n//! PORT STATUS: done\n")
+    copies = {}
+    for spec in [s for k in DISPATCH_SPECS for s in DISPATCH_SPECS[k]]:
+        rel = spec[0]
+        with open(os.path.join(real_root, rel), encoding="utf-8") as fh:
+            copies[rel] = fh.read()
+
+    def write_tree(files):
+        for rel, text in files.items():
+            with open(os.path.join(tmp, rel), "w", encoding="utf-8") as fh:
+                fh.write(text)
+
+    osc_rel = OSC_ENUM_SPEC[0]
+    osc_enum = (
+        "/// the command\n#[derive(Debug)]\npub enum Command<'p> {\n"
+        "    /// zero value\n    Invalid,\n"
+        "    Unknown { data: &'p [u8] },\n"
+        "    HyperlinkEnd,\n    ChangeWindowTitle(&'p [u8]),\n}\n"
+        "// unknown hyperlink_end program_status: words only, never variants\n"
+        "pub fn f() -> &'static str { \"unknown program_status\" }\n"
+        "pub const UNKNOWN_PROGRAM_STATUS: u8 = 0; fn unknown() {}\n"
+    )
+    sf = dict(surface)
+    sf["csi_handlers"] = {"has_else_unimplemented": True,
+                          "arms": [{"finals": ["A", "k"]}, {"finals": ["H", "f"]},
+                                   {"finals": ["m"]}, {"finals": ["else"]}]}
+    sf["esc_handlers"] = {"has_else_unimplemented": True,
+                          "arms": [{"finals": ["7"]}, {"finals": ["\\"]}, {"finals": ["B"]}]}
+    sf["c0_controls"] = {"controls": [{"name": "NUL", "value": "0x00"},
+                                      {"name": "BEL", "value": "0x07"},
+                                      {"name": "LF", "value": "0x0A"}]}
+    sf["osc_handlers"] = {"command_kinds": ["invalid", "unknown", "hyperlink_end",
+                                            "change_window_title"]}
+    with open(os.path.join(inv, "parity-surface.json"), "w") as fh:
+        json.dump(sf, fh)
+
+    # Default mode with the owner crate claimed done: an uncovered id is RED.
+    def kind_run(kind):
+        return subprocess.run([sys.executable, script, "--kind", kind],
+                              capture_output=True, text=True)
+
+    def uncovered(r, kind):
+        return sorted(l.split(f"UNCOVERED {kind}: ", 1)[1] for l in r.stdout.splitlines()
+                      if f"UNCOVERED {kind}: " in l)
+
+    # (i) the unmodified copies: every fixture id is covered => GREEN.
+    write_tree(copies)
+    write_tree({osc_rel: osc_enum})
+    rs = {k: kind_run(k) for k in ("csi", "esc", "c0", "osc")}
+    print("[i] real csi/esc/c0 copies + osc fixture -> exit "
+          + "/".join(str(rs[k].returncode) for k in rs) + " (expect 0/0/0/0)")
+    ok &= all(r.returncode == 0 for r in rs.values())
+
+    def drop_arm(rel, fn_name, scrutinee, kind, pattern):
+        text = copies[rel]
+        arms = dispatch_arms(text, rel, fn_name, scrutinee)
+        hit = [a for a in arms if a["pattern"].strip() == pattern]
+        if len(hit) != 1:
+            return None
+        a = hit[0]
+        return text[:a["start"]] + text[a["end"]:]
+
+    # (j)/(k)/(l): one arm removed from a copy of the real file => that id RED.
+    for tag, kind, pattern, want, token in (
+            ("j", "csi", "b'm'", "m", "b'm'"),
+            ("k", "esc", "b'\\\\'", "\\", None),
+            ("l", "c0", "ansi::C0::BEL", "BEL", None)):
+        rel, fn_name, scrutinee = DISPATCH_SPECS[kind][0]
+        mutated = drop_arm(rel, fn_name, scrutinee, kind, pattern)
+        if mutated is None:
+            print(f"[{tag}] could not locate the {pattern} arm in {rel} (expect one)")
+            ok = False
+            continue
+        write_tree({rel: mutated})
+        r = kind_run(kind)
+        got = uncovered(r, kind)
+        # Only a checked claim prints True/False; with no token to check: n/a.
+        still = "n/a" if token is None else (token in mutated)
+        print(f"[{tag}] {kind} copy without the {pattern} arm -> exit {r.returncode}, "
+              f"UNCOVERED {got} (expect non-zero, [{want!r}]); token kept elsewhere: {still}")
+        ok &= (r.returncode == 1 and got == [want] and still is not False)
+        write_tree({rel: copies[rel]})
+
+    # (m) osc: an enum body without `Unknown` => RED on `unknown`, although the
+    #     word `unknown` stays in the file (comment, string, fn and const names).
+    write_tree({osc_rel: osc_enum.replace("    Unknown { data: &'p [u8] },\n", "")})
+    r = kind_run("osc")
+    got = uncovered(r, "osc")
+    print(f"[m] osc enum without Unknown -> exit {r.returncode}, UNCOVERED {got} "
+          f"(expect non-zero, ['unknown'])")
+    ok &= (r.returncode == 1 and got == ["unknown"])
+    write_tree({osc_rel: osc_enum})
+
+    # (m-real) the variant reader on a copy of the REAL osc/mod.rs (its
+    #     lifetimes, doc comments, attributes, tuple and struct variants), with
+    #     the real surface's osc kinds: unmodified -> the real gaps only (not
+    #     pinned here, so the arm survives the W4 ports; `hyperlink_end` must
+    #     be covered); the unit variant `HyperlinkEnd` dropped -> exactly
+    #     `hyperlink_end` added to the UNCOVERED set,
+    #     although `HyperlinkEnd` stays in the file (Command::HyperlinkEnd uses).
+    with open(os.path.join(real_root, osc_rel), encoding="utf-8") as fh:
+        real_osc = fh.read()
+    with open(os.path.join(real_root, ".port", "phase-0", "inventory", "parity-surface.json"),
+              encoding="utf-8") as fh:
+        real_kinds = json.load(fh)["osc_handlers"]["command_kinds"]
+    sf_real = dict(sf)
+    sf_real["osc_handlers"] = {"command_kinds": real_kinds}
+    with open(os.path.join(inv, "parity-surface.json"), "w") as fh:
+        json.dump(sf_real, fh)
+    write_tree({osc_rel: real_osc})
+    r = kind_run("osc")
+    base = uncovered(r, "osc")
+    enum_at = real_osc.find("pub enum Command<")
+    enum_end = real_osc.find("\n}\n", enum_at)
+    drop_at = real_osc.find("\n    HyperlinkEnd,\n", enum_at)
+    if enum_at == -1 or not (enum_at < drop_at < enum_end):
+        print("[m-real] could not locate `HyperlinkEnd,` inside the real enum Command (expect one)")
+        ok = False
+    else:
+        mutated = real_osc[:drop_at] + real_osc[drop_at + len("\n    HyperlinkEnd,"):]
+        write_tree({osc_rel: mutated})
+        r2 = kind_run("osc")
+        got = uncovered(r2, "osc")
+        still = "HyperlinkEnd" in mutated
+        print(f"[m-real] real osc/mod.rs: UNCOVERED {base} (the real gaps; expect no 'hyperlink_end'); "
+              f"without HyperlinkEnd -> exit {r2.returncode}, UNCOVERED {got} (expect non-zero, "
+              f"+ 'hyperlink_end'); HyperlinkEnd kept elsewhere: {still}")
+        ok &= ("hyperlink_end" not in base and r2.returncode == 1
+               and got == sorted(base + ["hyperlink_end"]) and still)
+    with open(os.path.join(inv, "parity-surface.json"), "w") as fh:
+        json.dump(sf, fh)
+    write_tree({osc_rel: osc_enum})
+
+    # (n) a dispatch fn that cannot be found => BLOCKED (never a silent pass).
+    rel, fn_name, _ = DISPATCH_SPECS["esc"][0]
+    write_tree({rel: copies[rel].replace(f"fn {fn_name}(", "fn gone_dispatch(")})
+    r = kind_run("esc")
+    print(f"[n] esc dispatch fn renamed -> exit {r.returncode} (expect 3)")
+    ok &= (r.returncode == 3 and "BLOCKED" in r.stdout)
+    write_tree({rel: copies[rel]})
+
+    # (o) an arm pattern the matcher cannot read (a named const) => BLOCKED.
+    rel, fn_name, scrutinee = DISPATCH_SPECS["csi"][0]
+    write_tree({rel: copies[rel].replace("b'm' =>", "FINAL_M =>", 1)})
+    r = kind_run("csi")
+    print(f"[o] csi arm spelled as a named const -> exit {r.returncode} (expect 3)")
+    ok &= (r.returncode == 3 and "FINAL_M" in r.stdout)
+    write_tree({rel: copies[rel]})
+
+    # (p) no `enum Command` in the osc file => BLOCKED.
+    write_tree({osc_rel: osc_enum.replace("enum Command", "enum Other")})
+    r = kind_run("osc")
+    print(f"[p] osc enum Command missing -> exit {r.returncode} (expect 3)")
+    ok &= (r.returncode == 3 and "BLOCKED" in r.stdout)
+    write_tree({osc_rel: osc_enum})
+
+    # (q) a nested `match` on intermediates inside an arm does not count: the
+    #     `b'D'` csi arm holds `0 =>`, `1 =>` and `_ =>` sub-arms; dropping the
+    #     whole top-level `_ =>` arm must make `else` RED.
+    mutated = drop_arm(rel, fn_name, scrutinee, "csi", "_")
+    if mutated is None:
+        print("[q] could not locate the top-level _ arm (expect one)")
+        ok = False
+    else:
+        write_tree({rel: mutated})
+        r = kind_run("csi")
+        got = uncovered(r, "csi")
+        print(f"[q] csi copy without the top-level _ arm -> exit {r.returncode}, "
+              f"UNCOVERED {got} (expect non-zero, ['else'])")
+        ok &= (r.returncode == 1 and got == ["else"])
+        write_tree({rel: copies[rel]})
+    return ok
 
 
 def main():

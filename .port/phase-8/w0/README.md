@@ -77,7 +77,7 @@ Other sections (not G9 ids; G9's `csi`/`esc`/`c0` kinds read nothing, see F2):
   (`:2125`) was CSI `n` (DSR); the new one is ESC `n` LS2 (`:3037`). **Artifacts (expected); no
   real loss.** APPEAR: the real `escDispatch` arms `B A 0 7 8 D E H M N O V W Z c o ~ } | = > \`
   and `else`. (The `\` final is stored in the Zig-source spelling `'\\'`, i.e. the JSON string
-  `"\\\\"`; cosmetic.)
+  `"\\\\"`; cosmetic. Fixed in P8-W0 T5, N523: the generator decodes the literal and the JSON holds `"\\"`.)
 
 ## Findings
 
@@ -94,17 +94,21 @@ Other sections (not G9 ids; G9's `csi`/`esc`/`c0` kinds read nothing, see F2):
   rebuilt `zig-out/include` and `zig-out/lib/libghostty-vt.a` (the frameworks
   `build_ref_driver.sh` links), run twice (golden = stdout+stderr combined, plus stdout, stderr,
   exit), written into this worktree's `corpora/cvt/`. All 23 built and exited 0. The scripts
-  were not changed (outside this task).
+  were not changed (outside this task). **→ N525** (P8-W0 T5): both scripts now run from any checkout;
+  the `zig build` failure is oracle-side (upstream `d65cb5128` links the Darwin dylib with Apple's linker, so
+  no `ghostty-vt` artifact is registered); `build-examples.sh` implements the clang method above.
 - **F2 — G9 does not check CSI or ESC finals.** `check_parity_surface.py` registers `csi`, `esc`
   and `c0` owner kinds, but `surface_ids` never reads `csi_handlers`, `esc_handlers` or the C0
   list, so they print "(no ids in parity-surface.json)". The 13 + `y` + `}` CSI finals the old
   generator hid, and the 23 real ESC arms, cannot turn G9 red; the brief's "G9 RED … on the CSI
   finals the old generator hid" does not happen. Their coverage is unchecked by any gate today.
-  (A candidate N for T4/R4-F; not fixed here.)
+  (A candidate N for T4/R4-F; not fixed here.) **→ N523** (P8-W0 T5): G9 reads the Rust dispatch match
+  arms; CSI `y` is the one real gap (P8-W3 T1).
 - **F3 — G9 counts the OSC kind `unknown` as covered although it is not ported.** `present()`
   accepts any whole-word match of an id variant in the owner crate's token corpus, and the word
   `unknown` occurs throughout `rustty-vt`. The id closes with the unknown-OSC port (P8-W4); until
-  then G9 under-reports by one. Same class as any common-word id.
+  then G9 under-reports by one. Same class as any common-word id. **→ N524** (P8-W0 T5): osc kinds are read
+  from the `osc::Command` variants; `unknown` and `program_status` are UNCOVERED (P8-W4 T2, T3).
 
 No other gate is RED or BLOCKED beyond R4 §5's arrival list.
 
@@ -151,3 +155,18 @@ After the T4 records (`*-after-t4.txt`):
 Not applied mechanically, on purpose: Appendix A's UD250 `OpenGL.zig:312` and UD343 `test.yml` anchors are
 history anchors (20abdb50a code that no longer exists), UD205's "began at :1557 there" is a 20abdb50a anchor,
 and UD180/UD181's "first cited as" corrections are history; those were kept.
+
+## P8-W0 T5: gate repair (N523, N524, N525)
+
+G9 after the repair (`g9-after-gate-repair-at-a60e9e2a5.txt`, with its `--self-test`, PASS):
+
+| kind | before (T3, regenerated surface) | after T5 | UNCOVERED, owner |
+|---|---|---|---|
+| config | 216/218 RED | 216/218 RED | `vt-xt-checksum-report`, `vt-xt-checksum-extension`: P8-W3 T2 |
+| osc | 28/29 RED (`unknown` read covered) | 27/29 RED, structural | `unknown`: P8-W4 T2; `program_status`: P8-W4 T3 |
+| csi | no ids | 42/43 RED, structural | `y` (DECRQCRA/XTCHECKSUM): P8-W3 T1 |
+| esc | no ids | 24/24 | none |
+| c0 | no ids | 13/13 | none |
+| keybind, cli, terminfo, modes, sgr | covered | unchanged | none |
+
+Total 772/777 (was 694/697). No CSI, ESC or C0 final was a spelling miss of the matcher; `y` is a real gap.

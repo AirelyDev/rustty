@@ -4536,7 +4536,7 @@
       },
       {
         "finals": [
-          "\\\\"
+          "\\"
         ],
         "comment": "Sets ST (string terminator). We don't have to do anything | because our parser always accepts ST.",
         "line": 3126

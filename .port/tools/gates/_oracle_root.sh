@@ -171,6 +171,7 @@ _RUSTTY_ORACLE_CONSUMERS=(
   ".port/tools/cvt-parity.sh"
   ".port/tools/restore_zig_deps.sh"
   ".port/tools/wasm-parity.mjs"
+  ".port/phase-0/build-examples.sh"
 )
 
 _rustty_oracle_self_test() {
@@ -599,13 +600,15 @@ _rustty_oracle_self_test() {
     done
   }
   local spec eol_spec=".port/tools/gates/check_eol_fidelity.sh ORACLE 0 12 1"
-  # The N483 resolver users (P7-W12 T5 fix round 1). 10s proves each goes RED
-  # with a plain oracle read added.
+  # The N483 resolver users (P7-W12 T5 fix round 1), and the c-vt examples
+  # builder (N525, P8-W0 T5). 10s proves each goes RED with a plain oracle read
+  # added.
   local new_sh_specs=(
     ".port/tools/gates/check_symbol_manifest.sh ORACLE_TREE 0 0 1"
     ".port/tools/gates/check_rustty_h_abi.sh ORACLE_TREE 0 0 1"
     ".port/tools/cvt-parity.sh ORACLE 0 0 1"
     ".port/tools/restore_zig_deps.sh ORACLE_DIR 0 0 1"
+    ".port/phase-0/build-examples.sh GHOSTTY 0 0 1"
   )
   local wasm_node_spec=(GHOSTTY 0 0)
   for spec in \
