@@ -246,14 +246,6 @@ typedef enum {
 } ColorTag;
 
 /**
- * C: RusttyOscTerminator (R2)
- */
-typedef enum {
-    TERMINATOR_TERMINATOR_ST = 0,
-    TERMINATOR_TERMINATOR_BEL = 1,
-} Terminator;
-
-/**
  * C: GhosttySnapshotDecoderData -> RusttySnapshotDecoderData (R2)
  *
  * Data keys select typed values exposed by the decoder getter APIs.
@@ -636,14 +628,13 @@ typedef struct {
 typedef OscParserWrapper *Parser;
 
 /**
- * An OSC sequence whose number is not implemented, as C sees it.
- *
- * C: RusttyTerminalUnknownOscSequence (R2), the terminal's alias of this type
+ * The C ABI struct of `Attribute.Unknown`.
  */
 typedef struct {
-    bool truncated;
-    LibString content;
-    Terminator terminator;
+    const uint16_t *full_ptr;
+    uintptr_t full_len;
+    const uint16_t *partial_ptr;
+    uintptr_t partial_len;
 } UnknownC;
 
 /**

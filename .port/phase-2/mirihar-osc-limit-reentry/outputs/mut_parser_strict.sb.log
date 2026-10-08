@@ -1,0 +1,64 @@
+warning: integer-to-pointer cast
+   --> src/main.rs:122:19
+    |
+122 |     let exposed = std::ptr::with_exposed_provenance_mut::<Wrapper>(addr);
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ integer-to-pointer cast
+    |
+    = help: this program is using integer-to-pointer casts or (equivalently) `ptr::with_exposed_provenance`, which means that Miri might miss pointer bugs in this program
+    = help: see https://doc.rust-lang.org/nightly/std/ptr/fn.with_exposed_provenance.html for more details on that operation
+    = help: to ensure that Miri does not miss bugs in your program, use Strict Provenance APIs (https://doc.rust-lang.org/nightly/std/ptr/index.html#strict-provenance, https://crates.io/crates/sptr) instead
+    = help: you can then set `MIRIFLAGS=-Zmiri-strict-provenance` to ensure you are not relying on `with_exposed_provenance` semantics
+    = help: alternatively, `MIRIFLAGS=-Zmiri-permissive-provenance` disables this warning
+    = note: stack backtrace:
+            0: trampoline
+                at src/main.rs:122:19: 122:73
+            1: next_slice_raw
+                at src/main.rs:151:9: 151:46
+            2: run
+                at src/main.rs:193:9: 193:50
+            3: main
+                at src/main.rs:205:32: 205:73
+
+error: Undefined Behavior: not granting access to tag <1933> because that would remove [SharedReadOnly for <1979>] which is strongly protected
+   --> src/main.rs:107:41
+    |
+107 |                 let p: &mut OscParser = &mut (*w).stream.parser.osc_parser;
+    |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Undefined Behavior occurred here
+    |
+    = help: this indicates a potential bug in the program: it performed an invalid operation, but the Stacked Borrows rules it violated are still experimental
+    = help: see https://github.com/rust-lang/unsafe-code-guidelines/blob/master/wip/stacked-borrows.md for further information
+help: <1933> was created by a SharedReadWrite retag at offsets [0x0..0x68]
+   --> src/main.rs:167:27
+    |
+167 |       let w: *mut Wrapper = Box::into_raw(Box::new(Wrapper {
+    |  ___________________________^
+168 | |         stream: Stream {
+169 | |             handler: Handler {
+170 | |                 apc_unknown_max_bytes: 8,
+...   |
+186 | |         seen: Vec::new(),
+187 | |     }));
+    | |_______^
+help: <1979> is this argument
+   --> src/main.rs:118:38
+    |
+118 | fn trampoline(handler: &mut Handler, content: &[u8]) {
+    |                                      ^^^^^^^
+    = note: stack backtrace:
+            0: set_unknown_max_bytes
+                at src/main.rs:107:41: 107:75
+            1: on_unknown
+                at src/main.rs:159:9: 159:36
+            2: trampoline
+                at src/main.rs:142:9: 142:18
+            3: next_slice_raw
+                at src/main.rs:151:9: 151:46
+            4: run
+                at src/main.rs:193:9: 193:50
+            5: main
+                at src/main.rs:205:32: 205:73
+
+note: some details are omitted, run with `MIRIFLAGS=-Zmiri-backtrace=full` for a verbose backtrace
+
+error: aborting due to 1 previous error; 1 warning emitted
+

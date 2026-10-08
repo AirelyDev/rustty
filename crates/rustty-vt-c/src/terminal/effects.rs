@@ -464,7 +464,12 @@ pub struct UnknownStringSequence {
 ///
 /// C: GhosttyTerminalUnknownOscSequence -> RusttyTerminalUnknownOscSequence (R2)
 // pub const UnknownOscSequence = osc.Command.Unknown.C;
-pub type UnknownOscSequence = crate::osc::UnknownC;
+//
+// PORT NOTE (N551): a re-export, not a `pub type` alias, so cbindgen emits one
+// `UnknownOscSequence` struct; the projection's Rust name is the C name's
+// suffix so it cannot collide with another vt-c `#[repr(C)]` type (it was
+// `UnknownC`, which replaced the SGR `UnknownC` in `include/rustty.h`).
+pub use crate::osc::UnknownOscSequence;
 
 /// C: GhosttyTerminalUnknownSequenceTag -> RusttyTerminalUnknownSequenceTag (R2)
 /// — checked by the A5 enum-discriminant arm.

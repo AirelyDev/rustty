@@ -126,16 +126,17 @@ const _: () = assert!(std::mem::size_of::<Terminator>() == std::mem::size_of::<c
 //
 // PORT NOTE: the reference nests this in `osc.Command.Unknown` (rustty-vt);
 // the C projection lives in the C API crate (R3), so `Unknown.C` and its
-// `cval()` are here.
+// `cval()` are here, named after the C type (`UnknownOscSequence`; N551: the
+// generic `UnknownC` collided with the SGR projection in cbindgen's output).
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct UnknownC {
+pub struct UnknownOscSequence {
     pub truncated: bool,
     pub content: LibString,
     pub terminator: Terminator,
 }
 
-impl UnknownC {
+impl UnknownOscSequence {
     // pub fn cval(self: Unknown) Unknown.C {
     //     return .{
     //         .truncated = self.truncated,
@@ -144,8 +145,8 @@ impl UnknownC {
     //     };
     // }
     #[inline]
-    pub fn cval(v: osc::Unknown<'_>) -> UnknownC {
-        UnknownC {
+    pub fn cval(v: osc::Unknown<'_>) -> UnknownOscSequence {
+        UnknownOscSequence {
             truncated: v.truncated,
             content: LibString::init(v.content),
             terminator: Terminator::from_vt(v.terminator),
@@ -358,6 +359,8 @@ pub unsafe fn set(parser_: Parser, option: c_int, value: *const c_void) -> Resul
     // so the last command's borrow ends first, as in `next`/`reset`/`end`/
     // `free`. Both fields are written by raw place: no `&mut` of the wrapper
     // or the parser is formed, so nothing retags the parser's buffer.
+    // Not `clear_command()`: its `&mut self` would retag the whole wrapper,
+    // parser buffer included; the field write retags nothing.
     // SAFETY: `parser_` is a live handle (caller contract); the stored
     // command owns nothing, so overwriting it drops nothing.
     unsafe { (*parser_).command = osc::Command::Invalid };

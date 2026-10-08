@@ -2996,17 +2996,21 @@ about five pages of numbered lines through the print path (the same cost class a
 ### P8-W5 T3 — vt-c memory usage and snapshot history compression (2026-10-08)
 
 Two upstream tests ported by P8-W5 T3 take the both-lanes form (`cfg_attr(miri, ignore = "MIRI EXCEPTION
-(rustty-vt-c, P8-W5 T3) ...")`). They were not run under Miri: each is in the cost class of an existing
-measured exception, so the bound is taken from that sibling (UNVERIFIED for these two by direct measure).
+(rustty-vt-c, P8-W5 T3) ...")`). Measured in fix round 1 with the annotations removed:
+`bash .port/tools/miri-run.sh rustty-vt-c "get_memory_usage snapshot_decoder_compresses_history_when_requested" 3 40 30`
+(Stacked Borrows, `-Zmiri-disable-isolation`, one test per worker, three workers, 2026-10-08 01:58-02:28):
+`FINAL: completed=3/3 ok=1 UB=0 ... TIMEOUT=2`.
 
-| test | what makes it heavy | measured sibling |
+| test | what makes it heavy | Miri (SB) |
 |---|---|---|
-| `terminal::tests::get::get_memory_usage` (upstream "get memory_usage") | 4,000 lines of history, then a full compression of every page | `terminal::tests::viewport_resize::compression_activity_and_incremental_scheduling` (4,000 lines + compression) |
-| `snapshot::tests::snapshot_decoder_compresses_history_when_requested` (upstream "snapshot decoder compresses history when requested") | three pages of history at 215 columns, an encode, then two decodes, one compressing every history page | `snapshot::tests::snapshot_incremental_decoder_exposes_ready_and_page_progress` (same history, past a 20-minute bound) |
+| `terminal::tests::get::get_memory_usage` (upstream "get memory_usage") | 4,000 lines of history, then a full compression of every page | TIMEOUT (1,800 s, killed by the harness) |
+| `snapshot::tests::snapshot_decoder_compresses_history_when_requested` (upstream "snapshot decoder compresses history when requested") | three pages of history at 215 columns, an encode, then two decodes, one compressing every history page | TIMEOUT (1,800 s, killed by the harness) |
+
+The third test the filter matched, `get_memory_usage_size_rule`, passed (it runs in the lane).
 
 4-criterion basis:
 
-1. **Intractable**: the cost class above (both siblings are listed exceptions).
+1. **Intractable, measured**: both TIMEOUT at the 30-minute bound (above).
 2. **Passes natively** (`cargo test -p rustty-vt-c`) and under AddressSanitizer
    (`sanitizers.sh rustty-vt-c get_memory_usage address`: 2 ran, GREEN;
    `sanitizers.sh rustty-vt-c snapshot_decoder_compresses_history_when_requested address`: 1 ran, GREEN;

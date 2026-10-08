@@ -2350,7 +2350,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION (rustty-vt-c, P8-W5 T3): three full pages of history at 215 columns written through the terminal, then an encode and two decodes, one compressing every history page; the cost class of snapshot_incremental_decoder_exposes_ready_and_page_progress; runs natively and under ASan (see MIRI_EXCEPTIONS.md)"
+        ignore = "MIRI EXCEPTION (rustty-vt-c, P8-W5 T3): three full pages of history at 215 columns written through the terminal, then an encode and two decodes, one compressing every history page; measured TIMEOUT at the 30-minute miri-run.sh bound; runs natively and under ASan (see MIRI_EXCEPTIONS.md)"
     )]
     fn snapshot_decoder_compresses_history_when_requested() {
         with_test_allocator(|alloc| {

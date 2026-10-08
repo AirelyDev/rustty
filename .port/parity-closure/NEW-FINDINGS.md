@@ -11396,3 +11396,34 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **test**: `terminal::tests::get::get_checked_accepts_every_declared_data_value` (Rust-only): every value
   `0..=42` narrows to itself, 43, -1 and `c_int::MAX` are rejected, and `get_checked` answers `MOUSE_SHAPE`.
   RED with the bound at 40: `assertion failed: data value 41, left: Some(41), right: None`.
+
+## N551 — cbindgen emits one layout for same-named vt-c types; `include/rustty.h` declared the SGR unknown with the OSC layout
+
+- **id**: N551 (P8-W5 provisional range). Found in the review of P8-W5 T3 (fix round 1). **severity**: medium for
+  the regression (the published full header declared wrong by-value layouts), low to medium for the
+  pre-existing rows below. **kind**: port defect (Rustty only; Zig exports carry their own C names).
+  **status**: the T3 regression CLOSED; the pre-existing collisions OPEN, baselined.
+- **cause**: cbindgen keys types by their bare Rust name, not by module path. P8-W5 T3 added
+  `rustty_vt_c::osc::UnknownC` (the OSC `Unknown.C` projection) beside `rustty_vt_c::sgr::UnknownC`. cbindgen kept
+  one `UnknownC`, the OSC one, so `include/rustty.h` declared `rustty_sgr_unknown_full`,
+  `rustty_sgr_unknown_partial` and the SGR attribute value with `{ bool truncated; LibString content; Terminator
+  terminator; }` instead of `{ full_ptr, full_len, partial_ptr, partial_len }`. A5 did not see it: (a3) regenerates
+  the same wrong header byte for byte, and (c) checks the curated `include/rustty/vt/*.h`, which are hand-written.
+- **fix**: the OSC projection is named after its C type, `osc::UnknownOscSequence`, re-exported (not aliased) as
+  `terminal::UnknownOscSequence`; `include/rustty.h` regenerated and declares the SGR layout again.
+- **guard (R5)**: A5 arm (f), `.port/tools/check-vt-cbindgen-name-collisions.py`. It fails when two non-test
+  `pub struct|enum|union|type` items in rustty-vt-c share a name that `include/rustty.h` uses as a type, unless the
+  name is in its baseline, and fails on a stale baseline row. Negative controls: its `--self-test` (an unlisted
+  duplicate RED, a stale row RED, a clean fixture GREEN), and reintroducing the OSC `UnknownC` turned it RED
+  (`NEW COLLISION \`UnknownC\`: sgr.rs:73 (struct), osc.rs:133 (struct)`).
+- **pre-existing collisions (OPEN, baselined in the checker)**: `Data` (render, kitty_graphics, selection_gesture
+  enums, c_int-sized), `Encoder` (key/mouse encoder handles: rustty.h names the key encoder for both), `Event`
+  (key/mouse/selection-gesture handles), `KittyGraphics` (an alias of the same type, harmless), `Parser` (osc/sgr
+  handles: rustty.h declares the `rustty_sgr_*` functions over `OscParserWrapper *`), `RowData` (render/row enums),
+  and `Size`. **`Size` has different layouts**: `size_report::Size` (rows, columns, cell sizes) and
+  `mouse_encode::Size` (sized struct, screen and padding); rustty.h declares `rustty_size_report_encode(int, Size,
+  ...)` with the mouse layout, so a C caller using `include/rustty.h` instead of the curated
+  `rustty/vt/size_report.h` would pass the wrong struct by value. The handle and enum rows are ABI-compatible
+  (pointer- or c_int-sized) but name the wrong types. Fixing them means renaming Rust types across vt-c, which is
+  outside P8-W5 T3; owner: the coordinator to schedule. Each fix removes its baseline row (the arm goes RED on a
+  stale row).

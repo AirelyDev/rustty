@@ -990,7 +990,7 @@ fn get_checked_accepts_every_declared_data_value() {
 #[test]
 #[cfg_attr(
     miri,
-    ignore = "MIRI EXCEPTION (rustty-vt-c, P8-W5 T3): 4,000 lines of history, then a full compression of every page; the cost class of compression_activity_and_incremental_scheduling; runs natively and under ASan, and get_memory_usage_size_rule plus the memory_usage re-entry test cover the getter under Miri (see MIRI_EXCEPTIONS.md)"
+    ignore = "MIRI EXCEPTION (rustty-vt-c, P8-W5 T3): 4,000 lines of history, then a full compression of every page; measured TIMEOUT at the 30-minute miri-run.sh bound; runs natively and under ASan, and get_memory_usage_size_rule plus the memory_usage re-entry test cover the getter under Miri (see MIRI_EXCEPTIONS.md)"
 )]
 fn get_memory_usage() {
     with_test_allocator(|alloc| {
@@ -1191,6 +1191,34 @@ fn get_memory_usage_size_rule() {
         // try testing.expectEqual(@as(u64, 0xDEADBEEF), large.extra);
         assert_eq!(0xDEADBEEFu64, large.extra);
 
+        unsafe { free(t) };
+    });
+}
+
+// Rust-only (P8-W5 T3 fix 1; the setter twin of N550): the C setter's
+// `c_int` guard accepts every declared `RusttyTerminalOption`, including the
+// 42, 43 and 46 this task adds between and after 44/45, and rejects the first
+// value past the last one.
+#[test]
+fn terminal_set_accepts_every_declared_option() {
+    with_test_allocator(|alloc| {
+        let (new_result, t) = new_t(alloc, 80, 24);
+        assert_eq!(Result::Success, new_result);
+        // NULL clears each of these (callbacks, the checksum flag and bits).
+        for option in [41, 42, 43, 44, 45, 46] {
+            assert_eq!(
+                Result::Success.to_c_int(),
+                unsafe { crate::rustty_terminal_set(t, option, std::ptr::null()) },
+                "option {option}"
+            );
+        }
+        for option in [47, -1, c_int::MAX] {
+            assert_eq!(
+                Result::InvalidValue.to_c_int(),
+                unsafe { crate::rustty_terminal_set(t, option, std::ptr::null()) },
+                "option {option}"
+            );
+        }
         unsafe { free(t) };
     });
 }

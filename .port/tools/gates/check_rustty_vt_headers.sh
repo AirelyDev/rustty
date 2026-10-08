@@ -69,7 +69,7 @@ if [ "${1:-}" = "--self-test-masking" ]; then
   out=$(PATH="$shim:$PATH" sh "$0" 2>&1) || grc=$?
   rm -rf "$shim"
   rc=0
-  for arm in "(a3b)" "(a4)" "(b)" "(d)" "(c)" "(e)"; do
+  for arm in "(a3b)" "(a4)" "(b)" "(d)" "(c)" "(e)" "(f)"; do
     if printf '%s\n' "$out" | grep -qF "== $arm "; then
       echo "  ok   arm $arm still ran after (a3) failed"
     else
@@ -563,6 +563,19 @@ node .port/tools/check-vt-enum-discriminants.mjs --self-test
 node .port/tools/check-vt-enum-discriminants.mjs
 )
 record "(e)" $?
+
+# P8-W5 T3 fix 1 (NEW-FINDINGS N551). cbindgen keys types by bare name, so two
+# rustty-vt-c types with one name make include/rustty.h declare one layout for
+# both; (a3) regenerates that wrong header faithfully and (c) reads only the
+# curated headers. This arm fails on any such collision not in the checker's
+# baseline (and on a stale baseline row). Negative controls: its --self-test,
+# and reintroducing the OSC `UnknownC` beside the SGR one turns it RED.
+( set -e
+echo "== (f) no two rustty-vt-c types share a name cbindgen emits =="
+python3 .port/tools/check-vt-cbindgen-name-collisions.py --self-test
+python3 .port/tools/check-vt-cbindgen-name-collisions.py
+)
+record "(f)" $?
 
 if [ -n "$FAILED_ARMS" ]; then
   echo "VT-HEADERS: RED (failed arm(s):$FAILED_ARMS${BLOCKED_ARMS:+; blocked arm(s):$BLOCKED_ARMS})"
