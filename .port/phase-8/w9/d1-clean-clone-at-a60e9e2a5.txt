@@ -1,0 +1,40 @@
+# P8-W9 T2 lane d1-clean-clone at a60e9e2a5 (head 1d22ba80d)
+host: rvm (Fedora aarch64), clone /home/gael/projects/rustty-p8w9t2 (git archive 1d22ba80d plus .port and docs/superpowers copied from the worktree, since .gitattributes export-ignores them)
+### CMD: bash .port/tools/gates/check_slice_reinterpret.sh
+start (UTC): 2026-10-08T22:47:21Z
+end (UTC):   2026-10-08T22:47:21Z
+wall: 0 s
+rc: 1
+## verdict lines
+D1 slice-reinterpret audit
+  RED  crates/rustty-vt/src/bitmap_allocator.rs:848  UNLISTED reinterpret — add a row to slice-reinterpret.tsv
+  RED  crates/rustty-vt/src/bitmap_allocator.rs:880  UNLISTED reinterpret — add a row to slice-reinterpret.tsv
+  RED  crates/rustty-vt/src/page_impl.rs:2297  UNLISTED reinterpret — add a row to slice-reinterpret.tsv
+  RED  crates/rustty-vt/src/page_impl.rs:2467  UNLISTED reinterpret — add a row to slice-reinterpret.tsv
+  RED  crates/rustty-vt/src/page_impl.rs:2236  STALE allowlist row — no live reinterpret here (re-audit line drift)
+  RED  crates/rustty-vt/src/page_impl.rs:2414  STALE allowlist row — no live reinterpret here (re-audit line drift)
+  RED  crates/rustty-vt/src/bitmap_allocator.rs:829  STALE allowlist row — no live reinterpret here (re-audit line drift)
+  RED  crates/rustty-vt/src/bitmap_allocator.rs:861  STALE allowlist row — no live reinterpret here (re-audit line drift)
+  D1: RED — see above.
+## tail
+### CMD: bash .port/tools/gates/check_slice_reinterpret.sh
+D1 slice-reinterpret audit
+  scan base : /home/gael/projects/rustty-p8w9t2
+  roots     : crates crates-sys
+  allowlist : /home/gael/projects/rustty-p8w9t2/.port/audits/slice-reinterpret.tsv
+  --------------------------------------------------------------
+  RED  crates/rustty-vt/src/bitmap_allocator.rs:848  UNLISTED reinterpret — add a row to slice-reinterpret.tsv
+         >        let ptr_slice: &[u32] = unsafe { core::slice::from_raw_parts(ptr_addr as *const u32, 1) };
+  RED  crates/rustty-vt/src/bitmap_allocator.rs:880  UNLISTED reinterpret — add a row to slice-reinterpret.tsv
+         >        let ptr_slice: &[u32] = unsafe { core::slice::from_raw_parts(ptr_addr as *const u32, 6) };
+  RED  crates/rustty-vt/src/page_impl.rs:2297  UNLISTED reinterpret — add a row to slice-reinterpret.tsv
+         >            core::slice::from_raw_parts_mut(src_cells_ptr as *mut u64, len).fill(0);
+  RED  crates/rustty-vt/src/page_impl.rs:2467  UNLISTED reinterpret — add a row to slice-reinterpret.tsv
+         >            core::slice::from_raw_parts_mut(cells_ptr as *mut u64, span).fill(0);
+  OK   crates/rustty/tests/windows_resources.rs:260  [exact-len-proven]
+  RED  crates/rustty-vt/src/page_impl.rs:2236  STALE allowlist row — no live reinterpret here (re-audit line drift)
+  RED  crates/rustty-vt/src/page_impl.rs:2414  STALE allowlist row — no live reinterpret here (re-audit line drift)
+  RED  crates/rustty-vt/src/bitmap_allocator.rs:829  STALE allowlist row — no live reinterpret here (re-audit line drift)
+  RED  crates/rustty-vt/src/bitmap_allocator.rs:861  STALE allowlist row — no live reinterpret here (re-audit line drift)
+  --------------------------------------------------------------
+  D1: RED — see above.

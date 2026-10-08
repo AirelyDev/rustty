@@ -40,3 +40,23 @@ All found on rvm at head 1d22ba80d (pin a60e9e2a5). Provisional: no root-cause f
 - First full-Linux attempt used a clone without `.port/` and `docs/superpowers` (`.gitattributes` has `export-ignore` on both): 3 test failures plus three gates rc 127 were
   artifacts of that. Fixed by copying both dirs from the worktree and re-running; the recorded runs are the re-runs.
 - First G-ESCTEST attempt was BLOCKED (rc 3): the oracle's Zig build could not fetch packages (`TlsInitializationFailed`), right after the clock fix; the re-run ~4 min later was GREEN. No change made.
+
+## N623 D1 RED (slice-reinterpret audit): 4 unlisted `from_raw_parts` sites and 4 stale allowlist rows, claimed-done regression (R5)
+- `check_slice_reinterpret.sh`, clean clone, rc 1 (also RED in ci.sh). Code files come from `git archive`, so this is the repo, not a clone artifact.
+- UNLISTED: `crates/rustty-vt/src/bitmap_allocator.rs:848, :880`; `crates/rustty-vt/src/page_impl.rs:2297, :2467`.
+  STALE rows (line drift): `page_impl.rs:2236, :2414`; `bitmap_allocator.rs:829, :861`. The sites moved by ~19-53 lines; the
+  allowlist `.port/audits/slice-reinterpret.tsv` was not re-audited after Phase 8 edits to these two files. Evidence: `d1-clean-clone-at-a60e9e2a5.txt`.
+- This gate is PROGRESS class but a claimed-done crate regression fails CI (R5). If the T1 17-gate set did not include D1, that explains why it was missed. Mac result unknown to this runner.
+
+## N624 G-LINT RED (HARD) on rvm: shellcheck SC2010 and prettier on 3 docs
+- `check_lints.sh`, clean clone, rc 1: `shellcheck` FAIL (`.port/tools/cvt-parity.sh:24` SC2010 `ls | grep`, a warning-level finding of rvm's shellcheck version);
+  `prettier` FAIL on `docs/parity-audit/src-renderer.md`, `docs/parity-audit/src.md`, `docs/superpowers/plans/2026-10-07-phase8-upstream-resync.md`.
+  typos, alejandra, actionlint ok; swiftlint and pinact skipped by design.
+- `docs/superpowers` is export-ignored from `git archive`; I copied it from the worktree, so these 3 files are as committed. Whether the Mac lint passes (different shellcheck/prettier versions) is not known to this runner.
+- (The first ci.sh run's prettier list of 55 files and D6's 10 findings were `._*` AppleDouble files from my own tar and are discarded; D6 is GREEN in the clean clone: `d6-clean-clone-at-a60e9e2a5.txt`.)
+
+## G4 on rvm: BLOCKED, not run
+- ci.sh's G4 BLOCKED "reference driver not built". `.port/phase-0/harness/build_ref_driver.sh` is macOS-only (looks for a Mach-O `libghostty-vt.a` under /Users/gael/projects/ghostty/zig-out), so no G4 on rvm. The Mac runner/T1 owns G4. Evidence: `g4-not-runnable-on-rvm-at-a60e9e2a5.txt`.
+
+## ci.sh on rvm: other BLOCKED (environment)
+G-NIX (nixpkgs wasmtime fails to build on aarch64-linux), G-XCF/G-XCF-SELF/G-FONTBACKEND (macOS-only), G6/G6c/G6t (cargo-nextest not installed on rvm; Mac lanes), G-VALGRIND (deferred to its sharded lane by RUSTTY_VALGRIND_OWN_JOB).
