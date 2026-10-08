@@ -955,7 +955,7 @@ fn terminal_invalid_selector_warns_through_the_scoped_log_sink() {
     }
 }
 
-// Rust-only (P8-W5 T3, NEW-FINDINGS N550): the C getter's `c_int` guard
+// Rust-only (P8-W5 T3, NEW-FINDINGS N528): the C getter's `c_int` guard
 // accepts every declared `RusttyTerminalData` value, as the reference's
 // `std.enums.fromInt` does, and nothing past the last one. The guard's upper
 // bound used to stop at 40, so `RUSTTY_TERMINAL_DATA_MOUSE_SHAPE` (41) was
@@ -1195,7 +1195,7 @@ fn get_memory_usage_size_rule() {
     });
 }
 
-// Rust-only (P8-W5 T3 fix 1; the setter twin of N550): the C setter's
+// Rust-only (P8-W5 T3 fix 1; the setter twin of N528): the C setter's
 // `c_int` guard accepts every declared `RusttyTerminalOption`, including the
 // 42, 43 and 46 this task adds between and after 44/45, and rejects the first
 // value past the last one.

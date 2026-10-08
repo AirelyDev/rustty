@@ -11382,9 +11382,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   write ignored by the reader"; the capture gains `ignore_refused`). RED before the fix: `left: OutOfMemory,
   right: Success` (the paste succeeded). GREEN after; every allocation is returned.
 
-## N550 — `rustty_terminal_get` rejected `RUSTTY_TERMINAL_DATA_MOUSE_SHAPE`
+## N528 — `rustty_terminal_get` rejected `RUSTTY_TERMINAL_DATA_MOUSE_SHAPE`
 
-- **id**: N550 (P8-W5 provisional range). Found and closed by P8-W5 T3. **severity**: medium (a documented C
+- **id**: N528 (provisional N550, renumbered at the P8-W5 merge). Found and closed by P8-W5 T3. **severity**: medium (a documented C
   query always failed). **kind**: port defect (Rustty only). **status**: CLOSED.
 - **what**: `TerminalData::from_c_int` (`crates/rustty-vt-c/src/terminal/data.rs`), the `c_int` guard that
   `rustty_terminal_get` and `rustty_terminal_get_multi` go through, accepted `0..=TERMINAL_DATA_MAX` with
@@ -11397,9 +11397,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `0..=42` narrows to itself, 43, -1 and `c_int::MAX` are rejected, and `get_checked` answers `MOUSE_SHAPE`.
   RED with the bound at 40: `assertion failed: data value 41, left: Some(41), right: None`.
 
-## N551 — cbindgen emits one layout for same-named vt-c types; `include/rustty.h` declared the SGR unknown with the OSC layout
+## N529 — cbindgen emits one layout for same-named vt-c types; `include/rustty.h` declared the SGR unknown with the OSC layout
 
-- **id**: N551 (P8-W5 provisional range). Found in the review of P8-W5 T3 (fix round 1). **severity**: medium for
+- **id**: N529 (provisional N551, renumbered at the P8-W5 merge). Found in the review of P8-W5 T3 (fix round 1). **severity**: medium for
   the regression (the published full header declared wrong by-value layouts), low to medium for the
   pre-existing rows below. **kind**: port defect (Rustty only; Zig exports carry their own C names).
   **status**: CLOSED (the T3 regression by P8-W5 T3; the 7 pre-existing collisions by P8-W5 T5).

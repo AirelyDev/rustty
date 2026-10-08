@@ -1,6 +1,6 @@
 /* Pins the by-value `SizeReportSize` ABI of `rustty_size_report_encode` as
  * declared by the generated full header `include/rustty.h` (NEW-FINDINGS
- * N551). cbindgen once declared that function over `mouse_encode::Size`
+ * N529). cbindgen once declared that function over `mouse_encode::Size`
  * (size, screen_*, cell_*, padding_*) because two rustty-vt-c types shared the
  * name `Size`; a caller built from `rustty.h` then passed the wrong struct.
  * The initializer below names the REAL fields, so the old header fails to

@@ -2,7 +2,7 @@
 """Arm (f) of the vt-headers ABI gate (A5): no two rustty-vt-c types that
 cbindgen emits into include/rustty.h share a name.
 
-WHY (NEW-FINDINGS N551). cbindgen keys types by their bare Rust name, not by
+WHY (NEW-FINDINGS N529). cbindgen keys types by their bare Rust name, not by
 module path. When two `pub struct|enum|union|type` items in different
 rustty-vt-c modules share a name, it emits ONE of them and every declaration
 that names the other silently uses the wrong layout. P8-W5 T3 added an OSC
@@ -34,13 +34,13 @@ import tempfile
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
-# The pre-existing collisions of P8-W5 T3 (N551) were all fixed by P8-W5 T5;
+# The pre-existing collisions of P8-W5 T3 (N529) were all fixed by P8-W5 T5;
 # the list can only shrink, so it stays empty.
 BASELINE = {
     # name: (reason, the exact set of "file (kind)" items that define it). A
     # name whose item set differs from its row (a third definition, or one
     # gone) is RED, so the baseline cannot absorb a new collision. EMPTY since
-    # P8-W5 T5 (N551 closed): every vt-c type carries its upstream C name.
+    # P8-W5 T5 (N529 closed): every vt-c type carries its upstream C name.
 }
 
 ITEM_RE = re.compile(r"^\s*pub (struct|enum|union|type) ([A-Za-z_][A-Za-z0-9_]*)")
@@ -252,7 +252,7 @@ def main():
         return 1
     print(
         f"    no new cbindgen type-name collisions in include/rustty.h "
-        f"({len(collisions)} pre-existing, baselined in N551)"
+        f"({len(collisions)} pre-existing, baselined in N529)"
     )
     return 0
 

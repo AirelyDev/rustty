@@ -324,7 +324,7 @@ echo "  OK (pointee is a $a4_gen_size-byte struct, == sizeof(RusttyStyle))"
 record "(a4)" $?
 
 # --- (a5) rustty.h's rustty_size_report_encode takes the REAL size_report Size -
-# P8-W5 T5 (NEW-FINDINGS N551): `rustty_size_report_encode(int, Size, ...)` was
+# P8-W5 T5 (NEW-FINDINGS N529): `rustty_size_report_encode(int, Size, ...)` was
 # declared over `mouse_encode::Size` (a different layout) because cbindgen keys
 # types by bare name. Arm (f) bars the name collision; this arm pins the ABI
 # end to end: a C program built from the generated `include/rustty.h` passes a
@@ -583,7 +583,7 @@ node .port/tools/check-vt-enum-discriminants.mjs
 )
 record "(e)" $?
 
-# P8-W5 T3 fix 1 (NEW-FINDINGS N551). cbindgen keys types by bare name, so two
+# P8-W5 T3 fix 1 (NEW-FINDINGS N529). cbindgen keys types by bare name, so two
 # rustty-vt-c types with one name make include/rustty.h declare one layout for
 # both; (a3) regenerates that wrong header faithfully and (c) reads only the
 # curated headers. This arm fails on any such collision not in the checker's

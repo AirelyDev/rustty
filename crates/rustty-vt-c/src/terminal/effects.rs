@@ -465,7 +465,7 @@ pub struct UnknownStringSequence {
 /// C: GhosttyTerminalUnknownOscSequence -> RusttyTerminalUnknownOscSequence (R2)
 // pub const UnknownOscSequence = osc.Command.Unknown.C;
 //
-// PORT NOTE (N551): a re-export, not a `pub type` alias, so cbindgen emits one
+// PORT NOTE (N529): a re-export, not a `pub type` alias, so cbindgen emits one
 // `UnknownOscSequence` struct; the projection's Rust name is the C name's
 // suffix so it cannot collide with another vt-c `#[repr(C)]` type (it was
 // `UnknownC`, which replaced the SGR `UnknownC` in `include/rustty.h`).

@@ -126,7 +126,7 @@ const _: () = assert!(std::mem::size_of::<Terminator>() == std::mem::size_of::<c
 //
 // PORT NOTE: the reference nests this in `osc.Command.Unknown` (rustty-vt);
 // the C projection lives in the C API crate (R3), so `Unknown.C` and its
-// `cval()` are here, named after the C type (`UnknownOscSequence`; N551: the
+// `cval()` are here, named after the C type (`UnknownOscSequence`; N529: the
 // generic `UnknownC` collided with the SGR projection in cbindgen's output).
 #[repr(C)]
 #[derive(Clone, Copy)]

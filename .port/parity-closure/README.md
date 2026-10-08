@@ -346,6 +346,12 @@ committed records named here.
   word) are OPEN until their owners port `y`, `unknown` and `program_status`; N525 (c-vt corpus scripts wrote into the
   main checkout) and N526 (the freestanding wasm build broken since `ca2ef434b`; now guarded in the default `ci.sh`
   set) are CLOSED. **Next free ids: UD378, N527, V34.**
+- **P8-W1..W7 merged** (to `4b171279a`): N518 CLOSED (W0 T1); N520 RECORD-ONLY (DECRQCRA flag not in the snapshot);
+  N521 CLOSED (paste refused write); N522 PORT-ONLY (DeviceBox); N523 and N524 CLOSED by the W3/W4/W5 ports (G9
+  777/777); N527 CLOSED (build-rustty.sh LDFLAGS); N528 CLOSED (C getter rejected MOUSE_SHAPE; provisional N550);
+  N529 CLOSED (cbindgen same-name collisions made `include/rustty.h` declare wrong layouts, incl.
+  `rustty_size_report_encode`; provisional N551; A5 arm (f) + arm (a5) guard it). No UD taken.
+  **Next free ids: UD378, N530, V34.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.
