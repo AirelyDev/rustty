@@ -19,8 +19,9 @@ import _zigspan as Z  # noqa: E402
 PATH = "/Users/gael/projects/ghostty/src/terminal/stream.zig"
 FN_RE = r"^\s*(?:pub )?(?:inline )?fn csiDispatch\("
 SWITCH_RE = r"^            switch \(input\.final\) \{\s*$"
-# Finals the CSI dispatch must carry (N517 regression set).
-REQUIRED = set("A B C D E F G H I J K L M P S T W X Z a b c d e f g h j k l m n p q r s t u @ `".split())
+# Finals the CSI dispatch must carry (N517 regression set). '}' is the decsasd
+# arm whose body contains a brace char literal (exercises the brace matcher).
+REQUIRED = set("A B C D E F G H I J K L M P S T W X Z a b c d e f g h j k l m n p q r s t u @ ` }".split())
 FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
                        "tools", "gates", "fixtures", "parity-surface",
                        "stream_no_csi_m.zig")

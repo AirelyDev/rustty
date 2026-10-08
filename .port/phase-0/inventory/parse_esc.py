@@ -47,6 +47,13 @@ def self_test(path):
     missing = sorted(REQUIRED - got)
     print(f"[c] missing required ESC finals: {missing} (expect [])")
     ok &= not missing
+    # Negative control (R5) for [a]-[c]: rename the '7' arm (DECSC) in memory;
+    # the required-finals check must report it missing.
+    mut = [l.replace("                '7' =>", "                'Q' =>", 1) for l in lines]
+    m_arms, _ = Z.dispatch_arms(mut, FN_RE, SWITCH_RE)
+    caught = "7" in (REQUIRED - Z.finals_of(m_arms))
+    print(f"[f] arm '7' dropped -> caught={caught} (expect True)")
+    ok &= caught
     # Negative control (R5): a stream.zig with no escDispatch must be refused,
     # and one whose escDispatch header moved must still be found.
     try:

@@ -117,7 +117,11 @@ def parse_args(argv, default_path, self_test):
     path = default_path
     args = list(argv)
     if "--path" in args:
-        path = args[args.index("--path") + 1]
+        i = args.index("--path")
+        if i + 1 >= len(args):
+            print("usage: [--path stream.zig] [--self-test]", file=sys.stderr)
+            sys.exit(2)
+        path = args[i + 1]
     if "--self-test" in args:
         sys.exit(self_test(path))
     return path
