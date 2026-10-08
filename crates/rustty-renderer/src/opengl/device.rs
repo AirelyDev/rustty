@@ -7,7 +7,8 @@
 //! TODO: If there's a way to prefer certain devices like in
 //! Vulkan or Metal we should do it here.
 //!
-//! PORTS: ghostty `src/renderer/opengl/Device.zig` (new in `40d5b860d`), P8-W6 T2. The
+//! PORTS: ghostty `src/renderer/opengl/Device.zig` (new in `40d5b860d`; the
+//! surfaceless diagnosis `logUnsupportedPlatform` from `2e36658c6`), P8-W6 T2. The
 //! app-scoped half of the port's former per-renderer `OffscreenContext`
 //! (DECISIONS P12): the dlopen'd libEGL, the display, the config and the
 //! `EGL_MESA_image_dma_buf_export` entry points. The per-renderer EGL context
@@ -42,7 +43,7 @@ use std::mem::MaybeUninit;
 use khronos_egl as egl;
 
 use super::gl::sys::{self, ExportDmabufImageMesaFn, ExportDmabufImageQueryMesaFn};
-use super::gl::{log_info, log_warn};
+use super::gl::{log_err, log_info, log_warn};
 
 /// `EGL_PLATFORM_SURFACELESS_MESA` (`EGL_MESA_platform_surfaceless`).
 ///
@@ -91,16 +92,30 @@ impl Device {
         let egl = unsafe { egl::DynamicInstance::<egl::EGL1_5>::load_required() }
             .map_err(|err| Error::EglUnavailable(err.to_string()))?;
 
-        // const display: *egl.Display = try .initPlatform(
+        // const display = egl.Display.initPlatform(
         //     egl.c.EGL_PLATFORM_SURFACELESS_MESA,
         //     egl.c.EGL_DEFAULT_DISPLAY,
         //     null,
-        // );
+        // ) catch |err| {
+        //     if (err == error.BadParameter) logUnsupportedPlatform();
+        //     return err;
+        // };
         //
         // P8-W6 T2 (DECISIONS P12): the port used to pre-check the client
-        // extensions and fail before `eglGetPlatformDisplay`. It now follows the
-        // reference's order: try the platform display.
-        let display = sys::init_platform(&egl, PLATFORM_SURFACELESS_MESA, egl::DEFAULT_DISPLAY)?;
+        // extensions and fail before `eglGetPlatformDisplay`, with no log line and
+        // no way to tell "no driver" from "no surfaceless platform". It now follows
+        // the reference's order: try the platform display, diagnose on
+        // `EGL_BAD_PARAMETER`.
+        let display =
+            match sys::init_platform(&egl, PLATFORM_SURFACELESS_MESA, egl::DEFAULT_DISPLAY) {
+                Ok(display) => display,
+                Err(err) => {
+                    if err == egl::Error::BadParameter {
+                        diagnose_unsupported_platform(&egl);
+                    }
+                    return Err(err.into());
+                }
+            };
 
         // log.info("EGL vendor={s}", .{display.queryString(.vendor) orelse "(unknown)"});
         // log.info("EGL extensions={s}", .{display.queryString(.extensions) orelse "(unknown)"});
@@ -245,4 +260,123 @@ fn choose_config(
     ];
     egl.choose_first_config(display, &attributes)?
         .ok_or(Error::NoConfig)
+}
+
+/// Why `eglGetPlatformDisplay` rejected the surfaceless platform: the three arms
+/// of [`diagnose_unsupported_platform`], split out so each is unit-testable without a
+/// driver that produces it (RUSTTY-ONLY).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UnsupportedPlatform {
+    /// No client extensions at all: no EGL driver could be loaded.
+    NoDriver,
+    /// A driver loaded but does not offer `EGL_MESA_platform_surfaceless`.
+    NoSurfaceless,
+    /// The driver offers the platform and still rejected it.
+    Rejected,
+}
+
+/// The decision [`diagnose_unsupported_platform`] makes, over the client extension
+/// string (`None` when `eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS)` failed).
+pub(crate) fn classify(exts: Option<&str>) -> UnsupportedPlatform {
+    // const exts = egl.queryClientExtensions() orelse "";
+    let exts = exts.unwrap_or("");
+    // if (exts.len == 0) { ... }
+    if exts.is_empty() {
+        return UnsupportedPlatform::NoDriver;
+    }
+
+    // if (!egl.hasExtension(exts, "EGL_MESA_platform_surfaceless")) { ... }
+    if !sys::has_extension(exts, "EGL_MESA_platform_surfaceless") {
+        return UnsupportedPlatform::NoSurfaceless;
+    }
+
+    UnsupportedPlatform::Rejected
+}
+
+/// EGL_BAD_PARAMETER from eglGetPlatformDisplay means that no loaded
+/// EGL driver supports the surfaceless platform. Most often that is
+/// because no driver could be loaded at all, for example because the
+/// system's driver needs a newer libc than Rustty was built against,
+/// so say which it is rather than leaving a bare error name.
+//
+// fn logUnsupportedPlatform() void {   (Device.zig:65-89, `2e36658c6`)
+//
+// PORT NOTE (name): not `log_unsupported_platform`. G-LOGFILE reads a `log_*` fn
+// as a facade whose CALL SITE is the one emission, but this function holds three
+// distinct reference sites (`Device.zig:75`, `:82`, `:87`), each a different
+// message; under its own name each is counted where it is written.
+fn diagnose_unsupported_platform(egl: &egl::DynamicInstance<egl::EGL1_5>) {
+    // With no driver loaded, libglvnd reports no client extensions
+    // at all, since every platform comes from a driver.
+    let exts = sys::query_client_extensions(egl);
+    let exts_str = exts.as_deref().unwrap_or("");
+    match classify(exts.as_deref()) {
+        UnsupportedPlatform::NoDriver => {
+            // log.err("no EGL driver could be loaded; check that a GPU driver " ++
+            //     "is installed and was built against a compatible libc " ++
+            //     "(LD_DEBUG=libs shows why a driver failed to load)", .{});
+            log_err!(
+                "no EGL driver could be loaded; check that a GPU driver \
+                 is installed and was built against a compatible libc \
+                 (LD_DEBUG=libs shows why a driver failed to load)"
+            );
+        }
+        UnsupportedPlatform::NoSurfaceless => {
+            // log.err("the EGL driver does not support EGL_MESA_platform_surfaceless " ++
+            //     "client extensions={s}", .{exts});
+            log_err!(
+                "the EGL driver does not support EGL_MESA_platform_surfaceless \
+                 client extensions={exts_str}"
+            );
+        }
+        UnsupportedPlatform::Rejected => {
+            // log.err("the EGL driver rejected the surfaceless platform; " ++
+            //     "client extensions={s}", .{exts});
+            log_err!(
+                "the EGL driver rejected the surfaceless platform; \
+                 client extensions={exts_str}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{classify, UnsupportedPlatform};
+
+    /// `2e36658c6`'s three diagnoses (Rustty-only; the reference has no test).
+    /// No driver: libglvnd reports no client extensions at all, either as a
+    /// failed query or as an empty string.
+    #[test]
+    fn classify_no_client_extensions_is_no_driver() {
+        assert_eq!(classify(None), UnsupportedPlatform::NoDriver);
+        assert_eq!(classify(Some("")), UnsupportedPlatform::NoDriver);
+    }
+
+    /// A driver loaded but it lacks the surfaceless platform (a whole-token
+    /// match: a longer extension name that starts with it does not count).
+    #[test]
+    fn classify_missing_surfaceless_platform() {
+        assert_eq!(
+            classify(Some("EGL_EXT_client_extensions EGL_KHR_platform_gbm")),
+            UnsupportedPlatform::NoSurfaceless
+        );
+        assert_eq!(
+            classify(Some(
+                "EGL_MESA_platform_surfaceless_x EGL_EXT_platform_base"
+            )),
+            UnsupportedPlatform::NoSurfaceless
+        );
+    }
+
+    /// The platform is offered and was rejected anyway.
+    #[test]
+    fn classify_offered_platform_is_rejected() {
+        assert_eq!(
+            classify(Some(
+                "EGL_EXT_client_extensions EGL_MESA_platform_surfaceless EGL_KHR_platform_x11"
+            )),
+            UnsupportedPlatform::Rejected
+        );
+    }
 }

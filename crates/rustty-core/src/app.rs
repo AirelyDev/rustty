@@ -1864,6 +1864,55 @@ pub(crate) mod test_runtime {
         unsafe { app.device.deinit() };
     }
 
+    // rustty-only (P8-W6 T2, `40d5b860d` + `2e36658c6`): with no EGL driver
+    // (libglvnd pointed at a vendor file that does not exist), `App.init` fails
+    // with `error.DeviceFailed`, and the log says why: the device's surfaceless
+    // diagnosis (`opengl/Device.zig:75-77`), then `App.init`'s own line. At the
+    // pin the app came up and every surface failed instead (UD356's old
+    // trigger). Measured on rvm.
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[test]
+    #[ignore = "needs __EGL_VENDOR_LIBRARY_FILENAMES=/nonexistent.json; run alone with --ignored --exact"]
+    fn app_init_without_an_egl_driver_fails_with_device_failed_and_says_why() {
+        const TEST: &str = "app_init_without_an_egl_driver_fails_with_device_failed_and_says_why";
+        assert!(
+            std::env::var_os("__EGL_VENDOR_LIBRARY_FILENAMES")
+                .is_some_and(|v| v.to_string_lossy().contains("nonexistent")),
+            "{TEST}: run with __EGL_VENDOR_LIBRARY_FILENAMES=/nonexistent.json"
+        );
+        let cap = crate::log_capture::start();
+        let res = App::<TestApp>::init(Allocator);
+        let messages = cap.messages();
+        drop(cap);
+        assert!(
+            matches!(res, Err(CreateError::DeviceFailed)),
+            "App::init must fail with DeviceFailed, got {:?}",
+            res.as_ref().err()
+        );
+        let errors: Vec<_> = messages
+            .into_iter()
+            .filter(|(level, _, _)| *level == log::Level::Error)
+            .collect();
+        assert_eq!(
+            errors,
+            vec![
+                (
+                    log::Level::Error,
+                    "opengl".to_string(),
+                    "no EGL driver could be loaded; check that a GPU driver is installed and \
+                     was built against a compatible libc (LD_DEBUG=libs shows why a driver \
+                     failed to load)"
+                        .to_string()
+                ),
+                (
+                    log::Level::Error,
+                    "app".to_string(),
+                    "failed to initialize render device err=Egl(BadParameter)".to_string()
+                ),
+            ]
+        );
+    }
+
     // rustty-only (DECISIONS P11): the test constructor builds the app without
     // a device, and `deinit` skips the null box. Runs under Miri.
     #[test]

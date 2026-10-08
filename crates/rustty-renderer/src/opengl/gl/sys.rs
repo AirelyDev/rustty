@@ -33,7 +33,9 @@
 //! DMA-BUF export entry points) moved to `opengl/Device.zig`
 //! ([`crate::opengl::device::Device`]), which the core `App` creates once and
 //! every renderer borrows. [`OffscreenContext`] is now only the surface-scoped
-//! EGL context.
+//! EGL context. `2e36658c6` adds the client-extension helpers
+//! ([`query_client_extensions`], [`has_extension`]) that the device's
+//! surfaceless diagnosis uses.
 //!
 //! PORT NOTE (`const log = std.log.scoped(.opengl);`, `OpenGL.zig:34`): the
 //! scoped logger is reproduced by the `log_*!` macros in the parent module. (The
@@ -893,12 +895,35 @@ fn parse_gl_version(version: &str) -> Option<(u32, u32)> {
     Some((major, minor))
 }
 
-/// Whether `extensions` (a space-separated EGL extension string) contains `name`.
+/// Returns the client extensions, which are those that are independent
+/// of any display, such as the platforms that can be passed to
+/// `Display.initPlatform`. Returns null if the implementation does not
+/// support EGL_EXT_client_extensions or no driver could be loaded.
 ///
-/// Split on spaces rather than substring-matched, so that e.g.
-/// `EGL_KHR_platform_gbm` cannot satisfy a query for `EGL_KHR_platform_gb`.
-pub(crate) fn has_extension(extensions: &str, name: &str) -> bool {
-    extensions.split(' ').any(|ext| ext == name)
+/// PORTS: `egl.zig:74-81` `queryClientExtensions` (`2e36658c6`). `None` is the
+/// reference's null; the dlopen'd instance is the port's `egl.load()`.
+pub(crate) fn query_client_extensions(egl: &egl::DynamicInstance<egl::EGL1_5>) -> Option<String> {
+    // const exts = c.eglQueryString(null, c.EGL_EXTENSIONS) orelse return null;
+    // return std.mem.span(exts);
+    egl.query_string(None, egl::EXTENSIONS)
+        .ok()
+        .map(|s| s.to_string_lossy().into_owned())
+}
+
+/// Returns true if `name` appears in the space-separated
+/// extension string `exts`.
+///
+/// PORTS: `egl.zig:83-91` `hasExtension` (`2e36658c6`). Split on spaces rather
+/// than substring-matched, so that e.g. `EGL_KHR_platform_gbm` cannot satisfy a
+/// query for `EGL_KHR_platform_gb`. (`tokenizeScalar` skips empty tokens; an empty
+/// `name` is never asked for, so `split` is equivalent.)
+pub(crate) fn has_extension(exts: &str, name: &str) -> bool {
+    // var it = std.mem.tokenizeScalar(u8, exts, ' ');
+    // while (it.next()) |ext| {
+    //     if (std.mem.eql(u8, ext, name)) return true;
+    // }
+    // return false;
+    exts.split(' ').any(|ext| ext == name)
 }
 
 /// PORTS: `OpenGL.zig:72-130`.
