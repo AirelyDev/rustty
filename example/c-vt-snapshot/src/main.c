@@ -88,6 +88,31 @@ int main(void) {
   rustty_terminal_free(full_terminal);
   //! [snapshot-decode]
 
+  //! [snapshot-compress-history]
+  RusttySnapshotDecoder compressed_decoder = NULL;
+  result = rustty_snapshot_decoder_new_buf(
+      NULL, &compressed_decoder, snapshot, snapshot_len);
+  assert(result == RUSTTY_SUCCESS);
+
+  // Options must be set before decoding starts. With this set, each history
+  // page is compressed as soon as it is restored, so the full scrollback is
+  // never held uncompressed in memory.
+  const bool compress_history = true;
+  result = rustty_snapshot_decoder_set(
+      compressed_decoder,
+      RUSTTY_SNAPSHOT_DECODER_OPT_COMPRESS_HISTORY,
+      &compress_history);
+  assert(result == RUSTTY_SUCCESS);
+
+  RusttyTerminal compressed_terminal = NULL;
+  result = rustty_snapshot_decoder_decode(
+      compressed_decoder, &compressed_terminal);
+  assert(result == RUSTTY_SUCCESS);
+
+  rustty_snapshot_decoder_free(compressed_decoder);
+  rustty_terminal_free(compressed_terminal);
+  //! [snapshot-compress-history]
+
   //! [snapshot-incremental]
   BufferReader reader_state = {
       .data = snapshot,

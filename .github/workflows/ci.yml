@@ -727,6 +727,33 @@ jobs:
       - name: Build librustty-vt (release)
         run: cargo build -p rustty-vt-c --release --locked
 
+      # PORTS `a7cf951eb` (`build-libghostty-vt-windows`): run `c-vt-effects`
+      # directly rather than through its `build.sh`, so the DLL is loaded the
+      # way an embedder would load it. The reference needs this because its Zig
+      # DLL entry point skipped the C++ global constructors (`a141f9bdb`,
+      # `src/lib/windows_dll.zig`); a Rust `cdylib` enters through the CRT's own
+      # `_DllMainCRTStartup`, so this step is what proves the NON-PORT of that
+      # file (DECISIONS P1; rwin run in `.port/phase-8/w5/rwin-dll-proof.txt`).
+      # `clang`, not `cl`, for the reason given at the `test_dll_init` step.
+      - name: Build dynamic linking example
+        working-directory: example/c-vt-effects
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force out | Out-Null
+          clang -Wall -I ../../include src/main.c ../../target/release/rustty_vt_c.dll.lib -o out/c_vt_effects.exe
+          Copy-Item ../../target/release/rustty_vt_c.dll out/
+
+      # pwsh reports the full NTSTATUS; Git Bash truncates it to 8 bits.
+      - name: Test dynamic linking
+        working-directory: example/c-vt-effects
+        shell: pwsh
+        run: |
+          ./out/c_vt_effects.exe
+          $code = $LASTEXITCODE
+          "exit code: 0x{0:X8}" -f $code
+          exit $code
+
       # The Windows exe against the reference's (task W-4). At the pin both are
       # the helper CLI, a GUI-subsystem program with no window (app runtime
       # `.none`). The script runs rustty.exe over the CLI matrix and the "opened"

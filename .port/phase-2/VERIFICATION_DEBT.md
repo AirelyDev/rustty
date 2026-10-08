@@ -2747,7 +2747,7 @@ items that Phase 8 ports into `ci.yml`; they join this debt when written, and ar
   `target/`, runs it against a `rustty_vt_c` terminal (a pty-less driver), and uploads the log with a step-summary tally.
   First run needs: the esctest2 fetch on the runner, the python3 esctest2 run on `ubuntu-latest`, and the pass tally recorded.
 - the Windows DLL steps (`a7cf951eb`; ported by P8-W5 T4) in `ci.yml`'s `windows` job: build `example/c-vt-effects`
-  against `rustty_vt.dll`, copy the DLL beside the exe, run it under `pwsh` and print the exit code as `0x%08X`.
+  against `rustty_vt_c.dll`, copy the DLL beside the exe, run it under `pwsh` and print the exit code as `0x%08X`.
   The same step is also the proof for the provisional NON-PORT of `src/lib/windows_dll.zig` (DECISIONS P1): P8-W5 T4
   runs it once on rwin first; the hosted `windows-latest` leg waits on a push like the rest of this debt.
 
