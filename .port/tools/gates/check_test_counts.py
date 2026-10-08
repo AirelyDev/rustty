@@ -978,7 +978,7 @@ MAP = {
     "font_nerd_font_attributes":([f"{GHF}/nerd_font_attributes.zig"], [f"{RSF}/nerd_font_attributes.rs"], 0),
     "snapshot_terminal": ([f"{GH}/snapshot/terminal.zig"], [f"{RS}/snapshot/terminal.rs"], 0),
     # ---------------------------------------------------------------------
-    # P8-W0 T4 (Phase-8 start, pin a60e9e2a5): terminal/xt_checksum.zig (NEW in the
+    # P8-W0 T4 (Phase-8 start, the ORACLE_PIN advance): terminal/xt_checksum.zig (NEW in the
     # range, `9272a2f7c`; DECRQCRA/XTCHECKSUM) carries 12 named tests and sits in no
     # other row, so the honest meter is its own row. Same one-file glob rule as the
     # P7-W0 T4 rows above: the Rust file does not exist yet, so the row counts rust=0
