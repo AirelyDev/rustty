@@ -2667,7 +2667,7 @@ fn pagelist_incremental_compression_advances_after_allocation_failure() {
 /// PORTS: oracle@main PageList.zig `test "PageList memory usage"` (8834e161c).
 #[cfg_attr(
     all(miri, debug_assertions),
-    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'P8-W5 T1 — memory usage and compressed history restore'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the P8-W5 T1 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_memory_usage() {

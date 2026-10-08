@@ -230,6 +230,7 @@ impl<Item: WasmPageItem, A> WasmPagePool<Item, A> {
     /// `WasmPagePool.freeCount`: the number of unused items this pool holds,
     /// which is always zero. Freed items go to a free list shared by every pool
     /// of this item type in the module, so no single pool owns them.
+    #[inline]
     pub fn free_count(&self) -> usize {
         0
     }
@@ -354,6 +355,7 @@ impl<A> DynamicWasmPagePool<A> {
     /// `WasmPagePool.freeCount`: the number of unused items this pool holds,
     /// which is always zero. Freed items go to a free list shared by every pool
     /// of this item type in the module, so no single pool owns them.
+    #[inline]
     pub fn free_count(&self) -> usize {
         0
     }

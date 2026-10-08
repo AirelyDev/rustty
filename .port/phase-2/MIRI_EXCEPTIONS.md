@@ -2957,6 +2957,41 @@ returned to zero: the scanner took the rest of the file (lines 970–1851) as th
 and every later test in the file, including this new one, got no inventory row. The full native
 timing above does not depend on parsing source, so it closes that gap for `rustty-vt`.
 
+### P8-W5 T1 — memory usage and compressed history restore (2026-10-08)
+
+Three tests added by the core halves of upstream `8834e161c` / `88e66cbc6` compress full-size pages
+(LZ4 over a standard-capacity page) and are out of Miri's budget. Conditions: `cargo +nightly miri`
+(`nextest` for the G6c rows), Stacked Borrows, one test per process; G6 = debug assertions on, G6c =
+`RUSTFLAGS="-C debug-assertions=off"`. Bound: the G6 runs were stopped by PID after the times shown
+(no finer figure: the process was killed, not timed out by the harness); the G6c history run was
+stopped by PID at the 30-minute bound. Times are wall clock. Tree Borrows was not run.
+
+| test | native, debug assertions on | G6 | G6c SB | form |
+|---|---|---|---|---|
+| `pagelist::tests::compress::pagelist_memory_usage` | 1.3 s | did not finish (killed at 1,286 s) | ok, 48 s | G6 LANE ONLY |
+| `pagelist::tests::builder::pagelist_page_allocation_compresses_prepended_pages_unless_visible` | 1.9 s | did not finish (killed after 18+ min) | ok, 311 s | G6 LANE ONLY |
+| `snapshot::history::tests::history_decode_compresses_history_pages_when_requested` | 2.6 s | not run (slower than G6c) | TIMEOUT (30 min, killed by PID) | BOTH LANES |
+
+The first two take the sibling G6-only form (`cfg_attr(all(miri, debug_assertions), ignore = ...)`) and
+run in G6c, whose test set is derived from those annotations; both were UB- and leak-clean there.
+
+**`history_decode_compresses_history_pages_when_requested` takes the both-lanes form.** It writes
+about five pages of numbered lines through the print path (the same cost class as its sibling
+`history_encodes_newest_first_and_restores_complete_history`). 4-criterion basis:
+
+1. **Intractable, measured:** G6c SB still running at the 30-minute bound; G6 is slower.
+2. **Passes natively** (2.6 s, in ci.sh's HARD `cargo test --workspace`) and under AddressSanitizer
+   (`sanitizers.sh rustty-vt "history_decode_compresses pagelist_memory_usage compresses_prepended_pages" address`,
+   2026-10-08: 3 ran, GREEN).
+3. **Its unsafe paths stay Miri-covered by lighter tests:** the Rust-only
+   `snapshot::history::tests::history_decode_compress_option_prepends_and_compresses_small_pages`
+   (G6 lane, SB, debug assertions on: ok, 16 s) hand-builds two 10-column PAGE records and drives
+   `decode_page` -> `finalize(.prepend, .{ .compress = true })` through the allocation's raw PageList
+   pointer, checking both the `compress = false` and `compress = true` outcomes; and
+   `pagelist_page_allocation_compresses_prepended_pages_unless_visible` (G6c, 311 s) covers the
+   viewport cases of the same `finalize` code.
+4. **Documented here and at the source**, with the lanes named.
+
 ### Isolation exception (C-1 basis)
 
 | crate | test | what Miri cannot do |

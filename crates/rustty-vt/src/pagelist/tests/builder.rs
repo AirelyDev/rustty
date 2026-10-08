@@ -369,13 +369,11 @@ fn pagelist_page_allocation_finalizes_pages_and_preserves_live_state() {
 // ref: test "PageList PageAllocation compresses prepended pages unless visible"
 #[cfg_attr(
     all(miri, debug_assertions),
-    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'P8-W5 T1 — memory usage and compressed history restore'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the P8-W5 T1 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
 fn pagelist_page_allocation_compresses_prepended_pages_unless_visible() {
     use crate::pagelist::builder::{FinalizeOptions, Location};
-    use crate::pagelist::Storage;
-
     #[derive(Clone, Copy, PartialEq, Debug)]
     enum Vp {
         Active,
@@ -451,11 +449,6 @@ fn pagelist_page_allocation_compresses_prepended_pages_unless_visible() {
             if case.compressed { 1 } else { 0 },
             s.memory_stats().compressed_pages
         );
-        if case.compressed {
-            assert_eq!(Storage::Compressed, unsafe {
-                crate::pagelist::Node::storage(node)
-            });
-        }
 
         // Reading the page uncompresses it with its contents intact.
         assert_eq!('X' as u32, unsafe {

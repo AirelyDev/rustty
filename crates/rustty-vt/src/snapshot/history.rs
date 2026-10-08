@@ -635,6 +635,9 @@ fn has_semantic_prompt(terminal_page: &TerminalPage) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// Rows of each hand-built page in the Miri-sized compress companion test.
+    const HISTORY_COMPRESS_TEST_ROWS: u16 = 16;
+
     use super::super::fixture;
     use super::*;
     use crate::alloc::Allocator;
@@ -974,7 +977,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, P8-W5 T1; sibling of history_encodes_newest_first_and_restores_complete_history, .port/phase-2/MIRI_EXCEPTIONS.md): MEASURED 2026-10-08 under `cargo +nightly miri nextest run -p rustty-vt --lib` with `-C debug-assertions=off` (the G6c lane), single test, 3 test threads: still running at the 30-minute bound (killed by PID); the debug-assertions-on G6 lane is slower still. The test writes ~5 pages of numbered lines through the full print path before encoding. The prepend-and-compress path it drives (`PageAllocation::finalize(.prepend, .{ .compress = true })` through the allocation's raw PageList pointer) runs UB-clean under Miri in `pagelist_page_allocation_compresses_prepended_pages_unless_visible` (G6c, 311 s); this test runs natively in cargo test --workspace and under ASan"
+        ignore = "MIRI EXCEPTION — BOTH LANES (rustty-vt, P8-W5 T1; sibling of history_encodes_newest_first_and_restores_complete_history; .port/phase-2/MIRI_EXCEPTIONS.md, 'P8-W5 T1 — memory usage and compressed history restore'): MEASURED 2026-10-08 under `cargo +nightly miri nextest run -p rustty-vt --lib` with `-C debug-assertions=off` (the G6c lane), single test, 3 test threads: still running at the 30-minute bound (killed by PID); the debug-assertions-on G6 lane is slower still. The test writes ~5 pages of numbered lines through the full print path before encoding. The history alias path it drives (`decode_page` -> `finalize(.prepend, .{ .compress = true })`) is Miri-covered by the Rust-only `history_decode_compress_option_prepends_and_compresses_small_pages` (G6, 16 s). The prepend-and-compress path it drives (`PageAllocation::finalize(.prepend, .{ .compress = true })` through the allocation's raw PageList pointer) runs UB-clean under Miri in `pagelist_page_allocation_compresses_prepended_pages_unless_visible` (G6c, 311 s); this test runs natively in cargo test --workspace and under ASan"
     )]
     fn history_decode_compresses_history_pages_when_requested() {
         use crate::pagelist::{Node, Storage};
@@ -1079,6 +1082,92 @@ mod tests {
         }
 
         source_screen.deinit();
+    }
+
+    // Rust-only (no upstream counterpart): a Miri-sized companion to
+    // `history_decode_compresses_history_pages_when_requested`. It hand-builds a
+    // HISTORY sequence of two small 10-column PAGE records instead of filling
+    // pages through the print path, then drives `decode_page` ->
+    // `finalize(.prepend, .{ .compress = true })` through the allocation's raw
+    // PageList pointer, so the history alias path runs under Miri.
+    #[test]
+    fn history_decode_compress_option_prepends_and_compresses_small_pages() {
+        use crate::page::{Capacity, Cell, Page};
+        use crate::pagelist::{Node, Storage};
+        use crate::point;
+
+        let capacity = Capacity {
+            cols: 10,
+            rows: HISTORY_COMPRESS_TEST_ROWS,
+            ..Capacity::default()
+        };
+        let mut destination = io::AllocatingWriter::new();
+        let mut stream = record::Writer::init(&mut destination);
+        {
+            let payload = stream.begin(record::Tag::History);
+            Header {
+                key: TerminalScreenKey::Primary,
+                page_count: 2,
+            }
+            .encode(payload)
+            .unwrap();
+            stream.finish().unwrap();
+        }
+        // Newest first, like `encode`: 'B' then 'A'.
+        for marker in ['B', 'A'] {
+            let mut source_page = Page::init(capacity).unwrap();
+            source_page.size.rows = HISTORY_COMPRESS_TEST_ROWS;
+            // SAFETY: cell (0, 0) of the live standalone page.
+            unsafe { *source_page.get_row_and_cell(0, 0).cell = Cell::init(marker as u32) };
+            page::encode(&source_page, &mut stream).unwrap();
+            source_page.deinit();
+        }
+        let written = stream.destination().written().to_vec();
+        stream.deinit();
+
+        for compress in [false, true] {
+            let mut screen = TerminalScreen::init(Allocator, screen_options(10, 2)).unwrap();
+            let mut source = io::FixedReader::new(&written);
+            decode(
+                &mut source,
+                TerminalScreenKey::Primary,
+                &mut screen,
+                DecodeOptions { compress },
+            )
+            .unwrap();
+            assert_eq!(3, screen.pages.total_pages());
+            assert_eq!(
+                if compress { 2 } else { 0 },
+                screen.pages.memory_stats().compressed_pages,
+            );
+
+            // Oldest first in native order; the active page is never compressed.
+            let mut current = screen.pages.pages.first;
+            let mut index = 0;
+            // SAFETY: live nodes of `screen`'s PageList; `storage` reads the tag.
+            unsafe {
+                while !current.is_null() {
+                    let expected = if compress && index < 2 {
+                        Storage::Compressed
+                    } else {
+                        Storage::Resident
+                    };
+                    assert_eq!(expected, Node::storage(current));
+                    current = (*current).next;
+                    index += 1;
+                }
+            }
+
+            // Reading restores a compressed page with its contents intact.
+            let oldest = screen.pages.get_top_left(point::Tag::Screen).node;
+            // SAFETY: live node; `Node::page` restores a compressed node.
+            assert_eq!('A' as u32, unsafe {
+                (*(*Node::page(oldest)).get_row_and_cell(0, 0).cell).codepoint()
+            });
+            screen.pages.assert_integrity();
+            screen.assert_integrity();
+            screen.deinit();
+        }
     }
 
     // test "HISTORY encodes and restores an empty sequence"
