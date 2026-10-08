@@ -13,6 +13,8 @@ Sending clipboard read:
   write_pty (41 bytes): ]52;c;SGVsbG8gZnJvbSB0aGUgY2xpcGJvYXJk\
 Sending unknown APC:
   unknown APC (truncated=no, content=23 bytes): private-command;payload
+Sending unknown OSC:
+  unknown OSC (truncated=no, terminator=BEL, content=16 bytes): 7400;status=busy
 Sending another BEL:
   bell! (count=2)
 Total bells: 2
