@@ -1,0 +1,17 @@
+# P8-W9 T2 lane g-gtkfeat at a60e9e2a5 (head 1d22ba80d)
+host: rvm (Fedora aarch64), clone /home/gael/projects/rustty-p8w9t2 (git archive 1d22ba80d plus .port and docs/superpowers copied from the worktree, since .gitattributes export-ignores them)
+### CMD: bash .port/tools/gates/check_gtk_feature_lane.sh
+start (UTC): 2026-10-08T15:09:20Z
+end (UTC):   2026-10-08T15:14:21Z
+wall: 301 s
+rc: 0
+## verdict lines
+G-GTKFEAT: the --features gtk,wayland,x11 lane (no other CI lane compiles it)
+G-GTKFEAT: GREEN (floors: gtk delta>=220, wayland_*>=3, x11_*>=4)
+## tail
+### CMD: bash .port/tools/gates/check_gtk_feature_lane.sh
+G-GTKFEAT: the --features gtk,wayland,x11 lane (no other CI lane compiles it)
+  clippy -D warnings: clean
+  gated tests: 272 listed with features, 40 without -> 232 gated
+               (wayland_* 3, x11_* 4)
+G-GTKFEAT: GREEN (floors: gtk delta>=220, wayland_*>=3, x11_*>=4)

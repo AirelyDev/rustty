@@ -1,0 +1,23 @@
+# P8-W9 T2 lane g-lsan-gtk at a60e9e2a5 (head 1d22ba80d)
+host: rvm (Fedora aarch64), clone /home/gael/projects/rustty-p8w9t2 (git archive 1d22ba80d plus .port and docs/superpowers copied from the worktree, since .gitattributes export-ignores them)
+### CMD: bash .port/tools/gates/sanitizers.sh --gate lsan-gtk
+start (UTC): 2026-10-08T17:41:01Z
+end (UTC):   2026-10-08T17:42:05Z
+wall: 64 s
+rc: 0
+## verdict lines
+### G-LSAN-GTK: ASan + LeakSanitizer (detect_leaks=1) over a live GTK surface, created and closed (Linux/aarch64) ###
+  suppression 'libpangoft2-1.0.so': 6913 allocations matched (ceiling 7600)
+  suppression 'libpangocairo-1.0.so': 2197 allocations matched (ceiling 2420)
+G-LSAN-GTK: GREEN (1 test(s) under the sanitizer, 0 findings)
+## tail
+### CMD: bash .port/tools/gates/sanitizers.sh --gate lsan-gtk
+### G-LSAN-GTK: ASan + LeakSanitizer (detect_leaks=1) over a live GTK surface, created and closed (Linux/aarch64) ###
+  test: rustty-apprt:gtk,wayland,x11 --test gtk_window_live -- window_hosts_a_live_terminal --exact --ignored, inside .port/tools/gtk_live_headless_sway.sh
+=== sanitizer matrix: lsan over 1 crate spec(s); one shared target dir /home/gael/projects/rustty-p8w9t2/target/lsan-gtk/san-lsan, deleted when the pass ends ===
+  ✅ lsan rustty-apprt:gtk,wayland,x11: 1 test(s) ran, 63s — 1 passed, 0 ignored
+--- lsan matrix summary: 1 test(s) ran, wall 64s (1 min) ---
+  rustty-apprt:gtk,wayland,x11         GREEN                1 tests     63s
+  suppression 'libpangoft2-1.0.so': 6913 allocations matched (ceiling 7600)
+  suppression 'libpangocairo-1.0.so': 2197 allocations matched (ceiling 2420)
+G-LSAN-GTK: GREEN (1 test(s) under the sanitizer, 0 findings)

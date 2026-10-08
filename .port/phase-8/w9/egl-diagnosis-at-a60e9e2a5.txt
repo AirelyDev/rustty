@@ -1,0 +1,20 @@
+# P8-W9 T2 lane egl-diagnosis at a60e9e2a5 (head 1d22ba80d)
+host: rvm (Fedora aarch64), clone /home/gael/projects/rustty-p8w9t2 (git archive 1d22ba80d plus .port and docs/superpowers copied from the worktree, since .gitattributes export-ignores them)
+### CMD: env __EGL_VENDOR_LIBRARY_FILENAMES=/nonexistent.json cargo test -p rustty-core --lib app::test_runtime::app_init_without_an_egl_driver_fails_with_device_failed_and_says_why -- --ignored --exact --nocapture
+start (UTC): 2026-10-08T15:26:45Z
+end (UTC):   2026-10-08T15:26:45Z
+wall: 0 s
+rc: 0
+## verdict lines
+test app::test_runtime::app_init_without_an_egl_driver_fails_with_device_failed_and_says_why ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 84 filtered out; finished in 0.01s
+## tail
+### CMD: env __EGL_VENDOR_LIBRARY_FILENAMES=/nonexistent.json cargo test -p rustty-core --lib app::test_runtime::app_init_without_an_egl_driver_fails_with_device_failed_and_says_why -- --ignored --exact --nocapture
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (target/debug/deps/rustty_core-d2bf24c3aad9796f)
+
+running 1 test
+test app::test_runtime::app_init_without_an_egl_driver_fails_with_device_failed_and_says_why ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 84 filtered out; finished in 0.01s
+

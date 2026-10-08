@@ -1,0 +1,33 @@
+# P8-W9 T2 lane g-hwasan-zlib-isolated at a60e9e2a5 (head 1d22ba80d)
+host: rvm (Fedora aarch64), clone /home/gael/projects/rustty-p8w9t2 (git archive 1d22ba80d plus .port and docs/superpowers copied from the worktree, since .gitattributes export-ignores them)
+### CMD: env SAN_ONLY=zlib-sys bash .port/tools/gates/sanitizers.sh --gate hwasan
+start (UTC): 2026-10-08T17:20:40Z
+end (UTC):   2026-10-08T17:20:50Z
+wall: 10 s
+rc: 3
+## verdict lines
+### CMD: env SAN_ONLY=zlib-sys bash .port/tools/gates/sanitizers.sh --gate hwasan
+### G-HWASAN: HWAddressSanitizer (-Zbuild-std, tagged globals, lld; C via cc with -fsanitize=hwaddress) over the workspace test suites (Linux/aarch64) ###
+  - xtask: its tests run nested cargo builds that inherit RUSTFLAGS=-Zsanitizer=hwaddress without -Zbuild-std, which rustc rejects ('mixing -Zsanitizer will cause an ABI mismatch in crate rustty_util'; G-HWASAN's first run, rvm, P7-W16b: 38 nested builds, 2 tests failed); the same exclusion as G-MSAN's (SANITIZER_SUPPRESSIONS.md M4, H1)
+feature lane: rustty-vt:wuffs,oniguruma — the PNG decode tests (`image_load_png_zlib_compressed_direct`, `sys::tests::default_decoder_*`) are ignored without the wuffs feature, and one of them is a Miri exception whose stated compensating control is ASan; found by G-ASAN's claim cross-check on its first run (P7-W14); and the oniguruma feature's tests, e.g. the Miri-excepted tmux::control::concurrent_first_notifications_do_not_race_oniguruma_init, which no lane compiled until the cross-check covered every Miri exception (fix round 1)
+NOTE: SAN_ONLY narrows this run to: zlib-sys — the verdict is BLOCKED, never GREEN
+  ok hwasan zlib-sys: 1 C archive(s), all instrumented (__hwasan_ references)
+  ✅ hwasan zlib-sys: 11 test(s) ran, 10s — 11 passed, 0 ignored
+  zlib-sys                             GREEN               11 tests     10s
+G-HWASAN: BLOCKED (a crate did not build, or the disk floor was reached; see above)
+## tail
+### CMD: env SAN_ONLY=zlib-sys bash .port/tools/gates/sanitizers.sh --gate hwasan
+### G-HWASAN: HWAddressSanitizer (-Zbuild-std, tagged globals, lld; C via cc with -fsanitize=hwaddress) over the workspace test suites (Linux/aarch64) ###
+excluded (cannot run under the sanitizer):
+  - xtask: its tests run nested cargo builds that inherit RUSTFLAGS=-Zsanitizer=hwaddress without -Zbuild-std, which rustc rejects ('mixing -Zsanitizer will cause an ABI mismatch in crate rustty_util'; G-HWASAN's first run, rvm, P7-W16b: 38 nested builds, 2 tests failed); the same exclusion as G-MSA
+feature lane: rustty-vt:wuffs,oniguruma — the PNG decode tests (`image_load_png_zlib_compressed_direct`, `sys::tests::default_decoder_*`) are ignored without the wuffs feature, and one of them is a Miri exception whose stated compensating control is ASan; found by G-ASAN's claim cross-check on its f
+feature lane: rustty-apprt:gtk,wayland,x11 — GTK is the reference's Linux runtime, so its test executable there compiles the GTK apprt; cargo test --workspace does not
+feature lane: rustty-os:flatpak — the Flatpak arm of rustty-os (links gio-2.0, Linux/FreeBSD only); cargo test --workspace does not build it
+NOTE: SAN_ONLY narrows this run to: zlib-sys — the verdict is BLOCKED, never GREEN
+=== sanitizer matrix: hwasan over 1 crate spec(s); one shared target dir /home/gael/projects/rustty-p8w9t2/target/san-hwasan, deleted when the pass ends ===
+  ok hwasan zlib-sys: 1 C archive(s), all instrumented (__hwasan_ references)
+  ✅ hwasan zlib-sys: 11 test(s) ran, 10s — 11 passed, 0 ignored
+--- hwasan matrix summary: 11 test(s) ran, wall 10s (0 min) ---
+  zlib-sys                             GREEN               11 tests     10s
+  BLOCKED: SAN_ONLY narrowed the run; the Miri-exception cross-check needs the whole pass
+G-HWASAN: BLOCKED (a crate did not build, or the disk floor was reached; see above)

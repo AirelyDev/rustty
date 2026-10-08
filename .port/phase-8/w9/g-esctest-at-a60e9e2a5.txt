@@ -1,0 +1,23 @@
+# P8-W9 T2 lane g-esctest at a60e9e2a5 (head 1d22ba80d)
+host: rvm (Fedora aarch64), clone /home/gael/projects/rustty-p8w9t2 (git archive 1d22ba80d plus .port and docs/superpowers copied from the worktree, since .gitattributes export-ignores them)
+### CMD: bash .port/tools/gates/check_esctest.sh
+start (UTC): 2026-10-08T15:25:24Z
+end (UTC):   2026-10-08T15:26:45Z
+wall: 81 s
+rc: 0
+## verdict lines
+Rustty: *** 264 tests passed, 42 known bugs, 261 TESTS FAILED ***
+oracle: *** 264 tests passed, 42 known bugs, 261 TESTS FAILED ***
+G-ESCTEST GREEN: every esctest test has the same outcome and log against both.
+## tail
+### CMD: bash .port/tools/gates/check_esctest.sh
+== Rustty: test/esctest
+esctest2 2798f12149a19c3295e9b4853ab2da4b2eff1b2b is already in /home/gael/projects/rustty-p8w9t2/test/esctest/target/share/esctest
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s
+esctest-librustty exited 0
+== oracle: test/esctest at a60e9e2a57f73e1eef2bd1cf2995a467f69e7fb0
+esctest-libghostty exited 0
+Rustty: *** 264 tests passed, 42 known bugs, 261 TESTS FAILED ***
+oracle: *** 264 tests passed, 42 known bugs, 261 TESTS FAILED ***
+567 tests compared, 0 known differences, 0 findings
+G-ESCTEST GREEN: every esctest test has the same outcome and log against both.
