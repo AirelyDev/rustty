@@ -527,7 +527,8 @@ impl DiskCache {
         !matches!(err, Error::InvalidCacheKey | Error::CacheLocked)
     }
 
-    // Supports both standalone hostnames and user@hostname format
+    // Supports both standalone hostnames and user@hostname format, each with an
+    // optional `:port` suffix (`[addr]:port` for IPv6 addresses).
     // pub fn isValidCacheKey(key: []const u8) bool {
     pub fn is_valid_cache_key(key: &[u8]) -> bool {
         // if (key.len == 0) return false;
@@ -539,17 +540,108 @@ impl DiskCache {
         // if (std.mem.indexOfScalar(u8, key, '@')) |at_pos| {
         //     const user = key[0..at_pos];
         //     const hostname = key[at_pos + 1 ..];
-        //     return isValidUser(user) and isValidHost(hostname);
+        //     return isValidUser(user) and isValidHostPort(hostname);
         // }
         if let Some(at_pos) = key.iter().position(|&c| c == b'@') {
             let user = &key[0..at_pos];
             let hostname = &key[at_pos + 1..];
-            return is_valid_user(user) && is_valid_host(hostname);
+            return is_valid_user(user) && is_valid_host_port(hostname);
         }
 
-        // return isValidHost(key);
-        is_valid_host(key)
+        // return isValidHostPort(key);
+        is_valid_host_port(key)
     }
+
+    /// Split `host`, `host:port` or `[ipv6]:port` into its host and port. A
+    /// bare IPv6 address (more than one colon, no brackets) has no port. The
+    /// parts are not validated.
+    // pub fn splitHostPort(s: []const u8) HostPort {
+    pub fn split_host_port(s: &[u8]) -> HostPort<'_> {
+        // if (s.len > 0 and s[0] == '[') {
+        if !s.is_empty() && s[0] == b'[' {
+            // if (std.mem.indexOf(u8, s, "]:")) |close| return .{ .host = s[1..close], .port = s[close + 2 ..] };
+            if let Some(close) = s.windows(2).position(|w| w == b"]:") {
+                return HostPort {
+                    host: &s[1..close],
+                    port: Some(&s[close + 2..]),
+                };
+            }
+            // return .{ .host = s };
+            return HostPort {
+                host: s,
+                port: None,
+            };
+        }
+
+        // if (std.mem.indexOfScalar(u8, s, ':')) |colon| {
+        if let Some(colon) = s.iter().position(|&c| c == b':') {
+            // if (std.mem.indexOfScalarPos(u8, s, colon + 1, ':') == null) return .{ ... };
+            if !s[colon + 1..].contains(&b':') {
+                return HostPort {
+                    host: &s[0..colon],
+                    port: Some(&s[colon + 1..]),
+                };
+            }
+        }
+
+        // return .{ .host = s };
+        HostPort {
+            host: s,
+            port: None,
+        }
+    }
+}
+
+/// A host with an optional port, split apart.
+// pub const HostPort = struct { host: []const u8, port: ?[]const u8 = null };
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostPort<'a> {
+    pub host: &'a [u8],
+    pub port: Option<&'a [u8]>,
+}
+
+// fn isValidHostPort(s: []const u8) bool {
+fn is_valid_host_port(s: &[u8]) -> bool {
+    // const hp = splitHostPort(s);
+    let hp = DiskCache::split_host_port(s);
+    // const port = hp.port orelse return isValidHost(hp.host);
+    let Some(port) = hp.port else {
+        return is_valid_host(hp.host);
+    };
+
+    // Only IPv6 addresses are bracketed, and only when they carry a port.
+    // const bracketed = s[0] == '[';
+    let bracketed = s[0] == b'[';
+    // const ip6 = std.mem.indexOfScalar(u8, hp.host, ':') != null;
+    let ip6 = hp.host.contains(&b':');
+    // if (bracketed != ip6) return false;
+    if bracketed != ip6 {
+        return false;
+    }
+
+    // return isValidHost(hp.host) and isValidPort(port);
+    is_valid_host(hp.host) && is_valid_port(port)
+}
+
+// fn isValidPort(port: []const u8) bool {
+fn is_valid_port(port: &[u8]) -> bool {
+    // Digits only and no leading zero (which also rules out port 0), so
+    // `host:22` and `host:022` can't become distinct keys.
+    // if (port.len == 0 or port[0] == '0') return false;
+    if port.is_empty() || port[0] == b'0' {
+        return false;
+    }
+    // for (port) |c| if (!std.ascii.isDigit(c)) return false;
+    if !port.iter().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    // _ = std.fmt.parseInt(u16, port, 10) catch return false;
+    // Digits only here, so the only failure is overflow.
+    // return true;
+    std::str::from_utf8(port)
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .is_some()
 }
 
 // fn readEntries(alloc: Allocator, file: std.fs.File) !std.StringHashMap(Entry) {
@@ -1776,6 +1868,26 @@ mod tests {
         assert!(!is_valid_user(&b"a".repeat(65))); // too long
     }
 
+    // test splitHostPort
+    #[test]
+    fn split_host_port_test() {
+        let plain = DiskCache::split_host_port(b"example.com");
+        assert_eq!(b"example.com".as_slice(), plain.host);
+        assert!(plain.port.is_none());
+
+        let with_port = DiskCache::split_host_port(b"example.com:2222");
+        assert_eq!(b"example.com".as_slice(), with_port.host);
+        assert_eq!(b"2222".as_slice(), with_port.port.unwrap());
+
+        let ip6 = DiskCache::split_host_port(b"2001:db8::1");
+        assert_eq!(b"2001:db8::1".as_slice(), ip6.host);
+        assert!(ip6.port.is_none());
+
+        let ip6_port = DiskCache::split_host_port(b"[2001:db8::1]:2222");
+        assert_eq!(b"2001:db8::1".as_slice(), ip6_port.host);
+        assert_eq!(b"2222".as_slice(), ip6_port.port.unwrap());
+    }
+
     // test isValidCacheKey
     #[test]
     fn is_valid_cache_key_test() {
@@ -1787,6 +1899,23 @@ mod tests {
         assert!(DiskCache::is_valid_cache_key(b"user@example.com"));
         assert!(DiskCache::is_valid_cache_key(b"user@192.168.1.1"));
         assert!(DiskCache::is_valid_cache_key(b"user@::1"));
+        assert!(DiskCache::is_valid_cache_key(b"example.com:2222"));
+        assert!(DiskCache::is_valid_cache_key(b"user@example.com:2222"));
+        assert!(DiskCache::is_valid_cache_key(b"user@192.168.1.1:65535"));
+        assert!(DiskCache::is_valid_cache_key(b"user@[::1]:2222"));
+        assert!(DiskCache::is_valid_cache_key(b"[2001:db8::1]:22"));
+
+        // Invalid ports
+        assert!(!DiskCache::is_valid_cache_key(b"user@example.com:"));
+        assert!(!DiskCache::is_valid_cache_key(b"user@example.com:0"));
+        assert!(!DiskCache::is_valid_cache_key(b"user@example.com:022"));
+        assert!(!DiskCache::is_valid_cache_key(b"user@example.com:00"));
+        assert!(!DiskCache::is_valid_cache_key(b"user@example.com:65536"));
+        assert!(!DiskCache::is_valid_cache_key(b"user@example.com:+22"));
+        assert!(!DiskCache::is_valid_cache_key(b"user@example.com:ssh"));
+        assert!(!DiskCache::is_valid_cache_key(b"user@[::1]"));
+        assert!(!DiskCache::is_valid_cache_key(b"user@[::1]:"));
+        assert!(!DiskCache::is_valid_cache_key(b"user@[example.com]:22"));
 
         // Invalid
         assert!(!DiskCache::is_valid_cache_key(b""));

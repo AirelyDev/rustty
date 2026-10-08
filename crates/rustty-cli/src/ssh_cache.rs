@@ -122,12 +122,15 @@ impl args::Target for Options {
 /// inspects and maintains that cache.
 ///
 /// The cache stores destinations (a hostname or user@hostname) along with
-/// timestamps.
+/// timestamps. A destination on a port other than 22 carries it as a
+/// `:port` suffix (`user@hostname:2222`, or `user@[2001:db8::1]:2222` for an
+/// IPv6 address), since each port can be a different machine.
 ///
 /// A positional destination queries the cache: `user@hostname` shows that
 /// exact entry, while a bare `hostname` shows every cached entry for that
-/// host regardless of user. With no destination and no action, the entire
-/// cache is listed. A query that matches nothing exits 1.
+/// host regardless of user and port, and a bare `hostname:port` every entry
+/// for that port. With no destination and no action, the entire cache is
+/// listed. A query that matches nothing exits 1.
 ///
 /// At most one action (`--clear`, `--add`, `--remove`, or `--prune`) may be
 /// specified, and not together with a positional destination; combining them
@@ -142,6 +145,7 @@ impl args::Target for Options {
 ///     rustty +ssh-cache                           # List all cached destinations
 ///     rustty +ssh-cache user@example.com          # Show that destination
 ///     rustty +ssh-cache example.com               # Show all users on that host
+///     rustty +ssh-cache user@example.com:2222     # Show that destination on port 2222
 ///     rustty +ssh-cache --add=user@example.com    # Manually add a destination
 ///     rustty +ssh-cache --remove=user@example.com # Remove a destination
 ///     rustty +ssh-cache --prune=30d               # Remove entries older than 30 days
@@ -360,7 +364,7 @@ fn run_inner<Wo: Write, We: Write>(
             Err(disk_cache::Error::InvalidCacheKey) => {
                 writeln!(
                     stderr,
-                    "Error: invalid destination '{}' (expected hostname or user@hostname)",
+                    "Error: invalid destination '{}' (expected [user@]hostname[:port])",
                     String::from_utf8_lossy(dest),
                 )?;
                 return Ok(2);
@@ -390,7 +394,7 @@ fn run_inner<Wo: Write, We: Write>(
             Err(disk_cache::Error::InvalidCacheKey) => {
                 writeln!(
                     stderr,
-                    "Error: invalid destination '{}' (expected hostname or user@hostname)",
+                    "Error: invalid destination '{}' (expected [user@]hostname[:port])",
                     String::from_utf8_lossy(dest),
                 )?;
                 return Ok(2);
@@ -487,7 +491,7 @@ fn run_inner<Wo: Write, We: Write>(
         if !DiskCache::is_valid_cache_key(q) {
             writeln!(
                 stderr,
-                "Error: invalid destination '{}' (expected hostname or user@hostname)",
+                "Error: invalid destination '{}' (expected [user@]hostname[:port])",
                 String::from_utf8_lossy(q),
             )?;
             DiskCache::deinit_entries(&mut entries);
@@ -586,24 +590,51 @@ fn list_entries<W: Write>(
 }
 
 /// Whether a cache `key` matches a positional `query`. A `user@host` query
-/// (containing `@`) matches one exact key; a bare `host` query matches every
-/// key on that host regardless of user, comparing against the key's host
-/// component (everything after its first `@`, or the whole key if userless).
+/// (containing `@`) matches one exact destination; a bare `host` query
+/// matches every key on that host regardless of user and port, and a bare
+/// `host:port` query every key on that host and port regardless of user.
+/// A missing port is the same as port 22.
 // fn matchesQuery(key: []const u8, query: []const u8) bool {
 fn matches_query(key: &[u8], query: &[u8]) -> bool {
-    // if (std.mem.indexOfScalar(u8, query, '@') != null) { return std.mem.eql(u8, key, query); }
-    if query.contains(&b'@') {
-        return key == query;
+    // const key_at = std.mem.indexOfScalar(u8, key, '@');
+    // const query_at = std.mem.indexOfScalar(u8, query, '@');
+    let key_at = key.iter().position(|&c| c == b'@');
+    let query_at = query.iter().position(|&c| c == b'@');
+    // if (query_at) |i| {
+    if let Some(i) = query_at {
+        // const key_user = if (key_at) |j| key[0..j] else return false;
+        let key_user = match key_at {
+            Some(j) => &key[0..j],
+            None => return false,
+        };
+        // if (!std.mem.eql(u8, key_user, query[0..i])) return false;
+        if key_user != &query[0..i] {
+            return false;
+        }
     }
 
-    // const at = std.mem.indexOfScalar(u8, key, '@');
-    // const host = if (at) |i| key[i + 1 ..] else key;
-    let host = match key.iter().position(|&c| c == b'@') {
+    // const key_hp = DiskCache.splitHostPort(if (key_at) |i| key[i + 1 ..] else key);
+    // const query_hp = DiskCache.splitHostPort(if (query_at) |i| query[i + 1 ..] else query);
+    let key_hp = DiskCache::split_host_port(match key_at {
         Some(i) => &key[i + 1..],
         None => key,
-    };
-    // return std.mem.eql(u8, host, query);
-    host == query
+    });
+    let query_hp = DiskCache::split_host_port(match query_at {
+        Some(i) => &query[i + 1..],
+        None => query,
+    });
+    // if (!std.mem.eql(u8, key_hp.host, query_hp.host)) return false;
+    if key_hp.host != query_hp.host {
+        return false;
+    }
+
+    // Only a bare host query matches every port.
+    // if (query_at == null and query_hp.port == null) return true;
+    if query_at.is_none() && query_hp.port.is_none() {
+        return true;
+    }
+    // return std.mem.eql(u8, key_hp.port orelse "22", query_hp.port orelse "22");
+    key_hp.port.unwrap_or(b"22") == query_hp.port.unwrap_or(b"22")
 }
 
 /// Format a Unix timestamp as an ISO-8601 UTC string
@@ -807,6 +838,42 @@ mod tests {
         assert!(matches_query(b"root@example.com", b"example.com"));
         assert!(matches_query(b"example.com", b"example.com"));
         assert!(!matches_query(b"user@other.com", b"example.com"));
+
+        // Bare host: every port on that host too.
+        assert!(matches_query(b"user@example.com:2222", b"example.com"));
+        assert!(matches_query(b"user@[::1]:2222", b"::1"));
+        assert!(matches_query(b"user@::1", b"::1"));
+
+        // Bare host:port: that port only, any user.
+        assert!(matches_query(b"user@example.com:2222", b"example.com:2222"));
+        assert!(matches_query(b"root@example.com:2222", b"example.com:2222"));
+        assert!(!matches_query(b"user@example.com", b"example.com:2222"));
+        assert!(!matches_query(
+            b"user@example.com:2223",
+            b"example.com:2222"
+        ));
+        assert!(matches_query(b"user@[::1]:2222", b"[::1]:2222"));
+
+        // Exact user@host:port.
+        assert!(matches_query(
+            b"user@example.com:2222",
+            b"user@example.com:2222"
+        ));
+        assert!(!matches_query(
+            b"user@example.com",
+            b"user@example.com:2222"
+        ));
+        assert!(!matches_query(
+            b"user@example.com:2222",
+            b"user@example.com"
+        ));
+
+        // A missing port is port 22.
+        assert!(matches_query(b"user@example.com", b"example.com:22"));
+        assert!(matches_query(b"user@example.com", b"user@example.com:22"));
+        assert!(matches_query(b"user@example.com:22", b"user@example.com"));
+        assert!(matches_query(b"user@[::1]:22", b"user@::1"));
+        assert!(!matches_query(b"user@example.com:2222", b"example.com:22"));
     }
 
     // test formatTimestamp
