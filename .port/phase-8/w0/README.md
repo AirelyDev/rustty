@@ -116,3 +116,38 @@ No other gate is RED or BLOCKED beyond R4 §5's arrival list.
 | `*-after-at-a60e9e2a5.txt` | the same set (G9 against the regenerated surface), plus G-ORACLE-SH-SELF |
 | `g-census-arrival-at-a60e9e2a5.txt` | G-CENSUS at the new pin before `CENSUS_DELTA.md` moved (RED by design) |
 | `g9-before-regen-at-a60e9e2a5.txt` | G9 at the new pin against the frozen surface (GREEN 693/693) |
+
+## P8-W0 T4: phase-start records and gate maps
+
+Negative control for the new G1b MAP row (`g1b-with-xt-checksum-row-at-a60e9e2a5.txt`):
+`check_test_counts.py` with the `xt_checksum` row (`terminal/xt_checksum.zig` against
+`crates/rustty-vt/src/xt_checksum*.rs`, a one-file glob so the missing Rust file counts 0 instead of tripping
+the stale-mapping arm) reads
+
+```
+  input_mouse_encode   24    23  RED  drop=1
+  cli_ssh            13    12  RED  drop=1
+  xt_checksum        12     0  RED  drop=12
+TEST-COUNT GATE: RED — 3 module(s) with dropped tests
+```
+
+so the row is RED with upstream 12 against Rust 0, as the brief requires; the other two rows are the arrival
+state recorded above. The row goes GREEN when the `xt_checksum` port lands (P8-W3).
+
+After the T4 records (`*-after-t4.txt`):
+
+| gate | arrival (T3) | after T4 |
+|---|---|---|
+| G-UDDOCS | GREEN | PASS (UD20, UD312 "fixed upstream", docs rows removed) |
+| G-PARITY | GREEN | GREEN |
+| phase-2 closure | GREEN | GREEN |
+| G3b `--not-carried-check` | 6 NOT-CARRIED-INVALID | GREEN, 37 rows (`lib_vt.zig` rows 40-45: 519, 522-525, 527; the doc block moved +13, not +9) |
+| G-FILES | 6 MISSING | 5 MISSING (`windows_dll.zig` is a provisional NON-PORT) |
+| G-SYMS | 8 unexplained | 7 (`windows_dll.DllMain` gone) |
+| G-TESTS | 73 unexplained | 73 (unchanged; the ports are the fix) |
+| G3b default scope | RED, 411 missing | not re-run in T4 (a 12-minute run); only `--not-carried-check` was. The new `crate_map` rows make G3b read the six files' comments, so its count rises when it next runs |
+| G-LOGFILE arm 1 | 3 undeclared files, 10 sites | declared in `LOG-PORTMAP.tsv` (allowance = full site count: 6, 2, 2); the arm now reads "declared port file does not exist" until the ports land. The other arms (dead `Termio.zig:717`, 19 off-line ABSENT rows, short files, the N20 comment) are not in T4's scope. |
+
+Not applied mechanically, on purpose: Appendix A's UD250 `OpenGL.zig:312` and UD343 `test.yml` anchors are
+history anchors (20abdb50a code that no longer exists), UD205's "began at :1557 there" is a 20abdb50a anchor,
+and UD180/UD181's "first cited as" corrections are history; those were kept.

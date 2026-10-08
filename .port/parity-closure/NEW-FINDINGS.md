@@ -11182,3 +11182,27 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   test fails "no wide head in the last column" right after the resize in debug and release, and with that assertion disabled the
   release build still fails "cell 9 written", because a background SGR makes the stray blank non-empty), GREEN
   after in debug (206 resize tests), release (17) and Miri (17, no UB).
+
+## N519 — G-TESTS' four-token name matcher masks 17 of the 90 tests added in the Phase 8 range
+
+- **id**: N519. P8-W0 T4 (R4 §5.1, DECISIONS N519). **severity**: low (a gate blind spot; no behavioural defect).
+  **kind**: gate imprecision. **state**: RECORD-ONLY (no gate change; the checklist is the meter, as in Phase 7).
+- **cause**: `audit_test_coverage.py` (`analyze`, `need = parts[:4]`) treats an upstream test as present when the
+  first four normalized tokens of its name co-occur in any one Rust test name. Seventeen of the 90 tests added in
+  `12752b2ac..a60e9e2a5` pass that way with no counterpart in Rustty (19%): a grep for each snake-case name finds
+  nothing, except `next_slice_matches_per_byte`, an unrelated older test in `osc/mod.rs`. G-TESTS therefore reports
+  73 unexplained at the arrival, not 90.
+- **the masked tests**: `splitHostPort`; "parseDestination: port before hostname"; "legacy: ctrl+alt+shift+backspace";
+  "PageList PageAllocation compresses prepended pages unless visible"; "PageList resize reflow pin in blank cells
+  after line break"; "Screen: selectLine semantic boundary around unwritten cells"; "Terminal: eraseLine complete
+  clears kitty placeholder flag"; "Terminal: resize less cols without reflow cutting wide char tail"; "Terminal:
+  resize pending wrap live and saved cursors"; c/osc "command data null" and "unknown"; c/terminal "set
+  semantic_prompt callback", "set reset callback" and "checksum report requires explicit opt in"; "OSC unknown:
+  nextSlice matches per-byte parsing"; "stream: DECRQCRA dispatch" and "stream: XTCHECKSUM dispatch"; "unknown OSC
+  effect callback"; "xt_checksum: encode".
+  R4 §3 counts 17 but lists the 19 names above (one, "resize less cols without reflow cutting wide char tail",
+  was ported by P8-W0 T1, N518); the count of 17 is carried as R4 wrote it, and the TSV is the authority.
+- **remedy**: not a stricter matcher: it would need its own self-test arm and would risk the false gaps the script's
+  comments describe. At the finale every row of `.port/phase-8/delta-review/R4-upstream-tests.tsv` is ticked by
+  exact name (Phase 7's `w0/tests-checklist.txt` precedent), and each ported test keeps upstream's name so the
+  checklist can be read by grep.
