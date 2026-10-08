@@ -1,0 +1,69 @@
+a60e9e2a5 Update VOUCHED list (#14585)
+34f39002c Update VOUCHED list (#14573)
+c706451fe terminal: apply a single shift to exactly one printed character
+bae2c3cdb libghostty-vt: program status protocol (OSC 7501)
+2febd0116 Update VOUCHED list (#14566)
+6220a3617 terminal: print codepoints above 0xFF unmapped in a charset, as xterm
+13b5ab204 terminal: stop line selection at prompt boundaries across blank cells
+c3203ea4b Update VOUCHED list (#14550)
+140feb86a renderer: always release shaders when the render thread exits
+157c44f64 input: UTF-8 encode the button in 1005 mouse reports
+aca9bf031 libghostty-vt: zero the decode_png output before the callback
+e6db5b633 terminal: fix crash after shrinking columns splits a wide char
+f96c9711b Update VOUCHED list (#14528)
+406f2e544 deps: Update iTerm2 color schemes
+822e84272 Update VOUCHED list (#14522)
+f5a7f706f Update VOUCHED list (#14520)
+dfd7bafcd cli: address review feedback on the ssh-cache port
+82ae67b9f libghostty: document allocator alignment as a bit count
+0e75d015f macos: simplify window restoration setup
+934ef8140 macos: update window restoration on config reload
+83edd491e Update VOUCHED list (#14510)
+e55c687a4 input: encode ctrl+alt+shift+backspace in legacy mode
+136029788 macos: honor window-save-state=never for restorable windows
+e8b858cc6 terminal/tmux: don't count unstored bytes against max_bytes
+01b9f4958 terminal: link to xterm's checksumExtension source
+b2f557c6c terminal: inline the checksum test helper
+5f0d4febc terminal: use a rectangle selection for DECRQCRA
+cc0276778 terminal: link to xterm's checksum implementation
+edcaf6670 test/esctest: enable DECRQCRA
+25b04b410 lib-vt: export xt_checksum and device_attributes
+7e2d1793d lib-vt: add GHOSTTY_TERMINAL_OPT_XT_CHECKSUM_EXTENSION
+00a19db51 config: add vt-xt-checksum-extension
+9272a2f7c terminal: support DECRQCRA and XTCHECKSUM
+88e66cbc6 libghostty-vt: option to compress snapshot history while decoding
+8834e161c libghostty-vt: add memory usage query
+d5427745d Update VOUCHED list (#14497)
+36953bca8 terminal: route OSC 105 to the color parser
+b1bfd1d9c terminal: reset mouse shape on empty OSC 22
+1dc485f10 Update VOUCHED list (#14491)
+2e36658c6 opengl: explain why the surfaceless display can't be created
+2b0ceff7d terminal/c: fail a paste after any refused write
+fa604a170 terminal/c: test a paste reader ignoring a refused write
+9a4787d90 vt: don't call a same-size terminal resize a no-op
+51d3ca168 terminal/c: return false from osc command data on NULL
+02c51decf terminal/c: test osc command data with a NULL command
+7bb45ba34 libghostty: add semantic prompt and reset effects
+2b1edded2 terminal: cosmetic changes in `fullReset`
+bb20f8e45 terminal: reset the palette on RIS
+afded91df terminal: preserve saved cursor position during repeated widening
+be595d8f0 macOS: remove compiler check for Shortcut and Tab bar fix
+4da7523fa Update VOUCHED list (#14471)
+6fbb560cd cli: include the port in the ssh-terminfo cache key
+e2721d093 macos: don't show Kitty clipboard program name in prompts
+b0174d03f Update VOUCHED list (#14469)
+5b435d548 Update VOUCHED list (#14466)
+d67ab3213 Update VOUCHED list (#14464)
+6f51f41d0 Update VOUCHED list (#14462)
+80456f057 renderer: fix custom shader selection color uniform layout
+f9ab34f10 terminal: repair live pending wrap after resize
+438d584f0 test: run esctest against libghostty-vt, report-only in CI
+a7cf951eb ci: test the libghostty-vt DLL with c-vt-effects on Windows
+a141f9bdb windows: run global constructors in DLLs
+520d8f55a terminal: CAN and SUB cancel an in-progress OSC
+7b11f3dca libghostty: unknown sequence callback for OSC
+0d82239b5 fix(gtk): warn once about missing/invalid DPI values
+40d5b860d renderer: share render device state across renderers
+05392dcc9 renderer: nuke stub WebGL renderer
+a573781c6 terminal: clear the kitty placeholder flag on full-row clears
+5170b06f6 terminal: fix relative prompt click coordinates

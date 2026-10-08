@@ -1,0 +1,121 @@
+file	test_name	change	sha
+src/cli/ssh_cache.zig	matchesQuery	change	6fbb560cd,dfd7bafcd
+src/cli/ssh-cache/DiskCache.zig	isValidCacheKey	change	6fbb560cd,dfd7bafcd
+src/datastruct/untouched_pool.zig	UntouchedPool: create, destroy, reuse	change	8834e161c
+src/terminal/c/snapshot.zig	decoder option and empty source	change	88e66cbc6
+src/terminal/c/terminal.zig	get mouse_shape	change	b1bfd1d9c
+src/terminal/c/terminal.zig	set unknown_sequence callback	change	7b11f3dca
+src/terminal/c/types.zig	manifest uses public enum names	change	7bb45ba34
+src/terminal/PageList.zig	PageList PageAllocation finalizes pages and preserves live state	change	88e66cbc6
+src/terminal/PageList.zig	PageList PageAllocation rejects limits before modifying the destination	change	88e66cbc6
+src/terminal/PageList.zig	PageList PageAllocation stays detached until finalize	change	88e66cbc6
+src/terminal/Screen.zig	Screen: resize less cols with reflow but row space	change	f9ab34f10
+src/terminal/Screen.zig	Screen: resize less cols with reflow previously wrapped and scrollback	change	f9ab34f10
+src/terminal/Screen.zig	Screen: resize less rows moving cursor	change	f9ab34f10
+src/terminal/Screen.zig	Screen: resize less rows no scrollback	change	f9ab34f10
+src/terminal/Screen.zig	Screen: resize more cols no reflow	change	f9ab34f10
+src/terminal/Screen.zig	Screen: resize more cols with populated scrollback	change	f9ab34f10
+src/terminal/Screen.zig	Screen: resize more cols with reflow	change	f9ab34f10
+src/terminal/Screen.zig	Screen: resize more cols with reflow that fits full width	change	f9ab34f10
+src/terminal/Screen.zig	Screen: resize more cols with reflow that forces more wrapping	change	f9ab34f10
+src/terminal/Screen.zig	Screen: resize more cols with reflow that unwraps multiple times	change	f9ab34f10
+src/terminal/Screen.zig	Screen: resize more rows and cols with wrapping	change	f9ab34f10
+src/terminal/Screen.zig	Screen: resize more rows with populated scrollback	change	f9ab34f10
+src/terminal/search/pagelist.zig	feed discovers pages prepended after exhaustion	change	88e66cbc6
+src/terminal/search/screen.zig	feed after complete discovers prepended history pages	change	88e66cbc6
+src/terminal/snapshot/history.zig	HISTORY encodes and restores an empty sequence	change	88e66cbc6
+src/terminal/snapshot/history.zig	HISTORY encodes newest first and restores complete history	change	88e66cbc6
+src/terminal/snapshot/history.zig	HISTORY rejects invalid routing and incomplete sequences	change	88e66cbc6
+src/terminal/stream_terminal.zig	unknown APC effect callback	change	7b11f3dca
+src/terminal/Terminal.zig	Terminal: print charset outside of ASCII	change	6220a3617
+src/terminal/Terminal.zig	Terminal: print wide char at right edge with hyperlink	change	c706451fe
+src/cli/ssh-cache/DiskCache.zig	splitHostPort	add	6fbb560cd
+src/cli/ssh.zig	parseDestination: IPv6 hostname with non-default port	add	6fbb560cd
+src/cli/ssh.zig	parseDestination: non-default port	add	6fbb560cd
+src/cli/ssh.zig	parseDestination: port before hostname	add	6fbb560cd
+src/cli/ssh.zig	parseDestination: result is a valid cache key	add	6fbb560cd
+src/input/key_encode.zig	legacy: ctrl+alt+shift+backspace	add	e55c687a4
+src/input/mouse_encode.zig	utf8 encodes extended mouse buttons	add	157c44f64
+src/renderer/shadertoy.zig	custom shader selection uniform layout matches compiled GLSL	add	80456f057
+src/Surface.zig	promptClickRelativeRow	add	5170b06f6
+src/terminal/c/osc.zig	command data null	add	02c51decf
+src/terminal/c/osc.zig	unknown	add	7b11f3dca
+src/terminal/c/paste.zig	terminal_paste refused write ignored by the reader	add	fa604a170
+src/terminal/c/snapshot.zig	snapshot decoder compresses history when requested	add	88e66cbc6
+src/terminal/c/sys.zig	decode_png output is zeroed before the callback	add	aca9bf031
+src/terminal/c/terminal.zig	checksum extension survives resets	add	7e2d1793d
+src/terminal/c/terminal.zig	checksum report requires explicit opt in	add	9272a2f7c
+src/terminal/c/terminal.zig	get memory_usage	add	8834e161c
+src/terminal/c/terminal.zig	get memory_usage size rule	add	8834e161c
+src/terminal/c/terminal.zig	set program_status callback	add	bae2c3cdb
+src/terminal/c/terminal.zig	set reset callback	add	7bb45ba34
+src/terminal/c/terminal.zig	set semantic_prompt callback	add	7bb45ba34
+src/terminal/osc.zig	Parser end with CAN or SUB cancels the command	add	520d8f55a
+src/terminal/osc/parsers/program_status.zig	OSC 7501: all keys	add	bae2c3cdb
+src/terminal/osc/parsers/program_status.zig	OSC 7501: base64 padding is optional	add	bae2c3cdb
+src/terminal/osc/parsers/program_status.zig	OSC 7501: discarded reports	add	bae2c3cdb
+src/terminal/osc/parsers/program_status.zig	OSC 7501: empty text is absent	add	bae2c3cdb
+src/terminal/osc/parsers/program_status.zig	OSC 7501: ids	add	bae2c3cdb
+src/terminal/osc/parsers/program_status.zig	OSC 7501: invalid app is ignored	add	bae2c3cdb
+src/terminal/osc/parsers/program_status.zig	OSC 7501: kind and progress only apply to some states	add	bae2c3cdb
+src/terminal/osc/parsers/program_status.zig	OSC 7501: last value wins	add	bae2c3cdb
+src/terminal/osc/parsers/program_status.zig	OSC 7501: malformed pairs and unknown keys are skipped	add	bae2c3cdb
+src/terminal/osc/parsers/program_status.zig	OSC 7501: minimal report	add	bae2c3cdb
+src/terminal/osc/parsers/program_status.zig	OSC 7501: no allocator	add	bae2c3cdb
+src/terminal/osc/parsers/program_status.zig	OSC 7501: out of range progress is absent	add	bae2c3cdb
+src/terminal/osc/parsers/program_status.zig	OSC 7501: query	add	bae2c3cdb
+src/terminal/osc/parsers/program_status.zig	OSC 7501: text must decode to safe UTF-8	add	bae2c3cdb
+src/terminal/osc/parsers/program_status.zig	OSC 7501: whitespace around keys and values	add	bae2c3cdb
+src/terminal/osc/parsers/unknown.zig	OSC unknown: aborted sequences are dropped	add	7b11f3dca
+src/terminal/osc/parsers/unknown.zig	OSC unknown: allocating tier	add	7b11f3dca
+src/terminal/osc/parsers/unknown.zig	OSC unknown: allocation failure falls back to fixed buffer	add	7b11f3dca
+src/terminal/osc/parsers/unknown.zig	OSC unknown: allocation failure while growing truncates	add	7b11f3dca
+src/terminal/osc/parsers/unknown.zig	OSC unknown: disabled by default	add	7b11f3dca
+src/terminal/osc/parsers/unknown.zig	OSC unknown: fixed tier does not allocate	add	7b11f3dca
+src/terminal/osc/parsers/unknown.zig	OSC unknown: large limit without allocator uses fixed buffer	add	7b11f3dca
+src/terminal/osc/parsers/unknown.zig	OSC unknown: limit smaller than the identifier	add	7b11f3dca
+src/terminal/osc/parsers/unknown.zig	OSC unknown: nextSlice matches per-byte parsing	add	7b11f3dca
+src/terminal/osc/parsers/unknown.zig	OSC unknown: prefix state names are the bytes consumed	add	7b11f3dca
+src/terminal/osc/parsers/unknown.zig	OSC unknown: reported	add	7b11f3dca
+src/terminal/osc/parsers/unknown.zig	OSC unknown: supported commands are unchanged	add	7b11f3dca
+src/terminal/osc/parsers/unknown.zig	OSC unknown: truncated at the limit	add	7b11f3dca
+src/terminal/page.zig	Page clearCells full row clears kitty placeholder flag	add	a573781c6
+src/terminal/PageList.zig	PageList memory usage	add	8834e161c
+src/terminal/PageList.zig	PageList PageAllocation compresses prepended pages unless visible	add	88e66cbc6
+src/terminal/PageList.zig	PageList resize reflow pin in blank cells after line break	add	afded91df
+src/terminal/Parser.zig	osc: 105 empty	add	36953bca8
+src/terminal/Screen.zig	Screen: selectLine semantic boundary around unwritten cells	add	13b5ab204
+src/terminal/snapshot/history.zig	HISTORY decode compresses history pages when requested	add	88e66cbc6
+src/terminal/stream_terminal.zig	DECRQCRA disabled	add	9272a2f7c
+src/terminal/stream_terminal.zig	DECRQCRA enabled	add	9272a2f7c
+src/terminal/stream_terminal.zig	program_status effect callback	add	bae2c3cdb
+src/terminal/stream_terminal.zig	reset effect callback	add	7bb45ba34
+src/terminal/stream_terminal.zig	semantic_prompt effect callback	add	7bb45ba34
+src/terminal/stream_terminal.zig	unknown OSC effect callback	add	7b11f3dca
+src/terminal/stream_terminal.zig	window_title not changed by cancelled OSC	add	520d8f55a
+src/terminal/stream_terminal.zig	XTCHECKSUM ignored without xt checksum report	add	9272a2f7c
+src/terminal/stream.zig	stream: DECRQCRA dispatch	add	9272a2f7c
+src/terminal/stream.zig	stream: XTCHECKSUM dispatch	add	9272a2f7c
+src/terminal/Terminal.zig	Terminal: default xt checksum survives resets	add	00a19db51
+src/terminal/Terminal.zig	Terminal: eraseLine complete clears kitty placeholder flag	add	a573781c6
+src/terminal/Terminal.zig	Terminal: print single shift is used up by a combining character	add	c706451fe
+src/terminal/Terminal.zig	Terminal: print wide codepoint in a charset prints it unmapped	add	6220a3617
+src/terminal/Terminal.zig	Terminal: resize less cols without reflow cutting wide char tail	add	e6db5b633
+src/terminal/Terminal.zig	Terminal: resize pending wrap live and saved cursors	add	f9ab34f10
+src/terminal/Terminal.zig	Terminal: saved cursor survives repeated widening	add	afded91df
+src/terminal/Terminal.zig	Terminal: VS16 moving a character to the next line keeps it unmapped	add	c706451fe
+src/terminal/tmux/control.zig	tmux block terminator exactly max_bytes	add	e8b858cc6
+src/terminal/tmux/control.zig	tmux exceeding max_bytes	add	e8b858cc6
+src/terminal/tmux/control.zig	tmux notification exactly max_bytes	add	e8b858cc6
+src/terminal/xt_checksum.zig	xt_checksum: attributes	add	9272a2f7c,b2f557c6c
+src/terminal/xt_checksum.zig	xt_checksum: combining marks	add	9272a2f7c,b2f557c6c
+src/terminal/xt_checksum.zig	xt_checksum: DEC 8-bit values	add	9272a2f7c,b2f557c6c
+src/terminal/xt_checksum.zig	xt_checksum: DEC counts a leading space	add	9272a2f7c,b2f557c6c
+src/terminal/xt_checksum.zig	xt_checksum: DEC trims blanks and skips undrawn cells	add	9272a2f7c,b2f557c6c
+src/terminal/xt_checksum.zig	xt_checksum: empty rectangle	add	9272a2f7c,b2f557c6c
+src/terminal/xt_checksum.zig	xt_checksum: encode	add	9272a2f7c
+src/terminal/xt_checksum.zig	xt_checksum: extended attributes keep a space	add	9272a2f7c,b2f557c6c
+src/terminal/xt_checksum.zig	xt_checksum: rectangle bounds	add	9272a2f7c,b2f557c6c
+src/terminal/xt_checksum.zig	xt_checksum: selection defaults and clamping	add	5f0d4febc
+src/terminal/xt_checksum.zig	xt_checksum: selection origin mode	add	5f0d4febc
+src/terminal/xt_checksum.zig	xt_checksum: wide characters	add	9272a2f7c,b2f557c6c
