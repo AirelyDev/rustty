@@ -6,9 +6,7 @@
 //! Per `GPU_RD_TRAIT_DESIGN.md` §D + the committed monomorphic decision, the
 //! reference `pub fn Renderer(comptime GraphicsAPI: type) type` is ported as a
 //! CONCRETE `Renderer` over the concrete `Metal` leaf types (a set of one — no
-//! `GraphicsAPI` trait hierarchy; OpenGL is Linux-deferred). The `.webgl` arm does
-//! NOT come through here at all: the reference selects the bare `WebGL` type for it
-//! (renderer.zig:41), a 2-line placeholder ported COMPLETE at `crate::webgl`.
+//! `GraphicsAPI` trait hierarchy; OpenGL is Linux-deferred).
 //!
 //! PORT STATUS (GPU R-d OFFSCREEN slice — Chunks 3a–4, DONE):
 //!
@@ -1023,6 +1021,23 @@ pub(crate) mod surface_mailbox_tests {
 // rustty-renderer` (apprt-api/Cargo.toml) means naming an apprt type here would
 // CYCLE (check_acyclic) and the real renderer never reads either of them.
 pub struct Options {
+    /// The device state that corresponds to the physical GPU
+    /// we'd like to render to.
+    //
+    // P8-W6 T2 (`40d5b860d`): `device: *renderer.Device` (Options.zig:7-9), the
+    // app-scoped render device the core `App` owns (`App.device`, a `DeviceBox`
+    // allocation, N522) and frees after every surface. A raw `*const`: render
+    // threads only read it, and a reference here would tie the renderer to a
+    // borrow of the app (see `.port/phase-2/mirihar-device-box`).
+    //
+    // # Safety
+    //
+    // Must point to a live `Device` for the renderer's whole life: `Renderer::init`
+    // (a safe fn) dereferences it, and the renderer reads it until `deinit`. It is
+    // asserted non-null at `init`; the core `App` guarantees the rest by freeing
+    // the device only after every surface.
+    pub device: *const crate::Device,
+
     /// The derived configuration for this renderer implementation.
     pub config: DerivedConfig,
 

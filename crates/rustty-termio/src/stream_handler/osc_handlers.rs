@@ -910,6 +910,43 @@ impl<M: AppMailbox> StreamHandler<M> {
         }
     }
 
+    // fn reportXtChecksum(self: *StreamHandler, req: terminal.xt_checksum.Request) void {
+    pub(super) fn reportXtChecksum(&mut self, req: rustty_vt::xt_checksum::Request) {
+        // if (!self.xt_checksum_report) return;
+        if !self.xt_checksum_report {
+            return;
+        }
+        // var data: termio.Message.WriteReq.Small.Array = undefined;
+        // var writer: std.Io.Writer = .fixed(&data);
+        let mut data = [0u8; 38];
+        let mut writer = FixedFmt {
+            buf: &mut data,
+            pos: 0,
+        };
+        // terminal.xt_checksum.encode(
+        //     &writer,
+        //     req.id,
+        //     self.terminal.rectXtChecksum(req),
+        // ) catch |err| {
+        //     log.err("error encoding checksum report err={}", .{err});
+        //     return;
+        // };
+        let sum = self.term().rect_xt_checksum(req);
+        if let Err(err) = rustty_vt::xt_checksum::encode(&mut writer, req.id, sum) {
+            // log.err("error encoding checksum report err={}", .{err});
+            log::error!(target: LOG_SCOPE, "error encoding checksum report err={err:?}");
+            return;
+        }
+        let len = writer.pos;
+        // self.messageWriter(.{ .write_small = .{
+        //     .data = data,
+        //     .len = @intCast(writer.buffered().len),
+        // } });
+        self.messageWriter(Message::WriteSmall(
+            rustty_datastruct::message_data::Small { data, len },
+        ));
+    }
+
     // fn kittyColorReport(
     //     self: *StreamHandler,
     //     request: terminal.kitty.color.OSC,

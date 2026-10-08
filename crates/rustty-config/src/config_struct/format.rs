@@ -530,6 +530,10 @@ impl Config {
             b"vt-kam-allowed" => f_display!(vt_kam_allowed),
             // @"vt-window-resize-allowed": bool
             b"vt-window-resize-allowed" => f_display!(vt_window_resize_allowed),
+            // @"vt-xt-checksum-report": bool
+            b"vt-xt-checksum-report" => f_display!(vt_xt_checksum_report),
+            // @"vt-xt-checksum-extension": XtChecksumExtension (packed struct)
+            b"vt-xt-checksum-extension" => f_entry!(vt_xt_checksum_extension),
 
             // @"custom-shader": RepeatablePath (FormatEntry)
             b"custom-shader" => f_entry!(custom_shader),

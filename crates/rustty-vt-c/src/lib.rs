@@ -1455,10 +1455,13 @@ pub unsafe extern "C" fn rustty_style_is_default(s: *const style::Style) -> bool
 // reserved for it; 32..=37 = the Bundle M options; 38 = clipboard_read,
 // oracle e03475c0c; 39 = clipboard_write_max_bytes, oracle 5350d4a5f;
 // 40 = resize_pull_scrollback, oracle c55f213aa; 41 = render_hold, oracle
-// e50779498)
+// e50779498); 44/45 = xt_checksum_report/xt_checksum_extension (oracle
+// 9272a2f7c, 7e2d1793d). PORT NOTE: 42 (semantic_prompt), 43 (reset) and 46
+// (program_status) are appended by P8-W5 T3 at upstream's numbers, so the set
+// is temporarily non-contiguous: 0..=41 plus 44 and 45.
 const TERMINAL_OPTION_COUNT: c_int = 42;
 fn terminal_option_from_c_int(v: c_int) -> Option<terminal::Option_> {
-    if (0..TERMINAL_OPTION_COUNT).contains(&v) {
+    if (0..TERMINAL_OPTION_COUNT).contains(&v) || matches!(v, 44 | 45) {
         // SAFETY: `v` is a valid terminal `Option` discriminant (range-checked).
         Some(unsafe { std::mem::transmute::<c_int, terminal::Option_>(v) })
     } else {

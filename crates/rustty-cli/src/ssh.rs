@@ -782,14 +782,18 @@ fn resolve_destination(ssh: &[u8], args: &[Vec<u8>]) -> Option<Vec<u8>> {
     parse_destination(&output.stdout)
 }
 
-/// Parse `ssh -G` output for `user` and `hostname` and return the
-/// formatted `user@hostname`. Returns null if either key is missing
-/// or formatting fails.
+/// Parse `ssh -G` output for `user`, `hostname` and `port` and return the
+/// formatted `user@hostname`, or `user@hostname:port` when the port isn't
+/// the default 22 (`user@[hostname]:port` for an IPv6 address), so that
+/// different sshd instances behind one address are cached separately.
+/// Returns null if user or hostname is missing or formatting fails.
 // fn parseDestination(alloc, stdout) ?[]const u8 {
 fn parse_destination(stdout: &[u8]) -> Option<Vec<u8>> {
     // var user: []const u8 = ""; var host: []const u8 = "";
     let mut user: &[u8] = b"";
     let mut host: &[u8] = b"";
+    // var port: []const u8 = "";
+    let mut port: &[u8] = b"";
     // var it = std.mem.tokenizeScalar(u8, stdout, '\n');
     let mut it = TokenizeScalar::new(stdout, b'\n');
     // while (it.next()) |line| {
@@ -807,9 +811,11 @@ fn parse_destination(stdout: &[u8]) -> Option<Vec<u8>> {
             user = value;
         } else if key == b"hostname" {
             host = value;
+        } else if key == b"port" {
+            port = value;
         }
-        // if (user.len > 0 and host.len > 0) break;
-        if !user.is_empty() && !host.is_empty() {
+        // if (user.len > 0 and host.len > 0 and port.len > 0) break;
+        if !user.is_empty() && !host.is_empty() && !port.is_empty() {
             break;
         }
     }
@@ -825,11 +831,30 @@ fn parse_destination(stdout: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
 
-    // return std.fmt.allocPrint(alloc, "{s}@{s}", .{ user, host }) catch null;
-    let mut out = Vec::with_capacity(user.len() + 1 + host.len());
+    // if (port.len == 0 or std.mem.eql(u8, port, "22")) {
+    //     return std.fmt.allocPrint(alloc, "{s}@{s}", .{ user, host }) catch null;
+    // }
+    let mut out = Vec::with_capacity(user.len() + 1 + host.len() + 3 + port.len());
     out.extend_from_slice(user);
     out.push(b'@');
-    out.extend_from_slice(host);
+    if port.is_empty() || port == b"22" {
+        out.extend_from_slice(host);
+        return Some(out);
+    }
+
+    // if (std.mem.indexOfScalar(u8, host, ':') != null) {
+    //     return std.fmt.allocPrint(alloc, "{s}@[{s}]:{s}", .{ user, host, port }) catch null;
+    // }
+    if host.contains(&b':') {
+        out.push(b'[');
+        out.extend_from_slice(host);
+        out.push(b']');
+    } else {
+        // return std.fmt.allocPrint(alloc, "{s}@{s}:{s}", .{ user, host, port }) catch null;
+        out.extend_from_slice(host);
+    }
+    out.push(b':');
+    out.extend_from_slice(port);
     Some(out)
 }
 
@@ -1349,6 +1374,52 @@ mod tests {
         let result = parse_destination(stdout.as_bytes());
         // try testing.expectEqualStrings("alice@::1", result.?);
         assert_eq!(b"alice@::1".as_slice(), result.unwrap().as_slice());
+    }
+
+    // test "parseDestination: non-default port"
+    #[test]
+    fn parse_destination_non_default_port() {
+        let stdout = "user alice\nhostname example.com\nport 2222\n";
+        let result = parse_destination(stdout.as_bytes());
+        // try testing.expectEqualStrings("alice@example.com:2222", result.?);
+        assert_eq!(
+            b"alice@example.com:2222".as_slice(),
+            result.unwrap().as_slice(),
+        );
+    }
+
+    // test "parseDestination: port before hostname"
+    #[test]
+    fn parse_destination_port_before_hostname() {
+        let stdout = "port 2222\nuser alice\nhostname example.com\n";
+        let result = parse_destination(stdout.as_bytes());
+        assert_eq!(
+            b"alice@example.com:2222".as_slice(),
+            result.unwrap().as_slice(),
+        );
+    }
+
+    // test "parseDestination: IPv6 hostname with non-default port"
+    #[test]
+    fn parse_destination_ipv6_hostname_with_non_default_port() {
+        let stdout = "user alice\nhostname ::1\nport 2222\n";
+        let result = parse_destination(stdout.as_bytes());
+        assert_eq!(b"alice@[::1]:2222".as_slice(), result.unwrap().as_slice());
+    }
+
+    // test "parseDestination: result is a valid cache key"
+    #[test]
+    fn parse_destination_result_is_a_valid_cache_key() {
+        let outputs: [&[u8]; 4] = [
+            b"user alice\nhostname example.com\nport 22\n",
+            b"user alice\nhostname example.com\nport 2222\n",
+            b"user alice\nhostname 2001:db8::1\nport 22\n",
+            b"user alice\nhostname 2001:db8::1\nport 2222\n",
+        ];
+        for stdout in outputs {
+            let result = parse_destination(stdout).unwrap();
+            assert!(DiskCache::is_valid_cache_key(&result));
+        }
     }
 
     // test { ... Joined ... } (the anonymous test inside the Joined struct)

@@ -23,11 +23,21 @@ impl Renderer {
     // context) are one again.
     pub fn init(alloc: Global, options: Options) -> Result<Self, Error> {
         // Initialize our graphics API wrapper, this will prepare the
-        // surface provided by the apprt and set up any API-specific
-        // GPU resources.
-        // var api = try GraphicsAPI.init(alloc, options);
+        // surface provided by the apprt and set up any API- and surface-
+        // specific GPU resources.
+        // var api = try GraphicsAPI.init(
+        //     alloc,
+        //     options.device,
+        //     options,
+        // );   (generic.zig:701-705, `40d5b860d`)
         // errdefer api.deinit();
-        let api = OpenGL::init(options.config.blending)?;
+        //
+        // R7: `Options.device` must point to a live `Device` (see the field's contract);
+        // this safe fn dereferences it below.
+        assert!(!options.device.is_null());
+        // SAFETY: `options.device` is the app-scoped render device, which outlives
+        // every renderer (the core `App` frees it after all surfaces; `Options`).
+        let api = unsafe { OpenGL::init(options.device, options.config.blending) }?;
 
         // const has_custom_shaders = options.config.custom_shaders.value.items.len > 0;
         let has_custom_shaders = !options.config.custom_shaders.value.is_empty();
@@ -290,7 +300,11 @@ impl Renderer {
     /// The `draw_mutex` block of [`Self::thread_exit`]. The caller holds
     /// `draw_mutex`.
     pub fn thread_exit_locked(&mut self) {
-        // Release swap chain and shaders.
+        // Release swap chain and shaders. Shaders are only freed
+        // while unrealized and not every apprt unrealizes before
+        // destroying a surface (macOS never does), so mark it
+        // unrealized. This also stops any later draw.
+        self.display_realized = false;
         self.release_gpu_resources();
 
         // We don't release images in `releaseGpuResources`

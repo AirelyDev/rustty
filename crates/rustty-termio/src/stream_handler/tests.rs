@@ -36,6 +36,7 @@ pub(crate) fn terminal_opts(default_cursor_blink: Option<bool>) -> rustty_vt::te
         default_modes: rustty_vt::modes::ModePacked::default(),
         default_cursor_style: rustty_vt::screen::CursorStyle::Block,
         default_cursor_blink,
+        default_xt_checksum: Default::default(),
         colors: rustty_vt::terminal::Colors {
             background: color::DynamicRGB::UNSET,
             foreground: color::DynamicRGB::UNSET,
@@ -65,6 +66,7 @@ pub(crate) fn handler_for(
         renderer_mailbox: std::ptr::null_mut(),
         renderer_wakeup: xev::Async::init().expect("Async::init"),
         enquiry_response: Vec::new(),
+        xt_checksum_report: false,
         osc_color_report_format: OSCColorReportFormat::Bit16,
         clipboard_write: ClipboardAccess::Deny,
         clipboard_write_limit: rustty_vt::kitty::clipboard::max_write_size,
@@ -570,6 +572,7 @@ fn stream_handler_forwards_csi_8_t_as_a_resize_window_surface_message() {
         renderer_mailbox: n.renderer_mailbox,
         renderer_wakeup: n.renderer_wakeup,
         enquiry_response: n.enquiry_response,
+        xt_checksum_report: n.xt_checksum_report,
         osc_color_report_format: n.osc_color_report_format,
         clipboard_write: n.clipboard_write,
         clipboard_write_limit: n.clipboard_write_limit,
@@ -1265,5 +1268,182 @@ fn mouse_shape_reset_is_default_with_mouse_reporting_and_text_without() {
 
     s.handler.renderer_wakeup.deinit();
     drop(s);
+    term.deinit(Global.into());
+}
+
+// Review Focus 2 (P8-W3 T2; rustty-only, the reference adds no termio test):
+// a handler built from the DEFAULT `DerivedConfig` must never write a
+// DECRQCRA reply, and must ignore XTCHECKSUM. A screen read-back is a
+// disclosure channel, so reporting is opt-in via `vt-xt-checksum-report`.
+fn xt_checksum_fixture() -> (
+    Box<Terminal>,
+    *mut Mailbox,
+    *mut rustty_zigstd::thread::Mutex,
+    *mut State,
+) {
+    let mut term = Box::new(Terminal::init(Global.into(), terminal_opts(Some(false))).unwrap());
+    let mailbox: *mut Mailbox = Box::into_raw(Box::new(
+        crate::mailbox::Mailbox::initSPSC().expect("Mailbox::initSPSC"),
+    ));
+    let mutex: *mut rustty_zigstd::thread::Mutex =
+        Box::into_raw(Box::new(rustty_zigstd::thread::Mutex::new()));
+    let state: *mut State = Box::into_raw(Box::new(State {
+        mutex,
+        terminal: &raw mut *term,
+        inspector: None,
+        inspector_ptr: None,
+        preedit: None,
+        mouse: rustty_renderer::state::Mouse::default(),
+        demand: Default::default(),
+        handoff_gen: Default::default(),
+        handoff_park: Default::default(),
+    }));
+    (term, mailbox, mutex, state)
+}
+
+#[test]
+fn xt_checksum_default_config_never_replies() {
+    let (mut term, mailbox, mutex, state) = xt_checksum_fixture();
+    let mut h = handler_for(&raw mut *term, mailbox, state);
+
+    // The default config: reporting off, DEC checksum calculation.
+    let mut cfg = DerivedConfig::init(&rustty_config::Config::default());
+    assert!(!cfg.xt_checksum_report);
+    h.changeConfig(&mut cfg);
+    // `changeConfig` ends with the mode-2031 color scheme report.
+    assert!(matches!(
+        mailbox_pop(mailbox),
+        Some(Message::ColorSchemeReport { .. })
+    ));
+    assert!(mailbox_pop(mailbox).is_none());
+
+    let before = unsafe { (*h.terminal).flags.xt_checksum };
+    let mut s = stream::Stream::init(stream::Options::with_handler(h));
+    s.next_slice(b"hello");
+    // DECRQCRA over the whole screen, one cell, and with an id; then
+    // XTCHECKSUM with every bit set and with none.
+    s.next_slice(b"\x1b[1;1;1;1;24;80*y");
+    s.next_slice(b"\x1b[7;1;1;1;1;1*y");
+    s.next_slice(b"\x1b[31#y");
+    s.next_slice(b"\x1b[0#y");
+    s.next_slice(b"\x1b[#y");
+
+    assert!(
+        mailbox_pop(mailbox).is_none(),
+        "the default config must never answer DECRQCRA"
+    );
+    assert_eq!(
+        before, term.flags.xt_checksum,
+        "XTCHECKSUM is ignored while reporting is disabled"
+    );
+
+    s.handler.renderer_wakeup.deinit();
+    drop(s);
+    unsafe {
+        drop(Box::from_raw(state));
+        drop(Box::from_raw(mutex));
+        drop(Box::from_raw(mailbox));
+    }
+    term.deinit(Global.into());
+}
+
+// (`Config` has 200+ fields, so the field assignments stay.)
+#[allow(clippy::field_reassign_with_default)]
+#[test]
+fn xt_checksum_report_enabled_replies_with_xterms_checksum() {
+    let (mut term, mailbox, mutex, state) = xt_checksum_fixture();
+    let mut h = handler_for(&raw mut *term, mailbox, state);
+
+    // `vt-xt-checksum-report = true` with esctest's `--xterm-checksum`
+    // extension (xterm's `checksumExtension: 23`).
+    let mut config = rustty_config::Config::default();
+    config.vt_xt_checksum_report = true;
+    config.vt_xt_checksum_extension = rustty_config::XtChecksumExtension {
+        negate: false,
+        attributes: false,
+        trim: false,
+        undrawn: false,
+        full: true,
+    };
+    let mut cfg = DerivedConfig::init(&config);
+    assert!(cfg.xt_checksum_report);
+    h.changeConfig(&mut cfg);
+    let configured = rustty_vt::xt_checksum::Flags::default()
+        .with_positive(true)
+        .with_no_attributes(true)
+        .with_no_trim(true)
+        .with_full(true);
+    assert_eq!(configured, cfg.xt_checksum_extension);
+    // `changeConfig` applied it to the terminal (and to its RIS default).
+    assert_eq!(configured, term.flags.xt_checksum);
+    assert_eq!(configured, term.default_xt_checksum);
+    assert!(matches!(
+        mailbox_pop(mailbox),
+        Some(Message::ColorSchemeReport { .. })
+    ));
+
+    let mut s = stream::Stream::init(stream::Options::with_handler(h));
+    // Grapheme clustering (mode 2027), so the ZWJ family below is ONE cell.
+    s.next_slice(b"\x1b[?2027h");
+    // Row 1: wide characters; row 2: a ZWJ emoji cluster; row 3: a bold
+    // red cell.
+    s.next_slice("a橋a橋\r\n".as_bytes());
+    s.next_slice("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}x\r\n".as_bytes());
+    s.next_slice(b"\x1b[1;31mR\x1b[0m");
+
+    // The expected values below are hard-coded, NOT computed by
+    // `rect_xt_checksum`: they come from the reference's own
+    // `xt_checksum.compute` (Ghostty a60e9e2a5), fed the same cells in a
+    // scratch harness (see the P8-W3 T2 fix report for the source).
+    //
+    // The cells: `a`, wide `橋` (0x6A4B), `a`, wide `橋`; the family
+    // emoji as one wide cluster cell (U+1F468) and `x`; bold red `R`.
+    let ask = |s: &mut stream::Stream<StreamHandler<NullMailbox>>, seq: &[u8]| -> Vec<u8> {
+        s.next_slice(seq);
+        let msg = mailbox_pop(mailbox).expect("DECRQCRA is answered when reporting is on");
+        let bytes = write_bytes(&msg);
+        assert!(mailbox_pop(mailbox).is_none(), "exactly one reply");
+        bytes
+    };
+    // esctest's `--xterm-checksum` flags (the configured extension): no
+    // negation, no attributes, no trim, full codepoints.
+    assert_eq!(
+        b"\x1bP7!~CD0A\x1b\\".to_vec(),
+        ask(&mut s, b"\x1b[7;1;1;1;3;10*y")
+    );
+
+    // XTCHECKSUM now takes effect: `CSI 0 # y` selects the DEC calculation
+    // (negated, attributes counted, trimmed, DEC 8-bit values).
+    s.next_slice(b"\x1b[0#y");
+    assert_eq!(
+        rustty_vt::xt_checksum::Flags::default(),
+        term.flags.xt_checksum
+    );
+    let dec = ask(&mut s, b"\x1b[7;1;1;1;3;10*y");
+    assert_eq!(b"\x1bP7!~FD52\x1b\\".to_vec(), dec);
+    // Row 3 alone (the bold red cell).
+    assert_eq!(
+        b"\x1bP7!~FF2E\x1b\\".to_vec(),
+        ask(&mut s, b"\x1b[7;1;3;1;3;10*y")
+    );
+
+    // `CSI 2 # y` is the same DEC calculation without attributes: the bold
+    // cell stops counting, so the styled cell changes the reply.
+    s.next_slice(b"\x1b[2#y");
+    let no_attributes = ask(&mut s, b"\x1b[7;1;1;1;3;10*y");
+    assert_eq!(b"\x1bP7!~FDD2\x1b\\".to_vec(), no_attributes);
+    assert_ne!(dec, no_attributes, "the bold cell must count");
+    assert_eq!(
+        b"\x1bP7!~FFAE\x1b\\".to_vec(),
+        ask(&mut s, b"\x1b[7;1;3;1;3;10*y")
+    );
+
+    s.handler.renderer_wakeup.deinit();
+    drop(s);
+    unsafe {
+        drop(Box::from_raw(state));
+        drop(Box::from_raw(mutex));
+        drop(Box::from_raw(mailbox));
+    }
     term.deinit(Global.into());
 }

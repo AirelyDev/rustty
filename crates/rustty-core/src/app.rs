@@ -53,8 +53,9 @@ use rustty_config::Config;
 use rustty_datastruct::blocking_queue::{Size, Timeout};
 use rustty_datastruct::BlockingQueue;
 // const renderer = @import("renderer.zig");
-// PORT NOTE: used by `create`'s warmup probe (`renderer.Renderer.API.warmup`,
-// the P4 warmup chain) — referenced by full path there (`rustty_renderer::`).
+// PORT NOTE: used by `create`'s warmup probe (`renderer.Device.warmup`, the P4
+// warmup chain, `40d5b860d`) and by `App.device` (`renderer.Device`) —
+// referenced by full path there (`rustty_renderer::`).
 // const font = @import("font/main.zig");
 use rustty_font_shaper::SharedGridSet;
 
@@ -155,6 +156,16 @@ pub struct App<A: apprt::App + 'static> {
     /// same font configuration.
     pub font_grid_set: SharedGridSet,
 
+    /// The app-scoped render device, shared by the renderers of all surfaces.
+    //
+    // PORT NOTE (N522, DECISIONS P10): `device: renderer.Device` by value in the
+    // reference; here a [`DeviceBox`], the device in its own allocation. Every
+    // surface renderer reads the device on its render thread while the main
+    // thread keeps taking `&mut App` (`addSurface`, `updateConfig`, `deinit`, ...);
+    // by value those protected retags would race the reads (Stacked Borrows,
+    // `.port/phase-2/mirihar-device-box`).
+    pub device: DeviceBox,
+
     // Used to rate limit desktop notifications. Some platforms (notably macOS) will
     // run out of resources if desktop notifications are sent too fast and the OS
     // will kill Rustty.
@@ -174,12 +185,148 @@ pub struct App<A: apprt::App + 'static> {
     pub first: bool,
 }
 
-// pub const CreateError = Allocator.Error || font.SharedGridSet.InitError;
+// pub const CreateError = Allocator.Error ||
+//     font.SharedGridSet.InitError ||
+//     error{DeviceFailed};
 //
 // PORT NOTE: `Allocator.Error` collapses (infallible Rust allocation — the
 // termio/renderer_seam convention), leaving the `SharedGridSet` init error
-// set.
-pub type CreateError = rustty_font_shaper::shared_grid_set::InitError;
+// set and `error.DeviceFailed` (`40d5b860d`).
+#[derive(Debug)]
+pub enum CreateError {
+    /// `font.SharedGridSet.InitError`.
+    GridSet(rustty_font_shaper::shared_grid_set::InitError),
+    /// `error.DeviceFailed`: the render device could not be initialized (the
+    /// cause is logged by `App.init`).
+    DeviceFailed,
+}
+
+impl From<rustty_font_shaper::shared_grid_set::InitError> for CreateError {
+    fn from(err: rustty_font_shaper::shared_grid_set::InitError) -> CreateError {
+        CreateError::GridSet(err)
+    }
+}
+
+impl core::fmt::Display for CreateError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            CreateError::GridSet(err) => write!(f, "{err:?}"),
+            CreateError::DeviceFailed => f.write_str("DeviceFailed"),
+        }
+    }
+}
+
+impl std::error::Error for CreateError {}
+
+/// PORT-ONLY (N522, DECISIONS P10): `App.device` in its own allocation.
+///
+/// The reference embeds `device: renderer.Device` in `App` and gives each
+/// surface's renderer `&app.device` (`Surface.zig:564`). Here the device lives
+/// in a `Box::into_raw` allocation that [`App::init`] creates at the reference's
+/// point and [`App::deinit`] frees after the surface loop and the grid-set assert
+/// ("This must happen after all surfaces are gone since their renderers borrow
+/// it."). Renderers get the `*const Device` from [`DeviceBox::as_ptr`]
+/// (`renderer_seam::Options.device`). No `Arc`: a renderer must not keep the
+/// device alive past `App.deinit`, the reference's lifetime contract.
+///
+/// THREAD SAFETY: N render threads read the device concurrently through that raw
+/// pointer, and that is sound:
+/// - Metal: `MTLDevice` is documented thread-safe (objc2-metal declares it
+///   `Send + Sync`), so its `newCommandQueue`/resource creation may run on any
+///   thread;
+/// - OpenGL: EGL 1.5 requires display-level calls (`eglCreateContext`,
+///   `eglMakeCurrent`, `eglCreateImage`, ...) to be thread-safe;
+/// - every other field (`default_storage_mode`, `max_texture_size`, the EGL
+///   config, the resolved entry points) is written once by `Device::init`, before
+///   any surface exists, and never written again.
+///
+/// No `Sync` impl is needed: only the raw pointer crosses threads (inside each
+/// renderer, which the core moves to its render thread under its own `Send`
+/// wrapper), and the main thread never forms a `&mut Device` while a surface
+/// lives. `App` has no `Drop`; [`App::deinit`] (via `destroy`) frees the box once.
+pub struct DeviceBox(*mut rustty_renderer::Device);
+
+impl DeviceBox {
+    /// `.device = undefined` (`App.zig:133`): no device yet. Also the
+    /// `#[cfg(test)]` null-device constructor's box, which `deinit` skips.
+    const UNDEFINED: DeviceBox = DeviceBox(core::ptr::null_mut());
+
+    /// `self.device.init(alloc)` (`App.zig:137`), into a fresh allocation.
+    pub fn init() -> Result<DeviceBox, rustty_renderer::DeviceError> {
+        let mut slot = Box::<rustty_renderer::Device>::new_uninit();
+        rustty_renderer::Device::init(&mut slot)?;
+        // SAFETY: `Device::init` returned Ok, so it wrote the slot.
+        let device = unsafe { slot.assume_init() };
+        Ok(DeviceBox(Box::into_raw(device)))
+    }
+
+    /// The device every surface renderer borrows (`&app.device`). Null only for
+    /// an app built without a device (the test constructor).
+    #[inline]
+    pub fn as_ptr(&self) -> *const rustty_renderer::Device {
+        self.0
+    }
+
+    /// `self.device.deinit()` (`App.zig:157-159`), then free the allocation. A
+    /// null box is skipped; the box is null afterwards, so a second call is a
+    /// no-op.
+    ///
+    /// # Safety
+    /// No renderer that borrows the device is alive (every surface has been
+    /// deinitialized), and no `&Device` from [`DeviceBox::as_ptr`] is used
+    /// afterwards.
+    pub unsafe fn deinit(&mut self) {
+        if self.0.is_null() {
+            return;
+        }
+        // SAFETY: `self.0` came from `Box::into_raw` in `init`, is still live
+        // (nulled on free), and the caller guarantees no borrower remains.
+        unsafe {
+            (*self.0).deinit();
+            drop(Box::from_raw(self.0));
+        }
+        self.0 = core::ptr::null_mut();
+        // P8-W6 T2 (Review Focus 4): the test-only drop-order probe.
+        #[cfg(test)]
+        drop_order_probe::record(drop_order_probe::Event::Device);
+    }
+}
+
+/// RUSTTY-ONLY `#[cfg(test)]` drop-order probe (P8-W6 T2, Review Focus 4): the
+/// calling thread's record of renderer frees (`RendererBox::dealloc_after_deinit`)
+/// and render-device frees (`DeviceBox::deinit`), so a test can assert the device
+/// outlives every renderer that borrows it. Thread-local: the surfaces and the app
+/// are torn down on the test's own thread, and parallel tests do not interleave.
+#[cfg(test)]
+pub(crate) mod drop_order_probe {
+    use std::cell::RefCell;
+
+    /// What was freed.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum Event {
+        /// A surface renderer (its `RendererBox` allocation).
+        Renderer,
+        /// The app's render device (its `DeviceBox` allocation).
+        Device,
+    }
+
+    thread_local! {
+        static EVENTS: RefCell<Vec<Event>> = const { RefCell::new(Vec::new()) };
+    }
+
+    pub(crate) fn record(event: Event) {
+        EVENTS.with(|e| e.borrow_mut().push(event));
+    }
+
+    /// Take (and clear) this thread's record.
+    pub(crate) fn take() -> Vec<Event> {
+        EVENTS.with(|e| std::mem::take(&mut *e.borrow_mut()))
+    }
+}
+
+// P8-W6 T2, Review Focus 4: two surfaces on one App sharing the render device.
+#[cfg(test)]
+mod device_tests;
 
 impl<A> App<A>
 where
@@ -237,23 +384,24 @@ where
 
         // Same for the renderer's graphics API (e.g. Metal), which pays
         // one-time framework initialization costs on first use.
-        // if (comptime @hasDecl(renderer.Renderer.API, "warmup")) {
+        // if (comptime @hasDecl(renderer.Device, "warmup")) {
         //     if (std.Thread.spawn(
         //         .{},
-        //         renderer.Renderer.API.warmup,
+        //         renderer.Device.warmup,
         //         .{},
         //     )) |thr| thr.detach() else |err| {
         //         log.warn("renderer warmup thread spawn failed err={}", .{err});
         //     }
         // }
         //
-        // PORT NOTE: same `@hasDecl` fold — `renderer.Renderer.API` is the
-        // comptime graphics API (`Metal` on macOS, which declares `warmup`;
-        // OpenGL/WebGL do not), so the probe folds to the same macOS cfg.
+        // PORT NOTE: same `@hasDecl` fold — `renderer.Device` is the comptime
+        // graphics API's device (`metal/Device.zig` on macOS, which declares
+        // `warmup`; `opengl/Device.zig` does not), so the probe folds to the same
+        // macOS cfg.
         #[cfg(target_os = "macos")]
         {
             if let Err(err) = rustty_zigstd::thread::spawn_config()
-                .spawn(rustty_renderer::metal::Metal::warmup)
+                .spawn(rustty_renderer::Device::warmup)
                 .map(drop)
             {
                 // log.warn("renderer warmup thread spawn failed err={}", .{err});
@@ -275,11 +423,38 @@ where
     // writing `self.* = .{...}`); Rust has no placement-init, so `init`
     // returns the value and [`App::create`] is the stable-pointer path.
     pub fn init(alloc: Allocator) -> Result<App<A>, CreateError> {
+        let mut app = Self::init_fields(alloc)?;
+
+        // Initialize our render device.
+        // self.device.init(alloc) catch |err| {
+        //     log.err("failed to initialize render device err={}", .{err});
+        //     return error.DeviceFailed;
+        // };
+        app.device = match DeviceBox::init() {
+            Ok(device) => device,
+            Err(err) => {
+                log::error!(target: LOG_SCOPE, "failed to initialize render device err={err:?}");
+                // (errdefer font_grid_set.deinit();)
+                app.font_grid_set.deinit();
+                return Err(CreateError::DeviceFailed);
+            }
+        };
+        // errdefer self.device.deinit();
+        // PORT NOTE: after the last fallible statement, so it never fires (as in
+        // the reference); nothing to port.
+
+        Ok(app)
+    }
+
+    /// The part of [`App::init`] before the render device: the font grid set
+    /// and the field defaults, with `device` still `undefined` (a null
+    /// [`DeviceBox`]).
+    fn init_fields(alloc: Allocator) -> Result<App<A>, CreateError> {
         // var font_grid_set = try font.SharedGridSet.init(alloc);
         let font_grid_set = SharedGridSet::init(alloc)?;
         // errdefer font_grid_set.deinit();
-        // PORT NOTE: nothing below can fail — ownership drops cover the
-        // reference errdefer.
+        // PORT NOTE: the only fallible step after this is the device's, whose
+        // error arm in `init` runs this errdefer explicitly.
 
         // self.* = .{ ... } — the omitted fields take their declaration
         // defaults (focused=true, focused_surface=null,
@@ -292,11 +467,23 @@ where
             focused_surface: None,
             mailbox: Queue::<A>::default(),
             font_grid_set,
+            // .device = undefined,
+            device: DeviceBox::UNDEFINED,
             last_notification_time: None,
             last_notification_digest: 0,
             config_conditional_state: conditional::State::default(),
             first: true,
         })
+    }
+
+    /// RUSTTY-ONLY test constructor (DECISIONS P11): [`App::init`] without the
+    /// render device, for the tests that create no surface. A real device needs
+    /// a GPU (`MTLCopyAllDevices`, a dlopen'd libEGL), which Miri cannot run and
+    /// a GPU-less runner cannot provide; the app's `device` stays a null
+    /// [`DeviceBox`], which `deinit` skips. `App::init` itself stays faithful.
+    #[cfg(test)]
+    pub(crate) fn init_null_device(alloc: Allocator) -> Result<App<A>, CreateError> {
+        Self::init_fields(alloc)
     }
 
     pub fn deinit(&mut self) {
@@ -322,6 +509,13 @@ where
         // should gracefully close all surfaces.
         debug_assert!(self.font_grid_set.count() == 0);
         self.font_grid_set.deinit();
+
+        // Clean up our render device. This must happen after all surfaces
+        // are gone since their renderers borrow it.
+        //
+        // SAFETY: every surface was deinitialized above (its renderer and
+        // render thread are gone), so nothing borrows the device any more.
+        unsafe { self.device.deinit() };
     }
 
     pub fn destroy(mut self: Box<Self>) {
@@ -1570,25 +1764,55 @@ pub(crate) mod test_runtime {
         }
     }
 
+    /// R14 pivot for the tests that need a real render device (P8-W6 T2): the
+    /// core's twin of the renderer's `require_metal_or_skip` /
+    /// `require_gl_or_skip`, which are `pub(crate)` there. A no-op by default
+    /// (the caller prints its skip line and returns); a panic under
+    /// `RUSTTY_REQUIRE_METAL=1` (macOS) or `RUSTTY_REQUIRE_GL=1` (OpenGL targets),
+    /// which the GPU CI legs export.
+    #[track_caller]
+    pub(crate) fn require_device_or_skip(test_name: &str, err: &dyn core::fmt::Debug) {
+        #[cfg(target_os = "macos")]
+        const PIVOT: &str = "RUSTTY_REQUIRE_METAL";
+        #[cfg(not(target_os = "macos"))]
+        const PIVOT: &str = "RUSTTY_REQUIRE_GL";
+        let required = std::env::var_os(PIVOT).is_some_and(|v| v == "1");
+        assert!(
+            !required,
+            "render device required but unavailable ({PIVOT}=1): {test_name} would have \
+             skipped: {err:?}"
+        );
+        eprintln!("no render device ({err:?}); skipping {test_name}");
+    }
+
     // rustty-only: App.create/deinit round trip on an empty app (the
     // reference create/init/deinit/destroy path incl. the grid-set-empty
     // assert and the field declaration defaults).
     #[test]
-    // `App::create` (unlike `App::init`, which the sibling tests use and which
-    // runs green under Miri) spawns the macOS CoreText font-discovery warmup
-    // thread; that reaches `CFStringCreateWithBytes`, a foreign function Miri
-    // cannot call. Same class as this crate's already-argued oniguruma
+    // `App::create` (unlike `App::init_null_device`, which the sibling tests use
+    // and which runs green under Miri) spawns the macOS CoreText font-discovery
+    // warmup thread; that reaches `CFStringCreateWithBytes`, a foreign function
+    // Miri cannot call. Same class as this crate's already-argued oniguruma
     // exception — see .port/phase-2/MIRI_EXCEPTIONS.md, "rustty-core
-    // renderer_config_tests" — whose R6 verifier is the ASan lane. The
+    // renderer_config_tests" — whose R6 verifier is the ASan lane. Since P8-W6 T2
+    // (`40d5b860d`) `App::init` also creates the render device
+    // (`MTLCopyAllDevices` / a dlopen'd libEGL), equally out of Miri's reach. The
     // create/destroy round trip runs in ci.sh's HARD `cargo test --workspace`
-    // step; every field assertion below is also covered from `init` by
-    // `add_and_delete_surface_drive_the_quit_timer`, which stays Miri-checked.
+    // step; every field assertion below is also covered from
+    // `init_null_device` by `add_and_delete_surface_drive_the_quit_timer`, which
+    // stays Miri-checked.
     #[cfg_attr(
         miri,
-        ignore = "App::create spawns the CoreText warmup thread (CFStringCreateWithBytes)"
+        ignore = "App::create spawns the CoreText warmup thread (CFStringCreateWithBytes) and creates the render device"
     )]
     fn app_create_and_destroy_empty() {
-        let app = App::<TestApp>::create(Allocator).unwrap();
+        let app = match App::<TestApp>::create(Allocator) {
+            Ok(app) => app,
+            Err(err) => {
+                require_device_or_skip("app_create_and_destroy_empty", &err);
+                return;
+            }
+        };
         assert!(app.surfaces.is_empty());
         assert!(app.focused);
         assert!(app.focused_surface.is_none());
@@ -1598,13 +1822,114 @@ pub(crate) mod test_runtime {
         app.destroy();
     }
 
+    // rustty-only (P8-W6 T2, `40d5b860d`, DECISIONS P11): `App::init` creates
+    // the app-scoped render device in its own allocation (N522) and `deinit`
+    // frees it, after the surfaces and the grid set. Needs a GPU (macOS Metal;
+    // Linux via EGL, llvmpipe on rvm), so it is not a Miri test; GPU-less hosts
+    // skip through the R14 pivot.
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "App::init creates the render device (MTLCopyAllDevices / dlopen libEGL), foreign to Miri"
+    )]
+    fn app_init_creates_and_deinit_frees_the_render_device() {
+        let mut app = match App::<TestApp>::init(Allocator) {
+            Ok(app) => app,
+            Err(err) => {
+                assert!(
+                    matches!(err, CreateError::DeviceFailed),
+                    "init can only fail on the device here, got {err:?}"
+                );
+                require_device_or_skip("app_init_creates_and_deinit_frees_the_render_device", &err);
+                return;
+            }
+        };
+        let device = app.device.as_ptr();
+        assert!(!device.is_null(), "App::init creates the render device");
+        // The device is initialized: its fields read through the pointer every
+        // renderer gets (`Options.device`).
+        #[cfg(target_os = "macos")]
+        assert!(unsafe { (*device).max_texture_size } >= 8192);
+        #[cfg(not(target_os = "macos"))]
+        assert!(unsafe {
+            (*device).query_string(rustty_renderer::opengl::gl::sys::StringQuery::Vendor)
+        }
+        .is_some());
+        app.deinit();
+        assert!(
+            app.device.as_ptr().is_null(),
+            "App::deinit frees the render device"
+        );
+        // A second deinit of the box is a no-op (the null box is skipped).
+        unsafe { app.device.deinit() };
+    }
+
+    // rustty-only (P8-W6 T2, `40d5b860d` + `2e36658c6`): with no EGL driver
+    // (libglvnd pointed at a vendor file that does not exist), `App.init` fails
+    // with `error.DeviceFailed`, and the log says why: the device's surfaceless
+    // diagnosis (`opengl/Device.zig:75-77`), then `App.init`'s own line. At the
+    // pin the app came up and every surface failed instead (UD356's old
+    // trigger). Measured on rvm.
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[test]
+    #[ignore = "needs __EGL_VENDOR_LIBRARY_FILENAMES=/nonexistent.json; run alone with --ignored --exact"]
+    fn app_init_without_an_egl_driver_fails_with_device_failed_and_says_why() {
+        const TEST: &str = "app_init_without_an_egl_driver_fails_with_device_failed_and_says_why";
+        assert!(
+            std::env::var_os("__EGL_VENDOR_LIBRARY_FILENAMES")
+                .is_some_and(|v| v.to_string_lossy().contains("nonexistent")),
+            "{TEST}: run with __EGL_VENDOR_LIBRARY_FILENAMES=/nonexistent.json"
+        );
+        let cap = crate::log_capture::start();
+        let res = App::<TestApp>::init(Allocator);
+        let messages = cap.messages();
+        drop(cap);
+        assert!(
+            matches!(res, Err(CreateError::DeviceFailed)),
+            "App::init must fail with DeviceFailed, got {:?}",
+            res.as_ref().err()
+        );
+        let errors: Vec<_> = messages
+            .into_iter()
+            .filter(|(level, _, _)| *level == log::Level::Error)
+            .collect();
+        assert_eq!(
+            errors,
+            vec![
+                (
+                    log::Level::Error,
+                    "opengl".to_string(),
+                    "no EGL driver could be loaded; check that a GPU driver is installed and \
+                     was built against a compatible libc (LD_DEBUG=libs shows why a driver \
+                     failed to load)"
+                        .to_string()
+                ),
+                (
+                    log::Level::Error,
+                    "app".to_string(),
+                    "failed to initialize render device err=Egl(BadParameter)".to_string()
+                ),
+            ]
+        );
+    }
+
+    // rustty-only (DECISIONS P11): the test constructor builds the app without
+    // a device, and `deinit` skips the null box. Runs under Miri.
+    #[test]
+    fn init_null_device_has_no_device_and_deinit_skips_it() {
+        let mut app = App::<TestApp>::init_null_device(Allocator).unwrap();
+        assert!(app.device.as_ptr().is_null());
+        app.deinit();
+        assert!(app.device.as_ptr().is_null());
+    }
+
     // rustty-only: Mailbox.push stores the message, returns the queue Size,
     // and wakes the rt_app ("Wake up our app loop") — including through an
     // [ADV-FIX 6a] by-value copy of the handle.
     #[test]
     fn mailbox_push_wakes_rt_app_and_returns_size() {
         let mut rt_app = TestApp::new();
-        let mut app = App::<TestApp>::init(Allocator).unwrap();
+        let mut app = App::<TestApp>::init_null_device(Allocator).unwrap();
 
         // N505 (P7-W15): `&raw mut`, not a `&mut` reborrow, so the test's
         // direct reads of `rt_app.wakeups` between pushes do not freeze the
@@ -1639,7 +1964,7 @@ pub(crate) mod test_runtime {
     #[test]
     fn drain_mailbox_dispatches_and_quit_short_circuits() {
         let rt_app = TestApp::new();
-        let mut app = App::<TestApp>::init(Allocator).unwrap();
+        let mut app = App::<TestApp>::init_null_device(Allocator).unwrap();
 
         // Plain dispatch: open_config reaches the apprt.
         app.mailbox
@@ -1673,7 +1998,7 @@ pub(crate) mod test_runtime {
     // ("Prevent redundant focus events").
     #[test]
     fn focus_event_sets_state_and_dedupes() {
-        let mut app = App::<TestApp>::init(Allocator).unwrap();
+        let mut app = App::<TestApp>::init_null_device(Allocator).unwrap();
 
         // Defaults to true; a redundant `true` early-returns.
         assert!(app.focused);
@@ -1696,7 +2021,7 @@ pub(crate) mod test_runtime {
     #[test]
     fn color_scheme_event_sets_conditional_state_and_soft_reloads() {
         let rt_app = TestApp::new();
-        let mut app = App::<TestApp>::init(Allocator).unwrap();
+        let mut app = App::<TestApp>::init_null_device(Allocator).unwrap();
         assert_eq!(
             app.config_conditional_state.theme,
             conditional::Theme::Light
@@ -1717,7 +2042,7 @@ pub(crate) mod test_runtime {
     #[test]
     fn color_scheme_event_same_scheme_is_noop() {
         let rt_app = TestApp::new();
-        let mut app = App::<TestApp>::init(Allocator).unwrap();
+        let mut app = App::<TestApp>::init_null_device(Allocator).unwrap();
 
         // The default conditional theme is light.
         unsafe { App::colorSchemeEvent(&raw mut app, &rt_app, apprt::ColorScheme::Light) }.unwrap();
@@ -1736,7 +2061,7 @@ pub(crate) mod test_runtime {
     #[test]
     fn add_and_delete_surface_drive_the_quit_timer() {
         let mut rt_app = TestApp::new();
-        let mut app = App::<TestApp>::init(Allocator).unwrap();
+        let mut app = App::<TestApp>::init_null_device(Allocator).unwrap();
 
         let mut core_mu = std::mem::MaybeUninit::<Surface<TestApp>>::uninit();
         let core = fabricateSurface(&mut core_mu, 1);
@@ -1784,7 +2109,7 @@ pub(crate) mod test_runtime {
     #[test]
     fn ud366_perform_all_action_survives_a_host_append_that_reallocates() {
         let mut rt_app = TestApp::new();
-        let mut app = App::<TestApp>::init(Allocator).unwrap();
+        let mut app = App::<TestApp>::init_null_device(Allocator).unwrap();
         let app_ptr: *mut App<TestApp> = &raw mut app;
         let rt_app_ptr: *mut TestApp = &raw mut rt_app;
 
@@ -1851,7 +2176,7 @@ pub(crate) mod test_runtime {
     #[test]
     fn delete_surface_clears_matching_focused_surface() {
         let mut rt_app = TestApp::new();
-        let mut app = App::<TestApp>::init(Allocator).unwrap();
+        let mut app = App::<TestApp>::init_null_device(Allocator).unwrap();
 
         let mut core_mu = std::mem::MaybeUninit::<Surface<TestApp>>::uninit();
         let core = fabricateSurface(&mut core_mu, 7);
@@ -1881,7 +2206,7 @@ pub(crate) mod test_runtime {
     // surface query is never reached).
     #[test]
     fn needs_confirm_quit_false_with_zero_surfaces() {
-        let mut app = App::<TestApp>::init(Allocator).unwrap();
+        let mut app = App::<TestApp>::init_null_device(Allocator).unwrap();
         assert!(!app.needsConfirmQuit());
         app.deinit();
     }
@@ -1890,7 +2215,7 @@ pub(crate) mod test_runtime {
     #[test]
     fn key_event_release_returns_false() {
         let rt_app = TestApp::new();
-        let mut app = App::<TestApp>::init(Allocator).unwrap();
+        let mut app = App::<TestApp>::init_null_device(Allocator).unwrap();
 
         let ev = KeyEvent {
             action: key::Action::Release,
@@ -1917,7 +2242,7 @@ pub(crate) mod test_runtime {
             },
             BindingAction::OpenConfig(rustty_input::binding::OpenConfig::DEFAULT),
         );
-        let mut app = App::<TestApp>::init(Allocator).unwrap();
+        let mut app = App::<TestApp>::init_null_device(Allocator).unwrap();
         app.focusEvent(false);
 
         let ev = KeyEvent {
@@ -1942,7 +2267,7 @@ pub(crate) mod test_runtime {
             },
             BindingAction::OpenConfig(rustty_input::binding::OpenConfig::DEFAULT),
         );
-        let mut app = App::<TestApp>::init(Allocator).unwrap();
+        let mut app = App::<TestApp>::init_null_device(Allocator).unwrap();
         assert!(app.focused);
 
         let ev = KeyEvent {
@@ -1986,7 +2311,7 @@ pub(crate) mod test_runtime {
     fn perform_all_chained_action_continues_past_failures() {
         let mut rt_app = TestApp::new();
         rt_app.fail_key = Some(ActionKey::Quit);
-        let mut app = App::<TestApp>::init(Allocator).unwrap();
+        let mut app = App::<TestApp>::init_null_device(Allocator).unwrap();
 
         unsafe {
             App::performAllChainedAction(
@@ -2035,7 +2360,7 @@ pub(crate) mod test_runtime {
     /// (the success-path-diagnostic bug class this plan exists to catch).
     #[test]
     fn focus_event_emits_the_debug_diagnostic_only_on_a_real_change() {
-        let mut app = App::<TestApp>::init(Allocator).unwrap();
+        let mut app = App::<TestApp>::init_null_device(Allocator).unwrap();
         // `init` leaves `focused = true`.
         let cap = crate::log_capture::start();
 
@@ -2066,7 +2391,7 @@ pub(crate) mod test_runtime {
     #[test]
     fn drain_mailbox_logs_message_tags() {
         let mut rt_app = TestApp::new();
-        let mut app = App::<TestApp>::init(Allocator).unwrap();
+        let mut app = App::<TestApp>::init_null_device(Allocator).unwrap();
 
         // An unregistered surface pointer: `closeSurface` rejects it through
         // `hasSurface` before any dereference, so this is only ever compared,
@@ -2117,7 +2442,7 @@ pub(crate) mod test_runtime {
     fn perform_all_chained_action_warns_on_the_failing_action_only() {
         let mut rt_app = TestApp::new();
         rt_app.fail_key = Some(ActionKey::Quit);
-        let mut app = App::<TestApp>::init(Allocator).unwrap();
+        let mut app = App::<TestApp>::init_null_device(Allocator).unwrap();
 
         let cap = crate::log_capture::start();
         unsafe {

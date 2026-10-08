@@ -20,8 +20,7 @@
 //!
 //! The cfg predicate here MUST track [`crate::generic`]'s dispatcher arms: an
 //! `image` twin exists exactly where a `generic` twin does. On every other target
-//! (Windows / wasm32) the module is not compiled at all and `crate::Renderer` is
-//! the `WebGL` placeholder.
+//! (Windows / wasm32) the module is not compiled at all.
 //!
 //! PORT NOTE (W2D/F-003): the OpenGL arm's gate is `any(linux, freebsd)`, kept in
 //! lock-step with `generic`'s `linux_impl` gate and the crate root's `opengl`

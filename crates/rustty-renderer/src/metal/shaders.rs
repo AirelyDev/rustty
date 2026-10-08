@@ -621,11 +621,10 @@ fn check_error(nserr: &objc2_foundation::NSError) {
 /// `error.OutOfMemory` for one `createWithBytes` rejects (not UTF-8).
 #[cfg(test)]
 mod post_pipeline_error_tests {
-    use crate::metal::metal_impl::Metal;
     use crate::size::AlphaBlending;
 
     fn post_shader_warnings(source: &std::ffi::CStr) -> Option<Vec<String>> {
-        let metal = match Metal::init_offscreen(AlphaBlending::Native, 4, 4) {
+        let metal = match crate::metal::test_support::offscreen_metal(AlphaBlending::Native, 4, 4) {
             Ok(m) => m,
             Err(e) => {
                 crate::metal::test_support::require_metal_or_skip(

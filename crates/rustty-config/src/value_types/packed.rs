@@ -64,6 +64,29 @@ impl Default for ShellIntegrationFeatures {
     }
 }
 
+// pub const XtChecksumExtension = packed struct { negate = true, attributes = true, trim = true, undrawn = false, full = false };
+/// See vt-xt-checksum-extension
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XtChecksumExtension {
+    pub negate: bool,
+    pub attributes: bool,
+    pub trim: bool,
+    pub undrawn: bool,
+    pub full: bool,
+}
+
+impl Default for XtChecksumExtension {
+    fn default() -> Self {
+        Self {
+            negate: true,
+            attributes: true,
+            trim: true,
+            undrawn: false,
+            full: false,
+        }
+    }
+}
+
 // pub const SplitPreserveZoom = packed struct { navigation: bool = false };
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SplitPreserveZoom {
@@ -268,6 +291,31 @@ impl PackedStruct for ShellIntegrationFeatures {
     }
 }
 
+// packed struct { negate, attributes, trim, undrawn, full }
+impl PackedStruct for XtChecksumExtension {
+    fn field_names() -> &'static [&'static [u8]] {
+        &[b"negate", b"attributes", b"trim", b"undrawn", b"full"]
+    }
+    fn set_all(&mut self, b: bool) {
+        self.negate = b;
+        self.attributes = b;
+        self.trim = b;
+        self.undrawn = b;
+        self.full = b;
+    }
+    fn set_field(&mut self, part: &[u8], value: bool) -> bool {
+        match part {
+            b"negate" => self.negate = value,
+            b"attributes" => self.attributes = value,
+            b"trim" => self.trim = value,
+            b"undrawn" => self.undrawn = value,
+            b"full" => self.full = value,
+            _ => return false,
+        }
+        true
+    }
+}
+
 // packed struct { navigation }
 impl PackedStruct for SplitPreserveZoom {
     fn field_names() -> &'static [&'static [u8]] {
@@ -454,6 +502,13 @@ packed_to_c_uint!(ShellIntegrationFeatures {
     ssh_terminfo,
     path
 });
+packed_to_c_uint!(XtChecksumExtension {
+    negate,
+    attributes,
+    trim,
+    undrawn,
+    full
+});
 packed_to_c_uint!(SplitPreserveZoom { navigation });
 packed_to_c_uint!(AppNotifications {
     clipboard_copy,
@@ -539,6 +594,27 @@ impl FormatEntry for ShellIntegrationFeatures {
                 (b"ssh-env", self.ssh_env),
                 (b"ssh-terminfo", self.ssh_terminfo),
                 (b"path", self.path),
+            ],
+            writer,
+        )
+    }
+}
+
+// packed struct { negate, attributes, trim, undrawn, full }
+impl FormatEntry for XtChecksumExtension {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
+        format_entry_packed_struct(
+            name,
+            &[
+                (b"negate", self.negate),
+                (b"attributes", self.attributes),
+                (b"trim", self.trim),
+                (b"undrawn", self.undrawn),
+                (b"full", self.full),
             ],
             writer,
         )

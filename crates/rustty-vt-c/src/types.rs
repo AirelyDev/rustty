@@ -2564,6 +2564,8 @@ static DECLS: &[TypeDecl] = {
                     ("clipboard_write_max_bytes", ClipboardWriteMaxBytes),
                     ("resize_pull_scrollback", ResizePullScrollback),
                     ("render_hold", RenderHold),
+                    ("xt_checksum_report", XtChecksumReport),
+                    ("xt_checksum_extension", XtChecksumExtension),
                 ]
             )
         ),

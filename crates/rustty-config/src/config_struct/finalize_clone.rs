@@ -674,6 +674,8 @@ impl Config {
             Key::OscColorReportFormat => c!(osc_color_report_format),
             Key::VtKamAllowed => c!(vt_kam_allowed),
             Key::VtWindowResizeAllowed => c!(vt_window_resize_allowed),
+            Key::VtXtChecksumReport => c!(vt_xt_checksum_report),
+            Key::VtXtChecksumExtension => c!(vt_xt_checksum_extension),
             Key::CustomShader => c!(custom_shader),
             Key::CustomShaderAnimation => c!(custom_shader_animation),
             Key::BellFeatures => c!(bell_features),
@@ -975,6 +977,8 @@ impl Config {
         cv!(osc_color_report_format);
         cv!(vt_kam_allowed);
         cv!(vt_window_resize_allowed);
+        cv!(vt_xt_checksum_report);
+        cv!(vt_xt_checksum_extension);
         // RepeatablePath (no derived `Clone`)
         ci!(custom_shader);
         cv!(custom_shader_animation);

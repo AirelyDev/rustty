@@ -432,6 +432,20 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
         };
     }
 
+    // .xt_checksum_extension => if (self.xt_checksum_report) {
+    //     self.terminal.flags.xt_checksum = value.flags;
+    // },
+    fn xt_checksum_extension(&mut self, v: stream::XtChecksumExtension) {
+        if self.xt_checksum_report {
+            self.term().flags.xt_checksum = v.flags;
+        }
+    }
+
+    // .request_xt_checksum => self.reportXtChecksum(value),
+    fn request_xt_checksum(&mut self, v: rustty_vt::xt_checksum::Request) {
+        self.reportXtChecksum(v);
+    }
+
     // .size_report => self.sendSizeReport(value),
     fn size_report(&mut self, v: csi::SizeReportStyle) {
         self.sendSizeReport(v);

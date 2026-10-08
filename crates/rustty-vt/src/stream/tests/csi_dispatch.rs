@@ -90,6 +90,139 @@ fn stream_ansi_set_mode_sm_and_reset_mode_rm() {
     assert!(s.handler.mode.is_none());
 }
 
+// test "stream: DECRQCRA dispatch" (oracle 9272a2f7c)
+#[test]
+fn stream_decrqcra_dispatch() {
+    #[derive(Default)]
+    struct H {
+        calls: usize,
+        req: Option<crate::xt_checksum::Request>,
+    }
+    impl Handler for H {
+        fn request_xt_checksum(&mut self, v: crate::xt_checksum::Request) {
+            self.calls += 1;
+            self.req = Some(v);
+        }
+    }
+
+    struct Case {
+        input: &'static [u8],
+        req: Option<crate::xt_checksum::Request>,
+    }
+    use crate::xt_checksum::Request;
+    let cases = [
+        Case {
+            input: b"\x1b[7;1;2;3;4;5*y",
+            req: Some(Request {
+                id: 7,
+                top: 2,
+                left: 3,
+                bottom: 4,
+                right: 5,
+            }),
+        },
+        Case {
+            input: b"\x1b[7*y",
+            req: Some(Request {
+                id: 7,
+                ..Request::default()
+            }),
+        },
+        Case {
+            input: b"\x1b[*y",
+            req: Some(Request::default()),
+        },
+        Case {
+            input: b"\x1b[1;1;2;3*y",
+            req: Some(Request {
+                id: 1,
+                top: 2,
+                left: 3,
+                ..Request::default()
+            }),
+        },
+        Case {
+            input: b"\x1b[1;1;1;1;1;1;1*y",
+            req: None,
+        },
+        Case {
+            input: b"\x1b[1;1;1;1;1;1y",
+            req: None,
+        },
+        Case {
+            input: b"\x1b[1;1;1;1;1;1\"y",
+            req: None,
+        },
+    ];
+
+    for case in cases {
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H::default()));
+        s.next_slice(case.input);
+        if let Some(req) = case.req {
+            assert_eq!(1, s.handler.calls);
+            assert_eq!(req, s.handler.req.unwrap());
+        } else {
+            assert_eq!(0, s.handler.calls);
+        }
+    }
+}
+
+// test "stream: XTCHECKSUM dispatch" (oracle 9272a2f7c)
+#[test]
+fn stream_xtchecksum_dispatch() {
+    use crate::xt_checksum::Flags;
+
+    #[derive(Default)]
+    struct H {
+        calls: usize,
+        flags: Option<Flags>,
+    }
+    impl Handler for H {
+        fn xt_checksum_extension(&mut self, v: XtChecksumExtension) {
+            self.calls += 1;
+            self.flags = Some(v.flags);
+        }
+    }
+
+    struct Case {
+        input: &'static [u8],
+        flags: Option<Flags>,
+    }
+    let cases = [
+        Case {
+            input: b"\x1b[#y",
+            flags: Some(Flags::default()),
+        },
+        Case {
+            input: b"\x1b[0#y",
+            flags: Some(Flags::default()),
+        },
+        Case {
+            input: b"\x1b[5#y",
+            flags: Some(Flags::default().with_positive(true).with_no_trim(true)),
+        },
+        Case {
+            input: b"\x1b[48#y",
+            flags: Some(Flags::default().with_full(true)),
+        },
+        Case {
+            input: b"\x1b[1;2#y",
+            flags: None,
+        },
+    ];
+
+    for case in cases {
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H::default()));
+        s.next_slice(case.input);
+        if let Some(flags) = case.flags {
+            assert_eq!(1, s.handler.calls);
+            assert_eq!(flags, s.handler.flags.unwrap());
+        } else {
+            assert_eq!(0, s.handler.calls);
+        }
+    }
+}
+
 // test "stream: DECRQM dispatch" (oracle 9dc0d974e)
 #[test]
 fn stream_decrqm_dispatch() {

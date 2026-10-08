@@ -158,10 +158,38 @@ struct TestSurface {
     mutex: *mut rustty_zigstd::thread::Mutex,
 }
 
+/// R14 runtime skip for a host with no render device (P8-W6 T2): since
+/// `40d5b860d`, `App.create` initializes the app-scoped render device (Metal; EGL
+/// via a dlopen'd `libEGL.so.1` on Linux, which Windows does not have), and fails
+/// with `error.DeviceFailed` without one.
+///
+/// PORT NOTE: upstream has the same shape (its `App.create` fails the same way on
+/// such a host). A no-op skip by default; a panic under the GPU legs' pivot
+/// (`RUSTTY_REQUIRE_METAL=1` on macOS, `RUSTTY_REQUIRE_GL=1` elsewhere).
+fn require_device_or_skip(test_name: &str, err: &dyn std::fmt::Debug) {
+    let pivot = if cfg!(target_os = "macos") {
+        "RUSTTY_REQUIRE_METAL"
+    } else {
+        "RUSTTY_REQUIRE_GL"
+    };
+    assert!(
+        std::env::var_os(pivot).is_none_or(|v| v != "1"),
+        "render device required but unavailable ({pivot}=1): {test_name} would have skipped: {err:?}"
+    );
+    eprintln!("no render device ({err:?}); skipping {test_name}");
+}
+
 impl TestSurface {
-    fn build() -> TestSurface {
+    /// `None` when the host has no render device (after [`require_device_or_skip`]).
+    fn build() -> Option<TestSurface> {
         let mut rt_app = Box::new(TestApp::new());
-        let app: *mut App<TestApp> = Box::into_raw(App::<TestApp>::create(Allocator).unwrap());
+        let app: *mut App<TestApp> = match App::<TestApp>::create(Allocator) {
+            Ok(app) => Box::into_raw(app),
+            Err(err) => {
+                require_device_or_skip("surface_occlusion_callback_dedups_and_reports", &err);
+                return None;
+            }
+        };
 
         let mut mu: Box<MaybeUninit<Surface<TestApp>>> = Box::new(MaybeUninit::uninit());
         let sp = mu.as_mut_ptr();
@@ -189,6 +217,7 @@ impl TestSurface {
                 default_modes: rustty_vt::modes::ModePacked::default(),
                 default_cursor_style: rustty_vt::screen::CursorStyle::Block,
                 default_cursor_blink: Some(false),
+                default_xt_checksum: Default::default(),
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
             },
@@ -277,6 +306,7 @@ impl TestSurface {
             renderer_mailbox,
             renderer_wakeup: handler_wakeup,
             enquiry_response: derived.enquiry_response.clone(),
+            xt_checksum_report: derived.xt_checksum_report,
             osc_color_report_format: derived.osc_color_report_format,
             clipboard_write: derived.clipboard_write,
             clipboard_write_limit: derived.clipboard_write_limit,
@@ -335,7 +365,7 @@ impl TestSurface {
                 .write(rustty_xev::Async::init().expect("Async::init"));
         }
 
-        TestSurface {
+        Some(TestSurface {
             surface: sp,
             termio_mailbox: unsafe { std::ptr::addr_of_mut!((*(*sp).io.as_ptr()).mailbox) },
             renderer_mailbox,
@@ -344,7 +374,7 @@ impl TestSurface {
             rt_app,
             rt_surface,
             mutex,
-        }
+        })
     }
 
     fn surface(&mut self) -> &mut Surface<TestApp> {
@@ -389,7 +419,9 @@ fn surface_occlusion_callback_dedups_and_reports() {
     // REBUILD SENTINEL: verified to fire when tripped (see the lane report).
     assert_eq!(2 + 2, 4, "REBUILD SENTINEL");
 
-    let mut f = TestSurface::build();
+    let Some(mut f) = TestSurface::build() else {
+        return;
+    };
     f.set_report_visibility(true);
     // `build` seeds `visible = true`, so the first callback below is a real
     // transition. Drain anything the setup queued.

@@ -299,7 +299,6 @@ fn auto_attribute(table: VertexLayoutRef, vertex_desc: &MTLVertexDescriptor) {
 mod tests {
     use super::*;
     use crate::log_capture::CapturedRecord;
-    use crate::metal::metal_impl::Metal;
     use crate::size::AlphaBlending;
 
     /// S35-F2 is a HELPER-versus-USE-SITE question, and getting it backwards is
@@ -339,7 +338,7 @@ mod tests {
     /// `Err`, not a signal.
     #[test]
     fn check_error_emits_at_the_use_site() {
-        let metal = match Metal::init_offscreen(AlphaBlending::Native, 4, 4) {
+        let metal = match crate::metal::test_support::offscreen_metal(AlphaBlending::Native, 4, 4) {
             Ok(m) => m,
             Err(e) => {
                 crate::metal::test_support::require_metal_or_skip(
@@ -356,7 +355,7 @@ mod tests {
         let res = Pipeline::init(
             None,
             Options {
-                device: &metal.device,
+                device: &metal.device().device,
                 // `cell_text_vertex` takes a `[[stage_in]]` vertex input
                 // (`shaders.metal:558`) but we pass `None` for the attribute
                 // table, so no MTLVertexDescriptor is attached. Both functions

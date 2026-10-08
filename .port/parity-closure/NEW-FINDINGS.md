@@ -11307,3 +11307,63 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `cargo build --workspace`; documented in `.port/tools/CI.md`), BLOCKED (a WARNINGS row, not a skip) when the rustup
   target is absent. Negative control: replacing the wrapper with a bare `rustty_os::path::realpath` call made the
   check RED (E0433), reverted.
+
+## N522 — PORT-ONLY: the app-scoped render `Device` lives in its own allocation (`DeviceBox`), not by value in `App`
+
+- **id**: N522. P8-W6 T2 (R3 §2.2 and Q1, DECISIONS P10/P11/P12, N522). **severity**: none (a layout choice the
+  port needs; no behavioural difference). **kind**: PORT-ONLY. **state**: RECORD-ONLY.
+- **upstream** (`40d5b860d`): `App.device: renderer.Device` by value (`App.zig:57-58`), initialized in `App.init`
+  (`:133-142`) and torn down last in `App.deinit` (`:157-159`, "This must happen after all surfaces are gone since
+  their renderers borrow it."); every surface renderer is created with `.device = &app.device` (`Surface.zig:564`)
+  and reads it on its render thread (`Metal.zig` `self.device.*`, `OpenGL.zig` `self.device.display`).
+- **why the port differs**: by value, every main-thread `&mut App` (`addSurface`, `deleteSurface`, `updateConfig`,
+  `deinit`, ...) is a protected `Unique` over the device bytes while render threads read them: Stacked Borrows UB,
+  the N441/N444 class. Proven on `.port/phase-2/mirihar-device-box`: `inline_device` UB under SB (TB clean,
+  per-byte), `boxed_device` and `boxed_device_lifecycle` clean under SB and TB, and the negative control
+  `boxed_device_freed_before_surfaces` (device freed before the surviving render thread stops) UB under both.
+- **the port**: `rustty_core::app::DeviceBox(*mut rustty_renderer::Device)` from `Box::into_raw`, created in
+  `App::init` at the reference's point (logging `failed to initialize render device err={}` and returning
+  `CreateError::DeviceFailed` on error), freed in `App::deinit` after the surface loop and the grid-set assert;
+  `Options.device` is the `*const Device` from `DeviceBox::as_ptr`. No `Arc`: a surface must not keep the device
+  alive past `App::deinit`. The thread-safety argument is written at the type (MTLDevice thread-safe; EGL 1.5
+  display calls thread-safe; fields written once before any surface). `Device::init` writes a
+  `MaybeUninit<Device>` slot (the reference's in-place `init(self: *Device)` over an `undefined` field).
+- **tests without a GPU** (DECISIONS P11): `App::init_null_device` (`#[cfg(test)]`) builds the app with a null
+  box that `deinit` skips; the 16 App seam tests use it and stay Miri-checked (17 passed under Miri with the new
+  null-device test). Real-device tests: `app_init_creates_and_deinit_frees_the_render_device`,
+  `app::device_tests::two_surfaces_share_the_device_destroy_one_draw_the_other_then_deinit` (Review Focus 4: two
+  real surfaces, destroy one, draw the other, deinit; a `#[cfg(test)]` drop-order probe asserts the device is freed
+  after both renderers).
+
+## N527 — `build-rustty.sh` overrode the project's `OTHER_LDFLAGS` and RusttyTests failed to link
+
+- **status**: CLOSED (P8-W7 T4).
+- **cause**: `macos/build-rustty.sh` passed `OTHER_LDFLAGS="-lstdc++"` on the `xcodebuild` command line. A command-line
+  build setting overrides every project-level value, so it dropped the project's
+  `"OTHER_LDFLAGS[arch=*]" = "-lstdc++ -Wl,-u,_rustty_benchmark_cli"` (Debug and Release configurations,
+  `project.pbxproj`). RusttyTests built through that invocation failed with
+  `Undefined symbols for architecture arm64: "_rustty_benchmark_cli", referenced from: RusttyTests.BenchmarkTests.example()`.
+- **fix**: the override is removed. Every configuration (Debug, Release, ReleaseLocal) already carries `-lstdc++` in the
+  project, so nothing is lost; `project.pbxproj` is unchanged. The script comment now says why it is not passed.
+- **evidence**: RED: the script's exact invocation plus `-only-testing:RusttyTests test` ended with the undefined
+  `_rustty_benchmark_cli` link error. GREEN: the same invocation without the override gives `** TEST SUCCEEDED **`;
+  `bash macos/build-rustty.sh` gives `** BUILD SUCCEEDED **`; `.port/tools/macos-parity/menu-shortcut-parity.sh` prints
+  `menu-shortcut parity OK — 51 actions resolve byte-identically`.
+
+## N520 — `flags.xt_checksum` is not carried by the snapshot TERMINAL record
+
+- **id**: N520. P8-W3 T1 (R1 §2.5 risk 3, R1 §4 Q2, DECISIONS N520). **severity**: low (opt-in feature, no crash).
+  **kind**: upstream format gap, carried for byte parity. **state**: RECORD-ONLY.
+- **what**: XTCHECKSUM (`CSI Ps # y`) sets `Terminal.flags.xt_checksum`, which is program state. Upstream's
+  TERMINAL record (`snapshot/terminal.zig`, the flag list at `:392-402`, unchanged in `12752b2ac..a60e9e2a5`)
+  encodes `shell_redraw`, `modify_other_keys_2`, the mouse flags and `password_input`, but not `xt_checksum`, and
+  `default_xt_checksum` is not encoded either. Rustty's `snapshot/terminal.rs` mirrors the record byte for byte, so
+  a restored terminal comes back from `Terminal::init` with `flags.xt_checksum = Options.default_xt_checksum` (the
+  restore path builds its `Options` with the zero value, the DEC checksum) and answers DECRQCRA with that variant
+  instead of the one the program selected.
+- **why not a UD**: it is reachable only with `xt_checksum_report` on (off by default in the vt handler, the config
+  and the C surface), it cannot crash or corrupt state, and fixing it is a change to a documented binary format
+  whose goldens are cross-checked against Ghostty's. A Rustty-only field would break that byte identity. Upstream
+  is the right place to extend the record.
+- **revisit**: if upstream adds `xt_checksum` (or `default_xt_checksum`) to the TERMINAL record, port it with the
+  record change and retire this entry.

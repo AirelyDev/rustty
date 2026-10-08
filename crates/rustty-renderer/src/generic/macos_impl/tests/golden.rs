@@ -461,7 +461,10 @@ fn golden_presents_frame_on_screen() {
     let view_any: &AnyObject = &view;
 
     // `present` takes `&self` (N440).
-    let onscreen = Metal::init(view_any, 1.0, AlphaBlending::Native)
+    let device =
+        crate::metal::test_support::device().expect("the test device (Metal probed above)");
+    // SAFETY: the test device is process-lived.
+    let onscreen = unsafe { Metal::init(device, view_any, 1.0, AlphaBlending::Native) }
         .expect("Metal::init (Metal probed above)");
 
     // present(sync=true) → set_surface_sync → CALayer.setContents(surface).

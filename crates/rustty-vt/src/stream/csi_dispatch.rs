@@ -1839,6 +1839,63 @@ impl<H: Handler> Stream<H> {
                 }
             },
 
+            // 'y' => switch (input.intermediates.len) { ... }
+            b'y' => match input.intermediates.len() {
+                1 => match input.intermediates[0] {
+                    // DECRQCRA - Request Checksum of Rectangular Area.
+                    // The page number (the second parameter) is ignored.
+                    b'*' => {
+                        if input.params.len() > 6 {
+                            // log.warn("invalid DECRQCRA command: {f}", .{input});
+                            log::warn!(target: LOG_SCOPE, "invalid DECRQCRA command: {input:?}");
+                            return;
+                        }
+
+                        // var params: [6]u16 = @splat(0);
+                        // @memcpy(params[0..input.params.len], input.params);
+                        let mut params: [u16; 6] = [0; 6];
+                        params[..input.params.len()].copy_from_slice(input.params.as_slice());
+                        handler.request_xt_checksum(crate::xt_checksum::Request {
+                            id: params[0],
+                            top: params[2],
+                            left: params[3],
+                            bottom: params[4],
+                            right: params[5],
+                        });
+                    }
+
+                    // XTCHECKSUM - Select checksum extension. Bits
+                    // beyond the ones we know are ignored, as in xterm.
+                    b'#' => {
+                        if input.params.len() > 1 {
+                            // log.warn("invalid XTCHECKSUM command: {f}", .{input});
+                            log::warn!(target: LOG_SCOPE, "invalid XTCHECKSUM command: {input:?}");
+                            return;
+                        }
+
+                        let bits: u16 = if input.params.len() == 1 {
+                            input.params[0]
+                        } else {
+                            0
+                        };
+                        handler.xt_checksum_extension(XtChecksumExtension {
+                            // .flags = @as(xt_checksum.Flags, @bitCast(@as(u5, @truncate(bits)))),
+                            flags: crate::xt_checksum::Flags::from_bits((bits & 0x1F) as u8),
+                        });
+                    }
+
+                    // else => log.warn("ignoring unimplemented CSI y: {f}", .{input}),
+                    _ => {
+                        log::warn!(target: LOG_SCOPE, "ignoring unimplemented CSI y: {input:?}");
+                    }
+                },
+
+                // else => log.warn("ignoring unimplemented CSI y: {f}", .{input}),
+                _ => {
+                    log::warn!(target: LOG_SCOPE, "ignoring unimplemented CSI y: {input:?}");
+                }
+            },
+
             // DECSASD - Select Active Status Display
             // '}' => decsasd: { ... }
             b'}' => 'decsasd: {

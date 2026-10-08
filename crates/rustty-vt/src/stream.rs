@@ -308,6 +308,29 @@ pub struct ResizeWindow {
     pub columns: u16,
 }
 
+/// `Action.XtChecksumExtension`
+// pub const XtChecksumExtension = struct {
+//     flags: xt_checksum.Flags,
+//
+//     pub const C = u8;
+//
+//     pub fn cval(self: XtChecksumExtension) XtChecksumExtension.C {
+//         return @as(u5, @bitCast(self.flags));
+//     }
+// };
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct XtChecksumExtension {
+    pub flags: crate::xt_checksum::Flags,
+}
+
+impl XtChecksumExtension {
+    /// `XtChecksumExtension.cval`: the flags' `u5` bits as the C value (`u8`).
+    #[inline]
+    pub const fn cval(self) -> u8 {
+        self.flags.bits()
+    }
+}
+
 /// `Action.DeviceStatus`
 // pub const DeviceStatus = struct { request: device_status.Request };
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -842,6 +865,14 @@ pub trait Handler {
     /// `mouse_shape_reset` (an empty OSC 22, `b1bfd1d9c`)
     // mouse_shape_reset,
     fn mouse_shape_reset(&mut self) {}
+
+    /// `request_xt_checksum` (DECRQCRA, 9272a2f7c)
+    // request_xt_checksum: xt_checksum.Request,
+    fn request_xt_checksum(&mut self, _v: crate::xt_checksum::Request) {}
+
+    /// `xt_checksum_extension` (XTCHECKSUM, 9272a2f7c)
+    // xt_checksum_extension: XtChecksumExtension,
+    fn xt_checksum_extension(&mut self, _v: XtChecksumExtension) {}
 
     /// `program_status` (OSC 7501, `bae2c3cdb`)
     // program_status: ProgramStatus,
