@@ -1620,6 +1620,32 @@ mod tests {
         p.deinit();
     }
 
+    // test "osc: 105 empty" {
+    #[test]
+    fn osc_105_empty() {
+        let alloc = crate::alloc::Global;
+        let mut p: Parser = Parser::init();
+        // defer p.deinit();
+        // p.osc_parser.alloc = std.testing.allocator;
+        p.osc_parser.alloc = Some(alloc);
+
+        for c in b"\x1b]105" {
+            let _ = p.next(*c);
+        }
+
+        let a = p.next(0x07);
+        let cmd = match a[0].as_ref().unwrap() {
+            Action::OscDispatch(cmd) => cmd.as_ref(),
+            _ => panic!("expected osc_dispatch"),
+        };
+        match cmd {
+            osc::Command::ColorOperation { op, .. } => {
+                assert!(*op == osc::color::Operation::osc_105)
+            }
+            _ => panic!("expected color_operation"),
+        }
+    }
+
     // test "csi: too many params" {
     #[test]
     fn csi_too_many_params() {

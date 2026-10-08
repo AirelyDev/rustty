@@ -29,7 +29,33 @@
  * 3. Finalize parsing with rustty_osc_end() to get the command
  * 4. Query command type and extract data using rustty_osc_command_type()
  *    and rustty_osc_command_data()
- * 5. Free the parser with rustty_osc_free() when done
+ * 5. Call rustty_osc_reset() before parsing the next sequence
+ * 6. Free the parser with rustty_osc_free() when done
+ *
+ * ## Ending a Sequence
+ *
+ * An OSC sequence normally ends with BEL (0x07) or ST (ESC followed by a
+ * backslash). A program can also cancel a sequence partway through by
+ * sending CAN (0x18) or SUB (0x1A) instead. A cancelled sequence has no
+ * effect, even if the bytes before the cancel form a complete command.
+ *
+ * In every case, pass the byte that ended the sequence to
+ * rustty_osc_end(). For CAN or SUB, it discards the sequence and returns
+ * NULL:
+ *
+ * @code{.c}
+ * // The program sent "ESC ] 2 ; hello" to set the window title, then
+ * // sent CAN instead of a terminator.
+ * const char* input = "2;hello";
+ * for (size_t i = 0; input[i] != '\0'; i++) {
+ *   rustty_osc_next(parser, (uint8_t)input[i]);
+ * }
+ *
+ * RusttyOscCommand command = rustty_osc_end(parser, 0x18);
+ * // command is NULL, so the window title does not change.
+ *
+ * rustty_osc_reset(parser);
+ * @endcode
  *
  * @{
  */
@@ -67,6 +93,25 @@ typedef enum RUSTTY_ENUM_TYPED {
   RUSTTY_OSC_COMMAND_KITTY_DND_PROTOCOL = 24,
   RUSTTY_OSC_COMMAND_CONTEXT_SIGNAL = 25,
   RUSTTY_OSC_COMMAND_KITTY_DESKTOP_NOTIFICATION = 26,
+
+  /**
+   * An OSC sequence whose number the parser does not implement. Read it
+   * with the RUSTTY_OSC_DATA_UNKNOWN_* data types.
+   *
+   * Only produced when RUSTTY_OSC_OPT_UNKNOWN_MAX_BYTES is nonzero.
+   * Otherwise these sequences are RUSTTY_OSC_COMMAND_INVALID.
+   */
+  RUSTTY_OSC_COMMAND_UNKNOWN = 27,
+
+  /**
+   * A program status report or support query (OSC 7501), which a program
+   * sends to say what it is doing, such as working or waiting on the user.
+   *
+   * The OSC parser only identifies this command. To receive the report's
+   * contents, use a terminal with RUSTTY_TERMINAL_OPT_PROGRAM_STATUS
+   * instead (see RusttyTerminalProgramStatus).
+   */
+  RUSTTY_OSC_COMMAND_PROGRAM_STATUS = 28,
   RUSTTY_OSC_COMMAND_TYPE_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE,
 } RusttyOscCommandType;
 
@@ -156,28 +201,32 @@ RUSTTY_API void rustty_osc_next(RusttyOscParser parser, uint8_t byte);
 /**
  * Finalize OSC parsing and retrieve the parsed command.
  * 
- * Call this function after feeding all bytes of an OSC sequence to the parser
- * using rustty_osc_next() with the exception of the terminating character
- * (ESC or ST). This function finalizes the parsing process and returns the 
- * parsed OSC command.
+ * Call this after feeding every byte of the sequence to rustty_osc_next(),
+ * except the byte that ended it. Pass that byte here as the terminator.
  *
- * The return value is never NULL. Invalid commands will return a command
- * with type RUSTTY_OSC_COMMAND_INVALID.
- * 
- * The terminator parameter specifies the byte that terminated the OSC sequence
- * (typically 0x07 for BEL or 0x5C for ST after ESC). This information is
- * preserved in the parsed command so that responses can use the same terminator
- * format for better compatibility with the calling program. For commands that
- * do not require a response, this parameter is ignored and the resulting
- * command will not retain the terminator information.
+ * If the sequence is not a valid command, this returns NULL. You don't need
+ * to check for NULL before calling rustty_osc_command_type(), which
+ * returns RUSTTY_OSC_COMMAND_INVALID for it.
+ *
+ * Commands that reply to the program, such as color queries, end their
+ * reply the same way the request ended. A terminator of 0x07 (BEL) gets a
+ * BEL reply, and any other byte gets an ST reply. Commands that don't
+ * reply ignore the terminator.
+ *
+ * If the program cancelled the sequence with CAN (0x18) or SUB (0x1A),
+ * pass that byte as the terminator. The sequence is then discarded and
+ * this returns NULL, whatever command it contained. This matches xterm.
+ * The "Ending a Sequence" section of the overview has an example.
  * 
  * The returned command handle is valid until the next call to any 
  * `rustty_osc_*` function with the same parser instance with the exception
  * of command introspection functions such as `rustty_osc_command_type`.
  * 
  * @param parser The parser handle, must not be null.
- * @param terminator The terminating byte of the OSC sequence (0x07 for BEL, 0x5C for ST)
- * @return Handle to the parsed OSC command
+ * @param terminator The byte that ended the OSC sequence: 0x07 for BEL,
+ *        0x5C for ST, or 0x18 (CAN) or 0x1A (SUB) if it was cancelled
+ * @return Handle to the parsed OSC command, or NULL if the sequence is not
+ *         a valid command or was cancelled
  * 
  * @ingroup osc
  */

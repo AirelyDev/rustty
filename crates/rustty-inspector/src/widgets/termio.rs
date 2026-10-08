@@ -1393,6 +1393,8 @@ fn osc_tag_name(osc: &OscCommand) -> &'static str {
         OscCommand::KittyDndProtocol(_) => "kitty_dnd_protocol",
         OscCommand::ContextSignal(_) => "context_signal",
         OscCommand::KittyDesktopNotification(_) => "kitty_desktop_notification",
+        OscCommand::Unknown(_) => "unknown",
+        OscCommand::ProgramStatus(_) => "program_status",
     }
 }
 
@@ -1575,6 +1577,32 @@ fn encode_metadata_osc(md: &mut Metadata, osc: &OscCommand) {
                 dupe_z(terminator_tag(o.terminator).as_bytes()),
             );
         }
+
+        // unknown: Unknown { content: []const u8, truncated: bool, terminator: enum }
+        OscCommand::Unknown(u) => {
+            md.put(b"content", dupe_z(u.content));
+            md.put(b"truncated", single_bool(u.truncated));
+            md.put(
+                b"terminator",
+                dupe_z(terminator_tag(u.terminator).as_bytes()),
+            );
+        }
+
+        // program_status: union(enum) { query: Terminator, report: Report }
+        // (bae2c3cdb) ⇒ `.union` arm: `encodeMetadataSingle(tag_name, payload)`,
+        // so `query` is the terminator's tag name and `report` (a struct) is
+        // its type name.
+        OscCommand::ProgramStatus(ps) => match ps {
+            rustty_vt::osc::parsers::program_status::Command::Query(t) => {
+                md.put(b"query", dupe_z(terminator_tag(*t).as_bytes()));
+            }
+            rustty_vt::osc::parsers::program_status::Command::Report(_) => {
+                md.put(
+                    b"report",
+                    single_struct::<rustty_vt::osc::parsers::program_status::Report>(),
+                );
+            }
+        },
     }
 }
 
@@ -1586,6 +1614,11 @@ fn encode_metadata_osc(md: &mut Metadata, osc: &OscCommand) {
 // .int => md.put(key, allocPrintSentinel("{}", value))
 fn single_int(value: i64) -> Vec<u8> {
     dupe_z(format!("{}", value).as_bytes())
+}
+
+// .bool => md.put(key, if (value) "true" else "false");
+fn single_bool(value: bool) -> Vec<u8> {
+    dupe_z(if value { b"true".as_slice() } else { b"false" })
 }
 
 // .bool => md.put(key, if (value) "true" else "false");  wrapped by .optional:

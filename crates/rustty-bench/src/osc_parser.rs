@@ -48,6 +48,12 @@ pub struct Options {
     /// with no interaction is a bit annoying.
     // data: ?[]const u8 = null,
     data: Option<Vec<u8>>,
+
+    /// The most bytes to keep from each OSC sequence whose number the
+    /// parser does not implement. Zero, the default, discards them like
+    /// the parser does by default. See `osc.Parser.unknown_max_bytes`.
+    // @"unknown-max-bytes": usize = 0,
+    unknown_max_bytes: usize,
 }
 
 impl rustty_args::args::Target for Options {
@@ -61,6 +67,10 @@ impl rustty_args::args::Target for Options {
                 self.data = Some(rustty_args::args::parse_field_string(value)?);
                 Ok(())
             }
+            b"unknown-max-bytes" => {
+                self.unknown_max_bytes = rustty_args::args::parse_field_int(value)?;
+                Ok(())
+            }
             _ => Err(rustty_args::args::Error::InvalidField),
         }
     }
@@ -72,15 +82,19 @@ impl OscParser {
     //     const ptr = try alloc.create(OscParser);
     //     errdefer alloc.destroy(ptr);
     //     ptr.* = .{ .opts = opts, .data_f = null, .parser = .init(alloc) };
+    //     ptr.parser.unknown_max_bytes = opts.@"unknown-max-bytes";
     //     return ptr;
     // }
     pub fn create(alloc: Allocator, opts: Options) -> Result<Box<OscParser>, OutOfMemory> {
         let _ = alloc;
-        Ok(Box::new(OscParser {
+        let unknown_max_bytes = opts.unknown_max_bytes;
+        let mut ptr = Box::new(OscParser {
             opts,
             data_f: None,
             parser: Parser::init(Some(rustty_vt::alloc::Global)),
-        }))
+        });
+        ptr.parser.unknown_max_bytes = unknown_max_bytes;
+        Ok(ptr)
     }
 
     // pub fn destroy(self: *OscParser, alloc: Allocator) void {

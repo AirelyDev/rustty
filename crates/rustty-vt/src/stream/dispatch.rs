@@ -268,6 +268,25 @@ impl<H: Handler> Stream<H> {
                 handler.kitty_dnd(v);
             }
 
+            // .unknown => |v| {
+            //     @branchHint(.unlikely);
+            //     self.handler.vt(.osc_unknown, v);
+            // },
+            // PORT NOTE (P8-W4 T2): the `osc_unknown` action and the stream's
+            // `osc_unknown_max_bytes` option land with P8-W5 T2. Until then the
+            // stream never enables unknown capture (`unknown_max_bytes` stays
+            // 0), so the parser cannot produce this command here.
+            osc::Command::Unknown(_) => {
+                log::debug!(target: LOG_SCOPE, "unimplemented OSC callback: {cmd:?}");
+            }
+
+            // .program_status => |v| self.handler.vt(.program_status, v),
+            // PORT NOTE (P8-W4 T3): the `program_status` action lands with
+            // P8-W5 T2; until then the command is parsed but not dispatched.
+            osc::Command::ProgramStatus(_) => {
+                log::debug!(target: LOG_SCOPE, "unimplemented OSC callback: {cmd:?}");
+            }
+
             osc::Command::ConemuSleep { .. }
             | osc::Command::ConemuShowMessageBox(_)
             | osc::Command::ConemuChangeTabTitle(_)
