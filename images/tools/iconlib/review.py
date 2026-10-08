@@ -63,6 +63,26 @@ def official() -> list[Path]:
 
 SHEETS = {"official": lambda args: official()}
 
+TINTS = {"orange": "#F74C00", "white": "#FFFFFF", "green": "#3CD070", "purple": "#8A4FFF"}
+SCREEN = ["#0018B4", "#2A4BFF"]
+
+
+def custom() -> list[Path]:
+    from . import preview
+    cell = 256
+    frames = list(preview.FRAMES)
+    grid = Image.new("RGBA", (cell * len(TINTS), cell * len(frames)), LIGHT)
+    for r, frame in enumerate(frames):
+        for c, tint in enumerate(TINTS.values()):
+            icon = preview.custom_style(frame, SCREEN, tint).resize((cell, cell), Image.LANCZOS)
+            grid.alpha_composite(icon, (c * cell, r * cell))
+    out = paths.REVIEW_DIR / "custom-style-grid.png"
+    raster.save_png(grid, out)
+    return [out]
+
+
+SHEETS["custom"] = lambda args: custom()
+
 
 def run(args) -> int:
     for p in SHEETS[args.what](args):
