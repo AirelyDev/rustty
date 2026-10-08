@@ -11210,8 +11210,8 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 ## N523 — G9 never checked CSI, ESC or C0: the kinds were registered but `surface_ids` gave them no ids
 
 - **id**: N523. P8-W0 T5 (`.port/phase-8/w0/README.md` F2). **severity**: medium (a gate that cannot go RED on
-  a whole surface). **kind**: gate vacuity. **state**: OPEN — the gate is fixed (P8-W0 T5); the one real gap it
-  now shows, CSI `y` (DECRQCRA / XTCHECKSUM), closes with P8-W3 T1.
+  a whole surface). **kind**: gate vacuity. **state**: CLOSED (P8-W3 merge `db71cee2d`) — the gate is fixed (P8-W0 T5); the one real gap it
+  showed, CSI `y` (DECRQCRA / XTCHECKSUM), was closed by P8-W3 T1 (G9 csi 43/43, all kinds 777/777).
 - **cause**: `check_parity_surface.py` listed `csi`, `esc` and `c0` in `OWNERS`, but `surface_ids()` read none of
   `csi_handlers`, `esc_handlers` or `c0_controls`, so each printed "(no ids in parity-surface.json)" and
   could never turn G9 RED. A token search would not have helped: a final is one character.
@@ -11239,8 +11239,8 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 ## N524 — G9 counted OSC kind `unknown` as ported because the word `unknown` occurs in `rustty-vt`
 
 - **id**: N524. P8-W0 T5 (`.port/phase-8/w0/README.md` F3). **severity**: low (under-reports by one id).
-  **kind**: gate false positive. **state**: OPEN — the gate is fixed (P8-W0 T5); `unknown` closes with P8-W4 T2
-  (`osc::Command::Unknown`), `program_status` with P8-W4 T3.
+  **kind**: gate false positive. **state**: CLOSED (P8-W4 merge `99d788e36`) — the gate is fixed (P8-W0 T5); `unknown` was closed by P8-W4 T2
+  (`osc::Command::Unknown`), `program_status` by P8-W4 T3 (G9 osc 29/29).
 - **cause**: `present()` accepted any whole-word match of an id variant (or the raw substring) in the owner
   crate's token corpus. `unknown` is a common word in `rustty-vt`, so the unported `unknown` kind read covered
   (osc 28/29 at T3). Any kind named by a common word was exposed the same way (`invalid`, `hyperlink_end`).
