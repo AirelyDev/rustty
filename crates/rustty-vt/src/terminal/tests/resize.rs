@@ -449,6 +449,89 @@ fn terminal_resize_less_cols_with_wide_char_then_print() {
     t.deinit(alloc);
 }
 
+// test "Terminal: resize less cols without reflow cutting wide char tail"
+#[test]
+fn terminal_resize_less_cols_without_reflow_cutting_wide_char_tail() {
+    let alloc = Global;
+    let mut t = Terminal::init(alloc, opts(3, 1)).unwrap();
+
+    t.print('a' as u32).unwrap();
+    t.print('一' as u32).unwrap();
+    t.modes.set(modespkg::Mode::Wraparound, false);
+    t.resize(
+        alloc,
+        Resize {
+            cols: 2,
+            rows: 1,
+            cell_size_px: None,
+        },
+    )
+    .unwrap();
+
+    let list_cell = t.active_mut().pages.get_cell(active_pt(1, 0)).unwrap();
+    assert!(unsafe { (*list_cell.cell).is_empty() });
+
+    t.deinit(alloc);
+}
+
+// PORT NOTE: NOT a port of a reference `test {}` block (Rustty-only, N518,
+// upstream e6db5b633). The reference test above only checks the cut cell;
+// this drives the whole reachable sequence through the stream: narrow the
+// alt screen (no reflow) so a wide character straddles the new right edge,
+// then ICH (`CSI @`) and EL 1 (`CSI 1 K`), which both pair a wide head with
+// the cell after it. Before the fix they hit the `debug_assert!` in
+// `Screen::clear_cells` (debug) or wrote `cells[cols]` (release).
+// test "Terminal: resize less cols on alt screen then ICH and EL1 with a cut wide char"
+#[test]
+fn terminal_resize_less_cols_on_alt_screen_then_ich_and_el1_with_a_cut_wide_char() {
+    let alloc = Global;
+    let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();
+
+    {
+        let mut stream = t.vt_stream();
+        // CSI ? 1049 h -- alternate screen
+        stream.next_slice(b"\x1b[?1049h");
+        // Head of the wide character at column 8, its spacer tail at 9.
+        stream.next_slice("abcdefgh\u{6A4B}".as_bytes());
+        stream.deinit();
+    }
+
+    // Column 8 becomes cols - 1, cutting the spacer tail off.
+    t.resize(
+        alloc,
+        Resize {
+            cols: 9,
+            rows: 3,
+            cell_size_px: None,
+        },
+    )
+    .unwrap();
+
+    {
+        let mut stream = t.vt_stream();
+        // Cursor to the last column, then ICH and EL 1.
+        stream.next_slice(b"\x1b[1;9H");
+        stream.next_slice(b"\x1b[@");
+        stream.next_slice(b"\x1b[1K");
+        stream.deinit();
+    }
+
+    let list_cell = t.active_mut().pages.get_cell(active_pt(8, 0)).unwrap();
+    let cell = unsafe { *list_cell.cell };
+    assert!(cell.is_empty());
+    assert_eq!(crate::page::Wide::Narrow, cell.wide());
+
+    // Nothing at or past `cols` was written, up to the page capacity.
+    let page = unsafe { &*crate::pagelist::Node::page(list_cell.node) };
+    assert_eq!(9, page.size.cols);
+    let cells = unsafe { (*list_cell.row).cells().ptr(page.memory_ptr()) };
+    for x in 9..page.capacity.cols as usize {
+        assert!(unsafe { (*cells.add(x)).is_empty() }, "cell {x} written");
+    }
+
+    t.deinit(alloc);
+}
+
 // test "Terminal: resize resets synchronized output"
 #[test]
 fn terminal_resize_resets_synchronized_output() {
