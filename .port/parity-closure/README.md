@@ -342,6 +342,10 @@ committed records named here.
   P8-W0 T3 found; P8-W0 T5 opens and closes them. UD20 and UD312 are "fixed upstream" (their `docs/ghostty-bug-fixes.md`
   rows are gone); the reference fields of R4 Appendix A's 50 UDs are re-anchored at `a60e9e2a5` (UD32, UD250 and UD343 only in part: their old lines are history anchors of deleted code). No UD or V id is taken yet.
   **Next free ids: UD378, N526, V34.**
+- **P8-W0 merged** (`9c42ba5e6`): N523 and N524 (G9 never checked CSI/ESC/C0; OSC `unknown` counted by a common
+  word) are OPEN until their owners port `y`, `unknown` and `program_status`; N525 (c-vt corpus scripts wrote into the
+  main checkout) and N526 (the freestanding wasm build broken since `ca2ef434b`; now guarded in the default `ci.sh`
+  set) are CLOSED. **Next free ids: UD378, N527, V34.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.
