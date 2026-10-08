@@ -188,6 +188,16 @@
 #                                    Zig -> exit 3 BLOCKED, a WARNING);
 #                                    G-REFGEOM-SELF (--self-test) its
 #                                    oracle arms on fixtures -> HARD-FAIL.
+#   G-ESCTEST check_esctest.sh       esctest2 against librustty-vt
+#                                    (test/esctest) fails exactly where it
+#                                    fails against libghostty-vt (the
+#                                    reference's runner at the pin), test by
+#                                    test, outcome and log -> HARD-FAIL
+#                                    (no oracle with the pin, Zig, python3
+#                                    or network -> exit 3 BLOCKED, a
+#                                    WARNING); G-ESCTEST-SELF (--self-test)
+#                                    the comparison on fixture logs
+#                                    -> HARD-FAIL.
 #   G-WINPROTO-DEFAULT               the DEFAULT GUI dep graph per target
 #     check_default_linux_winproto.sh (Linux + FreeBSD: gtk4/libadwaita and both
 #                                    winproto arms; macOS: none)     -> HARD-FAIL
@@ -1072,6 +1082,21 @@ GATE_REGISTRY=(
   # it binds on CI too.
   "G-REFGEOM-SELF|HARD|$PY $GATES/check_ref_item_geometry.py --self-test"
   "G-REFGEOM|HARD|$PY $GATES/check_ref_item_geometry.py"
+  # G-ESCTEST (P8-W8 T1; DECISIONS P3; upstream 438d584f0, edcaf6670) — esctest2
+  # against librustty-vt must fail exactly where it fails against
+  # libghostty-vt. Runs the port's `test/esctest` runner and the reference's
+  # own (built with `zig build` in a temporary `git archive` of the pin, never
+  # in either tree), and compares the outcome and log block of every test:
+  # RED on any difference in either direction unless a row of
+  # esctest_known_diffs.tsv names its UD or N record, and RED on a stale row.
+  # The reference's `test-esctest` job is report-only because most of the
+  # suite fails there; the differential is what holds parity. Registered like
+  # G-REFGEOM: BLOCKED (a WARNING) without the oracle at ORACLE_PIN, Zig,
+  # python3 or the network (esctest2 is fetched by test/esctest/fetch.sh,
+  # SHA-256 checked), as on CI, where ci.yml's report-only `test-esctest` job
+  # runs the port's side. About 70 s. The self-test needs none of them.
+  "G-ESCTEST-SELF|HARD|bash $GATES/check_esctest.sh --self-test"
+  "G-ESCTEST|HARD|bash $GATES/check_esctest.sh"
   # G8b — the real perf regression fence (paired, same-session, vs a stored
   # binary). BLOCKS (2/3) rather than passing when the box is loaded or the
   # untracked oracle binary/corpora are absent. MUST precede G8: it emits the

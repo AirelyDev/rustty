@@ -57,8 +57,9 @@ jobs:
   # earlier audit recommended adopting this "before the matrix grows"; it is
   # growing here.
   #
-  # `needs` must list every job below. `always()` is required or this job would
-  # itself be skipped when a dependency fails.
+  # `needs` must list every job below except the report-only `test-esctest`,
+  # which the reference also leaves out. `always()` is required or this job
+  # would itself be skipped when a dependency fails.
   required:
     name: "Required Checks: rustty"
     runs-on: ubuntu-latest
@@ -406,7 +407,10 @@ jobs:
       # G-REFGEOM also needs Zig) are BLOCKED here for the same reason.
       # G-VTFEAT reads the oracle's lib_vt.zig/build_options.zig at the pin and
       # is BLOCKED here too (parity tail P-1b; before that it crashed with exit
-      # 1). G-REFGEOM-SELF and G-VTFEAT-SELF need neither and run. G-EOL's
+      # 1). G-ESCTEST runs the reference's own esctest runner from the oracle
+      # at the pin and is BLOCKED here too (the report-only `test-esctest` job
+      # below runs the port's side). G-REFGEOM-SELF, G-VTFEAT-SELF and
+      # G-ESCTEST-SELF need neither and run. G-EOL's
       # arms 1-2 still run, and
       # a RED in them is exit 1.
       # All of these bind locally, where the oracle exists at the pin. ci.sh
@@ -416,7 +420,7 @@ jobs:
         run: |
           echo "G4: local-only (R3 — oracle not on CI); expect 'G4 BLOCKED (exit 3)' as a WARNING in the ci.sh summary below."
           echo "G1b: local-only for the same reason (ghostty oracle checkout absent on CI)."
-          echo "G-EOL, D10, G-LOGFILE, G-REFGEOM, G-VTFEAT: expect BLOCKED (exit 3) WARNINGs too (no oracle at ORACLE_PIN on CI); check each one's reason line."
+          echo "G-EOL, D10, G-LOGFILE, G-REFGEOM, G-VTFEAT, G-ESCTEST: expect BLOCKED (exit 3) WARNINGs too (no oracle at ORACLE_PIN on CI); check each one's reason line."
           echo "G-ORACLE-SH-SELF needs node (set up above); a BLOCKED there means node is missing."
 
       # The single entry. ci.sh runs (collecting all failures):
@@ -1548,3 +1552,53 @@ jobs:
             --build-arg DISTRO_VERSION=13 \
             -f xtask/docker/debian/Dockerfile \
             .
+
+  # test-esctest: runs esctest against librustty-vt (438d584f0, edcaf6670).
+  # Report-only, as the reference's: many tests fail today, so this never
+  # fails and isn't in the required checks (the `required` job's `needs`
+  # leaves it out, as the reference's does). See test/esctest/README.md. The
+  # reference's `zig build run` fetches esctest itself; Cargo has no fetch
+  # step, so test/esctest/fetch.sh fetches it first (the same commit,
+  # SHA-256 checked). Parity is checked locally: G-ESCTEST compares this run
+  # test by test with the reference's own runner at the pin. V25 until this
+  # job has run on GitHub.
+  test-esctest:
+    name: Run esctest against librustty-vt
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run esctest
+        working-directory: test/esctest
+        run: (./fetch.sh >&2 && cargo run --locked) > esctest.log || true
+
+      - name: Summarize
+        if: always()
+        working-directory: test/esctest
+        run: |
+          {
+            echo '## esctest'
+            echo
+            grep 'tests passed' esctest.log || echo 'esctest wrote no summary.'
+            echo
+            echo '<details><summary>Failing tests</summary>'
+            echo
+            echo '```'
+            sed -n '/^Failing tests:$/,$p' esctest.log
+            echo '```'
+            echo
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: esctest-log
+          path: test/esctest/esctest.log
+          if-no-files-found: ignore

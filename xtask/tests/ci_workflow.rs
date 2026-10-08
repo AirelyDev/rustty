@@ -101,9 +101,17 @@ fn parse_jobs(text: &str) -> BTreeMap<String, Job> {
     jobs
 }
 
+/// The report-only jobs: the reference runs them with `continue-on-error:
+/// true` and leaves them out of its `required` job, and so does the port.
+/// `test-esctest` (438d584f0): most of esctest fails against the library
+/// today, so the job only reports its tally (P8-W8 T1).
+const REPORT_ONLY_JOBS: &[&str] = &["test-esctest"];
+
 /// What is wrong with `required`: it must need every other job (the port's
 /// `required` fails a skipped job too, so a job missing here is never
-/// checked), and nothing that is not a job.
+/// checked), and nothing that is not a job. The exceptions are the
+/// report-only jobs, which must exist, must not be needed, and must carry
+/// `continue-on-error: true`, as the reference's do.
 fn required_mismatch(jobs: &BTreeMap<String, Job>) -> Vec<String> {
     let Some(required) = jobs.get("required") else {
         return vec!["no `required` job".into()];
@@ -111,6 +119,9 @@ fn required_mismatch(jobs: &BTreeMap<String, Job>) -> Vec<String> {
     let needs: BTreeSet<&str> = required.needs.iter().map(String::as_str).collect();
     let mut out = Vec::new();
     for name in jobs.keys().filter(|n| n.as_str() != "required") {
+        if REPORT_ONLY_JOBS.contains(&name.as_str()) {
+            continue;
+        }
         if !needs.contains(name.as_str()) {
             out.push(format!("`required` does not need `{name}`"));
         }
@@ -118,6 +129,21 @@ fn required_mismatch(jobs: &BTreeMap<String, Job>) -> Vec<String> {
     for n in &needs {
         if !jobs.contains_key(*n) {
             out.push(format!("`required` needs `{n}`, which is not a job"));
+        }
+    }
+    for name in REPORT_ONLY_JOBS {
+        match jobs.get(*name) {
+            None => out.push(format!("no report-only `{name}` job")),
+            Some(job) => {
+                if needs.contains(name) {
+                    out.push(format!("`required` needs the report-only `{name}`"));
+                }
+                if !job.body.lines().any(|l| l == "    continue-on-error: true") {
+                    out.push(format!(
+                        "report-only `{name}` lacks `continue-on-error: true`"
+                    ));
+                }
+            }
         }
     }
     out
@@ -187,6 +213,8 @@ jobs:
     needs: [ci, a]
   ci:
     steps: []
+  test-esctest:
+    continue-on-error: true
 ";
     let jobs = parse_jobs(sample);
     assert_eq!(jobs["required"].needs, ["a", "b"]);
@@ -211,6 +239,63 @@ fn required_needs_every_job() {
     assert_ne!(mutated, text, "the control must change the file");
     let problems = required_mismatch(&parse_jobs(&mutated));
     assert_eq!(problems, ["`required` does not need `test-i18n`"]);
+
+    // Negative controls for the report-only exception: needing it, and
+    // dropping its `continue-on-error`.
+    let needed = text.replacen(
+        "      - test-debian-13\n",
+        "      - test-debian-13\n      - test-esctest\n",
+        1,
+    );
+    assert_ne!(needed, text, "the control must change the file");
+    assert_eq!(
+        required_mismatch(&parse_jobs(&needed)),
+        ["`required` needs the report-only `test-esctest`"]
+    );
+    let body = job_body(&jobs, "test-esctest");
+    let failing = text.replacen(
+        &body,
+        &body.replacen("    continue-on-error: true\n", "", 1),
+        1,
+    );
+    assert_ne!(failing, text, "the control must change the file");
+    assert_eq!(
+        required_mismatch(&parse_jobs(&failing)),
+        ["report-only `test-esctest` lacks `continue-on-error: true`"]
+    );
+}
+
+/// P8-W8 T1 (438d584f0, edcaf6670): `test-esctest` fetches esctest2 with
+/// `test/esctest/fetch.sh`, runs the port's runner into `esctest.log`
+/// without failing, and reports as the reference's job does: the tally and
+/// the failing tests in the step summary, the log as the `esctest-log`
+/// artifact.
+fn esctest_problems(body: &str) -> Vec<&'static str> {
+    missing(
+        body,
+        &[
+            "continue-on-error: true",
+            "working-directory: test/esctest",
+            "(./fetch.sh >&2 && cargo run --locked) > esctest.log || true",
+            "grep 'tests passed' esctest.log || echo 'esctest wrote no summary.'",
+            "sed -n '/^Failing tests:$/,$p' esctest.log",
+            "} >> \"$GITHUB_STEP_SUMMARY\"",
+            "name: esctest-log",
+            "path: test/esctest/esctest.log",
+        ],
+    )
+}
+
+#[test]
+fn test_esctest_job_reports_like_the_reference() {
+    let body = job_body(&parse_jobs(&ci_yml()), "test-esctest");
+    assert_eq!(esctest_problems(&body), Vec::<&str>::new());
+    let unfetched = body.replacen("./fetch.sh >&2 && ", "", 1);
+    assert_ne!(unfetched, body, "the control must change the text");
+    assert_eq!(
+        esctest_problems(&unfetched),
+        ["(./fetch.sh >&2 && cargo run --locked) > esctest.log || true"]
+    );
 }
 
 /// N376: every reference job CI-1 ported exists and runs after `ci`.
