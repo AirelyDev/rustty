@@ -97,7 +97,16 @@ local iteration.
 > under different install paths) is GREEN; an outcome difference either way, a
 > detail difference, a missing test, a Rustty log without a tally, two empty logs,
 > a stale ledger row, a ledger row with other outcomes and one without a record id
-> are RED; an oracle log without a tally is BLOCKED.
+> are RED; an oracle log without a tally is BLOCKED. Its target-directory arms run a
+> copy of the gate with stand-in tools: with `CARGO_TARGET_DIR` set, the fetch, the
+> build and the run all use that directory, and a build that leaves no runner is RED
+> without a stale runner ever running.
+>
+> Disk: a local G-ESCTEST run leaves the port's Debug build of `test/esctest`, about
+> 1.2 GB, in `test/esctest/target` (or `CARGO_TARGET_DIR`), outside the root
+> `target/`. It goes when the worktree is removed (memory `cleanup-as-you-go`); delete
+> it by hand on a long-lived checkout. The oracle's copy and build are in a temporary
+> directory the gate deletes.
 
 > **G5 (differential fuzz)** and **G6 (leak-free)** are wired progress-mode
 > runners now. G5: if `cargo fuzz` + the `vt_diff` target in

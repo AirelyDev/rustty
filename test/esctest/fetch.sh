@@ -24,21 +24,42 @@ SHA256="04b01a8343045a6801ea9a2a849b339e1b41179197102363a43fab13b25a2e1e"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 target="${CARGO_TARGET_DIR:-$here/target}"
+# cargo resolves a relative CARGO_TARGET_DIR against the working directory.
+case "$target" in /*) ;; *) target="$PWD/$target" ;; esac
 dest="$target/share/esctest"
+# The stamp holds the commit and a digest of the installed tree, so a tree
+# that was changed after the install is installed again, not trusted.
 stamp="$dest/.esctest2-commit"
 
-if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$COMMIT" ]; then
+# sha256 [FILE]: the hex SHA-256 of FILE, or of stdin.
+sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$@" | cut -d' ' -f1
+  else
+    shasum -a 256 "$@" | cut -d' ' -f1
+  fi
+}
+
+# tree_digest DIR: one SHA-256 over every file's path and SHA-256, leaving out
+# the stamp and the bytecode Python writes when esctest runs.
+tree_digest() {
+  (
+    cd "$1" || exit 1
+    find . -type f ! -name .esctest2-commit ! -name '*.pyc' ! -path '*/__pycache__/*' -print |
+      LC_ALL=C sort | while IFS= read -r f; do
+      printf '%s  %s\n' "$(sha256 "$f")" "$f"
+    done
+  ) | sha256
+}
+
+if [ -f "$stamp" ] && [ "$(sed -n 1p "$stamp")" = "$COMMIT" ] &&
+  [ "$(sed -n 2p "$stamp")" = "$(tree_digest "$dest")" ]; then
   echo "esctest2 $COMMIT is already in $dest"
   exit 0
 fi
-
-sha256() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | cut -d' ' -f1
-  else
-    shasum -a 256 "$1" | cut -d' ' -f1
-  fi
-}
+if [ -d "$dest" ]; then
+  echo "$dest is missing, from another commit or changed since it was installed; installing again"
+fi
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/esctest2-fetch.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
@@ -67,5 +88,6 @@ find "$src" -name '*.pyc' -type f -delete
 rm -rf "$dest"
 mkdir -p "$(dirname "$dest")"
 cp -R "$src" "$dest"
-printf '%s\n' "$COMMIT" >"$stamp"
+digest="$(tree_digest "$dest")"
+printf '%s\n%s\n' "$COMMIT" "$digest" >"$stamp"
 echo "installed esctest2 $COMMIT in $dest"

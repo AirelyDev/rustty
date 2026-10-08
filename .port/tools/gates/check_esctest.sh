@@ -38,7 +38,13 @@
 #                                         esctest_known_diffs.tsv)
 #   check_esctest.sh --print-oracle       print the oracle path (G-ORACLE-SH-SELF)
 # RUSTTY_ESCTEST_OUT=<dir> keeps the two logs (esctest-rustty.log,
-# esctest-oracle.log) and their outcome lists there.
+# esctest-oracle.log) and their outcome lists there. CARGO_TARGET_DIR, when
+# set, is where esctest2 is installed and the runner is built and run.
+#
+# Disk: a run leaves the port's Debug build, about 1.2 GB, in
+# test/esctest/target (or CARGO_TARGET_DIR). It is not in the root target/; it
+# goes when the worktree is removed (cleanup-as-you-go), or delete it by hand.
+# The oracle's copy and build live in a temporary directory deleted on exit.
 #
 # Exit: 0 GREEN, 1 RED, 3 BLOCKED (a missing tool, the oracle absent or
 # without the pinned commit, no network for esctest2 or the oracle's Zig
@@ -325,6 +331,69 @@ self_test() {
   fi
   oracle_arm "an oracle without the pinned commit is BLOCKED" "does not have the pinned commit"
 
+  # The target-directory arms: with CARGO_TARGET_DIR set, the gate fetches,
+  # builds and runs in that one directory, and never runs a binary the build
+  # did not just produce. Stand-ins on PATH: a cargo that records the target
+  # directory it was given and, in "produce" mode, links a runner there that
+  # leaves a marker; a zig that fails (so the oracle side is BLOCKED after the
+  # Rustty side ran); python3 and curl that are never reached. The fixture
+  # oracle has the pinned commit, and the fixture fetch.sh only records its
+  # CARGO_TARGET_DIR.
+  local fb="$st/fakebin" tgt="$st/scratch-target"
+  mkdir -p "$fb" "$fx/main/test/esctest"
+  cat >"$fb/cargo" <<'FAKE'
+#!/bin/sh
+printf '%s\n' "${CARGO_TARGET_DIR:-unset}" >"$ESCTEST_SELF_MARKS/cargo-target"
+if [ "${ESCTEST_SELF_CARGO:-}" = produce ]; then
+  mkdir -p "$CARGO_TARGET_DIR/debug"
+  printf '#!/bin/sh\ntouch "%s/fresh-ran"\n' "$ESCTEST_SELF_MARKS" >"$CARGO_TARGET_DIR/debug/esctest-librustty"
+  chmod +x "$CARGO_TARGET_DIR/debug/esctest-librustty"
+fi
+exit 0
+FAKE
+  printf '#!/bin/sh\nexit 1\n' >"$fb/zig"
+  printf '#!/bin/sh\nexit 0\n' >"$fb/python3"
+  cp "$fb/python3" "$fb/curl"
+  chmod +x "$fb/cargo" "$fb/zig" "$fb/python3" "$fb/curl"
+  cat >"$fx/main/test/esctest/fetch.sh" <<'FAKE'
+#!/bin/sh
+printf '%s\n' "${CARGO_TARGET_DIR:-unset}" >"$ESCTEST_SELF_MARKS/fetch-target"
+FAKE
+  rustty_fixture_repo "$fx/ghostty" PIN "pinned fixture oracle" >"$fx/main/.port/tools/gates/ORACLE_PIN" || {
+    echo "G-ESCTEST-SELF BLOCKED: could not build the pinned fixture oracle"
+    return 3
+  }
+  target_arm() { # target_arm <label> <want rc> <cargo mode> <want fresh-ran 0|1> [reason]
+    local marks="$st/marks-$3"
+    rm -rf "$tgt" "$marks"
+    mkdir -p "$tgt/debug" "$marks"
+    # A stale runner from an earlier build: it must never run.
+    printf '#!/bin/sh\ntouch "%s/stale-ran"\n' "$marks" >"$tgt/debug/esctest-librustty"
+    chmod +x "$tgt/debug/esctest-librustty"
+    rc=0
+    got="$(cd "$st" && PATH="$fb:$PATH" CARGO_TARGET_DIR="$tgt" ESCTEST_SELF_MARKS="$marks" \
+      ESCTEST_SELF_CARGO="$3" bash "$fx/main/.port/tools/gates/check_esctest.sh" 2>&1)" || rc=$?
+    local fresh=0 detail=""
+    [ -e "$marks/fresh-ran" ] && fresh=1
+    [ -e "$marks/stale-ran" ] && detail="the stale runner ran; "
+    [ "$(cat "$marks/cargo-target" 2>/dev/null)" = "$tgt" ] || detail="${detail}cargo got '$(cat "$marks/cargo-target" 2>/dev/null)'; "
+    [ "$(cat "$marks/fetch-target" 2>/dev/null)" = "$tgt" ] || detail="${detail}fetch.sh got '$(cat "$marks/fetch-target" 2>/dev/null)'; "
+    [ "$rc" = "$2" ] || detail="${detail}exit $rc, want $2; "
+    [ "$fresh" = "$4" ] || detail="${detail}fresh runner ran=$fresh, want $4; "
+    [ -z "${5:-}" ] || [[ "$got" == *"$5"* ]] || detail="${detail}no '$5' in the output; "
+    if [ -z "$detail" ]; then
+      echo "  ok   $1 (exit $rc)"
+    else
+      echo "  FAIL $1: $detail"
+      printf '%s\n' "$got" | sed 's/^/       | /' | tail -5
+      failed=1
+    fi
+  }
+  target_arm "CARGO_TARGET_DIR: fetch, build and the run use it; the fresh runner runs" 3 produce 1 \
+    "does not build here"
+  target_arm "CARGO_TARGET_DIR: a build that leaves no runner is RED, the stale one never runs" 1 none 0 \
+    "produced no runner"
+
   if [ "$failed" -ne 0 ]; then
     echo "G-ESCTEST-SELF RED: an arm above did not hold."
     return 1
@@ -368,8 +437,17 @@ trap 'rm -rf "$WORK"' EXIT
 OUT="${RUSTTY_ESCTEST_OUT:-$WORK/out}"
 mkdir -p "$OUT" || blocked "cannot create $OUT"
 
-# The port's runner: fetch esctest2 (pinned, hash-checked), build, run.
+# The port's runner: fetch esctest2 (pinned, hash-checked), build, run. The
+# fetch, the build and the run use ONE target directory: CARGO_TARGET_DIR when
+# it is set (made absolute, as cargo resolves it against the working
+# directory), else the package's own target/. It is exported so fetch.sh and
+# cargo cannot disagree, and the runner is deleted before the build, so the
+# gate never runs a binary this build did not produce.
 echo "== Rustty: test/esctest"
+TARGET="${CARGO_TARGET_DIR:-$ROOT/test/esctest/target}"
+case "$TARGET" in /*) ;; *) TARGET="$PWD/$TARGET" ;; esac
+export CARGO_TARGET_DIR="$TARGET"
+RUNNER="$TARGET/debug/esctest-librustty"
 rc=0
 bash "$ROOT/test/esctest/fetch.sh" || rc=$?
 case "$rc" in
@@ -377,9 +455,14 @@ case "$rc" in
   3) blocked "could not download esctest2 (no network?)" ;;
   *) red "test/esctest/fetch.sh failed (exit $rc); a hash mismatch is never accepted" ;;
 esac
+rm -f "$RUNNER"
 cargo build --locked --manifest-path "$ROOT/test/esctest/Cargo.toml" ||
   red "test/esctest does not build"
-"$ROOT/test/esctest/target/debug/esctest-librustty" >"$OUT/esctest-rustty.log" 2>"$OUT/esctest-rustty.stderr"
+[ -x "$RUNNER" ] || red "the build produced no runner at $RUNNER"
+# The runner's exit code is deliberately not checked (esctest exits 0 with
+# failing tests, as upstream's job relies on): a runner or esctest that dies
+# early leaves a log without a tally, which compare_logs makes RED.
+"$RUNNER" >"$OUT/esctest-rustty.log" 2>"$OUT/esctest-rustty.stderr"
 echo "esctest-librustty exited $?"
 
 # The reference's runner, from the pinned commit in a temporary copy.
@@ -389,6 +472,7 @@ rustty_oracle_git -C "$ORACLE" archive --format=tar "$PIN" | tar -xf - -C "$WORK
   blocked "cannot extract the pinned oracle tree"
 (cd "$WORK/oracle/test/esctest" && zig build) ||
   blocked "the oracle's test/esctest does not build here (Zig packages not fetchable?)"
+# Not checked either: an oracle log without a tally is BLOCKED in compare_logs.
 "$WORK/oracle/test/esctest/zig-out/bin/esctest-libghostty" >"$OUT/esctest-oracle.log" 2>"$OUT/esctest-oracle.stderr"
 echo "esctest-libghostty exited $?"
 
