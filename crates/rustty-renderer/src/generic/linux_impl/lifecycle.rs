@@ -23,11 +23,18 @@ impl Renderer {
     // context) are one again.
     pub fn init(alloc: Global, options: Options) -> Result<Self, Error> {
         // Initialize our graphics API wrapper, this will prepare the
-        // surface provided by the apprt and set up any API-specific
-        // GPU resources.
-        // var api = try GraphicsAPI.init(alloc, options);
+        // surface provided by the apprt and set up any API- and surface-
+        // specific GPU resources.
+        // var api = try GraphicsAPI.init(
+        //     alloc,
+        //     options.device,
+        //     options,
+        // );   (generic.zig:701-705, `40d5b860d`)
         // errdefer api.deinit();
-        let api = OpenGL::init(options.config.blending)?;
+        //
+        // SAFETY: `options.device` is the app-scoped render device, which outlives
+        // every renderer (the core `App` frees it after all surfaces; `Options`).
+        let api = unsafe { OpenGL::init(options.device, options.config.blending) }?;
 
         // const has_custom_shaders = options.config.custom_shaders.value.items.len > 0;
         let has_custom_shaders = !options.config.custom_shaders.value.is_empty();

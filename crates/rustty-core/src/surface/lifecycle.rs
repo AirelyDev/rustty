@@ -247,6 +247,7 @@ where
             mailbox: unsafe { &raw mut (*app).mailbox },
         };
         // var renderer_impl = try Renderer.init(alloc, .{
+        //     .device = &app.device,
         //     .config = try .init(alloc, config),
         //     .font_grid = font_grid,
         //     .size = size,
@@ -275,6 +276,9 @@ where
         let renderer_impl = match Renderer::init(
             alloc,
             crate::renderer_seam::Options {
+                // `&app.device` (`40d5b860d`): the app's out-of-line device
+                // (N522), read by place from the raw `app` (no `&mut App`).
+                device: unsafe { (*app).device.as_ptr() },
                 config: renderer_config,
                 font_grid,
                 size,

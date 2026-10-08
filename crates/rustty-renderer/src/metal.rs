@@ -33,6 +33,8 @@
 pub mod api;
 pub mod buffer;
 pub mod cvdisplaylink; // W2 — the CoreVideo CVDisplayLink loop driver
+                       // P8-W6 T2 (`40d5b860d`): `metal/Device.zig`, the app-scoped render device.
+pub mod device;
 pub mod frame;
 pub mod gpu_abi;
 pub mod iosurface_layer; // W0.T3 — CALayer subclass present primitive
@@ -53,6 +55,8 @@ pub mod texture;
 // at `metal::` so the crate-root `pub type Renderer = GenericRenderer<Metal>` alias
 // (Chunk 3) can name `crate::metal::Metal`.
 pub use metal_impl::Metal;
+// `pub const Device = @import("metal/Device.zig");` (Metal.zig:20).
+pub use device::Device;
 
 // PORT NOTE (rustty-only smoke test, NOT a ghostty parity test): the reference
 // has no unit `test{}` block over these ObjC resource wrappers. This is the

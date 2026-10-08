@@ -244,6 +244,25 @@ pub use generic::Renderer;
 #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
 pub use generic::Renderer;
 
+// P8-W6 T2 (`40d5b860d`):
+//
+//     const GraphicsAPI = switch (build_config.renderer) {
+//         .metal => Metal,
+//         .opengl => OpenGL,
+//     };
+//
+//     /// The app-scoped render device from which surface renderers are created.
+//     pub const Device = GraphicsAPI.Device;
+//
+// Monomorphic like `Renderer` above: one `Device` per target, with the same
+// cfg split. `DeviceError` names the error its `init` returns (Zig infers it).
+/// The app-scoped render device from which surface renderers are created.
+#[cfg(target_os = "macos")]
+pub use metal::device::{Device, Error as DeviceError};
+/// The app-scoped render device from which surface renderers are created.
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
+pub use opengl::device::{Device, Error as DeviceError};
+
 // The `renderer.Renderer.DerivedConfig` nested config, named by the cross-thread
 // message surface (`Message::ChangeConfig`). It names no Metal type (its 9
 // config-typed fields use inhabited placeholders — GPU_RD_CHUNK3A_DESIGN §B.1), so

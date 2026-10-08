@@ -143,7 +143,9 @@ int main(int argc, char **argv) {
     };
 
     /* app_new builds CoreApp + keymap + config clone — NO renderer, NO xev
-     * (EMBEDDED_BLUEPRINT §1: runtime-live). */
+     * (EMBEDDED_BLUEPRINT §1: runtime-live). Since P8-W6 T2 (`40d5b860d`)
+     * CoreApp also creates the app-scoped render device (Metal / EGL), so a
+     * host with no render device returns NULL here, as upstream does. */
     App *app = rustty_app_new(&rt_cfg, cfg);
     if (app == NULL) {
         rustty_config_free(cfg);

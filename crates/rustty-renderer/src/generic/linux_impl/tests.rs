@@ -227,9 +227,15 @@ fn enter_test_renderer(r: &mut Renderer) {
 #[test]
 fn linux_opengl_renderer_init_then_deinit_round_trips() {
     let _guard = test_support::gl_lock();
+    let Some(device) =
+        test_support::device_or_skip("linux_opengl_renderer_init_then_deinit_round_trips")
+    else {
+        return;
+    };
 
     let (font_grid, size) = test_font_grid_and_size(10, 3);
     let opts = Options {
+        device,
         config: derived_config_for_test(),
         font_grid,
         size,
@@ -569,9 +575,15 @@ fn term_opts(cols: CellCountInt, rows: CellCountInt) -> TermOptions {
 #[test]
 fn linux_opengl_rebuild_cells_places_ab_and_cursor() {
     let _guard = test_support::gl_lock();
+    let Some(device) =
+        test_support::device_or_skip("linux_opengl_rebuild_cells_places_ab_and_cursor")
+    else {
+        return;
+    };
 
     let (font_grid, size) = test_font_grid_and_size(10, 3);
     let opts = Options {
+        device,
         config: derived_config_for_test(),
         font_grid,
         size,
@@ -657,6 +669,7 @@ fn golden_renderer(cols: CellCountInt, rows: CellCountInt) -> Option<Renderer> {
 
     let (font_grid, size) = test_font_grid_and_size(cols, rows);
     let opts = Options {
+        device: test_support::device().expect("the test device (GL probed above)"),
         config: derived_config_for_test(),
         font_grid,
         size,

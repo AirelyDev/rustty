@@ -1021,6 +1021,16 @@ pub(crate) mod surface_mailbox_tests {
 // rustty-renderer` (apprt-api/Cargo.toml) means naming an apprt type here would
 // CYCLE (check_acyclic) and the real renderer never reads either of them.
 pub struct Options {
+    /// The device state that corresponds to the physical GPU
+    /// we'd like to render to.
+    //
+    // P8-W6 T2 (`40d5b860d`): `device: *renderer.Device` (Options.zig:7-9), the
+    // app-scoped render device the core `App` owns (`App.device`, a `DeviceBox`
+    // allocation, N522) and frees after every surface. A raw `*const`: render
+    // threads only read it, and a reference here would tie the renderer to a
+    // borrow of the app (see `.port/phase-2/mirihar-device-box`).
+    pub device: *const crate::Device,
+
     /// The derived configuration for this renderer implementation.
     pub config: DerivedConfig,
 

@@ -21,7 +21,8 @@
 //!   seam row above or below it (`scale.zig`, `render_surface.zig:176-205`). The
 //!   output is captured with `grim` (a VM-side capture of a headless compositor).
 //!
-//! * `surface_init_failure_shows_the_error_page` — UD356 (below).
+//! * `surface_init_failure_shows_the_error_page` — UD356 (below; since P8-W6 T2
+//!   triggered by a per-surface context failure, `MESA_GL_VERSION_OVERRIDE=4.1`).
 //!
 //! * `render_surface_dmabuf_build_failure_skips_the_destroy_notify` — GDK never
 //!   calls the DMA-BUF destroy notify for a build that failed, so the failure
@@ -223,8 +224,17 @@ fn finish(live: Live, keepalive: glib::SourceId) {
 /// (`EGL_MESA_image_dma_buf_export`), i.e. whether the renderer's first frames
 /// are DMA-BUFs.
 fn renderer_exports_dmabuf() -> bool {
-    match rustty_renderer::opengl::gl::sys::OffscreenContext::init() {
-        Ok(ctx) => ctx.has_dmabuf_export(),
+    // The app-scoped render device the renderer's contexts are made on
+    // (`40d5b860d`); the export entry points and the extension are its.
+    let mut slot = std::mem::MaybeUninit::<rustty_renderer::Device>::uninit();
+    match rustty_renderer::Device::init(&mut slot) {
+        Ok(()) => {
+            // SAFETY: `init` returned Ok, so it wrote the slot.
+            let mut device = unsafe { slot.assume_init() };
+            let exports = device.has_dmabuf_export();
+            device.deinit();
+            exports
+        }
         Err(_) => false,
     }
 }
@@ -403,22 +413,31 @@ fn render_surface_presents_dmabuf_on_wayland() {
     finish(live, ka);
 }
 
-/// UD356: when the renderer cannot initialize (here: libglvnd finds no EGL
-/// vendor, so the surfaceless display cannot be created), `initSurface` fails
-/// and the surface shows its error page. At `12752b2ac` nothing calls
-/// `setError(true)` any more (`2f0b65346` removed the GLArea check that did), so
-/// the reference leaves the surface blank.
+/// UD356: when the renderer cannot initialize (here: the surface's own OpenGL
+/// 4.3 core context cannot be created), `initSurface` fails and the surface
+/// shows its error page. At `12752b2ac` nothing calls `setError(true)` any more
+/// (`2f0b65346` removed the GLArea check that did), so the reference leaves the
+/// surface blank; still so at `a60e9e2a5`.
 ///
-///   __EGL_VENDOR_LIBRARY_FILENAMES=/nonexistent.json cargo test ... --exact \
+/// P8-W6 T2 (`40d5b860d`, DECISIONS M4): the trigger moved. With no EGL vendor
+/// at all (the old `__EGL_VENDOR_LIBRARY_FILENAMES=/nonexistent.json`) the app's
+/// render device now fails in `App.init` (`CreateError::DeviceFailed`), so no
+/// window or surface ever exists.
+/// What still reaches `initSurface`'s catch arm is a per-surface failure after
+/// the device exists: `MESA_GL_VERSION_OVERRIDE=4.1` caps Mesa below the 4.3 core
+/// context each renderer creates (`EGL_BAD_MATCH`), while the device (display +
+/// config) initializes. MEASURED on rvm (llvmpipe).
+///
+///   LIBGL_ALWAYS_SOFTWARE=1 MESA_GL_VERSION_OVERRIDE=4.1 cargo test ... --exact \
 ///     surface_init_failure_shows_the_error_page
 #[test]
-#[ignore = "headed GTK with __EGL_VENDOR_LIBRARY_FILENAMES=/nonexistent.json; run alone with --exact"]
+#[ignore = "headed GTK with MESA_GL_VERSION_OVERRIDE=4.1; run alone with --exact"]
 fn surface_init_failure_shows_the_error_page() {
     const TEST: &str = "surface_init_failure_shows_the_error_page";
     assert!(
-        std::env::var_os("__EGL_VENDOR_LIBRARY_FILENAMES")
-            .is_some_and(|v| v.to_string_lossy().contains("nonexistent")),
-        "{TEST}: run with __EGL_VENDOR_LIBRARY_FILENAMES=/nonexistent.json"
+        std::env::var_os("MESA_GL_VERSION_OVERRIDE")
+            .is_some_and(|v| v.to_string_lossy().starts_with("4.1")),
+        "{TEST}: run with MESA_GL_VERSION_OVERRIDE=4.1 (a per-surface context failure)"
     );
     rustty_apprt::init().expect("initialize rustty global state");
     let mut core_app: Box<CoreApp<gtk::App>> =
@@ -457,7 +476,7 @@ fn surface_init_failure_shows_the_error_page() {
     }
     assert!(
         surface.core().is_none(),
-        "{TEST}: the core surface must fail to initialize without EGL"
+        "{TEST}: the core surface must fail to initialize without a 4.3 core context"
     );
     assert!(
         surface.error(),

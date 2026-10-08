@@ -28,6 +28,13 @@
 //! context that `OpenGL::init` creates (P7-W7 T2). The GL function table
 //! [`prepare_context`] loads is the calling thread's (`glad`, DECISIONS B9).
 //!
+//! P8-W6 T2 (`40d5b860d`, DECISIONS P12): the app-scoped half of
+//! [`OffscreenContext`] (the dlopen'd libEGL, the display, the config and the
+//! DMA-BUF export entry points) moved to `opengl/Device.zig`
+//! ([`crate::opengl::device::Device`]), which the core `App` creates once and
+//! every renderer borrows. [`OffscreenContext`] is now only the surface-scoped
+//! EGL context.
+//!
 //! PORT NOTE (`const log = std.log.scoped(.opengl);`, `OpenGL.zig:34`): the
 //! scoped logger is reproduced by the `log_*!` macros in the parent module. (The
 //! original note's "this crate has no log facade and R3 permits no new dependency
@@ -46,9 +53,46 @@ use std::fmt;
 use khronos_egl as egl;
 
 use super::{draw, errors, glad, log_debug, log_err, log_info, log_warn};
+use crate::opengl::device::Device;
 
 /// `const log = std.log.scoped(.opengl_egl);` (`pkg/opengl/egl.zig:13`).
 const EGL_LOG_SCOPE: &str = "opengl_egl";
+
+/// `Display.initPlatform` (`egl.zig:94-101`) and the `initialize` it returns
+/// through (`egl.zig:103-111`): get the platform display, then initialize it.
+///
+/// ```zig
+/// pub fn initPlatform(
+///     platform: c.EGLenum,
+///     id: c.EGLNativeDisplayType,
+///     attribs: ?[*:c.EGL_NONE]const c.EGLAttrib,
+/// ) Error!*Display {
+///     const display = c.eglGetPlatformDisplay(platform, id, attribs) orelse return mustError();
+///     return initialize(display);
+/// }
+/// ```
+///
+/// PORT NOTE: `attribs` is always null at the reference's one caller
+/// (`Device.zig:33-37`), so it is not a parameter; the dlopen'd instance is the
+/// port's `egl.load()` (`opengl::device` module docs).
+pub(crate) fn init_platform(
+    egl: &egl::DynamicInstance<egl::EGL1_5>,
+    platform: egl::Enum,
+    id: egl::NativeDisplayType,
+) -> Result<egl::Display, egl::Error> {
+    // SAFETY: unsafe because the native-display pointer must be valid for the
+    // named platform. The one caller passes `EGL_PLATFORM_SURFACELESS_MESA`, which
+    // is defined to take `EGL_DEFAULT_DISPLAY` and no native handle at all; a
+    // driver without the platform rejects it with `EGL_BAD_PARAMETER`, which
+    // `Device.init` diagnoses.
+    let display = unsafe { egl.get_platform_display(platform, id, &[egl::ATTRIB_NONE]) }?;
+
+    // fn initialize(display: c.EGLDisplay) Error!*Display {
+    let (major, minor) = egl.initialize(display)?;
+    // log.debug("EGL initialized {}.{}", .{ major, minor });   (egl.zig:109)
+    log::debug!(target: EGL_LOG_SCOPE, "EGL initialized {major}.{minor}");
+    Ok(display)
+}
 
 /// PORTS: `OpenGL.zig:36-38`.
 ///
@@ -61,13 +105,8 @@ pub const MIN_VERSION_MAJOR: u32 = 4;
 /// See [`MIN_VERSION_MAJOR`].
 pub const MIN_VERSION_MINOR: u32 = 3;
 
-/// `EGL_PLATFORM_SURFACELESS_MESA` (`EGL_MESA_platform_surfaceless`).
-///
-/// PORT NOTE: not a ghostty constant — `khronos-egl` binds only core EGL, so the
-/// extension enum is spelled out here. Value per the Khronos registry.
-const PLATFORM_SURFACELESS_MESA: egl::Enum = 0x31DD;
-
-/// The errors [`OffscreenContext::init`] and [`prepare_context`] can produce.
+/// The errors [`Device::init`], [`OffscreenContext::init`] and
+/// [`prepare_context`] can produce.
 ///
 /// PORT NOTE: `prepareContext` returns Zig's inferred error set, whose only
 /// explicitly-returned member is `error.OpenGLOutdated` (`OpenGL.zig:148`); the
@@ -80,8 +119,6 @@ pub enum Error {
     EglUnavailable(String),
     /// An EGL call failed.
     Egl(egl::Error),
-    /// The EGL implementation lacks an extension this module requires.
-    MissingEglExtension(&'static str),
     /// No pbuffer-capable `EGL_OPENGL_BIT` config exists on this display, i.e.
     /// the EGL implementation offers no desktop-GL pixel format at all.
     NoConfig,
@@ -113,7 +150,6 @@ impl fmt::Display for Error {
         match self {
             Self::EglUnavailable(why) => write!(f, "EGL unavailable: {why}"),
             Self::Egl(err) => write!(f, "EGL error: {err}"),
-            Self::MissingEglExtension(ext) => write!(f, "missing EGL extension: {ext}"),
             Self::NoConfig => f.write_str("no pbuffer-capable EGL_OPENGL_BIT config"),
             Self::OpenGLOutdated { major, minor } => write!(
                 f,
@@ -148,31 +184,29 @@ impl From<errors::Error> for Error {
 /// RUSTTY-ONLY — see the module docs: ghostty has no analogue because GDK owns
 /// context creation in the GTK path.
 ///
-/// P7-W7 T1: it is also the stand-in, until the renderer's `init` owns one
-/// (stage S2), for the `egl_display`/`egl_context` pair ghostty's `OpenGL`
-/// holds (`OpenGL.zig:45-46`). The DMA-BUF export ([`Image`],
+/// P7-W7 T1: it is also the stand-in for the `egl_context` ghostty's `OpenGL`
+/// holds (`OpenGL.zig:50`). The DMA-BUF export ([`Image`],
 /// `opengl::target::Target::export_dmabuf`) takes it where the reference takes
-/// that pair.
+/// `display` and `context`.
+///
+/// P8-W6 T2 (`40d5b860d`): the display, config and libEGL handle are the shared
+/// [`Device`]'s; this is the surface-scoped context only ("Contexts are
+/// surface-scoped because a context can only be current on one thread at a
+/// time", `OpenGL.zig:63-64`), reached through its borrowed device.
 pub struct OffscreenContext {
-    /// The dlopen'd `libEGL.so.1`. Must outlive `display`/`context`, so it is
-    /// owned here rather than in a global.
-    egl: egl::DynamicInstance<egl::EGL1_5>,
-    display: egl::Display,
+    /// The app-scoped render device the context was created on. It outlives the
+    /// context (the core `App` frees it after every surface).
+    device: *const Device,
     context: egl::Context,
-    /// `eglExportDMABUFImageQueryMESA`, resolved once at [`Self::init`] as glad
-    /// resolves it in `gladLoadEGL` (`vendor/glad/src/glad_egl.c:34-37`). `None`
-    /// when `eglGetProcAddress` has no such entry point.
-    export_dmabuf_query_mesa: Option<ExportDmabufImageQueryMesaFn>,
-    /// `eglExportDMABUFImageMESA`; see `export_dmabuf_query_mesa`.
-    export_dmabuf_mesa: Option<ExportDmabufImageMesaFn>,
 }
 
 impl OffscreenContext {
     /// Stands up an OpenGL [`MIN_VERSION_MAJOR`].[`MIN_VERSION_MINOR`] core
-    /// context with no surface, current on the calling thread.
+    /// context with no surface on `device`'s display, current on the calling
+    /// thread.
     ///
-    /// The sequence is display -> initialize -> bind_api -> config -> context ->
-    /// `MakeCurrent(NO_SURFACE)`.
+    /// The sequence is bind_api -> context -> `MakeCurrent(NO_SURFACE)` (the
+    /// display and config are the device's, `40d5b860d`).
     ///
     /// The context is requested as **core** profile at exactly
     /// [`MIN_VERSION_MAJOR`].[`MIN_VERSION_MINOR`]. EGL treats
@@ -180,87 +214,21 @@ impl OffscreenContext {
     /// can do better returns better; one that cannot fails `EGL_BAD_MATCH` here
     /// rather than at [`prepare_context`]'s version gate. Both are a clean
     /// `Err`, never a panic.
-    pub fn init() -> Result<Self, Error> {
-        // SAFETY: `load_required` dlopen's libEGL.so.1 and resolves the core
-        // entry points. Unsafe only because it trusts the shared object to
-        // actually be EGL.
-        let egl = unsafe { egl::DynamicInstance::<egl::EGL1_5>::load_required() }
-            .map_err(|err| Error::EglUnavailable(err.to_string()))?;
-
-        // A surfaceless display needs no X11/Wayland/GBM native handle, which is
-        // the whole point: the offscreen tests must run with no display server
-        // and no DRM node. It is an extension even under EGL 1.5, so check for it
-        // rather than let `get_platform_display` fail opaquely.
-        let client_extensions = egl
-            .query_string(None, egl::EXTENSIONS)
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        if !has_extension(&client_extensions, "EGL_MESA_platform_surfaceless") {
-            return Err(Error::MissingEglExtension("EGL_MESA_platform_surfaceless"));
-        }
-
-        // SAFETY: unsafe because the native-display pointer must be valid for the
-        // named platform. `EGL_MESA_platform_surfaceless` — just confirmed
-        // present — is defined to take `EGL_DEFAULT_DISPLAY` and no native handle
-        // at all, which is precisely what is passed.
-        let display = unsafe {
-            egl.get_platform_display(
-                PLATFORM_SURFACELESS_MESA,
-                egl::DEFAULT_DISPLAY,
-                &[egl::ATTRIB_NONE],
-            )
-        }?;
-
-        let (egl_major, egl_minor) = egl.initialize(display)?;
-        // log.debug("EGL initialized {}.{}", .{ major, minor });   (egl.zig:90)
-        //
-        // P7-W7 T2: `egl.zig` logs under its own `.opengl_egl` scope (`egl.zig:13`).
-        log::debug!(target: EGL_LOG_SCOPE, "EGL initialized {egl_major}.{egl_minor}");
-
-        // log.info("EGL vendor={s}", .{display.queryString(.vendor) orelse "(unknown)"});
-        // log.info("EGL extensions={s}", .{display.queryString(.extensions) orelse "(unknown)"});
-        //   (OpenGL.zig:59-60)
-        {
-            let query = |name| {
-                egl.query_string(Some(display), name)
-                    .ok()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "(unknown)".to_owned())
-            };
-            log_info!("EGL vendor={}", query(egl::VENDOR));
-            log_info!("EGL extensions={}", query(egl::EXTENSIONS));
-        }
+    ///
+    /// # Safety
+    /// `device` points at a live, initialized [`Device`] that outlives the
+    /// returned context.
+    pub unsafe fn init(device: *const Device) -> Result<Self, Error> {
+        // SAFETY: the caller's contract.
+        let dev = unsafe { &*device };
 
         // P7-W7 T1 (DECISIONS B10): a failure from here on does NOT terminate the
         // display. Ghostty's `OpenGL.init` never terminates it on any path
-        // (`OpenGL.zig:113-115`, "Do not destroy the EGL display here as it is
+        // (`Device.zig:91-96`, "Do not destroy the EGL display here as it is
         // shared across the entire process."); see `Drop`.
-        let context = Self::create_context(&egl, display)?;
+        let context = Self::create_context(dev)?;
 
-        // `pub fn getProcAddress(name)` (`egl.zig:20-22`) through glad's
-        // `load_EGL_MESA_image_dma_buf_export` (`glad_egl.c:34-37`).
-        //
-        // SAFETY (both transmutes): `eglGetProcAddress` returned these for exactly
-        // these names, and the fn types are the extension's C prototypes
-        // (`EGL_MESA_image_dma_buf_export`; `extern "system"` is the EGL ABI).
-        let export_dmabuf_query_mesa =
-            egl.get_proc_address("eglExportDMABUFImageQueryMESA")
-                .map(|f| unsafe {
-                    std::mem::transmute::<extern "system" fn(), ExportDmabufImageQueryMesaFn>(f)
-                });
-        let export_dmabuf_mesa = egl
-            .get_proc_address("eglExportDMABUFImageMESA")
-            .map(|f| unsafe {
-                std::mem::transmute::<extern "system" fn(), ExportDmabufImageMesaFn>(f)
-            });
-
-        let this = Self {
-            egl,
-            display,
-            context,
-            export_dmabuf_query_mesa,
-            export_dmabuf_mesa,
-        };
+        let this = Self { device, context };
 
         // NO_SURFACE draw/read: legal for a core context via EGL 1.5 /
         // EGL_KHR_surfaceless_context. The renderer renders into an FBO it owns,
@@ -269,10 +237,10 @@ impl OffscreenContext {
         // display.makeCurrent(null, null, context) catch |err| {
         //     log.warn("failed to make EGL context current err={}", .{err});
         //     return err;
-        // };   (OpenGL.zig:95-98; the `errdefer context.destroy` is `this`'s Drop)
-        if let Err(err) = this
+        // };   (OpenGL.zig:75-78; the `errdefer context.destroy` is `this`'s Drop)
+        if let Err(err) = dev
             .egl
-            .make_current(this.display, None, None, Some(this.context))
+            .make_current(dev.display, None, None, Some(this.context))
         {
             log_warn!("failed to make EGL context current err={err:?}");
             return Err(err.into());
@@ -281,23 +249,12 @@ impl OffscreenContext {
         Ok(this)
     }
 
-    /// The `bind_api -> config -> create_context` half of [`Self::init`], split
-    /// out so that its callers have a single display-terminating error path.
-    fn create_context(
-        egl: &egl::DynamicInstance<egl::EGL1_5>,
-        display: egl::Display,
-    ) -> Result<egl::Context, Error> {
-        // Desktop GL, not GLES: `MIN_VERSION_*` is a desktop-GL core version, and
-        // the default bound API is EGL_OPENGL_ES_API.
-        egl.bind_api(egl::OPENGL_API)?;
-
-        // const config = egl.Config.choose(display, &.{ ... }) catch |err| {
-        //     log.warn("failed to choose config err={}", .{err});
-        //     return err;
-        // };   (OpenGL.zig:65-80)
-        let config = Self::choose_config(egl, display).inspect_err(|err| {
-            log_warn!("failed to choose config err={err:?}");
-        })?;
+    /// The `bind_api -> create_context` half of [`Self::init`] (`OpenGL.zig:59-72`).
+    fn create_context(device: &Device) -> Result<egl::Context, Error> {
+        // Bind to OpenGL API explicitly before we create the context,
+        // as otherwise it might fallback to OpenGL ES
+        // try egl.bindApi(egl.c.EGL_OPENGL_API);
+        device.egl.bind_api(egl::OPENGL_API)?;
 
         let attributes = [
             egl::CONTEXT_MAJOR_VERSION,
@@ -309,93 +266,25 @@ impl OffscreenContext {
             egl::NONE,
         ];
 
-        // const context = egl.Context.create(display, config, null, &.{ ... }) catch |err| {
+        // Create our context. Contexts are surface-scoped because a
+        // context can only be current on one thread at a time.
+        // const context = egl.Context.create(display, device.config, null, &.{ ... }) catch |err| {
         //     log.warn("failed to create EGL context err={}", .{err});
         //     return err;
-        // };   (OpenGL.zig:83-91)
-        egl.create_context(display, config, None, &attributes)
+        // };   (OpenGL.zig:63-72)
+        device
+            .egl
+            .create_context(device.display, device.config, None, &attributes)
             .map_err(|err| {
                 log_warn!("failed to create EGL context err={err:?}");
                 Error::from(err)
             })
     }
 
-    /// Picks an `EGL_OPENGL_BIT` RGBA8 config, with no surface type required.
-    ///
-    /// PORTS (P7-W7 T1, DECISIONS B10): the `egl.Config.choose` attribute list of
-    /// ghostty's `OpenGL.init` (`OpenGL.zig:63-80`, from `ab34b8b13`):
-    ///
-    /// ```zig
-    /// // Choose a config. We need a config that is renderable with
-    /// // OpenGL and a RGBA8 color buffer.
-    /// const config = egl.Config.choose(display, &.{
-    ///     // EGL_SURFACE_TYPE defaults to EGL_WINDOW_BIT even though
-    ///     // we are rendering exclusively through surfaceless mode.
-    ///     // This is no problem on Mesa but we need to specify this
-    ///     // explicitly for proprietary Nvidia drivers.
-    ///     egl.c.EGL_SURFACE_TYPE,    0,
-    ///     egl.c.EGL_RENDERABLE_TYPE, egl.c.EGL_OPENGL_BIT,
-    ///     egl.c.EGL_RED_SIZE,        8,
-    ///     egl.c.EGL_GREEN_SIZE,      8,
-    ///     egl.c.EGL_BLUE_SIZE,       8,
-    ///     egl.c.EGL_ALPHA_SIZE,      8,
-    /// }) catch |err| { ... };
-    /// ```
-    ///
-    /// `EGL_SURFACE_TYPE = 0` requires no surface type bit at all, so every
-    /// `EGL_OPENGL_BIT` config matches whatever surfaces it can back. The port
-    /// previously asked for `EGL_PBUFFER_BIT`, which the measurement below shows
-    /// also works on Mesa; `0` is the end state because a driver need not
-    /// advertise pbuffers on a surfaceless display. The history is kept because
-    /// the table still explains why the attribute cannot be left out.
-    ///
-    /// HISTORY (`EGL_SURFACE_TYPE = EGL_PBUFFER_BIT`): the attribute is REQUIRED,
-    /// not decoration. `eglChooseConfig` DEFAULTS `EGL_SURFACE_TYPE` to
-    /// `EGL_WINDOW_BIT` when it is left out (EGL 1.5 spec, table 3.4), so omitting
-    /// it silently asks for a WINDOW-capable config on a WINDOWLESS platform and
-    /// can only ever match zero configs.
-    ///
-    /// MEASURED on the L4 development host, same surfaceless display (config
-    /// counts from `eglChooseConfig`):
-    ///
-    /// | attribute list | virgl | llvmpipe |
-    /// |---|---|---|
-    /// | `[RENDERABLE_TYPE, OPENGL_BIT]` (implies `WINDOW_BIT`) | 0 | 0 |
-    /// | `[…, SURFACE_TYPE, WINDOW_BIT]` (the implied default, spelled out) | 0 | 0 |
-    /// | `[…, SURFACE_TYPE, PBUFFER_BIT]` (this) | **35** | **105** |
-    ///
-    /// So the surfaceless platform exposes plenty of `EGL_OPENGL_BIT` configs; the
-    /// zero is a property of the QUERY, not of the platform or of a driver. An
-    /// earlier revision of this file concluded the opposite and carried an
-    /// `EGL_NO_CONFIG_KHR` fallback to work around it; that fallback was never
-    /// load-bearing and is gone, along with the hard dependency it baked in on the
-    /// OPTIONAL `EGL_KHR_no_config_context` extension.
-    ///
-    /// PORT NOTE: the config selects the context's pixel format only — the context
-    /// is made current with NO surface ([`Self::init`]), and the offscreen path
-    /// renders into an FBO whose format it chooses itself. No surface is ever
-    /// created.
-    fn choose_config(
-        egl: &egl::DynamicInstance<egl::EGL1_5>,
-        display: egl::Display,
-    ) -> Result<egl::Config, Error> {
-        let attributes = [
-            egl::SURFACE_TYPE,
-            0,
-            egl::RENDERABLE_TYPE,
-            egl::OPENGL_BIT,
-            egl::RED_SIZE,
-            8,
-            egl::GREEN_SIZE,
-            8,
-            egl::BLUE_SIZE,
-            8,
-            egl::ALPHA_SIZE,
-            8,
-            egl::NONE,
-        ];
-        egl.choose_first_config(display, &attributes)?
-            .ok_or(Error::NoConfig)
+    /// The shared render device this context was created on.
+    pub fn device(&self) -> &Device {
+        // SAFETY: `init`'s contract: the device outlives the context.
+        unsafe { &*self.device }
     }
 
     /// Resolves an OpenGL entry point, for [`glad::load`].
@@ -404,53 +293,27 @@ impl OffscreenContext {
     /// `getProcAddress` argument the reference threads into `gl.glad.load`
     /// (`OpenGL.zig:133`).
     pub fn get_proc_address(&self, name: &str) -> *const c_void {
-        match self.egl.get_proc_address(name) {
-            Some(f) => f as *const c_void,
-            None => std::ptr::null(),
-        }
+        self.device().get_proc_address(name)
     }
 
     /// Make the context current on the calling thread.
     ///
-    /// PORTS: `egl.zig:106-113` `Display.makeCurrent(null, null, context)`, as
-    /// `OpenGL.threadEnter` calls it (`OpenGL.zig:224`).
+    /// PORTS: `egl.zig:125-132` `Display.makeCurrent(null, null, context)`, as
+    /// `OpenGL.threadEnter` calls it (`OpenGL.zig:203`).
     pub fn make_current(&self) -> Result<(), EglError> {
-        self.egl
-            .make_current(self.display, None, None, Some(self.context))
+        let dev = self.device();
+        dev.egl
+            .make_current(dev.display, None, None, Some(self.context))
             .map_err(EglError::from)
     }
 
     /// Release whatever context is current on the calling thread.
     ///
-    /// PORTS: `egl.zig:115-117` `Display.releaseCurrent`, as `OpenGL.threadExit`
-    /// calls it (`OpenGL.zig:233`). The reference discards the result.
+    /// PORTS: `egl.zig:134-136` `Display.releaseCurrent`, as `OpenGL.threadExit`
+    /// calls it (`OpenGL.zig:212`). The reference discards the result.
     pub fn release_current(&self) {
-        let _ = self.egl.make_current(self.display, None, None, None);
-    }
-
-    /// Queries `EGL_VENDOR` or `EGL_EXTENSIONS` on the display.
-    ///
-    /// PORTS: `egl.zig:98-104` `Display.queryString`.
-    pub fn query_string(&self, name: StringQuery) -> Option<String> {
-        let name = match name {
-            StringQuery::Vendor => egl::VENDOR,
-            StringQuery::Extensions => egl::EXTENSIONS,
-        };
-        self.egl
-            .query_string(Some(self.display), name)
-            .ok()
-            .map(|s| s.to_string_lossy().into_owned())
-    }
-
-    /// Whether the display offers `EGL_MESA_image_dma_buf_export` AND both of its
-    /// entry points resolved: the precondition of [`Image::export_dmabuf_query`]
-    /// and [`Image::export_dmabuf`]. RUSTTY-ONLY (the DMA-BUF KAT's skip probe).
-    pub fn has_dmabuf_export(&self) -> bool {
-        self.export_dmabuf_query_mesa.is_some()
-            && self.export_dmabuf_mesa.is_some()
-            && self
-                .query_string(StringQuery::Extensions)
-                .is_some_and(|exts| has_extension(&exts, "EGL_MESA_image_dma_buf_export"))
+        let dev = self.device();
+        let _ = dev.egl.make_current(dev.display, None, None, None);
     }
 }
 
@@ -459,36 +322,36 @@ impl Drop for OffscreenContext {
         // Release the context before destroying it: a context that is still
         // current is only marked for deletion by eglDestroyContext.
         //
-        // The shape of `OpenGL.deinit` (`OpenGL.zig:109-117`):
-        //     self.egl_display.releaseCurrent();
-        //     self.egl_context.destroy(self.egl_display) catch {};
-        let _ = self.egl.make_current(self.display, None, None, None);
-        let _ = self.egl.destroy_context(self.display, self.context);
+        // The shape of `OpenGL.deinit` (`OpenGL.zig:92-96`):
+        //     self.device.display.releaseCurrent();
+        //     self.egl_context.destroy(self.device.display) catch {};
+        let dev = self.device();
+        let _ = dev.egl.make_current(dev.display, None, None, None);
+        let _ = dev.egl.destroy_context(dev.display, self.context);
 
         // The GL function table is NOT unloaded here, as the reference's
         // `deinit` does not unload it: `glad.unload()` belongs to `threadExit`
-        // (`OpenGL.zig:234`, `OpenGL::thread_exit`), and this thread's table may
+        // (`OpenGL.zig:213`, `OpenGL::thread_exit`), and this thread's table may
         // have been loaded from another context.
         //
-        // NOTE: the table's pointers resolve through `self.egl`'s dlopen'd
-        // libEGL, which is dlclosed when this drops, so a table left behind here
-        // can outlive the library it came from. The live path drops the context
-        // on the main thread at surface close (P7-W7 T5b), after the render
-        // thread's `thread_exit` has unloaded its table, and the main thread
-        // never loads one; each test thread either calls `thread_exit` or makes
-        // no GL call after dropping its context, and libglvnd/Mesa stay mapped
-        // by the process in practice.
+        // NOTE: the table's pointers resolve through the device's dlopen'd
+        // libEGL, which is dlclosed when the DEVICE drops (at app teardown, after
+        // every surface), so a table left behind can outlive the library it came
+        // from only past `App::deinit`. The live path drops the context on the
+        // main thread at surface close (P7-W7 T5b), after the render thread's
+        // `thread_exit` has unloaded its table, and the main thread never loads
+        // one; each test thread either calls `thread_exit` or makes no GL call
+        // after dropping its context, and libglvnd/Mesa stay mapped by the process
+        // in practice.
 
-        // // Do not destroy the EGL display here as
-        // // it is shared across the entire process.
-        // // It will get automatically torn down by the OS.
-        //
-        // P7-W7 T1 (DECISIONS B10): this used to call `eglTerminate`. The display
-        // `eglGetPlatformDisplay` returns is the SAME one for every caller in the
-        // process, and terminating it marks every resource on it for deletion, so
-        // one context's teardown invalidated every other context on the display
-        // (the hazard `gtk_first_light.rs` recorded when a separate context shared
-        // GDK's display). The reference never terminates; neither does this.
+        // P7-W7 T1 (DECISIONS B10): the display is never terminated; it is the
+        // device's, and `Device::deinit` leaves it to the OS too ("Do not destroy
+        // the EGL display here as it is shared across the entire process.",
+        // `Device.zig:92-94`). The display `eglGetPlatformDisplay` returns is the
+        // SAME one for every caller in the process, and terminating it marks every
+        // resource on it for deletion, so one context's teardown invalidated every
+        // other context on the display (the hazard `gtk_first_light.rs` recorded
+        // when a separate context shared GDK's display).
     }
 }
 
@@ -652,10 +515,10 @@ impl ImageTarget {
 ///
 /// PORTS: `egl.zig:194-248` — `pub const Image = opaque { … }`.
 ///
-/// PORT NOTE: the reference passes `display: *Display` to each method. The Rust
-/// `khronos-egl` calls also need the dlopen'd instance, and the MESA entry points
-/// are resolved per context, so the methods take the [`OffscreenContext`] that
-/// owns all three.
+/// PORT NOTE: the reference passes `display: *Display` (and, to `create`, the
+/// context) to each method. The Rust `khronos-egl` calls also need the dlopen'd
+/// instance, and the MESA entry points, all of which the [`Device`] owns, so the
+/// methods take the [`OffscreenContext`], which reaches its device.
 #[derive(Debug)]
 pub struct Image(egl::Image);
 
@@ -689,9 +552,10 @@ impl Image {
         target: ImageTarget,
         attrs: &[egl::Attrib],
     ) -> Result<Image, EglError> {
-        ctx.egl
+        let dev = ctx.device();
+        dev.egl
             .create_image(
-                ctx.display,
+                dev.display,
                 ctx.context,
                 target.tag(),
                 target.to_client_buffer(),
@@ -711,8 +575,9 @@ impl Image {
     /// }
     /// ```
     pub fn destroy(self, ctx: &OffscreenContext) -> Result<(), EglError> {
-        ctx.egl
-            .destroy_image(ctx.display, self.0)
+        let dev = ctx.device();
+        dev.egl
+            .destroy_image(dev.display, self.0)
             .map_err(EglError::from)
     }
 
@@ -738,11 +603,12 @@ impl Image {
     /// ONE `u64` for `modifiers`, which the extension defines as "an array of at
     /// least <num_planes> elements".
     pub fn export_dmabuf_query(&self, ctx: &OffscreenContext) -> Result<DmabufQuery, EglError> {
-        let f = ctx
+        let dev = ctx.device();
+        let f = dev
             .export_dmabuf_query_mesa
             .ok_or(EglError::MissingEntryPoint("eglExportDMABUFImageQueryMESA"))?;
-        export_dmabuf_query_with(f, ctx.display.as_ptr(), self.0.as_ptr())
-            .map_err(|()| must_error(&ctx.egl))
+        export_dmabuf_query_with(f, dev.display.as_ptr(), self.0.as_ptr())
+            .map_err(|()| must_error(&dev.egl))
     }
 
     /// PORTS: `egl.zig:231-247`.
@@ -778,7 +644,8 @@ impl Image {
         strides: &mut [c_int; MAX_DMABUF_PLANES],
         offsets: &mut [c_int; MAX_DMABUF_PLANES],
     ) -> Result<(), EglError> {
-        let f = ctx
+        let dev = ctx.device();
+        let f = dev
             .export_dmabuf_mesa
             .ok_or(EglError::MissingEntryPoint("eglExportDMABUFImageMESA"))?;
         // SAFETY: `f` is the resolved `eglExportDMABUFImageMESA`; the display and
@@ -786,7 +653,7 @@ impl Image {
         // entries.
         let ok = unsafe {
             f(
-                ctx.display.as_ptr(),
+                dev.display.as_ptr(),
                 self.0.as_ptr(),
                 fds.as_mut_ptr(),
                 strides.as_mut_ptr(),
@@ -794,7 +661,7 @@ impl Image {
             )
         };
         if ok != egl::TRUE {
-            return Err(must_error(&ctx.egl));
+            return Err(must_error(&dev.egl));
         }
         Ok(())
     }
@@ -1030,7 +897,7 @@ fn parse_gl_version(version: &str) -> Option<(u32, u32)> {
 ///
 /// Split on spaces rather than substring-matched, so that e.g.
 /// `EGL_KHR_platform_gbm` cannot satisfy a query for `EGL_KHR_platform_gb`.
-fn has_extension(extensions: &str, name: &str) -> bool {
+pub(crate) fn has_extension(extensions: &str, name: &str) -> bool {
     extensions.split(' ').any(|ext| ext == name)
 }
 
@@ -1108,7 +975,7 @@ mod tests {
     use super::super::{draw, errors, glad, test_support};
     use super::{
         has_extension, load_gl, parse_gl_version, prepare_context, version_is_outdated, Error,
-        OffscreenContext, MIN_VERSION_MAJOR, MIN_VERSION_MINOR,
+        MIN_VERSION_MAJOR, MIN_VERSION_MINOR,
     };
 
     /// Proves a headless GL [`MIN_VERSION_MAJOR`].[`MIN_VERSION_MINOR`] core
@@ -1143,7 +1010,7 @@ mod tests {
     /// core-profile request from 3.2 to 4.6 fails `EGL_BAD_MATCH` there, across
     /// ALL of the surfaceless, GBM-on-`renderD128` and X11 platforms — including
     /// over a REAL, pbuffer-capable `EGL_OPENGL_BIT` config (re-measured after
-    /// [`OffscreenContext::choose_config`] was corrected: 35 such configs exist on
+    /// the config selection (now `opengl::device::choose_config`) was corrected: 35 such configs exist on
     /// virgl's surfaceless display, and 4.3 core over the first still fails
     /// `EGL_BAD_MATCH` 0x3009). So config selection is NOT the constraint on
     /// virgl: it exposes no desktop core profile at all. Another EGL platform will
@@ -1161,7 +1028,7 @@ mod tests {
         // into `None`.
         let _gl_lock = test_support::gl_lock();
 
-        let ctx = match OffscreenContext::init() {
+        let ctx = match test_support::offscreen_context() {
             Ok(ctx) => ctx,
             Err(err) => {
                 // W8-03 strict mode: under RUSTTY_REQUIRE_GL=1 an unavailable
@@ -1342,7 +1209,7 @@ mod tests {
     #[test]
     fn failed_prepare_context_restores_the_previous_table() {
         let _gl_lock = test_support::gl_lock();
-        let ctx = match OffscreenContext::init() {
+        let ctx = match test_support::offscreen_context() {
             Ok(ctx) => ctx,
             Err(err) => {
                 test_support::require_gl_or_skip(

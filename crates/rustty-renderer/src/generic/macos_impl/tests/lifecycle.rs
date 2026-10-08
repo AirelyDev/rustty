@@ -204,7 +204,7 @@ mod windowed_lifecycle {
     #[test]
     fn windowed_renderer_init_then_deinit_round_trips() {
         // Probe: skip cleanly on hosts with no Metal device (headless CI).
-        if let Err(e) = Metal::init_offscreen(AlphaBlending::Native, 1, 1) {
+        if let Err(e) = crate::metal::test_support::offscreen_metal(AlphaBlending::Native, 1, 1) {
             // F5 strict-mode pivot (metal::test_support).
             crate::metal::test_support::require_metal_or_skip(
                 "windowed_renderer_init_then_deinit_round_trips",
@@ -231,6 +231,8 @@ mod windowed_lifecycle {
         // (`2f0b65346`); `threadEnter` stays a faithful no-op for Metal.
         let (font_grid, size) = test_font_grid_and_size(10, 3);
         let opts = Options {
+            device: crate::metal::test_support::device()
+                .expect("the test device (Metal probed above)"),
             config: derived_config_for_test(),
             font_grid,
             size,

@@ -63,8 +63,13 @@ pub mod shaders;
 // present_last_target, buffer/texture/sampler/image_texture options,
 // init_atlas_texture, begin_frame, draw_frame_start/end, surface_size}`. Consumed
 // by the `generic::linux_impl` monomorphic `Renderer(OpenGL)` in Task 9.
+// P8-W6 T2 (`40d5b860d`): `opengl/Device.zig`, the app-scoped render device.
+pub mod device;
+
 pub mod opengl_impl;
 pub use opengl_impl::OpenGL;
+// `pub const Device = @import("opengl/Device.zig");` (OpenGL.zig:15).
+pub use device::Device;
 
 // RUSTTY-ONLY smoke tests for the Task-5 leaves — same framing as `metal.rs`'s
 // `creates_buffer_texture_sampler_without_panic`: the reference has NO `test{}`

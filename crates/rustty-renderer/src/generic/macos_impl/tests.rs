@@ -111,7 +111,7 @@ fn derived_config_for_test() -> DerivedConfig {
 // golden harness MINUS `drawFrame`.
 fn test_renderer(cols: CellCountInt, rows: CellCountInt) -> Option<Renderer> {
     // Headless CI may lack a Metal device → skip cleanly.
-    let api = match Metal::init_offscreen(AlphaBlending::Native, 256, 256) {
+    let api = match crate::metal::test_support::offscreen_metal(AlphaBlending::Native, 256, 256) {
         Ok(m) => m,
         Err(e) => {
             // F5 strict-mode pivot (metal::test_support): a no-op by
@@ -327,7 +327,7 @@ fn golden_renderer(cols: CellCountInt, rows: CellCountInt) -> Option<Renderer> {
     // the (Metal-independent) font-grid build. `init_offscreen` returns
     // `Err(NoMetalDevice)` on a headless host (the `metal.rs` / `test_renderer`
     // precedent).
-    if let Err(e) = Metal::init_offscreen(AlphaBlending::Native, 1, 1) {
+    if let Err(e) = crate::metal::test_support::offscreen_metal(AlphaBlending::Native, 1, 1) {
         // F5 strict-mode pivot (metal::test_support).
         crate::metal::test_support::require_metal_or_skip("golden_renderer", &format!("{e:?}"));
         eprintln!("no Metal device; skipping golden");
@@ -353,6 +353,7 @@ fn golden_renderer(cols: CellCountInt, rows: CellCountInt) -> Option<Renderer> {
     // empty and is sized by the first `update_frame`/`rebuild_cells`. Metal was
     // probed above, so `init` succeeds — the failure path is an `.expect`.
     let opts = Options {
+        device: crate::metal::test_support::device().expect("the test device (Metal probed above)"),
         config: derived_config_for_test(),
         font_grid,
         size,

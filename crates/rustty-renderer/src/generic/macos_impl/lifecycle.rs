@@ -161,10 +161,14 @@ impl Renderer {
     // }
     pub fn init(alloc: Global, options: Options) -> Result<Self, Error> {
         // Initialize our graphics API wrapper, this will prepare the
-        // surface provided by the apprt and set up any API-specific
-        // GPU resources.
+        // surface provided by the apprt and set up any API- and surface-
+        // specific GPU resources.
         //
-        // var api = try GraphicsAPI.init(alloc, options);   (generic.zig:662)
+        // var api = try GraphicsAPI.init(
+        //     alloc,
+        //     options.device,
+        //     options,
+        // );   (generic.zig:701-705, `40d5b860d`)
         // errdefer api.deinit();
         //
         // W1-7 DIVERGENCE (R4/apprt-free, DEFERRALS.md #3): `Options` carries no
@@ -176,11 +180,17 @@ impl Renderer {
         // renderer_seam wiring (W3) — behaviorally identical to ghostty across the
         // `init` -> host-attach sequence. This is the "reuse `init_offscreen`'s
         // shared body, do NOT duplicate" directive at the `Renderer` level.
-        let api = Metal::init_offscreen(
-            options.config.blending,
-            options.size.screen.width,
-            options.size.screen.height,
-        )?;
+        //
+        // SAFETY: `options.device` is the app-scoped render device, which outlives
+        // every renderer (the core `App` frees it after all surfaces; `Options`).
+        let api = unsafe {
+            Metal::init_offscreen(
+                options.device,
+                options.config.blending,
+                options.size.screen.width,
+                options.size.screen.height,
+            )
+        }?;
 
         // const has_custom_shaders = options.config.custom_shaders.value.items.len > 0;
         let has_custom_shaders = !options.config.custom_shaders.value.is_empty();
