@@ -77,7 +77,7 @@ pub use value_types::{
     FreetypeLoadFlags, Fullscreen, Keybinds, LinkPreviews, MiddleClickAction,
     MouseScrollMultiplier, MouseShiftCapture, NonNativeFullscreen, RepeatableCodepointMap,
     RepeatableFontVariation, RepeatableString, RightClickAction, ShellIntegrationFeatures,
-    WindowDecoration, WindowPaddingColor, WorkingDirectory,
+    WindowDecoration, WindowPaddingColor, WorkingDirectory, XtChecksumExtension,
 };
 
 #[cfg(test)]
@@ -117,6 +117,7 @@ mod root_alias_tests {
         assert_named::<crate::RepeatablePath>();
         assert_named::<crate::Path>();
         assert_named::<crate::ShellIntegrationFeatures>();
+        assert_named::<crate::XtChecksumExtension>();
         assert_named::<crate::WindowDecoration>();
         assert_named::<crate::WindowPaddingColor>();
         assert_named::<crate::BackgroundImagePosition>();

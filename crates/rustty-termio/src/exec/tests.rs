@@ -189,6 +189,7 @@ impl TestTermio {
                 default_modes: rustty_vt::modes::ModePacked::default(),
                 default_cursor_style: rustty_vt::screen::CursorStyle::Block,
                 default_cursor_blink: Some(false),
+                default_xt_checksum: Default::default(),
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
             },
@@ -252,6 +253,7 @@ impl TestTermio {
             #[allow(clippy::clone_on_copy)]
             renderer_wakeup: renderer_wakeup.clone(),
             enquiry_response: derived.enquiry_response.clone(),
+            xt_checksum_report: derived.xt_checksum_report,
             osc_color_report_format: derived.osc_color_report_format,
             clipboard_write: derived.clipboard_write,
             clipboard_write_limit: derived.clipboard_write_limit,

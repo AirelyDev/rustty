@@ -544,8 +544,8 @@ impl Terminal {
             // state, so a terminal reset must not change it.
             resize_pull_scrollback,
 
-            // P8-W3 T1 (DECRQCRA) sets `xt_checksum: self.default_xt_checksum,`
-            // here once the field and the default exist.
+            xt_checksum: self.default_xt_checksum,
+
             ..Flags::default()
         };
         self.modes.reset();

@@ -446,6 +446,8 @@ pub unsafe fn get(config: &Config, k: Key, ptr_raw: *mut std::ffi::c_void) -> bo
         Key::UnfocusedSplitOpacity => g_float!(unfocused_split_opacity, f64),
         Key::VtKamAllowed => g_bool!(vt_kam_allowed),
         Key::VtWindowResizeAllowed => g_bool!(vt_window_resize_allowed),
+        Key::VtXtChecksumReport => g_bool!(vt_xt_checksum_report),
+        Key::VtXtChecksumExtension => g_packed!(vt_xt_checksum_extension),
         Key::WaitAfterCommand => g_bool!(wait_after_command),
         Key::WindowColorspace => g_enum_fn!(window_colorspace, window_colorspace_to_name_z),
         Key::WindowDecoration => g_enum!(window_decoration),

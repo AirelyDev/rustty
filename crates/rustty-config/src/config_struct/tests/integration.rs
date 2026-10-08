@@ -828,10 +828,78 @@ fn vt_window_resize_allowed_default_parse_and_order() {
         .position(|n| *n == b"vt-window-resize-allowed".as_slice())
         .expect("vt-window-resize-allowed is a config field");
     assert_eq!(b"vt-kam-allowed".as_slice(), names[at - 1]);
-    assert_eq!(b"custom-shader".as_slice(), names[at + 1]);
+    assert_eq!(b"vt-xt-checksum-report".as_slice(), names[at + 1]);
     assert_eq!(
         Some(Key::VtWindowResizeAllowed),
         Key::string_to_enum(b"vt-window-resize-allowed")
+    );
+}
+
+// rustty-only (P8-W3 T2, `9272a2f7c` + `00a19db51`; the reference adds the
+// options without a `test {}`): `vt-xt-checksum-report` defaults to false;
+// `vt-xt-checksum-extension` defaults to `negate,attributes,trim,no-undrawn,
+// no-full`, accepts `no-` prefixes, round-trips through format, and both sit
+// right after `vt-window-resize-allowed` in declaration order.
+#[test]
+fn vt_xt_checksum_default_parse_format_and_order() {
+    let mut cfg = Config::default_config();
+    assert!(!cfg.vt_xt_checksum_report);
+    assert_eq!(XtChecksumExtension::default(), cfg.vt_xt_checksum_extension);
+    assert!(cfg.vt_xt_checksum_extension.negate);
+    assert!(cfg.vt_xt_checksum_extension.attributes);
+    assert!(cfg.vt_xt_checksum_extension.trim);
+    assert!(!cfg.vt_xt_checksum_extension.undrawn);
+    assert!(!cfg.vt_xt_checksum_extension.full);
+
+    let fmt = |cfg: &Config, name: &[u8]| {
+        let mut buf = rustty_cfg_fmt::AllocatingWriter::init();
+        cfg.format_entry_field(name, &mut buf).unwrap();
+        buf.written().to_vec()
+    };
+    assert_eq!(
+        b"vt-xt-checksum-report = false\n".to_vec(),
+        fmt(&cfg, b"vt-xt-checksum-report")
+    );
+    assert_eq!(
+        b"vt-xt-checksum-extension = negate,attributes,trim,no-undrawn,no-full\n".to_vec(),
+        fmt(&cfg, b"vt-xt-checksum-extension")
+    );
+
+    let mut it = TestIterator::new(&[
+        b"--vt-xt-checksum-report=true",
+        b"--vt-xt-checksum-extension=no-negate,no-attributes,no-trim,full",
+    ]);
+    cfg.load_iter(&mut it).unwrap();
+    assert!(cfg._diagnostics.empty());
+    assert!(cfg.vt_xt_checksum_report);
+    assert_eq!(
+        XtChecksumExtension {
+            negate: false,
+            attributes: false,
+            trim: false,
+            undrawn: false,
+            full: true,
+        },
+        cfg.vt_xt_checksum_extension
+    );
+    assert!(cfg.changed(&Config::default_config(), Key::VtXtChecksumReport));
+    assert!(cfg.changed(&Config::default_config(), Key::VtXtChecksumExtension));
+    assert_eq!(
+        b"vt-xt-checksum-extension = no-negate,no-attributes,no-trim,no-undrawn,full\n".to_vec(),
+        fmt(&cfg, b"vt-xt-checksum-extension")
+    );
+
+    let names: Vec<&[u8]> = CONFIG_FIELDS.iter().map(|(n, _)| *n).collect();
+    let at = names
+        .iter()
+        .position(|n| *n == b"vt-xt-checksum-report".as_slice())
+        .expect("vt-xt-checksum-report is a config field");
+    assert_eq!(b"vt-window-resize-allowed".as_slice(), names[at - 1]);
+    assert_eq!(b"vt-xt-checksum-extension".as_slice(), names[at + 1]);
+    assert_eq!(b"custom-shader".as_slice(), names[at + 2]);
+    assert_eq!(
+        Some(Key::VtXtChecksumExtension),
+        Key::string_to_enum(b"vt-xt-checksum-extension")
     );
 }
 

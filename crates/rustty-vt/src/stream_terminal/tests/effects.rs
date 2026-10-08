@@ -950,6 +950,60 @@ fn size_report_csi_21_t_title_enabled() {
     t.deinit(Global);
 }
 
+// test "DECRQCRA disabled" (oracle 9272a2f7c)
+#[test]
+fn decrqcra_disabled() {
+    let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+    cap_reset();
+    let mut s = t.vt_stream();
+    s.handler.effects.write_pty = Some(cap_write_pty);
+
+    s.next_slice(b"hello\x1b[1;1;1;1;1;5*y");
+    assert!(cap_take().is_none());
+
+    t.deinit(Global);
+}
+
+// test "DECRQCRA enabled" (oracle 9272a2f7c)
+#[test]
+fn decrqcra_enabled() {
+    let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+    cap_reset();
+    let mut s = t.vt_stream();
+    s.handler.effects.write_pty = Some(cap_write_pty);
+    s.handler.xt_checksum_report = true;
+
+    // "hello" sums to 0x214, which the DEC checksum negates.
+    s.next_slice(b"hello\x1b[3;1;1;1;1;5*y");
+    assert_eq!(cap_take().unwrap().as_slice(), b"\x1bP3!~FDEC\x1b\\");
+
+    // XTCHECKSUM 1 turns off the negation.
+    s.next_slice(b"\x1b[1#y\x1b[4;1;1;1;1;5*y");
+    assert_eq!(cap_take().unwrap().as_slice(), b"\x1bP4!~0214\x1b\\");
+
+    // A full reset restores the DEC checksum.
+    s.next_slice(b"\x1bchello\x1b[5;1;1;1;1;5*y");
+    assert_eq!(cap_take().unwrap().as_slice(), b"\x1bP5!~FDEC\x1b\\");
+
+    t.deinit(Global);
+}
+
+// test "XTCHECKSUM ignored without xt checksum report" (oracle 9272a2f7c)
+#[test]
+fn xtchecksum_ignored_without_xt_checksum_report() {
+    let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+    {
+        let mut s = t.vt_stream();
+        s.next_slice(b"\x1b[1#y");
+    }
+    assert_eq!(crate::xt_checksum::Flags::default(), t.flags.xt_checksum);
+
+    t.deinit(Global);
+}
+
 // test "enquiry no effect"
 #[test]
 fn enquiry_no_effect() {

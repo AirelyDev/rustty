@@ -100,6 +100,8 @@ pub mod point;
 // pub const color = @import("color.zig");
 pub mod clipboard;
 pub mod color;
+// pub const xt_checksum = @import("xt_checksum.zig");
+pub mod xt_checksum;
 // pub const compress = @import("compress.zig");
 pub mod compress;
 // PORT NOTE: `terminal/cursor.zig` has no top-level re-export in `main.zig`

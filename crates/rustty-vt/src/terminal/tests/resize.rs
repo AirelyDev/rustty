@@ -354,6 +354,37 @@ fn terminal_full_reset_tracked_pins() {
     t.deinit(Global);
 }
 
+// test "Terminal: default xt checksum survives resets" (oracle 9272a2f7c)
+//
+// PORT NOTE: this also pins P8-W2 T1's `full_reset` slot: RIS builds `Flags`
+// with a `..Flags::default()` spread, which would silently reset
+// `xt_checksum` to the zero value instead of `default_xt_checksum`.
+#[test]
+fn terminal_default_xt_checksum_survives_resets() {
+    use crate::xt_checksum::Flags;
+
+    let mut t = Terminal::init(
+        Global,
+        Options {
+            default_xt_checksum: Flags::default().with_positive(true),
+            ..opts(10, 10)
+        },
+    )
+    .unwrap();
+    assert_eq!(Flags::default().with_positive(true), t.flags.xt_checksum);
+
+    t.flags.xt_checksum = Flags::default().with_full(true);
+    t.full_reset();
+    assert_eq!(Flags::default().with_positive(true), t.flags.xt_checksum);
+
+    t.set_default_xt_checksum(Flags::default().with_no_trim(true));
+    assert_eq!(Flags::default().with_no_trim(true), t.flags.xt_checksum);
+    t.full_reset();
+    assert_eq!(Flags::default().with_no_trim(true), t.flags.xt_checksum);
+
+    t.deinit(Global);
+}
+
 // test "Terminal: glyph APC stores session glossary entries"
 #[test]
 #[cfg_attr(

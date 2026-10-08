@@ -130,6 +130,14 @@ pub struct Handler<'a> {
     // title_report: bool = false,
     pub title_report: bool,
 
+    /// Whether DECRQCRA may report the checksum of an area of the screen,
+    /// and XTCHECKSUM may change how it's calculated. This is disabled by
+    /// default because a program can checksum one cell at a time and so
+    /// read back everything on the screen, including output from other
+    /// programs.
+    // xt_checksum_report: bool = false,
+    pub xt_checksum_report: bool,
+
     /// The APC command handler maintains the APC state. APC is like
     /// CSI or OSC, but it is a private escape sequence that is used
     /// to send commands to the terminal emulator. This is used by
@@ -459,6 +467,8 @@ impl<'a> Handler<'a> {
             effects: Effects::READONLY,
             // title_report: false (the reference field default)
             title_report: false,
+            // xt_checksum_report: false (the reference field default)
+            xt_checksum_report: false,
             // apc_handler: .{} (the reference field default)
             apc_handler: ApcHandler::default(),
             // dcs_handler: .{} (the reference field default)
@@ -1140,6 +1150,15 @@ impl<'a> stream::Handler for Handler<'a> {
         };
     }
 
+    // .xt_checksum_extension => if (self.xt_checksum_report) {
+    //     self.terminal.flags.xt_checksum = value.flags;
+    // },
+    fn xt_checksum_extension(&mut self, v: stream::XtChecksumExtension) {
+        if self.xt_checksum_report {
+            self.term().flags.xt_checksum = v.flags;
+        }
+    }
+
     // .protected_mode_off => self.terminal.setProtectedMode(.off),
     fn protected_mode_off(&mut self) {
         self.term().set_protected_mode(ansi::ProtectedMode::Off);
@@ -1172,6 +1191,11 @@ impl<'a> stream::Handler for Handler<'a> {
     // .xtversion => self.reportXtversion(),
     fn xtversion(&mut self) {
         self.report_xtversion();
+    }
+
+    // .request_xt_checksum => self.reportXtChecksum(value),
+    fn request_xt_checksum(&mut self, req: crate::xt_checksum::Request) {
+        self.report_xt_checksum(req);
     }
 
     // .device_attributes => self.reportDeviceAttributes(value),

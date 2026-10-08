@@ -205,6 +205,159 @@ fn title_report_requires_explicit_opt_in() {
     });
 }
 
+// test "checksum report requires explicit opt in"
+#[test]
+fn checksum_report_requires_explicit_opt_in() {
+    static mut LAST_DATA: Option<Vec<u8>> = None;
+    fn deinit() {
+        // if (last_data) |data| testing.allocator.free(data);
+        unsafe { LAST_DATA = None };
+    }
+    fn last_data() -> Option<&'static Vec<u8>> {
+        unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }
+    }
+    extern "C" fn write_pty(_t: Terminal, _ud: *mut c_void, ptr: *const u8, len: usize) {
+        let data = unsafe { core::slice::from_raw_parts(ptr, len) }.to_vec();
+        unsafe { LAST_DATA = Some(data) };
+    }
+
+    with_test_allocator(|alloc| {
+        let (new_result, t) = new_t(alloc, 80, 24);
+        assert_eq!(Result::Success, new_result);
+        // S.last_data = null;
+        unsafe { LAST_DATA = None };
+        // defer S.deinit();
+
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::WritePty, write_pty as *const c_void)
+        });
+
+        // const text = "hello";
+        let text = b"hello";
+        // const query = "\x1B[1;1;1;1;1;5*y";
+        let query = b"\x1B[1;1;1;1;1;5*y";
+        vtw(t, text);
+
+        // WRITE_PTY alone must not enable the security-sensitive response.
+        vtw(t, query);
+        // try testing.expect(S.last_data == null);
+        assert!(last_data().is_none());
+
+        // const enabled = true;
+        let enabled: bool = true;
+        assert_eq!(Result::Success, unsafe {
+            set(
+                t,
+                Option_::XtChecksumReport,
+                &enabled as *const bool as *const c_void,
+            )
+        });
+        vtw(t, query);
+        // try testing.expectEqualStrings("\x1bP1!~FDEC\x1b\\", S.last_data.?);
+        assert_eq!(
+            b"\x1bP1!~FDEC\x1b\\".as_slice(),
+            last_data().unwrap().as_slice()
+        );
+
+        // NULL restores the secure default.
+        deinit();
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::XtChecksumReport, std::ptr::null())
+        });
+        vtw(t, query);
+        assert!(last_data().is_none());
+
+        unsafe { free(t) };
+    });
+}
+
+// test "checksum extension survives resets"
+#[test]
+fn checksum_extension_survives_resets() {
+    static mut LAST_DATA: Option<Vec<u8>> = None;
+    fn last_data() -> Option<&'static Vec<u8>> {
+        unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }
+    }
+    extern "C" fn write_pty(_t: Terminal, _ud: *mut c_void, ptr: *const u8, len: usize) {
+        let data = unsafe { core::slice::from_raw_parts(ptr, len) }.to_vec();
+        unsafe { LAST_DATA = Some(data) };
+    }
+
+    with_test_allocator(|alloc| {
+        let (new_result, t) = new_t(alloc, 80, 24);
+        assert_eq!(Result::Success, new_result);
+        // S.last_data = null;
+        unsafe { LAST_DATA = None };
+
+        // const enabled = true;
+        let enabled: bool = true;
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::WritePty, write_pty as *const c_void)
+        });
+        assert_eq!(Result::Success, unsafe {
+            set(
+                t,
+                Option_::XtChecksumReport,
+                &enabled as *const bool as *const c_void,
+            )
+        });
+
+        // Don't negate the result.
+        // const positive: u8 = 1;
+        let positive: u8 = 1;
+        assert_eq!(Result::Success, unsafe {
+            set(
+                t,
+                Option_::XtChecksumExtension,
+                &positive as *const u8 as *const c_void,
+            )
+        });
+
+        let text = b"hello";
+        let query = b"\x1B[1;1;1;1;1;5*y";
+        vtw(t, text);
+        vtw(t, query);
+        assert_eq!(
+            b"\x1bP1!~0214\x1b\\".as_slice(),
+            last_data().unwrap().as_slice()
+        );
+
+        // A reset restores the configured calculation, not the DEC one.
+        let negate = b"\x1B[0#y";
+        let ris = b"\x1Bc";
+        vtw(t, negate);
+        vtw(t, ris);
+        vtw(t, text);
+        vtw(t, query);
+        assert_eq!(
+            b"\x1bP1!~0214\x1b\\".as_slice(),
+            last_data().unwrap().as_slice()
+        );
+
+        // NULL restores the DEC calculation.
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::XtChecksumExtension, std::ptr::null())
+        });
+        vtw(t, query);
+        assert_eq!(
+            b"\x1bP1!~FDEC\x1b\\".as_slice(),
+            last_data().unwrap().as_slice()
+        );
+
+        // const invalid: u8 = 32;
+        let invalid: u8 = 32;
+        assert_eq!(Result::InvalidValue, unsafe {
+            set(
+                t,
+                Option_::XtChecksumExtension,
+                &invalid as *const u8 as *const c_void,
+            )
+        });
+
+        unsafe { free(t) };
+    });
+}
+
 // test "resize updates pixel dimensions"
 #[test]
 fn resize_updates_pixel_dimensions() {
