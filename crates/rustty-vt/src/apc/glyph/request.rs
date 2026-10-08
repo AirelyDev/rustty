@@ -1135,16 +1135,20 @@ pub(crate) fn std_base64_standard_decoder() -> Base64Decoder {
     Base64Decoder::init(std_base64_standard_alphabet_chars(), Some(b'='))
 }
 
-/// `std.base64.standard_no_pad.Decoder`.
-// PORT NOTE: `Base64Decoder.init(standard_alphabet_chars, null)`, the decoder
-// OSC 7501 (`bae2c3cdb`) uses for an unpadded `title` or `msg`; shared here
-// rather than adding a third base64 decoder.
-pub(crate) fn std_base64_standard_no_pad_decoder() -> Base64Decoder {
-    Base64Decoder::init(std_base64_standard_alphabet_chars(), None)
-}
+/// `std.base64.standard.Decoder` as a compile-time constant, as in the
+/// reference (no runtime table construction, no lazy initialization).
+pub(crate) static STANDARD_DECODER: Base64Decoder =
+    Base64Decoder::init(std_base64_standard_alphabet_chars(), Some(b'='));
+
+// PORT NOTE: OSC 7501 (`bae2c3cdb`) decodes an unpadded `title` or `msg` with
+// `std.base64.standard_no_pad.Decoder`; shared here rather than adding a third
+// base64 decoder.
+/// `std.base64.standard_no_pad.Decoder` as a compile-time constant.
+pub(crate) static STANDARD_NO_PAD_DECODER: Base64Decoder =
+    Base64Decoder::init(std_base64_standard_alphabet_chars(), None);
 
 /// Zig's `std.base64.standard_alphabet_chars`.
-fn std_base64_standard_alphabet_chars() -> [u8; 64] {
+const fn std_base64_standard_alphabet_chars() -> [u8; 64] {
     *b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 }
 
@@ -1171,7 +1175,10 @@ impl Base64Decoder {
     const INVALID_CHAR: u8 = 0xff;
     const INVALID_CHAR_TST: u32 = 0xff000000;
 
-    fn init(alphabet_chars: [u8; 64], pad_char: Option<u8>) -> Base64Decoder {
+    // PORT NOTE: `const fn` (the reference builds its decoders at comptime):
+    // the `for` is a `while` and the asserts are const panics, so the two
+    // decoders below are `static`s built at compile time.
+    const fn init(alphabet_chars: [u8; 64], pad_char: Option<u8>) -> Base64Decoder {
         let mut result = Base64Decoder {
             char_to_index: [Self::INVALID_CHAR; 256],
             fast_char_to_index: [[Self::INVALID_CHAR_TST; 256]; 4],
@@ -1179,7 +1186,9 @@ impl Base64Decoder {
         };
 
         let mut char_in_alphabet = [false; 256];
-        for (i, &c) in alphabet_chars.iter().enumerate() {
+        let mut i = 0;
+        while i < 64 {
+            let c = alphabet_chars[i];
             // assert(!char_in_alphabet[c]);
             assert!(!char_in_alphabet[c as usize]);
             // assert(pad_char == null or c != pad_char.?);
@@ -1196,6 +1205,7 @@ impl Base64Decoder {
 
             result.char_to_index[c as usize] = i as u8;
             char_in_alphabet[c as usize] = true;
+            i += 1;
         }
         result
     }

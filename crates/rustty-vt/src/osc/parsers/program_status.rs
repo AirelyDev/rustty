@@ -20,17 +20,27 @@
 //! `?` as the body. A terminal that supports it replies with the same
 //! sequence. See `Command::Query`.
 //!
+//! Example:
+//!
+//! ```text
+//! var p: osc.Parser = .init(alloc);
+//! defer p.deinit();
+//!
+//! p.nextSlice("7501;state=working:id=sync:progress=40");
+//! const report = p.end('\x1b').?.program_status.report;
+//! report.state; // .working
+//! report.readOption(.id); // "sync"
+//! report.readOption(.progress); // 40
+//! report.readOption(.app); // null, the program didn't send one
+//! ```
+//!
 //! PORTS: ghostty src/terminal/osc/parsers/program_status.zig
 //!
 //! PORT STATUS: ported — `parse`, `validate`, `Report` and the 15
 //! `OSC 7501:` tests (bae2c3cdb). The C-API half (`Command.C`, the
 //! `program_status` effect) is P8-W5.
 
-use std::sync::OnceLock;
-
-use crate::apc::glyph::request::{
-    std_base64_standard_decoder, std_base64_standard_no_pad_decoder, Base64Decoder,
-};
+use crate::apc::glyph::request::{Base64Decoder, STANDARD_DECODER, STANDARD_NO_PAD_DECODER};
 use crate::osc::encoding;
 use crate::osc::kitty_metadata::ValueIterator;
 use crate::osc::{Command as OSCCommand, Parser, State as ParserState, Terminator};
@@ -400,7 +410,7 @@ fn validate(data: &[u8]) -> Result<State, Error> {
         (b"title", MAX_TITLE_ENCODED_BYTES),
         (b"msg", MAX_MSG_ENCODED_BYTES),
     ] {
-        let mut it = ValueIterator::init(key_static(key), Some(VALUE_BYTES), data);
+        let mut it = ValueIterator::init(key, Some(VALUE_BYTES), data);
         while let Some(v) = it.next() {
             if v.len() > limit {
                 return Err(Error::TooLong);
@@ -423,17 +433,6 @@ fn validate(data: &[u8]) -> Result<State, Error> {
     last_value(b"state", data)
         .and_then(State::from_name)
         .ok_or(Error::InvalidState)
-}
-
-/// `ValueIterator` carries its key as `&'static`; the keys here are the fixed
-/// literals of the loop above.
-fn key_static(key: &[u8]) -> &'static [u8] {
-    match key {
-        b"app" => b"app",
-        b"title" => b"title",
-        b"msg" => b"msg",
-        _ => unreachable!(),
-    }
 }
 
 /// The last value of `key` in a report body. Pairs without an `=` and
@@ -512,27 +511,14 @@ fn parse_progress(value: &[u8]) -> Option<u8> {
     Some(n as u8)
 }
 
-// PORT NOTE: `std.base64.standard.Decoder` and `standard_no_pad.Decoder` are
-// comptime constants in the reference; building one fills 5 KiB of tables, so
-// the two are built once.
-fn padded_decoder() -> &'static Base64Decoder {
-    static D: OnceLock<Base64Decoder> = OnceLock::new();
-    D.get_or_init(std_base64_standard_decoder)
-}
-
-fn unpadded_decoder() -> &'static Base64Decoder {
-    static D: OnceLock<Base64Decoder> = OnceLock::new();
-    D.get_or_init(std_base64_standard_no_pad_decoder)
-}
-
 /// Decode a base64 title or msg into `buf` and check that the text is
 /// safe to show. Padding is optional. The caller must have checked the
 /// encoded length against `MAX_MSG_ENCODED_BYTES`.
 fn decode_text<'b>(encoded: &[u8], buf: &'b mut [u8; MAX_MSG_BYTES]) -> Result<&'b [u8], Error> {
-    let decoder = if encoded.ends_with(b"=") {
-        padded_decoder()
+    let decoder: &Base64Decoder = if encoded.ends_with(b"=") {
+        &STANDARD_DECODER
     } else {
-        unpadded_decoder()
+        &STANDARD_NO_PAD_DECODER
     };
 
     let len = decoder
