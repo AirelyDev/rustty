@@ -11206,19 +11206,3 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   comments describe. At the finale every row of `.port/phase-8/delta-review/R4-upstream-tests.tsv` is ticked by
   exact name (Phase 7's `w0/tests-checklist.txt` precedent), and each ported test keeps upstream's name so the
   checklist can be read by grep.
-
-## N570 — Review Focus 3's "OSC 1337 ; File=" input never reaches unknown capture (OSC 1337 is supported)
-
-- **id**: N570 (provisional, P8-W4 range). P8-W4 T2 (R2 §2.1, DECISIONS P4, Review Focus 3). **severity**: low (a
-  test-specification error; no behavioural defect). **kind**: spec correction. **state**: FIXED in the test.
-- **cause**: Review Focus 3 asks for "a 1 MiB OSC 1337 payload with unknown capture enabled" that must truncate at
-  the limit. OSC 1337 is a supported number (`State::S1337` → `parsers::iterm2`), and upstream's own test
-  `OSC unknown: supported commands are unchanged` asserts that a supported number is never reported as unknown, even
-  with an unsupported body (`1337;SetUserVar=…`). Its 1 MiB body overflows the fixed buffer and the sequence is
-  dropped (`.invalid`), in Ghostty and in Rustty alike.
-- **resolution**: `osc_unknown_huge_sequence_is_bounded_at_the_limit` (`osc/parsers/unknown.rs`) feeds the same
-  shape with an unimplemented number, `7400;File=` + 1 MiB of `A` in 4 KiB slices at a 4 KiB limit (the allocating
-  tier): content is the 10-byte prefix plus `4096 - 10` body bytes, `truncated` is set, the capture's capacity never
-  exceeds 4096 after any slice, the counting allocator's peak stays ≤ 4096 with nothing live afterwards, and the next
-  `0;title` parses. With capture disabled the same input allocates nothing. A third leg keeps the literal
-  `1337;File=` input and asserts it is dropped, reports nothing and allocates nothing with capture enabled.

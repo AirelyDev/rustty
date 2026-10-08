@@ -1394,6 +1394,7 @@ fn osc_tag_name(osc: &OscCommand) -> &'static str {
         OscCommand::ContextSignal(_) => "context_signal",
         OscCommand::KittyDesktopNotification(_) => "kitty_desktop_notification",
         OscCommand::Unknown(_) => "unknown",
+        OscCommand::ProgramStatus(_) => "program_status",
     }
 }
 
@@ -1586,6 +1587,22 @@ fn encode_metadata_osc(md: &mut Metadata, osc: &OscCommand) {
                 dupe_z(terminator_tag(u.terminator).as_bytes()),
             );
         }
+
+        // program_status: union(enum) { query: Terminator, report: Report }
+        // (bae2c3cdb) ⇒ `.union` arm: `encodeMetadataSingle(tag_name, payload)`,
+        // so `query` is the terminator's tag name and `report` (a struct) is
+        // its type name.
+        OscCommand::ProgramStatus(ps) => match ps {
+            rustty_vt::osc::parsers::program_status::Command::Query(t) => {
+                md.put(b"query", dupe_z(terminator_tag(*t).as_bytes()));
+            }
+            rustty_vt::osc::parsers::program_status::Command::Report(_) => {
+                md.put(
+                    b"report",
+                    single_struct::<rustty_vt::osc::parsers::program_status::Report>(),
+                );
+            }
+        },
     }
 }
 

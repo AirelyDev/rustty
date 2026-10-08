@@ -1135,6 +1135,14 @@ pub(crate) fn std_base64_standard_decoder() -> Base64Decoder {
     Base64Decoder::init(std_base64_standard_alphabet_chars(), Some(b'='))
 }
 
+/// `std.base64.standard_no_pad.Decoder`.
+// PORT NOTE: `Base64Decoder.init(standard_alphabet_chars, null)`, the decoder
+// OSC 7501 (`bae2c3cdb`) uses for an unpadded `title` or `msg`; shared here
+// rather than adding a third base64 decoder.
+pub(crate) fn std_base64_standard_no_pad_decoder() -> Base64Decoder {
+    Base64Decoder::init(std_base64_standard_alphabet_chars(), None)
+}
+
 /// Zig's `std.base64.standard_alphabet_chars`.
 fn std_base64_standard_alphabet_chars() -> [u8; 64] {
     *b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"

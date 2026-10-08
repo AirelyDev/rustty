@@ -280,6 +280,13 @@ impl<H: Handler> Stream<H> {
                 log::debug!(target: LOG_SCOPE, "unimplemented OSC callback: {cmd:?}");
             }
 
+            // .program_status => |v| self.handler.vt(.program_status, v),
+            // PORT NOTE (P8-W4 T3): the `program_status` action lands with
+            // P8-W5 T2; until then the command is parsed but not dispatched.
+            osc::Command::ProgramStatus(_) => {
+                log::debug!(target: LOG_SCOPE, "unimplemented OSC callback: {cmd:?}");
+            }
+
             osc::Command::ConemuSleep { .. }
             | osc::Command::ConemuShowMessageBox(_)
             | osc::Command::ConemuChangeTabTitle(_)

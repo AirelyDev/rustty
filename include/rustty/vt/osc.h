@@ -102,6 +102,16 @@ typedef enum RUSTTY_ENUM_TYPED {
    * Otherwise these sequences are RUSTTY_OSC_COMMAND_INVALID.
    */
   RUSTTY_OSC_COMMAND_UNKNOWN = 27,
+
+  /**
+   * A program status report or support query (OSC 7501), which a program
+   * sends to say what it is doing, such as working or waiting on the user.
+   *
+   * The OSC parser only identifies this command. To receive the report's
+   * contents, use a terminal with RUSTTY_TERMINAL_OPT_PROGRAM_STATUS
+   * instead (see RusttyTerminalProgramStatus).
+   */
+  RUSTTY_OSC_COMMAND_PROGRAM_STATUS = 28,
   RUSTTY_OSC_COMMAND_TYPE_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE,
 } RusttyOscCommandType;
 

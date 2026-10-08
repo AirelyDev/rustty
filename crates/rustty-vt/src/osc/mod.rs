@@ -326,6 +326,11 @@ pub enum Command<'p> {
     /// An OSC sequence whose number this parser does not implement. Only
     /// produced when `Parser.unknown_max_bytes` is nonzero.
     Unknown(Unknown<'p>),
+
+    /// Program status protocol (OSC 7501). A program reports what it is
+    /// doing, such as working or waiting on the user, or asks whether the
+    /// terminal supports the protocol. See `ProgramStatus`.
+    ProgramStatus(ProgramStatus<'p>),
 }
 
 /// An OSC sequence whose number this parser does not implement. For
@@ -434,6 +439,7 @@ impl Command<'_> {
             Command::ContextSignal(_) => CommandKey::ContextSignal,
             Command::KittyDesktopNotification(_) => CommandKey::KittyDesktopNotification,
             Command::Unknown(_) => CommandKey::Unknown,
+            Command::ProgramStatus(_) => CommandKey::ProgramStatus,
         }
     }
 }
@@ -476,6 +482,7 @@ pub enum CommandKey {
     ContextSignal,
     KittyDesktopNotification,
     Unknown,
+    ProgramStatus,
 }
 
 /// PORT NOTE: `parsers.semantic_prompt.Command` re-exported as
@@ -493,6 +500,10 @@ pub type KittyDndProtocol<'p> = parsers::kitty_dnd_protocol::OSC<'p>;
 /// PORT NOTE: `parsers.kitty_desktop_notification.OSC` re-exported as
 /// `Command.KittyDesktopNotification` (`9a8e7ae18`).
 pub type KittyDesktopNotification<'p> = parsers::kitty_desktop_notification::OSC<'p>;
+
+/// PORT NOTE: `parsers.program_status.Command` re-exported as
+/// `Command.ProgramStatus` (`bae2c3cdb`).
+pub type ProgramStatus<'p> = parsers::program_status::Command<'p>;
 
 /// PORT NOTE: `Command.ProgressReport` — the ConEmu progress report payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -854,6 +865,9 @@ pub enum State {
     S55,
     S66,
     S72,
+    S75,
+    S750,
+    S7501,
     S77,
     S99,
     S104,
@@ -936,6 +950,9 @@ impl State {
             State::S55 => b"55",
             State::S66 => b"66",
             State::S72 => b"72",
+            State::S75 => b"75",
+            State::S750 => b"750",
+            State::S7501 => b"7501",
             State::S77 => b"77",
             State::S99 => b"99",
             State::S104 => b"104",
@@ -1760,7 +1777,25 @@ impl Parser {
             State::S7 => match c {
                 b';' => self.capture_trailing(CaptureMode::Fixed),
                 b'2' => self.state = State::S72,
+                b'5' => self.state = State::S75,
                 b'7' => self.state = State::S77,
+                _ => self.unknown_or_invalid(Some(c)),
+            },
+
+            State::S75 => match c {
+                b'0' => self.state = State::S750,
+                _ => self.unknown_or_invalid(Some(c)),
+            },
+
+            State::S750 => match c {
+                b'1' => self.state = State::S7501,
+                _ => self.unknown_or_invalid(Some(c)),
+            },
+
+            // Allocating-mode capture, as `S72`: a report body may be up to
+            // 4087 bytes, exceeding the fixed buffer.
+            State::S7501 => match c {
+                b';' => self.capture_trailing(CaptureMode::Allocating),
                 _ => self.unknown_or_invalid(Some(c)),
             },
 
@@ -1864,6 +1899,8 @@ impl Parser {
             | State::S55
             | State::S552
             | State::S6
+            | State::S75
+            | State::S750
             | State::S77 => {
                 self.unknown_or_invalid(None);
                 if self.state == State::Invalid {
@@ -1920,6 +1957,8 @@ impl Parser {
             State::S72 => parsers::kitty_dnd_protocol::parse(self, terminator_ch),
 
             State::S99 => parsers::kitty_desktop_notification::parse(self, terminator_ch),
+
+            State::S7501 => parsers::program_status::parse(self, terminator_ch),
 
             State::S133 => parsers::semantic_prompt::parse(self, terminator_ch),
 

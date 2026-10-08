@@ -72,6 +72,9 @@ mod tests {
         State::S55,
         State::S66,
         State::S72,
+        State::S75,
+        State::S750,
+        State::S7501,
         State::S77,
         State::S99,
         State::S104,
@@ -419,29 +422,37 @@ mod tests {
     fn osc_unknown_allocating_tier() {
         let limit = MAX_BUF * 2;
 
-        let mut p = Parser::init(Some(crate::alloc::Global));
-        p.unknown_max_bytes = limit;
+        // PORT NOTE: upstream's `testing.allocator` fails the test on a leak;
+        // the counting allocator's live bytes are checked after `deinit`.
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let mut p = Parser::init(Some(alloc));
+            p.unknown_max_bytes = limit;
 
-        p.next_slice(b"7400;");
-        assert!(is_allocating(&p));
+            p.next_slice(b"7400;");
+            assert!(is_allocating(&p));
 
-        let body = vec![b'a'; limit];
+            let body = vec![b'a'; limit];
 
-        // Fill to exactly the limit, including the 5 identifier bytes.
-        p.next_slice(&body[..limit - 5]);
-        assert_eq!(State::Unknown, p.state);
-        assert_eq!(limit, allocating_capacity(&p));
+            // Fill to exactly the limit, including the 5 identifier bytes.
+            p.next_slice(&body[..limit - 5]);
+            assert_eq!(State::Unknown, p.state);
+            assert_eq!(limit, allocating_capacity(&p));
 
-        // One more byte truncates without growing the allocation.
-        p.next_slice(b"a");
-        assert_eq!(State::UnknownTruncated, p.state);
-        assert_eq!(limit, allocating_capacity(&p));
+            // One more byte truncates without growing the allocation.
+            p.next_slice(b"a");
+            assert_eq!(State::UnknownTruncated, p.state);
+            assert_eq!(limit, allocating_capacity(&p));
 
-        let cmd = unknown(p.end(Some(0x07)).unwrap());
-        assert!(cmd.truncated);
-        assert_eq!(limit, cmd.content.len());
-        assert!(cmd.content.starts_with(b"7400;aaa"));
-        p.deinit();
+            let cmd = unknown(p.end(Some(0x07)).unwrap());
+            assert!(cmd.truncated);
+            assert_eq!(limit, cmd.content.len());
+            assert!(cmd.content.starts_with(b"7400;aaa"));
+            p.deinit();
+        });
+        assert!(counting.alloc_calls.get() > 0);
+        assert_eq!(0, counting.live_bytes.get());
     }
 
     // test "OSC unknown: large limit without allocator uses fixed buffer"
@@ -569,9 +580,14 @@ mod tests {
     //
     // PORT NOTE: the review names "OSC 1337 ; File=" as the payload, but OSC
     // 1337 is a supported number (iTerm2), so its body is never captured as
-    // unknown ("supported commands are unchanged"). The unknown leg uses an
-    // unimplemented number with the same body; the 1337 leg asserts the
-    // supported path stays bounded and allocation free.
+    // unknown (upstream's `OSC unknown: supported commands are unchanged`
+    // asserts a supported number is never reported as unknown, even with an
+    // unsupported body). Its 1 MiB body overflows the fixed buffer and the
+    // sequence is dropped (`.invalid`), in Ghostty and in Rustty alike. That
+    // was an error in the review's example, not a defect, so no finding is
+    // recorded. The unknown leg uses an unimplemented number with the same
+    // body; the 1337 leg asserts the supported path stays bounded and
+    // allocation free.
     #[test]
     fn osc_unknown_huge_sequence_is_bounded_at_the_limit() {
         const LIMIT: usize = 4096;

@@ -1960,6 +1960,7 @@ static DECLS: &[TypeDecl] = {
                     ("context_signal", ContextSignal),
                     ("kitty_desktop_notification", KittyDesktopNotification),
                     ("unknown", Unknown),
+                    ("program_status", ProgramStatus),
                 ]
             )
         ),
