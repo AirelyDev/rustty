@@ -77,7 +77,10 @@ def pixel(f, m, rng):
     def frac(mask):
         return np.asarray(Image.fromarray((mask * 255).astype(np.uint8), "L").resize((sw, sh), Image.BOX)) / 255.0
 
-    def sym(x):  # Ferris is mirror-symmetric: mirror the left half so the pixel grid is too
+    def sym(x):
+        # Deliberate pixel-sprite symmetrization (approved at gate 2). Ferris's raster is NOT
+        # exactly symmetric, but at this cell size the asymmetric eye and leg pixels read as
+        # L/J shapes, so the left half is mirrored to give a clean sprite.
         return np.concatenate([x[:, :(sw + 1) // 2], x[:, :sw // 2][:, ::-1]], axis=1)
 
     sa = sym(frac(m.alpha > 0.5))
