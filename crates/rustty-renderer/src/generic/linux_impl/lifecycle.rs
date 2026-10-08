@@ -32,6 +32,9 @@ impl Renderer {
         // );   (generic.zig:701-705, `40d5b860d`)
         // errdefer api.deinit();
         //
+        // R7: `Options.device` must point to a live `Device` (see the field's contract);
+        // this safe fn dereferences it below.
+        assert!(!options.device.is_null());
         // SAFETY: `options.device` is the app-scoped render device, which outlives
         // every renderer (the core `App` frees it after all surfaces; `Options`).
         let api = unsafe { OpenGL::init(options.device, options.config.blending) }?;
@@ -297,7 +300,11 @@ impl Renderer {
     /// The `draw_mutex` block of [`Self::thread_exit`]. The caller holds
     /// `draw_mutex`.
     pub fn thread_exit_locked(&mut self) {
-        // Release swap chain and shaders.
+        // Release swap chain and shaders. Shaders are only freed
+        // while unrealized and not every apprt unrealizes before
+        // destroying a surface (macOS never does), so mark it
+        // unrealized. This also stops any later draw.
+        self.display_realized = false;
         self.release_gpu_resources();
 
         // We don't release images in `releaseGpuResources`

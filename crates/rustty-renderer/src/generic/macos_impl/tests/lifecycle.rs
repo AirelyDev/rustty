@@ -370,3 +370,31 @@ mod offscreen_resize {
         deinit_test_renderer(&mut r);
     }
 }
+
+/// `140feb86a`: `threadExit` marks the display unrealized before
+/// `releaseGpuResources`. The macOS apprt never unrealizes, so without it each
+/// closed surface leaked its render pipelines and shader library; it also
+/// stops any later draw.
+#[test]
+fn thread_exit_unrealizes_the_display() {
+    let mut r = match golden_renderer(10, 3) {
+        Some(r) => r,
+        None => return, // Metal-skip
+    };
+    r.draw_frame(false).expect("first draw");
+    assert!(r.display_realized);
+    assert!(r.swap_chain.is_some());
+    assert!(!r.shaders.defunct);
+
+    r.thread_exit();
+    assert!(!r.display_realized, "threadExit unrealizes the display");
+    assert!(r.swap_chain.is_none());
+    assert!(r.shaders.defunct, "the shaders are released on thread exit");
+
+    // A later draw returns early and rebuilds nothing.
+    r.draw_frame(true).expect("draw after thread exit");
+    assert!(r.swap_chain.is_none());
+    assert!(r.shaders.defunct);
+
+    deinit_test_renderer(&mut r);
+}

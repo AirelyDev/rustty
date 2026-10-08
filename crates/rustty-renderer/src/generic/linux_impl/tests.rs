@@ -357,6 +357,39 @@ fn linux_opengl_display_unrealize_then_realize_releases_and_rebuilds_on_the_rend
     deinit_test_renderer(&mut r);
 }
 
+/// `140feb86a`: `threadExit` marks the display unrealized before
+/// `releaseGpuResources`, so the shaders are freed even for an apprt that never
+/// unrealizes (macOS), and no later draw rebuilds resources after the render
+/// thread is gone. Plays the render thread with its own lock handle (N437).
+#[test]
+fn linux_opengl_thread_exit_unrealizes_the_display() {
+    let _guard = test_support::gl_lock();
+    let Some(mut r) = golden_renderer(10, 3) else {
+        return;
+    };
+    r.draw_frame(false).expect("first draw");
+    assert!(r.display_realized);
+    assert!(r.swap_chain.is_some());
+    assert!(!r.shaders.defunct);
+
+    // The `draw_mutex` block of `threadExit` (the API teardown is left to
+    // `deinit_test_renderer`'s own `thread_exit`).
+    let lock = r.draw_mutex.clone();
+    lock.lock();
+    r.thread_exit_locked();
+    lock.unlock();
+    assert!(!r.display_realized, "threadExit unrealizes the display");
+    assert!(r.swap_chain.is_none());
+    assert!(r.shaders.defunct, "the shaders are released on thread exit");
+
+    // A later draw returns early and rebuilds nothing.
+    r.draw_frame(true).expect("draw after thread exit");
+    assert!(r.swap_chain.is_none());
+    assert!(r.shaders.defunct);
+
+    deinit_test_renderer(&mut r);
+}
+
 /// `setVisible(false)` releases the swap chain on the render thread
 /// (`2f0b65346`: the pin's GTK arm skipped the release, because the GLArea
 /// owned the context), but not the shaders while the display is realized
