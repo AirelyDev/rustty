@@ -11154,4 +11154,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   clear at `cols - 1` when the cell there is `Wide::Wide`, reading it through the raw row pointer. Tests:
   `terminal_resize_less_cols_without_reflow_cutting_wide_char_tail` (upstream's test) and the Rustty-only
   stream-level `terminal_resize_less_cols_on_alt_screen_then_ich_and_el1_with_a_cut_wide_char`; both RED before
-  the fix, GREEN after (debug, release, Miri).
+  the fix in debug and in release (observed: the upstream test fails its `is_empty` assertion; the alt-screen
+  test fails "no wide head in the last column" right after the resize, and with that assertion disabled the
+  release build still fails "cell 9 written", because a background SGR makes the stray blank non-empty), GREEN
+  after in debug (206 resize tests), release (17) and Miri (17, no UB).

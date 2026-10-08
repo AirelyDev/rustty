@@ -507,8 +507,21 @@ fn terminal_resize_less_cols_on_alt_screen_then_ich_and_el1_with_a_cut_wide_char
     )
     .unwrap();
 
+    // The cut must not leave a wide head in the new last column.
+    {
+        let list_cell = t.active_mut().pages.get_cell(active_pt(8, 0)).unwrap();
+        assert_ne!(crate::page::Wide::Wide, unsafe { (*list_cell.cell).wide() });
+    }
+
     {
         let mut stream = t.vt_stream();
+        // A background color makes every blank cell a BgColorPalette cell,
+        // which `is_empty` rejects, so a stray write past the row shows up
+        // in the capacity loop below even in release builds.
+        stream.next_slice(b"\x1b[41m");
+        // ICH from column 0: a row shift over the narrowed row.
+        stream.next_slice(b"\x1b[1;1H");
+        stream.next_slice(b"\x1b[@");
         // Cursor to the last column, then ICH and EL 1.
         stream.next_slice(b"\x1b[1;9H");
         stream.next_slice(b"\x1b[@");
@@ -518,8 +531,8 @@ fn terminal_resize_less_cols_on_alt_screen_then_ich_and_el1_with_a_cut_wide_char
 
     let list_cell = t.active_mut().pages.get_cell(active_pt(8, 0)).unwrap();
     let cell = unsafe { *list_cell.cell };
-    assert!(cell.is_empty());
     assert_eq!(crate::page::Wide::Narrow, cell.wide());
+    assert!(!cell.has_text());
 
     // Nothing at or past `cols` was written, up to the page capacity.
     let page = unsafe { &*crate::pagelist::Node::page(list_cell.node) };
