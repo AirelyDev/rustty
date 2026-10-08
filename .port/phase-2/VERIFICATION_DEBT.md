@@ -2744,7 +2744,10 @@ items that Phase 8 ports into `ci.yml`; they join this debt when written, and ar
 
 - `test-esctest` (`438d584f0`, `edcaf6670`; ported by P8-W8 T1): a report-only job (`continue-on-error: true`, not in
   `required.needs`) that builds the `test/esctest` package outside the workspace, fetches esctest2 by sha256 into
-  `target/`, runs it against a `rustty_vt_c` terminal (a pty-less driver), and uploads the log with a step-summary tally.
+  `target/share/esctest` (`test/esctest/fetch.sh`), runs it under a pty against a `rustty-vt` terminal (upstream's
+  runner uses the `ghostty-vt` Zig module, not the C ABI), and uploads the log with a step-summary tally. Written by
+  P8-W8 T1; locally its run matches the reference's runner test for test (G-ESCTEST GREEN, 264 passed, 42 known
+  bugs, 261 failed on both, macOS and rvm).
   First run needs: the esctest2 fetch on the runner, the python3 esctest2 run on `ubuntu-latest`, and the pass tally recorded.
 - the Windows DLL steps (`a7cf951eb`; ported by P8-W5 T4) in `ci.yml`'s `windows` job: build `example/c-vt-effects`
   against `rustty_vt_c.dll`, copy the DLL beside the exe, run it under `pwsh` and print the exit code as `0x%08X`.

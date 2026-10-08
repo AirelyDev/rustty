@@ -8,6 +8,7 @@ the gate suite.
 
 | Path             | What it is                                                                            |
 | ---------------- | ------------------------------------------------------------------------------------- |
+| `esctest/`       | Runs esctest against librustty-vt (a separate Cargo package; see its README).         |
 | `pkgconfig/`     | The C smoke program `G-CCONSUMER` compiles against the installed pkg-config metadata. |
 | `windows/`       | `test_dll_init.c` — loads `rustty_apprt_c.dll` and calls across the C ABI.            |
 | `ucs-detect.sh`  | Runs [ucs-detect](https://github.com/jquast/ucs-detect) with pinned settings.         |

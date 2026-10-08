@@ -3357,6 +3357,23 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    in highway, use `__atomic_load_n`/`__atomic_store_n` (relaxed) for `mask_` in the `HWY_NO_LIBCXX` branch when the compiler is GCC or clang; or, in Ghostty, call the dispatch initialisation once under a lock before any thread can dispatch.
 - upstream status: not reported
 
+### UD378 — the esctest runner writes its log to a predictable name in the shared `/tmp`
+
+- id:              UD378 (P8-W8 T1)
+- kind:            non-crash (security: insecure temporary file, CWE-377; R13)
+- upstream project: ghostty
+- severity:        low (a developer and CI test tool, not the app or the library; needs another local user on the same machine)
+- reference:       at a60e9e2a5, `test/esctest/src/main.zig:113-121` builds the log path `/tmp/esctest-libghostty-{pid}.log` (`std.fmt.allocPrintSentinel` with `std.c.getpid()`), passes it to esctest as `--logfile=`, reads it back in `copyLog` and unlinks it with `defer _ = std.c.unlink(log_path)`.
+- defect:          the name is predictable and lives in a directory every local user can write to, so another user can create the file, or a symlink by that name, before the run; esctest then writes its log through it, the runner copies whatever is there to stdout, and the unlink removes the planted entry. A temporary file should be created in a directory only its owner can use.
+- ReleaseSafe:     no crash; the log goes wherever the planted name points.
+- ReleaseFast:     the same.
+- reachability:    another local user on the machine running `zig build run` in `test/esctest` (a shared development host or CI runner).
+- port handling:   `test/esctest/src/main.rs` `LogDir`: the log is `esctest.log` inside a fresh directory from `mkdtemp` on `$TMPDIR/esctest-librustty-XXXXXX` (`/tmp` without TMPDIR), mode 0700, checked (a real directory, owned by the user, mode 0700) before use; the file and the directory are removed on every return path (`PORT NOTE (UD378)`). Everything else is upstream's.
+- parity row(s):   none; found by the controller's security review of the P8-W8 T1 commit.
+- test:            `test/esctest` `unix::tests::log_path_is_inside_a_fresh_private_directory` (RED with upstream's path: the log's parent is `/tmp`, not the fresh directory; GREEN with the fix) and `check_private_rejects_shared_directories_and_symlinks` (`cargo test --manifest-path test/esctest/Cargo.toml`).
+- proposed fix:    create the log in a directory made with `mkdtemp` (or open it `O_CREAT | O_EXCL` inside a private directory) and remove both afterwards.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

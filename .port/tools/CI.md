@@ -76,6 +76,38 @@ local iteration.
 > worktree finds the main checkout's sibling; a measured difference is RED. It needs
 > neither Zig nor the oracle, so it binds on CI too.
 
+> **G-ESCTEST** (`check_esctest.sh`, P8-W8 T1, DECISIONS P3; upstream 438d584f0 and
+> edcaf6670) runs esctest2 against librustty-vt through the port's `test/esctest`
+> runner (a separate Cargo package; esctest2 fetched by `test/esctest/fetch.sh`,
+> pinned and SHA-256 checked) and against libghostty-vt through the reference's own
+> `test/esctest` runner, built with `zig build` in a temporary `git archive` of the
+> commit in `ORACLE_PIN` (never in the oracle or the Rustty tree, R3). It parses
+> each log into one outcome per test (pass, fail, known-bug, skip) and the test's
+> log block, with the two install paths normalized, and is RED when an outcome
+> differs in either direction, when a block differs, when the logs name different
+> tests, or when the Rustty log has no tally. A difference is accepted only by a
+> row of `esctest_known_diffs.tsv` naming its UD or N record, and a row whose
+> difference no longer occurs is RED (stale). Upstream's `test-esctest` job is
+> report-only because most of the suite fails there; the differential is the
+> parity value. Exit 0 GREEN / 1 RED / 3 BLOCKED (no oracle with the pinned commit,
+> no Zig, python3, cargo or curl, no network for esctest2 or the reference's Zig
+> packages, or an oracle log without a tally). BLOCKED on CI, where `ci.yml`'s
+> report-only `test-esctest` job runs the port's side alone. `G-ESCTEST-SELF`
+> (`--self-test`) checks the comparison on fixture logs: a matching pair (also
+> under different install paths) is GREEN; an outcome difference either way, a
+> detail difference, a missing test, a Rustty log without a tally, two empty logs,
+> a stale ledger row, a ledger row with other outcomes and one without a record id
+> are RED; an oracle log without a tally is BLOCKED. Its target-directory arms run a
+> copy of the gate with stand-in tools: with `CARGO_TARGET_DIR` set, the fetch, the
+> build and the run all use that directory, and a build that leaves no runner is RED
+> without a stale runner ever running.
+>
+> Disk: a local G-ESCTEST run leaves the port's Debug build of `test/esctest`, about
+> 1.2 GB, in `test/esctest/target` (or `CARGO_TARGET_DIR`), outside the root
+> `target/`. It goes when the worktree is removed (memory `cleanup-as-you-go`); delete
+> it by hand on a long-lived checkout. The oracle's copy and build are in a temporary
+> directory the gate deletes.
+
 > **G5 (differential fuzz)** and **G6 (leak-free)** are wired progress-mode
 > runners now. G5: if `cargo fuzz` + the `vt_diff` target in
 > `crates/rustty-vt/fuzz/` exist it runs a short smoke budget and fails on any
@@ -103,7 +135,7 @@ local iteration.
 
 In the `WARNINGS` summary each BLOCKED gate is followed by up to three
 `reason:` lines, copied from the `BLOCKED` lines the gate printed. A gate that
-is an expected warning on a lane (G4, G-EOL, D10, G-LOGFILE, G-REFGEOM on CI) can
+is an expected warning on a lane (G4, G-EOL, D10, G-LOGFILE, G-REFGEOM, G-ESCTEST on CI) can
 therefore not hide a new, different reason behind the same gate id: read the
 reason, not just the id.
 
@@ -111,7 +143,8 @@ For the oracle gates, exit 3 means the oracle is **absent, off the pin
 (`.port/tools/gates/ORACLE_PIN`), or dirty**, or the pin file itself is missing
 or malformed: G-EOL arm 3, G4's staleness guard, G-LOGFILE and G-REFGEOM need the
 oracle's HEAD to equal `ORACLE_PIN` (G-REFGEOM is also BLOCKED without Zig); D10 needs the oracle to have that commit (it reads
-`src/stb` at the pin, whatever HEAD is). See `.port/ORACLE_SYNC.md`.
+`src/stb` at the pin, whatever HEAD is), and so does G-ESCTEST (it archives the
+pinned commit). See `.port/ORACLE_SYNC.md`.
 
 ---
 
@@ -166,7 +199,7 @@ the ghostty oracle checkout is absent on CI ⇒ probe exits 3 BLOCKED.) Locally,
 G4's driver-source staleness guard also BLOCKS (exit 3) when the oracle is
 absent, is not at `ORACLE_PIN`, lacks a built `zig-out/include`, or there is no
 C compiler, and when `ORACLE_PIN` is missing or malformed. G-EOL, D10,
-G-LOGFILE and G-REFGEOM are BLOCKED on CI for the same no-oracle reason; `ci.yml`'s policy
+G-LOGFILE, G-REFGEOM and G-ESCTEST are BLOCKED on CI for the same no-oracle reason; `ci.yml`'s policy
 note names all of them.
 
 ---

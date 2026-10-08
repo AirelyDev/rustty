@@ -1,0 +1,41 @@
+# esctest-librustty — runs esctest against librustty-vt.
+#
+# PORTS: ghostty `test/esctest/build.zig` + `build.zig.zon` (438d584f0,
+# edcaf6670). See README.md.
+#
+# A separate package OUTSIDE the root workspace, the way upstream keeps
+# `test/esctest` a separate Zig package (DECISIONS P3): the empty
+# `[workspace]` below makes this directory its own workspace root, so
+# `cargo build --workspace` at the repository root never builds it, and this
+# package has its own `Cargo.lock` and `target/`. Build it with
+# `cargo build --manifest-path test/esctest/Cargo.toml`.
+#
+# R3: no dependency on the ghostty tree. esctest itself is Python, fetched by
+# `fetch.sh` (pinned and hash-checked), never by a build script: Cargo has no
+# lazy-dependency or install step, so the fetch is its own command.
+[package]
+name = "esctest-librustty"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.93"
+license = "MIT"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "esctest-librustty"
+path = "src/main.rs"
+
+[dependencies]
+# `.ghostty = .{ .path = "../../" }` and `dep.module("ghostty-vt")`: the
+# terminal module's own API, which in this port is the `rustty-vt` crate (the
+# C ABI over it is `rustty-vt-c`; upstream's runner does not go through the C
+# ABI either). `simd` is the `-Dsimd` default every non-wasm librustty-vt
+# build has (`rustty-vt-c`'s `default` turns it on the same way).
+rustty-vt = { path = "../../crates/rustty-vt", features = ["simd"] }
+# The `log` facade rustty-vt logs through; this runner installs the backend
+# (upstream's `std_options.logFn`).
+log = "0.4.33"
+# forkpty and execvp come from libc (upstream: `.link_libc = true`).
+libc = "0.2"
