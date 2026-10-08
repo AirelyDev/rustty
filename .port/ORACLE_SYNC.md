@@ -126,6 +126,30 @@ The phase fixed and documented 21 reference defects (UD352–UD372) and opened 2
 The full lanes and the benches are P7-W12 T2. Records: `.port/phase-7/README.md` §"Finale table"
 and the `phase-7/*` merge series.
 
+**PHASE-8 FINALE (2026-10-08): at `a60e9e2a5`, GREEN except G3b and one test crate.** Every
+workstream (W0–W8) is merged into `phase-8-upstream-resync` (finale base `0d73a3075`). G-TESTS is
+GREEN: 4,277 live-oracle test blocks, 0 unexplained. The R4 checklist
+(`.port/phase-8/w0/tests-checklist.txt`) has the 90 added upstream tests present by exact name (the
+19 that N519's matcher masks ticked by hand) and the 30 changed bodies re-aligned. G-FILES (562 files)
+and G-SYMS (2,908 `pub fn`) have 0 unexplained. G1b, G1, G-LOGFILE (after re-anchoring 19
+`LOG-ABSENT-SITES.tsv` rows to the pin), G-CENSUS, A3, A4, A5 (3 identical runs), G4 (drivers
+rebuilt at the pin; leg B 25 identical), G-REFGEOM, G-EOL, G-I18N, G-THEMES (657), G-UDDOCS,
+G-PARITY, G7, G9 (777 / 777), G-P2, G-ORACLE-SH-SELF, G-SKIP, G-ESCTEST (567 tests, identical) and
+the whole post-merge set are GREEN. G3b is RED on three reference comments in translated doc examples
+(two in vt, one apprt under `--strict`), and `rustty-extra`'s generated-file goldens lack P8-W3 T2's
+two config keys (6 tests); both are code fixes owed before the merge to `main`.
+
+The phase fixed and documented 1 reference defect (UD378) and opened 14 port findings (N517–N530):
+all closed except the record-only N519, N520 and N522. The targeted cross-host checks passed:
+
+- rvm: the GTK-feature workspace clippy, `cargo test -p` for the 18 touched packages (except the
+  `rustty-extra` goldens above), the env-gated no-EGL App test and 18 live GTK KATs;
+- rwin: `rustty_vt_c.dll` (x64 MSVC) with `c-vt-effects`, byte-identical to the golden;
+- macOS: xcodebuild RusttyTests, 404 passed; menu-shortcut parity, 51 actions.
+
+The full lanes and the benches are P8-W9 T2. Records: `.port/phase-8/README.md` §"Finale table"
+and the `phase-8/*` merge series.
+
 The previous pin, `4749c4e93`, was a **stale baseline**: work from beyond it had been ported by
 WS5–WS8 and tracked in an ad-hoc "beyond-pin series" table (BL-1…BL-7) that existed only because the
 pin had not moved. That table is **gone**. Its contents were either absorbed by the advance (the

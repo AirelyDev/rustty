@@ -356,6 +356,13 @@ committed records named here.
   `/tmp` name; Rustty uses a private mkdtemp directory) FIXED; N530 CLOSED (G3b self-test and G4 leg B drifted at the
   pin advance; `c-vt-effects` and `c-vt-formatter` brought back to upstream's examples). **Next free ids: UD379, N531,
   V34.**
+- **Phase 8 finale (P8-W9 T1, at `a60e9e2a5`).** Phase 8 used UD378 and N517–N530, and no V. UD378 is FIXED (one
+  status line, one docs row). N517, N518, N521 and N523–N530 are CLOSED; N519, N520 and N522 are RECORD-ONLY; none is
+  open. The finale re-anchored 19 `LOG-ABSENT-SITES.tsv` rows to the pin (G-LOGFILE GREEN), named the pin
+  symbolically in `cvt-parity.sh` (G-ORACLE-SH-SELF GREEN) and added three `COMMENT-NOT-CARRIED.tsv` rows for
+  `lib_vt.zig`'s `DllMain` doc (cap 79), with no new id. Owed before the merge to `main` (code, not records; see
+  `.port/phase-8/README.md` §"Open at the finale"): the `rustty-extra` goldens for the two `vt-xt-checksum-*` keys,
+  and three doc-example comments G3b reports. **Next free ids: UD379, N531, V34.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.
