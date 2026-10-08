@@ -217,6 +217,9 @@ impl rustty_lib::allocator::ZigAllocator for RawZigAllocator<'_> {
 /// Zig-compatible wrapper that calls through to the stored C callback.
 /// The C callback allocates the pixel data through the provided allocator,
 /// so we can take ownership directly.
+///
+/// Returns `error.InvalidData` if no callback is installed, if the callback
+/// returns false, or if it returns true without setting `data`.
 // PORT NOTE: the reference signature is
 //   fn decodePngWrapper(alloc: std.mem.Allocator, data: []const u8)
 //       terminal_sys.DecodeError!terminal_sys.Image
@@ -242,7 +245,14 @@ fn decode_png_wrapper(
     let zref = rustty_lib::allocator::ZigAllocatorRef::new(&zig_alloc);
     let c_alloc = CAllocator::from_zig(&zref);
 
-    // var out: Image = undefined;
+    // Hand the callback a zeroed struct instead of an undefined one. The
+    // callback stores a pointer into it, and runtimes that track pointers
+    // (Go, for example) require the memory to be initialized first. It
+    // also means a callback that returns true without setting `data` is
+    // caught by the null check below. The header documents this guarantee.
+    // var out: Image = std.mem.zeroes(Image);
+    // PORT NOTE (DECISIONS M5): Rust has no `undefined`, so the port always
+    // built this zeroed literal; `aca9bf031` makes the reference match.
     let mut out = Image {
         width: 0,
         height: 0,
@@ -1183,6 +1193,60 @@ pub(crate) mod tests {
         });
         // try std.testing.expect(terminal_sys.decode_png == null);
         assert!(terminal_sys::decode_png.read().unwrap().is_none());
+    }
+
+    // test "decode_png output is zeroed before the callback" {
+    #[test]
+    fn decode_png_output_is_zeroed_before_the_callback() {
+        let _guard = reset_global();
+        // const S = struct {
+        //     var seen: ?Image = null;
+        //     fn decode(_: ?*anyopaque, _: *const CAllocator, _: [*]const u8, _: usize, out: *Image) callconv(lib.calling_conv) bool {
+        //         // Record what we were given, then report success without
+        //         // filling anything in.
+        //         seen = out.*;
+        //         return true;
+        //     }
+        // };
+        static SEEN: std::sync::Mutex<Option<(u32, u32, usize, usize)>> =
+            std::sync::Mutex::new(None);
+        extern "C" fn decode(
+            _u: *mut std::ffi::c_void,
+            _a: *const CAllocator,
+            _d: *const u8,
+            _l: usize,
+            out: *mut Image,
+        ) -> bool {
+            // Record what we were given, then report success without
+            // filling anything in.
+            // SAFETY: `out` is the wrapper's live `Image`.
+            let seen = unsafe { *out };
+            *SEEN.lock().unwrap() =
+                Some((seen.width, seen.height, seen.data as usize, seen.data_len));
+            true
+        }
+        *SEEN.lock().unwrap() = None;
+
+        // try std.testing.expectEqual(Result.success, set(.decode_png, @ptrCast(&S.decode)));
+        // defer _ = set(.decode_png, null);
+        assert_eq!(Result::Success, unsafe {
+            set(Option_::DecodePng, decode as *const std::ffi::c_void)
+        });
+
+        // Success with no data is rejected rather than read as garbage.
+        // try std.testing.expectError(error.InvalidData, decodePngWrapper(std.testing.allocator, "png"));
+        assert!(matches!(
+            decode_png_wrapper(&terminal_sys::GlobalRawAllocator, b"png"),
+            Err(terminal_sys::DecodeError::InvalidData)
+        ));
+
+        // The callback saw an all-zero struct.
+        // try std.testing.expectEqual(std.mem.zeroes(Image), S.seen.?);
+        assert_eq!(Some((0, 0, 0, 0)), *SEEN.lock().unwrap());
+
+        assert_eq!(Result::Success, unsafe {
+            set(Option_::DecodePng, std::ptr::null())
+        });
     }
 
     #[test]

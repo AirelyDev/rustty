@@ -260,6 +260,7 @@ typedef enum {
     DECODER_DATA_DECODER_DATA_PROGRESS_ROWS = 6,
     DECODER_DATA_DECODER_DATA_PROGRESS_REMAINING = 7,
     DECODER_DATA_DECODER_DATA_RETAIN_CONTINUATION = 8,
+    DECODER_DATA_DECODER_DATA_COMPRESS_HISTORY = 9,
 } DecoderData;
 
 /**
@@ -413,6 +414,10 @@ typedef enum {
      * Output type: `mouse::Shape` (oracle 78494bad8/67fb0c940).
      */
     TERMINAL_DATA_TERMINAL_DATA_MOUSE_SHAPE = 41,
+    /**
+     * Output type: `TerminalMemoryUsage` (oracle 8834e161c).
+     */
+    TERMINAL_DATA_TERMINAL_DATA_MEMORY_USAGE = 42,
 } TerminalData;
 
 /**
@@ -1724,6 +1729,15 @@ void rustty_osc_reset(Parser parser);
  * command pointer aliases the parser and is valid until the next parse op.
  */
 Command rustty_osc_end(Parser parser, uint8_t terminator);
+
+/**
+ * C: rustty_osc_set
+ *
+ * # Safety
+ * `parser`, if non-null, must be a handle returned by `rustty_osc_new`;
+ * `value`, if non-null, must point to the option's input type.
+ */
+int rustty_osc_set(Parser parser, int option, const void *value);
 
 /**
  * C: rustty_osc_command_type

@@ -851,6 +851,19 @@ mod clear;
 mod cursor;
 mod select;
 
+/// The memory held by a screen. Returned by `Screen::memory_usage`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct MemoryUsage {
+    /// Page memory, which holds every cell along with its styles,
+    /// graphemes and hyperlinks.
+    pub pages: crate::pagelist::compress::MemoryUsage,
+
+    /// Bytes of image data stored through the Kitty graphics protocol.
+    /// Images are stored outside of pages, so this is not part of `pages`.
+    /// Always zero when Kitty graphics is disabled at build time.
+    pub image_bytes: usize,
+}
+
 impl Screen {
     /// Initialize a new screen.
     ///
@@ -977,6 +990,24 @@ impl Screen {
         }
         self.cursor.deinit(self.alloc);
         self.pages.deinit();
+    }
+
+    /// Return the memory held by this screen. Like `PageList.memoryUsage`,
+    /// this never restores a compressed page but does visit every page.
+    ///
+    /// PORTS: oracle@main Screen.zig `memoryUsage`.
+    pub fn memory_usage(&self) -> MemoryUsage {
+        MemoryUsage {
+            pages: self.pages.memory_usage(),
+            // PORT NOTE: `if (comptime build_options.kitty_graphics) ... else 0`;
+            // the field is always the real `ImageStorage` here (see
+            // `kitty_images`), so the gate is `options::KITTY_GRAPHICS`.
+            image_bytes: if crate::options::KITTY_GRAPHICS {
+                self.kitty_images.total_bytes
+            } else {
+                0
+            },
+        }
     }
 
     /// Assert that the screen is in a consistent state. This doesn't check

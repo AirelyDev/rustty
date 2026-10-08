@@ -337,7 +337,8 @@ pub enum Command<'p> {
 /// the sequence `ESC ] 7400;status=busy BEL`, `content` is
 /// "7400;status=busy" and `terminator` is `.bel`.
 // PORT NOTE: `Command.Unknown`, hoisted to module level like the other
-// payload types. `Unknown.C` and `cval()` belong to the C API (P8-W5 T3).
+// payload types. `Unknown.C` and `cval()` belong to the C API: they are
+// `rustty_vt_c::osc::UnknownOscSequence` (P8-W5 T3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Unknown<'p> {
     /// Every byte fed to the parser for this sequence, including the
@@ -2657,6 +2658,7 @@ mod s7_7_tests {
             handler: Titles::default(),
             allocator: Some(crate::alloc::Global),
             continuation_max_bytes: None,
+            osc_unknown_max_bytes: 0,
         });
         // (Compared as addresses, so no integer is cast back to a pointer:
         // strict provenance, S7-9.)

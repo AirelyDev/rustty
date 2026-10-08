@@ -819,6 +819,7 @@ impl<M: AppMailbox> Termio<M> {
                 allocator: Some(rustty_vt::alloc::Global),
                 handler,
                 continuation_max_bytes: None,
+                osc_unknown_max_bytes: 0,
             });
         unsafe { (&raw mut (*self_).terminal_stream).write(terminal_stream) };
 

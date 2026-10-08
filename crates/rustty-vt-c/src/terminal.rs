@@ -665,10 +665,13 @@ unsafe fn wrap(
         progress_report: Some(Effects::progress_report_trampoline),
         size: Some(Effects::size_trampoline),
         render_hold: Some(Effects::render_hold_trampoline),
+        semantic_prompt: Some(Effects::semantic_prompt_trampoline),
+        reset: Some(Effects::reset_trampoline),
 
         // Installed dynamically when the callback is set; see Effects.
         clipboard_write: None,
         clipboard_read: None,
+        program_status: None,
     };
 
     // wrapper.* = .{
@@ -705,6 +708,7 @@ unsafe fn wrap(
                     allocator: Some(capture_alloc),
                     handler,
                     continuation_max_bytes: Some(continuation_max_bytes),
+                    osc_unknown_max_bytes: 0,
                 }),
                 effects: Effects::default(),
                 // .tmp_dir_path = undefined -> None: the reference leaves it
@@ -1010,7 +1014,8 @@ pub const SCROLL_VIEWPORT_C_FIELD_ARMS: &[(&str, Option<&str>)] = &[
 
 /// `cFieldRename` arms for the `UnknownSequence` tagged value field (the
 /// `types.zig` `.generated` union arms; consumed by the ABI manifest rows).
-pub const UNKNOWN_SEQUENCE_C_FIELD_ARMS: &[(&str, Option<&str>)] = &[("apc", Some("apc"))];
+pub const UNKNOWN_SEQUENCE_C_FIELD_ARMS: &[(&str, Option<&str>)] =
+    &[("apc", Some("apc")), ("osc", Some("osc"))];
 
 /// C: GhosttyTerminalScrollViewport -> RusttyTerminalScrollViewport (R2) — the hand-authored tagged union.
 #[repr(C)]

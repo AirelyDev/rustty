@@ -482,6 +482,8 @@ fn get_mouse_shape() {
                 b"\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\",
                 rustty_vt::mouse::Shape::Crosshair,
             ),
+            // .{ "\x1b]22;\x1b\\", mouse.Shape.text },
+            (b"\x1b]22;\x1b\\", rustty_vt::mouse::Shape::Text),
             (b"\x1b]22;default\x07", rustty_vt::mouse::Shape::Default),
             (b"\x1b]22;text\x07", rustty_vt::mouse::Shape::Text),
         ];
@@ -951,4 +953,272 @@ fn terminal_invalid_selector_warns_through_the_scoped_log_sink() {
         assert_eq!(expected[i].0, scope.as_str());
         assert_eq!(expected[i].1, message.as_str());
     }
+}
+
+// Rust-only (P8-W5 T3, NEW-FINDINGS N550): the C getter's `c_int` guard
+// accepts every declared `RusttyTerminalData` value, as the reference's
+// `std.enums.fromInt` does, and nothing past the last one. The guard's upper
+// bound used to stop at 40, so `RUSTTY_TERMINAL_DATA_MOUSE_SHAPE` (41) was
+// rejected with INVALID_VALUE by `rustty_terminal_get`.
+#[test]
+fn get_checked_accepts_every_declared_data_value() {
+    for v in 0..=42 {
+        let d = TerminalData::from_c_int(v);
+        assert_eq!(Some(v), d.map(|d| d as c_int), "data value {v}");
+    }
+    for v in [43, -1, c_int::MAX] {
+        assert!(TerminalData::from_c_int(v).is_none(), "data value {v}");
+    }
+
+    with_test_allocator(|alloc| {
+        let (new_result, t) = new_t(alloc, 80, 24);
+        assert_eq!(Result::Success, new_result);
+        let mut shape = rustty_vt::mouse::Shape::Default;
+        assert_eq!(Result::Success, unsafe {
+            get_checked(
+                t,
+                TerminalData::MouseShape as c_int,
+                (&raw mut shape).cast(),
+            )
+        });
+        assert_eq!(rustty_vt::mouse::Shape::Text, shape);
+        unsafe { free(t) };
+    });
+}
+
+// test "get memory_usage"
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (rustty-vt-c, P8-W5 T3): 4,000 lines of history, then a full compression of every page; measured TIMEOUT at the 30-minute miri-run.sh bound; runs natively and under ASan, and get_memory_usage_size_rule plus the memory_usage re-entry test cover the getter under Miri (see MIRI_EXCEPTIONS.md)"
+)]
+fn get_memory_usage() {
+    with_test_allocator(|alloc| {
+        // var t: Terminal = null;
+        // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &t, 80, 24));
+        // defer free(t);
+        let (new_result, t) = new_t(alloc, 80, 24);
+        assert_eq!(Result::Success, new_result);
+        let get_usage = |out: &mut TerminalMemoryUsage| unsafe {
+            get(
+                t,
+                TerminalData::MemoryUsage,
+                (out as *mut TerminalMemoryUsage).cast(),
+            )
+        };
+
+        // var fresh: TerminalMemoryUsage = .{};
+        // try testing.expectEqual(Result.success, get(t, .memory_usage, @ptrCast(&fresh)));
+        let mut fresh = TerminalMemoryUsage::default();
+        assert_eq!(Result::Success, get_usage(&mut fresh));
+        // try testing.expectEqual(@sizeOf(TerminalMemoryUsage), fresh.size);
+        assert_eq!(size_of::<TerminalMemoryUsage>(), fresh.size);
+        // try testing.expectEqual(terminal_mem.canReclaim(.strict), fresh.compression_supported);
+        assert_eq!(
+            rustty_vt::mem::can_reclaim(rustty_vt::mem::DecommitMode::Strict),
+            fresh.compression_supported
+        );
+        // try testing.expect(fresh.primary_pages > 0);
+        assert!(fresh.primary_pages > 0);
+        // try testing.expect(fresh.primary_virtual_bytes > 0);
+        assert!(fresh.primary_virtual_bytes > 0);
+        // try testing.expect(fresh.primary_resident_bytes <= fresh.primary_virtual_bytes);
+        assert!(fresh.primary_resident_bytes <= fresh.primary_virtual_bytes);
+        // try testing.expectEqual(@as(u64, 0), fresh.primary_compressed_pages);
+        assert_eq!(0u64, fresh.primary_compressed_pages);
+        // try testing.expectEqual(@as(u64, 0), fresh.primary_compressed_bytes);
+        assert_eq!(0u64, fresh.primary_compressed_bytes);
+        // try testing.expectEqual(@as(u64, 0), fresh.primary_image_bytes);
+        assert_eq!(0u64, fresh.primary_image_bytes);
+
+        // The alternate screen doesn't exist yet.
+        assert_eq!(0u64, fresh.alternate_pages);
+        assert_eq!(0u64, fresh.alternate_virtual_bytes);
+        assert_eq!(0u64, fresh.alternate_resident_bytes);
+        assert_eq!(0u64, fresh.alternate_compressed_pages);
+        assert_eq!(0u64, fresh.alternate_compressed_bytes);
+        assert_eq!(0u64, fresh.alternate_image_bytes);
+
+        // Write compressible history.
+        // const line = "repeated and compressible terminal history\r\n";
+        // const repeat = 4_000;
+        // ... vt_write(t, input.ptr, input.len);
+        let line: &[u8] = b"repeated and compressible terminal history\r\n";
+        let repeat = 4_000;
+        let input = line.repeat(repeat);
+        vtw(t, &input);
+
+        // var history: TerminalMemoryUsage = .{};
+        // try testing.expectEqual(Result.success, get(t, .memory_usage, @ptrCast(&history)));
+        let mut history = TerminalMemoryUsage::default();
+        assert_eq!(Result::Success, get_usage(&mut history));
+        // try testing.expect(history.primary_pages > fresh.primary_pages);
+        assert!(history.primary_pages > fresh.primary_pages);
+        // try testing.expect(history.primary_resident_bytes > fresh.primary_resident_bytes);
+        assert!(history.primary_resident_bytes > fresh.primary_resident_bytes);
+
+        // var compression_result: CompressionResult = undefined;
+        // try testing.expectEqual(Result.success, compress(t, @intFromEnum(CompressionMode.full), &compression_result));
+        let mut compression_result = CompressionResult::Unsupported;
+        assert_eq!(Result::Success, unsafe {
+            compress(t, CompressionMode::Full as c_int, &mut compression_result)
+        });
+        // try testing.expectEqual(history.compression_supported, compression_result == .complete);
+        assert_eq!(
+            history.compression_supported,
+            compression_result == CompressionResult::Complete
+        );
+
+        // var compressed: TerminalMemoryUsage = .{};
+        // try testing.expectEqual(Result.success, get(t, .memory_usage, @ptrCast(&compressed)));
+        let mut compressed = TerminalMemoryUsage::default();
+        assert_eq!(Result::Success, get_usage(&mut compressed));
+        // try testing.expectEqual(history.primary_pages, compressed.primary_pages);
+        assert_eq!(history.primary_pages, compressed.primary_pages);
+        // try testing.expectEqual(history.primary_virtual_bytes, compressed.primary_virtual_bytes);
+        assert_eq!(
+            history.primary_virtual_bytes,
+            compressed.primary_virtual_bytes
+        );
+        // if (compressed.compression_supported) { ... } else { ... }
+        if compressed.compression_supported {
+            assert!(compressed.primary_compressed_pages > 0);
+            assert!(compressed.primary_compressed_bytes > 0);
+            assert!(compressed.primary_resident_bytes < history.primary_resident_bytes);
+        } else {
+            assert_eq!(0u64, compressed.primary_compressed_pages);
+        }
+
+        // The query never restores a compressed page.
+        // var again: TerminalMemoryUsage = .{};
+        // try testing.expectEqual(Result.success, get(t, .memory_usage, @ptrCast(&again)));
+        // try testing.expectEqual(compressed, again);
+        let mut again = TerminalMemoryUsage::default();
+        assert_eq!(Result::Success, get_usage(&mut again));
+        assert_eq!(compressed, again);
+
+        // Kitty images are counted separately from pages.
+        // if (comptime build_options.kitty_graphics) { ... }
+        if cfg!(feature = "kitty-graphics") {
+            // 1x2 RGB image, 6 bytes of pixel data.
+            let transmit = b"\x1b_Ga=t,t=d,f=24,i=1,s=1,v=2;////////\x1b\\";
+            vtw(t, transmit);
+            let mut images = TerminalMemoryUsage::default();
+            assert_eq!(Result::Success, get_usage(&mut images));
+            assert!(images.primary_image_bytes > 0);
+
+            let delete = b"\x1b_Ga=d,d=I,i=1\x1b\\";
+            vtw(t, delete);
+            assert_eq!(Result::Success, get_usage(&mut images));
+            assert_eq!(0u64, images.primary_image_bytes);
+        }
+
+        // Entering the alternate screen creates it.
+        // vt_write(t, "\x1b[?1049h", 8);
+        vtw(t, b"\x1b[?1049h");
+        let mut alternate = TerminalMemoryUsage::default();
+        assert_eq!(Result::Success, get_usage(&mut alternate));
+        assert!(alternate.alternate_pages > 0);
+        assert!(alternate.alternate_virtual_bytes > 0);
+        assert!(alternate.alternate_resident_bytes > 0);
+        assert!(alternate.alternate_resident_bytes <= alternate.alternate_virtual_bytes);
+        assert_eq!(compressed.primary_pages, alternate.primary_pages);
+
+        unsafe { free(t) };
+    });
+}
+
+// test "get memory_usage size rule"
+#[test]
+fn get_memory_usage_size_rule() {
+    with_test_allocator(|alloc| {
+        // var t: Terminal = null;
+        // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &t, 80, 24));
+        // defer free(t);
+        let (new_result, t) = new_t(alloc, 80, 24);
+        assert_eq!(Result::Success, new_result);
+
+        // A size smaller than the first layout is rejected and nothing is
+        // written.
+        // var small: TerminalMemoryUsage = .{
+        //     .size = @sizeOf(TerminalMemoryUsage) - 1,
+        //     .primary_pages = 1234,
+        // };
+        let mut small = TerminalMemoryUsage {
+            size: size_of::<TerminalMemoryUsage>() - 1,
+            primary_pages: 1234,
+            ..TerminalMemoryUsage::default()
+        };
+        // try testing.expectEqual(Result.invalid_value, get(t, .memory_usage, @ptrCast(&small)));
+        assert_eq!(Result::InvalidValue, unsafe {
+            get(t, TerminalData::MemoryUsage, (&raw mut small).cast())
+        });
+        // try testing.expectEqual(@sizeOf(TerminalMemoryUsage) - 1, small.size);
+        assert_eq!(size_of::<TerminalMemoryUsage>() - 1, small.size);
+        // try testing.expectEqual(@as(u64, 1234), small.primary_pages);
+        assert_eq!(1234u64, small.primary_pages);
+
+        // A size larger than ours, from a caller built against a newer
+        // layout, gets the known prefix and the rest is left untouched.
+        // const Larger = extern struct {
+        //     usage: TerminalMemoryUsage,
+        //     extra: u64,
+        // };
+        #[repr(C)]
+        struct Larger {
+            usage: TerminalMemoryUsage,
+            extra: u64,
+        }
+        // var large: Larger = .{
+        //     .usage = .{ .size = @sizeOf(Larger) },
+        //     .extra = 0xDEADBEEF,
+        // };
+        let mut large = Larger {
+            usage: TerminalMemoryUsage {
+                size: size_of::<Larger>(),
+                ..TerminalMemoryUsage::default()
+            },
+            extra: 0xDEADBEEF,
+        };
+        // try testing.expectEqual(Result.success, get(t, .memory_usage, @ptrCast(&large)));
+        assert_eq!(Result::Success, unsafe {
+            get(t, TerminalData::MemoryUsage, (&raw mut large).cast())
+        });
+        // try testing.expectEqual(@sizeOf(Larger), large.usage.size);
+        assert_eq!(size_of::<Larger>(), large.usage.size);
+        // try testing.expect(large.usage.primary_pages > 0);
+        assert!(large.usage.primary_pages > 0);
+        // try testing.expectEqual(@as(u64, 0xDEADBEEF), large.extra);
+        assert_eq!(0xDEADBEEFu64, large.extra);
+
+        unsafe { free(t) };
+    });
+}
+
+// Rust-only (P8-W5 T3 fix 1; the setter twin of N550): the C setter's
+// `c_int` guard accepts every declared `RusttyTerminalOption`, including the
+// 42, 43 and 46 this task adds between and after 44/45, and rejects the first
+// value past the last one.
+#[test]
+fn terminal_set_accepts_every_declared_option() {
+    with_test_allocator(|alloc| {
+        let (new_result, t) = new_t(alloc, 80, 24);
+        assert_eq!(Result::Success, new_result);
+        // NULL clears each of these (callbacks, the checksum flag and bits).
+        for option in [41, 42, 43, 44, 45, 46] {
+            assert_eq!(
+                Result::Success.to_c_int(),
+                unsafe { crate::rustty_terminal_set(t, option, std::ptr::null()) },
+                "option {option}"
+            );
+        }
+        for option in [47, -1, c_int::MAX] {
+            assert_eq!(
+                Result::InvalidValue.to_c_int(),
+                unsafe { crate::rustty_terminal_set(t, option, std::ptr::null()) },
+                "option {option}"
+            );
+        }
+        unsafe { free(t) };
+    });
 }

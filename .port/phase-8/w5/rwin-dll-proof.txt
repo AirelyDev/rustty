@@ -1,0 +1,84 @@
+P8-W5 T4 rwin proof (DECISIONS P1): rustty_vt_c.dll handles multi-byte UTF-8 on Windows
+host: rwin (Windows 11 ARM64, x64 binaries under emulation), clone of phase-8/w5 at f1d4b430 (T4 example edits, same sources as the T4 commit)
+rustc: rustc 1.93.1 (01f6ddf75 2026-02-11)
+msvc: cargo build -p rustty-vt-c --release --target x86_64-pc-windows-msvc (default features, incl. simd); example built with clang --target=x86_64-pc-windows-msvc against rustty_vt_c.dll.lib
+gnu: cargo build -p rustty-vt-c --release --target x86_64-pc-windows-gnu with llvm-mingw 20261006 (clang, no GNU gcc on the VM; libgcc/libgcc_eh/libstdc++ shimmed from compiler-rt/libunwind/libc++), example built with x86_64-w64-mingw32-clang against librustty_vt_c.dll.a
+programs: example/c-vt-effects (ASCII only) and .port/phase-8/w5/dll-utf8-proof.c (2/3/4-byte UTF-8 + wide chars; expects cursor_x=15)
+
+######## x86_64-pc-windows-msvc
+== build c-vt-effects exit 0
+== build utf8-proof exit 0
+== run c-vt-effects (x86_64-pc-windows-msvc)
+Sending BEL:
+  bell! (count=1)
+Sending title change:
+  title changed (cursor at col 0)
+Sending DECRQM query:
+  write_pty (8 bytes): [?7;1$y
+Sending clipboard write:
+  clipboard write (location=0, contents=1)
+    text/plain (15 bytes): Hello clipboard
+Sending clipboard read:
+  clipboard read (location=0, mimes=1)
+    text/plain
+  write_pty (41 bytes): ]52;c;SGVsbG8gZnJvbSB0aGUgY2xpcGJvYXJk\
+Sending desktop notifications:
+  desktop notification (size=40, title=0, body=14)
+    title: 
+    body: Build complete
+  desktop notification (size=40, title=6, body=15)
+    title: Rustty
+    body: Needs attention
+Sending progress reports:
+  progress report (size=16, state=1, progress=42)
+  progress report (size=16, state=3, progress=-1)
+Sending unknown APC:
+  unknown APC (truncated=no, content=23 bytes): private-command;payload
+Sending unknown OSC:
+  unknown OSC (truncated=no, terminator=BEL, content=16 bytes): 7400;status=busy
+Sending another BEL:
+  bell! (count=2)
+Total bells: 2
+exit code: 0x00000000
+== run utf8-proof (x86_64-pc-windows-msvc)
+utf-8 write ok, cursor_x=15 (expected 15)
+exit code: 0x00000000
+
+######## x86_64-pc-windows-gnu
+== build c-vt-effects exit 0
+== build utf8-proof exit 0
+== run c-vt-effects (x86_64-pc-windows-gnu)
+Sending BEL:
+  bell! (count=1)
+Sending title change:
+  title changed (cursor at col 0)
+Sending DECRQM query:
+  write_pty (8 bytes): [?7;1$y
+Sending clipboard write:
+  clipboard write (location=0, contents=1)
+    text/plain (15 bytes): Hello clipboard
+Sending clipboard read:
+  clipboard read (location=0, mimes=1)
+    text/plain
+  write_pty (41 bytes): ]52;c;SGVsbG8gZnJvbSB0aGUgY2xpcGJvYXJk\
+Sending desktop notifications:
+  desktop notification (size=40, title=0, body=14)
+    title: 
+    body: Build complete
+  desktop notification (size=40, title=6, body=15)
+    title: Rustty
+    body: Needs attention
+Sending progress reports:
+  progress report (size=16, state=1, progress=42)
+  progress report (size=16, state=3, progress=-1)
+Sending unknown APC:
+  unknown APC (truncated=no, content=23 bytes): private-command;payload
+Sending unknown OSC:
+  unknown OSC (truncated=no, terminator=BEL, content=16 bytes): 7400;status=busy
+Sending another BEL:
+  bell! (count=2)
+Total bells: 2
+exit code: 0x00000000
+== run utf8-proof (x86_64-pc-windows-gnu)
+utf-8 write ok, cursor_x=15 (expected 15)
+exit code: 0x00000000

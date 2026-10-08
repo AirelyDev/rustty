@@ -1,0 +1,15 @@
+[package]
+name = "mirihar-osc-limit-reentry"
+version = "0.0.0"
+edition = "2021"
+
+[[bin]]
+name = "mirihar-osc-limit-reentry"
+path = "src/main.rs"
+
+# No dependencies: a std-only model of the vt-c terminal wrapper, the raw-self
+# stream, the OSC parser's inline buffer and an unknown-OSC C callback that sets
+# UNKNOWN_MAX_BYTES while it holds the borrowed content (R2 §2.9).
+
+# Standalone: not part of the rustty root workspace (this is a proof artifact).
+[workspace]

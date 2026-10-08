@@ -615,6 +615,19 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
         self.vt("mouse_shape", r);
     }
 
+    // .mouse_shape_reset => try self.setMouseShape(
+    //     if (self.terminal.flags.mouse_event != .none) .default else .text,
+    // ),
+    fn mouse_shape_reset(&mut self) {
+        let shape = if self.term().flags.mouse_event != rustty_vt::mouse::Event::None {
+            rustty_vt::mouse::Shape::Default
+        } else {
+            rustty_vt::mouse::Shape::Text
+        };
+        let r = self.setMouseShape(shape);
+        self.vt("mouse_shape_reset", r);
+    }
+
     // .configure_charset => self.configureCharset(value.slot, value.charset),
     fn configure_charset(&mut self, v: stream::ConfigureCharset) {
         self.configureCharset(v.slot, v.charset);
@@ -719,8 +732,13 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // .title_push,
     // .title_pop,
     // .kitty_dnd,
+    // .osc_unknown,
+    // .program_status,
     // => {},
     // (af8d28a94, assessment E row P5-E11: the dnd Action is added next to the
-    // title_push/title_pop no-ops.)
+    // title_push/title_pop no-ops; 7b11f3dca and bae2c3cdb add `osc_unknown`
+    // and `program_status` to the same list.)
     fn kitty_dnd(&mut self, _v: osc::KittyDndProtocol) {}
+    fn osc_unknown(&mut self, _v: osc::Unknown) {}
+    fn program_status(&mut self, _v: rustty_vt::stream::ProgramStatus) {}
 }

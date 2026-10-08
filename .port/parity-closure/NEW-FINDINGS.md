@@ -11367,3 +11367,65 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   is the right place to extend the record.
 - **revisit**: if upstream adds `xt_checksum` (or `default_xt_checksum`) to the TERMINAL record, port it with the
   record change and retire this entry.
+
+## N521 — `rustty_terminal_paste` kept going after a refused write when the reader returned true
+
+- **id**: N521 (reserved in DECISIONS). Opened and closed by P8-W5 T3 (R2 §2.6 #9). **severity**: low (C API;
+  a reader that breaks its contract). **kind**: port carried the pre-fix upstream shape. **status**: CLOSED.
+- **what**: `readTrampoline` (`c/paste.zig`) used to return `error.WriteFailed` only when the C reader returned
+  false. A reader that ignores a refused `write` (the contract forbids it) and returns true made the paste go
+  ahead with the refused piece missing. Upstream `2b0ceff7d` checks `sink.write_failed` first, whatever the
+  reader returns. Rustty's `crates/rustty-vt-c/src/paste.rs` `read_trampoline` had the old shape.
+- **fix**: ported as upstream: `WriteFailed` if any write was refused, then `ReadFailed` if the reader returned
+  false.
+- **test**: `paste::tests::terminal_paste_refused_write_ignored_by_the_reader` (upstream's "terminal_paste refused
+  write ignored by the reader"; the capture gains `ignore_refused`). RED before the fix: `left: OutOfMemory,
+  right: Success` (the paste succeeded). GREEN after; every allocation is returned.
+
+## N550 — `rustty_terminal_get` rejected `RUSTTY_TERMINAL_DATA_MOUSE_SHAPE`
+
+- **id**: N550 (P8-W5 provisional range). Found and closed by P8-W5 T3. **severity**: medium (a documented C
+  query always failed). **kind**: port defect (Rustty only). **status**: CLOSED.
+- **what**: `TerminalData::from_c_int` (`crates/rustty-vt-c/src/terminal/data.rs`), the `c_int` guard that
+  `rustty_terminal_get` and `rustty_terminal_get_multi` go through, accepted `0..=TERMINAL_DATA_MAX` with
+  `TERMINAL_DATA_MAX = 40`. `MOUSE_SHAPE = 41` (oracle `78494bad8`/`67fb0c940`) was added to the enum without
+  raising the bound, so the C entry points answered `RUSTTY_INVALID_VALUE` for it. The ported `get mouse_shape`
+  test calls the typed `get` directly, past the guard, so it never saw this. The reference's guard is
+  `std.enums.fromInt`, which accepts every declared value.
+- **fix**: the bound is 42 (`MEMORY_USAGE`, added by this task).
+- **test**: `terminal::tests::get::get_checked_accepts_every_declared_data_value` (Rust-only): every value
+  `0..=42` narrows to itself, 43, -1 and `c_int::MAX` are rejected, and `get_checked` answers `MOUSE_SHAPE`.
+  RED with the bound at 40: `assertion failed: data value 41, left: Some(41), right: None`.
+
+## N551 — cbindgen emits one layout for same-named vt-c types; `include/rustty.h` declared the SGR unknown with the OSC layout
+
+- **id**: N551 (P8-W5 provisional range). Found in the review of P8-W5 T3 (fix round 1). **severity**: medium for
+  the regression (the published full header declared wrong by-value layouts), low to medium for the
+  pre-existing rows below. **kind**: port defect (Rustty only; Zig exports carry their own C names).
+  **status**: the T3 regression CLOSED; the pre-existing collisions OPEN, baselined.
+- **cause**: cbindgen keys types by their bare Rust name, not by module path. P8-W5 T3 added
+  `rustty_vt_c::osc::UnknownC` (the OSC `Unknown.C` projection) beside `rustty_vt_c::sgr::UnknownC`. cbindgen kept
+  one `UnknownC`, the OSC one, so `include/rustty.h` declared `rustty_sgr_unknown_full`,
+  `rustty_sgr_unknown_partial` and the SGR attribute value with `{ bool truncated; LibString content; Terminator
+  terminator; }` instead of `{ full_ptr, full_len, partial_ptr, partial_len }`. A5 did not see it: (a3) regenerates
+  the same wrong header byte for byte, and (c) checks the curated `include/rustty/vt/*.h`, which are hand-written.
+- **fix**: the OSC projection is named after its C type, `osc::UnknownOscSequence`, re-exported (not aliased) as
+  `terminal::UnknownOscSequence`; `include/rustty.h` regenerated and declares the SGR layout again.
+- **guard (R5)**: A5 arm (f), `.port/tools/check-vt-cbindgen-name-collisions.py`. It fails when two non-test
+  `pub struct|enum|union|type` items in rustty-vt-c share a name that `include/rustty.h` uses as a type, unless the
+  name is in its baseline WITH exactly that set of defining items (a third definition of a baselined name is RED),
+  and fails on a stale baseline row. `#[cfg(test)]` items are skipped by brace matching, so items after a test
+  module are still read (fix round 2; live control: a third `Size` in `focus.rs` -> `CHANGED COLLISION \`Size\``). Negative controls: its `--self-test` (an unlisted
+  duplicate RED, a stale row RED, a clean fixture GREEN), and reintroducing the OSC `UnknownC` turned it RED
+  (`NEW COLLISION \`UnknownC\`: sgr.rs:73 (struct), osc.rs:133 (struct)`).
+- **pre-existing collisions (OPEN, baselined in the checker)**: `Data` (render, kitty_graphics, selection_gesture
+  enums, c_int-sized), `Encoder` (key/mouse encoder handles: rustty.h names the key encoder for both), `Event`
+  (key/mouse/selection-gesture handles), `KittyGraphics` (an alias of the same type, harmless), `Parser` (osc/sgr
+  handles: rustty.h declares the `rustty_sgr_*` functions over `OscParserWrapper *`), `RowData` (render/row enums),
+  and `Size`. **`Size` has different layouts**: `size_report::Size` (rows, columns, cell sizes) and
+  `mouse_encode::Size` (sized struct, screen and padding); rustty.h declares `rustty_size_report_encode(int, Size,
+  ...)` with the mouse layout, so a C caller using `include/rustty.h` instead of the curated
+  `rustty/vt/size_report.h` would pass the wrong struct by value. The handle and enum rows are ABI-compatible
+  (pointer- or c_int-sized) but name the wrong types. Fixing them means renaming Rust types across vt-c, which is
+  outside P8-W5 T3; owner: the coordinator to schedule. Each fix removes its baseline row (the arm goes RED on a
+  stale row).

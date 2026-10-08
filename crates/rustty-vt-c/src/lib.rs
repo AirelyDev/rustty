@@ -1449,19 +1449,18 @@ pub unsafe extern "C" fn rustty_style_is_default(s: *const style::Style) -> bool
 // `terminal::TerminalData::from_c_int` under W35-B08 — `get_multi` must reach
 // the same guard per array element, so it can no longer live in this file.
 //
-// contiguous 0..=41 (27/28 = scrollback max bytes/lines; 29/30 = the
+// contiguous 0..=46 (27/28 = scrollback max bytes/lines; 29/30 = the
 // desktop-notification and progress-report effects, oracle c3655ba25 47d602c42;
 // 31 = continuation_max_bytes, Bundle S d7bb4b863, closing the hole Bundle M
 // reserved for it; 32..=37 = the Bundle M options; 38 = clipboard_read,
 // oracle e03475c0c; 39 = clipboard_write_max_bytes, oracle 5350d4a5f;
 // 40 = resize_pull_scrollback, oracle c55f213aa; 41 = render_hold, oracle
-// e50779498); 44/45 = xt_checksum_report/xt_checksum_extension (oracle
-// 9272a2f7c, 7e2d1793d). PORT NOTE: 42 (semantic_prompt), 43 (reset) and 46
-// (program_status) are appended by P8-W5 T3 at upstream's numbers, so the set
-// is temporarily non-contiguous: 0..=41 plus 44 and 45.
-const TERMINAL_OPTION_COUNT: c_int = 42;
+// e50779498); 42/43 = semantic_prompt/reset (oracle 7bb45ba34); 44/45 =
+// xt_checksum_report/xt_checksum_extension (oracle 9272a2f7c, 7e2d1793d);
+// 46 = program_status (oracle bae2c3cdb). Contiguous again: 0..=46.
+const TERMINAL_OPTION_COUNT: c_int = 47;
 fn terminal_option_from_c_int(v: c_int) -> Option<terminal::Option_> {
-    if (0..TERMINAL_OPTION_COUNT).contains(&v) || matches!(v, 44 | 45) {
+    if (0..TERMINAL_OPTION_COUNT).contains(&v) {
         // SAFETY: `v` is a valid terminal `Option` discriminant (range-checked).
         Some(unsafe { std::mem::transmute::<c_int, terminal::Option_>(v) })
     } else {
@@ -1660,6 +1659,22 @@ pub unsafe extern "C" fn rustty_osc_reset(parser: osc::Parser) {
 pub unsafe extern "C" fn rustty_osc_end(parser: osc::Parser, terminator: u8) -> osc::Command {
     // SAFETY: `parser` validity is the caller's contract.
     unsafe { osc::end(parser, terminator) }
+}
+
+// pub const osc_set = osc.set;  (ghostty_osc_set)
+/// C: rustty_osc_set
+///
+/// # Safety
+/// `parser`, if non-null, must be a handle returned by `rustty_osc_new`;
+/// `value`, if non-null, must point to the option's input type.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_osc_set(
+    parser: osc::Parser,
+    option: c_int,
+    value: *const std::ffi::c_void,
+) -> c_int {
+    // SAFETY: `parser`/`value` validity is the caller's contract.
+    unsafe { osc::set(parser, option, value) }.to_c_int()
 }
 
 // pub const osc_command_type = osc.commandType;  (ghostty_osc_command_type)

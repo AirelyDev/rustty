@@ -1417,6 +1417,7 @@ mod tests {
                 alloc,
                 &DecodeOptions {
                     max_continuation_bytes: 0,
+                    compress_history: false,
                 },
             )
             .unwrap();

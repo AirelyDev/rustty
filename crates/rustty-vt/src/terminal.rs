@@ -921,6 +921,7 @@ impl Terminal {
             allocator: Some(gpa),
             handler,
             continuation_max_bytes: None,
+            osc_unknown_max_bytes: 0,
         })
     }
 

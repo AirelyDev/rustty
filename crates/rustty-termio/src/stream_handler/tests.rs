@@ -277,6 +277,10 @@ fn vt_caller_tags_match_the_reference_action_union() {
         "kitty_clipboard",
         "kitty_dnd",
         "resize_window",
+        // 7b11f3dca, b1bfd1d9c, bae2c3cdb (oracle a60e9e2a5)
+        "osc_unknown",
+        "mouse_shape_reset",
+        "program_status",
     ];
 
     let src = include_str!("handler_impl.rs");
@@ -305,8 +309,8 @@ fn vt_caller_tags_match_the_reference_action_union() {
         );
     }
     assert_eq!(
-        38, seen,
-        "expected 38 `self.vt(…)` callers; a change in the count means an \
+        39, seen,
+        "expected 39 `self.vt(…)` callers; a change in the count means an \
          action was added or removed and this pin needs revisiting"
     );
 }
@@ -1223,6 +1227,48 @@ fn ud351_osc7_percent_encoded_local_host_still_sets_the_pwd() {
         Some(b"/tmp".to_vec())
     };
     assert_eq!(expected, osc7_pwd_after(b"file://local%68ost/tmp"));
+}
+
+// b1bfd1d9c: an empty OSC 22 resets the mouse shape. libghostty-vt's
+// handler always resets to `text`; termio picks `default` while the
+// program has mouse reporting on (the pointer is the program's, not a text
+// cursor) and `text` otherwise:
+//
+//     .mouse_shape_reset => try self.setMouseShape(
+//         if (self.terminal.flags.mouse_event != .none) .default else .text,
+//     ),
+//
+// Rustty-only: upstream pins the libghostty-vt half in `c/terminal.zig`
+// (`get mouse_shape`) and has no termio test for this arm.
+#[test]
+fn mouse_shape_reset_is_default_with_mouse_reporting_and_text_without() {
+    use rustty_vt::mouse::{Event, Shape};
+
+    let mut term = Terminal::init(Global.into(), terminal_opts(Some(false))).unwrap();
+    let term_ptr: *mut Terminal = &raw mut term;
+    let h = handler_for(term_ptr, std::ptr::null_mut(), std::ptr::null_mut());
+    let mut s = stream::Stream::init(stream::Options::with_handler(h));
+
+    // Mouse reporting on: an empty OSC 22 restores the default pointer.
+    s.next_slice(b"\x1b]22;pointer\x07");
+    // SAFETY: the stream's handler aliases `term`; read and write it through
+    // that raw pointer while the stream is live.
+    assert_eq!(Shape::Pointer, unsafe { (*term_ptr).mouse_shape });
+    unsafe { (*term_ptr).flags.mouse_event = Event::Normal };
+    s.next_slice(b"\x1b]22;\x07");
+    assert_eq!(Shape::Default, unsafe { (*term_ptr).mouse_shape });
+
+    // Mouse reporting off: an empty OSC 22 restores the text cursor, ended
+    // with ST this time.
+    s.next_slice(b"\x1b]22;pointer\x1b\\");
+    assert_eq!(Shape::Pointer, unsafe { (*term_ptr).mouse_shape });
+    unsafe { (*term_ptr).flags.mouse_event = Event::None };
+    s.next_slice(b"\x1b]22;\x1b\\");
+    assert_eq!(Shape::Text, unsafe { (*term_ptr).mouse_shape });
+
+    s.handler.renderer_wakeup.deinit();
+    drop(s);
+    term.deinit(Global.into());
 }
 
 // Review Focus 2 (P8-W3 T2; rustty-only, the reference adds no termio test):

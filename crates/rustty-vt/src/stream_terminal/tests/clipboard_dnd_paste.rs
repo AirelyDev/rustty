@@ -1834,6 +1834,7 @@ fn kitty_dnd_register_drop_and_serve_data() {
         allocator: Some(crate::alloc::Global),
         handler: Handler::init(ptr),
         continuation_max_bytes: None,
+        osc_unknown_max_bytes: 0,
     });
     s.handler.effects.write_pty = Some(dnd_write_pty);
 
@@ -1903,6 +1904,7 @@ fn kitty_dnd_state_updates_work_without_write_pty_effect() {
         allocator: Some(crate::alloc::Global),
         handler: Handler::init(ptr),
         continuation_max_bytes: None,
+        osc_unknown_max_bytes: 0,
     });
 
     // Queries produce no output (nowhere to write) but registration
@@ -1932,6 +1934,7 @@ fn kitty_dnd_registration_survives_terminal_reset() {
         allocator: Some(crate::alloc::Global),
         handler: Handler::init(ptr),
         continuation_max_bytes: None,
+        osc_unknown_max_bytes: 0,
     });
     s.handler.effects.write_pty = Some(dnd_write_pty);
 
@@ -1995,6 +1998,7 @@ fn kitty_dnd_effect_reports_registration_acceptance_and_conclusion() {
         allocator: Some(crate::alloc::Global),
         handler: Handler::init(ptr),
         continuation_max_bytes: None,
+        osc_unknown_max_bytes: 0,
     });
     s.handler.effects.drag_and_drop = Some(drag_and_drop);
 
@@ -2650,6 +2654,7 @@ fn paste_mode_5522_sends_an_event_the_program_can_read_with() {
         allocator: Some(crate::alloc::Global),
         handler,
         continuation_max_bytes: None,
+        osc_unknown_max_bytes: 0,
     });
     unsafe { (*ptr).modes.set(modespkg::Mode::KittyPasteEvents, true) };
     unsafe { (*ptr).modes.set(modespkg::Mode::BracketedPaste, true) };
@@ -2960,6 +2965,7 @@ fn paste_mode_5522_decrqm_requires_clipboard_read_effect() {
         allocator: Some(crate::alloc::Global),
         handler,
         continuation_max_bytes: None,
+        osc_unknown_max_bytes: 0,
     });
 
     // A paste event is unusable if its follow-up read can't be served, so
@@ -3009,6 +3015,7 @@ fn full_reset_drops_kitty_clipboard_grants() {
         allocator: Some(crate::alloc::Global),
         handler,
         continuation_max_bytes: None,
+        osc_unknown_max_bytes: 0,
     });
 
     s.handler

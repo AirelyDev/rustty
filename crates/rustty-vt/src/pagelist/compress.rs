@@ -371,7 +371,56 @@ impl MemoryStats {
     }
 }
 
+/// The memory held by a page list. Returned by `memory_usage`.
+///
+/// PORTS: oracle@main PageList.zig `MemoryUsage`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct MemoryUsage {
+    /// Number of pages in the list, including compressed pages.
+    pub pages: usize,
+
+    /// Bytes of address space reserved for page memory. This counts every
+    /// page in the list at its full allocated size, whether it is resident
+    /// or compressed, plus the unused items held by the page pool. Unused
+    /// pool items have had their physical memory released, so they add to
+    /// this figure but never to `resident_bytes`.
+    pub virtual_bytes: usize,
+
+    /// Bytes of physical memory used by pages. A resident page counts its
+    /// full allocated size. A compressed page counts its encoded data plus
+    /// any unused tail of its pool item, which compression doesn't release.
+    /// This is the same as `MemoryStats.estimatedResidentBytes`.
+    pub resident_bytes: usize,
+
+    /// Number of pages stored compressed.
+    pub compressed_pages: usize,
+
+    /// Total size of the encoded data of compressed pages. This is already
+    /// part of `resident_bytes`.
+    pub compressed_bytes: usize,
+}
+
 impl PageList {
+    /// Return the memory held by this page list, summarized for callers that
+    /// budget memory across many terminals. See `memory_stats` for a more
+    /// detailed breakdown.
+    ///
+    /// This never restores a compressed page. It does visit every page, so its
+    /// cost grows with the scrollback. Call it periodically rather than after
+    /// every write.
+    ///
+    /// PORTS: oracle@main PageList.zig `memoryUsage`.
+    pub fn memory_usage(&self) -> MemoryUsage {
+        let stats = self.memory_stats();
+        MemoryUsage {
+            pages: stats.resident_pages + stats.compressed_pages,
+            virtual_bytes: self.page_size + self.pool.pages.free_count() * std_size(),
+            resident_bytes: stats.estimated_resident_bytes(),
+            compressed_pages: stats.compressed_pages,
+            compressed_bytes: stats.encoded_bytes,
+        }
+    }
+
     /// Attempt to compress one resident page while retaining its raw mapping.
     ///
     /// Compression is opportunistic: every failure leaves the page resident and

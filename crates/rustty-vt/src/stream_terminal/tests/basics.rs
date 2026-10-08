@@ -217,6 +217,7 @@ fn unknown_apc_effect_callback() {
 
     // const S = struct {
     //     var count: usize = 0;
+    //     var osc_count: usize = 0;
     //     var content: [16]u8 = undefined;
     //     var content_len: usize = undefined;
     //     var truncated: bool = undefined;
@@ -227,6 +228,7 @@ fn unknown_apc_effect_callback() {
     // thread-locals (the module's established `CAPTURE` idiom).
     thread_local! {
         static UNKNOWN_COUNT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+        static UNKNOWN_OSC_COUNT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
         static UNKNOWN_CONTENT: core::cell::RefCell<Vec<u8>> =
             const { core::cell::RefCell::new(Vec::new()) };
         static UNKNOWN_TRUNCATED: core::cell::Cell<bool> =
@@ -239,11 +241,15 @@ fn unknown_apc_effect_callback() {
                 UNKNOWN_CONTENT.with(|c| *c.borrow_mut() = apc_value.content.to_vec());
                 UNKNOWN_TRUNCATED.with(|c| c.set(apc_value.truncated));
             }
+            // .osc => osc_count += 1,
+            UnknownSequence::Osc(_) => UNKNOWN_OSC_COUNT.with(|c| c.set(c.get() + 1)),
         }
         UNKNOWN_COUNT.with(|c| c.set(c.get() + 1));
     }
     // S.count = 0;
+    // S.osc_count = 0;
     UNKNOWN_COUNT.with(|c| c.set(0));
+    UNKNOWN_OSC_COUNT.with(|c| c.set(0));
 
     // var handler: Handler = .init(&t);
     // handler.unknown_sequence = &S.unknownSequence;
@@ -254,11 +260,14 @@ fn unknown_apc_effect_callback() {
     s.handler.unknown_sequence = Some(unknown_sequence);
     s.handler.apc_handler.unknown_max_bytes = 8;
 
-    // Unknown OSC commands retain their legacy behavior and are ignored.
+    // The APC limit does not enable OSC capture, so unknown OSCs are
+    // still ignored.
     s.next_slice(b"\x1B]999;abcdef\x07");
     s.next_slice(b"\x1B_abcd;payload\x1B\\");
 
     assert_eq!(1, UNKNOWN_COUNT.with(|c| c.get()));
+    // try testing.expectEqual(@as(usize, 0), S.osc_count);
+    assert_eq!(0, UNKNOWN_OSC_COUNT.with(|c| c.get()));
     assert_eq!(
         b"abcd;pay".as_slice(),
         UNKNOWN_CONTENT.with(|c| c.borrow().clone()).as_slice()
@@ -269,6 +278,116 @@ fn unknown_apc_effect_callback() {
     s.next_slice(b"\x1B_Xpayload\x18");
     assert_eq!(1, UNKNOWN_COUNT.with(|c| c.get()));
 
+    drop(s);
+    t.deinit(Global);
+}
+
+// test "unknown OSC effect callback"
+#[test]
+fn unknown_osc_effect_callback() {
+    let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+    // const S = struct {
+    //     var count: usize = 0;
+    //     var content: [32]u8 = undefined;
+    //     var content_len: usize = undefined;
+    //     var terminator: osc.Terminator = undefined;
+    //     fn unknownSequence(_: *Handler, value: Handler.UnknownSequence) void { ... }
+    // };
+    // PORT NOTE: thread-local captures, as in `unknown_apc_effect_callback`.
+    thread_local! {
+        static COUNT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+        static CONTENT: core::cell::RefCell<Vec<u8>> =
+            const { core::cell::RefCell::new(Vec::new()) };
+        static TERMINATOR: core::cell::Cell<Option<osc::Terminator>> =
+            const { core::cell::Cell::new(None) };
+    }
+
+    fn unknown_sequence(_: &mut Handler, value: UnknownSequence) {
+        // const v = switch (value) {
+        //     .osc => |v| v,
+        //     .apc => unreachable,
+        // };
+        let v = match value {
+            UnknownSequence::Osc(v) => v,
+            UnknownSequence::Apc(_) => unreachable!(),
+        };
+        CONTENT.with(|c| *c.borrow_mut() = v.content.to_vec());
+        TERMINATOR.with(|c| c.set(Some(v.terminator)));
+        COUNT.with(|c| c.set(c.get() + 1));
+    }
+    fn count() -> usize {
+        COUNT.with(|c| c.get())
+    }
+    fn content() -> Vec<u8> {
+        CONTENT.with(|c| c.borrow().clone())
+    }
+    // S.count = 0;
+    COUNT.with(|c| c.set(0));
+
+    // var handler: Handler = .init(&t);
+    // handler.unknown_sequence = &S.unknownSequence;
+    // var s: Stream = .init(.{
+    //     .allocator = testing.allocator,
+    //     .handler = handler,
+    //     .osc_unknown_max_bytes = 24,
+    // });
+    // defer s.deinit();
+    let mut handler = t.vt_handler();
+    handler.unknown_sequence = Some(unknown_sequence);
+    let mut s = Stream::init(stream::Options {
+        allocator: Some(Global),
+        handler,
+        continuation_max_bytes: None,
+        osc_unknown_max_bytes: 24,
+    });
+
+    // ST through the stream's fast path.
+    s.next_slice(b"\x1B]7400;status=busy\x1B\\");
+    assert_eq!(1, count());
+    assert_eq!(b"7400;status=busy".as_slice(), content().as_slice());
+    assert_eq!(Some(osc::Terminator::St), TERMINATOR.with(|c| c.get()));
+
+    // BEL through the stream's fast path.
+    s.next_slice(b"\x1B]7400;?\x07");
+    assert_eq!(2, count());
+    assert_eq!(b"7400;?".as_slice(), content().as_slice());
+    assert_eq!(Some(osc::Terminator::Bel), TERMINATOR.with(|c| c.get()));
+
+    // Split across writes.
+    s.next_slice(b"\x1B]74");
+    s.next_slice(b"00;a");
+    s.next_slice(b"b\x07");
+    assert_eq!(3, count());
+    assert_eq!(b"7400;ab".as_slice(), content().as_slice());
+
+    // Byte-at-a-time through the scalar path.
+    for &ch in b"\x1B]7400;cd\x1B\\" {
+        s.next(ch);
+    }
+    assert_eq!(4, count());
+    assert_eq!(b"7400;cd".as_slice(), content().as_slice());
+
+    // CAN and SUB abort through the generic parser and are suppressed.
+    s.next_slice(b"\x1B]7400;x\x18");
+    s.next_slice(b"\x1B]7400;x\x1A");
+    assert_eq!(4, count());
+
+    // Supported OSCs still take their normal path.
+    s.next_slice(b"\x1B]2;title\x07");
+    assert_eq!(4, count());
+    // try testing.expectEqualStrings("title", t.getTitle().?);
+    // SAFETY: the stream's handler aliases `t`; no other borrow is live.
+    assert_eq!(Some(b"title".as_slice()), unsafe {
+        (*s.handler.terminal).get_title()
+    });
+
+    // Clearing the limit restores the old behavior.
+    s.parser.osc_parser.unknown_max_bytes = 0;
+    s.next_slice(b"\x1B]7400;x\x07");
+    assert_eq!(4, count());
+
+    s.deinit();
     drop(s);
     t.deinit(Global);
 }

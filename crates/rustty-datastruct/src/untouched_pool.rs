@@ -254,6 +254,13 @@ impl<S: ItemShape, A: Allocator, G: Allocator> UntouchedPoolBase<S, A, G> {
         &self.free
     }
 
+    /// `freeCount`: the number of items that are allocated but not in use.
+    /// These wait in the free list until `create` hands them out again.
+    #[inline]
+    pub fn free_count(&self) -> usize {
+        self.free.len()
+    }
+
     /// `live`: the number of items allocated from the item allocator, free or
     /// in use.
     #[inline]
@@ -533,6 +540,7 @@ mod tests {
         assert!(a != b);
         assert!(a != c);
         assert!(b != c);
+        assert_eq!(0, pool.free_count());
 
         // Freed items are recycled, most recent first.
         // SAFETY: each item is live and came from this pool.
@@ -540,8 +548,10 @@ mod tests {
             pool.destroy(a);
             pool.destroy(b);
         }
+        assert_eq!(2, pool.free_count());
         assert_eq!(b, pool.create().unwrap());
         assert_eq!(a, pool.create().unwrap());
+        assert_eq!(0, pool.free_count());
 
         // SAFETY: as above.
         unsafe {

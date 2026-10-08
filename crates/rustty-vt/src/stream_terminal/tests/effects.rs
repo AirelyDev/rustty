@@ -295,6 +295,401 @@ fn progress_report_effect_callback() {
     t.deinit(Global);
 }
 
+// Capture cells for the program_status effect test (the reference's `S`).
+thread_local! {
+    static PS_COUNT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    static PS_LAST_STATE: core::cell::Cell<Option<osc::parsers::program_status::State>> =
+        const { core::cell::Cell::new(None) };
+    static PS_LAST_ID: core::cell::RefCell<Option<Vec<u8>>> =
+        const { core::cell::RefCell::new(None) };
+    static PS_LAST_MESSAGE: core::cell::RefCell<Option<Vec<u8>>> =
+        const { core::cell::RefCell::new(None) };
+    static PS_WRITTEN: core::cell::RefCell<Vec<u8>> =
+        const { core::cell::RefCell::new(Vec::new()) };
+}
+
+// fn reset() void { ... }
+fn ps_reset() {
+    PS_COUNT.with(|c| c.set(0));
+    PS_LAST_STATE.with(|c| c.set(None));
+    PS_LAST_ID.with(|c| *c.borrow_mut() = None);
+    PS_LAST_MESSAGE.with(|c| *c.borrow_mut() = None);
+    PS_WRITTEN.with(|c| c.borrow_mut().clear());
+}
+
+// fn programStatus(_: *Handler, report: osc.Command.ProgramStatus.Report) void { ... }
+fn ps_program_status(_: &mut Handler, report: osc::parsers::program_status::Report) {
+    use osc::parsers::program_status::{OptionKey, OptionValue};
+    PS_COUNT.with(|c| c.set(c.get() + 1));
+    PS_LAST_STATE.with(|c| c.set(Some(report.state)));
+    // last_id_len = if (report.readOption(.id)) |v| copy(&last_id, v) else null;
+    let OptionValue::Str(id) = report.read_option(OptionKey::Id) else {
+        unreachable!("id reads as a string")
+    };
+    PS_LAST_ID.with(|c| *c.borrow_mut() = id.map(<[u8]>::to_vec));
+    // var message: std.Io.Writer = .fixed(&last_message);
+    // report.writeText(.msg, &message) catch unreachable;
+    // last_message_len = message.buffered().len;
+    let mut message = Vec::new();
+    report
+        .write_text(OptionKey::Msg, &mut message)
+        .expect("unreachable");
+    PS_LAST_MESSAGE.with(|c| *c.borrow_mut() = Some(message));
+}
+
+// fn writePty(_: *Handler, data: []const u8) void { ... }
+fn ps_write_pty(_: &mut Handler, data: &[u8]) {
+    PS_WRITTEN.with(|c| c.borrow_mut().extend_from_slice(data));
+}
+
+fn ps_written() -> Vec<u8> {
+    PS_WRITTEN.with(|c| c.borrow().clone())
+}
+
+fn ps_count() -> usize {
+    PS_COUNT.with(|c| c.get())
+}
+
+// test "program_status effect callback"
+#[test]
+fn program_status_effect_callback() {
+    use osc::parsers::program_status::State;
+    let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+    // Without a callback, reports are ignored and the query isn't
+    // answered so the program sees the protocol as unsupported.
+    {
+        ps_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(ps_write_pty);
+        s.next_slice(b"\x1B]7501;?\x1B\\\x1B]7501;state=idle\x1B\\");
+        assert_eq!(0, ps_written().len());
+        s.deinit();
+    }
+
+    ps_reset();
+    let mut s = t.vt_stream();
+    s.handler.effects.write_pty = Some(ps_write_pty);
+    s.handler.effects.program_status = Some(ps_program_status);
+
+    // The query is answered with the same body and terminator.
+    s.next_slice(b"\x1B]7501;?\x1B\\");
+    assert_eq!(b"\x1B]7501;?\x1B\\".as_slice(), ps_written().as_slice());
+    PS_WRITTEN.with(|c| c.borrow_mut().clear());
+    s.next_slice(b"\x1B]7501;?\x07");
+    assert_eq!(b"\x1B]7501;?\x07".as_slice(), ps_written().as_slice());
+    assert_eq!(0, ps_count());
+    PS_WRITTEN.with(|c| c.borrow_mut().clear());
+
+    // A report split across writes. "Syncing photos"
+    s.next_slice(b"\x1B]7501;state=working:id=sync:msg=U3lu");
+    assert_eq!(0, ps_count());
+    s.next_slice(b"Y2luZyBwaG90b3M=\x1B\\");
+    assert_eq!(1, ps_count());
+    assert_eq!(Some(State::Working), PS_LAST_STATE.with(|c| c.get()));
+    assert_eq!(
+        Some(b"sync".to_vec()),
+        PS_LAST_ID.with(|c| c.borrow().clone())
+    );
+    assert_eq!(
+        Some(b"Syncing photos".to_vec()),
+        PS_LAST_MESSAGE.with(|c| c.borrow().clone())
+    );
+
+    // A full reset clears every record.
+    s.next_slice(b"\x1Bc");
+    assert_eq!(2, ps_count());
+    assert_eq!(Some(State::Clear), PS_LAST_STATE.with(|c| c.get()));
+    assert_eq!(None, PS_LAST_ID.with(|c| c.borrow().clone()));
+    // try testing.expectEqual(@as(?usize, 0), S.last_message_len);
+    assert_eq!(
+        Some(0),
+        PS_LAST_MESSAGE.with(|c| c.borrow().as_ref().map(Vec::len))
+    );
+
+    // Nothing from the reports was echoed back.
+    assert_eq!(0, ps_written().len());
+
+    s.deinit();
+    drop(s);
+    t.deinit(Global);
+}
+
+// Capture cells for the semantic_prompt effect test (the reference's `S`).
+// `last` keeps the event's scalars; the borrowed strings are copied into
+// `SP_COMMAND` / `SP_ERR` ("The strings are borrowed, so copy them.").
+thread_local! {
+    static SP_COUNT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    static SP_LAST: core::cell::Cell<(SemanticPromptKind, SemanticPromptPromptKind, Option<i32>)> =
+        const {
+            core::cell::Cell::new((
+                SemanticPromptKind::Invalid,
+                SemanticPromptPromptKind::Primary,
+                None,
+            ))
+        };
+    static SP_LAST_CURSOR_X: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    static SP_COMMAND: core::cell::RefCell<Vec<u8>> =
+        const { core::cell::RefCell::new(Vec::new()) };
+    static SP_ERR: core::cell::RefCell<Vec<u8>> =
+        const { core::cell::RefCell::new(Vec::new()) };
+}
+
+// fn semanticPrompt(handler: *Handler, event: Handler.SemanticPrompt) void { ... }
+fn sp_semantic_prompt(handler: &mut Handler, event: SemanticPrompt) {
+    SP_COUNT.with(|c| c.set(c.get() + 1));
+    SP_LAST.with(|c| c.set((event.kind, event.prompt_kind, event.exit_code)));
+    // last_cursor_x = handler.terminal.screens.active.cursor.x;
+    // SAFETY: the callback reaches the terminal only through the handler's
+    // raw alias; nothing else borrows it during the callback.
+    let x = unsafe { (*(*handler.terminal).screens.active).cursor.x };
+    SP_LAST_CURSOR_X.with(|c| c.set(usize::from(x)));
+
+    // The strings are borrowed, so copy them.
+    SP_COMMAND.with(|c| *c.borrow_mut() = event.command.to_vec());
+    SP_ERR.with(|c| *c.borrow_mut() = event.err.to_vec());
+}
+
+fn sp_count() -> usize {
+    SP_COUNT.with(|c| c.get())
+}
+fn sp_kind() -> SemanticPromptKind {
+    SP_LAST.with(|c| c.get().0)
+}
+fn sp_prompt_kind() -> SemanticPromptPromptKind {
+    SP_LAST.with(|c| c.get().1)
+}
+fn sp_exit_code() -> Option<i32> {
+    SP_LAST.with(|c| c.get().2)
+}
+fn sp_command() -> Vec<u8> {
+    SP_COMMAND.with(|c| c.borrow().clone())
+}
+fn sp_err() -> Vec<u8> {
+    SP_ERR.with(|c| c.borrow().clone())
+}
+
+// test "semantic_prompt effect callback"
+#[test]
+fn semantic_prompt_effect_callback() {
+    let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+    // A null callback (the default readonly effects) silently ignores events.
+    {
+        let mut s = t.vt_stream();
+        s.next_slice(b"\x1B]133;C;cmdline_url=ls\x1B\\");
+        s.deinit();
+    }
+
+    // S.count = 0;
+    SP_COUNT.with(|c| c.set(0));
+
+    let mut s = t.vt_stream();
+    s.handler.effects.semantic_prompt = Some(sp_semantic_prompt);
+
+    // The effect fires after the terminal applied the fresh line.
+    s.next_slice(b"abc");
+    s.next_slice(b"\x1B]133;A\x07");
+    assert_eq!(1, sp_count());
+    assert_eq!(SemanticPromptKind::PromptStart, sp_kind());
+    assert_eq!(SemanticPromptPromptKind::Primary, sp_prompt_kind());
+    assert_eq!(0, SP_LAST_CURSOR_X.with(|c| c.get()));
+
+    s.next_slice(b"\x1B]133;P;k=r\x07");
+    assert_eq!(2, sp_count());
+    assert_eq!(SemanticPromptKind::PromptStart, sp_kind());
+    assert_eq!(SemanticPromptPromptKind::Right, sp_prompt_kind());
+
+    s.next_slice(b"\x1B]133;P;k=c\x07");
+    assert_eq!(3, sp_count());
+    assert_eq!(SemanticPromptPromptKind::Continuation, sp_prompt_kind());
+
+    s.next_slice(b"\x1B]133;P;k=s\x07");
+    assert_eq!(4, sp_count());
+    assert_eq!(SemanticPromptPromptKind::Secondary, sp_prompt_kind());
+
+    // An unknown prompt kind is primary.
+    s.next_slice(b"\x1B]133;P;k=x\x07");
+    assert_eq!(5, sp_count());
+    assert_eq!(SemanticPromptPromptKind::Primary, sp_prompt_kind());
+
+    s.next_slice(b"\x1B]133;N\x07");
+    assert_eq!(6, sp_count());
+    assert_eq!(SemanticPromptKind::PromptStart, sp_kind());
+    assert_eq!(SemanticPromptPromptKind::Primary, sp_prompt_kind());
+
+    s.next_slice(b"\x1B]133;B\x07");
+    assert_eq!(7, sp_count());
+    assert_eq!(SemanticPromptKind::InputStart, sp_kind());
+
+    s.next_slice(b"\x1B]133;I\x07");
+    assert_eq!(8, sp_count());
+    assert_eq!(SemanticPromptKind::InputStart, sp_kind());
+
+    s.next_slice(b"\x1B]133;C;cmdline_url=ls%20-la\x07");
+    assert_eq!(9, sp_count());
+    assert_eq!(SemanticPromptKind::OutputStart, sp_kind());
+    assert_eq!(b"ls -la".as_slice(), sp_command().as_slice());
+
+    s.next_slice(b"\x1B]133;C;cmdline='echo hi'\x07");
+    assert_eq!(10, sp_count());
+    assert_eq!(b"echo hi".as_slice(), sp_command().as_slice());
+
+    // No command line, and an undecodable one, are both empty.
+    s.next_slice(b"\x1B]133;C\x07");
+    assert_eq!(11, sp_count());
+    assert_eq!(SemanticPromptKind::OutputStart, sp_kind());
+    assert_eq!(b"".as_slice(), sp_command().as_slice());
+
+    s.next_slice(b"\x1B]133;C;cmdline='bad\x07");
+    assert_eq!(12, sp_count());
+    assert_eq!(b"".as_slice(), sp_command().as_slice());
+
+    s.next_slice(b"\x1B]133;D;1\x07");
+    assert_eq!(13, sp_count());
+    assert_eq!(SemanticPromptKind::CommandEnd, sp_kind());
+    assert_eq!(Some(1), sp_exit_code());
+    assert_eq!(b"".as_slice(), sp_err().as_slice());
+
+    s.next_slice(b"\x1B]133;D\x07");
+    assert_eq!(14, sp_count());
+    assert_eq!(SemanticPromptKind::CommandEnd, sp_kind());
+    assert_eq!(None, sp_exit_code());
+
+    s.next_slice(b"\x1B]133;D;-2;err=boom\x07");
+    assert_eq!(15, sp_count());
+    assert_eq!(Some(-2), sp_exit_code());
+    assert_eq!(b"boom".as_slice(), sp_err().as_slice());
+
+    // Fresh line alone is layout, not lifecycle.
+    s.next_slice(b"\x1B]133;L\x07");
+    assert_eq!(15, sp_count());
+
+    // Sequences the parser rejects report nothing.
+    s.next_slice(b"\x1B]133;Lx\x07");
+    s.next_slice(b"\x1B]133;Z\x07");
+    assert_eq!(15, sp_count());
+
+    s.deinit();
+    drop(s);
+    t.deinit(Global);
+}
+
+// Rust-only (P8-W5 T3, carried from the T2 review): the reference's
+// `try self.terminal.semanticPrompt(cmd)` returns before the effect when the
+// terminal fails, and the shared catch records the failure. `A` does a fresh
+// line first, and at the bottom of a full page the fresh line's index has to
+// grow the page list, which allocates. With every allocation refused from
+// then on, that `A` sets `semantic_failure` and reports nothing, while every
+// earlier `A` was reported.
+#[test]
+fn semantic_prompt_effect_not_called_when_the_terminal_fails() {
+    let failing = crate::alloc::testing::FailingAllocator::over_heap(
+        crate::alloc::testing::Config::default(),
+    );
+    let failing_c = failing.allocator();
+    // SAFETY: `failing_c` and `failing` outlive `t`, deinited below.
+    let alloc = unsafe { crate::alloc::VtAllocator::from_c(core::ptr::NonNull::from(&failing_c)) };
+    // Unlimited scrollback, so a full page is never reused and the page
+    // list has to allocate to grow.
+    let mut t = Terminal::init(
+        alloc,
+        Options {
+            max_scrollback_bytes: None,
+            ..opts(10, 2)
+        },
+    )
+    .unwrap();
+
+    SP_COUNT.with(|c| c.set(0));
+    {
+        let mut s = t.vt_stream();
+        s.handler.effects.semantic_prompt = Some(sp_semantic_prompt);
+
+        failing.fail_index.set(failing.alloc_index.get());
+        let mut reported = 0;
+        while !failing.has_induced_failure.get() {
+            assert!(reported < 100_000, "the page list never allocated");
+            assert!(!s.handler.semantic_failure);
+            // The cursor is not at the left margin, so `A` moves to a new
+            // line.
+            s.next_slice(b"x\x1B]133;A\x07");
+            if !failing.has_induced_failure.get() {
+                reported += 1;
+                assert_eq!(reported, sp_count());
+            }
+        }
+
+        // The refused `A` was not reported, and the failure was recorded.
+        assert_eq!(reported, sp_count());
+        assert!(s.handler.semantic_failure);
+
+        failing.fail_index.set(usize::MAX);
+        s.next_slice(b"x\x1B]133;A\x07");
+        assert_eq!(reported + 1, sp_count());
+        s.deinit();
+    }
+
+    t.deinit(alloc);
+}
+
+// Capture cells for the reset effect test (the reference's `S`).
+thread_local! {
+    static RESET_EVENTS: core::cell::RefCell<Vec<u8>> =
+        const { core::cell::RefCell::new(Vec::new()) };
+    static RESET_CURSOR_X: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+// fn progressReport(_: *Handler, _: osc.Command.ProgressReport) void { ... }
+fn reset_progress_report(_: &mut Handler, _: osc::ProgressReport) {
+    RESET_EVENTS.with(|c| c.borrow_mut().push(b'p'));
+}
+
+// fn reset(handler: *Handler) void { ... }
+fn reset_reset(handler: &mut Handler) {
+    // reset_cursor_x = handler.terminal.screens.active.cursor.x;
+    // SAFETY: the callback reaches the terminal only through the handler's
+    // raw alias; nothing else borrows it during the callback.
+    let x = unsafe { (*(*handler.terminal).screens.active).cursor.x };
+    RESET_CURSOR_X.with(|c| c.set(usize::from(x)));
+    RESET_EVENTS.with(|c| c.borrow_mut().push(b'r'));
+}
+
+// test "reset effect callback"
+#[test]
+fn reset_effect_callback() {
+    let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+    // S.len = 0;
+    // S.reset_cursor_x = 0;
+    RESET_EVENTS.with(|c| c.borrow_mut().clear());
+    RESET_CURSOR_X.with(|c| c.set(0));
+
+    let mut s = t.vt_stream();
+    s.handler.effects.progress_report = Some(reset_progress_report);
+    s.handler.effects.reset = Some(reset_reset);
+
+    // A soft reset (DECSTR) doesn't report a reset.
+    s.next_slice(b"\x1B[!p");
+    assert_eq!(
+        b"".as_slice(),
+        RESET_EVENTS.with(|c| c.borrow().clone()).as_slice()
+    );
+
+    // A full reset reports the progress removal first, and the terminal
+    // already reset itself when the reset is reported.
+    s.next_slice(b"abc\x1Bc");
+    assert_eq!(
+        b"pr".as_slice(),
+        RESET_EVENTS.with(|c| c.borrow().clone()).as_slice()
+    );
+    assert_eq!(0, RESET_CURSOR_X.with(|c| c.get()));
+
+    s.deinit();
+    drop(s);
+    t.deinit(Global);
+}
+
 // Capture cells for the clipboard_write effect test (the analog of the
 // reference's per-test `S` struct; bare `fn` callbacks route through
 // thread-locals since Rust fn pointers cannot capture).
@@ -1723,6 +2118,7 @@ fn continuation_reconstructs_standard_stream_without_duplicate_effects() {
         allocator: Some(cont_alloc()),
         handler: source_handler,
         continuation_max_bytes: Some(1024),
+        osc_unknown_max_bytes: 0,
     });
 
     // Terminal mutation and all callbacks have already committed. The
@@ -1755,6 +2151,7 @@ fn continuation_reconstructs_standard_stream_without_duplicate_effects() {
             allocator: Some(cont_alloc()),
             handler: Handler::init(restored_ptr),
             continuation_max_bytes: None,
+            osc_unknown_max_bytes: 0,
         });
         snapshot_stream.next_slice(COMMITTED);
     }
@@ -1778,6 +2175,7 @@ fn continuation_reconstructs_standard_stream_without_duplicate_effects() {
         allocator: Some(cont_alloc()),
         handler: restored_handler,
         continuation_max_bytes: Some(1024),
+        osc_unknown_max_bytes: 0,
     });
 
     // S.reset();

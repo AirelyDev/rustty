@@ -136,6 +136,7 @@ impl ApcParser {
                     apc: apc::Handler::default(),
                 },
                 continuation_max_bytes: None,
+                osc_unknown_max_bytes: 0,
             }),
             data_f: None,
         }))

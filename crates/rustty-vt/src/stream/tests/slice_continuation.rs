@@ -220,6 +220,7 @@ fn stream_next_slice_until_ground_tracks_only_the_consumed_prefix() {
         allocator: Some(testing_allocator()),
         handler: ContinuationNullHandler,
         continuation_max_bytes: Some(64),
+        osc_unknown_max_bytes: 0,
     });
     // defer stream.deinit();
 
@@ -258,6 +259,7 @@ fn stream_continuation_lifecycle() {
         handler: ContinuationTestHandler::default(),
         allocator: None,
         continuation_max_bytes: Some(0),
+        osc_unknown_max_bytes: 0,
     });
     // defer zero_capacity.deinit();
     let mut zero_capacity_buf = [0u8; 1];
@@ -270,6 +272,7 @@ fn stream_continuation_lifecycle() {
         handler: ContinuationTestHandler::default(),
         allocator: None,
         continuation_max_bytes: Some(64),
+        osc_unknown_max_bytes: 0,
     });
     // defer no_allocator.deinit();
     let mut no_allocator_buf = [0u8; 1];
@@ -283,6 +286,7 @@ fn stream_continuation_lifecycle() {
         allocator: Some(testing_allocator()),
         handler: ContinuationTestHandler::default(),
         continuation_max_bytes: Some(64),
+        osc_unknown_max_bytes: 0,
     });
     // defer tracked.deinit();
 
@@ -314,6 +318,7 @@ fn stream_continuation_lifecycle() {
             allocator: Some(alloc),
             handler: ContinuationNullHandler,
             continuation_max_bytes: Some(64),
+            osc_unknown_max_bytes: 0,
         });
         // defer failing_stream.deinit();
         failing_stream.next_slice(b"\x1b[");
@@ -383,6 +388,7 @@ fn stream_continuation_suffixes_are_replay_safe() {
             allocator: Some(testing_allocator()),
             handler: ContinuationTestHandler::default(),
             continuation_max_bytes: Some(1024),
+            osc_unknown_max_bytes: 0,
         });
         // defer stream.deinit();
         stream.next_slice(case.input);
@@ -463,6 +469,7 @@ fn stream_continuation_reconstructs_every_unfinished_vt_state() {
             allocator: Some(testing_allocator()),
             handler: ContinuationTestHandler::default(),
             continuation_max_bytes: Some(1024),
+            osc_unknown_max_bytes: 0,
         });
         // defer source.deinit();
         source.next_slice(case.input);
@@ -476,6 +483,7 @@ fn stream_continuation_reconstructs_every_unfinished_vt_state() {
             allocator: Some(testing_allocator()),
             handler: ContinuationTestHandler::default(),
             continuation_max_bytes: Some(1024),
+            osc_unknown_max_bytes: 0,
         });
         // defer restored.deinit();
         restored.next_slice(writer.buffered());
@@ -493,6 +501,7 @@ fn stream_continuation_reconstructs_every_unfinished_vt_state() {
         allocator: Some(testing_allocator()),
         handler: ContinuationTestHandler::default(),
         continuation_max_bytes: Some(4),
+        osc_unknown_max_bytes: 0,
     });
     // defer utf8.deinit();
     utf8.next(0xF0);
@@ -515,6 +524,7 @@ fn stream_continuation_is_chunking_independent_and_idempotent() {
         allocator: Some(testing_allocator()),
         handler: ContinuationTestHandler::default(),
         continuation_max_bytes: Some(1024),
+        osc_unknown_max_bytes: 0,
     });
     // defer bulk.deinit();
     bulk.next_slice(input);
@@ -523,6 +533,7 @@ fn stream_continuation_is_chunking_independent_and_idempotent() {
         allocator: Some(testing_allocator()),
         handler: ContinuationTestHandler::default(),
         continuation_max_bytes: Some(1024),
+        osc_unknown_max_bytes: 0,
     });
     // defer scalar.deinit();
     for &c in input {
@@ -541,6 +552,7 @@ fn stream_continuation_is_chunking_independent_and_idempotent() {
         allocator: Some(testing_allocator()),
         handler: ContinuationTestHandler::default(),
         continuation_max_bytes: Some(1024),
+        osc_unknown_max_bytes: 0,
     });
     // defer restored.deinit();
     restored.next_slice(bulk_writer.buffered());
@@ -570,6 +582,7 @@ fn stream_continuation_rebuilds_apc_handler_input() {
         allocator: Some(testing_allocator()),
         handler: ContinuationTestHandler::default(),
         continuation_max_bytes: Some(1024),
+        osc_unknown_max_bytes: 0,
     });
     // defer source.deinit();
     source.next_slice(b"committed\x1b_Gabc");
@@ -582,6 +595,7 @@ fn stream_continuation_rebuilds_apc_handler_input() {
         allocator: Some(testing_allocator()),
         handler: ContinuationTestHandler::default(),
         continuation_max_bytes: Some(1024),
+        osc_unknown_max_bytes: 0,
     });
     // defer restored.deinit();
     restored.next_slice(writer.buffered());
@@ -613,6 +627,7 @@ fn stream_continuation_cap_and_recovery() {
         allocator: Some(testing_allocator()),
         handler: ContinuationTestHandler::default(),
         continuation_max_bytes: Some(4),
+        osc_unknown_max_bytes: 0,
     });
     // defer seeded.deinit();
     seeded.next_slice(b"committed text\x1b[1");
@@ -625,6 +640,7 @@ fn stream_continuation_cap_and_recovery() {
         allocator: Some(testing_allocator()),
         handler: ContinuationTestHandler::default(),
         continuation_max_bytes: Some(4),
+        osc_unknown_max_bytes: 0,
     });
     // defer exceeded.deinit();
     exceeded.next_slice(b"\x1b[123");
@@ -671,6 +687,7 @@ fn stream_continuation_spans_multiple_bulk_feeds() {
         allocator: Some(testing_allocator()),
         handler: ContinuationTestHandler::default(),
         continuation_max_bytes: Some(1024),
+        osc_unknown_max_bytes: 0,
     });
     // defer apc.deinit();
     apc.next_slice(b"text\x1b_Gab");
@@ -687,6 +704,7 @@ fn stream_continuation_spans_multiple_bulk_feeds() {
         allocator: Some(testing_allocator()),
         handler: ContinuationTestHandler::default(),
         continuation_max_bytes: Some(1024),
+        osc_unknown_max_bytes: 0,
     });
     // defer utf8.deinit();
     utf8.next_slice(b"text\xF0");
@@ -714,6 +732,7 @@ fn stream_continuation_exact_cap_and_large_unfinished_string() {
         allocator: Some(testing_allocator()),
         handler: ContinuationNullHandler,
         continuation_max_bytes: Some(5),
+        osc_unknown_max_bytes: 0,
     });
     // defer exact.deinit();
     exact.next_slice(b"\x1b[123");
@@ -731,6 +750,7 @@ fn stream_continuation_exact_cap_and_large_unfinished_string() {
         allocator: Some(testing_allocator()),
         handler: ContinuationNullHandler,
         continuation_max_bytes: Some(payload_len),
+        osc_unknown_max_bytes: 0,
     });
     // defer large.deinit();
     large.next_slice(&input);
@@ -757,6 +777,7 @@ fn stream_continuation_allocation_failure_recovers() {
             allocator: Some(alloc),
             handler: ContinuationNullHandler,
             continuation_max_bytes: Some(16 * 1024),
+            osc_unknown_max_bytes: 0,
         });
         // defer stream.deinit();
 
@@ -815,6 +836,7 @@ fn stream_continuation_every_byte_cuts_preserve_future_behavior() {
                 allocator: Some(testing_allocator()),
                 handler: ContinuationTestHandler::default(),
                 continuation_max_bytes: Some(64 * 1024),
+                osc_unknown_max_bytes: 0,
             });
             // defer source.deinit();
             source.next_slice(&corpus[0..cut]);
@@ -827,6 +849,7 @@ fn stream_continuation_every_byte_cuts_preserve_future_behavior() {
                 allocator: Some(testing_allocator()),
                 handler: ContinuationTestHandler::default(),
                 continuation_max_bytes: Some(64 * 1024),
+                osc_unknown_max_bytes: 0,
             });
             // defer restored.deinit();
             restored.next_slice(continuation_writer.buffered());
