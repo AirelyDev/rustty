@@ -159,7 +159,23 @@ impl Renderer {
     //
     //     return result;
     // }
-    pub fn init(alloc: Global, options: Options) -> Result<Self, Error> {
+    /// Builds the renderer for one surface (`generic.zig` `init`).
+    ///
+    /// # Safety
+    /// `options.device` points to a live, initialized [`crate::Device`] that
+    /// outlives the returned renderer (the core `App` frees it after every
+    /// surface, N522), and `options.font_grid` points to a live `SharedGrid` that
+    /// outlives it too. This fn dereferences both, and the renderer keeps reading
+    /// them until `deinit`.
+    ///
+    /// Calling it from safe code does not compile (P8-W9 FX7, review M1):
+    ///
+    /// ```compile_fail,E0133
+    /// fn build(options: rustty_renderer::generic::Options) {
+    ///     let _ = rustty_renderer::Renderer::init(allocator_api2::alloc::Global, options);
+    /// }
+    /// ```
+    pub unsafe fn init(alloc: Global, options: Options) -> Result<Self, Error> {
         // Initialize our graphics API wrapper, this will prepare the
         // surface provided by the apprt and set up any API- and surface-
         // specific GPU resources.
@@ -181,11 +197,11 @@ impl Renderer {
         // `init` -> host-attach sequence. This is the "reuse `init_offscreen`'s
         // shared body, do NOT duplicate" directive at the `Renderer` level.
         //
-        // R7: `Options.device` must point to a live `Device` (see the field's contract);
-        // this safe fn dereferences it below.
+        // R7: `Options.device` must point to a live `Device` (this fn's `# Safety`);
+        // it is dereferenced below.
         assert!(!options.device.is_null());
-        // SAFETY: `options.device` is the app-scoped render device, which outlives
-        // every renderer (the core `App` frees it after all surfaces; `Options`).
+        // SAFETY: the caller's contract: `options.device` is a live `Device` that
+        // outlives this renderer (the core `App` frees it after all surfaces).
         let api = unsafe {
             Metal::init_offscreen(
                 options.device,

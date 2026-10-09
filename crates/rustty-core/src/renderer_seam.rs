@@ -389,7 +389,14 @@ impl Renderer {
     // that errdefer lives INSIDE the real `Renderer::init` (it owns the moved
     // `DerivedConfig`), so the forwarder does NOT re-run `config.deinit()` on
     // error — doing so would be a double-free.
-    pub fn init<A: apprt::App + 'static>(
+    /// Builds the surface's renderer (`generic.zig` `init`), forwarding to
+    /// [`rustty_renderer::Renderer::init`].
+    ///
+    /// # Safety
+    /// As [`rustty_renderer::Renderer::init`]: `options.device` points to a live
+    /// `Device` and `options.font_grid` to a live `SharedGrid`, both outliving the
+    /// returned renderer (P8-W9 FX7, review M1).
+    pub unsafe fn init<A: apprt::App + 'static>(
         alloc: Allocator,
         options: Options<A>,
     ) -> Result<Renderer, RendererError> {
@@ -414,16 +421,19 @@ impl Renderer {
             rustty_renderer::generic::SurfaceMailbox::new(Arc::new(SurfaceMailboxAdapter {
                 surface_mailbox,
             }));
-        let inner = rustty_renderer::Renderer::init(
-            alloc,
-            rustty_renderer::generic::Options {
-                device,
-                config,
-                font_grid,
-                size,
-                surface_mailbox,
-            },
-        )?;
+        // SAFETY: the caller's contract (this fn's `# Safety`) is the real init's.
+        let inner = unsafe {
+            rustty_renderer::Renderer::init(
+                alloc,
+                rustty_renderer::generic::Options {
+                    device,
+                    config,
+                    font_grid,
+                    size,
+                    surface_mailbox,
+                },
+            )
+        }?;
         // N437: the main thread's handles, taken before the render thread starts.
         let handles = RendererHandles {
             draw_mutex: inner.draw_mutex.clone(),

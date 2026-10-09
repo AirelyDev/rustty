@@ -216,10 +216,10 @@ MSAN_SKIPS=(
   "rustty-renderer|opengl::pipeline::|the framebuffer/vertex-array teardown test in an offscreen GL context (M3)"
   "rustty-renderer|opengl::target::|render-target and dmabuf export tests on the offscreen EGL context (M3)"
   "rustty-renderer|shadertoy::|custom-shader translation through glslang and spirv-cross, whose glslang preprocessor reads libstdc++-constructed stream state (M2)"
-  "rustty-core|app::test_runtime::app_init_creates_and_deinit_frees_the_render_device|App::init creates the app's render device (DeviceBox::init -> Device::init -> init_platform -> eglGetPlatformDisplay in the uninstrumented libEGL.so.1; G-MSAN rvm, P8-W9 T2: use-of-uninitialized-value, origin a malloc inside libEGL.so.1; NEW-FINDINGS N620) (M3)"
-  "rustty-core|app::test_runtime::app_create_and_destroy_empty|App::create runs App::init, which creates the render device through the same uninstrumented libEGL (N620) (M3)"
-  "rustty-core|app::device_tests::|Review Focus 4's two live surfaces on one App: App::create's render device plus each surface renderer's offscreen EGL context and draws in the uninstrumented libEGL/Mesa (N620) (M3)"
-  "rustty-core|surface_occlusion_callback_dedups_and_reports|the surface_visibility_kat integration test's TestSurface::build runs App::create, so it creates the render device through the same uninstrumented libEGL (eglGetPlatformDisplay/eglInitialize; reports in libEGL_mesa, libgallium and Mesa's driconf libexpat; N620) (M3)"
+  "rustty-core|app::test_runtime::app_init_creates_and_deinit_frees_the_render_device|App::init creates the app's render device (DeviceBox::init -> Device::init -> init_platform -> eglGetPlatformDisplay in the uninstrumented libEGL.so.1; G-MSAN rvm, P8-W9 T2: use-of-uninitialized-value, origin a malloc inside libEGL.so.1; NEW-FINDINGS N620) (M6)"
+  "rustty-core|app::test_runtime::app_create_and_destroy_empty|App::create runs App::init, which creates the render device through the same uninstrumented libEGL (N620) (M6)"
+  "rustty-core|app::device_tests::|Review Focus 4's two live surfaces on one App: App::create's render device plus each surface renderer's offscreen EGL context and draws in the uninstrumented libEGL/Mesa (N620) (M6)"
+  "rustty-core|surface_occlusion_callback_dedups_and_reports|the surface_visibility_kat integration test's TestSurface::build runs App::create, so it creates the render device through the same uninstrumented libEGL (eglGetPlatformDisplay/eglInitialize; reports in libEGL_mesa, libgallium and Mesa's driconf libexpat; N620) (M6)"
 )
 # G-TSAN's scope (P7-W17) is the design's allow-list of THREADED crates
 # (design §B, TSan row), not the workspace: a data race needs two threads, and

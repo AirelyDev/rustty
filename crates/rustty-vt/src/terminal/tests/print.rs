@@ -2282,22 +2282,24 @@ fn terminal_vs16_moving_a_character_to_the_next_line_keeps_it_unmapped() {
 // test "Terminal: single shift applies to exactly one codepoint"
 #[test]
 fn terminal_single_shift_applies_to_exactly_one_codepoint() {
-    // (printed before the shift, printed after it, first cell, expected
-    // cursor x after the final 'q')
+    // (printed before the shift, printed after it, expected first-cell
+    // codepoint, expected cursor x after the final 'q'). The first cell pins
+    // the character the shift applied to (the unmapped CJK) or the GL base the
+    // zero-width codepoint joined; the cursor x pins how many cells were used.
     //
     // Guards: 6220a3617 (above 0xFF is unmapped, and the old wide path's
     // spacer write consumed the shift before the character) and c706451fe
     // (the shift is used up by a codepoint that takes no cell).
-    let cases: [(&[u32], &[u32]); 3] = [
+    let cases: [(&[u32], &[u32], u32, crate::size::CellCountInt); 3] = [
         // 6220a3617: wide CJK after the shift; the shift is used on it.
-        (&[], &[0x6A4B, 'q' as u32]),
+        (&[], &[0x6A4B, 'q' as u32], 0x6A4B, 3),
         // c706451fe: shift directly before a combining mark.
-        (&['q' as u32], &[0x0301, 'q' as u32]),
+        (&['q' as u32], &[0x0301, 'q' as u32], 'q' as u32, 2),
         // c706451fe: shift directly before VS16 on a base it does not widen.
-        (&['q' as u32], &[0xFE0F, 'q' as u32]),
+        (&['q' as u32], &[0xFE0F, 'q' as u32], 'q' as u32, 2),
     ];
     for cluster in [false, true] {
-        for (before, after) in cases {
+        for (before, after, first, cursor_x) in cases {
             let mut t = Terminal::init(Global, opts(10, 2)).unwrap();
             t.modes.set(modespkg::Mode::GraphemeCluster, cluster);
             t.configure_charset(charsets::Slots::G2, charsets::Charset::DecSpecial);
@@ -2310,8 +2312,12 @@ fn terminal_single_shift_applies_to_exactly_one_codepoint() {
             }
             assert_eq!(unsafe { (*t.screens.active).charset.single_shift }, None);
 
+            let head = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap().cell;
+            assert_eq!(unsafe { (*head).content_codepoint() }, first as u21);
+
             // The final 'q' is in the last cell written, printed from GL.
             let x = unsafe { (*t.screens.active).cursor.x };
+            assert_eq!(x, cursor_x);
             let last = t
                 .active_mut()
                 .pages
@@ -2375,6 +2381,41 @@ fn terminal_print_kitty_unicode_placeholder() {
     }
 
     assert!(t.is_dirty(screen_pt(0, 0)));
+
+    t.deinit(Global);
+}
+
+/// PORT NOTE: NOT a reference test (P8-W9 FX7, review M8). It keeps the one
+/// still-true arm of the Rustty-only
+/// `terminal_erase_line_clears_the_kitty_virtual_placeholder_flag`, which
+/// `0a3e385a5` (P8-W2 T1) deleted with the backwards scan that upstream
+/// `a573781c6` removed: printing over the only placeholder cell does NOT clear
+/// the row's flag (the reference never clears it on print), so the row stays
+/// marked while holding no placeholder.
+#[test]
+#[cfg_attr(
+    not(all(feature = "kitty-graphics", not(target_os = "none"))),
+    ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+)]
+fn terminal_print_over_a_kitty_placeholder_keeps_the_row_flag() {
+    let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+    let flag = |t: &mut Terminal| -> bool {
+        let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+        unsafe { (*list_cell.row).kitty_virtual_placeholder() }
+    };
+
+    // Printing the placeholder marks the row.
+    t.print(kitty::graphics_unicode::PLACEHOLDER).unwrap();
+    assert!(flag(&mut t));
+
+    // Overwriting the only placeholder cell does NOT clear the flag.
+    t.set_cursor_pos(1, 1);
+    t.print('A' as u32).unwrap();
+    {
+        let cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap().cell;
+        assert_eq!(unsafe { (*cell).content_codepoint() }, 'A' as u21);
+    }
+    assert!(flag(&mut t));
 
     t.deinit(Global);
 }

@@ -361,7 +361,10 @@ fn golden_renderer(cols: CellCountInt, rows: CellCountInt) -> Option<Renderer> {
         // Offscreen: no surface, hence no mailbox (push returns 0).
         surface_mailbox: SurfaceMailbox::DETACHED,
     };
-    Some(Renderer::init(Global, opts).expect("Renderer::init (Metal probed above)"))
+    // SAFETY: `opts.device` is the process's test device (created once, never
+    // freed) and `opts.font_grid` the boxed test grid, freed only after the
+    // renderer's `deinit`, so both outlive the renderer.
+    Some(unsafe { Renderer::init(Global, opts) }.expect("Renderer::init (Metal probed above)"))
 }
 
 /// N503 (G-LSAN on macOS, P7-W16a): the macOS twin of N411's Linux helper.

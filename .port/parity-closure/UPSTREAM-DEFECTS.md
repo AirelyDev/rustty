@@ -2525,7 +2525,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - kind:            leak
 - upstream project: ghostty
 - severity:        low (reachable only with a failing caller allocator)
-- reference:       src/terminal/osc/parsers/color.zig:284-292 (`parseGetSetDynamicColor`: `var result: List = .{};` at :291 with no `errdefer result.deinit(alloc);`, unlike its three siblings `parseGetSetAnsiColor`, `parseResetAnsiColor`, `parseResetDynamicColor`), at a60e9e2a5 (anchored at P7-W0 T4)
+- reference:       src/terminal/osc/parsers/color.zig:284-292 (`parseGetSetDynamicColor`: `var result: List = .{};` at :292 with no `errdefer result.deinit(alloc);`, unlike its three siblings `parseGetSetAnsiColor`, `parseResetAnsiColor`, `parseResetDynamicColor`), at a60e9e2a5 (anchored at P7-W0 T4)
 - defect:          `result` is a `SegmentedList(Request, 2)`: the third request grows the shelf array and shelf 0, the seventh a new shelf array and shelf 1. When that seventh `try result.addOne(alloc)` fails, the error returns without freeing `result`, and the caller's `catch` (color.zig `parse`) substitutes an empty list. Only OSC 10, 11, 12 and 13 reach a seventh request: each value advances with `Dynamic.next()`, which ends at 19, so OSC 14 takes at most six values and OSC 15-19 fewer.
 - ReleaseSafe:     the shelf array and shelf 0 leak (the testing allocator reports them); the OSC is otherwise handled as the reference intends (an empty request list).
 - ReleaseFast:     the same leak.
