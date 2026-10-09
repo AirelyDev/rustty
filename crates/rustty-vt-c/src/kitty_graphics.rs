@@ -2512,6 +2512,9 @@ mod tests {
         ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
     )]
     fn placement_viewport_pos_with_transmit_and_display() {
+        // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+        // warnings cannot land in another test's log sink.
+        let _guard = crate::sys::tests::reset_global();
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -2573,6 +2576,9 @@ mod tests {
         ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
     )]
     fn placement_viewport_pos_fully_off_screen_above() {
+        // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+        // warnings cannot land in another test's log sink.
+        let _guard = crate::sys::tests::reset_global();
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -2635,6 +2641,9 @@ mod tests {
         ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
     )]
     fn placement_viewport_pos_top_off_screen() {
+        // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+        // warnings cannot land in another test's log sink.
+        let _guard = crate::sys::tests::reset_global();
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -2701,6 +2710,9 @@ mod tests {
         ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
     )]
     fn placement_viewport_pos_bottom_off_screen() {
+        // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+        // warnings cannot land in another test's log sink.
+        let _guard = crate::sys::tests::reset_global();
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -2764,6 +2776,9 @@ mod tests {
         ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
     )]
     fn placement_viewport_pos_top_and_bottom_off_screen() {
+        // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+        // warnings cannot land in another test's log sink.
+        let _guard = crate::sys::tests::reset_global();
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -3585,6 +3600,9 @@ mod tests {
         ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
     )]
     fn storage_generation_via_get() {
+        // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+        // warnings cannot land in another test's log sink.
+        let _guard = crate::sys::tests::reset_global();
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -3949,6 +3967,9 @@ mod tests {
         ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
     )]
     fn generation_never_recurs_across_resets_and_screen_switches() {
+        // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+        // warnings cannot land in another test's log sink.
+        let _guard = crate::sys::tests::reset_global();
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {

@@ -11525,3 +11525,106 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   Miri, single test). Assertions are unchanged; the loop cap went 100,000 -> 100 and `assert!(reported > 0)` keeps the
   earlier-prompt arm live. Negative control: removing the `return` after `vt_catch` in `Handler::semantic_prompt`
   turns it RED (`left: 5, right: 6`). No Miri exception was needed.
+- **N625 (FIXED, P8-W9 FX5, `490a0e122`): rustty-vt-c `osc::tests::command_data_invalid_value_warns_through_the_scoped_log_sink`
+  flaked on rwin (V26).** Its scoped log sink caught `osc_set invalid option value=1` from
+  `osc_set_clears_the_command_and_checks_the_option` (new in Phase 8), which logs on the same `osc` scope without holding
+  `sys::tests::reset_global()`. The sink is process-global, so filtering by scope could not separate the two. Reproduced on
+  the Mac: running the two tests together failed 55/300 with the exact rwin message; the same unguarded test also failed
+  the exact-count `sys::tests::logfn_*` tests 83/300. A `cfg(test)` probe of `log_fn` over the whole lib found 29 tests
+  that emit without the guard (4 new in Phase 8: that one, `get_memory_usage`, `set_reset_callback`,
+  `terminal_set_accepts_every_declared_option`). All 29 now take the guard. `reset_global()` returns a `GlobalGuard` that
+  marks its thread, and `log_fn` asserts it under `cfg(test)`, so a new unguarded emitter fails deterministically. No
+  assertion changed. After: both pairs 0/300, `osc::tests` at 16 threads 0/200, lib 601/601 in 5 runs on the Mac, and
+  599/599 twice on rwin (x86_64-pc-windows-msvc). rustty-vt's `log_capture` already admits only the owning thread and
+  needed no change. Cost: the allocation-failure sweeps now serialize on the guard, so the vt-c lib went from about 14 s
+  to 38-62 s on the Mac.
+
+- **N605 (FIXED, P8-W9 FX3, `f4e77aeb8`; re-audit finding, provisional id): rustty-renderer
+  `custom_shader_selection_uniform_layout_matches_compiled_glsl` dropped upstream's uniform-buffer count assertion.**
+  Upstream `shadertoy.zig:391-399` (a60e9e2a5) lists `SPVC_RESOURCE_TYPE_UNIFORM_BUFFER` and requires
+  `try testing.expectEqual(@as(usize, 1), count);` before checking the member offsets; the Rust test found the block by
+  `OpName "Globals"` and never counted. A new test helper `spirv_uniform_buffer_count` (same SPIR-V word-parser style as
+  `spirv_block_member_offsets`) counts `OpVariable`s in the `Uniform` storage class whose pointee struct (through any
+  array) is decorated `Block`, as SPIRV-Cross classifies uniform buffers (`BufferBlock` is a storage buffer there), and
+  the test now does `assert_eq!(1, spirv_uniform_buffer_count(&spv))` at upstream's point. Negative control: a scratch
+  test with a second `layout(binding = 2, std140) uniform Extra` block failed (`left: 1, right: 2`), then was removed.
+  `cargo test -p rustty-renderer custom_shader_selection_uniform_layout` GREEN; clippy on rustty-renderer clean.
+  Evidence: `.port/phase-8/w9/reaudit-at-a60e9e2a5.txt`.
+- **N602 (CLOSED by suppression S19, P8-W9 FX3, `6c3190ddf`; provisional id): G-LSAN (Mac) RED, rustty-apprt-c
+  `macos_window_host` reported 328 B in 3 allocations at exit.** The leak is not Rustty's. Every stack is
+  `xpc_connection_create_mach_service` <- TCC `tccd` <- `TCCAccessPreflight` <- SkyLight `SLSTCCService::TCCAccessCheck` <-
+  `__SLSInitialize_block_invoke` <- `_dispatch_once_callout` <- `SLSGetActiveDisplayList` <-
+  `CVDisplayLinkCreateWithActiveCGDisplays` <- `DisplayLink::create_with_active_cg_displays` (render thread). Evidence
+  (commit `77c3ecdf6`, `.port/phase-8/w9/G-LSAN-mac.rustty-apprt-c.log`).
+  - It happens once per process. `log stream` of `tccd` during a `macos_window_host` run shows one `kTCCServiceListenEvent`
+    preflight per process (msgID `<pid>.1`), although the binary creates a display link for each surface. A scratch probe
+    that creates and releases a CVDisplayLink 1, 5 and 20 times on fresh threads leaks a constant 5,352 B (the S4-S7 classes),
+    3 runs each.
+  - It is timing-dependent. 23 later full runs of the same ASan binary gave 0 reports, so it is not a new test at this pin:
+    the test file is unchanged since `ac750e2af`.
+  - S19 `leak:SLSTCCService::TCCAccessCheck` was added to `lsan-darwin.supp` with a SANITIZER_SUPPRESSIONS.md row.
+  - Negative controls with S19 present: a scratch `Box::leak` test in `macos_window_host` is RED (40 B), and was then
+    removed. An unreleased CVDisplayLink is not reported by LSan with or without suppressions, so S19 hides nothing there.
+  - G-LSAN `--per-crate-target --gate lsan`, full pass on the Mac: GREEN, 10,045 tests, 0 findings, 48 min. In that pass
+    rustty-apprt-c is GREEN (51 passed, 1 ignored), and S19 did not match.
+
+
+- **N620 (FIXED, P8-W9 FX4; provisional id): G-MSAN was RED: rustty-core's render-device tests drive the uninstrumented
+  libEGL.** Since P8-W6 T2 `App::init` creates the app-scoped render device (`DeviceBox::init` -> `Device::init` ->
+  `init_platform` -> `eglGetPlatformDisplay`/`eglInitialize`), so the tests that run `App::init` or `App::create` reach
+  the system's uninstrumented libEGL/Mesa, the class of SANITIZER_SUPPRESSIONS.md M3. MSan stops at the first report,
+  so P8-W9 T2 named one test; a `SAN_MSAN_DIAG=1` (recover mode) run of rustty-core with no skips found reports in
+  exactly four: `app::test_runtime::app_init_creates_and_deinit_frees_the_render_device`,
+  `app::test_runtime::app_create_and_destroy_empty`, `app::device_tests::two_surfaces_share_the_device_destroy_one_draw_the_other_then_deinit`
+  and the `surface_visibility_kat` integration test `surface_occlusion_callback_dedups_and_reports`, every report under
+  libgallium, Mesa's driconf libexpat, libEGL_mesa, libLLVM, libdrm, libEGL.so.1 or an interceptor they called, plus two
+  Rust reads in `OffscreenContext::create_context` (`opengl/gl/sys.rs:279`) of values EGL wrote. They are four
+  `MSAN_SKIPS` entries (the module `app::device_tests::` for the third), each with its reason, recorded as M6. The gate's
+  existing self-checks still hold: every filter must match a listed test (`skips_unmatched`, RED otherwise; G-SAN-SELF
+  H arm "an MSAN_SKIPS filter that matches no test"), and a skip for a crate outside `MSAN_SCOPE` is RED. A single rule
+  was not possible with libtest's substring filters without renaming tests, so the list names the tests; M6 says how
+  it was established. G-MSAN on rvm: **GREEN**, 6,375 tests, 0 findings, 66 min (rustty-core 84 passed).
+- **N621 (FIXED, P8-W9 FX4; provisional id): G-HWASAN's archive check flagged the HOST build-dependency copy of
+  zlib-sys.** `hwasan_archive_check` searched the whole target dir for `*/build/<crate>-*/out/lib*.a`. `rustty-cli` has
+  `zlib-sys` as a build-dependency, which cargo builds for the host under `<td>/debug/build`, without
+  `CARGO_CFG_SANITIZE`, so the wrapper compiles it plain; it links into a build script only. In one shared target dir,
+  once `rustty-cli` had run, the check found that copy too. Phase 7 never hit it: its complete G-HWASAN runs used
+  `--per-crate-target` (N504), and its one shared-target check built the 16 `-sys` members only. The check now looks
+  only under `<td>/<triple>/debug/build`, as `tsan_archive_check` does. Reproduced on rvm (rustty-cli then zlib-sys
+  under HWASan in one target dir): two `libz.a`, the target one with 144 `__hwasan_` references and the host one
+  (`debug/build/zlib-sys-76a181c741038e4b`, the same hash as T2's report) with 0; the base check is RED with T2's exact
+  line, the new one passes. R5 negative control: zlib-sys rebuilt with the wrapper bypassed
+  (`CC_aarch64_unknown_linux_gnu=clang`) leaves a target `libz.a` with 0 references and the new check is RED (`1 of 1 C
+  archive(s) have no __hwasan_ reference`); rebuilt normally it is GREEN again. G-SAN-SELF arm I gains fixtures for both
+  directions and for a missing triple dir. G-HWASAN on rvm, full shared-target pass: **GREEN**, 10,183 tests, 0
+  findings, 15 `-sys` crates all instrumented plus the named gettext-sys skip, cross-check 476/420/56/0 problems, 30 min.
+- **N622 (FIXED, P8-W9 FX4; provisional id): G-TSAN was RED on rustty-core: three reports.**
+  1. Oniguruma first-use init (a Rustty test-and-library ordering gap, fixed). `onig_new` -> `onig_reg_init` reads
+     `onig_inited` and, if unset, runs `onig_initialize`, with no lock (regcomp.c:7667/7769). `DerivedConfig::init`
+     compiles each configured link regex through `Link::oni_regex` without the one thread-safe init, so on a test thread
+     it raced `oni::testing::ensure_init` on another. The reference's contract is one `oni.init` at startup
+     (`global.zig`), single-threaded; production Rustty keeps it (`rustty_init` and the exe both run
+     `rustty_apprt::init_with_action`, whose `GlobalState` init calls `ensure_init` before any app or surface).
+     `Link::oni_regex` now calls `ensure_init` first, as rustty-vt's `tmux::control` does (N102); after the app's
+     init it is a no-op. That makes every non-test regex compile in the workspace run after the init (the only other
+     ones are tmux's, already guarded; the test-only ones call `ensure_init`). Test:
+     `surface::tests::oniguruma_first_use_init_tests::concurrent_derived_config_link_regexes_and_ensure_init_do_not_race`
+     (8 threads behind a barrier, half `ensure_init`, half `DerivedConfig::init`), run alone under TSan: RED in 5 of
+     6 runs before the fix (`onig_reg_init` / `onig_initialize` reports), GREEN in 6 of 6 after.
+  2. Mesa EGL `memcmp` vs `calloc` in `eglGetPlatformDisplay` (false positive, suppressed as T5). Symbolized with the
+     distribution's debuginfo: `_eglFindDisplay`/`_eglSameAttribs` (`egldisplay.c:265/281`), both under
+     `_eglGlobal.Mutex`, a futex `simple_mtx` that TSan cannot see; EGL 1.5 §2.6: "EGL and its client APIs must be
+     threadsafe." So no serialization in Rustty.
+  3. Mesa `pthread_mutex_destroy`/`pthread_cond_destroy` in `gl::draw::flush` (false positive, suppressed as T6).
+     Symbolized: `lp_fence_destroy` (`lp_fence.c:130-131`) on the surviving surface's render thread, for a fence that
+     same thread created in its `blit_framebuffer`, against `lp_fence_signal`'s `mtx_lock`/`cnd_broadcast` on the
+     screen-wide rasterizer thread `llvmpipe-0` (created once per screen, `lp_screen.c:977`). The order is the fence's
+     atomic refcount (`pipe_reference`) in the uninstrumented driver. Nothing of the destroyed surface is involved
+     (its render thread is stopped and joined in `Surface::deinit`), so it is not a Rustty ordering gap and RF4 stays a
+     real test, unchanged.
+  The two `tsan.supp` entries name the Mesa modules (`race:libEGL_mesa.so`, `race:libgallium`; the frames have no
+  symbols), with a WHY each and rows T5/T6. Measured on the `app::` tests (20): with an empty suppressions file, 3
+  of 6 runs reported; with `tsan.supp`, 0 reports in 10 runs, matches listed in 5. Negative controls: G-SAN-SELF's A5
+  race arms run under the real `tsan.supp` and stay RED. Limit (documented under T5/T6): a race between Rustty memory
+  and a Mesa access to it would be hidden in those two modules. G-TSAN on rvm: **GREEN**, 4,536 tests, 0 reports
+  (rustty-core 88), 17 C archives instrumented, 24 min; `race:libEGL_mesa.so` matched once in that run.

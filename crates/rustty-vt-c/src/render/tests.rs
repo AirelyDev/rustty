@@ -1187,6 +1187,9 @@ fn render_row_cells_get_has_styling() {
 // accumulator would report a wrong probe size here.
 #[test]
 fn render_row_cells_get_graphemes_utf8() {
+    // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+    // warnings cannot land in another test's log sink.
+    let _guard = crate::sys::tests::reset_global();
     // const cases = [_]struct { terminal_input: []const u8, expected: []const u8 }{ ... };
     struct Case {
         terminal_input: &'static [u8],
@@ -2709,6 +2712,9 @@ const C_INVALID_VALUE: c_int = -2;
 
 #[test]
 fn render_get_multi_out_of_range_key_is_rejected() {
+    // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+    // warnings cannot land in another test's log sink.
+    let _guard = crate::sys::tests::reset_global();
     with_test_allocator(|alloc| {
         with_terminal_state(
             alloc,
@@ -2749,6 +2755,9 @@ fn render_get_multi_out_of_range_key_is_rejected() {
 
 #[test]
 fn render_row_get_multi_out_of_range_key_is_rejected() {
+    // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+    // warnings cannot land in another test's log sink.
+    let _guard = crate::sys::tests::reset_global();
     with_test_allocator(|alloc| {
         with_terminal_state(
             alloc,
@@ -2801,6 +2810,9 @@ fn render_row_get_multi_out_of_range_key_is_rejected() {
 
 #[test]
 fn render_row_cells_get_multi_out_of_range_key_is_rejected() {
+    // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+    // warnings cannot land in another test's log sink.
+    let _guard = crate::sys::tests::reset_global();
     with_test_allocator(|alloc| {
         with_terminal_state(
             alloc,

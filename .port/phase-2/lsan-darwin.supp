@@ -4,7 +4,7 @@
 #
 # Same rules as lsan.supp: every entry is a THIRD-PARTY allocation (here: Apple
 # system libraries), each with a row in .port/phase-2/SANITIZER_SUPPRESSIONS.md
-# (S3-S18) giving the reason and evidence, and a WHY comment directly above it
+# (S3-S19) giving the reason and evidence, and a WHY comment directly above it
 # (D6 rule c). A leak in Rustty code is never suppressed.
 #
 # Why macOS needs its own file: LeakSanitizer on Darwin takes its roots from
@@ -137,3 +137,16 @@ leak:-[_MTLCommandQueue initWithDevice:descriptor:]
 # (rustty-apprt-c macos_window_host, Metal::warmup's thread); Apple's `leaks`
 # on the same binary built natively: 0 leaks.
 leak:MTLRegisterDevices
+# S19: SkyLight's one-time initialization (__SLSInitialize_block_invoke, run
+# under dispatch_once by the first SLSGetActiveDisplayList, here from
+# CVDisplayLinkCreateWithActiveCGDisplays) preflights the ListenEvent TCC
+# service; TCC opens its XPC connection to tccd for that request (tccd ->
+# xpc_connection_create_mach_service), and the connection's dispatch mach
+# channel and unotes are reported when the exit scan does not find it held.
+# Once per process: tccd's log shows one ListenEvent preflight per process
+# (msgID <pid>.1), however many display links or render threads the process
+# makes. Only allocations made beneath SkyLight's TCC check, and Rustty calls
+# no TCC API. A CVDisplayLink Rustty fails to release is not reported by LSan
+# even without this entry (CoreVideo keeps it reachable; a probe that leaks 3
+# links reports none of them with no suppressions), so S19 hides nothing there.
+leak:SLSTCCService::TCCAccessCheck

@@ -106,6 +106,23 @@ impl Link {
         //     oni.Syntax.default,
         //     null,
         // );
+        //
+        // PORT NOTE (P8-W9 FX4, NEW-FINDINGS N622; the N102 precedent in
+        // rustty-vt's `tmux::control`): `oni.Regex.init` -> `onig_new`
+        // initializes Oniguruma's process-global tables LAZILY when nothing has
+        // (`onig_reg_init` reads `onig_inited`, then runs `onig_initialize`),
+        // with no lock. The reference never reaches that path: the app runs
+        // `oni.init(&.{oni.Encoding.utf8})` once at startup (`global.zig`),
+        // before any surface derives its config, and `zig test` is serial. Rust
+        // runs `DerivedConfig::init` (the surface's and the renderer's) on many
+        // test threads, beside tests that call `ensure_init`, and G-TSAN
+        // reported the lazy init racing the explicit one. So the one
+        // thread-safe process-global init runs first. It is the same UTF-8-only
+        // init the app performs (`rustty-apprt` `GlobalState::init` routes its
+        // `oni.init` through it), so after the app's call this is a no-op. Its
+        // error is ignored: `Regex::init` below still reports an init failure
+        // through the reference's own error path.
+        let _ = oni::testing::ensure_init();
         oni::Regex::init(
             &self.regex,
             oni::RegexOptions::default(),
