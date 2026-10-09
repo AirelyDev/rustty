@@ -11525,3 +11525,16 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   Miri, single test). Assertions are unchanged; the loop cap went 100,000 -> 100 and `assert!(reported > 0)` keeps the
   earlier-prompt arm live. Negative control: removing the `return` after `vt_catch` in `Handler::semantic_prompt`
   turns it RED (`left: 5, right: 6`). No Miri exception was needed.
+- **N625 (FIXED, P8-W9 FX5, `490a0e122`): rustty-vt-c `osc::tests::command_data_invalid_value_warns_through_the_scoped_log_sink`
+  flaked on rwin (V26).** Its scoped log sink caught `osc_set invalid option value=1` from
+  `osc_set_clears_the_command_and_checks_the_option` (new in Phase 8), which logs on the same `osc` scope without holding
+  `sys::tests::reset_global()`. The sink is process-global, so filtering by scope could not separate the two. Reproduced on
+  the Mac: running the two tests together failed 55/300 with the exact rwin message; the same unguarded test also failed
+  the exact-count `sys::tests::logfn_*` tests 83/300. A `cfg(test)` probe of `log_fn` over the whole lib found 29 tests
+  that emit without the guard (4 new in Phase 8: that one, `get_memory_usage`, `set_reset_callback`,
+  `terminal_set_accepts_every_declared_option`). All 29 now take the guard. `reset_global()` returns a `GlobalGuard` that
+  marks its thread, and `log_fn` asserts it under `cfg(test)`, so a new unguarded emitter fails deterministically. No
+  assertion changed. After: both pairs 0/300, `osc::tests` at 16 threads 0/200, lib 601/601 in 5 runs on the Mac, and
+  599/599 twice on rwin (x86_64-pc-windows-msvc). rustty-vt's `log_capture` already admits only the owning thread and
+  needed no change. Cost: the allocation-failure sweeps now serialize on the guard, so the vt-c lib went from about 14 s
+  to 38-62 s on the Mac.
