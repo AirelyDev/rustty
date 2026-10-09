@@ -11487,3 +11487,17 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (G3b): `program_status.zig:141` (the `Report` doc example, `readOption`/`writeText` spelled as upstream, the Rust
   form moved to a PORT NOTE), `stream_terminal.zig:126` (the `startsWith` line, as a PORT NOTE in the doc example) and
   `surface.zig:3952` (the `key` comment in `log_warn_once!`). G3b is GREEN with and without `--strict`.
+
+- **N600 (FIXED, P8-W9 FX1, `01c7a780b`): rustty-bench `hyperlink_map::tests::hyperlink_map` was RED under Miri (G6).**
+  Miri stopped with "inline assembly is not supported" at the `reg_sink!` `core::arch::asm!` in
+  `DoNotOptimize::sink` (`crates/rustty-bench/src/lib.rs`). The asm sink is now `#[cfg(not(miri))]` and otherwise
+  unchanged, so real builds keep the same codegen; a `#[cfg(miri)]` sink uses `core::hint::black_box`. RED before
+  (`cargo +nightly miri nextest run -p rustty-bench -E 'test(=hyperlink_map::tests::hyperlink_map)'`: 1 failed), GREEN
+  after (`cargo +nightly miri nextest run -p rustty-bench`: 38 passed, 15 skipped, 19 min). The gate was not relaxed.
+- **N601 (FIXED, P8-W9 FX1, `b4c13ce4f`): rustty-vt `semantic_prompt_effect_not_called_when_the_terminal_fails` did not
+  finish under Miri (G6).** Not UB. With 10 columns the test needed 4,367 `A`s to fill the first page before the page
+  list allocated (4.9 s native, over 2h40m under Miri). The page keeps the standard byte size, so the test now uses
+  8000 columns: the page holds only a few rows and the refused allocation comes after 5 `A`s (0.01 s native, 89 s
+  Miri, single test). Assertions are unchanged; the loop cap went 100,000 -> 100 and `assert!(reported > 0)` keeps the
+  earlier-prompt arm live. Negative control: removing the `return` after `vt_catch` in `Handler::semantic_prompt`
+  turns it RED (`left: 5, right: 6`). No Miri exception was needed.
