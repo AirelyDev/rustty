@@ -890,7 +890,7 @@ mod tests {
         }
 
         // One
-        page.append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x0A)
+        page.append_grapheme(rac.row, rac.cell, 0x0A)
             .unwrap();
         assert!(unsafe { (*rac.row).grapheme() });
         assert!(unsafe { (*rac.cell).has_grapheme() });
@@ -900,7 +900,7 @@ mod tests {
         );
 
         // Two
-        page.append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x0B)
+        page.append_grapheme(rac.row, rac.cell, 0x0B)
             .unwrap();
         assert!(unsafe { (*rac.row).grapheme() });
         assert!(unsafe { (*rac.cell).has_grapheme() });
@@ -910,8 +910,8 @@ mod tests {
         );
 
         // Clear it
-        page.clear_grapheme(unsafe { &mut *rac.cell });
-        page.update_row_grapheme_flag(unsafe { &mut *rac.row });
+        page.clear_grapheme(rac.cell);
+        page.update_row_grapheme_flag(rac.row);
         assert!(!unsafe { (*rac.row).grapheme() });
         assert!(!unsafe { (*rac.cell).has_grapheme() });
 
@@ -934,8 +934,8 @@ mod tests {
         let count = GRAPHEME_CHUNK_LEN * 10;
         for i in 0..count {
             page.append_grapheme(
-                unsafe { &mut *rac.row },
-                unsafe { &mut *rac.cell },
+                rac.row,
+                rac.cell,
                 (0x0A + i) as u32,
             )
             .unwrap();
@@ -966,8 +966,8 @@ mod tests {
 
         for i in 0..GRAPHEME_MAX_LEN + 16 {
             page.append_grapheme(
-                unsafe { &mut *rac.row },
-                unsafe { &mut *rac.cell },
+                rac.row,
+                rac.cell,
                 (0x0300 + i) as u32,
             )
             .unwrap();
@@ -1022,19 +1022,19 @@ mod tests {
         unsafe {
             *rac.cell = Cell::init(0x09);
         }
-        page.append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x0A)
+        page.append_grapheme(rac.row, rac.cell, 0x0A)
             .unwrap();
 
         let rac2 = page.get_row_and_cell(1, 0);
         unsafe {
             *rac2.cell = Cell::init(0x09);
         }
-        page.append_grapheme(unsafe { &mut *rac2.row }, unsafe { &mut *rac2.cell }, 0x0A)
+        page.append_grapheme(rac2.row, rac2.cell, 0x0A)
             .unwrap();
 
         // Clear it
-        page.clear_grapheme(unsafe { &mut *rac.cell });
-        page.update_row_grapheme_flag(unsafe { &mut *rac.row });
+        page.clear_grapheme(rac.cell);
+        page.update_row_grapheme_flag(rac.row);
         assert!(unsafe { (*rac.row).grapheme() });
         assert!(!unsafe { (*rac.cell).has_grapheme() });
         assert!(unsafe { (*rac2.cell).has_grapheme() });
@@ -1132,9 +1132,9 @@ mod tests {
             unsafe {
                 *rac.cell = Cell::init(0x09);
             }
-            page.append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x0A)
+            page.append_grapheme(rac.row, rac.cell, 0x0A)
                 .unwrap();
-            page.append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x0B)
+            page.append_grapheme(rac.row, rac.cell, 0x0B)
                 .unwrap();
         }
 
@@ -1712,8 +1712,8 @@ mod tests {
                     *rac.cell = cell_codepoint(42);
                 }
                 page.set_hyperlink(
-                    unsafe { &mut *rac.row },
-                    unsafe { &mut *rac.cell },
+                    rac.row,
+                    rac.cell,
                     hyperlink_id,
                 )
                 .unwrap();
@@ -1753,7 +1753,7 @@ mod tests {
             unsafe {
                 *rac.cell = cell_codepoint((y + 1) as u21);
             }
-            page.append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x0A)
+            page.append_grapheme(rac.row, rac.cell, 0x0A)
                 .unwrap();
         }
 
@@ -1782,8 +1782,8 @@ mod tests {
         // Write again
         for y in 0..page.capacity.rows as usize {
             let rac = page.get_row_and_cell(1, y);
-            page.clear_grapheme(unsafe { &mut *rac.cell });
-            page.update_row_grapheme_flag(unsafe { &mut *rac.row });
+            page.clear_grapheme(rac.cell);
+            page.update_row_grapheme_flag(rac.row);
             unsafe {
                 *rac.cell = cell_codepoint(0);
             }
@@ -1837,7 +1837,7 @@ mod tests {
                 *rac.cell = cell_codepoint((y + 1) as u21);
             }
             page2
-                .append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x0A)
+                .append_grapheme(rac.row, rac.cell, 0x0A)
                 .unwrap();
         }
 
@@ -1925,12 +1925,12 @@ mod tests {
             }
             {
                 let rac = page.get_row_and_cell(0, y);
-                page.append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x0A)
+                page.append_grapheme(rac.row, rac.cell, 0x0A)
                     .unwrap();
             }
             {
                 let rac = page.get_row_and_cell(9, y);
-                page.append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x0A)
+                page.append_grapheme(rac.row, rac.cell, 0x0A)
                     .unwrap();
             }
         }
@@ -2007,13 +2007,13 @@ mod tests {
             {
                 let rac = page2.get_row_and_cell(0, y);
                 page2
-                    .append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x0A)
+                    .append_grapheme(rac.row, rac.cell, 0x0A)
                     .unwrap();
             }
             {
                 let rac = page2.get_row_and_cell(9, y);
                 page2
-                    .append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x0A)
+                    .append_grapheme(rac.row, rac.cell, 0x0A)
                     .unwrap();
             }
         }
@@ -2079,8 +2079,8 @@ mod tests {
             {
                 let rac = page.get_row_and_cell(7, y);
                 page.set_hyperlink(
-                    unsafe { &mut *rac.row },
-                    unsafe { &mut *rac.cell },
+                    rac.row,
+                    rac.cell,
                     hyperlink_id,
                 )
                 .unwrap();
@@ -2180,8 +2180,8 @@ mod tests {
             {
                 let rac = page.get_row_and_cell(7, y);
                 page.set_hyperlink(
-                    unsafe { &mut *rac.row },
-                    unsafe { &mut *rac.cell },
+                    rac.row,
+                    rac.cell,
                     hyperlink_id,
                 )
                 .unwrap();
@@ -2255,8 +2255,8 @@ mod tests {
             {
                 let rac = page.get_row_and_cell(7, y);
                 page.set_hyperlink(
-                    unsafe { &mut *rac.row },
-                    unsafe { &mut *rac.cell },
+                    rac.row,
+                    rac.cell,
                     hyperlink_id,
                 )
                 .unwrap();
@@ -2311,12 +2311,17 @@ mod tests {
             }
         }
 
+        // PORT NOTE: pass the raw row pointers straight through (N640). A
+        // `&mut *src` temporary coerced to `*mut Row` keeps that reference's
+        // tag; the debug-only `assert_integrity` inside `clear_cells` reads
+        // every row through the page base and freezes it, so the later
+        // flag write through `dst_row` is Tree Borrows UB.
         let src = page.get_row(0);
         let dst = page.get_row(1);
         page.move_cells(
-            unsafe { &mut *src },
+            src,
             0,
-            unsafe { &mut *dst },
+            dst,
             0,
             page.capacity.cols as usize,
         );
@@ -2350,17 +2355,18 @@ mod tests {
             unsafe {
                 *rac.cell = cell_codepoint((x + 1) as u21);
             }
-            page.append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x0A)
+            page.append_grapheme(rac.row, rac.cell, 0x0A)
                 .unwrap();
         }
         let original_count = page.grapheme_count();
 
+        // PORT NOTE: raw row pointers; see page_moveCells_text_only (N640).
         let src = page.get_row(0);
         let dst = page.get_row(1);
         page.move_cells(
-            unsafe { &mut *src },
+            src,
             0,
-            unsafe { &mut *dst },
+            dst,
             0,
             page.size.cols as usize,
         );
@@ -2405,7 +2411,7 @@ mod tests {
             unsafe {
                 *rac.cell = cell_codepoint((x + 1) as u21);
             }
-            page.append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x0A)
+            page.append_grapheme(rac.row, rac.cell, 0x0A)
                 .unwrap();
         }
 
@@ -2434,7 +2440,7 @@ mod tests {
             unsafe {
                 *rac.cell = cell_codepoint((x + 1) as u21);
             }
-            page.append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x0A)
+            page.append_grapheme(rac.row, rac.cell, 0x0A)
                 .unwrap();
         }
 
@@ -2974,7 +2980,7 @@ mod tests {
             unsafe {
                 *rac.cell = Cell::init(b'a' as u21);
             }
-            page.append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x0301)
+            page.append_grapheme(rac.row, rac.cell, 0x0301)
                 .unwrap(); // combining acute accent
         }
         {
@@ -2989,7 +2995,7 @@ mod tests {
             unsafe {
                 *rac.cell = Cell::init(b'e' as u21);
             }
-            page.append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x0300)
+            page.append_grapheme(rac.row, rac.cell, 0x0300)
                 .unwrap(); // combining grave accent
         }
         {
@@ -3007,11 +3013,11 @@ mod tests {
             unsafe {
                 *rac.cell = Cell::init(b'o' as u21);
             }
-            page.append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x0301)
+            page.append_grapheme(rac.row, rac.cell, 0x0301)
                 .unwrap();
-            page.append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x0302)
+            page.append_grapheme(rac.row, rac.cell, 0x0302)
                 .unwrap();
-            page.append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x0303)
+            page.append_grapheme(rac.row, rac.cell, 0x0303)
                 .unwrap();
         }
         {
@@ -3030,7 +3036,7 @@ mod tests {
             unsafe {
                 *rac.cell = Cell::init(b'x' as u21);
             }
-            page.append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x0304)
+            page.append_grapheme(rac.row, rac.cell, 0x0304)
                 .unwrap();
         }
         {
@@ -3085,7 +3091,7 @@ mod tests {
 
         // Add 6 codepoints - requires 2 chunks (6 * 4 = 24 bytes, rounds up to 32)
         for i in 0..6u32 {
-            page.append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x0300 + i)
+            page.append_grapheme(rac.row, rac.cell, 0x0300 + i)
                 .unwrap();
         }
 
@@ -3136,7 +3142,7 @@ mod tests {
                     uri: uri1.as_bytes().to_vec(),
                 })
                 .unwrap();
-            page.set_hyperlink(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, id)
+            page.set_hyperlink(rac.row, rac.cell, id)
                 .unwrap();
             id
         };
@@ -3158,7 +3164,7 @@ mod tests {
 
             // Use the same hyperlink ID for another cell
             unsafe { page.hyperlink_set.use_id(page.memory_ptr(), id1) };
-            page.set_hyperlink(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, id1)
+            page.set_hyperlink(rac.row, rac.cell, id1)
                 .unwrap();
         }
         {
@@ -3179,7 +3185,7 @@ mod tests {
                     uri: uri2.as_bytes().to_vec(),
                 })
                 .unwrap();
-            page.set_hyperlink(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, id)
+            page.set_hyperlink(rac.row, rac.cell, id)
                 .unwrap();
         }
         // 2 hyperlinks - capacity accounts for load factor
@@ -3207,7 +3213,7 @@ mod tests {
                     uri: "https://outside.example.com".as_bytes().to_vec(),
                 })
                 .unwrap();
-            page.set_hyperlink(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, id)
+            page.set_hyperlink(rac.row, rac.cell, id)
                 .unwrap();
         }
         {
@@ -3269,7 +3275,7 @@ mod tests {
                     uri: uri.as_bytes().to_vec(),
                 })
                 .unwrap();
-            page.set_hyperlink(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, link_id)
+            page.set_hyperlink(rac.row, rac.cell, link_id)
                 .unwrap();
             link_id
         };
@@ -3324,7 +3330,7 @@ mod tests {
                     uri: uri.as_bytes().to_vec(),
                 })
                 .unwrap();
-            page.set_hyperlink(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, link_id)
+            page.set_hyperlink(rac.row, rac.cell, link_id)
                 .unwrap();
             link_id
         };
@@ -3333,7 +3339,7 @@ mod tests {
         for x in 1..(cols as usize) {
             let rac = page.get_row_and_cell(x, 0);
             unsafe { page.hyperlink_set.use_id(page.memory_ptr(), id) };
-            page.set_hyperlink(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, id)
+            page.set_hyperlink(rac.row, rac.cell, id)
                 .unwrap();
         }
 
@@ -3789,7 +3795,7 @@ mod tests {
         }
 
         // maxInt(u21) + 1
-        let _ = page.append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x20_0000);
+        let _ = page.append_grapheme(rac.row, rac.cell, 0x20_0000);
     }
 
     #[test]
@@ -3808,8 +3814,8 @@ mod tests {
         }
 
         let _ = page.set_graphemes(
-            unsafe { &mut *rac.row },
-            unsafe { &mut *rac.cell },
+            rac.row,
+            rac.cell,
             &[0x0Au32, 0x20_0000],
         );
     }
@@ -3830,9 +3836,9 @@ mod tests {
             *rac.cell = Cell::init(0x09);
         }
 
-        page.append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x10FFFF)
+        page.append_grapheme(rac.row, rac.cell, 0x10FFFF)
             .unwrap();
-        page.append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x1F_FFFF)
+        page.append_grapheme(rac.row, rac.cell, 0x1F_FFFF)
             .unwrap();
         assert_eq!(
             &[0x10FFFFu32, 0x1F_FFFF][..],
@@ -3844,8 +3850,8 @@ mod tests {
             *rac2.cell = Cell::init(0x09);
         }
         page.set_graphemes(
-            unsafe { &mut *rac2.row },
-            unsafe { &mut *rac2.cell },
+            rac2.row,
+            rac2.cell,
             &[0x1F_FFFFu32],
         )
         .unwrap();
