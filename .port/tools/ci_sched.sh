@@ -583,6 +583,8 @@ ci_on_signal() {
 #      Control: the scoped banner removed (the run falls through to PASS).
 #   G  --fast still exits 4 and names its skips, serial and parallel.
 #   H  --prune-targets deletes only marked dirs under target/ci-targets.
+#   I  the harness: a mutation whose target no longer exists is a FAIL, and
+#      the fixture it leaves exits 99 (never a stale copy from a past run).
 CST_PASS=0; CST_FAIL=0
 cst_ok()  { echo "  ok    $1"; CST_PASS=$((CST_PASS + 1)); }
 cst_bad() { echo "  FAIL  $1"; printf '%s\n' "${CST_OUT:-}" | tail -15 | sed 's/^/        /'; CST_FAIL=$((CST_FAIL + 1)); }
@@ -592,9 +594,13 @@ cst_bad() { echo "  FAIL  $1"; printf '%s\n' "${CST_OUT:-}" | tail -15 | sed 's/
 cst_make() {
   local d="$CST_BASE/$1"
   mkdir -p "$d/.port/tools/gates" "$d/target"
-  CST_REG="$2" "$PY" - "$ROOT/.port/tools" "$d/.port/tools" <<'PY' || return 1
+  # Both files are built before either is written, and a failure (a mutation
+  # target that no longer exists, say) leaves a ci.sh that exits 99: a stale
+  # copy from an earlier run must never stand in for this one.
+  if ! CST_REG="$2" "$PY" - "$ROOT/.port/tools" "$d/.port/tools" <<'PY'
 import os, sys
 src, dst = sys.argv[1], sys.argv[2]
+out = {}
 for f in ("ci.sh", "ci_sched.sh"):
     s = open(os.path.join(src, f)).read()
     if f == "ci.sh":
@@ -608,8 +614,15 @@ for f in ("ci.sh", "ci_sched.sh"):
         body = s if a < 0 else s[:a]
         assert body.count(old) == 1, "mutation target occurs %d times: %r" % (body.count(old), old)
         s = body.replace(old, new) + ("" if a < 0 else s[a:])
+    out[f] = s
+for f, s in out.items():
     open(os.path.join(dst, f), "w").write(s)
 PY
+  then
+    printf '#!/usr/bin/env bash\necho "FIXTURE BROKEN: cst_make %s"\nexit 99\n' "$1" > "$d/.port/tools/ci.sh"
+    CST_OUT=""; cst_bad "cst_make $1: the fixture copy could not be built (a mutation target that no longer exists?)"
+    return 1
+  fi
   cat > "$d/.port/tools/gates/fake.sh" <<'FAKE'
 #!/usr/bin/env bash
 # fake.sh ID RC SECONDS [MARKER-LINE]
@@ -756,7 +769,7 @@ A2|HARD|light|after=A1|bash $GATES/fake.sh A2 0 0'
   cst_run cap-mut --jobs 8 --heavy-cap 2; mh="$(cst_events cap-mut maxpar V1 V2 V3 V4)"
   if [ "$mh" -gt 2 ]; then cst_ok "C control: a dropped heavy-cap check is noticed (max $mh heavy at once)"
   else cst_bad "C control: a dropped heavy-cap check went unnoticed (max $mh)"; fi
-  CST_MUT_FILE=ci_sched.sh CST_MUT_OLD='  [ -n "$m" ] || return 0' CST_MUT_NEW='  return 0' cst_make lock-mut "$R"
+  CST_MUT_FILE=ci_sched.sh CST_MUT_OLD='  [ "${GS_MUTEX[$i]}" != " " ] || return 0' CST_MUT_NEW='  return 0' cst_make lock-mut "$R"
   cst_run lock-mut --jobs 8 --heavy-cap 2
   if cst_events lock-mut overlap L1 L2; then cst_ok "C control: a dropped lock check is noticed (L1 and L2 overlapped)"
   else cst_bad "C control: a dropped lock check went unnoticed"; fi
@@ -816,6 +829,16 @@ P2|HARD|light|dir=second|bash $GATES/fake.sh P2 0 0'
   if [ -d "$tr/handmade" ] && [ "$(printf '%s\n' "$CST_OUT" | grep -c '^rc=1$')" = 3 ] && cst_has "no $CI_TARGET_MARK"; then
     cst_ok "H control: an unmarked dir, a non-plain name and a foreign root are each refused"
   else cst_bad "H prune refusals"; fi
+
+  # I — the harness itself: a mutation whose target is gone must not run a
+  # stale copy (it happened: a refactor removed a target and an old fixture
+  # kept the arm green).
+  local nf
+  nf="$( (CST_FAIL=0; CST_MUT_FILE=ci_sched.sh CST_MUT_OLD='no such scheduler text' CST_MUT_NEW=x \
+          cst_make broken 'X1|HARD|light|-|bash $GATES/fake.sh X1 0 0' >/dev/null 2>&1; echo "$CST_FAIL") )"
+  cst_run broken --jobs 1
+  if [ "$nf" = 1 ] && [ "$CST_RC" = 99 ] && cst_has "FIXTURE BROKEN"; then cst_ok "I a mutation target that is gone fails the arm and leaves a fixture that exits 99"
+  else cst_bad "I fail-closed fixture (counted $nf, exit $CST_RC)"; fi
 
   echo "--- G-CI-SELF: $CST_PASS ok, $CST_FAIL failed (fixtures in $CST_BASE) ---"
   [ "$CST_FAIL" -eq 0 ] || { echo "G-CI-SELF RED"; return 1; }
