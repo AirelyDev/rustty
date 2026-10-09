@@ -3374,6 +3374,23 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    create the log in a directory made with `mkdtemp` (or open it `O_CREAT | O_EXCL` inside a private directory) and remove both afterwards.
 - upstream status: not reported
 
+### UD381 — VT formatter output replays an origin-mode cursor outside the margins at the wrong position
+
+- id:              UD381 (P8-W10 T2)
+- kind:            non-crash (breaks evident intent; R13)
+- upstream project: ghostty
+- severity:        low (a cursor-position mismatch after replaying formatter output; needs origin mode with the cursor outside the margins)
+- reference:       at 246f70287 (`23c7a3e5a`), `src/terminal/formatter.zig` `TerminalFormatter.format` sets `screen_formatter.cursor_origin` to the scrolling region's top-left when the VT output restores origin mode and the region, and `ScreenFormatter.format` writes the cursor CUP as `(cursor.y -| origin.y) + 1; (cursor.x -| origin.x) + 1`.
+- defect:          the formatter's evident intent is to reproduce the cursor ("reconstructs the terminal state as closely as possible"; the commit restores the cursor in origin mode). In origin mode CUP can only address cells inside the margins, but the cursor can be outside them: DECRC restores a cursor saved in origin mode after the margins changed, clamped only to the screen. The saturating subtraction avoids an underflow, but the replaying terminal clamps the written CUP into the region. Measured on a 20x10 terminal with `extra = .all`: cursor (0,0) under region rows 3-8 replays at (0,2); (1,1) under rows 3-8 and columns 4-15 at (3,2); (19,9) under rows 3-8 at (19,7).
+- ReleaseSafe:     no crash; wrong cursor position after replay.
+- ReleaseFast:     the same.
+- reachability:    any program: `CSI ?6h`, `ESC 7`, `CSI ?6l`, `CSI 3;8r`, `ESC 8`, then formatting the terminal as VT with the modes, scrolling region and cursor extras (for example a C embedder's VT snapshot).
+- port handling:   `crates/rustty-vt/src/formatter.rs`: `ScreenFormatter.cursor_margins` (Rustty-only, set together with `cursor_origin`). Only when origin mode is on and the cursor is outside the margins, the cursor extra writes full-screen margins (`CSI r`, and `CSI s` when left and right margins are set, which implies DECLRMM), the absolute CUP (plus the pending-wrap reprint), DECSC, the real DECSTBM/DECSLRM, then DECRC, which restores the position, the pending wrap and origin mode. This overwrites the replaying terminal's saved cursor; the formatter does not reproduce the saved cursor at all, so nothing it emits is lost (`PORT NOTE (UD381)`). Every other case keeps upstream's output byte for byte.
+- parity row(s):   none; found by the P8-W10 T2 R13 edge-case review of `23c7a3e5a`.
+- test:            `crates/rustty-vt` `formatter::tests::terminal_screen::terminal_vt_with_cursor_in_origin_mode_outside_the_margins` (RED with upstream's output: replayed y 2 instead of 0; GREEN with the fix; covers (0,0), (1,1), (19,9), and (19,9) with a pending wrap) and `terminal_vt_with_cursor_in_origin_mode_inside_the_margins_unchanged` (the in-margins output stays upstream's, with no DECSC/DECRC).
+- proposed fix:    when origin mode is on and the cursor is outside the margins, write the position under full-screen margins and restore it through DECSC/DECRC around re-setting the margins, as above.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
