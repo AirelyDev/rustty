@@ -807,6 +807,10 @@ EOF
 
 # Matrix result accumulators (globals: bash 3.2 has no namerefs).
 M_RED=0; M_BLOCKED=0; M_TOTAL=0; M_ROWS=""; M_WALL=0
+# M_NARROWED: SAN_ONLY narrowed the gate (ci.sh --changed-since uses it as the
+# gates' crate selector). gate_verdict then answers BLOCKED (exit 3), never
+# GREEN, and says SCOPED-GREEN when what ran is clean.
+M_NARROWED=0
 # TARGET DIRS. Default: ONE target dir per sanitizer pass, target/san-<san>,
 # shared by every crate of the pass (each instrumented dependency, the C -sys
 # builds and MSan's -Zbuild-std std are built once, not once per crate), and
@@ -952,6 +956,12 @@ gate_verdict() {  # gate_verdict ID EXTRA_RED
   local id="$1" extra="$2"
   if [ "$M_RED" -ne 0 ] || [ "$extra" -ne 0 ]; then echo "$id: RED"; return 1; fi
   if [ "$M_BLOCKED" -ne 0 ]; then echo "$id: BLOCKED (a crate did not build, or the disk floor was reached; see above)"; return 3; fi
+  if [ "$M_NARROWED" -ne 0 ]; then
+    # Checked before the vacuity floor: SAN_ONLY may select no crate of this
+    # gate's scope at all, which is a narrowing to nothing, not a vacuous pass.
+    echo "$id: BLOCKED — SCOPED-GREEN: SAN_ONLY narrowed the run; $M_TOTAL test(s) ran clean in it. Never a full GREEN."
+    return 3
+  fi
   if [ "$M_TOTAL" -eq 0 ]; then echo "$id: RED — VACUOUS, 0 tests ran"; return 1; fi
   echo "$id: GREEN ($M_TOTAL test(s) under the sanitizer, 0 findings)"
   return 0
@@ -1066,7 +1076,7 @@ EOF
     # A narrowed run cannot verify the Miri exceptions of the crates it left
     # out; it reports BLOCKED, never GREEN.
     echo "  BLOCKED: SAN_ONLY narrowed the run; the Miri-exception cross-check needs the whole pass"
-    M_BLOCKED=1
+    M_NARROWED=1
   else
     asan_claims_crosscheck "$san" || extra=1
   fi
@@ -1145,7 +1155,7 @@ gate_tsan() {
   fi
   matrix_run tsan "" ${specs_t[@]+"${specs_t[@]}"}
   matrix_summary tsan
-  if [ -n "${SAN_ONLY:-}" ]; then echo "  BLOCKED: SAN_ONLY narrowed the run"; M_BLOCKED=1; fi
+  if [ -n "${SAN_ONLY:-}" ]; then echo "  BLOCKED: SAN_ONLY narrowed the run"; M_NARROWED=1; fi
   gate_verdict "G-TSAN" "$extra"
 }
 
@@ -1304,8 +1314,18 @@ gate_msan() {
   msan_partition_check || extra=1
   for e in ${MSAN_SKIPS[@]+"${MSAN_SKIPS[@]}"}; do printf '  skipped in %s: tests matching %s — %s\n' "${e%%|*}" "$(printf '%s' "$e" | cut -d'|' -f2)" "${e##*|}"; done
   rm -rf -- "${SAN_LOG_ROOT:?}/msan"
-  matrix_run msan "" ${MSAN_SCOPE[@]+"${MSAN_SCOPE[@]}"}
+  local -a specs_m=()
+  for e in ${MSAN_SCOPE[@]+"${MSAN_SCOPE[@]}"}; do specs_m+=("$e"); done
+  if [ -n "${SAN_ONLY:-}" ]; then
+    # As for the ASan-like gates: a narrowed run is BLOCKED, never GREEN.
+    local -a narrowed=()
+    for e in ${specs_m[@]+"${specs_m[@]}"}; do case " $SAN_ONLY " in *" ${e%%:*} "*) narrowed+=("$e") ;; esac; done
+    specs_m=(${narrowed[@]+"${narrowed[@]}"})
+    echo "NOTE: SAN_ONLY narrows this run to: ${specs_m[*]:-<nothing>} — the verdict is BLOCKED, never GREEN"
+  fi
+  matrix_run msan "" ${specs_m[@]+"${specs_m[@]}"}
   matrix_summary msan
+  if [ -n "${SAN_ONLY:-}" ]; then echo "  BLOCKED: SAN_ONLY narrowed the run"; M_NARROWED=1; fi
   if [ -n "${SAN_MSAN_DIAG:-}" ]; then echo "  BLOCKED: SAN_MSAN_DIAG ran without the named skips (a diagnosis run)"; M_BLOCKED=1; fi
   gate_verdict "G-MSAN" "$extra"
 }
