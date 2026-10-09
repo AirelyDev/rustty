@@ -705,6 +705,70 @@ fn terminal_vt_with_scrolling_region() {
     t2.deinit(Global);
 }
 
+// test "Terminal vt with cursor in origin mode"
+#[test]
+fn terminal_vt_with_cursor_in_origin_mode() {
+    // Each stream sets a scrolling region and origin mode, then moves
+    // the cursor within the region; the last one leaves a pending wrap
+    // in the right column, which is restored by printing that cell again.
+    // The left and right margins need mode 69.
+    let streams: [&[u8]; 3] = [
+        b"\x1b[3;8r\x1b[?6h\x1b[2;5H",
+        b"\x1b[?69h\x1b[3;8r\x1b[4;15s\x1b[?6h\x1b[2;3H",
+        b"\x1b[3;8r\x1b[?6h\x1b[2;20Hx",
+    ];
+    for stream in streams {
+        let mut builder: Vec<u8> = Vec::new();
+
+        let mut t = Terminal::init(Global, opts(20, 10)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(stream);
+        }
+
+        let t_ptr: *const Terminal = &t;
+        let mut formatter: TerminalFormatter = TerminalFormatter::init(t_ptr, Options::vt());
+        formatter.extra = TerminalExtra::ALL;
+        formatter.format(&mut builder).unwrap();
+
+        let mut t2 = Terminal::init(Global, opts(20, 10)).unwrap();
+        {
+            let mut s2 = t2.vt_stream();
+            s2.next_slice(builder.as_slice());
+        }
+
+        assert!(t2.modes.get(crate::modes::Mode::Origin));
+        let (c1, c2) = unsafe { (&(*t.screens.active).cursor, &(*t2.screens.active).cursor) };
+        assert_eq!(c1.x, c2.x);
+        assert_eq!(c1.y, c2.y);
+        assert_eq!(c1.pending_wrap, c2.pending_wrap);
+        t.deinit(Global);
+        t2.deinit(Global);
+    }
+}
+
+// test "Terminal vt with cursor in origin mode without the region"
+#[test]
+fn terminal_vt_with_cursor_in_origin_mode_without_the_region() {
+    let mut builder: Vec<u8> = Vec::new();
+
+    let mut t = Terminal::init(Global, opts(20, 10)).unwrap();
+    {
+        let mut s = t.vt_stream();
+        s.next_slice(b"\x1b[3;8r\x1b[?6h\x1b[2;5H");
+    }
+
+    // Without the scrolling region in the output, the replaying terminal
+    // keeps full-screen margins, so the position stays absolute.
+    let t_ptr: *const Terminal = &t;
+    let mut formatter: TerminalFormatter = TerminalFormatter::init(t_ptr, Options::vt());
+    formatter.extra = TerminalExtra::ALL;
+    formatter.extra.scrolling_region = false;
+    formatter.format(&mut builder).unwrap();
+    assert!(builder.windows(6).any(|w| w == b"\x1b[4;5H"));
+    t.deinit(Global);
+}
+
 // test "Terminal vt with modes"
 #[test]
 fn terminal_vt_with_modes() {

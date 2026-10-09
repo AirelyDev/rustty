@@ -887,6 +887,21 @@ impl<'a> TerminalFormatter<'a> {
             ScreenFormatter::init(terminal.screens.active, clone_options(&self.opts));
         screen_formatter.content = Content::None;
         screen_formatter.extra = self.extra.screen;
+
+        // In origin mode (DECOM), which the modes above restore, CUP counts
+        // from the top-left of the scrolling region restored above, so the
+        // cursor position is written relative to it.
+        if self.opts.emit == Format::Vt
+            && self.extra.modes
+            && self.extra.scrolling_region
+            && terminal.modes.get(crate::modes::Mode::Origin)
+        {
+            screen_formatter.cursor_origin = CursorOrigin {
+                x: terminal.scrolling_region.left,
+                y: terminal.scrolling_region.top,
+            };
+        }
+
         if let Some(m) = self.pin_map.as_mut() {
             screen_formatter.pin_map = Some(PinMap {
                 alloc: m.alloc,
@@ -925,6 +940,11 @@ pub struct ScreenFormatter<'a> {
     ///
     /// Warning: there is a significant performance hit to track this
     pub pin_map: Option<PinMap<'a>>,
+
+    /// The point the emitted cursor position (CUP) counts from. This is the
+    /// top-left of the screen unless the output is replayed in origin mode
+    /// (DECOM), where CUP counts from the top-left of the scrolling region.
+    pub cursor_origin: CursorOrigin,
 }
 
 // PORT NOTE: nested `ScreenFormatter.Content` union(enum), hoisted to a
@@ -938,6 +958,14 @@ pub enum Content {
     /// Emit the content specified by the selection. Null for all.
     /// The selection is inclusive on both ends.
     Selection(Option<Selection>),
+}
+
+// PORT NOTE: nested `ScreenFormatter.CursorOrigin` struct, hoisted to a
+// top-level name like `Content` and `ScreenExtra`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CursorOrigin {
+    pub x: size::CellCountInt,
+    pub y: size::CellCountInt,
 }
 
 // PORT NOTE: nested `ScreenFormatter.Extra` packed struct, hoisted to a
@@ -1020,6 +1048,7 @@ impl<'a> ScreenFormatter<'a> {
             content: Content::Selection(None),
             extra: ScreenExtra::NONE,
             pin_map: None,
+            cursor_origin: CursorOrigin::default(),
         }
     }
 
@@ -1080,10 +1109,16 @@ impl<'a> ScreenFormatter<'a> {
         if self.extra.cursor {
             'cursor: {
                 let cursor = &screen.cursor;
+                let origin = self.cursor_origin;
 
                 // If we don't have pending wrap, then we can just use CUP.
                 if !cursor.pending_wrap || cursor.x != screen.pages.cols - 1 {
-                    write!(writer, "\x1b[{};{}H", cursor.y + 1, cursor.x + 1)?;
+                    write!(
+                        writer,
+                        "\x1b[{};{}H",
+                        u32::from(cursor.y.saturating_sub(origin.y)) + 1,
+                        u32::from(cursor.x.saturating_sub(origin.x)) + 1,
+                    )?;
                     break 'cursor;
                 }
 
@@ -1096,7 +1131,12 @@ impl<'a> ScreenFormatter<'a> {
                 };
 
                 // Move cursor to the edge.
-                write!(writer, "\x1b[{};{}H", cursor.y + 1, start_x + 1)?;
+                write!(
+                    writer,
+                    "\x1b[{};{}H",
+                    u32::from(cursor.y.saturating_sub(origin.y)) + 1,
+                    u32::from(start_x.saturating_sub(origin.x)) + 1,
+                )?;
 
                 // Reformat the cell which sets the proper pending wrap state.
                 // PORT NOTE (SB): the 1-cell PageFormatter's page alias is
@@ -1233,6 +1273,7 @@ impl<'a> ScreenFormatter<'a> {
                 content: Content::None,
                 extra: self.extra,
                 pin_map: None,
+                cursor_origin: self.cursor_origin,
             };
             // PORT NOTE: `extra_formatter.content = .none; .pin_map = null;` —
             // already set above; everything else is a copy of `self`.
