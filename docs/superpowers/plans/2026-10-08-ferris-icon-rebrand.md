@@ -14,7 +14,7 @@
 
 - Mascot: stock rustacean.net `rustacean-flat-happy.svg` (CC0). Body `#F74C00`, shade `#A52B00`, black eyes with white highlights. No prompt glyphs (D1).
 - Placement (D2): Ferris width = **0.68 × screen width**, horizontally centred, vertical centre **1.2 % of screen height above** the screen centre.
-- Backgrounds unchanged (D3). Alternates are style-matched (D4). The custom-style mascot is a neutral grey Ferris (D5).
+- Backgrounds unchanged (D3). Alternates are style-matched (D4). The custom-style mascot is a neutral gray Ferris (D5).
 - Config key `macos-icon-ghost-color` and its doc text stay as in Ghostty (D6).
 - Generator: Python 3 + Pillow + numpy, plus the `resvg` / `ictool` / `icotool` CLIs, at `images/tools/build_icons.py`. Outputs are committed, and builds/CI never run it (D7).
 - Plates are produced once, reviewed and committed. `all` never re-runs ghost removal (D8).
@@ -30,7 +30,7 @@
 ## Review Focus
 
 1. **Display-P3 renders.** `ictool` emits PNGs tagged Display P3, and the current exports are untagged sRGB. If the conversion is skipped, every flat export is colour-shifted. A test in **Task 3** pins it: `render_icon()` output has no ICC profile and its colours differ from a naive untagged read.
-2. **`ghosty.png` mode.** Today's custom-style layer is greyscale+alpha (`LA`) with `template-rendering-intent: template`. Writing RGBA would silently change how the asset catalog treats it. A test in **Task 4** pins mode `LA`.
+2. **`ghosty.png` mode.** Today's custom-style layer is grayscale+alpha (`LA`) with `template-rendering-intent: template`. Writing RGBA would silently change how the asset catalog treats it. A test in **Task 4** pins mode `LA`.
 3. **Running from another directory.** Someone may run `build_icons.py` from outside the repo root, so paths must resolve from `__file__`. A test in **Task 1** runs `paths` from a temp dir.
 4. **Missing CLI tool.** A missing `ictool`/`icotool` must fail with a clear message, exit 2, and write nothing. A test in **Task 3** runs `flats` with `ICTOOL=/nonexistent` and checks that no output's mtime changes.
 5. **Plates come from git history.** Plates must be cut from the pre-rebrand originals read out of git, not from the working tree. After `alternates` runs, the working-tree PNG already has a Ferris in it. A test in **Task 5** pins that `plates.original()` equals the `git show 401b95b0e:` blob.
@@ -53,7 +53,7 @@ images/
       paths.py                    # Task 1: every input/output path + size tables
       tools.py                    # Task 1: CLI tool lookup, subprocess, git blobs
       raster.py                   # Task 1: PNG I/O, sRGB, Ferris raster, masks, placement
-      mascot.py                   # Tasks 2, 4: Rustty.png layer, grey custom layer
+      mascot.py                   # Tasks 2, 4: Rustty.png layer, gray custom layer
       official.py                 # Task 2: icon.json edit
       flats.py                    # Task 3: ictool render, framing, all flat exports
       preview.py                  # Task 4: CG blend replica, custom-style preview
@@ -1189,7 +1189,7 @@ Tunables are `mascot.ICON_GLOW_*`, `flats.SHADOW_*`, and (only with user approva
 
 ---
 
-### Task 4: Custom-style grey Ferris and review gate 4
+### Task 4: Custom-style gray Ferris and review gate 4
 
 **Files:**
 
@@ -1254,7 +1254,7 @@ class BlendTest(unittest.TestCase):
         lum = lambda c: 0.3 * c[..., 0] + 0.59 * c[..., 1] + 0.11 * c[..., 2]
         np.testing.assert_allclose(lum(preview.blend_color(cb, cs)), lum(cb), atol=1e-9)
 
-    def test_overlay_identity_on_mid_grey(self):
+    def test_overlay_identity_on_mid_gray(self):
         cs = np.array([[0.2, 0.7, 0.9]])
         np.testing.assert_allclose(preview.blend_overlay(np.full((1, 3), 0.5), cs), cs)
 
@@ -1298,19 +1298,19 @@ CUSTOM_GLOW_STRENGTH = 0.5
 
 
 def custom_mascot() -> Image.Image:
-    """Neutral grey Ferris for ColorizedRusttyIcon: the user's tint supplies the hue (spec D5)."""
+    """Neutral gray Ferris for ColorizedRusttyIcon: the user's tint supplies the hue (spec D5)."""
     x, y, w, h = raster.ferris_box(CUSTOM_SCREEN_BBOX)
     f = raster.ferris_at(w)
     m = raster.classify(f)
     lum = np.zeros((h, w))
     for name, level in CUSTOM_LEVELS.items():
         lum[getattr(m, name)] = level
-    grey = np.dstack([lum, lum, lum, m.alpha * 255]).round().astype(np.uint8)
+    gray = np.dstack([lum, lum, lum, m.alpha * 255]).round().astype(np.uint8)
     canvas = Image.new("RGBA", (1024, 1024), (255, 255, 255, 0))
     alpha = Image.new("L", canvas.size, 0)
     alpha.paste(f.getchannel("A"), (x, y))
     canvas.alpha_composite(raster.glow(alpha, (255, 255, 255), CUSTOM_GLOW_RADIUS, CUSTOM_GLOW_STRENGTH))
-    canvas.alpha_composite(Image.fromarray(grey, "RGBA"), (x, y))
+    canvas.alpha_composite(Image.fromarray(gray, "RGBA"), (x, y))
     return canvas.convert("LA")
 
 
@@ -1456,7 +1456,7 @@ Expected: tests PASS. Open `target/icon-review/custom-style-grid.png` with the R
 
 ```bash
 git add images/tools macos/Assets.xcassets/Custom\ Icon/CustomIconGhost.imageset/ghosty.png
-git commit -m "icons: grey Ferris custom-style layer + Python replica of ColorizedRusttyIcon
+git commit -m "icons: gray Ferris custom-style layer + Python replica of ColorizedRusttyIcon
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```

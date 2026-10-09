@@ -12,7 +12,7 @@ class BlendTest(unittest.TestCase):
         lum = lambda c: 0.3 * c[..., 0] + 0.59 * c[..., 1] + 0.11 * c[..., 2]
         np.testing.assert_allclose(lum(preview.blend_color(cb, cs)), lum(cb), atol=1e-9)
 
-    def test_overlay_identity_on_mid_grey(self):
+    def test_overlay_identity_on_mid_gray(self):
         cs = np.array([[0.2, 0.7, 0.9]])
         np.testing.assert_allclose(preview.blend_overlay(np.full((1, 3), 0.5), cs), cs)
 
