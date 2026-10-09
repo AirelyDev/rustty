@@ -1,0 +1,53 @@
+# P8-W9 T2 lane g-hwasan at a60e9e2a5 (head 1d22ba80d)
+host: rvm (Fedora aarch64), clone /home/gael/projects/rustty-p8w9t2 (git archive 1d22ba80d plus .port and docs/superpowers copied from the worktree, since .gitattributes export-ignores them)
+### CMD: bash .port/tools/gates/sanitizers.sh --gate hwasan
+start (UTC): 2026-10-08T17:00:11Z
+end (UTC):   2026-10-08T17:20:05Z
+wall: 1194 s
+rc: 1
+## verdict lines
+### G-HWASAN: HWAddressSanitizer (-Zbuild-std, tagged globals, lld; C via cc with -fsanitize=hwaddress) over the workspace test suites (Linux/aarch64) ###
+  - xtask: its tests run nested cargo builds that inherit RUSTFLAGS=-Zsanitizer=hwaddress without -Zbuild-std, which rustc rejects ('mixing -Zsanitizer will cause an ABI mismatch in crate rustty_util'; G-HWASAN's first run, rvm, P7-W16b: 38 nested builds, 2 tests failed); the same exclusion as G-MSAN's (SANITIZER_SUPPRESSIONS.md M4, H1)
+  ❌ hwasan zlib-sys: 1 of 2 C archive(s) have no __hwasan_ reference (the cc wrapper was bypassed): debug/build/zlib-sys-76a181c741038e4b/out/libz.a
+G-HWASAN: RED
+## tail
+  rustty-font                          GREEN               89 tests      5s
+  rustty-font-shaper                   GREEN              133 tests     22s
+  rustty-global                        GREEN               18 tests      1s
+  rustty-helpgen                       GREEN                6 tests      1s
+  rustty-identity                      GREEN                1 tests      1s
+  rustty-input                         GREEN              120 tests      2s
+  rustty-inspector                     GREEN               23 tests      6s
+  rustty-lib                           GREEN               42 tests      1s
+  rustty-oniguruma                     GREEN                2 tests      1s
+  rustty-os                            GREEN              108 tests      1s
+  rustty-render-types                  GREEN               12 tests      1s
+  rustty-renderer                      GREEN              158 tests      8s
+  rustty-simd                          GREEN               42 tests     44s
+  rustty-synthetic                     GREEN               27 tests      1s
+  rustty-terminfo                      GREEN                7 tests      1s
+  rustty-termio                        GREEN              112 tests     10s
+  rustty-unicode                       GREEN               23 tests      1s
+  rustty-util                          GREEN                6 tests      1s
+  rustty-vaxis                         GREEN              171 tests      3s
+  rustty-version                       GREEN                6 tests      1s
+  rustty-vt                            GREEN             3414 tests    299s
+  rustty-vt-c                          GREEN              604 tests     20s
+  rustty-wasm                          NO-TESTS(Linux)      0 tests      7s
+  rustty-web-canvas                    GREEN                1 tests      6s
+  rustty-wuffs                         GREEN               24 tests      1s
+  rustty-xev                           GREEN              111 tests      4s
+  rustty-z2d                           GREEN              105 tests      1s
+  rustty-zf                            GREEN               11 tests      1s
+  rustty-zigimg                        GREEN               28 tests      1s
+  rustty-zigstd                        GREEN               89 tests      1s
+  sentry-sys                           GREEN                4 tests      5s
+  simdutf-sys                          GREEN                2 tests      1s
+  spirv-cross-sys                      GREEN                1 tests      1s
+  wuffs-sys                            GREEN                3 tests      1s
+  zlib-sys                             GREEN               11 tests      1s
+  rustty-vt:wuffs,oniguruma            GREEN             3444 tests    293s
+  rustty-apprt:gtk,wayland,x11         GREEN              173 tests     26s
+  rustty-os:flatpak                    GREEN              110 tests      3s
+  Miri-exception cross-check (hwasan, Linux): 475 Miri-excepted test(s); 419 ran and passed; 56 expected absent on Linux (listed, with reasons); 0 problem(s)
+G-HWASAN: RED

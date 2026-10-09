@@ -1,0 +1,38 @@
+# P8-W9 T2 lane d6-clean-clone at a60e9e2a5 (head 1d22ba80d)
+host: rvm (Fedora aarch64), clone /home/gael/projects/rustty-p8w9t2 (git archive 1d22ba80d plus .port and docs/superpowers copied from the worktree, since .gitattributes export-ignores them)
+### CMD: bash .port/tools/gates/check_sanitizer_canary.sh
+start (UTC): 2026-10-08T22:47:20Z
+end (UTC):   2026-10-08T22:47:21Z
+wall: 1 s
+rc: 0
+## verdict lines
+== D6 (a) sanitizer-visibility canary ==
+### D6 canary: rustty-d6-canary under -Zsanitizer=address (target=aarch64-unknown-linux-gnu) ###
+  ✅ D6 canary FIRED: the sanitizer lane SEES the port's heap (rc=1)
+  ✅ D6: canaries compile OUT of a non-sanitizer build (0 tests) — they
+== D6 (b)+(c) cfg-mapping + suppression audit ==
+D6 (b)+(c) cfg-mapping + suppression audit
+  (b) first-party #[global_allocator] sites scanned: 10 (each must be cfg-gated or D6-ALLOW-justified)
+      NOTE: each must port as a `cfg`, never a constant-folded value (D6 rule b). Binding per-switch verification lands as crates complete.
+  ✅ D6 audit clean: no constant-folded first-party allocator; every suppression toggle carries a WHY.
+D6: GREEN (sanitizer lane proven visible; cfg/suppression audit clean)
+## tail
+### CMD: bash .port/tools/gates/check_sanitizer_canary.sh
+== D6 (a) sanitizer-visibility canary ==
+### D6 canary: rustty-d6-canary under -Zsanitizer=address (target=aarch64-unknown-linux-gnu) ###
+  ✅ D6 canary FIRED: the sanitizer lane SEES the port's heap (rc=1)
+     SUMMARY: AddressSanitizer: heap-buffer-overflow /home/gael/projects/rustty-p8w9t2/.port/phase-2/d6-canary/src/lib.rs:40:24 in rustty_d6_canary::canary_heap_overflow_must_be_caught_by_asan
+  ✅ D6: canaries compile OUT of a non-sanitizer build (0 tests) — they
+        cannot pollute cargo lanes nor the sanitizer roll-up.
+== D6 (b)+(c) cfg-mapping + suppression audit ==
+D6 (b)+(c) cfg-mapping + suppression audit
+  (b) first-party #[global_allocator] sites scanned: 10 (each must be cfg-gated or D6-ALLOW-justified)
+  (advisory) oracle build-mode/comptime switches to map to cfg: 66 occurrence(s)
+         27  \bbuiltin\.mode\b
+         27  \bbuiltin\.is_test\b
+         12  @import\(\"build_options\"\)
+      NOTE: each must port as a `cfg`, never a constant-folded value (D6 rule b). Binding per-switch verification lands as crates complete.
+  (c) 148 block suppression entr(ies) frozen by d6_supp_baseline.txt (oracle-verbatim, no upstream WHY); a new or edited entry is NOT frozen and fails.
+  ✅ D6 audit clean: no constant-folded first-party allocator; every suppression toggle carries a WHY.
+------------------------------------------------------------------
+D6: GREEN (sanitizer lane proven visible; cfg/suppression audit clean)

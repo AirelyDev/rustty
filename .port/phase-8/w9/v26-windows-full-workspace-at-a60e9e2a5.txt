@@ -1,0 +1,31 @@
+# P8-W9 T2 lane V26 (Windows full workspace) at a60e9e2a5 (head 1d22ba80d)
+host: rwin (Windows 11 ARM64, x64 binaries under emulation) at 192.168.65.3 (the ssh alias still pointed at the old 192.168.64.5; used the IP directly, config untouched)
+clone: C:\Users\gael\projects\rustty-p8w9t2 (git archive 1d22ba80d + .port + docs/superpowers; no .git at first)
+command: cargo test --workspace --no-fail-fast --exclude libxml2-sys --exclude fontconfig-sys --exclude sentry-sys --target x86_64-pc-windows-msvc  (PATH has the SDK dir for rc.exe; RUSTTY_REQUIRE_FUZZ_CORPUS=1; --no-fail-fast added)
+start (UTC): 2026-10-09T10:41:52Z (second start; the first, 10:04:33Z, died with the ssh session and was discarded); end 2026-10-09T10:56:39Z approx, wall 887 s
+wall: 887 s (14.8 min), rc: 101
+totals: 6398 passed, 3 failed, 74 ignored
+## failures
+1. rustty-vt-c --lib osc::tests::command_data_invalid_value_warns_through_the_scoped_log_sink: left has an extra (Warning, osc, 'osc_set invalid option value=1') before the expected commandData line. FLAKE: passes alone, and in 7 further runs of the rustty-vt-c lib (2 in v26b, 5 in v26c).
+2. xtask dist::tests::distcheck_reads_the_tracked_config_from_head and 3. lib_vt_archive_applies_the_reference_excludes: the clone had no .git (needs HEAD). Environment artifact; after git init + commit both PASS (v26b).
+## verdict: V26 RED as run (one flaky test failure, N625); no other failure.
+## failure excerpts + tail
+6947:thread 'osc::tests::command_data_invalid_value_warns_through_the_scoped_log_sink' (1644) panicked at crates\rustty-vt-c\src\osc.rs:1132:9:
+6948-assertion `left == right` failed: the S174-F2 warning was not routed through sys::log_fn
+6949-  left: [(Warning, "osc", "osc_set invalid option value=1"), (Warning, "osc", "commandData invalid data value=999")]
+6950- right: [(Warning, "osc", "commandData invalid data value=999")]
+6951-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+6952-
+6953-
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests zlib_sys
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: 2 targets failed:
+    `-p rustty-vt-c --lib`
+    `-p xtask --bin xtask`

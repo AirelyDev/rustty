@@ -1,0 +1,54 @@
+# P8-W9 T2 lane g-msan at a60e9e2a5 (head 1d22ba80d)
+host: rvm (Fedora aarch64), clone /home/gael/projects/rustty-p8w9t2 (git archive 1d22ba80d plus .port and docs/superpowers copied from the worktree, since .gitattributes export-ignores them)
+### CMD: bash .port/tools/gates/sanitizers.sh --gate msan
+start (UTC): 2026-10-08T16:08:00Z
+end (UTC):   2026-10-08T16:59:43Z
+wall: 3103 s
+rc: 1
+## verdict lines
+### G-MSAN: MemorySanitizer (-Zbuild-std, C via cc with -fsanitize=memory) over the phase-1 scope (Linux/aarch64) ###
+  ❌ msan rustty-core: SANITIZER FINDING (14s) — log /home/gael/projects/rustty-p8w9t2/target/san-logs/msan/rustty-core.log
+       ==3770961==WARNING: MemorySanitizer: use-of-uninitialized-value
+       ==3771040==WARNING: MemorySanitizer: use-of-uninitialized-value
+G-MSAN: RED
+## tail
+  rustty-bench                         GREEN               52 tests    508s
+  rustty-build-config                  GREEN                5 tests      2s
+  rustty-cfg-fmt                       GREEN                9 tests      1s
+  rustty-cli                           GREEN              124 tests     20s
+  rustty-config                        GREEN              273 tests     12s
+  rustty-core                          FINDING              2 tests     14s
+  rustty-crash                         GREEN               20 tests      8s
+  rustty-datastruct                    GREEN              100 tests      3s
+  rustty-extra                         GREEN               39 tests     10s
+  rustty-font                          GREEN               89 tests     27s
+  rustty-font-shaper                   GREEN              133 tests     51s
+  rustty-global                        GREEN               18 tests      2s
+  rustty-helpgen                       GREEN                6 tests      2s
+  rustty-identity                      GREEN                1 tests      2s
+  rustty-input                         GREEN              120 tests      6s
+  rustty-inspector                     GREEN               23 tests     31s
+  rustty-lib                           GREEN               42 tests      2s
+  rustty-oniguruma                     GREEN                2 tests      1s
+  rustty-os                            GREEN              108 tests      2s
+  rustty-render-types                  GREEN               12 tests      2s
+  rustty-renderer                      GREEN               83 tests     15s
+  rustty-simd                          GREEN               42 tests    188s
+  rustty-synthetic                     GREEN               27 tests      3s
+  rustty-terminfo                      GREEN                7 tests      2s
+  rustty-termio                        GREEN              112 tests     49s
+  rustty-unicode                       GREEN               23 tests      3s
+  rustty-util                          GREEN                6 tests      2s
+  rustty-vaxis                         GREEN              171 tests      7s
+  rustty-version                       GREEN                6 tests      2s
+  rustty-vt                            GREEN             3414 tests   1684s
+  rustty-vt-c                          GREEN              604 tests     82s
+  rustty-wasm                          NO-TESTS(Linux)      0 tests     10s
+  rustty-web-canvas                    GREEN                1 tests      9s
+  rustty-wuffs                         GREEN               24 tests      2s
+  rustty-xev                           GREEN              111 tests      6s
+  rustty-z2d                           GREEN              105 tests      2s
+  rustty-zf                            GREEN               11 tests      1s
+  rustty-zigimg                        GREEN               28 tests      2s
+  rustty-zigstd                        GREEN               89 tests      3s
+G-MSAN: RED
