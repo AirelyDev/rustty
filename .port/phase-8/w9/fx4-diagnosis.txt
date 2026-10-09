@@ -1,0 +1,94 @@
+# P8-W9 FX4 diagnosis evidence (N620 MSan diag, N621 archive check, N622 TSan)
+host: rvm (Fedora 44 aarch64), clone /home/gael/projects/rustty-p8w9fx4; helper = sanitizers.sh --source-only + run_crate with a persistent target dir
+
+## N622.1 RED (before the Link::oni_regex fix), test run alone under TSan, 6 runs
+tsan-oni-red.log: 1 reports; src/regcomp.c:7764:7 in onig_initialize
+tsan-oni-red-1.log: 0 reports; 
+tsan-oni-red-2.log: 1 reports; src/regcomp.c:7667:7 in onig_reg_init
+tsan-oni-red-3.log: 1 reports; src/regcomp.c:7667:7 in onig_reg_init
+tsan-oni-red-4.log: 1 reports; src/regcomp.c:7764:7 in onig_initialize
+tsan-oni-red-5.log: 1 reports; src/regcomp.c:7667:7 in onig_reg_init
+
+## N622.1 GREEN (after), 6 runs
+tsan-oni-green.log: 0 reports; test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.05s
+tsan-oni-green-1.log: 0 reports; test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.04s
+tsan-oni-green-2.log: 0 reports; test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.02s
+tsan-oni-green-3.log: 0 reports; test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.02s
+tsan-oni-green-4.log: 0 reports; test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.03s
+tsan-oni-green-5.log: 0 reports; test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.03s
+
+## N622.2/.3 app:: tests (20), EMPTY suppressions file, 6 runs: SUMMARY lines per run
+run 1: 
+run 2: in pthread_mutex_destroy;in pthread_cond_destroy;
+run 3: 
+run 4: in memcmp;
+run 5: 
+run 6: in pthread_mutex_destroy;in pthread_cond_destroy;
+
+## N622.2/.3 app:: tests, real tsan.supp, 10 runs: reports and matched suppressions
+run 1: 0 reports; matched: 1 race:libgallium;
+run 2: 0 reports; matched: 
+run 3: 0 reports; matched: 2 race:libgallium;
+run 4: 0 reports; matched: 
+run 5: 0 reports; matched: 
+run 6: 0 reports; matched: 1 race:libEGL_mesa.so;
+run 7: 0 reports; matched: 2 race:libgallium;
+run 8: 0 reports; matched: 
+run 9: 0 reports; matched: 
+run 10: 0 reports; matched: 2 race:libgallium;
+
+## Mesa symbolization (eu-addr2line via debuginfod, mesa 26.1.4-1.fc44)
+libEGL_mesa.so.0+0x14e54 -> _eglSameAttribs inlined in _eglFindDisplay, egldisplay.c:265 (memcmp, egldisplay.c:234)
+libEGL_mesa.so.0+0x14ef0 -> _eglFindDisplay, egldisplay.c:281 (calloc of the attrib copy)
+libgallium-26.1.4.so+0x846380	lp_fence_destroy	src/gallium/drivers/llvmpipe/lp_fence.c:130:7
+libgallium-26.1.4.so+0x846388	lp_fence_destroy	src/gallium/drivers/llvmpipe/lp_fence.c:131:7
+libgallium-26.1.4.so+0x578c0c	mtx_lock	src/c11/impl/threads_posix.c:179:13
+libgallium-26.1.4.so+0x5789cc	cnd_broadcast	src/c11/impl/threads_posix.c:63:13
+libgallium-26.1.4.so+0x8462fc	lp_fence_create	src/gallium/drivers/llvmpipe/lp_fence.c:98:29
+libgallium-26.1.4.so+0x578bf0	mtx_init	src/c11/impl/threads_posix.c:163:9
+libgallium-26.1.4.so+0x578cc8	thrd_create	src/c11/impl/threads_posix.c:255:9
+
+## N620 MSan diagnosis: SAN_MSAN_DIAG=1 (recover mode), rustty-core, no skips (the lib test binary was stopped by PID while device_tests::two_surfaces_* was still running and reporting, after the other lib tests had finished; the integration tests then ran to the end)
+reports by module:
+  24694 /lib64/libgallium-26.1.4.so
+  12060 /lib64/libexpat.so.1
+   9436 /lib64/libEGL_mesa.so.0
+   5693 rustty_core-6d39045cf9d5b53a
+   1008 /lib64/libLLVM.so.22.1
+     40 /lib64/libdrm.so.2
+     34 /lib64/libEGL.so.1
+     32 /lib64/libgcc_s.so.1
+      2 RUST:crates/rustty-renderer/src/opengl/gl/sys.rs:279:14
+test functions in report stacks:
+  38536 in rustty_core::app::test_runtime::app_create_and_destroy_empty
+  35768 in surface_visibility_kat::surface_occlusion_callback_dedups_and_reports
+  12138 in rustty_core::app::device_tests::two_surfaces_share_the_device_destroy_one_draw_the_other_then_deinit
+   6062 in rustty_core::app::device_tests::new_surface
+     44 in rustty_core::app::test_runtime::app_init_creates_and_deinit_frees_the_render_device
+
+## N621 reproduction: rustty-cli then zlib-sys under HWASan in ONE target dir (fx4-n621.sh)
+# N621 evidence: rustty-cli then zlib-sys in ONE persistent target dir under HWASan,
+# then the archive check (new and old) over it. No deletions here.
+rustty-cli rc=0 GREEN 124
+zlib-sys rc=0 GREEN 11
+--- archives named libz.a under the target dir:
+aarch64-unknown-linux-gnu/debug/build/zlib-sys-834967e61b811ac3/out/libz.a __hwasan_ refs: 144
+debug/build/zlib-sys-76a181c741038e4b/out/libz.a __hwasan_ refs: 0
+--- new check:
+  ok hwasan zlib-sys: 1 C archive(s), all instrumented (__hwasan_ references)
+rc=0
+--- old check (base c8a55c96c):
+  ❌ hwasan zlib-sys: 1 of 2 C archive(s) have no __hwasan_ reference (the cc wrapper was bypassed): debug/build/zlib-sys-76a181c741038e4b/out/libz.a
+rc=1
+
+## N621 R5 negative control (fx4-n621-neg.sh): zlib-sys rebuilt with CC_aarch64_unknown_linux_gnu=clang (wrapper bypassed), then restored
+zlib-sys (wrapper bypassed) rc=0 GREEN 11
+aarch64-unknown-linux-gnu/debug/build/zlib-sys-834967e61b811ac3/out/libz.a __hwasan_ refs: 0
+debug/build/zlib-sys-76a181c741038e4b/out/libz.a __hwasan_ refs: 0
+--- new check:
+  ❌ hwasan zlib-sys: 1 of 1 C archive(s) have no __hwasan_ reference (the cc wrapper was bypassed): aarch64-unknown-linux-gnu/debug/build/zlib-sys-834967e61b811ac3/out/libz.a
+rc=1
+zlib-sys (wrapper restored) rc=0 GREEN 11
+--- new check after restore:
+  ok hwasan zlib-sys: 1 C archive(s), all instrumented (__hwasan_ references)
+rc=0
