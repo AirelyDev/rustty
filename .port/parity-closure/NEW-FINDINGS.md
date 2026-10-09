@@ -11628,3 +11628,24 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   race arms run under the real `tsan.supp` and stay RED. Limit (documented under T5/T6): a race between Rustty memory
   and a Mesa access to it would be hidden in those two modules. G-TSAN on rvm: **GREEN**, 4,536 tests, 0 reports
   (rustty-core 88), 17 C archives instrumented, 24 min; `race:libEGL_mesa.so` matched once in that run.
+- **N640 (FIXED, P8-W9 FX6; provisional id, first recorded by the G6t runner in `.port/phase-8/w9/findings-g6ct.md`): G6t (Tree Borrows, debug assertions on) was RED on two rustty-vt page
+  tests, `page::tests::page_moveCells_text_only` and `page_moveCells_graphemes`: "write access through <tag> ... is
+  forbidden" at `set_bits` (page.rs:604) via `Row::set_styled` in `Page::move_cells_inner`.** Test-only aliasing, not
+  production code. The tests passed `unsafe { &mut *src }` / `unsafe { &mut *dst }` for `move_cells`'s `*mut Row`
+  parameters; the coerced raw pointer keeps that temporary `&mut`'s tag. Inside, `clear_cells(dst_row, ..)` writes the
+  row flags through it (Reserved -> Unique), then its debug-only `assert_integrity` reads every row through the page
+  base (`verify_integrity`, page_impl.rs:735), a foreign read that freezes the tag, and the next `(*dst_row).set_styled`
+  write is UB. Stacked Borrows accepts it (the read pops only the `Unique`, the raw `SharedRW` above it survives), and
+  with debug assertions off there is no integrity read, which is why G6 and the G6t debug-off pass were GREEN. The
+  pattern dates from the page port (7dd709aad, 2026-06) and was first reached when G6t gained its debug-on pass. Not a
+  Ghostty pattern: the reference test passes the raw `*Row` pointers (`page.moveCells(src, 0, dst, 0, ...)`). Fix: the
+  tests pass the raw pointers straight through, like the reference; the same `unsafe { &mut *rac.row }` /
+  `&mut *rac.cell` argument form was removed from all 58 call sites in `page_tests.rs` (`append_grapheme`,
+  `set_hyperlink`, `set_graphemes`, `clear_grapheme`, `update_row_grapheme_flag`, `move_cells`; all take raw pointers).
+  Production callers of these methods already pass raw pointers (grep of rustty-vt and the workspace; no sibling).
+  The runner's diagnosis (`&mut *dst` at page_tests.rs:2319 frozen by the rows-slice reborrow at page_impl.rs:735,
+  then written at page.rs:604 via `Row::set_styled`) is confirmed by the Miri tag history; the freezing read is the
+  `assert_integrity` that `clear_cells` runs inside `move_cells_inner`. Evidence (Mac, `cargo +nightly miri nextest`,
+  `-Zmiri-disable-isolation`): the two tests RED under `-Zmiri-tree-borrows` before (2 failed), GREEN after under TB
+  with debug assertions on and off and under SB (2/2 each); the whole `page::` module under TB, debug on: 86/86 in
+  1,288 s; native `cargo test -p rustty-vt --lib page`: 634 passed, 4 ignored.
