@@ -11525,3 +11525,14 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   Miri, single test). Assertions are unchanged; the loop cap went 100,000 -> 100 and `assert!(reported > 0)` keeps the
   earlier-prompt arm live. Negative control: removing the `return` after `vt_catch` in `Handler::semantic_prompt`
   turns it RED (`left: 5, right: 6`). No Miri exception was needed.
+- **N605 (FIXED, P8-W9 FX3, `f4e77aeb8`; re-audit finding, provisional id): rustty-renderer
+  `custom_shader_selection_uniform_layout_matches_compiled_glsl` dropped upstream's uniform-buffer count assertion.**
+  Upstream `shadertoy.zig:391-399` (a60e9e2a5) lists `SPVC_RESOURCE_TYPE_UNIFORM_BUFFER` and requires
+  `try testing.expectEqual(@as(usize, 1), count);` before checking the member offsets; the Rust test found the block by
+  `OpName "Globals"` and never counted. A new test helper `spirv_uniform_buffer_count` (same SPIR-V word-parser style as
+  `spirv_block_member_offsets`) counts `OpVariable`s in the `Uniform` storage class whose pointee struct (through any
+  array) is decorated `Block`, as SPIRV-Cross classifies uniform buffers (`BufferBlock` is a storage buffer there), and
+  the test now does `assert_eq!(1, spirv_uniform_buffer_count(&spv))` at upstream's point. Negative control: a scratch
+  test with a second `layout(binding = 2, std140) uniform Extra` block failed (`left: 1, right: 2`), then was removed.
+  `cargo test -p rustty-renderer custom_shader_selection_uniform_layout` GREEN; clippy on rustty-renderer clean.
+  Evidence: `.port/phase-8/w9/reaudit-at-a60e9e2a5.txt`.
