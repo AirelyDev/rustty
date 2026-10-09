@@ -2296,17 +2296,23 @@ mod oniguruma_first_use_init_tests {
                     barrier.wait();
                     if i % 2 == 0 {
                         oni::testing::ensure_init().unwrap();
+                        0
                     } else {
                         let mut derived =
                             DerivedConfig::init(Allocator, &config).expect("DerivedConfig::init");
                         assert_eq!(derived.links.len(), config.link.links.len());
                         derived.deinit();
+                        1
                     }
                 })
             })
             .collect();
+        let mut derived_inits = 0;
         for h in handles {
-            h.join().expect("thread");
+            derived_inits += h.join().expect("thread");
         }
+        // Every odd thread really compiled the link regexes concurrently with
+        // the even threads' init (N540).
+        assert_eq!(derived_inits, THREADS / 2);
     }
 }
