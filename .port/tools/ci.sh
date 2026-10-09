@@ -363,6 +363,9 @@ SKIPPED_GATES=()
 #   --sccache         RUSTC_WRAPPER=sccache when sccache is on PATH (optional).
 #   --self-test       G-CI-SELF: the scheduler, scoping and sharding arms.
 CI_JOBS=auto
+# The registry kinds the runner dispatches, in this order. ci_plan refuses any
+# other kind, so an entry can never sit in the registry unrun.
+CI_PHASES="HARD PROGRESS PERF-FENCE ARMED"
 CI_HEAVY_CAP=2
 CI_CHANGED_SINCE=""
 CI_PRINT_SCOPE=0
@@ -592,9 +595,10 @@ run_test_counts() {
 
 # Gate registry: "DoP_id|classification|resource|traits|runner...".
 # classification is HARD or PROGRESS. HARD-fail gates run first (fail-fast
-# visibility), then PROGRESS. (G8b's PERF-FENCE and G8's ARMED are visited by
-# neither pass, so neither gate runs; the CI speed-up kept that as it found it
-# and reported it.) resource is light or heavy (at most
+# visibility), then PROGRESS, then G8b's PERF-FENCE and G8's ARMED, which run
+# LAST and alone (`exclusive`) so the perf fence measures a quiet machine. (From
+# c8ce4e576 to P8 the loop visited HARD and PROGRESS only, so G8b and G8 never
+# ran; an unknown kind is now a usage error.) resource is light or heavy (at most
 # --heavy-cap heavy gates at once); traits declare, per entry, what must not
 # overlap: a lock word (`tgt`: the default target dir and the tree's untracked
 # outputs), `dir=<name>` (its own CARGO_TARGET_DIR in a parallel run),
@@ -1188,7 +1192,7 @@ GATE_REGISTRY=(
   # present, G8b first runs every size label's `rustty_build` from BASELINE.json
   # (the release-fast bench and rustty-gen, the vt-c release libraries; nothing
   # earlier in this script builds them), so G8 never measures a stale artifact.
-  "G8b|PERF-FENCE|heavy|tgt|bash $GATES/check_perf_fence.sh --build --emit-metrics $PERF_METRICS"
+  "G8b|PERF-FENCE|heavy|tgt,exclusive|bash $GATES/check_perf_fence.sh --build --emit-metrics $PERF_METRICS"
   # G8 is ARMED once G8b has emitted that metrics file; with no substrate
   # present G8b BLOCKs, the file is absent, and G8 falls back to progress mode.
   # --strict (P7-W22, V16 DISCHARGED): G8b's metrics file now carries the size
@@ -1199,7 +1203,7 @@ GATE_REGISTRY=(
   # still absent is reported NOT-MEASURED, never passed.
   # The timing axis still compares against the retired 4749c4e93 series until
   # V17's idle re-base; --strict adds no timing check that was not already run.
-  "G8|ARMED|heavy|after=G8b|$PY $GATES/check_baseline_regression.py --strict --metrics $PERF_METRICS"
+  "G8|ARMED|heavy|after=G8b,exclusive|$PY $GATES/check_baseline_regression.py --strict --metrics $PERF_METRICS"
   "G5|PROGRESS|heavy|tgt|bash $GATES/run_fuzz_smoke.sh"
   "G6|PROGRESS|heavy|dir=miri-g6,scope=env:G6_ONLY|bash $GATES/check_leaks.sh --all-done"
   # G6b — PageList compressed-page encodings are not leaked (WS7 Phase E).

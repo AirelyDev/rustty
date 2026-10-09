@@ -26,9 +26,12 @@
 # EXIT CODES (deliberately four-valued)
 #   0 GREEN    fence held
 #   1 RED      real regression
-#   2 BLOCKED  unusable measurement (load average above the idle threshold).
-#              A contended run is neither a pass nor a failure; it must never
-#              become a recorded baseline. Surfaced as BLOCKED, not green.
+#   3 BLOCKED  unusable measurement (load average above the idle threshold;
+#              ws10_suite.py's own exit 2). A contended run is neither a pass
+#              nor a failure; it must never become a recorded baseline.
+#              Mapped to 3 because ci.sh reads every exit other than 0 and 3 as
+#              RED: the 2 this gate used to pass through went unseen only
+#              because ci.sh never ran G8b until P8 (c8ce4e576..P8).
 #   3 BLOCKED  measurement substrate absent (oracle binary / corpora missing --
 #              they are untracked and live only in the shared checkout, so this
 #              is the normal state inside a fresh worktree or on CI).
@@ -125,8 +128,8 @@ set -e
 case "$rc" in
   0) echo "GREEN: perf fence held" ;;
   1) echo "RED: perf fence regressed; see LOST / SELF-REGRESS above" ;;
-  2) echo "BLOCKED: load average above the idle threshold — measurement unusable" ;;
+  2) echo "BLOCKED: load average above the idle threshold — measurement unusable"; exit 3 ;;
   3) echo "BLOCKED: measurement substrate absent (untracked oracle binary/corpora)" ;;
-  *) echo "BLOCKED: unexpected harness exit $rc" ;;
+  *) echo "BLOCKED: unexpected harness exit $rc"; exit 3 ;;
 esac
 exit "$rc"

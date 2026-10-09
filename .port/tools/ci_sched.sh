@@ -8,7 +8,9 @@
 # before (`ci_classify`, the body of the old `run_gate`).
 #
 # REGISTRY ENTRY: "ID|KIND|RES|TRAITS|runner..."
-#   KIND    HARD | PROGRESS (| PERF-FENCE | ARMED: never dispatched, see ci.sh)
+#   KIND    HARD | PROGRESS | PERF-FENCE | ARMED, dispatched in that order
+#           (CI_PHASES); any other kind is a usage error (exit 2), so no entry
+#           can sit in the registry unrun (G8b/G8 did, from c8ce4e576 to P8).
 #   RES     light | heavy. Heavy = long or machine-filling (Miri, sanitizers,
 #           Valgrind, release / clean-clone / feature-matrix builds, G4/G5/G8).
 #           At most CI_HEAVY_CAP heavy gates run at once.
@@ -26,6 +28,9 @@
 #                     and it must not share a dir with a gate running beside it.
 #                     Gates naming the same dir are serialized.
 #     after=<ID>      start only once gate ID has finished (or is not run).
+#     exclusive       starts only once every other gate has finished, and
+#                     nothing starts beside it: G8b/G8 measure performance on a
+#                     quiet machine, at the end of the run.
 #     shard           the runner takes `--shard K/N` (G-VALGRIND): in a parallel
 #                     run it is split into CI_VALGRIND_SHARDS heavy units.
 #     scope=<how>     what `--changed-since` passes to the gate (see below).
@@ -69,7 +74,7 @@ trait_mutex() {
   local IFS=,
   for t in $1; do
     case "$t" in
-      -|shard|after=*|scope=*) ;;
+      -|shard|exclusive|after=*|scope=*) ;;
       dir=*) echo "dir:${t#dir=}" ;;
       *) echo "$t" ;;
     esac
@@ -292,7 +297,10 @@ ci_classify() {
     GS_CAT[$i]=SCOPED; GS_TEXT[$i]="$id — ${GS_NOTE[$i]}"
   elif [ "$rc" -eq 0 ]; then
     echo ">> PASS: $id"
-    if [ "$kind" = "PROGRESS" ]; then GS_CAT[$i]=PROGRESS; GS_TEXT[$i]="$id (progress/green)"; else GS_CAT[$i]=PASS; GS_TEXT[$i]="$id"; fi
+    # ARMED (G8): green may be its progress mode (no G8b metrics), never a PASS.
+    if [ "$kind" = "PROGRESS" ]; then GS_CAT[$i]=PROGRESS; GS_TEXT[$i]="$id (progress/green)"
+    elif [ "$kind" = "ARMED" ]; then GS_CAT[$i]=PROGRESS; GS_TEXT[$i]="$id (armed: green, or progress mode without G8b metrics)"
+    else GS_CAT[$i]=PASS; GS_TEXT[$i]="$id"; fi
   elif [ "$rc" -eq 3 ]; then
     echo ">> BLOCKED ($rc): $id [pending contract/tooling — surfaced, not greened]" >&2
     GS_CAT[$i]=WARN; GS_TEXT[$i]="$id BLOCKED (exit 3)$(blocked_reasons "$log")"
@@ -301,6 +309,9 @@ ci_classify() {
     if [ "$kind" = "HARD" ]; then
       echo ">> FAIL ($rc): $id [HARD-FAIL gate]" >&2
       GS_CAT[$i]=FAIL; GS_TEXT[$i]="$id (exit $rc)"
+    elif [ "$kind" != "PROGRESS" ]; then
+      echo ">> FAIL ($rc): $id [$kind gate RED]" >&2
+      GS_CAT[$i]=FAIL; GS_TEXT[$i]="$id ($kind, exit $rc)"
     else
       echo ">> FAIL ($rc): $id [PROGRESS gate went RED — a claimed-done crate regressed; R5]" >&2
       GS_CAT[$i]=FAIL; GS_TEXT[$i]="$id (claimed-done regression, exit $rc)"
@@ -337,6 +348,7 @@ ci_plan() {
   for entry in "${GATE_REGISTRY[@]}"; do
     IFS='|' read -r gid gkind gres gtraits grun <<< "$entry"
     case "$gres" in light|heavy) ;; *) echo "ci.sh: registry entry '$gid' has RES '$gres' (want light|heavy)" >&2; exit 2 ;; esac
+    in_words "$gkind" "$CI_PHASES" || { echo "ci.sh: registry entry '$gid' has KIND '$gkind', which no dispatch phase runs (known: $CI_PHASES)" >&2; exit 2; }
     [ -n "$gtraits" ] && [ -n "$grun" ] || { echo "ci.sh: registry entry '$gid' is not ID|KIND|RES|TRAITS|runner" >&2; exit 2; }
     GS_ID[$n]="$gid"; GS_KIND[$n]="$gkind"; GS_RES[$n]="$gres"; GS_TRAITS[$n]="$gtraits"; GS_RUN[$n]="$grun"
     GS_NARROWED[$n]=0; GS_NOTE[$n]=""; GS_ENV[$n]=""; GS_ARGS[$n]=""; GS_LEFT[$n]=0; GS_RCS[$n]=""; GS_STATE[$n]=pending
@@ -346,7 +358,7 @@ ci_plan() {
     GS_AFTER[$n]="$(printf '%s' "$gtraits" | tr ',' '\n' | sed -n 's/^after=//p' | tr '\n' ' ')"
     n=$((n + 1))
   done
-  for phase in HARD PROGRESS; do
+  for phase in $CI_PHASES; do
     i=0
     while [ "$i" -lt "$n" ]; do
       [ "${GS_KIND[$i]}" = "$phase" ] && CI_ORDER+=("$i")
@@ -421,8 +433,20 @@ ci_unit_launch() {
   [ "${GS_STATE[$i]}" = pending ] && { GS_STATE[$i]=running; GS_T0[$i]=${U_T0[$u]}; }
 }
 ci_unit_ready() {  # 0 when unit U may start now
-  local u="$1" i v o j dep di
+  local u="$1" i v o j dep di w
   i="${U_GATE[$u]}"
+  # exclusive: alone, after every other unit; and nothing starts beside one.
+  for o in ${CI_RUNNING[@]+"${CI_RUNNING[@]}"}; do
+    trait_has "${GS_TRAITS[${U_GATE[$o]}]}" exclusive && return 1
+  done
+  if trait_has "${GS_TRAITS[$i]}" exclusive; then
+    [ "${#CI_RUNNING[@]}" -eq 0 ] || return 1
+    w=0
+    while [ "$w" -lt "${#U_GATE[@]}" ]; do
+      if [ "${U_STATE[$w]}" = pending ] && [ "$w" != "$u" ] && ! trait_has "${GS_TRAITS[${U_GATE[$w]}]}" exclusive; then return 1; fi
+      w=$((w + 1))
+    done
+  fi
   for dep in ${GS_AFTER[$i]}; do
     for di in ${CI_ORDER[@]+"${CI_ORDER[@]}"}; do
       [ "${GS_ID[$di]}" = "$dep" ] || continue
@@ -583,6 +607,10 @@ ci_on_signal() {
 #      Control: the scoped banner removed (the run falls through to PASS).
 #   G  --fast still exits 4 and names its skips, serial and parallel.
 #   H  --prune-targets deletes only marked dirs under target/ci-targets.
+#   J  every KIND in the real GATE_REGISTRY is a dispatch phase, all four
+#      kinds run (exclusive PERF-FENCE/ARMED last, alone, in order). Control:
+#      a fixture registry with an unknown KIND fails the check and ci.sh
+#      refuses it (exit 2).
 #   I  the harness: a mutation whose target no longer exists is a FAIL, and
 #      the fixture it leaves exits 99 (never a stale copy from a past run).
 CST_PASS=0; CST_FAIL=0
@@ -703,6 +731,16 @@ if op == "before":
 PY
 }
 cst_headers() { printf '%s\n' "$CST_OUT" | sed -n 's/^### gate \([^ ]*\) .*/\1/p' | tr '\n' ' '; }
+
+# The KINDs a ci.sh copy's registry uses, and whether each is in its CI_PHASES.
+cst_kinds_list() { sed -n 's/^  "[A-Za-z0-9-]*|\([A-Z-]*\)|.*/\1/p' "$1" | sort -u | tr '\n' ' '; }
+cst_kinds_visited() {
+  local phases k
+  phases="$(sed -n 's/^CI_PHASES="\(.*\)"$/\1/p' "$1")"
+  [ -n "$phases" ] || return 1
+  for k in $(cst_kinds_list "$1"); do in_words "$k" "$phases" || return 1; done
+  return 0
+}
 
 ci_self_test() {
   CST_BASE="$CI_RUN_DIR/selftest"
@@ -829,6 +867,32 @@ P2|HARD|light|dir=second|bash $GATES/fake.sh P2 0 0'
   if [ -d "$tr/handmade" ] && [ "$(printf '%s\n' "$CST_OUT" | grep -c '^rc=1$')" = 3 ] && cst_has "no $CI_TARGET_MARK"; then
     cst_ok "H control: an unmarked dir, a non-plain name and a foreign root are each refused"
   else cst_bad "H prune refusals"; fi
+
+  # J — every registry kind is dispatched (G8b/G8 sat unrun for months), and
+  # exclusive gates run last and alone.
+  if cst_kinds_visited "$ROOT/.port/tools/ci.sh"; then cst_ok "J every KIND in the real GATE_REGISTRY is a dispatch phase ($(cst_kinds_list "$ROOT/.port/tools/ci.sh"))"
+  else CST_OUT="$(cst_kinds_list "$ROOT/.port/tools/ci.sh")"; cst_bad "J a KIND in the real GATE_REGISTRY is not dispatched"; fi
+  R='H1|HARD|light|-|bash $GATES/fake.sh H1 0 1
+PF|PERF-FENCE|heavy|exclusive|bash $GATES/fake.sh PF 0 1
+AR|ARMED|heavy|after=PF,exclusive|bash $GATES/fake.sh AR 0 0
+P1|PROGRESS|light|-|bash $GATES/fake.sh P1 0 1
+H2|HARD|heavy|-|bash $GATES/fake.sh H2 0 1'
+  cst_make kinds "$R"; cst_run kinds --jobs 1; h="$(cst_headers)"
+  if [ "$CST_RC" = 0 ] && [ "$h" = "H1 H2 P1 PF AR " ]; then cst_ok "J --jobs 1 runs every kind: HARD, PROGRESS, PERF-FENCE, ARMED ($h)"
+  else cst_bad "J --jobs 1 kinds (exit $CST_RC, order '$h')"; fi
+  cst_run kinds --jobs 4
+  if [ "$CST_RC" = 0 ] && cst_events kinds before H1 PF && cst_events kinds before H2 PF && cst_events kinds before P1 PF \
+     && cst_events kinds before PF AR && cst_has "+ PF" && cst_has "~ AR (armed"; then
+    cst_ok "J --jobs 4: the exclusive PERF-FENCE and ARMED gates run last, alone, in order"
+  else cst_bad "J exclusive gates (exit $CST_RC)"; fi
+  cst_make kinds-bad 'H1|HARD|light|-|bash $GATES/fake.sh H1 0 0
+B1|BOGUS|light|-|bash $GATES/fake.sh B1 0 0'
+  if ! cst_kinds_visited "$CST_BASE/kinds-bad/.port/tools/ci.sh"; then
+    cst_run kinds-bad --jobs 1
+    if [ "$CST_RC" = 2 ] && cst_has "KIND 'BOGUS', which no dispatch phase runs"; then
+      cst_ok "J control: a fixture registry with an unknown KIND fails the check, and ci.sh refuses it (exit 2)"
+    else cst_bad "J control: ci.sh ran a registry with an unknown KIND (exit $CST_RC)"; fi
+  else CST_OUT=""; cst_bad "J control: an unknown KIND went unnoticed"; fi
 
   # I — the harness itself: a mutation whose target is gone must not run a
   # stale copy (it happened: a refactor removed a target and an old fixture
