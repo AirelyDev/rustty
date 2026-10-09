@@ -1,7 +1,6 @@
 # P8-W9 T2 lane V26 (Windows full workspace) at a60e9e2a5 (head 1d22ba80d)
 host: rwin (Windows 11 ARM64, x64 binaries under emulation) at 192.168.65.3 (the ssh alias still pointed at the old 192.168.64.5; used the IP directly, config untouched)
 clone: C:\Users\gael\projects\rustty-p8w9t2 (git archive 1d22ba80d + .port + docs/superpowers; no .git at first)
-ustty-p8w9t2 (git archive 1d22ba80d + .port + docs/superpowers; no .git at first)
 command: cargo test --workspace --no-fail-fast --exclude libxml2-sys --exclude fontconfig-sys --exclude sentry-sys --target x86_64-pc-windows-msvc  (PATH has the SDK dir for rc.exe; RUSTTY_REQUIRE_FUZZ_CORPUS=1; --no-fail-fast added)
 start (UTC): 2026-10-09T10:41:52Z (second start; the first, 10:04:33Z, died with the ssh session and was discarded); end 2026-10-09T10:56:39Z approx, wall 887 s
 wall: 887 s (14.8 min), rc: 101
