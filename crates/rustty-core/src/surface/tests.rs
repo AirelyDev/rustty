@@ -2254,3 +2254,59 @@ mod prompt_click_relative_row_tests {
         }
     }
 }
+
+// rustty-only (P8-W9 FX4, NEW-FINDINGS N622 item 1): Oniguruma's first-use
+// init. `onig_new` -> `onig_reg_init` reads the process-global `onig_inited`
+// and, if it is unset, runs `onig_initialize` itself, with no lock
+// (regcomp.c:7667/7769). The reference runs `oni.init` once, single-threaded,
+// at startup (`global.zig`), before any surface derives its config; Rust's
+// test harness runs `DerivedConfig::init` (which compiles every configured
+// link regex through `Link::oni_regex`) on many threads with no such global
+// init, beside tests that call `oni::testing::ensure_init`. G-TSAN reported
+// exactly that pair (`onig_reg_init` read vs `onig_initialize` write). Every
+// regex compile must run after the one thread-safe init (memory
+// `parallel-cargo-test-exposes-c-init-races`).
+//
+// The race is on the FIRST init of the process, so this test is a regression
+// test only when it runs in a fresh process: run it alone under G-TSAN
+// (`--exact`) to reproduce; in the full binary another test may have
+// initialized Oniguruma first, and the test then still passes.
+#[cfg(test)]
+mod oniguruma_first_use_init_tests {
+    use super::*;
+    use std::sync::{Arc, Barrier};
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "DerivedConfig::init compiles the default config's link regex through oniguruma C FFI (extern static OnigEncodingUTF8) — un-executable under Miri; the TSan and native lanes cover it"
+    )]
+    fn concurrent_derived_config_link_regexes_and_ensure_init_do_not_race() {
+        const THREADS: usize = 8;
+        let barrier = Arc::new(Barrier::new(THREADS));
+        let handles: Vec<_> = (0..THREADS)
+            .map(|i| {
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    let config = configpkg::Config::default_config();
+                    assert!(
+                        !config.link.links.is_empty(),
+                        "the default config has a link regex to compile"
+                    );
+                    barrier.wait();
+                    if i % 2 == 0 {
+                        oni::testing::ensure_init().unwrap();
+                    } else {
+                        let mut derived =
+                            DerivedConfig::init(Allocator, &config).expect("DerivedConfig::init");
+                        assert_eq!(derived.links.len(), config.link.links.len());
+                        derived.deinit();
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().expect("thread");
+        }
+    }
+}
