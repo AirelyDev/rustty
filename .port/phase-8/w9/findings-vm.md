@@ -60,3 +60,10 @@ All found on rvm at head 1d22ba80d (pin a60e9e2a5). Provisional: no root-cause f
 
 ## ci.sh on rvm: other BLOCKED (environment)
 G-NIX (nixpkgs wasmtime fails to build on aarch64-linux), G-XCF/G-XCF-SELF/G-FONTBACKEND (macOS-only), G6/G6c/G6t (cargo-nextest not installed on rvm; Mac lanes), G-VALGRIND (deferred to its sharded lane by RUSTTY_VALGRIND_OWN_JOB).
+
+## N625 V26 (rwin) RED: flaky `rustty-vt-c` test `osc::tests::command_data_invalid_value_warns_through_the_scoped_log_sink`
+- In `cargo test --workspace` on x86_64-pc-windows-msvc, one failure: the scoped log sink captured an extra `(Warning, "osc", "osc_set invalid option value=1")` before the expected `commandData invalid data value=999`
+  (osc.rs:1132, message "the S174-F2 warning was not routed through sys::log_fn"). It passed alone and in 7 later runs of the lib (2+5) on rwin, and in every Linux run (rvm, 604 tests under TSan/ASan/MSan/valgrind).
+- Reading: a parallel sibling test that sets an invalid OSC option logs while this test's sink is installed (the sink is process-global rather than per-thread). Order-dependent flake, not reproduced. Evidence: `v26-windows-full-workspace-at-a60e9e2a5.txt`.
+- The two `xtask dist::` failures in the same run were my clone having no `.git`; both pass with a git repo (not a finding).
+- DLL step GREEN (`v26-dll-step-and-reruns-at-a60e9e2a5.txt`).
