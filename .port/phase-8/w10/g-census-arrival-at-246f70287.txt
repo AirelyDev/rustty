@@ -1,0 +1,7 @@
+  RED total_test_blocks    frozen=  3234 live=  4497 delta= +1263  (recorded 3234->4487)
+  RED total_assertions     frozen= 11975 live= 18291 delta= +6316  (recorded 11975->18258)
+  ok  files_with_tests     frozen=   279 live=   360 delta=   +81  (recorded 279->360)
+
+RED: 2 census figure(s) not recorded, or recorded stale, in .port/phase-3/CENSUS_DELTA.md: ['total_test_blocks', 'total_assertions']
+The frozen phase-0 inventory is the port's CONTRACT and stays frozen; this gate only requires the drift to be acknowledged in writing, so G1/G1b/G2's blind spot cannot widen unnoticed.
+g-census exit=1

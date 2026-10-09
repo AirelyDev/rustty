@@ -6,9 +6,9 @@ R3 forbids any build-time dependency on it).
 ## Pinned baseline
 
 ```
-commit  a60e9e2a57f73e1eef2bd1cf2995a467f69e7fb0   (short: a60e9e2a5 / a60e9e2a)
-date    2026-10-07
-subject Update VOUCHED list (#14585)
+commit  246f702876b924a1cb7cade1e99274d1470302fc   (short: 246f70287 / 246f7028)
+date    2026-10-09
+subject cli/list-themes: add ctrl-d/u paging (#14607)
 ```
 
 There is **one** sync point. The oracle working tree is checked out (detached) at this commit, and
@@ -38,7 +38,7 @@ tracked file in `.port/tools/gates` holds a 40-hex constant. Untracked and ignor
 Verify with:
 
 ```sh
-git -C ../ghostty rev-parse HEAD          # a60e9e2a57f73e1eef2bd1cf2995a467f69e7fb0
+git -C ../ghostty rev-parse HEAD          # 246f702876b924a1cb7cade1e99274d1470302fc
 git -C ../ghostty status --porcelain      # empty
 ```
 
@@ -60,6 +60,7 @@ at an empty tree and every gate finds zero reference sentences, i.e. vacuous gre
 | 2026-09-01 | `88f57ee66` (2026-08-25) | `20abdb50a` (2026-08-31) | Phase 6 upstream resync (advance-first, same doctrine; before/after gate states in `.port/phase-6/w0/`). 121 commits, 74 non-merge, 75 files, +6,261/−1,269. |
 | 2026-09-28 | `20abdb50a` (2026-08-31) | `12752b2ac` (2026-09-28) | Phase 7 upstream resync (`P7-W0 T3`, advance-first, same doctrine; before/after gate states in `.port/phase-7/w0/`). 333 commits, 234 non-merge, 233 files, +35,723/−9,235. |
 | 2026-10-07 | `12752b2ac` (2026-09-28) | `a60e9e2a5` (2026-10-07) | Phase 8 upstream resync (`P8-W0 T3`, advance-first, same doctrine; before/after gate states in `.port/phase-8/w0/`). 107 commits, 69 non-merge, 85 files, +7,466/−497. rvm's oracle fetched and detached at the same commit (N486). |
+| 2026-10-09 | `a60e9e2a5` (2026-10-07) | `246f70287` (2026-10-09) | Phase 8 second advance (`P8-W10 T0`, advance-first, same doctrine; before/after gate states in `.port/phase-8/w10/`). 18 commits, 12 non-merge, 10 files, +401/−72. rvm's oracle fetched and detached at the same commit (N486). |
 
 **Phase-4 note on ordering.** Unlike `P3-W10`, this advance happened at the *start* of the
 resync (explicit user direction: update the oracle, then port the whole range). The
@@ -203,9 +204,11 @@ before/after reports, the per-crate delta table, and the per-file attribution of
 
 ## Upstream beyond this pin
 
-At the time of the Phase-8 advance (2026-10-07) the pin IS `origin/main` — there is no
+At the time of the Phase-8 second advance (2026-10-09) the pin IS `origin/main` — there is no
 beyond-pin gap. Phase 8 absorbs `12752b2ac..a60e9e2a5` (107 commits, 69 non-merge, 85 files,
-+7,466/−497; artifacts in `.port/phase-8/`, delta reviews in `.port/phase-8/delta-review/`);
++7,466/−497; artifacts in `.port/phase-8/`, delta reviews in `.port/phase-8/delta-review/`)
+and then `a60e9e2a5..246f70287` (18 commits, 12 non-merge, 10 files, +401/−72; artifacts in
+`.port/phase-8/w10/`);
 Phase 7 absorbed `20abdb50a..12752b2ac` (333 commits, 234 non-merge, 233 files,
 +35,723/−9,235; artifacts in `.port/phase-7/`, delta reviews in `.port/phase-7/delta-review/`);
 Phase 6 absorbed `88f57ee66..20abdb50a` (121 commits, 74 non-merge, 75 files,

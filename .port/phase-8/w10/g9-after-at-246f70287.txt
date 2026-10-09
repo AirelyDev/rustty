@@ -1,0 +1,16 @@
+=== G9 :: full surface coverage (config/keybind/action/terminfo) ===
+config    : covered 218/218  owners=config (done)  -> done
+keybind   : covered 88/88  owners=input (done)  -> done
+cli       : covered 19/19  owners=cli (done)  -> done
+terminfo  : covered 270/270  owners=terminfo (done)  -> done
+modes     : covered 42/42  owners=vt (done)  -> done
+sgr       : covered 31/31  owners=vt (done)  -> done
+osc       : covered 29/29  owners=vt (done)  -> done  [structural: osc::Command variants]
+csi       : covered 43/43  owners=vt (done)  -> done  [structural: dispatch match arms; test-reference n/a]
+esc       : covered 24/24  owners=vt (done)  -> done  [structural: dispatch match arms; test-reference n/a]
+c0        : covered 13/13  owners=vt (done)  -> done  [structural: dispatch match arms; test-reference n/a]
+terminfo  : infocmp-parity: rustty terminfo entry not compiled/installed yet
+
+PROGRESS: surface ids covered 777/777
+GREEN: progress 777/777; no claimed-done owner uncovered
+g9 exit=0
