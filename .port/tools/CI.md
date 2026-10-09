@@ -27,6 +27,11 @@ CI exits **non-zero iff any *non-progress* check is red.**
 `CI_SKIP_CARGO=1 bash .port/tools/ci.sh` runs the gates only (no cargo) for fast
 local iteration.
 
+Gates run side by side by default (`--jobs auto`); `--jobs 1` is the serial
+run. See "Parallel, change-scoped and pruned runs" below for the scheduler,
+`--changed-since` fix verification and the policy on when to run the full
+suite.
+
 ---
 
 ## The canonical gate suite (`.port/tools/gates/`)
@@ -348,6 +353,155 @@ The driver is Node-only with **zero npm dependencies** (node's built-in `WebSock
 
 ---
 
+## Parallel, change-scoped and pruned runs
+
+A full `ci.sh` run took one and a half to two days on the Mac, gate after gate.
+These options cut the wall clock without weakening a gate (R5). The mechanics
+are in `.port/tools/ci_sched.sh`, and their self-test is the G-CI-SELF gate
+(`bash .port/tools/ci.sh --self-test`).
+
+```sh
+bash .port/tools/ci.sh                          # parallel (--jobs auto), every gate
+bash .port/tools/ci.sh --jobs 1                 # the serial run, in registry order
+bash .port/tools/ci.sh --changed-since <rev>    # fix verification (exit 5)
+bash .port/tools/ci.sh --changed-since <rev> --print-scope   # the scope only
+```
+
+| flag | effect |
+|---|---|
+| `--jobs N\|auto` | At most N gates run at once. `auto` is half the cores, between 2 and 8, and 1 when `GITHUB_ACTIONS` is set (GitHub-hosted runs stay serial). `--jobs 1` is the old serial loop: gates run in registry order and their output streams. |
+| `--heavy-cap N` | At most N heavy gates run at once (default 2, never more than `--jobs`). A heavy gate also waits while another one runs and the checkout's volume has less than `CI_MIN_FREE_GB` (15) free. |
+| `--changed-since <rev>` | The long gates run only the crates changed since `<rev>` and their reverse dependents. Every other gate runs in full. |
+| `--print-scope` | With `--changed-since`: print the scope and each long gate's decision, then exit. |
+| `--prune-targets` | Deletes each per-gate target dir under `target/ci-targets/` once the last gate using it ends. |
+| `--sccache` | Sets `RUSTC_WRAPPER=sccache` when sccache is on PATH. Without sccache the run is unchanged. |
+
+**What every run writes.** Each cargo step and gate prints its wall-clock
+seconds. The summary lists the slowest. `target/ci-run/ci-timings.tsv` has one
+row per cargo step, gate and Valgrind shard: gate id, kind, rc (or `skipped` /
+`scoped-out`), seconds. Gate logs go to `target/ci-run/logs/<id>.log`. The next
+run overwrites both.
+
+### What stays the same (R5)
+
+- A full run (no `--fast`, no `--changed-since`) runs every gate. Exit codes
+  are read exactly as before: 0 PASS, 3 BLOCKED (WARNING), anything else RED.
+  The summary lists PASSED, PROGRESS, WARNINGS and HARD FAILURES in registry
+  order, whatever order the gates finished in.
+- In a parallel run each gate's output goes to its own log and is printed whole
+  when the gate ends, under the same `### gate` header, followed by its
+  duration. Output from two gates never interleaves.
+- Exit codes: 0 PASS (full run only), 1 FAIL, 2 usage, 4 `--fast` subset green,
+  5 `--changed-since` scoped green. 4 and 5 print a NOT-A-RELEASE-GATE banner
+  instead of `CI RESULT: PASS`, and name what was skipped or narrowed and why.
+  `--fast` and `--changed-since` do not combine.
+
+### How gates are scheduled
+
+Each registry entry declares what it needs:
+`"<id>|<HARD|PROGRESS>|<light|heavy>|<traits>|<runner>"`. Nothing is inferred.
+
+- **heavy**: Miri, the sanitizers, Valgrind, release / clean-clone /
+  feature-matrix builds, G4, G5 and G8. `--heavy-cap` bounds them.
+- **`tgt`**: a lock held by every gate that builds in the default target dir,
+  reads artifacts cargo uplifts there (`target/{debug,release}/librustty_vt_c.*`,
+  xtask, examples), or writes untracked files into the tree (`dist/`,
+  `zig-out/`, `target/fuzz-*`). Cargo's own lock keeps concurrent builds
+  correct, but not a `librustty_vt_c` that another gate rebuilds with other
+  features while this one loads it (G-VTCLIB's publish rule). So the `tgt`
+  gates run one at a time, in registry order, beside everything else.
+- **`dir=<name>`**: in a parallel run the gate gets its own
+  `CARGO_TARGET_DIR=target/ci-targets/<name>`. G6, G6c and G6t each have one,
+  so the three Miri lanes can run side by side (G6c and G6t's debug-assertions-off
+  half build with other RUSTFLAGS). G-VALGRIND has one so its hours of
+  memcheck never wait for the `tgt` lock. Gates naming the same dir never
+  overlap. In `--jobs 1` runs every gate uses the default dirs, as before.
+- **`after=<id>`**: the gate starts only once `<id>` has finished.
+- **`shard`**: in a parallel run G-VALGRIND runs as `CI_VALGRIND_SHARDS` (4)
+  `check_valgrind.sh --shard K/N` units. Each unit is heavy, so the heavy cap
+  bounds them, and each passes `--jobs $CI_VALGRIND_JOBS` when that is set. If
+  any shard is RED the gate is RED. If any shard is BLOCKED the gate is
+  BLOCKED. Only all-green shards make a green gate.
+- **`scope=<how>`**: what `--changed-since` does to the gate (below).
+
+### `--changed-since <rev>`: fix verification
+
+The changed paths are `git diff --name-only <rev>` (against the working tree,
+so uncommitted edits count) plus untracked files. A path under `crates/<c>/`
+or `xtask/` selects that crate, whatever its file type. The selected crates are
+closed over reverse dependencies of every kind (normal, build, dev), using
+`cargo metadata`. When paths are not crate paths, the rules are conservative:
+
+- `.port/tools/**`, `.port/phase-2/**`, `crates-sys/**`, any `build.rs`,
+  `Cargo.lock`, the root `Cargo.toml`, `rust-toolchain*`, `.cargo/**` and
+  `valgrind.supp` select **every** crate. That is a full run (exit 0).
+- Docs and records select **nothing**: `*.md` and `*.txt` outside crate dirs,
+  `docs/`, `.superpowers/`, and `.port/**` outside `tools/` and `phase-2/`.
+  Every long gate is scoped out.
+- Any other path selects every crate.
+
+The long gates take the scope through their own selectors:
+
+| gate | selector |
+|---|---|
+| G6, G6t | `check_leaks.sh` `G6_ONLY="<crates>"` |
+| G6c | runs in full when `rustty-vt` is in scope, else scoped out |
+| G-ASAN, G-LSAN, G-MSAN, G-HWASAN, G-TSAN | `sanitizers.sh` `SAN_ONLY="<crates>"` |
+| G-LSAN-GTK | runs in full when `rustty-apprt` is in scope, else scoped out |
+| G-VALGRIND | `check_valgrind.sh <crate entries>`: its `--list-scope` rows whose crate is in scope |
+
+A narrowed gate never reports GREEN. `check_leaks.sh` and `sanitizers.sh`
+answer exit 3 with a `SCOPED-GREEN` line when what they ran is clean. ci.sh
+lists a narrowed gate that passed under "SCOPED", never under PASSED. A
+narrowed gate that is RED fails the run, and a plain BLOCKED is still a
+WARNING.
+
+### Gates and a non-default `CARGO_TARGET_DIR`
+
+Gates must not assume `<repo>/target`. A gate that reads a built artifact
+sources `.port/tools/gates/_target_dir.sh` and calls `rustty_target_dir
+"$ROOT"`, which returns `cargo metadata`'s `target_directory`, so
+`CARGO_TARGET_DIR` and any `build.target-dir` config are honoured. D11r, A5,
+G-ABISCHEMA, G-VTFEAT and the `example/*/build.sh` scripts read their
+library this way. xtask resolves the archives it folds in under
+`<root>/target`, so G-XCF and G-EXAMPLES' xcframework step run xtask under
+`env -u CARGO_TARGET_DIR`, as G8b already does. G-LINT skips every target
+root: `target/`, `target-*/`, any nested `target/`, and an in-tree
+`CARGO_TARGET_DIR`.
+
+G-TGTDIR (`check_target_dir.sh`) holds these rules in place:
+
+- It statically scans every registered runner and example script for literal
+  `target/<profile>` artifact reads. Rows in its `ALLOWED` list are exempt,
+  each with a reason, and a stale row is RED.
+- It runs G-LINT in a fixture checkout, with bad files placed in target roots.
+- It runs D11r, A5, G-ABISCHEMA and `example/c-vt` with `CARGO_TARGET_DIR`
+  set somewhere else.
+
+Each arm has a negative control.
+
+### Policy
+
+- **Phase end: one full run** (`bash .port/tools/ci.sh`, no `--fast`, no
+  `--changed-since`). Only its exit 0 is a release verdict.
+- **Fix verification: `--changed-since <rev>`**, where `<rev>` is the commit
+  the fix started from. It runs every short gate and scopes the long ones to
+  the fix. Do not re-run the whole suite because one crate changed.
+- **Working lanes: `--fast`**, as before.
+- **Low disk**: `--prune-targets`, and `--heavy-cap 1` when two sanitizer
+  passes (tens of GB each) do not fit side by side.
+
+### `--prune-targets`: what it may delete
+
+`ci.sh` deletes only `target/ci-targets/<name>` dirs. `<name>` must be a plain
+word, the target root must be `<checkout>/target/ci-targets`, and the dir must
+hold the `.created-by-ci-sh` marker that ci.sh writes when it creates the dir.
+A dir without the marker is refused by name. Each dir is deleted when the last
+gate that uses it ends. This is the only deletion `ci.sh` makes. The sanitizer
+gates already delete their own `target/san-<san>` dirs at the end of each pass.
+
+---
+
 ## Why this is honest (no fabricated greens)
 
 - Hard-fail gates that pass today (`fmt`, `clippy`, `build`, `test`, G7, G4
@@ -366,7 +520,12 @@ The driver is Node-only with **zero npm dependencies** (node's built-in `WebSock
 ## Adding / wiring a gate
 
 The gate suite is registered in `ci.sh`'s `GATE_REGISTRY` array as
-`"<DoP_id>|<HARD|PROGRESS>|<runner command>"`. To add a gate, drop its script in
-`.port/tools/gates/`, make it obey the 0 / 3 / non-zero exit contract above, and
-add one registry line. ci.sh runs HARD gates first, then PROGRESS gates, and
-aggregates all results before deciding the exit code.
+`"<DoP_id>|<HARD|PROGRESS>|<light|heavy>|<traits>|<runner command>"`. To add a
+gate, put its script in `.port/tools/gates/` and make it obey the 0 / 3 /
+non-zero exit contract above. Then add one registry line that declares its
+resource and traits (see "How gates are scheduled"): `heavy` if it is long or
+fills the machine, `tgt` if it builds in, or reads from, the default target
+dir or writes untracked files into the tree, and `-` otherwise. Read built
+artifacts through `_target_dir.sh`, never through a literal `target/` path
+(G-TGTDIR enforces this). ci.sh dispatches HARD gates first, then PROGRESS
+gates, and aggregates all results before deciding the exit code.
