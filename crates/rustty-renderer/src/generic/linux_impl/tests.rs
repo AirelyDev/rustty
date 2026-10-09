@@ -243,7 +243,10 @@ fn linux_opengl_renderer_init_then_deinit_round_trips() {
         surface_mailbox: SurfaceMailbox::DETACHED,
     };
 
-    let mut r = match Renderer::init(Global, opts) {
+    // SAFETY: `opts.device` is the process's test device (created once, never
+    // freed) and `opts.font_grid` the boxed test grid, freed only after the
+    // renderer's `deinit`, so both outlive `r`.
+    let mut r = match unsafe { Renderer::init(Global, opts) } {
         Ok(r) => r,
         // A GL/context failure here is the host being unable to stand up a
         // 4.3-core context (absent EGL / no surfaceless platform / the virgl
@@ -624,7 +627,10 @@ fn linux_opengl_rebuild_cells_places_ab_and_cursor() {
         // Offscreen: no surface, hence no mailbox (push returns 0).
         surface_mailbox: SurfaceMailbox::DETACHED,
     };
-    let mut r = match Renderer::init(Global, opts) {
+    // SAFETY: `opts.device` is the process's test device (created once, never
+    // freed) and `opts.font_grid` the boxed test grid, freed only after the
+    // renderer's `deinit`, so both outlive `r`.
+    let mut r = match unsafe { Renderer::init(Global, opts) } {
         Ok(r) => r,
         Err(e) => {
             // W8-03 strict mode (see test_support docs).
@@ -710,7 +716,10 @@ fn golden_renderer(cols: CellCountInt, rows: CellCountInt) -> Option<Renderer> {
         // Offscreen: no surface, hence no mailbox (push returns 0).
         surface_mailbox: SurfaceMailbox::DETACHED,
     };
-    let mut r = Renderer::init(Global, opts).expect("Renderer::init (GL probed above)");
+    // SAFETY: `opts.device` is the process's test device (created once, never
+    // freed) and `opts.font_grid` the boxed test grid, freed only after the
+    // renderer's `deinit`, so both outlive `r`.
+    let mut r = unsafe { Renderer::init(Global, opts) }.expect("Renderer::init (GL probed above)");
     enter_test_renderer(&mut r);
     Some(r)
 }

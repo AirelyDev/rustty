@@ -1033,9 +1033,10 @@ pub struct Options {
     // # Safety
     //
     // Must point to a live `Device` for the renderer's whole life: `Renderer::init`
-    // (a safe fn) dereferences it, and the renderer reads it until `deinit`. It is
-    // asserted non-null at `init`; the core `App` guarantees the rest by freeing
-    // the device only after every surface.
+    // (an `unsafe fn` whose `# Safety` carries this contract, P8-W9 FX7)
+    // dereferences it, and the renderer reads it until `deinit`. It is asserted
+    // non-null at `init`; the core `App` guarantees the rest by freeing the device
+    // only after every surface.
     pub device: *const crate::Device,
 
     /// The derived configuration for this renderer implementation.

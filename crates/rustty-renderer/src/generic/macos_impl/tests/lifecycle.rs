@@ -239,7 +239,11 @@ mod windowed_lifecycle {
             // Offscreen: no surface, hence no mailbox (push returns 0).
             surface_mailbox: SurfaceMailbox::DETACHED,
         };
-        let mut r = Renderer::init(Global, opts).expect("Renderer::init (Metal probed above)");
+        // SAFETY: `opts.device` is the process's test device (created once, never
+        // freed) and `opts.font_grid` the boxed test grid, freed only after the
+        // renderer's `deinit`, so both outlive `r`.
+        let mut r =
+            unsafe { Renderer::init(Global, opts) }.expect("Renderer::init (Metal probed above)");
 
         r.thread_enter(view_ptr).expect("thread_enter (no-op)");
 
