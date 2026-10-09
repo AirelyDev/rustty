@@ -591,12 +591,15 @@ fn semantic_prompt_effect_not_called_when_the_terminal_fails() {
     // SAFETY: `failing_c` and `failing` outlive `t`, deinited below.
     let alloc = unsafe { crate::alloc::VtAllocator::from_c(core::ptr::NonNull::from(&failing_c)) };
     // Unlimited scrollback, so a full page is never reused and the page
-    // list has to allocate to grow.
+    // list has to allocate to grow. The page keeps the standard byte size,
+    // so 8000 columns leave room for only a few rows: the page fills, and
+    // the refused allocation comes, after about five `A`s (10 columns took
+    // over 4,000, too slow for Miri).
     let mut t = Terminal::init(
         alloc,
         Options {
             max_scrollback_bytes: None,
-            ..opts(10, 2)
+            ..opts(8000, 2)
         },
     )
     .unwrap();
@@ -609,7 +612,7 @@ fn semantic_prompt_effect_not_called_when_the_terminal_fails() {
         failing.fail_index.set(failing.alloc_index.get());
         let mut reported = 0;
         while !failing.has_induced_failure.get() {
-            assert!(reported < 100_000, "the page list never allocated");
+            assert!(reported < 100, "the page list never allocated");
             assert!(!s.handler.semantic_failure);
             // The cursor is not at the left margin, so `A` moves to a new
             // line.
@@ -620,6 +623,8 @@ fn semantic_prompt_effect_not_called_when_the_terminal_fails() {
             }
         }
 
+        // Earlier `A`s were reported, so the count below is not trivially 0.
+        assert!(reported > 0);
         // The refused `A` was not reported, and the failure was recorded.
         assert_eq!(reported, sp_count());
         assert!(s.handler.semantic_failure);
