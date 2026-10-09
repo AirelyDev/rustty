@@ -1,7 +1,8 @@
+ids in this capture are provisional; see .port/phase-8/README.md id mapping
 Lane: G6c
 Command: CARGO_TARGET_DIR=<worktree>/target-g6c bash .port/tools/gates/check_leaks.sh --debug-assertions-off
 Host: Gaels-MacBook-Pro.local (Mac, aarch64-apple-darwin)
-Base: c8a55c96c Merge P8-W9 T2 (VM lanes): evidence at a60e9e2a5; rvm Linux/GTK/REL/examples/esctest/ASan/LSan/Valgrind GREEN, RED MSan/HWASan/TSan (N538-N540), V26 (N541 flaky)
+Base: c8a55c96c Merge P8-W9 T2 (VM lanes): evidence at a60e9e2a5; rvm Linux/GTK/REL/examples/esctest/ASan/LSan/Valgrind GREEN, RED MSan/HWASan/TSan (N620-N622), V26 (N625 flaky)
 Start (UTC): 2026-10-09T15:14:28Z
 End (UTC): 2026-10-09T15:55:06Z
 Wall: 2403s test phase (~40 min total incl. build)

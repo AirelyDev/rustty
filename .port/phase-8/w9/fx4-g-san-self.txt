@@ -1,3 +1,4 @@
+ids in this capture are provisional; see .port/phase-8/README.md id mapping
 # P8-W9 FX4 G-SAN-SELF
 host: rvm (Fedora 44 aarch64), clone /home/gael/projects/rustty-p8w9fx4 (git archive of phase-8/w9fx4 plus .port and docs/superpowers); rvm clock about 77 min behind the Mac
 ### CMD: bash .port/tools/gates/sanitizers.sh --self-test
@@ -55,8 +56,8 @@ host: rvm (Fedora 44 aarch64), clone /home/gael/projects/rustty-p8w9fx4 (git arc
   ok   I a listed exception with no instrumented archive is a named skip
   ok   I a listed exception whose archive IS instrumented is stale (RED)
   ok   I a crate that is not -sys is not checked (no output)
-  ok   I N539: a host build-dependency's uninstrumented copy is not looked at
-  ok   I N539: an uninstrumented TARGET archive is RED although the host copy is instrumented
+  ok   I N621: a host build-dependency's uninstrumented copy is not looked at
+  ok   I N621: an uninstrumented TARGET archive is RED although the host copy is instrumented
   ok   I nothing built for the instrumented triple is RED
   ok   I tsan control: instrumented target archives pass (a host build-dependency's is not looked at)
   ok   I tsan: an uninstrumented target archive is RED

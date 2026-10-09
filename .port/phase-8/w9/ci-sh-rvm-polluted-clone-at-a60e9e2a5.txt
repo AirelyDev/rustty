@@ -1,3 +1,4 @@
+ids in this capture are provisional; see .port/phase-8/README.md id mapping
 # P8-W9 T2 lane ci-sh-rvm-polluted-clone at a60e9e2a5 (head 1d22ba80d)
 host: rvm (Fedora aarch64), clone /home/gael/projects/rustty-p8w9t2 (git archive 1d22ba80d plus .port and docs/superpowers copied from the worktree, since .gitattributes export-ignores them)
 ### CMD: env RUSTTY_VALGRIND_OWN_JOB=run separately as G-VALGRIND shards by the runner bash .port/tools/ci.sh
@@ -68,5 +69,5 @@ Command line was `env RUSTTY_VALGRIND_OWN_JOB=... bash .port/tools/ci.sh` (valgr
 End-to-end wall time (without valgrind): 13,073 s (3 h 38 min). Before it, a first unmodified run reached G-VALGRIND after ~1h20 and was killed by the VM restart.
 This run's clone had 5,642 AppleDouble `._*` files (from my macOS tar of .port and docs/superpowers). They caused G-LINT (prettier warns on `._*.md`)
 and D6 (`._*.supp` without WHY comments) REDs; those two are NOT trusted. The clone was deleted and rebuilt clean for the re-runs
-(see ci-sh-rvm-clean-gates-*). Trustworthy REDs in this run: G-MSAN, G-HWASAN, G-TSAN (= N538-N540) and D1 (see findings-vm.md N535).
+(see ci-sh-rvm-clean-gates-*). Trustworthy REDs in this run: G-MSAN, G-HWASAN, G-TSAN (= N620-N622) and D1 (see findings-vm.md N623).
 G4 BLOCKED: reference driver not built (`vt_driver_ref`), see findings-vm.md.

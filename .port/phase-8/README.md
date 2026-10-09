@@ -75,8 +75,9 @@ use, and N532–N599 held no record (N540 appears only as the start of W3's prov
 N550/N551 only as W5's former provisional names of N528/N529).
 Every reference in `.port/`, `docs/` and `crates/` (comments, PORT NOTEs, one test assertion message in
 `rustty-vt-c/src/sys.rs`, gate skip reasons in `sanitizers.sh`, `tsan.supp`, the slice-reinterpret ledger and
-the `w9/` evidence files) now uses the new id. Commit subjects and the SDD ledger keep the old ids; this
-table maps them.
+the `w9/findings-*.md` records) now uses the new id. Captured tool output in `w9/` (`*.txt`, `*.log`) stays
+verbatim with the provisional ids, under a one-line note at its top; commit subjects and the SDD ledger keep
+the old ids too. This table maps them.
 
 | provisional | final | finding |
 |---|---|---|

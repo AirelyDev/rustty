@@ -1,3 +1,4 @@
+ids in this capture are provisional; see .port/phase-8/README.md id mapping
 # P8-W9 FX4 G-MSAN full gate (pin a60e9e2a5)
 host: rvm (Fedora 44 aarch64), clone /home/gael/projects/rustty-p8w9fx4 (git archive of phase-8/w9fx4 plus .port and docs/superpowers); rvm clock about 77 min behind the Mac
 ### CMD: SAN_ONLY=rustty-core bash .port/tools/gates/sanitizers.sh --gate msan  (gate_msan does not read SAN_ONLY, so this ran the whole MSAN_SCOPE, as the output shows)
@@ -18,10 +19,10 @@ excluded (link uninstrumented C/C++; MSan cannot run them):
   skipped in rustty-renderer: tests matching opengl::pipeline:: — the framebuffer/vertex-array teardown test in an offscreen GL context (M3)
   skipped in rustty-renderer: tests matching opengl::target:: — render-target and dmabuf export tests on the offscreen EGL context (M3)
   skipped in rustty-renderer: tests matching shadertoy:: — custom-shader translation through glslang and spirv-cross, whose glslang preprocessor reads libstdc++-constructed stream state (M2)
-  skipped in rustty-core: tests matching app::test_runtime::app_init_creates_and_deinit_frees_the_render_device — App::init creates the app's render device (DeviceBox::init -> Device::init -> init_platform -> eglGetPlatformDisplay in the uninstrumented libEGL.so.1; G-MSAN rvm, P8-W9 T2: use-of-uninitialized-value, origin a malloc inside libEGL.so.1; NEW-FINDINGS N538) (M3)
-  skipped in rustty-core: tests matching app::test_runtime::app_create_and_destroy_empty — App::create runs App::init, which creates the render device through the same uninstrumented libEGL (N538) (M3)
-  skipped in rustty-core: tests matching app::device_tests:: — Review Focus 4's two live surfaces on one App: App::create's render device plus each surface renderer's offscreen EGL context and draws in the uninstrumented libEGL/Mesa (N538) (M3)
-  skipped in rustty-core: tests matching surface_occlusion_callback_dedups_and_reports — the surface_visibility_kat integration test's TestSurface::build runs App::create, so it creates the render device through the same uninstrumented libEGL (eglGetPlatformDisplay/eglInitialize; reports in libEGL_mesa, libgallium and Mesa's driconf libexpat; N538) (M3)
+  skipped in rustty-core: tests matching app::test_runtime::app_init_creates_and_deinit_frees_the_render_device — App::init creates the app's render device (DeviceBox::init -> Device::init -> init_platform -> eglGetPlatformDisplay in the uninstrumented libEGL.so.1; G-MSAN rvm, P8-W9 T2: use-of-uninitialized-value, origin a malloc inside libEGL.so.1; NEW-FINDINGS N620) (M3)
+  skipped in rustty-core: tests matching app::test_runtime::app_create_and_destroy_empty — App::create runs App::init, which creates the render device through the same uninstrumented libEGL (N620) (M3)
+  skipped in rustty-core: tests matching app::device_tests:: — Review Focus 4's two live surfaces on one App: App::create's render device plus each surface renderer's offscreen EGL context and draws in the uninstrumented libEGL/Mesa (N620) (M3)
+  skipped in rustty-core: tests matching surface_occlusion_callback_dedups_and_reports — the surface_visibility_kat integration test's TestSurface::build runs App::create, so it creates the render device through the same uninstrumented libEGL (eglGetPlatformDisplay/eglInitialize; reports in libEGL_mesa, libgallium and Mesa's driconf libexpat; N620) (M3)
 === sanitizer matrix: msan over 59 crate spec(s); one shared target dir /home/gael/projects/rustty-p8w9fx4/target/san-msan, deleted when the pass ends ===
   ✅ msan breakpad-sys: 1 test(s) ran, 29s — 1 passed, 0 ignored
   ✅ msan dcimgui-sys: 8 test(s) ran, 37s — 8 passed, 0 ignored
