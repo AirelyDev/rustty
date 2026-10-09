@@ -126,10 +126,15 @@ ci_scope_from_list() {
   local list="$1" meta out
   mkdir -p "$CI_RUN_DIR" || return 2
   meta="$CI_RUN_DIR/scope-metadata.json"
+  # Every `.port/...` path a crate's own files name (source, tests, build
+  # scripts, comments: over-selecting is the safe side): a change there selects
+  # that crate. rustty-vt's fuzz_corpus_replay reads .port/phase-0/corpora/cvt.
+  local ment="$CI_RUN_DIR/scope-port-mentions.txt"
+  (cd "$ROOT" && git grep -I -n --full-name -E '\.port/[A-Za-z0-9_./-]+' -- crates xtask 2>/dev/null) > "$ment" || : > "$ment"
   if ! (cd "$ROOT" && cargo metadata --no-deps --format-version 1 --offline) > "$meta" 2>/dev/null; then
     echo "ci.sh: cargo metadata failed; cannot compute the change scope" >&2; return 2
   fi
-  out="$("$PY" - "$meta" "$list" <<'PY'
+  out="$("$PY" - "$meta" "$list" "$ment" <<'PY'
 import json, os, re, sys
 meta = json.load(open(sys.argv[1]))
 root = meta["workspace_root"]
@@ -144,12 +149,38 @@ for p in pkgs:
         if d["name"] in names and d.get("path"):
             rdeps[d["name"]].add(p["name"])
 files = [l.strip() for l in open(sys.argv[2]) if l.strip()]
+# (crate, mentioned .port path, on a code line?) from `git grep -n` lines
+# "<file>:<line>:<text>". A comment, a doc line or an `ignore = "..."` reason
+# CITES a path (records are cited everywhere); a code line may READ it.
+mentions = []
+for l in open(sys.argv[3]):
+    parts = l.rstrip("\n").split(":", 2)
+    if len(parts) < 3:
+        continue
+    path, text = parts[0], parts[2]
+    who = next((n for d, n in dirs if path.startswith(d)), None)
+    if not who:
+        continue
+    t = text.strip()
+    code = not (t.startswith(("//", "*", "/*", "#")) or "ignore =" in t or "ignore=" in t)
+    for m in re.findall(r"\.port/[A-Za-z0-9_./-]+", text):
+        mentions.append((who, m.rstrip("./"), code))
+def port_readers(f, code_only):
+    return {w for w, m, c in mentions if (c or not code_only)
+            and (f == m or f.startswith(m + "/") or m.startswith(f + "/"))}
+def is_record(f):
+    return re.search(r"\.(md|txt|tsv)$", f) is not None
 GLOBAL_PREFIX = (".port/tools/", ".port/phase-2/", "crates-sys/", ".cargo/")
 GLOBAL_FILE = {"Cargo.lock", "Cargo.toml", "rust-toolchain", "rust-toolchain.toml", "valgrind.supp"}
 def is_doc(f):
-    # .port/tools/ and .port/phase-2/ are GLOBAL and were matched before this.
-    if f.startswith(("docs/", ".superpowers/", ".port/")):
+    # .port/tools/ and .port/phase-2/ are GLOBAL, and a .port/ path a crate
+    # names selects that crate, both matched before this. What is left under
+    # .port/ is a record only as .md/.txt/.tsv; any other .port/ data selects
+    # ALL (unsure is never narrowed).
+    if f.startswith(("docs/", ".superpowers/")):
         return True
+    if f.startswith(".port/"):
+        return re.search(r"\.(md|txt|tsv)$", f) is not None
     return re.search(r"\.(md|txt)$", f) is not None
 glob, changed, docs = [], set(), 0
 for f in files:
@@ -159,6 +190,14 @@ for f in files:
     hit = next((n for d, n in dirs if f.startswith(d)), None)
     if hit is not None and (f.startswith("crates/") or f.startswith("xtask/")):
         changed.add(hit); continue
+    # A .port/ record selects the crates that name it on a code line; other
+    # .port/ data selects every crate that names it at all, and ALL when none
+    # does (unsure is never narrowed).
+    readers = port_readers(f, is_record(f)) if f.startswith(".port/") else set()  # PORT-READERS
+    if readers:
+        changed |= readers; continue
+    if f.startswith(".port/") and not is_record(f):
+        glob.append(f + " (.port/ data no crate names)"); continue
     if is_doc(f):
         docs += 1; continue
     glob.append(f + " (unclassified)")
@@ -202,7 +241,10 @@ ci_scope_from_rev() {
   fi
   mkdir -p "$CI_RUN_DIR" || return 2
   list="$CI_RUN_DIR/scope-changed-paths.txt"
-  { git -C "$ROOT" diff --name-only "$rev" -- && git -C "$ROOT" ls-files --others --exclude-standard; } > "$list" \
+  # --no-renames: a rename lists BOTH paths (git's default rename detection
+  # prints only the destination, so a file moved out of a crate looked like a
+  # docs change). Deleted paths are listed by --name-only as well.
+  { git -C "$ROOT" diff --no-renames --name-only "$rev" -- && git -C "$ROOT" ls-files --others --exclude-standard; } > "$list" \
     || { echo "ci.sh: git diff failed" >&2; return 2; }
   SCOPE_NFILES="$(grep -c . "$list" | tr -d ' ')"
   ci_scope_from_list "$list"
@@ -251,8 +293,12 @@ ci_gate_scope() {
     args)
       # The gate's own default scope (`--list-scope`), kept where the crate is
       # in the closure: crate names as positional arguments (its selector).
+      local listed
       # shellcheck disable=SC2086  # the runner is a word-split command line
-      for e in $( $runner --list-scope 2>/dev/null ); do
+      if ! listed="$($runner --list-scope 2>/dev/null)" || [ -z "$listed" ]; then
+        SC_NOTE="its --list-scope failed or printed nothing: runs in full"; return 0
+      fi
+      for e in $listed; do
         c="${e%%:*}"; in_words "$c" "$SCOPE_CRATES" && entries="$entries $e"
       done
       if [ -z "$entries" ]; then SC_ACTION=out; SC_NOTE="no crate of its scope is in the change closure"
@@ -527,6 +573,13 @@ ci_run_parallel() {
         GS_LEFT[$i]=$(( GS_LEFT[$i] - 1 ))
         [ "${U_LABEL[$u]}" != "${GS_ID[$i]}" ] && ci_timing_row "${U_LABEL[$u]}" SHARD "$rcv" $(( U_END[$u] - U_T0[$u] ))
         [ "${GS_LEFT[$i]}" -eq 0 ] && ci_gate_finish "$i"
+      elif ci_pid_gone "${U_PID[$u]}" && [ ! -s "$rcf" ]; then
+        # The wrapper itself died (OOM killer, an external kill) before writing
+        # its .rc: RED, never a scheduler that waits forever.
+        wait "${U_PID[$u]}" 2>/dev/null
+        echo "2" > "$rcf"
+        printf '\nci.sh: the wrapper of %s died before it recorded an exit code (killed?): RED\n' "${U_LABEL[$u]}" >> "${rcf%.rc}"
+        still+=("$u")
       else
         still+=("$u")
       fi
@@ -570,6 +623,14 @@ ci_run_parallel() {
   done
 }
 
+# ci_pid_gone PID: the process is gone, or a zombie nobody reaped yet (kill -0
+# succeeds on a zombie, so `ps` decides).
+ci_pid_gone() {
+  kill -0 "$1" 2>/dev/null || return 0
+  case "$(ps -o stat= -p "$1" 2>/dev/null)" in Z*) return 0 ;; esac
+  return 1
+}
+
 # Kill what this run started (explicit PIDs and their descendants) on INT/TERM.
 ci_killtree() { local p="$1" c; for c in $(pgrep -P "$p" 2>/dev/null); do ci_killtree "$c"; done; kill "$p" 2>/dev/null; }
 ci_on_signal() {
@@ -607,13 +668,17 @@ ci_on_signal() {
 #      Control: the scoped banner removed (the run falls through to PASS).
 #   G  --fast still exits 4 and names its skips, serial and parallel.
 #   H  --prune-targets deletes only marked dirs under target/ci-targets.
+#   K  the heavy-start disk floor with a stubbed df: 1 GB free runs heavy
+#      gates one at a time, 100 GB in parallel. Control: floor check dropped.
+#   M  a wrapper killed before it records its rc is RED (exit 2), never a
+#      hang. Control: the dead-wrapper check dropped (a watchdog ends it).
 #   J  every KIND in the real GATE_REGISTRY is a dispatch phase, all four
 #      kinds run (exclusive PERF-FENCE/ARMED last, alone, in order). Control:
 #      a fixture registry with an unknown KIND fails the check and ci.sh
 #      refuses it (exit 2).
 #   I  the harness: a mutation whose target no longer exists is a FAIL, and
 #      the fixture it leaves exits 99 (never a stale copy from a past run).
-CST_PASS=0; CST_FAIL=0
+CST_PASS=0; CST_FAIL=0; CST_BLOCKED=0
 cst_ok()  { echo "  ok    $1"; CST_PASS=$((CST_PASS + 1)); }
 cst_bad() { echo "  FAIL  $1"; printf '%s\n' "${CST_OUT:-}" | tail -15 | sed 's/^/        /'; CST_FAIL=$((CST_FAIL + 1)); }
 # cst_make NAME REGISTRY — a fixture root with copies of ci.sh (its registry
@@ -690,12 +755,17 @@ FAKE
   : > "$d/events"; : > "$d/vg_fail"
 }
 # cst_run NAME ARGS... — CST_OUT, CST_RC; the outer run's knobs never leak in.
+# The heavy-gate disk floor is 0 in the fixtures (the host's free disk must
+# never redden this self-test; arm K proves the floor with a stubbed df).
+# CST_WRAP prefixes the run (arm M: a watchdog).
 cst_run() {
   local d="$CST_BASE/$1"; shift
   : > "$d/events"
+  local v; local -a unset_n=()
+  for v in $CI_NARROW_VARS; do unset_n+=(-u "$v"); done
   CST_OUT="$(cd "$d" && env -u CI_RUN_DIR -u CI_VALGRIND_SHARDS -u CI_VALGRIND_JOBS -u CARGO_TARGET_DIR \
-    -u G6_ONLY -u SAN_ONLY -u GITHUB_ACTIONS -u CI_MIN_FREE_GB CI_SKIP_CARGO=1 CI_POLL=0.1 \
-    ${CST_ENV:-} bash "$d/.port/tools/ci.sh" "$@" 2>&1)"
+    "${unset_n[@]}" -u GITHUB_ACTIONS CI_SKIP_CARGO=1 CI_POLL=0.1 CI_MIN_FREE_GB=0 \
+    ${CST_ENV:-} ${CST_WRAP:-} bash "$d/.port/tools/ci.sh" "$@" 2>&1)"
   CST_RC=$?
 }
 cst_has() { printf '%s\n' "$CST_OUT" | grep -qF -- "$1"; }
@@ -785,6 +855,10 @@ B4|HARD|light|-|bash $GATES/fake.sh B4 3 1 BLOCKED: fixture reason'
   cst_run red-mut --jobs 4
   if [ "$CST_RC" != 1 ]; then cst_ok "B control: a finisher that drops the gate's rc is noticed (exit $CST_RC)"
   else cst_bad "B control: a finisher that drops the rc went unnoticed"; fi
+  CST_MUT_FILE=ci_sched.sh CST_MUT_OLD='echo $? > "$rcf.tmp"' CST_MUT_NEW='echo 0 > "$rcf.tmp"' cst_make rc-mut "$R"
+  cst_run rc-mut --jobs 4
+  if [ "$CST_RC" != 1 ]; then cst_ok "B control: a wrapper that records 0 instead of the gate's rc is noticed (exit $CST_RC)"
+  else cst_bad "B control: the rc capture mutation went unnoticed"; fi
 
   # C — heavy cap, locks, dirs, after=.
   R='V1|HARD|heavy|-|bash $GATES/fake.sh V1 0 1
@@ -811,6 +885,58 @@ A2|HARD|light|after=A1|bash $GATES/fake.sh A2 0 0'
   cst_run lock-mut --jobs 8 --heavy-cap 2
   if cst_events lock-mut overlap L1 L2; then cst_ok "C control: a dropped lock check is noticed (L1 and L2 overlapped)"
   else cst_bad "C control: a dropped lock check went unnoticed"; fi
+  CST_MUT_FILE=ci_sched.sh CST_MUT_OLD='  for dep in ${GS_AFTER[$i]}; do' CST_MUT_NEW='  for dep in; do' cst_make after-mut "$R"
+  cst_run after-mut --jobs 8 --heavy-cap 2
+  if ! cst_events after-mut before A1 A2; then cst_ok "C control: a dropped after= check is noticed (A2 started before A1 ended)"
+  else cst_bad "C control: a dropped after= check went unnoticed"; fi
+
+  # K — the heavy-start disk floor, with a stubbed df (the host's disk never
+  # decides this arm; every other fixture runs with the floor at 0).
+  R='V1|HARD|heavy|-|bash $GATES/fake.sh V1 0 1
+V2|HARD|heavy|-|bash $GATES/fake.sh V2 0 1
+V3|HARD|heavy|-|bash $GATES/fake.sh V3 0 1'
+  local k
+  for k in disk disk-mut; do
+    if [ "$k" = disk ]; then cst_make disk "$R"
+    else CST_MUT_FILE=ci_sched.sh CST_MUT_OLD='              if [ -n "$fg" ] && [ "$fg" -lt "$CI_MIN_FREE_GB" ]; then u=$((u + 1)); continue; fi' CST_MUT_NEW='              :' cst_make disk-mut "$R"; fi
+    mkdir -p "$CST_BASE/$k/fakebin"
+    printf '#!/bin/sh\nprintf "Filesystem 1024-blocks Used Available Capacity Mounted\\n/dev/fake 999999999 1 %%s 1%%%% /\\n" "$(cat "%s")"\n' "$CST_BASE/$k/df_kb" > "$CST_BASE/$k/fakebin/df"
+    chmod +x "$CST_BASE/$k/fakebin/df"
+  done
+  echo 1048576 > "$CST_BASE/disk/df_kb"     # 1 GB free
+  CST_ENV="CI_MIN_FREE_GB=15 PATH=$CST_BASE/disk/fakebin:$PATH" cst_run disk --jobs 4 --heavy-cap 3
+  local lo; lo="$(cst_events disk maxpar V1 V2 V3)"
+  echo 104857600 > "$CST_BASE/disk/df_kb"   # 100 GB free
+  CST_ENV="CI_MIN_FREE_GB=15 PATH=$CST_BASE/disk/fakebin:$PATH" cst_run disk --jobs 4 --heavy-cap 3
+  local hi; hi="$(cst_events disk maxpar V1 V2 V3)"
+  if [ "$lo" = 1 ] && [ "$hi" -ge 2 ]; then cst_ok "K below CI_MIN_FREE_GB (stubbed df: 1 GB) heavy gates run one at a time ($lo); with 100 GB, $hi at once"
+  else cst_bad "K disk floor (1 GB: max $lo heavy; 100 GB: max $hi)"; fi
+  echo 1048576 > "$CST_BASE/disk-mut/df_kb"
+  CST_ENV="CI_MIN_FREE_GB=15 PATH=$CST_BASE/disk-mut/fakebin:$PATH" cst_run disk-mut --jobs 4 --heavy-cap 3
+  lo="$(cst_events disk-mut maxpar V1 V2 V3)"
+  if [ "$lo" -ge 2 ]; then cst_ok "K control: a dropped disk-floor check runs $lo heavy gates at 1 GB free, noticed"
+  else cst_bad "K control: a dropped disk-floor check went unnoticed (max $lo)"; fi
+
+  # M — a wrapper that dies before recording its rc is RED, not a hang.
+  if command -v perl >/dev/null 2>&1; then
+    printf '#!/bin/sh\nexec perl -e '"'"'alarm shift; exec @ARGV or die'"'"' "$@"\n' > "$CST_BASE/watchdog.sh"; chmod +x "$CST_BASE/watchdog.sh"
+    R='W1|HARD|light|-|bash $GATES/killwrap.sh
+W2|HARD|light|-|bash $GATES/fake.sh W2 0 0'
+    for k in deadwrap deadwrap-mut; do
+      if [ "$k" = deadwrap ]; then cst_make deadwrap "$R"
+      else CST_MUT_FILE=ci_sched.sh CST_MUT_OLD='      elif ci_pid_gone "${U_PID[$u]}" && [ ! -s "$rcf" ]; then' CST_MUT_NEW='      elif false; then' cst_make deadwrap-mut "$R"; fi
+      # The gate kills its grandparent: the scheduler's wrapper subshell.
+      printf '#!/usr/bin/env bash\nkill -9 "$(ps -o ppid= -p "$PPID" | tr -d " ")"\nsleep 1\nexit 0\n' > "$CST_BASE/$k/.port/tools/gates/killwrap.sh"
+    done
+    CST_WRAP="$CST_BASE/watchdog.sh 60" cst_run deadwrap --jobs 2
+    if [ "$CST_RC" = 1 ] && cst_has "X W1 (exit 2)" && cst_has "died before it recorded an exit code"; then cst_ok "M a wrapper killed before it recorded its rc: W1 RED (exit 2), the run ends"
+    else cst_bad "M dead wrapper (exit $CST_RC)"; fi
+    CST_WRAP="$CST_BASE/watchdog.sh 15" cst_run deadwrap-mut --jobs 2
+    if [ "$CST_RC" = 142 ]; then cst_ok "M control: without the check the scheduler waits forever (killed by the 15 s watchdog), noticed"
+    else cst_bad "M control: a scheduler without the dead-wrapper check did not hang (exit $CST_RC)"; fi
+  else
+    echo "  BLOCKED arm M: no perl for the watchdog"; CST_BLOCKED=1
+  fi
 
   # D — sharding.
   R='G-VALGRIND|HARD|heavy|dir=valgrind,shard,scope=args|bash $GATES/check_valgrind.sh'
@@ -885,6 +1011,10 @@ H2|HARD|heavy|-|bash $GATES/fake.sh H2 0 1'
      && cst_events kinds before PF AR && cst_has "+ PF" && cst_has "~ AR (armed"; then
     cst_ok "J --jobs 4: the exclusive PERF-FENCE and ARMED gates run last, alone, in order"
   else cst_bad "J exclusive gates (exit $CST_RC)"; fi
+  CST_MUT_FILE=ci_sched.sh CST_MUT_OLD='  if trait_has "${GS_TRAITS[$i]}" exclusive; then' CST_MUT_NEW='  if false; then' cst_make kinds-mut "$R"
+  cst_run kinds-mut --jobs 4
+  if ! cst_events kinds-mut before H1 PF || ! cst_events kinds-mut before P1 PF; then cst_ok "J control: a dropped exclusive wait starts PERF-FENCE beside other gates, noticed"
+  else cst_bad "J control: a dropped exclusive wait went unnoticed"; fi
   cst_make kinds-bad 'H1|HARD|light|-|bash $GATES/fake.sh H1 0 0
 B1|BOGUS|light|-|bash $GATES/fake.sh B1 0 0'
   if ! cst_kinds_visited "$CST_BASE/kinds-bad/.port/tools/ci.sh"; then
@@ -906,6 +1036,7 @@ B1|BOGUS|light|-|bash $GATES/fake.sh B1 0 0'
 
   echo "--- G-CI-SELF: $CST_PASS ok, $CST_FAIL failed (fixtures in $CST_BASE) ---"
   [ "$CST_FAIL" -eq 0 ] || { echo "G-CI-SELF RED"; return 1; }
+  [ "$CST_BLOCKED" -eq 0 ] || { echo "G-CI-SELF BLOCKED: an arm could not run (above)"; return 3; }
   echo "G-CI-SELF GREEN"
   return 0
 }
@@ -951,12 +1082,30 @@ PY
   for p in ".port/tools/ci.sh|all" ".port/tools/gates/check_leaks.sh|all" "Cargo.lock|all" "rust-toolchain.toml|all" \
            "crates/$x/build.rs|all" "crates-sys/zlib-sys/Cargo.toml|all" ".port/phase-2/lsan.supp|all" "include/rustty/vt.h|all" \
            "valgrind.supp|all" "docs/ghostty-bug-fixes.md|none" ".port/parity-closure/NEW-FINDINGS.md|none" \
-           ".port/phase-8/DECISIONS.md|none" "README.md|none" "crates/$x/README.md|crates"; do
+           ".port/phase-8/DECISIONS.md|none" ".port/parity-closure/LEDGER.tsv|none" ".port/zz-ci-selftest-unnamed/data.bin|all" \
+           "README.md|none" "crates/$x/README.md|crates"; do
     want="${p#*|}"; printf '%s\n' "${p%|*}" > "$list"
     ci_scope_from_list "$list"
     if [ "$SCOPE_MODE" = "$want" ]; then cst_ok "E ${p%|*} -> $want"
     else CST_OUT="$SCOPE_MODE: $SCOPE_REASON"; cst_bad "E ${p%|*} -> $SCOPE_MODE, want $want"; fi
   done
+  # I4: the cvt fuzz corpus is data rustty-vt's tests read (fuzz_corpus_replay).
+  local seed=".port/phase-0/corpora/cvt/parser-initial/02-crlf"
+  printf '%s\n' "$seed" > "$list"; ci_scope_from_list "$list"
+  if [ "$SCOPE_MODE" = crates ] && in_words rustty-vt "$SCOPE_CRATES"; then cst_ok "E a cvt corpus seed selects rustty-vt (it reads .port/phase-0/corpora/cvt), $(printf '%s\n' $SCOPE_CRATES | grep -c .) crate(s) with dependents"
+  else CST_OUT="$SCOPE_MODE: $SCOPE_REASON"; cst_bad "E cvt corpus seed -> $SCOPE_MODE"; fi
+  "$PY" - "$ROOT/.port/tools/ci_sched.sh" "$mutd/ci_sched.sh" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+s = s[:s.index("\n# ---- G-CI-SELF (ci.sh --self-test)")]
+old = '    readers = port_readers(f, is_record(f)) if f.startswith(".port/") else set()  # PORT-READERS'
+assert s.count(old) == 1
+open(sys.argv[2], "w").write(s.replace(old, '    readers = set()\n    if f.startswith(".port/"):\n        docs += 1; continue'))
+PY
+  [ $? -eq 0 ] || { CST_OUT=""; cst_bad "E control: the .port/ mutation target is gone (fixture not built)"; return; }
+  CST_OUT="$( (. "$mutd/ci_sched.sh"; ci_scope_from_list "$list"; echo "mode=$SCOPE_MODE") 2>&1)"
+  if cst_has "mode=none"; then cst_ok "E control: .port/ treated as docs-only scopes the corpus change out (mode=none), noticed"
+  else cst_bad "E control: .port/ as docs-only went unnoticed"; fi
   printf '%s\n' docs/a.md crates/$x/src/lib.rs > "$list"; ci_scope_from_list "$list"
   if [ "$SCOPE_MODE" = crates ]; then cst_ok "E docs next to a crate change: the crate's closure"
   else cst_bad "E docs + crate"; fi
@@ -968,6 +1117,7 @@ old = 'GLOBAL_PREFIX = (".port/tools/", '
 assert s.count(old) == 1
 open(sys.argv[2], "w").write(s.replace(old, 'GLOBAL_PREFIX = ('))
 PY
+  [ $? -eq 0 ] || { CST_OUT=""; cst_bad "E control: the GLOBAL_PREFIX mutation target is gone (fixture not built)"; return; }
   printf '%s\n' .port/tools/ci.sh > "$list"
   CST_OUT="$( (. "$mutd/ci_sched.sh"; ci_scope_from_list "$list"; echo "mode=$SCOPE_MODE") 2>&1)"
   if ! cst_has "mode=all"; then cst_ok "E control: .port/tools/ dropped from the global list is noticed ($(printf '%s' "$CST_OUT" | tail -1))"
@@ -987,6 +1137,7 @@ cst_e2e_setup() {  # cst_e2e_setup REGISTRY (CST_MUT_* pass through to cst_make)
     else printf '[package]\nname = "%s"\nversion = "0.1.0"\nedition = "2021"\n' "$c" > "$d/crates/$c/Cargo.toml"; fi
     printf '// fixture\n' > "$d/crates/$c/src/lib.rs"
   done
+  printf 'data\n' > "$d/crates/a/src/data.txt"
   mkdir -p "$d/docs"; printf 'fixture\n' > "$d/docs/notes.md"
   printf '/target/\n/events\n/vg_fail\n' > "$d/.gitignore"
   ( cd "$d" && { [ -d .git ] || git init -q; } && cargo generate-lockfile --offline -q \
@@ -1011,7 +1162,7 @@ K1|HARD|light|-|bash $GATES/fake.sh K1 0 0'
     cst_ok "F a change in crate a: G6/G-VALGRIND narrowed to {a, b}, crate:a runs in full, crate:c scoped out, exit 5, no PASS banner"
   else cst_bad "F crate change (exit $CST_RC)"; fi
   cst_e2e_revert
-  CST_MUT_FILE=ci.sh CST_MUT_OLD='if [ "$(( ${#SCOPED_GATES[@]} + ${#SCOPED_OUT[@]} ))" -ne 0 ]; then' CST_MUT_NEW='if false; then' \
+  CST_MUT_FILE=ci.sh CST_MUT_OLD='if [ -n "$CI_CHANGED_SINCE" ] || [ -n "$CI_NARROW_ENV" ]; then' CST_MUT_NEW='if false; then' \
     cst_e2e_setup "$R"
   printf '// changed\n' >> "$d/crates/a/src/lib.rs"
   cst_run e2e --changed-since HEAD --jobs 3
@@ -1043,10 +1194,49 @@ K1|HARD|light|-|bash $GATES/fake.sh K1 0 0'
     cst_ok "F a docs-only change: the 4 scoped gates scoped out, K1 still runs, exit 5"
   else cst_bad "F docs-only (exit $CST_RC)"; fi
   cst_e2e_revert
+  # I2: every narrowed gate answers a plain BLOCKED and nothing is scoped out
+  # (crate:a runs in full), so no gate is classified SCOPED: still exit 5.
+  local R2='G6|PROGRESS|heavy|scope=env:G6_ONLY|bash $GATES/fake.sh G6 3 0 BLOCKED: no miri
+G6c|PROGRESS|heavy|scope=crate:a|bash $GATES/fake.sh G6c 0 0
+K1|HARD|light|-|bash $GATES/fake.sh K1 0 0'
+  cst_e2e_setup "$R2"; printf '// changed\n' >> "$d/crates/a/src/lib.rs"
+  cst_run e2e --changed-since HEAD --jobs 3
+  if [ "$CST_RC" = 5 ] && cst_has "0 long gate(s) ran only the change scope, 0 had nothing in it" && ! cst_has "CI RESULT: PASS"; then
+    cst_ok "F every narrowed gate BLOCKED, nothing scoped out: still exit 5, never PASS"
+  else cst_bad "F all-narrowed-BLOCKED (exit $CST_RC)"; fi
+  cst_e2e_revert
+  CST_MUT_FILE=ci.sh CST_MUT_OLD='if [ -n "$CI_CHANGED_SINCE" ] || [ -n "$CI_NARROW_ENV" ]; then' \
+    CST_MUT_NEW='if [ "$(( ${#SCOPED_GATES[@]} + ${#SCOPED_OUT[@]} ))" -ne 0 ]; then' cst_e2e_setup "$R2"
+  printf '// changed\n' >> "$d/crates/a/src/lib.rs"
+  cst_run e2e --changed-since HEAD --jobs 3
+  if [ "$CST_RC" = 0 ] && cst_has "CI RESULT: PASS"; then cst_ok "F control: the old count-keyed banner reads PASS there (exit 0), noticed"
+  else cst_bad "F control: the count-keyed banner went unnoticed (exit $CST_RC)"; fi
+  cst_e2e_revert
+  # I3: a rename out of a crate selects the crate (both paths are listed).
+  cst_e2e_setup "$R"
+  ( cd "$d" && mkdir -p docs && git mv crates/a/src/data.txt docs/data.md ) >/dev/null 2>&1
+  cst_run e2e --changed-since HEAD --print-scope
+  if [ "$CST_RC" = 6 ] && cst_has "changed crates: a" && cst_has "(--print-scope ran no gate: exit 6"; then
+    cst_ok "F a rename out of crate a (git mv to docs/) selects a; --print-scope exits 6"
+  else cst_bad "F rename (exit $CST_RC)"; fi
+  ( cd "$d" && git mv docs/data.md crates/a/src/data.txt ) >/dev/null 2>&1   # undo the move (no deletion)
+  CST_MUT_FILE=ci_sched.sh CST_MUT_OLD='git -C "$ROOT" diff --no-renames --name-only' CST_MUT_NEW='git -C "$ROOT" diff --name-only' cst_e2e_setup "$R"
+  ( cd "$d" && git mv crates/a/src/data.txt docs/data.md ) >/dev/null 2>&1
+  cst_run e2e --changed-since HEAD --print-scope
+  if cst_has "mode: none"; then cst_ok "F control: with git's rename detection the move reads as docs-only (mode none), noticed"
+  else cst_bad "F control: rename detection went unnoticed"; fi
+  ( cd "$d" && git mv docs/data.md crates/a/src/data.txt ) >/dev/null 2>&1   # undo the move (no deletion)
+  # A narrowing variable exported into a FULL run: never PASS.
+  cst_e2e_setup "$R"
+  CST_ENV="SAN_ONLY=a" cst_run e2e --jobs 2
+  if [ "$CST_RC" = 5 ] && cst_has "narrowing variable(s) exported into this run: SAN_ONLY" && ! cst_has "CI RESULT: PASS"; then
+    cst_ok "F SAN_ONLY exported into a full run: exit 5, named, never PASS"
+  else cst_bad "F exported narrowing variable (exit $CST_RC)"; fi
+  cst_e2e_setup "$R"
   printf '# touched\n' >> "$d/.port/tools/gates/fake.sh"
   cst_run e2e --changed-since HEAD --jobs 3
-  if [ "$CST_RC" = 0 ] && cst_has "mode: all" && cst_has "CI RESULT: PASS" && cst_has "this was a full run" && ! cst_has "G6_ONLY="; then
-    cst_ok "F a change under .port/tools/: every crate, no narrowing, a full run (exit 0)"
+  if [ "$CST_RC" = 5 ] && cst_has "mode: all" && ! cst_has "CI RESULT: PASS" && cst_has "never a release verdict" && ! cst_has "G6_ONLY="; then
+    cst_ok "F a change under .port/tools/: every crate, no narrowing, but still exit 5 (a --changed-since run is never a release verdict)"
   else cst_bad "F tooling change (exit $CST_RC)"; fi
   cst_e2e_revert
 }

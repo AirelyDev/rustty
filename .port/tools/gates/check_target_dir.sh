@@ -37,6 +37,11 @@ command -v python3 >/dev/null 2>&1 || { echo "G-TGTDIR BLOCKED: python3 not inst
 
 fail=0
 ARM2_SKIPPED=0
+ARM3_SKIPPED=0
+# TGTDIR_ARMS="1 2": run only those arms (no builds). A subset is never GREEN:
+# it ends BLOCKED, and ci.sh names TGTDIR_ARMS as a narrowing variable.
+ARMS="${TGTDIR_ARMS:-1 2 3}"
+want_arm() { case " $ARMS " in *" $1 "*) return 0 ;; esac; return 1; }
 ok()  { echo "  ok    $1"; }
 bad() { echo "  FAIL  $1"; fail=1; }
 
@@ -66,6 +71,8 @@ for f in sys.argv[1:]:
             print("%s:%d: %s" % (f, n, s[:140]))
 PY
 }
+W="$(mktemp -d "${TMPDIR:-/tmp}/tgtdir.XXXXXX")"
+if want_arm 1; then
 echo "=== G-TGTDIR arm 1: no literal target/<profile> artifact path in the gates or examples ==="
 files="$(sed -n 's/^  "[A-Za-z0-9-]*|[A-Z-]*|[a-z]*|[^|]*|\(.*\)"$/\1/p' "$ROOT/.port/tools/ci.sh" \
   | grep -oE '\$(GATES|ROOT)/[^ ]+\.(sh|py)' | sed "s#^\$GATES/#.port/tools/gates/#; s#^\$ROOT/##" | sort -u)"
@@ -91,14 +98,15 @@ else bad "arm 1: literal target/<profile> artifact paths (read cargo's target_di
 for e in "${ALLOWED[@]}"; do
   case " $used " in *" ${e%%|*} "*) ;; *) bad "arm 1: stale ALLOWED row ${e%%|*} (it has no literal path any more)" ;; esac
 done
-W="$(mktemp -d "${TMPDIR:-/tmp}/tgtdir.XXXXXX")"
 printf '%s\n' '"$CC" -I"$root/include" -L"$root/target/release" -lrustty_vt_c d11r.c -o d11r' > "$W/old_d11r.sh"
 printf '%s\n' '        lib = ROOT / "target" / "debug" / name' > "$W/old_vtfeat.py"
 if [ "$(static_scan "$W/old_d11r.sh" "$W/old_vtfeat.py" | grep -c .)" = 2 ]; then ok "arm 1 control: the old D11r and G-VTFEAT lines are each flagged"
 else bad "arm 1 control: the old literal lines were not both flagged"; fi
+fi
 
 # ---- arm 2: G-LINT skips target roots ----------------------------------------
-echo "=== G-TGTDIR arm 2: G-LINT skips every target root ==="
+if want_arm 2; then
+echo "=== G-TGTDIR arm 2: G-LINT skips every target root, and only target roots ==="
 lint_fixture() {  # lint_fixture DIR SUBDIR — a checkout with bad files in SUBDIR
   local d="$1"
   mkdir -p "$d/.port/tools/gates" "$d/src" "$d/$2"
@@ -111,23 +119,31 @@ lint_fixture() {  # lint_fixture DIR SUBDIR — a checkout with bad files in SUB
 }
 if command -v shellcheck >/dev/null 2>&1 && command -v typos >/dev/null 2>&1; then
   lint_fixture "$W/lint" target-alt
+  # A nested cargo target root (CACHEDIR.TAG), as a harness crate's target/.
+  mkdir -p "$W/lint/sub/target"; printf 'Signature: 8a477f597d28d172789f06886806bc55\n' > "$W/lint/sub/target/CACHEDIR.TAG"
+  printf '#!/usr/bin/env bash\ncd /tmp\n' > "$W/lint/sub/target/bad.sh"; printf 'teh\n' > "$W/lint/sub/target/bad.txt"
   mkdir -p "$W/lint/out-ctd"
   printf '#!/usr/bin/env bash\ncd /tmp\n' > "$W/lint/out-ctd/bad.sh"; printf 'teh\n' > "$W/lint/out-ctd/bad.txt"
   if out="$(cd "$W/lint" && CARGO_TARGET_DIR="$W/lint/out-ctd" bash .port/tools/gates/check_lints.sh shellcheck typos 2>&1)"; then
-    ok "arm 2: bad files in ./target-alt/ and in CARGO_TARGET_DIR (./out-ctd/) are not linted"
+    ok "arm 2: bad files in ./target-alt/, a CACHEDIR.TAG root (./sub/target/) and CARGO_TARGET_DIR (./out-ctd/) are not linted"
   else bad "arm 2: G-LINT linted a target root:"; printf '%s\n' "$out" | tail -8 | sed 's/^/        /'; fi
-  lint_fixture "$W/lint-ctl" notarget
+  # Control (M3): a source dir merely NAMED target (no CACHEDIR.TAG, not at
+  # the root) is linted like any other.
+  lint_fixture "$W/lint-ctl" src/target
   if out="$(cd "$W/lint-ctl" && bash .port/tools/gates/check_lints.sh shellcheck typos 2>&1)"; then
     bad "arm 2 control: the same bad files outside a target root went unflagged (lanes not live)"
   elif printf '%s\n' "$out" | grep -q 'FAIL    shellcheck' && printf '%s\n' "$out" | grep -q 'FAIL    typos'; then
-    ok "arm 2 control: the same files in ./notarget/ fail shellcheck and typos"
+    ok "arm 2 control: the same files in a plain ./src/target/ dir fail shellcheck and typos"
   else bad "arm 2 control: unexpected output"; printf '%s\n' "$out" | tail -8 | sed 's/^/        /'; fi
 else
   echo "  skip  arm 2: shellcheck or typos not installed (G-LINT reports them skipped by name)"
   ARM2_SKIPPED=1
 fi
 
+fi
+
 # ---- arm 3: the gates under a non-default CARGO_TARGET_DIR -------------------
+if want_arm 3; then
 echo "=== G-TGTDIR arm 3: D11r, A5, G-ABISCHEMA, example/c-vt with a non-default CARGO_TARGET_DIR ==="
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target/tgtdir-check}"
 mkdir -p "$CARGO_TARGET_DIR"
@@ -138,7 +154,7 @@ run_arm() {  # run_arm NAME CMD...
   local name="$1" out rc; shift
   out="$("$@" 2>&1)"; rc=$?
   if [ "$rc" = 0 ]; then ok "arm 3: $name passes"
-  elif [ "$rc" = 3 ]; then echo "  skip  arm 3: $name BLOCKED here: $(printf '%s\n' "$out" | grep -m1 BLOCKED)"
+  elif [ "$rc" = 3 ]; then echo "  skip  arm 3: $name BLOCKED here: $(printf '%s\n' "$out" | grep -m1 BLOCKED)"; ARM3_SKIPPED=1
   else bad "arm 3: $name (exit $rc)"; printf '%s\n' "$out" | tail -8 | sed 's/^/        /'; fi
 }
 run_arm "D11r" sh "$GATES/check_closed_enum_abi_runtime.sh"
@@ -161,7 +177,11 @@ if grep -q "$W/ctl/empty/release" "$W/ctl/.port/tools/gates/d11r_literal.sh" \
   else ok "arm 3 control: D11r with its old literal library path fails ($(grep -m1 -iE "not found|no such|error" "$W/ctl.log" | cut -c1-80))"; fi
 else bad "arm 3 control: could not build the literal-path copy of D11r"; fi
 
+fi
+
 if [ "$fail" -ne 0 ]; then echo "G-TGTDIR RED (fixtures in $W)"; exit 1; fi
+if [ "$ARMS" != "1 2 3" ]; then echo "G-TGTDIR BLOCKED: TGTDIR_ARMS=\"$ARMS\" ran a subset; never a full GREEN"; exit 3; fi
+if [ "$ARM3_SKIPPED" = 1 ]; then echo "G-TGTDIR BLOCKED: arm 3 sub-run(s) BLOCKED above, so arm 3 is unproven here"; exit 3; fi
 if [ "$ARM2_SKIPPED" = 1 ]; then echo "G-TGTDIR BLOCKED: arms 1 and 3 GREEN, arm 2 could not run (no shellcheck or typos)"; exit 3; fi
 echo "G-TGTDIR GREEN (gates read cargo's target dir; G-LINT skips target roots)"
 exit 0

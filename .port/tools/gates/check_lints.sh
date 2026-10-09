@@ -53,10 +53,11 @@ skip()  { echo "  skipped $1 ($2)"; SKIPPED="$SKIPPED $1"; }
 # cannot parse zsh at all (it silently analyses them as bash and invents
 # findings); they are listed in the summary so the exclusion is never silent.
 # ---------------------------------------------------------------------------
-# Every cargo target root is build output, never linted: ./target, per-lane
-# ./target-*/ dirs, any nested target/ dir, and CARGO_TARGET_DIR (cargo's own
-# target_directory, _target_dir.sh) when it lies inside the tree. No tracked
-# file lives under any of them. TARGET_REL is that last one, relative, or "".
+# Cargo target roots are build output, never linted. Only real roots are
+# skipped, each anchored at the checkout root: ./target, per-lane ./target-*/,
+# any dir holding cargo's CACHEDIR.TAG (a nested harness's target/), and
+# CARGO_TARGET_DIR (cargo's own target_directory, _target_dir.sh) when it lies
+# inside the tree. A source dir that merely is NAMED target is still linted.
 # shellcheck source=.port/tools/gates/_target_dir.sh
 . "$ROOT/.port/tools/gates/_target_dir.sh"
 # Compared physically (`pwd -P`): a //, a symlinked /var or /tmp, or a relative
@@ -67,10 +68,16 @@ _tdir="$(cd "$_tdir" 2>/dev/null && pwd -P || printf '%s' "$_tdir")"
 _root="$(cd "$ROOT" && pwd -P)"
 case "$_tdir" in "$_root"/*) TARGET_REL="${_tdir#"$_root"/}" ;; esac
 [ "$TARGET_REL" = target ] && TARGET_REL=""
+TARGET_ROOTS=()
+for _d in ./target ./target-*; do [ -d "$_d" ] && TARGET_ROOTS+=("${_d#./}"); done
+while IFS= read -r _t; do
+  [ -n "$_t" ] && TARGET_ROOTS+=("$(dirname "${_t#./}")")
+done < <(cd "$ROOT" && find . \( -path ./.git -o -path ./target -o -path './target-*' \) -prune -o -name CACHEDIR.TAG -print 2>/dev/null)
+[ -n "$TARGET_REL" ] && TARGET_ROOTS+=("$TARGET_REL")
 TGT_FIND=(); TGT_PRETTIER=(); TGT_TYPOS=()
-if [ -n "$TARGET_REL" ]; then
-  TGT_FIND=(! -path "./$TARGET_REL/*"); TGT_PRETTIER=("!$TARGET_REL/**"); TGT_TYPOS=(--exclude "$TARGET_REL/")
-fi
+for _r in ${TARGET_ROOTS[@]+"${TARGET_ROOTS[@]}"}; do
+  TGT_FIND+=(! -path "./$_r/*"); TGT_PRETTIER+=("!$_r/**"); TGT_TYPOS+=(--exclude "/$_r/")
+done
 
 run_shellcheck() {
   want shellcheck || return 0
@@ -88,7 +95,6 @@ run_shellcheck() {
   # reports, run logs and the throwaway scripts that drove long runs); it is
   # never in a CI checkout, so linting it only reports local scratch files.
   find . \( -name '*.sh' -o -name '*.bash' \) -type f \
-    ! -path './target/*' ! -path './target-*/*' ! -path '*/target/*' \
     ${TGT_FIND[@]+"${TGT_FIND[@]}"} \
     ! -path './zig-out/*' ! -path './macos/build/*' \
     ! -path './.git/*' ! -path '*/vendor/*' ! -path './build-cmake/*' \
@@ -146,7 +152,7 @@ run_prettier() {
   local out rc
   # Negated file globs (prettier reads --ignore-path patterns relative to the
   # ignore file, so a temporary ignore file would match nothing).
-  out="$("${cmd[@]}" --check . '!target/**' '!target-*/**' '!**/target/**' ${TGT_PRETTIER[@]+"${TGT_PRETTIER[@]}"} 2>&1)"; rc=$?
+  out="$("${cmd[@]}" --check . ${TGT_PRETTIER[@]+"${TGT_PRETTIER[@]}"} 2>&1)"; rc=$?
   if [ $rc -eq 0 ]; then
     pass "prettier"
   else
@@ -164,7 +170,7 @@ run_typos() {
     skip typos "not installed (brew install typos-cli)"; return 0
   fi
   local out rc
-  out="$(typos --exclude 'target/' --exclude 'target-*/' --exclude '**/target/' ${TGT_TYPOS[@]+"${TGT_TYPOS[@]}"} 2>&1)"; rc=$?
+  out="$(typos ${TGT_TYPOS[@]+"${TGT_TYPOS[@]}"} 2>&1)"; rc=$?
   if [ $rc -eq 0 ]; then pass typos; else printf '%s\n' "$out" | sed 's/^/          /'; fail typos; fi
 }
 

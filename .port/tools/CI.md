@@ -372,7 +372,7 @@ bash .port/tools/ci.sh --changed-since <rev> --print-scope   # the scope only
 | `--jobs N\|auto` | At most N gates run at once. `auto` is half the cores, between 2 and 8, and 1 when `GITHUB_ACTIONS` is set (GitHub-hosted runs stay serial). `--jobs 1` is the old serial loop: gates run in registry order and their output streams. |
 | `--heavy-cap N` | At most N heavy gates run at once (default 2, never more than `--jobs`). A heavy gate also waits while another one runs and the checkout's volume has less than `CI_MIN_FREE_GB` (15) free. |
 | `--changed-since <rev>` | The long gates run only the crates changed since `<rev>` and their reverse dependents. Every other gate runs in full. |
-| `--print-scope` | With `--changed-since`: print the scope and each long gate's decision, then exit. |
+| `--print-scope` | With `--changed-since`: print the scope and each long gate's decision, then exit 6. It runs no gate, so it is never a verdict. |
 | `--prune-targets` | Deletes each per-gate target dir under `target/ci-targets/` once the last gate using it ends. |
 | `--sccache` | Sets `RUSTC_WRAPPER=sccache` when sccache is on PATH. Without sccache the run is unchanged. |
 
@@ -391,9 +391,29 @@ run overwrites both.
 - In a parallel run each gate's output goes to its own log and is printed whole
   when the gate ends, under the same `### gate` header, followed by its
   duration. Output from two gates never interleaves.
-- Exit codes: 0 PASS (full run only), 1 FAIL, 2 usage, 4 `--fast` subset green,
-  5 `--changed-since` scoped green. 4 and 5 print a NOT-A-RELEASE-GATE banner
-  instead of `CI RESULT: PASS`, and name what was skipped or narrowed and why.
+- Exit codes:
+
+  | code | meaning |
+  |---|---|
+  | 0 | PASS. Only a full run can exit 0. |
+  | 1 | FAIL |
+  | 2 | usage error |
+  | 4 | `--fast` subset green |
+  | 5 | narrowed green |
+  | 6 | `--print-scope` (ran no gate) |
+
+  A run counts as narrowed when `--changed-since` is given (even if every
+  crate was selected), or when a narrowing variable is exported into the run.
+  The narrowing variables are `G6_ONLY`, `SAN_ONLY`, `G6T_SCOPE`, the
+  `G6C_*` overrides, `SAN_MSAN_DIAG`, `SAN_MANIFEST_PATH`, `SAN_CLAIMS_SRC`,
+  `SAN_EXPECTED_ABSENT` and `TGTDIR_ARMS`.
+
+  The exit code follows the mode, not how many gates were classified as
+  scoped. A narrowed gate that answers a plain BLOCKED still leaves the run
+  at exit 5.
+
+  Exits 4 and 5 print a NOT-A-RELEASE-GATE banner instead of
+  `CI RESULT: PASS`, and name what was skipped or narrowed and why.
   `--fast` and `--changed-since` do not combine.
 
 ### How gates are scheduled
@@ -417,6 +437,16 @@ Each registry entry declares what it needs:
   memcheck never wait for the `tgt` lock. Gates naming the same dir never
   overlap. In `--jobs 1` runs every gate uses the default dirs, as before.
 - **`after=<id>`**: the gate starts only once `<id>` has finished.
+- **`exclusive`**: the gate starts only once every other gate has finished,
+  and nothing starts beside it. G8b (PERF-FENCE) and then G8 (ARMED) run this
+  way, last and alone, so the perf fence measures a quiet machine.
+  - Every registry kind is dispatched, in the order HARD, PROGRESS,
+    PERF-FENCE, ARMED. An unknown kind is a usage error.
+  - G8b BLOCKs (exit 3) only through its dedicated pre-measurement load
+    check: a bounded cooldown (`G8B_COOLDOWN_S`, default 600 s), run before
+    its builds and again before measuring.
+  - A harness crash, a usage error, a provisional measurement or a fence RED
+    stay RED. G8b-SELF proves this.
 - **`shard`**: in a parallel run G-VALGRIND runs as `CI_VALGRIND_SHARDS` (4)
   `check_valgrind.sh --shard K/N` units. Each unit is heavy, so the heavy cap
   bounds them, and each passes `--jobs $CI_VALGRIND_JOBS` when that is set. If
@@ -426,8 +456,9 @@ Each registry entry declares what it needs:
 
 ### `--changed-since <rev>`: fix verification
 
-The changed paths are `git diff --name-only <rev>` (against the working tree,
-so uncommitted edits count) plus untracked files. A path under `crates/<c>/`
+The changed paths are `git diff --no-renames --name-only <rev>` plus untracked
+files. The diff is against the working tree, so uncommitted edits count. A
+rename lists both its source and its destination, and deletions are listed. A path under `crates/<c>/`
 or `xtask/` selects that crate, whatever its file type. The selected crates are
 closed over reverse dependencies of every kind (normal, build, dev), using
 `cargo metadata`. When paths are not crate paths, the rules are conservative:
@@ -435,9 +466,16 @@ closed over reverse dependencies of every kind (normal, build, dev), using
 - `.port/tools/**`, `.port/phase-2/**`, `crates-sys/**`, any `build.rs`,
   `Cargo.lock`, the root `Cargo.toml`, `rust-toolchain*`, `.cargo/**` and
   `valgrind.supp` select **every** crate. That is a full run (exit 0).
-- Docs and records select **nothing**: `*.md` and `*.txt` outside crate dirs,
-  `docs/`, `.superpowers/`, and `.port/**` outside `tools/` and `phase-2/`.
-  Every long gate is scoped out.
+- Other `.port/` paths select the crates whose files name them. A `git grep`
+  of `crates/` and `xtask/` finds the names. For example, rustty-vt's
+  `fuzz_corpus_replay` reads `.port/phase-0/corpora/cvt`, so a seed change
+  selects rustty-vt and its dependents.
+  - A `.port/` record (`.md`, `.txt` or `.tsv`) counts only when a crate names
+    it on a code line. Comments and `ignore = "..."` reasons only cite records.
+  - Other `.port/` data that no crate names selects every crate.
+- Docs and records select **nothing**: `docs/`, `.superpowers/`, the `.port/`
+  records above, and `*.md` and `*.txt` elsewhere outside crate dirs. Every
+  long gate is scoped out.
 - Any other path selects every crate.
 
 The long gates take the scope through their own selectors:
@@ -465,9 +503,12 @@ sources `.port/tools/gates/_target_dir.sh` and calls `rustty_target_dir
 G-ABISCHEMA, G-VTFEAT and the `example/*/build.sh` scripts read their
 library this way. xtask resolves the archives it folds in under
 `<root>/target`, so G-XCF and G-EXAMPLES' xcframework step run xtask under
-`env -u CARGO_TARGET_DIR`, as G8b already does. G-LINT skips every target
-root: `target/`, `target-*/`, any nested `target/`, and an in-tree
-`CARGO_TARGET_DIR`.
+`env -u CARGO_TARGET_DIR`, as G8b already does.
+
+G-LINT skips only real cargo target roots, each anchored at the checkout:
+`target/`, `target-*/`, any dir holding cargo's `CACHEDIR.TAG`, and an in-tree
+`CARGO_TARGET_DIR`. A source dir that is merely named `target` is still
+linted.
 
 G-TGTDIR (`check_target_dir.sh`) holds these rules in place:
 

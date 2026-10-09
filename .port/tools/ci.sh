@@ -316,7 +316,8 @@
 #   bash .port/tools/ci.sh --changed-since <rev>   # fix verification: long
 #                                            # gates scoped to the change (exit 5)
 # Exit codes: 0 PASS (full run) · 1 FAIL · 2 usage · 4 --fast subset green ·
-# 5 --changed-since scoped green. Only 0 is a release verdict.
+# 5 narrowed green (--changed-since, or a narrowing variable such as G6_ONLY /
+# SAN_ONLY exported) · 6 --print-scope (ran nothing). Only 0 is a release verdict.
 set -uo pipefail   # NOTE: no `-e` — run every check, aggregate failures.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -357,7 +358,8 @@ SKIPPED_GATES=()
 #   --changed-since R the long gates (Miri, sanitizers, Valgrind) run only the
 #                     reverse-dependency closure of the crates changed since R;
 #                     never a release verdict: exit 5, no PASS banner.
-#   --print-scope     with --changed-since: print the computed scope and exit.
+#   --print-scope     with --changed-since: print the computed scope and exit 6
+#                     (a non-verdict mode: never 0).
 #   --prune-targets   delete each per-gate target dir this script created
 #                     (target/ci-targets/<name>) once its last gate ends.
 #   --sccache         RUSTC_WRAPPER=sccache when sccache is on PATH (optional).
@@ -407,6 +409,13 @@ if [ -n "$CI_CHANGED_SINCE" ] && [ "$FAST_LANE" -eq 1 ]; then
   ci_usage "--fast and --changed-since do not combine (--fast already skips every gate --changed-since narrows)"
 fi
 [ "$CI_PRINT_SCOPE" = 1 ] && [ -z "$CI_CHANGED_SINCE" ] && ci_usage "--print-scope needs --changed-since REV"
+# Narrowing variables the gates honour (debug aids and --changed-since's
+# selectors). Exported into a run, each makes it a subset: the run is then
+# never a full PASS (exit 5, named in the banner), whatever it finds.
+CI_NARROW_VARS="G6_ONLY SAN_ONLY G6T_SCOPE G6C_FILTERS G6C_MIN_PASSED G6C_PKG G6C_DIR SAN_MSAN_DIAG SAN_MANIFEST_PATH SAN_CLAIMS_SRC SAN_EXPECTED_ABSENT TGTDIR_ARMS"
+CI_NARROW_ENV=""
+for _v in $CI_NARROW_VARS; do printenv "$_v" >/dev/null 2>&1 && CI_NARROW_ENV="$CI_NARROW_ENV $_v"; done
+CI_NARROW_ENV="${CI_NARROW_ENV# }"
 # Run artifacts: per-gate logs and ci-timings.tsv (overwritten each run).
 CI_RUN_DIR="${CI_RUN_DIR:-$ROOT/target/ci-run}"
 CI_TIMINGS="$CI_RUN_DIR/ci-timings.tsv"
@@ -1185,6 +1194,11 @@ GATE_REGISTRY=(
   # runs the port's side. About 70 s. The self-test needs none of them.
   "G-ESCTEST-SELF|HARD|light|-|bash $GATES/check_esctest.sh --self-test"
   "G-ESCTEST|HARD|light|tgt|bash $GATES/check_esctest.sh"
+  # G8b-SELF (P8 CI speed-up review I6) — G8b's exit mapping against a fake
+  # harness: a crash, a usage error and a fence RED stay RED; only the
+  # dedicated pre-measurement load check is BLOCKED (and measures nothing).
+  # Control: the reviewed blanket remap turns the crash BLOCKED. Seconds.
+  "G8b-SELF|HARD|light|-|bash $GATES/check_perf_fence.sh --self-test"
   # G8b — the real perf regression fence (paired, same-session, vs a stored
   # binary). BLOCKS (2/3) rather than passing when the box is loaded or the
   # untracked oracle binary/corpora are absent. MUST precede G8: it emits the
@@ -1360,7 +1374,7 @@ GATE_REGISTRY=(
   "A5|PROGRESS|light|tgt|sh $GATES/check_rustty_vt_headers.sh"
   # A5-MASK-SELF (P7-W12 T0) — A5's negative control: a failing early arm must
   # not hide the later ones (the gate used to stop at its first failing arm).
-  "A5-MASK-SELF|PROGRESS|light|-|sh $GATES/check_rustty_vt_headers.sh --self-test-masking"
+  "A5-MASK-SELF|PROGRESS|light|tgt|sh $GATES/check_rustty_vt_headers.sh --self-test-masking"
   # G-VTFEAT (gap-close 2026-08-26, oracle 1fdbb8c91) — the `-Dvt-features`
   # trimming gate. The reference lets a LIB artifact drop optional features so
   # embedders can shrink the binary, and each feature gates a block of
@@ -1542,7 +1556,7 @@ if [ "$CI_SELF_TEST" = 1 ]; then ci_self_test; exit $?; fi
 if [ -n "$CI_CHANGED_SINCE" ]; then
   ci_scope_from_rev "$CI_CHANGED_SINCE" || exit 2
   ci_scope_print
-  if [ "$CI_PRINT_SCOPE" = 1 ]; then ci_plan; echo "  per gate:"; ci_scope_table; exit 0; fi
+  if [ "$CI_PRINT_SCOPE" = 1 ]; then ci_plan; echo "  per gate:"; ci_scope_table; echo "(--print-scope ran no gate: exit 6, not a verdict)"; exit 6; fi
 fi
 ci_timing_init
 if [ "$CI_SCCACHE" = 1 ]; then
@@ -1638,21 +1652,25 @@ if [ "$FAST_LANE" -eq 1 ]; then
   exit 4
 fi
 
-if [ "$(( ${#SCOPED_GATES[@]} + ${#SCOPED_OUT[@]} ))" -ne 0 ]; then
-  # The same ANTI-VACUITY rule for --changed-since: the long gates ran only the
-  # change scope (or not at all), so this is fix verification, never a release
-  # verdict. Distinct exit code; what was narrowed or left out, and why, above.
+if [ -n "$CI_CHANGED_SINCE" ] || [ -n "$CI_NARROW_ENV" ]; then
+  # The same ANTI-VACUITY rule as --fast, keyed on the MODE, never on how many
+  # gates ended up classified as scoped: a narrowed gate that answers a plain
+  # BLOCKED is a WARNING, and the run is still a subset. Fix verification,
+  # never a release verdict; distinct exit code; what was narrowed and why.
   echo "CI RESULT: CHANGE-SCOPED GREEN — *** NOT A RELEASE GATE ***"
-  echo "  --changed-since $CI_CHANGED_SINCE: $SCOPE_MODE — $SCOPE_REASON"
-  echo "  ${#SCOPED_GATES[@]} long gate(s) ran only the change scope, ${#SCOPED_OUT[@]} had nothing in it:"
-  for x in "${SCOPED_GATES[@]:-}"; do [ -n "$x" ] && echo "    ~ $x"; done
-  for x in "${SCOPED_OUT[@]:-}"; do [ -n "$x" ] && echo "    - $x"; done
-  echo "  Every other gate ran in full. Run the full suite (no --changed-since)"
-  echo "  once at phase end before declaring green."
+  if [ -n "$CI_CHANGED_SINCE" ]; then
+    echo "  --changed-since $CI_CHANGED_SINCE: $SCOPE_MODE — $SCOPE_REASON"
+    [ "$SCOPE_MODE" = all ] && echo "  (every crate was selected, but a --changed-since run is never a release verdict)"
+    echo "  ${#SCOPED_GATES[@]} long gate(s) ran only the change scope, ${#SCOPED_OUT[@]} had nothing in it:"
+    for x in "${SCOPED_GATES[@]:-}"; do [ -n "$x" ] && echo "    ~ $x"; done
+    for x in "${SCOPED_OUT[@]:-}"; do [ -n "$x" ] && echo "    - $x"; done
+  fi
+  [ -n "$CI_NARROW_ENV" ] && echo "  narrowing variable(s) exported into this run: $CI_NARROW_ENV"
+  echo "  Run the full suite (no --changed-since, no narrowing variable) once at"
+  echo "  phase end before declaring green."
   exit 5
 fi
 
-[ -n "$CI_CHANGED_SINCE" ] && echo "(--changed-since $CI_CHANGED_SINCE selected every crate, $SCOPE_REASON: this was a full run)"
 echo "CI RESULT: PASS  (all hard-fail checks green; progress gates printed"
 echo "           progress without failing CI — R5: gates invariant, never weakened)"
 exit 0
