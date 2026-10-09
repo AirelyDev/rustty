@@ -1,0 +1,120 @@
+# P8-W9 FX4 G-SAN-SELF
+host: rvm (Fedora 44 aarch64), clone /home/gael/projects/rustty-p8w9fx4 (git archive of phase-8/w9fx4 plus .port and docs/superpowers); rvm clock about 77 min behind the Mac
+### CMD: bash .port/tools/gates/sanitizers.sh --self-test
+
+### G-SAN-SELF: sanitizers.sh --self-test (work dir /tmp/san-self.8sZpm9) ###
+  ok   C classifier: finding (rc=1) -> FINDING
+  ok   C classifier: build (rc=101) -> BUILD
+  ok   C classifier: fail (rc=101) -> FAIL
+  ok   C classifier: vacuous (rc=0) -> VACUOUS
+  ok   C classifier: green (rc=0) -> GREEN 5
+  ok   C classifier: msan (rc=77) -> FINDING
+  ok   C classifier: leak (rc=23) -> FINDING
+  ok   C classifier: oominfo (rc=0) -> GREEN 1
+  ok   C classifier: allignored (rc=0) -> VACUOUS
+  ok   C classifier: crash (rc=101) -> FAIL
+  ok   C classifier: hwasan (rc=99) -> FINDING
+  ok   C classifier: hang (rc=0) -> HANG
+  ok   C classifier: hang (rc=143) -> HANG
+  ok   D drop_target removes san-asan and san-asan-<crate>, refuses anything else
+  ok   E control: all 3 Miri-excepted tests ran and passed -> GREEN (comment and not(miri) not counted)
+  ok   E a result line with another test's unterminated stdout glued in front still counts (P7-W16b)
+  ok   E an ignored Miri-excepted test is RED (multi-line attribute parsed)
+  ok   E an absent Miri-excepted test (all(miri, ..) form) is RED
+  ok   E the same absence on the expected-absent list is GREEN
+  ok   E an expected-absent row whose test ran and passed is stale (RED)
+  ok   E an expected-absent row that matches nothing is stale (RED)
+  ok   E an ok in another module (b::tests::ran) does not satisfy a::ran (module-path match)
+  ok   E a result line prefixed by a test's unterminated stdout still counts
+  ok   E an ok in a child file (a::b::ran) does not satisfy a::tests::ran
+  ok   E an ok in a sibling inline mod (a::other::ran) does not satisfy a::tests::ran
+  ok   E an expected-absent test that ran and FAILED is RED
+  ok   E an annotation followed by something other than a fn is RED (never attached to a later fn)
+  ok   E a crate with Miri-excepted tests but no log (excluded) is RED
+  ok   H control: the real exclusions and feature lanes name workspace members
+  ok   H a stale *_EXCLUDES entry is RED
+  ok   H control: the real TSAN_SCOPE names workspace members
+  ok   H a stale TSAN_SCOPE entry is RED
+  ok   H control: every TSAN_SERIAL spec is a TSAN_SCOPE spec
+  ok   H a TSAN_SERIAL spec outside TSAN_SCOPE is stale (RED)
+  ok   H spec_args: --test-threads=1 for a TSAN_SERIAL spec under tsan on Linux only
+  ok   H spec_args: no --test-threads=1 for a TSAN_SERIAL spec on macOS
+  ok   H a stale feature-lane entry is RED
+  ok   H control: the real MSAN_SCOPE/MSAN_EXCLUDES/MSAN_SKIPS partition is complete
+  ok   H a member in neither MSAN_SCOPE nor MSAN_EXCLUDES is RED
+  ok   H an MSAN_SKIPS entry for a crate out of scope is stale (RED)
+  ok   H a BUILD row makes gate_verdict BLOCKED (exit 3)
+  ok   H control: a clean matrix makes gate_verdict GREEN
+  ok   H RED dominates BLOCKED
+  ok   H control: every MSAN_SKIPS filter matches a listed test
+  ok   H an MSAN_SKIPS filter that matches no test is reported (RED in the matrix)
+  ok   I control: a -sys crate whose archive is instrumented passes
+  ok   I an uninstrumented archive is RED (the cc wrapper was bypassed)
+  ok   I one uninstrumented archive among instrumented ones is RED
+  ok   I a -sys crate that built no archive is RED
+  ok   I a listed exception with no instrumented archive is a named skip
+  ok   I a listed exception whose archive IS instrumented is stale (RED)
+  ok   I a crate that is not -sys is not checked (no output)
+  ok   I N621: a host build-dependency's uninstrumented copy is not looked at
+  ok   I N621: an uninstrumented TARGET archive is RED although the host copy is instrumented
+  ok   I nothing built for the instrumented triple is RED
+  ok   I tsan control: instrumented target archives pass (a host build-dependency's is not looked at)
+  ok   I tsan: an uninstrumented target archive is RED
+  ok   I tsan: a listed exception is a named skip
+  ok   I tsan: a listed exception whose archive IS instrumented is stale (RED)
+  ok   I tsan: zero archives although a build script declared a static C library is RED
+  ok   I tsan: nothing built for the instrumented triple is RED
+  ok   I tsan control: zero archives and no C declared passes
+  ok   F RUSTTY_SANITIZERS_OWN_JOB is BLOCKED (exit 3), naming the job
+  ok   H --gate lsan on a host other than Linux/macOS is BLOCKED (exit 3)
+  ok   H --gate tsan on a host other than Linux/macOS is BLOCKED (exit 3)
+  ok   H --gate tsan under RUSTTY_SANITIZERS_OWN_JOB is BLOCKED (exit 3), naming the job
+  ok   H --gate tsan with its suppressions file missing is RED
+  ok   H --gate lsan-gtk on a host other than Linux is BLOCKED (exit 3)
+  ok   H --gate lsan-gtk under RUSTTY_SANITIZERS_OWN_JOB is BLOCKED (exit 3), naming V33, not the job
+  ok   H --gate lsan-gtk without sway is BLOCKED (exit 3)
+  ok   H --gate lsan-gtk without XDG_RUNTIME_DIR is BLOCKED (exit 3)
+  ok   H control: the real LSAN_GTK_CEILINGS pin every lsan-gtk.supp entry
+  ok   H lsan_gtk_ceiling_check: matches within their ceilings are GREEN
+  ok   H lsan_gtk_ceiling_check: a match count above its ceiling is RED
+  ok   H lsan_gtk_ceiling_check: an entry with no ceiling is RED
+  ok   H lsan_gtk_ceiling_check: a ceiling with no entry is stale (RED)
+  ok   H lsan_gtk_ceiling_check: the test ran but the log has no Suppressions used table (RED)
+  ok   H lsan_gtk_ceiling_check: the test ran but the always-matching entry matched nothing (RED)
+  ok   H control: the real LSAN_GTK_MUST_MATCH is a lsan-gtk.supp entry
+  ok   H --gate lsan-gtk with lsan-gtk.supp missing is RED
+  ok   A1 heap overflow: asan 'tests::defect_heap_overflow --exact' -> RED (heap-buffer-overflow)
+  ok   A0 clean control: asan 'tests::clean_control --exact' -> GREEN (1 test(s) ran)
+  ok   A0 the shared target dir is deleted when the pass ends
+  ok   A0 per-crate target dirs (--per-crate-target): asan 'tests::defect_heap_overflow --exact' -> RED (per-crate target dirs)
+  ok   B  empty filter: asan 'no_such_test_anywhere' -> RED (VACUOUS)
+  ok   B  hang past the bound: asan 'tests::slow_hang --exact' -> RED (HANG after 60s (no verdict))
+  ok   B  the hung test's process tree is gone after the kill
+  ok   H a crate that does not build is BLOCKED (exit 3)
+  ok   H the disk floor stops the pass BLOCKED (exit 3)
+  ok   H SAN_ONLY=rustty-identity: its 1 test GREEN, the gate BLOCKED (exit 3), never GREEN
+  ok   G NO_TESTS_ON, filter 'no_such_test_anywhere': 0 tests on Linux by construction (M_RED=0)
+  ok   G NO_TESTS_ON, filter 'tests::clean_control --exact': the entry is stale (M_RED=1)
+  ok   A2 leak: lsan 'tests::defect_leak --exact' -> RED (LeakSanitizer: detected memory leaks)
+  ok   A2 control: clean under LSan: lsan 'tests::clean_control --exact' -> GREEN (1 test(s) ran)
+  ok   A2 control: the leak under G-ASAN (leak checker off): asan 'tests::defect_leak --exact' -> GREEN (1 test(s) ran)
+  ok   A2 opt-out hook reaches the runtime: lsan 'tests::defect_leak --exact' -> GREEN (1 test(s) ran)
+  ok   A2g Rust leak under lsan.supp + lsan-gtk.supp: lsan 'tests::defect_leak --exact' -> RED (LeakSanitizer: detected memory leaks)
+  ok   A2g control: GLib/GObject allocate and free, clean under lsan-gtk.supp: lsan 'glib_leaks::glib_clean_control --exact' -> GREEN (1 test(s) ran)
+  ok   A2g leaked g_strdup string: lsan 'glib_leaks::leak_gstrdup --exact' -> RED (LeakSanitizer: detected memory leaks)
+  ok   A2g leaked GObject: lsan 'glib_leaks::leak_gobject --exact' -> RED (LeakSanitizer: detected memory leaks)
+  ok   A2g leaked FcPattern (lsan-gtk.supp G1): lsan 'glib_leaks::leak_fcpattern --exact' -> RED (LeakSanitizer: detected memory leaks)
+  ok   A2g leaked GClosure, sunk and referenced (the N516 shape; no entry may hide it): lsan 'glib_leaks::leak_gclosure --exact' -> RED (LeakSanitizer: detected memory leaks)
+  ok   A3 uninit read: msan 'tests::defect_uninit_read --exact' -> RED (MemorySanitizer: use-of-uninitialized-value)
+  ok   A3 control: clean under MSan: msan 'tests::clean_control --exact' -> GREEN (1 test(s) ran)
+  ok   A4 heap overflow: hwasan 'tests::defect_heap_overflow --exact' -> RED (HWAddressSanitizer: tag-mismatch)
+  ok   A4 wild index into a live block (what ASan cannot see): hwasan 'tests::defect_wild_index_into_live_block --exact' -> RED (HWAddressSanitizer: tag-mismatch)
+  ok   A4 control: clean under HWASan: hwasan 'tests::clean_control --exact' -> GREEN (1 test(s) ran)
+  ok   A4 heap overflow in C (the cc wrapper instruments it): hwasan 'tests::c_heap_overflow --exact' -> RED (HWAddressSanitizer: tag-mismatch)
+  ok   A4 control: clean C under HWASan, its archive instrumented: hwasan 'tests::c_clean_control --exact' -> GREEN (all instrumented)
+  ok   A5 data race: tsan 'tests::defect_data_race --exact' -> RED (ThreadSanitizer: data race)
+  ok   A5 control: Mutex-ordered writes, clean under TSan: tsan 'tests::synchronized_control --exact' -> GREEN (1 test(s) ran)
+  ok   A5s data race between one test's threads, tests run one at a time (TSAN_SERIAL): tsan 'tests::defect_data_race --exact --test-threads=1' -> RED (ThreadSanitizer: data race)
+  ok   A5 data race in C (the cc wrapper instruments it): tsan 'tests::c_data_race --exact' -> RED (ThreadSanitizer: data race)
+  ok   A5 control: clean C under TSan, its archive instrumented: tsan 'tests::c_clean_control --exact' -> GREEN (tsan C archives: 1 built for the instrumented target, 1 instrumented)
+G-SAN-SELF: GREEN
