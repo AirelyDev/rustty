@@ -1532,7 +1532,7 @@ if [ "$CI_SELF_TEST" = 1 ]; then ci_self_test; exit $?; fi
 if [ -n "$CI_CHANGED_SINCE" ]; then
   ci_scope_from_rev "$CI_CHANGED_SINCE" || exit 2
   ci_scope_print
-  [ "$CI_PRINT_SCOPE" = 1 ] && exit 0
+  if [ "$CI_PRINT_SCOPE" = 1 ]; then ci_plan; echo "  per gate:"; ci_scope_table; exit 0; fi
 fi
 ci_timing_init
 if [ "$CI_SCCACHE" = 1 ]; then
@@ -1605,6 +1605,7 @@ if [ -n "$CI_CHANGED_SINCE" ]; then
   echo "SCOPED — ran only the change scope (${#SCOPED_GATES[@]}):"; for x in "${SCOPED_GATES[@]:-}"; do [ -n "$x" ] && echo "  ~ $x"; done
   echo "SCOPED OUT — nothing in scope, not run (${#SCOPED_OUT[@]}):"; for x in "${SCOPED_OUT[@]:-}"; do [ -n "$x" ] && echo "  - $x"; done
   ci_scope_print
+  ci_scope_table
 fi
 ci_timing_summary
 

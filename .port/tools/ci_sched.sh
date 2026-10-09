@@ -210,8 +210,21 @@ ci_scope_print() {
     echo "  changed crates: $SCOPE_CHANGED"
     echo "  closure (changed + every reverse dependent): $SCOPE_CRATES"
   fi
-  echo "  long gates narrowed to that scope: G6 G6c G6t G-ASAN G-LSAN G-MSAN G-HWASAN G-TSAN G-LSAN-GTK G-VALGRIND;"
-  echo "  every other gate runs in full."
+  echo "  gates with a scope= trait (the long gates) follow it; every other gate runs in full."
+}
+# After ci_plan: what --changed-since does to each gate with a scope= trait.
+ci_scope_table() {
+  local i how
+  for i in ${CI_ORDER[@]+"${CI_ORDER[@]}"}; do
+    how="$(trait_val "${GS_TRAITS[$i]}" scope)" || continue
+    case "${GS_STATE[$i]}" in
+      out) printf '  %-12s scoped out — %s\n' "${GS_ID[$i]}" "${GS_NOTE[$i]}" ;;
+      skip) printf '  %-12s skipped by --fast\n' "${GS_ID[$i]}" ;;
+      *) if [ "${GS_NARROWED[$i]}" = 1 ]; then
+           printf '  %-12s narrowed — %s%s%s\n' "${GS_ID[$i]}" "${GS_NOTE[$i]}" "${GS_ENV[$i]:+ (${GS_ENV[$i]%%=*})}" "${GS_ARGS[$i]:+ (args: ${GS_ARGS[$i]})}"
+         else printf '  %-12s full run%s\n' "${GS_ID[$i]}" "${GS_NOTE[$i]:+ — ${GS_NOTE[$i]}}"; fi ;;
+    esac
+  done
 }
 
 # ci_gate_scope TRAITS RUNNER — what --changed-since does to one gate. Sets
