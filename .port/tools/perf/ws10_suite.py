@@ -82,14 +82,14 @@ ORACLE_DEFAULT = os.path.join(
 #: (S-4: a second build from a fresh archive and cache matched them); the
 #: whole-file hash is not, because the linker's LC_UUID and the debug map
 #: record the build directory. So the file is kept, and this pins it.
-ORACLE_SHA256 = "79a642786cc3f9e6be52a9104b01c684387364a8c99d871b200a4decb8fb0d79"
+ORACLE_SHA256 = "84f5dc9fbe5ff82406ceca4acd83ba99b5a394328ec403796bc074432ff44eee"
 #: The pin ORACLE_SHA256 was built at, as `pin_digest(pin)` (the first 16 hex
 #: of the pin's sha256: a digest, not a copy of the pin, so G-ORACLE-SH's pin
 #: arms stay green). When ORACLE_PIN advances this stops matching and every
 #: oracle run BLOCKs until the oracle is rebuilt and BOTH constants are updated
 #: in the same commit -- so the old binary copied to the new file name cannot
 #: pass as the new oracle (review S-4 F3).
-ORACLE_SHA256_PIN_DIGEST = "8dec11eeab2390f0"
+ORACLE_SHA256_PIN_DIGEST = "3a1e8eaad1cedf19"
 COR = os.path.join(SHARED, ".port/phase-0/baseline/corpora")
 UTF8 = os.path.join(COR, "utf8.bin")
 ASCII = os.path.join(COR, "ascii.bin")
