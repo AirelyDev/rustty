@@ -11536,3 +11536,20 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   test with a second `layout(binding = 2, std140) uniform Extra` block failed (`left: 1, right: 2`), then was removed.
   `cargo test -p rustty-renderer custom_shader_selection_uniform_layout` GREEN; clippy on rustty-renderer clean.
   Evidence: `.port/phase-8/w9/reaudit-at-a60e9e2a5.txt`.
+- **N602 (CLOSED by suppression S19, P8-W9 FX3, `6c3190ddf`; provisional id): G-LSAN (Mac) RED, rustty-apprt-c
+  `macos_window_host` reported 328 B in 3 allocations at exit.** The leak is not Rustty's. Every stack is
+  `xpc_connection_create_mach_service` <- TCC `tccd` <- `TCCAccessPreflight` <- SkyLight `SLSTCCService::TCCAccessCheck` <-
+  `__SLSInitialize_block_invoke` <- `_dispatch_once_callout` <- `SLSGetActiveDisplayList` <-
+  `CVDisplayLinkCreateWithActiveCGDisplays` <- `DisplayLink::create_with_active_cg_displays` (render thread). Evidence
+  (commit `77c3ecdf6`, `.port/phase-8/w9/G-LSAN-mac.rustty-apprt-c.log`).
+  - It happens once per process. `log stream` of `tccd` during a `macos_window_host` run shows one `kTCCServiceListenEvent`
+    preflight per process (msgID `<pid>.1`), although the binary creates a display link for each surface. A scratch probe
+    that creates and releases a CVDisplayLink 1, 5 and 20 times on fresh threads leaks a constant 5,352 B (the S4-S7 classes),
+    3 runs each.
+  - It is timing-dependent. 23 later full runs of the same ASan binary gave 0 reports, so it is not a new test at this pin:
+    the test file is unchanged since `ac750e2af`.
+  - S19 `leak:SLSTCCService::TCCAccessCheck` was added to `lsan-darwin.supp` with a SANITIZER_SUPPRESSIONS.md row.
+  - Negative controls with S19 present: a scratch `Box::leak` test in `macos_window_host` is RED (40 B), and was then
+    removed. An unreleased CVDisplayLink is not reported by LSan with or without suppressions, so S19 hides nothing there.
+  - G-LSAN `--per-crate-target --gate lsan`, full pass on the Mac: GREEN, 10,045 tests, 0 findings, 48 min. In that pass
+    rustty-apprt-c is GREEN (51 passed, 1 ignored), and S19 did not match.
