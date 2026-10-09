@@ -1,0 +1,127 @@
+==================================================================
+ rustty CI — single entry (.port/tools/ci.sh)
+ root: /Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m
+ toolchain: rustc 1.93.1 (01f6ddf75 2026-02-11)
+==================================================================
+------------------------------------------------------------------
+### opt-in lane: WS14 wasm/WebGL  (--webgl)
+------------------------------------------------------------------
+--- .port/tools/build-main-wasm.sh --release
+   Compiling allocator-api2 v0.2.21
+   Compiling rustty-util v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-util)
+   Compiling rustty-zigstd v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-zigstd)
+   Compiling rustty-build-config v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-build-config)
+   Compiling find-msvc-tools v0.1.9
+   Compiling shlex v2.0.1
+   Compiling rustty-identity v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-identity)
+   Compiling libc v0.2.186
+   Compiling pkg-config v0.3.33
+   Compiling equivalent v1.0.2
+   Compiling log v0.4.33
+   Compiling rustty-unicode v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-unicode)
+   Compiling rustty-helpgen v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-helpgen)
+   Compiling rustty-z2d v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-z2d)
+   Compiling rustty-vt v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-vt)
+   Compiling cc v1.2.65
+   Compiling rustty-terminfo v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-terminfo)
+   Compiling rustty-input v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-input)
+   Compiling rustty-version v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-version)
+   Compiling rustty-config v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-config)
+   Compiling rustty-cfg-fmt v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-cfg-fmt)
+   Compiling hashbrown v0.17.1
+   Compiling indexmap v2.14.0
+   Compiling rustty-os v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-os)
+   Compiling rustty-simd v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-simd)
+   Compiling rustty-font-shaper v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-font-shaper)
+   Compiling rustty-datastruct v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-datastruct)
+   Compiling rustty-lib v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-lib)
+   Compiling rustty-render-types v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-render-types)
+   Compiling rustty-global v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-global)
+   Compiling rustty-font v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-font)
+   Compiling rustty-args v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-args)
+warning: unused variable: `buf`
+   --> crates/rustty-config/src/config_struct/support.rs:443:47
+    |
+443 | pub(crate) fn expand_home<'a>(path: &'a [u8], buf: &'a mut [u8]) -> &'a [u8] {
+    |                                               ^^^ help: if this is intentional, prefix it with an underscore: `_buf`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `rustty-config` (lib) generated 1 warning (run `cargo fix --lib -p rustty-config` to apply 1 suggestion)
+   Compiling rustty-wasm v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-wasm)
+    Finished `release` profile [optimized] target(s) in 8.01s
+--- .port/tools/build-web-canvas-wasm.sh   (DEBUG — no --release, deliberately)
+   Compiling allocator-api2 v0.2.21
+   Compiling shlex v2.0.1
+   Compiling find-msvc-tools v0.1.9
+   Compiling rustty-util v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-util)
+   Compiling rustty-zigstd v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-zigstd)
+   Compiling rustty-build-config v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-build-config)
+   Compiling rustty-identity v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-identity)
+   Compiling libc v0.2.186
+   Compiling pkg-config v0.3.33
+   Compiling equivalent v1.0.2
+   Compiling log v0.4.33
+   Compiling rustty-unicode v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-unicode)
+   Compiling rustty-z2d v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-z2d)
+   Compiling rustty-vt v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-vt)
+   Compiling rustty-terminfo v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-terminfo)
+   Compiling cc v1.2.65
+   Compiling rustty-vt-c v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-vt-c)
+   Compiling hashbrown v0.17.1
+   Compiling indexmap v2.14.0
+   Compiling rustty-os v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-os)
+   Compiling rustty-simd v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-simd)
+   Compiling rustty-font-shaper v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-font-shaper)
+   Compiling rustty-datastruct v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-datastruct)
+   Compiling rustty-lib v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-lib)
+   Compiling rustty-render-types v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-render-types)
+   Compiling rustty-global v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-global)
+   Compiling rustty-font v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-font)
+   Compiling rustty-web-canvas v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-web-canvas)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.89s
+--- node .port/tools/wasm-log-emission.mjs
+artifact: /Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/target/wasm32-unknown-unknown/debug/rustty_web_canvas.wasm
+          28443842 bytes, DEBUG (carries the restored message text)
+arm A (positive): OK — captured "warning(deferred_face): failed to init face for codepoint check face=OTTOgarbage-font-bytes err=InvalidFontStr" (sole record)
+arm B (negative control): OK — the fast path emitted 0 records
+arm C (well-formed control): OK — 0 failure warns; the success path's
+          "debug(font_face): face initialized: monospace" and "debug(font_face): metrics font=monospace value=FaceMetrics { ... }"
+          arrived instead (a second restored site, at a second level)
+
+WASM LOG EMISSION: PASS ✓ — a restored wasm logging site was EXECUTED and
+its record was OBSERVED arriving at the host sink, driven only through exports
+that did not install a backend before 3a90678c.
+--- node .port/tools/wasm-web-canvas-font.mjs
+S91-F2: OK — 13.5 points sets "13.5px monospace", 12 points "12px monospace"
+S91-F5: OK — a 305-byte ctx.font read back equal; no warning
+control: OK — a differing 308-byte read-back (longer than the first read's buffer) warns, quoting all of it
+
+WASM WEB_CANVAS FONT: PASS
+--- .port/tools/gates/ws14_webgl_browser_gate.sh
+WS14 WebGL2 browser gate
+  renderer                   WebKit WebGL
+  wasm imports non-`env`     []
+  wasi imports               0
+  atlas_debug_canvas handle  1
+
+  expect (CPU, from atlas)    [104,100]
+  good   (WebGL readback)     [104,100,0]
+  NC1 offset (+3px UV)        [110,60,0]
+  NC2 black shader            [0,0,0]
+
+  pass_good                  true
+  neg_offset_fails           true
+  neg_black_fails            true
+  undrawn_cell_is_zero       true
+  glError                    0
+
+  P1 glyphs non-zero ink     true
+  P2 regions disjoint        true
+  P3 no ink outside regions  true (atlas ink 204 vs sum(expect) 204)
+  P4 glyph counts distinct   true
+  P5 debug canvas agrees     true (atlas_debug_canvas alpha ink 204 vs atlas ink 204)
+
+WS14 GATE: GREEN (positive matched; both negative controls failed)
+------------------------------------------------------------------
+CI RESULT (--webgl lane): PASS
