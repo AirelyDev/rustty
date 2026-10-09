@@ -185,6 +185,16 @@ pub trait DoNotOptimize {
 macro_rules! reg_sink {
     ($($t:ty),*) => {$(
         impl DoNotOptimize for $t {
+            #[cfg(miri)]
+            #[inline(always)]
+            fn sink(self) {
+                // PORT NOTE: Miri does not support inline assembly, so the
+                // interpreter takes `black_box` instead. Real builds keep the
+                // register sink below; codegen there is unchanged.
+                core::hint::black_box(self);
+            }
+
+            #[cfg(not(miri))]
             #[inline(always)]
             fn sink(self) {
                 // SAFETY: empty asm, one register input, no memory access.
