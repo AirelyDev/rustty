@@ -1,0 +1,49 @@
+G-TSAN-mac at a60e9e2a5 (branch head 1d22ba80d)
+command: bash .port/tools/gates/sanitizers.sh --per-crate-target --gate tsan
+host: Mac aarch64-apple-darwin (worktree p8-w9t2m)
+start: 2026-10-09T07:45:06Z
+end: 2026-10-09T08:22:57Z
+wall: 2271s
+rc: 0
+---- tail ----
+  scope: rustty-xev — the libxev port's thread pool, async wakeups and intrusive queues
+  scope: rustty-renderer — the renderer Thread and its cross-thread draw/sync state (N437's area)
+  scope: rustty-vt:wuffs,oniguruma — the vt search thread (search/thread.rs), the tmux control/viewer threads and the oniguruma first-use init race test (tmux::control::concurrent_first_notifications_do_not_race_oniguruma_init, needs the oniguruma feature; G-ASAN's FEATURE_LANES spec, so the default
+  scope: rustty-vt-c — the C API's handles used from embedders' threads (search ticks, terminal effects)
+  scope: highway-sys — the vendored Highway runtime's dispatch state, shared by every thread that runs a SIMD routine; holds UD377's regression test (concurrent_supported_targets_calls_agree)
+  tests one at a time on Linux: rustty-xev — TSan models each fd as a word written by the call that opens it and by close; it sees neither the io_uring arm's close ops (the kernel closes the socket) nor fds opened by raw syscalls (SYS_pidfd_open, io_uring_setup), so when one test's closed socket num
+=== sanitizer matrix: tsan over 7 crate spec(s); per-crate target dirs /Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/target/san-tsan-<crate>, each deleted after its crate ===
+  ok tsan C archives: 20 built for the instrumented target, 20 instrumented (__tsan_ references), the rest named exceptions
+  ✅ tsan rustty-core: 86 test(s) ran, 71s — 86 passed, 0 ignored
+  ok tsan C archives: 16 built for the instrumented target, 16 instrumented (__tsan_ references), the rest named exceptions
+  ✅ tsan rustty-termio: 129 test(s) ran, 362s — 129 passed, 4 ignored
+  ok tsan C archives: 0 built for the instrumented target, 0 instrumented (__tsan_ references), the rest named exceptions
+  ✅ tsan rustty-xev: 54 test(s) ran, 17s — 54 passed, 1 ignored
+  ok tsan C archives: 14 built for the instrumented target, 14 instrumented (__tsan_ references), the rest named exceptions
+  ✅ tsan rustty-renderer: 145 test(s) ran, 46s — 145 passed, 1 ignored
+  ok tsan C archives: 6 built for the instrumented target, 6 instrumented (__tsan_ references), the rest named exceptions
+  ✅ tsan rustty-vt:wuffs,oniguruma: 3450 test(s) ran, 1660s — 3450 passed, 14 ignored
+  ok tsan C archives: 9 built for the instrumented target, 9 instrumented (__tsan_ references), the rest named exceptions
+  ✅ tsan rustty-vt-c: 604 test(s) ran, 99s — 604 passed, 1 ignored
+  ok tsan C archives: 2 built for the instrumented target, 2 instrumented (__tsan_ references), the rest named exceptions
+  ✅ tsan highway-sys: 19 test(s) ran, 11s — 19 passed, 0 ignored
+--- tsan matrix summary: 4487 test(s) ran, wall 2271s (37 min) ---
+  rustty-core                          GREEN               86 tests     71s
+  rustty-termio                        GREEN              129 tests    362s
+  rustty-xev                           GREEN               54 tests     17s
+  rustty-renderer                      GREEN              145 tests     46s
+  rustty-vt:wuffs,oniguruma            GREEN             3450 tests   1660s
+  rustty-vt-c                          GREEN              604 tests     99s
+  highway-sys                          GREEN               19 tests     11s
+G-TSAN: GREEN (4487 test(s) under the sanitizer, 0 findings)
+
+RF4 confirmation (separate run, strict pivots so a skip would panic):
+command: RUSTTY_REQUIRE_METAL=1 RUSTTY_REQUIRE_GL=1 bash .port/tools/gates/sanitizers.sh --per-crate-target --matrix --san tsan --crates rustty-core --filter two_surfaces_share
+start 2026-10-09T08:23:24Z end 2026-10-09T08:24:13Z rc 0
+=== sanitizer matrix: tsan over 1 crate spec(s); per-crate target dirs /Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/target/san-tsan-<crate>, each deleted after its crate ===
+  ok tsan C archives: 20 built for the instrumented target, 20 instrumented (__tsan_ references), the rest named exceptions
+  ✅ tsan rustty-core: 1 test(s) ran, 48s — 1 passed, 0 ignored
+--- tsan matrix summary: 1 test(s) ran, wall 49s (0 min) ---
+  rustty-core                          GREEN                1 tests     48s
+MATRIX(tsan): GREEN (1 test(s) under the sanitizer, 0 findings)
+In the full G-TSAN run the test app::device_tests::two_surfaces_share_the_device_destroy_one_draw_the_other_then_deinit is listed 'ok' in rustty-core (G-TSAN-mac.rustty-core.log).
