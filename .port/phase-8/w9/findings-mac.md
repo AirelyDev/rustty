@@ -39,3 +39,7 @@
   docs/superpowers/plans/2026-10-07-phase8-upstream-resync.md), typos/swiftlint/actionlint ok, alejandra and pinact skipped (not installed / no GITHUB_TOKEN).
 - Observed standalone. Not fixed, nothing relaxed.
 - Evidence: .port/phase-8/w9/G-LINT-mac.full.log
+
+N604 correction: of the shellcheck hits, only .port/tools/cvt-parity.sh:24 (SC2010) is a repository finding. The other four (SC2164 in
+.port/phase-8/w9/g6-part2.sh, logs/g6p2.sh, logs/lane.sh, logs/rec.sh) are the runner's own helper scripts, which sat in the worktree during the lint run
+(g6-part2.sh is renamed to .txt in the evidence dir; logs/ is untracked). A re-run on a clean checkout would show only cvt-parity.sh plus prettier.
