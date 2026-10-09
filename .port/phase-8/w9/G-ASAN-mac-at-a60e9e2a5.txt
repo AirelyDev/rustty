@@ -1,0 +1,48 @@
+G-ASAN-mac at a60e9e2a5 (branch head 1d22ba80d)
+command: bash .port/tools/gates/sanitizers.sh --per-crate-target --gate asan
+host: Mac aarch64-apple-darwin (worktree p8-w9t2m)
+start: 2026-10-09T06:48:12Z
+end: 2026-10-09T07:15:35Z
+wall: 1643s
+rc: 0
+---- tail ----
+  rustty-extra                         GREEN               39 tests     45s
+  rustty-font                          GREEN               89 tests     12s
+  rustty-font-shaper                   GREEN              141 tests     20s
+  rustty-global                        GREEN               18 tests      3s
+  rustty-helpgen                       GREEN                6 tests      2s
+  rustty-identity                      GREEN                1 tests      1s
+  rustty-input                         GREEN              126 tests     14s
+  rustty-inspector                     GREEN               23 tests     40s
+  rustty-lib                           GREEN               42 tests      2s
+  rustty-oniguruma                     GREEN                2 tests      8s
+  rustty-os                            GREEN              129 tests     10s
+  rustty-render-types                  GREEN               12 tests      2s
+  rustty-renderer                      GREEN              145 tests     39s
+  rustty-simd                          GREEN               42 tests     31s
+  rustty-synthetic                     GREEN               27 tests     14s
+  rustty-terminfo                      GREEN                7 tests      2s
+  rustty-termio                        GREEN              129 tests     76s
+  rustty-unicode                       GREEN               23 tests      1s
+  rustty-util                          GREEN                6 tests      1s
+  rustty-vaxis                         GREEN              171 tests     11s
+  rustty-version                       GREEN                6 tests      2s
+  rustty-vt                            GREEN             3420 tests    250s
+  rustty-vt-c                          GREEN              604 tests     27s
+  rustty-wasm                          NO-TESTS(Darwin)      0 tests     19s
+  rustty-web-canvas                    GREEN                1 tests     19s
+  rustty-wuffs                         GREEN               24 tests      7s
+  rustty-xev                           GREEN               54 tests      5s
+  rustty-z2d                           GREEN              105 tests      2s
+  rustty-zf                            GREEN               11 tests      1s
+  rustty-zigimg                        GREEN               28 tests      8s
+  rustty-zigstd                        GREEN               89 tests      2s
+  sentry-sys                           GREEN                4 tests      8s
+  simdutf-sys                          GREEN                2 tests      3s
+  spirv-cross-sys                      GREEN                1 tests     13s
+  wuffs-sys                            GREEN                3 tests      7s
+  xtask                                GREEN              126 tests     70s
+  zlib-sys                             GREEN               11 tests      2s
+  rustty-vt:wuffs,oniguruma            GREEN             3450 tests    245s
+  Miri-exception cross-check (asan, Darwin): 475 Miri-excepted test(s); 466 ran and passed; 9 expected absent on Darwin (listed, with reasons); 0 problem(s)
+G-ASAN: GREEN (10045 test(s) under the sanitizer, 0 findings)

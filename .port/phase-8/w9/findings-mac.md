@@ -15,3 +15,15 @@
   iterations of `x ESC]133;A BEL` filling pages with unlimited scrollback). Controller killed PID 93160 (SIGTERM). All other rustty-vt tests passed.
 - Not a UB report; a Miri-cost problem. Not fixed, gate not relaxed.
 - Evidence: .port/phase-8/w9/G6-at-a60e9e2a5.txt, logs copy of the nextest output under logs/n601-vt-output (not committed).
+
+## N602 - G-LSAN (Mac) RED: rustty-apprt-c, LeakSanitizer, 328 bytes in 3 allocations
+- Lane: bash .port/tools/gates/sanitizers.sh --per-crate-target --gate lsan; every other crate GREEN (rustty-vt 3420 tests, vt-c 604, ...).
+- All 16+19+... rustty-apprt-c tests PASSED; the leak is reported at process exit of the test binary `macos_window_host`
+  (the 19-test binary, see log). Direct leak 144 B (+ indirect 128 B + 56 B).
+- Allocation stack is Apple-internal: calloc <- libobjc class_createInstance <- libdispatch _dispatch_mach_create <- libxpc
+  xpc_connection_create_mach_service <- TCC TCCAccessPreflight <- SkyLight __SLSInitialize_block_invoke (dispatch_once)
+  <- SLSGetActiveDisplayList <- CVDisplayLinkCreateWithActiveCGDisplays <- rustty_renderer::metal::cvdisplaylink::DisplayLink::create_with_active_cg_displays
+  <- Renderer::sync_display_link_raw <- loop_enter_raw <- rustty_core renderer_seam Thread::threadMain (render thread).
+- Not matched by lsan-darwin.supp (S1-S9). Possibly a first-time-initialisation of SkyLight on a thread (the test hosts a render thread that
+  creates a display link) or host-state dependent (TCC). Not diagnosed further; not suppressed (R5). Controller decides: new suppression with citation vs. code.
+- Evidence: .port/phase-8/w9/G-LSAN-mac-at-a60e9e2a5.txt, G-LSAN-mac.rustty-apprt-c.log
