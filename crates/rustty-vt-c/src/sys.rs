@@ -506,6 +506,13 @@ impl core::fmt::Write for LogEmitter<'_> {
 // takes the runtime level, the scope name, and the already-formatted message
 // (`core::fmt::Arguments`), reproducing the same chunked dispatch.
 pub fn log_fn(level: StdLevel, scope: &str, args: core::fmt::Arguments) {
+    // TEST-ONLY isolation invariant (N625, P8-W9 FX5): the sink is
+    // process-global, so a test that emits here without holding the
+    // `tests::reset_global()` guard can land in another test's scoped-log
+    // capture (or its exact call count) and flake it. Fail the emitting test
+    // deterministically instead.
+    #[cfg(test)]
+    tests::assert_global_guard_held(scope, &args);
     // PORT NOTE (`d61920d80`, `lib_vt.zig` `std_options`): on wasm the
     // installed `std.log` sink is NOT this C-ABI dispatcher — `lib_vt.zig`
     // selects `os/wasm/log.zig` instead:
@@ -910,14 +917,53 @@ pub(crate) mod tests {
         }
     }
 
+    // N625 (P8-W9 FX5): every test that can reach `log_fn` (directly, or
+    // through the `log` facade from the crates below) must hold the guard, not
+    // only the tests that install a sink: a test that merely EMITS while
+    // another test's sink is installed lands in that test's capture. The
+    // thread-local below records which thread holds `TEST_LOCK`, and
+    // `log_fn` asserts it under `cfg(test)`, so an unguarded emitter fails
+    // deterministically instead of flaking a sibling.
+    thread_local! {
+        static HOLDS_GLOBAL_GUARD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// The `reset_global()` guard: holds `TEST_LOCK` and marks the holding
+    /// thread for [`assert_global_guard_held`] until dropped.
+    pub(crate) struct GlobalGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl GlobalGuard {
+        fn new(lock: std::sync::MutexGuard<'static, ()>) -> Self {
+            HOLDS_GLOBAL_GUARD.with(|h| h.set(true));
+            Self { _lock: lock }
+        }
+    }
+
+    impl Drop for GlobalGuard {
+        fn drop(&mut self) {
+            HOLDS_GLOBAL_GUARD.with(|h| h.set(false));
+        }
+    }
+
+    pub(crate) fn assert_global_guard_held(scope: &str, args: &core::fmt::Arguments) {
+        assert!(
+            HOLDS_GLOBAL_GUARD.with(|h| h.get()),
+            "log_fn reached without crate::sys::tests::reset_global() held \
+             (scope {scope:?}, message {args:?}); take the guard at the top of \
+             this test so it cannot land in another test's log sink (N625)"
+        );
+    }
+
     // Reset GLOBAL + the rustty-vt decode_png slot to a known empty state. Holds
     // and returns the serialization guard so the whole test body runs without
     // another sys test mutating GLOBAL concurrently (mirroring Zig's serial run).
     // `pub(crate)`: other modules' tests that install a log callback (e.g. the
     // render-state scoped-log tests) must serialize against these, since GLOBAL
     // is process-wide.
-    pub(crate) fn reset_global() -> std::sync::MutexGuard<'static, ()> {
-        let guard = lock_tests();
+    pub(crate) fn reset_global() -> GlobalGuard {
+        let guard = GlobalGuard::new(lock_tests());
         GLOBAL.clear_poison();
         let mut g = GLOBAL.lock().unwrap();
         g.userdata = std::ptr::null_mut();
