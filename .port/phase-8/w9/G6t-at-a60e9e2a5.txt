@@ -1,0 +1,179 @@
+Lane: G6t (INCOMPLETE: RED in rustty-vt; run stopped during rustty-core for low disk)
+Command: CARGO_TARGET_DIR=<worktree>/target-g6t bash .port/tools/gates/check_leaks.sh --tree-borrows
+Host: Gaels-MacBook-Pro.local (Mac, aarch64-apple-darwin)
+Base: c8a55c96c
+Start (UTC): 2026-10-09T15:14:28Z
+End (UTC): ~2026-10-09T20:13Z (stopped by runner, kill by explicit PID, Mac free disk fell to ~12 GB, rule floor)
+Wall: ~4h59m
+rc: n/a (killed)
+Verdict: G6t RED (rustty-vt: 2 TB UB failures); rustty-vt-c, rustty-renderer, rustty-xev GREEN; rustty-core NOT COMPLETED (BLOCKED, not green)
+Per crate: rustty-vt SB-on 10627s RED (2 fail of the TB scope); rustty-vt G6c-annotated TB debug-assertions-off 121/121 passed 1643s; rustty-vt-c 586/586 1125s; rustty-renderer 65/65 224s; rustty-xev 22/22 4s; rustty-core started, unfinished
+--- G6t log ---
+=== G6t :: Miri Tree Borrows via nextest over: 
+rustty-vt:page rustty-vt:pagelist rustty-vt:search rustty-vt:render
+rustty-vt:screen rustty-vt:terminal rustty-vt:snapshot rustty-vt:kitty
+rustty-vt-c
+rustty-renderer:cell rustty-renderer:cursor rustty-renderer:dmabuf
+rustty-renderer:generic::surface_mailbox_tests rustty-renderer:generic::derived_config_tests
+rustty-renderer:health_tests rustty-renderer:image::macos_impl rustty-renderer:latest_frame
+rustty-renderer:log_capture rustty-renderer:message::change_config_tests
+rustty-renderer:metal::gpu_abi rustty-renderer:metal::shaders::metallib_tests
+rustty-renderer:metal::test_support rustty-renderer:overlay rustty-renderer:state
+rustty-renderer:thread rustty-renderer:undefined
+rustty-renderer:=generic::macos_impl::tests::health::metal_health_push_deadlocks::metal_async_frame_completed_never_blocks_on_a_full_mailbox
+rustty-renderer:=generic::macos_impl::tests::health::metal_health_push_deadlocks::metal_health_report_concurrent_completions_stay_consistent
+rustty-renderer:=generic::macos_impl::tests::health::metal_health_push_deadlocks::metal_health_report_never_restores_an_undelivered_health
+rustty-renderer:=generic::macos_impl::tests::health::metal_health_push_deadlocks::metal_sync_frame_completed_detached_mailbox_keeps_health
+rustty-renderer:=generic::macos_impl::tests::health::metal_health_push_deadlocks::metal_sync_frame_completed_never_blocks_the_mailbox_drainer
+rustty-renderer:=shadertoy::tests::uniforms_match_the_std140_block_in_shadertoy_prefix_glsl
+rustty-renderer:-generic::derived_config_tests::decoded_bg_image_len_is_wh4
+rustty-renderer:-image::macos_impl::tests::image_empty_lifecycle
+rustty-renderer:-message::change_config_tests::change_config_deinit_frees_links
+rustty-renderer:-state::tests::renderer_state_yield_to_demand_is_free_without_demand
+rustty-xev
+rustty-core
+ ===
+=== G6t [rustty-vt] ===
+    [rustty-vt] scope check (Miri test list, --lib):
+      scope ok: rustty-vt:page — 86 runnable test(s)
+      scope ok: rustty-vt:pagelist — 262 runnable test(s)
+      scope ok: rustty-vt:search — 52 runnable test(s)
+      scope ok: rustty-vt:render — 36 runnable test(s)
+      scope ok: rustty-vt:screen — 233 runnable test(s)
+      scope ok: rustty-vt:terminal — 459 runnable test(s)
+      scope ok: rustty-vt:snapshot — 141 runnable test(s)
+      scope ok: rustty-vt:kitty — 342 runnable test(s)
+    [rustty-vt] Miri Tree Borrows, debug assertions on, 8 processes, MIRIFLAGS='-Zmiri-tree-borrows'
+    filterset: test(/^(page|pagelist|search|render|screen|terminal|snapshot|kitty)::/)
+    [rustty-vt] 10627s
+  RED [rustty-vt]:
+    Miri finding in rustty-vt page::tests::page_moveCells_graphemes:
+        error: Undefined Behavior: write access through <1869987> at alloc349449[0x8] is forbidden
+        --> crates/rustty-vt/src/page.rs:604:5
+    Miri finding in rustty-vt page::tests::page_moveCells_text_only:
+        error: Undefined Behavior: write access through <1025030> at alloc349449[0x8] is forbidden
+        --> crates/rustty-vt/src/page.rs:604:5
+    2 test(s) did not pass:
+        FAIL rustty-vt page::tests::page_moveCells_graphemes
+        FAIL rustty-vt page::tests::page_moveCells_text_only
+    full output: /var/folders/3z/vhbmzwg50g96n2644l_pz4nh0000gn/T//mn.g6t.rustty-vt.sbK0w2
+    [rustty-vt] the 121 G6c-annotated test(s) in scope, debug assertions off:
+    [rustty-vt] Miri Tree Borrows, debug assertions off, 8 processes, MIRIFLAGS='-Zmiri-disable-isolation -Zmiri-tree-borrows', RUSTFLAGS='-C debug-assertions=off'
+    filterset: test(=search::screen::tests::feed_after_complete_discovers_prepended_history_pages) | test(=search::pagelist::tests::feed_iteratively_through_multiple_matches)  ... (11031 chars)
+    [rustty-vt] 1643s
+    Summary [1587.987s] 121 tests run: 121 passed (41 slow), 3264 skipped
+    full output: /var/folders/3z/vhbmzwg50g96n2644l_pz4nh0000gn/T//mn.g6t.rustty-vt.off.P0GqQc
+=== G6t [rustty-vt-c] ===
+    [rustty-vt-c] scope check (Miri test list, all targets):
+      scope ok: rustty-vt-c — 586 runnable test(s)
+    [rustty-vt-c] Miri Tree Borrows, debug assertions on, 8 processes, MIRIFLAGS='-Zmiri-tree-borrows'
+    filterset: all()
+    [rustty-vt-c] 1125s
+    Summary [1117.675s] 586 tests run: 586 passed (11 slow), 19 skipped
+=== G6t [rustty-renderer] ===
+    [rustty-renderer] scope check (Miri test list, --lib):
+      scope ok: rustty-renderer:cell — 6 runnable test(s)
+      scope ok: rustty-renderer:cursor — 4 runnable test(s)
+      scope ok: rustty-renderer:dmabuf — 3 runnable test(s)
+      scope ok: rustty-renderer:generic::surface_mailbox_tests — 2 runnable test(s)
+      scope ok: rustty-renderer:generic::derived_config_tests — 5 runnable test(s)
+      scope ok: rustty-renderer:health_tests — 2 runnable test(s)
+      scope ok: rustty-renderer:image::macos_impl — 10 runnable test(s)
+      scope ok: rustty-renderer:latest_frame — 4 runnable test(s)
+      scope ok: rustty-renderer:log_capture — 2 runnable test(s)
+      scope ok: rustty-renderer:message::change_config_tests — 2 runnable test(s)
+      scope ok: rustty-renderer:metal::gpu_abi — 3 runnable test(s)
+      scope ok: rustty-renderer:metal::shaders::metallib_tests — 1 runnable test(s)
+      scope ok: rustty-renderer:metal::test_support — 5 runnable test(s)
+      scope ok: rustty-renderer:overlay — 5 runnable test(s)
+      scope ok: rustty-renderer:state — 6 runnable test(s)
+      scope ok: rustty-renderer:thread — 1 runnable test(s)
+      scope ok: rustty-renderer:undefined — 2 runnable test(s)
+      scope ok: rustty-renderer:=generic::macos_impl::tests::health::metal_health_push_deadlocks::metal_async_frame_completed_never_blocks_on_a_full_mailbox — names 1 runnable test
+      scope ok: rustty-renderer:=generic::macos_impl::tests::health::metal_health_push_deadlocks::metal_health_report_concurrent_completions_stay_consistent — names 1 runnable test
+      scope ok: rustty-renderer:=generic::macos_impl::tests::health::metal_health_push_deadlocks::metal_health_report_never_restores_an_undelivered_health — names 1 runnable test
+      scope ok: rustty-renderer:=generic::macos_impl::tests::health::metal_health_push_deadlocks::metal_sync_frame_completed_detached_mailbox_keeps_health — names 1 runnable test
+      scope ok: rustty-renderer:=generic::macos_impl::tests::health::metal_health_push_deadlocks::metal_sync_frame_completed_never_blocks_the_mailbox_drainer — names 1 runnable test
+      scope ok: rustty-renderer:=shadertoy::tests::uniforms_match_the_std140_block_in_shadertoy_prefix_glsl — names 1 runnable test
+      scope ok: rustty-renderer:-generic::derived_config_tests::decoded_bg_image_len_is_wh4 — names 1 test
+      scope ok: rustty-renderer:-image::macos_impl::tests::image_empty_lifecycle — names 1 test
+      scope ok: rustty-renderer:-message::change_config_tests::change_config_deinit_frees_links — names 1 test
+      scope ok: rustty-renderer:-state::tests::renderer_state_yield_to_demand_is_free_without_demand — names 1 test
+    [rustty-renderer] Miri Tree Borrows, debug assertions on, 8 processes, MIRIFLAGS='-Zmiri-tree-borrows'
+    filterset: (test(/^(cell|cursor|dmabuf|generic::surface_mailbox_tests|generic::derived_config_tests|health_tests|image::macos_impl|latest_frame|log_capture|message::change ... (1296 chars)
+    [rustty-renderer] 224s
+    Summary [ 222.560s] 65 tests run: 65 passed (1 slow), 78 skipped
+=== G6t [rustty-xev] ===
+    [rustty-xev] scope check (Miri test list, all targets):
+      scope ok: rustty-xev — 22 runnable test(s)
+    [rustty-xev] Miri Tree Borrows, debug assertions on, 8 processes, MIRIFLAGS='-Zmiri-tree-borrows'
+    filterset: all()
+    [rustty-xev] 4s
+    Summary [   3.149s] 22 tests run: 22 passed, 33 skipped
+=== G6t [rustty-core] ===
+    [rustty-core] scope check (Miri test list, all targets):
+      scope ok: rustty-core — 69 runnable test(s)
+    [rustty-core] Miri Tree Borrows, debug assertions on, 8 processes, MIRIFLAGS='-Zmiri-tree-borrows'
+    filterset: all()
+--- full Miri output for the 2 failing tests (first diagnostic of each) ---
+    error: Undefined Behavior: write access through <1025030> at alloc349449[0x8] is forbidden
+        --> crates/rustty-vt/src/page.rs:604:5
+         |
+     604 |     *backing = (*backing & !m) | ((value << shift) & m);
+         |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Undefined Behavior occurred here
+         |
+         = help: this indicates a potential bug in the program: it performed an invalid operation, but the Tree Borrows rules it violated are still experimental
+         = help: see https://github.com/rust-lang/unsafe-code-guidelines/blob/master/wip/tree-borrows.md for further information
+         = help: the accessed tag <1025030> is a child of the conflicting tag <1012845>
+         = help: the conflicting tag <1012845> has state Frozen which forbids this child write access
+    help: the accessed tag <1025030> was created here
+        --> crates/rustty-vt/src/page.rs:602:13
+         |
+     602 | fn set_bits(backing: &mut u64, shift: u32, bits: u32, value: u64) {
+         |             ^^^^^^^
+    help: the conflicting tag <1012845> was created here, in the initial state Reserved
+        --> crates/rustty-vt/src/page_tests.rs:2319:22
+         |
+    2319 |             unsafe { &mut *dst },
+         |                      ^^^^^^^^^
+    help: the conflicting tag <1012845> later transitioned to Unique due to a child write access at offsets [0x8..0x10]
+        --> crates/rustty-vt/src/page.rs:604:5
+         |
+     604 |     *backing = (*backing & !m) | ((value << shift) & m);
+         |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+         = help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
+    help: the conflicting tag <1012845> later transitioned to Frozen due to a reborrow (acting as a foreign read access) at offsets [0x0..0x50]
+        --> crates/rustty-vt/src/page_impl.rs:735:13
+         |
+     735 |             core::slice::from_raw_parts(self.rows.ptr(base), self.size.rows as usize)
+         |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+         = help: this transition corresponds to a loss of write permissions
+         = note: this is on thread `page::tests::page_moveCells_text_only`
+         = note: stack backtrace:
+                 0: page::set_bits
+                     at crates/rustty-vt/src/page.rs:604:5: 604:56
+                 1: page::Row::set_styled
+                     at crates/rustty-vt/src/page.rs:1070:9: 1070:61
+                 2: page::Page::move_cells_inner
+                     at crates/rustty-vt/src/page_impl.rs:2287:22: 2287:48
+                 3: page::Page::move_cells
+                     at crates/rustty-vt/src/page_impl.rs:2223:9: 2223:73
+                 4: page::tests::page_moveCells_text_only
+                     at crates/rustty-vt/src/page_tests.rs:2316:9: 2322:10
+                 5: page::tests::page_moveCells_text_only::{closure#0}
+                     at crates/rustty-vt/src/page_tests.rs:2299:34: 2299:34
+
+    note: some details are omitted, run with `MIRIFLAGS=-Zmiri-backtrace=full` for a verbose backtrace
+
+    error: aborting due to 1 previous error; 2 warnings emitted
+
+
+    (test failed with exit code 1)
+
+        PASS [  25.371s] ( 413/1611) rustty-vt page::tests::page_read_and_write_cells
+        FAIL [  30.652s] ( 414/1611) rustty-vt page::tests::page_moveCells_graphemes
+  stdout ───
+
+    running 1 test
+    test page::tests::page_moveCells_graphemes ... 
+  stderr ───
