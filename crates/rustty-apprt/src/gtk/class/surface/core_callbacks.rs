@@ -14,7 +14,7 @@ use super::*;
 // (`:1497-...`) and the RenderSurface lifecycle (`:3305-3528`).
 // ===========================================================================
 
-/// Logs a warning once-ish for the given format string and arguments. It may log duplicates if called from
+/// Logs a warning once-ish for the given format string and argument types. It may log duplicates if called from
 /// multiple threads but will eventually stop.
 ///
 /// PORTS: `surface.zig:3948-3963` `logWarnOnce`. The reference keeps a per-(format, argument type)
