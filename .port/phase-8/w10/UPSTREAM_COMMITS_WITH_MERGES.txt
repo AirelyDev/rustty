@@ -1,0 +1,18 @@
+246f70287 cli/list-themes: add ctrl-d/u paging (#14607)
+9d479dcb1 Update VOUCHED list (#14614)
+b115e4567 terminal: support DECSTR (#14538)
+5169c473a terminal: documentation for DECSTR
+f473f3109 terminal: support DECSTR
+c770410db cli/list-themes: fix keypad page down binding (#14605)
+7f1219fd7 cli/list-themes: add ctrl-d/u paging
+54ba7b1dd cli/list-themes: fix keypad page down binding
+ce63fcba6 I18n/da konfiguration (#14594)
+7ec9e26a2 formatter: write the cursor position relative to the margins in origin mode (#14588)
+bad5854f3 Update VOUCHED list (#14603)
+0f171f650 Update VOUCHED list (#14600)
+7551c5bad Update VOUCHED list (#14599)
+e2ced6b71 i18n: update Danish (da) PO-Revision-Date
+55424c1cc i18n: use "konfiguration" consistently in Danish (da) translation
+8f0dd3709 i18n: improve Danish (da) translation (#14586)
+7b60f9bf5 i18n: improve Danish (da) translation
+23c7a3e5a formatter: write the cursor position relative to the margins in origin mode

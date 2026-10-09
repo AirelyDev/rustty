@@ -1,0 +1,11 @@
+ .github/VOUCHED.td               |   4 +
+ include/ghostty/vt/terminal.h    |  10 +-
+ po/da.po                         | 103 +++++++++++----------
+ src/cli/list_themes.zig          |  10 +-
+ src/terminal/Terminal.zig        | 192 +++++++++++++++++++++++++++++++++++++--
+ src/terminal/formatter.zig       | 100 +++++++++++++++++++-
+ src/terminal/modes.zig           |   5 +
+ src/terminal/stream.zig          |  47 +++++++++-
+ src/terminal/stream_terminal.zig |   1 +
+ src/termio/stream_handler.zig    |   1 +
+ 10 files changed, 401 insertions(+), 72 deletions(-)
