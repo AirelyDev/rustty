@@ -21,7 +21,9 @@
 set -e
 if [ "${1:-}" = "--all" ]; then
   self="$0"; rootd=$(cd "$(dirname "$0")/../.." && pwd); fail=0; ran=0; nc=0
-  for d in $(ls "$rootd/example" | grep -E '^(c|cpp)-vt'); do
+  for p in "$rootd"/example/*; do
+    d=${p##*/}
+    case $d in c-vt*|cpp-vt*) ;; *) continue ;; esac
     sh "$self" "$d" && rc=0 || rc=$?
     case $rc in 0) ran=$((ran + 1)) ;; 4) nc=$((nc + 1)) ;; *) fail=1 ;; esac
   done

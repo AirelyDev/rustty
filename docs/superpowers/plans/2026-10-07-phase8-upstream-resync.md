@@ -182,6 +182,7 @@ Parallelism: at most 3 building worktrees. Suggested first wave after W0: W1 + W
   - G9 RED only on the new config keys, OSC kinds and the CSI finals the old generator hid (list them in `w0/README.md`; each is owned by a workstream below or mapped in T4).
 
   Any other red is a finding: add it to `w0/README.md`.
+
 - [ ] **Step 6: Commit.** `oracle: advance pin 12752b2ac → a60e9e2a5 (107 commits, 69 non-merge) (P8-W0 T3)`.
 
 ### Task 4: Phase-start records and gate maps
@@ -648,26 +649,26 @@ Parallelism: at most 3 building worktrees. Suggested first wave after W0: W1 + W
 
 Run each lane at the finale head; one VM lane at a time; benches with the VMs paused (the maintainer pauses UTM). Save each result under `.port/phase-8/w9/`. A RED result becomes a NEW-FINDINGS entry and a fail-first fix task before the merge to `main`; a gate is never relaxed to pass (R5).
 
-| lane | command | host | last recorded runtime |
-|---|---|---|---|
-| Full Linux lane | `cargo test --workspace` with GTK features; G-GTKFEAT `check_gtk_feature_lane.sh`; G-REL `check_release_lane.sh`; G-EXAMPLES `check_examples.sh` | rvm | ~1–2 h |
-| Full `ci.sh` | `bash .port/tools/ci.sh` | Mac, then rvm | hours (never recorded end to end — record it this time) |
-| G6 Miri Stacked Borrows | `bash .port/tools/gates/check_leaks.sh --all-done` | Mac | ~3.7 h |
-| G6c debug assertions off | `bash .port/tools/gates/check_leaks.sh --debug-assertions-off` | Mac | ~19 min |
-| G6t Tree Borrows | `bash .port/tools/gates/check_leaks.sh --tree-borrows` (scope self-check runs every run) | Mac | ~1–2 h (record wall time) |
-| G-ASAN | `bash .port/tools/gates/sanitizers.sh --gate asan` | Mac and rvm | ~15 min (Mac) |
-| G-LSAN | `… --gate lsan` | Mac and rvm | 33 min / 20 min |
-| G-MSAN | `… --gate msan` | rvm | ~50 min |
-| G-HWASAN | `… --gate hwasan` | rvm | ~56–77 min |
-| G-TSAN | `… --gate tsan` | Mac and rvm | 38 min / 21 min |
-| G-LSAN-GTK | `… --gate lsan-gtk` (headless sway; ceilings 7,600 / 2,420) | rvm | minutes |
-| G-SAN-SELF | `… --self-test` | Mac and rvm | minutes |
-| G-VALGRIND | `bash .port/tools/gates/check_valgrind.sh` (4 shards, `--jobs 4`) | rvm | ~3 h 44 min |
-| Windows full workspace (V26) | the V26 command plus the DLL step | rwin | ~1 h |
-| G-ESCTEST | `bash .port/tools/gates/check_esctest.sh` | Mac and rvm | ~1 min |
-| Perf suite vs Ghostty | `python3 .port/tools/perf/ws10_suite.py` against a zigbench rebuilt at `a60e9e2a5` with `-Doptimize=ReleaseFast` (update the suite's oracle sha); must hold 14/14 wins, with particular attention to `osc-parser`, `terminal-stream`, `t-parser`/print | Mac, idle | ~1–2 h |
-| G8 baseline | re-base `.port/phase-0/baseline/BASELINE.json` on the oracle at the new pin (V17 recipe, ReleaseFast rows only, per-label size tolerances per V16), then `python3 .port/tools/gates/check_baseline_regression.py --strict` and G8b `--build` | Mac, idle | minutes after the suite |
-| Re-audit | Task 41 step 3 over `src/terminal`, `src/terminal/c`, `src/renderer` at the new pin | Mac | — |
+| lane                         | command                                                                                                                                                                                                                                                | host          | last recorded runtime                                   |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------- | ------------------------------------------------------- |
+| Full Linux lane              | `cargo test --workspace` with GTK features; G-GTKFEAT `check_gtk_feature_lane.sh`; G-REL `check_release_lane.sh`; G-EXAMPLES `check_examples.sh`                                                                                                       | rvm           | ~1–2 h                                                  |
+| Full `ci.sh`                 | `bash .port/tools/ci.sh`                                                                                                                                                                                                                               | Mac, then rvm | hours (never recorded end to end — record it this time) |
+| G6 Miri Stacked Borrows      | `bash .port/tools/gates/check_leaks.sh --all-done`                                                                                                                                                                                                     | Mac           | ~3.7 h                                                  |
+| G6c debug assertions off     | `bash .port/tools/gates/check_leaks.sh --debug-assertions-off`                                                                                                                                                                                         | Mac           | ~19 min                                                 |
+| G6t Tree Borrows             | `bash .port/tools/gates/check_leaks.sh --tree-borrows` (scope self-check runs every run)                                                                                                                                                               | Mac           | ~1–2 h (record wall time)                               |
+| G-ASAN                       | `bash .port/tools/gates/sanitizers.sh --gate asan`                                                                                                                                                                                                     | Mac and rvm   | ~15 min (Mac)                                           |
+| G-LSAN                       | `… --gate lsan`                                                                                                                                                                                                                                        | Mac and rvm   | 33 min / 20 min                                         |
+| G-MSAN                       | `… --gate msan`                                                                                                                                                                                                                                        | rvm           | ~50 min                                                 |
+| G-HWASAN                     | `… --gate hwasan`                                                                                                                                                                                                                                      | rvm           | ~56–77 min                                              |
+| G-TSAN                       | `… --gate tsan`                                                                                                                                                                                                                                        | Mac and rvm   | 38 min / 21 min                                         |
+| G-LSAN-GTK                   | `… --gate lsan-gtk` (headless sway; ceilings 7,600 / 2,420)                                                                                                                                                                                            | rvm           | minutes                                                 |
+| G-SAN-SELF                   | `… --self-test`                                                                                                                                                                                                                                        | Mac and rvm   | minutes                                                 |
+| G-VALGRIND                   | `bash .port/tools/gates/check_valgrind.sh` (4 shards, `--jobs 4`)                                                                                                                                                                                      | rvm           | ~3 h 44 min                                             |
+| Windows full workspace (V26) | the V26 command plus the DLL step                                                                                                                                                                                                                      | rwin          | ~1 h                                                    |
+| G-ESCTEST                    | `bash .port/tools/gates/check_esctest.sh`                                                                                                                                                                                                              | Mac and rvm   | ~1 min                                                  |
+| Perf suite vs Ghostty        | `python3 .port/tools/perf/ws10_suite.py` against a zigbench rebuilt at `a60e9e2a5` with `-Doptimize=ReleaseFast` (update the suite's oracle sha); must hold 14/14 wins, with particular attention to `osc-parser`, `terminal-stream`, `t-parser`/print | Mac, idle     | ~1–2 h                                                  |
+| G8 baseline                  | re-base `.port/phase-0/baseline/BASELINE.json` on the oracle at the new pin (V17 recipe, ReleaseFast rows only, per-label size tolerances per V16), then `python3 .port/tools/gates/check_baseline_regression.py --strict` and G8b `--build`           | Mac, idle     | minutes after the suite                                 |
+| Re-audit                     | Task 41 step 3 over `src/terminal`, `src/terminal/c`, `src/renderer` at the new pin                                                                                                                                                                    | Mac           | —                                                       |
 
 - [ ] Each lane GREEN, or its RED turned into a recorded, fixed and re-run finding.
 - [ ] Clean up: VM clones deleted and fstrimmed after each VM lane; every `target/` outside the main checkout deleted by literal path; `df -h /Users/gael` recorded.
