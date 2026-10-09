@@ -177,3 +177,12 @@ rustty-core
     running 1 test
     test page::tests::page_moveCells_graphemes ... 
   stderr ───
+
+=== rerun at c0adec970 (coordinator add-on): NOT COMPLETED, BLOCKED on disk ===
+Merged c0adec970 into the worktree (ff-only impossible because of evidence commits; merge a7b04e101).
+check_leaks.sh does not combine --tree-borrows / --debug-assertions-off with --crate (arg parsing: each gate flag
+accepts only an optional --self-test). G6c is rustty-vt only (G6C_PKG); the four changed crates are not in its scope
+and rustty-vt is unchanged between c8a55c96c and c0adec970, so the G6c result above stands for the new head.
+G6t scope can be narrowed with the G6T_SCOPE env var; I ran it for rustty-vt-c, rustty-renderer (all scope entries) and
+rustty-core (rustty-input is not in G6t scope). It was started 20:15Z, stopped at 20:17Z when Mac free disk fell to 11 GB
+(floor 12 GB) before any test completed. Killed by explicit PID. Not green.
