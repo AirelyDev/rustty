@@ -1,0 +1,38 @@
+G-SAN-SELF-mac at a60e9e2a5 (branch head 1d22ba80d)
+command: bash .port/tools/gates/sanitizers.sh --self-test
+host: Mac aarch64-apple-darwin (worktree p8-w9t2m)
+start: 2026-10-09T08:24:39Z
+end: 2026-10-09T08:27:00Z
+wall: 141s
+rc: 0
+---- tail ----
+  ok   A0 clean control: asan 'tests::clean_control --exact' -> GREEN (1 test(s) ran)
+  ok   A0 the shared target dir is deleted when the pass ends
+  ok   A0 per-crate target dirs (--per-crate-target): asan 'tests::defect_heap_overflow --exact' -> RED (per-crate target dirs)
+  ok   B  empty filter: asan 'no_such_test_anywhere' -> RED (VACUOUS)
+  ok   B  hang past the bound: asan 'tests::slow_hang --exact' -> RED (HANG after 60s (no verdict))
+  ok   B  the hung test's process tree is gone after the kill
+  ok   H a crate that does not build is BLOCKED (exit 3)
+  ok   H the disk floor stops the pass BLOCKED (exit 3)
+  ok   H SAN_ONLY=rustty-identity: its 1 test GREEN, the gate BLOCKED (exit 3), never GREEN
+  ok   G NO_TESTS_ON, filter 'no_such_test_anywhere': 0 tests on Darwin by construction (M_RED=0)
+  ok   G NO_TESTS_ON, filter 'tests::clean_control --exact': the entry is stale (M_RED=1)
+  ok   A2 leak: lsan 'tests::defect_leak --exact' -> RED (LeakSanitizer: detected memory leaks)
+  ok   A2 control: clean under LSan: lsan 'tests::clean_control --exact' -> GREEN (1 test(s) ran)
+  ok   A2 control: the leak under G-ASAN (leak checker off): asan 'tests::defect_leak --exact' -> GREEN (1 test(s) ran)
+  ok   A2 opt-out hook reaches the runtime: lsan 'tests::defect_leak --exact' -> GREEN (1 test(s) ran)
+  ok   A2d control: CoreText create and release, clean under lsan-darwin.supp: lsan 'darwin::create_release_control --exact' -> GREEN (1 test(s) ran)
+  ok   A2d leaked CTFont (S9, S10, S13): lsan 'darwin::leak_ctfont --exact' -> RED (LeakSanitizer: detected memory leaks)
+  ok   A2d leaked CTFontDescriptor, created (S10): lsan 'darwin::leak_font_descriptor_created --exact' -> RED (LeakSanitizer: detected memory leaks)
+  ok   A2d leaked CTFontDescriptor, copied from a font (S10): lsan 'darwin::leak_font_descriptor_copied --exact' -> RED (LeakSanitizer: detected memory leaks)
+  ok   A2d leaked character set derived from a font's (S9): lsan 'darwin::leak_charset_derived --exact' -> RED (LeakSanitizer: detected memory leaks)
+  ok   A2d leaked CGFont (S13): lsan 'darwin::leak_cgfont --exact' -> RED (LeakSanitizer: detected memory leaks)
+  ok   A2d leaked MTLCopyAllDevices array (S17, S18): lsan 'darwin::leak_mtl_device_array --exact' -> RED (LeakSanitizer: detected memory leaks)
+  skip A3 uninit read under MSan: Linux-only (compiler-rt has no MSan for Darwin); runs on rvm / ci.yml
+  skip A4 heap overflow under HWASan: aarch64 Linux only (rustc rejects -Zsanitizer=hwaddress on Darwin/arm64); runs on rvm
+  ok   A5 data race: tsan 'tests::defect_data_race --exact' -> RED (ThreadSanitizer: data race)
+  ok   A5 control: Mutex-ordered writes, clean under TSan: tsan 'tests::synchronized_control --exact' -> GREEN (1 test(s) ran)
+  ok   A5s data race between one test's threads, tests run one at a time (TSAN_SERIAL): tsan 'tests::defect_data_race --exact --test-threads=1' -> RED (ThreadSanitizer: data race)
+  ok   A5 data race in C (the cc wrapper instruments it): tsan 'tests::c_data_race --exact' -> RED (ThreadSanitizer: data race)
+  ok   A5 control: clean C under TSan, its archive instrumented: tsan 'tests::c_clean_control --exact' -> GREEN (tsan C archives: 1 built for the instrumented target, 1 instrumented)
+G-SAN-SELF: GREEN
