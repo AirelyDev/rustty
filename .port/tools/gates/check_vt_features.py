@@ -37,6 +37,7 @@ BUILD configuration, not a test configuration; adding guards the oracle lacks
 would be an R1 divergence.
 """
 
+import json
 import os
 import re
 import subprocess
@@ -186,12 +187,21 @@ def build(args):
 
 def exported_symbols():
     """The `rustty_*` symbols exported by the built cdylib."""
+    # cargo's own target dir (CARGO_TARGET_DIR honoured), as _target_dir.sh.
+    meta = subprocess.run(
+        ["cargo", "metadata", "--no-deps", "--format-version", "1", "--offline"],
+        cwd=ROOT, capture_output=True, text=True,
+    )
+    try:
+        tdir = Path(json.loads(meta.stdout)["target_directory"])
+    except (ValueError, KeyError):
+        tdir = ROOT / "target"
     for name in ("librustty_vt_c.dylib", "librustty_vt_c.so"):
-        lib = ROOT / "target" / "debug" / name
+        lib = tdir / "debug" / name
         if lib.exists():
             break
     else:
-        fail("no built cdylib found under target/debug")
+        fail("no built cdylib found under %s/debug" % tdir)
         return set()
 
     if lib.suffix == ".dylib":

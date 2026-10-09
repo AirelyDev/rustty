@@ -266,8 +266,12 @@ echo "=== G-XCF 1/2 :: build the framework ==="
 # Rebuild unconditionally: a stale bundle would let this gate bless an artifact
 # built from different sources. Same reasoning as WS19 T16. `xtask
 # xcframework-vt` recreates the bundle directory, so no stale slice survives.
-if ! cargo run -q -p xtask -- xcframework-vt > /dev/null 2>&1; then
-  cargo run -q -p xtask -- xcframework-vt 2>&1 | tail -20 | sed 's/^/    /'
+# xtask builds with cargo but resolves the archives it folds in under
+# <root>/target (xtask/src/main.rs `build_root`), so it runs in the DEFAULT
+# target dir whatever CARGO_TARGET_DIR the caller set (the check_perf_fence.sh
+# precedent); otherwise its archive check fails on cargo's own output.
+if ! env -u CARGO_TARGET_DIR cargo run -q -p xtask -- xcframework-vt > /dev/null 2>&1; then
+  env -u CARGO_TARGET_DIR cargo run -q -p xtask -- xcframework-vt 2>&1 | tail -20 | sed 's/^/    /'
   red "xtask xcframework-vt failed"
 fi
 echo "    ok      $BUNDLE"

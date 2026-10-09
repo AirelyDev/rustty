@@ -221,7 +221,7 @@ ci_scope_table() {
       out) printf '  %-12s scoped out — %s\n' "${GS_ID[$i]}" "${GS_NOTE[$i]}" ;;
       skip) printf '  %-12s skipped by --fast\n' "${GS_ID[$i]}" ;;
       *) if [ "${GS_NARROWED[$i]}" = 1 ]; then
-           printf '  %-12s narrowed — %s%s%s\n' "${GS_ID[$i]}" "${GS_NOTE[$i]}" "${GS_ENV[$i]:+ (${GS_ENV[$i]%%=*})}" "${GS_ARGS[$i]:+ (args: ${GS_ARGS[$i]})}"
+           printf '  %-12s narrowed — %s%s\n' "${GS_ID[$i]}" "${GS_NOTE[$i]}" "${GS_ARGS[$i]:+ (args: ${GS_ARGS[$i]})}"
          else printf '  %-12s full run%s\n' "${GS_ID[$i]}" "${GS_NOTE[$i]:+ — ${GS_NOTE[$i]}}"; fi ;;
     esac
   done
@@ -332,7 +332,7 @@ ci_plan() {
   local entry gid gkind gres gtraits grun n=0 phase i k nsh
   GS_ID=(); GS_KIND=(); GS_RES=(); GS_TRAITS=(); GS_RUN=(); GS_CAT=(); GS_TEXT=()
   GS_NARROWED=(); GS_NOTE=(); GS_ENV=(); GS_ARGS=(); GS_LEFT=(); GS_T0=(); GS_RCS=(); GS_STATE=()
-  GS_UNITS=(); GS_UNITLIST=()
+  GS_UNITS=(); GS_UNITLIST=(); GS_MUTEX=(); GS_AFTER=()
   CI_ORDER=()
   for entry in "${GATE_REGISTRY[@]}"; do
     IFS='|' read -r gid gkind gres gtraits grun <<< "$entry"
@@ -341,6 +341,9 @@ ci_plan() {
     GS_ID[$n]="$gid"; GS_KIND[$n]="$gkind"; GS_RES[$n]="$gres"; GS_TRAITS[$n]="$gtraits"; GS_RUN[$n]="$grun"
     GS_NARROWED[$n]=0; GS_NOTE[$n]=""; GS_ENV[$n]=""; GS_ARGS[$n]=""; GS_LEFT[$n]=0; GS_RCS[$n]=""; GS_STATE[$n]=pending
     GS_UNITS[$n]=0; GS_UNITLIST[$n]=""
+    # Computed once here: the poll loop then needs no subshell per check.
+    GS_MUTEX[$n]=" $(trait_mutex "$gtraits" | tr '\n' ' ')"
+    GS_AFTER[$n]="$(printf '%s' "$gtraits" | tr ',' '\n' | sed -n 's/^after=//p' | tr '\n' ' ')"
     n=$((n + 1))
   done
   for phase in HARD PROGRESS; do
@@ -410,6 +413,7 @@ ci_unit_launch() {
   local u="$1" i log rcf
   i="${U_GATE[$u]}"
   log="$CI_RUN_DIR/logs/$(printf '%s' "${U_LABEL[$u]}" | tr '/[]' '___').log"; rcf="$log.rc"
+  U_RCF[$u]="$rcf"
   : > "$log"; : > "$rcf"   # an EMPTY .rc means running (no stale rc from a past run)
   # The inner subshell: even a runner that calls `exit` leaves the .rc file.
   ( ( ci_unit_exec "$u" ) > "$log" 2>&1 < /dev/null; echo $? > "$rcf.tmp"; mv -f "$rcf.tmp" "$rcf" ) &
@@ -417,20 +421,19 @@ ci_unit_launch() {
   [ "${GS_STATE[$i]}" = pending ] && { GS_STATE[$i]=running; GS_T0[$i]=${U_T0[$u]}; }
 }
 ci_unit_ready() {  # 0 when unit U may start now
-  local u="$1" i v m o j dep di
+  local u="$1" i v o j dep di
   i="${U_GATE[$u]}"
-  for dep in $(printf '%s' "${GS_TRAITS[$i]}" | tr ',' '\n' | sed -n 's/^after=//p'); do
+  for dep in ${GS_AFTER[$i]}; do
     for di in ${CI_ORDER[@]+"${CI_ORDER[@]}"}; do
       [ "${GS_ID[$di]}" = "$dep" ] || continue
       case "${GS_STATE[$di]}" in done|skip|out) ;; *) return 1 ;; esac
     done
   done
-  m="$(trait_mutex "${GS_TRAITS[$i]}")"
-  [ -n "$m" ] || return 0
+  [ "${GS_MUTEX[$i]}" != " " ] || return 0
   for o in ${CI_RUNNING[@]+"${CI_RUNNING[@]}"}; do
     j="${U_GATE[$o]}"; [ "$j" = "$i" ] && continue
-    for v in $(trait_mutex "${GS_TRAITS[$j]}"); do
-      printf '%s\n' "$m" | grep -qxF -- "$v" && return 1
+    for v in ${GS_MUTEX[$j]}; do
+      case "${GS_MUTEX[$i]} " in *" $v "*) return 1 ;; esac
     done
   done
   return 0
@@ -475,7 +478,8 @@ ci_gate_finish() {  # print gate I whole, classify it, record timings, prune
 }
 ci_run_parallel() {
   local u i nrun nheavy progressed rcv fg
-  CI_RUNNING=(); U_RC=(); U_END=()
+  CI_RUNNING=(); U_RC=(); U_END=(); U_RCF=()
+  local scan=1 last_scan=0
   # --fast / --changed-since lines first, in order: they run nothing.
   for i in ${CI_ORDER[@]+"${CI_ORDER[@]}"}; do
     case "${GS_STATE[$i]}" in
@@ -489,8 +493,7 @@ ci_run_parallel() {
     progressed=0
     local -a still=()
     for u in ${CI_RUNNING[@]+"${CI_RUNNING[@]}"}; do
-      local rcf
-      rcf="$CI_RUN_DIR/logs/$(printf '%s' "${U_LABEL[$u]}" | tr '/[]' '___').log.rc"
+      local rcf="${U_RCF[$u]}"
       if [ -s "$rcf" ]; then
         wait "${U_PID[$u]}" 2>/dev/null
         rcv="$(cat "$rcf")"; case "$rcv" in ''|*[!0-9]*) rcv=2 ;; esac
@@ -505,7 +508,12 @@ ci_run_parallel() {
       fi
     done
     CI_RUNNING=(${still[@]+"${still[@]}"})
-    # launch
+    # launch: only when a slot may have opened (a unit ended, or the first
+    # pass), or every 5 s for the free-disk condition on heavy gates.
+    [ "$progressed" -eq 1 ] && scan=1
+    [ $(( SECONDS - last_scan )) -ge 5 ] && scan=1
+    if [ "$scan" -eq 0 ]; then sleep "$CI_POLL"; continue; fi
+    scan=0; last_scan=$SECONDS; fg=""
     nrun=${#CI_RUNNING[@]}
     nheavy=0
     for u in ${CI_RUNNING[@]+"${CI_RUNNING[@]}"}; do [ "${GS_RES[${U_GATE[$u]}]}" = heavy ] && nheavy=$((nheavy + 1)); done
@@ -519,7 +527,7 @@ ci_run_parallel() {
           if [ "${GS_RES[$i]}" = heavy ]; then
             if [ "$nheavy" -ge "$CI_HEAVY_CAP" ]; then u=$((u + 1)); continue; fi
             if [ "$nheavy" -gt 0 ]; then
-              fg="$(ci_free_gb "$ROOT")"
+              [ -n "$fg" ] || fg="$(ci_free_gb "$ROOT")"
               if [ -n "$fg" ] && [ "$fg" -lt "$CI_MIN_FREE_GB" ]; then u=$((u + 1)); continue; fi
             fi
           fi

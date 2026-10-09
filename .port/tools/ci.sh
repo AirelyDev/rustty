@@ -1323,6 +1323,12 @@ GATE_REGISTRY=(
   # written correctly before T2: the parameter was the closed enum, so the call
   # was UB and there was no defined answer to assert.
   "D11r|HARD|light|tgt|sh $GATES/check_closed_enum_abi_runtime.sh"
+  # G-TGTDIR (P8 CI speed-up, controller input) — the gates work under a
+  # non-default CARGO_TARGET_DIR: no registered gate or example/*/build.sh
+  # reads a literal target/<profile> artifact (ALLOWED rows aside), G-LINT
+  # skips every target root, and D11r, A5, G-ABISCHEMA and example/c-vt pass
+  # with CARGO_TARGET_DIR elsewhere; each arm with a negative control.
+  "G-TGTDIR|HARD|heavy|tgt,dir=tgtdir|bash $GATES/check_target_dir.sh"
   # A3 — the rustty-embed.h product-umbrella ABI gate (rebrand Task 4; formerly
   # the ghostty.h byte-freeze). Asserts include/rustty-embed.h is EXACTLY
   # ghostty's upstream include/ghostty.h (read from the pinned $ORACLE_HEADER_PATH

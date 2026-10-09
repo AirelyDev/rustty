@@ -17,6 +17,9 @@ SDK="$(xcrun --show-sdk-path 2>/dev/null || true)"
 # no-op rebuild costs a fraction of a second. Identical change in all 23
 # example/*/build.sh.
 ( cd "$root" && cargo build -p rustty-vt-c --release --features "identity-oracle simd" >/dev/null )
+# The library cargo just built, wherever CARGO_TARGET_DIR put it: cargo
+# metadata's target_directory, never a literal "$root/target".
+rel="$(cd "$root" && cargo metadata --no-deps --format-version 1 --offline | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')/release"
 out="${TMPDIR:-/tmp}/$(basename "$here")"
-"$CC" ${SDK:+-isysroot "$SDK"} -Wall -I"$root/include" -L"$root/target/release" -lrustty_vt_c "$here"/src/*.c -o "$out"
-DYLD_LIBRARY_PATH="$root/target/release" LD_LIBRARY_PATH="$root/target/release" "$out"
+"$CC" ${SDK:+-isysroot "$SDK"} -Wall -I"$root/include" -L"$rel" -lrustty_vt_c "$here"/src/*.c -o "$out"
+DYLD_LIBRARY_PATH="$rel" LD_LIBRARY_PATH="$rel" "$out"
