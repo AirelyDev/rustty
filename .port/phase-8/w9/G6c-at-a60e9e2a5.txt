@@ -1,0 +1,18 @@
+Lane: G6c
+Command: CARGO_TARGET_DIR=<worktree>/target-g6c bash .port/tools/gates/check_leaks.sh --debug-assertions-off
+Host: Gaels-MacBook-Pro.local (Mac, aarch64-apple-darwin)
+Base: c8a55c96c Merge P8-W9 T2 (VM lanes): evidence at a60e9e2a5; rvm Linux/GTK/REL/examples/esctest/ASan/LSan/Valgrind GREEN, RED MSan/HWASan/TSan (N620-N622), V26 (N625 flaky)
+Start (UTC): 2026-10-09T15:14:28Z
+End (UTC): 2026-10-09T15:55:06Z
+Wall: 2403s test phase (~40 min total incl. build)
+rc: 0
+Verdict: G6c GREEN
+--- full log ---
+=== G6c [rustty-vt] :: Miri via nextest, -C debug-assertions=off ===
+    126 test(s), derived from the cfg_attr(all(miri, debug_assertions)) annotations
+    126 test path(s) from 126 annotated name(s)
+    [rustty-vt] Miri Stacked Borrows, debug assertions off, 8 processes, MIRIFLAGS='-Zmiri-disable-isolation', RUSTFLAGS='-C debug-assertions=off'
+    filterset: test(=search::screen::tests::feed_after_complete_discovers_prepended_history_pages) | test(=search::pagelist::tests::feed_iteratively_through_multiple_matches)  ... (11488 chars)
+    [rustty-vt] 2403s
+    Summary [2355.940s] 126 tests run: 126 passed (73 slow), 3259 skipped
+G6c GREEN (2403s; debug assertions off, UB/leak-clean, non-vacuous)
