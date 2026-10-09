@@ -1135,6 +1135,56 @@ mod tests {
             .collect()
     }
 
+    /// Counts the uniform buffers in SPIR-V words the way SPIRV-Cross reflects
+    /// `SPVC_RESOURCE_TYPE_UNIFORM_BUFFER`: every `OpVariable` (59) in the
+    /// `Uniform` storage class (2) whose pointee type, through any `OpTypeArray`
+    /// (28) or `OpTypeRuntimeArray` (29), is a struct decorated `Block` (`OpDecorate`
+    /// (71) with decoration 2). A `BufferBlock` (3) struct is a storage buffer to
+    /// SPIRV-Cross, so it is not counted.
+    fn spirv_uniform_buffer_count(spv: &[u8]) -> usize {
+        assert_eq!(spv.len() % 4, 0, "SPIR-V is a sequence of 32-bit words");
+        let words: Vec<u32> = spv
+            .chunks_exact(4)
+            .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+            .collect();
+        assert_eq!(words[0], 0x0723_0203, "SPIR-V magic number");
+        let mut blocks = std::collections::BTreeSet::new();
+        let mut pointees: std::collections::BTreeMap<u32, u32> = Default::default();
+        let mut elements: std::collections::BTreeMap<u32, u32> = Default::default();
+        let mut uniform_vars = Vec::new();
+        let mut i = 5; // past the five-word header
+        while i < words.len() {
+            let count = (words[i] >> 16) as usize;
+            let opcode = words[i] & 0xffff;
+            assert!(count > 0, "malformed SPIR-V instruction at word {i}");
+            let ops = &words[i + 1..i + count];
+            match opcode {
+                71 if ops[1] == 2 => {
+                    blocks.insert(ops[0]);
+                }
+                28 | 29 => {
+                    elements.insert(ops[0], ops[1]);
+                }
+                32 => {
+                    pointees.insert(ops[0], ops[2]);
+                }
+                59 if ops[2] == 2 => uniform_vars.push(ops[0]),
+                _ => {}
+            }
+            i += count;
+        }
+        uniform_vars
+            .iter()
+            .filter(|pointer| {
+                let mut id = pointees[pointer];
+                while let Some(&element) = elements.get(&id) {
+                    id = element;
+                }
+                blocks.contains(&id)
+            })
+            .count()
+    }
+
     /// Upstream `custom shader selection uniform layout matches compiled GLSL`
     /// (`80456f057`): the two selection colours sit at the std140 offsets glslang
     /// assigns `iSelectionForegroundColor` / `iSelectionBackgroundColor`.
@@ -1148,6 +1198,7 @@ mod tests {
         );
         let mut spv = Vec::new();
         spirv_from_glsl(&mut spv, None, &src).expect("the prefix compiles");
+        assert_eq!(1, spirv_uniform_buffer_count(&spv));
         let members = spirv_block_member_offsets(&spv, "Globals");
 
         for (field, name) in [
