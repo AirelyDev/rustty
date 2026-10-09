@@ -105,9 +105,13 @@ fi
 # set on both: the library's defined, exported symbols, filtered to `rustty_*`
 # in arm (b). Any other host is unverified, so arm (b), and arm (d) with it,
 # is BLOCKED there (exit 3), never a pass.
+# The target dir is cargo's own (CARGO_TARGET_DIR honoured): _target_dir.sh.
+# shellcheck source=.port/tools/gates/_target_dir.sh
+. "$(dirname "$0")/_target_dir.sh"
+TDIR="$(rustty_target_dir "$(cd "$(dirname "$0")/../../.." && pwd)")"
 case "$(uname -s)" in
-  Darwin) lib=target/release/librustty_vt_c.dylib ;;
-  Linux|FreeBSD) lib=target/release/librustty_vt_c.so ;;
+  Darwin) lib="$TDIR/release/librustty_vt_c.dylib" ;;
+  Linux|FreeBSD) lib="$TDIR/release/librustty_vt_c.so" ;;
   *) lib="" ;;
 esac
 # native_exports: the native library's defined, exported symbol names, one per
@@ -363,7 +367,7 @@ if [ ! -s "$T/vt_native_exp.txt" ]; then
   exit 1
 fi
 grep -rhoE 'rustty_[a-z0-9_]+' include/rustty/vt.h include/rustty/vt | sort -u > "$T/vt_decl.txt"
-wasm=target/wasm32-unknown-unknown/release/rustty_vt_c.wasm
+wasm="$TDIR/wasm32-unknown-unknown/release/rustty_vt_c.wasm"
 { cat "$T/vt_native_exp.txt"; \
   node -e 'const{readFileSync}=require("fs");WebAssembly.compile(readFileSync(process.argv[1])).then(m=>WebAssembly.Module.exports(m).forEach(e=>console.log(e.name)))' "$wasm"; \
 } | grep '^rustty_' | sort -u > "$T/vt_exp.txt"

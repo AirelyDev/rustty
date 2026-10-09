@@ -71,7 +71,11 @@ if ! cargo build -p rustty-vt-c --quiet; then
   exit 1
 fi
 DYLIB=""
-for cand in target/debug/librustty_vt_c.dylib target/debug/librustty_vt_c.so; do
+# The artifact cargo just built, wherever CARGO_TARGET_DIR put it.
+# shellcheck source=.port/tools/gates/_target_dir.sh
+. "$(dirname "$0")/_target_dir.sh"
+TDIR="$(rustty_target_dir "$(pwd)")"
+for cand in "$TDIR/debug/librustty_vt_c.dylib" "$TDIR/debug/librustty_vt_c.so"; do
   [ -f "$cand" ] && DYLIB="$cand" && break
 done
 if [ -z "$DYLIB" ]; then

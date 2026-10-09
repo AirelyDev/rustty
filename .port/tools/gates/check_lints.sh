@@ -53,6 +53,32 @@ skip()  { echo "  skipped $1 ($2)"; SKIPPED="$SKIPPED $1"; }
 # cannot parse zsh at all (it silently analyses them as bash and invents
 # findings); they are listed in the summary so the exclusion is never silent.
 # ---------------------------------------------------------------------------
+# Cargo target roots are build output, never linted. Only real roots are
+# skipped, each anchored at the checkout root: ./target, per-lane ./target-*/,
+# any dir holding cargo's CACHEDIR.TAG (a nested harness's target/), and
+# CARGO_TARGET_DIR (cargo's own target_directory, _target_dir.sh) when it lies
+# inside the tree. A source dir that merely is NAMED target is still linted.
+# shellcheck source=.port/tools/gates/_target_dir.sh
+. "$ROOT/.port/tools/gates/_target_dir.sh"
+# Compared physically (`pwd -P`): a //, a symlinked /var or /tmp, or a relative
+# CARGO_TARGET_DIR must not hide that the dir is inside the tree.
+TARGET_REL=""
+_tdir="$(rustty_target_dir "$ROOT")"
+_tdir="$(cd "$_tdir" 2>/dev/null && pwd -P || printf '%s' "$_tdir")"
+_root="$(cd "$ROOT" && pwd -P)"
+case "$_tdir" in "$_root"/*) TARGET_REL="${_tdir#"$_root"/}" ;; esac
+[ "$TARGET_REL" = target ] && TARGET_REL=""
+TARGET_ROOTS=()
+for _d in ./target ./target-*; do [ -d "$_d" ] && TARGET_ROOTS+=("${_d#./}"); done
+while IFS= read -r _t; do
+  [ -n "$_t" ] && TARGET_ROOTS+=("$(dirname "${_t#./}")")
+done < <(cd "$ROOT" && find . \( -path ./.git -o -path ./target -o -path './target-*' \) -prune -o -name CACHEDIR.TAG -print 2>/dev/null)
+[ -n "$TARGET_REL" ] && TARGET_ROOTS+=("$TARGET_REL")
+TGT_FIND=(); TGT_PRETTIER=(); TGT_TYPOS=()
+for _r in ${TARGET_ROOTS[@]+"${TARGET_ROOTS[@]}"}; do
+  TGT_FIND+=(! -path "./$_r/*"); TGT_PRETTIER+=("!$_r/**"); TGT_TYPOS+=(--exclude "/$_r/")
+done
+
 run_shellcheck() {
   want shellcheck || return 0
   if ! command -v shellcheck >/dev/null 2>&1; then
@@ -69,7 +95,8 @@ run_shellcheck() {
   # reports, run logs and the throwaway scripts that drove long runs); it is
   # never in a CI checkout, so linting it only reports local scratch files.
   find . \( -name '*.sh' -o -name '*.bash' \) -type f \
-    ! -path './target/*' ! -path './zig-out/*' ! -path './macos/build/*' \
+    ${TGT_FIND[@]+"${TGT_FIND[@]}"} \
+    ! -path './zig-out/*' ! -path './macos/build/*' \
     ! -path './.git/*' ! -path '*/vendor/*' ! -path './build-cmake/*' \
     ! -path './.claude/*' ! -path './.superpowers/*' \
     | sort > "$list"
@@ -123,7 +150,9 @@ run_prettier() {
     skip prettier "no prettier and no npx"; return 0
   fi
   local out rc
-  out="$("${cmd[@]}" --check . 2>&1)"; rc=$?
+  # Negated file globs (prettier reads --ignore-path patterns relative to the
+  # ignore file, so a temporary ignore file would match nothing).
+  out="$("${cmd[@]}" --check . ${TGT_PRETTIER[@]+"${TGT_PRETTIER[@]}"} 2>&1)"; rc=$?
   if [ $rc -eq 0 ]; then
     pass "prettier"
   else
@@ -141,7 +170,7 @@ run_typos() {
     skip typos "not installed (brew install typos-cli)"; return 0
   fi
   local out rc
-  out="$(typos 2>&1)"; rc=$?
+  out="$(typos ${TGT_TYPOS[@]+"${TGT_TYPOS[@]}"} 2>&1)"; rc=$?
   if [ $rc -eq 0 ]; then pass typos; else printf '%s\n' "$out" | sed 's/^/          /'; fail typos; fi
 }
 

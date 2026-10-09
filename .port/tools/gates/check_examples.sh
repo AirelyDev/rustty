@@ -152,7 +152,11 @@ else
   # Rebuild the framework unconditionally, for the reason WS19 T16 gave for the
   # example build.sh scripts: a stale dist/rustty-vt.xcframework would let this
   # lane link an XCFramework built from different sources and report green.
-  if ! (cd "$ROOT" && cargo run -q -p xtask -- xcframework-vt) > "$WORK/xcf-vt.log" 2>&1; then
+  # xtask builds with cargo but resolves the archives it folds in under
+  # <root>/target (xtask/src/main.rs `build_root`), so it runs in the DEFAULT
+  # target dir whatever CARGO_TARGET_DIR the caller set (the check_perf_fence.sh
+  # precedent); otherwise its archive check fails on cargo's own output.
+  if ! (cd "$ROOT" && env -u CARGO_TARGET_DIR cargo run -q -p xtask -- xcframework-vt) > "$WORK/xcf-vt.log" 2>&1; then
     tail -20 "$WORK/xcf-vt.log" | sed 's/^/          /'
     bad "swift-vt-xcframework (xtask xcframework-vt failed)"
   elif ! (cd "$swiftdir" && swift build) > "$WORK/swift.log" 2>&1; then
