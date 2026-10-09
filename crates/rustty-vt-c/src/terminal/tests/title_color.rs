@@ -1095,6 +1095,9 @@ fn set_color_sets_dirty_flag() {
     ignore = "SkipZigTest: needs the glyph-protocol vt feature (R14)"
 )]
 fn set_glyph_protocol_disables_apc_handling_and_clears_glossary() {
+    // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+    // warnings cannot land in another test's log sink.
+    let _guard = crate::sys::tests::reset_global();
     // if (comptime !build_options.glyph_protocol) return error.SkipZigTest;
     with_test_allocator(|alloc| {
         // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));

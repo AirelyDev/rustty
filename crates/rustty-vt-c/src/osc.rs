@@ -986,6 +986,9 @@ mod tests {
     // allocator and is truncated at the limit.
     #[test]
     fn osc_set_clears_the_command_and_checks_the_option() {
+        // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+        // warnings cannot land in another test's log sink.
+        let _guard = crate::sys::tests::reset_global();
         let mut p: OscParser = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(None, &mut p) });
         let max_bytes: usize = 8;
@@ -1388,6 +1391,9 @@ mod tests {
     // empty list, kitty warn-and-continue), and every byte comes back.
     #[test]
     fn osc_allocation_failure_sweep_through_the_c_api() {
+        // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+        // warnings cannot land in another test's log sink.
+        let _guard = crate::sys::tests::reset_global();
         use rustty_vt::alloc::testing::{Config, FailingAllocator};
 
         let mut n = 0usize;
