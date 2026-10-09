@@ -2547,7 +2547,7 @@ mod tests {
         ignore = "MIRI EXCEPTION (rustty-vt-c, parity tail C-1): intractable under Miri, two full pages of scrollback written through the terminal; measured past a 20-minute bound; runs natively and under ASan (see MIRI_EXCEPTIONS.md)"
     )]
     fn search_feed_and_run_report_out_of_memory_instead_of_spinning() {
-        // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+        // N541: this test reaches `sys::log_fn`; hold the sys guard so its
         // warnings cannot land in another test's log sink.
         let _guard = crate::sys::tests::reset_global();
         let failing = FailingAllocator::over_heap(Config::default());
@@ -2688,7 +2688,7 @@ mod tests {
     // refuses the r-th remap instead; its fallback allocates, so nothing fails.
     #[test]
     fn search_allocation_failure_sweep_through_the_c_api() {
-        // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+        // N541: this test reaches `sys::log_fn`; hold the sys guard so its
         // warnings cannot land in another test's log sink.
         let _guard = crate::sys::tests::reset_global();
         with_test_allocator(|talloc| unsafe {
@@ -2773,7 +2773,7 @@ mod tests {
     // own state. The same checks hold, and the terminal frees every byte.
     #[test]
     fn search_shared_allocator_failure_sweep_through_the_c_api() {
-        // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+        // N541: this test reaches `sys::log_fn`; hold the sys guard so its
         // warnings cannot land in another test's log sink.
         let _guard = crate::sys::tests::reset_global();
         let failing = FailingAllocator::over_heap(Config::default());

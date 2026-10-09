@@ -107,7 +107,7 @@ impl Link {
         //     null,
         // );
         //
-        // PORT NOTE (P8-W9 FX4, NEW-FINDINGS N622; the N102 precedent in
+        // PORT NOTE (P8-W9 FX4, NEW-FINDINGS N540; the N102 precedent in
         // rustty-vt's `tmux::control`): `oni.Regex.init` -> `onig_new`
         // initializes Oniguruma's process-global tables LAZILY when nothing has
         // (`onig_reg_init` reads `onig_inited`, then runs `onig_initialize`),

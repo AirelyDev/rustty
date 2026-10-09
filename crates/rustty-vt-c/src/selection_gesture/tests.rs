@@ -1290,7 +1290,7 @@ fn event_set_behaviors_rejects_out_of_range_c_values() {
 // failing index through `out_written`.
 #[test]
 fn get_multi_rejects_out_of_range_c_keys() {
-    // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+    // N541: this test reaches `sys::log_fn`; hold the sys guard so its
     // warnings cannot land in another test's log sink.
     let _guard = crate::sys::tests::reset_global();
     const C_INVALID_VALUE: c_int = -2;

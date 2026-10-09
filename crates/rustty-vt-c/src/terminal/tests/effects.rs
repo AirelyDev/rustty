@@ -2098,7 +2098,7 @@ fn set_semantic_prompt_callback() {
 // test "set reset callback"
 #[test]
 fn set_reset_callback() {
-    // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+    // N541: this test reaches `sys::log_fn`; hold the sys guard so its
     // warnings cannot land in another test's log sink.
     let _guard = crate::sys::tests::reset_global();
     static mut COUNT: usize = 0;
@@ -2152,7 +2152,7 @@ fn set_reset_callback() {
 // test "set unknown_sequence callback"
 #[test]
 fn set_unknown_sequence_callback() {
-    // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+    // N541: this test reaches `sys::log_fn`; hold the sys guard so its
     // warnings cannot land in another test's log sink.
     let _guard = crate::sys::tests::reset_global();
     static mut COUNT: usize = 0;

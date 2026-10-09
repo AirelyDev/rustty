@@ -1,3 +1,4 @@
+ids in this capture are provisional; see .port/phase-8/README.md id mapping
 # P8-W9 T2 lane ci-sh-rvm-polluted-clone at a60e9e2a5 (head 1d22ba80d)
 host: rvm (Fedora aarch64), clone /home/gael/projects/rustty-p8w9t2 (git archive 1d22ba80d plus .port and docs/superpowers copied from the worktree, since .gitattributes export-ignores them)
 ### CMD: env RUSTTY_VALGRIND_OWN_JOB=run separately as G-VALGRIND shards by the runner bash .port/tools/ci.sh

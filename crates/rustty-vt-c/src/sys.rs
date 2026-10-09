@@ -506,7 +506,7 @@ impl core::fmt::Write for LogEmitter<'_> {
 // takes the runtime level, the scope name, and the already-formatted message
 // (`core::fmt::Arguments`), reproducing the same chunked dispatch.
 pub fn log_fn(level: StdLevel, scope: &str, args: core::fmt::Arguments) {
-    // TEST-ONLY isolation invariant (N625, P8-W9 FX5): the sink is
+    // TEST-ONLY isolation invariant (N541, P8-W9 FX5): the sink is
     // process-global, so a test that emits here without holding the
     // `tests::reset_global()` guard can land in another test's scoped-log
     // capture (or its exact call count) and flake it. Fail the emitting test
@@ -917,7 +917,7 @@ pub(crate) mod tests {
         }
     }
 
-    // N625 (P8-W9 FX5): every test that can reach `log_fn` (directly, or
+    // N541 (P8-W9 FX5): every test that can reach `log_fn` (directly, or
     // through the `log` facade from the crates below) must hold the guard, not
     // only the tests that install a sink: a test that merely EMITS while
     // another test's sink is installed lands in that test's capture. The
@@ -952,7 +952,7 @@ pub(crate) mod tests {
             HOLDS_GLOBAL_GUARD.with(|h| h.get()),
             "log_fn reached without crate::sys::tests::reset_global() held \
              (scope {scope:?}, message {args:?}); take the guard at the top of \
-             this test so it cannot land in another test's log sink (N625)"
+             this test so it cannot land in another test's log sink (N541)"
         );
     }
 

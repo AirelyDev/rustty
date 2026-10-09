@@ -1,3 +1,4 @@
+ids in this capture are provisional; see .port/phase-8/README.md id mapping
 # P8-W9 FX4 G-SAN-SELF
 host: rvm (Fedora 44 aarch64), clone /home/gael/projects/rustty-p8w9fx4 (git archive of phase-8/w9fx4 plus .port and docs/superpowers); rvm clock about 77 min behind the Mac
 ### CMD: bash .port/tools/gates/sanitizers.sh --self-test

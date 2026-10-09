@@ -1,3 +1,4 @@
+ids in this capture are provisional; see .port/phase-8/README.md id mapping
 # P8-W9 T2 re-audit at a60e9e2a5 (Task 41 step 3 scope: the 41 upstream files changed in 12752b2ac..a60e9e2a5 under src/terminal, src/terminal/c, src/renderer, include/ghostty/vt)
 Method: workflow p8-reaudit (run wf_7aea2c7c-a33), 5 read-only finder shards (vt-c-api, osc-parser, stream-terminal, screen-pages, renderer) comparing each upstream hunk against the Rustty port at 1d22ba80d, plus an adversarial verifier per shard with findings (default REFUTED).
 Result: 1 CONFIRMED low finding (N605, provisional); 4 shards with 0 findings.

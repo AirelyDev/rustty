@@ -137,11 +137,13 @@ rebuilt at the pin; leg B 25 identical), G-REFGEOM, G-EOL, G-I18N, G-THEMES (657
 G-PARITY, G7, G9 (777 / 777), G-P2, G-ORACLE-SH-SELF, G-SKIP, G-ESCTEST (567 tests, identical) and
 the whole post-merge set are GREEN. P8-W9 T1a (N531) regenerated `rustty-extra`'s generated-file
 goldens for P8-W3 T2's two config keys and quoted three reference comments in translated doc examples
-verbatim, which turned G3b and `cargo test -p rustty-extra` GREEN. Nothing is owed before the merge to
-`main`.
+verbatim, which turned G3b and `cargo test -p rustty-extra` GREEN. The long lanes that followed (P8-W9 T2,
+FX1–FX7) and what is still owed before the merge to `main` are in `.port/phase-8/README.md`
+(§"Validation: long lanes", §"Owed before the merge to `main`").
 
-The phase fixed and documented 1 reference defect (UD378) and opened 15 port findings (N517–N531):
-all closed except the record-only N519, N520 and N522. The targeted cross-host checks passed:
+The phase fixed and documented 1 reference defect (UD378) and opened 27 port findings (N517–N543):
+all closed except the record-only N519, N520 and N522 and the open N543 (G6t over `rustty-core` not yet
+run to completion). The targeted cross-host checks passed:
 
 - rvm: the GTK-feature workspace clippy, `cargo test -p` for the 18 touched packages (`rustty-extra`
   after T1a, re-checked on the Mac), the env-gated no-EGL App test and 18 live GTK KATs;

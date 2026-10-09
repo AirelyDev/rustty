@@ -1850,7 +1850,7 @@ mod tests {
     // test "snapshot decoder retains every supported continuation class"
     #[test]
     fn snapshot_decoder_retains_every_supported_continuation_class() {
-        // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+        // N541: this test reaches `sys::log_fn`; hold the sys guard so its
         // warnings cannot land in another test's log sink.
         let _guard = crate::sys::tests::reset_global();
         struct Case {

@@ -1,3 +1,4 @@
+ids in this capture are provisional; see .port/phase-8/README.md id mapping
 # P8-W9 T2 lane V26 (Windows full workspace) at a60e9e2a5 (head 1d22ba80d)
 host: rwin (Windows 11 ARM64, x64 binaries under emulation) at 192.168.65.3 (the ssh alias still pointed at the old 192.168.64.5; used the IP directly, config untouched)
 clone: C:\Users\gael\projects\rustty-p8w9t2 (git archive 1d22ba80d + .port + docs/superpowers; no .git at first)

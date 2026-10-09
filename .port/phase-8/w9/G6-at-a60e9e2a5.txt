@@ -1,3 +1,4 @@
+ids in this capture are provisional; see .port/phase-8/README.md id mapping
 G6 (Miri Stacked Borrows + ASan FFI crates) at a60e9e2a5 (branch head 1d22ba80d)
 host: Mac (aarch64-apple-darwin), worktree .claude/worktrees/p8-w9t2m
 VERDICT: RED (N600 rustty-bench, N601 rustty-vt timeout). All other gated crates GREEN.

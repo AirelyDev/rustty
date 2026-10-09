@@ -1,3 +1,4 @@
+ids in this capture are provisional; see .port/phase-8/README.md id mapping
 Lane: G6c
 Command: CARGO_TARGET_DIR=<worktree>/target-g6c bash .port/tools/gates/check_leaks.sh --debug-assertions-off
 Host: Gaels-MacBook-Pro.local (Mac, aarch64-apple-darwin)

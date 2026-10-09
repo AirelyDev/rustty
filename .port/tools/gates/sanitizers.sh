@@ -216,10 +216,10 @@ MSAN_SKIPS=(
   "rustty-renderer|opengl::pipeline::|the framebuffer/vertex-array teardown test in an offscreen GL context (M3)"
   "rustty-renderer|opengl::target::|render-target and dmabuf export tests on the offscreen EGL context (M3)"
   "rustty-renderer|shadertoy::|custom-shader translation through glslang and spirv-cross, whose glslang preprocessor reads libstdc++-constructed stream state (M2)"
-  "rustty-core|app::test_runtime::app_init_creates_and_deinit_frees_the_render_device|App::init creates the app's render device (DeviceBox::init -> Device::init -> init_platform -> eglGetPlatformDisplay in the uninstrumented libEGL.so.1; G-MSAN rvm, P8-W9 T2: use-of-uninitialized-value, origin a malloc inside libEGL.so.1; NEW-FINDINGS N620) (M6)"
-  "rustty-core|app::test_runtime::app_create_and_destroy_empty|App::create runs App::init, which creates the render device through the same uninstrumented libEGL (N620) (M6)"
-  "rustty-core|app::device_tests::|Review Focus 4's two live surfaces on one App: App::create's render device plus each surface renderer's offscreen EGL context and draws in the uninstrumented libEGL/Mesa (N620) (M6)"
-  "rustty-core|surface_occlusion_callback_dedups_and_reports|the surface_visibility_kat integration test's TestSurface::build runs App::create, so it creates the render device through the same uninstrumented libEGL (eglGetPlatformDisplay/eglInitialize; reports in libEGL_mesa, libgallium and Mesa's driconf libexpat; N620) (M6)"
+  "rustty-core|app::test_runtime::app_init_creates_and_deinit_frees_the_render_device|App::init creates the app's render device (DeviceBox::init -> Device::init -> init_platform -> eglGetPlatformDisplay in the uninstrumented libEGL.so.1; G-MSAN rvm, P8-W9 T2: use-of-uninitialized-value, origin a malloc inside libEGL.so.1; NEW-FINDINGS N538) (M6)"
+  "rustty-core|app::test_runtime::app_create_and_destroy_empty|App::create runs App::init, which creates the render device through the same uninstrumented libEGL (N538) (M6)"
+  "rustty-core|app::device_tests::|Review Focus 4's two live surfaces on one App: App::create's render device plus each surface renderer's offscreen EGL context and draws in the uninstrumented libEGL/Mesa (N538) (M6)"
+  "rustty-core|surface_occlusion_callback_dedups_and_reports|the surface_visibility_kat integration test's TestSurface::build runs App::create, so it creates the render device through the same uninstrumented libEGL (eglGetPlatformDisplay/eglInitialize; reports in libEGL_mesa, libgallium and Mesa's driconf libexpat; N538) (M6)"
 )
 # G-TSAN's scope (P7-W17) is the design's allow-list of THREADED crates
 # (design §B, TSan row), not the workspace: a data race needs two threads, and
@@ -720,7 +720,7 @@ skips_unmatched() {
 # wrapper instruments only crates built with CARGO_CFG_SANITIZE, and it links
 # into a build script, never into a test binary. In one shared target dir that
 # host copy sits next to the target copy once a crate with that
-# build-dependency has run (P8-W9 FX4, NEW-FINDINGS N621).
+# build-dependency has run (P8-W9 FX4, NEW-FINDINGS N539).
 hwasan_archive_check() {
   local crate="$1" td="$2" tgt="${3:-$(host_target)}" a n=0 inst=0 bad="" ex="" e
   case "$crate" in *-sys) ;; *) return 0 ;; esac
@@ -1472,7 +1472,7 @@ RS
   # --- arm I: G-HWASAN's C-instrumentation check over fixture archives (any
   # host: plain cc/ar; an object that calls __hwasan_init stands for an
   # instrumented one). The fixtures sit under <td>/trip/debug/build, the
-  # instrumented target's build dir; <td>/debug/build is the host's (N621). ---
+  # instrumented target's build dir; <td>/debug/build is the host's (N539). ---
   local fx="$st/fx"
   mkdir -p "$fx/t/trip/debug/build/inst-sys-1/out" "$fx/t/trip/debug/build/plain-sys-1/out" "$fx/t/trip/debug/build/mixed-sys-1/out" "$fx/t/trip/debug/build/none-sys-1/out" "$fx/src" \
     "$fx/t/trip/debug/build/hostcopy-sys-1/out" "$fx/t/debug/build/hostcopy-sys-2/out" "$fx/t/trip/debug/build/tgtplain-sys-1/out" "$fx/t/debug/build/tgtplain-sys-2/out"
@@ -1483,7 +1483,7 @@ RS
     ar rcs "$fx/t/trip/debug/build/plain-sys-1/out/libplain.a" "$fx/src/p.o"
     ar rcs "$fx/t/trip/debug/build/mixed-sys-1/out/liba.a" "$fx/src/i.o"
     ar rcs "$fx/t/trip/debug/build/mixed-sys-1/out/libb.a" "$fx/src/p.o"
-    # N621: an instrumented target copy beside an uninstrumented HOST copy (a
+    # N539: an instrumented target copy beside an uninstrumented HOST copy (a
     # build-dependency's, e.g. rustty-cli's zlib-sys), and the reverse.
     ar rcs "$fx/t/trip/debug/build/hostcopy-sys-1/out/libz.a" "$fx/src/i.o"
     ar rcs "$fx/t/debug/build/hostcopy-sys-2/out/libz.a" "$fx/src/p.o"
@@ -1504,8 +1504,8 @@ RS
     ic "a listed exception whose archive IS instrumented is stale (RED)" 1 "the entry is stale" \
       "HWASAN_UNINSTRUMENTED=('inst-sys|fixture'); hwasan_archive_check inst-sys '$fx/t' trip"
     ic "a crate that is not -sys is not checked (no output)" 0 "" "hwasan_archive_check rustty-x '$fx/t' trip"
-    ic "N621: a host build-dependency's uninstrumented copy is not looked at" 0 "hostcopy-sys: 1 C archive(s), all instrumented" "hwasan_archive_check hostcopy-sys '$fx/t' trip"
-    ic "N621: an uninstrumented TARGET archive is RED although the host copy is instrumented" 1 "1 of 1 C archive(s) have no __hwasan_ reference (the cc wrapper was bypassed): trip/debug/build/tgtplain-sys-1/out/libz.a" "hwasan_archive_check tgtplain-sys '$fx/t' trip"
+    ic "N539: a host build-dependency's uninstrumented copy is not looked at" 0 "hostcopy-sys: 1 C archive(s), all instrumented" "hwasan_archive_check hostcopy-sys '$fx/t' trip"
+    ic "N539: an uninstrumented TARGET archive is RED although the host copy is instrumented" 1 "1 of 1 C archive(s) have no __hwasan_ reference (the cc wrapper was bypassed): trip/debug/build/tgtplain-sys-1/out/libz.a" "hwasan_archive_check tgtplain-sys '$fx/t' trip"
     ic "nothing built for the instrumented triple is RED" 1 "produced no lib\\*.a for other-trip" "hwasan_archive_check inst-sys '$fx/t' other-trip"
     # G-TSAN's check (tsan_archive_check): every archive built for the
     # instrumented target (<td>/<triple>/debug/build), whatever the package.

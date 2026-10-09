@@ -1,3 +1,4 @@
+ids in this capture are provisional; see .port/phase-8/README.md id mapping
 # P8-W9 FX4 diagnosis evidence (N620 MSan diag, N621 archive check, N622 TSan)
 host: rvm (Fedora 44 aarch64), clone /home/gael/projects/rustty-p8w9fx4; helper = sanitizers.sh --source-only + run_crate with a persistent target dir
 
