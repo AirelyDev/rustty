@@ -7,7 +7,7 @@ End (UTC): ~2026-10-09T20:13Z (stopped by runner, kill by explicit PID, Mac free
 Wall: ~4h59m
 rc: n/a (killed)
 Verdict: G6t RED (rustty-vt: 2 TB UB failures); rustty-vt-c, rustty-renderer, rustty-xev GREEN; rustty-core NOT COMPLETED (BLOCKED, not green)
-Per crate: rustty-vt SB-on 10627s RED (2 fail of the TB scope); rustty-vt G6c-annotated TB debug-assertions-off 121/121 passed 1643s; rustty-vt-c 586/586 1125s; rustty-renderer 65/65 224s; rustty-xev 22/22 4s; rustty-core started, unfinished
+Per crate: rustty-vt TB debug-assertions-on 10627s RED (2 failed); rustty-vt G6c-annotated TB debug-assertions-off 121/121 passed 1643s; rustty-vt-c 586/586 1125s; rustty-renderer 65/65 224s; rustty-xev 22/22 4s; rustty-core started, unfinished
 --- G6t log ---
 === G6t :: Miri Tree Borrows via nextest over: 
 rustty-vt:page rustty-vt:pagelist rustty-vt:search rustty-vt:render
