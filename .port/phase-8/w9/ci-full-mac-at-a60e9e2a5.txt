@@ -1,0 +1,22 @@
+full ci.sh (Mac) at a60e9e2a5 (branch head 1d22ba80d): BLOCKED (disk), NOT GREEN, NOT a code verdict
+command: bash .port/tools/ci.sh
+start 2026-10-09T08:28:48Z  stopped 2026-10-09T08:31:37Z by me (explicit PIDs 51384 83832 83833; earlier 83730/73231 had already exited)
+Reason: free disk on /Users/gael fell to 8.5 GiB (below the 12 GB stop line) 3 minutes in, while cargo test --workspace was running; worktree target was 9.9 GB.
+Steps that finished before the stop: fmt PASS, clippy PASS, build PASS, wasm check PASS. cargo test --workspace was interrupted (rc 143, caused by my kill, not a test failure). The gate rows after it (G7 PASS, G4 BLOCKED) are artifacts of the interruption and carry no verdict.
+No end-to-end wall time was obtainable.
+---- log lines ----
+### cargo fmt --check  (HARD-FAIL)
+>> PASS: cargo fmt --check
+### cargo clippy -D warnings  (HARD-FAIL)
+>> PASS: cargo clippy -D warnings
+### cargo build --workspace  (HARD-FAIL)
+>> PASS: cargo build --workspace
+### cargo check -p rustty-wasm --target wasm32-unknown-unknown  (HARD-FAIL)
+>> PASS: cargo check -p rustty-wasm --target wasm32-unknown-unknown
+### cargo test --workspace  (HARD-FAIL)
+>> FAIL (143): cargo test --workspace
+### gate G7  [HARD]  ->  bash /Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/.port/tools/gates/check_acyclic.sh
+>> PASS: G7
+### gate G4  [HARD]  ->  bash /Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/.port/tools/gates/run_differential.sh
+>> BLOCKED (3): G4 [pending contract/tooling — surfaced, not greened]
+### gate G4-uni  [HARD]  ->  bash /Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/.port/phase-0/harness/unicode/run_unicode_diff.sh

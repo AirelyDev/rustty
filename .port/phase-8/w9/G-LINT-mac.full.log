@@ -1,0 +1,55 @@
+=== G-LINT :: non-Rust linters ===
+          
+          In ./.port/phase-8/w9/g6-part2.sh line 2:
+          cd /Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m
+          ^-- SC2164 (warning): Use 'cd ... || exit' or 'cd ... || return' in case cd fails.
+          
+          Did you mean:
+          cd /Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m || exit
+          
+          
+          In ./.port/tools/cvt-parity.sh line 24:
+            for d in $(ls "$rootd/example" | grep -E '^(c|cpp)-vt'); do
+                       ^-- SC2010 (warning): Don't use ls | grep. Use a glob or a for loop with a condition to allow non-alphanumeric filenames.
+          
+          
+          In ./logs/g6p2.sh line 2:
+          cd /Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m
+          ^-- SC2164 (warning): Use 'cd ... || exit' or 'cd ... || return' in case cd fails.
+          
+          Did you mean:
+          cd /Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m || exit
+          
+          
+          In ./logs/lane.sh line 3:
+          cd /Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m
+          ^-- SC2164 (warning): Use 'cd ... || exit' or 'cd ... || return' in case cd fails.
+          
+          Did you mean:
+          cd /Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m || exit
+          
+          
+          In ./logs/rec.sh line 3:
+          cd /Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m
+          ^-- SC2164 (warning): Use 'cd ... || exit' or 'cd ... || return' in case cd fails.
+          
+          Did you mean:
+          cd /Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m || exit
+          
+          For more information:
+            https://www.shellcheck.net/wiki/SC2010 -- Don't use ls | grep. Use a glob o...
+            https://www.shellcheck.net/wiki/SC2164 -- Use 'cd ... || exit' or 'cd ... |...
+  FAIL    shellcheck (157 files)
+          Checking formatting...
+          [warn] docs/parity-audit/src-renderer.md
+          [warn] docs/parity-audit/src.md
+          [warn] docs/superpowers/plans/2026-10-07-phase8-upstream-resync.md
+          [warn] Code style issues found in 3 files. Run Prettier with --write to fix.
+  FAIL    prettier
+  ok      typos
+  ok      swiftlint
+  skipped alejandra (not installed)
+  skipped pinact (no GITHUB_TOKEN (would rate-limit))
+  ok      actionlint
+--- G-LINT summary: 5 ran, 2 skipped ---
+G-LINT RED: at least one linter reported findings (see above).

@@ -1,0 +1,33 @@
+ci-webgl-mac at a60e9e2a5 (branch head 1d22ba80d)
+command: bash .port/tools/ci.sh --webgl
+host: Mac aarch64-apple-darwin (worktree p8-w9t2m)
+start: 2026-10-09T08:32:50Z
+end: 2026-10-09T08:33:07Z
+wall: 17s
+rc: 0
+---- tail ----
+  renderer                   WebKit WebGL
+  wasm imports non-`env`     []
+  wasi imports               0
+  atlas_debug_canvas handle  1
+
+  expect (CPU, from atlas)    [104,100]
+  good   (WebGL readback)     [104,100,0]
+  NC1 offset (+3px UV)        [110,60,0]
+  NC2 black shader            [0,0,0]
+
+  pass_good                  true
+  neg_offset_fails           true
+  neg_black_fails            true
+  undrawn_cell_is_zero       true
+  glError                    0
+
+  P1 glyphs non-zero ink     true
+  P2 regions disjoint        true
+  P3 no ink outside regions  true (atlas ink 204 vs sum(expect) 204)
+  P4 glyph counts distinct   true
+  P5 debug canvas agrees     true (atlas_debug_canvas alpha ink 204 vs atlas ink 204)
+
+WS14 GATE: GREEN (positive matched; both negative controls failed)
+------------------------------------------------------------------
+CI RESULT (--webgl lane): PASS
