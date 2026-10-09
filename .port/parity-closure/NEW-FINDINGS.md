@@ -11487,3 +11487,27 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (G3b): `program_status.zig:141` (the `Report` doc example, `readOption`/`writeText` spelled as upstream, the Rust
   form moved to a PORT NOTE), `stream_terminal.zig:126` (the `startsWith` line, as a PORT NOTE in the doc example) and
   `surface.zig:3952` (the `key` comment in `log_warn_once!`). G3b is GREEN with and without `--strict`.
+
+- **N603 (FIXED, P8-W9 FX2; N623 is the rvm duplicate): D1 (`check_slice_reinterpret.sh`) was RED, 4 unlisted
+  reinterpret sites and 4 stale allowlist rows.** Unlisted: `crates/rustty-vt/src/bitmap_allocator.rs:848, :880`,
+  `crates/rustty-vt/src/page_impl.rs:2297, :2467`; stale: `bitmap_allocator.rs:829, :861`, `page_impl.rs:2236, :2414`.
+  All four are the audited sites drifted, none is new: the gate was already RED at the Phase 8 base `401b95b0e`, from
+  Phase 7 commits above the sites (`bee52ca79` for `bitmap_allocator.rs`; `0bc5fd6b8`, `32d6c4b51`, `5a7f2d1c8` for
+  `page_impl.rs`), then `0a3e385a5` (P8-W2 T1) moved the `clear_cells_inner` site 2475 -> 2467. The two bitmap test
+  bodies are byte-identical to the ones audited at `50538fe8f`; the two `page_impl.rs` expressions, their pointer
+  provenance (`cells().ptr(base).add(..)`, a `*mut Cell`, 8-aligned) and their cell-count lengths are unchanged, so every
+  row stays `exact-len-proven` with the same guard tests. The four rows in `.port/audits/slice-reinterpret.tsv` were
+  re-audited and re-keyed, with zig origins re-resolved at `a60e9e2a5` (`page.zig:1150`, `:1291`;
+  `bitmap_allocator.zig:616`, `:641`). The rvm run listed `:848` and the Mac summary did not, but there is no host
+  difference: the gate is a plain `grep -rnE` with no cfg or target logic, and the Mac log
+  (`.port/phase-8/w9/D1-mac.full.log` in the T2 Mac worktree) lists `:848` too; the Mac summary dropped it when copying.
+  D1 is GREEN on the Mac and on rvm (a `git archive` of the branch, gate only, no build), and `--self-test` passes.
+- **N604 (FIXED, P8-W9 FX2; N624 is the rvm duplicate): G-LINT (HARD) was RED: shellcheck SC2010 and prettier on 3 docs.**
+  `.port/tools/cvt-parity.sh:24` enumerated examples with `ls | grep -E '^(c|cpp)-vt'`; it now globs
+  `"$rootd"/example/*` and filters with `case c-vt*|cpp-vt*`, which keeps the sorted order and the set. `--all`
+  output before and after is identical (25 identical, 3 not covered, GREEN). `prettier@3` (3.9.9) `-w` was run on
+  `docs/parity-audit/src-renderer.md`, `docs/parity-audit/src.md` and
+  `docs/superpowers/plans/2026-10-07-phase8-upstream-resync.md`; the diff is whitespace and table padding only
+  (whitespace- and dash-stripped contents compare equal). The other shellcheck hits in the Mac run (SC2164) were the
+  runner's own helper scripts in its worktree, not repository files. `check_lints.sh` is GREEN on the Mac (shellcheck
+  153 files, prettier, typos, swiftlint, actionlint; alejandra and pinact skipped as before).
