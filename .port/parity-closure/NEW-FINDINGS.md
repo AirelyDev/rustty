@@ -11656,3 +11656,11 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   not a test failure: `rustty-core` is BLOCKED, not GREEN, and Phase 7's G6t (P7-W15, 67 tests) is its last complete
   Tree Borrows run. Close-out: the final delta-Miri runner runs G6t over `rustty-core` in full at `26d23100b`; the
   controller records its verdict here and in `.port/phase-8/README.md`.
+- **N544 (P8-W9 delta `ci.sh --fast` at `26d23100b`, fixed P8-W9 FX8): G-SKIP RED on the FX4 onig-init race test.**
+  `rustty-core` `surface::tests::oniguruma_first_use_init_tests::concurrent_derived_config_link_regexes_and_ensure_init_do_not_race`
+  (added by P8-W9 FX4 for N540) kept every assertion inside the spawned threads' closures, so
+  `check_silent_skips.py` flagged it (`LOOP`): nothing outside a loop or combinator proved the threads ran their
+  assertions. Fix: each thread returns whether it took the `DerivedConfig::init` branch, and the test asserts after the
+  joins that exactly `THREADS / 2` threads compiled the link regexes. Evidence: `check_silent_skips.py` RED (1 site)
+  before, rc 0 with no RED after; `cargo test -p rustty-core --lib concurrent_derived_config_link_regexes` passes;
+  clippy `-D warnings` and fmt clean.
