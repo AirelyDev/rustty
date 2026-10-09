@@ -1,7 +1,9 @@
 <!-- LOGO -->
 <h1>
-<p align="center">
-  Rustty
+  <p align="center">
+    <img src="images/gnome/256.png" alt="Logo" width="128" />
+    <br />Rustty
+  </p>
 </h1>
   <p align="center">
     A full-fidelity Rust port of Ghostty — a fast, native, feature-rich

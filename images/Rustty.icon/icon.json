@@ -102,15 +102,15 @@
           "position" : {
             "scale" : 1,
             "translation-in-points" : [
-              -185.015625,
-              -143.8359375
+              0,
+              -10
             ]
           }
         },
         {
           "blend-mode" : "normal",
           "fill" : {
-            "solid" : "extended-srgb:0.00000,0.47843,1.00000,1.00000"
+            "solid" : "extended-srgb:0.96863,0.29804,0.00000,1.00000"
           },
           "glass" : true,
           "hidden" : false,
@@ -119,8 +119,8 @@
           "position" : {
             "scale" : 1,
             "translation-in-points" : [
-              -186.59375,
-              -143.8359375
+              0,
+              -10
             ]
           }
         },
