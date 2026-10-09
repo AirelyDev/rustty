@@ -1,0 +1,52 @@
+# P8-W9 T2 lane g-valgrind-shard4of4 at a60e9e2a5 (head 1d22ba80d)
+host: rvm (Fedora aarch64), clone /home/gael/projects/rustty-p8w9t2 (git archive 1d22ba80d plus .port and docs/superpowers copied from the worktree, since .gitattributes export-ignores them)
+### CMD: bash .port/tools/gates/check_valgrind.sh --shard 4/4 --jobs 4
+start (UTC): 2026-10-09T08:44:03Z
+end (UTC):   2026-10-09T09:52:39Z
+wall: 4116 s
+rc: 0
+## verdict lines
+=== G-VALGRIND :: memcheck over 62 crate(s), shard 4/4, 4 job(s) ===
+--- G-VALGRIND summary: 148 memcheck run(s) in 4116s; crates without a test binary: none; 1 named test skip(s): rustty-cli/rustty_cli::edit_config::exec_tests::exec_failure_report_prints_the_raw_command_bytes ---
+G-VALGRIND GREEN (148 memcheck run(s) clean, shard 4/4, 4 job(s)).
+## tail
+  ok      rustty-bench/rustty_bench [2/46] — test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 44 filtered out; finished in 0.12s (2s)
+  ok      rustty-synthetic/rustty_synthetic [1/26] — test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 25 filtered out; finished in 0.06s (0s)
+  ok      highway-sys/highway_sys [1/19] — test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.03s (0s)
+  -- part 16/16:
+  ok      rustty-datastruct/rustty_datastruct [6/100] — test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 94 filtered out; finished in 0.06s (0s)
+  ok      rustty-unicode/rustty_unicode [1/23] — test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 22 filtered out; finished in 0.04s (1s)
+  ok      rustty-simd/rustty_simd [2/42] — test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 40 filtered out; finished in 0.06s (0s)
+  ok      rustty-lib/rustty_lib [2/41] — test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 39 filtered out; finished in 0.04s (1s)
+  ok      rustty-os/rustty_os [6/110] — test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 104 filtered out; finished in 0.08s (0s)
+  ok      rustty-os:flatpak/rustty_os [7/114] — test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 107 filtered out; finished in 0.08s (1s)
+  ok      rustty-xev/rustty_xev [6/108] — test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 102 filtered out; finished in 0.11s (0s)
+  ok      rustty-zigstd/rustty_zigstd [5/88] — test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 83 filtered out; finished in 0.10s (1s)
+  ok      rustty-vt/rustty_vt [212/3395] — test result: ok. 211 passed; 0 failed; 1 ignored; 0 measured; 3183 filtered out; finished in 3461.79s (3463s)
+  ok      rustty-vt-c/rustty_vt_c [37/601] — test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 564 filtered out; finished in 463.09s (463s)
+  ok      rustty-crash/rustty_crash [1/20] — test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.07s (1s)
+  ok      rustty-args/rustty_args [4/79] — test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 75 filtered out; finished in 0.04s (0s)
+  ok      rustty-apprt-api/rustty_apprt_api [1/28] — test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 27 filtered out; finished in 0.08s (1s)
+  ok      rustty-font/rustty_font [5/89] — test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 84 filtered out; finished in 0.54s (1s)
+  ok      rustty-font-shaper/rustty_font_shaper [8/137] — test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 129 filtered out; finished in 0.90s (2s)
+  ok      rustty-wuffs/rustty_wuffs [1/24] — test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.03s (1s)
+  ok      rustty-z2d/rustty_z2d [6/99] — test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 93 filtered out; finished in 0.06s (0s)
+  ok      rustty-zigimg/rustty_zigimg [1/16] — test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.03s (0s)
+  ok      rustty-vaxis/rustty_vaxis [9/147] — test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 138 filtered out; finished in 0.06s (1s)
+  ok      rustty-vaxis/image_tier [1/22] — test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 21 filtered out; finished in 0.11s (0s)
+  ok      rustty-input/rustty_input [7/119] — test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 112 filtered out; finished in 0.11s (1s)
+  ok      rustty-inspector/rustty_inspector [1/21] — test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 20 filtered out; finished in 0.04s (1s)
+  ok      rustty-renderer/rustty_renderer [9/155] — test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 146 filtered out; finished in 36.58s (38s)
+  ok      rustty-config/rustty_config [16/268] — test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 252 filtered out; finished in 0.32s (1s)
+  ok      rustty-termio/rustty_termio [6/109] — test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 103 filtered out; finished in 0.21s (2s)
+  ok      rustty-core/rustty_core [5/85] — test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 80 filtered out; finished in 90.77s (92s)
+  ok      rustty-apprt/rustty_apprt [2/37] — test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 35 filtered out; finished in 0.06s (1s)
+  ok      rustty-apprt/gtk_perform_action [lists no tests: whole binary] — test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s (0s)
+  ok      rustty-apprt:gtk,wayland,x11/rustty_apprt [13/221] — test result: ok. 11 passed; 0 failed; 2 ignored; 0 measured; 208 filtered out; finished in 0.27s (3s)
+  ok      rustty-cli/rustty_cli [7/127] — test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 120 filtered out; finished in 0.30s (1s)
+  ok      rustty-extra/rustty_extra [2/35] — test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 33 filtered out; finished in 0.08s (2s)
+  ok      rustty-bench/rustty_bench [2/46] — test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 44 filtered out; finished in 11.18s (12s)
+  ok      rustty-synthetic/rustty_synthetic [1/26] — test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 25 filtered out; finished in 0.03s (1s)
+  ok      highway-sys/highway_sys [1/19] — test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.03s (0s)
+--- G-VALGRIND summary: 148 memcheck run(s) in 4116s; crates without a test binary: none; 1 named test skip(s): rustty-cli/rustty_cli::edit_config::exec_tests::exec_failure_report_prints_the_raw_command_bytes ---
+G-VALGRIND GREEN (148 memcheck run(s) clean, shard 4/4, 4 job(s)).
