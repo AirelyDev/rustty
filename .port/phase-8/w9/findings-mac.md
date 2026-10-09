@@ -27,3 +27,15 @@
 - Not matched by lsan-darwin.supp (S1-S9). Possibly a first-time-initialisation of SkyLight on a thread (the test hosts a render thread that
   creates a display link) or host-state dependent (TCC). Not diagnosed further; not suppressed (R5). Controller decides: new suppression with citation vs. code.
 - Evidence: .port/phase-8/w9/G-LSAN-mac-at-a60e9e2a5.txt, G-LSAN-mac.rustty-apprt-c.log
+
+## N603 - D1 (check_slice_reinterpret.sh, PROGRESS in ci.sh) RED on the Mac
+- 3 UNLISTED reinterpret sites (crates/rustty-vt/src/bitmap_allocator.rs:880, page_impl.rs:2297, page_impl.rs:2467) and 4 STALE allowlist rows
+  (page_impl.rs:2236, :2414, bitmap_allocator.rs:829, :861). Looks like line drift plus new sites; slice-reinterpret.tsv not updated.
+- Observed standalone (the full ci.sh did not finish, see ci record). In ci.sh D1 is PROGRESS (non-blocking). Not fixed.
+- Evidence: .port/phase-8/w9/D1-mac.full.log
+
+## N604 - G-LINT (HARD) RED on the Mac
+- shellcheck FAIL (157 files; SC2010 and SC2164 among the findings), prettier FAIL (docs/parity-audit/src-renderer.md, docs/parity-audit/src.md,
+  docs/superpowers/plans/2026-10-07-phase8-upstream-resync.md), typos/swiftlint/actionlint ok, alejandra and pinact skipped (not installed / no GITHUB_TOKEN).
+- Observed standalone. Not fixed, nothing relaxed.
+- Evidence: .port/phase-8/w9/G-LINT-mac.full.log
