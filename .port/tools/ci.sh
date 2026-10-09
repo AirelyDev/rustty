@@ -1335,6 +1335,28 @@ PASSED=()          # checks that passed cleanly
 hr() { printf '%s\n' "------------------------------------------------------------------"; }
 section() { hr; printf '### %s\n' "$1"; hr; }
 
+# ---- per-gate timing (CI speed-up, step 1) ----------------------------------
+# Every cargo step and gate prints its wall-clock seconds, and each run writes
+# a machine-readable ci-timings.tsv: gate id, kind (CARGO for a cargo step),
+# rc (the exit code, or `skipped` under --fast / CI_SKIP_CARGO), seconds. The
+# summary lists the slowest. CI_RUN_DIR (default target/ci-run) is overwritten
+# by the next run.
+CI_RUN_DIR="${CI_RUN_DIR:-$ROOT/target/ci-run}"
+CI_TIMINGS="$CI_RUN_DIR/ci-timings.tsv"
+ci_now() { date +%s; }
+ci_timing_init() {
+  mkdir -p "$CI_RUN_DIR"
+  printf 'gate\tkind\trc\tseconds\n' > "$CI_TIMINGS"
+  CI_T_START=$(ci_now)
+}
+ci_timing_row() { printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >> "$CI_TIMINGS"; }
+ci_timing_summary() {
+  local wall=$(( $(ci_now) - CI_T_START ))
+  echo "TIMINGS — wall ${wall}s ($((wall / 60)) min); slowest first (all rows: $CI_TIMINGS):"
+  awk -F'\t' 'NR > 1 && $3 != "skipped" {printf "%8d  %s\n", $4, $1 "  [" $2 ", rc " $3 "]"}' "$CI_TIMINGS" \
+    | sort -rn | head -"${CI_TIMINGS_TOP:-25}" | sed 's/^/  /'
+}
+
 # Run a HARD-FAIL cargo step. Records failure; never aborts the script.
 run_cargo() {
   local label="$1"; shift
@@ -1342,13 +1364,17 @@ run_cargo() {
   if [ "${CI_SKIP_CARGO:-0}" = "1" ]; then
     echo "SKIPPED (CI_SKIP_CARGO=1): $label"
     PROGRESS_NOTES+=("$label (skipped via CI_SKIP_CARGO)")
+    ci_timing_row "$label" CARGO skipped 0
     return 0
   fi
+  local t0 rc=0; t0=$(ci_now)
   if "$@"; then
     echo ">> PASS: $label"; PASSED+=("$label")
   else
-    local rc=$?; echo ">> FAIL ($rc): $label" >&2; HARD_FAILURES+=("$label (exit $rc)")
+    rc=$?; echo ">> FAIL ($rc): $label" >&2; HARD_FAILURES+=("$label (exit $rc)")
   fi
+  echo "   ($label: $(( $(ci_now) - t0 ))s)"
+  ci_timing_row "$label" CARGO "$rc" "$(( $(ci_now) - t0 ))"
 }
 
 # Run one registry gate, interpreting its exit code per classification.
@@ -1357,6 +1383,7 @@ run_gate() {
   if skip_in_fast "$id"; then
     echo "### gate $id  [SKIPPED by --fast]"
     SKIPPED_GATES+=("$id")
+    ci_timing_row "$id" "$kind" skipped 0
     return 0
   fi
   section "gate $id  [$kind]  ->  $*"
@@ -1365,8 +1392,9 @@ run_gate() {
   # (say G-EOL on CI) must not hide a NEW reason behind the same gate id. The
   # gate's stderr is merged into its stdout for this; the exit code is the
   # gate's own (PIPESTATUS), so the pass/BLOCKED/RED contract is unchanged.
-  local rc log=""
+  local rc log="" t0
   log="$(mktemp "${TMPDIR:-/tmp}/ci_gate.XXXXXX" 2>/dev/null)" || log=""
+  t0=$(ci_now)
   if [ -n "$log" ]; then
     "$@" 2>&1 | tee "$log"; rc=${PIPESTATUS[0]}
   else
@@ -1388,6 +1416,8 @@ run_gate() {
       HARD_FAILURES+=("$id (claimed-done regression, exit $rc)")
     fi
   fi
+  echo "   (gate $id: $(( $(ci_now) - t0 ))s)"
+  ci_timing_row "$id" "$kind" "$rc" "$(( $(ci_now) - t0 ))"
   [ -n "$log" ] && rm -f "$log"
   return 0
 }
@@ -1439,6 +1469,9 @@ if [ "$LZ4_SLOW_LANE" = "1" ]; then
   esac
   exit "$rc"
 fi
+
+ci_timing_init
+echo " timings: $CI_TIMINGS"
 
 # ---- 1..4: cargo steps (all HARD-FAIL) ------------------------------------
 run_cargo "cargo fmt --check"        cargo fmt --check
@@ -1499,6 +1532,7 @@ echo "PASSED (${#PASSED[@]}):";          for x in "${PASSED[@]:-}";        do [ 
 echo "PROGRESS — not failing CI (${#PROGRESS_NOTES[@]}):"; for x in "${PROGRESS_NOTES[@]:-}"; do [ -n "$x" ] && echo "  ~ $x"; done
 echo "WARNINGS — BLOCKED (pending contract/tooling) (${#WARNINGS[@]}):";   for x in "${WARNINGS[@]:-}";     do [ -n "$x" ] && echo "  ! $x"; done
 echo "HARD FAILURES (${#HARD_FAILURES[@]}):"; for x in "${HARD_FAILURES[@]:-}"; do [ -n "$x" ] && echo "  X $x"; done
+ci_timing_summary
 
 hr
 if [ "${#HARD_FAILURES[@]}" -ne 0 ]; then
