@@ -68,5 +68,5 @@ Command line was `env RUSTTY_VALGRIND_OWN_JOB=... bash .port/tools/ci.sh` (valgr
 End-to-end wall time (without valgrind): 13,073 s (3 h 38 min). Before it, a first unmodified run reached G-VALGRIND after ~1h20 and was killed by the VM restart.
 This run's clone had 5,642 AppleDouble `._*` files (from my macOS tar of .port and docs/superpowers). They caused G-LINT (prettier warns on `._*.md`)
 and D6 (`._*.supp` without WHY comments) REDs; those two are NOT trusted. The clone was deleted and rebuilt clean for the re-runs
-(see ci-sh-rvm-clean-gates-*). Trustworthy REDs in this run: G-MSAN, G-HWASAN, G-TSAN (= N620-N622) and D1 (see findings-vm.md N623).
+(see ci-sh-rvm-clean-gates-*). Trustworthy REDs in this run: G-MSAN, G-HWASAN, G-TSAN (= N538-N540) and D1 (see findings-vm.md N535).
 G4 BLOCKED: reference driver not built (`vt_driver_ref`), see findings-vm.md.

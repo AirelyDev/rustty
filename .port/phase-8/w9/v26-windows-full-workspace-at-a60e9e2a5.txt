@@ -8,7 +8,7 @@ totals: 6398 passed, 3 failed, 74 ignored
 ## failures
 1. rustty-vt-c --lib osc::tests::command_data_invalid_value_warns_through_the_scoped_log_sink: left has an extra (Warning, osc, 'osc_set invalid option value=1') before the expected commandData line. FLAKE: passes alone, and in 7 further runs of the rustty-vt-c lib (2 in v26b, 5 in v26c).
 2. xtask dist::tests::distcheck_reads_the_tracked_config_from_head and 3. lib_vt_archive_applies_the_reference_excludes: the clone had no .git (needs HEAD). Environment artifact; after git init + commit both PASS (v26b).
-## verdict: V26 RED as run (one flaky test failure, N625); no other failure.
+## verdict: V26 RED as run (one flaky test failure, N541); no other failure.
 ## failure excerpts + tail
 6947:thread 'osc::tests::command_data_invalid_value_warns_through_the_scoped_log_sink' (1644) panicked at crates\rustty-vt-c\src\osc.rs:1132:9:
 6948-assertion `left == right` failed: the S174-F2 warning was not routed through sys::log_fn

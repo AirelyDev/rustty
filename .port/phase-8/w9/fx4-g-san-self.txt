@@ -55,8 +55,8 @@ host: rvm (Fedora 44 aarch64), clone /home/gael/projects/rustty-p8w9fx4 (git arc
   ok   I a listed exception with no instrumented archive is a named skip
   ok   I a listed exception whose archive IS instrumented is stale (RED)
   ok   I a crate that is not -sys is not checked (no output)
-  ok   I N621: a host build-dependency's uninstrumented copy is not looked at
-  ok   I N621: an uninstrumented TARGET archive is RED although the host copy is instrumented
+  ok   I N539: a host build-dependency's uninstrumented copy is not looked at
+  ok   I N539: an uninstrumented TARGET archive is RED although the host copy is instrumented
   ok   I nothing built for the instrumented triple is RED
   ok   I tsan control: instrumented target archives pass (a host build-dependency's is not looked at)
   ok   I tsan: an uninstrumented target archive is RED

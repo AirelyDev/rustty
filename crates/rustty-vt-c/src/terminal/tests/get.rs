@@ -59,7 +59,7 @@ fn get_cursor_position() {
 // heap.)
 #[test]
 fn get_vt_processing_error() {
-    // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+    // N541: this test reaches `sys::log_fn`; hold the sys guard so its
     // warnings cannot land in another test's log sink.
     let _guard = crate::sys::tests::reset_global();
     with_test_allocator(|alloc| {
@@ -450,7 +450,7 @@ fn get_multi_null_keys_returns_invalid_value() {
 // test "get mouse_shape"
 #[test]
 fn get_mouse_shape() {
-    // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+    // N541: this test reaches `sys::log_fn`; hold the sys guard so its
     // warnings cannot land in another test's log sink.
     let _guard = crate::sys::tests::reset_global();
     with_test_allocator(|alloc| {
@@ -771,7 +771,7 @@ fn get_multi_error_sets_out_written() {
 // the parity disposition is `.invalid_value` + the failing index.
 #[test]
 fn get_multi_out_of_range_raw_key_is_rejected_with_the_failing_index() {
-    // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+    // N541: this test reaches `sys::log_fn`; hold the sys guard so its
     // warnings cannot land in another test's log sink.
     let _guard = crate::sys::tests::reset_global();
     with_test_allocator(|alloc| {
@@ -1002,7 +1002,7 @@ fn get_checked_accepts_every_declared_data_value() {
     ignore = "MIRI EXCEPTION (rustty-vt-c, P8-W5 T3): 4,000 lines of history, then a full compression of every page; measured TIMEOUT at the 30-minute miri-run.sh bound; runs natively and under ASan, and get_memory_usage_size_rule plus the memory_usage re-entry test cover the getter under Miri (see MIRI_EXCEPTIONS.md)"
 )]
 fn get_memory_usage() {
-    // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+    // N541: this test reaches `sys::log_fn`; hold the sys guard so its
     // warnings cannot land in another test's log sink.
     let _guard = crate::sys::tests::reset_global();
     with_test_allocator(|alloc| {
@@ -1213,7 +1213,7 @@ fn get_memory_usage_size_rule() {
 // value past the last one.
 #[test]
 fn terminal_set_accepts_every_declared_option() {
-    // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+    // N541: this test reaches `sys::log_fn`; hold the sys guard so its
     // warnings cannot land in another test's log sink.
     let _guard = crate::sys::tests::reset_global();
     with_test_allocator(|alloc| {

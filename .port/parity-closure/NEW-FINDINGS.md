@@ -11488,7 +11488,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   form moved to a PORT NOTE), `stream_terminal.zig:126` (the `startsWith` line, as a PORT NOTE in the doc example) and
   `surface.zig:3952` (the `key` comment in `log_warn_once!`). G3b is GREEN with and without `--strict`.
 
-- **N603 (FIXED, P8-W9 FX2; N623 is the rvm duplicate): D1 (`check_slice_reinterpret.sh`) was RED, 4 unlisted
+- **N535 (FIXED, P8-W9 FX2; the rvm run found the same and shares this id): D1 (`check_slice_reinterpret.sh`) was RED, 4 unlisted
   reinterpret sites and 4 stale allowlist rows.** Unlisted: `crates/rustty-vt/src/bitmap_allocator.rs:848, :880`,
   `crates/rustty-vt/src/page_impl.rs:2297, :2467`; stale: `bitmap_allocator.rs:829, :861`, `page_impl.rs:2236, :2414`.
   All four are the audited sites drifted, none is new: the gate was already RED at the Phase 8 base `401b95b0e`, from
@@ -11502,7 +11502,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   difference: the gate is a plain `grep -rnE` with no cfg or target logic, and the Mac log
   (`.port/phase-8/w9/D1-mac.full.log` in the T2 Mac worktree) lists `:848` too; the Mac summary dropped it when copying.
   D1 is GREEN on the Mac and on rvm (a `git archive` of the branch, gate only, no build), and `--self-test` passes.
-- **N604 (FIXED, P8-W9 FX2; N624 is the rvm duplicate): G-LINT (HARD) was RED: shellcheck SC2010 and prettier on 3 docs.**
+- **N536 (FIXED, P8-W9 FX2; the rvm run found the same and shares this id): G-LINT (HARD) was RED: shellcheck SC2010 and prettier on 3 docs.**
   `.port/tools/cvt-parity.sh:24` enumerated examples with `ls | grep -E '^(c|cpp)-vt'`; it now globs
   `"$rootd"/example/*` and filters with `case c-vt*|cpp-vt*`, which keeps the sorted order and the set. `--all`
   output before and after is identical (25 identical, 3 not covered, GREEN). `prettier@3` (3.9.9) `-w` was run on
@@ -11512,20 +11512,20 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   runner's own helper scripts in its worktree, not repository files. `check_lints.sh` is GREEN on the Mac (shellcheck
   153 files, prettier, typos, swiftlint, actionlint; alejandra and pinact skipped as before).
 
-- **N600 (FIXED, P8-W9 FX1, `01c7a780b`): rustty-bench `hyperlink_map::tests::hyperlink_map` was RED under Miri (G6).**
+- **N532 (FIXED, P8-W9 FX1, `01c7a780b`): rustty-bench `hyperlink_map::tests::hyperlink_map` was RED under Miri (G6).**
   Miri stopped with "inline assembly is not supported" at the `reg_sink!` `core::arch::asm!` in
   `DoNotOptimize::sink` (`crates/rustty-bench/src/lib.rs`). The asm sink is now `#[cfg(not(miri))]` and otherwise
   unchanged, so real builds keep the same codegen; a `#[cfg(miri)]` sink uses `core::hint::black_box`. RED before
   (`cargo +nightly miri nextest run -p rustty-bench -E 'test(=hyperlink_map::tests::hyperlink_map)'`: 1 failed), GREEN
   after (`cargo +nightly miri nextest run -p rustty-bench`: 38 passed, 15 skipped, 19 min). The gate was not relaxed.
-- **N601 (FIXED, P8-W9 FX1, `b4c13ce4f`): rustty-vt `semantic_prompt_effect_not_called_when_the_terminal_fails` did not
+- **N533 (FIXED, P8-W9 FX1, `b4c13ce4f`): rustty-vt `semantic_prompt_effect_not_called_when_the_terminal_fails` did not
   finish under Miri (G6).** Not UB. With 10 columns the test needed 4,367 `A`s to fill the first page before the page
   list allocated (4.9 s native, over 2h40m under Miri). The page keeps the standard byte size, so the test now uses
   8000 columns: the page holds only a few rows and the refused allocation comes after 5 `A`s (0.01 s native, 89 s
   Miri, single test). Assertions are unchanged; the loop cap went 100,000 -> 100 and `assert!(reported > 0)` keeps the
   earlier-prompt arm live. Negative control: removing the `return` after `vt_catch` in `Handler::semantic_prompt`
   turns it RED (`left: 5, right: 6`). No Miri exception was needed.
-- **N625 (FIXED, P8-W9 FX5, `490a0e122`): rustty-vt-c `osc::tests::command_data_invalid_value_warns_through_the_scoped_log_sink`
+- **N541 (FIXED, P8-W9 FX5, `490a0e122`): rustty-vt-c `osc::tests::command_data_invalid_value_warns_through_the_scoped_log_sink`
   flaked on rwin (V26).** Its scoped log sink caught `osc_set invalid option value=1` from
   `osc_set_clears_the_command_and_checks_the_option` (new in Phase 8), which logs on the same `osc` scope without holding
   `sys::tests::reset_global()`. The sink is process-global, so filtering by scope could not separate the two. Reproduced on
@@ -11539,7 +11539,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   needed no change. Cost: the allocation-failure sweeps now serialize on the guard, so the vt-c lib went from about 14 s
   to 38-62 s on the Mac.
 
-- **N605 (FIXED, P8-W9 FX3, `f4e77aeb8`; re-audit finding, provisional id): rustty-renderer
+- **N537 (FIXED, P8-W9 FX3, `f4e77aeb8`; re-audit finding; id renumbered at P8-W9 T3): rustty-renderer
   `custom_shader_selection_uniform_layout_matches_compiled_glsl` dropped upstream's uniform-buffer count assertion.**
   Upstream `shadertoy.zig:391-399` (a60e9e2a5) lists `SPVC_RESOURCE_TYPE_UNIFORM_BUFFER` and requires
   `try testing.expectEqual(@as(usize, 1), count);` before checking the member offsets; the Rust test found the block by
@@ -11550,7 +11550,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   test with a second `layout(binding = 2, std140) uniform Extra` block failed (`left: 1, right: 2`), then was removed.
   `cargo test -p rustty-renderer custom_shader_selection_uniform_layout` GREEN; clippy on rustty-renderer clean.
   Evidence: `.port/phase-8/w9/reaudit-at-a60e9e2a5.txt`.
-- **N602 (CLOSED by suppression S19, P8-W9 FX3, `6c3190ddf`; provisional id): G-LSAN (Mac) RED, rustty-apprt-c
+- **N534 (CLOSED by suppression S19, P8-W9 FX3, `6c3190ddf`; id renumbered at P8-W9 T3): G-LSAN (Mac) RED, rustty-apprt-c
   `macos_window_host` reported 328 B in 3 allocations at exit.** The leak is not Rustty's. Every stack is
   `xpc_connection_create_mach_service` <- TCC `tccd` <- `TCCAccessPreflight` <- SkyLight `SLSTCCService::TCCAccessCheck` <-
   `__SLSInitialize_block_invoke` <- `_dispatch_once_callout` <- `SLSGetActiveDisplayList` <-
@@ -11569,7 +11569,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
     rustty-apprt-c is GREEN (51 passed, 1 ignored), and S19 did not match.
 
 
-- **N620 (FIXED, P8-W9 FX4; provisional id): G-MSAN was RED: rustty-core's render-device tests drive the uninstrumented
+- **N538 (FIXED, P8-W9 FX4; id renumbered at P8-W9 T3): G-MSAN was RED: rustty-core's render-device tests drive the uninstrumented
   libEGL.** Since P8-W6 T2 `App::init` creates the app-scoped render device (`DeviceBox::init` -> `Device::init` ->
   `init_platform` -> `eglGetPlatformDisplay`/`eglInitialize`), so the tests that run `App::init` or `App::create` reach
   the system's uninstrumented libEGL/Mesa, the class of SANITIZER_SUPPRESSIONS.md M3. MSan stops at the first report,
@@ -11584,7 +11584,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   H arm "an MSAN_SKIPS filter that matches no test"), and a skip for a crate outside `MSAN_SCOPE` is RED. A single rule
   was not possible with libtest's substring filters without renaming tests, so the list names the tests; M6 says how
   it was established. G-MSAN on rvm: **GREEN**, 6,375 tests, 0 findings, 66 min (rustty-core 84 passed).
-- **N621 (FIXED, P8-W9 FX4; provisional id): G-HWASAN's archive check flagged the HOST build-dependency copy of
+- **N539 (FIXED, P8-W9 FX4; id renumbered at P8-W9 T3): G-HWASAN's archive check flagged the HOST build-dependency copy of
   zlib-sys.** `hwasan_archive_check` searched the whole target dir for `*/build/<crate>-*/out/lib*.a`. `rustty-cli` has
   `zlib-sys` as a build-dependency, which cargo builds for the host under `<td>/debug/build`, without
   `CARGO_CFG_SANITIZE`, so the wrapper compiles it plain; it links into a build script only. In one shared target dir,
@@ -11598,7 +11598,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   archive(s) have no __hwasan_ reference`); rebuilt normally it is GREEN again. G-SAN-SELF arm I gains fixtures for both
   directions and for a missing triple dir. G-HWASAN on rvm, full shared-target pass: **GREEN**, 10,183 tests, 0
   findings, 15 `-sys` crates all instrumented plus the named gettext-sys skip, cross-check 476/420/56/0 problems, 30 min.
-- **N622 (FIXED, P8-W9 FX4; provisional id): G-TSAN was RED on rustty-core: three reports.**
+- **N540 (FIXED, P8-W9 FX4; id renumbered at P8-W9 T3): G-TSAN was RED on rustty-core: three reports.**
   1. Oniguruma first-use init (a Rustty test-and-library ordering gap, fixed). `onig_new` -> `onig_reg_init` reads
      `onig_inited` and, if unset, runs `onig_initialize`, with no lock (regcomp.c:7667/7769). `DerivedConfig::init`
      compiles each configured link regex through `Link::oni_regex` without the one thread-safe init, so on a test thread
@@ -11628,7 +11628,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   race arms run under the real `tsan.supp` and stay RED. Limit (documented under T5/T6): a race between Rustty memory
   and a Mesa access to it would be hidden in those two modules. G-TSAN on rvm: **GREEN**, 4,536 tests, 0 reports
   (rustty-core 88), 17 C archives instrumented, 24 min; `race:libEGL_mesa.so` matched once in that run.
-- **N640 (FIXED, P8-W9 FX6; provisional id, first recorded by the G6t runner in `.port/phase-8/w9/findings-g6ct.md`): G6t (Tree Borrows, debug assertions on) was RED on two rustty-vt page
+- **N542 (FIXED, P8-W9 FX6; id renumbered at P8-W9 T3; first recorded by the G6t runner in `.port/phase-8/w9/findings-g6ct.md`): G6t (Tree Borrows, debug assertions on) was RED on two rustty-vt page
   tests, `page::tests::page_moveCells_text_only` and `page_moveCells_graphemes`: "write access through <tag> ... is
   forbidden" at `set_bits` (page.rs:604) via `Row::set_styled` in `Page::move_cells_inner`.** Test-only aliasing, not
   production code. The tests passed `unsafe { &mut *src }` / `unsafe { &mut *dst }` for `move_cells`'s `*mut Row`
@@ -11649,3 +11649,10 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `-Zmiri-disable-isolation`): the two tests RED under `-Zmiri-tree-borrows` before (2 failed), GREEN after under TB
   with debug assertions on and off and under SB (2/2 each); the whole `page::` module under TB, debug on: 86/86 in
   1,288 s; native `cargo test -p rustty-vt --lib page`: 634 passed, 4 ignored.
+- **N543 (OPEN, PENDING the final delta-Miri run; P8-W9 T2 G6c/G6t runner; id renumbered at P8-W9 T3): G6t (Tree
+  Borrows) never completed for `rustty-core` at the pin.** The full G6t pass at `c8a55c96c`
+  (`.port/phase-8/w9/G6t-at-a60e9e2a5.txt`) was stopped by its runner during `rustty-core` when Mac free disk reached
+  the 12 GB floor (other lanes were building; the runner's own target dir stayed about 7 GB). This is a coverage gap,
+  not a test failure: `rustty-core` is BLOCKED, not GREEN, and Phase 7's G6t (P7-W15, 67 tests) is its last complete
+  Tree Borrows run. Close-out: the final delta-Miri runner runs G6t over `rustty-core` in full at `26d23100b`; the
+  controller records its verdict here and in `.port/phase-8/README.md`.

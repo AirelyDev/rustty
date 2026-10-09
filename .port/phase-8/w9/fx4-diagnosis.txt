@@ -1,7 +1,7 @@
-# P8-W9 FX4 diagnosis evidence (N620 MSan diag, N621 archive check, N622 TSan)
+# P8-W9 FX4 diagnosis evidence (N538 MSan diag, N539 archive check, N540 TSan)
 host: rvm (Fedora 44 aarch64), clone /home/gael/projects/rustty-p8w9fx4; helper = sanitizers.sh --source-only + run_crate with a persistent target dir
 
-## N622.1 RED (before the Link::oni_regex fix), test run alone under TSan, 6 runs
+## N540.1 RED (before the Link::oni_regex fix), test run alone under TSan, 6 runs
 tsan-oni-red.log: 1 reports; src/regcomp.c:7764:7 in onig_initialize
 tsan-oni-red-1.log: 0 reports; 
 tsan-oni-red-2.log: 1 reports; src/regcomp.c:7667:7 in onig_reg_init
@@ -9,7 +9,7 @@ tsan-oni-red-3.log: 1 reports; src/regcomp.c:7667:7 in onig_reg_init
 tsan-oni-red-4.log: 1 reports; src/regcomp.c:7764:7 in onig_initialize
 tsan-oni-red-5.log: 1 reports; src/regcomp.c:7667:7 in onig_reg_init
 
-## N622.1 GREEN (after), 6 runs
+## N540.1 GREEN (after), 6 runs
 tsan-oni-green.log: 0 reports; test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.05s
 tsan-oni-green-1.log: 0 reports; test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.04s
 tsan-oni-green-2.log: 0 reports; test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.02s
@@ -17,7 +17,7 @@ tsan-oni-green-3.log: 0 reports; test result: ok. 1 passed; 0 failed; 0 ignored;
 tsan-oni-green-4.log: 0 reports; test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.03s
 tsan-oni-green-5.log: 0 reports; test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.03s
 
-## N622.2/.3 app:: tests (20), EMPTY suppressions file, 6 runs: SUMMARY lines per run
+## N540.2/.3 app:: tests (20), EMPTY suppressions file, 6 runs: SUMMARY lines per run
 run 1: 
 run 2: in pthread_mutex_destroy;in pthread_cond_destroy;
 run 3: 
@@ -25,7 +25,7 @@ run 4: in memcmp;
 run 5: 
 run 6: in pthread_mutex_destroy;in pthread_cond_destroy;
 
-## N622.2/.3 app:: tests, real tsan.supp, 10 runs: reports and matched suppressions
+## N540.2/.3 app:: tests, real tsan.supp, 10 runs: reports and matched suppressions
 run 1: 0 reports; matched: 1 race:libgallium;
 run 2: 0 reports; matched: 
 run 3: 0 reports; matched: 2 race:libgallium;
@@ -48,7 +48,7 @@ libgallium-26.1.4.so+0x8462fc	lp_fence_create	src/gallium/drivers/llvmpipe/lp_fe
 libgallium-26.1.4.so+0x578bf0	mtx_init	src/c11/impl/threads_posix.c:163:9
 libgallium-26.1.4.so+0x578cc8	thrd_create	src/c11/impl/threads_posix.c:255:9
 
-## N620 MSan diagnosis: SAN_MSAN_DIAG=1 (recover mode), rustty-core, no skips (the lib test binary was stopped by PID while device_tests::two_surfaces_* was still running and reporting, after the other lib tests had finished; the integration tests then ran to the end)
+## N538 MSan diagnosis: SAN_MSAN_DIAG=1 (recover mode), rustty-core, no skips (the lib test binary was stopped by PID while device_tests::two_surfaces_* was still running and reporting, after the other lib tests had finished; the integration tests then ran to the end)
 reports by module:
   24694 /lib64/libgallium-26.1.4.so
   12060 /lib64/libexpat.so.1
@@ -66,8 +66,8 @@ test functions in report stacks:
    6062 in rustty_core::app::device_tests::new_surface
      44 in rustty_core::app::test_runtime::app_init_creates_and_deinit_frees_the_render_device
 
-## N621 reproduction: rustty-cli then zlib-sys under HWASan in ONE target dir (fx4-n621.sh)
-# N621 evidence: rustty-cli then zlib-sys in ONE persistent target dir under HWASan,
+## N539 reproduction: rustty-cli then zlib-sys under HWASan in ONE target dir (fx4-n621.sh)
+# N539 evidence: rustty-cli then zlib-sys in ONE persistent target dir under HWASan,
 # then the archive check (new and old) over it. No deletions here.
 rustty-cli rc=0 GREEN 124
 zlib-sys rc=0 GREEN 11
@@ -81,7 +81,7 @@ rc=0
   ❌ hwasan zlib-sys: 1 of 2 C archive(s) have no __hwasan_ reference (the cc wrapper was bypassed): debug/build/zlib-sys-76a181c741038e4b/out/libz.a
 rc=1
 
-## N621 R5 negative control (fx4-n621-neg.sh): zlib-sys rebuilt with CC_aarch64_unknown_linux_gnu=clang (wrapper bypassed), then restored
+## N539 R5 negative control (fx4-n621-neg.sh): zlib-sys rebuilt with CC_aarch64_unknown_linux_gnu=clang (wrapper bypassed), then restored
 zlib-sys (wrapper bypassed) rc=0 GREEN 11
 aarch64-unknown-linux-gnu/debug/build/zlib-sys-834967e61b811ac3/out/libz.a __hwasan_ refs: 0
 debug/build/zlib-sys-76a181c741038e4b/out/libz.a __hwasan_ refs: 0

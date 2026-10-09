@@ -735,7 +735,7 @@ fn continuation_tracker_routes_through_the_terminals_allocator() {
     ignore = "MIRI EXCEPTION (rustty-vt-c, parity tail C-1): intractable under Miri, one pass of the sweep corpus costs about 30 minutes of Miri time (its 600-column resize alone about 27); measured past a 20-minute bound; runs natively and under ASan (see MIRI_EXCEPTIONS.md)"
 )]
 fn sweep_corpus_reaches_the_s7_4_families() {
-    // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+    // N541: this test reaches `sys::log_fn`; hold the sys guard so its
     // warnings cannot land in another test's log sink.
     let _guard = crate::sys::tests::reset_global();
     use rustty_vt::alloc::testing::CountingAllocator;
@@ -916,7 +916,7 @@ fn sweep_once(failing: &rustty_vt::alloc::testing::FailingAllocator, what: &str)
     ignore = "MIRI EXCEPTION (rustty-vt-c, parity tail C-1): intractable under Miri, one pass of the sweep corpus costs about 30 minutes of Miri time (its 600-column resize alone about 27) and the sweep makes one pass per allocation; measured past a 20-minute bound; runs natively and under ASan (see MIRI_EXCEPTIONS.md)"
 )]
 fn allocation_failure_sweep_through_the_c_api() {
-    // N625: this test reaches `sys::log_fn`; hold the sys guard so its
+    // N541: this test reaches `sys::log_fn`; hold the sys guard so its
     // warnings cannot land in another test's log sink.
     let _guard = crate::sys::tests::reset_global();
     use rustty_vt::alloc::testing::{Config, FailingAllocator};

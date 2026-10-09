@@ -1,6 +1,6 @@
 G6 (Miri Stacked Borrows + ASan FFI crates) at a60e9e2a5 (branch head 1d22ba80d)
 host: Mac (aarch64-apple-darwin), worktree .claude/worktrees/p8-w9t2m
-VERDICT: RED (N600 rustty-bench, N601 rustty-vt timeout). All other gated crates GREEN.
+VERDICT: RED (N532 rustty-bench, N533 rustty-vt timeout). All other gated crates GREEN.
 
 Part 1: bash .port/tools/gates/check_leaks.sh --all-done
   start 2026-10-08T14:51:05Z; killed by Claude Code session restart during rustty-vt (no rc/end).
@@ -8,11 +8,11 @@ Part 1: bash .port/tools/gates/check_leaks.sh --all-done
   rustty-core: 69 passed (1 slow), 17 skipped, 7570s. This includes the Miri carry
     surface::tests::prompt_click_relative_row_tests::* : it COMPLETED under Miri (about 2h on its own), GREEN.
   rustty-vt-c: 586 passed (3 slow), 19 skipped, 677s.
-  rustty-bench: RED, N600 (hyperlink_map::tests::hyperlink_map: Miri "inline assembly is not supported", reg_sink asm! at crates/rustty-bench/src/lib.rs:194).
+  rustty-bench: RED, N532 (hyperlink_map::tests::hyperlink_map: Miri "inline assembly is not supported", reg_sink asm! at crates/rustty-bench/src/lib.rs:194).
   Log: logs/g6.log (not committed copy: see g6-part1.log)
 Part 2: logs/g6p2.sh = for c in rustty-vt rustty-wasm rustty-wuffs rustty-xev rustty-z2d rustty-zf rustty-zigstd; check_leaks.sh --crate $c
   start 2026-10-08T19:06:34Z, end 2026-10-09T06:46:44Z (includes a user pause of about 6h from 23:50Z, so wall time is not a runtime measurement).
-  rustty-vt: RED, N601: only failing test stream_terminal::tests::effects::semantic_prompt_effect_not_called_when_the_terminal_fails
+  rustty-vt: RED, N533: only failing test stream_terminal::tests::effects::semantic_prompt_effect_not_called_when_the_terminal_fails
     was SIGTERMed by the controller (PID 93160) after 2h+ of single-process Miri at 100% CPU (loop up to 100000 iterations); every other
     rustty-vt test passed; doc tests ok (2 passed, 2 ignored). Provisional TIMEOUT.
   rustty-wasm: no runnable test (all #[ignore]); 0 run, 1 skipped (pre-existing behaviour)

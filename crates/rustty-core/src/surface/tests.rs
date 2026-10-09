@@ -2255,7 +2255,7 @@ mod prompt_click_relative_row_tests {
     }
 }
 
-// rustty-only (P8-W9 FX4, NEW-FINDINGS N622 item 1): Oniguruma's first-use
+// rustty-only (P8-W9 FX4, NEW-FINDINGS N540 item 1): Oniguruma's first-use
 // init. `onig_new` -> `onig_reg_init` reads the process-global `onig_inited`
 // and, if it is unset, runs `onig_initialize` itself, with no lock
 // (regcomp.c:7667/7769). The reference runs `oni.init` once, single-threaded,

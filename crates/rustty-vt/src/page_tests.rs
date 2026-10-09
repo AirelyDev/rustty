@@ -2311,7 +2311,7 @@ mod tests {
             }
         }
 
-        // PORT NOTE: pass the raw row pointers straight through (N640). A
+        // PORT NOTE: pass the raw row pointers straight through (N542). A
         // `&mut *src` temporary coerced to `*mut Row` keeps that reference's
         // tag; the debug-only `assert_integrity` inside `clear_cells` reads
         // every row through the page base and freezes it, so the later
@@ -2360,7 +2360,7 @@ mod tests {
         }
         let original_count = page.grapheme_count();
 
-        // PORT NOTE: raw row pointers; see page_moveCells_text_only (N640).
+        // PORT NOTE: raw row pointers; see page_moveCells_text_only (N542).
         let src = page.get_row(0);
         let dst = page.get_row(1);
         page.move_cells(
