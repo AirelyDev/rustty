@@ -39,7 +39,11 @@ read from the Rust structure instead:
     (plus `else` when `has_else_unimplemented`) and the `c0_controls` names. An id
     is covered iff it is a top-level arm pattern of the Rust dispatch match named in
     DISPATCH_SPECS (`csi_dispatch`, `esc_dispatch`, `execute`), read by
-    `dispatch_arms`. They carry no test-reference arm (a final byte has no name a
+    `dispatch_arms`. A csi id also carries the arm's intermediates (P8-W10 T4):
+    `<intermediates><final>` per entry of the arm's `intermediates`, e.g. `!p`
+    (DECSTR), `$p` and `?$p` (DECRQM), `?h`; it is covered iff the Rust arm for
+    that final handles those intermediates, read from its body by the same
+    reader the generator runs on stream.zig (`_csi_intermediates.py`). They carry no test-reference arm (a final byte has no name a
     test could reference; G4 proves the behaviour); their line says so.
   osc: an id is covered iff the Rust `osc::Command` enum (OSC_ENUM_SPEC) has a
     variant matching it under `_gatelib.name_candidates` (a common word such as
@@ -57,6 +61,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _gatelib as G  # noqa: E402
+import _csi_intermediates as CI  # noqa: E402
 
 
 def _parity_names(root):
@@ -114,13 +119,19 @@ def surface_ids(surface):
     out["osc"] = [str(k) for k in osc.get("command_kinds", [])] if isinstance(osc.get("command_kinds", []), list) else []
     # N523: the CSI / ESC finals (each final of each top-level dispatch arm, in
     # arm order, once; `else` for the fallback arm) and the C0 control names.
+    # P8-W10 T4: a csi id is `<intermediates><final>` for each entry of the
+    # arm's `intermediates` (an arm without the key, or `else`, is the final
+    # alone).
     for kind, key in (("csi", "csi_handlers"), ("esc", "esc_handlers")):
         sec = surface.get(key, {})
         finals = []
         for arm in sec.get("arms", []):
+            inters = arm.get("intermediates", [""]) if kind == "csi" else [""]
             for f in arm.get("finals", []):
-                if f not in finals:
-                    finals.append(f)
+                for i in ([""] if f == "else" else inters):
+                    fid = CI.csi_id(i, f)
+                    if fid not in finals:
+                        finals.append(fid)
         if sec.get("has_else_unimplemented") and "else" not in finals:
             finals.append("else")
         out[kind] = finals
@@ -396,8 +407,9 @@ def pattern_values(pattern):
 
 
 def structural_finals(kind, surface):
-    """The set of ids of `kind` (csi/esc: final characters and "else"; c0:
-    control names) that the Rust dispatch handles, per DISPATCH_SPECS, read by
+    """The set of ids of `kind` (csi: intermediates + final, P8-W10 T4; esc:
+    final characters; both plus "else"; c0: control names) that the Rust
+    dispatch handles, per DISPATCH_SPECS, read by
     dispatch_arms. A pattern the matcher cannot read is G.Blocked, never a
     silent miss: extend pattern_values to the spelling the code uses."""
     c0_names = {}
@@ -418,9 +430,20 @@ def structural_finals(kind, surface):
             except ValueError:
                 raise G.Blocked(f"{rel}:{arm['line']}: arm pattern {arm['pattern'].strip()!r} "
                                 f"is not a spelling the G9 matcher reads for {kind}")
+            inters = [""]
+            if kind == "csi":
+                # P8-W10 T4: the intermediates this arm's body handles.
+                body = text[arm["start"]:arm["end"]]
+                try:
+                    inters = CI.arm_intermediates(body[body.index("=>") + 2:], "rust")
+                except ValueError as e:
+                    raise G.Blocked(f"{rel}:{arm['line']}: {e} (the G9 intermediates "
+                                    "reader must be updated with the code)")
             for v in values:
                 if v == "else":
                     handled.add("else")
+                elif isinstance(v, int) and kind == "csi":
+                    handled.update(CI.csi_id(i, chr(v)) for i in inters)
                 elif isinstance(v, int):
                     handled.add(c0_names.get(v, f"0x{v:02X}") if kind == "c0" else chr(v))
                 elif kind == "c0":
@@ -639,6 +662,7 @@ def self_test():
     here = os.path.dirname(os.path.abspath(__file__))
     shutil.copy(os.path.join(here, "_gatelib.py"), gates)
     shutil.copy(os.path.join(here, "check_parity_surface.py"), gates)
+    shutil.copy(os.path.join(here, "_csi_intermediates.py"), gates)
 
     summary = {
         "crate_map": {
@@ -790,7 +814,11 @@ def _self_test_structural(tmp, gates, inv, here, surface, script):
     sf = dict(surface)
     sf["csi_handlers"] = {"has_else_unimplemented": True,
                           "arms": [{"finals": ["A", "k"]}, {"finals": ["H", "f"]},
-                                   {"finals": ["m"]}, {"finals": ["else"]}]}
+                                   {"finals": ["m"]},
+                                   {"finals": ["p"], "intermediates": ["$", "?$"]},
+                                   {"finals": ["q"], "intermediates": [" ", "\"", ">"]},
+                                   {"finals": ["h"], "intermediates": ["", "?"]},
+                                   {"finals": ["else"]}]}
     sf["esc_handlers"] = {"has_else_unimplemented": True,
                           "arms": [{"finals": ["7"]}, {"finals": ["\\"]}, {"finals": ["B"]}]}
     sf["c0_controls"] = {"controls": [{"name": "NUL", "value": "0x00"},
@@ -935,6 +963,41 @@ def _self_test_structural(tmp, gates, inv, here, surface, script):
         print(f"[q] csi copy without the top-level _ arm -> exit {r.returncode}, "
               f"UNCOVERED {got} (expect non-zero, ['else'])")
         ok &= (r.returncode == 1 and got == ["else"])
+        write_tree({rel: copies[rel]})
+
+    # (r) P8-W10 T4 negative control: two commands share a final and the port
+    #     lacks one. In a copy of the real file, the `b'q'` arm's XTVERSION
+    #     sub-arm (`CSI > q`) is respelled `b'%'`: the `b'q'` top-level arm
+    #     stays (so the final-only keying of N523 would be GREEN), DECSCUSR
+    #     (` q`) and DECSCA (`"q`) stay covered, and exactly `>q` is RED.
+    arms = dispatch_arms(copies[rel], rel, fn_name, scrutinee)
+    q_arm = [a for a in arms if a["pattern"].strip() == "b'q'"]
+    if len(q_arm) != 1 or "b'>' =>" not in copies[rel][q_arm[0]["start"]:q_arm[0]["end"]]:
+        print("[r] could not locate the b'q' arm's b'>' sub-arm (expect one)")
+        ok = False
+    else:
+        a = q_arm[0]
+        arm_text = copies[rel][a["start"]:a["end"]].replace("b'>' =>", "b'%' =>", 1)
+        mutated = copies[rel][:a["start"]] + arm_text + copies[rel][a["end"]:]
+        write_tree({rel: mutated})
+        r = kind_run("csi")
+        got = uncovered(r, "csi")
+        final_kept = any(x["pattern"].strip() == "b'q'"
+                         for x in dispatch_arms(mutated, rel, fn_name, scrutinee))
+        print(f"[r] csi copy without CSI > q (b'q' arm kept: {final_kept}) -> exit "
+              f"{r.returncode}, UNCOVERED {got} (expect non-zero, ['>q'])")
+        ok &= (r.returncode == 1 and got == [">q"] and final_kept)
+        write_tree({rel: copies[rel]})
+
+    # (s) an intermediates sub-arm label the reader cannot parse => BLOCKED.
+    if len(q_arm) == 1:
+        a = q_arm[0]
+        arm_text = copies[rel][a["start"]:a["end"]].replace("b'>' =>", "XT_GT =>", 1)
+        write_tree({rel: copies[rel][:a["start"]] + arm_text + copies[rel][a["end"]:]})
+        r = kind_run("csi")
+        print(f"[s] csi intermediates sub-arm spelled as a named const -> exit "
+              f"{r.returncode} (expect 3)")
+        ok &= (r.returncode == 3 and "XT_GT" in r.stdout)
         write_tree({rel: copies[rel]})
     return ok
 
