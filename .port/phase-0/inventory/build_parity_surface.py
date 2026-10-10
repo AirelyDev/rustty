@@ -156,6 +156,9 @@ surface = {
         "osc_subparsers": len(osc_parsers),
         "osc_numeric_codes_referenced": len(osc_numbers),
         "csi_final_byte_handlers": csi["count_arms"],
+        # P8-W10 T4: distinct CSI commands (intermediates + final).
+        "csi_handler_ids": len({i + f for a in csi["arms"] for f in a["finals"]
+                                if f != "else" for i in a["intermediates"]}),
         "esc_final_byte_handlers": esc["count_arms"],
         "dcs_command_kinds": len(dcs_cmd_kinds),
         "dcs_decrqss_subvalues": len(decrqss),
@@ -199,7 +202,9 @@ surface = {
     "csi_handlers": {
         "source": "src/terminal/stream.zig csiDispatch (switch on input.final)",
         "note": "Top-level final-byte arms; many further dispatch on intermediates "
-                "(more distinct commands than arm count). Param enums in src/terminal/csi.zig.",
+                "(more distinct commands than arm count). Each arm's `intermediates` "
+                "lists the intermediate-byte sequences it distinguishes (P8-W10 T4); "
+                "a G9 csi id is intermediates + final. Param enums in src/terminal/csi.zig.",
         "has_else_unimplemented": csi["has_else"],
         "arms": csi["arms"],
     },

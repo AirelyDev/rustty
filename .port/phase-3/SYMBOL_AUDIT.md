@@ -2,7 +2,9 @@
 
 Companion to `.port/tools/audit_symbol_coverage.py` (pass 2 of the systematic
 oracle→port audit). The tool checks every oracle `pub fn` for a counterpart token
-anywhere in `crates/`. At the `88f57ee66` pin it checks **2831 symbols across 530
+in a Rust file that belongs to it (since P8-W10 T4: a counterpart file of the
+oracle file, or a file naming the function's container; see "Note on the
+matcher"). At the `88f57ee66` pin it checks **2831 symbols across 530
 files**; every absence is recorded below with its reason, because an absence that
 is merely *believed* fine is indistinguishable from one nobody looked at.
 
@@ -34,7 +36,7 @@ them. This is a better port than hand-writing the pairs, not a worse one.
 - `src/apprt/gtk/class/surface.zig::getMouseHidden` — generated; **0 callers upstream**
 - `src/apprt/gtk/class/surface.zig::getBellRinging` — generated; **0 callers upstream**
 
-## Collapsed into the call site, deliberately (3)
+## Collapsed into the call site, deliberately (6)
 
 - `src/apprt/gtk/class/split_tree.zig::initReused` — realized inline in
   `build_tree`'s reuse arm (`split_tree.rs:860-865`). The reference's
@@ -49,6 +51,19 @@ them. This is a better port than hand-writing the pairs, not a worse one.
   this port's `*_adapted` forms were already identity wrappers (no adapted form
   exists here), so `fedd42e8d`'s consolidation removed the alias rather than
   porting a wrapper that wraps nothing.
+- `src/apprt/gtk/class/split_tree.zig::initNew` — the other `BuildTreeResult`
+  constructor, collapsed with `initReused` above: `build_tree`'s no-ancestor arm
+  returns the freshly built `SurfaceScrolledWindow` as an owned `Widget`
+  (PORT NOTE at `split_tree.rs:1122`). Until P8-W10 T4 the bare-name match found
+  the word in a `surface_scrolled_window.rs` comment.
+- `src/terminal/hash_map.zig::getKey` — the context-inferring wrapper
+  (`@sizeOf(Context) != 0` is a compile error); this port's maps always take the
+  context, so the function is `get_key_context` (`hash_map.rs:922`), as
+  `getKeyPtr` is `get_key_ptr_context`. **0 callers** in the oracle. Until
+  P8-W10 T4 the bare-name match took `rustty-vt-c` `key_event::get_key`.
+- `src/unicode/lut.zig::hash` — the hasher of the anonymous `BlockMap` context
+  struct; `lut.rs` derives `Hash`/`Eq` on `Block` instead (PARITY note at
+  `lut.rs:47`). Until P8-W10 T4 any `hash` in the tree matched it.
 
 ## A comptime type the model has no place for (1)
 
@@ -85,3 +100,12 @@ The first run reported 16 absences; three (`putAssumeCapacityNoClobber`,
 token matching missed all three. The tool now prefix-matches names of 8+
 characters. That bias is deliberate: a false ABSENT wastes a reader's time and,
 on this project's evidence, tempts someone to "fix" the audit instead of the code.
+
+P8-W10 T4 made the match container-aware. The token used to count from any file
+in `crates/`, so `modes.zig` `ModeState.getDefault` read as present at the
+`246f70287` pin through `rustty-font-shaper` `hb.rs` `Language::get_default`.
+The token (or its 8+ prefix) now has to be in a counterpart file of the oracle
+file (G-FILES' mapping: filename or citation) or in a file naming the function's
+container (`ModeState`, `Terminal`, or the module stem). The first run moved
+three more rows here (`initNew`, `getKey`, lut `hash`), each a common word found
+in an unrelated file; `--self-test` rebuilds the getDefault case.

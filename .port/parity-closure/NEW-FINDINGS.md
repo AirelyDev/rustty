@@ -11664,3 +11664,33 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   joins that exactly `THREADS / 2` threads compiled the link regexes. Evidence: `check_silent_skips.py` RED (1 site)
   before, rc 0 with no RED after; `cargo test -p rustty-core --lib concurrent_derived_config_link_regexes` passes;
   clippy `-D warnings` and fmt clean.
+- **N559 (FIXED, P8-W10 T4; provisional id): G9 keyed CSI coverage on the final byte only, so a command sharing its
+  final with a ported one was invisible.** DECSTR (`CSI ! p`, new at `246f70287`) shares `p` with DECRQM
+  (`CSI $ p` / `CSI ? $ p`); at the pin the regenerated surface had no new id and G9 stayed GREEN 777/777 while
+  `softReset` was unported (`.port/phase-8/w10/README.md` F2; the arm-granularity limit N523 recorded). Fix: a CSI id
+  is now intermediates plus final. One reader, `.port/tools/gates/_csi_intermediates.py`, extracts from one dispatch arm
+  the intermediate sequences it distinguishes (`intermediates[0] == 'X'` with an optional `intermediates[1]` test,
+  `intermediates.len == 0`, the `0` arm of a switch on `intermediates.len`, the char arms of a switch on
+  `intermediates[0]`; none of these means the final alone), with comments and strings removed so the Zig quoted in
+  Rust comments never counts. The generator (`parse_csi.py`) runs it on `stream.zig` and writes each arm's
+  `intermediates` into `parity-surface.json` (43 final arms, now 64 ids plus `else`); G9 runs it on the Rust
+  `csi_dispatch` arms. An intermediates sub-arm label it cannot read is BLOCKED. Evidence: the Zig and Rust readings
+  agree on every final except `p`, where the port lacks `!`; G9 default is RED with exactly `UNCOVERED csi: !p`
+  (798/799) until P8-W10 T1 merges (its in-progress `csi_dispatch.rs` reads `['!', '$', '?$']`). Negative controls:
+  G9 self-test arm (r) respells the `b'q'` arm's XTVERSION sub-arm in a copy of the real file, keeping the `b'q'`
+  arm (the old keying would be GREEN), and requires exactly `UNCOVERED csi: >q`; arm (s) requires BLOCKED for an
+  unreadable sub-arm label; `parse_csi.py --self-test` [e] drops the DECSTR test from the `p` arm and requires
+  `['$', '?$']`.
+- **N560 (FIXED, P8-W10 T4; provisional id): G-SYMS matched an oracle `pub fn` by bare name anywhere in `crates/`, so
+  a common name in an unrelated crate counted as its port.** `modes.zig` `ModeState.getDefault` (new at `246f70287`)
+  read as present through `rustty-font-shaper` `hb.rs` `Language::get_default` (`.port/phase-8/w10/README.md` F3; the
+  N524 common-name class). Fix: `audit_symbol_coverage.py` now requires the token (or its 8+ prefix) in a file that
+  belongs to the symbol: a counterpart of the oracle file (G-FILES' filename-or-citation mapping) or a file naming the
+  function's innermost Zig container (`ModeState`, `Terminal`, a type-returning `fn X(...) type`, else the module
+  stem). Re-run at `246f70287`: 2911 symbols, newly ABSENT `modes.zig::getDefault` (P8-W10 T1 ports it) and three
+  that the bare name had matched in unrelated files, none a real gap, recorded in `.port/phase-3/SYMBOL_AUDIT.md`:
+  `split_tree.zig::initNew` (collapsed with `initReused`), `hash_map.zig::getKey` (context-inferring wrapper, 0
+  oracle callers, ported as `get_key_context`), `unicode/lut.zig::hash` (derived `Hash`). G-SYMS stays RED on
+  `softReset` and `getDefault` until T1 merges. Negative control: new `--self-test` (ci.sh `G-SYMS-SELF`, HARD)
+  rebuilds the getDefault case on a fixture tree: ABSENT with only `hb.rs` `get_default` (the bare-name match says
+  present), present when ported in `modes.rs` or in a file naming `ModeState`.
