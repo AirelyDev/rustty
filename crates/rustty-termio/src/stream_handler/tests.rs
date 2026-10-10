@@ -1447,3 +1447,26 @@ fn xt_checksum_report_enabled_replies_with_xterms_checksum() {
     }
     term.deinit(Global.into());
 }
+
+// PORT NOTE: no reference test (P8-W10 T1). Pins the termio half of
+// f473f3109's wiring, `.soft_reset => self.terminal.softReset()`: DECSTR
+// through the app's `StreamHandler` reaches `Terminal::soft_reset`.
+#[test]
+fn stream_handler_soft_reset_reaches_the_terminal() {
+    use rustty_vt::modes::Mode;
+
+    let mut term = Terminal::init(Global.into(), terminal_opts(Some(false))).unwrap();
+    let h = handler_for(&raw mut term, std::ptr::null_mut(), std::ptr::null_mut());
+    let mut s = stream::Stream::init(stream::Options::with_handler(h));
+    s.next_slice(b"\x1b[4h\x1b[?6h\x1b[2;3r");
+    assert!(s.handler.term().modes.get(Mode::Insert));
+    s.next_slice(b"\x1b[!p");
+    s.handler.renderer_wakeup.deinit();
+    drop(s);
+
+    assert!(!term.modes.get(Mode::Insert));
+    assert!(!term.modes.get(Mode::Origin));
+    assert_eq!(0, term.scrolling_region.top);
+    assert_eq!(2, term.scrolling_region.bottom);
+    term.deinit(Global.into());
+}

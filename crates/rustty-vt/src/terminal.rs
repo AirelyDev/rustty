@@ -317,13 +317,13 @@ pub struct Options {
     /// will revert back to this state.
     pub default_modes: modespkg::ModePacked,
 
-    /// Cursor state restored by DECSCUSR default and RIS.
+    /// Cursor state restored by DECSCUSR default, RIS and DECSTR.
     // default_cursor_style: Screen.CursorStyle = .block,
     // default_cursor_blink: ?bool = false,
     pub default_cursor_style: crate::screen::CursorStyle,
     pub default_cursor_blink: Option<bool>,
 
-    /// The checksum variant DECRQCRA computes after RIS.
+    /// The checksum variant DECRQCRA computes after RIS or DECSTR.
     // default_xt_checksum: xt_checksum.Flags = .{},
     pub default_xt_checksum: crate::xt_checksum::Flags,
 
@@ -456,11 +456,11 @@ pub struct Cursor {
     /// Whether the current cursor appearance follows the configured defaults.
     pub is_default: bool,
 
-    /// Configured style restored by DECSCUSR default and RIS.
+    /// Configured style restored by DECSCUSR default, RIS and DECSTR.
     pub default_style: crate::screen::CursorStyle,
 
-    /// Configured blink restored by DECSCUSR default and RIS. Null selects
-    /// the terminal emulator default, which is blinking.
+    /// Configured blink restored by DECSCUSR default, RIS and DECSTR.
+    /// Null selects the terminal emulator default, which is blinking.
     pub default_blink: Option<bool>,
 }
 
@@ -640,8 +640,8 @@ pub struct Terminal {
     // cursor: Cursor = .{}
     pub cursor: Cursor,
 
-    /// The checksum variant DECRQCRA computes after RIS. The current variant
-    /// is in `flags.xt_checksum`.
+    /// The checksum variant DECRQCRA computes after RIS or DECSTR. The current
+    /// variant is in `flags.xt_checksum`.
     // default_xt_checksum: xt_checksum.Flags = .{},
     pub default_xt_checksum: crate::xt_checksum::Flags,
 
@@ -932,8 +932,8 @@ impl Terminal {
         Handler::init(self_ptr)
     }
 
-    /// Set the checksum variant restored by RIS. Like `ModeState.setDefault`,
-    /// this also changes the current variant.
+    /// Set the checksum variant restored by RIS and DECSTR. Like
+    /// `ModeState.setDefault`, this also changes the current variant.
     pub fn set_default_xt_checksum(&mut self, flags: crate::xt_checksum::Flags) {
         self.default_xt_checksum = flags;
         self.flags.xt_checksum = flags;

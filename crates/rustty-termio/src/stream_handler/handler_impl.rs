@@ -318,6 +318,11 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
         self.vt("full_reset", r);
     }
 
+    // .soft_reset => self.terminal.softReset(),
+    fn soft_reset(&mut self) {
+        self.term().soft_reset();
+    }
+
     // .set_mode => try self.setMode(value.mode, true),
     fn set_mode(&mut self, v: stream::Mode) {
         let r = self.setMode(v.mode, true);

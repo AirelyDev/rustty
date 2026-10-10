@@ -1602,6 +1602,11 @@ impl<'a> stream::Handler for Handler<'a> {
         self.vt("decaln", |t| t.decaln());
     }
 
+    // .soft_reset => self.terminal.softReset(),
+    fn soft_reset(&mut self) {
+        self.term().soft_reset();
+    }
+
     // .window_title => try self.windowTitle(value.title),
     fn window_title(&mut self, v: stream::WindowTitle) {
         let r = self.do_window_title(v.title);
