@@ -30,6 +30,7 @@
     "osc_subparsers": 19,
     "osc_numeric_codes_referenced": 14,
     "csi_final_byte_handlers": 38,
+    "csi_handler_ids": 64,
     "esc_final_byte_handlers": 23,
     "dcs_command_kinds": 3,
     "dcs_decrqss_subvalues": 5,
@@ -4094,7 +4095,7 @@
   },
   "csi_handlers": {
     "source": "src/terminal/stream.zig csiDispatch (switch on input.final)",
-    "note": "Top-level final-byte arms; many further dispatch on intermediates (more distinct commands than arm count). Param enums in src/terminal/csi.zig.",
+    "note": "Top-level final-byte arms; many further dispatch on intermediates (more distinct commands than arm count). Each arm's `intermediates` lists the intermediate-byte sequences it distinguishes (P8-W10 T4); a G9 csi id is intermediates + final. Param enums in src/terminal/csi.zig.",
     "has_else_unimplemented": true,
     "arms": [
       {
@@ -4103,21 +4104,30 @@
           "k"
         ],
         "comment": "CUU - Cursor Up",
-        "line": 1474
+        "line": 1474,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "B"
         ],
         "comment": "CUD - Cursor Down",
-        "line": 1497
+        "line": 1497,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "C"
         ],
         "comment": "CUF - Cursor Right",
-        "line": 1517
+        "line": 1517,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
@@ -4125,21 +4135,30 @@
           "j"
         ],
         "comment": "CUB - Cursor Left",
-        "line": 1540
+        "line": 1540,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "E"
         ],
         "comment": "CNL - Cursor Next Line",
-        "line": 1560
+        "line": 1560,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "F"
         ],
         "comment": "CPL - Cursor Previous Line",
-        "line": 1583
+        "line": 1583,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
@@ -4147,7 +4166,10 @@
           "`"
         ],
         "comment": "HPA - Cursor Horizontal Position Absolute | TODO: test",
-        "line": 1607
+        "line": 1607,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
@@ -4155,224 +4177,342 @@
           "f"
         ],
         "comment": "CUP - Set Cursor Position. | TODO: test",
-        "line": 1628
+        "line": 1628,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "I"
         ],
         "comment": "CHT - Cursor Horizontal Tabulation",
-        "line": 1653
+        "line": 1653,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "J"
         ],
         "comment": "Erase Display",
-        "line": 1670
+        "line": 1670,
+        "intermediates": [
+          "",
+          "?"
+        ]
       },
       {
         "finals": [
           "K"
         ],
         "comment": "Erase Line",
-        "line": 1703
+        "line": 1703,
+        "intermediates": [
+          "",
+          "?"
+        ]
       },
       {
         "finals": [
           "L"
         ],
         "comment": "IL - Insert Lines | TODO: test",
-        "line": 1743
+        "line": 1743,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "M"
         ],
         "comment": "DL - Delete Lines | TODO: test",
-        "line": 1761
+        "line": 1761,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "P"
         ],
         "comment": "Delete Character (DCH)",
-        "line": 1778
+        "line": 1778,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "S"
         ],
         "comment": null,
-        "line": 1796
+        "line": 1796,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "T"
         ],
         "comment": "Scroll Down (SD)",
-        "line": 1813
+        "line": 1813,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "W"
         ],
         "comment": "Cursor Tabulation Control",
-        "line": 1830
+        "line": 1830,
+        "intermediates": [
+          "",
+          "?"
+        ]
       },
       {
         "finals": [
           "X"
         ],
         "comment": "Erase Characters (ECH)",
-        "line": 1873
+        "line": 1873,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "Z"
         ],
         "comment": "CHT - Cursor Horizontal Tabulation Back",
-        "line": 1894
+        "line": 1894,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "a"
         ],
         "comment": "HPR - Cursor Horizontal Position Relative",
-        "line": 1911
+        "line": 1911,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "b"
         ],
         "comment": "Repeat Previous Char (REP)",
-        "line": 1930
+        "line": 1930,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "c"
         ],
         "comment": "c - Device Attributes (DA1)",
-        "line": 1947
+        "line": 1947,
+        "intermediates": [
+          "",
+          "=",
+          ">"
+        ]
       },
       {
         "finals": [
           "d"
         ],
         "comment": "VPA - Cursor Vertical Position Absolute",
-        "line": 1971
+        "line": 1971,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "e"
         ],
         "comment": "VPR - Cursor Vertical Position Relative",
-        "line": 1990
+        "line": 1990,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "g"
         ],
         "comment": "TBC - Tab Clear | TODO: test",
-        "line": 2010
+        "line": 2010,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "h"
         ],
         "comment": "SM - Set Mode",
-        "line": 2036
+        "line": 2036,
+        "intermediates": [
+          "",
+          "?"
+        ]
       },
       {
         "finals": [
           "l"
         ],
         "comment": "RM - Reset Mode",
-        "line": 2057
+        "line": 2057,
+        "intermediates": [
+          "",
+          "?"
+        ]
       },
       {
         "finals": [
           "m"
         ],
         "comment": "SGR - Select Graphic Rendition",
-        "line": 2078
+        "line": 2078,
+        "intermediates": [
+          "",
+          ">"
+        ]
       },
       {
         "finals": [
           "n"
         ],
         "comment": "TODO: test",
-        "line": 2162
+        "line": 2162,
+        "intermediates": [
+          "",
+          ">",
+          "?"
+        ]
       },
       {
         "finals": [
           "p"
         ],
         "comment": "DECRQM - Request Mode, DECSTR - Soft Terminal Reset",
-        "line": 2217
+        "line": 2217,
+        "intermediates": [
+          "!",
+          "$",
+          "?$"
+        ]
       },
       {
         "finals": [
           "q"
         ],
         "comment": null,
-        "line": 2270
+        "line": 2270,
+        "intermediates": [
+          " ",
+          "\"",
+          ">"
+        ]
       },
       {
         "finals": [
           "r"
         ],
         "comment": null,
-        "line": 2338
+        "line": 2338,
+        "intermediates": [
+          "",
+          "?"
+        ]
       },
       {
         "finals": [
           "s"
         ],
         "comment": null,
-        "line": 2380
+        "line": 2380,
+        "intermediates": [
+          "",
+          ">",
+          "?"
+        ]
       },
       {
         "finals": [
           "t"
         ],
         "comment": "XTWINOPS",
-        "line": 2441
+        "line": 2441,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "u"
         ],
         "comment": null,
-        "line": 2521
+        "line": 2521,
+        "intermediates": [
+          "",
+          "<",
+          "=",
+          ">",
+          "?"
+        ]
       },
       {
         "finals": [
           "@"
         ],
         "comment": "ICH - Insert Blanks",
-        "line": 2595
+        "line": 2595,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "y"
         ],
         "comment": null,
-        "line": 2612
+        "line": 2612,
+        "intermediates": [
+          "#",
+          "*"
+        ]
       },
       {
         "finals": [
           "}"
         ],
         "comment": "DECSASD - Select Active Status Display",
-        "line": 2660
+        "line": 2660,
+        "intermediates": [
+          "$"
+        ]
       },
       {
         "finals": [
           "else"
         ],
         "comment": null,
-        "line": 2683
+        "line": 2683,
+        "intermediates": [
+          ""
+        ]
       }
     ]
   },
