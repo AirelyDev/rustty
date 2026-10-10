@@ -119,7 +119,7 @@ pub struct PlacementIteratorWrapper {
 // pub const Data = enum(c_int) { invalid = 0, placement_iterator = 1, generation = 2, ... };
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Data {
+pub enum KittyGraphicsData {
     Invalid = 0,
     PlacementIterator = 1,
     Generation = 2,
@@ -127,9 +127,10 @@ pub enum Data {
 
 // D11 (P3-W6 T2): proves taking this value as a `c_int` in the exported
 // signature leaves the ABI unchanged.
-const _: () = assert!(std::mem::size_of::<Data>() == std::mem::size_of::<std::os::raw::c_int>());
+const _: () =
+    assert!(std::mem::size_of::<KittyGraphicsData>() == std::mem::size_of::<std::os::raw::c_int>());
 
-impl Data {
+impl KittyGraphicsData {
     /// Narrow an inbound C integer to a `Data`, mirroring
     /// `std.meta.intToEnum`; `None` outside the declared range.
     ///
@@ -142,11 +143,11 @@ impl Data {
     /// disposition inside `get`; only genuinely undeclared integers are `None`.
     ///
     /// PRE-EXISTING: predates the Phase 3 resync range.
-    pub fn from_c_int(v: std::os::raw::c_int) -> Option<Data> {
+    pub fn from_c_int(v: std::os::raw::c_int) -> Option<KittyGraphicsData> {
         match v {
-            0 => Some(Data::Invalid),
-            1 => Some(Data::PlacementIterator),
-            2 => Some(Data::Generation),
+            0 => Some(KittyGraphicsData::Invalid),
+            1 => Some(KittyGraphicsData::PlacementIterator),
+            2 => Some(KittyGraphicsData::Generation),
             _ => None,
         }
     }
@@ -220,16 +221,18 @@ impl PlacementData {
 /// # Safety
 /// `graphics_` must be a valid `KittyGraphics` handle (a `*mut ImageStorage`);
 /// `out` must point to writable storage of the type required by `data`.
-pub unsafe fn get(graphics_: KittyGraphics, data: Data, out: *mut c_void) -> Result {
+pub unsafe fn get(graphics_: KittyGraphics, data: KittyGraphicsData, out: *mut c_void) -> Result {
     // if (comptime !build_options.kitty_graphics) return .no_value;
     if !KITTY_GRAPHICS {
         return Result::NoValue;
     }
 
     match data {
-        Data::Invalid => Result::InvalidValue,
+        KittyGraphicsData::Invalid => Result::InvalidValue,
         // inline else => getTyped(graphics_, comptime_data, @ptrCast(@alignCast(out)))
-        Data::PlacementIterator | Data::Generation => unsafe { get_typed(graphics_, data, out) },
+        KittyGraphicsData::PlacementIterator | KittyGraphicsData::Generation => unsafe {
+            get_typed(graphics_, data, out)
+        },
     }
 }
 
@@ -251,12 +254,12 @@ pub unsafe fn get(graphics_: KittyGraphics, data: Data, out: *mut c_void) -> Res
 /// # Safety
 /// `graphics_` is a valid `*mut ImageStorage`; `out` points to storage of the
 /// type required by `data`.
-unsafe fn get_typed(graphics_: KittyGraphics, data: Data, out: *mut c_void) -> Result {
+unsafe fn get_typed(graphics_: KittyGraphics, data: KittyGraphicsData, out: *mut c_void) -> Result {
     // const storage = graphics_;
     let storage = graphics_ as *mut ImageStorage;
     match data {
-        Data::Invalid => Result::InvalidValue,
-        Data::PlacementIterator => {
+        KittyGraphicsData::Invalid => Result::InvalidValue,
+        KittyGraphicsData::PlacementIterator => {
             // const it = out.* orelse return .invalid_value;
             // SAFETY: `out` points to a `PlacementIterator` (caller contract).
             let it = unsafe { *(out as *mut PlacementIterator) };
@@ -280,7 +283,7 @@ unsafe fn get_typed(graphics_: KittyGraphics, data: Data, out: *mut c_void) -> R
             Result::Success
         }
         // .generation => out.* = storage.generation,
-        Data::Generation => {
+        KittyGraphicsData::Generation => {
             // SAFETY: `out` points to a writable `u64` (caller contract);
             // `storage` is the live `ImageStorage` behind the handle.
             unsafe { *(out as *mut u64) = (*storage).generation };
@@ -1610,7 +1613,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::PlacementIterator,
+                    KittyGraphicsData::PlacementIterator,
                     &mut iter as *mut PlacementIterator as *mut c_void,
                 )
             });
@@ -1652,7 +1655,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::PlacementIterator,
+                    KittyGraphicsData::PlacementIterator,
                     &mut iter as *mut PlacementIterator as *mut c_void,
                 )
             });
@@ -1710,7 +1713,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::PlacementIterator,
+                    KittyGraphicsData::PlacementIterator,
                     &mut iter as *mut PlacementIterator as *mut c_void,
                 )
             });
@@ -1797,7 +1800,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::PlacementIterator,
+                    KittyGraphicsData::PlacementIterator,
                     &mut iter as *mut PlacementIterator as *mut c_void,
                 )
             });
@@ -1903,7 +1906,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::PlacementIterator,
+                    KittyGraphicsData::PlacementIterator,
                     &mut iter as *mut PlacementIterator as *mut c_void,
                 )
             });
@@ -1932,7 +1935,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::PlacementIterator,
+                    KittyGraphicsData::PlacementIterator,
                     &mut iter as *mut PlacementIterator as *mut c_void,
                 )
             });
@@ -1960,7 +1963,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::PlacementIterator,
+                    KittyGraphicsData::PlacementIterator,
                     &mut iter as *mut PlacementIterator as *mut c_void,
                 )
             });
@@ -1988,7 +1991,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::PlacementIterator,
+                    KittyGraphicsData::PlacementIterator,
                     &mut iter as *mut PlacementIterator as *mut c_void,
                 )
             });
@@ -2290,7 +2293,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::PlacementIterator,
+                    KittyGraphicsData::PlacementIterator,
                     &mut iter as *mut PlacementIterator as *mut c_void,
                 )
             });
@@ -2380,7 +2383,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::PlacementIterator,
+                    KittyGraphicsData::PlacementIterator,
                     &mut iter as *mut PlacementIterator as *mut c_void,
                 )
             });
@@ -2462,7 +2465,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::PlacementIterator,
+                    KittyGraphicsData::PlacementIterator,
                     &mut iter as *mut PlacementIterator as *mut c_void,
                 )
             });
@@ -2509,6 +2512,9 @@ mod tests {
         ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
     )]
     fn placement_viewport_pos_with_transmit_and_display() {
+        // N541: this test reaches `sys::log_fn`; hold the sys guard so its
+        // warnings cannot land in another test's log sink.
+        let _guard = crate::sys::tests::reset_global();
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -2543,7 +2549,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::PlacementIterator,
+                    KittyGraphicsData::PlacementIterator,
                     &mut iter as *mut PlacementIterator as *mut c_void,
                 )
             });
@@ -2570,6 +2576,9 @@ mod tests {
         ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
     )]
     fn placement_viewport_pos_fully_off_screen_above() {
+        // N541: this test reaches `sys::log_fn`; hold the sys guard so its
+        // warnings cannot land in another test's log sink.
+        let _guard = crate::sys::tests::reset_global();
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -2608,7 +2617,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::PlacementIterator,
+                    KittyGraphicsData::PlacementIterator,
                     &mut iter as *mut PlacementIterator as *mut c_void,
                 )
             });
@@ -2632,6 +2641,9 @@ mod tests {
         ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
     )]
     fn placement_viewport_pos_top_off_screen() {
+        // N541: this test reaches `sys::log_fn`; hold the sys guard so its
+        // warnings cannot land in another test's log sink.
+        let _guard = crate::sys::tests::reset_global();
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -2672,7 +2684,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::PlacementIterator,
+                    KittyGraphicsData::PlacementIterator,
                     &mut iter as *mut PlacementIterator as *mut c_void,
                 )
             });
@@ -2698,6 +2710,9 @@ mod tests {
         ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
     )]
     fn placement_viewport_pos_bottom_off_screen() {
+        // N541: this test reaches `sys::log_fn`; hold the sys guard so its
+        // warnings cannot land in another test's log sink.
+        let _guard = crate::sys::tests::reset_global();
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -2735,7 +2750,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::PlacementIterator,
+                    KittyGraphicsData::PlacementIterator,
                     &mut iter as *mut PlacementIterator as *mut c_void,
                 )
             });
@@ -2761,6 +2776,9 @@ mod tests {
         ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
     )]
     fn placement_viewport_pos_top_and_bottom_off_screen() {
+        // N541: this test reaches `sys::log_fn`; hold the sys guard so its
+        // warnings cannot land in another test's log sink.
+        let _guard = crate::sys::tests::reset_global();
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -2801,7 +2819,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::PlacementIterator,
+                    KittyGraphicsData::PlacementIterator,
                     &mut iter as *mut PlacementIterator as *mut c_void,
                 )
             });
@@ -2879,7 +2897,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::PlacementIterator,
+                    KittyGraphicsData::PlacementIterator,
                     &mut iter as *mut PlacementIterator as *mut c_void,
                 )
             });
@@ -2949,7 +2967,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::PlacementIterator,
+                    KittyGraphicsData::PlacementIterator,
                     &mut iter as *mut PlacementIterator as *mut c_void,
                 )
             });
@@ -3019,7 +3037,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::PlacementIterator,
+                    KittyGraphicsData::PlacementIterator,
                     &mut iter as *mut PlacementIterator as *mut c_void,
                 )
             });
@@ -3129,7 +3147,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::PlacementIterator,
+                    KittyGraphicsData::PlacementIterator,
                     &mut iter as *mut PlacementIterator as *mut c_void,
                 )
             });
@@ -3226,7 +3244,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::PlacementIterator,
+                    KittyGraphicsData::PlacementIterator,
                     &mut iter as *mut PlacementIterator as *mut c_void,
                 )
             });
@@ -3290,7 +3308,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::PlacementIterator,
+                    KittyGraphicsData::PlacementIterator,
                     &mut iter as *mut PlacementIterator as *mut c_void,
                 )
             });
@@ -3481,7 +3499,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::PlacementIterator,
+                    KittyGraphicsData::PlacementIterator,
                     &mut iter as *mut PlacementIterator as *mut c_void,
                 )
             });
@@ -3582,6 +3600,9 @@ mod tests {
         ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
     )]
     fn storage_generation_via_get() {
+        // N541: this test reaches `sys::log_fn`; hold the sys guard so its
+        // warnings cannot land in another test's log sink.
+        let _guard = crate::sys::tests::reset_global();
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -3605,7 +3626,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::Generation,
+                    KittyGraphicsData::Generation,
                     &mut gen0 as *mut u64 as *mut c_void,
                 )
             });
@@ -3618,7 +3639,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::Generation,
+                    KittyGraphicsData::Generation,
                     &mut gen1 as *mut u64 as *mut c_void,
                 )
             });
@@ -3631,7 +3652,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::Generation,
+                    KittyGraphicsData::Generation,
                     &mut gen2 as *mut u64 as *mut c_void,
                 )
             });
@@ -3644,7 +3665,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::Generation,
+                    KittyGraphicsData::Generation,
                     &mut gen3 as *mut u64 as *mut c_void,
                 )
             });
@@ -3657,7 +3678,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::Generation,
+                    KittyGraphicsData::Generation,
                     &mut gen4 as *mut u64 as *mut c_void,
                 )
             });
@@ -3828,7 +3849,7 @@ mod tests {
             assert_eq!(Result::Success, unsafe {
                 get(
                     graphics,
-                    Data::Generation,
+                    KittyGraphicsData::Generation,
                     &mut storage_gen as *mut u64 as *mut c_void,
                 )
             });
@@ -3946,6 +3967,9 @@ mod tests {
         ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
     )]
     fn generation_never_recurs_across_resets_and_screen_switches() {
+        // N541: this test reaches `sys::log_fn`; hold the sys guard so its
+        // warnings cannot land in another test's log sink.
+        let _guard = crate::sys::tests::reset_global();
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -3967,7 +3991,7 @@ mod tests {
                     assert_eq!(Result::Success, unsafe {
                         get(
                             graphics,
-                            Data::Generation,
+                            KittyGraphicsData::Generation,
                             &mut gen as *mut u64 as *mut c_void,
                         )
                     });
@@ -4040,18 +4064,21 @@ mod tests {
     fn selector_from_c_int_rejects_out_of_range() {
         // (the selector enums derive no `Debug`, so these are `is_none`/
         // `matches!` rather than `assert_eq!`)
-        assert!(Data::from_c_int(99).is_none());
+        assert!(KittyGraphicsData::from_c_int(99).is_none());
         assert!(ImageData::from_c_int(99).is_none());
         assert!(PlacementData::from_c_int(99).is_none());
 
         // -1 (a sign-extended C `int`) is out of range too.
-        assert!(Data::from_c_int(-1).is_none());
+        assert!(KittyGraphicsData::from_c_int(-1).is_none());
         assert!(ImageData::from_c_int(-1).is_none());
         assert!(PlacementData::from_c_int(-1).is_none());
 
         // The declared `invalid = 0` tag IS in range; it keeps its
         // `.invalid_value` disposition inside `get`, not here.
-        assert!(matches!(Data::from_c_int(0), Some(Data::Invalid)));
+        assert!(matches!(
+            KittyGraphicsData::from_c_int(0),
+            Some(KittyGraphicsData::Invalid)
+        ));
         assert!(matches!(ImageData::from_c_int(0), Some(ImageData::Invalid)));
         assert!(matches!(
             PlacementData::from_c_int(0),

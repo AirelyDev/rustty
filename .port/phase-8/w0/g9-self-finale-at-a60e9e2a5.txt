@@ -1,0 +1,20 @@
+=== G9 SELF-TEST ===
+[a] stub 0/2 progress -> exit 0 (expect 0)
+[b] done 1/2 -> exit 1 (expect non-zero), UNCOVERED: True
+[c] done 2/2 -> exit 0 (expect 0)
+[d] strict stub 1/2 -> exit 1 (expect non-zero)
+[e] done, id only in relocated file, no relocation -> exit 1 (expect non-zero)
+[f] same + relocation -> exit 0/0 (expect 0/0)
+[g] relocation present, 'font-size' dropped -> exit 1 (expect non-zero)
+[h] relocation path missing -> exit 3 (expect 3)
+[i] real csi/esc/c0 copies + osc fixture -> exit 0/0/0/0 (expect 0/0/0/0)
+[j] csi copy without the b'm' arm -> exit 1, UNCOVERED ['m'] (expect non-zero, ['m']); token kept elsewhere: True
+[k] esc copy without the b'\\' arm -> exit 1, UNCOVERED ['\\'] (expect non-zero, ['\\']); token kept elsewhere: n/a
+[l] c0 copy without the ansi::C0::BEL arm -> exit 1, UNCOVERED ['BEL'] (expect non-zero, ['BEL']); token kept elsewhere: n/a
+[m] osc enum without Unknown -> exit 1, UNCOVERED ['unknown'] (expect non-zero, ['unknown'])
+[m-real] real osc/mod.rs: UNCOVERED [] (the real gaps; expect no 'hyperlink_end'); without HyperlinkEnd -> exit 1, UNCOVERED ['hyperlink_end'] (expect non-zero, + 'hyperlink_end'); HyperlinkEnd kept elsewhere: True
+[n] esc dispatch fn renamed -> exit 3 (expect 3)
+[o] csi arm spelled as a named const -> exit 3 (expect 3)
+[p] osc enum Command missing -> exit 3 (expect 3)
+[q] csi copy without the top-level _ arm -> exit 1, UNCOVERED ['else'] (expect non-zero, ['else'])
+SELF-TEST: PASS

@@ -111,18 +111,29 @@ impl PageAllocation {
     }
 
     /// Finalize this complete page and transfer its ownership to the PageList.
-    /// The parameter determines where it goes into the PageList.
+    /// The location determines where it goes into the PageList.
     ///
     /// Existing pages and tracked pins keep their identity. A pinned viewport
     /// keeps showing the same content while its cached absolute row offset
     /// moves down by the number of newly inserted rows.
-    pub fn finalize(&mut self, location: Location) -> Result<(), FinalizeError> {
+    ///
+    /// ```zig
+    /// var allocation = try pages.allocatePage(capacity);
+    /// defer allocation.deinit();
+    /// // ... fill in allocation.page() ...
+    /// try allocation.finalize(.prepend, .{ .compress = true });
+    /// ```
+    pub fn finalize(
+        &mut self,
+        location: Location,
+        options: FinalizeOptions,
+    ) -> Result<(), FinalizeError> {
         match location {
-            Location::Prepend => self.prepend(),
+            Location::Prepend => self.prepend(options),
         }
     }
 
-    fn prepend(&mut self) -> Result<(), FinalizeError> {
+    fn prepend(&mut self, options: FinalizeOptions) -> Result<(), FinalizeError> {
         let destination = self.destination;
         // const node = self.node.?;
         let node = self.node;
@@ -181,8 +192,45 @@ impl PageAllocation {
             (*destination).assert_integrity();
         }
         self.node = core::ptr::null_mut();
+
+        // A prepended page is above every existing page, so it is never part
+        // of the active area. It is visible only when the viewport is at the
+        // top of the scrollback, which makes it the first visible page. A
+        // failed compression leaves the page uncompressed and is not an error.
+        //
+        // SAFETY (Stacked Borrows): `destination` is the raw PageList pointer
+        // (struct LIFETIMES note); no reference into it is alive here (the
+        // `unsafe` block above ended and `self` is a different object), so the
+        // narrow `&mut` for `compress_page` / the viewport read is the only
+        // access. `node` is now a live published node.
+        if options.compress
+            && crate::mem::can_reclaim(crate::mem::DecommitMode::Strict)
+            && unsafe {
+                (*destination)
+                    .get_top_left(crate::point::Tag::Viewport)
+                    .node
+            } != node
+        {
+            let _ = unsafe { (*destination).compress_page(node) };
+        }
         Ok(())
     }
+}
+
+/// `PageAllocation.FinalizeOptions`
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FinalizeOptions {
+    /// Compress the page after it is added, unless it is visible in the
+    /// viewport.
+    ///
+    /// Use this when adding many pages of old history one at a time,
+    /// such as when restoring a snapshot, so that the full history is
+    /// never held uncompressed in memory. Compression is best effort.
+    /// A page that does not compress well, or a platform that does not
+    /// support compression, leaves the page uncompressed without an
+    /// error. Accessing a compressed page later uncompresses it
+    /// automatically.
+    pub compress: bool,
 }
 
 /// `PageAllocation.Location`

@@ -483,7 +483,11 @@ impl PageList {
     /// the front or back of the linked list, never the middle. The pin and row
     /// accounting in this operation is only defined for those boundary ranges.
     /// Use the public eraseHistory/eraseActive wrappers which enforce this.
-    fn erase_rows(&mut self, tl_pt: point::Point, bl_pt: Option<point::Point>) {
+    pub(in crate::pagelist) fn erase_rows(
+        &mut self,
+        tl_pt: point::Point,
+        bl_pt: Option<point::Point>,
+    ) {
         // PORT NOTE: `defer self.assertIntegrity()` — Zig's defer runs on the
         // grow-failure EARLY `return` too, so the body lives in an inner fn and
         // the integrity gate runs unconditionally after it (VALIDATION_REPORT

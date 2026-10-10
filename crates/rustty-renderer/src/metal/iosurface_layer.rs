@@ -332,18 +332,18 @@ mod tests {
     use rustty_render_types::AlphaBlending;
 
     use super::{DisplayCallback, IOSurfaceLayer};
-    use crate::metal::metal_impl::{Error as MetalError, Metal};
 
     // W0.T3 culminating KAT: the CALayer subclass sets a real IOSurface as its
     // `contents`. Reuses the offscreen Metal device (the golden-gate device path)
     // to mint a real IOSurface-backed Target.
     #[test]
     fn iosurface_layer_sets_surface_as_contents() {
-        let metal = match Metal::init_offscreen(AlphaBlending::Native, 64, 32) {
+        let metal = match crate::metal::test_support::offscreen_metal(AlphaBlending::Native, 64, 32)
+        {
             Ok(m) => m,
-            // `init_offscreen` only ever yields `NoMetalDevice`; the `ObjCFailed`
-            // arm (W1-3) is unreachable here but keeps the match exhaustive.
-            Err(e @ (MetalError::NoMetalDevice | MetalError::ObjCFailed)) => {
+            // No Metal device (the test device's `NoMetalDevice`), or a failed
+            // `newCommandQueue`.
+            Err(e) => {
                 // F5 strict-mode pivot (metal::test_support).
                 crate::metal::test_support::require_metal_or_skip(
                     "iosurface_layer_sets_surface_as_contents",

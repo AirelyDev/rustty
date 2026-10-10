@@ -21,13 +21,39 @@ impl Renderer {
     // `.reinitialize_shaders = true`). The port's two constructors (`init` over an
     // offscreen context the tests owned, `init_windowed` over GDK's borrowed GLArea
     // context) are one again.
-    pub fn init(alloc: Global, options: Options) -> Result<Self, Error> {
+    /// Builds the renderer for one surface (`generic.zig` `init`).
+    ///
+    /// # Safety
+    /// `options.device` points to a live, initialized [`crate::Device`] that
+    /// outlives the returned renderer (the core `App` frees it after every
+    /// surface, N522), and `options.font_grid` points to a live `SharedGrid` that
+    /// outlives it too. This fn dereferences both, and the renderer keeps reading
+    /// them until `deinit`.
+    ///
+    /// Calling it from safe code does not compile (P8-W9 FX7, review M1):
+    ///
+    /// ```compile_fail,E0133
+    /// fn build(options: rustty_renderer::generic::Options) {
+    ///     let _ = rustty_renderer::Renderer::init(allocator_api2::alloc::Global, options);
+    /// }
+    /// ```
+    pub unsafe fn init(alloc: Global, options: Options) -> Result<Self, Error> {
         // Initialize our graphics API wrapper, this will prepare the
-        // surface provided by the apprt and set up any API-specific
-        // GPU resources.
-        // var api = try GraphicsAPI.init(alloc, options);
+        // surface provided by the apprt and set up any API- and surface-
+        // specific GPU resources.
+        // var api = try GraphicsAPI.init(
+        //     alloc,
+        //     options.device,
+        //     options,
+        // );   (generic.zig:701-705, `40d5b860d`)
         // errdefer api.deinit();
-        let api = OpenGL::init(options.config.blending)?;
+        //
+        // R7: `Options.device` must point to a live `Device` (this fn's `# Safety`);
+        // it is dereferenced below.
+        assert!(!options.device.is_null());
+        // SAFETY: the caller's contract: `options.device` is a live `Device` that
+        // outlives this renderer (the core `App` frees it after all surfaces).
+        let api = unsafe { OpenGL::init(options.device, options.config.blending) }?;
 
         // const has_custom_shaders = options.config.custom_shaders.value.items.len > 0;
         let has_custom_shaders = !options.config.custom_shaders.value.is_empty();
@@ -290,7 +316,11 @@ impl Renderer {
     /// The `draw_mutex` block of [`Self::thread_exit`]. The caller holds
     /// `draw_mutex`.
     pub fn thread_exit_locked(&mut self) {
-        // Release swap chain and shaders.
+        // Release swap chain and shaders. Shaders are only freed
+        // while unrealized and not every apprt unrealizes before
+        // destroying a surface (macOS never does), so mark it
+        // unrealized. This also stops any later draw.
+        self.display_realized = false;
         self.release_gpu_resources();
 
         // We don't release images in `releaseGpuResources`

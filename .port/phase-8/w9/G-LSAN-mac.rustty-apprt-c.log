@@ -1,0 +1,425 @@
+   Compiling shlex v2.0.1
+   Compiling find-msvc-tools v0.1.9
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling glob v0.3.3
+   Compiling libc v0.2.186
+   Compiling prettyplease v0.2.37
+   Compiling log v0.4.33
+   Compiling memchr v2.8.2
+   Compiling cfg-if v1.0.4
+   Compiling minimal-lexical v0.2.1
+   Compiling regex-syntax v0.8.11
+   Compiling either v1.16.0
+   Compiling libloading v0.8.9
+   Compiling bindgen v0.72.1
+   Compiling cc v1.2.65
+   Compiling itertools v0.13.0
+   Compiling rustc-hash v2.1.2
+   Compiling bitflags v2.13.0
+   Compiling shlex v1.3.0
+   Compiling rustty-build-config v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-build-config)
+   Compiling clang-sys v1.8.1
+   Compiling nom v7.1.3
+   Compiling allocator-api2 v0.2.21
+   Compiling objc2 v0.6.4
+   Compiling objc2-encode v4.1.0
+   Compiling rustty-zigstd v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-zigstd)
+   Compiling hashbrown v0.17.1
+   Compiling rustty-util v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-util)
+   Compiling regex-automata v0.4.14
+   Compiling rustty-identity v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-identity)
+   Compiling equivalent v1.0.2
+   Compiling pkg-config v0.3.33
+   Compiling indexmap v2.14.0
+   Compiling zlib-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/zlib-sys)
+   Compiling syn v2.0.118
+   Compiling cexpr v0.6.0
+   Compiling rustty-xev v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-xev)
+   Compiling simdutf-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/simdutf-sys)
+   Compiling rustty-os v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-os)
+   Compiling highway-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/highway-sys)
+   Compiling regex v1.12.4
+   Compiling rustty-helpgen v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-helpgen)
+   Compiling rustty-simd v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-simd)
+   Compiling rustty-unicode v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-unicode)
+   Compiling khronos_api v3.1.0
+   Compiling rustty-vt v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-vt)
+   Compiling rustty-z2d v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-z2d)
+   Compiling rustty-terminfo v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-terminfo)
+   Compiling block2 v0.6.2
+   Compiling dispatch2 v0.3.1
+   Compiling xml-rs v0.8.28
+   Compiling objc2-core-foundation v0.3.2
+   Compiling rustty-datastruct v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-datastruct)
+   Compiling rustty-lib v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-lib)
+   Compiling rustty-input v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-input)
+   Compiling rustty-render-types v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-render-types)
+   Compiling rustty-global v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-global)
+   Compiling rustty-font-shaper v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-font-shaper)
+   Compiling rustty-cfg-fmt v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-cfg-fmt)
+   Compiling gl_generator v0.14.0
+   Compiling rustty-version v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-version)
+   Compiling objc2-foundation v0.3.2
+   Compiling rustty-config v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-config)
+   Compiling rustty-termio v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-termio)
+   Compiling rustty-core v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-core)
+   Compiling rustty-renderer v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-renderer)
+   Compiling rustty-apprt v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-apprt)
+   Compiling rustty-vaxis v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-vaxis)
+   Compiling rustty-zf v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-zf)
+   Compiling rustty-apprt-c v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-apprt-c)
+   Compiling rustty-cli v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-cli)
+   Compiling gettext-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/gettext-sys)
+   Compiling freetype-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/freetype-sys)
+   Compiling wuffs-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/wuffs-sys)
+   Compiling libxml2-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/libxml2-sys)
+   Compiling oniguruma-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/oniguruma-sys)
+   Compiling harfbuzz-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/harfbuzz-sys)
+   Compiling fontconfig-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/fontconfig-sys)
+   Compiling spirv-cross-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/spirv-cross-sys)
+   Compiling glslang-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/glslang-sys)
+   Compiling dcimgui-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/dcimgui-sys)
+   Compiling objc2-io-surface v0.3.2
+   Compiling objc2-quartz-core v0.3.2
+   Compiling objc2-app-kit v0.3.2
+   Compiling objc2-metal v0.3.2
+   Compiling rustty-wuffs v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-wuffs)
+   Compiling rustty-zigimg v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-zigimg)
+   Compiling rustty-font v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-font)
+   Compiling rustty-args v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-args)
+   Compiling rustty-crash v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-crash)
+   Compiling objc2-core-graphics v0.3.2
+   Compiling objc2-core-text v0.3.2
+   Compiling rustty-oniguruma v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-oniguruma)
+   Compiling rustty-synthetic v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-synthetic)
+   Compiling rustty-inspector v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-inspector)
+   Compiling rustty-apprt-api v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-apprt-api)
+   Compiling rustty-bench v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-bench)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 42.12s
+     Running unittests src/lib.rs (target/san-lsan-rustty-apprt-c/aarch64-apple-darwin/debug/deps/rustty_apprt_c-b1599d8cddf78353)
+
+running 16 tests
+test main_c_tests::ghostty_string_s_empty_string ... ok
+test tests::detect_from_argv_invalid ... ok
+test tests::detect_from_argv_none ... ok
+test main_c_tests::ghostty_string_s_zig_string ... ok
+test main_c_tests::ghostty_string_s_c_string ... ok
+test tests::detect_from_argv_multiple ... ok
+test binding_route_tests::split_routes_through_perform_binding_action ... ok
+test binding_route_tests::request_close_routes_through_perform_binding_action ... ok
+test binding_route_tests::split_focus_logs_error_focusing_split ... ok
+test tests::detect_from_argv_plus_version ... ok
+test tests::rustty_init_invalid_action_returns_1 ... ok
+test quicklook_word_tests::quicklook_word_empty_cell_yields_no_word ... ok
+test quicklook_word_tests::quicklook_word_selects_word_under_cursor ... ok
+test main_c_tests::cli_try_action_null_action_returns ... ok
+test quicklook_font_tests::quicklook_font_handoff_is_plus_one_the_host_releases ... ok
+test tests::cli_try_action_version_runs_and_exits ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+
+     Running unittests src/bin/translate_probe.rs (target/san-lsan-rustty-apprt-c/aarch64-apple-darwin/debug/deps/translate_probe-d37c5b74ce9f41b5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/abi_layout.rs (target/san-lsan-rustty-apprt-c/aarch64-apple-darwin/debug/deps/abi_layout-1eb101f4b656e60d)
+
+running 4 tests
+test action_key_positional_ordinals ... ok
+test enum_widths ... ok
+test struct_sizes_and_aligns ... ok
+test pinned_enum_ordinals ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/build_defaults.rs (target/san-lsan-rustty-apprt-c/aarch64-apple-darwin/debug/deps/build_defaults-038daa41b92243b9)
+
+running 2 tests
+test default_feature_set_enables_simd ... ok
+test default_feature_set_resolves_terminal_simd_on ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/color_scheme_invalid_is_silent.rs (target/san-lsan-rustty-apprt-c/aarch64-apple-darwin/debug/deps/color_scheme_invalid_is_silent-7ed3963ec068bd9d)
+
+running 1 test
+test invalid_color_scheme_is_silent ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+     Running tests/config_diagnostics.rs (target/san-lsan-rustty-apprt-c/aarch64-apple-darwin/debug/deps/config_diagnostics-1189d7ac2af34686)
+
+running 2 tests
+test apprt_c_build_reports_the_lib_artifact ... ok
+test get_diagnostic_returns_the_precomputed_message_for_the_lib_artifact ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/i18n_translate.rs (target/san-lsan-rustty-apprt-c/aarch64-apple-darwin/debug/deps/i18n_translate-416fa6d3483aa6ed)
+
+running 1 test
+test rustty_translate_performs_a_real_catalog_lookup ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.82s
+
+     Running tests/macos_window_host.rs (target/san-lsan-rustty-apprt-c/aarch64-apple-darwin/debug/deps/macos_window_host-a05a9ae936079696)
+
+running 19 tests
+test metal_pivot_is_strict_only_when_env_is_exactly_one ... ok
+test metal_pivot_panics_when_required - should panic ... ok
+test set_window_background_blur_is_panic_free_on_transparent_config ... ok
+test shows_visible_window_on_device ... ignored, on-device: real NSWindow; needs a WindowServer + the process main thread
+test content_scale_restamp_tracks_cross_dpi_move ... ok
+test close_callback_reenters_the_closing_surface ... ok
+test color_scheme_soft_reload_host_callback_updates_the_target_surface ... ok
+test ime_point_saturates_with_a_saturated_padding ... ok
+test search_callback_context_lives_for_the_search_thread ... ok
+test mouse_scroll_routes_each_offset_to_its_own_axis ... ok
+test quicklook_exports_are_abort_free_on_live_surface ... ok
+test resize_tracks_host_layer_bounds ... ok
+test hosts_view_layer_and_presents_live_frame ... ok
+test reset_window_size_host_callback_resizes_the_target_surface ... ok
+test set_display_id_pushes_to_render_thread_panic_free ... ok
+test split_and_close_exports_reach_the_host ... ok
+test surface_free_frees_the_last_inherited_working_directory ... ok
+test resize_window_host_callback_resizes_the_target_surface ... ok
+test init_error_path_joins_both_threads_before_freeing_their_state ... ok
+
+test result: ok. 18 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.61s
+
+error: test failed, to rerun pass `-p rustty-apprt-c --test macos_window_host`
+
+Caused by:
+  process didn't exit successfully: `/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/target/san-lsan-rustty-apprt-c/aarch64-apple-darwin/debug/deps/macos_window_host-a05a9ae936079696` (exit status: 1)
+note: test exited abnormally; to see the full output pass --no-capture to the harness.
+     Running tests/mouse_pressure_stage_guard.rs (target/san-lsan-rustty-apprt-c/aarch64-apple-darwin/debug/deps/mouse_pressure_stage_guard-1aa9e440acdf6eb1)
+
+running 1 test
+test invalid_mouse_pressure_stage_is_silent ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+     Running tests/panic_policy.rs (target/san-lsan-rustty-apprt-c/aarch64-apple-darwin/debug/deps/panic_policy-8bae82952943d7eb)
+
+running 2 tests
+test no_c_unwind_in_c_api_sources ... ok
+test exported_c_abi_panic_aborts_host ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/smoke.rs (target/san-lsan-rustty-apprt-c/aarch64-apple-darwin/debug/deps/smoke-dee534b0fe821c36)
+
+running 4 tests
+test generated_header_declares_in_crate_tail_and_documents_the_rest ... ok
+test generated_header_defines_and_applies_rustty_api ... ok
+test apple_only_declarations_are_gated_on_apple ... ok
+test c_abi_smoke_compile_link_run ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.65s
+
+   Doc-tests rustty_apprt_c
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: 1 target failed:
+    `-p rustty-apprt-c --test macos_window_host`
+
+===== sanitizer runtime output (rt.85376) =====
+-----------------------------------------------------
+Suppressions used:
+  count      bytes template
+      3        120 _fetchInitializingClassList
+      1         72 ^fetch_cache(bool)$
+     89       8624 TGlobalFontRegistry::CreateRegistry
+    138       5520 TRequestCache::AddResultForRequest
+      1         96 TDescriptorSource::CopyDescriptorUncached
+-----------------------------------------------------
+
+
+===== sanitizer runtime output (rt.85384) =====
+-----------------------------------------------------
+Suppressions used:
+  count      bytes template
+      3        120 _fetchInitializingClassList
+      1        400 dyld::ThreadLocalVariables::instantiateVariable
+-----------------------------------------------------
+
+
+===== sanitizer runtime output (rt.85418) =====
+
+=================================================================
+==85418==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 144 byte(s) in 1 object(s) allocated from:
+    #0 0x000108f76ea0 in calloc+0x74 (librustc-nightly_rt.asan.dylib:arm64+0x3eea0)
+    #1 0x00018e2e26ec in _malloc_type_calloc_outlined+0x64 (libsystem_malloc.dylib:arm64e+0x1e6ec)
+    #2 0x00018e0737d8 in class_createInstance+0x48 (libobjc.A.dylib:arm64e+0x77d8)
+    #3 0x00018e31784c in _os_object_alloc_realized+0x1c (libdispatch.dylib:arm64e+0x284c)
+    #4 0x00018e330644 in _dispatch_mach_create+0x64 (libdispatch.dylib:arm64e+0x1b644)
+    #5 0x00018e1ba5c4 in _xpc_connection_create+0x124 (libxpc.dylib:arm64e+0x1b5c4)
+    #6 0x00018e1a9a48 in xpc_connection_create_mach_service+0x20 (libxpc.dylib:arm64e+0xaa48)
+    #7 0x000194c969c4 in tccd+0x13c (TCC:arm64e+0x19c4)
+    #8 0x000194c9a24c in __TCCAccessRequest_block_invoke.205+0x2e0 (TCC:arm64e+0x524c)
+    #9 0x00018e3304ac in _dispatch_client_callout+0xc (libdispatch.dylib:arm64e+0x1b4ac)
+    #10 0x00018e32635c in _dispatch_lane_barrier_sync_invoke_and_complete+0x34 (libdispatch.dylib:arm64e+0x1135c)
+    #11 0x00018e1fbfac in _os_activity_initiate_impl+0x3c (libsystem_trace.dylib:arm64e+0x7fac)
+    #12 0x000194c96268 in TCCAccessRequest+0x254 (TCC:arm64e+0x1268)
+    #13 0x000194c97348 in TCCAccessPreflight+0x128 (TCC:arm64e+0x2348)
+    #14 0x000194d4de40 in (anonymous namespace)::SLSTCCService::TCCAccessCheck((anonymous namespace)::SLSTCCService::TCCAccessCheckType, __CFString const*, __CFDictionary const*)+0x178 (SkyLight:arm64e+0x94e40)
+    #15 0x00019505be88 in __SLSInitialize_block_invoke+0x84 (SkyLight:arm64e+0x3a2e88)
+    #16 0x00018e3304ac in _dispatch_client_callout+0xc (libdispatch.dylib:arm64e+0x1b4ac)
+    #17 0x00018e31962c in _dispatch_once_callout+0x1c (libdispatch.dylib:arm64e+0x462c)
+    #18 0x000194e72564 in SLSGetActiveDisplayList+0x38 (SkyLight:arm64e+0x1b9564)
+    #19 0x000194ea5610 in SLGetActiveDisplayList+0x30 (SkyLight:arm64e+0x1ec610)
+    #20 0x000198e8eae0 in CVDisplayLinkCreateWithActiveCGDisplays+0x38 (CoreVideo:arm64e+0x1ae0)
+    #21 0x000104dbbc8c in _RNvMs_NtNtCsezB6q47OcyO_15rustty_renderer5metal13cvdisplaylinkNtB4_11DisplayLink30create_with_active_cg_displays+0x108 (macos_window_host-a05a9ae936079696:arm64+0x10098fc8c)
+    #22 0x000104d6c978 in _RNvMNtNtNtCsezB6q47OcyO_15rustty_renderer7generic10macos_impl12cross_threadNtB4_8Renderer21sync_display_link_raw+0x3f4 (macos_window_host-a05a9ae936079696:arm64+0x100940978)
+    #23 0x000104d6c2ac in _RNvMNtNtNtCsezB6q47OcyO_15rustty_renderer7generic10macos_impl12cross_threadNtB4_8Renderer14loop_enter_raw+0xc0 (macos_window_host-a05a9ae936079696:arm64+0x1009402ac)
+    #24 0x00010481e5d4 in _RNvMsa_NtCsjWb05c5yHr2_11rustty_core13renderer_seamINtB5_6ThreadNtNtCsjfl2tRwKJ1n_12rustty_apprt8embedded3AppE11threadMain_B14_+0x44c (macos_window_host-a05a9ae936079696:arm64+0x1003f25d4)
+    #25 0x00010481d7b0 in _RNvMsa_NtCsjWb05c5yHr2_11rustty_core13renderer_seamINtB5_6ThreadNtNtCsjfl2tRwKJ1n_12rustty_apprt8embedded3AppE10threadMainB14_+0x17c (macos_window_host-a05a9ae936079696:arm64+0x1003f17b0)
+    #26 0x00010485b5e0 in _RNCNvMNtNtCsjWb05c5yHr2_11rustty_core7surface9lifecycleINtB6_7SurfaceNtNtCsjfl2tRwKJ1n_12rustty_apprt8embedded3AppE4inits0_0B19_+0x11c (macos_window_host-a05a9ae936079696:arm64+0x10042f5e0)
+    #27 0x0001049981ec in _RINvNtNtCshrkeXHZkvHl_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMNtNtCsjWb05c5yHr2_11rustty_core7surface9lifecycleINtB1e_7SurfaceNtNtCsjfl2tRwKJ1n_12rustty_apprt8embedded3AppE4inits0_0uEB2i_+0xc (macos_window_host-a05a9ae936079696:arm64+0x10056c1ec)
+    #28 0x000104871424 in _RNCNCINvNtNtCshrkeXHZkvHl_3std6thread9lifecycle15spawn_uncheckedNCNvMNtNtCsjWb05c5yHr2_11rustty_core7surface9lifecycleINtB17_7SurfaceNtNtCsjfl2tRwKJ1n_12rustty_apprt8embedded3AppE4inits0_0uEs_00B2b_+0x1fc (macos_window_host-a05a9ae936079696:arm64+0x100445424)
+    #29 0x000104850f64 in _RNvXsn_NtNtCsmpf2o5WY3k_4core5panic11unwind_safeINtB5_16AssertUnwindSafeNCNCINvNtNtCshrkeXHZkvHl_3std6thread9lifecycle15spawn_uncheckedNCNvMNtNtCsjWb05c5yHr2_11rustty_core7surface9lifecycleINtB2g_7SurfaceNtNtCsjfl2tRwKJ1n_12rustty_apprt8embedded3AppE4inits0_0uEs_00EINtNtNtB9_3ops8function6FnOnceuE9call_onceB3k_+0x130 (macos_window_host-a05a9ae936079696:arm64+0x100424f64)
+
+Indirect leak of 128 byte(s) in 1 object(s) allocated from:
+    #0 0x000108f76ea0 in calloc+0x74 (librustc-nightly_rt.asan.dylib:arm64+0x3eea0)
+    #1 0x00018e2e26ec in _malloc_type_calloc_outlined+0x64 (libsystem_malloc.dylib:arm64e+0x1e6ec)
+    #2 0x00018e316918 in _dispatch_calloc_typed+0x20 (libdispatch.dylib:arm64e+0x1918)
+    #3 0x00018e336820 in _dispatch_unote_create+0x74 (libdispatch.dylib:arm64e+0x21820)
+    #4 0x00018e33ae40 in _dispatch_mach_send_create+0xc (libdispatch.dylib:arm64e+0x25e40)
+    #5 0x00018e330788 in _dispatch_mach_create+0x1a8 (libdispatch.dylib:arm64e+0x1b788)
+    #6 0x00018e1ba5c4 in _xpc_connection_create+0x124 (libxpc.dylib:arm64e+0x1b5c4)
+    #7 0x00018e1a9a48 in xpc_connection_create_mach_service+0x20 (libxpc.dylib:arm64e+0xaa48)
+    #8 0x000194c969c4 in tccd+0x13c (TCC:arm64e+0x19c4)
+    #9 0x000194c9a24c in __TCCAccessRequest_block_invoke.205+0x2e0 (TCC:arm64e+0x524c)
+    #10 0x00018e3304ac in _dispatch_client_callout+0xc (libdispatch.dylib:arm64e+0x1b4ac)
+    #11 0x00018e32635c in _dispatch_lane_barrier_sync_invoke_and_complete+0x34 (libdispatch.dylib:arm64e+0x1135c)
+    #12 0x00018e1fbfac in _os_activity_initiate_impl+0x3c (libsystem_trace.dylib:arm64e+0x7fac)
+    #13 0x000194c96268 in TCCAccessRequest+0x254 (TCC:arm64e+0x1268)
+    #14 0x000194c97348 in TCCAccessPreflight+0x128 (TCC:arm64e+0x2348)
+    #15 0x000194d4de40 in (anonymous namespace)::SLSTCCService::TCCAccessCheck((anonymous namespace)::SLSTCCService::TCCAccessCheckType, __CFString const*, __CFDictionary const*)+0x178 (SkyLight:arm64e+0x94e40)
+    #16 0x00019505be88 in __SLSInitialize_block_invoke+0x84 (SkyLight:arm64e+0x3a2e88)
+    #17 0x00018e3304ac in _dispatch_client_callout+0xc (libdispatch.dylib:arm64e+0x1b4ac)
+    #18 0x00018e31962c in _dispatch_once_callout+0x1c (libdispatch.dylib:arm64e+0x462c)
+    #19 0x000194e72564 in SLSGetActiveDisplayList+0x38 (SkyLight:arm64e+0x1b9564)
+    #20 0x000194ea5610 in SLGetActiveDisplayList+0x30 (SkyLight:arm64e+0x1ec610)
+    #21 0x000198e8eae0 in CVDisplayLinkCreateWithActiveCGDisplays+0x38 (CoreVideo:arm64e+0x1ae0)
+    #22 0x000104dbbc8c in _RNvMs_NtNtCsezB6q47OcyO_15rustty_renderer5metal13cvdisplaylinkNtB4_11DisplayLink30create_with_active_cg_displays+0x108 (macos_window_host-a05a9ae936079696:arm64+0x10098fc8c)
+    #23 0x000104d6c978 in _RNvMNtNtNtCsezB6q47OcyO_15rustty_renderer7generic10macos_impl12cross_threadNtB4_8Renderer21sync_display_link_raw+0x3f4 (macos_window_host-a05a9ae936079696:arm64+0x100940978)
+    #24 0x000104d6c2ac in _RNvMNtNtNtCsezB6q47OcyO_15rustty_renderer7generic10macos_impl12cross_threadNtB4_8Renderer14loop_enter_raw+0xc0 (macos_window_host-a05a9ae936079696:arm64+0x1009402ac)
+    #25 0x00010481e5d4 in _RNvMsa_NtCsjWb05c5yHr2_11rustty_core13renderer_seamINtB5_6ThreadNtNtCsjfl2tRwKJ1n_12rustty_apprt8embedded3AppE11threadMain_B14_+0x44c (macos_window_host-a05a9ae936079696:arm64+0x1003f25d4)
+    #26 0x00010481d7b0 in _RNvMsa_NtCsjWb05c5yHr2_11rustty_core13renderer_seamINtB5_6ThreadNtNtCsjfl2tRwKJ1n_12rustty_apprt8embedded3AppE10threadMainB14_+0x17c (macos_window_host-a05a9ae936079696:arm64+0x1003f17b0)
+    #27 0x00010485b5e0 in _RNCNvMNtNtCsjWb05c5yHr2_11rustty_core7surface9lifecycleINtB6_7SurfaceNtNtCsjfl2tRwKJ1n_12rustty_apprt8embedded3AppE4inits0_0B19_+0x11c (macos_window_host-a05a9ae936079696:arm64+0x10042f5e0)
+    #28 0x0001049981ec in _RINvNtNtCshrkeXHZkvHl_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMNtNtCsjWb05c5yHr2_11rustty_core7surface9lifecycleINtB1e_7SurfaceNtNtCsjfl2tRwKJ1n_12rustty_apprt8embedded3AppE4inits0_0uEB2i_+0xc (macos_window_host-a05a9ae936079696:arm64+0x10056c1ec)
+    #29 0x000104871424 in _RNCNCINvNtNtCshrkeXHZkvHl_3std6thread9lifecycle15spawn_uncheckedNCNvMNtNtCsjWb05c5yHr2_11rustty_core7surface9lifecycleINtB17_7SurfaceNtNtCsjfl2tRwKJ1n_12rustty_apprt8embedded3AppE4inits0_0uEs_00B2b_+0x1fc (macos_window_host-a05a9ae936079696:arm64+0x100445424)
+
+Indirect leak of 56 byte(s) in 1 object(s) allocated from:
+    #0 0x000108f76ea0 in calloc+0x74 (librustc-nightly_rt.asan.dylib:arm64+0x3eea0)
+    #1 0x00018e2e26ec in _malloc_type_calloc_outlined+0x64 (libsystem_malloc.dylib:arm64e+0x1e6ec)
+    #2 0x00018e316918 in _dispatch_calloc_typed+0x20 (libdispatch.dylib:arm64e+0x1918)
+    #3 0x00018e336838 in _dispatch_unote_create+0x8c (libdispatch.dylib:arm64e+0x21838)
+    #4 0x00018e330700 in _dispatch_mach_create+0x120 (libdispatch.dylib:arm64e+0x1b700)
+    #5 0x00018e1ba5c4 in _xpc_connection_create+0x124 (libxpc.dylib:arm64e+0x1b5c4)
+    #6 0x00018e1a9a48 in xpc_connection_create_mach_service+0x20 (libxpc.dylib:arm64e+0xaa48)
+    #7 0x000194c969c4 in tccd+0x13c (TCC:arm64e+0x19c4)
+    #8 0x000194c9a24c in __TCCAccessRequest_block_invoke.205+0x2e0 (TCC:arm64e+0x524c)
+    #9 0x00018e3304ac in _dispatch_client_callout+0xc (libdispatch.dylib:arm64e+0x1b4ac)
+    #10 0x00018e32635c in _dispatch_lane_barrier_sync_invoke_and_complete+0x34 (libdispatch.dylib:arm64e+0x1135c)
+    #11 0x00018e1fbfac in _os_activity_initiate_impl+0x3c (libsystem_trace.dylib:arm64e+0x7fac)
+    #12 0x000194c96268 in TCCAccessRequest+0x254 (TCC:arm64e+0x1268)
+    #13 0x000194c97348 in TCCAccessPreflight+0x128 (TCC:arm64e+0x2348)
+    #14 0x000194d4de40 in (anonymous namespace)::SLSTCCService::TCCAccessCheck((anonymous namespace)::SLSTCCService::TCCAccessCheckType, __CFString const*, __CFDictionary const*)+0x178 (SkyLight:arm64e+0x94e40)
+    #15 0x00019505be88 in __SLSInitialize_block_invoke+0x84 (SkyLight:arm64e+0x3a2e88)
+    #16 0x00018e3304ac in _dispatch_client_callout+0xc (libdispatch.dylib:arm64e+0x1b4ac)
+    #17 0x00018e31962c in _dispatch_once_callout+0x1c (libdispatch.dylib:arm64e+0x462c)
+    #18 0x000194e72564 in SLSGetActiveDisplayList+0x38 (SkyLight:arm64e+0x1b9564)
+    #19 0x000194ea5610 in SLGetActiveDisplayList+0x30 (SkyLight:arm64e+0x1ec610)
+    #20 0x000198e8eae0 in CVDisplayLinkCreateWithActiveCGDisplays+0x38 (CoreVideo:arm64e+0x1ae0)
+    #21 0x000104dbbc8c in _RNvMs_NtNtCsezB6q47OcyO_15rustty_renderer5metal13cvdisplaylinkNtB4_11DisplayLink30create_with_active_cg_displays+0x108 (macos_window_host-a05a9ae936079696:arm64+0x10098fc8c)
+    #22 0x000104d6c978 in _RNvMNtNtNtCsezB6q47OcyO_15rustty_renderer7generic10macos_impl12cross_threadNtB4_8Renderer21sync_display_link_raw+0x3f4 (macos_window_host-a05a9ae936079696:arm64+0x100940978)
+    #23 0x000104d6c2ac in _RNvMNtNtNtCsezB6q47OcyO_15rustty_renderer7generic10macos_impl12cross_threadNtB4_8Renderer14loop_enter_raw+0xc0 (macos_window_host-a05a9ae936079696:arm64+0x1009402ac)
+    #24 0x00010481e5d4 in _RNvMsa_NtCsjWb05c5yHr2_11rustty_core13renderer_seamINtB5_6ThreadNtNtCsjfl2tRwKJ1n_12rustty_apprt8embedded3AppE11threadMain_B14_+0x44c (macos_window_host-a05a9ae936079696:arm64+0x1003f25d4)
+    #25 0x00010481d7b0 in _RNvMsa_NtCsjWb05c5yHr2_11rustty_core13renderer_seamINtB5_6ThreadNtNtCsjfl2tRwKJ1n_12rustty_apprt8embedded3AppE10threadMainB14_+0x17c (macos_window_host-a05a9ae936079696:arm64+0x1003f17b0)
+    #26 0x00010485b5e0 in _RNCNvMNtNtCsjWb05c5yHr2_11rustty_core7surface9lifecycleINtB6_7SurfaceNtNtCsjfl2tRwKJ1n_12rustty_apprt8embedded3AppE4inits0_0B19_+0x11c (macos_window_host-a05a9ae936079696:arm64+0x10042f5e0)
+    #27 0x0001049981ec in _RINvNtNtCshrkeXHZkvHl_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMNtNtCsjWb05c5yHr2_11rustty_core7surface9lifecycleINtB1e_7SurfaceNtNtCsjfl2tRwKJ1n_12rustty_apprt8embedded3AppE4inits0_0uEB2i_+0xc (macos_window_host-a05a9ae936079696:arm64+0x10056c1ec)
+    #28 0x000104871424 in _RNCNCINvNtNtCshrkeXHZkvHl_3std6thread9lifecycle15spawn_uncheckedNCNvMNtNtCsjWb05c5yHr2_11rustty_core7surface9lifecycleINtB17_7SurfaceNtNtCsjfl2tRwKJ1n_12rustty_apprt8embedded3AppE4inits0_0uEs_00B2b_+0x1fc (macos_window_host-a05a9ae936079696:arm64+0x100445424)
+    #29 0x000104850f64 in _RNvXsn_NtNtCsmpf2o5WY3k_4core5panic11unwind_safeINtB5_16AssertUnwindSafeNCNCINvNtNtCshrkeXHZkvHl_3std6thread9lifecycle15spawn_uncheckedNCNvMNtNtCsjWb05c5yHr2_11rustty_core7surface9lifecycleINtB2g_7SurfaceNtNtCsjfl2tRwKJ1n_12rustty_apprt8embedded3AppE4inits0_0uEs_00EINtNtNtB9_3ops8function6FnOnceuE9call_onceB3k_+0x130 (macos_window_host-a05a9ae936079696:arm64+0x100424f64)
+
+-----------------------------------------------------
+Suppressions used:
+  count      bytes template
+      8        328 _fetchInitializingClassList
+      1         72 ^fetch_cache(bool)$
+      4       4512 __CFTSDGetTable
+      2        256 RunElsewhere::create_source
+     89       8624 TGlobalFontRegistry::CreateRegistry
+    138       5520 TRequestCache::AddResultForRequest
+      2        680 TDescriptorSource::CopyDescriptorUncached
+      3        640 TCGFontCache::CopyFont
+      2      16384 CA::Transaction::create
+-----------------------------------------------------
+
+SUMMARY: AddressSanitizer: 328 byte(s) leaked in 3 allocation(s).
+
+===== sanitizer runtime output (rt.85420) =====
+-----------------------------------------------------
+Suppressions used:
+  count      bytes template
+      6        240 _fetchInitializingClassList
+      1         72 ^fetch_cache(bool)$
+      1       1128 __CFTSDGetTable
+      1       4096 AutoreleasePoolPage::autoreleaseNoPage
+      1        128 RunElsewhere::create_source
+     85       8176 TGlobalFontRegistry::CreateRegistry
+    134       5360 TRequestCache::AddResultForRequest
+-----------------------------------------------------
+
+
+===== sanitizer runtime output (rt.85657) =====
+-----------------------------------------------------
+Suppressions used:
+  count      bytes template
+      6        240 _fetchInitializingClassList
+      1         72 ^fetch_cache(bool)$
+      1       1128 __CFTSDGetTable
+      1       4096 AutoreleasePoolPage::autoreleaseNoPage
+      1        128 RunElsewhere::create_source
+     88       8512 TGlobalFontRegistry::CreateRegistry
+    140       5600 TRequestCache::AddResultForRequest
+-----------------------------------------------------
+
+
+===== sanitizer runtime output (rt.85666) =====
+-----------------------------------------------------
+Suppressions used:
+  count      bytes template
+      9        360 _fetchInitializingClassList
+      1         72 ^fetch_cache(bool)$
+      1       1128 __CFTSDGetTable
+      1       4096 AutoreleasePoolPage::autoreleaseNoPage
+      1        128 RunElsewhere::create_source
+     87       8400 TGlobalFontRegistry::CreateRegistry
+    136       5440 TRequestCache::AddResultForRequest
+-----------------------------------------------------
+
+
+===== sanitizer runtime output (rt.85739) =====
+-----------------------------------------------------
+Suppressions used:
+  count      bytes template
+      9        360 _fetchInitializingClassList
+      1         72 ^fetch_cache(bool)$
+      1       1128 __CFTSDGetTable
+      1       4096 AutoreleasePoolPage::autoreleaseNoPage
+     86       8288 TGlobalFontRegistry::CreateRegistry
+    134       5360 TRequestCache::AddResultForRequest
+      4        128 -[_MTLCommandQueue initWithDevice:descriptor:]
+-----------------------------------------------------
+

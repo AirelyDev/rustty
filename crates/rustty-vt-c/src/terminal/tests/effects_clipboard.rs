@@ -7,6 +7,9 @@ use super::*;
 // state: reply-based, with name/granted/can_remember)
 #[test]
 fn set_clipboard_write_callback() {
+    // N541: this test reaches `sys::log_fn`; hold the sys guard so its
+    // warnings cannot land in another test's log sink.
+    let _guard = crate::sys::tests::reset_global();
     static mut COUNT: usize = 0;
     static mut LAST_TERMINAL: Terminal = std::ptr::null_mut();
     static mut LAST_USERDATA: *mut c_void = std::ptr::null_mut();

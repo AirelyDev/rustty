@@ -1,0 +1,25 @@
+   Compiling zlib-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/zlib-sys)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.18s
+     Running unittests src/lib.rs (target/san-msan/aarch64-unknown-linux-gnu/debug/deps/zlib_sys-0c4b2420a71cb0b5)
+
+running 11 tests
+test tests::deflate_raw_empty_round_trip ... ok
+test tests::adler32_ffi_null_seed ... ok
+test tests::gz_file_api_round_trips ... ok
+test tests::adler32_empty_is_one ... ok
+test tests::adler32_single_byte ... ok
+test tests::adler32_wikipedia_known_answer ... ok
+test tests::infback_decodes_a_raw_deflate_stream ... ok
+test tests::inflate_zlib_too_large ... ok
+test tests::inflate_zlib_known_answer ... ok
+test tests::deflate_raw_inflate_raw_round_trip ... ok
+test tests::inflate_zlib_invalid_data ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+   Doc-tests zlib_sys
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

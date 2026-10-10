@@ -256,6 +256,38 @@ impl<'a> Handler<'a> {
         self.write_pty(&resp);
     }
 
+    // fn reportXtChecksum(self: *Handler, req: xt_checksum.Request) void {
+    //     if (!self.xt_checksum_report) return;
+    //     var buf: [xt_checksum.max_encode_size + 1]u8 = undefined;
+    //     var writer: std.Io.Writer = .fixed(&buf);
+    //     xt_checksum.encode(
+    //         &writer,
+    //         req.id,
+    //         self.terminal.rectXtChecksum(req),
+    //     ) catch unreachable;
+    //     const len = writer.buffered().len;
+    //     buf[len] = 0;
+    //     self.writePty(buf[0..len :0]);
+    // }
+    pub(super) fn report_xt_checksum(&mut self, req: crate::xt_checksum::Request) {
+        if !self.xt_checksum_report {
+            return;
+        }
+        let sum = self.term().rect_xt_checksum(req);
+        let mut buf = [0u8; crate::xt_checksum::MAX_ENCODE_SIZE + 1];
+        let mut writer = crate::fixed_writer::FixedWriter::new(&mut buf);
+        // PORT NOTE: the reference's `catch unreachable` holds by
+        // construction: the longest reply, `"\x1bP65535!~FFFF\x1b\\"`, is
+        // `max_encode_size` bytes, and the buffer has one more for the NUL.
+        crate::xt_checksum::encode(&mut writer, req.id, sum)
+            .expect("unreachable: the DECRQCRA reply fits in max_encode_size");
+        let len = writer.end;
+        // buf[len] = 0; — the `[:0]` sentinel; `write_pty` takes `&[u8]` (see
+        // its PORT NOTE), so the slice handed over stops before it.
+        buf[len] = 0;
+        self.write_pty(&buf[..len]);
+    }
+
     // fn reportSize(self: *Handler, style: csi.SizeReportStyle) void { ... }
     pub(super) fn report_size(&mut self, style: csi::SizeReportStyle) {
         // Almost all size reports will fit in 256 bytes so try that

@@ -1,0 +1,13 @@
+   Compiling libxml2-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/libxml2-sys)
+   Compiling fontconfig-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/fontconfig-sys)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.90s
+     Running unittests src/lib.rs (target/san-msan/aarch64-unknown-linux-gnu/debug/deps/fontconfig_sys-7d30c3328a97dda0)
+
+running 4 tests
+test dir_defines::tests::freebsd_uses_usr_local_etc_fonts ... ok
+test dir_defines::tests::other_oses_use_etc_fonts ... ok
+test tests::kat_fontconfig_2_18_3_init_and_pattern ... ok
+test tests::ud360_cache_stamped_by_fontconfig_2_18_3_is_rescanned_after_its_dir_changes ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.13s
+

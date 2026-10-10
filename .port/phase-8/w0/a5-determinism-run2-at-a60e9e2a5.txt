@@ -1,0 +1,38 @@
+== (a) headers compile ==
+  OK
+== (a2) EVERY published header compiles standalone as C11 and C++17 ==
+  OK  rustty.h (c11 + c++17)
+  OK  rustty-apprt.h (c11 + c++17)
+  OK  rustty-embed.h (c11 + c++17)
+  OK  rustty/vt.h (c++17; the (a) probe covers C)
+== (a3) include/rustty.h is byte-identical to a fresh cbindgen run ==
+  OK (regenerated and byte-identical)
+== (a3b) include/rustty-apprt.h is byte-identical to a fresh cbindgen run ==
+  OK (regenerated and byte-identical)
+== (a4) generated rustty_style_default pointee == curated RusttyStyle ==
+  OK (pointee is a 72-byte struct, == sizeof(RusttyStyle))
+== (a5) rustty.h: rustty_size_report_encode(SizeReportSize) encodes the reference vector ==
+  OK (rustty.h's SizeReportSize round-trips through the library)
+== (b) every declared+cbindgen rustty_* symbol is a real export ==
+  OK (204 symbols cross-checked, floor 204; 6 documented non-ABI tokens)
+== (d) every ORACLE lib_vt.zig export has a rustty_* counterpart ==
+  OK (204 oracle exports checked; 0 documented residual(s), owner: P4-W5 T6 Bundle W)
+== (c) struct layouts match rustty_type_json() ==
+    67 sizeof + 285 offsetof asserts across 65 header aggregates OK [type_json registry vs oracle: 172 types, 0 residuals owned by the later P4-W5 bundles] (0 documented as not in type_json)
+== (e) enum discriminants and names match the curated headers ==
+    self-test PASS: matching fixture is green
+    self-test PASS: transposed fixture: value asserts alone stay green
+    self-test PASS: transposed fixture: the name arm is RED
+    self-test PASS: a suffix that is not at a `_` boundary is RED
+    self-test PASS: a stale NAME_ALIASES row is RED
+    SELF-TEST: PASS
+    719 enumerator discriminants and names across 77 enums OK (1 documented unmapped, 8 name alias(es))
+== (f) no two rustty-vt-c types share a name cbindgen emits ==
+    self-test PASS: clean fixture is green
+    self-test PASS: an item after a #[cfg(test)] module is read
+    self-test PASS: an unlisted duplicate is RED
+    self-test PASS: a stale baseline row is RED, a listed one is accepted
+    self-test PASS: a third definition of a baselined name is RED
+    SELF-TEST: PASS
+    no new cbindgen type-name collisions in include/rustty.h (0 pre-existing, baselined in N529)
+VT-HEADERS: GREEN

@@ -1322,6 +1322,229 @@ fn reentrant_callback_paste_reader() {
     });
 }
 
+// ---------------------------------------------------------------------
+// Rust-only (P8-W5 T3; R2 §2.9; Miri targets, filter `callback`). The four
+// effects this task adds hand the callback text that borrows the OSC
+// parser's buffer or capture inside `wrapper.stream.parser` (unknown OSC
+// content, program-status id and app, the semantic-prompt error), or this
+// frame's buffers (program-status title and message, the decoded command
+// line). Each callback below, fired from `vt_write`, re-enters the same
+// terminal while it holds that text: it reads the title and the memory
+// usage (`rustty_terminal_get`) and sets UNKNOWN_MAX_BYTES, which writes
+// the OSC parser's own limit. Only then does it read the borrowed strings.
+// Under Miri (SB and TB) this proves the trampolines' `live_handler` and the
+// raw place write of the parser limit leave the borrowed bytes valid.
+// ---------------------------------------------------------------------
+
+/// What the four re-entry callbacks recorded.
+#[derive(Default)]
+struct OscReentry {
+    calls: usize,
+    titles: Vec<Vec<u8>>,
+    primary_pages: Vec<u64>,
+    strings: Vec<Vec<u8>>,
+}
+
+/// Re-enter `t` the way the callbacks above do: read the title and the
+/// memory usage, then set the shared unknown-sequence limit to 3.
+///
+/// # Safety
+/// `t` is the live terminal the callback was given; `r` is the test's live
+/// `OscReentry`.
+unsafe fn osc_reenter(t: Terminal, r: *mut OscReentry) {
+    let mut title = LibString::init(b"");
+    assert_eq!(Result::Success, unsafe {
+        get(t, TerminalData::Title, (&raw mut title).cast())
+    });
+    let title = unsafe { core::slice::from_raw_parts(title.ptr, title.len) }.to_vec();
+    let mut usage = TerminalMemoryUsage::default();
+    assert_eq!(Result::Success, unsafe {
+        get(t, TerminalData::MemoryUsage, (&raw mut usage).cast())
+    });
+    let max_bytes: usize = 3;
+    assert_eq!(Result::Success, unsafe {
+        set(t, Option_::UnknownMaxBytes, (&raw const max_bytes).cast())
+    });
+    unsafe {
+        (*r).calls += 1;
+        (*r).titles.push(title);
+        (*r).primary_pages.push(usage.primary_pages);
+    }
+}
+
+/// # Safety
+/// `s` is a borrowed string valid for the callback.
+unsafe fn osc_reentry_copy(r: *mut OscReentry, s: LibString) {
+    let bytes = if s.len == 0 {
+        Vec::new()
+    } else {
+        unsafe { core::slice::from_raw_parts(s.ptr, s.len) }.to_vec()
+    };
+    unsafe { (*r).strings.push(bytes) };
+}
+
+/// A new 10x3 terminal with `r` as userdata and the title "t".
+fn osc_reentry_terminal(alloc: &CAllocator, r: *mut OscReentry) -> Terminal {
+    let (new_result, t) = new_t(alloc, 10, 3);
+    assert_eq!(Result::Success, new_result);
+    assert_eq!(Result::Success, unsafe {
+        set(t, Option_::Userdata, r as *const c_void)
+    });
+    vtw(t, b"\x1b]2;t\x07");
+    t
+}
+
+#[test]
+fn reentrant_callback_unknown_osc() {
+    extern "C" fn on_unknown(t: Terminal, ud: *mut c_void, sequence: *const UnknownSequence) {
+        let r = ud as *mut OscReentry;
+        unsafe {
+            osc_reenter(t, r);
+            assert_eq!(UnknownSequenceTag::Osc, (*sequence).tag);
+            osc_reentry_copy(r, (*sequence).value.osc.content);
+        }
+    }
+    with_test_allocator(|alloc| {
+        let mut r = OscReentry::default();
+        let rp: *mut OscReentry = &mut r;
+        let t = osc_reentry_terminal(alloc, rp);
+        let max_bytes: usize = 8;
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::UnknownMaxBytes, (&raw const max_bytes).cast())
+        });
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::UnknownSequence, on_unknown as *const c_void)
+        });
+
+        // The callback lowers the limit while it holds the content; the
+        // content it then reads is the sequence it was given, and the next
+        // sequence is captured at the new limit.
+        vtw(t, b"\x1b]7400;abcdef\x07\x1b]7400;abcdef\x1b\\");
+        unsafe {
+            assert_eq!(2, (*rp).calls);
+            assert_eq!(vec![b"t".to_vec(), b"t".to_vec()], (*rp).titles);
+            assert!((*rp).primary_pages.iter().all(|&p| p > 0));
+            assert_eq!(vec![b"7400;abc".to_vec(), b"740".to_vec()], (*rp).strings);
+            assert_eq!(3, (*t).stream.parser.osc_parser.unknown_max_bytes);
+            assert_eq!(3, (*t).stream.handler.apc_handler.unknown_max_bytes);
+        }
+        unsafe { free(t) };
+    });
+}
+
+#[test]
+fn reentrant_callback_program_status() {
+    extern "C" fn on_program_status(t: Terminal, ud: *mut c_void, report: *const ProgramStatus) {
+        let r = ud as *mut OscReentry;
+        unsafe {
+            osc_reenter(t, r);
+            osc_reentry_copy(r, (*report).id);
+            osc_reentry_copy(r, (*report).app);
+            osc_reentry_copy(r, (*report).title);
+            osc_reentry_copy(r, (*report).message);
+        }
+    }
+    with_test_allocator(|alloc| {
+        let mut r = OscReentry::default();
+        let rp: *mut OscReentry = &mut r;
+        let t = osc_reentry_terminal(alloc, rp);
+        assert_eq!(Result::Success, unsafe {
+            set(
+                t,
+                Option_::ProgramStatus,
+                on_program_status as *const c_void,
+            )
+        });
+
+        vtw(
+            t,
+            b"\x1b]7501;state=blocked:id=a/b:app=terraform:title=UGxhbg==:msg=QXBwbHk/\x07",
+        );
+        unsafe {
+            assert_eq!(1, (*rp).calls);
+            assert_eq!(vec![b"t".to_vec()], (*rp).titles);
+            assert_eq!(
+                vec![
+                    b"a/b".to_vec(),
+                    b"terraform".to_vec(),
+                    b"Plan".to_vec(),
+                    b"Apply?".to_vec(),
+                ],
+                (*rp).strings
+            );
+            assert_eq!(3, (*t).stream.parser.osc_parser.unknown_max_bytes);
+        }
+        unsafe { free(t) };
+    });
+}
+
+#[test]
+fn reentrant_callback_semantic_prompt() {
+    extern "C" fn on_semantic_prompt(t: Terminal, ud: *mut c_void, event: *const SemanticPrompt) {
+        let r = ud as *mut OscReentry;
+        unsafe {
+            osc_reenter(t, r);
+            osc_reentry_copy(r, (*event).command);
+            osc_reentry_copy(r, (*event).error);
+        }
+    }
+    with_test_allocator(|alloc| {
+        let mut r = OscReentry::default();
+        let rp: *mut OscReentry = &mut r;
+        let t = osc_reentry_terminal(alloc, rp);
+        assert_eq!(Result::Success, unsafe {
+            set(
+                t,
+                Option_::SemanticPrompt,
+                on_semantic_prompt as *const c_void,
+            )
+        });
+
+        vtw(
+            t,
+            b"\x1b]133;C;cmdline_url=ls%20-la\x07\x1b]133;D;1;err=boom\x1b\\",
+        );
+        unsafe {
+            assert_eq!(2, (*rp).calls);
+            assert_eq!(
+                vec![b"ls -la".to_vec(), Vec::new(), Vec::new(), b"boom".to_vec(),],
+                (*rp).strings
+            );
+        }
+        unsafe { free(t) };
+    });
+}
+
+#[test]
+fn reentrant_callback_reset() {
+    extern "C" fn on_reset(t: Terminal, ud: *mut c_void) {
+        unsafe { osc_reenter(t, ud as *mut OscReentry) };
+    }
+    with_test_allocator(|alloc| {
+        let mut r = OscReentry::default();
+        let rp: *mut OscReentry = &mut r;
+        let t = osc_reentry_terminal(alloc, rp);
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::Reset, on_reset as *const c_void)
+        });
+
+        // RIS clears the title before the callback; text after it in the
+        // same write still lands.
+        vtw(t, b"\x1bcAB");
+        unsafe {
+            assert_eq!(1, (*rp).calls);
+            assert_eq!(vec![Vec::<u8>::new()], (*rp).titles);
+            assert_eq!(3, (*t).stream.parser.osc_parser.unknown_max_bytes);
+        }
+        let mut x: size::CellCountInt = 0;
+        assert_eq!(Result::Success, unsafe {
+            get(t, TerminalData::CursorX, (&raw mut x).cast())
+        });
+        assert_eq!(2, x);
+        unsafe { free(t) };
+    });
+}
+
 // test "title_changed without callback is silent"
 #[test]
 fn title_changed_without_callback_is_silent() {
@@ -1633,14 +1856,311 @@ fn set_progress_report_callback() {
     });
 }
 
+// test "set program_status callback"
+#[test]
+fn set_program_status_callback() {
+    // const S = struct { var count ... };
+    static mut COUNT: usize = 0;
+    static mut LAST_USERDATA: *mut c_void = std::ptr::null_mut();
+    static mut LAST_SIZE: usize = 0;
+    static mut LAST_STATE: ProgramStatusState = ProgramStatusState::Idle;
+    static mut LAST_KIND: ProgramStatusKind = ProgramStatusKind::None;
+    static mut LAST_PROGRESS: i8 = -1;
+    static mut LAST_ID: Vec<u8> = Vec::new();
+    static mut LAST_APP: Vec<u8> = Vec::new();
+    static mut LAST_TITLE: Vec<u8> = Vec::new();
+    static mut LAST_MESSAGE: Vec<u8> = Vec::new();
+    static mut WRITTEN: Vec<u8> = Vec::new();
+
+    // fn copy(dst: []u8, src: lib.String) usize { ... }
+    // PORT NOTE: the fixed `[64]u8` buffers + lengths become `Vec`s (the
+    // crate's test-capture convention).
+    unsafe fn copy(dst: *mut Vec<u8>, src: LibString) {
+        unsafe {
+            (*dst).clear();
+            if src.len > 0 {
+                (*dst).extend_from_slice(core::slice::from_raw_parts(src.ptr, src.len));
+            }
+        }
+    }
+
+    extern "C" fn program_status(_: Terminal, ud: *mut c_void, report: *const ProgramStatus) {
+        unsafe {
+            COUNT += 1;
+            LAST_USERDATA = ud;
+            LAST_SIZE = (*report).size;
+            LAST_STATE = (*report).state;
+            LAST_KIND = (*report).kind;
+            LAST_PROGRESS = (*report).progress;
+            copy(&raw mut LAST_ID, (*report).id);
+            copy(&raw mut LAST_APP, (*report).app);
+            copy(&raw mut LAST_TITLE, (*report).title);
+            copy(&raw mut LAST_MESSAGE, (*report).message);
+        }
+    }
+
+    extern "C" fn write_pty(_: Terminal, _: *mut c_void, ptr: *const u8, len: usize) {
+        unsafe {
+            let written: *mut Vec<u8> = &raw mut WRITTEN;
+            (*written).extend_from_slice(core::slice::from_raw_parts(ptr, len));
+        }
+    }
+    fn get(v: *const Vec<u8>) -> Vec<u8> {
+        unsafe { (*v).clone() }
+    }
+
+    with_test_allocator(|alloc| {
+        let (new_result, t) = new_t(alloc, 80, 24);
+        assert_eq!(Result::Success, new_result);
+        // S.count = 0;
+        // S.written_len = 0;
+        unsafe {
+            COUNT = 0;
+            let written: *mut Vec<u8> = &raw mut WRITTEN;
+            (*written).clear();
+        }
+
+        // var sentinel: u8 = 100;
+        let mut sentinel: u8 = 100;
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::Userdata, (&raw mut sentinel).cast())
+        });
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::WritePty, write_pty as *const c_void)
+        });
+
+        // Without the callback, the support query is not answered.
+        let query = b"\x1B]7501;?\x1B\\";
+        vtw(t, query);
+        assert_eq!(0, get(&raw const WRITTEN).len());
+
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::ProgramStatus, program_status as *const c_void)
+        });
+
+        // With the callback, it is.
+        vtw(t, query);
+        assert_eq!(query.as_slice(), get(&raw const WRITTEN).as_slice());
+        assert_eq!(0, unsafe { COUNT });
+
+        // "Plan" and "Apply?"
+        let report: &[u8] = b"\x1B]7501;state=blocked:kind=permission:progress=40:id=a/b\
+:app=terraform:title=UGxhbg==:msg=QXBwbHk/\x07";
+        vtw(t, report);
+        assert_eq!(1, unsafe { COUNT });
+        assert_eq!((&raw mut sentinel).cast::<c_void>(), unsafe {
+            LAST_USERDATA
+        });
+        assert_eq!(size_of::<ProgramStatus>(), unsafe { LAST_SIZE });
+        assert_eq!(ProgramStatusState::Blocked, unsafe { LAST_STATE });
+        assert_eq!(ProgramStatusKind::Permission, unsafe { LAST_KIND });
+        assert_eq!(40i8, unsafe { LAST_PROGRESS });
+        assert_eq!(b"a/b".as_slice(), get(&raw const LAST_ID).as_slice());
+        assert_eq!(b"terraform".as_slice(), get(&raw const LAST_APP).as_slice());
+        assert_eq!(b"Plan".as_slice(), get(&raw const LAST_TITLE).as_slice());
+        assert_eq!(
+            b"Apply?".as_slice(),
+            get(&raw const LAST_MESSAGE).as_slice()
+        );
+
+        // Absent values are empty, none, or -1.
+        let minimal = b"\x1B]7501;state=done\x1B\\";
+        vtw(t, minimal);
+        assert_eq!(2, unsafe { COUNT });
+        assert_eq!(ProgramStatusState::Done, unsafe { LAST_STATE });
+        assert_eq!(ProgramStatusKind::None, unsafe { LAST_KIND });
+        assert_eq!(-1i8, unsafe { LAST_PROGRESS });
+        assert_eq!(0, get(&raw const LAST_ID).len());
+        assert_eq!(0, get(&raw const LAST_APP).len());
+        assert_eq!(0, get(&raw const LAST_TITLE).len());
+        assert_eq!(0, get(&raw const LAST_MESSAGE).len());
+
+        // Unsetting the callback ignores reports and the query again.
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::ProgramStatus, std::ptr::null())
+        });
+        unsafe {
+            let written: *mut Vec<u8> = &raw mut WRITTEN;
+            (*written).clear();
+        }
+        vtw(t, query);
+        vtw(t, minimal);
+        assert_eq!(0, get(&raw const WRITTEN).len());
+        assert_eq!(2, unsafe { COUNT });
+
+        unsafe { free(t) };
+    });
+}
+
+// test "set semantic_prompt callback"
+#[test]
+fn set_semantic_prompt_callback() {
+    static mut COUNT: usize = 0;
+    static mut LAST_USERDATA: *mut c_void = std::ptr::null_mut();
+    static mut LAST_SIZE: usize = 0;
+    static mut LAST_KIND: SemanticPromptKind = SemanticPromptKind::Invalid;
+    static mut LAST_PROMPT_KIND: SemanticPromptPromptKind = SemanticPromptPromptKind::Primary;
+    static mut LAST_HAS_EXIT_CODE: bool = false;
+    static mut LAST_EXIT_CODE: i32 = 0;
+    static mut COMMAND: Vec<u8> = Vec::new();
+    static mut ERROR: Vec<u8> = Vec::new();
+
+    extern "C" fn semantic_prompt(_: Terminal, ud: *mut c_void, event: *const SemanticPrompt) {
+        unsafe {
+            COUNT += 1;
+            LAST_USERDATA = ud;
+            LAST_SIZE = (*event).size;
+            LAST_KIND = (*event).kind;
+            LAST_PROMPT_KIND = (*event).prompt_kind;
+            LAST_HAS_EXIT_CODE = (*event).has_exit_code;
+            LAST_EXIT_CODE = (*event).exit_code;
+            let command = (*event).command;
+            let command_out: *mut Vec<u8> = &raw mut COMMAND;
+            *command_out = core::slice::from_raw_parts(command.ptr, command.len).to_vec();
+            let error = (*event).error;
+            let error_out: *mut Vec<u8> = &raw mut ERROR;
+            *error_out = core::slice::from_raw_parts(error.ptr, error.len).to_vec();
+        }
+    }
+    fn get(v: *const Vec<u8>) -> Vec<u8> {
+        unsafe { (*v).clone() }
+    }
+
+    with_test_allocator(|alloc| {
+        let (new_result, t) = new_t(alloc, 80, 24);
+        assert_eq!(Result::Success, new_result);
+        // S.count = 0; S.last_userdata = null; S.last_size = 0;
+        unsafe {
+            COUNT = 0;
+            LAST_USERDATA = std::ptr::null_mut();
+            LAST_SIZE = 0;
+        }
+
+        let mut sentinel: u8 = 100;
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::Userdata, (&raw mut sentinel).cast())
+        });
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::SemanticPrompt, semantic_prompt as *const c_void)
+        });
+
+        let prompt = b"\x1B]133;P;k=r\x07";
+        vtw(t, prompt);
+        assert_eq!(1, unsafe { COUNT });
+        assert_eq!((&raw mut sentinel).cast::<c_void>(), unsafe {
+            LAST_USERDATA
+        });
+        assert_eq!(size_of::<SemanticPrompt>(), unsafe { LAST_SIZE });
+        assert_eq!(SemanticPromptKind::PromptStart, unsafe { LAST_KIND });
+        assert_eq!(SemanticPromptPromptKind::Right, unsafe { LAST_PROMPT_KIND });
+        assert!(!unsafe { LAST_HAS_EXIT_CODE });
+
+        let input = b"\x1B]133;B\x07";
+        vtw(t, input);
+        assert_eq!(2, unsafe { COUNT });
+        assert_eq!(SemanticPromptKind::InputStart, unsafe { LAST_KIND });
+        assert_eq!(SemanticPromptPromptKind::Primary, unsafe {
+            LAST_PROMPT_KIND
+        });
+
+        let output = b"\x1B]133;C;cmdline_url=ls%20-la\x07";
+        vtw(t, output);
+        assert_eq!(3, unsafe { COUNT });
+        assert_eq!(SemanticPromptKind::OutputStart, unsafe { LAST_KIND });
+        assert_eq!(b"ls -la".as_slice(), get(&raw const COMMAND).as_slice());
+
+        let end = b"\x1B]133;D;-1;err=boom\x07";
+        vtw(t, end);
+        assert_eq!(4, unsafe { COUNT });
+        assert_eq!(SemanticPromptKind::CommandEnd, unsafe { LAST_KIND });
+        assert!(unsafe { LAST_HAS_EXIT_CODE });
+        assert_eq!(-1i32, unsafe { LAST_EXIT_CODE });
+        assert_eq!(b"boom".as_slice(), get(&raw const ERROR).as_slice());
+        assert_eq!(0, get(&raw const COMMAND).len());
+
+        let end_no_code = b"\x1B]133;D\x07";
+        vtw(t, end_no_code);
+        assert_eq!(5, unsafe { COUNT });
+        assert!(!unsafe { LAST_HAS_EXIT_CODE });
+        assert_eq!(0i32, unsafe { LAST_EXIT_CODE });
+        assert_eq!(0, get(&raw const ERROR).len());
+
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::SemanticPrompt, std::ptr::null())
+        });
+        vtw(t, prompt);
+        assert_eq!(5, unsafe { COUNT });
+
+        unsafe { free(t) };
+    });
+}
+
+// test "set reset callback"
+#[test]
+fn set_reset_callback() {
+    // N541: this test reaches `sys::log_fn`; hold the sys guard so its
+    // warnings cannot land in another test's log sink.
+    let _guard = crate::sys::tests::reset_global();
+    static mut COUNT: usize = 0;
+    static mut LAST_USERDATA: *mut c_void = std::ptr::null_mut();
+
+    extern "C" fn reset_cb(_: Terminal, ud: *mut c_void) {
+        unsafe {
+            COUNT += 1;
+            LAST_USERDATA = ud;
+        }
+    }
+
+    with_test_allocator(|alloc| {
+        let (new_result, t) = new_t(alloc, 80, 24);
+        assert_eq!(Result::Success, new_result);
+        unsafe {
+            COUNT = 0;
+            LAST_USERDATA = std::ptr::null_mut();
+        }
+
+        let mut sentinel: u8 = 100;
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::Userdata, (&raw mut sentinel).cast())
+        });
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::Reset, reset_cb as *const c_void)
+        });
+
+        // A soft reset (DECSTR) doesn't report a reset.
+        let soft = b"\x1B[!p";
+        vtw(t, soft);
+        assert_eq!(0, unsafe { COUNT });
+
+        let full = b"\x1Bc";
+        vtw(t, full);
+        assert_eq!(1, unsafe { COUNT });
+        assert_eq!((&raw mut sentinel).cast::<c_void>(), unsafe {
+            LAST_USERDATA
+        });
+
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::Reset, std::ptr::null())
+        });
+        vtw(t, full);
+        assert_eq!(1, unsafe { COUNT });
+
+        unsafe { free(t) };
+    });
+}
+
 // test "set unknown_sequence callback"
 #[test]
 fn set_unknown_sequence_callback() {
+    // N541: this test reaches `sys::log_fn`; hold the sys guard so its
+    // warnings cannot land in another test's log sink.
+    let _guard = crate::sys::tests::reset_global();
     static mut COUNT: usize = 0;
     static mut LAST_TERMINAL: Terminal = std::ptr::null_mut();
     static mut LAST_USERDATA: *mut c_void = std::ptr::null_mut();
     static mut LAST_TAG: UnknownSequenceTag = UnknownSequenceTag::Apc;
     static mut LAST_TRUNCATED: bool = false;
+    static mut LAST_TERMINATOR: crate::osc::Terminator = crate::osc::Terminator::St;
     static mut CONTENT: [u8; 64] = [0; 64];
     static mut CONTENT_LEN: usize = 0;
 
@@ -1654,14 +2174,37 @@ fn set_unknown_sequence_callback() {
             LAST_TERMINAL = terminal_;
             LAST_USERDATA = ud;
             LAST_TAG = (*sequence).tag;
-            // const apc_value = sequence.value.apc;
-            let apc_value = (*sequence).value.apc;
-            LAST_TRUNCATED = apc_value.truncated;
-            // content_len = @min(apc_value.content.len, content.len);
-            CONTENT_LEN = core::cmp::min(apc_value.content.len, 64);
-            // @memcpy(content[0..content_len], apc_value.content.ptr[0..content_len]);
+            // const str: lib.String = switch (sequence.tag) {
+            //     .apc => str: {
+            //         const apc_value = sequence.value.apc;
+            //         last_truncated = apc_value.truncated;
+            //         break :str apc_value.content;
+            //     },
+            //     .osc => str: {
+            //         const osc_value = sequence.value.osc;
+            //         last_truncated = osc_value.truncated;
+            //         last_terminator = osc_value.terminator;
+            //         break :str osc_value.content;
+            //     },
+            // };
+            let str = match (*sequence).tag {
+                UnknownSequenceTag::Apc => {
+                    let apc_value = (*sequence).value.apc;
+                    LAST_TRUNCATED = apc_value.truncated;
+                    apc_value.content
+                }
+                UnknownSequenceTag::Osc => {
+                    let osc_value = (*sequence).value.osc;
+                    LAST_TRUNCATED = osc_value.truncated;
+                    LAST_TERMINATOR = osc_value.terminator;
+                    osc_value.content
+                }
+            };
+            // content_len = @min(str.len, content.len);
+            CONTENT_LEN = core::cmp::min(str.len, 64);
+            // @memcpy(content[0..content_len], str.ptr[0..content_len]);
             core::ptr::copy_nonoverlapping(
-                apc_value.content.ptr,
+                str.ptr,
                 core::ptr::addr_of_mut!(CONTENT) as *mut u8,
                 CONTENT_LEN,
             );
@@ -1708,6 +2251,10 @@ fn set_unknown_sequence_callback() {
         // try testing.expectEqual(max_bytes, t.?.stream.handler.apc_handler.unknown_max_bytes);
         assert_eq!(max_bytes, unsafe {
             (*t).stream.handler.apc_handler.unknown_max_bytes
+        });
+        // try testing.expectEqual(max_bytes, t.?.stream.parser.osc_parser.unknown_max_bytes);
+        assert_eq!(max_bytes, unsafe {
+            (*t).stream.parser.osc_parser.unknown_max_bytes
         });
 
         // A byte limit without a callback performs no external effect.
@@ -1764,13 +2311,39 @@ fn set_unknown_sequence_callback() {
         vtw(t, aborted);
         assert_eq!(2, unsafe { COUNT });
 
+        // Unknown OSCs share the callback and the byte limit.
+        // const osc_st = "\x1B]7400;x\x1B\\";
+        let osc_st = b"\x1B]7400;x\x1B\\";
+        vtw(t, osc_st);
+        assert_eq!(3, unsafe { COUNT });
+        assert_eq!(UnknownSequenceTag::Osc, unsafe { LAST_TAG });
+        assert!(!unsafe { LAST_TRUNCATED });
+        assert_eq!(crate::osc::Terminator::St, unsafe { LAST_TERMINATOR });
+        assert_eq!(b"7400;x".as_slice(), content());
+
+        // const osc_bel = "\x1B]7400;abcdef\x07";
+        let osc_bel = b"\x1B]7400;abcdef\x07";
+        vtw(t, osc_bel);
+        assert_eq!(4, unsafe { COUNT });
+        assert_eq!(UnknownSequenceTag::Osc, unsafe { LAST_TAG });
+        assert!(unsafe { LAST_TRUNCATED });
+        assert_eq!(crate::osc::Terminator::Bel, unsafe { LAST_TERMINATOR });
+        assert_eq!(b"7400;abc".as_slice(), content());
+
+        // Aborted unknown OSCs and supported OSCs are not reported.
+        // const osc_aborted = "\x1B]7400;x\x18\x1B]2;title\x07";
+        let osc_aborted = b"\x1B]7400;x\x18\x1B]2;title\x07";
+        vtw(t, osc_aborted);
+        assert_eq!(4, unsafe { COUNT });
+
         // Clearing the callback restores the null fast path immediately.
         assert_eq!(Result::Success, unsafe {
             set(t, Option_::UnknownSequence, std::ptr::null())
         });
         assert!(unsafe { (*t).stream.handler.unknown_sequence }.is_none());
         vtw(t, before_callback);
-        assert_eq!(2, unsafe { COUNT });
+        vtw(t, osc_st);
+        assert_eq!(4, unsafe { COUNT });
 
         // A NULL limit disables capture even after reinstalling the callback.
         assert_eq!(Result::Success, unsafe {
@@ -1787,8 +2360,13 @@ fn set_unknown_sequence_callback() {
         assert_eq!(0, unsafe {
             (*t).stream.handler.apc_handler.unknown_max_bytes
         });
+        // try testing.expectEqual(@as(usize, 0), t.?.stream.parser.osc_parser.unknown_max_bytes);
+        assert_eq!(0, unsafe {
+            (*t).stream.parser.osc_parser.unknown_max_bytes
+        });
         vtw(t, before_callback);
-        assert_eq!(2, unsafe { COUNT });
+        vtw(t, osc_st);
+        assert_eq!(4, unsafe { COUNT });
 
         unsafe { free(t) };
     });

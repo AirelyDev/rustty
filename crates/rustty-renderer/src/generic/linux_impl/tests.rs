@@ -227,9 +227,15 @@ fn enter_test_renderer(r: &mut Renderer) {
 #[test]
 fn linux_opengl_renderer_init_then_deinit_round_trips() {
     let _guard = test_support::gl_lock();
+    let Some(device) =
+        test_support::device_or_skip("linux_opengl_renderer_init_then_deinit_round_trips")
+    else {
+        return;
+    };
 
     let (font_grid, size) = test_font_grid_and_size(10, 3);
     let opts = Options {
+        device,
         config: derived_config_for_test(),
         font_grid,
         size,
@@ -237,7 +243,10 @@ fn linux_opengl_renderer_init_then_deinit_round_trips() {
         surface_mailbox: SurfaceMailbox::DETACHED,
     };
 
-    let mut r = match Renderer::init(Global, opts) {
+    // SAFETY: `opts.device` is the process's test device (created once, never
+    // freed) and `opts.font_grid` the boxed test grid, freed only after the
+    // renderer's `deinit`, so both outlive `r`.
+    let mut r = match unsafe { Renderer::init(Global, opts) } {
         Ok(r) => r,
         // A GL/context failure here is the host being unable to stand up a
         // 4.3-core context (absent EGL / no surfaceless platform / the virgl
@@ -347,6 +356,39 @@ fn linux_opengl_display_unrealize_then_realize_releases_and_rebuilds_on_the_rend
     unsafe { Renderer::display_unrealized_raw(rp, &lock) };
     assert!(unsafe { Renderer::release_if_unrealized_raw(rp, &lock) });
     assert!(r.swap_chain.is_none());
+
+    deinit_test_renderer(&mut r);
+}
+
+/// `140feb86a`: `threadExit` marks the display unrealized before
+/// `releaseGpuResources`, so the shaders are freed even for an apprt that never
+/// unrealizes (macOS), and no later draw rebuilds resources after the render
+/// thread is gone. Plays the render thread with its own lock handle (N437).
+#[test]
+fn linux_opengl_thread_exit_unrealizes_the_display() {
+    let _guard = test_support::gl_lock();
+    let Some(mut r) = golden_renderer(10, 3) else {
+        return;
+    };
+    r.draw_frame(false).expect("first draw");
+    assert!(r.display_realized);
+    assert!(r.swap_chain.is_some());
+    assert!(!r.shaders.defunct);
+
+    // The `draw_mutex` block of `threadExit` (the API teardown is left to
+    // `deinit_test_renderer`'s own `thread_exit`).
+    let lock = r.draw_mutex.clone();
+    lock.lock();
+    r.thread_exit_locked();
+    lock.unlock();
+    assert!(!r.display_realized, "threadExit unrealizes the display");
+    assert!(r.swap_chain.is_none());
+    assert!(r.shaders.defunct, "the shaders are released on thread exit");
+
+    // A later draw returns early and rebuilds nothing.
+    r.draw_frame(true).expect("draw after thread exit");
+    assert!(r.swap_chain.is_none());
+    assert!(r.shaders.defunct);
 
     deinit_test_renderer(&mut r);
 }
@@ -549,6 +591,7 @@ fn term_opts(cols: CellCountInt, rows: CellCountInt) -> TermOptions {
         default_modes: ModePacked::default(),
         default_cursor_style: rustty_vt::screen::CursorStyle::Block,
         default_cursor_blink: Some(false),
+        default_xt_checksum: Default::default(),
         kitty_image_storage_limit: 320 * 1000 * 1000,
         kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
     }
@@ -569,16 +612,25 @@ fn term_opts(cols: CellCountInt, rows: CellCountInt) -> TermOptions {
 #[test]
 fn linux_opengl_rebuild_cells_places_ab_and_cursor() {
     let _guard = test_support::gl_lock();
+    let Some(device) =
+        test_support::device_or_skip("linux_opengl_rebuild_cells_places_ab_and_cursor")
+    else {
+        return;
+    };
 
     let (font_grid, size) = test_font_grid_and_size(10, 3);
     let opts = Options {
+        device,
         config: derived_config_for_test(),
         font_grid,
         size,
         // Offscreen: no surface, hence no mailbox (push returns 0).
         surface_mailbox: SurfaceMailbox::DETACHED,
     };
-    let mut r = match Renderer::init(Global, opts) {
+    // SAFETY: `opts.device` is the process's test device (created once, never
+    // freed) and `opts.font_grid` the boxed test grid, freed only after the
+    // renderer's `deinit`, so both outlive `r`.
+    let mut r = match unsafe { Renderer::init(Global, opts) } {
         Ok(r) => r,
         Err(e) => {
             // W8-03 strict mode (see test_support docs).
@@ -657,13 +709,17 @@ fn golden_renderer(cols: CellCountInt, rows: CellCountInt) -> Option<Renderer> {
 
     let (font_grid, size) = test_font_grid_and_size(cols, rows);
     let opts = Options {
+        device: test_support::device().expect("the test device (GL probed above)"),
         config: derived_config_for_test(),
         font_grid,
         size,
         // Offscreen: no surface, hence no mailbox (push returns 0).
         surface_mailbox: SurfaceMailbox::DETACHED,
     };
-    let mut r = Renderer::init(Global, opts).expect("Renderer::init (GL probed above)");
+    // SAFETY: `opts.device` is the process's test device (created once, never
+    // freed) and `opts.font_grid` the boxed test grid, freed only after the
+    // renderer's `deinit`, so both outlive `r`.
+    let mut r = unsafe { Renderer::init(Global, opts) }.expect("Renderer::init (GL probed above)");
     enter_test_renderer(&mut r);
     Some(r)
 }

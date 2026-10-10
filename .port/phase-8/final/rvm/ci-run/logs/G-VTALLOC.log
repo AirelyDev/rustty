@@ -1,0 +1,4 @@
+G-VTALLOC: allocator_api2 Vec slow-method ban (N261)
+  ok      config: both clippy.toml files ban 2 paths, identical
+  ok      escape: nothing in the vt crates or the workspace lints switches the ban off
+G-VTALLOC: PASS

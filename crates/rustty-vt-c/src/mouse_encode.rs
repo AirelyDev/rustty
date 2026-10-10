@@ -32,7 +32,7 @@
 // these warnings were always meant to reach — under this scope constant, the
 // `@tagName` of the reference's `std.log.scoped(.mouse_encode)`.
 pub(crate) const LOG_SCOPE: &str = "mouse_encode";
-use crate::mouse_event::{self, Event};
+use crate::mouse_event::{self, MouseEvent};
 use crate::result::Result;
 use crate::terminal as terminal_c;
 use crate::writer::{CountingWriter, FixedWriter};
@@ -71,7 +71,7 @@ pub struct MouseEncoderWrapper {
 
 /// C: RusttyMouseEncoder (R2)
 // pub const Encoder = ?*MouseEncoderWrapper;
-pub type Encoder = *mut MouseEncoderWrapper;
+pub type MouseEncoder = *mut MouseEncoderWrapper;
 
 /// C: RusttyMouseTrackingMode (R2)
 // pub const TrackingMode = terminal_mouse.Event;
@@ -159,7 +159,7 @@ impl MouseFormat {
 // };
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct Size {
+pub struct MouseEncoderSize {
     pub size: usize,
     pub screen_width: u32,
     pub screen_height: u32,
@@ -171,11 +171,11 @@ pub struct Size {
     pub padding_left: u32,
 }
 
-impl Default for Size {
+impl Default for MouseEncoderSize {
     // size: usize = @sizeOf(Size),
     fn default() -> Self {
-        Size {
-            size: std::mem::size_of::<Size>(),
+        MouseEncoderSize {
+            size: std::mem::size_of::<MouseEncoderSize>(),
             screen_width: 0,
             screen_height: 0,
             cell_width: 0,
@@ -188,7 +188,7 @@ impl Default for Size {
     }
 }
 
-impl Size {
+impl MouseEncoderSize {
     // fn toRenderer(self: Size) ?renderer_size.Size {
     //     if (self.cell_width == 0 or self.cell_height == 0) return null;
     //     return .{ .screen = .{ ... }, .cell = .{ ... }, .padding = .{ ... } };
@@ -245,7 +245,7 @@ pub enum Option_ {
 /// # Safety
 /// `alloc_`, if non-null, must point to a valid `CAllocator`; `result` must be
 /// writable storage for one `Encoder`.
-pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut Encoder) -> Result {
+pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut MouseEncoder) -> Result {
     // const ptr = alloc.create(MouseEncoderWrapper) catch return .out_of_memory;
     // ptr.* = .{ .opts = .{ .size = defaultSize() }, .alloc = alloc };
     let ptr = unsafe {
@@ -283,7 +283,7 @@ pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut Encoder) -> Result {
 //
 /// # Safety
 /// `encoder_`, if non-null, must be a handle returned by `new`, not yet freed.
-pub unsafe fn free(encoder_: Encoder) {
+pub unsafe fn free(encoder_: MouseEncoder) {
     // const wrapper = encoder_ orelse return;
     if encoder_.is_null() {
         return;
@@ -313,7 +313,7 @@ pub unsafe fn free(encoder_: Encoder) {
 /// # Safety
 /// `encoder_`, if non-null, must be a `new` handle; `value`, if non-null, must
 /// point to a readable value of the option's in-type.
-pub unsafe fn setopt(encoder_: Encoder, option: c_int, value: *const c_void) {
+pub unsafe fn setopt(encoder_: MouseEncoder, option: c_int, value: *const c_void) {
     // if (comptime std.debug.runtime_safety) {
     //     _ = std.meta.intToEnum(Option, ...) catch { log.warn(...); return; };
     // }
@@ -350,7 +350,7 @@ pub unsafe fn setopt(encoder_: Encoder, option: c_int, value: *const c_void) {
 /// # Safety
 /// `encoder_` must be non-null (`encoder_.?`); `value` must point to a readable
 /// value of `option`'s in-type.
-unsafe fn setopt_typed(encoder_: Encoder, option: Option_, value: *const c_void) {
+unsafe fn setopt_typed(encoder_: MouseEncoder, option: Option_, value: *const c_void) {
     // const wrapper = encoder_.?;
     // SAFETY: `encoder_` is non-null per the caller contract (`.?`).
     let wrapper = unsafe { &mut *encoder_ };
@@ -409,16 +409,16 @@ unsafe fn setopt_typed(encoder_: Encoder, option: Option_, value: *const c_void)
         //     wrapper.last_cell = null;
         // },
         Option_::Size => {
-            let value: &Size = unsafe { &*(value as *const Size) };
+            let value: &MouseEncoderSize = unsafe { &*(value as *const MouseEncoderSize) };
             // if (value.size < @sizeOf(Size)) { ...; return; }
-            if value.size < std::mem::size_of::<Size>() {
+            if value.size < std::mem::size_of::<MouseEncoderSize>() {
                 crate::sys::log_fn(
                     crate::sys::StdLevel::Warn,
                     LOG_SCOPE,
                     format_args!(
                         "setopt size struct too small size={} expected>={}",
                         value.size,
-                        std::mem::size_of::<Size>()
+                        std::mem::size_of::<MouseEncoderSize>()
                     ),
                 );
                 return;
@@ -470,7 +470,7 @@ unsafe fn setopt_typed(encoder_: Encoder, option: Option_, value: *const c_void)
 //
 /// # Safety
 /// `encoder_`/`terminal_`, if non-null, must be live handles.
-pub unsafe fn setopt_from_terminal(encoder_: Encoder, terminal_: terminal_c::Terminal) {
+pub unsafe fn setopt_from_terminal(encoder_: MouseEncoder, terminal_: terminal_c::Terminal) {
     // const wrapper = encoder_ orelse return;
     if encoder_.is_null() {
         return;
@@ -498,7 +498,7 @@ pub unsafe fn setopt_from_terminal(encoder_: Encoder, terminal_: terminal_c::Ter
 //
 /// # Safety
 /// `encoder_`, if non-null, must be a `new` handle.
-pub unsafe fn reset(encoder_: Encoder) {
+pub unsafe fn reset(encoder_: MouseEncoder) {
     // const wrapper = encoder_ orelse return;
     if encoder_.is_null() {
         return;
@@ -535,8 +535,8 @@ pub unsafe fn reset(encoder_: Encoder) {
 /// `encoder_`/`event_` must be `new` handles; `out_` (if non-null) must point to
 /// `out_len` writable bytes; `out_written` must be writable.
 pub unsafe fn encode(
-    encoder_: Encoder,
-    event_: Event,
+    encoder_: MouseEncoder,
+    event_: MouseEvent,
     out_: *mut u8,
     out_len: usize,
     out_written: *mut usize,
@@ -671,19 +671,19 @@ mod tests {
     //     return .{ .size = @sizeOf(Size), .screen_width = 1_000, .screen_height = 1_000,
     //               .cell_width = 1, .cell_height = 1, .padding_* = 0 };
     // }
-    fn test_size() -> Size {
-        Size {
+    fn test_size() -> MouseEncoderSize {
+        MouseEncoderSize {
             screen_width: 1_000,
             screen_height: 1_000,
             cell_width: 1,
             cell_height: 1,
-            ..Size::default()
+            ..MouseEncoderSize::default()
         }
     }
 
     // PORT NOTE: setopt takes the option as the raw `c_int` discriminant (the
     // lib.rs `extern "C"` wrapper guards the range); the tests pass it directly.
-    unsafe fn setopt_v<T>(e: Encoder, option: Option_, v: &T) {
+    unsafe fn setopt_v<T>(e: MouseEncoder, option: Option_, v: &T) {
         unsafe { setopt(e, option as c_int, v as *const T as *const c_void) };
     }
 
@@ -692,7 +692,7 @@ mod tests {
     fn alloc() {
         with_test_allocator(|calloc| {
             // var e: Encoder = undefined;
-            let mut e: Encoder = std::ptr::null_mut();
+            let mut e: MouseEncoder = std::ptr::null_mut();
             // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &e));
             assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut e) });
             // free(e);
@@ -704,7 +704,7 @@ mod tests {
     #[test]
     fn setopt_test() {
         with_test_allocator(|calloc| {
-            let mut e: Encoder = std::ptr::null_mut();
+            let mut e: MouseEncoder = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut e) });
 
             // const event_mode: TrackingMode = .any;
@@ -754,7 +754,7 @@ mod tests {
     #[test]
     fn setopt_from_terminal_test() {
         with_test_allocator(|calloc| {
-            let mut e: Encoder = std::ptr::null_mut();
+            let mut e: MouseEncoder = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut e) });
 
             let mut t: terminal_c::Terminal = std::ptr::null_mut();
@@ -797,7 +797,7 @@ mod tests {
             // setopt_from_terminal(null, t);
             unsafe { setopt_from_terminal(std::ptr::null_mut(), t) };
 
-            let mut e: Encoder = std::ptr::null_mut();
+            let mut e: MouseEncoder = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut e) });
             // setopt_from_terminal(e, null);
             unsafe { setopt_from_terminal(e, std::ptr::null_mut()) };
@@ -812,8 +812,8 @@ mod tests {
     // Result. Mirrors the repeated setopt(event/format/size) preamble; the
     // preamble's `Result.success` expectEqual ASSERTION lives in each test body
     // (assertion-for-assertion; G2 counts source-level asserts per test).
-    fn make_sgr_any_encoder(calloc: &CAllocator) -> (Result, Encoder) {
-        let mut encoder: Encoder = std::ptr::null_mut();
+    fn make_sgr_any_encoder(calloc: &CAllocator) -> (Result, MouseEncoder) {
+        let mut encoder: MouseEncoder = std::ptr::null_mut();
         let new_result = unsafe { new(Some(calloc), &mut encoder) };
         let event_mode = TrackingMode::Any;
         unsafe { setopt_v(encoder, Option_::Event, &event_mode) };
@@ -831,20 +831,20 @@ mod tests {
     #[test]
     fn encode_utf8_surrogate_coordinate_is_not_reported() {
         with_test_allocator(|calloc| {
-            let mut encoder: Encoder = std::ptr::null_mut();
+            let mut encoder: MouseEncoder = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut encoder) });
             let event_mode = TrackingMode::Any;
             unsafe { setopt_v(encoder, Option_::Event, &event_mode) };
-            let size = Size {
+            let size = MouseEncoderSize {
                 screen_width: 60_000,
                 screen_height: 60_000,
                 cell_width: 1,
                 cell_height: 1,
-                ..Size::default()
+                ..MouseEncoderSize::default()
             };
             unsafe { setopt_v(encoder, Option_::Size, &size) };
 
-            let mut event: Event = std::ptr::null_mut();
+            let mut event: MouseEvent = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
                 mouse_event::new(Some(calloc), &mut event)
             });
@@ -919,7 +919,7 @@ mod tests {
             // try testing.expectEqual(Result.success, new(&test_allocator, &encoder));
             assert_eq!(Result::Success, encoder_new_result);
 
-            let mut event: Event = std::ptr::null_mut();
+            let mut event: MouseEvent = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
                 mouse_event::new(Some(calloc), &mut event)
             });
@@ -969,7 +969,7 @@ mod tests {
             let (encoder_new_result, encoder) = make_sgr_any_encoder(calloc);
             assert_eq!(Result::Success, encoder_new_result);
 
-            let mut event: Event = std::ptr::null_mut();
+            let mut event: MouseEvent = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
                 mouse_event::new(Some(calloc), &mut event)
             });
@@ -1007,7 +1007,7 @@ mod tests {
             // setopt(encoder, .track_last_cell, &track_last_cell);
             unsafe { setopt_v(encoder, Option_::TrackLastCell, &track_last_cell) };
 
-            let mut event: Event = std::ptr::null_mut();
+            let mut event: MouseEvent = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
                 mouse_event::new(Some(calloc), &mut event)
             });
@@ -1067,7 +1067,7 @@ mod tests {
             let track_last_cell = true;
             unsafe { setopt_v(encoder, Option_::TrackLastCell, &track_last_cell) };
 
-            let mut event: Event = std::ptr::null_mut();
+            let mut event: MouseEvent = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
                 mouse_event::new(Some(calloc), &mut event)
             });
@@ -1135,7 +1135,7 @@ mod tests {
         CAPTURED.lock().unwrap().clear();
 
         with_test_allocator(|calloc| {
-            let mut e: Encoder = std::ptr::null_mut();
+            let mut e: MouseEncoder = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut e) });
 
             assert_eq!(Result::Success, unsafe {
@@ -1169,7 +1169,7 @@ mod tests {
                 setopt(
                     e,
                     Option_::Size as c_int,
-                    &tiny_size as *const Size as *const c_void,
+                    &tiny_size as *const MouseEncoderSize as *const c_void,
                 )
             };
             // Size with a zero cell dimension (valid struct size, invalid values).
@@ -1179,7 +1179,7 @@ mod tests {
                 setopt(
                     e,
                     Option_::Size as c_int,
-                    &zero_size as *const Size as *const c_void,
+                    &zero_size as *const MouseEncoderSize as *const c_void,
                 )
             };
 
@@ -1226,7 +1226,7 @@ mod tests {
                     "mouse_encode".to_string(),
                     format!(
                         "setopt size struct too small size=1 expected>={}",
-                        std::mem::size_of::<Size>()
+                        std::mem::size_of::<MouseEncoderSize>()
                     ),
                 ),
                 (

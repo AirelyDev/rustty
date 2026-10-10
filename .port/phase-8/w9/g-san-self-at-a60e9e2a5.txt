@@ -1,0 +1,51 @@
+# P8-W9 T2 lane g-san-self at a60e9e2a5 (head 1d22ba80d)
+host: rvm (Fedora aarch64), clone /home/gael/projects/rustty-p8w9t2 (git archive 1d22ba80d plus .port and docs/superpowers copied from the worktree, since .gitattributes export-ignores them)
+### CMD: bash .port/tools/gates/sanitizers.sh --self-test
+start (UTC): 2026-10-08T17:42:16Z
+end (UTC):   2026-10-08T17:45:36Z
+wall: 200 s
+rc: 0
+## verdict lines
+### G-SAN-SELF: sanitizers.sh --self-test (work dir /tmp/san-self.9vKnZP) ###
+G-SAN-SELF: GREEN
+## tail
+  ok   H lsan_gtk_ceiling_check: a ceiling with no entry is stale (RED)
+  ok   H lsan_gtk_ceiling_check: the test ran but the log has no Suppressions used table (RED)
+  ok   H lsan_gtk_ceiling_check: the test ran but the always-matching entry matched nothing (RED)
+  ok   H control: the real LSAN_GTK_MUST_MATCH is a lsan-gtk.supp entry
+  ok   H --gate lsan-gtk with lsan-gtk.supp missing is RED
+  ok   A1 heap overflow: asan 'tests::defect_heap_overflow --exact' -> RED (heap-buffer-overflow)
+  ok   A0 clean control: asan 'tests::clean_control --exact' -> GREEN (1 test(s) ran)
+  ok   A0 the shared target dir is deleted when the pass ends
+  ok   A0 per-crate target dirs (--per-crate-target): asan 'tests::defect_heap_overflow --exact' -> RED (per-crate target dirs)
+  ok   B  empty filter: asan 'no_such_test_anywhere' -> RED (VACUOUS)
+  ok   B  hang past the bound: asan 'tests::slow_hang --exact' -> RED (HANG after 60s (no verdict))
+  ok   B  the hung test's process tree is gone after the kill
+  ok   H a crate that does not build is BLOCKED (exit 3)
+  ok   H the disk floor stops the pass BLOCKED (exit 3)
+  ok   H SAN_ONLY=rustty-identity: its 1 test GREEN, the gate BLOCKED (exit 3), never GREEN
+  ok   G NO_TESTS_ON, filter 'no_such_test_anywhere': 0 tests on Linux by construction (M_RED=0)
+  ok   G NO_TESTS_ON, filter 'tests::clean_control --exact': the entry is stale (M_RED=1)
+  ok   A2 leak: lsan 'tests::defect_leak --exact' -> RED (LeakSanitizer: detected memory leaks)
+  ok   A2 control: clean under LSan: lsan 'tests::clean_control --exact' -> GREEN (1 test(s) ran)
+  ok   A2 control: the leak under G-ASAN (leak checker off): asan 'tests::defect_leak --exact' -> GREEN (1 test(s) ran)
+  ok   A2 opt-out hook reaches the runtime: lsan 'tests::defect_leak --exact' -> GREEN (1 test(s) ran)
+  ok   A2g Rust leak under lsan.supp + lsan-gtk.supp: lsan 'tests::defect_leak --exact' -> RED (LeakSanitizer: detected memory leaks)
+  ok   A2g control: GLib/GObject allocate and free, clean under lsan-gtk.supp: lsan 'glib_leaks::glib_clean_control --exact' -> GREEN (1 test(s) ran)
+  ok   A2g leaked g_strdup string: lsan 'glib_leaks::leak_gstrdup --exact' -> RED (LeakSanitizer: detected memory leaks)
+  ok   A2g leaked GObject: lsan 'glib_leaks::leak_gobject --exact' -> RED (LeakSanitizer: detected memory leaks)
+  ok   A2g leaked FcPattern (lsan-gtk.supp G1): lsan 'glib_leaks::leak_fcpattern --exact' -> RED (LeakSanitizer: detected memory leaks)
+  ok   A2g leaked GClosure, sunk and referenced (the N516 shape; no entry may hide it): lsan 'glib_leaks::leak_gclosure --exact' -> RED (LeakSanitizer: detected memory leaks)
+  ok   A3 uninit read: msan 'tests::defect_uninit_read --exact' -> RED (MemorySanitizer: use-of-uninitialized-value)
+  ok   A3 control: clean under MSan: msan 'tests::clean_control --exact' -> GREEN (1 test(s) ran)
+  ok   A4 heap overflow: hwasan 'tests::defect_heap_overflow --exact' -> RED (HWAddressSanitizer: tag-mismatch)
+  ok   A4 wild index into a live block (what ASan cannot see): hwasan 'tests::defect_wild_index_into_live_block --exact' -> RED (HWAddressSanitizer: tag-mismatch)
+  ok   A4 control: clean under HWASan: hwasan 'tests::clean_control --exact' -> GREEN (1 test(s) ran)
+  ok   A4 heap overflow in C (the cc wrapper instruments it): hwasan 'tests::c_heap_overflow --exact' -> RED (HWAddressSanitizer: tag-mismatch)
+  ok   A4 control: clean C under HWASan, its archive instrumented: hwasan 'tests::c_clean_control --exact' -> GREEN (all instrumented)
+  ok   A5 data race: tsan 'tests::defect_data_race --exact' -> RED (ThreadSanitizer: data race)
+  ok   A5 control: Mutex-ordered writes, clean under TSan: tsan 'tests::synchronized_control --exact' -> GREEN (1 test(s) ran)
+  ok   A5s data race between one test's threads, tests run one at a time (TSAN_SERIAL): tsan 'tests::defect_data_race --exact --test-threads=1' -> RED (ThreadSanitizer: data race)
+  ok   A5 data race in C (the cc wrapper instruments it): tsan 'tests::c_data_race --exact' -> RED (ThreadSanitizer: data race)
+  ok   A5 control: clean C under TSan, its archive instrumented: tsan 'tests::c_clean_control --exact' -> GREEN (tsan C archives: 1 built for the instrumented target, 1 instrumented)
+G-SAN-SELF: GREEN

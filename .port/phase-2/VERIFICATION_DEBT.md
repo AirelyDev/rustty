@@ -270,7 +270,7 @@ audit rows O13a/O14/O15/O16 — so it is scheduled work, not an out-of-scope dec
 **[WS14 sharpening, 2026-07-30: what remains out of scope is the browser *apprt
 runtime* — a full `apprt` App/Surface over the browser. `apprt/browser.zig` ITSELF is
 4 loc and is ported at `crates/rustty-apprt/src/browser.rs`. This exclusion does NOT
-cover WS14, which is DONE: it ports the `renderer/WebGL.zig` placeholder, the
+cover WS14, which is DONE: it ported the `renderer/WebGL.zig` placeholder (**[P8-W6 T1: upstream removed that stub in 05392dcc9 and Rustty's `webgl.rs` went with it; the wasm module and its browser gate are unaffected]**), the
 `main_wasm.zig` module as a real freestanding `rustty_wasm.wasm` cdylib, `App.Wasm`
 and `Atlas.Wasm` (all 4 reference asserts live), and gates browser rendering with a
 falsifiable pixel assertion whose two negative controls must FAIL on every run
@@ -2738,6 +2738,21 @@ What each needs from a first run, by exact job name:
 - `release-tag.yml` `sentry-dsym` (`sentry-cli dif upload --project rustty --wait
   rustty-macos-universal-dsym.zip`, the Sentry project name `rustty` is an assumption the maintainer
   confirms), and `publish-tag.yml`'s new `rustty-macos-universal-dsym.zip` check.
+
+**Added at Phase 8 start (P8-W0 T4, DECISIONS M7; no new V).** The reference's range `12752b2ac..a60e9e2a5` adds two CI
+items that Phase 8 ports into `ci.yml`; they join this debt when written, and are statically checked only:
+
+- `test-esctest` (`438d584f0`, `edcaf6670`; ported by P8-W8 T1): a report-only job (`continue-on-error: true`, not in
+  `required.needs`) that builds the `test/esctest` package outside the workspace, fetches esctest2 by sha256 into
+  `target/share/esctest` (`test/esctest/fetch.sh`), runs it under a pty against a `rustty-vt` terminal (upstream's
+  runner uses the `ghostty-vt` Zig module, not the C ABI), and uploads the log with a step-summary tally. Written by
+  P8-W8 T1; locally its run matches the reference's runner test for test (G-ESCTEST GREEN, 264 passed, 42 known
+  bugs, 261 failed on both, macOS and rvm).
+  First run needs: the esctest2 fetch on the runner, the python3 esctest2 run on `ubuntu-latest`, and the pass tally recorded.
+- the Windows DLL steps (`a7cf951eb`; ported by P8-W5 T4) in `ci.yml`'s `windows` job: build `example/c-vt-effects`
+  against `rustty_vt_c.dll`, copy the DLL beside the exe, run it under `pwsh` and print the exit code as `0x%08X`.
+  The same step is also the proof for the provisional NON-PORT of `src/lib/windows_dll.zig` (DECISIONS P1): P8-W5 T4
+  runs it once on rwin first; the hosted `windows-latest` leg waits on a push like the rest of this debt.
 
 **Recipe:** push the branch to the canonical repository (or a fork, for `ci.yml` only) and read the
 `Required Checks: rustty` result; each red job above is a finding for its NEW-FINDINGS entry (N376,

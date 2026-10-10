@@ -217,6 +217,9 @@ impl rustty_lib::allocator::ZigAllocator for RawZigAllocator<'_> {
 /// Zig-compatible wrapper that calls through to the stored C callback.
 /// The C callback allocates the pixel data through the provided allocator,
 /// so we can take ownership directly.
+///
+/// Returns `error.InvalidData` if no callback is installed, if the callback
+/// returns false, or if it returns true without setting `data`.
 // PORT NOTE: the reference signature is
 //   fn decodePngWrapper(alloc: std.mem.Allocator, data: []const u8)
 //       terminal_sys.DecodeError!terminal_sys.Image
@@ -242,7 +245,14 @@ fn decode_png_wrapper(
     let zref = rustty_lib::allocator::ZigAllocatorRef::new(&zig_alloc);
     let c_alloc = CAllocator::from_zig(&zref);
 
-    // var out: Image = undefined;
+    // Hand the callback a zeroed struct instead of an undefined one. The
+    // callback stores a pointer into it, and runtimes that track pointers
+    // (Go, for example) require the memory to be initialized first. It
+    // also means a callback that returns true without setting `data` is
+    // caught by the null check below. The header documents this guarantee.
+    // var out: Image = std.mem.zeroes(Image);
+    // PORT NOTE (DECISIONS M5): Rust has no `undefined`, so the port always
+    // built this zeroed literal; `aca9bf031` makes the reference match.
     let mut out = Image {
         width: 0,
         height: 0,
@@ -496,6 +506,13 @@ impl core::fmt::Write for LogEmitter<'_> {
 // takes the runtime level, the scope name, and the already-formatted message
 // (`core::fmt::Arguments`), reproducing the same chunked dispatch.
 pub fn log_fn(level: StdLevel, scope: &str, args: core::fmt::Arguments) {
+    // TEST-ONLY isolation invariant (N541, P8-W9 FX5): the sink is
+    // process-global, so a test that emits here without holding the
+    // `tests::reset_global()` guard can land in another test's scoped-log
+    // capture (or its exact call count) and flake it. Fail the emitting test
+    // deterministically instead.
+    #[cfg(test)]
+    tests::assert_global_guard_held(scope, &args);
     // PORT NOTE (`d61920d80`, `lib_vt.zig` `std_options`): on wasm the
     // installed `std.log` sink is NOT this C-ABI dispatcher — `lib_vt.zig`
     // selects `os/wasm/log.zig` instead:
@@ -900,14 +917,53 @@ pub(crate) mod tests {
         }
     }
 
+    // N541 (P8-W9 FX5): every test that can reach `log_fn` (directly, or
+    // through the `log` facade from the crates below) must hold the guard, not
+    // only the tests that install a sink: a test that merely EMITS while
+    // another test's sink is installed lands in that test's capture. The
+    // thread-local below records which thread holds `TEST_LOCK`, and
+    // `log_fn` asserts it under `cfg(test)`, so an unguarded emitter fails
+    // deterministically instead of flaking a sibling.
+    thread_local! {
+        static HOLDS_GLOBAL_GUARD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// The `reset_global()` guard: holds `TEST_LOCK` and marks the holding
+    /// thread for [`assert_global_guard_held`] until dropped.
+    pub(crate) struct GlobalGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl GlobalGuard {
+        fn new(lock: std::sync::MutexGuard<'static, ()>) -> Self {
+            HOLDS_GLOBAL_GUARD.with(|h| h.set(true));
+            Self { _lock: lock }
+        }
+    }
+
+    impl Drop for GlobalGuard {
+        fn drop(&mut self) {
+            HOLDS_GLOBAL_GUARD.with(|h| h.set(false));
+        }
+    }
+
+    pub(crate) fn assert_global_guard_held(scope: &str, args: &core::fmt::Arguments) {
+        assert!(
+            HOLDS_GLOBAL_GUARD.with(|h| h.get()),
+            "log_fn reached without crate::sys::tests::reset_global() held \
+             (scope {scope:?}, message {args:?}); take the guard at the top of \
+             this test so it cannot land in another test's log sink (N541)"
+        );
+    }
+
     // Reset GLOBAL + the rustty-vt decode_png slot to a known empty state. Holds
     // and returns the serialization guard so the whole test body runs without
     // another sys test mutating GLOBAL concurrently (mirroring Zig's serial run).
     // `pub(crate)`: other modules' tests that install a log callback (e.g. the
     // render-state scoped-log tests) must serialize against these, since GLOBAL
     // is process-wide.
-    pub(crate) fn reset_global() -> std::sync::MutexGuard<'static, ()> {
-        let guard = lock_tests();
+    pub(crate) fn reset_global() -> GlobalGuard {
+        let guard = GlobalGuard::new(lock_tests());
         GLOBAL.clear_poison();
         let mut g = GLOBAL.lock().unwrap();
         g.userdata = std::ptr::null_mut();
@@ -1183,6 +1239,60 @@ pub(crate) mod tests {
         });
         // try std.testing.expect(terminal_sys.decode_png == null);
         assert!(terminal_sys::decode_png.read().unwrap().is_none());
+    }
+
+    // test "decode_png output is zeroed before the callback" {
+    #[test]
+    fn decode_png_output_is_zeroed_before_the_callback() {
+        let _guard = reset_global();
+        // const S = struct {
+        //     var seen: ?Image = null;
+        //     fn decode(_: ?*anyopaque, _: *const CAllocator, _: [*]const u8, _: usize, out: *Image) callconv(lib.calling_conv) bool {
+        //         // Record what we were given, then report success without
+        //         // filling anything in.
+        //         seen = out.*;
+        //         return true;
+        //     }
+        // };
+        static SEEN: std::sync::Mutex<Option<(u32, u32, usize, usize)>> =
+            std::sync::Mutex::new(None);
+        extern "C" fn decode(
+            _u: *mut std::ffi::c_void,
+            _a: *const CAllocator,
+            _d: *const u8,
+            _l: usize,
+            out: *mut Image,
+        ) -> bool {
+            // Record what we were given, then report success without
+            // filling anything in.
+            // SAFETY: `out` is the wrapper's live `Image`.
+            let seen = unsafe { *out };
+            *SEEN.lock().unwrap() =
+                Some((seen.width, seen.height, seen.data as usize, seen.data_len));
+            true
+        }
+        *SEEN.lock().unwrap() = None;
+
+        // try std.testing.expectEqual(Result.success, set(.decode_png, @ptrCast(&S.decode)));
+        // defer _ = set(.decode_png, null);
+        assert_eq!(Result::Success, unsafe {
+            set(Option_::DecodePng, decode as *const std::ffi::c_void)
+        });
+
+        // Success with no data is rejected rather than read as garbage.
+        // try std.testing.expectError(error.InvalidData, decodePngWrapper(std.testing.allocator, "png"));
+        assert!(matches!(
+            decode_png_wrapper(&terminal_sys::GlobalRawAllocator, b"png"),
+            Err(terminal_sys::DecodeError::InvalidData)
+        ));
+
+        // The callback saw an all-zero struct.
+        // try std.testing.expectEqual(std.mem.zeroes(Image), S.seen.?);
+        assert_eq!(Some((0, 0, 0, 0)), *SEEN.lock().unwrap());
+
+        assert_eq!(Result::Success, unsafe {
+            set(Option_::DecodePng, std::ptr::null())
+        });
     }
 
     #[test]

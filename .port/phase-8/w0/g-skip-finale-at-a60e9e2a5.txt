@@ -1,0 +1,2 @@
+=== G-SKIP :: no silent skips in test code (R14) ===
+G-SKIP: 0 silent-skip site(s), 0 allow-list error(s); 265 guarded return(s) accepted

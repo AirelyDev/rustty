@@ -509,7 +509,11 @@ pub unsafe extern "C" fn rustty_cli_try_action() {
 #[derive(Debug)]
 enum AppNewError {
     // const core_app = try CoreApp.create(global.alloc);
-    // (CoreApp.create's error: font.SharedGridSet.InitError || Allocator.Error.)
+    // (CoreApp.create's error: font.SharedGridSet.InitError || Allocator.Error
+    // || error{DeviceFailed} — the render device, `40d5b860d`. With no Metal
+    // device / EGL driver `rustty_app_new` now logs `error initializing app
+    // err=DeviceFailed` (after App.init's own `failed to initialize render
+    // device` line) and returns null, as upstream's `ghostty_app_new` does.)
     Create(rustty_core::app::CreateError),
 }
 

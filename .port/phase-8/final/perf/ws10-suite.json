@@ -1,0 +1,41 @@
+{
+  "load1": 1.77001953125,
+  "n": 9,
+  "provisional": false,
+  "oracle_sha256_expected": "37c6317668c020e6be5b62ca2e4d2d45c9afee41ff9e60d2920c4171490fee49",
+  "oracle": {
+    "zig_median_s": {
+      "terminal-parser/utf8": 0.5914883330115117,
+      "terminal-stream/ascii": 0.04664368700468913,
+      "codepoint-width.noop/utf8": 0.005161082983249798,
+      "codepoint-width.table/utf8": 0.2089719170180615,
+      "codepoint-width.simd/utf8": 0.4526950829895213,
+      "codepoint-width.wcwidth/utf8": 0.6944298330054153,
+      "grapheme-break.noop/utf8": 0.20795320798060857,
+      "grapheme-break.table/utf8": 0.2316317499789875,
+      "is-symbol.table/utf8": 0.21388304099673405,
+      "is-symbol.uucode/utf8": 0.21204929100349545,
+      "osc-parser/osc-parser": 0.1792067080095876,
+      "screen-clone.noop/small": 0.007514500000979751,
+      "screen-clone.clone/small": 0.045770458003971726,
+      "screen-clone.render/small": 0.1428298749960959
+    },
+    "rust_median_s": {
+      "terminal-parser/utf8": 0.1376712920027785,
+      "terminal-stream/ascii": 0.045635041504283436,
+      "codepoint-width.noop/utf8": 0.003254083974752575,
+      "codepoint-width.table/utf8": 0.184494209010154,
+      "codepoint-width.simd/utf8": 0.3980222080135718,
+      "codepoint-width.wcwidth/utf8": 0.6359565420134459,
+      "grapheme-break.noop/utf8": 0.18704437499400228,
+      "grapheme-break.table/utf8": 0.19423795799957588,
+      "is-symbol.table/utf8": 0.1783403329900466,
+      "is-symbol.uucode/utf8": 0.18520112498663366,
+      "osc-parser/osc-parser": 0.054557249997742474,
+      "screen-clone.noop/small": 0.004077417019288987,
+      "screen-clone.clone/small": 0.016638999979477376,
+      "screen-clone.render/small": 0.12660591598250903
+    },
+    "ok": true
+  }
+}

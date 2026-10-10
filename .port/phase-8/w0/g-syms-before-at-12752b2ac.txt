@@ -1,0 +1,5 @@
+indexing port symbols…
+
+SYMBOL AUDIT: 2890 oracle `pub fn` checked across 539 files; 0 unexplained, 7 accepted with a written reason
+GREEN: every oracle `pub fn` has a counterpart or a written reason.
+syms exit=0

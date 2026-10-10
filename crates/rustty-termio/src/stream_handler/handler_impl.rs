@@ -318,6 +318,11 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
         self.vt("full_reset", r);
     }
 
+    // .soft_reset => self.terminal.softReset(),
+    fn soft_reset(&mut self) {
+        self.term().soft_reset();
+    }
+
     // .set_mode => try self.setMode(value.mode, true),
     fn set_mode(&mut self, v: stream::Mode) {
         let r = self.setMode(v.mode, true);
@@ -430,6 +435,20 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
         } else {
             rustty_vt::terminal::MouseShiftCapture::False
         };
+    }
+
+    // .xt_checksum_extension => if (self.xt_checksum_report) {
+    //     self.terminal.flags.xt_checksum = value.flags;
+    // },
+    fn xt_checksum_extension(&mut self, v: stream::XtChecksumExtension) {
+        if self.xt_checksum_report {
+            self.term().flags.xt_checksum = v.flags;
+        }
+    }
+
+    // .request_xt_checksum => self.reportXtChecksum(value),
+    fn request_xt_checksum(&mut self, v: rustty_vt::xt_checksum::Request) {
+        self.reportXtChecksum(v);
     }
 
     // .size_report => self.sendSizeReport(value),
@@ -601,6 +620,19 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
         self.vt("mouse_shape", r);
     }
 
+    // .mouse_shape_reset => try self.setMouseShape(
+    //     if (self.terminal.flags.mouse_event != .none) .default else .text,
+    // ),
+    fn mouse_shape_reset(&mut self) {
+        let shape = if self.term().flags.mouse_event != rustty_vt::mouse::Event::None {
+            rustty_vt::mouse::Shape::Default
+        } else {
+            rustty_vt::mouse::Shape::Text
+        };
+        let r = self.setMouseShape(shape);
+        self.vt("mouse_shape_reset", r);
+    }
+
     // .configure_charset => self.configureCharset(value.slot, value.charset),
     fn configure_charset(&mut self, v: stream::ConfigureCharset) {
         self.configureCharset(v.slot, v.charset);
@@ -705,8 +737,13 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // .title_push,
     // .title_pop,
     // .kitty_dnd,
+    // .osc_unknown,
+    // .program_status,
     // => {},
     // (af8d28a94, assessment E row P5-E11: the dnd Action is added next to the
-    // title_push/title_pop no-ops.)
+    // title_push/title_pop no-ops; 7b11f3dca and bae2c3cdb add `osc_unknown`
+    // and `program_status` to the same list.)
     fn kitty_dnd(&mut self, _v: osc::KittyDndProtocol) {}
+    fn osc_unknown(&mut self, _v: osc::Unknown) {}
+    fn program_status(&mut self, _v: rustty_vt::stream::ProgramStatus) {}
 }

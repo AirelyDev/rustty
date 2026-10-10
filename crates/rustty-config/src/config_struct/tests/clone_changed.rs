@@ -181,6 +181,8 @@ const ALL_KEYS: &[Key] = &[
     Key::OscColorReportFormat,
     Key::VtKamAllowed,
     Key::VtWindowResizeAllowed,
+    Key::VtXtChecksumReport,
+    Key::VtXtChecksumExtension,
     Key::CustomShader,
     Key::CustomShaderAnimation,
     Key::BellFeatures,
@@ -268,8 +270,11 @@ fn key_exhaustive_parse_format_clone_changed() {
     //
     // 209 -> 210: Phase-7 W6 T1 — `vt-window-resize-allowed` (`714fe9b90`,
     // `2a987d59d`).
-    assert_eq!(ALL_KEYS.len(), 210);
-    assert_eq!(CONFIG_FIELDS.len(), 210);
+    //
+    // 210 -> 212: Phase-8 W3 T2 — `vt-xt-checksum-report` (`9272a2f7c`) and
+    // `vt-xt-checksum-extension` (`00a19db51`).
+    assert_eq!(ALL_KEYS.len(), 212);
+    assert_eq!(CONFIG_FIELDS.len(), 212);
 
     let default = Config::default();
 

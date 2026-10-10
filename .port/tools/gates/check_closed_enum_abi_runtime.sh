@@ -40,6 +40,10 @@ T="${TMPDIR:-/tmp}"
 # Build unconditionally — the WS19 T16 rule. A gate that links whatever dylib is
 # lying in target/release is testing an unknown artifact.
 cargo build -p rustty-vt-c --release >/dev/null
+# The library cargo just built, wherever CARGO_TARGET_DIR put it.
+# shellcheck source=.port/tools/gates/_target_dir.sh
+. "$root/.port/tools/gates/_target_dir.sh"
+rel="$(rustty_target_dir "$root")/release"
 
 cat > "$T/d11r.c" <<'CEOF'
 #include <rustty/vt.h>
@@ -146,7 +150,7 @@ CEOF
 # SDK expands to zero or two words on purpose.
 # shellcheck disable=SC2086
 "$CC" ${SDK:+-isysroot "$SDK"} -std=c11 -Wall -Wextra \
-  -I"$root/include" -L"$root/target/release" -lrustty_vt_c \
+  -I"$root/include" -L"$rel" -lrustty_vt_c \
   "$T/d11r.c" -o "$T/d11r"
-DYLD_LIBRARY_PATH="$root/target/release" LD_LIBRARY_PATH="$root/target/release" "$T/d11r"
+DYLD_LIBRARY_PATH="$rel" LD_LIBRARY_PATH="$rel" "$T/d11r"
 echo "D11r: GREEN"

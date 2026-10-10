@@ -1,0 +1,46 @@
+Trying seed: 0
+Trying seed: 7
+Trying seed: 6
+Trying seed: 5
+Trying seed: 2
+Trying seed: 1
+Trying seed: 4
+Trying seed: 3
+error: Undefined Behavior: not granting access to tag <1906> because that would remove [Unique for <4169>] which is strongly protected
+   --> src/main.rs:118:26
+    |
+118 |         let v = unsafe { (*dev.0).read() };
+    |                          ^^^^^^^^ Undefined Behavior occurred here
+    |
+    = help: this indicates a potential bug in the program: it performed an invalid operation, but the Stacked Borrows rules it violated are still experimental
+    = help: see https://github.com/rust-lang/unsafe-code-guidelines/blob/master/wip/stacked-borrows.md for further information
+help: <1906> was created by a SharedReadWrite retag at offsets [0x0..0x28]
+   --> src/main.rs:105:31
+    |
+105 |       let app: *mut InlineApp = Box::into_raw(Box::new(InlineApp {
+    |  _______________________________^
+106 | |         surfaces: Vec::new(),
+107 | |         device: Device::init(),
+108 | |     }));
+    | |_______^
+help: <4169> is this argument
+   --> src/main.rs:97:20
+    |
+ 97 |     fn add_surface(&mut self, s: u32, step: &Step) {
+    |                    ^^^^^^^^^
+    = note: this is on thread `unnamed-1`
+note: the current function got called indirectly due to this code
+   --> src/main.rs:114:18
+    |
+114 |       let render = thread::spawn(move || {
+    |  __________________^
+115 | |         let dev = dev;
+116 | |         s2.wait(1);
+...   |
+120 | |         v
+121 | |     });
+    | |______^
+
+note: some details are omitted, run with `MIRIFLAGS=-Zmiri-backtrace=full` for a verbose backtrace
+
+FAILING SEED: 7

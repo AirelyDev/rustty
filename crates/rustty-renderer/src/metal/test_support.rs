@@ -100,6 +100,57 @@ fn require_display_or_skip_impl(required: bool, test_name: &str, err: &dyn std::
 /// cores directly — never `std::env::set_var` — so they are race-free under the
 /// parallel harness and require no Metal device (they run on every macOS host,
 /// including one where every live-Metal test skips).
+/// The process's test render device (P8-W6 T2): what the core `App` owns in
+/// the product (`App.device`, `40d5b860d`), shared here by every Metal test as
+/// every surface renderer shares the app's. Created once and never freed, so the
+/// `*const Device` the tests hand to `Metal::init_offscreen` (and to
+/// `generic::Options.device`) is valid for the whole process.
+pub(crate) fn device() -> Result<*const crate::metal::Device, crate::metal::device::Error> {
+    use std::mem::MaybeUninit;
+    use std::sync::OnceLock;
+
+    use crate::metal::Device;
+
+    static DEVICE: OnceLock<Result<Device, crate::metal::device::Error>> = OnceLock::new();
+    DEVICE
+        .get_or_init(|| {
+            let mut slot = MaybeUninit::<Device>::uninit();
+            // SAFETY: `init` wrote the slot when it returned Ok.
+            Device::init(&mut slot).map(|()| unsafe { slot.assume_init() })
+        })
+        .as_ref()
+        .map(|d| d as *const Device)
+        .map_err(|e| *e)
+}
+
+/// [`device`], or `None` after the [`require_metal_or_skip`] pivot and a
+/// `skipping <test_name>` line when this host has no Metal device.
+#[track_caller]
+pub(crate) fn device_or_skip(test_name: &str) -> Option<*const crate::metal::Device> {
+    match device() {
+        Ok(d) => Some(d),
+        Err(err) => {
+            require_metal_or_skip(test_name, &err);
+            eprintln!("no Metal device ({err}); skipping {test_name}");
+            None
+        }
+    }
+}
+
+/// `Metal::init_offscreen` on the process's test [`device`]: what the generic
+/// `Renderer::init` does with `Options.device`. The error is the device's (no
+/// Metal device) or the renderer's, rendered for the skip line.
+pub(crate) fn offscreen_metal(
+    blending: rustty_render_types::AlphaBlending,
+    width: u32,
+    height: u32,
+) -> Result<crate::metal::Metal, String> {
+    let device = device().map_err(|e| format!("{e:?}"))?;
+    // SAFETY: the test device is process-lived.
+    unsafe { crate::metal::Metal::init_offscreen(device, blending, width, height) }
+        .map_err(|e| format!("{e:?}"))
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::OsStr;

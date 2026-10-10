@@ -1,0 +1,73 @@
+ids in this capture are provisional; see .port/phase-8/README.md id mapping
+# P8-W9 T2 lane ci-sh-rvm-polluted-clone at a60e9e2a5 (head 1d22ba80d)
+host: rvm (Fedora aarch64), clone /home/gael/projects/rustty-p8w9t2 (git archive 1d22ba80d plus .port and docs/superpowers copied from the worktree, since .gitattributes export-ignores them)
+### CMD: env RUSTTY_VALGRIND_OWN_JOB=run separately as G-VALGRIND shards by the runner bash .port/tools/ci.sh
+start (UTC): 2026-10-08T19:08:02Z
+end (UTC):   2026-10-08T22:45:55Z
+wall: 13073 s
+rc: 1
+## verdict lines
+>> BLOCKED (3): G-XCF [pending contract/tooling — surfaced, not greened]
+>> BLOCKED (3): G-FONTBACKEND [pending contract/tooling — surfaced, not greened]
+>> BLOCKED (3): G6 [pending contract/tooling — surfaced, not greened]
+>> BLOCKED (3): G6c [pending contract/tooling — surfaced, not greened]
+>> BLOCKED (3): G6t [pending contract/tooling — surfaced, not greened]
+>> FAIL (1): D1 [PROGRESS gate went RED — a claimed-done crate regressed; R5]
+>> FAIL (1): D6 [PROGRESS gate went RED — a claimed-done crate regressed; R5]
+HARD FAILURES (6):
+  X G-LINT (exit 1)
+  X G-MSAN (exit 1)
+  X G-HWASAN (exit 1)
+  X G-TSAN (exit 1)
+  X D1 (claimed-done regression, exit 1)
+  X D6 (claimed-done regression, exit 1)
+CI RESULT: FAIL  (6 non-progress check(s) red)
+## tail
+  ~ D4 (progress/green)
+  ~ D5 (progress/green)
+  ~ D8 (progress/green)
+  ~ D9 (progress/green)
+  ~ D10 (progress/green)
+  ~ A3 (progress/green)
+  ~ A4 (progress/green)
+  ~ A5 (progress/green)
+  ~ A5-MASK-SELF (progress/green)
+  ~ G-VTFEAT (progress/green)
+  ~ G-ABISCHEMA (progress/green)
+WARNINGS — BLOCKED (pending contract/tooling) (9):
+  ! G4 BLOCKED (exit 3)
+      reason: BLOCKED: harness self-test FAILED — the differential harness is broken
+  ! G-NIX BLOCKED (exit 3)
+      reason: devshell BLOCKED (N489): only nixpkgs' wasmtime failed on aarch64-linux: s7g8hsh2cfl3piimil4jxqsks6gndw3b-python3.14-wasmtime-47.0.1.drv ELIGIBLE
+      reason: G-NIX BLOCKED: flake checks passed and the Nix files are formatted, but the dev shell
+  ! G-VALGRIND BLOCKED (exit 3)
+      reason: G-VALGRIND BLOCKED: this job defers to run separately as G-VALGRIND shards by the runner (RUSTTY_VALGRIND_OWN_JOB is set), which runs the full scope sharded.
+  ! G-XCF-SELF BLOCKED (exit 3)
+      reason: G-XCF BLOCKED: macOS-only (lipo/nm/xcodebuild)
+  ! G-XCF BLOCKED (exit 3)
+      reason: G-XCF BLOCKED: macOS-only (lipo/nm/xcodebuild)
+  ! G-FONTBACKEND BLOCKED (exit 3)
+      reason: G-FONTBACKEND BLOCKED: macOS-only lane (the reference's build-macos-freetype job; CoreText backends)
+  ! G6 BLOCKED (exit 3)
+      reason: G6 BLOCKED: cargo-nextest not available (install it, or pass --libtest)
+  ! G6c BLOCKED (exit 3)
+      reason: G6 BLOCKED: cargo-nextest not available (install it, or pass --libtest)
+  ! G6t BLOCKED (exit 3)
+      reason: G6 BLOCKED: cargo-nextest not available (install it, or pass --libtest)
+HARD FAILURES (6):
+  X G-LINT (exit 1)
+  X G-MSAN (exit 1)
+  X G-HWASAN (exit 1)
+  X G-TSAN (exit 1)
+  X D1 (claimed-done regression, exit 1)
+  X D6 (claimed-done regression, exit 1)
+------------------------------------------------------------------
+CI RESULT: FAIL  (6 non-progress check(s) red)
+
+## NOTE (runner)
+Command line was `env RUSTTY_VALGRIND_OWN_JOB=... bash .port/tools/ci.sh` (valgrind deferred to its own sharded lane, as CI does).
+End-to-end wall time (without valgrind): 13,073 s (3 h 38 min). Before it, a first unmodified run reached G-VALGRIND after ~1h20 and was killed by the VM restart.
+This run's clone had 5,642 AppleDouble `._*` files (from my macOS tar of .port and docs/superpowers). They caused G-LINT (prettier warns on `._*.md`)
+and D6 (`._*.supp` without WHY comments) REDs; those two are NOT trusted. The clone was deleted and rebuilt clean for the re-runs
+(see ci-sh-rvm-clean-gates-*). Trustworthy REDs in this run: G-MSAN, G-HWASAN, G-TSAN (= N620-N622) and D1 (see findings-vm.md N623).
+G4 BLOCKED: reference driver not built (`vt_driver_ref`), see findings-vm.md.

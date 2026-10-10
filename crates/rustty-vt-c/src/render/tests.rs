@@ -69,7 +69,7 @@ fn render_get_invalid_value() {
         assert_eq!(Result::InvalidValue, unsafe {
             get(
                 std::ptr::null_mut(),
-                Data::Cols,
+                RenderStateData::Cols,
                 &mut cols as *mut _ as *mut c_void,
             )
         });
@@ -81,7 +81,7 @@ fn render_get_invalid_value() {
         // defer free(state);
         // try testing.expectEqual(Result.invalid_value, get(state, .cols, null));
         assert_eq!(Result::InvalidValue, unsafe {
-            get(state, Data::Cols, std::ptr::null_mut())
+            get(state, RenderStateData::Cols, std::ptr::null_mut())
         });
 
         unsafe { free(state) };
@@ -98,7 +98,7 @@ fn render_get_invalid_data() {
 
         // try testing.expectEqual(Result.invalid_value, get(state, .invalid, null));
         assert_eq!(Result::InvalidValue, unsafe {
-            get(state, Data::Invalid, std::ptr::null_mut())
+            get(state, RenderStateData::Invalid, std::ptr::null_mut())
         });
 
         unsafe { free(state) };
@@ -122,20 +122,24 @@ fn render_aggregate_get_invalid_value() {
         assert_eq!(Result::InvalidValue, unsafe {
             get(
                 std::ptr::null_mut(),
-                Data::Colors,
+                RenderStateData::Colors,
                 &mut colors as *mut _ as *mut c_void,
             )
         });
         // try testing.expectEqual(Result.invalid_value, get(state, .colors, null));
         assert_eq!(Result::InvalidValue, unsafe {
-            get(state, Data::Colors, std::ptr::null_mut())
+            get(state, RenderStateData::Colors, std::ptr::null_mut())
         });
 
         // colors.size = @sizeOf(usize) - 1;
         colors.size = std::mem::size_of::<usize>() - 1;
         // try testing.expectEqual(Result.invalid_value, get(state, .colors, &colors));
         assert_eq!(Result::InvalidValue, unsafe {
-            get(state, Data::Colors, &mut colors as *mut _ as *mut c_void)
+            get(
+                state,
+                RenderStateData::Colors,
+                &mut colors as *mut _ as *mut c_void,
+            )
         });
 
         // var cursor: Cursor = std.mem.zeroes(Cursor);
@@ -147,20 +151,24 @@ fn render_aggregate_get_invalid_value() {
         assert_eq!(Result::InvalidValue, unsafe {
             get(
                 std::ptr::null_mut(),
-                Data::Cursor,
+                RenderStateData::Cursor,
                 &mut cursor as *mut _ as *mut c_void,
             )
         });
         // try testing.expectEqual(Result.invalid_value, get(state, .cursor, null));
         assert_eq!(Result::InvalidValue, unsafe {
-            get(state, Data::Cursor, std::ptr::null_mut())
+            get(state, RenderStateData::Cursor, std::ptr::null_mut())
         });
 
         // cursor.size = @sizeOf(usize) - 1;
         cursor.size = std::mem::size_of::<usize>() - 1;
         // try testing.expectEqual(Result.invalid_value, get(state, .cursor, &cursor));
         assert_eq!(Result::InvalidValue, unsafe {
-            get(state, Data::Cursor, &mut cursor as *mut _ as *mut c_void)
+            get(
+                state,
+                RenderStateData::Cursor,
+                &mut cursor as *mut _ as *mut c_void,
+            )
         });
 
         unsafe { free(state) };
@@ -176,7 +184,7 @@ fn render_get_set_dirty_invalid_value() {
     assert_eq!(Result::InvalidValue, unsafe {
         get(
             std::ptr::null_mut(),
-            Data::Dirty,
+            RenderStateData::Dirty,
             &mut dirty as *mut _ as *mut c_void,
         )
     });
@@ -204,7 +212,11 @@ fn render_get_set_dirty() {
         let mut dirty: Dirty = Dirty::False;
         // try testing.expectEqual(Result.success, get(state, .dirty, @ptrCast(&dirty)));
         assert_eq!(Result::Success, unsafe {
-            get(state, Data::Dirty, &mut dirty as *mut _ as *mut c_void)
+            get(
+                state,
+                RenderStateData::Dirty,
+                &mut dirty as *mut _ as *mut c_void,
+            )
         });
         // try testing.expectEqual(Dirty.false, dirty);
         assert_eq!(Dirty::False, dirty);
@@ -219,7 +231,11 @@ fn render_get_set_dirty() {
             )
         });
         assert_eq!(Result::Success, unsafe {
-            get(state, Data::Dirty, &mut dirty as *mut _ as *mut c_void)
+            get(
+                state,
+                RenderStateData::Dirty,
+                &mut dirty as *mut _ as *mut c_void,
+            )
         });
         // try testing.expectEqual(Dirty.partial, dirty);
         assert_eq!(Dirty::Partial, dirty);
@@ -234,7 +250,11 @@ fn render_get_set_dirty() {
             )
         });
         assert_eq!(Result::Success, unsafe {
-            get(state, Data::Dirty, &mut dirty as *mut _ as *mut c_void)
+            get(
+                state,
+                RenderStateData::Dirty,
+                &mut dirty as *mut _ as *mut c_void,
+            )
         });
         // try testing.expectEqual(Dirty.full, dirty);
         assert_eq!(Dirty::Full, dirty);
@@ -350,7 +370,7 @@ fn render_row_iterator_get_invalid_value() {
         assert_eq!(Result::InvalidValue, unsafe {
             get(
                 std::ptr::null_mut(),
-                Data::RowIterator,
+                RenderStateData::RowIterator,
                 &mut iterator as *mut _ as *mut c_void,
             )
         });
@@ -392,7 +412,7 @@ fn render_row_iterator_new_free() {
                 assert_eq!(Result::Success, unsafe {
                     get(
                         state,
-                        Data::RowIterator,
+                        RenderStateData::RowIterator,
                         &mut iterator as *mut _ as *mut c_void,
                     )
                 });
@@ -448,7 +468,7 @@ fn render_row_get_null() {
     assert_eq!(Result::InvalidValue, unsafe {
         row_get(
             std::ptr::null_mut(),
-            RowData::Dirty,
+            RenderStateRowData::Dirty,
             &mut dirty as *mut _ as *mut c_void,
         )
     });
@@ -478,7 +498,7 @@ fn render_row_get_invalid_data() {
                 assert_eq!(Result::Success, unsafe {
                     get(
                         state,
-                        Data::RowIterator,
+                        RenderStateData::RowIterator,
                         &mut iterator as *mut _ as *mut c_void,
                     )
                 });
@@ -486,7 +506,7 @@ fn render_row_get_invalid_data() {
                 assert!(unsafe { row_iterator_next(iterator) });
                 // try testing.expectEqual(Result.invalid_value, row_get(iterator, .invalid, null));
                 assert_eq!(Result::InvalidValue, unsafe {
-                    row_get(iterator, RowData::Invalid, std::ptr::null_mut())
+                    row_get(iterator, RenderStateRowData::Invalid, std::ptr::null_mut())
                 });
 
                 unsafe { row_iterator_free(iterator) };
@@ -534,7 +554,7 @@ fn render_row_set_before_iteration() {
                 assert_eq!(Result::Success, unsafe {
                     get(
                         state,
-                        Data::RowIterator,
+                        RenderStateData::RowIterator,
                         &mut iterator as *mut _ as *mut c_void,
                     )
                 });
@@ -579,7 +599,7 @@ fn render_row_get_before_iteration() {
                 assert_eq!(Result::Success, unsafe {
                     get(
                         state,
-                        Data::RowIterator,
+                        RenderStateData::RowIterator,
                         &mut iterator as *mut _ as *mut c_void,
                     )
                 });
@@ -589,7 +609,7 @@ fn render_row_get_before_iteration() {
                 assert_eq!(Result::InvalidValue, unsafe {
                     row_get(
                         iterator,
-                        RowData::Dirty,
+                        RenderStateRowData::Dirty,
                         &mut dirty as *mut _ as *mut c_void,
                     )
                 });
@@ -629,12 +649,20 @@ fn render_row_get_set_dirty() {
                 // defer row_iterator_free(it);
 
                 assert_eq!(Result::Success, unsafe {
-                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                    get(
+                        state,
+                        RenderStateData::RowIterator,
+                        &mut it as *mut _ as *mut c_void,
+                    )
                 });
                 assert!(unsafe { row_iterator_next(it) });
                 let mut dirty: bool = false;
                 assert_eq!(Result::Success, unsafe {
-                    row_get(it, RowData::Dirty, &mut dirty as *mut _ as *mut c_void)
+                    row_get(
+                        it,
+                        RenderStateRowData::Dirty,
+                        &mut dirty as *mut _ as *mut c_void,
+                    )
                 });
                 // try testing.expect(dirty);
                 assert!(dirty);
@@ -658,11 +686,19 @@ fn render_row_get_set_dirty() {
                 // defer row_iterator_free(it2);
 
                 assert_eq!(Result::Success, unsafe {
-                    get(state, Data::RowIterator, &mut it2 as *mut _ as *mut c_void)
+                    get(
+                        state,
+                        RenderStateData::RowIterator,
+                        &mut it2 as *mut _ as *mut c_void,
+                    )
                 });
                 assert!(unsafe { row_iterator_next(it2) });
                 assert_eq!(Result::Success, unsafe {
-                    row_get(it2, RowData::Dirty, &mut dirty as *mut _ as *mut c_void)
+                    row_get(
+                        it2,
+                        RenderStateRowData::Dirty,
+                        &mut dirty as *mut _ as *mut c_void,
+                    )
                 });
                 // try testing.expect(!dirty);
                 assert!(!dirty);
@@ -718,7 +754,11 @@ fn render_row_get_selection() {
                 // defer row_iterator_free(it);
 
                 assert_eq!(Result::Success, unsafe {
-                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                    get(
+                        state,
+                        RenderStateData::RowIterator,
+                        &mut it as *mut _ as *mut c_void,
+                    )
                 });
 
                 // var sel: RowSelection = .{};
@@ -727,14 +767,22 @@ fn render_row_get_selection() {
                 assert!(unsafe { row_iterator_next(it) });
                 // try testing.expectEqual(Result.no_value, row_get(it, .selection, @ptrCast(&sel)));
                 assert_eq!(Result::NoValue, unsafe {
-                    row_get(it, RowData::Selection, &mut sel as *mut _ as *mut c_void)
+                    row_get(
+                        it,
+                        RenderStateRowData::Selection,
+                        &mut sel as *mut _ as *mut c_void,
+                    )
                 });
 
                 assert!(unsafe { row_iterator_next(it) });
                 // sel = .{};
                 sel = RowSelection::default();
                 assert_eq!(Result::Success, unsafe {
-                    row_get(it, RowData::Selection, &mut sel as *mut _ as *mut c_void)
+                    row_get(
+                        it,
+                        RenderStateRowData::Selection,
+                        &mut sel as *mut _ as *mut c_void,
+                    )
                 });
                 // try testing.expectEqual(@as(u16, 2), sel.start_x);
                 assert_eq!(2u16, sel.start_x);
@@ -744,7 +792,11 @@ fn render_row_get_selection() {
                 assert!(unsafe { row_iterator_next(it) });
                 sel = RowSelection::default();
                 assert_eq!(Result::NoValue, unsafe {
-                    row_get(it, RowData::Selection, &mut sel as *mut _ as *mut c_void)
+                    row_get(
+                        it,
+                        RenderStateRowData::Selection,
+                        &mut sel as *mut _ as *mut c_void,
+                    )
                 });
 
                 unsafe { row_iterator_free(it) };
@@ -787,7 +839,11 @@ fn render_row_get_cells_raw() {
 
         // try testing.expectEqual(Result.success, get(state, .row_iterator, @ptrCast(&it)));
         assert_eq!(Result::Success, unsafe {
-            get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+            get(
+                state,
+                RenderStateData::RowIterator,
+                &mut it as *mut _ as *mut c_void,
+            )
         });
 
         // Not positioned on a row yet.
@@ -798,14 +854,22 @@ fn render_row_get_cells_raw() {
         };
         // try testing.expectEqual(Result.invalid_value, row_get(it, .cells_raw, @ptrCast(&view)));
         assert_eq!(Result::InvalidValue, unsafe {
-            row_get(it, RowData::CellsRaw, &mut view as *mut _ as *mut c_void)
+            row_get(
+                it,
+                RenderStateRowData::CellsRaw,
+                &mut view as *mut _ as *mut c_void,
+            )
         });
 
         // try testing.expect(row_iterator_next(it));
         assert!(unsafe { row_iterator_next(it) });
         // try testing.expectEqual(Result.success, row_get(it, .cells_raw, @ptrCast(&view)));
         assert_eq!(Result::Success, unsafe {
-            row_get(it, RowData::CellsRaw, &mut view as *mut _ as *mut c_void)
+            row_get(
+                it,
+                RenderStateRowData::CellsRaw,
+                &mut view as *mut _ as *mut c_void,
+            )
         });
         // try testing.expectEqual(@as(usize, 10), view.len);
         assert_eq!(10usize, view.len);
@@ -820,7 +884,11 @@ fn render_row_get_cells_raw() {
         // defer row_cells_free(cells);
         // try testing.expectEqual(Result.success, row_get(it, .cells, @ptrCast(&cells)));
         assert_eq!(Result::Success, unsafe {
-            row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+            row_get(
+                it,
+                RenderStateRowData::Cells,
+                &mut cells as *mut _ as *mut c_void,
+            )
         });
         // const ptr = view.ptr.?;
         let ptr = view.ptr;
@@ -907,12 +975,20 @@ fn render_row_cells_get_selected() {
                 // defer row_cells_free(cells);
 
                 assert_eq!(Result::Success, unsafe {
-                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                    get(
+                        state,
+                        RenderStateData::RowIterator,
+                        &mut it as *mut _ as *mut c_void,
+                    )
                 });
 
                 assert!(unsafe { row_iterator_next(it) });
                 assert_eq!(Result::Success, unsafe {
-                    row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+                    row_get(
+                        it,
+                        RenderStateRowData::Cells,
+                        &mut cells as *mut _ as *mut c_void,
+                    )
                 });
 
                 // var selected: bool = true;
@@ -929,7 +1005,11 @@ fn render_row_cells_get_selected() {
 
                 assert!(unsafe { row_iterator_next(it) });
                 assert_eq!(Result::Success, unsafe {
-                    row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+                    row_get(
+                        it,
+                        RenderStateRowData::Cells,
+                        &mut cells as *mut _ as *mut c_void,
+                    )
                 });
 
                 assert_eq!(Result::Success, unsafe { row_cells_select(cells, 1) });
@@ -1032,11 +1112,19 @@ fn render_row_cells_get_has_styling() {
                 });
 
                 assert_eq!(Result::Success, unsafe {
-                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                    get(
+                        state,
+                        RenderStateData::RowIterator,
+                        &mut it as *mut _ as *mut c_void,
+                    )
                 });
                 assert!(unsafe { row_iterator_next(it) });
                 assert_eq!(Result::Success, unsafe {
-                    row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+                    row_get(
+                        it,
+                        RenderStateRowData::Cells,
+                        &mut cells as *mut _ as *mut c_void,
+                    )
                 });
 
                 // var has_styling = true;
@@ -1099,6 +1187,9 @@ fn render_row_cells_get_has_styling() {
 // accumulator would report a wrong probe size here.
 #[test]
 fn render_row_cells_get_graphemes_utf8() {
+    // N541: this test reaches `sys::log_fn`; hold the sys guard so its
+    // warnings cannot land in another test's log sink.
+    let _guard = crate::sys::tests::reset_global();
     // const cases = [_]struct { terminal_input: []const u8, expected: []const u8 }{ ... };
     struct Case {
         terminal_input: &'static [u8],
@@ -1155,11 +1246,19 @@ fn render_row_cells_get_graphemes_utf8() {
                     });
 
                     assert_eq!(Result::Success, unsafe {
-                        get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                        get(
+                            state,
+                            RenderStateData::RowIterator,
+                            &mut it as *mut _ as *mut c_void,
+                        )
                     });
                     assert!(unsafe { row_iterator_next(it) });
                     assert_eq!(Result::Success, unsafe {
-                        row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+                        row_get(
+                            it,
+                            RenderStateRowData::Cells,
+                            &mut cells as *mut _ as *mut c_void,
+                        )
                     });
 
                     // try testing.expectEqual(Result.success, row_cells_select(cells, 0));
@@ -1260,11 +1359,19 @@ fn render_row_cells_get_graphemes_utf8() {
                 });
 
                 assert_eq!(Result::Success, unsafe {
-                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                    get(
+                        state,
+                        RenderStateData::RowIterator,
+                        &mut it as *mut _ as *mut c_void,
+                    )
                 });
                 assert!(unsafe { row_iterator_next(it) });
                 assert_eq!(Result::Success, unsafe {
-                    row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+                    row_get(
+                        it,
+                        RenderStateRowData::Cells,
+                        &mut cells as *mut _ as *mut c_void,
+                    )
                 });
 
                 // try testing.expectEqual(Result.success, row_cells_select(cells, 1));
@@ -1318,7 +1425,7 @@ fn render_row_iterator_next() {
                 assert_eq!(Result::Success, unsafe {
                     get(
                         state,
-                        Data::RowIterator,
+                        RenderStateData::RowIterator,
                         &mut iterator as *mut _ as *mut c_void,
                     )
                 });
@@ -1390,7 +1497,7 @@ fn render_row_iterator_next_dirty() {
         assert_eq!(Result::Success, unsafe {
             get(
                 state,
-                Data::RowIterator,
+                RenderStateData::RowIterator,
                 &mut iterator as *mut _ as *mut c_void,
             )
         });
@@ -1442,7 +1549,7 @@ fn render_row_iterator_next_dirty() {
         assert_eq!(Result::Success, unsafe {
             get(
                 state,
-                Data::RowIterator,
+                RenderStateData::RowIterator,
                 &mut iterator as *mut _ as *mut c_void,
             )
         });
@@ -1466,7 +1573,7 @@ fn render_row_iterator_next_dirty() {
         assert_eq!(Result::Success, unsafe {
             get(
                 state,
-                Data::RowIterator,
+                RenderStateData::RowIterator,
                 &mut iterator as *mut _ as *mut c_void,
             )
         });
@@ -1483,7 +1590,7 @@ fn render_row_iterator_next_dirty() {
         assert_eq!(Result::Success, unsafe {
             get(
                 state,
-                Data::RowIterator,
+                RenderStateData::RowIterator,
                 &mut iterator as *mut _ as *mut c_void,
             )
         });
@@ -1521,10 +1628,18 @@ fn render_update() {
                 let mut cols: size::CellCountInt = 0;
                 let mut rows_val: size::CellCountInt = 0;
                 assert_eq!(Result::Success, unsafe {
-                    get(state, Data::Cols, &mut cols as *mut _ as *mut c_void)
+                    get(
+                        state,
+                        RenderStateData::Cols,
+                        &mut cols as *mut _ as *mut c_void,
+                    )
                 });
                 assert_eq!(Result::Success, unsafe {
-                    get(state, Data::Rows, &mut rows_val as *mut _ as *mut c_void)
+                    get(
+                        state,
+                        RenderStateData::Rows,
+                        &mut rows_val as *mut _ as *mut c_void,
+                    )
                 });
                 // try testing.expectEqual(@as(size.CellCountInt, 80), cols);
                 assert_eq!(80u16, cols);
@@ -1555,7 +1670,11 @@ fn render_colors_data_get() {
                 colors.size = std::mem::size_of::<Colors>();
                 // try testing.expectEqual(Result.success, get(state, .colors, &colors));
                 assert_eq!(Result::Success, unsafe {
-                    get(state, Data::Colors, &mut colors as *mut _ as *mut c_void)
+                    get(
+                        state,
+                        RenderStateData::Colors,
+                        &mut colors as *mut _ as *mut c_void,
+                    )
                 });
 
                 // const state_colors = &state.?.state.colors;
@@ -1604,7 +1723,11 @@ fn render_cursor_data_get_matches_scalar_getters() {
                 cursor.size = std::mem::size_of::<Cursor>();
                 // try testing.expectEqual(Result.success, get(state, .cursor, &cursor));
                 assert_eq!(Result::Success, unsafe {
-                    get(state, Data::Cursor, &mut cursor as *mut _ as *mut c_void)
+                    get(
+                        state,
+                        RenderStateData::Cursor,
+                        &mut cursor as *mut _ as *mut c_void,
+                    )
                 });
 
                 // var viewport_has_value: bool = undefined; ... (the scalar reads)
@@ -1619,56 +1742,56 @@ fn render_cursor_data_get_matches_scalar_getters() {
                 assert_eq!(Result::Success, unsafe {
                     get(
                         state,
-                        Data::CursorViewportHasValue,
+                        RenderStateData::CursorViewportHasValue,
                         &mut viewport_has_value as *mut _ as *mut c_void,
                     )
                 });
                 assert_eq!(Result::Success, unsafe {
                     get(
                         state,
-                        Data::CursorViewportX,
+                        RenderStateData::CursorViewportX,
                         &mut viewport_x as *mut _ as *mut c_void,
                     )
                 });
                 assert_eq!(Result::Success, unsafe {
                     get(
                         state,
-                        Data::CursorViewportY,
+                        RenderStateData::CursorViewportY,
                         &mut viewport_y as *mut _ as *mut c_void,
                     )
                 });
                 assert_eq!(Result::Success, unsafe {
                     get(
                         state,
-                        Data::CursorViewportWideTail,
+                        RenderStateData::CursorViewportWideTail,
                         &mut wide_tail as *mut _ as *mut c_void,
                     )
                 });
                 assert_eq!(Result::Success, unsafe {
                     get(
                         state,
-                        Data::CursorVisible,
+                        RenderStateData::CursorVisible,
                         &mut visible as *mut _ as *mut c_void,
                     )
                 });
                 assert_eq!(Result::Success, unsafe {
                     get(
                         state,
-                        Data::CursorBlinking,
+                        RenderStateData::CursorBlinking,
                         &mut blinking as *mut _ as *mut c_void,
                     )
                 });
                 assert_eq!(Result::Success, unsafe {
                     get(
                         state,
-                        Data::CursorPasswordInput,
+                        RenderStateData::CursorPasswordInput,
                         &mut password_input as *mut _ as *mut c_void,
                     )
                 });
                 assert_eq!(Result::Success, unsafe {
                     get(
                         state,
-                        Data::CursorVisualStyle,
+                        RenderStateData::CursorVisualStyle,
                         &mut visual_style as *mut _ as *mut c_void,
                     )
                 });
@@ -1720,7 +1843,11 @@ fn render_cursor_data_get_without_viewport() {
         c.wide_tail = true;
         // try testing.expectEqual(Result.success, get(state, .cursor, &cursor));
         assert_eq!(Result::Success, unsafe {
-            get(state, Data::Cursor, &mut c as *mut _ as *mut c_void)
+            get(
+                state,
+                RenderStateData::Cursor,
+                &mut c as *mut _ as *mut c_void,
+            )
         });
 
         // try testing.expect(!cursor.viewport_has_value);
@@ -1778,7 +1905,11 @@ fn render_cursor_data_get_supports_truncated_sized_struct() {
                 c.visible = !expected_visible;
                 // try testing.expectEqual(Result.success, get(state, .cursor, &cursor));
                 assert_eq!(Result::Success, unsafe {
-                    get(state, Data::Cursor, &mut c as *mut _ as *mut c_void)
+                    get(
+                        state,
+                        RenderStateData::Cursor,
+                        &mut c as *mut _ as *mut c_void,
+                    )
                 });
 
                 // try testing.expect(cursor.viewport_has_value);
@@ -1820,7 +1951,11 @@ fn render_row_cells_bg_color_no_background() {
                     row_iterator_new(Some(alloc), &mut it)
                 });
                 assert_eq!(Result::Success, unsafe {
-                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                    get(
+                        state,
+                        RenderStateData::RowIterator,
+                        &mut it as *mut _ as *mut c_void,
+                    )
                 });
                 assert!(unsafe { row_iterator_next(it) });
 
@@ -1830,7 +1965,11 @@ fn render_row_cells_bg_color_no_background() {
                 });
 
                 assert_eq!(Result::Success, unsafe {
-                    row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+                    row_get(
+                        it,
+                        RenderStateRowData::Cells,
+                        &mut cells as *mut _ as *mut c_void,
+                    )
                 });
                 assert!(unsafe { row_cells_next(cells) });
 
@@ -1883,7 +2022,11 @@ fn render_row_cells_bg_color_from_style() {
                     row_iterator_new(Some(alloc), &mut it)
                 });
                 assert_eq!(Result::Success, unsafe {
-                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                    get(
+                        state,
+                        RenderStateData::RowIterator,
+                        &mut it as *mut _ as *mut c_void,
+                    )
                 });
                 assert!(unsafe { row_iterator_next(it) });
 
@@ -1893,7 +2036,11 @@ fn render_row_cells_bg_color_from_style() {
                 });
 
                 assert_eq!(Result::Success, unsafe {
-                    row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+                    row_get(
+                        it,
+                        RenderStateRowData::Cells,
+                        &mut cells as *mut _ as *mut c_void,
+                    )
                 });
                 assert!(unsafe { row_cells_next(cells) });
 
@@ -1948,7 +2095,11 @@ fn render_row_cells_bg_color_from_content_tag() {
                     row_iterator_new(Some(alloc), &mut it)
                 });
                 assert_eq!(Result::Success, unsafe {
-                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                    get(
+                        state,
+                        RenderStateData::RowIterator,
+                        &mut it as *mut _ as *mut c_void,
+                    )
                 });
                 assert!(unsafe { row_iterator_next(it) });
 
@@ -1958,7 +2109,11 @@ fn render_row_cells_bg_color_from_content_tag() {
                 });
 
                 assert_eq!(Result::Success, unsafe {
-                    row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+                    row_get(
+                        it,
+                        RenderStateRowData::Cells,
+                        &mut cells as *mut _ as *mut c_void,
+                    )
                 });
                 assert!(unsafe { row_cells_next(cells) });
 
@@ -2005,7 +2160,11 @@ fn render_row_cells_fg_color_no_foreground() {
                     row_iterator_new(Some(alloc), &mut it)
                 });
                 assert_eq!(Result::Success, unsafe {
-                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                    get(
+                        state,
+                        RenderStateData::RowIterator,
+                        &mut it as *mut _ as *mut c_void,
+                    )
                 });
                 assert!(unsafe { row_iterator_next(it) });
 
@@ -2015,7 +2174,11 @@ fn render_row_cells_fg_color_no_foreground() {
                 });
 
                 assert_eq!(Result::Success, unsafe {
-                    row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+                    row_get(
+                        it,
+                        RenderStateRowData::Cells,
+                        &mut cells as *mut _ as *mut c_void,
+                    )
                 });
                 assert!(unsafe { row_cells_next(cells) });
 
@@ -2065,7 +2228,11 @@ fn render_row_cells_fg_color_from_style() {
                     row_iterator_new(Some(alloc), &mut it)
                 });
                 assert_eq!(Result::Success, unsafe {
-                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                    get(
+                        state,
+                        RenderStateData::RowIterator,
+                        &mut it as *mut _ as *mut c_void,
+                    )
                 });
                 assert!(unsafe { row_iterator_next(it) });
 
@@ -2075,7 +2242,11 @@ fn render_row_cells_fg_color_from_style() {
                 });
 
                 assert_eq!(Result::Success, unsafe {
-                    row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+                    row_get(
+                        it,
+                        RenderStateRowData::Cells,
+                        &mut cells as *mut _ as *mut c_void,
+                    )
                 });
                 assert!(unsafe { row_cells_next(cells) });
 
@@ -2131,7 +2302,11 @@ fn render_colors_data_get_supports_truncated_sized_struct() {
                 colors.size = palette_offset + std::mem::size_of::<RGB>() * 2;
                 // try testing.expectEqual(Result.success, get(state, .colors, &colors));
                 assert_eq!(Result::Success, unsafe {
-                    get(state, Data::Colors, &mut colors as *mut _ as *mut c_void)
+                    get(
+                        state,
+                        RenderStateData::Colors,
+                        &mut colors as *mut _ as *mut c_void,
+                    )
                 });
 
                 let state_colors = unsafe { &(*state).state.colors };
@@ -2166,7 +2341,7 @@ fn render_get_multi_success() {
                 let mut written: usize = 0;
 
                 // const keys = [_]Data{ .cols, .rows };
-                let keys = [Data::Cols, Data::Rows];
+                let keys = [RenderStateData::Cols, RenderStateData::Rows];
                 let mut values = [
                     &mut cols as *mut _ as *mut c_void,
                     &mut rows as *mut _ as *mut c_void,
@@ -2231,7 +2406,11 @@ fn render_row_get_multi_success() {
                 });
 
                 assert_eq!(Result::Success, unsafe {
-                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                    get(
+                        state,
+                        RenderStateData::RowIterator,
+                        &mut it as *mut _ as *mut c_void,
+                    )
                 });
                 assert!(unsafe { row_iterator_next(it) });
 
@@ -2240,7 +2419,7 @@ fn render_row_get_multi_success() {
                 let mut written: usize = 0;
 
                 // const keys = [_]RowData{.dirty};
-                let keys = [RowData::Dirty];
+                let keys = [RenderStateRowData::Dirty];
                 let mut values = [&mut dirty as *mut _ as *mut c_void];
                 assert_eq!(Result::Success, unsafe {
                     row_get_multi(
@@ -2303,7 +2482,11 @@ fn render_row_cells_get_multi_success() {
                 });
 
                 assert_eq!(Result::Success, unsafe {
-                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                    get(
+                        state,
+                        RenderStateData::RowIterator,
+                        &mut it as *mut _ as *mut c_void,
+                    )
                 });
                 assert!(unsafe { row_iterator_next(it) });
 
@@ -2313,7 +2496,11 @@ fn render_row_cells_get_multi_success() {
                 });
 
                 assert_eq!(Result::Success, unsafe {
-                    row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+                    row_get(
+                        it,
+                        RenderStateRowData::Cells,
+                        &mut cells as *mut _ as *mut c_void,
+                    )
                 });
                 assert!(unsafe { row_cells_next(cells) });
 
@@ -2525,6 +2712,9 @@ const C_INVALID_VALUE: c_int = -2;
 
 #[test]
 fn render_get_multi_out_of_range_key_is_rejected() {
+    // N541: this test reaches `sys::log_fn`; hold the sys guard so its
+    // warnings cannot land in another test's log sink.
+    let _guard = crate::sys::tests::reset_global();
     with_test_allocator(|alloc| {
         with_terminal_state(
             alloc,
@@ -2540,7 +2730,7 @@ fn render_get_multi_out_of_range_key_is_rejected() {
                 let mut written: usize = usize::MAX;
 
                 // keys[1] is an UNDECLARED selector.
-                let keys: [c_int; 2] = [Data::Cols as c_int, 999];
+                let keys: [c_int; 2] = [RenderStateData::Cols as c_int, 999];
                 let mut values = [
                     &mut cols as *mut _ as *mut c_void,
                     &mut unused as *mut _ as *mut c_void,
@@ -2565,6 +2755,9 @@ fn render_get_multi_out_of_range_key_is_rejected() {
 
 #[test]
 fn render_row_get_multi_out_of_range_key_is_rejected() {
+    // N541: this test reaches `sys::log_fn`; hold the sys guard so its
+    // warnings cannot land in another test's log sink.
+    let _guard = crate::sys::tests::reset_global();
     with_test_allocator(|alloc| {
         with_terminal_state(
             alloc,
@@ -2580,7 +2773,11 @@ fn render_row_get_multi_out_of_range_key_is_rejected() {
                     row_iterator_new(Some(alloc), &mut it)
                 });
                 assert_eq!(Result::Success, unsafe {
-                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                    get(
+                        state,
+                        RenderStateData::RowIterator,
+                        &mut it as *mut _ as *mut c_void,
+                    )
                 });
                 assert!(unsafe { row_iterator_next(it) });
 
@@ -2588,7 +2785,7 @@ fn render_row_get_multi_out_of_range_key_is_rejected() {
                 let mut unused: u32 = 0;
                 let mut written: usize = usize::MAX;
 
-                let keys: [c_int; 2] = [RowData::Dirty as c_int, 999];
+                let keys: [c_int; 2] = [RenderStateRowData::Dirty as c_int, 999];
                 let mut values = [
                     &mut dirty as *mut _ as *mut c_void,
                     &mut unused as *mut _ as *mut c_void,
@@ -2613,6 +2810,9 @@ fn render_row_get_multi_out_of_range_key_is_rejected() {
 
 #[test]
 fn render_row_cells_get_multi_out_of_range_key_is_rejected() {
+    // N541: this test reaches `sys::log_fn`; hold the sys guard so its
+    // warnings cannot land in another test's log sink.
+    let _guard = crate::sys::tests::reset_global();
     with_test_allocator(|alloc| {
         with_terminal_state(
             alloc,
@@ -2628,7 +2828,11 @@ fn render_row_cells_get_multi_out_of_range_key_is_rejected() {
                     row_iterator_new(Some(alloc), &mut it)
                 });
                 assert_eq!(Result::Success, unsafe {
-                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                    get(
+                        state,
+                        RenderStateData::RowIterator,
+                        &mut it as *mut _ as *mut c_void,
+                    )
                 });
                 assert!(unsafe { row_iterator_next(it) });
 
@@ -2637,7 +2841,11 @@ fn render_row_cells_get_multi_out_of_range_key_is_rejected() {
                     row_cells_new(Some(alloc), &mut cells)
                 });
                 assert_eq!(Result::Success, unsafe {
-                    row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+                    row_get(
+                        it,
+                        RenderStateRowData::Cells,
+                        &mut cells as *mut _ as *mut c_void,
+                    )
                 });
                 assert!(unsafe { row_cells_next(cells) });
 
@@ -2743,7 +2951,11 @@ fn render_invalid_selector_warns_through_the_scoped_log_sink() {
             row_iterator_new(Some(alloc), &mut it)
         });
         assert_eq!(Result::Success, unsafe {
-            get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+            get(
+                state,
+                RenderStateData::RowIterator,
+                &mut it as *mut _ as *mut c_void,
+            )
         });
         assert!(unsafe { row_iterator_next(it) });
 
@@ -2752,7 +2964,11 @@ fn render_invalid_selector_warns_through_the_scoped_log_sink() {
             row_cells_new(Some(alloc), &mut cells)
         });
         assert_eq!(Result::Success, unsafe {
-            row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+            row_get(
+                it,
+                RenderStateRowData::Cells,
+                &mut cells as *mut _ as *mut c_void,
+            )
         });
         assert!(unsafe { row_cells_next(cells) });
 
@@ -2863,14 +3079,22 @@ fn render_get_dirty_fills_the_whole_int_slot() {
                     // matches no case.
                     let mut slot: c_int = 0x7F7F_7F01u32 as c_int;
                     assert_eq!(Result::Success, unsafe {
-                        get(state, Data::Dirty, &mut slot as *mut c_int as *mut c_void)
+                        get(
+                            state,
+                            RenderStateData::Dirty,
+                            &mut slot as *mut c_int as *mut c_void,
+                        )
                     });
                     assert_eq!(tag, slot);
 
                     // ...and the typed read agrees.
                     let mut dirty = Dirty::False;
                     assert_eq!(Result::Success, unsafe {
-                        get(state, Data::Dirty, &mut dirty as *mut _ as *mut c_void)
+                        get(
+                            state,
+                            RenderStateData::Dirty,
+                            &mut dirty as *mut _ as *mut c_void,
+                        )
                     });
                     assert_eq!(want, dirty);
                 }
@@ -2917,7 +3141,11 @@ fn render_set_dirty_reads_the_whole_int_slot() {
                 // ...and the state is untouched.
                 let mut dirty = Dirty::False;
                 assert_eq!(Result::Success, unsafe {
-                    get(state, Data::Dirty, &mut dirty as *mut _ as *mut c_void)
+                    get(
+                        state,
+                        RenderStateData::Dirty,
+                        &mut dirty as *mut _ as *mut c_void,
+                    )
                 });
                 assert_eq!(Dirty::Partial, dirty);
 
@@ -2931,7 +3159,11 @@ fn render_set_dirty_reads_the_whole_int_slot() {
                     )
                 });
                 assert_eq!(Result::Success, unsafe {
-                    get(state, Data::Dirty, &mut dirty as *mut _ as *mut c_void)
+                    get(
+                        state,
+                        RenderStateData::Dirty,
+                        &mut dirty as *mut _ as *mut c_void,
+                    )
                 });
                 assert_eq!(Dirty::Full, dirty);
             },
@@ -3238,7 +3470,7 @@ fn set_overscan(state: RenderState, req: &Overscan) -> Result {
     }
 }
 
-fn get_overscan(state: RenderState, data: Data, out: &mut Overscan) -> Result {
+fn get_overscan(state: RenderState, data: RenderStateData, out: &mut Overscan) -> Result {
     unsafe { get(state, data, out as *mut Overscan as *mut c_void) }
 }
 
@@ -3256,7 +3488,11 @@ fn test_collect_rows(alloc: &CAllocator, state: RenderState) -> Vec<TestRowEntry
         row_iterator_new(Some(alloc), &mut it)
     });
     assert_eq!(Result::Success, unsafe {
-        get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+        get(
+            state,
+            RenderStateData::RowIterator,
+            &mut it as *mut _ as *mut c_void,
+        )
     });
 
     let mut list = Vec::new();
@@ -3266,12 +3502,16 @@ fn test_collect_rows(alloc: &CAllocator, state: RenderState) -> Vec<TestRowEntry
             viewport_y: 0,
         };
         assert_eq!(Result::Success, unsafe {
-            row_get(it, RowData::Id, &mut entry.id as *mut _ as *mut c_void)
+            row_get(
+                it,
+                RenderStateRowData::Id,
+                &mut entry.id as *mut _ as *mut c_void,
+            )
         });
         assert_eq!(Result::Success, unsafe {
             row_get(
                 it,
-                RowData::ViewportY,
+                RenderStateRowData::ViewportY,
                 &mut entry.viewport_y as *mut _ as *mut c_void,
             )
         });
@@ -3303,12 +3543,12 @@ fn render_overscan_request_applies_on_the_next_update() {
         let mut out = Overscan::default();
         assert_eq!(
             Result::Success,
-            get_overscan(state, Data::OverscanRequest, &mut out)
+            get_overscan(state, RenderStateData::OverscanRequest, &mut out)
         );
         assert_eq!(none, out);
         assert_eq!(
             Result::Success,
-            get_overscan(state, Data::Overscan, &mut out)
+            get_overscan(state, RenderStateData::Overscan, &mut out)
         );
         assert_eq!(req, out);
 
@@ -3343,14 +3583,14 @@ fn render_overscan_option_roundtrip() {
         };
         assert_eq!(
             Result::Success,
-            get_overscan(state, Data::OverscanRequest, &mut out)
+            get_overscan(state, RenderStateData::OverscanRequest, &mut out)
         );
         assert_eq!(Overscan { above: 4, below: 1 }, out);
 
         // Nothing is captured before an update.
         assert_eq!(
             Result::Success,
-            get_overscan(state, Data::Overscan, &mut out)
+            get_overscan(state, RenderStateData::Overscan, &mut out)
         );
         assert_eq!(Overscan::default(), out);
 
@@ -3376,7 +3616,7 @@ fn render_overscan_clamps_to_existing_rows() {
         assert_eq!(Result::Success, unsafe { update(state, terminal) });
         assert_eq!(
             Result::Success,
-            get_overscan(state, Data::Overscan, &mut out)
+            get_overscan(state, RenderStateData::Overscan, &mut out)
         );
         assert_eq!(Overscan { above: 3, below: 0 }, out);
 
@@ -3385,7 +3625,7 @@ fn render_overscan_clamps_to_existing_rows() {
         assert_eq!(Result::Success, unsafe { update(state, terminal) });
         assert_eq!(
             Result::Success,
-            get_overscan(state, Data::Overscan, &mut out)
+            get_overscan(state, RenderStateData::Overscan, &mut out)
         );
         assert_eq!(Overscan { above: 3, below: 2 }, out);
 
@@ -3394,14 +3634,14 @@ fn render_overscan_clamps_to_existing_rows() {
         assert_eq!(Result::Success, unsafe { update(state, terminal) });
         assert_eq!(
             Result::Success,
-            get_overscan(state, Data::Overscan, &mut out)
+            get_overscan(state, RenderStateData::Overscan, &mut out)
         );
         assert_eq!(Overscan { above: 0, below: 2 }, out);
 
         // The request is reported unchanged.
         assert_eq!(
             Result::Success,
-            get_overscan(state, Data::OverscanRequest, &mut out)
+            get_overscan(state, RenderStateData::OverscanRequest, &mut out)
         );
         assert_eq!(req, out);
 
@@ -3427,7 +3667,11 @@ fn render_row_iterator_unchanged_without_overscan() {
             row_iterator_new(Some(alloc), &mut it)
         });
         assert_eq!(Result::Success, unsafe {
-            get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+            get(
+                state,
+                RenderStateData::RowIterator,
+                &mut it as *mut _ as *mut c_void,
+            )
         });
 
         // The first update is a full redraw so next_dirty visits every row.
@@ -3437,7 +3681,11 @@ fn render_row_iterator_unchanged_without_overscan() {
             assert_eq!(count, y as usize);
             let mut vy: i32 = 0;
             assert_eq!(Result::Success, unsafe {
-                row_get(it, RowData::ViewportY, &mut vy as *mut _ as *mut c_void)
+                row_get(
+                    it,
+                    RenderStateRowData::ViewportY,
+                    &mut vy as *mut _ as *mut c_void,
+                )
             });
             assert_eq!(i32::from(y), vy);
             count += 1;
@@ -3470,7 +3718,7 @@ fn render_row_iterator_covers_overscan() {
         assert_eq!(Result::Success, unsafe {
             get(
                 plain,
-                Data::RowIterator,
+                RenderStateData::RowIterator,
                 &mut plain_it as *mut _ as *mut c_void,
             )
         });
@@ -3480,14 +3728,14 @@ fn render_row_iterator_covers_overscan() {
         assert_eq!(Result::Success, unsafe {
             row_get(
                 plain_it,
-                RowData::Raw,
+                RenderStateRowData::Raw,
                 &mut plain_raw as *mut _ as *mut c_void,
             )
         });
         assert_eq!(Result::Success, unsafe {
             row_get(
                 plain_it,
-                RowData::Id,
+                RenderStateRowData::Id,
                 &mut plain_id as *mut _ as *mut c_void,
             )
         });
@@ -3503,7 +3751,11 @@ fn render_row_iterator_covers_overscan() {
             row_iterator_new(Some(alloc), &mut it)
         });
         assert_eq!(Result::Success, unsafe {
-            get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+            get(
+                state,
+                RenderStateData::RowIterator,
+                &mut it as *mut _ as *mut c_void,
+            )
         });
 
         let mut count: usize = 0;
@@ -3511,7 +3763,11 @@ fn render_row_iterator_covers_overscan() {
         while unsafe { row_iterator_next(it) } {
             let mut vy: i32 = 0;
             assert_eq!(Result::Success, unsafe {
-                row_get(it, RowData::ViewportY, &mut vy as *mut _ as *mut c_void)
+                row_get(
+                    it,
+                    RenderStateRowData::ViewportY,
+                    &mut vy as *mut _ as *mut c_void,
+                )
             });
             assert_eq!(count as i32 - 3, vy);
 
@@ -3520,10 +3776,14 @@ fn render_row_iterator_covers_overscan() {
                 let mut raw: row::CRow = 0;
                 let mut id = RowId::default();
                 assert_eq!(Result::Success, unsafe {
-                    row_get(it, RowData::Raw, &mut raw as *mut _ as *mut c_void)
+                    row_get(
+                        it,
+                        RenderStateRowData::Raw,
+                        &mut raw as *mut _ as *mut c_void,
+                    )
                 });
                 assert_eq!(Result::Success, unsafe {
-                    row_get(it, RowData::Id, &mut id as *mut _ as *mut c_void)
+                    row_get(it, RenderStateRowData::Id, &mut id as *mut _ as *mut c_void)
                 });
                 assert_eq!(plain_raw, raw);
                 assert_eq!(plain_id, id);
@@ -3639,7 +3899,7 @@ fn render_overscan_invalid_values() {
         assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut state) });
 
         assert_eq!(Result::InvalidValue, unsafe {
-            get(state, Data::Overscan, std::ptr::null_mut())
+            get(state, RenderStateData::Overscan, std::ptr::null_mut())
         });
         assert_eq!(Result::InvalidValue, unsafe {
             set(state, SetOption::Overscan, std::ptr::null())
@@ -3653,13 +3913,17 @@ fn render_overscan_invalid_values() {
             row_iterator_new(Some(alloc), &mut it)
         });
         assert_eq!(Result::Success, unsafe {
-            get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+            get(
+                state,
+                RenderStateData::RowIterator,
+                &mut it as *mut _ as *mut c_void,
+            )
         });
 
         // Before the first next, there is no current row.
         let mut id = RowId::default();
         assert_eq!(Result::InvalidValue, unsafe {
-            row_get(it, RowData::Id, &mut id as *mut _ as *mut c_void)
+            row_get(it, RenderStateRowData::Id, &mut id as *mut _ as *mut c_void)
         });
 
         unsafe { row_iterator_free(it) };
@@ -3686,9 +3950,9 @@ fn render_overscan_get_multi_and_row_get_multi() {
         let mut overscan_req = Overscan::default();
         let mut written: usize = 0;
         let keys = [
-            Data::Rows as c_int,
-            Data::Overscan as c_int,
-            Data::OverscanRequest as c_int,
+            RenderStateData::Rows as c_int,
+            RenderStateData::Overscan as c_int,
+            RenderStateData::OverscanRequest as c_int,
         ];
         let mut values: [*mut c_void; 3] = [
             &mut rows as *mut _ as *mut c_void,
@@ -3714,7 +3978,11 @@ fn render_overscan_get_multi_and_row_get_multi() {
             row_iterator_new(Some(alloc), &mut it)
         });
         assert_eq!(Result::Success, unsafe {
-            get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+            get(
+                state,
+                RenderStateData::RowIterator,
+                &mut it as *mut _ as *mut c_void,
+            )
         });
         assert!(unsafe { row_iterator_next(it) });
 
@@ -3722,9 +3990,9 @@ fn render_overscan_get_multi_and_row_get_multi() {
         let mut vy: i32 = 0;
         let mut id = RowId::default();
         let row_keys = [
-            RowData::Dirty as c_int,
-            RowData::ViewportY as c_int,
-            RowData::Id as c_int,
+            RenderStateRowData::Dirty as c_int,
+            RenderStateRowData::ViewportY as c_int,
+            RenderStateRowData::Id as c_int,
         ];
         let mut row_values: [*mut c_void; 3] = [
             &mut dirty as *mut _ as *mut c_void,
@@ -3774,7 +4042,11 @@ fn render_clean_interleaves_with_a_live_overscan_iterator() {
             row_iterator_new(Some(alloc), &mut it)
         });
         assert_eq!(Result::Success, unsafe {
-            get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+            get(
+                state,
+                RenderStateData::RowIterator,
+                &mut it as *mut _ as *mut c_void,
+            )
         });
         assert_eq!(2 + 5 + 1, unsafe { (*it).rows.len() });
 
@@ -3782,7 +4054,11 @@ fn render_clean_interleaves_with_a_live_overscan_iterator() {
         assert!(unsafe { row_iterator_next(it) });
         let mut dirty = false;
         assert_eq!(Result::Success, unsafe {
-            row_get(it, RowData::Dirty, &mut dirty as *mut _ as *mut c_void)
+            row_get(
+                it,
+                RenderStateRowData::Dirty,
+                &mut dirty as *mut _ as *mut c_void,
+            )
         });
         assert!(dirty, "the first update is a full redraw");
         assert_eq!(Result::Success, unsafe { clean(state) });
@@ -3791,11 +4067,19 @@ fn render_clean_interleaves_with_a_live_overscan_iterator() {
         // writes a row's dirty flag back through the sub-slice.
         let mut vy: i32 = 0;
         assert_eq!(Result::Success, unsafe {
-            row_get(it, RowData::Dirty, &mut dirty as *mut _ as *mut c_void)
+            row_get(
+                it,
+                RenderStateRowData::Dirty,
+                &mut dirty as *mut _ as *mut c_void,
+            )
         });
         assert!(!dirty);
         assert_eq!(Result::Success, unsafe {
-            row_get(it, RowData::ViewportY, &mut vy as *mut _ as *mut c_void)
+            row_get(
+                it,
+                RenderStateRowData::ViewportY,
+                &mut vy as *mut _ as *mut c_void,
+            )
         });
         assert_eq!(-2, vy);
         let set_dirty = true;
@@ -3810,7 +4094,7 @@ fn render_clean_interleaves_with_a_live_overscan_iterator() {
         while unsafe { row_iterator_next(it) } {
             let mut id = RowId::default();
             assert_eq!(Result::Success, unsafe {
-                row_get(it, RowData::Id, &mut id as *mut _ as *mut c_void)
+                row_get(it, RenderStateRowData::Id, &mut id as *mut _ as *mut c_void)
             });
             assert!(id != RowId::default());
             seen += 1;
@@ -3826,7 +4110,11 @@ fn render_clean_interleaves_with_a_live_overscan_iterator() {
         let mut y: size::CellCountInt = 0;
         let mut again = 0;
         assert_eq!(Result::Success, unsafe {
-            get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+            get(
+                state,
+                RenderStateData::RowIterator,
+                &mut it as *mut _ as *mut c_void,
+            )
         });
         while unsafe { row_iterator_next_dirty(it, &mut y) } {
             again += 1;
@@ -3874,7 +4162,7 @@ fn ud369_row_iterator_after_failed_overscan_update_stays_in_bounds() {
     let mut out = Overscan::default();
     assert_eq!(
         Result::Success,
-        get_overscan(state, Data::Overscan, &mut out)
+        get_overscan(state, RenderStateData::Overscan, &mut out)
     );
     assert_eq!(Overscan::default(), out, "nothing is reported captured");
 
@@ -3882,7 +4170,11 @@ fn ud369_row_iterator_after_failed_overscan_update_stays_in_bounds() {
     let mut it: RowIterator = std::ptr::null_mut();
     assert_eq!(Result::Success, unsafe { row_iterator_new(None, &mut it) });
     assert_eq!(Result::Success, unsafe {
-        get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+        get(
+            state,
+            RenderStateData::RowIterator,
+            &mut it as *mut _ as *mut c_void,
+        )
     });
     let len = unsafe { (*state).state.row_data.len() };
     assert!(unsafe { (*it).rows.len() } <= len);
@@ -3892,7 +4184,11 @@ fn ud369_row_iterator_after_failed_overscan_update_stays_in_bounds() {
     while unsafe { row_iterator_next(it) } {
         let mut raw: row::CRow = 0;
         assert_eq!(Result::Success, unsafe {
-            row_get(it, RowData::Raw, &mut raw as *mut _ as *mut c_void)
+            row_get(
+                it,
+                RenderStateRowData::Raw,
+                &mut raw as *mut _ as *mut c_void,
+            )
         });
     }
     unsafe { row_iterator_free(it) };
@@ -3901,7 +4197,7 @@ fn ud369_row_iterator_after_failed_overscan_update_stays_in_bounds() {
     assert_eq!(Result::Success, unsafe { update(state, terminal) });
     assert_eq!(
         Result::Success,
-        get_overscan(state, Data::Overscan, &mut out)
+        get_overscan(state, RenderStateData::Overscan, &mut out)
     );
     assert_eq!(
         Overscan {

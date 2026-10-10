@@ -1,0 +1,12 @@
+   Compiling sentry-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/sentry-sys)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.63s
+     Running unittests src/lib.rs (target/san-msan/aarch64-unknown-linux-gnu/debug/deps/sentry_sys-b668348817d9665b)
+
+running 4 tests
+test modulefinder::tests::supported_oses_select_their_module_finder ... ok
+test tests::kat_sentry_value_api_roundtrip ... ok
+test modulefinder::tests::an_unsupported_os_is_an_error ... ok
+test tests::kat_breakpad_backend_selected ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+

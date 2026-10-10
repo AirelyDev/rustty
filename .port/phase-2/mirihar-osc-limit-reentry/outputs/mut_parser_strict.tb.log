@@ -1,0 +1,22 @@
+warning: integer-to-pointer cast
+   --> src/main.rs:122:19
+    |
+122 |     let exposed = std::ptr::with_exposed_provenance_mut::<Wrapper>(addr);
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ integer-to-pointer cast
+    |
+    = help: this program is using integer-to-pointer casts or (equivalently) `ptr::with_exposed_provenance`, which means that Miri might miss pointer bugs in this program
+    = help: see https://doc.rust-lang.org/nightly/std/ptr/fn.with_exposed_provenance.html for more details on that operation
+    = help: to ensure that Miri does not miss bugs in your program, use Strict Provenance APIs (https://doc.rust-lang.org/nightly/std/ptr/index.html#strict-provenance, https://crates.io/crates/sptr) instead
+    = help: you can then set `MIRIFLAGS=-Zmiri-strict-provenance` to ensure you are not relying on `with_exposed_provenance` semantics
+    = help: Tree Borrows does not support integer-to-pointer casts, so the program is likely to go wrong when this pointer gets used
+    = note: stack backtrace:
+            0: trampoline
+                at src/main.rs:122:19: 122:73
+            1: next_slice_raw
+                at src/main.rs:151:9: 151:46
+            2: run
+                at src/main.rs:193:9: 193:50
+            3: main
+                at src/main.rs:205:32: 205:73
+
+mut_parser_strict: ok

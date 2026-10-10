@@ -3406,6 +3406,36 @@ mod tests {
     }
 
     #[test]
+    fn legacy_ctrl_alt_shift_backspace() {
+        let event = ev(key::KeyEvent {
+            key: key::Key::Backspace,
+            mods: Mods {
+                ctrl: true,
+                alt: true,
+                shift: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+        let mut writer: Vec<u8> = Vec::new();
+        legacy(&mut writer, &event, Options::default()).unwrap();
+        assert_eq!(writer, b"\x1b\x08");
+
+        let mut writer: Vec<u8> = Vec::new();
+        legacy(
+            &mut writer,
+            &event,
+            Options {
+                modify_other_keys_state_2: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(writer, b"\x1b[27;8;127~");
+    }
+
+    #[test]
     fn legacy_backspace_decbkm_reset() {
         let mut writer: Vec<u8> = Vec::new();
         legacy(

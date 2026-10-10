@@ -271,6 +271,7 @@ mod tests {
             default_modes: modespkg::ModePacked::default(),
             default_cursor_style: crate::screen::CursorStyle::Block,
             default_cursor_blink: Some(false),
+            default_xt_checksum: Default::default(),
             kitty_image_storage_limit: 320 * 1000 * 1000,
             kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
         }
@@ -965,7 +966,7 @@ mod tests {
     #[test]
     fn feed_discovers_pages_prepended_after_exhaustion() {
         use crate::page::{Capacity, Cell};
-        use crate::pagelist::builder::Location;
+        use crate::pagelist::builder::{FinalizeOptions, Location};
         use crate::pagelist::PageList;
 
         let alloc = Allocator;
@@ -1046,8 +1047,10 @@ mod tests {
                     *(*page).get_row_and_cell(x, 1).cell = Cell::init(*c as u32);
                 }
             }
-            // try allocation.finalize(.prepend);
-            allocation.finalize(Location::Prepend).unwrap();
+            // try allocation.finalize(.prepend, .{});
+            allocation
+                .finalize(Location::Prepend, FinalizeOptions::default())
+                .unwrap();
             allocation.deinit();
         }
         // const prepended = pages.pages.first.?;

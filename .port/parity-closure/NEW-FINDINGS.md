@@ -1985,7 +1985,7 @@ progress) is the obvious suspect. Deliberately NOT diagnosed here: naming the as
 the failure reproduced under load, and guessing at it in this file is how a finding becomes
 folklore.
 
-**state**: **OPEN** (triage T-1, 2026-09-28). No later record reproduces or fixes it; `search/thread.rs` changed since (S7-6, S-1d) without addressing it. Left: reproduce under deliberate load, name the failing assertion, decide test versus handshake, and measure repetitions under load. Effort M, and it needs a long run (repetitions under load), which the wrap-up defers; internal test reliability unless the handshake itself is wrong (then observable as a stalled search). Was: OPEN. Needs (1) the failure reproduced under deliberate load and the failing
+**state**: **FIXED by N548** (P8-W10 FX12, 2026-10-09): reproduced under deliberate load, the failing assertion is the 100 ms completion wait, and it is the test, not the handshake (the search always completes; measured 0-165 ms under load). Was: OPEN (triage T-1, 2026-09-28). No later record reproduces or fixes it; `search/thread.rs` changed since (S7-6, S-1d) without addressing it. Left: reproduce under deliberate load, name the failing assertion, decide test versus handshake, and measure repetitions under load. Effort M, and it needs a long run (repetitions under load), which the wrap-up defers; internal test reliability unless the handshake itself is wrong (then observable as a stalled search). Was: OPEN. Needs (1) the failure reproduced under deliberate load and the failing
 assertion named, (2) a decision on whether it is the test or the handshake that is wrong, and
 (3) if the suite is to be trusted under contention, a repetition measurement that is taken
 under load rather than on an idle host.
@@ -11136,3 +11136,592 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **lane handling**: `lsan-gtk.supp` G2 deleted; its self-test arm is now a regression arm ("A2g leaked
   GClosure, sunk and referenced (the N516 shape; no entry may hide it)", RED). SANITIZER_SUPPRESSIONS.md G2
   struck. No upstream issue is filed (project rule).
+
+## N517 — the parity-surface generator reads phase-0 line windows of `stream.zig`: 13 CSI finals missing, 5 ESC rows are CSI arms
+
+- **id**: N517. P8-W0 T2 (R4 §5.3, DECISIONS D3). **severity**: medium (a silent shrink of gate G9's CSI/ESC
+  surface at the next regeneration). **state**: CLOSED 2026-10-07 (P8-W0 T2; the regeneration of
+  `parity-surface.json` is P8-W0 T3).
+- **found**: Phase 8's delta review of the range `12752b2ac..a60e9e2a5`. `parse_csi.py` read lines 807-1943 and
+  `parse_esc.py` lines 2105-2376 of `src/terminal/stream.zig`, windows fixed at phase 0. At the pin `csiDispatch`
+  starts at line 1410 and `escDispatch` at 2762, so the windows no longer held the functions: the CSI set missed
+  13 finals (`e g h l m n p q r s t u @`) and the ESC set recorded `n p q r s`, which are CSI arms. G9 stayed
+  GREEN only because the frozen `parity-surface.json` was never regenerated across the earlier pins.
+- **fix**: both scripts locate `fn csiDispatch(` / `fn escDispatch(` by header, brace-match to the function end
+  (the shared `_zigspan.py` skips comments, strings, char literals and `\\` lines), find the function's
+  top-level `switch (input.final)` / `switch (action.final)` and brace-match that, then read its 16-space arms;
+  the output format is unchanged. `--self-test` (with `--path` to point at another `stream.zig`) asserts the
+  required CSI/ESC finals, that no arm lies outside its function, and that a header move or a +500-line shift
+  does not change the result. Negative control: `.port/tools/gates/fixtures/parity-surface/stream_no_csi_m.zig`
+  (a trimmed `stream.zig` without `'m'` in `csiDispatch`) makes the CSI self-test arm report `'m'` missing; a
+  `stream.zig` without `escDispatch` is refused. `check_parity_surface.py` does not invoke the generator, so
+  it is unchanged.
+- **evidence**: at `12752b2ac` the regenerated CSI set is 37 arms (`A k B C D j E F G \` H f I J K L M P S T W X
+  Z a b c d e g h l m n p q r s t u @ }` plus `else`) and the ESC set 23 arms (`B A 0 7 8 D E H M N O V W Z c n o
+  ~ } | = > \\` plus `else`); `a60e9e2a5` gives the same sets (both self-tests PASS at both revisions). G9
+  against the frozen surface stays GREEN (693/693).
+
+## N518 — A non-reflow narrow leaves a wide head in the new last column (ICH / EL 1 / row shift reach past the row)
+
+- **id**: N518. P8-W0 T1 (Phase 8 delta review R1 §2.1). **severity**: medium (reachable crash from program
+  output). **state**: CLOSED 2026-10-07 (P8-W0 T1).
+- **found**: Phase 8 delta review of upstream `e6db5b633` ("terminal: fix crash after shrinking columns splits
+  a wide char"); the Rustty port at `401b95b0e` carried the same defect in `resize_without_reflow`.
+- **cause**: narrowing without reflow (`PageList.resizeWithoutReflow`, the cols-less arm) cleared only
+  `[cols, old_cols)`. When the cut fell between a wide head and its spacer tail the head stayed in the new last
+  column, and every operation that pairs a head with the following cell reached past the row end:
+  `insert_blanks` and `erase_line(.left)` in `Screen::clear_cells` (debug assertion; release writes out of row),
+  and the row-shift path writing `cells[cols]`.
+- **reachable recipe**: alt screen (`CSI ? 1049 h`, no reflow), print a wide character whose head is at column
+  `cols - 1` after the next step, resize one column narrower, then `CSI @` or `CSI 1 K` at the last column.
+- **fix** (`vt: clear a wide head cut by a non-reflow narrow (e6db5b633) (P8-W0 T1)`): the arm now starts the
+  clear at `cols - 1` when the cell there is `Wide::Wide`, reading it through the raw row pointer. Tests:
+  `terminal_resize_less_cols_without_reflow_cutting_wide_char_tail` (upstream's test) and the Rustty-only
+  stream-level `terminal_resize_less_cols_on_alt_screen_then_ich_and_el1_with_a_cut_wide_char`; both RED before
+  the fix (observed: the upstream test fails its `is_empty` assertion in debug, not run in release; the alt-screen
+  test fails "no wide head in the last column" right after the resize in debug and release, and with that assertion disabled the
+  release build still fails "cell 9 written", because a background SGR makes the stray blank non-empty), GREEN
+  after in debug (206 resize tests), release (17) and Miri (17, no UB).
+
+## N519 — G-TESTS' four-token name matcher masks 17 of the 90 tests added in the Phase 8 range
+
+- **id**: N519. P8-W0 T4 (R4 §5.1, DECISIONS N519). **severity**: low (a gate blind spot; no behavioural defect).
+  **kind**: gate imprecision. **state**: RECORD-ONLY (no gate change; the checklist is the meter, as in Phase 7).
+- **cause**: `audit_test_coverage.py` (`analyze`, `need = parts[:4]`) treats an upstream test as present when the
+  first four normalized tokens of its name co-occur in any one Rust test name. Seventeen of the 90 tests added in
+  `12752b2ac..a60e9e2a5` pass that way with no counterpart in Rustty (19%): a grep for each snake-case name finds
+  nothing, except `next_slice_matches_per_byte`, an unrelated older test in `osc/mod.rs`. G-TESTS therefore reports
+  73 unexplained at the arrival, not 90.
+- **the masked tests**: `splitHostPort`; "parseDestination: port before hostname"; "legacy: ctrl+alt+shift+backspace";
+  "PageList PageAllocation compresses prepended pages unless visible"; "PageList resize reflow pin in blank cells
+  after line break"; "Screen: selectLine semantic boundary around unwritten cells"; "Terminal: eraseLine complete
+  clears kitty placeholder flag"; "Terminal: resize less cols without reflow cutting wide char tail"; "Terminal:
+  resize pending wrap live and saved cursors"; c/osc "command data null" and "unknown"; c/terminal "set
+  semantic_prompt callback", "set reset callback" and "checksum report requires explicit opt in"; "OSC unknown:
+  nextSlice matches per-byte parsing"; "stream: DECRQCRA dispatch" and "stream: XTCHECKSUM dispatch"; "unknown OSC
+  effect callback"; "xt_checksum: encode".
+  R4 §3 counts 17 but lists the 19 names above (one, "resize less cols without reflow cutting wide char tail",
+  was ported by P8-W0 T1, N518); the count of 17 is carried as R4 wrote it, and the TSV is the authority.
+- **remedy**: not a stricter matcher: it would need its own self-test arm and would risk the false gaps the script's
+  comments describe. At the finale every row of `.port/phase-8/delta-review/R4-upstream-tests.tsv` is ticked by
+  exact name (Phase 7's `w0/tests-checklist.txt` precedent), and each ported test keeps upstream's name so the
+  checklist can be read by grep.
+
+## N523 — G9 never checked CSI, ESC or C0: the kinds were registered but `surface_ids` gave them no ids
+
+- **id**: N523. P8-W0 T5 (`.port/phase-8/w0/README.md` F2). **severity**: medium (a gate that cannot go RED on
+  a whole surface). **kind**: gate vacuity. **state**: CLOSED (P8-W3 merge `db71cee2d`) — the gate is fixed (P8-W0 T5); the one real gap it
+  showed, CSI `y` (DECRQCRA / XTCHECKSUM), was closed by P8-W3 T1 (G9 csi 43/43, all kinds 777/777).
+- **cause**: `check_parity_surface.py` listed `csi`, `esc` and `c0` in `OWNERS`, but `surface_ids()` read none of
+  `csi_handlers`, `esc_handlers` or `c0_controls`, so each printed "(no ids in parity-surface.json)" and
+  could never turn G9 RED. A token search would not have helped: a final is one character.
+- **fix**: `surface_ids()` yields each final of each `csi_handlers.arms` / `esc_handlers.arms` row (once, plus
+  `else` when `has_else_unimplemented`) and the `c0_controls` names. Coverage is structural: `dispatch_arms`
+  locates `fn csi_dispatch` (`crates/rustty-vt/src/stream/csi_dispatch.rs`), `fn esc_dispatch` and `fn execute`
+  (`stream/dispatch.rs`), then the one `match input.final_` / `match action.final_` / `match c0` in each, and
+  reads its top-level arm patterns (`b'm'`, `b'A' | b'k'`, `b'\\'`, integer literals, `..=` ranges, `_` as
+  `else`, `ansi::C0::NUL` paths for C0; nested matches inside an arm are skipped). A missing fn or match, or a
+  pattern spelling the matcher cannot read (a named constant), is BLOCKED (exit 3). `csi_dispatch_final` has no
+  match on the final (it forwards every final to `csi_dispatch`), so it adds nothing. The kinds carry no
+  `--require-tests` arm; their line says so.
+- **negative controls** (`--self-test` arms i-q, on copies of the real files): the `b'm'` arm removed makes `csi`
+  RED on exactly `m` although `b'm'` stays in `csi_dispatch_final` (checked; arms k and l have no other
+  occurrence of their token and print `n/a`); the `b'\\'` ESC arm removed, RED on `\`;
+  the `ansi::C0::BEL` arm removed, RED on `BEL`; the top-level `_` arm removed, RED on `else` (the nested `_`
+  arms do not count); `fn esc_dispatch` renamed, BLOCKED; `b'm'` respelled as `FINAL_M`, BLOCKED.
+- **result at `a60e9e2a5`**: csi 42/43, UNCOVERED `y` only (real: not yet ported; P8-W3 T1); esc 24/24; c0
+  13/13. No final was a spelling miss. `.port/phase-8/w0/g9-after-gate-repair-at-a60e9e2a5.txt`.
+- **also fixed** (minor, same task): the ESC `\` final was stored in its Zig-source spelling (JSON `"\\\\"`, two
+  characters). `_zigspan.py` now decodes each Zig char literal (`zig_char`); `parse_esc.py`'s required set names
+  the one-character final, and its self-test was RED on `\` before the decoder (`missing required ESC finals:
+  ['\\']`). Regenerated with `build_parity_surface.py`: the only change in `parity-surface.json` is that line.
+
+## N524 — G9 counted OSC kind `unknown` as ported because the word `unknown` occurs in `rustty-vt`
+
+- **id**: N524. P8-W0 T5 (`.port/phase-8/w0/README.md` F3). **severity**: low (under-reports by one id).
+  **kind**: gate false positive. **state**: CLOSED (P8-W4 merge `99d788e36`) — the gate is fixed (P8-W0 T5); `unknown` was closed by P8-W4 T2
+  (`osc::Command::Unknown`), `program_status` by P8-W4 T3 (G9 osc 29/29).
+- **cause**: `present()` accepted any whole-word match of an id variant (or the raw substring) in the owner
+  crate's token corpus. `unknown` is a common word in `rustty-vt`, so the unported `unknown` kind read covered
+  (osc 28/29 at T3). Any kind named by a common word was exposed the same way (`invalid`, `hyperlink_end`).
+- **fix**: for `osc`, an id is covered iff the `osc::Command` enum (`crates/rustty-vt/src/osc/mod.rs`) has a
+  variant matching it under G1's convention (`_gatelib.name_candidates`, either direction), read from the enum
+  body (`osc_enum_variants`). The `--require-tests` arm is unchanged. A missing enum is BLOCKED.
+- **negative control**: `--self-test` arm m, a fixture enum without `Unknown` while the word `unknown` stays in a
+  comment, a string, a fn name and a const name: RED on exactly `unknown`. Arm m-real, a copy of the REAL
+  `osc/mod.rs` with the real surface's kinds: unmodified, UNCOVERED is the real gaps only; with the `HyperlinkEnd`
+  variant dropped (its `Command::HyperlinkEnd` uses stay), exactly `hyperlink_end` is added. Arm p: no
+  `enum Command`, BLOCKED.
+- **other kinds**: every single-word id of `modes`, `sgr`, `keybind`, `cli` and `config` (48 ids, e.g. `insert`,
+  `unknown` in sgr, `quit`, `help`, `title`) has a defining site in its owner crate (a field, a variant or a
+  string literal), so the false positive is not shown to affect them; their matching is unchanged.
+- **result at `a60e9e2a5`**: osc 27/29, UNCOVERED `unknown` and `program_status` (both real).
+
+## N525 — the c-vt corpus scripts wrote into the main checkout, and the examples' `zig build` fails on macOS
+
+- **id**: N525. P8-W0 T5 (`.port/phase-8/w0/README.md` F1). **severity**: low (tooling; the goldens were
+  re-captured by hand in T3). **kind**: harness portability. **state**: CLOSED 2026-10-07 (P8-W0 T5).
+- **cause**: `.port/phase-0/run-cvt-corpora.sh` and `build-examples.sh` hard-coded
+  `/Users/gael/projects/rustty/.port/phase-0/{examples-out,corpora/cvt}` and the oracle path, so from a worktree
+  they read and wrote the main checkout, and `examples-out` existed in neither checkout.
+- **oracle build failure**: `zig build` of an example (`cd example/c-vt-effects && zig build --prefix …
+  --cache-dir …`) panics at `a60e9e2a5` on macOS with "unable to find artifact 'ghostty-vt'" (reproduced in T5;
+  "available artifact: 'ghostty-vt-static'"). Cause: since upstream `d65cb5128` (2026-07-23, before both Phase
+  8 pins), `GhosttyLibVt.initShared` links the Darwin shared library with Apple's linker (`initLibApple`), a Run
+  step that registers no Compile artifact named `ghostty-vt`, so every example's `dep.artifact("ghostty-vt")`
+  finds nothing. Upstream CI builds the Zig examples on Linux only, where `initLib` still registers it. This is
+  an oracle-side build issue (a candidate upstream-defect row for the controller; not recorded here), not a
+  Rustty one.
+- **fix**: both scripts derive the repository root from their own location. `build-examples.sh` (bash now)
+  resolves the oracle with `rustty_oracle_root`, is BLOCKED (exit 3) unless the oracle is at `ORACLE_PIN` with
+  `example/` and `include/` clean, its `zig-out/include/ghostty` equals `include/ghostty`, and a Mach-O
+  `libghostty-vt.a` exists, then builds each example with the supported method (N395/T3: the example's
+  `src/main.c`, `main.cpp` for `cpp-vt-stream`, compiled with Xcode clang against that library; `-DGHOSTTY_STATIC`
+  and libc++ as the examples' `build.zig` set them) into `.port/phase-0/examples-out/` (git-ignored). It is a
+  G-ORACLE-SH-SELF consumer (`--print-oracle`, arm 5) with an arm-10 spec (`GHOSTTY 0 0 1`; 10s RED with a
+  plain `git -C "$GHOSTTY"`). `run-cvt-corpora.sh` reads its own `examples-out/`, writes its own
+  `corpora/cvt/`, compares under N395's `pw=` mask (the `cvt_normalize` sed), and keeps a stored file that is
+  equal under the mask, so a re-run does not churn `c-vt-paste`.
+- **proof**: from this worktree, 23/23 built and exited 0; after `run-cvt-corpora.sh` (exit 0, 23 determinism
+  rows OK) `git status` shows no change under `corpora/cvt/`; a raw re-run is byte-identical to the committed
+  goldens for 22 cases and equal under the mask for `c-vt-paste`. Nothing was written to the main checkout.
+
+## N526 — the freestanding `rustty_wasm` build was broken since ca2ef434b and nothing noticed
+
+- **id**: N526. P8-W0 T6. **severity**: medium (a whole deliverable, the `main_wasm.zig` artifact, did not build for
+  10 days). **kind**: regression + gate gap. **state**: CLOSED.
+- **cause**: `ca2ef434b` (2026-09-27, "parity tail W-2: the application tier compiles and runs on Windows (N351)")
+  changed two `rustty-config` sites (`config_struct/load.rs`, the cwd expansion in `load_cli_args`; `path.rs`, the
+  `expand` realpath) to call `rustty_os::path::realpath`. `rustty_os::path` is `cfg(not(target_arch = "wasm32"))`, so
+  `cargo build -p rustty-wasm --target wasm32-unknown-unknown` failed with E0433 (x2) plus two follow-on errors
+  (E0277, E0282). The only check of that build was the opt-in `ci.sh --webgl` lane.
+- **fix**: `rustty_config::path::realpath`, a crate-local wrapper: `rustty_os::path::realpath` on every non-wasm32
+  target (unchanged, Windows DOS form kept), `std::fs::canonicalize` on wasm32 (unsupported there, the pre-W-2
+  behaviour). Reference: `main_wasm.zig` retains only `os/wasm.zig`, `font`, `terminal`, `config.Wasm`, `App.Wasm`;
+  Zig's lazy analysis never reaches `Config.loadCliArgs` / `path.expand` on wasm32-freestanding, so no filesystem
+  behaviour exists to mirror.
+- **residual check**: after the fix `bash .port/tools/ci.sh --webgl` is PASS (release wasm build, log-emission gate,
+  web_canvas font check, WebGL2 browser gate in headless Chrome) and `cargo test -p rustty-wasm -- --ignored` is
+  green; nothing else had rotted.
+- **guard**: a `cargo check -p rustty-wasm --target wasm32-unknown-unknown` step in the default `ci.sh` set (after
+  `cargo build --workspace`; documented in `.port/tools/CI.md`), BLOCKED (a WARNINGS row, not a skip) when the rustup
+  target is absent. Negative control: replacing the wrapper with a bare `rustty_os::path::realpath` call made the
+  check RED (E0433), reverted.
+
+## N522 — PORT-ONLY: the app-scoped render `Device` lives in its own allocation (`DeviceBox`), not by value in `App`
+
+- **id**: N522. P8-W6 T2 (R3 §2.2 and Q1, DECISIONS P10/P11/P12, N522). **severity**: none (a layout choice the
+  port needs; no behavioural difference). **kind**: PORT-ONLY. **state**: RECORD-ONLY.
+- **upstream** (`40d5b860d`): `App.device: renderer.Device` by value (`App.zig:57-58`), initialized in `App.init`
+  (`:133-142`) and torn down last in `App.deinit` (`:157-159`, "This must happen after all surfaces are gone since
+  their renderers borrow it."); every surface renderer is created with `.device = &app.device` (`Surface.zig:564`)
+  and reads it on its render thread (`Metal.zig` `self.device.*`, `OpenGL.zig` `self.device.display`).
+- **why the port differs**: by value, every main-thread `&mut App` (`addSurface`, `deleteSurface`, `updateConfig`,
+  `deinit`, ...) is a protected `Unique` over the device bytes while render threads read them: Stacked Borrows UB,
+  the N441/N444 class. Proven on `.port/phase-2/mirihar-device-box`: `inline_device` UB under SB (TB clean,
+  per-byte), `boxed_device` and `boxed_device_lifecycle` clean under SB and TB, and the negative control
+  `boxed_device_freed_before_surfaces` (device freed before the surviving render thread stops) UB under both.
+- **the port**: `rustty_core::app::DeviceBox(*mut rustty_renderer::Device)` from `Box::into_raw`, created in
+  `App::init` at the reference's point (logging `failed to initialize render device err={}` and returning
+  `CreateError::DeviceFailed` on error), freed in `App::deinit` after the surface loop and the grid-set assert;
+  `Options.device` is the `*const Device` from `DeviceBox::as_ptr`. No `Arc`: a surface must not keep the device
+  alive past `App::deinit`. The thread-safety argument is written at the type (MTLDevice thread-safe; EGL 1.5
+  display calls thread-safe; fields written once before any surface). `Device::init` writes a
+  `MaybeUninit<Device>` slot (the reference's in-place `init(self: *Device)` over an `undefined` field).
+- **tests without a GPU** (DECISIONS P11): `App::init_null_device` (`#[cfg(test)]`) builds the app with a null
+  box that `deinit` skips; the 16 App seam tests use it and stay Miri-checked (17 passed under Miri with the new
+  null-device test). Real-device tests: `app_init_creates_and_deinit_frees_the_render_device`,
+  `app::device_tests::two_surfaces_share_the_device_destroy_one_draw_the_other_then_deinit` (Review Focus 4: two
+  real surfaces, destroy one, draw the other, deinit; a `#[cfg(test)]` drop-order probe asserts the device is freed
+  after both renderers).
+
+## N527 — `build-rustty.sh` overrode the project's `OTHER_LDFLAGS` and RusttyTests failed to link
+
+- **status**: CLOSED (P8-W7 T4).
+- **cause**: `macos/build-rustty.sh` passed `OTHER_LDFLAGS="-lstdc++"` on the `xcodebuild` command line. A command-line
+  build setting overrides every project-level value, so it dropped the project's
+  `"OTHER_LDFLAGS[arch=*]" = "-lstdc++ -Wl,-u,_rustty_benchmark_cli"` (Debug and Release configurations,
+  `project.pbxproj`). RusttyTests built through that invocation failed with
+  `Undefined symbols for architecture arm64: "_rustty_benchmark_cli", referenced from: RusttyTests.BenchmarkTests.example()`.
+- **fix**: the override is removed. Every configuration (Debug, Release, ReleaseLocal) already carries `-lstdc++` in the
+  project, so nothing is lost; `project.pbxproj` is unchanged. The script comment now says why it is not passed.
+- **evidence**: RED: the script's exact invocation plus `-only-testing:RusttyTests test` ended with the undefined
+  `_rustty_benchmark_cli` link error. GREEN: the same invocation without the override gives `** TEST SUCCEEDED **`;
+  `bash macos/build-rustty.sh` gives `** BUILD SUCCEEDED **`; `.port/tools/macos-parity/menu-shortcut-parity.sh` prints
+  `menu-shortcut parity OK — 51 actions resolve byte-identically`.
+
+## N520 — `flags.xt_checksum` is not carried by the snapshot TERMINAL record
+
+- **id**: N520. P8-W3 T1 (R1 §2.5 risk 3, R1 §4 Q2, DECISIONS N520). **severity**: low (opt-in feature, no crash).
+  **kind**: upstream format gap, carried for byte parity. **state**: RECORD-ONLY.
+- **what**: XTCHECKSUM (`CSI Ps # y`) sets `Terminal.flags.xt_checksum`, which is program state. Upstream's
+  TERMINAL record (`snapshot/terminal.zig`, the flag list at `:392-402`, unchanged in `12752b2ac..a60e9e2a5`)
+  encodes `shell_redraw`, `modify_other_keys_2`, the mouse flags and `password_input`, but not `xt_checksum`, and
+  `default_xt_checksum` is not encoded either. Rustty's `snapshot/terminal.rs` mirrors the record byte for byte, so
+  a restored terminal comes back from `Terminal::init` with `flags.xt_checksum = Options.default_xt_checksum` (the
+  restore path builds its `Options` with the zero value, the DEC checksum) and answers DECRQCRA with that variant
+  instead of the one the program selected.
+- **why not a UD**: it is reachable only with `xt_checksum_report` on (off by default in the vt handler, the config
+  and the C surface), it cannot crash or corrupt state, and fixing it is a change to a documented binary format
+  whose goldens are cross-checked against Ghostty's. A Rustty-only field would break that byte identity. Upstream
+  is the right place to extend the record.
+- **revisit**: if upstream adds `xt_checksum` (or `default_xt_checksum`) to the TERMINAL record, port it with the
+  record change and retire this entry.
+
+## N521 — `rustty_terminal_paste` kept going after a refused write when the reader returned true
+
+- **id**: N521 (reserved in DECISIONS). Opened and closed by P8-W5 T3 (R2 §2.6 #9). **severity**: low (C API;
+  a reader that breaks its contract). **kind**: port carried the pre-fix upstream shape. **status**: CLOSED.
+- **what**: `readTrampoline` (`c/paste.zig`) used to return `error.WriteFailed` only when the C reader returned
+  false. A reader that ignores a refused `write` (the contract forbids it) and returns true made the paste go
+  ahead with the refused piece missing. Upstream `2b0ceff7d` checks `sink.write_failed` first, whatever the
+  reader returns. Rustty's `crates/rustty-vt-c/src/paste.rs` `read_trampoline` had the old shape.
+- **fix**: ported as upstream: `WriteFailed` if any write was refused, then `ReadFailed` if the reader returned
+  false.
+- **test**: `paste::tests::terminal_paste_refused_write_ignored_by_the_reader` (upstream's "terminal_paste refused
+  write ignored by the reader"; the capture gains `ignore_refused`). RED before the fix: `left: OutOfMemory,
+  right: Success` (the paste succeeded). GREEN after; every allocation is returned.
+
+## N528 — `rustty_terminal_get` rejected `RUSTTY_TERMINAL_DATA_MOUSE_SHAPE`
+
+- **id**: N528 (provisional N550, renumbered at the P8-W5 merge). Found and closed by P8-W5 T3. **severity**: medium (a documented C
+  query always failed). **kind**: port defect (Rustty only). **status**: CLOSED.
+- **what**: `TerminalData::from_c_int` (`crates/rustty-vt-c/src/terminal/data.rs`), the `c_int` guard that
+  `rustty_terminal_get` and `rustty_terminal_get_multi` go through, accepted `0..=TERMINAL_DATA_MAX` with
+  `TERMINAL_DATA_MAX = 40`. `MOUSE_SHAPE = 41` (oracle `78494bad8`/`67fb0c940`) was added to the enum without
+  raising the bound, so the C entry points answered `RUSTTY_INVALID_VALUE` for it. The ported `get mouse_shape`
+  test calls the typed `get` directly, past the guard, so it never saw this. The reference's guard is
+  `std.enums.fromInt`, which accepts every declared value.
+- **fix**: the bound is 42 (`MEMORY_USAGE`, added by this task).
+- **test**: `terminal::tests::get::get_checked_accepts_every_declared_data_value` (Rust-only): every value
+  `0..=42` narrows to itself, 43, -1 and `c_int::MAX` are rejected, and `get_checked` answers `MOUSE_SHAPE`.
+  RED with the bound at 40: `assertion failed: data value 41, left: Some(41), right: None`.
+
+## N529 — cbindgen emits one layout for same-named vt-c types; `include/rustty.h` declared the SGR unknown with the OSC layout
+
+- **id**: N529 (provisional N551, renumbered at the P8-W5 merge). Found in the review of P8-W5 T3 (fix round 1). **severity**: medium for
+  the regression (the published full header declared wrong by-value layouts), low to medium for the
+  pre-existing rows below. **kind**: port defect (Rustty only; Zig exports carry their own C names).
+  **status**: CLOSED (the T3 regression by P8-W5 T3; the 7 pre-existing collisions by P8-W5 T5).
+- **cause**: cbindgen keys types by their bare Rust name, not by module path. P8-W5 T3 added
+  `rustty_vt_c::osc::UnknownC` (the OSC `Unknown.C` projection) beside `rustty_vt_c::sgr::UnknownC`. cbindgen kept
+  one `UnknownC`, the OSC one, so `include/rustty.h` declared `rustty_sgr_unknown_full`,
+  `rustty_sgr_unknown_partial` and the SGR attribute value with `{ bool truncated; LibString content; Terminator
+  terminator; }` instead of `{ full_ptr, full_len, partial_ptr, partial_len }`. A5 did not see it: (a3) regenerates
+  the same wrong header byte for byte, and (c) checks the curated `include/rustty/vt/*.h`, which are hand-written.
+- **fix**: the OSC projection is named after its C type, `osc::UnknownOscSequence`, re-exported (not aliased) as
+  `terminal::UnknownOscSequence`; `include/rustty.h` regenerated and declares the SGR layout again.
+- **guard (R5)**: A5 arm (f), `.port/tools/check-vt-cbindgen-name-collisions.py`. It fails when two non-test
+  `pub struct|enum|union|type` items in rustty-vt-c share a name that `include/rustty.h` uses as a type, unless the
+  name is in its baseline WITH exactly that set of defining items (a third definition of a baselined name is RED),
+  and fails on a stale baseline row. `#[cfg(test)]` items are skipped by brace matching, so items after a test
+  module are still read (fix round 2; live control: a third `Size` in `focus.rs` -> `CHANGED COLLISION \`Size\``). Negative controls: its `--self-test` (an unlisted
+  duplicate RED, a stale row RED, a clean fixture GREEN), and reintroducing the OSC `UnknownC` turned it RED
+  (`NEW COLLISION \`UnknownC\`: sgr.rs:73 (struct), osc.rs:133 (struct)`).
+- **pre-existing collisions (OPEN, baselined in the checker)**: `Data` (render, kitty_graphics, selection_gesture
+  enums, c_int-sized), `Encoder` (key/mouse encoder handles: rustty.h names the key encoder for both), `Event`
+  (key/mouse/selection-gesture handles), `KittyGraphics` (an alias of the same type, harmless), `Parser` (osc/sgr
+  handles: rustty.h declares the `rustty_sgr_*` functions over `OscParserWrapper *`), `RowData` (render/row enums),
+  and `Size`. **`Size` has different layouts**: `size_report::Size` (rows, columns, cell sizes) and
+  `mouse_encode::Size` (sized struct, screen and padding); rustty.h declares `rustty_size_report_encode(int, Size,
+  ...)` with the mouse layout, so a C caller using `include/rustty.h` instead of the curated
+  `rustty/vt/size_report.h` would pass the wrong struct by value. The handle and enum rows are ABI-compatible
+  (pointer- or c_int-sized) but name the wrong types. Fixing them means renaming Rust types across vt-c, which is
+  outside P8-W5 T3; owner: the coordinator to schedule. Each fix removes its baseline row (the arm goes RED on a
+  stale row).
+
+- **closure (P8-W5 T5)**: each colliding Rust type now carries its upstream C name (`Rustty` + the C name,
+  minus the prefix), by renaming the Rust type (cbindgen has no per-item rename, and `[export.rename]` is keyed by
+  the bare name that collides). No layout, symbol or discriminant moved; `include/rustty.h` was regenerated with
+  `cargo run -p xtask -- header-gen`. A5 arm (f)'s BASELINE is EMPTY.
+
+  | old name (modules) | new name | wrong declaration in rustty.h before | correct after |
+  | --- | --- | --- | --- |
+  | `Size` (`size_report`, `mouse_encode`) | `SizeReportSize`, `MouseEncoderSize` | `rustty_size_report_encode(int, Size, ...)` over the 9-field mouse layout `{size, screen_*, cell_*, padding_*}` (real ABI defect) | `SizeReportSize {rows, columns, cell_width, cell_height}` |
+  | `Parser` (`osc`, `sgr`) | `OscParser`, `SgrParser` | all `rustty_sgr_*` over `OscParserWrapper *` | `SgrParser` = `ParserWrapper *`; `rustty_osc_*` over `OscParser` |
+  | `Event` (`key_event`, `mouse_event`, `selection_gesture`) | `KeyEvent`, `MouseEvent`, `SelectionGestureEvent` | `rustty_mouse_event_*` and `rustty_selection_gesture_event_*` over `KeyEventWrapper *` | each over its own wrapper pointer |
+  | `Encoder` (`key_encode`, `mouse_encode`) | `KeyEncoder`, `MouseEncoder` | `rustty_mouse_encoder_*` over `KeyEncoderWrapper *` | `MouseEncoder` = `MouseEncoderWrapper *` |
+  | `Data` (`render`, `kitty_graphics`, `selection_gesture`) | `RenderStateData`, `KittyGraphicsData`, `SelectionGestureData` | `rustty_render_state_get_multi` and the selection-gesture getter over the kitty-graphics `Data` (3 enumerators) | each over its own enum |
+  | `RowData` (`render`, `row`) | `RenderStateRowData` (render), `RowData` (row) | `rustty_row_get_multi` over the render row enum | `RowData` is the `row` enum (wrap, grapheme, ...); the render getter uses `RenderStateRowData` |
+  | `KittyGraphics` (`kitty_graphics`, `terminal::data` alias) | one type; `terminal::data` re-exports it | two typedefs of one type | one typedef |
+
+  Guard: arm (a5) of `check_rustty_vt_headers.sh` compiles `test/rustty-h/size_report_abi.c` against the generated
+  `include/rustty.h`, links the native library and checks the bytes `rustty_size_report_encode` writes for a
+  `SizeReportSize` value (RED against the old header: `SizeReportSize` is undeclared there). Arm (f)'s negative
+  control still fires (a duplicate `SizeReportSize` -> `NEW COLLISION`).
+
+## N530 — gate drift at the a60e9e2a5 advance: G3b self-test line anchor, G4 leg B not runnable on macOS, two examples off upstream
+
+- **id**: N530 (used directly; reserved for P8-W0 T7). **status**: CLOSED. **severity**: medium (two gates unable to vote, two examples unfaithful).
+- **G3b self-test.** `--self-test` had one failing arm, `REAL NEG: lib_vt.zig:186 ... STALE`: its negative control was
+  anchored by line number and the advance moved the comment (186 -> 189). Fix: the control finds the line by the comment's
+  text (`Force-reference our memset override`), so the next advance cannot break it this way. It stays a real control: with
+  the anchor text changed to a string absent from the oracle (copy of the script), the arm dies with `StopIteration`
+  instead of silently passing; `--self-test` is GREEN with the real text. R5/R14 kept.
+- **G4 leg B (`.port/tools/cvt-parity.sh`).** It built the oracle twin with the example's own `zig build run`, which aborts
+  on macOS at the pin (N525, upstream `d65cb5128`), so the verdict was BLOCKED. It now builds the oracle example source
+  with Xcode clang in a scratch dir against the oracle's `zig-out` lib/headers (the N395 method `build-examples.sh`
+  documents), with the same BLOCKED (exit 3) checks `build-examples.sh` has (oracle at the pin and clean under `example/`
+  and `include/`, built headers equal the pin's, Mach-O lib present) and the N395 `pw=` mask `cvt_normalize` applies. Leg B's
+  meaning (Rustty example stdout byte-equal to the oracle's) is unchanged. Negative control: one expected line of
+  `c-vt-sgr` perturbed in the Rustty source -> `DIFFERS`, exit 1. Verdict over all 25 examples that have a Rustty twin:
+  GREEN, byte-identical (`.port/phase-8/w0/cvt-parity-at-a60e9e2a5.txt`); the 3 CMake examples have no `build.sh` and are
+  not run.
+- **Example divergences found by the run (2, not 1).** (1) `c-vt-effects`: Rustty-only "6. Desktop notification" /
+  "7. Progress report" sections, callbacks and `rustty_terminal_set` calls added by `384d62995` (P3-W6 T3, which ported
+  upstream `c3655ba25`/`47d602c42`/`628adaf30`; those exposed the effects in the C API but not in the example). No
+  recorded decision keeps them (searched NEW-FINDINGS, DECISIONS, NON_PORTS, the Phase 3 plan); removed, `main.c` is now
+  upstream's with the names mapped (R1). The C API is untouched. (2) `c-vt-formatter`: upstream `924c8a90d` (formatter
+  streams through a `GhosttyWriter`) changed the example to stream through a writer and print `(N bytes)` after the
+  output; the Rustty example still used `rustty_formatter_format_alloc` and printed `Formatted output (N bytes):`. The
+  writer API was already ported (`rustty_formatter_format`), so the example was brought to upstream's.
+
+- **N531 (CLOSED, P8-W9 T1a): the `rustty-extra` goldens were not regenerated for `vt-xt-checksum-report` and
+  `vt-xt-checksum-extension`, and three upstream comments were paraphrased.** P8-W3 T2 added the two config keys
+  (a60e9e2a5 `Config.zig:3086`, `:3124`) but did not touch `crates/rustty-extra`, so `cargo test -p rustty-extra` failed 6
+  tests (bash, zsh, fish, sublime, vim goldens and the mdgen field count 212 vs 210) on Mac and rvm. There is no golden
+  update switch: the fixtures in `crates/rustty-extra/testdata` are upstream's generated output with the brand tokens
+  flipped, kept by hand. The generators (ports of `src/extra/*.zig`) were run for the current field table, and the
+  only differences from the committed fixtures were the lines for the two keys (bash 4, zsh 2, fish 2, vim 2, sublime
+  keyword list 1); the generator output was committed and the mdgen literal went 210 -> 212. Also carried verbatim
+  (G3b): `program_status.zig:141` (the `Report` doc example, `readOption`/`writeText` spelled as upstream, the Rust
+  form moved to a PORT NOTE), `stream_terminal.zig:126` (the `startsWith` line, as a PORT NOTE in the doc example) and
+  `surface.zig:3952` (the `key` comment in `log_warn_once!`). G3b is GREEN with and without `--strict`.
+
+- **N535 (FIXED, P8-W9 FX2; the rvm run found the same and shares this id): D1 (`check_slice_reinterpret.sh`) was RED, 4 unlisted
+  reinterpret sites and 4 stale allowlist rows.** Unlisted: `crates/rustty-vt/src/bitmap_allocator.rs:848, :880`,
+  `crates/rustty-vt/src/page_impl.rs:2297, :2467`; stale: `bitmap_allocator.rs:829, :861`, `page_impl.rs:2236, :2414`.
+  All four are the audited sites drifted, none is new: the gate was already RED at the Phase 8 base `401b95b0e`, from
+  Phase 7 commits above the sites (`bee52ca79` for `bitmap_allocator.rs`; `0bc5fd6b8`, `32d6c4b51`, `5a7f2d1c8` for
+  `page_impl.rs`), then `0a3e385a5` (P8-W2 T1) moved the `clear_cells_inner` site 2475 -> 2467. The two bitmap test
+  bodies are byte-identical to the ones audited at `50538fe8f`; the two `page_impl.rs` expressions, their pointer
+  provenance (`cells().ptr(base).add(..)`, a `*mut Cell`, 8-aligned) and their cell-count lengths are unchanged, so every
+  row stays `exact-len-proven` with the same guard tests. The four rows in `.port/audits/slice-reinterpret.tsv` were
+  re-audited and re-keyed, with zig origins re-resolved at `a60e9e2a5` (`page.zig:1150`, `:1291`;
+  `bitmap_allocator.zig:616`, `:641`). The rvm run listed `:848` and the Mac summary did not, but there is no host
+  difference: the gate is a plain `grep -rnE` with no cfg or target logic, and the Mac log
+  (`.port/phase-8/w9/D1-mac.full.log` in the T2 Mac worktree) lists `:848` too; the Mac summary dropped it when copying.
+  D1 is GREEN on the Mac and on rvm (a `git archive` of the branch, gate only, no build), and `--self-test` passes.
+- **N536 (FIXED, P8-W9 FX2; the rvm run found the same and shares this id): G-LINT (HARD) was RED: shellcheck SC2010 and prettier on 3 docs.**
+  `.port/tools/cvt-parity.sh:24` enumerated examples with `ls | grep -E '^(c|cpp)-vt'`; it now globs
+  `"$rootd"/example/*` and filters with `case c-vt*|cpp-vt*`, which keeps the sorted order and the set. `--all`
+  output before and after is identical (25 identical, 3 not covered, GREEN). `prettier@3` (3.9.9) `-w` was run on
+  `docs/parity-audit/src-renderer.md`, `docs/parity-audit/src.md` and
+  `docs/superpowers/plans/2026-10-07-phase8-upstream-resync.md`; the diff is whitespace and table padding only
+  (whitespace- and dash-stripped contents compare equal). The other shellcheck hits in the Mac run (SC2164) were the
+  runner's own helper scripts in its worktree, not repository files. `check_lints.sh` is GREEN on the Mac (shellcheck
+  153 files, prettier, typos, swiftlint, actionlint; alejandra and pinact skipped as before).
+
+- **N532 (FIXED, P8-W9 FX1, `01c7a780b`): rustty-bench `hyperlink_map::tests::hyperlink_map` was RED under Miri (G6).**
+  Miri stopped with "inline assembly is not supported" at the `reg_sink!` `core::arch::asm!` in
+  `DoNotOptimize::sink` (`crates/rustty-bench/src/lib.rs`). The asm sink is now `#[cfg(not(miri))]` and otherwise
+  unchanged, so real builds keep the same codegen; a `#[cfg(miri)]` sink uses `core::hint::black_box`. RED before
+  (`cargo +nightly miri nextest run -p rustty-bench -E 'test(=hyperlink_map::tests::hyperlink_map)'`: 1 failed), GREEN
+  after (`cargo +nightly miri nextest run -p rustty-bench`: 38 passed, 15 skipped, 19 min). The gate was not relaxed.
+- **N533 (FIXED, P8-W9 FX1, `b4c13ce4f`): rustty-vt `semantic_prompt_effect_not_called_when_the_terminal_fails` did not
+  finish under Miri (G6).** Not UB. With 10 columns the test needed 4,367 `A`s to fill the first page before the page
+  list allocated (4.9 s native, over 2h40m under Miri). The page keeps the standard byte size, so the test now uses
+  8000 columns: the page holds only a few rows and the refused allocation comes after 5 `A`s (0.01 s native, 89 s
+  Miri, single test). Assertions are unchanged; the loop cap went 100,000 -> 100 and `assert!(reported > 0)` keeps the
+  earlier-prompt arm live. Negative control: removing the `return` after `vt_catch` in `Handler::semantic_prompt`
+  turns it RED (`left: 5, right: 6`). No Miri exception was needed.
+- **N541 (FIXED, P8-W9 FX5, `490a0e122`): rustty-vt-c `osc::tests::command_data_invalid_value_warns_through_the_scoped_log_sink`
+  flaked on rwin (V26).** Its scoped log sink caught `osc_set invalid option value=1` from
+  `osc_set_clears_the_command_and_checks_the_option` (new in Phase 8), which logs on the same `osc` scope without holding
+  `sys::tests::reset_global()`. The sink is process-global, so filtering by scope could not separate the two. Reproduced on
+  the Mac: running the two tests together failed 55/300 with the exact rwin message; the same unguarded test also failed
+  the exact-count `sys::tests::logfn_*` tests 83/300. A `cfg(test)` probe of `log_fn` over the whole lib found 29 tests
+  that emit without the guard (4 new in Phase 8: that one, `get_memory_usage`, `set_reset_callback`,
+  `terminal_set_accepts_every_declared_option`). All 29 now take the guard. `reset_global()` returns a `GlobalGuard` that
+  marks its thread, and `log_fn` asserts it under `cfg(test)`, so a new unguarded emitter fails deterministically. No
+  assertion changed. After: both pairs 0/300, `osc::tests` at 16 threads 0/200, lib 601/601 in 5 runs on the Mac, and
+  599/599 twice on rwin (x86_64-pc-windows-msvc). rustty-vt's `log_capture` already admits only the owning thread and
+  needed no change. Cost: the allocation-failure sweeps now serialize on the guard, so the vt-c lib went from about 14 s
+  to 38-62 s on the Mac.
+
+- **N537 (FIXED, P8-W9 FX3, `f4e77aeb8`; re-audit finding; id renumbered at P8-W9 T3): rustty-renderer
+  `custom_shader_selection_uniform_layout_matches_compiled_glsl` dropped upstream's uniform-buffer count assertion.**
+  Upstream `shadertoy.zig:391-399` (a60e9e2a5) lists `SPVC_RESOURCE_TYPE_UNIFORM_BUFFER` and requires
+  `try testing.expectEqual(@as(usize, 1), count);` before checking the member offsets; the Rust test found the block by
+  `OpName "Globals"` and never counted. A new test helper `spirv_uniform_buffer_count` (same SPIR-V word-parser style as
+  `spirv_block_member_offsets`) counts `OpVariable`s in the `Uniform` storage class whose pointee struct (through any
+  array) is decorated `Block`, as SPIRV-Cross classifies uniform buffers (`BufferBlock` is a storage buffer there), and
+  the test now does `assert_eq!(1, spirv_uniform_buffer_count(&spv))` at upstream's point. Negative control: a scratch
+  test with a second `layout(binding = 2, std140) uniform Extra` block failed (`left: 1, right: 2`), then was removed.
+  `cargo test -p rustty-renderer custom_shader_selection_uniform_layout` GREEN; clippy on rustty-renderer clean.
+  Evidence: `.port/phase-8/w9/reaudit-at-a60e9e2a5.txt`.
+- **N534 (CLOSED by suppression S19, P8-W9 FX3, `6c3190ddf`; id renumbered at P8-W9 T3): G-LSAN (Mac) RED, rustty-apprt-c
+  `macos_window_host` reported 328 B in 3 allocations at exit.** The leak is not Rustty's. Every stack is
+  `xpc_connection_create_mach_service` <- TCC `tccd` <- `TCCAccessPreflight` <- SkyLight `SLSTCCService::TCCAccessCheck` <-
+  `__SLSInitialize_block_invoke` <- `_dispatch_once_callout` <- `SLSGetActiveDisplayList` <-
+  `CVDisplayLinkCreateWithActiveCGDisplays` <- `DisplayLink::create_with_active_cg_displays` (render thread). Evidence
+  (commit `77c3ecdf6`, `.port/phase-8/w9/G-LSAN-mac.rustty-apprt-c.log`).
+  - It happens once per process. `log stream` of `tccd` during a `macos_window_host` run shows one `kTCCServiceListenEvent`
+    preflight per process (msgID `<pid>.1`), although the binary creates a display link for each surface. A scratch probe
+    that creates and releases a CVDisplayLink 1, 5 and 20 times on fresh threads leaks a constant 5,352 B (the S4-S7 classes),
+    3 runs each.
+  - It is timing-dependent. 23 later full runs of the same ASan binary gave 0 reports, so it is not a new test at this pin:
+    the test file is unchanged since `ac750e2af`.
+  - S19 `leak:SLSTCCService::TCCAccessCheck` was added to `lsan-darwin.supp` with a SANITIZER_SUPPRESSIONS.md row.
+  - Negative controls with S19 present: a scratch `Box::leak` test in `macos_window_host` is RED (40 B), and was then
+    removed. An unreleased CVDisplayLink is not reported by LSan with or without suppressions, so S19 hides nothing there.
+  - G-LSAN `--per-crate-target --gate lsan`, full pass on the Mac: GREEN, 10,045 tests, 0 findings, 48 min. In that pass
+    rustty-apprt-c is GREEN (51 passed, 1 ignored), and S19 did not match.
+
+
+- **N538 (FIXED, P8-W9 FX4; id renumbered at P8-W9 T3): G-MSAN was RED: rustty-core's render-device tests drive the uninstrumented
+  libEGL.** Since P8-W6 T2 `App::init` creates the app-scoped render device (`DeviceBox::init` -> `Device::init` ->
+  `init_platform` -> `eglGetPlatformDisplay`/`eglInitialize`), so the tests that run `App::init` or `App::create` reach
+  the system's uninstrumented libEGL/Mesa, the class of SANITIZER_SUPPRESSIONS.md M3. MSan stops at the first report,
+  so P8-W9 T2 named one test; a `SAN_MSAN_DIAG=1` (recover mode) run of rustty-core with no skips found reports in
+  exactly four: `app::test_runtime::app_init_creates_and_deinit_frees_the_render_device`,
+  `app::test_runtime::app_create_and_destroy_empty`, `app::device_tests::two_surfaces_share_the_device_destroy_one_draw_the_other_then_deinit`
+  and the `surface_visibility_kat` integration test `surface_occlusion_callback_dedups_and_reports`, every report under
+  libgallium, Mesa's driconf libexpat, libEGL_mesa, libLLVM, libdrm, libEGL.so.1 or an interceptor they called, plus two
+  Rust reads in `OffscreenContext::create_context` (`opengl/gl/sys.rs:279`) of values EGL wrote. They are four
+  `MSAN_SKIPS` entries (the module `app::device_tests::` for the third), each with its reason, recorded as M6. The gate's
+  existing self-checks still hold: every filter must match a listed test (`skips_unmatched`, RED otherwise; G-SAN-SELF
+  H arm "an MSAN_SKIPS filter that matches no test"), and a skip for a crate outside `MSAN_SCOPE` is RED. A single rule
+  was not possible with libtest's substring filters without renaming tests, so the list names the tests; M6 says how
+  it was established. G-MSAN on rvm: **GREEN**, 6,375 tests, 0 findings, 66 min (rustty-core 84 passed).
+- **N539 (FIXED, P8-W9 FX4; id renumbered at P8-W9 T3): G-HWASAN's archive check flagged the HOST build-dependency copy of
+  zlib-sys.** `hwasan_archive_check` searched the whole target dir for `*/build/<crate>-*/out/lib*.a`. `rustty-cli` has
+  `zlib-sys` as a build-dependency, which cargo builds for the host under `<td>/debug/build`, without
+  `CARGO_CFG_SANITIZE`, so the wrapper compiles it plain; it links into a build script only. In one shared target dir,
+  once `rustty-cli` had run, the check found that copy too. Phase 7 never hit it: its complete G-HWASAN runs used
+  `--per-crate-target` (N504), and its one shared-target check built the 16 `-sys` members only. The check now looks
+  only under `<td>/<triple>/debug/build`, as `tsan_archive_check` does. Reproduced on rvm (rustty-cli then zlib-sys
+  under HWASan in one target dir): two `libz.a`, the target one with 144 `__hwasan_` references and the host one
+  (`debug/build/zlib-sys-76a181c741038e4b`, the same hash as T2's report) with 0; the base check is RED with T2's exact
+  line, the new one passes. R5 negative control: zlib-sys rebuilt with the wrapper bypassed
+  (`CC_aarch64_unknown_linux_gnu=clang`) leaves a target `libz.a` with 0 references and the new check is RED (`1 of 1 C
+  archive(s) have no __hwasan_ reference`); rebuilt normally it is GREEN again. G-SAN-SELF arm I gains fixtures for both
+  directions and for a missing triple dir. G-HWASAN on rvm, full shared-target pass: **GREEN**, 10,183 tests, 0
+  findings, 15 `-sys` crates all instrumented plus the named gettext-sys skip, cross-check 476/420/56/0 problems, 30 min.
+- **N540 (FIXED, P8-W9 FX4; id renumbered at P8-W9 T3): G-TSAN was RED on rustty-core: three reports.**
+  1. Oniguruma first-use init (a Rustty test-and-library ordering gap, fixed). `onig_new` -> `onig_reg_init` reads
+     `onig_inited` and, if unset, runs `onig_initialize`, with no lock (regcomp.c:7667/7769). `DerivedConfig::init`
+     compiles each configured link regex through `Link::oni_regex` without the one thread-safe init, so on a test thread
+     it raced `oni::testing::ensure_init` on another. The reference's contract is one `oni.init` at startup
+     (`global.zig`), single-threaded; production Rustty keeps it (`rustty_init` and the exe both run
+     `rustty_apprt::init_with_action`, whose `GlobalState` init calls `ensure_init` before any app or surface).
+     `Link::oni_regex` now calls `ensure_init` first, as rustty-vt's `tmux::control` does (N102); after the app's
+     init it is a no-op. That makes every non-test regex compile in the workspace run after the init (the only other
+     ones are tmux's, already guarded; the test-only ones call `ensure_init`). Test:
+     `surface::tests::oniguruma_first_use_init_tests::concurrent_derived_config_link_regexes_and_ensure_init_do_not_race`
+     (8 threads behind a barrier, half `ensure_init`, half `DerivedConfig::init`), run alone under TSan: RED in 5 of
+     6 runs before the fix (`onig_reg_init` / `onig_initialize` reports), GREEN in 6 of 6 after.
+  2. Mesa EGL `memcmp` vs `calloc` in `eglGetPlatformDisplay` (false positive, suppressed as T5). Symbolized with the
+     distribution's debuginfo: `_eglFindDisplay`/`_eglSameAttribs` (`egldisplay.c:265/281`), both under
+     `_eglGlobal.Mutex`, a futex `simple_mtx` that TSan cannot see; EGL 1.5 §2.6: "EGL and its client APIs must be
+     threadsafe." So no serialization in Rustty.
+  3. Mesa `pthread_mutex_destroy`/`pthread_cond_destroy` in `gl::draw::flush` (false positive, suppressed as T6).
+     Symbolized: `lp_fence_destroy` (`lp_fence.c:130-131`) on the surviving surface's render thread, for a fence that
+     same thread created in its `blit_framebuffer`, against `lp_fence_signal`'s `mtx_lock`/`cnd_broadcast` on the
+     screen-wide rasterizer thread `llvmpipe-0` (created once per screen, `lp_screen.c:977`). The order is the fence's
+     atomic refcount (`pipe_reference`) in the uninstrumented driver. Nothing of the destroyed surface is involved
+     (its render thread is stopped and joined in `Surface::deinit`), so it is not a Rustty ordering gap and RF4 stays a
+     real test, unchanged.
+  The two `tsan.supp` entries name the Mesa modules (`race:libEGL_mesa.so`, `race:libgallium`; the frames have no
+  symbols), with a WHY each and rows T5/T6. Measured on the `app::` tests (20): with an empty suppressions file, 3
+  of 6 runs reported; with `tsan.supp`, 0 reports in 10 runs, matches listed in 5. Negative controls: G-SAN-SELF's A5
+  race arms run under the real `tsan.supp` and stay RED. Limit (documented under T5/T6): a race between Rustty memory
+  and a Mesa access to it would be hidden in those two modules. G-TSAN on rvm: **GREEN**, 4,536 tests, 0 reports
+  (rustty-core 88), 17 C archives instrumented, 24 min; `race:libEGL_mesa.so` matched once in that run.
+- **N542 (FIXED, P8-W9 FX6; id renumbered at P8-W9 T3; first recorded by the G6t runner in `.port/phase-8/w9/findings-g6ct.md`): G6t (Tree Borrows, debug assertions on) was RED on two rustty-vt page
+  tests, `page::tests::page_moveCells_text_only` and `page_moveCells_graphemes`: "write access through <tag> ... is
+  forbidden" at `set_bits` (page.rs:604) via `Row::set_styled` in `Page::move_cells_inner`.** Test-only aliasing, not
+  production code. The tests passed `unsafe { &mut *src }` / `unsafe { &mut *dst }` for `move_cells`'s `*mut Row`
+  parameters; the coerced raw pointer keeps that temporary `&mut`'s tag. Inside, `clear_cells(dst_row, ..)` writes the
+  row flags through it (Reserved -> Unique), then its debug-only `assert_integrity` reads every row through the page
+  base (`verify_integrity`, page_impl.rs:735), a foreign read that freezes the tag, and the next `(*dst_row).set_styled`
+  write is UB. Stacked Borrows accepts it (the read pops only the `Unique`, the raw `SharedRW` above it survives), and
+  with debug assertions off there is no integrity read, which is why G6 and the G6t debug-off pass were GREEN. The
+  pattern dates from the page port (7dd709aad, 2026-06) and was first reached when G6t gained its debug-on pass. Not a
+  Ghostty pattern: the reference test passes the raw `*Row` pointers (`page.moveCells(src, 0, dst, 0, ...)`). Fix: the
+  tests pass the raw pointers straight through, like the reference; the same `unsafe { &mut *rac.row }` /
+  `&mut *rac.cell` argument form was removed from all 58 call sites in `page_tests.rs` (`append_grapheme`,
+  `set_hyperlink`, `set_graphemes`, `clear_grapheme`, `update_row_grapheme_flag`, `move_cells`; all take raw pointers).
+  Production callers of these methods already pass raw pointers (grep of rustty-vt and the workspace; no sibling).
+  The runner's diagnosis (`&mut *dst` at page_tests.rs:2319 frozen by the rows-slice reborrow at page_impl.rs:735,
+  then written at page.rs:604 via `Row::set_styled`) is confirmed by the Miri tag history; the freezing read is the
+  `assert_integrity` that `clear_cells` runs inside `move_cells_inner`. Evidence (Mac, `cargo +nightly miri nextest`,
+  `-Zmiri-disable-isolation`): the two tests RED under `-Zmiri-tree-borrows` before (2 failed), GREEN after under TB
+  with debug assertions on and off and under SB (2/2 each); the whole `page::` module under TB, debug on: 86/86 in
+  1,288 s; native `cargo test -p rustty-vt --lib page`: 634 passed, 4 ignored.
+- **N543 (OPEN, PENDING the final delta-Miri run; P8-W9 T2 G6c/G6t runner; id renumbered at P8-W9 T3): G6t (Tree
+  Borrows) never completed for `rustty-core` at the pin.** The full G6t pass at `c8a55c96c`
+  (`.port/phase-8/w9/G6t-at-a60e9e2a5.txt`) was stopped by its runner during `rustty-core` when Mac free disk reached
+  the 12 GB floor (other lanes were building; the runner's own target dir stayed about 7 GB). This is a coverage gap,
+  not a test failure: `rustty-core` is BLOCKED, not GREEN, and Phase 7's G6t (P7-W15, 67 tests) is its last complete
+  Tree Borrows run. Close-out: the final delta-Miri runner runs G6t over `rustty-core` in full at `26d23100b`; the
+  controller records its verdict here and in `.port/phase-8/README.md`.
+- **N544 (P8-W9 delta `ci.sh --fast` at `26d23100b`, fixed P8-W9 FX8): G-SKIP RED on the FX4 onig-init race test.**
+  `rustty-core` `surface::tests::oniguruma_first_use_init_tests::concurrent_derived_config_link_regexes_and_ensure_init_do_not_race`
+  (added by P8-W9 FX4 for N540) kept every assertion inside the spawned threads' closures, so
+  `check_silent_skips.py` flagged it (`LOOP`): nothing outside a loop or combinator proved the threads ran their
+  assertions. Fix: each thread returns whether it took the `DerivedConfig::init` branch, and the test asserts after the
+  joins that exactly `THREADS / 2` threads compiled the link regexes. Evidence: `check_silent_skips.py` RED (1 site)
+  before, rc 0 with no RED after; `cargo test -p rustty-core --lib concurrent_derived_config_link_regexes` passes;
+  clippy `-D warnings` and fmt clean.
+- **N545 (FIXED, P8-W10 T4; provisional N559, renumbered at P8-W10 FX10): G9 keyed CSI coverage on the final byte only, so a command sharing its
+  final with a ported one was invisible.** DECSTR (`CSI ! p`, new at `246f70287`) shares `p` with DECRQM
+  (`CSI $ p` / `CSI ? $ p`); at the pin the regenerated surface had no new id and G9 stayed GREEN 777/777 while
+  `softReset` was unported (`.port/phase-8/w10/README.md` F2; the arm-granularity limit N523 recorded). Fix: a CSI id
+  is now intermediates plus final. One reader, `.port/tools/gates/_csi_intermediates.py`, extracts from one dispatch arm
+  the intermediate sequences it distinguishes (`intermediates[0] == 'X'` with an optional `intermediates[1]` test,
+  `intermediates.len == 0`, the `0` arm of a switch on `intermediates.len`, the char arms of a switch on
+  `intermediates[0]`; none of these means the final alone), with comments and strings removed so the Zig quoted in
+  Rust comments never counts. The generator (`parse_csi.py`) runs it on `stream.zig` and writes each arm's
+  `intermediates` into `parity-surface.json` (43 final arms, now 64 ids plus `else`); four old ids are
+  replaced rather than kept, because upstream has no plain-final command for them: `p` → `!p`, `$p`, `?$p`; `q` →
+  ` q`, `"q`, `>q`; `y` → `#y`, `*y`; `}` → `$}`. Every other final keeps its plain id, so every old final still has at
+  least one id and none was dropped; G9 runs it on the Rust
+  `csi_dispatch` arms. An intermediates sub-arm label it cannot read is BLOCKED. Evidence: the Zig and Rust readings
+  agree on every final except `p`, where the port lacks `!`; G9 default is RED with exactly `UNCOVERED csi: !p`
+  (798/799) until P8-W10 T1 merges (its in-progress `csi_dispatch.rs` reads `['!', '$', '?$']`). Negative controls:
+  G9 self-test arm (r) respells the `b'q'` arm's XTVERSION sub-arm in a copy of the real file, keeping the `b'q'`
+  arm (the old keying would be GREEN), and requires exactly `UNCOVERED csi: >q`; arm (s) requires BLOCKED for an
+  unreadable sub-arm label; `parse_csi.py --self-test` [e] drops the DECSTR test from the `p` arm and requires
+  `['$', '?$']`.
+- **N546 (FIXED, P8-W10 T4; provisional N560, renumbered at P8-W10 FX10): G-SYMS matched an oracle `pub fn` by bare name anywhere in `crates/`, so
+  a common name in an unrelated crate counted as its port.** `modes.zig` `ModeState.getDefault` (new at `246f70287`)
+  read as present through `rustty-font-shaper` `hb.rs` `Language::get_default` (`.port/phase-8/w10/README.md` F3; the
+  N524 common-name class). Fix: `audit_symbol_coverage.py` now requires the token (or its 8+ prefix) in a file that
+  belongs to the symbol: a counterpart of the oracle file (G-FILES' filename-or-citation mapping) or a file naming the
+  function's innermost Zig container (`ModeState`, `Terminal`, a type-returning `fn X(...) type`, else the module
+  stem). Re-run at `246f70287`: 2911 symbols, newly ABSENT `modes.zig::getDefault` (P8-W10 T1 ports it) and three
+  that the bare name had matched in unrelated files, none a real gap, recorded in `.port/phase-3/SYMBOL_AUDIT.md`:
+  `split_tree.zig::initNew` (collapsed with `initReused`), `hash_map.zig::getKey` (context-inferring wrapper, 0
+  oracle callers, ported as `get_key_context`), `unicode/lut.zig::hash` (derived `Hash`). G-SYMS stays RED on
+  `softReset` and `getDefault` until T1 merges. Negative control: new `--self-test` (ci.sh `G-SYMS-SELF`, HARD)
+  rebuilds the getDefault case on a fixture tree: ABSENT with only `hb.rs` `get_default` (the bare-name match says
+  present), present when ported in `modes.rs` or in a file naming `ModeState`.
+- **N547 (FIXED, P8-W10 FX11; provisional N565, final validation): `sys_log_no_alloc` counted every thread's
+  allocations, so libtest's main thread flaked it under TSan.** G-TSAN (Mac) failed
+  `log_fn_dispatch_is_allocation_free` (`left: 1`, `right: 0`). Not a `log_fn` regression: the arm flag was a
+  process-wide `AtomicBool`, and libtest's main thread, after spawning the test thread, is still entering
+  `rx.recv_timeout`. A scratch probe (thread id, `pthread_main_np`, backtrace in the counting allocator) put every stray
+  allocation on the main thread while `measure` ran on the test thread: the lazy mpmc `Context` TLS init (48 B), the
+  waker `Vec<Entry>` growth (96 B), a lazily boxed pthread mutex, `run_tests` bookkeeping. Rate under TSan with the
+  gate's flags: 13 of 590 runs (1/20 on the unmodified binary); natively 0/20. Fix: the arm flag is now a `const`
+  thread-local `Cell<bool>`, so only the measuring thread's allocations count (`log_fn` formats synchronously on its
+  caller's thread). After: 0/120 under TSan, 0/40 native. Negative control: `log_fn_c_abi` formatting through
+  `std::fmt::format` first is RED 20/20 under TSan and 20/20 natively (`left: 1`), then reverted.
+- **N548 (FIXED, P8-W10 FX12; provisional N567, final validation): `search::thread::tests::search_thread` waited
+  only 100 ms for the search to complete, so it failed under load; under G-LSAN the panic also skipped the Terminal's
+  teardown.** G-LSAN (Mac) reported 1660 bytes in 7 allocations rooted at `Terminal::init` (`ScreenSet::init`,
+  `create_screen`) in that test. The leak is secondary: the log shows the test FAILED first (`timed out waiting for
+  search completion`, then the search thread's `PoisonError` on `reset_done`, poisoned by the panic while the main
+  thread held the guard). The panic unwound past the explicit `thread.deinit()` / `t.deinit(alloc)` at the end of
+  the test. This is N35. It is not DECSTR: `Terminal::init`/`deinit` are leak-free on every passing run (0 leaks in
+  140 LSan runs below), and 5a69f3fca adds no allocation. Rate with the gate's flags (ASan, `detect_leaks=1`,
+  `lsan-darwin.supp`, `RUST_MIN_STACK`): 0/50 alone, and 2/30 with 42 busy loops on 14 CPUs. Both failures matched
+  the gate log byte for byte (1660 B in 7 allocations). A probe that waited 30 s measured completion at 0-165 ms
+  under that load, 3 of 60 runs above 100 ms. The search always completes, so the handshake is sound and the
+  reference's 100 ms tolerance is the cause. Fix (test only): the wait is bounded at 10 s (PORT NOTE). The guard is
+  released, and the search thread stopped and joined, BEFORE the completion assertion, so a real timeout neither
+  poisons the callback's lock nor leaves the thread running. The reference's `try` instead returns with the thread
+  running, and its `defer thread.deinit()` frees the thread under it; that is a test-only failure path, so no UD.
+  After: 60/60 under the same load, 20/20 alone under LSan (0 leaks), and 20/20 native. Miri: the test is a
+  recorded MIRI EXCEPTION (interpreter ICE), so no Miri run.

@@ -79,7 +79,11 @@ echo "== 3/3 xcodebuild =="
 #     `dgettext`/`bindtextdomain`/`textdomain` resolve from the app's own
 #     archive — no `-L/opt/homebrew/opt/gettext/lib -lintl`.
 # `-lstdc++` stays: it is a toolchain runtime (the C++ -sys crates), not a
-# third-party library rustty could vendor.
+# third-party library rustty could vendor. The project already carries it for
+# every configuration (`OTHER_LDFLAGS[arch=*]` in Debug, Release and
+# ReleaseLocal), so it is NOT passed here: a command-line build setting
+# overrides every project-level value, and would drop the Debug/Release
+# `-Wl,-u,_rustty_benchmark_cli` that RusttyTests needs to link (N527).
 # Guard: `.port/tools/gates/no_homebrew_gettext_gate.sh` proves this by building
 # with Homebrew's libintl hidden.
 #
@@ -92,7 +96,6 @@ env -i HOME="$HOME" PATH="$PATH" \
   xcodebuild -project Rustty.xcodeproj -scheme Rustty -configuration "$CONFIGURATION" \
   -destination "$DESTINATION" \
   CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
-  OTHER_LDFLAGS="-lstdc++" \
   "$@"
 
 # Copy the app bundle to the install path (GhosttyXcodebuild.zig:167-178, the

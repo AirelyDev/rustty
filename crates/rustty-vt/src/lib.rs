@@ -100,6 +100,8 @@ pub mod point;
 // pub const color = @import("color.zig");
 pub mod clipboard;
 pub mod color;
+// pub const xt_checksum = @import("xt_checksum.zig");
+pub mod xt_checksum;
 // pub const compress = @import("compress.zig");
 pub mod compress;
 // PORT NOTE: `terminal/cursor.zig` has no top-level re-export in `main.zig`
@@ -303,6 +305,11 @@ pub use stream::Stream;
 // at `stream.rs` ("The possible actions that can be emitted by the Stream"). The
 // omission of a root `StreamAction` is therefore a consequence of that settled
 // design fork, not an unported alias.
+// pub const SemanticPrompt = stream_terminal.Handler.SemanticPrompt;
+// PORT NOTE (7bb45ba34, DECISIONS P9): the crate-root `SemanticPrompt` is the
+// stream_terminal event; `stream::SemanticPrompt` (the OSC 133 command alias)
+// keeps its name and module, so neither module is glob re-exported here.
+pub use stream_terminal::SemanticPrompt;
 // pub const UnknownSequence = stream_terminal.Handler.UnknownSequence;
 pub use stream_terminal::UnknownSequence;
 // pub const Paste = paste.Request;

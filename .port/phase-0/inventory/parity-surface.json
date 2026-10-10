@@ -1,15 +1,15 @@
 {
   "_meta": {
     "reference": "/Users/gael/projects/ghostty",
-    "reference_rev": "12752b2ac1bb05ce53402ed8c853ed1f96eef0b1",
+    "reference_rev": "246f702876b924a1cb7cade1e99274d1470302fc",
     "zig_version": "0.16.0",
     "generated_for": "phase-0 parity surface census",
     "note": "All counts parsed directly from reference source; no fabrication."
   },
   "summary": {
-    "config_options_user_facing": 210,
+    "config_options_user_facing": 212,
     "config_fields_internal": 6,
-    "config_fields_total": 216,
+    "config_fields_total": 218,
     "keybind_actions": 88,
     "keybind_actions_void": 55,
     "keybind_actions_with_payload": 33,
@@ -26,11 +26,12 @@
     "terminal_modes_ansi": 4,
     "terminal_modes_dec": 38,
     "sgr_attributes": 31,
-    "osc_command_kinds": 27,
-    "osc_subparsers": 17,
-    "osc_numeric_codes_referenced": 12,
-    "csi_final_byte_handlers": 24,
-    "esc_final_byte_handlers": 5,
+    "osc_command_kinds": 29,
+    "osc_subparsers": 19,
+    "osc_numeric_codes_referenced": 14,
+    "csi_final_byte_handlers": 38,
+    "csi_handler_ids": 64,
+    "esc_final_byte_handlers": 23,
     "dcs_command_kinds": 3,
     "dcs_decrqss_subvalues": 5,
     "dcs_recognized_hook_sequences": 3,
@@ -1024,280 +1025,292 @@
         "line": 3071
       },
       {
+        "name": "vt-xt-checksum-report",
+        "type": "bool",
+        "default": "false",
+        "line": 3086
+      },
+      {
+        "name": "vt-xt-checksum-extension",
+        "type": "XtChecksumExtension",
+        "default": ".{}",
+        "line": 3124
+      },
+      {
         "name": "custom-shader",
         "type": "RepeatablePath",
         "default": ".{}",
-        "line": 3192
+        "line": 3245
       },
       {
         "name": "custom-shader-animation",
         "type": "CustomShaderAnimation",
         "default": ".true",
-        "line": 3210
+        "line": 3263
       },
       {
         "name": "bell-features",
         "type": "BellFeatures",
         "default": ".{}",
-        "line": 3265
+        "line": 3318
       },
       {
         "name": "bell-audio-path",
         "type": "?Path",
         "default": "null",
-        "line": 3274
+        "line": 3327
       },
       {
         "name": "bell-audio-volume",
         "type": "f64",
         "default": "0.5",
-        "line": 3281
+        "line": 3334
       },
       {
         "name": "app-notifications",
         "type": "AppNotifications",
         "default": ".{}",
-        "line": 3310
+        "line": 3363
       },
       {
         "name": "macos-non-native-fullscreen",
         "type": "NonNativeFullscreen",
         "default": ".false",
-        "line": 3341
+        "line": 3394
       },
       {
         "name": "macos-window-buttons",
         "type": "MacWindowButtons",
         "default": ".visible",
-        "line": 3362
+        "line": 3415
       },
       {
         "name": "macos-titlebar-style",
         "type": "MacTitlebarStyle",
         "default": ".transparent",
-        "line": 3404
+        "line": 3457
       },
       {
         "name": "macos-titlebar-proxy-icon",
         "type": "MacTitlebarProxyIcon",
         "default": ".visible",
-        "line": 3425
+        "line": 3478
       },
       {
         "name": "macos-dock-drop-behavior",
         "type": "MacOSDockDropBehavior",
         "default": ".@\"new-tab\"",
-        "line": 3440
+        "line": 3493
       },
       {
         "name": "macos-option-as-alt",
         "type": "?inputpkg.OptionAsAlt",
         "default": "null",
-        "line": 3474
+        "line": 3527
       },
       {
         "name": "macos-window-shadow",
         "type": "bool",
         "default": "true",
-        "line": 3479
+        "line": 3532
       },
       {
         "name": "macos-hidden",
         "type": "MacHidden",
         "default": ".never",
-        "line": 3501
+        "line": 3554
       },
       {
         "name": "macos-auto-secure-input",
         "type": "bool",
         "default": "true",
-        "line": 3519
+        "line": 3572
       },
       {
         "name": "macos-secure-input-indication",
         "type": "bool",
         "default": "true",
-        "line": 3529
+        "line": 3582
       },
       {
         "name": "macos-applescript",
         "type": "bool",
         "default": "true",
-        "line": 3539
+        "line": 3592
       },
       {
         "name": "macos-icon",
         "type": "MacAppIcon",
         "default": ".official",
-        "line": 3574
+        "line": 3627
       },
       {
         "name": "macos-custom-icon",
         "type": "?[:0]const u8",
         "default": "null",
-        "line": 3580
+        "line": 3633
       },
       {
         "name": "macos-icon-frame",
         "type": "MacAppIconFrame",
         "default": ".aluminum",
-        "line": 3593
+        "line": 3646
       },
       {
         "name": "macos-icon-ghost-color",
         "type": "?Color",
         "default": "null",
-        "line": 3601
+        "line": 3654
       },
       {
         "name": "macos-icon-screen-color",
         "type": "?ColorList",
         "default": "null",
-        "line": 3613
+        "line": 3666
       },
       {
         "name": "macos-shortcuts",
         "type": "MacShortcuts",
         "default": ".ask",
-        "line": 3637
+        "line": 3690
       },
       {
         "name": "linux-cgroup",
         "type": "LinuxCgroup",
         "default": "if (builtin.os.tag == .linux) .@\"single-instance\" else .never",
-        "line": 3666
+        "line": 3719
       },
       {
         "name": "linux-cgroup-memory-limit",
         "type": "?u64",
         "default": "null",
-        "line": 3684
+        "line": 3737
       },
       {
         "name": "linux-cgroup-processes-limit",
         "type": "?u64",
         "default": "null",
-        "line": 3697
+        "line": 3750
       },
       {
         "name": "linux-cgroup-hard-fail",
         "type": "bool",
         "default": "false",
-        "line": 3710
+        "line": 3763
       },
       {
         "name": "gtk-opengl-debug",
         "type": "bool",
         "default": "builtin.mode == .Debug",
-        "line": 3716
+        "line": 3769
       },
       {
         "name": "gtk-single-instance",
         "type": "GtkSingleInstance",
         "default": ".default",
-        "line": 3746
+        "line": 3799
       },
       {
         "name": "gtk-titlebar",
         "type": "bool",
         "default": "true",
-        "line": 3754
+        "line": 3807
       },
       {
         "name": "gtk-tabs-location",
         "type": "GtkTabsLocation",
         "default": ".top",
-        "line": 3764
+        "line": 3817
       },
       {
         "name": "gtk-titlebar-hide-when-maximized",
         "type": "bool",
         "default": "false",
-        "line": 3770
+        "line": 3823
       },
       {
         "name": "gtk-toolbar-style",
         "type": "GtkToolbarStyle",
         "default": ".raised",
-        "line": 3780
+        "line": 3833
       },
       {
         "name": "gtk-titlebar-style",
         "type": "GtkTitlebarStyle",
         "default": ".native",
-        "line": 3795
+        "line": 3848
       },
       {
         "name": "gtk-wide-tabs",
         "type": "bool",
         "default": "true",
-        "line": 3801
+        "line": 3854
       },
       {
         "name": "gtk-horizontal-tab-scroll",
         "type": "bool",
         "default": "true",
-        "line": 3809
+        "line": 3862
       },
       {
         "name": "gtk-custom-css",
         "type": "RepeatablePath",
         "default": ".{}",
-        "line": 3832
+        "line": 3885
       },
       {
         "name": "desktop-notifications",
         "type": "bool",
         "default": "true",
-        "line": 3836
+        "line": 3889
       },
       {
         "name": "progress-style",
         "type": "bool",
         "default": "true",
-        "line": 3841
+        "line": 3894
       },
       {
         "name": "bold-color",
         "type": "?BoldColor",
         "default": "null",
-        "line": 3860
+        "line": 3913
       },
       {
         "name": "faint-opacity",
         "type": "f64",
         "default": "0.5",
-        "line": 3867
+        "line": 3920
       },
       {
         "name": "term",
         "type": "[]const u8",
         "default": "\"xterm-ghostty\"",
-        "line": 3875
+        "line": 3928
       },
       {
         "name": "enquiry-response",
         "type": "[]const u8",
         "default": "\"\"",
-        "line": 3879
+        "line": 3932
       },
       {
         "name": "async-backend",
         "type": "AsyncBackend",
         "default": ".auto",
-        "line": 3909
+        "line": 3962
       },
       {
         "name": "auto-update",
         "type": "?AutoUpdate",
         "default": "null",
-        "line": 3934
+        "line": 3987
       },
       {
         "name": "auto-update-channel",
         "type": "?build_config.ReleaseChannel",
         "default": "null",
-        "line": 3956
+        "line": 4009
       }
     ],
     "internal": [
@@ -1305,37 +1318,37 @@
         "name": "_arena",
         "type": "?ArenaAllocator",
         "default": "null",
-        "line": 3959
+        "line": 4012
       },
       {
         "name": "_diagnostics",
         "type": "cli.DiagnosticList",
         "default": ".{}",
-        "line": 3963
+        "line": 4016
       },
       {
         "name": "_conditional_state",
         "type": "conditional.State",
         "default": ".{}",
-        "line": 3967
+        "line": 4020
       },
       {
         "name": "_conditional_set",
         "type": "std.EnumSet(conditional.Key)",
         "default": ".{}",
-        "line": 3971
+        "line": 4024
       },
       {
         "name": "_replay_steps",
         "type": "std.ArrayList(Replay.Step)",
         "default": ".empty",
-        "line": 3976
+        "line": 4029
       },
       {
         "name": "_xdg-terminal-exec",
         "type": "bool",
         "default": "false",
-        "line": 3979
+        "line": 4032
       }
     ]
   },
@@ -3548,7 +3561,7 @@
         "kind": "ANSI",
         "default": false,
         "disabled": false,
-        "line": 334
+        "line": 339
       },
       {
         "name": "insert",
@@ -3556,7 +3569,7 @@
         "kind": "ANSI",
         "default": false,
         "disabled": false,
-        "line": 335
+        "line": 340
       },
       {
         "name": "send_receive_mode",
@@ -3564,7 +3577,7 @@
         "kind": "ANSI",
         "default": true,
         "disabled": false,
-        "line": 336
+        "line": 341
       },
       {
         "name": "linefeed",
@@ -3572,7 +3585,7 @@
         "kind": "ANSI",
         "default": false,
         "disabled": false,
-        "line": 337
+        "line": 342
       },
       {
         "name": "cursor_keys",
@@ -3580,7 +3593,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 340
+        "line": 345
       },
       {
         "name": "132_column",
@@ -3588,7 +3601,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 341
+        "line": 346
       },
       {
         "name": "slow_scroll",
@@ -3596,7 +3609,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 342
+        "line": 347
       },
       {
         "name": "reverse_colors",
@@ -3604,7 +3617,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 343
+        "line": 348
       },
       {
         "name": "origin",
@@ -3612,7 +3625,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 344
+        "line": 349
       },
       {
         "name": "wraparound",
@@ -3620,7 +3633,7 @@
         "kind": "DEC",
         "default": true,
         "disabled": false,
-        "line": 345
+        "line": 350
       },
       {
         "name": "autorepeat",
@@ -3628,7 +3641,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 346
+        "line": 351
       },
       {
         "name": "mouse_event_x10",
@@ -3636,7 +3649,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 347
+        "line": 352
       },
       {
         "name": "cursor_blinking",
@@ -3644,7 +3657,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 348
+        "line": 353
       },
       {
         "name": "cursor_visible",
@@ -3652,7 +3665,7 @@
         "kind": "DEC",
         "default": true,
         "disabled": false,
-        "line": 349
+        "line": 354
       },
       {
         "name": "enable_mode_3",
@@ -3660,7 +3673,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 350
+        "line": 355
       },
       {
         "name": "reverse_wrap",
@@ -3668,7 +3681,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 351
+        "line": 356
       },
       {
         "name": "alt_screen_legacy",
@@ -3676,7 +3689,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 352
+        "line": 357
       },
       {
         "name": "keypad_keys",
@@ -3684,7 +3697,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 353
+        "line": 358
       },
       {
         "name": "backarrow_key_mode",
@@ -3692,7 +3705,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 358
+        "line": 363
       },
       {
         "name": "enable_left_and_right_margin",
@@ -3700,7 +3713,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 359
+        "line": 364
       },
       {
         "name": "mouse_event_normal",
@@ -3708,7 +3721,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 360
+        "line": 365
       },
       {
         "name": "mouse_event_button",
@@ -3716,7 +3729,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 361
+        "line": 366
       },
       {
         "name": "mouse_event_any",
@@ -3724,7 +3737,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 362
+        "line": 367
       },
       {
         "name": "focus_event",
@@ -3732,7 +3745,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 363
+        "line": 368
       },
       {
         "name": "mouse_format_utf8",
@@ -3740,7 +3753,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 364
+        "line": 369
       },
       {
         "name": "mouse_format_sgr",
@@ -3748,7 +3761,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 365
+        "line": 370
       },
       {
         "name": "mouse_alternate_scroll",
@@ -3756,7 +3769,7 @@
         "kind": "DEC",
         "default": true,
         "disabled": false,
-        "line": 366
+        "line": 371
       },
       {
         "name": "mouse_format_urxvt",
@@ -3764,7 +3777,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 367
+        "line": 372
       },
       {
         "name": "mouse_format_sgr_pixels",
@@ -3772,7 +3785,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 368
+        "line": 373
       },
       {
         "name": "ignore_keypad_with_numlock",
@@ -3780,7 +3793,7 @@
         "kind": "DEC",
         "default": true,
         "disabled": false,
-        "line": 369
+        "line": 374
       },
       {
         "name": "alt_esc_prefix",
@@ -3788,7 +3801,7 @@
         "kind": "DEC",
         "default": true,
         "disabled": false,
-        "line": 370
+        "line": 375
       },
       {
         "name": "alt_sends_escape",
@@ -3796,7 +3809,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 371
+        "line": 376
       },
       {
         "name": "reverse_wrap_extended",
@@ -3804,7 +3817,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 372
+        "line": 377
       },
       {
         "name": "alt_screen",
@@ -3812,7 +3825,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 373
+        "line": 378
       },
       {
         "name": "save_cursor",
@@ -3820,7 +3833,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 374
+        "line": 379
       },
       {
         "name": "alt_screen_save_cursor_clear_enter",
@@ -3828,7 +3841,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 375
+        "line": 380
       },
       {
         "name": "bracketed_paste",
@@ -3836,7 +3849,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 376
+        "line": 381
       },
       {
         "name": "synchronized_output",
@@ -3844,7 +3857,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 377
+        "line": 382
       },
       {
         "name": "grapheme_cluster",
@@ -3852,7 +3865,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 378
+        "line": 383
       },
       {
         "name": "report_color_scheme",
@@ -3860,7 +3873,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 379
+        "line": 384
       },
       {
         "name": "report_visibility",
@@ -3868,7 +3881,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 380
+        "line": 385
       },
       {
         "name": "in_band_size_reports",
@@ -3876,7 +3889,7 @@
         "kind": "DEC",
         "default": false,
         "disabled": false,
-        "line": 381
+        "line": 386
       }
     ]
   },
@@ -4038,7 +4051,9 @@
       "kitty_clipboard_protocol",
       "kitty_dnd_protocol",
       "context_signal",
-      "kitty_desktop_notification"
+      "kitty_desktop_notification",
+      "unknown",
+      "program_status"
     ],
     "subparsers": [
       "change_window_icon",
@@ -4055,11 +4070,14 @@
       "kitty_text_sizing",
       "mouse_shape",
       "osc9",
+      "program_status",
       "report_pwd",
       "rxvt_extension",
-      "semantic_prompt"
+      "semantic_prompt",
+      "unknown"
     ],
     "numeric_codes_referenced": [
+      2,
       7,
       8,
       9,
@@ -4071,56 +4089,45 @@
       77,
       99,
       777,
-      3008
+      3008,
+      7501
     ]
   },
   "csi_handlers": {
     "source": "src/terminal/stream.zig csiDispatch (switch on input.final)",
-    "note": "Top-level final-byte arms; many further dispatch on intermediates (more distinct commands than arm count). Param enums in src/terminal/csi.zig.",
+    "note": "Top-level final-byte arms; many further dispatch on intermediates (more distinct commands than arm count). Each arm's `intermediates` lists the intermediate-byte sequences it distinguishes (P8-W10 T4); a G9 csi id is intermediates + final. Param enums in src/terminal/csi.zig.",
     "has_else_unimplemented": true,
     "arms": [
-      {
-        "finals": [
-          ";"
-        ],
-        "comment": "An empty first parameter.",
-        "line": 962
-      },
-      {
-        "finals": [
-          "else"
-        ],
-        "comment": "Defer to the state machine for anything else | (C0 controls, intermediates, colon).",
-        "line": 976
-      },
-      {
-        "finals": [
-          "else"
-        ],
-        "comment": null,
-        "line": 1406
-      },
       {
         "finals": [
           "A",
           "k"
         ],
         "comment": "CUU - Cursor Up",
-        "line": 1437
+        "line": 1474,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "B"
         ],
         "comment": "CUD - Cursor Down",
-        "line": 1460
+        "line": 1497,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "C"
         ],
         "comment": "CUF - Cursor Right",
-        "line": 1480
+        "line": 1517,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
@@ -4128,21 +4135,30 @@
           "j"
         ],
         "comment": "CUB - Cursor Left",
-        "line": 1503
+        "line": 1540,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "E"
         ],
         "comment": "CNL - Cursor Next Line",
-        "line": 1523
+        "line": 1560,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "F"
         ],
         "comment": "CPL - Cursor Previous Line",
-        "line": 1546
+        "line": 1583,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
@@ -4150,7 +4166,10 @@
           "`"
         ],
         "comment": "HPA - Cursor Horizontal Position Absolute | TODO: test",
-        "line": 1570
+        "line": 1607,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
@@ -4158,153 +4177,516 @@
           "f"
         ],
         "comment": "CUP - Set Cursor Position. | TODO: test",
-        "line": 1591
+        "line": 1628,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "I"
         ],
         "comment": "CHT - Cursor Horizontal Tabulation",
-        "line": 1616
+        "line": 1653,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "J"
         ],
         "comment": "Erase Display",
-        "line": 1633
+        "line": 1670,
+        "intermediates": [
+          "",
+          "?"
+        ]
       },
       {
         "finals": [
           "K"
         ],
         "comment": "Erase Line",
-        "line": 1666
+        "line": 1703,
+        "intermediates": [
+          "",
+          "?"
+        ]
       },
       {
         "finals": [
           "L"
         ],
         "comment": "IL - Insert Lines | TODO: test",
-        "line": 1706
+        "line": 1743,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "M"
         ],
         "comment": "DL - Delete Lines | TODO: test",
-        "line": 1724
+        "line": 1761,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "P"
         ],
         "comment": "Delete Character (DCH)",
-        "line": 1741
+        "line": 1778,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "S"
         ],
         "comment": null,
-        "line": 1759
+        "line": 1796,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "T"
         ],
         "comment": "Scroll Down (SD)",
-        "line": 1776
+        "line": 1813,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "W"
         ],
         "comment": "Cursor Tabulation Control",
-        "line": 1793
+        "line": 1830,
+        "intermediates": [
+          "",
+          "?"
+        ]
       },
       {
         "finals": [
           "X"
         ],
         "comment": "Erase Characters (ECH)",
-        "line": 1836
+        "line": 1873,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "Z"
         ],
         "comment": "CHT - Cursor Horizontal Tabulation Back",
-        "line": 1857
+        "line": 1894,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "a"
         ],
         "comment": "HPR - Cursor Horizontal Position Relative",
-        "line": 1874
+        "line": 1911,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "b"
         ],
         "comment": "Repeat Previous Char (REP)",
-        "line": 1893
+        "line": 1930,
+        "intermediates": [
+          ""
+        ]
       },
       {
         "finals": [
           "c"
         ],
         "comment": "c - Device Attributes (DA1)",
-        "line": 1910
+        "line": 1947,
+        "intermediates": [
+          "",
+          "=",
+          ">"
+        ]
       },
       {
         "finals": [
           "d"
         ],
         "comment": "VPA - Cursor Vertical Position Absolute",
-        "line": 1934
-      }
-    ]
-  },
-  "esc_handlers": {
-    "source": "src/terminal/stream.zig escDispatch (switch on action.final)",
-    "has_else_unimplemented": false,
-    "arms": [
+        "line": 1971,
+        "intermediates": [
+          ""
+        ]
+      },
+      {
+        "finals": [
+          "e"
+        ],
+        "comment": "VPR - Cursor Vertical Position Relative",
+        "line": 1990,
+        "intermediates": [
+          ""
+        ]
+      },
+      {
+        "finals": [
+          "g"
+        ],
+        "comment": "TBC - Tab Clear | TODO: test",
+        "line": 2010,
+        "intermediates": [
+          ""
+        ]
+      },
+      {
+        "finals": [
+          "h"
+        ],
+        "comment": "SM - Set Mode",
+        "line": 2036,
+        "intermediates": [
+          "",
+          "?"
+        ]
+      },
+      {
+        "finals": [
+          "l"
+        ],
+        "comment": "RM - Reset Mode",
+        "line": 2057,
+        "intermediates": [
+          "",
+          "?"
+        ]
+      },
+      {
+        "finals": [
+          "m"
+        ],
+        "comment": "SGR - Select Graphic Rendition",
+        "line": 2078,
+        "intermediates": [
+          "",
+          ">"
+        ]
+      },
       {
         "finals": [
           "n"
         ],
         "comment": "TODO: test",
-        "line": 2125
+        "line": 2162,
+        "intermediates": [
+          "",
+          ">",
+          "?"
+        ]
       },
       {
         "finals": [
           "p"
         ],
-        "comment": "DECRQM - Request Mode",
-        "line": 2180
+        "comment": "DECRQM - Request Mode, DECSTR - Soft Terminal Reset",
+        "line": 2217,
+        "intermediates": [
+          "!",
+          "$",
+          "?$"
+        ]
       },
       {
         "finals": [
           "q"
         ],
         "comment": null,
-        "line": 2220
+        "line": 2270,
+        "intermediates": [
+          " ",
+          "\"",
+          ">"
+        ]
       },
       {
         "finals": [
           "r"
         ],
         "comment": null,
-        "line": 2288
+        "line": 2338,
+        "intermediates": [
+          "",
+          "?"
+        ]
       },
       {
         "finals": [
           "s"
         ],
         "comment": null,
-        "line": 2330
+        "line": 2380,
+        "intermediates": [
+          "",
+          ">",
+          "?"
+        ]
+      },
+      {
+        "finals": [
+          "t"
+        ],
+        "comment": "XTWINOPS",
+        "line": 2441,
+        "intermediates": [
+          ""
+        ]
+      },
+      {
+        "finals": [
+          "u"
+        ],
+        "comment": null,
+        "line": 2521,
+        "intermediates": [
+          "",
+          "<",
+          "=",
+          ">",
+          "?"
+        ]
+      },
+      {
+        "finals": [
+          "@"
+        ],
+        "comment": "ICH - Insert Blanks",
+        "line": 2595,
+        "intermediates": [
+          ""
+        ]
+      },
+      {
+        "finals": [
+          "y"
+        ],
+        "comment": null,
+        "line": 2612,
+        "intermediates": [
+          "#",
+          "*"
+        ]
+      },
+      {
+        "finals": [
+          "}"
+        ],
+        "comment": "DECSASD - Select Active Status Display",
+        "line": 2660,
+        "intermediates": [
+          "$"
+        ]
+      },
+      {
+        "finals": [
+          "else"
+        ],
+        "comment": null,
+        "line": 2683,
+        "intermediates": [
+          ""
+        ]
+      }
+    ]
+  },
+  "esc_handlers": {
+    "source": "src/terminal/stream.zig escDispatch (switch on action.final)",
+    "has_else_unimplemented": true,
+    "arms": [
+      {
+        "finals": [
+          "B"
+        ],
+        "comment": "Charsets",
+        "line": 2902
+      },
+      {
+        "finals": [
+          "A"
+        ],
+        "comment": null,
+        "line": 2906
+      },
+      {
+        "finals": [
+          "0"
+        ],
+        "comment": null,
+        "line": 2907
+      },
+      {
+        "finals": [
+          "7"
+        ],
+        "comment": "DECSC - Save Cursor",
+        "line": 2913
+      },
+      {
+        "finals": [
+          "8"
+        ],
+        "comment": null,
+        "line": 2925
+      },
+      {
+        "finals": [
+          "D"
+        ],
+        "comment": "IND - Index",
+        "line": 2955
+      },
+      {
+        "finals": [
+          "E"
+        ],
+        "comment": "NEL - Next Line",
+        "line": 2965
+      },
+      {
+        "finals": [
+          "H"
+        ],
+        "comment": "HTS - Horizontal Tab Set",
+        "line": 2975
+      },
+      {
+        "finals": [
+          "M"
+        ],
+        "comment": "RI - Reverse Index",
+        "line": 2985
+      },
+      {
+        "finals": [
+          "N"
+        ],
+        "comment": "SS2 - Single Shift 2",
+        "line": 2998
+      },
+      {
+        "finals": [
+          "O"
+        ],
+        "comment": "SS3 - Single Shift 3",
+        "line": 3012
+      },
+      {
+        "finals": [
+          "V"
+        ],
+        "comment": "SPA - Start of Guarded Area",
+        "line": 3026
+      },
+      {
+        "finals": [
+          "W"
+        ],
+        "comment": "EPA - End of Guarded Area",
+        "line": 3032
+      },
+      {
+        "finals": [
+          "Z"
+        ],
+        "comment": "DECID",
+        "line": 3038
+      },
+      {
+        "finals": [
+          "c"
+        ],
+        "comment": "RIS - Full Reset",
+        "line": 3043
+      },
+      {
+        "finals": [
+          "n"
+        ],
+        "comment": "LS2 - Locking Shift 2",
+        "line": 3052
+      },
+      {
+        "finals": [
+          "o"
+        ],
+        "comment": "LS3 - Locking Shift 3",
+        "line": 3066
+      },
+      {
+        "finals": [
+          "~"
+        ],
+        "comment": "LS1R - Locking Shift 1 Right",
+        "line": 3080
+      },
+      {
+        "finals": [
+          "}"
+        ],
+        "comment": "LS2R - Locking Shift 2 Right",
+        "line": 3094
+      },
+      {
+        "finals": [
+          "|"
+        ],
+        "comment": "LS3R - Locking Shift 3 Right",
+        "line": 3108
+      },
+      {
+        "finals": [
+          "="
+        ],
+        "comment": "Set application keypad mode",
+        "line": 3122
+      },
+      {
+        "finals": [
+          ">"
+        ],
+        "comment": "Reset application keypad mode",
+        "line": 3131
+      },
+      {
+        "finals": [
+          "\\"
+        ],
+        "comment": "Sets ST (string terminator). We don't have to do anything | because our parser always accepts ST.",
+        "line": 3141
+      },
+      {
+        "finals": [
+          "else"
+        ],
+        "comment": null,
+        "line": 3145
       }
     ]
   },

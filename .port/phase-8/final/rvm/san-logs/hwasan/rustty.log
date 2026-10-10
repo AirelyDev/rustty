@@ -1,0 +1,257 @@
+   Compiling pkg-config v0.3.33
+   Compiling quote v1.0.45
+   Compiling winnow v1.0.4
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling target-lexicon v0.13.5
+   Compiling smallvec v1.15.2
+   Compiling heck v0.5.0
+   Compiling serde_spanned v1.1.1
+   Compiling version-compare v0.2.1
+   Compiling memchr v2.8.2
+   Compiling libc v0.2.186
+   Compiling rustty-build-config v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-build-config)
+   Compiling allocator-api2 v0.2.21
+   Compiling nom v7.1.3
+   Compiling syn v2.0.118
+   Compiling rustty-util v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-util)
+warning: unknown and unstable feature specified for `-Ctarget-feature`: `tagged-globals`
+  |
+  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
+  = help: consider filing a feature request
+
+warning: unstable feature specified for `-Ctarget-feature`: `outline-atomics`
+  |
+  = note: this feature is not stably supported; its behavior can change in the future
+
+   Compiling cfg-expr v0.20.8
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling hashbrown v0.17.1
+warning: `rustty-util` (lib) generated 2 warnings
+   Compiling rustty-zigstd v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-zigstd)
+   Compiling log v0.4.33
+   Compiling toml v1.1.3+spec-1.1.0
+   Compiling rustty-identity v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-identity)
+   Compiling bitflags v2.13.0
+warning: `rustty-identity` (lib) generated 2 warnings (2 duplicates)
+   Compiling futures-core v0.3.32
+   Compiling cexpr v0.6.0
+   Compiling equivalent v1.0.2
+   Compiling system-deps v7.0.8
+   Compiling indexmap v2.14.0
+warning: `zlib-sys` (lib) generated 2 warnings (2 duplicates)
+   Compiling futures-task v0.3.32
+   Compiling pin-project-lite v0.2.17
+   Compiling rustty-datastruct v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-datastruct)
+   Compiling slab v0.4.12
+   Compiling rustty-os v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-os)
+   Compiling cfg-if v1.0.4
+   Compiling khronos_api v3.1.0
+warning: `rustty-zigstd` (lib) generated 2 warnings (2 duplicates)
+   Compiling libloading v0.8.9
+   Compiling rustty-global v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-global)
+warning: `rustty-build-config` (lib) generated 2 warnings (2 duplicates)
+   Compiling futures-channel v0.3.32
+warning: `rustty-datastruct` (lib) generated 2 warnings (2 duplicates)
+   Compiling simdutf-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/simdutf-sys)
+   Compiling rustty-helpgen v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-helpgen)
+   Compiling glib-sys v0.22.8
+   Compiling gobject-sys v0.22.6
+   Compiling gio-sys v0.22.8
+   Compiling gdk-pixbuf-sys v0.22.0
+   Compiling prettyplease v0.2.37
+   Compiling cairo-sys-rs v0.22.0
+   Compiling pango-sys v0.22.0
+   Compiling gdk4-sys v0.11.4
+   Compiling bindgen v0.72.1
+warning: `rustty-global` (lib) generated 2 warnings (2 duplicates)
+   Compiling xml-rs v0.8.28
+   Compiling graphene-sys v0.22.8
+   Compiling futures-macro v0.3.32
+   Compiling glib-macros v0.22.6
+   Compiling gl_generator v0.14.0
+   Compiling rustty-unicode v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-unicode)
+   Compiling futures-util v0.3.32
+   Compiling rustty-simd v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-simd)
+warning: `highway-sys` (lib) generated 2 warnings (2 duplicates)
+   Compiling rustty-render-types v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-render-types)
+   Compiling futures-io v0.3.32
+warning: `rustty-render-types` (lib) generated 2 warnings (2 duplicates)
+   Compiling rustty-z2d v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-z2d)
+   Compiling rustty-vt v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-vt)
+   Compiling futures-executor v0.3.32
+   Compiling gsk4-sys v0.11.4
+warning: `rustty-unicode` (lib) generated 2 warnings (2 duplicates)
+   Compiling gtk4-sys v0.11.4
+warning: `simdutf-sys` (lib) generated 2 warnings (2 duplicates)
+   Compiling rustty-lib v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-lib)
+   Compiling rustty-font v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-font)
+   Compiling rustty-terminfo v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-terminfo)
+warning: `rustty-os` (lib) generated 2 warnings (2 duplicates)
+   Compiling gl v0.14.0
+   Compiling glib v0.22.8
+   Compiling rustty-input v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-input)
+   Compiling freetype-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/freetype-sys)
+warning: `rustty-terminfo` (lib) generated 2 warnings (2 duplicates)
+   Compiling wuffs-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/wuffs-sys)
+   Compiling libxml2-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/libxml2-sys)
+warning: `rustty-lib` (lib) generated 2 warnings (2 duplicates)
+   Compiling dcimgui-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/dcimgui-sys)
+warning: `rustty-z2d` (lib) generated 2 warnings (2 duplicates)
+   Compiling oniguruma-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/oniguruma-sys)
+warning: `rustty-font` (lib) generated 2 warnings (2 duplicates)
+   Compiling harfbuzz-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/harfbuzz-sys)
+   Compiling fontconfig-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/fontconfig-sys)
+   Compiling spirv-cross-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/spirv-cross-sys)
+   Compiling glslang-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/glslang-sys)
+   Compiling gio v0.22.8
+warning: `rustty-simd` (lib) generated 2 warnings (2 duplicates)
+warning: `wuffs-sys` (lib) generated 2 warnings (2 duplicates)
+   Compiling rustty-wuffs v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-wuffs)
+warning: `rustty-wuffs` (lib) generated 2 warnings (2 duplicates)
+   Compiling rustty-font-shaper v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-font-shaper)
+   Compiling rustty-xev v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-xev)
+   Compiling khronos-egl v6.0.0
+   Compiling cairo-rs v0.22.0
+warning: `oniguruma-sys` (lib) generated 2 warnings (2 duplicates)
+   Compiling rustty-oniguruma v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-oniguruma)
+warning: `rustty-oniguruma` (lib) generated 2 warnings (2 duplicates)
+   Compiling rustty-renderer v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-renderer)
+   Compiling rustty-args v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-args)
+   Compiling rustty-cfg-fmt v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-cfg-fmt)
+warning: `rustty-cfg-fmt` (lib) generated 2 warnings (2 duplicates)
+   Compiling autocfg v1.5.1
+   Compiling semver v1.0.28
+warning: `rustty-args` (lib) generated 2 warnings (2 duplicates)
+   Compiling rustty-version v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-version)
+   Compiling rustc_version v0.4.1
+   Compiling memoffset v0.9.1
+   Compiling wayland-sys v0.31.11
+   Compiling rustix v1.1.4
+   Compiling field-offset v0.3.6
+warning: `rustty-version` (lib) generated 2 warnings (2 duplicates)
+   Compiling toml_edit v0.25.13+spec-1.1.0
+warning: `rustty-xev` (lib) generated 2 warnings (2 duplicates)
+   Compiling gdk-pixbuf v0.22.0
+   Compiling pango v0.22.8
+   Compiling rustty-config v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-config)
+   Compiling dlib v0.5.3
+   Compiling linux-raw-sys v0.12.1
+   Compiling gdk4 v0.11.4
+   Compiling wayland-backend v0.3.15
+warning: `freetype-sys` (lib) generated 2 warnings (2 duplicates)
+   Compiling proc-macro-crate v3.5.0
+   Compiling graphene-rs v0.22.8
+warning: `libxml2-sys` (lib) generated 2 warnings (2 duplicates)
+   Compiling quick-xml v0.39.4
+   Compiling scoped-tls v1.0.1
+   Compiling downcast-rs v1.2.1
+   Compiling wayland-client v0.31.14
+   Compiling wayland-scanner v0.31.10
+   Compiling gsk4 v0.11.4
+   Compiling gtk4-macros v0.11.4
+   Compiling rustty-crash v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-crash)
+   Compiling gdk4-wayland-sys v0.11.0
+   Compiling gdk4-x11-sys v0.11.0
+   Compiling gtk4-layer-shell-sys v0.6.0
+   Compiling libadwaita-sys v0.9.2
+   Compiling x11-dl v2.21.0
+   Compiling rustty-termio v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-termio)
+   Compiling gtk4 v0.11.4
+warning: `rustty-crash` (lib) generated 2 warnings (2 duplicates)
+   Compiling zlib-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/zlib-sys)
+   Compiling once_cell v1.21.4
+   Compiling rustty-core v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-core)
+warning: `fontconfig-sys` (lib) generated 2 warnings (2 duplicates)
+   Compiling rustty-apprt v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-apprt)
+   Compiling wayland-protocols v0.32.13
+   Compiling rustty-vaxis v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-vaxis)
+   Compiling gdk4-x11 v0.11.4
+warning: `dcimgui-sys` (lib) generated 2 warnings (2 duplicates)
+   Compiling wayland-protocols-plasma v0.3.12
+   Compiling gdk4-wayland v0.11.4
+   Compiling rustty-cli v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-cli)
+   Compiling rustty-zigimg v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-zigimg)
+warning: `rustty-zigimg` (lib) generated 2 warnings (2 duplicates)
+   Compiling rustty-zf v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-zf)
+   Compiling rustty v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty)
+warning: `rustty-zf` (lib) generated 2 warnings (2 duplicates)
+warning: `rustty-vaxis` (lib) generated 2 warnings (2 duplicates)
+warning: `harfbuzz-sys` (lib) generated 2 warnings (2 duplicates)
+warning: `rustty-input` (lib) generated 2 warnings (2 duplicates)
+warning: `rustty-font-shaper` (lib) generated 2 warnings (2 duplicates)
+warning: `spirv-cross-sys` (lib) generated 2 warnings (2 duplicates)
+warning: `rustty-vt` (lib) generated 2 warnings (2 duplicates)
+   Compiling libadwaita v0.9.2
+   Compiling gtk4-layer-shell v0.8.0
+warning: `glslang-sys` (lib) generated 2 warnings (2 duplicates)
+   Compiling rustty-inspector v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-inspector)
+warning: `rustty-inspector` (lib) generated 2 warnings (2 duplicates)
+   Compiling rustty-apprt-api v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-apprt-api)
+warning: `rustty-renderer` (lib) generated 2 warnings (2 duplicates)
+warning: `rustty-apprt-api` (lib) generated 2 warnings (2 duplicates)
+warning: `rustty-config` (lib) generated 2 warnings (2 duplicates)
+warning: `rustty-termio` (lib) generated 2 warnings (2 duplicates)
+warning: `rustty-core` (lib) generated 2 warnings (2 duplicates)
+warning: `rustty-cli` (lib) generated 2 warnings (2 duplicates)
+warning: `rustty-apprt` (lib) generated 2 warnings (2 duplicates)
+warning: `rustty` (test "cli_log_facade") generated 2 warnings (2 duplicates)
+warning: `rustty` (test "windows_launch") generated 2 warnings (2 duplicates)
+warning: `rustty` (test "windows_resources") generated 2 warnings (2 duplicates)
+warning: `rustty` (test "cli_smoke") generated 2 warnings (2 duplicates)
+warning: `rustty` (test "gui_leaf") generated 2 warnings (2 duplicates)
+warning: `rustty` (bin "rustty" test) generated 2 warnings (2 duplicates)
+warning: `rustty` (bin "rustty") generated 2 warnings (2 duplicates)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 11s
+     Running unittests src/main.rs (target/san-hwasan/aarch64-unknown-linux-gnu/debug/deps/rustty-3dac13495998f8e4)
+
+running 6 tests
+test build_checks::tests::full_build_rejects_ios_only ... ok
+test main_rustty::tests::ref_all_decls ... ok
+test tests::ref_entrypoint ... ok
+test build_checks::tests::pie_option_resolves_like_the_reference ... ok
+test build_checks::tests::nix_shell_check_matches_the_reference_guards ... ok
+test build_checks::tests::windows_resource_command_per_toolchain ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cli_log_facade.rs (target/san-hwasan/aarch64-unknown-linux-gnu/debug/deps/cli_log_facade-d592a4c8757ac9d1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cli_smoke.rs (target/san-hwasan/aarch64-unknown-linux-gnu/debug/deps/cli_smoke-01df24b8546c4f6f)
+
+running 9 tests
+test no_args_usage_banner ... ignored, no-args launches the GTK app on this target, not the banner (R14)
+test bogus_unknown_action ... ok
+test list_actions_nonempty ... ok
+test validate_config_broken ... ok
+test version_dashes ... ok
+test version_plus ... ok
+test validate_config_valid ... ok
+test new_window_not_supported ... ok
+test ssh_cache_add_then_list ... ok
+
+test result: ok. 8 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.27s
+
+     Running tests/gui_leaf.rs (target/san-hwasan/aarch64-unknown-linux-gnu/debug/deps/gui_leaf-b904ea90e8d1c990)
+
+running 2 tests
+test rustty_gtk_launch_and_quit ... ignored, requires a display; run via xvfb-run -a cargo test -p rustty --features gtk --test gui_leaf -- --ignored
+test gtk_runtime_leaf_is_reachable ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/windows_launch.rs (target/san-hwasan/aarch64-unknown-linux-gnu/debug/deps/windows_launch-9fcc5d7cf94326be)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/windows_resources.rs (target/san-hwasan/aarch64-unknown-linux-gnu/debug/deps/windows_resources-f9821754f9586135)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

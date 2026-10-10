@@ -1,0 +1,50 @@
+# P8-W9 T2 lane g-esctest-attempt1-blocked at a60e9e2a5 (head 1d22ba80d)
+host: rvm (Fedora aarch64), clone /home/gael/projects/rustty-p8w9t2 (git archive 1d22ba80d plus .port and docs/superpowers copied from the worktree, since .gitattributes export-ignores them)
+### CMD: bash .port/tools/gates/check_esctest.sh
+start (UTC): 2026-10-08T15:21:07Z
+end (UTC):   2026-10-08T15:24:05Z
+wall: 178 s
+rc: 3
+## verdict lines
+G-ESCTEST BLOCKED: the oracle's test/esctest does not build here (Zig packages not fetchable?)
+## tail
+   Compiling libloading v0.8.9
+   Compiling either v1.16.0
+   Compiling bindgen v0.72.1
+   Compiling rustty-build-config v0.1.0 (/home/gael/projects/rustty-p8w9t2/crates/rustty-build-config)
+   Compiling nom v7.1.3
+   Compiling syn v2.0.118
+   Compiling itertools v0.13.0
+   Compiling rustty-datastruct v0.1.0 (/home/gael/projects/rustty-p8w9t2/crates/rustty-datastruct)
+   Compiling bitflags v2.13.0
+   Compiling regex-automata v0.4.14
+   Compiling shlex v1.3.0
+   Compiling rustc-hash v2.1.2
+   Compiling rustty-identity v0.1.0 (/home/gael/projects/rustty-p8w9t2/crates/rustty-identity)
+   Compiling highway-sys v0.1.0 (/home/gael/projects/rustty-p8w9t2/crates-sys/highway-sys)
+   Compiling simdutf-sys v0.1.0 (/home/gael/projects/rustty-p8w9t2/crates-sys/simdutf-sys)
+   Compiling cexpr v0.6.0
+   Compiling pkg-config v0.3.33
+   Compiling equivalent v1.0.2
+   Compiling indexmap v2.14.0
+   Compiling rustty-os v0.1.0 (/home/gael/projects/rustty-p8w9t2/crates/rustty-os)
+   Compiling regex v1.12.4
+   Compiling rustty-simd v0.1.0 (/home/gael/projects/rustty-p8w9t2/crates/rustty-simd)
+   Compiling rustty-unicode v0.1.0 (/home/gael/projects/rustty-p8w9t2/crates/rustty-unicode)
+   Compiling rustty-render-types v0.1.0 (/home/gael/projects/rustty-p8w9t2/crates/rustty-render-types)
+   Compiling rustty-global v0.1.0 (/home/gael/projects/rustty-p8w9t2/crates/rustty-global)
+   Compiling rustty-vt v0.1.0 (/home/gael/projects/rustty-p8w9t2/crates/rustty-vt)
+   Compiling rustty-z2d v0.1.0 (/home/gael/projects/rustty-p8w9t2/crates/rustty-z2d)
+   Compiling rustty-terminfo v0.1.0 (/home/gael/projects/rustty-p8w9t2/crates/rustty-terminfo)
+   Compiling rustty-lib v0.1.0 (/home/gael/projects/rustty-p8w9t2/crates/rustty-lib)
+   Compiling rustty-font v0.1.0 (/home/gael/projects/rustty-p8w9t2/crates/rustty-font)
+   Compiling wuffs-sys v0.1.0 (/home/gael/projects/rustty-p8w9t2/crates-sys/wuffs-sys)
+   Compiling rustty-wuffs v0.1.0 (/home/gael/projects/rustty-p8w9t2/crates/rustty-wuffs)
+   Compiling esctest-librustty v0.0.0 (/home/gael/projects/rustty-p8w9t2/test/esctest)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.90s
+esctest-librustty exited 0
+== oracle: test/esctest at a60e9e2a57f73e1eef2bd1cf2995a467f69e7fb0
+/tmp/gesctest.gHK7Cn/oracle/test/esctest/../../build.zig.zon:122:20: error: unable to connect to server: TlsInitializationFailed
+            .url = "https://deps.files.ghostty.org/ghostty-themes-release-20260928-151043-99d9701.tgz",
+                   ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+G-ESCTEST BLOCKED: the oracle's test/esctest does not build here (Zig packages not fetchable?)

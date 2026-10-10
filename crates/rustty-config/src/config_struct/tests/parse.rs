@@ -204,6 +204,8 @@ const CONFIG_FIELD_NAMES: &[&[u8]] = &[
     b"unfocused-split-opacity",
     b"vt-kam-allowed",
     b"vt-window-resize-allowed",
+    b"vt-xt-checksum-extension",
+    b"vt-xt-checksum-report",
     b"wait-after-command",
     b"window-colorspace",
     b"window-decoration",
@@ -247,7 +249,9 @@ fn config_field_names_count_is_contract() {
     // `70f006575`).
     // 209 -> 210: Phase-7 W6 T1 added `vt-window-resize-allowed`
     // (`714fe9b90`, moved next to `vt-kam-allowed` by `2a987d59d`).
-    assert_eq!(CONFIG_FIELD_NAMES.len(), 210);
+    // 210 -> 212: Phase-8 W3 T2 added `vt-xt-checksum-report` (`9272a2f7c`)
+    // and `vt-xt-checksum-extension` (`00a19db51`).
+    assert_eq!(CONFIG_FIELD_NAMES.len(), 212);
 }
 
 /// Area G OQ-6: until `P3-W9 T3`, these three `204` assertions guarded rustty

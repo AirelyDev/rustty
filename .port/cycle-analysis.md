@@ -1,10 +1,12 @@
 # rustty crate-graph cycle analysis (pre-Phase-0)
 
-Reference: ghostty @ `12752b2ac` (this analysis was originally taken at `4749c4e`;
+Reference: ghostty @ `246f70287` (this analysis was originally taken at `4749c4e`;
 the oracle sync point was advanced by `P3-W10 T3` to `6ad1fe7d8` on 2026-07-31,
 by the Phase-4 resync to `12967b68f` on 2026-08-17, by the Phase-5 resync to `683d8db64` on 2026-08-25,
 by the gap-close to `88f57ee66` on 2026-08-26, by the Phase-6 resync to `20abdb50a` on 2026-09-01,
-then by the Phase-7 resync to `12752b2ac` on 2026-09-28 — see
+by the Phase-7 resync to `12752b2ac` on 2026-09-28,
+by the Phase-8 resync to `a60e9e2a5` on 2026-10-07,
+then by the Phase-8 second advance to `246f70287` on 2026-10-09 — see
 `.port/ORACLE_SYNC.md`), `src/` (512 .zig files at the original analysis). Tooling:
 `.port/tools/cycle_check.py` (crate-level SCC) and `.port/tools/reach_scc.py`
 (file-level reachability + SCC condensation). Both are kept as **parity gates**:

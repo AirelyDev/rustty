@@ -819,6 +819,7 @@ mod scroll_page_fractional_saturation_tests {
                 default_modes: rustty_vt::modes::ModePacked::default(),
                 default_cursor_style: rustty_vt::screen::CursorStyle::Block,
                 default_cursor_blink: Some(false),
+                default_xt_checksum: Default::default(),
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
             },
@@ -1397,6 +1398,7 @@ mod clipboard_codepoint_map_e2e {
                 default_modes: rustty_vt::modes::ModePacked::default(),
                 default_cursor_style: rustty_vt::screen::CursorStyle::Block,
                 default_cursor_blink: Some(false),
+                default_xt_checksum: Default::default(),
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
             },
@@ -1566,6 +1568,7 @@ mod mok2_key_path_e2e {
                 default_modes: rustty_vt::modes::ModePacked::default(),
                 default_cursor_style: rustty_vt::screen::CursorStyle::Block,
                 default_cursor_blink: Some(false),
+                default_xt_checksum: Default::default(),
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
             },
@@ -1882,6 +1885,7 @@ mod paste_event_mutex_tests {
                 default_modes: rustty_vt::modes::ModePacked::default(),
                 default_cursor_style: rustty_vt::screen::CursorStyle::Block,
                 default_cursor_blink: Some(false),
+                default_xt_checksum: Default::default(),
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
             },
@@ -2115,5 +2119,200 @@ mod paste_event_mutex_tests {
             unlocked_after,
             "completeClipboardPasteEvent returned with the renderer mutex still locked"
         );
+    }
+}
+
+// test "promptClickRelativeRow" {
+//
+// (`5170b06f6`; the helper is `mouse_input::prompt_click_relative_row`.)
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod prompt_click_relative_row_tests {
+    use super::*;
+    use rustty_vt::alloc::Global;
+    use rustty_vt::point;
+
+    #[test]
+    fn promptClickRelativeRow() {
+        // const testing = std.testing;
+        // const Case = struct {
+        //     layout: enum { no_history, offset, cross_page, prompt_above_viewport },
+        //     click_y: u32,
+        //     expected: u32,
+        // };
+        #[derive(PartialEq, Eq)]
+        enum Layout {
+            NoHistory,
+            Offset,
+            CrossPage,
+            PromptAboveViewport,
+        }
+        struct Case {
+            layout: Layout,
+            click_y: u32,
+            expected: u32,
+        }
+        // const cases = [_]Case{
+        //     .{ .layout = .no_history, .click_y = 1, .expected = 1 },
+        //     .{ .layout = .offset, .click_y = 3, .expected = 3 },
+        //     .{ .layout = .cross_page, .click_y = 3, .expected = 3 },
+        //     .{ .layout = .prompt_above_viewport, .click_y = 0, .expected = 3 },
+        // };
+        let cases = [
+            Case {
+                layout: Layout::NoHistory,
+                click_y: 1,
+                expected: 1,
+            },
+            Case {
+                layout: Layout::Offset,
+                click_y: 3,
+                expected: 3,
+            },
+            Case {
+                layout: Layout::CrossPage,
+                click_y: 3,
+                expected: 3,
+            },
+            Case {
+                layout: Layout::PromptAboveViewport,
+                click_y: 0,
+                expected: 3,
+            },
+        ];
+        // for (cases) |case| {
+        for case in cases {
+            // var pages = try terminal.PageList.init(testing.allocator, .{
+            //     .cols = 80,
+            //     .rows = 5,
+            // });
+            // defer pages.deinit();
+            let mut pages =
+                terminal::pagelist::PageList::init(Global, terminal::pagelist::Options::new(80, 5))
+                    .unwrap();
+            // const scroll_rows: u32 = switch (case.layout) {
+            //     .no_history => 0,
+            //     .offset, .prompt_above_viewport => 10,
+            //     .cross_page => pages.pages.first.?.capacity().rows - 2,
+            // };
+            let scroll_rows: u32 = match case.layout {
+                Layout::NoHistory => 0,
+                Layout::Offset | Layout::PromptAboveViewport => 10,
+                Layout::CrossPage => {
+                    u32::from(unsafe { terminal::pagelist::Node::capacity(pages.pages.first) }.rows)
+                        - 2
+                }
+            };
+            // for (0..scroll_rows) |_| _ = try pages.grow();
+            for _ in 0..scroll_rows {
+                pages.grow().unwrap();
+            }
+
+            // const prompt_y = if (case.layout == .prompt_above_viewport)
+            //     scroll_rows - 2
+            // else
+            //     scroll_rows + 1;
+            let prompt_y = if case.layout == Layout::PromptAboveViewport {
+                scroll_rows - 2
+            } else {
+                scroll_rows + 1
+            };
+            // const prompt = pages.pin(.{ .screen = .{ .y = prompt_y } }).?;
+            let prompt = pages
+                .pin(point::Point::Screen(point::Coordinate {
+                    x: 0,
+                    y: prompt_y,
+                }))
+                .unwrap();
+            // const click = pages.pin(.{ .viewport = .{ .x = 7, .y = case.click_y } }).?;
+            let click = pages
+                .pin(point::Point::Viewport(point::Coordinate {
+                    x: 7,
+                    y: case.click_y,
+                }))
+                .unwrap();
+            // try testing.expectEqual(case.layout == .cross_page, prompt.node != click.node);
+            assert_eq!(
+                case.layout == Layout::CrossPage,
+                !std::ptr::eq(prompt.node, click.node)
+            );
+            // try testing.expectEqual(
+            //     case.layout == .prompt_above_viewport,
+            //     pages.pointFromPin(.viewport, prompt) == null,
+            // );
+            assert_eq!(
+                case.layout == Layout::PromptAboveViewport,
+                pages.point_from_pin(point::Tag::Viewport, prompt).is_none()
+            );
+            // try testing.expectEqual(case.expected, promptClickRelativeRow(&pages, prompt, click));
+            assert_eq!(
+                case.expected,
+                mouse_input::prompt_click_relative_row(&pages, prompt, click)
+            );
+
+            pages.deinit();
+        }
+    }
+}
+
+// rustty-only (P8-W9 FX4, NEW-FINDINGS N540 item 1): Oniguruma's first-use
+// init. `onig_new` -> `onig_reg_init` reads the process-global `onig_inited`
+// and, if it is unset, runs `onig_initialize` itself, with no lock
+// (regcomp.c:7667/7769). The reference runs `oni.init` once, single-threaded,
+// at startup (`global.zig`), before any surface derives its config; Rust's
+// test harness runs `DerivedConfig::init` (which compiles every configured
+// link regex through `Link::oni_regex`) on many threads with no such global
+// init, beside tests that call `oni::testing::ensure_init`. G-TSAN reported
+// exactly that pair (`onig_reg_init` read vs `onig_initialize` write). Every
+// regex compile must run after the one thread-safe init (memory
+// `parallel-cargo-test-exposes-c-init-races`).
+//
+// The race is on the FIRST init of the process, so this test is a regression
+// test only when it runs in a fresh process: run it alone under G-TSAN
+// (`--exact`) to reproduce; in the full binary another test may have
+// initialized Oniguruma first, and the test then still passes.
+#[cfg(test)]
+mod oniguruma_first_use_init_tests {
+    use super::*;
+    use std::sync::{Arc, Barrier};
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "DerivedConfig::init compiles the default config's link regex through oniguruma C FFI (extern static OnigEncodingUTF8) — un-executable under Miri; the TSan and native lanes cover it"
+    )]
+    fn concurrent_derived_config_link_regexes_and_ensure_init_do_not_race() {
+        const THREADS: usize = 8;
+        let barrier = Arc::new(Barrier::new(THREADS));
+        let handles: Vec<_> = (0..THREADS)
+            .map(|i| {
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    let config = configpkg::Config::default_config();
+                    assert!(
+                        !config.link.links.is_empty(),
+                        "the default config has a link regex to compile"
+                    );
+                    barrier.wait();
+                    if i % 2 == 0 {
+                        oni::testing::ensure_init().unwrap();
+                        0
+                    } else {
+                        let mut derived =
+                            DerivedConfig::init(Allocator, &config).expect("DerivedConfig::init");
+                        assert_eq!(derived.links.len(), config.link.links.len());
+                        derived.deinit();
+                        1
+                    }
+                })
+            })
+            .collect();
+        let mut derived_inits = 0;
+        for h in handles {
+            derived_inits += h.join().expect("thread");
+        }
+        // Every odd thread really compiled the link regexes concurrently with
+        // the even threads' init (N540).
+        assert_eq!(derived_inits, THREADS / 2);
     }
 }

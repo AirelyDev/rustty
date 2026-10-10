@@ -978,6 +978,17 @@ impl Target for Config {
             b"vt-kam-allowed" => field_bool!(vt_kam_allowed),
             // @"vt-window-resize-allowed": bool
             b"vt-window-resize-allowed" => field_bool!(vt_window_resize_allowed),
+            // @"vt-xt-checksum-report": bool
+            b"vt-xt-checksum-report" => field_bool!(vt_xt_checksum_report),
+            // @"vt-xt-checksum-extension": XtChecksumExtension (packed struct)
+            b"vt-xt-checksum-extension" => {
+                if is_empty {
+                    reset_default!(vt_xt_checksum_extension);
+                }
+                self.vt_xt_checksum_extension =
+                    rustty_args::args::parse_packed_struct(value.ok_or(Error::ValueRequired)?)?;
+                Ok(())
+            }
 
             // @"custom-shader": RepeatablePath (parseCLI self)
             b"custom-shader" => field_parsecli_self_map!(custom_shader, path_parse_err),

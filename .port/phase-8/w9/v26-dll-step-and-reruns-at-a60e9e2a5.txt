@@ -1,0 +1,42 @@
+# P8-W9 T2 rwin: reruns after V26 and the DLL step
+## v26b (xtask dist tests with a git repo; vt-c osc test alone; vt-c lib again): rc 0, 107 s
+### xtask dist tests 
+test dist::tests::dist_tarball_ships_vendor_inputs ... ignored, shells to git/cargo: cargo vendor over the full workspace
+test dist::tests::dist_config_appends_the_vendor_replacement_to_the_tracked_config ... ok
+test dist::tests::distcheck_cargo_does_not_inherit_the_fuzz_corpus_requirement ... ok
+test dist::tests::checkout_config_defaults_wasm_to_simd128 ... ok
+test dist::tests::tarballs_are_named_after_the_full_app_version ... ok
+test dist::tests::distcheck_reads_the_tracked_config_from_head ... ok
+test dist::tests::lib_vt_archive_applies_the_reference_excludes ... ok
+test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 73 filtered out; finished in 1.33s
+### vt-c osc test alone 
+test osc::tests::command_data_invalid_value_warns_through_the_scoped_log_sink ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 598 filtered out; finished in 0.01s
+### vt-c lib full again 
+test osc::tests::command_data_invalid_value_warns_through_the_scoped_log_sink ... ok
+test result: ok. 599 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.63s
+
+## v26c DLL step (msvc x64): 98 s
+### DLL step: cargo build -p rustty-vt-c --release --target x86_64-pc-windows-msvc
+cargo build rc=0
+### build c-vt-effects with clang
+clang rc=0
+### run c_vt_effects.exe
+Total bells: 2
+exit code: 0x00000000
+### build + run dll-utf8-proof.c (P8-W5 T4 proof)
+utf-8 write ok, cursor_x=15 (expected 15)
+utf8proof exit code: 0x00000000
+### flake probe: rustty-vt-c lib x5
+run 1
+test result: ok. 599 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.33s
+run 2
+test result: ok. 599 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.29s
+run 3
+test result: ok. 599 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.31s
+run 4
+test result: ok. 599 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.19s
+run 5
+test result: ok. 599 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.40s
+
+Steps: cargo build -p rustty-vt-c --release --locked --target x86_64-pc-windows-msvc; clang --target=x86_64-pc-windows-msvc build of example/c-vt-effects/src/main.c against rustty_vt_c.dll.lib; run with the DLL beside it (exit 0x00000000, 2 bells); .port/phase-8/w5/dll-utf8-proof.c built and run (cursor_x=15 expected 15). GREEN.

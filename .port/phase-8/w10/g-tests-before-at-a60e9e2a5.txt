@@ -1,0 +1,4 @@
+
+TEST AUDIT: 4277 live-oracle test blocks across 540 files; 0 unexplained, 1 accepted with a written reason
+GREEN: every live-oracle test has a counterpart or a written reason.
+g-tests exit=0

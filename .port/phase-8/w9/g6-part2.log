@@ -1,0 +1,91 @@
+=== G6 [rustty-vt] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-vt] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-vt] 41899s
+  RED [rustty-vt]:
+    1 test(s) did not pass:
+        SIGTERM rustty-vt stream_terminal::tests::effects::semantic_prompt_effect_not_called_when_the_terminal_fails
+    [rustty-vt] doc tests: test result: ok. 2 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.20s
+    full output: /var/folders/3z/vhbmzwg50g96n2644l_pz4nh0000gn/T//mn.rustty-vt.jJx1lm
+CRATE-RC-NONZERO rustty-vt
+=== G6 [rustty-wasm] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-wasm] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-wasm] 7s
+    rustty-wasm: no runnable test in the NATIVE build either (every test is #[ignore]d in source, not by a Miri cfg)
+    Summary [   0.000s] 0 tests run: 0 passed, 1 skipped
+    [rustty-wasm] doc tests: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== G6 [rustty-wuffs] :: ASan (FFI crate; Miri can't run C) ===
+   Compiling bitflags v2.13.0
+   Compiling png v0.18.1
+   Compiling rustty-wuffs v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-wuffs)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.86s
+     Running unittests src/lib.rs (target/aarch64-apple-darwin/debug/deps/rustty_wuffs-ffbbcb722d1bd67c)
+
+running 24 tests
+test log_capture::tests::capture_admits_only_the_owning_thread ... ok
+test log_capture::tests::records_emitted_outside_a_capture_are_discarded ... ok
+test swizzle::tests::a_successful_swizzle_is_silent ... ok
+test swizzle::tests::rgb_to_rgba_known_answer ... ok
+test swizzle::tests::bgra_premul_to_rgba_premul_known_answer ... ok
+test swizzle::tests::bgr_to_rgba_known_answer ... ok
+test swizzle::tests::ga_to_rgba ... ok
+test swizzle::tests::g_to_rgba_known_answer ... ok
+test jpeg::tests::jpeg_too_big ... ok
+test swizzle::tests::rgba_src_over ... ok
+test jpeg::tests::jpeg_decode_ffffff ... ok
+test jpeg::tests::jpeg_decode_000000 ... ok
+test swizzle::tests::swizzle_prepare_failure_warns_with_the_reference_text_and_scope ... ok
+test tests::maximum_image_size_threshold_matrix ... ok
+test png::tests::png_too_big ... ok
+test tests::ref_all_decls ... ok
+test zlib::tests::zlib_decode_accepts_exact_limit_and_rejects_truncated_input ... ok
+test zlib::tests::zlib_decode_enforces_output_limit ... ok
+test zlib::tests::zlib_decode_aligns_decoder_in_an_unaligned_allocator_buffer ... ok
+test png::tests::png_decode_ffffff ... ok
+test png::tests::png_decode_000000 ... ok
+test zlib::tests::zlib_decode_rejects_corrupted_checksum ... ok
+test swizzle::tests::rgb_to_rgba_odd_length_panics - should panic ... ok
+test zlib::tests::zlib_decode_grows_output ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rustty_wuffs
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+(FFI leak detection for rustty-wuffs is G-LSAN's job: sanitizers.sh --gate lsan, ASan with detect_leaks=1, macOS and Linux)
+=== G6 [rustty-xev] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-xev] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-xev] 3s
+    Summary [   2.633s] 22 tests run: 22 passed, 33 skipped
+    [rustty-xev] doc tests: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== G6 [rustty-xev] :: ASan companion (the 31 live-syscall tests Miri cannot execute) ===
+    ### sanitizer=address crate=rustty-xev ###
+      ✅ address: 35 test(s) ran — test result: ok. 35 passed; 0 failed; 1 ignored; 0 measured; 17 filtered out; finished in 0.08s;test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s;test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s;test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+    SANITIZERS: GREEN (rustty-xev: address)
+=== G6 [rustty-xev] :: ASan (non-excepted modules: thread_pool::) ===
+    ### sanitizer=address crate=rustty-xev ###
+      ✅ address: 4 test(s) ran — test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 49 filtered out; finished in 2.07s;test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s;test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s;test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+    SANITIZERS: GREEN (rustty-xev: address)
+=== G6 [rustty-z2d] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-z2d] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-z2d] 12s
+    Summary [  10.405s] 91 tests run: 91 passed, 14 skipped
+    [rustty-z2d] doc tests: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+=== G6 [rustty-zf] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-zf] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-zf] 2s
+    Summary [   1.033s] 11 tests run: 11 passed, 0 skipped
+    [rustty-zf] doc tests: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== G6 [rustty-zigstd] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-zigstd] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-zigstd] 58s
+    Summary [  56.576s] 86 tests run: 86 passed, 2 skipped
+    [rustty-zigstd] doc tests: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s

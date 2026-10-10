@@ -247,6 +247,7 @@ where
             mailbox: unsafe { &raw mut (*app).mailbox },
         };
         // var renderer_impl = try Renderer.init(alloc, .{
+        //     .device = &app.device,
         //     .config = try .init(alloc, config),
         //     .font_grid = font_grid,
         //     .size = size,
@@ -272,21 +273,31 @@ where
         // then frees them without glue (`dealloc`).
         let renderer_thread_slot = ThreadSharedBox::<crate::renderer_seam::Thread<A>>::new_uninit();
         let renderer_state_slot = ThreadSharedBox::<rendererpkg::state::State>::new_uninit();
-        let renderer_impl = match Renderer::init(
-            alloc,
-            crate::renderer_seam::Options {
-                config: renderer_config,
-                font_grid,
-                size,
-                surface_mailbox: SurfaceMailbox {
-                    surface: self_,
-                    app: app_mailbox,
+        // SAFETY (`Renderer::init`'s contract, P8-W9 FX7): `device` is the app's
+        // `DeviceBox` allocation, which the `App` frees only after every surface
+        // (N522); `font_grid` is the grid set's ref for `font_grid_key`, which
+        // `deinit` derefs only after the renderer's `deinit`. `app` is live
+        // (this fn's contract).
+        let renderer_impl = match unsafe {
+            Renderer::init(
+                alloc,
+                crate::renderer_seam::Options {
+                    // `&app.device` (`40d5b860d`): the app's out-of-line device
+                    // (N522), read by place from the raw `app` (no `&mut App`).
+                    device: (*app).device.as_ptr(),
+                    config: renderer_config,
+                    font_grid,
+                    size,
+                    surface_mailbox: SurfaceMailbox {
+                        surface: self_,
+                        app: app_mailbox,
+                    },
+                    rt_surface,
+                    // (N444: the out-of-line block's address.)
+                    thread: renderer_thread_slot.as_ptr(),
                 },
-                rt_surface,
-                // (N444: the out-of-line block's address.)
-                thread: renderer_thread_slot.as_ptr(),
-            },
-        ) {
+            )
+        } {
             Ok(v) => v,
             Err(err) => {
                 // (N444: the two never-written slots.)

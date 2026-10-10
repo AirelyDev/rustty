@@ -533,8 +533,8 @@ impl Renderer {
         }
 
         // If we have no graphics context we can't draw. This is
-        // only the case while unrealized (GTK); displayRealized
-        // rebuilds the swap chain.
+        // only the case while unrealized (GTK) or after the render
+        // thread exits; displayRealized rebuilds the swap chain.
         // if (!self.display_realized) return false;
         if !unsafe { (*self_ptr).display_realized } {
             return Ok(false);

@@ -1,0 +1,26 @@
+   Compiling libxml2-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/libxml2-sys)
+warning: unknown and unstable feature specified for `-Ctarget-feature`: `tagged-globals`
+  |
+  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
+  = help: consider filing a feature request
+
+warning: unstable feature specified for `-Ctarget-feature`: `outline-atomics`
+  |
+  = note: this feature is not stably supported; its behavior can change in the future
+
+   Compiling fontconfig-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/fontconfig-sys)
+warning: `zlib-sys` (lib) generated 2 warnings
+warning: `freetype-sys` (lib) generated 2 warnings (2 duplicates)
+warning: `libxml2-sys` (lib) generated 2 warnings (2 duplicates)
+warning: `fontconfig-sys` (lib test) generated 2 warnings (2 duplicates)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 36.32s
+     Running unittests src/lib.rs (target/san-hwasan/aarch64-unknown-linux-gnu/debug/deps/fontconfig_sys-7b261e181a7e40f8)
+
+running 4 tests
+test dir_defines::tests::other_oses_use_etc_fonts ... ok
+test dir_defines::tests::freebsd_uses_usr_local_etc_fonts ... ok
+test tests::kat_fontconfig_2_18_3_init_and_pattern ... ok
+test tests::ud360_cache_stamped_by_fontconfig_2_18_3_is_rescanned_after_its_dir_changes ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.14s
+

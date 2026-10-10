@@ -5,8 +5,9 @@ Closure of the functional-parity audit of Rustty against Ghostty at pin
 `docs/superpowers/plans/2026-09-08-parity-defect-closure.md`. Work ran from
 2026-09-08 to 2026-09-28.
 
-**Current pin: `12752b2ac`** (Phase 7 upstream resync, 2026-09-28 to 2026-09-30;
-`.port/phase-7/README.md`). The records below were carried forward through Phase 7, and the
+**Current pin: `a60e9e2a5`** (Phase 8 upstream resync, started 2026-10-07; the advance is `P8-W0 T3`,
+evidence in `.port/phase-8/w0/README.md`). It was `12752b2ac` through Phase 7 (2026-09-28 to
+2026-09-30; `.port/phase-7/README.md`). The records below were carried forward through Phase 7, and the
 counts are as of its finale. Phase 7 added UD352–UD372, N435–N465 and V27–V29.
 
 ## Result
@@ -61,7 +62,7 @@ pin), G-P2-SELF, G-KAITAI (now HARD).
 | G-LSAN | HARD (`--fast` skips it) | macOS (since P7-W16a) and Linux; BLOCKED elsewhere | ASan with `detect_leaks=1` (rustc's ASan runtime has a working leak checker on Apple Silicon; the standalone `-Zsanitizer=leak` and Apple clang's runtime do not), the same scope plus, on Linux, the GTK apprt and Flatpak feature lanes; suppressions only through `.port/phase-2/SANITIZER_SUPPRESSIONS.md`: `lsan.supp` on Linux (two, both Mesa), `lsan-darwin.supp` on macOS (sixteen: libobjc, CoreFoundation, SkyLight, CoreText, CoreAnimation, ColorSync, Metal and dyld TLV state LSan on Darwin does not see as roots; Apple's `leaks` reports 0 for the same binaries) |
 | G-HWASAN (P7-W16b) | HARD (`--fast` skips it) | aarch64 Linux (rvm); BLOCKED elsewhere | HWAddressSanitizer (`-Zbuild-std`, tagged globals, lld) with our C/C++ instrumented, over G-ASAN's scope plus the GTK and Flatpak lanes, minus `xtask` (H1), and the same Miri-exception cross-check. Its pointer tags catch an access landing inside another live block, which ASan's redzones miss (G-SAN-SELF A4). No hosted job yet (V31) |
 | G-MSAN | HARD (`--fast` skips it) | Linux; BLOCKED elsewhere (compiler-rt has no MSan for Darwin) | MemorySanitizer with `-Zbuild-std` and our C/C++ instrumented, over an allow-list of 59 members (rustty-renderer with its EGL/GL/glslang test modules skipped by name); 2 excluded with reasons (glslang-sys, xtask) |
-| G-TSAN (P7-W17) | HARD (`--fast` skips it) | macOS (run) and Linux (V32); BLOCKED elsewhere | ThreadSanitizer (`-Zbuild-std`, our C/C++ instrumented and checked for `__tsan_` references) over the threaded crates (`TSAN_SCOPE`: core, termio, xev, renderer, vt with `wuffs,oniguruma`, vt-c, highway-sys); empty `tsan.supp`. First runs found UD377 (N508); GREEN on the Mac, 4,380 tests, 38 min. G-SAN-SELF A5 makes a Rust and a C data race RED |
+| G-TSAN (P7-W17) | HARD (`--fast` skips it) | macOS (run) and Linux (V32); BLOCKED elsewhere | ThreadSanitizer (`-Zbuild-std`, our C/C++ instrumented and checked for `__tsan_` references) over the threaded crates (`TSAN_SCOPE`: core, termio, xev, renderer, vt with `wuffs,oniguruma`, vt-c, highway-sys); `tsan.supp` holds only T5 (`race:libEGL_mesa.so`) and T6 (`race:libgallium`), races inside uninstrumented system Mesa (P8-W9 FX4, N540; `SANITIZER_SUPPRESSIONS.md`). First runs found UD377 (N508); GREEN on the Mac, 4,380 tests, 38 min. G-SAN-SELF A5 makes a Rust and a C data race RED |
 
 In ci.yml's `ci` job the three report BLOCKED (`RUSTTY_SANITIZERS_OWN_JOB`), naming the new `sanitizers`
 job (one leg per sanitizer on x86_64 Linux, never run yet: V30). Results of P7-W14's runs:
@@ -124,19 +125,20 @@ command in `.port/phase-2/VERIFICATION_DEBT.md` or the named record.
 
 | What | Where recorded | Command |
 |---|---|---|
-| Full `ci.sh` end to end on macOS and Linux (Task 41 step 4) | here | `bash .port/tools/ci.sh`; on Linux `ssh rvm 'cd ~/projects/rustty && bash .port/tools/ci.sh'` |
-| G-REL: 17 release doc-test targets failed with "can't find crate" in the last full run, and pass when run alone; cause unknown | task-C-1 report | `bash .port/tools/gates/check_release_lane.sh` |
+| Full `ci.sh` end to end on macOS and Linux (Task 41 step 4). Phase 8 (P8-W9): every long gate ran on its own at the pin (`.port/phase-8/README.md` §"Validation: long lanes"); the Mac full `ci.sh` was BLOCKED on disk at `1d22ba80d`; the rvm full `ci.sh` at `c0adec970` and the Mac `ci.sh --fast` at `26d23100b` are PENDING at T3 | here; `.port/phase-8/README.md` | `bash .port/tools/ci.sh`; on Linux `ssh rvm 'cd ~/projects/rustty && bash .port/tools/ci.sh'` |
+| G-REL: 17 release doc-test targets failed with "can't find crate" in the last full run, and pass when run alone; cause unknown. Not reproduced by P8-W9 T2 on rvm: GREEN, 6,726 passed, 0 failed (cause still unknown) | task-C-1 report; `.port/phase-8/w9/g-rel-at-a60e9e2a5.txt` | `bash .port/tools/gates/check_release_lane.sh` |
 | ~~G6 Miri as one continuous lane~~ DONE on nextest, P7-W15: 38 crates in 13,354 s at `04f0a894c`, GREEN after N507 (`rustty-vt` 3,104 tests in 9,525 s; about 8 h under libtest) | `MIRI_EXCEPTIONS.md` "P7-W15" | `bash .port/tools/gates/check_leaks.sh --all-done` |
 | ~~G6t to completion~~ DONE, P7-W15: GREEN after N500 and N505 (`rustty-vt` 1,597 + 119, `rustty-xev` 22, `rustty-vt-c` 570, `rustty-renderer` 60, `rustty-core` 67) | `MIRI_EXCEPTIONS.md` "P7-W15" | `bash .port/tools/gates/check_leaks.sh --tree-borrows` |
 | ~~G6c as the gate runs it~~ DONE on nextest, P7-W15: 124 of 124 GREEN in 1,110 s (libtest: 119 tests, about 105 min) | `MIRI_EXCEPTIONS.md` "P7-W15" | `bash .port/tools/gates/check_leaks.sh --debug-assertions-off` |
-| Re-audit of the most-changed areas (Task 41 step 3) | here | the parity audit workflow over `src/terminal`, `src/apprt`, `pkg`, `include` |
+| Phase 8 Miri at the pin (P8-W9): G6 GREEN after N532/N533 (FX1); G6c GREEN (126 tests); G6t GREEN for `rustty-vt` after N542 (FX6), `rustty-vt-c`, `rustty-renderer`, `rustty-xev`; G6t `rustty-core` never completed (N543, OPEN) | `.port/phase-8/README.md` | `bash .port/tools/gates/check_leaks.sh --tree-borrows` (delta run at `26d23100b` PENDING) |
+| Re-audit of the most-changed areas (Task 41 step 3). Phase 8 (P8-W9): DONE for the 41 upstream-changed files under `src/terminal`, `src/terminal/c`, `src/renderer` and `include/ghostty/vt` (4 shards clean, N537 fixed); `src/apprt` and `pkg` not re-audited this phase | here; `.port/phase-8/w9/reaudit-at-a60e9e2a5.txt` | the parity audit workflow over `src/terminal`, `src/apprt`, `pkg`, `include` |
 | ~~Idle-machine performance runs and a new G8 baseline~~ DONE, P7-W23 (V17 DISCHARGED): idle run (load 1.65-1.85 at each start, Linux VM stopped) 14/14 wins, suite -27.9% wall; BASELINE.json's timing rows re-based to the pinned oracle, the Debug rows dropped by parity; G8b and G8 (`--strict`) GREEN. (P7-W19: oracle rebuilt at the pin, V18 DISCHARGED with N511. P7-W22: the size axis, V16 DISCHARGED with N512) | V17 | V17's P7-W19 recipe |
 | The 16 new CI jobs and release-workflow changes on GitHub's runners | V25 | push, then read the run |
-| Windows full-workspace tests on the clang-cl-built C/C++ dependencies | V26 | `cargo test --workspace --exclude libxml2-sys --exclude fontconfig-sys --exclude sentry-sys --target x86_64-pc-windows-msvc` |
+| Windows full-workspace tests on the clang-cl-built C/C++ dependencies. Phase 8 (P8-W9 T2, rwin at `1d22ba80d`): 6,398 passed; the 2 `xtask dist` failures needed `.git` and pass in a git checkout; the flaky vt-c log-sink test is N541, fixed by FX5 (599/599 twice on rwin); the DLL step passes. The re-run at `26d23100b` is PENDING at T3 | V26; `.port/phase-8/w9/v26-*` | `cargo test --workspace --exclude libxml2-sys --exclude fontconfig-sys --exclude sentry-sys --target x86_64-pc-windows-msvc` |
 | Nix and Snap packaging | V24 | user-deferred |
 | FreeBSD, flatpak execution, macOS 27 AppKit, Windows console/font discovery | V10–V12, V19, V23 | environment-blocked |
 | The new Valgrind CI job's runtime and software-GL noise on GitHub's x86_64 runners | N412, N413 | the `valgrind` job |
-| Phase 7 deferrals: the paired benches against a zigbench built at `12752b2ac` (alloc, `sc.clone`, `render-*`, mode lookup, print, nerd-font lookup, `grapheme_break`), and the full Linux lane (the V27–V29 Miri debt was DISCHARGED by P7-W15 on 2026-10-06) | P7-W12 T2 | `docs/superpowers/plans/2026-09-28-phase7-upstream-resync.md` §P7-W12 Task 2 |
+| Phase 7 deferrals: the paired benches against a zigbench built at `12752b2ac` (alloc, `sc.clone`, `render-*`, mode lookup, print, nerd-font lookup, `grapheme_break`), and the full Linux lane (the V27–V29 Miri debt was DISCHARGED by P7-W15 on 2026-10-06). Phase 8: the full Linux lane ran GREEN at `a60e9e2a5` (P8-W9 T2, rvm); the benches move to the zigbench at `a60e9e2a5` (Phase 8 perf + G8 rebase, `--strict`, G8b), PENDING at T3 | P7-W12 T2; `.port/phase-8/README.md` | `docs/superpowers/plans/2026-09-28-phase7-upstream-resync.md` §P7-W12 Task 2 |
 
 ## Still open
 
@@ -150,8 +152,6 @@ Code gaps left after the final triage, none a ledger row:
   Rust's `Debug` form where Ghostty prints `error.<Name>`. Log text only; 30
   sites are in Linux-only code, so the change needs the Linux VM. The shared
   error-name helper it needs (`rustty-zigstd` `ErrorName`) exists since N121.
-- **N35**: a load-dependent `search_thread` test failure, never diagnosed; needs
-  a long run under load.
 - **N354**: a Windows test failure seen once, not reproduced.
 - **N376**, 5 of 21 CI gaps: the wasm ABI-manifest step, Apple dylib install
   names, a Nix test Ghostty has and Rustty lacks, Ghostty's 5 MB tarball limit
@@ -333,6 +333,43 @@ committed records named here.
   (`LSAN_GTK_CEILINGS`; LSan treats suppressed blocks as live), the live KATs' `close_surfaces` asserts the
   window and every Rustty widget in it are finalized, and `TSAN_SERIAL` applies on Linux only (N514's
   record updated). No new id. **Next free ids: UD378, N517, V34.**
+- **Phase 8 start (P8-W0, pin `a60e9e2a5`).** N517 (the parity-surface generator's stale line windows, P8-W0 T2)
+  and N518 (a non-reflow narrow leaves a wide head in the last column, P8-W0 T1) are CLOSED. N519 (G-TESTS' four-token
+  matcher masks 17 of the 90 added tests) is RECORD-ONLY (P8-W0 T4). N520 (the snapshot omits `flags.xt_checksum`),
+  N521 (`rustty_terminal_paste` kept writing after a refused write) and N522 (the render `Device` lives in its own
+  allocation) are reserved for their owners and not yet opened. N523, N524 and N525 are reserved for the gate defects
+  P8-W0 T3 found; P8-W0 T5 opens and closes them. UD20 and UD312 are "fixed upstream" (their `docs/ghostty-bug-fixes.md`
+  rows are gone); the reference fields of R4 Appendix A's 50 UDs are re-anchored at `a60e9e2a5` (UD32, UD250 and UD343 only in part: their old lines are history anchors of deleted code). No UD or V id is taken yet.
+  **Next free ids: UD378, N526, V34.**
+- **P8-W0 merged** (`9c42ba5e6`): N523 and N524 (G9 never checked CSI/ESC/C0; OSC `unknown` counted by a common
+  word) are OPEN until their owners port `y`, `unknown` and `program_status`; N525 (c-vt corpus scripts wrote into the
+  main checkout) and N526 (the freestanding wasm build broken since `ca2ef434b`; now guarded in the default `ci.sh`
+  set) are CLOSED. **Next free ids: UD378, N527, V34.**
+- **P8-W1..W7 merged** (to `4b171279a`): N518 CLOSED (W0 T1); N520 RECORD-ONLY (DECRQCRA flag not in the snapshot);
+  N521 CLOSED (paste refused write); N522 PORT-ONLY (DeviceBox); N523 and N524 CLOSED by the W3/W4/W5 ports (G9
+  777/777); N527 CLOSED (build-rustty.sh LDFLAGS); N528 CLOSED (C getter rejected MOUSE_SHAPE; provisional N550);
+  N529 CLOSED (cbindgen same-name collisions made `include/rustty.h` declare wrong layouts, incl.
+  `rustty_size_report_encode`; provisional N551; A5 arm (f) + arm (a5) guard it). No UD taken.
+  **Next free ids: UD378, N530, V34.**
+- **P8-W8 + P8-W0 T7 merged** (`334dec755`): UD378 (upstream's esctest runner writes its log to a predictable
+  `/tmp` name; Rustty uses a private mkdtemp directory) FIXED; N530 CLOSED (G3b self-test and G4 leg B drifted at the
+  pin advance; `c-vt-effects` and `c-vt-formatter` brought back to upstream's examples). **Next free ids: UD379, N531,
+  V34.**
+- **Phase 8 finale (P8-W9 T1 and T1a, at `a60e9e2a5`).** Phase 8 used UD378 and N517–N531, and no V. UD378 is FIXED
+  (one status line, one docs row). N517, N518, N521 and N523–N531 are CLOSED; N519, N520 and N522 are RECORD-ONLY; none
+  is open. The finale re-anchored 19 `LOG-ABSENT-SITES.tsv` rows to the pin (G-LOGFILE GREEN), named the pin
+  symbolically in `cvt-parity.sh` (G-ORACLE-SH-SELF GREEN) and added three `COMMENT-NOT-CARRIED.tsv` rows for
+  `lib_vt.zig`'s `DllMain` doc (cap 79). T1a (N531, CLOSED) regenerated the `rustty-extra` goldens for the two
+  `vt-xt-checksum-*` keys and quoted three doc-example comments verbatim (G3b GREEN). **Next free ids: UD379, N532,
+  V34.**
+- **Phase 8 long lanes and close-out (P8-W9 T2, FX1–FX7, T3; to `26d23100b`).** The long lanes at the pin found
+  N532–N543 (provisional N600–N605, N620–N625, N640/N641, renumbered at T3; mapping in `.port/phase-8/README.md`
+  §"Provisional id renumbering"). N532–N542 are CLOSED (FX1–FX6: two Miri test fixes, D1 ledger drift and G-LINT, a
+  re-audit assertion, Mac LSan S19, rvm MSan/HWASan/TSan, the vt-c log-sink flake, the page tests' Tree Borrows UB).
+  N543 is OPEN: G6t over `rustty-core` never completed, pending the final delta-Miri run. FX7 fixed the final
+  review's minors. Still owed before the merge to `main` (listed in `.port/phase-8/README.md` §"Owed before the
+  merge to `main`"): N543, the delta lanes at `26d23100b` (Mac, rvm, rwin V26), the rvm full `ci.sh` at
+  `c0adec970`, and perf + G8. No UD or V taken. **Next free ids: UD379, N544, V34.**
 - Gates: `bash .port/tools/ci.sh` runs them all; each gate script in
   `.port/tools/gates/` has a `--self-test` where it matters. After merging
   records, re-run `check_parity_closure.py` and the phase-2 closure gate.

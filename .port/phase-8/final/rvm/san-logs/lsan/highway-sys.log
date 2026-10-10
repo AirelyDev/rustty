@@ -1,0 +1,33 @@
+   Compiling highway-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/highway-sys)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.69s
+     Running unittests src/lib.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/highway_sys-ada346d1eb9466ed)
+
+running 19 tests
+test tests::avx2_requires_os_xsave_and_bmi ... ok
+test tests::avx3_dl_requires_all_eight_ecx_features ... ok
+test tests::aarch64_linux_sve2_needs_sveaes ... ok
+test tests::avx3_zen4_is_bf16_on_amd_and_avx3_spr_is_fp16_plus_bf16 ... ok
+test tests::aarch64_linux_neon_and_neon_bf16 ... ok
+test tests::avx10_512_enables_avx3_dl_and_spr ... ok
+test tests::aarch64_linux_sve_by_vector_length ... ok
+test tests::avx3_requires_f_vl_dq_bw_cd ... ok
+test tests::avx512_needs_the_os_to_save_its_state_except_on_darwin ... ok
+test tests::detect_targets_links ... ok
+test tests::is_amd_matches_the_authentic_amd_vendor_string ... ok
+test tests::ppc8_requires_altivec_vsx_arch207_veccrypto ... ok
+test tests::rvv_requires_hwcap_v_bit ... ok
+test tests::ppc10_nests_inside_ppc9_plus_arch31_and_mma ... ok
+test tests::ppc9_nests_inside_ppc8_plus_arch300 ... ok
+test tests::z14_requires_vx_and_vxe ... ok
+test tests::supported_targets_is_nonzero ... ok
+test tests::z15_nests_inside_z14_plus_vxe2 ... ok
+test tests::concurrent_supported_targets_calls_agree ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Doc-tests highway_sys
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

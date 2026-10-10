@@ -92,7 +92,7 @@ impl SizeReportStyle {
 // and converts it to the source-of-truth `Size` (R3).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Size {
+pub struct SizeReportSize {
     /// Terminal row count in cells.
     pub rows: u16,
     /// Terminal column count in cells.
@@ -103,7 +103,7 @@ pub struct Size {
     pub cell_height: u32,
 }
 
-impl Size {
+impl SizeReportSize {
     /// Project the C-ABI size onto the rustty-vt source-of-truth `Size`.
     pub fn to_vt(self) -> terminal_size_report::Size {
         terminal_size_report::Size {
@@ -124,7 +124,7 @@ impl Size {
 /// must be a valid, writable pointer to `usize`.
 pub unsafe fn encode(
     style: SizeReportStyle,
-    size: Size,
+    size: SizeReportSize,
     out_: *mut u8,
     out_len: usize,
     out_written: *mut usize,
@@ -178,7 +178,7 @@ mod tests {
         let result = unsafe {
             encode(
                 SizeReportStyle::Mode2048,
-                Size {
+                SizeReportSize {
                     rows: 24,
                     columns: 80,
                     cell_width: 9,
@@ -203,7 +203,7 @@ mod tests {
         let result = unsafe {
             encode(
                 SizeReportStyle::Csi14T,
-                Size {
+                SizeReportSize {
                     rows: 24,
                     columns: 80,
                     cell_width: 9,
@@ -228,7 +228,7 @@ mod tests {
         let result = unsafe {
             encode(
                 SizeReportStyle::Csi18T,
-                Size {
+                SizeReportSize {
                     rows: 24,
                     columns: 80,
                     cell_width: 9,
@@ -256,7 +256,7 @@ mod tests {
         let result = unsafe {
             encode(
                 SizeReportStyle::Csi14T,
-                Size {
+                SizeReportSize {
                     rows: 24,
                     columns: 80,
                     cell_width: 9,
@@ -280,7 +280,7 @@ mod tests {
         let result = unsafe {
             encode(
                 SizeReportStyle::Csi18T,
-                Size {
+                SizeReportSize {
                     rows: 24,
                     columns: 80,
                     cell_width: 9,

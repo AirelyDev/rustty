@@ -1,0 +1,66 @@
+cmd: bash .port/tools/gates/check_perf_fence.sh --build --emit-metrics <scratch>/g8-metrics.json
+start: 2026-10-10T15:13:59Z;  8:13  up 1 day, 20:15, 1 user, load averages: 1.29 3.44 5.06
+=== G8b :: paired same-session perf fence (the pinned oracle only) ===
+preflight: measurement substrate present
+load check (before the builds): 1-minute load 1.29 <= IDLE_MAX 2.0 (after 0s)
++ cargo build -p rustty-bench --profile release-fast --bin rustty-bench
+    Finished `release-fast` profile [optimized] target(s) in 0.13s
++ cargo build -p rustty-synthetic --profile release-fast --bin rustty-gen
+    Finished `release-fast` profile [optimized] target(s) in 0.03s
++ cargo build -p rustty-vt-c --release
+    Finished `release` profile [optimized] target(s) in 0.06s
+NOTE: no entry binary at .perf-bins/rustty-bench-ws10-entry-RF -> Fence 1 (oracle) only.
+load check (before measuring): 1-minute load 1.26 <= IDLE_MAX 2.0 (after 0s)
+## terminal-parser/utf8
+   zig=606.62ms  rust=139.79ms  spread(rust)=1.014
+## terminal-stream/ascii
+   zig=47.37ms  rust=45.73ms  spread(rust)=1.083
+## codepoint-width.noop/utf8
+   zig=5.33ms  rust=3.18ms  spread(rust)=1.090
+## codepoint-width.table/utf8
+   zig=213.87ms  rust=189.41ms  spread(rust)=1.022
+## codepoint-width.simd/utf8
+   zig=463.11ms  rust=406.34ms  spread(rust)=1.014
+## codepoint-width.wcwidth/utf8
+   zig=714.08ms  rust=651.25ms  spread(rust)=1.014
+## grapheme-break.noop/utf8
+   zig=212.68ms  rust=189.41ms  spread(rust)=1.008
+## grapheme-break.table/utf8
+   zig=237.51ms  rust=196.83ms  spread(rust)=1.015
+## is-symbol.table/utf8
+   zig=218.35ms  rust=179.90ms  spread(rust)=1.021
+## is-symbol.uucode/utf8
+   zig=214.81ms  rust=188.17ms  spread(rust)=1.013
+## osc-parser/osc-parser
+   zig=178.51ms  rust=55.76ms  spread(rust)=1.033
+## screen-clone.noop/small
+   zig=7.49ms  rust=4.24ms  spread(rust)=1.157
+## screen-clone.clone/small
+   zig=46.56ms  rust=16.87ms  spread(rust)=1.113
+## screen-clone.render/small
+   zig=145.38ms  rust=128.67ms  spread(rust)=1.056
+load average (1 min): 1.26  (IDLE_MAX=2.0)
+ACCEPTED_TRADEOFFS: (none)
+INCOMPARABLE: (none)
+NOTE: all numbers are comparable to the pinned oracle 246f70287 (sha256 37c63176...) and to NO other oracle revision.
+
+=== FENCE 1: ORACLE (rustty vs pinned oracle, N=9) ===
+    PASS STRICT terminal-parser/utf8           zig=  606.62ms rust=  139.79ms (-77.0%)
+    PASS STRICT terminal-stream/ascii          zig=   47.37ms rust=   45.73ms (-3.5%)
+    PASS BANDED codepoint-width.noop/utf8      zig=    5.33ms rust=    3.18ms (-40.4%)
+    PASS STRICT codepoint-width.table/utf8     zig=  213.87ms rust=  189.41ms (-11.4%)
+    PASS STRICT codepoint-width.simd/utf8      zig=  463.11ms rust=  406.34ms (-12.3%)
+    PASS STRICT codepoint-width.wcwidth/utf8   zig=  714.08ms rust=  651.25ms (-8.8%)
+    PASS STRICT grapheme-break.noop/utf8       zig=  212.68ms rust=  189.41ms (-10.9%)
+    PASS STRICT grapheme-break.table/utf8      zig=  237.51ms rust=  196.83ms (-17.1%)
+    PASS STRICT is-symbol.table/utf8           zig=  218.35ms rust=  179.90ms (-17.6%)
+    PASS STRICT is-symbol.uucode/utf8          zig=  214.81ms rust=  188.17ms (-12.4%)
+    PASS STRICT osc-parser/osc-parser          zig=  178.51ms rust=   55.76ms (-68.8%)
+    PASS BANDED screen-clone.noop/small        zig=    7.49ms rust=    4.24ms (-43.4%)
+    PASS BANDED screen-clone.clone/small       zig=   46.56ms rust=   16.87ms (-63.8%)
+    PASS BANDED screen-clone.render/small      zig=  145.38ms rust=  128.67ms (-11.5%)
+  ORACLE FENCE: GREEN  (14/14 configs pass)
+metrics written: /private/tmp/claude-501/-Users-gael-projects-rustty/03fbd66e-c5b4-4893-abbb-31f3e0e85a7e/scratchpad/g8-metrics.json (14 benchmarks, 3 sizes)
+GREEN: perf fence held
+rc=0
+end: 2026-10-10T15:14:57Z;  8:14  up 1 day, 20:16, 1 user, load averages: 1.45 3.09 4.82

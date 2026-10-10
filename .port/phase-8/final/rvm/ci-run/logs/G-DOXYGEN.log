@@ -1,0 +1,7 @@
+=== G-DOXYGEN 1/3 :: the assets the Doxyfile names all exist ===
+    ok      every named asset resolves
+=== G-DOXYGEN 2/3 :: doxygen runs clean ===
+    ok      no unexpected warnings (6 baselined line(s) accepted)
+=== G-DOXYGEN 3/3 :: the output is real ===
+    ok      194 HTML page(s), index.html present
+G-DOXYGEN GREEN (docs generate warning-free, 194 page(s)).

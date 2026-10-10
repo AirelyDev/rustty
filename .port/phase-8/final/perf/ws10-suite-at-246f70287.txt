@@ -1,0 +1,57 @@
+cmd: python3 .port/tools/perf/ws10_suite.py --rust target/release-fast/rustty-bench --json .port/phase-8/final/perf/ws10-suite.json
+host: Gaels-MacBook-Pro.local arm64; head 11b4c74d0
+start: 2026-10-10T15:11:55Z;  8:11  up 1 day, 20:13, 1 user, load averages: 1.77 4.56 5.65
+## terminal-parser/utf8
+   zig=591.49ms  rust=137.67ms  spread(rust)=1.014
+## terminal-stream/ascii
+   zig=46.81ms  rust=47.40ms  spread(rust)=1.086
+## codepoint-width.noop/utf8
+   zig=5.16ms  rust=3.25ms  spread(rust)=1.077
+## codepoint-width.table/utf8
+   zig=208.97ms  rust=184.49ms  spread(rust)=1.011
+## codepoint-width.simd/utf8
+   zig=452.70ms  rust=398.02ms  spread(rust)=1.009
+## codepoint-width.wcwidth/utf8
+   zig=694.43ms  rust=635.96ms  spread(rust)=1.005
+## grapheme-break.noop/utf8
+   zig=207.95ms  rust=187.04ms  spread(rust)=1.010
+## grapheme-break.table/utf8
+   zig=231.63ms  rust=194.24ms  spread(rust)=1.016
+## is-symbol.table/utf8
+   zig=213.88ms  rust=178.34ms  spread(rust)=1.010
+## is-symbol.uucode/utf8
+   zig=212.05ms  rust=185.20ms  spread(rust)=1.011
+## osc-parser/osc-parser
+   zig=179.21ms  rust=54.56ms  spread(rust)=1.020
+## screen-clone.noop/small
+   zig=7.51ms  rust=4.08ms  spread(rust)=1.036
+## screen-clone.clone/small
+   zig=45.77ms  rust=16.64ms  spread(rust)=1.144
+## screen-clone.render/small
+   zig=142.83ms  rust=126.61ms  spread(rust)=1.058
+## RE-RUN(2N) terminal-stream/ascii
+load average (1 min): 1.77  (IDLE_MAX=2.0)
+ACCEPTED_TRADEOFFS: (none)
+INCOMPARABLE: (none)
+NOTE: all numbers are comparable to the pinned oracle 246f70287 (sha256 37c63176...) and to NO other oracle revision.
+
+=== FENCE 1: ORACLE (rustty vs pinned oracle, N=9) ===
+  two-strike: re-running 1 config(s) at N=18
+    PASS STRICT terminal-parser/utf8           zig=  591.49ms rust=  137.67ms (-76.7%)
+    PASS STRICT terminal-stream/ascii          zig=   46.64ms rust=   45.64ms (-2.2%)
+    PASS BANDED codepoint-width.noop/utf8      zig=    5.16ms rust=    3.25ms (-36.9%)
+    PASS STRICT codepoint-width.table/utf8     zig=  208.97ms rust=  184.49ms (-11.7%)
+    PASS STRICT codepoint-width.simd/utf8      zig=  452.70ms rust=  398.02ms (-12.1%)
+    PASS STRICT codepoint-width.wcwidth/utf8   zig=  694.43ms rust=  635.96ms (-8.4%)
+    PASS STRICT grapheme-break.noop/utf8       zig=  207.95ms rust=  187.04ms (-10.1%)
+    PASS STRICT grapheme-break.table/utf8      zig=  231.63ms rust=  194.24ms (-16.1%)
+    PASS STRICT is-symbol.table/utf8           zig=  213.88ms rust=  178.34ms (-16.6%)
+    PASS STRICT is-symbol.uucode/utf8          zig=  212.05ms rust=  185.20ms (-12.7%)
+    PASS STRICT osc-parser/osc-parser          zig=  179.21ms rust=   54.56ms (-69.6%)
+    PASS BANDED screen-clone.noop/small        zig=    7.51ms rust=    4.08ms (-45.7%)
+    PASS BANDED screen-clone.clone/small       zig=   45.77ms rust=   16.64ms (-63.6%)
+    PASS BANDED screen-clone.render/small      zig=  142.83ms rust=  126.61ms (-11.4%)
+  ORACLE FENCE: GREEN  (14/14 configs pass)
+json written: .port/phase-8/final/perf/ws10-suite.json
+rc=0
+end: 2026-10-10T15:12:54Z;  8:12  up 1 day, 20:14, 1 user, load averages: 1.44 3.95 5.35

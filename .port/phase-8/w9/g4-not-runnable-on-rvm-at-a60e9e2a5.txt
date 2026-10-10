@@ -1,0 +1,15 @@
+# P8-W9 T2 lane g4-not-runnable-on-rvm at a60e9e2a5 (head 1d22ba80d)
+host: rvm (Fedora aarch64), clone /home/gael/projects/rustty-p8w9t2 (git archive 1d22ba80d plus .port and docs/superpowers copied from the worktree, since .gitattributes export-ignores them)
+### CMD: bash -c bash .port/phase-0/harness/build_ref_driver.sh && bash .port/phase-0/harness/build_port_driver.sh && bash .port/tools/gates/run_differential.sh
+start (UTC): 2026-10-08T22:47:39Z
+end (UTC):   2026-10-08T22:47:39Z
+wall: 0 s
+rc: 11
+## verdict lines
+ERROR: no Mach-O libghostty-vt.a found under /Users/gael/projects/ghostty/zig-out/lib
+  (probed the top-level .a and the xcframework macos-arm64_x86_64 .a;
+## tail
+### CMD: bash -c bash .port/phase-0/harness/build_ref_driver.sh && bash .port/phase-0/harness/build_port_driver.sh && bash .port/tools/gates/run_differential.sh
+ERROR: no Mach-O libghostty-vt.a found under /Users/gael/projects/ghostty/zig-out/lib
+  (probed the top-level .a and the xcframework macos-arm64_x86_64 .a;
+   a present-but-GNU-format archive is NOT linkable by ld64)

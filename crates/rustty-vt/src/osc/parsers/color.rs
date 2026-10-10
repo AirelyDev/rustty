@@ -89,7 +89,7 @@ pub enum Operation {
     osc_119,
 }
 
-/// Parse OSCs 4, 5, 10-19, 104, 110-119
+/// Parse OSCs 4, 5, 10-19, 104, 105, 110-119
 pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<Command<'a>> {
     // const alloc = parser.alloc orelse {
     //     parser.state = .invalid;
@@ -120,6 +120,7 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<Co
         crate::osc::State::S18 => Operation::osc_18,
         crate::osc::State::S19 => Operation::osc_19,
         crate::osc::State::S104 => Operation::osc_104,
+        crate::osc::State::S105 => Operation::osc_105,
         crate::osc::State::S110 => Operation::osc_110,
         crate::osc::State::S111 => Operation::osc_111,
         crate::osc::State::S112 => Operation::osc_112,

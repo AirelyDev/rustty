@@ -1003,6 +1003,17 @@ impl Terminal {
     fn print_inner(&mut self, c: u32) -> Result<(), OutOfMemory> {
         let active: *mut Screen = self.screens.active;
 
+        // The charset this character is printed with. A single shift applies to
+        // exactly one character, so it is used up here, whether the character
+        // takes a cell or attaches to the previous one: xterm clears it for a
+        // combining character and so do we.
+        let charset: charsets::Charset = {
+            let state = unsafe { &mut (*active).charset };
+            let key = state.single_shift.unwrap_or(state.gl);
+            state.single_shift = None;
+            state.charsets.get(key)
+        };
+
         // Our right margin depends where our cursor is now.
         let right_limit = if unsafe { (*active).cursor.x } > self.scrolling_region.right {
             self.cols
@@ -1067,7 +1078,7 @@ impl Terminal {
             // Single cell is very easy: just write in the cell
             1 => {
                 self.active_mut().cursor_mark_dirty();
-                self.print_cell(c, pagepkg::Wide::Narrow);
+                self.print_cell(c, pagepkg::Wide::Narrow, charset);
             }
 
             // Wide character requires a spacer. We print this by
@@ -1075,7 +1086,7 @@ impl Terminal {
             // wide char. The second is guaranteed to be a spacer if
             // we're not at the end of the line.
             2 => {
-                if self.print_inner_wide(c, right_limit)? {
+                if self.print_inner_wide(c, right_limit, charset)? {
                     return Ok(());
                 }
             }
@@ -1274,7 +1285,7 @@ impl Terminal {
                                 unsafe { (*prev_cell).set_content_codepoint(0) };
 
                                 self.print_wrap()?;
-                                self.print_cell(prev_cp, pagepkg::Wide::Wide);
+                                self.write_cell(prev_cp, pagepkg::Wide::Wide);
 
                                 let active: *mut Screen = self.screens.active;
                                 let new_pin = unsafe { *(*active).cursor.page_pin };
@@ -1357,7 +1368,7 @@ impl Terminal {
                                 // we'll be appending graphemes to
                                 prev_cell = unsafe { (*self.screens.active).cursor.page_cell };
                             } else {
-                                self.print_cell(
+                                self.write_cell(
                                     0,
                                     if row_wrap {
                                         pagepkg::Wide::SpacerHead
@@ -1366,7 +1377,7 @@ impl Terminal {
                                     },
                                 );
                                 self.print_wrap()?;
-                                self.print_cell(prev_cp, pagepkg::Wide::Wide);
+                                self.write_cell(prev_cp, pagepkg::Wide::Wide);
 
                                 // Point prev.cell to our new previous cell that
                                 // we'll be appending graphemes to
@@ -1391,7 +1402,7 @@ impl Terminal {
                             unsafe { (*(*self.screens.active).cursor.page_pin).node };
                         let spacer_serial = unsafe { (*spacer_node).serial };
 
-                        self.print_cell(0, pagepkg::Wide::SpacerTail);
+                        self.write_cell(0, pagepkg::Wide::SpacerTail);
 
                         let active: *mut Screen = self.screens.active;
                         if !std::ptr::eq(unsafe { (*(*active).cursor.page_pin).node }, spacer_node)
@@ -1541,6 +1552,7 @@ impl Terminal {
         &mut self,
         c: u32,
         right_limit: size::CellCountInt,
+        charset: charsets::Charset,
     ) -> Result<bool, OutOfMemory> {
         let active: *mut Screen = self.screens.active;
 
@@ -1565,60 +1577,70 @@ impl Terminal {
                     // a page resize during printCell then it'll fail
                     // integrity checks.
                     unsafe { (*(*active).cursor.page_row).set_wrap(true) };
-                    self.print_cell(0, pagepkg::Wide::SpacerHead);
+                    self.write_cell(0, pagepkg::Wide::SpacerHead);
                 } else {
-                    self.print_cell(0, pagepkg::Wide::Narrow);
+                    self.write_cell(0, pagepkg::Wide::Narrow);
                 }
                 self.print_wrap()?;
             }
 
             self.active_mut().cursor_mark_dirty();
-            self.print_cell(c, pagepkg::Wide::Wide);
+            self.print_cell(c, pagepkg::Wide::Wide, charset);
             self.active_mut().cursor_right(1);
-            self.print_cell(0, pagepkg::Wide::SpacerTail);
+            self.write_cell(0, pagepkg::Wide::SpacerTail);
         } else {
             // This is pretty broken, terminals should never be only 1-wide.
             // We should prevent this downstream.
             self.active_mut().cursor_mark_dirty();
-            self.print_cell(0, pagepkg::Wide::Narrow);
+            self.write_cell(0, pagepkg::Wide::Narrow);
         }
 
         Ok(false)
     }
 
-    fn print_cell(&mut self, unmapped_c: u32, wide: pagepkg::Wide) {
+    /// Prints the character unmapped_c into the cell under the cursor, mapped
+    /// through set, the charset print chose for it. Spacers and cells that
+    /// already hold a mapped character are written with write_cell instead.
+    #[inline(always)]
+    fn print_cell(&mut self, unmapped_c: u32, wide: pagepkg::Wide, set: charsets::Charset) {
+        let c: u32 = 'c: {
+            // TODO: non-utf8 handling, gr
+
+            // UTF-8 or ASCII is used as-is
+            if set == charsets::Charset::Utf8 || set == charsets::Charset::Ascii {
+                break 'c unmapped_c;
+            }
+
+            // The tables only cover 0x00-0xFF. Like xterm, which never remaps a
+            // character above 255 in UTF-8 mode, we print anything above as is,
+            // which also keeps it at the width it was measured with.
+            if unmapped_c > u8::MAX as u32 {
+                break 'c unmapped_c;
+            }
+
+            // Get our lookup table and map it
+            let table = charsets::table(set);
+            table[unmapped_c as usize] as u32
+        };
+
+        self.write_cell_inline(c, wide);
+    }
+
+    /// Writes c into the cell under the cursor as it is, without a charset.
+    fn write_cell(&mut self, c: u32, wide: pagepkg::Wide) {
+        self.write_cell_inline(c, wide);
+    }
+
+    // PORT NOTE: Rust has no call-site `@call(.always_inline, ...)`. The body
+    // lives here, always inlined into `print_cell` (the reference's only
+    // always-inline caller); the other `write_cell` callers use the plain fn.
+    #[inline(always)]
+    fn write_cell_inline(&mut self, c: u32, wide: pagepkg::Wide) {
         // defer self.screens.active.assertIntegrity();
 
         // TODO: spacers should use a bgcolor only cell
 
         let active: *mut Screen = self.screens.active;
-
-        let c: u32 = {
-            // TODO: non-utf8 handling, gr
-
-            // If we're single shifting, then we use the key exactly once.
-            let key = if let Some(key_once) = unsafe { (*active).charset.single_shift } {
-                unsafe { (*active).charset.single_shift = None };
-                key_once
-            } else {
-                unsafe { (*active).charset.gl }
-            };
-
-            let set = unsafe { (*active).charset.charsets.get(key) };
-
-            // UTF-8 or ASCII is used as-is
-            if set == charsets::Charset::Utf8 || set == charsets::Charset::Ascii {
-                unmapped_c
-            } else if unmapped_c > u8::MAX as u32 {
-                // If we're outside of ASCII range this is an invalid value in
-                // this table so we just return space.
-                ' ' as u32
-            } else {
-                // Get our lookup table and map it
-                let table = charsets::table(set);
-                table[unmapped_c as usize] as u32
-            }
-        };
 
         let cell: *mut pagepkg::Cell = unsafe { (*active).cursor.page_cell };
 

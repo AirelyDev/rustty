@@ -1,0 +1,57 @@
+=== G2 :: assertion-for-assertion ===
+crate           status        rust     ref  state
+apprt           in-progress     733      79  progress
+apprt-api       done            47       0  done
+args            ported         223     174  done
+bench           done            71       4  done
+bin             c6             164      11  progress
+build-config    done            14       0  done
+cfg-fmt         done            16      12  done
+cli             done           476     157  done
+config          done           990     549  done
+core            done           295      13  done
+crash           done            76      17  done
+datastruct      done           412     311  done
+extra           done           110       1  done
+font            done          1043     619  done
+global          done           108       0  done
+input           done           423     353  done
+inspector       complete        72       0  done
+lib             done           147      27  done
+os              done           419     177  done
+render-types    done            23      18  done
+renderer        in progress    1220      89  progress
+simd            done           166      98  done
+synthetic       done            43      12  done
+terminfo        done            17       7  done
+termio          ported         482     137  done
+unicode         done           110      18  done
+util            done             6       5  done
+vt              done         14549    7544  done
+vt-c            done          4103    1529  done
+    CONTRACT-DELETED: config::fromHex — 6 assertion(s) off the crate bar; removed upstream in 2970e9a2a
+    CONTRACT-DELETED: datastruct::SegmentedPool — 10 assertion(s) off the crate bar; removed upstream in e0ef934f7
+    CONTRACT-DELETED: datastruct::get — 5 assertion(s) off the crate bar; removed upstream in 02f34835e
+    CONTRACT-DELETED: datastruct::getOrPut — 13 assertion(s) off the crate bar; removed upstream in 02f34835e
+    CONTRACT-DELETED: datastruct::resize shrink and remove — 7 assertion(s) off the crate bar; removed upstream in 02f34835e
+    CONTRACT-DELETED: datastruct::resize shrink without removal — 4 assertion(s) off the crate bar; removed upstream in 02f34835e
+    CONTRACT-DELETED: lib::cutPrefix — 2 assertion(s) off the crate bar; removed upstream in 1d6bc6829
+    CONTRACT-DELETED: os::appendEnv empty — 1 assertion(s) off the crate bar; removed upstream in e8525c0fd
+    CONTRACT-DELETED: os::appendEnv existing — 2 assertion(s) off the crate bar; removed upstream in e8525c0fd
+    CONTRACT-DELETED: os::args — 1 assertion(s) off the crate bar; removed upstream in e8525c0fd
+    CONTRACT-DELETED: os::prependEnv empty — 1 assertion(s) off the crate bar; removed upstream in e8525c0fd
+    CONTRACT-DELETED: os::prependEnv existing — 2 assertion(s) off the crate bar; removed upstream in e8525c0fd
+    CONTRACT-DELETED: vt::PageList compact insufficient savings returns null — 2 assertion(s) off the crate bar; removed upstream in 16e4b5e98
+    CONTRACT-DELETED: vt::PageList compact std_size page returns null — 3 assertion(s) off the crate bar; removed upstream in 16e4b5e98
+    CONTRACT-DELETED: vt::Terminal: scrollUp with max_scrollback zero — 2 assertion(s) off the crate bar; removed upstream in 86f81fb5b
+    CONTRACT-DELETED: vt::Terminal: scrollUp with max_scrollback zero and left/right margin — 1 assertion(s) off the crate bar; removed upstream in 86f81fb5b
+    CONTRACT-DELETED: vt::Terminal: scrollUp with max_scrollback zero and top margin — 1 assertion(s) off the crate bar; removed upstream in 86f81fb5b
+    CONTRACT-DELETED: vt::parse mouse_any_flag — 4 assertion(s) off the crate bar; removed upstream in 1ca2858d0
+    CONTRACT-DELETED: vt::selectionString map allocation failure cleanup — 1 assertion(s) off the crate bar; removed upstream in f1948d505
+    CONTRACT-DELETED: vt-c::struct sizes are non-zero — 1 assertion(s) off the crate bar; removed upstream in 9673a22b0
+    DRIFT-OK: core::keyToMouseShape — upstream shrank 13->12 in 0fb6d2940; rust=12 >= live bar 12
+    DRIFT-OK: os::desktop environment — upstream shrank 10->8 in f8e13f31e; rust=9 >= live bar 8
+
+PER-TEST [workspace]: 3022/3065 named reference tests bound to a ported fn and compared (L1-L5)
+PROGRESS [workspace]: assertions rust=26359 ref=11961 (global contract floor = 11975)
+GREEN: progress rust=26359/ref=11961; no claimed-done crate weakened

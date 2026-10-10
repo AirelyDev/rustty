@@ -184,6 +184,15 @@ impl<H: Handler> Stream<H> {
 
             // .mouse_shape => |v| { ... }
             osc::Command::MouseShape { value } => {
+                // if (v.value.len == 0) {
+                //     self.handler.vt(.mouse_shape_reset, {});
+                //     return;
+                // }
+                if value.is_empty() {
+                    handler.mouse_shape_reset();
+                    return;
+                }
+
                 // const shape = MouseShape.fromString(v.value) orelse { ... };
                 let shape = match MouseShape::from_string(&value) {
                     Some(shape) => shape,
@@ -266,6 +275,22 @@ impl<H: Handler> Stream<H> {
             // },
             osc::Command::KittyDndProtocol(v) => {
                 handler.kitty_dnd(v);
+            }
+
+            // .program_status => |v| {
+            //     self.handler.vt(.program_status, v);
+            // },
+            osc::Command::ProgramStatus(v) => {
+                handler.program_status(v);
+            }
+
+            // .unknown => |v| {
+            //     @branchHint(.unlikely);
+            //     self.handler.vt(.osc_unknown, v);
+            // },
+            osc::Command::Unknown(v) => {
+                // @branchHint(.unlikely);
+                handler.osc_unknown(v);
             }
 
             osc::Command::ConemuSleep { .. }

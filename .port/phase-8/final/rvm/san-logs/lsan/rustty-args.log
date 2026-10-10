@@ -1,0 +1,101 @@
+   Compiling rustty-args v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-args)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.22s
+     Running unittests src/lib.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/rustty_args-6ad2b1c3cbcd5a3d)
+
+running 79 tests
+test args::tests::compatibility_renamed_warns_when_the_target_field_fails_to_parse ... ok
+test args::tests::line_iterator ... ok
+test args::tests::args_iterator ... ok
+test arg_iterator_general::tests::general_parsing ... ok
+test args::tests::line_iterator_end_in_newline ... ok
+test args::tests::line_iterator_refills_after_ignored_line_at_buffer_boundary ... ok
+test args::tests::line_iterator_is_silent_on_lines_that_fit ... ok
+test args::tests::line_iterator_with_buffered_reader ... ok
+test args::tests::line_iterator_spaces_around ... ok
+test args::tests::line_iterator_no_value ... ok
+test args::tests::parse_auto_struct_propagates_comma_splitter_errors ... ok
+test args::tests::parse_compatibility_handler ... ok
+test args::tests::parse_compatibility_renamed ... ok
+test args::tests::compat_handler_success_logs_the_deprecated_field_notice ... ok
+test args::tests::line_iterator_warns_and_stops_on_a_line_longer_than_the_buffer ... ok
+test args::tests::line_iterator_with_crlf_line_endings ... ok
+test args::tests::parse_empty_value_resets_to_default ... ok
+test args::tests::parse_field_float_accepts_the_reference_grammar ... ok
+test args::tests::parse_into_field_floats ... ok
+test args::tests::parse_into_field_ignore_underscore_prefixed_fields ... ok
+test args::tests::line_iterator_with_buffered_and_primed_reader ... ok
+test args::tests::parse_diagnostic_location ... ok
+test args::tests::parse_field_int_accepts_the_reference_underscore_separators ... ok
+test args::tests::parse_into_field_bool ... ok
+test args::tests::parse_into_field_optional_field ... ok
+test args::tests::parse_into_field_optional_struct_with_parse_func ... ok
+test args::tests::parse_diagnostic_tracking ... ok
+test args::tests::parse_into_field_enums ... ok
+test args::tests::parse_into_field_packed_struct_whitespace ... ok
+test args::tests::parse_into_field_sentinel_string ... ok
+test args::tests::parse_into_field_struct_with_parse_func ... ok
+test args::tests::parse_into_field_packed_struct ... ok
+test args::tests::parse_into_field_packed_struct_negation ... ok
+test args::tests::parse_into_field_struct_with_init_func ... ok
+test args::tests::parse_into_field_packed_struct_true_false ... ok
+test args::tests::parse_into_field_tagged_union ... ok
+test args::tests::parse_into_field_tagged_union_missing_tag ... ok
+test args::tests::parse_into_field_struct_with_basic_fields ... ok
+test args::tests::parse_into_field_tagged_union_unknown_filed ... ok
+test args::tests::parse_simple ... ok
+test args::tests::parse_into_field_string ... ok
+test args::tests::parse_into_field_tagged_union_invalid_field_value ... ok
+test args::tests::parse_positional_arguments_are_invalid ... ok
+test args::tests::parse_into_field_unsigned_numbers ... ok
+test comma_splitter::tests::splitter_1 ... ok
+test args::tests::zig_string_escape_port_helper ... ok
+test args::tests::parse_quoted_value ... ok
+test comma_splitter::tests::splitter_12 ... ok
+test comma_splitter::tests::splitter_15 ... ok
+test comma_splitter::tests::splitter_10 ... ok
+test comma_splitter::tests::splitter_11 ... ok
+test comma_splitter::tests::splitter_13 ... ok
+test comma_splitter::tests::splitter_16 ... ok
+test comma_splitter::tests::splitter_14 ... ok
+test comma_splitter::tests::splitter_2 ... ok
+test comma_splitter::tests::splitter_21 ... ok
+test comma_splitter::tests::splitter_17 ... ok
+test comma_splitter::tests::splitter_18 ... ok
+test comma_splitter::tests::splitter_19 ... ok
+test comma_splitter::tests::splitter_24 ... ok
+test comma_splitter::tests::splitter_20 ... ok
+test comma_splitter::tests::splitter_25 ... ok
+test comma_splitter::tests::splitter_23 ... ok
+test comma_splitter::tests::splitter_22 ... ok
+test comma_splitter::tests::splitter_4 ... ok
+test comma_splitter::tests::splitter_3 ... ok
+test comma_splitter::tests::splitter_backslash_literal_outside_quotes_on_windows ... ignored, Windows-only: escape_outside_quotes is false there (R14)
+test comma_splitter::tests::splitter_backslash_still_escapes_inside_quotes_on_windows ... ignored, Windows-only: escape_outside_quotes is false there (R14)
+test comma_splitter::tests::splitter_windows_paths ... ignored, Windows-only: escape_outside_quotes is false there (R14)
+test comma_splitter::tests::splitter_9 ... ok
+test diagnostics::tests::precompute_is_enabled_under_test ... ok
+test comma_splitter::tests::splitter_5 ... ok
+test comma_splitter::tests::splitter_8 ... ok
+test comma_splitter::tests::splitter_6 ... ok
+test comma_splitter::tests::splitter_7 ... ok
+test log_capture::tests::records_emitted_outside_a_capture_are_discarded ... ok
+test diagnostics::tests::cloned_precompute_keeps_the_sentinel ... ok
+test diagnostics::tests::precomputed_message_is_nul_terminated_but_excludes_the_sentinel ... ok
+test log_capture::tests::capture_admits_only_the_owning_thread ... ok
+
+test result: ok. 76 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/os_args_seam.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/os_args_seam-64ce4d954e02cb33)
+
+running 2 tests
+test arg_bytes_preserves_non_utf8 ... ok
+test args ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rustty_args
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -69,7 +69,7 @@ if [ "${1:-}" = "--self-test-masking" ]; then
   out=$(PATH="$shim:$PATH" sh "$0" 2>&1) || grc=$?
   rm -rf "$shim"
   rc=0
-  for arm in "(a3b)" "(a4)" "(b)" "(d)" "(c)" "(e)"; do
+  for arm in "(a3b)" "(a4)" "(b)" "(d)" "(c)" "(e)" "(f)"; do
     if printf '%s\n' "$out" | grep -qF "== $arm "; then
       echo "  ok   arm $arm still ran after (a3) failed"
     else
@@ -105,9 +105,13 @@ fi
 # set on both: the library's defined, exported symbols, filtered to `rustty_*`
 # in arm (b). Any other host is unverified, so arm (b), and arm (d) with it,
 # is BLOCKED there (exit 3), never a pass.
+# The target dir is cargo's own (CARGO_TARGET_DIR honoured): _target_dir.sh.
+# shellcheck source=.port/tools/gates/_target_dir.sh
+. "$(dirname "$0")/_target_dir.sh"
+TDIR="$(rustty_target_dir "$(cd "$(dirname "$0")/../../.." && pwd)")"
 case "$(uname -s)" in
-  Darwin) lib=target/release/librustty_vt_c.dylib ;;
-  Linux|FreeBSD) lib=target/release/librustty_vt_c.so ;;
+  Darwin) lib="$TDIR/release/librustty_vt_c.dylib" ;;
+  Linux|FreeBSD) lib="$TDIR/release/librustty_vt_c.so" ;;
   *) lib="" ;;
 esac
 # native_exports: the native library's defined, exported symbol names, one per
@@ -323,6 +327,25 @@ echo "  OK (pointee is a $a4_gen_size-byte struct, == sizeof(RusttyStyle))"
 )
 record "(a4)" $?
 
+# --- (a5) rustty.h's rustty_size_report_encode takes the REAL size_report Size -
+# P8-W5 T5 (NEW-FINDINGS N529): `rustty_size_report_encode(int, Size, ...)` was
+# declared over `mouse_encode::Size` (a different layout) because cbindgen keys
+# types by bare name. Arm (f) bars the name collision; this arm pins the ABI
+# end to end: a C program built from the generated `include/rustty.h` passes a
+# `SizeReportSize` by value to the native library and checks the bytes.
+( set -e
+echo "== (a5) rustty.h: rustty_size_report_encode(SizeReportSize) encodes the reference vector =="
+if [ -z "$lib" ]; then
+  echo "  BLOCKED: no native library for $(uname -s). This is NOT a pass."
+  exit 3
+fi
+"$CC" -std=c11 -Wall -Wextra -Werror $SYSROOT -Iinclude test/rustty-h/size_report_abi.c \
+  "$lib" -Wl,-rpath,"$PWD/$(dirname "$lib")" -o "$T/a5_size_report"
+"$T/a5_size_report"
+echo "  OK (rustty.h's SizeReportSize round-trips through the library)"
+)
+record "(a5)" $?
+
 # Arm (d) reads the export list arm (b) writes: drop any list an earlier run
 # left in $T, so (d) never reads a stale one when (b) stops before writing it.
 rm -f "$T/vt_exp.txt" "$T/vt_native_exp.txt"
@@ -344,7 +367,7 @@ if [ ! -s "$T/vt_native_exp.txt" ]; then
   exit 1
 fi
 grep -rhoE 'rustty_[a-z0-9_]+' include/rustty/vt.h include/rustty/vt | sort -u > "$T/vt_decl.txt"
-wasm=target/wasm32-unknown-unknown/release/rustty_vt_c.wasm
+wasm="$TDIR/wasm32-unknown-unknown/release/rustty_vt_c.wasm"
 { cat "$T/vt_native_exp.txt"; \
   node -e 'const{readFileSync}=require("fs");WebAssembly.compile(readFileSync(process.argv[1])).then(m=>WebAssembly.Module.exports(m).forEach(e=>console.log(e.name)))' "$wasm"; \
 } | grep '^rustty_' | sort -u > "$T/vt_exp.txt"
@@ -394,7 +417,10 @@ if [ -n "$missing" ]; then echo "  MISMATCH — declared+cbindgen but NOT export
 # P6-W3 (+8): `rustty_search_{new,free,tick,feed,run,set,get,get_multi}`
 # (oracle `f9202919f`/`76d9fcefe`) — measured 203 on 2026-09-01 with the
 # search C API landed; floor re-pinned to the measurement (arm (d) reads 203).
-VT_BOTH_FLOOR=203
+# P8-W9 T1 (+1): the Phase 8 libvt C API (P8-W2 T2, P8-W3 T3, P8-W5 T3) —
+# measured 204 at the Phase 8 finale (2026-10-08); floor re-pinned to the
+# measurement (the P8-W5 T3 review's deferred minor).
+VT_BOTH_FLOOR=204
 both_n=$(wc -l < "$T/vt_both.txt" | tr -d ' ')
 if [ "$both_n" -lt "$VT_BOTH_FLOOR" ]; then
   echo "  VACUOUS SHRINK — the (vt.h ∩ cbindgen) intersection is $both_n, below the"
@@ -563,6 +589,19 @@ node .port/tools/check-vt-enum-discriminants.mjs --self-test
 node .port/tools/check-vt-enum-discriminants.mjs
 )
 record "(e)" $?
+
+# P8-W5 T3 fix 1 (NEW-FINDINGS N529). cbindgen keys types by bare name, so two
+# rustty-vt-c types with one name make include/rustty.h declare one layout for
+# both; (a3) regenerates that wrong header faithfully and (c) reads only the
+# curated headers. This arm fails on any such collision not in the checker's
+# baseline (and on a stale baseline row). Negative controls: its --self-test,
+# and reintroducing the OSC `UnknownC` beside the SGR one turns it RED.
+( set -e
+echo "== (f) no two rustty-vt-c types share a name cbindgen emits =="
+python3 .port/tools/check-vt-cbindgen-name-collisions.py --self-test
+python3 .port/tools/check-vt-cbindgen-name-collisions.py
+)
+record "(f)" $?
 
 if [ -n "$FAILED_ARMS" ]; then
   echo "VT-HEADERS: RED (failed arm(s):$FAILED_ARMS${BLOCKED_ARMS:+; blocked arm(s):$BLOCKED_ARMS})"

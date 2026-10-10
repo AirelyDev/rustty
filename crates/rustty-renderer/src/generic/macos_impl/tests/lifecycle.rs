@@ -204,7 +204,7 @@ mod windowed_lifecycle {
     #[test]
     fn windowed_renderer_init_then_deinit_round_trips() {
         // Probe: skip cleanly on hosts with no Metal device (headless CI).
-        if let Err(e) = Metal::init_offscreen(AlphaBlending::Native, 1, 1) {
+        if let Err(e) = crate::metal::test_support::offscreen_metal(AlphaBlending::Native, 1, 1) {
             // F5 strict-mode pivot (metal::test_support).
             crate::metal::test_support::require_metal_or_skip(
                 "windowed_renderer_init_then_deinit_round_trips",
@@ -231,13 +231,19 @@ mod windowed_lifecycle {
         // (`2f0b65346`); `threadEnter` stays a faithful no-op for Metal.
         let (font_grid, size) = test_font_grid_and_size(10, 3);
         let opts = Options {
+            device: crate::metal::test_support::device()
+                .expect("the test device (Metal probed above)"),
             config: derived_config_for_test(),
             font_grid,
             size,
             // Offscreen: no surface, hence no mailbox (push returns 0).
             surface_mailbox: SurfaceMailbox::DETACHED,
         };
-        let mut r = Renderer::init(Global, opts).expect("Renderer::init (Metal probed above)");
+        // SAFETY: `opts.device` is the process's test device (created once, never
+        // freed) and `opts.font_grid` the boxed test grid, freed only after the
+        // renderer's `deinit`, so both outlive `r`.
+        let mut r =
+            unsafe { Renderer::init(Global, opts) }.expect("Renderer::init (Metal probed above)");
 
         r.thread_enter(view_ptr).expect("thread_enter (no-op)");
 
@@ -367,4 +373,32 @@ mod offscreen_resize {
 
         deinit_test_renderer(&mut r);
     }
+}
+
+/// `140feb86a`: `threadExit` marks the display unrealized before
+/// `releaseGpuResources`. The macOS apprt never unrealizes, so without it each
+/// closed surface leaked its render pipelines and shader library; it also
+/// stops any later draw.
+#[test]
+fn thread_exit_unrealizes_the_display() {
+    let mut r = match golden_renderer(10, 3) {
+        Some(r) => r,
+        None => return, // Metal-skip
+    };
+    r.draw_frame(false).expect("first draw");
+    assert!(r.display_realized);
+    assert!(r.swap_chain.is_some());
+    assert!(!r.shaders.defunct);
+
+    r.thread_exit();
+    assert!(!r.display_realized, "threadExit unrealizes the display");
+    assert!(r.swap_chain.is_none());
+    assert!(r.shaders.defunct, "the shaders are released on thread exit");
+
+    // A later draw returns early and rebuilds nothing.
+    r.draw_frame(true).expect("draw after thread exit");
+    assert!(r.swap_chain.is_none());
+    assert!(r.shaders.defunct);
+
+    deinit_test_renderer(&mut r);
 }

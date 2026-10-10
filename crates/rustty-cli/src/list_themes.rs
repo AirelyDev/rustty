@@ -980,8 +980,12 @@ fn update<'a>(
                     ) {
                         down(st, 1);
                     }
-                    // if (key.matchesAny(&.{ page_down, kp_down }, .{})) self.down(20);
-                    if key.matches_any(&[key::page_down, key::kp_down], none) {
+                    // if (key.matchesAny(&.{ page_down, kp_page_down }, .{})) self.down(20);
+                    if key.matches_any(&[key::page_down, key::kp_page_down], none) {
+                        down(st, 20);
+                    }
+                    // if (key.matches('d', .{ .ctrl = true })) self.down(20);
+                    if key.matches('d' as u32, ctrl) {
                         down(st, 20);
                     }
                     // if (key.matchesAny(&.{ 'k', '-', up, kp_up, kp_subtract }, .{})) self.up(1);
@@ -999,6 +1003,10 @@ fn update<'a>(
                     }
                     // if (key.matchesAny(&.{ page_up, kp_page_up }, .{})) self.up(20);
                     if key.matches_any(&[key::page_up, key::kp_page_up], none) {
+                        up(st, 20);
+                    }
+                    // if (key.matches('u', .{ .ctrl = true })) self.up(20);
+                    if key.matches('u' as u32, ctrl) {
                         up(st, 20);
                     }
                     // if (key.matchesAny(&.{ 'h', 'x' }, .{})) self.hex = true;
@@ -1390,10 +1398,10 @@ fn draw<'a>(vx: &mut Vaxis<'a>, st: &mut DrawState<'a>) {
                 (b"f", b"Cycle through theme filters."),
                 ("k, ↑".as_bytes(), b"Move up 1 theme."),
                 (b"ScrollUp", b"Move up 1 theme."),
-                (b"PgUp", b"Move up 20 themes."),
+                (b"PgUp, ^U", b"Move up 20 themes."),
                 ("j, ↓".as_bytes(), b"Move down 1 theme."),
                 (b"ScrollDown", b"Move down 1 theme."),
-                (b"PgDown", b"Move down 20 themes."),
+                (b"PgDown, ^D", b"Move down 20 themes."),
                 (b"h, x", b"Show palette numbers in hexadecimal."),
                 (b"d", b"Show palette numbers in decimal."),
                 (b"c", b"Copy theme name to the clipboard."),
@@ -2979,6 +2987,137 @@ mod picker_tests {
             log.contains("r13d: every key handled on an empty filter"),
             "the child ran the body:\n{log}"
         );
+    }
+
+    /// 54ba7b1dd + 7f1219fd7: keypad Page Down pages by 20 (the reference listed `kp_down`,
+    /// so keypad Down moved 21), and Ctrl-D / Ctrl-U page down / up by 20. `update` needs a
+    /// `Tty`, so this runs in a re-executed copy of the test binary on a fresh pty, like
+    /// the R13d test above.
+    #[cfg(unix)]
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-cli, parity tail C-1): calls the foreign function `openpty`, which Miri cannot execute; runs natively in cargo test --workspace (see MIRI_EXCEPTIONS.md)"
+    )]
+    fn keypad_page_down_and_ctrl_d_u_page_by_twenty() {
+        const CHILD: &str = "RUSTTY_W10T3_LIST_THEMES_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            paging_keys_child();
+            return;
+        }
+
+        let (mut master, mut slave) = (0, 0);
+        let rc = unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(0, rc, "openpty");
+
+        use std::os::fd::FromRawFd as _;
+        use std::os::unix::process::CommandExt as _;
+        let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+        cmd.args([
+            "--exact",
+            "list_themes::picker_tests::keypad_page_down_and_ctrl_d_u_page_by_twenty",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CHILD, "1")
+        .stdin(unsafe { std::process::Stdio::from_raw_fd(libc::dup(slave)) });
+        // SAFETY: `setsid` and `ioctl` are async-signal-safe; fd 0 is the slave.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                if libc::ioctl(0, libc::TIOCSCTTY as _, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = cmd
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("re-exec the test binary");
+        unsafe {
+            libc::close(slave);
+        }
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break Some(status);
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                break None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let out = child.wait_with_output().unwrap();
+        unsafe {
+            libc::close(master);
+        }
+        let log = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let status = status.unwrap_or_else(|| panic!("the child hung:\n{log}"));
+        assert!(status.success(), "the child failed ({status}):\n{log}");
+        assert!(
+            log.contains("w10t3: paging keys moved by 20"),
+            "the child ran the body:\n{log}"
+        );
+    }
+
+    #[cfg(unix)]
+    fn paging_keys_child() {
+        let themes: Vec<ThemeListElement> = (0..100).map(|_| te(b"T", b"/nonexistent")).collect();
+        let arena = Arena::init();
+        let mut vx = smoke_vx();
+        let mut st = smoke_state(&arena, &themes, Mode::Normal);
+        let mut tty = Tty::init(Vec::new()).expect("the pty is the controlling terminal");
+        macro_rules! press {
+            ($codepoint:expr, $mods:expr) => {
+                update(
+                    &mut vx,
+                    &mut tty,
+                    &mut st,
+                    Event::KeyPress(KeyOwned {
+                        codepoint: $codepoint,
+                        text: None,
+                        shifted_codepoint: None,
+                        base_layout_codepoint: None,
+                        mods: $mods,
+                    }),
+                )
+                .unwrap()
+            };
+        }
+        let none = Modifiers::default();
+        let ctrl = Modifiers {
+            ctrl: true,
+            ..Default::default()
+        };
+
+        press!(key::kp_page_down, none);
+        assert_eq!(20, st.current, "keypad Page Down moves down 20");
+        press!('d' as u32, ctrl);
+        assert_eq!(40, st.current, "Ctrl-D moves down 20");
+        press!('u' as u32, ctrl);
+        assert_eq!(20, st.current, "Ctrl-U moves up 20");
+        // Keypad Down is a single step (it used to also match the move-down-by-20 binding).
+        press!(key::kp_down, none);
+        assert_eq!(21, st.current, "keypad Down moves down 1");
+
+        tty.deinit();
+        println!("w10t3: paging keys moved by 20");
     }
 
     #[cfg(unix)]

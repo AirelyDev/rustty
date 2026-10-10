@@ -1,0 +1,20 @@
+G-VTALLOC: allocator_api2 Vec slow-method ban (N261)
+  ok      config: both clippy.toml files ban 2 paths, identical
+  ok      escape: nothing in the vt crates or the workspace lints switches the ban off
+  ok      escape self-test: clean tree passes 
+  ok      escape self-test: a tree without the vt crates -> RED
+  ok      escape self-test: planted allow(clippy::style) -> RED
+  ok      escape self-test: planted combined allow -> RED
+  ok      escape self-test: planted multi-line allow -> RED
+  ok      escape self-test: planted expect -> RED
+  ok      escape self-test: planted inner allow(clippy::all) -> RED
+  ok      escape self-test: planted cfg_attr allow -> RED
+  ok      escape self-test: planted multi-line allow(warnings) -> RED
+  ok      escape self-test: planted crate [lints.clippy] -> RED
+  ok      escape self-test: planted crate [lints] not workspace -> RED
+  ok      escape self-test: planted workspace style allow -> RED
+  ok      escape self-test: planted workspace disallowed_methods allow -> RED
+  ok      fires: crates/rustty-vt/clippy.toml flags exactly lines [13 14 ]
+  ok      fires: crates/rustty-vt-c/clippy.toml flags exactly lines [13 14 ]
+  ok      control: with no config the fixture flags nothing
+G-VTALLOC: PASS

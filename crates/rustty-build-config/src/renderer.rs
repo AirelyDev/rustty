@@ -12,17 +12,11 @@ use crate::os::{Target, WasmTarget};
 pub enum Backend {
     Opengl,
     Metal,
-    Webgl,
 }
 
 impl Backend {
     pub const fn default(target: Target, wasm_target: WasmTarget) -> Backend {
-        if target.arch.is_wasm() {
-            return match wasm_target {
-                WasmTarget::Browser => Backend::Webgl,
-            };
-        }
-
+        let _ = wasm_target;
         if target.os.is_darwin() {
             return Backend::Metal;
         }

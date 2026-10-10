@@ -2427,7 +2427,8 @@ Miri-cannot-model case.
 | crate | test(s) | class | final lane |
 |---|---|---|---|
 | `rustty-cli` | `ssh_cache::…run_inner_fails_cleanly_when_the_cache_is_unusable` | `mkdir` under isolation | 55 passed, 17 ignored |
-| `rustty-core` | `app::test_runtime::app_create_and_destroy_empty` | CoreText warmup thread → `CFStringCreateWithBytes` | see below |
+| `rustty-core` | `app::test_runtime::app_create_and_destroy_empty` | CoreText warmup thread → `CFStringCreateWithBytes`; since P8-W6 T2 (`40d5b860d`) also the render device `App.init` creates (`MTLCopyAllDevices` / dlopen libEGL) | see below |
+| `rustty-core` | `app::test_runtime::app_init_creates_and_deinit_frees_the_render_device`, `app::device_tests::two_surfaces_share_the_device_destroy_one_draw_the_other_then_deinit` (P8-W6 T2) | real render device (Metal / EGL); the second also render and io threads and a pty | the device's lifetime is Miri-proven instead by `.port/phase-2/mirihar-device-box` (inline UB under SB, `DeviceBox` clean under SB and TB) and by the App tests on the `#[cfg(test)]` null-device constructor (DECISIONS P11), 17 passed under Miri |
 | `rustty-global` | `environ::…global_environ_map_reflects_the_process`, `rlimit_tests::restore_round_trips_nofile` | empty environ under isolation; `getrlimit` | 8 passed, 2 ignored |
 | `rustty-vaxis` | `recover_tests::{recover_writes_exact_reset_bundle_to_stored_fd, recover_restores_saved_termios_on_a_pty, install_panic_recovery_runs_recover_then_chains_previous_hook}` | real pty + `tcsetattr` | 98 passed, 3 ignored |
 | `rustty-vt` | `hyperlink::…try_dupe_bytes_reports_allocation_failure` | Miri hard-errors instead of failing an allocation | — |
@@ -2956,6 +2957,69 @@ comments included. In `search/terminal.rs` the first changed test,
 returned to zero: the scanner took the rest of the file (lines 970–1851) as that one test's body,
 and every later test in the file, including this new one, got no inventory row. The full native
 timing above does not depend on parsing source, so it closes that gap for `rustty-vt`.
+
+### P8-W5 T1 — memory usage and compressed history restore (2026-10-08)
+
+Three tests added by the core halves of upstream `8834e161c` / `88e66cbc6` compress full-size pages
+(LZ4 over a standard-capacity page) and are out of Miri's budget. Conditions: `cargo +nightly miri`
+(`nextest` for the G6c rows), Stacked Borrows, one test per process; G6 = debug assertions on, G6c =
+`RUSTFLAGS="-C debug-assertions=off"`. Bound: the G6 runs were stopped by PID after the times shown
+(no finer figure: the process was killed, not timed out by the harness); the G6c history run was
+stopped by PID at the 30-minute bound. Times are wall clock. Tree Borrows was not run.
+
+| test | native, debug assertions on | G6 | G6c SB | form |
+|---|---|---|---|---|
+| `pagelist::tests::compress::pagelist_memory_usage` | 1.3 s | did not finish (killed at 1,286 s) | ok, 48 s | G6 LANE ONLY |
+| `pagelist::tests::builder::pagelist_page_allocation_compresses_prepended_pages_unless_visible` | 1.9 s | did not finish (killed after 18+ min) | ok, 311 s | G6 LANE ONLY |
+| `snapshot::history::tests::history_decode_compresses_history_pages_when_requested` | 2.6 s | not run (slower than G6c) | TIMEOUT (30 min, killed by PID) | BOTH LANES |
+
+The first two take the sibling G6-only form (`cfg_attr(all(miri, debug_assertions), ignore = ...)`) and
+run in G6c, whose test set is derived from those annotations; both were UB- and leak-clean there.
+
+**`history_decode_compresses_history_pages_when_requested` takes the both-lanes form.** It writes
+about five pages of numbered lines through the print path (the same cost class as its sibling
+`history_encodes_newest_first_and_restores_complete_history`). 4-criterion basis:
+
+1. **Intractable, measured:** G6c SB still running at the 30-minute bound; G6 is slower.
+2. **Passes natively** (2.6 s, in ci.sh's HARD `cargo test --workspace`) and under AddressSanitizer
+   (`sanitizers.sh rustty-vt "history_decode_compresses pagelist_memory_usage compresses_prepended_pages" address`,
+   2026-10-08: 3 ran, GREEN).
+3. **Its unsafe paths stay Miri-covered by lighter tests:** the Rust-only
+   `snapshot::history::tests::history_decode_compress_option_prepends_and_compresses_small_pages`
+   (G6 lane, SB, debug assertions on: ok, 16 s) hand-builds two 10-column PAGE records and drives
+   `decode_page` -> `finalize(.prepend, .{ .compress = true })` through the allocation's raw PageList
+   pointer, checking both the `compress = false` and `compress = true` outcomes; and
+   `pagelist_page_allocation_compresses_prepended_pages_unless_visible` (G6c, 311 s) covers the
+   viewport cases of the same `finalize` code.
+4. **Documented here and at the source**, with the lanes named.
+
+### P8-W5 T3 — vt-c memory usage and snapshot history compression (2026-10-08)
+
+Two upstream tests ported by P8-W5 T3 take the both-lanes form (`cfg_attr(miri, ignore = "MIRI EXCEPTION
+(rustty-vt-c, P8-W5 T3) ...")`). Measured in fix round 1 with the annotations removed:
+`bash .port/tools/miri-run.sh rustty-vt-c "get_memory_usage snapshot_decoder_compresses_history_when_requested" 3 40 30`
+(Stacked Borrows, `-Zmiri-disable-isolation`, one test per worker, three workers, 2026-10-08 01:58-02:28):
+`FINAL: completed=3/3 ok=1 UB=0 ... TIMEOUT=2`.
+
+| test | what makes it heavy | Miri (SB) |
+|---|---|---|
+| `terminal::tests::get::get_memory_usage` (upstream "get memory_usage") | 4,000 lines of history, then a full compression of every page | TIMEOUT (1,800 s, killed by the harness) |
+| `snapshot::tests::snapshot_decoder_compresses_history_when_requested` (upstream "snapshot decoder compresses history when requested") | three pages of history at 215 columns, an encode, then two decodes, one compressing every history page | TIMEOUT (1,800 s, killed by the harness) |
+
+The third test the filter matched, `get_memory_usage_size_rule`, passed (it runs in the lane).
+
+4-criterion basis:
+
+1. **Intractable, measured**: both TIMEOUT at the 30-minute bound (above).
+2. **Passes natively** (`cargo test -p rustty-vt-c`) and under AddressSanitizer
+   (`sanitizers.sh rustty-vt-c get_memory_usage address`: 2 ran, GREEN;
+   `sanitizers.sh rustty-vt-c snapshot_decoder_compresses_history_when_requested address`: 1 ran, GREEN;
+   2026-10-08).
+3. **Their unsafe paths stay Miri-covered by lighter tests**: `get_memory_usage_size_rule` (the getter, the
+   size rule and the struct write) and `reentrant_callback_*` (the getter called from inside effect
+   callbacks) ran clean under SB, and the new tests under TB too; the decoder option is covered by
+   `decoder_option_and_empty_source`; the core compression paths by the P8-W5 T1 rows above.
+4. **Documented here and at the source**, with the lanes named.
 
 ### Isolation exception (C-1 basis)
 

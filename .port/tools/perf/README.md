@@ -11,6 +11,8 @@ oracle's 0.254 s, which ran without `ensureLocale` (N173), while Fence 1 holds i
 against the pin. P7-W23 (V17, 2026-10-07) re-based BASELINE.json's `benchmarks`
 to the pinned oracle on an idle host (`run_benchmarks.py <oracle> <out> 7`, load
 1.85; see `benchmarks_rule` there), so G8 and Fence 1 now read the same oracle.
+P8-W10 PERF (2026-10-10) re-ran that recipe at the current pin (load 1.44), with
+the size labels re-based beside it.
 
 ## The measurement substrate is UNTRACKED
 

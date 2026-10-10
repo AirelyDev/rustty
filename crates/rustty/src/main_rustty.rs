@@ -404,9 +404,14 @@ fn run_gtk(logging: &Logging) -> ! {
     //   returned `Box` is the reference's stable `*App` heap pointer.
     let mut core_app: Box<CoreApp<gtk::App>> = match CoreApp::<gtk::App>::create(Global) {
         Ok(app) => app,
-        // `try App.create` — a create failure (font `SharedGridSet` init) aborts
-        // startup. The reference propagates it out of `main` (nonzero exit); the
-        // port logs and exits 1 (no teardown is owed — nothing was constructed).
+        // `try App.create` — a create failure (font `SharedGridSet` init, or since
+        // `40d5b860d` `error.DeviceFailed`: no render device, e.g. no EGL driver
+        // could be loaded, which `App.init` has already explained in its own
+        // `failed to initialize render device` line and the device's EGL
+        // diagnosis) aborts startup before any window exists. The reference
+        // propagates it out of `main` (nonzero exit, `error: DeviceFailed`); the
+        // port logs and exits 1 (no teardown is owed — `App.init` released what it
+        // built).
         Err(err) => {
             log_fn(
                 LogLevel::Err,

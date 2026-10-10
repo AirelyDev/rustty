@@ -436,14 +436,14 @@ pub struct ParserWrapper {
 
 /// C: GhosttySgrParser -> RusttySgrParser (R2)
 // pub const Parser = ?*ParserWrapper;
-pub type Parser = *mut ParserWrapper;
+pub type SgrParser = *mut ParserWrapper;
 
 /// PORT NOTE: `pub fn new(alloc_, result) callconv(...) Result`.
 ///
 /// # Safety
 /// `alloc_`, if non-null, must point to a valid `CAllocator`; `result` must be a
 /// valid, writable pointer to `Parser`.
-pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut Parser) -> Result {
+pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut SgrParser) -> Result {
     // const ptr = alloc.create(ParserWrapper) catch return .out_of_memory;
     let ptr = unsafe {
         create(
@@ -472,7 +472,7 @@ pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut Parser) -> Result {
 ///
 /// # Safety
 /// `parser_`, if non-null, must be a pointer returned by `new`, not yet freed.
-pub unsafe fn free(parser_: Parser) {
+pub unsafe fn free(parser_: SgrParser) {
     // const wrapper = parser_ orelse return;
     if parser_.is_null() {
         return;
@@ -491,7 +491,7 @@ pub unsafe fn free(parser_: Parser) {
 ///
 /// # Safety
 /// `parser_`, if non-null, must be a pointer returned by `new`.
-pub unsafe fn reset(parser_: Parser) {
+pub unsafe fn reset(parser_: SgrParser) {
     // const wrapper = parser_ orelse return;
     if parser_.is_null() {
         return;
@@ -509,7 +509,7 @@ pub unsafe fn reset(parser_: Parser) {
 /// point to `len` readable `u16`; `seps_`, if non-null, must point to `len`
 /// readable bytes.
 pub unsafe fn set_params(
-    parser_: Parser,
+    parser_: SgrParser,
     params: *const u16,
     seps_: *const u8,
     len: usize,
@@ -628,7 +628,7 @@ pub unsafe fn set_params(
 ///
 /// # Safety
 /// `parser_` must be a valid `new`-returned pointer.
-unsafe fn free_params(alloc_: Option<&CAllocator>, parser_: Parser) {
+unsafe fn free_params(alloc_: Option<&CAllocator>, parser_: SgrParser) {
     // PORT NOTE (soundness): operate through the raw pointer + `addr_of_mut!`, not
     // a retained `&mut *parser_`, so the caller's later raw writes are not
     // invalidated under Stacked Borrows.
@@ -659,7 +659,7 @@ unsafe fn free_params(alloc_: Option<&CAllocator>, parser_: Parser) {
 /// # Safety
 /// `parser_`, if non-null, must be a pointer returned by `new`; `result` must be
 /// a valid, writable pointer to an `AttributeC`.
-pub unsafe fn next(parser_: Parser, result: *mut AttributeC) -> bool {
+pub unsafe fn next(parser_: SgrParser, result: *mut AttributeC) -> bool {
     // const wrapper = parser_ orelse return false;
     if parser_.is_null() {
         return false;
@@ -746,7 +746,7 @@ mod tests {
     fn alloc() {
         with_test_allocator(|ta| {
             // var p: Parser = undefined;
-            let mut p: Parser = std::ptr::null_mut();
+            let mut p: SgrParser = std::ptr::null_mut();
             // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &p));
             assert_eq!(Result::Success, unsafe { new(Some(ta), &mut p) });
             // free(p);
@@ -758,7 +758,7 @@ mod tests {
     fn simple_params_no_seps() {
         with_test_allocator(|ta| {
             // var p: Parser = undefined;
-            let mut p: Parser = std::ptr::null_mut();
+            let mut p: SgrParser = std::ptr::null_mut();
             // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &p));
             assert_eq!(Result::Success, unsafe { new(Some(ta), &mut p) });
             // defer free(p);
@@ -830,7 +830,7 @@ mod tests {
         CAPTURED.lock().unwrap().clear();
 
         with_ta(|ta| {
-            let mut p: Parser = std::ptr::null_mut();
+            let mut p: SgrParser = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe { new(Some(ta), &mut p) });
 
             assert_eq!(Result::Success, unsafe {

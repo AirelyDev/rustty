@@ -95,11 +95,12 @@ CANDIDATE_OPTIMIZE = "ReleaseFast"
 #: contains 446f80f4e, so both sides run the same 50_000 iterations.
 BASIS_CHANGED: "dict[str, str]" = {}
 
-#: Two values of the V17 re-base (P7-W23: the oracle at the pin, idle) that
-#: --self-test [f] pins in the live BASELINE.json, so a silent edit of the rows
-#: or a reverted re-base fails the self-test. Re-base them with the rows.
-REBASE_PIN_TS = 1373.6     # terminal-stream/ascii, throughput_MiB_per_s
-REBASE_PIN_SC = 0.04694    # screen-clone.clone/small, median_s
+#: Two values of the live re-base (V17's recipe, P7-W23; last re-based by
+#: P8-W10 PERF to the oracle at the pin, idle) that --self-test [f] pins in the
+#: live BASELINE.json, so a silent edit of the rows or a reverted re-base fails
+#: the self-test. Re-base them with the rows.
+REBASE_PIN_TS = 1380.5     # terminal-stream/ascii, throughput_MiB_per_s
+REBASE_PIN_SC = 0.04576    # screen-clone.clone/small, median_s
 
 
 def bench_index(obj):

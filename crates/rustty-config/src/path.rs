@@ -354,7 +354,7 @@ impl Path {
         // const abs = dir.realpath(path, &buf) catch |err| abs: {
         let joined = base_path.join(os_str_from_bytes(&path));
         // (`rustty_os::path::realpath`: the DOS form on Windows, task W-2.)
-        let abs: Vec<u8> = match rustty_os::path::realpath(&joined) {
+        let abs: Vec<u8> = match realpath(&joined) {
             Ok(p) => path_to_bytes(&p),
             Err(err) => 'abs: {
                 // if (err == error.FileNotFound) {
@@ -657,6 +657,27 @@ fn open_dir_absolute(base: &[u8]) -> std::io::Result<()> {
     #[cfg(not(target_family = "wasm"))]
     {
         std::fs::read_dir(os_str_from_bytes(base)).map(|_| ())
+    }
+}
+
+/// `std.fs.Dir.realpath` / `realPathFile`.
+///
+/// PORT NOTE (N526, wasm32): `rustty_os::path` is not compiled on wasm32. The
+/// reference reaches no filesystem there either: `main_wasm.zig` retains only
+/// `os/wasm.zig`, `font`, `terminal`, `config.Wasm` and `App.Wasm`, and Zig's
+/// lazy analysis never instantiates `Config.loadCliArgs` / `path.expand` for
+/// `wasm32-freestanding`. Rust compiles them, so the stand-in is
+/// `std::fs::canonicalize`, which wasm32-unknown-unknown reports as
+/// unsupported (the error this code produced before W-2). Other targets are
+/// unchanged.
+pub(crate) fn realpath(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        rustty_os::path::realpath(path)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        std::fs::canonicalize(path)
     }
 }
 

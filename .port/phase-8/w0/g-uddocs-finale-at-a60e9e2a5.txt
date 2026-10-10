@@ -1,0 +1,76 @@
+### UD headings (whole file, template included): 206
+- upstream status: lines (whole file, template included): 206
+UD entries: 205; entries with an upstream status line: 205
+
+fix-type UD entries (143): UD1, UD2, UD3, UD6, UD7, UD8, UD9, UD10, UD11, UD12, UD19, UD20, UD21, UD22, UD23, UD27, UD50, UD57, UD58, UD59, UD60, UD61, UD62, UD63, UD64, UD65, UD66, UD67, UD68, UD69, UD70, UD71, UD72, UD73, UD74, UD75, UD76, UD80, UD90, UD91, UD92, UD93, UD94, UD95, UD96, UD97, UD98, UD99, UD100, UD101, UD102, UD103, UD104, UD105, UD107, UD108, UD110, UD111, UD112, UD113, UD114, UD115, UD131, UD140, UD141, UD150, UD160, UD170, UD171, UD172, UD182, UD190, UD200, UD201, UD202, UD203, UD204, UD205, UD210, UD211, UD230, UD245, UD246, UD247, UD251, UD252, UD260, UD261, UD262, UD263, UD264, UD265, UD266, UD280, UD290, UD291, UD295, UD305, UD310, UD312, UD313, UD314, UD315, UD320, UD321, UD325, UD326, UD331, UD340, UD341, UD342, UD344, UD345, UD346, UD350, UD351, UD352, UD353, UD354, UD355, UD356, UD357, UD358, UD359, UD360, UD361, UD362, UD363, UD364, UD365, UD366, UD367, UD368, UD369, UD370, UD371, UD372, UD373, UD374, UD375, UD376, UD377, UD378
+
+not fix-type (62):
+  UD4: excluded: treated as an invariant: no verified trigger (the entry says so)
+  UD5: port handling: faithful (R1, a non-crash defect)
+  UD13: port handling: faithful in production: `crates/rustty-apprt/src/gtk/media
+  UD14: kind: test-weakness (plus a wrong comment)
+  UD15: port handling: faithful: `crates/rustty-vt/src/pagelist/tests
+  UD16: port handling: faithful one-directional check: `crates/rustty-lib/src/enum
+  UD17: port handling: faithful acceptance of `Ok`, with the limit documented at `c
+  UD18: port handling: faithful: `crates/rustty-config/src/config_struct
+  UD24: port handling: faithful ("Reproduced verbatim, NOT corrected"): `crates/rus
+  UD25: port handling: faithful ("FAITHFULNESS QUIRK (R1)"): `crates/rustty-rendere
+  UD26: excluded: unobservable: the two infos always hold the same value
+  UD28: excluded: dead in product: no map has a zero-sized key
+  UD29: port handling: not ported (the parameter type does not exist): `crates/rust
+  UD30: port handling: faithful: `crates/rustty-core/src/renderer_seam
+  UD31: kind: latent (copy-paste in log messages)
+  UD32: port handling: faithful: `crates/rustty-renderer/src/opengl/opengl_impl
+  UD33: port handling: faithful, tracked by the N22 dead-site ratchet (`
+  UD34: kind: latent (compile)
+  UD35: kind: latent (compile)
+  UD36: kind: latent (compile)
+  UD37: kind: latent (compile)
+  UD38: kind: latent (compile)
+  UD39: kind: latent (compile)
+  UD40: kind: latent (compile)
+  UD41: kind: latent (compile)
+  UD42: kind: latent (prose)
+  UD43: kind: latent (prose, plus one type name)
+  UD44: port handling: faithful: the rustty CLI installs no hook
+  UD45: port handling: faithful with a note: `crates-sys/libxml2-sys/build
+  UD46: port handling: faithful but strengthened: `crates/rustty-xev/src/dynamic
+  UD47: port handling: faithful: `crates/rustty-xev/src/io_uring
+  UD48: port handling: faithful: `crates/rustty-vaxis/src/vaxis
+  UD49: kind: latent (compile)
+  UD51: port handling: faithful: `crates/rustty-xev/src/dynamic
+  UD52: port handling: faithful: `crates/rustty-xev/src/dynamic
+  UD53: port handling: faithful: `crates/rustty-xev/src/io_uring
+  UD54: port handling: faithful: `crates/rustty-xev/src/io_uring
+  UD55: kind: latent (build)
+  UD56: port handling: none possible in the port
+  UD106: excluded: unbuilt code: the wasm font tree is not compiled
+  UD109: excluded: test code only (kind test-weakness)
+  UD173: port handling: faithful (message and behaviour), as R13 leaves non-crash de
+  UD174: port handling: faithful (the same 512-byte limit, measured on the raw bytes
+  UD180: port handling: faithful: `crates/rustty-config/src/value_types
+  UD181: excluded: unobservable: no production caller compares two loaded maps
+  UD206: kind: latent (uncompilable but unused code)
+  UD248: port handling: faithful: `crates/rustty-font-shaper/src/collection
+  UD249: port handling: faithful: `crates/rustty-vaxis/src/key
+  UD250: port handling: faithful: `crates/rustty-renderer/src/opengl/gl/framebuffer
+  UD267: port handling: faithful (R1): `crates/rustty-vaxis/src/queue
+  UD270: port handling: faithful, not changed (found by task S-12 while fixing UD12;
+  UD271: port handling: faithful, not changed (found by task S-12; not in its assign
+  UD272: port handling: faithful, not changed (found by task S-12; not in its assign
+  UD273: port handling: faithful, not changed
+  UD275: port handling: faithful (R1): `crates/rustty-xev/src/kqueue
+  UD276: port handling: faithful skip (R13 keeps test weaknesses faithful; R14 form 
+  UD281: port handling: faithful (R13 keeps test weaknesses faithful): `crates/rustt
+  UD300: port handling: faithful (R13: message text stays faithful)
+  UD301: port handling: faithful (R13: message text stays faithful): xtask's `report
+  UD311: kind: latent
+  UD330: kind: test-weakness
+  UD343: kind: latent (build defects in code the reference's builds do not 
+
+fixed-upstream, exempt from a docs row (3): UD20, UD150, UD312
+
+privately-reported UD entries: UD131, UD351
+
+docs rows: 139; UD ids cited: 140
+CHECK PASS

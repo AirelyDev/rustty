@@ -1,0 +1,13 @@
+=== G-XTARGET --self-test ===
+  pass    named target skipped while another built -> BLOCKED (exit 3)
+  pass    unnamed run with a skip -> GREEN (control) (exit 0)
+  pass    every named target built -> GREEN (exit 0)
+  pass    named target failed -> RED (exit 1)
+  pass    end to end: named unknown target -> BLOCKED (exit 3)
+  pass    C probe with a compiler that fails -> not buildable (exit 1)
+  pass    C probe with a compiler that succeeds -> buildable (control) (exit 0)
+  pass    target dir follows CARGO_TARGET_DIR (/tmp/tmp.WAXl8KJNRP/tdir)
+  pass    16 KiB-aligned .so -> ok (exit 0)
+  pass    4 KiB-aligned .so -> FAIL (exit 1)
+  pass    missing .so -> FAIL (exit 1)
+G-XTARGET SELF-TEST GREEN

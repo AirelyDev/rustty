@@ -1,0 +1,117 @@
+cmd: python3 .port/phase-0/baseline/run_benchmarks.py ~/rustty-oracle-artifacts/ghostty-bench-246f70287 .port/phase-8/final/perf/oracle-rebase-246f70287.jsonl 7
+start: 2026-10-10T15:12:54Z;  8:12  up 1 day, 20:14, 1 user, load averages: 1.44 3.95 5.35
+## terminal-parser/utf8  cmd: /Users/gael/rustty-oracle-artifacts/ghostty-bench-246f70287 +terminal-parser --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.6162s
+   rep 2: 0.6155s
+   rep 3: 0.6128s
+   rep 4: 0.6104s
+   rep 5: 0.6095s
+   rep 6: 0.6102s
+   rep 7: 0.6104s
+## terminal-stream/ascii  cmd: /Users/gael/rustty-oracle-artifacts/ghostty-bench-246f70287 +terminal-stream --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/ascii.bin
+   rep 1: 0.0464s
+   rep 2: 0.0463s
+   rep 3: 0.0463s
+   rep 4: 0.0472s
+   rep 5: 0.0460s
+   rep 6: 0.0480s
+   rep 7: 0.0465s
+## codepoint-width.noop/utf8  cmd: /Users/gael/rustty-oracle-artifacts/ghostty-bench-246f70287 +codepoint-width --mode=noop --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.0052s
+   rep 2: 0.0052s
+   rep 3: 0.0050s
+   rep 4: 0.0050s
+   rep 5: 0.0052s
+   rep 6: 0.0049s
+   rep 7: 0.0050s
+## codepoint-width.table/utf8  cmd: /Users/gael/rustty-oracle-artifacts/ghostty-bench-246f70287 +codepoint-width --mode=table --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.2147s
+   rep 2: 0.2139s
+   rep 3: 0.2140s
+   rep 4: 0.2145s
+   rep 5: 0.2142s
+   rep 6: 0.2140s
+   rep 7: 0.2147s
+## codepoint-width.simd/utf8  cmd: /Users/gael/rustty-oracle-artifacts/ghostty-bench-246f70287 +codepoint-width --mode=simd --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.4631s
+   rep 2: 0.4630s
+   rep 3: 0.4620s
+   rep 4: 0.4644s
+   rep 5: 0.4629s
+   rep 6: 0.4629s
+   rep 7: 0.4637s
+## codepoint-width.wcwidth/utf8  cmd: /Users/gael/rustty-oracle-artifacts/ghostty-bench-246f70287 +codepoint-width --mode=wcwidth --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.7080s
+   rep 2: 0.7063s
+   rep 3: 0.7041s
+   rep 4: 0.7085s
+   rep 5: 0.7105s
+   rep 6: 0.7064s
+   rep 7: 0.7061s
+## grapheme-break.noop/utf8  cmd: /Users/gael/rustty-oracle-artifacts/ghostty-bench-246f70287 +grapheme-break --mode=noop --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.2110s
+   rep 2: 0.2105s
+   rep 3: 0.2125s
+   rep 4: 0.2112s
+   rep 5: 0.2097s
+   rep 6: 0.2106s
+   rep 7: 0.2117s
+## grapheme-break.table/utf8  cmd: /Users/gael/rustty-oracle-artifacts/ghostty-bench-246f70287 +grapheme-break --mode=table --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.2346s
+   rep 2: 0.2343s
+   rep 3: 0.2340s
+   rep 4: 0.2347s
+   rep 5: 0.2350s
+   rep 6: 0.2359s
+   rep 7: 0.2335s
+## is-symbol.table/utf8  cmd: /Users/gael/rustty-oracle-artifacts/ghostty-bench-246f70287 +is-symbol --mode=table --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.2152s
+   rep 2: 0.2168s
+   rep 3: 0.2160s
+   rep 4: 0.2157s
+   rep 5: 0.2176s
+   rep 6: 0.2146s
+   rep 7: 0.2164s
+## is-symbol.uucode/utf8  cmd: /Users/gael/rustty-oracle-artifacts/ghostty-bench-246f70287 +is-symbol --mode=uucode --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.2153s
+   rep 2: 0.2128s
+   rep 3: 0.2124s
+   rep 4: 0.2138s
+   rep 5: 0.2119s
+   rep 6: 0.2112s
+   rep 7: 0.2122s
+## osc-parser/osc-parser  cmd: /Users/gael/rustty-oracle-artifacts/ghostty-bench-246f70287 +osc-parser --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/osc-parser.bin
+   rep 1: 0.1758s
+   rep 2: 0.1788s
+   rep 3: 0.1776s
+   rep 4: 0.1770s
+   rep 5: 0.1770s
+   rep 6: 0.1745s
+   rep 7: 0.1770s
+## screen-clone.noop/small  cmd: /Users/gael/rustty-oracle-artifacts/ghostty-bench-246f70287 +screen-clone --mode=noop --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/ascii-small.bin
+   rep 1: 0.0073s
+   rep 2: 0.0081s
+   rep 3: 0.0075s
+   rep 4: 0.0076s
+   rep 5: 0.0074s
+   rep 6: 0.0074s
+   rep 7: 0.0074s
+## screen-clone.clone/small  cmd: /Users/gael/rustty-oracle-artifacts/ghostty-bench-246f70287 +screen-clone --mode=clone --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/ascii-small.bin
+   rep 1: 0.0458s
+   rep 2: 0.0453s
+   rep 3: 0.0460s
+   rep 4: 0.0458s
+   rep 5: 0.0458s
+   rep 6: 0.0456s
+   rep 7: 0.0457s
+## screen-clone.render/small  cmd: /Users/gael/rustty-oracle-artifacts/ghostty-bench-246f70287 +screen-clone --mode=render --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/ascii-small.bin
+   rep 1: 0.1422s
+   rep 2: 0.1457s
+   rep 3: 0.1434s
+   rep 4: 0.1430s
+   rep 5: 0.1435s
+   rep 6: 0.1429s
+   rep 7: 0.1438s
+DONE
+rc=0
+end: 2026-10-10T15:13:20Z;  8:13  up 1 day, 20:15, 1 user, load averages: 1.29 3.71 5.22

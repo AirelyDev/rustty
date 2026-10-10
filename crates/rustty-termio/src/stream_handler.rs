@@ -158,6 +158,11 @@ pub struct StreamHandler<M: AppMailbox> {
     // precedent).
     pub enquiry_response: Vec<u8>,
 
+    /// Whether DECRQCRA may report the checksum of an area of the screen,
+    /// and XTCHECKSUM may change how it's calculated.
+    // xt_checksum_report: bool,
+    pub xt_checksum_report: bool,
+
     /// The color reporting format for OSC requests.
     // osc_color_report_format: configpkg.Config.OSCColorReportFormat,
     pub osc_color_report_format: OSCColorReportFormat,
@@ -267,6 +272,8 @@ impl<M: AppMailbox> StreamHandler<M> {
         // self.enquiry_response = config.enquiry_response;
         // (PORT NOTE: owned copy — see the field's PORT NOTE.)
         self.enquiry_response = config.enquiry_response.clone();
+        // self.xt_checksum_report = config.xt_checksum_report;
+        self.xt_checksum_report = config.xt_checksum_report;
         // self.terminal.setDefaultCursorStyle(config.cursor_style);
         // self.terminal.setDefaultCursorBlink(config.cursor_blink);
         //
@@ -277,6 +284,9 @@ impl<M: AppMailbox> StreamHandler<M> {
         let cursor_blink = config.cursor_blink;
         self.term().set_default_cursor_style(cursor_style);
         self.term().set_default_cursor_blink(cursor_blink);
+        // self.terminal.setDefaultXtChecksum(config.xt_checksum_extension);
+        let xt_checksum_extension = config.xt_checksum_extension;
+        self.term().set_default_xt_checksum(xt_checksum_extension);
 
         // The config could have changed any of our colors so update mode 2031
         // self.messageWriter(.{ .color_scheme_report = .{ .force = false } });

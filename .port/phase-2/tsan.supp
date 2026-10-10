@@ -9,7 +9,22 @@
 # c). A race in Rustty code is never suppressed: it is a finding (an N id, and
 # a UD when Ghostty has it too), fixed with a regression test.
 #
-# No entry: G-TSAN's first runs (P7-W17, macOS; P7-W24, Linux) needed none.
-# The first Linux run's rustty-xev reports (TSan's fd model, NEW-FINDINGS
-# N514) are handled by running that crate's tests one at a time
-# (TSAN_SERIAL in sanitizers.sh), not by a suppression.
+# G-TSAN's first runs (P7-W17, macOS; P7-W24, Linux) needed no entry. The
+# first Linux run's rustty-xev reports (TSan's fd model, NEW-FINDINGS N514)
+# are handled by running that crate's tests one at a time (TSAN_SERIAL in
+# sanitizers.sh), not by a suppression.
+
+# WHY (T5, NEW-FINDINGS N540 item 2): Mesa's EGL (system, uninstrumented).
+# Two threads in eglGetPlatformDisplay: _eglFindDisplay (egldisplay.c:265,
+# _eglSameAttribs's memcmp) reads the attrib copy another thread's
+# _eglFindDisplay calloc'd (egldisplay.c:281). Both run under
+# _eglGlobal.Mutex, a futex-based simple_mtx inside Mesa that TSan cannot see.
+# EGL 1.5 section 2.6: "EGL and its client APIs must be threadsafe."
+race:libEGL_mesa.so
+# WHY (T6, NEW-FINDINGS N540 item 3): Mesa llvmpipe (system, uninstrumented).
+# A context thread drops the last reference to an lp_fence and destroys its
+# mutex and condvar (lp_fence_destroy, lp_fence.c:130-131) after one of the
+# screen-wide rasterizer threads ("llvmpipe-N", lp_rast.c) signalled it under
+# that mutex (lp_fence_signal). The order between the two is Mesa's atomic
+# reference count (pipe_reference, u_inlines.h:88), which TSan cannot see.
+race:libgallium

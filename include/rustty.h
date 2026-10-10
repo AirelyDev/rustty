@@ -223,17 +223,50 @@ typedef enum {
 } CellData;
 
 /**
- * C: GhosttyRenderStateRowData -> RusttyRenderStateRowData (R2)
+ * C: GhosttyRowData -> RusttyRowData (R2)
  */
 typedef enum {
     ROW_DATA_ROW_DATA_INVALID = 0,
-    ROW_DATA_ROW_DATA_DIRTY = 1,
-    ROW_DATA_ROW_DATA_RAW = 2,
-    ROW_DATA_ROW_DATA_CELLS = 3,
-    ROW_DATA_ROW_DATA_SELECTION = 4,
-    ROW_DATA_ROW_DATA_CELLS_RAW = 5,
-    ROW_DATA_ROW_DATA_VIEWPORT_Y = 6,
-    ROW_DATA_ROW_DATA_ID = 7,
+    /**
+     * Whether this row is soft-wrapped.
+     * Output type: bool *
+     */
+    ROW_DATA_ROW_DATA_WRAP = 1,
+    /**
+     * Whether this row is a continuation of a soft-wrapped row.
+     * Output type: bool *
+     */
+    ROW_DATA_ROW_DATA_WRAP_CONTINUATION = 2,
+    /**
+     * Whether any cells in this row have grapheme clusters.
+     * Output type: bool *
+     */
+    ROW_DATA_ROW_DATA_GRAPHEME = 3,
+    /**
+     * Whether any cells in this row have styling (may have false positives).
+     * Output type: bool *
+     */
+    ROW_DATA_ROW_DATA_STYLED = 4,
+    /**
+     * Whether any cells in this row have hyperlinks (may have false positives).
+     * Output type: bool *
+     */
+    ROW_DATA_ROW_DATA_HYPERLINK = 5,
+    /**
+     * The semantic prompt state of this row.
+     * Output type: GhosttyRowSemanticPrompt *
+     */
+    ROW_DATA_ROW_DATA_SEMANTIC_PROMPT = 6,
+    /**
+     * Whether this row contains a Kitty virtual placeholder.
+     * Output type: bool *
+     */
+    ROW_DATA_ROW_DATA_KITTY_VIRTUAL_PLACEHOLDER = 7,
+    /**
+     * Whether this row is dirty and requires a redraw.
+     * Output type: bool *
+     */
+    ROW_DATA_ROW_DATA_DIRTY = 8,
 } RowData;
 
 /**
@@ -260,6 +293,7 @@ typedef enum {
     DECODER_DATA_DECODER_DATA_PROGRESS_ROWS = 6,
     DECODER_DATA_DECODER_DATA_PROGRESS_REMAINING = 7,
     DECODER_DATA_DECODER_DATA_RETAIN_CONTINUATION = 8,
+    DECODER_DATA_DECODER_DATA_COMPRESS_HISTORY = 9,
 } DecoderData;
 
 /**
@@ -298,13 +332,46 @@ typedef enum {
 } PlacementData;
 
 /**
- * C: GhosttyKittyGraphicsData -> RusttyKittyGraphicsData (R2)
+ * C: GhosttyRenderStateData -> RusttyRenderStateData (R2)
  */
 typedef enum {
-    DATA_DATA_INVALID = 0,
-    DATA_DATA_PLACEMENT_ITERATOR = 1,
-    DATA_DATA_GENERATION = 2,
-} Data;
+    RENDER_STATE_DATA_RENDER_STATE_DATA_INVALID = 0,
+    RENDER_STATE_DATA_RENDER_STATE_DATA_COLS = 1,
+    RENDER_STATE_DATA_RENDER_STATE_DATA_ROWS = 2,
+    RENDER_STATE_DATA_RENDER_STATE_DATA_DIRTY = 3,
+    RENDER_STATE_DATA_RENDER_STATE_DATA_ROW_ITERATOR = 4,
+    RENDER_STATE_DATA_RENDER_STATE_DATA_COLOR_BACKGROUND = 5,
+    RENDER_STATE_DATA_RENDER_STATE_DATA_COLOR_FOREGROUND = 6,
+    RENDER_STATE_DATA_RENDER_STATE_DATA_COLOR_CURSOR = 7,
+    RENDER_STATE_DATA_RENDER_STATE_DATA_COLOR_CURSOR_HAS_VALUE = 8,
+    RENDER_STATE_DATA_RENDER_STATE_DATA_COLOR_PALETTE = 9,
+    RENDER_STATE_DATA_RENDER_STATE_DATA_CURSOR_VISUAL_STYLE = 10,
+    RENDER_STATE_DATA_RENDER_STATE_DATA_CURSOR_VISIBLE = 11,
+    RENDER_STATE_DATA_RENDER_STATE_DATA_CURSOR_BLINKING = 12,
+    RENDER_STATE_DATA_RENDER_STATE_DATA_CURSOR_PASSWORD_INPUT = 13,
+    RENDER_STATE_DATA_RENDER_STATE_DATA_CURSOR_VIEWPORT_HAS_VALUE = 14,
+    RENDER_STATE_DATA_RENDER_STATE_DATA_CURSOR_VIEWPORT_X = 15,
+    RENDER_STATE_DATA_RENDER_STATE_DATA_CURSOR_VIEWPORT_Y = 16,
+    RENDER_STATE_DATA_RENDER_STATE_DATA_CURSOR_VIEWPORT_WIDE_TAIL = 17,
+    RENDER_STATE_DATA_RENDER_STATE_DATA_CURSOR = 18,
+    RENDER_STATE_DATA_RENDER_STATE_DATA_COLORS = 19,
+    RENDER_STATE_DATA_RENDER_STATE_DATA_OVERSCAN = 20,
+    RENDER_STATE_DATA_RENDER_STATE_DATA_OVERSCAN_REQUEST = 21,
+} RenderStateData;
+
+/**
+ * C: GhosttyRenderStateRowData -> RusttyRenderStateRowData (R2)
+ */
+typedef enum {
+    RENDER_STATE_ROW_DATA_RENDER_STATE_ROW_DATA_INVALID = 0,
+    RENDER_STATE_ROW_DATA_RENDER_STATE_ROW_DATA_DIRTY = 1,
+    RENDER_STATE_ROW_DATA_RENDER_STATE_ROW_DATA_RAW = 2,
+    RENDER_STATE_ROW_DATA_RENDER_STATE_ROW_DATA_CELLS = 3,
+    RENDER_STATE_ROW_DATA_RENDER_STATE_ROW_DATA_SELECTION = 4,
+    RENDER_STATE_ROW_DATA_RENDER_STATE_ROW_DATA_CELLS_RAW = 5,
+    RENDER_STATE_ROW_DATA_RENDER_STATE_ROW_DATA_VIEWPORT_Y = 6,
+    RENDER_STATE_ROW_DATA_RENDER_STATE_ROW_DATA_ID = 7,
+} RenderStateRowData;
 
 /**
  * C: GhosttyRenderStateRowCellsData -> RusttyRenderStateRowCellsData (R2)
@@ -321,6 +388,17 @@ typedef enum {
     ROW_CELLS_DATA_ROW_CELLS_DATA_HAS_STYLING = 8,
     ROW_CELLS_DATA_ROW_CELLS_DATA_GRAPHEMES_UTF8 = 9,
 } RowCellsData;
+
+/**
+ * C: GhosttySelectionGestureData -> RusttySelectionGestureData (R2)
+ */
+typedef enum {
+    SELECTION_GESTURE_DATA_SELECTION_GESTURE_DATA_CLICK_COUNT = 0,
+    SELECTION_GESTURE_DATA_SELECTION_GESTURE_DATA_DRAGGED = 1,
+    SELECTION_GESTURE_DATA_SELECTION_GESTURE_DATA_AUTOSCROLL = 2,
+    SELECTION_GESTURE_DATA_SELECTION_GESTURE_DATA_BEHAVIOR = 3,
+    SELECTION_GESTURE_DATA_SELECTION_GESTURE_DATA_ANCHOR = 4,
+} SelectionGestureData;
 
 /**
  * C: GhosttySearchStatus -> RusttySearchStatus (R2)
@@ -413,6 +491,10 @@ typedef enum {
      * Output type: `mouse::Shape` (oracle 78494bad8/67fb0c940).
      */
     TERMINAL_DATA_TERMINAL_DATA_MOUSE_SHAPE = 41,
+    /**
+     * Output type: `TerminalMemoryUsage` (oracle 8834e161c).
+     */
+    TERMINAL_DATA_TERMINAL_DATA_MEMORY_USAGE = 42,
 } TerminalData;
 
 /**
@@ -429,6 +511,8 @@ typedef enum {
  * Owns the source adapter and all state needed by an opaque C decoder handle.
  */
 typedef struct DecoderWrapper DecoderWrapper;
+
+typedef struct EventWrapper EventWrapper;
 
 /**
  * Wrapper around formatter that tracks the allocator for C API usage.
@@ -450,9 +534,24 @@ typedef struct KeyEncoderWrapper KeyEncoderWrapper;
 typedef struct KeyEventWrapper KeyEventWrapper;
 
 /**
+ * Wrapper around mouse encoding options that tracks the allocator for C API usage.
+ */
+typedef struct MouseEncoderWrapper MouseEncoderWrapper;
+
+/**
+ * Wrapper around mouse event that tracks the allocator for C API usage.
+ */
+typedef struct MouseEventWrapper MouseEventWrapper;
+
+/**
  * Wrapper around the parser that tracks the allocator for C API usage.
  */
 typedef struct OscParserWrapper OscParserWrapper;
+
+/**
+ * Wrapper around parser that tracks the allocator for C API usage.
+ */
+typedef struct ParserWrapper ParserWrapper;
 
 typedef struct PlacementIteratorWrapper PlacementIteratorWrapper;
 
@@ -543,29 +642,46 @@ typedef struct {
 } Request;
 
 /**
- * C: RusttyMouseEncoderSize (R2)
+ * C: RusttySizeReportSize (R2)
  */
 typedef struct {
-    uintptr_t size;
-    uint32_t screen_width;
-    uint32_t screen_height;
+    /**
+     * Terminal row count in cells.
+     */
+    uint16_t rows;
+    /**
+     * Terminal column count in cells.
+     */
+    uint16_t columns;
+    /**
+     * Width of a single terminal cell in pixels.
+     */
     uint32_t cell_width;
+    /**
+     * Height of a single terminal cell in pixels.
+     */
     uint32_t cell_height;
-    uint32_t padding_top;
-    uint32_t padding_bottom;
-    uint32_t padding_right;
-    uint32_t padding_left;
-} Size;
+} SizeReportSize;
 
 /**
  * C: RusttyKeyEvent (R2)
  */
-typedef KeyEventWrapper *Event;
+typedef KeyEventWrapper *KeyEvent;
 
 /**
  * C: RusttyKeyEncoder (R2)
  */
-typedef KeyEncoderWrapper *Encoder;
+typedef KeyEncoderWrapper *KeyEncoder;
+
+/**
+ * C: RusttyMouseEvent (R2)
+ */
+typedef MouseEventWrapper *MouseEvent;
+
+/**
+ * C: RusttyMouseEncoder (R2)
+ */
+typedef MouseEncoderWrapper *MouseEncoder;
 
 /**
  * C: GhosttyCell -> RusttyCell (R2)
@@ -618,9 +734,9 @@ typedef struct {
 #define Style_DEFAULT (Style){ .size = (size_of){  }, .fg_color = (Color){ .tag = ColorTag_None, .value = (ColorValue){  } }, .bg_color = (Color){ .tag = ColorTag_None, .value = (ColorValue){  } }, .underline_color = (Color){ .tag = ColorTag_None, .value = (ColorValue){  } }, .bold = false, .italic = false, .faint = false, .blink = false, .inverse = false, .invisible = false, .strikethrough = false, .overline = false, .underline = 0 }
 
 /**
- * C: RusttyOscParser (R2)
+ * C: GhosttySgrParser -> RusttySgrParser (R2)
  */
-typedef OscParserWrapper *Parser;
+typedef ParserWrapper *SgrParser;
 
 /**
  * The C ABI struct of `Attribute.Unknown`.
@@ -698,6 +814,11 @@ typedef struct {
     int tag;
     CValue value;
 } AttributeC;
+
+/**
+ * C: RusttyOscParser (R2)
+ */
+typedef OscParserWrapper *OscParser;
 
 /**
  * C: RusttyFormatter (R2)
@@ -862,6 +983,11 @@ typedef RowCellsWrapper *RowCells;
  * C: GhosttySelectionGesture -> RusttySelectionGesture (R2)
  */
 typedef GestureWrapper *Gesture;
+
+/**
+ * C: GhosttySelectionGestureEvent -> RusttySelectionGestureEvent (R2)
+ */
+typedef EventWrapper *SelectionGestureEvent;
 
 /**
  * C: GhosttySearch -> RusttySearch (R2)
@@ -1221,7 +1347,7 @@ uintptr_t rustty_unicode_grapheme_width(const uint32_t *cps, uintptr_t len, uint
  * must be a valid, writable pointer to `usize`.
  */
 int rustty_size_report_encode(int style,
-                              Size size,
+                              SizeReportSize size,
                               uint8_t *out,
                               uintptr_t out_len,
                               uintptr_t *out_written);
@@ -1233,7 +1359,7 @@ int rustty_size_report_encode(int style,
  * `alloc`, if non-null, must point to a valid allocator; `result` must be a
  * valid, writable pointer to a key-event handle.
  */
-int rustty_key_event_new(const Allocator *alloc, Event *result);
+int rustty_key_event_new(const Allocator *alloc, KeyEvent *result);
 
 /**
  * C: rustty_key_event_free
@@ -1241,7 +1367,7 @@ int rustty_key_event_new(const Allocator *alloc, Event *result);
  * # Safety
  * `event`, if non-null, must be a handle returned by `rustty_key_event_new`.
  */
-void rustty_key_event_free(Event event);
+void rustty_key_event_free(KeyEvent event);
 
 /**
  * C: rustty_key_event_set_action
@@ -1249,7 +1375,7 @@ void rustty_key_event_free(Event event);
  * # Safety
  * `event` must be a handle returned by `rustty_key_event_new`.
  */
-void rustty_key_event_set_action(Event event, int action);
+void rustty_key_event_set_action(KeyEvent event, int action);
 
 /**
  * C: rustty_key_event_get_action
@@ -1257,7 +1383,7 @@ void rustty_key_event_set_action(Event event, int action);
  * # Safety
  * `event` must be a handle returned by `rustty_key_event_new`.
  */
-int rustty_key_event_get_action(Event event);
+int rustty_key_event_get_action(KeyEvent event);
 
 /**
  * C: rustty_key_event_set_key
@@ -1265,7 +1391,7 @@ int rustty_key_event_get_action(Event event);
  * # Safety
  * `event` must be a handle returned by `rustty_key_event_new`.
  */
-void rustty_key_event_set_key(Event event, int k);
+void rustty_key_event_set_key(KeyEvent event, int k);
 
 /**
  * C: rustty_key_event_get_key
@@ -1273,7 +1399,7 @@ void rustty_key_event_set_key(Event event, int k);
  * # Safety
  * `event` must be a handle returned by `rustty_key_event_new`.
  */
-int rustty_key_event_get_key(Event event);
+int rustty_key_event_get_key(KeyEvent event);
 
 /**
  * C: rustty_key_event_set_mods
@@ -1281,7 +1407,7 @@ int rustty_key_event_get_key(Event event);
  * # Safety
  * `event` must be a handle returned by `rustty_key_event_new`.
  */
-void rustty_key_event_set_mods(Event event, ModsBacking mods);
+void rustty_key_event_set_mods(KeyEvent event, ModsBacking mods);
 
 /**
  * C: rustty_key_event_get_mods
@@ -1289,7 +1415,7 @@ void rustty_key_event_set_mods(Event event, ModsBacking mods);
  * # Safety
  * `event` must be a handle returned by `rustty_key_event_new`.
  */
-ModsBacking rustty_key_event_get_mods(Event event);
+ModsBacking rustty_key_event_get_mods(KeyEvent event);
 
 /**
  * C: rustty_key_event_set_consumed_mods
@@ -1297,7 +1423,7 @@ ModsBacking rustty_key_event_get_mods(Event event);
  * # Safety
  * `event` must be a handle returned by `rustty_key_event_new`.
  */
-void rustty_key_event_set_consumed_mods(Event event, ModsBacking consumed_mods);
+void rustty_key_event_set_consumed_mods(KeyEvent event, ModsBacking consumed_mods);
 
 /**
  * C: rustty_key_event_get_consumed_mods
@@ -1305,7 +1431,7 @@ void rustty_key_event_set_consumed_mods(Event event, ModsBacking consumed_mods);
  * # Safety
  * `event` must be a handle returned by `rustty_key_event_new`.
  */
-ModsBacking rustty_key_event_get_consumed_mods(Event event);
+ModsBacking rustty_key_event_get_consumed_mods(KeyEvent event);
 
 /**
  * C: rustty_key_event_set_composing
@@ -1313,7 +1439,7 @@ ModsBacking rustty_key_event_get_consumed_mods(Event event);
  * # Safety
  * `event` must be a handle returned by `rustty_key_event_new`.
  */
-void rustty_key_event_set_composing(Event event, bool composing);
+void rustty_key_event_set_composing(KeyEvent event, bool composing);
 
 /**
  * C: rustty_key_event_get_composing
@@ -1321,7 +1447,7 @@ void rustty_key_event_set_composing(Event event, bool composing);
  * # Safety
  * `event` must be a handle returned by `rustty_key_event_new`.
  */
-bool rustty_key_event_get_composing(Event event);
+bool rustty_key_event_get_composing(KeyEvent event);
 
 /**
  * C: rustty_key_event_set_utf8
@@ -1330,7 +1456,7 @@ bool rustty_key_event_get_composing(Event event);
  * `event` must be a handle returned by `rustty_key_event_new`; `utf8`, if
  * non-null, must point to `len` readable bytes.
  */
-void rustty_key_event_set_utf8(Event event, const uint8_t *utf8, uintptr_t len);
+void rustty_key_event_set_utf8(KeyEvent event, const uint8_t *utf8, uintptr_t len);
 
 /**
  * C: rustty_key_event_get_utf8
@@ -1339,7 +1465,7 @@ void rustty_key_event_set_utf8(Event event, const uint8_t *utf8, uintptr_t len);
  * `event` must be a handle returned by `rustty_key_event_new`; `len`, if
  * non-null, must be a valid, writable pointer to `usize`.
  */
-const uint8_t *rustty_key_event_get_utf8(Event event, uintptr_t *len);
+const uint8_t *rustty_key_event_get_utf8(KeyEvent event, uintptr_t *len);
 
 /**
  * C: rustty_key_event_set_unshifted_codepoint
@@ -1347,7 +1473,7 @@ const uint8_t *rustty_key_event_get_utf8(Event event, uintptr_t *len);
  * # Safety
  * `event` must be a handle returned by `rustty_key_event_new`.
  */
-void rustty_key_event_set_unshifted_codepoint(Event event, uint32_t codepoint);
+void rustty_key_event_set_unshifted_codepoint(KeyEvent event, uint32_t codepoint);
 
 /**
  * C: rustty_key_event_get_unshifted_codepoint
@@ -1355,7 +1481,7 @@ void rustty_key_event_set_unshifted_codepoint(Event event, uint32_t codepoint);
  * # Safety
  * `event` must be a handle returned by `rustty_key_event_new`.
  */
-uint32_t rustty_key_event_get_unshifted_codepoint(Event event);
+uint32_t rustty_key_event_get_unshifted_codepoint(KeyEvent event);
 
 /**
  * C: rustty_key_encoder_new
@@ -1364,7 +1490,7 @@ uint32_t rustty_key_event_get_unshifted_codepoint(Event event);
  * `alloc`, if non-null, must point to a valid allocator; `result` must be a
  * valid, writable pointer to a key-encoder handle.
  */
-int rustty_key_encoder_new(const Allocator *alloc, Encoder *result);
+int rustty_key_encoder_new(const Allocator *alloc, KeyEncoder *result);
 
 /**
  * C: rustty_key_encoder_free
@@ -1372,7 +1498,7 @@ int rustty_key_encoder_new(const Allocator *alloc, Encoder *result);
  * # Safety
  * `encoder`, if non-null, must be a handle returned by `rustty_key_encoder_new`.
  */
-void rustty_key_encoder_free(Encoder encoder);
+void rustty_key_encoder_free(KeyEncoder encoder);
 
 /**
  * C: rustty_key_encoder_setopt
@@ -1381,7 +1507,7 @@ void rustty_key_encoder_free(Encoder encoder);
  * `encoder`, if non-null, must be a `rustty_key_encoder_new` handle; `value`,
  * if non-null, must point to a readable value of the option's in-type.
  */
-void rustty_key_encoder_setopt(Encoder encoder, int option, const void *value);
+void rustty_key_encoder_setopt(KeyEncoder encoder, int option, const void *value);
 
 /**
  * C: rustty_key_encoder_setopt_from_terminal
@@ -1389,7 +1515,7 @@ void rustty_key_encoder_setopt(Encoder encoder, int option, const void *value);
  * # Safety
  * `encoder`/`terminal`, if non-null, must be live handles.
  */
-void rustty_key_encoder_setopt_from_terminal(Encoder encoder, Terminal terminal);
+void rustty_key_encoder_setopt_from_terminal(KeyEncoder encoder, Terminal terminal);
 
 /**
  * C: rustty_key_encoder_encode
@@ -1398,8 +1524,8 @@ void rustty_key_encoder_setopt_from_terminal(Encoder encoder, Terminal terminal)
  * `encoder`/`event` must be non-null `new` handles; `out` (if non-null) must
  * point to `out_len` writable bytes; `out_written` must be valid, writable.
  */
-int rustty_key_encoder_encode(Encoder encoder,
-                              Event event,
+int rustty_key_encoder_encode(KeyEncoder encoder,
+                              KeyEvent event,
                               uint8_t *out,
                               uintptr_t out_len,
                               uintptr_t *out_written);
@@ -1411,7 +1537,7 @@ int rustty_key_encoder_encode(Encoder encoder,
  * `alloc`, if non-null, must point to a valid allocator; `result` must be a
  * valid, writable pointer to a mouse-event handle.
  */
-int rustty_mouse_event_new(const Allocator *alloc, Event *result);
+int rustty_mouse_event_new(const Allocator *alloc, MouseEvent *result);
 
 /**
  * C: rustty_mouse_event_free
@@ -1419,7 +1545,7 @@ int rustty_mouse_event_new(const Allocator *alloc, Event *result);
  * # Safety
  * `event`, if non-null, must be a handle returned by `rustty_mouse_event_new`.
  */
-void rustty_mouse_event_free(Event event);
+void rustty_mouse_event_free(MouseEvent event);
 
 /**
  * C: rustty_mouse_event_set_action
@@ -1427,7 +1553,7 @@ void rustty_mouse_event_free(Event event);
  * # Safety
  * `event` must be a handle returned by `rustty_mouse_event_new`.
  */
-void rustty_mouse_event_set_action(Event event, int action);
+void rustty_mouse_event_set_action(MouseEvent event, int action);
 
 /**
  * C: rustty_mouse_event_get_action
@@ -1435,7 +1561,7 @@ void rustty_mouse_event_set_action(Event event, int action);
  * # Safety
  * `event` must be a handle returned by `rustty_mouse_event_new`.
  */
-int rustty_mouse_event_get_action(Event event);
+int rustty_mouse_event_get_action(MouseEvent event);
 
 /**
  * C: rustty_mouse_event_set_button
@@ -1443,7 +1569,7 @@ int rustty_mouse_event_get_action(Event event);
  * # Safety
  * `event` must be a handle returned by `rustty_mouse_event_new`.
  */
-void rustty_mouse_event_set_button(Event event, int button);
+void rustty_mouse_event_set_button(MouseEvent event, int button);
 
 /**
  * C: rustty_mouse_event_clear_button
@@ -1451,7 +1577,7 @@ void rustty_mouse_event_set_button(Event event, int button);
  * # Safety
  * `event` must be a handle returned by `rustty_mouse_event_new`.
  */
-void rustty_mouse_event_clear_button(Event event);
+void rustty_mouse_event_clear_button(MouseEvent event);
 
 /**
  * C: rustty_mouse_event_get_button
@@ -1460,7 +1586,7 @@ void rustty_mouse_event_clear_button(Event event);
  * `event` must be a handle returned by `rustty_mouse_event_new`; `out`, if
  * non-null, must be a valid, writable pointer to a `c_int` button code.
  */
-bool rustty_mouse_event_get_button(Event event, int *out);
+bool rustty_mouse_event_get_button(MouseEvent event, int *out);
 
 /**
  * C: rustty_mouse_event_set_mods
@@ -1468,7 +1594,7 @@ bool rustty_mouse_event_get_button(Event event, int *out);
  * # Safety
  * `event` must be a handle returned by `rustty_mouse_event_new`.
  */
-void rustty_mouse_event_set_mods(Event event, ModsBacking mods);
+void rustty_mouse_event_set_mods(MouseEvent event, ModsBacking mods);
 
 /**
  * C: rustty_mouse_event_get_mods
@@ -1476,7 +1602,7 @@ void rustty_mouse_event_set_mods(Event event, ModsBacking mods);
  * # Safety
  * `event` must be a handle returned by `rustty_mouse_event_new`.
  */
-ModsBacking rustty_mouse_event_get_mods(Event event);
+ModsBacking rustty_mouse_event_get_mods(MouseEvent event);
 
 /**
  * C: rustty_mouse_event_set_position
@@ -1484,7 +1610,7 @@ ModsBacking rustty_mouse_event_get_mods(Event event);
  * # Safety
  * `event` must be a handle returned by `rustty_mouse_event_new`.
  */
-void rustty_mouse_event_set_position(Event event, Position pos);
+void rustty_mouse_event_set_position(MouseEvent event, Position pos);
 
 /**
  * C: rustty_mouse_event_get_position
@@ -1492,7 +1618,7 @@ void rustty_mouse_event_set_position(Event event, Position pos);
  * # Safety
  * `event` must be a handle returned by `rustty_mouse_event_new`.
  */
-Position rustty_mouse_event_get_position(Event event);
+Position rustty_mouse_event_get_position(MouseEvent event);
 
 /**
  * C: rustty_mouse_encoder_new
@@ -1501,7 +1627,7 @@ Position rustty_mouse_event_get_position(Event event);
  * `alloc`, if non-null, must point to a valid allocator; `result` must be a
  * valid, writable pointer to a mouse-encoder handle.
  */
-int rustty_mouse_encoder_new(const Allocator *alloc, Encoder *result);
+int rustty_mouse_encoder_new(const Allocator *alloc, MouseEncoder *result);
 
 /**
  * C: rustty_mouse_encoder_free
@@ -1509,7 +1635,7 @@ int rustty_mouse_encoder_new(const Allocator *alloc, Encoder *result);
  * # Safety
  * `encoder`, if non-null, must be a handle returned by `rustty_mouse_encoder_new`.
  */
-void rustty_mouse_encoder_free(Encoder encoder);
+void rustty_mouse_encoder_free(MouseEncoder encoder);
 
 /**
  * C: rustty_mouse_encoder_setopt
@@ -1518,7 +1644,7 @@ void rustty_mouse_encoder_free(Encoder encoder);
  * `encoder`, if non-null, must be a `rustty_mouse_encoder_new` handle; `value`,
  * if non-null, must point to a readable value of the option's in-type.
  */
-void rustty_mouse_encoder_setopt(Encoder encoder, int option, const void *value);
+void rustty_mouse_encoder_setopt(MouseEncoder encoder, int option, const void *value);
 
 /**
  * C: rustty_mouse_encoder_setopt_from_terminal
@@ -1526,7 +1652,7 @@ void rustty_mouse_encoder_setopt(Encoder encoder, int option, const void *value)
  * # Safety
  * `encoder`/`terminal`, if non-null, must be live handles.
  */
-void rustty_mouse_encoder_setopt_from_terminal(Encoder encoder, Terminal terminal);
+void rustty_mouse_encoder_setopt_from_terminal(MouseEncoder encoder, Terminal terminal);
 
 /**
  * C: rustty_mouse_encoder_reset
@@ -1534,7 +1660,7 @@ void rustty_mouse_encoder_setopt_from_terminal(Encoder encoder, Terminal termina
  * # Safety
  * `encoder`, if non-null, must be a `rustty_mouse_encoder_new` handle.
  */
-void rustty_mouse_encoder_reset(Encoder encoder);
+void rustty_mouse_encoder_reset(MouseEncoder encoder);
 
 /**
  * C: rustty_mouse_encoder_encode
@@ -1544,8 +1670,8 @@ void rustty_mouse_encoder_reset(Encoder encoder);
  * handles; `out` (if non-null) must point to `out_len` writable bytes;
  * `out_written` must be valid, writable.
  */
-int rustty_mouse_encoder_encode(Encoder encoder,
-                                Event event,
+int rustty_mouse_encoder_encode(MouseEncoder encoder,
+                                MouseEvent event,
                                 uint8_t *out,
                                 uintptr_t out_len,
                                 uintptr_t *out_written);
@@ -1613,7 +1739,7 @@ bool rustty_style_is_default(const Style *s);
  * `alloc`, if non-null, must point to a valid allocator; `result` must be a
  * valid, writable pointer to a sgr-parser handle.
  */
-int rustty_sgr_new(const Allocator *alloc, Parser *result);
+int rustty_sgr_new(const Allocator *alloc, SgrParser *result);
 
 /**
  * C: rustty_sgr_free
@@ -1621,7 +1747,7 @@ int rustty_sgr_new(const Allocator *alloc, Parser *result);
  * # Safety
  * `parser`, if non-null, must be a handle returned by `rustty_sgr_new`.
  */
-void rustty_sgr_free(Parser parser);
+void rustty_sgr_free(SgrParser parser);
 
 /**
  * C: rustty_sgr_reset
@@ -1629,7 +1755,7 @@ void rustty_sgr_free(Parser parser);
  * # Safety
  * `parser`, if non-null, must be a handle returned by `rustty_sgr_new`.
  */
-void rustty_sgr_reset(Parser parser);
+void rustty_sgr_reset(SgrParser parser);
 
 /**
  * C: rustty_sgr_set_params
@@ -1639,7 +1765,7 @@ void rustty_sgr_reset(Parser parser);
  * `params` must point to `len` readable `u16`; `seps`, if non-null, must point
  * to `len` readable bytes.
  */
-int rustty_sgr_set_params(Parser parser,
+int rustty_sgr_set_params(SgrParser parser,
                           const uint16_t *params,
                           const uint8_t *seps,
                           uintptr_t len);
@@ -1651,7 +1777,7 @@ int rustty_sgr_set_params(Parser parser,
  * `parser`, if non-null, must be a handle returned by `rustty_sgr_new`;
  * `result` must be a valid, writable pointer to a `sgr::AttributeC`.
  */
-bool rustty_sgr_next(Parser parser, AttributeC *result);
+bool rustty_sgr_next(SgrParser parser, AttributeC *result);
 
 /**
  * C: rustty_sgr_unknown_full
@@ -1690,7 +1816,7 @@ CValue *rustty_sgr_attribute_value(AttributeC *attr);
  * `alloc`, if non-null, must point to a valid allocator; `result` must be a
  * valid, writable pointer to an osc-parser handle.
  */
-int rustty_osc_new(const Allocator *alloc, Parser *result);
+int rustty_osc_new(const Allocator *alloc, OscParser *result);
 
 /**
  * C: rustty_osc_free
@@ -1698,7 +1824,7 @@ int rustty_osc_new(const Allocator *alloc, Parser *result);
  * # Safety
  * `parser`, if non-null, must be a handle returned by `rustty_osc_new`.
  */
-void rustty_osc_free(Parser parser);
+void rustty_osc_free(OscParser parser);
 
 /**
  * C: rustty_osc_next
@@ -1706,7 +1832,7 @@ void rustty_osc_free(Parser parser);
  * # Safety
  * `parser` must be a non-null handle returned by `rustty_osc_new`.
  */
-void rustty_osc_next(Parser parser, uint8_t byte);
+void rustty_osc_next(OscParser parser, uint8_t byte);
 
 /**
  * C: rustty_osc_reset
@@ -1714,7 +1840,7 @@ void rustty_osc_next(Parser parser, uint8_t byte);
  * # Safety
  * `parser` must be a non-null handle returned by `rustty_osc_new`.
  */
-void rustty_osc_reset(Parser parser);
+void rustty_osc_reset(OscParser parser);
 
 /**
  * C: rustty_osc_end
@@ -1723,7 +1849,16 @@ void rustty_osc_reset(Parser parser);
  * `parser` must be a non-null handle returned by `rustty_osc_new`. The returned
  * command pointer aliases the parser and is valid until the next parse op.
  */
-Command rustty_osc_end(Parser parser, uint8_t terminator);
+Command rustty_osc_end(OscParser parser, uint8_t terminator);
+
+/**
+ * C: rustty_osc_set
+ *
+ * # Safety
+ * `parser`, if non-null, must be a handle returned by `rustty_osc_new`;
+ * `value`, if non-null, must point to the option's input type.
+ */
+int rustty_osc_set(OscParser parser, int option, const void *value);
 
 /**
  * C: rustty_osc_command_type
@@ -2176,7 +2311,7 @@ int rustty_render_state_get(RenderState state, int data, void *out);
  */
 int rustty_render_state_get_multi(RenderState state,
                                   uintptr_t count,
-                                  const Data *keys,
+                                  const RenderStateData *keys,
                                   void **values,
                                   uintptr_t *out_written);
 
@@ -2239,7 +2374,7 @@ int rustty_render_state_row_get(RowIterator iterator, int data, void *out);
  */
 int rustty_render_state_row_get_multi(RowIterator iterator,
                                       uintptr_t count,
-                                      const RowData *keys,
+                                      const RenderStateRowData *keys,
                                       void **values,
                                       uintptr_t *out_written);
 
@@ -2339,7 +2474,7 @@ void rustty_selection_gesture_reset(Gesture gesture, Terminal terminal);
  */
 int rustty_selection_gesture_event(Gesture gesture,
                                    Terminal terminal,
-                                   Event event,
+                                   SelectionGestureEvent event,
                                    CSelection *out_selection);
 
 /**
@@ -2359,7 +2494,7 @@ int rustty_selection_gesture_get(Gesture gesture, Terminal terminal, int data, v
 int rustty_selection_gesture_get_multi(Gesture gesture,
                                        Terminal terminal,
                                        uintptr_t count,
-                                       const Data *keys,
+                                       const SelectionGestureData *keys,
                                        void **values,
                                        uintptr_t *out_written);
 
@@ -2370,7 +2505,9 @@ int rustty_selection_gesture_get_multi(Gesture gesture,
  * `alloc_`, if non-null, must point to a valid allocator; `out_event`, if
  * non-null, must be a valid, writable pointer to an event handle.
  */
-int rustty_selection_gesture_event_new(const Allocator *alloc_, Event *out_event, int event_type);
+int rustty_selection_gesture_event_new(const Allocator *alloc_,
+                                       SelectionGestureEvent *out_event,
+                                       int event_type);
 
 /**
  * C: rustty_selection_gesture_event_free
@@ -2378,7 +2515,7 @@ int rustty_selection_gesture_event_new(const Allocator *alloc_, Event *out_event
  * # Safety
  * `event`, if non-null, must be a handle returned by `_event_new`.
  */
-void rustty_selection_gesture_event_free(Event event);
+void rustty_selection_gesture_event_free(SelectionGestureEvent event);
 
 /**
  * C: rustty_selection_gesture_event_set
@@ -2386,7 +2523,7 @@ void rustty_selection_gesture_event_free(Event event);
  * # Safety
  * `value`, if non-null, must point to a value of the type required by `option`.
  */
-int rustty_selection_gesture_event_set(Event event, int option, const void *value);
+int rustty_selection_gesture_event_set(SelectionGestureEvent event, int option, const void *value);
 
 /**
  * C: rustty_search_new

@@ -1,0 +1,2 @@
+[G-LZ4] OK: encoder byte stream and decoder behaviour identical to the oracle on
+[G-LZ4]     all 7976 differential points (oracle origin/main:src/terminal/compress/lz4.zig).

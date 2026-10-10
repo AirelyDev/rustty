@@ -1,0 +1,6 @@
+=== G-PARITY SELF-TEST ===
+  all closed/waived -> 0 (expect 0)
+  one still OPEN    -> 1 (expect 1)
+  WAIVED, no reason -> 1 (expect 1)
+  unknown state     -> 1 (expect 1)
+SELF-TEST GREEN: the gate flips RED on an open row, an unjustified waiver, and an unknown state.

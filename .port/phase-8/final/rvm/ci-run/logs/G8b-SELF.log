@@ -1,0 +1,8 @@
+  ok    harness green -> exit 0 (green)
+  ok    harness red -> exit 1 (RED in ci.sh)
+  ok    harness usage -> exit 2 (RED in ci.sh)
+  ok    harness crash -> exit 139 (RED in ci.sh)
+  ok    with --emit-metrics (as ci.sh runs it) -> exit 0
+  ok    loaded host -> exit 3 (pre-measurement load check), nothing measured
+  ok    control: the blanket remap turns a harness crash into BLOCKED (exit 3); the crash arm above requires RED
+G8b-SELF GREEN

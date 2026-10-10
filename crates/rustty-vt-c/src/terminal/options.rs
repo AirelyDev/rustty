@@ -63,6 +63,16 @@ pub enum Option_ {
     ResizePullScrollback = 40,
     /// Input type: `RenderHoldFn` (oracle e50779498).
     RenderHold = 41,
+    /// Input type: `SemanticPromptFn` (oracle 7bb45ba34).
+    SemanticPrompt = 42,
+    /// Input type: `ResetFn` (oracle 7bb45ba34).
+    Reset = 43,
+    /// Input type: `*const bool` (oracle 9272a2f7c).
+    XtChecksumReport = 44,
+    /// Input type: `*const u8` (oracle 7e2d1793d).
+    XtChecksumExtension = 45,
+    /// Input type: `ProgramStatusFn` (oracle bae2c3cdb).
+    ProgramStatus = 46,
     // /// Input type expected for setting the option.
     // pub fn InType(comptime self: Option) type {
     //     return switch (self) {
@@ -75,19 +85,25 @@ pub enum Option_ {
     //         .xtversion => ?Effects.XtversionFn,
     //         .title_changed => ?Effects.TitleChangedFn,
     //         .pwd_changed => ?Effects.PwdChangedFn,
+    //         .progress_report => ?Effects.ProgressReportFn,
+    //         .program_status => ?Effects.ProgramStatusFn,
     //         .size_cb => ?Effects.SizeFn,
     //         .clipboard_write => ?Effects.ClipboardWriteFn,
     //         .clipboard_read => ?Effects.ClipboardReadFn,
     //         .unknown_sequence => ?Effects.UnknownSequenceFn,
     //         .render_hold => ?Effects.RenderHoldFn,
+    //         .semantic_prompt => ?Effects.SemanticPromptFn,
+    //         .reset => ?Effects.ResetFn,
     //         .title, .pwd, .terminfo_name => ?*const lib.String,
     //         .color_foreground, .color_background, .color_cursor => ?*const color.RGB.C,
     //         .color_palette => ?*const color.PaletteC,
     //         .kitty_image_storage_limit => ?*const u64,
+    //         .xt_checksum_extension => ?*const u8,
     //         .kitty_image_medium_file,
     //         .kitty_image_medium_shared_mem,
     //         .glyph_protocol,
     //         .title_report,
+    //         .xt_checksum_report,
     //         .resize_pull_scrollback,
     //         => ?*const bool,
     //         .kitty_image_medium_temp_file => ?*const lib.String,
@@ -228,6 +244,16 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
             (*terminal_).effects.render_hold =
                 std::mem::transmute::<*const c_void, Option<RenderHoldFn>>(value);
         },
+        // .semantic_prompt => wrapper.effects.semantic_prompt = value,
+        Option_::SemanticPrompt => unsafe {
+            (*terminal_).effects.semantic_prompt =
+                std::mem::transmute::<*const c_void, Option<SemanticPromptFn>>(value);
+        },
+        // .reset => wrapper.effects.reset = value,
+        Option_::Reset => unsafe {
+            (*terminal_).effects.reset =
+                std::mem::transmute::<*const c_void, Option<ResetFn>>(value);
+        },
         // .clipboard_write => {
         //     wrapper.effects.clipboard_write = value;
         //     wrapper.stream.handler.effects.clipboard_write = if (value != null)
@@ -262,6 +288,26 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
             // (reads stay denied without a callback; see Effects).
             (*handler_ptr(terminal_)).effects.clipboard_read = if !value.is_null() {
                 Some(Effects::clipboard_read_trampoline)
+            } else {
+                None
+            };
+        },
+        // .program_status => {
+        //     // Installed dynamically because the terminal only answers the
+        //     // OSC 7501 support query when something consumes reports.
+        //     wrapper.effects.program_status = value;
+        //     wrapper.stream.handler.effects.program_status = if (value != null)
+        //         &Effects.programStatusTrampoline
+        //     else
+        //         null;
+        // },
+        Option_::ProgramStatus => unsafe {
+            // Installed dynamically because the terminal only answers the
+            // OSC 7501 support query when something consumes reports.
+            (*terminal_).effects.program_status =
+                std::mem::transmute::<*const c_void, Option<ProgramStatusFn>>(value);
+            (*handler_ptr(terminal_)).effects.program_status = if !value.is_null() {
+                Some(Effects::program_status_trampoline)
             } else {
                 None
             };
@@ -878,18 +924,31 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
             unsafe { set_continuation_max_bytes(terminal_, max_bytes) };
         }
 
-        // .unknown_max_bytes => wrapper.stream.handler.apc_handler.unknown_max_bytes =
-        //     if (value) |ptr| ptr.* else 0,
+        // .unknown_max_bytes => {
+        //     // One limit applies to every unknown sequence type.
+        //     const max_bytes = if (value) |ptr| ptr.* else 0;
+        //     wrapper.stream.handler.apc_handler.unknown_max_bytes = max_bytes;
+        //     wrapper.stream.parser.osc_parser.unknown_max_bytes = max_bytes;
+        // },
         Option_::UnknownMaxBytes => {
+            // One limit applies to every unknown sequence type.
             let ptr = value as *const usize;
-            let v = if !ptr.is_null() {
+            let max_bytes = if !ptr.is_null() {
                 // SAFETY: `value` points to a readable `usize` (caller contract).
                 unsafe { *ptr }
             } else {
                 0
             };
             // SAFETY: raw place write off the handle (no wrapper-level `&mut`).
-            unsafe { (*handler_ptr(terminal_)).apc_handler.unknown_max_bytes = v };
+            unsafe { (*handler_ptr(terminal_)).apc_handler.unknown_max_bytes = max_bytes };
+            // PORT NOTE (SB, R2 §2.9): a raw place write too. An unknown-OSC
+            // callback may set this while its content still borrows this
+            // parser's buffer; forming `&mut Stream`, `&mut Parser` or
+            // `&mut osc::Parser` here would retag those bytes. The stream
+            // drives the parser through its raw-self pointer (N452), so no
+            // protected borrow of the parser is live across a callback.
+            // SAFETY: `terminal_` is a live wrapper (caller contract).
+            unsafe { (*terminal_).stream.parser.osc_parser.unknown_max_bytes = max_bytes };
         }
 
         // .clipboard_write_max_bytes => wrapper.stream.handler.kitty_clipboard_write_max_bytes =
@@ -919,6 +978,43 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
             // SAFETY: raw place write through the handle's terminal pointer
             // (no wrapper-level or terminal-level `&mut`).
             unsafe { (*(*terminal_).terminal).flags.resize_pull_scrollback = v };
+        }
+
+        // .xt_checksum_report => wrapper.stream.handler.xt_checksum_report = if (value) |ptr|
+        //     ptr.*
+        // else
+        //     false,
+        Option_::XtChecksumReport => {
+            let ptr = value as *const bool;
+            let v = if !ptr.is_null() {
+                // SAFETY: `value` points to a readable `bool` (caller contract).
+                unsafe { *ptr }
+            } else {
+                false
+            };
+            // SAFETY: raw place write off the handle (no wrapper-level `&mut`).
+            unsafe { (*handler_ptr(terminal_)).xt_checksum_report = v };
+        }
+
+        // .xt_checksum_extension => {
+        //     const bits = if (value) |ptr| ptr.* else 0;
+        //     const flags = std.math.cast(u5, bits) orelse return .invalid_value;
+        //     wrapper.terminal.setDefaultXtChecksum(@bitCast(flags));
+        // },
+        Option_::XtChecksumExtension => {
+            let ptr = value as *const u8;
+            let bits = if !ptr.is_null() {
+                // SAFETY: `value` points to a readable `u8` (caller contract).
+                unsafe { *ptr }
+            } else {
+                0
+            };
+            // std.math.cast(u5, bits) orelse return .invalid_value
+            if bits > 0x1F {
+                return Result::InvalidValue;
+            }
+            // SAFETY: raw place access to the owned heap terminal.
+            unsafe { (*t).set_default_xt_checksum(rustty_vt::xt_checksum::Flags::from_bits(bits)) };
         }
 
         // .mode, .mode_default => {

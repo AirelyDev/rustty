@@ -1,0 +1,62 @@
+  closed-row skip: a live marker is selected, a discharged row quoting it is not
+G-P2 SELF-TEST — ENVIRONMENT-BLOCKED arm, 13 real row(s): V2, V8, V10, V11, V12, V19, V23, V24, V25, V26, V30, V31, V33
+  root: GIT_DIR + GIT_WORK_TREE do not redirect ROOT
+  V2: accepted (artifacts resolve)
+    control 1 (paths broken) -> rejected: ENVIRONMENT-BLOCKED names ported artifacts that do not resolve: crates/rustty-re
+    control 2 (no Blocked-on) -> rejected: ENVIRONMENT-BLOCKED with no `**Blocked on:**` line naming the missing environmen
+    control 3 (no PORTED line) -> rejected: ENVIRONMENT-BLOCKED with no `PORTED: <path>` line; this marker is only for work 
+  V8: accepted (artifacts resolve)
+    control 1 (paths broken) -> rejected: ENVIRONMENT-BLOCKED names ported artifacts that do not resolve: crates/rustty-xe
+    control 2 (no Blocked-on) -> rejected: ENVIRONMENT-BLOCKED with no `**Blocked on:**` line naming the missing environmen
+    control 3 (no PORTED line) -> rejected: ENVIRONMENT-BLOCKED with no `PORTED: <path>` line; this marker is only for work 
+  V10: accepted (artifacts resolve)
+    control 1 (paths broken) -> rejected: ENVIRONMENT-BLOCKED names ported artifacts that do not resolve: crates/rustty-va
+    control 2 (no Blocked-on) -> rejected: ENVIRONMENT-BLOCKED with no `**Blocked on:**` line naming the missing environmen
+    control 3 (no PORTED line) -> rejected: ENVIRONMENT-BLOCKED with no `PORTED: <path>` line; this marker is only for work 
+  V11: accepted (artifacts resolve)
+    control 1 (paths broken) -> rejected: ENVIRONMENT-BLOCKED names ported artifacts that do not resolve: crates/rustty-fo
+    control 2 (no Blocked-on) -> rejected: ENVIRONMENT-BLOCKED with no `**Blocked on:**` line naming the missing environmen
+    control 3 (no PORTED line) -> rejected: ENVIRONMENT-BLOCKED with no `PORTED: <path>` line; this marker is only for work 
+  V12: accepted (artifacts resolve)
+    control 1 (paths broken) -> rejected: ENVIRONMENT-BLOCKED names ported artifacts that do not resolve: crates/rustty-os
+    control 2 (no Blocked-on) -> rejected: ENVIRONMENT-BLOCKED with no `**Blocked on:**` line naming the missing environmen
+    control 3 (no PORTED line) -> rejected: ENVIRONMENT-BLOCKED with no `PORTED: <path>` line; this marker is only for work 
+  V19: accepted (artifacts resolve)
+    control 1 (paths broken) -> rejected: ENVIRONMENT-BLOCKED names ported artifacts that do not resolve: macos/Sources/Fe
+    control 2 (no Blocked-on) -> rejected: ENVIRONMENT-BLOCKED with no `**Blocked on:**` line naming the missing environmen
+    control 3 (no PORTED line) -> rejected: ENVIRONMENT-BLOCKED with no `PORTED: <path>` line; this marker is only for work 
+  V23: accepted (artifacts resolve)
+    control 1 (paths broken) -> rejected: ENVIRONMENT-BLOCKED names ported artifacts that do not resolve: crates/rustty-xe
+    control 2 (no Blocked-on) -> rejected: ENVIRONMENT-BLOCKED with no `**Blocked on:**` line naming the missing environmen
+    control 3 (no PORTED line) -> rejected: ENVIRONMENT-BLOCKED with no `PORTED: <path>` line; this marker is only for work 
+  V24: accepted (artifacts resolve)
+    control 1 (paths broken) -> rejected: ENVIRONMENT-BLOCKED names ported artifacts that do not resolve: flake.nix.__self
+    control 2 (no Blocked-on) -> rejected: ENVIRONMENT-BLOCKED with no `**Blocked on:**` line naming the missing environmen
+    control 3 (no PORTED line) -> rejected: ENVIRONMENT-BLOCKED with no `PORTED: <path>` line; this marker is only for work 
+  V25: accepted (artifacts resolve)
+    control 1 (paths broken) -> rejected: ENVIRONMENT-BLOCKED names ported artifacts that do not resolve: .github/workflow
+    control 2 (no Blocked-on) -> rejected: ENVIRONMENT-BLOCKED with no `**Blocked on:**` line naming the missing environmen
+    control 3 (no PORTED line) -> rejected: ENVIRONMENT-BLOCKED with no `PORTED: <path>` line; this marker is only for work 
+  V26: accepted (artifacts resolve)
+    control 1 (paths broken) -> rejected: ENVIRONMENT-BLOCKED names ported artifacts that do not resolve: crates-sys/zlib-
+    control 2 (no Blocked-on) -> rejected: ENVIRONMENT-BLOCKED with no `**Blocked on:**` line naming the missing environmen
+    control 3 (no PORTED line) -> rejected: ENVIRONMENT-BLOCKED with no `PORTED: <path>` line; this marker is only for work 
+  V30: accepted (artifacts resolve)
+    control 1 (paths broken) -> rejected: ENVIRONMENT-BLOCKED names ported artifacts that do not resolve: .github/workflow
+    control 2 (no Blocked-on) -> rejected: ENVIRONMENT-BLOCKED with no `**Blocked on:**` line naming the missing environmen
+    control 3 (no PORTED line) -> rejected: ENVIRONMENT-BLOCKED with no `PORTED: <path>` line; this marker is only for work 
+  V31: accepted (artifacts resolve)
+    control 1 (paths broken) -> rejected: ENVIRONMENT-BLOCKED names ported artifacts that do not resolve: .port/tools/gate
+    control 2 (no Blocked-on) -> rejected: ENVIRONMENT-BLOCKED with no `**Blocked on:**` line naming the missing environmen
+    control 3 (no PORTED line) -> rejected: ENVIRONMENT-BLOCKED with no `PORTED: <path>` line; this marker is only for work 
+  V33: accepted (artifacts resolve)
+    control 1 (paths broken) -> rejected: ENVIRONMENT-BLOCKED names ported artifacts that do not resolve: .port/tools/gate
+    control 2 (no Blocked-on) -> rejected: ENVIRONMENT-BLOCKED with no `**Blocked on:**` line naming the missing environmen
+    control 3 (no PORTED line) -> rejected: ENVIRONMENT-BLOCKED with no `PORTED: <path>` line; this marker is only for work 
+  derivation: open and closed are disjoint (1 open, 19 closed)
+    control (struck row) -> contributes neither open nor closed
+    control (same row unstruck) -> correctly read as OPEN
+    control (BEYOND-PIN, not re-verified) -> expiry rule rejects
+    control (same row re-verified) -> accepted
+
+G-P2 SELF-TEST: GREEN — the ENVIRONMENT-BLOCKED arm accepts the shipped rows and rejects each requirement being broken.

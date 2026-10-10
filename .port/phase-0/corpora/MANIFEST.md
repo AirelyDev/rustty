@@ -194,7 +194,7 @@ which is machine-independent.
 
 ---
 
-## Category 4 — vttest / esctest conformance  (0 goldens — TODO-2)
+## Category 4 — vttest / esctest conformance  (0 goldens — TODO-2, closed by P8-W8 T1)
 
 Probed PATH and common install locations (`/opt/homebrew/bin`,
 `/usr/local/bin`, `/Applications`):
@@ -210,6 +210,17 @@ TODO, not a failure** (per task instructions). When stood up, esctest goldens
 should be driven against the rustty terminal (its conformance output is the
 oracle) and vttest used interactively/scripted.
 
+**Closed (P8-W8 T1, 2026-10-08).** The reference added its own esctest runner
+(`test/esctest`, 438d584f0 + edcaf6670), and the port carries it at
+`test/esctest/` (esctest2 fetched by `fetch.sh`, pinned and SHA-256 checked).
+esctest is covered by a live differential rather than stored goldens: gate
+**G-ESCTEST** (`.port/tools/gates/check_esctest.sh`) runs the port's runner and
+the reference's runner at the pin and compares every test's outcome and log, so
+"the oracle" is the reference's own run at each pin instead of a golden that
+would go stale. vttest is interactive; the reference runs it only by hand (its
+dev shell carries it, as `nix/devShell.nix` here does), so there is nothing to
+capture.
+
 ---
 
 ## TODO summary
@@ -219,9 +230,9 @@ oracle) and vttest used interactively/scripted.
   args (exit 1) and otherwise leaks machine-dependent user config + sentry stderr.
   Default-config goldens captured; sample-file parse goldens deferred to the
   rustty CLI.
-- **TODO-2 (vttest/esctest):** both absent from this machine. Install
-  (`brew install vttest`; clone esctest) and capture conformance goldens in a
-  later pass.
+- **TODO-2 (vttest/esctest):** CLOSED by P8-W8 T1: esctest runs through
+  `test/esctest` and the G-ESCTEST differential against the reference's runner;
+  vttest stays a manual tool, as in the reference (see Category 4).
 - **TODO-3 (cmake c-vt examples):** `c-vt-cmake{,-static,-cross}` were not built
   (no `cmake`; they also `FetchContent` from GitHub `main`, not the pin) — they
   demonstrate CMake consumption, not VT behavior, so they are not parity oracles.

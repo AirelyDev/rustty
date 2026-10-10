@@ -58,6 +58,12 @@
 #                                     prove G6t's FAIL arms and its scope
 #   check_leaks.sh --libtest <mode>   the pre-nextest runner for G6 / G6c
 #                                     (`--all-done`, `--crate`, `--debug-assertions-off`)
+#
+# G6_ONLY="<crate> ..." (ci.sh --changed-since) narrows `--all-done` and
+# `--tree-borrows` to those crates: the others are named as scoped out and not
+# run. A pure narrowing: every crate it keeps runs exactly as in a full run and
+# any RED stays RED, but a narrowed run that is otherwise clean answers exit 3
+# with a `SCOPED-GREEN` line, never GREEN (the sanitizers.sh SAN_ONLY rule).
 # Exit 0 = GREEN (clean) ; 3 = BLOCKED (miri toolchain missing — a tooling
 # input, surfaced by ci.sh as a WARNING per the CI.md exit contract, never a
 # silent green and never misclassified as a claimed-done regression) ; any
@@ -1013,7 +1019,7 @@ rustty-renderer:health_tests rustty-renderer:image::macos_impl rustty-renderer:l
 rustty-renderer:log_capture rustty-renderer:message::change_config_tests
 rustty-renderer:metal::gpu_abi rustty-renderer:metal::shaders::metallib_tests
 rustty-renderer:metal::test_support rustty-renderer:overlay rustty-renderer:state
-rustty-renderer:thread rustty-renderer:undefined rustty-renderer:webgl
+rustty-renderer:thread rustty-renderer:undefined
 rustty-renderer:=generic::macos_impl::tests::health::metal_health_push_deadlocks::metal_async_frame_completed_never_blocks_on_a_full_mailbox
 rustty-renderer:=generic::macos_impl::tests::health::metal_health_push_deadlocks::metal_health_report_concurrent_completions_stay_consistent
 rustty-renderer:=generic::macos_impl::tests::health::metal_health_push_deadlocks::metal_health_report_never_restores_an_undelivered_health
@@ -1138,10 +1144,17 @@ run_g6t() {
   require_miri; require_nextest
   local c rc=0 t0=$SECONDS
   echo "=== G6t :: Miri Tree Borrows via nextest over: $G6T_SCOPE ==="
+  local ran=0
   for c in $(g6t_crates); do
+    if ! g6_in_scope "$c"; then echo "=== G6t [$c] scoped out by G6_ONLY (not run) ==="; continue; fi
     echo "=== G6t [$c] ==="
+    ran=$((ran + 1))
     g6t_crate "$c" "" || rc=1
   done
+  if [ "$rc" = 0 ] && [ -n "${G6_ONLY:-}" ]; then
+    echo "G6t SCOPED-GREEN ($((SECONDS - t0))s; $ran G6t crate(s) of G6_ONLY clean) — BLOCKED (exit 3), never a full GREEN"
+    return 3
+  fi
   if [ "$rc" = 0 ]; then echo "G6t GREEN ($((SECONDS - t0))s; Tree Borrows, UB/leak-clean, non-vacuous)"
   else echo "G6t RED ($((SECONDS - t0))s)"; fi
   return $rc
@@ -1201,6 +1214,9 @@ rustty-renderer:=cell::no_such_test rustty-renderer:-no_such_module::no_such_tes
   [ $rc = 0 ] && echo "G6t --self-test: ALL ARMS REACHABLE"
   return $rc
 }
+
+# G6_ONLY: 0 when crate $1 is in the narrowed scope (or no G6_ONLY is set).
+g6_in_scope() { [ -z "${G6_ONLY:-}" ] && return 0; case " $G6_ONLY " in *" $1 "*) return 0 ;; esac; return 1; }
 
 enumerate_crate_dirs() {
   local cargo_toml
@@ -1271,6 +1287,7 @@ case "${1:---all-done}" in
     rc=0; ran=0; probed=0; failed_probe=0
     while IFS= read -r dir; do
       c="$(basename "$dir")"
+      if ! g6_in_scope "$c"; then continue; fi
       probed=$((probed + 1))
       claimed_done "$dir"; st=$?
       case $st in
@@ -1284,6 +1301,11 @@ case "${1:---all-done}" in
       echo "  Those crates were neither run nor honestly skipped — treat this run as"
       echo "  covering nothing until the probe works."
       rc=1
+    fi
+    # G6_ONLY narrowed the run: never a full GREEN (see the header).
+    if [ -n "${G6_ONLY:-}" ] && [ "$rc" = 0 ]; then
+      echo "G6 SCOPED-GREEN ($ran claimed-done crate(s) of the $probed in G6_ONLY clean; G6_ONLY: $G6_ONLY) — BLOCKED (exit 3), never a full GREEN"
+      exit 3
     fi
     # A run that examined ZERO crates is not progress, it is a vacuous green.
     # With the old `|| continue`, a probe broken for every crate landed here and

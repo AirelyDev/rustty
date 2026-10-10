@@ -76,20 +76,21 @@ ORACLE_PIN = _gatelib.oracle_pin()
 ARTIFACTS = os.path.expanduser("~/rustty-oracle-artifacts")
 ORACLE_DEFAULT = os.path.join(
     ARTIFACTS, "ghostty-bench-" + (ORACLE_PIN or "MISSING-PIN")[:9])
-#: sha256 of the stored oracle binary (rebuilt 2026-10-07 by P7-W19 from an
-#: archive of the current pin, recipe in README.md; the S-4 binary of the
-#: previous pin was 46b5adfb...). Its __TEXT/__DATA contents are reproducible
-#: (S-4: a second build from a fresh archive and cache matched them); the
-#: whole-file hash is not, because the linker's LC_UUID and the debug map
-#: record the build directory. So the file is kept, and this pins it.
-ORACLE_SHA256 = "79a642786cc3f9e6be52a9104b01c684387364a8c99d871b200a4decb8fb0d79"
+#: sha256 of the stored oracle binary (rebuilt 2026-10-09 by P8-W10 T0 with
+#: Zig 0.16.0 ReleaseFast from an archive of the current pin, recipe in
+#: README.md; the previous pin's binary, rebuilt by P8-W9, was 84f5dc9f...,
+#: and the S-4 binary before it 46b5adfb...). Its __TEXT/__DATA contents are
+#: reproducible (S-4: a second build from a fresh archive and cache matched
+#: them); the whole-file hash is not, because the linker's LC_UUID and the
+#: debug map record the build directory. So the file is kept, and this pins it.
+ORACLE_SHA256 = "37c6317668c020e6be5b62ca2e4d2d45c9afee41ff9e60d2920c4171490fee49"
 #: The pin ORACLE_SHA256 was built at, as `pin_digest(pin)` (the first 16 hex
 #: of the pin's sha256: a digest, not a copy of the pin, so G-ORACLE-SH's pin
 #: arms stay green). When ORACLE_PIN advances this stops matching and every
 #: oracle run BLOCKs until the oracle is rebuilt and BOTH constants are updated
 #: in the same commit -- so the old binary copied to the new file name cannot
 #: pass as the new oracle (review S-4 F3).
-ORACLE_SHA256_PIN_DIGEST = "8dec11eeab2390f0"
+ORACLE_SHA256_PIN_DIGEST = "ef1a9f5859c2ce05"
 COR = os.path.join(SHARED, ".port/phase-0/baseline/corpora")
 UTF8 = os.path.join(COR, "utf8.bin")
 ASCII = os.path.join(COR, "ascii.bin")

@@ -343,29 +343,31 @@ fn read_trampoline(
         writer: writer_erased,
         write_failed: false,
     };
-    // if (!req.reader.read.?(req.reader.userdata, .init(mime), .{
+    // const ok = req.reader.read.?(req.reader.userdata, .init(mime), .{
     //     .write = &Sink.write,
     //     .userdata = &sink,
-    // })) {
-    //     return if (sink.write_failed) error.WriteFailed else error.ReadFailed;
-    // }
+    // });
     // SAFETY: `req` is the live `terminal_paste` request (`ctx` is borrowed
     // for the paste call duration); `.?` on `read` is the reference's checked
     // unwrap (terminal_paste validated the reader when mimes exist).
     let reader = unsafe { (*req).reader };
-    if !(reader.read.unwrap())(
+    let ok = (reader.read.unwrap())(
         reader.userdata,
         LibString::init(mime),
         io::Writer {
             write: Some(Sink::write),
             userdata: &mut sink as *mut Sink as *mut c_void,
         },
-    ) {
-        return Err(if sink.write_failed {
-            clipboard::MimeReaderError::WriteFailed
-        } else {
-            clipboard::MimeReaderError::ReadFailed
-        });
+    );
+    // A reader that ignores a refused write would otherwise paste what
+    // was written with the refused data missing.
+    // if (sink.write_failed) return error.WriteFailed;
+    if sink.write_failed {
+        return Err(clipboard::MimeReaderError::WriteFailed);
+    }
+    // if (!ok) return error.ReadFailed;
+    if !ok {
+        return Err(clipboard::MimeReaderError::ReadFailed);
     }
     Ok(())
 }
@@ -716,6 +718,9 @@ mod tests {
             pub len: usize,
             pub reads: [usize; 2],
             pub fail: bool,
+            /// Keep writing and report success after a refused write, which
+            /// the contract forbids.
+            pub ignore_refused: bool,
         }
 
         impl Contents {
@@ -727,6 +732,7 @@ mod tests {
                     len: 0,
                     reads: [0; 2],
                     fail: false,
+                    ignore_refused: false,
                 };
                 for entry in entries {
                     this.mimes[this.len] = LibString::init(entry.0);
@@ -798,7 +804,11 @@ mod tests {
                     while offset < data.len() {
                         // const n = @min(3, data.len - offset);
                         let n = std::cmp::min(3, data.len() - offset);
-                        if !(writer.write.unwrap())(writer.userdata, data[offset..].as_ptr(), n) {
+                        // const accepted = writer.write.?(writer.userdata, data[offset..].ptr, n);
+                        // if (!accepted and !self.ignore_refused) return false;
+                        let accepted =
+                            (writer.write.unwrap())(writer.userdata, data[offset..].as_ptr(), n);
+                        if !accepted && !(*this).ignore_refused {
                             return false;
                         }
                         offset += n;
@@ -1176,6 +1186,67 @@ mod tests {
 
             unsafe { terminal_c::free(t) };
         });
+    }
+
+    // test "terminal_paste refused write ignored by the reader" {
+    #[test]
+    fn terminal_paste_refused_write_ignored_by_the_reader() {
+        let _guard = PASTE_TEST_LOCK.lock().unwrap();
+        use capture as s;
+        // const S = TerminalPasteCapture;
+        // S.reset();
+        s::reset();
+
+        // A write is only refused when the buffer the text is read into
+        // fails to grow, so the terminal's allocator is the lever.
+        // var failing: std.testing.FailingAllocator = .init(testing.allocator, .{});
+        // const zig_alloc = failing.allocator();
+        // const alloc: lib.alloc.Allocator = .fromZig(&zig_alloc);
+        let failing = rustty_vt::alloc::testing::FailingAllocator::over_heap(
+            rustty_vt::alloc::testing::Config::default(),
+        );
+        let alloc = failing.allocator();
+        // var t: Terminal = null;
+        // try testing.expectEqual(Result.success, terminal_c.new(&alloc, &t, 80, 24));
+        // defer terminal_c.free(t);
+        let mut t: Terminal = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            terminal_c::new(&alloc as *const CAllocator, &mut t, 80, 24)
+        });
+        // try testing.expectEqual(Result.success, terminal_c.set(t, .write_pty, @ptrCast(&S.writePty)));
+        assert_eq!(Result::Success, unsafe {
+            terminal_c::set(
+                t,
+                terminal_c::Option_::WritePty,
+                s::write_pty as *const c_void,
+            )
+        });
+
+        // var contents: S.Contents = .init(&.{.{ "text/plain", "hello" }});
+        // contents.ignore_refused = true;
+        // const req = contents.request();
+        let mut contents = s::Contents::init(&[(b"text/plain", b"hello")]);
+        let contents = &raw mut contents;
+        // SAFETY: `contents` is the one raw root (N455).
+        unsafe { (*contents).ignore_refused = true };
+        let req = unsafe { s::Contents::request_raw(contents) };
+
+        // Every allocation from here on is refused, the first write's
+        // included. The reader ignores that and reports success.
+        // failing.fail_index = failing.alloc_index;
+        failing.fail_index.set(failing.alloc_index.get());
+        // try testing.expectEqual(Result.out_of_memory, terminal_paste(t, &req, null));
+        assert_eq!(Result::OutOfMemory, unsafe {
+            terminal_paste(t, &req, std::ptr::null_mut())
+        });
+        // try testing.expectEqual(@as(usize, 1), contents.reads[0]);
+        assert_eq!(1, unsafe { (*contents).reads[0] });
+        // try testing.expectEqual(@as(usize, 0), S.write_count);
+        assert_eq!(0, unsafe { s::WRITE_COUNT });
+
+        failing.fail_index.set(usize::MAX);
+        unsafe { terminal_c::free(t) };
+        assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
     }
 
     // test "terminal_paste event"

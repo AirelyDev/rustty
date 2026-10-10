@@ -1,4 +1,4 @@
-//! PORTS: ghostty src/terminal/Terminal.zig — the `deccolm` / `resize` / `switchScreen` / `switchScreenMode` / `fullReset` tests.
+//! PORTS: ghostty src/terminal/Terminal.zig — the `deccolm` / `resize` / `switchScreen` / `switchScreenMode` / `fullReset` / `softReset` tests.
 
 use super::*;
 
@@ -354,6 +354,200 @@ fn terminal_full_reset_tracked_pins() {
     t.deinit(Global);
 }
 
+// test "Terminal: default xt checksum survives resets" (oracle 9272a2f7c)
+//
+// PORT NOTE: this also pins P8-W2 T1's `full_reset` slot: RIS builds `Flags`
+// with a `..Flags::default()` spread, which would silently reset
+// `xt_checksum` to the zero value instead of `default_xt_checksum`.
+#[test]
+fn terminal_default_xt_checksum_survives_resets() {
+    use crate::xt_checksum::Flags;
+
+    let mut t = Terminal::init(
+        Global,
+        Options {
+            default_xt_checksum: Flags::default().with_positive(true),
+            ..opts(10, 10)
+        },
+    )
+    .unwrap();
+    assert_eq!(Flags::default().with_positive(true), t.flags.xt_checksum);
+
+    t.flags.xt_checksum = Flags::default().with_full(true);
+    t.full_reset();
+    assert_eq!(Flags::default().with_positive(true), t.flags.xt_checksum);
+
+    t.set_default_xt_checksum(Flags::default().with_no_trim(true));
+    assert_eq!(Flags::default().with_no_trim(true), t.flags.xt_checksum);
+    t.full_reset();
+    assert_eq!(Flags::default().with_no_trim(true), t.flags.xt_checksum);
+
+    // t.flags.xt_checksum = .{ .full = true };
+    // t.softReset();
+    // try testing.expectEqual(xt_checksum.Flags{ .no_trim = true }, t.flags.xt_checksum);
+    t.flags.xt_checksum = Flags::default().with_full(true);
+    t.soft_reset();
+    assert_eq!(Flags::default().with_no_trim(true), t.flags.xt_checksum);
+
+    t.deinit(Global);
+}
+
+// test "Terminal: softReset modes" (oracle f473f3109)
+#[test]
+fn terminal_soft_reset_modes() {
+    use modespkg::Mode;
+
+    let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+    t.modes.set(Mode::Insert, true);
+    t.modes.set(Mode::Origin, true);
+    t.modes.set(Mode::Wraparound, false);
+    t.modes.set(Mode::ReverseWrap, true);
+    t.modes.set(Mode::CursorVisible, false);
+    t.modes.set(Mode::CursorKeys, true);
+    t.modes.set(Mode::KeypadKeys, true);
+    t.modes.set(Mode::BracketedPaste, true);
+    t.soft_reset();
+
+    assert!(!t.modes.get(Mode::Insert));
+    assert!(!t.modes.get(Mode::Origin));
+    assert!(t.modes.get(Mode::Wraparound));
+    assert!(!t.modes.get(Mode::ReverseWrap));
+    assert!(t.modes.get(Mode::CursorVisible));
+    assert!(!t.modes.get(Mode::CursorKeys));
+    assert!(!t.modes.get(Mode::KeypadKeys));
+
+    // Modes DECSTR doesn't cover are left alone.
+    assert!(t.modes.get(Mode::BracketedPaste));
+
+    t.deinit(Global);
+}
+
+// test "Terminal: softReset margins" (oracle f473f3109)
+#[test]
+fn terminal_soft_reset_margins() {
+    let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+    t.set_top_and_bottom_margin(3, 4);
+    t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+    t.set_left_and_right_margin(5, 6);
+    t.soft_reset();
+
+    assert!(!t.modes.get(modespkg::Mode::EnableLeftAndRightMargin));
+    assert_eq!(
+        ScrollingRegion {
+            top: 0,
+            bottom: 9,
+            left: 0,
+            right: 9,
+        },
+        t.scrolling_region
+    );
+
+    t.deinit(Global);
+}
+
+// test "Terminal: softReset keeps the cursor and screen" (oracle f473f3109)
+#[test]
+fn terminal_soft_reset_keeps_the_cursor_and_screen() {
+    let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+    t.print_string(b"hello").unwrap();
+    t.set_cursor_pos(6, 5);
+    t.soft_reset();
+
+    assert_eq!(4, t.active_mut().cursor.x);
+    assert_eq!(5, t.active_mut().cursor.y);
+
+    {
+        let str = t.plain_string(Global).unwrap();
+        assert_eq!(str.as_slice(), "hello".as_bytes());
+    }
+
+    t.deinit(Global);
+}
+
+// test "Terminal: softReset saved cursor" (oracle f473f3109)
+#[test]
+fn terminal_soft_reset_saved_cursor() {
+    let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+    t.set_cursor_pos(6, 5);
+    t.set_attribute(sgr::Attribute::Bold).unwrap();
+    t.save_cursor();
+    t.soft_reset();
+    t.restore_cursor();
+
+    assert_eq!(0, t.active_mut().cursor.x);
+    assert_eq!(0, t.active_mut().cursor.y);
+    assert!(!t.active_mut().cursor.style.flags.bold);
+
+    t.deinit(Global);
+}
+
+// test "Terminal: softReset pen, protection, and charsets" (oracle f473f3109)
+#[test]
+fn terminal_soft_reset_pen_protection_and_charsets() {
+    let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+    t.set_attribute(sgr::Attribute::Bold).unwrap();
+    t.set_protected_mode(ansi::ProtectedMode::Dec);
+    t.configure_charset(charsets::Slots::G0, charsets::Charset::DecSpecial);
+    t.soft_reset();
+
+    assert_eq!(0 as style::Id, t.active_mut().cursor.style_id);
+    assert!(!t.active_mut().cursor.protected);
+    assert_eq!(
+        charsets::Charset::Utf8,
+        t.active_mut().charset.charsets.get(charsets::Slots::G0)
+    );
+
+    t.deinit(Global);
+}
+
+// test "Terminal: softReset status display and checksum" (oracle f473f3109)
+#[test]
+fn terminal_soft_reset_status_display_and_checksum() {
+    use crate::xt_checksum::Flags;
+
+    let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+    t.status_display = ansi::StatusDisplay::StatusLine;
+    t.flags.xt_checksum = Flags::default().with_positive(true);
+    t.soft_reset();
+
+    assert!(t.status_display == ansi::StatusDisplay::Main);
+    assert_eq!(Flags::default(), t.flags.xt_checksum);
+
+    t.deinit(Global);
+}
+
+// test "Terminal: softReset palette" (oracle f473f3109)
+#[test]
+fn terminal_soft_reset_palette() {
+    let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+    // Nothing changed, so nothing is redrawn.
+    t.soft_reset();
+    assert!(!t.flags.dirty.palette);
+
+    let red = color::RGB {
+        r: 0xff,
+        g: 0,
+        b: 0,
+    };
+    t.colors.palette.set(1, red);
+    t.colors.palette.set(200, red);
+    t.soft_reset();
+
+    assert!(t.flags.dirty.palette);
+    assert_eq!(0_usize, t.colors.palette.mask.count());
+    assert_eq!(color::DEFAULT[1], t.colors.palette.current[1]);
+    assert_eq!(color::DEFAULT[200], t.colors.palette.current[200]);
+
+    t.deinit(Global);
+}
+
 // test "Terminal: glyph APC stores session glossary entries"
 #[test]
 #[cfg_attr(
@@ -445,6 +639,102 @@ fn terminal_resize_less_cols_with_wide_char_then_print() {
     .unwrap();
     t.set_cursor_pos(1, 2);
     t.print('😀' as u32).unwrap(); // 0x1F600
+
+    t.deinit(alloc);
+}
+
+// test "Terminal: resize less cols without reflow cutting wide char tail"
+#[test]
+fn terminal_resize_less_cols_without_reflow_cutting_wide_char_tail() {
+    let alloc = Global;
+    let mut t = Terminal::init(alloc, opts(3, 1)).unwrap();
+
+    t.print('a' as u32).unwrap();
+    t.print('一' as u32).unwrap();
+    t.modes.set(modespkg::Mode::Wraparound, false);
+    t.resize(
+        alloc,
+        Resize {
+            cols: 2,
+            rows: 1,
+            cell_size_px: None,
+        },
+    )
+    .unwrap();
+
+    let list_cell = t.active_mut().pages.get_cell(active_pt(1, 0)).unwrap();
+    assert!(unsafe { (*list_cell.cell).is_empty() });
+
+    t.deinit(alloc);
+}
+
+// PORT NOTE: NOT a port of a reference `test {}` block (Rustty-only, N518,
+// upstream e6db5b633). The reference test above only checks the cut cell;
+// this drives the whole reachable sequence through the stream: narrow the
+// alt screen (no reflow) so a wide character straddles the new right edge,
+// then ICH (`CSI @`) and EL 1 (`CSI 1 K`), which both pair a wide head with
+// the cell after it. Before the fix they hit the `debug_assert!` in
+// `Screen::clear_cells` (debug) or wrote `cells[cols]` (release).
+// test "Terminal: resize less cols on alt screen then ICH and EL1 with a cut wide char"
+#[test]
+fn terminal_resize_less_cols_on_alt_screen_then_ich_and_el1_with_a_cut_wide_char() {
+    let alloc = Global;
+    let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();
+
+    {
+        let mut stream = t.vt_stream();
+        // CSI ? 1049 h -- alternate screen
+        stream.next_slice(b"\x1b[?1049h");
+        // Head of the wide character at column 8, its spacer tail at 9.
+        stream.next_slice("abcdefgh\u{6A4B}".as_bytes());
+        stream.deinit();
+    }
+
+    // Column 8 becomes cols - 1, cutting the spacer tail off.
+    t.resize(
+        alloc,
+        Resize {
+            cols: 9,
+            rows: 3,
+            cell_size_px: None,
+        },
+    )
+    .unwrap();
+
+    // The cut must not leave a wide head in the new last column.
+    {
+        let list_cell = t.active_mut().pages.get_cell(active_pt(8, 0)).unwrap();
+        assert_ne!(crate::page::Wide::Wide, unsafe { (*list_cell.cell).wide() });
+    }
+
+    {
+        let mut stream = t.vt_stream();
+        // A background color makes every blank cell a BgColorPalette cell,
+        // which `is_empty` rejects, so a stray write past the row shows up
+        // in the capacity loop below even in release builds.
+        stream.next_slice(b"\x1b[41m");
+        // ICH from column 0: a row shift over the narrowed row.
+        stream.next_slice(b"\x1b[1;1H");
+        stream.next_slice(b"\x1b[@");
+        // Cursor to the last column, then ICH and EL 1.
+        stream.next_slice(b"\x1b[1;9H");
+        stream.next_slice(b"\x1b[@");
+        stream.next_slice(b"\x1b[1K");
+        stream.deinit();
+    }
+
+    let list_cell = t.active_mut().pages.get_cell(active_pt(8, 0)).unwrap();
+    let cell = unsafe { *list_cell.cell };
+    assert_eq!(crate::page::Wide::Narrow, cell.wide());
+    assert!(!cell.has_text());
+
+    // Nothing at or past `cols` was written, up to the page capacity.
+    let page = unsafe { &*crate::pagelist::Node::page(list_cell.node) };
+    assert_eq!(9, page.size.cols);
+    let cells = unsafe { (*list_cell.row).cells().ptr(page.memory_ptr()) };
+    for x in 9..page.capacity.cols as usize {
+        assert!(unsafe { (*cells.add(x)).is_empty() }, "cell {x} written");
+    }
 
     t.deinit(alloc);
 }
@@ -1352,6 +1642,133 @@ fn terminal_resize_with_reflow_and_saved_cursor_pending_wrap() {
     }
 
     t.deinit(alloc);
+}
+
+// test "Terminal: saved cursor survives repeated widening"
+#[test]
+fn terminal_saved_cursor_survives_repeated_widening() {
+    let alloc = Global;
+    let mut t = Terminal::init(alloc, opts(4, 5)).unwrap();
+
+    t.print_string("abc\nAAA|".as_bytes()).unwrap();
+    t.save_cursor();
+    for cols in [5, 6] {
+        t.resize(
+            alloc,
+            Resize {
+                cols,
+                rows: 5,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
+    }
+    t.restore_cursor();
+    t.print('X' as u32).unwrap();
+
+    {
+        let str = t.plain_string(Global).unwrap();
+        assert_eq!(str.as_slice(), "abc\nAAA|X".as_bytes());
+    }
+
+    t.deinit(alloc);
+}
+
+// test "Terminal: resize pending wrap live and saved cursors"
+#[test]
+fn terminal_resize_pending_wrap_live_and_saved_cursors() {
+    let alloc = Global;
+    struct Case {
+        text: &'static str,
+        cols: u16,
+        pending_wrap: bool,
+        expected: &'static str,
+    }
+    let cases = [
+        // Widening leaves room after the formerly full line.
+        Case {
+            text: "ABCD",
+            cols: 6,
+            pending_wrap: false,
+            expected: "ABCDX",
+        },
+        // Narrowing can move the last character into the middle of a row.
+        Case {
+            text: "ABCD",
+            cols: 3,
+            pending_wrap: false,
+            expected: "ABC\nDX",
+        },
+        // Keep pending wrap when the last character still fills a row.
+        Case {
+            text: "ABCD",
+            cols: 2,
+            pending_wrap: true,
+            expected: "AB\nCD\nX",
+        },
+        // A height-only resize also preserves pending wrap.
+        Case {
+            text: "ABCD",
+            cols: 4,
+            pending_wrap: true,
+            expected: "ABCD\nX",
+        },
+        // Reflow can merge previously wrapped rows.
+        Case {
+            text: "ABCDEFGH",
+            cols: 6,
+            pending_wrap: false,
+            expected: "ABCDEF\nGHX",
+        },
+        // A wide character at the old right edge must not be overwritten.
+        Case {
+            text: "AB界",
+            cols: 6,
+            pending_wrap: false,
+            expected: "AB界X",
+        },
+        // A cursor without pending wrap must not advance an extra cell.
+        Case {
+            text: "ABC",
+            cols: 6,
+            pending_wrap: false,
+            expected: "ABCX",
+        },
+    ];
+
+    for case in cases {
+        for restore in [false, true] {
+            let mut t = Terminal::init(alloc, opts(4, 5)).unwrap();
+            t.print_string(case.text.as_bytes()).unwrap();
+            if restore {
+                t.save_cursor();
+            }
+
+            t.resize(
+                alloc,
+                Resize {
+                    cols: case.cols as _,
+                    rows: 6,
+                    cell_size_px: None,
+                },
+            )
+            .unwrap();
+            if restore {
+                t.restore_cursor();
+            }
+            assert_eq!(case.pending_wrap, unsafe {
+                (*t.screens.active).cursor.pending_wrap
+            });
+
+            t.print('X' as u32).unwrap();
+            {
+                let str = t.plain_string(Global).unwrap();
+                assert_eq!(str.as_slice(), case.expected.as_bytes());
+            }
+
+            t.deinit(alloc);
+        }
+    }
 }
 
 // test "Terminal: DECCOLM without DEC mode 40"

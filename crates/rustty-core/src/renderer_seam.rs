@@ -365,6 +365,9 @@ impl RendererBox {
         // SAFETY: `self.0` came from `Box::into_raw(Box::new(..))` in `new`, and
         // the contract above makes this the last use.
         unsafe { drop(Box::from_raw(self.0)) };
+        // P8-W6 T2 (Review Focus 4): the test-only drop-order probe.
+        #[cfg(test)]
+        crate::app::drop_order_probe::record(crate::app::drop_order_probe::Event::Renderer);
     }
 }
 
@@ -376,7 +379,7 @@ impl Renderer {
     // `pub fn init(alloc: Allocator, options: renderer.Options) !Self`
     // (generic.zig:658) — so the alloc STAYS on the forwarder. Callsite
     // Surface.zig:551. Maps `Options<A>` -> the real `generic::Options`
-    // (`config`/`font_grid`/`size`); the apprt-typed `surface_mailbox`/
+    // (`device`/`config`/`font_grid`/`size`); the apprt-typed `surface_mailbox`/
     // `rt_surface`/`thread` stay in core (surface-mailbox seam: the real
     // renderer does not store them).
     //
@@ -386,11 +389,19 @@ impl Renderer {
     // that errdefer lives INSIDE the real `Renderer::init` (it owns the moved
     // `DerivedConfig`), so the forwarder does NOT re-run `config.deinit()` on
     // error — doing so would be a double-free.
-    pub fn init<A: apprt::App + 'static>(
+    /// Builds the surface's renderer (`generic.zig` `init`), forwarding to
+    /// [`rustty_renderer::Renderer::init`].
+    ///
+    /// # Safety
+    /// As [`rustty_renderer::Renderer::init`]: `options.device` points to a live
+    /// `Device` and `options.font_grid` to a live `SharedGrid`, both outliving the
+    /// returned renderer (P8-W9 FX7, review M1).
+    pub unsafe fn init<A: apprt::App + 'static>(
         alloc: Allocator,
         options: Options<A>,
     ) -> Result<Renderer, RendererError> {
         let Options {
+            device,
             config,
             font_grid,
             size,
@@ -410,15 +421,19 @@ impl Renderer {
             rustty_renderer::generic::SurfaceMailbox::new(Arc::new(SurfaceMailboxAdapter {
                 surface_mailbox,
             }));
-        let inner = rustty_renderer::Renderer::init(
-            alloc,
-            rustty_renderer::generic::Options {
-                config,
-                font_grid,
-                size,
-                surface_mailbox,
-            },
-        )?;
+        // SAFETY: the caller's contract (this fn's `# Safety`) is the real init's.
+        let inner = unsafe {
+            rustty_renderer::Renderer::init(
+                alloc,
+                rustty_renderer::generic::Options {
+                    device,
+                    config,
+                    font_grid,
+                    size,
+                    surface_mailbox,
+                },
+            )
+        }?;
         // N437: the main thread's handles, taken before the render thread starts.
         let handles = RendererHandles {
             draw_mutex: inner.draw_mutex.clone(),
@@ -550,6 +565,15 @@ impl Renderer {
 // by value, the rest are raw pointers), so a lifetime parameter would be
 // unused (E0392) and is dropped — faithful to Options.zig.
 pub struct Options<A: apprt::App + 'static> {
+    /// The device state that corresponds to the physical GPU
+    /// we'd like to render to.
+    //
+    // P8-W6 T2 (`40d5b860d`): `device: *renderer.Device` (Options.zig:7-9), the
+    // app's render device (`&app.device`, `Surface.zig:564`), forwarded to the
+    // real renderer's `Options.device`. The `App` owns it out of line
+    // (`app::DeviceBox`, N522).
+    pub device: *const rustty_renderer::Device,
+
     /// The derived configuration for this renderer implementation.
     //
     // PORT NOTE: `config: renderer.Renderer.DerivedConfig` — now the real
@@ -2680,6 +2704,7 @@ mod compression_tests {
                         default_modes: rustty_vt::modes::ModePacked::default(),
                         default_cursor_style: rustty_vt::screen::CursorStyle::Block,
                         default_cursor_blink: Some(false),
+                        default_xt_checksum: Default::default(),
                         kitty_image_storage_limit: 0,
                         kitty_image_loading_limits:
                             rustty_vt::kitty::graphics_image::Limits::DIRECT,

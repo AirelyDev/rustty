@@ -1,0 +1,64 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running unittests src/lib.rs (target/debug/deps/rustty_extra-cc4ac705294c0cdf)
+
+running 35 tests
+test mdgen::render::tests::html_is_standalone_and_escaped ... ok
+test mdgen::render::tests::hyphens_are_escaped ... ok
+test mdgen::render::tests::definition_terms_match_the_tp_count ... ok
+test mdgen::render::tests::leading_control_chars_are_escaped ... ok
+test mdgen::render::tests::markdown_backslash_escapes_resolve ... ok
+test fish::tests::get_description ... ok
+test mdgen::render::tests::links_become_angle_brackets ... ok
+test mdgen::render::tests::long_prose_is_wrapped_under_eighty_columns ... ok
+test mdgen::render::tests::definition_list_becomes_tp ... ok
+test mdgen::render::tests::multi_paragraph_definition_nests_and_keeps_bullets ... ok
+test mdgen::render::tests::code_block_is_nofill_and_unwrapped ... ok
+test mdgen::render::tests::inline_markup_spanning_source_lines_is_matched ... ok
+test bash::tests::completions_match_golden ... ok
+test mdgen::render::tests::non_ascii_becomes_a_unicode_escape ... ok
+test mdgen::render::tests::title_block_becomes_th ... ok
+test mdgen::render::tests::title_override_renames_only_the_th ... ok
+test vim::tests::compiler_matches_golden ... ok
+test mdgen::tests::substitute_replaces_every_version_marker ... ok
+test sublime::tests::syntax_matches_golden ... ok
+test vim::tests::ftdetect_matches_golden ... ok
+test vim::tests::ftplugin_matches_golden ... ok
+test vim::tests::syntax_generates ... ok
+test vim::tests::syntax_matches_golden ... ok
+test mdgen::tests::gen_actions_covers_every_action_with_the_right_sigil ... ok
+test webgen::tests::actions_mdx_delegates_to_helpgen_actions ... ok
+test zsh::tests::completions_match_golden ... ok
+test mdgen::tests::section_headers_match_the_reference_multiline_literals ... ok
+test mdgen::tests::man_1_markdown_section_order_matches_the_reference ... ok
+test webgen::tests::commands_mdx_covers_every_cli_action ... ok
+test mdgen::tests::gen_keybind_actions_covers_every_action ... ok
+test mdgen::tests::man_5_markdown_section_order_matches_the_reference ... ok
+test webgen::tests::config_mdx_blocks_are_balanced ... ok
+test fish::tests::completions_match_golden ... ok
+test webgen::tests::config_mdx_frontmatter_and_grouping ... ok
+test mdgen::tests::gen_config_covers_every_field_and_honors_the_cli_flag ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/bash_shell_integration_gate.rs (target/debug/deps/bash_shell_integration_gate-b91bc7bfa51acf1c)
+
+running 3 tests
+test pivot_tests::bash44_required_is_false_by_default ... ok
+test pivot_tests::bash44_required_is_true_only_for_exactly_1 ... ok
+test declare_ax_prompt_command_is_installed_and_reports_status_correctly ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/w9_doc_rewrites_reach_generated_artifacts.rs (target/debug/deps/w9_doc_rewrites_reach_generated_artifacts-e56011d43cdf5486)
+
+running 1 test
+test background_blur_and_keybind_doc_rewrites_reach_man5_and_webdata ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rustty_extra
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

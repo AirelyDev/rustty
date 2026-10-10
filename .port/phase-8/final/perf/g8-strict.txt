@@ -1,0 +1,9 @@
+cmd: python3 .port/tools/gates/check_baseline_regression.py --strict --metrics .port/phase-8/final/perf/g8-metrics.json
+start: 2026-10-10T15:14:57Z
+=== G8 :: no perf/memory/size/startup regression vs BASELINE.json ===
+  size ghostty-bench (ReleaseFast): oracle=4110400 rustty=2991728 (-27.22%; tolerance +0%) ok
+  size ghostty-gen (ReleaseFast): oracle=464728 rustty=505296 (+8.73%; tolerance +11%) ok
+  size libghostty-vt.0.1.0.dylib (shared): oracle=1964784 rustty=2107024 (+7.24%; tolerance +10%) ok
+compared 17 metrics; regressions 0; missing-from-candidate 0; basis-changed 0
+GREEN: no regression beyond tolerance across 17 metrics
+rc=0

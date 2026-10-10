@@ -1,0 +1,147 @@
+ids in this capture are provisional; see .port/phase-8/README.md id mapping
+# P8-W9 T2 re-audit at a60e9e2a5 (Task 41 step 3 scope: the 41 upstream files changed in 12752b2ac..a60e9e2a5 under src/terminal, src/terminal/c, src/renderer, include/ghostty/vt)
+Method: workflow p8-reaudit (run wf_7aea2c7c-a33), 5 read-only finder shards (vt-c-api, osc-parser, stream-terminal, screen-pages, renderer) comparing each upstream hunk against the Rustty port at 1d22ba80d, plus an adversarial verifier per shard with findings (default REFUTED).
+Result: 1 CONFIRMED low finding (N605, provisional); 4 shards with 0 findings.
+
+## Finder shard (1 findings)
+files: /Users/gael/projects/rustty/crates/rustty-renderer/src/metal/device.rs; /Users/gael/projects/rustty/crates/rustty-renderer/src/opengl/device.rs; /Users/gael/projects/rustty/crates/rustty-renderer/src/metal/metal_impl.rs; /Users/gael/projects/rustty/crates/rustty-renderer/src/opengl/opengl_impl.rs; /Users/gael/projects/rustty/crates/rustty-renderer/src/opengl/gl/sys.rs; /Users/gael/projects/rustty/crates/rustty-renderer/src/shadertoy.rs; /Users/gael/projects/rustty/crates/rustty-renderer/src/generic.rs; /Users/gael/projects/rustty/crates/rustty-renderer/src/generic/macos_impl/lifecycle.rs; /Users/gael/projects/rustty/crates/rustty-renderer/src/generic/linux_impl/lifecycle.rs; /Users/gael/projects/rustty/crates/rustty-renderer/src/generic/macos_impl/draw.rs; /Users/gael/projects/rustty/crates/rustty-renderer/src/generic/linux_impl/draw.rs; /Users/gael/projects/rustty/crates/rustty-build-config/src/renderer.rs; /Users/gael/projects/rustty/crates/rustty-core/src/renderer_seam.rs
+coverage: I compared all 9 shard files' diffs in 12752b2ac..a60e9e2a5 with their Rustty ports. Everything else checks out except the one test assertion reported in findings.
+- metal/Device.zig maps to metal/device.rs: init, deinit, warmup, chooseDevice, queryMaxTextureSize, the log lines and the doc comments all match. The dead .ios arms are kept as comments.
+- opengl/Device.zig maps to opengl/device.rs: init, the BadParameter diagnosis with its three log.err lines, the config attributes including EGL_SURFACE_TYPE 0, and deinit all match. There are extra Rustty tests for the diagnosis.
+- Metal.zig maps to metal/metal_impl.rs: the queue is created from the app-scoped device, deinit does not release the device, and every default_storage_mode / max_texture_size read goes through the device.
+- OpenGL.zig maps to opengl/opengl_impl.rs plus gl/sys.rs: bindApi with its comment, the 'surface-scoped' context comment, the context created from device.config, and deinit, threadEnter and threadExit through the device display.
+- Options.zig: the device field is in rustty-renderer generic.rs:1024 and rustty-core renderer_seam.rs:558.
+- generic.zig: the new init comment and device argument are in both the macOS and Linux lifecycle.rs. threadExit sets display_realized=false with the upstream comment in both. The drawFrame comment update is in both draw.rs files.
+- backend.zig: the webgl variant is removed and wasm_target is ignored in rustty-build-config renderer.rs.
+- WebGL.zig was deleted upstream and has no Rustty counterpart.
+- shadertoy.zig: the Uniforms field swap is ported, with const offset asserts, and the new test exists under the same name. Its only gap is the one reported.
+Nothing was built or run, as instructed.
+FINDING low: Ported selection-uniform layout test drops upstream's 'exactly one uniform buffer' assertion
+  upstream: /Users/gael/projects/ghostty/src/renderer/shadertoy.zig:399 (at a60e9e2a5) `try testing.expectEqual(@as(usize, 1), count);` inside test "custom shader selection uniform layout matches compiled GLSL" (line 357)
+  rustty: /Users/gael/projects/rustty/crates/rustty-renderer/src/shadertoy.rs:1142 `fn custom_shader_selection_uniform_layout_matches_compiled_glsl()` looks up the block by name through `spirv_block_member_offsets(&spv, "Globals")` (line 1097) and never counts the uniform blocks
+  detail: The upstream test reflects the compiled SPIR-V with spirv-cross, and before it checks offsets it asserts that the shader has exactly one SPVC_RESOURCE_TYPE_UNIFORM_BUFFER. The Rust test parses the SPIR-V by hand and finds the block by its OpName "Globals". It checks the two member offsets but never asserts that only one uniform block exists, so if the prefix ever declared a second uniform block, the Rust test would still pass while upstream's would fail. The offset assertions match upstream exactly; only the block-count assertion is missing. No PORT NOTE, DECISIONS row or UD entry records this gap. A fix is to count the uniform-block decorations (OpDecorate Block/BufferBlock on Uniform-storage variables) and assert the count is 1.
+
+VERDICT CONFIRMED: Ported selection-uniform layout test drops upstream's 'exactly one uniform buffer' assertion
+  evidence: Upstream ghostty/src/renderer/shadertoy.zig:391-399 (a60e9e2a5) calls spvc_resources_get_resource_list_for_type(..., SPVC_RESOURCE_TYPE_UNIFORM_BUFFER, ...) and then `try testing.expectEqual(@as(usize, 1), count);` before checking the member offsets. Rustty's test rustty/crates/rustty-renderer/src/shadertoy.rs:1142-1168 (custom_shader_selection_uniform_layout_matches_compiled_glsl) only calls spirv_block_member_offsets(&spv, "Globals"). That helper (lines 1097-1135) finds the block by OpName and reads OpMemberName and Offset decorations. Neither the helper nor the test counts uniform blocks, so the count==1 check is missing. The spirv-cross-sys FFI (`spvc`) is already imported in shadertoy.rs, so the reflection approach was available. Records: DECISIONS.md M1, UD20 and R3-renderer-apprt-macos.md section 2.5 call for porting the upstream-named test and say the hand-written helper 'is enough'. None of them notes or accepts dropping the uniform-buffer count assertion, and no PORT NOTE at the test mentions it. The gap is real and unrecorded. Severity is low because the offset assertions match upstream.
+
+## Finder shard (0 findings)
+files: /Users/gael/projects/ghostty src/terminal/osc.zig (diff 12752b2ac..a60e9e2a5 + end-state Capture/unknownOrInvalid/captureFailed/nextSlice/next/end); /Users/gael/projects/ghostty src/terminal/osc/parsers.zig (diff); /Users/gael/projects/ghostty src/terminal/osc/parsers/color.zig (diff + osc_105 sites); /Users/gael/projects/ghostty src/terminal/osc/parsers/program_status.zig (full end state); /Users/gael/projects/ghostty src/terminal/osc/parsers/unknown.zig (full end state); /Users/gael/projects/ghostty src/terminal/Parser.zig (diff + osc_parser.end site); /Users/gael/projects/ghostty src/terminal/stream.zig (diff); /Users/gael/projects/ghostty include/ghostty/vt/osc.h (command enum values); /Users/gael/projects/rustty/crates/rustty-vt/src/osc/mod.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/osc/parsers/program_status.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/osc/parsers/unknown.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/osc/parsers/color.rs (osc_105 sites); /Users/gael/projects/rustty/crates/rustty-vt/src/parser.rs (osc_105_empty test, osc end site); /Users/gael/projects/rustty/crates/rustty-vt/src/stream.rs (Handler actions, XtChecksumExtension, Options.osc_unknown_max_bytes, init); /Users/gael/projects/rustty/crates/rustty-vt/src/stream/dispatch.rs (mouse_shape_reset, program_status, unknown arms); /Users/gael/projects/rustty/crates/rustty-vt/src/stream/csi_dispatch.rs (CSI y DECRQCRA/XTCHECKSUM); /Users/gael/projects/rustty/crates/rustty-vt/src/stream/tests/csi_dispatch.rs (DECRQCRA/XTCHECKSUM dispatch tests); /Users/gael/projects/rustty/include/rustty/vt/osc.h (command enum values)
+coverage: I checked every hunk of upstream 12752b2ac..a60e9e2a5 in the 7 shard files against the Rustty port and found no parity gaps.
+
+osc.zig -> crates/rustty-vt/src/osc/mod.rs:
+- Command.unknown and Command.program_status variants, their docs, and the Unknown struct match. The Key order ends with unknown and program_status, and the C enum value RUSTTY_OSC_COMMAND_UNKNOWN=27 matches upstream.
+- unknown_max_bytes field and its doc, plus the init default of 0, match.
+- State: unknown, unknown_truncated, 75, 750, 7501 and 105 are present. The prefix table at mod.rs:921-976 replaces @tagName and is a recorded PORT NOTE (P4).
+- unknownOrInvalid (mod.rs:1411) matches upstream: the fixed vs allocating tier, the fallback to the fixed buffer on allocation failure, and writing the prefix then the byte.
+- captureFailed (mod.rs:1482) pins max_bytes and handles unknown_truncated.
+- nextSlice and next route write failures to captureFailed in both the fixed and the allocating arm.
+- Every `else => invalid` arm became unknown_or_invalid. 104 and 105 are merged into the shared `;` arm. The 75 -> 750 -> 7501 chain uses an allocating capture.
+- end(): CAN (0x18) and SUB (0x1A) return None early. The bridge states (3, 30, 300, 55, 552, 6, 75, 750, 77) go through unknown_or_invalid(None) and then the unknown parser. 7501 goes to program_status and 105 to color.
+- Test "Parser end with CAN or SUB cancels the command" is present (mod.rs:2026).
+
+parsers.zig and color.zig: the program_status and unknown modules are wired in. color.rs:92 has the updated doc line and :123 maps S105 to osc_105.
+
+program_status.zig -> program_status.rs:
+- All limit constants, the State and Kind enums, Report.read_option and write_text, validate, last_value, the name/value byte sets, validate_id, parse_progress and decode_text match.
+- Both log lines match (target osc_program_status; err printed with {:?}, the project-wide convention for Zig `{}` on an error).
+- All 15 "OSC 7501:" tests are present by name with the same cases and assertions.
+
+unknown.zig -> unknown.rs: parse matches, and all 13 "OSC unknown:" tests are present with the same assertions. The FailingAllocator configurations mirror the Zig ones.
+
+Parser.zig: test "osc: 105 empty" is present at parser.rs:1623.
+
+stream.zig -> stream.rs, stream/dispatch.rs and stream/csi_dispatch.rs:
+- Options.osc_unknown_max_bytes (doc and default 0) is applied in init.
+- Handler hooks osc_unknown, mouse_shape_reset, request_xt_checksum, xt_checksum_extension and program_status exist. XtChecksumExtension.cval returns the u5 bits.
+- CSI y DECRQCRA and XTCHECKSUM dispatch match upstream, including the parameter-count limits, the 5-bit truncation and the three warning log lines.
+- An empty OSC 22 dispatches mouse_shape_reset. The program_status and unknown OSC arms are present.
+- Tests "stream: DECRQCRA dispatch" and "stream: XTCHECKSUM dispatch" are present with identical cases.
+
+I did not check the stream.Action.Key lib.Enum tag list. Rustty models actions as Handler trait methods, and Key is used only in stream tests, apprt and benchmarks, so it is not part of the C ABI.
+
+Out of shard: the C-API halves (osc.h/terminal.h program_status and unknown data getters in rustty-vt-c) and the kitty_metadata.ValueIterator semantics were not audited.
+
+## Finder shard (0 findings)
+files: /Users/gael/projects/rustty/crates/rustty-vt/src/xt_checksum.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/pagelist/resize.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/pagelist/builder.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/pagelist/compress.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/pagelist/tests/builder.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/pagelist/tests/compress.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/pagelist/tests/resize_noreflow_b.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/screen.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/screen/clear.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/screen/select.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/screen/tests/resize.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/screen/tests/select.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/page_impl.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/page_tests.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/search/pagelist.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/search/screen.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/snapshot/history.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/snapshot/codec.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/snapshot/mod.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/lib.rs; ghostty git diff 12752b2ac..a60e9e2a5 for all 9 shard files; /Users/gael/projects/ghostty/src/terminal/Screen.zig (resize, SelectLine end state); /Users/gael/projects/ghostty/src/terminal/snapshot/snapshot.zig
+coverage: I found no parity gaps in this shard. I checked every hunk of the upstream diff 12752b2ac..a60e9e2a5 for all 9 files against the Rustty port.
+
+- **PageList.zig.** All of it is ported:
+  - ReflowCursor dst_x is at pagelist/resize.rs:1522.
+  - resizeWithoutReflow clears the head of a split wide char (resize.rs:710).
+  - PageAllocation.FinalizeOptions, finalize(location, options), and prepend with the compress tail (canReclaim(.strict) plus the viewport-top check) are in pagelist/builder.rs:113-235.
+  - MemoryUsage and memoryUsage are in pagelist/compress.rs:378-422.
+  - The three new tests exist by name with the same assertions: "compresses prepended pages unless visible" (tests/builder.rs:376), "PageList memory usage" (tests/compress.rs:2673) and "resize reflow pin in blank cells after line break" (tests/resize_noreflow_b.rs:1913).
+  - The existing tests now call finalize with FinalizeOptions::default().
+- **Screen.zig.** All of it is ported:
+  - MemoryUsage and memoryUsage, with the kitty gate, are at screen.rs:856 and :999.
+  - clearCells now clears the kitty placeholder flag unconditionally on a full row (screen/clear.rs:286).
+  - resize advances the cursor when pending wrap is set and it is no longer at the right edge (screen/clear.rs:699).
+  - selectLine has the end_pin.before bound (screen/select.rs:337).
+  - All 12 adjusted resize tests carry the `pending_wrap = false` lines or the new assertions (screen/tests/resize.rs).
+  - The new test "selectLine semantic boundary around unwritten cells" is at screen/tests/select.rs:284.
+- **page.zig.** The clearCells kitty flag change is ported (page_impl.rs, in clear_cells_inner), and the new test is at page_tests.rs:1051.
+- **search/pagelist.zig and search/screen.zig.** The test call sites are updated.
+- **snapshot/history.zig.** DecodeOptions, decodePage, Decoder.decode and decode all take the options (history.rs:407-611). The new test is at history.rs:982. Its Miri ignore is documented in MIRI_EXCEPTIONS, and a Rust-only companion covers the same path under Miri. The empty-sequence test uses compress:true and checks compressed_pages == 0 (history.rs:1198-1201).
+- **snapshot/main.zig.** The "Compressed History" doc section is at snapshot/mod.rs:155.
+- **snapshot/snapshot.zig.** compress_history and its doc are at codec.rs:397-410. page_options is in Decoder state (codec.rs:583), set at READY (:1027) and passed to decode_page (:1213).
+- **xt_checksum.zig (new).** Ported in full at crates/rustty-vt/src/xt_checksum.rs:
+  - Flags is a u5 bit newtype with matching bit order; this is recorded in a PORT NOTE and DECISIONS P8.
+  - Request is repr(C). selection, limit, compute, value, attributes, extended, MAX_ENCODE_SIZE and encode are all present.
+  - All 12 upstream tests are present by name with identical assertions.
+
+Out of scope: callers of the new APIs outside this shard (Terminal.zig, stream handlers, the C API memory_usage and xt_checksum ABI, the include headers). Per the read-only rule, nothing was built or run.
+
+## Finder shard (0 findings)
+files: /Users/gael/projects/ghostty/src/terminal/stream_terminal.zig (diff 12752b2ac..a60e9e2a5 + full_reset arm end-state); /Users/gael/projects/ghostty/src/terminal/Terminal.zig (diff 12752b2ac..a60e9e2a5 + printSlice charset fast-path end-state); /Users/gael/projects/ghostty/src/terminal/tmux/control.zig (diff); /Users/gael/projects/ghostty/src/terminal/main.zig (diff); /Users/gael/projects/rustty/crates/rustty-vt/src/tmux/control.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/lib.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/terminal.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/terminal/state.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/terminal/print.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/terminal/tests/print.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/terminal/tests/resize.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/terminal/tests/attrs.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/stream_terminal.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/stream_terminal/reports.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/stream_terminal/tests/basics.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/stream_terminal/tests/effects.rs; /Users/gael/projects/rustty/crates/rustty-vt/src/stream.rs (Handler trait defaults)
+coverage: I found no parity gaps in this shard. Every upstream hunk in 12752b2ac..a60e9e2a5 has a matching Rustty port, with the same logic, comments, log lines and tests.
+
+- **tmux/control.zig**: The max_bytes check now runs after the state switch, in control.rs:258-263, with the same comment and the same OutOfMemory/broken path. All three new tests exist by name with the same assertions (control.rs:1469-1520).
+- **main.zig**: The xt_checksum module (lib.rs:104) and the crate-root SemanticPrompt re-export (lib.rs:312, PORT NOTE plus DECISIONS P9) are both present.
+- **Terminal.zig, xt_checksum**:
+  - default_xt_checksum is on Terminal (terminal.rs:646), Flags (terminal.rs:167) and Options (terminal.rs:328), and init copies it into flags (terminal.rs:865).
+  - set_default_xt_checksum and rect_xt_checksum are at terminal.rs:937-964, with origin mode selecting the scrolling region.
+  - full_reset (state.rs:500-590) keeps visible and resize_pull_scrollback, restores xt_checksum from the default, runs modes.reset after the flags, and calls palette reset_all.
+- **Terminal.zig, print**:
+  - The single shift is used up once at the top of print (print.rs:1006-1015).
+  - print_cell takes the charset and leaves codepoints above 0xFF unmapped (print.rs:1605-1627).
+  - Spacers and re-written cells go through write_cell, which keeps the integrity assert.
+  - All new or changed tests are present by name with the same assertions: the charset tests (tests/print.rs:2183-2275), "eraseLine complete clears kitty placeholder flag" (tests/attrs.rs:511), and the xt checksum, cut-wide-char, repeated-widening and pending-wrap resize tests (tests/resize.rs:357, 483, 1484, 1514). The renamed comment in the hyperlink test matches.
+- **stream_terminal.zig**:
+  - **Handler fields and new types**:
+    - The xt_checksum_report field defaults to false, and the new unknown_sequence doc and example are present.
+    - UnknownSequence has its Osc variant.
+    - SemanticPrompt and its Kind/PromptKind enums are repr(i32) in declaration order.
+  - **Effects**: program_status, semantic_prompt and reset have the same docs and default to None in readonly.
+  - **Dispatch arms**: xt_checksum_extension is gated on xt_checksum_report. mouse_shape_reset, osc_unknown, program_status (query answered only when the callback is set, with the same terminator) and request_xt_checksum/report_xt_checksum (reports.rs:272) are all handled.
+  - **full_reset arm**: The order matches upstream: progress remove, then program_status clear, then the reset effect.
+  - **semantic_prompt**: The effect runs only after the terminal accepts the sequence. The allocation-failure warn line and the empty-command fallback match.
+  - **Tests**: All new upstream tests exist by name with the same assertions, including the osc_count additions to "unknown APC effect callback". The tests are "unknown OSC effect callback", "program_status effect callback", "semantic_prompt effect callback", "reset effect callback", "window_title not changed by cancelled OSC", "DECRQCRA disabled", "DECRQCRA enabled" and "XTCHECKSUM ignored without xt checksum report".
+
+The C ABI for the new effects and enums is in the vt-c crate and outside this shard, so I did not audit it beyond a grep.
+
+## Finder shard (0 findings)
+files: /Users/gael/projects/rustty/crates/rustty-vt-c/src/osc.rs; /Users/gael/projects/rustty/crates/rustty-vt-c/src/sys.rs; /Users/gael/projects/rustty/crates/rustty-vt-c/src/paste.rs; /Users/gael/projects/rustty/crates/rustty-vt-c/src/snapshot.rs; /Users/gael/projects/rustty/crates/rustty-vt-c/src/types.rs; /Users/gael/projects/rustty/crates/rustty-vt-c/src/lib.rs; /Users/gael/projects/rustty/crates/rustty-vt-c/src/terminal.rs; /Users/gael/projects/rustty/crates/rustty-vt-c/src/terminal/effects.rs; /Users/gael/projects/rustty/crates/rustty-vt-c/src/terminal/options.rs; /Users/gael/projects/rustty/crates/rustty-vt-c/src/terminal/data.rs; /Users/gael/projects/rustty/crates/rustty-vt-c/src/terminal/tests/effects.rs; /Users/gael/projects/rustty/crates/rustty-vt-c/src/terminal/tests/get.rs; /Users/gael/projects/rustty/crates/rustty-vt-c/src/terminal/tests/title_color.rs; /Users/gael/projects/rustty/crates/rustty-vt-c/Cargo.toml; /Users/gael/projects/rustty/crates/rustty-vt/src/osc/parsers/program_status.rs; /Users/gael/projects/rustty/include/rustty/vt/allocator.h; /Users/gael/projects/rustty/include/rustty/vt/osc.h; /Users/gael/projects/rustty/include/rustty/vt/snapshot.h; /Users/gael/projects/rustty/include/rustty/vt/sys.h; /Users/gael/projects/rustty/include/rustty/vt/terminal.h; ghostty diff 12752b2ac..a60e9e2a5: src/terminal/c/{terminal,osc,paste,snapshot,sys,types,main}.zig, include/ghostty/vt/{allocator,osc,snapshot,sys,terminal}.h; ghostty a60e9e2a5: src/terminal/osc.zig (Unknown.C), src/terminal/osc/parsers/program_status.zig (State)
+coverage: I found no parity gaps in this shard. I compared every hunk in 12752b2ac..a60e9e2a5 for all 12 files against the Rustty port. Nothing was built or run; every check was by reading code.
+
+Headers: I renamed GHOSTTY/Ghostty/ghostty to RUSTTY/Rustty/rustty in each upstream end-state header and diffed it against include/rustty/vt. allocator.h, osc.h and sys.h match exactly. terminal.h and snapshot.h differ only in whitespace and alignment, plus the snapshot.h @see link, which points at the Rust codec. Every enum value matches: OSC_COMMAND_UNKNOWN=27 and PROGRAM_STATUS=28, the terminator, option and data enums, SNAPSHOT_DECODER_OPT/DATA_COMPRESS_HISTORY=2/9, terminal options 42-46, TerminalData MEMORY_USAGE=42, and the ProgramStatus and SemanticPrompt enums.
+
+main.zig: the osc_set export is at lib.rs:1675-1682.
+
+osc.zig: Option, set (with the invalid-option warning log), the unknown_* data arms, and the NULL command check in commandDataTyped are all ported. The "command data null" and "unknown" tests are present with the same assertions. Rust's set also clears the stored command. That is consistent with the header, which says the returned command handle is only valid until the next osc call, and it has a PORT NOTE plus a Rust-only test.
+
+paste.zig: the trampoline checks write_failed before ok (paste.rs:362-370). The ignore_refused field and the "terminal_paste refused write ignored by the reader" test are present.
+
+snapshot.zig: compress_history is wired through set, get, the wrapper init and the ready options (snapshot.rs:887). The "decoder option and empty source" additions and "snapshot decoder compresses history when requested" are ported. The latter is skipped under Miri, and that skip is recorded in MIRI_EXCEPTIONS.md.
+
+sys.zig: the zeroed Image has a DECISIONS M5 PORT NOTE, the doc comment is present, and the test "decode_png output is zeroed before the callback" exists.
+
+types.zig: all 9 new manifest entries are present, and the extended assertions in "manifest uses public enum names" are present.
+
+terminal.zig:
+- The ProgramStatus, SemanticPrompt and UnknownOscSequence types are ported, with matching field order. UnknownSequence gained its osc arm.
+- The new Effects fields and the three trampolines are ported, including the -1 and none defaults and the fixed title/message buffers.
+- semantic_prompt and reset are always installed in wrap. program_status is installed only while its callback is set.
+- Options 42-46 are handled: the program_status install, xt_checksum_report, xt_checksum_extension (u5 range check returning invalid_value), and unknown_max_bytes writing both the APC and OSC parser limits. The option range check covers 0..=46.
+- TerminalMemoryUsage is ported, with its init and the get size rule.
+- Every new test is present by name with the same assertions: "get memory_usage", "get memory_usage size rule", "set program_status callback", "set semantic_prompt callback", "set reset callback", the extended "set unknown_sequence callback", "checksum report requires explicit opt in", "checksum extension survives resets", and the new "get mouse_shape" case.
+

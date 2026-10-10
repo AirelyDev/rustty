@@ -188,6 +188,8 @@ pub enum Key {
     OscColorReportFormat,
     VtKamAllowed,
     VtWindowResizeAllowed,
+    VtXtChecksumReport,
+    VtXtChecksumExtension,
     CustomShader,
     CustomShaderAnimation,
     BellFeatures,
@@ -436,6 +438,8 @@ impl Key {
             b"unfocused-split-opacity" => Some(Key::UnfocusedSplitOpacity),
             b"vt-kam-allowed" => Some(Key::VtKamAllowed),
             b"vt-window-resize-allowed" => Some(Key::VtWindowResizeAllowed),
+            b"vt-xt-checksum-extension" => Some(Key::VtXtChecksumExtension),
+            b"vt-xt-checksum-report" => Some(Key::VtXtChecksumReport),
             b"wait-after-command" => Some(Key::WaitAfterCommand),
             b"window-colorspace" => Some(Key::WindowColorspace),
             b"window-decoration" => Some(Key::WindowDecoration),
@@ -666,6 +670,8 @@ pub fn value_type(key: Key) -> std::any::TypeId {
         Key::OscColorReportFormat => TypeId::of::<OSCColorReportFormat>(),
         Key::VtKamAllowed => TypeId::of::<bool>(),
         Key::VtWindowResizeAllowed => TypeId::of::<bool>(),
+        Key::VtXtChecksumReport => TypeId::of::<bool>(),
+        Key::VtXtChecksumExtension => TypeId::of::<XtChecksumExtension>(),
         Key::CustomShader => TypeId::of::<RepeatablePath>(),
         Key::CustomShaderAnimation => TypeId::of::<CustomShaderAnimation>(),
         Key::BellFeatures => TypeId::of::<BellFeatures>(),
@@ -892,6 +898,9 @@ pub fn config_completion_kind(key: Key) -> ConfigCompletionKind {
         }
         Key::ShellIntegrationFeatures => {
             ConfigCompletionKind::PackedFlags(ShellIntegrationFeatures::field_names())
+        }
+        Key::VtXtChecksumExtension => {
+            ConfigCompletionKind::PackedFlags(XtChecksumExtension::field_names())
         }
         Key::BellFeatures => ConfigCompletionKind::PackedFlags(BellFeatures::field_names()),
         Key::AppNotifications => ConfigCompletionKind::PackedFlags(AppNotifications::field_names()),

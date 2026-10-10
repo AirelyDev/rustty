@@ -1,0 +1,19 @@
+   Compiling oniguruma-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/oniguruma-sys)
+warning: unknown and unstable feature specified for `-Ctarget-feature`: `tagged-globals`
+  |
+  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
+  = help: consider filing a feature request
+
+warning: unstable feature specified for `-Ctarget-feature`: `outline-atomics`
+  |
+  = note: this feature is not stably supported; its behavior can change in the future
+
+warning: `oniguruma-sys` (lib test) generated 2 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.46s
+     Running unittests src/lib.rs (target/san-hwasan/aarch64-unknown-linux-gnu/debug/deps/oniguruma_sys-c62875aafd30b378)
+
+running 1 test
+test kat::onig_search_finds_known_match ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

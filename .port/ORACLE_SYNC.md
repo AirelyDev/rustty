@@ -6,9 +6,9 @@ R3 forbids any build-time dependency on it).
 ## Pinned baseline
 
 ```
-commit  12752b2ac1bb05ce53402ed8c853ed1f96eef0b1   (short: 12752b2ac / 12752b2a)
-date    2026-09-28
-subject Update VOUCHED list (#14445)
+commit  246f702876b924a1cb7cade1e99274d1470302fc   (short: 246f70287 / 246f7028)
+date    2026-10-09
+subject cli/list-themes: add ctrl-d/u paging (#14607)
 ```
 
 There is **one** sync point. The oracle working tree is checked out (detached) at this commit, and
@@ -38,7 +38,7 @@ tracked file in `.port/tools/gates` holds a 40-hex constant. Untracked and ignor
 Verify with:
 
 ```sh
-git -C ../ghostty rev-parse HEAD          # 12752b2ac1bb05ce53402ed8c853ed1f96eef0b1
+git -C ../ghostty rev-parse HEAD          # 246f702876b924a1cb7cade1e99274d1470302fc
 git -C ../ghostty status --porcelain      # empty
 ```
 
@@ -59,6 +59,8 @@ at an empty tree and every gate finds zero reference sentences, i.e. vacuous gre
 | 2026-08-26 | `683d8db64` (2026-08-25) | `88f57ee66` (2026-08-25) | Gap-close drift absorb (advance-first): the 2-commit `stream.zig` ground-state tail — `0f35043c9` (execute C0 0x10-0x1F) + `40a40f848` (ignore UTF-8-decoded C1). See `.port/gap-close/`. |
 | 2026-09-01 | `88f57ee66` (2026-08-25) | `20abdb50a` (2026-08-31) | Phase 6 upstream resync (advance-first, same doctrine; before/after gate states in `.port/phase-6/w0/`). 121 commits, 74 non-merge, 75 files, +6,261/−1,269. |
 | 2026-09-28 | `20abdb50a` (2026-08-31) | `12752b2ac` (2026-09-28) | Phase 7 upstream resync (`P7-W0 T3`, advance-first, same doctrine; before/after gate states in `.port/phase-7/w0/`). 333 commits, 234 non-merge, 233 files, +35,723/−9,235. |
+| 2026-10-07 | `12752b2ac` (2026-09-28) | `a60e9e2a5` (2026-10-07) | Phase 8 upstream resync (`P8-W0 T3`, advance-first, same doctrine; before/after gate states in `.port/phase-8/w0/`). 107 commits, 69 non-merge, 85 files, +7,466/−497. rvm's oracle fetched and detached at the same commit (N486). |
+| 2026-10-09 | `a60e9e2a5` (2026-10-07) | `246f70287` (2026-10-09) | Phase 8 second advance (`P8-W10 T0`, advance-first, same doctrine; before/after gate states in `.port/phase-8/w10/`). 18 commits, 12 non-merge, 10 files, +401/−72. rvm's oracle fetched and detached at the same commit (N486). |
 
 **Phase-4 note on ordering.** Unlike `P3-W10`, this advance happened at the *start* of the
 resync (explicit user direction: update the oracle, then port the whole range). The
@@ -125,6 +127,33 @@ The phase fixed and documented 21 reference defects (UD352–UD372) and opened 2
 The full lanes and the benches are P7-W12 T2. Records: `.port/phase-7/README.md` §"Finale table"
 and the `phase-7/*` merge series.
 
+**PHASE-8 FINALE (2026-10-08): re-greened at `a60e9e2a5`.** Every
+workstream (W0–W8) is merged into `phase-8-upstream-resync` (finale base `0d73a3075`). G-TESTS is
+GREEN: 4,277 live-oracle test blocks, 0 unexplained. The R4 checklist
+(`.port/phase-8/w0/tests-checklist.txt`) has the 90 added upstream tests present by exact name (the
+19 that N519's matcher masks ticked by hand) and the 30 changed bodies re-aligned. G-FILES (562 files)
+and G-SYMS (2,908 `pub fn`) have 0 unexplained. G1b, G1, G3b (default, `--crate vt` and `--strict`), G-LOGFILE (after re-anchoring 19
+`LOG-ABSENT-SITES.tsv` rows to the pin), G-CENSUS, A3, A4, A5 (3 identical runs), G4 (drivers
+rebuilt at the pin; leg B 25 identical), G-REFGEOM, G-EOL, G-I18N, G-THEMES (657), G-UDDOCS,
+G-PARITY, G7, G9 (777 / 777), G-P2, G-ORACLE-SH-SELF, G-SKIP, G-ESCTEST (567 tests, identical) and
+the whole post-merge set are GREEN. P8-W9 T1a (N531) regenerated `rustty-extra`'s generated-file
+goldens for P8-W3 T2's two config keys and quoted three reference comments in translated doc examples
+verbatim, which turned G3b and `cargo test -p rustty-extra` GREEN. The long lanes that followed (P8-W9 T2,
+FX1–FX7) and what is still owed before the merge to `main` are in `.port/phase-8/README.md`
+(§"Validation: long lanes", §"Owed before the merge to `main`").
+
+The phase fixed and documented 1 reference defect (UD378) and opened 27 port findings (N517–N543):
+all closed except the record-only N519, N520 and N522 and the open N543 (G6t over `rustty-core` not yet
+run to completion). The targeted cross-host checks passed:
+
+- rvm: the GTK-feature workspace clippy, `cargo test -p` for the 18 touched packages (`rustty-extra`
+  after T1a, re-checked on the Mac), the env-gated no-EGL App test and 18 live GTK KATs;
+- rwin: `rustty_vt_c.dll` (x64 MSVC) with `c-vt-effects`, byte-identical to the golden;
+- macOS: xcodebuild RusttyTests, 404 passed; menu-shortcut parity, 51 actions.
+
+The full lanes and the benches are P8-W9 T2. Records: `.port/phase-8/README.md` §"Finale table"
+and the `phase-8/*` merge series.
+
 The previous pin, `4749c4e93`, was a **stale baseline**: work from beyond it had been ported by
 WS5–WS8 and tracked in an ad-hoc "beyond-pin series" table (BL-1…BL-7) that existed only because the
 pin had not moved. That table is **gone**. Its contents were either absorbed by the advance (the
@@ -175,8 +204,12 @@ before/after reports, the per-crate delta table, and the per-file attribution of
 
 ## Upstream beyond this pin
 
-At the time of the Phase-7 advance (2026-09-28) the pin IS `origin/main` — there is no
-beyond-pin gap. Phase 7 absorbs `20abdb50a..12752b2ac` (333 commits, 234 non-merge, 233 files,
+At the time of the Phase-8 second advance (2026-10-09) the pin IS `origin/main` — there is no
+beyond-pin gap. Phase 8 absorbs `12752b2ac..a60e9e2a5` (107 commits, 69 non-merge, 85 files,
++7,466/−497; artifacts in `.port/phase-8/`, delta reviews in `.port/phase-8/delta-review/`)
+and then `a60e9e2a5..246f70287` (18 commits, 12 non-merge, 10 files, +401/−72; artifacts in
+`.port/phase-8/w10/`);
+Phase 7 absorbed `20abdb50a..12752b2ac` (333 commits, 234 non-merge, 233 files,
 +35,723/−9,235; artifacts in `.port/phase-7/`, delta reviews in `.port/phase-7/delta-review/`);
 Phase 6 absorbed `88f57ee66..20abdb50a` (121 commits, 74 non-merge, 75 files,
 +6,261/−1,269; artifacts in `.port/phase-6/`); the gap-close absorbed `683d8db64..88f57ee66`

@@ -1,0 +1,14 @@
+G3b [vt]: distinctive ref comments=14929 missing=2 review=64
+    REVIEW (ratio 0.74): (markmutated sets both); dirty set without a generation change
+    REVIEW (ratio 0.63): .command_end => if (event.exit_code) |code| {
+    REVIEW (ratio 0.79): `page_serial`. consequently, every previously captured pointer-plus-serial
+    REVIEW (ratio 0.71): `page` metadata. a resident page can access the mapping directly since
+    REVIEW (ratio 0.79): a caller may pass our current tracked selection back to us by value, so
+    REVIEW (ratio 0.62): a group of raw values for the vectorized operations.
+    REVIEW (ratio 0.68): backing int of the packed struct
+    REVIEW (ratio 0.72): behind the raw mapping is discarded. however, we retain the
+    REVIEW (ratio 0.75): both states retain the same `page.memory` virtual mapping and the same
+    REVIEW (ratio 0.75): buffered bytes go first to keep the order.
+    MISSING ref comment: if (report.readoption(.progress)) |percent| showprogress(percent);
+    MISSING ref comment: if (v.truncated or !std.mem.startswith(u8, v.content, prefix)) return;
+RED: dropped reference comment(s) or an invalid NOT-CARRIED row — see MISSING / NOT-CARRIED-INVALID above (R1 violation)

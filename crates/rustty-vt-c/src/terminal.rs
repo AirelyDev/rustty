@@ -47,7 +47,6 @@
 // const Handler = @import("../stream_terminal.zig").Handler;
 use crate::grid_ref::CGridRef;
 use crate::grid_ref_tracked::{CTrackedGridRef, TrackedGridRef};
-use crate::kitty_graphics::KittyGraphics as KittyGraphicsHandle;
 use crate::point::PointC;
 use crate::result::Result;
 use crate::search::SearchWrapper;
@@ -537,6 +536,7 @@ fn new_(
             default_modes: rustty_vt::modes::ModePacked::default(),
             default_cursor_style: rustty_vt::screen::CursorStyle::Block,
             default_cursor_blink: Some(false),
+            default_xt_checksum: Default::default(),
             kitty_image_storage_limit: ZigTerminalOptions::kitty_image_storage_limit_default(
                 rustty_vt::build_options::Artifact::Lib,
             ),
@@ -664,10 +664,13 @@ unsafe fn wrap(
         progress_report: Some(Effects::progress_report_trampoline),
         size: Some(Effects::size_trampoline),
         render_hold: Some(Effects::render_hold_trampoline),
+        semantic_prompt: Some(Effects::semantic_prompt_trampoline),
+        reset: Some(Effects::reset_trampoline),
 
         // Installed dynamically when the callback is set; see Effects.
         clipboard_write: None,
         clipboard_read: None,
+        program_status: None,
     };
 
     // wrapper.* = .{
@@ -704,6 +707,7 @@ unsafe fn wrap(
                     allocator: Some(capture_alloc),
                     handler,
                     continuation_max_bytes: Some(continuation_max_bytes),
+                    osc_unknown_max_bytes: 0,
                 }),
                 effects: Effects::default(),
                 // .tmp_dir_path = undefined -> None: the reference leaves it
@@ -1009,7 +1013,8 @@ pub const SCROLL_VIEWPORT_C_FIELD_ARMS: &[(&str, Option<&str>)] = &[
 
 /// `cFieldRename` arms for the `UnknownSequence` tagged value field (the
 /// `types.zig` `.generated` union arms; consumed by the ABI manifest rows).
-pub const UNKNOWN_SEQUENCE_C_FIELD_ARMS: &[(&str, Option<&str>)] = &[("apc", Some("apc"))];
+pub const UNKNOWN_SEQUENCE_C_FIELD_ARMS: &[(&str, Option<&str>)] =
+    &[("apc", Some("apc")), ("osc", Some("osc"))];
 
 /// C: GhosttyTerminalScrollViewport -> RusttyTerminalScrollViewport (R2) — the hand-authored tagged union.
 #[repr(C)]

@@ -502,6 +502,8 @@ impl Terminal {
     pub fn full_reset(&mut self) {
         // Ensure we're back on primary screen
         // self.screens.switchTo(.primary);
+        //
+        // Remove alternate screen
         // self.screens.remove(self.screens.active.alloc, .alternate);
         self.screens.switch_to(crate::screen_set::Key::Primary);
         // SAFETY: `self.screens.active` is now the primary screen (a stable heap
@@ -512,36 +514,27 @@ impl Terminal {
         self.screens
             .remove(alloc, crate::screen_set::Key::Alternate);
 
-        // Reset our screens
+        // Reset primary screen
         // self.screens.active.reset();
         // SAFETY: `self.screens.active` is the primary screen; `reset` takes
         // `&mut Screen` and does not mutate `self.screens`.
         unsafe { (*self.screens.active).reset() };
 
-        // Rest our basic state
-        // self.modes.reset();
-        // self.flags = .{};
-        // self.tabstops.reset(TABSTOP_INTERVAL);
-        // self.previous_char = null;
-        // self.pwd.clearRetainingCapacity();
-        // self.title.clearRetainingCapacity();
-        // self.glyph_glossary.clearAndFree(self.gpa());
-        // self.status_display = .main;
-        // const visible = self.flags.visible;
-        // const resize_pull_scrollback = self.flags.resize_pull_scrollback;
-        // self.modes.reset();
+        // Reset our basic state
         // self.flags = .{
         //     // Visibility belongs to the view rather than terminal state, so a
         //     // terminal reset must not make a hidden view potentially visible.
-        //     .visible = visible,
+        //     .visible = self.flags.visible,
         //
         //     // This is configuration based on the pty rather than terminal
         //     // state, so a terminal reset must not change it.
-        //     .resize_pull_scrollback = resize_pull_scrollback,
+        //     .resize_pull_scrollback = self.flags.resize_pull_scrollback,
+        //
+        //     .xt_checksum = self.default_xt_checksum,
         // };
+        // self.modes.reset();
         let visible = self.flags.visible;
         let resize_pull_scrollback = self.flags.resize_pull_scrollback;
-        self.modes.reset();
         self.flags = Flags {
             // Visibility belongs to the view rather than terminal state, so a
             // terminal reset must not make a hidden view potentially visible.
@@ -550,9 +543,15 @@ impl Terminal {
             // This is configuration based on the pty rather than terminal
             // state, so a terminal reset must not change it.
             resize_pull_scrollback,
+
+            xt_checksum: self.default_xt_checksum,
+
             ..Flags::default()
         };
+        self.modes.reset();
+        // self.tabstops.reset(TABSTOP_INTERVAL);
         self.tabstops.reset(TABSTOP_INTERVAL as usize);
+        // self.previous_char = null;
         self.previous_char = None;
         // self.pwd.clearRetainingCapacity();
         // self.title.clearRetainingCapacity();
@@ -572,6 +571,7 @@ impl Terminal {
         if let Some(dnd) = self.kitty_dnd.as_mut() {
             dnd.chunking = Default::default();
         }
+        // self.status_display = .main;
         self.status_display = ansi::StatusDisplay::Main;
         // self.scrolling_region = .{
         //     .top = 0,
@@ -587,9 +587,90 @@ impl Terminal {
         };
         // self.setCursorStyle(.default);
         self.set_cursor_style(ansi::CursorStyle::Default);
+        // self.colors.palette.resetAll();
+        self.colors.palette.reset_all();
 
         // Always mark dirty so we redraw everything
         // self.flags.dirty.clear = true;
         self.flags.dirty.clear = true;
+    }
+
+    /// DECSTR - Soft Terminal Reset. Resets the modes and state a program may
+    /// have left behind, without clearing the screen or moving the cursor.
+    /// Beyond what the VT510 manual lists, this also resets what xterm's soft
+    /// reset does: left and right margins, the cursor style, the color palette,
+    /// modifyOtherKeys, and the XTCHECKSUM variant.
+    pub fn soft_reset(&mut self) {
+        use modespkg::Mode;
+
+        // const reset_modes = [_]modespkg.Mode{ ... };
+        // for (reset_modes) |mode| self.modes.set(mode, self.modes.getDefault(mode));
+        const RESET_MODES: [Mode; 10] = [
+            Mode::CursorVisible,
+            Mode::Insert,
+            Mode::Origin,
+            Mode::Wraparound,
+            Mode::ReverseWrap,
+            Mode::ReverseWrapExtended,
+            Mode::DisableKeyboard,
+            Mode::CursorKeys,
+            Mode::KeypadKeys,
+            Mode::EnableLeftAndRightMargin,
+        ];
+        for mode in RESET_MODES {
+            self.modes.set(mode, self.modes.get_default(mode));
+        }
+
+        // self.scrolling_region = .{
+        //     .top = 0,
+        //     .bottom = self.rows - 1,
+        //     .left = 0,
+        //     .right = self.cols - 1,
+        // };
+        debug_assert!(self.rows >= 1 && self.cols >= 1);
+        self.scrolling_region = ScrollingRegion {
+            top: 0,
+            bottom: self.rows.saturating_sub(1),
+            left: 0,
+            right: self.cols.saturating_sub(1),
+        };
+
+        // The default style needs no allocation so this can't fail.
+        // const screen: *Screen = self.screens.active;
+        // screen.cursor.style = .{};
+        // screen.manualStyleUpdate() catch unreachable;
+        // screen.cursor.protected = false;
+        // screen.charset = .{};
+        {
+            let screen = self.active_mut();
+            screen.cursor.style = style::Style::default();
+            screen.manual_style_update().unwrap();
+            screen.cursor.protected = false;
+            screen.charset = Default::default();
+
+            // A saved cursor now restores to the home position with the defaults.
+            // screen.saved_cursor = null;
+            screen.saved_cursor = None;
+        }
+
+        // self.status_display = .main;
+        // self.flags.modify_other_keys_2 = false;
+        // self.flags.xt_checksum = self.default_xt_checksum;
+        // self.setCursorStyle(.default);
+        self.status_display = ansi::StatusDisplay::Main;
+        self.flags.modify_other_keys_2 = false;
+        self.flags.xt_checksum = self.default_xt_checksum;
+        self.set_cursor_style(ansi::CursorStyle::Default);
+
+        // xterm resets the palette for DECSTR as well as RIS, as OSC 104
+        // with no arguments would. Dynamic colors (OSC 10-19) are kept.
+        // if (self.colors.palette.mask.count() > 0) {
+        //     self.colors.palette.resetAll();
+        //     self.flags.dirty.palette = true;
+        // }
+        if self.colors.palette.mask.count() > 0 {
+            self.colors.palette.reset_all();
+            self.flags.dirty.palette = true;
+        }
     }
 }

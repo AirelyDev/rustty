@@ -1,19 +1,27 @@
 //! PORTS: ghostty src/terminal/c/terminal.zig — the effect callback
 //! surface: the `Effects` struct and its trampolines, the C callback
 //! fn-ptr typedefs, and the clipboard / desktop-notification /
-//! progress-report / unknown-sequence / mode-config / device-attributes
-//! extern structs they carry.
+//! progress-report / program-status / semantic-prompt / unknown-sequence /
+//! mode-config / device-attributes extern structs they carry.
 
 use super::*;
 
-/// C callback state for terminal effects. Most trampolines are always
-/// installed on the stream handler; they check these fields and no-op when
-/// the corresponding callback is null. The unknown-sequence and
-/// clipboard trampolines are installed dynamically to preserve their
-/// null fast paths (for clipboard_write, a null Zig-level effect makes
-/// Kitty clipboard writes fail up front instead of spooling a
-/// transaction that can never commit; for clipboard_read it keeps
-/// reads denied).
+/// C callback state for terminal effects.
+///
+/// Most trampolines are always installed on the stream handler. They check
+/// these fields and do nothing when the C callback is null.
+///
+/// A few trampolines are only installed while their C callback is set,
+/// because the stream handler behaves differently when the Zig effect is
+/// null:
+///
+/// - `unknown_sequence`: unknown sequences are skipped without being
+///   captured.
+/// - `clipboard_write`: Kitty clipboard writes fail up front instead of
+///   collecting data for a write that can never finish.
+/// - `clipboard_read`: clipboard reads are denied.
+/// - `program_status`: the OSC 7501 support query gets no reply, so
+///   programs know not to send reports.
 // PORT NOTE (internal, NOT C-ABI): mirrors the reference `Effects` struct field
 // for field. The fn-ptr typedefs and `CDeviceAttributes` ARE part of the C ABI
 // (named below). `da_features_buf` is the scratch buffer the device-attributes
@@ -33,6 +41,9 @@ pub struct Effects {
     pub clipboard_read: Option<ClipboardReadFn>,
     pub desktop_notification: Option<DesktopNotificationFn>,
     pub progress_report: Option<ProgressReportFn>,
+    pub program_status: Option<ProgramStatusFn>,
+    pub semantic_prompt: Option<SemanticPromptFn>,
+    pub reset: Option<ResetFn>,
     pub unknown_sequence: Option<UnknownSequenceFn>,
     pub render_hold: Option<RenderHoldFn>,
 
@@ -66,6 +77,9 @@ impl Default for Effects {
             clipboard_read: None,
             desktop_notification: None,
             progress_report: None,
+            program_status: None,
+            semantic_prompt: None,
+            reset: None,
             unknown_sequence: None,
             render_hold: None,
             da_features_buf: [rustty_vt::device_attributes::Feature::AnsiColor; 64],
@@ -321,6 +335,117 @@ pub struct ProgressReport {
 // pub const ProgressReportFn = *const fn (Terminal, ?*anyopaque, *const ProgressReport) callconv(lib.calling_conv) void;
 pub type ProgressReportFn = extern "C" fn(Terminal, *mut c_void, *const ProgressReport);
 
+/// C: GhosttyProgramStatusState -> RusttyProgramStatusState (R2)
+// pub const ProgramStatusState = osc.Command.ProgramStatus.State;
+pub type ProgramStatusState = rustty_vt::osc::parsers::program_status::State;
+
+/// What a blocked program needs from the user. This matches
+/// `osc.Command.ProgramStatus.Kind` but adds `none` first, because C has
+/// no optional enums and a zeroed value must mean "no kind".
+///
+/// C: GhosttyProgramStatusKind -> RusttyProgramStatusKind (R2)
+// pub const ProgramStatusKind = lib.Enum(lib.target, &.{
+//     "none",
+//     "permission",
+//     "question",
+//     "auth",
+// });
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProgramStatusKind {
+    None = 0,
+    Permission = 1,
+    Question = 2,
+    Auth = 3,
+}
+
+impl ProgramStatusKind {
+    // inline else => |tag| @field(ProgramStatusKind, @tagName(tag)),
+    #[inline]
+    fn from_vt(kind: rustty_vt::osc::parsers::program_status::Kind) -> ProgramStatusKind {
+        use rustty_vt::osc::parsers::program_status::Kind;
+        match kind {
+            Kind::Permission => ProgramStatusKind::Permission,
+            Kind::Question => ProgramStatusKind::Question,
+            Kind::Auth => ProgramStatusKind::Auth,
+        }
+    }
+}
+
+/// A program status report (OSC 7501). Absent text is an empty string,
+/// an absent kind is `none`, and absent progress is -1. See the header
+/// for the meaning of each field.
+///
+/// C: GhosttyTerminalProgramStatus -> RusttyTerminalProgramStatus (R2)
+// pub const ProgramStatus = extern struct {
+//     size: usize,
+//     state: ProgramStatusState,
+//     kind: ProgramStatusKind,
+//     progress: i8,
+//     id: lib.String,
+//     app: lib.String,
+//     title: lib.String,
+//     message: lib.String,
+// };
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ProgramStatus {
+    pub size: usize,
+    pub state: ProgramStatusState,
+    pub kind: ProgramStatusKind,
+    pub progress: i8,
+    pub id: LibString,
+    pub app: LibString,
+    pub title: LibString,
+    pub message: LibString,
+}
+
+/// C function pointer type for the program_status callback. The report
+/// and its strings are borrowed for the callback duration.
+// pub const ProgramStatusFn = *const fn (Terminal, ?*anyopaque, *const ProgramStatus) callconv(lib.calling_conv) void;
+pub type ProgramStatusFn = extern "C" fn(Terminal, *mut c_void, *const ProgramStatus);
+
+/// C: GhosttySemanticPromptKind -> RusttySemanticPromptKind (R2)
+// pub const SemanticPromptKind = Handler.SemanticPrompt.Kind;
+pub type SemanticPromptKind = rustty_vt::stream_terminal::SemanticPromptKind;
+
+/// C: GhosttySemanticPromptPromptKind -> RusttySemanticPromptPromptKind (R2)
+// pub const SemanticPromptPromptKind = Handler.SemanticPrompt.PromptKind;
+pub type SemanticPromptPromptKind = rustty_vt::stream_terminal::SemanticPromptPromptKind;
+
+/// A shell integration event. See `Handler.SemanticPrompt`.
+///
+/// C: GhosttyTerminalSemanticPrompt -> RusttyTerminalSemanticPrompt (R2)
+// pub const SemanticPrompt = extern struct {
+//     size: usize,
+//     kind: SemanticPromptKind,
+//     prompt_kind: SemanticPromptPromptKind,
+//     has_exit_code: bool,
+//     exit_code: i32,
+//     command: lib.String,
+//     @"error": lib.String,
+// };
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SemanticPrompt {
+    pub size: usize,
+    pub kind: SemanticPromptKind,
+    pub prompt_kind: SemanticPromptPromptKind,
+    pub has_exit_code: bool,
+    pub exit_code: i32,
+    pub command: LibString,
+    pub error: LibString,
+}
+
+/// C function pointer type for the semantic_prompt callback. The event
+/// and its strings are borrowed for the callback duration.
+// pub const SemanticPromptFn = *const fn (Terminal, ?*anyopaque, *const SemanticPrompt) callconv(lib.calling_conv) void;
+pub type SemanticPromptFn = extern "C" fn(Terminal, *mut c_void, *const SemanticPrompt);
+
+/// C function pointer type for the reset callback.
+// pub const ResetFn = *const fn (Terminal, ?*anyopaque) callconv(lib.calling_conv) void;
+pub type ResetFn = extern "C" fn(Terminal, *mut c_void);
+
 /// A borrowed unsupported string sequence.
 ///
 /// C: GhosttyTerminalUnknownStringSequence -> RusttyTerminalUnknownStringSequence (R2)
@@ -335,9 +460,20 @@ pub struct UnknownStringSequence {
     pub content: LibString,
 }
 
+/// An OSC sequence whose number is not implemented.
+///
+/// C: GhosttyTerminalUnknownOscSequence -> RusttyTerminalUnknownOscSequence (R2)
+// pub const UnknownOscSequence = osc.Command.Unknown.C;
+//
+// PORT NOTE (N529): a re-export, not a `pub type` alias, so cbindgen emits one
+// `UnknownOscSequence` struct; the projection's Rust name is the C name's
+// suffix so it cannot collide with another vt-c `#[repr(C)]` type (it was
+// `UnknownC`, which replaced the SGR `UnknownC` in `include/rustty.h`).
+pub use crate::osc::UnknownOscSequence;
+
 /// C: GhosttyTerminalUnknownSequenceTag -> RusttyTerminalUnknownSequenceTag (R2)
 /// — checked by the A5 enum-discriminant arm.
-// pub const Tag = lib.Enum(lib.target, &.{"apc"});
+// pub const Tag = lib.Enum(lib.target, &.{ "apc", "osc" });
 //
 // PORT NOTE: the reference nests `Tag` inside `UnknownSequence`; Rust types
 // cannot nest, so it lives at module scope (the vt `UnknownSequence` flattening
@@ -346,6 +482,7 @@ pub struct UnknownStringSequence {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnknownSequenceTag {
     Apc = 0,
+    Osc = 1,
 }
 
 /// C: GhosttyTerminalUnknownSequenceValue -> RusttyTerminalUnknownSequenceValue (R2)
@@ -359,13 +496,14 @@ pub enum UnknownSequenceTag {
 #[derive(Clone, Copy)]
 pub union UnknownSequenceValue {
     pub apc: UnknownStringSequence,
+    pub osc: UnknownOscSequence,
     pub _padding: [u64; 16],
 }
 
 /// An unsupported terminal sequence reported to the C callback.
 ///
 /// C: GhosttyTerminalUnknownSequence -> RusttyTerminalUnknownSequence (R2)
-// pub const UnknownSequence = union(Tag) { apc: UnknownStringSequence, ... };
+// pub const UnknownSequence = union(Tag) { apc: UnknownStringSequence, osc: UnknownOscSequence, ... };
 // pub const C = c_union.C;
 //
 // PORT NOTE: the reference declares the tagged Zig union and derives the C
@@ -1189,6 +1327,171 @@ impl Effects {
         func(wrapper, userdata, &request);
     }
 
+    // fn programStatusTrampoline(
+    //     handler: *Handler,
+    //     report: osc.Command.ProgramStatus.Report,
+    // ) void {
+    //     const wrapper = TerminalWrapper.fromHandler(handler);
+    //     const func = wrapper.effects.program_status orelse return;
+    //
+    //     // Both buffers hold the longest text the parser accepts, so
+    //     // writing to them can't fail.
+    //     var title_buf: [osc.program_status.max_title_bytes]u8 = undefined;
+    //     var title: std.Io.Writer = .fixed(&title_buf);
+    //     report.writeText(.title, &title) catch unreachable;
+    //     var message_buf: [osc.program_status.max_msg_bytes]u8 = undefined;
+    //     var message: std.Io.Writer = .fixed(&message_buf);
+    //     report.writeText(.msg, &message) catch unreachable;
+    //
+    //     const c_report: ProgramStatus = .{
+    //         .size = @sizeOf(ProgramStatus),
+    //         .state = report.state,
+    //         .kind = if (report.readOption(.kind)) |kind| switch (kind) {
+    //             inline else => |tag| @field(ProgramStatusKind, @tagName(tag)),
+    //         } else .none,
+    //         .progress = if (report.readOption(.progress)) |value| @intCast(value) else -1,
+    //         .id = .init(report.readOption(.id) orelse ""),
+    //         .app = .init(report.readOption(.app) orelse ""),
+    //         .title = .init(title.buffered()),
+    //         .message = .init(message.buffered()),
+    //     };
+    //     func(@ptrCast(wrapper), wrapper.effects.userdata, &c_report);
+    // }
+    //
+    // PORT NOTE (SB, LIFETIMES.tsv `Effects program_status`): `id` and `app`
+    // borrow the OSC parser's capture inside `wrapper.stream.parser`, not the
+    // handler; title and message are this frame's buffers. The callback may
+    // re-enter the terminal through `live_handler` (N452).
+    pub(crate) fn program_status_trampoline(
+        handler: &mut Handler<'static>,
+        report: rustty_vt::osc::parsers::program_status::Report<'_>,
+    ) {
+        use rustty_vt::osc::parsers::program_status::{
+            OptionKey, OptionValue, MAX_MSG_BYTES, MAX_TITLE_BYTES,
+        };
+        // N452: ONE raw pointer from the argument, which is not used
+        // again (see `TerminalWrapper::live_handler`).
+        let handler: *mut Handler<'static> = handler;
+        let wrapper = wrapper_from_handler(handler);
+        let Some(func) = (unsafe { (*wrapper).effects.program_status }) else {
+            return;
+        };
+        let userdata = unsafe { (*wrapper).effects.userdata };
+
+        // Both buffers hold the longest text the parser accepts, so
+        // writing to them can't fail.
+        // PORT NOTE: `std.Io.Writer.fixed(&buf)` is a `&mut [u8]` writer; what
+        // it buffered is the prefix it advanced past.
+        let mut title_buf = [0u8; MAX_TITLE_BYTES];
+        let title_len = {
+            let mut title: &mut [u8] = &mut title_buf;
+            // report.writeText(.title, &title) catch unreachable;
+            report
+                .write_text(OptionKey::Title, &mut title)
+                .unwrap_or_else(|_| unreachable!());
+            MAX_TITLE_BYTES - title.len()
+        };
+        let mut message_buf = [0u8; MAX_MSG_BYTES];
+        let message_len = {
+            let mut message: &mut [u8] = &mut message_buf;
+            // report.writeText(.msg, &message) catch unreachable;
+            report
+                .write_text(OptionKey::Msg, &mut message)
+                .unwrap_or_else(|_| unreachable!());
+            MAX_MSG_BYTES - message.len()
+        };
+
+        let str_option = |key: OptionKey| match report.read_option(key) {
+            OptionValue::Str(Some(v)) => v,
+            _ => b"".as_slice(),
+        };
+        let c_report = ProgramStatus {
+            size: std::mem::size_of::<ProgramStatus>(),
+            state: report.state,
+            kind: match report.read_option(OptionKey::Kind) {
+                OptionValue::Kind(Some(kind)) => ProgramStatusKind::from_vt(kind),
+                _ => ProgramStatusKind::None,
+            },
+            progress: match report.read_option(OptionKey::Progress) {
+                // @intCast(value): the parser only keeps 0..=100.
+                OptionValue::Progress(Some(value)) => {
+                    i8::try_from(value).expect("progress is at most 100")
+                }
+                _ => -1,
+            },
+            id: LibString::init(str_option(OptionKey::Id)),
+            app: LibString::init(str_option(OptionKey::App)),
+            title: LibString::init(&title_buf[..title_len]),
+            message: LibString::init(&message_buf[..message_len]),
+        };
+        let _live = LiveHandler::publish(wrapper, handler);
+        func(wrapper, userdata, &c_report);
+    }
+
+    // fn semanticPromptTrampoline(
+    //     handler: *Handler,
+    //     event: Handler.SemanticPrompt,
+    // ) void {
+    //     const wrapper = TerminalWrapper.fromHandler(handler);
+    //     const func = wrapper.effects.semantic_prompt orelse return;
+    //     const c_event: SemanticPrompt = .{
+    //         .size = @sizeOf(SemanticPrompt),
+    //         .kind = event.kind,
+    //         .prompt_kind = event.prompt_kind,
+    //         .has_exit_code = event.exit_code != null,
+    //         .exit_code = event.exit_code orelse 0,
+    //         .command = .init(event.command),
+    //         .@"error" = .init(event.err),
+    //     };
+    //     func(@ptrCast(wrapper), wrapper.effects.userdata, &c_event);
+    // }
+    //
+    // PORT NOTE (SB, LIFETIMES.tsv `Effects semantic_prompt`): `error`
+    // borrows the OSC parser's capture and `command` the handler's gpa
+    // buffer, freed after the callback returns.
+    pub(crate) fn semantic_prompt_trampoline(
+        handler: &mut Handler<'static>,
+        event: rustty_vt::stream_terminal::SemanticPrompt<'_>,
+    ) {
+        // N452: ONE raw pointer from the argument, which is not used
+        // again (see `TerminalWrapper::live_handler`).
+        let handler: *mut Handler<'static> = handler;
+        let wrapper = wrapper_from_handler(handler);
+        let Some(func) = (unsafe { (*wrapper).effects.semantic_prompt }) else {
+            return;
+        };
+        let userdata = unsafe { (*wrapper).effects.userdata };
+        let c_event = SemanticPrompt {
+            size: std::mem::size_of::<SemanticPrompt>(),
+            kind: event.kind,
+            prompt_kind: event.prompt_kind,
+            has_exit_code: event.exit_code.is_some(),
+            exit_code: event.exit_code.unwrap_or(0),
+            command: LibString::init(event.command),
+            error: LibString::init(event.err),
+        };
+        let _live = LiveHandler::publish(wrapper, handler);
+        func(wrapper, userdata, &c_event);
+    }
+
+    // fn resetTrampoline(handler: *Handler) void {
+    //     const wrapper = TerminalWrapper.fromHandler(handler);
+    //     const func = wrapper.effects.reset orelse return;
+    //     func(@ptrCast(wrapper), wrapper.effects.userdata);
+    // }
+    pub(crate) fn reset_trampoline(handler: &mut Handler<'static>) {
+        // N452: ONE raw pointer from the argument, which is not used
+        // again (see `TerminalWrapper::live_handler`).
+        let handler: *mut Handler<'static> = handler;
+        let wrapper = wrapper_from_handler(handler);
+        let Some(func) = (unsafe { (*wrapper).effects.reset }) else {
+            return;
+        };
+        let userdata = unsafe { (*wrapper).effects.userdata };
+        let _live = LiveHandler::publish(wrapper, handler);
+        func(wrapper, userdata);
+    }
+
     // fn unknownSequenceTrampoline(
     //     handler: *Handler,
     //     sequence: Handler.UnknownSequence,
@@ -1205,9 +1508,16 @@ impl Effects {
     //                 },
     //             },
     //         },
+    //         .osc => |osc_value| .{ .osc = osc_value.cval() },
     //     });
     //     func(@ptrCast(wrapper), wrapper.effects.userdata, &value);
     // }
+    //
+    // PORT NOTE (SB, LIFETIMES.tsv `UnknownSequence osc arm`): the OSC
+    // content borrows the OSC parser's buffer or capture inside
+    // `wrapper.stream.parser`. A callback that sets UNKNOWN_MAX_BYTES writes
+    // that parser's limit by raw place (options.rs), never through a `&mut`
+    // that would retag the borrowed bytes.
     pub(crate) fn unknown_sequence_trampoline(
         handler: &mut Handler<'static>,
         sequence: rustty_vt::stream_terminal::UnknownSequence<'_>,
@@ -1232,6 +1542,13 @@ impl Effects {
                         // .content = .init(apc_value.content)
                         content: LibString::init(apc_value.content),
                     },
+                },
+            },
+            // .osc => |osc_value| .{ .osc = osc_value.cval() },
+            rustty_vt::stream_terminal::UnknownSequence::Osc(osc_value) => UnknownSequence {
+                tag: UnknownSequenceTag::Osc,
+                value: UnknownSequenceValue {
+                    osc: UnknownOscSequence::cval(osc_value),
                 },
             },
         };

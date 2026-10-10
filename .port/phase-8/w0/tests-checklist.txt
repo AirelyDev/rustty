@@ -1,0 +1,131 @@
+# P8-W9 T1 -- R4-upstream-tests.tsv checklist (120 rows) at a60e9e2a5
+# Columns: change, upstream file, upstream test name, sha, disposition (Rust fn @ file:line).
+# PRESENT = ported; the upstream name (snake-cased) matches exactly one Rust #[test] fn in the owning crate
+#   (identifier-named upstream tests `test matchesQuery`, `test isValidCacheKey`, `test splitHostPort` port as `<name>_test`);
+# RE-ALIGNED = body checked against the upstream end-state diff 12752b2ac..a60e9e2a5 of that test block
+#   (every added numeric/string literal is in the Rust body; the literal-free additions -- `pending_wrap = false`,
+#   `finalize(.prepend, .{})`, the HISTORY decode options, `compress_history`, `osc_count`, the writeCell comment --
+#   were checked by hand in the Rust body).
+# N519: the 19 names G-TESTS' four-token matcher masks are marked and were ticked by exact name here.
+# Totals: add:PRESENT=90, change:RE-ALIGNED=30
+# Required by R4 §3: 90 named adds PRESENT, 30 changes RE-ALIGNED, 0 removals -> all met, 0 gaps.
+change	src/cli/ssh_cache.zig	matchesQuery	6fbb560cd,dfd7bafcd	RE-ALIGNED matches_query_test @ crates/rustty-cli/src/ssh_cache.rs:830
+change	src/cli/ssh-cache/DiskCache.zig	isValidCacheKey	6fbb560cd,dfd7bafcd	RE-ALIGNED is_valid_cache_key_test @ crates/rustty-cli/src/ssh_cache/disk_cache.rs:1893
+change	src/datastruct/untouched_pool.zig	UntouchedPool: create, destroy, reuse	8834e161c	RE-ALIGNED untouched_pool_create_destroy_reuse @ crates/rustty-datastruct/src/untouched_pool.rs:531
+change	src/terminal/c/snapshot.zig	decoder option and empty source	88e66cbc6	RE-ALIGNED decoder_option_and_empty_source @ crates/rustty-vt-c/src/snapshot.rs:1331
+change	src/terminal/c/terminal.zig	get mouse_shape	b1bfd1d9c	RE-ALIGNED get_mouse_shape @ crates/rustty-vt-c/src/terminal/tests/get.rs:449
+change	src/terminal/c/terminal.zig	set unknown_sequence callback	7b11f3dca	RE-ALIGNED set_unknown_sequence_callback @ crates/rustty-vt-c/src/terminal/tests/effects.rs:2151
+change	src/terminal/c/types.zig	manifest uses public enum names	7bb45ba34	RE-ALIGNED manifest_uses_public_enum_names @ crates/rustty-vt-c/src/types.rs:3928
+change	src/terminal/PageList.zig	PageList PageAllocation finalizes pages and preserves live state	88e66cbc6	RE-ALIGNED pagelist_page_allocation_finalizes_pages_and_preserves_live_state @ crates/rustty-vt/src/pagelist/tests/builder.rs:223
+change	src/terminal/PageList.zig	PageList PageAllocation rejects limits before modifying the destination	88e66cbc6	RE-ALIGNED pagelist_page_allocation_rejects_limits_before_modifying_the_destination @ crates/rustty-vt/src/pagelist/tests/builder.rs:550
+change	src/terminal/PageList.zig	PageList PageAllocation stays detached until finalize	88e66cbc6	RE-ALIGNED pagelist_page_allocation_stays_detached_until_finalize @ crates/rustty-vt/src/pagelist/tests/builder.rs:467
+change	src/terminal/Screen.zig	Screen: resize less cols with reflow but row space	f9ab34f10	RE-ALIGNED screen_resize_less_cols_with_reflow_but_row_space @ crates/rustty-vt/src/screen/tests/resize.rs:1719
+change	src/terminal/Screen.zig	Screen: resize less cols with reflow previously wrapped and scrollback	f9ab34f10	RE-ALIGNED screen_resize_less_cols_with_reflow_previously_wrapped_and_scrollback @ crates/rustty-vt/src/screen/tests/resize.rs:1894
+change	src/terminal/Screen.zig	Screen: resize less rows moving cursor	f9ab34f10	RE-ALIGNED screen_resize_less_rows_moving_cursor @ crates/rustty-vt/src/screen/tests/resize.rs:1540
+change	src/terminal/Screen.zig	Screen: resize less rows no scrollback	f9ab34f10	RE-ALIGNED screen_resize_less_rows_no_scrollback @ crates/rustty-vt/src/screen/tests/resize.rs:1506
+change	src/terminal/Screen.zig	Screen: resize more cols no reflow	f9ab34f10	RE-ALIGNED screen_resize_more_cols_no_reflow @ crates/rustty-vt/src/screen/tests/resize.rs:577
+change	src/terminal/Screen.zig	Screen: resize more cols with populated scrollback	f9ab34f10	RE-ALIGNED screen_resize_more_cols_with_populated_scrollback @ crates/rustty-vt/src/screen/tests/resize.rs:972
+change	src/terminal/Screen.zig	Screen: resize more cols with reflow	f9ab34f10	RE-ALIGNED screen_resize_more_cols_with_reflow @ crates/rustty-vt/src/screen/tests/resize.rs:1115
+change	src/terminal/Screen.zig	Screen: resize more cols with reflow that fits full width	f9ab34f10	RE-ALIGNED screen_resize_more_cols_with_reflow_that_fits_full_width @ crates/rustty-vt/src/screen/tests/resize.rs:777
+change	src/terminal/Screen.zig	Screen: resize more cols with reflow that forces more wrapping	f9ab34f10	RE-ALIGNED screen_resize_more_cols_with_reflow_that_forces_more_wrapping @ crates/rustty-vt/src/screen/tests/resize.rs:878
+change	src/terminal/Screen.zig	Screen: resize more cols with reflow that unwraps multiple times	f9ab34f10	RE-ALIGNED screen_resize_more_cols_with_reflow_that_unwraps_multiple_times @ crates/rustty-vt/src/screen/tests/resize.rs:925
+change	src/terminal/Screen.zig	Screen: resize more rows and cols with wrapping	f9ab34f10	RE-ALIGNED screen_resize_more_rows_and_cols_with_wrapping @ crates/rustty-vt/src/screen/tests/resize.rs:1470
+change	src/terminal/Screen.zig	Screen: resize more rows with populated scrollback	f9ab34f10	RE-ALIGNED screen_resize_more_rows_with_populated_scrollback @ crates/rustty-vt/src/screen/tests/resize.rs:523
+change	src/terminal/search/pagelist.zig	feed discovers pages prepended after exhaustion	88e66cbc6	RE-ALIGNED feed_discovers_pages_prepended_after_exhaustion @ crates/rustty-vt/src/search/pagelist.rs:967
+change	src/terminal/search/screen.zig	feed after complete discovers prepended history pages	88e66cbc6	RE-ALIGNED feed_after_complete_discovers_prepended_history_pages @ crates/rustty-vt/src/search/screen.rs:3430
+change	src/terminal/snapshot/history.zig	HISTORY encodes and restores an empty sequence	88e66cbc6	RE-ALIGNED history_encodes_and_restores_an_empty_sequence @ crates/rustty-vt/src/snapshot/history.rs:1175
+change	src/terminal/snapshot/history.zig	HISTORY encodes newest first and restores complete history	88e66cbc6	RE-ALIGNED history_encodes_newest_first_and_restores_complete_history @ crates/rustty-vt/src/snapshot/history.rs:714
+change	src/terminal/snapshot/history.zig	HISTORY rejects invalid routing and incomplete sequences	88e66cbc6	RE-ALIGNED history_rejects_invalid_routing_and_incomplete_sequences @ crates/rustty-vt/src/snapshot/history.rs:1217
+change	src/terminal/stream_terminal.zig	unknown APC effect callback	7b11f3dca	RE-ALIGNED unknown_apc_effect_callback @ crates/rustty-vt/src/stream_terminal/tests/basics.rs:215
+change	src/terminal/Terminal.zig	Terminal: print charset outside of ASCII	6220a3617	RE-ALIGNED terminal_print_charset_outside_of_ascii @ crates/rustty-vt/src/terminal/tests/print.rs:2185
+change	src/terminal/Terminal.zig	Terminal: print wide char at right edge with hyperlink	c706451fe	RE-ALIGNED terminal_print_wide_char_at_right_edge_with_hyperlink @ crates/rustty-vt/src/terminal/tests/print.rs:2874
+add	src/cli/ssh-cache/DiskCache.zig	splitHostPort	6fbb560cd	PRESENT split_host_port_test @ crates/rustty-cli/src/ssh_cache/disk_cache.rs:1873  [N519 masked by G-TESTS; ticked by hand]
+add	src/cli/ssh.zig	parseDestination: IPv6 hostname with non-default port	6fbb560cd	PRESENT parse_destination_ipv6_hostname_with_non_default_port @ crates/rustty-cli/src/ssh.rs:1404
+add	src/cli/ssh.zig	parseDestination: non-default port	6fbb560cd	PRESENT parse_destination_non_default_port @ crates/rustty-cli/src/ssh.rs:1381
+add	src/cli/ssh.zig	parseDestination: port before hostname	6fbb560cd	PRESENT parse_destination_port_before_hostname @ crates/rustty-cli/src/ssh.rs:1393  [N519 masked by G-TESTS; ticked by hand]
+add	src/cli/ssh.zig	parseDestination: result is a valid cache key	6fbb560cd	PRESENT parse_destination_result_is_a_valid_cache_key @ crates/rustty-cli/src/ssh.rs:1412
+add	src/input/key_encode.zig	legacy: ctrl+alt+shift+backspace	e55c687a4	PRESENT legacy_ctrl_alt_shift_backspace @ crates/rustty-vt/src/input/key_encode.rs:3409  [N519 masked by G-TESTS; ticked by hand]
+add	src/input/mouse_encode.zig	utf8 encodes extended mouse buttons	157c44f64	PRESENT utf8_encodes_extended_mouse_buttons @ crates/rustty-vt/src/input/mouse_encode.rs:938
+add	src/renderer/shadertoy.zig	custom shader selection uniform layout matches compiled GLSL	80456f057	PRESENT custom_shader_selection_uniform_layout_matches_compiled_glsl @ crates/rustty-renderer/src/shadertoy.rs:1142
+add	src/Surface.zig	promptClickRelativeRow	5170b06f6	PRESENT promptClickRelativeRow @ crates/rustty-core/src/surface/tests.rs:2136
+add	src/terminal/c/osc.zig	command data null	02c51decf	PRESENT command_data_null @ crates/rustty-vt-c/src/osc.rs:792  [N519 masked by G-TESTS; ticked by hand]
+add	src/terminal/c/osc.zig	unknown	7b11f3dca	PRESENT unknown @ crates/rustty-vt-c/src/osc.rs:866  [N519 masked by G-TESTS; ticked by hand]
+add	src/terminal/c/paste.zig	terminal_paste refused write ignored by the reader	fa604a170	PRESENT terminal_paste_refused_write_ignored_by_the_reader @ crates/rustty-vt-c/src/paste.rs:1193
+add	src/terminal/c/snapshot.zig	snapshot decoder compresses history when requested	88e66cbc6	PRESENT snapshot_decoder_compresses_history_when_requested @ crates/rustty-vt-c/src/snapshot.rs:2355
+add	src/terminal/c/sys.zig	decode_png output is zeroed before the callback	aca9bf031	PRESENT decode_png_output_is_zeroed_before_the_callback @ crates/rustty-vt-c/src/sys.rs:1200
+add	src/terminal/c/terminal.zig	checksum extension survives resets	7e2d1793d	PRESENT checksum_extension_survives_resets @ crates/rustty-vt-c/src/terminal/tests/title_color.rs:276
+add	src/terminal/c/terminal.zig	checksum report requires explicit opt in	9272a2f7c	PRESENT checksum_report_requires_explicit_opt_in @ crates/rustty-vt-c/src/terminal/tests/title_color.rs:210  [N519 masked by G-TESTS; ticked by hand]
+add	src/terminal/c/terminal.zig	get memory_usage	8834e161c	PRESENT get_memory_usage @ crates/rustty-vt-c/src/terminal/tests/get.rs:995
+add	src/terminal/c/terminal.zig	get memory_usage size rule	8834e161c	PRESENT get_memory_usage_size_rule @ crates/rustty-vt-c/src/terminal/tests/get.rs:1133
+add	src/terminal/c/terminal.zig	set program_status callback	bae2c3cdb	PRESENT set_program_status_callback @ crates/rustty-vt-c/src/terminal/tests/effects.rs:1861
+add	src/terminal/c/terminal.zig	set reset callback	7bb45ba34	PRESENT set_reset_callback @ crates/rustty-vt-c/src/terminal/tests/effects.rs:2100  [N519 masked by G-TESTS; ticked by hand]
+add	src/terminal/c/terminal.zig	set semantic_prompt callback	7bb45ba34	PRESENT set_semantic_prompt_callback @ crates/rustty-vt-c/src/terminal/tests/effects.rs:1997  [N519 masked by G-TESTS; ticked by hand]
+add	src/terminal/osc.zig	Parser end with CAN or SUB cancels the command	520d8f55a	PRESENT parser_end_with_can_or_sub_cancels_the_command @ crates/rustty-vt/src/osc/mod.rs:2028
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: all keys	bae2c3cdb	PRESENT osc_7501_all_keys @ crates/rustty-vt/src/osc/parsers/program_status.rs:639
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: base64 padding is optional	bae2c3cdb	PRESENT osc_7501_base64_padding_is_optional @ crates/rustty-vt/src/osc/parsers/program_status.rs:663
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: discarded reports	bae2c3cdb	PRESENT osc_7501_discarded_reports @ crates/rustty-vt/src/osc/parsers/program_status.rs:860
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: empty text is absent	bae2c3cdb	PRESENT osc_7501_empty_text_is_absent @ crates/rustty-vt/src/osc/parsers/program_status.rs:848
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: ids	bae2c3cdb	PRESENT osc_7501_ids @ crates/rustty-vt/src/osc/parsers/program_status.rs:773
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: invalid app is ignored	bae2c3cdb	PRESENT osc_7501_invalid_app_is_ignored @ crates/rustty-vt/src/osc/parsers/program_status.rs:762
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: kind and progress only apply to some states	bae2c3cdb	PRESENT osc_7501_kind_and_progress_only_apply_to_some_states @ crates/rustty-vt/src/osc/parsers/program_status.rs:710
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: last value wins	bae2c3cdb	PRESENT osc_7501_last_value_wins @ crates/rustty-vt/src/osc/parsers/program_status.rs:686
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: malformed pairs and unknown keys are skipped	bae2c3cdb	PRESENT osc_7501_malformed_pairs_and_unknown_keys_are_skipped @ crates/rustty-vt/src/osc/parsers/program_status.rs:698
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: minimal report	bae2c3cdb	PRESENT osc_7501_minimal_report @ crates/rustty-vt/src/osc/parsers/program_status.rs:622
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: no allocator	bae2c3cdb	PRESENT osc_7501_no_allocator @ crates/rustty-vt/src/osc/parsers/program_status.rs:932
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: out of range progress is absent	bae2c3cdb	PRESENT osc_7501_out_of_range_progress_is_absent @ crates/rustty-vt/src/osc/parsers/program_status.rs:733
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: query	bae2c3cdb	PRESENT osc_7501_query @ crates/rustty-vt/src/osc/parsers/program_status.rs:602
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: text must decode to safe UTF-8	bae2c3cdb	PRESENT osc_7501_text_must_decode_to_safe_utf8 @ crates/rustty-vt/src/osc/parsers/program_status.rs:817
+add	src/terminal/osc/parsers/program_status.zig	OSC 7501: whitespace around keys and values	bae2c3cdb	PRESENT osc_7501_whitespace_around_keys_and_values @ crates/rustty-vt/src/osc/parsers/program_status.rs:674
+add	src/terminal/osc/parsers/unknown.zig	OSC unknown: aborted sequences are dropped	7b11f3dca	PRESENT osc_unknown_aborted_sequences_are_dropped @ crates/rustty-vt/src/osc/parsers/unknown.rs:312
+add	src/terminal/osc/parsers/unknown.zig	OSC unknown: allocating tier	7b11f3dca	PRESENT osc_unknown_allocating_tier @ crates/rustty-vt/src/osc/parsers/unknown.rs:422
+add	src/terminal/osc/parsers/unknown.zig	OSC unknown: allocation failure falls back to fixed buffer	7b11f3dca	PRESENT osc_unknown_allocation_failure_falls_back_to_fixed_buffer @ crates/rustty-vt/src/osc/parsers/unknown.rs:478
+add	src/terminal/osc/parsers/unknown.zig	OSC unknown: allocation failure while growing truncates	7b11f3dca	PRESENT osc_unknown_allocation_failure_while_growing_truncates @ crates/rustty-vt/src/osc/parsers/unknown.rs:499
+add	src/terminal/osc/parsers/unknown.zig	OSC unknown: disabled by default	7b11f3dca	PRESENT osc_unknown_disabled_by_default @ crates/rustty-vt/src/osc/parsers/unknown.rs:181
+add	src/terminal/osc/parsers/unknown.zig	OSC unknown: fixed tier does not allocate	7b11f3dca	PRESENT osc_unknown_fixed_tier_does_not_allocate @ crates/rustty-vt/src/osc/parsers/unknown.rs:395
+add	src/terminal/osc/parsers/unknown.zig	OSC unknown: large limit without allocator uses fixed buffer	7b11f3dca	PRESENT osc_unknown_large_limit_without_allocator_uses_fixed_buffer @ crates/rustty-vt/src/osc/parsers/unknown.rs:460
+add	src/terminal/osc/parsers/unknown.zig	OSC unknown: limit smaller than the identifier	7b11f3dca	PRESENT osc_unknown_limit_smaller_than_the_identifier @ crates/rustty-vt/src/osc/parsers/unknown.rs:366
+add	src/terminal/osc/parsers/unknown.zig	OSC unknown: nextSlice matches per-byte parsing	7b11f3dca	PRESENT osc_unknown_next_slice_matches_per_byte_parsing @ crates/rustty-vt/src/osc/parsers/unknown.rs:538  [N519 masked by G-TESTS; ticked by hand]
+add	src/terminal/osc/parsers/unknown.zig	OSC unknown: prefix state names are the bytes consumed	7b11f3dca	PRESENT osc_unknown_prefix_state_names_are_the_bytes_consumed @ crates/rustty-vt/src/osc/parsers/unknown.rs:135
+add	src/terminal/osc/parsers/unknown.zig	OSC unknown: reported	7b11f3dca	PRESENT osc_unknown_reported @ crates/rustty-vt/src/osc/parsers/unknown.rs:199
+add	src/terminal/osc/parsers/unknown.zig	OSC unknown: supported commands are unchanged	7b11f3dca	PRESENT osc_unknown_supported_commands_are_unchanged @ crates/rustty-vt/src/osc/parsers/unknown.rs:272
+add	src/terminal/osc/parsers/unknown.zig	OSC unknown: truncated at the limit	7b11f3dca	PRESENT osc_unknown_truncated_at_the_limit @ crates/rustty-vt/src/osc/parsers/unknown.rs:336
+add	src/terminal/page.zig	Page clearCells full row clears kitty placeholder flag	a573781c6	PRESENT page_clear_cells_full_row_clears_kitty_placeholder_flag @ crates/rustty-vt/src/page_tests.rs:1051
+add	src/terminal/PageList.zig	PageList memory usage	8834e161c	PRESENT pagelist_memory_usage @ crates/rustty-vt/src/pagelist/tests/compress.rs:2673
+add	src/terminal/PageList.zig	PageList PageAllocation compresses prepended pages unless visible	88e66cbc6	PRESENT pagelist_page_allocation_compresses_prepended_pages_unless_visible @ crates/rustty-vt/src/pagelist/tests/builder.rs:375  [N519 masked by G-TESTS; ticked by hand]
+add	src/terminal/PageList.zig	PageList resize reflow pin in blank cells after line break	afded91df	PRESENT pagelist_resize_reflow_pin_in_blank_cells_after_line_break @ crates/rustty-vt/src/pagelist/tests/resize_noreflow_b.rs:1914  [N519 masked by G-TESTS; ticked by hand]
+add	src/terminal/Parser.zig	osc: 105 empty	36953bca8	PRESENT osc_105_empty @ crates/rustty-vt/src/parser.rs:1625
+add	src/terminal/Screen.zig	Screen: selectLine semantic boundary around unwritten cells	13b5ab204	PRESENT screen_select_line_semantic_boundary_around_unwritten_cells @ crates/rustty-vt/src/screen/tests/select.rs:285  [N519 masked by G-TESTS; ticked by hand]
+add	src/terminal/snapshot/history.zig	HISTORY decode compresses history pages when requested	88e66cbc6	PRESENT history_decode_compresses_history_pages_when_requested @ crates/rustty-vt/src/snapshot/history.rs:982
+add	src/terminal/stream_terminal.zig	DECRQCRA disabled	9272a2f7c	PRESENT decrqcra_disabled @ crates/rustty-vt/src/stream_terminal/tests/effects.rs:1350
+add	src/terminal/stream_terminal.zig	DECRQCRA enabled	9272a2f7c	PRESENT decrqcra_enabled @ crates/rustty-vt/src/stream_terminal/tests/effects.rs:1365
+add	src/terminal/stream_terminal.zig	program_status effect callback	bae2c3cdb	PRESENT program_status_effect_callback @ crates/rustty-vt/src/stream_terminal/tests/effects.rs:355
+add	src/terminal/stream_terminal.zig	reset effect callback	7bb45ba34	PRESENT reset_effect_callback @ crates/rustty-vt/src/stream_terminal/tests/effects.rs:660
+add	src/terminal/stream_terminal.zig	semantic_prompt effect callback	7bb45ba34	PRESENT semantic_prompt_effect_callback @ crates/rustty-vt/src/stream_terminal/tests/effects.rs:474
+add	src/terminal/stream_terminal.zig	unknown OSC effect callback	7b11f3dca	PRESENT unknown_osc_effect_callback @ crates/rustty-vt/src/stream_terminal/tests/basics.rs:287  [N519 masked by G-TESTS; ticked by hand]
+add	src/terminal/stream_terminal.zig	window_title not changed by cancelled OSC	520d8f55a	PRESENT window_title_not_changed_by_cancelled_osc @ crates/rustty-vt/src/stream_terminal/tests/effects.rs:996
+add	src/terminal/stream_terminal.zig	XTCHECKSUM ignored without xt checksum report	9272a2f7c	PRESENT xtchecksum_ignored_without_xt_checksum_report @ crates/rustty-vt/src/stream_terminal/tests/effects.rs:1390
+add	src/terminal/stream.zig	stream: DECRQCRA dispatch	9272a2f7c	PRESENT stream_decrqcra_dispatch @ crates/rustty-vt/src/stream/tests/csi_dispatch.rs:95  [N519 masked by G-TESTS; ticked by hand]
+add	src/terminal/stream.zig	stream: XTCHECKSUM dispatch	9272a2f7c	PRESENT stream_xtchecksum_dispatch @ crates/rustty-vt/src/stream/tests/csi_dispatch.rs:172  [N519 masked by G-TESTS; ticked by hand]
+add	src/terminal/Terminal.zig	Terminal: default xt checksum survives resets	00a19db51	PRESENT terminal_default_xt_checksum_survives_resets @ crates/rustty-vt/src/terminal/tests/resize.rs:363
+add	src/terminal/Terminal.zig	Terminal: eraseLine complete clears kitty placeholder flag	a573781c6	PRESENT terminal_erase_line_complete_clears_kitty_placeholder_flag @ crates/rustty-vt/src/terminal/tests/attrs.rs:517  [N519 masked by G-TESTS; ticked by hand]
+add	src/terminal/Terminal.zig	Terminal: print single shift is used up by a combining character	c706451fe	PRESENT terminal_print_single_shift_is_used_up_by_a_combining_character @ crates/rustty-vt/src/terminal/tests/print.rs:2235
+add	src/terminal/Terminal.zig	Terminal: print wide codepoint in a charset prints it unmapped	6220a3617	PRESENT terminal_print_wide_codepoint_in_a_charset_prints_it_unmapped @ crates/rustty-vt/src/terminal/tests/print.rs:2212
+add	src/terminal/Terminal.zig	Terminal: resize less cols without reflow cutting wide char tail	e6db5b633	PRESENT terminal_resize_less_cols_without_reflow_cutting_wide_char_tail @ crates/rustty-vt/src/terminal/tests/resize.rs:485  [N519 masked by G-TESTS; ticked by hand]
+add	src/terminal/Terminal.zig	Terminal: resize pending wrap live and saved cursors	f9ab34f10	PRESENT terminal_resize_pending_wrap_live_and_saved_cursors @ crates/rustty-vt/src/terminal/tests/resize.rs:1516  [N519 masked by G-TESTS; ticked by hand]
+add	src/terminal/Terminal.zig	Terminal: saved cursor survives repeated widening	afded91df	PRESENT terminal_saved_cursor_survives_repeated_widening @ crates/rustty-vt/src/terminal/tests/resize.rs:1486
+add	src/terminal/Terminal.zig	Terminal: VS16 moving a character to the next line keeps it unmapped	c706451fe	PRESENT terminal_vs16_moving_a_character_to_the_next_line_keeps_it_unmapped @ crates/rustty-vt/src/terminal/tests/print.rs:2259
+add	src/terminal/tmux/control.zig	tmux block terminator exactly max_bytes	e8b858cc6	PRESENT tmux_block_terminator_exactly_max_bytes @ crates/rustty-vt/src/tmux/control.rs:1490
+add	src/terminal/tmux/control.zig	tmux exceeding max_bytes	e8b858cc6	PRESENT tmux_exceeding_max_bytes @ crates/rustty-vt/src/tmux/control.rs:1510
+add	src/terminal/tmux/control.zig	tmux notification exactly max_bytes	e8b858cc6	PRESENT tmux_notification_exactly_max_bytes @ crates/rustty-vt/src/tmux/control.rs:1471
+add	src/terminal/xt_checksum.zig	xt_checksum: attributes	9272a2f7c,b2f557c6c	PRESENT xt_checksum_attributes @ crates/rustty-vt/src/xt_checksum.rs:726
+add	src/terminal/xt_checksum.zig	xt_checksum: combining marks	9272a2f7c,b2f557c6c	PRESENT xt_checksum_combining_marks @ crates/rustty-vt/src/xt_checksum.rs:858
+add	src/terminal/xt_checksum.zig	xt_checksum: DEC 8-bit values	9272a2f7c,b2f557c6c	PRESENT xt_checksum_dec_8_bit_values @ crates/rustty-vt/src/xt_checksum.rs:799
+add	src/terminal/xt_checksum.zig	xt_checksum: DEC counts a leading space	9272a2f7c,b2f557c6c	PRESENT xt_checksum_dec_counts_a_leading_space @ crates/rustty-vt/src/xt_checksum.rs:662
+add	src/terminal/xt_checksum.zig	xt_checksum: DEC trims blanks and skips undrawn cells	9272a2f7c,b2f557c6c	PRESENT xt_checksum_dec_trims_blanks_and_skips_undrawn_cells @ crates/rustty-vt/src/xt_checksum.rs:615
+add	src/terminal/xt_checksum.zig	xt_checksum: empty rectangle	9272a2f7c,b2f557c6c	PRESENT xt_checksum_empty_rectangle @ crates/rustty-vt/src/xt_checksum.rs:681
+add	src/terminal/xt_checksum.zig	xt_checksum: encode	9272a2f7c	PRESENT xt_checksum_encode @ crates/rustty-vt/src/xt_checksum.rs:491  [N519 masked by G-TESTS; ticked by hand]
+add	src/terminal/xt_checksum.zig	xt_checksum: extended attributes keep a space	9272a2f7c,b2f557c6c	PRESENT xt_checksum_extended_attributes_keep_a_space @ crates/rustty-vt/src/xt_checksum.rs:776
+add	src/terminal/xt_checksum.zig	xt_checksum: rectangle bounds	9272a2f7c,b2f557c6c	PRESENT xt_checksum_rectangle_bounds @ crates/rustty-vt/src/xt_checksum.rs:704
+add	src/terminal/xt_checksum.zig	xt_checksum: selection defaults and clamping	5f0d4febc	PRESENT xt_checksum_selection_defaults_and_clamping @ crates/rustty-vt/src/xt_checksum.rs:504
+add	src/terminal/xt_checksum.zig	xt_checksum: selection origin mode	5f0d4febc	PRESENT xt_checksum_selection_origin_mode @ crates/rustty-vt/src/xt_checksum.rs:565
+add	src/terminal/xt_checksum.zig	xt_checksum: wide characters	9272a2f7c,b2f557c6c	PRESENT xt_checksum_wide_characters @ crates/rustty-vt/src/xt_checksum.rs:829

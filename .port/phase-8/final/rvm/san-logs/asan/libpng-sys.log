@@ -1,0 +1,10 @@
+   Compiling libpng-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/libpng-sys)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.62s
+     Running unittests src/lib.rs (target/san-asan/aarch64-unknown-linux-gnu/debug/deps/libpng_sys-0cf748efd8fd25d4)
+
+running 2 tests
+test kat::access_version_number_is_1_6_43 ... ok
+test kat::create_and_destroy_read_struct ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

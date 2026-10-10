@@ -2199,12 +2199,136 @@ fn terminal_print_charset_outside_of_ascii() {
     t.print(0x1F600).unwrap();
     {
         let str = t.plain_string(Global).unwrap();
-        assert_eq!(str.as_slice(), "◆ ".as_bytes());
+        assert_eq!(str.as_slice(), "◆😀".as_bytes());
     }
 
     assert!(t.is_dirty(screen_pt(0, 0)));
 
     t.deinit(Global);
+}
+
+// test "Terminal: print wide codepoint in a charset prints it unmapped"
+#[test]
+fn terminal_print_wide_codepoint_in_a_charset_prints_it_unmapped() {
+    let mut t = Terminal::init(Global, opts(10, 2)).unwrap();
+
+    // The charset has no such codepoint, so it prints as it is, two
+    // columns wide, and the characters after it are mapped again.
+    t.configure_charset(charsets::Slots::G0, charsets::Charset::DecSpecial);
+    t.print('`' as u32).unwrap();
+    t.print(0x1F600).unwrap();
+    t.print('a' as u32).unwrap();
+    assert_eq!(unsafe { (*t.screens.active).cursor.x }, 4);
+    let cell = t.active_mut().pages.get_cell(screen_pt(1, 0)).unwrap().cell;
+    assert_eq!(unsafe { (*cell).content_codepoint() }, 0x1F600);
+    assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+    {
+        let str = t.plain_string(Global).unwrap();
+        assert_eq!(str.as_slice(), "◆😀▒".as_bytes());
+    }
+
+    t.deinit(Global);
+}
+
+// test "Terminal: print single shift is used up by a combining character"
+#[test]
+fn terminal_print_single_shift_is_used_up_by_a_combining_character() {
+    // As in xterm, the single shift applies to the combining mark, the next
+    // character printed, whether or not it clusters with the one before.
+    for cluster in [false, true] {
+        let mut t = Terminal::init(Global, opts(10, 2)).unwrap();
+        t.modes.set(modespkg::Mode::GraphemeCluster, cluster);
+
+        t.configure_charset(charsets::Slots::G2, charsets::Charset::British);
+        t.print('#' as u32).unwrap();
+        t.invoke_charset(charsets::ActiveSlot::GL, charsets::Slots::G2, true);
+        t.print(0x0301).unwrap();
+        assert_eq!(unsafe { (*t.screens.active).charset.single_shift }, None);
+        t.print('#' as u32).unwrap();
+
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 2);
+        let cell = t.active_mut().pages.get_cell(screen_pt(1, 0)).unwrap().cell;
+        assert_eq!(unsafe { (*cell).content_codepoint() }, '#' as u21);
+
+        t.deinit(Global);
+    }
+}
+
+// test "Terminal: VS16 moving a character to the next line keeps it unmapped"
+#[test]
+fn terminal_vs16_moving_a_character_to_the_next_line_keeps_it_unmapped() {
+    let mut t = Terminal::init(Global, opts(3, 5)).unwrap();
+
+    // The '#' is printed with ASCII in the last column. VS16 widens it after
+    // the British set (which maps '#' to '£') is selected, which moves it to
+    // the next line: it is the same character, not one to map again.
+    t.modes.set(modespkg::Mode::GraphemeCluster, true);
+    t.cursor_right(2);
+    t.print('#' as u32).unwrap();
+    t.configure_charset(charsets::Slots::G0, charsets::Charset::British);
+    t.print(0xFE0F).unwrap();
+
+    let cell = t.active_mut().pages.get_cell(screen_pt(0, 1)).unwrap().cell;
+    assert_eq!(unsafe { (*cell).content_codepoint() }, '#' as u21);
+    assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+
+    t.deinit(Global);
+}
+
+// Rustty-only (Review Focus 5): a single shift applies to exactly one
+// printed codepoint, whatever its shape, and the next one prints from GL.
+// Each case puts the shift directly before the codepoint under test and
+// then prints 'q', which must come out as 'q' (GL), not U+2500 (G2).
+// test "Terminal: single shift applies to exactly one codepoint"
+#[test]
+fn terminal_single_shift_applies_to_exactly_one_codepoint() {
+    // (printed before the shift, printed after it, expected first-cell
+    // codepoint, expected cursor x after the final 'q'). The first cell pins
+    // the character the shift applied to (the unmapped CJK) or the GL base the
+    // zero-width codepoint joined; the cursor x pins how many cells were used.
+    //
+    // Guards: 6220a3617 (above 0xFF is unmapped, and the old wide path's
+    // spacer write consumed the shift before the character) and c706451fe
+    // (the shift is used up by a codepoint that takes no cell).
+    let cases: [(&[u32], &[u32], u32, crate::size::CellCountInt); 3] = [
+        // 6220a3617: wide CJK after the shift; the shift is used on it.
+        (&[], &[0x6A4B, 'q' as u32], 0x6A4B, 3),
+        // c706451fe: shift directly before a combining mark.
+        (&['q' as u32], &[0x0301, 'q' as u32], 'q' as u32, 2),
+        // c706451fe: shift directly before VS16 on a base it does not widen.
+        (&['q' as u32], &[0xFE0F, 'q' as u32], 'q' as u32, 2),
+    ];
+    for cluster in [false, true] {
+        for (before, after, first, cursor_x) in cases {
+            let mut t = Terminal::init(Global, opts(10, 2)).unwrap();
+            t.modes.set(modespkg::Mode::GraphemeCluster, cluster);
+            t.configure_charset(charsets::Slots::G2, charsets::Charset::DecSpecial);
+            for &c in before {
+                t.print(c).unwrap();
+            }
+            t.invoke_charset(charsets::ActiveSlot::GL, charsets::Slots::G2, true);
+            for &c in after {
+                t.print(c).unwrap();
+            }
+            assert_eq!(unsafe { (*t.screens.active).charset.single_shift }, None);
+
+            let head = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap().cell;
+            assert_eq!(unsafe { (*head).content_codepoint() }, first as u21);
+
+            // The final 'q' is in the last cell written, printed from GL.
+            let x = unsafe { (*t.screens.active).cursor.x };
+            assert_eq!(x, cursor_x);
+            let last = t
+                .active_mut()
+                .pages
+                .get_cell(screen_pt(x - 1, 0))
+                .unwrap()
+                .cell;
+            assert_eq!(unsafe { (*last).content_codepoint() }, 'q' as u21);
+
+            t.deinit(Global);
+        }
+    }
 }
 
 // test "Terminal: print invoke charset"
@@ -2261,19 +2385,19 @@ fn terminal_print_kitty_unicode_placeholder() {
     t.deinit(Global);
 }
 
-/// PORT NOTE: NOT a reference test. The reference's `Screen.clearCells`
-/// kitty block (`Screen.zig:1818-1828`) was carried only as a comment, and
-/// nothing in either tree exercised it. It clears
-/// `row.kitty_virtual_placeholder` on a FULL-row clear only when no cell in
-/// the row still carries the placeholder codepoint (the Zig `for ... else`
-/// runs its `else` when the loop did not `break`), so both arms are pinned
-/// here.
+/// PORT NOTE: NOT a reference test (P8-W9 FX7, review M8). It keeps the one
+/// still-true arm of the Rustty-only
+/// `terminal_erase_line_clears_the_kitty_virtual_placeholder_flag`, which
+/// `0a3e385a5` (P8-W2 T1) deleted with the backwards scan that upstream
+/// `a573781c6` removed: printing over the only placeholder cell does NOT clear
+/// the row's flag (the reference never clears it on print), so the row stays
+/// marked while holding no placeholder.
 #[test]
 #[cfg_attr(
     not(all(feature = "kitty-graphics", not(target_os = "none"))),
     ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
 )]
-fn terminal_erase_line_clears_the_kitty_virtual_placeholder_flag() {
+fn terminal_print_over_a_kitty_placeholder_keeps_the_row_flag() {
     let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
     let flag = |t: &mut Terminal| -> bool {
         let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
@@ -2284,25 +2408,13 @@ fn terminal_erase_line_clears_the_kitty_virtual_placeholder_flag() {
     t.print(kitty::graphics_unicode::PLACEHOLDER).unwrap();
     assert!(flag(&mut t));
 
-    // Overwriting the only placeholder cell does NOT clear the flag (the
-    // reference never clears it on print either), so the row is now marked
-    // but holds no placeholder.
+    // Overwriting the only placeholder cell does NOT clear the flag.
     t.set_cursor_pos(1, 1);
     t.print('A' as u32).unwrap();
-    assert!(flag(&mut t));
-
-    // A full-row clear with no placeholder left in the row clears the flag.
-    t.set_cursor_pos(1, 1);
-    t.erase_line(csi::EraseLine::Complete, false);
-    assert!(!flag(&mut t));
-
-    // The `break` arm: a row that still holds a placeholder keeps the flag,
-    // because the loop breaks before the `else`.
-    t.set_cursor_pos(1, 1);
-    t.print(kitty::graphics_unicode::PLACEHOLDER).unwrap();
-    assert!(flag(&mut t));
-    t.set_cursor_pos(1, 1);
-    t.erase_line(csi::EraseLine::Complete, false);
+    {
+        let cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap().cell;
+        assert_eq!(unsafe { (*cell).content_codepoint() }, 'A' as u21);
+    }
     assert!(flag(&mut t));
 
     t.deinit(Global);
@@ -2795,7 +2907,7 @@ fn terminal_overwrite_hyperlink() {
 }
 
 // Printing a wide char at the right edge with an active hyperlink causes
-// printCell to write a spacer_head before printWrap sets the row wrap
+// writeCell to write a spacer_head before printWrap sets the row wrap
 // flag. The integrity check inside setHyperlink (or increaseCapacity)
 // sees the unwrapped spacer head and panics. Found via fuzzing.
 // test "Terminal: print wide char at right edge with hyperlink"
@@ -2810,7 +2922,7 @@ fn terminal_print_wide_char_at_right_edge_with_hyperlink() {
     // Move cursor to the last column (1-indexed)
     t.set_cursor_pos(1, 10);
 
-    // Print a wide character; this will call printCell(0, .spacer_head)
+    // Print a wide character; this will call writeCell(0, .spacer_head)
     // at the right edge before calling printWrap, triggering the
     // integrity violation.
     t.print(0x4E2D).unwrap(); // U+4E2D '中'

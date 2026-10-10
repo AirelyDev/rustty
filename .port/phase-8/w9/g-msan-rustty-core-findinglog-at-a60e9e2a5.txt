@@ -1,0 +1,236 @@
+   Compiling rustty-core v0.1.0 (/home/gael/projects/rustty-p8w9t2/crates/rustty-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.83s
+     Running unittests src/lib.rs (target/san-msan/aarch64-unknown-linux-gnu/debug/deps/rustty_core-ebb58db46854f95c)
+
+running 85 tests
+test app::test_runtime::app_init_without_an_egl_driver_fails_with_device_failed_and_says_why ... ignored, needs __EGL_VENDOR_LIBRARY_FILENAMES=/nonexistent.json; run alone with --ignored --exact
+Uninitialized bytes in scandir at offset 0 inside [0xe0500000a0b8, 24)
+==3770961==WARNING: MemorySanitizer: use-of-uninitialized-value
+test app::test_runtime::add_and_delete_surface_drive_the_quit_timer ... ok
+test app::test_runtime::delete_surface_clears_matching_focused_surface ... ok
+test app::test_runtime::color_scheme_event_same_scheme_is_noop ... ok
+test app::test_runtime::focus_event_emits_the_debug_diagnostic_only_on_a_real_change ... ok
+test app::test_runtime::focus_event_sets_state_and_dedupes ... ok
+test app::test_runtime::init_null_device_has_no_device_and_deinit_skips_it ... ok
+test app::test_runtime::color_scheme_event_sets_conditional_state_and_soft_reloads ... ok
+test app::test_runtime::drain_mailbox_dispatches_and_quit_short_circuits ... ok
+test app::test_runtime::key_event_app_scoped_leaf_performs_action ... ok
+test app::test_runtime::key_event_release_returns_false ... ok
+test app::test_runtime::needs_confirm_quit_false_with_zero_surfaces ... ok
+test app::test_runtime::drain_mailbox_logs_message_tags ... ok
+test app::test_runtime::key_event_unfocused_non_global_returns_false ... ok
+test log_capture::tests::all_threads_capture_admits_a_spawned_thread ... ok
+test log_capture::tests::capture_admits_only_the_owning_thread ... ok
+test app::test_runtime::mailbox_push_wakes_rt_app_and_returns_size ... ok
+error(task14a_app_logger_test): proving message 1
+warning: default-scope proving message
+test log_capture::tests::records_emitted_outside_a_capture_are_discarded ... ok
+test logging::tests::app_log_backend_installs_and_dispatches_without_panicking ... ok
+test logging::tests::empty_facade_target_maps_onto_the_reference_default_scope ... ok
+test logging::tests::level_as_text_matches_reference ... ok
+test logging::tests::level_from_log_matches_the_reference_mapping ... ok
+info: boot message
+test app::test_runtime::perform_all_chained_action_continues_past_failures ... ok
+test app::test_runtime::ud366_perform_all_action_survives_a_host_append_that_reallocates ... ok
+test logging::tests::log_with_gates_on_stderr_flag ... ok
+test logging::tests::state_reading_log_defaults_when_unset ... ok
+test app::test_runtime::perform_all_chained_action_warns_on_the_failing_action_only ... ok
+test renderer_seam::cursor_blink_interval_tests::cursor_blink_interval_is_five_times_longer_under_valgrind ... ok
+test renderer_seam::surface_mailbox_seam_tests::adapter_enqueues_scrollbar_and_health_onto_the_real_app_queue ... ok
+test renderer_seam::surface_mailbox_seam_tests::adapter_reports_zero_when_the_queue_is_full ... ok
+test renderer_seam::thread_diagnostics_tests::animation_timer_callback_warns_and_disarms_without_data_set ... ok
+test renderer_seam::thread_diagnostics_tests::compression_timer_warns_only_on_a_non_canceled_error ... ok
+test renderer_seam::thread_diagnostics_tests::cursor_cancel_callback_is_silent_on_not_found ... ok
+test renderer_seam::thread_diagnostics_tests::cursor_cancel_callback_warns_and_disarms_on_a_cancel_error ... ok
+test renderer_seam::thread_diagnostics_tests::mailbox_message_renders_the_reference_union_syntax ... ok
+test renderer_seam::thread_diagnostics_tests::draw_now_callback_null_userdata_panics_at_the_unwrap - should panic ... ok
+test renderer_seam::thread_diagnostics_tests::render_callback_warns_and_disarms_without_data_set ... ok
+test renderer_seam::thread_diagnostics_tests::stop_callback_null_userdata_panics_at_the_unwrap - should panic ... ok
+test renderer_seam::thread_diagnostics_tests::stop_callback_rearms_on_a_wait_error ... ok
+test renderer_seam::thread_diagnostics_tests::timer_callbacks_disarm_on_an_unexpected_error ... ok
+test renderer_seam::thread_diagnostics_tests::wakeup_callback_null_userdata_panics_at_the_unwrap - should panic ... ok
+test simd_option::simd_feature_reaches_the_terminal_and_the_simd_kernels ... ok
+test surface::tests::clipboard_codepoint_map_e2e::clipboard_codepoint_map_fixture_is_miri_clean ... ok
+test surface::tests::clipboard_codepoint_map_e2e::clipboard_codepoint_map_reaches_copy_selection_to_clipboards ... ok
+test surface::tests::diagnostics_tests::activate_key_table_logs_the_missing_table_name ... ok
+test surface::tests::diagnostics_tests::clipboard_write_invalid_base64_logs_and_the_deny_line_does_not ... ok
+test surface::tests::diagnostics_tests::clipboard_write_deny_logs_once_and_the_allowed_path_does_not ... ok
+test surface::tests::freetype_load_flags_tests::default_round_trips_exactly ... ok
+test surface::tests::freetype_load_flags_tests::derived_config_carries_the_configured_flags ... ok
+test surface::tests::freetype_load_flags_tests::from_config_threads_every_field ... ok
+test surface::tests::freetype_load_flags_tests::load_flags_are_hash_distinguishing ... ok
+test surface::tests::inspector_lifecycle_tests::inspector_renderer_info_coerces_to_overlay_and_reads ... ok
+test surface::tests::inspector_lifecycle_tests::record_key_event_grows_then_evicts_bounded ... ok
+test surface::tests::isize_from_float_tests::isize_from_float_in_range_is_exact ... ok
+test surface::tests::isize_from_float_tests::isize_from_float_reports_nan_whose_reference_value_is_target_dependent ... ok
+test surface::tests::isize_from_float_tests::isize_from_float_reports_the_values_the_reference_traps_on ... ok
+test surface::tests::isize_from_float_tests::isize_from_float_saturating_takes_the_end_in_each_direction ... ok
+test surface::tests::diagnostics_tests::set_title_with_a_static_config_title_logs_and_returns ... ok
+test surface::tests::paste_event_mutex_tests::paste_event_queues_while_holding_the_renderer_mutex_on_a_full_mailbox ... ok
+test surface::tests::mok2_key_path_e2e::surface_mok2_keypad_alt_ctrl_end_to_end ... ok
+test surface::tests::queue_io_readonly_tests::queueIo_frees_allocated_writes_in_readonly_mode ... ok
+test surface::tests::r13_window_size_overflow_tests::a_click_repeat_interval_above_u32_nanoseconds_is_widened_not_trapped ... ok
+test surface::tests::r13_window_size_overflow_tests::an_oversized_window_padding_saturates_and_leaves_a_one_cell_grid ... ok
+test surface::tests::r13_window_size_overflow_tests::initial_size_px_overflow_takes_the_skip_path ... ok
+test surface::tests::r13_window_size_overflow_tests::initial_size_px_with_a_nan_content_scale_takes_the_skip_path ... ok
+    #0 0xffffb215b0d8  (/lib64/libEGL.so.1+0xb0d8) (BuildId: 1d71bf3e14bd953a49bb5e67a276cd5e3cdc4d1d)
+    #1 0xffffb2853958 in __pthread_once_slow.isra.0 (/lib64/libc.so.6+0x93958) (BuildId: 942a4e04fffa544ebeac46c234a1e908537cec58)
+    #2 0xffffb2853a20 in pthread_once@@GLIBC_2.34 (/lib64/libc.so.6+0x93a20) (BuildId: 942a4e04fffa544ebeac46c234a1e908537cec58)
+    #3 0xffffb2156428  (/lib64/libEGL.so.1+0x6428) (BuildId: 1d71bf3e14bd953a49bb5e67a276cd5e3cdc4d1d)
+    #4 0xaaaab0214a34 in eglGetPlatformDisplay<libloading::safe::Library> /home/gael/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/khronos-egl-6.0.0/src/lib.rs:2333:6
+    #5 0xaaaab0214a34 in <khronos_egl::Instance<khronos_egl::Dynamic<libloading::safe::Library, khronos_egl::EGL1_5>>>::get_platform_display /home/gael/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/khronos-egl-6.0.0/src/lib.rs:1775:7
+    #6 0xaaaab00eff24 in rustty_renderer::opengl::gl::sys::init_platform /home/gael/projects/rustty-p8w9t2/crates/rustty-renderer/src/opengl/gl/sys.rs:90:32
+    #7 0xaaaab00b0f2c in <rustty_renderer::opengl::device::Device>::init /home/gael/projects/rustty-p8w9t2/crates/rustty-renderer/src/opengl/device.rs:110:19
+    #8 0xaaaaaf7beda4 in <rustty_core::app::DeviceBox>::init /home/gael/projects/rustty-p8w9t2/crates/rustty-core/src/app.rs:257:9
+    #9 0xaaaaaf78387c in <rustty_core::app::App<rustty_core::app::test_runtime::TestApp>>::init /home/gael/projects/rustty-p8w9t2/crates/rustty-core/src/app.rs:433:28
+    #10 0xaaaaaf942c74 in rustty_core::app::test_runtime::app_init_creates_and_deinit_frees_the_render_device /home/gael/projects/rustty-p8w9t2/crates/rustty-core/src/app.rs:1836:29
+    #11 0xaaaaaf67aac4 in rustty_core::app::test_runtime::app_init_creates_and_deinit_frees_the_render_device::{closure#0} /home/gael/projects/rustty-p8w9t2/crates/rustty-core/src/app.rs:1835:61
+    #12 0xaaaaaf8e15dc in <rustty_core::app::test_runtime::app_init_creates_and_deinit_frees_the_render_device::{closure#0} as core::ops::function::FnOnce<()>>::call_once /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+    #13 0xaaaaafaab028 in <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+    #14 0xaaaaaf9fcfd8 in test::__rust_begin_short_backtrace::<core::result::Result<(), alloc::string::String>, fn() -> core::result::Result<(), alloc::string::String>> /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/test/src/lib.rs:733:18
+    #15 0xaaaaafb1038c in <test::types::RunnableTest>::run /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/test/src/types.rs:145:40
+    #16 0xaaaaafa107a4 in test::run_test_in_process::{closure#0} /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/test/src/lib.rs:756:74
+    #17 0xaaaaafaef278 in <core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}> as core::ops::function::FnOnce<()>>::call_once /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panic/unwind_safe.rs:275:9
+    #18 0xaaaaaf9dcc1c in std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}>, core::result::Result<(), alloc::string::String>> /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:576:43
+    #19 0xaaaaaf9fb51c in __rust_try test.4d7dd1f014e07982-cgu.01
+    #20 0xaaaaaf9d62e4 in std::panicking::catch_unwind::<core::result::Result<(), alloc::string::String>, core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}>> /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:544:19
+    #21 0xaaaaafb91308 in std::panic::catch_unwind::<core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}>, core::result::Result<(), alloc::string::String>> /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panic.rs:359:14
+    #22 0xaaaaafa16730 in test::run_test_in_process /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/test/src/lib.rs:756:27
+    #23 0xaaaaafa12bfc in test::run_test::{closure#0} /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/test/src/lib.rs:677:43
+    #24 0xaaaaafa13824 in test::run_test::{closure#1} /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/test/src/lib.rs:707:41
+    #25 0xaaaaafb4999c in std::sys::backtrace::__rust_begin_short_backtrace::<test::run_test::{closure#1}, ()> /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/sys/backtrace.rs:166:18
+    #26 0xaaaaafa34760 in std::thread::lifecycle::spawn_unchecked::<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0} /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/thread/lifecycle.rs:70:13
+    #27 0xaaaaafaef1d4 in <core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}> as core::ops::function::FnOnce<()>>::call_once /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panic/unwind_safe.rs:275:9
+    #28 0xaaaaaf9dc8d8 in std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>, ()> /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:576:43
+    #29 0xaaaaaf9fb51c in __rust_try test.4d7dd1f014e07982-cgu.01
+    #30 0xaaaaaf9d67fc in std::panicking::catch_unwind::<(), core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>> /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:544:19
+    #31 0xaaaaafb91250 in std::panic::catch_unwind::<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>, ()> /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panic.rs:359:14
+    #32 0xaaaaafa32f4c in std::thread::lifecycle::spawn_unchecked::<test::run_test::{closure#1}, ()>::{closure#1} /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/thread/lifecycle.rs:68:26
+    #33 0xaaaaafa9aff0 in <std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0} /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+    #34 0xaaaab4e2ec24 in <alloc::boxed::Box<dyn core::ops::function::FnOnce<(), Output = ()> + core::marker::Send> as core::ops::function::FnOnce<()>>::call_once /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/boxed.rs:2321:9
+    #35 0xaaaab4db5914 in <std::sys::thread::unix::Thread>::new::thread_start /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/sys/thread/unix.rs:123:17
+    #36 0xffffb284e0f8 in start_thread (/lib64/libc.so.6+0x8e0f8) (BuildId: 942a4e04fffa544ebeac46c234a1e908537cec58)
+    #37 0xffffb28b8458 in thread_start (/lib64/libc.so.6+0xf8458) (BuildId: 942a4e04fffa544ebeac46c234a1e908537cec58)
+
+  Uninitialized value was created by a heap allocation
+test surface::tests::r13_window_size_overflow_tests::size_limit_min_overflow_skips_the_action ... ok
+    #0 0xaaaaaf4d73d8 in malloc (/home/gael/projects/rustty-p8w9t2/target/san-msan/aarch64-unknown-linux-gnu/debug/deps/rustty_core-ebb58db46854f95c+0x1173d8) (BuildId: 0f82cc511818b33b15a73667bc0df9f56bf09276)
+    #1 0xffffb2156068  (/lib64/libEGL.so.1+0x6068) (BuildId: 1d71bf3e14bd953a49bb5e67a276cd5e3cdc4d1d)
+    #2 0x75ffffb215b078  (<unknown module>)
+    #3 0x5fffffb2853958  (<unknown module>)
+    #4 0x33ffffb2853a20  (<unknown module>)
+    #5 0x63ffffb2156428  (<unknown module>)
+    #6 0x5daaaab0214a34  (<unknown module>)
+    #7 0xaaaab00eff24 in rustty_renderer::opengl::gl::sys::init_platform /home/gael/projects/rustty-p8w9t2/crates/rustty-renderer/src/opengl/gl/sys.rs:90:32
+    #8 0xaaaab00b0f2c in <rustty_renderer::opengl::device::Device>::init /home/gael/projects/rustty-p8w9t2/crates/rustty-renderer/src/opengl/device.rs:110:19
+    #9 0xaaaaaf7beda4 in <rustty_core::app::DeviceBox>::init /home/gael/projects/rustty-p8w9t2/crates/rustty-core/src/app.rs:257:9
+    #10 0xaaaaaf78387c in <rustty_core::app::App<rustty_core::app::test_runtime::TestApp>>::init /home/gael/projects/rustty-p8w9t2/crates/rustty-core/src/app.rs:433:28
+    #11 0xaaaaaf942c74 in rustty_core::app::test_runtime::app_init_creates_and_deinit_frees_the_render_device /home/gael/projects/rustty-p8w9t2/crates/rustty-core/src/app.rs:1836:29
+    #12 0xaaaaaf67aac4 in rustty_core::app::test_runtime::app_init_creates_and_deinit_frees_the_render_device::{closure#0} /home/gael/projects/rustty-p8w9t2/crates/rustty-core/src/app.rs:1835:61
+    #13 0xaaaaaf8e15dc in <rustty_core::app::test_runtime::app_init_creates_and_deinit_frees_the_render_device::{closure#0} as core::ops::function::FnOnce<()>>::call_once /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+    #14 0xaaaaafaab028 in <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+    #15 0xaaaaaf9fcfd8 in test::__rust_begin_short_backtrace::<core::result::Result<(), alloc::string::String>, fn() -> core::result::Result<(), alloc::string::String>> /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/test/src/lib.rs:733:18
+    #16 0xaaaaafb1038c in <test::types::RunnableTest>::run /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/test/src/types.rs:145:40
+    #17 0xaaaaafa107a4 in test::run_test_in_process::{closure#0} /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/test/src/lib.rs:756:74
+    #18 0xaaaaafaef278 in <core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}> as core::ops::function::FnOnce<()>>::call_once /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panic/unwind_safe.rs:275:9
+    #19 0xaaaaaf9dcc1c in std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}>, core::result::Result<(), alloc::string::String>> /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:576:43
+
+SUMMARY: MemorySanitizer: use-of-uninitialized-value (/lib64/libEGL.so.1+0xb0d8) (BuildId: 1d71bf3e14bd953a49bb5e67a276cd5e3cdc4d1d) 
+Exiting
+error: test failed, to rerun pass `-p rustty-core --lib`
+
+Caused by:
+  process didn't exit successfully: `/home/gael/projects/rustty-p8w9t2/target/san-msan/aarch64-unknown-linux-gnu/debug/deps/rustty_core-ebb58db46854f95c` (exit status: 1)
+note: test exited abnormally; to see the full output pass --no-capture to the harness.
+     Running tests/surface_visibility_kat.rs (target/san-msan/aarch64-unknown-linux-gnu/debug/deps/surface_visibility_kat-45dd6c5f9d6a7614)
+
+running 1 test
+Uninitialized bytes in scandir at offset 0 inside [0xe05000002f48, 24)
+==3771040==WARNING: MemorySanitizer: use-of-uninitialized-value
+    #0 0xffff911eb0d8  (/lib64/libEGL.so.1+0xb0d8) (BuildId: 1d71bf3e14bd953a49bb5e67a276cd5e3cdc4d1d)
+    #1 0xffff917c3958 in __pthread_once_slow.isra.0 (/lib64/libc.so.6+0x93958) (BuildId: 942a4e04fffa544ebeac46c234a1e908537cec58)
+    #2 0xffff917c3a20 in pthread_once@@GLIBC_2.34 (/lib64/libc.so.6+0x93a20) (BuildId: 942a4e04fffa544ebeac46c234a1e908537cec58)
+    #3 0xffff911e6428  (/lib64/libEGL.so.1+0x6428) (BuildId: 1d71bf3e14bd953a49bb5e67a276cd5e3cdc4d1d)
+    #4 0xaaaab65246b4 in eglGetPlatformDisplay<libloading::safe::Library> /home/gael/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/khronos-egl-6.0.0/src/lib.rs:2333:6
+    #5 0xaaaab65246b4 in <khronos_egl::Instance<khronos_egl::Dynamic<libloading::safe::Library, khronos_egl::EGL1_5>>>::get_platform_display /home/gael/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/khronos-egl-6.0.0/src/lib.rs:1775:7
+    #6 0xaaaab64e3d1c in rustty_renderer::opengl::gl::sys::init_platform /home/gael/projects/rustty-p8w9t2/crates/rustty-renderer/src/opengl/gl/sys.rs:90:32
+    #7 0xaaaab64e0aa8 in <rustty_renderer::opengl::device::Device>::init /home/gael/projects/rustty-p8w9t2/crates/rustty-renderer/src/opengl/device.rs:110:19
+    #8 0xaaaab6463dc0 in <rustty_core::app::DeviceBox>::init /home/gael/projects/rustty-p8w9t2/crates/rustty-core/src/app.rs:257:9
+    #9 0xaaaab61c96d8 in <rustty_core::app::App<surface_visibility_kat::TestApp>>::init /home/gael/projects/rustty-p8w9t2/crates/rustty-config/src/config_struct/parse.rs
+    #10 0xaaaab61c9f98 in <rustty_core::app::App<surface_visibility_kat::TestApp>>::create /home/gael/projects/rustty-p8w9t2/crates/rustty-config/src/config_struct/parse.rs
+    #11 0xaaaab61d5da0 in <surface_visibility_kat::TestSurface>::build /home/gael/projects/rustty-p8w9t2/crates/rustty-config/src/config_struct/parse.rs
+    #12 0xaaaab61d1bbc in surface_visibility_kat::surface_occlusion_callback_dedups_and_reports /home/gael/projects/rustty-p8w9t2/crates/rustty-config/src/config_struct/parse.rs
+    #13 0xaaaab61abbdc in surface_visibility_kat::surface_occlusion_callback_dedups_and_reports::{closure#0} /home/gael/projects/rustty-p8w9t2/crates/rustty-config/src/config_struct/parse.rs:176:17
+    #14 0xaaaab61baea8 in <surface_visibility_kat::surface_occlusion_callback_dedups_and_reports::{closure#0} as core::ops::function::FnOnce<()>>::call_once /home/gael/projects/rustty-p8w9t2/crates/rustty-config/src/config_struct/parse.rs
+    #15 0xaaaab628ebe4 in <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+    #16 0xaaaab61e0b94 in test::__rust_begin_short_backtrace::<core::result::Result<(), alloc::string::String>, fn() -> core::result::Result<(), alloc::string::String>> /home/gael/projects/rustty-p8w9t2/crates/rustty-config/src/config_struct/parse.rs
+    #17 0xaaaab62f3f48 in <test::types::RunnableTest>::run /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/test/src/types.rs:145:40
+    #18 0xaaaab61f4360 in test::run_test_in_process::{closure#0} /home/gael/projects/rustty-p8w9t2/crates/rustty-config/src/config_struct/parse.rs:341:9
+    #19 0xaaaab62d2e34 in <core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}> as core::ops::function::FnOnce<()>>::call_once /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panic/unwind_safe.rs:275:9
+    #20 0xaaaab640ecdc in std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}>, core::result::Result<(), alloc::string::String>> /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:576:43
+    #21 0xaaaab642d5dc in __rust_try test.4d7dd1f014e07982-cgu.01
+    #22 0xaaaab64083a4 in std::panicking::catch_unwind::<core::result::Result<(), alloc::string::String>, core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}>> /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:544:19
+    #23 0xaaaab6374ec4 in std::panic::catch_unwind::<core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}>, core::result::Result<(), alloc::string::String>> /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panic.rs:359:14
+    #24 0xaaaab61fa2ec in test::run_test_in_process /home/gael/projects/rustty-p8w9t2/crates/rustty-config/src/config_struct/parse.rs:341:9
+    #25 0xaaaab61f67b8 in test::run_test::{closure#0} /home/gael/projects/rustty-p8w9t2/crates/rustty-config/src/config_struct/parse.rs:341:9
+    #26 0xaaaab61f73e0 in test::run_test::{closure#1} /home/gael/projects/rustty-p8w9t2/crates/rustty-config/src/config_struct/parse.rs:341:9
+    #27 0xaaaab632d558 in std::sys::backtrace::__rust_begin_short_backtrace::<test::run_test::{closure#1}, ()> /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/sys/backtrace.rs:166:18
+    #28 0xaaaab621831c in std::thread::lifecycle::spawn_unchecked::<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0} /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/thread/lifecycle.rs:70:13
+    #29 0xaaaab62d2d90 in <core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}> as core::ops::function::FnOnce<()>>::call_once /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panic/unwind_safe.rs:275:9
+    #30 0xaaaab640e998 in std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>, ()> /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:576:43
+    #31 0xaaaab642d5dc in __rust_try test.4d7dd1f014e07982-cgu.01
+    #32 0xaaaab64088bc in std::panicking::catch_unwind::<(), core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>> /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:544:19
+    #33 0xaaaab6374e0c in std::panic::catch_unwind::<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>, ()> /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panic.rs:359:14
+    #34 0xaaaab6216b08 in std::thread::lifecycle::spawn_unchecked::<test::run_test::{closure#1}, ()>::{closure#1} /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/thread/lifecycle.rs:68:26
+    #35 0xaaaab627ebac in <std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0} /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+    #36 0xaaaab72f7f68 in <alloc::boxed::Box<dyn core::ops::function::FnOnce<(), Output = ()> + core::marker::Send> as core::ops::function::FnOnce<()>>::call_once /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/boxed.rs:2321:9
+    #37 0xaaaab7281400 in <std::sys::thread::unix::Thread>::new::thread_start /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/sys/thread/unix.rs:123:17
+    #38 0xffff917be0f8 in start_thread (/lib64/libc.so.6+0x8e0f8) (BuildId: 942a4e04fffa544ebeac46c234a1e908537cec58)
+    #39 0xffff91828458 in thread_start (/lib64/libc.so.6+0xf8458) (BuildId: 942a4e04fffa544ebeac46c234a1e908537cec58)
+
+  Uninitialized value was created by a heap allocation
+    #0 0xaaaab613aec0 in malloc /home/gael/projects/rustty-p8w9t2/crates/rustty-config/src/config_struct/parse.rs
+    #1 0xffff911e6068  (/lib64/libEGL.so.1+0x6068) (BuildId: 1d71bf3e14bd953a49bb5e67a276cd5e3cdc4d1d)
+    #2 0x6dffff911eb078  (<unknown module>)
+    #3 0x2ffff917c3958  (<unknown module>)
+    #4 0x58ffff917c3a20  (<unknown module>)
+    #5 0xcffff911e6428  (<unknown module>)
+    #6 0x19aaaab65246b4  (<unknown module>)
+    #7 0xaaaab64e3d1c in rustty_renderer::opengl::gl::sys::init_platform /home/gael/projects/rustty-p8w9t2/crates/rustty-renderer/src/opengl/gl/sys.rs:90:32
+    #8 0xaaaab64e0aa8 in <rustty_renderer::opengl::device::Device>::init /home/gael/projects/rustty-p8w9t2/crates/rustty-renderer/src/opengl/device.rs:110:19
+    #9 0xaaaab6463dc0 in <rustty_core::app::DeviceBox>::init /home/gael/projects/rustty-p8w9t2/crates/rustty-core/src/app.rs:257:9
+    #10 0xaaaab61c96d8 in <rustty_core::app::App<surface_visibility_kat::TestApp>>::init /home/gael/projects/rustty-p8w9t2/crates/rustty-config/src/config_struct/parse.rs
+    #11 0xaaaab61c9f98 in <rustty_core::app::App<surface_visibility_kat::TestApp>>::create /home/gael/projects/rustty-p8w9t2/crates/rustty-config/src/config_struct/parse.rs
+    #12 0xaaaab61d5da0 in <surface_visibility_kat::TestSurface>::build /home/gael/projects/rustty-p8w9t2/crates/rustty-config/src/config_struct/parse.rs
+    #13 0xaaaab61d1bbc in surface_visibility_kat::surface_occlusion_callback_dedups_and_reports /home/gael/projects/rustty-p8w9t2/crates/rustty-config/src/config_struct/parse.rs
+    #14 0xaaaab61abbdc in surface_visibility_kat::surface_occlusion_callback_dedups_and_reports::{closure#0} /home/gael/projects/rustty-p8w9t2/crates/rustty-config/src/config_struct/parse.rs:176:17
+    #15 0xaaaab61baea8 in <surface_visibility_kat::surface_occlusion_callback_dedups_and_reports::{closure#0} as core::ops::function::FnOnce<()>>::call_once /home/gael/projects/rustty-p8w9t2/crates/rustty-config/src/config_struct/parse.rs
+    #16 0xaaaab628ebe4 in <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+    #17 0xaaaab61e0b94 in test::__rust_begin_short_backtrace::<core::result::Result<(), alloc::string::String>, fn() -> core::result::Result<(), alloc::string::String>> /home/gael/projects/rustty-p8w9t2/crates/rustty-config/src/config_struct/parse.rs
+    #18 0xaaaab62f3f48 in <test::types::RunnableTest>::run /home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/test/src/types.rs:145:40
+    #19 0xaaaab61f4360 in test::run_test_in_process::{closure#0} /home/gael/projects/rustty-p8w9t2/crates/rustty-config/src/config_struct/parse.rs:341:9
+
+SUMMARY: MemorySanitizer: use-of-uninitialized-value (/lib64/libEGL.so.1+0xb0d8) (BuildId: 1d71bf3e14bd953a49bb5e67a276cd5e3cdc4d1d) 
+Exiting
+error: test failed, to rerun pass `-p rustty-core --test surface_visibility_kat`
+
+Caused by:
+  process didn't exit successfully: `/home/gael/projects/rustty-p8w9t2/target/san-msan/aarch64-unknown-linux-gnu/debug/deps/surface_visibility_kat-45dd6c5f9d6a7614` (exit status: 1)
+note: test exited abnormally; to see the full output pass --no-capture to the harness.
+     Running tests/vt_build_options.rs (target/san-msan/aarch64-unknown-linux-gnu/debug/deps/vt_build_options-7a3f8c2a6ea05936)
+
+running 2 tests
+test app_tier_resolves_terminal_simd_from_the_option ... ok
+test app_tier_manifest_defaults_terminal_simd_on_as_an_option ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rustty_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: 2 targets failed:
+    `-p rustty-core --lib`
+    `-p rustty-core --test surface_visibility_kat`

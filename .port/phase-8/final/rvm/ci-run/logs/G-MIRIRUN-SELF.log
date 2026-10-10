@@ -1,0 +1,11 @@
+  self-test PASS: passes.out -> ok
+  self-test PASS: use_after_free.out -> UB
+  self-test PASS: leaks.out -> LEAK
+  self-test PASS: exhausts.out -> INTERP
+  self-test PASS: unsupported.out -> INTERP
+  self-test PASS: build.out -> BUILD
+  self-test PASS: fails.out -> FAIL
+  self-test PASS: the abort-string rule would misfile 3 of build/exhausts/unsupported/leaks
+  self-test PASS: empty output at the budget -> TIMEOUT
+  self-test PASS: two runs get distinct work dirs
+SELF-TEST: PASS

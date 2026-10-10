@@ -1,0 +1,217 @@
+==================================================================
+ D9 stale-comment contract check  (heuristic; candidates for review)
+ ledger: .port/audits/stale-comments-D9.tsv  [open]
+==================================================================
+
+-- CLASS 1: STALE-SEMANTIC (comment describes old/non-panic behaviour
+            next to a panicking/raw Rust primitive; no Rust contract) --
+  crates/rustty-apprt/src/gtk/class/render_surface.rs:293
+     primitive: let w = i32::try_from(size.width).expect("device width exceeds c_int");
+     comment  : // PORT NOTE (R7): `@intCast(size.width)` into `c_int` traps above // `i32::MAX`.
+  crates/rustty-apprt/src/gtk/class/render_surface.rs:294
+     primitive: let h = i32::try_from(size.height).expect("device height exceeds c_int");
+     comment  : // PORT NOTE (R7): `@intCast(size.width)` into `c_int` traps above // `i32::MAX`.
+  crates/rustty-apprt/src/gtk/class/render_surface.rs:434
+     primitive: u32::try_from(frame.planes.offsets[i]).expect("negative plane offset"),
+     comment  : // PORT NOTE (R7): `@intCast` of the driver's `c_int` offset/stride.
+  crates/rustty-apprt/src/gtk/class/render_surface.rs:506
+     primitive: let stride = usize::try_from(frame.width).expect("width") * 4; // stride
+     comment  : // Its allocation failure arm (`frame.deinit()` before returning) collapses // with the infallible a
+  crates/rustty-apprt/src/gtk/class/render_surface.rs:507
+     primitive: let width = i32::try_from(frame.width).expect("texture width exceeds c_int");
+     comment  : // with the infallible allocation. // stride
+  crates/rustty-apprt/src/gtk/class/surface/template_callbacks.rs:787
+     primitive: width: u32::try_from(width).expect("negative resize width"),
+     comment  : // PORT NOTE (R7): `@intCast(width)` of a `c_int` into `u32` traps on a // negative value.
+  crates/rustty-apprt/tests/gtk_wayland_compute_size.rs:171
+     primitive: let display = gtk4::gdk::Display::default().expect("a default GDK display");
+     comment  : // Report what the compositor advertises, so a mis-provisioned head is caught // here rather than si
+  crates/rustty-bench/src/hyperlink_map.rs:263
+     primitive: let self_ = unsafe { &mut *(ptr as *mut HyperlinkMap) };
+     comment  : // fn stepLookup(ptr: *anyopaque) Benchmark.Error!void { // const self: *HyperlinkMap = @ptrCast(@al
+  crates/rustty-bench/src/hyperlink_map.rs:290
+     primitive: let self_ = unsafe { &mut *(ptr as *mut HyperlinkMap) };
+     comment  : // fn stepChurn(ptr: *anyopaque) Benchmark.Error!void { // const self: *HyperlinkMap = @ptrCast(@ali
+  crates/rustty-cli/src/ssh_cache.rs:712
+     primitive: let age: u64 = now.saturating_sub(ts).max(0) as u64;
+     comment  : // Saturating so a garbage timestamp can't overflow; clamp at 0 so a // future timestamp becomes a z
+  crates/rustty-core/src/surface/key_input.rs:1326
+     primitive: .expect("Vec writer is infallible");
+     comment  : // (the Allocating writer's only error is OOM — the `Vec` sink is // infallible, the `try` collapses
+  crates/rustty-datastruct/src/segmented_list.rs:336
+     primitive: .expect("setCapacity(0) never allocates");
+     comment  : // self.setCapacity(allocator, 0) catch unreachable;
+  crates/rustty-font-shaper/src/discovery.rs:2230
+     primitive: this.fuzzy_style = this.fuzzy_style.saturating_sub(s.len() as u8);
+     comment  : // if (std.ascii.indexOfIgnoreCase(style_str, s) != null) { // self.fuzzy_style -|= @intCast(s.len);
+  crates/rustty-font/src/sprite/draw/box.rs:2379
+     primitive: let y: i32 = (metrics.cell_height.saturating_sub(thick_px) / 2) as i32;
+     comment  : // Our dashes should be centered vertically. // const y: i32 = @intCast((metrics.cell_height -| thic
+  crates/rustty-font/src/sprite/draw/box.rs:2486
+     primitive: let x: i32 = (metrics.cell_width.saturating_sub(thick_px) / 2) as i32;
+     comment  : // Our dashes should be centered horizontally. // const x: i32 = @intCast((metrics.cell_width -| thi
+  crates/rustty-font/src/sprite/face.rs:769
+     primitive: let offset_y: i32 = region.height.saturating_add(canvas.clip_bottom) as i32
+     comment  : //         @as(i32, @intCast(metrics.cell_height)) - @as(i32, @intCast(height)), //         2, //   
+  crates/rustty-os/src/file.rs:335
+     primitive: unsafe { libc::arc4random_buf(buf.as_mut_ptr().cast(), buf.len()) };
+     comment  : // The libc `arc4random_buf` is the canonical macOS/BSD CSPRNG and // never fails.
+  crates/rustty-renderer/src/opengl/gl.rs:378
+     primitive: let attrs = Buffer::create().expect("attr Buffer::create");
+     comment  : // hand-transcribed FFI signature where a swapped or wrong-typed argument // compiles silently and s
+  crates/rustty-renderer/src/opengl/gl.rs:379
+     primitive: let attrs_binding = attrs.bind(Target::ARRAY).expect("attr Buffer::bind");
+     comment  : // compiles silently and shows up only as a GL error. Nothing else covers // them until Task 6, so d
+  crates/rustty-renderer/src/opengl/opengl_impl.rs:561
+     primitive: width: u32::try_from(target.width).expect("Target width exceeds u32"),
+     comment  : // PORT NOTE (R7): `@intCast(target.width)` traps above `u32::MAX`.
+  crates/rustty-renderer/src/opengl/opengl_impl.rs:562
+     primitive: height: u32::try_from(target.height).expect("Target height exceeds u32"),
+     comment  : // PORT NOTE (R7): `@intCast(target.width)` traps above `u32::MAX`.
+  crates/rustty-renderer/src/opengl/texture.rs:255
+     primitive: GLint::try_from(v).expect("texture offset exceeds GLint")
+     comment  : /// `@intCast(v)`: usize -> GLint. See [`to_glsizei`].
+  crates/rustty-termio/src/thread.rs:1237
+     primitive: r.expect("stop wait: unreachable error");
+     comment  : // _ = r catch unreachable;
+  crates/rustty-termio/tests/subprocess_drop_repro.rs:144
+     primitive: drainer.join().expect("drainer join");
+     comment  : // ... then drop the SAME object — a no-op now (empty fields), NOT a // second free of `args`/`cwd`.
+  crates/rustty-vt-c/src/cell.rs:450
+     primitive: &mut cp as *mut u32 as *mut c_void,
+     comment  : // var values = [_]?*anyopaque{ @ptrCast(&cp), @ptrCast(&has_text) };
+  crates/rustty-vt-c/src/cell.rs:451
+     primitive: &mut has_text as *mut bool as *mut c_void,
+     comment  : // var values = [_]?*anyopaque{ @ptrCast(&cp), @ptrCast(&has_text) };
+  crates/rustty-vt-c/src/cell.rs:506
+     primitive: let mut values = [&mut cp as *mut u32 as *mut c_void];
+     comment  : // var values = [_]?*anyopaque{@ptrCast(&cp)};
+  crates/rustty-vt-c/src/kitty_graphics.rs:1464
+     primitive: (pin_screen.coord().y as i32 - vp_screen.coord().y as i32).saturating_add(row_of
+     comment  : //     @as(i32, @intCast(vp_screen.screen.y))) +| origin.row_offset; // R7: `+|` -> `saturating_add`
+  crates/rustty-vt-c/src/kitty_graphics.rs:1466
+     primitive: let vp_col: i32 = (pin_screen.coord().x as i32).saturating_add(col_offset);
+     comment  : // const vp_col: i32 = @as(i32, @intCast(pin_screen.screen.x)) +| origin.col_offset;
+  crates/rustty-vt-c/src/kitty_graphics.rs:3391
+     primitive: &mut id as *mut u32 as *mut c_void,
+     comment  : // var values = [_]?*anyopaque{ @ptrCast(&id), @ptrCast(&width), @ptrCast(&height) };
+  crates/rustty-vt-c/src/kitty_graphics.rs:3392
+     primitive: &mut width as *mut u32 as *mut c_void,
+     comment  : // var values = [_]?*anyopaque{ @ptrCast(&id), @ptrCast(&width), @ptrCast(&height) };
+  crates/rustty-vt-c/src/kitty_graphics.rs:3429
+     primitive: &mut id as *mut u32 as *mut c_void,
+     comment  : // var values = [_]?*anyopaque{ @ptrCast(&id), @ptrCast(&id) };
+  crates/rustty-vt-c/src/kitty_graphics.rs:3430
+     primitive: &mut id as *mut u32 as *mut c_void,
+     comment  : // var values = [_]?*anyopaque{ @ptrCast(&id), @ptrCast(&id) };
+  crates/rustty-vt-c/src/kitty_graphics.rs:3522
+     primitive: &mut image_id as *mut u32 as *mut c_void,
+     comment  : // var values = [_]?*anyopaque{ @ptrCast(&image_id), @ptrCast(&columns), @ptrCast(&z) };
+  crates/rustty-vt-c/src/kitty_graphics.rs:3523
+     primitive: &mut columns as *mut u32 as *mut c_void,
+     comment  : // var values = [_]?*anyopaque{ @ptrCast(&image_id), @ptrCast(&columns), @ptrCast(&z) };
+  crates/rustty-vt-c/src/render/tests.rs:1063
+     primitive: let mut values = [&mut selected as *mut _ as *mut c_void];
+     comment  : // const keys = [_]RowCellsData{.selected}; // var values = [_]?*anyopaque{@ptrCast(&selected)};
+  crates/rustty-vt-c/src/render/tests.rs:2375
+     primitive: let mut values = [&mut cols as *mut _ as *mut c_void];
+     comment  : // var cols: u16 = 0; // var values = [_]?*anyopaque{@ptrCast(&cols)};
+  crates/rustty-vt-c/src/row.rs:347
+     primitive: &mut wrap as *mut bool as *mut c_void,
+     comment  : // var values = [_]?*anyopaque{ @ptrCast(&wrap), @ptrCast(&dirty) };
+  crates/rustty-vt-c/src/row.rs:348
+     primitive: &mut dirty as *mut bool as *mut c_void,
+     comment  : // var values = [_]?*anyopaque{ @ptrCast(&wrap), @ptrCast(&dirty) };
+  crates/rustty-vt-c/src/row.rs:407
+     primitive: let mut values = [&mut wrap as *mut bool as *mut c_void];
+     comment  : // var values = [_]?*anyopaque{@ptrCast(&wrap)};
+  crates/rustty-vt-c/src/terminal/effects.rs:1418
+     primitive: i8::try_from(value).expect("progress is at most 100")
+     comment  : // @intCast(value): the parser only keeps 0..=100.
+  crates/rustty-vt/src/osc/parsers/program_status.rs:265
+     primitive: writer.write_all(decode_text(encoded, &mut buf).expect("validated by the parser"
+     comment  : // The parser already checked that this decodes, so it can't fail.
+  crates/rustty-vt/src/ref_counted_set.rs:1316
+     primitive: (hash.wrapping_add(i as u64) & (self.layout.table_mask.to_usize() as u64)) as us
+     comment  : // const p: usize = @intCast((hash +% i) & self.layout.table_mask);
+  crates/rustty-vt/src/ref_counted_set.rs:1411
+     primitive: (hash.wrapping_add(i as u64) & (self.layout.table_mask.to_usize() as u64)) as us
+     comment  : // const p: Id = @intCast((hash +% i) & self.layout.table_mask);
+  crates/rustty-vt/src/search/sliding_window.rs:1169
+     primitive: self.needle = crate::alloc::try_dupe(self.alloc, new).expect("testChangeNeedle d
+     comment  : // self.alloc.free(self.needle); // self.needle = self.alloc.dupe(u8, new) catch unreachable;
+  crates/rustty-vt/src/xt_checksum.rs:325
+     primitive: sum = sum.wrapping_add(cp as u16);
+     comment  : // for (cps) |cp| sum +%= @truncate(cp);
+  crates/rustty-z2d/src/internal/raster/supersample.rs:133
+     primitive: .expect("mask dimensions validated");
+     comment  : // Mask dimensions are validated >= 1 above, so `init` cannot fail.
+  crates/rustty-zigstd/src/arena_allocator.rs:203
+     primitive: .expect("live backing node has a valid layout (validated at alloc)");
+     comment  : // therefore cannot fail here. Faithful to Zig, which frees with the same // recomputed layout it al
+  crates/rustty-zigstd/src/fmt.rs:709
+     primitive: n_digits -= next.saturating_sub(b'0' - 1) as isize;
+     comment  : // n_digits -= @as(isize, @intCast(next -| ('0' - 1)));
+
+-- CLASS 2: GUARANTEE-TEST (len/align 'guaranteed' comment next to a
+            panicking cast — REQUIRES a test asserting the guarantee) --
+  (none)
+
+------------------------------------------------------------------
+CANDIDATES: 49   (STALE-SEMANTIC=49, GUARANTEE-TEST=0)
+LEDGER    : contract-ok=0  false-positive=0  needs-fix=0  un-reviewed=49
+
+UN-DISPOSITIONED (review + record in .port/audits/stale-comments-D9.tsv):
+  [UN-REVIEWED] crates/rustty-apprt/src/gtk/class/render_surface.rs:293  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-apprt/src/gtk/class/render_surface.rs:294  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-apprt/src/gtk/class/render_surface.rs:434  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-apprt/src/gtk/class/render_surface.rs:506  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-apprt/src/gtk/class/render_surface.rs:507  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-apprt/src/gtk/class/surface/template_callbacks.rs:787  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-apprt/tests/gtk_wayland_compute_size.rs:171  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-bench/src/hyperlink_map.rs:263  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-bench/src/hyperlink_map.rs:290  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-cli/src/ssh_cache.rs:712  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-core/src/surface/key_input.rs:1326  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-datastruct/src/segmented_list.rs:336  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-font-shaper/src/discovery.rs:2230  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-font/src/sprite/draw/box.rs:2379  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-font/src/sprite/draw/box.rs:2486  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-font/src/sprite/face.rs:769  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-os/src/file.rs:335  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-renderer/src/opengl/gl.rs:378  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-renderer/src/opengl/gl.rs:379  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-renderer/src/opengl/opengl_impl.rs:561  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-renderer/src/opengl/opengl_impl.rs:562  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-renderer/src/opengl/texture.rs:255  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-termio/src/thread.rs:1237  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-termio/tests/subprocess_drop_repro.rs:144  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-vt-c/src/cell.rs:450  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-vt-c/src/cell.rs:451  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-vt-c/src/cell.rs:506  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-vt-c/src/kitty_graphics.rs:1464  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-vt-c/src/kitty_graphics.rs:1466  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-vt-c/src/kitty_graphics.rs:3391  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-vt-c/src/kitty_graphics.rs:3392  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-vt-c/src/kitty_graphics.rs:3429  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-vt-c/src/kitty_graphics.rs:3430  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-vt-c/src/kitty_graphics.rs:3522  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-vt-c/src/kitty_graphics.rs:3523  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-vt-c/src/render/tests.rs:1063  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-vt-c/src/render/tests.rs:2375  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-vt-c/src/row.rs:347  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-vt-c/src/row.rs:348  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-vt-c/src/row.rs:407  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-vt-c/src/terminal/effects.rs:1418  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-vt/src/osc/parsers/program_status.rs:265  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-vt/src/ref_counted_set.rs:1316  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-vt/src/ref_counted_set.rs:1411  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-vt/src/search/sliding_window.rs:1169  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-vt/src/xt_checksum.rs:325  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-z2d/src/internal/raster/supersample.rs:133  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-zigstd/src/arena_allocator.rs:203  STALE-SEMANTIC
+  [UN-REVIEWED] crates/rustty-zigstd/src/fmt.rs:709  STALE-SEMANTIC
+------------------------------------------------------------------
+>> ADVISORY (progress): 49 candidate(s) printed; not failing CI.
+   Review each per .port/audits/D9_STALE_COMMENT_CHECKLIST.md and record
+   its disposition in .port/audits/stale-comments-D9.tsv. Seal the ledger to make D9 bind.

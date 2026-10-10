@@ -1,0 +1,71 @@
+== Rustty: test/esctest
+fetching https://github.com/ThomasDickey/esctest2/archive/2798f12149a19c3295e9b4853ab2da4b2eff1b2b.tar.gz
+installed esctest2 2798f12149a19c3295e9b4853ab2da4b2eff1b2b in /Users/gael/projects/rustty/.claude/worktrees/p8-w9/test/esctest/target/share/esctest
+   Compiling find-msvc-tools v0.1.9
+   Compiling shlex v2.0.1
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling glob v0.3.3
+   Compiling prettyplease v0.2.37
+   Compiling libc v0.2.186
+   Compiling memchr v2.8.2
+   Compiling regex-syntax v0.8.11
+   Compiling minimal-lexical v0.2.1
+   Compiling cfg-if v1.0.4
+   Compiling log v0.4.33
+   Compiling either v1.16.0
+   Compiling libloading v0.8.9
+   Compiling bindgen v0.72.1
+   Compiling allocator-api2 v0.2.21
+   Compiling cc v1.2.65
+   Compiling itertools v0.13.0
+   Compiling rustc-hash v2.1.2
+   Compiling shlex v1.3.0
+   Compiling bitflags v2.13.0
+   Compiling rustty-util v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9/crates/rustty-util)
+   Compiling clang-sys v1.8.1
+   Compiling nom v7.1.3
+   Compiling rustty-zigstd v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9/crates/rustty-zigstd)
+   Compiling objc2 v0.6.4
+   Compiling rustty-build-config v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9/crates/rustty-build-config)
+   Compiling hashbrown v0.17.1
+   Compiling objc2-encode v4.1.0
+   Compiling regex-automata v0.4.14
+   Compiling rustty-identity v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9/crates/rustty-identity)
+   Compiling equivalent v1.0.2
+   Compiling indexmap v2.14.0
+   Compiling pkg-config v0.3.33
+   Compiling rustty-xev v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9/crates/rustty-xev)
+   Compiling highway-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9/crates-sys/highway-sys)
+   Compiling cexpr v0.6.0
+   Compiling simdutf-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9/crates-sys/simdutf-sys)
+   Compiling rustty-os v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9/crates/rustty-os)
+   Compiling rustty-simd v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9/crates/rustty-simd)
+   Compiling rustty-unicode v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9/crates/rustty-unicode)
+   Compiling rustty-z2d v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9/crates/rustty-z2d)
+   Compiling syn v2.0.118
+   Compiling regex v1.12.4
+   Compiling rustty-vt v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9/crates/rustty-vt)
+   Compiling rustty-terminfo v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9/crates/rustty-terminfo)
+   Compiling rustty-datastruct v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9/crates/rustty-datastruct)
+   Compiling dispatch2 v0.3.1
+   Compiling block2 v0.6.2
+   Compiling rustty-lib v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9/crates/rustty-lib)
+   Compiling rustty-render-types v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9/crates/rustty-render-types)
+   Compiling objc2-core-foundation v0.3.2
+   Compiling rustty-global v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9/crates/rustty-global)
+   Compiling objc2-foundation v0.3.2
+   Compiling gettext-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9/crates-sys/gettext-sys)
+   Compiling wuffs-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9/crates-sys/wuffs-sys)
+   Compiling rustty-wuffs v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9/crates/rustty-wuffs)
+   Compiling rustty-font v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9/crates/rustty-font)
+   Compiling esctest-librustty v0.0.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9/test/esctest)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.58s
+esctest-librustty exited 0
+== oracle: test/esctest at a60e9e2a57f73e1eef2bd1cf2995a467f69e7fb0
+esctest-libghostty exited 0
+Rustty: *** 264 tests passed, 42 known bugs, 261 TESTS FAILED ***
+oracle: *** 264 tests passed, 42 known bugs, 261 TESTS FAILED ***
+567 tests compared, 0 known differences, 0 findings
+G-ESCTEST GREEN: every esctest test has the same outcome and log against both.

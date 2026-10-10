@@ -25,9 +25,11 @@ pub mod kitty_dnd_protocol;
 pub mod kitty_text_sizing;
 pub mod mouse_shape;
 pub mod osc9;
+pub mod program_status;
 pub mod report_pwd;
 pub mod rxvt_extension;
 pub mod semantic_prompt;
+pub mod unknown;
 
 // test {
 //     std.testing.refAllDecls(@This());
@@ -57,11 +59,13 @@ mod tests {
         let _ = super::kitty_color::parse as fn(_, _) -> _;
         let _ = super::kitty_dnd_protocol::parse as fn(_, _) -> _;
         let _ = super::kitty_desktop_notification::parse as fn(_, _) -> _;
+        let _ = super::program_status::parse as fn(_, _) -> _;
         let _ = super::kitty_text_sizing::parse as fn(_, _) -> _;
         let _ = super::mouse_shape::parse as fn(_, _) -> _;
         let _ = super::osc9::parse as fn(_, _) -> _;
         let _ = super::report_pwd::parse as fn(_, _) -> _;
         let _ = super::rxvt_extension::parse as fn(_, _) -> _;
         let _ = super::semantic_prompt::parse as fn(_, _) -> _;
+        let _ = super::unknown::parse as fn(_, _) -> _;
     }
 }

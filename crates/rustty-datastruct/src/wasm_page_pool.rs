@@ -227,6 +227,14 @@ impl<Item: WasmPageItem, A> WasmPagePool<Item, A> {
         assert!(Self::ITEM_SIZE >= core::mem::size_of::<Node>());
     };
 
+    /// `WasmPagePool.freeCount`: the number of unused items this pool holds,
+    /// which is always zero. Freed items go to a free list shared by every pool
+    /// of this item type in the module, so no single pool owns them.
+    #[inline]
+    pub fn free_count(&self) -> usize {
+        0
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub fn create(&self) -> Result<NonNull<Item>, OutOfMemory> {
         // Force the per-monomorph comptime invariant checks.
@@ -342,6 +350,14 @@ impl<A> DynamicWasmPagePool<A> {
     /// `WasmPagePool.item_size` (the runtime value).
     pub fn item_size(&self) -> usize {
         self.item_size
+    }
+
+    /// `WasmPagePool.freeCount`: the number of unused items this pool holds,
+    /// which is always zero. Freed items go to a free list shared by every pool
+    /// of this item type in the module, so no single pool owns them.
+    #[inline]
+    pub fn free_count(&self) -> usize {
+        0
     }
 
     /// `allocator`, spelled as the native pool's getter

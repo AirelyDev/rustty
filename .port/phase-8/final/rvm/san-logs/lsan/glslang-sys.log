@@ -1,0 +1,9 @@
+   Compiling glslang-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/glslang-sys)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 48.93s
+     Running unittests src/lib.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/glslang_sys-dfe45acd1f4c181b)
+
+running 1 test
+test kat::glslang_compiles_trivial_vertex_shader_to_spirv ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+

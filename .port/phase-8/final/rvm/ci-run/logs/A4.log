@@ -1,0 +1,76 @@
+== by-value-return ABI types (hard-gated crash class) ==
+  ok   rustty_diagnostic_s — 8 bytes (frozen)
+  ok   rustty_info_s — 24 bytes (frozen)  <-- WARN >16B: returned via x8 sret; must match exactly
+  ok   rustty_input_trigger_s — 12 bytes (frozen)
+  ok   rustty_string_s — 24 bytes (frozen)  <-- WARN >16B: returned via x8 sret; must match exactly
+  ok   rustty_surface_config_s — 88 bytes (frozen)  <-- WARN >16B: returned via x8 sret; must match exactly
+  ok   rustty_surface_size_s — 20 bytes (frozen)  <-- WARN >16B: returned via x8 sret; must match exactly
+
+== field-offset cross-check (41 annotated fields) ==
+  ok — all 41 field offsets match the header
+
+== full aggregate coverage ledger (61 types; only by-value returns are gated) ==
+  chostty_ipc_target_s                       C=16   unfrozen
+  rustty_action_cell_size_s                  C=8    unfrozen
+  rustty_action_color_change_s               C=8    unfrozen
+  rustty_action_command_finished_s           C=16   unfrozen
+  rustty_action_config_change_s              C=8    unfrozen
+  rustty_action_desktop_notification_s       C=16   unfrozen
+  rustty_action_export_terminal_io_s         C=16   unfrozen
+  rustty_action_initial_size_s               C=8    unfrozen
+  rustty_action_key_sequence_s               C=16   unfrozen
+  rustty_action_key_table_s                  C=24   unfrozen
+  rustty_action_key_table_u                  C=16   unfrozen
+  rustty_action_mouse_over_link_s            C=16   unfrozen
+  rustty_action_move_tab_s                   C=8    unfrozen
+  rustty_action_open_url_s                   C=24   unfrozen
+  rustty_action_progress_report_s            C=8    unfrozen
+  rustty_action_pwd_s                        C=8    unfrozen
+  rustty_action_reload_config_s              C=1    unfrozen
+  rustty_action_resize_split_s               C=8    unfrozen
+  rustty_action_resize_window_s              C=8    frozen=8
+  rustty_action_s                            C=32   frozen=32
+  rustty_action_scrollbar_s                  C=24   unfrozen
+  rustty_action_search_selected_s            C=8    unfrozen
+  rustty_action_search_total_s               C=8    unfrozen
+  rustty_action_set_title_s                  C=8    unfrozen
+  rustty_action_size_limit_s                 C=16   unfrozen
+  rustty_action_start_search_s               C=8    unfrozen
+  rustty_action_u                            C=24   frozen=24
+  rustty_clipboard_complete_s                C=40   frozen=40
+  rustty_clipboard_confirm_s                 C=48   frozen=48
+  rustty_clipboard_content_s                 C=24   frozen=24
+  rustty_command_s                           C=32   frozen=32
+  rustty_config_color_list_s                 C=16   unfrozen
+  rustty_config_color_s                      C=3    unfrozen
+  rustty_config_command_list_s               C=16   unfrozen
+  rustty_config_palette_s                    C=768  unfrozen
+  rustty_config_path_s                       C=16   unfrozen
+  rustty_config_quick_terminal_size_s        C=16   unfrozen
+  rustty_diagnostic_s                        C=8    frozen=8
+  rustty_env_var_s                           C=16   frozen=16
+  rustty_info_s                              C=24   frozen=24
+  rustty_input_key_s                         C=32   frozen=32
+  rustty_input_trigger_key_u                 C=4    unfrozen
+  rustty_input_trigger_s                     C=12   frozen=12
+  rustty_ipc_action_new_window_s             C=8    unfrozen
+  rustty_ipc_action_u                        C=8    unfrozen
+  rustty_ipc_target_u                        C=8    unfrozen
+  rustty_platform_ios_s                      C=8    unfrozen
+  rustty_platform_macos_s                    C=8    unfrozen
+  rustty_platform_u                          C=8    unfrozen
+  rustty_point_s                             C=16   frozen=16
+  rustty_quick_terminal_size_s               C=8    unfrozen
+  rustty_quick_terminal_size_value_u         C=4    unfrozen
+  rustty_runtime_config_s                    C=64   frozen=64
+  rustty_selection_s                         C=36   frozen=36
+  rustty_string_s                            C=24   frozen=24
+  rustty_surface_config_s                    C=88   frozen=88
+  rustty_surface_message_childexited_s       C=16   unfrozen
+  rustty_surface_size_s                      C=20   frozen=20
+  rustty_target_s                            C=16   frozen=16
+  rustty_target_u                            C=8    unfrozen
+  rustty_text_s                              C=40   frozen=40
+  (20/61 aggregates have a Rust @embed-abi freeze)
+
+check_embed_h_abi: PASS — every by-value-return ABI type is frozen and matches the header.

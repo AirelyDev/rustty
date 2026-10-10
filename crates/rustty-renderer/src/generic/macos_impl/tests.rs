@@ -35,6 +35,7 @@ fn opts(cols: CellCountInt, rows: CellCountInt) -> TermOptions {
         default_modes: ModePacked::default(),
         default_cursor_style: rustty_vt::screen::CursorStyle::Block,
         default_cursor_blink: Some(false),
+        default_xt_checksum: Default::default(),
         kitty_image_storage_limit: 320 * 1000 * 1000,
         kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
     }
@@ -111,7 +112,7 @@ fn derived_config_for_test() -> DerivedConfig {
 // golden harness MINUS `drawFrame`.
 fn test_renderer(cols: CellCountInt, rows: CellCountInt) -> Option<Renderer> {
     // Headless CI may lack a Metal device → skip cleanly.
-    let api = match Metal::init_offscreen(AlphaBlending::Native, 256, 256) {
+    let api = match crate::metal::test_support::offscreen_metal(AlphaBlending::Native, 256, 256) {
         Ok(m) => m,
         Err(e) => {
             // F5 strict-mode pivot (metal::test_support): a no-op by
@@ -327,7 +328,7 @@ fn golden_renderer(cols: CellCountInt, rows: CellCountInt) -> Option<Renderer> {
     // the (Metal-independent) font-grid build. `init_offscreen` returns
     // `Err(NoMetalDevice)` on a headless host (the `metal.rs` / `test_renderer`
     // precedent).
-    if let Err(e) = Metal::init_offscreen(AlphaBlending::Native, 1, 1) {
+    if let Err(e) = crate::metal::test_support::offscreen_metal(AlphaBlending::Native, 1, 1) {
         // F5 strict-mode pivot (metal::test_support).
         crate::metal::test_support::require_metal_or_skip("golden_renderer", &format!("{e:?}"));
         eprintln!("no Metal device; skipping golden");
@@ -353,13 +354,17 @@ fn golden_renderer(cols: CellCountInt, rows: CellCountInt) -> Option<Renderer> {
     // empty and is sized by the first `update_frame`/`rebuild_cells`. Metal was
     // probed above, so `init` succeeds — the failure path is an `.expect`.
     let opts = Options {
+        device: crate::metal::test_support::device().expect("the test device (Metal probed above)"),
         config: derived_config_for_test(),
         font_grid,
         size,
         // Offscreen: no surface, hence no mailbox (push returns 0).
         surface_mailbox: SurfaceMailbox::DETACHED,
     };
-    Some(Renderer::init(Global, opts).expect("Renderer::init (Metal probed above)"))
+    // SAFETY: `opts.device` is the process's test device (created once, never
+    // freed) and `opts.font_grid` the boxed test grid, freed only after the
+    // renderer's `deinit`, so both outlive the renderer.
+    Some(unsafe { Renderer::init(Global, opts) }.expect("Renderer::init (Metal probed above)"))
 }
 
 /// N503 (G-LSAN on macOS, P7-W16a): the macOS twin of N411's Linux helper.

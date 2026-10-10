@@ -1,0 +1,310 @@
+=== G1 :: 100% test blocks ported ===
+crate           status     ported  contract  state
+apprt           in-progress    242        27  progress
+apprt-api       done           28        20  done
+    EXTRA:   apprt-api::copy_utf8_z_handles_len_at_the_final_byte_of_every_utf8_sequence_length
+    EXTRA:   apprt-api::copy_utf8_z_keeps_a_complete_codepoint_at_the_truncation_boundary
+    EXTRA:   apprt-api::copy_utf8_z_preserves_utf8_that_fits
+    EXTRA:   apprt-api::desktop_notification_init
+    EXTRA:   apprt-api::ghostty_h_open_config
+    EXTRA:   apprt-api::ghostty_h_probe_can_fail
+    EXTRA:   apprt-api::ref_all_decls_recursive
+    EXTRA:   apprt-api::reify_runtime
+    EXTRA:   apprt-api::target_surface_is_a_raw_pointer_to_the_core_surface
+args            ported         79        64  done
+    EXTRA:   args::capture_admits_only_the_owning_thread
+    EXTRA:   args::cloned_precompute_keeps_the_sentinel
+    EXTRA:   args::compat_handler_success_logs_the_deprecated_field_notice
+    EXTRA:   args::compatibility_renamed_warns_when_the_target_field_fails_to_parse
+    EXTRA:   args::general_parsing
+    EXTRA:   args::line_iterator_is_silent_on_lines_that_fit
+    EXTRA:   args::line_iterator_refills_after_ignored_line_at_buffer_boundary
+    EXTRA:   args::line_iterator_warns_and_stops_on_a_line_longer_than_the_buffer
+    EXTRA:   args::parse_auto_struct_propagates_comma_splitter_errors
+    EXTRA:   args::parse_field_float_accepts_the_reference_grammar
+    EXTRA:   ... (+5 more)
+bench           done           46         8  done
+    EXTRA:   bench::a_valid_hyperlink_map_creation_is_silent
+    EXTRA:   bench::action_tag_name_round_trips
+    EXTRA:   bench::apc_parser
+    EXTRA:   bench::bench_every_action_round_trips_through_from_name
+    EXTRA:   bench::bench_registers_compression_actions
+    EXTRA:   bench::cache_line_buf_is_aligned_to_the_reference_cache_line
+    EXTRA:   bench::capture_admits_only_the_owning_thread
+    EXTRA:   bench::every_reference_diagnostic_is_live_at_its_level_and_scope
+    EXTRA:   bench::failed_action_warning_uses_the_tag_name
+    EXTRA:   bench::hyperlink_map
+    EXTRA:   ... (+29 more)
+bin             c6             54         6  progress
+build-config    done            5         0  done
+cfg-fmt         done           10         9  done
+    EXTRA:   cfg-fmt::format_entry_float_nan_matches_zig_spelling
+cli             done          132        45  done
+    EXTRA:   cli::a_flush_failure_warns_under_the_default_scope_and_exits_1
+    EXTRA:   cli::a_home_too_long_for_the_xdg_lookup_is_out_of_memory
+    EXTRA:   cli::a_report_too_old_for_a_duration_saturates_instead_of_trapping
+    EXTRA:   cli::a_successful_help_write_is_silent
+    EXTRA:   cli::a_write_failure_warns_under_the_default_scope_and_exits_1
+    EXTRA:   cli::a_write_to_a_stdout_closed_at_exec_fails_with_ebadf
+    EXTRA:   cli::a_write_to_an_unwritable_stdout_fails_where_std_reports_success
+    EXTRA:   cli::a_write_to_the_process_stderr_reports_its_length
+    EXTRA:   cli::action_errors_render_as_zig_error_names
+    EXTRA:   cli::add_does_not_chmod_an_existing_cache_file
+    EXTRA:   ... (+77 more)
+config          done          269       167  done
+    EXTRA:   config::a_successful_load_file_is_silent
+    EXTRA:   config::alpha_blending_is_linear
+    EXTRA:   config::auto_struct_comma_splitter_errors_are_not_invalid_value
+    EXTRA:   config::c_get_optional_path
+    EXTRA:   config::cell_relative_cursor_and_selection_colors_reach_the_renderer
+    EXTRA:   config::clipboard_write_limit
+    EXTRA:   config::color_config_accepts_bare_hex_and_prefixed_palette_index
+    EXTRA:   config::color_parse_cli_hex
+    EXTRA:   config::color_parse_cli_non_ascii_is_invalid_value_not_a_panic
+    EXTRA:   config::command_format_config_direct_fixed_buffer_boundary
+    EXTRA:   ... (+95 more)
+    MULTI-BOUND: config::duration_test_format <- 2 ref names: 'format'; 'test format'
+    MULTI-BOUND: config::repeatable_command_format_config_empty <- 2 ref names: 'RepeatableCommand formatConfig empty'; 'formatConfig empty'
+    MULTI-BOUND: config::repeatable_command_format_config_multiple_items <- 2 ref names: 'RepeatableCommand formatConfig multiple items'; 'formatConfig multiple items'
+    MULTI-BOUND: config::repeatable_command_format_config_single_item <- 2 ref names: 'RepeatableCommand formatConfig single item'; 'formatConfig single item'
+    MULTI-BOUND: config::repeatable_command_parse_cli <- 2 ref names: 'RepeatableCommand parseCLI'; 'parseCLI'
+    MULTI-BOUND: config::repeatable_string_map_format_config_empty <- 2 ref names: 'RepeatableStringMap: formatConfig empty'; 'formatConfig empty'
+    MULTI-BOUND: config::repeatable_string_map_format_config_multiple_items <- 2 ref names: 'RepeatableStringMap: formatConfig multiple items'; 'formatConfig multiple items'
+    MULTI-BOUND: config::repeatable_string_map_format_config_single_item <- 2 ref names: 'RepeatableStringMap: formatConfig single item'; 'formatConfig single item'
+    MULTI-BOUND: config::repeatable_string_map_parse_cli <- 2 ref names: 'RepeatableStringMap: parseCLI'; 'parseCLI'
+    MULTI-BOUND: config::working_directory_parse_cli <- 2 ref names: 'WorkingDirectory parseCLI'; 'parseCLI'
+core            done           89         1  done
+    EXTRA:   core::a_click_repeat_interval_above_u32_nanoseconds_is_widened_not_trapped
+    EXTRA:   core::a_saturated_scroll_delta_is_clamped_by_the_viewport
+    EXTRA:   core::activate_key_table_logs_the_missing_table_name
+    EXTRA:   core::adapter_enqueues_scrollbar_and_health_onto_the_real_app_queue
+    EXTRA:   core::adapter_reports_zero_when_the_queue_is_full
+    EXTRA:   core::add_and_delete_surface_drive_the_quit_timer
+    EXTRA:   core::all_threads_capture_admits_a_spawned_thread
+    EXTRA:   core::an_oversized_window_padding_saturates_and_leaves_a_one_cell_grid
+    EXTRA:   core::animation_timer_callback_warns_and_disarms_without_data_set
+    EXTRA:   core::app_create_and_destroy_empty
+    EXTRA:   ... (+78 more)
+crash           done           27         9  done
+    EXTRA:   crash::before_send_no_thread_state
+    EXTRA:   crash::before_send_thread_state_surface_seam
+    EXTRA:   crash::before_send_with_thread_state_does_not_log_the_skip
+    EXTRA:   crash::before_send_without_thread_state_logs_the_skip
+    EXTRA:   crash::cache_dir_follows_the_intended_condition
+    EXTRA:   crash::capture_admits_only_the_owning_thread
+    EXTRA:   crash::header_parse_follows_std_json_edge_cases
+    EXTRA:   crash::header_serialize_prints_numbers_like_std_json
+    EXTRA:   crash::matches_zig_std_json_golden
+    EXTRA:   crash::parse_and_drop_any_depth_without_stack_overflow
+    EXTRA:   ... (+8 more)
+datastruct      done          100        76  done
+    EXTRA:   datastruct::CircBuf_resize_empty_to_zero
+    EXTRA:   datastruct::CircBuf_resize_shrink_partially_full
+    EXTRA:   datastruct::CircBuf_resize_shrink_to_length
+    EXTRA:   datastruct::a_refused_shelf_in_a_multi_shelf_growth_frees_the_new_shelves
+    EXTRA:   datastruct::a_refused_shelf_leaves_the_list_unchanged
+    EXTRA:   datastruct::allocator_calls_follow_the_reference_shelf_growth
+    EXTRA:   datastruct::basic_usage
+    EXTRA:   datastruct::clear_retaining_capacity
+    EXTRA:   datastruct::comptime_int_set_empty
+    EXTRA:   datastruct::comptime_int_set_exhaustive_against_linear_scan
+    EXTRA:   ... (+20 more)
+extra           done           35         2  done
+    EXTRA:   extra::actions_mdx_delegates_to_helpgen_actions
+    EXTRA:   extra::code_block_is_nofill_and_unwrapped
+    EXTRA:   extra::commands_mdx_covers_every_cli_action
+    EXTRA:   extra::compiler_matches_golden
+    EXTRA:   extra::completions_match_golden
+    EXTRA:   extra::config_mdx_blocks_are_balanced
+    EXTRA:   extra::config_mdx_frontmatter_and_grouping
+    EXTRA:   extra::definition_list_becomes_tp
+    EXTRA:   extra::definition_terms_match_the_tp_count
+    EXTRA:   extra::ftdetect_matches_golden
+    EXTRA:   ... (+21 more)
+font            done          292       178  done
+    EXTRA:   font::Modifier_parse_takes_the_zig_number_grammar
+    EXTRA:   font::Modifier_percent_out_of_range_saturates
+    EXTRA:   font::a_coretext_font_without_a_family_name_is_unknown
+    EXTRA:   font::a_descriptor_family_with_a_nul_reaches_the_pattern_cut_at_the_nul
+    EXTRA:   font::a_face_without_a_family_name_is_unknown
+    EXTRA:   font::a_failed_init_font_step_destroys_the_harfbuzz_font
+    EXTRA:   font::a_failed_variation_axes_step_destroys_the_harfbuzz_font
+    EXTRA:   font::a_failed_variation_axes_step_frees_the_ft_mutex
+    EXTRA:   font::add_set_size_failure_deinits_face
+    EXTRA:   font::append_from_string_is_silent_when_every_setting_parses
+    EXTRA:   ... (+106 more)
+global          done           20         0  done
+input           done          129       116  done
+    EXTRA:   input::a_failed_reload_keeps_the_old_source_owned
+    EXTRA:   input::a_reload_to_a_source_without_layout_data_keeps_the_old_layout
+    EXTRA:   input::a_source_without_layout_data_is_released_on_the_error_path
+    EXTRA:   input::a_successful_reload_replaces_the_source
+    EXTRA:   input::anonymous
+    EXTRA:   input::command_c_fields_are_nul_terminated_and_readable
+    EXTRA:   input::command_c_matches_the_header_abi
+    EXTRA:   input::empty
+    EXTRA:   input::entries_table_built_once
+    EXTRA:   input::force_comptime
+    EXTRA:   ... (+8 more)
+inspector       complete       21         1  done
+    EXTRA:   inspector::action_tag_set_roundtrip
+    EXTRA:   inspector::copy_and_export_events_seam_contract
+    EXTRA:   inspector::encode_csi_and_esc
+    EXTRA:   inspector::encode_dcs_and_apc_like_action_format
+    EXTRA:   inspector::encode_print_and_execute
+    EXTRA:   inspector::format_bytes_matches_oracle_units
+    EXTRA:   inspector::format_events_tab_separated_oldest_first
+    EXTRA:   inspector::metadata_byte_slice_payload_is_data
+    EXTRA:   inspector::metadata_optional_and_enum_fields
+    EXTRA:   inspector::metadata_optional_bool_fields
+    EXTRA:   ... (+11 more)
+lib             done           41        13  done
+    EXTRA:   lib::TaggedUnion_custom_C_value_fields
+    EXTRA:   lib::accumulator_is_width_faithful
+    EXTRA:   lib::c_vtable_alloc_returns_null_for_an_unrepresentable_request
+    EXTRA:   lib::create_raw_via_caller_allocator
+    EXTRA:   lib::enum_name_table_declares_the_table
+    EXTRA:   lib::global_zero_length_sentinel_matches_zig
+    EXTRA:   lib::header_decls_is_a_lookup
+    EXTRA:   lib::henum_key_matching_ignores_underscores_and_case
+    EXTRA:   lib::henum_type_reads_values_and_tag_from_the_enum
+    EXTRA:   lib::matches_the_check_value
+    EXTRA:   ... (+21 more)
+os              done          142        58  done
+    EXTRA:   os::a_clean_run_emits_the_three_debug_lines_in_the_reference_order
+    EXTRA:   os::align_helpers_match_reference
+    EXTRA:   os::all_fourteen_reference_diagnostics_are_live_at_the_reference_level_and_scope
+    EXTRA:   os::alloc_tmp_dir_agrees_with_global_fallback
+    EXTRA:   os::alloc_tmp_dir_keeps_the_root_directory
+    EXTRA:   os::alloc_tmp_dir_takes_empty_and_non_utf8_values_verbatim
+    EXTRA:   os::argv_z_keeps_bytes_and_truncates_at_an_interior_nul
+    EXTRA:   os::basics
+    EXTRA:   os::candidate_longer_than_max_path_is_no_space_left
+    EXTRA:   os::capture_admits_only_the_owning_thread
+    EXTRA:   ... (+85 more)
+render-types    done           12        11  done
+    EXTRA:   render-types::grid_arithmetic_outside_u16_saturates
+renderer        in progress    258        21  progress
+simd            done           42        23  done
+    EXTRA:   simd::base64_empty_input
+    EXTRA:   simd::base64_streaming_decode_chunk_boundaries
+    EXTRA:   simd::base64_streaming_decode_invalid
+    EXTRA:   simd::base64_strict_decode_invalid
+    EXTRA:   simd::base64_strict_decode_valid
+    EXTRA:   simd::capture_admits_only_the_owning_thread
+    EXTRA:   simd::codepointWidth_matches_kernel
+    EXTRA:   simd::codepoint_width_scalar_lane_uses_uucode_below_0x100
+    EXTRA:   simd::decode_ascii_fast_path_tight_output_no_overwrite
+    EXTRA:   simd::decode_in_place_matches_decode
+    EXTRA:   ... (+10 more)
+synthetic       done           26        12  done
+    EXTRA:   synthetic::ascii_lines
+    EXTRA:   synthetic::every_generated_sequence_parses_as_a_kitty_apc_command
+    EXTRA:   synthetic::fill
+    EXTRA:   synthetic::kitty
+    EXTRA:   synthetic::kitty_is_deterministic_for_a_fixed_seed
+    EXTRA:   synthetic::kitty_seed_0_matches_the_reference_bytes
+    EXTRA:   synthetic::ref_all_actions
+    EXTRA:   synthetic::ref_all_decls
+    EXTRA:   synthetic::sequence
+    EXTRA:   synthetic::splitmix64
+    EXTRA:   ... (+5 more)
+    MULTI-BOUND: synthetic::utf8 <- 2 ref names: 'Utf8'; 'utf8'
+terminfo        done            8         4  done
+    EXTRA:   terminfo::names_are_ghostty_under_harness_profile
+    EXTRA:   terminfo::names_are_rustty_under_default_profile
+    EXTRA:   terminfo::ref_all_decls
+    EXTRA:   terminfo::version_is_content_derived
+    EXTRA:   terminfo::wyhash_test_vectors
+termio          ported        131        44  done
+    EXTRA:   termio::appendEnv_empty
+    EXTRA:   termio::appendEnv_existing
+    EXTRA:   termio::append_env_preserves_non_utf8_path_component
+    EXTRA:   termio::bash_repeated_inject_flags_do_not_fail_setup
+    EXTRA:   termio::capture_admits_only_the_owning_thread
+    EXTRA:   termio::color_operation_reports_every_query_and_applies_later_requests
+    EXTRA:   termio::config_default_scrollback_limit_lines_is_unlimited
+    EXTRA:   termio::config_scrollback_limit_bytes_unlimited_reaches_the_pagelist
+    EXTRA:   termio::config_scrollback_limit_lines_prunes_the_pagelist
+    EXTRA:   termio::config_working_directory_with_a_nul_is_ignored_as_a_cwd
+    EXTRA:   ... (+79 more)
+unicode         done           23         5  done
+    EXTRA:   unicode::break_state_table_index_layout
+    EXTRA:   unicode::case_folding_full_follows_the_ucd_statuses
+    EXTRA:   unicode::case_folding_full_sharp_s
+    EXTRA:   unicode::case_folding_table_is_sorted_and_complete
+    EXTRA:   unicode::codepoint_width_table
+    EXTRA:   unicode::codepoint_width_unicode18_wide_ranges
+    EXTRA:   unicode::generated_tables_uphold_lut_invariant
+    EXTRA:   unicode::get_matches_reference_indexing_across_u21_sweep
+    EXTRA:   unicode::grapheme_data_checksum
+    EXTRA:   unicode::grapheme_width_emoji_sequences
+    EXTRA:   ... (+9 more)
+util            done            6         4  done
+    EXTRA:   util::inline_assert_false_traps_in_checked_builds
+    EXTRA:   util::inline_assert_true_is_a_noop
+    EXTRA:   util::test_anon_0
+vt              done         3446      1996  done
+    EXTRA:   vt::BitmapAllocator_layout_chunks_region_matches_bitmap_addressable_bytes
+    EXTRA:   vt::BitmapAllocator_layout_small_capacity_cannot_alloc_out_of_bounds
+    EXTRA:   vt::BitmapAllocator_search_hint_does_not_skip_partial_words
+    EXTRA:   vt::BitmapAllocator_search_hint_skips_full_words
+    EXTRA:   vt::HashMap_auto_context_matches_reference_wyhash_layout
+    EXTRA:   vt::HashMap_ensureUnusedCapacity_with_removals
+    EXTRA:   vt::HashMap_key_and_value_iterators
+    EXTRA:   vt::HashMap_layout_offsets_are_from_buffer_start
+    EXTRA:   vt::HashMap_no_clobber_move_after_remove_at_max_load
+    EXTRA:   vt::HashMap_random_operations_against_an_oracle
+    EXTRA:   ... (+1458 more)
+    MULTI-BOUND: vt::drag_selection_logic <- 2 ref names: 'SelectionGesture drag selection logic'; 'SelectionGesture rectangle drag selection logic'
+    MULTI-BOUND: vt::osc_4 <- 2 ref names: 'OSC 4:'; 'osc4'
+vt-c            done          602       307  done
+    EXTRA:   vt-c::allocation_failure_sweep_through_snapshot_decode
+    EXTRA:   vt-c::allocation_failure_sweep_through_the_allocating_writers
+    EXTRA:   vt-c::allocation_failure_sweep_through_the_c_api
+    EXTRA:   vt-c::android_links_with_16k_max_page_size
+    EXTRA:   vt-c::apple_dylib_carries_the_reference_versions
+    EXTRA:   vt-c::c_parser_capture_falls_back_to_fixed_when_the_caller_allocator_fails
+    EXTRA:   vt-c::c_parser_capture_grows_by_remap_like_zig_realloc
+    EXTRA:   vt-c::c_parser_captures_through_the_caller_allocator
+    EXTRA:   vt-c::c_parser_color_requests_route_through_the_caller_allocator
+    EXTRA:   vt-c::c_parser_title_is_borrowed_not_copied
+    EXTRA:   ... (+291 more)
+    CONTRACT-DELETED: config::fromHex — removed upstream in 2970e9a2a
+    CONTRACT-DELETED: datastruct::SegmentedPool — removed upstream in e0ef934f7
+    CONTRACT-DELETED: datastruct::get — removed upstream in 02f34835e
+    CONTRACT-DELETED: datastruct::getOrPut — removed upstream in 02f34835e
+    CONTRACT-DELETED: datastruct::resize shrink and remove — removed upstream in 02f34835e
+    CONTRACT-DELETED: datastruct::resize shrink without removal — removed upstream in 02f34835e
+    CONTRACT-RENAMED: lib::abi by removing a key -> 'stable values when removing a key' (e77c2612e); successor ported
+    CONTRACT-DELETED: lib::cutPrefix — removed upstream in 1d6bc6829
+    CONTRACT-DELETED: os::appendEnv empty — removed upstream in e8525c0fd
+    CONTRACT-DELETED: os::appendEnv existing — removed upstream in e8525c0fd
+    CONTRACT-DELETED: os::args — removed upstream in e8525c0fd
+    CONTRACT-DELETED: os::prependEnv empty — removed upstream in e8525c0fd
+    CONTRACT-DELETED: os::prependEnv existing — removed upstream in e8525c0fd
+    CONTRACT-RENAMED: vt-c::json parses -> 'manifest parses and is versioned' (9673a22b0); successor ported
+    CONTRACT-RENAMED: vt-c::mode_get and mode_set -> 'set and get mode' (cfc19e805); successor ported
+    CONTRACT-RENAMED: vt-c::mode_get null -> 'set and get mode null' (cfc19e805); successor ported
+    CONTRACT-RENAMED: vt-c::mode_get unknown mode -> 'set and get mode validate configuration' (cfc19e805); successor ported
+    CONTRACT-RENAMED: vt-c::mode_set null -> 'set and get mode null' (cfc19e805); successor ported
+    CONTRACT-RENAMED: vt-c::mode_set unknown mode -> 'set and get mode validate configuration' (cfc19e805); successor ported
+    CONTRACT-RENAMED: vt-c::render: colors get -> 'render: colors data get' (b4079f00c); successor ported
+    CONTRACT-RENAMED: vt-c::render: colors get invalid value -> 'render: aggregate get invalid value' (b4079f00c); successor ported
+    CONTRACT-RENAMED: vt-c::render: colors get supports truncated sized struct -> 'render: colors data get supports truncated sized struct' (b4079f00c); successor ported
+    CONTRACT-RENAMED: vt-c::set write_pty callback -> 'set write_pty callback DECRQM' (9dc0d974e); successor ported
+    CONTRACT-DELETED: vt-c::struct sizes are non-zero — removed upstream in 9673a22b0
+    CONTRACT-DELETED: vt::HashMap ensureUnusedCapacity with tombstones — removed upstream in fedd42e8d
+    CONTRACT-DELETED: vt::PageList compact insufficient savings returns null — removed upstream in 16e4b5e98
+    CONTRACT-DELETED: vt::PageList compact std_size page returns null — removed upstream in 16e4b5e98
+    CONTRACT-DELETED: vt::Terminal: scrollUp with max_scrollback zero — removed upstream in 86f81fb5b
+    CONTRACT-DELETED: vt::Terminal: scrollUp with max_scrollback zero and left/right margin — removed upstream in 86f81fb5b
+    CONTRACT-DELETED: vt::Terminal: scrollUp with max_scrollback zero and top margin — removed upstream in 86f81fb5b
+    CONTRACT-DELETED: vt::parse mouse_any_flag — removed upstream in 1ca2858d0
+    CONTRACT-DELETED: vt::selectionString map allocation failure cleanup — removed upstream in f1948d505
+    CONTRACT-RENAMED: vt::size report csi_21_t title -> 'size report csi_21_t title disabled by default', 'size report csi_21_t title enabled' (38e891e6c); successor ported
+    CONTRACT-RENAMED: vt::storage: delete all placements and images -> 'storage: delete all visible placements and matching images' (f8b40a023); successor ported
+
+PROGRESS [workspace]: 6246/3227 ported (global contract floor = 3234)
+  (note: 7 contract tests live in non-DAG assets ['xtask'] outside crates/; workspace contract = 3227, global floor = 3234 = 3227 + 7)
+GREEN: progress 6246/3227; no claimed-done crate is short

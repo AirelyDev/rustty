@@ -140,9 +140,11 @@ fn display_application() -> harness::AppHarness {
     harness::AppHarness::init().unwrap_or_else(|| {
         panic!(
             "the GTK Application could not be built, so this #[ignore]d test could \
-             not run. Two causes: (a) no display — export DISPLAY or \
+             not run. Three causes: (a) no display — export DISPLAY or \
              WAYLAND_DISPLAY; (b) GTK was already initialized by another test in \
-             this binary (it binds one thread) — run one test with `--exact`."
+             this binary (it binds one thread) — run one test with `--exact`; \
+             (c) `CoreApp::create` failed with `DeviceFailed` (no EGL driver, so \
+             the app-scoped render device could not be created)."
         )
     })
 }

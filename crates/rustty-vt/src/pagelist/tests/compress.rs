@@ -2664,6 +2664,71 @@ fn pagelist_incremental_compression_advances_after_allocation_failure() {
     });
 }
 
+/// PORTS: oracle@main PageList.zig `test "PageList memory usage"` (8834e161c).
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'P8-W5 T1 — memory usage and compressed history restore'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the P8-W5 T1 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
+)]
+#[test]
+fn pagelist_memory_usage() {
+    let mut s = PageList::init(Global, Options::new(80, 24)).unwrap();
+
+    // A fresh list holds the preheated pool items, one of which backs
+    // the only page.
+    let fresh = s.memory_usage();
+    assert_eq!(s.total_pages(), fresh.pages);
+    assert_eq!(
+        crate::pagelist::PAGE_PREHEAT * crate::pagelist::std_size(),
+        fresh.virtual_bytes
+    );
+    assert_eq!(s.page_size, fresh.resident_bytes);
+    assert!(fresh.resident_bytes <= fresh.virtual_bytes);
+    assert_eq!(0, fresh.compressed_pages);
+    assert_eq!(0, fresh.compressed_bytes);
+
+    grow_cold_pages_for_test(&mut s, 2);
+    let before = s.memory_usage();
+    assert_eq!(s.total_pages(), before.pages);
+    assert_eq!(
+        s.page_size + s.pool.pages.free_count() * crate::pagelist::std_size(),
+        before.virtual_bytes
+    );
+    assert!(before.resident_bytes <= before.virtual_bytes);
+
+    // Compression changes residency but not address space.
+    let _ = s.compress(CompressionMode::Full);
+    let compressed = s.memory_usage();
+    assert_eq!(before.pages, compressed.pages);
+    assert_eq!(before.virtual_bytes, compressed.virtual_bytes);
+    assert!(compressed.resident_bytes < before.resident_bytes);
+    assert_eq!(2, compressed.compressed_pages);
+    assert!(compressed.compressed_bytes > 0);
+    assert_eq!(
+        s.memory_stats().estimated_resident_bytes(),
+        compressed.resident_bytes
+    );
+
+    // The query itself never restores a page.
+    assert_eq!(compressed, s.memory_usage());
+
+    // Reading a page restores it.
+    let _ = unsafe { crate::pagelist::Node::page(s.pages.first) };
+    let restored = s.memory_usage();
+    assert_eq!(1, restored.compressed_pages);
+    assert!(restored.resident_bytes > compressed.resident_bytes);
+    assert_eq!(before.virtual_bytes, restored.virtual_bytes);
+
+    // Destroyed pages go back to the pool: the address space is kept but
+    // the memory is no longer resident.
+    s.erase_rows(point::Point::History(point::Coordinate::default()), None);
+    let erased = s.memory_usage();
+    assert!(erased.pages < restored.pages);
+    assert_eq!(before.virtual_bytes, erased.virtual_bytes);
+    assert!(erased.resident_bytes < restored.resident_bytes);
+
+    s.deinit();
+}
+
 /// PORTS: oracle@main PageList.zig
 /// `test "PageList memory stats do not restore compressed pages"`.
 #[cfg_attr(

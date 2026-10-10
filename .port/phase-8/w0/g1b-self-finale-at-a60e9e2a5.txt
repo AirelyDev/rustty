@@ -1,0 +1,14 @@
+  ok   GIT_DIR + GIT_WORK_TREE do not redirect RS_ROOT
+  ok   zig cache defaults to ~/.cache/zig
+  ok   zig cache honours XDG_CACHE_HOME
+  ok   ZIG_GLOBAL_CACHE_DIR wins over XDG_CACHE_HOME
+  ok   an oracle at the pin passes
+  ok   NEGATIVE: a wrong-pin oracle is refused
+  ok   NEGATIVE: a missing oracle is refused
+  ok   NEGATIVE: a non-checkout directory is refused
+  ok   NEGATIVE: a missing pin is refused
+  ok   NEGATIVE: main() beside a MISSING oracle exits 3 on the pin check (rc 3)
+  ok   NEGATIVE: main() beside an OFF-PIN oracle exits 3 on the pin check (rc 3)
+  ok   control: main() beside an AT-PIN fixture passes the pin check (rc 3)
+  ok   row counting + the vaxis/vxfw row binding
+G1b SELF-TEST: GREEN

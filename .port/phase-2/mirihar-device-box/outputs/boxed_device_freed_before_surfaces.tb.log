@@ -1,0 +1,84 @@
+Trying seed: 0
+Trying seed: 6
+Trying seed: 3
+Trying seed: 7
+Trying seed: 5
+Trying seed: 1
+Trying seed: 4
+Trying seed: 2
+error: Undefined Behavior: constructing invalid value of type &Device: encountered a dangling reference (use-after-free)
+   --> src/main.rs:175:49
+    |
+175 |                 acc = acc.wrapping_add(unsafe { (*dev.0).read() });
+    |                                                 ^^^^^^^^ Undefined Behavior occurred here
+    |
+    = help: this indicates a bug in the program: it performed an invalid operation, and caused Undefined Behavior
+    = help: see https://doc.rust-lang.org/nightly/reference/behavior-considered-undefined.html for further information
+    = note: this is on thread `unnamed-1`
+note: the current function got called indirectly due to this code
+   --> src/main.rs:169:22
+    |
+169 |           let render = thread::spawn(move || {
+    |  ______________________^
+170 | |             let dev = dev;
+171 | |             let mut acc = 0u64;
+...   |
+181 | |             acc
+182 | |         });
+    | |__________^
+
+error: Undefined Behavior: constructing invalid value of type &Device: encountered a dangling reference (use-after-free)
+   --> src/main.rs:175:49
+    |
+175 |                 acc = acc.wrapping_add(unsafe { (*dev.0).read() });
+    |                                                 ^^^^^^^^ Undefined Behavior occurred here
+    |
+    = help: this indicates a bug in the program: it performed an invalid operation, and caused Undefined Behavior
+    = help: see https://doc.rust-lang.org/nightly/reference/behavior-considered-undefined.html for further information
+    = note: this is on thread `unnamed-1`
+note: the current function got called indirectly due to this code
+   --> src/main.rs:169:22
+    |
+169 |           let render = thread::spawn(move || {
+    |  ______________________^
+170 | |             let dev = dev;
+171 | |             let mut acc = 0u64;
+...   |
+181 | |             acc
+182 | |         });
+    | |__________^
+    = note: duplicate diagnostic emitted due to `-Z deduplicate-diagnostics=no`
+
+note: some details are omitted, run with `MIRIFLAGS=-Zmiri-backtrace=full` for a verbose backtrace
+
+FAILING SEED: 5
+error: Undefined Behavior: Data race detected between (1) non-atomic read on thread `unnamed-1` and (2) deallocation on thread `main` at alloc6291
+    --> /Users/gael/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/boxed.rs:2002:17
+     |
+2002 |                 self.1.deallocate(From::from(ptr.cast()), layout);
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (2) just happened here
+     |
+help: and (1) occurred earlier here
+    --> src/main.rs:58:9
+     |
+  58 |         self.handle + u64::from(self.default_storage_mode) + u64::from(self.max_texture_size)
+     |         ^^^^^^^^^^^
+     = help: this indicates a bug in the program: it performed an invalid operation, and caused Undefined Behavior
+     = help: see https://doc.rust-lang.org/nightly/reference/behavior-considered-undefined.html for further information
+     = note: this is on thread `main`
+     = note: stack backtrace:
+             0: <std::boxed::Box<Device> as std::ops::Drop>::drop
+                 at /Users/gael/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/boxed.rs:2002:17: 2002:66
+             1: std::ptr::drop_glue::<std::boxed::Box<Device>> - shim(Some(std::boxed::Box<Device>))
+                 at /Users/gael/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:828:1: 830:25
+             2: std::mem::drop::<std::boxed::Box<Device>>
+                 at /Users/gael/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/mem/mod.rs:1043:1: 1043:2
+             3: DeviceBox::deinit
+                 at src/main.rs:150:13: 150:51
+             4: BoxedApp::deinit_device_first
+                 at src/main.rs:240:18: 240:38
+             5: boxed_device_freed_before_surfaces
+                 at src/main.rs:314:9: 314:37
+             6: main
+                 at src/main.rs:326:49: 326:85
+

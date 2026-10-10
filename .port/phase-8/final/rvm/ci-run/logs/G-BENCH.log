@@ -1,0 +1,13 @@
+=== G-BENCH: cargo test -p rustty-bench --lib (debug) ===
+test screen_clone::tests::screen_clone_every_mode_name_parses_and_runs_setup_with_zero_loops ... ok
+
+test result: ok. 45 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 97.30s
+OK: 45 tests (floor 44)
+=== G-BENCH: cargo test -p rustty-bench --lib --release ===
+test screen_clone::tests::screen_clone_every_mode_name_parses_and_runs_one_iteration ... ok
+
+test result: ok. 46 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s
+OK: 46 tests (floor 44)
+=== G-BENCH: oracle action-set parity ===
+OK: 14 actions, identical to the oracle's
+G-BENCH: PASS

@@ -1,0 +1,15 @@
+P8-W10 PERF evidence at 11b4c74d0 (tree), oracle pin 246f70287 (ghostty-bench sha256 37c63176...)
+Host: Apple M4 Pro, macOS, both VMs stopped. 2026-10-10.
+
+n566-readthread_pipeline-10x.txt  N566: cargo test -p rustty-termio --release --lib readthread_pipeline x10 -> 10/10 pass
+ws10-suite-at-246f70287.txt       ws10_suite.py Fence 1 N=9, load 1.77 -> exit 0, 14/14 (suite 3,240 -> 2,352 ms, -27.4%)
+ws10-suite.json                   its --json output
+oracle-rebase-246f70287.jsonl     run_benchmarks.py <oracle> N=7, load 1.44 -> 1.29: the BASELINE.json re-base rows
+oracle-rebase-246f70287.log       its log
+g8-self-test.txt                  check_baseline_regression.py --self-test after the re-base -> PASS
+g8b-perf-fence-build.txt          check_perf_fence.sh --build --emit-metrics, load 1.26 -> GREEN 14/14 (-27.7%), Fence 1 only (no .perf-bins entry binary)
+g8-metrics.json                   the metrics file G8b emitted
+g8-strict.txt                     check_baseline_regression.py --strict --metrics g8-metrics.json -> GREEN, 17 metrics, 0 regressions, 0 missing
+g8-strict-progress.txt            check_baseline_regression.py --strict without --metrics (progress mode) -> GREEN
+
+Thinnest win: terminal-stream/ascii, 0.979 (two-strike re-run at N=18 after a first-round 47.40 vs 46.81 ms loss) and 0.965 in G8b.

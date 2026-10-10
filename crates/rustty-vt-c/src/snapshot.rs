@@ -46,6 +46,7 @@ fn default_max_continuation_bytes() -> usize {
 pub enum DecoderOption {
     MaxContinuationBytes = 0,
     RetainContinuation = 1,
+    CompressHistory = 2,
 }
 
 // D11 closed-enum c_int narrowing (the `_` non-exhaustive arm of the reference
@@ -55,6 +56,7 @@ impl DecoderOption {
         match v {
             0 => Some(DecoderOption::MaxContinuationBytes),
             1 => Some(DecoderOption::RetainContinuation),
+            2 => Some(DecoderOption::CompressHistory),
             _ => None,
         }
     }
@@ -77,6 +79,7 @@ pub enum DecoderData {
     ProgressRows = 6,
     ProgressRemaining = 7,
     RetainContinuation = 8,
+    CompressHistory = 9,
     // /// Return the Zig type stored through the C API output pointer for a key.
     // fn OutType(comptime self: DecoderData) type {
     //     return switch (self) {
@@ -86,7 +89,7 @@ pub enum DecoderData {
     //         .progress_screen => terminal_c.TerminalScreen,
     //         .progress_rows => usize,
     //         .progress_remaining => u32,
-    //         .retain_continuation => bool,
+    //         .retain_continuation, .compress_history => bool,
     //         _ => void,
     //     };
     // }
@@ -98,9 +101,9 @@ pub enum DecoderData {
 
 impl DecoderData {
     pub fn from_c_int(v: c_int) -> Option<DecoderData> {
-        // Contiguous 0..=8; `Invalid = 0` is IN range and keeps its
+        // Contiguous 0..=9; `Invalid = 0` is IN range and keeps its
         // `.invalid_value` disposition inside `decoder_get`.
-        if (0..=8).contains(&v) {
+        if (0..=9).contains(&v) {
             // SAFETY: `v` is a valid `DecoderData` discriminant (checked).
             Some(unsafe { std::mem::transmute::<c_int, DecoderData>(v) })
         } else {
@@ -192,7 +195,7 @@ enum State {
 }
 
 /// Owns the source adapter and all state needed by an opaque C decoder handle.
-// const DecoderWrapper = struct { alloc, source, decoder, state, max_continuation_bytes, retain_continuation };
+// const DecoderWrapper = struct { alloc, source, decoder, state, max_continuation_bytes, retain_continuation, compress_history };
 //
 // PORT NOTE (SB, decoder-aliasing discipline): the reference stores the source
 // INLINE and hands the core decoder a pointer into its own heap allocation.
@@ -220,6 +223,7 @@ pub struct DecoderWrapper {
     state: State,
     max_continuation_bytes: usize,
     retain_continuation: bool,
+    compress_history: bool,
 }
 
 /// C: GhosttySnapshotDecoder, an opaque nullable decoder handle.
@@ -341,6 +345,8 @@ unsafe fn decoder_new_source(
             state: State::Configuring,
             max_continuation_bytes: default_max_continuation_bytes(),
             retain_continuation: false,
+            // wrapper.compress_history = false;
+            compress_history: false,
         });
         *out = wrapper_ptr;
     }
@@ -418,6 +424,11 @@ pub unsafe fn decoder_set(
         DecoderOption::RetainContinuation => unsafe {
             (*decoder_).retain_continuation = *(value_ as *const bool)
         },
+        // .compress_history => decoder.compress_history =
+        //     @as(*const bool, @ptrCast(@alignCast(value))).*,
+        DecoderOption::CompressHistory => unsafe {
+            (*decoder_).compress_history = *(value_ as *const bool)
+        },
     }
     Result::Success
 }
@@ -474,6 +485,19 @@ unsafe fn decoder_get_typed(decoder_: Decoder, data: DecoderData, out: *mut c_vo
                     return Result::NoValue;
                 }
                 *(out as *mut bool) = (*decoder_).retain_continuation;
+            }
+        }
+        // .compress_history => {
+        //     if (decoderFailed(decoder)) return .no_value;
+        //     out.* = decoder.compress_history;
+        // },
+        DecoderData::CompressHistory => {
+            // SAFETY: `decoder_` is live; `out` points to a writable `bool`.
+            unsafe {
+                if decoder_failed(decoder_) {
+                    return Result::NoValue;
+                }
+                *(out as *mut bool) = (*decoder_).compress_history;
             }
         }
 
@@ -852,12 +876,15 @@ unsafe fn decoder_ready_terminal(
     // Decode READY while the fresh I/O implementation is still locally owned.
     // var decoded = decoder.decoder.ready(decoder.alloc, io.io(), .{
     //     .max_continuation_bytes = decoder.max_continuation_bytes,
+    //     .compress_history = decoder.compress_history,
     // }) catch |err| { io.deinit(decoder.alloc); return err; };
     // defer decoded.deinit(decoder.alloc);
     // SAFETY: `decoder` is live (caller contract); the transient `&mut` of the
     // decoder field dies with this statement.
     let options = snapshot_core::DecodeOptions {
         max_continuation_bytes: unsafe { (*decoder).max_continuation_bytes },
+        // SAFETY: as above.
+        compress_history: unsafe { (*decoder).compress_history },
     };
     // SAFETY: `decoder` is live (caller contract).
     let gpa = unsafe { decoder_gpa(decoder) };
@@ -1363,6 +1390,41 @@ mod tests {
             });
             assert!(retain);
 
+            // var compress = true;
+            let mut compress = true;
+            // try testing.expectEqual(Result.success, decoder_get(decoder, .compress_history, &compress));
+            assert_eq!(Result::Success, unsafe {
+                decoder_get(
+                    decoder,
+                    DecoderData::CompressHistory,
+                    &mut compress as *mut bool as *mut c_void,
+                )
+            });
+            // try testing.expect(!compress);
+            assert!(!compress);
+            // compress = true;
+            compress = true;
+            // try testing.expectEqual(Result.success, decoder_set(decoder, .compress_history, &compress));
+            assert_eq!(Result::Success, unsafe {
+                decoder_set(
+                    decoder,
+                    DecoderOption::CompressHistory,
+                    &compress as *const bool as *const c_void,
+                )
+            });
+            // compress = false;
+            compress = false;
+            // try testing.expectEqual(Result.success, decoder_get(decoder, .compress_history, &compress));
+            assert_eq!(Result::Success, unsafe {
+                decoder_get(
+                    decoder,
+                    DecoderData::CompressHistory,
+                    &mut compress as *mut bool as *mut c_void,
+                )
+            });
+            // try testing.expect(compress);
+            assert!(compress);
+
             let mut written: usize = 99;
             assert_eq!(Result::InvalidValue, unsafe {
                 decoder_get_multi(
@@ -1788,6 +1850,9 @@ mod tests {
     // test "snapshot decoder retains every supported continuation class"
     #[test]
     fn snapshot_decoder_retains_every_supported_continuation_class() {
+        // N541: this test reaches `sys::log_fn`; hold the sys guard so its
+        // warnings cannot land in another test's log sink.
+        let _guard = crate::sys::tests::reset_global();
         struct Case {
             name: &'static str,
             prefix: &'static [u8],
@@ -2279,6 +2344,165 @@ mod tests {
             unsafe {
                 terminal_c::free(restored);
                 decoder_free(decoder);
+                terminal_c::free(source);
+            }
+        });
+    }
+
+    // test "snapshot decoder compresses history when requested"
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-vt-c, P8-W5 T3): three full pages of history at 215 columns written through the terminal, then an encode and two decodes, one compressing every history page; measured TIMEOUT at the 30-minute miri-run.sh bound; runs natively and under ASan (see MIRI_EXCEPTIONS.md)"
+    )]
+    fn snapshot_decoder_compresses_history_when_requested() {
+        with_test_allocator(|alloc| {
+            // var source: terminal_c.Terminal = null;
+            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &source, 215, 2));
+            // defer terminal_c.free(source);
+            let (new_result, source) = new_t(alloc, 215, 2);
+            assert_eq!(Result::Success, new_result);
+            // try testing.expectEqual(Result.success, terminal_c.set(source, .scrollback_max_bytes, null));
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::set(source, Option_::ScrollbackMaxBytes, std::ptr::null())
+            });
+            // const source_pages = &terminal_c.zigTerminal(source).?.screens
+            //     .get(.primary).?.pages;
+            // const first_page_rows = source_pages.pages.first.?.capacity().rows;
+            let source_pages: *const rustty_vt::pagelist::PageList = unsafe {
+                let zt = terminal_c::zig_terminal(source);
+                let primary = (*zt)
+                    .screens
+                    .get(rustty_vt::screen_set::Key::Primary)
+                    .unwrap();
+                &raw const (*primary).pages
+            };
+            let first_page_rows: usize = unsafe {
+                let first = (*source_pages).pages.first;
+                assert!(!first.is_null());
+                rustty_vt::pagelist::Node::capacity(first).rows as usize
+            };
+            // for (0..@as(usize, first_page_rows) * 3) |_|
+            //     terminal_c.vt_write(source, "x\r\n", 3);
+            for _ in 0..first_page_rows * 3 {
+                vtw(source, b"x\r\n");
+            }
+
+            // var encoded_ptr: ?[*]u8 = null;
+            // var encoded_len: usize = 0;
+            // try testing.expectEqual(Result.success, encode_alloc(source, &lib.alloc.test_allocator, &encoded_ptr, &encoded_len));
+            // const encoded = encoded_ptr.?[0..encoded_len];
+            // defer lib.alloc.default(&lib.alloc.test_allocator).free(encoded);
+            let mut encoded_ptr: *mut u8 = std::ptr::null_mut();
+            let mut encoded_len: usize = 0;
+            assert_eq!(Result::Success, unsafe {
+                encode_alloc(source, Some(alloc), &mut encoded_ptr, &mut encoded_len)
+            });
+            let encoded: &[u8] = unsafe { core::slice::from_raw_parts(encoded_ptr, encoded_len) };
+
+            // for ([_]bool{ false, true }) |compress| {
+            for compress in [false, true] {
+                // var decoder: Decoder = null;
+                // try testing.expectEqual(Result.success, decoder_new_buf(&lib.alloc.test_allocator, &decoder, encoded.ptr, encoded.len));
+                // defer decoder_free(decoder);
+                let mut decoder: Decoder = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    decoder_new_buf(Some(alloc), &mut decoder, encoded.as_ptr(), encoded.len())
+                });
+                // try testing.expectEqual(Result.success, decoder_set(decoder, .compress_history, &compress));
+                assert_eq!(Result::Success, unsafe {
+                    decoder_set(
+                        decoder,
+                        DecoderOption::CompressHistory,
+                        &compress as *const bool as *const c_void,
+                    )
+                });
+
+                // var restored: terminal_c.Terminal = null;
+                // try testing.expectEqual(Result.success, decoder_decode(decoder, &restored));
+                // defer terminal_c.free(restored);
+                let mut restored: terminal_c::Terminal = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    decoder_decode(decoder, &mut restored)
+                });
+
+                // Options freeze once decoding starts, but remain readable.
+                // try testing.expectEqual(Result.invalid_value, decoder_set(decoder, .compress_history, &compress));
+                assert_eq!(Result::InvalidValue, unsafe {
+                    decoder_set(
+                        decoder,
+                        DecoderOption::CompressHistory,
+                        &compress as *const bool as *const c_void,
+                    )
+                });
+                // var actual = !compress;
+                // try testing.expectEqual(Result.success, decoder_get(decoder, .compress_history, &actual));
+                // try testing.expectEqual(compress, actual);
+                let mut actual = !compress;
+                assert_eq!(Result::Success, unsafe {
+                    decoder_get(
+                        decoder,
+                        DecoderData::CompressHistory,
+                        &mut actual as *mut bool as *mut c_void,
+                    )
+                });
+                assert_eq!(compress, actual);
+
+                // The restored history is complete either way. Only how it is stored
+                // differs. Every page above the active area can be compressed because
+                // the restored viewport shows the active area.
+                // const pages = &terminal_c.zigTerminal(restored).?.screens
+                //     .get(.primary).?.pages;
+                unsafe {
+                    let zt = terminal_c::zig_terminal(restored);
+                    let primary = (*zt)
+                        .screens
+                        .get(rustty_vt::screen_set::Key::Primary)
+                        .unwrap();
+                    let pages: *const rustty_vt::pagelist::PageList = &raw const (*primary).pages;
+                    // try testing.expectEqual(source_pages.total_rows, pages.total_rows);
+                    assert_eq!((*source_pages).total_rows, (*pages).total_rows);
+                    // const active = pages.getTopLeft(.active).node;
+                    let active = (*pages).get_top_left(rustty_vt::point::Tag::Active).node;
+                    // var history_pages: usize = 0;
+                    // var current = pages.pages.first;
+                    // while (current) |node| : (current = node.next) {
+                    //     if (node == active) break;
+                    //     history_pages += 1;
+                    // }
+                    // PORT NOTE: `Node.next` is private to rustty-vt; the walk
+                    // from the first page is a page iterator from the screen's
+                    // top-left, which is the first page's first row.
+                    let mut history_pages: usize = 0;
+                    let mut it = (*pages)
+                        .get_top_left(rustty_vt::point::Tag::Screen)
+                        .page_iterator(rustty_vt::pagelist::iter::Direction::RightDown, None);
+                    while let Some(chunk) = it.next() {
+                        if chunk.node == active {
+                            break;
+                        }
+                        history_pages += 1;
+                    }
+                    // try testing.expect(history_pages > 0);
+                    assert!(history_pages > 0);
+                    // try testing.expectEqual(
+                    //     if (compress) history_pages else 0,
+                    //     pages.memoryStats().compressed_pages,
+                    // );
+                    assert_eq!(
+                        if compress { history_pages } else { 0 },
+                        (*pages).memory_stats().compressed_pages
+                    );
+                }
+
+                unsafe {
+                    terminal_c::free(restored);
+                    decoder_free(decoder);
+                }
+            }
+
+            unsafe {
+                free_alloc(alloc, encoded_ptr, encoded_len);
                 terminal_c::free(source);
             }
         });

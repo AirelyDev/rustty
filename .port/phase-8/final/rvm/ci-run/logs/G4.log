@@ -1,0 +1,8 @@
+=== G4 :: differential VT clean (runner) ===
+--- PROGRESS mode: port driver not armed for this run (/home/gael/projects/rustty-p8final/.port/phase-0/harness/bin/vt_driver_port) ---
+    G4 cannot be parity-GREEN without the port driver; running the
+    harness self-test (proves the comparator detects total divergence).
+--- staleness guard: vt_driver.c compiles against the pinned oracle headers: OK ---
+GATE ERROR: reference driver not built (/home/gael/projects/rustty-p8final/.port/phase-0/harness/bin/vt_driver_ref).
+  -> run: bash /home/gael/projects/rustty-p8final/.port/phase-0/harness/build_ref_driver.sh
+BLOCKED: harness self-test FAILED — the differential harness is broken

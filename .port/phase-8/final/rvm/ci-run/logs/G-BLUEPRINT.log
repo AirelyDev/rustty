@@ -1,0 +1,5 @@
+=== G-BLUEPRINT 1/2 :: compile (19 templates) ===
+    ok      all 19 templates compile
+=== G-BLUEPRINT 2/2 :: formatting ===
+    ok      all 19 templates are already formatted
+G-BLUEPRINT GREEN: 19 templates compile and are formatted.

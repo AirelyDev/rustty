@@ -1,0 +1,271 @@
+NOT-CARRIED-INVALID: COMMENT-NOT-CARRIED.tsv:40 (lib_vt.zig:506): STALE — the oracle line at the pin is 'std.debug.FullPanic(std.debug.defaultPanic)', not the declared text
+NOT-CARRIED-INVALID: COMMENT-NOT-CARRIED.tsv:41 (lib_vt.zig:509): STALE — the oracle line at the pin is '', not the declared text
+NOT-CARRIED-INVALID: COMMENT-NOT-CARRIED.tsv:42 (lib_vt.zig:510): STALE — the oracle line at the pin is '/// Runs global constructors when libghostty-vt is built as a Windows', not the declared text
+NOT-CARRIED-INVALID: COMMENT-NOT-CARRIED.tsv:43 (lib_vt.zig:511): STALE — the oracle line at the pin is '/// DLL. See `lib/windows_dll.zig`; without it simdutf dispatches through', not the declared text
+NOT-CARRIED-INVALID: COMMENT-NOT-CARRIED.tsv:44 (lib_vt.zig:512): STALE — the oracle line at the pin is '/// a null kernel pointer on the first multi-byte UTF-8 sequence.', not the declared text
+NOT-CARRIED-INVALID: COMMENT-NOT-CARRIED.tsv:45 (lib_vt.zig:514): STALE — the oracle line at the pin is 'builtin.output_mode == .Lib and', not the declared text
+    NOT-CARRIED (no-counterpart, was MISSING): apprt/gtk/adw_version.zig:3 Until the gobject bindings are built at the same time we are building
+    NOT-CARRIED (no-counterpart, was MISSING): apprt/gtk/adw_version.zig:4 Ghostty, we need to import `adwaita.h` directly to ensure that the version
+    NOT-CARRIED (no-counterpart, was MISSING): apprt/gtk/adw_version.zig:5 macros match the version of `libadwaita` that we are building/linking
+    NOT-CARRIED (no-counterpart, was MISSING): apprt/gtk/adw_version.zig:101 Whether AdwDialog, AdwAlertDialog, etc. are supported (1.5+)
+    NOT-CARRIED (gag-prose, was MISSING): apprt/gtk/class/application.zig:3348 Abusing integers to be enums and booleans is a terrible idea, C.
+    NOT-CARRIED (no-counterpart, was MISSING): apprt/gtk/class/config.zig:94 Get the mutable configuration. This is usually NOT recommended
+    NOT-CARRIED (no-counterpart, was MISSING): apprt/gtk/class/config.zig:95 because any changes to the config won't be propagated to anyone
+    NOT-CARRIED (no-counterpart, was MISSING): apprt/gtk/class/config.zig:96 with a reference to this object. If you know what you're doing, then
+    NOT-CARRIED (gag-prose, was MISSING): apprt/gtk/class/global_shortcuts.zig:380 XDG Portals are really, really poorly-designed pieces of hot garbage.
+    NOT-CARRIED (gag-prose, was MISSING): apprt/gtk/class/global_shortcuts.zig:396 And they know this. Instead of fixing their freaking protocol, they just
+    NOT-CARRIED (gag-prose, was MISSING): apprt/gtk/class/global_shortcuts.zig:406 When in Rome, do as the Romans do, I guess...?
+    NOT-CARRIED (no-counterpart, was MISSING): apprt/gtk/gtk_version.zig:3 Until the gobject bindings are built at the same time we are building
+    NOT-CARRIED (no-counterpart, was MISSING): apprt/gtk/gtk_version.zig:4 Ghostty, we need to import `gtk/gtk.h` directly to ensure that the version
+    NOT-CARRIED (no-counterpart, was MISSING): apprt/gtk/gtk_version.zig:5 macros match the version of `gtk4` that we are building/linking against.
+    NOT-CARRIED (gag-prose, was MISSING): apprt/gtk/winproto/BlurRegion.zig:58 NOTE(pluiedev): CSDs are a f--king mistake.
+    NOT-CARRIED (gag-prose, was MISSING): apprt/gtk/winproto/x11.zig:482 I know this is really ugly. X11 is ugly. I consider it apropos.
+    (16 reference comment(s) excused by COMMENT-NOT-CARRIED.tsv; each row is validated above)
+G3b [apprt]: distinctive ref comments=2623 missing=4 review=2
+    REVIEW (ratio 0.7): destroy callback for the `gbytes` backing a `gdkmemorytexture`.
+    REVIEW (ratio 0.69): we own the pixels; make sure they don't leak.
+    MISSING ref comment: don't care about load/store orders here. a few duplicates aren't critical.
+    MISSING ref comment: key forces the compiler to instantiate this container per (format, argument type) i.e. roughly per c
+    MISSING ref comment: logs a warning once-ish for the given format string and argument types. it may log duplicates if cal
+    MISSING ref comment: multiple threads but will eventually stop.
+G3b [apprt-api]: distinctive ref comments=330 missing=0 review=0
+G3b [args]: distinctive ref comments=186 missing=0 review=1
+    REVIEW (ratio 0.79): returns true if this type can track diagnostics.
+G3b [bench]: distinctive ref comments=173 missing=8 review=0
+    MISSING ref comment: and does nothing with it.
+    MISSING ref comment: nothing, so the benchmark measures the whole path from input to
+    MISSING ref comment: other value also installs an `unknown_sequence` callback that does
+    MISSING ref comment: parser does not implement. zero, the default, discards them like
+    MISSING ref comment: parser does not implement. zero, the default, discards them. any
+    MISSING ref comment: stands in for an application that receives every unknown sequence
+    MISSING ref comment: the most bytes to keep from each osc sequence whose number the
+    MISSING ref comment: the parser does by default. see `osc.parser.unknown_max_bytes`.
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:179 On Windows, Zig's _DllMainCRTStartup does not initialize the MSVC C
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:180 runtime when targeting MSVC ABI. Without initialization, any C library
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:181 function that depends on CRT internal state (setlocale, malloc from C
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:182 dependencies, C++ constructors in glslang) crashes with null pointer
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:183 dereferences. Declaring DllMain causes Zig's start.zig to call it
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:184 during DLL_PROCESS_ATTACH/DETACH, and for MSVC we forward to the CRT
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:185 bootstrap functions from libvcruntime and libucrt (already linked).
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:186 For other ABIs (MinGW) the handler is a no-op since dllcrt2.obj already
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:187 handles CRT init; we still need `DllMain` declared so that Zig's
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:188 start.zig does not fall back to calling a non-function value.
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:190 This is a workaround. Zig handles MinGW DLLs correctly (via dllcrt2.obj)
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:191 but not MSVC. No upstream issue tracks this exact gap as of 2026-03-26.
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:192 Closest: Codeberg ziglang/zig #30936 (reimplement crt0 code).
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:193 Remove this DllMain when Zig handles MSVC DLL CRT init natively.
+    NOT-CARRIED (no-counterpart, was MISSING): main_c.zig:211 Only MSVC needs to bootstrap the CRT; MinGW handles it via dllcrt2.obj.
+    (15 reference comment(s) excused by COMMENT-NOT-CARRIED.tsv; each row is validated above)
+G3b [bin]: distinctive ref comments=180 missing=7 review=2
+    REVIEW (ratio 0.7): `std.options.debug_io` defaults to `std.io.threaded`, and anything
+    REVIEW (ratio 0.63): this verifies nothing ever touches it.
+    MISSING ref comment: a null kernel pointer on the first multi-byte utf-8 sequence.
+    MISSING ref comment: dll. see `lib/windows_dll.zig`; without it simdutf dispatches through
+    MISSING ref comment: guards release builds against accidentally reintroducing the std
+    MISSING ref comment: roughly 110kb of unreachable code.
+    MISSING ref comment: runs global constructors when librustty-vt is built as a windows
+    MISSING ref comment: std.log handler, etc.) pins threaded's entire vtable into the binary:
+    MISSING ref comment: that reaches it (std.debug.print, std.debug.lockstderr, the default
+G3b [build-config]: distinctive ref comments=27 missing=0 review=1
+    REVIEW (ratio 0.75): the semantic version of this build.
+G3b [cfg-fmt]: distinctive ref comments=13 missing=0 review=0
+G3b [cli]: distinctive ref comments=622 missing=21 review=4
+    REVIEW (ratio 0.67): bare host: every port on that host too.
+    REVIEW (ratio 0.75): for that port. with no destination and no action, the entire cache is
+    REVIEW (ratio 0.68): this should be returned by actions that want to print the help text.
+    REVIEW (ratio 0.72): var buf: [std.compress.flate.max_window_len]u8 = undefined;
+    MISSING ref comment: `:port` suffix (`user@hostname:2222`, or `user@[2001:db8::1]:2222` for an
+    MISSING ref comment: `host:22` and `host:022` can't become distinct keys.
+    MISSING ref comment: `host:port` query every key on that host and port regardless of user.
+    MISSING ref comment: a host with an optional port, split apart.
+    MISSING ref comment: a missing port is port 22.
+    MISSING ref comment: a missing port is the same as port 22.
+    MISSING ref comment: bare host:port: that port only, any user.
+    MISSING ref comment: bare ipv6 address (more than one colon, no brackets) has no port. the
+    MISSING ref comment: different sshd instances behind one address are cached separately.
+    MISSING ref comment: digits only and no leading zero (which also rules out port 0), so
+    MISSING ref comment: formatted `user@hostname`, or `user@hostname:port` when the port isn't
+    MISSING ref comment: host regardless of user and port, and a bare `hostname:port` every entry
+    MISSING ref comment: ipv6 address), since each port can be a different machine.
+    MISSING ref comment: matches every key on that host regardless of user and port, and a bare
+    MISSING ref comment: only a bare host query matches every port.
+    MISSING ref comment: only ipv6 addresses are bracketed, and only when they carry a port.
+    MISSING ref comment: optional `:port` suffix (`[addr]:port` for ipv6 addresses).
+    MISSING ref comment: returns null if user or hostname is missing or formatting fails.
+    MISSING ref comment: split `host`, `host:port` or `[ipv6]:port` into its host and port. a
+    MISSING ref comment: the default 22 (`user@[hostname]:port` for an ipv6 address), so that
+    MISSING ref comment: timestamps. a destination on a port other than 22 carries it as a
+G3b [config]: distinctive ref comments=2906 missing=32 review=8
+    REVIEW (ratio 0.64): 3. "application support" directory (macos only)
+    REVIEW (ratio 0.71): load the configuration according to the default rules:
+    REVIEW (ratio 0.73): see "clipboard-codepoint-map" for documentation.
+    REVIEW (ratio 0.69): see `font-synthetic-style` for documentation.
+    REVIEW (ratio 0.75): see macos-dock-drop-behavior
+    REVIEW (ratio 0.74): see window-show-tab-bar
+    REVIEW (ratio 0.7): this is disabled by default because a program can ask for the checksum of
+    REVIEW (ratio 0.63): valid values for confirm-close-surface
+    MISSING ref comment: * `attributes` - add bold, underline, blink, inverse, invisible, and
+    MISSING ref comment: * `full` - use the full codepoint of each cell instead of the dec
+    MISSING ref comment: * `negate` - report the negated sum, as dec terminals do.
+    MISSING ref comment: * `trim` - omit plain spaces other than the first cell of the area.
+    MISSING ref comment: * `undrawn` - count cells that were never written to as spaces
+    MISSING ref comment: [implementation](https://github.com/thomasdickey/xterm-snapshots/blob/xterm-411/screen.c#l3162-l3290
+    MISSING ref comment: [man page](https://github.com/thomasdickey/xterm-snapshots/blob/xterm-411/xterm.man#l2870-l2896)
+    MISSING ref comment: `checksumextension` resource. a running program can change it with
+    MISSING ref comment: `no-negate,no-attributes,no-trim,full` when run with `--xterm-checksum`,
+    MISSING ref comment: `undrawn` here. it also lists a bit 5 that xterm doesn't implement.
+    MISSING ref comment: and its [control sequence documentation](https://github.com/thomasdickey/xterm-snapshots/blob/xterm-
+    MISSING ref comment: as omitting cells that were never written to, but xterm skips those
+    MISSING ref comment: ask for a checksum of an area of the screen. terminal test suites use it
+    MISSING ref comment: but where those disagree with xterm's
+    MISSING ref comment: calculated. this is the calculation used after a reset, like xterm's
+    MISSING ref comment: calculation of a real dec terminal.
+    MISSING ref comment: cells by default and counts them as spaces with the bit set, which is
+    MISSING ref comment: checksum is calculated, is ignored as well.
+    MISSING ref comment: enables or disables checksum reporting (decrqcra, `csi pi ; pg ; pt ;
+    MISSING ref comment: how the checksum reported for decrqcra (see `vt-xt-checksum-report`) is
+    MISSING ref comment: one cell at a time and so read back everything on the screen, including
+    MISSING ref comment: pl ; pb ; pr * y`). this escape sequence allows the running program to
+    MISSING ref comment: prefix a value with `no-` to disable it. for example, esctest expects
+    MISSING ref comment: protected attributes to the value of each cell.
+    MISSING ref comment: rustty follows the implementation. the documentation describes bit 3
+G3b [core]: distinctive ref comments=1257 missing=3 review=1
+    REVIEW (ratio 0.62): are gone since their renderers borrow it.
+    MISSING ref comment: clean up our render device. this must happen after all surfaces
+    MISSING ref comment: returns the one-based sgr row for a click at or below the prompt.
+    MISSING ref comment: the app-scoped render device, shared by the renderers of all surfaces.
+G3b [crash]: distinctive ref comments=167 missing=0 review=2
+    REVIEW (ratio 0.75): linux). on darwin the thread names itself in initthread.
+    REVIEW (ratio 0.76): naming the thread from here only works on some platforms (e.g.
+G3b [datastruct]: distinctive ref comments=635 missing=4 review=4
+    REVIEW (ratio 0.68): const ids = comptimeintset(u16, &.{ 2026, 25, 1049 });
+    REVIEW (ratio 0.68): fn nameof(id: u16) ?[]const u8 {
+    REVIEW (ratio 0.68): freed items, shared by every pool of this item type in the
+    REVIEW (ratio 0.64): return the number of items that are allocated but not in use.
+    MISSING ref comment: always zero. freed items go to a free list shared by every pool
+    MISSING ref comment: of this item type in the module, so no single pool owns them.
+    MISSING ref comment: return the number of unused items this pool holds, which is
+    MISSING ref comment: these wait in the free list until `create` hands them out again.
+G3b [extra]: distinctive ref comments=20 missing=0 review=2
+    REVIEW (ratio 0.67): generates the syntax file at comptime.
+    REVIEW (ratio 0.72): this results leading or tailing spaces being necessary to move onto the next match.
+G3b [font]: distinctive ref comments=3365 missing=0 review=0
+G3b [global]: distinctive ref comments=106 missing=0 review=2
+    REVIEW (ratio 0.64): asserts that `self.io_impl` has been initialized.
+    REVIEW (ratio 0.78): returns the global state action.
+G3b [input]: distinctive ref comments=1113 missing=0 review=0
+G3b [inspector]: distinctive ref comments=202 missing=0 review=0
+G3b [lib]: distinctive ref comments=99 missing=0 review=0
+G3b [os]: distinctive ref comments=685 missing=0 review=2
+    REVIEW (ratio 0.75): first check the env var. on windows we treat `localappdata` as a
+    REVIEW (ratio 0.66): not great, but xev timer can't fail atm
+G3b [render-types]: distinctive ref comments=149 missing=0 review=0
+G3b [renderer]: distinctive ref comments=1800 missing=11 review=7
+    REVIEW (ratio 0.65): by the render device, not by us.
+    REVIEW (ratio 0.74): context can only be current on one thread at a time.
+    REVIEW (ratio 0.69): frames. apprts use this to orient frames when presenting.
+    REVIEW (ratio 0.75): only the case while unrealized (gtk) or after the render
+    REVIEW (ratio 0.73): release swap chain and shaders. shaders are only freed
+    REVIEW (ratio 0.62): we'd like to render to.
+    REVIEW (ratio 0.73): whether +y is down in the coordinate space of exported
+    MISSING ref comment: as otherwise it might fallback to opengl es
+    MISSING ref comment: bind to opengl api explicitly before we create the context,
+    MISSING ref comment: create a mtlcommandqueue for our app-scoped mtldevice.
+    MISSING ref comment: create our context. contexts are surface-scoped because a
+    MISSING ref comment: destroying a surface (macos never does), so mark it
+    MISSING ref comment: the app-scoped render device from which surface renderers are created.
+    MISSING ref comment: the device state that corresponds to the physical gpu
+    MISSING ref comment: the mtldevice is app-scoped and destroyed
+    MISSING ref comment: thread exits; displayrealized rebuilds the swap chain.
+    MISSING ref comment: unrealized. this also stops any later draw.
+    MISSING ref comment: while unrealized and not every apprt unrealizes before
+G3b [simd]: distinctive ref comments=177 missing=0 review=0
+G3b [synthetic]: distinctive ref comments=101 missing=0 review=0
+G3b [terminfo]: distinctive ref comments=99 missing=0 review=0
+G3b [termio]: distinctive ref comments=1228 missing=4 review=6
+    REVIEW (ratio 0.65): or if due to race conditions it doesn't exist or any various other
+    REVIEW (ratio 0.72): password is allocated and must be freed.
+    REVIEW (ratio 0.7): reasons. we don't want to crash the entire process if this fails so we
+    REVIEW (ratio 0.68): sets the fd to non-blocking mode. returns false on failure.
+    REVIEW (ratio 0.64): this functionality has been taken from zig stdlib, a simplified
+    REVIEW (ratio 0.78): version of the exec bits with path search so that we can just
+    MISSING ref comment: and xtchecksum may change how it's calculated.
+    MISSING ref comment: convert the vt-xt-checksum-extension config, whose values are named for
+    MISSING ref comment: what they turn on, to the xtchecksum bits, which turn things off.
+    MISSING ref comment: whether decrqcra may report the checksum of an area of the screen,
+G3b [unicode]: distinctive ref comments=124 missing=0 review=0
+G3b [util]: distinctive ref comments=146 missing=0 review=0
+G3b [vt]: distinctive ref comments=14713 missing=277 review=103
+    REVIEW (ratio 0.74): (markmutated sets both); dirty set without a generation change
+    REVIEW (ratio 0.79): `page_serial`. consequently, every previously captured pointer-plus-serial
+    REVIEW (ratio 0.71): `page` metadata. a resident page can access the mapping directly since
+    REVIEW (ratio 0.65): a and n accept the same k= option as p, and the terminal
+    REVIEW (ratio 0.79): a caller may pass our current tracked selection back to us by value, so
+    REVIEW (ratio 0.67): a full reset also removes the progress report and program
+    REVIEW (ratio 0.67): a full reset clears every record.
+    REVIEW (ratio 0.62): a group of raw values for the vectorized operations.
+    REVIEW (ratio 0.64): a height-only resize also preserves pending wrap.
+    REVIEW (ratio 0.67): a prompt drawn at the right edge of the line.
+    MISSING ref comment: "7400;status=busy" and `terminator` is `.bel`.
+    MISSING ref comment: "hello" sums to 0x214, which the dec checksum negates.
+    MISSING ref comment: (c is null). supported oscs never reach this.
+    MISSING ref comment: (osc 7501). programs use these to say what they are doing, such
+    MISSING ref comment: - osc: `stream.options.osc_unknown_max_bytes` when creating the
+    MISSING ref comment: .command_end => if (event.exit_code) |code| {
+    MISSING ref comment: // match the number and its ";" so "74000;" is not included.
+    MISSING ref comment: // the program sent can instead of bel, so the title never changes.
+    MISSING ref comment: 1. `prompt_start`: the shell starts drawing a prompt.
+    MISSING ref comment: 2. `input_start`: the prompt is drawn and the user can type.
+    MISSING ref comment: 3. `output_start`: the user submitted the command and it runs.
+    MISSING ref comment: `esc c`). the terminal has already reset itself, which clears
+    MISSING ref comment: `osc 7501 ; ?`, through `write_pty`. while this is null, the
+    MISSING ref comment: `osc.parser.unknown_max_bytes` for how the limit behaves.
+    MISSING ref comment: `pwd_changed` are not called for this, so update anything that
+    MISSING ref comment: `terminator_ch` is the byte that ended the sequence. commands that
+    MISSING ref comment: `unknown_sequence` callback. the data is only valid until the
+    MISSING ref comment: a bel reply, and any other byte, or null, gets an st reply.
+    MISSING ref comment: a cursor without pending wrap must not advance an extra cell.
+    MISSING ref comment: a description of what went wrong, for `command_end` when the
+    MISSING ref comment: a fixed capture (osc 2) cancelled by can.
+    MISSING ref comment: a fresh list holds the preheated pool items, one of which backs
+    MISSING ref comment: a full reset (ris) removes every record. when that happens, the
+    MISSING ref comment: a full reset reports the progress removal first, and the terminal
+    MISSING ref comment: a full reset restores the dec checksum.
+G3b [vt-c]: distinctive ref comments=797 missing=62 review=12
+    REVIEW (ratio 0.66): - `clipboard_read`: clipboard reads are denied.
+    REVIEW (ratio 0.75): - `clipboard_write`: kitty clipboard writes fail up front instead of
+    REVIEW (ratio 0.69): a few trampolines are only installed while their c callback is set,
+    REVIEW (ratio 0.69): a reset restores the configured calculation, not the dec one.
+    REVIEW (ratio 0.75): a size smaller than the first layout is rejected and nothing is
+    REVIEW (ratio 0.79): c function pointer type for the semantic_prompt callback. the event
+    REVIEW (ratio 0.67): entering the alternate screen creates it.
+    REVIEW (ratio 0.63): fails to grow, so the terminal's allocator is the lever.
+    REVIEW (ratio 0.65): installed dynamically because the terminal only answers the
+    REVIEW (ratio 0.63): the alternate screen is created on first use. until then its
+    MISSING ref comment: (go, for example) require the memory to be initialized first. it
+    MISSING ref comment: - `program_status`: the osc 7501 support query gets no reply, so
+    MISSING ref comment: - `unknown_sequence`: unknown sequences are skipped without being
+    MISSING ref comment: 1x2 rgb image, 6 bytes of pixel data.
+    MISSING ref comment: `caller_size` instead of our own size, so that copying the result
+    MISSING ref comment: `osc.command.programstatus.kind` but adds `none` first, because c has
+    MISSING ref comment: a null value disables capture again.
+    MISSING ref comment: a program status report (osc 7501). absent text is an empty string,
+    MISSING ref comment: a reader that ignores a refused write would otherwise paste what
+    MISSING ref comment: a shell integration event. see `handler.semanticprompt`.
+    MISSING ref comment: a size larger than ours, from a caller built against a newer
+    MISSING ref comment: a smaller size means the caller doesn't have every field of
+    MISSING ref comment: a soft reset (decstr) doesn't report a reset.
+    MISSING ref comment: a write is only refused when the buffer the text is read into
+    MISSING ref comment: aborted unknown oscs and supported oscs are not reported.
+    MISSING ref comment: absent values are empty, none, or -1.
+    MISSING ref comment: also means a callback that returns true without setting `data` is
+    MISSING ref comment: an absent kind is `none`, and absent progress is -1. see the header
+    MISSING ref comment: an osc sequence whose number is not implemented.
+    MISSING ref comment: because the stream handler behaves differently when the zig effect is
+    MISSING ref comment: both buffers hold the longest text the parser accepts, so
+    MISSING ref comment: callback stores a pointer into it, and runtimes that track pointers
+    MISSING ref comment: caught by the null check below. the header documents this guarantee.
+    MISSING ref comment: collecting data for a write that can never finish.
+    MISSING ref comment: every allocation from here on is refused, the first write's
+RED: dropped reference comment(s) or an invalid NOT-CARRIED row — see MISSING / NOT-CARRIED-INVALID above (R1 violation)
+g3b-strict exit=1

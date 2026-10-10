@@ -54,12 +54,14 @@ use std::sync::Arc;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_io_surface::IOSurfaceRef;
-use objc2_metal::{MTLCommandQueue, MTLDevice, MTLGPUFamily};
+use objc2_metal::{MTLCommandQueue, MTLDevice};
 
 use rustty_render_types::AlphaBlending; // ← Part A hoist (no config edge)
 
 use super::api;
 use super::buffer::BufferOptions;
+// `pub const Device = @import("metal/Device.zig");` (Metal.zig:20, `40d5b860d`).
+pub use super::device::Device;
 use super::frame::{self, CompletionContext, CompletionFn, Frame};
 use super::iosurface_layer::{self, IOSurfaceLayer};
 use super::sampler::SamplerOptions;
@@ -193,8 +195,16 @@ pub struct Metal {
     // renderer byte. `attach_view` swaps in a new cell (before the render loop
     // starts); an in-flight frame keeps presenting through the cell it began with.
     layer: Arc<LayerCell>,
-    /// MTLDevice
-    pub device: Retained<ProtocolObject<dyn MTLDevice>>,
+
+    /// The shared render device.
+    //
+    // P8-W6 T2 (`40d5b860d`): `device: *const Device` (Metal.zig:44-45). The
+    // MTLDevice, `default_storage_mode` and `max_texture_size` moved into the
+    // app-scoped `metal::device::Device` (`metal/Device.zig`), which the core
+    // `App` owns (`DeviceBox`, N522) and frees after every surface. Read through
+    // [`Metal::device`].
+    device: *const Device,
+
     /// MTLCommandQueue
     pub queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
 
@@ -203,16 +213,6 @@ pub struct Metal {
     // `rustty_render_types::AlphaBlending` (no config edge). Drives sRGB pixel-format
     // selection in init_shaders/init_target/texture_options via `blending.is_linear()`.
     pub blending: AlphaBlending,
-
-    /// The default storage mode to use for resources created with our device.
-    ///
-    /// This is based on whether the device is a discrete GPU or not, since
-    /// discrete GPUs do not have unified memory and therefore do not support
-    /// the "shared" storage mode, instead we have to use the "managed" mode.
-    pub default_storage_mode: api::StorageMode,
-
-    /// The maximum 2D texture width and height supported by the device.
-    pub max_texture_size: u32,
 
     /// We start an AutoreleasePool before `drawFrame` and end it afterwards.
     // Metal.zig: `autorelease_pool: ?*objc.AutoreleasePool = null`.
@@ -254,112 +254,45 @@ impl Metal {
     pub const SWAP_CHAIN_COUNT: usize = 3;
 }
 
-/// `Metal.zig` `fn chooseDevice() error{NoMetalDevice}!objc.Object`.
-fn choose_device() -> Result<Retained<ProtocolObject<dyn MTLDevice>>, Error> {
-    let mut chosen_device: Option<Retained<ProtocolObject<dyn MTLDevice>>> = None;
-
-    // .macos arm (this module is `#[cfg(target_os = "macos")]`). The Zig `.ios`
-    // arm (`MTLCreateSystemDefaultDevice`) and `else => @compileError` are dead
-    // comptime arms preserved as comments (R1):
-    //     .ios => chosen_device = objc.Object.fromId(mtl.MTLCreateSystemDefaultDevice());
-    //     else => @compileError("unsupported target for Metal");
-    // Zig `defer devices.release()` → ARC: the `Retained` array drops at end of
-    // scope. Zig `var iter = devices.iterate(); while (iter.next()) |device|` maps
-    // to indexed `count()`/`objectAtIndex()` (each returns an owned `Retained`).
-    let devices = api::MTLCopyAllDevices(); // Retained<NSArray<ProtocolObject<dyn MTLDevice>>>
-    let n = devices.count();
-    for i in 0..n {
-        // `objectAtIndex` returns Retained<ProtocolObject<dyn MTLDevice>>.
-        let device = devices.objectAtIndex(i);
-        // We want a GPU that's connected to a display.
-        if device.isHeadless() {
-            continue;
-        }
-        chosen_device = Some(device.clone());
-        // If the user has an eGPU plugged in, they probably want
-        // to use it. Otherwise, integrated GPUs are better for
-        // battery life and thermals.
-        if device.isRemovable() || device.isLowPower() {
-            break;
-        }
-    }
-
-    // Zig `const device = chosen_device orelse return error.NoMetalDevice; return
-    // device.retain();` — the `Retained` already owns the +1 (objc2 ARC), so
-    // returning it *is* the `retain()`; no explicit retain needed.
-    chosen_device.ok_or(Error::NoMetalDevice)
-}
-
-/// Determines the maximum 2D texture size supported by the device.
-/// We need to clamp our frame size to this if it's larger.
-// Metal.zig `fn queryMaxTextureSize(device: objc.Object) u32`.
-fn query_max_texture_size(device: &ProtocolObject<dyn MTLDevice>) -> u32 {
-    // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf
-    if device.supportsFamily(MTLGPUFamily::Apple10) {
-        return 32768;
-    }
-    if device.supportsFamily(MTLGPUFamily::Apple3) {
-        return 16384;
-    }
-    8192
-}
-
-/// The four device-derived fields the offscreen-portable init prologue produces
-/// (`init_device`): device, command queue, default storage mode, max texture size.
-/// A named alias keeps the shared-prologue return type readable (clippy
-/// `type_complexity`).
-type DeviceParts = (
-    Retained<ProtocolObject<dyn MTLDevice>>,
-    Retained<ProtocolObject<dyn MTLCommandQueue>>,
-    api::StorageMode,
-    u32,
-);
+// P8-W6 T2 (`40d5b860d`): `chooseDevice`, `queryMaxTextureSize` and the device
+// metadata half of `init` moved to `metal/Device.zig` (`super::device`).
 
 impl Metal {
-    /// The offscreen-portable half of `Metal.zig` `init` (lines 72-88): chooseDevice,
-    /// newCommandQueue, and device metadata (`default_storage_mode`,
-    /// `max_texture_size`). Shared by `init_offscreen` (layer None) and `init`
-    /// (windowed, adds the view attach) so neither duplicates it. Returns the four
-    /// device-derived fields.
-    fn init_device() -> Result<DeviceParts, Error> {
-        // Choose our MTLDevice and create a MTLCommandQueue for that device.
-        let device = choose_device()?;
-        // errdefer device.release() — ARC via Retained Drop on the early return below.
-        let queue = device.newCommandQueue().ok_or(Error::NoMetalDevice)?;
-        // errdefer queue.release() — ARC via Retained Drop.
+    /// The offscreen-portable half of `Metal.zig` `init` (`Metal.zig:68-71` at
+    /// `a60e9e2a5`): the MTLCommandQueue for the app-scoped MTLDevice. Shared by
+    /// `init_offscreen` (layer None) and `init` (windowed, adds the view attach)
+    /// so neither duplicates it.
+    ///
+    /// # Safety
+    /// `device` points at a live, initialized [`Device`] that outlives the
+    /// returned `Metal` (the core `App` frees it after every surface).
+    unsafe fn init_queue(
+        device: *const Device,
+    ) -> Result<Retained<ProtocolObject<dyn MTLCommandQueue>>, Error> {
+        // Create a MTLCommandQueue for our app-scoped MTLDevice.
+        // const mtl_device = device.device;
+        // const queue = mtl_device.msgSend(objc.Object, objc.sel("newCommandQueue"), .{});
+        // errdefer queue.release();   (ARC via Retained Drop)
+        //
         // (Zig `newCommandQueue` cannot fail in practice; the `?*anyopaque` null
         // maps to None → NoMetalDevice.)
-
-        // Grab metadata about the device.
-        //   .ios => .shared;  else => hasUnifiedMemory ? .shared : .managed
-        // (the `.ios` arm — manage mode is not supported by iOS — is a dead
-        //  comptime arm preserved in this comment, R1.)
-        let default_storage_mode = if device.hasUnifiedMemory() {
-            api::StorageMode::Shared
-        } else {
-            api::StorageMode::Managed
-        };
-        let max_texture_size = query_max_texture_size(&device);
-        // log.debug("device properties default_storage_mode={} max_texture_size={}",
-        //           .{ default_storage_mode, max_texture_size });
-        // (R1 rendering note: Zig's `{}` on an enum prints the fully qualified
-        //  `<type>.<tag>`; the port has only a derived `Debug`, so this renders
-        //  `Shared`/`Managed` where the reference renders
-        //  `mtl.MTLResourceOptions.StorageMode.shared`. Known, accepted.)
-        log::debug!(
-            target: LOG_SCOPE,
-            "device properties default_storage_mode={default_storage_mode:?} max_texture_size={max_texture_size}"
-        );
-
-        Ok((device, queue, default_storage_mode, max_texture_size))
+        // SAFETY: the caller's contract.
+        let mtl_device = unsafe { &(*device).device };
+        mtl_device.newCommandQueue().ok_or(Error::NoMetalDevice)
     }
 
     /// OFFSCREEN constructor (CHUNK-2 golden/smoke entry point). Runs the
-    /// offscreen-portable half of `Metal.zig`'s `init`: chooseDevice +
-    /// newCommandQueue + device metadata, WITHOUT the NSView/IOSurfaceLayer half
-    /// (windowing-host seam M-2). Takes `blending` + the fixed offscreen size
-    /// directly, so CHUNK 2 needs neither `renderer::Options` nor `apprt`.
-    pub fn init_offscreen(
+    /// offscreen-portable half of `Metal.zig`'s `init`: newCommandQueue on the
+    /// shared `device`, WITHOUT the NSView/IOSurfaceLayer half (windowing-host
+    /// seam M-2). Takes `blending` + the fixed offscreen size directly, so CHUNK 2
+    /// needs neither `renderer::Options` nor `apprt`.
+    ///
+    /// # Safety
+    /// `device` points at a live, initialized [`Device`] that outlives the
+    /// returned `Metal` (`Options.device`; the core `App` frees it after every
+    /// surface, `App.zig` `deinit`).
+    pub unsafe fn init_offscreen(
+        device: *const Device,
         blending: AlphaBlending,
         width: u32,
         height: u32,
@@ -367,7 +300,8 @@ impl Metal {
         // comptime switch (builtin.os.tag) { .macos, .ios => {}, else => @compileError(...) };
         //   → the module cfg `#[cfg(target_os = "macos")]` is that comptime gate.
 
-        let (device, queue, default_storage_mode, max_texture_size) = Self::init_device()?;
+        // SAFETY: the caller's contract.
+        let queue = unsafe { Self::init_queue(device) }?;
 
         // OFFSCREEN seam M-2: the reference here fetches the underlying view
         // (`opts.rt_surface.platform.nsview`) + scale factor and builds/attaches an
@@ -383,41 +317,34 @@ impl Metal {
             device,
             queue,
             blending,
-            default_storage_mode,
-            max_texture_size,
             autorelease_pool: None,
             offscreen_size: SurfaceSize { width, height },
             display_ctx: core::ptr::null_mut(),
         })
     }
 
-    /// DEFERRED (windowing-host seam M-2): the real `Metal.zig` `init(alloc, opts)`.
+    /// DEFERRED (windowing-host seam M-2): the real `Metal.zig` `init(alloc, device, opts)`.
     ///
     /// Needs `opts.rt_surface.platform.nsview` (a live NSView) + `IOSurfaceLayer` +
     /// the wantsLayer/addSublayer/clipsToBounds/contentsScale/
     /// needsDisplayOnBoundsChange attach. None of that is offscreen-portable; it
     /// lands with the windowing-host tier. The offscreen ctor is `init_offscreen`.
     ///
-    /// Verbatim Zig body (Metal.zig:64-156), preserved for R1/R5:
-    // pub fn init(alloc: Allocator, opts: rendererpkg.Options) !Metal {
+    /// Verbatim Zig body (Metal.zig:56-137 at `a60e9e2a5`), preserved for R1/R5:
+    // pub fn init(
+    //     alloc: Allocator,
+    //     device: *const Device,
+    //     opts: rendererpkg.Options,
+    // ) !Metal {
     //     comptime switch (builtin.os.tag) {
     //         .macos, .ios => {},
     //         else => @compileError("unsupported platform for Metal"),
     //     };
     //     _ = alloc;
-    //     // Choose our MTLDevice and create a MTLCommandQueue for that device.
-    //     const device = try chooseDevice();
-    //     errdefer device.release();
-    //     const queue = device.msgSend(objc.Object, objc.sel("newCommandQueue"), .{});
+    //     // Create a MTLCommandQueue for our app-scoped MTLDevice.
+    //     const mtl_device = device.device;
+    //     const queue = mtl_device.msgSend(objc.Object, objc.sel("newCommandQueue"), .{});
     //     errdefer queue.release();
-    //     // Grab metadata about the device.
-    //     const default_storage_mode: mtl.MTLResourceOptions.StorageMode = switch (comptime builtin.os.tag) {
-    //         .ios => .shared,
-    //         else => if (device.getProperty(bool, "hasUnifiedMemory")) .shared else .managed,
-    //     };
-    //     const max_texture_size = queryMaxTextureSize(device);
-    //     log.debug("device properties default_storage_mode={} max_texture_size={}",
-    //         .{ default_storage_mode, max_texture_size });
     //     const ViewInfo = struct { view: objc.Object, scaleFactor: f64 };
     //     // Get the metadata about our underlying view that we'll be rendering to.
     //     const info: ViewInfo = switch (apprt.runtime) {
@@ -468,22 +395,26 @@ impl Metal {
     //         .device = device,
     //         .queue = queue,
     //         .blending = opts.config.blending,
-    //         .default_storage_mode = default_storage_mode,
-    //         .max_texture_size = max_texture_size,
     //     };
     // }
-    /// `Metal.zig` `init(alloc, opts)` — the on-screen constructor. `view` is the
+    /// `Metal.zig` `init(alloc, device, opts)` — the on-screen constructor.
+    /// `device` is the app-scoped render device (`Options.device`), `view` is the
     /// host NSView/UIView (ghostty `info.view`), `scale_factor` is
     /// `opts.rt_surface.content_scale.x` (ghostty `info.scaleFactor`), `blending`
     /// maps ghostty's `opts.config.blending`. `view` is type-erased
     /// (`&objc2::runtime::AnyObject`, byte-faithful to `info.view: objc.Object`) to
     /// keep R4 (no app-kit dep). See the verbatim Zig body above.
-    pub fn init(
+    ///
+    /// # Safety
+    /// As [`Metal::init_offscreen`]: `device` is live and outlives the result.
+    pub unsafe fn init(
+        device: *const Device,
         view: &objc2::runtime::AnyObject,
         scale_factor: f64,
         blending: AlphaBlending,
     ) -> Result<Metal, Error> {
-        let (device, queue, default_storage_mode, max_texture_size) = Self::init_device()?;
+        // SAFETY: the caller's contract.
+        let queue = unsafe { Self::init_queue(device) }?;
 
         // Create an IOSurfaceLayer which we can assign to the view to make it in to a
         // "layer-hosting view", so that we can manually control the layer contents.
@@ -498,7 +429,7 @@ impl Metal {
         // On macOS we do this by making the view "layer-hosting" by assigning it to
         // the view's `layer` property BEFORE setting `wantsLayer` to `true` (the
         // ORDER is load-bearing). The Zig `.ios` arm
-        // (`view_layer.addSublayer:(layer.layer.value)`, Metal.zig:128-131) is a dead
+        // (`view_layer.addSublayer:(layer.layer.value)`, Metal.zig:111-114) is a dead
         // comptime arm preserved as a comment (R1).
         let l: *const objc2_quartz_core::CALayer = layer.as_ca_layer();
         // SAFETY: `view` is a live NSView; `setLayer:`/`setWantsLayer:` are the
@@ -525,8 +456,6 @@ impl Metal {
             device,
             queue,
             blending,
-            default_storage_mode,
-            max_texture_size,
             autorelease_pool: None,
             // OFFSCREEN seam M-3 no longer drives surface_size on-screen (the layer
             // branch, W1-3); keep a zeroed offscreen_size — it is never read while
@@ -537,6 +466,15 @@ impl Metal {
             },
             display_ctx: core::ptr::null_mut(),
         })
+    }
+
+    /// The shared render device (`self.device.*`).
+    #[inline]
+    pub fn device(&self) -> &Device {
+        // SAFETY: `device` came from `Options.device` (or a test's device), live
+        // for this `Metal`'s whole life (the constructors' contract); it is only
+        // ever read, on any thread (see `metal::device`'s sharing note).
+        unsafe { &*self.device }
     }
 
     /// The layer frames are presented on (`None` offscreen).
@@ -685,11 +623,11 @@ impl Metal {
     // pub inline fn bufferOptions(self: Metal) bufferpkg.Options
     fn buffer_options(&self) -> BufferOptions {
         BufferOptions {
-            device: self.device.clone(),
+            device: self.device().device.clone(),
             resource_options: api::MTLResourceOptions {
                 // Indicate that the CPU writes to this resource but never reads it.
                 cpu_cache_mode: api::CPUCacheMode::WriteCombined,
-                storage_mode: self.default_storage_mode,
+                storage_mode: self.device().default_storage_mode,
                 hazard_tracking_mode: api::HazardTrackingMode::Default, // Zig field-default `.default`
             },
         }
@@ -721,7 +659,7 @@ impl Metal {
     // pub inline fn textureOptions(self: Metal) Texture.Options
     pub fn texture_options(&self) -> TextureOptions {
         TextureOptions {
-            device: self.device.clone(),
+            device: self.device().device.clone(),
             // Using an `*_srgb` pixel format makes Metal gamma encode the pixels
             // written to it *after* blending, which means we get linear alpha
             // blending rather than gamma-incorrect blending.
@@ -733,7 +671,7 @@ impl Metal {
             resource_options: api::MTLResourceOptions {
                 // Indicate that the CPU writes to this resource but never reads it.
                 cpu_cache_mode: api::CPUCacheMode::WriteCombined,
-                storage_mode: self.default_storage_mode,
+                storage_mode: self.device().default_storage_mode,
                 hazard_tracking_mode: api::HazardTrackingMode::Default,
             },
             usage: api::MTLTextureUsage {
@@ -752,7 +690,7 @@ impl Metal {
     // pub inline fn samplerOptions(self: Metal) Sampler.Options
     pub fn sampler_options(&self) -> SamplerOptions {
         SamplerOptions {
-            device: self.device.clone(),
+            device: self.device().device.clone(),
             // These parameters match Shadertoy behaviors.
             min_filter: api::MTLSamplerMinMagFilter::Linear,
             mag_filter: api::MTLSamplerMinMagFilter::Linear,
@@ -765,12 +703,12 @@ impl Metal {
     // pub inline fn imageTextureOptions(self, format, srgb) Texture.Options
     pub fn image_texture_options(&self, format: ImageTextureFormat, srgb: bool) -> TextureOptions {
         TextureOptions {
-            device: self.device.clone(),
+            device: self.device().device.clone(),
             pixel_format: format.to_pixel_format(srgb),
             resource_options: api::MTLResourceOptions {
                 // Indicate that the CPU writes to this resource but never reads it.
                 cpu_cache_mode: api::CPUCacheMode::WriteCombined,
-                storage_mode: self.default_storage_mode,
+                storage_mode: self.device().default_storage_mode,
                 hazard_tracking_mode: api::HazardTrackingMode::Default,
             },
             usage: api::MTLTextureUsage {
@@ -803,12 +741,12 @@ impl Metal {
 
         Texture::init(
             TextureOptions {
-                device: self.device.clone(),
+                device: self.device().device.clone(),
                 pixel_format,
                 resource_options: api::MTLResourceOptions {
                     // Indicate that the CPU writes to this resource but never reads it.
                     cpu_cache_mode: api::CPUCacheMode::WriteCombined,
-                    storage_mode: self.default_storage_mode,
+                    storage_mode: self.device().default_storage_mode,
                     hazard_tracking_mode: api::HazardTrackingMode::Default,
                 },
                 usage: api::MTLTextureUsage {
@@ -828,7 +766,7 @@ impl Metal {
     pub fn init_target(&self, width: usize, height: usize) -> Result<Target, target::Error> {
         Target::init(target::Options {
             // deref-coerces &Retained<..> → &ProtocolObject<..> (struct-field site)
-            device: &self.device,
+            device: &self.device().device,
             // Using an `*_srgb` pixel format makes Metal gamma encode the pixels
             // written to it *after* blending, which means we get linear alpha
             // blending rather than gamma-incorrect blending.
@@ -837,7 +775,7 @@ impl Metal {
             } else {
                 api::MTLPixelFormat::BGRA8Unorm
             },
-            storage_mode: self.default_storage_mode,
+            storage_mode: self.device().default_storage_mode,
             width,
             height,
         })
@@ -853,7 +791,7 @@ impl Metal {
     // `custom_shaders: []const [:0]const u8` → `&[&CStr]`.
     pub fn init_shaders(&self, custom_shaders: &[&CStr]) -> Result<Shaders, shaders::Error> {
         Shaders::init(
-            &self.device,
+            &self.device().device,
             custom_shaders,
             // Using an `*_srgb` pixel format makes Metal gamma encode
             // the pixels written to it *after* blending, which means
@@ -882,8 +820,8 @@ impl Metal {
     //     // possible texture size since we can't create a screen buffer (texture)
     //     // larger than that.
     //     return .{
-    //         .width = @min(@as(u32, @intFromFloat(bounds.size.width * scale)), self.max_texture_size),
-    //         .height = @min(@as(u32, @intFromFloat(bounds.size.height * scale)), self.max_texture_size),
+    //         .width = @min(@as(u32, @intFromFloat(bounds.size.width * scale)), self.device.max_texture_size),
+    //         .height = @min(@as(u32, @intFromFloat(bounds.size.height * scale)), self.device.max_texture_size),
     //     };
     pub fn surface_size(&self) -> Result<SurfaceSize, Error> {
         match self.layer() {
@@ -893,13 +831,20 @@ impl Metal {
                 let scale = layer.as_ca_layer().contentsScale(); // CGFloat (f64)
                                                                  // @intFromFloat → `as u32` (trunc-toward-zero, byte-faithful); clamp each axis.
                 Ok(SurfaceSize {
-                    width: ((bounds.size.width * scale) as u32).min(self.max_texture_size),
-                    height: ((bounds.size.height * scale) as u32).min(self.max_texture_size),
+                    width: ((bounds.size.width * scale) as u32).min(self.device().max_texture_size),
+                    height: ((bounds.size.height * scale) as u32)
+                        .min(self.device().max_texture_size),
                 })
             }
             None => Ok(SurfaceSize {
-                width: self.offscreen_size.width.min(self.max_texture_size),
-                height: self.offscreen_size.height.min(self.max_texture_size),
+                width: self
+                    .offscreen_size
+                    .width
+                    .min(self.device().max_texture_size),
+                height: self
+                    .offscreen_size
+                    .height
+                    .min(self.device().max_texture_size),
             }),
         }
     }
@@ -952,58 +897,9 @@ impl Metal {
         )
     }
 
-    /// Warm up the Metal device machinery. The first Metal device query in
-    /// a process takes multiple milliseconds; once warm, subsequent queries
-    /// are effectively free. Calling this early (e.g. on a background
-    /// thread at app startup; Metal device queries are thread-safe) moves
-    /// that one-time cost off the critical path of the first surface's
-    /// renderer initialization.
-    //
-    // pub fn warmup() void {
-    //
-    // (`c454a3bf4`..`931a538a3` warmup chain, END STATE — the intermediate
-    // `threadedWarmup` shape was dissolved and is NOT ported.)
-    pub fn warmup() {
-        // const device = chooseDevice() catch return;
-        // defer device.release();
-        //
-        // (ARC: the `Retained` device drops at end of scope.)
-        let Ok(device) = choose_device() else { return };
-
-        // Create and release a command queue. The first command queue
-        // created for a device pays additional one-time driver setup
-        // costs; subsequent creations are much cheaper.
-        // const queue = device.msgSend(objc.Object, objc.sel("newCommandQueue"), .{});
-        // queue.release();
-        let queue = device.newCommandQueue();
-        drop(queue);
-
-        // Build and discard our shader pipelines for both pixel formats we
-        // may use (which one is used depends on the blending config). The
-        // first pipeline state creation compiles shaders which is slow;
-        // once warm, later creations hit driver and OS caches.
-        //
-        // (Zig `inline for` over the two comptime formats -> a plain loop;
-        // `shaders.Shaders.init(std.heap.c_allocator, ..)`'s allocator param
-        // dissolved in the port — the shaders.rs `init` PORT NOTE.)
-        for format in [
-            api::MTLPixelFormat::BGRA8Unorm_sRGB,
-            api::MTLPixelFormat::BGRA8Unorm,
-        ] {
-            match Shaders::init(&device, &[], format) {
-                // var s_mut = s;
-                // s_mut.deinit(std.heap.c_allocator);
-                Ok(s) => {
-                    let mut s_mut = s;
-                    s_mut.deinit();
-                }
-                Err(err) => {
-                    // log.warn("metal warmup shader init failed err={}", .{err});
-                    log::warn!(target: LOG_SCOPE, "metal warmup shader init failed err={err:?}");
-                }
-            }
-        }
-    }
+    // P8-W6 T2 (`40d5b860d`): `warmup` moved to `metal/Device.zig`
+    // (`metal::device::Device::warmup`), where `App.create`'s `@hasDecl` probe now
+    // looks for it.
 
     /// Present the provided target.
     // pub inline fn present(self: *Metal, target: Target, sync: bool) !void
@@ -1086,7 +982,10 @@ fn abort_on_unwind<R>(f: impl FnOnce() -> R) -> R {
 impl Metal {
     // pub fn deinit(self: *Metal) void {
     //     self.queue.release();
-    //     self.device.release();
+    //
+    //     // The MTLDevice is app-scoped and destroyed
+    //     // by the render device, not by us.
+    //
     //     self.layer.release();
     // }
     //
@@ -1096,7 +995,7 @@ impl Metal {
     // display pass must not reach the freed renderer). That clear, and freeing
     // the port-only callback context (N437), are what must happen at `deinit`
     // time, so they live here and `Renderer::deinit` calls it. The ARC releases
-    // of `queue`/`device`/`layer` are the value's drop, which the owner runs right
+    // of `queue`/`layer` are the value's drop, which the owner runs right
     // after `deinit` (`rustty_core::renderer_seam::RendererBox::dealloc_after_deinit`).
     // Idempotent: `Drop` calls it again.
     pub fn deinit(&mut self) {
@@ -1125,7 +1024,8 @@ impl Drop for Metal {
         // (a no-op when `deinit` already ran).
         self.deinit();
 
-        // ARC: `queue`/`device` (Retained) release automatically on drop; `layer`
+        // ARC: `queue` (Retained) releases automatically on drop (the MTLDevice is
+        // the app-scoped `Device`'s, `40d5b860d`: not released here); `layer`
         // (the `Option<IOSurfaceLayer>`) releases via `IOSurfaceLayer`'s
         // `Retained<CALayer>` Drop — `self.layer.release()` (Metal.zig:161) ⇒ that
         // Drop. Release order is immaterial under ARC. If a pool is still pushed here
@@ -1196,10 +1096,17 @@ mod tests {
     #[test]
     fn metal_offscreen_construct_and_begin_frame() {
         // Headless CI may lack a Metal device.
-        let metal = match Metal::init_offscreen(AlphaBlending::Native, 4, 4) {
+        let Some(device) =
+            crate::metal::test_support::device_or_skip("metal_offscreen_construct_and_begin_frame")
+        else {
+            return;
+        };
+        // SAFETY: the test device is process-lived.
+        let metal = match unsafe { Metal::init_offscreen(device, AlphaBlending::Native, 4, 4) } {
             Ok(m) => m,
-            // `init_offscreen` only ever yields `NoMetalDevice`; the `ObjCFailed`
-            // arm (W1-3) is unreachable here but keeps the match exhaustive.
+            // `init_offscreen` only ever yields `NoMetalDevice` (a failed
+            // `newCommandQueue`); the `ObjCFailed` arm (W1-3) is unreachable here
+            // but keeps the match exhaustive.
             Err(e @ (Error::NoMetalDevice | Error::ObjCFailed)) => {
                 // F5 strict-mode pivot (metal::test_support).
                 crate::metal::test_support::require_metal_or_skip(
@@ -1214,10 +1121,10 @@ mod tests {
         // Managed. Accept either (per ADV-FIX B.8) so the test skips-or-passes on
         // any Metal host rather than failing on Intel.
         assert!(matches!(
-            metal.default_storage_mode,
+            metal.device().default_storage_mode,
             api::StorageMode::Shared | api::StorageMode::Managed
         ));
-        assert!(metal.max_texture_size >= 8192);
+        assert!(metal.device().max_texture_size >= 8192);
         assert_eq!(
             metal.surface_size().unwrap(),
             SurfaceSize {

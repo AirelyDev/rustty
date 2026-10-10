@@ -1909,6 +1909,86 @@ fn pagelist_resize_reflow_less_cols_cursor_in_final_blank_cell() {
     s.deinit();
 }
 
+// ref: test "PageList resize reflow pin in blank cells after line break"
+#[test]
+fn pagelist_resize_reflow_pin_in_blank_cells_after_line_break() {
+    struct Case {
+        first: &'static [u8],
+        wrap: bool,
+        pin_x: size::CellCountInt,
+        cols: size::CellCountInt,
+        expected: point::Coordinate,
+    }
+    let cases = [
+        // A hard line break starts the pin row at column zero.
+        Case {
+            first: b"abc",
+            wrap: false,
+            pin_x: 5,
+            cols: 8,
+            expected: point::Coordinate { x: 5, y: 1 },
+        },
+        // A soft continuation uses the remaining destination columns.
+        Case {
+            first: b"abcdef",
+            wrap: true,
+            pin_x: 3,
+            cols: 8,
+            expected: point::Coordinate { x: 7, y: 0 },
+        },
+        // Pending wrap starts the continuation at column zero.
+        Case {
+            first: b"abcdef",
+            wrap: true,
+            pin_x: 2,
+            cols: 3,
+            expected: point::Coordinate { x: 2, y: 2 },
+        },
+    ];
+
+    for case in cases {
+        let mut s = PageList::init(Global, Options::new(6, 4)).unwrap();
+        let page = unsafe { crate::pagelist::Node::page(s.pages.first) };
+        unsafe { (*(*page).get_row(0)).set_wrap(case.wrap) };
+        for (x, &cp) in case.first.iter().enumerate() {
+            let rac = unsafe { (*page).get_row_and_cell(x, 0) };
+            unsafe {
+                *rac.cell = cell_codepoint(cp as u32);
+            }
+        }
+        let rac = unsafe { (*page).get_row_and_cell(0, 1) };
+        unsafe {
+            (*rac.row).set_wrap_continuation(case.wrap);
+            *rac.cell = cell_codepoint('g' as u32);
+        }
+
+        let p = s
+            .track_pin(
+                s.pin(point::Point::Active(point::Coordinate {
+                    x: case.pin_x,
+                    y: 1,
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+
+        s.resize(Resize {
+            cols: Some(case.cols),
+            reflow: true,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            point::Point::Active(case.expected),
+            s.point_from_pin(point::Tag::Active, pin_copy(p)).unwrap()
+        );
+        assert!(unsafe { (*pin_copy(p).row_and_cell().cell).is_empty() });
+
+        s.untrack_pin(p);
+        s.deinit();
+    }
+}
+
 // ref: test "PageList resize reflow less cols cursor in wrapped blank cell"
 #[test]
 fn pagelist_resize_reflow_less_cols_cursor_in_wrapped_blank_cell() {

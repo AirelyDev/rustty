@@ -2452,21 +2452,13 @@ impl Page {
             }
         }
 
-        if KITTY_GRAPHICS
-            && unsafe { (*row).kitty_virtual_placeholder() }
-            && span == self.size.cols as usize
-        {
-            let mut found = false;
-            for i in 0..span {
-                let c = unsafe { *cells_ptr.add(i) };
-                if c.codepoint() == KITTY_PLACEHOLDER {
-                    found = true;
-                    break;
-                }
-            }
-            if !found {
-                unsafe { (*row).set_kitty_virtual_placeholder(false) };
-            }
+        // if (comptime build_options.kitty_graphics) {
+        //     if (cells.len == self.size.cols) {
+        //         row.kitty_virtual_placeholder = false;
+        //     }
+        // }
+        if KITTY_GRAPHICS && span == self.size.cols as usize {
+            unsafe { (*row).set_kitty_virtual_placeholder(false) };
         }
 
         // Zero the cells as u64s since empirically this seems

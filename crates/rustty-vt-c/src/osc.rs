@@ -22,6 +22,7 @@
 pub(crate) const LOG_SCOPE: &str = "osc";
 use crate::result::Result;
 use rustty_lib::allocator::Allocator as CAllocator;
+use rustty_lib::String as LibString;
 use rustty_vt::osc;
 use std::ffi::c_void;
 use std::os::raw::c_int;
@@ -78,11 +79,80 @@ impl OscParserWrapper {
 
 /// C: RusttyOscParser (R2)
 // pub const Parser = ?*osc.Parser;
-pub type Parser = *mut OscParserWrapper;
+pub type OscParser = *mut OscParserWrapper;
 
 /// C: RusttyOscCommand (R2)
 // pub const Command = ?*osc.Command;
 pub type Command = *mut osc::Command<'static>;
+
+/// C: RusttyOscTerminator (R2)
+// pub const Terminator = osc.Terminator.C;
+//
+// PORT NOTE: the reference's `osc.Terminator.C` is a `LibEnum(.c, &.{ "st",
+// "bel" })`, a `c_int` enum numbered in key order. Rustty hand-authors the
+// projection here (the vt-c convention); `from_vt` is `Terminator.cval()`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Terminator {
+    St = 0,
+    Bel = 1,
+}
+
+impl Terminator {
+    // pub fn cval(self: Terminator) C {
+    //     return switch (self) {
+    //         .st => .st,
+    //         .bel => .bel,
+    //     };
+    // }
+    #[inline]
+    pub fn from_vt(t: osc::Terminator) -> Terminator {
+        match t {
+            osc::Terminator::St => Terminator::St,
+            osc::Terminator::Bel => Terminator::Bel,
+        }
+    }
+}
+const _: () = assert!(std::mem::size_of::<Terminator>() == std::mem::size_of::<c_int>());
+
+/// An OSC sequence whose number is not implemented, as C sees it.
+///
+/// C: RusttyTerminalUnknownOscSequence (R2), the terminal's alias of this type
+// pub const C = extern struct {
+//     truncated: bool,
+//     content: lib.String,
+//     terminator: Terminator.C,
+// };
+//
+// PORT NOTE: the reference nests this in `osc.Command.Unknown` (rustty-vt);
+// the C projection lives in the C API crate (R3), so `Unknown.C` and its
+// `cval()` are here, named after the C type (`UnknownOscSequence`; N529: the
+// generic `UnknownC` collided with the SGR projection in cbindgen's output).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct UnknownOscSequence {
+    pub truncated: bool,
+    pub content: LibString,
+    pub terminator: Terminator,
+}
+
+impl UnknownOscSequence {
+    // pub fn cval(self: Unknown) Unknown.C {
+    //     return .{
+    //         .truncated = self.truncated,
+    //         .content = .init(self.content),
+    //         .terminator = self.terminator.cval(),
+    //     };
+    // }
+    #[inline]
+    pub fn cval(v: osc::Unknown<'_>) -> UnknownOscSequence {
+        UnknownOscSequence {
+            truncated: v.truncated,
+            content: LibString::init(v.content),
+            terminator: Terminator::from_vt(v.terminator),
+        }
+    }
+}
 
 // pub fn new(alloc_: ?*const CAllocator, result: *Parser) ... Result {
 //     const alloc = lib.alloc.default(alloc_);
@@ -95,7 +165,7 @@ pub type Command = *mut osc::Command<'static>;
 /// # Safety
 /// `alloc_`, if non-null, must point to a valid `CAllocator`; `result` must be
 /// writable storage for one `Parser`.
-pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut Parser) -> Result {
+pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut OscParser) -> Result {
     // const alloc = lib.alloc.default(alloc_);
     // SAFETY: a non-NULL `alloc_` is valid for the parser's life (the C API's
     // contract, N260).
@@ -134,7 +204,7 @@ pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut Parser) -> Result {
 //
 /// # Safety
 /// `parser_`, if non-null, must be a handle returned by `new`, not yet freed.
-pub unsafe fn free(parser_: Parser) {
+pub unsafe fn free(parser_: OscParser) {
     // C-built parsers always have an associated allocator.
     // const parser = parser_ orelse return;
     if parser_.is_null() {
@@ -159,7 +229,7 @@ pub unsafe fn free(parser_: Parser) {
 //
 /// # Safety
 /// `parser_` must be a non-null handle returned by `new`.
-pub unsafe fn reset(parser_: Parser) {
+pub unsafe fn reset(parser_: OscParser) {
     // parser_.?.reset();
     // SAFETY: `parser_` is non-null per the caller contract (`.?`); the last
     // command's borrow ends first.
@@ -175,7 +245,7 @@ pub unsafe fn reset(parser_: Parser) {
 //
 /// # Safety
 /// `parser_` must be a non-null handle returned by `new`.
-pub unsafe fn next(parser_: Parser, byte: u8) {
+pub unsafe fn next(parser_: OscParser, byte: u8) {
     // parser_.?.next(byte);
     // SAFETY: `parser_` is non-null per the caller contract (`.?`); the last
     // command's borrow ends first.
@@ -191,7 +261,7 @@ pub unsafe fn next(parser_: Parser, byte: u8) {
 //
 /// # Safety
 /// `parser_` must be a non-null handle returned by `new`.
-pub unsafe fn end(parser_: Parser, terminator: u8) -> Command {
+pub unsafe fn end(parser_: OscParser, terminator: u8) -> Command {
     // return parser_.?.end(terminator);
     // PORT NOTE: `osc::Parser::end` takes `Option<u8>` (the reference passes the
     // raw `u8` terminator; rustty wraps it in `Some`). It returns the command
@@ -219,6 +289,104 @@ pub unsafe fn end(parser_: Parser, terminator: u8) -> Command {
     }
 }
 
+/// C: RusttyOscOption (R2)
+// pub const Option = enum(c_int) {
+//     unknown_max_bytes = 0,
+// };
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Option_ {
+    UnknownMaxBytes = 0,
+}
+
+impl Option_ {
+    /// Narrow a wire `c_int` to a declared option, `None` for anything else.
+    // PORT NOTE (D11, UD113, DECISIONS M3): the reference checks the option
+    // with `std.enums.fromInt` only under `runtime_safety`; rustty receives
+    // the `c_int` and narrows it in every build.
+    pub fn from_c_int(v: c_int) -> Option<Option_> {
+        match v {
+            0 => Some(Option_::UnknownMaxBytes),
+            _ => None,
+        }
+    }
+}
+const _: () = assert!(std::mem::size_of::<Option_>() == std::mem::size_of::<c_int>());
+
+// pub fn set(
+//     parser_: Parser,
+//     option: Option,
+//     value: ?*const anyopaque,
+// ) callconv(lib.calling_conv) Result {
+//     if (comptime std.debug.runtime_safety) {
+//         _ = std.enums.fromInt(Option, @intFromEnum(option)) orelse {
+//             log.warn("osc_set invalid option value={d}", .{@intFromEnum(option)});
+//             return .invalid_value;
+//         };
+//     }
+//
+//     const parser = parser_ orelse return .invalid_value;
+//     switch (option) {
+//         .unknown_max_bytes => {
+//             const ptr: ?*const usize = @ptrCast(@alignCast(value));
+//             parser.unknown_max_bytes = if (ptr) |v| v.* else 0;
+//         },
+//     }
+//
+//     return .success;
+// }
+//
+/// # Safety
+/// `parser_`, if non-null, must be a handle returned by `new`; `value`, if
+/// non-null, must point to the option's input type (`size_t` for
+/// `UnknownMaxBytes`).
+pub unsafe fn set(parser_: OscParser, option: c_int, value: *const c_void) -> Result {
+    // _ = std.enums.fromInt(Option, @intFromEnum(option)) orelse { log.warn(...); return .invalid_value; };
+    let Some(option) = Option_::from_c_int(option) else {
+        crate::sys::log_fn(
+            crate::sys::StdLevel::Warn,
+            LOG_SCOPE,
+            format_args!("osc_set invalid option value={option}"),
+        );
+        return Result::InvalidValue;
+    };
+
+    // const parser = parser_ orelse return .invalid_value;
+    if parser_.is_null() {
+        return Result::InvalidValue;
+    }
+    // PORT NOTE (SB, R2 §2.5): `set` is a call on the parser like any other,
+    // so the last command's borrow ends first, as in `next`/`reset`/`end`/
+    // `free`. Both fields are written by raw place: no `&mut` of the wrapper
+    // or the parser is formed, so nothing retags the parser's buffer.
+    // Not `clear_command()`: its `&mut self` would retag the whole wrapper,
+    // parser buffer included; the field write retags nothing.
+    // SAFETY: `parser_` is a live handle (caller contract); the stored
+    // command owns nothing, so overwriting it drops nothing.
+    unsafe { (*parser_).command = osc::Command::Invalid };
+    match option {
+        // .unknown_max_bytes => {
+        //     const ptr: ?*const usize = @ptrCast(@alignCast(value));
+        //     parser.unknown_max_bytes = if (ptr) |v| v.* else 0;
+        // },
+        Option_::UnknownMaxBytes => {
+            let ptr = value as *const usize;
+            let max_bytes = if ptr.is_null() {
+                0
+            } else {
+                // SAFETY: `value` points to a readable `usize` (caller
+                // contract).
+                unsafe { *ptr }
+            };
+            // SAFETY: raw place write into the live wrapper.
+            unsafe { (*parser_).parser.unknown_max_bytes = max_bytes };
+        }
+    }
+
+    // return .success;
+    Result::Success
+}
+
 // pub fn commandType(command_: Command) ... osc.Command.Key {
 //     const command = command_ orelse return .invalid;
 //     return command.*;
@@ -242,6 +410,9 @@ pub unsafe fn command_type(command_: Command) -> osc::CommandKey {
 // pub const CommandData = enum(c_int) {
 //     invalid = 0,
 //     change_window_title_str = 1,
+//     unknown_content = 2,
+//     unknown_truncated = 3,
+//     unknown_terminator = 4,
 //     ...
 // };
 #[repr(C)]
@@ -249,11 +420,17 @@ pub unsafe fn command_type(command_: Command) -> osc::CommandKey {
 pub enum CommandData {
     Invalid = 0,
     ChangeWindowTitleStr = 1,
+    UnknownContent = 2,
+    UnknownTruncated = 3,
+    UnknownTerminator = 4,
     // /// Output type expected for querying the data of the given kind.
     // pub fn OutType(comptime self: CommandData) type {
     //     return switch (self) {
     //         .invalid => void,
     //         .change_window_title_str => [*:0]const u8,
+    //         .unknown_content => lib.String,
+    //         .unknown_truncated => bool,
+    //         .unknown_terminator => Terminator,
     //     };
     // }
     // PORT NOTE: `OutType` is a comptime type map used by `commandDataTyped`;
@@ -291,6 +468,9 @@ pub unsafe fn command_data(command_: Command, data: c_int, out: *mut c_void) -> 
     let data = match data {
         0 => CommandData::Invalid,
         1 => CommandData::ChangeWindowTitleStr,
+        2 => CommandData::UnknownContent,
+        3 => CommandData::UnknownTruncated,
+        4 => CommandData::UnknownTerminator,
         _ => {
             // log.warn("commandData invalid data value={d}", .{@intFromEnum(data)});
             crate::sys::log_fn(
@@ -311,15 +491,34 @@ pub unsafe fn command_data(command_: Command, data: c_int, out: *mut c_void) -> 
             // SAFETY: `command_`/`out` validity is the caller's contract.
             unsafe { command_data_change_window_title_str(command_, out as *mut *const u8) }
         }
+        // .unknown_content, .unknown_truncated, .unknown_terminator => commandDataTyped(...)
+        CommandData::UnknownContent
+        | CommandData::UnknownTruncated
+        | CommandData::UnknownTerminator => {
+            // SAFETY: `command_`/`out` validity is the caller's contract.
+            unsafe { command_data_unknown(command_, data, out) }
+        }
     }
 }
 
 // fn commandDataTyped(command_: Command, comptime data: CommandData, out: *data.OutType()) bool {
-//     const command = command_.?;
+//     const command = command_ orelse return false;
 //     switch (data) {
 //         .invalid => return false,
 //         .change_window_title_str => switch (command.*) {
 //             .change_window_title => |v| out.* = v.ptr,
+//             else => return false,
+//         },
+//         .unknown_content => switch (command.*) {
+//             .unknown => |v| out.* = .init(v.content),
+//             else => return false,
+//         },
+//         .unknown_truncated => switch (command.*) {
+//             .unknown => |v| out.* = v.truncated,
+//             else => return false,
+//         },
+//         .unknown_terminator => switch (command.*) {
+//             .unknown => |v| out.* = v.terminator.cval(),
 //             else => return false,
 //         },
 //     }
@@ -333,14 +532,10 @@ pub unsafe fn command_data(command_: Command, data: c_int, out: *mut c_void) -> 
 /// `command_`, if non-null, must be a live command pointer; `out` must point
 /// to writable `*const u8` storage.
 unsafe fn command_data_change_window_title_str(command_: Command, out: *mut *const u8) -> bool {
-    // const command = command_.?;
-    // PORT NOTE: reference defect (R13), UD312 (N323). The header documents
-    // `command` as "may be NULL", and `rustty_osc_end` returns NULL for every
-    // invalid or unfinished OSC, but the reference unwraps it with `.?`: a
-    // panic in ReleaseSafe and undefined behaviour in ReleaseFast when a C
-    // caller asks a NULL command for its title. `commandType` answers NULL
-    // with `.invalid`; this answers it with `false` ("the data is not
-    // available"), the function's own failure value, and never dereferences.
+    // const command = command_ orelse return false;
+    // PORT NOTE (UD312, fixed upstream in 51d3ca168): a NULL command, which
+    // `rustty_osc_end` returns for an invalid or cancelled OSC, answers
+    // `false` and never dereferences.
     if command_.is_null() {
         return false;
     }
@@ -366,6 +561,42 @@ unsafe fn command_data_change_window_title_str(command_: Command, out: *mut *con
     }
 }
 
+/// PORT NOTE: the `.unknown_content`, `.unknown_truncated` and
+/// `.unknown_terminator` arms of `commandDataTyped`.
+///
+/// # Safety
+/// `command_`, if non-null, must be a live command pointer; `out` must point
+/// to writable storage of `data`'s out-type (`RusttyString`, `bool` or
+/// `RusttyOscTerminator`).
+unsafe fn command_data_unknown(command_: Command, data: CommandData, out: *mut c_void) -> bool {
+    // const command = command_ orelse return false;
+    if command_.is_null() {
+        return false;
+    }
+    // SAFETY: non-null, so a live command pointer (caller contract).
+    let osc::Command::Unknown(v) = (unsafe { &*command_ }) else {
+        // else => return false,
+        return false;
+    };
+    // SAFETY (each arm): `out` is writable storage of the arm's out-type
+    // (caller contract).
+    match data {
+        // .unknown => |v| out.* = .init(v.content),
+        CommandData::UnknownContent => unsafe {
+            *(out as *mut LibString) = LibString::init(v.content)
+        },
+        // .unknown => |v| out.* = v.truncated,
+        CommandData::UnknownTruncated => unsafe { *(out as *mut bool) = v.truncated },
+        // .unknown => |v| out.* = v.terminator.cval(),
+        CommandData::UnknownTerminator => unsafe {
+            *(out as *mut Terminator) = Terminator::from_vt(v.terminator)
+        },
+        CommandData::Invalid | CommandData::ChangeWindowTitleStr => unreachable!(),
+    }
+    // return true;
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,7 +607,7 @@ mod tests {
     fn alloc() {
         with_test_allocator(|calloc| {
             // var p: Parser = undefined;
-            let mut p: Parser = std::ptr::null_mut();
+            let mut p: OscParser = std::ptr::null_mut();
             // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &p));
             assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut p) });
             // free(p);
@@ -393,7 +624,7 @@ mod tests {
     fn c_parser_captures_through_the_caller_allocator() {
         let counting = crate::test_util::CountingCAllocator::new();
         let calloc = counting.c_allocator();
-        let mut p: Parser = std::ptr::null_mut();
+        let mut p: OscParser = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut p) });
         let after_new = counting.alloc_calls.get();
         assert_eq!(1, after_new, "only the parser wrapper itself");
@@ -429,7 +660,7 @@ mod tests {
     fn c_parser_capture_falls_back_to_fixed_when_the_caller_allocator_fails() {
         let counting = crate::test_util::CountingCAllocator::new();
         let calloc = counting.c_allocator();
-        let mut p: Parser = std::ptr::null_mut();
+        let mut p: OscParser = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut p) });
         counting.reject.set(true);
 
@@ -484,7 +715,7 @@ mod tests {
     fn c_parser_capture_grows_by_remap_like_zig_realloc() {
         use rustty_vt::alloc::testing::{Config, CountingAllocator, FailingAllocator};
 
-        let feed_long_osc52 = |p: Parser| {
+        let feed_long_osc52 = |p: OscParser| {
             for &b in b"52;c;" {
                 unsafe { next(p, b) };
             }
@@ -499,7 +730,7 @@ mod tests {
 
         let counting = CountingAllocator::over_heap();
         let calloc = counting.allocator();
-        let mut p: Parser = std::ptr::null_mut();
+        let mut p: OscParser = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut p) });
         assert_eq!(
             1,
@@ -523,7 +754,7 @@ mod tests {
             ..Config::default()
         });
         let calloc = failing.allocator();
-        let mut p: Parser = std::ptr::null_mut();
+        let mut p: OscParser = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut p) });
         feed_long_osc52(p);
         assert!(
@@ -536,7 +767,7 @@ mod tests {
         assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
 
         // NULL: the Rust heap (`lib.alloc.default(null)`), same result.
-        let mut p: Parser = std::ptr::null_mut();
+        let mut p: OscParser = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(None, &mut p) });
         feed_long_osc52(p);
         unsafe { free(p) };
@@ -551,13 +782,26 @@ mod tests {
         });
     }
 
-    // Parity tail S7-7, N323 (R13; no reference test): `commandData` on a NULL
-    // command (what `end` returns for an invalid OSC; the header says the
-    // command "may be NULL") answers `false` and leaves `out` alone, where
-    // the reference's `command_.?` traps.
+    // test "command data null" {
+    //
+    // Also parity tail S7-7, N323 (UD312, fixed upstream in 51d3ca168): the
+    // NULL that `end` returns for an unfinished OSC answers `false` and
+    // leaves `out` alone. The upstream assertion comes first; the rest is
+    // Rustty's broader check, kept (DECISIONS M1).
     #[test]
-    fn command_data_on_a_null_command_is_false() {
-        let mut p: Parser = std::ptr::null_mut();
+    fn command_data_null() {
+        // var title: [*:0]const u8 = undefined;
+        // try testing.expect(!commandData(null, .change_window_title_str, @ptrCast(&title)));
+        let mut title: *const u8 = std::ptr::null();
+        assert!(!unsafe {
+            command_data(
+                std::ptr::null_mut(),
+                CommandData::ChangeWindowTitleStr as c_int,
+                &mut title as *mut *const u8 as *mut c_void,
+            )
+        });
+
+        let mut p: OscParser = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(None, &mut p) });
         unsafe { next(p, b'2') };
         let cmd = unsafe { end(p, 0x07) };
@@ -580,7 +824,7 @@ mod tests {
     fn change_window_title() {
         with_test_allocator(|calloc| {
             // var p: Parser = undefined;
-            let mut p: Parser = std::ptr::null_mut();
+            let mut p: OscParser = std::ptr::null_mut();
             // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &p));
             assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut p) });
             // defer free(p);
@@ -615,6 +859,223 @@ mod tests {
             // defer free(p);
             unsafe { free(p) };
         });
+    }
+
+    // test "unknown" {
+    #[test]
+    fn unknown() {
+        with_test_allocator(|calloc| {
+            // var p: Parser = undefined;
+            let mut p: OscParser = std::ptr::null_mut();
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &p));
+            assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut p) });
+            // defer free(p);
+
+            // const max_bytes: usize = 8;
+            let max_bytes: usize = 8;
+            // try testing.expectEqual(Result.success, set(p, .unknown_max_bytes, @ptrCast(&max_bytes)));
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    p,
+                    Option_::UnknownMaxBytes as c_int,
+                    (&raw const max_bytes).cast(),
+                )
+            });
+
+            // Parse it
+            // for ("7400;x") |ch| next(p, ch);
+            for &ch in b"7400;x" {
+                unsafe { next(p, ch) };
+            }
+            // const cmd = end(p, 0x07);
+            let cmd = unsafe { end(p, 0x07) };
+            // try testing.expectEqual(.unknown, commandType(cmd));
+            assert_eq!(osc::CommandKey::Unknown, unsafe { command_type(cmd) });
+
+            // var content: lib.String = undefined;
+            let mut content = LibString::init(b"");
+            // try testing.expect(commandData(cmd, .unknown_content, @ptrCast(&content)));
+            assert!(unsafe {
+                command_data(
+                    cmd,
+                    CommandData::UnknownContent as c_int,
+                    (&raw mut content).cast(),
+                )
+            });
+            // try testing.expectEqualStrings("7400;x", content.ptr[0..content.len]);
+            // SAFETY: valid until the next call on `p`.
+            assert_eq!(b"7400;x", unsafe {
+                std::slice::from_raw_parts(content.ptr, content.len)
+            });
+
+            // var truncated: bool = true;
+            let mut truncated = true;
+            // try testing.expect(commandData(cmd, .unknown_truncated, @ptrCast(&truncated)));
+            assert!(unsafe {
+                command_data(
+                    cmd,
+                    CommandData::UnknownTruncated as c_int,
+                    (&raw mut truncated).cast(),
+                )
+            });
+            // try testing.expect(!truncated);
+            assert!(!truncated);
+
+            // var terminator: osc.Terminator.C = .st;
+            let mut terminator = Terminator::St;
+            // try testing.expect(commandData(cmd, .unknown_terminator, @ptrCast(&terminator)));
+            assert!(unsafe {
+                command_data(
+                    cmd,
+                    CommandData::UnknownTerminator as c_int,
+                    (&raw mut terminator).cast(),
+                )
+            });
+            // try testing.expectEqual(osc.Terminator.C.bel, terminator);
+            assert_eq!(Terminator::Bel, terminator);
+
+            // Other commands can't read unknown data.
+            // reset(p);
+            unsafe { reset(p) };
+            // for ("0;a") |ch| next(p, ch);
+            for &ch in b"0;a" {
+                unsafe { next(p, ch) };
+            }
+            // const title_cmd = end(p, 0x07);
+            let title_cmd = unsafe { end(p, 0x07) };
+            // try testing.expectEqual(.change_window_title, commandType(title_cmd));
+            assert_eq!(osc::CommandKey::ChangeWindowTitle, unsafe {
+                command_type(title_cmd)
+            });
+            // try testing.expect(!commandData(title_cmd, .unknown_content, @ptrCast(&content)));
+            assert!(!unsafe {
+                command_data(
+                    title_cmd,
+                    CommandData::UnknownContent as c_int,
+                    (&raw mut content).cast(),
+                )
+            });
+
+            // A NULL value disables capture again.
+            // try testing.expectEqual(Result.success, set(p, .unknown_max_bytes, null));
+            assert_eq!(Result::Success, unsafe {
+                set(p, Option_::UnknownMaxBytes as c_int, std::ptr::null())
+            });
+            // reset(p);
+            unsafe { reset(p) };
+            // for ("7400;x") |ch| next(p, ch);
+            for &ch in b"7400;x" {
+                unsafe { next(p, ch) };
+            }
+            // try testing.expectEqual(.invalid, commandType(end(p, 0x07)));
+            assert_eq!(osc::CommandKey::Invalid, unsafe {
+                command_type(end(p, 0x07))
+            });
+
+            unsafe { free(p) };
+        });
+    }
+
+    // Rust-only (P8-W5 T3; R2 §2.5 SB hazard, D11/UD113; Miri target). The
+    // option is checked in every build: an undeclared value and a NULL parser
+    // answer INVALID_VALUE. `set` is a call on the parser, so it ends the
+    // last command (the stored command is `.invalid` afterwards, as the
+    // header's lifetime says) without forming a `&mut` that would retag the
+    // bytes an unknown command borrowed; a fresh `end` then works. With a
+    // limit above `MAX_BUF` the capture allocates through the parser's
+    // allocator and is truncated at the limit.
+    #[test]
+    fn osc_set_clears_the_command_and_checks_the_option() {
+        // N541: this test reaches `sys::log_fn`; hold the sys guard so its
+        // warnings cannot land in another test's log sink.
+        let _guard = crate::sys::tests::reset_global();
+        let mut p: OscParser = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe { new(None, &mut p) });
+        let max_bytes: usize = 8;
+        assert_eq!(Result::InvalidValue, unsafe {
+            set(std::ptr::null_mut(), 0, (&raw const max_bytes).cast())
+        });
+        for option in [1, -1, c_int::MAX] {
+            assert_eq!(Result::InvalidValue, unsafe {
+                set(p, option, (&raw const max_bytes).cast())
+            });
+        }
+        // SAFETY: `p` is live; the field is read by place.
+        assert_eq!(0, unsafe { (*p).parser.unknown_max_bytes });
+
+        assert_eq!(Result::Success, unsafe {
+            set(p, 0, (&raw const max_bytes).cast())
+        });
+        for &ch in b"7400;abcdef" {
+            unsafe { next(p, ch) };
+        }
+        let cmd = unsafe { end(p, 0x1B) };
+        let mut content = LibString::init(b"");
+        assert!(unsafe {
+            command_data(
+                cmd,
+                CommandData::UnknownContent as c_int,
+                (&raw mut content).cast(),
+            )
+        });
+        // SAFETY: valid until the next call on `p`.
+        assert_eq!(b"7400;abc", unsafe {
+            std::slice::from_raw_parts(content.ptr, content.len)
+        });
+        let mut truncated = false;
+        assert!(unsafe {
+            command_data(
+                cmd,
+                CommandData::UnknownTruncated as c_int,
+                (&raw mut truncated).cast(),
+            )
+        });
+        assert!(truncated);
+
+        // `set` ends the command: the stored command is `.invalid`. (`cmd`
+        // itself is dead now, per the header, and is not read again.)
+        let big: usize = osc::MAX_BUF * 2;
+        assert_eq!(Result::Success, unsafe {
+            set(p, 0, (&raw const big).cast())
+        });
+        assert!(
+            // SAFETY: `p` is live; the wrapper's stored command is inspected.
+            matches!(unsafe { &(*p).command }, osc::Command::Invalid),
+            "set ended the command"
+        );
+
+        // A fresh sequence past `MAX_BUF` uses the allocating capture.
+        unsafe { reset(p) };
+        for &ch in b"7400;" {
+            unsafe { next(p, ch) };
+        }
+        let long = if cfg!(miri) {
+            osc::MAX_BUF + 64
+        } else {
+            big + 100
+        };
+        for _ in 0..long {
+            unsafe { next(p, b'z') };
+        }
+        let cmd = unsafe { end(p, 0x07) };
+        assert_eq!(osc::CommandKey::Unknown, unsafe { command_type(cmd) });
+        assert!(unsafe {
+            command_data(
+                cmd,
+                CommandData::UnknownContent as c_int,
+                (&raw mut content).cast(),
+            )
+        });
+        assert_eq!(std::cmp::min(5 + long, big), content.len);
+        assert!(unsafe {
+            command_data(
+                cmd,
+                CommandData::UnknownTruncated as c_int,
+                (&raw mut truncated).cast(),
+            )
+        });
+        assert_eq!(5 + long > big, truncated);
+        unsafe { free(p) };
     }
 
     // task-14a (rustty-only proving test, NOT a reference test — S174-F2):
@@ -696,7 +1157,7 @@ mod tests {
 
         let counting = CountingAllocator::over_heap();
         let calloc = counting.allocator();
-        let mut p: Parser = std::ptr::null_mut();
+        let mut p: OscParser = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut p) });
         assert_eq!(1, counting.alloc_calls.get(), "the parser itself");
 
@@ -778,7 +1239,7 @@ mod tests {
         for input in [&b"4;1;?;2;?;3;?"[..], &b"21;foreground=?;background=?"[..]] {
             let counting = CountingAllocator::over_heap();
             let calloc = counting.allocator();
-            let mut p: Parser = std::ptr::null_mut();
+            let mut p: OscParser = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut p) });
             for &b in input {
                 unsafe { next(p, b) };
@@ -811,7 +1272,7 @@ mod tests {
 
         let counting = CountingAllocator::over_heap();
         let calloc = counting.allocator();
-        let mut p: Parser = std::ptr::null_mut();
+        let mut p: OscParser = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut p) });
         for &b in b"2;a borrowed title" {
             unsafe { next(p, b) };
@@ -847,7 +1308,7 @@ mod tests {
     /// failed.
     fn osc_sweep_once(failing: &rustty_vt::alloc::testing::FailingAllocator, what: &str) -> bool {
         let calloc = failing.allocator();
-        let mut p: Parser = std::ptr::null_mut();
+        let mut p: OscParser = std::ptr::null_mut();
         match unsafe { new(Some(&calloc), &mut p) } {
             Result::Success => {}
             Result::OutOfMemory => {
@@ -930,6 +1391,9 @@ mod tests {
     // empty list, kitty warn-and-continue), and every byte comes back.
     #[test]
     fn osc_allocation_failure_sweep_through_the_c_api() {
+        // N541: this test reaches `sys::log_fn`; hold the sys guard so its
+        // warnings cannot land in another test's log sink.
+        let _guard = crate::sys::tests::reset_global();
         use rustty_vt::alloc::testing::{Config, FailingAllocator};
 
         let mut n = 0usize;

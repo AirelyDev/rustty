@@ -1,0 +1,61 @@
+### G-MSAN: MemorySanitizer (-Zbuild-std, C via cc with -fsanitize=memory) over the phase-1 scope (Linux/aarch64) ###
+excluded (link uninstrumented C/C++; MSan cannot run them):
+  - glslang-sys: its test runs glslang's preprocessor, whose TPpContext holds a std::istringstream constructed and imbued by the uninstrumented libstdc++.so; MSan reports the stream's own fields as uninitialized (PpContext.cpp:98, origin: the stack allocation of 'ppContext'); needs an MSan-instrumented libstdc++/libc++ (SANITIZER_SUPPRESSIONS.md M2)
+  - xtask: its tests run nested cargo and cmake builds that inherit RUSTFLAGS=-Zsanitizer=memory without -Zbuild-std, which rustc rejects ('mixing -Zsanitizer will cause an ABI mismatch'); it is the build driver, which G-VALGRIND leaves out for the same kind of reason (M4)
+  skipped in rustty-renderer: tests matching generic::linux_impl::tests — the golden-renderer tests drive EGL and OpenGL in the system's uninstrumented libEGL/Mesa; MSan reports reads of what libEGL wrote itself (eglQueryString under OffscreenContext::init, origin a malloc inside libEGL.so.1) (M3)
+  skipped in rustty-renderer: tests matching image::linux_impl::tests — the kitty-image tests build their textures through the same offscreen EGL context (gl_api -> OpenGL::init_offscreen -> eglQueryString in libEGL) (M3)
+  skipped in rustty-renderer: tests matching opengl::tests:: — opengl.rs's tests build buffers in an offscreen GL context (test_support::offscreen_gl) (M3)
+  skipped in rustty-renderer: tests matching opengl::gl::tests:: — gl.rs's tests compile shaders in an offscreen GL context (M3)
+  skipped in rustty-renderer: tests matching opengl::gl::sys::tests::offscreen_egl_context_reaches_gl43_core — creates a real EGL context (OffscreenContext::init); the module's other six tests (version parsing, extension matching, the dmabuf query with stub function pointers) stay in (M3)
+  skipped in rustty-renderer: tests matching opengl::gl::sys::tests::failed_prepare_context_restores_the_previous_table — creates a real EGL context (OffscreenContext::init) (M3)
+  skipped in rustty-renderer: tests matching opengl::gl::program:: — program-link failure tests in an offscreen GL context (M3)
+  skipped in rustty-renderer: tests matching opengl::opengl_impl:: — OpenGL::init_offscreen / present tests (M3)
+  skipped in rustty-renderer: tests matching opengl::shaders:: — the five-pipeline shader build, in GL and through glslang (M2) (M3)
+  skipped in rustty-renderer: tests matching opengl::pipeline:: — the framebuffer/vertex-array teardown test in an offscreen GL context (M3)
+  skipped in rustty-renderer: tests matching opengl::target:: — render-target and dmabuf export tests on the offscreen EGL context (M3)
+  skipped in rustty-renderer: tests matching shadertoy:: — custom-shader translation through glslang and spirv-cross, whose glslang preprocessor reads libstdc++-constructed stream state (M2)
+  skipped in rustty-core: tests matching app::test_runtime::app_init_creates_and_deinit_frees_the_render_device — App::init creates the app's render device (DeviceBox::init -> Device::init -> init_platform -> eglGetPlatformDisplay in the uninstrumented libEGL.so.1; G-MSAN rvm, P8-W9 T2: use-of-uninitialized-value, origin a malloc inside libEGL.so.1; NEW-FINDINGS N538) (M6)
+  skipped in rustty-core: tests matching app::test_runtime::app_create_and_destroy_empty — App::create runs App::init, which creates the render device through the same uninstrumented libEGL (N538) (M6)
+  skipped in rustty-core: tests matching app::device_tests:: — Review Focus 4's two live surfaces on one App: App::create's render device plus each surface renderer's offscreen EGL context and draws in the uninstrumented libEGL/Mesa (N538) (M6)
+  skipped in rustty-core: tests matching surface_occlusion_callback_dedups_and_reports — the surface_visibility_kat integration test's TestSurface::build runs App::create, so it creates the render device through the same uninstrumented libEGL (eglGetPlatformDisplay/eglInitialize; reports in libEGL_mesa, libgallium and Mesa's driconf libexpat; N538) (M6)
+=== sanitizer matrix: msan over 59 crate spec(s); one shared target dir /home/gael/projects/rustty-p8final/target/san-msan, deleted when the pass ends ===
+  ✅ msan breakpad-sys: 1 test(s) ran, 39s — 1 passed, 0 ignored
+  ✅ msan dcimgui-sys: 8 test(s) ran, 45s — 8 passed, 0 ignored
+  ✅ msan fontconfig-sys: 4 test(s) ran, 20s — 4 passed, 0 ignored
+  ✅ msan freetype-sys: 1 test(s) ran, 2s — 1 passed, 0 ignored
+  ⏭  msan gettext-sys: 0 tests on Linux by construction — libintl is part of glibc on Linux, so the crate compiles no C there and every test is #[cfg(all(test, target_os = "macos"))] (crates-sys/gettext-sys/src/lib.rs)
+  ✅ msan harfbuzz-sys: 1 test(s) ran, 22s — 1 passed, 0 ignored
+  ✅ msan highway-sys: 19 test(s) ran, 5s — 19 passed, 0 ignored
+  ✅ msan libpng-sys: 2 test(s) ran, 5s — 2 passed, 0 ignored
+  ✅ msan libxml2-sys: 1 test(s) ran, 2s — 1 passed, 0 ignored
+  ✅ msan oniguruma-sys: 1 test(s) ran, 7s — 1 passed, 0 ignored
+  ✅ msan sentry-sys: 4 test(s) ran, 7s — 4 passed, 0 ignored
+  ✅ msan simdutf-sys: 2 test(s) ran, 4s — 2 passed, 0 ignored
+  ✅ msan spirv-cross-sys: 1 test(s) ran, 30s — 1 passed, 0 ignored
+  ✅ msan wuffs-sys: 3 test(s) ran, 7s — 3 passed, 0 ignored
+  ✅ msan zlib-sys: 11 test(s) ran, 2s — 11 passed, 0 ignored
+  ✅ msan rustty: 15 test(s) ran, 156s — 15 passed, 2 ignored
+  ✅ msan rustty-apprt: 40 test(s) ran, 34s — 40 passed, 0 ignored
+  ✅ msan rustty-apprt-api: 28 test(s) ran, 72s — 28 passed, 0 ignored
+  ⛔ BLOCKED: 14 GB free under /home/gael/projects/rustty-p8final/target, below the SAN_MIN_FREE_GB=15 floor; stopping before rustty-apprt-c
+--- msan matrix summary: 142 test(s) ran, wall 465s (7 min) ---
+  breakpad-sys                         GREEN                1 tests     39s
+  dcimgui-sys                          GREEN                8 tests     45s
+  fontconfig-sys                       GREEN                4 tests     20s
+  freetype-sys                         GREEN                1 tests      2s
+  gettext-sys                          NO-TESTS(Linux)      0 tests      2s
+  harfbuzz-sys                         GREEN                1 tests     22s
+  highway-sys                          GREEN               19 tests      5s
+  libpng-sys                           GREEN                2 tests      5s
+  libxml2-sys                          GREEN                1 tests      2s
+  oniguruma-sys                        GREEN                1 tests      7s
+  sentry-sys                           GREEN                4 tests      7s
+  simdutf-sys                          GREEN                2 tests      4s
+  spirv-cross-sys                      GREEN                1 tests     30s
+  wuffs-sys                            GREEN                3 tests      7s
+  zlib-sys                             GREEN               11 tests      2s
+  rustty                               GREEN               15 tests    156s
+  rustty-apprt                         GREEN               40 tests     34s
+  rustty-apprt-api                     GREEN               28 tests     72s
+  rustty-apprt-c                       BLOCKED(disk)        0 tests      0s
+G-MSAN: BLOCKED (a crate did not build, or the disk floor was reached; see above)

@@ -508,6 +508,50 @@ fn terminal_erase_line_complete_preserves_background_sgr() {
     t.deinit(Global);
 }
 
+// test "Terminal: eraseLine complete clears kitty placeholder flag"
+#[test]
+#[cfg_attr(
+    not(all(feature = "kitty-graphics", not(target_os = "none"))),
+    ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+)]
+fn terminal_erase_line_complete_clears_kitty_placeholder_flag() {
+    let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+    t.print(kitty::graphics_unicode::PLACEHOLDER).unwrap();
+    {
+        let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+        assert!(unsafe { (*list_cell.row).kitty_virtual_placeholder() });
+    }
+    t.erase_line(csi::EraseLine::Complete, false);
+
+    let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+    assert!(!unsafe { (*list_cell.row).kitty_virtual_placeholder() });
+
+    t.deinit(Global);
+}
+
+// PORT NOTE: NOT a reference test (Rustty-only). The reference has no test for
+// the palette reset that `bb20f8e45` added to `fullReset`; the OSC 4 set is
+// applied through `Palette::set` as the OSC 4 handler does.
+#[test]
+fn terminal_ris_resets_the_palette() {
+    let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+    let default = t.colors.palette.original()[1];
+    let custom = crate::color::RGB { r: 1, g: 2, b: 3 };
+    assert_ne!(default, custom);
+    t.colors.palette.set(1, custom);
+    assert_eq!(custom, t.colors.palette.current[1]);
+    assert!(t.colors.palette.mask.is_set(1));
+
+    t.full_reset();
+
+    assert_eq!(default, t.colors.palette.current[1]);
+    assert!(!t.colors.palette.mask.is_set(1));
+
+    t.deinit(Global);
+}
+
 // test "Terminal: eraseLine complete resets wrap"
 #[test]
 fn terminal_erase_line_complete_resets_wrap() {

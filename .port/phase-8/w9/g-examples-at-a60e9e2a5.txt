@@ -1,0 +1,55 @@
+# P8-W9 T2 lane g-examples at a60e9e2a5 (head 1d22ba80d)
+host: rvm (Fedora aarch64), clone /home/gael/projects/rustty-p8w9t2 (git archive 1d22ba80d plus .port and docs/superpowers copied from the worktree, since .gitattributes export-ignores them)
+### CMD: bash .port/tools/gates/check_examples.sh
+start (UTC): 2026-10-08T15:19:42Z
+end (UTC):   2026-10-08T15:20:22Z
+wall: 40 s
+rc: 0
+## verdict lines
+=== G-EXAMPLES 1/4 :: example/*/build.sh (compile + run) ===
+=== G-EXAMPLES 2/4 :: example/c-vt-cmake* (cmake configure + build) ===
+=== G-EXAMPLES 3/4 :: example/swift-vt-xcframework ===
+=== G-EXAMPLES 4/4 :: example/wasm-* ===
+--- G-EXAMPLES summary: 27 built, 7 skipped ---
+G-EXAMPLES GREEN (27 example(s) built). Not built: c-vt-cmake-cross swift-vt-xcframework wasm-key-encode wasm-sgr wasm-vt wasm-web-canvas wasm-webgl
+## tail
+=== G-EXAMPLES 1/4 :: example/*/build.sh (compile + run) ===
+  ok      cpp-vt-stream
+  ok      c-vt-build-info
+  ok      c-vt
+  ok      c-vt-colors
+  ok      c-vt-color-scheme
+  ok      c-vt-compression
+  ok      c-vt-effects
+  ok      c-vt-encode-focus
+  ok      c-vt-encode-key
+  ok      c-vt-encode-mouse
+  ok      c-vt-formatter
+  ok      c-vt-grid-ref-tracked
+  ok      c-vt-grid-traverse
+  ok      c-vt-kitty-graphics
+  ok      c-vt-modes
+  ok      c-vt-paste
+  ok      c-vt-render
+  ok      c-vt-search
+  ok      c-vt-selection
+  ok      c-vt-selection-gesture
+  ok      c-vt-sgr
+  ok      c-vt-size-report
+  ok      c-vt-snapshot
+  ok      c-vt-static
+  ok      c-vt-stream
+=== G-EXAMPLES 2/4 :: example/c-vt-cmake* (cmake configure + build) ===
+  ok      c-vt-cmake -> Plain text (80 bytes):
+  skipped c-vt-cmake-cross (rust target aarch64-pc-windows-gnu not installed (rustup target add aarch64-pc-windows-gnu))
+  ok      c-vt-cmake-static -> Plain text (89 bytes):
+=== G-EXAMPLES 3/4 :: example/swift-vt-xcframework ===
+  skipped swift-vt-xcframework (macOS-only (SwiftPM + xcodebuild))
+=== G-EXAMPLES 4/4 :: example/wasm-* ===
+  skipped wasm-key-encode (browser lane — run 'bash .port/tools/ci.sh --webgl')
+  skipped wasm-sgr (browser lane — run 'bash .port/tools/ci.sh --webgl')
+  skipped wasm-vt (browser lane — run 'bash .port/tools/ci.sh --webgl')
+  skipped wasm-web-canvas (browser lane — run 'bash .port/tools/ci.sh --webgl')
+  skipped wasm-webgl (browser lane — run 'bash .port/tools/ci.sh --webgl')
+--- G-EXAMPLES summary: 27 built, 7 skipped ---
+G-EXAMPLES GREEN (27 example(s) built). Not built: c-vt-cmake-cross swift-vt-xcframework wasm-key-encode wasm-sgr wasm-vt wasm-web-canvas wasm-webgl

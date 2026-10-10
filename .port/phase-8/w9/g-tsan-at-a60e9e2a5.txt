@@ -1,0 +1,57 @@
+# P8-W9 T2 lane g-tsan at a60e9e2a5 (head 1d22ba80d)
+host: rvm (Fedora aarch64), clone /home/gael/projects/rustty-p8w9t2 (git archive 1d22ba80d plus .port and docs/superpowers copied from the worktree, since .gitattributes export-ignores them)
+### CMD: bash .port/tools/gates/sanitizers.sh --gate tsan
+start (UTC): 2026-10-08T17:21:07Z
+end (UTC):   2026-10-08T17:40:21Z
+wall: 1154 s
+rc: 1
+## verdict lines
+### G-TSAN: ThreadSanitizer (-Zbuild-std; C via cc with -fsanitize=thread) over the threaded crates (Linux/aarch64) ###
+  scope: rustty-core — the render thread, the surface mailbox and the app/surface lifecycle threads (surface/lifecycle.rs, app.rs)
+  ❌ tsan rustty-core: SANITIZER FINDING (47s) — log /home/gael/projects/rustty-p8w9t2/target/san-logs/tsan/rustty-core.log
+       SUMMARY: ThreadSanitizer: data race /home/gael/projects/rustty-p8w9t2/crates-sys/oniguruma-sys/vendor/src/regcomp.c:7667:7 in onig_reg_init
+       SUMMARY: ThreadSanitizer: data race (/home/gael/projects/rustty-p8w9t2/target/san-tsan/aarch64-unknown-linux-gnu/debug/deps/rustty_core-f63b364b97f86fc8+0x10d494) (BuildId: bf2ac1528d1a2831a66086e2f301b043495c826f) in pthread_cond_destroy
+       SUMMARY: ThreadSanitizer: data race (/home/gael/projects/rustty-p8w9t2/target/san-tsan/aarch64-unknown-linux-gnu/debug/deps/rustty_core-f63b364b97f86fc8+0x10d870) (BuildId: bf2ac1528d1a2831a66086e2f301b043495c826f) in pthread_mutex_destroy
+       SUMMARY: ThreadSanitizer: data race (/home/gael/projects/rustty-p8w9t2/target/san-tsan/aarch64-unknown-linux-gnu/debug/deps/rustty_core-f63b364b97f86fc8+0x119878) (BuildId: bf2ac1528d1a2831a66086e2f301b043495c826f) in memcmp
+  rustty-core                          FINDING             87 tests     47s
+G-TSAN: RED
+## tail
+### CMD: bash .port/tools/gates/sanitizers.sh --gate tsan
+### G-TSAN: ThreadSanitizer (-Zbuild-std; C via cc with -fsanitize=thread) over the threaded crates (Linux/aarch64) ###
+  scope: rustty-core — the render thread, the surface mailbox and the app/surface lifecycle threads (surface/lifecycle.rs, app.rs)
+  scope: rustty-termio — the pty read thread, the exec/Command fork paths and the termio mailbox
+  scope: rustty-xev — the libxev port's thread pool, async wakeups and intrusive queues
+  scope: rustty-renderer — the renderer Thread and its cross-thread draw/sync state (N437's area)
+  scope: rustty-vt:wuffs,oniguruma — the vt search thread (search/thread.rs), the tmux control/viewer threads and the oniguruma first-use init race test (tmux::control::concurrent_first_notifications_do_not_race_oniguruma_init, needs the oniguruma feature; G-ASAN's FEATURE_LANES spec, so the default
+  scope: rustty-vt-c — the C API's handles used from embedders' threads (search ticks, terminal effects)
+  scope: highway-sys — the vendored Highway runtime's dispatch state, shared by every thread that runs a SIMD routine; holds UD377's regression test (concurrent_supported_targets_calls_agree)
+  tests one at a time on Linux: rustty-xev — TSan models each fd as a word written by the call that opens it and by close; it sees neither the io_uring arm's close ops (the kernel closes the socket) nor fds opened by raw syscalls (SYS_pidfd_open, io_uring_setup), so when one test's closed socket num
+=== sanitizer matrix: tsan over 7 crate spec(s); one shared target dir /home/gael/projects/rustty-p8w9t2/target/san-tsan, deleted when the pass ends ===
+  ok tsan C archives: 17 built for the instrumented target, 17 instrumented (__tsan_ references), the rest named exceptions
+  ❌ tsan rustty-core: SANITIZER FINDING (47s) — log /home/gael/projects/rustty-p8w9t2/target/san-logs/tsan/rustty-core.log
+       SUMMARY: ThreadSanitizer: data race /home/gael/projects/rustty-p8w9t2/crates-sys/oniguruma-sys/vendor/src/regcomp.c:7667:7 in onig_reg_init
+       SUMMARY: ThreadSanitizer: data race (/home/gael/projects/rustty-p8w9t2/target/san-tsan/aarch64-unknown-linux-gnu/debug/deps/rustty_core-f63b364b97f86fc8+0x10d494) (BuildId: bf2ac1528d1a2831a66086e2f301b043495c826f) in pthread_cond_destroy
+       SUMMARY: ThreadSanitizer: data race (/home/gael/projects/rustty-p8w9t2/target/san-tsan/aarch64-unknown-linux-gnu/debug/deps/rustty_core-f63b364b97f86fc8+0x10d870) (BuildId: bf2ac1528d1a2831a66086e2f301b043495c826f) in pthread_mutex_destroy
+       SUMMARY: ThreadSanitizer: data race (/home/gael/projects/rustty-p8w9t2/target/san-tsan/aarch64-unknown-linux-gnu/debug/deps/rustty_core-f63b364b97f86fc8+0x119878) (BuildId: bf2ac1528d1a2831a66086e2f301b043495c826f) in memcmp
+       WARNING: ThreadSanitizer: data race (pid=3889553)
+  ok tsan C archives: 17 built for the instrumented target, 17 instrumented (__tsan_ references), the rest named exceptions
+  ✅ tsan rustty-termio: 112 test(s) ran, 35s — 112 passed, 6 ignored
+  ok tsan C archives: 17 built for the instrumented target, 17 instrumented (__tsan_ references), the rest named exceptions
+  ✅ tsan rustty-xev: 111 test(s) ran, 8s — 111 passed, 0 ignored
+  ok tsan C archives: 17 built for the instrumented target, 17 instrumented (__tsan_ references), the rest named exceptions
+  ✅ tsan rustty-renderer: 158 test(s) ran, 13s — 158 passed, 1 ignored
+  ok tsan C archives: 17 built for the instrumented target, 17 instrumented (__tsan_ references), the rest named exceptions
+  ✅ tsan rustty-vt:wuffs,oniguruma: 3444 test(s) ran, 998s — 3444 passed, 21 ignored
+  ok tsan C archives: 17 built for the instrumented target, 17 instrumented (__tsan_ references), the rest named exceptions
+  ✅ tsan rustty-vt-c: 604 test(s) ran, 48s — 604 passed, 1 ignored
+  ok tsan C archives: 17 built for the instrumented target, 17 instrumented (__tsan_ references), the rest named exceptions
+  ✅ tsan highway-sys: 19 test(s) ran, 1s — 19 passed, 0 ignored
+--- tsan matrix summary: 4448 test(s) ran, wall 1154s (19 min) ---
+  rustty-core                          FINDING             87 tests     47s
+  rustty-termio                        GREEN              112 tests     35s
+  rustty-xev                           GREEN              111 tests      8s
+  rustty-renderer                      GREEN              158 tests     13s
+  rustty-vt:wuffs,oniguruma            GREEN             3444 tests    998s
+  rustty-vt-c                          GREEN              604 tests     48s
+  highway-sys                          GREEN               19 tests      1s
+G-TSAN: RED

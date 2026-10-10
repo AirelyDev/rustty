@@ -6,7 +6,7 @@ use super::*;
 
 /// C: GhosttyKittyGraphics -> RusttyKittyGraphics (R2)
 // pub const KittyGraphics = kitty_gfx_c.KittyGraphics;
-pub type KittyGraphics = KittyGraphicsHandle;
+pub use crate::kitty_graphics::KittyGraphics;
 
 /// C: GhosttyTerminalScreen -> RusttyTerminalScreen (R2)
 // pub const TerminalScreen = ScreenSet.Key;
@@ -15,6 +15,114 @@ pub type TerminalScreen = ScreenSetKey;
 /// C: GhosttyTerminalScrollbar -> RusttyTerminalScrollbar (R2)
 // pub const TerminalScrollbar = PageList.Scrollbar.C;
 pub type TerminalScrollbar = ScrollbarC;
+
+/// C: GhosttyTerminalMemoryUsage -> RusttyTerminalMemoryUsage (R2)
+///
+/// This is a sized struct, so new fields may only be added to the end.
+/// The figures for each screen are separate fields rather than a nested
+/// struct per screen, because only the outermost struct can grow. Add a
+/// new per-screen field as a primary and alternate pair.
+// pub const TerminalMemoryUsage = extern struct {
+//     size: usize = @sizeOf(TerminalMemoryUsage),
+//     compression_supported: bool = false,
+//     primary_pages: u64 = 0,
+//     ...
+//     alternate_image_bytes: u64 = 0,
+// };
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TerminalMemoryUsage {
+    pub size: usize,
+    pub compression_supported: bool,
+    pub primary_pages: u64,
+    pub primary_virtual_bytes: u64,
+    pub primary_resident_bytes: u64,
+    pub primary_compressed_pages: u64,
+    pub primary_compressed_bytes: u64,
+    pub primary_image_bytes: u64,
+    pub alternate_pages: u64,
+    pub alternate_virtual_bytes: u64,
+    pub alternate_resident_bytes: u64,
+    pub alternate_compressed_pages: u64,
+    pub alternate_compressed_bytes: u64,
+    pub alternate_image_bytes: u64,
+}
+
+// PORT NOTE: the reference's field defaults (`.{}`); Rust spells them as
+// `Default`.
+impl Default for TerminalMemoryUsage {
+    fn default() -> TerminalMemoryUsage {
+        TerminalMemoryUsage {
+            size: size_of::<TerminalMemoryUsage>(),
+            compression_supported: false,
+            primary_pages: 0,
+            primary_virtual_bytes: 0,
+            primary_resident_bytes: 0,
+            primary_compressed_pages: 0,
+            primary_compressed_bytes: 0,
+            primary_image_bytes: 0,
+            alternate_pages: 0,
+            alternate_virtual_bytes: 0,
+            alternate_resident_bytes: 0,
+            alternate_compressed_pages: 0,
+            alternate_compressed_bytes: 0,
+            alternate_image_bytes: 0,
+        }
+    }
+}
+
+impl TerminalMemoryUsage {
+    /// Gather the memory usage of `t`. The size field is set to
+    /// `caller_size` instead of our own size, so that copying the result
+    /// into the caller's struct keeps the size they passed in.
+    ///
+    /// # Safety
+    /// `t` must be a live terminal; no `&mut` of it or its screens may be
+    /// live (the reads form shared borrows of each screen).
+    // fn init(t: *const ZigTerminal, caller_size: usize) TerminalMemoryUsage {
+    unsafe fn init(t: *const ZigTerminal, caller_size: usize) -> TerminalMemoryUsage {
+        // var result: TerminalMemoryUsage = .{
+        //     .size = caller_size,
+        //     .compression_supported = terminal_mem.canReclaim(.strict),
+        // };
+        let mut result = TerminalMemoryUsage {
+            size: caller_size,
+            compression_supported: rustty_vt::mem::can_reclaim(
+                rustty_vt::mem::DecommitMode::Strict,
+            ),
+            ..TerminalMemoryUsage::default()
+        };
+
+        // const primary = t.screens.get(.primary).?.memoryUsage();
+        // SAFETY: `t` is live (caller contract); the primary screen always
+        // exists.
+        let primary = unsafe { (*(*t).screens.get(ScreenSetKey::Primary).unwrap()).memory_usage() };
+        result.primary_pages = primary.pages.pages as u64;
+        result.primary_virtual_bytes = primary.pages.virtual_bytes as u64;
+        result.primary_resident_bytes = primary.pages.resident_bytes as u64;
+        result.primary_compressed_pages = primary.pages.compressed_pages as u64;
+        result.primary_compressed_bytes = primary.pages.compressed_bytes as u64;
+        result.primary_image_bytes = primary.image_bytes as u64;
+
+        // The alternate screen is created on first use. Until then its
+        // fields stay zero.
+        // if (t.screens.get(.alternate)) |screen| { ... }
+        // SAFETY: as above.
+        if let Some(screen) = unsafe { (*t).screens.get(ScreenSetKey::Alternate) } {
+            // SAFETY: a live screen of the live terminal.
+            let alternate = unsafe { (*screen).memory_usage() };
+            result.alternate_pages = alternate.pages.pages as u64;
+            result.alternate_virtual_bytes = alternate.pages.virtual_bytes as u64;
+            result.alternate_resident_bytes = alternate.pages.resident_bytes as u64;
+            result.alternate_compressed_pages = alternate.pages.compressed_pages as u64;
+            result.alternate_compressed_bytes = alternate.pages.compressed_bytes as u64;
+            result.alternate_image_bytes = alternate.image_bytes as u64;
+        }
+
+        // return result;
+        result
+    }
+}
 
 /// C: GhosttyTerminalData -> RusttyTerminalData (R2)
 // pub const TerminalData = enum(c_int) { ... };
@@ -73,6 +181,8 @@ pub enum TerminalData {
     ///
     /// Output type: `mouse::Shape` (oracle 78494bad8/67fb0c940).
     MouseShape = 41,
+    /// Output type: `TerminalMemoryUsage` (oracle 8834e161c).
+    MemoryUsage = 42,
     // /// Output type expected for querying the data of the given kind.
     // pub fn OutType(comptime self: TerminalData) type {
     //     return switch (self) {
@@ -116,6 +226,7 @@ pub enum TerminalData {
     //         .kitty_graphics => KittyGraphics,
     //         .selection => selection_c.CSelection,
     //         .mode => ModeConfig,
+    //         .memory_usage => TerminalMemoryUsage,
     //     };
     // }
     // (`.continuation_max_bytes => usize` rides Bundle S.)
@@ -147,7 +258,7 @@ const _: () = assert!(std::mem::size_of::<TerminalData>() == std::mem::size_of::
 // Bundle M reopened the holes at 36/38; Bundle S closed them again
 // (`continuation_max_bytes` = 36, `vt_ground` = 38) — the list is empty but
 // the MECHANISM stays.
-const TERMINAL_DATA_MAX: c_int = 40;
+const TERMINAL_DATA_MAX: c_int = 42;
 const TERMINAL_DATA_HOLES: &[c_int] = &[];
 
 impl TerminalData {
@@ -401,6 +512,42 @@ unsafe fn get_typed(terminal_: Terminal, data: TerminalData, out: *mut c_void) -
             // field via the raw ptr (no `&mut` retag of the handler-aliased
             // terminal).
             unsafe { *(out as *mut rustty_vt::mouse::Shape) = (*t).mouse_shape };
+        }
+
+        // .memory_usage => {
+        //     // A smaller size means the caller doesn't have every field of
+        //     // the first version of this struct, so reject it. A larger size
+        //     // means the caller was built against a newer version with more
+        //     // fields. We write only the fields we know and leave the rest
+        //     // alone.
+        //     //
+        //     // When fields are added later, compare against the size of the
+        //     // first version here, and copy only min(out.size, current size)
+        //     // bytes.
+        //     if (out.size < @sizeOf(TerminalMemoryUsage)) return .invalid_value;
+        //     out.* = .init(t, out.size);
+        // },
+        TerminalData::MemoryUsage => {
+            // A smaller size means the caller doesn't have every field of
+            // the first version of this struct, so reject it. A larger size
+            // means the caller was built against a newer version with more
+            // fields. We write only the fields we know and leave the rest
+            // alone.
+            //
+            // When fields are added later, compare against the size of the
+            // first version here, and copy only min(out.size, current size)
+            // bytes.
+            let out = out as *mut TerminalMemoryUsage;
+            // SAFETY: `out` points to a readable+writable
+            // `TerminalMemoryUsage` (caller contract; `get` already rejected
+            // a null `out`).
+            let caller_size = unsafe { (*out).size };
+            if caller_size < size_of::<TerminalMemoryUsage>() {
+                return Result::InvalidValue;
+            }
+            // SAFETY: as above; `t` is the live terminal, read through shared
+            // borrows of its screens only.
+            unsafe { *out = TerminalMemoryUsage::init(t, caller_size) };
         }
 
         // .scrollbar => out.* = t.screens.active.pages.scrollbar().cval(),

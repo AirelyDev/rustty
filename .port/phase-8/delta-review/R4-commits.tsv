@@ -1,0 +1,70 @@
+sha	date	subject	files	area	cited_by	flag
+5170b06f6	2026-09-25	terminal: fix relative prompt click coordinates	src/Surface.zig	R1+R3	R1+R3	-
+a573781c6	2026-09-29	terminal: clear the kitty placeholder flag on full-row clears	src/terminal/Screen.zig, src/terminal/Terminal.zig, src/terminal/page.zig	R1	R1+R4	re-opens LEDGER S133-F1 (CLOSED row ported the old behaviour)
+05392dcc9	2026-09-23	renderer: nuke stub WebGL renderer	src/renderer.zig, src/renderer/WebGL.zig, src/renderer/backend.zig	R3	R3+R4	deletion: Rustty webgl.rs + check_leaks.sh G6 list
+40d5b860d	2026-09-23	renderer: share render device state across renderers	src/App.zig, src/Surface.zig, src/renderer.zig, src/renderer/Metal.zig, src/renderer/OpenGL.zig, src/renderer/Options.zig, src/renderer/generic.zig, src/renderer/metal/Device.zig, src/renderer/opengl/Device.zig	R3	R3+R4	new files metal/Device.zig, opengl/Device.zig
+0d82239b5	2026-09-27	fix(gtk): warn once about missing/invalid DPI values	src/apprt/gtk/class/surface.zig	R3	R3	-
+7b11f3dca	2026-09-29	libghostty: unknown sequence callback for OSC	example/c-vt-effects/src/main.c, include/ghostty/vt/osc.h, include/ghostty/vt/terminal.h, src/benchmark/OscParser.zig, src/benchmark/TerminalStream.zig, src/lib_vt.zig, src/terminal/c/main.zig, src/terminal/c/osc.zig, src/terminal/c/terminal.zig, src/terminal/c/types.zig, src/terminal/osc.zig, src/terminal/osc/parsers.zig, src/terminal/osc/parsers/unknown.zig, src/terminal/stream.zig, src/terminal/stream_terminal.zig, src/termio/stream_handler.zig	R2+R1	R1+R2+R3+R4	new file unknown.zig
+520d8f55a	2026-09-29	terminal: CAN and SUB cancel an in-progress OSC	include/ghostty/vt/osc.h, src/terminal/osc.zig, src/terminal/osc/parsers/unknown.zig, src/terminal/stream_terminal.zig	R2+R1	R1+R2	-
+a141f9bdb	2026-09-22	windows: run global constructors in DLLs	src/lib/windows_dll.zig, src/lib_vt.zig	R2+R4	R2+R4	NON-PORT candidate (Zig toolchain DllMain workaround; phase-4 main_c precedent)
+a7cf951eb	2026-09-22	ci: test the libghostty-vt DLL with c-vt-effects on Windows	.github/workflows/test.yml	R4	R2+R4	CI: new Windows DLL steps
+438d584f0	2026-09-29	test: run esctest against libghostty-vt, report-only in CI	.github/workflows/test.yml, test/esctest/README.md, test/esctest/build.zig, test/esctest/build.zig.zon, test/esctest/src/main.zig	R4	R2+R4	CI: new test-esctest job + test/esctest harness
+f9ab34f10	2026-09-29	terminal: repair live pending wrap after resize	src/terminal/Screen.zig, src/terminal/Terminal.zig	R1	R1	-
+80456f057	2026-09-30	renderer: fix custom shader selection color uniform layout	src/renderer/shadertoy.zig	R3	R3+R4	fixes-UD20 (FIXED-SAME)
+6f51f41d0	2026-09-30	Update VOUCHED list (#14462)	.github/VOUCHED.td	N/A	R4	N/A (VOUCHED governance, NON_PORTS phase-3 G13 §6)
+d67ab3213	2026-09-30	Update VOUCHED list (#14464)	.github/VOUCHED.td	N/A	R4	N/A (VOUCHED governance, NON_PORTS phase-3 G13 §6)
+5b435d548	2026-09-30	Update VOUCHED list (#14466)	.github/VOUCHED.td	N/A	R4	N/A (VOUCHED governance, NON_PORTS phase-3 G13 §6)
+b0174d03f	2026-09-30	Update VOUCHED list (#14469)	.github/VOUCHED.td	N/A	R4	N/A (VOUCHED governance, NON_PORTS phase-3 G13 §6)
+e2721d093	2026-09-29	macos: don't show Kitty clipboard program name in prompts	macos/Sources/Features/ClipboardConfirmation/ClipboardConfirmationController.swift, macos/Sources/Features/ClipboardConfirmation/ClipboardConfirmationView.swift, macos/Sources/Ghostty/Ghostty.App.swift, macos/Sources/Ghostty/Ghostty.ClipboardConfirmationRequest.swift	R3	R3	-
+6fbb560cd	2026-09-30	cli: include the port in the ssh-terminfo cache key	src/cli/ssh-cache/DiskCache.zig, src/cli/ssh.zig, src/cli/ssh_cache.zig	R3	R3+R4	UD160 re-anchor; UD160 still live
+4da7523fa	2026-09-30	Update VOUCHED list (#14471)	.github/VOUCHED.td	N/A	R4	N/A (VOUCHED governance, NON_PORTS phase-3 G13 §6)
+be595d8f0	2026-09-30	macOS: remove compiler check for Shortcut and Tab bar fix	macos/Sources/App/AppDelegate.swift, macos/Sources/Features/Terminal/Window, Styles/TitlebarTabsTahoeTerminalWindow.swift, macos/Sources/Features/Terminal/Window, Styles/TransparentTitlebarTerminalWindow.swift	R3	R3	-
+afded91df	2026-09-30	terminal: preserve saved cursor position during repeated widening	src/terminal/PageList.zig, src/terminal/Terminal.zig	R1	R1	-
+bb20f8e45	2026-09-30	terminal: reset the palette on RIS	src/terminal/Terminal.zig	R1	R1+R4	-
+2b1edded2	2026-09-30	terminal: cosmetic changes in `fullReset`	src/terminal/Terminal.zig	R1	R1	comments only
+7bb45ba34	2026-09-30	libghostty: add semantic prompt and reset effects	include/ghostty/vt/terminal.h, src/lib_vt.zig, src/terminal/c/terminal.zig, src/terminal/c/types.zig, src/terminal/main.zig, src/terminal/stream_terminal.zig	R2+R1	R1+R2	-
+02c51decf	2026-09-30	terminal/c: test osc command data with a NULL command	src/terminal/c/osc.zig	R2	R2+R4	UD312 test
+51d3ca168	2026-09-30	terminal/c: return false from osc command data on NULL	src/terminal/c/osc.zig	R2	R2+R4	fixes-UD312 (FIXED-SAME)
+9a4787d90	2026-09-30	vt: don't call a same-size terminal resize a no-op	include/ghostty/vt/terminal.h	R2	R1+R2	header doc only
+fa604a170	2026-09-30	terminal/c: test a paste reader ignoring a refused write	src/terminal/c/paste.zig	R2	R2	-
+2b0ceff7d	2026-09-30	terminal/c: fail a paste after any refused write	src/terminal/c/paste.zig	R2	R2+R4	-
+2e36658c6	2026-09-30	opengl: explain why the surfaceless display can't be created	pkg/opengl/egl.zig, src/renderer/opengl/Device.zig	R3	R3	-
+1dc485f10	2026-10-01	Update VOUCHED list (#14491)	.github/VOUCHED.td	N/A	R4	N/A (VOUCHED governance, NON_PORTS phase-3 G13 §6)
+b1bfd1d9c	2026-10-01	terminal: reset mouse shape on empty OSC 22	src/terminal/c/terminal.zig, src/terminal/stream.zig, src/terminal/stream_terminal.zig, src/termio/stream_handler.zig	R1+R2+R3	R1+R2+R3	-
+36953bca8	2026-10-01	terminal: route OSC 105 to the color parser	src/terminal/Parser.zig, src/terminal/osc.zig, src/terminal/osc/parsers/color.zig	R2+R1	R1+R2	-
+d5427745d	2026-10-01	Update VOUCHED list (#14497)	.github/VOUCHED.td	N/A	R4	N/A (VOUCHED governance, NON_PORTS phase-3 G13 §6)
+8834e161c	2026-10-01	libghostty-vt: add memory usage query	example/c-vt-compression/README.md, example/c-vt-compression/src/main.c, include/ghostty/vt/terminal.h, src/datastruct/untouched_pool.zig, src/datastruct/wasm_page_pool.zig, src/terminal/PageList.zig, src/terminal/Screen.zig, src/terminal/c/terminal.zig, src/terminal/c/types.zig	R1+R2	R1+R2	-
+88e66cbc6	2026-10-01	libghostty-vt: option to compress snapshot history while decoding	example/c-vt-snapshot/README.md, example/c-vt-snapshot/src/main.c, include/ghostty/vt/snapshot.h, src/terminal/PageList.zig, src/terminal/c/snapshot.zig, src/terminal/search/pagelist.zig, src/terminal/search/screen.zig, src/terminal/snapshot/history.zig, src/terminal/snapshot/main.zig, src/terminal/snapshot/snapshot.zig	R1+R2	R1+R2	-
+9272a2f7c	2026-09-26	terminal: support DECRQCRA and XTCHECKSUM	include/ghostty/vt/terminal.h, src/config/Config.zig, src/terminal/Terminal.zig, src/terminal/c/terminal.zig, src/terminal/main.zig, src/terminal/stream.zig, src/terminal/stream_terminal.zig, src/terminal/xt_checksum.zig, src/termio/Termio.zig, src/termio/stream_handler.zig	R1+R2+R3	R1+R2+R3+R4	new file xt_checksum.zig; G9 config key
+00a19db51	2026-09-27	config: add vt-xt-checksum-extension	src/config/Config.zig, src/terminal/Terminal.zig, src/termio/Termio.zig, src/termio/stream_handler.zig	R3+R1	R1+R3+R4	G9: new config key (2 keys with 9272a2f7c)
+7e2d1793d	2026-09-27	lib-vt: add GHOSTTY_TERMINAL_OPT_XT_CHECKSUM_EXTENSION	include/ghostty/vt/terminal.h, src/terminal/c/terminal.zig	R2	R1+R2	-
+25b04b410	2026-09-27	lib-vt: export xt_checksum and device_attributes	src/lib_vt.zig	R2	R1+R2	-
+edcaf6670	2026-09-30	test/esctest: enable DECRQCRA	test/esctest/README.md, test/esctest/src/main.zig	R4+R1	R1+R2+R4	esctest README/main
+cc0276778	2026-10-01	terminal: link to xterm's checksum implementation	src/terminal/xt_checksum.zig	R1	R1	comments only
+5f0d4febc	2026-10-01	terminal: use a rectangle selection for DECRQCRA	src/terminal/Terminal.zig, src/terminal/xt_checksum.zig	R1	R1	-
+b2f557c6c	2026-10-01	terminal: inline the checksum test helper	src/terminal/xt_checksum.zig	R1	R1	test refactor only
+01b9f4958	2026-10-01	terminal: link to xterm's checksumExtension source	src/config/Config.zig, src/terminal/xt_checksum.zig	R1+R3	R1+R3+R4	comments only
+e8b858cc6	2026-10-01	terminal/tmux: don't count unstored bytes against max_bytes	src/terminal/tmux/control.zig	R1	R1+R4	UD6 re-anchor; UD6 still live
+136029788	2026-10-01	macos: honor window-save-state=never for restorable windows	macos/Sources/Features/Terminal/TerminalController.swift	R3	R3	-
+e55c687a4	2026-10-01	input: encode ctrl+alt+shift+backspace in legacy mode	src/input/function_keys.zig, src/input/key_encode.zig	R1	R1	-
+83edd491e	2026-10-01	Update VOUCHED list (#14510)	.github/VOUCHED.td	N/A	R4	N/A (VOUCHED governance, NON_PORTS phase-3 G13 §6)
+934ef8140	2026-10-02	macos: update window restoration on config reload	macos/Sources/Features/Terminal/TerminalController.swift, macos/Tests/Terminal/TerminalControllerRestorationTests.swift	R3	R3	Swift test file added, removed by 0e75d015f (net zero)
+0e75d015f	2026-10-02	macos: simplify window restoration setup	macos/Sources/Features/Terminal/TerminalController.swift, macos/Tests/Terminal/TerminalControllerRestorationTests.swift	R3	R3	removes the test file 934ef8140 added
+82ae67b9f	2026-10-02	libghostty: document allocator alignment as a bit count	include/ghostty/vt/allocator.h	R2	R2	header doc only
+dfd7bafcd	2026-10-03	cli: address review feedback on the ssh-cache port	src/cli/ssh-cache/DiskCache.zig, src/cli/ssh_cache.zig	R3	R3+R4	UD160 re-anchor
+f5a7f706f	2026-10-02	Update VOUCHED list (#14520)	.github/VOUCHED.td	N/A	R4	N/A (VOUCHED governance, NON_PORTS phase-3 G13 §6)
+822e84272	2026-10-02	Update VOUCHED list (#14522)	.github/VOUCHED.td	N/A	R4	N/A (VOUCHED governance, NON_PORTS phase-3 G13 §6)
+406f2e544	2026-10-04	deps: Update iTerm2 color schemes	build.zig.zon, build.zig.zon.json, build.zig.zon.nix, build.zig.zon.txt, flatpak/zig-packages.json	R4	R4	themes 617->657 (+40, 1 changed)
+f96c9711b	2026-10-04	Update VOUCHED list (#14528)	.github/VOUCHED.td	N/A	R4	N/A (VOUCHED governance, NON_PORTS phase-3 G13 §6)
+e6db5b633	2026-10-01	terminal: fix crash after shrinking columns splits a wide char	src/terminal/PageList.zig, src/terminal/Terminal.zig	R1	R1+R4	-
+aca9bf031	2026-10-04	libghostty-vt: zero the decode_png output before the callback	include/ghostty/vt/sys.h, src/terminal/c/sys.zig	R2	R2+R4	-
+157c44f64	2026-10-01	input: UTF-8 encode the button in 1005 mouse reports	src/input/mouse_encode.zig	R1	R1+R4	UD60 re-anchor; UD60 still live
+140feb86a	2026-10-04	renderer: always release shaders when the render thread exits	src/renderer/generic.zig	R3	R3+R4	-
+c3203ea4b	2026-10-06	Update VOUCHED list (#14550)	.github/VOUCHED.td	N/A	R4	N/A (VOUCHED governance, NON_PORTS phase-3 G13 §6)
+13b5ab204	2026-10-06	terminal: stop line selection at prompt boundaries across blank cells	src/terminal/Screen.zig	R1	R1	-
+6220a3617	2026-10-06	terminal: print codepoints above 0xFF unmapped in a charset, as xterm	src/terminal/Terminal.zig	R1	R1	-
+2febd0116	2026-10-06	Update VOUCHED list (#14566)	.github/VOUCHED.td	N/A	R4	N/A (VOUCHED governance, NON_PORTS phase-3 G13 §6)
+bae2c3cdb	2026-10-02	libghostty-vt: program status protocol (OSC 7501)	include/ghostty/vt/osc.h, include/ghostty/vt/terminal.h, src/terminal/c/terminal.zig, src/terminal/c/types.zig, src/terminal/osc.zig, src/terminal/osc/parsers.zig, src/terminal/osc/parsers/program_status.zig, src/terminal/stream.zig, src/terminal/stream_terminal.zig, src/termio/stream_handler.zig	R2+R1+R3	R1+R2+R3+R4	new file program_status.zig
+c706451fe	2026-10-07	terminal: apply a single shift to exactly one printed character	src/terminal/Terminal.zig	R1	R1	-
+34f39002c	2026-10-07	Update VOUCHED list (#14573)	.github/VOUCHED.td	N/A	R4	N/A (VOUCHED governance, NON_PORTS phase-3 G13 §6)
+a60e9e2a5	2026-10-07	Update VOUCHED list (#14585)	.github/VOUCHED.td	N/A	R4	N/A (VOUCHED governance, NON_PORTS phase-3 G13 §6)

@@ -1,0 +1,6 @@
+  ok  total_test_blocks    frozen=  3234 live=  4397 delta= +1163  (recorded 3234->4397)
+  ok  total_assertions     frozen= 11975 live= 17717 delta= +5742  (recorded 11975->17717)
+  ok  files_with_tests     frozen=   279 live=   357 delta=   +78  (recorded 279->357)
+
+GREEN: the frozen-vs-live census delta is recorded and current.
+census exit=0

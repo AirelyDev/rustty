@@ -437,6 +437,12 @@ fn build_keys() -> KeyEntryArray {
                 ..Default::default()
             },
             Entry {
+                mods: m(true, true, true, false),
+                modify_other_keys: ModifyKeys::Set,
+                sequence: "\x1b\x08".to_string(),
+                ..Default::default()
+            },
+            Entry {
                 mods: m(false, false, false, true),
                 modify_other_keys: ModifyKeys::Set,
                 sequence: "\x7f".to_string(),

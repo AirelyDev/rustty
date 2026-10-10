@@ -119,56 +119,6 @@ void on_clipboard_read(
 }
 //! [effects-clipboard-read]
 
-//! [effects-desktop-notification]
-void on_desktop_notification(
-    RusttyTerminal terminal,
-    void* userdata,
-    const RusttyTerminalDesktopNotification* notification) {
-  (void)terminal;
-  (void)userdata;
-
-  // Sized-struct contract: only read fields present within `size`. Asserting
-  // the exact size here is what proves the library and this header agree —
-  // a by-value ABI mismatch shows up as a wrong `size`, not as a crash.
-  if (notification->size != sizeof(RusttyTerminalDesktopNotification)) {
-    fprintf(stderr, "  desktop notification: BAD size %zu (expected %zu)\n",
-            notification->size, sizeof(RusttyTerminalDesktopNotification));
-    return;
-  }
-
-  printf("  desktop notification (size=%zu, title=%zu, body=%zu)\n",
-         notification->size, notification->title.len, notification->body.len);
-  printf("    title: ");
-  if (notification->title.len > 0) {
-    fwrite(notification->title.ptr, 1, notification->title.len, stdout);
-  }
-  printf("\n    body: ");
-  if (notification->body.len > 0) {
-    fwrite(notification->body.ptr, 1, notification->body.len, stdout);
-  }
-  printf("\n");
-}
-//! [effects-desktop-notification]
-
-//! [effects-progress-report]
-void on_progress_report(RusttyTerminal terminal,
-                        void* userdata,
-                        const RusttyTerminalProgressReport* report) {
-  (void)terminal;
-  (void)userdata;
-
-  if (report->size != sizeof(RusttyTerminalProgressReport)) {
-    fprintf(stderr, "  progress report: BAD size %zu (expected %zu)\n",
-            report->size, sizeof(RusttyTerminalProgressReport));
-    return;
-  }
-
-  // `progress` is -1 when the running program omitted the percentage.
-  printf("  progress report (size=%zu, state=%d, progress=%d)\n",
-         report->size, (int)report->state, (int)report->progress);
-}
-//! [effects-progress-report]
-
 //! [effects-unknown-sequence]
 void on_unknown_sequence(
     RusttyTerminal terminal,
@@ -185,6 +135,22 @@ void on_unknown_sequence(
            apc->content.len);
     if (apc->content.len > 0) {
       fwrite(apc->content.ptr, 1, apc->content.len, stdout);
+    }
+    printf("\n");
+    break;
+  }
+  case RUSTTY_TERMINAL_UNKNOWN_SEQUENCE_OSC: {
+    // The content starts with the OSC number, for example
+    // "7400;status=busy". A real application would check for the
+    // numbers it implements and ignore the rest. If it replies, it should
+    // end the reply with the same terminator the program used.
+    const RusttyTerminalUnknownOscSequence* osc = &sequence->value.osc;
+    printf("  unknown OSC (truncated=%s, terminator=%s, content=%zu bytes): ",
+           osc->truncated ? "yes" : "no",
+           osc->terminator == RUSTTY_OSC_TERMINATOR_BEL ? "BEL" : "ST",
+           osc->content.len);
+    if (osc->content.len > 0) {
+      fwrite(osc->content.ptr, 1, osc->content.len, stdout);
     }
     printf("\n");
     break;
@@ -219,10 +185,6 @@ int main() {
       (const void *)on_clipboard_write);
   rustty_terminal_set(terminal, RUSTTY_TERMINAL_OPT_CLIPBOARD_READ,
       (const void *)on_clipboard_read);
-  rustty_terminal_set(terminal, RUSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION,
-      (const void *)on_desktop_notification);
-  rustty_terminal_set(terminal, RUSTTY_TERMINAL_OPT_PROGRESS_REPORT,
-      (const void *)on_progress_report);
   rustty_terminal_set(terminal, RUSTTY_TERMINAL_OPT_UNKNOWN_SEQUENCE,
       (const void *)on_unknown_sequence);
 
@@ -265,31 +227,18 @@ int main() {
   rustty_terminal_vt_write(terminal, (const uint8_t*)clipboard_read_seq,
                             strlen(clipboard_read_seq));
 
-  // 6. Desktop notification (OSC 777 ; notify ; <title> ; <body> BEL).
-  //    OSC 9 is the title-less form.
-  printf("Sending desktop notifications:\n");
-  const char* osc9 = "\x1B]9;Build complete\x1B\\";
-  rustty_terminal_vt_write(terminal, (const uint8_t*)osc9, strlen(osc9));
-  const char* osc777 = "\x1B]777;notify;Rustty;Needs attention\x07";
-  rustty_terminal_vt_write(terminal, (const uint8_t*)osc777, strlen(osc777));
-
-  // 7. Progress report (OSC 9 ; 4 ; <state> ; <percent> ST). The second one
-  //    omits the percentage, which the callback sees as -1.
-  printf("Sending progress reports:\n");
-  const char* progress_set = "\x1B]9;4;1;42\x1B\\";
-  rustty_terminal_vt_write(terminal, (const uint8_t*)progress_set,
-                            strlen(progress_set));
-  const char* progress_indeterminate = "\x1B]9;4;3\x1B\\";
-  rustty_terminal_vt_write(terminal, (const uint8_t*)progress_indeterminate,
-                            strlen(progress_indeterminate));
-
-  // 8. Unsupported APC sequence
+  // 6. Unsupported APC sequence
   printf("Sending unknown APC:\n");
   const char* unknown_apc = "\x1B_private-command;payload\x1B\\";
   rustty_terminal_vt_write(terminal, (const uint8_t*)unknown_apc,
                             strlen(unknown_apc));
 
-  // 9. Another bell to show the counter increments
+  printf("Sending unknown OSC:\n");
+  const char* unknown_osc = "\x1B]7400;status=busy\x07";
+  rustty_terminal_vt_write(terminal, (const uint8_t*)unknown_osc,
+                            strlen(unknown_osc));
+
+  // 7. Another bell to show the counter increments
   printf("Sending another BEL:\n");
   rustty_terminal_vt_write(terminal, &bel, 1);
 

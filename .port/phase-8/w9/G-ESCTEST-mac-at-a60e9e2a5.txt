@@ -1,0 +1,23 @@
+G-ESCTEST-mac at a60e9e2a5 (branch head 1d22ba80d)
+command: bash .port/tools/gates/check_esctest.sh
+host: Mac aarch64-apple-darwin (worktree p8-w9t2m)
+start: 2026-10-09T08:27:12Z
+end: 2026-10-09T08:28:34Z
+wall: 82s
+rc: 0
+---- tail ----
+   Compiling objc2-core-foundation v0.3.2
+   Compiling objc2-foundation v0.3.2
+   Compiling gettext-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/gettext-sys)
+   Compiling wuffs-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/wuffs-sys)
+   Compiling rustty-wuffs v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-wuffs)
+   Compiling rustty-font v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-font)
+   Compiling esctest-librustty v0.0.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/test/esctest)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.68s
+esctest-librustty exited 0
+== oracle: test/esctest at a60e9e2a57f73e1eef2bd1cf2995a467f69e7fb0
+esctest-libghostty exited 0
+Rustty: *** 264 tests passed, 42 known bugs, 261 TESTS FAILED ***
+oracle: *** 264 tests passed, 42 known bugs, 261 TESTS FAILED ***
+567 tests compared, 0 known differences, 0 findings
+G-ESCTEST GREEN: every esctest test has the same outcome and log against both.

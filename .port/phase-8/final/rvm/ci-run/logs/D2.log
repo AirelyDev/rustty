@@ -1,0 +1,14 @@
+D2 capacity-saturation inventory
+  base      : /home/gael/projects/rustty-p8final
+  inventory : /home/gael/projects/rustty-p8final/.port/audits/capacity-saturation.tsv
+  --------------------------------------------------------------
+  OK   csi_params  -> parser_params_capacity_saturation   [crates/rustty-vt/src/parser.rs:360]
+  OK   csi_intermediates  -> parser_intermediates_capacity_saturation   [crates/rustty-vt/src/parser.rs:356]
+  OK   dcs_decrqss  -> dcs_decrqss_capacity_saturation   [crates/rustty-vt/src/dcs.rs:411]
+  OK   kitty_kv_temp  -> kitty_kv_temp_capacity_saturation   [crates/rustty-vt/src/kitty/graphics_command.rs:57]
+  OK   apc_identify  -> apc_identify_buf_capacity_saturation   [crates/rustty-vt/src/apc/mod.rs:369]
+  OK   sgr_print_attributes  -> terminal_print_attributes_capacity_saturation   [crates/rustty-vt/src/terminal/attrs.rs:166]
+  OK   pagelist_pin_buf  -> pagelist_pin_buf_capacity_saturation   [crates/rustty-vt/src/pagelist/access.rs:228]
+  OK   osc_capture_buffer  -> osc_buffer_capacity_saturation   [crates/rustty-vt/src/osc/mod.rs:496]
+  --------------------------------------------------------------
+  D2: GREEN — all 8 fixed-array/counter pairs named + guarded.

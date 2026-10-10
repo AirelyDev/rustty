@@ -301,6 +301,36 @@ pub enum PrepareInputError {
     InputNotFound,
 }
 
+// The configuration for this IO that is derived from the main
+// configuration. This must be exported so that we don't need to
+// pass around Config pointers which makes memory management a pain.
+//
+// PORT NOTE (00a19db51): the reference inserted `xtChecksumFlags` between this
+// doc comment and `DerivedConfig`, so the comment sits above the function
+// there. Rust keeps it, in upstream order, as a plain comment and repeats it
+// as the doc comment of `DerivedConfig` below.
+
+/// Convert the vt-xt-checksum-extension config, whose values are named for
+/// what they turn on, to the XTCHECKSUM bits, which turn things off.
+// fn xtChecksumFlags(
+//     ext: configpkg.Config.XtChecksumExtension,
+// ) terminalpkg.xt_checksum.Flags {
+fn xt_checksum_flags(ext: rustty_config::XtChecksumExtension) -> rustty_vt::xt_checksum::Flags {
+    // return .{
+    //     .positive = !ext.negate,
+    //     .no_attributes = !ext.attributes,
+    //     .no_trim = !ext.trim,
+    //     .undrawn = ext.undrawn,
+    //     .full = ext.full,
+    // };
+    rustty_vt::xt_checksum::Flags::default()
+        .with_positive(!ext.negate)
+        .with_no_attributes(!ext.attributes)
+        .with_no_trim(!ext.trim)
+        .with_undrawn(ext.undrawn)
+        .with_full(ext.full)
+}
+
 /// The configuration for this IO that is derived from the main
 /// configuration. This must be exported so that we don't need to
 /// pass around Config pointers which makes memory management a pain.
@@ -322,6 +352,10 @@ pub struct DerivedConfig {
     // PORT NOTE: `enquiry_response: []const u8` -> owned `Vec<u8>` (R1 raw
     // bytes; arena-`dupe`d in the reference).
     pub enquiry_response: Vec<u8>,
+    // xt_checksum_report: bool,
+    pub xt_checksum_report: bool,
+    // xt_checksum_extension: terminalpkg.xt_checksum.Flags,
+    pub xt_checksum_extension: rustty_vt::xt_checksum::Flags,
     pub conditional_state: conditional::State,
 }
 
@@ -373,6 +407,10 @@ impl DerivedConfig {
             // .clipboard_write_limit = config.@"clipboard-write-limit-bytes".value,
             clipboard_write_limit: config.clipboard_write_limit_bytes.value,
             enquiry_response: config.enquiry_response.clone(),
+            // .xt_checksum_report = config.@"vt-xt-checksum-report",
+            xt_checksum_report: config.vt_xt_checksum_report,
+            // .xt_checksum_extension = xtChecksumFlags(config.@"vt-xt-checksum-extension"),
+            xt_checksum_extension: xt_checksum_flags(config.vt_xt_checksum_extension),
             conditional_state: config._conditional_state,
             // This has to be last so that we copy AFTER the arena allocations
             // above happen (Zig assigns in order).
@@ -472,6 +510,7 @@ impl<M: AppMailbox> Termio<M> {
     //         .osc_color_report_format = opts.config.osc_color_report_format,
     //         .clipboard_write = opts.config.clipboard_write,
     //         .enquiry_response = opts.config.enquiry_response,
+    //         .xt_checksum_report = opts.config.xt_checksum_report,
     //         .default_cursor_style = opts.config.cursor_style,
     //         .default_cursor_blink = opts.config.cursor_blink,
     //     };
@@ -579,6 +618,8 @@ impl<M: AppMailbox> Termio<M> {
                 // .default_cursor_blink = opts.config.cursor_blink,
                 default_cursor_style: opts.config.cursor_style,
                 default_cursor_blink: opts.config.cursor_blink,
+                // .default_xt_checksum = opts.config.xt_checksum_extension,
+                default_xt_checksum: opts.config.xt_checksum_extension,
                 colors: rustty_vt::terminal::Colors {
                     // .background = .init(opts.config.background.toTerminalRGB()),
                     background: color::DynamicRGB::init(opts.config.background.to_terminal_rgb()),
@@ -671,6 +712,8 @@ impl<M: AppMailbox> Termio<M> {
         // .clipboard_write_limit = opts.config.clipboard_write_limit,
         let handler_clipboard_write_limit = opts.config.clipboard_write_limit;
         let handler_enquiry_response = opts.config.enquiry_response.clone();
+        // .xt_checksum_report = opts.config.xt_checksum_report,
+        let handler_xt_checksum_report = opts.config.xt_checksum_report;
 
         // (PORT NOTE: `opts.surface_mailbox`/`opts.renderer_wakeup`/`opts.renderer_state`
         // /`opts.renderer_mailbox`/`alloc` are all `Copy` — the reference uses each
@@ -750,6 +793,8 @@ impl<M: AppMailbox> Termio<M> {
             kitty_clipboard_write: None,
             // .enquiry_response = opts.config.enquiry_response,
             enquiry_response: handler_enquiry_response,
+            // .xt_checksum_report = opts.config.xt_checksum_report,
+            xt_checksum_report: handler_xt_checksum_report,
             // (reference field defaults for the handler fields not in the literal:
             // `apc = .{}`, `dcs = .{}`, `tmux_viewer = null`,
             // `termio_messaged = false`, `seen_title = false`.)
@@ -774,6 +819,7 @@ impl<M: AppMailbox> Termio<M> {
                 allocator: Some(rustty_vt::alloc::Global),
                 handler,
                 continuation_max_bytes: None,
+                osc_unknown_max_bytes: 0,
             });
         unsafe { (&raw mut (*self_).terminal_stream).write(terminal_stream) };
 
@@ -2344,6 +2390,7 @@ mod scrollback_limit_handoff_tests {
                 default_modes: rustty_vt::modes::ModePacked::default(),
                 default_cursor_style: rustty_vt::screen::CursorStyle::Block,
                 default_cursor_blink: Some(false),
+                default_xt_checksum: Default::default(),
                 kitty_image_storage_limit: 0,
                 kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
             },

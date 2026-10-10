@@ -1,0 +1,1283 @@
+=== G6 [rustty-apprt-api] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-apprt-api] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-apprt-api] 69s
+    Summary [  27.338s] 28 tests run: 28 passed, 0 skipped
+    [rustty-apprt-api] doc tests: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== G6 [rustty-args] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-args] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-args] 14s
+    Summary [   6.755s] 78 tests run: 78 passed, 3 skipped
+    [rustty-args] doc tests: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== G6 [rustty-bench] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-bench] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-bench] 1324s
+  RED [rustty-bench]:
+    1 test(s) did not pass:
+        FAIL rustty-bench hyperlink_map::tests::hyperlink_map
+    [rustty-bench] doc tests: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+    full output: /var/folders/3z/vhbmzwg50g96n2644l_pz4nh0000gn/T//mn.rustty-bench.fjA2lF
+=== G6 [rustty-build-config] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-build-config] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-build-config] 2s
+    Summary [   0.687s] 5 tests run: 5 passed, 0 skipped
+    [rustty-build-config] doc tests: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== G6 [rustty-cfg-fmt] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-cfg-fmt] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-cfg-fmt] 2s
+    Summary [   1.281s] 9 tests run: 9 passed, 0 skipped
+    [rustty-cfg-fmt] doc tests: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== G6 [rustty-cli] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-cli] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-cli] 152s
+    Summary [ 137.501s] 93 tests run: 93 passed (1 slow), 35 skipped
+    [rustty-cli] doc tests: none ([lib] doctest = false, which cargo miri test honours)
+=== G6 [rustty-config] :: ASan (FFI crate; Miri can't run C) ===
+   Compiling shlex v2.0.1
+   Compiling find-msvc-tools v0.1.9
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling glob v0.3.3
+   Compiling libc v0.2.186
+   Compiling prettyplease v0.2.37
+   Compiling regex-syntax v0.8.11
+   Compiling memchr v2.8.2
+   Compiling cfg-if v1.0.4
+   Compiling minimal-lexical v0.2.1
+   Compiling log v0.4.33
+   Compiling bindgen v0.72.1
+   Compiling libloading v0.8.9
+   Compiling either v1.16.0
+   Compiling cc v1.2.65
+   Compiling rustc-hash v2.1.2
+   Compiling bitflags v2.13.0
+   Compiling shlex v1.3.0
+   Compiling clang-sys v1.8.1
+   Compiling nom v7.1.3
+   Compiling itertools v0.13.0
+   Compiling allocator-api2 v0.2.21
+   Compiling objc2 v0.6.4
+   Compiling rustty-build-config v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-build-config)
+   Compiling objc2-encode v4.1.0
+   Compiling hashbrown v0.17.1
+   Compiling rustty-zigstd v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-zigstd)
+   Compiling regex-automata v0.4.14
+   Compiling rustty-util v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-util)
+   Compiling rustty-identity v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-identity)
+   Compiling equivalent v1.0.2
+   Compiling cexpr v0.6.0
+   Compiling indexmap v2.14.0
+   Compiling rustty-xev v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-xev)
+   Compiling syn v2.0.118
+   Compiling zlib-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/zlib-sys)
+   Compiling regex v1.12.4
+   Compiling pkg-config v0.3.33
+   Compiling rustty-simd v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-simd)
+   Compiling rustty-helpgen v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-helpgen)
+   Compiling rustty-unicode v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-unicode)
+   Compiling khronos_api v3.1.0
+   Compiling rustty-z2d v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-z2d)
+   Compiling rustty-vt v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-vt)
+   Compiling block2 v0.6.2
+   Compiling rustty-terminfo v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-terminfo)
+   Compiling rustty-datastruct v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-datastruct)
+   Compiling rustty-os v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-os)
+   Compiling dispatch2 v0.3.1
+   Compiling rustty-lib v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-lib)
+   Compiling objc2-core-foundation v0.3.2
+   Compiling rustty-render-types v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-render-types)
+   Compiling rustty-global v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-global)
+   Compiling xml-rs v0.8.28
+   Compiling rustty-input v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-input)
+   Compiling rustty-font-shaper v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-font-shaper)
+   Compiling rustty-version v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-version)
+   Compiling rustty-cfg-fmt v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-cfg-fmt)
+   Compiling rustty-config v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-config)
+   Compiling gl_generator v0.14.0
+   Compiling rustty-renderer v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-renderer)
+   Compiling objc2-foundation v0.3.2
+   Compiling gettext-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/gettext-sys)
+   Compiling freetype-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/freetype-sys)
+   Compiling libxml2-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/libxml2-sys)
+   Compiling wuffs-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/wuffs-sys)
+   Compiling oniguruma-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/oniguruma-sys)
+   Compiling harfbuzz-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/harfbuzz-sys)
+   Compiling fontconfig-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/fontconfig-sys)
+   Compiling glslang-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/glslang-sys)
+   Compiling spirv-cross-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/spirv-cross-sys)
+   Compiling objc2-io-surface v0.3.2
+   Compiling objc2-quartz-core v0.3.2
+   Compiling objc2-metal v0.3.2
+   Compiling objc2-core-graphics v0.3.2
+   Compiling rustty-wuffs v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-wuffs)
+   Compiling objc2-core-text v0.3.2
+   Compiling rustty-font v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-font)
+   Compiling rustty-args v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-args)
+   Compiling rustty-oniguruma v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-oniguruma)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 56.33s
+     Running unittests src/lib.rs (target/aarch64-apple-darwin/debug/deps/rustty_config-86a6d5a751b026cb)
+
+running 268 tests
+test c_get::tests::c_get_color ... ok
+test c_get::tests::c_get_background_blur ... ok
+test c_api::log_site_tests::load_file_logs_the_reference_error_under_the_config_scope ... ok
+test c_api::tests::ghostty_config_get_enum ... ok
+test c_api::log_site_tests::a_successful_load_file_is_silent ... ok
+test c_api::tests::ghostty_config_get_float ... ok
+test c_api::log_site_tests::trigger_logs_the_zig_error_name ... ok
+test c_api::tests::ghostty_config_get_optional_string_null_returns_true ... ok
+test c_api::tests::ghostty_config_get_optional_null_returns_false ... ok
+test command::tests::command_arg_iterator_direct ... ok
+test c_get::tests::c_get_optional ... ok
+test c_api::tests::ghostty_config_get_unknown_key_returns_false ... ok
+test command::tests::command_format_config_direct ... ok
+test command::tests::command_arg_iterator_shell ... ok
+test command::tests::command_format_config_direct_fixed_buffer_boundary ... ok
+test command::tests::command_format_config_shell ... ok
+test command::tests::command_parse_cli_direct ... ok
+test command::tests::command_parse_cli_errors ... ok
+test command::tests::command_parse_cli_shell_expanded ... ok
+test command::tests::command_string_direct ... ok
+test command::tests::command_string_shell ... ok
+test c_get::tests::c_get_enum ... ok
+test command::tests::ref_all_decls ... ok
+test conditional::tests::conditional_enum_match ... ok
+test conditional::tests::os_conditional_matches_real_tag ... ok
+test conditional::tests::os_tag_name_matches_zig_target_os_tag ... ok
+test config_struct::key::key_tests::value ... ok
+test c_api::log_site_tests::the_other_restored_sites_are_live_with_the_reference_text ... ok
+test c_get::tests::c_get_u8 ... ok
+test c_get::tests::c_get_optional_path ... ok
+test c_get::tests::c_get_split_preserve_zoom ... ok
+test config_struct::tests::clone_changed::format_entry_field_unknown_key_is_unreachable - should panic ... ok
+test config_struct::tests::clone_changed::clone_default ... ok
+test c_api::tests::ghostty_config_get_struct_cval_conversion ... ok
+test c_api::tests::ghostty_config_trigger_default_keybind ... ok
+test config_struct::tests::integration::auto_struct_comma_splitter_errors_are_not_invalid_value ... ok
+test config_struct::tests::clone_changed::clone_preserves_conditional_state ... ok
+test config_struct::tests::clone_changed::changed ... ok
+test config_struct::tests::integration::compatibility_gtk_single_instance_desktop ... ok
+test config_struct::tests::integration::compatibility_removed_bold_is_bright ... ok
+test config_struct::tests::integration::clipboard_write_limit ... ok
+test config_struct::tests::integration::compatibility_removed_cursor_invert_fg_bg ... ok
+test c_api::tests::ghostty_config_get_bool ... ok
+test config_struct::tests::integration::change_conditional_state_ignores_irrelevant_changes ... ok
+test config_struct::tests::integration::finalize_default_lookup_is_skipped_on_wasm_and_in_tests ... ok
+test config_struct::tests::integration::change_conditional_state_applies_relevant_changes ... ok
+test config_struct::tests::clone_changed::key_exhaustive_parse_format_clone_changed ... ok
+test config_struct::tests::integration::enum_field_diagnostics_list_the_valid_values ... ok
+test config_struct::tests::integration::compatibility_removed_selection_invert_fg_bg ... ok
+test config_struct::tests::integration::help_text_keeps_the_reference_token_casing ... ok
+test config_struct::tests::integration::clone_preserves_conditional_set ... ok
+test config_struct::tests::integration::compatibility_window_new_window ... ok
+test config_struct::tests::integration::font_variation_nan_formats_as_zig_nan ... ok
+test config_struct::tests::integration::compatibility_scrollback_limit_renamed_to_bytes ... ok
+test config_struct::tests::integration::link_key_records_the_reference_not_implemented_diagnostic ... ok
+test config_struct::tests::integration::middle_click_action_clipboard_paste ... ok
+test config_struct::tests::integration::limit_keys_accept_zig_int_separators_through_the_parser ... ok
+test config_struct::tests::integration::parse_e_command_and_args ... ok
+test config_struct::tests::integration::scrollback_limits ... ok
+test config_struct::tests::integration::config_file_diagnostics_use_zig_error_and_kind_names ... ok
+test config_struct::tests::integration::mouse_scroll_multiplier_accepts_zig_float_syntax_through_the_parser ... ok
+test config_struct::tests::integration::parse_hook_invalid_command ... ok
+test config_struct::tests::integration::theme_specifying_light_dark_changes_window_theme_from_auto ... ok
+test config_struct::tests::integration::compatibility_copy_on_select_true_false ... ok
+test config_struct::tests::integration::windows_home_lookup_error_propagates ... ok
+test config_struct::tests::integration::theme_priority_is_lower_than_config ... ok
+test config_struct::tests::machinery::config_log_err_renders_the_error_token ... ok
+test config_struct::tests::machinery::config_log_gate_honors_logging_stderr ... ok
+test config_struct::tests::integration::clone_can_then_change_conditional_state ... ok
+test config_struct::tests::integration::theme_loading ... ok
+test config_struct::tests::integration::theme_specifying_light_dark_sets_theme_usage_in_conditional_state ... ok
+test config_struct::tests::parse::parse_bare_enum_field_hyphenated ... ok
+test config_struct::tests::parse::config_field_names_count_is_contract ... ok
+test config_struct::tests::parse::config_scrollback_compression_defaults_and_parses ... ok
+test config_struct::tests::parse::parse_bare_enum_field_numeric_name ... ok
+test config_struct::tests::parse::config_gtk_horizontal_tab_scroll_defaults_parses_and_round_trips ... ok
+test config_struct::tests::machinery::finalize_warns_with_the_formatted_short_quit_delay ... ok
+test config_struct::tests::machinery::config_log_gate_reads_published_global ... ok
+test config_struct::tests::parse::parse_cursor_style_external_enum ... ok
+test config_struct::tests::parse::parse_empty_resets_to_default ... ok
+test config_struct::tests::parse::parse_int_field ... ok
+test config_struct::tests::integration::vt_window_resize_allowed_default_parse_and_order ... ok
+test config_struct::tests::parse::parse_into_field_ignores_underscore_fields ... ok
+test config_struct::tests::parse::parse_into_field_unknown_is_invalid_field ... ok
+test config_struct::tests::parse::parse_opt_bare_enum_field ... ok
+test config_struct::tests::parse::parse_opt_parsecli_value_field ... ok
+test config_struct::tests::parse::parse_opt_sentinel_string_field ... ok
+test config_struct::tests::parse::parse_packed_struct_field ... ok
+test config_struct::tests::integration::theme_loading_preserves_conditional_state ... ok
+test config_struct::tests::parse::parse_parsecli_self_field ... ok
+test config_struct::tests::parse::parse_string_field ... ok
+test config_struct::tests::parse::parse_parsecli_value_field ... ok
+test config_struct::tests::parse::parse_opt_int_field ... ok
+test config_struct::tests::machinery::handle_bom_in_config_files ... ok
+test io::tests::readable_io_format_entry ... ok
+test formatter_file::tests::format_default_config ... ok
+test io::tests::readable_io_format_entry_fixed_buffer_boundary ... ok
+test file_load::tests::open_warns_on_an_unexpected_open_error ... ok
+test io::tests::readable_io_parse_cli ... ok
+test io::tests::ref_all_decls ... ok
+test io::tests::repeatable_readable_io_parse_cli ... ok
+test formatter_file::tests::format_default_config_changed ... ok
+test path::tests::expand_relative_emits_the_reference_debug_trace ... ok
+test path::tests::path_format_config_multiple_items ... ok
+test path::tests::path_format_config_optional_fixed_buffer_boundary ... ok
+test path::tests::path_format_config_single_item ... ok
+test path::tests::path_parse ... ok
+test path::tests::path_parse_cli ... ok
+test path::tests::repeatable_path_format_config_empty ... ok
+test path::tests::repeatable_path_format_config_multiple_items ... ok
+test path::tests::repeatable_path_format_config_single_item ... ok
+test config_struct::tests::parse::parse_into_field_exhaustive ... ok
+test path::tests::expand_returns_the_base_directory_open_error ... ok
+test path::tests::repeatable_path_parse_cli ... ok
+test path::tests::std_fs_path_dirname_windows_and_posix ... ok
+test config_struct::tests::integration::vt_xt_checksum_default_parse_format_and_order ... ok
+test path::tests::std_fs_path_get_win32_path_type ... ok
+test path::tests::std_fs_path_resolve_posix ... ok
+test path::tests::std_fs_path_is_absolute_and_basename ... ok
+test renderer_config::tests::cell_relative_cursor_and_selection_colors_reach_the_renderer ... ok
+test repeatable_string_map::tests::repeatable_string_map_format_config_empty ... ok
+test repeatable_string_map::tests::repeatable_string_map_format_config_multiple_items ... ok
+test repeatable_string_map::tests::repeatable_string_map_format_config_fixed_buffer_boundary ... ok
+test renderer_config::tests::font_features_carry_interior_nul_bytes ... ok
+test formatter_file::tests::format_changed_compares_against_the_full_default_config ... ok
+test repeatable_string_map::tests::repeatable_string_map_format_config_single_item ... ok
+test repeatable_string_map::tests::repeatable_string_map_parse_cli ... ok
+test root_alias_tests::root_aliases_resolve ... ok
+test path::tests::std_fs_path_resolve_windows ... ok
+test string::tests::codepoint_iterator_ascii_no_escapes ... ok
+test string::tests::codepoint_iterator_emoji_unicode_escape ... ok
+test string::tests::codepoint_iterator_empty ... ok
+test string::tests::codepoint_iterator_escape_sequences ... ok
+test path::tests::expand_diagnostics_use_zig_error_names ... ok
+test string::tests::codepoint_iterator_multibyte_utf8 ... ok
+test string::tests::codepoint_iterator_unicode_escape ... ok
+test string::tests::parse_empty ... ok
+test string::tests::parse_escaped_surrogate_half ... ok
+test string::tests::parse_escapes ... ok
+test string::tests::parse_hex_escapes_are_bytes ... ok
+test string::tests::parse_no_escapes ... ok
+test theme::tests::diagnostic_preserves_theme_bytes_separator_rejection ... ok
+test theme::tests::diagnostic_preserves_theme_bytes_open_absolute_not_found ... ok
+test url::duplication_gate::regex_is_byte_identical_to_the_vt_copy ... ok
+test value_types::tests::command::font_variation_and_scroll_multiplier_accept_zig_float_syntaxes ... ok
+test value_types::tests::command::parse_float_f64_matches_std_fmt_parsefloat ... ok
+test value_types::tests::command::repeatable_command_format_config_empty ... ok
+test value_types::tests::command::repeatable_command_clone_rebuilds_the_c_mirror ... ok
+test value_types::tests::command::repeatable_command_cval_cleared ... ok
+test value_types::tests::command::repeatable_command_cval ... ok
+test value_types::tests::command::repeatable_command_format_config_multiple_items ... ok
+test value_types::tests::command::repeatable_command_format_config_single_item ... ok
+test value_types::tests::command::keybinds_parse_cli_announces_the_reference_special_values ... ok
+test value_types::tests::command::repeatable_command_parse_cli_commas ... ok
+test theme::tests::diagnostics_use_zig_error_and_kind_names ... ok
+test value_types::tests::keybinds::keybinds_clone_with_tables ... ok
+test value_types::tests::keybinds::keybinds_equal_with_tables_different_bindings ... ok
+test value_types::tests::keybinds::keybinds_equal_with_tables ... ok
+test value_types::tests::keybinds::keybinds_equal_with_tables_different_table_count ... ok
+test value_types::tests::keybinds::keybinds_equal_with_tables_different_table_names ... ok
+test value_types::tests::command::repeatable_command_format_config_fixed_buffer_bound ... ok
+test config_struct::tests::integration::theme_loading_correct_light_dark ... ok
+test value_types::tests::keybinds::keybinds_format_config_single ... ok
+test value_types::tests::keybinds::keybinds_format_config_multiple_items ... ok
+test value_types::tests::command::repeatable_command_parse_cli_announces_the_reference_special_values ... ok
+test value_types::tests::keybinds::keybinds_format_entry_with_tables ... ok
+test value_types::tests::keybinds::keybinds_format_entry_docs_writes_only_the_blank_line ... ok
+test value_types::tests::keybinds::keybinds_format_entry_with_tables_and_root_set ... ok
+test value_types::tests::keybinds::keybinds_parse_cli ... ok
+test value_types::tests::keybinds::keybinds_parse_cli_bare_slash_as_key_is_not_a_table ... ok
+test value_types::tests::keybinds::keybinds_parse_cli_chain_without_prior_parsed_binding_is_invalid ... ok
+test value_types::tests::keybinds::keybinds_parse_cli_chain_applies_to_most_recent_table_binding ... ok
+test value_types::tests::keybinds::keybinds_parse_cli_clear_clears_tables ... ok
+test value_types::tests::keybinds::keybinds_format_entry_table_prefix_fixed_buffer_bound ... ok
+test value_types::tests::keybinds::keybinds_format_config_multiple_items_nested ... ok
+test value_types::tests::keybinds::keybinds_parse_cli_shift_slash_as_key_is_not_a_table ... ok
+test value_types::tests::keybinds::keybinds_parse_cli_slash_as_key_with_modifier_is_not_a_table ... ok
+test value_types::tests::keybinds::keybinds_parse_cli_slash_in_action_argument_is_not_a_table ... ok
+test value_types::tests::keybinds::keybinds_parse_cli_slash_in_key_sequence_is_not_a_table ... ok
+test value_types::tests::keybinds::keybinds_parse_cli_reset_clears_tables ... ok
+test value_types::tests::keybinds::keybinds_parse_cli_table_chain_syntax_is_invalid ... ok
+test value_types::tests::keybinds::keybinds_parse_cli_table_empty_name_is_invalid ... ok
+test value_types::tests::keybinds::keybinds_parse_cli_table_clear ... ok
+test value_types::tests::keybinds::keybinds_parse_cli_table_definition ... ok
+test value_types::tests::keybinds::keybinds_parse_cli_table_does_not_affect_root_set ... ok
+test value_types::tests::keybinds::keybinds_parse_cli_table_with_key_sequence ... ok
+test value_types::tests::keybinds::keybinds_parse_cli_table_multiple_bindings ... ok
+test value_types::tests::keybinds::keybinds_parse_cli_table_with_slash_in_binding ... ok
+test value_types::tests::command::repeatable_command_parse_cli ... ok
+test value_types::tests::limit_colors::bold_color_format_config ... ok
+test value_types::tests::keybinds::keybinds_parse_cli_table_with_sequence_containing_slash ... ok
+test value_types::tests::limit_colors::color_format_config ... ok
+test config_struct::tests::parse::parse_bool_field ... ok
+test value_types::tests::limit_colors::limit_default_and_parsing ... ok
+test config_struct::tests::integration::parse_e_command_only ... ok
+test value_types::tests::limit_colors::limit_formatting ... ok
+test config_struct::tests::parse::parse_float_field ... ok
+test path::tests::repeatable_path_format_config_optional_fixed_buffer_boundary ... ok
+test value_types::tests::limit_colors::limit_optional ... ok
+test value_types::tests::limit_colors::color_list_clone ... ok
+test value_types::tests::limit_colors::limit_parse_cli_accepts_the_zig_parse_int_grammar ... ok
+test value_types::tests::limit_colors::palette_parse_cli ... ok
+test value_types::tests::limit_colors::palette_parse_cli_base ... ok
+test value_types::tests::limit_colors::palette_parse_cli_overflow ... ok
+test value_types::tests::limit_colors::palette_parse_cli_with_whitespace ... ok
+test value_types::tests::limit_colors::terminal_color_format_config ... ok
+test value_types::tests::limit_colors::palette_format_config ... ok
+test value_types::tests::repeatable::repeatable_clipboard_codepoint_map_format_config_codepoint ... ok
+test value_types::tests::repeatable::repeatable_clipboard_codepoint_map_format_config_fixed_buffer_bound ... ok
+test value_types::tests::repeatable::repeatable_clipboard_codepoint_map_format_config_string ... ok
+test value_types::tests::repeatable::repeatable_clipboard_codepoint_map_parse_cli_codepoint_parse_int_forms ... ok
+test value_types::tests::repeatable::repeatable_clipboard_codepoint_map_parse_cli_codepoint_replacement ... ok
+test value_types::tests::repeatable::repeatable_clipboard_codepoint_map_parse_cli_range_replacement ... ok
+test value_types::tests::repeatable::repeatable_clipboard_codepoint_map_parse_cli_string_replacement ... ok
+test value_types::tests::repeatable::repeatable_codepoint_map_clone_equal ... ok
+test value_types::tests::repeatable::repeatable_codepoint_map_format_config_multiple ... ok
+test value_types::tests::repeatable::repeatable_codepoint_map_format_config_fixed_buffer_bound ... ok
+test value_types::tests::repeatable::repeatable_codepoint_map_format_config_range ... ok
+test value_types::tests::limit_colors::bold_color_parse_cli ... ok
+test value_types::tests::limit_colors::terminal_color_parse_cli ... ok
+test value_types::tests::limit_colors::color_config_accepts_bare_hex_and_prefixed_palette_index ... ok
+test value_types::tests::repeatable::repeatable_codepoint_map_format_config_single ... ok
+test value_types::tests::limit_colors::color_parse_cli_non_ascii_is_invalid_value_not_a_panic ... ok
+test value_types::tests::limit_colors::color_parse_cli_with_whitespace ... ok
+test value_types::tests::limit_colors::color_parse_cli_from_name ... ok
+test value_types::tests::limit_colors::color_list_parse_cli ... ok
+test value_types::tests::limit_colors::color_parse_cli_hex ... ok
+test value_types::tests::repeatable::repeatable_codepoint_map_parse_cli ... ok
+test value_types::tests::limit_colors::color_list_format ... ok
+test value_types::tests::repeatable::repeatable_string_format_config_multiple_items ... ok
+test value_types::tests::repeatable::repeatable_font_variation_format_config_single ... ok
+test value_types::tests::repeatable::repeatable_font_variation_parse_cli ... ok
+test value_types::tests::repeatable::repeatable_font_variation_parse_cli_with_whitespace ... ok
+test value_types::tests::repeatable::repeatable_string_parse_cli ... ok
+test value_types::tests::repeatable::repeatable_string_parse_cli_overwrite ... ok
+test config_struct::tests::integration::working_directory_expands_tilde ... ok
+test value_types::tests::repeatable::selection_word_chars_parse_cli ... ok
+test value_types::tests::repeatable::selection_word_chars_parse_cli_backslash_escape ... ok
+test value_types::tests::repeatable::selection_word_chars_parse_cli_escape_sequences ... ok
+test value_types::tests::window_misc::alpha_blending_is_linear ... ok
+test value_types::tests::window_misc::calculate_quick_terminal_size ... ok
+test value_types::tests::window_misc::duration_test_entry_formatter ... ok
+test value_types::tests::window_misc::font_style_format_config_default ... ok
+test value_types::tests::window_misc::duration_test_format ... ok
+test value_types::tests::window_misc::font_style_format_config_named ... ok
+test value_types::tests::window_misc::font_style_parse_cli ... ok
+test value_types::tests::window_misc::font_style_format_config_false ... ok
+test value_types::tests::window_misc::format_entry_mouse_scroll_multiplier ... ok
+test value_types::tests::window_misc::mouse_scroll_multiplier_parse ... ok
+test value_types::tests::window_misc::parse_background_blur_underscore_separators ... ok
+test value_types::tests::window_misc::parse_background_blur ... ok
+test value_types::tests::window_misc::parse_quick_terminal_size ... ok
+test value_types::tests::window_misc::parse_duration ... ok
+test value_types::tests::window_misc::parse_quick_terminal_size_zig_number_spellings ... ok
+test value_types::tests::window_misc::parse_window_decoration ... ok
+test value_types::tests::window_misc::parse_window_padding ... ok
+test value_types::tests::window_misc::parse_window_padding_zig_int_spellings ... ok
+test value_types::tests::window_misc::quick_terminal_size_out_of_range_percentages_do_not_trap ... ok
+test value_types::tests::window_misc::quick_terminal_size_percentage_uses_the_parse_float_grammar ... ok
+test value_types::tests::window_misc::working_directory_parse_cli ... ok
+test zig_error::tests::errno_names_follow_each_calls_switch ... ok
+test value_types::tests::window_misc::parse_theme ... ok
+test zig_error::tests::file_kind_tag_names ... ok
+test value_types::tests::window_misc::working_directory_finalize ... ok
+test value_types::tests::repeatable::repeatable_string_format_config_empty ... ok
+test value_types::tests::repeatable::selection_word_chars_parse_cli_unicode_escape ... ok
+test value_types::tests::repeatable::repeatable_string_format_config_single_item ... ok
+test value_types::tests::window_misc::theme_format_config_fixed_buffer_bound ... ok
+
+test result: ok. 268 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/goto_tab_out_of_range.rs (target/aarch64-apple-darwin/debug/deps/goto_tab_out_of_range-c8cc96cf6bb728c6)
+
+running 1 test
+test goto_tab_index_above_c_int_max_is_a_config_diagnostic ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/load_cli_args_non_utf8_argv.rs (target/aarch64-apple-darwin/debug/deps/load_cli_args_non_utf8_argv-4ba32fcb6b94b917)
+     Running tests/load_path_errors_propagate.rs (target/aarch64-apple-darwin/debug/deps/load_path_errors_propagate-3b89f15000d5948f)
+
+running 4 tests
+test theme_user_dir_buffer_too_small_is_out_of_memory ... ok
+test load_cli_args_returns_the_cwd_realpath_error ... ok
+test load_default_files_returns_the_xdg_path_error ... ok
+test theme_user_dir_resolves_with_a_short_home ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+(FFI leak detection for rustty-config is G-LSAN's job: sanitizers.sh --gate lsan, ASan with detect_leaks=1, macOS and Linux)
+=== G6 [rustty-core] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-core] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-core] 7574s
+    Summary [7570.178s] 69 tests run: 69 passed (1 slow), 17 skipped
+    [rustty-core] doc tests: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== G6 [rustty-crash] :: ASan (FFI crate; Miri can't run C) ===
+   Compiling dispatch2 v0.3.1
+   Compiling block2 v0.6.2
+   Compiling objc2-core-foundation v0.3.2
+   Compiling objc2-foundation v0.3.2
+   Compiling rustty-os v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-os)
+   Compiling rustty-crash v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-crash)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.38s
+     Running unittests src/lib.rs (target/aarch64-apple-darwin/debug/deps/rustty_crash-82f2fc9419a14dc0)
+
+running 20 tests
+test build_options::tests::sentry_tracks_the_resolved_build_option ... ok
+test sentry_envelope::tests::envelope_parse ... ok
+test sentry_envelope::tests::envelope_parse_attachment ... ok
+test sentry_envelope::tests::envelope_serialize_empty ... ok
+test sentry_envelope::tests::envelope_parse_multiple ... ok
+test sentry_envelope::tests::envelope_parse_session ... ok
+test log_capture::tests::capture_admits_only_the_owning_thread ... ok
+test log_capture::tests::records_emitted_outside_a_capture_are_discarded ... ok
+test sentry_envelope::tests::envelope_parse_end_in_new_line ... ok
+test sentry::tests::the_four_undrivable_diagnostics_are_live_at_the_reference_level_and_scope ... ok
+test sentry_envelope::tests::envelope_serialize_session ... ok
+test sentry_envelope::tests::header_parse_follows_std_json_edge_cases ... ok
+test tests::ref_all_decls ... ok
+test sentry_envelope::tests::envelope_parse_multiple_no_length ... ok
+test sentry_envelope::tests::header_serialize_prints_numbers_like_std_json ... ok
+test json::tests::matches_zig_std_json_golden ... ok
+test json::tests::stringify_rejects_depth_257_with_an_error ... ok
+test sentry_envelope::tests::serialize_rejects_a_header_deeper_than_256_levels ... ok
+test json::tests::stringify_round_trips_the_documented_256_levels ... ok
+test json::tests::parse_and_drop_any_depth_without_stack_overflow ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.06s
+
+   Doc-tests rustty_crash
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+(FFI leak detection for rustty-crash is G-LSAN's job: sanitizers.sh --gate lsan, ASan with detect_leaks=1, macOS and Linux)
+=== G6 [rustty-datastruct] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-datastruct] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-datastruct] 68s
+    Summary [  66.597s] 97 tests run: 97 passed, 3 skipped
+    [rustty-datastruct] doc tests: test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+=== G6 [rustty-extra] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-extra] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-extra] 501s
+    Summary [ 498.054s] 33 tests run: 33 passed (5 slow), 6 skipped
+    [rustty-extra] doc tests: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== G6 [rustty-font-shaper] :: ASan (FFI crate; Miri can't run C) ===
+   Compiling rustty-util v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-util)
+   Compiling rustty-font-shaper v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-font-shaper)
+   Compiling objc2-metal v0.3.2
+   Compiling rustty-zigstd v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-zigstd)
+   Compiling rustty-simd v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-simd)
+   Compiling rustty-datastruct v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-datastruct)
+   Compiling rustty-lib v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-lib)
+   Compiling objc2-core-graphics v0.3.2
+   Compiling rustty-build-config v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-build-config)
+   Compiling rustty-render-types v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-render-types)
+   Compiling rustty-global v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-global)
+   Compiling rustty-xev v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-xev)
+   Compiling rustty-os v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-os)
+   Compiling objc2-core-text v0.3.2
+   Compiling rustty-font v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-font)
+   Compiling rustty-vt v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-vt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.43s
+     Running unittests src/lib.rs (target/aarch64-apple-darwin/debug/deps/rustty_font_shaper-fc51b7650709422d)
+
+running 146 tests
+test collection::tests::face_metrics ... ignored, SkipZigTest: the reference runs this only on web_canvas (Collection.zig:1398; inverted guard, N265) (R14)
+test collection::tests::add_deferred_without_loading_options ... ok
+test codepoint_resolver::tests::get_index_box_glyph ... ok
+test backend_selection_tests::selectors_follow_options_backend ... ok
+test collection::tests::has_codepoint_emoji_default_graphical ... ignored, SkipZigTest: fontconfig_freetype backend only (R14)
+test collection::tests::index_layout ... ok
+test collection::tests::init_test ... ok
+test collection::tests::load_options_new_is_the_reference_field_defaults ... ok
+test collection::tests::add_set_size_failure_deinits_face ... ok
+test collection::tests::has_codepoint ... ok
+test collection::tests::set_size ... ok
+test collection::tests::get_index ... ok
+test collection::tests::complete_styles ... ok
+test collection::tests::get_face ... ok
+test codepoint_resolver::tests::get_index_disabled_font_style ... ok
+test codepoint_resolver::tests::get_index ... ok
+test deferred_face::tests::cstring_needs_room_for_the_nul ... ok
+test discovery::tests::coretext_sorting ... ignored, SkipZigTest: the reference disables this test unconditionally (`if (true) return error.SkipZigTest;`, SF Pro is not in CI); its body is ported live but unreachable, as upstream (R14)
+test collection::tests::complete_styles_is_silent_when_every_regular_face_loads ... ok
+test collection::tests::metrics ... ok
+test discovery::tests::descriptor_hash ... ok
+test discovery::tests::descriptor_hash_family_names ... ok
+test discovery::tests::parse_head_table_is_silent_on_a_well_formed_table ... ok
+test discovery::tests::parse_head_table_warns_once_on_a_malformed_table ... ok
+test discovery::tests::parse_os2_table_is_silent_on_a_well_formed_table ... ok
+test discovery::tests::windows ... ignored, SkipZigTest: freetype_windows backend only (R14)
+test discovery::tests::windows_family_name_is_decoded_from_utf16 ... ignored, freetype_windows backend only (R14)
+test discovery::tests::parse_os2_table_warns_once_on_a_malformed_table ... ok
+test deferred_face::tests::load_coretext_deinits_the_face_when_set_variations_fails ... ok
+test face::coretext::tests::dump_variation_axes_emits_the_header_and_one_record_per_axis ... ok
+test face::coretext::tests::dump_variation_axes_is_silent_when_not_debug_mode ... ok
+test face::coretext::tests::glyph_index_colored_vs_text ... ok
+test collection::tests::adjusted_sizes ... ok
+test discovery::tests::discover_exact_family_rejects_names_that_do_not_fit_256_bytes ... ok
+test face::coretext::tests::emoji ... ok
+test face::coretext::tests::name ... ok
+test face::coretext::tests::in_memory ... ok
+test collection::tests::get_face_deferred_set_size_failure_deinits_face ... ok
+test face::coretext::tests::svg_font_table ... ok
+test deferred_face::tests::coretext_name_lookups_release_the_copied_name_string ... ok
+test deferred_face::tests::coretext_names_longer_than_the_buffer_are_returned_whole ... ok
+test face::freetype::tests::a_failed_variation_axes_step_destroys_the_harfbuzz_font ... ok
+test face::freetype::tests::a_failed_variation_axes_step_frees_the_ft_mutex ... ok
+test face::freetype::tests::bitmap_glyph ... ok
+test face::freetype::tests::bitmap_glyph_pcf ... ok
+test face::freetype::tests::bitmap_glyph_otb ... ok
+test face::freetype::tests::dump_variation_axes_emits_the_header_and_one_record_per_axis ... ok
+test face::freetype::tests::dump_variation_axes_is_silent_when_not_debug_mode ... ok
+test face::freetype::tests::face_name ... ok
+test face::freetype::tests::face_name_returns_a_raw_record_longer_than_the_buffer ... ok
+test face::freetype::tests::bitmap_glyph_bdf ... ok
+test face::coretext::tests::variable ... ok
+test face::coretext::tests::variable_set_variation ... ok
+test face::freetype::tests::face_name_decodes_every_utf16be_family_record ... ok
+test face::freetype::tests::face_name_utf16_record_too_long_for_the_buffer_is_returned_raw ... ok
+test face::freetype::tests::stb_resize_kat_bitmap_strike_grayscale ... ok
+test face::freetype::tests::set_variations_with_an_out_of_range_value_saturates ... ok
+test face::freetype::tests::svg_font_table ... ok
+test face::tests::ref_all_decls ... ok
+test face::tests::variation_id_slnt_should_be_1936486004 ... ok
+test face::tests::variation_id_wght_should_be_2003265652 ... ok
+test ft::tests::basics ... ok
+test ft::tests::error_conversion ... ok
+test ft::tests::load_flags_all_flags_individually ... ok
+test ft::tests::load_flags_all_load_targets ... ok
+test ft::tests::load_flags_bitcast ... ok
+test ft::tests::loading_memory_font ... ok
+test ft::tests::ref_all_decls ... ok
+test hb::tests::blob_user_data ... ok
+test hb::tests::buffer_create ... ok
+test face::freetype::tests::color_emoji ... ok
+test face::freetype::tests::mono_to_bgra ... ok
+test hb::tests::feature_from_string ... ok
+test hb::tests::freetype_bridge ... ok
+test hb::tests::version_basics ... ok
+test hb::tests::ref_all_decls ... ok
+test log_capture::tests::capture_admits_only_the_owning_thread ... ok
+test log_capture::tests::records_emitted_outside_a_capture_are_discarded ... ok
+test shape::cache::tests::cache ... ok
+test install_contract_tests::every_rustty_wc_export_installs_the_log_backend ... ok
+test shape::coretext::tests::init_returns_an_error_when_the_release_thread_cannot_spawn ... ok
+test discovery::tests::coretext ... ok
+test discovery::tests::from_descriptors_no_match ... ok
+test hb::tests::coretext_bridge ... ok
+test deferred_face::tests::coretext ... ok
+test face::coretext::tests::render_ascii ... ok
+test face::freetype::tests::stb_resize_kat_rejects_nearest_and_bilinear ... ok
+test shape::coretext::tests::shape_box_glyphs ... ok
+test shape::coretext::tests::run_iterator_empty_cells_with_background_set ... ok
+test shape::coretext::tests::shape_bengali_ligatures_with_out_of_order_vowels ... ok
+test shape::coretext::tests::shape ... ok
+test shape::coretext::tests::shape_cell_attribute_change ... ok
+test shape::coretext::tests::run_iterator ... ok
+test shape::coretext::tests::end_frame_releases_the_pool_on_the_cf_release_thread ... ok
+test shape::coretext::tests::shape_chakma_vowel_sign_with_ligature_vowel_sign_renders_first ... ok
+test face::freetype::tests::stb_resize_kat_bitmap_strike_bgra ... ok
+test face::freetype::tests::render_and_resize ... ok
+test deferred_face::tests::a_coretext_font_without_a_family_name_is_unknown ... ok
+test shape::coretext::tests::shape_cursor_boundary ... ok
+test shape::coretext::tests::shape_emoji_width ... ok
+test shape::coretext::tests::shape_combining_characters ... ok
+test face::coretext::tests::a_face_without_a_family_name_is_unknown ... ok
+test shape::coretext::tests::shape_devanagari_string ... ok
+test shape::coretext::tests::shape_emoji_width_long ... ok
+test shape::coretext::tests::shape_cursor_boundary_and_colored_emoji ... ok
+test shape::coretext::tests::shape_javanese_ligatures ... ok
+test shape::coretext::tests::shape_left_replaced_lig_in_early_run ... ok
+test shape::coretext::tests::shape_high_plane_sprite_font_codepoint ... ok
+test shape::coretext::tests::system_font_pivot_is_strict_only_when_env_is_exactly_one ... ok
+test shape::coretext::tests::shape_left_replaced_lig_in_last_run ... ok
+test shape::coretext::tests::system_font_pivot_panics_when_required - should panic ... ok
+test shape::feature::tests::append_from_string_is_silent_when_every_setting_parses ... ok
+test shape::feature::tests::append_from_string_warns_once_for_an_unparseable_setting ... ok
+test shape::feature::tests::feature_from_string ... ok
+test shape::feature::tests::feature_list_from_string ... ok
+test shape::noop::tests::ref_all_decls ... ok
+test shape::tests::module ... ok
+test shape::coretext::tests::shape_inconsolata_ligs ... ok
+test shape::coretext::tests::shape_monaspace_ligs ... ok
+test shared_grid::tests::tripwire_fail_points_are_armed_in_this_test_build ... ok
+test shared_grid_set::error_name_tests::nested_errors_print_the_innermost_zig_name ... ok
+test shared_grid_set::tests::collection_error_exit_deinits_collection ... ok
+test shared_grid_set::tests::key ... ok
+test shared_grid_set::tests::key_different_font_dpi ... ok
+test shared_grid_set::tests::key_different_font_points ... ok
+test shape::coretext::tests::shape_nerd_fonts ... ok
+test shape::coretext::tests::shape_tai_tham_vowels_position_differs_from_advance ... ok
+test stb::tests::stbir_resize_uint8_treats_channels_independently ... ok
+test stb::tests::stbir_resize_uint8_upsamples_a_known_ramp ... ok
+test uucode::tests::emoji_presentation_spot_checks ... ok
+test shape::coretext::tests::shape_tai_tham_letters_position_y_differs_from_advance ... ok
+test uucode::tests::emoji_presentation_total_point_count ... ok
+test uucode::tests::emoji_presentation_unicode_18_additions ... ok
+test uucode::tests::emoji_presentation_unicode_17_additions ... ok
+test shape::coretext::tests::shape_selection_boundary ... ok
+test shape::coretext::tests::shape_u_3c9_with_jb_mono ... ok
+test shape::coretext::tests::shape_variation_selector_vs15 ... ok
+test shape::coretext::tests::shape_variation_selector_vs16 ... ok
+test shared_grid::tests::get_index ... ok
+test shared_grid::tests::render_glyph_error_after_cache_insert_rolls_back_cache_entry ... ok
+test shape::coretext::tests::shape_with_empty_cells_in_between ... ok
+test shared_grid_set::tests::shared_grid_set ... ok
+test shared_grid_set::tests::ref_whose_grid_init_fails_deinits_the_collection ... ok
+test shared_grid::tests::init_error ... ok
+test discovery::tests::coretext_codepoint ... ok
+test collection::tests::add_full ... ok
+
+test result: ok. 141 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+(FFI leak detection for rustty-font-shaper is G-LSAN's job: sanitizers.sh --gate lsan, ASan with detect_leaks=1, macOS and Linux)
+=== G6 [rustty-font] :: ASan (FFI crate; Miri can't run C) ===
+   Compiling simd-adler32 v0.3.9
+   Compiling crc32fast v1.5.0
+   Compiling adler2 v2.0.1
+   Compiling cfg-if v1.0.4
+   Compiling miniz_oxide v0.8.9
+   Compiling fdeflate v0.3.7
+   Compiling flate2 v1.1.9
+   Compiling png v0.18.1
+   Compiling rustty-font v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-font)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.04s
+     Running unittests src/lib.rs (target/aarch64-apple-darwin/debug/deps/rustty_font-d05cd2a2d1e7f4fb)
+
+running 89 tests
+test atlas::tests::tripwire_fail_points_are_armed_in_this_test_build ... ok
+test atlas::tests::doesnt_fit ... ok
+test atlas::tests::fit_multiple ... ok
+test atlas::tests::writing_data ... ok
+test atlas::tests::writing_data_from_a_larger_source ... ok
+test atlas::tests::grow_oom ... ok
+test atlas::tests::exact_fit ... ok
+test atlas::tests::grow_bgr ... ok
+test atlas::tests::grow_error ... ok
+test atlas::tests::grow ... ok
+test atlas::tests::init_error ... ok
+test atlas::tests::writing_bgr_data ... ok
+test atlas::tests::reserve_error ... ok
+test embedded::tests::static_jetbrains_mono_faces_have_their_styles ... ok
+test codepoint_map::tests::codepointmap ... ok
+test glyf_rasterize::tests::degenerate_outline_returns_full_empty_bitmap ... ok
+test glyf_rasterize::tests::empty_outline_returns_empty_bitmap ... ok
+test glyf_rasterize::tests::reference_import_glyf_rasterize_png_test ... ok
+test glyf_rasterize::tests::line_height_does_not_change_unconstrained_em_scale ... ok
+test glyf_rasterize::tests::multiple_contours_render_independently ... ok
+test glyf_rasterize::tests::contour_can_start_with_implied_midpoint ... ok
+test glyf_rasterize::tests::negative_y_coordinates_descend_below_baseline ... ok
+test glyf_rasterize::tests::consecutive_off_curve_points_render ... ok
+test glyf_rasterize::tests::non_zero_bearings_preserve_declared_whitespace ... ok
+test glyf_rasterize::tests::contour_can_start_off_curve_with_final_on_curve_point ... ok
+test glyph::tests::Constraints ... ok
+test glyf_rasterize::tests::units_per_em_controls_baseline_scale ... ok
+test glyf_rasterize::tests::two_cell_bitmap_and_constraint_render_within_width ... ok
+test metrics::tests::Metrics_adjust_cell_height_larger ... ok
+test glyf_rasterize::tests::quadratic_contour_renders ... ok
+test glyf_rasterize::tests::square_fills_bitmap_center ... ok
+test metrics::tests::Metrics_adjust_cell_height_smaller ... ok
+test metrics::tests::Metrics_adjust_icon_height_by_absolute_pixels ... ok
+test metrics::tests::Metrics_adjust_icon_height_by_percentage ... ok
+test metrics::tests::Metrics_apply_modifiers ... ok
+test metrics::tests::Modifier_absolute ... ok
+test metrics::tests::Modifier_parse_absolute ... ok
+test metrics::tests::Modifier_parse_percent ... ok
+test metrics::tests::Modifier_parse_takes_the_zig_number_grammar ... ok
+test metrics::tests::Modifier_percent ... ok
+test metrics::tests::Modifier_percent_out_of_range_saturates ... ok
+test metrics::tests::formatConfig_absolute ... ok
+test metrics::tests::formatConfig_percent ... ok
+test opentype::glyf::tests::glyf_decode_off_curve_and_same_coordinate_flags ... ok
+test opentype::glyf::tests::glyf_decode_multiple_contours ... ok
+test opentype::glyf::tests::glyf_decode_repeat_and_short_vector_flags ... ok
+test opentype::glyf::tests::glyf_decode_one_point_contour ... ok
+test opentype::glyf::tests::glyf_decode_triangle ... ok
+test opentype::glyf::tests::glyf ... ok
+test opentype::glyf::tests::glyf_zero_contour_glyph_can_be_header_only ... ok
+test opentype::glyf::tests::glyf_reject_truncated ... ok
+test opentype::glyf::tests::glyf_zero_contour_glyph_can_include_instruction_length ... ok
+test opentype::glyf::tests::glyf_zero_contour_glyph_rejects_instructions ... ok
+test opentype::glyf::tests::glyf_reject_glyphs_with_instructions_and_composite_glyphs ... ok
+test opentype::head::tests::head ... ok
+test opentype::os2::tests::unsupported_version_is_reported_before_reading_fields ... ok
+test opentype::hhea::tests::hhea ... ok
+test opentype::os2::tests::os_2 ... ok
+test opentype::sfnt::fixed_point_tests::fixed_point ... ok
+test opentype::sfnt::tests::get_table ... ok
+test opentype::post::tests::post ... ok
+test opentype::sfnt::tests::parse_font ... ok
+test opentype::svg::tests::svg_document_list_offset_past_end ... ok
+test opentype::svg::tests::svg ... ok
+test opentype::glyf::tests::glyf_reject_endpoints_out_of_order ... ok
+test opentype::svg::tests::svg_document_list_with_no_records_is_end_of_stream ... ok
+test opentype::glyf::tests::glyf_reject_too_many_points ... ok
+test opentype::svg::tests::svg_document_list_record_count_past_end ... ok
+test glyf_rasterize::glyf_rasterize_png_test::diff_encoded_atlas_flags_byte_smuggle ... ok
+test sprite::canvas::tests::assemble_box_to_atlas ... ok
+test sprite::canvas::tests::box_rect_normalizes ... ok
+test sprite::canvas::tests::invert_and_flip ... ok
+test sprite::draw::common::tests::fill_writes_box ... ok
+test sprite::draw::common::tests::fraction_aliases ... ok
+test sprite::draw::common::tests::fraction_min_max_alignment ... ok
+test sprite::draw::common::tests::hline_middle_centered ... ok
+test sprite::draw::common::tests::thickness_height ... ok
+test sprite::face::tests::ranges_have_no_overlap ... ok
+test sprite::sprite_tests::sprite_start ... ok
+test sprite::face::tests::has_codepoint_and_blank_glyph ... ok
+test sprite::face::tests::full_height_cursor_sprites_respect_cursor_height_metric ... ok
+test sprite::face::tests::diff_atlas_accepts_byte_identical_reference ... ok
+test nerd_font_attributes::tests::constraints_lookup_table ... ok
+test sprite::face::tests::diff_atlas_flags_byte_smuggle_when_pixels_match ... ok
+test sprite::face::tests::diff_atlas_flags_pixel_diff ... ok
+test sprite::face::tests::diff_atlas_failures_leave_the_reference_artifacts ... ok
+test opentype::glyf::tests::glyf_decode_contour_ending_at_max_point_index ... ok
+test glyf_rasterize::glyf_rasterize_png_test::bubbletea_glyph_protocol_examples_match_reference_image ... ok
+test sprite::face::tests::sprite_face_render_all_sprites ... ok
+
+test result: ok. 89 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.03s
+
+(FFI leak detection for rustty-font is G-LSAN's job: sanitizers.sh --gate lsan, ASan with detect_leaks=1, macOS and Linux)
+=== G6 [rustty-global] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-global] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-global] 2s
+    Summary [   1.046s] 13 tests run: 13 passed, 7 skipped
+    [rustty-global] doc tests: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== G6 [rustty-helpgen] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-helpgen] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-helpgen] 1s
+    Summary [   0.464s] 6 tests run: 6 passed, 0 skipped
+    [rustty-helpgen] doc tests: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== G6 [rustty-identity] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-identity] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-identity] 1s
+    Summary [   0.436s] 1 test run: 1 passed, 0 skipped
+    [rustty-identity] doc tests: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== G6 [rustty-input] :: ASan (FFI crate; Miri can't run C) ===
+   Compiling rustty-font v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-font)
+   Compiling rustty-args v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-args)
+   Compiling rustty-vt v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-vt)
+   Compiling rustty-input v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-input)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.51s
+     Running unittests src/lib.rs (target/aarch64-apple-darwin/debug/deps/rustty_input-47dd2eb084a7bac4)
+
+running 124 tests
+test binding::tests::action::action_clone ... ok
+test binding::tests::action::parse_action_invalid ... ok
+test binding::tests::action::action_format_set_title ... ok
+test binding::tests::action::action_format ... ok
+test binding::tests::action::parse_action_with_enum_with_default ... ok
+test binding::tests::action::parse_action_no_parameters ... ok
+test binding::tests::action::parse_action_with_enum ... ok
+test binding::tests::action::parse_action_with_int ... ok
+test binding::tests::action::parse_action_with_a_tuple ... ok
+test binding::tests::action::parse_copy_to_clipboard_explicit ... ok
+test binding::tests::action::parse_copy_to_clipboard_default ... ok
+test binding::tests::action::parse_decrease_font_size ... ok
+test binding::tests::action::goto_tab_index_above_c_int_max_is_rejected_by_both_parsers ... ok
+test binding::tests::action::parse_action_with_string ... ok
+test binding::tests::action::parse_increase_font_size ... ok
+test binding::tests::action::parse_reset_font_size ... ok
+test binding::tests::action::parse_write_screen_file_format ... ok
+test binding::tests::action::parse_set_font_size ... ok
+test binding::tests::action::parse_action_with_float ... ok
+test binding::tests::action::parse_action_numbers_take_the_zig_grammar ... ok
+test binding::tests::action::parse_write_screen_file_format_as_string ... ok
+test binding::tests::action::parse_write_screen_file_invalid ... ok
+test binding::tests::action::parse_write_screen_file_no_format ... ok
+test binding::tests::chain_format::set_append_chain_after_put_converts_to_leaf_chained ... ok
+test binding::tests::chain_format::set_append_chain_after_put_flags_preserves_flags ... ok
+test binding::tests::chain_format::set_append_chain_removes_reverse_mapping ... ok
+test binding::tests::chain_format::set_append_chain_multiple_times ... ok
+test binding::tests::chain_format::set_append_chain_with_no_parent_returns_error ... ok
+test binding::tests::chain_format::set_append_chain_restores_next_valid_reverse_mapping ... ok
+test binding::tests::chain_format::set_append_chain_with_performable_does_not_affect_reverse_mapping ... ok
+test binding::tests::chain_format::set_format_entries_leaf_chained ... ok
+test binding::tests::parser::parse_chain ... ok
+test binding::tests::parser::parse_sequences ... ok
+test binding::tests::chain_format::set_format_entries_leaf_chained_multiple_chains ... ok
+test binding::tests::chain_format::set_format_entries_leaf_chained_with_text_action ... ok
+test binding::tests::set::set_clone_produces_null_chain_parent ... ok
+test binding::tests::parser::sequence_iterator ... ok
+test binding::tests::set::set_consumed_state ... ok
+test binding::tests::set::set_direct_remove_clears_chain_parent ... ok
+test binding::tests::set::set_clone_with_leaf_chained ... ok
+test binding::tests::set::set_get_event_catch_all_fallback ... ok
+test binding::tests::set::set_clone_with_leaf_chained_containing_allocated_data ... ok
+test binding::tests::set::set_get_event_physical ... ok
+test binding::tests::set::set_get_event_catch_all_with_modifiers ... ok
+test binding::tests::set::set_get_event_codepoint_case_folding ... ok
+test binding::tests::set::set_invalid_format_preserves_chain_parent ... ok
+test binding::tests::set::set_get_event_codepoint ... ok
+test binding::tests::set::set_maintains_reverse_mapping ... ok
+test binding::tests::set::set_overriding_a_mapping_updates_reverse ... ok
+test binding::tests::set::set_multiple_leaves_under_leader_updates_chain_parent ... ok
+test binding::tests::set::set_parse_and_put_chain ... ok
+test binding::tests::set::set_parse_and_put_chain_after_unbind_is_error ... ok
+test binding::tests::set::set_parse_and_put_chain_multiple_times ... ok
+test binding::tests::set::set_parse_and_put_chain_preserves_flags ... ok
+test binding::tests::set::set_parse_and_put_chain_with_unbind_is_error ... ok
+test binding::tests::set::set_parse_and_put_chain_without_parent_is_error ... ok
+test binding::tests::set::set_parse_and_put_overwrite_sequence ... ok
+test binding::tests::set::set_parse_and_put_chain_on_sequence ... ok
+test binding::tests::set::set_parse_and_put_typical_binding ... ok
+test binding::tests::set::set_parse_and_put_sequence ... ok
+test binding::tests::set::set_parse_and_put_sequence_preserves_reverse_mapping ... ok
+test binding::tests::set::set_parse_and_put_overwrite_leader ... ok
+test binding::tests::set::set_parse_and_put_sequence_with_two_actions ... ok
+test binding::tests::set::set_parse_and_put_removed_binding ... ok
+test binding::tests::set::set_parse_and_put_unbind_sequence_unbinds_leader ... ok
+test binding::tests::set::set_parse_and_put_unconsumed_binding ... ok
+test binding::tests::set::set_parse_and_put_unbind_sequence_unbinds_leader_if_not_set ... ok
+test binding::tests::set::set_performable_is_not_part_of_reverse_mappings ... ok
+test binding::tests::set::set_put_flags_sets_chain_parent ... ok
+test binding::tests::set::set_put_overwrites_sequence ... ok
+test binding::tests::set::set_put_sets_chain_parent ... ok
+test binding::tests::set::set_sequence_sets_chain_parent_to_final_leaf ... ok
+test binding::tests::trigger::cval ... ok
+test binding::tests::set::set_sequence_unbind_with_remaining_leaves_clears_chain_parent ... ok
+test binding::tests::set::set_sequence_unbind_clears_chain_parent ... ok
+test binding::tests::trigger::parse_catch_all ... ok
+test binding::tests::trigger::parse_all_triggers ... ok
+test binding::tests::trigger::parse_equals_sign ... ok
+test binding::tests::set::ud365_generic_leaf_actions_outlive_a_replaced_set ... ok
+test binding::tests::trigger::parse_plus_sign ... ok
+test binding::tests::trigger::parse_modifier_aliases ... ok
+test binding::tests::trigger::parse_global_triggers ... ok
+test binding::tests::trigger::parse_w3c_key_names ... ok
+test binding::tests::trigger::parse_text_action_equals_sign ... ok
+test binding::tests::trigger::split_focus_direction_parse ... ok
+test binding::tests::trigger::parse_triggers ... ok
+test binding::tests::trigger::trigger_equal ... ok
+test binding::tests::trigger::trigger_folds_non_ascii_case ... ok
+test command::tests::command_c_matches_the_header_abi ... ok
+test command::tests::command_c_fields_are_nul_terminated_and_readable ... ok
+test helpgen_actions::tests::markdown_header_ends_with_one_blank_line ... ok
+test key_mods::tests::remap_set_both_sides_specified ... ok
+test key_mods::tests::remap_set_error_on_missing_assignment ... ok
+test key_mods::tests::remap_set_error_on_invalid_modifier ... ok
+test key_mods::tests::remap_set_format_entry_empty ... ok
+test key_mods::tests::remap_set_clone_creates_independent_copy ... ok
+test key_mods::tests::remap_set_format_entry_right_sided ... ok
+test key_mods::tests::remap_set_equal_compares_correctly ... ok
+test key_mods::tests::remap_set_format_entry_unsided_creates_two_entries ... ok
+test key_mods::tests::remap_set_format_entry_single_sided ... ok
+test key_mods::tests::remap_set_multiple_parses_accumulate ... ok
+test key_mods::tests::remap_set_is_remapped_checks_mask ... ok
+test key_mods::tests::remap_set_parse_aliased_modifiers ... ok
+test key_mods::tests::remap_set_parse_aliased_modifiers_command ... ok
+test key_mods::tests::remap_set_parse_aliased_modifiers_control ... ok
+test key_mods::tests::remap_set_parse_cli_basic ... ok
+test binding::tests::trigger::parse_backwards_compatibility_with_1_1_x ... ok
+test key_mods::tests::remap_set_parse_aliased_modifiers_opt_and_option ... ok
+test key_mods::tests::remap_set_parse_cli_invalid ... ok
+test key_mods::tests::remap_set_parse_cli_empty_clears ... ok
+test key_mods::tests::remap_set_sided_from_only_maps_that_side ... ok
+test key_mods::tests::remap_set_sided_to ... ok
+test key_mods::tests::remap_set_unsided_remap_creates_both_left_and_right_mappings ... ok
+test key_mods::tests::translation_macos_option_as_alt ... ok
+test key_mods::tests::remap_set_parse_aliased_modifiers_on_target_side ... ok
+test keymap_darwin::tests::a_failed_reload_keeps_the_old_source_owned ... ok
+test keymap_darwin::tests::a_reload_to_a_source_without_layout_data_keeps_the_old_layout ... ok
+test keymap_darwin::tests::a_source_without_layout_data_is_released_on_the_error_path ... ok
+test keycodes::tests::empty ... ok
+test keymap_darwin::tests::expected_values ... ok
+test tests::ref_all_decls ... ok
+test command::tests::command_defaults ... ok
+test keymap_darwin::tests::a_successful_reload_replaces_the_source ... ok
+test keymap_darwin::tests::anonymous ... ok
+
+test result: ok. 124 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+   Doc-tests rustty_input
+
+running 2 tests
+test crates/rustty-input/src/binding/set.rs - binding::set::GenericLeaf (line 260) - compile fail ... ok
+test crates/rustty-input/src/binding/set.rs - binding::set::GenericLeaf (line 239) ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+
+(FFI leak detection for rustty-input is G-LSAN's job: sanitizers.sh --gate lsan, ASan with detect_leaks=1, macOS and Linux)
+=== G6 [rustty-inspector] :: ASan (FFI crate; Miri can't run C) ===
+   Compiling dcimgui-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/dcimgui-sys)
+   Compiling rustty-inspector v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-inspector)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.41s
+     Running unittests src/lib.rs (target/aarch64-apple-darwin/debug/deps/rustty_inspector-5132a5cbf6009127)
+
+running 21 tests
+test tests::ref_all_decls ... ok
+test widgets::pagelist::ws7_tests::format_bytes_matches_oracle_units ... ok
+test widgets::termio::tests::action_tag_set_roundtrip ... ok
+test widgets::pagelist::ws7_tests::pagelist_widget_page_tree_never_restores ... ok
+test widgets::terminal::tests::modes_table_lists_every_mode_in_declaration_order ... ok
+test widgets::termio::tests::encode_print_and_execute ... ok
+test widgets::termio::tests::encode_csi_and_esc ... ok
+test widgets::termio::tests::encode_dcs_and_apc_like_action_format ... ok
+test widgets::termio::tests::format_events_tab_separated_oldest_first ... ok
+test widgets::termio::tests::copy_and_export_events_seam_contract ... ok
+test widgets::termio::tests::metadata_byte_slice_payload_is_data ... ok
+test widgets::pagelist::ws7_tests::pagelist_widget_tracked_pins_never_restores ... ok
+test widgets::termio::tests::metadata_optional_bool_fields ... ok
+test widgets::termio::tests::metadata_optional_and_enum_fields ... ok
+test widgets::termio::tests::metadata_struct_payload_per_field ... ok
+test widgets::termio::tests::metadata_union_payload_tag_and_value ... ok
+test widgets::termio::tests::osc_tag_prefix_in_description ... ok
+test widgets::termio::tests::void_payload_has_no_metadata ... ok
+test widgets::pagelist::ws7_tests::pagelist_widget_reports_compression_memory ... ok
+test widgets::pagelist::ws7_tests::pagelist_compression_view_renders_live_numbers ... ok
+test widgets::pagelist::ws7_tests::pagelist_widget_draw_path_never_restores ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.94s
+
+     Running tests/pagelist_never_restores.rs (target/aarch64-apple-darwin/debug/deps/pagelist_never_restores-4852dbab64a45921)
+
+running 2 tests
+test the_guard_is_actually_reading_the_widget_source ... ok
+test pagelist_widget_never_restores_a_compressed_page_anywhere_in_the_file ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rustty_inspector
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+(FFI leak detection for rustty-inspector is G-LSAN's job: sanitizers.sh --gate lsan, ASan with detect_leaks=1, macOS and Linux)
+=== G6 [rustty-lib] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-lib] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-lib] 115s
+    Summary [ 111.344s] 42 tests run: 42 passed (1 slow), 0 skipped
+    [rustty-lib] doc tests: test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== G6 [rustty-oniguruma] :: ASan (FFI crate; Miri can't run C) ===
+   Compiling rustty-oniguruma v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-oniguruma)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running unittests src/lib.rs (target/aarch64-apple-darwin/debug/deps/oni-368522f073e498d0)
+
+running 2 tests
+test types::tests::order ... ok
+test regex::tests::search_and_search_with_param ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+(FFI leak detection for rustty-oniguruma is G-LSAN's job: sanitizers.sh --gate lsan, ASan with detect_leaks=1, macOS and Linux)
+=== G6 [rustty-os] :: Miri via nextest (unit surface --lib; live-FFI test binaries routed to ASan per MIRI_EXCEPTIONS.md) ===
+    [rustty-os] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-os] 422s
+    Summary [ 419.882s] 79 tests run: 79 passed (2 slow), 46 skipped
+=== G6 [rustty-os --test cf_release_live] :: ASan (live syscalls; Miri cannot execute them) ===
+   Compiling rustty-os v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-os)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.59s
+     Running tests/cf_release_live.rs (target/aarch64-apple-darwin/debug/deps/cf_release_live-008305e87da5e456)
+
+running 1 test
+test cf_release_thread_releases_on_real_xev_loop ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+=== G6 [rustty-render-types] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-render-types] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-render-types] 1s
+    Summary [   0.949s] 12 tests run: 12 passed, 0 skipped
+    [rustty-render-types] doc tests: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== G6 [rustty-simd] :: ASan (FFI crate; Miri can't run C) ===
+   Compiling simdutf-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/simdutf-sys)
+   Compiling highway-sys v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates-sys/highway-sys)
+   Compiling rustty-simd v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-simd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.66s
+     Running unittests src/lib.rs (target/aarch64-apple-darwin/debug/deps/rustty_simd-1f8b0758da2f23c5)
+
+running 42 tests
+test base64::tests::base64_maxLen ... ok
+test base64::tests::base64_empty_input ... ok
+test base64::tests::base64_decode ... ok
+test base64::tests::base64_strict_decode_valid ... ok
+test base64::tests::base64_strict_decode_invalid ... ok
+test base64::tests::decode_in_place_matches_decode ... ok
+test base64::tests::max_len_scalar_is_silent_on_success ... ok
+test base64::tests::base64_streaming_decode_invalid ... ok
+test base64::tests::max_len_scalar_warns_when_the_size_cannot_be_calculated ... ok
+test codepoint_width::tests::codepointWidth_basic ... ok
+test base64::tests::base64_streaming_decode_chunk_boundaries ... ok
+test codepoint_width::tests::codepoint_width_scalar_lane_uses_uucode_below_0x100 ... ok
+test index_of::tests::index_of ... ok
+test log_capture::tests::capture_admits_only_the_owning_thread ... ok
+test log_capture::tests::records_emitted_outside_a_capture_are_discarded ... ok
+test tests::lanes_matches_the_native_vector_width ... ok
+test tests::ref_all_decls ... ok
+test vt::tests::Table_3_11_truncated_sequences ... ok
+test vt::tests::Table_3_10_other_ill_formed_sequences ... ok
+test vt::tests::Table_3_8_non_shortest_form_sequences ... ok
+test vt::tests::Table_3_9_surrogate_sequences ... ok
+test vt::tests::decode_ascii_to_escape ... ok
+test vt::tests::decode_immediate_esc_sequence ... ok
+test vt::tests::decode_incomplete_utf_8 ... ok
+test vt::tests::decode_invalid_byte_before_escape ... ok
+test vt::tests::decode_invalid_continuation_in_3_byte_sequence ... ok
+test vt::tests::decode_invalid_continuation_in_4_byte_sequence ... ok
+test vt::tests::decode_invalid_leading_byte_is_replaced ... ok
+test vt::tests::decode_invalid_utf_8 ... ok
+test vt::tests::decode_multiple_consecutive_invalid_bytes ... ok
+test vt::tests::decode_no_escape ... ok
+test vt::tests::decode_overlong_2_byte_encoding ... ok
+test vt::tests::decode_partial_utf8_before_escape ... ok
+test vt::tests::decode_partial_utf8_before_escape_scalar ... ok
+test vt::tests::decode_surrogate_half ... ok
+test vt::tests::decode_tight_buffer_no_overread ... ok
+test vt::tests::decode_unexpected_continuation_byte_as_lead ... ok
+test vt::tests::decode_valid_multibyte_surrounded_by_invalid ... ok
+test base64::tests::scalar_decode_in_place_matches_scalar_decode ... ok
+test vt::tests::decode_simd_matches_scalar ... ok
+test vt::tests::decode_ascii_fast_path_tight_output_no_overwrite ... ok
+test codepoint_width::tests::codepointWidth_matches_kernel ... ok
+
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.71s
+
+   Doc-tests rustty_simd
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+(FFI leak detection for rustty-simd is G-LSAN's job: sanitizers.sh --gate lsan, ASan with detect_leaks=1, macOS and Linux)
+=== G6 [rustty-synthetic] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-synthetic] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-synthetic] 25s
+    Summary [  20.056s] 26 tests run: 26 passed, 1 skipped
+    [rustty-synthetic] doc tests: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== G6 [rustty-terminfo] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-terminfo] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-terminfo] 3s
+    Summary [   2.043s] 7 tests run: 7 passed, 0 skipped
+    [rustty-terminfo] doc tests: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== G6 [rustty-termio] :: ASan (FFI crate; Miri can't run C) ===
+   Compiling rustty-config v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-config)
+   Compiling rustty-termio v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-termio)
+   Compiling rustty-crash v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-crash)
+   Compiling rustty-inspector v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-inspector)
+   Compiling rustty-apprt-api v0.1.0 (/Users/gael/projects/rustty/.claude/worktrees/p8-w9t2m/crates/rustty-apprt-api)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.39s
+     Running unittests src/lib.rs (target/aarch64-apple-darwin/debug/deps/rustty_termio-a443c6c5f391cf57)
+
+running 124 tests
+test command::tests::create_null_delimited_env_map ... ok
+test command::tests::errno_tag_names_follow_the_zig_enum ... ok
+test command::tests::exec_failure_report_prints_the_errno_tag ... ok
+test command::tests::create_null_delimited_env_map_keeps_the_map_order ... ok
+test command::tests::path_search_ends_on_eperm_and_remembers_eacces ... ok
+test command::tests::execvpe_latches_the_last_path_entry_errno ... ok
+test command::tests::posix_call_retries_eintr_and_maps_errnos ... ok
+test command::tests::rt_info_defaults_are_inert ... ok
+test command::tests::setup_fd_clears_cloexec_and_dups ... ok
+test command::tests::rt_pre_exec_info_init_copies_the_config_fields ... ok
+test command::tests::rt_post_fork_info_init_copies_the_config_fields ... ok
+test command::tests::setup_fd_retries_eintr_and_fails_on_ebusy_through_posix_call ... ok
+test exec::tests::child_raw_errno::errno_tag_name_renders_the_name_not_the_number ... ok
+test exec::tests::child_raw_errno::errno_table_matches_the_host_libc ... ok
+test exec::tests::child_raw_errno::log_err_child_raw_uses_no_facade_and_no_locking_printer ... ok
+test exec::tests::exec_command::appendEnv_empty ... ok
+test exec::tests::exec_command::appendEnv_existing ... ok
+test exec::tests::exec_command::append_env_preserves_non_utf8_path_component ... ok
+test exec::tests::exec_command::exec_command_darwin_direct_command ... ok
+test exec::tests::exec_command::exec_command_darwin_shell_command ... ok
+test exec::tests::exec_command::exec_command_direct_command_config_freed ... ok
+test exec::tests::exec_command::exec_command_direct_command_error_passwd ... ok
+test exec::tests::exec_command::exec_command_shell_command_empty_passwd ... ok
+test exec::tests::exec_command::exec_command_shell_command_error_passwd ... ok
+test exec::tests::exec_command::exec_command_windows_bare_cmd_exe_resolves_via_comspec ... ignored, the body only exists under cfg(windows) (R14)
+test exec::tests::exec_command::exec_command_windows_bare_non_cmd_shell_is_passed_through ... ignored, the body only exists under cfg(windows) (R14)
+test exec::tests::exec_command::exec_command_windows_direct_command_is_passed_through_unchanged ... ignored, the body only exists under cfg(windows) (R14)
+test exec::tests::exec_command::exec_command_windows_shell_with_args_is_split_on_whitespace ... ignored, the body only exists under cfg(windows) (R14)
+test exec::tests::read_thread::gather_stage_reads_output_that_arrives_with_the_hangup ... ok
+test exec::tests::read_thread::outer_poll_hangup_with_data_reads_once_more ... ok
+test exec::tests::read_thread::read_thread_ring_matches_the_reference_on_every_target ... ok
+test exec::tests::exec_command::exec_command_cuts_a_nul_argument_where_execve_reads_it ... ok
+test command::tests::command_custom_env_vars ... ok
+test command::tests::command_os_pre_exec_1 ... ok
+test command::tests::command_os_pre_exec_2 ... ok
+test command::tests::command_custom_working_directory ... ok
+test command::tests::command_redirect_stdout_to_file ... ok
+test command::tests::command_rt_post_fork_1 ... ok
+test command::tests::command_rt_pre_exec_1 ... ok
+test command::tests::command_rt_pre_exec_2 ... ok
+test command::tests::command_posix_fork_handles_execvez_failure ... ok
+test command::tests::exec_failure_in_child_reports_the_errno_tag ... ok
+test exec::tests::subprocess::posix_waitpid_checked_reports_echild_instead_of_aborting ... ok
+test exec::tests::child_raw_errno::log_err_child_raw_completes_in_a_child_forked_while_stderr_is_locked ... ok
+test exec::tests::child_raw_errno::log_err_child_raw_writes_exactly_what_logfn_would ... ok
+test exec::tests::read_thread::readthread_gather_spawn_failure_logs_and_returns ... ok
+test exec::tests::read_thread::readthread_pipeline_keeps_interactive_latency ... ok
+test exec::tests::subprocess::subprocess_start_with_no_free_descriptor_is_openpty_failed ... ok
+test exec::tests::subprocess::kill_pid_abandons_a_child_that_ignores_sighup ... ok
+test exec::tests::thread_enter::ud367_process_info_waits_for_thread_enter_to_publish_the_pty ... ok
+test log_capture::tests::capture_admits_only_the_owning_thread ... ok
+test log_capture::tests::records_emitted_outside_a_capture_are_discarded ... ok
+test message::tag_name_tests::message_tag_names_are_the_reference_field_names ... ok
+test message::tests::message_size ... ok
+test message::tests::ref_all_decls ... ok
+test shell_integration::tests::bash ... ok
+test shell_integration::tests::bash_additional_arguments ... ok
+test shell_integration::tests::bash_env ... ok
+test shell_integration::tests::bash_histfile ... ok
+test shell_integration::tests::bash_inject_flags ... ok
+test shell_integration::tests::bash_missing_resources ... ok
+test shell_integration::tests::bash_rcfile ... ok
+test shell_integration::tests::bash_repeated_inject_flags_do_not_fail_setup ... ok
+test shell_integration::tests::bash_unsupported_options ... ok
+test shell_integration::tests::detect_shell ... ok
+test shell_integration::tests::detect_shell_basename_skips_trailing_separators ... ok
+test shell_integration::tests::force_shell ... ok
+test shell_integration::tests::non_utf8_path_bytes_survive_the_conversion_but_not_the_lossy_one ... ok
+test shell_integration::tests::nushell ... ok
+test shell_integration::tests::nushell_missing_resources ... ok
+test shell_integration::tests::nushell_unsupported_options ... ok
+test shell_integration::tests::prependEnv_empty ... ok
+test shell_integration::tests::prependEnv_existing ... ok
+test shell_integration::tests::prepend_env_preserves_non_utf8_path_component ... ok
+test shell_integration::tests::setup_features ... ok
+test shell_integration::tests::setup_xdg_data_dirs_is_silent_when_the_integration_dir_exists ... ok
+test shell_integration::tests::setup_xdg_data_dirs_warns_when_the_integration_dir_is_missing ... ok
+test shell_integration::tests::shell_integration_failure ... ok
+test shell_integration::tests::xdg_empty_xdg_data_dirs ... ok
+test shell_integration::tests::xdg_existing_xdg_data_dirs ... ok
+test shell_integration::tests::xdg_missing_resources ... ok
+test shell_integration::tests::zsh ... ok
+test shell_integration::tests::zsh_missing_resources ... ok
+test shell_integration::tests::zsh_zdotdir ... ok
+test stream_handler::tests::color_operation_reports_every_query_and_applies_later_requests ... ok
+test stream_handler::tests::kitty_clipboard_read_targets_only_never_consumes_a_one_time_grant ... ok
+test stream_handler::tests::kitty_clipboard_write_oversized_text_replies_efbig ... ok
+test stream_handler::tests::mouse_shape_reset_is_default_with_mouse_reporting_and_text_without ... ok
+test stream_handler::tests::stream_handler_change_config_routes_cursor_defaults_to_the_terminal ... ok
+test stream_handler::tests::stream_handler_dcs_tmux_arm_drives_the_viewer ... ok
+test stream_handler::tests::stream_handler_forwards_csi_8_t_as_a_resize_window_surface_message ... ok
+test stream_handler::tests::stream_handler_mode_12_ignored_when_default_blink_is_explicit ... ok
+test stream_handler::tests::stream_handler_visibility_report_arms_push_forced_messages ... ok
+test stream_handler::tests::ud351_osc7_host_decoding_to_256_bytes_is_ignored ... ok
+test stream_handler::tests::ud351_osc7_host_of_300_bytes_with_a_percent_escape_is_ignored ... ok
+test stream_handler::tests::ud351_osc7_long_hosts_that_fit_or_need_no_decoding_are_rejected_as_non_local ... ok
+test stream_handler::tests::ud351_osc7_long_ipv6_bracketed_host_is_ignored ... ok
+test stream_handler::tests::ud351_osc7_long_kitty_shell_cwd_host_is_ignored ... ok
+test stream_handler::tests::ud351_osc7_percent_encoded_local_host_still_sets_the_pwd ... ok
+test stream_handler::tests::vt_caller_tags_match_the_reference_action_union ... ok
+test stream_handler::tests::vt_callers_are_wired_to_the_funnel ... ok
+test stream_handler::tests::vt_funnel_emits_the_action_name_and_the_error ... ok
+test stream_handler::tests::window_title_is_silent_when_the_title_fits ... ok
+test stream_handler::tests::window_title_warns_when_the_title_exceeds_the_buffer ... ok
+test stream_handler::tests::xt_checksum_default_config_never_replies ... ok
+test stream_handler::tests::xt_checksum_report_enabled_replies_with_xterms_checksum ... ok
+test termio_impl::scrollback_limit_handoff_tests::config_default_scrollback_limit_lines_is_unlimited ... ok
+test termio_impl::scrollback_limit_handoff_tests::config_scrollback_limit_bytes_unlimited_reaches_the_pagelist ... ok
+test exec::tests::read_thread::readthread_pipeline_shuts_down_cleanly_from_both_stages ... ok
+test tests::ref_all_decls ... ok
+test thread::failure_screen_tests::failure_screen_text_has_the_reference_arms ... ok
+test termio_impl::scrollback_limit_handoff_tests::config_scrollback_limit_lines_prunes_the_pagelist ... ok
+test exec::tests::read_thread::readthread_pipeline_sustains_saturated_producer ... ok
+test exec::tests::read_thread::readthread_pty_bytes_land_in_screen ... ok
+test exec::tests::read_thread::readthread_sets_io_crash_thread_state ... ok
+test exec::tests::read_thread::readthread_sets_user_initiated_qos ... ok
+test exec::tests::subprocess::config_working_directory_with_a_nul_is_ignored_as_a_cwd ... ok
+test exec::tests::subprocess::drain_pty_master_once_consumes_pending_and_returns_on_a_quiet_master ... ok
+test exec::tests::subprocess::osc7_percent_00_pwd_is_ignored_as_a_cwd_instead_of_panicking ... ok
+test exec::tests::subprocess::rt_hooks_reach_the_spawned_command ... ok
+test exec::tests::subprocess::subprocess_start_spawns_and_reaps ... ok
+test exec::tests::thread_enter::process_exit_reports_a_child_that_exited_before_the_watch_was_registered ... ok
+test exec::tests::thread_enter::threadenter_queuewrite_writes_to_pty ... ok
+test exec::tests::thread_enter::threadenter_read_thread_spawn_failure_drains_before_stop ... ok
+
+test result: ok. 120 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 55.31s
+
+     Running tests/io_thread.rs (target/aarch64-apple-darwin/debug/deps/io_thread-7d585dafc52e39ad)
+
+running 3 tests
+test io_thread_sets_io_crash_thread_state ... ok
+test oversized_input_file_paints_the_input_failure_screen ... ok
+test missing_input_path_paints_the_input_failure_screen ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/live_shell.rs (target/aarch64-apple-darwin/debug/deps/live_shell-759dfc87f709c48c)
+
+running 1 test
+test live_shell_echo_round_trips_into_the_screen ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/rt_hooks_install.rs (target/aarch64-apple-darwin/debug/deps/rt_hooks_install-dc312c7eb55b2f1d)
+
+running 1 test
+test install_rt_hooks_contract ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/subprocess_drop_repro.rs (target/aarch64-apple-darwin/debug/deps/subprocess_drop_repro-684bb7b46ad69874)
+
+running 3 tests
+test exec_consume_via_copy_then_forget_original_no_abort ... ok
+test subprocess_deinit_is_idempotent ... ok
+test subprocess_start_deinit_in_place_then_drop_no_abort ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+   Doc-tests rustty_termio
+
+running 1 test
+test crates/rustty-termio/src/backend.rs - backend::Backend (line 70) - compile fail ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+(FFI leak detection for rustty-termio is G-LSAN's job: sanitizers.sh --gate lsan, ASan with detect_leaks=1, macOS and Linux)
+=== G6 [rustty-unicode] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-unicode] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-unicode] 443s
+    Summary [ 441.775s] 23 tests run: 23 passed (1 slow), 0 skipped
+    [rustty-unicode] doc tests: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== G6 [rustty-util] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-util] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-util] 2s
+    Summary [   0.651s] 6 tests run: 6 passed, 0 skipped
+    [rustty-util] doc tests: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== G6 [rustty-vaxis] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-vaxis] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-vaxis] 113s
+    Summary [ 110.607s] 159 tests run: 159 passed (1 slow), 12 skipped
+    [rustty-vaxis] doc tests: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== G6 [rustty-version] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-version] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-version] 1s
+    Summary [   0.508s] 5 tests run: 5 passed, 1 skipped
+    [rustty-version] doc tests: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== G6 [rustty-vt-c] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-vt-c] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()
+    [rustty-vt-c] 691s
+    Summary [ 676.905s] 586 tests run: 586 passed (3 slow), 19 skipped
+    [rustty-vt-c] doc tests: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== G6 [rustty-vt] :: Miri via nextest (UB + leaks, one process per test) ===
+    [rustty-vt] Miri Stacked Borrows, debug assertions on, 8 processes, MIRIFLAGS=''
+    filterset: all()

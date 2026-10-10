@@ -179,6 +179,8 @@ syn keyword rusttyConfigKeyword
 	\ osc-color-report-format
 	\ vt-kam-allowed
 	\ vt-window-resize-allowed
+	\ vt-xt-checksum-report
+	\ vt-xt-checksum-extension
 	\ custom-shader
 	\ custom-shader-animation
 	\ bell-features

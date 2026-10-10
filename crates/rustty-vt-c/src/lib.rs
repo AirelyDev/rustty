@@ -619,7 +619,7 @@ pub unsafe extern "C" fn rustty_unicode_grapheme_width(
 pub unsafe extern "C" fn rustty_size_report_encode(
     // D11: inbound as the C integer, narrowed below. See `Style::from_c_int`.
     style: c_int,
-    size: size_report::Size,
+    size: size_report::SizeReportSize,
     out: *mut u8,
     out_len: usize,
     out_written: *mut usize,
@@ -651,7 +651,7 @@ pub unsafe extern "C" fn rustty_size_report_encode(
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_event_new(
     alloc: *const rustty_lib::allocator::Allocator,
-    result: *mut key_event::Event,
+    result: *mut key_event::KeyEvent,
 ) -> c_int {
     // task-14a review (IMPORTANT 3): install the `log` facade backend from
     // every constructor a C/wasm embedder might call first — several shipped
@@ -670,7 +670,7 @@ pub unsafe extern "C" fn rustty_key_event_new(
 /// `event`, if non-null, must be a handle returned by `rustty_key_event_new`.
 #[cfg(feature = "input-encode")]
 #[no_mangle]
-pub unsafe extern "C" fn rustty_key_event_free(event: key_event::Event) {
+pub unsafe extern "C" fn rustty_key_event_free(event: key_event::KeyEvent) {
     // SAFETY: `event` validity is the caller's contract.
     unsafe { key_event::free(event) }
 }
@@ -682,7 +682,7 @@ pub unsafe extern "C" fn rustty_key_event_free(event: key_event::Event) {
 /// `event` must be a handle returned by `rustty_key_event_new`.
 #[cfg(feature = "input-encode")]
 #[no_mangle]
-pub unsafe extern "C" fn rustty_key_event_set_action(event: key_event::Event, action: c_int) {
+pub unsafe extern "C" fn rustty_key_event_set_action(event: key_event::KeyEvent, action: c_int) {
     // _ = std.meta.intToEnum(key.Action, ...) catch { log.warn(...); return; };
     let Some(a) = key_action_from_c_int(action) else {
         // log.warn("set_action invalid action value={d}", .{...});
@@ -704,7 +704,7 @@ pub unsafe extern "C" fn rustty_key_event_set_action(event: key_event::Event, ac
 /// `event` must be a handle returned by `rustty_key_event_new`.
 #[cfg(feature = "input-encode")]
 #[no_mangle]
-pub unsafe extern "C" fn rustty_key_event_get_action(event: key_event::Event) -> c_int {
+pub unsafe extern "C" fn rustty_key_event_get_action(event: key_event::KeyEvent) -> c_int {
     // SAFETY: `event` validity is the caller's contract.
     unsafe { key_event::get_action(event) as c_int }
 }
@@ -716,7 +716,7 @@ pub unsafe extern "C" fn rustty_key_event_get_action(event: key_event::Event) ->
 /// `event` must be a handle returned by `rustty_key_event_new`.
 #[cfg(feature = "input-encode")]
 #[no_mangle]
-pub unsafe extern "C" fn rustty_key_event_set_key(event: key_event::Event, k: c_int) {
+pub unsafe extern "C" fn rustty_key_event_set_key(event: key_event::KeyEvent, k: c_int) {
     // _ = std.meta.intToEnum(key.Key, ...) catch { log.warn(...); return; };
     let Some(key) = key_key_from_c_int(k) else {
         // log.warn("set_key invalid key value={d}", .{...});
@@ -738,7 +738,7 @@ pub unsafe extern "C" fn rustty_key_event_set_key(event: key_event::Event, k: c_
 /// `event` must be a handle returned by `rustty_key_event_new`.
 #[cfg(feature = "input-encode")]
 #[no_mangle]
-pub unsafe extern "C" fn rustty_key_event_get_key(event: key_event::Event) -> c_int {
+pub unsafe extern "C" fn rustty_key_event_get_key(event: key_event::KeyEvent) -> c_int {
     // SAFETY: `event` validity is the caller's contract.
     unsafe { key_event::get_key(event) as c_int }
 }
@@ -751,7 +751,7 @@ pub unsafe extern "C" fn rustty_key_event_get_key(event: key_event::Event) -> c_
 #[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_event_set_mods(
-    event: key_event::Event,
+    event: key_event::KeyEvent,
     mods: rustty_vt::input::key_mods::ModsBacking,
 ) {
     // SAFETY: `event` validity is the caller's contract.
@@ -766,7 +766,7 @@ pub unsafe extern "C" fn rustty_key_event_set_mods(
 #[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_event_get_mods(
-    event: key_event::Event,
+    event: key_event::KeyEvent,
 ) -> rustty_vt::input::key_mods::ModsBacking {
     // SAFETY: `event` validity is the caller's contract.
     unsafe { key_event::get_mods(event) }.int()
@@ -780,7 +780,7 @@ pub unsafe extern "C" fn rustty_key_event_get_mods(
 #[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_event_set_consumed_mods(
-    event: key_event::Event,
+    event: key_event::KeyEvent,
     consumed_mods: rustty_vt::input::key_mods::ModsBacking,
 ) {
     // SAFETY: `event` validity is the caller's contract.
@@ -797,7 +797,7 @@ pub unsafe extern "C" fn rustty_key_event_set_consumed_mods(
 #[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_event_get_consumed_mods(
-    event: key_event::Event,
+    event: key_event::KeyEvent,
 ) -> rustty_vt::input::key_mods::ModsBacking {
     // SAFETY: `event` validity is the caller's contract.
     unsafe { key_event::get_consumed_mods(event) }.int()
@@ -810,7 +810,10 @@ pub unsafe extern "C" fn rustty_key_event_get_consumed_mods(
 /// `event` must be a handle returned by `rustty_key_event_new`.
 #[cfg(feature = "input-encode")]
 #[no_mangle]
-pub unsafe extern "C" fn rustty_key_event_set_composing(event: key_event::Event, composing: bool) {
+pub unsafe extern "C" fn rustty_key_event_set_composing(
+    event: key_event::KeyEvent,
+    composing: bool,
+) {
     // SAFETY: `event` validity is the caller's contract.
     unsafe { key_event::set_composing(event, composing) }
 }
@@ -822,7 +825,7 @@ pub unsafe extern "C" fn rustty_key_event_set_composing(event: key_event::Event,
 /// `event` must be a handle returned by `rustty_key_event_new`.
 #[cfg(feature = "input-encode")]
 #[no_mangle]
-pub unsafe extern "C" fn rustty_key_event_get_composing(event: key_event::Event) -> bool {
+pub unsafe extern "C" fn rustty_key_event_get_composing(event: key_event::KeyEvent) -> bool {
     // SAFETY: `event` validity is the caller's contract.
     unsafe { key_event::get_composing(event) }
 }
@@ -836,7 +839,7 @@ pub unsafe extern "C" fn rustty_key_event_get_composing(event: key_event::Event)
 #[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_event_set_utf8(
-    event: key_event::Event,
+    event: key_event::KeyEvent,
     utf8: *const u8,
     len: usize,
 ) {
@@ -853,7 +856,7 @@ pub unsafe extern "C" fn rustty_key_event_set_utf8(
 #[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_event_get_utf8(
-    event: key_event::Event,
+    event: key_event::KeyEvent,
     len: *mut usize,
 ) -> *const u8 {
     // SAFETY: `event`/`len` validity is the caller's contract.
@@ -869,7 +872,7 @@ pub unsafe extern "C" fn rustty_key_event_get_utf8(
 #[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_event_set_unshifted_codepoint(
-    event: key_event::Event,
+    event: key_event::KeyEvent,
     codepoint: u32,
 ) {
     // SAFETY: `event` validity is the caller's contract.
@@ -884,7 +887,9 @@ pub unsafe extern "C" fn rustty_key_event_set_unshifted_codepoint(
 /// `event` must be a handle returned by `rustty_key_event_new`.
 #[cfg(feature = "input-encode")]
 #[no_mangle]
-pub unsafe extern "C" fn rustty_key_event_get_unshifted_codepoint(event: key_event::Event) -> u32 {
+pub unsafe extern "C" fn rustty_key_event_get_unshifted_codepoint(
+    event: key_event::KeyEvent,
+) -> u32 {
     // SAFETY: `event` validity is the caller's contract.
     unsafe { key_event::get_unshifted_codepoint(event) }
 }
@@ -955,7 +960,7 @@ fn mouse_button_from_c_int(v: c_int) -> Option<rustty_vt::input::mouse::Button> 
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_encoder_new(
     alloc: *const rustty_lib::allocator::Allocator,
-    result: *mut key_encode::Encoder,
+    result: *mut key_encode::KeyEncoder,
 ) -> c_int {
     // task-14a review (IMPORTANT 3): install the `log` facade backend from
     // every constructor a C/wasm embedder might call first — several shipped
@@ -974,7 +979,7 @@ pub unsafe extern "C" fn rustty_key_encoder_new(
 /// `encoder`, if non-null, must be a handle returned by `rustty_key_encoder_new`.
 #[cfg(feature = "input-encode")]
 #[no_mangle]
-pub unsafe extern "C" fn rustty_key_encoder_free(encoder: key_encode::Encoder) {
+pub unsafe extern "C" fn rustty_key_encoder_free(encoder: key_encode::KeyEncoder) {
     // SAFETY: `encoder` validity is the caller's contract.
     unsafe { key_encode::free(encoder) }
 }
@@ -988,7 +993,7 @@ pub unsafe extern "C" fn rustty_key_encoder_free(encoder: key_encode::Encoder) {
 #[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_encoder_setopt(
-    encoder: key_encode::Encoder,
+    encoder: key_encode::KeyEncoder,
     option: c_int,
     value: *const std::ffi::c_void,
 ) {
@@ -1006,7 +1011,7 @@ pub unsafe extern "C" fn rustty_key_encoder_setopt(
 #[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_encoder_setopt_from_terminal(
-    encoder: key_encode::Encoder,
+    encoder: key_encode::KeyEncoder,
     terminal: terminal::Terminal,
 ) {
     // SAFETY: handle validity is the caller's contract.
@@ -1022,8 +1027,8 @@ pub unsafe extern "C" fn rustty_key_encoder_setopt_from_terminal(
 #[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_encoder_encode(
-    encoder: key_encode::Encoder,
-    event: key_event::Event,
+    encoder: key_encode::KeyEncoder,
+    event: key_event::KeyEvent,
     out: *mut u8,
     out_len: usize,
     out_written: *mut usize,
@@ -1047,7 +1052,7 @@ pub unsafe extern "C" fn rustty_key_encoder_encode(
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_event_new(
     alloc: *const rustty_lib::allocator::Allocator,
-    result: *mut mouse_event::Event,
+    result: *mut mouse_event::MouseEvent,
 ) -> c_int {
     // task-14a review (IMPORTANT 3): install the `log` facade backend from
     // every constructor a C/wasm embedder might call first — several shipped
@@ -1066,7 +1071,7 @@ pub unsafe extern "C" fn rustty_mouse_event_new(
 /// `event`, if non-null, must be a handle returned by `rustty_mouse_event_new`.
 #[cfg(feature = "input-encode")]
 #[no_mangle]
-pub unsafe extern "C" fn rustty_mouse_event_free(event: mouse_event::Event) {
+pub unsafe extern "C" fn rustty_mouse_event_free(event: mouse_event::MouseEvent) {
     // SAFETY: `event` validity is the caller's contract.
     unsafe { mouse_event::free(event) }
 }
@@ -1078,7 +1083,10 @@ pub unsafe extern "C" fn rustty_mouse_event_free(event: mouse_event::Event) {
 /// `event` must be a handle returned by `rustty_mouse_event_new`.
 #[cfg(feature = "input-encode")]
 #[no_mangle]
-pub unsafe extern "C" fn rustty_mouse_event_set_action(event: mouse_event::Event, action: c_int) {
+pub unsafe extern "C" fn rustty_mouse_event_set_action(
+    event: mouse_event::MouseEvent,
+    action: c_int,
+) {
     // _ = std.meta.intToEnum(Action, ...) catch { log.warn(...); return; };
     let Some(a) = mouse_action_from_c_int(action) else {
         // log.warn("set_action invalid action value={d}", .{...});
@@ -1100,7 +1108,7 @@ pub unsafe extern "C" fn rustty_mouse_event_set_action(event: mouse_event::Event
 /// `event` must be a handle returned by `rustty_mouse_event_new`.
 #[cfg(feature = "input-encode")]
 #[no_mangle]
-pub unsafe extern "C" fn rustty_mouse_event_get_action(event: mouse_event::Event) -> c_int {
+pub unsafe extern "C" fn rustty_mouse_event_get_action(event: mouse_event::MouseEvent) -> c_int {
     // SAFETY: `event` validity is the caller's contract.
     unsafe { mouse_event::get_action(event) as c_int }
 }
@@ -1112,7 +1120,10 @@ pub unsafe extern "C" fn rustty_mouse_event_get_action(event: mouse_event::Event
 /// `event` must be a handle returned by `rustty_mouse_event_new`.
 #[cfg(feature = "input-encode")]
 #[no_mangle]
-pub unsafe extern "C" fn rustty_mouse_event_set_button(event: mouse_event::Event, button: c_int) {
+pub unsafe extern "C" fn rustty_mouse_event_set_button(
+    event: mouse_event::MouseEvent,
+    button: c_int,
+) {
     // _ = std.meta.intToEnum(Button, ...) catch { log.warn(...); return; };
     let Some(b) = mouse_button_from_c_int(button) else {
         // log.warn("set_button invalid button value={d}", .{...});
@@ -1134,7 +1145,7 @@ pub unsafe extern "C" fn rustty_mouse_event_set_button(event: mouse_event::Event
 /// `event` must be a handle returned by `rustty_mouse_event_new`.
 #[cfg(feature = "input-encode")]
 #[no_mangle]
-pub unsafe extern "C" fn rustty_mouse_event_clear_button(event: mouse_event::Event) {
+pub unsafe extern "C" fn rustty_mouse_event_clear_button(event: mouse_event::MouseEvent) {
     // SAFETY: `event` validity is the caller's contract.
     unsafe { mouse_event::clear_button(event) }
 }
@@ -1148,7 +1159,7 @@ pub unsafe extern "C" fn rustty_mouse_event_clear_button(event: mouse_event::Eve
 #[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_event_get_button(
-    event: mouse_event::Event,
+    event: mouse_event::MouseEvent,
     out: *mut c_int,
 ) -> bool {
     // PORT NOTE: the reference writes the `Button` enum (a `c_int`) through `out`.
@@ -1170,7 +1181,7 @@ pub unsafe extern "C" fn rustty_mouse_event_get_button(
 #[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_event_set_mods(
-    event: mouse_event::Event,
+    event: mouse_event::MouseEvent,
     mods: rustty_vt::input::key_mods::ModsBacking,
 ) {
     // SAFETY: `event` validity is the caller's contract.
@@ -1185,7 +1196,7 @@ pub unsafe extern "C" fn rustty_mouse_event_set_mods(
 #[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_event_get_mods(
-    event: mouse_event::Event,
+    event: mouse_event::MouseEvent,
 ) -> rustty_vt::input::key_mods::ModsBacking {
     // SAFETY: `event` validity is the caller's contract.
     unsafe { mouse_event::get_mods(event) }.int()
@@ -1199,7 +1210,7 @@ pub unsafe extern "C" fn rustty_mouse_event_get_mods(
 #[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_event_set_position(
-    event: mouse_event::Event,
+    event: mouse_event::MouseEvent,
     pos: mouse_event::Position,
 ) {
     // SAFETY: `event` validity is the caller's contract.
@@ -1214,7 +1225,7 @@ pub unsafe extern "C" fn rustty_mouse_event_set_position(
 #[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_event_get_position(
-    event: mouse_event::Event,
+    event: mouse_event::MouseEvent,
 ) -> mouse_event::Position {
     // SAFETY: `event` validity is the caller's contract.
     unsafe { mouse_event::get_position(event) }
@@ -1231,7 +1242,7 @@ pub unsafe extern "C" fn rustty_mouse_event_get_position(
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_encoder_new(
     alloc: *const rustty_lib::allocator::Allocator,
-    result: *mut mouse_encode::Encoder,
+    result: *mut mouse_encode::MouseEncoder,
 ) -> c_int {
     // task-14a review (IMPORTANT 3): install the `log` facade backend from
     // every constructor a C/wasm embedder might call first — several shipped
@@ -1250,7 +1261,7 @@ pub unsafe extern "C" fn rustty_mouse_encoder_new(
 /// `encoder`, if non-null, must be a handle returned by `rustty_mouse_encoder_new`.
 #[cfg(feature = "input-encode")]
 #[no_mangle]
-pub unsafe extern "C" fn rustty_mouse_encoder_free(encoder: mouse_encode::Encoder) {
+pub unsafe extern "C" fn rustty_mouse_encoder_free(encoder: mouse_encode::MouseEncoder) {
     // SAFETY: `encoder` validity is the caller's contract.
     unsafe { mouse_encode::free(encoder) }
 }
@@ -1264,7 +1275,7 @@ pub unsafe extern "C" fn rustty_mouse_encoder_free(encoder: mouse_encode::Encode
 #[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_encoder_setopt(
-    encoder: mouse_encode::Encoder,
+    encoder: mouse_encode::MouseEncoder,
     option: c_int,
     value: *const std::ffi::c_void,
 ) {
@@ -1282,7 +1293,7 @@ pub unsafe extern "C" fn rustty_mouse_encoder_setopt(
 #[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_encoder_setopt_from_terminal(
-    encoder: mouse_encode::Encoder,
+    encoder: mouse_encode::MouseEncoder,
     terminal: terminal::Terminal,
 ) {
     // SAFETY: handle validity is the caller's contract.
@@ -1296,7 +1307,7 @@ pub unsafe extern "C" fn rustty_mouse_encoder_setopt_from_terminal(
 /// `encoder`, if non-null, must be a `rustty_mouse_encoder_new` handle.
 #[cfg(feature = "input-encode")]
 #[no_mangle]
-pub unsafe extern "C" fn rustty_mouse_encoder_reset(encoder: mouse_encode::Encoder) {
+pub unsafe extern "C" fn rustty_mouse_encoder_reset(encoder: mouse_encode::MouseEncoder) {
     // SAFETY: `encoder` validity is the caller's contract.
     unsafe { mouse_encode::reset(encoder) }
 }
@@ -1311,8 +1322,8 @@ pub unsafe extern "C" fn rustty_mouse_encoder_reset(encoder: mouse_encode::Encod
 #[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_encoder_encode(
-    encoder: mouse_encode::Encoder,
-    event: mouse_event::Event,
+    encoder: mouse_encode::MouseEncoder,
+    event: mouse_event::MouseEvent,
     out: *mut u8,
     out_len: usize,
     out_written: *mut usize,
@@ -1449,14 +1460,16 @@ pub unsafe extern "C" fn rustty_style_is_default(s: *const style::Style) -> bool
 // `terminal::TerminalData::from_c_int` under W35-B08 — `get_multi` must reach
 // the same guard per array element, so it can no longer live in this file.
 //
-// contiguous 0..=41 (27/28 = scrollback max bytes/lines; 29/30 = the
+// contiguous 0..=46 (27/28 = scrollback max bytes/lines; 29/30 = the
 // desktop-notification and progress-report effects, oracle c3655ba25 47d602c42;
 // 31 = continuation_max_bytes, Bundle S d7bb4b863, closing the hole Bundle M
 // reserved for it; 32..=37 = the Bundle M options; 38 = clipboard_read,
 // oracle e03475c0c; 39 = clipboard_write_max_bytes, oracle 5350d4a5f;
 // 40 = resize_pull_scrollback, oracle c55f213aa; 41 = render_hold, oracle
-// e50779498)
-const TERMINAL_OPTION_COUNT: c_int = 42;
+// e50779498); 42/43 = semantic_prompt/reset (oracle 7bb45ba34); 44/45 =
+// xt_checksum_report/xt_checksum_extension (oracle 9272a2f7c, 7e2d1793d);
+// 46 = program_status (oracle bae2c3cdb). Contiguous again: 0..=46.
+const TERMINAL_OPTION_COUNT: c_int = 47;
 fn terminal_option_from_c_int(v: c_int) -> Option<terminal::Option_> {
     if (0..TERMINAL_OPTION_COUNT).contains(&v) {
         // SAFETY: `v` is a valid terminal `Option` discriminant (range-checked).
@@ -1476,7 +1489,7 @@ fn terminal_option_from_c_int(v: c_int) -> Option<terminal::Option_> {
 #[no_mangle]
 pub unsafe extern "C" fn rustty_sgr_new(
     alloc: *const rustty_lib::allocator::Allocator,
-    result: *mut sgr::Parser,
+    result: *mut sgr::SgrParser,
 ) -> c_int {
     // task-14a review (IMPORTANT 3): install the `log` facade backend from
     // every constructor a C/wasm embedder might call first — several shipped
@@ -1494,7 +1507,7 @@ pub unsafe extern "C" fn rustty_sgr_new(
 /// # Safety
 /// `parser`, if non-null, must be a handle returned by `rustty_sgr_new`.
 #[no_mangle]
-pub unsafe extern "C" fn rustty_sgr_free(parser: sgr::Parser) {
+pub unsafe extern "C" fn rustty_sgr_free(parser: sgr::SgrParser) {
     // SAFETY: `parser` validity is the caller's contract.
     unsafe { sgr::free(parser) }
 }
@@ -1505,7 +1518,7 @@ pub unsafe extern "C" fn rustty_sgr_free(parser: sgr::Parser) {
 /// # Safety
 /// `parser`, if non-null, must be a handle returned by `rustty_sgr_new`.
 #[no_mangle]
-pub unsafe extern "C" fn rustty_sgr_reset(parser: sgr::Parser) {
+pub unsafe extern "C" fn rustty_sgr_reset(parser: sgr::SgrParser) {
     // SAFETY: `parser` validity is the caller's contract.
     unsafe { sgr::reset(parser) }
 }
@@ -1519,7 +1532,7 @@ pub unsafe extern "C" fn rustty_sgr_reset(parser: sgr::Parser) {
 /// to `len` readable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn rustty_sgr_set_params(
-    parser: sgr::Parser,
+    parser: sgr::SgrParser,
     params: *const u16,
     seps: *const u8,
     len: usize,
@@ -1536,7 +1549,7 @@ pub unsafe extern "C" fn rustty_sgr_set_params(
 /// `result` must be a valid, writable pointer to a `sgr::AttributeC`.
 #[no_mangle]
 pub unsafe extern "C" fn rustty_sgr_next(
-    parser: sgr::Parser,
+    parser: sgr::SgrParser,
     result: *mut sgr::AttributeC,
 ) -> bool {
     // SAFETY: `parser`/`result` validity is the caller's contract.
@@ -1602,7 +1615,7 @@ pub unsafe extern "C" fn rustty_sgr_attribute_value(
 #[no_mangle]
 pub unsafe extern "C" fn rustty_osc_new(
     alloc: *const rustty_lib::allocator::Allocator,
-    result: *mut osc::Parser,
+    result: *mut osc::OscParser,
 ) -> c_int {
     // task-14a review (IMPORTANT 3): install the `log` facade backend from
     // every constructor a C/wasm embedder might call first — several shipped
@@ -1620,7 +1633,7 @@ pub unsafe extern "C" fn rustty_osc_new(
 /// # Safety
 /// `parser`, if non-null, must be a handle returned by `rustty_osc_new`.
 #[no_mangle]
-pub unsafe extern "C" fn rustty_osc_free(parser: osc::Parser) {
+pub unsafe extern "C" fn rustty_osc_free(parser: osc::OscParser) {
     // SAFETY: `parser` validity is the caller's contract.
     unsafe { osc::free(parser) }
 }
@@ -1631,7 +1644,7 @@ pub unsafe extern "C" fn rustty_osc_free(parser: osc::Parser) {
 /// # Safety
 /// `parser` must be a non-null handle returned by `rustty_osc_new`.
 #[no_mangle]
-pub unsafe extern "C" fn rustty_osc_next(parser: osc::Parser, byte: u8) {
+pub unsafe extern "C" fn rustty_osc_next(parser: osc::OscParser, byte: u8) {
     // SAFETY: `parser` validity is the caller's contract.
     unsafe { osc::next(parser, byte) }
 }
@@ -1642,7 +1655,7 @@ pub unsafe extern "C" fn rustty_osc_next(parser: osc::Parser, byte: u8) {
 /// # Safety
 /// `parser` must be a non-null handle returned by `rustty_osc_new`.
 #[no_mangle]
-pub unsafe extern "C" fn rustty_osc_reset(parser: osc::Parser) {
+pub unsafe extern "C" fn rustty_osc_reset(parser: osc::OscParser) {
     // SAFETY: `parser` validity is the caller's contract.
     unsafe { osc::reset(parser) }
 }
@@ -1654,9 +1667,25 @@ pub unsafe extern "C" fn rustty_osc_reset(parser: osc::Parser) {
 /// `parser` must be a non-null handle returned by `rustty_osc_new`. The returned
 /// command pointer aliases the parser and is valid until the next parse op.
 #[no_mangle]
-pub unsafe extern "C" fn rustty_osc_end(parser: osc::Parser, terminator: u8) -> osc::Command {
+pub unsafe extern "C" fn rustty_osc_end(parser: osc::OscParser, terminator: u8) -> osc::Command {
     // SAFETY: `parser` validity is the caller's contract.
     unsafe { osc::end(parser, terminator) }
+}
+
+// pub const osc_set = osc.set;  (ghostty_osc_set)
+/// C: rustty_osc_set
+///
+/// # Safety
+/// `parser`, if non-null, must be a handle returned by `rustty_osc_new`;
+/// `value`, if non-null, must point to the option's input type.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_osc_set(
+    parser: osc::OscParser,
+    option: c_int,
+    value: *const std::ffi::c_void,
+) -> c_int {
+    // SAFETY: `parser`/`value` validity is the caller's contract.
+    unsafe { osc::set(parser, option, value) }.to_c_int()
 }
 
 // pub const osc_command_type = osc.commandType;  (ghostty_osc_command_type)
@@ -2111,7 +2140,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_get(
     data: c_int,
     out: *mut std::ffi::c_void,
 ) -> c_int {
-    let data = match kitty_graphics::Data::from_c_int(data) {
+    let data = match kitty_graphics::KittyGraphicsData::from_c_int(data) {
         Some(d) => d,
         None => return result::Result::InvalidValue.to_c_int(),
     };
@@ -2534,7 +2563,7 @@ pub unsafe extern "C" fn rustty_render_state_get(
 pub unsafe extern "C" fn rustty_render_state_get_multi(
     state: render::RenderState,
     count: usize,
-    keys: *const render::Data,
+    keys: *const render::RenderStateData,
     values: *mut *mut std::ffi::c_void,
     out_written: *mut usize,
 ) -> c_int {
@@ -2673,7 +2702,7 @@ pub unsafe extern "C" fn rustty_render_state_row_get(
 pub unsafe extern "C" fn rustty_render_state_row_get_multi(
     iterator: render::RowIterator,
     count: usize,
-    keys: *const render::RowData,
+    keys: *const render::RenderStateRowData,
     values: *mut *mut std::ffi::c_void,
     out_written: *mut usize,
 ) -> c_int {
@@ -2894,7 +2923,7 @@ pub unsafe extern "C" fn rustty_selection_gesture_reset(
 pub unsafe extern "C" fn rustty_selection_gesture_event(
     gesture: selection_gesture::Gesture,
     terminal: terminal::Terminal,
-    event: selection_gesture::Event,
+    event: selection_gesture::SelectionGestureEvent,
     out_selection: *mut selection::CSelection,
 ) -> c_int {
     // SAFETY: pointer validity is the caller's contract.
@@ -2934,7 +2963,7 @@ pub unsafe extern "C" fn rustty_selection_gesture_get_multi(
     gesture: selection_gesture::Gesture,
     terminal: terminal::Terminal,
     count: usize,
-    keys: *const selection_gesture::Data,
+    keys: *const selection_gesture::SelectionGestureData,
     values: *mut *mut std::ffi::c_void,
     out_written: *mut usize,
 ) -> c_int {
@@ -2969,7 +2998,7 @@ pub unsafe extern "C" fn rustty_selection_gesture_get_multi(
 #[no_mangle]
 pub unsafe extern "C" fn rustty_selection_gesture_event_new(
     alloc_: *const rustty_lib::allocator::Allocator,
-    out_event: *mut selection_gesture::Event,
+    out_event: *mut selection_gesture::SelectionGestureEvent,
     event_type: c_int,
 ) -> c_int {
     // task-14a review (IMPORTANT 3): install the `log` facade backend from
@@ -2993,7 +3022,9 @@ pub unsafe extern "C" fn rustty_selection_gesture_event_new(
 /// `event`, if non-null, must be a handle returned by `_event_new`.
 #[cfg(feature = "selection")]
 #[no_mangle]
-pub unsafe extern "C" fn rustty_selection_gesture_event_free(event: selection_gesture::Event) {
+pub unsafe extern "C" fn rustty_selection_gesture_event_free(
+    event: selection_gesture::SelectionGestureEvent,
+) {
     // SAFETY: `event` validity is the caller's contract.
     unsafe { selection_gesture::event_free(event) }
 }
@@ -3006,7 +3037,7 @@ pub unsafe extern "C" fn rustty_selection_gesture_event_free(event: selection_ge
 #[cfg(feature = "selection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_selection_gesture_event_set(
-    event: selection_gesture::Event,
+    event: selection_gesture::SelectionGestureEvent,
     option: c_int,
     value: *const std::ffi::c_void,
 ) -> c_int {

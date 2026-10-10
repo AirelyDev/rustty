@@ -120,6 +120,7 @@ deep_equal_via_eq!(
 deep_equal_via_eq!(
     FontSyntheticStyle,
     ShellIntegrationFeatures,
+    XtChecksumExtension,
     SplitPreserveZoom,
     AppNotifications,
     BellFeatures,
