@@ -732,19 +732,20 @@ exit "$2"
 FAKE
   cat > "$d/.port/tools/gates/check_valgrind.sh" <<'FAKE'
 #!/usr/bin/env bash
-# A stand-in G-VALGRIND: `--list-scope`, `--shard K/N`, crate arguments. The
-# shard named in <root>/vg_fail (if any) exits 1.
+# A stand-in G-VALGRIND: `--list-scope`, `--shard K/N`, `--jobs J`, crate
+# arguments. The shard named in <root>/vg_fail (if any) exits 1.
 root="$(cd "$(dirname "$0")/../../.." && pwd)"
-k=1; n=1; crates=""
+k=1; n=1; j=1; crates=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --list-scope) printf '%s\n' a b c "b:feat"; exit 0 ;;
     --shard) k="${2%/*}"; n="${2#*/}"; shift 2 ;;
+    --jobs) j="$2"; shift 2 ;;
     *) crates="$crates $1"; shift ;;
   esac
 done
 echo "S vg$k" >> "$root/events"
-echo "shard $k/$n crates:${crates:- <default>} CTD=${CARGO_TARGET_DIR:-unset}"
+echo "shard $k/$n jobs $j crates:${crates:- <default>} CTD=${CARGO_TARGET_DIR:-unset}"
 sleep 1
 echo "E vg$k" >> "$root/events"
 [ "$(cat "$root/vg_fail" 2>/dev/null)" = "$k" ] && { echo "G-VALGRIND RED: shard $k"; exit 1; }
@@ -951,6 +952,14 @@ W2|HARD|light|-|bash $GATES/fake.sh W2 0 0'
   CST_ENV="CI_VALGRIND_SHARDS=3" cst_run shard --jobs 4 --heavy-cap 3
   if [ "$CST_RC" = 0 ] && cst_has "+ G-VALGRIND"; then cst_ok "D control: all shards green, the gate is green"
   else cst_bad "D all-green shards (exit $CST_RC)"; fi
+  # Each shard's memcheck jobs default to the cores over the heavy cap (one
+  # memcheck process is one thread); CI_VALGRIND_JOBS overrides it.
+  vj=$(( $(ci_ncpu) / 3 )); [ "$vj" -lt 1 ] && vj=1
+  if [ "$(printf '%s\n' "$CST_OUT" | grep -c "jobs $vj crates:")" = 3 ]; then cst_ok "D every shard defaults to --jobs $vj (cores / heavy cap)"
+  else cst_bad "D default shard jobs (wanted $vj on 3 shards)"; fi
+  CST_ENV="CI_VALGRIND_SHARDS=3 CI_VALGRIND_JOBS=5" cst_run shard --jobs 4 --heavy-cap 3
+  if [ "$CST_RC" = 0 ] && [ "$(printf '%s\n' "$CST_OUT" | grep -c "jobs 5 crates:")" = 3 ]; then cst_ok "D CI_VALGRIND_JOBS=5 overrides the default on every shard"
+  else cst_bad "D CI_VALGRIND_JOBS override (exit $CST_RC)"; fi
   # shellcheck disable=SC2016  # the scheduler's code, literally
   CST_MUT_FILE=ci_sched.sh CST_MUT_OLD='  for r in ${GS_RCS[$i]}; do' CST_MUT_NEW='  rc="${GS_RCS[$i]##* }"; for r in; do' cst_make shard-mut "$R"
   echo 2 > "$CST_BASE/shard-mut/vg_fail"

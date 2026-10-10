@@ -449,7 +449,9 @@ Each registry entry declares what it needs:
     stay RED. G8b-SELF proves this.
 - **`shard`**: in a parallel run G-VALGRIND runs as `CI_VALGRIND_SHARDS` (4)
   `check_valgrind.sh --shard K/N` units. Each unit is heavy, so the heavy cap
-  bounds them, and each passes `--jobs $CI_VALGRIND_JOBS` when that is set. If
+  bounds them, and each passes `--jobs $CI_VALGRIND_JOBS`. That defaults to
+  the core count divided by the heavy cap (at least 1), because one memcheck
+  process is one thread; set it to override. If
   any shard is RED the gate is RED. If any shard is BLOCKED the gate is
   BLOCKED. Only all-green shards make a green gate.
 - **`scope=<how>`**: what `--changed-since` does to the gate (below).
