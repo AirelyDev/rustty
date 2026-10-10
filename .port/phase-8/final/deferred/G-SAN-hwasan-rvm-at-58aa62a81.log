@@ -1,0 +1,152 @@
+### G-HWASAN: HWAddressSanitizer (-Zbuild-std, tagged globals, lld; C via cc with -fsanitize=hwaddress) over the workspace test suites (Linux/aarch64) ###
+excluded (cannot run under the sanitizer):
+  - xtask: its tests run nested cargo builds that inherit RUSTFLAGS=-Zsanitizer=hwaddress without -Zbuild-std, which rustc rejects ('mixing -Zsanitizer will cause an ABI mismatch in crate rustty_util'; G-HWASAN's first run, rvm, P7-W16b: 38 nested builds, 2 tests failed); the same exclusion as G-MSAN's (SANITIZER_SUPPRESSIONS.md M4, H1)
+feature lane: rustty-vt:wuffs,oniguruma — the PNG decode tests (`image_load_png_zlib_compressed_direct`, `sys::tests::default_decoder_*`) are ignored without the wuffs feature, and one of them is a Miri exception whose stated compensating control is ASan; found by G-ASAN's claim cross-check on its first run (P7-W14); and the oniguruma feature's tests, e.g. the Miri-excepted tmux::control::concurrent_first_notifications_do_not_race_oniguruma_init, which no lane compiled until the cross-check covered every Miri exception (fix round 1)
+feature lane: rustty-apprt:gtk,wayland,x11 — GTK is the reference's Linux runtime, so its test executable there compiles the GTK apprt; cargo test --workspace does not
+feature lane: rustty-os:flatpak — the Flatpak arm of rustty-os (links gio-2.0, Linux/FreeBSD only); cargo test --workspace does not build it
+=== sanitizer matrix: hwasan over 63 crate spec(s); one shared target dir /home/gael/projects/rustty-p8def/target/san-hwasan, deleted when the pass ends ===
+  ok hwasan breakpad-sys: 1 C archive(s), all instrumented (__hwasan_ references)
+  ✅ hwasan breakpad-sys: 1 test(s) ran, 10s — 1 passed, 0 ignored
+  ok hwasan dcimgui-sys: 1 C archive(s), all instrumented (__hwasan_ references)
+  ✅ hwasan dcimgui-sys: 8 test(s) ran, 21s — 8 passed, 0 ignored
+  ok hwasan fontconfig-sys: 1 C archive(s), all instrumented (__hwasan_ references)
+  ✅ hwasan fontconfig-sys: 4 test(s) ran, 15s — 4 passed, 0 ignored
+  ok hwasan freetype-sys: 1 C archive(s), all instrumented (__hwasan_ references)
+  ✅ hwasan freetype-sys: 1 test(s) ran, 2s — 1 passed, 0 ignored
+  ⏭  hwasan gettext-sys: C archives not checked for instrumentation — it compiles no C on Linux: libintl is part of glibc there (crates-sys/gettext-sys/build.rs builds the vendored gettext only on macOS), so its build produces no archive to check
+  ⏭  hwasan gettext-sys: 0 tests on Linux by construction — libintl is part of glibc on Linux, so the crate compiles no C there and every test is #[cfg(all(test, target_os = "macos"))] (crates-sys/gettext-sys/src/lib.rs)
+  ok hwasan glslang-sys: 1 C archive(s), all instrumented (__hwasan_ references)
+  ✅ hwasan glslang-sys: 1 test(s) ran, 32s — 1 passed, 0 ignored
+  ok hwasan harfbuzz-sys: 1 C archive(s), all instrumented (__hwasan_ references)
+  ✅ hwasan harfbuzz-sys: 1 test(s) ran, 14s — 1 passed, 0 ignored
+  ok hwasan highway-sys: 2 C archive(s), all instrumented (__hwasan_ references)
+  ✅ hwasan highway-sys: 19 test(s) ran, 2s — 19 passed, 0 ignored
+  ok hwasan libpng-sys: 1 C archive(s), all instrumented (__hwasan_ references)
+  ✅ hwasan libpng-sys: 2 test(s) ran, 3s — 2 passed, 0 ignored
+  ok hwasan libxml2-sys: 1 C archive(s), all instrumented (__hwasan_ references)
+  ✅ hwasan libxml2-sys: 1 test(s) ran, 1s — 1 passed, 0 ignored
+  ok hwasan oniguruma-sys: 1 C archive(s), all instrumented (__hwasan_ references)
+  ✅ hwasan oniguruma-sys: 1 test(s) ran, 4s — 1 passed, 0 ignored
+  ✅ hwasan rustty: 15 test(s) ran, 70s — 15 passed, 2 ignored
+  ✅ hwasan rustty-apprt: 40 test(s) ran, 10s — 40 passed, 0 ignored
+  ✅ hwasan rustty-apprt-api: 28 test(s) ran, 25s — 28 passed, 0 ignored
+  ✅ hwasan rustty-apprt-c: 32 test(s) ran, 17s — 32 passed, 0 ignored
+  ✅ hwasan rustty-args: 78 test(s) ran, 1s — 78 passed, 3 ignored
+  ✅ hwasan rustty-bench: 52 test(s) ran, 134s — 52 passed, 1 ignored
+  ✅ hwasan rustty-build-config: 5 test(s) ran, 1s — 5 passed, 0 ignored
+  ✅ hwasan rustty-cfg-fmt: 9 test(s) ran, 1s — 9 passed, 0 ignored
+  ✅ hwasan rustty-cli: 125 test(s) ran, 10s — 125 passed, 5 ignored
+  ✅ hwasan rustty-config: 273 test(s) ran, 4s — 273 passed, 0 ignored
+  ✅ hwasan rustty-core: 88 test(s) ran, 6s — 88 passed, 1 ignored
+  ✅ hwasan rustty-crash: 20 test(s) ran, 3s — 20 passed, 0 ignored
+  ✅ hwasan rustty-datastruct: 100 test(s) ran, 1s — 100 passed, 2 ignored
+  ✅ hwasan rustty-extra: 39 test(s) ran, 3s — 39 passed, 0 ignored
+  ✅ hwasan rustty-font: 89 test(s) ran, 5s — 89 passed, 0 ignored
+  ✅ hwasan rustty-font-shaper: 133 test(s) ran, 21s — 133 passed, 4 ignored
+  ✅ hwasan rustty-global: 18 test(s) ran, 1s — 18 passed, 2 ignored
+  ✅ hwasan rustty-helpgen: 6 test(s) ran, 1s — 6 passed, 0 ignored
+  ✅ hwasan rustty-identity: 1 test(s) ran, 1s — 1 passed, 0 ignored
+  ✅ hwasan rustty-input: 120 test(s) ran, 2s — 120 passed, 1 ignored
+  ✅ hwasan rustty-inspector: 23 test(s) ran, 6s — 23 passed, 0 ignored
+  ✅ hwasan rustty-lib: 42 test(s) ran, 1s — 42 passed, 2 ignored
+  ✅ hwasan rustty-oniguruma: 2 test(s) ran, 1s — 2 passed, 0 ignored
+  ✅ hwasan rustty-os: 108 test(s) ran, 1s — 108 passed, 2 ignored
+  ✅ hwasan rustty-render-types: 12 test(s) ran, 1s — 12 passed, 0 ignored
+  ✅ hwasan rustty-renderer: 159 test(s) ran, 7s — 159 passed, 1 ignored
+  ✅ hwasan rustty-simd: 42 test(s) ran, 43s — 42 passed, 0 ignored
+  ✅ hwasan rustty-synthetic: 27 test(s) ran, 1s — 27 passed, 0 ignored
+  ✅ hwasan rustty-terminfo: 7 test(s) ran, 1s — 7 passed, 0 ignored
+  ✅ hwasan rustty-termio: 113 test(s) ran, 10s — 113 passed, 6 ignored
+  ✅ hwasan rustty-unicode: 23 test(s) ran, 1s — 23 passed, 0 ignored
+  ✅ hwasan rustty-util: 6 test(s) ran, 1s — 6 passed, 0 ignored
+  ✅ hwasan rustty-vaxis: 171 test(s) ran, 3s — 171 passed, 0 ignored
+  ✅ hwasan rustty-version: 6 test(s) ran, 1s — 6 passed, 0 ignored
+  ✅ hwasan rustty-vt: 3428 test(s) ran, 278s — 3428 passed, 26 ignored
+  ✅ hwasan rustty-vt-c: 604 test(s) ran, 44s — 604 passed, 1 ignored
+  ⏭  hwasan rustty-wasm: 0 tests on Linux by construction — its one native test, tests/artifact_shape.rs, is #[ignore]d: it inspects the wasm32 artifact that .port/tools/build-main-wasm.sh builds (the --webgl lane), and its exports are cfg(target_arch = "wasm32")
+  ✅ hwasan rustty-web-canvas: 1 test(s) ran, 7s — 1 passed, 0 ignored
+  ✅ hwasan rustty-wuffs: 24 test(s) ran, 1s — 24 passed, 0 ignored
+  ✅ hwasan rustty-xev: 111 test(s) ran, 4s — 111 passed, 0 ignored
+  ✅ hwasan rustty-z2d: 105 test(s) ran, 1s — 105 passed, 0 ignored
+  ✅ hwasan rustty-zf: 11 test(s) ran, 1s — 11 passed, 0 ignored
+  ✅ hwasan rustty-zigimg: 28 test(s) ran, 1s — 28 passed, 0 ignored
+  ✅ hwasan rustty-zigstd: 89 test(s) ran, 2s — 89 passed, 0 ignored
+  ok hwasan sentry-sys: 1 C archive(s), all instrumented (__hwasan_ references)
+  ✅ hwasan sentry-sys: 4 test(s) ran, 4s — 4 passed, 0 ignored
+  ok hwasan simdutf-sys: 1 C archive(s), all instrumented (__hwasan_ references)
+  ✅ hwasan simdutf-sys: 2 test(s) ran, 1s — 2 passed, 0 ignored
+  ok hwasan spirv-cross-sys: 2 C archive(s), all instrumented (__hwasan_ references)
+  ✅ hwasan spirv-cross-sys: 1 test(s) ran, 1s — 1 passed, 0 ignored
+  ok hwasan wuffs-sys: 4 C archive(s), all instrumented (__hwasan_ references)
+  ✅ hwasan wuffs-sys: 3 test(s) ran, 1s — 3 passed, 0 ignored
+  ok hwasan zlib-sys: 1 C archive(s), all instrumented (__hwasan_ references)
+  ✅ hwasan zlib-sys: 11 test(s) ran, 1s — 11 passed, 0 ignored
+  ✅ hwasan rustty-vt:wuffs,oniguruma: 3458 test(s) ran, 280s — 3458 passed, 21 ignored
+  ✅ hwasan rustty-apprt:gtk,wayland,x11: 173 test(s) ran, 26s — 173 passed, 99 ignored
+  ✅ hwasan rustty-os:flatpak: 110 test(s) ran, 3s — 110 passed, 4 ignored
+--- hwasan matrix summary: 10214 test(s) ran, wall 1167s (19 min) ---
+  breakpad-sys                         GREEN                1 tests     10s
+  dcimgui-sys                          GREEN                8 tests     21s
+  fontconfig-sys                       GREEN                4 tests     15s
+  freetype-sys                         GREEN                1 tests      2s
+  gettext-sys                          NO-TESTS(Linux)      0 tests      1s
+  glslang-sys                          GREEN                1 tests     32s
+  harfbuzz-sys                         GREEN                1 tests     14s
+  highway-sys                          GREEN               19 tests      2s
+  libpng-sys                           GREEN                2 tests      3s
+  libxml2-sys                          GREEN                1 tests      1s
+  oniguruma-sys                        GREEN                1 tests      4s
+  rustty                               GREEN               15 tests     70s
+  rustty-apprt                         GREEN               40 tests     10s
+  rustty-apprt-api                     GREEN               28 tests     25s
+  rustty-apprt-c                       GREEN               32 tests     17s
+  rustty-args                          GREEN               78 tests      1s
+  rustty-bench                         GREEN               52 tests    134s
+  rustty-build-config                  GREEN                5 tests      1s
+  rustty-cfg-fmt                       GREEN                9 tests      1s
+  rustty-cli                           GREEN              125 tests     10s
+  rustty-config                        GREEN              273 tests      4s
+  rustty-core                          GREEN               88 tests      6s
+  rustty-crash                         GREEN               20 tests      3s
+  rustty-datastruct                    GREEN              100 tests      1s
+  rustty-extra                         GREEN               39 tests      3s
+  rustty-font                          GREEN               89 tests      5s
+  rustty-font-shaper                   GREEN              133 tests     21s
+  rustty-global                        GREEN               18 tests      1s
+  rustty-helpgen                       GREEN                6 tests      1s
+  rustty-identity                      GREEN                1 tests      1s
+  rustty-input                         GREEN              120 tests      2s
+  rustty-inspector                     GREEN               23 tests      6s
+  rustty-lib                           GREEN               42 tests      1s
+  rustty-oniguruma                     GREEN                2 tests      1s
+  rustty-os                            GREEN              108 tests      1s
+  rustty-render-types                  GREEN               12 tests      1s
+  rustty-renderer                      GREEN              159 tests      7s
+  rustty-simd                          GREEN               42 tests     43s
+  rustty-synthetic                     GREEN               27 tests      1s
+  rustty-terminfo                      GREEN                7 tests      1s
+  rustty-termio                        GREEN              113 tests     10s
+  rustty-unicode                       GREEN               23 tests      1s
+  rustty-util                          GREEN                6 tests      1s
+  rustty-vaxis                         GREEN              171 tests      3s
+  rustty-version                       GREEN                6 tests      1s
+  rustty-vt                            GREEN             3428 tests    278s
+  rustty-vt-c                          GREEN              604 tests     44s
+  rustty-wasm                          NO-TESTS(Linux)      0 tests      7s
+  rustty-web-canvas                    GREEN                1 tests      7s
+  rustty-wuffs                         GREEN               24 tests      1s
+  rustty-xev                           GREEN              111 tests      4s
+  rustty-z2d                           GREEN              105 tests      1s
+  rustty-zf                            GREEN               11 tests      1s
+  rustty-zigimg                        GREEN               28 tests      1s
+  rustty-zigstd                        GREEN               89 tests      2s
+  sentry-sys                           GREEN                4 tests      4s
+  simdutf-sys                          GREEN                2 tests      1s
+  spirv-cross-sys                      GREEN                1 tests      1s
+  wuffs-sys                            GREEN                3 tests      1s
+  zlib-sys                             GREEN               11 tests      1s
+  rustty-vt:wuffs,oniguruma            GREEN             3458 tests    280s
+  rustty-apprt:gtk,wayland,x11         GREEN              173 tests     26s
+  rustty-os:flatpak                    GREEN              110 tests      3s
+  Miri-exception cross-check (hwasan, Linux): 477 Miri-excepted test(s); 421 ran and passed; 56 expected absent on Linux (listed, with reasons); 0 problem(s)
+G-HWASAN: GREEN (10214 test(s) under the sanitizer, 0 findings)

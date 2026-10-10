@@ -9,7 +9,7 @@
 
 ## Verdict
 
-GREEN for the scope run, with a named DEFERRED list (below). No open RED: each RED in the full run is either a disk-floor stop, a fixed finding verified by a scoped rerun, or N549 (closed by the perf-window quiet rerun).
+GREEN. The deferred lanes were completed at `58aa62a81` (below). No open RED: each RED in the full run is either a disk-floor stop, a fixed finding verified by a scoped rerun, or N549 (closed by the perf-window quiet rerun).
 
 ## Hosts
 
@@ -28,11 +28,11 @@ GREEN for the scope run, with a named DEFERRED list (below). No open RED: each R
 | FX12 | `SAN_ONLY=rustty-vt sanitizers.sh --gate lsan`; `cargo test -p rustty-vt search::thread` | SCOPED-GREEN, 6898 passed; 3 passed |
 | FX13 | G-CI-SELF (new arm-D default + override; negative control RED) | GREEN |
 
-## DEFERRED to the later full rerun
+## Deferred lanes, completed at `58aa62a81`
 
-- rvm: G-ASAN (full), G-TSAN, G-MSAN, G-HWASAN, G-LSAN, G-LSAN-GTK. None produced a verdict this run: the first attempt stopped at the 15 GB disk floor, and the rerun was lost when the VM thrashed and was restarted.
-- rvm: G4 with built drivers.
-- rwin: V26.
+rvm: G-LSAN-GTK, G-ASAN, G-LSAN, G-MSAN, G-HWASAN and G-TSAN all GREEN (0 findings). rwin: V26 GREEN, and
+the DLL step PASS. G4 is not runnable on Linux, and it is GREEN on the Mac. Details and logs:
+`deferred/`, and the phase README's "Deferred lanes, completed".
 
 ## Perf
 

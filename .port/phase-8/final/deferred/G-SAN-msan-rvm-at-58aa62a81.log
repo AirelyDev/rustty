@@ -1,0 +1,141 @@
+### G-MSAN: MemorySanitizer (-Zbuild-std, C via cc with -fsanitize=memory) over the phase-1 scope (Linux/aarch64) ###
+excluded (link uninstrumented C/C++; MSan cannot run them):
+  - glslang-sys: its test runs glslang's preprocessor, whose TPpContext holds a std::istringstream constructed and imbued by the uninstrumented libstdc++.so; MSan reports the stream's own fields as uninitialized (PpContext.cpp:98, origin: the stack allocation of 'ppContext'); needs an MSan-instrumented libstdc++/libc++ (SANITIZER_SUPPRESSIONS.md M2)
+  - xtask: its tests run nested cargo and cmake builds that inherit RUSTFLAGS=-Zsanitizer=memory without -Zbuild-std, which rustc rejects ('mixing -Zsanitizer will cause an ABI mismatch'); it is the build driver, which G-VALGRIND leaves out for the same kind of reason (M4)
+  skipped in rustty-renderer: tests matching generic::linux_impl::tests — the golden-renderer tests drive EGL and OpenGL in the system's uninstrumented libEGL/Mesa; MSan reports reads of what libEGL wrote itself (eglQueryString under OffscreenContext::init, origin a malloc inside libEGL.so.1) (M3)
+  skipped in rustty-renderer: tests matching image::linux_impl::tests — the kitty-image tests build their textures through the same offscreen EGL context (gl_api -> OpenGL::init_offscreen -> eglQueryString in libEGL) (M3)
+  skipped in rustty-renderer: tests matching opengl::tests:: — opengl.rs's tests build buffers in an offscreen GL context (test_support::offscreen_gl) (M3)
+  skipped in rustty-renderer: tests matching opengl::gl::tests:: — gl.rs's tests compile shaders in an offscreen GL context (M3)
+  skipped in rustty-renderer: tests matching opengl::gl::sys::tests::offscreen_egl_context_reaches_gl43_core — creates a real EGL context (OffscreenContext::init); the module's other six tests (version parsing, extension matching, the dmabuf query with stub function pointers) stay in (M3)
+  skipped in rustty-renderer: tests matching opengl::gl::sys::tests::failed_prepare_context_restores_the_previous_table — creates a real EGL context (OffscreenContext::init) (M3)
+  skipped in rustty-renderer: tests matching opengl::gl::program:: — program-link failure tests in an offscreen GL context (M3)
+  skipped in rustty-renderer: tests matching opengl::opengl_impl:: — OpenGL::init_offscreen / present tests (M3)
+  skipped in rustty-renderer: tests matching opengl::shaders:: — the five-pipeline shader build, in GL and through glslang (M2) (M3)
+  skipped in rustty-renderer: tests matching opengl::pipeline:: — the framebuffer/vertex-array teardown test in an offscreen GL context (M3)
+  skipped in rustty-renderer: tests matching opengl::target:: — render-target and dmabuf export tests on the offscreen EGL context (M3)
+  skipped in rustty-renderer: tests matching shadertoy:: — custom-shader translation through glslang and spirv-cross, whose glslang preprocessor reads libstdc++-constructed stream state (M2)
+  skipped in rustty-core: tests matching app::test_runtime::app_init_creates_and_deinit_frees_the_render_device — App::init creates the app's render device (DeviceBox::init -> Device::init -> init_platform -> eglGetPlatformDisplay in the uninstrumented libEGL.so.1; G-MSAN rvm, P8-W9 T2: use-of-uninitialized-value, origin a malloc inside libEGL.so.1; NEW-FINDINGS N538) (M6)
+  skipped in rustty-core: tests matching app::test_runtime::app_create_and_destroy_empty — App::create runs App::init, which creates the render device through the same uninstrumented libEGL (N538) (M6)
+  skipped in rustty-core: tests matching app::device_tests:: — Review Focus 4's two live surfaces on one App: App::create's render device plus each surface renderer's offscreen EGL context and draws in the uninstrumented libEGL/Mesa (N538) (M6)
+  skipped in rustty-core: tests matching surface_occlusion_callback_dedups_and_reports — the surface_visibility_kat integration test's TestSurface::build runs App::create, so it creates the render device through the same uninstrumented libEGL (eglGetPlatformDisplay/eglInitialize; reports in libEGL_mesa, libgallium and Mesa's driconf libexpat; N538) (M6)
+=== sanitizer matrix: msan over 59 crate spec(s); one shared target dir /home/gael/projects/rustty-p8def/target/san-msan, deleted when the pass ends ===
+  ✅ msan breakpad-sys: 1 test(s) ran, 11s — 1 passed, 0 ignored
+  ✅ msan dcimgui-sys: 8 test(s) ran, 20s — 8 passed, 0 ignored
+  ✅ msan fontconfig-sys: 4 test(s) ran, 13s — 4 passed, 0 ignored
+  ✅ msan freetype-sys: 1 test(s) ran, 1s — 1 passed, 0 ignored
+  ⏭  msan gettext-sys: 0 tests on Linux by construction — libintl is part of glibc on Linux, so the crate compiles no C there and every test is #[cfg(all(test, target_os = "macos"))] (crates-sys/gettext-sys/src/lib.rs)
+  ✅ msan harfbuzz-sys: 1 test(s) ran, 13s — 1 passed, 0 ignored
+  ✅ msan highway-sys: 19 test(s) ran, 3s — 19 passed, 0 ignored
+  ✅ msan libpng-sys: 2 test(s) ran, 3s — 2 passed, 0 ignored
+  ✅ msan libxml2-sys: 1 test(s) ran, 2s — 1 passed, 0 ignored
+  ✅ msan oniguruma-sys: 1 test(s) ran, 4s — 1 passed, 0 ignored
+  ✅ msan sentry-sys: 4 test(s) ran, 4s — 4 passed, 0 ignored
+  ✅ msan simdutf-sys: 2 test(s) ran, 3s — 2 passed, 0 ignored
+  ✅ msan spirv-cross-sys: 1 test(s) ran, 18s — 1 passed, 0 ignored
+  ✅ msan wuffs-sys: 3 test(s) ran, 4s — 3 passed, 0 ignored
+  ✅ msan zlib-sys: 11 test(s) ran, 1s — 11 passed, 0 ignored
+  ✅ msan rustty: 15 test(s) ran, 80s — 15 passed, 2 ignored
+  ✅ msan rustty-apprt: 40 test(s) ran, 18s — 40 passed, 0 ignored
+  ✅ msan rustty-apprt-api: 28 test(s) ran, 35s — 28 passed, 0 ignored
+  ✅ msan rustty-apprt-c: 31 test(s) ran, 33s — 31 passed, 1 ignored
+  ✅ msan rustty-args: 78 test(s) ran, 2s — 78 passed, 3 ignored
+  ✅ msan rustty-bench: 52 test(s) ran, 477s — 52 passed, 1 ignored
+  ✅ msan rustty-build-config: 5 test(s) ran, 1s — 5 passed, 0 ignored
+  ✅ msan rustty-cfg-fmt: 9 test(s) ran, 1s — 9 passed, 0 ignored
+  ✅ msan rustty-cli: 125 test(s) ran, 16s — 125 passed, 5 ignored
+  ✅ msan rustty-config: 273 test(s) ran, 9s — 273 passed, 0 ignored
+  ✅ msan rustty-core: 84 test(s) ran, 25s — 84 passed, 1 ignored
+  ✅ msan rustty-crash: 20 test(s) ran, 5s — 20 passed, 0 ignored
+  ✅ msan rustty-datastruct: 100 test(s) ran, 2s — 100 passed, 2 ignored
+  ✅ msan rustty-extra: 39 test(s) ran, 7s — 39 passed, 0 ignored
+  ✅ msan rustty-font: 89 test(s) ran, 21s — 89 passed, 0 ignored
+  ✅ msan rustty-font-shaper: 133 test(s) ran, 37s — 133 passed, 4 ignored
+  ✅ msan rustty-global: 18 test(s) ran, 2s — 18 passed, 2 ignored
+  ✅ msan rustty-helpgen: 6 test(s) ran, 1s — 6 passed, 0 ignored
+  ✅ msan rustty-identity: 1 test(s) ran, 1s — 1 passed, 0 ignored
+  ✅ msan rustty-input: 120 test(s) ran, 3s — 120 passed, 1 ignored
+  ✅ msan rustty-inspector: 23 test(s) ran, 26s — 23 passed, 0 ignored
+  ✅ msan rustty-lib: 42 test(s) ran, 2s — 42 passed, 2 ignored
+  ✅ msan rustty-oniguruma: 2 test(s) ran, 1s — 2 passed, 0 ignored
+  ✅ msan rustty-os: 108 test(s) ran, 2s — 108 passed, 2 ignored
+  ✅ msan rustty-render-types: 12 test(s) ran, 1s — 12 passed, 0 ignored
+  ✅ msan rustty-renderer: 84 test(s) ran, 10s — 84 passed, 1 ignored
+  ✅ msan rustty-simd: 42 test(s) ran, 174s — 42 passed, 0 ignored
+  ✅ msan rustty-synthetic: 27 test(s) ran, 2s — 27 passed, 0 ignored
+  ✅ msan rustty-terminfo: 7 test(s) ran, 1s — 7 passed, 0 ignored
+  ✅ msan rustty-termio: 113 test(s) ran, 45s — 113 passed, 6 ignored
+  ✅ msan rustty-unicode: 23 test(s) ran, 2s — 23 passed, 0 ignored
+  ✅ msan rustty-util: 6 test(s) ran, 1s — 6 passed, 0 ignored
+  ✅ msan rustty-vaxis: 171 test(s) ran, 5s — 171 passed, 0 ignored
+  ✅ msan rustty-version: 6 test(s) ran, 1s — 6 passed, 0 ignored
+  ✅ msan rustty-vt: 3428 test(s) ran, 1430s — 3428 passed, 26 ignored
+  ✅ msan rustty-vt-c: 604 test(s) ran, 198s — 604 passed, 1 ignored
+  ⏭  msan rustty-wasm: 0 tests on Linux by construction — its one native test, tests/artifact_shape.rs, is #[ignore]d: it inspects the wasm32 artifact that .port/tools/build-main-wasm.sh builds (the --webgl lane), and its exports are cfg(target_arch = "wasm32")
+  ✅ msan rustty-web-canvas: 1 test(s) ran, 9s — 1 passed, 0 ignored
+  ✅ msan rustty-wuffs: 24 test(s) ran, 2s — 24 passed, 0 ignored
+  ✅ msan rustty-xev: 111 test(s) ran, 4s — 111 passed, 0 ignored
+  ✅ msan rustty-z2d: 105 test(s) ran, 2s — 105 passed, 0 ignored
+  ✅ msan rustty-zf: 11 test(s) ran, 1s — 11 passed, 0 ignored
+  ✅ msan rustty-zigimg: 28 test(s) ran, 1s — 28 passed, 0 ignored
+  ✅ msan rustty-zigstd: 89 test(s) ran, 2s — 89 passed, 0 ignored
+--- msan matrix summary: 6392 test(s) ran, wall 2815s (46 min) ---
+  breakpad-sys                         GREEN                1 tests     11s
+  dcimgui-sys                          GREEN                8 tests     20s
+  fontconfig-sys                       GREEN                4 tests     13s
+  freetype-sys                         GREEN                1 tests      1s
+  gettext-sys                          NO-TESTS(Linux)      0 tests      2s
+  harfbuzz-sys                         GREEN                1 tests     13s
+  highway-sys                          GREEN               19 tests      3s
+  libpng-sys                           GREEN                2 tests      3s
+  libxml2-sys                          GREEN                1 tests      2s
+  oniguruma-sys                        GREEN                1 tests      4s
+  sentry-sys                           GREEN                4 tests      4s
+  simdutf-sys                          GREEN                2 tests      3s
+  spirv-cross-sys                      GREEN                1 tests     18s
+  wuffs-sys                            GREEN                3 tests      4s
+  zlib-sys                             GREEN               11 tests      1s
+  rustty                               GREEN               15 tests     80s
+  rustty-apprt                         GREEN               40 tests     18s
+  rustty-apprt-api                     GREEN               28 tests     35s
+  rustty-apprt-c                       GREEN               31 tests     33s
+  rustty-args                          GREEN               78 tests      2s
+  rustty-bench                         GREEN               52 tests    477s
+  rustty-build-config                  GREEN                5 tests      1s
+  rustty-cfg-fmt                       GREEN                9 tests      1s
+  rustty-cli                           GREEN              125 tests     16s
+  rustty-config                        GREEN              273 tests      9s
+  rustty-core                          GREEN               84 tests     25s
+  rustty-crash                         GREEN               20 tests      5s
+  rustty-datastruct                    GREEN              100 tests      2s
+  rustty-extra                         GREEN               39 tests      7s
+  rustty-font                          GREEN               89 tests     21s
+  rustty-font-shaper                   GREEN              133 tests     37s
+  rustty-global                        GREEN               18 tests      2s
+  rustty-helpgen                       GREEN                6 tests      1s
+  rustty-identity                      GREEN                1 tests      1s
+  rustty-input                         GREEN              120 tests      3s
+  rustty-inspector                     GREEN               23 tests     26s
+  rustty-lib                           GREEN               42 tests      2s
+  rustty-oniguruma                     GREEN                2 tests      1s
+  rustty-os                            GREEN              108 tests      2s
+  rustty-render-types                  GREEN               12 tests      1s
+  rustty-renderer                      GREEN               84 tests     10s
+  rustty-simd                          GREEN               42 tests    174s
+  rustty-synthetic                     GREEN               27 tests      2s
+  rustty-terminfo                      GREEN                7 tests      1s
+  rustty-termio                        GREEN              113 tests     45s
+  rustty-unicode                       GREEN               23 tests      2s
+  rustty-util                          GREEN                6 tests      1s
+  rustty-vaxis                         GREEN              171 tests      5s
+  rustty-version                       GREEN                6 tests      1s
+  rustty-vt                            GREEN             3428 tests   1430s
+  rustty-vt-c                          GREEN              604 tests    198s
+  rustty-wasm                          NO-TESTS(Linux)      0 tests     10s
+  rustty-web-canvas                    GREEN                1 tests      9s
+  rustty-wuffs                         GREEN               24 tests      2s
+  rustty-xev                           GREEN              111 tests      4s
+  rustty-z2d                           GREEN              105 tests      2s
+  rustty-zf                            GREEN               11 tests      1s
+  rustty-zigimg                        GREEN               28 tests      1s
+  rustty-zigstd                        GREEN               89 tests      2s
+G-MSAN: GREEN (6392 test(s) under the sanitizer, 0 findings)
