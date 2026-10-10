@@ -11664,7 +11664,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   joins that exactly `THREADS / 2` threads compiled the link regexes. Evidence: `check_silent_skips.py` RED (1 site)
   before, rc 0 with no RED after; `cargo test -p rustty-core --lib concurrent_derived_config_link_regexes` passes;
   clippy `-D warnings` and fmt clean.
-- **N559 (FIXED, P8-W10 T4; provisional id): G9 keyed CSI coverage on the final byte only, so a command sharing its
+- **N545 (FIXED, P8-W10 T4; provisional N559, renumbered at P8-W10 FX10): G9 keyed CSI coverage on the final byte only, so a command sharing its
   final with a ported one was invisible.** DECSTR (`CSI ! p`, new at `246f70287`) shares `p` with DECRQM
   (`CSI $ p` / `CSI ? $ p`); at the pin the regenerated surface had no new id and G9 stayed GREEN 777/777 while
   `softReset` was unported (`.port/phase-8/w10/README.md` F2; the arm-granularity limit N523 recorded). Fix: a CSI id
@@ -11673,7 +11673,10 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `intermediates.len == 0`, the `0` arm of a switch on `intermediates.len`, the char arms of a switch on
   `intermediates[0]`; none of these means the final alone), with comments and strings removed so the Zig quoted in
   Rust comments never counts. The generator (`parse_csi.py`) runs it on `stream.zig` and writes each arm's
-  `intermediates` into `parity-surface.json` (43 final arms, now 64 ids plus `else`); G9 runs it on the Rust
+  `intermediates` into `parity-surface.json` (43 final arms, now 64 ids plus `else`); four old ids are
+  replaced rather than kept, because upstream has no plain-final command for them: `p` → `!p`, `$p`, `?$p`; `q` →
+  ` q`, `"q`, `>q`; `y` → `#y`, `*y`; `}` → `$}`. Every other final keeps its plain id, so every old final still has at
+  least one id and none was dropped; G9 runs it on the Rust
   `csi_dispatch` arms. An intermediates sub-arm label it cannot read is BLOCKED. Evidence: the Zig and Rust readings
   agree on every final except `p`, where the port lacks `!`; G9 default is RED with exactly `UNCOVERED csi: !p`
   (798/799) until P8-W10 T1 merges (its in-progress `csi_dispatch.rs` reads `['!', '$', '?$']`). Negative controls:
@@ -11681,7 +11684,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   arm (the old keying would be GREEN), and requires exactly `UNCOVERED csi: >q`; arm (s) requires BLOCKED for an
   unreadable sub-arm label; `parse_csi.py --self-test` [e] drops the DECSTR test from the `p` arm and requires
   `['$', '?$']`.
-- **N560 (FIXED, P8-W10 T4; provisional id): G-SYMS matched an oracle `pub fn` by bare name anywhere in `crates/`, so
+- **N546 (FIXED, P8-W10 T4; provisional N560, renumbered at P8-W10 FX10): G-SYMS matched an oracle `pub fn` by bare name anywhere in `crates/`, so
   a common name in an unrelated crate counted as its port.** `modes.zig` `ModeState.getDefault` (new at `246f70287`)
   read as present through `rustty-font-shaper` `hb.rs` `Language::get_default` (`.port/phase-8/w10/README.md` F3; the
   N524 common-name class). Fix: `audit_symbol_coverage.py` now requires the token (or its 8+ prefix) in a file that

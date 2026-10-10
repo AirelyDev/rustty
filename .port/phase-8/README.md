@@ -55,7 +55,9 @@ columns list the ids each workstream opened; an id another workstream closed is 
 | — | plan and phase-branch records | 2 | `5e969a4bb` (plan), `0d73a3075` (register) | — | — | — |
 
 Totals: UD378 (1 reference defect, fixed and documented), N517–N543 (27 entries), no V. Next free
-ids: **UD379, N544, V34**.
+ids at the W9 close-out: UD379, N544, V34. Since then P8-W9 FX8 took N544, and the second pin
+advance (P8-W10, `a60e9e2a5..246f70287`) took N545, N546 and UD379 (renumbered at P8-W10 FX10; see
+"Provisional id renumbering (P8-W10 FX10)" below). Next free ids: **UD380, N547, V34**.
 
 States at `26d23100b`:
 
@@ -93,6 +95,21 @@ the old ids too. This table maps them.
 | N625 | N541 | V26: flaky vt-c scoped-log test |
 | N650, N640 | N542 | G6t: page tests' Tree Borrows UB (N650 was FX6's first name, never committed) |
 | N641 | N543 | G6t `rustty-core` not run to completion |
+
+### Provisional id renumbering (P8-W10 FX10)
+
+The W10 tasks took provisional ids (T0 N545+, T1 N548+/UD379+, T2 N553+/UD381+, T3 N556+/UD383+; the
+G9/G-SYMS fix ran as T4 and named N559 and N560). Only three were used. The highest real ids before were
+UD378 and N544, so they move to the next free ids. Every reference in `.port/`, `docs/` and `crates/`
+(the `PORT NOTE (UD379)` comments in `formatter.rs` and its tests) now uses the new id. No captured tool
+output under `w10/` named any of them, so none needed a note. Commit subjects (for example the merge
+`13c439e7d`) and the SDD ledger keep the old ids; this table maps them.
+
+| provisional | final | finding |
+|---|---|---|
+| N559 | N545 | G9 keyed CSI coverage on the final byte only (DECSTR invisible) |
+| N560 | N546 | G-SYMS matched an oracle `pub fn` by bare name anywhere in `crates/` |
+| UD381 | UD379 | VT formatter output replays an origin-mode cursor outside the margins at the wrong position |
 
 ## Finale gates (at `a60e9e2a5`, on the finale head)
 

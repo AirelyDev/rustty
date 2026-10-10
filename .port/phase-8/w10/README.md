@@ -66,10 +66,16 @@ any kind. The only content change is the CSI `p` arm's comment (`DECRQM - Reques
   CSI ids are the dispatch arms' final bytes (N523), so the regenerated surface has no new id and
   G9 stays GREEN while `softReset` is unported. G-TESTS and G-SYMS do carry it (T1). Same
   arm-granularity limit as N523 records; not fixed here.
+  Follow-up: P8-W10 T4 fixed it (N545): a CSI id is now intermediates plus final. Four plain ids
+  were replaced rather than kept, because upstream has no plain-final command for them: `p` → `!p`,
+  `$p`, `?$p`; `q` → ` q`, `"q`, `>q`; `y` → `#y`, `*y`; `}` → `$}`. Every old final still has at
+  least one id.
 - **F3 — G-SYMS counts `ModeState.getDefault` (new in `modes.zig`) as covered by a name match.**
   The only Rust `get_default` is `rustty-font-shaper/src/hb.rs` `Language::get_default`, unrelated
   to modes. Same common-name class as N524. T1 ports `getDefault` regardless (it is on the DECSTR
   path); the audit simply will not go red if it is skipped.
+  Follow-up: P8-W10 T4 fixed it (N546, container-aware G-SYMS); P8-W10 FX10 narrowed the
+  module-stem fallback to the counterpart files.
 
 No other gate changed. No cvt golden changed.
 
