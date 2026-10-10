@@ -22,21 +22,40 @@
 //! which must not be imposed on the crate's other test binaries.
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rustty_vt_c::sys::{self, LogLevel, StdLevel};
 
-/// Counts allocations while ARMED. Disarmed by default so unrelated test
-/// harness/setup allocations are invisible.
+/// Counts allocations made by the MEASURING thread while it is ARMED. Disarmed
+/// by default so unrelated test harness/setup allocations are invisible.
 struct CountingAlloc;
 
-static ARMED: AtomicBool = AtomicBool::new(false);
+thread_local! {
+    /// Per-thread arm flag (N547, P8-W10 FX11). It was a process-wide
+    /// `AtomicBool`, so ANY thread's allocation inside `measure` counted:
+    /// libtest's main thread, after spawning the test thread, is still
+    /// entering `rx.recv_timeout` (the lazy mpmc `Context` TLS init, the
+    /// waker-entry `Vec` growth, a lazy pthread mutex box), and under TSan's
+    /// slowdown that overlapped the measured `log_fn` call in ~2% of runs
+    /// (G-TSAN, Mac; probe: every stray allocation had `pthread_main_np() == 1`
+    /// while `measure` ran on the test thread). `log_fn` formats synchronously
+    /// on its caller's thread, so arming only that thread loses nothing it
+    /// could allocate. `const` init and no destructor: reading it from inside
+    /// the global allocator never allocates or touches a torn-down TLS slot.
+    static ARMED: Cell<bool> = const { Cell::new(false) };
+}
 static ALLOCS: AtomicUsize = AtomicUsize::new(0);
+
+/// True when the CURRENT thread is the armed, measuring one.
+fn armed() -> bool {
+    ARMED.with(Cell::get)
+}
 
 unsafe impl GlobalAlloc for CountingAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if ARMED.load(Ordering::Relaxed) {
+        if armed() {
             ALLOCS.fetch_add(1, Ordering::Relaxed);
         }
         // SAFETY: forwarding the caller's contract to the system allocator.
@@ -49,7 +68,7 @@ unsafe impl GlobalAlloc for CountingAlloc {
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        if ARMED.load(Ordering::Relaxed) {
+        if armed() {
             ALLOCS.fetch_add(1, Ordering::Relaxed);
         }
         // SAFETY: forwarding the caller's contract to the system allocator.
@@ -90,9 +109,9 @@ extern "C" fn counting_log_cb(
 
 fn measure(f: impl FnOnce()) -> usize {
     ALLOCS.store(0, Ordering::Relaxed);
-    ARMED.store(true, Ordering::Relaxed);
+    ARMED.with(|a| a.set(true));
     f();
-    ARMED.store(false, Ordering::Relaxed);
+    ARMED.with(|a| a.set(false));
     ALLOCS.load(Ordering::Relaxed)
 }
 

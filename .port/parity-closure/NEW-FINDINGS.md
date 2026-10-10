@@ -11697,3 +11697,14 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `softReset` and `getDefault` until T1 merges. Negative control: new `--self-test` (ci.sh `G-SYMS-SELF`, HARD)
   rebuilds the getDefault case on a fixture tree: ABSENT with only `hb.rs` `get_default` (the bare-name match says
   present), present when ported in `modes.rs` or in a file naming `ModeState`.
+- **N547 (FIXED, P8-W10 FX11; provisional N565, final validation): `sys_log_no_alloc` counted every thread's
+  allocations, so libtest's main thread flaked it under TSan.** G-TSAN (Mac) failed
+  `log_fn_dispatch_is_allocation_free` (`left: 1`, `right: 0`). Not a `log_fn` regression: the arm flag was a
+  process-wide `AtomicBool`, and libtest's main thread, after spawning the test thread, is still entering
+  `rx.recv_timeout`. A scratch probe (thread id, `pthread_main_np`, backtrace in the counting allocator) put every stray
+  allocation on the main thread while `measure` ran on the test thread: the lazy mpmc `Context` TLS init (48 B), the
+  waker `Vec<Entry>` growth (96 B), a lazily boxed pthread mutex, `run_tests` bookkeeping. Rate under TSan with the
+  gate's flags: 13 of 590 runs (1/20 on the unmodified binary); natively 0/20. Fix: the arm flag is now a `const`
+  thread-local `Cell<bool>`, so only the measuring thread's allocations count (`log_fn` formats synchronously on its
+  caller's thread). After: 0/120 under TSan, 0/40 native. Negative control: `log_fn_c_abi` formatting through
+  `std::fmt::format` first is RED 20/20 under TSan and 20/20 natively (`left: 1`), then reverted.
