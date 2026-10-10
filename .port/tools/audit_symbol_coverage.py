@@ -27,8 +27,12 @@ in a Rust file that belongs to the symbol, which is either
       oracle path), or
     - a file that names the symbol's CONTAINER: the innermost enclosing Zig
       `const X = struct/union/enum/opaque` or type-returning `fn X(...) type`,
-      else the oracle file's stem (`Terminal` for Terminal.zig, `modes` for
-      modes.zig), verbatim or snake_case.
+      verbatim or snake_case.
+A top-level `pub fn` (a file-struct module's method, such as Terminal.zig's, or
+a free function of modes.zig) has no inner container, and its scope is the
+counterpart files alone (P8-W10 FX10): the old fallback to "any file naming the
+stem" took every file mentioning `terminal`, most of `crates/`, which is close
+to the bare-name match again.
 The prefix rule below applies inside that scope too.
 
 Usage:
@@ -81,8 +85,7 @@ PUB_FN_LINE = re.compile(r"^( *)pub fn ([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 def zig_pub_fns(src, rel):
     """[(name, container)] for every `pub fn` of one oracle file. The container
     is the innermost enclosing container declared at a smaller indent (zig fmt
-    indents each level by 4), else the file's stem."""
-    stem = os.path.basename(rel)[:-4]
+    indents each level by 4), else None (a top-level function)."""
     out = []
     stack = []  # (indent, name) of open containers
     for line in src.splitlines():
@@ -92,7 +95,7 @@ def zig_pub_fns(src, rel):
             while stack and stack[-1][0] >= indent and not line.lstrip().startswith(("}", ")")):
                 stack.pop()
         if m:
-            out.append((m.group(2), stack[-1][1] if stack else stem))
+            out.append((m.group(2), stack[-1][1] if stack else None))
         c = CONTAINER.match(line)
         if c:
             stack.append((len(c.group(1)), c.group(2) or c.group(3)))
@@ -161,13 +164,15 @@ def container_aliases(container):
 
 def present(name, rel, container, index, cp_cache):
     """THE match: `name` or its snake_case (or a >= 8-char snake prefix of a
-    longer token) in a file that belongs to the symbol (module doc)."""
+    longer token) in a file that belongs to the symbol (module doc). A
+    top-level function (`container` None) is scoped to the counterparts only."""
     by_file, by_token, cites = index
     if rel not in cp_cache:
         cp_cache[rel] = counterparts(rel, by_file, cites)
     scope = set(cp_cache[rel])
-    for a in container_aliases(container):
-        scope |= by_token.get(a, set())
+    if container is not None:
+        for a in container_aliases(container):
+            scope |= by_token.get(a, set())
     snake = camel_to_snake(name)
     if (by_token.get(name, set()) | by_token.get(snake, set())) & scope:
         return True
@@ -209,7 +214,9 @@ def analyze(zig, read_src, index, accepted):
 
 def self_test():
     """Negative control for the container-aware match (P8-W10 T4): the
-    `ModeState.getDefault` false positive, rebuilt on a fixture tree."""
+    `ModeState.getDefault` false positive, rebuilt on a fixture tree; and
+    (P8-W10 FX10) a top-level `Terminal.zig` method matched only in an
+    unrelated file that mentions `terminal`."""
     import shutil
     import tempfile
     tmp = tempfile.mkdtemp(prefix="gsyms_selftest_")
@@ -267,12 +274,40 @@ def self_test():
         print(f"[c] get_default in a file naming ModeState: gaps {g} (expect [])")
         if g:
             failures.append("c")
+        # [d] P8-W10 FX10: a top-level method of a file-struct module
+        # (Terminal.zig) whose only match is in an unrelated file that merely
+        # mentions `terminal`. The old module-stem fallback put that file in
+        # scope; now it must NOT count.
+        term_src = {"src/terminal/Terminal.zig":
+                    "rows: u16,\n\npub fn softReset(self: *Terminal) void {\n    _ = self;\n}\n"}
+        os.makedirs(os.path.join(tmp, "crates", "rustty-renderer", "src"))
+        write("crates/rustty-vt/src/terminal.rs",
+              "//! terminal/Terminal.zig\npub struct Terminal { rows: u16 }\n")
+        unrelated = ("use rustty_vt::terminal::Terminal;\n"
+                     "pub fn soft_reset(cells: &mut [u8]) { cells.fill(0); }\n")
+        write("crates/rustty-renderer/src/cell.rs", unrelated)
+        idx = build_symbol_index(tmp)
+        old_scope = idx[1].get("terminal", set()) | idx[1].get("Terminal", set())
+        old_present = bool(idx[1].get("soft_reset", set()) & old_scope)
+        g = analyze(list(term_src), term_src.get, idx, set())[1]
+        print(f"[d] soft_reset only in an unrelated file naming `terminal`: gaps {g} "
+              f"(expect softReset); the stem fallback would say present: {old_present}")
+        if g != [("src/terminal/Terminal.zig", "softReset")] or not old_present:
+            failures.append("d")
+        # [e] ported in the counterpart file: present.
+        write("crates/rustty-vt/src/terminal.rs",
+              "//! terminal/Terminal.zig\npub struct Terminal { rows: u16 }\n"
+              "impl Terminal {\n    pub fn soft_reset(&mut self) {}\n}\n")
+        g = analyze(list(term_src), term_src.get, build_symbol_index(tmp), set())[1]
+        print(f"[e] soft_reset in terminal.rs: gaps {g} (expect [])")
+        if g:
+            failures.append("e")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     if failures:
         print(f"SELF-TEST RED: arm(s) {failures} failed")
         return 1
-    print("SELF-TEST GREEN: the container-aware match rejects the getDefault false positive")
+    print("SELF-TEST GREEN: the container-aware match rejects the getDefault and stem-fallback false positives")
     return 0
 
 
