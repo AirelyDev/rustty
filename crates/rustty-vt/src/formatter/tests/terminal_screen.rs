@@ -769,7 +769,7 @@ fn terminal_vt_with_cursor_in_origin_mode_without_the_region() {
     t.deinit(Global);
 }
 
-// UD381 (Rustty-only): origin mode on with the cursor outside the margins,
+// UD379 (Rustty-only): origin mode on with the cursor outside the margins,
 // which a program reaches by restoring (DECRC) a cursor saved in origin mode
 // after setting the margins. No CUP can address that cell in origin mode, so
 // upstream's output replays the cursor clamped into the region.
@@ -820,7 +820,7 @@ fn terminal_vt_with_cursor_in_origin_mode_outside_the_margins() {
     }
 }
 
-// UD381 (Rustty-only): inside the margins the output is upstream's, byte for
+// UD379 (Rustty-only): inside the margins the output is upstream's, byte for
 // byte: the region, then the CUP relative to it, with no DECSC/DECRC.
 #[test]
 fn terminal_vt_with_cursor_in_origin_mode_inside_the_margins_unchanged() {

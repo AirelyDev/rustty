@@ -627,11 +627,12 @@ impl Terminal {
         //     .left = 0,
         //     .right = self.cols - 1,
         // };
+        debug_assert!(self.rows >= 1 && self.cols >= 1);
         self.scrolling_region = ScrollingRegion {
             top: 0,
-            bottom: self.rows - 1,
+            bottom: self.rows.saturating_sub(1),
             left: 0,
-            right: self.cols - 1,
+            right: self.cols.saturating_sub(1),
         };
 
         // The default style needs no allocation so this can't fail.

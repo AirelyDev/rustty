@@ -900,7 +900,7 @@ impl<'a> TerminalFormatter<'a> {
                 x: terminal.scrolling_region.left,
                 y: terminal.scrolling_region.top,
             };
-            // PORT NOTE (UD381): Rustty-only. The full region, so the screen
+            // PORT NOTE (UD379): Rustty-only. The full region, so the screen
             // formatter can restore a cursor that lies outside it.
             screen_formatter.cursor_margins = Some(CursorMargins {
                 top: terminal.scrolling_region.top,
@@ -954,7 +954,7 @@ pub struct ScreenFormatter<'a> {
     /// (DECOM), where CUP counts from the top-left of the scrolling region.
     pub cursor_origin: CursorOrigin,
 
-    /// PORT NOTE (UD381): Rustty-only. The scrolling region the output is
+    /// PORT NOTE (UD379): Rustty-only. The scrolling region the output is
     /// replayed with in origin mode (DECOM), set together with
     /// `cursor_origin`. In origin mode CUP cannot address a cell outside the
     /// margins, yet the cursor can be there (DECRC of a cursor saved in
@@ -985,7 +985,7 @@ pub struct CursorOrigin {
     pub y: size::CellCountInt,
 }
 
-// PORT NOTE (UD381): Rustty-only, the type of `ScreenFormatter.cursor_margins`.
+// PORT NOTE (UD379): Rustty-only, the type of `ScreenFormatter.cursor_margins`.
 // Inclusive, 0-indexed, like `Terminal.scrolling_region`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CursorMargins {
@@ -1135,24 +1135,30 @@ impl<'a> ScreenFormatter<'a> {
         // print uses and changes active screen state, so the requested style,
         // hyperlink, protection, and charset must be restored afterwards.
         if self.extra.cursor {
-            // PORT NOTE (UD381): Rustty-only. In origin mode with the cursor
+            // PORT NOTE (UD379): Rustty-only. In origin mode with the cursor
             // outside the margins, no CUP can address the cursor, so the
             // state is rebuilt the way a program reaches it: full-screen
             // margins (origin mode is already on, so CUP is then absolute),
             // the position below, DECSC, the real margins, and DECRC, which
-            // restores the position, the pending wrap and origin mode. This
-            // overwrites the replaying terminal's saved cursor; the formatter
-            // never reproduces the saved cursor, and DECRC restores the
-            // style, charset and protection DECSC just saved. Every other
-            // case keeps upstream's output byte for byte.
+            // restores the position, the pending wrap and origin mode. DECRC
+            // also restores the style, charset and protection DECSC just
+            // saved. The DECSC replaces the replaying terminal's saved cursor.
+            // The formatter never reproduces the ORIGINAL saved cursor either
+            // way: with mode 1048 on, the modes output's `CSI ?1048h` saves a
+            // cursor during the replay, which this DECSC then overwrites, so
+            // afterwards the saved cursor is the restored one (this position,
+            // origin mode, and the pen current at the DECSC). Neither that nor
+            // upstream's result is the original. Every other case keeps
+            // upstream's output byte for byte.
             let outside_margins: Option<CursorMargins> = self.cursor_margins.filter(|m| {
                 let cursor = &screen.cursor;
                 cursor.y < m.top || cursor.y > m.bottom || cursor.x < m.left || cursor.x > m.right
             });
+            debug_assert!(screen.pages.rows >= 1 && screen.pages.cols >= 1);
             let full_top_bottom =
-                |m: &CursorMargins| m.top == 0 && m.bottom == screen.pages.rows - 1;
+                |m: &CursorMargins| m.top == 0 && m.bottom == screen.pages.rows.saturating_sub(1);
             let full_left_right =
-                |m: &CursorMargins| m.left == 0 && m.right == screen.pages.cols - 1;
+                |m: &CursorMargins| m.left == 0 && m.right == screen.pages.cols.saturating_sub(1);
             if let Some(m) = &outside_margins {
                 // DECSTBM and DECSLRM (with DECLRMM on, which non-full left
                 // and right margins imply) with no parameters reset to the
@@ -1217,7 +1223,7 @@ impl<'a> ScreenFormatter<'a> {
                 cell_formatter.format(writer)?;
             }
 
-            // PORT NOTE (UD381): save the absolute position, restore the
+            // PORT NOTE (UD379): save the absolute position, restore the
             // real margins (which home the cursor), then restore the cursor.
             if let Some(m) = &outside_margins {
                 writer.write_all(b"\x1b7")?;
