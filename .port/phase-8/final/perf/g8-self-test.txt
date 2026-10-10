@@ -1,0 +1,17 @@
+=== G8 SELF-TEST ===
+[a] no metrics -> exit 0 (expect 0)
+[b] equal metrics -> exit 0 (expect 0)
+[c] throughput -50% -> exit 1 (expect non-zero), REGRESS: True
+[d] size +1B (0% tol) -> exit 1 (expect non-zero)
+[e] throughput -2% (within band) -> exit 0 (expect 0)
+[e2] listed id 50x worse -> exit 0 (expect 0), reported=True (expect True)
+[e2] UNLISTED id 50x worse -> exit 1 (expect non-zero)
+[e2] live set (empty): screen-clone.render/small 50x worse -> exit 1 (expect non-zero)
+[g] +10% on a 10% label, strict -> exit 0 (expect 0)
+[g] +10.0001% on a 10% label -> exit 1 (expect non-zero)
+[g] +1 B on a label without a tolerance -> exit 1 (expect non-zero)
+[g] --tol-size 0 overrides the label's 10% -> exit 1 (expect non-zero)
+[f] RF row 250, Debug row 5 (second); candidate 125 -> exit 1 (expect non-zero)
+[f] candidate 250, strict -> exit 0 (expect 0)
+[f] live BASELINE is the V17 re-base -> True (expect True) [14 rows, 14 ids, optimize=['ReleaseFast']; terminal-stream=1380 screen-clone.clone=0.04576]
+SELF-TEST: PASS

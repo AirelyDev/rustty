@@ -1,0 +1,15 @@
+N566 quiet rerun: cargo test -p rustty-termio --release --lib readthread_pipeline, 10x
+host: Gaels-MacBook-Pro.local arm64; head 11b4c74d0
+start: 2026-10-10T14:45:24Z;  7:45  up 1 day, 19:47, 2 users, load averages: 4.60 9.55 8.15
+run 1 rc=0 :: test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 122 filtered out; finished in 0.07s
+run 2 rc=0 :: test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 122 filtered out; finished in 0.05s
+run 3 rc=0 :: test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 122 filtered out; finished in 0.06s
+run 4 rc=0 :: test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 122 filtered out; finished in 0.06s
+run 5 rc=0 :: test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 122 filtered out; finished in 0.06s
+run 6 rc=0 :: test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 122 filtered out; finished in 0.06s
+run 7 rc=0 :: test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 122 filtered out; finished in 0.06s
+run 8 rc=0 :: test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 122 filtered out; finished in 0.06s
+run 9 rc=0 :: test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 122 filtered out; finished in 0.06s
+run 10 rc=0 :: test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 122 filtered out; finished in 0.06s
+end: 2026-10-10T14:45:26Z;  7:45  up 1 day, 19:47, 2 users, load averages: 4.32 9.41 8.11
+VERDICT: 10/10 pass

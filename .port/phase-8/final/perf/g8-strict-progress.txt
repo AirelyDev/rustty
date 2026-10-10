@@ -1,0 +1,17 @@
+cmd: python3 .port/tools/gates/check_baseline_regression.py --strict  (no --metrics: progress mode)
+=== G8 :: no perf/memory/size/startup regression vs BASELINE.json ===
+NOTE: no --metrics candidate supplied -> progress mode
+baseline benchmarks: 14 rows, 14 comparable (ReleaseFast); baseline size labels: 3
+  baseline bench terminal-parser/utf8 [ReleaseFast]: throughput_MiB_per_s=104.85310825741921 (higher-is-better)
+  baseline bench terminal-stream/ascii [ReleaseFast]: throughput_MiB_per_s=1380.4892644986421 (higher-is-better)
+  baseline bench codepoint-width.noop/utf8 [ReleaseFast]: throughput_MiB_per_s=12744.137365024988 (higher-is-better)
+  baseline bench codepoint-width.table/utf8 [ReleaseFast]: throughput_MiB_per_s=298.7337660736663 (higher-is-better)
+  baseline bench codepoint-width.simd/utf8 [ReleaseFast]: throughput_MiB_per_s=138.23462662626903 (higher-is-better)
+  baseline bench codepoint-width.wcwidth/utf8 [ReleaseFast]: throughput_MiB_per_s=90.60032807681515 (higher-is-better)
+  baseline bench grapheme-break.noop/utf8 [ReleaseFast]: throughput_MiB_per_s=303.3610858246471 (higher-is-better)
+  baseline bench grapheme-break.table/utf8 [ReleaseFast]: throughput_MiB_per_s=272.81974659112416 (higher-is-better)
+  baseline size  ghostty-bench (ReleaseFast): 4110400 bytes
+  baseline size  ghostty-gen (ReleaseFast): 464728 bytes
+  baseline size  libghostty-vt.0.1.0.dylib (shared): 1964784 bytes
+GREEN: progress mode: no candidate metrics; nothing can regress
+rc=0
