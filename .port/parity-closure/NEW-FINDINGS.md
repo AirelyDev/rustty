@@ -1985,7 +1985,7 @@ progress) is the obvious suspect. Deliberately NOT diagnosed here: naming the as
 the failure reproduced under load, and guessing at it in this file is how a finding becomes
 folklore.
 
-**state**: **OPEN** (triage T-1, 2026-09-28). No later record reproduces or fixes it; `search/thread.rs` changed since (S7-6, S-1d) without addressing it. Left: reproduce under deliberate load, name the failing assertion, decide test versus handshake, and measure repetitions under load. Effort M, and it needs a long run (repetitions under load), which the wrap-up defers; internal test reliability unless the handshake itself is wrong (then observable as a stalled search). Was: OPEN. Needs (1) the failure reproduced under deliberate load and the failing
+**state**: **FIXED by N548** (P8-W10 FX12, 2026-10-09): reproduced under deliberate load, the failing assertion is the 100 ms completion wait, and it is the test, not the handshake (the search always completes; measured 0-165 ms under load). Was: OPEN (triage T-1, 2026-09-28). No later record reproduces or fixes it; `search/thread.rs` changed since (S7-6, S-1d) without addressing it. Left: reproduce under deliberate load, name the failing assertion, decide test versus handshake, and measure repetitions under load. Effort M, and it needs a long run (repetitions under load), which the wrap-up defers; internal test reliability unless the handshake itself is wrong (then observable as a stalled search). Was: OPEN. Needs (1) the failure reproduced under deliberate load and the failing
 assertion named, (2) a decision on whether it is the test or the handshake that is wrong, and
 (3) if the suite is to be trusted under contention, a repetition measurement that is taken
 under load rather than on an idle host.
@@ -11708,3 +11708,20 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   thread-local `Cell<bool>`, so only the measuring thread's allocations count (`log_fn` formats synchronously on its
   caller's thread). After: 0/120 under TSan, 0/40 native. Negative control: `log_fn_c_abi` formatting through
   `std::fmt::format` first is RED 20/20 under TSan and 20/20 natively (`left: 1`), then reverted.
+- **N548 (FIXED, P8-W10 FX12; provisional N567, final validation): `search::thread::tests::search_thread` waited
+  only 100 ms for the search to complete, so it failed under load; under G-LSAN the panic also skipped the Terminal's
+  teardown.** G-LSAN (Mac) reported 1660 bytes in 7 allocations rooted at `Terminal::init` (`ScreenSet::init`,
+  `create_screen`) in that test. The leak is secondary: the log shows the test FAILED first (`timed out waiting for
+  search completion`, then the search thread's `PoisonError` on `reset_done`, poisoned by the panic while the main
+  thread held the guard). The panic unwound past the explicit `thread.deinit()` / `t.deinit(alloc)` at the end of
+  the test. This is N35. It is not DECSTR: `Terminal::init`/`deinit` are leak-free on every passing run (0 leaks in
+  140 LSan runs below), and 5a69f3fca adds no allocation. Rate with the gate's flags (ASan, `detect_leaks=1`,
+  `lsan-darwin.supp`, `RUST_MIN_STACK`): 0/50 alone, and 2/30 with 42 busy loops on 14 CPUs. Both failures matched
+  the gate log byte for byte (1660 B in 7 allocations). A probe that waited 30 s measured completion at 0-165 ms
+  under that load, 3 of 60 runs above 100 ms. The search always completes, so the handshake is sound and the
+  reference's 100 ms tolerance is the cause. Fix (test only): the wait is bounded at 10 s (PORT NOTE). The guard is
+  released, and the search thread stopped and joined, BEFORE the completion assertion, so a real timeout neither
+  poisons the callback's lock nor leaves the thread running. The reference's `try` instead returns with the thread
+  running, and its `defer thread.deinit()` frees the thread under it; that is a test-only failure path, so no UD.
+  After: 60/60 under the same load, 20/20 alone under LSan (0 leaks), and 20/20 native. Miri: the test is a
+  recorded MIRI EXCEPTION (interpreter ICE), so no Miri run.

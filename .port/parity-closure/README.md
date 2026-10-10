@@ -152,8 +152,6 @@ Code gaps left after the final triage, none a ledger row:
   Rust's `Debug` form where Ghostty prints `error.<Name>`. Log text only; 30
   sites are in Linux-only code, so the change needs the Linux VM. The shared
   error-name helper it needs (`rustty-zigstd` `ErrorName`) exists since N121.
-- **N35**: a load-dependent `search_thread` test failure, never diagnosed; needs
-  a long run under load.
 - **N354**: a Windows test failure seen once, not reproduced.
 - **N376**, 5 of 21 CI gaps: the wasm ABI-manifest step, Apple dylib install
   names, a Nix test Ghostty has and Rustty lacks, Ghostty's 5 MB tarball limit

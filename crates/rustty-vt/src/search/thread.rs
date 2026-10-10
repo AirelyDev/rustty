@@ -1860,22 +1860,36 @@ mod tests {
             wakeup_notifier.notify().unwrap();
 
             // Wait for completion
-            // try ud.reset.timedWait(100 * std.time.ns_per_ms);
-            {
+            // try ud.reset.waitTimeout(testing.io, .{ .duration = .{ .clock = .awake, .raw = .fromMilliseconds(100) } });
+            //
+            // PORT NOTE (N548): the bound is 10 s, not the reference's 100 ms.
+            // The search always completes, but under load it can take longer
+            // than 100 ms (measured under ASan with 3x-oversubscribed CPUs: 0 to
+            // 165 ms, 3 of 60 runs above 100 ms), and the test then failed
+            // (N35; G-LSAN, where the panic also skipped the teardown below and
+            // left the Terminal reported as leaked). A search that never
+            // completes still fails, after 10 s. The guard is released and
+            // the search thread stopped and joined BEFORE the assertion, so a
+            // timeout neither poisons `reset_done` for the search thread's
+            // callback nor leaves the thread running; the reference's `try`
+            // returns with the thread still running and its `defer
+            // thread.deinit()` then frees the thread under it.
+            let completed = {
                 let done = ud.reset_done.lock().unwrap();
-                let (done, timeout) = ud
+                let (done, _timeout) = ud
                     .reset_cond
-                    .wait_timeout_while(done, std::time::Duration::from_millis(100), |d| !*d)
+                    .wait_timeout_while(done, std::time::Duration::from_secs(10), |d| !*d)
                     .unwrap();
-                assert!(*done, "timed out waiting for search completion");
-                let _ = timeout;
-            }
+                *done
+            };
 
             // Stop the thread
             // try thread.stop.notify();
             stop_notifier.notify().unwrap();
             // os_thread.join();
             os_thread.join().unwrap();
+
+            assert!(completed, "timed out waiting for search completion");
         });
 
         // 1 total matches
