@@ -877,6 +877,10 @@ pub trait Handler {
     /// `program_status` (OSC 7501, `bae2c3cdb`)
     // program_status: ProgramStatus,
     fn program_status(&mut self, _v: ProgramStatus<'_>) {}
+
+    /// `soft_reset` (DECSTR, f473f3109)
+    // soft_reset,
+    fn soft_reset(&mut self) {}
 }
 
 /// Returns a type that can process a stream of tty control characters.

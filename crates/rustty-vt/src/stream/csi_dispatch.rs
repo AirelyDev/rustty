@@ -1236,11 +1236,30 @@ impl<H: Handler> Stream<H> {
                 }
             }
 
-            // DECRQM - Request Mode
+            // DECRQM - Request Mode, DECSTR - Soft Terminal Reset
             // 'p' => switch (input.intermediates.len) { ... }
             b'p' => match input.intermediates.len() {
                 // 1, 2 => decrqm: { ... }
                 1 | 2 => 'decrqm: {
+                    // DECSTR - Soft Terminal Reset
+                    // if (input.intermediates.len == 1 and
+                    //     input.intermediates[0] == '!')
+                    // { ... }
+                    if input.intermediates.len() == 1 && input.intermediates[0] == b'!' {
+                        // if (input.params.len != 0) {
+                        //     log.warn("invalid DECSTR command: {f}", .{input});
+                        //     break :decrqm;
+                        // }
+                        if !input.params.is_empty() {
+                            log::warn!(target: LOG_SCOPE, "invalid DECSTR command: {input:?}");
+                            break 'decrqm;
+                        }
+
+                        // self.handler.vt(.soft_reset, {});
+                        handler.soft_reset();
+                        break 'decrqm;
+                    }
+
                     // const ansi_mode = ansi: { ... };
                     let ansi_mode = 'ansi: {
                         // switch (input.intermediates.len) {

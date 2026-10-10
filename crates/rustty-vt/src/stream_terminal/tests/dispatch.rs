@@ -1311,3 +1311,52 @@ fn bell_effect_callback() {
 
     t.deinit(Global);
 }
+
+// PORT NOTE: no reference test (P8-W10 T1 brief). Drives DECSTR (`CSI ! p`,
+// f473f3109) through the real `Stream`/`Handler` pair so the
+// `.soft_reset => self.terminal.softReset()` arm is pinned end to end, not
+// only the parser's dispatch and `Terminal::soft_reset` in isolation.
+#[test]
+fn soft_reset_through_stream() {
+    let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+    {
+        let mut s = t.vt_stream();
+        // Pen, insert/origin/wraparound modes, margins, a G0 charset, a
+        // saved cursor and a palette entry, then some text.
+        s.next_slice(b"hello\x1b[1m\x1b[4h\x1b[?6h\x1b[?7l\x1b[3;4r\x1b(0\x1b7");
+        s.next_slice(b"\x1b]4;1;rgb:ff/00/00\x1b\\");
+        s.next_slice(b"\x1b[!p");
+    }
+
+    assert!(!t.modes.get(modespkg::Mode::Insert));
+    assert!(!t.modes.get(modespkg::Mode::Origin));
+    assert!(t.modes.get(modespkg::Mode::Wraparound));
+    assert_eq!(
+        crate::terminal::ScrollingRegion {
+            top: 0,
+            bottom: 9,
+            left: 0,
+            right: 9,
+        },
+        t.scrolling_region
+    );
+    assert_eq!(0, t.active_mut().cursor.style_id);
+    assert_eq!(
+        crate::charsets::Charset::Utf8,
+        t.active_mut()
+            .charset
+            .charsets
+            .get(crate::charsets::Slots::G0)
+    );
+    assert!(t.active_mut().saved_cursor.is_none());
+    assert_eq!(0_usize, t.colors.palette.mask.count());
+    assert!(t.flags.dirty.palette);
+
+    // The screen is kept.
+    {
+        let str = t.plain_string(Global).unwrap();
+        assert_eq!(str.as_slice(), "hello".as_bytes());
+    }
+
+    t.deinit(Global);
+}

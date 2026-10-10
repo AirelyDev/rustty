@@ -90,6 +90,49 @@ fn stream_ansi_set_mode_sm_and_reset_mode_rm() {
     assert!(s.handler.mode.is_none());
 }
 
+// test "stream: DECSTR dispatch" (oracle f473f3109)
+#[test]
+fn stream_decstr_dispatch() {
+    #[derive(Default)]
+    struct H {
+        calls: usize,
+    }
+    impl Handler for H {
+        fn soft_reset(&mut self) {
+            self.calls += 1;
+        }
+    }
+
+    struct Case {
+        input: &'static [u8],
+        calls: usize,
+    }
+    let cases = [
+        Case {
+            input: b"\x1b[!p",
+            calls: 1,
+        },
+        Case {
+            input: b"\x1b[1!p",
+            calls: 0,
+        },
+        Case {
+            input: b"\x1b[?!p",
+            calls: 0,
+        },
+        Case {
+            input: b"\x1b[$p",
+            calls: 0,
+        },
+    ];
+
+    for case in cases {
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H::default()));
+        s.next_slice(case.input);
+        assert_eq!(case.calls, s.handler.calls);
+    }
+}
+
 // test "stream: DECRQCRA dispatch" (oracle 9272a2f7c)
 #[test]
 fn stream_decrqcra_dispatch() {

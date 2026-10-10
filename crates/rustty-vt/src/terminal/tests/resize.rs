@@ -1,4 +1,4 @@
-//! PORTS: ghostty src/terminal/Terminal.zig — the `deccolm` / `resize` / `switchScreen` / `switchScreenMode` / `fullReset` tests.
+//! PORTS: ghostty src/terminal/Terminal.zig — the `deccolm` / `resize` / `switchScreen` / `switchScreenMode` / `fullReset` / `softReset` tests.
 
 use super::*;
 
@@ -381,6 +381,169 @@ fn terminal_default_xt_checksum_survives_resets() {
     assert_eq!(Flags::default().with_no_trim(true), t.flags.xt_checksum);
     t.full_reset();
     assert_eq!(Flags::default().with_no_trim(true), t.flags.xt_checksum);
+
+    // t.flags.xt_checksum = .{ .full = true };
+    // t.softReset();
+    // try testing.expectEqual(xt_checksum.Flags{ .no_trim = true }, t.flags.xt_checksum);
+    t.flags.xt_checksum = Flags::default().with_full(true);
+    t.soft_reset();
+    assert_eq!(Flags::default().with_no_trim(true), t.flags.xt_checksum);
+
+    t.deinit(Global);
+}
+
+// test "Terminal: softReset modes" (oracle f473f3109)
+#[test]
+fn terminal_soft_reset_modes() {
+    use modespkg::Mode;
+
+    let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+    t.modes.set(Mode::Insert, true);
+    t.modes.set(Mode::Origin, true);
+    t.modes.set(Mode::Wraparound, false);
+    t.modes.set(Mode::ReverseWrap, true);
+    t.modes.set(Mode::CursorVisible, false);
+    t.modes.set(Mode::CursorKeys, true);
+    t.modes.set(Mode::KeypadKeys, true);
+    t.modes.set(Mode::BracketedPaste, true);
+    t.soft_reset();
+
+    assert!(!t.modes.get(Mode::Insert));
+    assert!(!t.modes.get(Mode::Origin));
+    assert!(t.modes.get(Mode::Wraparound));
+    assert!(!t.modes.get(Mode::ReverseWrap));
+    assert!(t.modes.get(Mode::CursorVisible));
+    assert!(!t.modes.get(Mode::CursorKeys));
+    assert!(!t.modes.get(Mode::KeypadKeys));
+
+    // Modes DECSTR doesn't cover are left alone.
+    assert!(t.modes.get(Mode::BracketedPaste));
+
+    t.deinit(Global);
+}
+
+// test "Terminal: softReset margins" (oracle f473f3109)
+#[test]
+fn terminal_soft_reset_margins() {
+    let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+    t.set_top_and_bottom_margin(3, 4);
+    t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+    t.set_left_and_right_margin(5, 6);
+    t.soft_reset();
+
+    assert!(!t.modes.get(modespkg::Mode::EnableLeftAndRightMargin));
+    assert_eq!(
+        ScrollingRegion {
+            top: 0,
+            bottom: 9,
+            left: 0,
+            right: 9,
+        },
+        t.scrolling_region
+    );
+
+    t.deinit(Global);
+}
+
+// test "Terminal: softReset keeps the cursor and screen" (oracle f473f3109)
+#[test]
+fn terminal_soft_reset_keeps_the_cursor_and_screen() {
+    let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+    t.print_string(b"hello").unwrap();
+    t.set_cursor_pos(6, 5);
+    t.soft_reset();
+
+    assert_eq!(4, t.active_mut().cursor.x);
+    assert_eq!(5, t.active_mut().cursor.y);
+
+    {
+        let str = t.plain_string(Global).unwrap();
+        assert_eq!(str.as_slice(), "hello".as_bytes());
+    }
+
+    t.deinit(Global);
+}
+
+// test "Terminal: softReset saved cursor" (oracle f473f3109)
+#[test]
+fn terminal_soft_reset_saved_cursor() {
+    let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+    t.set_cursor_pos(6, 5);
+    t.set_attribute(sgr::Attribute::Bold).unwrap();
+    t.save_cursor();
+    t.soft_reset();
+    t.restore_cursor();
+
+    assert_eq!(0, t.active_mut().cursor.x);
+    assert_eq!(0, t.active_mut().cursor.y);
+    assert!(!t.active_mut().cursor.style.flags.bold);
+
+    t.deinit(Global);
+}
+
+// test "Terminal: softReset pen, protection, and charsets" (oracle f473f3109)
+#[test]
+fn terminal_soft_reset_pen_protection_and_charsets() {
+    let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+    t.set_attribute(sgr::Attribute::Bold).unwrap();
+    t.set_protected_mode(ansi::ProtectedMode::Dec);
+    t.configure_charset(charsets::Slots::G0, charsets::Charset::DecSpecial);
+    t.soft_reset();
+
+    assert_eq!(0 as style::Id, t.active_mut().cursor.style_id);
+    assert!(!t.active_mut().cursor.protected);
+    assert_eq!(
+        charsets::Charset::Utf8,
+        t.active_mut().charset.charsets.get(charsets::Slots::G0)
+    );
+
+    t.deinit(Global);
+}
+
+// test "Terminal: softReset status display and checksum" (oracle f473f3109)
+#[test]
+fn terminal_soft_reset_status_display_and_checksum() {
+    use crate::xt_checksum::Flags;
+
+    let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+    t.status_display = ansi::StatusDisplay::StatusLine;
+    t.flags.xt_checksum = Flags::default().with_positive(true);
+    t.soft_reset();
+
+    assert!(t.status_display == ansi::StatusDisplay::Main);
+    assert_eq!(Flags::default(), t.flags.xt_checksum);
+
+    t.deinit(Global);
+}
+
+// test "Terminal: softReset palette" (oracle f473f3109)
+#[test]
+fn terminal_soft_reset_palette() {
+    let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+    // Nothing changed, so nothing is redrawn.
+    t.soft_reset();
+    assert!(!t.flags.dirty.palette);
+
+    let red = color::RGB {
+        r: 0xff,
+        g: 0,
+        b: 0,
+    };
+    t.colors.palette.set(1, red);
+    t.colors.palette.set(200, red);
+    t.soft_reset();
+
+    assert!(t.flags.dirty.palette);
+    assert_eq!(0_usize, t.colors.palette.mask.count());
+    assert_eq!(color::DEFAULT[1], t.colors.palette.current[1]);
+    assert_eq!(color::DEFAULT[200], t.colors.palette.current[200]);
 
     t.deinit(Global);
 }
