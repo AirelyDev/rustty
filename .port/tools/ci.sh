@@ -942,7 +942,9 @@ GATE_REGISTRY=(
   # G-SYMS-SELF (P8-W10 T4): the match is container-aware (a counterpart file
   # or a file naming the symbol's container); the self-test rebuilds the
   # `ModeState.getDefault` false positive (an unrelated `hb.rs` `get_default`)
-  # and requires ABSENT. Its own HARD entry, like G-TESTS-SELF.
+  # and requires ABSENT; P8-W10 FX10 added arm [d]: a top-level Terminal.zig
+  # method matched only in an unrelated file that mentions `terminal` must stay
+  # ABSENT (no module-stem fallback). Its own HARD entry, like G-TESTS-SELF.
   "G-SYMS-SELF|HARD|light|-|$PY $ROOT/.port/tools/audit_symbol_coverage.py --self-test"
   "G-SYMS|HARD|light|-|$PY $ROOT/.port/tools/audit_symbol_coverage.py"
   # G-TESTS (2026-07-31). Pass 3, and the same frozen-inventory blind spot one
