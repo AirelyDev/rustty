@@ -1,0 +1,15 @@
+bench,ghostty_ms,ghostty_min_ms,ghostty_max_ms,rustty_ms,rustty_min_ms,rustty_max_ms,date,rustty_head,provenance
+terminal-parser,591.49,,,137.67,,,2026-10-10,11b4c74d0,MEASURED
+terminal-stream,46.64,,,45.64,,,2026-10-10,11b4c74d0,MEASURED
+codepoint-width.noop,5.16,,,3.25,,,2026-10-10,11b4c74d0,MEASURED
+codepoint-width.table,208.97,,,184.49,,,2026-10-10,11b4c74d0,MEASURED
+codepoint-width.simd,452.70,,,398.02,,,2026-10-10,11b4c74d0,MEASURED
+codepoint-width.wcwidth,694.43,,,635.96,,,2026-10-10,11b4c74d0,MEASURED
+grapheme-break.noop,207.95,,,187.04,,,2026-10-10,11b4c74d0,MEASURED
+grapheme-break.table,231.63,,,194.24,,,2026-10-10,11b4c74d0,MEASURED
+is-symbol.table,213.88,,,178.34,,,2026-10-10,11b4c74d0,MEASURED
+is-symbol.uucode,212.05,,,185.20,,,2026-10-10,11b4c74d0,MEASURED
+osc-parser,179.21,,,54.56,,,2026-10-10,11b4c74d0,MEASURED
+screen-clone.noop,7.51,,,4.08,,,2026-10-10,11b4c74d0,MEASURED
+screen-clone.clone,45.77,,,16.64,,,2026-10-10,11b4c74d0,MEASURED
+screen-clone.render,142.83,,,126.61,,,2026-10-10,11b4c74d0,MEASURED

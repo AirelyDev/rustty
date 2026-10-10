@@ -1,0 +1,17 @@
+sys_crate,ghostty_pkg,vendored_c_cpp_loc,rust_wrapper_loc,build_rs_lines,ghostty_pkg_zig_loc,ghostty_pkg_in_tree_c_loc
+freetype-sys,pkg/freetype,162181,52,231,860,9
+libxml2-sys,pkg/libxml2,140539,71,333,200,51
+harfbuzz-sys,pkg/harfbuzz,115927,92,176,864,0
+highway-sys,pkg/highway,113885,460,165,522,125
+glslang-sys,pkg/glslang,79514,80,231,263,23
+oniguruma-sys,pkg/oniguruma,78513,65,268,649,0
+wuffs-sys,pkg/wuffs,73304,63,329,646,19
+dcimgui-sys,pkg/dcimgui,68384,304,348,243,35
+spirv-cross-sys,pkg/spirv-cross,49383,101,169,95,0
+fontconfig-sys,pkg/fontconfig,39705,184,396,928,16530
+simdutf-sys,pkg/simdutf,38536,20,132,68,38536
+libpng-sys,pkg/libpng,24413,27,170,84,195
+breakpad-sys,pkg/breakpad,22338,20,228,140,4594
+sentry-sys,pkg/sentry,20848,124,295,375,0
+zlib-sys,pkg/zlib,17445,362,131,71,0
+gettext-sys,pkg/libintl,13544,62,150,70,1823

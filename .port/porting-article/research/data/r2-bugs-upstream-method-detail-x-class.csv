@@ -1,0 +1,50 @@
+method_detail,class,count
+adversarial reviewer of a task,crash,2
+adversarial reviewer of a task,intent-breaking,1
+adversarial reviewer of a task,latent,3
+build-system port,intent-breaking,3
+build-system port,latent,1
+"checked arithmetic, casts and bounds",crash,29
+"checked arithmetic, casts and bounds",ub,1
+code reading (entry says found by reading),crash,4
+code reading (entry says found by reading),deadlock/hang,2
+code reading (entry says found by reading),intent-breaking,3
+code reading (entry says found by reading),latent,5
+code reading (entry says found by reading),leak,2
+code reading (entry says found by reading),ub,9
+compiling previously-unanalysed code,intent-breaking,3
+compiling previously-unanalysed code,latent,14
+cross-platform bring-up,crash,6
+cross-platform bring-up,deadlock/hang,2
+cross-platform bring-up,intent-breaking,10
+cross-platform bring-up,latent,5
+cross-platform bring-up,ub,2
+defect sweep (R13 inventory / port-note sweep),crash,6
+defect sweep (R13 inventory / port-note sweep),latent,16
+defect sweep (R13 inventory / port-note sweep),leak,2
+fault injection (allocation/C-API failure),crash,4
+fault injection (allocation/C-API failure),deadlock/hang,1
+fault injection (allocation/C-API failure),intent-breaking,1
+fault injection (allocation/C-API failure),latent,1
+fault injection (allocation/C-API failure),leak,5
+live testing of the port,crash,1
+live testing of the port,deadlock/hang,3
+parity audit (side-by-side file audit),crash,4
+parity audit (side-by-side file audit),intent-breaking,6
+parity audit (side-by-side file audit),latent,10
+parity audit (side-by-side file audit),leak,2
+parity audit (side-by-side file audit),ub,1
+parity re-audit after a pin advance,intent-breaking,2
+sanitizer,leak,2
+sanitizer,ub,1
+security review,intent-breaking,1
+test port,test-weakness,11
+type/borrow checker,crash,1
+type/borrow checker,ub,4
+"while translating (session logs, records, port notes)",crash,1
+"while translating (session logs, records, port notes)",deadlock/hang,1
+"while translating (session logs, records, port notes)",intent-breaking,3
+"while translating (session logs, records, port notes)",latent,4
+"while translating (session logs, records, port notes)",leak,1
+"while translating (session logs, records, port notes)",ub,1
+withheld,crash,2

@@ -1,0 +1,10 @@
+config,stage,rustty_over_ghostty,metric,date,commit,provenance
+apc-parser,first paired (P7-W19),1.81,child CPU ms (instr 943M vs 241M),2026-10-07,75ce42c45,DOCUMENTED V18
+apc-parser,after NEON group test (P7-W20),1.1,child CPU,2026-10-07,5a7f2d1c8,DOCUMENTED V18/N511
+apc-parser,idle re-measure (P7-W23),1.11,child CPU,2026-10-07,b61e273e6,DOCUMENTED V18
+hyperlink-map.churn,first paired (P7-W19),1.26,per-loop slope,2026-10-07,75ce42c45,DOCUMENTED V18
+hyperlink-map.churn,after inlining (P7-W20),0.94,child CPU (provisional),2026-10-07,5a7f2d1c8,DOCUMENTED V18
+hyperlink-map.churn,idle re-measure (P7-W23),1.01,child CPU (0.99-1.03),2026-10-07,b61e273e6,DOCUMENTED V18
+hyperlink-map.lookup,first paired (P7-W19),1.17,per-loop slope,2026-10-07,75ce42c45,DOCUMENTED V18
+hyperlink-map.lookup,after inlining (P7-W20),1.09,child CPU,2026-10-07,5a7f2d1c8,DOCUMENTED V18
+hyperlink-map.lookup,idle re-measure (P7-W23),1.1,child CPU,2026-10-07,b61e273e6,DOCUMENTED V18

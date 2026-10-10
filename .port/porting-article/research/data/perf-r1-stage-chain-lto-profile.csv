@@ -1,0 +1,169 @@
+order,fix,commit,verdict,bench,rust_ms
+0,frozen_C (pre-fix),10cc614,baseline,terminal-parser,684.31
+0,frozen_C (pre-fix),10cc614,baseline,terminal-stream,449.71
+0,frozen_C (pre-fix),10cc614,baseline,codepoint-width.noop,2.93
+0,frozen_C (pre-fix),10cc614,baseline,codepoint-width.table,228.62
+0,frozen_C (pre-fix),10cc614,baseline,codepoint-width.simd,474.08
+0,frozen_C (pre-fix),10cc614,baseline,codepoint-width.wcwidth,259.94
+0,frozen_C (pre-fix),10cc614,baseline,grapheme-break.noop,227.62
+0,frozen_C (pre-fix),10cc614,baseline,grapheme-break.table,269.23
+0,frozen_C (pre-fix),10cc614,baseline,is-symbol.table,224.77
+0,frozen_C (pre-fix),10cc614,baseline,is-symbol.uucode,228.61
+0,frozen_C (pre-fix),10cc614,baseline,osc-parser,128.66
+0,frozen_C (pre-fix),10cc614,baseline,screen-clone.noop,4.85
+0,frozen_C (pre-fix),10cc614,baseline,screen-clone.clone,70.37
+0,frozen_C (pre-fix),10cc614,baseline,screen-clone.render,31.97
+1,fix-profile-lto,9e028ec,superseded by 9e1837b,terminal-parser,685.6
+1,fix-profile-lto,9e028ec,superseded by 9e1837b,terminal-stream,458.49
+1,fix-profile-lto,9e028ec,superseded by 9e1837b,codepoint-width.noop,2.82
+1,fix-profile-lto,9e028ec,superseded by 9e1837b,codepoint-width.table,229.66
+1,fix-profile-lto,9e028ec,superseded by 9e1837b,codepoint-width.simd,477.55
+1,fix-profile-lto,9e028ec,superseded by 9e1837b,codepoint-width.wcwidth,259.67
+1,fix-profile-lto,9e028ec,superseded by 9e1837b,grapheme-break.noop,227.87
+1,fix-profile-lto,9e028ec,superseded by 9e1837b,grapheme-break.table,269.1
+1,fix-profile-lto,9e028ec,superseded by 9e1837b,is-symbol.table,225.09
+1,fix-profile-lto,9e028ec,superseded by 9e1837b,is-symbol.uucode,228.53
+1,fix-profile-lto,9e028ec,superseded by 9e1837b,osc-parser,129.79
+1,fix-profile-lto,9e028ec,superseded by 9e1837b,screen-clone.noop,4.9
+1,fix-profile-lto,9e028ec,superseded by 9e1837b,screen-clone.clone,70.17
+1,fix-profile-lto,9e028ec,superseded by 9e1837b,screen-clone.render,30.69
+2,fix-inline-idioms,f2b7dcd,ACCEPT,terminal-parser,620.32
+2,fix-inline-idioms,f2b7dcd,ACCEPT,terminal-stream,457.34
+2,fix-inline-idioms,f2b7dcd,ACCEPT,codepoint-width.noop,2.96
+2,fix-inline-idioms,f2b7dcd,ACCEPT,codepoint-width.table,229.12
+2,fix-inline-idioms,f2b7dcd,ACCEPT,codepoint-width.simd,476.05
+2,fix-inline-idioms,f2b7dcd,ACCEPT,codepoint-width.wcwidth,259.92
+2,fix-inline-idioms,f2b7dcd,ACCEPT,grapheme-break.noop,227.87
+2,fix-inline-idioms,f2b7dcd,ACCEPT,grapheme-break.table,249.87
+2,fix-inline-idioms,f2b7dcd,ACCEPT,is-symbol.table,222.64
+2,fix-inline-idioms,f2b7dcd,ACCEPT,is-symbol.uucode,226.6
+2,fix-inline-idioms,f2b7dcd,ACCEPT,osc-parser,77.39
+2,fix-inline-idioms,f2b7dcd,ACCEPT,screen-clone.noop,5.01
+2,fix-inline-idioms,f2b7dcd,ACCEPT,screen-clone.clone,70.62
+2,fix-inline-idioms,f2b7dcd,ACCEPT,screen-clone.render,31.5
+3,fix-utf8-dfa,79dce2e,ACCEPT,terminal-parser,632.01
+3,fix-utf8-dfa,79dce2e,ACCEPT,terminal-stream,458.33
+3,fix-utf8-dfa,79dce2e,ACCEPT,codepoint-width.noop,3.12
+3,fix-utf8-dfa,79dce2e,ACCEPT,codepoint-width.table,216.14
+3,fix-utf8-dfa,79dce2e,ACCEPT,codepoint-width.simd,463.25
+3,fix-utf8-dfa,79dce2e,ACCEPT,codepoint-width.wcwidth,246.66
+3,fix-utf8-dfa,79dce2e,ACCEPT,grapheme-break.noop,217.11
+3,fix-utf8-dfa,79dce2e,ACCEPT,grapheme-break.table,236.48
+3,fix-utf8-dfa,79dce2e,ACCEPT,is-symbol.table,209.28
+3,fix-utf8-dfa,79dce2e,ACCEPT,is-symbol.uucode,214.9
+3,fix-utf8-dfa,79dce2e,ACCEPT,osc-parser,77.96
+3,fix-utf8-dfa,79dce2e,ACCEPT,screen-clone.noop,4.99
+3,fix-utf8-dfa,79dce2e,ACCEPT,screen-clone.clone,70.25
+3,fix-utf8-dfa,79dce2e,ACCEPT,screen-clone.render,30.32
+4,fix-bench-assert-tier,eb32359,ACCEPT,terminal-parser,623.51
+4,fix-bench-assert-tier,eb32359,ACCEPT,terminal-stream,459.11
+4,fix-bench-assert-tier,eb32359,ACCEPT,codepoint-width.noop,2.91
+4,fix-bench-assert-tier,eb32359,ACCEPT,codepoint-width.table,217.89
+4,fix-bench-assert-tier,eb32359,ACCEPT,codepoint-width.simd,460.07
+4,fix-bench-assert-tier,eb32359,ACCEPT,codepoint-width.wcwidth,246.82
+4,fix-bench-assert-tier,eb32359,ACCEPT,grapheme-break.noop,219.86
+4,fix-bench-assert-tier,eb32359,ACCEPT,grapheme-break.table,234.81
+4,fix-bench-assert-tier,eb32359,ACCEPT,is-symbol.table,210.87
+4,fix-bench-assert-tier,eb32359,ACCEPT,is-symbol.uucode,213.72
+4,fix-bench-assert-tier,eb32359,ACCEPT,osc-parser,79.89
+4,fix-bench-assert-tier,eb32359,ACCEPT,screen-clone.noop,4.9
+4,fix-bench-assert-tier,eb32359,ACCEPT,screen-clone.clone,70.58
+4,fix-bench-assert-tier,eb32359,ACCEPT,screen-clone.render,30.75
+5,fix-pin-keys-collect,08299e0,ACCEPT,terminal-parser,640.71
+5,fix-pin-keys-collect,08299e0,ACCEPT,terminal-stream,462.06
+5,fix-pin-keys-collect,08299e0,ACCEPT,codepoint-width.noop,2.91
+5,fix-pin-keys-collect,08299e0,ACCEPT,codepoint-width.table,221.53
+5,fix-pin-keys-collect,08299e0,ACCEPT,codepoint-width.simd,460.45
+5,fix-pin-keys-collect,08299e0,ACCEPT,codepoint-width.wcwidth,246.83
+5,fix-pin-keys-collect,08299e0,ACCEPT,grapheme-break.noop,218.76
+5,fix-pin-keys-collect,08299e0,ACCEPT,grapheme-break.table,233.37
+5,fix-pin-keys-collect,08299e0,ACCEPT,is-symbol.table,210.0
+5,fix-pin-keys-collect,08299e0,ACCEPT,is-symbol.uucode,214.59
+5,fix-pin-keys-collect,08299e0,ACCEPT,osc-parser,78.54
+5,fix-pin-keys-collect,08299e0,ACCEPT,screen-clone.noop,4.91
+5,fix-pin-keys-collect,08299e0,ACCEPT,screen-clone.clone,71.9
+5,fix-pin-keys-collect,08299e0,ACCEPT,screen-clone.render,30.77
+6,fix-remap-hasher,cdb9a26,ACCEPT,terminal-parser,640.91
+6,fix-remap-hasher,cdb9a26,ACCEPT,terminal-stream,455.37
+6,fix-remap-hasher,cdb9a26,ACCEPT,codepoint-width.noop,2.93
+6,fix-remap-hasher,cdb9a26,ACCEPT,codepoint-width.table,220.7
+6,fix-remap-hasher,cdb9a26,ACCEPT,codepoint-width.simd,460.72
+6,fix-remap-hasher,cdb9a26,ACCEPT,codepoint-width.wcwidth,248.11
+6,fix-remap-hasher,cdb9a26,ACCEPT,grapheme-break.noop,219.93
+6,fix-remap-hasher,cdb9a26,ACCEPT,grapheme-break.table,234.07
+6,fix-remap-hasher,cdb9a26,ACCEPT,is-symbol.table,209.81
+6,fix-remap-hasher,cdb9a26,ACCEPT,is-symbol.uucode,213.67
+6,fix-remap-hasher,cdb9a26,ACCEPT,osc-parser,79.2
+6,fix-remap-hasher,cdb9a26,ACCEPT,screen-clone.noop,4.98
+6,fix-remap-hasher,cdb9a26,ACCEPT,screen-clone.clone,71.76
+6,fix-remap-hasher,cdb9a26,ACCEPT,screen-clone.render,30.69
+7,fix-osc-fixed-capture,11ca425,ACCEPT,terminal-parser,633.08
+7,fix-osc-fixed-capture,11ca425,ACCEPT,terminal-stream,456.67
+7,fix-osc-fixed-capture,11ca425,ACCEPT,codepoint-width.noop,2.97
+7,fix-osc-fixed-capture,11ca425,ACCEPT,codepoint-width.table,215.36
+7,fix-osc-fixed-capture,11ca425,ACCEPT,codepoint-width.simd,464.15
+7,fix-osc-fixed-capture,11ca425,ACCEPT,codepoint-width.wcwidth,241.14
+7,fix-osc-fixed-capture,11ca425,ACCEPT,grapheme-break.noop,219.5
+7,fix-osc-fixed-capture,11ca425,ACCEPT,grapheme-break.table,232.82
+7,fix-osc-fixed-capture,11ca425,ACCEPT,is-symbol.table,210.84
+7,fix-osc-fixed-capture,11ca425,ACCEPT,is-symbol.uucode,215.34
+7,fix-osc-fixed-capture,11ca425,ACCEPT,osc-parser,49.21
+7,fix-osc-fixed-capture,11ca425,ACCEPT,screen-clone.noop,5.0
+7,fix-osc-fixed-capture,11ca425,ACCEPT,screen-clone.clone,70.86
+7,fix-osc-fixed-capture,11ca425,ACCEPT,screen-clone.render,30.59
+8,fix-color-list-prealloc,67962f1,REVERTED 408ddaa,terminal-parser,632.1
+8,fix-color-list-prealloc,67962f1,REVERTED 408ddaa,terminal-stream,475.69
+8,fix-color-list-prealloc,67962f1,REVERTED 408ddaa,codepoint-width.noop,2.99
+8,fix-color-list-prealloc,67962f1,REVERTED 408ddaa,codepoint-width.table,217.01
+8,fix-color-list-prealloc,67962f1,REVERTED 408ddaa,codepoint-width.simd,463.11
+8,fix-color-list-prealloc,67962f1,REVERTED 408ddaa,codepoint-width.wcwidth,248.48
+8,fix-color-list-prealloc,67962f1,REVERTED 408ddaa,grapheme-break.noop,219.32
+8,fix-color-list-prealloc,67962f1,REVERTED 408ddaa,grapheme-break.table,233.12
+8,fix-color-list-prealloc,67962f1,REVERTED 408ddaa,is-symbol.table,209.93
+8,fix-color-list-prealloc,67962f1,REVERTED 408ddaa,is-symbol.uucode,213.81
+8,fix-color-list-prealloc,67962f1,REVERTED 408ddaa,osc-parser,48.91
+8,fix-color-list-prealloc,67962f1,REVERTED 408ddaa,screen-clone.noop,5.12
+8,fix-color-list-prealloc,67962f1,REVERTED 408ddaa,screen-clone.clone,69.88
+8,fix-color-list-prealloc,67962f1,REVERTED 408ddaa,screen-clone.render,30.64
+9,fix-lut-bounds,82defe5,ACCEPT,terminal-parser,650.46
+9,fix-lut-bounds,82defe5,ACCEPT,terminal-stream,478.84
+9,fix-lut-bounds,82defe5,ACCEPT,codepoint-width.noop,3.07
+9,fix-lut-bounds,82defe5,ACCEPT,codepoint-width.table,219.93
+9,fix-lut-bounds,82defe5,ACCEPT,codepoint-width.simd,461.86
+9,fix-lut-bounds,82defe5,ACCEPT,codepoint-width.wcwidth,247.01
+9,fix-lut-bounds,82defe5,ACCEPT,grapheme-break.noop,219.7
+9,fix-lut-bounds,82defe5,ACCEPT,grapheme-break.table,216.52
+9,fix-lut-bounds,82defe5,ACCEPT,is-symbol.table,206.87
+9,fix-lut-bounds,82defe5,ACCEPT,is-symbol.uucode,216.23
+9,fix-lut-bounds,82defe5,ACCEPT,osc-parser,48.67
+9,fix-lut-bounds,82defe5,ACCEPT,screen-clone.noop,5.07
+9,fix-lut-bounds,82defe5,ACCEPT,screen-clone.clone,71.25
+9,fix-lut-bounds,82defe5,ACCEPT,screen-clone.render,30.42
+10,fix-parser-destage,2bb5c42,ACCEPT,terminal-parser,522.16
+10,fix-parser-destage,2bb5c42,ACCEPT,terminal-stream,496.08
+10,fix-parser-destage,2bb5c42,ACCEPT,codepoint-width.noop,2.9
+10,fix-parser-destage,2bb5c42,ACCEPT,codepoint-width.table,219.73
+10,fix-parser-destage,2bb5c42,ACCEPT,codepoint-width.simd,461.86
+10,fix-parser-destage,2bb5c42,ACCEPT,codepoint-width.wcwidth,246.95
+10,fix-parser-destage,2bb5c42,ACCEPT,grapheme-break.noop,219.3
+10,fix-parser-destage,2bb5c42,ACCEPT,grapheme-break.table,217.04
+10,fix-parser-destage,2bb5c42,ACCEPT,is-symbol.table,206.93
+10,fix-parser-destage,2bb5c42,ACCEPT,is-symbol.uucode,214.28
+10,fix-parser-destage,2bb5c42,ACCEPT,osc-parser,49.26
+10,fix-parser-destage,2bb5c42,ACCEPT,screen-clone.noop,4.95
+10,fix-parser-destage,2bb5c42,ACCEPT,screen-clone.clone,71.0
+10,fix-parser-destage,2bb5c42,ACCEPT,screen-clone.render,30.92
+11,FINAL_C (merge incl. render-soa),d211a84,merge,terminal-parser,531.05
+11,FINAL_C (merge incl. render-soa),d211a84,merge,terminal-stream,484.48
+11,FINAL_C (merge incl. render-soa),d211a84,merge,codepoint-width.noop,2.95
+11,FINAL_C (merge incl. render-soa),d211a84,merge,codepoint-width.table,214.65
+11,FINAL_C (merge incl. render-soa),d211a84,merge,codepoint-width.simd,462.61
+11,FINAL_C (merge incl. render-soa),d211a84,merge,codepoint-width.wcwidth,247.85
+11,FINAL_C (merge incl. render-soa),d211a84,merge,grapheme-break.noop,217.68
+11,FINAL_C (merge incl. render-soa),d211a84,merge,grapheme-break.table,217.42
+11,FINAL_C (merge incl. render-soa),d211a84,merge,is-symbol.table,207.67
+11,FINAL_C (merge incl. render-soa),d211a84,merge,is-symbol.uucode,213.92
+11,FINAL_C (merge incl. render-soa),d211a84,merge,osc-parser,48.43
+11,FINAL_C (merge incl. render-soa),d211a84,merge,screen-clone.noop,5.05
+11,FINAL_C (merge incl. render-soa),d211a84,merge,screen-clone.clone,70.36
+11,FINAL_C (merge incl. render-soa),d211a84,merge,screen-clone.render,23.85

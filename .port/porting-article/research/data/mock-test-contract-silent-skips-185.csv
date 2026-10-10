@@ -1,0 +1,186 @@
+lint_kind,file,line,test_fn,guard_class,guard_group,body_mentions_SkipZigTest
+RET,crates-sys/dcimgui-sys/tests/metal_offscreen.rs,56,metal_offscreen_render_writes_pixels,GPU / display / window server,runtime resource,0
+MSG,crates-sys/dcimgui-sys/tests/metal_offscreen.rs,55,metal_offscreen_render_writes_pixels,GPU / display / window server,runtime resource,0
+RET,crates/rustty-apprt-c/tests/build_defaults.rs,49,default_feature_set_resolves_terminal_simd_on,build feature / option,compile-time scope,0
+RET,crates/rustty-apprt-c/tests/macos_window_host.rs,491,mouse_scroll_routes_each_offset_to_its_own_axis,GPU / display / window server,runtime resource,0
+RET,crates/rustty-apprt-c/tests/macos_window_host.rs,573,surface_free_frees_the_last_inherited_working_directory,GPU / display / window server,runtime resource,0
+RET,crates/rustty-apprt-c/tests/macos_window_host.rs,641,ime_point_saturates_with_a_saturated_padding,GPU / display / window server,runtime resource,0
+RET,crates/rustty-apprt-c/tests/macos_window_host.rs,695,hosts_view_layer_and_presents_live_frame,GPU / display / window server,runtime resource,0
+RET,crates/rustty-apprt-c/tests/macos_window_host.rs,753,set_display_id_pushes_to_render_thread_panic_free,GPU / display / window server,runtime resource,0
+RET,crates/rustty-apprt-c/tests/macos_window_host.rs,778,quicklook_exports_are_abort_free_on_live_surface,GPU / display / window server,runtime resource,0
+RET,crates/rustty-apprt-c/tests/macos_window_host.rs,835,content_scale_restamp_tracks_cross_dpi_move,GPU / display / window server,runtime resource,0
+RET,crates/rustty-apprt-c/tests/macos_window_host.rs,873,resize_tracks_host_layer_bounds,GPU / display / window server,runtime resource,0
+RET,crates/rustty-apprt-c/tests/macos_window_host.rs,916,shows_visible_window_on_device,GPU / display / window server,runtime resource,0
+RET,crates/rustty-apprt-c/tests/macos_window_host.rs,946,shows_visible_window_on_device,GPU / display / window server,runtime resource,0
+RET,crates/rustty-apprt-c/tests/macos_window_host.rs,1024,init_error_path_joins_both_threads_before_freeing_their_state,GPU / display / window server,runtime resource,0
+MSG,crates/rustty-apprt-c/tests/macos_window_host.rs,490,mouse_scroll_routes_each_offset_to_its_own_axis,GPU / display / window server,runtime resource,0
+MSG,crates/rustty-apprt-c/tests/macos_window_host.rs,572,surface_free_frees_the_last_inherited_working_directory,GPU / display / window server,runtime resource,0
+MSG,crates/rustty-apprt-c/tests/macos_window_host.rs,640,ime_point_saturates_with_a_saturated_padding,GPU / display / window server,runtime resource,0
+MSG,crates/rustty-apprt-c/tests/macos_window_host.rs,694,hosts_view_layer_and_presents_live_frame,GPU / display / window server,runtime resource,0
+MSG,crates/rustty-apprt-c/tests/macos_window_host.rs,777,quicklook_exports_are_abort_free_on_live_surface,GPU / display / window server,runtime resource,0
+MSG,crates/rustty-apprt-c/tests/macos_window_host.rs,834,content_scale_restamp_tracks_cross_dpi_move,GPU / display / window server,runtime resource,0
+MSG,crates/rustty-apprt-c/tests/macos_window_host.rs,872,resize_tracks_host_layer_bounds,GPU / display / window server,runtime resource,0
+MSG,crates/rustty-apprt-c/tests/macos_window_host.rs,912,shows_visible_window_on_device,GPU / display / window server,runtime resource,0
+MSG,crates/rustty-apprt-c/tests/macos_window_host.rs,1023,init_error_path_joins_both_threads_before_freeing_their_state,GPU / display / window server,runtime resource,0
+MSG,crates/rustty-apprt-c/tests/macos_window_host.rs,1120,init_error_path_joins_both_threads_before_freeing_their_state,GPU / display / window server,runtime resource,0
+RET,crates/rustty-apprt/src/gtk/app.rs,476,perform_ipc_no_instance_fails_with_ipc_failed,GPU / display / window server,runtime resource,0
+MSG,crates/rustty-apprt/src/gtk/app.rs,475,perform_ipc_no_instance_fails_with_ipc_failed,GPU / display / window server,runtime resource,0
+RET,crates/rustty-apprt/tests/gtk_perform_action.rs,207,perform_action_render_queues_a_render,GPU / display / window server,runtime resource,0
+RET,crates/rustty-apprt/tests/gtk_perform_action.rs,224,perform_action_unimplemented_returns_false,GPU / display / window server,runtime resource,0
+RET,crates/rustty-apprt/tests/gtk_perform_action.rs,272,perform_action_new_window_app_does_not_panic,GPU / display / window server,runtime resource,0
+RET,crates/rustty-apprt/tests/gtk_perform_action.rs,288,perform_action_selection_changed_returns_true,GPU / display / window server,runtime resource,0
+RET,crates/rustty-args/src/comma_splitter.rs,372,splitter_9,target OS / arch,compile-time scope,0
+RET,crates/rustty-args/src/comma_splitter.rs,381,splitter_10,target OS / arch,compile-time scope,0
+RET,crates/rustty-args/src/comma_splitter.rs,390,splitter_11,target OS / arch,compile-time scope,0
+RET,crates/rustty-args/src/comma_splitter.rs,399,splitter_12,target OS / arch,compile-time scope,0
+RET,crates/rustty-args/src/comma_splitter.rs,408,splitter_13,target OS / arch,compile-time scope,0
+RET,crates/rustty-args/src/comma_splitter.rs,417,splitter_14,target OS / arch,compile-time scope,0
+RET,crates/rustty-args/src/comma_splitter.rs,433,splitter_16,target OS / arch,compile-time scope,0
+RET,crates/rustty-args/src/comma_splitter.rs,442,splitter_17,target OS / arch,compile-time scope,0
+RET,crates/rustty-args/src/comma_splitter.rs,451,splitter_18,target OS / arch,compile-time scope,0
+RET,crates/rustty-args/src/comma_splitter.rs,521,splitter_25,target OS / arch,compile-time scope,0
+RET,crates/rustty-args/src/comma_splitter.rs,533,splitter_windows_paths,target OS / arch,compile-time scope,0
+RET,crates/rustty-args/src/comma_splitter.rs,550,splitter_backslash_literal_outside_quotes_on_windows,target OS / arch,compile-time scope,0
+RET,crates/rustty-args/src/comma_splitter.rs,562,splitter_backslash_still_escapes_inside_quotes_on_windows,target OS / arch,compile-time scope,0
+RET,crates/rustty-bench/src/benchmark.rs,297,benchmark,target OS / arch,compile-time scope,1
+EMPTY,crates/rustty-datastruct/src/wasm_page_pool.rs,400,wasm_page_pool,target OS / arch,compile-time scope,1
+EMPTY,crates/rustty-font-shaper/src/collection.rs,1971,has_codepoint_emoji_default_graphical,system fonts,runtime resource,1
+WRAP,crates/rustty-font-shaper/src/collection.rs,1971,has_codepoint_emoji_default_graphical,system fonts,runtime resource,1
+RET,crates/rustty-font-shaper/src/deferred_face.rs,1373,fontconfig,build feature / option,compile-time scope,1
+RET,crates/rustty-font-shaper/src/deferred_face.rs,1445,coretext,build feature / option,compile-time scope,1
+RET,crates/rustty-font-shaper/src/discovery.rs,2851,fontconfig,build feature / option,compile-time scope,1
+RET,crates/rustty-font-shaper/src/discovery.rs,2894,discover_iterator_drops_native_handles,build feature / option,compile-time scope,0
+RET,crates/rustty-font-shaper/src/discovery.rs,2947,fontconfig_codepoint,build feature / option,compile-time scope,1
+RET,crates/rustty-font-shaper/src/discovery.rs,3064,coretext,build feature / option,compile-time scope,1
+RET,crates/rustty-font-shaper/src/discovery.rs,3113,from_descriptors_no_match,build feature / option,compile-time scope,0
+RET,crates/rustty-font-shaper/src/discovery.rs,3150,coretext_codepoint,build feature / option,compile-time scope,1
+RET,crates/rustty-font-shaper/src/discovery.rs,3195,coretext_sorting,build feature / option,compile-time scope,1
+RET,crates/rustty-font-shaper/src/discovery.rs,3207,coretext_sorting,build feature / option,compile-time scope,1
+EMPTY,crates/rustty-font-shaper/src/discovery.rs,3273,windows,target OS / arch,compile-time scope,0
+RET,crates/rustty-font-shaper/src/discovery.rs,3278,windows,build feature / option,compile-time scope,1
+RET,crates/rustty-font-shaper/src/shaper/coretext_tests.rs,1105,shape_devanagari_string,system fonts,runtime resource,0
+RET,crates/rustty-font-shaper/src/shaper/coretext_tests.rs,1164,shape_tai_tham_vowels_position_differs_from_advance,system fonts,runtime resource,0
+RET,crates/rustty-font-shaper/src/shaper/coretext_tests.rs,1227,shape_tai_tham_letters_position_y_differs_from_advance,system fonts,runtime resource,0
+RET,crates/rustty-font-shaper/src/shaper/coretext_tests.rs,1290,shape_javanese_ligatures,system fonts,runtime resource,0
+RET,crates/rustty-font-shaper/src/shaper/coretext_tests.rs,1354,shape_chakma_vowel_sign_with_ligature,system fonts,runtime resource,0
+RET,crates/rustty-font-shaper/src/shaper/coretext_tests.rs,1424,shape_bengali_ligatures_with_out_of_order_vowels,system fonts,runtime resource,0
+RET,crates/rustty-font-shaper/src/shaper/harfbuzz_tests.rs,1114,shape_devanagari_string,system fonts,runtime resource,0
+RET,crates/rustty-font-shaper/src/shaper/harfbuzz_tests.rs,1237,shape_tibetan_characters,system fonts,runtime resource,0
+RET,crates/rustty-font-shaper/src/shaper/harfbuzz_tests.rs,1392,shape_chakma_vowel_sign_with_ligature,system fonts,runtime resource,0
+RET,crates/rustty-font-shaper/src/shaper/harfbuzz_tests.rs,1469,shape_bengali_ligatures_with_out_of_order_vowels,system fonts,runtime resource,0
+RET,crates/rustty-input/src/key_mods.rs,685,translation_macos_option_as_alt,target OS / arch,compile-time scope,1
+RET,crates/rustty-os/src/homedir.rs,347,expand_home_unix,target OS / arch,compile-time scope,1
+RET,crates/rustty-os/src/i18n.rs,363,canonicalizeLocale_darwin,target OS / arch,compile-time scope,1
+RET,crates/rustty-os/src/i18n.rs,442,gettext_resolves_from_vendored_libintl,target OS / arch,compile-time scope,0
+RET,crates/rustty-os/src/kernel_info.rs,55,read_proc_sys_kernel_osrelease,target OS / arch,compile-time scope,0
+RET,crates/rustty-os/src/passwd.rs,273,passwd_entry,target OS / arch,compile-time scope,1
+RET,crates/rustty-os/src/xdg.rs,372,fallback_when_xdg_env_empty,target OS / arch,compile-time scope,1
+RET,crates/rustty-os/src/xdg.rs,394,fallback_when_xdg_env_empty_and_subdir,target OS / arch,compile-time scope,1
+RET,crates/rustty-os/src/xdg.rs,431,non_utf8_xdg_env_is_used_raw,target OS / arch,compile-time scope,1
+RET,crates/rustty-os/src/xdg.rs,462,non_utf8_home_fallback_is_used_raw,target OS / arch,compile-time scope,1
+RET,crates/rustty-renderer/src/generic.rs,8686,sync_parks_the_link_while_idle_and_runs_it_while_dirty,GPU / display / window server,runtime resource,0
+EMPTY,crates/rustty-termio/src/command.rs,1958,command_os_pre_exec_1,target OS / arch,compile-time scope,1
+EMPTY,crates/rustty-termio/src/command.rs,2012,command_os_pre_exec_2,target OS / arch,compile-time scope,1
+EMPTY,crates/rustty-termio/src/command.rs,2062,command_rt_pre_exec_1,target OS / arch,compile-time scope,1
+EMPTY,crates/rustty-termio/src/command.rs,2112,command_rt_pre_exec_2,target OS / arch,compile-time scope,1
+EMPTY,crates/rustty-termio/src/command.rs,2162,command_rt_post_fork_1,target OS / arch,compile-time scope,1
+EMPTY,crates/rustty-termio/src/command.rs,2526,command_posix_fork_handles_execvez_failure,target OS / arch,compile-time scope,1
+EMPTY,crates/rustty-termio/src/exec.rs,6037,exec_command_darwin_shell_command,target OS / arch,compile-time scope,1
+EMPTY,crates/rustty-termio/src/exec.rs,6093,exec_command_darwin_direct_command,target OS / arch,compile-time scope,1
+EMPTY,crates/rustty-termio/src/exec.rs,6141,exec_command_shell_command_empty_passwd,target OS / arch,compile-time scope,1
+EMPTY,crates/rustty-termio/src/exec.rs,6183,exec_command_shell_command_error_passwd,target OS / arch,compile-time scope,1
+EMPTY,crates/rustty-termio/src/exec.rs,6227,exec_command_direct_command_error_passwd,target OS / arch,compile-time scope,1
+EMPTY,crates/rustty-termio/src/exec.rs,6271,exec_command_direct_command_config_freed,target OS / arch,compile-time scope,1
+EMPTY,crates/rustty-termio/src/exec.rs,6319,exec_command_windows_bare_cmd_exe_resolves_via_comspec,target OS / arch,compile-time scope,1
+EMPTY,crates/rustty-termio/src/exec.rs,6350,exec_command_windows_bare_non_cmd_shell_is_passed_through,target OS / arch,compile-time scope,1
+EMPTY,crates/rustty-termio/src/exec.rs,6376,exec_command_windows_shell_with_args_is_split_on_whitespace,target OS / arch,compile-time scope,1
+EMPTY,crates/rustty-termio/src/exec.rs,6403,exec_command_windows_direct_command_is_passed_through_unchanged,target OS / arch,compile-time scope,1
+EMPTY,crates/rustty-termio/src/shell_integration.rs,1505,xdg_empty_xdg_data_dirs,target OS / arch,compile-time scope,1
+EMPTY,crates/rustty-termio/src/shell_integration.rs,1542,xdg_existing_xdg_data_dirs,target OS / arch,compile-time scope,1
+RET,crates/rustty-vaxis/src/lib.rs,381,recover_restores_saved_termios_on_a_pty,pty / tty,runtime resource,0
+MSG,crates/rustty-vaxis/src/lib.rs,380,recover_restores_saved_termios_on_a_pty,pty / tty,runtime resource,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,1535,placement_iterator_new_free,build feature / option,compile-time scope,1
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,1567,placement_iterator_next_on_empty_storage,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,1617,placement_iterator_get_before_next_returns_invalid,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,1667,placement_iterator_with_transmit_and_display,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,1752,placement_iterator_with_multiple_placements,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,1842,placement_iterator_set_layer_filter,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,1995,image_get_handle_returns_null_for_missing_id,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,2023,image_get_handle_and_image_get_with_transmitted_image,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,2120,image_get_exposes_pending_metadata_without_a_data_pointer,build feature / option,compile-time scope,1
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,2235,placement_rect_with_transmit_and_display,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,2305,placement_rect_null_args_return_invalid_value,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,2324,placement_pixel_size_with_transmit_and_display,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,2386,placement_pixel_size_null_args_return_invalid_value,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,2405,placement_grid_size_with_transmit_and_display,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,2466,placement_grid_size_null_args_return_invalid_value,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,2485,placement_viewport_pos_with_transmit_and_display,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,2545,placement_viewport_pos_fully_off_screen_above,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,2606,placement_viewport_pos_top_off_screen,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,2671,placement_viewport_pos_bottom_off_screen,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,2733,placement_viewport_pos_top_and_bottom_off_screen,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,2798,placement_viewport_pos_null_args_return_invalid_value,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,2817,placement_source_rect_defaults_to_full_image,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,2878,placement_source_rect_with_explicit_source_rect,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,2947,placement_source_rect_clamps_to_image_bounds,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,3026,placement_source_rect_null_args_return_invalid_value,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,3048,image_get_on_null_returns_invalid_value,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,3064,placement_render_info_returns_all_fields,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,3156,placement_render_info_handles_maximum_grid_dimensions,build feature / option,compile-time scope,1
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,3217,placement_render_info_off_screen_sets_viewport_visible_false,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,3281,placement_render_info_null_returns_invalid_value,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,3298,image_get_multi_success,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,3360,image_get_multi_error_sets_out_written,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,3391,image_get_multi_null_keys_returns_invalid_value,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,3411,placement_get_multi_success,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,3489,placement_get_multi_error_sets_out_written,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,3517,placement_get_multi_null_keys_returns_invalid_value,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,3537,storage_generation_via_get,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,3628,image_generation_detects_same_sized_retransmission,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,3735,image_generation_via_image_get_multi,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,3814,image_compression_and_format_always_report_decoded_data,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,3897,generation_never_recurs_across_resets_and_screen_switches,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/kitty_graphics.rs,4086,image_get_writes_a_full_c_int_for_format_and_compression,build feature / option,compile-time scope,0
+RET,crates/rustty-vt-c/src/terminal.rs,10461,set_glyph_protocol_disables_apc_handling_and_clears_glossary,build feature / option,compile-time scope,1
+RET,crates/rustty-vt-c/src/terminal.rs,10813,kitty_image_storage_limit_round_trips_above_32_bits,build feature / option,compile-time scope,0
+RET,crates/rustty-vt/src/apc/mod.rs,896,garbage_kitty_command,build feature / option,compile-time scope,1
+RET,crates/rustty-vt/src/apc/mod.rs,914,kitty_command_with_overflow_u32,build feature / option,compile-time scope,1
+RET,crates/rustty-vt/src/apc/mod.rs,932,kitty_command_with_overflow_i32,build feature / option,compile-time scope,1
+RET,crates/rustty-vt/src/apc/mod.rs,950,kitty_feed_error_deinits_parser,build feature / option,compile-time scope,1
+RET,crates/rustty-vt/src/apc/mod.rs,974,kitty_max_bytes_exceeded,build feature / option,compile-time scope,1
+RET,crates/rustty-vt/src/apc/mod.rs,1013,valid_kitty_command,build feature / option,compile-time scope,1
+RET,crates/rustty-vt/src/apc/mod.rs,1122,feed_slice_valid_kitty_command,build feature / option,compile-time scope,1
+RET,crates/rustty-vt/src/apc/mod.rs,1145,feed_slice_identify_split_across_slices,build feature / option,compile-time scope,0
+RET,crates/rustty-vt/src/apc/mod.rs,1198,feed_slice_kitty_max_bytes_exceeded,build feature / option,compile-time scope,0
+RET,crates/rustty-vt/src/compress/lz4_differential.rs,619,lz4_differential_exhaustive,oracle / corpus / git checkout,runtime resource,1
+RET,crates/rustty-vt/src/dcs.rs,1023,tmux_enter_and_implicit_exit,build feature / option,compile-time scope,1
+RET,crates/rustty-vt/src/input/key_encode.rs,2555,kitty_report_associated_with_alt_text_on_macos_with_option,target OS / arch,compile-time scope,1
+RET,crates/rustty-vt/src/input/key_encode.rs,2590,kitty_report_associated_with_alt_text_on_macos_with_alt,target OS / arch,compile-time scope,1
+RET,crates/rustty-vt/src/input/key_encode.rs,3099,legacy_alt_x_macos,target OS / arch,compile-time scope,1
+RET,crates/rustty-vt/src/input/key_encode.rs,3128,legacy_shift_alt_period_macos,target OS / arch,compile-time scope,1
+RET,crates/rustty-vt/src/input/key_encode.rs,3400,legacy_alt_digit_with_modify_other_state_2_and_macos_option_as_alt_false,target OS / arch,compile-time scope,1
+RET,crates/rustty-vt/src/input/key_encode.rs,3834,legacy_super_only_on_macos_with_text,target OS / arch,compile-time scope,1
+RET,crates/rustty-vt/src/input/key_encode.rs,3858,legacy_super_and_other_mods_on_macos_with_text,target OS / arch,compile-time scope,1
+RET,crates/rustty-vt/src/kitty/graphics_image.rs,2632,image_load_png_not_compressed_regular_file,optional decoder not installed,runtime resource,1
+RET,crates/rustty-vt/src/kitty/graphics_image.rs,2795,image_load_png_rejects_oversized_wuffs_image_before_allocation,optional decoder not installed,runtime resource,1
+RET,crates/rustty-vt/src/snapshot/codec.rs,2097,complete_snapshot_preserves_kitty_virtual_placeholders,build feature / option,compile-time scope,1
+EMPTY,crates/rustty-vt/src/stream.rs,7966,stream_continuation_allocation_failure_recovers,build profile,compile-time scope,0
+RET,crates/rustty-vt/src/stream_terminal.rs,5680,glyph_protocol_apc_with_write_pty_callback,build feature / option,compile-time scope,1
+RET,crates/rustty-vt/src/stream_terminal.rs,7078,kitty_graphics_apc_response,build feature / option,compile-time scope,1
+RET,crates/rustty-vt/src/stream_terminal.rs,7104,kitty_graphics_via_apc,build feature / option,compile-time scope,1
+RET,crates/rustty-vt/src/stream_terminal.rs,7228,kitty_graphics_shared_memory_copies_the_requested_range,build feature / option,compile-time scope,0
+RET,crates/rustty-vt/src/stream_terminal.rs,7260,kitty_graphics_shared_memory_truncated_after_fstat_is_invalid_data,build feature / option,compile-time scope,0
+RET,crates/rustty-vt/src/terminal.rs,9595,terminal_print_kitty_unicode_placeholder,build feature / option,compile-time scope,0
+RET,crates/rustty-vt/src/terminal.rs,9629,terminal_erase_line_clears_the_kitty_virtual_placeholder_flag,build feature / option,compile-time scope,0
+RET,crates/rustty-vt/src/terminal.rs,18860,terminal_full_reset_preserves_kitty_graphics_limits,build feature / option,compile-time scope,1
+RET,crates/rustty-vt/src/terminal.rs,18963,terminal_glyph_apc_stores_session_glossary_entries,build feature / option,compile-time scope,1
+RET,crates/rustty-vt/src/terminal.rs,23014,ud131_vt_release_one_style_below_the_ceiling_keeps_the_style,build profile,compile-time scope,0
+MSG,crates/rustty-vt/src/terminal.rs,22916,ud131_vt_expect_degraded,build profile,compile-time scope,0
+MSG,crates/rustty-vt/src/terminal.rs,23013,ud131_vt_release_one_style_below_the_ceiling_keeps_the_style,build profile,compile-time scope,0
+RET,crates/rustty-vt/tests/fuzz_corpus_replay.rs,318,port_corpus_matches_oracle_bytes,oracle / corpus / git checkout,runtime resource,0
+RET,crates/rustty-vt/tests/fuzz_corpus_replay.rs,358,replay_full_oracle_corpus,oracle / corpus / git checkout,runtime resource,0
+MSG,crates/rustty-vt/tests/fuzz_corpus_replay.rs,317,port_corpus_matches_oracle_bytes,oracle / corpus / git checkout,runtime resource,0
+MSG,crates/rustty-vt/tests/fuzz_corpus_replay.rs,357,replay_full_oracle_corpus,oracle / corpus / git checkout,runtime resource,0
+RET,crates/rustty-xev/src/dynamic.rs,5525,dynamic_pty_queued_writes,target OS / arch,compile-time scope,1
+RET,crates/rustty/tests/cli_smoke.rs,242,new_window_not_supported,build feature / option,compile-time scope,0
+RET,crates/rustty/tests/cli_smoke.rs,261,no_args_usage_banner,build feature / option,compile-time scope,0

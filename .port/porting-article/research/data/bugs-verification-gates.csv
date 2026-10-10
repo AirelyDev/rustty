@@ -1,0 +1,14 @@
+gate,tool,platform,date,head,tests,wall_seconds,result,findings,source
+G6 (first full rustty-vt sweep),Miri Stacked Borrows,macOS arm64,2026-07-11,3277f2f78,2037,,9 real SB UB (search) + ~70 intractable + 3 FFI + 1 ICE,9 UB tests (1 class),.port/phase-2/VT_MIRI_SWEEP.md
+G6 (vt search re-verify),Miri Stacked Borrows,macOS arm64,2026-07-29,,65,,GREEN (30 pass + 35 documented exceptions; UB=0),0,memory search-screen-sb-ub-finding (re-verified)
+G6 nextest (V27-V29 groups),Miri Stacked Borrows,macOS arm64 (M4 Pro),2026-10-02,5e8cbd918,445,1687,GREEN (6.9x faster than libtest 11722 s),0,.port/phase-2/MIRI_EXCEPTIONS.md P7-W15
+G6t first run,Miri Tree Borrows,macOS arm64,2026-10-02,5e8cbd918,1018,11100,RED at first finding,N500 (test-side TB UB),.port/phase-2/MIRI_EXCEPTIONS.md P7-W15
+G6t second run,Miri Tree Borrows,macOS arm64,2026-10-02,b2c119aba,2375,15120,7 failures -> fixed -> GREEN,N505 (7 test-side TB UB),.port/phase-2/MIRI_EXCEPTIONS.md P7-W15
+G6 (38 crates),Miri Stacked Borrows,macOS arm64,2026-10-06,04f0a894c,,13354,GREEN after N507 (rustty-vt 3104 tests in 9525 s),N507 (gate-side),.port/parity-closure/README.md
+G6c (debug assertions off),Miri Stacked Borrows,macOS arm64,2026-10-06,04f0a894c,124,1110,GREEN,0,.port/parity-closure/README.md
+G-ASAN,AddressSanitizer,macOS arm64,2026-10-02,,9850,900,GREEN (117 of 117 ASan claims; 459 Miri-excepted tests ran / 9 expected absent),N495-N499,.port/parity-closure/README.md
+G-LSAN,ASan+LeakSanitizer,Linux aarch64 (rvm),2026-10-02,05478107,10111,1200,GREEN (cross-check 412 ran / 56 expected absent / 0 problems),N498 N499,.port/parity-closure/README.md
+G-LSAN,ASan+LeakSanitizer,macOS arm64,2026-10-02,,9850,1980,GREEN after fixes,UD376 N502 N503,.port/parity-closure/README.md
+G-MSAN,MemorySanitizer,Linux aarch64 (rvm),2026-10-02,,6183,3000,GREEN,0 in Rustty code,.port/parity-closure/README.md
+G-TSAN,ThreadSanitizer,macOS arm64,2026-10-07,,4380,2280,GREEN after fix,UD377 (vendored Highway data race) N508,.port/parity-closure/README.md
+G-VALGRIND,Valgrind memcheck,Linux aarch64 (rvm),2026-10-07,1e84e3ff5,6614,13451,GREEN after test fix + Mesa suppressions; 0 errors in Rustty code,N509 N510 (Mesa / llvmpipe),.port/parity-closure/README.md

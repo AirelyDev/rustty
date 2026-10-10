@@ -1,0 +1,61 @@
+crate,kind,first_commit,first_date,first_subject,exists_at_head,first_date_rust_loc_ge_1000
+rustty,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-07-17
+rustty-apprt,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-07-02
+rustty-apprt-api,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-07-01
+rustty-args,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-06-25
+rustty-bench,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-07-09
+rustty-build-config,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-09-11
+rustty-cfg-fmt,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,
+rustty-cli,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-07-02
+rustty-config,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-06-25
+rustty-core,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-07-02
+rustty-crash,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-07-01
+rustty-datastruct,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-06-21
+rustty-font,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-06-25
+rustty-global,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-07-30
+rustty-identity,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,
+rustty-input,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-06-25
+rustty-inspector,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-07-14
+rustty-lib,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-06-21
+rustty-os,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-06-21
+rustty-render-types,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-06-22
+rustty-renderer,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-07-01
+rustty-simd,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-06-21
+rustty-synthetic,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-07-09
+rustty-terminfo,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-08-17
+rustty-termio,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-07-01
+rustty-unicode,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-06-21
+rustty-util,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,
+rustty-vt,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-06-21
+rustty-vt-c,crate,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-06-25
+dcimgui-sys,sys,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,
+fontconfig-sys,sys,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,
+freetype-sys,sys,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,
+gettext-sys,sys,f7eba28e9,2026-06-21,rustty: os prep — deps + gettext-sys + pty.c + module skeleton,yes,
+glslang-sys,sys,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,
+harfbuzz-sys,sys,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,
+highway-sys,sys,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,
+libpng-sys,sys,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,
+oniguruma-sys,sys,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,
+sentry-sys,sys,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,
+simdutf-sys,sys,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,
+spirv-cross-sys,sys,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,
+wuffs-sys,sys,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,
+zlib-sys,sys,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,
+rustty-zigstd,crate,8b55b12ba,2026-06-22,rustty: add rustty-zigstd infra crate (skeleton),yes,2026-06-22
+rustty-font-shaper,crate,89d921595,2026-06-30,rustty: font-shaper F3 scaffold + face backend selector,yes,2026-06-30
+rustty-z2d,crate,0467b4db9,2026-06-30,rustty: port z2d subset (2D vector rasterizer) -> rustty-z2d,yes,2026-06-30
+rustty-oniguruma,crate,61ced867b,2026-07-01,rustty: rustty-oniguruma safe wrapper (oni::* API) + tests,yes,2026-07-01
+rustty-apprt-c,crate,7e311ab24,2026-07-02,rustty: embedded E0 — apprt-c crate scaffold + none/browser backends + rustty_init,yes,2026-07-02
+rustty-xev,crate,b305daaa9,2026-07-02,"rustty: core C0 — xev crate, zigstd Mutex, apprt-api growth methods, mailbox Timeout/Size, type-Core decision",yes,2026-07-03
+rustty-helpgen,crate,656ceed78,2026-07-03,rustty: help_strings doc-table generator + un-defer explain_config + --docs/+help,yes,
+rustty-wuffs,crate,498aeac27,2026-07-08,rustty: renderer background-image pipeline — wuffs PNG/JPEG decode + rustty-wuffs crate,yes,2026-07-15
+rustty-extra,crate,b6217aa36,2026-07-09,"rustty: sub-project #3 — port src/extra/** (shell-completion + editor-syntax generators, byte-exact)",yes,2026-07-09
+rustty-vaxis,crate,2e8e10e50,2026-07-09,rustty: TUI-CLI / vaxis chunk 1a — port the vaxis value types into rustty-vaxis (Miri-clean),yes,2026-07-09
+rustty-zf,crate,56d139636,2026-07-09,"rustty: TUI-CLI groundwork — port the zf fuzzy finder into rustty-zf (rank bit-faithful, Miri-clean)",yes,2026-07-09
+rustty-wasm,crate,992f91f30,2026-07-15,rustty: WASM/web target — headless C-ABI module + wasm32 os proof (completeness-fill: wasm),yes,
+rustty-web-canvas,crate,6c432f314,2026-07-15,rustty: web_canvas font backend + true browser-freestanding wasm,yes,
+libxml2-sys,sys,af0d065d9,2026-07-17,libxml2-sys: vendor libxml2 2.11.5 (cc + bindgen + KAT) — L3 T2,yes,
+rustty-zigimg,crate,b4907ad6f,2026-07-29,rustty-zigimg: crate skeleton + decode (wuffs png/jpeg) + rgb24/rgba32 convert + PNG encoder over vendored zlib (WS12 T6+T7),yes,2026-07-30
+breakpad-sys,sys,8120dd10d,2026-08-11,"codex-vet: vet all 147 audited parity findings, remediate 140, restore Windows",yes,
+rustty-version,crate,9582c0f36,2026-09-23,parity T-B fix round: the git-derived version is its own leaf crate; UD150 fixed under R13; N110,yes,

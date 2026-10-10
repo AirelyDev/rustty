@@ -1,0 +1,206 @@
+id,class,reachability_source
+UD1,crash,peer process (D-Bus/X11/Wayland)
+UD2,crash,peer process (D-Bus/X11/Wayland)
+UD3,crash,other
+UD4,crash,other
+UD5,latent,peer process (D-Bus/X11/Wayland)
+UD6,crash,VT stream / terminal output
+UD7,crash,VT stream / terminal output
+UD8,crash,VT stream / terminal output
+UD9,crash,VT stream / terminal output
+UD10,crash,VT stream / terminal output
+UD11,crash,VT stream / terminal output
+UD12,intent-breaking,other
+UD13,ub,library C API / embedder
+UD14,test-weakness,none at the pin
+UD15,test-weakness,none at the pin
+UD16,test-weakness,none at the pin
+UD17,test-weakness,none at the pin
+UD18,test-weakness,none at the pin
+UD19,latent,VT stream / terminal output
+UD20,latent,config file
+UD21,latent,OS / driver behaviour
+UD22,latent,library C API / embedder
+UD23,latent,file / font input
+UD24,latent,none at the pin
+UD25,latent,none at the pin
+UD26,latent,none at the pin
+UD27,latent,OS / driver behaviour
+UD28,latent,none at the pin
+UD29,latent,none at the pin
+UD30,latent,none at the pin
+UD31,latent,library C API / embedder
+UD32,latent,OS / driver behaviour
+UD33,latent,none at the pin
+UD34,latent,none at the pin
+UD35,latent,none at the pin
+UD36,latent,none at the pin
+UD37,latent,none at the pin
+UD38,latent,none at the pin
+UD39,latent,none at the pin
+UD40,latent,none at the pin
+UD41,latent,none at the pin
+UD42,latent,none at the pin
+UD43,latent,none at the pin
+UD44,latent,file / font input
+UD45,latent,none at the pin
+UD46,test-weakness,none at the pin
+UD47,test-weakness,none at the pin
+UD48,latent,library C API / embedder
+UD49,latent,none at the pin
+UD50,latent,none at the pin
+UD51,latent,none at the pin
+UD52,latent,none at the pin
+UD53,latent,library C API / embedder
+UD54,latent,none at the pin
+UD55,latent,build
+UD56,crash,peer process (D-Bus/X11/Wayland)
+UD57,crash,config file
+UD58,crash,config file
+UD59,crash,config file
+UD60,crash,library C API / embedder
+UD61,crash,VT stream / terminal output
+UD62,crash,library C API / embedder
+UD63,crash,none at the pin
+UD64,crash,library C API / embedder
+UD65,crash,file / font input
+UD66,latent,file / font input
+UD67,crash,none at the pin
+UD68,leak,other
+UD69,leak,library C API / embedder
+UD70,crash,other
+UD71,crash,config file
+UD72,crash,library C API / embedder
+UD73,crash,allocation failure
+UD74,deadlock/hang,file / font input
+UD75,crash,library C API / embedder
+UD76,crash,config file
+UD80,crash,VT stream / terminal output
+UD90,crash,config file
+UD91,crash,config file
+UD92,ub,file / font input
+UD93,deadlock/hang,other
+UD94,crash,file / font input
+UD95,crash,config file
+UD96,crash,config file
+UD97,crash,config file
+UD98,crash,config file
+UD99,crash,library C API / embedder
+UD100,crash,library C API / embedder
+UD101,deadlock/hang,config file
+UD102,deadlock/hang,other
+UD103,ub,other
+UD104,ub,library C API / embedder
+UD105,ub,peer process (D-Bus/X11/Wayland)
+UD106,latent,none at the pin
+UD107,ub,file / font input
+UD108,ub,other
+UD109,test-weakness,config file
+UD110,leak,file / font input
+UD111,leak,config file
+UD112,leak,peer process (D-Bus/X11/Wayland)
+UD113,ub,library C API / embedder
+UD114,crash,none at the pin
+UD115,crash,library C API / embedder
+UD131,crash,other
+UD140,intent-breaking,VT stream / terminal output
+UD141,intent-breaking,VT stream / terminal output
+UD150,latent,build
+UD160,crash,library C API / embedder
+UD170,crash,library C API / embedder
+UD171,ub,VT stream / terminal output
+UD172,ub,VT stream / terminal output
+UD173,latent,config file
+UD174,latent,peer process (D-Bus/X11/Wayland)
+UD180,latent,library C API / embedder
+UD181,latent,none at the pin
+UD182,latent,none at the pin
+UD190,crash,file / font input
+UD200,deadlock/hang,file / font input
+UD201,crash,OS / driver behaviour
+UD202,crash,library C API / embedder
+UD203,intent-breaking,other
+UD204,intent-breaking,config file
+UD205,intent-breaking,VT stream / terminal output
+UD206,latent,none at the pin
+UD210,intent-breaking,allocation failure
+UD211,intent-breaking,other
+UD230,intent-breaking,VT stream / terminal output
+UD245,latent,library C API / embedder
+UD246,deadlock/hang,library C API / embedder
+UD247,leak,config file
+UD248,latent,none at the pin
+UD249,latent,library C API / embedder
+UD250,latent,none at the pin
+UD251,leak,config file
+UD252,crash,file / font input
+UD260,crash,library C API / embedder
+UD261,intent-breaking,library C API / embedder
+UD262,crash,file / font input
+UD263,crash,library C API / embedder
+UD264,crash,library C API / embedder
+UD265,intent-breaking,library C API / embedder
+UD266,intent-breaking,library C API / embedder
+UD267,latent,library C API / embedder
+UD270,latent,other
+UD271,latent,other
+UD272,latent,other
+UD273,latent,other
+UD275,latent,none at the pin
+UD276,test-weakness,none at the pin
+UD280,intent-breaking,library C API / embedder
+UD281,test-weakness,none at the pin
+UD290,crash,config file
+UD291,intent-breaking,library C API / embedder
+UD295,ub,other
+UD300,latent,other
+UD301,latent,build
+UD305,deadlock/hang,library C API / embedder
+UD310,leak,library C API / embedder
+UD311,latent,none at the pin
+UD312,crash,library C API / embedder
+UD313,leak,library C API / embedder
+UD314,leak,library C API / embedder
+UD315,intent-breaking,library C API / embedder
+UD320,leak,library C API / embedder
+UD321,intent-breaking,file / font input
+UD325,crash,library C API / embedder
+UD326,deadlock/hang,VT stream / terminal output
+UD330,test-weakness,library C API / embedder
+UD331,intent-breaking,library C API / embedder
+UD340,intent-breaking,OS / driver behaviour
+UD341,intent-breaking,other
+UD342,intent-breaking,config file
+UD343,latent,none at the pin
+UD344,intent-breaking,file / font input
+UD345,intent-breaking,other
+UD346,intent-breaking,file / font input
+UD350,leak,config file
+UD351,crash,VT stream / terminal output
+UD352,ub,other
+UD353,leak,allocation failure
+UD354,intent-breaking,config file
+UD355,ub,OS / driver behaviour
+UD356,intent-breaking,OS / driver behaviour
+UD357,intent-breaking,build
+UD358,intent-breaking,config file
+UD359,intent-breaking,library C API / embedder
+UD360,intent-breaking,library C API / embedder
+UD361,crash,none at the pin
+UD362,deadlock/hang,VT stream / terminal output
+UD363,ub,OS / driver behaviour
+UD364,crash,library C API / embedder
+UD365,ub,config file
+UD366,ub,config file
+UD367,ub,OS / driver behaviour
+UD368,ub,other
+UD369,crash,library C API / embedder
+UD370,crash,library C API / embedder
+UD371,crash,VT stream / terminal output
+UD372,crash,VT stream / terminal output
+UD373,intent-breaking,library C API / embedder
+UD374,intent-breaking,VT stream / terminal output
+UD375,intent-breaking,library C API / embedder
+UD376,leak,OS / driver behaviour
+UD377,ub,VT stream / terminal output
+UD378,intent-breaking,library C API / embedder

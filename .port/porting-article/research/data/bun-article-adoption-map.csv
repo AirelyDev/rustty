@@ -1,0 +1,17 @@
+bun_idea,article_section,rustty_artifact_or_rule,rustty_commit,status
+"Adversarial split-context review (1 implementer, 2 reviewers, 1 fixer; default-reject)",Split context windows; Trial run,R11 (ratified 2026-07-10),ccd14200e,ADOPTED
+LIFETIMES.tsv field-ownership ledger built by classify workflow + 2 adversarial reviewers,Prep work,"R11 + .port/audits/GHOSTTY_LIFETIMES.tsv (315 rows, 18 classes) + LIFETIMES_AUDIT_2026-07-10.md (20 findings)",8f6d781dc; b4845f427; dcae8d61e,ADOPTED (retroactive + prospective pre-port prong)
+PORTING.md living rulebook / pattern map,Prep work,"PORT_RULES.md R7 (replacement-primitive semantics), R8 (comptime/build-switch), R10 (markers)",ccd14200e,ADAPTED (Rustty already had R1-R6)
+"Agent git discipline: no stash/reset, commit explicit paths",False starts,R11 swarm hygiene clause,ccd14200e,ADOPTED
+Worktree sharding with N agents per shard,False starts,R11 swarm hygiene; memory parallel-worktree-disk-budget (<=3 building worktrees),-,ADAPTED
+Reject paragraph-long justification comments,Another false start,BUN_PORT_LEARNINGS 3.3 anti-justification rule (scoped to new agent prose; ported comments untouchable),2c03357ce,ADAPTED
+debug_assert! side-effect regression class,Porting mistakes,R7 asserts clause + DG2/DG4 release-profile semantics,ccd14200e,ADOPTED
+Odd-length slice reinterpret class,Porting mistakes,D1 detector .port/audits/slice-reinterpret.tsv,-,ADOPTED
+Bounds checks / placeholder constant class,Porting mistakes,D2 capacity-saturation.tsv + D3 constants-by-expression (R8),-,ADOPTED
+comptime format-string class,Porting mistakes,R8 comptime-phase preservation + D4,ccd14200e,ADOPTED
+"unsafe accounting (bun-unsafe-audit: one rg command, density)",The work continues,R9 + .port/audits/count-unsafe.sh + unsafe-census-*.json + UNSOUND_SAFE.md,d8ee18a75,ADOPTED
+LeakSanitizer tracking all native allocations,We fixed every instrumentable memory leak,"R6 (pre-existing: Miri primary, ASan FFI, LSan Linux) + D6 sanitizer canary",-,ALREADY-COVERED + sharpened
+Main-parity re-porting of upstream commits (Bun phase-H),"(PR, not article)",R12 upstream parity + ORACLE_SYNC.md pin advances,ccd14200e,ADOPTED
+"Fix the process, not the code",Loops that write & review code,workflow scripts .port/phase-2/wf-*.js edited between rounds,-,ADOPTED
+Same language-independent test suite as oracle,Why Rust?,R3 external oracle: Ghostty binary/tests; Zig tests ported (R1) rather than reused,-,"ADAPTED (Ghostty tests are Zig, so ported, not reused)"
+Non-compiling Phase-A draft then compiler-errors-as-queue,Compiler errors as a work queue,REJECTED as main loop: Rustty gates every sub-batch compiled+tested (R5/R6),2c03357ce,REJECTED

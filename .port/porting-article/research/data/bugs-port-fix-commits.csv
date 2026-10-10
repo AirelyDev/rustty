@@ -1,0 +1,479 @@
+commit,date,week_start,category,subject
+45de1c576,2026-10-08,2026-10-05,other fix,records: cross-host build evidence as plain text (P8-W9 T1b fix)
+51e38fba6,2026-10-08,2026-10-05,other fix,records: finale records and G3b/rustty-extra evidence after T1a (P8-W9 T1 fix 1)
+91ded4f69,2026-10-08,2026-10-05,other fix,gates: cvt-parity NOT COVERED exit + --all driver; G3b anchor-missing is a FAIL line (P8-W0 T7 fix 1)
+cdff71df8,2026-10-08,2026-10-05,other fix,"test: G-ESCTEST uses one target dir for fetch, build and run; fetch.sh re-verifies the installed tree (P8-W8 T1 fix 1)"
+de013d460,2026-10-08,2026-10-05,upstream defect (R13/UD),"test: esctest log in a private mkdtemp directory, not a fixed /tmp name (UD378) (438d584f0) (P8-W8 T1)"
+daee56664,2026-10-08,2026-10-05,other fix,"vt-c records/gates: FFI test is an SB control for the OSC-limit seam; arm (f) baseline keyed to definition sets, brace-matched cfg(test) skip (N551) (P8-W5 T3 fix 2)"
+75d0ff222,2026-10-08,2026-10-05,other fix,vt-c: P8-W5 T3 fix 1 — OSC UnknownC collision in rustty.h + A5 arm (f); osc-limit re-entry Miri harness; measured Miri exceptions; setter guard test (N551) (P8-W5 T3 fix 1)
+509f0eac9,2026-10-08,2026-10-05,other fix,"vt-c: unknown OSC, program status, semantic prompt, reset, memory usage, snapshot compression, paste fix (7b11f3dca, 520d8f55a, bae2c3cdb, 7bb45ba34, 02c51decf, 51d3ca168, fa604a170, 2b0ceff7d, aca9bf031, 82ae67b9f, 9a4787d90, b1bfd1d9c, 8834e161c, 88e66cbc6) (P8-W5 T3)"
+d48331c27,2026-10-08,2026-10-05,other fix,"vt: record P8-W5 T1 Miri exceptions, Miri-sized history compress test, trim ported test (8834e161c, 88e66cbc6) (P8-W5 T1 fix 1)"
+b2b22714a,2026-10-07,2026-10-05,other fix,termio: hard-code oracle DECRQCRA checksums in the Review Focus 2 test (P8-W3 T2 fix 1)
+fb458471b,2026-10-07,2026-10-05,crash (panic/signal),"renderer: W6 T2 review fixes — metal mod comment, Options.device contract, DeviceFailed panic cause (P8-W6 T3)"
+e1467183a,2026-10-07,2026-10-05,other fix,"vt: OSC 7501 decoders as compile-time statics, header example (P8-W4 T3 fix 1)"
+3164bae28,2026-10-07,2026-10-05,other fix,"gates: G9 self-test claims only what it checks; real osc::Command arm (N523, N524) (P8-W0 T5 fix 1)"
+a1c5aec2c,2026-10-07,2026-10-05,other fix,vt: single-shift test shapes precede zero-width codepoints; mirror upstream inlining (P8-W1 T2 fix 1)
+4eee1318e,2026-10-07,2026-10-05,leak,records: renumber P7-W18's N520/N521 to N509/N510; N509 records why the leak is bounded (P7-W18 review)
+1c465c6d9,2026-10-07,2026-10-05,data race / deadlock,"G-TSAN review fixes: hwy header rerun triggers, non-vacuous archive check, wrapper comment (P7-W17)"
+ed830178c,2026-10-07,2026-10-05,upstream defect (R13/UD),gate(G-TSAN): ThreadSanitizer over the threaded crates; UD377 Highway dispatch race fixed (P7-W17)
+3ba19cefb,2026-10-06,2026-10-05,other fix,G6t review fixes: every run checks its scope; renderer scope back to the 66 Miri-passing tests (P7-W15)
+8ff0fb60c,2026-10-06,2026-10-05,other fix,"P7-W15 finale: G6 GREEN on nextest (N507 gate fix), G6t complete at 04f0a894c; V27-V29 discharged"
+9eb49e0d5,2026-10-02,2026-09-28,data race / deadlock,"P7-W16a fix round 2: per-crate hang bound in sanitizers.sh; N506 (macOS ASan fork deadlock, intermittent); S9 third frame XTCopyPropertiesForFont; Mac G-LSAN GREEN"
+6bdaf2b5f,2026-10-02,2026-09-28,other fix,"P7-W15 records: second G6t run (vt, xev GREEN; N501 fixed; renderer FFI-unrunnable under Miri, scope decision open)"
+3f8627a1b,2026-10-02,2026-09-28,data race / deadlock,"P7-W16a fix round 2 (WIP): per-crate hang bound in sanitizers.sh (HANG is RED, tree killed by PID), G-SAN-SELF hang arms, N505"
+53fe7660c,2026-10-02,2026-09-28,other fix,"P7-W16a fix round 1: narrow S9 (three registry frames), anchor S4, Darwin negative-control arms in G-SAN-SELF, N502 all-platform scope + Linux coverage gap, ThreadSharedBox docs"
+dcc2b2ada,2026-10-02,2026-09-28,crash (panic/signal),"P7-W16b follow-up: G-HWASAN checks its C instrumentation (archive check, A4 C overflow arm, fixture arms); atomics wording"
+18172f1cc,2026-10-02,2026-09-28,other fix,"P7-W16a fix round 1 (WIP): S9 narrowed to two frames, S4 anchored, Darwin negative-control arms in G-SAN-SELF, N502 all-platform scope and Linux gap, ThreadSharedBox docs"
+fd7c17c56,2026-10-02,2026-09-28,other fix,P7-W16a follow-up: renumber to N501-N503; fix N502 (surface teardown drops its render-thread/state blocks) and N503 (macOS renderer test helpers); S15-S17; R6 amendment
+ac750e2af,2026-10-02,2026-09-28,leak,P7-W16a: G-LSAN runs on macOS (rustc's ASan runtime has a working leak checker); MSan/HWASan BLOCKED reasons cited
+6d2d783ba,2026-10-02,2026-09-28,aliasing UB (Miri SB/TB),"P7-W15 records: nextest measurements (6.9x on V27-V29), G6c GREEN 124/124 in 1,110 s, G6t stopped RED at N500 (TB UB in a snapshot::codec test); V27-V29 not discharged; recipes on nextest; G6t module scopes run --lib"
+cc38272c3,2026-10-02,2026-09-28,other fix,"P7-W14 fix round 2: renderer MSan skips narrowed to the EGL/GL/glslang tests (81 run), N499 oracle lines, commit records"
+054781071,2026-10-02,2026-09-28,other fix,"P7-W14 fix round 2 (WIP): exact enclosing-mod matching, FAILED expected-absent RED, stale MSAN_SKIPS RED, narrow renderer opengl skips"
+d3c0fbf60,2026-10-02,2026-09-28,other fix,"P7-W14 fix round 1: Linux expected-absent rows, rustty-renderer MSan skips measured (52 tests), SAN_MSAN_DIAG diagnosis mode, records"
+7ddf62ffd,2026-10-02,2026-09-28,upstream defect (R13/UD),"P7-W14 fix round 1: UD376 withdrawn (N499), bench chunks per step; cross-check over every Miri exception by module path with a per-OS expected-absent list; rustty-renderer in G-MSAN with named skips; self-test arms for scope bookkeeping, BUILD, disk floor, SAN_ONLY; wording fixes"
+92672bd28,2026-10-01,2026-09-28,upstream defect (R13/UD),"G-LSAN first-run triage (WIP): UD376 bench clones freed, N496 test-side leaks/forks, Mesa suppressions, executed-test counting"
+ce7bc393b,2026-10-01,2026-09-28,upstream defect (R13/UD),"records: N492 closed (test-side Tree Borrows UB in five rustty-vt tests; P7-W12 T7); next free UD376, N494, V30"
+62141fd62,2026-09-30,2026-09-28,other fix,"gates: G-NIX step 4 strips ANSI, reds every unconsumed error line, and blocks only an exit-code wasmtime failure carrying N489's marker (P7-W12 T5 fix round 2)"
+6c3299c38,2026-09-30,2026-09-28,upstream defect (R13/UD),"records: UD375 (upstream CMake soname links), N489 (dev shell BLOCKED on nixpkgs wasmtime), N490 (A1 header override, open); N483 round-1 notes; id register (P7-W12 T5 fix round 1)"
+5033457bd,2026-09-30,2026-09-28,other fix,gates: G-NIX builds the dev shell again (BLOCKED only on N489); G1b's main() pin check has a negative control; the new resolver users join G-ORACLE-SH-SELF (P7-W12 T5 fix round 1)
+46ada9153,2026-09-30,2026-09-28,other fix,"dcimgui-sys, inspector: ImGui tests set IniFilename = null and stop writing imgui.ini; the N485 scan covers the hand-written extern blocks; N485 toolchain note (P7-W12 T4 fix round 1)"
+39740f4b9,2026-09-30,2026-09-28,other fix,"fixes: N477 empty --shell-integration= resets, N478 cursor_left comment, N479 smoke links deps/, N480 wuffs-sys check-only, N481 G2 drift row (P7-W12 T3)"
+c03f11fcb,2026-09-30,2026-09-28,other fix,lint: prettier the ghostty-bug-fixes table; typos ignores the 'Earl Grey' theme name (P7-W12 T2 lane C G-LINT)
+132b40c4c,2026-09-30,2026-09-28,other fix,records: the reference-exe patch note in the gates README; N464 resync note (P7-W12 T1b fix round 1)
+46b6e88cf,2026-09-30,2026-09-28,other fix,"windows: the show-config differential cases compare byte-equal after targeted R2 normalisers, with a selftest (P7-W12 T1b fix round 1)"
+0c15d54a0,2026-09-30,2026-09-28,other fix,gates: fix round — application.zig allowance back to 0 (W6 T2 ported both resize_window logs); masking control covers (a3b); stale reason refs; README/ci.yml notes (P7-W12 T0)
+513f603bc,2026-09-29,2026-09-28,other fix,terminal: route the CSI 8 t arm through csi_dispatch's handler argument after the W2.T9 raw-self drivers (merge fix-up) (P7-W6 T1)
+51d144279,2026-09-29,2026-09-28,upstream defect (R13/UD),"core: CSI 8 t fix round 1 — N456, UD371 padding trigger (714fe9b90, 2a987d59d) (P7-W6 T1)"
+328bc9b26,2026-09-29,2026-09-28,upstream defect (R13/UD),"render: P7-W3 fix round 1 (Ruling 53): UD369/UD370 ids, bench loops, clamp tests"
+7b34d78bf,2026-09-29,2026-09-28,aliasing UB (Miri SB/TB),"records: N452, re-entrant Terminal C API calls from effect callbacks (port-only SB UB; Ruling 51)"
+e4cca1da9,2026-09-29,2026-09-28,other fix,"core: the search callback reads a spawn-time context, not the surface (N444 fix round 1) (P7-W7 T5c)"
+729c7cd10,2026-09-29,2026-09-28,other fix,"libvt: fix round 1 — add the C: RusttyMouseShape doc line to mouse::Shape (78494bad8, 67fb0c940) (P7-W2 T4)"
+19cb14955,2026-09-29,2026-09-28,upstream defect (R13/UD),"core: records for T5b fix round 2: UD366 (was N448), N441 backend teardown (P7-W7 T5b)"
+78f20317f,2026-09-29,2026-09-28,upstream defect (R13/UD),renderer: tear the backend down in Renderer::deinit and drop the renderer after it; UD366 test and notes; UD365 compile_fail arm (P7-W7 T5b fix round 2)
+d9b29b064,2026-09-29,2026-09-28,upstream defect (R13/UD),"terminal: fix round 1 on kitty temp-dir shared copy — refute UD365, close soundness hole (ruling 44) (105d0a545) (P7-W2 T3)"
+f38a79bff,2026-09-29,2026-09-28,upstream defect (R13/UD),"core: records for T5b fix round 1: N441-N443 closed, N448 filed, N444 to W7.T5c, UD368 (P7-W7 T5b)"
+c239609a6,2026-09-29,2026-09-28,other fix,"core: free the out-of-line renderer after deinit, raw-self core and embedded App entries across host callbacks, snapshot performAllAction's surface list (N441, N442, N443, N448) (P7-W7 T5b fix round 1)"
+e282fcd50,2026-09-29,2026-09-28,other fix,"renderer, core: arm the animation timer after a draw_now draw while a health report is owed; wake only when a report becomes owed (P7-W7 T5a fix round 3)"
+9330ff35d,2026-09-29,2026-09-28,other fix,renderer: track the surface's last-heard health and pace the report retry (P7-W7 T5a fix round 2)
+2d9735bf1,2026-09-29,2026-09-28,upstream defect (R13/UD),terminal: Screen.clone deinits its PageList on every error; record UD364 (clone viewport-fill grow over a stale pool copy) (P7-W1 T5 fix round 1)
+3e527aff8,2026-09-29,2026-09-28,other fix,"renderer: keep the reference's store-push-release order with a non-blocking health push, withdrawal and draw_now retry; narrow LayerCell (P7-W7 T5a fix round 1)"
+7043dc96e,2026-09-29,2026-09-28,other fix,"terminal: batch DEC-special/British charset print, fix reverse-wrap cursor jump, fix word-selection hard breaks and wide chars (a4f0d9f4a, d4f45bee3, c4f15c884, a3e80a685) (P7-W4 T3)"
+a07176fc5,2026-09-29,2026-09-28,other fix,"macos: window cascading fixes, glass flicker, find previous, title clipping, move_tab_to_new_window, Shortcuts.app duplicate windows, tab bar opacity (d4a5ff58b, 451e224c6, 310797df1, a8b0855b6, e8936b896, aafacb1cb, e347482fb, 74e47a706, 1a8f331f1, e8fe0a5e6, b94b3a056) (P7-W9 T1)"
+292e0f3b9,2026-09-29,2026-09-28,other fix,rustty-vt-c: pin the kitty export cfg to rustty-vt's KITTY_GRAPHICS; gate extern-calling tests (Ruling 30) (P7-W5 T2 fix round 2)
+2e08239e2,2026-09-29,2026-09-28,other fix,"terminal/kitty: Kitty graphics and wuffs off on freestanding wasm, as upstream's lib-vt wasm (Ruling 30) (P7-W5 T2 fix round 1)"
+87203128d,2026-09-28,2026-09-28,other fix,datastruct: one unmanaged ArrayList for vt and UntouchedPool; pool fields private (e01e75bbb) (P7-W1 T4 fix round 1)
+24ea4a9ea,2026-09-28,2026-09-28,other fix,shell-integration: cover ed7f046ee/a4031c8e3 (attributed/pre-populated PROMPT_COMMAND arrays) in the wired gate (P7-W11 fix round 2)
+be3971b59,2026-09-28,2026-09-28,upstream defect (R13/UD),"fontconfig-sys: fix the reference's GNU Windows build and stale cache stamp (UD358, UD360) (501e7b5c1) (P7-W10 T1)"
+55e8c9b8c,2026-09-28,2026-09-28,other fix,"shell-integration: wire the bash exit-status test into cargo test, add RUSTTY_REQUIRE_BASH44, fix VENDORING.md pin (P7-W11 fix round 1)"
+0a6facc4f,2026-09-28,2026-09-28,upstream defect (R13/UD),"parity tail: merge tail-u1 (U-1: OSC 7 long percent-encoded host crash confirmed in Ghostty at the pin, UD351; Rustty guard tested)"
+6a9fdfcbc,2026-09-28,2026-09-28,leak,"parity tail G-1: the Miri runner classifies on content with LEAK/INTERP/BUILD buckets, uses a unique work dir, and self-tests on captured Miri output (N31)"
+0037cd2a2,2026-09-28,2026-09-28,other fix,"parity tail F-1: record N383 and N353 fixed, N347's residual confirmed, N355 closed unreproduced (1202 runs); V25 debt (N347, N353, N355, N383)"
+2326e5d63,2026-09-28,2026-09-28,other fix,parity tail: merge tail-c1 (C-1: ci.sh reds fixed with fast checks; N390-N395; G4 goldens re-based; G-KAITAI HARD)
+110ecea98,2026-09-28,2026-09-28,aliasing UB (Miri SB/TB),"parity tail: merge tail-x1 (X-1/X-2/X-3: N385, N430-N432, N434 event-loop aliasing fixes)"
+eed3f3def,2026-09-28,2026-09-28,other fix,parity tail: merge tail-a1b (A-1 review fixes F1-F7)
+8a0c6703a,2026-09-28,2026-09-28,other fix,"parity tail X-3: record N434 fixed; LIFETIMES heap root row notes timer_ptr, row 262 port column names the live wasi_watcher.rs AsyncLoopState; mirihar-n431 README says its timer queue cannot see N434 (N434; review X-2 F2, F3)"
+6d265a75c,2026-09-28,2026-09-28,other fix,"parity tail X-2: record N430 and N431 fixed, N432 latent reference shape (N430, N431, N432)"
+fe92ee7ff,2026-09-28,2026-09-28,other fix,parity tail X-1: record N385 fixed; iocp watcher AsyncTests are live (N385)
+250ed6228,2026-09-27,2026-09-21,leak,"parity tail C-1: the unaligned-page tests free their buffer on unwind (Miri leak, G6)"
+7d8a101a8,2026-09-27,2026-09-21,upstream defect (R13/UD),"parity tail L-5: records: N400-N407 (tool-BLOCKED gates run green; font-shaper and xev leaks fixed; valgrind scope survey), UD350 (SharedGridSet.ref leaks the collection when SharedGrid.init fails, R13)"
+ec597e66b,2026-09-27,2026-09-21,leak,"parity tail L-5: the tool-BLOCKED gates run: G-BLUEPRINT, G-GTKFEAT, G-VALGRIND, G-KAITAI green; gate fixes (N400-N405, N407)"
+7f8639805,2026-09-27,2026-09-21,leak,parity tail L-5: the Linux event loop drops its backend loop; every termio thread leaked 240 bytes (N406)
+4b47c738a,2026-09-27,2026-09-21,upstream defect (R13/UD),"parity tail L-5: rustty-font-shaper's 88 memcheck leaks fixed; SharedGrid::init frees the resolver it consumed on error (N404, UD350 R13)"
+4994a5159,2026-09-27,2026-09-21,aliasing UB (Miri SB/TB),"parity tail W-5b: records: N381 closed (fixed, R1), N382 closed (test bug), N384 (EnvMap order, fixed), N385 (IOCP async_notify &Loop aliasing, recorded)"
+e9a68aa69,2026-09-27,2026-09-21,upstream defect (R13/UD),"parity tail W-5: records: UD344 fixed (R13) + ghostty-bug-fixes row; N340, N352 closed with Windows evidence; N381 (POSIX createMap first-wins vs Zig last-wins, recorded)"
+1aa2418a8,2026-09-27,2026-09-21,upstream defect (R13/UD),parity tail W-5: exe differential: PS 5.1 array fix for the stale check; a failed host listing check shows as a DIFF verdict (UD344)
+2c4ef39aa,2026-09-27,2026-09-21,upstream defect (R13/UD),"parity tail W-4b: records - N365/N367 corrected, UD341 (pipes only), UD340 reachability (F5), UD346, N380 (provisional id), bug-fixes rows"
+d0cf7c238,2026-09-27,2026-09-21,upstream defect (R13/UD),"parity tail P-1b: .envrc watches nix/pkgs/wraptest.nix (UD345 fixed under R13, controller ruling; review P-1 F5)"
+5b7ca1bec,2026-09-27,2026-09-21,crash (panic/signal),"parity tail P-1: G-VTFEAT reports BLOCKED, not a crash, when the oracle is absent (every CI leg)"
+8c5defba4,2026-09-27,2026-09-21,upstream defect (R13/UD),"parity tail W-2b: records after review W-2 (UD331 fixed, UD330 F4, V9/V10 F5, N347 F6, N346 F7, N350, N355)"
+47f670ba2,2026-09-27,2026-09-21,upstream defect (R13/UD),"parity tail W-2: Windows scopes and arms for POSIX-shaped tests; LF fixtures on Windows checkouts (N351, UD330)"
+a454e15a1,2026-09-27,2026-09-21,upstream defect (R13/UD),"parity tail: merge L-4 (+L-4b): S112-F5 closed in a real Flatpak sandbox; UD320, UD321; GTK drag-and-drop fixed on Linux (N336-N339); Linux-verified"
+3b84a0d1c,2026-09-27,2026-09-21,upstream defect (R13/UD),"parity tail L-4b: review fixes F1-F6 — split drop test, UD320 reachability, UD295 correction, class.rs doc, PREPORT correction; single-file drop pastes (R13, UD321)"
+16ef8680e,2026-09-27,2026-09-21,crash (panic/signal),parity tail: glyph_protocol_checks_the_glossary_allocator tears the terminal down before re-raising its expected panic (Miri reported the leak)
+560510da0,2026-09-27,2026-09-21,upstream defect (R13/UD),parity tail S7-8b: records — N334 and DEFERRALS F-008 list the snapshot decoder's source boxes and the kitty temp-dir copies (review F1); UD314 docs row wording (F2); Tier 1 paragraph names the selection-gesture handle (F6); N331 notes the writeByte fix and the NULL-allocator test
+c876d4742,2026-09-26,2026-09-21,parity bug (behaviour diverged from Ghostty),parity tail S7-8: the identity asserts name the passed allocator first (the mismatch message reads correctly)
+0530e455c,2026-09-26,2026-09-21,upstream defect (R13/UD),"parity tail S7-8: selection-gesture wrappers and the event codepoint copy go through the caller's allocator; the invalid-codepoint leak is not ported (R13, UD314)"
+a94c093c8,2026-09-26,2026-09-21,other fix,parity tail S7-7b: LEDGER S174-F3 cites the review-fix commits
+1393525b3,2026-09-26,2026-09-21,upstream defect (R13/UD),"parity tail S7-7b: records — UD310 (N321, OSC 10-13 only), UD311 (N322, latent; per-build consequence, Collection.zig caller), UD312 (N323, header contradiction, minimal trigger), UD313 (review F4, second end leaks); ghostty-bug-fixes rows for UD310/312/313; PORT NOTE ids"
+d4e0f8d00,2026-09-26,2026-09-21,upstream defect (R13/UD),"parity tail S7-5b: review fixes — UD315's in-row failure (UB by reading, UNVERIFIED), N315 records the user-accepted per-column cell storage and string/link_cells precisely, a duplicated test comment"
+1687cc703,2026-09-26,2026-09-21,other fix,parity tail S7-4b: S179-F2's evidence records the review fixes
+c63d84686,2026-09-26,2026-09-21,other fix,parity tail S7-4b: NEW-FINDINGS: N274 and N275 amended for the review fixes; N278 thread stacks
+79d4bbe98,2026-09-24,2026-09-21,upstream defect (R13/UD),"parity tail L-2: ghostty-bug-fixes.md entries for UD170, UD171, UD172 (R13 crash/UB fixes from tail-d)"
+6e363f292,2026-09-24,2026-09-21,other fix,"parity tail: merge S7-3 (+S7-3b): PageList/Screen/Terminal allocations routed through the caller allocator handle; N270, N273 Rust-heap shrink fixes; C-API failure sweep"
+92d2a56ba,2026-09-24,2026-09-21,upstream defect (R13/UD),"parity tail S-14b: records — N285 settled and closed (UD281), N286 corrected, N266 addendum, UD280 docs caveat (review M2, M3, L1, L4)"
+ac6d85431,2026-09-24,2026-09-21,other fix,"parity tail S-8a: font — restore 28 dropped reference comments, fix 19 reviews; correct stale headers"
+799c6ddef,2026-09-24,2026-09-21,upstream defect (R13/UD),parity tail: merge S-12 (+S-12b): tmux UD12 (capture-pane -C) and UD9 (pane state after captures) fixed; UD270-UD273 latent
+e03b39e33,2026-09-24,2026-09-21,upstream defect (R13/UD),"parity tail S-12b records: UD12 residual refuted and N250 qualified (review F1); bug-fix log rows claim only what users see at the pin (F2); UD273 capture style leak recorded, latent (F3); UD270-UD272 ruled latent with the .windows reopen trigger (F4)"
+b5882a2de,2026-09-24,2026-09-21,upstream defect (R13/UD),"parity tail: merge S-6 (+S-6b, S-6c): docs log backfill (87 rows), extended-R13 sweep; fixes UD19, UD20, UD27, UD245, UD246, UD247, UD251, UD252"
+049e05afd,2026-09-24,2026-09-21,upstream defect (R13/UD),"parity tail S-6c: records - UD252 entry, UD27 (2) fixed, UD246 late-reply note and unit tests (n4, n5); docs rows for UD252 and UD27"
+453997af5,2026-09-24,2026-09-21,upstream defect (R13/UD),parity tail S-6c: UD27 (2) fixed under R13 by ruling - keypad Begin is unmapped in the inspector instead of reaching imgui as Tab
+ddbb6de45,2026-09-24,2026-09-21,upstream defect (R13/UD),"parity tail S-6c: UD252 fixed under R13 (libvaxis read-loop carry) and UD246 hardened (EINTR retry, unit-tested helpers)"
+32e01d6f6,2026-09-24,2026-09-21,upstream defect (R13/UD),"parity tail S-12 records: UD9 and UD12 fixed (R13), N250, N251; new UD270 (%output never unescaped), UD271 (panes left on the alternate screen), UD272 (captures staircase) recorded for a controller ruling; ghostty-bug-fixes rows"
+08bacbab3,2026-09-24,2026-09-21,upstream defect (R13/UD),"parity tail S-12: fix tmux control-mode UD12 (capture-pane -C, decoded) and UD9 (pane state waits for a pane's own reply)"
+ef196d06b,2026-09-24,2026-09-21,upstream defect (R13/UD),"parity tail S-10c: records — review S-10b F1-F5 (UD261 proposed fix gated, UD263 reachability, UD260 Debug label, N240 probe anomaly and zigimg residual narrowed, ZF_DESIGN export names) and UD267 (latent: queue edge-only signalling)"
+a679db978,2026-09-24,2026-09-21,upstream defect (R13/UD),"parity tail S-6b: records - UD245, UD246, UD247, UD251 fixed (R13, controller ruling); UD5 and UD27(2) stay faithful by ruling; UD9 and UD12 fix assigned to S-12; four docs rows"
+39b962ae8,2026-09-24,2026-09-21,upstream defect (R13/UD),parity tail S-6b: UD245 fixed under R13 - libvaxis Windows table maps VK_F7 to F7 (Windows run pending)
+a3f53b5dd,2026-09-24,2026-09-21,upstream defect (R13/UD),parity tail S-6b: UD246 fixed under R13 - libvaxis Loop.stop returns when the terminal never answers ESC[5n
+7d3eaee04,2026-09-24,2026-09-21,upstream defect (R13/UD),"parity tail S-6b: UD247 and UD251 fixed under R13 - OpenGL createVF releases its objects on failure, Pipeline.deinit releases fbo and vao"
+894f0f086,2026-09-24,2026-09-21,upstream defect (R13/UD),"parity tail S-10b: records — NON_PORTS §G2 discharged (N240), DEFERRALS G2 struck and the Chunk 1b uucode premise corrected, REAUDIT row 15, UD261-UD266"
+fb3f917e4,2026-09-24,2026-09-21,upstream defect (R13/UD),parity tail S-6: record UD251 - OpenGL Pipeline.deinit leaks its framebuffer and vertex array on each shader rebuild
+e0e3a5354,2026-09-24,2026-09-21,other fix,"parity tail S-4 records: close N93, N173, N207; N215 (terminal-stream vs the pinned oracle, fixed)"
+9bd536150,2026-09-23,2026-09-21,upstream defect (R13/UD),"parity tail S-6: docs/ghostty-bug-fixes.md backfill - 55 new rows (57 UD ids: 54 earlier R13 fixes plus UD19, UD20, UD27)"
+8ca66a38e,2026-09-23,2026-09-21,upstream defect (R13/UD),parity tail S-6: UD19 fixed under extended R13 - output that arrives with the pty hangup is read (Linux run pending)
+98eeb7a7a,2026-09-23,2026-09-21,upstream defect (R13/UD),parity tail S-6: UD27 fixed under extended R13 - keypad Page Down reaches the inspector as Page Down
+780e5c440,2026-09-23,2026-09-21,upstream defect (R13/UD),parity tail S-6: UD20 fixed under extended R13 - custom-shader selection uniforms receive the colours they are named for
+c91955a5d,2026-09-23,2026-09-21,other fix,"parity tail-s2 (S-2c): review-S-2 fixes M1, N2, N3, N4 and the OffsetSlice PORT NOTE (N208)"
+6b9fda8ef,2026-09-23,2026-09-21,other fix,"parity tail: merge T-I (bench, input, inspector, renderer, stb, macos, simd, datastruct, unicode: 19 closed, S101-F1 waived; N180-N182) with its review fixes"
+f3b113622,2026-09-23,2026-09-21,upstream defect (R13/UD),parity tail S-9b review fixes: NON_PORTS §G2 records parseParam's parseInt as absorbed by N206; UD230 chain marked code-traced; N206 port-vs-escape reason; uri.rs cites Zig 0.16.0
+8719ded3b,2026-09-23,2026-09-21,other fix,"parity tail-s2 (S-2b) records: S155-F1 CLOSED by N82's fix; N82 tag-byte follow-up; N207 (OSC 8 stream 3.3x slower, OPEN); N208 (Offset.Slice field order, OPEN)"
+50c43bbcd,2026-09-23,2026-09-21,upstream defect (R13/UD),parity tail S-9b: close N206; UD230 and its ghostty-bug-fixes line
+382f7f5b3,2026-09-23,2026-09-21,crash (panic/signal),"parity tail T-H2: S6-F2 Decision A (run-time artifact for mode 5522, gate G-ARTIFACT); S43-F6 panic note corrected"
+b63e3d7b7,2026-09-23,2026-09-21,upstream defect (R13/UD),parity tail T-H2: R13 fixes for S111-F11 (UD210) and S111-F1 TMPDIR=/ (UD211); spawn-failure test (M1); N172
+f3ffa0e9f,2026-09-23,2026-09-21,crash (panic/signal),parity tail T-H: GTK launch path runs global.deinit (crash flush); a gtk-less Linux/FreeBSD rustty build is refused instead of panicking at launch
+d7d598948,2026-09-23,2026-09-21,crash (panic/signal),"parity T-G: io threads set their crash thread_state; termio Error carries the three failure-screen members (closes S212-F1, S212-F2; S211-F2 POSIX closed, Windows build pending)"
+4e5859910,2026-09-23,2026-09-21,other fix,"parity T-G: threadEnter selects threadMainWindows on Windows (S211-F3 fix written, Windows build pending)"
+36ffc425a,2026-09-23,2026-09-21,other fix,"parity T-G: the read pipeline ring is the pin's 4 x 64 KiB on every target (S211-F1 fix written, Linux run pending)"
+76a2bd2a7,2026-09-23,2026-09-21,upstream defect (R13/UD),"parity T-G: colorOperation's unbounded report accumulator recorded as an R13 fix (closes S214-F1, UD205)"
+7bfd50a8f,2026-09-23,2026-09-21,upstream defect (R13/UD),"parity T-G: setupBash's unbounded inject flags recorded as a deliberate R13 fix (closes S213-F2, UD204)"
+60fa143f1,2026-09-23,2026-09-21,upstream defect (R13/UD),"parity T-G: systemd comm check has both failure arms and a 16-byte read; notify address uses the reference length, fits its NUL, and handles abstract sockets (S112-F8 fix written, Linux run pending; UD202, UD203, N160)"
+f5694f9f5,2026-09-23,2026-09-21,parity bug (behaviour diverged from Ghostty),"parity T-G: passwd flatpak block keeps its errors, closes the pty on every exit, and cannot diverge from build_config.flatpak (S112-F5 fix written, Flatpak run pending)"
+7a4a20658,2026-09-23,2026-09-21,other fix,"parity T-G: resourcesDir works on raw bytes and returns bufPrint's NoSpaceLeft (closes S112-F1, S112-F2; S112-F3 fix written, Linux run pending)"
+b84ae40ed,2026-09-23,2026-09-21,other fix,"parity T-F: the font-size-request boxed GType is GhosttyFontDesiredSize (S87-F4 fix written, Linux run pending)"
+f83119940,2026-09-23,2026-09-21,other fix,"parity T-F: the quick terminal's layer-shell namespace is passed as raw bytes (S33-F1 fix written, Linux run pending)"
+d2a78caf5,2026-09-23,2026-09-21,other fix,"parity T-F: highway detection ports AVX-512/AVX10/isAMD and aarch64-Linux SVE (closes S34-F2; S34-F3 fix written, Linux run pending)"
+2315cbfcc,2026-09-23,2026-09-21,other fix,"parity T-A fix round: the two parent/child tests are ignored under Miri (child processes, fd 2, FFI)"
+edc42627e,2026-09-23,2026-09-21,parity bug (behaviour diverged from Ghostty),parity T-A fix round: give the N102 regression test its own oniguruma cfg; restore tmux_client_session_changed's
+816cfda11,2026-09-23,2026-09-21,crash (panic/signal),parity T-A fix round records: N102 crash-signal counts corrected
+66608d986,2026-09-23,2026-09-21,data race / deadlock,parity T-A fix round records: N102 (Oniguruma lazy-init race in tmux control mode)
+249d174ab,2026-09-23,2026-09-21,other fix,parity T-A fix round: tmux control mode initializes Oniguruma once before its first regex (N102)
+db7673caf,2026-09-23,2026-09-21,other fix,parity T-A fix round records: S208-F2 is an R7 invariant close; S190-F2/S204-F1 owner cells no longer start with OPEN
+306bb5368,2026-09-23,2026-09-21,other fix,parity T-A fix round: pin log_stderr's one-write boundary and its production stderr sink (S178-F2)
+57dc4dfd3,2026-09-23,2026-09-21,other fix,"parity T-A fix round records: S179-F3 closed, S174-F3 narrowed, exact remainders for S179-F2/S175-F1/S176-F1, F-008 deferral updated"
+86ee87a10,2026-09-23,2026-09-21,other fix,parity T-A fix round: grid_ref_track allocates the ref through the caller's allocator and reaches both OOM arms (S179-F3)
+b3182eb1a,2026-09-23,2026-09-21,other fix,parity T-A fix round: OSC captures of C-created parsers and terminals allocate through the caller's allocator (S174-F3)
+015f5fdaf,2026-09-23,2026-09-21,upstream defect (R13/UD),"parity T-A fix round records: UD141, bug-fix log line, ledger notes for S170/S186/S194/S195/S197, N100 update"
+c631309cd,2026-09-23,2026-09-21,upstream defect (R13/UD),"parity T-A fix round: wire-protocol integers refuse Zig's _ digit separator, as Ghostty's own OSC 99 parser does (UD141, R13 extended)"
+dda83868d,2026-09-23,2026-09-21,upstream defect (R13/UD),"parity T-A fix round records: UD140, bug-fix log line, S189-F2 ledger note"
+b3852fa1a,2026-09-23,2026-09-21,upstream defect (R13/UD),"parity T-A fix round: a kitty file of exactly max_size bytes loads without s= (S189-F2, UD140, R13 extended)"
+606e34a4b,2026-09-23,2026-09-21,other fix,"parity T-A fix round records: S166-F1 adjudication (faithful alternative implemented), ledger owner, LIFETIMES ctx rows"
+e966575d7,2026-09-23,2026-09-21,other fix,"parity T-A fix round: clipboard replies apply their side effects inside reply, as the reference does (S166-F1)"
+00afab946,2026-09-23,2026-09-21,other fix,parity T-A fix round: zig_parse_int carries Zig std's test parseInt and test parseUnsigned verbatim
+991442402,2026-09-23,2026-09-21,other fix,parity T-A fix round: G-SKIP green; the S149-F1 glyph-off test runs in every lane through a cfg(test) seam (R14)
+f44516ad4,2026-09-23,2026-09-21,other fix,parity T-A: S156-F2 was already fixed by task 20 (S54-F3); correct the stale mouse-shape note (closes S156-F2)
+0e35a853a,2026-09-23,2026-09-21,upstream defect (R13/UD),"parity tail T-C3 fix round records: ledger cells for S67-F3/F4, S71-F2/F3, S68-F1, S67-F11, S69-F1; N120 update, N122-N124; UD160 ReleaseFast measured; list_colors PORT NOTE names the synthetic probe"
+00d93108d,2026-09-23,2026-09-21,other fix,parity tail T-C3 fix round: rustty-config calls rustty_args::std_fmt instead of its own number-parser copies (N120); f32 percentages accept hex floats as the reference does (N123)
+08c016c34,2026-09-23,2026-09-21,other fix,"parity tail T-C3 fix round: tests kill the surviving mutations M1-M4 (S68-F1/F2 vx.deinit, S67-F11 environ, S71-F3 incomplete IPv6, S69-F1 carried draw_offset)"
+55b360e0a,2026-09-23,2026-09-21,other fix,"parity tail T-C3 fix round: +new-tab surface ids go through parseUnsigned, which rejects a leading '+' (N122)"
+f20407dff,2026-09-23,2026-09-21,crash (panic/signal),"parity tail T-C3 fix round: std_fmt parse_int reports Overflow at the first overflowing step as Zig does; parseUnsigned ported; std tables verbatim (N124, S67-F3, S67-F4, S71-F2)"
+b1041d629,2026-09-23,2026-09-21,upstream defect (R13/UD),"parity task T-C: the +list-colors/+list-themes missing flushes are R13 fixes under the extended rule, with tests and negative controls; UD22/UD23 updated with the measurement; bug-fix log lists UD22, UD23 and UD160 (closes S68-F3, S69-F4)"
+3d09bbbaa,2026-09-23,2026-09-21,upstream defect (R13/UD),"parity task T-C: +list-themes search box drawn by TextInput.drawWithStyle, save-pane docs lines rename only the product; the missing flushes stay fixed as reference defects UD22/UD23 (closes S69-F1, S69-F2; waives S68-F3, S69-F4)"
+0ac419b72,2026-09-23,2026-09-21,other fix,parity task T-C: +show-face DerivedConfig carries freetype-load-flags on FreeType targets (S70-F5 fix; row stays OPEN until the Linux test runs)
+46123d448,2026-09-23,2026-09-21,other fix,"parity T-B fix round: ledger, platform-unverified rows stay OPEN; stale S64-F4/S64-F9 notes"
+27aab1a4a,2026-09-23,2026-09-21,other fix,"parity T-B fix round: the Windows import library installs as rustty-vt.lib, the file -lrustty-vt names (S64-F5)"
+ee129fd88,2026-09-23,2026-09-21,other fix,parity T-B fix round: build-rustty.sh builds the resources in the configuration's optimize mode
+a074d7437,2026-09-23,2026-09-21,other fix,parity T-B fix round: correct dylib_link_args.rs on cargo's install name
+5925a2376,2026-09-23,2026-09-21,other fix,parity T-B fix round: the S63-F10 test asserts the exact lib-vt exclude list
+be1f71835,2026-09-23,2026-09-21,other fix,"parity T-B fix round: publish-tag, rustty-tip and the menu-shortcut harness use the universal names"
+1af8e1831,2026-09-23,2026-09-21,other fix,"parity T-B fix round: G-XCF expects the Apple universal slice set, with a self-test; CI installs the targets"
+68723bbc1,2026-09-23,2026-09-21,other fix,"parity T-B fix round: G-SKIP, the cmake and xgettext skips go through strict-mode pivots (R14)"
+293ff0f0d,2026-09-23,2026-09-21,other fix,parity T-B fix round: install-lib's .pc Version is the composed app version (S63-F9)
+9582c0f36,2026-09-23,2026-09-21,upstream defect (R13/UD),parity T-B fix round: the git-derived version is its own leaf crate; UD150 fixed under R13; N110
+cd48508fd,2026-09-23,2026-09-21,other fix,"parity T-B: xtask install-lib, the non-Darwin librustty-internal install (S63-F9, fix written; Linux run pending)"
+579722e8d,2026-09-23,2026-09-21,other fix,"parity T-B: GTK x11/wayland arms follow the system GTK4 targets (S65-F6, fix written; Linux run pending)"
+2187782e2,2026-09-23,2026-09-21,other fix,"parity T-B: xtask patchelf, the port of Config.zig's patch-interp/patch-rpath (S63-F4, fix written; Linux run pending)"
+3b95c8365,2026-09-23,2026-09-21,other fix,"parity T-B: Windows GUI subsystem and .rc resource (closes S63-F5); checkNixShell (S63-F6, fix written; Linux run pending)"
+e6496220c,2026-09-23,2026-09-21,other fix,"parity T-B: versioned lib-vt install layout (S64-F5, fix written; Linux run pending)"
+724e21f8e,2026-09-23,2026-09-21,other fix,parity T-B: lib-vt tarball applies the reference's :(exclude) pathspecs; distcheck drops RUSTTY_REQUIRE_FUZZ_CORPUS (closes S63-F10; fixes N197)
+4ae22c577,2026-09-23,2026-09-21,upstream defect (R13/UD),"parity tail T-E fix round records: UD182, UD21/UD180/UD181 updates, N140, bug-fix log"
+e4c3fcba2,2026-09-23,2026-09-21,upstream defect (R13/UD),parity tail T-E fix round: test the uppercase 0B/0O prefixes; UD180 stays faithful under extended R13
+a6bd70651,2026-09-23,2026-09-21,upstream defect (R13/UD),"parity tail T-E fix round: sentry cacheDir implements its comment on macOS (S79-F1, UD21, R13 extended)"
+c4f39f2cc,2026-09-23,2026-09-21,upstream defect (R13/UD),parity tail T-E fix round: std.json port enforces Stringify's 256-level limit as an error; iterative Value drop (UD182)
+b6d93fd5f,2026-09-23,2026-09-21,other fix,"parity tail T-E fix round: G-SKIP, the AccessDenied arms assert their precondition (R14)"
+a45686381,2026-09-23,2026-09-21,other fix,"parity tail T-E: {d} prints NaN as nan; pin the float and argv rows already fixed (closes S75-F3, S76-F6, S74-F2)"
+f94ab8e81,2026-09-23,2026-09-21,upstream defect (R13/UD),R13: fix non-crash Ghostty bugs that break the reference's evident intent; user-facing log docs/ghostty-bug-fixes.md
+91c4c331c,2026-09-23,2026-09-21,other fix,"parity task tail-s1b (records): N190, N191 closed; N192 fixed; N203, N204, N205"
+9d55b6101,2026-09-23,2026-09-21,other fix,parity tail T-D: bench log-site census follows the S61-F8 message (fixes the census test broken by 02db0ef3)
+dc939e69f,2026-09-23,2026-09-21,other fix,"parity tail T-D (UNBUILT ON LINUX): fixes for the ten open apprt rows, plus verified S50-F2/S49-F4/S50-F3"
+0e33d7e16,2026-09-22,2026-09-21,upstream defect (R13/UD),parity task R13-X: row-copy loops degrade to defaults instead of crashing at the style-set ceiling (UD131/N80)
+0b0f03f4d,2026-09-22,2026-09-21,upstream defect (R13/UD),"parity task R13-L (2/2): records — N88 (the layout divergence and its fix), N89 (heap-only header sizes), N90 (the UD64 boundary test fails on Linux); UD64/UD65/UD80/N66 port thresholds now equal Ghostty's; RGB, Color and threshold notes corrected"
+9bb1c48e4,2026-09-22,2026-09-21,upstream defect (R13/UD),"parity task R13-W2 (3/3): records: UD80's pinning cost, the capacity-ceiling path and its mitigation, attribution and test-field fixes; UD64's boundary test"
+29ae94a00,2026-09-22,2026-09-21,upstream defect (R13/UD),parity task R13-W2 (1/3): re-clone once at the style-capacity ceiling to drop orphaned pinned styles before splitting or crashing (UD80)
+97ce9e5fb,2026-09-22,2026-09-21,upstream defect (R13/UD),"parity task R13-S2 (3/n): records — UD65's premise corrected, the wide-terminal overflow recorded (UD80, N66)"
+c6fb2a300,2026-09-22,2026-09-21,upstream defect (R13/UD),parity task R13-G F4 merge: three doc corrections from the F4 re-review
+d73152cbf,2026-09-22,2026-09-21,upstream defect (R13/UD),parity task R13-D2 (7/7): NEW-FINDINGS: N72 corrected (a test is possible and exists); N73-N75
+d709122ae,2026-09-22,2026-09-21,upstream defect (R13/UD),"parity task R13-D2 (2/7): comment corrections: 44 unmapped keys (UD91), 768 KiB (UD92), immortal discovered names (UD110)"
+fbffd7bd8,2026-09-22,2026-09-21,other fix,parity task 20 merge: LEDGER S60-F1 records fix rounds 4-5 and the new sync_blur anchor
+6fc0fef34,2026-09-22,2026-09-21,upstream defect (R13/UD),parity task 20 round 4 (2/2): UD3 test/fix text corrected; UD56 verified and moved
+2d282c86c,2026-09-22,2026-09-21,upstream defect (R13/UD),parity task R13-D (25/n): N20 correction cites the gate's own stale-comment count
+223894994,2026-09-22,2026-09-21,upstream defect (R13/UD),parity task R13-D (21/n): NEW-FINDINGS N70-N72; N20 stale-comment count corrected; N53 CoreText half annotated
+1a380f07c,2026-09-22,2026-09-21,upstream defect (R13/UD),"parity task R13-D (14/n): the child-side log is proven not to deadlock on a lock held at fork (M32, UD101)"
+29806bc6f,2026-09-22,2026-09-21,upstream defect (R13/UD),"parity task R13-D (11/n): CoreText name lookups: record the reference's leaked +1 copies, prove the port releases them (M42, UD110)"
+a5f16310f,2026-09-22,2026-09-21,upstream defect (R13/UD),"parity task R13-D (2/n): +crash-report saturates an age too large for a Duration instead of truncating it (M30, P3, UD99)"
+005eeeaf4,2026-09-22,2026-09-21,upstream defect (R13/UD),"parity task R13-C (13/n): re-close S114-F2 under R13; record the io_uring cancel-race probe (M16, UD73)"
+14faf6da1,2026-09-22,2026-09-21,upstream defect (R13/UD),"parity task R13-C (2/n): the inherited working directory is owned by the surface, not leaked (M15, UD68, N56)"
+b49fba483,2026-09-11,2026-09-07,upstream defect (R13/UD),"parity task R13-S (1/n): strengthen the custom-shader colour test, correct N45 and UD60"
+b2ac07ecb,2026-09-11,2026-09-07,upstream defect (R13/UD),parity task R13-P (7/7): a failed variation-axes read no longer leaks the HarfBuzz font (N53)
+e5bbf580d,2026-09-11,2026-09-07,upstream defect (R13/UD),parity task 20 fix round 3: UD3 test/scenarios corrected; UD56 (gtk) for GDK's own requests
+6704e91b1,2026-09-11,2026-09-07,other fix,parity task 20 fix round 3: the M110 test depends on the trap result; drop guard for the X error trap
+f9cf6aac6,2026-09-11,2026-09-07,upstream defect (R13/UD),"parity task R13-A follow-up: UD11/UD12/N44; UD9, UD10, N41, N42 and S209-F1 corrections"
+0a4902fa3,2026-09-11,2026-09-07,upstream defect (R13/UD),parity task 20 fix round 2: UD3 is a reachable crash; UD1/UD2/UD4/UD5 corrections
+7091f1b9f,2026-09-11,2026-09-07,upstream defect (R13/UD),"parity task 20 fix round 2: trap X errors on winproto property calls (M110, R13); .previous empty-list case"
+d38a1a398,2026-09-11,2026-09-07,upstream defect (R13/UD),"parity task R13-A: UD6 marks its ReleaseFast leak as inferred, not measured"
+7d13fab2d,2026-09-11,2026-09-07,upstream defect (R13/UD),parity task 20 fix round 1: UD1/UD2 corrected; UD3-UD5 added; S60-F1 owner cell
+40a434c84,2026-09-11,2026-09-07,upstream defect (R13/UD),parity task 20 fix round 1: S60-F1 stub test; UD2 and S52-F3 comments corrected
+d9de03392,2026-09-11,2026-09-07,upstream defect (R13/UD),parity task 20 (8/n): R13 — do not port the reference's portal-signal crashes (S51-F7)
+18a954f85,2026-09-11,2026-09-07,other fix,"parity task 19 fix round 1: ledger owner cells for S48-F1, S156-F1, S194-F2"
+8efe3f32a,2026-09-11,2026-09-07,other fix,parity task 19 fix round 1: bell_media_file test fails loudly without a display; G-DIST blocks on missing cmake
+abbadac2a,2026-09-11,2026-09-07,other fix,"parity task 19 fix round 1: restore osc_52 null fixture; henum_type! observes duplicates, key binding and tag type"
+5a73f0bca,2026-09-11,2026-09-07,other fix,parity fix round 1: close S117-F2 (VM-verified) and file N35 (a load-dependent flake)
+9c9da413d,2026-09-11,2026-09-07,other fix,parity fix round 1: finish the release-lane sweep the S166-F2 rows started
+ae4a492f7,2026-09-11,2026-09-07,other fix,"parity task 16 fix round 2: move two qualifications out of the report and into the code, and correct S206-F1's ledger cell"
+d0739ace9,2026-09-11,2026-09-07,other fix,"parity task 16 fix round 1: re-open S204-F1 and S190-F2, cover the unprotected tripwire site, file N31"
+89fea4185,2026-09-10,2026-09-07,other fix,"parity: closes S76-F3, S76-F4, S77-F1, S78-F1 (fixed-buffer format bounds)"
+bfccd6fac,2026-09-10,2026-09-07,other fix,"fix round 1: bind the henum key list to the Rust enums (N29), unbreak the Linux lint, finish the N28 sweep"
+03822c87c,2026-09-10,2026-09-07,other fix,"task-14e-2 fix round 1: the stale note under my own edit, an over-broad test claim, N24"
+cb3d820d2,2026-09-10,2026-09-07,other fix,task-14e-2 fix: the cf_release_thread capture probe was a tenth emission on a nine-site file
+a435c20eb,2026-09-10,2026-09-07,other fix,task-14e-2 fix: the error-token test was crediting Config.zig's arm with a phantom emission
+547d96060,2026-09-10,2026-09-07,crash (panic/signal),task-14e-2: rustty-crash sentry diagnostics — closes S79-F2
+c7f54146e,2026-09-10,2026-09-07,other fix,"task-14e-1 fix round 1: revert a false waiver, move the forked-child site off the facade, fix 4 truncated messages"
+12082d7e5,2026-09-10,2026-09-07,other fix,14d-3 fix round 1 (F3): give the discard self-test its positive control
+2f147bb42,2026-09-10,2026-09-07,other fix,14d-3 fix round 1 (F2): display-requiring tests now FAIL on a missing display instead of reporting `1 passed`
+c4fe85aea,2026-09-10,2026-09-07,other fix,"14d-3 fix round 1 (F1): pre_exec's raw post-fork writes said `err(`, the reference says `error(`"
+1841e015f,2026-09-10,2026-09-07,other fix,"14d-3: surface.zig — 59 bypasses to the facade, 20 error values restored, S54-F6's level fixed (S54-F4, S54-F6)"
+f798cca08,2026-09-10,2026-09-07,other fix,14gate fix round 4: budget the EXCLUSIONS — the one number a stage could move without a ratchet
+a91e840c1,2026-09-10,2026-09-07,other fix,14gate fix round 3: the gate was reproducing the blind spot it was built to close (N15)
+1761e93ea,2026-09-10,2026-09-07,data race / deadlock,task-14d-2: restore Path.expand's two log.debug traces in rustty-config (closes S78-F7)
+32e804dbe,2026-09-10,2026-09-07,other fix,14gate fix round 2: N14 recounted through the gate (199 -> 244); bypass_cap ratchet; raw byte strings
+3ec9b2054,2026-09-10,2026-09-07,other fix,14gate fix round 1: char-literal desync in the Rust scanner; baseline 232 -> 183; N14
+349183b19,2026-09-10,2026-09-07,other fix,"parity-closure 14c-3 fix round 1: narrow the three macOS-twin-only waivers, correct N9's row list, unorphan a bullet, fix a count"
+65bf86e2a,2026-09-10,2026-09-07,parity bug (behaviour diverged from Ghostty),"task-14wasm-proof fix round 1: record the glue regression as N10, disclose the node coupling, tighten arm A"
+50a82792f,2026-09-10,2026-09-07,other fix,parity-closure 14c-3: fix the S115-F2 test's assertion — the rebuild's own log records are part of the capture
+a7269d769,2026-09-10,2026-09-07,other fix,"task-14c-2 fix round 1 (F1, F2, F5): doc-only corrections + NEW-FINDINGS N8"
+97d846fbb,2026-09-10,2026-09-07,other fix,"parity-closure: rule one implementer at a time, and record why pathspec alone does not fix it"
+76da2da83,2026-09-10,2026-09-07,other fix,"task-14c-4 fix round 1 (F2): close S81-F1, whose fix had already landed"
+40a0cab9f,2026-09-10,2026-09-07,aliasing UB (Miri SB/TB),"task-14c-4 fix round 1 (F5, F4): write the dangling N4 section; record N6"
+e142effb7,2026-09-10,2026-09-07,other fix,"task-14c-4 fix round 1 (F4, F7): restore discovery.rs's two UNCLAIMED sites; add the briefed coretext test"
+3a90678c8,2026-09-10,2026-09-07,other fix,"task-14c-4 fix round 1 (F3): make the wasm log-backend install ARTIFACT-wide, not crate-wide"
+1cc2ab5d5,2026-09-10,2026-09-07,crash (panic/signal),task-14c-4 fix round 1 (F6): name the right crate in log_capture's install panic
+c75a0e285,2026-09-10,2026-09-07,other fix,"correction: 3a333486 absorbed task-14c-1's fix round because of MY commit, not a worker's"
+8960547ca,2026-09-10,2026-09-07,other fix,task-14c-1 fix round 1: attribution note (content landed in 3a333486)
+9f81bdff2,2026-09-09,2026-09-07,other fix,task-14r-a fix-review r1: make log_capture actually isolated; correct stale PORT NOTE counts
+050f257b6,2026-09-09,2026-09-07,other fix,"task-14wasm fix-review r1: cover rustty_wasm.wasm, unbreak the wasm32 build"
+bbc76bc9b,2026-09-09,2026-09-07,other fix,"task-14b fix-review: repair false warning, revert 3 over-claimed rows, close S166-F3 for real"
+c3cfd0b3d,2026-09-09,2026-09-07,other fix,"task-14a review round 3: fix bootstrap timing, add the wasm artifact backend"
+a6319422a,2026-09-09,2026-09-07,other fix,"task-14a review round 2: cover libghostty/macOS init, fix bootstrap window"
+12a5f351a,2026-09-09,2026-09-07,other fix,"task-14a review fixes: contain the max-level clobber, add the app-build backend"
+06e68156b,2026-09-09,2026-09-07,other fix,task-14a: log facade infra + fix rustty-vt-c's eprintln! sink bypass
+ee59bc2af,2026-09-09,2026-09-07,other fix,fix(apprt): restore gtk command-palette access to CommandCStorage.action
+eb3edbb96,2026-09-09,2026-09-07,other fix,"fix(highway-sys): port oracle's PowerPC/s390x/RISC-V target detection, closes S34-F4/F5/F6"
+6f965063c,2026-09-09,2026-09-07,other fix,"fix(highway-sys): port oracle's x86 AVX2 OS-support gate literally, closes S34-F1"
+3c6f84a43,2026-09-09,2026-09-07,other fix,fix(apprt): remove GlobalState::new's masking re-capture (N1); real S43-F1 test
+2dae289d1,2026-09-08,2026-09-07,other fix,fix(apprt): re-sync captured environ after ensureLocale (closes S43-F1)
+9604a459f,2026-09-08,2026-09-07,other fix,fix(vt): search refresh timer re-arms on every dispatch (closes S198-F1)
+45f4c9537,2026-09-08,2026-09-07,leak,"fix(vt,core): S151-F1 review fixes — two more clone_options sites, fixture SB/leak bugs"
+accc140d4,2026-09-08,2026-09-07,other fix,fix(vt): clipboard-codepoint-map is silently inert (closes S151-F1)
+83a7154ce,2026-09-08,2026-09-07,other fix,fix(renderer): address S118-F1 review — stale doc-comment + silent test skip
+43aba1c91,2026-09-08,2026-09-07,other fix,"fix(renderer): tag Target's IOSurface with Display P3 colorspace, closes S118-F1"
+326ccd0df,2026-09-08,2026-09-07,other fix,fix(renderer): S117-F1 review fixes — Linux arm compile + full 16-field layout pin
+36deaf50f,2026-09-08,2026-09-07,other fix,fix(renderer): std140 layout for shadertoy::Uniforms (closes S117-F1)
+33cfdba1c,2026-09-08,2026-09-07,other fix,fix(vt-c): widen kitty image format/compression to c_int (closes S3-F1)
+5b869d6e5,2026-09-08,2026-09-07,ABI / layout,fixup(task-3 review): header-pin the command_s ABI freeze; ledger byte-fix
+a5c1f7ec3,2026-09-08,2026-09-07,ABI / layout,"parity-closure: close S1-F1, S103-F1 (command_s ABI fix)"
+5073fbfe8,2026-09-08,2026-09-07,ABI / layout,"fix(abi): command_s is 4x const char*, not 4x Vec (closes S1-F1, S103-F1)"
+bd8cd3071,2026-09-08,2026-09-07,parity bug (behaviour diverged from Ghostty),parity-closure: fix wrong cross-crate cfg(test) claim in S83-F3 entry
+2cdd81d42,2026-09-08,2026-09-07,other fix,parity-closure: fix S92-F3 reasoning to avoid premise collision with S209-F1
+d38b014ba,2026-09-08,2026-09-07,crash (panic/signal),fix(linux): example build.sh aborts on non-macOS hosts; clippy field-reassign in a cfg(not(macos)) test
+6b8cbe674,2026-09-01,2026-08-31,other fix,fix(renderer): the Linux test target was RED on main — linux_impl's DerivedConfig test helper lacked custom_shader_animation
+5e2b6c01a,2026-09-01,2026-08-31,other fix,macos: fix AppleScript send key for non-control keys (oracle 6229d4eb6)
+4348771dc,2026-09-01,2026-08-31,other fix,perf fixes
+3b3b404ce,2026-08-26,2026-08-24,parity bug (behaviour diverged from Ghostty),"build: fuzz targets wired, VM tests runnable, XCFramework gate — and two wrong claims corrected"
+258f535a4,2026-08-26,2026-08-24,other fix,fix: untrack the lib-vt source tarball — .gitignore pattern did not match
+bec39793e,2026-08-26,2026-08-24,parity bug (behaviour diverged from Ghostty),build: cross-target gate + fix the -Dvt-features / CMake SIMD-off regression
+617d904dd,2026-08-26,2026-08-24,other fix,fix(renderer): the Linux build was broken — set_macos_display_id arity drift
+7fe13fc15,2026-08-26,2026-08-24,other fix,fix: green ci.sh check #2 — clippy -D warnings was RED on main (finding 13)
+01e63b194,2026-08-26,2026-08-24,other fix,docs(gap-close): record the symbol-manifest gate fix
+5128d7fc3,2026-08-26,2026-08-24,other fix,fix(os): drop the bogus `_libintl_locale_name_canonicalize` extern
+d558b9c31,2026-08-26,2026-08-24,other fix,build: build every example in CI (gate G-EXAMPLES) + fix 5 cross-build defects
+5a8f9e839,2026-08-25,2026-08-24,parity bug (behaviour diverged from Ghostty),"phase-5 W1: leaf prerequisites — simd base64 strict+streaming, wuffs swizzle end state (live gaToRgba divergence FIXED), paste core, sys randomSecure hook, config clipboard limit"
+445239ad0,2026-08-25,2026-08-24,other fix,"phase-4 finale: Linux-lane fixes — fc-match double-destroy (UPSTREAM BUG P4-U3), kitty prefix-test scratch placement, +new-tab bin pin; ledgers"
+47b2dbbb7,2026-08-25,2026-08-24,other fix,"phase-4 par-5: snapshot subsystem COMPLETE + C-API bundles S and W + benches — A5 fully GREEN, two Miri-found bugs fixed"
+3d6fd16e9,2026-08-17,2026-08-17,crash (panic/signal),"phase-4 par-1: ssh-terminfo cache, config bundle, po/ i18n end-state mirror, .github mirrors, crash no-global-state"
+27c784ab2,2026-08-17,2026-08-17,other fix,phase-4 W0: fix 10 live bugs shipping in rustty today (fail-first)
+5243303fb,2026-07-31,2026-07-27,crash (panic/signal),"fix(xev): the ASan crash was a dropped Zig field default, not an ASan limitation"
+586747ab8,2026-07-31,2026-07-27,other fix,fix(vt): redo the dedup correctly — the first pass orphaned attributes
+13ec8ffec,2026-07-31,2026-07-27,crash (panic/signal),ledger: record the xev join Acquire deviation + U3 tmux overflow upstream bug
+d5e135055,2026-07-31,2026-07-27,crash (panic/signal),fix(config/renderer): font-feature must carry raw bytes — a NUL in a config file aborted renderer init (P3 panic-paths)
+49edf86a4,2026-07-31,2026-07-27,other fix,fix: silence 2 release-only dead-code warnings; record 2 faithfully-ported upstream bugs
+54a90dbf6,2026-07-31,2026-07-27,other fix,fix: thread freetype-load-flags through the DI bridge + port the termio tmux dcsCommand arm
+70a4b2909,2026-07-31,2026-07-27,aliasing UB (Miri SB/TB),"fix(xev): real Stacked-Borrows UB in ThreadPool — wildcard container_of, protected &mut deinit, join-chain data race (WS-XEV-UB)"
+0b7ebdcdc,2026-07-31,2026-07-27,crash (panic/signal),"fix(vt/tmux): regex non-match must return to idle, not panic (P3 unreachable audit)"
+c34527bd1,2026-07-31,2026-07-27,other fix,fix(gtk/media): stop the bell MediaFile test racing GstPlay teardown on Linux
+abaa20d29,2026-07-31,2026-07-27,parity bug (behaviour diverged from Ghostty),"audit: re-verify all 231 tracked deferrals against code; 14 wrong statuses, 5 fixes"
+bb2cbbf32,2026-07-31,2026-07-27,leak,fix(gate): repair the G6b compressed-page leak harness; triage the advance's gate flips (P3-W10 T4)
+f16150629,2026-07-31,2026-07-27,other fix,"apprt/gtk: fix the two clippy errors in the gtk,wayland,x11 feature lane"
+da6e4f094,2026-07-31,2026-07-27,other fix,fix(release): three more sites where the release lane could not build or pass
+8acc40b1b,2026-07-31,2026-07-27,other fix,"fix(vt): repair `cargo test -p rustty-vt --release`, RED on main since P3-W4 T5"
+dbccae405,2026-07-31,2026-07-27,other fix,vt/dcs: DECRQSS encodes its own response into a fixed buffer; termio and the C API consume it (oracle 39ae85f04) (P3-W4 T6)
+0227b8bfc,2026-07-31,2026-07-27,parity bug (behaviour diverged from Ghostty),"vt: mixed-width selection clamp regression tests; reconcile the type_json registry both directions (oracle b6f34be44 a9f5b7eba tests, 03d5fa268 negative assertion) (P3-W6 T7)"
+9d8fafb82,2026-07-30,2026-07-27,aliasing UB (Miri SB/TB),"fix(vt): two pre-existing UB bugs found by the P3 vt Miri sweep (F1, F2)"
+0c4dc22ba,2026-07-30,2026-07-27,aliasing UB (Miri SB/TB),"docs(miri): F1 — real pre-existing UB in the LZ4 page compressor, and the baseline gap that hid it"
+35e734e53,2026-07-30,2026-07-27,other fix,"macos: exact-geometry quick-terminal cache, synchronous main-thread surface free, publisher retain-cycle fix, preedit commits via key events, macOS 27 titlebar workarounds (oracle 0274e7ad8 a6edca2d7 35790a7e5 f52f8aab9 751a60df6 2104e0749 632aa6756 fa3802a70) (P3-W8 T2)"
+b4219b748,2026-07-30,2026-07-27,crash (panic/signal),os/termio: byte-type the environment family (fixes a live non-UTF-8 surface-creation panic) and move append/prepend into their consumers (oracle e8525c0fd env.zig deletion) (P3-W7 T2)
+9be05f7ab,2026-07-30,2026-07-27,other fix,gates(G-P2): ENVIRONMENT-BLOCKED disposition with disk-resolved teeth; fix a struck-row derivation hole; truth-up 4 stale ROADMAP rows
+e879fe92e,2026-07-30,2026-07-27,other fix,fix(gates): D1 line drift + Linux-portable mktemp in check_leaks.sh
+c3eb108f4,2026-07-30,2026-07-27,other fix,fix(linux): serialize fontconfig FcFini against the parallel test runner
+630ce0810,2026-07-30,2026-07-27,other fix,"fix(linux): rustty-apprt clippy lane (GTK, Linux-only)"
+f1cd006f2,2026-07-30,2026-07-27,other fix,fix(linux): termio killpg label + execCommand type param off Darwin
+e9e89429b,2026-07-30,2026-07-27,other fix,"fix(linux): libpng-sys bindgen lint, keymap_darwin CarbonMods cfg, xev test muts"
+c618e6e1e,2026-07-30,2026-07-27,other fix,fix(linux): sentry cache_dir block ends in the reference's explicit break
+dba2f435f,2026-07-30,2026-07-27,other fix,"fix(linux): systemd MONOTONIC_USEC — no conversion, like the reference"
+a16e17917,2026-07-30,2026-07-27,ABI / layout,renderer/metal: fix the sizeof-squared buffer over-allocation and the stale len on realloc (oracle 4a22eed6d); re-affirm the 14 remaining quirk sites against the range (P3-W0 T5)
+d4dca9432,2026-07-30,2026-07-27,other fix,fix(linux): rustty-os clippy lane (Linux-only lints)
+f0a205b52,2026-07-30,2026-07-27,other fix,fix(linux): repair the Linux build/test/clippy lane
+7c67b98ac,2026-07-30,2026-07-27,other fix,fix(page): reconcile the duplicate CellField/cell_field_mask from two WS10 lanes
+d709fce34,2026-07-30,2026-07-27,other fix,fix(gtk/portal): correct the OpenURI ordering test — it contradicted the oracle
+7c36e9dcb,2026-07-30,2026-07-27,other fix,rustty-apprt-c: fix the clippy doc-list overindent in the T5 KAT header; rustty-apprt/build: record the msgfmt --check FAIL arm (WS13 T9)
+07287ee1e,2026-07-30,2026-07-27,other fix,gates/docs: WS11 T10 final green sweep; retire the Task-7 VM scope note; fix the 2%->3% envelope drift (WS11 T10)
+24c1b33bb,2026-07-29,2026-07-27,other fix,fix(termio): drain the pty master before stop() on threadEnter error arms; ECHILD-aware waitpid in killPid (WS19 T17)
+f3f18d2d9,2026-07-29,2026-07-27,parity bug (behaviour diverged from Ghostty),"port-docs: truth-up 11 wrong ledger rows, un-nest 2 mis-filed items, reclassify 2 permanent divergences, restate the beyond-pin owners; correct the ROADMAP (WS19 T2)"
+3082dc6eb,2026-07-29,2026-07-27,parity bug (behaviour diverged from Ghostty),rustty-apprt/gtk: clippy cleanups from the WS16 no-regression sweep (WS16 T7)
+f79a762c3,2026-07-29,2026-07-27,leak,"gates: wire the PageList compressed-page leak check into a real gate, G6b (WS7 Phase E)"
+9e15d1bde,2026-07-29,2026-07-27,aliasing UB (Miri SB/TB),vt-pagelist: fix real Stacked-Borrows UB in decommit_pool_item zero test (WS7 Phase E)
+f333a779f,2026-07-29,2026-07-27,other fix,review: WS7 Phase C fixes — I1/I2 + M1-M5 (gate/ledger hygiene)
+91522cfbb,2026-07-29,2026-07-27,other fix,"fix(termio): review follow-ups — drop SIGKILL escalation, delete vacuous guard, record residuals"
+9874db879,2026-07-29,2026-07-27,parity bug (behaviour diverged from Ghostty),fix(termio): bound killPid's kill/waitpid wait [deliberate R1 divergence]
+f3cd7c792,2026-07-29,2026-07-27,other fix,fix(termio/test): drain the pty master across teardown in subprocess_drop_repro
+c3a6d0d85,2026-07-29,2026-07-27,other fix,docs+fix(vt): WS7 Phase B re-review corrections (merge-blocking)
+e0529d48c,2026-07-29,2026-07-27,leak,test(miri): counting global allocator makes the I3 leak check mechanised (WS7 I3)
+87a3adaa0,2026-07-29,2026-07-27,other fix,fix(bench): de-flake `Benchmark` test — spin until the monotonic clock advances
+a71d91543,2026-07-29,2026-07-27,other fix,fix(libxml2-sys): link libiconv on Apple targets (test lane link failure)
+0413d2b52,2026-07-29,2026-07-27,other fix,"fix(vt/pagelist): scroll activity placement + PreservedPage must_use + Limits note (WS7 M1, M2, I4)"
+8581fde7f,2026-07-29,2026-07-27,other fix,fix(vt/pagelist): keep the Node page accessors raw-derived (WS7 I2 + M3)
+2d58bc3e0,2026-07-29,2026-07-27,other fix,fix(inspector): PageList tab must not decompress the whole scrollback (WS7 I1)
+15951c1c5,2026-07-29,2026-07-27,other fix,"fix(vt,font-shaper): retarget 3 missed `(*node).data` sites (WS7 B5 residuals)"
+cef782b57,2026-07-29,2026-07-27,other fix,fix(ws15): assert dispatch (not just signal delivery) in the live gate; split out the OpenURI deferral
+8b0f422ab,2026-07-29,2026-07-27,crash (panic/signal),"gate: WS15 both-platform green + G7 acyclic, RE-RUN after the VM hard crash (WS15 T9)"
+c43fa8926,2026-07-28,2026-07-27,other fix,vt/compress: WS7 Phase A review fixes + miri-run.sh worktree bug
+5feb078ff,2026-07-28,2026-07-27,other fix,"review: WS8 fixes — F1-F6 (kitty delete invariant, libc rationale, fmt drift, clippy warnings, MIRI_EXCEPTIONS over-claim)"
+0b92fdf77,2026-07-28,2026-07-27,data race / deadlock,"WS6 review fixes: LOC/line-number accuracy, honest V1b wording, imgui.ini guard"
+9e6fecab6,2026-07-28,2026-07-27,crash (panic/signal),ledgers: strike the stale macOS-inspector deferrals + crash-guard sentinel (WS6 T7)
+d9c67e54a,2026-07-28,2026-07-27,leak,inspector: WS6 gate sweep fixups — fmt + KAT artifact leak (WS6 T6)
+48895872b,2026-07-28,2026-07-27,crash (panic/signal),apprt/apprt-c: retire the Phase-3-leaf + crash-guard prose on the live inspector path (WS6 T4)
+86cce9dd4,2026-07-23,2026-07-20,other fix,"fix(vt-c): WriteResult FFI return is open (repr(transparent) i32) — sound against out-of-range C returns, matches oracle open enum (WS5 review)"
+e970d34ff,2026-07-23,2026-07-20,other fix,rustty-apprt-c: WS4 end-to-end fixes — fmt/clippy on touched files (WS4 T12)
+c38e8d595,2026-07-23,2026-07-20,ABI / layout,vt-c: pass RGB color inputs by pointer — rustty_color_rgb_get ABI fix (WS5 T2)
+a8e1e267a,2026-07-23,2026-07-20,other fix,"rustty-cli: +version real renderer/libxev/toolchain lines (WS3-B, ADV-FIX 1 retired)"
+5910ce5f2,2026-07-23,2026-07-20,crash (panic/signal),rustty-apprt-c: live-surface quicklook abort-free regression KAT (WS2-A)
+e47728fcb,2026-07-23,2026-07-20,other fix,fix(macos): restore cross-platform build after the Linux/xev merges
+fbfd95c47,2026-07-22,2026-07-20,crash (panic/signal),gtk: fix RefCell double-borrow abort in on_notify_vadjustment
+a1c674b2d,2026-07-22,2026-07-20,crash (panic/signal),port: VERIFICATION_DEBT V4 — mutter-session set_urgent KAT (crash-correlation avoidance)
+9597128d9,2026-07-19,2026-07-13,other fix,gtk: fix stale IPC test — no-instance perform_ipc must fail with IPCFailed
+9de16be19,2026-07-19,2026-07-13,aliasing UB (Miri SB/TB),"xev: final whole-branch review fixes (wakeup aliasing, fidelity notes, port registry)"
+445b50b8d,2026-07-19,2026-07-13,other fix,xev: Task 6 review fixes — oracle-faithful TCP close sequencing + macOS deferral wording
+e6885c02c,2026-07-19,2026-07-13,other fix,xev(thread_pool): fix futex_wake clamp (root cause) + ledgered Event shutdown-wake deviation (Task 1 D1)
+6587b098d,2026-07-19,2026-07-13,data race / deadlock,inspector(gtk): fix gtk_inspector_dump teardown deadlock
+af5a9078f,2026-07-18,2026-07-13,crash (panic/signal),"rustty-apprt/gtk: close the audited GTK parity gaps — dead actions, drop crash, T24 overlays, T25 palette, T26 shortcuts, themes"
+a984c8003,2026-07-18,2026-07-13,crash (panic/signal),"rustty-apprt/gtk: T23 TitleDialog + wire context-menu ""Change Tab Title"" — fixes crash + dead menu"
+733e2e1ee,2026-07-18,2026-07-13,crash (panic/signal),rustty-apprt/gtk: T23 CloseConfirmationDialog — fixes close window/tab/split aborts
+486793623,2026-07-18,2026-07-13,crash (panic/signal),rustty-apprt/gtk: fix crash-on-interaction — context_menu_closed + child_exited_close
+5ce0d0269,2026-07-18,2026-07-13,other fix,rustty-apprt/gtk: fix terminal swallowing all input — placeholder overlays must start hidden
+d14252176,2026-07-17,2026-07-13,crash (panic/signal),rustty-apprt/gtk: fix new_window/new_tab panic — defer T21 tab leaf (L5.3 T22 fix)
+11766c1de,2026-07-17,2026-07-13,leak,"rustty-apprt/gtk: About dialog sources rustty identity, drops ghostty.org leak (L5.3 T20 fix)"
+6fe5259bf,2026-07-17,2026-07-13,other fix,rustty-apprt/gtk: finalize frees the CoreSurface box WITHOUT Drop glue (double-free fix)
+f3bb00b5c,2026-07-17,2026-07-13,other fix,rustty-termio: fix Subprocess argv double-free — free C-string storage in deinit
+9580454b1,2026-07-17,2026-07-13,other fix,rustty-apprt/gtk: fix GLArea swapped-callback arg order + add resize/render drivers (L5.2 T15 review)
+612ab4898,2026-07-17,2026-07-13,other fix,"rustty-apprt/gtk: port ext::list_find (listFind, ext.zig:34 — live @ application.zig:2717) (L5.0 T3 review fix)"
+f4b668883,2026-07-17,2026-07-13,parity bug (behaviour diverged from Ghostty),L4 plan: RESOLVE the host-GL question — supersede the controller's half-wrong probe note
+51cea8587,2026-07-17,2026-07-13,other fix,rustty-renderer: fix EGL config selection + narrow the test's skip arm (L4 T1 review)
+31eb3dccb,2026-07-17,2026-07-13,other fix,rustty-renderer: fix Linux hard compile error (ungate metal-free overlay) (L5 blocker)
+981b57b80,2026-07-17,2026-07-13,other fix,"rustty-font-shaper: fix Linux hard compile errors (Options alias, discovery::Error, typed Fontconfig stub) (L3 Task 1)"
+85d19023a,2026-07-16,2026-07-13,other fix,rustty: linux-port — fix never-compiled -sys build breaks on aarch64 glibc / GCC 16
+10f2091fe,2026-07-16,2026-07-13,other fix,rustty: vt — parity fix: same-page clone must not skip style/kitty for hyperlinked cells
+ada047519,2026-07-16,2026-07-13,other fix,"rustty: alloc-bench suite — alloc-bench feature seam, equal-scope standalone bench, arena resize seam (fix 12), std_size golden gate"
+9e386ab44,2026-07-16,2026-07-13,other fix,rustty: perf — r2-osc-win: fall-through success store in the OSC fixed-capture writeByte
+b6f5e4f2f,2026-07-16,2026-07-13,other fix,perf(vt): render update — stop re-zeroing the style/grapheme SoA columns per rebuild (fix-render-undefined-cols)
+1e9660360,2026-07-16,2026-07-13,other fix,"rustty: phase-2 — perf-opt attribution log, fix plan, raw bench data"
+408ddaa32,2026-07-16,2026-07-13,other fix,"Revert ""rustty: perf — fix-color-list-prealloc: restore SegmentedList(Request,2) inline prealloc"""
+d211a84a6,2026-07-16,2026-07-13,other fix,rustty: perf — merge fix-render-soa branch
+2bb5c4278,2026-07-16,2026-07-13,other fix,rustty: perf — fix-parser-destage: restore the reference arm structure in Parser::next
+82defe5f4,2026-07-16,2026-07-13,other fix,rustty: perf — fix-lut-bounds: remove the 3 chained bounds checks in the 3-stage unicode lookup
+67962f13d,2026-07-16,2026-07-13,other fix,"rustty: perf — fix-color-list-prealloc: restore SegmentedList(Request,2) inline prealloc"
+11ca4255e,2026-07-16,2026-07-13,other fix,rustty: perf — fix-osc-fixed-capture: restore the zero-alloc fixed-writer-over-self.buffer OSC capture
+9789788e2,2026-07-16,2026-07-13,other fix,rustty: perf — fix-render-soa: restore MultiArrayList SoA + raw-column memcpy in RenderState
+cdb9a26e6,2026-07-16,2026-07-13,other fix,rustty: perf — fix-remap-hasher: pointer-identity hasher for TrackedPinsRemap
+08299e036,2026-07-16,2026-07-13,other fix,rustty: perf — fix-pin-keys-collect: drop the per-chunk tracked-pin key Vec
+eb3235987,2026-07-16,2026-07-13,other fix,rustty: perf — fix-bench-assert-tier: port std.debug.assert at its correct tier
+79dce2e5b,2026-07-16,2026-07-13,crash (panic/signal),rustty: perf — fix-utf8-dfa: elide per-byte TRANSITIONS bounds/overflow checks
+f2b7dcd52,2026-07-16,2026-07-13,other fix,rustty: perf — fix-inline-idioms: restore every dropped Zig inline hint
+9e028ec0f,2026-07-16,2026-07-13,other fix,rustty: perf — fix-profile-lto: TIER-0 build-profile parity for release-fast
+40727a2cb,2026-07-15,2026-07-13,crash (panic/signal),fix(cabi): TriggerC by-value return was 20B vs header 12B → sret crash
+6de1ba49b,2026-07-15,2026-07-13,other fix,"examples: fix README build refs — build.zig/Zig -> build.sh/clang, ghostty-vt -> rustty-vt"
+3f8f069a7,2026-07-15,2026-07-13,other fix,cabi: fix stale include/ghostty.h references after dropping the vendored copy
+053729872,2026-07-15,2026-07-13,other fix,vt-headers: fix libghostty->librustty in header docs + Ghostty->Rustty in config-template
+fe41fec7c,2026-07-15,2026-07-13,other fix,examples: port ghostty wasm-vt (byte-exact parity) + fix type_json usize width
+d78103a8e,2026-07-15,2026-07-13,other fix,demo: fix web_canvas sample string typo Rusty! -> Rustty!
+36efe063e,2026-07-15,2026-07-13,other fix,demo: fix web_canvas harness glyph display — blit the packed atlas
+e8e45f89e,2026-07-15,2026-07-13,ABI / layout,"docs: correct WASM DEFERRALS — VT C-ABI wasm DONE, web_canvas is dead-upstream"
+1f51f705e,2026-07-15,2026-07-13,crash (panic/signal),inspector: inhabit core mouse-position record (fix crash-on-mouse-move) + termio recordPtyRead (populate VT-events panel)
+c62ab072a,2026-07-15,2026-07-13,crash (panic/signal),"inspector: port ImGui input callbacks (focus/mouse/key/text/size/scale) — fix crash-on-open, wire host input to dcimgui IO"
+1d63af765,2026-07-14,2026-07-13,other fix,test: cli_smoke expects capital 'Rustty ' version banner (match APP_NAME_TITLECASE) — final-review blocker fix
+0c5fe1434,2026-07-14,2026-07-13,other fix,"rebrand: fix Ghostty->rustty miscasing — product name in prose is Rustty (capital), not lowercase; regenerate completion goldens"
+b3c283056,2026-07-14,2026-07-13,other fix,chore: fix workspace repository URL -> github.com/AirelyDev/rustty (T16 missed root Cargo.toml)
+eb440ea0e,2026-07-14,2026-07-13,leak,"plan: add T17 (rename identity-ghostty feature -> identity-oracle, user request) + T18 (fix terminfo-content/theme-dir/editor-filetype leaks found in T14)"
+692b08aaf,2026-07-14,2026-07-13,other fix,macos: fix LSEnvironment key GHOSTTY_MAC_LAUNCH_SOURCE -> RUSTTY_ to match Swift reader (Task 8 fix)
+d144eeb35,2026-07-14,2026-07-13,other fix,xcode: fix pbxproj/xcscheme content that the prior commit missed (Task 8 follow-up)
+62cc94c0b,2026-07-14,2026-07-13,other fix,swift: fix half-renamed custom-icon default path -> ~/.config/rustty/Rustty.icns (Task 6 fix)
+252edc22b,2026-07-12,2026-07-06,other fix,"parity: integration parity review vs ghostty — faithful runtime seams; fixes are packaging/resource-layer (shell-integration + themes ship empty, self-contained lib, iOS host_view)"
+a290323a8,2026-07-12,2026-07-06,crash (panic/signal),apprt-c: P2 crash-guard quicklook/inspector feature leaves — graceful sentinel instead of abort
+9b2890a3c,2026-07-12,2026-07-06,other fix,xtask: combine vendored C archives into a self-contained GhosttyKit lib (B3 link fix)
+a47d8f4e7,2026-07-12,2026-07-06,other fix,os: fix latent cfg-gated compile breaks C1+C4 (VALIDATION_REPORT_2)
+dcae8d61e,2026-07-12,2026-07-06,aliasing UB (Miri SB/TB),rustty: fix xev MPSC completion-queue latent SB/TB UB (LIFETIMES-audit M1+M2)
+c44e04f23,2026-07-12,2026-07-06,aliasing UB (Miri SB/TB),fmt: rustfmt the search UB fix + Miri-exception annotations; fix pre-existing face.rs drift
+6f16c0a8b,2026-07-12,2026-07-06,aliasing UB (Miri SB/TB),vt-c: fix SB UB in get_multi_error_sets_out_written test (aliasing out-pointers)
+9e3fe1c25,2026-07-11,2026-07-06,aliasing UB (Miri SB/TB),vt: fix search-subsystem SB UB found by the full Miri sweep (9 tests)
+3277f2f78,2026-07-11,2026-07-06,aliasing UB (Miri SB/TB),vt: first full Miri sweep (all 2037 tests) — inventory + the real search/screen.rs SB UB finding
+4292a3b6b,2026-07-10,2026-07-06,other fix,"rustty-vt, rustty-font: upstream parity ports — b953bb346, e44f5cb0f, 3d08161b5, 0aaedf436, 0cb004734, 91f0cf67d(fix-only), 5fa37f2b7, cee35cabf, 8f1c2fe95, dac341cad+e8f3f6c43 (T19, R12)"
+b4845f427,2026-07-10,2026-07-06,other fix,"audits: LIFETIMES retroactive audit — 20 findings (1 fixed, 4 filed) (T16 step 3)"
+c4758b431,2026-07-10,2026-07-06,aliasing UB (Miri SB/TB),"soundness: G6-widened Miri lane findings — vt-c row-iterator write provenance (*const->*mut slice), vt-c Handler built from base heap ptr (autoref temporary tag made vt_write UB after any &mut export call), kitty display() storage re-derive after cursor-pin alias pop, core test alias via rt_surface.app, simd base64 Miri scalar-lane routing, core renderer_config oniguruma-FFI tests routed to native+ASan (MIRI_EXCEPTIONS documented)"
+6b646a082,2026-07-10,2026-07-06,crash (panic/signal),"rustty-apprt-c: M4 resolved honestly — the windowed-present KAT ignore-reason is now TRUE and points at DEFERRALS W-ATTACH (real gap: core renderer_seam Renderer::init drops rt_surface and builds Metal via init_offscreen, so the host view is never made layer-hosting; old 'Metal::loop_enter unimplemented' reason was stale since W5); set_display_id KAT un-ignored + green on this Metal host; TIS app_new_serialized fix kept (parallel rustty_app_new SIGABRT in HIToolbox TIS init); W-ATTACH full triage in DEFERRALS.md; plan addendum 'New findings (2026-07-10 execution)' defines Task 23 = wire windowed host-attach, acceptance = both KATs un-ignored and green on a Metal host (T13, VALIDATION_REPORT §3d/§3e)"
+f34761d16,2026-07-10,2026-07-06,other fix,"rustty-vt: tmux DCS dormant-body note fixed — honest assertion inventory (2 of the reference's 4 expects carried; the 2 variant asserts inexpressible against the () TmuxCommand stub are held as DEFERRED ASSERT lines the wiring sub-batch MUST restore, dcs.zig:420-428); DEFERRALS entry updated to drop the false 'verbatim faithful' claim (T13, VALIDATION_REPORT §3d/§3e)"
+ae40aa2a9,2026-07-10,2026-07-06,other fix,"phase-2 payoff: contract gates binding on done crates; 8 residual findings fixed, 4 filed"
+9f87df18e,2026-07-10,2026-07-06,crash (panic/signal),"soundness mediums: get_row ptr-arith, png decode leak, C-unwind abort, apprt-c panic policy, SIGWINCH, MIRI_EXCEPTIONS 8-13, div_exact, erase_chars clamp, error-path integrity, iosurface AtomicPtr (T12, VALIDATION_REPORT §3c)"
+8726523bb,2026-07-10,2026-07-06,aliasing UB (Miri SB/TB),"rustty-vaxis: fix Loop::stop protected-tag UB via field projection; mirihar overlap model proves pre-fix UB and post-fix clean; MIRI_EXCEPTIONS 708 corrected (T11, VALIDATION_REPORT H1)"
+5ec035bda,2026-07-10,2026-07-06,other fix,"rustty: T6 — CI workflow can actually pass (fixes H7): install nightly+miri and pinned zig 0.15.2 on both legs; require_miri aligned to documented exit-3 BLOCKED semantics; G4 documented honestly as local-only (R3), phantom exit-78 comment removed"
+2ccd52134,2026-07-10,2026-07-06,data race / deadlock,rustty-termio: fix termio test-binary fork hang
+734ee0522,2026-07-09,2026-07-06,other fix,rustty: sub-project #3 — ledger hygiene (reconcile DEFERRALS.md + fix stale vt status headers)
+f046d41a6,2026-07-07,2026-07-06,aliasing UB (Miri SB/TB),rustty: GPU R-d Chunk 3b — CPU cell-fill + the shaper-hook aliasing fix (Miri-proven SB/TB-clean)
+754a0f520,2026-07-04,2026-06-29,other fix,rustty: GPU R-d Chunk 3a — R1 fidelity fixes from the clean-re-attempt validation
+41278a493,2026-07-03,2026-06-29,other fix,"rustty: GPU R-d (Metal) blueprint — adversarially reviewed, ACCEPT-WITH-FIXES (objc2-metal feasible, offscreen golden gate; image/Overlay/Semaphore prereqs; vacuous-gate + determinism fixes)"
+9e13f609f,2026-07-03,2026-06-29,data race / deadlock,rustty: fix xev socket-test flake (macOS TIME_WAIT rebind race)
+9c602341a,2026-07-03,2026-06-29,other fix,"rustty: xev Milestone B blueprint (termio live shell) — adversarially reviewed, ACCEPT-WITH-FIXES (Termio::init in-place, raw threadMain/processOutput, no pty double-close)"
+8484c007e,2026-07-03,2026-06-29,other fix,"rustty: xev/D6 blueprint (libxev port) — adversarially reviewed, ACCEPT-WITH-FIXES (termio-only Milestone B, Send/Default discipline, libc kevent64)"
+43fb4f15d,2026-07-02,2026-06-29,crash (panic/signal),rustty: cli C4 — crash_report/edit_config + none-backed IPC actions + tui seam
+3dd1fe9d8,2026-07-02,2026-06-29,other fix,"rustty: CLI+bin blueprint — adversarially reviewed, ACCEPT-WITH-FIXES folded in (bin-owns-detection, version PARTIAL, explain_config defers on help_strings)"
+bee8be0fc,2026-07-02,2026-06-29,ABI / layout,"rustty: embedded C-ABI blueprint (apprt/embedded, 71 exports) — adversarially reviewed, ACCEPT-WITH-FIXES folded in"
+24abccd32,2026-07-02,2026-06-29,crash (panic/signal),rustty: core C10 — key tier + crash ThreadStateSurface un-defer
+8c3bef888,2026-07-02,2026-06-29,other fix,"rustty: core blueprint (Surface/App/surface_mouse) — adversarially reviewed, ACCEPT-WITH-FIXES folded in"
+51826f60a,2026-07-02,2026-06-29,crash (panic/signal),rustty: plan checkpoint — integration tier (crash/termio/Command) DONE; core design next
+b8e4ae01c,2026-07-01,2026-06-29,crash (panic/signal),"rustty: port crash tier (dir/sentry/sentry_envelope, ThreadStateSurface seam) — 9 tests"
+1bbdbbdb9,2026-07-01,2026-06-29,crash (panic/signal),"rustty: integration-tier blueprint — Command→termio (not core, cycle), crash ThreadStateSurface seam, xev=D6 deferred"
+6cf99b4cd,2026-07-01,2026-06-29,other fix,rustty: fix concurrent onig_initialize heap corruption (remove renderer Terminal test lock)
+601d20237,2026-07-01,2026-06-29,other fix,rustty: wire vt oniguruma feature — fix tmux capture_group + StringMap url/move bugs
+497b0a11d,2026-06-26,2026-06-22,other fix,rustty: config C2 field-parity fix (restore font-size+) + DeepEqual on all value types
+4c2af7b8e,2026-06-25,2026-06-22,other fix,rustty: fix SIMD utf8_decode_until_control_seq tail over-read (ASan)
+e9e325358,2026-06-25,2026-06-22,aliasing UB (Miri SB/TB),rustty: fix vt-c tracked_grid_ref gpa reborrow (Miri SB+TB UB)
+3662e56bf,2026-06-24,2026-06-22,aliasing UB (Miri SB/TB),rustty: fix clear_cells Stacked-Borrows UB — raw-ptr args (faithful to Zig unprotected *Page/[]Cell)
+3ee9fd06d,2026-06-24,2026-06-22,aliasing UB (Miri SB/TB),rustty: clear_cells Stacked-Borrows UB fix workflow (Miri-caught)
+293cd99eb,2026-06-24,2026-06-22,other fix,rustty: restore dropped Screen production doc comments (vt-11 fidelity fix)
+b9425c6c3,2026-06-24,2026-06-22,other fix,"rustty: osc raw-byte payloads — fidelity fix (Zig [:0]const u8, not lossy String)"
+bb6620c1b,2026-06-24,2026-06-22,other fix,rustty: vt-9 osc raw-byte fidelity fix workflow
+460e74c8c,2026-06-23,2026-06-22,other fix,rustty: allocation benchmark workflow (§4 — quantify the audit-fix wins)
+846c32cde,2026-06-23,2026-06-22,aliasing UB (Miri SB/TB),rustty: fix Stacked-Borrows UB in resize_without_reflow_grow_cols (raw ptr)
+eccf49681,2026-06-22,2026-06-22,aliasing UB (Miri SB/TB),rustty: fix Stacked-Borrows UB in clone-reclaims-styles test (raw ptr)
+1cf702d14,2026-06-22,2026-06-22,other fix,rustty: vt-3c comment-fidelity fix workflow (restore dropped method doc comments)
+64f3861bc,2026-06-22,2026-06-22,aliasing UB (Miri SB/TB),rustty: PageList tests 43/205 + grow Stacked-Borrows fix (vt-3c WIP checkpoint)
+6f74f1253,2026-06-21,2026-06-15,other fix,rustty: fix R1 comment/code-path drops in os/lib/datastruct (hardened G3b green)
+478732c3b,2026-06-21,2026-06-15,other fix,rustty: fix rustty-unicode tautological oracle tests — harness differential + real in-crate spot-checks; Miri confirmed
+9956175e6,2026-06-21,2026-06-15,other fix,rustty: fix ci.sh G6 invocation (--all-done); batch-1 full CI green
+bc912670f,2026-06-21,2026-06-15,other fix,rustty: batch-1 final gate — port build_config mode_string (R1 fidelity fix) + reports
+d9fd637ce,2026-06-21,2026-06-15,aliasing UB (Miri SB/TB),rustty: adopt Miri as primary memory/UB/leak gate (G6); drop tracking-allocator

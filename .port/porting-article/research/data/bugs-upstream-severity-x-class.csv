@@ -1,0 +1,15 @@
+severity,class,count
+high,crash,6
+high,deadlock/hang,1
+low,crash,40
+low,deadlock/hang,4
+low,intent-breaking,28
+low,latent,58
+low,leak,14
+low,test-weakness,11
+low,ub,15
+medium,crash,14
+medium,deadlock/hang,4
+medium,intent-breaking,5
+medium,latent,1
+medium,ub,4

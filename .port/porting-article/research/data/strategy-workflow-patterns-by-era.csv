@@ -1,0 +1,23 @@
+era,scripts_in_era,pattern,scripts_with_pattern,pct
+pre-Bun (<2026-07-10),156,fan_out_parallel,52,33.3
+pre-Bun (<2026-07-10),156,pipeline,2,1.3
+pre-Bun (<2026-07-10),156,adversarial_refute,77,49.4
+pre-Bun (<2026-07-10),156,vote_or_panel,37,23.7
+pre-Bun (<2026-07-10),156,design_doc,52,33.3
+pre-Bun (<2026-07-10),156,worktree,3,1.9
+pre-Bun (<2026-07-10),156,fix_loop,97,62.2
+pre-Bun (<2026-07-10),156,miri,115,73.7
+pre-Bun (<2026-07-10),156,oracle_diff,11,7.1
+pre-Bun (<2026-07-10),156,lifetimes,1,0.6
+pre-Bun (<2026-07-10),156,structured_schema,149,95.5
+post-Bun (>=2026-07-10),56,fan_out_parallel,47,83.9
+post-Bun (>=2026-07-10),56,pipeline,5,8.9
+post-Bun (>=2026-07-10),56,adversarial_refute,14,25.0
+post-Bun (>=2026-07-10),56,vote_or_panel,5,8.9
+post-Bun (>=2026-07-10),56,design_doc,6,10.7
+post-Bun (>=2026-07-10),56,worktree,26,46.4
+post-Bun (>=2026-07-10),56,fix_loop,20,35.7
+post-Bun (>=2026-07-10),56,miri,27,48.2
+post-Bun (>=2026-07-10),56,oracle_diff,55,98.2
+post-Bun (>=2026-07-10),56,lifetimes,10,17.9
+post-Bun (>=2026-07-10),56,structured_schema,55,98.2

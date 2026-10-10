@@ -1,0 +1,11 @@
+first_ts,last_ts,tool,machine,cost_usd,active_hours,calls,n_subagent_files,compactions,models,title
+2026-09-01T08:38,2026-09-26T23:32,claude,mac,4523.6262,70.2008,43014,1636,3,claude-fable-5|claude-fable-5-1|claude-haiku-4-5-20251001|claude-opus-4-8|claude-opus-5|claude-opus-5-5|claude-sonnet-5,Rustty port upstream changes
+2026-09-24T05:15,2026-10-08T19:46,claude,mac,2904.0781,65.4219,30045,354,7,claude-haiku-4-5-20251001|claude-opus-5-5|claude-sonnet-5|claude-sonnet-5-5,Rustty port upstream changes (2)
+2026-08-01T06:43,2026-08-02T14:05,codex,mac,768.8937,31.0914,6831,0,0,gpt-5.5,
+2026-07-19T08:39,2026-07-19T23:13,claude,rvm,365.1162,10.9562,2307,75,1,claude-fable-5|claude-opus-4-8|claude-sonnet-5,Check desktop environment and Wayland status
+2026-07-18T10:40,2026-07-19T10:02,claude,rvm,251.8039,8.6994,1976,67,1,claude-opus-4-8,
+2026-07-31T18:51,2026-08-01T05:59,codex,mac,150.6474,10.2954,2089,0,0,gpt-5.6-sol,
+2026-07-19T17:36,2026-07-23T13:36,claude,rvm,70.5528,2.9202,291,4,1,claude-fable-5|claude-opus-4-8,Check desktop environment and Wayland status
+2026-10-08T14:17,2026-10-08T16:53,claude,mac,25.2409,1.5102,401,9,0,claude-opus-5-5|claude-sonnet-5-5,Rustty icon rebrand plan
+2026-08-01T06:04,2026-08-01T06:36,codex,mac,6.3891,0.5326,119,0,0,gpt-5.6-sol,
+2026-07-22T19:15,2026-09-23T01:58,claude,mac,5.9123,0.8335,153,0,1,claude-sonnet-5,Analyze disk usage and identify cleanup opportunities

@@ -1,0 +1,29 @@
+utc,local_pdt,event,provenance,source
+2026-06-28T07:16Z,2026-06-28 00:16,"Codex (gpt-5.5 high) starts the website rebrand: 'Help me fully rebrand the website from ghostty to rustty'",MEASURED,~/.codex/sessions/2026/06/28/rollout-...019f0d12*.jsonl
+2026-06-28..2026-07-05,,"10 Codex website threads (Ferris mascot, light/dark mode, 3D and eye-tracking animation), $240 API-equivalent; 16 website commits without a Claude trailer on 06-28/07-03/07-04, 26 Claude Fable 5 commits on 07-02",MEASURED (commit attribution ESTIMATED),rustty-stats messages.csv.gz; git log codex/rustty-website-rebrand
+2026-07-15T22:13Z,2026-07-15 15:13,"Codex (gpt-5.6-sol medium, cwd ghostty): 'Tell me about the Nix (Linux?) build config ... how ghostty builds on these other platforms'",MEASURED,rollout 019f67d6
+2026-07-15T22:42Z,2026-07-15 15:42,"Codex: 'Run the build (build-rusty.sh) and run the debug app'",MEASURED,rollout 019f67f1
+2026-07-18T10:23Z,2026-07-18 03:23,"Codex sets up the Linux VM (rvm): clone rustty and pinned ghostty, SSH push config, git/shell aliases, install Claude Code and Cursor",MEASURED,rollout 019f74be
+2026-07-18T10:56Z,,"Codex account shows plan_type=pro from here to 2026-08-18 (plus before and after)",MEASURED,rustty-stats messages.csv.gz plan_type
+2026-07-31T16:05Z,2026-07-31 09:05,"(Claude Code, in parallel) /goal: audit ghostty vs rustty and address gaps, 'being mindful of token utilization'",MEASURED,~/.claude/history.jsonl
+2026-07-31T18:51Z,2026-07-31 11:51,"Codex audit 1 starts (/goal, gpt-5.6-sol high): adversarial non-macOS parity audit, write only to .port/codex/",MEASURED,rollout 019fb984
+2026-07-31T19:39Z,2026-07-31 12:39,"Author: 'You fugure out the scope, I just want 100% parity and no gaps/bugs'",MEASURED,rollout 019fb984
+2026-07-31T20:19Z,2026-07-31 13:19,"A Claude commit (2bd45ccc7) sweeps the in-progress .port/codex tree (78 files) into git",MEASURED,git show --stat 2bd45ccc7
+2026-08-01T06:03Z,2026-07-31 23:03,"Audit 1 ends: 20 verified gaps (5 P1, 9 P2, 3 P3, 3 P4); line-audit design + universe + fail-closed verifier written",MEASURED/DOCUMENTED,rollout 019fb984; FINDINGS.md at d34cc1549^
+2026-08-01T06:04Z,2026-07-31 23:04,"Audit 2 goal: 'every single line of code needs to be audited ... orchestrate with 10-15 sub-agents (not just 3)'",MEASURED,rollout 019fbbeb
+2026-08-01T06:43Z,2026-07-31 23:43,"Audit 2 main thread starts on gpt-5.5 high; first batch of independent wave reviewers (prompt: 'one of 15 independent reviewers') spawned at 06:45",MEASURED,rollout 019fbc0f
+2026-08-01T14:33Z,2026-08-01 07:33,"Author: address 'pending replay' rows and consolidate FINDINGS.md into INDEX.md",MEASURED,rollout 019fbc0f
+2026-08-01T14:56Z,2026-08-01 07:56,"Author: 'use medium effort from now on'",MEASURED,rollout 019fbc0f
+2026-08-01T20:33Z,2026-08-01 13:33,"(Claude Code) author kills a CI run stuck for ~24 h; Claude work pauses until 08-10",MEASURED,~/.claude/history.jsonl
+2026-08-02T03:00Z,2026-08-01 20:00,"Wave 100 reached",MEASURED,assistant messages 019fbc0f
+2026-08-02T06:55Z,2026-08-01 23:55,"Registry first reported at 659 rows",MEASURED,assistant messages 019fbc0f
+2026-08-02T13:24Z,2026-08-02 06:24,"Severity audit: 'replay' is a lifecycle state, not a severity; 659 rows, severity cells P1 12 / P2 27 / P3 64 / P4 87",DOCUMENTED,assistant final answer 019fbc0f
+2026-08-02T14:05Z,2026-08-02 07:05,"Last Codex call; weekly limit at 99% (window 10,080 min); strict line-ledger credit 10,929 lines (0.35%)",MEASURED,rollout token_count rate_limits; final answer
+2026-08-10T20:13Z,2026-08-10 13:13,"Commit d34cc1549 'untrack codex stuff' removes the swept .port/codex files (91 files, 23,637 lines) and gitignores .port/codex",MEASURED,git show --stat d34cc1549
+2026-08-10T20:36Z,2026-08-10 13:36,"Claude Code prompt: vet every Codex finding with workflows, keep a resumable state file, remediate and verify",MEASURED,~/.claude/history.jsonl
+2026-08-10,,"Three vet workflows (P1+P2 27 groups, P3 51, P4 69) -> 144 confirmed / 3 refuted; fix wave 1 launched (16 lanes, 64 sub-batches, 132 findings), restarted after a session restart",DOCUMENTED,.port/codex-vet/STATE.json workflows[]
+2026-08-11T00:52Z,2026-08-10 17:52,"Author: include the deferred platform items too (Windows unverifiable; Linux on the VM)",MEASURED,~/.claude/history.jsonl
+2026-08-11T02:13Z,2026-08-10 19:13,"Author: Fable usage about to expire, continue with Opus 5",MEASURED,~/.claude/history.jsonl
+2026-08-11,,"Wave-2 design docs with adversary pass; wave 1 resume (9 lanes, 42 sub-batches); fixup (6 lanes); wave 2 platform fixes (4 lanes, 8 batches, 16 agents)",DOCUMENTED,STATE.json workflows[]
+2026-08-12T05:03Z,2026-08-11 22:03,"Commit 8120dd10d: vet 147, remediate 140, restore Windows type-check; 532 files +87,270/-5,513; 4,660 tests pass",MEASURED,git show 8120dd10d
+2026-09-11,,"Under the never-port-a-bug rule, the defect ledger entry for a 32-bit Kitty storage-limit trap reverses the codex-vet resolution of W33-B07-32BIT-01 (trap -> saturate)",DOCUMENTED,.port/parity-closure/UPSTREAM-DEFECTS.md UD63

@@ -1,0 +1,24 @@
+bench,order,step,commits,rust_ms,zig_ms_same_session,source_under_.port/phase-2
+terminal-parser,0,"pre-fix code, release-fast profile",10cc614,660.1,262.9,perf-v2/frozen_B.jsonl
+terminal-parser,1,r1: inline idioms + utf8 DFA + parser destage (no LTO),"f2b7dcd,79dce2e,2bb5c42,9e1837b",322.7,262.9,perf-v2/SHIP_RF.jsonl
+terminal-parser,2,"r2: boxed dispatch payloads + InlineVec + state hoist (Action 16 B, drop-free)",e1f4829,216.6,260.7,perf-v3/s_arrayvec.jsonl
+terminal-parser,3,r3 ship (no parser change; noise),10f2091,210.6,266.0,perf-v3/r3_r3ship.jsonl
+terminal-parser,4,r5: state-equal fast path in Parser::next,be02801,92.5,263.8,perf-v5/r5ship.jsonl
+screen-clone.clone,0,"pre-fix code, release-fast profile",10cc614,79.4,49.7,perf-v2/frozen_B.jsonl
+screen-clone.clone,1,r1 ship (pin-keys / remap hasher: noise),"08299e0,cdb9a26",79.8,49.7,perf-v2/SHIP_RF.jsonl
+screen-clone.clone,2,r2: packed Style::eql + coalesced cell copy,ab20827,56.9,51.3,perf-v3/s_clone.jsonl
+screen-clone.clone,3,r3: outline cold grapheme/hyperlink arms,1abae33,53.7,51.6,perf-v3/r3_s_r3clone.jsonl
+screen-clone.clone,4,r3 ship (incl. parity fix 10f2091),10f2091,50.5,51.6,perf-v3/r3_r3ship.jsonl
+screen-clone.clone,5,r5: same-style run batching + by-pointer set adds,745b3c9,20.9,50.6,perf-v5/r5ship.jsonl
+screen-clone.render,0,"pre-fix code, release-fast profile",10cc614,30.4,15.6,perf-v2/frozen_B.jsonl
+screen-clone.render,1,r1: MultiArrayList SoA + raw-column memcpy,9789788,24.7,15.6,perf-v2/SHIP_RF.jsonl
+screen-clone.render,2,r2: stop re-zeroing SoA columns per rebuild,b6f5e4f,17.0,15.7,perf-v3/s_render.jsonl
+screen-clone.render,3,r3: hoist mutable style/grapheme column borrows,e6f27dc,15.5,15.7,perf-v3/r3_s_r3render.jsonl
+screen-clone.render,4,r4: hoist style-set base + zip walk (Zig does not do this),a26a4b1,13.8,15.4,perf-v5/r5ship.jsonl
+osc-parser,0,"pre-fix code, release-fast profile",10cc614,146.4,57.3,perf-v2/frozen_B.jsonl
+osc-parser,1,r1: inline idioms + zero-alloc fixed-writer capture,"f2b7dcd,11ca425",57.5,57.3,perf-v2/SHIP_RF.jsonl
+osc-parser,2,r2: shared RefCountedSet path + fall-through success store,"ab20827,9e386ab",49.2,51.3,perf-v3/s_oscwin.jsonl
+osc-parser,3,r5 ship (lane C NONE-SAFE: M4 store-forward floor),-,49.4,57.1,perf-v5/r5ship.jsonl
+terminal-stream,0,"pre-fix code, release-fast profile",10cc614,443.2,562.6,perf-v2/frozen_B.jsonl
+terminal-stream,1,"r1-r3 ships (canary, flat)",-,460.8,566.2,perf-v3/r3_r3ship.jsonl
+terminal-stream,2,r5: outline cold print arms + bench built with simd like ghostty-bench,"6ca1015,52116f3",343.3,551.5,perf-v5/r5ship.jsonl

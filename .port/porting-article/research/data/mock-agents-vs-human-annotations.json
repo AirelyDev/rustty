@@ -1,0 +1,431 @@
+{
+ "eras": [
+  [
+   "foundation",
+   "2026-06-21",
+   "2026-06-21",
+   "Phases 0-1: reference baseline, oracle harness, workspace scaffold and parity gates"
+  ],
+  [
+   "port",
+   "2026-06-21",
+   "2026-06-26",
+   "Terminal engine port, leaves first (vt tests 0 → 2,032 in 4 days)"
+  ],
+  [
+   "port",
+   "2026-06-26",
+   "2026-07-08",
+   "Upper tiers: config, font, termio, core, CLI, embedding API, renderer"
+  ],
+  [
+   "platform",
+   "2026-07-08",
+   "2026-07-12",
+   "macOS windowing + Swift app (first pixels 07-09, runnable 07-12)"
+  ],
+  [
+   "strategy",
+   "2026-07-10",
+   "2026-07-12",
+   "Bun learnings + realignment: six new porting rules, field-lifetime ledger, first full Miri sweep"
+  ],
+  [
+   "platform",
+   "2026-07-13",
+   "2026-07-16",
+   "Rustty rebrand + inspector port"
+  ],
+  [
+   "perf",
+   "2026-07-15",
+   "2026-07-16",
+   "Perf head-to-head vs Zig: 14/14 benchmarks faster"
+  ],
+  [
+   "platform",
+   "2026-07-16",
+   "2026-07-22",
+   "Linux: epoll/io_uring event loop, OpenGL, GTK app runtime"
+  ],
+  [
+   "port",
+   "2026-07-23",
+   "2026-07-30",
+   "Completion program: 20 workstreams, no deferrals"
+  ],
+  [
+   "resync",
+   "2026-07-29",
+   "2026-07-31",
+   "Upstream resync 1 (4749c4e93 → 6ad1fe7d8, 365 upstream commits)"
+  ],
+  [
+   "audit",
+   "2026-08-10",
+   "2026-08-11",
+   "Vetting the Codex line audit (147 groups, 140 remediated)"
+  ],
+  [
+   "resync",
+   "2026-08-17",
+   "2026-08-25",
+   "Upstream resync 2 (6ad1fe7d8 → 12967b68f, 543 upstream commits)"
+  ],
+  [
+   "resync",
+   "2026-08-25",
+   "2026-08-25",
+   "Upstream resync 3 (12967b68f → 683d8db64)"
+  ],
+  [
+   "audit",
+   "2026-08-26",
+   "2026-08-26",
+   "Gap close + build-system gaps (Nix, Flatpak, xcframework)"
+  ],
+  [
+   "perf",
+   "2026-08-28",
+   "2026-09-01",
+   "Perf wave 2: restoring compile-time specialisation and inlining"
+  ],
+  [
+   "resync",
+   "2026-09-01",
+   "2026-09-08",
+   "Upstream resync 4 (88f57ee66 → 20abdb50a)"
+  ],
+  [
+   "audit",
+   "2026-09-08",
+   "2026-09-28",
+   "Functional-parity audit + closure (497 findings)"
+  ],
+  [
+   "resync",
+   "2026-09-28",
+   "2026-10-07",
+   "Upstream resync 5 + memory-safety lanes (Miri, ASan/LSan/MSan/TSan)"
+  ],
+  [
+   "resync",
+   "2026-10-07",
+   "2026-10-08",
+   "Upstream resync 6 (12752b2ac → a60e9e2a5)"
+  ],
+  [
+   "platform",
+   "2026-10-08",
+   "2026-10-08",
+   "Ferris icon rebrand"
+  ]
+ ],
+ "human_eras": [
+  [
+   "2026-06-20",
+   "2026-07-09",
+   "Greenfield sprint"
+  ],
+  [
+   "2026-07-10",
+   "2026-07-17",
+   "Bun ideas, macOS app, perf"
+  ],
+  [
+   "2026-07-18",
+   "2026-07-23",
+   "Linux VM GTK bring-up"
+  ],
+  [
+   "2026-07-24",
+   "2026-08-31",
+   "Completion, Codex audit, first resyncs"
+  ],
+  [
+   "2026-09-01",
+   "2026-09-28",
+   "Parity closure, never port a bug"
+  ],
+  [
+   "2026-09-29",
+   "2026-10-08",
+   "Verification matrix, last resync"
+  ]
+ ],
+ "events": [
+  [
+   "2026-06-21",
+   "15:36",
+   "mile",
+   "First commit",
+   "Workspace scaffold + reference baseline (15c1a9bd7). The launch prompt itself is not in the history file."
+  ],
+  [
+   "2026-06-22",
+   "06:57",
+   "limit",
+   "API throttling",
+   "“The workflow stopped due to API throttling, please resume it”"
+  ],
+  [
+   "2026-06-26",
+   "09:30",
+   "limit",
+   "Token limit",
+   "“can we pause here, as I am approaching my token limit.”"
+  ],
+  [
+   "2026-06-30",
+   "18:38",
+   "limit",
+   "Limit reset",
+   "“continue, token limit is reset”"
+  ],
+  [
+   "2026-07-04",
+   "08:41",
+   "limit",
+   "Out of tokens",
+   "“I am out of token usage.”"
+  ],
+  [
+   "2026-07-09",
+   "00:35",
+   "mile",
+   "First pixels",
+   "Metal on-screen present (74c57204f)"
+  ],
+  [
+   "2026-07-10",
+   "02:43",
+   "pivot",
+   "Bun ideas pivot",
+   "“I haven't validated my port at all, so I'd like you do help do that validation, and possibly catch bugs I haven't uncovered yet.” Bun learnings committed 10:55 (2c03357ce); six new rules ratified 17:14 (ccd14200e)."
+  ],
+  [
+   "2026-07-12",
+   "04:12",
+   "mile",
+   "Runnable macOS",
+   "Runnable Rustty terminal on macOS (d1b4df097)"
+  ],
+  [
+   "2026-07-13",
+   "07:11",
+   "limit",
+   "Rate-limit day",
+   "/rate-limit-options, then /usage-credits twice; plans only, no commits"
+  ],
+  [
+   "2026-07-16",
+   "10:41",
+   "mile",
+   "14/14 perf wins",
+   "Head-to-head vs Zig: 14/14 benchmarks faster (349e5d101)"
+  ],
+  [
+   "2026-07-18",
+   "02:00",
+   "mile",
+   "Live GTK window",
+   "A live terminal in a GTK window on the Linux VM (9bc62e574)"
+  ],
+  [
+   "2026-07-31",
+   "12:00",
+   "pin",
+   "Pin +365",
+   "Upstream pin 4749c4e93 → 6ad1fe7d8 (365 upstream commits)"
+  ],
+  [
+   "2026-08-01",
+   "13:34",
+   "limit",
+   "Codex audit stalls",
+   "“it seems stuck- been runnign for 24hrs” (Codex weekly meter 90-99%)"
+  ],
+  [
+   "2026-08-10",
+   "19:13",
+   "limit",
+   "Model switch",
+   "“My Fable usage is about to expire, when it does, continue your work with Opus 5”"
+  ],
+  [
+   "2026-08-17",
+   "12:00",
+   "pin",
+   "Pin +543",
+   "Upstream pin 6ad1fe7d8 → 12967b68f (543 upstream commits)"
+  ],
+  [
+   "2026-08-25",
+   "07:17",
+   "limit",
+   "Credits out",
+   "“Resume the workflow, which was interupted when I ran our of usage credits.”"
+  ],
+  [
+   "2026-08-25",
+   "12:00",
+   "pin",
+   "Pin +245",
+   "Upstream pin 12967b68f → 683d8db64 (245 upstream commits)"
+  ],
+  [
+   "2026-08-26",
+   "12:00",
+   "pin",
+   "Pin +4",
+   "Drift absorb 683d8db64 → 88f57ee66"
+  ],
+  [
+   "2026-09-01",
+   "12:00",
+   "pin",
+   "Pin +121",
+   "Upstream pin 88f57ee66 → 20abdb50a (121 upstream commits)"
+  ],
+  [
+   "2026-09-01",
+   "12:07",
+   "limit",
+   "Session limit",
+   "“The workflow was interrupted due to my session limits expiring.” 333 agent threads hit the limit within one minute."
+  ],
+  [
+   "2026-09-11",
+   "10:43",
+   "rule",
+   "Never port a bug",
+   "“We shouldn't port the crash, please don't. Fix it here … and document all issues like this so we can propose upstream fixes later.” Rule committed 4 minutes later (7dd991582)."
+  ],
+  [
+   "2026-09-24",
+   "08:33",
+   "limit",
+   "Nearing limits",
+   "“Pause the work for now, we're nearing limits. I'll continue post-reset”"
+  ],
+  [
+   "2026-09-28",
+   "12:00",
+   "pin",
+   "Pin +333",
+   "Upstream pin 20abdb50a → 12752b2ac (333 upstream commits)"
+  ],
+  [
+   "2026-09-28",
+   "16:20",
+   "mile",
+   "Parity closure",
+   "Parity closure merged (079cc21e7)"
+  ],
+  [
+   "2026-09-28",
+   "21:48",
+   "limit",
+   "Approaching limits",
+   "“want to pause for a bit since we're approching usage limits.”"
+  ],
+  [
+   "2026-10-02",
+   "16:15",
+   "limit",
+   "Weekly limit",
+   "Weekly limit hit, “resets Oct 6 at 3pm”; $0 of Mac Claude usage 10-03 → 10-06"
+  ],
+  [
+   "2026-10-06",
+   "19:03",
+   "limit",
+   "Resume",
+   "“Resume the work as we previously hit the session limit”"
+  ],
+  [
+   "2026-10-07",
+   "12:00",
+   "pin",
+   "Pin +107",
+   "Upstream pin 12752b2ac → a60e9e2a5 (107 upstream commits)"
+  ]
+ ],
+ "quiet": [
+  [
+   "2026-06-27",
+   "2026-06-29",
+   "Token limit: between “approaching my token limit” (06-26) and “continue, token limit is reset” (06-30)"
+  ],
+  [
+   "2026-07-05",
+   "2026-07-06",
+   "Out of tokens: after “I am out of token usage” (07-04); resumed 07-07"
+  ],
+  [
+   "2026-07-13",
+   "2026-07-13",
+   "Rate-limit day: /rate-limit-options + /usage-credits ×2; plan-writing only"
+  ],
+  [
+   "2026-07-20",
+   "2026-07-21",
+   "Linux VM work paused; the computer crashed on resume. No limit language"
+  ],
+  [
+   "2026-07-24",
+   "2026-07-27",
+   "Explicit pause: “pause here actually (stop sub-agents too), and plan to resume when I say so”"
+  ],
+  [
+   "2026-08-01",
+   "2026-08-09",
+   "Codex app audit wrote only untracked findings (its weekly meter hit 90-99%); author on other projects; resumed 08-10 by handing the findings to Claude"
+  ],
+  [
+   "2026-08-12",
+   "2026-08-16",
+   "Audit fixes merged 08-12; VM disk cleanup only; author on other projects"
+  ],
+  [
+   "2026-08-19",
+   "2026-08-24",
+   "Upstream-sync workflow paused 08-18; next prompt: “interupted when I ran our of usage credits”"
+  ],
+  [
+   "2026-08-27",
+   "2026-08-27",
+   "Single idle day"
+  ],
+  [
+   "2026-08-29",
+   "2026-08-31",
+   "Local GitHub Actions run; author on other projects"
+  ],
+  [
+   "2026-09-02",
+   "2026-09-07",
+   "Parity audit interrupted by “session limits expiring” (09-01); resumed 09-07 with the same message"
+  ],
+  [
+   "2026-09-12",
+   "2026-09-16",
+   "Paused 09-11: “I want to focus tokens in something else”"
+  ],
+  [
+   "2026-09-18",
+   "2026-09-21",
+   "Author working in another app that embeds Rustty as its terminal"
+  ],
+  [
+   "2026-09-25",
+   "2026-09-25",
+   "“Pause the work for now, we're nearing limits”; resumed 09-26"
+  ],
+  [
+   "2026-10-03",
+   "2026-10-05",
+   "Weekly limit hit 10-02 (“resets Oct 6 at 3pm”); zero prompts in any project"
+  ]
+ ]
+}

@@ -1,0 +1,4 @@
+era,start,end,commits_nonmerge,merge_commits,code_lines_added,records_docs_lines_added,prompts,days_with_prompts,slash_cmd_prompts,median_prompt_chars,commits_per_prompt,recovered_cost_usd_lower_bound,records_to_code_ratio
+E1 pre-Bun-realignment,2026-06-21,2026-07-09,445,0,417002,80188,113,12,33,30.0,3.94,0.0,0.192
+E2 post-Bun rules + LIFETIMES (phases 3-5),2026-07-10,2026-08-31,947,107,402700,417144,551,26,93,50.0,1.72,3075.71,1.036
+"E3 upstream resyncs, Opus 5/5.5 orchestrator (phases 6-8)",2026-09-01,2026-10-08,1310,159,407383,193267,226,20,68,38.5,5.8,7956.72,0.474

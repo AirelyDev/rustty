@@ -1,0 +1,27 @@
+date,commit,event,category
+2026-06-21,15c1a9bd7,First commit: phase-1 workspace scaffold + phase-0 artifacts,foundation
+2026-06-21,d9fd637ce,Miri adopted as primary memory/UB/leak gate (G6),safety
+2026-06-23,161178d6a,Sanitizer matrix gate script added,safety
+2026-06-25,e9e325358,"First Miri-found UB fixed (vt-c tracked_grid_ref reborrow, SB+TB)",safety
+2026-06-25,a7156db18,"rustty-vt reaches 2,032 #[test] fns (from 113 on day 1)",port
+2026-07-07,f046d41a6,"Shaper-hook aliasing fix, Miri-proven SB/TB-clean",safety
+2026-07-07,b0df56c29,Offscreen golden-image renderer gate (GPU R-d Chunk 4),renderer
+2026-07-09,74c57204f,FIRST PIXELS: Metal on-screen present (macOS),milestone
+2026-07-10,2c03357ce,Bun-rewrite learnings + realignment plan land,strategy
+2026-07-10,8f6d781dc,LIFETIMES.tsv retroactive pointer-field ownership ledger,strategy
+2026-07-11,3277f2f78,"First full vt Miri sweep (2,037 tests) - real SB UB found in search",safety
+2026-07-12,1395249e5,Upstream Swift macOS app imported byte-identical over Rust xcframework,milestone
+2026-07-12,d1b4df097,RUNNABLE Rustty terminal on macOS,milestone
+2026-07-14,ae70b8214,Rebrand complete: tree is Rustty-branded,milestone
+2026-07-15,992f91f30,WASM/web target: headless C-ABI module,platform
+2026-07-16,349e5d101,"Perf: 14/14 benchmark wins vs Zig, suite -21.7%",perf
+2026-07-17,3dad6d7a2,GTK FIRST LIGHT: live terminal frame on Linux,milestone
+2026-07-29,2690b7139,Live verification on rvm (GNOME 50 Linux VM),cross-host
+2026-07-30,507dcced2,libxev iocp (Windows) + wasi_poll backends ported,platform
+2026-07-31,0efe06a1c,First oracle pin advance (Phase 3),resync
+2026-08-26,b8e6a9eb8,"Flatpak built, installed and run on Linux",packaging
+2026-09-28,079cc21e7,"Parity closure merged: 497 findings, 0 open",audit
+2026-09-30,9076dfefd,"Cross-platform build check GREEN: Linux, Windows x64/ARM64/GNU, macOS",cross-host
+2026-10-06,1e84e3ff5,Miri lanes on nextest GREEN (G6/G6c/G6t),safety
+2026-10-07,63de65bc2,"G-TSAN gate GREEN on Mac (4,380 tests); Highway race UD377 fixed",safety
+2026-10-08,1d22ba80d,"Phase 8 cross-host build GREEN on rvm, rwin (msvc+gnu), macOS at pin a60e9e2a5",cross-host

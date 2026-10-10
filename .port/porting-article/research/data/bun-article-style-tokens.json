@@ -1,0 +1,56 @@
+{
+ "source": "bun.com/blog/bun-in-rust, computed styles via Playwright 2026-10-08 (MEASURED)",
+ "page": {
+  "framework": "SSR React islands, Tailwind classes, hashed /_assets chunks; no chart library detected (inline SVG + requestAnimationFrame)",
+  "bg": "#ffffff (light)",
+  "prose_width_px": 736,
+  "article_width_px": 1200,
+  "widget_card_width_px": 800,
+  "body_font": "ui-sans-serif/system-ui 17px",
+  "h1_font": "Archivo 60.8px bold",
+  "h2_px": 29.75,
+  "h3_px": 22.1,
+  "mono_font": "Martian Mono (code 13.5-14.9px; widget labels 11px letter-spacing 1.98px uppercase; widget big numbers 30px 700)"
+ },
+ "widget_card": {
+  "bg": "#0b0c10",
+  "border": "1px #282a36 (gray-800)",
+  "radius": "rounded-2xl (sm+)",
+  "text": "#d1d5db",
+  "caption": "12px #6b7280 below a divider",
+  "bleed": "-mx-4 mobile full-bleed, lg:-mx-8 xl:-mx-24 wider than prose",
+  "pill": "'\u273b claude code \u00b7 dynamic workflow' Martian Mono 9px #e8946f outlined"
+ },
+ "palettes": {
+  "heatmap_empty": "#16181f",
+  "heatmap_ramp": [
+   "#502482",
+   "#6a28a4",
+   "#b01d8f",
+   "#e7476c",
+   "#f87e48",
+   "#fcab40",
+   "#fde047"
+  ],
+  "ci_fail": "#ef4444",
+  "ci_pass": "#22c55e",
+  "ci_partial": "#166534",
+  "gitlog_add": "#f472b6",
+  "gitlog_delete": "#22d3ee",
+  "gitlog_mid": "#a78bfa",
+  "roles": {
+   "fixer": "#fbbf24",
+   "reviewer": "#a78bfa",
+   "applier": "#4ade80"
+  },
+  "diff_add": "#34d399",
+  "diff_del": "#f87171"
+ },
+ "interaction_patterns": [
+  "play/replay buttons that compress days into ~30s",
+  "big monospace counters that tick with the replay",
+  "scroll-triggered staggered reveal",
+  "per-mark SVG <title> tooltips with exact counts",
+  "captions stating exactly what is plotted and that data/commit subjects are real"
+ ]
+}

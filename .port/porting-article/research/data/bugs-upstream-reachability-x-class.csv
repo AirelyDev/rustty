@@ -1,0 +1,49 @@
+reachability_source,class,count
+OS / driver behaviour,crash,1
+OS / driver behaviour,intent-breaking,2
+OS / driver behaviour,latent,3
+OS / driver behaviour,leak,1
+OS / driver behaviour,ub,3
+VT stream / terminal output,crash,11
+VT stream / terminal output,deadlock/hang,2
+VT stream / terminal output,intent-breaking,5
+VT stream / terminal output,latent,1
+VT stream / terminal output,ub,3
+allocation failure,crash,1
+allocation failure,intent-breaking,1
+allocation failure,leak,1
+build,intent-breaking,1
+build,latent,3
+config file,crash,12
+config file,deadlock/hang,1
+config file,intent-breaking,4
+config file,latent,2
+config file,leak,4
+config file,test-weakness,1
+config file,ub,2
+file / font input,crash,5
+file / font input,deadlock/hang,2
+file / font input,intent-breaking,3
+file / font input,latent,3
+file / font input,leak,1
+file / font input,ub,2
+library C API / embedder,crash,19
+library C API / embedder,deadlock/hang,2
+library C API / embedder,intent-breaking,12
+library C API / embedder,latent,8
+library C API / embedder,leak,5
+library C API / embedder,test-weakness,1
+library C API / embedder,ub,3
+none at the pin,crash,4
+none at the pin,latent,32
+none at the pin,test-weakness,9
+other,crash,4
+other,deadlock/hang,2
+other,intent-breaking,5
+other,latent,5
+other,leak,1
+other,ub,5
+peer process (D-Bus/X11/Wayland),crash,3
+peer process (D-Bus/X11/Wayland),latent,2
+peer process (D-Bus/X11/Wayland),leak,1
+peer process (D-Bus/X11/Wayland),ub,1

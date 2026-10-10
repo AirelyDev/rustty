@@ -1,0 +1,8 @@
+component,central_usd,low_usd,high_usd,provenance,method
+recovered_total_all_sources,11032.43,11032.43,11032.43,MEASURED,sum cost_usd is_project=1 messages.csv.gz
+recovered_mac_claude,7957.09,7957.09,7957.09,MEASURED,
+recovered_mac_codex,2350.99,2350.99,2350.99,MEASURED,
+recovered_rvm_claude,724.35,724.35,724.35,MEASURED,
+lost_mac_claude_2026-06-21_to_2026-08-30,5800,4100,8700,ESTIMATED,1024 AI-trailer non-merge commits (HEAD) x recovered-window $/commit 5.67 (weekly range 4.0-8.5)
+readme_estimate_lost_mac_claude,6000,4000,9000,DOCUMENTED,/Users/gael/projects/rustty-stats/README.md commits.py section
+estimated_total_api_equivalent,17000,15100,19700,ESTIMATED,recovered + lost estimate

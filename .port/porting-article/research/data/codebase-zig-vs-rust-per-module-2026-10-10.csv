@@ -1,0 +1,35 @@
+module,zig_code,zig_comments,zig_tests,rust_crates,rust_code,rust_comments,rust_tests,code_ratio,tests_ratio
+VT engine,116709,25470,2983,rustty-vt,174720,44629,3488,1.5,1.17
+VT C API,20989,1609,465,rustty-vt-c,41595,14545,606,1.98,1.3
+font,21349,5440,171,rustty-font+rustty-font-shaper,36697,15997,292,1.72,1.71
+apprt,20795,4090,61,rustty-apprt+rustty-apprt-api+rustty-apprt-c,36568,12581,358,1.76,5.87
+dep: libxev,17239,2934,124,rustty-xev,30372,7587,204,1.76,1.65
+renderer,9364,2667,35,rustty-renderer+rustty-render-types,27294,13997,254,2.91,7.26
+config,8734,4767,184,rustty-config+rustty-cfg-fmt,19948,8943,283,2.28,1.54
+dep: z2d,19812,4384,176,rustty-z2d,9907,2016,105,0.5,0.6
+cli,7506,1274,109,rustty-cli+rustty-args,15336,6071,215,2.04,1.97
+dep: libvaxis,14206,1929,151,rustty-vaxis,13862,1878,174,0.98,1.15
+termio,5972,1662,46,rustty-termio,13963,9574,139,2.34,3.02
+core,4996,1624,3,rustty-core,13252,10014,92,2.65,30.67
+os,3393,809,50,rustty-os,9531,3111,143,2.81,2.86
+input,4549,1526,90,rustty-input,8646,2477,124,1.9,1.38
+build,4646,1035,7,xtask+rustty-build-config,7772,690,133,1.67,19.0
+inspector,4193,286,1,rustty-inspector,7086,4471,23,1.69,23.0
+rust-only infra,0,0,0,rustty-zigstd+rustty-identity+rustty-version+rustty-zigimg,5926,834,124,,
+datastruct,4190,1003,88,rustty-datastruct,5814,1357,100,1.39,1.14
+bench,2751,803,9,rustty-bench,5626,2456,53,2.05,5.89
+unicode,566,176,11,rustty-unicode,5386,305,23,9.52,2.09
+lib,3150,560,45,rustty-lib,2621,456,42,0.83,0.93
+synthetic,1292,228,14,rustty-synthetic,2792,421,27,2.16,1.93
+extra,833,34,2,rustty-extra,2485,258,39,2.98,19.5
+crash,697,216,9,rustty-crash,2226,989,27,3.19,3.0
+simd,922,219,30,rustty-simd,1666,494,42,1.81,1.4
+dep: zf,664,62,9,rustty-zf,1423,133,12,2.14,1.33
+global,235,148,0,rustty-global,1123,565,25,4.78,
+pkg: wuffs,646,65,14,rustty-wuffs,1096,693,24,1.7,1.71
+binary entry,421,129,5,rustty,996,512,26,2.37,5.2
+util/misc,815,422,11,rustty-util,416,137,6,0.51,0.55
+pkg: oniguruma,649,32,4,rustty-oniguruma,780,123,2,1.2,0.5
+terminfo,471,130,4,rustty-terminfo,772,199,8,1.64,2.0
+wasm,17,6,0,rustty-wasm+rustty-web-canvas,538,195,2,31.65,
+helpgen,151,11,0,rustty-helpgen,153,67,6,1.01,

@@ -1,0 +1,61 @@
+week_start,category,count
+2026-06-15,aliasing UB (Miri SB/TB),1
+2026-06-15,other fix,4
+2026-06-22,aliasing UB (Miri SB/TB),6
+2026-06-22,other fix,7
+2026-06-29,ABI / layout,1
+2026-06-29,crash (panic/signal),5
+2026-06-29,data race / deadlock,1
+2026-06-29,other fix,8
+2026-07-06,aliasing UB (Miri SB/TB),8
+2026-07-06,crash (panic/signal),3
+2026-07-06,data race / deadlock,1
+2026-07-06,other fix,9
+2026-07-13,ABI / layout,1
+2026-07-13,aliasing UB (Miri SB/TB),1
+2026-07-13,crash (panic/signal),9
+2026-07-13,data race / deadlock,1
+2026-07-13,leak,2
+2026-07-13,other fix,41
+2026-07-13,parity bug (behaviour diverged from Ghostty),1
+2026-07-20,ABI / layout,1
+2026-07-20,crash (panic/signal),3
+2026-07-20,other fix,4
+2026-07-27,ABI / layout,1
+2026-07-27,aliasing UB (Miri SB/TB),4
+2026-07-27,crash (panic/signal),8
+2026-07-27,data race / deadlock,1
+2026-07-27,leak,4
+2026-07-27,other fix,37
+2026-07-27,parity bug (behaviour diverged from Ghostty),5
+2026-08-17,crash (panic/signal),1
+2026-08-17,other fix,1
+2026-08-24,other fix,8
+2026-08-24,parity bug (behaviour diverged from Ghostty),3
+2026-08-31,other fix,3
+2026-09-07,ABI / layout,3
+2026-09-07,aliasing UB (Miri SB/TB),1
+2026-09-07,crash (panic/signal),3
+2026-09-07,data race / deadlock,1
+2026-09-07,leak,1
+2026-09-07,other fix,51
+2026-09-07,parity bug (behaviour diverged from Ghostty),2
+2026-09-07,upstream defect (R13/UD),10
+2026-09-21,aliasing UB (Miri SB/TB),1
+2026-09-21,crash (panic/signal),7
+2026-09-21,data race / deadlock,1
+2026-09-21,leak,3
+2026-09-21,other fix,52
+2026-09-21,parity bug (behaviour diverged from Ghostty),3
+2026-09-21,upstream defect (R13/UD),70
+2026-09-28,aliasing UB (Miri SB/TB),3
+2026-09-28,crash (panic/signal),1
+2026-09-28,data race / deadlock,2
+2026-09-28,leak,2
+2026-09-28,other fix,35
+2026-09-28,upstream defect (R13/UD),13
+2026-10-05,crash (panic/signal),1
+2026-10-05,data race / deadlock,1
+2026-10-05,leak,1
+2026-10-05,other fix,14
+2026-10-05,upstream defect (R13/UD),2

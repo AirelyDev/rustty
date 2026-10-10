@@ -1,0 +1,10 @@
+resync,from_pin,to_pin,to_pin_upstream_date,advanced_in_rustty,upstream_commits_incl_merges,upstream_nonmerge_commits,files_changed,insertions,deletions,evidence,ghostty_zig_loc_at_to_pin_all_files
+baseline,,4749c4e93,2026-06-20,2026-06-21,,,,,,.port/phase-0/REPORT.md,273827
+phase-3,4749c4e93,6ad1fe7d8,2026-07-29,2026-07-31,365,250,507,37683,11323,.port/phase-3/README.md,297110
+phase-4,6ad1fe7d8,12967b68f,2026-08-17,2026-08-17,543,359,381,72554,8106,.port/phase-4/README.md,331362
+phase-5,12967b68f,683d8db64,2026-08-25,2026-08-25,245,169,155,25534,3360,.port/phase-5/README.md,351780
+gap-close drift absorb,683d8db64,88f57ee66,2026-08-25,2026-08-26,2,2,,,,.port/ORACLE_SYNC.md,351976
+phase-6,88f57ee66,20abdb50a,2026-08-31,2026-09-01,121,74,75,6261,1269,.port/phase-6/README.md,353734
+phase-7,20abdb50a,12752b2ac,2026-09-28,2026-09-28,333,234,233,35723,9235,.port/phase-7/README.md,360991
+phase-8,12752b2ac,a60e9e2a5,2026-10-07,2026-10-07,107,69,85,7466,497,.port/phase-8/README.md,366687
+phase-8 second advance,a60e9e2a5,246f70287,2026-10-09,2026-10-09,18,12,10,401,72,.port/phase-8/w10/README.md,367013

@@ -1,0 +1,3059 @@
+{
+ "quota_weeks": [
+  {
+   "q": 0,
+   "start": "2026-06-16T22:00Z",
+   "lost_frac": 0.417,
+   "models_commits": {
+    "Opus 4.8": 93
+   },
+   "rustty_usd_rec": {},
+   "rustty_usd_ext": [
+    411.25,
+    576.97,
+    888.01
+   ],
+   "rustty_tok_rec": {},
+   "rustty_tok_ext": [
+    968333333.0,
+    973125000.0,
+    2414791667.0
+   ],
+   "rustty_delegated": null,
+   "all_usd_rec": {},
+   "all_usd_ext": [
+    822.51,
+    1153.94,
+    1776.01
+   ],
+   "all_tok_rec": {},
+   "all_tok_ext": [
+    1936666667.0,
+    1946250000.0,
+    4829583333.0
+   ],
+   "all_delegated": null
+  },
+  {
+   "q": 1,
+   "start": "2026-06-23T22:00Z",
+   "lost_frac": 1.0,
+   "models_commits": {
+    "Opus 4.8": 200
+   },
+   "rustty_usd_rec": {},
+   "rustty_usd_ext": [
+    987.01,
+    1384.72,
+    2131.22
+   ],
+   "rustty_tok_rec": {},
+   "rustty_tok_ext": [
+    2324000000.0,
+    2335500000.0,
+    5795500000.0
+   ],
+   "rustty_delegated": null,
+   "all_usd_rec": {
+    "Codex": 188.86
+   },
+   "all_usd_ext": [
+    1974.02,
+    2769.45,
+    4262.43
+   ],
+   "all_tok_rec": {
+    "Codex": 209668883.0
+   },
+   "all_tok_ext": [
+    4648000000.0,
+    4671000000.0,
+    11591000000.0
+   ],
+   "all_delegated": 0.0414
+  },
+  {
+   "q": 2,
+   "start": "2026-06-30T22:00Z",
+   "lost_frac": 1.0,
+   "models_commits": {
+    "Opus 4.8": 118,
+    "Fable 5+Opus 4.8": 7
+   },
+   "rustty_usd_rec": {},
+   "rustty_usd_ext": [
+    987.01,
+    1384.72,
+    2131.22
+   ],
+   "rustty_tok_rec": {},
+   "rustty_tok_ext": [
+    2324000000.0,
+    2335500000.0,
+    5795500000.0
+   ],
+   "rustty_delegated": null,
+   "all_usd_rec": {
+    "Codex": 72.45
+   },
+   "all_usd_ext": [
+    1974.02,
+    2769.45,
+    4262.43
+   ],
+   "all_tok_rec": {
+    "Codex": 80629405.0
+   },
+   "all_tok_ext": [
+    4648000000.0,
+    4671000000.0,
+    11591000000.0
+   ],
+   "all_delegated": 0.0775
+  },
+  {
+   "q": 3,
+   "start": "2026-07-07T22:00Z",
+   "lost_frac": 1.0,
+   "models_commits": {
+    "Opus 4.8": 69,
+    "Fable 5": 67,
+    "none": 2
+   },
+   "rustty_usd_rec": {},
+   "rustty_usd_ext": [
+    806.66,
+    1204.37,
+    1950.86
+   ],
+   "rustty_tok_rec": {},
+   "rustty_tok_ext": [
+    2123060786.0,
+    2134560786.0,
+    5594560786.0
+   ],
+   "rustty_delegated": null,
+   "all_usd_rec": {
+    "Codex": 5.15
+   },
+   "all_usd_ext": [
+    1793.67,
+    2589.1,
+    4082.08
+   ],
+   "all_tok_rec": {
+    "Codex": 5995041.0
+   },
+   "all_tok_ext": [
+    4447060786.0,
+    4470060786.0,
+    11390060786.0
+   ],
+   "all_delegated": null
+  },
+  {
+   "q": 4,
+   "start": "2026-07-14T22:00Z",
+   "lost_frac": 1.0,
+   "models_commits": {
+    "Opus 4.8": 238,
+    "none": 50,
+    "Fable 5": 2
+   },
+   "rustty_usd_rec": {
+    "VM Claude": 658.68,
+    "Codex": 3.69
+   },
+   "rustty_usd_ext": [
+    491.01,
+    888.72,
+    1635.21
+   ],
+   "rustty_tok_rec": {
+    "VM Claude": 733864957.0,
+    "Codex": 5449058.0
+   },
+   "rustty_tok_ext": [
+    1773230018.0,
+    1784730018.0,
+    5244730018.0
+   ],
+   "rustty_delegated": 0.4564,
+   "all_usd_rec": {
+    "VM Claude": 658.68,
+    "Codex": 257.79
+   },
+   "all_usd_ext": [
+    1477.07,
+    2272.5,
+    3765.48
+   ],
+   "all_tok_rec": {
+    "VM Claude": 733864957.0,
+    "Codex": 427133667.0
+   },
+   "all_tok_ext": [
+    4094833209.0,
+    4117833209.0,
+    11037833209.0
+   ],
+   "all_delegated": 0.4938
+  },
+  {
+   "q": 5,
+   "start": "2026-07-21T22:00Z",
+   "lost_frac": 1.0,
+   "models_commits": {
+    "Opus 4.8": 22,
+    "Fable 5": 1,
+    "none": 35
+   },
+   "rustty_usd_rec": {
+    "VM Claude": 64.55
+   },
+   "rustty_usd_ext": [
+    939.9,
+    1337.61,
+    2084.1
+   ],
+   "rustty_tok_rec": {
+    "VM Claude": 65170264.0
+   },
+   "rustty_tok_ext": [
+    2276191273.0,
+    2287691273.0,
+    5747691273.0
+   ],
+   "rustty_delegated": 0.143,
+   "all_usd_rec": {
+    "Sonnet 5 / 5.5": 3.47,
+    "VM Claude": 64.55,
+    "Codex": 3265.16
+   },
+   "all_usd_ext": [
+    1924.39,
+    2719.82,
+    4212.8
+   ],
+   "all_tok_rec": {
+    "Sonnet 5 / 5.5": 8753565.0,
+    "VM Claude": 65170264.0,
+    "Codex": 6242435042.0
+   },
+   "all_tok_ext": [
+    4593834517.0,
+    4616834517.0,
+    11536834517.0
+   ],
+   "all_delegated": 0.6857
+  },
+  {
+   "q": 6,
+   "start": "2026-07-28T22:00Z",
+   "lost_frac": 1.0,
+   "models_commits": {
+    "Opus 5": 317,
+    "none": 94
+   },
+   "rustty_usd_rec": {
+    "VM Claude": 0.85,
+    "Codex": 2347.31
+   },
+   "rustty_usd_ext": [
+    716.14,
+    1004.96,
+    1547.05
+   ],
+   "rustty_tok_rec": {
+    "VM Claude": 1762913.0,
+    "Codex": 2970138338.0
+   },
+   "rustty_tok_ext": [
+    1686386456.0,
+    1694737647.0,
+    4207356694.0
+   ],
+   "rustty_delegated": 0.6053,
+   "all_usd_rec": {
+    "VM Claude": 0.85,
+    "Codex": 3448.66
+   },
+   "all_usd_ext": [
+    1973.41,
+    2768.84,
+    4261.82
+   ],
+   "all_tok_rec": {
+    "VM Claude": 1762913.0,
+    "Codex": 5110287659.0
+   },
+   "all_tok_ext": [
+    4646719789.0,
+    4669719789.0,
+    11589719789.0
+   ],
+   "all_delegated": 0.624
+  },
+  {
+   "q": 7,
+   "start": "2026-08-04T22:00Z",
+   "lost_frac": 1.0,
+   "models_commits": {
+    "none": 1
+   },
+   "rustty_usd_rec": {},
+   "rustty_usd_ext": [
+    270.18,
+    379.08,
+    583.47
+   ],
+   "rustty_tok_rec": {},
+   "rustty_tok_ext": [
+    636193035.0,
+    639341845.0,
+    1586722797.0
+   ],
+   "rustty_delegated": null,
+   "all_usd_rec": {
+    "Codex": 213.89
+   },
+   "all_usd_ext": [
+    1973.95,
+    2769.38,
+    4262.36
+   ],
+   "all_tok_rec": {
+    "Codex": 449527378.0
+   },
+   "all_tok_ext": [
+    4647859702.0,
+    4670859702.0,
+    11590859702.0
+   ],
+   "all_delegated": 0.4385
+  },
+  {
+   "q": 8,
+   "start": "2026-08-11T22:00Z",
+   "lost_frac": 1.0,
+   "models_commits": {
+    "Opus 5": 1,
+    "Fable 5": 10
+   },
+   "rustty_usd_rec": {
+    "Sonnet 5 / 5.5": 0.37,
+    "VM Claude": 0.27
+   },
+   "rustty_usd_ext": [
+    986.71,
+    1384.43,
+    2130.92
+   ],
+   "rustty_tok_rec": {
+    "Sonnet 5 / 5.5": 1108173.0,
+    "VM Claude": 512393.0
+   },
+   "rustty_tok_ext": [
+    2323324477.0,
+    2334824477.0,
+    5794824477.0
+   ],
+   "rustty_delegated": null,
+   "all_usd_rec": {
+    "Sonnet 5 / 5.5": 0.92,
+    "VM Claude": 0.27,
+    "Codex": 504.11
+   },
+   "all_usd_ext": [
+    1973.57,
+    2769.0,
+    4261.98
+   ],
+   "all_tok_rec": {
+    "Sonnet 5 / 5.5": 2022780.0,
+    "VM Claude": 512393.0,
+    "Codex": 1042689003.0
+   },
+   "all_tok_ext": [
+    4647074049.0,
+    4670074049.0,
+    11590074049.0
+   ],
+   "all_delegated": 0.0665
+  },
+  {
+   "q": 9,
+   "start": "2026-08-18T22:00Z",
+   "lost_frac": 1.0,
+   "models_commits": {
+    "Fable 5": 7
+   },
+   "rustty_usd_rec": {},
+   "rustty_usd_ext": [
+    986.74,
+    1384.46,
+    2130.95
+   ],
+   "rustty_tok_rec": {},
+   "rustty_tok_ext": [
+    2323195255.0,
+    2334695255.0,
+    5794695255.0
+   ],
+   "rustty_delegated": null,
+   "all_usd_rec": {},
+   "all_usd_ext": [
+    1973.35,
+    2768.78,
+    4261.76
+   ],
+   "all_tok_rec": {},
+   "all_tok_ext": [
+    4646531076.0,
+    4669531076.0,
+    11589531076.0
+   ],
+   "all_delegated": null
+  },
+  {
+   "q": 10,
+   "start": "2026-08-25T22:00Z",
+   "lost_frac": 1.0,
+   "models_commits": {
+    "Fable 5": 37,
+    "Opus 5": 35,
+    "none": 16
+   },
+   "rustty_usd_rec": {
+    "Fable 5 / 5.1": 561.03
+   },
+   "rustty_usd_ext": [
+    833.39,
+    1231.11,
+    1977.6
+   ],
+   "rustty_tok_rec": {
+    "Fable 5 / 5.1": 305894170.0
+   },
+   "rustty_tok_ext": [
+    2240243263.0,
+    2251743263.0,
+    5711743263.0
+   ],
+   "rustty_delegated": 0.9466,
+   "all_usd_rec": {
+    "Fable 5 / 5.1": 561.03,
+    "Codex": 23.11
+   },
+   "all_usd_ext": [
+    1820.41,
+    2615.84,
+    4108.82
+   ],
+   "all_tok_rec": {
+    "Fable 5 / 5.1": 305894170.0,
+    "Codex": 30436137.0
+   },
+   "all_tok_ext": [
+    4564243263.0,
+    4587243263.0,
+    11507243263.0
+   ],
+   "all_delegated": 0.9092
+  },
+  {
+   "q": 11,
+   "start": "2026-09-01T22:00Z",
+   "lost_frac": 0.869,
+   "models_commits": {},
+   "rustty_usd_rec": {
+    "Opus 5": 246.43,
+    "Fable 5 / 5.1": 137.69
+   },
+   "rustty_usd_ext": [
+    309.34,
+    598.16,
+    1140.26
+   ],
+   "rustty_tok_rec": {
+    "Opus 5": 241459804.0,
+    "Fable 5 / 5.1": 90187715.0
+   },
+   "rustty_tok_ext": [
+    1465529234.0,
+    1473880424.0,
+    3986499472.0
+   ],
+   "rustty_delegated": 0.9816,
+   "all_usd_rec": {
+    "Opus 5": 322.73,
+    "Fable 5 / 5.1": 282.01,
+    "Sonnet 5 / 5.5": 79.17,
+    "Opus 4.7": 0.47,
+    "Other Claude": 0.76,
+    "Codex": 36.92
+   },
+   "all_usd_ext": [
+    1026.1,
+    1603.73,
+    2687.92
+   ],
+   "all_tok_rec": {
+    "Opus 5": 343357030.0,
+    "Fable 5 / 5.1": 398347012.0,
+    "Sonnet 5 / 5.5": 309267049.0,
+    "Opus 4.7": 138939.0,
+    "Other Claude": 4321289.0,
+    "Codex": 30265371.0
+   },
+   "all_tok_ext": [
+    3153195900.0,
+    3169898281.0,
+    8195136377.0
+   ],
+   "all_delegated": 0.7552
+  },
+  {
+   "q": 12,
+   "start": "2026-09-08T22:00Z",
+   "lost_frac": 0.0,
+   "models_commits": {
+    "Opus 5": 258
+   },
+   "rustty_usd_rec": {
+    "Opus 5": 1541.66,
+    "Fable 5 / 5.1": 11.73,
+    "Sonnet 5 / 5.5": 157.88,
+    "Opus 4.7": 88.86,
+    "Other Claude": 0.34
+   },
+   "rustty_usd_ext": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rustty_tok_rec": {
+    "Opus 5": 2326000965.0,
+    "Fable 5 / 5.1": 3950206.0,
+    "Sonnet 5 / 5.5": 634191092.0,
+    "Opus 4.7": 48616351.0,
+    "Other Claude": 1650670.0
+   },
+   "rustty_tok_ext": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rustty_delegated": 0.761,
+   "all_usd_rec": {
+    "Opus 5": 2338.77,
+    "Fable 5 / 5.1": 11.73,
+    "Sonnet 5 / 5.5": 310.09,
+    "Opus 4.7": 108.16,
+    "Other Claude": 0.71,
+    "Codex": 11.08
+   },
+   "all_usd_ext": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "all_tok_rec": {
+    "Opus 5": 3382125284.0,
+    "Fable 5 / 5.1": 3950206.0,
+    "Sonnet 5 / 5.5": 1227381208.0,
+    "Opus 4.7": 55634413.0,
+    "Other Claude": 2190254.0,
+    "Codex": 13863457.0
+   },
+   "all_tok_ext": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "all_delegated": 0.624
+  },
+  {
+   "q": 13,
+   "start": "2026-09-15T22:00Z",
+   "lost_frac": 0.0,
+   "models_commits": {
+    "Opus 5": 4
+   },
+   "rustty_usd_rec": {
+    "Opus 4.7": 2.78
+   },
+   "rustty_usd_ext": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rustty_tok_rec": {
+    "Opus 4.7": 1559163.0
+   },
+   "rustty_tok_ext": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rustty_delegated": null,
+   "all_usd_rec": {
+    "Opus 5": 2189.04,
+    "Sonnet 5 / 5.5": 773.56,
+    "Opus 4.7": 156.33,
+    "Other Claude": 8.41,
+    "Codex": 12.68
+   },
+   "all_usd_ext": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "all_tok_rec": {
+    "Opus 5": 3453361922.0,
+    "Sonnet 5 / 5.5": 2954039055.0,
+    "Opus 4.7": 85390765.0,
+    "Other Claude": 41214604.0,
+    "Codex": 35765792.0
+   },
+   "all_tok_ext": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "all_delegated": 0.4131
+  },
+  {
+   "q": 14,
+   "start": "2026-09-22T22:00Z",
+   "lost_frac": 0.0,
+   "models_commits": {
+    "Opus 5.5": 750
+   },
+   "rustty_usd_rec": {
+    "Opus 4.8": 54.57,
+    "Opus 5.5": 3097.06,
+    "Sonnet 5 / 5.5": 28.76,
+    "Opus 4.7": 275.67
+   },
+   "rustty_usd_ext": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rustty_tok_rec": {
+    "Opus 4.8": 87009009.0,
+    "Opus 5.5": 8712548876.0,
+    "Sonnet 5 / 5.5": 100092973.0,
+    "Opus 4.7": 167574607.0
+   },
+   "rustty_tok_ext": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rustty_delegated": 0.8595,
+   "all_usd_rec": {
+    "Opus 4.8": 54.57,
+    "Opus 5": 16.51,
+    "Opus 5.5": 3620.21,
+    "Sonnet 5 / 5.5": 219.94,
+    "Opus 4.7": 346.41,
+    "Other Claude": 4.78,
+    "Codex": 2.83
+   },
+   "all_usd_ext": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "all_tok_rec": {
+    "Opus 4.8": 87009009.0,
+    "Opus 5": 23705929.0,
+    "Opus 5.5": 10205222760.0,
+    "Sonnet 5 / 5.5": 808465542.0,
+    "Opus 4.7": 206485551.0,
+    "Other Claude": 260508839.0,
+    "Codex": 168201437.0
+   },
+   "all_tok_ext": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "all_delegated": 0.8058
+  },
+  {
+   "q": 15,
+   "start": "2026-09-29T22:00Z",
+   "lost_frac": 0.0,
+   "models_commits": {
+    "Opus 5.5": 181,
+    "Sonnet 5.5": 3
+   },
+   "rustty_usd_rec": {
+    "Opus 5.5": 1063.83,
+    "Sonnet 5 / 5.5": 106.47,
+    "Opus 4.7": 109.22
+   },
+   "rustty_usd_ext": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rustty_tok_rec": {
+    "Opus 5.5": 2402653081.0,
+    "Sonnet 5 / 5.5": 324347053.0,
+    "Opus 4.7": 72981417.0
+   },
+   "rustty_tok_ext": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rustty_delegated": 0.7698,
+   "all_usd_rec": {
+    "Opus 5.5": 1622.01,
+    "Sonnet 5 / 5.5": 129.76,
+    "Opus 4.7": 221.56,
+    "Other Claude": 0.69,
+    "Codex": 96.75
+   },
+   "all_usd_ext": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "all_tok_rec": {
+    "Opus 5.5": 4125040788.0,
+    "Sonnet 5 / 5.5": 376426788.0,
+    "Opus 4.7": 143777850.0,
+    "Other Claude": 3232007.0,
+    "Codex": 6538883291.0
+   },
+   "all_tok_ext": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "all_delegated": 0.6465
+  },
+  {
+   "q": 16,
+   "start": "2026-10-06T22:00Z",
+   "lost_frac": 0.0,
+   "models_commits": {
+    "Opus 5.5": 62,
+    "Sonnet 5.5": 22
+   },
+   "rustty_usd_rec": {
+    "Opus 5.5": 406.02,
+    "Sonnet 5 / 5.5": 65.64,
+    "Other Claude": 1.07
+   },
+   "rustty_usd_ext": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rustty_tok_rec": {
+    "Opus 5.5": 966144104.0,
+    "Sonnet 5 / 5.5": 164416528.0,
+    "Other Claude": 3793312.0
+   },
+   "rustty_tok_ext": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rustty_delegated": 0.7966,
+   "all_usd_rec": {
+    "Opus 5.5": 424.67,
+    "Sonnet 5 / 5.5": 71.86,
+    "Other Claude": 1.07,
+    "Codex": 36.67
+   },
+   "all_usd_ext": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "all_tok_rec": {
+    "Opus 5.5": 1011455063.0,
+    "Sonnet 5 / 5.5": 181052641.0,
+    "Other Claude": 3793312.0,
+    "Codex": 2585145124.0
+   },
+   "all_tok_ext": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "all_delegated": 0.7773
+  }
+ ],
+ "context": [
+  {
+   "q": 4,
+   "src": "rvm",
+   "n": 4590,
+   "p10": 26107.0,
+   "med": 76903.0,
+   "p90": 426164.0,
+   "max": 999021.0
+  },
+  {
+   "q": 4,
+   "src": "codex",
+   "n": 85,
+   "p10": 17788.0,
+   "med": 51007.0,
+   "p90": 116544.0,
+   "max": 118295.0
+  },
+  {
+   "q": 5,
+   "src": "rvm",
+   "n": 388,
+   "p10": 35785.0,
+   "med": 71344.0,
+   "p90": 442789.0,
+   "max": 525093.0
+  },
+  {
+   "q": 6,
+   "src": "rvm",
+   "n": 33,
+   "p10": 43144.0,
+   "med": 51484.0,
+   "p90": 63061.0,
+   "max": 64798.0
+  },
+  {
+   "q": 6,
+   "src": "codex",
+   "n": 28377,
+   "p10": 26666.0,
+   "med": 97039.0,
+   "p90": 190966.0,
+   "max": 247932.0
+  },
+  {
+   "q": 10,
+   "src": "mac",
+   "n": 2978,
+   "p10": 37020.0,
+   "med": 89423.5,
+   "p90": 183062.0,
+   "max": 333523.0
+  },
+  {
+   "q": 11,
+   "src": "mac",
+   "n": 5013,
+   "p10": 37432.0,
+   "med": 51124.0,
+   "p90": 121827.0,
+   "max": 506022.0
+  },
+  {
+   "q": 12,
+   "src": "mac",
+   "n": 14285,
+   "p10": 57462.0,
+   "med": 150670.0,
+   "p90": 454573.0,
+   "max": 966661.0
+  },
+  {
+   "q": 14,
+   "src": "mac",
+   "n": 36553,
+   "p10": 60795.0,
+   "med": 193707.0,
+   "p90": 516301.0,
+   "max": 967103.0
+  },
+  {
+   "q": 15,
+   "src": "mac",
+   "n": 13472,
+   "p10": 55991.0,
+   "med": 150089.0,
+   "p90": 441330.0,
+   "max": 965134.0
+  },
+  {
+   "q": 16,
+   "src": "mac",
+   "n": 6505,
+   "p10": 51857.0,
+   "med": 137286.0,
+   "p90": 360818.0,
+   "max": 751519.0
+  }
+ ],
+ "coverage": [
+  {
+   "d": "2026-06-21",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 23,
+   "commits": 6,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-06-22",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 17,
+   "p_rvm": 0,
+   "p_other": 19,
+   "commits": 50,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-06-23",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 15,
+   "p_rvm": 0,
+   "p_other": 3,
+   "commits": 38,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-06-24",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 5,
+   "p_rvm": 0,
+   "p_other": 5,
+   "commits": 76,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-06-25",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 6,
+   "p_rvm": 0,
+   "p_other": 13,
+   "commits": 91,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-06-26",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 10,
+   "p_rvm": 0,
+   "p_other": 9,
+   "commits": 32,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-06-27",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-06-28",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-06-29",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 20,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-06-30",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-07-01",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 10,
+   "p_rvm": 0,
+   "p_other": 1,
+   "commits": 46,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-07-02",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 8,
+   "p_rvm": 0,
+   "p_other": 56,
+   "commits": 30,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-07-03",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 11,
+   "p_rvm": 0,
+   "p_other": 34,
+   "commits": 35,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-07-04",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 10,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 14,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-07-05",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-07-06",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-07-07",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 5,
+   "p_rvm": 0,
+   "p_other": 5,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-07-08",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 9,
+   "p_rvm": 0,
+   "p_other": 4,
+   "commits": 12,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-07-09",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 7,
+   "p_rvm": 0,
+   "p_other": 5,
+   "commits": 15,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-07-10",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 16,
+   "p_rvm": 0,
+   "p_other": 9,
+   "commits": 43,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-07-11",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 13,
+   "p_rvm": 0,
+   "p_other": 7,
+   "commits": 14,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-07-12",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 26,
+   "p_rvm": 0,
+   "p_other": 2,
+   "commits": 54,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-07-13",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 9,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 103.72
+  },
+  {
+   "d": "2026-07-14",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 3,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 19,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 103.72
+  },
+  {
+   "d": "2026-07-15",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 15,
+   "p_mac": 69,
+   "p_rvm": 0,
+   "p_other": 8,
+   "commits": 84,
+   "usd": 0.49,
+   "lost": true,
+   "ext_c": 103.72
+  },
+  {
+   "d": "2026-07-16",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 2,
+   "p_mac": 58,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 45,
+   "usd": 0.2,
+   "lost": true,
+   "ext_c": 103.72
+  },
+  {
+   "d": "2026-07-17",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 15,
+   "p_rvm": 0,
+   "p_other": 20,
+   "commits": 62,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 103.72
+  },
+  {
+   "d": "2026-07-18",
+   "mac_claude": 0,
+   "rvm": 424,
+   "codex": 68,
+   "p_mac": 3,
+   "p_rvm": 42,
+   "p_other": 43,
+   "commits": 21,
+   "usd": 66.53,
+   "lost": true,
+   "ext_c": 103.72
+  },
+  {
+   "d": "2026-07-19",
+   "mac_claude": 0,
+   "rvm": 4166,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 92,
+   "p_other": 17,
+   "commits": 59,
+   "usd": 595.15,
+   "lost": true,
+   "ext_c": 103.72
+  },
+  {
+   "d": "2026-07-20",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 188.6
+  },
+  {
+   "d": "2026-07-21",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 1,
+   "p_rvm": 0,
+   "p_other": 3,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 188.6
+  },
+  {
+   "d": "2026-07-22",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 21,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 188.6
+  },
+  {
+   "d": "2026-07-23",
+   "mac_claude": 0,
+   "rvm": 388,
+   "codex": 0,
+   "p_mac": 20,
+   "p_rvm": 21,
+   "p_other": 15,
+   "commits": 58,
+   "usd": 64.55,
+   "lost": true,
+   "ext_c": 188.6
+  },
+  {
+   "d": "2026-07-24",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 1,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 188.6
+  },
+  {
+   "d": "2026-07-25",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 6,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 188.6
+  },
+  {
+   "d": "2026-07-26",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 15,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 188.6
+  },
+  {
+   "d": "2026-07-27",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.7
+  },
+  {
+   "d": "2026-07-28",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.7
+  },
+  {
+   "d": "2026-07-29",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 21,
+   "p_rvm": 0,
+   "p_other": 13,
+   "commits": 107,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.7
+  },
+  {
+   "d": "2026-07-30",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 30,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 170,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.7
+  },
+  {
+   "d": "2026-07-31",
+   "mac_claude": 0,
+   "rvm": 33,
+   "codex": 1284,
+   "p_mac": 23,
+   "p_rvm": 4,
+   "p_other": 0,
+   "commits": 134,
+   "usd": 83.02,
+   "lost": true,
+   "ext_c": 197.7
+  },
+  {
+   "d": "2026-08-01",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 21042,
+   "p_mac": 3,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 0,
+   "usd": 1663.92,
+   "lost": true,
+   "ext_c": 197.7
+  },
+  {
+   "d": "2026-08-02",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 6051,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 0,
+   "usd": 601.21,
+   "lost": true,
+   "ext_c": 197.7
+  },
+  {
+   "d": "2026-08-03",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 0.0
+  },
+  {
+   "d": "2026-08-04",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 0.0
+  },
+  {
+   "d": "2026-08-05",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 2,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 0.0
+  },
+  {
+   "d": "2026-08-06",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 8,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 0.0
+  },
+  {
+   "d": "2026-08-07",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 11,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 0.0
+  },
+  {
+   "d": "2026-08-08",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 22,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 0.0
+  },
+  {
+   "d": "2026-08-09",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 91,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 0.0
+  },
+  {
+   "d": "2026-08-10",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 3,
+   "p_rvm": 0,
+   "p_other": 26,
+   "commits": 1,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.78
+  },
+  {
+   "d": "2026-08-11",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 5,
+   "p_rvm": 0,
+   "p_other": 8,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.78
+  },
+  {
+   "d": "2026-08-12",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 4,
+   "p_rvm": 0,
+   "p_other": 9,
+   "commits": 1,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.78
+  },
+  {
+   "d": "2026-08-13",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 84,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.78
+  },
+  {
+   "d": "2026-08-14",
+   "mac_claude": 0,
+   "rvm": 10,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 5,
+   "p_other": 17,
+   "commits": 0,
+   "usd": 0.27,
+   "lost": true,
+   "ext_c": 197.78
+  },
+  {
+   "d": "2026-08-15",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 8,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.78
+  },
+  {
+   "d": "2026-08-16",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 47,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.78
+  },
+  {
+   "d": "2026-08-17",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 32,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.77
+  },
+  {
+   "d": "2026-08-18",
+   "mac_claude": 14,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 15,
+   "p_rvm": 0,
+   "p_other": 32,
+   "commits": 10,
+   "usd": 0.37,
+   "lost": true,
+   "ext_c": 197.77
+  },
+  {
+   "d": "2026-08-19",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 37,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.77
+  },
+  {
+   "d": "2026-08-20",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 5,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.77
+  },
+  {
+   "d": "2026-08-21",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 35,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.77
+  },
+  {
+   "d": "2026-08-22",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 1,
+   "p_other": 20,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.77
+  },
+  {
+   "d": "2026-08-23",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 19,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.77
+  },
+  {
+   "d": "2026-08-24",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 19,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-08-25",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 5,
+   "p_rvm": 0,
+   "p_other": 5,
+   "commits": 7,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-08-26",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 27,
+   "p_rvm": 0,
+   "p_other": 1,
+   "commits": 55,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-08-27",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 1,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 1,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-08-28",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-08-29",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 16,
+   "p_rvm": 0,
+   "p_other": 16,
+   "commits": 2,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-08-30",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 197.82
+  },
+  {
+   "d": "2026-08-31",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 117.67
+  },
+  {
+   "d": "2026-09-01",
+   "mac_claude": 2978,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 8,
+   "p_rvm": 0,
+   "p_other": 13,
+   "commits": 30,
+   "usd": 561.03,
+   "lost": true,
+   "ext_c": 117.67
+  },
+  {
+   "d": "2026-09-02",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 117.67
+  },
+  {
+   "d": "2026-09-03",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 24,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 117.67
+  },
+  {
+   "d": "2026-09-04",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 10,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 117.67
+  },
+  {
+   "d": "2026-09-05",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 49,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 117.67
+  },
+  {
+   "d": "2026-09-06",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 140,
+   "commits": 0,
+   "usd": 0,
+   "lost": true,
+   "ext_c": 117.67
+  },
+  {
+   "d": "2026-09-07",
+   "mac_claude": 1019,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 4,
+   "p_rvm": 0,
+   "p_other": 118,
+   "commits": 0,
+   "usd": 137.69,
+   "lost": true,
+   "ext_c": 0.0
+  },
+  {
+   "d": "2026-09-08",
+   "mac_claude": 4032,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 6,
+   "p_rvm": 0,
+   "p_other": 76,
+   "commits": 1,
+   "usd": 254.05,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-09-09",
+   "mac_claude": 2286,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 6,
+   "p_rvm": 0,
+   "p_other": 4,
+   "commits": 35,
+   "usd": 183.85,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-09-10",
+   "mac_claude": 6082,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 5,
+   "p_rvm": 0,
+   "p_other": 30,
+   "commits": 121,
+   "usd": 683.65,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-09-11",
+   "mac_claude": 5879,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 9,
+   "p_rvm": 0,
+   "p_other": 26,
+   "commits": 101,
+   "usd": 925.36,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-09-12",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 1,
+   "p_rvm": 0,
+   "p_other": 43,
+   "commits": 0,
+   "usd": 0,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-09-13",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 11,
+   "commits": 0,
+   "usd": 0,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-09-14",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 29,
+   "commits": 0,
+   "usd": 0,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-09-15",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 10,
+   "commits": 0,
+   "usd": 0,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-09-16",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 1,
+   "p_rvm": 0,
+   "p_other": 27,
+   "commits": 0,
+   "usd": 0,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-09-17",
+   "mac_claude": 11,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 40,
+   "commits": 2,
+   "usd": 1.47,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-09-18",
+   "mac_claude": 10,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 1,
+   "p_rvm": 0,
+   "p_other": 137,
+   "commits": 2,
+   "usd": 1.31,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-09-19",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 78,
+   "commits": 0,
+   "usd": 0,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-09-20",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 61,
+   "commits": 0,
+   "usd": 0,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-09-21",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 54,
+   "commits": 0,
+   "usd": 0,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-09-22",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 35,
+   "commits": 0,
+   "usd": 0,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-09-23",
+   "mac_claude": 8833,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 13,
+   "p_rvm": 0,
+   "p_other": 28,
+   "commits": 181,
+   "usd": 663.98,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-09-24",
+   "mac_claude": 12048,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 9,
+   "p_rvm": 0,
+   "p_other": 4,
+   "commits": 279,
+   "usd": 1063.02,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-09-25",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 45,
+   "commits": 0,
+   "usd": 0,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-09-26",
+   "mac_claude": 3393,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 4,
+   "p_rvm": 0,
+   "p_other": 13,
+   "commits": 74,
+   "usd": 366.88,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-09-27",
+   "mac_claude": 3517,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 24,
+   "p_rvm": 0,
+   "p_other": 4,
+   "commits": 72,
+   "usd": 337.38,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-09-28",
+   "mac_claude": 5006,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 18,
+   "p_rvm": 0,
+   "p_other": 56,
+   "commits": 105,
+   "usd": 726.82,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-09-29",
+   "mac_claude": 4966,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 20,
+   "p_rvm": 0,
+   "p_other": 47,
+   "commits": 55,
+   "usd": 391.33,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-09-30",
+   "mac_claude": 7857,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 17,
+   "p_rvm": 0,
+   "p_other": 17,
+   "commits": 102,
+   "usd": 552.14,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-10-01",
+   "mac_claude": 2238,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 16,
+   "p_rvm": 0,
+   "p_other": 26,
+   "commits": 29,
+   "usd": 156.57,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-10-02",
+   "mac_claude": 2167,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 23,
+   "p_rvm": 0,
+   "p_other": 82,
+   "commits": 37,
+   "usd": 477.46,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-10-03",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 0,
+   "usd": 0,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-10-04",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 0,
+   "usd": 0,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-10-05",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 0,
+   "usd": 0,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-10-06",
+   "mac_claude": 0,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 0,
+   "p_rvm": 0,
+   "p_other": 0,
+   "commits": 0,
+   "usd": 0,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-10-07",
+   "mac_claude": 1799,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 7,
+   "p_rvm": 0,
+   "p_other": 13,
+   "commits": 22,
+   "usd": 167.82,
+   "lost": false,
+   "ext_c": 0
+  },
+  {
+   "d": "2026-10-08",
+   "mac_claude": 4706,
+   "rvm": 0,
+   "codex": 0,
+   "p_mac": 34,
+   "p_rvm": 0,
+   "p_other": 9,
+   "commits": 62,
+   "usd": 304.91,
+   "lost": false,
+   "ext_c": 0
+  }
+ ],
+ "eras": [
+  {
+   "name": "Before the Bun-inspired rules",
+   "start": "2026-06-21",
+   "end": "2026-07-09",
+   "recovered": 0,
+   "ext": {
+    "low": 2679.03,
+    "central": 3758.53,
+    "high": 5784.74
+   },
+   "commits": 445,
+   "prompts": 113,
+   "code_lines": 417002
+  },
+  {
+   "name": "Rules, ledgers, VM and Codex",
+   "start": "2026-07-10",
+   "end": "2026-08-31",
+   "recovered": 3075.71,
+   "ext": {
+    "low": 5681.2,
+    "central": 8294.75,
+    "high": 13200.27
+   },
+   "commits": 947,
+   "prompts": 551,
+   "code_lines": 402700
+  },
+  {
+   "name": "Upstream resyncs, orchestrator",
+   "start": "2026-09-01",
+   "end": "2026-10-08",
+   "recovered": 7956.72,
+   "ext": {
+    "low": 365.13,
+    "central": 706.03,
+    "high": 1345.88
+   },
+   "commits": 1310,
+   "prompts": 226,
+   "code_lines": 407383
+  }
+ ],
+ "units": [
+  {
+   "q": 12,
+   "usd": 1800.48,
+   "commits": 257,
+   "prompts": 21,
+   "code_lines": 34722
+  },
+  {
+   "q": 13,
+   "usd": 2.78,
+   "commits": 4,
+   "prompts": 2,
+   "code_lines": 747
+  },
+  {
+   "q": 14,
+   "usd": 3456.06,
+   "commits": 766,
+   "prompts": 88,
+   "code_lines": 117844
+  },
+  {
+   "q": 15,
+   "usd": 1279.52,
+   "commits": 168,
+   "prompts": 56,
+   "code_lines": 230693
+  },
+  {
+   "q": 16,
+   "usd": 472.73,
+   "commits": 84,
+   "prompts": 41,
+   "code_lines": 16807
+  }
+ ],
+ "kinds": {
+  "rustty": {
+   "codex/main": {
+    "calls": 9124,
+    "usd": 929.62,
+    "tok": 1304880500.0,
+    "out": 3787973.0,
+    "ctx_med": 146538.5
+   },
+   "claude/main": {
+    "calls": 11199,
+    "usd": 1759.62,
+    "tok": 2913939663.0,
+    "out": 9973559.0,
+    "ctx_med": 101555.0
+   },
+   "claude/subagent": {
+    "calls": 63268,
+    "usd": 5992.89,
+    "tok": 13880952647.0,
+    "out": 35805016.0,
+    "ctx_med": 173427.5
+   },
+   "claude/workflow": {
+    "calls": 9395,
+    "usd": 928.93,
+    "tok": 662597486.0,
+    "out": 3240816.0,
+    "ctx_med": 54942.0
+   },
+   "codex/subagent": {
+    "calls": 19338,
+    "usd": 1421.38,
+    "tok": 1670706896.0,
+    "out": 8558102.0,
+    "ctx_med": 83181.0
+   }
+  },
+  "all": {
+   "codex/main": {
+    "calls": 66832,
+    "usd": 3326.73,
+    "tok": 8804528765.0,
+    "out": 17717804.0,
+    "ctx_med": 133535.0
+   },
+   "codex/subagent": {
+    "calls": 135883,
+    "usd": 4849.36,
+    "tok": 14166397922.0,
+    "out": 49976411.0,
+    "ctx_med": 96751.0
+   },
+   "claude/main": {
+    "calls": 30871,
+    "usd": 5124.48,
+    "tok": 9790125712.0,
+    "out": 26820891.0,
+    "ctx_med": 221726.0
+   },
+   "claude/subagent": {
+    "calls": 103138,
+    "usd": 8335.72,
+    "tok": 19649756648.0,
+    "out": 58386576.0,
+    "ctx_med": 146717.5
+   },
+   "claude/workflow": {
+    "calls": 16461,
+    "usd": 1145.52,
+    "tok": 1374993791.0,
+    "out": 6965526.0,
+    "ctx_med": 63502.0
+   }
+  }
+ },
+ "mix": {
+  "rustty": {
+   "input": {
+    "tok": 140003283.0,
+    "usd": 659.68
+   },
+   "output": {
+    "tok": 61365466.0,
+    "usd": 1404.16
+   },
+   "cache_write": {
+    "tok": 517695953.0,
+    "usd": 2897.37
+   },
+   "cache_read": {
+    "tok": 19714012490.0,
+    "usd": 6071.22
+   }
+  },
+  "all": {
+   "input": {
+    "tok": 755908217.0,
+    "usd": 1755.2
+   },
+   "output": {
+    "tok": 159867208.0,
+    "usd": 2745.04
+   },
+   "cache_write": {
+    "tok": 754241911.0,
+    "usd": 4041.26
+   },
+   "cache_read": {
+    "tok": 52115785502.0,
+    "usd": 14240.3
+   }
+  }
+ },
+ "meter": [
+  {
+   "h": "2026-07-31T18",
+   "med": 1.0,
+   "min": 0.0,
+   "max": 2.0,
+   "n": 222,
+   "cum": 15.75
+  },
+  {
+   "h": "2026-07-31T19",
+   "med": 2.0,
+   "min": 1.0,
+   "max": 3.0,
+   "n": 253,
+   "cum": 31.21
+  },
+  {
+   "h": "2026-07-31T20",
+   "med": 3.0,
+   "min": 3.0,
+   "max": 7.0,
+   "n": 324,
+   "cum": 48.86
+  },
+  {
+   "h": "2026-07-31T21",
+   "med": 4.0,
+   "min": 3.0,
+   "max": 4.0,
+   "n": 126,
+   "cum": 55.71
+  },
+  {
+   "h": "2026-07-31T22",
+   "med": 5.0,
+   "min": 4.0,
+   "max": 7.0,
+   "n": 164,
+   "cum": 71.39
+  },
+  {
+   "h": "2026-07-31T23",
+   "med": 6.0,
+   "min": 5.0,
+   "max": 7.0,
+   "n": 195,
+   "cum": 82.18
+  },
+  {
+   "h": "2026-08-01T00",
+   "med": 7.0,
+   "min": 6.0,
+   "max": 16.0,
+   "n": 551,
+   "cum": 115.61
+  },
+  {
+   "h": "2026-08-01T01",
+   "med": 11.0,
+   "min": 8.0,
+   "max": 16.0,
+   "n": 480,
+   "cum": 149.4
+  },
+  {
+   "h": "2026-08-01T02",
+   "med": 12.0,
+   "min": 11.0,
+   "max": 14.0,
+   "n": 327,
+   "cum": 173.69
+  },
+  {
+   "h": "2026-08-01T03",
+   "med": 14.0,
+   "min": 0.0,
+   "max": 16.0,
+   "n": 907,
+   "cum": 233.91
+  },
+  {
+   "h": "2026-08-01T04",
+   "med": 3.0,
+   "min": 1.0,
+   "max": 6.0,
+   "n": 902,
+   "cum": 292.8
+  },
+  {
+   "h": "2026-08-01T05",
+   "med": 5.0,
+   "min": 4.0,
+   "max": 6.0,
+   "n": 202,
+   "cum": 308.19
+  },
+  {
+   "h": "2026-08-01T06",
+   "med": 8.0,
+   "min": 6.0,
+   "max": 10.0,
+   "n": 799,
+   "cum": 374.25
+  },
+  {
+   "h": "2026-08-01T07",
+   "med": 11.0,
+   "min": 9.0,
+   "max": 13.0,
+   "n": 952,
+   "cum": 456.42
+  },
+  {
+   "h": "2026-08-01T08",
+   "med": 15.0,
+   "min": 13.0,
+   "max": 17.0,
+   "n": 885,
+   "cum": 536.38
+  },
+  {
+   "h": "2026-08-01T09",
+   "med": 19.0,
+   "min": 17.0,
+   "max": 90.0,
+   "n": 1356,
+   "cum": 643.41
+  },
+  {
+   "h": "2026-08-01T10",
+   "med": 24.0,
+   "min": 21.0,
+   "max": 26.0,
+   "n": 1394,
+   "cum": 751.11
+  },
+  {
+   "h": "2026-08-01T11",
+   "med": 29.0,
+   "min": 26.0,
+   "max": 33.0,
+   "n": 1598,
+   "cum": 889.89
+  },
+  {
+   "h": "2026-08-01T12",
+   "med": 35.0,
+   "min": 33.0,
+   "max": 37.0,
+   "n": 1094,
+   "cum": 983.06
+  },
+  {
+   "h": "2026-08-01T13",
+   "med": 39.0,
+   "min": 37.0,
+   "max": 41.0,
+   "n": 1078,
+   "cum": 1078.33
+  },
+  {
+   "h": "2026-08-01T14",
+   "med": 44.0,
+   "min": 41.0,
+   "max": 46.0,
+   "n": 1234,
+   "cum": 1180.98
+  },
+  {
+   "h": "2026-08-01T15",
+   "med": 48.0,
+   "min": 46.0,
+   "max": 49.0,
+   "n": 758,
+   "cum": 1245.46
+  },
+  {
+   "h": "2026-08-01T16",
+   "med": 51.0,
+   "min": 49.0,
+   "max": 53.0,
+   "n": 937,
+   "cum": 1326.19
+  },
+  {
+   "h": "2026-08-01T17",
+   "med": 54.0,
+   "min": 53.0,
+   "max": 56.0,
+   "n": 983,
+   "cum": 1397.01
+  },
+  {
+   "h": "2026-08-01T18",
+   "med": 57.0,
+   "min": 56.0,
+   "max": 59.0,
+   "n": 883,
+   "cum": 1458.35
+  },
+  {
+   "h": "2026-08-01T19",
+   "med": 60.0,
+   "min": 59.0,
+   "max": 62.0,
+   "n": 843,
+   "cum": 1518.43
+  },
+  {
+   "h": "2026-08-01T20",
+   "med": 63.0,
+   "min": 61.0,
+   "max": 65.0,
+   "n": 839,
+   "cum": 1583.83
+  },
+  {
+   "h": "2026-08-01T21",
+   "med": 66.0,
+   "min": 65.0,
+   "max": 67.0,
+   "n": 786,
+   "cum": 1643.95
+  },
+  {
+   "h": "2026-08-01T22",
+   "med": 68.0,
+   "min": 67.0,
+   "max": 69.0,
+   "n": 606,
+   "cum": 1689.34
+  },
+  {
+   "h": "2026-08-01T23",
+   "med": 71.0,
+   "min": 69.0,
+   "max": 72.0,
+   "n": 648,
+   "cum": 1746.09
+  },
+  {
+   "h": "2026-08-02T00",
+   "med": 74.0,
+   "min": 72.0,
+   "max": 75.0,
+   "n": 785,
+   "cum": 1813.83
+  },
+  {
+   "h": "2026-08-02T01",
+   "med": 76.0,
+   "min": 75.0,
+   "max": 78.0,
+   "n": 714,
+   "cum": 1878.6
+  },
+  {
+   "h": "2026-08-02T02",
+   "med": 79.0,
+   "min": 78.0,
+   "max": 81.0,
+   "n": 674,
+   "cum": 1935.73
+  },
+  {
+   "h": "2026-08-02T03",
+   "med": 82.0,
+   "min": 81.0,
+   "max": 83.0,
+   "n": 668,
+   "cum": 1993.26
+  },
+  {
+   "h": "2026-08-02T04",
+   "med": 84.0,
+   "min": 83.0,
+   "max": 85.0,
+   "n": 249,
+   "cum": 2024.23
+  },
+  {
+   "h": "2026-08-02T05",
+   "med": 85.0,
+   "min": 85.0,
+   "max": 86.0,
+   "n": 289,
+   "cum": 2058.09
+  },
+  {
+   "h": "2026-08-02T06",
+   "med": 87.0,
+   "min": 86.0,
+   "max": 88.0,
+   "n": 486,
+   "cum": 2106.55
+  },
+  {
+   "h": "2026-08-02T07",
+   "med": 89.0,
+   "min": 88.0,
+   "max": 90.0,
+   "n": 387,
+   "cum": 2149.23
+  },
+  {
+   "h": "2026-08-02T08",
+   "med": 91.0,
+   "min": 90.0,
+   "max": 91.0,
+   "n": 300,
+   "cum": 2182.9
+  },
+  {
+   "h": "2026-08-02T09",
+   "med": 92.0,
+   "min": 91.0,
+   "max": 93.0,
+   "n": 283,
+   "cum": 2214.92
+  },
+  {
+   "h": "2026-08-02T10",
+   "med": 94.0,
+   "min": 93.0,
+   "max": 94.0,
+   "n": 317,
+   "cum": 2248.35
+  },
+  {
+   "h": "2026-08-02T11",
+   "med": 95.0,
+   "min": 94.0,
+   "max": 96.0,
+   "n": 333,
+   "cum": 2285.28
+  },
+  {
+   "h": "2026-08-02T12",
+   "med": 97.0,
+   "min": 96.0,
+   "max": 97.0,
+   "n": 281,
+   "cum": 2314.79
+  },
+  {
+   "h": "2026-08-02T13",
+   "med": 98.0,
+   "min": 97.0,
+   "max": 98.0,
+   "n": 266,
+   "cum": 2345.02
+  },
+  {
+   "h": "2026-08-02T14",
+   "med": 99.0,
+   "min": 98.0,
+   "max": 99.0,
+   "n": 19,
+   "cum": 2347.31
+  }
+ ],
+ "model_usd": {
+  "claude:claude-opus-5-5": 4566.91,
+  "codex:gpt-5.5": 2014.29,
+  "claude:claude-opus-5": 1788.09,
+  "claude:claude-fable-5": 711.16,
+  "claude:claude-opus-4-8": 602.84,
+  "claude:claude-opus-4-7": 509.88,
+  "codex:gpt-5.6-sol": 335.73,
+  "claude:claude-sonnet-5": 258.99,
+  "claude:claude-fable-5-1": 137.69,
+  "claude:claude-sonnet-5-5": 104.45,
+  "codex:gpt-5.6-terra": 0.97,
+  "claude:claude-haiku-4-5-20251001": 0.78,
+  "claude:claude-haiku-5-5": 0.63,
+  "codex:codex-auto-review": 0.0
+ },
+ "extrap_check": {
+  "2026-06-15:low": [
+   141.0,
+   141.0
+  ],
+  "2026-06-15:central": [
+   197.82,
+   197.82
+  ],
+  "2026-06-15:high": [
+   304.46,
+   304.46
+  ],
+  "2026-06-22:low": [
+   987.01,
+   987.01
+  ],
+  "2026-06-22:central": [
+   1384.72,
+   1384.72
+  ],
+  "2026-06-22:high": [
+   2131.22,
+   2131.22
+  ],
+  "2026-06-29:low": [
+   987.01,
+   987.01
+  ],
+  "2026-06-29:central": [
+   1384.72,
+   1384.72
+  ],
+  "2026-06-29:high": [
+   2131.22,
+   2131.22
+  ],
+  "2026-07-06:low": [
+   987.01,
+   987.01
+  ],
+  "2026-07-06:central": [
+   1384.72,
+   1384.72
+  ],
+  "2026-07-06:high": [
+   2131.22,
+   2131.22
+  ],
+  "2026-07-13:low": [
+   328.33,
+   328.33
+  ],
+  "2026-07-13:central": [
+   726.04,
+   726.04
+  ],
+  "2026-07-13:high": [
+   1472.53,
+   1472.53
+  ],
+  "2026-07-20:low": [
+   922.46,
+   922.46
+  ],
+  "2026-07-20:central": [
+   1320.17,
+   1320.17
+  ],
+  "2026-07-20:high": [
+   2066.66,
+   2066.66
+  ],
+  "2026-07-27:low": [
+   986.16,
+   986.16
+  ],
+  "2026-07-27:central": [
+   1383.88,
+   1383.88
+  ],
+  "2026-07-27:high": [
+   2130.37,
+   2130.37
+  ],
+  "2026-08-03:low": [
+   0.0,
+   0.0
+  ],
+  "2026-08-03:central": [
+   0.0,
+   0.0
+  ],
+  "2026-08-03:high": [
+   0.0,
+   0.0
+  ],
+  "2026-08-10:low": [
+   986.74,
+   986.74
+  ],
+  "2026-08-10:central": [
+   1384.46,
+   1384.46
+  ],
+  "2026-08-10:high": [
+   2130.95,
+   2130.95
+  ],
+  "2026-08-17:low": [
+   986.64,
+   986.64
+  ],
+  "2026-08-17:central": [
+   1384.36,
+   1384.36
+  ],
+  "2026-08-17:high": [
+   2130.85,
+   2130.85
+  ],
+  "2026-08-24:low": [
+   987.01,
+   987.01
+  ],
+  "2026-08-24:central": [
+   1384.72,
+   1384.72
+  ],
+  "2026-08-24:high": [
+   2131.22,
+   2131.22
+  ],
+  "2026-08-31:low": [
+   425.98,
+   425.98
+  ],
+  "2026-08-31:central": [
+   823.7,
+   823.7
+  ],
+  "2026-08-31:high": [
+   1570.19,
+   1570.19
+  ],
+  "2026-09-07:low": [
+   0.0,
+   0.0
+  ],
+  "2026-09-07:central": [
+   0.0,
+   0.0
+  ],
+  "2026-09-07:high": [
+   0.0,
+   0.0
+  ]
+ }
+}

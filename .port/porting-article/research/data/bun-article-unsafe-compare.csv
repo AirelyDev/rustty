@@ -1,0 +1,6 @@
+project,snapshot,date,unsafe_sites,loc,density_per_kloc,source,provenance
+Bun (Rust port),article,2026-07-08,13000,780000,16.7,bun.com/blog/bun-in-rust (approx figures),DOCUMENTED
+Bun (Rust port),bun-unsafe-audit,2026-07,13365,,13.7,BUN_PORT_LEARNINGS.md S5 citing bun.com/bun-unsafe-audit,DOCUMENTED
+Rustty,b4845f4,2026-07-10,11145,412464,27.02,.port/audits/unsafe-census-b4845f4.json,DOCUMENTED
+Rustty,47b2dbbb,2026-08-25,18645,662381,28.15,.port/audits/unsafe-census-47b2dbbb.json,DOCUMENTED
+Rustty,b0685c0d,2026-08-25,18826,675517,27.87,.port/audits/unsafe-census-b0685c0d.json,DOCUMENTED

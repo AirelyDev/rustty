@@ -1,0 +1,10 @@
+metric,zig,rust,unit,delta_pct,official,note,provenance
+"page allocs, full PageList workload",6,6,count,0.0,yes,was reported 7 vs 3 (unequal scope); arena resize-seam fix removed the reset realloc,PERF_LOG.md Rounds 2-3; ALLOC_BENCH_V2.md
+peak outstanding page bytes,7502136,5271864,bytes,-29.7,yes,geometry: port carries upstream b953bb346 BitmapAllocator fix the pinned oracle predates,PERF_LOG.md
+std page size (geometry),589824,409600,bytes,-30.6,yes,"grapheme_alloc 131136 vs 8256, string_alloc 65544 vs 2056",ALLOC_BENCH_V2.md
+PageList workload latency (median of 9),809,768.6,us,-5.0,yes (idle),,PERF_LOG.md
+"peak RSS, alloc bench",7864320,10305536,bytes,31.0,yes,asymmetric: Rust binary carries the TrackingAllocator seam,PERF_LOG.md
+peak RSS terminal-parser,7.06,6.29,MB,-10.9,r2-SHIP,/usr/bin/time -l,PERF_LOG.md
+peak RSS screen-clone.clone,157.2,139.9,MB,-11.0,r2-SHIP,/usr/bin/time -l,PERF_LOG.md
+peak RSS screen-clone.render,9.18,8.04,MB,-12.4,r2-SHIP,/usr/bin/time -l,PERF_LOG.md
+peak RSS osc-parser,7.01,7.5,MB,7.0,r2-SHIP,only config where Rust RSS is higher (7 of 8 lower),PERF_LOG.md

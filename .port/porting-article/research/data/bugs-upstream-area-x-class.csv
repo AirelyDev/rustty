@@ -1,0 +1,48 @@
+area,class,count
+CLI + TUIs (incl. libvaxis),crash,8
+CLI + TUIs (incl. libvaxis),deadlock/hang,2
+CLI + TUIs (incl. libvaxis),intent-breaking,7
+CLI + TUIs (incl. libvaxis),latent,9
+CLI + TUIs (incl. libvaxis),test-weakness,1
+CLI + TUIs (incl. libvaxis),ub,2
+VT core + libghostty-vt,crash,19
+VT core + libghostty-vt,deadlock/hang,1
+VT core + libghostty-vt,intent-breaking,5
+VT core + libghostty-vt,latent,7
+VT core + libghostty-vt,leak,3
+VT core + libghostty-vt,test-weakness,3
+VT core + libghostty-vt,ub,1
+app runtimes (GTK/macOS/embed),crash,15
+app runtimes (GTK/macOS/embed),deadlock/hang,1
+app runtimes (GTK/macOS/embed),intent-breaking,4
+app runtimes (GTK/macOS/embed),latent,10
+app runtimes (GTK/macOS/embed),leak,4
+app runtimes (GTK/macOS/embed),test-weakness,2
+app runtimes (GTK/macOS/embed),ub,8
+build/test infra,intent-breaking,6
+build/test infra,latent,4
+dependencies (zig std / highway / GStreamer / zf),crash,2
+dependencies (zig std / highway / GStreamer / zf),intent-breaking,2
+dependencies (zig std / highway / GStreamer / zf),latent,1
+dependencies (zig std / highway / GStreamer / zf),ub,2
+event loop (libxev),latent,6
+event loop (libxev),test-weakness,2
+font,crash,5
+font,intent-breaking,2
+font,latent,6
+font,leak,3
+font,test-weakness,3
+font,ub,1
+misc (datastruct / docs / IPC),latent,3
+renderer,crash,7
+renderer,deadlock/hang,1
+renderer,intent-breaking,1
+renderer,latent,7
+renderer,leak,3
+renderer,ub,3
+termio/pty/os,crash,4
+termio/pty/os,deadlock/hang,4
+termio/pty/os,intent-breaking,6
+termio/pty/os,latent,6
+termio/pty/os,leak,1
+termio/pty/os,ub,2

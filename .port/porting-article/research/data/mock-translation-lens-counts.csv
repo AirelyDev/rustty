@@ -1,0 +1,33 @@
+pattern,side,label,count
+rawptr,rust,"#[allow(clippy::not_unsafe_ptr_arg_deref)] sites (a pub fn taking raw-pointer args, citing the Zig signature)",135
+rawptr,rust,Rust fns with a *mut Page / Row / Cell / [Cell] parameter (one-line signatures),26
+rawptr,zig,Zig fns with a *Page / *Row parameter (one-line signatures),16
+intrusive,rust,Rust lines citing @fieldParentPtr (each ported recovery keeps the Zig line),57
+intrusive,rust,"offset_of! in Rust (container_of arithmetic, but also GPU vertex layouts)",236
+intrusive,zig,@fieldParentPtr in Zig (Ghostty src + libxev),95
+intrusive,rust,Rust field-address trait methods (next_field / heap_field / node_field),22
+intrusive,rust,Rust with_exposed_provenance uses,8
+intrusive,zig,libxev Intrusive(...) instantiations / references,30
+intrusive,ledger,INTRUSIVE + BACKREF rows in the pointer-lifetime ledger,34
+comptime,rust,const-generic parameters in Rust (<const NAME: ...>),54
+comptime,zig,comptime parameters in Zig signatures,228
+comptime,zig,inline else switches in Zig,87
+comptime,rust,#[inline(always)] in Rust,78
+comptime,rust,"#[inline] in Rust (LTO is off, so hot cross-crate fns need it)",657
+packed,rust,Rust lines citing a Zig packed struct (port notes and docs),307
+packed,zig,packed struct in Zig,148
+packed,zig,packed union in Zig,12
+packed,rust,Rust bit helpers (get_bits / set_bits / from_bits / to_bits),27
+errdefer,rust,Rust lines citing errdefer (each ported errdefer keeps its Zig text),970
+errdefer,zig,errdefer in Zig (Ghostty src + libxev),696
+errdefer,rust,impl Drop for ... in Rust,144
+errdefer,rust,Rust comment lines citing errdefer (of those 970),929
+errdefer,rust,named *Errdefer guard types in Rust,5
+errdefer,rust,Rust guards created armed (armed: true),4
+bytes,rust,&[u8] / &mut [u8] in Rust,2655
+bytes,zig,[]const u8 in Zig,1550
+bytes,zig,[:0]const u8 in Zig,379
+bytes,zig,[]u8 in Zig,218
+bytes,rust,Vec<u8> in Rust,1807
+bytes,rust,raw *const/*mut [u8] in Rust,69
+bytes,rust,"from_utf8_lossy in Rust (all uses, tests included)",436

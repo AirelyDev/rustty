@@ -1,0 +1,15 @@
+bench,zig_ms,rust_ms,rust_over_zig,speedup_x,delta_pct,zig_spread_maxmin,rust_spread_maxmin,config_class,oracle_rev,date,rustty_commit,source
+terminal-parser,263.8,92.47,0.351,2.85,-64.9,1.012,1.019,large,4749c4e93,2026-07-16,a3a2b23,perf-v5/zig.jsonl + perf-v5/r5ship.jsonl
+screen-clone.clone,50.59,20.88,0.413,2.42,-58.7,1.026,1.042,large,4749c4e93,2026-07-16,a3a2b23,perf-v5/zig.jsonl + perf-v5/r5ship.jsonl
+terminal-stream,551.46,343.32,0.623,1.61,-37.7,1.07,1.026,large,4749c4e93,2026-07-16,a3a2b23,perf-v5/zig.jsonl + perf-v5/r5ship.jsonl
+codepoint-width.noop,3.65,2.99,0.817,1.22,-18.3,1.203,1.144,spawn-floor,4749c4e93,2026-07-16,a3a2b23,perf-v5/zig.jsonl + perf-v5/r5ship.jsonl
+grapheme-break.table,256.41,211.45,0.825,1.21,-17.5,1.012,1.02,large,4749c4e93,2026-07-16,a3a2b23,perf-v5/zig.jsonl + perf-v5/r5ship.jsonl
+screen-clone.noop,5.49,4.56,0.831,1.2,-16.9,1.103,1.082,spawn-floor,4749c4e93,2026-07-16,a3a2b23,perf-v5/zig.jsonl + perf-v5/r5ship.jsonl
+is-symbol.table,238.63,200.52,0.84,1.19,-16.0,1.015,1.045,large,4749c4e93,2026-07-16,a3a2b23,perf-v5/zig.jsonl + perf-v5/r5ship.jsonl
+osc-parser,57.15,49.39,0.864,1.16,-13.6,1.027,1.027,large,4749c4e93,2026-07-16,a3a2b23,perf-v5/zig.jsonl + perf-v5/r5ship.jsonl
+codepoint-width.table,234.31,207.85,0.887,1.13,-11.3,1.018,1.011,large,4749c4e93,2026-07-16,a3a2b23,perf-v5/zig.jsonl + perf-v5/r5ship.jsonl
+is-symbol.uucode,229.87,206.1,0.897,1.12,-10.3,1.013,1.012,large,4749c4e93,2026-07-16,a3a2b23,perf-v5/zig.jsonl + perf-v5/r5ship.jsonl
+screen-clone.render,15.4,13.84,0.899,1.11,-10.1,1.047,1.076,large,4749c4e93,2026-07-16,a3a2b23,perf-v5/zig.jsonl + perf-v5/r5ship.jsonl
+grapheme-break.noop,231.04,211.77,0.917,1.09,-8.3,1.01,1.015,large,4749c4e93,2026-07-16,a3a2b23,perf-v5/zig.jsonl + perf-v5/r5ship.jsonl
+codepoint-width.wcwidth,258.38,237.64,0.92,1.09,-8.0,1.018,1.007,large,4749c4e93,2026-07-16,a3a2b23,perf-v5/zig.jsonl + perf-v5/r5ship.jsonl
+codepoint-width.simd,501.14,466.36,0.931,1.07,-6.9,1.005,1.007,large,4749c4e93,2026-07-16,a3a2b23,perf-v5/zig.jsonl + perf-v5/r5ship.jsonl
