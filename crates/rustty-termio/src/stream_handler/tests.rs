@@ -1458,8 +1458,11 @@ fn stream_handler_soft_reset_reaches_the_terminal() {
     let mut term = Terminal::init(Global.into(), terminal_opts(Some(false))).unwrap();
     let h = handler_for(&raw mut term, std::ptr::null_mut(), std::ptr::null_mut());
     let mut s = stream::Stream::init(stream::Options::with_handler(h));
-    s.next_slice(b"\x1b[4h\x1b[?6h\x1b[2;3r");
+    // The region's bottom (1) differs from the full screen's (rows 3, so 2),
+    // so the bottom assertion below fails unless DECSTR resets the region.
+    s.next_slice(b"\x1b[4h\x1b[?6h\x1b[1;2r");
     assert!(s.handler.term().modes.get(Mode::Insert));
+    assert_eq!(1, s.handler.term().scrolling_region.bottom);
     s.next_slice(b"\x1b[!p");
     s.handler.renderer_wakeup.deinit();
     drop(s);
