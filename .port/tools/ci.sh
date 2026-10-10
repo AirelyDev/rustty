@@ -939,6 +939,11 @@ GATE_REGISTRY=(
   # can exist, be the right size, cite its oracle source and still be missing
   # individual functions — that is what a partial port looks like, and nothing
   # else here looks for it.
+  # G-SYMS-SELF (P8-W10 T4): the match is container-aware (a counterpart file
+  # or a file naming the symbol's container); the self-test rebuilds the
+  # `ModeState.getDefault` false positive (an unrelated `hb.rs` `get_default`)
+  # and requires ABSENT. Its own HARD entry, like G-TESTS-SELF.
+  "G-SYMS-SELF|HARD|light|-|$PY $ROOT/.port/tools/audit_symbol_coverage.py --self-test"
   "G-SYMS|HARD|light|-|$PY $ROOT/.port/tools/audit_symbol_coverage.py"
   # G-TESTS (2026-07-31). Pass 3, and the same frozen-inventory blind spot one
   # level down: G1 compares test blocks against `.port/phase-0/inventory/`

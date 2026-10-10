@@ -11681,3 +11681,16 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   arm (the old keying would be GREEN), and requires exactly `UNCOVERED csi: >q`; arm (s) requires BLOCKED for an
   unreadable sub-arm label; `parse_csi.py --self-test` [e] drops the DECSTR test from the `p` arm and requires
   `['$', '?$']`.
+- **N560 (FIXED, P8-W10 T4; provisional id): G-SYMS matched an oracle `pub fn` by bare name anywhere in `crates/`, so
+  a common name in an unrelated crate counted as its port.** `modes.zig` `ModeState.getDefault` (new at `246f70287`)
+  read as present through `rustty-font-shaper` `hb.rs` `Language::get_default` (`.port/phase-8/w10/README.md` F3; the
+  N524 common-name class). Fix: `audit_symbol_coverage.py` now requires the token (or its 8+ prefix) in a file that
+  belongs to the symbol: a counterpart of the oracle file (G-FILES' filename-or-citation mapping) or a file naming the
+  function's innermost Zig container (`ModeState`, `Terminal`, a type-returning `fn X(...) type`, else the module
+  stem). Re-run at `246f70287`: 2911 symbols, newly ABSENT `modes.zig::getDefault` (P8-W10 T1 ports it) and three
+  that the bare name had matched in unrelated files, none a real gap, recorded in `.port/phase-3/SYMBOL_AUDIT.md`:
+  `split_tree.zig::initNew` (collapsed with `initReused`), `hash_map.zig::getKey` (context-inferring wrapper, 0
+  oracle callers, ported as `get_key_context`), `unicode/lut.zig::hash` (derived `Hash`). G-SYMS stays RED on
+  `softReset` and `getDefault` until T1 merges. Negative control: new `--self-test` (ci.sh `G-SYMS-SELF`, HARD)
+  rebuilds the getDefault case on a fixture tree: ABSENT with only `hb.rs` `get_default` (the bare-name match says
+  present), present when ported in `modes.rs` or in a file naming `ModeState`.
