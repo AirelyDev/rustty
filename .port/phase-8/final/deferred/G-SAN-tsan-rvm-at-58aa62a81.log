@@ -1,0 +1,33 @@
+### G-TSAN: ThreadSanitizer (-Zbuild-std; C via cc with -fsanitize=thread) over the threaded crates (Linux/aarch64) ###
+  scope: rustty-core — the render thread, the surface mailbox and the app/surface lifecycle threads (surface/lifecycle.rs, app.rs)
+  scope: rustty-termio — the pty read thread, the exec/Command fork paths and the termio mailbox
+  scope: rustty-xev — the libxev port's thread pool, async wakeups and intrusive queues
+  scope: rustty-renderer — the renderer Thread and its cross-thread draw/sync state (N437's area)
+  scope: rustty-vt:wuffs,oniguruma — the vt search thread (search/thread.rs), the tmux control/viewer threads and the oniguruma first-use init race test (tmux::control::concurrent_first_notifications_do_not_race_oniguruma_init, needs the oniguruma feature; G-ASAN's FEATURE_LANES spec, so the default-feature tests run too)
+  scope: rustty-vt-c — the C API's handles used from embedders' threads (search ticks, terminal effects)
+  scope: highway-sys — the vendored Highway runtime's dispatch state, shared by every thread that runs a SIMD routine; holds UD377's regression test (concurrent_supported_targets_calls_agree)
+  tests one at a time on Linux: rustty-xev — TSan models each fd as a word written by the call that opens it and by close; it sees neither the io_uring arm's close ops (the kernel closes the socket) nor fds opened by raw syscalls (SYS_pidfd_open, io_uring_setup), so when one test's closed socket number is reopened by another test running beside it, the reuse is reported as a race (epoll_ctl, mmap or close against the first test's socket(); rvm, P7-W24, no suppressions: in parallel, 59 and 26 reports in 24 and 15 of two sets of 25 runs; one at a time, 0 in 25 runs). No memory is shared; Linux only (macOS's kqueue arm has no such path)
+=== sanitizer matrix: tsan over 7 crate spec(s); one shared target dir /home/gael/projects/rustty-p8def/target/san-tsan, deleted when the pass ends ===
+  ok tsan C archives: 17 built for the instrumented target, 17 instrumented (__tsan_ references), the rest named exceptions
+  ✅ tsan rustty-core: 88 test(s) ran, 52s — 88 passed, 1 ignored
+  ok tsan C archives: 17 built for the instrumented target, 17 instrumented (__tsan_ references), the rest named exceptions
+  ✅ tsan rustty-termio: 113 test(s) ran, 34s — 113 passed, 6 ignored
+  ok tsan C archives: 17 built for the instrumented target, 17 instrumented (__tsan_ references), the rest named exceptions
+  ✅ tsan rustty-xev: 111 test(s) ran, 9s — 111 passed, 0 ignored
+  ok tsan C archives: 17 built for the instrumented target, 17 instrumented (__tsan_ references), the rest named exceptions
+  ✅ tsan rustty-renderer: 159 test(s) ran, 12s — 159 passed, 1 ignored
+  ok tsan C archives: 17 built for the instrumented target, 17 instrumented (__tsan_ references), the rest named exceptions
+  ✅ tsan rustty-vt:wuffs,oniguruma: 3458 test(s) ran, 871s — 3458 passed, 21 ignored
+  ok tsan C archives: 17 built for the instrumented target, 17 instrumented (__tsan_ references), the rest named exceptions
+  ✅ tsan rustty-vt-c: 604 test(s) ran, 117s — 604 passed, 1 ignored
+  ok tsan C archives: 17 built for the instrumented target, 17 instrumented (__tsan_ references), the rest named exceptions
+  ✅ tsan highway-sys: 19 test(s) ran, 1s — 19 passed, 0 ignored
+--- tsan matrix summary: 4552 test(s) ran, wall 1097s (18 min) ---
+  rustty-core                          GREEN               88 tests     52s
+  rustty-termio                        GREEN              113 tests     34s
+  rustty-xev                           GREEN              111 tests      9s
+  rustty-renderer                      GREEN              159 tests     12s
+  rustty-vt:wuffs,oniguruma            GREEN             3458 tests    871s
+  rustty-vt-c                          GREEN              604 tests    117s
+  highway-sys                          GREEN               19 tests      1s
+G-TSAN: GREEN (4552 test(s) under the sanitizer, 0 findings)

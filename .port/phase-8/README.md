@@ -267,12 +267,27 @@ Evidence and the full per-gate table: `final/FINAL-VALIDATION.md`, `final/gate-t
 | rvm | full `ci.sh --heavy-cap 2` | 94 GREEN incl. G-ESCTEST, G-GTKFEAT, G-BENCH; G-VALGRIND complete GREEN (1/4, 2/4 + 8 exact sub-shards for 3/4, 4/4) |
 | Mac (idle) | ws10 suite vs the oracle at `246f70287`; G8 re-base; `--strict`; G8b `--build` | 14/14 wins, suite −27.4% (worst terminal-stream/ascii 0.979); BASELINE re-based (`949584651`); `--strict` GREEN; G8b GREEN 14/14 |
 
-## DEFERRED to the next full rerun (user, 2026-10-10: "EXPEDITE and do partial reruns to verify the fixes, we can save the full rerun for later")
+## Deferred lanes, completed (at `58aa62a81`, local `main`, 2026-10-10)
 
-- rvm: G-ASAN (full), G-TSAN, G-MSAN, G-HWASAN, G-LSAN, G-LSAN-GTK at the second pin. None produced a
-  verdict: the first attempt stopped at the 15 GB disk floor and the rerun was lost to an OOM thrash and VM
-  restart. They were GREEN at `a60e9e2a5` (rows above); the W10 delta is DECSTR, the formatter, G9/G-SYMS
-  tooling and test-only fixes.
-- rvm: G4 with built drivers. rwin: V26 plus the DLL step.
+The user deferred these on 2026-10-10 ("EXPEDITE and do partial reruns to verify the fixes, we can save the
+full rerun for later"), then ran them in full the same day ("lets do the deferred stuff with full
+validation"). rvm and rwin ran at the same time. Evidence: `final/deferred/`.
+
+| host | lane | result |
+|---|---|---|
+| rvm | G-LSAN-GTK | GREEN: 1 test, 0 findings (68 s) |
+| rvm | G-ASAN | GREEN: 10,339 tests, 0 findings (20 min) |
+| rvm | G-LSAN | GREEN: 10,339 tests, 0 findings (19 min) |
+| rvm | G-MSAN | GREEN: 6,392 tests, 0 findings (47 min) |
+| rvm | G-HWASAN | GREEN: 10,214 tests, 0 findings (20 min) |
+| rvm | G-TSAN | GREEN: 4,552 tests, 0 reports (18 min) |
+| rwin | V26: `cargo test --workspace --no-fail-fast --exclude libxml2-sys --exclude fontconfig-sys --exclude sentry-sys --target x86_64-pc-windows-msvc` | GREEN: rc 0, 948 s, 0 failed (the `xtask dist` tests pass in the bundle's git checkout) |
+| rwin | DLL step: `rustty_vt_c.dll` (x64 MSVC), `c-vt-effects`, `dll-utf8-proof.c` | PASS: 2 bells, exit 0; `cursor_x=15`, exit 0 |
+| rvm | G4 | not runnable on Linux (the drivers are macOS-only; `w9/g4-not-runnable-on-rvm-at-a60e9e2a5.txt`); G4 is GREEN on the Mac (`final/G4-mac.log`) |
+
+The sanitizers ran one at a time with `CARGO_BUILD_JOBS=4`, because two at once had run the 9 GB VM out of
+memory during the final run. The chain's `rc=` column in `sanitizer-chain-rvm-at-58aa62a81.txt` is not
+the gate's exit code (it was expanded after `$(date)`); each gate's verdict is the last line of its log.
+Nothing from Phase 8 is still owed.
 
 Hosted CI legs stay push-gated under V25 (the maintainer's call).

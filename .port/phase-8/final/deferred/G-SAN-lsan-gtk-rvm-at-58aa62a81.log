@@ -1,0 +1,9 @@
+### G-LSAN-GTK: ASan + LeakSanitizer (detect_leaks=1) over a live GTK surface, created and closed (Linux/aarch64) ###
+  test: rustty-apprt:gtk,wayland,x11 --test gtk_window_live -- window_hosts_a_live_terminal --exact --ignored, inside .port/tools/gtk_live_headless_sway.sh
+=== sanitizer matrix: lsan over 1 crate spec(s); one shared target dir /home/gael/projects/rustty-p8def/target/lsan-gtk/san-lsan, deleted when the pass ends ===
+  ✅ lsan rustty-apprt:gtk,wayland,x11: 1 test(s) ran, 67s — 1 passed, 0 ignored
+--- lsan matrix summary: 1 test(s) ran, wall 67s (1 min) ---
+  rustty-apprt:gtk,wayland,x11         GREEN                1 tests     67s
+  suppression 'libpangoft2-1.0.so': 6913 allocations matched (ceiling 7600)
+  suppression 'libpangocairo-1.0.so': 2197 allocations matched (ceiling 2420)
+G-LSAN-GTK: GREEN (1 test(s) under the sanitizer, 0 findings)

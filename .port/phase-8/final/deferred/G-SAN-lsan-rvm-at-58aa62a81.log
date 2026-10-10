@@ -1,0 +1,136 @@
+### G-LSAN: AddressSanitizer + LeakSanitizer (detect_leaks=1) over the workspace test suites (Linux/aarch64) ###
+feature lane: rustty-vt:wuffs,oniguruma — the PNG decode tests (`image_load_png_zlib_compressed_direct`, `sys::tests::default_decoder_*`) are ignored without the wuffs feature, and one of them is a Miri exception whose stated compensating control is ASan; found by G-ASAN's claim cross-check on its first run (P7-W14); and the oniguruma feature's tests, e.g. the Miri-excepted tmux::control::concurrent_first_notifications_do_not_race_oniguruma_init, which no lane compiled until the cross-check covered every Miri exception (fix round 1)
+feature lane: rustty-apprt:gtk,wayland,x11 — GTK is the reference's Linux runtime, so its test executable there compiles the GTK apprt; cargo test --workspace does not
+feature lane: rustty-os:flatpak — the Flatpak arm of rustty-os (links gio-2.0, Linux/FreeBSD only); cargo test --workspace does not build it
+=== sanitizer matrix: lsan over 64 crate spec(s); one shared target dir /home/gael/projects/rustty-p8def/target/san-lsan, deleted when the pass ends ===
+  ✅ lsan breakpad-sys: 1 test(s) ran, 4s — 1 passed, 0 ignored
+  ✅ lsan dcimgui-sys: 8 test(s) ran, 13s — 8 passed, 0 ignored
+  ✅ lsan fontconfig-sys: 4 test(s) ran, 8s — 4 passed, 0 ignored
+  ✅ lsan freetype-sys: 1 test(s) ran, 1s — 1 passed, 0 ignored
+  ⏭  lsan gettext-sys: 0 tests on Linux by construction — libintl is part of glibc on Linux, so the crate compiles no C there and every test is #[cfg(all(test, target_os = "macos"))] (crates-sys/gettext-sys/src/lib.rs)
+  ✅ lsan glslang-sys: 1 test(s) ran, 30s — 1 passed, 0 ignored
+  ✅ lsan harfbuzz-sys: 1 test(s) ran, 9s — 1 passed, 0 ignored
+  ✅ lsan highway-sys: 19 test(s) ran, 2s — 19 passed, 0 ignored
+  ✅ lsan libpng-sys: 2 test(s) ran, 2s — 2 passed, 0 ignored
+  ✅ lsan libxml2-sys: 1 test(s) ran, 1s — 1 passed, 0 ignored
+  ✅ lsan oniguruma-sys: 1 test(s) ran, 3s — 1 passed, 0 ignored
+  ✅ lsan rustty: 15 test(s) ran, 60s — 15 passed, 2 ignored
+  ✅ lsan rustty-apprt: 40 test(s) ran, 9s — 40 passed, 0 ignored
+  ✅ lsan rustty-apprt-api: 28 test(s) ran, 19s — 28 passed, 0 ignored
+  ✅ lsan rustty-apprt-c: 32 test(s) ran, 20s — 32 passed, 0 ignored
+  ✅ lsan rustty-args: 78 test(s) ran, 1s — 78 passed, 3 ignored
+  ✅ lsan rustty-bench: 52 test(s) ran, 122s — 52 passed, 1 ignored
+  ✅ lsan rustty-build-config: 5 test(s) ran, 1s — 5 passed, 0 ignored
+  ✅ lsan rustty-cfg-fmt: 9 test(s) ran, 1s — 9 passed, 0 ignored
+  ✅ lsan rustty-cli: 125 test(s) ran, 10s — 125 passed, 5 ignored
+  ✅ lsan rustty-config: 273 test(s) ran, 5s — 273 passed, 0 ignored
+  ✅ lsan rustty-core: 88 test(s) ran, 7s — 88 passed, 1 ignored
+  ✅ lsan rustty-crash: 20 test(s) ran, 2s — 20 passed, 0 ignored
+  ✅ lsan rustty-datastruct: 100 test(s) ran, 1s — 100 passed, 2 ignored
+  ✅ lsan rustty-extra: 39 test(s) ran, 4s — 39 passed, 0 ignored
+  ✅ lsan rustty-font: 89 test(s) ran, 4s — 89 passed, 0 ignored
+  ✅ lsan rustty-font-shaper: 133 test(s) ran, 10s — 133 passed, 4 ignored
+  ✅ lsan rustty-global: 18 test(s) ran, 1s — 18 passed, 2 ignored
+  ✅ lsan rustty-helpgen: 6 test(s) ran, 1s — 6 passed, 0 ignored
+  ✅ lsan rustty-identity: 1 test(s) ran, 2s — 1 passed, 0 ignored
+  ✅ lsan rustty-input: 120 test(s) ran, 2s — 120 passed, 1 ignored
+  ✅ lsan rustty-inspector: 23 test(s) ran, 5s — 23 passed, 0 ignored
+  ✅ lsan rustty-lib: 42 test(s) ran, 1s — 42 passed, 2 ignored
+  ✅ lsan rustty-oniguruma: 2 test(s) ran, 1s — 2 passed, 0 ignored
+  ✅ lsan rustty-os: 108 test(s) ran, 1s — 108 passed, 2 ignored
+  ✅ lsan rustty-render-types: 12 test(s) ran, 1s — 12 passed, 0 ignored
+  ✅ lsan rustty-renderer: 159 test(s) ran, 7s — 159 passed, 1 ignored
+  ✅ lsan rustty-simd: 42 test(s) ran, 23s — 42 passed, 0 ignored
+  ✅ lsan rustty-synthetic: 27 test(s) ran, 1s — 27 passed, 0 ignored
+  ✅ lsan rustty-terminfo: 7 test(s) ran, 1s — 7 passed, 0 ignored
+  ✅ lsan rustty-termio: 113 test(s) ran, 12s — 113 passed, 6 ignored
+  ✅ lsan rustty-unicode: 23 test(s) ran, 1s — 23 passed, 0 ignored
+  ✅ lsan rustty-util: 6 test(s) ran, 1s — 6 passed, 0 ignored
+  ✅ lsan rustty-vaxis: 171 test(s) ran, 3s — 171 passed, 0 ignored
+  ✅ lsan rustty-version: 6 test(s) ran, 1s — 6 passed, 0 ignored
+  ✅ lsan rustty-vt: 3428 test(s) ran, 255s — 3428 passed, 26 ignored
+  ✅ lsan rustty-vt-c: 604 test(s) ran, 39s — 604 passed, 1 ignored
+  ⏭  lsan rustty-wasm: 0 tests on Linux by construction — its one native test, tests/artifact_shape.rs, is #[ignore]d: it inspects the wasm32 artifact that .port/tools/build-main-wasm.sh builds (the --webgl lane), and its exports are cfg(target_arch = "wasm32")
+  ✅ lsan rustty-web-canvas: 1 test(s) ran, 7s — 1 passed, 0 ignored
+  ✅ lsan rustty-wuffs: 24 test(s) ran, 1s — 24 passed, 0 ignored
+  ✅ lsan rustty-xev: 111 test(s) ran, 4s — 111 passed, 0 ignored
+  ✅ lsan rustty-z2d: 105 test(s) ran, 1s — 105 passed, 0 ignored
+  ✅ lsan rustty-zf: 11 test(s) ran, 1s — 11 passed, 0 ignored
+  ✅ lsan rustty-zigimg: 28 test(s) ran, 1s — 28 passed, 0 ignored
+  ✅ lsan rustty-zigstd: 89 test(s) ran, 1s — 89 passed, 0 ignored
+  ✅ lsan sentry-sys: 4 test(s) ran, 3s — 4 passed, 0 ignored
+  ✅ lsan simdutf-sys: 2 test(s) ran, 1s — 2 passed, 0 ignored
+  ✅ lsan spirv-cross-sys: 1 test(s) ran, 1s — 1 passed, 0 ignored
+  ✅ lsan wuffs-sys: 3 test(s) ran, 2s — 3 passed, 0 ignored
+  ✅ lsan xtask: 125 test(s) ran, 36s — 125 passed, 2 ignored
+  ✅ lsan zlib-sys: 11 test(s) ran, 1s — 11 passed, 0 ignored
+  ✅ lsan rustty-vt:wuffs,oniguruma: 3458 test(s) ran, 261s — 3458 passed, 21 ignored
+  ✅ lsan rustty-apprt:gtk,wayland,x11: 173 test(s) ran, 64s — 173 passed, 99 ignored
+  ✅ lsan rustty-os:flatpak: 110 test(s) ran, 2s — 110 passed, 4 ignored
+--- lsan matrix summary: 10339 test(s) ran, wall 1106s (18 min) ---
+  breakpad-sys                         GREEN                1 tests      4s
+  dcimgui-sys                          GREEN                8 tests     13s
+  fontconfig-sys                       GREEN                4 tests      8s
+  freetype-sys                         GREEN                1 tests      1s
+  gettext-sys                          NO-TESTS(Linux)      0 tests      1s
+  glslang-sys                          GREEN                1 tests     30s
+  harfbuzz-sys                         GREEN                1 tests      9s
+  highway-sys                          GREEN               19 tests      2s
+  libpng-sys                           GREEN                2 tests      2s
+  libxml2-sys                          GREEN                1 tests      1s
+  oniguruma-sys                        GREEN                1 tests      3s
+  rustty                               GREEN               15 tests     60s
+  rustty-apprt                         GREEN               40 tests      9s
+  rustty-apprt-api                     GREEN               28 tests     19s
+  rustty-apprt-c                       GREEN               32 tests     20s
+  rustty-args                          GREEN               78 tests      1s
+  rustty-bench                         GREEN               52 tests    122s
+  rustty-build-config                  GREEN                5 tests      1s
+  rustty-cfg-fmt                       GREEN                9 tests      1s
+  rustty-cli                           GREEN              125 tests     10s
+  rustty-config                        GREEN              273 tests      5s
+  rustty-core                          GREEN               88 tests      7s
+  rustty-crash                         GREEN               20 tests      2s
+  rustty-datastruct                    GREEN              100 tests      1s
+  rustty-extra                         GREEN               39 tests      4s
+  rustty-font                          GREEN               89 tests      4s
+  rustty-font-shaper                   GREEN              133 tests     10s
+  rustty-global                        GREEN               18 tests      1s
+  rustty-helpgen                       GREEN                6 tests      1s
+  rustty-identity                      GREEN                1 tests      2s
+  rustty-input                         GREEN              120 tests      2s
+  rustty-inspector                     GREEN               23 tests      5s
+  rustty-lib                           GREEN               42 tests      1s
+  rustty-oniguruma                     GREEN                2 tests      1s
+  rustty-os                            GREEN              108 tests      1s
+  rustty-render-types                  GREEN               12 tests      1s
+  rustty-renderer                      GREEN              159 tests      7s
+  rustty-simd                          GREEN               42 tests     23s
+  rustty-synthetic                     GREEN               27 tests      1s
+  rustty-terminfo                      GREEN                7 tests      1s
+  rustty-termio                        GREEN              113 tests     12s
+  rustty-unicode                       GREEN               23 tests      1s
+  rustty-util                          GREEN                6 tests      1s
+  rustty-vaxis                         GREEN              171 tests      3s
+  rustty-version                       GREEN                6 tests      1s
+  rustty-vt                            GREEN             3428 tests    255s
+  rustty-vt-c                          GREEN              604 tests     39s
+  rustty-wasm                          NO-TESTS(Linux)      0 tests      7s
+  rustty-web-canvas                    GREEN                1 tests      7s
+  rustty-wuffs                         GREEN               24 tests      1s
+  rustty-xev                           GREEN              111 tests      4s
+  rustty-z2d                           GREEN              105 tests      1s
+  rustty-zf                            GREEN               11 tests      1s
+  rustty-zigimg                        GREEN               28 tests      1s
+  rustty-zigstd                        GREEN               89 tests      1s
+  sentry-sys                           GREEN                4 tests      3s
+  simdutf-sys                          GREEN                2 tests      1s
+  spirv-cross-sys                      GREEN                1 tests      1s
+  wuffs-sys                            GREEN                3 tests      2s
+  xtask                                GREEN              125 tests     36s
+  zlib-sys                             GREEN               11 tests      1s
+  rustty-vt:wuffs,oniguruma            GREEN             3458 tests    261s
+  rustty-apprt:gtk,wayland,x11         GREEN              173 tests     64s
+  rustty-os:flatpak                    GREEN              110 tests      2s
+  Miri-exception cross-check (lsan, Linux): 477 Miri-excepted test(s); 421 ran and passed; 56 expected absent on Linux (listed, with reasons); 0 problem(s)
+G-LSAN: GREEN (10339 test(s) under the sanitizer, 0 findings)
