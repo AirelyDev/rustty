@@ -1,0 +1,11 @@
+ok: rustty-wasm (wasm32-unknown-unknown) — no rustty-xev edge
+ok: rustty-web-canvas (wasm32-unknown-unknown) — no rustty-xev edge
+ok: rustty-vt-c (wasm32-unknown-unknown) — no rustty-xev edge
+ok: rustty-vt-c (wasm32-wasip1) — no rustty-xev edge
+ok: rustty-os -> rustty-xev is macOS-gated ([target.'cfg(target_os = "macos")'.dependencies])
+ok: rustty-os -> rustty-xev (flatpak) is optional + feature-gated, default-off
+
+>> xev reachability gate (G-XEVREACH): GREEN — no wasm artifact links
+   rustty-xev, and the one sub-app-tier xev edge stays macOS-gated.
+   (This gate draws NO scope conclusion: the iocp and wasi_poll backends
+    are PORTED — see the RETRACTED entry in .port/phase-2/DEFERRALS.md.)

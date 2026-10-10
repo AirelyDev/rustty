@@ -1,0 +1,27 @@
+/home/gael/projects/rustty-p8final/crates/rustty-vt/src/snapshot/snapshot.ksy: /types/grid_row/seq/1/id:
+	warning: use `num_cells` instead of `cell_count`, given that it's only used as repeat count of `cells` (see https://doc.kaitai.io/ksy_style_guide.html#attr-id)
+
+ok checkpoint-ready-v1.hex
+ok complete-v1.hex
+ok continuation-apc-v1.hex
+ok continuation-csi-v1.hex
+ok continuation-dcs-v1.hex
+ok continuation-esc-v1.hex
+ok continuation-ground-v1.hex
+ok continuation-osc-v1.hex
+ok continuation-utf8-v1.hex
+ok envelope-v1.hex
+ok grid-v1.hex
+ok history-header-v1.hex
+ok hyperlink-explicit-v1.hex
+ok hyperlink-implicit-v1.hex
+ok page-empty-record-v1.hex
+ok page-header-v1.hex
+ok page-v1.hex
+ok record-page-header-v1.hex
+ok screen-header-v1.hex
+ok screen-saved-cursor-v1.hex
+ok style-v1.hex
+ok terminal-header-v1.hex
+validated 22 snapshot fixtures
+G-KAITAI PASS: 22/22 snapshot goldens validate against snapshot.ksy

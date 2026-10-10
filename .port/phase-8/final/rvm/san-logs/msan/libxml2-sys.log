@@ -1,0 +1,9 @@
+   Compiling libxml2-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/libxml2-sys)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.38s
+     Running unittests src/lib.rs (target/san-msan/aarch64-unknown-linux-gnu/debug/deps/libxml2_sys-269741180c17566b)
+
+running 1 test
+test tests::kat_libxml2_2_11_5_parse_memory ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

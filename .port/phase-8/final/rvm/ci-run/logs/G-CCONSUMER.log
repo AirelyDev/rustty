@@ -1,0 +1,23 @@
+=== G-CCONSUMER 1/5 :: cmake configure ===
+=== G-CCONSUMER 2/5 :: cmake build ===
+=== G-CCONSUMER 3/5 :: cmake install + artifact check ===
+    ok      lib64/librustty-vt.so.0.1.0
+    ok      lib64/librustty-vt.so.0
+    ok      lib64/librustty-vt.so
+    ok      lib64/librustty-vt.a
+    ok      include/rustty/vt.h
+    ok      lib64/cmake/rustty-vt/rustty-vt-config.cmake
+    ok      lib64/cmake/rustty-vt/rustty-vt-config-version.cmake
+    ok      share/pkgconfig/librustty-vt.pc
+    ok      share/pkgconfig/librustty-vt-static.pc
+=== G-CCONSUMER 4/5 :: pkg-config metadata ===
+    ok      librustty-vt validates
+    ok      librustty-vt-static validates
+    Cflags(shared): -I/tmp/tmp.ldO17mvQUj/prefix/share/pkgconfig/../../include
+    Libs(shared):   -L/tmp/tmp.ldO17mvQUj/prefix/share/pkgconfig/../../lib64 -lrustty-vt
+    Libs(static):   /tmp/tmp.ldO17mvQUj/prefix/share/pkgconfig/../../lib64/librustty-vt.a -lstdc++ -lc -lm -lpthread -ldl -lgcc_s
+=== G-CCONSUMER 5/5 :: compile, link and RUN the smoke test ===
+    ok      shared:  SIMD: yes
+    ok      static:  SIMD: yes
+    ok      static binary is self-contained
+G-CCONSUMER GREEN: cmake build+install, both .pc files, and both link modes verified.

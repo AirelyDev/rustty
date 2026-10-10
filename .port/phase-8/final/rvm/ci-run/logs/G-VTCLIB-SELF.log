@@ -1,0 +1,3 @@
+=== G-VTCLIB SELF-TEST (arm 3 fail path: simulated unification) ===
+--- cargo test -p rustty-vt-c --features rustty-vt/wuffs --test lib_feature_isolation (MUST FAIL)
+G-VTCLIB SELF-TEST: GREEN (simulated unification turns arm 3 red)

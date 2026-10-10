@@ -1,0 +1,4 @@
+[a] getDefault only as hb.rs Language::get_default: gaps [('src/terminal/modes.zig', 'getDefault')] (expect getDefault); the bare-name match would say present: True
+[b] get_default in modes.rs: gaps [] (expect [])
+[c] get_default in a file naming ModeState: gaps [] (expect [])
+SELF-TEST GREEN: the container-aware match rejects the getDefault false positive

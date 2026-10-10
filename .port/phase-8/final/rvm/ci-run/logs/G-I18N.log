@@ -1,0 +1,4 @@
+=== G-I18N :: every catalogue matches po/io.airely.rustty.pot (34 files) ===
+    ok      all 34 catalogues agree with po/io.airely.rustty.pot
+G-I18N GREEN: all 34 catalogues match po/io.airely.rustty.pot.
+  Not checked: whether po/io.airely.rustty.pot itself is current — see the gate header.

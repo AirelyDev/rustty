@@ -1,0 +1,14 @@
+=== G-UDDOCS SELF-TEST ===
+  case 1 (no status line)      -> rc=1 (expect 1) ok
+  case 2 (two status lines)    -> rc=1 (expect 1) ok
+  case 3 (fix-type, no docs row, not fixed upstream) -> rc=1 (expect 1) ok
+  case 4 (fixed upstream, no docs row) -> rc=0 (expect 0) ok
+  case 4 control (exemption removed)   -> rc=1 (expect 1) ok
+  case 5 (empty Entries section)       -> rc=3 (expect 3) ok
+  case 5b (missing Entries marker)     -> rc=3 (expect 3) ok
+  case 6 (cite UD id with no entry)    -> rc=1 (expect 1) ok
+  case 7 (cite a non-fix-type entry)   -> rc=1 (expect 1) ok
+  case 8 (private UD, no marker)       -> rc=1 (expect 1) ok
+  case 9 (private UD, marker+recipe)   -> rc=1 (expect 1) ok
+  case 9b (private UD, clean row)      -> rc=0 (expect 0) ok
+SELF-TEST GREEN: the gate flips RED on a missing/duplicated status line, an undocumented fix, a citation of a non-existent or non-fix-type UD, and a private-report row that leaks its marker or recipe; flips BLOCKED on an empty/markerless ledger; and stays GREEN on the fixed-upstream exemption and a clean private-report row.

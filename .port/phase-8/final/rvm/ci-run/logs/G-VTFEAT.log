@@ -1,0 +1,19 @@
+G-VTFEAT: -Dvt-features parity
+  oracle: /home/gael/projects/ghostty
+  lib_vt.zig exports: 204
+  build_options.zig Features: 10 (snapshot, formatter, selection, search, render-state, input-encode, color, grid-introspection, glyph-protocol, kitty-graphics)
+  [1/3] feature declarations + default set
+  [2/3] --features snapshot          clean build,  57 exports — exact
+  [2/3] --features formatter         clean build,  50 exports — exact
+  [2/3] --features selection         clean build,  66 exports — exact
+  [2/3] --features search            clean build,  53 exports — exact
+  [2/3] --features render-state      clean build,  67 exports — exact
+  [2/3] --features input-encode      clean build,  87 exports — exact
+  [2/3] --features color             clean build,  56 exports — exact
+  [2/3] --features grid-introspection clean build,  61 exports — exact
+  [2/3] --features glyph-protocol    clean build,  45 exports — exact
+  [2/3] --features kitty-graphics    clean build,  61 exports — exact
+  [2/3] -all (no features)           clean build,  45 exports — exact
+  [3/3] default (all features)      clean build, 199 exports — exact
+
+VT-FEATURES GATE: GREEN — every -Dvt-features token trims exactly its lib_vt.zig export block

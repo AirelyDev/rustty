@@ -1,0 +1,27 @@
+=== D4 :: comptime-phase preservation + golden VT bytes (runner) ===
+--- presence checks ---
+  OK   checklist present: /home/gael/projects/rustty-p8final/.port/tools/gates/check_comptime_phase.md
+  OK   golden+ST test present: crates/rustty-vt/tests/d4_golden_vt_bytes.rs
+--- golden byte tests (byte-exact + ST-integrity) ---
+  cargo test -p rustty-vt --test d4_golden_vt_bytes
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running tests/d4_golden_vt_bytes.rs (target/debug/deps/d4_golden_vt_bytes-995d85970cee7569)
+
+running 13 tests
+test full_corpus_st_sweep ... ok
+test golden_device_attributes_da2 ... ok
+test golden_device_attributes_da3_is_dcs ... ok
+test golden_kitty_graphics_response ... ok
+test st_scanner_accepts_wellformed_and_concatenated ... ok
+test st_scanner_rejects_orphan_terminator ... ok
+test st_scanner_rejects_stray_esc_inside_string ... ok
+test st_scanner_rejects_unterminated_opener ... ok
+test golden_size_reports ... ok
+test golden_device_attributes_da1 ... ok
+test golden_glyph_apc_responses ... ok
+test golden_osc_replies_st_integrity ... ok
+test golden_osc_terminator_surface ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+>> PASS: D4 checklist present; golden byte + ST-integrity tests green

@@ -1,0 +1,235 @@
+   Compiling compiler_builtins v0.1.160 (/home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling core v0.0.0 (/home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/core)
+   Compiling libc v0.2.185
+   Compiling shlex v2.0.1
+   Compiling find-msvc-tools v0.1.9
+   Compiling object v0.39.1
+   Compiling std v0.0.0 (/home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std)
+   Compiling test v0.0.0 (/home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/test)
+   Compiling cc v1.2.65
+   Compiling log v0.4.33
+   Compiling proc-macro2 v1.0.106
+   Compiling glob v0.3.3
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling libc v0.2.186
+   Compiling prettyplease v0.2.37
+   Compiling cfg-if v1.0.4
+   Compiling regex-syntax v0.8.11
+   Compiling minimal-lexical v0.2.1
+   Compiling clang-sys v1.8.1
+   Compiling memchr v2.8.2
+   Compiling libloading v0.8.9
+   Compiling nom v7.1.3
+   Compiling either v1.16.0
+   Compiling bindgen v0.72.1
+   Compiling syn v2.0.118
+   Compiling itertools v0.13.0
+   Compiling shlex v1.3.0
+   Compiling regex-automata v0.4.14
+   Compiling bitflags v2.13.0
+   Compiling rustc-hash v2.1.2
+   Compiling rustty-build-config v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-build-config)
+   Compiling rustty-zigstd v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-zigstd)
+   Compiling cexpr v0.6.0
+   Compiling zlib-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/zlib-sys)
+   Compiling regex v1.12.4
+   Compiling pkg-config v0.3.33
+   Compiling khronos_api v3.1.0
+   Compiling simdutf-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/simdutf-sys)
+   Compiling highway-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/highway-sys)
+   Compiling rustty-os v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-os)
+   Compiling xml-rs v0.8.28
+   Compiling gl_generator v0.14.0
+   Compiling rustty-simd v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-simd)
+   Compiling rustty-helpgen v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-helpgen)
+   Compiling rustty-vt v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-vt)
+   Compiling gl v0.14.0
+   Compiling rustty-input v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-input)
+   Compiling rustty-font-shaper v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-font-shaper)
+   Compiling rustty-xev v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-xev)
+   Compiling khronos-egl v6.0.0
+   Compiling rustty-renderer v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-renderer)
+   Compiling rustty-version v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-version)
+   Compiling rustty-config v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-config)
+   Compiling rustty-termio v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-termio)
+   Compiling rustty-core v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-core)
+   Compiling freetype-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/freetype-sys)
+   Compiling wuffs-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/wuffs-sys)
+   Compiling libxml2-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/libxml2-sys)
+   Compiling oniguruma-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/oniguruma-sys)
+   Compiling fontconfig-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/fontconfig-sys)
+   Compiling harfbuzz-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/harfbuzz-sys)
+   Compiling spirv-cross-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/spirv-cross-sys)
+   Compiling glslang-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/glslang-sys)
+   Compiling rustc-std-workspace-core v1.99.0 (/home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/rustc-std-workspace-core)
+   Compiling alloc v0.0.0 (/home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc)
+   Compiling unwind v0.0.0 (/home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/unwind)
+   Compiling adler2 v2.0.1
+   Compiling memchr v2.7.6
+   Compiling rustc-demangle v0.1.28
+   Compiling panic_abort v0.0.0 (/home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/panic_abort)
+   Compiling rustc-literal-escaper v0.0.8
+   Compiling dcimgui-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/dcimgui-sys)
+   Compiling rustc-std-workspace-alloc v1.99.0 (/home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/rustc-std-workspace-alloc)
+   Compiling panic_unwind v0.0.0 (/home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/panic_unwind)
+   Compiling gimli v0.34.0
+   Compiling miniz_oxide v0.9.1
+   Compiling std_detect v0.1.5 (/home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std_detect)
+   Compiling hashbrown v0.17.1
+   Compiling addr2line v0.27.0
+   Compiling rustc-std-workspace-std v1.99.0 (/home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/rustc-std-workspace-std)
+   Compiling proc_macro v0.0.0 (/home/gael/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/proc_macro)
+   Compiling getopts v0.2.24
+   Compiling allocator-api2 v0.2.21
+   Compiling rustty-util v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-util)
+   Compiling rustty-identity v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-identity)
+   Compiling equivalent v1.0.2
+   Compiling indexmap v2.14.0
+   Compiling rustty-unicode v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-unicode)
+   Compiling rustty-datastruct v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-datastruct)
+   Compiling rustty-render-types v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-render-types)
+   Compiling rustty-global v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-global)
+   Compiling rustty-z2d v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-z2d)
+   Compiling rustty-oniguruma v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-oniguruma)
+   Compiling rustty-font v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-font)
+   Compiling rustty-wuffs v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-wuffs)
+   Compiling rustty-lib v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-lib)
+   Compiling rustty-terminfo v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-terminfo)
+   Compiling rustty-args v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-args)
+   Compiling rustty-cfg-fmt v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-cfg-fmt)
+   Compiling rustty-crash v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-crash)
+   Compiling rustty-inspector v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-inspector)
+   Compiling rustty-apprt-api v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-apprt-api)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 02s
+     Running unittests src/lib.rs (target/san-tsan/aarch64-unknown-linux-gnu/debug/deps/rustty_core-f63b364b97f86fc8)
+
+running 86 tests
+test app::test_runtime::app_init_without_an_egl_driver_fails_with_device_failed_and_says_why ... ignored, needs __EGL_VENDOR_LIBRARY_FILENAMES=/nonexistent.json; run alone with --ignored --exact
+test app::test_runtime::add_and_delete_surface_drive_the_quit_timer ... ok
+test app::test_runtime::color_scheme_event_same_scheme_is_noop ... ok
+test app::test_runtime::color_scheme_event_sets_conditional_state_and_soft_reloads ... ok
+test app::test_runtime::delete_surface_clears_matching_focused_surface ... ok
+test app::test_runtime::drain_mailbox_dispatches_and_quit_short_circuits ... ok
+test app::test_runtime::drain_mailbox_logs_message_tags ... ok
+test app::test_runtime::focus_event_sets_state_and_dedupes ... ok
+test app::test_runtime::init_null_device_has_no_device_and_deinit_skips_it ... ok
+test app::test_runtime::focus_event_emits_the_debug_diagnostic_only_on_a_real_change ... ok
+test app::test_runtime::needs_confirm_quit_false_with_zero_surfaces ... ok
+test app::test_runtime::key_event_unfocused_non_global_returns_false ... ok
+test app::test_runtime::key_event_app_scoped_leaf_performs_action ... ok
+test app::test_runtime::perform_all_chained_action_continues_past_failures ... ok
+test app::test_runtime::key_event_release_returns_false ... ok
+test app::test_runtime::mailbox_push_wakes_rt_app_and_returns_size ... ok
+test app::test_runtime::perform_all_chained_action_warns_on_the_failing_action_only ... ok
+error(task14a_app_logger_test): proving message 1
+warning: default-scope proving message
+test app::test_runtime::ud366_perform_all_action_survives_a_host_append_that_reallocates ... ok
+test log_capture::tests::all_threads_capture_admits_a_spawned_thread ... ok
+test log_capture::tests::capture_admits_only_the_owning_thread ... ok
+test log_capture::tests::records_emitted_outside_a_capture_are_discarded ... ok
+libEGL warning: egl: failed to create dri2 screen
+libEGL warning: DRI2: failed to create screen
+test logging::tests::app_log_backend_installs_and_dispatches_without_panicking ... ok
+info: boot message
+test logging::tests::empty_facade_target_maps_onto_the_reference_default_scope ... ok
+test logging::tests::level_as_text_matches_reference ... ok
+libEGL warning: egl: failed to create dri2 screen
+libEGL warning: DRI2: failed to create screen
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test logging::tests::level_from_log_matches_the_reference_mapping ... ok
+test logging::tests::log_with_gates_on_stderr_flag ... ok
+test logging::tests::state_reading_log_defaults_when_unset ... ok
+test renderer_seam::cursor_blink_interval_tests::cursor_blink_interval_is_five_times_longer_under_valgrind ... ok
+test renderer_seam::surface_mailbox_seam_tests::adapter_enqueues_scrollbar_and_health_onto_the_real_app_queue ... ok
+test renderer_seam::surface_mailbox_seam_tests::adapter_reports_zero_when_the_queue_is_full ... ok
+test renderer_seam::thread_diagnostics_tests::animation_timer_callback_warns_and_disarms_without_data_set ... ok
+test app::test_runtime::app_init_creates_and_deinit_frees_the_render_device ... ok
+test app::test_runtime::app_create_and_destroy_empty ... ok
+test renderer_seam::thread_diagnostics_tests::compression_timer_warns_only_on_a_non_canceled_error ... ok
+test renderer_seam::thread_diagnostics_tests::cursor_cancel_callback_is_silent_on_not_found ... ok
+test renderer_seam::thread_diagnostics_tests::cursor_cancel_callback_warns_and_disarms_on_a_cancel_error ... ok
+test renderer_seam::thread_diagnostics_tests::draw_now_callback_null_userdata_panics_at_the_unwrap - should panic ... ok
+test renderer_seam::thread_diagnostics_tests::mailbox_message_renders_the_reference_union_syntax ... ok
+test renderer_seam::thread_diagnostics_tests::render_callback_warns_and_disarms_without_data_set ... ok
+test renderer_seam::thread_diagnostics_tests::stop_callback_null_userdata_panics_at_the_unwrap - should panic ... ok
+test renderer_seam::thread_diagnostics_tests::stop_callback_rearms_on_a_wait_error ... ok
+test renderer_seam::thread_diagnostics_tests::timer_callbacks_disarm_on_an_unexpected_error ... ok
+test renderer_seam::thread_diagnostics_tests::wakeup_callback_null_userdata_panics_at_the_unwrap - should panic ... ok
+test simd_option::simd_feature_reaches_the_terminal_and_the_simd_kernels ... ok
+test surface::tests::clipboard_codepoint_map_e2e::clipboard_codepoint_map_fixture_is_miri_clean ... ok
+test surface::tests::diagnostics_tests::activate_key_table_logs_the_missing_table_name ... ok
+test surface::tests::diagnostics_tests::clipboard_write_deny_logs_once_and_the_allowed_path_does_not ... ok
+test surface::tests::diagnostics_tests::clipboard_write_invalid_base64_logs_and_the_deny_line_does_not ... ok
+test surface::tests::freetype_load_flags_tests::default_round_trips_exactly ... ok
+test surface::tests::clipboard_codepoint_map_e2e::clipboard_codepoint_map_reaches_copy_selection_to_clipboards ... ok
+test surface::tests::freetype_load_flags_tests::derived_config_carries_the_configured_flags ... ok
+test surface::tests::diagnostics_tests::set_title_with_a_static_config_title_logs_and_returns ... ok
+test surface::tests::freetype_load_flags_tests::from_config_threads_every_field ... ok
+test surface::tests::freetype_load_flags_tests::load_flags_are_hash_distinguishing ... ok
+test surface::tests::inspector_lifecycle_tests::inspector_renderer_info_coerces_to_overlay_and_reads ... ok
+test surface::tests::inspector_lifecycle_tests::record_key_event_grows_then_evicts_bounded ... ok
+test surface::tests::isize_from_float_tests::isize_from_float_in_range_is_exact ... ok
+test surface::tests::isize_from_float_tests::isize_from_float_reports_nan_whose_reference_value_is_target_dependent ... ok
+test surface::tests::isize_from_float_tests::isize_from_float_reports_the_values_the_reference_traps_on ... ok
+test surface::tests::isize_from_float_tests::isize_from_float_saturating_takes_the_end_in_each_direction ... ok
+test surface::tests::mok2_key_path_e2e::surface_mok2_keypad_alt_ctrl_end_to_end ... ok
+test surface::tests::queue_io_readonly_tests::queueIo_frees_allocated_writes_in_readonly_mode ... ok
+test surface::tests::paste_event_mutex_tests::paste_event_queues_while_holding_the_renderer_mutex_on_a_full_mailbox ... ok
+test surface::tests::r13_window_size_overflow_tests::a_click_repeat_interval_above_u32_nanoseconds_is_widened_not_trapped ... ok
+test surface::tests::r13_window_size_overflow_tests::an_oversized_window_padding_saturates_and_leaves_a_one_cell_grid ... ok
+test surface::tests::oniguruma_first_use_init_tests::concurrent_derived_config_link_regexes_and_ensure_init_do_not_race ... ok
+test surface::tests::r13_window_size_overflow_tests::initial_size_px_overflow_takes_the_skip_path ... ok
+test surface::tests::r13_window_size_overflow_tests::size_limit_min_overflow_skips_the_action ... ok
+test surface::tests::r13_window_size_overflow_tests::initial_size_px_with_a_nan_content_scale_takes_the_skip_path ... ok
+test surface::tests::resize_window_tests::csi_8_t_resizes_the_window_only_when_allowed ... ok
+test surface::tests::resize_window_tests::ud371_csi_8_t_overflow_returns_without_panicking ... ok
+test surface::tests::renderer_config_tests::renderer_derived_config_from_real_config ... ok
+test surface::tests::renderer_config_tests::init_change_config_from_real_config ... ok
+test surface::tests::scroll_gesture_cast_tests::x_discrete_gesture_cast_out_of_range_scrolls_nothing ... ok
+test surface::tests::scroll_gesture_cast_tests::x_precision_gesture_cast_out_of_range_scrolls_nothing ... ok
+test surface::tests::scroll_gesture_cast_tests::y_gesture_cast_out_of_range_scrolls_nothing ... ok
+test surface::tests::resize_window_tests::ud371_resize_window_overflow_takes_the_skip_path ... ok
+test surface::tests::scroll_page_fractional_saturation_tests::a_saturated_scroll_delta_is_clamped_by_the_viewport ... ok
+test surface_mouse::tests::key_to_mouse_shape ... ok
+test surface_mouse::tests::key_to_mouse_shape_osc22_shape_with_shift ... ok
+test type_core_prototype::option1_self_referential_core_bound ... ok
+test app::device_tests::two_surfaces_share_the_device_destroy_one_draw_the_other_then_deinit ... ok
+test surface::tests::prompt_click_relative_row_tests::promptClickRelativeRow ... ok
+test renderer_seam::compression_tests::compression_is_inert_when_the_option_is_disabled ... ok
+test renderer_seam::compression_tests::compression_idle_pass_compresses_scrollback ... ok
+test renderer_seam::compression_tests::change_config_restarts_the_pass_only_on_disabled_to_enabled ... ok
+
+test result: ok. 85 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 13.27s
+
+ThreadSanitizer: Matched 19 suppressions (pid=798173):
+1 race:libEGL_mesa.so
+18 race:libgallium
+     Running tests/surface_visibility_kat.rs (target/san-tsan/aarch64-unknown-linux-gnu/debug/deps/surface_visibility_kat-e8b4617ff257b31e)
+
+running 1 test
+libEGL warning: egl: failed to create dri2 screen
+libEGL warning: DRI2: failed to create screen
+libEGL warning: egl: failed to create dri2 screen
+libEGL warning: DRI2: failed to create screen
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test surface_occlusion_callback_dedups_and_reports ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/vt_build_options.rs (target/san-tsan/aarch64-unknown-linux-gnu/debug/deps/vt_build_options-510383527a65e941)
+
+running 2 tests
+test app_tier_manifest_defaults_terminal_simd_on_as_an_option ... ok
+test app_tier_resolves_terminal_simd_from_the_option ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rustty_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

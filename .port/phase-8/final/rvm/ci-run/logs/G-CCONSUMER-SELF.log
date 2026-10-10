@@ -1,0 +1,11 @@
+=== G-CCONSUMER SELF-TEST ===
+  [ok ] Darwin/lib: complete tree passes
+  [ok ] Darwin/lib: soname link missing -> RED
+  [ok ] Darwin/lib64: complete tree passes
+  [ok ] Darwin/lib64: soname link missing -> RED
+  [ok ] Linux/lib: complete tree passes
+  [ok ] Linux/lib: soname link missing -> RED
+  [ok ] Linux/lib64: complete tree passes
+  [ok ] Linux/lib64: soname link missing -> RED
+  [ok ] cargo's librustty_vt_c.* names only -> RED
+G-CCONSUMER SELF-TEST: GREEN

@@ -1,0 +1,296 @@
+   Compiling rustty-vt v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-vt)
+   Compiling wayland-sys v0.31.11
+   Compiling wayland-backend v0.3.15
+   Compiling rustty-apprt v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-apprt)
+   Compiling wayland-server v0.31.14
+   Compiling rustty-input v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-input)
+   Compiling rustty-font-shaper v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-font-shaper)
+   Compiling rustty-renderer v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-renderer)
+   Compiling rustty-config v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-config)
+   Compiling rustty-inspector v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-inspector)
+   Compiling rustty-apprt-api v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-apprt-api)
+   Compiling rustty-termio v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-termio)
+   Compiling rustty-core v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.67s
+     Running unittests src/lib.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/rustty_apprt-813571dde450bcbe)
+
+running 37 tests
+test bootstrap_tests::compute_logging_defaults ... ok
+test bootstrap_tests::compute_logging_env_bool_shorthand ... ok
+test bootstrap_tests::compute_logging_action_disables_stderr ... ok
+test bootstrap_tests::compute_logging_env_stderr_flag ... ok
+test embedded::tests::host_view_tests::non_darwin_returns_null ... ok
+test embedded::tests::imgui_key_tests::numpad_begin_is_unmapped ... ok
+test embedded::tests::imgui_key_tests::numpad_page_down_maps_to_page_down ... ok
+test embedded::tests::inspector_style_tests::update_content_scale_is_idempotent_not_compounding ... ok
+test embedded::tests::inspector_style_tests::update_content_scale_rescales_active_imgui_style ... ok
+test embedded::tests::key_event_core_tests::key_event_core_zeroes_an_unshifted_codepoint_outside_u21 ... ok
+test embedded::tests::keymap_lazy_tests::reload_keymap_does_not_initialize ... ok
+test embedded::working_dir::inherited_working_directory_tests::a_pwd_that_starts_with_a_nul_is_empty ... ok
+test embedded::working_dir::inherited_working_directory_tests::an_inherited_pwd_with_a_nul_reaches_the_host_cut_at_the_nul ... ok
+test embedded::working_dir::inherited_working_directory_tests::an_ordinary_pwd_is_unchanged ... ok
+test embedded::working_dir::inherited_working_directory_tests::the_inherited_working_directory_is_freed_by_the_next_call_and_by_deinit ... ok
+test embedded::working_dir::requested_working_directory_tests::a_directory_is_usable_without_a_diagnostic ... ok
+test embedded::working_dir::requested_working_directory_tests::a_missing_path_fails_at_the_open ... ok
+test embedded::working_dir::requested_working_directory_tests::a_regular_file_fails_at_the_open_not_the_kind_check ... ok
+test gtk_scale::tests::device_size_fractional_scale ... ok
+test gtk_scale::tests::device_size_integer_scale ... ok
+test gtk_scale::tests::device_size_rejects_non_positive_inputs ... ok
+test gtk_scale::tests::snap_offset_aligns_fractional_device_origins ... ok
+test bootstrap_tests::init_log_values_use_zig_rendering ... ok
+test bootstrap_tests::compute_logging_env_invalid_falls_back_to_default ... ok
+test bootstrap_tests::compute_logging_env_negation ... ok
+test embedded::tests::host_view_tests::non_darwin_platform_init_is_unsupported ... ok
+test bootstrap_tests::init_signals_ignores_sigpipe ... ok
+test gtk_targets::tests::explicit_option_wins_else_the_probe ... ok
+test gtk_targets::tests::targets_follow_pkg_config_output ... ok
+test bootstrap_tests::init_log_lines_are_the_references ... ok
+test gtk_scale::tests::snap_offset_rejects_non_positive_scale ... ok
+test gtk_scale::tests::snapped_device_size_integer_scale_with_origin ... ok
+test gtk_scale::tests::snapped_device_size_uses_origin_aware_device_spans ... ok
+test log_capture::tests::all_threads_capture_admits_a_spawned_thread ... ok
+info: rustty version=0.1.0-main+8bd26ad
+info: rustty build optimize=Debug
+info: runtime=.gtk
+info: font_backend=.fontconfig_freetype
+info: dependency harfbuzz=11.0.0
+test log_capture::tests::records_emitted_outside_a_capture_are_discarded ... infook: 
+dependency fontconfig=21803
+info: renderer=renderer.generic.Renderer(renderer.OpenGL)
+info: libxev default backend=io_uring
+test bootstrap_tests::full_init_populates_state_and_is_idempotent ... ok
+test log_capture::tests::capture_admits_only_the_owning_thread ... ok
+
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/global_init_resyncs_environ.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/global_init_resyncs_environ-8bec966fd4530622)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_application.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_application-e4f239c15d9a07ad)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_assets.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_assets-310b7f4e4a20eae0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_cgroup_scope.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_cgroup_scope-b2fca89e27c6f1d5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_clipboard.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_clipboard-2f55314f12262115)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_clipboard_confirm.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_clipboard_confirm-3192a08ed81e8027)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_close_confirmation.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_close_confirmation-9a4de56669da178f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_config_errors_dialog.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_config_errors_dialog-c46aa6d1bb17560b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_css_parse_error.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_css_parse_error-dde52c17e73548d5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_first_light.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_first_light-fe7004c4a2d94c87)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_glyph_dump.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_glyph_dump-77186e7104bad84e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_icon_identity.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_icon_identity-514a5785f2b85815)
+
+running 1 test
+test gnome_icons_are_rustty_artwork ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/gtk_input_focus.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_input_focus-d7f86b0a281875e7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_inspector_dump.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_inspector_dump-cb56eeef0a254d91)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_parity_callbacks.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_parity_callbacks-8d83a23e0beb5a7e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_perform_action.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_perform_action-d3b7ea55278cd7fb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_portal_openuri.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_portal_openuri-3eb5a285c98340be)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_portal_openuri_live.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_portal_openuri_live-bdcedb98142e2404)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_render_surface.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_render_surface-4cfde7a8199264ce)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_resize_window_live.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_resize_window_live-266d37051a9b3cab)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_resources.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_resources-ceae6c74f1c980a7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_seam.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_seam-1c4505f2d0c00b39)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_split_drop.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_split_drop-e576eed8588985f3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_title_dialog.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_title_dialog-c1f738abfb0f752f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_wayland_compute_size.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_wayland_compute_size-c22fe56b36ce0e99)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_wayland_deco_live.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_wayland_deco_live-95f063be6cefe267)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_wayland_deinit_token.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_wayland_deinit_token-d13aeb9b85e10dfd)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_wayland_kde_globals.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_wayland_kde_globals-642e41d55eb9b21f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_wayland_set_urgent.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_wayland_set_urgent-beb63549e409d991)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_wayland_vicinae_hotkeys.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_wayland_vicinae_hotkeys-44708096154bb79e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_wayland_winproto.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_wayland_winproto-a0064de396e4e1cb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_window_live.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_window_live-cd57eff8791ba505)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_x11_event_mods.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_x11_event_mods-65220aedc06cfae7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_x11_windowid.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_x11_windowid-0edc7fdc50de071a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_x11_winproto.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_x11_winproto-793956882e808618)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gtk_x11_xkb_init.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/gtk_x11_xkb_init-a1cd9b559fbc1e81)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/i18n_msgid_coverage.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/i18n_msgid_coverage-0ec9feea2386def3)
+
+running 2 tests
+test blp_msgids_all_exist_in_pot ... ok
+test code_msgids_all_wrapped_and_in_pot ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+
+   Doc-tests rustty_apprt
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

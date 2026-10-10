@@ -1,0 +1,4 @@
+=== GATE pagelist-compress-leaks :: native counting-allocator leak check ===
+ok  leak_check (counting global allocator, delta == 0)
+all selected scenarios passed (leak check runs at exit)
+GREEN: compress -> reset -> compress -> deinit returns to its live-byte baseline

@@ -1,0 +1,13 @@
+=== G-XTARGET :: cross-target builds of rustty-vt-c ===
+  ok      wasm32-unknown-unknown
+  ok      wasm32-unknown-unknown requires simd128
+  ok      wasm32-wasip1
+  ok      wasm32-wasip1 requires simd128
+  skipped x86_64-pc-windows-msvc (host C compiler cannot target it (no sysroot/toolchain))
+  skipped x86_64-unknown-freebsd (host C compiler cannot target it (no sysroot/toolchain))
+  skipped x86_64-pc-windows-gnu (host C compiler cannot target it (no sysroot/toolchain))
+  skipped aarch64-linux-android (no Android NDK clang for it: set CC_aarch64_linux_android and CXX_aarch64_linux_android (and AR_aarch64_linux_android, CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER) to the NDK's clang)
+  skipped x86_64-linux-android (no Android NDK clang for it: set CC_x86_64_linux_android and CXX_x86_64_linux_android (and AR_x86_64_linux_android, CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER) to the NDK's clang)
+  skipped armv7-linux-androideabi (no Android NDK clang for it: set CC_armv7_linux_androideabi and CXX_armv7_linux_androideabi (and AR_armv7_linux_androideabi, CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER) to the NDK's clang)
+--- G-XTARGET summary: 2 built, 6 skipped ---
+G-XTARGET GREEN (2 target(s) built). Not built: x86_64-pc-windows-msvc x86_64-unknown-freebsd x86_64-pc-windows-gnu aarch64-linux-android x86_64-linux-android armv7-linux-androideabi

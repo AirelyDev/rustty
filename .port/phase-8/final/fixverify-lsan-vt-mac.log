@@ -1,0 +1,11 @@
+### G-LSAN: AddressSanitizer + LeakSanitizer (detect_leaks=1) over the workspace test suites (Darwin/arm64) ###
+feature lane: rustty-vt:wuffs,oniguruma — the PNG decode tests (`image_load_png_zlib_compressed_direct`, `sys::tests::default_decoder_*`) are ignored without the wuffs feature, and one of them is a Miri exception whose stated compensating control is ASan; found by G-ASAN's claim cross-check on its first run (P7-W14); and the oniguruma feature's tests, e.g. the Miri-excepted tmux::control::concurrent_first_notifications_do_not_race_oniguruma_init, which no lane compiled until the cross-check covered every Miri exception (fix round 1)
+NOTE: SAN_ONLY narrows this run to: rustty-vt rustty-vt:wuffs,oniguruma — the verdict is BLOCKED, never GREEN
+=== sanitizer matrix: lsan over 2 crate spec(s); one shared target dir /Users/gael/projects/rustty/target/san-lsan, deleted when the pass ends ===
+  ✅ lsan rustty-vt: 3434 test(s) ran, 263s — 3434 passed, 19 ignored
+  ✅ lsan rustty-vt:wuffs,oniguruma: 3464 test(s) ran, 223s — 3464 passed, 14 ignored
+--- lsan matrix summary: 6898 test(s) ran, wall 487s (8 min) ---
+  rustty-vt                            GREEN             3434 tests    263s
+  rustty-vt:wuffs,oniguruma            GREEN             3464 tests    223s
+  BLOCKED: SAN_ONLY narrowed the run; the Miri-exception cross-check needs the whole pass
+G-LSAN: BLOCKED — SCOPED-GREEN: SAN_ONLY narrowed the run; 6898 test(s) ran clean in it. Never a full GREEN.

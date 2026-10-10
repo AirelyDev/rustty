@@ -1,0 +1,9 @@
+   Compiling freetype-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/freetype-sys)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.46s
+     Running unittests src/lib.rs (target/san-msan/aarch64-unknown-linux-gnu/debug/deps/freetype_sys-d7883e0d39be95de)
+
+running 1 test
+test tests::kat_freetype_2_13_2_memory_face ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

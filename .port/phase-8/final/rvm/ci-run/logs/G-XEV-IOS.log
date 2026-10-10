@@ -1,0 +1,154 @@
+== 1/3: rustty-xev type-checks for aarch64-apple-ios (check-only; no linking) ==
+    Checking allocator-api2 v0.2.21
+   Compiling rustty-zigstd v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-zigstd)
+    Checking rustty-util v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-util)
+    Checking equivalent v1.0.2
+    Checking rustty-identity v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-identity)
+   Compiling rustty-xev v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-xev)
+   Compiling libc v0.2.186
+   Compiling rustty-build-config v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-build-config)
+    Checking hashbrown v0.17.1
+    Checking indexmap v2.14.0
+    Checking rustty-datastruct v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-datastruct)
+    Checking rustty-global v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-global)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.46s
+== 2/3: the Darwin gates name the reference's full set ==
+rustty-xev Darwin set OK: 131 cfg attributes scanned, 0 narrowings.
+== 3/3: host lane must not regress ==
+   Compiling rustty-xev v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-xev)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.16s
+     Running unittests src/lib.rs (target/debug/deps/rustty_xev-9645baf14231a061)
+
+running 108 tests
+test backend::tests::backend_default_and_candidates ... ok
+test backend::tests::linux_candidates_and_default ... ok
+test backend::tests::backend_tag_names_are_the_reference_field_names ... ok
+test backend_accessor_tests::backend_is_a_linux_candidate ... ok
+test dynamic::tests::dynamic_backend_default_is_last_candidate ... ok
+test dynamic::tests::dynamic_completion_ensure_tag ... ok
+test dynamic::tests::dynamic_completion_zero_able ... ok
+test dynamic::tests::dynamic_async_batches_multiple_notifications ... ok
+test dynamic::tests::dynamic_async_notify ... ok
+test dynamic::tests::dynamic_detect ... ok
+test dynamic::tests::dynamic_file_poll ... ok
+test dynamic::tests::dynamic_prefer ... ok
+test dynamic::tests::dynamic_async_notify_first ... ok
+test dynamic::tests::dynamic_process_wait_on_a_process_that_already_exited ... ok
+test dynamic::tests::dynamic_loop_basics ... ok
+test dynamic::tests::dynamic_pty_parent_to_child ... ok
+test dynamic::tests::dynamic_loop_now_advances ... ok
+test dynamic::tests::dynamic_ref_all_decls ... ok
+test dynamic::tests::dynamic_process_spawn_exit ... ok
+test dynamic::tests::dynamic_process_wait_with_non_zero_exit_code ... ok
+test dynamic::tests::dynamic_file_read_write ... ok
+test dynamic::tests::dynamic_pty_child_to_parent ... ok
+test dynamic::tests::dynamic_loop_init_dispatches_on_the_global ... ok
+test epoll::tests::async_file::epoll_async_batches_multiple_notifications ... ok
+test dynamic::tests::dynamic_pty_queued_writes ... ok
+test epoll::tests::async_file::epoll_async_notify_first ... ok
+test dynamic::tests::dynamic_pty_write_roundtrip ... ok
+test epoll::tests::async_file::epoll_close_on_thread_pool ... ok
+test epoll::tests::async_file::epoll_file_poll ... ok
+test dynamic::tests::dynamic_tcp_accept_connect_send_recv_close ... ok
+test epoll::tests::async_file::epoll_file_pread_pwrite ... ok
+test epoll::tests::async_file::epoll_file_queued_writes ... ok
+test epoll::tests::epoll_callback_reenters_through_stored_loop_pointer ... ok
+test epoll::tests::async_file::epoll_file_read_write ... ok
+test epoll::tests::async_file::epoll_async_notify ... ok
+test epoll::tests::async_file::epoll_file_queue_pwrite_kat ... ok
+test epoll::tests::epoll_default_completion ... ok
+test epoll::tests::epoll_completion_size ... ok
+test epoll::tests::epoll_canceling_a_completed_operation ... ok
+test dynamic::tests::dynamic_timer ... ok
+test epoll::tests::epoll_loop_time ... ok
+test epoll::tests::epoll_timer_cancellation ... ok
+test epoll::tests::epoll_stop ... ok
+test dynamic::tests::dynamic_timer_cancel ... ok
+test epoll::tests::net::epoll_socket_roundtrip ... ok
+test epoll::tests::epoll_timer ... ok
+test epoll::tests::epoll_timer_reset_before_tick ... ok
+test epoll::tests::epoll_timer_reset ... ok
+test dynamic::tests::dynamic_timer_reset ... ok
+test epoll::tests::epoll_timer_reset_after_trigger ... ok
+test epoll::tests::epoll_timerfd ... ok
+test epoll::tests::process_pty::epoll_process_wait_on_a_process_that_already_exited ... ok
+test epoll::tests::net::epoll_tcp_accept_connect_send_recv_close ... ok
+test epoll::tests::net::epoll_udp_read_write ... ok
+test epoll::tests::process_pty::epoll_pty_child_to_parent ... ok
+test epoll::tests::process_pty::epoll_pty_write_roundtrip ... ok
+test epoll::tests::process_pty::epoll_pty_parent_to_child ... ok
+test epoll::tests::process_pty::epoll_process_spawn_exit ... ok
+test heap::tests::heap ... ok
+test heap::tests::heap_dangling_next_pointer ... ok
+test epoll::tests::process_pty::epoll_pty_queued_writes ... ok
+test heap::tests::heap_equal_values ... ok
+test dynamic::tests::dynamic_udp_read_write ... ok
+test epoll::tests::process_pty::epoll_process_wait_with_non_zero_exit_code ... ok
+test heap::tests::heap_remove_root ... ok
+test io_uring::tests::async_file::io_uring_async_batches_multiple_notifications ... ok
+test io_uring::tests::async_file::io_uring_file_poll ... ok
+test heap::tests::heap_remove_with_children ... ok
+test io_uring::tests::async_file::io_uring_file_queue_pwrite_kat ... ok
+test io_uring::tests::io_uring_available ... ok
+test io_uring::tests::async_file::io_uring_async_notify_first ... ok
+test io_uring::tests::async_file::io_uring_file_pread_pwrite ... ok
+test io_uring::tests::io_uring_callback_reenters_through_stored_loop_pointer ... ok
+test io_uring::tests::io_uring_completion_size ... ok
+test io_uring::tests::async_file::io_uring_file_queued_writes ... ok
+test io_uring::tests::async_file::io_uring_file_read_write ... ok
+test io_uring::tests::io_uring_overflow_entries_count ... ok
+test io_uring::tests::io_uring_loop_time ... ok
+test io_uring::tests::io_uring_default_completion ... ok
+test io_uring::tests::io_uring_stop ... ok
+test io_uring::tests::io_uring_timer_remove ... ok
+test io_uring::tests::net::io_uring_socket_read_cancellation ... ok
+test io_uring::tests::io_uring_timer ... ok
+test io_uring::tests::net::io_uring_tcp_accept_connect_send_recv_close ... ok
+test io_uring::tests::net::io_uring_socket_roundtrip ... ok
+test io_uring::tests::io_uring_timer_reset ... ok
+test io_uring::tests::net::io_uring_sendmsg_recvmsg ... ok
+test io_uring::tests::io_uring_timerfd ... ok
+test io_uring::tests::net::io_uring_udp_read_write ... ok
+test io_uring::tests::process_pty::io_uring_process_wait_on_a_process_that_already_exited ... ok
+test io_uring::tests::process_pty::io_uring_pty_child_to_parent ... ok
+test io_uring::tests::process_pty::io_uring_process_spawn_exit ... ok
+test io_uring::tests::process_pty::io_uring_process_wait_with_non_zero_exit_code ... ok
+test linux::eventfd::tests::eventfd_notify_drain ... ok
+test io_uring::tests::process_pty::io_uring_pty_write_roundtrip ... ok
+test io_uring::tests::process_pty::io_uring_pty_parent_to_child ... ok
+test io_uring::tests::process_pty::io_uring_pty_queued_writes ... ok
+test queue::tests::intrusive ... ok
+test queue_mpsc::tests::intrusive ... ok
+test thread_pool::tests::batch_push_links_tasks ... ok
+test thread_pool::tests::init_shutdown_deinit_without_tasks_joins_cleanly ... ok
+test thread_pool::tests::schedule_runs_all_tasks_and_deinit_joins ... ok
+test linux::timerfd::tests::timerfd_fires ... ok
+test io_uring::tests::async_file::io_uring_async_notify ... ok
+test io_uring::tests::net::io_uring_tcp_queued_writes ... ok
+test epoll::tests::net::epoll_tcp_queued_writes ... ok
+test heap::tests::heap_million_values ... ok
+test thread_pool::tests::multi_worker_quiesce_then_join_50x ... ok
+
+test result: ok. 108 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.50s
+
+     Running tests/dynamic_loop_drop.rs (target/debug/deps/dynamic_loop_drop-d8fdadf1be5f803a)
+
+running 1 test
+test a_dropped_loop_frees_its_backend_loop ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/surface_parity.rs (target/debug/deps/surface_parity-94e031cf4aac35a1)
+
+running 2 tests
+test public_zero_values_construct ... ok
+test public_loop_surface_is_live ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rustty_xev
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

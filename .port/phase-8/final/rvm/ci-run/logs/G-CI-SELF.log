@@ -1,0 +1,69 @@
+==================================================================
+ rustty CI — single entry (.port/tools/ci.sh)
+ root: /home/gael/projects/rustty-p8final
+ toolchain: rustc 1.93.1 (01f6ddf75 2026-02-11)
+==================================================================
+=== G-CI-SELF :: ci.sh's scheduler, scoping and sharding, on copies of ci.sh ===
+  ok    A --jobs 1: HARD then PROGRESS in registry order (H1 H2 P1 ), one ci-timings.tsv row each
+  ok    A control: plain registry order (H1 P1 H2 ) is noticed
+  ok    B a RED gate inside a parallel batch of 4 fails the run (exit 1), BLOCKED stays a WARNING, each gate printed whole
+  ok    B control: a finisher that drops the gate's rc is noticed (exit 0)
+  ok    B control: a wrapper that records 0 instead of the gate's rc is noticed (exit 0)
+  ok    C heavy cap 2 reached and held (max 2), tgt and dir=shared serialized, after= waits, dir= sets CARGO_TARGET_DIR
+  ok    C control: a dropped heavy-cap check is noticed (max 4 heavy at once)
+  ok    C control: a dropped lock check is noticed (L1 and L2 overlapped)
+  ok    C control: a dropped after= check is noticed (A2 started before A1 ended)
+  ok    K below CI_MIN_FREE_GB (stubbed df: 1 GB) heavy gates run one at a time (1); with 100 GB, 3 at once
+  ok    K control: a dropped disk-floor check runs 3 heavy gates at 1 GB free, noticed
+  ok    M a wrapper killed before it recorded its rc: W1 RED (exit 2), the run ends
+  ok    M control: without the check the scheduler waits forever (killed by the 15 s watchdog), noticed
+  ok    D a RED shard (2/3) fails G-VALGRIND; 3 shards side by side in one dir, a timing row per shard
+  ok    D control: all shards green, the gate is green
+  ok    D control: taking the last shard's rc hides shard 2's RED, noticed
+  ok    E a change in rustty-apprt selects rustty-cli (direct) and rustty-extra (through rustty-cli)
+  ok    E control: a one-level closure misses rustty-extra, noticed
+  ok    E .port/tools/ci.sh -> all
+  ok    E .port/tools/gates/check_leaks.sh -> all
+  ok    E Cargo.lock -> all
+  ok    E rust-toolchain.toml -> all
+  ok    E crates/rustty-apprt/build.rs -> all
+  ok    E crates-sys/zlib-sys/Cargo.toml -> all
+  ok    E .port/phase-2/lsan.supp -> all
+  ok    E include/rustty/vt.h -> all
+  ok    E valgrind.supp -> all
+  ok    E docs/ghostty-bug-fixes.md -> none
+  ok    E .port/parity-closure/NEW-FINDINGS.md -> none
+  ok    E .port/phase-8/DECISIONS.md -> none
+  ok    E .port/parity-closure/LEDGER.tsv -> none
+  ok    E .port/zz-ci-selftest-unnamed/data.bin -> all
+  ok    E README.md -> none
+  ok    E crates/rustty-apprt/README.md -> crates
+  ok    E a cvt corpus seed selects rustty-vt (it reads .port/phase-0/corpora/cvt), 20 crate(s) with dependents
+  ok    E control: .port/ treated as docs-only scopes the corpus change out (mode=none), noticed
+  ok    E docs next to a crate change: the crate's closure
+  ok    E control: .port/tools/ dropped from the global list is noticed (mode=crates)
+  ok    F a change in crate a: G6/G-VALGRIND narrowed to {a, b}, crate:a runs in full, crate:c scoped out, exit 5, no PASS banner
+  ok    F control: without the scoped banner the run reads PASS (exit 0), noticed
+  ok    F a RED long gate inside the scope fails the run (exit 1)
+  ok    F a narrowed gate's exit 3 with SCOPED-GREEN is SCOPED
+  ok    F control: a narrowed gate's plain exit 3 stays a BLOCKED WARNING
+  ok    F a docs-only change: the 4 scoped gates scoped out, K1 still runs, exit 5
+  ok    F every narrowed gate BLOCKED, nothing scoped out: still exit 5, never PASS
+  ok    F control: the old count-keyed banner reads PASS there (exit 0), noticed
+  ok    F a rename out of crate a (git mv to docs/) selects a; --print-scope exits 6
+  ok    F control: with git's rename detection the move reads as docs-only (mode none), noticed
+  ok    F SAN_ONLY exported into a full run: exit 5, named, never PASS
+  ok    F a change under .port/tools/: every crate, no narrowing, but still exit 5 (a --changed-since run is never a release verdict)
+  ok    G --fast --jobs 1: exit 4, G6 named as skipped, no PASS banner
+  ok    G --fast --jobs 3: exit 4, G6 named as skipped, no PASS banner
+  ok    H without --prune-targets the dirs stay
+  ok    H --prune-targets deletes each gate's marked dir when it ends
+  ok    H control: an unmarked dir, a non-plain name and a foreign root are each refused
+  ok    J every KIND in the real GATE_REGISTRY is a dispatch phase (ARMED HARD PERF-FENCE PROGRESS )
+  ok    J --jobs 1 runs every kind: HARD, PROGRESS, PERF-FENCE, ARMED (H1 H2 P1 PF AR )
+  ok    J --jobs 4: the exclusive PERF-FENCE and ARMED gates run last, alone, in order
+  ok    J control: a dropped exclusive wait starts PERF-FENCE beside other gates, noticed
+  ok    J control: a fixture registry with an unknown KIND fails the check, and ci.sh refuses it (exit 2)
+  ok    I a mutation target that is gone fails the arm and leaves a fixture that exits 99
+--- G-CI-SELF: 61 ok, 0 failed (fixtures in /home/gael/projects/rustty-p8final/target/ci-run/selftest) ---
+G-CI-SELF GREEN

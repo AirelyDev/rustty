@@ -1,0 +1,21 @@
+warning: unknown and unstable feature specified for `-Ctarget-feature`: `tagged-globals`
+  |
+  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
+  = help: consider filing a feature request
+
+warning: unstable feature specified for `-Ctarget-feature`: `outline-atomics`
+  |
+  = note: this feature is not stably supported; its behavior can change in the future
+
+warning: `zlib-sys` (lib) generated 2 warnings
+   Compiling harfbuzz-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/harfbuzz-sys)
+warning: `freetype-sys` (lib) generated 2 warnings (2 duplicates)
+warning: `harfbuzz-sys` (lib test) generated 2 warnings (2 duplicates)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 47.63s
+     Running unittests src/lib.rs (target/san-hwasan/aarch64-unknown-linux-gnu/debug/deps/harfbuzz_sys-8581d42af769ee95)
+
+running 1 test
+test tests::kat_harfbuzz_11_0_0_shape_hello ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

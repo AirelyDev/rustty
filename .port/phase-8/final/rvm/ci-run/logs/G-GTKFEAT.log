@@ -1,0 +1,5 @@
+G-GTKFEAT: the --features gtk,wayland,x11 lane (no other CI lane compiles it)
+  clippy -D warnings: clean
+  gated tests: 272 listed with features, 40 without -> 232 gated
+               (wayland_* 3, x11_* 4)
+G-GTKFEAT: GREEN (floors: gtk delta>=220, wayland_*>=3, x11_*>=4)

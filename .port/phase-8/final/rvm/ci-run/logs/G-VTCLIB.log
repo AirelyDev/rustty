@@ -1,0 +1,5 @@
+G-VTCLIB: lib-vt C artifact keeps the oracle null decode_png default (W36-B03)
+  arm 1: isolated -p rustty-vt-c graph leaves rustty-vt's wuffs feature off
+  arm 2: detector fires on simulated unification (control)
+  arm 3: pristine rustty_vt::sys::decode_png default is None in-process
+G-VTCLIB: GREEN (isolated -p rustty-vt-c stays lib-null; publish rule holds)

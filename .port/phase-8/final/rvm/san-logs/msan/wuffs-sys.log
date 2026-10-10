@@ -1,0 +1,11 @@
+   Compiling wuffs-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/wuffs-sys)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.13s
+     Running unittests src/lib.rs (target/san-msan/aarch64-unknown-linux-gnu/debug/deps/wuffs_sys-b3754801da079de8)
+
+running 3 tests
+test kat::adler32_abc_known_answer ... ok
+test kat::crc32_abc_known_answer ... ok
+test kat::pixel_format_rgba_premul_shims ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

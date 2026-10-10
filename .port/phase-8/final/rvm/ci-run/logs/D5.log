@@ -1,0 +1,7 @@
+D5 paired-invariant catalog: /home/gael/projects/rustty-p8final/.port/phase-2/VT_INVARIANTS.md
+
+D5 REVIEW RULE (primary gate): when a chunk touches EITHER end of any
+invariant in VT_INVARIANTS.md (producer or consumer file), the same PR
+MUST update the catalog and keep the seam tests green. New cross-site
+predicates are catalogued as part of the tier's pre-port gate.
+>> D5 PASS: catalog complete; all anchors and seam tests present.

@@ -1,0 +1,11 @@
+   Compiling rustty-identity v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-identity)
+   Compiling rustty-vt v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-vt)
+   Compiling rustty-vt-c v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-vt-c)
+   Compiling rustty-build-config v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-build-config)
+   Compiling rustty-terminfo v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-terminfo)
+   Compiling rustty-global v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-global)
+   Compiling rustty-os v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-os)
+   Compiling rustty-font v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-font)
+    Finished `release` profile [optimized] target(s) in 20.46s
+D11r: all out-of-range enumerators returned a DEFINED result
+D11r: GREEN

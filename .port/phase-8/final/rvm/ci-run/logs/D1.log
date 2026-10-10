@@ -1,0 +1,12 @@
+D1 slice-reinterpret audit
+  scan base : /home/gael/projects/rustty-p8final
+  roots     : crates crates-sys
+  allowlist : /home/gael/projects/rustty-p8final/.port/audits/slice-reinterpret.tsv
+  --------------------------------------------------------------
+  OK   crates/rustty-vt/src/bitmap_allocator.rs:848  [exact-len-proven]
+  OK   crates/rustty-vt/src/bitmap_allocator.rs:880  [exact-len-proven]
+  OK   crates/rustty-vt/src/page_impl.rs:2297  [exact-len-proven]
+  OK   crates/rustty-vt/src/page_impl.rs:2467  [exact-len-proven]
+  OK   crates/rustty/tests/windows_resources.rs:260  [exact-len-proven]
+  --------------------------------------------------------------
+  D1: GREEN — every slice reinterpret is allowlisted & guarded.

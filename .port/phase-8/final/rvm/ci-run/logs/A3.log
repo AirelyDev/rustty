@@ -1,0 +1,11 @@
+rustty-embed.h product-umbrella ABI gate (Task 4)
+  product  : /home/gael/projects/rustty-p8final/include/rustty-embed.h
+  oracle   : /home/gael/projects/ghostty/include/ghostty.h
+  name-map : /home/gael/projects/rustty-p8final/.port/audits/CABI_SYMBOLS.tsv
+
+  oracle GHOSTTY_API functions  : 91
+  product RUSTTY_API functions   : 91
+>> name-mapped equivalence: product umbrella == oracle umbrella token-renamed (91 functions).
+>> zero-ghostty-left-behind: no ghostty_* function tokens in include/rustty-embed.h.
+
+>> Task-4 PASS: include/rustty-embed.h is exactly the pinned ghostty oracle header renamed ghostty->rustty (91 functions), zero ghostty_* left behind.

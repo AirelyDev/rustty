@@ -1,0 +1,25 @@
+=== G-DIST 1/5 :: cargo run -p xtask -- dist ===
+    ok      rustty-0.1.0-main+8bd26ad.tar.gz (76 MB)
+    ok      named for the full version 0.1.0-main+8bd26ad (VERSION file agrees)
+=== G-DIST 2/5 :: tarball shape ===
+    ok      every entry is under rustty-0.1.0-main+8bd26ad/
+    ok      Cargo.toml
+    ok      Cargo.lock
+    ok      rust-toolchain.toml
+    ok      CMakeLists.txt
+    ok      crates/rustty-vt/Cargo.toml
+    ok      include/rustty/vt.h
+    ok      xtask/Cargo.toml
+    ok      2299 vendored crates-sys/*/vendor files present
+    ok      .port/ correctly excluded
+    ok      docs/superpowers/ correctly excluded
+=== G-DIST 3/5 :: xtask dist-lib-vt (the VT-library-only tarball) ===
+    ok      librustty-vt-0.1.0-main+8bd26ad.tar.gz (31 MB)
+    ok      5247 entries vs the workspace tarball's 14715
+    ok      the C-consumer surface is present
+    ok      out-of-closure crates pruned (rustty-apprt absent)
+=== G-DIST 4/5 :: the tarball builds on another distro ===
+    skipped debian-13 build (set RUSTTY_DISTCHECK_DEBIAN=1; needs podman/docker)
+=== G-DIST 5/5 :: distcheck (extract + test) ===
+    skipped distcheck (set RUSTTY_DISTCHECK=1 — it is a cold full-workspace build+test)
+G-DIST GREEN (tarball built and shape-checked). Not run: distcheck, distcheck-lib-vt.

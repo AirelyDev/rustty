@@ -1,0 +1,48 @@
+   Compiling proc-macro2 v1.0.106
+   Compiling glob v0.3.3
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling libc v0.2.186
+   Compiling prettyplease v0.2.37
+   Compiling clang-sys v1.8.1
+   Compiling memchr v2.8.2
+   Compiling cfg-if v1.0.4
+   Compiling minimal-lexical v0.2.1
+   Compiling regex-syntax v0.8.11
+   Compiling syn v2.0.118
+   Compiling nom v7.1.3
+   Compiling libloading v0.8.9
+   Compiling regex-automata v0.4.14
+   Compiling bindgen v0.72.1
+   Compiling either v1.16.0
+   Compiling cexpr v0.6.0
+   Compiling itertools v0.13.0
+   Compiling regex v1.12.4
+   Compiling log v0.4.33
+   Compiling rustc-hash v2.1.2
+   Compiling bitflags v2.13.0
+   Compiling shlex v1.3.0
+   Compiling zlib-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/zlib-sys)
+   Compiling freetype-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/freetype-sys)
+   Compiling dcimgui-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/dcimgui-sys)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.46s
+     Running unittests src/lib.rs (target/san-asan/aarch64-unknown-linux-gnu/debug/deps/dcimgui_sys-55414ebe27d1fa1c)
+
+running 8 tests
+test tests::opengl3_symbols_link ... ok
+test tests::link_imgui_dock_builder_ffi ... ok
+test tests::kat_dock_builder_set_node_size_smoke ... ok
+test tests::kat_dcimgui_1_92_5_context_lifecycle ... ok
+test tests::variadic_aggregate_scanner_negative_control ... ok
+test tests::kat_text_colored_ptr_formats_its_arguments ... ok
+test tests::kat_dock_builder_add_node_ex_get_node_round_trip ... ok
+test tests::no_variadic_binding_takes_an_aggregate_by_value ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/metal_offscreen.rs (target/san-asan/aarch64-unknown-linux-gnu/debug/deps/metal_offscreen-086f5f5ae1a1557b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

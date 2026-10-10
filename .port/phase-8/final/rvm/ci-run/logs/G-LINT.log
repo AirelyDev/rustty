@@ -1,0 +1,10 @@
+=== G-LINT :: non-Rust linters ===
+  ok      shellcheck (156 files)
+  ok      prettier
+  ok      typos
+  skipped swiftlint (macOS-only lane)
+  ok      alejandra
+  skipped pinact (no GITHUB_TOKEN (would rate-limit))
+  ok      actionlint
+--- G-LINT summary: 5 ran, 2 skipped ---
+G-LINT GREEN (5 linter(s) clean). Not run: swiftlint pinact

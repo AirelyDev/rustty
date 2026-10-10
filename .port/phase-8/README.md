@@ -52,12 +52,17 @@ columns list the ids each workstream opened; an id another workstream closed is 
 | W9 FX6 | page tests pass raw `Row`/`Cell` pointers (test-only Tree Borrows UB) | 2 | `ff2fee943` | — | closes N542 | — |
 | W9 FX7 | final-review minors M1-M3, M5-M9: `Renderer::init` is an `unsafe fn` with `# Safety`; print tests M7/M8; records | 3 | `26d23100b` | — | — | — |
 | W9 T3 | close-out records: id renumbering, these tables | 1 | on `phase-8/w9t3` | — | N543 recorded in NEW-FINDINGS | — |
+| W10 FX11 | `sys_log_no_alloc` counts only the measuring thread's allocations (TSan flake, 13/590) | 2 | `1a32bce23` | — | N547 (opened and closed) | — |
+| W10 FX12 | `search_thread` test waits 10 s and joins before asserting (load timeout surfaced as an LSan leak) | 2 | `1ed503e6d` | — | N548 (opened and closed); closes N35 | — |
+| W10 FX13 | ci.sh: G-VALGRIND shard `--jobs` defaults to cores / heavy cap | 1 | `11b4c74d0` | — | — | — |
+| W10 FINAL | the bulk validation at `f5f2bdf28`, fix reruns at `11b4c74d0`, perf at `949584651` (`final/`) | 3 | `949584651` (BASELINE re-base), `834e9db23` (perf records), final records | — | N549 (G-REL latency under load; closed by the quiet rerun); closes N543 | — |
 | — | plan and phase-branch records | 2 | `5e969a4bb` (plan), `0d73a3075` (register) | — | — | — |
 
 Totals: UD378 (1 reference defect, fixed and documented), N517–N543 (27 entries), no V. Next free
 ids at the W9 close-out: UD379, N544, V34. Since then P8-W9 FX8 took N544, and the second pin
 advance (P8-W10, `a60e9e2a5..246f70287`) took N545, N546 and UD379 (renumbered at P8-W10 FX10; see
-"Provisional id renumbering (P8-W10 FX10)" below). Next free ids: **UD380, N547, V34**.
+"Provisional id renumbering (P8-W10 FX10)" below), and the final validation took N547–N549 (see
+"Provisional id renumbering (P8-W10 FINAL)"). Next free ids: **UD380, N550, V34**.
 
 States at `26d23100b`:
 
@@ -65,8 +70,8 @@ States at `26d23100b`:
   not reported upstream. UD20 and UD312 became "fixed upstream" at the advance (P8-W0 T4).
 - **Ns.** CLOSED: N517, N518, N521, N523–N542. RECORD-ONLY: N519 (G-TESTS' four-token matcher; the
   checklist is the meter), N520 (the snapshot TERMINAL record omits `flags.xt_checksum`, for byte parity),
-  N522 (PORT-ONLY `DeviceBox`). OPEN: N543 (G6t `rustty-core` never ran to completion; PENDING the final
-  delta-Miri run).
+  N522 (PORT-ONLY `DeviceBox`). N543 CLOSED by the final validation (G6t `rustty-core` 69 passed, 7,682 s).
+  W10: N545–N549 CLOSED.
 - **Vs.** None opened this phase.
 
 ### Provisional id renumbering (P8-W9 T3)
@@ -110,6 +115,17 @@ output under `w10/` named any of them, so none needed a note. Commit subjects (f
 | N559 | N545 | G9 keyed CSI coverage on the final byte only (DECSTR invisible) |
 | N560 | N546 | G-SYMS matched an oracle `pub fn` by bare name anywhere in `crates/` |
 | UD381 | UD379 | VT formatter output replays an origin-mode cursor outside the margins at the wrong position |
+
+### Provisional id renumbering (P8-W10 FINAL)
+
+The final-validation runner named its findings N565–N567 (`final/findings.md` keeps them verbatim; FX11 and
+FX12 commit subjects use N565 and N567). Final ids:
+
+| provisional | final | finding |
+|---|---|---|
+| N565 | N547 | G-TSAN (Mac): `sys_log_no_alloc` counted libtest main-thread allocations (closed FX11) |
+| N567 | N548 | G-LSAN (Mac): `search_thread` load timeout left a Terminal alive at exit (closed FX12) |
+| N566 | N549 | G-REL (Mac): `readthread_pipeline_keeps_interactive_latency` RED under full-CI load; 10/10 on a quiet machine (closed, load-sensitive) |
 
 ## Finale gates (at `a60e9e2a5`, on the finale head)
 
@@ -231,22 +247,32 @@ Rows marked PENDING are lanes still running at `26d23100b`; the controller fills
 | rwin | V26: `cargo test --workspace --exclude libxml2-sys --exclude fontconfig-sys --exclude sentry-sys --target x86_64-pc-windows-msvc` | RED → GREEN: 6,398 passed, 3 failed: 2 `xtask dist` tests needed `.git` (pass in a git checkout), 1 flaky vt-c log-sink test (N541; FX5: 599/599 twice on rwin) | `v26-windows-full-workspace-at-a60e9e2a5.txt`, `v26-dll-step-and-reruns-at-a60e9e2a5.txt`, N541 |
 | rwin | DLL step: `rustty_vt_c.dll` (x64 MSVC) with `c-vt-effects` | PASS | `v26-dll-step-and-reruns-at-a60e9e2a5.txt` |
 | rvm, rwin, Mac | cross-host build (T1b): rvm GTK-feature build, clippy and release; rwin msvc and gnu; macOS xcframework | PASS, zero warnings | `cross-host-build-at-a60e9e2a5.txt` |
-| Mac | `ci.sh --fast` plus delta G6/G6c/G6t (crates changed since their full evidence) and delta ASan/LSan/TSan at `26d23100b` | PENDING (controller fills at close-out) | — |
-| Mac | G6t `rustty-core` in full at `26d23100b` (N543) | PENDING (controller fills at close-out) | — |
-| rvm | full `ci.sh` (Valgrind inline) at `c0adec970` | PENDING (controller fills at close-out) | — |
-| rvm | delta at `26d23100b` (compiles FX7's Linux `Renderer::init` twin) | PENDING (controller fills at close-out) | — |
-| rwin | V26 plus the DLL step at `26d23100b` | PENDING (controller fills at close-out) | — |
-| Mac (idle) | perf suite against the zigbench at `a60e9e2a5` (ReleaseFast; artifacts rebuilt by perf prep on `phase-8/w9perf`, `fdf81eba7`, not merged), loop-sweep ns/op; DECISIONS P4's osc-parser / terminal-stream check of the unknown-OSC fast path | PENDING (controller fills at close-out) | — |
-| Mac (idle) | G8 rebase, G8 `--strict`, G8b (and the `ORACLE_SHA256` provenance comment, still "P7-W19") | PENDING (controller fills at close-out) | — |
+| Mac | `ci.sh --fast` plus delta G6/G6c/G6t (crates changed since their full evidence) and delta ASan/LSan/TSan at `26d23100b` | SUPERSEDED by the final validation at the second pin (below) | `final/` |
+| Mac | G6t `rustty-core` in full at `26d23100b` (N543) | SUPERSEDED by the final validation at the second pin (below) | `final/` |
+| rvm | full `ci.sh` (Valgrind inline) at `c0adec970` | SUPERSEDED by the final validation at the second pin (below) | `final/` |
+| rvm | delta at `26d23100b` (compiles FX7's Linux `Renderer::init` twin) | SUPERSEDED by the final validation at the second pin (below) | `final/` |
+| rwin | V26 plus the DLL step at `26d23100b` | SUPERSEDED by the final validation at the second pin (below) | `final/` |
+| Mac (idle) | perf suite against the zigbench at `a60e9e2a5` (ReleaseFast; artifacts rebuilt by perf prep on `phase-8/w9perf`, `fdf81eba7`, not merged), loop-sweep ns/op; DECISIONS P4's osc-parser / terminal-stream check of the unknown-OSC fast path | SUPERSEDED by the final validation at the second pin (below) | `final/` |
+| Mac (idle) | G8 rebase, G8 `--strict`, G8b (and the `ORACLE_SHA256` provenance comment, still "P7-W19") | SUPERSEDED by the final validation at the second pin (below) | `final/` |
 
-## Owed before the merge to `main`
+## Final validation (P8-W10 FINAL, at `f5f2bdf28`; fixes at `11b4c74d0`; perf at `949584651`)
 
-- N543: G6t over `rustty-core` in full, GREEN.
-- The delta lanes at `26d23100b` on the Mac (`ci.sh --fast`, delta Miri, delta sanitizers) and on rvm, the
-  rvm full `ci.sh` at `c0adec970`, and rwin V26 plus the DLL step at `26d23100b`: each GREEN or its finding
-  recorded and closed.
-- Perf: the suite and the P4 measurement against the zigbench at `a60e9e2a5`, then the G8 rebase,
-  `--strict` and G8b; merge `phase-8/w9perf`.
-- The PENDING rows above filled, and the README totals re-checked if any of them opens an id.
+Evidence and the full per-gate table: `final/FINAL-VALIDATION.md`, `final/gate-table.md`.
+
+| host | lane | result |
+|---|---|---|
+| Mac | full `ci.sh --jobs auto --heavy-cap 3` | 98 GREEN, 14 BLOCKED (host tooling, G-NIX pre-existing, G8b load cooldown), 4 RED all resolved: G-ASAN/G-LSAN disk floor (reruns GREEN / N548), G-TSAN N547, G-REL N549 |
+| Mac | Miri G6 (SB), G6c, G6t (TB) in full | GREEN; G6t `rustty-core` 69 passed (closes N543) |
+| Mac | fix reruns at `11b4c74d0` (FX10–FX13) | GREEN / SCOPED-GREEN: TSan `rustty-vt-c` 604, LSan `rustty-vt` 6,898, `soft_reset` 8, `formatter` 111, termio 121, G-SYMS, G-CI-SELF |
+| rvm | full `ci.sh --heavy-cap 2` | 94 GREEN incl. G-ESCTEST, G-GTKFEAT, G-BENCH; G-VALGRIND complete GREEN (1/4, 2/4 + 8 exact sub-shards for 3/4, 4/4) |
+| Mac (idle) | ws10 suite vs the oracle at `246f70287`; G8 re-base; `--strict`; G8b `--build` | 14/14 wins, suite −27.4% (worst terminal-stream/ascii 0.979); BASELINE re-based (`949584651`); `--strict` GREEN; G8b GREEN 14/14 |
+
+## DEFERRED to the next full rerun (user, 2026-10-10: "EXPEDITE and do partial reruns to verify the fixes, we can save the full rerun for later")
+
+- rvm: G-ASAN (full), G-TSAN, G-MSAN, G-HWASAN, G-LSAN, G-LSAN-GTK at the second pin. None produced a
+  verdict: the first attempt stopped at the 15 GB disk floor and the rerun was lost to an OOM thrash and VM
+  restart. They were GREEN at `a60e9e2a5` (rows above); the W10 delta is DECSTR, the formatter, G9/G-SYMS
+  tooling and test-only fixes.
+- rvm: G4 with built drivers. rwin: V26 plus the DLL step.
 
 Hosted CI legs stay push-gated under V25 (the maintainer's call).

@@ -1,0 +1,10 @@
+=== G-VTFEAT SELF-TEST ===
+  [ok ] missing ORACLE_PIN -> BLOCKED (exit 3)
+  [ok ] oracle absent -> BLOCKED (exit 3)
+  [ok ] oracle not a repository -> BLOCKED (exit 3)
+  [ok ] oracle off the pin -> BLOCKED (exit 3)
+  [ok ] oracle dirty -> BLOCKED (exit 3)
+  [ok ] clean pinned oracle -> check passes (exit 0)
+  [ok ] oracle inside an enclosing repository -> BLOCKED (exit 3)
+
+G-VTFEAT SELF-TEST: GREEN

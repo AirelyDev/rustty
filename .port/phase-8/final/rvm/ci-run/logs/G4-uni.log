@@ -1,0 +1,16 @@
+==================================================================
+ rustty-unicode differential gate (ORACLE #2)
+ harness: /home/gael/projects/rustty-p8final/.port/phase-0/harness/unicode
+ work:    /tmp/tmp.5g4veDXXhQ
+==================================================================
+--- [1/4] zig build uucode-oracle ---
+--- [2/4] run uucode-oracle (live uucode, full range) ---
+--- [3/4] cargo run --example dump_tables (rustty embedded tables) ---
+--- [4/4] diff_unicode.py (assert 0 diffs) ---
+=== rustty-unicode differential (ORACLE #2): rustty tables vs live uucode ===
+OK    width                            0 diffs (1114112 entries)
+OK    is_symbol                        0 diffs (1114112 entries)
+OK    props_flags(width|wzg|evb)       0 diffs (1114112 entries)
+OK    grapheme_break_no_control        0 diffs (1114112 entries)
+OK    grapheme_precompute(8192)        0 diffs (8192 entries)
+RESULT: 0 diffs across all fields over 0..=0x10FFFF + 8192 grapheme entries

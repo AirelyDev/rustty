@@ -1,0 +1,3 @@
+== G-GTKINIT: one gtk4::init() per test binary ==
+  OK (11 gtk4::init() call site(s) across 37 test file(s); none doubled)
+G-GTKINIT: GREEN

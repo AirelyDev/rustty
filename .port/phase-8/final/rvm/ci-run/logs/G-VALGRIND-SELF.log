@@ -1,0 +1,24 @@
+=== G-VALGRIND-SELF :: check_valgrind.sh against a fake valgrind and cargo ===
+  ok    A shards 1-3/3 x 2 jobs: every test once, the skip never, the no-list binary once
+  ok    A unsharded: three binaries whole, the one with a skip by name without it
+  ok    A control: an off-by-one modulus leaves tests out, noticed
+  ok    A control: a copy that runs the skipped test, noticed
+  ok    B the summary counts and names the skip
+  ok    B a skip naming a test the binary does not list is RED
+  ok    B a skip naming a binary the crate does not build is RED
+  ok    B control: the same entry, its crate not in this run, is not RED
+  ok    C a forked child's ERROR SUMMARY 1 under a parent's 0 is RED
+  ok    C the child's leak record is printed
+  ok    C 'definitely lost: 0 bytes' with ERROR SUMMARY 0 is GREEN
+  ok    C control: a copy reading only the test binary's own (last) summary misses the child
+  ok    D a build failure is RED
+  ok    D a build failure next to a clean crate is RED
+  ok    E RUSTTY_VALGRIND_OWN_JOB is BLOCKED
+  ok    E --shard 4/3 is RED
+  ok    F the real DEFAULT_SCOPE covers every real workspace member but xtask
+  ok    F control: rustty-zf dropped from the real list is RED
+  ok    F control: the GTK apprt lane dropped is RED
+  ok    F control: the flatpak lane dropped is RED
+  ok    G memcheck gets the gate's options and both suppression files
+--- G-VALGRIND-SELF: 21 ok, 0 failed ---
+G-VALGRIND-SELF GREEN

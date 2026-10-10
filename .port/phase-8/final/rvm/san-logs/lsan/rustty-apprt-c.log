@@ -1,0 +1,150 @@
+   Compiling rustty-build-config v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-build-config)
+   Compiling dcimgui-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/dcimgui-sys)
+   Compiling rustty-core v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-core)
+   Compiling rustty-zigimg v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-zigimg)
+   Compiling rustty-apprt v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-apprt)
+   Compiling rustty-cli v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-cli)
+   Compiling rustty-apprt-c v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-apprt-c)
+   Compiling rustty-vaxis v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-vaxis)
+   Compiling rustty-os v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-os)
+   Compiling rustty-font-shaper v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-font-shaper)
+   Compiling rustty-version v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-version)
+   Compiling rustty-global v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-global)
+   Compiling rustty-renderer v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-renderer)
+   Compiling rustty-config v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-config)
+   Compiling rustty-termio v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-termio)
+   Compiling rustty-xev v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-xev)
+   Compiling rustty-font v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-font)
+   Compiling rustty-args v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-args)
+   Compiling rustty-crash v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-crash)
+   Compiling rustty-vt v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-vt)
+   Compiling rustty-input v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-input)
+   Compiling rustty-synthetic v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-synthetic)
+   Compiling rustty-inspector v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-inspector)
+   Compiling rustty-apprt-api v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-apprt-api)
+   Compiling rustty-bench v0.1.0 (/home/gael/projects/rustty-p8final/crates/rustty-bench)
+warning: feature `sanitize` is declared but not used
+  --> crates/rustty-cli/src/lib.rs:41:34
+   |
+41 | #![cfg_attr(rustty_asan, feature(sanitize))]
+   |                                  ^^^^^^^^
+   |
+   = note: `#[warn(unused_features)]` (part of `#[warn(unused)]`) on by default
+
+warning: `rustty-cli` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 35.46s
+     Running unittests src/lib.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/rustty_apprt_c-213369c1610d9876)
+
+running 15 tests
+test main_c_tests::ghostty_string_s_c_string ... ok
+test main_c_tests::ghostty_string_s_empty_string ... ok
+test main_c_tests::ghostty_string_s_zig_string ... ok
+test quicklook_word_tests::quicklook_word_selects_word_under_cursor ... ok
+test quicklook_word_tests::quicklook_word_empty_cell_yields_no_word ... ok
+test tests::detect_from_argv_invalid ... ok
+test tests::detect_from_argv_multiple ... ok
+test tests::detect_from_argv_plus_version ... ok
+error: failed to initialize rustty error=InvalidAction
+info: rustty version=0.1.0-main+8bd26ad
+info: rustty build optimize=Debug
+test tests::detect_from_argv_none ... info: runtime=.gtk
+ok
+test binding_route_tests::request_close_routes_through_perform_binding_action ... ok
+info: font_backend=.fontconfig_freetype
+test binding_route_tests::split_routes_through_perform_binding_action ... ok
+test binding_route_tests::split_focus_logs_error_focusing_split ... ok
+test tests::rustty_init_invalid_action_returns_1 ... ok
+info: dependency harfbuzz=11.0.0
+info: dependency fontconfig=21803
+info: renderer=renderer.generic.Renderer(renderer.OpenGL)
+info: libxev default backend=io_uring
+debug(os): file handle limit raised value=524288
+info(os_locale): setlocale from env result=en_US.UTF-8
+test main_c_tests::cli_try_action_null_action_returns ... ok
+test tests::cli_try_action_version_runs_and_exits ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running unittests src/bin/translate_probe.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/translate_probe-3f1d5536a49a7077)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/abi_layout.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/abi_layout-8a9d2c0683a6746c)
+
+running 4 tests
+test action_key_positional_ordinals ... ok
+test pinned_enum_ordinals ... ok
+test enum_widths ... ok
+test struct_sizes_and_aligns ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/build_defaults.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/build_defaults-a0ad2281399f2080)
+
+running 2 tests
+test default_feature_set_enables_simd ... ok
+test default_feature_set_resolves_terminal_simd_on ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/color_scheme_invalid_is_silent.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/color_scheme_invalid_is_silent-f0f3aff98bdb3b50)
+
+running 1 test
+test invalid_color_scheme_is_silent ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/config_diagnostics.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/config_diagnostics-d78c3e0fbdc51908)
+
+running 2 tests
+test apprt_c_build_reports_the_lib_artifact ... ok
+test get_diagnostic_returns_the_precomputed_message_for_the_lib_artifact ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/i18n_translate.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/i18n_translate-ebddf853535f50f4)
+
+running 1 test
+test rustty_translate_performs_a_real_catalog_lookup ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+     Running tests/macos_window_host.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/macos_window_host-595ec72580e0f182)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/mouse_pressure_stage_guard.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/mouse_pressure_stage_guard-9383ad70b7023f00)
+
+running 1 test
+test invalid_mouse_pressure_stage_is_silent ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/panic_policy.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/panic_policy-1880b5ddbcad30b1)
+
+running 2 tests
+test exported_c_abi_panic_aborts_host ... ok
+test no_c_unwind_in_c_api_sources ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+
+     Running tests/smoke.rs (target/san-lsan/aarch64-unknown-linux-gnu/debug/deps/smoke-77aaf614b0882939)
+
+running 4 tests
+test generated_header_defines_and_applies_rustty_api ... ok
+test generated_header_declares_in_crate_tail_and_documents_the_rest ... ok
+test apple_only_declarations_are_gated_on_apple ... ok
+test c_abi_smoke_compile_link_run ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.67s
+
+   Doc-tests rustty_apprt_c
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

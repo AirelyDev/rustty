@@ -1,0 +1,35 @@
+=== D10 stb_image_resize parity: vendored C vs ghostty's own build recipe ===
+host cc: cc (GCC) 16.0.1 20260321 (Red Hat 16.0.1-0)
+=== case 16x32 (in 8x16, 1ch)
+  host cc -O0  vs host cc -O2: 9/512 differ, maxdelta=1 [within the +/-1-on-3% codegen envelope]
+  host cc -O1  vs host cc -O2: 9/512 differ, maxdelta=1 [within the +/-1-on-3% codegen envelope]
+  host cc -O3  vs host cc -O2: 0/512 differ, maxdelta=0 [EXACT]
+  host cc -Os  vs host cc -O2: 0/512 differ, maxdelta=0 [EXACT]
+  reference (host cc -O2): md5 5f18d21d6d9d9c6f035bade776299e7c
+  oracle: /home/gael/projects/ghostty @ 246f70287 (the pin) ; zig 0.16.0
+  ghostty-recipe Debug        vs consensus: 0/512 differ, maxdelta=0 [EXACT]
+  ghostty-recipe ReleaseFast  vs consensus: 0/512 differ, maxdelta=0 [within envelope: maxdelta<=1 on 0.00% <= 3%]
+  ghostty-recipe ReleaseSafe  vs consensus: 0/512 differ, maxdelta=0 [EXACT]
+  ghostty-recipe ReleaseSmall vs consensus: 0/512 differ, maxdelta=0 [EXACT]
+=== case 8x17 (in 8x16, 1ch)
+  host cc -O0  vs host cc -O2: 3/136 differ, maxdelta=1 [within the +/-1-on-3% codegen envelope]
+  host cc -O1  vs host cc -O2: 3/136 differ, maxdelta=1 [within the +/-1-on-3% codegen envelope]
+  host cc -O3  vs host cc -O2: 0/136 differ, maxdelta=0 [EXACT]
+  host cc -Os  vs host cc -O2: 0/136 differ, maxdelta=0 [EXACT]
+  reference (host cc -O2): md5 0e2fb9f06dc7de62c1c28b5706bd918b
+  ghostty-recipe Debug        vs consensus: 0/136 differ, maxdelta=0 [EXACT]
+  ghostty-recipe ReleaseFast  vs consensus: 0/136 differ, maxdelta=0 [within envelope: maxdelta<=1 on 0.00% <= 3%]
+  ghostty-recipe ReleaseSafe  vs consensus: 0/136 differ, maxdelta=0 [EXACT]
+  ghostty-recipe ReleaseSmall vs consensus: 0/136 differ, maxdelta=0 [EXACT]
+run.sh: GREEN
+
+16x32  stb-vs-nearest   501/512 differ, maxdelta=89, mean=12.7
+16x32  stb-vs-bilinear  374/512 differ, maxdelta=28, mean=5.0
+8x17   stb-vs-nearest   124/136 differ, maxdelta=192, mean=13.6
+8x17   stb-vs-bilinear  75/136 differ, maxdelta=14, mean=1.9
+
+negative_control.py: GREEN — both wrong resamplers are far outside the maxdelta<=1/frac<=3% envelope (margin: >50% of bytes, maxdelta>=10)
+
+D10: GREEN — fixtures exact at every opt level; ghostty Debug/ReleaseSafe/
+     ReleaseSmall byte-exact; ReleaseFast within the measured +/-1-on-3 %
+     envelope; negative control discriminating.

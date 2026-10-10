@@ -1,0 +1,4 @@
+G-ONIG: the --features oniguruma lane (no other CI lane compiles it)
+  rustty-vt: 3452 with feature, 3428 without -> 24 gated
+  rustty-config url::: 2 passed
+G-ONIG: GREEN (gated-test floors: vt delta>=11, config>=1)

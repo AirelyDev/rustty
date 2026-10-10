@@ -1,0 +1,1 @@
+G-ARTIFACT GREEN: set_runtime_artifact_lib is called only by rustty-vt-c's install_log_backend, RUNTIME_ARTIFACT has one writer (the setter), and only ['rustty-web-canvas'] depend on rustty-vt-c

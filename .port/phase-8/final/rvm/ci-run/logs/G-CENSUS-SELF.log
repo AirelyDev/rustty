@@ -1,0 +1,5 @@
+  ok   missing ledger is RED
+  ok   ledger with a stale live number is RED
+  ok   empty live census trips the vacuity floor
+  ok   GIT_DIR + GIT_WORK_TREE redirect neither ROOT nor ORACLE
+SELF-TEST GREEN: all 4 arms demonstrated reachable FAIL.

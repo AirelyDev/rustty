@@ -1,0 +1,31 @@
+=== G-REFGEOM SELF-TEST ===
+  [ok ] fixture has no worktree-sibling oracle (no stopgap)
+  [ok ] pinned clean oracle is GREEN (main checkout, decoy cwd)
+  [ok ] from a worktree without the stopgap symlink it resolves the main checkout's sibling and is GREEN
+  [ok ] a measured difference is RED
+  [ok ] missing ORACLE_PIN is BLOCKED
+  [ok ] malformed ORACLE_PIN (empty) is BLOCKED
+  [ok ] malformed ORACLE_PIN (39-hex) is BLOCKED
+  [ok ] malformed ORACLE_PIN (upper-case) is BLOCKED
+  [ok ] malformed ORACLE_PIN (two lines) is BLOCKED
+  [ok ] a GIT_DIR + GIT_WORK_TREE decoy (dirty, off the pin) does not redirect HEAD or status (GREEN)
+  [ok ] ... nor from a worktree
+  [ok ] an off-pin HEAD is BLOCKED
+  [ok ] a dirty oracle is BLOCKED
+  [ok ] a clean GIT_DIR decoy does not mask a dirty oracle
+  [ok ] restored oracle is GREEN again
+  [ok ] a missing git is BLOCKED
+  [ok ] a corrupt index (rev-parse ok, status exits non-zero) is BLOCKED
+  [ok ] restored index is GREEN again
+  [ok ] an oracle answered by an enclosing repository at the pin is BLOCKED
+  [ok ] oracle restored after the enclosing-repository arm is GREEN
+  [ok ] an oracle that is not a git repository is BLOCKED (not RED)
+  [ok ] an oracle with no .git at all is BLOCKED (not RED)
+  [ok ] an absent oracle is BLOCKED, naming the main checkout's sibling
+  [ok ] ... also from a worktree
+  [ok ] live run is from the main checkout (the worktree case is the fixture above)
+SELF-TEST GREEN: an absent, off-pin, dirty, non-repository or git-less
+oracle, a failing status, an enclosing repository at the pin and a
+missing or malformed ORACLE_PIN are BLOCKED; a GIT_DIR decoy
+redirects nothing; a worktree resolves the main checkout's sibling; a
+measured difference is RED.

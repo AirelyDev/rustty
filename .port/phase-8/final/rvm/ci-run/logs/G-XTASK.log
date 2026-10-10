@@ -1,0 +1,16 @@
+=== G-XTASK 1/6 :: resources (host) ===
+  ok      resources (host) — 2 man, 34/34 locale, 657 themes, 4 terminfo, 7 shell-integration
+=== G-XTASK 2/6 :: resources --target-os linux ===
+  ok      resources (linux) — desktop + dbus(+systemd) + metainfo + 10 icons (1 above 512)
+=== G-XTASK 2b/6 :: resources --target-os linux (default optimize -> -debug id) ===
+  ok      resources (linux, default optimize) — the -debug app id, as the reference derives it
+=== G-XTASK 3/6 :: resources --target-os linux --flatpak ===
+  ok      resources (flatpak) — D-Bus template swapped, no systemd unit, icons capped at 512
+=== G-XTASK 4/6 :: gen <+action> ===
+  ok      gen — all 9 actions emitted non-empty output
+=== G-XTASK 5/6 :: wasm-patch-growable-table ===
+  ok      wasm-patch-growable-table — limits flag 0x01 -> 0x00, max dropped
+=== G-XTASK 6/6 :: xcframework (app bundle) ===
+  skipped xcframework (macOS only)
+--- G-XTASK summary: 6 check(s) ran ---
+G-XTASK GREEN (6 check(s) clean).

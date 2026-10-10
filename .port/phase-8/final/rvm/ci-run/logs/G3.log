@@ -1,0 +1,35 @@
+=== G3 :: zero comment-inventory delta (fidelity critic) ===
+NOTE: identity-rename.map absent; running drop-count fidelity only (token-rename ALTERED detection unavailable until the map exists).
+crate           status        rust     ref   delta  state
+apprt           in-progress   21644    3223   18421  progress
+apprt-api       done          1460     383    1077  done
+args            ported        1921     256    1665  done
+bench           done          3569     235    3334  done
+bin             c6            6356     150    6206  progress
+build-config    done           464      33     431  done
+cfg-fmt         done           355      16     339  done
+cli             done          6843     905    5938  done
+config          done         13980    4543    9437  done
+core            done         12155    1524   10631  done
+crash           done          1651     215    1436  done
+datastruct      done          2527     855    1672  done
+extra           done           739      37     702  done
+font            done         20965    5619   15346  done
+global          done          1048      77     971  done
+input           done          4028    1715    2313  done
+inspector       complete      5285     287    4998  done
+lib             done          1234     123    1111  done
+os              done          5015     898    4117  done
+render-types    done           482     179     303  done
+renderer        in progress   23515    2217   21298  progress
+simd            done           700     139     561  done
+synthetic       done           898     142     756  done
+terminfo        done           296     126     170  done
+termio          ported       11705    1316   10389  done
+unicode         done           701     107     594  done
+util            done           369     218     151  done
+vt              done         64247   15148   49099  done
+vt-c            done         18261     564   17697  done
+
+PROGRESS [workspace]: comment-lines rust=225013 ref=41250 (global census total = 42069)
+GREEN: progress rust=225013/ref=41250; no claimed-done crate dropped comments

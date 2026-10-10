@@ -1,0 +1,9 @@
+   Compiling spirv-cross-sys v0.1.0 (/home/gael/projects/rustty-p8final/crates-sys/spirv-cross-sys)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 29.13s
+     Running unittests src/lib.rs (target/san-msan/aarch64-unknown-linux-gnu/debug/deps/spirv_cross_sys-d0c22a64b5b057da)
+
+running 1 test
+test kat::spvc_parses_and_cross_compiles_trivial_shader ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
