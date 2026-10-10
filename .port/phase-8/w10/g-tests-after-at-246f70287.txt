@@ -1,0 +1,12 @@
+ABSENT  src/terminal/Terminal.zig                      test "softReset modes"
+ABSENT  src/terminal/Terminal.zig                      test "softReset margins"
+ABSENT  src/terminal/Terminal.zig                      test "softReset keeps the cursor and screen"
+ABSENT  src/terminal/Terminal.zig                      test "softReset saved cursor"
+ABSENT  src/terminal/Terminal.zig                      test "softReset pen, protection, and charsets"
+ABSENT  src/terminal/Terminal.zig                      test "softReset status display and checksum"
+ABSENT  src/terminal/Terminal.zig                      test "softReset palette"
+ABSENT  src/terminal/stream.zig                        test "DECSTR dispatch"
+
+TEST AUDIT: 4287 live-oracle test blocks across 540 files; 8 unexplained, 1 accepted with a written reason
+RED: an oracle test has no counterpart and no TEST_AUDIT.md entry.
+g-tests exit=1

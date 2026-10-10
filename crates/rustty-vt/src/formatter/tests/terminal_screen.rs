@@ -705,6 +705,144 @@ fn terminal_vt_with_scrolling_region() {
     t2.deinit(Global);
 }
 
+// test "Terminal vt with cursor in origin mode"
+#[test]
+fn terminal_vt_with_cursor_in_origin_mode() {
+    // Each stream sets a scrolling region and origin mode, then moves
+    // the cursor within the region; the last one leaves a pending wrap
+    // in the right column, which is restored by printing that cell again.
+    // The left and right margins need mode 69.
+    let streams: [&[u8]; 3] = [
+        b"\x1b[3;8r\x1b[?6h\x1b[2;5H",
+        b"\x1b[?69h\x1b[3;8r\x1b[4;15s\x1b[?6h\x1b[2;3H",
+        b"\x1b[3;8r\x1b[?6h\x1b[2;20Hx",
+    ];
+    for stream in streams {
+        let mut builder: Vec<u8> = Vec::new();
+
+        let mut t = Terminal::init(Global, opts(20, 10)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(stream);
+        }
+
+        let t_ptr: *const Terminal = &t;
+        let mut formatter: TerminalFormatter = TerminalFormatter::init(t_ptr, Options::vt());
+        formatter.extra = TerminalExtra::ALL;
+        formatter.format(&mut builder).unwrap();
+
+        let mut t2 = Terminal::init(Global, opts(20, 10)).unwrap();
+        {
+            let mut s2 = t2.vt_stream();
+            s2.next_slice(builder.as_slice());
+        }
+
+        assert!(t2.modes.get(crate::modes::Mode::Origin));
+        let (c1, c2) = unsafe { (&(*t.screens.active).cursor, &(*t2.screens.active).cursor) };
+        assert_eq!(c1.x, c2.x);
+        assert_eq!(c1.y, c2.y);
+        assert_eq!(c1.pending_wrap, c2.pending_wrap);
+        t.deinit(Global);
+        t2.deinit(Global);
+    }
+}
+
+// test "Terminal vt with cursor in origin mode without the region"
+#[test]
+fn terminal_vt_with_cursor_in_origin_mode_without_the_region() {
+    let mut builder: Vec<u8> = Vec::new();
+
+    let mut t = Terminal::init(Global, opts(20, 10)).unwrap();
+    {
+        let mut s = t.vt_stream();
+        s.next_slice(b"\x1b[3;8r\x1b[?6h\x1b[2;5H");
+    }
+
+    // Without the scrolling region in the output, the replaying terminal
+    // keeps full-screen margins, so the position stays absolute.
+    let t_ptr: *const Terminal = &t;
+    let mut formatter: TerminalFormatter = TerminalFormatter::init(t_ptr, Options::vt());
+    formatter.extra = TerminalExtra::ALL;
+    formatter.extra.scrolling_region = false;
+    formatter.format(&mut builder).unwrap();
+    assert!(builder.windows(6).any(|w| w == b"\x1b[4;5H"));
+    t.deinit(Global);
+}
+
+// UD381 (Rustty-only): origin mode on with the cursor outside the margins,
+// which a program reaches by restoring (DECRC) a cursor saved in origin mode
+// after setting the margins. No CUP can address that cell in origin mode, so
+// upstream's output replays the cursor clamped into the region.
+#[test]
+fn terminal_vt_with_cursor_in_origin_mode_outside_the_margins() {
+    let streams: [&[u8]; 4] = [
+        // (0,0): above the top margin.
+        b"\x1b[?6h\x1b7\x1b[?6l\x1b[3;8r\x1b8",
+        // (1,1): above the top margin and left of the left margin.
+        b"\x1b[?69h\x1b[?6h\x1b[2;2H\x1b7\x1b[?6l\x1b[3;8r\x1b[4;15s\x1b8",
+        // (19,9): below the bottom margin.
+        b"\x1b[?6h\x1b[10;20H\x1b7\x1b[?6l\x1b[3;8r\x1b8",
+        // (19,9) with a pending wrap: the reprinted cell restores it.
+        b"\x1b[?6h\x1b[10;20Hx\x1b7\x1b[?6l\x1b[3;8r\x1b8",
+    ];
+    for stream in streams {
+        let mut builder: Vec<u8> = Vec::new();
+
+        let mut t = Terminal::init(Global, opts(20, 10)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(stream);
+        }
+        assert!(t.modes.get(crate::modes::Mode::Origin));
+
+        let t_ptr: *const Terminal = &t;
+        let mut formatter: TerminalFormatter = TerminalFormatter::init(t_ptr, Options::vt());
+        formatter.extra = TerminalExtra::ALL;
+        formatter.format(&mut builder).unwrap();
+
+        let mut t2 = Terminal::init(Global, opts(20, 10)).unwrap();
+        {
+            let mut s2 = t2.vt_stream();
+            s2.next_slice(builder.as_slice());
+        }
+
+        assert!(t2.modes.get(crate::modes::Mode::Origin));
+        let (c1, c2) = unsafe { (&(*t.screens.active).cursor, &(*t2.screens.active).cursor) };
+        assert_eq!(c1.x, c2.x);
+        assert_eq!(c1.y, c2.y);
+        assert_eq!(c1.pending_wrap, c2.pending_wrap);
+        assert_eq!(t.scrolling_region.top, t2.scrolling_region.top);
+        assert_eq!(t.scrolling_region.bottom, t2.scrolling_region.bottom);
+        assert_eq!(t.scrolling_region.left, t2.scrolling_region.left);
+        assert_eq!(t.scrolling_region.right, t2.scrolling_region.right);
+        t.deinit(Global);
+        t2.deinit(Global);
+    }
+}
+
+// UD381 (Rustty-only): inside the margins the output is upstream's, byte for
+// byte: the region, then the CUP relative to it, with no DECSC/DECRC.
+#[test]
+fn terminal_vt_with_cursor_in_origin_mode_inside_the_margins_unchanged() {
+    let mut builder: Vec<u8> = Vec::new();
+
+    let mut t = Terminal::init(Global, opts(20, 10)).unwrap();
+    {
+        let mut s = t.vt_stream();
+        s.next_slice(b"\x1b[3;8r\x1b[?6h\x1b[2;5H");
+    }
+
+    let t_ptr: *const Terminal = &t;
+    let mut formatter: TerminalFormatter = TerminalFormatter::init(t_ptr, Options::vt());
+    formatter.extra = TerminalExtra::ALL;
+    formatter.format(&mut builder).unwrap();
+
+    let tail: &[u8] = b"\x1b[H\x1b[3;8r\x1b[2;5H\x1b[0m";
+    assert!(builder.ends_with(tail));
+    assert!(!builder.windows(2).any(|w| w == b"\x1b7" || w == b"\x1b8"));
+    t.deinit(Global);
+}
+
 // test "Terminal vt with modes"
 #[test]
 fn terminal_vt_with_modes() {
