@@ -427,9 +427,16 @@ CI_TARGET_ROOT="$ROOT/target/ci-targets"
 CI_MIN_FREE_GB="${CI_MIN_FREE_GB:-15}"
 # G-VALGRIND in a parallel run: this many `--shard K/N` units, each a heavy
 # unit (so the heavy cap bounds them), each with --jobs CI_VALGRIND_JOBS.
+# One memcheck process is one thread, so the default is the cores over the
+# heavy cap: a full set of heavy slots fills the machine. (Leaving it unset ran
+# every shard at --jobs 1; rvm sat ~72% idle in the P8 final run.)
 CI_VALGRIND_SHARDS="${CI_VALGRIND_SHARDS:-4}"
-CI_VALGRIND_JOBS="${CI_VALGRIND_JOBS:-}"
+if [ -z "${CI_VALGRIND_JOBS:-}" ]; then
+  CI_VALGRIND_JOBS=$(( $(ci_ncpu) / CI_HEAVY_CAP ))
+  [ "$CI_VALGRIND_JOBS" -lt 1 ] && CI_VALGRIND_JOBS=1
+fi
 case "$CI_VALGRIND_SHARDS" in ''|*[!0-9]*|0) ci_usage "CI_VALGRIND_SHARDS wants a positive integer" ;; esac
+case "$CI_VALGRIND_JOBS" in *[!0-9]*|0) ci_usage "CI_VALGRIND_JOBS wants a positive integer" ;; esac
 
 # Gates skipped by --fast, by id. Deliberately a NAMED list rather than a
 # duration heuristic: a gate that becomes slow should be added here consciously,
