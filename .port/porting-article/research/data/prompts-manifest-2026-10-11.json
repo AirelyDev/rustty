@@ -1,0 +1,155 @@
+{
+  "sources": {
+    "claude-mac": {
+      "in_source": 12435,
+      "kept": 836,
+      "dropped": {
+        "after-cutoff": 10,
+        "before-window": 9291,
+        "other-project": 2298
+      }
+    },
+    "claude-vm": {
+      "in_source": 165,
+      "kept": 165,
+      "dropped": {}
+    },
+    "codex": {
+      "in_source": 8419,
+      "kept": 22,
+      "dropped": {
+        "auto-review": 3319,
+        "injected-context": 882,
+        "other-project": 1273,
+        "subagent": 2923
+      }
+    }
+  },
+  "generated": "2026-10-11T04:13:39Z",
+  "cutoff": "2026-10-11T01:51:58Z",
+  "window": [
+    "2026-06-21",
+    "2026-10-10"
+  ],
+  "window_utc": [
+    "2026-06-21T07:00:00Z",
+    "2026-10-11T01:51:58Z"
+  ],
+  "purged_before": "2026-09-08",
+  "vm_status": "fetched (VM history last modified 2026-08-22T17:27:58Z)",
+  "rules": {
+    "article_work": "A session is article work if it has a prompt on or after 2026-10-08 00:00 Pacific AND (any of its prompts was typed in a project path containing 'ghostty-website', OR any of its prompts matches \\b(article|journey|website|porting page|disclosure)\\b, case-insensitive). Only that session's prompts on or after the cutoff are tagged; earlier prompts never are.",
+    "decision": "After lowercasing and replacing punctuation with spaces, the prompt is a single choice letter, or 1-3 words all drawn from {a, agreed, ahead, b, c, continue, d, go, lgtm, no, ok, proceed, sure, y, yes}. Slash commands are never decisions.",
+    "commits": "A prompt's window runs from the prompt to the next human prompt of the same session (for the session's last prompt: to the session's last recorded activity, or 12 h when unknown), capped at 12 h and never past the extraction cutoff. Commits authored in the window are linked as follows. A commit is never linked when its Claude-Session trailer, or the `[branch sha]` git output in a surviving transcript, ties it to other human sessions only. session-window: the session's git branch is known (transcript, rustty-stats or Codex metadata) and the commit either shows up in this session's own transcripts (main, subagent or workflow files) or landed on that branch (made on it, merged into it through a chain of merges, or reachable from its current tip). time-window-branch: the branch is unknown and every commit in the window carries the same branch label. none: otherwise. Branch labels come from the `[branch sha]` lines git prints on commit (surviving transcripts), else from the oldest merge that brought the commit in, else from the local branch that reaches it. After linking, a commit linked from prompts of two or more human sessions keeps only the links backed by evidence: the commit's `[branch sha]` git output appears in that session's own transcripts, or its Claude-Session trailer names a cloud session bridged from that session. Other links to it are removed; a prompt left with no commits gets basis `ambiguous`.",
+    "project": "Claude history `project` / Codex `cwd` contains 'rustty' (worktrees included, as rustty-stats); paths containing 'ghostty-website' are also kept on or after 2026-10-08 00:00 Pacific (article work).",
+    "human_turns": "Claude: every history row (typed prompts and slash commands; subagent prompts are never in the history). Codex: user-role message items of root sessions, minus injected context (AGENTS.md, environment/plugin/goal/subagent notices), minus replays; subagent and auto-review sessions are dropped whole.",
+    "settings": "transcript (the call answering the prompt, live transcript or rustty-stats per-call rows; for Codex the turn context) > session (rustty-stats, one model in the session) > commit-trailer (Co-Authored-By model of the prompt's own linked commits, after the multi-session dedupe; effort unknown) > unknown.",
+    "ids": "jargon.py find_internal_ids patterns (ghostty-website-journey 438cb814) + FX<n>.",
+    "founding": "Founding prompts were typed before the repository existed. Candidates: Claude Code history sessions with prompts on or after 2026-06-20T00:00Z in the projects folder itself or a 'rusty*' folder before the first prompt in a 'rustty' path, or in the reference checkout (a 'ghostty*' folder that is not the website) up to the cutoff. Each candidate gets one reason: ghostty-checkout (reference checkout), port-decision (a prompt about porting and Zig, Rust or Ghostty), naming (a prompt naming the project, or the early 'rusty' folder), else other. Candidates are only proposed; prompts are kept only for sessions the author lists with decision 'include' (--founding), from 2026-06-20T00:00Z to the cutoff, whatever their folder.",
+    "sessions": "A session is (tool, machine, session id). Per session: first and last prompt, prompt count, commands_only (every prompt is a slash command), founding and article_work (any of its prompts), branches and models (union, where known), commits (union of its prompts' links after the dedupe) and commits_ambiguous (its prompts left with basis 'ambiguous'). cc_title: Claude Code's own title from rustty-stats sessions.csv (ai_title, else title), Claude sessions only."
+  },
+  "founding_floor": "2026-06-20T00:00:00Z",
+  "counts": {
+    "prompts": 1023,
+    "by_source": {
+      "claude-mac": 836,
+      "claude-vm": 165,
+      "codex": 22
+    },
+    "kind": {
+      "command": 215,
+      "prompt": 808
+    },
+    "pasted": {
+      "kept": 11,
+      "lost": 10,
+      "none": 1002
+    },
+    "settings_source": {
+      "commit-trailer": 96,
+      "session": 15,
+      "transcript": 449,
+      "unknown": 463
+    },
+    "settings_source_by_source": {
+      "claude-mac": {
+        "commit-trailer": 95,
+        "session": 4,
+        "transcript": 286,
+        "unknown": 451
+      },
+      "claude-vm": {
+        "commit-trailer": 1,
+        "session": 11,
+        "transcript": 141,
+        "unknown": 12
+      },
+      "codex": {
+        "transcript": 22
+      }
+    },
+    "commits_basis": {
+      "ambiguous": 89,
+      "none": 808,
+      "session-window": 27,
+      "time-window-branch": 99
+    },
+    "article_work": {
+      "False": 980,
+      "True": 43
+    },
+    "decision": {
+      "False": 989,
+      "True": 34
+    },
+    "mac_before_purge_with_transcript": 7,
+    "prompts_with_commits": 126,
+    "commit_dedupe": {
+      "contested_commits": 271,
+      "links_removed": 697,
+      "prompts_ambiguous": 89
+    },
+    "redaction_candidates": {
+      "email": 3,
+      "ip": 1,
+      "person": 1,
+      "secret": 4,
+      "unrelated-path": 4,
+      "unrelated-project": 1,
+      "user-host": 6
+    },
+    "redaction_candidate_prompts": 15,
+    "glossary_missing_ids": 27,
+    "glossary_missing_ids_family_id": 2,
+    "article_sessions": 3,
+    "founding_candidates": {
+      "ghostty-checkout": 1,
+      "naming": 1,
+      "other": 1,
+      "port-decision": 1
+    },
+    "founding_candidate_prompts": 16,
+    "founding_list": "approved",
+    "founding_sessions": 3,
+    "founding_prompts": 13,
+    "sessions": 96,
+    "sessions_by_source": {
+      "claude-mac": 69,
+      "claude-vm": 21,
+      "codex": 6
+    },
+    "sessions_commands_only": 45,
+    "sessions_with_cc_title": 16
+  },
+  "inputs": {
+    "codex_files": 3680,
+    "transcript_sessions": 23,
+    "phases": "strategy-timeline-2026-10-10.csv",
+    "people_names": 2,
+    "allowlist_terms": 5,
+    "other_project_names": 39,
+    "rustty_head": "3a59e7edcc254418217597b5a786b8e0419c4e3c",
+    "commits": 2827,
+    "commits_seen_in_transcripts": 279
+  }
+}
