@@ -580,12 +580,15 @@ LANG=he_IL.UTF-8 LC_ALL=he_IL.UTF-8 \
 
 ---
 
-## V8. libxev `wasi_poll` + `iocp` backends: cross-compile-verified only, never EXECUTED — **ENVIRONMENT-BLOCKED**
+## V8. libxev `iocp` backend: the no-op-`tick` control and 11 watcher stubs remain (the `wasi_poll` half RUNS since 2026-10-10, G-WASI) — **ENVIRONMENT-BLOCKED**
+
+CORRECTION (wasm-green, 2026-10-10): the header read "V8. libxev `wasi_poll` + `iocp` backends: cross-compile-verified only, never EXECUTED". The row now tracks only the `iocp` remainder; the word that would close it is deliberately not used here while that remains.
+
+**WASI status (2026-10-10, wasm-green, macOS aarch64, wasmtime 49.0.2):** the `wasi_poll` half is done. `cargo test -p rustty-xev --target wasm32-wasip1` with `wasmtime --dir=.` as the runner: 34 passed, 2 ignored, 0 failed, doctests included. The 9 skip-stubs are live ports (`wasi_file` and the 8 `AsyncTests`/`TimerTests` watcher tests); the 4 `GenericStreamTests` stubs stay, as the reference itself skips them outside linux/macOS (3) or checks them at compile time (1). The two ignored tests are port-added thread-pool tests (wasm32-wasip1 has no threads). The recipe's two negative controls ran: with a no-op `Loop::tick` every loop-driving test fails or hangs; without `--dir=.`, `wasi_file` fails on its fixture. `wasi_loop_time` needed a host precondition (wasmtime's monotonic clock starts at instance start), and wasmtime is the only runtime that can run the backend (wazero, iwasm and Node reject or hang on its absolute-time clock subscriptions): NEW-FINDINGS N550. The run is now a HARD gate in the default `ci.sh` run, G-WASI (`.port/tools/gates/check_wasi_xev.sh`: the suite, an anti-vacuity list of the 17 loop-driving tests, and the no-preopen control).
 
 **W-1 status (2026-09-27, rwin: Windows 11 build 26200 on ARM64, target `x86_64-pc-windows-msvc` under x64 emulation):** the `iocp` half now EXECUTES: `cargo test -p rustty-xev` passes 42/42 on Windows, and `cargo clippy -p rustty-xev --all-targets -- -D warnings` is green there (`AcceptEx` needed its `mswsock` link, NEW-FINDINGS N344). NOT done: the recipe's no-op-`tick` negative control, and the `wasi_poll` half. Row stays open for those.
 
-**Blocked on:** a Windows host (for `iocp`) and a WASI runtime host (for
-`wasi_poll`). Neither exists in this project; the porting host is macOS aarch64.
+**Blocked on:** the remaining `iocp` steps (the no-op-`tick` control, the 11 watcher stubs and the 5 loop skip-stubs) need a Windows host session to write and run them; the `rwin` VM is that host. CORRECTION (wasm-green): this read "a Windows host (for `iocp`) and a WASI runtime host (for `wasi_poll`). Neither exists in this project"; wasmtime on the porting host is the WASI runtime.
 
 ```
 PORTED: crates/rustty-xev/src/iocp.rs

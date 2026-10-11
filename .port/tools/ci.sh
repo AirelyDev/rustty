@@ -99,6 +99,11 @@
 #                                    and the Android 16 KiB PT_LOAD check on
 #                                    4 KiB/16 KiB .so's -> HARD-FAIL; BLOCKED
 #                                    without an ELF cc + llvm-readelf (macOS).
+#   G-WASI check_wasi_xev.sh         rustty-xev's tests, wasi_poll's included,
+#                                    RUN under wasmtime (wasm32-wasip1), all 17
+#                                    loop-driving tests named ok, and wasi_file
+#                                    failing without its preopen -> HARD-FAIL.
+#                                    BLOCKED without wasmtime or the std.
 #   G-I18N check_translations.sh     msgcmp every po/*.po against the .pot
 #                                    -> HARD-FAIL. BLOCKED without gettext.
 #   G-BLUEPRINT check_blueprints.sh  all .blp templates compile and are
@@ -588,6 +593,38 @@ run_webgl_lane() {
     return 1
   fi
 
+  # The wasm example harnesses (2026-10-10). Each existed and passed by hand,
+  # and none was in this lane, so they rotted unseen: wasm-parity.mjs no longer
+  # parsed the pin's manifest (N551), and G-EXAMPLES called example/wasm-* "covered
+  # by the --webgl lane" when nothing here opened them (N552).
+  echo "--- node .port/tools/wasm-vt-roundtrip.mjs"
+  if ! node "$ROOT/.port/tools/wasm-vt-roundtrip.mjs"; then
+    echo ">> FAIL: the rustty-vt.wasm roundtrip failed" >&2
+    return 1
+  fi
+  echo "--- .port/tools/build-web-canvas-wasm.sh --release && node .port/tools/web-canvas-instantiate.mjs"
+  if ! sh "$ROOT/.port/tools/build-web-canvas-wasm.sh" --release; then
+    echo ">> FAIL: the release rustty_web_canvas.wasm cdylib did not build" >&2
+    return 1
+  fi
+  if ! node "$ROOT/.port/tools/web-canvas-instantiate.mjs"; then
+    echo ">> FAIL: the web_canvas instantiate check failed" >&2
+    return 1
+  fi
+  # These two need the oracle checkout and zig (they build its ghostty-vt.wasm).
+  # Without either they exit 3 and the lane reports BLOCKED, never green.
+  echo "--- .port/tools/gates/wasm_examples_browser_gate.mjs"
+  node "$GATES/wasm_examples_browser_gate.mjs"
+  rc_ex=$?
+  [ "$rc_ex" -eq 0 ] || { [ "$rc_ex" -eq 3 ] && return 3; echo ">> FAIL: the wasm examples browser gate exited $rc_ex" >&2; return 1; }
+  # After the examples gate, which has just built both wasm modules at this tree
+  # and the pin.
+  echo "--- node .port/tools/wasm-parity.mjs"
+  if ! node "$ROOT/.port/tools/wasm-parity.mjs"; then
+    echo ">> FAIL: wasm-parity (rustty-vt.wasm against ghostty-vt.wasm) failed" >&2
+    return 1
+  fi
+
   echo "--- .port/tools/gates/ws14_webgl_browser_gate.sh"
   sh "$GATES/ws14_webgl_browser_gate.sh"
 }
@@ -745,6 +782,12 @@ GATE_REGISTRY=(
   # Its --self-test (review A-1 F1, F3) is a separate entry, as with G-XCF.
   "G-XTARGET-SELF|HARD|light|tier=product|bash $GATES/check_cross_targets.sh --self-test"
   "G-XTARGET|HARD|heavy|tgt,tier=product|bash $GATES/check_cross_targets.sh"
+  # G-WASI (2026-10-10, V8) — libxev's `wasi_poll` backend EXECUTED: the
+  # rustty-xev suite under wasmtime, plus an anti-vacuity list of the 17
+  # loop-driving tests and a no-preopen negative control. Until this line the
+  # backend was only cross-compiled. BLOCKED without wasmtime or the
+  # wasm32-wasip1 std.
+  "G-WASI|HARD|light|tgt,tier=product|bash $GATES/check_wasi_xev.sh"
   # G-I18N (2026-08-26) — msgcmp every po/*.po against the .pot (the reference's
   # `translations` job). The i18n_msgid_coverage TEST checks the msgid set
   # against the sources; nothing looked at the 32 catalogues until now. The

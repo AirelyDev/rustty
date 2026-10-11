@@ -51,6 +51,7 @@ suite.
 | **G6** | `check_leaks.sh` | Miri (pure) / ASan (FFI + live-syscall tests), `_gatelib` done-detection; Miri runs on `cargo miri nextest` (one process per test, P7-W15; `--libtest` keeps the old runner for one release) plus a libtest `--doc` arm; missing miri or cargo-nextest ⇒ exit 3 BLOCKED | PROGRESS* |
 | **G6c** | `check_leaks.sh --debug-assertions-off` | Miri with `Page::assert_integrity` off — runs the vt page-level compression tests G6 can only TIMEOUT on; the annotation-derived names resolve to exact nextest paths, each of which must PASS, so a lost flag is RED (WS19 T6, P7-W15) | PROGRESS |
 | **G6t** | `check_leaks.sh --tree-borrows` | Miri Tree Borrows over the pointer-heavy scope (`G6T_SCOPE`), with G6/G6c's split on debug assertions; `--self-test` checks every scope entry matches tests (P7-W15) | PROGRESS |
+| **G-WASI** | `check_wasi_xev.sh` | wasmtime + the `wasm32-wasip1` std: runs `cargo test -p rustty-xev --target wasm32-wasip1` with wasmtime as the runner (V8), requires the 17 loop-driving `wasi_poll`/`wasi_watcher` tests to be named `ok`, and requires `wasi_file` to fail on its fixture without the `--dir=.` preopen. wasmtime only: wazero and iwasm reject the loop's absolute-time clock subscriptions and Node's WASI hangs on them; missing wasmtime or std ⇒ exit 3 BLOCKED | **HARD-FAIL** |
 | **D1** | `check_slice_reinterpret.sh` | `.port/audits/slice-reinterpret.tsv` | PROGRESS |
 | **D2** | `check_capacity_saturation.sh` | `.port/audits/capacity-saturation.tsv` | PROGRESS |
 | **D3** | `check_constants_parity.py` | port markers + ghostty oracle | PROGRESS |
@@ -290,12 +291,36 @@ step and, for D8, the G8 bench lane.
 bash .port/tools/ci.sh --webgl
 ```
 
-which is exactly these two commands, in order:
+which runs, in order:
 
 ```sh
 .port/tools/build-main-wasm.sh --release            # ~9 s cold, ~5 s warm
+.port/tools/build-web-canvas-wasm.sh                # DEBUG, for the next two
+node .port/tools/wasm-log-emission.mjs
+node .port/tools/wasm-web-canvas-font.mjs
+node .port/tools/wasm-vt-roundtrip.mjs              # example/wasm-vt's flow in Node
+.port/tools/build-web-canvas-wasm.sh --release
+node .port/tools/web-canvas-instantiate.mjs         # example/wasm-web-canvas, mock Canvas
+node .port/tools/gates/wasm_examples_browser_gate.mjs   # example pages vs Ghostty's
+node .port/tools/wasm-parity.mjs                    # rustty-vt.wasm vs ghostty-vt.wasm
 .port/tools/gates/ws14_webgl_browser_gate.sh        # ~6 s (headless Chrome)
 ```
+
+**The example pages against Ghostty's (2026-10-10).**
+`wasm_examples_browser_gate.mjs` loads `example/wasm-vt`, `wasm-sgr` and
+`wasm-key-encode` in headless Chrome twice: from this tree with `rustty-vt.wasm`,
+and from the oracle at the pin with `ghostty-vt.wasm`, which it builds there the
+way Ghostty's CI does (`zig build -Demit-lib-vt -Dtarget=wasm32-freestanding`;
+only the gitignored `zig-out/` and `.zig-cache/` change). It drives the same
+inputs into both (8 VT runs, 11 SGR sequences, 20 keys under 2 Kitty flag
+settings and 3 actions: 139 outputs) and requires the `#output` text to match
+after Ghostty's names map to Rustty's. Its manifest arm checks every constant
+table the pages hard-code (SGR tags, 175 key codes, key actions) against the
+module's own `type_json`; that arm found UD380, a wrong SGR tag table in
+Ghostty's `wasm-sgr` page, so the oracle side is served with the same
+correction. Controls: different VT inputs and different keys must give
+different outputs (NC1, NC2), and the uncorrected table must fail the manifest
+arm (NC3). It needs the oracle checkout and `zig`; without either it exits 3.
 
 **What it proves.** The freestanding `rustty_wasm.wasm` cdylib
 (`wasm32-unknown-unknown`, zero wasi imports, every import in `env`) is loaded in
@@ -341,6 +366,7 @@ browser process, and two things a CI box may not have. Missing either is **exit 
 
 - the `wasm32-unknown-unknown` rustup target → `rustup target add wasm32-unknown-unknown`
 - a Chrome/Chromium binary (the driver probes the usual macOS/Linux paths)
+- for the example-page and parity arms, the oracle checkout and `zig`
 
 **Headless is not a weaker proxy.** `--headless=new --enable-unsafe-swiftshader`
 was observed to produce **byte-identical** ink counts to a live, GPU-backed Chrome

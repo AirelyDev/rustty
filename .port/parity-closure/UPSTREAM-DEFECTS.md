@@ -3391,6 +3391,23 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    when origin mode is on and the cursor is outside the margins, write the position under full-screen margins and restore it through DECSC/DECRC around re-setting the margins, as above.
 - upstream status: not reported
 
+### UD380 — the wasm-sgr example labels every SGR attribute from tag 8 up as the next one
+
+- id:              UD380 (wasm-green, 2026-10-10)
+- kind:            non-crash (breaks evident intent; R13)
+- upstream project: ghostty
+- severity:        low (an example page; the library is correct)
+- reference:       at 246f70287, `example/wasm-sgr/index.html:150-183` (`SGR_ATTR_TAGS`, "SGR attribute tag values from include/ghostty/vt/sgr.h"); present since the example was added (`7d7c0bf5c`, #9362)
+- defect:          the table has a `RESET_UNDERLINE: 8` entry that `GhosttySgrAttributeTag` does not have (`include/ghostty/vt/sgr.h`, and the module's own `ghostty_type_json` manifest: `UNDERLINE_COLOR` is 8). Every tag from 8 up is therefore one too high, so the page shows the wrong attribute for what the parser returned: `58;5;100` (a 256-colour underline, tag 9) is printed as "Underline color RGB = (100, 0, 0)", and the resets, overline, blink, inverse, invisible, strikethrough and colour tags are shown as their neighbours or as "Other attribute".
+- ReleaseSafe:     no crash; wrong text on the page.
+- ReleaseFast:     the same.
+- reachability:    anyone who opens the example and types an SGR sequence with an attribute whose tag is 8 or higher (the page's own default sequence includes one).
+- port handling:   `example/wasm-sgr/index.html` (`SGR_ATTR_TAGS`): the extra entry is gone and every value equals `RusttySgrAttributeTag` in `include/rustty/vt/sgr.h`.
+- parity row(s):   none; found by the manifest arm of `.port/tools/gates/wasm_examples_browser_gate.mjs` (N552).
+- test:            the gate's manifest arm checks the page's table against `rustty_type_json` (31 tags GREEN); NC3 runs the same arm on Ghostty's uncorrected table and requires it to fail (24 wrong tags). The gate serves Ghostty's page with the same correction so its 139-output differential still compares the wasm modules; it goes RED if the oracle page stops having the extra entry. Restoring the old Rustty table turns the gate RED (33 problems).
+- proposed fix:    drop `RESET_UNDERLINE: 8` from `SGR_ATTR_TAGS` and renumber the rest to match `sgr.h`, or build the table from `typeLayout.types.GhosttySgrAttributeTag.values` as `wasm-vt` already does for `GhosttyFormatterFormat`.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

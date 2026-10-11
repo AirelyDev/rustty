@@ -178,3 +178,6 @@ test/cases/**/*.actual.png
 /Box_test_diff.ppm
 /rustty.qcow2
 /sprite_face_test*
+
+# rustty-xev wasi_file test fixture (left behind when the test aborts under wasmtime)
+wasi-test-file.txt

@@ -115,6 +115,11 @@ async function runFlow(path, P /* symbol prefix: ghostty|rustty */) {
     else if (fi.type === "u16") dv.setUint16(0, v, true);
     else if (fi.type === "u32" || fi.type === "enum") dv.setUint32(0, v, true);
     else if (fi.type === "u64") dv.setBigUint64(0, BigInt(v), true);
+    // The manifest names an enum field by its enum type (e.g.
+    // `GhosttyFormatterFormat`); example/wasm-vt/index.html's setField writes
+    // those as i32 when the type row says `kind: "enum", underlying: "i32"`.
+    else if (L[fi.type]?.kind === "enum" && L[fi.type].underlying === "i32")
+      dv.setInt32(0, v, true);
     else throw new Error(`bad field type ${fi.type} for ${sname}.${f}`);
   };
   const rdU32 = (p) => new DataView(buf()).getUint32(p, true);
@@ -143,7 +148,9 @@ async function runFlow(path, P /* symbol prefix: ghostty|rustty */) {
   const fp = fn("wasm_alloc")(FOPT);
   new Uint8Array(buf(), fp, FOPT).fill(0);
   setField(fp, "FormatterTerminalOptions", "size", FOPT);
-  setField(fp, "FormatterTerminalOptions", "emit", EMIT_PLAIN);
+  // As example/wasm-vt reads it: `<Prefix>FormatterFormat.values.PLAIN`.
+  const emitPlain = L[`${K}FormatterFormat`]?.values?.PLAIN ?? EMIT_PLAIN;
+  setField(fp, "FormatterTerminalOptions", "emit", emitPlain);
   setField(fp, "FormatterTerminalOptions", "unwrap", 0);
   setField(fp, "FormatterTerminalOptions", "trim", 1);
   const exOff = L[`${K}FormatterTerminalOptions`].fields.extra.offset;

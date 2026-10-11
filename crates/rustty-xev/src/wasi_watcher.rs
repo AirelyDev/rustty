@@ -21,11 +21,8 @@
 //!     `.wasi_poll` ("Do not add the methods for poll if the backend doesn't
 //!     support it.", stream.zig:221), so there is deliberately NO `Stream::poll`.
 //!
-//! VERIFICATION: cross-compile-verified on this host
-//! (`cargo check -p rustty-xev --target wasm32-wasip1 --all-targets`). The
-//! reference `test {}` blocks are ported below as documented skip-stubs — they
-//! need a live WASI runtime, which is verification debt with a runnable recipe,
-//! NOT a scope exclusion.
+//! VERIFICATION: the reference `test {}` blocks are ported below and run under
+//! wasmtime (`cargo test -p rustty-xev --target wasm32-wasip1`, G-WASI).
 
 // (module is `#[cfg(target_os = "wasi")]`-gated in lib.rs)
 
@@ -445,8 +442,10 @@ pub type TimerCancelError = CancelError;
 
 /// PORT NOTE: `Process(xev)`'s `switch (xev.backend)` has, verbatim:
 ///
-///     // Unsupported
-///     .wasi_poll => struct {},
+/// ```zig
+/// // Unsupported
+/// .wasi_poll => struct {},
+/// ```
 ///
 /// So the reference's `xev.Process` on this backend IS the empty struct — it has
 /// no `init`/`deinit`/`wait`. This type is that empty struct; there is no body to
@@ -1107,52 +1106,382 @@ struct WriteResult {
 // corresponding watcher's `test {}` on this backend. (`ProcessTests` is NOT — the
 // `.wasi_poll` arm of `Process(xev)` is `struct {}`, which has no `test {}`.)
 //
-// They need a live WASI runtime, which this macOS host cannot provide — so they
-// are ported as documented skip-stubs (the established repo precedent, same as
-// the wasi_poll loop tests) and the count is held. The runnable recipe lives in
-// `.port/phase-2/VERIFICATION_DEBT.md`.
+// They run on a WASI runtime: `cargo test -p rustty-xev --target wasm32-wasip1`
+// with wasmtime as the runner (G-WASI in `.port/tools/ci.sh`). Before V8 was
+// discharged they were documented skip-stubs; they are live ports now.
 // ===========================================================================
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::wasi::{CompletionState, Options, RunMode};
+
+    fn set_bool_rearm(
+        ud: *mut bool,
+        _l: *mut Loop,
+        _c: *mut Completion,
+        r: core::result::Result<(), AsyncError>,
+    ) -> CallbackAction {
+        r.unwrap(); // _ = r catch unreachable;
+        unsafe { *ud = true };
+        CallbackAction::Rearm
+    }
+
+    fn set_bool_disarm(
+        ud: *mut bool,
+        _l: *mut Loop,
+        _c: *mut Completion,
+        r: core::result::Result<(), AsyncError>,
+    ) -> CallbackAction {
+        r.unwrap(); // _ = r catch unreachable;
+        unsafe { *ud = true };
+        CallbackAction::Disarm
+    }
+
+    fn count_rearm(
+        ud: *mut u32,
+        _l: *mut Loop,
+        _c: *mut Completion,
+        r: core::result::Result<(), AsyncError>,
+    ) -> CallbackAction {
+        r.unwrap(); // _ = r catch unreachable;
+        unsafe { *ud += 1 };
+        CallbackAction::Rearm
+    }
+
+    fn timer_set_bool_disarm(
+        ud: *mut bool,
+        _l: *mut Loop,
+        _c: *mut Completion,
+        r: core::result::Result<(), RunError>,
+    ) -> CallbackAction {
+        r.unwrap(); // _ = r catch unreachable;
+        unsafe { *ud = true };
+        CallbackAction::Disarm
+    }
+
     /// PORT NOTE: `AsyncTests(xev, AsyncLoopState)` -> `test "async"`.
-    /// SKIP-STUB: needs a live `poll_oneoff` loop on a WASI runtime.
     #[test]
-    fn wasi_watcher_async() {}
+    fn wasi_watcher_async() {
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+        let mut notifier = Async::init().unwrap();
+
+        // Wait
+        let mut wake = false;
+        let mut c_wait = Completion::default();
+        unsafe {
+            notifier.wait(
+                &raw mut loop_,
+                &raw mut c_wait,
+                &raw mut wake,
+                set_bool_rearm,
+            )
+        };
+
+        // Send a notification
+        notifier.notify().unwrap();
+
+        // Wait for wake
+        loop_.run(RunMode::Once).unwrap();
+        assert!(wake);
+
+        // Make sure it only triggers once
+        wake = false;
+        loop_.run(RunMode::NoWait).unwrap();
+        assert!(!wake);
+
+        notifier.deinit();
+        loop_.deinit();
+    }
 
     /// PORT NOTE: `AsyncTests(xev, AsyncLoopState)` -> `test "async: notify first"`.
-    /// SKIP-STUB: needs a live `poll_oneoff` loop on a WASI runtime.
     #[test]
-    fn wasi_watcher_async_notify_first() {}
+    fn wasi_watcher_async_notify_first() {
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+        let mut notifier = Async::init().unwrap();
+
+        // Send a notification
+        notifier.notify().unwrap();
+
+        // Wait
+        let mut wake = false;
+        let mut c_wait = Completion::default();
+        unsafe {
+            notifier.wait(
+                &raw mut loop_,
+                &raw mut c_wait,
+                &raw mut wake,
+                set_bool_disarm,
+            )
+        };
+
+        // Wait for wake
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert!(wake);
+
+        notifier.deinit();
+        loop_.deinit();
+    }
 
     /// PORT NOTE: `AsyncTests(xev, AsyncLoopState)` -> `test "async batches
-    /// multiple notifications"`. SKIP-STUB: needs a live WASI runtime.
+    /// multiple notifications"`.
     #[test]
-    fn wasi_watcher_async_batches_multiple_notifications() {}
+    fn wasi_watcher_async_batches_multiple_notifications() {
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+        let mut notifier = Async::init().unwrap();
+
+        // Send a notification many times
+        notifier.notify().unwrap();
+        notifier.notify().unwrap();
+        notifier.notify().unwrap();
+        notifier.notify().unwrap();
+        notifier.notify().unwrap();
+
+        // Wait
+        let mut count: u32 = 0;
+        let mut c_wait = Completion::default();
+        unsafe { notifier.wait(&raw mut loop_, &raw mut c_wait, &raw mut count, count_rearm) };
+
+        // Send a notification
+        notifier.notify().unwrap();
+
+        // Wait for wake
+        loop_.run(RunMode::Once).unwrap();
+        for _ in 0..10 {
+            loop_.run(RunMode::NoWait).unwrap();
+        }
+        assert_eq!(count, 1);
+
+        notifier.deinit();
+        loop_.deinit();
+    }
 
     /// PORT NOTE: `TimerTests(xev, TimerLoop)` -> `test "timer"`.
-    /// SKIP-STUB: needs a live WASI runtime.
     #[test]
-    fn wasi_watcher_timer() {}
+    fn wasi_watcher_timer() {
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+        let timer = Timer::init().unwrap();
+
+        // Add the timer
+        let mut called = false;
+        let mut c1 = Completion::default();
+        unsafe {
+            timer.run(
+                &raw mut loop_,
+                &raw mut c1,
+                1,
+                &raw mut called,
+                timer_set_bool_disarm,
+            )
+        };
+
+        // Wait
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert!(called);
+
+        timer.deinit();
+        loop_.deinit();
+    }
 
     /// PORT NOTE: `TimerTests(xev, TimerLoop)` -> `test "timer reset"`.
-    /// SKIP-STUB: needs a live WASI runtime.
     #[test]
-    fn wasi_watcher_timer_reset() {}
+    fn wasi_watcher_timer_reset() {
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+        let timer = Timer::init().unwrap();
+
+        let mut c_timer = Completion::default();
+        let mut c_cancel = Completion::default();
+
+        // Add the timer
+        let mut canceled = false;
+        unsafe {
+            timer.run(
+                &raw mut loop_,
+                &raw mut c_timer,
+                100_000,
+                &raw mut canceled,
+                timer_set_bool_disarm,
+            )
+        };
+
+        // Wait
+        loop_.run(RunMode::NoWait).unwrap();
+        assert!(!canceled);
+
+        // Reset it
+        unsafe {
+            timer.reset(
+                &raw mut loop_,
+                &raw mut c_timer,
+                &raw mut c_cancel,
+                1,
+                &raw mut canceled,
+                timer_set_bool_disarm,
+            )
+        };
+
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert!(canceled);
+        assert!(unsafe { Completion::state(&raw mut c_timer) } == CompletionState::Dead);
+        assert!(unsafe { Completion::state(&raw mut c_cancel) } == CompletionState::Dead);
+
+        timer.deinit();
+        loop_.deinit();
+    }
 
     /// PORT NOTE: `TimerTests(xev, TimerLoop)` -> `test "timer reset before tick"`.
-    /// SKIP-STUB: needs a live WASI runtime.
     #[test]
-    fn wasi_watcher_timer_reset_before_tick() {}
+    fn wasi_watcher_timer_reset_before_tick() {
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+        let timer = Timer::init().unwrap();
+
+        let mut c_timer = Completion::default();
+        let mut c_cancel = Completion::default();
+
+        // Add the timer
+        let mut canceled = false;
+        unsafe {
+            timer.run(
+                &raw mut loop_,
+                &raw mut c_timer,
+                100_000,
+                &raw mut canceled,
+                timer_set_bool_disarm,
+            )
+        };
+
+        // Reset it
+        unsafe {
+            timer.reset(
+                &raw mut loop_,
+                &raw mut c_timer,
+                &raw mut c_cancel,
+                1,
+                &raw mut canceled,
+                timer_set_bool_disarm,
+            )
+        };
+
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert!(canceled);
+        assert!(unsafe { Completion::state(&raw mut c_timer) } == CompletionState::Dead);
+        assert!(unsafe { Completion::state(&raw mut c_cancel) } == CompletionState::Dead);
+
+        timer.deinit();
+        loop_.deinit();
+    }
 
     /// PORT NOTE: `TimerTests(xev, TimerLoop)` -> `test "timer reset after trigger"`.
-    /// SKIP-STUB: needs a live WASI runtime.
     #[test]
-    fn wasi_watcher_timer_reset_after_trigger() {}
+    fn wasi_watcher_timer_reset_after_trigger() {
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+        let timer = Timer::init().unwrap();
+
+        let mut c_timer = Completion::default();
+        let mut c_cancel = Completion::default();
+
+        // Add the timer
+        let mut canceled = false;
+        unsafe {
+            timer.run(
+                &raw mut loop_,
+                &raw mut c_timer,
+                1,
+                &raw mut canceled,
+                timer_set_bool_disarm,
+            )
+        };
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert!(canceled);
+        canceled = false;
+
+        // Reset it
+        unsafe {
+            timer.reset(
+                &raw mut loop_,
+                &raw mut c_timer,
+                &raw mut c_cancel,
+                1,
+                &raw mut canceled,
+                timer_set_bool_disarm,
+            )
+        };
+
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert!(canceled);
+        assert!(unsafe { Completion::state(&raw mut c_timer) } == CompletionState::Dead);
+        assert!(unsafe { Completion::state(&raw mut c_cancel) } == CompletionState::Dead);
+
+        timer.deinit();
+        loop_.deinit();
+    }
 
     /// PORT NOTE: `TimerTests(xev, TimerLoop)` -> `test "timer cancel"`.
-    /// SKIP-STUB: needs a live WASI runtime.
     #[test]
-    fn wasi_watcher_timer_cancel() {}
+    fn wasi_watcher_timer_cancel() {
+        fn cb_timer(
+            ud: *mut bool,
+            _l: *mut Loop,
+            _c: *mut Completion,
+            r: core::result::Result<(), RunError>,
+        ) -> CallbackAction {
+            // ud.?.* = if (r) false else |err| err == error.Canceled;
+            unsafe {
+                *ud = match r {
+                    Ok(()) => false,
+                    Err(e) => e == RunError::Canceled,
+                }
+            };
+            CallbackAction::Disarm
+        }
+
+        fn cb_cancel(
+            ud: *mut bool,
+            _l: *mut Loop,
+            _c: *mut Completion,
+            r: core::result::Result<(), CancelError>,
+        ) -> CallbackAction {
+            r.unwrap(); // _ = r catch unreachable;
+            unsafe { *ud = true };
+            CallbackAction::Disarm
+        }
+
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+        let timer = Timer::init().unwrap();
+
+        // Add the timer
+        let mut canceled = false;
+        let mut c1 = Completion::default();
+        unsafe {
+            timer.run(
+                &raw mut loop_,
+                &raw mut c1,
+                100_000,
+                &raw mut canceled,
+                cb_timer,
+            )
+        };
+
+        // Cancel
+        let mut cancel_confirm = false;
+        let mut c2 = Completion::default();
+        unsafe {
+            timer.cancel(
+                &raw mut loop_,
+                &raw mut c1,
+                &raw mut c2,
+                &raw mut cancel_confirm,
+                cb_cancel,
+            )
+        };
+
+        // Wait
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert!(canceled);
+        assert!(cancel_confirm);
+
+        timer.deinit();
+        loop_.deinit();
+    }
 
     /// PORT NOTE: `GenericStreamTests(xev, GenericStream)` -> `test "Stream decls"`.
     /// A COMPILE-TIME assertion in the reference ("missing decl: ..."), discharged
