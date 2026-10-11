@@ -1,0 +1,9 @@
+# Phrases that are known-safe in prompts. A redaction candidate whose span lies inside an
+# occurrence of one of these phrases (case-insensitive) is not proposed.
+# A personal name listed in --people is suppressed only inside the full phrase here, so
+# "Mitchell" alone is still proposed while "Mitchell Hashimoto" (crediting Ghostty) is not.
+Ghostty
+Mitchell Hashimoto
+Jarred Sumner
+noreply@anthropic.com
+git@github.com
