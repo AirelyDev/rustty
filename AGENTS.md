@@ -86,6 +86,9 @@ gate. The hosted workflow `.github/workflows/ci.yml` calls the same script.
   - Perf: on an idle machine, the perf suite must keep winning against the
     oracle built at the pin (`.port/tools/perf/`), then re-base
     `.port/phase-0/baseline/BASELINE.json` and run G8 `--strict` and G8b.
+    Store or refresh G8b's entry binary (`check_perf_fence.sh --store-entry`)
+    only on purpose, at a phase close-out after a GREEN perf verdict, never
+    automatically.
   - Each RED becomes a recorded finding, then a fix verified by a scoped rerun.
 - **Never weaken a gate to pass (R5).** BLOCKED is not green, a narrowed run is
   not a full pass, and a skipped test needs a written reason (R14).

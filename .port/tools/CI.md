@@ -238,6 +238,7 @@ done` with 0 ported tests turns G1/G2/G3 RED and ci.sh exits 1; reverting to
 | `check_comments_fidelity.py` | G3 | per-file comment delta `>= 0` after identity-rename (census **42069**) | per-crate `rust / ref` comment lines | a `done` crate (then delta `>= 0`, no DROPPED) |
 | `check_parity_surface.py` | G9 | every config/keybind/action/terminfo id covered + test-referenced; zero residual `ghostty_*` (R2) | `0/677` surface ids covered | an owner crate is `done` (then no UNCOVERED) |
 | `check_baseline_regression.py` | G8 | every perf/mem/size/startup metric `<= baseline*(1+tol)` | no candidate metrics ⇒ "nothing can regress" | the port emits a candidate metrics JSON (then no REGRESS) |
+| `check_perf_fence.sh` | G8b | Fence 1: rustty beats the pinned oracle on all 14 configs; Fence 2: no self-regression (+5% / +15%) against the stored entry binary in the MAIN checkout's `.perf-bins/`, whose manifest (commit, sha256, date) is printed | no entry binary (or no manifest) ⇒ Fence 1 still runs and writes G8's metrics, but the verdict is **BLOCKED (exit 3)** with a reason line; an entry whose sha256 is not its manifest's is RED; any RED wins | an entry is stored on purpose with `--store-entry` at a phase close-out after a GREEN perf verdict (never automatically) |
 
 A **BLOCKED** result from any of these (e.g. `tests-summary.json` lacks the
 `crate_map`, `parity-surface.json` absent, `BASELINE.json` unreadable) exits 3
@@ -448,9 +449,11 @@ The traits always include exactly one `tier=parity` or `tier=product` (see
   way, last and alone, so the perf fence measures a quiet machine.
   - Every registry kind is dispatched, in the order HARD, PROGRESS,
     PERF-FENCE, ARMED. An unknown kind is a usage error.
-  - G8b BLOCKs (exit 3) only through its dedicated pre-measurement load
+  - G8b BLOCKs (exit 3) through its dedicated pre-measurement load
     check: a bounded cooldown (`G8B_COOLDOWN_S`, default 600 s), run before
-    its builds and again before measuring.
+    its builds and again before measuring. It also BLOCKs, after measuring
+    Fence 1 and writing the metrics, when Fence 2 has no entry binary (or
+    none with a manifest) to compare against.
   - A harness crash, a usage error, a provisional measurement or a fence RED
     stay RED. G8b-SELF proves this.
   - G-REL-LAT (HARD) runs this way too, before G8b. It is
