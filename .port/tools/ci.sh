@@ -678,7 +678,8 @@ GATE_REGISTRY=(
   # negative control. Seconds; runs no cargo build.
   "G-CI-SELF|HARD|light|tier=product|bash $ROOT/.port/tools/ci.sh --self-test"
   "G7|HARD|light|tier=product|bash $GATES/check_acyclic.sh"
-  "G4|HARD|heavy|tier=parity|bash $GATES/run_differential.sh"
+  "G4-BUILD-SELF|HARD|light|tier=parity|bash $GATES/run_differential.sh --self-test-build"
+  "G4|HARD|heavy|tgt,tier=parity|bash $GATES/run_differential.sh"
   "G4-uni|HARD|heavy|tgt,tier=parity|bash $ROOT/.port/phase-0/harness/unicode/run_unicode_diff.sh"
   # G-LINT (2026-08-25) — the non-Rust linter lane: shellcheck, prettier,
   # typos, swiftlint, alejandra, pinact. The reference runs each as its own
@@ -949,6 +950,12 @@ GATE_REGISTRY=(
   # stale / over-cap allow-list arms. HARD: green at landing, about a second.
   "G-SKIP-SELF|HARD|light|tier=product|$PY $GATES/check_silent_skips.py --self-test"
   "G-SKIP|HARD|light|tier=product|$PY $GATES/check_silent_skips.py"
+  # G-HOMEPATH (CI hygiene A, 2026-10-10) — no literal /Users/<name> or
+  # /home/<name> path in tracked tooling (.port/tools, xtask, workflows), so
+  # the tools run from any checkout and any machine; allowlist in
+  # gates/home_paths_allow.tsv.
+  "G-HOMEPATH-SELF|HARD|light|tier=product|$PY $GATES/check_home_paths.py --self-test"
+  "G-HOMEPATH|HARD|light|tier=product|$PY $GATES/check_home_paths.py"
   # G-P2 (WS19 T19) — the Phase 2 CLOSURE gate, and the standing invariant that keeps
   # Phase 2 closed. It parses the four Phase-2 ledgers and FAILS if any open item lacks
   # an owner in an OPEN workstream, where "open workstream" is DERIVED from the ROADMAP's
