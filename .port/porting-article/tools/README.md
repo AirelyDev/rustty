@@ -26,7 +26,9 @@ Options: `--research` (research dir, default `~/projects/rustty/.port/journey-ar
 `--claude-dir`, `--people` (one personal name per line; default `<research>/data/prompts-people.txt`),
 `--allowlist` (default `redaction-allowlist.txt` here), `--cutoff` (ISO UTC), `--founding` (approved
 founding-sessions CSV: the proposed file's columns with `decision` = `include` or `exclude`; a row
-without a valid decision is refused; without the flag no founding prompt is kept).
+without a valid decision is refused; without the flag no founding prompt is kept), `--include-website`
+(also keep Claude Code prompts typed in the website folders over the whole window; recorded in the
+manifest as `counts.include_website` and `rules.website`).
 
 The output date suffix is `DATE_TAG` in the script (now `2026-10-11`); earlier runs' files are
 never overwritten.
@@ -35,7 +37,7 @@ never overwritten.
 
 | File | Content |
 |---|---|
-| `prompts-raw-<date>.jsonl` | one prompt per line: `id, ts, tool, machine, session, text, chars, kind, pasted, model, effort, mode, settings_source, approval, sandbox, article_work, commits, commits_basis, ids, phase, decision, branch, project, founding` |
+| `prompts-raw-<date>.jsonl` | one prompt per line: `id, ts, tool, machine, session, text, chars, kind, pasted, model, effort, mode, settings_source, approval, sandbox, article_work, commits, commits_basis, ids, phase, decision, branch, project, founding, project_marker` (`website`, `rustty` or `other`) |
 | `prompts-manifest-<date>.json` | publishable: per-source `in_source / kept / dropped{reason}`, cutoff, VM status, rules, counts only (no home paths, IPs or project names; checked before writing) |
 | `prompts-manifest-private-<date>.json` | debugging only, never published: input paths, the free-text `--vm-status` note, the `--founding` path, other-project names |
 | `prompts-redactions-proposed-<date>.csv` | `id,start,end,match,reason,decision` (decision empty = unreviewed; the author writes `redact` or `keep`); covers founding prompts once they are kept |
@@ -54,6 +56,13 @@ never overwritten.
 - **Project filter.** History `project` / Codex `cwd` contains `rustty` (worktrees included, as in
   rustty-stats). Paths containing `ghostty-website` are kept from 2026-10-08 00:00 Pacific on
   (article work). Window: 2026-06-21 00:00 Pacific to the cutoff.
+- **Website folders** (`--include-website`, `WEBSITE_RULE`). Claude Code prompts (Mac and VM history)
+  whose project is under `~/projects/ghostty-website*` (the Rustty site checkout and its worktrees,
+  matched as a `projects/ghostty-website*` path component) are kept over the whole window with
+  `project_marker: website`. Every session with such a prompt is article work (reason
+  `project:website`) for all of its prompts, whatever the date. Website prompts never link Rustty
+  commits (`commits_basis: other-repo`). Codex keeps the older rule (website `cwd` only from
+  2026-10-08 00:00 Pacific).
 - **Codex human turns.** Subagent rollouts (`drop: subagent`) and auto-review rollouts (model
   `codex-auto-review` or `guardian_review` threads; `drop: auto-review`) are dropped whole. Inside
   a root session, injected context (`# AGENTS.md instructions`, `<environment_context>`,
@@ -79,7 +88,8 @@ never overwritten.
   human sessions keeps only links backed by that evidence; prompts left with no commits get basis
   `ambiguous` (`dedupe_links`).
 - **Decision** (`is_decision`): after lowercasing and stripping punctuation, a single choice letter,
-  or 1-3 words all from `{ok, yes, y, no, go, ahead, continue, proceed, sure, agreed, lgtm, a, b, c, d}`.
+  or 1-3 words all from `{ok, yes, y, no, go, ahead, continue, proceed, sure, agreed, lgtm, approve,
+  approved, a, b, c, d}` (`approve` and `approved` added 2026-10-11).
 - **Article work.** A session with a prompt on/after 2026-10-08 00:00 Pacific AND (a project
   path containing `ghostty-website` OR a prompt matching
   `\b(article|journey|website|porting page|disclosure)\b`, case-insensitive). Only its prompts on
@@ -129,3 +139,8 @@ never overwritten.
   21 VM, 6 Codex; 44 command-only; 16 with a Claude Code title). Founding candidates: 4 sessions,
   16 prompts (one each `port-decision`, `naming`, `ghostty-checkout`, `other`). Redaction proposals
   unchanged (20 spans in 15 prompts).
+- **2026-10-11c** (`DATE_TAG` still 2026-10-11; run into a scratch `--research` dir and copied with
+  the `-2026-10-11c` suffix), `--cutoff 2026-10-11T14:20:54Z`, `--founding` (approved list),
+  `--include-website`, the same reused VM history copy. 1,098 prompts (911 Mac, 165 VM, 22 Codex),
+  102 sessions; 49 website-folder prompts in 5 sessions (four from 2026-07-02/03, one from
+  2026-10-07 Pacific), all article work. Decisions: 48 (adds `approve` / `approved`).

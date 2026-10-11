@@ -39,6 +39,8 @@ WINDOW_CAP_S = 12 * 3600  # a prompt's commit window never spans more than 12 ho
 CALL_SLACK_S = 2.0  # a model call this close before the prompt's history timestamp still answers it
 PROJECT_MARK = "rustty"
 WEBSITE_MARK = "ghostty-website"
+# a website folder (the Rustty site checkout and its worktrees): ~/projects/ghostty-website*
+WEBSITE_PATH_RE = re.compile(r"/projects/ghostty-website[^/]*(?:/|$)")
 
 # ---------------------------------------------------------------------------- time helpers
 
@@ -81,7 +83,7 @@ def prompt_kind(text):
 
 
 DECISION_WORDS = {"ok", "yes", "y", "no", "go", "ahead", "continue", "proceed", "sure", "agreed",
-                  "lgtm", "a", "b", "c", "d"}
+                  "lgtm", "approve", "approved", "a", "b", "c", "d"}
 DECISION_RULE = ("After lowercasing and replacing punctuation with spaces, the prompt is a single choice "
                  "letter (a-d) or number (one or two digits, answering a numbered choice), or 1-3 words all drawn from {" + ", ".join(sorted(DECISION_WORDS)) + "}. "
                  "Slash commands are never decisions.")
@@ -101,15 +103,36 @@ ARTICLE_RULE = ("A session is article work if it has a prompt on or after 2026-1
                 "(any of its prompts was typed in a project path containing 'ghostty-website', OR any of "
                 "its prompts matches \\b(article|journey|website|porting page|disclosure)\\b, case-insensitive). "
                 "Only that session's prompts on or after the cutoff are tagged; earlier prompts never are.")
+WEBSITE_RULE = ("With --include-website: Claude Code prompts typed in a website folder (a projects/ghostty-website* folder, "
+                "worktrees included) are kept over the whole window, marked project_marker 'website', and every "
+                "session with such a prompt is article work (reason project:website) for all of its prompts, "
+                "whatever the date. Website prompts never link Rustty commits (basis other-repo).")
 
 
-def article_sessions(prompts):
-    """Return {session: reason} for the sessions that are article work (see ARTICLE_RULE)."""
+def is_website_path(path):
+    """True for a project path under ~/projects/ghostty-website* (the Rustty site and its worktrees)."""
+    return bool(WEBSITE_PATH_RE.search(path or ""))
+
+
+def project_marker(path):
+    """'website' for a website folder, 'rustty' for a Rustty path, else 'other' (founding prompts)."""
+    path = path or ""
+    if is_website_path(path):
+        return "website"
+    return "rustty" if PROJECT_MARK in path else "other"
+
+
+def article_sessions(prompts, include_website=False):
+    """Return {session: reason} for the sessions that are article work (see ARTICLE_RULE; with
+    include_website also WEBSITE_RULE: a session with a website-folder prompt, any date)."""
     by = collections.defaultdict(list)
     for p in prompts:
         by[p["session"]].append(p)
     out = {}
     for s, ps in by.items():
+        if include_website and any(p.get("project_marker") == "website" for p in ps):
+            out[s] = "project:website"
+            continue
         if not any(p["ts_epoch"] >= ARTICLE_CUTOFF for p in ps):
             continue
         if any(WEBSITE_MARK in (p.get("project") or "") for p in ps):
@@ -124,6 +147,8 @@ def article_sessions(prompts):
 
 
 def is_article_work(p, sessions):
+    if sessions.get(p["session"]) == "project:website":
+        return True
     return p["session"] in sessions and p["ts_epoch"] >= ARTICLE_CUTOFF
 
 
@@ -415,16 +440,19 @@ class SourceResult:
         self.dropped[reason] += 1
 
 
-def _in_project(path, ts):
+def _in_project(path, ts, include_website=False):
     path = path or ""
+    if include_website and is_website_path(path):
+        return True
     return PROJECT_MARK in path or (WEBSITE_MARK in path and ts >= ARTICLE_CUTOFF)
 
 
-def history_prompts(rows, machine, window, cache_hashes=frozenset(), founding=frozenset()):
+def history_prompts(rows, machine, window, cache_hashes=frozenset(), founding=frozenset(), include_website=False):
     """Claude Code history rows -> prompts. `rows` may hold None for unparseable lines.
 
     founding: approved founding sessions {(tool, machine, session)} (see FOUNDING_RULE); their prompts
-    are kept from FOUNDING_FLOOR on, whatever their folder, and flagged `founding`."""
+    are kept from FOUNDING_FLOOR on, whatever their folder, and flagged `founding`.
+    include_website: also keep website-folder prompts over the whole window (see WEBSITE_RULE)."""
     res = SourceResult()
     start, end = window
     for i, r in enumerate(rows):
@@ -441,7 +469,7 @@ def history_prompts(rows, machine, window, cache_hashes=frozenset(), founding=fr
             if ts >= end:
                 res.drop("after-cutoff")
                 continue
-            if not _in_project(r.get("project"), ts):
+            if not _in_project(r.get("project"), ts, include_website):
                 res.drop("other-project")
                 continue
         text = r.get("display") or ""
@@ -452,6 +480,7 @@ def history_prompts(rows, machine, window, cache_hashes=frozenset(), founding=fr
             tool="claude", machine=machine, session=r.get("sessionId") or f"nosession-{machine}-{i}",
             ts_epoch=ts, order=i, text=text, chars=len(text), kind=prompt_kind(text),
             pasted=pasted_flag(text, r.get("pastedContents"), cache_hashes), project=r.get("project"),
+            project_marker=project_marker(r.get("project")),
             model=None, effort=None, mode=None, settings_source="unknown", approval=None, sandbox=None,
             branch=None, founding=is_founding))
     res.dropped = dict(res.dropped)
@@ -555,6 +584,7 @@ def codex_prompts(sessions, window):
             seen.add(key)
             pr = dict(tool="codex", machine="mac", session=sid, ts_epoch=ts, order=res.in_source, text=text,
                       chars=len(text), kind=prompt_kind(text), pasted="none", project=cwd, founding=False,
+                      project_marker=project_marker(cwd),
                       model=None, effort=None, mode=None, settings_source="unknown", approval=None,
                       sandbox=None, branch=branch if branch and branch != "HEAD" else None)
             if ctx:
@@ -1101,6 +1131,9 @@ def main(argv=None):
     ap.add_argument("--people", default=None, help="file: one personal name per line (default: <research>/data/prompts-people.txt)")
     ap.add_argument("--allowlist", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "redaction-allowlist.txt"))
     ap.add_argument("--cutoff", default=None, help="ISO UTC; default: now")
+    ap.add_argument("--include-website", action="store_true",
+                    help="also keep Claude Code prompts typed in ~/projects/ghostty-website* over the whole window, "
+                         "as article work (see WEBSITE_RULE)")
     ap.add_argument("--founding", default=None,
                     help="approved founding-sessions CSV (columns of prompts-founding-sessions-proposed-<date>.csv, "
                          "decision include|exclude); without it no founding prompt is kept")
@@ -1119,10 +1152,12 @@ def main(argv=None):
     founding = load_founding(a.founding) if a.founding else set()
     vm_rows = read_jsonl(vm_path) if os.path.exists(vm_path) else None
     candidates = founding_candidates([("mac", mac_rows)] + ([("vm", vm_rows)] if vm_rows is not None else []), cutoff)
-    results = {"claude-mac": history_prompts(mac_rows, "mac", window, cache, founding)}
+    results = {"claude-mac": history_prompts(mac_rows, "mac", window, cache, founding,
+                                                 include_website=a.include_website)}
     vm_status = "pending"
     if vm_rows is not None:
-        results["claude-vm"] = history_prompts(vm_rows, "vm", window, founding=founding)
+        results["claude-vm"] = history_prompts(vm_rows, "vm", window, founding=founding,
+                                                  include_website=a.include_website)
         vm_status = f"fetched (VM history last modified {iso_utc(os.path.getmtime(vm_path))})"
     codex_files, seen_ids = [], set()
     for kind in ("sessions", "archived_sessions"):
@@ -1183,7 +1218,12 @@ def main(argv=None):
             if branch == "HEAD":
                 branch = None
             p["branch"] = branch
-            p["commits"], p["commits_basis"] = commit_window(p["ts_epoch"], end, branch, commits, foreign, sid, cutoff)
+            if p.get("project_marker") == "website":
+                # the website is another repository: its prompts never link Rustty commits (WEBSITE_RULE)
+                p["commits"], p["commits_basis"] = [], "other-repo"
+            else:
+                p["commits"], p["commits_basis"] = commit_window(p["ts_epoch"], end, branch, commits, foreign, sid,
+                                                                 cutoff)
             p["_end"], p["_tx"], p["_sk"], p["_ss"] = end, t, sk, ss
 
     # a commit claimed by two or more human sessions keeps only evidence-backed links
@@ -1206,7 +1246,7 @@ def main(argv=None):
     phases_csv = sorted(glob.glob(os.path.join(data, "strategy-timeline-*.csv")))
     phases_csv = phases_csv[-1] if phases_csv else os.path.join(data, "strategy-timeline.csv")
     phases = load_phases(phases_csv)
-    art = article_sessions(prompts)
+    art = article_sessions(prompts, include_website=a.include_website)
     for p in prompts:
         p["article_work"] = is_article_work(p, art)
         p["ids"] = find_internal_ids(p["text"])
@@ -1218,7 +1258,7 @@ def main(argv=None):
     # outputs
     fields = ["id", "ts", "tool", "machine", "session", "text", "chars", "kind", "pasted", "model", "effort",
               "mode", "settings_source", "approval", "sandbox", "article_work", "commits", "commits_basis", "ids",
-              "phase", "decision", "branch", "project", "founding"]
+              "phase", "decision", "branch", "project", "founding", "project_marker"]
     with open(os.path.join(data, f"prompts-raw-{DATE_TAG}.jsonl"), "w") as f:
         for p in prompts:
             f.write(json.dumps({k: p.get(k) for k in fields}, ensure_ascii=False) + "\n")
@@ -1297,7 +1337,8 @@ def main(argv=None):
                               "session) > commit-trailer (Co-Authored-By model of the prompt's own linked commits, "
                               "after the multi-session dedupe; effort unknown) > unknown.",
                   "ids": "jargon.py find_internal_ids patterns (ghostty-website-journey 438cb814) + FX<n>.",
-                  "founding": FOUNDING_RULE, "sessions": SESSION_RULE},
+                  "founding": FOUNDING_RULE, "sessions": SESSION_RULE,
+                  "website": WEBSITE_RULE if a.include_website else "off (--include-website not given)"},
         "founding_floor": iso_utc(FOUNDING_FLOOR),
         "counts": {
             "prompts": len(prompts),
@@ -1320,6 +1361,9 @@ def main(argv=None):
             "founding_candidates": dict(sorted(collections.Counter(c["reason"] for c in candidates).items())),
             "founding_candidate_prompts": sum(c["prompts"] for c in candidates),
             "founding_list": "approved" if a.founding else "none",
+            "include_website": bool(a.include_website),
+            "website_prompts": sum(1 for p in prompts if p.get("project_marker") == "website"),
+            "website_sessions": len({p["session"] for p in prompts if p.get("project_marker") == "website"}),
             "founding_sessions": sum(1 for s in sessions if s["founding"]),
             "founding_prompts": sum(1 for p in prompts if p["founding"]),
             "sessions": len(sessions),

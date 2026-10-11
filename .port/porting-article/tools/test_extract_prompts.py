@@ -41,6 +41,40 @@ class HistoryTest(unittest.TestCase):
         self.assertEqual([p["text"] for p in res.prompts], ["site after"])
         self.assertEqual(res.dropped, {"before-window": 1, "other-project": 1})
 
+    def test_include_website_keeps_website_folders(self):
+        rows = [hist("rebrand the site", "2026-07-02T10:00:00Z", project="/Users/example/projects/ghostty-website",
+                     session="w1"),
+                hist("journey page", "2026-10-07T10:00:00Z",
+                     project="/Users/example/projects/ghostty-website-journey/src", session="w2"),
+                hist("unrelated", "2026-07-02T10:05:00Z", project="/Users/example/projects/other", session="o1"),
+                hist("not a website folder", "2026-07-02T10:06:00Z",
+                     project="/Users/example/projects/other/ghostty-website-notes", session="o2"),
+                hist("port it", "2026-07-02T10:07:00Z", project="/Users/example/projects/rustty", session="r1"),
+                hist("too early", "2026-06-01T10:00:00Z", project="/Users/example/projects/ghostty-website",
+                     session="w0")]
+        # without the flag the July and early-October website prompts stay dropped
+        off = ep.history_prompts(rows, "mac", WINDOW)
+        self.assertEqual([p["text"] for p in off.prompts], ["port it"])
+        on = ep.history_prompts(rows, "mac", WINDOW, include_website=True)
+        self.assertEqual([p["text"] for p in on.prompts], ["rebrand the site", "journey page", "port it"])
+        self.assertEqual([p["project_marker"] for p in on.prompts], ["website", "website", "rustty"])
+        self.assertEqual(on.dropped, {"other-project": 2, "before-window": 1})
+        self.assertEqual(on.in_source, len(on.prompts) + sum(on.dropped.values()))
+        # every prompt of a website session is article work, whatever the date
+        prompts = [dict(p, ts_epoch=p["ts_epoch"]) for p in on.prompts]
+        sessions = ep.article_sessions(prompts, include_website=True)
+        self.assertEqual(sessions, {"w1": "project:website", "w2": "project:website"})
+        self.assertEqual([ep.is_article_work(p, sessions) for p in prompts], [True, True, False])
+        # the flag changes nothing for the sessions without a website prompt
+        self.assertEqual(ep.article_sessions(prompts), {})
+
+    def test_project_marker(self):
+        self.assertEqual(ep.project_marker("/Users/example/projects/ghostty-website"), "website")
+        self.assertEqual(ep.project_marker("/Users/example/projects/ghostty-website-journey/x"), "website")
+        self.assertEqual(ep.project_marker("/Users/example/projects/rustty/.claude/worktrees/a"), "rustty")
+        self.assertEqual(ep.project_marker("/Users/example/projects"), "other")
+        self.assertEqual(ep.project_marker(None), "other")
+
     def test_slash_commands_kind_command(self):
         self.assertEqual(ep.prompt_kind("/clear"), "command")
         self.assertEqual(ep.prompt_kind("/goal See rustty"), "command")
@@ -246,9 +280,11 @@ class CommitWindowTest(unittest.TestCase):
 
 class RulesTest(unittest.TestCase):
     def test_decision_rule(self):
-        for t in ["A", "b", "ok", "yes", "go", "continue", "ok.", "B, go ahead", "Go ahead\n", "LGTM!", "2", "12.", " 3 "]:
+        for t in ["A", "b", "ok", "yes", "go", "continue", "ok.", "B, go ahead", "Go ahead\n", "LGTM!", "2", "12.", " 3 ",
+                  "approve", "Approved.", "approved, go ahead", "ok approve"]:
             self.assertTrue(ep.is_decision(t), t)
-        for t in ["ok but change X", "", "continue with the plan", "/clear", "e", "go go go go", "123", "2 and 3", "2026"]:
+        for t in ["ok but change X", "", "continue with the plan", "/clear", "e", "go go go go", "123", "2 and 3", "2026",
+                  "approved the plan but fix X", "approval"]:
             self.assertFalse(ep.is_decision(t), t)
 
     def test_article_work_rule(self):
