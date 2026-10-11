@@ -50,6 +50,7 @@ bad() { echo "  FAIL  $1"; fail=1; }
 ALLOWED=(
   ".port/tools/gates/check_dist.sh|its target/release read runs inside the Debian container, on a tarball freshly extracted there, where no CARGO_TARGET_DIR is set"
   ".port/tools/gates/check_perf_fence.sh|builds every artifact it measures under env -u CARGO_TARGET_DIR, so the default dir is where they are"
+  ".port/tools/perf/ws10_suite.py|its target/... strings are self-test fixture values (fake size counterparts), not reads; the real counterparts come from BASELINE.json and G8b builds them under env -u CARGO_TARGET_DIR"
 )
 # static_scan FILE... -> prints "file:line: text" for each literal artifact read
 static_scan() {
@@ -76,6 +77,15 @@ if want_arm 1; then
 echo "=== G-TGTDIR arm 1: no literal target/<profile> artifact path in the gates or examples ==="
 files="$(sed -n 's/^  "[A-Za-z0-9-]*|[A-Z-]*|[a-z]*|[^|]*|\(.*\)"$/\1/p' "$ROOT/.port/tools/ci.sh" \
   | grep -oE '\$(GATES|ROOT)/[^ ]+\.(sh|py)' | sed "s#^\$GATES/#.port/tools/gates/#; s#^\$ROOT/##" | sort -u)"
+# Also: every tracked tool under .port/tools (shell, Python, Node), not only
+# the registry's. Helpers reached indirectly (ci.sh's --webgl lane, a Node tool
+# that runs build-vt-wasm.sh) spelled `<root>/target/...` where no arm looked;
+# A5's struct-layout checker failed to link under a non-default
+# CARGO_TARGET_DIR for that reason. Node tools use _target_dir.mjs.
+files="$files
+$(cd "$ROOT" && git ls-files '.port/tools/*.sh' '.port/tools/*.py' '.port/tools/*.mjs' '.port/tools/*.js' \
+    '.port/tools/**/*.sh' '.port/tools/**/*.py' '.port/tools/**/*.mjs' '.port/tools/**/*.js')"
+files="$(printf '%s\n' "$files" | grep . | sort -u)"
 # This gate's own fixture strings are not reads; it is not scanned.
 files="$(printf '%s\n' "$files" | grep -vx '.port/tools/gates/check_target_dir.sh')
 $(ls example/*/build.sh 2>/dev/null)"
@@ -100,8 +110,12 @@ for e in "${ALLOWED[@]}"; do
 done
 printf '%s\n' '"$CC" -I"$root/include" -L"$root/target/release" -lrustty_vt_c d11r.c -o d11r' > "$W/old_d11r.sh"
 printf '%s\n' '        lib = ROOT / "target" / "debug" / name' > "$W/old_vtfeat.py"
-if [ "$(static_scan "$W/old_d11r.sh" "$W/old_vtfeat.py" | grep -c .)" = 2 ]; then ok "arm 1 control: the old D11r and G-VTFEAT lines are each flagged"
-else bad "arm 1 control: the old literal lines were not both flagged"; fi
+printf '%s\n' 'const UU = new URL("../../target/wasm32-unknown-unknown/release/rustty_vt_c.wasm", import.meta.url);' > "$W/old_roundtrip.mjs"
+# shellcheck disable=SC2016  # the old JS template literal, verbatim fixture text
+printf '%s\n' '  `${ROOT}/target/release`,' > "$W/old_layouts.mjs"
+if [ "$(static_scan "$W/old_d11r.sh" "$W/old_vtfeat.py" "$W/old_roundtrip.mjs" "$W/old_layouts.mjs" | grep -c .)" = 4 ]; then ok "arm 1 control: the old D11r, G-VTFEAT, wasm-vt-roundtrip and struct-layout lines are each flagged"
+else bad "arm 1 control: the old literal lines were not all flagged"; fi
+case "$files" in *.port/tools/wasm-vt-roundtrip.mjs*) ok "arm 1: the Node tools are in the scanned set" ;; *) bad "arm 1: the Node tools are not in the scanned set" ;; esac
 fi
 
 # ---- arm 2: G-LINT skips target roots ----------------------------------------

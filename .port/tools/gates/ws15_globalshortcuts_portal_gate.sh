@@ -60,7 +60,10 @@ WORK="${TMPDIR:-/tmp}/ws15-gate"
 APP_LOG="$WORK/app.log"
 BUS_LOG="$WORK/bus.log"
 SHORTCUT="SHIFT+CTRL+ALT+F12"
-BIN="$RUSTTY_ROOT/target/debug/rustty"
+# cargo's own target dir (CARGO_TARGET_DIR honoured), not a literal $RUSTTY_ROOT/target.
+# shellcheck source=.port/tools/gates/_target_dir.sh
+. "$RUSTTY_ROOT/.port/tools/gates/_target_dir.sh"
+BIN="$(rustty_target_dir "$RUSTTY_ROOT")/debug/rustty"
 # `build_info::APPLICATION_ID` — BUNDLE_ID plus the debug_assertions `-debug`
 # suffix (`info.zig:7-10`).
 APP_ID="io.airely.rustty-debug"

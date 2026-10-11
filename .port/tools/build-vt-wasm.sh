@@ -42,7 +42,11 @@ cargo rustc --manifest-path "$root/Cargo.toml" \
   -C link-arg=-zstack-size=131072
 
 # (b)+(c) patch the table growable and install as rustty-vt.wasm.
-raw="$root/target/wasm32-unknown-unknown/release/rustty_vt_c.wasm"
+# cargo's own target dir (CARGO_TARGET_DIR honoured), where `cargo rustc` just
+# wrote the artifact: a literal $root/target read nothing under a custom dir.
+# shellcheck source=.port/tools/gates/_target_dir.sh
+. "$here/gates/_target_dir.sh"
+raw="$(rustty_target_dir "$root")/wasm32-unknown-unknown/release/rustty_vt_c.wasm"
 out_dir="$root/zig-out/bin"
 mkdir -p "$out_dir"
 cargo run --manifest-path "$root/Cargo.toml" -p xtask -- \

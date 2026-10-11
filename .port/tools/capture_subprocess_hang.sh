@@ -2,11 +2,15 @@
 # Capture the live wedged state of a subprocess_drop_repro hang, then clean up.
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# cargo's own target dir (CARGO_TARGET_DIR honoured), not a literal $ROOT/target.
+# shellcheck source=.port/tools/gates/_target_dir.sh
+. "$ROOT/.port/tools/gates/_target_dir.sh"
+TGT="$(rustty_target_dir "$ROOT")"
 # `ls -t` is load-bearing here: cargo leaves several hash-suffixed
 # subprocess_drop_repro-* binaries in deps/ and we want the newest. A glob
 # cannot sort by mtime, so the ls|grep pipe stays.
 # shellcheck disable=SC2010
-BIN="$(ls -t "$ROOT"/target/debug/deps/subprocess_drop_repro-* | grep -v '\.d$' | head -1)"
+BIN="$(ls -t "$TGT"/debug/deps/subprocess_drop_repro-* | grep -v '\.d$' | head -1)"
 echo "binary: $BIN"
 
 "$BIN" --test-threads="${TEST_THREADS:-3}" >/tmp/rustty-hang.log 2>&1 &

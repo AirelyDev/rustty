@@ -69,17 +69,16 @@
 // --expect-silence goes RED, and the shipped artifact WITH it goes RED, so the
 // two builds are distinguished in both directions.
 import { readFileSync, statSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { makeWebCanvasEnv } from "./web-canvas-glue.mjs";
 import { makeMockCanvas } from "./web-canvas-mock.mjs";
+import { join } from "node:path";
+import { targetDir } from "./_target_dir.mjs";
 
 const EXPECT_SILENCE = process.argv.includes("--expect-silence");
 
 const WASM = process.env.RUSTTY_WC_WASM
   ? process.env.RUSTTY_WC_WASM
-  : fileURLToPath(
-      new URL("../../target/wasm32-unknown-unknown/debug/rustty_web_canvas.wasm", import.meta.url),
-    );
+  : join(targetDir(), "wasm32-unknown-unknown", "debug", "rustty_web_canvas.wasm");
 
 // The CSS "font" value driven through the failing path. `OTTO` is a real
 // font-FILE magic (CFF/OpenType) and pure ASCII, so `validate_css_font_str`

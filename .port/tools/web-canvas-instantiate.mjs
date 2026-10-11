@@ -25,11 +25,10 @@
 import { readFileSync } from "node:fs";
 import { makeWebCanvasEnv } from "./web-canvas-glue.mjs";
 import { makeMockCanvas } from "./web-canvas-mock.mjs";
+import { join } from "node:path";
+import { targetDir } from "./_target_dir.mjs";
 
-const WASM = new URL(
-  "../../target/wasm32-unknown-unknown/release/rustty_web_canvas.wasm",
-  import.meta.url,
-);
+const WASM = join(targetDir(), "wasm32-unknown-unknown", "release", "rustty_web_canvas.wasm");
 
 const mod = await WebAssembly.compile(readFileSync(WASM));
 
