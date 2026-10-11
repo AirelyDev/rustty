@@ -1,0 +1,40 @@
+
+=== build
+   Compiling rustty-apprt-api v0.1.0 (/home/gael/projects/rustty-fbsd/crates/rustty-apprt-api)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 58.85s
+
+=== exports
+0
+target/debug/rustty: ELF 64-bit LSB executable, ARM aarch64, version 1 (GNU/Linu
+
+=== unit
+test result: ok. 125 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.06s
+test result: ok. 108 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 104 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 5.32s
+test result: ok. 108 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.10s
+
+=== xtask
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 78 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+=== i18n
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+=== termio-thread_enter
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 109 filtered out; finished in 0.00s
+
+=== apprt-default
+passed 163 failed 0 ignored 82
+
+=== live
+gtk_first_light::first_light_renders_a_live_terminal_frame -> test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.71s
+gtk_window_live::window_hosts_a_live_terminal -> test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+gtk_input_focus::placeholder_overlays_do_not_capture_input -> test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.06s
+dmabuf_on_wayland(REQUIRE) -> test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 2.35s
+dmabuf_build_failure(REQUIRE) -> test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 3.39s
+
+=== clippy
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 48.23s
+warning: build failed, waiting for other jobs to finish...
+
+=== done
