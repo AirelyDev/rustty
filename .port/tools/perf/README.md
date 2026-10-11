@@ -17,22 +17,27 @@ the size labels re-based beside it.
 ## The measurement substrate is UNTRACKED
 
 Neither the oracle bench binary nor the corpora are in git. The corpora exist
-only in the **shared checkout**; the oracle binary lives in the host's oracle
-artifact directory:
+only in the **main ("shared") checkout**; the oracle binary lives in the host's
+oracle artifact directory, `~/rustty-oracle-artifacts` unless
+`RUSTTY_ORACLE_ARTIFACTS` names another one:
 
 | what | path | size |
 |---|---|---|
-| oracle bench binary (the pin) | `~/rustty-oracle-artifacts/ghostty-bench-<first 9 hex of ORACLE_PIN>` | 4 029 184 B |
+| oracle bench binary (the pin) | `${RUSTTY_ORACLE_ARTIFACTS:-~/rustty-oracle-artifacts}/ghostty-bench-<first 9 hex of ORACLE_PIN>` | 4 029 184 B |
 | corpus (utf8) | `.port/phase-0/baseline/corpora/utf8.bin` | 67 108 864 B |
 | corpus (ascii) | `.port/phase-0/baseline/corpora/ascii.bin` | 67 108 864 B |
 | corpus (osc) | `.port/phase-0/baseline/corpora/osc-parser.bin` | 67 108 864 B |
 | corpus (ascii-small) | `.port/phase-0/baseline/corpora/ascii-small.bin` | 262 144 B |
 
-`ws10_suite.py` references them by absolute path (the corpora in the shared
-checkout), so it works from a worktree. If any is absent the gate **BLOCKS
-(exit 3)**, and it also BLOCKS when the oracle binary's sha256 is not
-`ORACLE_SHA256` in `ws10_suite.py` — a missing or different substrate is not a
-green pass.
+`ws10_suite.py` derives the main checkout instead of spelling it:
+`_gatelib.main_checkout` asks `git rev-parse --git-common-dir` (with `GIT_*`
+removed), the rule `_gatelib.oracle_root` uses for the oracle, so the suite
+finds the corpora from the main checkout or any linked worktree, wherever the
+clone lives. `RUSTTY_ORACLE_ARTIFACTS` only relocates the oracle binary: it must
+still match `ORACLE_SHA256`. If any piece is absent the gate **BLOCKS (exit 3)**,
+and it also BLOCKS when the oracle binary's sha256 is not `ORACLE_SHA256` in
+`ws10_suite.py` — a missing or different substrate is not a green pass. Self-test
+arm `[h]` covers the location rule and the override.
 
 ## The oracle binary: provenance and rebuild
 

@@ -172,6 +172,8 @@ _RUSTTY_ORACLE_CONSUMERS=(
   ".port/tools/restore_zig_deps.sh"
   ".port/tools/wasm-parity.mjs"
   ".port/phase-0/build-examples.sh"
+  ".port/phase-0/harness/build_ref_driver.sh"
+  ".port/phase-0/harness/build_port_driver.sh"
   ".port/tools/gates/check_esctest.sh"
 )
 

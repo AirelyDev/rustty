@@ -36,8 +36,12 @@ ORACLE COMPARABILITY -- non-negotiable
 --------------------------------------
 The oracle is Ghostty's `ghostty-bench` built ReleaseFast at THE ORACLE PIN
 (`.port/tools/gates/ORACLE_PIN`), stored at
-`~/rustty-oracle-artifacts/ghostty-bench-<first 9 hex of the pin>` and checked
-against ORACLE_SHA256 before every oracle run (a mismatch is BLOCKED, exit 3).
+`<artifacts>/ghostty-bench-<first 9 hex of the pin>` and checked against
+ORACLE_SHA256 before every oracle run (a mismatch is BLOCKED, exit 3).
+`<artifacts>` is `~/rustty-oracle-artifacts` unless `RUSTTY_ORACLE_ARTIFACTS`
+names another directory. The override is safe where the oracle CHECKOUT's is
+not (`_gatelib.oracle_root` takes none, R5): whatever it points at must still
+match ORACLE_SHA256, so it can only relocate the pinned binary, never swap it.
 Every number is comparable to that binary and to NO OTHER ORACLE REVISION. The
 series recorded before task S-4 (2026-09-23) is anchored on the retired
 `4749c4e93` binary (sha256 0fb47d26..., backup
@@ -52,7 +56,18 @@ EXIT CODES
      from both 0 and 1: a contended run is not a pass and not a failure, and
      must never become a recorded baseline.
   3  BLOCKED -- measurement substrate absent (oracle binary or corpora missing;
-     they are untracked and live only in the shared checkout, not in worktrees).
+     both are untracked).
+
+WHERE THE SUBSTRATE IS
+----------------------
+The corpora are untracked and live only in the MAIN ("shared") checkout's
+`.port/phase-0/baseline/corpora`, never in a linked worktree. The main checkout
+is derived, not spelled: `_gatelib.main_checkout` asks git for the common dir
+(with `GIT_*` removed), the same rule `_gatelib.oracle_root` uses for the
+oracle. So the suite finds them from the main checkout or any of its worktrees,
+wherever the clone lives. (It used to be a literal path to one developer's
+checkout, which BLOCKED on every other machine.) A missing corpus is still
+BLOCKED (exit 3), never a pass.
 """
 import argparse
 import json
@@ -63,17 +78,31 @@ import sys
 import time
 
 # --------------------------------------------------------------------------
-# Measurement substrate (untracked; shared checkout only -- NOT in worktrees)
+# Measurement substrate (untracked; the MAIN checkout only -- NOT in worktrees)
 # --------------------------------------------------------------------------
-SHARED = "/Users/gael/projects/rustty"
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "gates"))
 import _gatelib  # noqa: E402  (the one reader of ORACLE_PIN)
 
+#: The main checkout of THIS script's repository, from itself or any linked
+#: worktree (module docstring, "WHERE THE SUBSTRATE IS").
+SHARED = _gatelib.main_checkout(_gatelib.RUSTTY_ROOT)
+
 #: The oracle pin, read from ORACLE_PIN (never spelled here: G-ORACLE-SH's pin
 #: arm forbids a copy of it in any tracked .port/tools file).
 ORACLE_PIN = _gatelib.oracle_pin()
-ARTIFACTS = os.path.expanduser("~/rustty-oracle-artifacts")
+
+
+def artifacts_dir(environ=None):
+    """The oracle-artifacts directory: `RUSTTY_ORACLE_ARTIFACTS` if set and
+    non-empty, else `~/rustty-oracle-artifacts`. Only a location: the binary
+    found there is still checked against ORACLE_SHA256 (module docstring)."""
+    env = os.environ if environ is None else environ
+    return os.path.expanduser(env.get("RUSTTY_ORACLE_ARTIFACTS")
+                              or "~/rustty-oracle-artifacts")
+
+
+ARTIFACTS = artifacts_dir()
 ORACLE_DEFAULT = os.path.join(
     ARTIFACTS, "ghostty-bench-" + (ORACLE_PIN or "MISSING-PIN")[:9])
 #: sha256 of the stored oracle binary (rebuilt 2026-10-09 by P8-W10 T0 with
@@ -411,7 +440,7 @@ def self_test():
     base = {bid: 0.100 for bid in ALL_IDS}
     # Cases run per arm. An arm that runs zero cases is a FAIL: a vacuous arm
     # (arm [e] over an empty INCOMPARABLE, before review S-4 F1) is not a pass.
-    cases = {arm: 0 for arm in "abcdefg"}
+    cases = {arm: 0 for arm in "abcdefgh"}
 
     # (a) rust uniformly 0.9x zig -> green
     lines, good = evaluate_oracle(base, {k: v * 0.9 for k, v in base.items()})
@@ -566,6 +595,80 @@ def self_test():
         ok &= g_lb
         cases["g"] += 1
 
+    # (h) the substrate is LOCATED, not spelled: the main checkout of a
+    #     throwaway repository resolves from its linked worktree (even with
+    #     GIT_DIR pointing at a decoy); a COPY of this script run from that
+    #     worktree finds the corpora in that main checkout (present -> 0,
+    #     absent -> BLOCKED 3: a literal SHARED would answer from the real
+    #     checkout instead, so the absent case is the control); and
+    #     RUSTTY_ORACLE_ARTIFACTS relocates the oracle binary's directory
+    #     (default ~/rustty-oracle-artifacts).
+    with tempfile.TemporaryDirectory() as td:
+        td = os.path.realpath(td)
+        main_co = os.path.join(td, "main")
+        wt = os.path.join(td, "main", ".claude", "worktrees", "wt")
+        decoy = os.path.join(td, "decoy")
+        genv = dict(_gatelib.git_env(), GIT_CONFIG_GLOBAL=os.devnull,
+                    GIT_CONFIG_NOSYSTEM="1")
+        gitq = {"env": genv, "capture_output": True, "check": True}
+        for d in (main_co, decoy):
+            subprocess.run(["git", "init", "-q", d], **gitq)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t",
+                        "commit", "-q", "--allow-empty", "-m", "x"],
+                       cwd=main_co, **gitq)
+        subprocess.run(["git", "worktree", "add", "-q", wt], cwd=main_co, **gitq)
+        saved = os.environ.get("GIT_DIR")
+        os.environ["GIT_DIR"] = os.path.join(decoy, ".git")
+        try:
+            h_cases = [
+                ("from the main checkout", _gatelib.main_checkout(main_co), main_co),
+                ("from a linked worktree, GIT_DIR=decoy",
+                 _gatelib.main_checkout(wt), main_co),
+            ]
+        finally:
+            if saved is None:
+                os.environ.pop("GIT_DIR", None)
+            else:
+                os.environ["GIT_DIR"] = saved
+        for label, got, want in h_cases:
+            print(f"[h] main checkout {label} -> {got == want} (expect True)")
+            ok &= got == want
+            cases["h"] += 1
+        import shutil
+        here = os.path.dirname(os.path.abspath(__file__))
+        gates = os.path.join(here, "..", "gates")
+        for sub, names, src in ((".port/tools/perf", ["ws10_suite.py"], here),
+                                (".port/tools/gates", ["_gatelib.py", "ORACLE_PIN"], gates)):
+            os.makedirs(os.path.join(wt, sub), exist_ok=True)
+            for n in names:
+                shutil.copy(os.path.join(src, n), os.path.join(wt, sub, n))
+        copy = os.path.join(wt, ".port/tools/perf/ws10_suite.py")
+        cor = os.path.join(main_co, ".port/phase-0/baseline/corpora")
+        for label, present, want_rc in (("corpora absent", False, 3),
+                                        ("corpora present", True, 0)):
+            if present:
+                os.makedirs(cor)
+                for n in ("utf8.bin", "ascii.bin", "osc-parser.bin",
+                          "ascii-small.bin"):
+                    open(os.path.join(cor, n), "wb").close()
+            r = subprocess.run([sys.executable, copy, "--preflight", "--no-oracle"],
+                               cwd=wt, capture_output=True, text=True, env=genv)
+            print(f"[h] copy in a worktree, {label} -> rc={r.returncode} "
+                  f"(expect {want_rc})")
+            ok &= r.returncode == want_rc
+            cases["h"] += 1
+    a_cases = [
+        ("override", {"RUSTTY_ORACLE_ARTIFACTS": "/x/arts"}, "/x/arts"),
+        ("empty override = default", {"RUSTTY_ORACLE_ARTIFACTS": ""},
+         os.path.expanduser("~/rustty-oracle-artifacts")),
+        ("unset = default", {}, os.path.expanduser("~/rustty-oracle-artifacts")),
+    ]
+    for label, env, want in a_cases:
+        got = artifacts_dir(env)
+        print(f"[h] artifacts dir, {label} -> {got == want} (expect True)")
+        ok &= got == want
+        cases["h"] += 1
+
     empty = [arm for arm, n in cases.items() if n == 0]
     if empty:
         print(f"FAIL: arm(s) {', '.join(empty)} ran zero cases")
@@ -651,8 +754,10 @@ def main():
     need_oracle = not args.no_oracle
     missing = substrate_missing(args.oracle, need_oracle)
     if missing:
-        print("BLOCKED: measurement substrate absent (untracked; lives in the "
-              "shared checkout, not in worktrees):")
+        print("BLOCKED: measurement substrate absent (untracked; the corpora "
+              f"live in the main checkout {SHARED}, the oracle binary in "
+              f"{ARTIFACTS} ($RUSTTY_ORACLE_ARTIFACTS, default "
+              f"~/rustty-oracle-artifacts)):")
         for m in missing:
             print("   missing:", m)
         sys.exit(3)

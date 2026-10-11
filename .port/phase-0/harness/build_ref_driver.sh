@@ -12,7 +12,19 @@
 set -euo pipefail
 
 HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-GHOSTTY="${GHOSTTY:-/Users/gael/projects/ghostty}"
+# The read-only oracle: `ghostty` beside the MAIN checkout, from the shared
+# resolver every gate uses (_oracle_root.sh), so a worktree or a clone at any
+# path finds the same tree G4's staleness guard checks. R5, as there: no
+# environment override (the retired `GHOSTTY` default was a literal path to one
+# developer's machine) and `GIT_*` cannot redirect it. `--print-oracle` prints
+# the result and exits (G-ORACLE-SH-SELF's consumer arm runs it with decoys).
+# shellcheck source=.port/tools/gates/_oracle_root.sh
+. "$HARNESS_DIR/../../tools/gates/_oracle_root.sh" || { echo "ERROR: cannot source _oracle_root.sh" >&2; exit 11; }
+GHOSTTY="$(rustty_oracle_root "$(cd "$HARNESS_DIR/../../.." && pwd)")"
+if [ "${1:-}" = "--print-oracle" ]; then
+  printf '%s\n' "$GHOSTTY"
+  exit 0
+fi
 INC="$GHOSTTY/zig-out/include"
 OUT="$HARNESS_DIR/bin/vt_driver_ref"
 

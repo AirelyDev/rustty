@@ -217,6 +217,73 @@ mod tests {
     ///   `GHOSTTY_*` env vars or `ghostty` command references.
     const VERBATIM_FILES: &[&str] = &["bash/bash-preexec.sh"];
 
+    /// The read-only ghostty oracle checkout: `ghostty` BESIDE THE MAIN
+    /// rustty checkout, the rule `.port/tools/gates/_gatelib.oracle_root` and
+    /// its shell twin `_oracle_root.sh` apply for every gate.
+    ///
+    /// `common_dir` is git's `--git-common-dir` answer for this crate's tree:
+    /// the MAIN repository's `.git` even from a linked worktree such as
+    /// `.claude/worktrees/<id>`, so its parent is the main checkout. Without it
+    /// (git absent or failing) the fallback is this checkout's own sibling,
+    /// `<manifest>/../../ghostty`, which from a worktree names a missing
+    /// directory and so FAILS loudly rather than finding a stray tree. There is
+    /// no environment override, as in the gates (R5). This replaced a literal
+    /// path to one developer's machine.
+    fn oracle_checkout_from(common_dir: Option<&Path>, manifest_dir: &Path) -> std::path::PathBuf {
+        match common_dir.and_then(Path::parent) {
+            Some(main_checkout) => main_checkout.join("../ghostty"),
+            None => manifest_dir.join("../../ghostty"),
+        }
+    }
+
+    /// [`oracle_checkout_from`] with git's live answer for this crate. git runs
+    /// with every `GIT_*` variable removed, so `GIT_DIR` cannot redirect it to
+    /// a decoy repository, and its stdout is trusted only on exit 0.
+    fn oracle_checkout() -> std::path::PathBuf {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut git = std::process::Command::new("git");
+        git.args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+            .current_dir(manifest_dir);
+        for (k, _) in std::env::vars_os() {
+            if k.to_string_lossy().starts_with("GIT_") {
+                git.env_remove(k);
+            }
+        }
+        let common = git
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| std::path::PathBuf::from(s.trim_end()))
+            .filter(|p| !p.as_os_str().is_empty());
+        oracle_checkout_from(common.as_deref(), manifest_dir)
+    }
+
+    /// The location rule above, without git or an oracle on disk: from a
+    /// linked worktree the oracle is the MAIN checkout's sibling (not the
+    /// worktree's, `.claude/worktrees/ghostty`), from the main checkout it is
+    /// that checkout's sibling, and with no git answer it falls back to the
+    /// crate's own `../../ghostty`.
+    #[test]
+    fn oracle_checkout_is_beside_the_main_checkout() {
+        let main = Path::new("/r/rustty");
+        let wt_manifest = Path::new("/r/rustty/.claude/worktrees/w/xtask");
+        let main_manifest = Path::new("/r/rustty/xtask");
+        let common = main.join(".git");
+        assert_eq!(
+            oracle_checkout_from(Some(&common), wt_manifest),
+            Path::new("/r/rustty/../ghostty")
+        );
+        assert_eq!(
+            oracle_checkout_from(Some(&common), main_manifest),
+            Path::new("/r/rustty/../ghostty")
+        );
+        assert_eq!(
+            oracle_checkout_from(None, wt_manifest),
+            Path::new("/r/rustty/.claude/worktrees/w/xtask/../../ghostty")
+        );
+    }
+
     /// R1/R2 oracle KAT (dev-only): the vendored shell-integration tree must
     /// equal ghostty's `src/shell-integration/` tree mapped through the
     /// per-token rebrand (names + contents), excluding `*.md` on both sides,
@@ -225,22 +292,20 @@ mod tests {
     /// Run explicitly (never in default `cargo test` — R3 no oracle dep):
     ///   cargo test -p xtask -- --ignored oracle_shell_integration_parity
     #[test]
-    #[ignore = "requires the read-only ghostty oracle checkout at ../ghostty (R3: dev-only)"]
+    #[ignore = "requires the read-only ghostty oracle checkout beside the main checkout (R3: dev-only)"]
     fn oracle_shell_integration_parity() {
-        // Candidate oracle locations: `../../ghostty` next to a plain checkout
-        // of rustty, OR (when this crate is built from inside a git worktree
-        // nested under the main checkout, e.g. `.claude/worktrees/<id>/xtask`)
-        // the fixed dev-machine location `/Users/gael/projects/ghostty`.
-        let candidates = [
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ghostty/src/shell-integration"),
-            Path::new("/Users/gael/projects/ghostty/src/shell-integration").to_path_buf(),
-        ];
-        let oracle_root = candidates.iter().find(|p| p.is_dir()).unwrap_or_else(|| {
-            panic!(
-                "ghostty oracle not found in any of {:?} — this KAT only runs on the dev machine",
-                candidates
-            )
-        });
+        // The oracle beside the MAIN checkout, from a plain checkout or any
+        // linked worktree ([`oracle_checkout`]).
+        let oracle_checkout = oracle_checkout();
+        let oracle_dir = oracle_checkout.join("src/shell-integration");
+        assert!(
+            oracle_dir.is_dir(),
+            "ghostty oracle not found: expected {} (`ghostty` beside the main rustty \
+             checkout, located through `git rev-parse --git-common-dir`); this KAT needs \
+             the read-only oracle checkout there",
+            oracle_dir.display()
+        );
+        let oracle_root = oracle_dir.as_path();
         let vendored_root =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/rustty-extra/shell-integration");
 

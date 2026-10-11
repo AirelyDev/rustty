@@ -1013,6 +1013,33 @@ def git_env():
     return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
 
 
+def main_checkout(checkout=RUSTTY_ROOT):
+    """The MAIN checkout's working tree, from `checkout` or any of its worktrees.
+
+    `git rev-parse --git-common-dir` names the main repository's `.git` from
+    inside any linked worktree, so its parent is the main checkout; from the
+    main checkout itself it is the checkout. This is how tools find the
+    untracked material that lives only in the main ("shared") checkout -- the
+    perf corpora (`ws10_suite.py`) -- and, one level up, the oracle
+    (`oracle_root`), without a hard-coded path to one developer's machine.
+
+    R5, as for `oracle_root`: git runs with every `GIT_*` variable removed, so
+    `GIT_DIR` cannot redirect the answer to a decoy repository, and git's
+    stdout is trusted only when it exits 0. If git cannot answer, the fallback
+    is `checkout` itself. Like `oracle_root`, this only LOCATES; a caller that
+    needs something under it must turn its absence into BLOCKED (exit 3).
+    """
+    import subprocess
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd=checkout, capture_output=True, text=True, env=git_env())
+        common = r.stdout.strip() if r.returncode == 0 else ""
+    except OSError:
+        common = ""
+    return os.path.abspath(os.path.dirname(common) if common else checkout)
+
+
 def oracle_root(checkout=RUSTTY_ROOT):
     """The read-only ghostty oracle checkout: `ghostty` BESIDE THE MAIN checkout.
 
@@ -1039,16 +1066,7 @@ def oracle_root(checkout=RUSTTY_ROOT):
     `.port/tools/gates/_oracle_root.sh` is the shell twin of this function; its
     self-test checks that the two agree.
     """
-    import subprocess
-    try:
-        r = subprocess.run(
-            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-            cwd=checkout, capture_output=True, text=True, env=git_env())
-        common = r.stdout.strip() if r.returncode == 0 else ""
-    except OSError:
-        common = ""
-    main_checkout = os.path.dirname(common) if common else checkout
-    return os.path.abspath(os.path.join(main_checkout, "..", "ghostty"))
+    return os.path.abspath(os.path.join(main_checkout(checkout), "..", "ghostty"))
 
 
 # The ONE place the oracle pin is written down: `ORACLE_PIN`, a one-line file
