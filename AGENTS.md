@@ -73,6 +73,9 @@ gate. The hosted workflow `.github/workflows/ci.yml` calls the same script.
   - `bash .port/tools/ci.sh --changed-since <rev>`, which scopes the long gates
     (Miri, sanitizers, Valgrind) to the crates changed since `<rev>`. It is
     fix verification, never a release verdict (exit 5).
+  - `--tier product` runs only the generic project gates and skips the
+    oracle-parity ones (`--tier parity` does the reverse). Either is a subset,
+    never a full pass (exit 4).
 - **At the end of a resync,** do one full run. Fix-only reruns verify the
   fixes found in it; don't repeat the full run.
   - `bash .port/tools/ci.sh`, which runs every gate in parallel (`--jobs auto`),
