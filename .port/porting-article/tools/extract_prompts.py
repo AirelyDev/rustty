@@ -83,16 +83,16 @@ def prompt_kind(text):
 DECISION_WORDS = {"ok", "yes", "y", "no", "go", "ahead", "continue", "proceed", "sure", "agreed",
                   "lgtm", "a", "b", "c", "d"}
 DECISION_RULE = ("After lowercasing and replacing punctuation with spaces, the prompt is a single choice "
-                 "letter, or 1-3 words all drawn from {" + ", ".join(sorted(DECISION_WORDS)) + "}. "
+                 "letter (a-d) or number (one or two digits, answering a numbered choice), or 1-3 words all drawn from {" + ", ".join(sorted(DECISION_WORDS)) + "}. "
                  "Slash commands are never decisions.")
 
 
 def is_decision(text):
-    """A prompt that only answers a choice or acknowledges (A, b, ok, go ahead, continue). See DECISION_RULE."""
+    """A prompt that only answers a choice or acknowledges (A, b, 2, ok, go ahead, continue). See DECISION_RULE."""
     if prompt_kind(text.strip()) == "command":
         return False
     words = re.sub(r"[^\w\s]|_", " ", text.lower()).split()
-    if len(words) == 1 and re.fullmatch(r"[a-d]", words[0]):
+    if len(words) == 1 and re.fullmatch(r"[a-d]|\d{1,2}", words[0]):
         return True
     return 1 <= len(words) <= 3 and all(w in DECISION_WORDS for w in words)
 

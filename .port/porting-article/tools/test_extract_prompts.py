@@ -246,9 +246,9 @@ class CommitWindowTest(unittest.TestCase):
 
 class RulesTest(unittest.TestCase):
     def test_decision_rule(self):
-        for t in ["A", "b", "ok", "yes", "go", "continue", "ok.", "B, go ahead", "Go ahead\n", "LGTM!"]:
+        for t in ["A", "b", "ok", "yes", "go", "continue", "ok.", "B, go ahead", "Go ahead\n", "LGTM!", "2", "12.", " 3 "]:
             self.assertTrue(ep.is_decision(t), t)
-        for t in ["ok but change X", "", "continue with the plan", "/clear", "e", "go go go go"]:
+        for t in ["ok but change X", "", "continue with the plan", "/clear", "e", "go go go go", "123", "2 and 3", "2026"]:
             self.assertFalse(ep.is_decision(t), t)
 
     def test_article_work_rule(self):
