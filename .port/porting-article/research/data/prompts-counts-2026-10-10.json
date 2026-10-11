@@ -15,7 +15,12 @@
   "pasted_lost": 10,
   "settings_unknown": 447,
   "settings_inferred": 99,
-  "after_oct8_prompts": 75,
-  "after_oct8_article_work": 18,
-  "after_oct8_port_work": 57
+  "other_figures_cutoff": "2026-10-08T14:00:00-07:00",
+  "before_cutoff_claude": 898,
+  "before_cutoff_codex": 22,
+  "after_cutoff_prompts": 90,
+  "after_cutoff_article_work": 30,
+  "after_cutoff_port_work": 60,
+  "first_prompt_pacific": "2026-06-22T06:04:08-07:00",
+  "last_prompt_pacific": "2026-10-10T18:40:09-07:00"
 }
