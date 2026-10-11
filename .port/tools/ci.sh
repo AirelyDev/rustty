@@ -1369,7 +1369,7 @@ GATE_REGISTRY=(
   "G-THEMES|HARD|light|tier=product|$PY $GATES/check_theme_corpus.py"
   "D4|PROGRESS|light|tgt,tier=parity|bash $GATES/check_comptime_phase.sh"
   "D5|PROGRESS|light|tier=parity|bash $GATES/check_paired_invariants.sh"
-  "D6|PROGRESS|light|tier=parity|bash $GATES/check_sanitizer_canary.sh"
+  "D6|PROGRESS|light|tier=product|bash $GATES/check_sanitizer_canary.sh"
   "D8|PROGRESS|light|tier=parity|bash $GATES/check_clone_injection.sh"
   "D9|PROGRESS|light|tier=parity|bash $GATES/check_stale_comments.sh"
   # D10 — the vendored stb_image_resize glyph resampler vs ghostty's OWN build of the
