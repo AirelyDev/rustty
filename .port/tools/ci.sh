@@ -315,7 +315,9 @@
 #   bash .port/tools/ci.sh --jobs 1          # the serial run (registry order)
 #   bash .port/tools/ci.sh --changed-since <rev>   # fix verification: long
 #                                            # gates scoped to the change (exit 5)
-# Exit codes: 0 PASS (full run) · 1 FAIL · 2 usage · 4 --fast subset green ·
+#   bash .port/tools/ci.sh --tier product    # only the product gates (exit 4)
+#   bash .port/tools/ci.sh --tier parity     # only the parity gates (exit 4)
+# Exit codes: 0 PASS (full run) · 1 FAIL · 2 usage · 4 --fast or --tier subset green ·
 # 5 narrowed green (--changed-since, or a narrowing variable such as G6_ONLY /
 # SAN_ONLY exported) · 6 --print-scope (ran nothing). Only 0 is a release verdict.
 set -uo pipefail   # NOTE: no `-e` — run every check, aggregate failures.
@@ -362,6 +364,16 @@ SKIPPED_GATES=()
 #                     (a non-verdict mode: never 0).
 #   --prune-targets   delete each per-gate target dir this script created
 #                     (target/ci-targets/<name>) once its last gate ends.
+#   --tier T          product | parity | all (default all). Every registry entry
+#                     carries exactly one tier= trait (ci_registry_check): parity
+#                     gates exist because Rustty tracks the Ghostty oracle (they
+#                     need its checkout, pin or artifacts, or check the port's
+#                     records and coverage); product gates are the CI the project
+#                     would have without the port (the cargo steps, which are all
+#                     product, the release lane, sanitizers, Miri, Valgrind, fuzz
+#                     smoke, cross builds, linters, examples). A tier other than
+#                     all is a SUBSET: like --fast it exits 4, never 0, prints no
+#                     PASS banner and names every gate it skipped.
 #   --sccache         RUSTC_WRAPPER=sccache when sccache is on PATH (optional).
 #   --self-test       G-CI-SELF: the scheduler, scoping and sharding arms.
 CI_JOBS=auto
@@ -374,10 +386,12 @@ CI_PRINT_SCOPE=0
 CI_PRUNE=0
 CI_SCCACHE=0
 CI_SELF_TEST=0
+CI_TIER=all
+TIER_SKIPPED=()    # --tier: gates (and cargo steps) of the other tier, not run
 SCOPED_GATES=()    # --changed-since: long gates that ran only the change scope
 SCOPED_OUT=()      # --changed-since: long gates with nothing in scope (not run)
 ci_usage() {
-  echo "ci.sh: $1 (known: --webgl, --lz4-slow, --fast, --jobs N|auto, --heavy-cap N, --changed-since REV [--print-scope], --prune-targets, --sccache, --self-test)" >&2
+  echo "ci.sh: $1 (known: --webgl, --lz4-slow, --fast, --jobs N|auto, --heavy-cap N, --changed-since REV [--print-scope], --prune-targets, --tier product|parity|all, --sccache, --self-test)" >&2
   exit 2
 }
 while [ "$#" -gt 0 ]; do
@@ -393,6 +407,8 @@ while [ "$#" -gt 0 ]; do
     --changed-since=*) CI_CHANGED_SINCE="${1#--changed-since=}" ;;
     --print-scope) CI_PRINT_SCOPE=1 ;;
     --prune-targets) CI_PRUNE=1 ;;
+    --tier) [ "$#" -ge 2 ] || ci_usage "--tier needs product, parity or all"; CI_TIER="$2"; shift ;;
+    --tier=*) CI_TIER="${1#--tier=}" ;;
     --sccache) CI_SCCACHE=1 ;;
     --self-test) CI_SELF_TEST=1 ;;
     *) ci_usage "unknown argument '$1'" ;;
@@ -409,6 +425,7 @@ if [ -n "$CI_CHANGED_SINCE" ] && [ "$FAST_LANE" -eq 1 ]; then
   ci_usage "--fast and --changed-since do not combine (--fast already skips every gate --changed-since narrows)"
 fi
 [ "$CI_PRINT_SCOPE" = 1 ] && [ -z "$CI_CHANGED_SINCE" ] && ci_usage "--print-scope needs --changed-since REV"
+case "$CI_TIER" in product|parity|all) ;; *) ci_usage "--tier wants product, parity or all, not '$CI_TIER'" ;; esac
 # Narrowing variables the gates honour (debug aids and --changed-since's
 # selectors). Exported into a run, each makes it a subset: the run is then
 # never a full PASS (exit 5, named in the banner), whatever it finds.
@@ -610,6 +627,18 @@ run_test_counts() {
 }
 
 # Gate registry: "DoP_id|classification|resource|traits|runner...".
+# TIER: every entry's traits hold exactly one `tier=parity` or `tier=product`
+# (ci_registry_check refuses a missing, doubled or unknown one: exit 2).
+#   parity   exists because Rustty tracks the Ghostty oracle: it needs the
+#            oracle checkout, the pin or the oracle's artifacts, or it checks
+#            the port's records and coverage (G1-G3b, G9, G-PARITY, G-FILES /
+#            G-SYMS / G-TESTS / G-CENSUS, G-UDDOCS, G-LOGFILE, G4, G-ESCTEST,
+#            G-REFGEOM, G8b/G8, the D1-D10 port audits, the oracle-shell checks).
+#   product  the CI the project would have without the port: fmt, clippy, the
+#            workspace build and tests, the release lane, sanitizers, Miri,
+#            Valgrind, fuzz smoke, cross-target and feature builds, linters,
+#            examples, the C-ABI and artifact checks.
+# A -SELF entry takes the tier of the gate it tests. `--tier` runs one tier.
 # classification is HARD or PROGRESS. HARD-fail gates run first (fail-fast
 # visibility), then PROGRESS, then G8b's PERF-FENCE and G8's ARMED, which run
 # LAST and alone (`exclusive`) so the perf fence measures a quiet machine. (From
@@ -633,10 +662,10 @@ GATE_REGISTRY=(
   # over reverse dependencies and widens to ALL on tooling changes, and the
   # scoped/fast exits never print the PASS banner; each with a mutated-copy
   # negative control. Seconds; runs no cargo build.
-  "G-CI-SELF|HARD|light|-|bash $ROOT/.port/tools/ci.sh --self-test"
-  "G7|HARD|light|-|bash $GATES/check_acyclic.sh"
-  "G4|HARD|heavy|-|bash $GATES/run_differential.sh"
-  "G4-uni|HARD|heavy|tgt|bash $ROOT/.port/phase-0/harness/unicode/run_unicode_diff.sh"
+  "G-CI-SELF|HARD|light|tier=product|bash $ROOT/.port/tools/ci.sh --self-test"
+  "G7|HARD|light|tier=product|bash $GATES/check_acyclic.sh"
+  "G4|HARD|heavy|tier=parity|bash $GATES/run_differential.sh"
+  "G4-uni|HARD|heavy|tgt,tier=parity|bash $ROOT/.port/phase-0/harness/unicode/run_unicode_diff.sh"
   # G-LINT (2026-08-25) — the non-Rust linter lane: shellcheck, prettier,
   # typos, swiftlint, alejandra, pinact. The reference runs each as its own
   # `test.yml` job through `nix develop -c <tool>`; rustty's configs for all
@@ -646,11 +675,11 @@ GATE_REGISTRY=(
   # as of this commit. A linter that is not installed reports `skipped` by
   # name (and the gate exits 3 BLOCKED if EVERY lane is skipped) rather than
   # contributing a vacuous green — see the gate's header.
-  "G-LINT|HARD|light|-|bash $GATES/check_lints.sh"
+  "G-LINT|HARD|light|tier=product|bash $GATES/check_lints.sh"
   # G-MIRIRUN-SELF (NEW-FINDINGS N31) — the Miri runner's classifier over real
   # captured Miri outputs (ok / UB / LEAK / INTERP / BUILD / FAIL / TIMEOUT)
   # and its per-run work directory. Seconds; runs no Miri.
-  "G-MIRIRUN-SELF|HARD|light|-|bash $ROOT/.port/tools/miri-run.sh --self-test"
+  "G-MIRIRUN-SELF|HARD|light|tier=product|bash $ROOT/.port/tools/miri-run.sh --self-test"
   # G-CCONSUMER (2026-08-25) — the C/CMake/pkg-config consumer lane, the merge
   # of the reference's `build-cmake` + `test-lib-vt-pkgconfig` jobs. Nothing
   # here was exercised before: `cargo test` never invokes cmake, so a 400-line
@@ -662,8 +691,8 @@ GATE_REGISTRY=(
   # .pc from the install list -> "the install tree is incomplete").
   # G-CCONSUMER-SELF (parity tail P-1b): the install-layout check over fake
   # prefixes (complete tree passes; a missing soname link is RED).
-  "G-CCONSUMER-SELF|HARD|light|-|bash $GATES/check_c_consumer.sh --self-test"
-  "G-CCONSUMER|HARD|heavy|tgt|bash $GATES/check_c_consumer.sh"
+  "G-CCONSUMER-SELF|HARD|light|tier=product|bash $GATES/check_c_consumer.sh --self-test"
+  "G-CCONSUMER|HARD|heavy|tgt,tier=product|bash $GATES/check_c_consumer.sh"
   # G-EXAMPLES (2026-08-25) — build (and run) every example/ program, the
   # analog of the reference's list-examples + build-examples-* jobs. 32 example
   # programs were checked in and none were built by anything.
@@ -671,7 +700,7 @@ GATE_REGISTRY=(
   # example/*/build.sh"; this gate is what makes that true. HARD: 27 build and
   # run today. The 5 wasm examples belong to ci.sh's opt-in --webgl lane and
   # are reported skipped BY NAME, never counted as green.
-  "G-EXAMPLES|HARD|heavy|tgt|bash $GATES/check_examples.sh"
+  "G-EXAMPLES|HARD|heavy|tgt,tier=product|bash $GATES/check_examples.sh"
   # G-DIST (2026-08-25) — the source-tarball lane (the reference's build-dist /
   # build-dist-lib-vt). `xtask dist` was invoked from nothing but the release
   # workflows, so a broken tarball would first have surfaced DURING a release.
@@ -683,15 +712,15 @@ GATE_REGISTRY=(
   # runs only under
   # RUSTTY_DISTCHECK=1 (set by ci.yml on the Ubuntu leg); otherwise the gate
   # reports it skipped BY NAME rather than implying it ran.
-  "G-DIST|HARD|heavy|tgt|bash $GATES/check_dist.sh"
+  "G-DIST|HARD|heavy|tgt,tier=product|bash $GATES/check_dist.sh"
   # G-NIX (2026-08-26) — `nix flake check` + alejandra, the reference's
   # build-nix and alejandra jobs. Builds librustty-vt in a hermetic sandbox
   # with a pinned toolchain and runs the five passthru tests (symbols, both
   # .pc files, and a C consumer linked BOTH ways). BLOCKED, never green, where
   # nix is absent — which is every macOS leg here.
-  "G-NIX|HARD|heavy|-|bash $GATES/check_nix.sh"
+  "G-NIX|HARD|heavy|tier=product|bash $GATES/check_nix.sh"
   # Its dev-shell classifier's self-test (N489), a separate entry like G-XCF-SELF.
-  "G-NIX-SELF|HARD|light|-|bash $GATES/check_nix.sh --self-test"
+  "G-NIX-SELF|HARD|light|tier=product|bash $GATES/check_nix.sh --self-test"
   # G-XTARGET (2026-08-26) — cross-target BUILDS of rustty-vt-c (the
   # reference's build-libghostty-vt-{wasm,windows,...} legs). G-WINCHK is
   # `cargo check`-level and never runs the crates-sys C compiles for the
@@ -699,20 +728,20 @@ GATE_REGISTRY=(
   # std is missing, or that the host C compiler cannot target, are reported
   # skipped BY NAME; all-skipped exits 3 BLOCKED.
   # Its --self-test (review A-1 F1, F3) is a separate entry, as with G-XCF.
-  "G-XTARGET-SELF|HARD|light|-|bash $GATES/check_cross_targets.sh --self-test"
-  "G-XTARGET|HARD|heavy|tgt|bash $GATES/check_cross_targets.sh"
+  "G-XTARGET-SELF|HARD|light|tier=product|bash $GATES/check_cross_targets.sh --self-test"
+  "G-XTARGET|HARD|heavy|tgt,tier=product|bash $GATES/check_cross_targets.sh"
   # G-I18N (2026-08-26) — msgcmp every po/*.po against the .pot (the reference's
   # `translations` job). The i18n_msgid_coverage TEST checks the msgid set
   # against the sources; nothing looked at the 32 catalogues until now. The
   # reference's other arm (regenerate the .pot and diff) is deliberately NOT
   # ported yet — regeneration is known-lossy here — see the gate's header.
-  "G-I18N|HARD|light|-|bash $GATES/check_translations.sh"
+  "G-I18N|HARD|light|tier=product|bash $GATES/check_translations.sh"
   # G-BLUEPRINT (2026-08-26) — the reference's `blueprint-compiler` job. rustty
   # ported nix/build-support/check-blueprints.sh during the Nix work and wired
   # it to nothing; this runs it. Compiles all 19 .blp templates and checks they
   # are formatted, against a COPY so the gate is read-only. BLOCKED where
   # blueprint-compiler is absent (every macOS host).
-  "G-BLUEPRINT|HARD|light|-|bash $GATES/check_blueprints.sh"
+  "G-BLUEPRINT|HARD|light|tier=product|bash $GATES/check_blueprints.sh"
   # G-VALGRIND (2026-08-26) — the reference's `valgrind` job, and the closure of
   # a deferral check_leaks.sh named in its own header: FFI *leak* detection was
   # thought impossible on arm64 macOS (no valgrind; LSan believed absent, which
@@ -725,8 +754,8 @@ GATE_REGISTRY=(
   # prove the shard partition, the named skips (stale ones RED), child-process
   # error summaries, build failure RED, OWN_JOB BLOCKED and, on the real
   # DEFAULT_SCOPE rows, the workspace-member and feature-lane checks.
-  "G-VALGRIND-SELF|HARD|light|-|bash $GATES/check_valgrind.sh --self-test"
-  "G-VALGRIND|HARD|heavy|dir=valgrind,shard,scope=args|bash $GATES/check_valgrind.sh"
+  "G-VALGRIND-SELF|HARD|light|tier=product|bash $GATES/check_valgrind.sh --self-test"
+  "G-VALGRIND|HARD|heavy|dir=valgrind,shard,scope=args,tier=product|bash $GATES/check_valgrind.sh"
   # G-ASAN / G-LSAN / G-MSAN (P7-W14, 2026-10-01) — the sanitizer matrix of the
   # memory-safety-lanes design (docs/superpowers/specs/2026-10-01-memory-
   # safety-lanes-design.md §B). sanitizers.sh existed as a one-crate harness
@@ -753,10 +782,10 @@ GATE_REGISTRY=(
   # uninitialized read must each turn its sanitizer RED, a clean control GREEN,
   # a filter matching nothing a vacuous RED, plus the classifier, the cross-
   # check and the BLOCKED arms over fixtures.
-  "G-SAN-SELF|HARD|heavy|-|bash $GATES/sanitizers.sh --self-test"
-  "G-ASAN|HARD|heavy|scope=env:SAN_ONLY|bash $GATES/sanitizers.sh --gate asan"
-  "G-LSAN|HARD|heavy|scope=env:SAN_ONLY|bash $GATES/sanitizers.sh --gate lsan"
-  "G-MSAN|HARD|heavy|scope=env:SAN_ONLY|bash $GATES/sanitizers.sh --gate msan"
+  "G-SAN-SELF|HARD|heavy|tier=product|bash $GATES/sanitizers.sh --self-test"
+  "G-ASAN|HARD|heavy|scope=env:SAN_ONLY,tier=product|bash $GATES/sanitizers.sh --gate asan"
+  "G-LSAN|HARD|heavy|scope=env:SAN_ONLY,tier=product|bash $GATES/sanitizers.sh --gate lsan"
+  "G-MSAN|HARD|heavy|scope=env:SAN_ONLY,tier=product|bash $GATES/sanitizers.sh --gate msan"
   # G-HWASAN (P7-W16b, 2026-10-02) — HWAddressSanitizer (-Zbuild-std, tagged
   # globals, lld; the cc-built C instrumented) over the same scope as G-ASAN,
   # with the same Miri-exception cross-check. Its pointer tags also catch an
@@ -764,7 +793,7 @@ GATE_REGISTRY=(
   # aarch64 Linux only (rustc rejects hwaddress elsewhere): runs on rvm; on
   # macOS and x86_64 Linux, including every ci.yml leg, it is BLOCKED naming
   # the host (no hosted job runs it yet: V31). Hours, so --fast skips it.
-  "G-HWASAN|HARD|heavy|scope=env:SAN_ONLY|bash $GATES/sanitizers.sh --gate hwasan"
+  "G-HWASAN|HARD|heavy|scope=env:SAN_ONLY,tier=product|bash $GATES/sanitizers.sh --gate hwasan"
   # G-TSAN (P7-W17, 2026-10-06) — ThreadSanitizer (-Zbuild-std; the cc-built
   # C instrumented through the tsan-cc wrapper and checked for __tsan_
   # references) over the design's threaded crates (TSAN_SCOPE in
@@ -772,7 +801,7 @@ GATE_REGISTRY=(
   # rustty-vt with the vt search thread, rustty-vt-c). Every race report is
   # RED; suppressions only in .port/phase-2/tsan.supp with a cited reason.
   # macOS and Linux; BLOCKED on any other host. Long, so --fast skips it.
-  "G-TSAN|HARD|heavy|scope=env:SAN_ONLY|bash $GATES/sanitizers.sh --gate tsan"
+  "G-TSAN|HARD|heavy|scope=env:SAN_ONLY,tier=product|bash $GATES/sanitizers.sh --gate tsan"
   # G-LSAN-GTK (P7-W24) — N502's Linux coverage gap: no test G-LSAN runs on
   # Linux creates and closes a core Surface (on Linux one comes only from the
   # GTK runtime, whose live tests need a compositor). This runs one,
@@ -782,7 +811,7 @@ GATE_REGISTRY=(
   # negative controls). Linux only; BLOCKED elsewhere, without sway, and in
   # ci.yml (no hosted job: V33). Builds the GTK apprt instrumented, so --fast
   # skips it.
-  "G-LSAN-GTK|HARD|heavy|scope=crate:rustty-apprt|bash $GATES/sanitizers.sh --gate lsan-gtk"
+  "G-LSAN-GTK|HARD|heavy|scope=crate:rustty-apprt,tier=product|bash $GATES/sanitizers.sh --gate lsan-gtk"
   # G-XCF (2026-08-26) — the XCFramework structure/ABI lane, the adapted port
   # of the reference's check-apple-libghostty-vt.nu. Adapted because rustty
   # ships a STATIC ARCHIVE where the reference ships a dylib: no Mach-O dylib
@@ -796,21 +825,21 @@ GATE_REGISTRY=(
   # Two entries, not `--self-test && <gate>`: run_gate executes its command
   # as a word-split argv, not through a shell, so `&&` reached the script as an
   # argument and only the self-test ever ran (found by parity tail P-1b).
-  "G-XCF-SELF|HARD|light|-|bash $GATES/check_xcframework.sh --self-test"
-  "G-XCF|HARD|heavy|tgt|bash $GATES/check_xcframework.sh"
+  "G-XCF-SELF|HARD|light|tier=product|bash $GATES/check_xcframework.sh --self-test"
+  "G-XCF|HARD|heavy|tgt,tier=product|bash $GATES/check_xcframework.sh"
   # G-FEATMATRIX (2026-08-26) — the reference's test-pkg-linux (build a pkg/
   # subproject ALONE) and test-sentry-linux (build both sides of a build
   # option). Standalone builds are not redundant with `cargo build
   # --workspace`: Cargo unifies features across a workspace, so a crate that
   # forgets one of its own still compiles there and breaks for anyone who
   # depends on it alone.
-  "G-FEATMATRIX|HARD|heavy|tgt|bash $GATES/check_feature_matrix.sh"
+  "G-FEATMATRIX|HARD|heavy|tgt,tier=product|bash $GATES/check_feature_matrix.sh"
   # G-FONTBACKEND (S-14, N266) — the reference's `build-macos-freetype` job:
   # `-Dfont-backend=coretext_freetype` tested and the tree built, plus every
   # other backend the port builds on macOS (coretext_harfbuzz, coretext_noshape,
   # freetype, fontconfig_freetype, freetype_windows) clippy'd and tested. Each run asserts, through RUSTTY_EXPECT_FONT_BACKEND, that
   # its feature really selected that backend. macOS-only; BLOCKED elsewhere.
-  "G-FONTBACKEND|HARD|heavy|tgt|bash $GATES/check_font_backends.sh"
+  "G-FONTBACKEND|HARD|heavy|tgt,tier=product|bash $GATES/check_font_backends.sh"
   # G-EOL (2026-08-26) — byte fidelity of the corpora, fixtures and vendored
   # trees. `.gitattributes` opens with `* text=auto` and guarded the byte-exact
   # fixtures by EXTENSION, but fuzz corpus seeds have none — so git normalized
@@ -820,7 +849,7 @@ GATE_REGISTRY=(
   # it and existed only for anyone who cloned; the replay test read the working
   # tree and was green either way. HARD: green, and a demonstrated RED flip
   # (delete the corpora path rule -> "still under line-ending conversion").
-  "G-EOL|HARD|light|-|bash $GATES/check_eol_fidelity.sh"
+  "G-EOL|HARD|light|tier=parity|bash $GATES/check_eol_fidelity.sh"
   # G-ORACLE-SH-SELF (R13-GF2) — the shell twin of `_gatelib.oracle_root`.
   # G-EOL, G4 and the macOS menu-shortcut parity harness used to read the
   # oracle from an environment variable (GHOSTTY_ORACLE / GHOSTTY /
@@ -836,7 +865,7 @@ GATE_REGISTRY=(
   # `git -C "$ORACLE"` or a second assignment of the oracle variable; and the
   # `--self-test-oracle` arms of G4, G-BENCH, G-LZ4 and A5. An arm that cannot
   # check (no python3, no node) makes it exit 3 BLOCKED, never GREEN.
-  "G-ORACLE-SH-SELF|HARD|light|-|bash $GATES/_oracle_root.sh --self-test"
+  "G-ORACLE-SH-SELF|HARD|light|tier=parity|bash $GATES/_oracle_root.sh --self-test"
   # G-XTASK (2026-08-26) — the xtask subcommands nothing else ran. xtask IS
   # rustty's build.zig; grepping every `xtask -- <cmd>` across .port/tools and
   # .github/workflows found `resources`, `gen`, `wasm-patch-growable-table` and
@@ -847,7 +876,7 @@ GATE_REGISTRY=(
   # and --flatpak arms are pure file generation, so they run from any host and
   # are asserted DIFFERENTIALLY (the plain arm must emit the systemd wiring and
   # a >512 icon that the flatpak arm must then drop) rather than by presence.
-  "G-XTASK|HARD|light|tgt|bash $GATES/check_xtask_surface.sh"
+  "G-XTASK|HARD|light|tgt,tier=product|bash $GATES/check_xtask_surface.sh"
   # G-DOXYGEN (2026-08-26) — the C-API reference generates, and cleanly. The
   # Doxyfile, DoxygenLayout.xml and all six dist/doxygen assets were ported and
   # `doxygen` then ran from NOWHERE, while the Doxyfile's INPUT
@@ -857,7 +886,7 @@ GATE_REGISTRY=(
   # text byte-identical to the reference's (`rgb:<red>/<green>/<blue>`), and
   # demanding zero would force a faithfully-ported comment to diverge from its
   # source. BLOCKED where doxygen is absent.
-  "G-DOXYGEN|HARD|light|-|bash $GATES/check_doxygen.sh"
+  "G-DOXYGEN|HARD|light|tier=product|bash $GATES/check_doxygen.sh"
   # G-REL (WS18) — the `--release` test lane. Steps 3/4 above only ever exercise
   # the DEBUG profile, so nothing noticed that release had rotted to 22 failures
   # across 7 targets. Most were tests driving a seam the port deliberately
@@ -867,7 +896,7 @@ GATE_REGISTRY=(
   # NEW release-only failure — or a new injection test that forgot the attribute
   # — from going unnoticed again. HARD: it is green today and its verdict has a
   # `--self-test` RED-flip proof.
-  "G-REL|HARD|heavy|tgt|bash $GATES/check_release_lane.sh"
+  "G-REL|HARD|heavy|tgt,tier=product|bash $GATES/check_release_lane.sh"
   # G-GTKINIT (WS19 T4, audit row N3) — one `gtk4::init()` per test binary. GTK is
   # thread-pinned and libtest gives every `#[test]` its own thread, so a second
   # `gtk4::init()` in one binary ALWAYS panics. `tests/gtk_wayland_winproto.rs`
@@ -876,7 +905,7 @@ GATE_REGISTRY=(
   # macOS too, where those KATs cannot even compile, so a macOS lane catches a bad
   # merge. HARD: green at landing, milliseconds, and BOTH its FAIL arms (doubled
   # init; vacuous zero-match) are mutation-proven.
-  "G-GTKINIT|HARD|light|-|bash $GATES/check_gtk_one_init.sh"
+  "G-GTKINIT|HARD|light|tier=product|bash $GATES/check_gtk_one_init.sh"
   # G-SKIP (PORT_RULES R14, 2026-09-23) — no silent skips in test code. A Rust
   # test that returns early reports `ok`, so a skip on a missing resource (Metal,
   # GL, a display, a font, the corpus, a feature, the OS) made a lane that lost
@@ -892,8 +921,8 @@ GATE_REGISTRY=(
   # macOS). SELF first (the G-CENSUS-SELF convention): 21 synthetic arms prove
   # each RED and each accept path, the dead-guard re-verification, and the
   # stale / over-cap allow-list arms. HARD: green at landing, about a second.
-  "G-SKIP-SELF|HARD|light|-|$PY $GATES/check_silent_skips.py --self-test"
-  "G-SKIP|HARD|light|-|$PY $GATES/check_silent_skips.py"
+  "G-SKIP-SELF|HARD|light|tier=product|$PY $GATES/check_silent_skips.py --self-test"
+  "G-SKIP|HARD|light|tier=product|$PY $GATES/check_silent_skips.py"
   # G-P2 (WS19 T19) — the Phase 2 CLOSURE gate, and the standing invariant that keeps
   # Phase 2 closed. It parses the four Phase-2 ledgers and FAILS if any open item lacks
   # an owner in an OPEN workstream, where "open workstream" is DERIVED from the ROADMAP's
@@ -913,8 +942,8 @@ GATE_REGISTRY=(
   # G-P2 could mean "nothing is open" or "the checker stopped binding", and those look
   # identical from the outside.
   # Two entries, for the same run_gate argv reason as G-XCF (P-1b).
-  "G-P2-SELF|HARD|light|-|$PY $GATES/check_phase2_closure.py --self-test"
-  "G-P2|HARD|light|-|$PY $GATES/check_phase2_closure.py"
+  "G-P2-SELF|HARD|light|tier=parity|$PY $GATES/check_phase2_closure.py --self-test"
+  "G-P2|HARD|light|tier=parity|$PY $GATES/check_phase2_closure.py"
   # G-XEVREACH (WS20, 2026-07-30 — was G-XEVSCOPE, WS19 T7). The gate's FACT is
   # unchanged; its CONCLUSION is deleted. It used to justify classifying the
   # `iocp`/`wasi_poll` backends as "out of scope by platform" — that
@@ -940,7 +969,7 @@ GATE_REGISTRY=(
   # inventory, so a file upstream ADDED after the pin is invisible to all three
   # — which is how three post-pin files sat unexamined until the file-level
   # audit. An absence is acceptable only when ARGUED in NON_PORTS.md.
-  "G-FILES|HARD|light|-|$PY $ROOT/.port/tools/audit_file_coverage.py"
+  "G-FILES|HARD|light|tier=parity|$PY $ROOT/.port/tools/audit_file_coverage.py"
   # G-SYMS (2026-07-31). Pass 2 of the audit: G-FILES proves a counterpart FILE
   # exists; this proves every oracle `pub fn` has a counterpart SYMBOL. A file
   # can exist, be the right size, cite its oracle source and still be missing
@@ -952,8 +981,8 @@ GATE_REGISTRY=(
   # and requires ABSENT; P8-W10 FX10 added arm [d]: a top-level Terminal.zig
   # method matched only in an unrelated file that mentions `terminal` must stay
   # ABSENT (no module-stem fallback). Its own HARD entry, like G-TESTS-SELF.
-  "G-SYMS-SELF|HARD|light|-|$PY $ROOT/.port/tools/audit_symbol_coverage.py --self-test"
-  "G-SYMS|HARD|light|-|$PY $ROOT/.port/tools/audit_symbol_coverage.py"
+  "G-SYMS-SELF|HARD|light|tier=parity|$PY $ROOT/.port/tools/audit_symbol_coverage.py --self-test"
+  "G-SYMS|HARD|light|tier=parity|$PY $ROOT/.port/tools/audit_symbol_coverage.py"
   # G-TESTS (2026-07-31). Pass 3, and the same frozen-inventory blind spot one
   # level down: G1 compares test blocks against `.port/phase-0/inventory/`
   # captured at 4749c4e93, so a test upstream added since the pin is in neither
@@ -967,8 +996,8 @@ GATE_REGISTRY=(
   # and requires the gate to notice. If the self-test is red the gate's verdict
   # means nothing, so it runs as its own HARD entry rather than as a flag on the
   # main one.
-  "G-TESTS-SELF|HARD|light|-|$PY $ROOT/.port/tools/audit_test_coverage.py --self-test"
-  "G-TESTS|HARD|light|-|$PY $ROOT/.port/tools/audit_test_coverage.py"
+  "G-TESTS-SELF|HARD|light|tier=parity|$PY $ROOT/.port/tools/audit_test_coverage.py --self-test"
+  "G-TESTS|HARD|light|tier=parity|$PY $ROOT/.port/tools/audit_test_coverage.py"
   # G-CENSUS (2026-07-31) — the same blind spot as G-FILES/G-SYMS/G-TESTS, but
   # for the NUMBERS. G1/G1b/G2 measure against the phase-0 inventory frozen at
   # 4749c4e93; re-running that same tokenizer against the live tree at 6ad1fe7d8
@@ -979,9 +1008,9 @@ GATE_REGISTRY=(
   # denominator of every historical completion claim. This gate does not demand
   # a zero delta; it demands the delta be written down, so it cannot widen
   # unnoticed the next time the pin moves.
-  "G-CENSUS-SELF|HARD|light|-|$PY $GATES/check_census_staleness.py --self-test"
-  "G-CENSUS|HARD|light|-|$PY $GATES/check_census_staleness.py"
-  "G-ONIG|HARD|light|tgt|bash $GATES/check_oniguruma_lane.sh"
+  "G-CENSUS-SELF|HARD|light|tier=parity|$PY $GATES/check_census_staleness.py --self-test"
+  "G-CENSUS|HARD|light|tier=parity|$PY $GATES/check_census_staleness.py"
+  "G-ONIG|HARD|light|tgt,tier=product|bash $GATES/check_oniguruma_lane.sh"
   # G-VTCLIB (2026-08-10, codex-vet W36-B03) — the lib-vt C artifact must keep
   # the oracle's NULL decode_png default (sys.zig:16-20 `.lib => null`;
   # GhosttyZig.zig:67-68 pins artifact=.lib). Cargo feature UNIFICATION is the
@@ -996,8 +1025,8 @@ GATE_REGISTRY=(
   # path is proven reachable by re-running the test with
   # `--features rustty-vt/wuffs`, which must go red — if it cannot, the main
   # entry's green means nothing.
-  "G-VTCLIB-SELF|HARD|light|tgt|bash $GATES/check_vtc_lib_isolation.sh --self-test"
-  "G-VTCLIB|HARD|light|tgt|bash $GATES/check_vtc_lib_isolation.sh"
+  "G-VTCLIB-SELF|HARD|light|tgt,tier=product|bash $GATES/check_vtc_lib_isolation.sh --self-test"
+  "G-VTCLIB|HARD|light|tgt,tier=product|bash $GATES/check_vtc_lib_isolation.sh"
   # G-ARTIFACT (2026-09-23, parity S6-F2 Decision A) — the other half of the
   # artifact split. rustty-vt carries a process-wide RUN-TIME artifact value
   # (`options::runtime_artifact()`) that rustty-vt-c sets to `Lib` in
@@ -1008,8 +1037,8 @@ GATE_REGISTRY=(
   # in options.rs), and only rustty-web-canvas may depend on rustty-vt-c
   # (`cargo metadata --no-deps`; review-T-H2 blocking 3). STATIC, every OS,
   # about a second. SELF first: synthetic arms prove each RED and GREEN.
-  "G-ARTIFACT-SELF|HARD|light|-|$PY $GATES/check_runtime_artifact_setter.py --self-test"
-  "G-ARTIFACT|HARD|light|-|$PY $GATES/check_runtime_artifact_setter.py"
+  "G-ARTIFACT-SELF|HARD|light|tier=product|$PY $GATES/check_runtime_artifact_setter.py --self-test"
+  "G-ARTIFACT|HARD|light|tier=product|$PY $GATES/check_runtime_artifact_setter.py"
   # G-VTALLOC (2026-09-24, parity tail S7-1, N261) — allocator_api2's stable
   # `Vec::{extend_from_slice, resize}` are per-element loops (+81% on
   # screen-clone.render when RenderState moved onto them); the vt crates ban
@@ -1018,8 +1047,8 @@ GATE_REGISTRY=(
   # identical, both paths, no `allow` escape); the SELF entry proves on a
   # fixture crate that each config flags exactly the two banned calls and that
   # no config flags nothing (the ban cannot silently stop resolving).
-  "G-VTALLOC-SELF|HARD|light|-|bash $GATES/check_vt_alloc_vec_ban.sh --self-test"
-  "G-VTALLOC|HARD|light|-|bash $GATES/check_vt_alloc_vec_ban.sh"
+  "G-VTALLOC-SELF|HARD|light|tier=product|bash $GATES/check_vt_alloc_vec_ban.sh --self-test"
+  "G-VTALLOC|HARD|light|tier=product|bash $GATES/check_vt_alloc_vec_ban.sh"
   # G-GTKFEAT (2026-07-31) — the same hole as G-ONIG, one crate over. The
   # workspace clippy lane above builds with DEFAULT features, and rustty-apprt's
   # gtk/wayland/x11 features are default-OFF, so ~30k lines of ported GTK4/
@@ -1030,8 +1059,8 @@ GATE_REGISTRY=(
   # since losing a whole backend moves a 140-test delta by only 3 — so it cannot
   # go green by linting an empty shell. Exits 3 BLOCKED (a WARNING, never a pass)
   # on non-Linux, where --features gtk resolves to a no-op.
-  "G-GTKFEAT|HARD|light|tgt|bash $GATES/check_gtk_feature_lane.sh"
-  "G-XEVREACH|HARD|light|-|sh $GATES/xev_scope_boundary_gate.sh"
+  "G-GTKFEAT|HARD|light|tgt,tier=product|bash $GATES/check_gtk_feature_lane.sh"
+  "G-XEVREACH|HARD|light|tier=product|sh $GATES/xev_scope_boundary_gate.sh"
   # G-BENCH (WS10 T4) — the `rustty-bench` unit-test lane, debug AND --release.
   # `B-compression.md` §4.5 records "`rustty-bench` is in NO gate". Half right:
   # the crate is a workspace member, so a FAILING bench test already fails
@@ -1043,7 +1072,7 @@ GATE_REGISTRY=(
   # live one. HARD: green at landing (14 tests, both profiles, <1 s) and its
   # count arm is mutation-proven both synthetically (`--self-test`, 4 arms) and
   # live (floor raised to 15 against the real crate -> exit 1).
-  "G-BENCH|HARD|light|tgt|bash $GATES/check_bench_tests.sh"
+  "G-BENCH|HARD|light|tgt,tier=product|bash $GATES/check_bench_tests.sh"
   # G-WINCHK (2026-08-11, codex-vet F-001 / W2D_WINDOWS_OS) — the shared OS layer
   # plus VT and VT-C must TYPE-CHECK for `x86_64-pc-windows-msvc`. The oracle
   # CI-tests exactly this surface (`build-libghostty-vt-windows`,
@@ -1056,7 +1085,7 @@ GATE_REGISTRY=(
   # the host check with `RUSTTY_SYS_CHECK_ONLY` UNSET, so the check-only `-sys`
   # skip cannot silently swallow the native build. Exits 3 BLOCKED (a warning,
   # never a pass) when the windows rust-std is not installed.
-  "G-WINCHK|HARD|light|tgt|bash $GATES/w2f001_windows_check_gate.sh"
+  "G-WINCHK|HARD|light|tgt,tier=product|bash $GATES/w2f001_windows_check_gate.sh"
   # G-XEV-IOS (wired 2026-08-26, unimplemented-leaf gap-close) — the rustty-xev
   # Darwin-gate parity gate. libxev maps `.ios`/`.visionos` onto kqueue exactly
   # as it maps `.macos`, but the port gated its kqueue family on macos+freebsd
@@ -1069,7 +1098,7 @@ GATE_REGISTRY=(
   # never a pass) when the aarch64-apple-ios rust-std is not installed. Its FAIL
   # arm is proven reachable by `--self-test`, which reintroduces the exact bug
   # and requires the in-crate seam fence to fire.
-  "G-XEV-IOS|HARD|light|tgt|bash $GATES/xev_ios_kqueue_gate.sh"
+  "G-XEV-IOS|HARD|light|tgt,tier=product|bash $GATES/xev_ios_kqueue_gate.sh"
   # G-WINPROTO-DEFAULT (wired 2026-08-11, W2D §E/WI-14; the script predates this
   # and had never been on any roster) — the DEFAULT GUI dependency graph, pinned
   # per target. It was F-007's Linux/macOS predicate (both winproto arms on Linux,
@@ -1082,7 +1111,7 @@ GATE_REGISTRY=(
   # "FreeBSD — the platform's explicit ledger row"). `cargo tree` resolves without
   # building, so this is cheap and host-agnostic; the macOS control arm keeps it
   # from passing merely because a target gate stopped gating.
-  "G-WINPROTO-DEFAULT|HARD|light|-|bash $GATES/check_default_linux_winproto.sh"
+  "G-WINPROTO-DEFAULT|HARD|light|tier=product|bash $GATES/check_default_linux_winproto.sh"
   # G1-SELF — G1's own flip proof, HARD for the same reason G-TESTS-SELF is:
   # G1 subtracts the contract entries upstream DELETED or RENAMED
   # (.port/phase-3/CONTRACT_DELETIONS.md), and an exemption mechanism nobody has
@@ -1092,13 +1121,13 @@ GATE_REGISTRY=(
   # that commit, successor not ported) plus the original synthetic-crate arms.
   # Arms 3/3b/4 were added after the first pass caught a wrong sha in the
   # original twelve rows (`os::args` cited a commit that never touched the file).
-  "G1-SELF|HARD|light|-|$PY $GATES/check_tests_ported.py --self-test"
-  "G1|PROGRESS|light|-|$PY $GATES/check_tests_ported.py"
-  "G1b|PROGRESS|light|-|run_test_counts"
-  "G2|PROGRESS|light|-|$PY $GATES/check_assertions.py"
-  "G3|PROGRESS|light|-|$PY $GATES/check_comments_fidelity.py"
-  "G3b|PROGRESS|light|-|$PY $GATES/check_comment_coverage.py"
-  "G9|PROGRESS|light|-|$PY $GATES/check_parity_surface.py"
+  "G1-SELF|HARD|light|tier=parity|$PY $GATES/check_tests_ported.py --self-test"
+  "G1|PROGRESS|light|tier=parity|$PY $GATES/check_tests_ported.py"
+  "G1b|PROGRESS|light|tier=parity|run_test_counts"
+  "G2|PROGRESS|light|tier=parity|$PY $GATES/check_assertions.py"
+  "G3|PROGRESS|light|tier=parity|$PY $GATES/check_comments_fidelity.py"
+  "G3b|PROGRESS|light|tier=parity|$PY $GATES/check_comment_coverage.py"
+  "G9|PROGRESS|light|tier=parity|$PY $GATES/check_parity_surface.py"
   # G-PARITY (phase-6-W1) — every audited parity finding is closed, waived-with-
   # reason, or open. The ledger in .port/parity-closure/LEDGER.tsv is the single
   # source of truth; this gate is the only thing that reads its `state` column.
@@ -1106,8 +1135,8 @@ GATE_REGISTRY=(
   # so a reopened or unjustified row fails CI. The self-test is HARD and covers
   # all three RED arms (open row, unjustified waiver, unknown state) so the gate
   # cannot rot into a vacuous green.
-  "G-PARITY-SELF|HARD|light|-|$PY $GATES/check_parity_closure.py --self-test"
-  "G-PARITY|HARD|light|-|$PY $GATES/check_parity_closure.py"
+  "G-PARITY-SELF|HARD|light|tier=parity|$PY $GATES/check_parity_closure.py --self-test"
+  "G-PARITY|HARD|light|tier=parity|$PY $GATES/check_parity_closure.py"
   # G-UDDOCS (P7-W0 T2, DECISIONS.md R2) — the UD <-> docs check, tracked as a
   # standing gate instead of task S-6's one-shot script. Every UD entry
   # (.port/parity-closure/UPSTREAM-DEFECTS.md) has exactly one `- upstream
@@ -1116,8 +1145,8 @@ GATE_REGISTRY=(
   # (`- upstream status: fixed upstream in ...`), which has no behavioural
   # difference left to document and is exempt. HARD from day one: it is GREEN
   # at 178 UDs, and R5 keeps a UD/docs drift from ever going unnoticed.
-  "G-UDDOCS-SELF|HARD|light|-|$PY $GATES/check_ud_docs.py --self-test"
-  "G-UDDOCS|HARD|light|-|$PY $GATES/check_ud_docs.py"
+  "G-UDDOCS-SELF|HARD|light|tier=parity|$PY $GATES/check_ud_docs.py --self-test"
+  "G-UDDOCS|HARD|light|tier=parity|$PY $GATES/check_ud_docs.py"
   # G-LOGFILE (task 14gate) — the SAME blind spot as G-CENSUS, but for
   # DIAGNOSTICS. G-PARITY counts ROWS, and every row cites a RANGE of reference
   # lines, so whatever falls outside every row's range is unaudited and no row
@@ -1175,8 +1204,8 @@ GATE_REGISTRY=(
   # does not. Nothing here is
   # env-settable (R5); an absent or off-pin oracle checkout is 3 BLOCKED, never a
   # vacuous green.
-  "G-LOGFILE-SELF|HARD|light|-|$PY $GATES/check_log_reconcile.py --self-test"
-  "G-LOGFILE|HARD|light|-|$PY $GATES/check_log_reconcile.py"
+  "G-LOGFILE-SELF|HARD|light|tier=parity|$PY $GATES/check_log_reconcile.py --self-test"
+  "G-LOGFILE|HARD|light|tier=parity|$PY $GATES/check_log_reconcile.py"
   # G-REFGEOM (tasks R13-L2, R13-L3; NEW-FINDINGS N88/N91) — the reference's
   # style and hyperlink set-item geometry, re-measured by compiling a probe into
   # a scratch copy of the pinned oracle for aarch64-macos, aarch64-linux-gnu and
@@ -1191,8 +1220,8 @@ GATE_REGISTRY=(
   # re-measurement of the reference catches it (about 90 s). The self-test
   # needs neither Zig nor the oracle (a stand-in zig and a fixture oracle), so
   # it binds on CI too.
-  "G-REFGEOM-SELF|HARD|light|-|$PY $GATES/check_ref_item_geometry.py --self-test"
-  "G-REFGEOM|HARD|light|-|$PY $GATES/check_ref_item_geometry.py"
+  "G-REFGEOM-SELF|HARD|light|tier=parity|$PY $GATES/check_ref_item_geometry.py --self-test"
+  "G-REFGEOM|HARD|light|tier=parity|$PY $GATES/check_ref_item_geometry.py"
   # G-ESCTEST (P8-W8 T1; DECISIONS P3; upstream 438d584f0, edcaf6670) — esctest2
   # against librustty-vt must fail exactly where it fails against
   # libghostty-vt. Runs the port's `test/esctest` runner and the reference's
@@ -1206,13 +1235,13 @@ GATE_REGISTRY=(
   # python3 or the network (esctest2 is fetched by test/esctest/fetch.sh,
   # SHA-256 checked), as on CI, where ci.yml's report-only `test-esctest` job
   # runs the port's side. About 70 s. The self-test needs none of them.
-  "G-ESCTEST-SELF|HARD|light|-|bash $GATES/check_esctest.sh --self-test"
-  "G-ESCTEST|HARD|light|tgt|bash $GATES/check_esctest.sh"
+  "G-ESCTEST-SELF|HARD|light|tier=parity|bash $GATES/check_esctest.sh --self-test"
+  "G-ESCTEST|HARD|light|tgt,tier=parity|bash $GATES/check_esctest.sh"
   # G8b-SELF (P8 CI speed-up review I6) — G8b's exit mapping against a fake
   # harness: a crash, a usage error and a fence RED stay RED; only the
   # dedicated pre-measurement load check is BLOCKED (and measures nothing).
   # Control: the reviewed blanket remap turns the crash BLOCKED. Seconds.
-  "G8b-SELF|HARD|light|-|bash $GATES/check_perf_fence.sh --self-test"
+  "G8b-SELF|HARD|light|tier=parity|bash $GATES/check_perf_fence.sh --self-test"
   # G8b — the real perf regression fence (paired, same-session, vs a stored
   # binary). BLOCKS (2/3) rather than passing when the box is loaded or the
   # untracked oracle binary/corpora are absent. MUST precede G8: it emits the
@@ -1220,7 +1249,7 @@ GATE_REGISTRY=(
   # present, G8b first runs every size label's `rustty_build` from BASELINE.json
   # (the release-fast bench and rustty-gen, the vt-c release libraries; nothing
   # earlier in this script builds them), so G8 never measures a stale artifact.
-  "G8b|PERF-FENCE|heavy|tgt,exclusive|bash $GATES/check_perf_fence.sh --build --emit-metrics $PERF_METRICS"
+  "G8b|PERF-FENCE|heavy|tgt,exclusive,tier=parity|bash $GATES/check_perf_fence.sh --build --emit-metrics $PERF_METRICS"
   # G8 is ARMED once G8b has emitted that metrics file; with no substrate
   # present G8b BLOCKs, the file is absent, and G8 falls back to progress mode.
   # --strict (P7-W22, V16 DISCHARGED): G8b's metrics file now carries the size
@@ -1231,9 +1260,9 @@ GATE_REGISTRY=(
   # still absent is reported NOT-MEASURED, never passed.
   # The timing axis still compares against the retired 4749c4e93 series until
   # V17's idle re-base; --strict adds no timing check that was not already run.
-  "G8|ARMED|heavy|after=G8b,exclusive|$PY $GATES/check_baseline_regression.py --strict --metrics $PERF_METRICS"
-  "G5|PROGRESS|heavy|tgt|bash $GATES/run_fuzz_smoke.sh"
-  "G6|PROGRESS|heavy|dir=miri-g6,scope=env:G6_ONLY|bash $GATES/check_leaks.sh --all-done"
+  "G8|ARMED|heavy|after=G8b,exclusive,tier=parity|$PY $GATES/check_baseline_regression.py --strict --metrics $PERF_METRICS"
+  "G5|PROGRESS|heavy|tgt,tier=product|bash $GATES/run_fuzz_smoke.sh"
+  "G6|PROGRESS|heavy|dir=miri-g6,scope=env:G6_ONLY,tier=product|bash $GATES/check_leaks.sh --all-done"
   # G6b — PageList compressed-page encodings are not leaked (WS7 Phase E).
   # `CompressedPage::encoded` is a GLOBAL-allocator Vec, so the page-allocator
   # leak accounting cannot see it and G6's Miri lane cannot reach it (the
@@ -1244,7 +1273,7 @@ GATE_REGISTRY=(
   # `leakcheck` scenario (milliseconds, no Miri). HARD: green today, fast, and its
   # FAIL arm is proven reachable by `--self-test` (a negative control that
   # `mem::forget`s a compressed list, i.e. the real leak via the real path).
-  "G6b|HARD|light|-|bash $GATES/check_pagelist_compress_leaks.sh"
+  "G6b|HARD|light|tier=product|bash $GATES/check_pagelist_compress_leaks.sh"
   # G6c — the `-C debug-assertions=off` vt Miri lane (WS19 T6, closure-audit row
   # O2). ADDITIVE to G6, never a replacement: G6 keeps debug assertions ON (that
   # is what upholds the integrity-assertion coverage, and without the existing
@@ -1260,7 +1289,7 @@ GATE_REGISTRY=(
   # the same bedding-in convention the D1-D9 detectors use; it is a multi-minute
   # Miri lane on a shared host, so a loaded machine must not make CI
   # un-passable (R5). Promote to HARD once it has ridden clean.
-  "G6c|PROGRESS|heavy|dir=miri-g6c,scope=crate:rustty-vt|bash $GATES/check_leaks.sh --debug-assertions-off"
+  "G6c|PROGRESS|heavy|dir=miri-g6c,scope=crate:rustty-vt,tier=product|bash $GATES/check_leaks.sh --debug-assertions-off"
   # G6t — Miri Tree Borrows over the pointer-heavy modules and crates (P7-W15;
   # memory-safety-lanes design §A). ADDITIVE (R5): G6 stays the full Stacked
   # Borrows lane; G6t runs the forward-looking model where long-lived raw
@@ -1268,7 +1297,7 @@ GATE_REGISTRY=(
   # debug assertions. Its scope lives in one place (check_leaks.sh G6T_SCOPE)
   # and `--tree-borrows --self-test` proves each entry matches tests, plus the
   # UB/leak, vacuity and flag-loss arms. Same tier as G6.
-  "G6t|PROGRESS|heavy|dir=miri-g6t,scope=env:G6_ONLY|bash $GATES/check_leaks.sh --tree-borrows"
+  "G6t|PROGRESS|heavy|dir=miri-g6t,scope=env:G6_ONLY,tier=product|bash $GATES/check_leaks.sh --tree-borrows"
   # D1-D9 — Bun semantic-mismatch detectors (.port/phase-2/BUN_PORT_LEARNINGS.md
   # §4). Each kills one class of the invisible Zig->Rust divergence that slipped
   # every Bun gate. They are ADDITIVE (weaken no existing gate, R5). Registered
@@ -1283,9 +1312,9 @@ GATE_REGISTRY=(
   # (exit 0 + a review list); the fail-closed ones (D1/D2/D4/D6) still surface a
   # real RED — and in ci.sh's run_gate a PROGRESS RED (non-0/non-3) is still a
   # HARD_FAILURE, so a genuine regression is never silently swallowed.
-  "D1|PROGRESS|light|-|bash $GATES/check_slice_reinterpret.sh"
-  "D2|PROGRESS|light|-|bash $GATES/check_capacity_saturation.sh"
-  "D3|PROGRESS|light|-|$PY $GATES/check_constants_parity.py"
+  "D1|PROGRESS|light|tier=parity|bash $GATES/check_slice_reinterpret.sh"
+  "D2|PROGRESS|light|tier=parity|bash $GATES/check_capacity_saturation.sh"
+  "D3|PROGRESS|light|tier=parity|$PY $GATES/check_constants_parity.py"
   # G-LZ4 — the LZ4 encoder BYTE STREAM matches the oracle's, not merely
   # round-trips. Sits next to D3 because it extends D3's subject matter from
   # derived constants to the emitted bytes. `lz4_differential_light` is a real
@@ -1298,7 +1327,7 @@ GATE_REGISTRY=(
   # exits 3 BLOCKED without the oracle checkout or a zig toolchain, and
   # run_gate's PROGRESS-went-RED branch still escalates a genuine mismatch. Its
   # FAIL arm is proven by `--self-test` (exactly 1,631 diverging rows).
-  "G-LZ4|PROGRESS|light|-|bash $GATES/check_lz4_byte_exact.sh"
+  "G-LZ4|PROGRESS|light|tier=parity|bash $GATES/check_lz4_byte_exact.sh"
   # G-THEMES (P3-W9 T5) — the vendored iterm2 theme corpus vs a committed
   # per-file SHA-256 manifest. `xtask/src/res_themes.rs` asserts the emitted
   # count is exactly 657 (20260928-151043-99d9701 re-vendor, phase-8 w7 T3;
@@ -1311,18 +1340,18 @@ GATE_REGISTRY=(
   # tampering with one manifest row trips the total-digest self-consistency arm.
   # HARD: pure stdlib Python over in-repo files, no oracle and no toolchain, so
   # it cannot legitimately BLOCK.
-  "G-THEMES|HARD|light|-|$PY $GATES/check_theme_corpus.py"
-  "D4|PROGRESS|light|tgt|bash $GATES/check_comptime_phase.sh"
-  "D5|PROGRESS|light|-|bash $GATES/check_paired_invariants.sh"
-  "D6|PROGRESS|light|-|bash $GATES/check_sanitizer_canary.sh"
-  "D8|PROGRESS|light|-|bash $GATES/check_clone_injection.sh"
-  "D9|PROGRESS|light|-|bash $GATES/check_stale_comments.sh"
+  "G-THEMES|HARD|light|tier=product|$PY $GATES/check_theme_corpus.py"
+  "D4|PROGRESS|light|tgt,tier=parity|bash $GATES/check_comptime_phase.sh"
+  "D5|PROGRESS|light|tier=parity|bash $GATES/check_paired_invariants.sh"
+  "D6|PROGRESS|light|tier=parity|bash $GATES/check_sanitizer_canary.sh"
+  "D8|PROGRESS|light|tier=parity|bash $GATES/check_clone_injection.sh"
+  "D9|PROGRESS|light|tier=parity|bash $GATES/check_stale_comments.sh"
   # D10 — the vendored stb_image_resize glyph resampler vs ghostty's OWN build of the
   # byte-identical header, at all four Zig optimize modes, plus a negative control
   # proving the +/-1-on-3% envelope still rejects nearest/bilinear. PROGRESS because
   # it reports BLOCKED (exit 3) on a box without `zig` or the oracle checkout; a
   # genuine mismatch is still escalated by run_gate's PROGRESS-went-RED branch.
-  "D10|PROGRESS|light|-|bash $GATES/check_stb_resize_parity.sh"
+  "D10|PROGRESS|light|tier=parity|bash $GATES/check_stb_resize_parity.sh"
   # D11 — no CLOSED #[repr(C)] enum may be received BY VALUE across the C ABI.
   # An out-of-range tag is materialized by the callee's prologue, before any
   # `match` can narrow it; every flagged enum's header declaration carries a
@@ -1343,7 +1372,7 @@ GATE_REGISTRY=(
   # each narrowed enum, so the published ABI is provably unchanged. Because the
   # allowlist is empty AND a stale allowlist row is itself a FAIL, this gate can
   # now only ever move in one direction.
-  "D11|HARD|light|-|bash $GATES/check_closed_enum_abi.sh"
+  "D11|HARD|light|tier=product|bash $GATES/check_closed_enum_abi.sh"
   # D11r — the RUNTIME half of D11 (P3-W6 T2 Step 4). D11 is a SOURCE scanner and
   # is satisfied by the parameter TYPE alone, so it cannot tell a narrowing point
   # that REJECTS an undeclared value from one that silently clamps it. D11r
@@ -1354,13 +1383,13 @@ GATE_REGISTRY=(
   # leaves D11 GREEN and turns D11r RED (2 checks). That test could not be
   # written correctly before T2: the parameter was the closed enum, so the call
   # was UB and there was no defined answer to assert.
-  "D11r|HARD|light|tgt|sh $GATES/check_closed_enum_abi_runtime.sh"
+  "D11r|HARD|light|tgt,tier=product|sh $GATES/check_closed_enum_abi_runtime.sh"
   # G-TGTDIR (P8 CI speed-up, controller input) — the gates work under a
   # non-default CARGO_TARGET_DIR: no registered gate or example/*/build.sh
   # reads a literal target/<profile> artifact (ALLOWED rows aside), G-LINT
   # skips every target root, and D11r, A5, G-ABISCHEMA and example/c-vt pass
   # with CARGO_TARGET_DIR elsewhere; each arm with a negative control.
-  "G-TGTDIR|HARD|heavy|tgt,dir=tgtdir|bash $GATES/check_target_dir.sh"
+  "G-TGTDIR|HARD|heavy|tgt,dir=tgtdir,tier=product|bash $GATES/check_target_dir.sh"
   # A3 — the rustty-embed.h product-umbrella ABI gate (rebrand Task 4; formerly
   # the ghostty.h byte-freeze). Asserts include/rustty-embed.h is EXACTLY
   # ghostty's upstream include/ghostty.h (read from the pinned $ORACLE_HEADER_PATH
@@ -1369,7 +1398,7 @@ GATE_REGISTRY=(
   # nothing added, dropped, or left un-renamed. PROGRESS not HARD (R5): a genuine
   # mismatch/leftover RED is still escalated to a HARD failure by run_gate's
   # PROGRESS-went-RED branch.
-  "A3|PROGRESS|light|-|bash $GATES/check_rustty_h_abi.sh"
+  "A3|PROGRESS|light|tier=parity|bash $GATES/check_rustty_h_abi.sh"
   # A4 — the rustty-embed.h ABI-SIZE gate (companion to A3's name gate). Clang-
   # probes every umbrella-header aggregate's C sizeof and HARD-requires every
   # by-value-return type (the AAPCS64 sret crash class) to carry a Rust
@@ -1377,7 +1406,7 @@ GATE_REGISTRY=(
   # shipped a 20-byte TriggerC vs the header's 12 → sret crash → blank menu
   # shortcuts (MACOS_UI_PARITY_GAPS.md). PROGRESS: a coverage gap or size drift
   # RED is escalated to HARD by run_gate's PROGRESS-went-RED branch.
-  "A4|PROGRESS|light|-|bash $GATES/check_embed_h_abi.sh"
+  "A4|PROGRESS|light|tier=product|bash $GATES/check_embed_h_abi.sh"
   # A5 — the rustty/vt.h family struct-layout ABI gate. Cross-checks every
   # cbindgen/curated vt struct's sizeof + field OFFSETS against the Rust
   # `#[repr(C)]` layout via `rustty_type_json()` (the vt surface's answer to the
@@ -1385,10 +1414,10 @@ GATE_REGISTRY=(
   # but was never wired into this runner; registered here so the vt C-ABI is
   # continuously layout-gated (the vt header declares no by-value struct returns,
   # so this covers field-offset drift rather than the A4 sret crash class).
-  "A5|PROGRESS|light|tgt|sh $GATES/check_rustty_vt_headers.sh"
+  "A5|PROGRESS|light|tgt,tier=product|sh $GATES/check_rustty_vt_headers.sh"
   # A5-MASK-SELF (P7-W12 T0) — A5's negative control: a failing early arm must
   # not hide the later ones (the gate used to stop at its first failing arm).
-  "A5-MASK-SELF|PROGRESS|light|tgt|sh $GATES/check_rustty_vt_headers.sh --self-test-masking"
+  "A5-MASK-SELF|PROGRESS|light|tgt,tier=product|sh $GATES/check_rustty_vt_headers.sh --self-test-masking"
   # G-VTFEAT (gap-close 2026-08-26, oracle 1fdbb8c91) — the `-Dvt-features`
   # trimming gate. The reference lets a LIB artifact drop optional features so
   # embedders can shrink the binary, and each feature gates a block of
@@ -1412,8 +1441,8 @@ GATE_REGISTRY=(
   # dirty) run against fixture oracles and must exit 3; a clean pinned fixture
   # must pass the check. Needs no oracle, so it is real evidence on CI, where
   # G-VTFEAT itself reports BLOCKED (no oracle checkout there).
-  "G-VTFEAT-SELF|HARD|light|-|python3 $GATES/check_vt_features.py --self-test"
-  "G-VTFEAT|PROGRESS|light|tgt|python3 $GATES/check_vt_features.py"
+  "G-VTFEAT-SELF|HARD|light|tier=parity|python3 $GATES/check_vt_features.py --self-test"
+  "G-VTFEAT|PROGRESS|light|tgt,tier=parity|python3 $GATES/check_vt_features.py"
   # G-ABISCHEMA (P4-W5 Bundle T, oracle c75559589) — the librustty-vt ABI type
   # manifest (`rustty_type_json`) validates against its checked-in JSON Schema
   # (`crates/rustty-vt-c/types.schema.json`) via the ported
@@ -1428,7 +1457,7 @@ GATE_REGISTRY=(
   # bedding-in convention; a genuine schema regression is still escalated by
   # run_gate's PROGRESS-went-RED branch. Exits 3 BLOCKED (never green) when no
   # python with jsonschema exists and the cached venv cannot be provisioned.
-  "G-ABISCHEMA|PROGRESS|light|tgt|bash $GATES/check_abi_schema.sh"
+  "G-ABISCHEMA|PROGRESS|light|tgt,tier=product|bash $GATES/check_abi_schema.sh"
   # G-KAITAI (phase-4 wbench, oracle 38d92c50c) — the snapshot wire format's
   # normative Kaitai spec (crates/rustty-vt/src/snapshot/snapshot.ksy) parses
   # every checked-in golden fixture, byte-accounted and CRC32C-checked, via the
@@ -1445,8 +1474,8 @@ GATE_REGISTRY=(
   # exit 3 BLOCKED (a WARNING, never a silent green). G-KAITAI-SELF runs the
   # gate's own --self-test (count-exact green, count-short RED, no-banner RED),
   # which needs no Kaitai tooling.
-  "G-KAITAI-SELF|HARD|light|-|bash $GATES/check_kaitai_snapshot.sh --self-test"
-  "G-KAITAI|HARD|light|-|bash $GATES/check_kaitai_snapshot.sh"
+  "G-KAITAI-SELF|HARD|light|tier=product|bash $GATES/check_kaitai_snapshot.sh --self-test"
+  "G-KAITAI|HARD|light|tier=product|bash $GATES/check_kaitai_snapshot.sh"
 )
 
 HARD_FAILURES=()   # hard-fail checks that failed, or a claimed-done regression
@@ -1460,6 +1489,13 @@ section() { hr; printf '### %s\n' "$1"; hr; }
 # Run a HARD-FAIL cargo step. Records failure; never aborts the script.
 run_cargo() {
   local label="$1"; shift
+  # Every cargo step is product tier: `--tier parity` names it as skipped.
+  if [ "$CI_TIER" = parity ]; then
+    echo "### $label  [SKIPPED by --tier parity: a product step]"
+    TIER_SKIPPED+=("$label (product)")
+    ci_timing_row "$label" CARGO skipped 0
+    return 0
+  fi
   section "$label  (HARD-FAIL)"
   if [ "${CI_SKIP_CARGO:-0}" = "1" ]; then
     echo "SKIPPED (CI_SKIP_CARGO=1): $label"
@@ -1485,6 +1521,11 @@ run_gate() {
   if [ "${GS_STATE[$i]}" = skip ]; then
     echo "### gate $id  [SKIPPED by --fast]"
     GS_CAT[$i]=SKIP; ci_timing_row "$id" "$kind" skipped 0
+    return 0
+  fi
+  if [ "${GS_STATE[$i]}" = tier ]; then
+    echo "### gate $id  [SKIPPED by --tier $CI_TIER: a ${GS_TIER[$i]} gate]"
+    GS_CAT[i]=TIER; ci_timing_row "$id" "$kind" skipped 0
     return 0
   fi
   if [ "${GS_STATE[$i]}" = out ]; then
@@ -1567,6 +1608,9 @@ fi
 
 # ---- G-CI-SELF, change scope, timings ---------------------------------------
 if [ "$CI_SELF_TEST" = 1 ]; then ci_self_test; exit $?; fi
+# A malformed registry (an unknown KIND or RES, a missing, doubled or unknown
+# tier) is a usage error BEFORE the cargo steps, not after them.
+ci_registry_check || exit 2
 if [ -n "$CI_CHANGED_SINCE" ]; then
   ci_scope_from_rev "$CI_CHANGED_SINCE" || exit 2
   ci_scope_print
@@ -1588,7 +1632,7 @@ run_cargo "cargo build --workspace"  cargo build --workspace
 # unseen for 10 days because its only check lived in the opt-in `--webgl` lane. This is the
 # cheap default-set guard. BLOCKED (a WARNINGS row, never a silent skip) when the rustup
 # target is missing; a compile error is a HARD-FAIL.
-if [ "${CI_SKIP_CARGO:-0}" != "1" ] &&
+if [ "${CI_SKIP_CARGO:-0}" != "1" ] && [ "$CI_TIER" != parity ] &&
    ! rustup target list --installed 2>/dev/null | grep -qx 'wasm32-unknown-unknown'; then
   section "cargo check -p rustty-wasm --target wasm32-unknown-unknown  (BLOCKED)"
   echo "BLOCKED: the wasm32-unknown-unknown target is not installed." >&2
@@ -1618,8 +1662,12 @@ case "$(uname -s)" in
     run_cargo "cargo test -p rustty-os --features flatpak" \
       cargo test -p rustty-os --features flatpak --no-fail-fast ;;
   *)
-    echo "skipped: cargo test -p rustty-os --features flatpak (Linux/FreeBSD only: links gio-2.0)"
-    PROGRESS_NOTES+=("cargo test -p rustty-os --features flatpak (skipped: Linux/FreeBSD only)") ;;
+    if [ "$CI_TIER" = parity ]; then
+      run_cargo "cargo test -p rustty-os --features flatpak"   # names the --tier skip
+    else
+      echo "skipped: cargo test -p rustty-os --features flatpak (Linux/FreeBSD only: links gio-2.0)"
+      PROGRESS_NOTES+=("cargo test -p rustty-os --features flatpak (skipped: Linux/FreeBSD only)")
+    fi ;;
 esac
 
 # ---- 5: parity gates (HARD first, then PROGRESS) ---------------------------
@@ -1639,6 +1687,9 @@ echo "PASSED (${#PASSED[@]}):";          for x in "${PASSED[@]:-}";        do [ 
 echo "PROGRESS — not failing CI (${#PROGRESS_NOTES[@]}):"; for x in "${PROGRESS_NOTES[@]:-}"; do [ -n "$x" ] && echo "  ~ $x"; done
 echo "WARNINGS — BLOCKED (pending contract/tooling) (${#WARNINGS[@]}):";   for x in "${WARNINGS[@]:-}";     do [ -n "$x" ] && echo "  ! $x"; done
 echo "HARD FAILURES (${#HARD_FAILURES[@]}):"; for x in "${HARD_FAILURES[@]:-}"; do [ -n "$x" ] && echo "  X $x"; done
+if [ "$CI_TIER" != all ]; then
+  echo "SKIPPED by --tier $CI_TIER (${#TIER_SKIPPED[@]}):"; for x in "${TIER_SKIPPED[@]:-}"; do [ -n "$x" ] && echo "  - $x"; done
+fi
 if [ -n "$CI_CHANGED_SINCE" ]; then
   echo "SCOPED — ran only the change scope (${#SCOPED_GATES[@]}):"; for x in "${SCOPED_GATES[@]:-}"; do [ -n "$x" ] && echo "  ~ $x"; done
   echo "SCOPED OUT — nothing in scope, not run (${#SCOPED_OUT[@]}):"; for x in "${SCOPED_OUT[@]:-}"; do [ -n "$x" ] && echo "  - $x"; done
@@ -1651,6 +1702,22 @@ hr
 if [ "${#HARD_FAILURES[@]}" -ne 0 ]; then
   echo "CI RESULT: FAIL  (${#HARD_FAILURES[@]} non-progress check(s) red)" >&2
   exit 1
+fi
+
+if [ "$CI_TIER" != all ]; then
+  # The --fast convention (exit 4): a tier is a subset of WHOLE gates, skipped
+  # by name, so it is never a release verdict, whatever else narrowed the run.
+  echo "CI RESULT: TIER-SUBSET GREEN (--tier $CI_TIER) — *** NOT A RELEASE GATE ***"
+  echo "  ${#TIER_SKIPPED[@]} gate(s) and cargo step(s) of the other tier were SKIPPED by --tier $CI_TIER:"
+  for x in "${TIER_SKIPPED[@]:-}"; do [ -n "$x" ] && echo "    - $x"; done
+  if [ "$FAST_LANE" -eq 1 ]; then
+    echo "  and ${#SKIPPED_GATES[@]} expensive gate(s) were SKIPPED by --fast:"
+    for x in "${SKIPPED_GATES[@]:-}"; do [ -n "$x" ] && echo "    - $x"; done
+  fi
+  [ -n "$CI_CHANGED_SINCE" ] && echo "  and the long gates were scoped by --changed-since $CI_CHANGED_SINCE ($SCOPE_MODE)."
+  [ -n "$CI_NARROW_ENV" ] && echo "  narrowing variable(s) exported into this run: $CI_NARROW_ENV"
+  echo "  Run the full suite (no --tier) once at phase end before declaring green."
+  exit 4
 fi
 
 if [ "$FAST_LANE" -eq 1 ]; then

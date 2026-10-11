@@ -365,6 +365,8 @@ bash .port/tools/ci.sh                          # parallel (--jobs auto), every 
 bash .port/tools/ci.sh --jobs 1                 # the serial run, in registry order
 bash .port/tools/ci.sh --changed-since <rev>    # fix verification (exit 5)
 bash .port/tools/ci.sh --changed-since <rev> --print-scope   # the scope only
+bash .port/tools/ci.sh --tier product           # only the product gates (exit 4)
+bash .port/tools/ci.sh --tier parity            # only the parity gates (exit 4)
 ```
 
 | flag | effect |
@@ -374,6 +376,7 @@ bash .port/tools/ci.sh --changed-since <rev> --print-scope   # the scope only
 | `--changed-since <rev>` | The long gates run only the crates changed since `<rev>` and their reverse dependents. Every other gate runs in full. |
 | `--print-scope` | With `--changed-since`: print the scope and each long gate's decision, then exit 6. It runs no gate, so it is never a verdict. |
 | `--prune-targets` | Deletes each per-gate target dir under `target/ci-targets/` once the last gate using it ends. |
+| `--tier product\|parity\|all` | Runs only that tier's gates (default `all`). See "Parity and product tiers" below. |
 | `--sccache` | Sets `RUSTC_WRAPPER=sccache` when sccache is on PATH. Without sccache the run is unchanged. |
 
 **What every run writes.** Each cargo step and gate prints its wall-clock
@@ -398,7 +401,7 @@ run overwrites both.
   | 0 | PASS. Only a full run can exit 0. |
   | 1 | FAIL |
   | 2 | usage error |
-  | 4 | `--fast` subset green |
+  | 4 | `--fast` or `--tier` subset green |
   | 5 | narrowed green |
   | 6 | `--print-scope` (ran no gate) |
 
@@ -414,12 +417,15 @@ run overwrites both.
 
   Exits 4 and 5 print a NOT-A-RELEASE-GATE banner instead of
   `CI RESULT: PASS`, and name what was skipped or narrowed and why.
-  `--fast` and `--changed-since` do not combine.
+  `--fast` and `--changed-since` do not combine. `--tier` combines with
+  either, and the run then exits 4.
 
 ### How gates are scheduled
 
 Each registry entry declares what it needs:
 `"<id>|<HARD|PROGRESS>|<light|heavy>|<traits>|<runner>"`. Nothing is inferred.
+The traits always include exactly one `tier=parity` or `tier=product` (see
+"Parity and product tiers" below).
 
 - **heavy**: Miri, the sanitizers, Valgrind, release / clean-clone /
   feature-matrix builds, G4, G5 and G8. `--heavy-cap` bounds them.
@@ -455,6 +461,43 @@ Each registry entry declares what it needs:
   any shard is RED the gate is RED. If any shard is BLOCKED the gate is
   BLOCKED. Only all-green shards make a green gate.
 - **`scope=<how>`**: what `--changed-since` does to the gate (below).
+
+### Parity and product tiers
+
+Every registry entry carries exactly one tier trait:
+
+- **`tier=parity`**: the gate exists because Rustty tracks the Ghostty
+  oracle. It needs the oracle checkout, the pin or the oracle's artifacts,
+  or it checks the port's records and coverage. Examples: G1 to G3b, G9,
+  G-PARITY, G-FILES, G-SYMS, G-TESTS, G-CENSUS, G-UDDOCS, G-LOGFILE, G4,
+  G4-uni, G-ESCTEST, G-REFGEOM, G-EOL, G8b and G8, and the D1 to D10 port
+  audits.
+- **`tier=product`**: the CI the project would have without the port. That
+  covers fmt, clippy, the workspace build and tests, the release lane, the
+  sanitizers, Miri, Valgrind, fuzz smoke, cross-target and feature builds,
+  the linters, the examples, and the C-ABI and artifact checks.
+
+A `-SELF` entry takes the tier of the gate it tests. The cargo steps are all
+product.
+
+ci.sh checks the registry before the cargo steps. An entry with no tier, two
+tiers or an unknown value is a usage error (exit 2), and nothing runs.
+
+`--tier product` or `--tier parity` runs only that tier. A tier run is a
+subset, like `--fast`:
+
+- every gate and cargo step of the other tier is listed as `SKIPPED by
+  --tier`;
+- the run exits 4 with a TIER-SUBSET banner, never 0, and never prints
+  `CI RESULT: PASS`.
+
+G-CI-SELF's T arms prove all of this, each with a negative control:
+
+- every real entry has exactly one valid tier;
+- a missing, doubled or unknown tier is refused;
+- the real registry's plan under each tier holds only that tier;
+- fixture runs under `--tier product` and `--tier parity` start no gate of the
+  other tier and exit 4.
 
 ### `--changed-since <rev>`: fix verification
 
@@ -568,7 +611,8 @@ gate, put its script in `.port/tools/gates/` and make it obey the 0 / 3 /
 non-zero exit contract above. Then add one registry line that declares its
 resource and traits (see "How gates are scheduled"): `heavy` if it is long or
 fills the machine, `tgt` if it builds in, or reads from, the default target
-dir or writes untracked files into the tree, and `-` otherwise. Read built
+dir or writes untracked files into the tree, and always its `tier=parity` or
+`tier=product`. Read built
 artifacts through `_target_dir.sh`, never through a literal `target/` path
 (G-TGTDIR enforces this). ci.sh dispatches HARD gates first, then PROGRESS
 gates, and aggregates all results before deciding the exit code.
