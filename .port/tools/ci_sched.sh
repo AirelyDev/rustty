@@ -822,7 +822,11 @@ while [ "$#" -gt 0 ]; do
 done
 echo "S vg$k" >> "$root/events"
 echo "shard $k/$n jobs $j crates:${crates:- <default>} CTD=${CARGO_TARGET_DIR:-unset}"
-sleep 1
+# Staggered so the LAST shard to finish is shard N, deterministically: arm D's
+# control (the gate takes the last-finishing shard's rc) must see a green last
+# shard. With one fixed sleep the red shard 2 sometimes finished last on a
+# loaded host, and the control went unnoticed by chance.
+sleep "0.$((k * 3))"
 echo "E vg$k" >> "$root/events"
 [ "$(cat "$root/vg_fail" 2>/dev/null)" = "$k" ] && { echo "G-VALGRIND RED: shard $k"; exit 1; }
 echo "G-VALGRIND GREEN (shard $k/$n)"
