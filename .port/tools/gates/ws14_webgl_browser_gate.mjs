@@ -28,10 +28,11 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { targetDir } from "../_target_dir.mjs";
 
 const HERE = import.meta.dirname;
 const ROOT = resolve(HERE, "..", "..", "..");
-const ARTIFACT = join(ROOT, "target/wasm32-unknown-unknown/release/rustty_wasm.wasm");
+const ARTIFACT = join(targetDir(), "wasm32-unknown-unknown", "release", "rustty_wasm.wasm");
 const PAGE = "/example/wasm-webgl/index.html";
 const GATE_JS = join(ROOT, "example/wasm-webgl/gate.js");
 

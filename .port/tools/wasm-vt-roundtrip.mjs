@@ -6,6 +6,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { WASI } from 'node:wasi';
+import { join } from 'node:path';
+import { targetDir } from './_target_dir.mjs';
 
 // wasm path resolves relative to the repo root (this file is .port/tools/)
 //
@@ -18,8 +20,8 @@ import { WASI } from 'node:wasi';
 // a real defect. Prefer the pure-Rust artifact (building it if absent, since it
 // is a build product of this repo and needs no C toolchain), and fall back to a
 // wasip1 build if one happens to be present.
-const UU = new URL("../../target/wasm32-unknown-unknown/release/rustty_vt_c.wasm", import.meta.url);
-const WASIP1 = new URL("../../target/wasm32-wasip1/release/rustty_vt_c.wasm", import.meta.url);
+const UU = join(targetDir(), 'wasm32-unknown-unknown', 'release', 'rustty_vt_c.wasm');
+const WASIP1 = join(targetDir(), 'wasm32-wasip1', 'release', 'rustty_vt_c.wasm');
 let WASM = existsSync(UU) ? UU : (existsSync(WASIP1) ? WASIP1 : null);
 if (!WASM) {
   const build = new URL("./build-vt-wasm.sh", import.meta.url);
@@ -27,7 +29,7 @@ if (!WASM) {
   const r = spawnSync(fileURLToPath(build), [], { stdio: ["ignore", "inherit", "inherit"] });
   if (r.status !== 0 || !existsSync(UU)) {
     console.error(
-      "wasm-vt-roundtrip: could not build " + fileURLToPath(UU) +
+      "wasm-vt-roundtrip: could not build " + UU +
       "\n  (is the wasm32-unknown-unknown target installed? `rustup target add wasm32-unknown-unknown`)");
     process.exit(3);   // environment missing — never a silent pass
   }

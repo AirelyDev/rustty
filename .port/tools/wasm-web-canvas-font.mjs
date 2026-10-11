@@ -16,13 +16,12 @@
 // DEBUG ARTIFACT ONLY, as for wasm-log-emission.mjs: the warn is stripped from
 // a release build, and the arms below assert on it.
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { makeWebCanvasEnv } from "./web-canvas-glue.mjs";
 import { makeMockCanvas } from "./web-canvas-mock.mjs";
+import { join } from "node:path";
+import { targetDir } from "./_target_dir.mjs";
 
-const WASM = fileURLToPath(
-  new URL("../../target/wasm32-unknown-unknown/debug/rustty_web_canvas.wasm", import.meta.url),
-);
+const WASM = join(targetDir(), "wasm32-unknown-unknown", "debug", "rustty_web_canvas.wasm");
 const WARN_MARKER = "canvas font didn't set, fonts may be broken";
 
 let bytes;
