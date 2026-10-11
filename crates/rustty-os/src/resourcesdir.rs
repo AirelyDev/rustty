@@ -494,14 +494,22 @@ mod tests {
     fn walk_finds_the_share_tree_above_the_executable() {
         let tree = TempTree::new("walk");
         let sentinel = sentinels()[0];
-        std::fs::create_dir_all(tree.0.join("app/share").join(sentinel)).unwrap();
+        // The walk looks for `local/share` on FreeBSD (`resourcesdir.zig:103`).
+        let share = if cfg!(target_os = "freebsd") {
+            "app/local/share"
+        } else {
+            "app/share"
+        };
+        std::fs::create_dir_all(tree.0.join(share).join(sentinel)).unwrap();
         let mut exe = tree.bytes();
         exe.extend_from_slice(b"/app/bin/deeper/rustty");
 
         let env = Environ::from_entries(Vec::new());
         let dir = resources_dir_from(&env, Some(&exe)).unwrap();
         let mut want = tree.bytes();
-        want.extend_from_slice(b"/app/share/");
+        want.push(b'/');
+        want.extend_from_slice(share.as_bytes());
+        want.push(b'/');
         want.extend_from_slice(app_subdir().as_bytes());
         assert_eq!(dir.app(), Some(&want[..]));
     }

@@ -535,7 +535,11 @@ impl PosixPty {
                 None
             }
         }
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        // PORT NOTE (UD381): the reference's switch has no `.freebsd` arm, so it
+        // returns null there, while its own test (`pty.zig:513-514`) expects a
+        // `/dev/` name on FreeBSD and fails at the `.?`. FreeBSD takes the
+        // linux arm's `ptsname_r`, which its libc provides, as that test intends.
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
         {
             let rc = unsafe {
                 libc::ptsname_r(
@@ -551,7 +555,12 @@ impl PosixPty {
             self.tty_name.set(Some(len));
             std::ffi::CStr::from_bytes_with_nul(unsafe { &(&*buf)[..len + 1] }).ok()
         }
-        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "android",
+            target_os = "freebsd"
+        )))]
         {
             None
         }

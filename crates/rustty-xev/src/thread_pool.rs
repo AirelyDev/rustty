@@ -1005,15 +1005,17 @@ fn futex_wait(atomic: &AtomicU32, expect: u32) {
 
 #[cfg(all(target_os = "freebsd", not(miri)))]
 fn futex_wake(atomic: &AtomicU32, n: u32) {
-    // `c._umtx_op(@intFromPtr(&ptr.raw), @intFromEnum(c.UMTX_OP.WAKE_PRIVATE),
-    //  @as(c_ulong, max_waiters), 0, 0)` (Futex.zig:340-347).
+    // `std.c._umtx_op(@intFromPtr(ptr), @intFromEnum(std.c.UMTX_OP.WAKE_PRIVATE),
+    //  @as(c_ulong, @min(max_waiters, std.math.maxInt(c_int))), 0, 0)`
+    // (Zig 0.16 `std/Io/Threaded.zig:1158-1165`, the pin's toolchain).
     //
-    // NO CLAMP, deliberately (R1): unlike `LinuxImpl.wake`, `FreebsdImpl.wake`
-    // passes `max_waiters` straight through. The linux arm's `min(i32::MAX)` is an
-    // artifact of FUTEX_WAKE's C `int` count slot; `_umtx_op`'s `val` slot is a
-    // `c_ulong`, so `u32::MAX` ("wake all") arrives intact and must NOT be clamped
-    // here.
-    //
+    // The clamp is the reference's, as in the linux arm: the kernel takes the wake
+    // count as an `int`, so an unclamped `u32::MAX` ("wake all") becomes -1 and
+    // wakes AT MOST ONE waiter (measured on FreeBSD 15.1 arm64: 1 of 4 woken with
+    // 0xffffffff, 4 of 4 with 0x7fffffff), which stranded `Event::shutdown`'s
+    // sleepers and deadlocked `multi_worker_quiesce_then_join_50x` (N553). This arm
+    // had followed the older `Thread/Futex.zig` `FreebsdImpl`, which had no clamp.
+    let n = n.min(i32::MAX as u32);
     // SAFETY: as `futex_wait` above.
     unsafe {
         libc::_umtx_op(

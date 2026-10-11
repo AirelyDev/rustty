@@ -14,6 +14,9 @@ fn main() {
     // Set PIE if requested
     pie(&target_os);
 
+    // Keep the bundled C libraries private (N557)
+    exclude_static_libs_from_dynamic_symbols(&target_os);
+
     // Check for possible issues
     check_nix_shell(&target_os);
 
@@ -48,9 +51,30 @@ fn pie(target_os: &str) {
     println!("cargo::rerun-if-env-changed=RUSTTY_PIE");
     let value = std::env::var("RUSTTY_PIE").ok();
     match build_checks::link_no_pie(target_os, value.as_deref()) {
+        // FreeBSD's clang driver ignores `-no-pie` ("argument unused during
+        // compilation") and the executable stays PIE, so FreeBSD hands the
+        // flag to its linker (ld.lld) directly (N556).
+        Ok(true) if target_os == "freebsd" => {
+            println!("cargo::rustc-link-arg-bin=rustty=-Wl,--no-pie")
+        }
         Ok(true) => println!("cargo::rustc-link-arg-bin=rustty=-no-pie"),
         Ok(false) => {}
         Err(msg) => panic!("{msg}"),
+    }
+}
+
+/// N557: on Linux and FreeBSD, the linker puts a symbol the executable defines
+/// into its dynamic symbol table when a shared library it links references it.
+/// The bundled HarfBuzz, FreeType and fontconfig are static archives, and GTK's
+/// Pango, cairo and FreeType reference those same names, so the system libraries
+/// bound to the bundled copies, whose ABI is not theirs: a SIGSEGV in
+/// `hb_ot_metrics_get_position` at the first window on FreeBSD 15.1 (system
+/// HarfBuzz 14.2.1, bundled 11.0.0). `--exclude-libs,ALL` makes every archive
+/// member's symbols local, so each library keeps its own copy. Applies to every
+/// target of this package (the executable and its tests).
+fn exclude_static_libs_from_dynamic_symbols(target_os: &str) {
+    if matches!(target_os, "linux" | "freebsd") {
+        println!("cargo::rustc-link-arg=-Wl,--exclude-libs,ALL");
     }
 }
 

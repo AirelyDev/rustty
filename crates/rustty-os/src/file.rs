@@ -383,8 +383,10 @@ pub fn random_secure(buffer: &mut [u8]) -> Result<(), EntropyUnavailable> {
     // Darwin (the `crypto_random_bytes` precedent above); the glibc-2.36+ case
     // collapses into the Linux getrandom arm below, because the Rust `libc`
     // floor cannot assume the symbol exists and getrandom is the same source
-    // glibc's arc4random_buf draws from.
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    // glibc's arc4random_buf draws from. FreeBSD links libc and has
+    // arc4random_buf, so it takes this arm as in the reference (it had been left
+    // out, and fell through to EntropyUnavailable: N554).
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
     {
         // posix.system.arc4random_buf(buffer.ptr, buffer.len);
         // return;

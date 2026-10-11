@@ -400,7 +400,7 @@ impl RenderSurface {
     ) -> Result<(), RebuildError> {
         let display = self.display();
 
-        let mut builder = gdk::DmabufTextureBuilder::new()
+        let mut builder = DmabufTextureBuilder::new()
             .set_display(&display)
             .set_width(frame.width)
             .set_height(frame.height)
@@ -676,6 +676,116 @@ mod tests {
             translate: (0.0, css_h),
             x: origin.x as f32,
             y: origin.y as f32,
+        }
+    }
+}
+
+// The texture builder the reference calls on every platform
+// (`render_surface.zig:321`, `gdk.DmabufTextureBuilder.new()`). gtk4-rs exposes
+// `gdk::DmabufTextureBuilder` on Linux only, although GTK exports the C API on
+// every platform (FreeBSD 15.1's libgtk-4 has `gdk_dmabuf_texture_builder_new`)
+// and builds nothing it cannot import, returning an error the caller already
+// handles by asking for CPU frames. Elsewhere this wrapper makes the same C
+// calls through `gdk4-sys`, which exposes them on every target (N555).
+#[cfg(not(target_os = "linux"))]
+use dmabuf_builder::DmabufTextureBuilder;
+#[cfg(target_os = "linux")]
+use gdk::DmabufTextureBuilder;
+
+#[cfg(not(target_os = "linux"))]
+mod dmabuf_builder {
+    use super::{gdk, glib};
+    use gdk::ffi;
+    use glib::translate::ToGlibPtr;
+
+    /// `GdkDmabufTextureBuilder`, owned (one reference, released on drop), with
+    /// the subset of gtk4-rs's builder methods `rebuild_dmabuf_texture` uses.
+    pub(super) struct DmabufTextureBuilder(*mut ffi::GdkDmabufTextureBuilder);
+
+    impl Drop for DmabufTextureBuilder {
+        fn drop(&mut self) {
+            // SAFETY: `self.0` is the reference `new` returned, released once.
+            unsafe { glib::gobject_ffi::g_object_unref(self.0.cast()) };
+        }
+    }
+
+    impl DmabufTextureBuilder {
+        pub(super) fn new() -> Self {
+            // SAFETY: returns a new, owned builder (never null).
+            Self(unsafe { ffi::gdk_dmabuf_texture_builder_new() })
+        }
+
+        pub(super) fn as_ptr(&self) -> *mut ffi::GdkDmabufTextureBuilder {
+            self.0
+        }
+
+        pub(super) fn set_display(self, display: &gdk::Display) -> Self {
+            // SAFETY: `self.0` is live; GDK refs the display it keeps.
+            unsafe {
+                ffi::gdk_dmabuf_texture_builder_set_display(self.0, display.to_glib_none().0)
+            };
+            self
+        }
+
+        pub(super) fn set_width(self, width: u32) -> Self {
+            // SAFETY: `self.0` is live.
+            unsafe { ffi::gdk_dmabuf_texture_builder_set_width(self.0, width) };
+            self
+        }
+
+        pub(super) fn set_height(self, height: u32) -> Self {
+            // SAFETY: `self.0` is live.
+            unsafe { ffi::gdk_dmabuf_texture_builder_set_height(self.0, height) };
+            self
+        }
+
+        pub(super) fn set_fourcc(self, fourcc: u32) -> Self {
+            // SAFETY: `self.0` is live.
+            unsafe { ffi::gdk_dmabuf_texture_builder_set_fourcc(self.0, fourcc) };
+            self
+        }
+
+        pub(super) fn set_modifier(self, modifier: u64) -> Self {
+            // SAFETY: `self.0` is live.
+            unsafe { ffi::gdk_dmabuf_texture_builder_set_modifier(self.0, modifier) };
+            self
+        }
+
+        pub(super) fn set_premultiplied(self, premultiplied: bool) -> Self {
+            // SAFETY: `self.0` is live.
+            unsafe {
+                ffi::gdk_dmabuf_texture_builder_set_premultiplied(
+                    self.0,
+                    glib::ffi::gboolean::from(premultiplied),
+                )
+            };
+            self
+        }
+
+        pub(super) fn set_n_planes(self, n_planes: u32) -> Self {
+            // SAFETY: `self.0` is live.
+            unsafe { ffi::gdk_dmabuf_texture_builder_set_n_planes(self.0, n_planes) };
+            self
+        }
+
+        /// # Safety
+        /// `fd` must stay open until GDK releases the texture built from it.
+        pub(super) unsafe fn set_fd(self, plane: u32, fd: std::os::fd::RawFd) -> Self {
+            // SAFETY: `self.0` is live; the caller keeps `fd` open.
+            unsafe { ffi::gdk_dmabuf_texture_builder_set_fd(self.0, plane, fd) };
+            self
+        }
+
+        pub(super) fn set_offset(self, plane: u32, offset: u32) -> Self {
+            // SAFETY: `self.0` is live.
+            unsafe { ffi::gdk_dmabuf_texture_builder_set_offset(self.0, plane, offset) };
+            self
+        }
+
+        pub(super) fn set_stride(self, plane: u32, stride: u32) -> Self {
+            // SAFETY: `self.0` is live.
+            unsafe { ffi::gdk_dmabuf_texture_builder_set_stride(self.0, plane, stride) };
+            self
         }
     }
 }

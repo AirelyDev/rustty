@@ -383,7 +383,9 @@ pub fn nonzero_bytes(rgba: &[u8]) -> usize {
 /// Whether the texture is a DMA-BUF import (`GdkDmabufTexture`) or CPU memory
 /// (`GdkMemoryTexture`).
 pub fn texture_kind(texture: &gdk::Texture) -> &'static str {
-    if texture.is::<gdk::DmabufTexture>() {
+    // By GType name: gtk4-rs exposes `gdk::DmabufTexture` on Linux only, and
+    // GTK has the type on every platform (FreeBSD included).
+    if texture.type_().name() == "GdkDmabufTexture" {
         "dmabuf"
     } else if texture.is::<gdk::MemoryTexture>() {
         "memory"
