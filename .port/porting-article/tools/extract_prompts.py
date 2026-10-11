@@ -11,7 +11,8 @@ Sources (all read-only):
 
 Outputs (UNREDACTED, keep them in the untracked research data dir; never commit them):
   prompts-raw-<date>.jsonl, prompts-manifest-<date>.json, prompts-redactions-proposed-<date>.csv,
-  prompts-glossary-missing-<date>.txt, prompts-article-sessions-<date>.csv
+  prompts-glossary-missing-<date>.txt, prompts-article-sessions-<date>.csv,
+  prompts-founding-sessions-proposed-<date>.csv, prompts-sessions-<date>.jsonl
 
 Standard library only. See README.md next to this file for the rules and how to run it.
 """
@@ -30,7 +31,7 @@ from zoneinfo import ZoneInfo
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
 UTC = dt.timezone.utc
-DATE_TAG = "2026-10-10"
+DATE_TAG = "2026-10-11"
 WINDOW_START_DAY = "2026-06-21"  # Pacific calendar day the section's window opens
 WINDOW_END_DAY = "2026-10-10"
 PURGED_BEFORE = "2026-09-08"  # Mac transcripts before this day were purged (Claude Code cleanup)
@@ -124,6 +125,162 @@ def article_sessions(prompts):
 
 def is_article_work(p, sessions):
     return p["session"] in sessions and p["ts_epoch"] >= ARTICLE_CUTOFF
+
+
+# ---------------------------------------------------------------------------- founding sessions
+
+FOUNDING_FLOOR = parse_ts("2026-06-20T00:00:00Z")
+FOUNDING_RULE = (
+    "Founding prompts were typed before the repository existed. Candidates: Claude Code history sessions with "
+    "prompts on or after 2026-06-20T00:00Z in the projects folder itself or a 'rusty*' folder before the first "
+    "prompt in a 'rustty' path, or in the reference checkout (a 'ghostty*' folder that is not the website) up to "
+    "the cutoff. Each candidate gets one reason: ghostty-checkout (reference checkout), port-decision (a prompt "
+    "about porting and Zig, Rust or Ghostty), naming (a prompt naming the project, or the early 'rusty' folder), "
+    "else other. Candidates are only proposed; prompts are kept only for sessions the author lists with "
+    "decision 'include' (--founding), from 2026-06-20T00:00Z to the cutoff, whatever their folder.")
+_HOME_PROJECTS = r"^(?:/Users|/home)/[^/]+/projects"
+FOUNDING_ROOT_RE = re.compile(_HOME_PROJECTS + r"/?$")
+FOUNDING_RUSTY_RE = re.compile(_HOME_PROJECTS + r"/rusty(?!t)[^/]*(?:/.*)?$")
+FOUNDING_CHECKOUT_RE = re.compile(_HOME_PROJECTS + r"/ghostty(?!-website)[^/]*(?:/.*)?$")
+PORT_RE = re.compile(r"\bport(?:ing|ed)?\b", re.I)
+PORT_SUBJECT_RE = re.compile(r"\b(?:zig|rust|ghostty)\b", re.I)
+NAMING_RE = re.compile(r"\b(?:rustty|rusty|name it|naming|call it)\b", re.I)
+FOUNDING_FIELDS = ["session", "tool", "machine", "project", "first_ts", "last_ts", "prompts", "reason", "decision"]
+FOUNDING_DECISIONS = {"include", "exclude"}
+
+
+def _tilde(path):
+    m = re.match(r"(?:/Users|/home)/[^/]+(/.*)?$", path or "")
+    return "~" + (m.group(1) or "") if m else (path or "")
+
+
+def founding_reason(rows):
+    """One reason per candidate session (see FOUNDING_RULE)."""
+    if any(FOUNDING_CHECKOUT_RE.match(r.get("project") or "") for r in rows):
+        return "ghostty-checkout"
+    texts = [r.get("display") or "" for r in rows]
+    if any(PORT_RE.search(t) and PORT_SUBJECT_RE.search(t) for t in texts):
+        return "port-decision"
+    if any(NAMING_RE.search(t) for t in texts) or any(FOUNDING_RUSTY_RE.match(r.get("project") or "") for r in rows):
+        return "naming"
+    return "other"
+
+
+def founding_candidates(sources, cutoff):
+    """sources: [(machine, history rows)]. Returns candidate sessions (FOUNDING_FIELDS dicts, decision empty),
+    ordered by first prompt. The first `rustty` prompt is taken over every source."""
+    stamps = [int(r["timestamp"]) / 1000.0 for _m, rows in sources for r in rows
+              if r and PROJECT_MARK in (r.get("project") or "")]
+    first_rustty = min(stamps) if stamps else cutoff
+    by = collections.OrderedDict()
+    for machine, rows in sources:
+        for r in rows:
+            if not r:
+                continue
+            ts = int(r["timestamp"]) / 1000.0
+            proj = r.get("project") or ""
+            if ts < FOUNDING_FLOOR or ts >= cutoff:
+                continue
+            early = (FOUNDING_ROOT_RE.match(proj) or FOUNDING_RUSTY_RE.match(proj)) and ts < first_rustty
+            if not (early or FOUNDING_CHECKOUT_RE.match(proj)):
+                continue
+            by.setdefault((machine, r.get("sessionId") or ""), []).append((ts, r))
+    out = []
+    for (machine, sid), items in by.items():
+        items.sort(key=lambda x: x[0])
+        rows = [r for _t, r in items]
+        out.append(dict(session=sid, tool="claude", machine=machine,
+                        project="|".join(sorted({_tilde(r.get("project")) for r in rows})),
+                        first_ts=iso_utc(items[0][0]), last_ts=iso_utc(items[-1][0]), prompts=len(rows),
+                        reason=founding_reason(rows), decision=""))
+    out.sort(key=lambda c: (c["first_ts"], c["machine"], c["session"]))
+    return out
+
+
+def parse_founding(lines):
+    """Approved founding-sessions CSV (FOUNDING_FIELDS) -> {(tool, machine, session)} with decision `include`.
+    Refuses a row without a decision (unreviewed) or with an unknown one."""
+    out = set()
+    for r in csv.DictReader(lines):
+        d = (r.get("decision") or "").strip().lower()
+        if d not in FOUNDING_DECISIONS:
+            raise SystemExit(f"founding list: session {r.get('session')!r} has no valid decision ({d!r}); "
+                             f"expected one of {sorted(FOUNDING_DECISIONS)}")
+        if d == "include":
+            out.add((r["tool"].strip(), r["machine"].strip(), r["session"].strip()))
+    return out
+
+
+def load_founding(path):
+    with open(path, newline="") as f:
+        return parse_founding(f)
+
+
+# ---------------------------------------------------------------------------- sessions
+
+SESSION_RULE = ("A session is (tool, machine, session id). Per session: first and last prompt, prompt count, "
+                "commands_only (every prompt is a slash command), founding and article_work (any of its prompts), "
+                "branches and models (union, where known), commits (union of its prompts' links after the dedupe) "
+                "and commits_ambiguous (its prompts left with basis 'ambiguous'). cc_title: Claude Code's own "
+                "title from rustty-stats sessions.csv (ai_title, else title), Claude sessions only.")
+
+
+def titles_from_rows(rows):
+    """rustty-stats sessions.csv rows -> {(stats machine, session id): title}; `ai_title` preferred, else
+    `title`; Claude sessions only."""
+    out = {}
+    for r in rows:
+        if r.get("tool") != "claude":
+            continue
+        t = (r.get("ai_title") or "").strip() or (r.get("title") or "").strip()
+        if t:
+            out[(r["machine"], r["session_id"])] = t
+    return out
+
+
+def load_titles(stats_dir):
+    with open(os.path.join(stats_dir, "sessions.csv"), newline="") as f:
+        return titles_from_rows(csv.DictReader(f))
+
+
+STAT_MACHINE = {"mac": "mac", "vm": "rvm"}
+
+
+def session_aggregates(prompts, titles=None):
+    """One object per (tool, machine, session) (see SESSION_RULE), ordered by first prompt. Keys are
+    `<tool>-<machine>-<id prefix>`, the prefix 8 characters long or longer when needed to stay unique."""
+    titles = titles or {}
+    by = collections.defaultdict(list)
+    for p in prompts:
+        by[(p["tool"], p["machine"], p["session"])].append(p)
+    out = []
+    for (tool, machine, sid), ps in by.items():
+        ps.sort(key=lambda p: (p["ts_epoch"], p.get("order", 0)))
+        commits = []
+        for p in ps:
+            for sha in p.get("commits") or []:
+                if sha not in commits:
+                    commits.append(sha)
+        out.append(dict(
+            session=sid, key=None, tool=tool, machine=machine,
+            first_ts=iso_utc(ps[0]["ts_epoch"]), last_ts=iso_utc(ps[-1]["ts_epoch"]), prompts=len(ps),
+            commands_only=all(p["kind"] == "command" for p in ps),
+            founding=any(p.get("founding") for p in ps), article_work=any(p.get("article_work") for p in ps),
+            branches=sorted({p["branch"] for p in ps if p.get("branch")}),
+            models=sorted({p["model"] for p in ps if p.get("model")}),
+            commits=commits, commits_ambiguous=sum(1 for p in ps if p.get("commits_basis") == "ambiguous"),
+            cc_title=titles.get((STAT_MACHINE.get(machine, machine), sid)) if tool == "claude" else None))
+    groups = collections.defaultdict(list)
+    for s in out:
+        groups[(s["tool"], s["machine"])].append(s)
+    for (tool, machine), ss in groups.items():
+        for s in ss:
+            n = 8
+            while n < len(s["session"]) and any(o is not s and o["session"][:n] == s["session"][:n] for o in ss):
+                n += 1
+            s["key"] = f"{tool}-{machine}-{s['session'][:n]}"
+    out.sort(key=lambda s: (s["first_ts"], s["tool"], s["machine"], s["session"]))
+    return out
 
 
 # Internal ids. ID_PATTERN and PROCESS_LABELS are copied verbatim from the website repo's
@@ -260,8 +417,11 @@ def _in_project(path, ts):
     return PROJECT_MARK in path or (WEBSITE_MARK in path and ts >= ARTICLE_CUTOFF)
 
 
-def history_prompts(rows, machine, window, cache_hashes=frozenset()):
-    """Claude Code history rows -> prompts. `rows` may hold None for unparseable lines."""
+def history_prompts(rows, machine, window, cache_hashes=frozenset(), founding=frozenset()):
+    """Claude Code history rows -> prompts. `rows` may hold None for unparseable lines.
+
+    founding: approved founding sessions {(tool, machine, session)} (see FOUNDING_RULE); their prompts
+    are kept from FOUNDING_FLOOR on, whatever their folder, and flagged `founding`."""
     res = SourceResult()
     start, end = window
     for i, r in enumerate(rows):
@@ -270,15 +430,17 @@ def history_prompts(rows, machine, window, cache_hashes=frozenset()):
             res.drop("unparseable")
             continue
         ts = int(r["timestamp"]) / 1000.0
-        if ts < start:
-            res.drop("before-window")
-            continue
-        if ts >= end:
-            res.drop("after-cutoff")
-            continue
-        if not _in_project(r.get("project"), ts):
-            res.drop("other-project")
-            continue
+        is_founding = ("claude", machine, r.get("sessionId")) in founding and FOUNDING_FLOOR <= ts < end
+        if not is_founding:
+            if ts < start:
+                res.drop("before-window")
+                continue
+            if ts >= end:
+                res.drop("after-cutoff")
+                continue
+            if not _in_project(r.get("project"), ts):
+                res.drop("other-project")
+                continue
         text = r.get("display") or ""
         if not text.strip():
             res.drop("empty")
@@ -288,7 +450,7 @@ def history_prompts(rows, machine, window, cache_hashes=frozenset()):
             ts_epoch=ts, order=i, text=text, chars=len(text), kind=prompt_kind(text),
             pasted=pasted_flag(text, r.get("pastedContents"), cache_hashes), project=r.get("project"),
             model=None, effort=None, mode=None, settings_source="unknown", approval=None, sandbox=None,
-            branch=None))
+            branch=None, founding=is_founding))
     res.dropped = dict(res.dropped)
     return res
 
@@ -389,7 +551,7 @@ def codex_prompts(sessions, window):
                 continue
             seen.add(key)
             pr = dict(tool="codex", machine="mac", session=sid, ts_epoch=ts, order=res.in_source, text=text,
-                      chars=len(text), kind=prompt_kind(text), pasted="none", project=cwd,
+                      chars=len(text), kind=prompt_kind(text), pasted="none", project=cwd, founding=False,
                       model=None, effort=None, mode=None, settings_source="unknown", approval=None,
                       sandbox=None, branch=branch if branch and branch != "HEAD" else None)
             if ctx:
@@ -933,6 +1095,9 @@ def main(argv=None):
     ap.add_argument("--people", default=None, help="file: one personal name per line (default: <research>/data/prompts-people.txt)")
     ap.add_argument("--allowlist", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "redaction-allowlist.txt"))
     ap.add_argument("--cutoff", default=None, help="ISO UTC; default: now")
+    ap.add_argument("--founding", default=None,
+                    help="approved founding-sessions CSV (columns of prompts-founding-sessions-proposed-<date>.csv, "
+                         "decision include|exclude); without it no founding prompt is kept")
     a = ap.parse_args(argv)
 
     data = os.path.join(a.research, "data")
@@ -945,10 +1110,13 @@ def main(argv=None):
     mac_rows = read_jsonl(os.path.join(a.claude_dir, "history.jsonl"))
     cache_dir = os.path.join(a.claude_dir, "paste-cache")
     cache = frozenset(os.path.splitext(f)[0] for f in os.listdir(cache_dir)) if os.path.isdir(cache_dir) else frozenset()
-    results = {"claude-mac": history_prompts(mac_rows, "mac", window, cache)}
+    founding = load_founding(a.founding) if a.founding else set()
+    vm_rows = read_jsonl(vm_path) if os.path.exists(vm_path) else None
+    candidates = founding_candidates([("mac", mac_rows)] + ([("vm", vm_rows)] if vm_rows is not None else []), cutoff)
+    results = {"claude-mac": history_prompts(mac_rows, "mac", window, cache, founding)}
     vm_status = "pending"
-    if os.path.exists(vm_path):
-        results["claude-vm"] = history_prompts(read_jsonl(vm_path), "vm", window)
+    if vm_rows is not None:
+        results["claude-vm"] = history_prompts(vm_rows, "vm", window, founding=founding)
         vm_status = f"fetched (VM history last modified {iso_utc(os.path.getmtime(vm_path))})"
     codex_files, seen_ids = [], set()
     for kind in ("sessions", "archived_sessions"):
@@ -1044,7 +1212,7 @@ def main(argv=None):
     # outputs
     fields = ["id", "ts", "tool", "machine", "session", "text", "chars", "kind", "pasted", "model", "effort",
               "mode", "settings_source", "approval", "sandbox", "article_work", "commits", "commits_basis", "ids",
-              "phase", "decision", "branch", "project"]
+              "phase", "decision", "branch", "project", "founding"]
     with open(os.path.join(data, f"prompts-raw-{DATE_TAG}.jsonl"), "w") as f:
         for p in prompts:
             f.write(json.dumps({k: p.get(k) for k in fields}, ensure_ascii=False) + "\n")
@@ -1083,6 +1251,18 @@ def main(argv=None):
                 w.writerow([sid, tool, machine, art[sid], ps[0]["ts"], ps[-1]["ts"], len(ps),
                             sum(p["article_work"] for p in ps), "|".join(sorted({p["project"] or "" for p in ps}))])
 
+    with open(os.path.join(data, f"prompts-founding-sessions-proposed-{DATE_TAG}.csv"), "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=FOUNDING_FIELDS)
+        w.writeheader()
+        w.writerows(candidates)
+
+    sessions = session_aggregates(prompts, load_titles(a.stats))
+    if sum(s["prompts"] for s in sessions) != len(prompts):
+        raise SystemExit("session prompt counts do not add up to the prompt total")
+    with open(os.path.join(data, f"prompts-sessions-{DATE_TAG}.jsonl"), "w") as f:
+        for s in sessions:
+            f.write(json.dumps(s, ensure_ascii=False) + "\n")
+
     def count(k, src=None):
         c = collections.Counter()
         for p in prompts:
@@ -1110,7 +1290,9 @@ def main(argv=None):
                               "rows; for Codex the turn context) > session (rustty-stats, one model in the "
                               "session) > commit-trailer (Co-Authored-By model of the prompt's own linked commits, "
                               "after the multi-session dedupe; effort unknown) > unknown.",
-                  "ids": "jargon.py find_internal_ids patterns (ghostty-website-journey 438cb814) + FX<n>."},
+                  "ids": "jargon.py find_internal_ids patterns (ghostty-website-journey 438cb814) + FX<n>.",
+                  "founding": FOUNDING_RULE, "sessions": SESSION_RULE},
+        "founding_floor": iso_utc(FOUNDING_FLOOR),
         "counts": {
             "prompts": len(prompts),
             "by_source": {k: v["kept"] for k, v in sources.items() if "kept" in v},
@@ -1129,6 +1311,16 @@ def main(argv=None):
             "glossary_missing_ids": len(missing),
             "glossary_missing_ids_family_id": sum(1 for i in missing if id_family(i) == "id"),
             "article_sessions": len(art),
+            "founding_candidates": dict(sorted(collections.Counter(c["reason"] for c in candidates).items())),
+            "founding_candidate_prompts": sum(c["prompts"] for c in candidates),
+            "founding_list": "approved" if a.founding else "none",
+            "founding_sessions": sum(1 for s in sessions if s["founding"]),
+            "founding_prompts": sum(1 for p in prompts if p["founding"]),
+            "sessions": len(sessions),
+            "sessions_by_source": dict(sorted(collections.Counter(
+                f"{s['tool']}-{s['machine']}".replace("codex-mac", "codex") for s in sessions).items())),
+            "sessions_commands_only": sum(1 for s in sessions if s["commands_only"]),
+            "sessions_with_cc_title": sum(1 for s in sessions if s["cc_title"]),
         },
         "inputs": {"codex_files": len(codex_files), "transcript_sessions": len(tx),
                    "phases": os.path.basename(phases_csv), "people_names": len(people),
@@ -1141,6 +1333,7 @@ def main(argv=None):
         json.dump(manifest, f, indent=2, ensure_ascii=False)
         f.write("\n")
     private = {"note": "untracked debugging details; never publish", "vm_note": a.vm_status,
+               "founding_list": a.founding,
                "paths": {"claude_history": os.path.join(a.claude_dir, "history.jsonl"), "vm_history": vm_path,
                          "codex_dir": a.codex_dir, "stats": a.stats, "rustty_repo": a.rustty_repo},
                "other_project_names": projects}

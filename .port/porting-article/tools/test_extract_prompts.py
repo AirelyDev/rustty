@@ -394,5 +394,143 @@ class IdAssignmentTest(unittest.TestCase):
         self.assertEqual(ps[0]["ts"], "2026-07-13T09:15:02Z")
 
 
+def ehist(display, iso, project="/Users/example/projects/rustty", session="s1"):
+    """History row with a synthetic home directory."""
+    return hist(display, iso, project=project, session=session)
+
+
+HOME = "/Users/example"
+
+
+class FoundingTest(unittest.TestCase):
+    def rows(self):
+        return [
+            # session A: the port decision, in the projects folder, partly before the window opens (07:00Z)
+            ehist("check out the reference repo", "2026-06-21T04:40:00Z", HOME + "/projects", "A"),
+            ehist("port it from zig to rust", "2026-06-21T05:00:00Z", HOME + "/projects", "A"),
+            ehist("call it rustty", "2026-06-21T07:30:00Z", HOME + "/projects", "A"),
+            # session B: same day, same folder, unrelated question
+            ehist("tell me about some tool", "2026-06-21T08:00:00Z", HOME + "/projects", "B"),
+            # session C: the early folder name
+            ehist("/effort", "2026-06-21T08:30:00Z", HOME + "/projects/rusty", "C"),
+            # first prompt in a rustty path
+            ehist("start", "2026-06-22T13:00:00Z", HOME + "/projects/rustty", "R"),
+            # session D: the reference checkout, after the repository exists
+            ehist("review the allocator use while porting to rust", "2026-06-24T00:30:00Z",
+                  HOME + "/projects/ghostty", "D"),
+            # session E: the projects folder after the repository exists: not a candidate
+            ehist("/resume", "2026-06-22T13:10:00Z", HOME + "/projects", "E"),
+            # session F: an unrelated project the same day: not a candidate
+            ehist("fix the app", "2026-06-21T05:00:00Z", HOME + "/projects/otherapp", "F"),
+            # session G: the website checkout before the article: not a candidate
+            ehist("site copy", "2026-07-02T10:00:00Z", HOME + "/projects/ghostty-website", "G"),
+            # before the founding floor
+            ehist("old", "2026-06-19T23:59:00Z", HOME + "/projects", "H"),
+        ]
+
+    def test_founding_sessions_explicit_list(self):
+        approved = ep.parse_founding([
+            "session,tool,machine,project,first_ts,last_ts,prompts,reason,decision",
+            "A,claude,mac,~/projects,2026-06-21T04:40:00Z,2026-06-21T07:30:00Z,3,port-decision,include",
+            "C,claude,mac,~/projects/rusty,2026-06-21T08:30:00Z,2026-06-21T08:30:00Z,1,naming,exclude",
+        ])
+        self.assertEqual(approved, {("claude", "mac", "A")})
+        res = ep.history_prompts(self.rows(), "mac", WINDOW, founding=approved)
+        kept = [(p["session"], p["founding"]) for p in res.prompts]
+        self.assertEqual([s for s, _f in kept], ["A", "A", "A", "R"])
+        self.assertTrue(all(f for s, f in kept if s == "A"))
+        self.assertFalse(any(f for s, f in kept if s != "A"))
+        # B (same day, not listed) and C (excluded) are dropped as other projects
+        self.assertEqual(res.dropped, {"other-project": 5, "before-window": 2})
+        self.assertEqual(res.in_source, len(res.prompts) + sum(res.dropped.values()))
+        # the founding list is per machine and tool: the same id on the VM is not founding
+        vm = ep.history_prompts(self.rows(), "vm", WINDOW, founding=approved)
+        self.assertNotIn("A", {p["session"] for p in vm.prompts if p["founding"]})
+        # an unreviewed row is refused
+        with self.assertRaises(SystemExit):
+            ep.parse_founding(["session,tool,machine,project,first_ts,last_ts,prompts,reason,decision",
+                               "A,claude,mac,~/projects,x,y,3,port-decision,"])
+
+    def test_founding_candidates_proposed(self):
+        cands = ep.founding_candidates([("mac", self.rows())], cutoff=WINDOW[1])
+        by = {c["session"]: c for c in cands}
+        self.assertEqual(set(by), {"A", "B", "C", "D"})
+        self.assertEqual(by["A"]["reason"], "port-decision")
+        self.assertEqual(by["B"]["reason"], "other")
+        self.assertEqual(by["C"]["reason"], "naming")
+        self.assertEqual(by["D"]["reason"], "ghostty-checkout")
+        self.assertEqual((by["A"]["prompts"], by["A"]["first_ts"], by["A"]["last_ts"]),
+                         (3, "2026-06-21T04:40:00Z", "2026-06-21T07:30:00Z"))
+        self.assertEqual(by["A"]["project"], "~/projects")
+        self.assertTrue(all(c["decision"] == "" for c in cands))
+        self.assertEqual([c["session"] for c in cands], ["A", "B", "C", "D"])  # by first prompt
+        # without an approved list nothing is included
+        res = ep.history_prompts(self.rows(), "mac", WINDOW)
+        self.assertEqual({p["session"] for p in res.prompts}, {"R"})
+        self.assertFalse(any(p["founding"] for p in res.prompts))
+
+
+class SessionAggregateTest(unittest.TestCase):
+    def p(self, sid, iso, kind="prompt", tool="claude", machine="mac", branch=None, model=None, commits=(),
+          basis="none", article=False, founding=False):
+        return {"tool": tool, "machine": machine, "session": sid, "ts_epoch": ep.parse_ts(iso), "order": 0,
+                "kind": kind, "branch": branch, "model": model, "commits": list(commits), "commits_basis": basis,
+                "article_work": article, "founding": founding}
+
+    def test_session_aggregate(self):
+        ps = [
+            self.p("aaaaaaaa-1111", "2026-07-01T10:00:00Z", branch="main", model="claude-opus-4-8",
+                   commits=["c1"], basis="session-window"),
+            self.p("aaaaaaaa-1111", "2026-07-01T12:00:00Z", branch="phase-2", model="claude-fable-5",
+                   commits=["c2", "c1"], basis="session-window"),
+            self.p("aaaaaaaa-1111", "2026-07-01T11:00:00Z", kind="command", basis="ambiguous"),
+            self.p("bbbbbbbb-2222", "2026-07-02T09:00:00Z", kind="command"),
+            self.p("bbbbbbbb-2222", "2026-07-02T09:05:00Z", kind="command"),
+            self.p("cx-33", "2026-07-03T09:00:00Z", tool="codex", basis="ambiguous", article=True, founding=False),
+            self.p("cx-33", "2026-07-03T09:30:00Z", tool="codex", basis="ambiguous", model="gpt-5.5"),
+        ]
+        agg = ep.session_aggregates(ps, titles={("mac", "aaaaaaaa-1111"): "Port the parser"})
+        self.assertEqual([s["key"] for s in agg], ["claude-mac-aaaaaaaa", "claude-mac-bbbbbbbb", "codex-mac-cx-33"])
+        a, b, c = agg
+        self.assertEqual((a["session"], a["tool"], a["machine"], a["prompts"]), ("aaaaaaaa-1111", "claude", "mac", 3))
+        self.assertEqual((a["first_ts"], a["last_ts"]), ("2026-07-01T10:00:00Z", "2026-07-01T12:00:00Z"))
+        self.assertEqual(a["branches"], ["main", "phase-2"])
+        self.assertEqual(a["models"], ["claude-fable-5", "claude-opus-4-8"])
+        self.assertEqual(a["commits"], ["c1", "c2"])
+        self.assertEqual(a["commits_ambiguous"], 1)
+        self.assertFalse(a["commands_only"])
+        self.assertTrue(b["commands_only"])
+        self.assertEqual((b["prompts"], b["branches"], b["models"], b["commits"]), (2, [], [], []))
+        self.assertEqual((c["commits_ambiguous"], c["article_work"], c["founding"]), (2, True, False))
+        self.assertEqual(sum(s["prompts"] for s in agg), len(ps))
+        self.assertEqual(set(a), {"session", "key", "tool", "machine", "first_ts", "last_ts", "prompts",
+                                  "commands_only", "founding", "article_work", "branches", "models", "commits",
+                                  "commits_ambiguous", "cc_title"})
+
+    def test_session_keys_unique(self):
+        ps = [self.p("019e1d07-aaaa", "2026-07-01T10:00:00Z", tool="codex"),
+              self.p("019e1d07-bbbb", "2026-07-01T10:01:00Z", tool="codex")]
+        keys = [s["key"] for s in ep.session_aggregates(ps)]
+        self.assertEqual(len(set(keys)), 2)
+        self.assertTrue(all(k.startswith("codex-mac-019e1d07") for k in keys))
+
+    def test_cc_title(self):
+        import io
+        stats = io.StringIO(
+            "machine,tool,session_id,title,ai_title\n"
+            "mac,claude,s-ai,Typed title,Generated title\n"
+            "mac,claude,s-typed,Typed only,\n"
+            "rvm,claude,s-vm,,VM generated\n"
+            "mac,claude,s-none,,\n"
+            "mac,codex,s-codex,Codex title,\n")
+        titles = ep.titles_from_rows(ep.csv.DictReader(stats))
+        self.assertEqual(titles, {("mac", "s-ai"): "Generated title", ("mac", "s-typed"): "Typed only",
+                                  ("rvm", "s-vm"): "VM generated"})
+        ps = [self.p("s-ai", "2026-07-01T10:00:00Z"), self.p("s-vm", "2026-07-01T10:00:00Z", machine="vm"),
+              self.p("s-none", "2026-07-01T10:00:00Z"), self.p("s-codex", "2026-07-01T10:00:00Z", tool="codex")]
+        got = {s["session"]: s["cc_title"] for s in ep.session_aggregates(ps, titles=titles)}
+        self.assertEqual(got, {"s-ai": "Generated title", "s-vm": "VM generated", "s-none": None, "s-codex": None})
+
+
 if __name__ == "__main__":
     unittest.main()
