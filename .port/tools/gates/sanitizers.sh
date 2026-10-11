@@ -819,6 +819,23 @@ M_NARROWED=0
 # the disk never holds more than one crate's instrumented build (P7-W14's
 # first passes ran that way, on a Mac with 26 GB free).
 SAN_PER_CRATE_TARGET="${SAN_PER_CRATE_TARGET:-0}"
+# "Deleted when the pass ends" holds on EVERY way out of a pass: the end of
+# the crate loop (GREEN or RED crates alike), the disk-floor BLOCKED stop, and
+# an interrupt. The last had no handler: a pass stopped by INT/TERM/HUP (ci.sh
+# kills a gate's process tree on Ctrl-C; an operator kills a stuck run) left
+# its tens-of-GB target/san-<san> behind (CI hygiene B). SAN_CUR_TD is the dir
+# being built in (the shared one, or the current crate's), and the trap drops
+# it, through drop_target's shape guard, before exiting 128+signal. A SIGKILL
+# cannot be trapped; the next pass's opening drop_target still clears that.
+SAN_CUR_TD=""
+san_on_signal() {  # san_on_signal SIGNAL RC
+  trap - INT TERM HUP
+  echo "sanitizers.sh: interrupted (SIG$1): deleting ${SAN_CUR_TD:-no target dir} before exiting $2" >&2
+  if [ -n "$SAN_CUR_TD" ]; then drop_target "$SAN_CUR_TD"; fi
+  exit "$2"
+}
+san_trap_install() { trap 'san_on_signal INT 130' INT; trap 'san_on_signal TERM 143' TERM; trap 'san_on_signal HUP 129' HUP; }
+san_trap_clear() { trap - INT TERM HUP; SAN_CUR_TD=""; }
 matrix_run() {  # matrix_run SAN FILTER SPEC...
   local san="$1" filter="$2"; shift 2
   local spec crate td log rc v t0 t1 safe fg shared="" m0
@@ -832,6 +849,8 @@ matrix_run() {  # matrix_run SAN FILTER SPEC...
     drop_target "$shared"
     echo "=== sanitizer matrix: $san over $# crate spec(s); one shared target dir $shared, deleted when the pass ends ==="
   fi
+  SAN_CUR_TD="$shared"
+  san_trap_install
   for spec in "$@"; do
     crate="${spec%%:*}"
     safe="$(printf '%s' "$spec" | tr ':,' '__')"
@@ -844,9 +863,11 @@ matrix_run() {  # matrix_run SAN FILTER SPEC...
       M_BLOCKED=1
       M_ROWS="$M_ROWS$spec|BLOCKED(disk)|0|0"$'\n'
       if [ -n "$shared" ]; then drop_target "$shared"; fi
+      san_trap_clear
       M_WALL=$(($(date +%s) - m0))
       return
     fi
+    [ -n "$shared" ] || SAN_CUR_TD="$td"
     t0=$(date +%s)
     run_crate "$san" "$spec" "$filter$(spec_skips "$san" "$spec")$(spec_args "$san" "$spec")" "$td" "$log"; rc=$?
     t1=$(date +%s)
@@ -918,6 +939,7 @@ matrix_run() {  # matrix_run SAN FILTER SPEC...
     esac
   done
   if [ -n "$shared" ]; then drop_target "$shared"; fi
+  san_trap_clear
   M_WALL=$(($(date +%s) - m0))
 }
 
@@ -1375,6 +1397,40 @@ self_test() {
   elif ! ( SAN_TARGET_ROOT="$st/t"; drop_target "$st/t/san-asan" && drop_target "$st/t/san-asan-foo" ) || [ -d "$st/t/san-asan" ] || [ -d "$st/t/san-asan-foo" ]; then
     echo "  FAIL D drop_target did not remove the shared and the per-crate dir"; fail=1
   else echo "  ok   D drop_target removes san-asan and san-asan-<crate>, refuses anything else"; fi
+  # --- arm D2: the pass's target dir is gone on every way out (stub run_crate) ---
+  # A GREEN pass, a RED crate, the disk-floor BLOCKED stop (the floor trips
+  # once the shared dir exists, i.e. before the second crate) and a SIGTERM
+  # mid-crate, shared and --per-crate-target. Control: no trap installed, the
+  # SIGTERM leaves the dir behind.
+  dx() {  # dx NAME WANT_RC DIR SNIPPET (after sourcing this script, with stubs)
+    local o r root="$st/d2-$1"
+    mkdir -p "$root"
+    # shellcheck disable=SC2016  # expanded by the inner bash
+    o="$(SAN_TARGET_ROOT="$root" SAN_LOG_ROOT="$root/logs" bash -c '. "$0" --source-only
+      run_crate() { mkdir -p "$4" "$(dirname "$5")"; : > "$4/built"
+        case "${D2_MODE:-}" in
+          red) printf "running 1 test\ntest a ... FAILED\ntest result: FAILED. 0 passed; 1 failed\n" > "$5"; return 101 ;;
+          term) kill -TERM $$; sleep 2 ;;
+        esac
+        printf "running 1 test\ntest result: ok. 1 passed; 0 failed; 0 ignored\n" > "$5"; return 0; }
+      free_gb() { if [ -n "${D2_FLOOR:-}" ] && [ -d "$SAN_TARGET_ROOT/san-asan" ]; then echo 1; else echo 100; fi; }
+      '"$4" "$GATES_DIR/sanitizers.sh" 2>&1)"; r=$?
+    if [ "$r" -eq "$2" ] && [ ! -d "$root/$3" ]; then echo "  ok   D2 $1: exit $r, $3 deleted"
+    else echo "  FAIL D2 $1 (rc=$r, $3 $( [ -d "$root/$3" ] && echo LEFT BEHIND || echo absent)): $(printf '%s' "$o" | tail -3)"; fail=1; fi
+  }
+  dx green 0 san-asan 'matrix_run asan "" c1 c2'
+  dx red 0 san-asan 'D2_MODE=red; matrix_run asan "" c1 c2; [ "$M_RED" = 1 ]'
+  dx floor 0 san-asan 'D2_FLOOR=1; matrix_run asan "" c1 c2; [ "$M_BLOCKED" = 1 ]'
+  dx term 143 san-asan 'D2_MODE=term; matrix_run asan "" c1 c2'
+  dx term-per-crate 143 san-asan-c1 'D2_MODE=term; SAN_PER_CRATE_TARGET=1; matrix_run asan "" c1 c2'
+  mkdir -p "$st/d2-ctl"
+  # shellcheck disable=SC2016  # expanded by the inner bash
+  : "$(SAN_TARGET_ROOT="$st/d2-ctl" SAN_LOG_ROOT="$st/d2-ctl/logs" bash -c '. "$0" --source-only
+    san_trap_install() { :; }
+    run_crate() { mkdir -p "$4"; kill -TERM $$; sleep 2; }
+    matrix_run asan "" c1' "$GATES_DIR/sanitizers.sh" 2>&1)"
+  if [ -d "$st/d2-ctl/san-asan" ]; then echo "  ok   D2 control: without the trap a SIGTERM leaves san-asan behind, noticed"
+  else echo "  FAIL D2 control: san-asan was deleted without the trap (the arm proves nothing)"; fail=1; fi
   # --- arm E: the Miri-exception cross-check over a synthetic source + logs ---
   mkdir -p "$st/src/crates/foo/src" "$st/xlogs/asan"
   printf '[package]\nname = "foo"\n' >"$st/src/crates/foo/Cargo.toml"
