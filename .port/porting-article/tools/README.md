@@ -15,8 +15,8 @@ python3 .port/porting-article/tools/extract_prompts.py --vm-status "fetched <whe
 python3 -m unittest discover -s .port/porting-article/tools -p 'test_*.py' -v
 ```
 
-`python3 -m unittest .port/porting-article/tools/test_extract_prompts.py` does not work: the
-leading `.port` makes unittest derive an empty module name. Use `discover` as above.
+Always run the tests with the `discover` form above (a dotted file path starting with `.port`
+gives unittest an empty module name).
 
 Options: `--research` (research dir, default `~/projects/rustty/.port/journey-article/research`),
 `--rustty-repo`, `--stats` (rustty-stats `data/`), `--vm-history`, `--vm-status`, `--codex-dir`,
@@ -28,7 +28,8 @@ Options: `--research` (research dir, default `~/projects/rustty/.port/journey-ar
 | File | Content |
 |---|---|
 | `prompts-raw-2026-10-10.jsonl` | one prompt per line: `id, ts, tool, machine, session, text, chars, kind, pasted, model, effort, mode, settings_source, approval, sandbox, article_work, commits, commits_basis, ids, phase, decision, branch, project` |
-| `prompts-manifest-2026-10-10.json` | per-source `in_source / kept / dropped{reason}`, cutoff, VM status, rules, counts per badge |
+| `prompts-manifest-2026-10-10.json` | publishable: per-source `in_source / kept / dropped{reason}`, cutoff, VM status, rules, counts only (no home paths, IPs or project names; checked before writing) |
+| `prompts-manifest-private-2026-10-10.json` | debugging only, never published: input paths, the free-text `--vm-status` note, other-project names |
 | `prompts-redactions-proposed-2026-10-10.csv` | `id,start,end,match,reason,decision` (decision empty = unreviewed; the author writes `redact` or `keep`) |
 | `prompts-glossary-missing-2026-10-10.txt` | `id<TAB>count<TAB>first prompt id<TAB>family` for ids not in `r2-glossary.md` |
 | `prompts-article-sessions-2026-10-10.csv` | the sessions tagged as article work, with the reason |
@@ -56,15 +57,17 @@ Options: `--research` (research dir, default `~/projects/rustty/.port/journey-ar
 - **Settings** (`settings_source`): `transcript`, the model call answering the prompt (live
   transcript, else the rustty-stats per-call rows; for Codex the turn context, with approval policy
   and sandbox) > `session`, the session's only model in rustty-stats > `commit-trailer`, the
-  `Co-Authored-By` model of the prompt's commits (or of every commit in its window when they all
-  agree; effort unknown) > `unknown`. Mode is the transcript's `permissionMode` at the prompt, else
+  `Co-Authored-By` model of the prompt's own linked commits after the dedupe (effort unknown) >
+  `unknown`. Mode is the transcript's `permissionMode` at the prompt, else
   the rustty-stats session mode (`bypassPermissions` → `bypass`). Codex mode: `plan` for plan
   collaboration mode, `bypass` for approval `never` + `danger-full-access`, else `default`.
 - **Commits.** See `COMMITS_RULE` in the script (also written to the manifest): a window from the
   prompt to the session's next prompt (capped at 12 h); `session-window` when the session's branch
   is known, `time-window-branch` when it is not but only one branch was active, else `none`.
   Claude-Session trailers and the `[branch sha]` lines git prints into surviving transcripts keep
-  a commit away from sessions that did not make it.
+  a commit away from sessions that did not make it. After linking, a commit claimed by two or more
+  human sessions keeps only links backed by that evidence; prompts left with no commits get basis
+  `ambiguous` (`dedupe_links`).
 - **Decision** (`is_decision`): after lowercasing and stripping punctuation, a single choice letter,
   or 1-3 words all from `{ok, yes, y, no, go, ahead, continue, proceed, sure, agreed, lgtm, a, b, c, d}`.
 - **Article work.** A session with a prompt on/after 2026-10-08 00:00 Pacific AND (a project
@@ -76,7 +79,11 @@ Options: `--research` (research dir, default `~/projects/rustty/.port/journey-ar
 - **Phase.** The strategy timeline's era (latest dated `strategy-timeline-*.csv`) in force on the
   prompt's Pacific date; the one-day `external` marker is skipped.
 - **Redaction candidates** (`scan_redactions`): `secret` (sk-/ghp_/xox…/AWS keys, `-----BEGIN`,
-  "password is …"), `email` (except `noreply@anthropic.com`), `phone`, `unrelated-path` (home paths
+  Bearer tokens, `sshpass -p`, credentials in any phrasing: "password is X", "pwd X", "pw: X",
+  "passw X", "pass: X", "login user/pass", "api_key = …"; a common word after the credential word
+  does not count), `email` (except `noreply@anthropic.com`), `user-host` (user@host or user@IP that
+  is not an email, e.g. ssh targets and shell prompts), `ip` (IPv4, private ranges included),
+  `phone`, `unrelated-path` (home paths
   outside `projects/rustty*` / `projects/ghostty*`), `person` (names from `--people`),
   `unrelated-project` (leaf names of the other projects in the prompt history). Spans inside an
   allowlisted phrase (`redaction-allowlist.txt`) are not proposed. Only the author's `redact`

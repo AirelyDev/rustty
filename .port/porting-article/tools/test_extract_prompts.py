@@ -1,6 +1,6 @@
 """Tests for extract_prompts.py. In-memory fixtures only; no real files are read.
 
-Run: python3 -m unittest .port/porting-article/tools/test_extract_prompts.py -v
+Run: python3 -m unittest discover -s .port/porting-article/tools -p 'test_*.py' -v
 """
 import os
 import sys
@@ -201,6 +201,25 @@ class CommitWindowTest(unittest.TestCase):
         self.assertEqual(ep.commit_window(self.t, self.t + 3600, "phase-8", [mixed], foreign_cloud={"session_X"}),
                          (["a" * 40], "session-window"))
 
+    def test_dedupe_multi_session_commits(self):
+        by_sha = {
+            "a": {"sha": "a", "sessions": {"s1"}, "cloud": set()},         # transcript evidence for s1
+            "b": {"sha": "b", "sessions": set(), "cloud": {"session_Z"}},  # trailer bridged from s2
+            "c": {"sha": "c", "sessions": set(), "cloud": set()},          # no evidence at all
+            "d": {"sha": "d", "sessions": set(), "cloud": set()},          # claimed by s1 only
+        }
+        prompts = [
+            {"session": "s1", "commits": ["a", "b", "c", "d"], "commits_basis": "session-window"},
+            {"session": "s2", "commits": ["a", "b", "c"], "commits_basis": "time-window-branch"},
+            {"session": "s2", "commits": ["c"], "commits_basis": "time-window-branch"},
+        ]
+        stats = ep.dedupe_links(prompts, by_sha, {"s2": {"session_Z"}})
+        self.assertEqual(prompts[0]["commits"], ["a", "d"])
+        self.assertEqual(prompts[0]["commits_basis"], "session-window")
+        self.assertEqual(prompts[1]["commits"], ["b"])
+        self.assertEqual((prompts[2]["commits"], prompts[2]["commits_basis"]), ([], "ambiguous"))
+        self.assertEqual(stats, {"contested_commits": 3, "links_removed": 5, "prompts_ambiguous": 1})
+
     def test_window_end(self):
         self.assertEqual(ep.window_end(100.0, 200.0, None), 200.0)
         self.assertEqual(ep.window_end(100.0, None, 5000.0), 5000.0)
@@ -296,6 +315,38 @@ class RedactionTest(unittest.TestCase):
         for text in clean:
             self.assertEqual(self.scan(text, people, allow), [], text)
 
+    def test_credentials_any_phrasing(self):
+        positives = {
+            "freshly installed, pwd hunter2, help me": "pwd hunter2",
+            "user gael pw: hunter2": "pw: hunter2",
+            "pass: s3cret!": "pass: s3cret!",
+            "login gael/hunter2 on the box": "login gael/hunter2",
+            "the password hunter2 works": "password hunter2",
+            "password is hunter2-example.": "password is hunter2-example",
+            "creds: admin/admin": "creds: admin/admin",
+            "api_key = abcdef1234567890": "api_key = abcdef1234567890",
+            "sshpass -p hunter2 ssh box": "sshpass -p hunter2",
+            "on the vm, user gael passw hunter2": "passw hunter2",
+        }
+        for text, want in positives.items():
+            self.assertIn((want, "secret"), self.scan(text), text)
+        negatives = ["do a review pass", "first pass done", "pass the flag through", "run pwd and ls",
+                     "the password field is empty", "print `pwd` first", "pwd output shows the path",
+                     "a password is required", "password manager", "pass it to the builder",
+                     "no token is needed", "we passed the test"]
+        for text in negatives:
+            self.assertEqual([h for h in self.scan(text) if h[1] == "secret"], [], text)
+
+    def test_ip_and_user_host(self):
+        self.assertIn(("203.0.113.7", "ip"), self.scan("VM at 203.0.113.7, fresh"))
+        self.assertIn(("user@203.0.113.7", "user-host"), self.scan("running at user@203.0.113.7 (repo)"))
+        self.assertIn(("user@devbox:~/projects/rustty$", "user-host"), self.scan("user@devbox:~/projects/rustty$ clear"))
+        self.assertIn(("bob@example.com", "email"), self.scan("mail bob@example.com"))
+        self.assertNotIn("user-host", [r for _m, r in self.scan("mail bob@example.com")])
+        for text in ["version 1.2.3", "zig 0.16.0", "oracle 12752b2ac", "review @docs/ and @.port/",
+                     "react@18.3.1 is pinned", "v1.2.3.4.5"]:
+            self.assertEqual([h for h in self.scan(text) if h[1] in ("ip", "user-host")], [], text)
+
     def test_unrelated_project_names(self):
         hits = [(m["match"], m["reason"]) for m in
                 ep.scan_redactions("compare with manga-reader please", projects=["manga-reader"])]
@@ -322,6 +373,14 @@ class ManifestTest(unittest.TestCase):
         ep.check_reconciles(sources)
         with self.assertRaises(SystemExit):
             ep.check_reconciles({"x": {"in_source": 3, "kept": 1, "dropped": {"a": 1}}})
+
+
+class PublicManifestTest(unittest.TestCase):
+    def test_public_manifest_has_no_private_details(self):
+        ep.check_public_manifest({"counts": {"prompts": 3}, "vm_status": "fetched (copy dated 2026-10-11T01:28:00Z)"})
+        for leak in ["/Users/gael/.claude/history.jsonl", "/home/gael/x", "~/projects/x", "rvm at 192.168.64.4"]:
+            with self.assertRaises(SystemExit):
+                ep.check_public_manifest({"inputs": {"x": leak}})
 
 
 class IdAssignmentTest(unittest.TestCase):

@@ -525,6 +525,39 @@ def commit_window(start, end, branch, commits, foreign_cloud=frozenset(), sessio
     return [], "none"
 
 
+DEDUPE_RULE = ("After linking, a commit linked from prompts of two or more human sessions keeps only the links "
+               "backed by evidence: the commit's `[branch sha]` git output appears in that session's own transcripts, "
+               "or its Claude-Session trailer names a cloud session bridged from that session. Other links to it are "
+               "removed; a prompt left with no commits gets basis `ambiguous`.")
+
+
+def dedupe_links(prompts, by_sha, owned_clouds):
+    """Apply DEDUPE_RULE in place. owned_clouds: {session: set(cloud ids bridged from it)}.
+    Returns counts {contested_commits, links_removed, prompts_ambiguous}."""
+    claimed = collections.defaultdict(set)
+    for p in prompts:
+        for sha in p.get("commits") or []:
+            claimed[sha].add(p["session"])
+    contested = {sha for sha, ss in claimed.items() if len(ss) >= 2}
+    removed = ambiguous = 0
+    for p in prompts:
+        if not p.get("commits"):
+            continue
+        keep = []
+        for sha in p["commits"]:
+            c = by_sha[sha]
+            if sha not in contested or p["session"] in c.get("sessions", ()) or \
+                    (c.get("cloud", set()) & owned_clouds.get(p["session"], set())):
+                keep.append(sha)
+            else:
+                removed += 1
+        if not keep:
+            p["commits_basis"] = "ambiguous"
+            ambiguous += 1
+        p["commits"] = keep
+    return {"contested_commits": len(contested), "links_removed": removed, "prompts_ambiguous": ambiguous}
+
+
 def merge_subject_branch(subject):
     m = re.match(r"Merge (?:remote-tracking )?branch '([^']+)'", subject)
     if m:
@@ -716,6 +749,13 @@ def load_stats(stats_dir, keys):
 
 # ---------------------------------------------------------------------------- redaction scanner
 
+_COMMON_AFTER_CREDENTIAL = (
+    "is|was|the|a|an|and|or|to|for|of|in|on|at|with|field|fields|manager|prompt|prompts|reset|change|changed|"
+    "protected|less|auth|authentication|login|output|outputs|command|shows|showed|prints|returns|returned|"
+    "should|would|will|can|could|must|may|be|not|here|there|that|this|it|from|as|by|so|if|when|then|"
+    "directory|dir|path|cwd|again|first|only|also|still|now|set|setup|required|needed|works|worked|ok")
+_NOT_COMMON = r"(?!(?:" + _COMMON_AFTER_CREDENTIAL + r")\b)(?![.,;:!?)\]`'\"])"
+
 SECRET_PATTERNS = [
     r"\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{16,}",
     r"\bgh[pousr]_[A-Za-z0-9]{20,}",
@@ -723,7 +763,17 @@ SECRET_PATTERNS = [
     r"\bxox[abposr]-[A-Za-z0-9-]{10,}",
     r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b",
     r"-----BEGIN[A-Z0-9 ]*-----",
-    r"(?i)\b(?:password|passwd|passphrase|api[ _-]?key|access[ _-]?token)\s*(?:is|=|:)\s*\S+",
+    # credential words, with or without a separator ("password is X", "pwd X", "pw: X"); the value may not be
+    # a common word, so "password field", "pwd output", "the password manager" stay quiet
+    r"(?i)\b(?:password|passwd|passw|passphrase|pwd|pw)\b(?:\s*(?:is|=|:)\s*|\s+)" + _NOT_COMMON + r"[^\s,;]+",
+    # bare "pass" only with an explicit separator ("pass: X", "pass=X"), never "first pass", "pass the …"
+    r"(?i)\bpass\s*[:=]\s*[^\s,;]+",
+    # "login user/pass", "creds: user/pass", "user/pass: a/b"
+    r"(?i)\b(?:login|logins?|creds?|credentials|user(?:name)?/pass(?:word)?)\b\s*(?:is|=|:)?\s*[^\s/,;]+/[^\s,;]+",
+    r"(?i)\b(?:api[ _-]?key|access[ _-]?token|auth[ _-]?token|secret[ _-]?key|token|secret)\s*(?:is|=|:)\s*"
+    r"[A-Za-z0-9_./+=-]{8,}",
+    r"\bBearer\s+[A-Za-z0-9._~+/=-]{16,}",
+    r"\bsshpass\s+-p\s*\S+",
 ]
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
 EMAIL_ALWAYS_OK = {"noreply@anthropic.com"}
@@ -731,7 +781,11 @@ PHONE_RE = re.compile(r"(?<![\w.+/-])(?:\+\d{1,3}[\s.-]?)?(?:\(\d{3}\)|\d{3})[\s
 PATH_RE = re.compile(r"(?:/Users|/home)/[A-Za-z0-9._-]+(?:/[^\s'\"`)\]>,;]*)?|~/[^\s'\"`)\]>,;]+")
 PATH_OK = re.compile(r"^(?:projects/(?:rustty|ghostty)[^/]*(?:/.*)?|projects/?|"
                      r"\.claude/projects/-(?:Users|home)-[^/]*-projects-(?:rustty|ghostty)[^/]*(?:/.*)?)$")
-REASON_PRIORITY = {"secret": 0, "email": 1, "phone": 2, "unrelated-path": 3, "person": 4, "unrelated-project": 5}
+IPV4_RE = re.compile(r"(?<![\w.])(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?![\w.]*\d)")
+# user@host / user@IP that is not an email address (no alphabetic TLD), e.g. ssh targets, shell prompts
+USER_HOST_RE = re.compile(r"(?<![\w.@/-])[A-Za-z_][\w.-]*@(?:[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)(?::[~/][^\s'\"`]*)?")
+REASON_PRIORITY = {"secret": 0, "email": 1, "user-host": 2, "ip": 3, "phone": 4, "unrelated-path": 5, "person": 6,
+                   "unrelated-project": 7}
 
 
 def _path_ok(path):
@@ -747,10 +801,23 @@ def scan_redactions(text, people=(), allowlist=(), projects=()):
     """Candidate spans to redact: [{start, end, match, reason}], non-overlapping, in order."""
     hits = []
     for pat in SECRET_PATTERNS:
-        hits += [(m.start(), m.end(), "secret") for m in re.finditer(pat, text)]
+        for m in re.finditer(pat, text):
+            s = m.group(0).rstrip(".:)'\"`")
+            hits.append((m.start(), m.start() + len(s), "secret"))
+    emails = []
     for m in EMAIL_RE.finditer(text):
+        emails.append((m.start(), m.end()))
         if m.group(0).lower() not in EMAIL_ALWAYS_OK:
             hits.append((m.start(), m.end(), "email"))
+    for m in USER_HOST_RE.finditer(text):
+        if any(a <= m.start() < b for a, b in emails):
+            continue
+        s = m.group(0).rstrip(".,:)")
+        host = re.split(r"[:]", s.split("@", 1)[1])[0]
+        if not re.search(r"[A-Za-z]", host) and not IPV4_RE.fullmatch(host):
+            continue  # package@version, not a login
+        hits.append((m.start(), m.start() + len(s), "user-host"))
+    hits += [(m.start(), m.end(), "ip") for m in IPV4_RE.finditer(text)]
     hits += [(m.start(), m.end(), "phone") for m in PHONE_RE.finditer(text)]
     for m in PATH_RE.finditer(text):
         s = m.group(0).rstrip(".,:")
@@ -778,6 +845,17 @@ def scan_redactions(text, people=(), allowlist=(), projects=()):
         out.append(dict(start=s, end=e, match=text[s:e], reason=reason))
         last = e
     return out
+
+
+PUBLIC_LEAKS = re.compile(r"/Users/|/home/|~/|" + IPV4_RE.pattern)
+
+
+def check_public_manifest(manifest):
+    """The manifest is published: counts and rules only, no home paths or IP addresses."""
+    blob = json.dumps(manifest, ensure_ascii=False)
+    m = PUBLIC_LEAKS.search(blob)
+    if m:
+        raise SystemExit(f"manifest would publish a private detail: {blob[max(0, m.start() - 40):m.end() + 40]!r}")
 
 
 def read_list(path):
@@ -871,7 +949,7 @@ def main(argv=None):
     vm_status = "pending"
     if os.path.exists(vm_path):
         results["claude-vm"] = history_prompts(read_jsonl(vm_path), "vm", window)
-        vm_status = a.vm_status or f"fetched (file mtime {iso_utc(os.path.getmtime(vm_path))})"
+        vm_status = f"fetched (VM history last modified {iso_utc(os.path.getmtime(vm_path))})"
     codex_files, seen_ids = [], set()
     for kind in ("sessions", "archived_sessions"):
         for path in sorted(glob.glob(os.path.join(a.codex_dir, kind, "**", "*.jsonl"), recursive=True)):
@@ -932,15 +1010,23 @@ def main(argv=None):
                 branch = None
             p["branch"] = branch
             p["commits"], p["commits_basis"] = commit_window(p["ts_epoch"], end, branch, commits, foreign, sid)
-            if tool == "claude":
-                linked = set(p["commits"])
-                tm = [m for c in commits if c["sha"] in linked for m in c["models"]]
-                if not tm:
-                    win = [m for c in commits if p["ts_epoch"] <= c["ts"] < end
-                           and not (c["cloud"] and not (c["cloud"] - foreign))
-                           and not (c["sessions"] and sid not in c["sessions"]) for m in c["models"]]
-                    tm = win if len(set(win)) == 1 else []
-                p.update(join_settings(p, end, t, stats_calls.get(sk), ss, tm))
+            p["_end"], p["_tx"], p["_sk"], p["_ss"] = end, t, sk, ss
+
+    # a commit claimed by two or more human sessions keeps only evidence-backed links
+    owned = collections.defaultdict(set)
+    for cloud, o in owners.items():
+        for sid in o:
+            owned[sid].add(cloud)
+    by_sha = {c["sha"]: c for c in commits}
+    dedupe_stats = dedupe_links(prompts, by_sha, owned)
+
+    # settings (after the dedupe: trailer inference uses the prompt's own linked commits only)
+    for p in prompts:
+        if p["tool"] == "claude":
+            tm = [m for sha in p["commits"] for m in by_sha[sha]["models"]]
+            p.update(join_settings(p, p["_end"], p["_tx"], stats_calls.get(p["_sk"]), p["_ss"], tm))
+        for k in ("_end", "_tx", "_sk", "_ss"):
+            p.pop(k, None)
 
     # tags
     phases_csv = sorted(glob.glob(os.path.join(data, "strategy-timeline-*.csv")))
@@ -1012,7 +1098,7 @@ def main(argv=None):
         "window_utc": [iso_utc(window[0]), iso_utc(window[1])],
         "purged_before": PURGED_BEFORE,
         "vm_status": vm_status,
-        "rules": {"article_work": ARTICLE_RULE, "decision": DECISION_RULE, "commits": COMMITS_RULE,
+        "rules": {"article_work": ARTICLE_RULE, "decision": DECISION_RULE, "commits": COMMITS_RULE + " " + DEDUPE_RULE,
                   "project": "Claude history `project` / Codex `cwd` contains 'rustty' (worktrees included, as "
                              "rustty-stats); paths containing 'ghostty-website' are also kept on or after "
                              "2026-10-08 00:00 Pacific (article work).",
@@ -1022,8 +1108,8 @@ def main(argv=None):
                                  "replays; subagent and auto-review sessions are dropped whole.",
                   "settings": "transcript (the call answering the prompt, live transcript or rustty-stats per-call "
                               "rows; for Codex the turn context) > session (rustty-stats, one model in the "
-                              "session) > commit-trailer (Co-Authored-By model of the prompt's commits, or of "
-                              "every commit in its window when they agree; effort unknown) > unknown.",
+                              "session) > commit-trailer (Co-Authored-By model of the prompt's own linked commits, "
+                              "after the multi-session dedupe; effort unknown) > unknown.",
                   "ids": "jargon.py find_internal_ids patterns (ghostty-website-journey 438cb814) + FX<n>."},
         "counts": {
             "prompts": len(prompts),
@@ -1036,6 +1122,7 @@ def main(argv=None):
                 1 for p in prompts if p["tool"] == "claude" and p["machine"] == "mac"
                 and pacific_day(p["ts_epoch"]) < PURGED_BEFORE and p["settings_source"] == "transcript"),
             "prompts_with_commits": sum(1 for p in prompts if p["commits"]),
+            "commit_dedupe": dedupe_stats,
             "redaction_candidates": dict(sorted(red.items())),
             "redaction_candidate_prompts": len({p["id"] for p in prompts
                                                 if scan_redactions(p["text"], people, allow, projects)}),
@@ -1043,15 +1130,22 @@ def main(argv=None):
             "glossary_missing_ids_family_id": sum(1 for i in missing if id_family(i) == "id"),
             "article_sessions": len(art),
         },
-        "inputs": {"claude_history": os.path.join(a.claude_dir, "history.jsonl"), "vm_history": vm_path,
-                   "codex_files": len(codex_files), "transcript_sessions": len(tx), "stats": a.stats,
+        "inputs": {"codex_files": len(codex_files), "transcript_sessions": len(tx),
                    "phases": os.path.basename(phases_csv), "people_names": len(people),
-                   "allowlist_terms": len(allow), "other_project_names": projects,
+                   "allowlist_terms": len(allow), "other_project_names": len(projects),
                    "rustty_head": _git(a.rustty_repo, "rev-parse", "HEAD").strip(), "commits": len(commits),
                    "commits_seen_in_transcripts": len(tx_branch)},
     }
+    check_public_manifest(manifest)
     with open(os.path.join(data, f"prompts-manifest-{DATE_TAG}.json"), "w") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    private = {"note": "untracked debugging details; never publish", "vm_note": a.vm_status,
+               "paths": {"claude_history": os.path.join(a.claude_dir, "history.jsonl"), "vm_history": vm_path,
+                         "codex_dir": a.codex_dir, "stats": a.stats, "rustty_repo": a.rustty_repo},
+               "other_project_names": projects}
+    with open(os.path.join(data, f"prompts-manifest-private-{DATE_TAG}.json"), "w") as f:
+        json.dump(private, f, indent=2, ensure_ascii=False)
         f.write("\n")
     print(json.dumps({k: manifest[k] for k in ("sources", "cutoff", "vm_status", "counts")}, indent=2))
     return manifest
