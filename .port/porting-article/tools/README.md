@@ -60,8 +60,9 @@ never overwritten.
   and Codex human turns (root sessions only; subagent, auto-review and injected context are dropped and
   archive copies read once, as for Rustty) whose project / `cwd` is under `~/projects/ghostty-website*` (the Rustty site checkout and its worktrees,
   matched as a `projects/ghostty-website*` path component) are kept over the whole window with
-  `project_marker: website`. Every session with such a prompt is article work (reason
-  `project:website`) for all of its prompts, whatever the date. Website prompts never link Rustty
+  `project_marker: website`. A session with a website prompt on or after 2026-10-01 00:00 Pacific
+  (`WEBSITE_ARTICLE_FROM`) is article work (reason `project:website`) for its prompts from then on;
+  the June/July site build and Ferris rebrand are website work, not article work (author, 2026-10-11). Website prompts never link Rustty
   commits (`commits_basis: other-repo`). Codex was added on 2026-10-11 (run `2026-10-11d`).
 - **Codex human turns.** Subagent rollouts (`drop: subagent`) and auto-review rollouts (model
   `codex-auto-review` or `guardian_review` threads; `drop: auto-review`) are dropped whole. Inside
@@ -145,4 +146,10 @@ never overwritten.
   the `-2026-10-11c` suffix), `--cutoff 2026-10-11T14:20:54Z`, `--founding` (approved list),
   `--include-website`, the same reused VM history copy. 1,098 prompts (911 Mac, 165 VM, 22 Codex),
   102 sessions; 49 website-folder prompts in 5 sessions (four from 2026-07-02/03, one from
-  2026-10-07 Pacific), all article work. Decisions: 48 (adds `approve` / `approved`).
+  2026-10-07 Pacific), all article work under the rule of that run. Decisions: 48 (adds `approve` / `approved`).
+- **2026-10-11d**, `--cutoff 2026-10-11T14:37:27Z`, same flags: Codex website turns added (the in-app
+  browser header cut). 1,212 prompts (911 Mac, 165 VM, 136 Codex), 112 sessions; 163 website prompts
+  in 15 sessions.
+- **2026-10-11e**, `--cutoff 2026-10-11T17:46:10Z`, same flags: website prompts are article work only
+  from 2026-10-01 Pacific. 1,229 prompts (928 Mac, 165 VM, 136 Codex), 112 sessions; article-work
+  prompts 92 in 5 sessions (231 in 19 under the 2026-10-11d rule).

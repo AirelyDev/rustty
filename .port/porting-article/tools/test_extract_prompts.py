@@ -60,13 +60,26 @@ class HistoryTest(unittest.TestCase):
         self.assertEqual([p["project_marker"] for p in on.prompts], ["website", "website", "rustty"])
         self.assertEqual(on.dropped, {"other-project": 2, "before-window": 1})
         self.assertEqual(on.in_source, len(on.prompts) + sum(on.dropped.values()))
-        # every prompt of a website session is article work, whatever the date
+        # website prompts are article work only from 2026-10-01 Pacific: the July site work is not
         prompts = [dict(p, ts_epoch=p["ts_epoch"]) for p in on.prompts]
         sessions = ep.article_sessions(prompts, include_website=True)
-        self.assertEqual(sessions, {"w1": "project:website", "w2": "project:website"})
-        self.assertEqual([ep.is_article_work(p, sessions) for p in prompts], [True, True, False])
+        self.assertEqual(sessions, {"w2": "project:website"})
+        self.assertEqual([ep.is_article_work(p, sessions) for p in prompts], [False, True, False])
         # the flag changes nothing for the sessions without a website prompt
         self.assertEqual(ep.article_sessions(prompts), {})
+
+    def test_website_article_boundary(self):
+        def p(session, iso, project="/Users/example/projects/ghostty-website"):
+            return {"session": session, "ts_epoch": ep.parse_ts(iso), "text": "tweak the page", "project": project,
+                    "project_marker": ep.project_marker(project)}
+        # 2026-10-01 00:00 Pacific is 07:00Z
+        prompts = [p("before", "2026-10-01T06:59:59Z"), p("at", "2026-10-01T07:00:00Z"),
+                   p("span", "2026-09-30T20:00:00Z"), p("span", "2026-10-02T20:00:00Z"),
+                   p("july", "2026-07-03T05:00:00Z")]
+        sessions = ep.article_sessions(prompts, include_website=True)
+        self.assertEqual(sessions, {"at": "project:website", "span": "project:website"})
+        # a session spanning the boundary: only its prompts from 2026-10-01 on are article work
+        self.assertEqual([ep.is_article_work(x, sessions) for x in prompts], [False, True, False, True, False])
 
     def test_project_marker(self):
         self.assertEqual(ep.project_marker("/Users/example/projects/ghostty-website"), "website")
@@ -179,9 +192,8 @@ class CodexTest(unittest.TestCase):
         self.assertEqual([p["text"] for p in on.prompts], ["Run the build please\n", "Go ahead\n"])
         self.assertEqual({p["project_marker"] for p in on.prompts}, {"website"})
         self.assertEqual(on.dropped, {"injected-context": 3})
-        sessions = ep.article_sessions(on.prompts, include_website=True)
-        self.assertEqual(sessions, {"cx1": "project:website"})
-        self.assertTrue(all(ep.is_article_work(p, sessions) for p in on.prompts))
+        # the fixture is dated July: website work, not article work
+        self.assertEqual(ep.article_sessions(on.prompts, include_website=True), {})
         # subagent and auto-review rollouts in a website folder stay dropped whole
         sub = ep.codex_prompts([codex_session(cwd=site, sub=True, thread_source="subagent")], WINDOW,
                                include_website=True)

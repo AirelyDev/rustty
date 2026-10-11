@@ -72,6 +72,9 @@ def pacific_midnight(day):
 
 
 ARTICLE_CUTOFF = pacific_midnight("2026-10-08")  # 2026-10-08T00:00-07:00
+# website-folder prompts are article work only from this day on (the October article sessions); the
+# June/July site build and Ferris rebrand are website work, not article work (WEBSITE_RULE)
+WEBSITE_ARTICLE_FROM = pacific_midnight("2026-10-01")  # 2026-10-01T00:00-07:00
 ARTICLE_RE = re.compile(r"\b(article|journey|website|porting page|disclosure)\b", re.I)
 
 # ---------------------------------------------------------------------------- rules
@@ -105,9 +108,10 @@ ARTICLE_RULE = ("A session is article work if it has a prompt on or after 2026-1
                 "Only that session's prompts on or after the cutoff are tagged; earlier prompts never are.")
 WEBSITE_RULE = ("With --include-website: Claude Code prompts and Codex human turns (root sessions; subagent, "
                 "auto-review and injected context dropped as for Rustty; archive copies read once) typed in a website folder (a projects/ghostty-website* folder, "
-                "worktrees included) are kept over the whole window, marked project_marker 'website', and every "
-                "session with such a prompt is article work (reason project:website) for all of its prompts, "
-                "whatever the date. Website prompts never link Rustty commits (basis other-repo).")
+                "worktrees included) are kept over the whole window and marked project_marker 'website'. A session "
+                "with a website-folder prompt on or after 2026-10-01 00:00 Pacific is article work (reason "
+                "project:website) for its prompts from that moment on; earlier website prompts (the June/July "
+                "site build and rebrand) are not article work. Website prompts never link Rustty commits (basis other-repo).")
 
 
 def is_website_path(path):
@@ -125,13 +129,14 @@ def project_marker(path):
 
 def article_sessions(prompts, include_website=False):
     """Return {session: reason} for the sessions that are article work (see ARTICLE_RULE; with
-    include_website also WEBSITE_RULE: a session with a website-folder prompt, any date)."""
+    include_website also WEBSITE_RULE: a session with a website-folder prompt from WEBSITE_ARTICLE_FROM on)."""
     by = collections.defaultdict(list)
     for p in prompts:
         by[p["session"]].append(p)
     out = {}
     for s, ps in by.items():
-        if include_website and any(p.get("project_marker") == "website" for p in ps):
+        if include_website and any(p.get("project_marker") == "website" and p["ts_epoch"] >= WEBSITE_ARTICLE_FROM
+                                   for p in ps):
             out[s] = "project:website"
             continue
         if not any(p["ts_epoch"] >= ARTICLE_CUTOFF for p in ps):
@@ -149,7 +154,7 @@ def article_sessions(prompts, include_website=False):
 
 def is_article_work(p, sessions):
     if sessions.get(p["session"]) == "project:website":
-        return True
+        return p["ts_epoch"] >= WEBSITE_ARTICLE_FROM
     return p["session"] in sessions and p["ts_epoch"] >= ARTICLE_CUTOFF
 
 
