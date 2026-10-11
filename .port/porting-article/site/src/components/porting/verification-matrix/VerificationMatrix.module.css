@@ -1,0 +1,474 @@
+/* The verification-matrix widget body. Values follow the approved mockup
+   (10-verification-matrix) inside the shared instrument card. */
+
+/* Widget root: positioning context for the floating tooltip. */
+.root {
+  position: relative;
+  min-width: 0;
+  color: #d9ded6;
+  font-variant-numeric: tabular-nums;
+}
+.mono {
+  font-family: var(--jetbrains-mono), ui-monospace, monospace;
+}
+.k {
+  color: #858a84;
+}
+.port {
+  color: #e06c75;
+}
+.gh {
+  color: #64d8c6;
+}
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Status markers: shape plus colour (--mark). */
+.mark {
+  display: inline-block;
+  flex: none;
+  width: 9px;
+  height: 9px;
+  background: var(--mark);
+}
+.mark_circle {
+  border-radius: 50%;
+}
+.mark_diamond {
+  transform: rotate(45deg) scale(0.85);
+}
+.mark_triangle {
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+.mark_ring {
+  background: transparent;
+  border: 1.5px dashed #858a84;
+  border-radius: 50%;
+}
+
+/* Hero and tiles. */
+.hero {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr 1fr 1fr;
+  gap: 16px;
+  align-items: end;
+  margin: 10px 0 6px;
+}
+.big {
+  display: block;
+  color: #f4f1ed;
+  font: 700 30px/1.1 var(--jetbrains-mono), ui-monospace, monospace;
+}
+.hs {
+  color: #9aa09a;
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+.hs b {
+  display: block;
+  color: #f4f1ed;
+  font-size: 19px;
+}
+
+/* Reference-commit selector. */
+.pins {
+  display: grid;
+  grid-template-columns: repeat(9, minmax(0, 1fr));
+  gap: 4px;
+  margin: 16px 0 6px;
+}
+.pin {
+  display: block;
+  min-width: 0;
+  padding: 6px 8px;
+  background: none;
+  border: 1px solid #262927;
+  border-radius: 10px;
+  color: #c1c8c0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.pinOn {
+  background: #151816;
+  border-color: #c1c8c0;
+}
+.pinSha {
+  display: block;
+  color: #f4f1ed;
+  font-size: 11px;
+}
+.pinDate {
+  display: block;
+  color: #858a84;
+  font-size: 10.5px;
+}
+.dots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 4px;
+}
+.dot {
+  display: block;
+  width: 6px;
+  height: 6px;
+  background: var(--mark);
+}
+.dot_circle {
+  border-radius: 50%;
+}
+.dot_diamond {
+  transform: rotate(45deg) scale(0.9);
+}
+.dot_triangle {
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+.dot_ring {
+  background: transparent;
+  border: 1px dashed #858a84;
+  border-radius: 50%;
+}
+.dotNone {
+  display: block;
+  width: 6px;
+  height: 6px;
+  background: #262927;
+  border-radius: 2px;
+}
+.pin:focus-visible,
+.cellBtn:focus-visible {
+  outline: 2px solid #64d8c6;
+  outline-offset: 1px;
+}
+
+/* Legend. */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 8px 0 4px;
+  color: #9aa09a;
+  font-size: 11.5px;
+}
+.legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.swHatch {
+  display: inline-block;
+  width: 14px;
+  height: 9px;
+  background: repeating-linear-gradient(45deg, #1a1d1b 0 3px, #0f1110 3px 6px);
+  border-radius: 2px;
+}
+.abbr {
+  margin: 0 0 8px;
+  color: #858a84;
+  font-size: 11.5px;
+}
+.bd {
+  display: inline-block;
+  margin-left: 3px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font: 10px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.bdPort {
+  background: #3a1d20;
+  color: #e06c75;
+}
+.bdTarget {
+  margin: 0;
+  background: #2a2417;
+  color: #e6c07b;
+}
+.bdGh {
+  background: #163430;
+  color: #64d8c6;
+}
+
+/* Matrix. */
+/* Positioned so absolutely placed screen-reader text stays inside the scroller
+   instead of widening the page on phones. */
+.mxw {
+  position: relative;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.root .mx {
+  width: 100%;
+  min-width: 760px;
+  margin: 0;
+  border-collapse: separate;
+  border-spacing: 3px;
+  font-size: 11.5px;
+}
+.root .mx th {
+  padding: 4px 6px;
+  border: 0;
+  color: #9aa09a;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+.root .mx th.rowHead {
+  vertical-align: middle;
+  color: #c1c8c0;
+  font-weight: 500;
+}
+.hw {
+  display: block;
+  font-weight: 400;
+}
+.sub {
+  color: #858a84;
+  font: 10.5px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.num {
+  color: #f4f1ed;
+  font: 11.5px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.root .mx td {
+  width: 22%;
+  height: 46px;
+  padding: 0;
+  vertical-align: top;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+.root .mx td.cell:hover {
+  border-color: #3a3e3b;
+}
+.root .mx td.sel {
+  border-color: #d9ded6;
+}
+.root .mx td.pend {
+  background: #121413;
+  border: 1px dashed #3a3e3b;
+}
+.root .mx td.na {
+  padding: 5px 7px;
+  background: repeating-linear-gradient(45deg, #141615 0 4px, #0e100f 4px 8px);
+}
+.root .mx td.none {
+  padding: 5px 7px;
+  background: #0e100f;
+}
+.root .mx td.none .sub {
+  color: #4a4f4b;
+}
+.cellBtn {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 5px 7px;
+  background: none;
+  border: 0;
+  border-radius: 5px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.st {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.meta {
+  display: block;
+}
+.note {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  border: 1px dashed #3a3e3b;
+  border-radius: 10px;
+  color: #c1c8c0;
+  font-size: 12.5px;
+}
+
+/* Panels. */
+.low {
+  display: grid;
+  grid-template-columns: 1.25fr 1fr;
+  gap: 12px;
+  margin-top: 14px;
+}
+.even {
+  grid-template-columns: 1fr 1fr;
+}
+.low > * {
+  min-width: 0;
+}
+.pn {
+  padding: 12px 14px;
+  border: 1px solid #262927;
+  border-radius: 12px;
+}
+.pn h4 {
+  margin: 0 0 8px;
+  color: #9aa09a;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+.det h5 {
+  margin: 0 0 4px;
+  color: #f4f1ed;
+  font-size: 14.5px;
+}
+.det dl {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr);
+  gap: 3px 10px;
+  margin: 6px 0 0;
+  font-size: 12.5px;
+}
+.det dt {
+  color: #858a84;
+}
+.det dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.detHint {
+  margin: 0;
+  color: #9aa09a;
+  font-size: 13px;
+}
+
+/* Lane history. */
+.histScroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.hist {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+  touch-action: pan-x pan-y;
+}
+.hist text {
+  fill: #858a84;
+  font: 10px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.hd {
+  cursor: pointer;
+  outline: none;
+}
+.hd:focus-visible,
+.hdSel {
+  filter: drop-shadow(0 0 0 #f4f1ed) drop-shadow(0 0 2px #f4f1ed);
+}
+.scrollHint {
+  display: none;
+  margin: 0 0 6px;
+  color: #858a84;
+  font: 11px var(--jetbrains-mono), ui-monospace, monospace;
+  text-align: center;
+}
+
+/* Bars (wall time, found). */
+.bars {
+  display: grid;
+  gap: 4px;
+}
+.bar {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr) 50px;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+}
+.barName {
+  color: #c1c8c0;
+}
+.barTrack {
+  display: flex;
+  height: 12px;
+  overflow: hidden;
+  background: #141615;
+  border-radius: 3px;
+}
+.barFill {
+  display: block;
+  height: 100%;
+}
+.barVal {
+  color: #858a84;
+  font-size: 10.5px;
+  text-align: right;
+}
+.barKey {
+  margin: 8px 0 0;
+  color: #858a84;
+  font-size: 11.5px;
+}
+.barNote {
+  margin: 8px 0 0;
+  color: #858a84;
+  font-size: 11.5px;
+}
+.foot {
+  margin: 16px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid #262927;
+  color: #858a84;
+  font-size: 12px;
+}
+
+/* Floating tooltip. */
+.tip {
+  position: absolute;
+  z-index: 5;
+  max-width: 320px;
+  padding: 8px 10px;
+  background: #141615;
+  border: 1px solid #3a3e3b;
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  color: #d9ded6;
+  font-size: 12px;
+  line-height: 1.45;
+  pointer-events: none;
+}
+.tip[hidden] {
+  display: none;
+}
+.tip b {
+  color: #f4f1ed;
+}
+
+@media (max-width: 800px) {
+  .hero {
+    grid-template-columns: 1fr 1fr;
+  }
+  .pins {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .low,
+  .even {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .hist {
+    min-width: 560px;
+  }
+  .scrollHint {
+    display: block;
+  }
+  .bar {
+    grid-template-columns: 120px minmax(0, 1fr) 44px;
+  }
+}

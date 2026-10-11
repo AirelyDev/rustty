@@ -1,0 +1,140 @@
+# Hand-drawn Zig → Rust line mappings of the translation-lens widget, for author review.
+# slug	pattern/excerpt	Zig file: lines	Rust file: lines	first Zig line → first Rust line
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1752-1757	crates/rustty-vt/src/screen/clear.rs: 163-164	pub fn clearCells( → #[allow(clippy::not_unsafe_ptr_arg_deref)] // reference takes `page: *Page, row: *Row, cells: []Cell`
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1758	crates/rustty-vt/src/screen/clear.rs: 165-171	if (cells.len == 0) return; → // if (cells.len == 0) return;
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1762	crates/rustty-vt/src/screen/clear.rs: 178	page.pauseIntegrityChecks(true); → unsafe { (*page).pause_integrity_checks(true) };
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1763-1767	crates/rustty-vt/src/screen/clear.rs: 180-183, 304-308	defer { → // PORT NOTE: the reference uses a `defer` block to resume integrity
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1769	crates/rustty-vt/src/screen/clear.rs: 185	if (comptime std.debug.runtime_safety) { → if cfg!(debug_assertions) {
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1771	crates/rustty-vt/src/screen/clear.rs: 187	const page_rows = page.rows.ptr(page.memory.ptr); → let page_rows = unsafe { (*page).rows.ptr((*page).memory_ptr()) };
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1772	crates/rustty-vt/src/screen/clear.rs: 188	assert(@intFromPtr(row) >= @intFromPtr(&page_rows[0])); → debug_assert!(row as usize >= page_rows as usize);
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1773	crates/rustty-vt/src/screen/clear.rs: 189-191	assert(@intFromPtr(row) <= @intFromPtr(&page_rows[page.size.rows - 1])); → debug_assert!(
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1775	crates/rustty-vt/src/screen/clear.rs: 193-195	const row_cells = page.getCells(row); → let row_cells = unsafe { (*page).get_cells(row) };
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1776	crates/rustty-vt/src/screen/clear.rs: 196	assert(@intFromPtr(&cells[0]) >= @intFromPtr(&row_cells[0])); → debug_assert!(cells_base as usize >= row_cells_base as usize);
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1777	crates/rustty-vt/src/screen/clear.rs: 197-200	assert(@intFromPtr(&cells[cells.len - 1]) <= @intFromPtr(&row_cells[row_cells.len - 1])); → debug_assert!(
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1778	crates/rustty-vt/src/screen/clear.rs: 201	} → }
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1782	crates/rustty-vt/src/screen/clear.rs: 205	if (row.grapheme) { → if unsafe { (*row).grapheme() } {
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1783	crates/rustty-vt/src/screen/clear.rs: 206-207	for (cells) |*cell| { → for i in 0..cells_len {
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1784-1785	crates/rustty-vt/src/screen/clear.rs: 208-210	if (cell.hasGrapheme()) → if unsafe { (*cell).has_grapheme() } {
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1786	crates/rustty-vt/src/screen/clear.rs: 211	} → }
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1791	crates/rustty-vt/src/screen/clear.rs: 216	if (cells.len == page.size.cols) { → if cells_len == unsafe { (*page).size.cols } as usize {
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1792	crates/rustty-vt/src/screen/clear.rs: 217	row.grapheme = false; → unsafe { (*row).set_grapheme(false) };
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1793	crates/rustty-vt/src/screen/clear.rs: 218	} else { → } else {
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1794	crates/rustty-vt/src/screen/clear.rs: 219	page.updateRowGraphemeFlag(row); → unsafe { (*page).update_row_grapheme_flag(row) };
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1795	crates/rustty-vt/src/screen/clear.rs: 220	} → }
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1796	crates/rustty-vt/src/screen/clear.rs: 221	} → }
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1842-1846	crates/rustty-vt/src/screen/clear.rs: 291-293	if (comptime build_options.kitty_graphics) { → if crate::options::KITTY_GRAPHICS && cells_len == unsafe { (*page).size.cols } as usize {
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1848	crates/rustty-vt/src/screen/clear.rs: 295-302	@memset(cells, self.blankCell()); → let blank = self.blank_cell();
+translation-lens	rawptr/main	src/terminal/Screen.zig: 1849	crates/rustty-vt/src/screen/clear.rs: 309	} → }
+translation-lens	intrusive/queue	libxev/src/queue.zig: 4-5	crates/rustty-xev/src/queue.rs: 19-32	/// An intrusive queue implementation. The type T must have a field → 
+translation-lens	intrusive/queue	libxev/src/queue.zig: 14	crates/rustty-xev/src/queue.rs: 44, 70	pub fn Intrusive(comptime T: type) type { → pub struct Intrusive<T: Node> {
+translation-lens	intrusive/queue	libxev/src/queue.zig: 15-16	crates/rustty-xev/src/queue.rs: 44	return struct { → pub struct Intrusive<T: Node> {
+translation-lens	intrusive/queue	libxev/src/queue.zig: 19	crates/rustty-xev/src/queue.rs: 46, 54-61	head: ?*T = null, → pub head: *mut T,
+translation-lens	intrusive/queue	libxev/src/queue.zig: 20	crates/rustty-xev/src/queue.rs: 47, 54-61	tail: ?*T = null, → pub tail: *mut T,
+translation-lens	intrusive/queue	libxev/src/queue.zig: 23	crates/rustty-xev/src/queue.rs: 71-76	pub fn push(self: *Self, v: *T) void { → /// Enqueue a new element to the back of the queue.
+translation-lens	intrusive/queue	libxev/src/queue.zig: 24	crates/rustty-xev/src/queue.rs: 77-79	assert(v.next == null); → // assert(v.next == null) — ports as `debug_assert` (a runtime-safety-only
+translation-lens	intrusive/queue	libxev/src/queue.zig: 26	crates/rustty-xev/src/queue.rs: 81	if (self.tail) |tail| { → if !self.tail.is_null() {
+translation-lens	intrusive/queue	libxev/src/queue.zig: 28	crates/rustty-xev/src/queue.rs: 83	tail.next = v; → unsafe { T::next_field(self.tail).write(v) };
+translation-lens	intrusive/queue	libxev/src/queue.zig: 29	crates/rustty-xev/src/queue.rs: 84	self.tail = v; → self.tail = v;
+translation-lens	intrusive/queue	libxev/src/queue.zig: 30	crates/rustty-xev/src/queue.rs: 85	} else { → } else {
+translation-lens	intrusive/queue	libxev/src/queue.zig: 32	crates/rustty-xev/src/queue.rs: 87	self.head = v; → self.head = v;
+translation-lens	intrusive/queue	libxev/src/queue.zig: 33	crates/rustty-xev/src/queue.rs: 88	self.tail = v; → self.tail = v;
+translation-lens	intrusive/queue	libxev/src/queue.zig: 34	crates/rustty-xev/src/queue.rs: 89	} → }
+translation-lens	intrusive/queue	libxev/src/queue.zig: 35	crates/rustty-xev/src/queue.rs: 90	} → }
+translation-lens	intrusive/queue	libxev/src/queue.zig: 38	crates/rustty-xev/src/queue.rs: 92-97	pub fn pop(self: *Self) ?*T { → /// Dequeue the next element from the queue.
+translation-lens	intrusive/queue	libxev/src/queue.zig: 40	crates/rustty-xev/src/queue.rs: 99-102	const next = self.head orelse return null; → let next = self.head;
+translation-lens	intrusive/queue	libxev/src/queue.zig: 44	crates/rustty-xev/src/queue.rs: 106-108	if (self.head == self.tail) self.tail = null; → if self.head == self.tail {
+translation-lens	intrusive/queue	libxev/src/queue.zig: 48	crates/rustty-xev/src/queue.rs: 112	self.head = next.next; → self.head = unsafe { T::next_field(next).read() };
+translation-lens	intrusive/queue	libxev/src/queue.zig: 52	crates/rustty-xev/src/queue.rs: 116	next.next = null; → unsafe { T::next_field(next).write(ptr::null_mut()) };
+translation-lens	intrusive/queue	libxev/src/queue.zig: 53	crates/rustty-xev/src/queue.rs: 117	return next; → next
+translation-lens	intrusive/queue	libxev/src/queue.zig: 54	crates/rustty-xev/src/queue.rs: 118	} → }
+translation-lens	intrusive/queue	libxev/src/queue.zig: 57	crates/rustty-xev/src/queue.rs: 121	pub fn empty(self: *const Self) bool { → pub fn empty(&self) -> bool {
+translation-lens	intrusive/queue	libxev/src/queue.zig: 58	crates/rustty-xev/src/queue.rs: 122	return self.head == null; → self.head.is_null()
+translation-lens	intrusive/queue	libxev/src/queue.zig: 59	crates/rustty-xev/src/queue.rs: 123	} → }
+translation-lens	intrusive/parent	src/terminal/c/terminal.zig: 91	crates/rustty-vt-c/src/terminal/effects.rs: 625	/// Fetches a `TerminalWrapper` reference from a `Handler`. → /// Fetches a `TerminalWrapper` reference from a `Handler`.
+translation-lens	intrusive/parent	src/terminal/c/terminal.zig: 92	crates/rustty-vt-c/src/terminal/effects.rs: 626-627	fn fromHandler(handler: *Handler) *TerminalWrapper { → #[inline]
+translation-lens	intrusive/parent	src/terminal/c/terminal.zig: 93	crates/rustty-vt-c/src/terminal/effects.rs: 628, 630	const stream_ptr: *Stream = @fieldParentPtr("handler", handler); → // const stream_ptr: *Stream = @fieldParentPtr("handler", handler);
+translation-lens	intrusive/parent	src/terminal/c/terminal.zig: 94	crates/rustty-vt-c/src/terminal/effects.rs: 629-634	return @alignCast(@fieldParentPtr("stream", stream_ptr)); → // const wrapper: *TerminalWrapper = @fieldParentPtr("stream", stream_ptr);
+translation-lens	intrusive/parent	src/terminal/c/terminal.zig: 95	crates/rustty-vt-c/src/terminal/effects.rs: 635	} → }
+translation-lens	intrusive/parent	src/terminal/c/terminal.zig: 436	crates/rustty-vt-c/src/terminal/effects.rs: 684, 690	fn writePtyTrampoline(handler: *Handler, data: []const u8) void { → // fn writePtyTrampoline(handler: *Handler, data: [:0]const u8) void {
+translation-lens	intrusive/parent	src/terminal/c/terminal.zig: 437	crates/rustty-vt-c/src/terminal/effects.rs: 685-686, 691-694	const wrapper = TerminalWrapper.fromHandler(handler); → //     const stream_ptr: *Stream = @fieldParentPtr("handler", handler);
+translation-lens	intrusive/parent	src/terminal/c/terminal.zig: 438	crates/rustty-vt-c/src/terminal/effects.rs: 687, 695-700	const func = wrapper.effects.write_pty orelse return; → //     const func = wrapper.effects.write_pty orelse return;
+translation-lens	intrusive/parent	src/terminal/c/terminal.zig: 439	crates/rustty-vt-c/src/terminal/effects.rs: 688, 701-703	func(@ptrCast(wrapper), wrapper.effects.userdata, data.ptr, data.len); → //     func(@ptrCast(wrapper), wrapper.effects.userdata, data.ptr, data.len);
+translation-lens	intrusive/parent	src/terminal/c/terminal.zig: 440	crates/rustty-vt-c/src/terminal/effects.rs: 689, 704	} → // }
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 318-320	crates/rustty-vt/src/snapshot/grid.rs: 802	/// Truncate one cell word to its transported value. Only words → /// `width.truncate(word)` with the width as a compile-time constant.
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 321	crates/rustty-vt/src/snapshot/grid.rs: 803-804	pub fn truncate(comptime self: EncodedWidth, word: u64) self.Int() { → #[inline(always)]
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 322	crates/rustty-vt/src/snapshot/grid.rs: 805	return @truncate(switch (self) { → match SIZE {
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 324	crates/rustty-vt/src/snapshot/grid.rs: 807-808	.one, .two => @as(Cell, @bitCast(word)).content, → 1 => (Cell::from_bits(word).content as u64) & 0xFF,
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 327	crates/rustty-vt/src/snapshot/grid.rs: 810-811	.four, .eight => word, → 4 => word & 0xFFFF_FFFF,
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 328	crates/rustty-vt/src/snapshot/grid.rs: 812	}); → }
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 329	crates/rustty-vt/src/snapshot/grid.rs: 813	} → }
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 518	crates/rustty-vt/src/snapshot/grid.rs: 824	const words: [*]const u64 = @ptrCast(cells.ptr); → match width {
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 519	crates/rustty-vt/src/snapshot/grid.rs: 825-828	switch (cell_width) { → EncodedWidth::One => encode_narrow_cells_sized::<1>(cells, writer),
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 520	crates/rustty-vt/src/snapshot/grid.rs: 832, 836	inline .one, .two, .four => |width| { → fn encode_narrow_cells_sized<const SIZE: usize>(
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 521	crates/rustty-vt/src/snapshot/grid.rs: 825-828	const size = comptime width.size(); → EncodedWidth::One => encode_narrow_cells_sized::<1>(cells, writer),
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 659	crates/rustty-vt/src/snapshot/grid.rs: 819, 832	fn encodeNarrowCells( → fn encode_narrow_cells(
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 660	crates/rustty-vt/src/snapshot/grid.rs: 820, 824-829	comptime width: Cell.EncodedWidth, → width: EncodedWidth,
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 661	crates/rustty-vt/src/snapshot/grid.rs: 821, 833	cells: []const TerminalCell, → cells: &[TerminalCell],
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 662	crates/rustty-vt/src/snapshot/grid.rs: 822, 834	writer: *std.Io.Writer, → writer: &mut dyn io::Writer,
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 663	crates/rustty-vt/src/snapshot/grid.rs: 823, 835	) std.Io.Writer.Error!void { → ) -> Result<(), io::WriteFailed> {
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 664	crates/rustty-vt/src/snapshot/grid.rs: 836, 839	const size = comptime width.size(); → let mut chunk = [0u8; 1024];
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 665	crates/rustty-vt/src/snapshot/grid.rs: 837	var chunk: [1024]u8 = undefined; → let mut i: usize = 0;
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 666	crates/rustty-vt/src/snapshot/grid.rs: 838	var i: usize = 0; → while i < cells.len() {
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 667	crates/rustty-vt/src/snapshot/grid.rs: 839	while (i < cells.len) { → let n = (cells.len() - i).min(chunk.len() / SIZE);
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 668	crates/rustty-vt/src/snapshot/grid.rs: 840	const n = @min(cells.len - i, chunk.len / size); → for (j, cell) in cells[i..i + n].iter().enumerate() {
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 669	crates/rustty-vt/src/snapshot/grid.rs: 841	for (cells[i..][0..n], 0..) |*cell, j| { → let value = truncate_sized::<SIZE>(classify_word(cell));
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 670-675	crates/rustty-vt/src/snapshot/grid.rs: 842-843	std.mem.writeInt( → chunk[j * SIZE..j * SIZE + SIZE].copy_from_slice(&value.to_le_bytes()[..SIZE]);
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 676	crates/rustty-vt/src/snapshot/grid.rs: 844	} → writer.write_all(&chunk[..n * SIZE])?;
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 677	crates/rustty-vt/src/snapshot/grid.rs: 845	try writer.writeAll(chunk[0 .. n * size]); → i += n;
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 678	crates/rustty-vt/src/snapshot/grid.rs: 846	i += n; → }
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 679	crates/rustty-vt/src/snapshot/grid.rs: 847	} → Ok(())
+translation-lens	comptime/main	src/terminal/snapshot/grid.zig: 680	crates/rustty-vt/src/snapshot/grid.rs: 848-850	} → }
+translation-lens	packed/main	src/terminal/page.zig: 2137	crates/rustty-vt/src/page.rs: 554-556	pub const Cell = packed struct(u64) { → #[repr(transparent)]
+translation-lens	packed/main	src/terminal/page.zig: 2140	crates/rustty-vt/src/page.rs: 559-560, 626-635	content_tag: ContentTag = .codepoint, → const CELL_CONTENT_TAG_SHIFT: u32 = 0;
+translation-lens	packed/main	src/terminal/page.zig: 2143-2158	crates/rustty-vt/src/page.rs: 561-563	content: packed union { → pub const CELL_CONTENT_SHIFT: u32 = 2;
+translation-lens	packed/main	src/terminal/page.zig: 2162	crates/rustty-vt/src/page.rs: 563-564, 716-721	style_id: StyleId = 0, → pub const CELL_STYLE_ID_SHIFT: u32 = CELL_CONTENT_SHIFT + CELL_CONTENT_BITS; // 26
+translation-lens	packed/main	src/terminal/page.zig: 2168	crates/rustty-vt/src/page.rs: 565-566, 732-739	wide: Wide = .narrow, → const CELL_WIDE_SHIFT: u32 = CELL_STYLE_ID_SHIFT + CELL_STYLE_ID_BITS; // 42
+translation-lens	packed/main	src/terminal/page.zig: 2171	crates/rustty-vt/src/page.rs: 567, 745-749	protected: bool = false, → const CELL_PROTECTED_SHIFT: u32 = CELL_WIDE_SHIFT + CELL_WIDE_BITS; // 44
+translation-lens	packed/main	src/terminal/page.zig: 2176	crates/rustty-vt/src/page.rs: 568, 755-761	hyperlink: bool = false, → const CELL_HYPERLINK_SHIFT: u32 = CELL_PROTECTED_SHIFT + 1; // 45
+translation-lens	packed/main	src/terminal/page.zig: 2180	crates/rustty-vt/src/page.rs: 569-570	/// boundary points for content. → const CELL_SEMANTIC_CONTENT_SHIFT: u32 = CELL_HYPERLINK_SHIFT + 1; // 46
+translation-lens	packed/main	src/terminal/page.zig: 2182	crates/rustty-vt/src/page.rs: 541-549	 → ///   bits 42..43  wide        : Wide (u2)
+translation-lens	errdefer/main	src/pty.zig: 134	crates/rustty-os/src/pty.rs: 278	pub fn open(size: winsize) OpenError!Pty { → pub fn open(size: winsize) -> Result<Pty, PosixPtyError> {
+translation-lens	errdefer/main	src/pty.zig: 136	crates/rustty-os/src/pty.rs: 280	var sizeCopy = size; → let mut sizeCopy = size;
+translation-lens	errdefer/main	src/pty.zig: 138	crates/rustty-os/src/pty.rs: 282	var master_fd: Fd = undefined; → let mut master_fd: PosixPtyFd = 0;
+translation-lens	errdefer/main	src/pty.zig: 139	crates/rustty-os/src/pty.rs: 283	var slave_fd: Fd = undefined; → let mut slave_fd: PosixPtyFd = 0;
+translation-lens	errdefer/main	src/pty.zig: 140-146	crates/rustty-os/src/pty.rs: 284-293	if (c.openpty( → let rc = unsafe {
+translation-lens	errdefer/main	src/pty.zig: 147	crates/rustty-os/src/pty.rs: 294-295	return error.OpenptyFailed; → return Err(PosixPtyError::OpenptyFailed);
+translation-lens	errdefer/main	src/pty.zig: 148-151	crates/rustty-os/src/pty.rs: 296-301, 342, 561-580	errdefer { → // PORT NOTE: `errdefer { _ = posix.system.close(master_fd); _ = posix.system.close(slave_fd); }`.
+translation-lens	errdefer/main	src/pty.zig: 155	crates/rustty-os/src/pty.rs: 305	cloexec: { → 'cloexec: {
+translation-lens	errdefer/main	src/pty.zig: 156	crates/rustty-os/src/pty.rs: 306	const flags = posix.system.fcntl(master_fd, posix.F.GETFD); → let flags = unsafe { libc::fcntl(master_fd, libc::F_GETFD, 0) };
+translation-lens	errdefer/main	src/pty.zig: 157	crates/rustty-os/src/pty.rs: 307	if (flags == -1) { → if flags < 0 {
+translation-lens	errdefer/main	src/pty.zig: 158	crates/rustty-os/src/pty.rs: 308-313	log.warn("error getting flags for master fd err=E{s}", .{@tagName(posix.errno(-1))}); → // log.warn("error getting flags for master fd err=E{s}", .{@tagName(posix.errno(-1))});
+translation-lens	errdefer/main	src/pty.zig: 159	crates/rustty-os/src/pty.rs: 314	break :cloexec; → break 'cloexec;
+translation-lens	errdefer/main	src/pty.zig: 160	crates/rustty-os/src/pty.rs: 315	} → }
+translation-lens	errdefer/main	src/pty.zig: 162-166	crates/rustty-os/src/pty.rs: 317-318	switch (posix.errno(posix.system.fcntl( → let rc = unsafe { libc::fcntl(master_fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) };
+translation-lens	errdefer/main	src/pty.zig: 167	crates/rustty-os/src/pty.rs: 318	.SUCCESS => {}, → if rc < 0 {
+translation-lens	errdefer/main	src/pty.zig: 168	crates/rustty-os/src/pty.rs: 319-327	else => |e| log.warn("error setting CLOEXEC on master fd err=E{}", .{e}), → // else => |e| log.warn("error setting CLOEXEC on master fd err=E{}", .{e}),
+translation-lens	errdefer/main	src/pty.zig: 169-170	crates/rustty-os/src/pty.rs: 328-329	} → }
+translation-lens	errdefer/main	src/pty.zig: 174	crates/rustty-os/src/pty.rs: 333	var attrs: c.termios = undefined; → let mut attrs: libc::termios = unsafe { std::mem::zeroed() };
+translation-lens	errdefer/main	src/pty.zig: 175	crates/rustty-os/src/pty.rs: 334	if (c.tcgetattr(master_fd, &attrs) != 0) → if unsafe { libc::tcgetattr(master_fd, &mut attrs) } != 0 {
+translation-lens	errdefer/main	src/pty.zig: 176	crates/rustty-os/src/pty.rs: 335-336	return error.OpenptyFailed; → return Err(PosixPtyError::OpenptyFailed);
+translation-lens	errdefer/main	src/pty.zig: 177	crates/rustty-os/src/pty.rs: 337	attrs.c_iflag |= c.IUTF8; → attrs.c_iflag |= IUTF8;
+translation-lens	errdefer/main	src/pty.zig: 178	crates/rustty-os/src/pty.rs: 338	if (c.tcsetattr(master_fd, c.TCSANOW, &attrs) != 0) → if unsafe { libc::tcsetattr(master_fd, libc::TCSANOW, &attrs) } != 0 {
+translation-lens	errdefer/main	src/pty.zig: 179	crates/rustty-os/src/pty.rs: 339-340	return error.OpenptyFailed; → return Err(PosixPtyError::OpenptyFailed);
+translation-lens	errdefer/main	src/pty.zig: 181-186	crates/rustty-os/src/pty.rs: 342-348	return .{ → errdefer_guard.armed = false;
+translation-lens	errdefer/main	src/pty.zig: 187	crates/rustty-os/src/pty.rs: 349	} → }
+translation-lens	bytes/main	src/terminal/Terminal.zig: 4743	crates/rustty-vt/src/terminal/state.rs: 106-109, 119-123	pub fn setTitle(self: *Terminal, t: []const u8) !void { → pub fn set_title(&mut self, t: &[u8]) -> Result<(), OutOfMemory> {
+translation-lens	bytes/main	src/terminal/Terminal.zig: 4744	crates/rustty-vt/src/terminal/state.rs: 125-126	if (t.len == 0) { → // if (t.len == 0) { self.title.clearRetainingCapacity(); return; }
+translation-lens	bytes/main	src/terminal/Terminal.zig: 4745	crates/rustty-vt/src/terminal/state.rs: 127	self.title.clearRetainingCapacity(); → self.title.clear_retaining_capacity();
+translation-lens	bytes/main	src/terminal/Terminal.zig: 4746	crates/rustty-vt/src/terminal/state.rs: 128	return; → return Ok(());
+translation-lens	bytes/main	src/terminal/Terminal.zig: 4747	crates/rustty-vt/src/terminal/state.rs: 129	} → }
+translation-lens	bytes/main	src/terminal/Terminal.zig: 4749-4750	crates/rustty-vt/src/terminal/state.rs: 131-136	const capacity = std.math.add(usize, t.len, 1) catch → // const capacity = std.math.add(usize, t.len, 1) catch
+translation-lens	bytes/main	src/terminal/Terminal.zig: 4751	crates/rustty-vt/src/terminal/state.rs: 138-147	try self.title.ensureTotalCapacity(self.gpa(), capacity); → // try self.title.ensureTotalCapacity(self.gpa(), capacity);
+translation-lens	bytes/main	src/terminal/Terminal.zig: 4753	crates/rustty-vt/src/terminal/state.rs: 148-149	self.title.items.len = capacity; → // self.title.items.len = capacity;
+translation-lens	bytes/main	src/terminal/Terminal.zig: 4754	crates/rustty-vt/src/terminal/state.rs: 150-151	std.mem.copyForwards(u8, self.title.items[0..t.len], t); → // std.mem.copyForwards(u8, self.title.items[0..t.len], t);
+translation-lens	bytes/main	src/terminal/Terminal.zig: 4755	crates/rustty-vt/src/terminal/state.rs: 152-153	self.title.items[t.len] = 0; → // self.title.items[t.len] = 0;
+translation-lens	bytes/main	src/terminal/Terminal.zig: 4756	crates/rustty-vt/src/terminal/state.rs: 155-156	} → Ok(())
+translation-lens	bytes/main	src/terminal/Terminal.zig: 4758-4759	crates/rustty-vt/src/terminal/state.rs: 158-159	/// Returns the title for the terminal, if any. The memory is owned by the → /// Returns the title for the terminal, if any. The memory is owned by the
+translation-lens	bytes/main	src/terminal/Terminal.zig: 4760	crates/rustty-vt/src/terminal/state.rs: 160-162	pub fn getTitle(self: *const Terminal) ?[:0]const u8 { → // pub fn getTitle(self: *const Terminal) ?[:0]const u8
+translation-lens	bytes/main	src/terminal/Terminal.zig: 4761	crates/rustty-vt/src/terminal/state.rs: 163-166	if (self.title.items.len == 0) return null; → // if (self.title.items.len == 0) return null;
+translation-lens	bytes/main	src/terminal/Terminal.zig: 4762	crates/rustty-vt/src/terminal/state.rs: 167-168	return self.title.items[0 .. self.title.items.len - 1 :0]; → // return self.title.items[0 .. self.title.items.len - 1 :0];
+translation-lens	bytes/main	src/terminal/Terminal.zig: 4763	crates/rustty-vt/src/terminal/state.rs: 169	} → }

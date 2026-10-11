@@ -1,0 +1,598 @@
+import Fact from "@/components/porting/ui/Fact";
+import CommitLink from "@/components/porting/ui/CommitLink";
+import SourceLink from "@/components/porting/ui/SourceLink";
+import PortingWidget from "@/components/porting/ui/PortingWidget";
+
+Rustty is a port of [Ghostty](https://ghostty.org/) from [Zig](https://ziglang.org/) to [Rust](https://www.rust-lang.org/), done over <Fact id="days_total" /> with [Claude Code](https://code.claude.com/docs/en/overview) agents.
+
+## At a glance
+
+[Ghostty](https://github.com/ghostty-org/ghostty) is a terminal emulator written in Zig by [Mitchell Hashimoto](https://mitchellh.com/) and [its contributors](https://github.com/ghostty-org/ghostty/graphs/contributors). Rustty is a port of it to Rust: the terminal engine, the font and rendering stack, the app runtimes, the C API libraries and the build, with Ghostty's macOS [Swift](https://www.swift.org/) app running on top. Rustty's behaviour is defined by Ghostty's, so most of the credit for it belongs to Ghostty's authors.
+
+The scope is narrow on purpose. Rustty aims for parity with one pinned Ghostty commit: everything Ghostty does at that commit, nothing it does not. The one exception is bugs. When the port finds a Ghostty bug, it fixes it instead of copying it.
+
+Rustty ran on one Claude subscription that I shared with other projects, and the subscription's weekly limit set its pace. Agents worked on <Fact id="commit_days" /> of the <Fact id="days_total" />. Without the limits, I [estimate](#what-it-cost) the same work would have taken about <Fact id="days_no_limits_central" /> (<Fact id="days_no_limits_range" />).
+
+Unless a figure says otherwise, everything in this article was measured on 2026-10-10 at Rustty <CommitLink hash="58aa62a81" />, against Ghostty <CommitLink hash="246f70287" />, the reference commit at that time, on a <Fact id="hardware" />. Two kinds of figures are older. The Linux [sanitizer](https://doc.rust-lang.org/beta/unstable-book/compiler-flags/sanitizer.html) runs are from the previous reference commit, <CommitLink hash="a60e9e2a5" />, and their re-run at the current one is still to come. Figures drawn from the [Claude Code](https://code.claude.com/docs/en/overview) and [Codex](https://developers.openai.com/codex/app) session records (prompts, usage and cost) stop at 8 October, because later sessions include the research for this article and cannot be told apart from the port's own. Line counts are code lines as counted by [tokei](https://github.com/XAMPPRocky/tokei). The Zig side includes the Zig dependencies the port also covers: the [libxev](https://github.com/mitchellh/libxev) event loop, [libvaxis](https://github.com/rockorager/libvaxis), [z2d](https://github.com/vancluever/z2d) and [zf](https://github.com/natecraddock/zf).
+
+<PortingWidget slug="stats-card" />
+
+The card's test counts differ in scope: <Fact id="rust_tests" /> Rust tests across every crate, including the ported libxev, libvaxis and z2d and the `-sys` wrappers, against <Fact id="zig_tests_pin" /> test blocks in Ghostty's <SourceLink at="246f70287" path="src" tree text="src/" /> alone. Matched module by module, with the dependencies on both sides, it is <Fact id="rust_tests_matched" /> against <Fact id="zig_tests_matched" />, the comparison the translation lens uses. The stricter check is per module. In all <Fact id="test_gate_modules" /> mapped Zig modules, the Rust test count is at or above the Zig one, and none falls below.
+
+## Why port, and what "port" means here
+
+I was a Ghostty user before I started this, and my prompt history before that night has no question about porting Ghostty or Zig. The port began as a night of seeing what was possible. The first prompts were typed on the night of 20–21 June, Pacific time, in a directory that held no Rustty yet:
+
+> 21:42 · "Checkout ghostty repo on github, in ~/projects."
+>
+> 22:40 · "…help me gauge any benefits (perf, rendering latency, memory, etc. others too) to doing a rust zig->rust port."
+>
+> 23:08 · "Assume I wanted to go ahead and do it, a full fidelity port, 100% functional parity, verified by all tests ported, every assertion, full coverage no exceptions…"
+>
+> 00:27 · "Lets call our port rustty…"
+
+From that last prompt, Claude wrote a prompt kit: a "Parity Constitution", a master prompt and one prompt per phase. The kit pinned Ghostty <CommitLink hash="4749c4e93" />, Zig 0.15.2 and the baseline machine. One line in it set the priorities for the rest of the project: "[Parity is the invariant; performance is the gradient](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/PORT_RULES.md#L80-L81)". I launched the master prompt, and agents wrote the plan. The first commit, <CommitLink hash="15c1a9bd7" />, landed <Fact id="origin_to_first_commit" /> after the clone prompt.
+
+"Port" has a specific meaning here. It is a set of commitments, each one checked by a test or a gate:
+
+- **Parity with one pinned commit.** The reference started at <CommitLink hash="4749c4e93" /> and moved forward <Fact id="pin_advances" /> times, to <CommitLink hash="246f70287" />. A change on Ghostty's main branch counts only after the reference moves past it and the port absorbs it. I call the porting that brings the port up to a new reference commit an upstream catch-up.
+- **Nothing lost, comments included.** The full-fidelity rule says: "[Every comment is preserved](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/PORT_RULES.md#L12-L16) — doc comments, inline comments, TODOs, license headers, ASCII diagrams, citations/spec references. […] Comments are NEVER dropped or summarized away." A fuzzy-matching check tracks <Fact id="comments_carried" /> distinctive Ghostty comments and finds none missing, and <Fact id="comments_not_carried" /> deliberately not carried, each excused by a written rule.
+- **The same C libraries.** [FreeType](https://freetype.org/), [HarfBuzz](https://harfbuzz.github.io/) and the rest are vendored and built from source, with no pure-Rust substitutes. Ghostty itself is never a build dependency. It is only a reference to compare against.
+- **A byte-compatible C ABI.** Rustty's terminal library ships the same header family as [libghostty-vt](https://github.com/ghostty-org/ghostty/tree/246f702876b924a1cb7cade1e99274d1470302fc/include/ghostty/vt): <Fact id="cabi_headers" /> headers and <Fact id="cabi_functions" /> functions. The embedding API, which the macOS app calls, maps <Fact id="embed_entrypoints" /> entry points one to one.
+- **The Swift app is reused, not ported.** On 12 July, Ghostty's macOS app was imported byte-identical (<CommitLink hash="1395249e5" />): <Fact id="swift_lines_identical" /> lines, the same count as Ghostty's at the first reference commit. At first it linked through `ghostty_*` alias symbols. A later rebrand renamed it to call `rustty_*` directly. The work was the C ABI underneath it.
+- **Parity is the whole scope.** Two prompts drew the boundary. On 30 July: "[Everything is in scope if ghostty supports it.](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/phase-3/DEFERRAL_REAUDIT.md#L19-L20)" On 28 September: "the aim is rustty parity with the exception of copying bugs".
+
+The bug exception arrived late, on 11 September. Before that, the port copied Ghostty's bugs faithfully and noted them for upstream. The rule that replaced this begins: "[Fidelity is owed to what the reference is **for**, not to its bugs.](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/PORT_RULES.md#L349)" A later section tells that story. In short, <Fact id="defects_live" /> live defects in Ghostty and its dependencies are fixed in the port instead of reproduced, and <Fact id="fixes_list_entries" /> recorded defects are listed in a [public log of deliberate differences](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/docs/ghostty-bug-fixes.md) from Ghostty.
+
+## The reference as a contract
+
+No Rust was written on the first day until Ghostty had been turned into numbers the port would have to match. On 21 June, agents worked on the pinned checkout:
+
+- They ran Ghostty's full test suite and confirmed it passed.
+- They inventoried every Zig test block: <Fact id="zig_tests_contract" /> tests holding <Fact id="zig_assertions_contract" /> assertions.
+- They counted <Fact id="zig_comment_census" /> comment lines across the <Fact id="zig_src_files_first" /> files of <SourceLink at="4749c4e93" path="src" tree text="src/" />.
+- They recorded <Fact id="baseline_benchmarks" /> benchmark results and the binary sizes of Ghostty's release build as the performance baseline.
+- They built a byte-level differential harness and showed that it fails against an empty port, so a pass from it means something.
+
+The port's rules state the idea plainly: "[Every `test {}` block → a Rust test, **assertion-for-assertion**.](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/PORT_RULES.md#L17-L18)" The test count taken on the first day is a contract. The first audit then caught the contract itself being wrong. The first count missed the tests that Zig names with an identifier instead of a string, and two documents had frozen the total at <Fact id="zig_tests_first_count" />. Under an exact-match reading, a complete port would have failed the gate. The phase's reviewer re-derived the total and blocked the plan until both documents said <Fact id="zig_tests_contract" />.
+
+Gates went in on the first day too, and from the start they had to prove they could fail. In <Fact id="gate_selftest_day1" /> of the first gate scripts, a self-test injects a violation and expects red: a crate cycle, a corrupted byte, or a crate marked done with zero tests. The rule behind them:
+
+> [Never weaken, skip, xfail, or loosen a test or gate.](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/PORT_RULES.md#L79-L80) A red gate that cannot be made green honestly → STOP and surface a precise blocker.
+
+Memory-safety checking also started early. [Miri](https://github.com/rust-lang/miri) became the primary undefined-behaviour and leak gate on day 1 (<CommitLink hash="d9fd637ce" />), in place of a custom tracking allocator. On day 3 I asked for [AddressSanitizer](https://clang.llvm.org/docs/AddressSanitizer.html) and [LeakSanitizer](https://clang.llvm.org/docs/LeakSanitizer.html) to complement it, and a sanitizer-matrix gate followed the same day (<CommitLink hash="161178d6a" />).
+
+The widget replays the contract filling up. Each square is one Zig test. It turns copper when its module's Rust test count reaches it. <Fact id="contract_week1_pct" /> of the first-day contract was covered within a week. The whole of it was covered on 30 July, one day before the reference moved for the first time. After that the target kept moving. Every move of the reference brought new Zig tests. The widget counts string-named and anonymous test blocks, the form its per-module mapping can match: <Fact id="zig_tests_first_count" /> at the first reference commit (the contract's <Fact id="zig_tests_contract" /> also counts the identifier-named tests) and <Fact id="zig_tests_pin" /> at the current one.
+
+<PortingWidget slug="test-contract" asOf="rust_tests" />
+
+A count is a weak contract, and the widget shows where. When upstream added tests to a module that already had surplus Rust tests, the count was met before anything was ported. That happened to <Fact id="contract_precovered" /> newly added Zig tests. So a per-name checklist joined the count: every live Zig test must name its Rust counterpart or give a written reason. The census in the last panel previews a later failure, tests that passed while checking nothing, which the section on checks covers. At the current reference commit, the checklist stands at <Fact id="zig_tests_accounted" />. It matches tests by name, so it covers the string-named Zig tests outside the build and benchmark code, a subset of the <Fact id="zig_tests_pin" /> blocks counted above. <Fact id="rust_tests" /> Rust tests stand behind it.
+
+## Cutting a 345-file cycle into crates
+
+Zig compiles Ghostty's <SourceLink at="4749c4e93" path="src" tree text="src/" /> as one module, and its files import each other freely. At the first reference commit, the runtime imports among its <Fact id="zig_src_files_first" /> files formed a single strongly connected component of <Fact id="scc_files" /> files, with <Fact id="scc_edges" /> import edges inside it. From any of those files you can follow imports and come back to it. The hub is easy to miss. <SourceLink at="4749c4e93" path="src/quirks.zig" lines="12" text="quirks.zig" />, a small assert helper, is imported by <Fact id="quirks_importers" /> files in the cycle. One font workaround in it imports the font package, so the assert helper reached the font stack, and from there config, the app runtime and the renderer.
+
+[Cargo](https://doc.rust-lang.org/cargo/) does not allow cycles between crates, so the port needed crate boundaries across which no import points upward. The crate-structure design written on day 1 listed <Fact id="scc_cuts" /> cuts. The rule for them was strict: "[Cycle-breaking refactors](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/PORT_RULES.md#L64-L65) […] are behavior-preserving structural changes ONLY". A cut may move code. It may not change logic, comments or tests. By mechanism, they break down like this:
+
+- **Six traits.** A lower crate defines an interface, and the upper crate implements it. For example, the renderer defines the inspector overlay it draws, and core depends on the app-runtime interface traits instead of the [GTK](https://www.gtk.org/) or macOS backends.
+- **Five moves.** A file or type moves down into a lower crate. The backend enums went to a build-config crate, and grid sizes to shared render types.
+- **Two splits.** The <SourceLink at="4749c4e93" path="src/global.zig" text="global.zig" /> hub became a leaf crate holding process-wide state, and the C API layer moved out of the terminal engine into a crate on top of it.
+- **One injection.** Config passes the values the font stack needs, so font never depends on config.
+
+The widget tests each cut by removing it while keeping all the others. Every removal leaves a cycle in Cargo's terms, so every cut is load-bearing. After the planned cuts, a smaller knot of renderer, inspector, terminal I/O, core and crash files remained. It held together through one upward edge, from the crash reporter into the surface. One more seam cut it: a small trait local to the crash crate, which core's surface implements.
+
+<PortingWidget slug="cutting-the-cycle" asOf="crate_packages" />
+
+Three of the layering decisions shaped the code more than the others:
+
+- **Font sits below the terminal engine.** The font crate does pure parsing (OpenType, sprites, atlas, metrics). The terminal crate depends on it, never the reverse. Shaping, which needs the terminal's types, moved into a separate crate above both. This was decided on 25 June.
+- **The renderer owns its view of the configuration.** Config depends on the renderer, because a config change is sent to the renderer as a message. So the renderer cannot name a config type.
+- **Process spawning lives in terminal I/O.** The original plan put Ghostty's <SourceLink at="4749c4e93" path="src/Command.zig" text="Command.zig" /> in core, which created a new cycle. It moved to the terminal-I/O crate, which core already depends on.
+
+The renderer's case shows the pattern. In Ghostty, the renderer reads fields straight off the config struct (<SourceLink at="4749c4e93" path="src/renderer/generic.zig" lines="574-610" /> at <CommitLink hash="4749c4e93" />):
+
+```zig
+pub fn init(
+    alloc_gpa: Allocator,
+    config: *const configpkg.Config,
+) !DerivedConfig {
+    // …
+    // Get our font styles
+    var font_styles = font.CodepointResolver.StyleStatus.initFill(true);
+    font_styles.set(.bold, config.@"font-style-bold" != .false);
+    // …
+    return .{
+        .background_opacity = @max(0, @min(1, config.@"background-opacity")),
+        .background_opacity_cells = config.@"background-opacity-cells",
+        .font_thicken = config.@"font-thicken",
+```
+
+In Rustty, the renderer defines a trait with one accessor per config field, and <SourceLink at="58aa62a81" path="crates/rustty-config/src/renderer_config.rs" lines="67" text="rustty-config" /> implements it for its `Config`. The body of `init` stays line-for-line comparable with the Zig (<SourceLink at="58aa62a81" path="crates/rustty-renderer/src/config.rs" lines="42-76" /> and <SourceLink at="58aa62a81" path="crates/rustty-renderer/src/generic.rs" lines="449-503" text="generic.rs" /> at <CommitLink hash="58aa62a81" />):
+
+```rust
+pub trait RendererConfig {
+    fn font_thicken(&self) -> bool;
+    fn font_thicken_strength(&self) -> u8;
+    fn background_opacity(&self) -> f64; // init clamps @max(0,@min(1,x))
+    // …
+    fn font_style_bold(&self) -> bool; // config.@"font-style-bold" != .false
+    // …
+}
+
+pub fn init<C: RendererConfig>(
+    alloc_gpa: Global,
+    config: &C,
+) -> Result<DerivedConfig, DerivedConfigError> {
+    // …
+    let mut font_styles = StyleStatus::init_fill(true);
+    font_styles.set(Style::Bold, config.font_style_bold());
+    // …
+    Ok(DerivedConfig {
+        background_opacity: config.background_opacity().clamp(0.0, 1.0),
+        background_opacity_cells: config.background_opacity_cells(),
+        font_thicken: config.font_thicken(),
+```
+
+On day 1, <Fact id="crates_day1" /> crates were scaffolded from the plan, in leaves-first order. Porting followed that order only loosely. The terminal engine sits in the middle of the graph but went first, because everything above it needed it. Ghostty's own cycle kept growing during the port, to <Fact id="scc_files_now" /> files at the current reference commit, and the crate graph stayed acyclic through every reference move. Today the workspace has <Fact id="crate_packages" /> packages and no cycle, and its longest dependency chain is <Fact id="crate_depth" /> hops.
+
+## The first three weeks
+
+The terminal engine went first, and fast. Between 21 and 25 June, <SourceLink at="58aa62a81" path="crates/rustty-vt" tree text="rustty-vt" /> grew from <Fact id="vt_lines_start" /> to <Fact id="vt_lines_0625" /> lines, and from <Fact id="vt_tests_start" /> to <Fact id="vt_tests_0625" /> tests. By 28 June the workspace had <Fact id="rust_tests_week1" /> tests, close to the size of the whole contract.
+
+The upper tiers came next: config, font, terminal I/O, core, the embedded app runtime and the renderer. They ran into a problem the engine did not have. Ghostty's <SourceLink at="4749c4e93" path="src/Surface.zig" text="Surface.zig" /> and <SourceLink at="4749c4e93" path="src/App.zig" text="App.zig" /> call straight into subsystems that were not ported yet: the GPU renderer, the event loop and the inspector. Instead of waiting, the port gave each missing subsystem a real placeholder type whose methods panic with `unimplemented!()`. The code that calls those subsystems was ported in full, compiled and reviewed as real Rust. When a subsystem landed, the placeholder gave way to the real port. [A dated audit lists every](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/gap-close/UNIMPLEMENTED_LEAF_CENSUS.md) `unimplemented!()` that remains in the code, with its reason.
+
+Each milestone ran as a [Claude Code](https://code.claude.com/docs/en/overview) Workflow script. The usual shape was design, adversarial review of the design, port, then verify, with [Miri](https://github.com/rust-lang/miri) in the verify step of most scripts. <Fact id="wf_scripts_pre_realignment" /> of these scripts were written before 10 July. The human side was small and mostly about getting out of the way. In the 18 days from 22 June to 9 July I sent <Fact id="era_a_prompts" /> prompts, and <Fact id="era_a_commits" /> commits landed, <Fact id="era_a_commits_per_prompt" /> per prompt. About a fifth of the typed ones began with "continue", "resume" or "retry", often after a usage limit. The first limit came on day 2: "The workflow stopped due to API throttling, please resume it". Others pushed the agents to decide for themselves:
+
+> 06-25 · "Next time, after detailed tradeoff review, make a recommendation and just continue autonomously (no need to block on me)"
+>
+> 07-08 · "keep going, your call- stop stopping to ask me, youre supposed to progress autonomously."
+
+On 8 July the plan settled on macOS first, with Ghostty's Swift app reused on top of a Rust C ABI. [Metal](https://developer.apple.com/metal/) drew its first pixels on <Fact id="first_pixels_day" /> (<CommitLink hash="74c57204f" />). On 12 July the Swift app was imported unchanged. Twenty minutes later, <CommitLink hash="d1b4df097" /> recorded a runnable Rustty terminal on macOS: Ghostty's own app driving the Rust port, on <Fact id="runnable_macos_day" />.
+
+The widget shows every hour of the port: commits as cells, my prompts as dots. The prompts themselves, word for word, are in [Every prompt](#every-prompt). The first three weeks are at the top. The pattern that holds across the whole port is visible early. Agents kept committing overnight and for hours after the last prompt. Up to 8 October, <Fact id="autonomy_gt1h" /> of non-merge commits landed more than an hour after my last prompt, and the hands-on prompting added up to <Fact id="engaged_hours" />.
+
+<PortingWidget slug="agents-vs-human" />
+
+By 9 July the history was still linear, with <Fact id="commits_pre_realignment" /> commits and no merges. The method was about to change. Two days before the macOS app first ran, the port adopted new rules and a new kind of audit, and the next section explains why.
+
+## The method matures
+
+On 10 July, <Fact id="realignment_day" /> of the port, I paused the porting and asked for an audit of what had been built. Two days earlier, Jarred Sumner had published "[Rewriting Bun in Rust](https://bun.com/blog/bun-in-rust)", an account of Bun's own port from Zig to Rust. My prompt asked agents to read it, follow its links into the [Bun repository](https://github.com/oven-sh/bun) and its [deleted porting guide](https://github.com/oven-sh/bun/blob/f6ad291ea032/docs/PORTING.md), and see what applied to Rustty. It also admitted something:
+
+> 02:43 · "…note that I haven't validated my port at all […] and possibly catch bugs I haven't uncovered yet."
+
+Three ideas in that write-up shaped what came next: a field-by-field ledger of who owns each pointer, written before pointer-heavy code is ported; a committed count of every `unsafe` site; and a list of the regression classes that had escaped Bun's tests. Rustty built its own version of each. A research workflow tagged each idea against the rules already in place, as adopt, adapt, already covered or reject (<CommitLink hash="2c03357ce" />). That afternoon six new rules were ratified (<CommitLink hash="ccd14200e" />). They covered explicit semantics for each Zig builtin replaced by a Rust primitive, compile-time work that stays compile-time, `unsafe` accounting, greppable porting markers, separate implementer and reviewer agents, and a verdict for every upstream commit.
+
+The ledger came first (<CommitLink hash="8f6d781dc" />). It has one row per pointer-typed field in Ghostty's pointer-heavy code: the file, struct and field, the Zig type, an ownership class (owned, shared, a borrowed field or parameter, an intrusive link, an FFI handle and so on), the Rust type an agent must use, and the evidence for the call. Its header tells agents how to use it:
+
+> [Port agents consume this table VERBATIM](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/audits/GHOSTTY_LIFETIMES.tsv#L30-L32): "trust it over local guessing". […] UNKNOWN => `Option<NonNull<T>>` + TODO(port).
+
+It was filled retroactively for the <Fact id="lifetimes_rows_created" /> fields already ported, and from then on it applied in advance, under a new rule: "[no pointer-heavy tier ports without its](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/PORT_RULES.md#L308-L309) [GHOSTTY_LIFETIMES.tsv](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/audits/GHOSTTY_LIFETIMES.tsv) rows landing first (2-reviewer consensus)." An audit of the existing code against it found <Fact id="lifetimes_audit_findings" /> issues the same evening (<CommitLink hash="b4845f427" />). The two medium-severity findings were latent aliasing undefined behaviour in the event loop's lock-free completion queue, in a branch no test reached yet. The fix two days later (<CommitLink hash="dcae8d61e" />) needed the queue in its own heap allocation. A one-line fix was not enough, and a small [Miri](https://github.com/rust-lang/miri) model of the queue showed it.
+
+The `unsafe` census (<CommitLink hash="d8ee18a75" />) made one committed search command the ground truth for the count. Next to it, a [separate ledger tracks *safe* functions](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/audits/UNSOUND_SAFE.md) whose soundness rests on invariants the compiler does not check, which no grep for `unsafe` finds. The rule behind both sets a bar for calling such a function fixed:
+
+> ["Fixed" bar: safe code cannot cause UB](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/PORT_RULES.md#L254-L255) in a release build; debug assertions do not qualify; wrappers that hide the invariant do not qualify.
+
+On 12 July, <Fact id="detectors_initial" /> regression detectors went into the [check registry](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/tools/ci.sh#L636-L1449) (<CommitLink hash="94ca0243e" />). Each one targets one class: byte slices reinterpreted as wider types, fixed buffers driven to capacity, constants folded into literals, compile-time work that drifted to run time (checked with golden bytes for every escape sequence the terminal emits), invariants that two crates must agree on, a sanitizer canary that must fail, unexplained copies, and comments that no longer describe the Rust behaviour. They entered as progress checks, with self-tests.
+
+<PortingWidget slug="strategy-timeline" />
+
+The timeline puts these changes among the others, each at the commit that introduced it. The era bands make one point plainly. Over the two months after the realignment the commit rate fell only slightly, from <Fact id="era_pre_commits_per_day" /> to <Fact id="era_post_commits_per_day" /> a day; what changed was what a commit had to show. The third band starts with the never-port-a-bug rule on 11 September, and that rule's section returns to it.
+
+The first payoff came the night after the realignment, on 11 July. A Miri run over all <Fact id="vt_miri_sweep_tests" /> terminal-engine tests (<CommitLink hash="3277f2f78" />), the first full one, found undefined behaviour in <Fact id="vt_miri_sweep_ub_tests" /> search tests, and it was fixed <Fact id="vt_miri_sweep_fix_hours" /> later (<CommitLink hash="9e3fe1c25" />). The ledger had no rows for the search code, so it could not have caught this one. Miri did. By 10 October the ledger had grown from <Fact id="lifetimes_rows_created" /> rows to <Fact id="lifetimes_rows" />, and the check registry from <Fact id="checks_realignment" /> entries on the day of the realignment to <Fact id="checks_now" />.
+
+## Zig pointers in Rust's aliasing model
+
+Most of the memory-safety bugs the port introduced share one cause. Zig and Rust disagree about what a pointer promises.
+
+In Zig, `*T` and `[]T` are addresses. Two of them may point at the same memory, one may write while the other reads, and nothing in the language tracks which one came first. [Rust references make promises](https://doc.rust-lang.org/nomicon/aliasing.html) the compiler relies on: a `&mut T` is the only live way to reach that `T`, and nothing writes through a `&T` while it is live. Breaking a promise is [undefined behaviour by definition](https://doc.rust-lang.org/reference/behavior-considered-undefined.html), even when the program seems to work, and that definition is what lets the optimizer assume the promise holds. [Miri](https://github.com/rust-lang/miri) checks executions against two formal models of these rules. [Stacked Borrows](https://plv.mpi-sws.org/rustbelt/stacked-borrows/) keeps a stack of tags for each memory location, one per reference or raw pointer derived from it. Writing through a tag pops every tag above it; reading through it pops only the unique tags (from `&mut`) above it. Using a tag that has been popped is undefined behaviour. [Tree Borrows](https://perso.crans.org/vanille/treebor/), the newer model, arranges tags in a tree whose nodes change state (reserved, active, frozen, disabled), and it accepts some patterns that Stacked Borrows rejects. The port checks every pure-Rust crate under Stacked Borrows and the pointer-heavy code under Tree Borrows as well.
+
+The rule that trips up a direct translation is the *protector*. A reference passed as a function argument is protected for the whole call. Any access during the call that would pop or disable its tag is undefined behaviour on the spot, even if the function never uses the reference again. Ghostty's Zig often passes `*Page`, `*Row` or `[]Cell` into a function that re-reads the same memory another way, for example an integrity assertion that walks the page list. Miri first caught this on 24 June in `Screen::clear_cells`. The agent's note from the fix states the asymmetry: "the Zig reference passes `*Page` / `*Row` / `[]Cell` — Zig pointers/slices are UNPROTECTED — so it's sound there. The Rust `&mut` is a *Rust-only over-constraint*." The fix (<CommitLink hash="3662e56bf" />) made those arguments raw pointers, with a short-lived `&mut` taken only for each mutation and dropped before any re-read. That became the rule. Today <Fact id="rawptr_allow_fns" /> public functions take raw-pointer arguments and carry a lint allowance that cites the Zig signature. They are safe functions whose soundness rests on callers passing valid pointers, which is exactly the class the [ledger of unsound safe wrappers](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/audits/UNSOUND_SAFE.md) tracks. The first tab of the lens below shows the `clear_cells` pair.
+
+<PortingWidget slug="translation-lens" />
+
+The protector also applies to memory that is freed rather than read. Ghostty's `startHyperlink` passes its slices to `startHyperlinkOnce`, which explicitly allows them to point into the hyperlink it is about to replace (<SourceLink at="a60e9e2a5" path="src/terminal/Screen.zig" lines="2747-2760" /> at <CommitLink hash="a60e9e2a5" />):
+
+```zig
+fn startHyperlinkOnce(
+    self: *Screen,
+    source: hyperlink.Hyperlink,
+) (Allocator.Error || Page.InsertHyperlinkError)!void {
+    // Allocate our new Hyperlink entry in non-page memory. This
+    // lets us quickly get access to URI, ID.
+    const link = try self.alloc.create(hyperlink.Hyperlink);
+    errdefer self.alloc.destroy(link);
+    link.* = try source.dupe(self.alloc);
+    errdefer link.deinit(self.alloc);
+
+    // End any prior hyperlink only after duplicating the new value. The
+    // source slices are allowed to reference our current hyperlink.
+    self.endHyperlink();
+```
+
+The contract holds in Zig because a slice carries no promise. A Rust `&[u8]` argument does: dropping the allocation it points into, while the call is still running, is undefined behaviour even though the slice is never read again. A Miri sweep found this on 30 July (<CommitLink hash="9d8fafb82" />). The port now keeps a safe entry point for callers that cannot alias, and an `unsafe` one with raw slice pointers that carries Zig's contract (<SourceLink at="58aa62a81" path="crates/rustty-vt/src/screen/attrs.rs" lines="524-565" /> at <CommitLink hash="58aa62a81" />):
+
+```rust
+pub fn start_hyperlink(
+    &mut self,
+    uri: &[u8],
+    id_: Option<&[u8]>,
+) -> Result<(), pagelist::grow::IncreaseCapacityError> {
+    // SAFETY: `uri`/`id_` are live readable slices for the whole call, and
+    // per this function's documented restriction they do not alias the
+    // current hyperlink state.
+    unsafe { self.start_hyperlink_raw(uri as *const [u8], id_.map(|id| id as *const [u8])) }
+}
+// …
+pub unsafe fn start_hyperlink_raw(
+    &mut self,
+    uri: *const [u8],
+    id_: Option<*const [u8]>,
+) -> Result<(), pagelist::grow::IncreaseCapacityError> {
+```
+
+A second difference is [*provenance*](https://doc.rust-lang.org/std/ptr/index.html#provenance): a Rust pointer may only access the memory it was derived from. Under Stacked Borrows, a pointer made from a reference to one field may access only that field. Tree Borrows is more permissive here, but the port must pass both. Ghostty's C API writes a style's eight boolean flags with one 8-byte store that starts at the first flag (<SourceLink at="a60e9e2a5" path="src/terminal/c/style.zig" lines="110-136" /> at <CommitLink hash="a60e9e2a5" />):
+
+```zig
+pub fn write(s: style.Style, out: *Style) void {
+    // …
+    // We have to align(1) because we're ptrCasting a u8 pointer.
+    @as(*align(1) u64, @ptrCast(&out.bold)).* = bytes: {
+        // …
+        break :bytes @bitCast(bytes);
+    };
+```
+
+Ported as `&mut out.bold` cast to `*mut u64`, under Stacked Borrows, the store reaches seven bytes outside its provenance. The fix on 27 September (<CommitLink hash="add88e2a7" />) derives the pointer from the whole struct and adds the field offset (<SourceLink at="58aa62a81" path="crates/rustty-vt-c/src/style.rs" lines="219-229" /> at <CommitLink hash="58aa62a81" />):
+
+```rust
+// SAFETY: the eight bool fields are consecutive starting at `bold`
+// (const-asserted below) with unique 0/1 representations, so the
+// unaligned 8-byte store writes exactly those fields. The pointer is
+// derived from the whole `Style`, not from `&mut out.bold`: a
+// one-byte field reference carries provenance for that byte only,
+// and an 8-byte store through it is out of bounds (Stacked Borrows; […]).
+unsafe {
+    let base = out as *mut Style as *mut u8;
+    (base.add(core::mem::offset_of!(Style, bold)) as *mut u64).write_unaligned(bytes)
+};
+```
+
+The same arithmetic, run backwards, ports Zig's [`@fieldParentPtr`](https://ziglang.org/documentation/0.15.2/) (C's [`container_of`](https://www.kernel.org/doc/html/latest/driver-api/basics.html)): subtract the field's [`offset_of!`](https://doc.rust-lang.org/std/mem/macro.offset_of.html) from a raw pointer to the field to recover its parent. That is sound only when the field pointer carries the parent's provenance, for example one derived from the handle [`Box::into_raw`](https://doc.rust-lang.org/std/boxed/struct.Box.html#method.into_raw) returned, not from `&mut parent.field`. Intrusive lists use a per-type trait that returns the *address* of the link field, so the code never forms a `&mut` to an element that another pointer still references. The lens's second tab shows both.
+
+The hardest cases are long-lived aliases. In the renderer's row loop, a run iterator holds a raw pointer to the font shaper inside the renderer for the whole loop, and the loop calls the shaper as it goes (<SourceLink at="a60e9e2a5" path="src/renderer/generic.zig" lines="2956-2998" /> at <CommitLink hash="a60e9e2a5" />):
+
+```zig
+var run_iter = self.font_shaper.runIterator(run_iter_opts);
+var shaper_run: ?font.shape.TextRun = try run_iter.next(self.alloc);
+// …
+        // Otherwise we have to shape them.
+        const new_cells = try self.font_shaper.shape(run);
+```
+
+In Rust, `self.font_shaper.shape(run)` creates a new reference to the shaper beside the iterator's pointer, a sibling. Under both models that pops or disables the iterator's tag, so its next step is undefined behaviour. The design reviewer flagged the hazard and proposed taking the whole renderer as a raw pointer. A Miri model showed that this was necessary but not sufficient: alone, it was still undefined behaviour under both models. The clean structure needed both halves. The shaper is called *through the iterator's own pointer*, a child of its tag, and the helpers called inside the loop take the renderer as a raw pointer (`self_raw` below) with narrow field access, instead of a whole `&mut self` (<CommitLink hash="f046d41a6" />; <SourceLink at="58aa62a81" path="crates/rustty-renderer/src/generic/macos_impl/cells.rs" lines="363-666" /> at <CommitLink hash="58aa62a81" />):
+
+```rust
+let self_raw: *mut Renderer = self;
+let mut run_iter = self.font_shaper.run_iterator(run_iter_opts);
+let mut shaper_run: Option<shape::TextRun> = run_iter.next(self.alloc)?;
+// …
+            // Otherwise we have to shape them.
+            // SAFETY ([…]): shape THROUGH the
+            // hook's own raw `*mut Shaper` (`run_iter.hooks.
+            // shaper`), a child reborrow that does NOT pop the
+            // hook — a `self.font_shaper.shape(...)` sibling
+            // reborrow WOULD pop it (Miri-proven UB). Same Shaper
+            // object, byte-identical to the reference `self.
+            // font_shaper.shape(run)`.
+            let new_cells = unsafe { (*run_iter.hooks.shaper).shape(run) }?;
+```
+
+That case set the method. Much of the pointer-heavy code calls [Metal](https://developer.apple.com/metal/), [CoreText](https://developer.apple.com/documentation/coretext) or C libraries that Miri cannot execute, so its tests cannot run under Miri. Instead, each aliasing question gets an isolated [proof harness](https://github.com/AirelyDev/rustty/tree/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/phase-2/mirihar-chunk3b): a small crate with no FFI that reproduces the exact borrow shape, with candidate designs run under both models. The design that came out of the shaper fix says it directly: "[do NOT hand-reason SB](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/phase-2/GPU_RD_CHUNK4_DESIGN.md#L594)" (Stacked Borrows); test it under Miri instead. The repository now holds <Fact id="miri_harnesses" /> of these harnesses. The next widget replays four of the port's bugs through the implementer, the reviewer, Miri's borrow stack and the fix.
+
+<PortingWidget slug="three-reviewers" />
+
+<PortingWidget slug="memory-safety" />
+
+The record is a floor, because port bugs before September were tracked only in commit messages. It still shows the shape. The port introduced at least <Fact id="port_memsafety_defects" /> memory-safety defects in <Fact id="port_memsafety_events" /> events, and Miri caught <Fact id="port_memsafety_miri" /> of them, directly, through a harness or by proving an audit's finding. <Fact id="port_memsafety_aliasing" /> were aliasing or provenance undefined behaviour, a class of bug that exists because Rust has an aliasing model and Zig does not. The sanitizers found <Fact id="port_memsafety_sanitizers" />, and none of those was aliasing. In October the Tree Borrows lane found two more bugs, both in tests: page tests passed `&mut` temporaries where the code takes raw row pointers, and a debug-only integrity read then froze the borrow before the next write, a sequence Stacked Borrows accepts. The tests now pass raw pointers, as Ghostty's do (<CommitLink hash="0bed3efe0" />).
+
+## Performance
+
+The kickoff rule put parity first and performance second, so the first head-to-head waited until 15 July (<CommitLink hash="10cc61434" />). Rustty won none of the benchmarks against Ghostty's release build (<Fact id="perf_wins_start" />), and the suite was <Fact id="perf_suite_slower_start" /> slower. That night I asked for a worktree for the performance work and left:
+
+> 00:47 · "Go autonomous from now, I won't be around to approve anything"
+
+Between 01:18 and 10:41 on 16 July, agents landed <Fact id="perf_commits_july" /> performance commits. At the end (<CommitLink hash="349e5d101" />), Rustty won <Fact id="perf_wins_july" />, with the suite <Fact id="perf_suite_delta_july" />, the terminal parser <Fact id="perf_tparser_speedup" /> faster and screen cloning <Fact id="perf_clone_speedup" /> faster. The replay steps through the night one measured build at a time.
+
+<PortingWidget slug="perf-replay" asOf="perf_suite_delta_july" />
+
+These numbers hold only because of how they were measured:
+
+- **The same benchmark on both sides.** <SourceLink at="58aa62a81" path="crates/rustty-bench" tree text="rustty-bench" /> is a one-to-one port of Ghostty's benchmark CLI, and both read byte-identical input corpora. The Rust synthetic-data generator produces the same bytes as Ghostty's for the same seed.
+- **Comparable builds.** Ghostty's benchmark is built with `-Doptimize=ReleaseFast`. A build without that flag once gave misleading numbers. Rust uses a `release-fast` profile that differs from the shipped `release` profile in one way only: overflow checks are off, as in [ReleaseFast](https://ziglang.org/documentation/0.15.2/). The shipped build keeps them on, to trap where Zig's ReleaseSafe traps.
+- **Same-session Zig.** Each figure is the median of seven (later nine) timed runs after one discarded warm-up, run one at a time, and Ghostty is re-measured in the same session as every Rust build. Across four sessions, the same unchanged Zig binary measured the terminal parser <Fact id="zig_session_span" /> apart. Session matters for Rust too: the same pre-fix Rust code measured <Fact id="perf_suite_delta_start" /> on the suite in the 15 July session and <Fact id="perf_session_effect" /> in the 16 July session. So the starting gap overstates what the night's code changes closed. Part of it was the session.
+- **Per-operation slopes, not wall clock.** Every wall-clock figure includes process start-up. In August, an agent found that Rustty's process floor was <Fact id="perf_floor_ms" /> lower than Ghostty's. On a benchmark that runs for a few milliseconds, that difference decides the result: the hyperlink lookup "won" by <Fact id="hyperlink_lookup_wall" /> on wall clock while running <Fact id="hyperlink_lookup_perop" /> slower per operation. Since then, short benchmarks run at several loop counts N, and the slope `(t(N) − t(1)) / (N − 1)` gives nanoseconds per operation.
+
+Two results from that night shaped the rest of the code. [Link-time optimisation](https://doc.rust-lang.org/cargo/reference/profiles.html) helped the OSC parser and screen cloning by <Fact id="lto_gain_osc_clone" /> but slowed the terminal parser (<Fact id="lto_tparser" />), so it was reverted and banned in a comment above the profile in <SourceLink at="58aa62a81" path="Cargo.toml" lines="502-517" />. Without it, every hot public function called across crates needs [`#[inline]`](https://doc.rust-lang.org/reference/attributes/codegen.html#the-inline-attribute), which Zig, compiling everything as one unit, never needed. And instruction-level profiling of screen cloning found a parity bug rather than a speed-up (<CommitLink hash="10f2091fe" />). Ghostty's `break :hyperlink` leaves only a labelled block, so the style handling after it still runs for that cell. The port had used `continue`, which skipped it, so a cell with both a hyperlink and a style lost its style on a same-page clone. The translation compiled and passed every existing test.
+
+The August round widened the matrix to newer benchmarks, measured against Ghostty's main branch, and found the main source of performance gaps: Zig compile-time parameters and constants that the port had turned into runtime values. A compile-time width parameter that became a runtime enum, for example, turned a fixed-size store into a `memcpy` call per cell. Fixing those (<CommitLink hash="1d50073f6" />) took snapshot encoding from <Fact id="snapshot_encode_gap" /> relative to Zig and left Rustty faster on <Fact id="perf_breadth" /> configurations. In the same round, swapping hot `assert!` calls for [`debug_assert!`](https://doc.rust-lang.org/std/macro.debug_assert.html) made the code slower. In a release build `assert!` still checks its condition, and the optimizer can use that condition afterwards; `debug_assert!` removes both the check and that knowledge. Some of those asserts were what removed later bounds checks.
+
+On 7 October, at <CommitLink hash="12752b2ac" />, two reference commits before the current one, and on an idle machine, Rustty won <Fact id="perf_wins_prev_pin" /> again in two independent runs, with the suite <Fact id="perf_suite_delta_prev_pin" /> (<CommitLink hash="b61e273e6" />). The workloads had changed with the reference, so those ratios are not comparable with July's. At the current reference commit, <CommitLink hash="246f70287" />, the suite ran again on 10 October with the same harness, and Rustty won <Fact id="perf_wins_pin" /> with the suite <Fact id="perf_suite_delta_pin" /> (<CommitLink hash="949584651" />). The terminal parser ran in <Fact id="perf_tparser_share_pin" /> of Ghostty's time and the OSC parser in <Fact id="perf_osc_share_pin" />. The closest benchmark, terminal-stream, lost its first nine-run round by <Fact id="perf_stream_first_loss" /> and won the harness's built-in eighteen-run re-run by <Fact id="perf_stream_rerun_win" />; an independent run of the performance check gave a suite <Fact id="perf_g8b_delta_pin" />.
+
+## Keeping up with upstream
+
+Ghostty kept moving during the port. Between the first reference commit and the current one, upstream landed <Fact id="upstream_commits_absorbed" /> non-merge commits (<Fact id="upstream_lines" /> lines, summed over the moves), and Ghostty's Zig code grew by <Fact id="ghostty_growth" />. The port moved its reference <Fact id="pin_advances" /> times to keep up. One rule governs every move:
+
+> updating the reference checkout does not port anything — "[a merge does NOT port the fix](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/phase-2/MAIN_PARITY.md#L8); only an explicit .rs change does".
+
+The first move (<CommitLink hash="0efe06a1c" />) ported the upstream range first and moved the reference at the end. <Fact id="wait_first" /> passed between the new reference commit landing upstream and the port adopting it. From the second move on 17 August, at my direction, the order was reversed. The port moves the reference first, runs every check against it, records which checks went red, and then ports until they are green again. The red counts became the progress meter. At the second move (<CommitLink hash="c8e76c6eb" />), <Fact id="move2_comments_missing" /> reference comments had no Rust counterpart and <Fact id="move2_tests_missing" /> Zig tests had none. At the third, the counts were <Fact id="move3_comments_missing" /> comments and <Fact id="move3_tests_missing" /> tests, <Fact id="move3_kitty_tests" /> of them in the kitty module, for new clipboard, drag-and-drop and graphics-animation features. From then on, each catch-up ended when the counts were back at zero.
+
+The wait to adopt a new reference commit dropped to as little as <Fact id="wait_min" /> at the third move. It was not a steady decline: the last move waited <Fact id="wait_last" />, and the median was <Fact id="wait_median" />. Catch-ups also got shorter, but not steadily. The second took <Fact id="move2_resync_days" /> from move to finish, the seventh <Fact id="move7_resync_hours" /> and the eighth <Fact id="move8_resync_minutes" />, though part of the eighth's porting merged just before its move.
+
+<PortingWidget slug="moving-target" />
+
+The matrix shows where the work landed. <Fact id="churn_terminal_share" /> of the upstream churn was in the terminal engine. One move also exposed a weakness in the checks themselves. At the fifth move, on 1 September, the per-module test-count check stayed green, but only because two new upstream files were outside the list it read. <Fact id="move5_unseen_tests" /> new Zig tests were invisible to it (<CommitLink hash="62c1690d9" />). The next section is about that kind of green.
+
+The seventh move, on 7 October (<CommitLink hash="7719ebb4d" />), arrived with <Fact id="move7_comments_missing" /> reference comments and <Fact id="move7_tests_missing" /> Zig test blocks missing. The catch-up closed <Fact id="move7_resync_hours" /> later with both counts back at zero. Ghostty moved again while that catch-up was being verified: the eighth move, on 9 October (<CommitLink hash="2bf89b95a" />), brought <Fact id="move8_upstream_commits" /> upstream non-merge commits, among them a soft terminal reset, and arrived with <Fact id="move8_comments_missing" /> reference comments and <Fact id="move8_tests_missing" /> Zig test blocks missing. The comment, test and symbol checks were green again <Fact id="move8_resync_minutes" /> after the move (<CommitLink hash="f5f2bdf28" />), and porting that range recorded one more Ghostty defect, an origin-mode cursor outside the margins that the terminal formatter replays at the wrong position (<CommitLink hash="e7a4fe3f2" />).
+
+## Checks as the specification
+
+The [check registry](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/tools/ci.sh#L636-L1449) is where "parity" is written down precisely enough to fail. It had <Fact id="checks_day1" /> entries on the first day and has <Fact id="checks_now" /> today. <Fact id="checks_hard" /> of them must pass. The other <Fact id="checks_progress" /> track progress toward a target while the code they measure is unfinished, and they start failing once a crate claims to be done. Every check also has to prove it can fail. <Fact id="checks_self" /> registry entries are self-tests that inject a violation into a check and require it to go red, and <Fact id="check_scripts_self" /> check scripts carry a self-test of their own.
+
+<PortingWidget slug="checks-growth" />
+
+The hardest lesson was about checks that pass without checking anything. On 30 July, the check that guarded the close of the main porting phase was green, and had been for days. It took its list of open work from the roadmap, a hand-maintained checklist. Ticking off three finished workstreams turned it red (<CommitLink hash="9be05f7ab" />). Its green had depended on rows staying nominally open. Two faults pointed in opposite directions. Four roadmap rows contradicted commits that were already merged, and a struck-through row still counted as open, so work it owned passed on the strength of a retracted line. The note the agents wrote down afterwards states the lesson: "a green result proves nothing until you check what the green rests on". Since then, a check that derives its verdict from a document asserts that its derived sets do not overlap, and its self-test breaks each requirement on the real rows and demands a rejection. It also fails loudly when no row exercises a requirement, and it prints every accepted exception on every green run.
+
+The same failure came back in other forms. One was the test-count check that missed new upstream files. Another was the silent skip. A test that cannot find a resource it needs, such as a font or a display, and returns early reports `ok`. On 23 September a new check found <Fact id="silent_skips_removed" /> such sites (<CommitLink hash="1096fa4cd" />). The rule written that day:
+
+> [A Rust test that returns early reports `ok`](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/PORT_RULES.md#L401), which cannot be told apart from a pass.
+
+Now a test that cannot always run is either compiled out by `cfg`, marked ignored, or calls a helper that turns its skip into a failure on lanes that have the resource. When last counted, at <CommitLink hash="1d22ba80d" />, <Fact id="tests_no_skip" /> tests had no skip mechanism at all.
+
+One check exists because of a crash. On 15 July, every dynamically populated macOS menu shortcut was blank. The cause was a struct returned by value across the C interface (<CommitLink hash="40727a2cb" />). `TriggerC` embedded a modifier type without a C layout, which made it <Fact id="triggerc_rust_bytes" /> in Rust against <Fact id="triggerc_header_bytes" /> in the header. On arm64, a returned struct larger than <Fact id="aapcs64_sret_threshold" /> [travels through a hidden pointer](https://github.com/ARM-software/abi-aa/blob/main/aapcs64/aapcs64.rst), and a smaller one comes back in registers. So Swift and Rust used different calling conventions for the same function. The fix commit records a SIGBUS on the first call, and the blank shortcuts in the app. A lint allowance had hidden the compiler's warning. The check added that day [compiles a probe with clang](https://clang.llvm.org/) and requires every type returned by value through the embedding header to carry a Rust size assertion that matches it.
+
+The checks that define parity go past counts where they can:
+
+- **Comments.** A first check compared comment line counts per crate, and a dropped comment slipped past it. Its replacement matches content: every distinctive Ghostty comment, a phrase of five words or more, must have a fuzzy match in the port's comments after the rename. At the current reference commit, <Fact id="comments_carried" /> comments match and none is missing. <Fact id="comments_not_carried" /> are deliberately not carried, and each of those rows has to prove its reason mechanically.
+- **Tests.** In each of the <Fact id="test_gate_modules" /> mapped modules, the Rust test count is at or above Zig's.
+- **Escape sequences.** A later check runs the [esctest2](https://github.com/ThomasDickey/esctest2) suite against both terminal libraries and requires the same outcome and log for every test: <Fact id="esctest_compared" /> tests, with identical results on both sides.
+- **The C interface.** Rustty's terminal library matches Ghostty's on <Fact id="cabi_headers" /> headers, <Fact id="cabi_functions" /> functions and <Fact id="cabi_sentinels" /> enum sentinels that force C compilers to size enums as `int`. The embedding API maps <Fact id="embed_entrypoints" /> entry points.
+
+All of these checks were green when the latest catch-up closed at the current reference commit (<CommitLink hash="f5f2bdf28" />), and in the full validation run that followed it.
+
+## Never port a bug
+
+Until 11 September, the port copied Ghostty's bugs. When a translation reached a crash in the reference, the agent ported the crash, marked it as deliberate fidelity and recorded it for a later upstream report (<CommitLink hash="49edf86a4" />, for example). The rule changed over one [GTK](https://www.gtk.org/) file. That morning a parity task ported how Ghostty reads the reply of the [desktop portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html)'s global-shortcuts request (<CommitLink hash="dae5118bb" />). If the reply body has an unexpected shape, `params_.get` leaves `vardict` null while `response` stays 0 (<SourceLink at="a60e9e2a5" path="src/apprt/gtk/class/global_shortcuts.zig" lines="454-467" /> at <CommitLink hash="a60e9e2a5" />):
+
+```zig
+var response: u32 = 0;
+var vardict: ?*glib.Variant = null;
+defer if (vardict) |v| v.unref();
+params_.get("(u@a{sv})", &response, &vardict);
+
+switch (response) {
+    0 => {
+        log.debug("request successful", .{});
+        method.onResponse(self_cb, vardict.?);
+    },
+    1 => log.debug("request was cancelled by user", .{}),
+    2 => log.warn("request ended unexpectedly", .{}),
+    else => log.warn("unrecognized response code={}", .{response}),
+}
+```
+
+Unwrapping a null optional with `.?` panics in a safety-checked build and is undefined behaviour in [ReleaseFast](https://ziglang.org/documentation/0.15.2/). The signal subscription has no sender filter, so any process on the [session bus](https://dbus.freedesktop.org/doc/dbus-specification.html) can send such a body. The port reproduced the panic on purpose, with a note saying so. Half an hour after that commit, I wrote:
+
+> 10:43 · "Wait, that seems odd. We shouldn't port the crash, please don't. Fix it here, update the plan/rules accordingly, and document all issues like this so we can propose upstream fixes later. Do this for past work too…"
+
+Four minutes later the rule was in the rules file (<CommitLink hash="7dd991582" />), and a minute after that the panic was gone (<CommitLink hash="d9de03392" />). A body without results now takes the reference's own "ended unexpectedly" branch (<SourceLink at="58aa62a81" path="crates/rustty-apprt/src/gtk/class/global_shortcuts.rs" lines="678-699" /> at <CommitLink hash="58aa62a81" />):
+
+```rust
+let (response, vardict) = response_params(params);
+
+// PORT NOTE: reference defect […]. A deliberate divergence […], not an oversight: a body that is
+// not `(ua{sv})` leaves `response` 0 and `vardict` null, and the reference then
+// runs `method.onResponse(self_cb, vardict.?)` — a panic in a safe build, undefined
+// behaviour in ReleaseFast. It is reachable from ANY session-bus peer: this
+// subscription, like the reference's (`:481-491`), has a null sender. […]
+// code 0 without a vardict takes the `2` arm — the
+// failed response it evidently is, with the reference's own "ended unexpectedly"
+// warning — and `onResponse` is not called.
+match (response, vardict) {
+    (0, Some(vardict)) => {
+        log::debug!(target: LOG_SCOPE, "request successful");
+        self.on_response(method, &vardict);
+    }
+    // …
+    (2, _) | (0, None) => log::warn!(target: LOG_SCOPE, "request ended unexpectedly"),
+```
+
+In plain words, the rule is this. A crash, undefined behaviour, leak or deadlock in Ghostty that real input can reach is not reproduced. The port implements what the reference evidently intends. A test proves the fix and must fail when the bug is put back. A port note marks the site, and the defect goes [into a ledger with a proposed upstream fix](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/parity-closure/UPSTREAM-DEFECTS.md). Assertions of real invariants still port as assertions. The rule also says how to decide:
+
+> When unsure, [trace where the input comes from before deciding](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/PORT_RULES.md#L373-L375); "the reference also traps" is not by itself a reason to trap.
+
+On 23 September (<CommitLink hash="f94ab8e81" />) the rule was extended to bugs that crash nothing but break the code's evident intent, such as output lost to a missing flush. Since then "[the port implements the intended behaviour, not the bug](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/PORT_RULES.md#L381-L382)", and every such difference also gets a line in a [user-facing list of fixes](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/docs/ghostty-bug-fixes.md).
+
+The third band on the strategy timeline starts with this rule. From 11 September to 10 October, commits ran at <Fact id="era_r13_commits_per_day" /> a day, about twice the earlier rate. The closing work of that period came as many small commits, one finding each, with its test first.
+
+The ledger held <Fact id="defects_day1" /> entries at the end of 11 September, most of them from a sweep of earlier work, so those dates record when an entry was written, not when the bug was found. It now holds <Fact id="defects_total" />: <Fact id="defects_ghostty" /> in Ghostty and <Fact id="defects_deps" /> in its dependencies, mostly [libvaxis](https://github.com/rockorager/libvaxis) and [libxev](https://github.com/mitchellh/libxev). <Fact id="defects_live" /> are live: <Fact id="defects_crash" /> crashes, <Fact id="defects_ub" /> cases of undefined behaviour, <Fact id="defects_leak" /> leaks, <Fact id="defects_hang" /> hangs or deadlocks, and <Fact id="defects_intent" /> that break intent. The rest are latent (<Fact id="defects_latent" />, unreachable at the reference commit) or weaknesses in Ghostty's own tests (<Fact id="defects_testweak" />).
+
+<PortingWidget slug="defect-map" asOf="defects_total" />
+
+A crash in a safety-checked build understates the problem, because Ghostty ships ReleaseFast, where those checks are compiled out. Each ledger entry [states what happens in ReleaseFast](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/parity-closure/UPSTREAM-DEFECTS.md#L1697). Read by hand, <Fact id="rf_ub" /> crash entries become undefined behaviour there, <Fact id="rf_wrong" /> silently produce a wrong value, and <Fact id="rf_term" /> still terminate.
+
+The ledger also shows how porting finds bugs. The method of discovery is a hand classification, so these counts are estimates:
+
+- **Reading and review** found the most, <Fact id="method_read" />, during parity audits, defect sweeps, translation and reviewer passes.
+- **Checked conversions** found <Fact id="method_arith" />, and <Fact id="method_arith_crash" /> of them are crashes. A Zig `@intCast` or an overflow on input-controlled data has to become [`try_from`](https://doc.rust-lang.org/std/convert/trait.TryFrom.html) or checked arithmetic in Rust, and choosing between them forces someone to work out the range.
+- **Compiling code Zig never analyses** found <Fact id="method_compile" />, none of them a crash. Zig type-checks lazily, so code that no build reaches can rot unnoticed. Rust compiles all of it.
+- **Bringing up other platforms** found <Fact id="method_xplat" /> (<Fact id="method_xplat_crash" /> crashes), fault injection <Fact id="method_fault" />, porting Ghostty's tests <Fact id="method_testport" /> and the sanitizers <Fact id="method_san" />.
+- **The rest:** the type and borrow checker found <Fact id="method_types" />, porting the build system <Fact id="method_build" /> and live use of the port <Fact id="method_live" />. The two crashes still to be reported privately were not classified by method.
+
+[Miri](https://github.com/rust-lang/miri) and fuzzing found none first. Zig has no aliasing model for Miri to check. Miri can only confirm a Rust model of an access pattern that was found some other way.
+
+None of the defects has been reported upstream yet. Before any report, upstream had fixed <Fact id="upstream_fixed" /> independently, three in Ghostty and one in [Google Highway](https://github.com/google/highway) (not yet in Ghostty's pinned version), and partly fixed <Fact id="upstream_partly" />. That is independent evidence that the entries are real. Two crashes reachable from ordinary terminal output are to be reported privately, and one entry is obsolete upstream. The remaining <Fact id="defects_unreported" /> are unreported, each with a proposed fix ready to file, and <Fact id="fixes_list_entries" /> appear in the public list of fixes.
+
+## Second opinions
+
+Every reviewer in the port so far was a [Claude Code](https://code.claude.com/docs/en/overview) agent reviewing another Claude Code agent's work. At the end of July I wanted a review from a different vendor, so I ran [Codex](https://developers.openai.com/codex/app) in the Codex app. Its instructions were to read both repositories, write only into one findings directory, change nothing, and check its own claims:
+
+> "I want you to report on things that you've actually verified. If you come up with a theory or flags, I want you to come up with a way to vet and verify it (do adverserial reviews of your own review comments)."
+
+It ran twice, for <Fact id="codex_hours" /> between 31 July and 2 August (UTC). The first run began as an audit of non-macOS parity, split into workstreams, and returned <Fact id="codex_run1_gaps" /> verified gaps. During it I widened the goal to every line of code, and the second run restarted with that goal. Codex listed <Fact id="codex_universe_lines" /> lines across both repositories and split the files into hash-pinned line ranges. It gave each range to a primary auditor and had a second agent independently replay every non-trivial result. Codex's goal loop kept itself going, with <Fact id="codex_goal_turns" /> automatic continuations against <Fact id="codex_human_msgs" /> messages from me. It spawned <Fact id="codex_workers" /> workers, at most <Fact id="codex_peak_concurrent" /> at once. Its weekly usage meter went from <Fact id="codex_meter" /> over the second run, and the audit stopped there. By then its strict ledger credited only <Fact id="codex_strict_credit" /> of the lines as mechanically verified, though the primary reviews had covered much more ground less formally. The output was a registry of <Fact id="codex_rows" /> rows.
+
+Eight days later, Claude Code agents took the registry as input. Rows that shared a root cause were folded into <Fact id="codex_groups" /> groups. Each group went to its own read-only agent, which had to confirm or refute it against the current code without trusting the report's claims. Each fix batch then went to a fix agent followed by an independent verify agent. Everything landed in one commit (<CommitLink hash="8120dd10d" />): <Fact id="codex_remediation_files" /> files, <Fact id="codex_proving_tests" /> new proving tests and <Fact id="codex_remediation_tests" /> tests passing.
+
+Most of what Codex found was what a macOS-first plan had never exercised. Windows did not compile, with <Fact id="codex_windows_errors" /> errors cutting off the terminal engine, its C library and terminal I/O. [FreeBSD](https://www.freebsd.org/) selected a Linux-only [GTK](https://www.gtk.org/) path and a macOS-only [kqueue](https://man.freebsd.org/cgi/man.cgi?query=kqueue) backend. [Kitty graphics](https://sw.kovidgoyal.net/kitty/graphics-protocol/) had never been rendered on Linux, and custom shaders were never applied. One finding paid off indirectly. It noted that the port had no [coverage-guided fuzz target](https://github.com/rust-fuzz/cargo-fuzz). The target added in response found a reachable panic: `RGB::parse`, called from the live OSC parser, sliced a Rust string at a byte that was not a character boundary, where Ghostty slices bytes and returns `InvalidFormat`. Parsing moved to `&[u8]`.
+
+The same separation of roles runs through the port's own work. The rule for it:
+
+> [Split contexts: implementer, verifier, and fixer are separate agents](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/PORT_RULES.md#L294-L297); the verifier works a concrete violation checklist […] and defaults to not-ok-if-uncertain; the fixer makes surgical edits only and may skip a hallucinated finding with a note
+
+Separately, the recovered transcripts hold <Fact id="security_review_sessions" /> automated security-review sessions, most of them on [Opus 4.7](https://docs.claude.com/en/docs/about-claude/models/overview) at extra-high effort.
+
+<PortingWidget slug="audit-funnel" />
+
+Precision is what matters in a second opinion. Of the <Fact id="codex_groups" /> groups, <Fact id="codex_confirmed" /> held up under independent checking and <Fact id="codex_refuted" /> were refuted. Claude agreed with Codex's severity on <Fact id="codex_severity_agree" />, and <Fact id="codex_fixed" /> were fixed and verified.
+
+## The verification matrix
+
+The tool for each kind of code was set early: [Miri](https://github.com/rust-lang/miri) for pure-Rust crates, [AddressSanitizer](https://clang.llvm.org/docs/AddressSanitizer.html) for crates that call into C, and [Ghostty's own Valgrind job](https://github.com/ghostty-org/ghostty/blob/246f702876b924a1cb7cade1e99274d1470302fc/.github/workflows/test.yml#L2192), reproduced. The lanes were added one by one. The first time every lane ran to completion was at <CommitLink hash="12752b2ac" />, two reference commits before the current one, between late September and 7 October.
+
+On 1 October I questioned the cost of all this:
+
+> 21:26 · "lets re-evaluate the value of these long running miri checks. do most rust projects even run with them?"
+
+The design written that day kept Miri and changed how it runs. At the fifth reference move, the Miri lane had not finished in <Fact id="miri_unfinished" />. Miri interprets the program, and libtest ran all of a crate's tests in one process. Running each test in its own process with [nextest](https://nexte.st/), several at a time, cut three groups of slow tests from <Fact id="miri_nextest_secs" />, <Fact id="miri_nextest_speedup" /> faster. At <CommitLink hash="12752b2ac" />, [Stacked Borrows](https://plv.mpi-sws.org/rustbelt/stacked-borrows/) covered <Fact id="miri_crates" /> in <Fact id="miri_secs" />, and it covered the same crates again at the current reference commit. A second lane runs, with debug assertions off, the tests that are only practical under Miri that way, and at the current reference commit it passed <Fact id="miri_c_lane" />. [Tree Borrows](https://perso.crans.org/vanille/treebor/) covered the pointer-heavy code, and at the current reference commit also the <Fact id="tb_core_tests" /> tests of the app core. The design also widened the sanitizer lanes around Miri. Each lane's latest complete run was at the current reference commit on macOS and for Valgrind, and at the previous one, <CommitLink hash="a60e9e2a5" />, for the Linux sanitizers:
+
+- **AddressSanitizer:** <Fact id="san_asan" /> tests on macOS.
+- **[LeakSanitizer](https://clang.llvm.org/docs/LeakSanitizer.html):** <Fact id="san_lsan_mac" /> on macOS and <Fact id="san_lsan_linux" /> on the Linux VM.
+- **[MemorySanitizer](https://clang.llvm.org/docs/MemorySanitizer.html):** <Fact id="san_msan" />, on the Linux VM only, since it has no macOS support.
+- **[HWAddressSanitizer](https://clang.llvm.org/docs/HardwareAssistedAddressSanitizerDesign.html):** <Fact id="san_hwasan" />, on the Linux VM only, since it needs aarch64 Linux.
+- **[ThreadSanitizer](https://clang.llvm.org/docs/ThreadSanitizer.html):** <Fact id="san_tsan_mac" /> on macOS and <Fact id="san_tsan_linux" /> on the Linux VM.
+- **[Valgrind](https://valgrind.org/docs/manual/mc-manual.html):** <Fact id="valgrind_tests" /> tests in <Fact id="valgrind_procs" /> memcheck runs on Linux, with no errors in Rustty code once [Mesa's EGL](https://docs.mesa3d.org/drivers/llvmpipe.html) leaks were suppressed.
+
+<PortingWidget slug="verification-matrix" asOf="sanitizer_runs_latest" />
+
+The matrix settles the question I asked. For the port's own bugs, unlike Ghostty's, Miri was the bug finder. Recorded per run, the Miri lanes found <Fact id="matrix_miri_bugs" /> port bugs: <Fact id="matrix_sb_bugs" /> under Stacked Borrows, <Fact id="matrix_tb_bugs" /> under Tree Borrows (all in test code) and <Fact id="matrix_capi_bugs" /> in the C API lane, against <Fact id="matrix_other_bugs" /> for all sanitizer and test lanes combined. The sanitizers found what Miri cannot run: <Fact id="san_ghostty_defects" /> defects on the upstream side, in C, C++ and FFI paths.
+
+- **Valgrind**'s first memcheck run found that Ghostty leaks a font collection when the shared glyph grid fails to initialize (<CommitLink hash="7d8a101a8" />).
+- **LeakSanitizer**'s first macOS run found that [Dear ImGui](https://github.com/ocornut/imgui)'s [Metal](https://developer.apple.com/metal/) backend, built without automatic reference counting, leaks every frame.
+- **ThreadSanitizer** found a data race in [Google Highway](https://github.com/google/highway). Two threads making their first SIMD call at the same time read and write its chosen-target mask without synchronization. The fix uses relaxed atomics in the vendored header.
+
+At the previous reference commit, <CommitLink hash="a60e9e2a5" />, every lane completed except Tree Borrows on the app core, which did not finish there. ThreadSanitizer on the Linux VM found a link regex compiled on a test thread before the [Oniguruma](https://github.com/kkos/oniguruma) library's one thread-safe initialisation, and the compile path now initialises first (<CommitLink hash="adc5d6c12" />). At the current reference commit, <CommitLink hash="246f70287" />, the full check script ran on both hosts after the catch-up closed (<CommitLink hash="f5f2bdf28" />, merged in <CommitLink hash="58aa62a81" />). To fit a full run on one machine, the script had gained per-check timings, a parallel scheduler with a cap on heavy checks, sharded Valgrind and per-check build directories (<CommitLink hash="0182ccc35" />). On macOS, <Fact id="ci_mac_gates" /> checks were green, among them Miri under both borrow models; the sanitizers and one latency test first failed on two test-only problems, a full disk or machine load, and passed once fixed or re-run, and the others needed tools the Mac does not have. On the Linux VM, <Fact id="ci_linux_gates" /> checks were green, among them a complete Valgrind run. In a separate run at <CommitLink hash="58aa62a81" />, the full Windows workspace suite passed <Fact id="windows_full_tests" /> tests with none failing. The Linux sanitizer lanes produced no result in that run, so the matrix shows them at <CommitLink hash="a60e9e2a5" /> until their re-run at the current commit. Taking each lane at its latest complete run, the lanes of the first complete matrix add up to <Fact id="sanitizer_runs_latest" /> test executions under a sanitizer or Valgrind, against <Fact id="sanitizer_runs_prev" /> at <CommitLink hash="12752b2ac" />.
+
+## How the orchestration changed
+
+For the first two months, the port ran on Workflow scripts. Each one was a JavaScript file that fanned a milestone out to agents in a fixed shape: design, adversarial review of the design, port, verify. <Fact id="wf_scripts_committed" /> were committed, the last on 25 August.
+
+September changed the unit of work. A controlling session now wrote a plan and dispatched one [subagent](https://code.claude.com/docs/en/sub-agents) per task, each in its own git worktree. A separate reviewer subagent checked each branch before the controller merged it, one at a time. In September, <Fact id="sept_subagents" /> subagents worked across <Fact id="sept_worktrees" /> worktrees, and subagents made <Fact id="sept_sub_share" /> of the model calls. The longest unattended run was <Fact id="longest_unattended" />, overnight from 23 to 24 September.
+
+<PortingWidget slug="orchestration" />
+
+Three things changed with it:
+
+- **Disk became a limit.** Each worktree builds its own target directory. On 23 September, about seven building worktrees filled the Mac's disk, and every tool call stalled. Since then, no more than three worktrees build at once, and each worktree and branch is deleted right after its merge.
+- **Context per call grew.** The median went from <Fact id="ctx_median" />. A controller holding a whole plan, and subagents reading the reference beside the port, both need more context.
+- **Models changed with usage allotments.** The trailers of the <Fact id="commits_nonmerge_head" /> non-merge commits on the main line name the model. [Opus 4.8](https://docs.claude.com/en/docs/about-claude/models/overview) wrote <Fact id="model_opus48" /> commits in the first five weeks. Opus 5 wrote <Fact id="model_opus5" /> from late July, and Opus 5.5 <Fact id="model_opus55" /> from 23 September. Fable 5 (<Fact id="model_fable5" />), Sonnet 5.5 (<Fact id="model_sonnet55" />) and Haiku 5.5 (<Fact id="model_haiku55" />) filled gaps, <Fact id="model_joint" /> commits name both Opus 4.8 and Fable 5, and <Fact id="model_none" /> carry no trailer. Switches often followed a usage allotment running out, as on 10 August: "My Fable usage is about to expire, when it does, continue your work with Opus 5".
+
+Up to 8 October, my prompts to [Claude Code](https://code.claude.com/docs/en/overview), on the Mac and the Linux VM, numbered <Fact id="rustty_prompts" /> on <Fact id="prompt_days" /> days. The change shows in commits per prompt. From 10 July to 31 August, there were <Fact id="cpp_julaug" /> commits per prompt. From 1 September to 8 October, there were <Fact id="cpp_sepoct" />.
+
+## Every prompt
+
+The prompts came in <Fact id="sessions_total" /> sessions, each one Claude Code or Codex conversation on one machine. <Fact id="sessions_command_only" /> of them hold only commands, such as switching the model or clearing the context. The rest are grouped by the part of the work they did, from the terminal engine to the website and this article, under a title that is Claude Code's own, or one written by Claude where Claude Code kept none or I changed it. Sessions often ran side by side: on <Fact id="sessions_busiest_day" />, <Fact id="sessions_busiest_parallel" /> sessions had an instruction or a decision from me. Some sessions were resumed again and again; the longest held <Fact id="sessions_longest_prompts" /> prompts and spanned <Fact id="sessions_longest_spanned_days" />. The founding sessions, <Fact id="sessions_founding_sessions" /> of them, hold <Fact id="sessions_founding_prompts" /> prompts typed outside the repository. On the night of 20 June, before the repository existed, I weighed a port of Ghostty from Zig to Rust, planned it and named it in one session, and changed a setting in another, in the folder that preceded the repository; on 23 June came a short session in the Ghostty checkout.
+
+The log below holds every prompt I sent to the port and its website from 20 June to 11 October, <Fact id="prompts_total" /> in all, from three sources: the prompt history of [Claude Code](https://code.claude.com/docs/en/overview) on the Mac (<Fact id="prompts_claude_mac" />) and on the Linux VM (<Fact id="prompts_claude_vm" />), and the session logs of the [Codex](https://developers.openai.com/codex/app) app (<Fact id="prompts_codex" />). The founding prompts are part of it, and so are the <Fact id="prompts_website" /> prompts I typed in the website folders, where the Rustty website and this article were built, most of them in <Fact id="sessions_website" /> website sessions; their commits are in the website repository and are not linked. Prompts that agents wrote for their subagents, and the automated Codex review sessions, are left out. Of the prompts, <Fact id="prompts_instructions" /> are instructions and <Fact id="prompts_decisions" /> only answer a choice or acknowledge; the other <Fact id="prompts_commands_hidden" /> are Claude Code commands and shell escapes, kept in the log but hidden until you show them. The text is verbatim, typos included. The internal labels in it, such as task and check names, keep their spelling, and hovering or focusing one explains it. The <Fact id="prompts_article_work" /> prompts of the October sessions about this article are tagged as article work; the July build of the site appears under the website area instead. The other prompt figures in this article stop at 14:00 Pacific on 8 October. This section runs to 11 October, when I extracted the prompts, so it also counts the <Fact id="prompts_after_cutoff" /> prompts typed after that cutoff, <Fact id="prompts_after_cutoff_port" /> of them port work.
+
+Part of the record is gone. Model, effort and mode are unknown for <Fact id="prompts_settings_unknown" /> prompts, most of them typed on the Mac before 8 September, whose transcripts Claude Code deleted. For <Fact id="prompts_settings_inferred" /> more, the model shown comes from the Co-Authored-By trailer of a commit linked to the prompt, and is marked as inferred. Pasted text is not published; for <Fact id="prompts_pasted_lost" /> prompts it no longer exists. I made <Fact id="prompts_redactions" /> redactions, for secrets, logins, email and IP addresses, my username and the name of an unrelated project. Each one reads `[redacted: reason]`, and nothing else in the text was changed.
+
+<PortingWidget slug="every-prompt" />
+
+## What it cost
+
+The port was paid for by subscription, not per token. [Claude Max](https://claude.com/pricing) at the 20x tier covered the whole port. [ChatGPT Pro](https://openai.com/chatgpt/pricing/) covered one month, 18 July to 18 August, which included the [Codex](https://developers.openai.com/codex/app) audit, and ChatGPT Plus the other months. The outlay attributable to Rustty, up to 8 October, is <Fact id="cost_paid_central" />:
+
+- **Claude:** <Fact id="cost_claude_paid" />, the plan's <Fact id="plan_price" /> over the port's <Fact id="port_months" /> months, with half counted toward Rustty because the subscription was shared with other projects.
+- **Codex:** <Fact id="cost_codex_paid" />. Rustty was <Fact id="codex_pro_share" /> of that Pro month's Codex usage. Rustty's Codex use on Plus was negligible.
+
+Counting whole billing cycles instead of prorating, or Codex at half, gives a range of <Fact id="cost_paid" />. Any extra-usage credits come on top; their amount is unknown.
+
+What the same tokens would cost at API list prices is a reference value, not money spent. Measuring it has a gap. [Claude Code](https://code.claude.com/docs/en/overview) deletes local transcripts after about 30 days, so the Mac Claude telemetry before 8 September is gone. The recovered usage comes to <Fact id="cost_recovered" /> at list price, from the Mac and Linux VM Claude transcripts and the complete Codex logs. For the lost window, Mac Claude from 21 June to 7 September, the estimate assumes a maxed-out subscription in every week with Rustty activity, with 50% of it counted toward Rustty. Prompt history from those weeks shows limits being hit throughout. <Fact id="quiet_runs_limit" /> quiet stretches in the commit history are bracketed by prompts about limits, such as "can we pause here, as I am approaching my token limit." (26 June).
+
+The size of a maxed-out week comes from recovered weeks that ended at the weekly limit: <Fact id="cost_ceiling_range" /> at list price across all projects, <Fact id="cost_ceiling_central" /> as the central value. In the recovered weeks, Rustty's measured share was <Fact id="rustty_share_measured" />, which supports counting half. The lost window comes to <Fact id="cost_lost_modeled" /> (<Fact id="cost_lost_range" />). The total reference value is <Fact id="cost_api_equiv" /> (<Fact id="cost_api_range" />), <Fact id="leverage" /> what was paid.
+
+The flat price came with a pace. The weekly limit reset every Tuesday afternoon, and the port ran to it. Of the <Fact id="gaps_12h" /> pauses in the commit history longer than twelve hours, <Fact id="resumes_after_reset" /> ended within five hours of a reset. Between June and August, agents made <Fact id="pace_early_week" /> commits per running hour in the first three days after a reset and <Fact id="pace_late_week" /> in the rest of the week, and the port ran fewer hours a day as the week went on. [The analysis](https://github.com/AirelyDev/rustty/blob/b459faf54b9fc90ba368d9a3492a9db6318bfdc1/.port/porting-article/research/elapsed-without-limits-v2-2026-10-11.md) builds the estimate from the hours the port was actually running: about <Fact id="days_no_limits_central" /> (<Fact id="days_no_limits_range" /> days) instead of <Fact id="days_total" />. The estimate keeps every piece of work and every hour I spent reading and answering the agents, and removes the stretches the usage limits left idle, counting the eleven days I split between a limit and other work as half chosen.
+
+<PortingWidget slug="cost" asOf="cost_recovered" />
+
+The token mix shows where that figure comes from. Cache reads were <Fact id="cache_read_tokens" /> of tokens but <Fact id="cache_read_cost" /> of the list-price cost, because every call re-reads its context from the cache. Subagents and workflow runs accounted for <Fact id="delegated_cost" /> of the recovered usage at list price. In the recovered window from 8 September to 8 October, a commit came to <Fact id="cost_per_commit" /> at list price. On the Codex side, one percentage point of the weekly meter corresponded to <Fact id="codex_per_point" /> of list-price usage.
+
+## Unsafe, measured
+
+Early in July I asked the obvious question:
+
+> 22:28 · "/btw Does the heavy use of unsafe {} defeat the purpose of Rust, in the port? Or not necessarily"
+
+The answer starts with a count. The port's census is one committed command (<SourceLink at="58aa62a81" path=".port/audits/count-unsafe.sh" lines="6-9" />):
+
+```sh
+rg --no-config -n --column -o \
+   'unsafe \{|unsafe fn|unsafe extern|unsafe impl|unsafe trait' \
+   --glob '*.rs' --glob '!**/vendor/**' --glob '!**/cbits/**' \
+   crates crates-sys xtask
+```
+
+It counts <Fact id="unsafe_sites" /> sites in <Fact id="unsafe_lines" /> physical lines of tracked Rust. Physical lines here means every line of every tracked `.rs` file outside vendored code, comments and blank lines included, not the code lines [tokei](https://github.com/XAMPPRocky/tokei) counts. That gives <Fact id="unsafe_density" /> sites per 1,000 physical lines. Per code line the density would be higher. The figure has barely moved since 10 July, while the code grew <Fact id="physical_growth" />. It was <Fact id="unsafe_density_0710" /> on 10 July (<Fact id="unsafe_sites_0710" /> sites), peaked at <Fact id="unsafe_density_peak" /> on 25 August and read <Fact id="unsafe_density_0825" /> at a second census later that day.
+
+<PortingWidget slug="unsafe-density" />
+
+Where the sites sit matters more than the total:
+
+- **Tests.** By a heuristic count, <Fact id="unsafe_test_share" /> of all sites are in test code. With a stricter rule for what counts as a test file, it is <Fact id="unsafe_test_share_strict" />. In the terminal engine, <Fact id="vt_unsafe_test" /> sites are in tests against <Fact id="vt_unsafe_nontest" /> outside them. Ghostty's tests manipulate pages, rows and cells through pointers, and the ported tests keep that shape.
+- **FFI.** Per 1,000 physical lines of each crate, the inspector has <Fact id="dens_inspector" />, and <Fact id="inspector_unsafe_nontest" /> of its sites are outside tests, because it calls [Dear ImGui](https://github.com/ocornut/imgui) through C. The terminal library's C API has <Fact id="dens_vtc" />.
+- **The rest.** The terminal engine has <Fact id="dens_vt" /> and the app runtime crate <Fact id="dens_apprt" />. The port of the [z2d](https://github.com/vancluever/z2d) graphics library has none.
+
+A count does not show soundness. The earlier sections cover the parts that do: the bar for calling a soundness bug fixed, the ledger of safe functions that rest on unchecked invariants, and the [Miri](https://github.com/rust-lang/miri) lanes. The count shows where to look. At head, that is <Fact id="unsafe_density" /> sites per 1,000 physical lines, most of them in tests and at C boundaries.
+
+## Limitations and what's left
+
+The parity work closed with one difference still open: <Fact id="open_log_sites" /> log sites print values in Rust's derived `Debug` format, where Zig prints its own format. Only log text differs, and the severity is low.
+
+Each platform has a one-line claim, worded to match the evidence:
+
+- **macOS:** "The main platform: it builds, runs, and carries all the [Miri](https://github.com/rust-lang/miri) evidence and most of the sanitizer evidence."
+- **Linux ([GTK](https://www.gtk.org/)):** "The GTK app is ported and works in a Linux VM under [Wayland](https://wayland.freedesktop.org/) and [X11](https://www.x.org/), tested by hand and by live-window tests; never run on a real GPU or on x86_64 Linux."
+- **Windows:** "It builds, lints and passes the full workspace test suite on Windows; like Ghostty at this reference commit, there is no Windows app."
+- **[FreeBSD](https://www.freebsd.org/):** "Built, tested and run natively on FreeBSD in an arm64 VM: the GTK app runs under X11 and Wayland, tested by hand and by live-window tests; three DMA-BUF tests need a GPU driver the VM lacks, and it was never run on amd64." This claim is as of <CommitLink hash="110adad44" />, after the snapshot. On FreeBSD 15.1 the first workspace test run gave <Fact id="freebsd_ws_passed" /> passed and <Fact id="freebsd_ws_failed" /> failed; each failure was fixed or explained, and its test binary was run again and passed. The GTK runtime's tests give <Fact id="freebsd_apprt_passed" /> passed and none failed, and <Fact id="freebsd_live_passed" /> of the <Fact id="freebsd_live_total" /> live-window tests pass. The other three need DMA-BUF export, which FreeBSD's [Mesa](https://www.mesa3d.org/) provides only with a GPU driver, and arm64 FreeBSD has none for the VM's virtual GPU. The run found bugs in the port: the app crashed at its first window, because the system's text layout library ([Pango](https://www.gtk.org/docs/architecture/pango)) mixed Rustty's bundled [HarfBuzz](https://harfbuzz.github.io/) with the system's newer one, and the event loop's thread pool could hang at shutdown (<CommitLink hash="77f076c3f" />). It also found that Ghostty's own terminal test expects the terminal's device name on FreeBSD, which Ghostty's code does not report there; Rustty reports it, as on Linux (<CommitLink hash="77f076c3f" />). The fixes that also touch Linux passed again in the Linux VM (<CommitLink hash="3e43a1d18" />). I used the app by hand on that VM, typing, colours, CJK text, emoji, resizing and tabs, as the [run record](https://github.com/AirelyDev/rustty/blob/110adad44349da8b4a96e73d404bcc9f8de1ff3d/.port/phase-2/VERIFICATION_DEBT.md#L2551) states; [its setup](https://github.com/AirelyDev/rustty/blob/110adad44349da8b4a96e73d404bcc9f8de1ff3d/.port/freebsd-green/README.md) and logs are committed with it. No sanitizer has run on FreeBSD.
+- **[WebAssembly](https://webassembly.org/):** "The terminal core and the font demo compile to WebAssembly and run in a browser, in [Node](https://nodejs.org/) and under [wasmtime](https://wasmtime.dev/), where the event loop's [WASI](https://wasi.dev/) backend passes its tests; three example pages give the same output as Ghostty's. There is no web terminal app, and Ghostty has none either." This claim is as of <CommitLink hash="3a59e7edc" />, after the snapshot. Under wasmtime the event loop's tests give <Fact id="wasi_xev_passed" /> passed and <Fact id="wasi_xev_ignored" /> ignored, because WASI has no threads. In headless Chrome, three of Ghostty's example pages and their Rustty copies, given the same inputs, match in all <Fact id="wasm_example_outputs" /> compared outputs. The same check found that Ghostty's SGR example page has one entry too many in its table of attribute numbers, so it shows most attributes as a neighbour; Rustty's page uses the library's values (<CommitLink hash="d3bed2c2d" />). I also ran all five example pages by hand in Chrome on 10 October, at that commit; that run is my own statement, with no run record in the repository.
+
+<PortingWidget slug="platform-table" />
+
+The Linux claim deserves its history. The GTK app was written on two aarch64 Linux VMs by [Claude Code](https://code.claude.com/docs/en/overview) sessions running there: <Fact id="vm1_commits" /> commits on the first and <Fact id="vm2_commits" /> on the second, between 16 and 23 July. A live terminal appeared in a GTK window on 18 July (<CommitLink hash="9bc62e574" />). I then used it next to Ghostty on [GNOME](https://www.gnome.org/) under Wayland, in an [Xfce](https://www.xfce.org/) session under X11 and in [sway](https://swaywm.org/), and found real bugs. Typing was swallowed (<CommitLink hash="5ce0d0269" />). It crashed after a right-click (<CommitLink hash="486793623" />). Menus showed no shortcuts (<CommitLink hash="abb3c51a3" />). The window title format differed, and `clear` failed on an unknown terminal type. The title bar was striped (<CommitLink hash="cddffa093" />). After the quick-terminal check in sway, against Ghostty run first as the baseline, my verdict was "Is works exactly as Ghostty to me". All of it ran on software OpenGL. The x86_64 Linux CI jobs are written but have no recorded run.
+
+What is still missing:
+
+- **Current-commit verification.** The Linux sanitizer lanes ([AddressSanitizer](https://clang.llvm.org/docs/AddressSanitizer.html), [LeakSanitizer](https://clang.llvm.org/docs/LeakSanitizer.html), [MemorySanitizer](https://clang.llvm.org/docs/MemorySanitizer.html), [HWAddressSanitizer](https://clang.llvm.org/docs/HardwareAssistedAddressSanitizerDesign.html) and [ThreadSanitizer](https://clang.llvm.org/docs/ThreadSanitizer.html)) and the Linux run of the byte-for-byte differential check against Ghostty, with its test drivers built, have not yet run at the current reference commit; the sanitizers' latest results are from the previous one.
+- **Windows.** The full workspace test suite passes, with three C libraries excluded, but there is no Windows app, as in Ghostty.
+- **The [z2d](https://github.com/vancluever/z2d) port.** It is a subset, from <Fact id="z2d_lines" />, and it tracks z2d 0.10.0 while Ghostty's reference commit uses 0.12.1.
+- **End-user performance.** Every performance figure here is a library micro-benchmark. Startup time, input latency, frame rate and app memory were not measured.
+- **Upstream reports.** None of the <Fact id="defects_total" /> ledger entries has been filed with Ghostty or its dependencies yet.
+
+## Appendix: methodology
+
+Every number in this article comes from one fact table. Hover over a number to see its source, its provenance and the commit or date it was measured at. Provenance is one of three kinds. Measured means computed from git, the code or the logs. Documented means read from a record the port keeps. Estimated means a model or a hand classification.
+
+The prose, widgets and data pipeline were drafted with Claude (Claude Code) and reviewed by the author; every number links to its source.
+
+- **Snapshot.** Rustty at <CommitLink hash="58aa62a81" />, Ghostty at <CommitLink hash="246f70287" />, 10 October 2026. Session-derived figures (prompts, usage, cost) stop at 8 October. Days are counted in Pacific time, with 21 June as day 1.
+- **Commits.** `git log` at that commit, with merges identified by parent count. Non-merge counts differ slightly by ref set, and each figure's tooltip names its source.
+- **Lines.** Zig and Rust are compared in [tokei](https://github.com/XAMPPRocky/tokei) code lines, which exclude comments and blank lines, with vendored code excluded. Growth and `unsafe` density use physical lines of tracked, non-vendored `.rs` files. The two are never plotted on one axis.
+- **Tests.** Rust counts `#[test]` functions. Zig counts `test "name"` and `test {` blocks, with identifier-named test blocks noted separately. The per-module comparison maps each Zig module to its Rust counterpart.
+- **Comments.** A distinctive Ghostty comment, five words or more, counts as carried when it has a fuzzy match among the port's comments after the rename.
+- **Models.** Co-Authored-By trailers, parsed with [git's own trailer parser](https://git-scm.com/docs/pretty-formats) (`git log --format='%(trailers:key=Co-Authored-By,valueonly)'`). Commits without a trailer stay unattributed.
+- **Prompts and engaged time.** [Claude Code](https://code.claude.com/docs/en/overview)'s prompt history on the Mac and the Linux VM. Engaged hours are an estimate that clusters prompts separated by less than half an hour.
+- **Cost.** Per-call token counts from the recovered Claude Code and [Codex](https://developers.openai.com/codex/app) transcripts, priced at [LiteLLM](https://github.com/BerriAI/litellm)'s list rates, with cache writes at the five-minute rate. The lost window is modeled as described in the cost section. Paid figures use public plan prices.
+- **Performance.** A one-to-one port of Ghostty's benchmark tool and byte-identical inputs, Zig built with [`-Doptimize=ReleaseFast`](https://ziglang.org/documentation/0.15.2/) and Rust with a profile that differs from release only in overflow checks. Each figure is the median of seven or nine runs after a warm-up, with Zig re-measured in the same session. Short benchmarks are reported as per-operation slopes over several loop counts, not wall clock.
+- **Defects.** Parsed from the port's [upstream-defect ledger](https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/parity-closure/UPSTREAM-DEFECTS.md). The class comes from each entry's own kind field. The discovery method and the ReleaseFast consequence are hand classifications.
+- **Unsafe.** The committed census command shown in the unsafe section.
+- **Hardware.** A <Fact id="hardware" />. The Linux VM runs <Fact id="linux_vm_spec" />, with software OpenGL ([llvmpipe](https://docs.mesa3d.org/drivers/llvmpipe.html)) on Apple silicon. Windows builds x86_64 targets (MSVC and GNU) under emulation on a Windows 11 ARM64 VM.

@@ -1,0 +1,1054 @@
+/* Every prompt widget body: timeline strip, live tiles, weekly settings
+   bars and the full log inside the shared instrument card. Colours follow the article tokens
+   (copper #d97934, gold #ffbc7a, teal #64d8c6, greys #262927…#f4f1ed). */
+
+/* Widget root. */
+.root {
+  position: relative;
+  min-width: 0;
+  color: #d9ded6;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Headline row: total prompts on the left, filter status on the right. */
+.top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px 16px;
+  margin: 0 0 10px;
+}
+
+/* Big mono total with the per-lane split under it. */
+.big {
+  color: #f4f1ed;
+  font: 700 30px/1 var(--jetbrains-mono), ui-monospace, monospace;
+}
+.big b {
+  color: #d97934;
+}
+.big small {
+  display: block;
+  margin-top: 6px;
+  color: #858a84;
+  font: 500 12px/1.3 var(--jetbrains-mono), ui-monospace, monospace;
+}
+
+/* Filter status: range, active conditions and the clear button. */
+.status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px 10px;
+  color: #9aa09a;
+  font: 11px/1.4 var(--jetbrains-mono), ui-monospace, monospace;
+}
+.statusNote {
+  color: #858a84;
+  font-style: italic;
+}
+
+/* Buttons (toggles, reset, clear). */
+.btn {
+  padding: 7px 9px;
+  background: #121413;
+  border: 1px solid #262927;
+  border-radius: 8px;
+  color: #c1c8c0;
+  font: 500 11px/1 var(--jetbrains-mono), ui-monospace, monospace;
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) {
+  border-color: #4a4f4b;
+  color: #f4f1ed;
+}
+.btn:disabled {
+  color: #4a4f4b;
+  cursor: default;
+}
+.btn[aria-disabled="true"] {
+  color: #858a84;
+  cursor: progress;
+}
+.btn[aria-pressed="true"] {
+  background: #1d140d;
+  border-color: #d97934;
+  color: #f4f1ed;
+}
+.btn:focus-visible,
+.linkBtn:focus-visible,
+.range:focus-visible {
+  outline: 2px solid #64d8c6;
+  outline-offset: 2px;
+}
+
+/* Timeline block: plot and range inputs. */
+.timeline {
+  margin-bottom: 14px;
+}
+
+/* Positioning context for the floating tooltip. */
+.plotBox {
+  position: relative;
+}
+
+/* Horizontal scroll box for the timeline (phone). */
+.plotScroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.plotScroll:focus-visible {
+  outline: 2px solid #64d8c6;
+  outline-offset: 2px;
+}
+
+/* Timeline SVG: readable minimum width, no text selection while brushing. */
+.plotSvg {
+  display: block;
+  width: 100%;
+  min-width: 760px;
+  height: auto;
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: crosshair;
+}
+.plotSvg text {
+  font-family: var(--jetbrains-mono), ui-monospace, monospace;
+}
+.plotSvg:focus-visible {
+  outline: 2px solid #64d8c6;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.plotSvg path {
+  fill: none;
+}
+
+/* Timeline labels. */
+.phaseText {
+  fill: #9aa09a;
+  font-size: 10px;
+}
+.purgeText {
+  fill: #c1c8c0;
+  font-size: 10px;
+  paint-order: stroke;
+  stroke: #0b0c0c;
+  stroke-width: 3px;
+}
+.laneText {
+  fill: #d9ded6;
+  font-size: 11px;
+  font-weight: 600;
+}
+.laneSub {
+  fill: #858a84;
+  font-size: 9.5px;
+}
+.axisText {
+  fill: #858a84;
+  font-size: 10px;
+}
+
+/* Brush: dimmed days outside the range and an outlined range. */
+.dim {
+  fill: #0b0c0c;
+  opacity: 0.72;
+}
+.brush {
+  fill: none;
+  stroke: #64d8c6;
+  stroke-width: 1.2;
+}
+
+/* Hovered or focused day column. */
+.dayFocus {
+  fill: rgba(244, 241, 237, 0.06);
+  stroke: #f4f1ed;
+  stroke-width: 0.8;
+}
+
+/* Scroll hint, shown only where the timeline scrolls sideways. */
+.scrollHint {
+  display: none;
+  margin: 0 0 6px;
+  color: #858a84;
+  font: 11px var(--jetbrains-mono), ui-monospace, monospace;
+  text-align: center;
+}
+
+/* Range inputs: the keyboard alternative to the brush. */
+.ranges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 8px;
+  color: #9aa09a;
+  font: 11px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.rangeLabel {
+  min-width: 82px;
+}
+.rangeLabel b {
+  color: #f4f1ed;
+  font-weight: 600;
+}
+.range {
+  flex: 1 1 140px;
+  min-width: 0;
+  accent-color: #64d8c6;
+}
+
+/* Floating tooltip (timeline days, settings segments). */
+.tip {
+  position: absolute;
+  z-index: 5;
+  max-width: min(320px, calc(100% - 16px));
+  padding: 9px 11px;
+  background: #161917;
+  border: 1px solid #3a3f3b;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  color: #d9ded6;
+  font-size: 12px;
+  line-height: 1.45;
+  pointer-events: none;
+}
+.tip[data-pinned] {
+  pointer-events: auto;
+}
+.tip[hidden] {
+  display: none;
+}
+.th {
+  color: #f4f1ed;
+  font: 600 12px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.thPhase {
+  color: #858a84;
+  font-weight: 400;
+}
+.tm {
+  color: #9aa09a;
+  font: 11px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.tnote {
+  margin-top: 4px;
+  color: #c1c8c0;
+  font-size: 11px;
+}
+.tipLanes {
+  margin: 3px 0;
+  padding: 0;
+  list-style: none;
+  color: #d9ded6;
+  font: 11px/1.5 var(--jetbrains-mono), ui-monospace, monospace;
+}
+.sw {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 2px;
+}
+
+/* Live tiles: four columns on wide screens, two on phones. */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.tile {
+  min-width: 0;
+  padding: 9px 10px;
+  background: #0e100f;
+  border: 1px solid #262927;
+  border-radius: 10px;
+}
+.tile > b {
+  display: block;
+  color: #f4f1ed;
+  font: 700 18px/1.1 var(--jetbrains-mono), ui-monospace, monospace;
+}
+.tile > span {
+  display: block;
+  margin-top: 4px;
+  color: #858a84;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.tileWide {
+  grid-column: span 1;
+}
+.tile > .tileSmallHead {
+  color: #858a84;
+  font: 500 11px/1.3 var(--jetbrains-mono), ui-monospace, monospace;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+.repeated {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  color: #c1c8c0;
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.ruleMark {
+  color: #9aa09a;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.linkBtn {
+  padding: 0;
+  background: none;
+  border: 0;
+  color: #64d8c6;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+/* Settings view: heading, toggle, legend, weekly bars. */
+.settings {
+  position: relative;
+  padding-top: 14px;
+  border-top: 1px solid #262927;
+}
+.settingsHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.settingsHead h4 {
+  margin: 0;
+  color: #858a84;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.3;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+.toggle {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+  color: #c1c8c0;
+  font: 11px/1.5 var(--jetbrains-mono), ui-monospace, monospace;
+}
+.legend li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.legendN {
+  color: #858a84;
+}
+.legendSw {
+  display: inline-block;
+  box-sizing: border-box;
+  width: 14px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+/* One row per week: label, bar track, total. */
+.weeks {
+  display: grid;
+  gap: 3px;
+}
+.week {
+  display: grid;
+  grid-template-columns: 112px 1fr 36px;
+  align-items: center;
+  gap: 8px;
+}
+.weekLabel {
+  color: #9aa09a;
+  font: 11px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.weekTotal {
+  color: #d9ded6;
+  font: 11px var(--jetbrains-mono), ui-monospace, monospace;
+  text-align: right;
+}
+.track {
+  min-width: 0;
+  height: 18px;
+}
+.bar {
+  display: flex;
+  height: 100%;
+  min-width: 2px;
+  gap: 1px;
+}
+.empty {
+  color: #4a4f4b;
+  font: italic 11px/18px var(--jetbrains-mono), ui-monospace, monospace;
+}
+
+/* A bar segment (a button for its tooltip) and its three textures. */
+.seg {
+  flex-basis: 0;
+  min-width: 2px;
+  box-sizing: border-box;
+  padding: 0 2px;
+  overflow: hidden;
+  border-radius: 2px;
+  color: #0b0c0c;
+  font: 600 10px/18px var(--jetbrains-mono), ui-monospace, monospace;
+  text-align: center;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.seg:focus-visible {
+  outline: 2px solid #f4f1ed;
+  outline-offset: 1px;
+}
+.segKnown {
+  background: var(--c);
+  border: 0;
+}
+.effMedium {
+  opacity: 0.72;
+}
+.effNone {
+  background: repeating-linear-gradient(
+    90deg,
+    var(--c) 0 3px,
+    color-mix(in srgb, var(--c) 40%, #0b0c0c) 3px 5px
+  );
+}
+.segInferred {
+  background: color-mix(in srgb, var(--c) 18%, transparent);
+  border: 1.5px dashed var(--c);
+  color: #f4f1ed;
+}
+.segUnknown {
+  background: repeating-linear-gradient(
+    45deg,
+    #4a4f4b 0 2px,
+    transparent 2px 6px
+  );
+  border: 1px solid #4a4f4b;
+  color: #f4f1ed;
+}
+.seg.segInferred,
+.seg.segUnknown {
+  line-height: 15px;
+}
+
+/* Hint under the settings bars. */
+.hint {
+  margin: 8px 0 0;
+  color: #858a84;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+/* Log section: heading, filters, count and the scroll box of rows. */
+.log {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #262927;
+  scroll-margin-top: calc(var(--header-height, 72px) + 52px);
+}
+.logHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.logHead h4 {
+  margin: 0;
+  color: #858a84;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.3;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+.logCount {
+  margin: 8px 0 6px;
+  color: #9aa09a;
+  font: 11px/1.4 var(--jetbrains-mono), ui-monospace, monospace;
+}
+
+/* Note shown when the prompt to jump to is hidden by the filter. */
+.jumpNote {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  background: #1d140d;
+  border: 1px solid #d97934;
+  border-radius: 8px;
+  color: #d9ded6;
+  font: 12px/1.45 var(--jetbrains-mono), ui-monospace, monospace;
+}
+
+/* Filter controls: search, lane toggles, selects and switches. */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  color: #9aa09a;
+  font: 11px/1.4 var(--jetbrains-mono), ui-monospace, monospace;
+}
+.search,
+.selects label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.search {
+  flex: 1 1 240px;
+}
+.search input,
+.selects select {
+  min-width: 0;
+  padding: 6px 8px;
+  background: #121413;
+  border: 1px solid #262927;
+  border-radius: 8px;
+  color: #f4f1ed;
+  font: 12px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.search input {
+  flex: 1 1 auto;
+  width: 100%;
+}
+.selects select {
+  max-width: 190px;
+}
+.search input:focus-visible,
+.selects select:focus-visible,
+.checks input:focus-visible,
+.logBox:focus-visible {
+  outline: 2px solid #64d8c6;
+  outline-offset: 2px;
+}
+.lanes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.lanes .btn {
+  display: inline-flex;
+  align-items: center;
+}
+.lanes .btn[aria-pressed="false"] .sw {
+  opacity: 0.3;
+}
+.selects,
+.checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+.checks label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.checks input {
+  accent-color: #d97934;
+}
+
+/* The scroll box: a fixed height (not tied to the viewport), so the card's
+   reserved height holds while the log loads or filters. */
+.logBox {
+  position: relative;
+  height: 560px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
+  background: #0b0c0c;
+  border: 1px solid #262927;
+  border-radius: 10px;
+}
+.logState {
+  padding: 18px 14px;
+  color: #9aa09a;
+  font: 12px/1.5 var(--jetbrains-mono), ui-monospace, monospace;
+}
+.rowList {
+  position: relative;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.rowSlot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  outline: none;
+}
+
+/* One prompt: meta line, verbatim text, badges and commits. */
+.row {
+  padding: 10px 12px 11px;
+  border-bottom: 1px solid #1b1e1c;
+}
+.row[data-highlighted] {
+  background: #1d140d;
+  box-shadow: inset 3px 0 0 #d97934;
+}
+.rowSlot:focus-visible .row {
+  box-shadow: inset 0 0 0 2px #64d8c6;
+}
+.rowMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin-bottom: 5px;
+  color: #858a84;
+  font: 11px/1.4 var(--jetbrains-mono), ui-monospace, monospace;
+}
+.rowMeta time {
+  color: #c1c8c0;
+}
+.rowLane {
+  display: inline-flex;
+  align-items: center;
+}
+.rowText {
+  color: #e6e9e3;
+  font: 12.5px/1.5 var(--jetbrains-mono), ui-monospace, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.rowText[data-collapsed] {
+  max-height: calc(6 * 1.5em);
+  overflow: hidden;
+}
+/* Term tooltips inside the pre-wrapped text wrap normally (they are placed with
+   fixed positioning inside the log box, see Tooltip's boundary). */
+.rowText [role="tooltip"] {
+  white-space: normal;
+}
+.term {
+  color: #ffbc7a;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.rowFoot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 6px;
+  font: 11px/1.4 var(--jetbrains-mono), ui-monospace, monospace;
+}
+.badge {
+  padding: 1px 6px;
+  border: 1px solid #3a3f3b;
+  border-radius: 999px;
+  color: #c1c8c0;
+}
+.badge[data-badge="decision"] {
+  border-color: #64d8c6;
+  color: #64d8c6;
+}
+.badge[data-badge="redacted"] {
+  border-color: #d97934;
+  color: #ffbc7a;
+}
+.badge[data-badge="article work"] {
+  border-style: dashed;
+}
+.badge[data-badge="website folder"] {
+  border-color: #b4a7f5;
+  color: #b4a7f5;
+}
+.quiet {
+  color: #6f746e;
+  font-style: italic;
+}
+.rowCommits {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  color: #9aa09a;
+}
+
+/* Session timeline: heading, key, area legend (buttons filtering by area) and bars. */
+.sessions {
+  margin-bottom: 12px;
+}
+.sessionsHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin-bottom: 6px;
+}
+.sessionsHead h4 {
+  margin: 0;
+  color: #858a84;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.3;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+.sessionsKey {
+  margin: 0;
+  color: #858a84;
+  font: 11px/1.4 var(--jetbrains-mono), ui-monospace, monospace;
+}
+.foundingKey {
+  color: #f4f1ed;
+}
+.cmdKey {
+  display: inline-block;
+  width: 12px;
+  height: 2px;
+  vertical-align: middle;
+  background: #4a4f4b;
+}
+.areaLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin: 0 0 8px;
+  padding: 0;
+  border: 0;
+}
+.areaBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 7px;
+  background: #121413;
+  border: 1px solid #262927;
+  border-radius: 6px;
+  color: #c1c8c0;
+  font: 11px/1.2 var(--jetbrains-mono), ui-monospace, monospace;
+  cursor: pointer;
+}
+.areaBtn:hover {
+  border-color: #4a4f4b;
+  color: #f4f1ed;
+}
+.areaBtn[aria-pressed="true"] {
+  background: #1d140d;
+  border-color: #d97934;
+  color: #f4f1ed;
+}
+.areaBtn:focus-visible {
+  outline: 2px solid #64d8c6;
+  outline-offset: 2px;
+}
+.areaSw {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+.sessSvg {
+  display: block;
+  width: 100%;
+  min-width: 760px;
+  height: auto;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.sessSvg text {
+  font-family: var(--jetbrains-mono), ui-monospace, monospace;
+}
+.sessBar {
+  cursor: pointer;
+  outline: none;
+}
+.byClaude {
+  display: inline-block;
+  margin: 2px 0 3px;
+  padding: 0 5px;
+  border: 1px solid #4a4f4b;
+  border-radius: 4px;
+  color: #9aa09a;
+  font: 10px/1.5 var(--jetbrains-mono), ui-monospace, monospace;
+}
+
+/* Session tiles: the per-area tile spans two columns with a small bar list. */
+.tileAreas {
+  grid-column: span 2;
+  grid-row: span 2;
+}
+.areaBars {
+  display: grid;
+  gap: 3px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  color: #c1c8c0;
+  font: 11px/1.3 var(--jetbrains-mono), ui-monospace, monospace;
+}
+.areaBars li {
+  display: grid;
+  grid-template-columns: minmax(0, 132px) 1fr 24px;
+  align-items: center;
+  gap: 8px;
+}
+.areaName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.areaTrack {
+  height: 8px;
+  background: #171a19;
+  border-radius: 2px;
+}
+.areaFill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+}
+.areaN {
+  color: #9aa09a;
+  text-align: right;
+}
+
+/* Settings view under a filter: what the bars count. */
+.settingsNote {
+  margin: 0 0 8px;
+  color: #9aa09a;
+  font: 11px/1.4 var(--jetbrains-mono), ui-monospace, monospace;
+}
+
+/* Status: what the category choice shows and hides. */
+.showing {
+  color: #c1c8c0;
+}
+
+/* The command-only toggle of the session timeline. */
+.coToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  background: #121413;
+  border: 1px solid #262927;
+  border-radius: 6px;
+  color: #c1c8c0;
+  font: inherit;
+  cursor: pointer;
+}
+.coToggle[aria-pressed="true"] {
+  border-color: #858a84;
+  color: #f4f1ed;
+}
+.coToggle:focus-visible,
+.chip:focus-visible,
+.cardBtn:focus-visible {
+  outline: 2px solid #64d8c6;
+  outline-offset: 2px;
+}
+.cmdNote {
+  color: #858a84;
+}
+
+/* Category chips of the filter bar. */
+.cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  flex-basis: 100%;
+}
+.chip {
+  padding: 5px 9px;
+  background: #121413;
+  border: 1px solid #262927;
+  border-radius: 999px;
+  color: #858a84;
+  font: 500 11px/1 var(--jetbrains-mono), ui-monospace, monospace;
+  cursor: pointer;
+}
+.chip[aria-pressed="true"] {
+  background: #13201d;
+  border-color: #64d8c6;
+  color: #f4f1ed;
+}
+.tileSub {
+  display: block;
+  color: #6f746e;
+  font-size: 10.5px;
+}
+
+/* The log's view toggle (session cards or every prompt). */
+.logModeRow {
+  display: flex;
+  justify-content: flex-end;
+  margin: 8px 0 4px;
+}
+
+/* A session card header and the command-only group in the session view. */
+.card,
+.groupHead {
+  padding: 10px 12px;
+  background: #111312;
+  border-bottom: 1px solid #262927;
+}
+.cardHi {
+  box-shadow: inset 3px 0 0 #d97934;
+}
+.cardBtn {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  width: 100%;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: #f4f1ed;
+  font: 600 12.5px/1.4 var(--jetbrains-mono), ui-monospace, monospace;
+  text-align: left;
+  cursor: pointer;
+}
+.cardChevron {
+  color: #858a84;
+}
+.cardTitle {
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.cardCount {
+  color: #9aa09a;
+  font-weight: 400;
+  font-size: 11px;
+}
+.cardMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin-top: 6px;
+  padding-left: 18px;
+  color: #858a84;
+  font: 11px/1.4 var(--jetbrains-mono), ui-monospace, monospace;
+}
+.cardMeta .byClaude {
+  margin: 0;
+}
+.cardArea {
+  display: inline-flex;
+  align-items: center;
+  color: #c1c8c0;
+}
+.cardQuiet {
+  color: #6f746e;
+  font-style: italic;
+}
+.groupNote {
+  color: #9aa09a;
+  font: 11px/1.5 var(--jetbrains-mono), ui-monospace, monospace;
+}
+/* A prompt inside an open card is indented under it. */
+.rowInCard .row {
+  padding-left: 30px;
+}
+
+/* Brushing scrolls on touch screens instead; the range inputs narrow days there. */
+@media (pointer: coarse), (max-width: 820px) {
+  .plotSvg {
+    touch-action: pan-x pan-y;
+  }
+}
+
+/* Narrow: scroll hint shown. */
+@media (max-width: 820px) {
+  .scrollHint {
+    display: block;
+  }
+}
+
+/* Phone: tiles in two columns, week label above its bar, smaller headline. */
+@media (max-width: 520px) {
+  .tiles {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .tileWide {
+    grid-column: span 2;
+  }
+  .tileAreas {
+    grid-column: span 2;
+    grid-row: auto;
+  }
+  .rowInCard .row {
+    padding-left: 18px;
+  }
+  .cardMeta {
+    padding-left: 0;
+  }
+  .big {
+    font-size: 24px;
+  }
+  .status {
+    justify-content: flex-start;
+  }
+  .search {
+    flex-basis: 100%;
+  }
+  .selects select {
+    max-width: 150px;
+  }
+  .row {
+    padding: 9px 10px 10px;
+  }
+  .logBox {
+    height: 480px;
+  }
+  .week {
+    grid-template-columns: 1fr 36px;
+    row-gap: 2px;
+  }
+  .weekLabel {
+    grid-column: 1 / -1;
+  }
+}

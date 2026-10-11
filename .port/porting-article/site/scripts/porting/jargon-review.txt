@@ -1,0 +1,386 @@
+agents-vs-human	rustty: phase-1 workspace scaffold + phase-0 artifacts	rustty: workspace scaffold + artifacts
+agents-vs-human	rustty: phase-1 parity-gate infrastructure + self-test	rustty: parity-gate infrastructure + self-test
+agents-vs-human	rustty: port rustty-datastruct (phase 2)	rustty: port rustty-datastruct
+agents-vs-human	rustty: batch-1 safe clippy autofixes + fmt (machine-applicable, tests green)	rustty: safe clippy autofixes + fmt (machine-applicable, tests green)
+agents-vs-human	rustty: port rustty-unicode (phase 2, batch 2)	rustty: port rustty-unicode
+agents-vs-human	rustty: os group A-pure (phase 2)	rustty: os group A-pure
+agents-vs-human	rustty: os group D-rest (phase 2)	rustty: os group D-rest
+agents-vs-human	rustty: vt leaf primitives (sub-batch 1)	rustty: vt leaf primitives
+agents-vs-human	rustty: vt data structures (sub-batch 2a)	rustty: vt data structures
+agents-vs-human	rustty: vt page memory layer + wire style seams (sub-batch 2b)	rustty: vt page memory layer + wire style seams
+agents-vs-human	rustty: raw-ptr sweep tests.rs (UB-class) — batch 1	rustty: raw-ptr sweep tests.rs (UB-class)
+agents-vs-human	rustty: raw-ptr sweep tests.rs (UB-class) — batch 2	rustty: raw-ptr sweep tests.rs (UB-class)
+agents-vs-human	rustty: allocation-stack audit workflow (phase 1: map + refute + synthesize)	rustty: allocation-stack audit workflow (map + refute + synthesize)
+agents-vs-human	rustty: phase-1 Zig reference PageList bench harness + measured results	rustty: Zig reference PageList bench harness + measured results
+agents-vs-human	rustty: vt port tabstops (vt-4 leaf)	rustty: vt port tabstops (leaf)
+agents-vs-human	rustty: vt osc parent skeleton — Command+Parser+dispatch, parser stubs (vt-6)	rustty: vt osc parent skeleton — Command+Parser+dispatch, parser stubs
+agents-vs-human	rustty: vt Parser + parse_table (vt-5)	rustty: vt Parser + parse_table
+agents-vs-human	rustty: vt kitty image (vt-7)	rustty: vt kitty image
+agents-vs-human	rustty: vt stream dispatch — csi/osc/esc/dcs/apc (vt-9)	rustty: vt stream dispatch — csi/osc/esc/dcs/apc
+agents-vs-human	rustty: Screen core foundation — init/cursor/accessors + tests (vt-11a)	rustty: Screen core foundation — init/cursor/accessors + tests
+agents-vs-human	rustty: formatter production + Screen dump_string + read/write tests (vt-11b)	rustty: formatter production + Screen dump_string + read/write tests
+agents-vs-human	rustty: Screen resize + reflow coordination + tests (vt-11c)	rustty: Screen resize + reflow coordination + tests
+agents-vs-human	rustty: Screen prompt_click + StringMap + ScreenSet + deferred map test (vt-11g)	rustty: Screen prompt_click + StringMap + ScreenSet + deferred map test
+agents-vs-human	rustty: Terminal (vt-12) plan + vt-12a structs workflow	rustty: Terminal plan + structs workflow
+agents-vs-human	rustty: Terminal + stream_terminal struct-first skeleton (vt-12a)	rustty: Terminal + stream_terminal struct-first skeleton
+agents-vs-human	rustty: Terminal erase methods + tests (vt-12b-3a)	rustty: Terminal erase methods + tests
+agents-vs-human	rustty: Terminal scroll/lines/margins + tests (vt-12b-3b)	rustty: Terminal scroll/lines/margins + tests
+agents-vs-human	rustty: Terminal modes/resize/switch + tests (vt-12b-5)	rustty: Terminal modes/resize/switch + tests
+agents-vs-human	rustty: stream_terminal Handler state-dispatch + Effects + stream tests (vt-12b-7a)	rustty: stream_terminal Handler state-dispatch + Effects + stream tests
+agents-vs-human	rustty: TerminalFormatter + 100 formatter tests + 5 Screen tests (vt-12c-fmt)	rustty: TerminalFormatter + 100 formatter tests + 5 Screen tests
+agents-vs-human	rustty: port the 23 deferred Screen tests (vt-12c-screen)	rustty: port the 23 deferred Screen tests
+agents-vs-human	rustty: recover Terminal print tests (vt-12 recovery)	rustty: recover Terminal print tests (recovery)
+agents-vs-human	rustty: recover Terminal input-sweep tests (vt-12 recovery)	rustty: recover Terminal input-sweep tests (recovery)
+agents-vs-human	rustty: port SelectionGesture (vt-13)	rustty: port SelectionGesture
+agents-vs-human	rustty: vt input key_encode + 92 tests (vt-14)	rustty: vt input key_encode + 92 tests
+agents-vs-human	rustty: vt search sliding_window + 25 tests (vt-15)	rustty: vt search sliding_window + 25 tests
+agents-vs-human	rustty: vt search screen/pagelist/viewport/active + 29 tests (vt-15)	rustty: vt search screen/pagelist/viewport/active + 29 tests
+agents-vs-human	rustty: vt tmux viewer + 9 tests (vt-16)	rustty: vt tmux viewer + 9 tests
+agents-vs-human	rustty: font Glyph + Metrics + nerd_font_attributes (Stage A.2)	rustty: font Glyph + Metrics + nerd_font_attributes
+agents-vs-human	rustty: apc glyph request+Glossary+execute + 40 tests (Stage A.3)	rustty: apc glyph request+Glossary+execute + 40 tests
+agents-vs-human	rustty: port rustty-args (args + CommaSplitter, 64 tests) — Stage C	rustty: port rustty-args (args + CommaSplitter, 64 tests)
+agents-vs-human	rustty: vt-c foundation + small types (~40 tests, Stage B)	rustty: vt-c foundation + small types (~40 tests)
+agents-vs-human	rustty: vt-c wire 168 rustty_* C exports + fill residual set/get (Stage B)	rustty: vt-c wire 168 rustty_* C exports + fill residual set/get
+agents-vs-human	rustty: core C-T — termio mutex-family un-defers + newConfig realized	rustty: core — termio mutex-family un-defers + newConfig realized
+agents-vs-human	rustty: embedded — Inspector Phase-3 placeholder	rustty: embedded — Inspector placeholder
+agents-vs-human	rustty: cli — bin (action dispatch + usage banner + Phase-3 GUI leaf) + it-runs smoke KAT	rustty: cli — bin (action dispatch + usage banner + GUI leaf) + it-runs smoke KAT
+agents-vs-human	rustty: GPU Chunk 0 — Metal API vocabulary + shader build infra (monomorphic)	rustty: GPU — Metal API vocabulary + shader build infra (monomorphic)
+agents-vs-human	rustty: GPU Chunk 1b — Metal draw-plumbing leaves (Pipeline/RenderPass/Target/Frame/shader…	rustty: GPU — Metal draw-plumbing leaves (Pipeline/RenderPass/Target/Frame/shader…
+agents-vs-human	rustty: GPU Chunk 2 (Part B) — port Metal.zig graphics-API wrapper (offscreen, monomorphic…	rustty: GPU — port Metal.zig graphics-API wrapper (offscreen, monomorphic…
+agents-vs-human	rustty: GPU — port renderer/image.zig + Overlay.zig (Chunk-3 prereqs, doctrine-scoped)	rustty: GPU — port renderer/image.zig + Overlay.zig (prereqs, doctrine-scoped)
+agents-vs-human	rustty: collect all workflow orchestration scripts into .port/phase-2 (+ WORKFLOWS.md mani…	rustty: collect all workflow orchestration scripts into .port/ (+ WORKFLOWS.md mani…
+agents-vs-human	rustty: GPU Chunk 3a (Part B) — the monomorphic Renderer struct + SwapChain/FrameState ske…	rustty: GPU — the monomorphic Renderer struct + SwapChain/FrameState ske…
+agents-vs-human	rustty: collect the Chunk-3a re-attempt validation workflow (.port/phase-2 convention)	rustty: collect the re-attempt validation workflow (.port/ convention)
+agents-vs-human	rustty: GPU Chunk 3b — CPU cell-fill + the shaper-hook aliasing fix (Miri-proven SB/TB-cle…	rustty: GPU — CPU cell-fill + the shaper-hook aliasing fix (Miri-proven SB/TB-cle…
+agents-vs-human	rustty: GPU Chunk 3c — updateFrame frame-orchestrator + the uniforms math	rustty: GPU — updateFrame frame-orchestrator + the uniforms math
+agents-vs-human	rustty: GPU Chunk 4 — the offscreen GOLDEN-IMAGE gate (the contract)	rustty: GPU — the offscreen GOLDEN-IMAGE gate (the contract)
+agents-vs-human	rustty: GPU Chunk 5 — the finale (seam audit + honest status + docs)	rustty: GPU — the finale (seam audit + honest status + docs)
+agents-vs-human	rustty: full gap analysis + completion plan + macOS-windowing (sub-project #1) design	rustty: full gap analysis + completion plan + macOS-windowing design
+agents-vs-human	rustty: macOS-windowing (sub-project #1) implementation plan — tasks	rustty: macOS-windowing implementation plan — tasks
+agents-vs-human	rustty: sub-project #3 — ledger hygiene (reconcile DEFERRALS.md + fix stale vt status head…	rustty: ledger hygiene (reconcile DEFERRALS.md + fix stale vt status head…
+agents-vs-human	rustty: sub-project #3 — port src/synthetic/** (differential-fuzz generators, Miri-clean)	rustty: port src/synthetic/** (differential-fuzz generators, Miri-clean)
+agents-vs-human	rustty: sub-project #3 — port src/benchmark/** (micro-benchmark harness, Miri-clean)	rustty: port src/benchmark/** (micro-benchmark harness, Miri-clean)
+agents-vs-human	rustty: sub-project #3 — port src/extra/** (shell-completion + editor-syntax generators, b…	rustty: port src/extra/** (shell-completion + editor-syntax generators, b…
+agents-vs-human	rustty: vaxis chunk 1b — uucode-0.1.0 unicode-data foundation + gwidth/unicode (tables bit…	rustty: vaxis — uucode-0.1.0 unicode-data foundation + gwidth/unicode (tables bit…
+agents-vs-human	rustty: vaxis chunk 3a — ANSI input Parser + ctlseqs + event (34 tests, Miri-clean, no uns…	rustty: vaxis — ANSI input Parser + ctlseqs + event (34 tests, Miri-clean, no uns…
+agents-vs-human	rustty: vaxis chunk 3b — tty backend (termios FFI) + queue + Loop read-thread (owned-text,…	rustty: vaxis — tty backend (termios FFI) + queue + Loop read-thread (owned-text,…
+agents-vs-human	rustty: vaxis chunk 4b — TextInput widget (gap buffer, Miri-clean)	rustty: vaxis — TextInput widget (gap buffer, Miri-clean)
+agents-vs-human	port: Bun-rewrite learnings + validation sweep #1 reports, realignment plan, and the phase…	port: porting lessons + validation sweep #1 reports, realignment plan, and the phase…
+agents-vs-human	phase-2 payoff: contract gates binding on done crates; 8 residual findings fixed, 4 filed	payoff: contract gates binding on done crates; 8 residual findings fixed, 4 filed
+agents-vs-human	chore: rustfmt fallout from the families/ test restorations; phase-1/2 orchestration scrip…	chore: rustfmt fallout from the families/ test restorations; orchestration scrip…
+agents-vs-human	audits: GHOSTTY_LIFETIMES.tsv — retroactive pointer-field ownership ledger (Bun lifetime-c…	audits: GHOSTTY_LIFETIMES.tsv — retroactive pointer-field ownership ledger (lifetime-c…
+agents-vs-human	validation: sweep #2 report + Phase-5 pre-port artifacts (gtk/swift-app/inspector)	validation: sweep #2 report + pre-port artifacts (gtk/swift-app/inspector)
+agents-vs-human	swift: repoint ghostty_* -> rustty_*, import RusttyKit (Task 5)	swift: repoint ghostty_* -> rustty_*, import RusttyKit
+agents-vs-human	shell-integration: rename ghostty.* scripts to rustty.*, route env vars to RUSTTY_ (Task 1…	shell-integration: rename ghostty.* scripts to rustty.*, route env vars to RUSTTY_ (…
+agents-vs-human	inspector: inhabit Inspector struct + per-Surface ImGui context (Task 4)	inspector: inhabit Inspector struct + per-Surface ImGui context
+agents-vs-human	inspector: key.rs ImGui draw half (Task 8)	inspector: key.rs ImGui draw half
+agents-vs-human	inspector: pagelist.rs widget + comptime hand-expansion (Task 13)	inspector: pagelist.rs widget + comptime hand-expansion
+agents-vs-human	inspector: Inspector.rs aggregate + top-level render (Task 17)	inspector: Inspector.rs aggregate + top-level render
+agents-vs-human	examples(phase B): port all 20 ghostty c-vt/cpp-vt runtime examples — 21/21 byte-identical	examples: port all 20 ghostty c-vt/cpp-vt runtime examples — 21/21 byte-identical
+agents-vs-human	rustty: top-level project files port — Batch 1 (docs, dotfiles, governance)	rustty: top-level project files port — (docs, dotfiles, governance)
+agents-vs-human	rustty: top-level project files port — Batch 2 (C-API build tooling)	rustty: top-level project files port — (C-API build tooling)
+agents-vs-human	rustty: top-level project files port — Batch 6 (full i18n)	rustty: top-level project files port — (full i18n)
+agents-vs-human	rustty: phase-2 — Rust-vs-Zig benchmark head-to-head + synthetic CLI parity design	rustty: Rust-vs-Zig benchmark head-to-head + synthetic CLI parity design
+agents-vs-human	rustty: phase-2 — perf-opt attribution log, fix plan, raw bench data	rustty: perf-opt attribution log, fix plan, raw bench data
+agents-vs-human	rustty: perf — r3-clone: outline cold grapheme/hyperlink arms of clone_partial_row_from	rustty: perf: outline cold grapheme/hyperlink arms of clone_partial_row_from
+agents-vs-human	rustty: perf — r5-print-outline: outline cold print arms (grapheme/zero-width/wide)	rustty: perf: outline cold print arms (grapheme/zero-width/wide)
+agents-vs-human	rustty: perf — r5-clone-style-run: batch same-style runs + by-pointer set adds in the clon…	rustty: perf: batch same-style runs + by-pointer set adds in the clon…
+agents-vs-human	rustty-apprt/gtk: clipboard copy/paste (Phase A) — set_clipboard + clipboard_request	rustty-apprt/gtk: clipboard copy/paste — set_clipboard + clipboard_request
+agents-vs-human	rustty-apprt/gtk: clipboard confirmation dialog (Phase B) — ClipboardConfirmationDialog	rustty-apprt/gtk: clipboard confirmation dialog — ClipboardConfirmationDialog
+agents-vs-human	inspector(gtk): fill Key::imgui_key + enable imgui in the gtk build (Task 3)	inspector(gtk): fill Key:imgui_key + enable imgui in the gtk build
+agents-vs-human	inspector(gtk): ImguiWidget — ImGui-over-GLArea host (Task 4)	inspector(gtk): ImguiWidget — ImGui-over-GLArea host
+agents-vs-human	xev: port ThreadPool (lock-free work-stealing pool) + mirihar Miri proof (Task 1)	xev: port ThreadPool (lock-free work-stealing pool) + mirihar Miri proof
+agents-vs-human	xev: port TCP watcher (Task 3)	xev: port TCP watcher
+agents-vs-human	xev: port File watcher + epoll ThreadPool integration (Task 5)	xev: port File watcher + epoll ThreadPool integration
+agents-vs-human	xev: File/TCP/UDP/ThreadPool complete on Linux — libxev surface parity (Task 6)	xev: File/TCP/UDP/ThreadPool complete on Linux — libxev surface parity
+agents-vs-human	vt/compress: Phase A review fixes + miri-run.sh worktree bug	vt/compress: review fixes + miri-run.sh worktree bug
+agents-vs-human	review: Phase C fixes — + (gate/ledger hygiene)	review: fixes — + (gate/ledger hygiene)
+agents-vs-human	port: Phase 3 upstream-resync artifacts — full pin..head diff (365 commits, 507 files, +37…	port: upstream-resync artifacts — full pin..head diff (365 commits, 507 files, +37…
+agents-vs-human	docs: Phase 3 upstream-resync master plan	docs: upstream-resync master plan
+agents-vs-human	phase-4: advance the oracle pin 6ad1fe7d8 -> 12967b68f (543 commits, +72,554/-8,106) with …	advance the oracle pin 6ad1fe7d8 -> 12967b68f (543 commits, +72,554/-8,106) with …
+agents-vs-human	phase-4 par-1: ssh-terminfo cache, config bundle, po/ i18n end-state mirror, .github mirro…	ssh-terminfo cache, config bundle, po/ i18n end-state mirror, .github mirro…
+agents-vs-human	phase-4: PageList Builder/allocatePage end state + RefCountedSet iterator + snapshot re-ex…	PageList Builder/allocatePage end state + RefCountedSet iterator + snapshot re-ex…
+agents-vs-human	phase-4 par-2: kitty end-state + security, formatter PinMap bundle, input, modes DECECM, t…	kitty end-state + security, formatter PinMap bundle, input, modes DECECM, t…
+agents-vs-human	phase-4 par-3: reflow end-state chain (SB+TB Miri-proven), terminal tail, snapshot scaffol…	reflow end-state chain (SB+TB Miri-proven), terminal tail, snapshot scaffol…
+agents-vs-human	phase-4 par-4: snapshot grid/page/history + C-API bundles T,R,M,K + embed-header bundle E	snapshot grid/page/history + C-API bundles T,R,M,K + embed-header bundle E
+agents-vs-human	phase-4 par-5: snapshot subsystem COMPLETE + C-API bundles S and W + benches — fully GREEN…	snapshot subsystem COMPLETE + C-API bundles S and W + benches — fully GREEN…
+agents-vs-human	phase-5: advance the oracle pin 12967b68f -> 683d8db64 (245 commits, +25,534/-3,360); asse…	advance the oracle pin 12967b68f -> 683d8db64 (245 commits, +25,534/-3,360); asse…
+agents-vs-human	phase-5: leaf prerequisites — simd base64 strict+streaming, wuffs swizzle end state (live …	leaf prerequisites — simd base64 strict+streaming, wuffs swizzle end state (live …
+agents-vs-human	phase-5 tier-2a: kitty spec-conformance + relative placements, OSC 99 desktop notification…	kitty spec-conformance + relative placements, OSC 99 desktop notification…
+agents-vs-human	phase-5 tier-3a: OSC 5522 clipboard VT side + OSC 72 DnD VT side (dispatch stage follows)	OSC 5522 clipboard VT side + OSC 72 DnD VT side (dispatch stage follows)
+agents-vs-human	phase-5 tier-3b: unified OSC 5522/72 dispatch — stream_terminal, Surface, termio; GREEN	unified OSC 5522/72 dispatch — stream_terminal, Surface, termio; GREEN
+agents-vs-human	phase-5: UI tiers merged onto (oracle-arbitrated, 54 regions) — macOS kitty clipboard, ren…	UI tiers merged onto (oracle-arbitrated, 54 regions) — macOS kitty clipboard, ren…
+agents-vs-human	phase-5 finale(1): comment sweep — termio GREEN, 9 comments restored; 6 MISSED upstream co…	finale: comment sweep — termio GREEN, 9 comments restored; 6 MISSED upstream co…
+agents-vs-human	phase-5 finale(2): the six missed commits ported — GREEN (1,536 -> 0), GREEN, all fidelity…	finale: the six missed commits ported — GREEN (1,536 -> 0), GREEN, all fidelity…
+agents-vs-human	build: Nix flake, Phase A — librustty-vt + dev shell, verified on Linux	build: Nix flake, — librustty-vt + dev shell, verified on Linux
+agents-vs-human	phase-6: advance the oracle pin 88f57ee66 -> 20abdb50a (121 commits, +6,261/-1,269) with b…	advance the oracle pin 88f57ee66 -> 20abdb50a (121 commits, +6,261/-1,269) with b…
+agents-vs-human	phase-6: search C API — c/search.zig (17 tests), rustty_search_* exports + `search` featur…	search C API — c/search.zig (17 tests), rustty_search_* exports + `search` featur…
+agents-vs-human	phase-6 finale(1): census ledger at 20abdb50a (+26 test blocks +201 assertions +2 files ov…	finale: census ledger at 20abdb50a (+26 test blocks +201 assertions +2 files ov…
+agents-vs-human	parity-closure: adjudicate batch 2d DISPUTED findings (28 rows)	parity-closure: adjudicate DISPUTED findings (28 rows)
+agents-vs-human	fixup(task-3 review): header-pin the command_s ABI freeze; ledger byte-fix	fixup(review): header-pin the command_s ABI freeze; ledger byte-fix
+agents-vs-human	phase-6/task-13: DECISION doc for the logging-facade class (86 LOG findings)	DECISION doc for the logging-facade class (86 LOG findings)
+agents-vs-human	task-14a: log facade infra + fix rustty-vt-c's eprintln! sink bypass	log facade infra + fix rustty-vt-c's eprintln! sink bypass
+agents-vs-human	task-14a review fixes: contain the max-level clobber, add the app-build backend	review fixes: contain the max-level clobber, add the app-build backend
+agents-vs-human	task-14a review round 3: fix bootstrap timing, add the wasm artifact backend	review round 3: fix bootstrap timing, add the wasm artifact backend
+agents-vs-human	task-14b: restore rustty-vt logging diagnostics (18/19 LOG rows)	restore rustty-vt logging diagnostics (18/19 LOG rows)
+agents-vs-human	task-14wasm: wasm32-only release_max_level_off, correct DECISION-logging.md §6	wasm32-only release_max_level_off, correct DECISION-logging.md §6
+agents-vs-human	task-14r-a fix-review r1: make log_capture actually isolated; correct stale PORT NOTE coun…	fix review: make log_capture actually isolated; correct stale PORT NOTE coun…
+agents-vs-human	task-14wasm-proof: execute a restored wasm logging site end to end in Node	execute a restored wasm logging site end to end in Node
+agents-vs-human	parity: ledger for task 16 — 19 ALLOC rows CLOSED, 6 left OPEN with narrowed owners	parity: ledger — 19 ALLOC rows CLOSED, 6 left OPEN with narrowed owners
+agents-vs-human	parity task 16 fix round 2: move two qualifications out of the report and into the code, a…	parity fix round 2: move two qualifications out of the report and into the code, a…
+agents-vs-human	task-18: port +version's GTK block and give portal tokens a CSPRNG	port +version's GTK block and give portal tokens a CSPRNG
+agents-vs-human	parity task 19 (2/n): bind the hand-typed enum key lists to their enums	parity: bind the hand-typed enum key lists to their enums
+agents-vs-human	parity task 19 review: close (VM-verified under broadway; plain headless run is vacuous)	parity review: close (VM-verified under broadway; plain headless run is vacuous)
+agents-vs-human	parity task 19 fix round 1: restore osc_52 null fixture; henum_type! observes duplicates, …	parity fix round 1: restore osc_52 null fixture; henum_type! observes duplicates, …
+agents-vs-human	parity task 20 (6/n): GTK apprt behaviour, GObject properties and missing structure	parity: GTK apprt behaviour, GObject properties and missing structure
+agents-vs-human	parity task: tmux control-mode input no longer reaches reference traps	parity: tmux control-mode input no longer reaches reference traps
+agents-vs-human	parity task 20 fix round 2: trap X errors on winproto property calls; .previous empty-list…	parity fix round 2: trap X errors on winproto property calls; .previous empty-list…
+agents-vs-human	parity task:, cell-relative colours leave custom-shader uniforms unchanged	parity: cell-relative colours leave custom-shader uniforms unchanged
+agents-vs-human	parity task (records): -; closed (reversal), pointer	parity (records): closed (reversal), pointer
+agents-vs-human	parity task (2/n): malformed snapshot bytes no longer reach a trap, an overflow or a 4 GiB…	parity: malformed snapshot bytes no longer reach a trap, an overflow or a 4 GiB…
+agents-vs-human	parity task (2/n): pin the three gesture float casts	parity: pin the three gesture float casts
+agents-vs-human	parity task (2/n): test the streaming half of the string-length bound	parity: test the streaming half of the string-length bound
+agents-vs-human	parity task part: no environment input points a gate at another oracle	parity part: no environment input points a gate at another oracle
+agents-vs-human	parity task part: absent/off-pin oracle is BLOCKED; every oracle read strips GIT_*	parity part: absent/off-pin oracle is BLOCKED; every oracle read strips GIT_*
+agents-vs-human	parity task: PageEntry.Id shares its payload bytes as the reference union does, so the was…	parity: PageEntry.Id shares its payload bytes as the reference union does, so the was…
+agents-vs-human	parity task: row-copy loops degrade to defaults instead of crashing at the style-set ceili…	parity: row-copy loops degrade to defaults instead of crashing at the style-set ceili…
+agents-vs-human	parity task: the row-copy degrade is per dimension; mixed-row tests against a control, rel…	parity: the row-copy degrade is per dimension; mixed-row tests against a control, rel…
+agents-vs-human	parity task (code): reachable on 80x24 (PSL overflow) + log-site:775	parity (code): reachable on 80x24 (PSL overflow) + log-site:775
+agents-vs-human	parity task merge: input size is about 1.2 KB, and IL does not reach it at 80x24	parity merge: input size is about 1.2 KB, and IL does not reach it at 80x24
+agents-vs-human	parity task T-C: port std.fmt.parseInt/parseFloat into rustty-args; int/float fields and t…	parity: port std.fmt.parseInt/parseFloat into rustty-args; int/float fields and t…
+agents-vs-human	parity task tail-s1b (gate): test-only reference sites, LOG-ABSENT-SITES, LOG-ATTRIBUTION;…	parity (gate): test-only reference sites, LOG-ABSENT-SITES, LOG-ATTRIBUTION;…
+agents-vs-human	parity tail T-E fix round: std.json port enforces Stringify's 256-level limit as an error;…	parity tail fix round: std.json port enforces Stringify's 256-level limit as an error;…
+agents-vs-human	parity T-A fix round: clipboard replies apply their side effects inside reply, as the refe…	parity fix round: clipboard replies apply their side effects inside reply, as the refe…
+agents-vs-human	parity T-F: Modifier.parse and the keybind action numbers use ported Zig parseInt/parseFlo…	parity: Modifier.parse and the keybind action numbers use ported Zig parseInt/parseFlo…
+agents-vs-human	parity T-G: io threads set their crash thread_state; termio Error carries the three failur…	parity: io threads set their crash thread_state; termio Error carries the three failur…
+agents-vs-human	parity tail-s9: one port of Zig's std.fmt number parsers, in rustty-zigstd	parity: one port of Zig's std.fmt number parsers, in rustty-zigstd
+agents-vs-human	parity-closure Task 41 step 5: closure record; the audit README points at it	parity-closure step 5: closure record; the audit README points at it
+agents-vs-human	phase 7 plan: defer benchmarks and full lanes until after the port	plan: defer benchmarks and full lanes until after the port
+agents-vs-human	records: Phase 7 finale — tests checklist, phase README, ORACLE_SYNC note, parity-closure …	records: finale — tests checklist, phase README, ORACLE_SYNC note, parity-closure …
+agents-vs-human	lockfiles: refresh the fuzz and mirihar-pagelist-compress lockfiles for the Phase 7 depend…	lockfiles: refresh the fuzz and mirihar-pagelist-compress lockfiles for the depend…
+agents-vs-human	miri: four Phase 7 TIMEOUTs move to after passing it under Stacked and Tree Borrows (part …	miri: four TIMEOUTs move to after passing it under Stacked and Tree Borrows (part …
+agents-vs-human	phase-1 scope from the rvm probe: 58 members in, glslang-sys/rustty-renderer/xtask out wit…	scope from the rvm probe: 58 members in, glslang-sys/rustty-renderer/xtask out wit…
+agents-vs-human	plan(phase 8): delta reviews, decisions and plan for 12752b2ac → a60e9e2a5	plan: delta reviews, decisions and plan for 12752b2ac → a60e9e2a5
+agents-vs-human	Phases 0-1: reference baseline, oracle harness, workspace scaffold and parity gates	reference baseline, oracle harness, workspace scaffold and parity gates
+agents-vs-human	Bun learnings + realignment: six new porting rules, field-lifetime ledger, first full Miri sweep	Realignment: six new porting rules, field-lifetime ledger, first full Miri sweep
+agents-vs-human	Perf wave 2: restoring compile-time specialisation and inlining	Perf: restoring compile-time specialisation and inlining
+agents-vs-human	Bun ideas, macOS app, perf	New porting rules, macOS app, perf
+agents-vs-human	Bun ideas pivot	Validation pivot
+agents-vs-human	“I haven't validated my port at all, so I'd like you do help do that validation, and possibly catch bugs I haven't uncovered yet.” Bun learnings committed 10:55 (2c03357ce); six new rules ratified 17:14 (ccd14200e).	“I haven't validated my port at all, so I'd like you do help do that validation, and possibly catch bugs I haven't uncovered yet.” Porting lessons committed 10:55 (2c03357ce); six new rules ratified 17:14 (ccd14200e).
+translation-lens	private field rustty_datastruct::untouched_pool::DynamicUntouchedPool<P, VtAllocator> (P = page allocator, generic per …, default PageBackingAlloc; free-list gpa = gen_alloc). A pool-owned Page holds memory_ptr, a raw a…	private field rustty_datastruct::untouched_pool::DynamicUntouchedPool<P, VtAllocator> (P = page allocator, generic, default PageBackingAlloc; free-list gpa = gen_alloc). A pool-owned Page holds memory_ptr, a raw a…
+translation-lens	crates/rustty-vt-c/src/terminal.rs TerminalWrapper::tmp_dir_path: Option<ZigSlice> is the wrapper's ONE copy, allocated/freed through the caller's C allocator (wrapper.alloc, …), matching …. Every screen's kitty_images.…	crates/rustty-vt-c/src/terminal.rs TerminalWrapper::tmp_dir_path: Option<ZigSlice> is the wrapper's ONE copy, allocated/freed through the caller's C allocator (wrapper.alloc). Every screen's kitty_images.…
+translation-lens	*const c_char with null-terminator sentinel (-6 prospective: rustty-vt-c color::x11_entries() leaks CString-owned NUL-terminated names once via OnceLock; table + names live for the process lifetime, matching the oracle …	*const c_char with null-terminator sentinel (prospective: rustty-vt-c color::x11_entries() leaks CString-owned NUL-terminated names once via OnceLock; table + names live for the process lifetime, matching the oracle …
+translation-lens	interior-mutable (, …FIXED): tty_name_buf: UnsafeCell<[u8; MAX_PATH_BYTES + 1]>, tty_name: Cell<Option<usize>> (a length, not a self-pointer); setSize / getForegroundPid / getTtyName take &self on PosixPty, WindowsPty (…	interior-mutable: tty_name_buf: UnsafeCell<[u8; MAX_PATH_BYTES + 1]>, tty_name: Cell<Option<usize>> (a length, not a self-pointer); setSize / getForegroundPid / getTtyName take &self on PosixPty, WindowsPty (…
+translation-lens	interior-mutable (, …FIXED): tty_name_buf: UnsafeCell<[u8; MAX_PATH_BYTES + 1]>, tty_name: Cell<Option<usize>…	interior-mutable: tty_name_buf: UnsafeCell<[u8; MAX_PATH_BYTES + 1]>, tty_name: Cell<Option<usize>…
+translation-lens	crates/rustty-vt/src/stream.rs (, …): the drivers that reach a handler action are raw-self associated fns ove…	crates/rustty-vt/src/stream.rs: the drivers that reach a handler action are raw-self associated fns ove…
+translation-lens	crates/rustty-vt/src/stream_terminal.rs Handler::paste_raw(this: *mut Handler, req) (, …): raw-self with plac…	crates/rustty-vt/src/stream_terminal.rs Handler::paste_raw(this: *mut Handler, req): raw-self with plac…
+three-reviewers	.port/phase-2/wf-clearcells-sb-fix.js	fix workflow script, verifier step
+three-reviewers	agent memory note on protected &mut arguments (not in the repo; quoted in the glossary, author to confirm)	the port's agent memory note on protected `&mut` arguments
+three-reviewers	.port/phase-2/mirihar-chunk3b/src/main.rs	proof harness · src/main.rs
+three-reviewers	.port/phase-2/GPU_RD_CHUNK3B_DESIGN.md §H.2	cell-fill design document, §H.2
+three-reviewers	.port/phase-2/GPU_RD_CHUNK3B_DESIGN.md §C.3(2)	cell-fill design document, §C.3(2)
+three-reviewers	agent memory note on the shaper-hook interleave (quoted in the glossary, author to confirm); the in-repo rules point to the same “isolated non-FFI Miri proof harness” doctrine	the port's agent memory note on the shaper-hook interleave; the in-repo rules point to the same “isolated non-FFI Miri proof harness” doctrine
+three-reviewers	.port/phase-2/VT_MIRI_SWEEP.md (commit 3277f2f78)	terminal-engine Miri sweep record (commit 3277f2f78)
+three-reviewers	.port/phase-2/VT_MIRI_SWEEP.md	terminal-engine Miri sweep record
+three-reviewers	pointer-lifetime ledger, class definitions (.port/audits/GHOSTTY_LIFETIMES.tsv header)	pointer-lifetime ledger, class definitions (ledger header)
+three-reviewers	.port/audits/LIFETIMES_AUDIT_2026-07-10.md (as filed, b4845f427)	pointer-lifetime audit of 2026-07-10 (as filed, b4845f427)
+three-reviewers	porting rules, adversarial-verification rule (.port/PORT_RULES.md)	porting rules, adversarial-verification rule
+memory-safety	long-lived raw alias into a field interleaved with &mut to that field; proven on an isolated Miri harness (mirihar-chunk3b)	long-lived raw alias into a field interleaved with &mut to that field; proven on an isolated Miri harness (an isolated harness)
+memory-safety	Miri (SB; widened G6 lane)	Miri (SB; widened Miri lane)
+memory-safety	vt-c row iterator wrote through *const-derived slice; vt-c Handler built from an autoref temporary tag (vt_write UB after any &mut export); kitty display() alias pop; core test alias	vt-c row iterator wrote through *const-derived slice; vt-c Handler built from an autoref temporary tag (vt_write UB after any &mut export); kitty display alias pop; core test alias
+memory-safety	LIFETIMES audit + Miri	pointer-lifetime ledger audit + Miri
+memory-safety	completion-queue latent SB/TB UB found by the field-lifetime audit (M1+M2)	completion-queue latent SB/TB UB found by the field-lifetime audit
+memory-safety	TriggerC returned by value was 20 bytes in Rust vs 12 in the header; >16 B uses x8 sret so caller and callee disagreed; SIGBUS on first call; gate A4 added	TriggerC returned by value was 20 bytes in Rust vs 12 in the header; >16 B uses x8 sret so caller and callee disagreed; SIGBUS on first call; an ABI size gate was added
+memory-safety	Miri (P3 vt sweep)	Miri (vt sweep during the first resync)
+memory-safety	F1: LZ4 compressor read struct padding (Zig may read undefined bytes; Rust may not) -> repr(C) named padding; F2: start_hyperlink freed the allocation of its own &[u8] argument (protector) -> raw-slice variant	LZ4 compressor read struct padding (Zig may read undefined bytes; Rust may not) -> repr(C) named padding; start_hyperlink freed the allocation of its own &[u8] argument (protector) -> raw-slice variant
+memory-safety	test container_of through a narrow field tag; deinit(&mut self) protector vs workers' &self; join() Relaxed load raced peer frame teardown -> Acquire	test container_of through a narrow field tag; deinit(&mut self) protector vs workers' &self; join Relaxed load raced peer frame teardown -> Acquire
+memory-safety	Miri G6	Miri lane
+memory-safety	Miri harnesses (mirihar-n385/n431/n434)	Miri harnesses (isolated models)
+memory-safety	Miri harnesses (mirihar-n437/n440/n441/n444/n456/n465)	Miri harnesses (isolated models)
+memory-safety	review + Miri harness (mirihar-n452)	review + Miri harness (isolated model)
+memory-safety	Miri G6t (Tree Borrows)	Miri Tree Borrows lane (Tree Borrows)
+memory-safety	LSan (G-LSAN first macOS run) + Apple leaks	LSan (LeakSanitizer lane first macOS run) + Apple leaks
+memory-safety	LSan (G-LSAN-GTK)	LSan (LeakSanitizer GTK lane)
+memory-safety	A5 header gate	C header enum check
+perf-replay	rustty: phase-2 — Rust-vs-Zig benchmark head-to-head + synthetic CLI parity design	rustty: Rust-vs-Zig benchmark head-to-head + synthetic CLI parity design
+perf-replay	rustty: perf — r2-action-arrayvec: drop-glue-free per-byte Action return (boxed dispatch payloads + InlineVec + state hoist)	rustty: perf: drop-glue-free per-byte Action return (boxed dispatch payloads + InlineVec + state hoist)
+perf-replay	rustty: perf — r2-clone: inline packed Style::eql + coalesced cell copy in clone_partial_row_from	rustty: perf: inline packed Style::eql + coalesced cell copy in clone_partial_row_from
+perf-replay	rustty: perf — r2-osc-win: fall-through success store in the OSC fixed-capture writeByte	rustty: perf: fall-through success store in the OSC fixed-capture writeByte
+perf-replay	rustty: perf — r3-clone: outline cold grapheme/hyperlink arms of clone_partial_row_from	rustty: perf: outline cold grapheme/hyperlink arms of clone_partial_row_from
+perf-replay	rustty: perf — r3-render: hoist mutable style/grapheme column borrows in update()	rustty: perf: hoist mutable style/grapheme column borrows in update()
+perf-replay	rustty: perf — fix-profile-lto: TIER-0 build-profile parity for release-fast	rustty: perf — fix-profile-lto: build-profile parity for release-fast
+perf-replay	rustty: phase-2 — perf-opt attribution log, fix plan, raw bench data	rustty: perf-opt attribution log, fix plan, raw bench data
+perf-replay	rustty: phase-2 — rounds 2-3 official results: 13 wins / 1 parity / 0 losses vs Zig	rustty: rounds 2-3 official results: 13 wins / 1 parity / 0 losses vs Zig
+perf-replay	rustty: perf — r4-render-win: hoist style-set base + zip the managed cell walk	rustty: perf: hoist style-set base + zip the managed cell walk
+perf-replay	rustty: phase-2 — r4 final gate record: workspace green, SHIP-RF stashed, -7.0% confirmation sweep	rustty: round 4 final gate record: workspace green, shipped binary stashed, −7.0% confirmation sweep
+perf-replay	rustty: perf — r5-parser-fastpath: state-equal fast path in Parser::next	rustty: perf: state-equal fast path in Parser::next
+perf-replay	rustty: perf — r5-print-outline: outline cold print arms (grapheme/zero-width/wide)	rustty: perf: outline cold print arms (grapheme/zero-width/wide)
+perf-replay	rustty: perf — r5-stream-simd: restore the reference bench binary's SIMD build config	rustty: perf: restore the reference bench binary's SIMD build config
+perf-replay	rustty: perf — r5-utf8-dfa-pad: panic-free 512-entry DFA pad + per-arm state stores in UTF8Decoder::next	rustty: perf: panic-free 512-entry DFA pad + per-arm state stores in UTF8Decoder::next
+perf-replay	rustty: perf — r5-clone-style-run: batch same-style runs + by-pointer set adds in the clone chain	rustty: perf: batch same-style runs + by-pointer set adds in the clone chain
+perf-replay	rustty: phase-2 — rounds 4-5 official: 14/14 WINS vs Zig, suite -21.7%	rustty: rounds 4-5 official: 14/14 WINS vs Zig, suite −21.7%
+perf-replay	+65% (322 -> 531 ms); osc/clone -16%	+65% (322 -> 531 ms); osc/clone −16%
+perf-replay	0 osc gain; terminal-stream canary -3.3% when removed	0 osc gain; terminal-stream canary −3.3% when removed
+perf-replay	-94% noop lane (DCE) but +12..22% real lanes	−94% noop lane (DCE) but +12..22% real lanes
+perf-replay	M4 store-forward renaming floor (NONE-SAFE)	M4 store-forward renaming floor
+perf-replay	r1: inline idioms + utf8 DFA + parser destage (no LTO)	round 1: inline idioms + utf8 DFA + parser destage (no LTO)
+perf-replay	r2: boxed dispatch payloads + InlineVec + state hoist (Action 16 B, drop-free)	round 2: boxed dispatch payloads + InlineVec + state hoist (Action 16 B, drop-free)
+perf-replay	r3 ship (no parser change; noise)	round 3 ship (no parser change; noise)
+perf-replay	r5: state-equal fast path in Parser::next	round 5: state-equal fast path in Parser::next
+perf-replay	r1 ship (pin-keys / remap hasher: noise)	round 1 ship (pin-keys / remap hasher: noise)
+perf-replay	r2: packed Style::eql + coalesced cell copy	round 2: packed Style::eql + coalesced cell copy
+perf-replay	r3: outline cold grapheme/hyperlink arms	round 3: outline cold grapheme/hyperlink arms
+perf-replay	r3 ship (incl. parity fix 10f2091)	round 3 ship (incl. parity fix 10f2091)
+perf-replay	r5: same-style run batching + by-pointer set adds	round 5: same-style run batching + by-pointer set adds
+perf-replay	r1: MultiArrayList SoA + raw-column memcpy	round 1: MultiArrayList SoA + raw-column memcpy
+perf-replay	r2: stop re-zeroing SoA columns per rebuild	round 2: stop re-zeroing SoA columns per rebuild
+perf-replay	r3: hoist mutable style/grapheme column borrows	round 3: hoist mutable style/grapheme column borrows
+perf-replay	r4: hoist style-set base + zip walk (Zig does not do this)	round 4: hoist style-set base + zip walk (Zig does not do this)
+perf-replay	r1: inline idioms + zero-alloc fixed-writer capture	round 1: inline idioms + zero-alloc fixed-writer capture
+perf-replay	r2: shared RefCountedSet path + fall-through success store	round 2: shared RefCountedSet path + fall-through success store
+perf-replay	r5 ship (lane C NONE-SAFE: M4 store-forward floor)	round 5 ship (no safe win found: M4 store-forward floor)
+perf-replay	r1-r3 ships (canary, flat)	rounds 1–3 ships (canary, flat)
+perf-replay	r5: outline cold print arms + bench built with simd like ghostty-bench	round 5: outline cold print arms + bench built with simd like ghostty-bench
+perf-replay	first paired (P7-W19)	first paired
+perf-replay	after NEON group test (P7-W20)	after NEON group test
+perf-replay	idle re-measure (P7-W23)	idle re-measure
+perf-replay	after inlining (P7-W20)	after inlining
+perf-replay	RESULTS.md wave 2	RESULTS.md
+perf-replay	+27% -> -1%	+27% -> −1%
+perf-replay	~24% at r5 (8.2% by WS10)	~24% at round 5 (8.2% re-measured later)
+perf-replay	documented floor until r5	documented floor until round 5
+moving-target	port: advance the oracle sync point to 6ad1fe7d8 (working tree moved)	port: advance the reference commit to 6ad1fe7d8 (working tree moved)
+defect-map	adversarial reviewer of a task	adversarial reviewer
+defect-map	var shortcut_id: [*:0]const u8 = undefined; params.getChild(1, "&s", &shortcut_id); fails two different ways, depending on the body. - **No second child** ((o), ()): g_variant_get_child reaches GLib's fatal error "Attempt to access item 1 in a container with only 1 items" and the process aborts.	var shortcut_id: [*:0]const u8 = undefined; params.getChild(1, "&s", &shortcut_id); fails two different ways, depending on the body. - No second child ((o), ()): g_variant_get_child reaches GLib's fatal error "Attempt to access item 1 in a container with only 1 items" and the process aborts.
+defect-map	Two faults. - **No error trap.** XChangeProperty, XDeleteProperty and XGetWindowProperty are called with no gdk_x11_display_error_trap_push/_pop, so an X error on them reaches GDK's default X error handler. That handler prints "The program '…' received an X Window System error … BadWindow" and calls exit(1).	Two faults. - No error trap. XChangeProperty, XDeleteProperty and XGetWindowProperty are called with no gdk_x11_display_error_trap_push/_pop, so an X error on them reaches GDK's default X error handler. That handler prints "The program '…' received an X Window System error … BadWindow" and calls exit(1).
+defect-map	fixed (the never-port-a-bug rule, task S-12; see the port handling (task S-12) line below). Before S-12: faithful (the never-port-a-bug rule non-crash defect): the port's parser and DCS handler behave the same.	fixed (the never-port-a-bug rule). Before that fix: faithful (the never-port-a-bug rule non-crash defect): the port's parser and DCS handler behave the same.
+defect-map	faithful acceptance of Ok, with the limit documented at crates/rustty-vt/src/snapshot/codec.rs:2629-2640 (that note's cited reason was corrected in task the never-port-a-bug rule-R: the re…	faithful acceptance of Ok, with the limit documented at crates/rustty-vt/src/snapshot/codec.rs:2629-2640 (that note's cited reason was corrected later: the re…
+defect-map	fixed (the never-port-a-bug rule, extended 2026-09-23; task tail-s6; Linux end-to-end run done by task L-1, above): crates/rustty-termio/src/exec.rs ReadThread::outer_poll_hup_exits (PORT…	fixed (the never-port-a-bug rule, extended 2026-09-23; Linux end-to-end run done, above): crates/rustty-termio/src/exec.rs ReadThread::outer_poll_hup_exits…
+defect-map	not reported (the Linux measurement it waited for is done: task L-1; negative control on Linux, the reference's decision, fails the unit tes…	not reported (the Linux measurement it waited for is done; negative control on Linux, the reference's decision, fails the unit tes…
+defect-map	fixed (the never-port-a-bug rule, extended 2026-09-23; task tail-s6): the port declares Uniforms.selection_foreground_color before selection_background_color, the GLSL order, so each unifo…	fixed (the never-port-a-bug rule, extended 2026-09-23): the port declares Uniforms.selection_foreground_color before selection_background_color, the GLSL order, so each unifo…
+defect-map	run creates a 4096-byte buffered stderr writer and prints to it in two places, but no path flushes it. Both messages are far shorter than the buffer, so neither reaches the terminal (MEASURED, task T-C, Zig 0.16.0: the "No themes found" line through an unflushed 4096-byte std.Io.File.Writer delivers 0 bytes;	run creates a 4096-byte buffered stderr writer and prints to it in two places, but no path flushes it. Both messages are far shorter than the buffer, so neither reaches the terminal (measured, Zig 0.16.0: the "No themes found" line through an unflushed 4096-byte std.Io.File.Writer delivers 0 bytes;
+defect-map	(1) fixed (the never-port-a-bug rule, extended 2026-09-23; task tail-s6) at both copies: .numpad_page_down maps to ImGuiKey_PageDown, as .page_down does, in crates/rustty-vt/src/input/k…	(1) fixed (the never-port-a-bug rule, extended 2026-09-23) at both copies: .numpad_page_down maps to ImGuiKey_PageDown, as .page_down does, in crates/rustty-vt/src/input/k…
+defect-map	Both messages name the wrong operation, so a goto_split failure is reported as a split-creation failure, and an app-targeted set_window_title as set_tab_title. - Two further sub-sites in the source records are **refuted at the pin**: "mouse over link does nothing with an app target" and "set mouse shapes nothing" are not i…	Both messages name the wrong operation, so a goto_split failure is reported as a split-creation failure, and an app-targeted set_window_title as set_tab_title. - Two further sub-sites in the source records are refuted at the pin: "mouse over link does nothing with an app target" and "set mouse shapes nothing" are not i…
+defect-map	These functions are never referenced, so Zig never analyses them. They are not type-checked against current APIs and can bit-rot unnoticed. The source records also mention "eight gate log sites"; those were not located, are **UNVERIFIED**, and are not included.	These functions are never referenced, so Zig never analyses them. They are not type-checked against current APIs and can bit-rot unnoticed. The source records also mention "eight gate log sites"; those were not located, are unverified, and are not included.
+defect-map	faithful, tracked by the a port finding dead-site ratchet (.port/parity-closure/LOG-DEAD-SITES.tsv).	faithful, tracked by a dead-site ratchet in the port's records.
+defect-map	The guard has no upper compiler bound, but the attribute has been removed from newer compilers. **Measured (task the never-port-a-bug rule-R, macOS host):** Homebrew's x86_64-w64-mingw32-gcc **16.2.0** rejects both __attribute__((target("avx512f,evex512"))) and target("avx512f,no-evex512") with "attribute 'target' argument 'evex512' is unknown"…	The guard has no upper compiler bound, but the attribute has been removed from newer compilers. Measured (macOS host): Homebrew's x86_64-w64-mingw32-gcc 16.2.0 rejects both __attribute__((target("avx512f,evex512"))) and target("avx512f,no-evex512") with "attribute 'target' argument 'evex512' is unknown"…
+defect-map	undefined behaviour. In the probe the surrogate was written as ED A0 80 (x = 55263) and ED BF BF (x = 57310), which is not valid UTF-8, and nothing crashed.	undefined behaviour. In the probe the surrogate was written as 0xED 0xA0 0x80 (x = 55263) and 0xED 0xBF 0xBF (x = 57310), which is not valid UTF-8, and nothing crashed.
+defect-map	assert is unreachable, so this is undefined behaviour. MEASURED on 64-bit by the same probe: the process dies with SIGBUS.	assert is unreachable, so this is undefined behaviour. measured on 64-bit by the same probe: the process dies with SIGBUS.
+defect-map	the same; MEASURED by the same probe: EndOfStream.	the same; measured by the same probe: EndOfStream.
+defect-map	crates/rustty-core/src/renderer_seam.rs (task the never-port-a-bug rule-C). cursorCancelCallback's Linux arm keeps the reference's warning and then disarms, as its success arms do (the tim…	crates/rustty-core/src/renderer_seam.rs. cursorCancelCallback's Linux arm keeps the reference's warning and then disarms, as its success arms do (the tim…
+defect-map	the refcount wraps silently. MEASURED by the same probe with -Doptimize=ReleaseFast: the cursor style's refcount reads 4465 after the 70,000 prints (70,001 mod 65,536).…	the refcount wraps silently. measured by the same probe with -Doptimize=ReleaseFast: the cursor style's refcount reads 4465 after the 70,000 prints (70,001 mod 65,536).…
+defect-map	the row-copy retry loops @panic when a destination page's style set cannot grow — reachable on an ORDINARY 80×24 terminal from about 1.2 KB of output (DoS)	the row-copy retry loops @panic when a destination page's style set cannot grow — reachable on an ordinary 80×24 terminal from about 1.2 KB of output (DoS)
+defect-map	the port degrades PER DIMENSION instead of panicking (task the never-port-a-bug rule-X2; task the never-port-a-bug rule-X's first version degraded every dimension at once).	the port degrades per dimension instead of panicking.
+defect-map	fixed: crates/rustty-version/src/git_version.rs branch_from_rev_parse trims first and then sanitizes (PORT…	fixed: crates/rustty-version/src/git_version.rs branch_from_rev_parse trims first and then sanitizes…
+defect-map	undefined behaviour (the @intCast is unchecked). MEASURED with Zig 0.16.0 ReleaseFast (task T-C review, re-measured in T-C3 with the reference's isValidHost body): to…	undefined behaviour (the @intCast is unchecked). measured with Zig 0.16.0 ReleaseFast (re-measured with the reference's isValidHost body): to…
+defect-map	UTF-8 &str at the GLib boundary forced a conversion choice; parity audit an audit finding then flagged it	UTF-8 &str at the GLib boundary forced a conversion choice; parity audit then flagged it
+defect-map	UTF-8 &str at the GLib boundary; parity audit an audit finding	UTF-8 &str at the GLib boundary; parity audit
+defect-map	UTF-8 &str at the GTK boundary; parity audit an audit finding	UTF-8 &str at the GTK boundary; parity audit
+defect-map	the WTF-8 validator accepts the overlong form E0 80..9F 80..BF, and the decoder that runs after it rejects that form with an error the caller turns into unreachable. MEASURED with zig 0.16.0 Debug (zig run): std.unicode.wtf8ToWtf16Le(&buf, "\xe0\x9f\xbf") panics "attempt to unwrap error: Utf8OverlongEncoding".	the WTF-8 validator accepts the overlong form E0 80..9F 80..BF, and the decoder that runs after it rejects that form with an error the caller turns into unreachable. measured with zig 0.16.0 Debug (zig run): std.unicode.wtf8ToWtf16Le(&buf, "\xe0\x9f\xbf") panics "attempt to unwrap error: Utf8OverlongEncoding".
+defect-map	the same (no safety check is involved). MEASURED, identical to ReleaseSafe: 361 bytes of stdout OK and 362 or 512 bytes OutOfMemory;	the same (no safety check is involved). measured, identical to ReleaseSafe: 361 bytes of stdout OK and 362 or 512 bytes OutOfMemory;
+defect-map	trimEnd removes every trailing /, including the root directory's only one, so TMPDIR=/ (or TMP=/, or //) yields "". MEASURED with zig 0.16.0 on macOS: trimEnd("/") has length 0; Dir.cwd().openDir("") fails with FileNotFound, while openDir("/") succeeds. So TempDir.init fails for a valid temp directory.	trimEnd removes every trailing /, including the root directory's only one, so TMPDIR=/ (or TMP=/, or //) yields "". measured with zig 0.16.0 on macOS: trimEnd("/") has length 0; Dir.cwd().openDir("") fails with FileNotFound, while openDir("/") succeeds. So TempDir.init fails for a valid temp directory.
+defect-map	the same (no safety check is involved; MEASURED identical).	the same (no safety check is involved; measured identical).
+defect-map	fixed (the never-port-a-bug rule; controller ruling in task S-6b): crates/rustty-vaxis/src/tty.rs maps 0x76 to key::f7 (port note: reference defect (the never-port-a-bug rule) at the arm).	fixed (the never-port-a-bug rule; ruled in review): crates/rustty-vaxis/src/tty.rs maps 0x76 to key::f7 (port note: reference defect (the never-port-a-bug rule) at the arm).
+defect-map	fixed (the never-port-a-bug rule; controller ruling in task S-6b): crates/rustty-vaxis/src/loop_.rs. Loop::start creates a close-on-exec wake pipe;	fixed (the never-port-a-bug rule; ruled in review): crates/rustty-vaxis/src/loop_.rs. Loop::start creates a close-on-exec wake pipe;
+defect-map	fixed (the never-port-a-bug rule; controller ruling in task S-6b): crates/rustty-renderer/src/opengl/gl/program.rs Program::create_vf destroys vs when its compile fails, fs when its co…	fixed (the never-port-a-bug rule; ruled in review): crates/rustty-renderer/src/opengl/gl/program.rs Program::create_vf destroys vs when its compile fails, fs when its co…
+defect-map	faithful: crates/rustty-vaxis/src/key.rs Key::match_shifted_codepoint keeps the dead store with a port note. Decided by task tail-s6: unobservable in the product.	faithful: crates/rustty-vaxis/src/key.rs Key::match_shifted_codepoint keeps the dead store with a port note. Decided: unobservable in the product.
+defect-map	fixed (the never-port-a-bug rule; controller ruling in task S-6b): crates/rustty-renderer/src/opengl/pipeline.rs Pipeline::deinit destroys vao and fbo after the program (port note: ref…	fixed (the never-port-a-bug rule; ruled in review): crates/rustty-renderer/src/opengl/pipeline.rs Pipeline::deinit destroys vao and fbo after the program (port note: ref…
+defect-map	fixed (the never-port-a-bug rule; controller ruling in task S-6c): crates/rustty-vaxis/src/loop_.rs ReadCarry (the pair buf / read_start) with read_buf (where the next read goes) and…	fixed (the never-port-a-bug rule; ruled in review): crates/rustty-vaxis/src/loop_.rs ReadCarry (the pair buf / read_start) with read_buf (where the next read goes) and…
+defect-map	fixed (the never-port-a-bug rule): crates/rustty-vaxis/src/vaxis.rs render_diff negates the comparison (!ptr_eql) and gates it on caps.multi_cursor (task tail-s10c, review F1): the dra…	fixed (the never-port-a-bug rule): crates/rustty-vaxis/src/vaxis.rs render_diff negates the comparison (!ptr_eql) and gates it on caps.multi_cursor: the dra…
+defect-map	faithful, not changed. Ruled (controller, review of task S-12, 2026-09-24): faithful and latent.	faithful, not changed. Ruled (review, 2026-09-24): faithful and latent.
+defect-map	faithful, not changed (found by task S-12; not in its assignment). Ruled (controller, review of task S-12, 2026-09-24): faithful and latent.	faithful, not changed (found during a fix of a sibling entry). Ruled (review, 2026-09-24): faithful and latent.
+defect-map	faithful, not changed (found by task S-12; not in its assignment; the S-12 tests compare lines with leading blanks removed so that they neither depend on nor pin this).	faithful, not changed (found during a fix of a sibling entry; those tests compare lines with leading blanks removed so that they neither depend on nor pin this).
+defect-map	faithful, not changed. Ruled (controller, review of task S-12, 2026-09-24): latent. Reopen trigger: becomes visible, and must be fixed, when termio's .windows is implem…	faithful, not changed. Ruled (review, 2026-09-24): latent. Reopen trigger: becomes visible, and must be fixed, when termio's .windows is implem…
+defect-map	faithful skip (the never-port-a-bug rule keeps test weaknesses faithful; a porting rule form 1: cfg_attr(not(wasm32), ignore) in crates/rustty-font-shaper/src/collection.rs face_metrics), with the…	faithful skip (the never-port-a-bug rule keeps test weaknesses faithful; the test-skip rule, form 1: cfg_attr(not(wasm32), ignore) in crates/rustty-font-shaper/src/collection.rs face_metrics), with the…
+defect-map	faithful (the never-port-a-bug rule: message text stays faithful). The port had used the "corrected" names; task S-1c restored the reference text in crates/rustty-apprt/src/gtk/class/applicat…	faithful (the never-port-a-bug rule: message text stays faithful). The port had used the "corrected" names; a later fix restored the reference text in crates/rustty-apprt/src/gtk/class/applicat…
+defect-map	faithful (the never-port-a-bug rule: message text stays faithful): xtask's report_usage_error prints the reference's line (task S-1d). Not in docs/ghostty-bug-fixes.md.	faithful (the never-port-a-bug rule: message text stays faithful): xtask's report_usage_error prints the reference's line. Not in docs/ghostty-bug-fixes.md.
+defect-map	the stale/empty rows as above; by reading, UNVERIFIED: the same reads are undefined behaviour (a wild or dangling read of the grapheme slice).	the stale/empty rows as above; by reading, unverified: the same reads are undefined behaviour (a wild or dangling read of the grapheme slice).
+defect-map	crates/rustty-apprt/src/gtk/class/surface.rs drop pastes the escaped path, as the file-list branch does (controller ruling, task L-4b).	crates/rustty-apprt/src/gtk/class/surface.rs drop pastes the escaped path, as the file-list branch does (ruled in review).
+defect-map	fixed (the never-port-a-bug rule, controller ruling after review W-2 F1): dist/windows/rustty.rc adds #define VS_VERSION_INFO 1 directly above the VERSIONINFO, with port note: reference d…	fixed (the never-port-a-bug rule; ruled in review): dist/windows/rustty.rc adds #define VS_VERSION_INFO 1 directly above the VERSIONINFO, with port note: reference d…
+defect-map	the same (MEASURED, same host).	the same (measured, same host).
+defect-map	the same (MEASURED).	the same (measured).
+defect-map	on stock Windows fonts the first family entry is mostly a Unicode-platform (UTF-16BE) one, so +list-fonts prints \0A\0r\0i\0a\0l for Arial (MEASURED bytes 00 41 00 72 00 69 00 61 00 6c 0a on Windows 11, reference exe at the pin, task W-4).	on stock Windows fonts the first family entry is mostly a Unicode-platform (UTF-16BE) one, so +list-fonts prints \0A\0r\0i\0a\0l for Arial (measured bytes 00 41 00 72 00 69 00 61 00 6c 0a on Windows 11, reference exe at the pin).
+defect-map	fixed (the never-port-a-bug rule, evident intent; controller ruling, task P-1b): .envrc watches nix/{devShell,package}.nix nix/pkgs/wraptest.nix (port note: reference defect a…	fixed (the never-port-a-bug rule, evident intent; ruled in review): .envrc watches nix/{devShell,package}.nix nix/pkgs/wraptest.nix (port note: reference defect a…
+defect-map	undefined behaviour. MEASURED with the same function-level program: the process spins at 100% CPU and never returns (runs killed after 5 s, about 2 minutes and 14 minutes…	undefined behaviour. measured with the same function-level program: the process spins at 100% CPU and never returns (runs killed after 5 s, about 2 minutes and 14 minutes…
+defect-map	NOT YET REPORTED	not yet reported
+defect-map	crates/rustty-vt/src/render.rs (port note: reference defect): RenderState::begin_update resets overscan to zero on a failure (the a related entry forced rebuil…	crates/rustty-vt/src/render.rs (port note: reference defect): RenderState::begin_update resets overscan to zero on a failure (a related entry's forced rebuil…
+defect-map	core's Surface.resizeWindow (714fe9b90) sends any u32 width or height in points, and a size above maxInt(c_int) fits u32 without overflowing a related entry's arithmetic: a 40000 px cell × 65535 columns is 2621400000. Its delta is outside c_int, so @intFromFloat is out of range.	core's Surface.resizeWindow (714fe9b90) sends any u32 width or height in points, and a size above maxInt(c_int) fits u32 without overflowing a sibling entry's arithmetic: a 40000 px cell × 65535 columns is 2621400000. Its delta is outside c_int, so @intFromFloat is out of range.
+verification-matrix	timeline dossier	project timeline
+verification-matrix	phase-6 README · 09-27 lane commits	resync record (September) · 09-27 lane commits
+verification-matrix	phase-6 README	resync record (September)
+verification-matrix	parity-closure README	closure record
+verification-matrix	bugs-verification-gates.csv	verification ledger
+verification-matrix	phase-7 README	resync record (09-30)
+verification-matrix	cross-host record	cross-host build record
+verification-matrix	phase-8 README	resync record (October)
+verification-matrix	rvm, 10-08	Linux VM run, 10-08
+verification-matrix	compiler-rt has no MSan for Darwin	MemorySanitizer is not available on macOS (compiler-rt has no Darwin port)
+verification-matrix	HWASan runs on aarch64 Linux only	HWAddressSanitizer runs on aarch64 Linux only
+verification-matrix	Miri lanes run on the Mac	Miri lanes run on the MacBook Pro, Apple M4 Pro
+verification-matrix	Previous reference commit 12752b2ac: the first time every lane ran to completion. Each red-dot cell found bugs on its first run; all were fixed and the lane re-run green before the next pin move.	Previous reference commit 12752b2ac: the first time every lane ran to completion. Each diamond (found and fixed) cell found bugs on its first run; all were fixed and the lane re-run green before the next pin move.
+verification-matrix	rustty-xev 42 of 42 with the IOCP backend executing	rustty-xev 42 of 42 with the Windows I/O completion port backend executing
+verification-matrix	914 memcheck processes, 6,614 tests, 3 h 44 min; renderer-only RED fixed by a test fix and Mesa suppressions; 0 errors in Rustty code	914 memcheck processes, 6,614 tests, 3 h 44 min; renderer-only failure fixed by a test fix and Mesa suppressions; 0 errors in Rustty code
+verification-matrix	XCTest app tests 403 pass	macOS app tests 403 pass
+verification-matrix	XCTest 404 passed, 0 failed; menu-shortcut parity 51 actions byte-identical	macOS app tests 404 passed, 0 failed; menu-shortcut parity 51 actions byte-identical
+verification-matrix	C example built against the vt-c DLL: output byte-identical to the golden	C example built against the vt-c shared library: output byte-identical to the golden
+cost	Before the Bun-inspired rules	Before the written working rules
+cost	Codex audit 1 starts (/goal, gpt-5.6-sol high): adversarial non-macOS parity audit, write only to .port/codex/	Codex audit 1 starts (gpt-5.6-sol, high effort): an adversarial parity audit of the non-macOS code
+cost	Audit 1 ends: 20 verified gaps (5 P1, 9 P2, 3 P3, 3 P4); line-audit design + universe + fail-closed verifier written	Audit 1 ends with 20 verified gaps and a design for auditing every line
+cost	Audit 2 main thread starts on gpt-5.5 high; first batch of independent wave reviewers (prompt: 'one of 15 independent reviewers') spawned at 06:45	Audit 2 starts on gpt-5.5 at high effort and spawns its first independent reviewers
+cost	Author: 'use medium effort from now on'	The author: “use medium effort from now on”
+cost	Wave 100 reached	The audit reaches its 100th round of reviewers
+cost	Registry first reported at 659 rows	The findings registry is first reported at 659 rows
+cost	Last Codex call; weekly limit at 99% (window 10,080 min); strict line-ledger credit 10,929 lines (0.35%)	Last Codex call: the weekly meter is at 99%; Codex's own strict line ledger credits 10,929 lines (0.35%)
+agents-vs-human	Upstream resync 1 (4749c4e93 → 6ad1fe7d8, 365 upstream commits)	Upstream catch-up 1 (4749c4e93 → 6ad1fe7d8, 365 upstream commits)
+agents-vs-human	Upstream resync 2 (6ad1fe7d8 → 12967b68f, 543 upstream commits)	Upstream catch-up 2 (6ad1fe7d8 → 12967b68f, 543 upstream commits)
+agents-vs-human	Upstream resync 3 (12967b68f → 683d8db64)	Upstream catch-up 3 (12967b68f → 683d8db64)
+agents-vs-human	Upstream resync 4 (88f57ee66 → 20abdb50a)	Upstream catch-up 4 (88f57ee66 → 20abdb50a)
+agents-vs-human	Upstream resync 5 + memory-safety lanes (Miri, ASan/LSan/MSan/TSan)	Upstream catch-up 5 + memory-safety lanes (Miri, ASan/LSan/MSan/TSan)
+agents-vs-human	Upstream resync 6 (12752b2ac → a60e9e2a5)	Upstream catch-up 6 (12752b2ac → a60e9e2a5)
+agents-vs-human	Completion, Codex audit, first resyncs	Completion, Codex audit, first upstream catch-ups
+agents-vs-human	Verification matrix, last resync	Verification matrix, last upstream catch-up
+agents-vs-human	Pin +365	Upstream +365
+agents-vs-human	Upstream pin 4749c4e93 → 6ad1fe7d8 (365 upstream commits)	Reference moved 4749c4e93 → 6ad1fe7d8 (365 upstream commits)
+agents-vs-human	Pin +543	Upstream +543
+agents-vs-human	Upstream pin 6ad1fe7d8 → 12967b68f (543 upstream commits)	Reference moved 6ad1fe7d8 → 12967b68f (543 upstream commits)
+agents-vs-human	Pin +245	Upstream +245
+agents-vs-human	Upstream pin 12967b68f → 683d8db64 (245 upstream commits)	Reference moved 12967b68f → 683d8db64 (245 upstream commits)
+agents-vs-human	Pin +4	Upstream +4
+agents-vs-human	Pin +121	Upstream +121
+agents-vs-human	Upstream pin 88f57ee66 → 20abdb50a (121 upstream commits)	Reference moved 88f57ee66 → 20abdb50a (121 upstream commits)
+agents-vs-human	Pin +333	Upstream +333
+agents-vs-human	Upstream pin 20abdb50a → 12752b2ac (333 upstream commits)	Reference moved 20abdb50a → 12752b2ac (333 upstream commits)
+agents-vs-human	Pin +107	Upstream +107
+agents-vs-human	Upstream pin 12752b2ac → a60e9e2a5 (107 upstream commits)	Reference moved 12752b2ac → a60e9e2a5 (107 upstream commits)
+defect-map	parity re-audit after a pin advance	parity re-audit after a reference-commit move
+memory-safety	Miri (P3 vt sweep)	Miri (terminal-engine sweep during the first upstream catch-up)
+verification-matrix	phase-6 README · 09-27 lane commits	upstream catch-up record (September) · 09-27 lane commits
+verification-matrix	phase-6 README	upstream catch-up record (September)
+verification-matrix	phase-7 README	upstream catch-up record (09-30)
+verification-matrix	phase-8 README	upstream catch-up record (October)
+cost	Upstream resyncs, orchestrator	Upstream catch-ups, orchestrator
+three-reviewers	Miri (vt sweep, 3rd resync)	Miri (terminal-engine sweep, 3rd upstream catch-up)
+agents-vs-human	reference baseline, oracle harness, workspace scaffold and parity gates	reference baseline, reference-comparison harness, workspace scaffold and parity gates
+verification-matrix	First pin move: the Miri exception families were re-audited adversarially and libxev's thread pool proven under both borrow models.	First reference move: the Miri exception families were re-audited adversarially and libxev's thread pool proven under both borrow models.
+verification-matrix	Second pin move: the Linux lane ran at the finale.	Second reference move: the Linux lane ran when its catch-up ended.
+verification-matrix	Third pin move (same day as the second finale): no separate verification record.	Third reference move (the day the second catch-up ended): no separate verification record.
+verification-matrix	Previous reference commit 12752b2ac: the first time every lane ran to completion. Each red-dot cell found bugs on its first run; all were fixed and the lane re-run green before the next pin move.	Previous reference commit 12752b2ac: the first time every lane ran to completion. Each diamond (found and fixed) cell found bugs on its first run; all were fixed and the lane re-run green before the next reference move.
+verification-matrix	vt Miri sweep before the first pin move: uninitialised struct padding hashed by the page compressor, and an argument freed mid-call	vt Miri sweep before the first reference move: uninitialised struct padding hashed by the page compressor, and an argument freed mid-call
+three-reviewers	Miri (vt sweep, 3rd resync)	Miri (terminal-engine sweep during the first upstream catch-up)
+defect-map	Both messages name the wrong operation, so a goto_split failure is reported as a split-creation failure, and an app-targeted set_window_title as set_tab_title. - Two further sub-sites in the source records are **refuted at the pin**: "mouse over link does nothing with an app target" and "set mouse shapes nothing" are not i…	Both messages name the wrong operation, so a goto_split failure is reported as a split-creation failure, and an app-targeted set_window_title as set_tab_title. - Two further sub-sites in the source records are refuted at the reference commit: "mouse over link does nothing with an app target" and "set mouse shapes nothing" are not i…
+defect-map	Commit 41ae32814 ("renderer: fix color glyph rendering under OpenGL", an ancestor of the pin) renamed Atlas.Format.rgba to bgra and rgb to bgr, but left this switch arm on .rgba. Format is an exhaustive enum, so the arm is a compile error whenever renderGlyph is analysed.	Commit 41ae32814 ("renderer: fix color glyph rendering under OpenGL", an ancestor of the reference commit) renamed Atlas.Format.rgba to bgra and rgb to bgr, but left this switch arm on .rgba. Format is an exhaustive enum, so the arm is a compile error whenever renderGlyph is analysed.
+defect-map	self.surface is the class/surface.zig Surface, which has no cgroupPath: a search of src and pkg finds only this call. Commit 1342eb594 ("gtk: revamp cgroup/transient scope handling", an ancestor of the pin) deleted cgroupPath from class/surface.zig but left this wrapper.	self.surface is the class/surface.zig Surface, which has no cgroupPath: a search of src and pkg finds only this call. Commit 1342eb594 ("gtk: revamp cgroup/transient scope handling", an ancestor of the reference commit) deleted cgroupPath from class/surface.zig but left this wrapper.
+defect-map	The pin requires Zig 0.16.0 (build.zig.zon:6), whose std.builtin.Type tags are lowercase (.array, .int, .comptime_int); .Array, .Int and .ComptimeInt are pre-0.14 spellings. attribute also calls b.enableAttribArray, which Buffer.Binding does not declare;	The reference commit requires Zig 0.16.0 (build.zig.zon:6), whose std.builtin.Type tags are lowercase (.array, .int, .comptime_int); .Array, .Int and .ComptimeInt are pre-0.14 spellings. attribute also calls b.enableAttribArray, which Buffer.Binding does not declare;
+defect-map	fixed in highway 1.4.0 (7cde540171, 4201022df1, 31ea1cfdf8); Ghostty's pin (1.2.0) does not have it	fixed in highway 1.4.0 (7cde540171, 4201022df1, 31ea1cfdf8); Ghostty's pinned version (1.2.0) does not have it
+defect-map	keysymFromTrigger is also null for every input.Key the GTK keymap does not list: 44 values at the pin, counting unidentified (176 input.Key values, 132 of them mapped; counted by script, and every mapped name checked to be an enum value), e.g.	keysymFromTrigger is also null for every input.Key the GTK keymap does not list: 44 values at the reference commit, counting unidentified (176 input.Key values, 132 of them mapped; counted by script, and every mapped name checked to be an enum value), e.g.
+defect-map	any value other than 0 or 1 is illegal behaviour. The only caller is the JS glue, which passes 0 or 1. The file is not compiled by any build step at the pin, so this is not reachable today.	any value other than 0 or 1 is illegal behaviour. The only caller is the JS glue, which passes 0 or 1. The file is not compiled by any build step at the reference commit, so this is not reachable today.
+defect-map	the helper-CLI exe cannot be built for Windows at the pin	the helper-CLI exe cannot be built for Windows at the reference commit
+defect-map	on stock Windows fonts the first family entry is mostly a Unicode-platform (UTF-16BE) one, so +list-fonts prints \0A\0r\0i\0a\0l for Arial (MEASURED bytes 00 41 00 72 00 69 00 61 00 6c 0a on Windows 11, reference exe at the pin, task W-4).	on stock Windows fonts the first family entry is mostly a Unicode-platform (UTF-16BE) one, so +list-fonts prints \0A\0r\0i\0a\0l for Arial (measured bytes 00 41 00 72 00 69 00 61 00 6c 0a on Windows 11, reference exe at the reference commit).
+defect-map	parity re-audit after a pin advance	parity re-audit after a reference move
+verification-matrix	Current-pin run in progress on an unmerged branch	Current-reference run in progress on an unmerged branch
+verification-matrix	Scheduled with the current-pin verification run	Scheduled with the current-reference verification run
+agents-vs-human	Upstream resync 4 (683d8db64 → 88f57ee66, 4 upstream commits)	Upstream catch-up 4 (683d8db64 → 88f57ee66, 4 upstream commits)
+agents-vs-human	Upstream resync 6 (20abdb50a → 12752b2ac, 333 upstream commits) + memory-safety lanes (Miri, ASan/LSan/MSan/TSan)	Upstream catch-up 6 (20abdb50a → 12752b2ac, 333 upstream commits) + memory-safety lanes (Miri, ASan/LSan/MSan/TSan)
+agents-vs-human	Upstream pin 683d8db64 → 88f57ee66 (4 upstream commits)	Reference moved 683d8db64 → 88f57ee66 (4 upstream commits)
+verification-matrix	Reference commit 12752b2ac (09-28): the first time every lane ran to completion. Each red-dot cell found bugs on its first run; all were fixed and the lane re-run green before the next pin move.	Reference commit 12752b2ac (09-28): the first time every lane ran to completion. Each diamond (found and fixed) cell found bugs on its first run; all were fixed and the lane re-run green before the next reference move.
+memory-safety	ThreadSanitizer (G-TSAN on the Linux VM)	ThreadSanitizer (the Linux VM lane)

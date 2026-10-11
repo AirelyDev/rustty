@@ -1,0 +1,322 @@
+/* The memory-safety widget body. Values follow the approved mockup
+   (09-memory-safety) inside the shared instrument card. */
+
+/* Widget root: positioning context for the floating tooltip. */
+.root {
+  position: relative;
+  min-width: 0;
+  color: #d9ded6;
+  font-variant-numeric: tabular-nums;
+}
+.mono {
+  font-family: var(--jetbrains-mono), ui-monospace, monospace;
+}
+.k {
+  color: #858a84;
+}
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Hero figure and tiles. */
+.hero {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 1fr 1fr;
+  gap: 16px;
+  align-items: end;
+  margin: 4px 0;
+}
+.big {
+  color: #f4f1ed;
+  font: 700 30px/1.1 var(--jetbrains-mono), ui-monospace, monospace;
+}
+.hs {
+  color: #9aa09a;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.hs b {
+  display: block;
+  color: #f4f1ed;
+  font: 700 20px/1.2 var(--jetbrains-mono), ui-monospace, monospace;
+}
+
+/* Facet toggle and legend. */
+.ctl {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 14px 0 4px;
+}
+.seg {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid #262927;
+  border-radius: 999px;
+}
+.seg button {
+  padding: 3px 11px;
+  background: none;
+  border: 0;
+  color: #9aa09a;
+  font: 11.5px var(--font-sans, inherit);
+  cursor: pointer;
+}
+.seg button.segOn {
+  background: #1c1f1d;
+  color: #f4f1ed;
+}
+.seg button:focus-visible,
+.cell:focus-visible,
+.rules li:focus-visible {
+  outline: 2px solid #64d8c6;
+  outline-offset: 2px;
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  color: #9aa09a;
+  font-size: 11.5px;
+}
+.legend i {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 5px;
+}
+.swProd {
+  border-radius: 50%;
+}
+.swTest {
+  border: 1px dashed #f4f1ed;
+  border-radius: 50%;
+}
+.swBench {
+  border-radius: 1px;
+}
+
+/* Swimlane plot. */
+.scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.swim {
+  display: block;
+  width: 100%;
+  height: auto;
+  touch-action: pan-x pan-y;
+}
+.swim:focus-visible {
+  outline: 2px solid #64d8c6;
+  outline-offset: 2px;
+}
+.swim text {
+  fill: #858a84;
+  font: 10px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.bubble {
+  cursor: pointer;
+}
+.flag {
+  cursor: default;
+  outline: none;
+}
+.flag:focus-visible circle {
+  stroke: #64d8c6;
+  stroke-width: 2;
+}
+.scrollHint {
+  display: none;
+  margin: 0 0 6px;
+  color: #858a84;
+  font: 11px var(--jetbrains-mono), ui-monospace, monospace;
+  text-align: center;
+}
+
+/* Rule list. */
+.rules {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 18px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  color: #c1c8c0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.rules li {
+  display: grid;
+  grid-template-columns: 22px 44px 1fr;
+  gap: 6px;
+  align-items: start;
+  padding: 2px 4px;
+  border-radius: 6px;
+}
+.rules li.ruleOn {
+  background: #171a18;
+}
+.ruleNo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid #c1c8c0;
+  border-radius: 50%;
+  color: #f4f1ed;
+  font: 10px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.ruleDate {
+  color: #858a84;
+  font: 12px var(--jetbrains-mono), ui-monospace, monospace;
+}
+
+/* Heat table and detail panel. */
+.low {
+  display: grid;
+  grid-template-columns: 1.75fr 1fr;
+  gap: 12px;
+  margin-top: 14px;
+}
+.panel {
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid #262927;
+  border-radius: 12px;
+}
+.panel h4,
+.detail h4 {
+  margin: 0 0 8px;
+  color: #9aa09a;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+.heatScroll {
+  position: relative;
+  overflow-x: auto;
+}
+.root .heat {
+  margin: 0;
+  width: 100%;
+  min-width: 360px;
+  border-collapse: separate;
+  border-spacing: 2px;
+  font: 11.5px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.root .heat th,
+.root .heat td {
+  border: 0;
+  line-height: 1.3;
+}
+.root .heat th {
+  padding: 2px 4px;
+  color: #858a84;
+  font-weight: 500;
+  text-align: center;
+  white-space: nowrap;
+}
+.root .heat th.rowHead {
+  color: #c1c8c0;
+  text-align: left;
+}
+.root .heat td {
+  padding: 0;
+  text-align: center;
+}
+.root .heat td.zero {
+  color: #4a4f4b;
+}
+.cell {
+  width: 100%;
+  padding: 4px 0;
+  border: 0;
+  border-radius: 3px;
+  font: inherit;
+  cursor: pointer;
+}
+.cellOn {
+  outline: 1.5px solid #f4f1ed;
+}
+.note,
+.hint {
+  margin: 6px 0 0;
+  color: #9aa09a;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.hint {
+  font-size: 13px;
+}
+.detail h5 {
+  margin: 0 0 4px;
+  color: #f4f1ed;
+  font-size: 14.5px;
+  line-height: 1.4;
+}
+.detail dl {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 3px 10px;
+  margin: 6px 0 0;
+  font-size: 12.5px;
+}
+.detail dt {
+  color: #858a84;
+}
+.detail dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Floating chart tooltip. */
+.tip {
+  position: absolute;
+  z-index: 5;
+  max-width: 330px;
+  padding: 8px 10px;
+  background: #141615;
+  border: 1px solid #3a3f3c;
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  color: #d9ded6;
+  font-size: 12px;
+  line-height: 1.45;
+  pointer-events: none;
+}
+.tip[hidden] {
+  display: none;
+}
+.tip b {
+  color: #f4f1ed;
+}
+
+@media (max-width: 800px) {
+  .hero {
+    grid-template-columns: 1fr 1fr;
+  }
+  .hero > span:first-child {
+    grid-column: 1 / -1;
+  }
+  .rules,
+  .low {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .swim {
+    min-width: 720px;
+  }
+  .scrollHint {
+    display: block;
+  }
+}

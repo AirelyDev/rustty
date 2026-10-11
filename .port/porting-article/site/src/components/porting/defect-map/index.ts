@@ -1,0 +1,2 @@
+/** The defect-map widget body, loaded lazily by WidgetMount. */
+export { default } from "./Body";

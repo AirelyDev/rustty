@@ -1,0 +1,834 @@
+/* The "Translation lens: Zig ↔ Rust" widget body. Values follow the approved
+   mockup (07-translation-lens) inside the shared instrument card. */
+
+/* Widget root (positions the floating tooltip). */
+.root {
+  --mono: var(--jetbrains-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  position: relative;
+  min-width: 0;
+  color: #d9ded6;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Headline: the selected pattern's primary Rust count. */
+.headline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 18px;
+  margin: 0 0 14px;
+}
+.big {
+  color: #f4f1ed;
+  font: 700 30px/1.1 var(--mono);
+}
+.bigSub {
+  color: #9aa09a;
+  font-size: 13px;
+}
+.bigSub b {
+  color: #d9ded6;
+  font-weight: 600;
+}
+
+/* Pattern tabs. */
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.tab {
+  display: flex;
+  flex: 1 1 128px;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 128px;
+  padding: 7px 10px;
+  border: 1px solid #262927;
+  border-radius: 10px;
+  background: #121413;
+  color: #c1c8c0;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  line-height: 1.2;
+  text-align: left;
+  cursor: pointer;
+}
+.tab small {
+  color: #858a84;
+  font: 500 10px/1 var(--mono);
+}
+.tab[aria-selected="true"] {
+  border-color: #d97934;
+  background: #1a1410;
+  color: #f4f1ed;
+}
+.tab[aria-selected="true"] small {
+  color: #ffbc7a;
+}
+.root button:focus-visible,
+.pane:focus-visible,
+.rows:focus-visible {
+  outline: 2px solid #64d8c6;
+  outline-offset: 2px;
+}
+.rows:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Pattern title, explanation, stat chips and sub-excerpt toggle. */
+.pTitle {
+  margin: 2px 0 4px;
+  color: #f4f1ed;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.why {
+  max-width: 880px;
+  margin: 0 0 10px;
+  color: #9aa09a;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.chip {
+  padding: 4px 8px;
+  border: 1px solid #262927;
+  border-radius: 8px;
+  background: #0f1110;
+  color: #9aa09a;
+  font: 500 11px/1.3 var(--mono);
+}
+.chip b {
+  color: #f4f1ed;
+  font-weight: 700;
+}
+.chip[data-c="te"] b {
+  color: #64d8c6;
+}
+.chip[data-c="cu"] b {
+  color: #d97934;
+}
+.chip[data-c="gr"] b {
+  color: #98c379;
+}
+.chip[data-c="re"] b {
+  color: #e06c75;
+}
+.chip[data-c="go"] b {
+  color: #ffbc7a;
+}
+.subs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+.sub {
+  padding: 3px 10px;
+  border: 1px solid #262927;
+  border-radius: 999px;
+  background: none;
+  color: #9aa09a;
+  font: 500 11px var(--mono);
+  cursor: pointer;
+}
+.sub[aria-pressed="true"] {
+  border-color: #64d8c6;
+  color: #64d8c6;
+}
+
+/* Side-by-side code with the map gutter. */
+.code {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 64px minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid #262927;
+  border-radius: 12px;
+  background: #070808;
+}
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.pHdr {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid #262927;
+  background: #0d0f0e;
+  color: #858a84;
+  font: 500 10.5px/1.3 var(--mono);
+}
+.lang {
+  flex: none;
+  font-weight: 700;
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+.zig .lang {
+  color: #64d8c6;
+}
+.rust .lang {
+  color: #d97934;
+}
+.path {
+  overflow: hidden;
+  direction: rtl;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rows {
+  position: relative;
+  height: 440px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  font: 11.5px/17px var(--mono);
+}
+.ln {
+  display: flex;
+  min-width: max-content;
+  padding-right: 10px;
+  border-left: 2px solid transparent;
+  white-space: pre;
+  cursor: default;
+}
+.n {
+  display: inline-block;
+  flex: none;
+  width: 42px;
+  padding-right: 10px;
+  color: #4a4f4b;
+  text-align: right;
+  user-select: none;
+}
+.t {
+  color: #c1c8c0;
+}
+.gap {
+  justify-content: center;
+  background: #0c0d0d;
+  color: #4a4f4b;
+  font-size: 10px;
+}
+.cm .t {
+  color: #7f8a7e;
+}
+.ln[data-k="carried"] {
+  border-left-color: rgba(152, 195, 121, 0.55);
+}
+.ln[data-k="carried"] .t {
+  color: #9db58c;
+}
+.ln[data-k="echo"] {
+  border-left-color: rgba(100, 216, 198, 0.45);
+}
+.ln[data-k="echo"] .t {
+  color: #77aaa2;
+}
+.ln[data-k="note"] {
+  border-left-color: rgba(255, 188, 122, 0.6);
+}
+.ln[data-k="note"] .t {
+  color: #c9a27a;
+}
+.ln[data-k="only"] {
+  background: rgba(217, 121, 52, 0.045);
+}
+.zig .hl {
+  background: rgba(100, 216, 198, 0.13);
+}
+.rust .hl {
+  background: rgba(217, 121, 52, 0.17);
+}
+.hl .n {
+  color: #d9ded6;
+}
+.cursor {
+  box-shadow: inset 0 0 0 1px rgba(244, 241, 237, 0.35);
+}
+.red .n::after {
+  content: "•";
+  margin-left: 2px;
+  color: #858a84;
+}
+.unsafe {
+  color: #e06c75;
+  font-weight: 700;
+}
+.t :global(.hljs-comment) {
+  font-style: normal;
+}
+.gut {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #262927;
+  border-left: 1px solid #262927;
+  background: #0a0b0b;
+}
+.gut .pHdr {
+  justify-content: center;
+  padding: 7px 2px;
+  font-size: 9px;
+}
+.gut svg {
+  display: block;
+  width: 64px;
+  height: 440px;
+}
+.status {
+  min-height: 18px;
+  margin: 8px 2px 0;
+  color: #c1c8c0;
+  font: 11px/1.5 var(--mono);
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin: 6px 2px 0;
+  color: #858a84;
+  font-size: 11px;
+}
+.legend i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 5px;
+  border-radius: 2px;
+  vertical-align: -1px;
+}
+.note {
+  margin: 6px 2px 0;
+  color: #858a84;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* Evidence row and side panels. */
+.ev {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 16px;
+}
+.panels {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 16px;
+}
+.box {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #262927;
+  border-radius: 12px;
+  background: #0d0e0e;
+}
+.bt {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: #858a84;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 1.6px;
+  text-transform: uppercase;
+}
+.bt b {
+  color: #d9ded6;
+  font: 700 12px var(--mono);
+  letter-spacing: 0;
+  text-transform: none;
+}
+.none {
+  color: #858a84;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.small {
+  font-size: 11px;
+}
+.cnt {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 2px 8px;
+  margin-bottom: 6px;
+  font-size: 11.5px;
+}
+.lab {
+  color: #9aa09a;
+  line-height: 1.3;
+}
+.side {
+  font: 700 9px var(--mono);
+}
+.val {
+  font: 700 12px var(--mono);
+  text-align: right;
+}
+.bar {
+  grid-column: 1 / 3;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: #1a1c1b;
+}
+.bar i {
+  display: block;
+  height: 100%;
+}
+.prim .lab {
+  color: #f4f1ed;
+  font-weight: 600;
+}
+.prim .val {
+  font-size: 15px;
+}
+.split {
+  color: #858a84;
+}
+.tbl {
+  max-height: 236px;
+  overflow: auto;
+  font: 10.5px/1.35 var(--mono);
+}
+.tbl table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.tbl td {
+  padding: 4px;
+  border-bottom: 1px solid #191b1a;
+  color: #c1c8c0;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.cls {
+  display: inline-block;
+  padding: 0 4px;
+  border-radius: 4px;
+  color: #0b0c0c;
+  font-size: 9.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.fld {
+  color: #64d8c6;
+}
+.file {
+  color: #858a84;
+}
+.zt {
+  color: #858a84;
+}
+
+/* Proof box: Miri harness tables, perf chains, bit layout. */
+.h {
+  margin-bottom: 10px;
+}
+.hn {
+  color: #d9ded6;
+  font: 600 11px var(--mono);
+}
+.hn span {
+  color: #858a84;
+  font-weight: 400;
+}
+.hw {
+  margin: 2px 0 4px;
+  color: #858a84;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.grid {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 2px 1px;
+  table-layout: fixed;
+  font: 10px/1.5 var(--mono);
+}
+.grid th,
+.grid td {
+  padding: 0;
+  overflow: hidden;
+  color: #9aa09a;
+  font-weight: 400;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.grid .vc {
+  width: 34px;
+}
+.grid th + th {
+  text-align: center;
+}
+.grid .hd {
+  color: #858a84;
+}
+.grid .c,
+.grid .x {
+  border-radius: 3px;
+  font-weight: 700;
+  text-align: center;
+}
+.grid .c {
+  background: rgba(152, 195, 121, 0.16);
+  color: #98c379;
+}
+.grid .x {
+  background: rgba(224, 108, 117, 0.16);
+  color: #e06c75;
+}
+.perf {
+  margin-bottom: 9px;
+}
+.step {
+  display: grid;
+  grid-template-columns: 1fr 46px;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  margin: 2px 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #858a84;
+  font: 10px var(--mono);
+  cursor: default;
+}
+.stepTrack {
+  position: relative;
+  height: 11px;
+  border-radius: 2px;
+  background: #1a1c1b;
+}
+.stepTrack i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: 2px;
+}
+.stepVal {
+  color: #d9ded6;
+  text-align: right;
+}
+.bits {
+  display: flex;
+  height: 34px;
+  margin: 6px 0 4px;
+  overflow: hidden;
+  border: 1px solid #262927;
+  border-radius: 6px;
+}
+.bitSeg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  border-right: 1px solid #0b0c0c;
+  color: #0b0c0c;
+  font: 600 9px var(--mono);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.bitSeg[aria-pressed="true"] {
+  outline: 2px solid #f4f1ed;
+  outline-offset: -2px;
+}
+.bitAx {
+  position: relative;
+  height: 12px;
+  color: #4a4f4b;
+  font: 9px var(--mono);
+}
+.bitAx span {
+  position: absolute;
+  transform: translateX(-50%);
+}
+.bitAx span:first-child {
+  transform: none;
+}
+.bitAx span:last-child {
+  transform: translateX(-100%);
+}
+.bitInfo {
+  min-height: 32px;
+  margin-top: 4px;
+  color: #9aa09a;
+  font: 11px/1.4 var(--mono);
+}
+.bitInfo b {
+  color: #f4f1ed;
+}
+
+/* Side-panel toggles, class rows, charts and the heuristic bar. */
+.tog {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.tog button {
+  padding: 3px 7px;
+  border: 1px solid #262927;
+  border-radius: 6px;
+  background: none;
+  color: #858a84;
+  font: 500 10px var(--mono);
+  cursor: pointer;
+}
+.tog button[aria-pressed="true"] {
+  border-color: #4a4f4b;
+  background: #161817;
+  color: #f4f1ed;
+}
+.chart {
+  display: block;
+  width: 100%;
+  height: auto;
+  font-family: var(--mono);
+}
+.chart:focus:not(:focus-visible) {
+  outline: none;
+}
+.chart:focus-visible {
+  outline: 2px solid #64d8c6;
+  outline-offset: 2px;
+}
+.clsRow {
+  display: grid;
+  grid-template-columns: 110px 1fr 30px;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 2px 3px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: #9aa09a;
+  font: 10.5px var(--mono);
+  text-align: left;
+  cursor: pointer;
+}
+.clsRow:hover,
+.clsRow[aria-pressed="true"] {
+  background: #171918;
+}
+.clsRow.pat .nm {
+  color: #f4f1ed;
+  font-weight: 700;
+}
+.clsTrack {
+  position: relative;
+  height: 9px;
+  border-radius: 2px;
+  background: #151716;
+}
+.clsTrack i {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 9px;
+  border-radius: 2px;
+}
+.clsV {
+  color: #d9ded6;
+  text-align: right;
+}
+.samp {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid #262927;
+}
+.heur {
+  margin-top: 10px;
+}
+.heurBar {
+  display: flex;
+  height: 12px;
+  overflow: hidden;
+  border-radius: 3px;
+}
+.heurList {
+  margin: 4px 0 0;
+  padding: 0;
+  color: #858a84;
+  font: 10px/1.5 var(--mono);
+  list-style: none;
+}
+
+/* Insight strip and sources. */
+.ins {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+.in {
+  padding: 4px 0 4px 10px;
+  border-left: 2px solid #d97934;
+}
+.inV {
+  color: #f4f1ed;
+  font: 700 18px var(--mono);
+}
+.inD {
+  margin-top: 2px;
+  color: #9aa09a;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.foot {
+  margin-top: 14px;
+  color: #858a84;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.foot code {
+  color: #9aa09a;
+  font: 11px var(--mono);
+}
+
+/* Floating chart tooltip. */
+.tip {
+  position: absolute;
+  z-index: 5;
+  max-width: 320px;
+  padding: 7px 9px;
+  border: 1px solid #333735;
+  border-radius: 8px;
+  background: #141615;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  color: #d9ded6;
+  font: 11px/1.45 var(--mono);
+  pointer-events: none;
+}
+.tip[hidden] {
+  display: none;
+}
+.tip b {
+  color: #f4f1ed;
+}
+.tipGold {
+  display: block;
+  color: #ffbc7a;
+}
+.tipLine {
+  display: block;
+}
+
+/* Narrow: the evidence row and panels stack. */
+@media (max-width: 860px) {
+  .ev,
+  .panels {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ins {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+/* Phone: the code panes stack, the map gutter hides, the panes shrink. */
+@media (max-width: 640px) {
+  .code {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .gut {
+    display: none;
+  }
+  .zig {
+    border-bottom: 1px solid #262927;
+  }
+  .rows {
+    height: 300px;
+  }
+  .ins {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .tab {
+    flex: 1 1 44%;
+    min-width: 0;
+  }
+  .big {
+    font-size: 26px;
+  }
+}
+
+/* Perf steps sit in the shared Tooltip trigger: make its wrapper and button full-width blocks. */
+.perf > span {
+  display: block;
+}
+.perf > span > button {
+  display: block;
+  width: 100%;
+}
+
+/* The sub-excerpt toggle is a fieldset without the default chrome. */
+fieldset.subs {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+}
+
+/* Reset the site's prose table styles (margins, padding, row rules) inside the widget. */
+.root table.grid,
+.root .tbl table {
+  display: table;
+  width: 100%;
+  margin: 0;
+  overflow: visible;
+}
+.root table.grid {
+  table-layout: fixed;
+  border-collapse: separate;
+}
+.root .tbl tr,
+.root table.grid tr {
+  border-bottom: 0;
+}
+.root .tbl td {
+  padding: 4px;
+  border-bottom: 1px solid #191b1a;
+  color: #c1c8c0;
+}
+.root table.grid th,
+.root table.grid td {
+  padding: 0 2px;
+  color: #9aa09a;
+  font-weight: 400;
+  vertical-align: middle;
+}
+.root table.grid th {
+  color: #858a84;
+}
+.root table.grid td.c {
+  color: #98c379;
+  font-weight: 700;
+  text-align: center;
+}
+.root table.grid td.x {
+  color: #e06c75;
+  font-weight: 700;
+  text-align: center;
+}

@@ -1,0 +1,284 @@
+/* Outer shell: the phone contents bar sticks within it, above the page. */
+.shell {
+  --toc-bar-height: 44px;
+}
+
+/*
+ * Where the bar shows (below 1277 px), headings land below the site header
+ * and the bar when jumped to.
+ */
+@media (max-width: 1276px) {
+  .shell .article :global([id]) {
+    scroll-margin-top: calc(
+      var(--header-height) + var(--toc-bar-height) + 8px
+    );
+  }
+}
+
+/* Page shell: prose column plus sticky table of contents, centered. */
+.page {
+  --sidecar-margin: 24px;
+  --sidecar-width: 235px;
+  --prose-width: 736px;
+  display: flex;
+  justify-content: center;
+  max-width: 100%;
+  margin: 24px auto 88px auto;
+  padding: 0 24px;
+}
+
+/* Main column holding the heading and the article. */
+.main {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+  min-width: 0;
+  max-width: var(--prose-width);
+}
+
+/* Title block above the article. */
+.heading {
+  padding: 30px 0;
+  border-bottom: 1px solid var(--gray-2);
+}
+
+/* Subtitle under the title. */
+.dek {
+  margin-top: 8px;
+  color: var(--gray-5);
+}
+
+/* Byline under the subtitle: small and muted, with a calm underlined link. */
+.heading .byline {
+  margin-top: 10px;
+  color: var(--gray-5);
+  font-size: 14px;
+}
+
+.heading .byline a {
+  color: inherit;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, currentColor 48%, transparent);
+  text-underline-offset: 0.22em;
+}
+
+.heading .byline a:is(:hover, :focus-visible) {
+  color: var(--gray-8);
+  text-decoration-color: currentColor;
+}
+
+/* Article body wrapper. */
+.article {
+  min-width: 0;
+}
+
+/*
+ * Wide blocks (widgets) break out of the prose column symmetrically: the same
+ * extension on both sides, centred on the prose.
+ *
+ * Without the table of contents (801-1276 px): up to 132 px each side
+ * (1000 px wide), shrinking to keep a 16 px gutter to the viewport edge.
+ */
+.article :global(.porting-wide) {
+  width: min(1000px, 100vw - 32px);
+  margin-inline: calc((100% - min(1000px, 100vw - 32px)) / 2);
+}
+
+/*
+ * With the table of contents (from 1277 px): --breakout each side (48 px at
+ * 1277 px, growing to 96 px from 1373 px). The column reserves that space on
+ * its left and the sidecar on its right, so a card ends 24 px before the TOC,
+ * and the whole group (card extent plus TOC) is centred: the card's left
+ * margin equals the TOC's right margin.
+ */
+@media (min-width: 1277px) {
+  .page {
+    --breakout: clamp(48px, (100vw - 1277px) / 2 + 48px, 96px);
+  }
+
+  .main {
+    margin-left: var(--breakout);
+  }
+
+  .article :global(.porting-wide) {
+    width: calc(100% + 2 * var(--breakout));
+    margin-inline: calc(-1 * var(--breakout));
+  }
+}
+
+/* Phone fallback: wide blocks stay within the column. */
+@media (max-width: 800px) {
+  .article :global(.porting-wide) {
+    width: 100%;
+    margin-inline: 0;
+  }
+}
+
+/*
+ * A wide block nested in another (e.g. an InstrumentCard inside a
+ * PortingWidget section) already sits in the broken-out area: it fills its
+ * parent instead of applying the breakout margins a second time. Placed after
+ * the breakout rules so it wins at every width.
+ */
+.article :global(.porting-wide .porting-wide) {
+  width: auto;
+  margin-inline: 0;
+}
+
+/* Inline fact values: tabular numerals so figures align and do not jitter. */
+.article :global(.porting-fact) {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/*
+ * Prose links (external references): calm 1 px underline in a muted colour,
+ * offset from the text; brighter text and underline on hover and focus. Fact,
+ * source-path and commit links keep their own styles.
+ */
+.article
+  :global(
+    :is(p, li, blockquote, td, figcaption)
+      a:not(.porting-fact):not(.porting-source):not(.porting-commit)
+  ) {
+  color: var(--gray-8);
+  text-decoration-line: underline;
+  text-decoration-style: solid;
+  text-decoration-thickness: 1px;
+  /* 48%: underline vs page background 4.4:1 (non-colour cue, at least 3:1). */
+  text-decoration-color: color-mix(in srgb, var(--gray-8) 48%, transparent);
+  text-underline-offset: 0.22em;
+  transition: text-decoration-color 0.15s ease, color 0.15s ease;
+}
+
+.article
+  :global(
+    :is(p, li, blockquote, td, figcaption)
+      a:not(.porting-fact):not(.porting-source):not(.porting-commit):is(
+        :hover,
+        :focus-visible
+      )
+  ) {
+  color: var(--white);
+  text-decoration-color: currentColor;
+}
+
+.article
+  :global(
+    :is(p, li, blockquote, td, figcaption)
+      a:not(.porting-fact):not(.porting-source):not(.porting-commit):focus-visible
+  ) {
+  outline: 2px solid #d97934;
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .article :global(:is(p, li, blockquote, td, figcaption) a) {
+    transition: none;
+  }
+}
+
+/* Fact values link to their source: subtle, in the text colour, with a dotted underline. */
+.article :global(a.porting-fact) {
+  color: inherit;
+  text-decoration: underline dotted;
+  text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
+  text-underline-offset: 0.2em;
+  text-decoration-thickness: 1px;
+}
+
+.article :global(a.porting-fact:hover) {
+  text-decoration-color: currentColor;
+}
+
+.article :global(a.porting-fact:focus-visible),
+.article :global(a.porting-source:focus-visible),
+.article :global(a.porting-commit:focus-visible) {
+  outline: 2px solid #d97934;
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Long fact phrases (several words) may wrap so they never widen a phone page. */
+.article :global(.porting-fact-long) {
+  white-space: normal;
+}
+
+/* Inline code in prose (long file paths) may break anywhere on narrow screens. */
+.article :global(:not(pre) > code) {
+  overflow-wrap: anywhere;
+}
+
+/* Source paths: links whose code text keeps the inline-code look. */
+.article :global(a.porting-source code) {
+  color: inherit;
+}
+
+/* Commit and source-path links: monospace, solid 1 px underline. */
+.article :global(a.porting-commit),
+.article :global(a.porting-source) {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.22em;
+  text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
+}
+
+.article :global(a.porting-commit:hover),
+.article :global(a.porting-source:hover) {
+  text-decoration-color: currentColor;
+}
+
+/* Commit hashes: monospace links. */
+.article :global(.porting-commit) {
+  font-family: var(--jetbrains-mono), ui-monospace, monospace;
+  font-size: 0.9em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Sticky table of contents, same placement as the docs sidecar. */
+.sidecar {
+  position: sticky;
+  top: calc(var(--header-height) + var(--sidecar-margin));
+  margin-left: var(--sidecar-margin);
+  margin-right: var(--sidecar-margin);
+  width: var(--sidecar-width);
+  flex-shrink: 0;
+  --sidecar-margin-top: 84px;
+  margin-top: var(--sidecar-margin-top);
+  max-height: calc(
+    100vh - var(--header-height) - 2 * var(--sidecar-margin)
+  );
+  overflow-y: auto;
+}
+
+/*
+ * The sidecar sits --breakout + 24 px from the prose, so wide cards end 24 px
+ * before it; no right margin, so the group is centred (see .porting-wide).
+ */
+@media (min-width: 1277px) {
+  .sidecar {
+    margin-left: calc(var(--sidecar-margin) + var(--breakout));
+    margin-right: 0;
+  }
+}
+
+/* Hide the table of contents when the viewport is too narrow, and in print. */
+@media (max-width: 1276px) {
+  .sidecar {
+    display: none;
+  }
+}
+
+@media print {
+  .sidecar {
+    display: none;
+  }
+}
+
+/* Phone: tighter gutter. */
+@media (max-width: 560px) {
+  .page {
+    padding: 0 16px;
+  }
+}
