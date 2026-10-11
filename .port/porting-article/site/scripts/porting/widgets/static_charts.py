@@ -46,7 +46,7 @@ def _meta(slug: str, sources: list[str], as_of: str = RUSTTY_HEAD) -> dict:
 # names a figure as a {fact_id} placeholder, which the card renders as that fact's linked display.
 STATS_TILES = [
     dict(key="days", value="days_total", label="from the first commit to this snapshot",
-         note="Agents worked on {commit_days} of them. Without usage limits, an estimated "
+         note="Agents committed on {commit_days} of them. Without usage limits, an estimated "
               "{days_no_limits_range} days."),
     dict(key="commits", value="commits_head", label="commits on the main line",
          extra="commits_nonmerge_head", extraLabel="excluding merges"),
@@ -546,7 +546,7 @@ PLATFORM_ROWS = [
          builds=("yes", "Native, with GTK", "Built natively on FreeBSD 15.1 (arm64, in a VM) with GTK 4.20, excluding the crash reporter library, which Ghostty also builds for macOS only. Lints show no FreeBSD-specific warning; the executable is not position-independent, as Ghostty's default (10-11)."),
          runs=("yes", "GTK app in a VM", "The app reports its GTK runtime, OpenGL renderer and kqueue event loop. A GTK window with a live shell ran under X11 and Wayland: typing, colours, CJK text, emoji, resizing, a new tab, and exit closing its tab (10-11). Before a fix in that run it crashed at its first window."),
          hand=("yes", "Author, X11 and Wayland", "The author used the app by hand on the VM on 10-11, as the committed run record states; the same checks were also driven by tools. Under Wayland a virtual keyboard garbles shifted keys exactly as in Ghostty built at the reference commit on that VM."),
-         lanes=("yes", "Workspace and live GTK tests", "One native run, not a recurring lane. Workspace tests: 6,665 passed, 23 failed on the first run; every failure was fixed or explained and its test binary re-run green. GTK runtime tests: 163 passed, 0 failed. Live GTK window tests: 15 of 18; the 3 DMA-BUF tests need a GPU driver the VM lacks. No sanitizers (Rust supports them on FreeBSD only for x86_64) and no amd64 run."),
+         lanes=("partial", "Partly: one run, no sanitizers", "One native run, not a recurring lane. Workspace tests: 6,665 passed, 23 failed on the first run; every failure was fixed or explained and its test binary re-run green. GTK runtime tests: 163 passed, 0 failed. Live GTK window tests: 15 of 18; the 3 DMA-BUF tests need a GPU driver the VM lacks. No sanitizers (Rust supports them on FreeBSD only for x86_64) and no amd64 run."),
          last="2026-10-11", lastRef="110adad44",
          claim="Built, tested and run natively on FreeBSD in an arm64 VM: the GTK app runs under X11 and Wayland, tested by hand and by live-window tests; three DMA-BUF tests need a GPU driver the VM lacks, and it was never run on amd64."),
     # The WebAssembly row is as of Rustty 3a59e7edc (after the article's snapshot), from
@@ -582,10 +582,11 @@ def build_platform_table(_research: Path, _mockbuild: Path) -> dict:
             row[col] = dict(status=status, text=_clean(slug, short), detail=_clean(slug, detail))
         rows.append(row)
     return {
-        "_meta": _meta(slug, ["research/r2-platforms.md", "data/r2-platforms-matrix.csv",
-                              "research/refresh-2026-10-10.md (lane cells refreshed)",
+        # The matrices are committed on the research branch at f153b7014 (the source pill links -11b).
+        "_meta": _meta(slug, ["data/r2-platforms-matrix-2026-10-11b.csv (the current matrix; FreeBSD row as of Rustty 110adad44)",
                               "data/r2-platforms-matrix-2026-10-11.csv (WebAssembly row, as of Rustty 3a59e7edc)",
-                              "data/r2-platforms-matrix-2026-10-11b.csv (FreeBSD row, as of Rustty 110adad44)"],
+                              "research/r2-platforms.md", "data/r2-platforms-matrix.csv",
+                              "research/refresh-2026-10-10.md (lane cells refreshed)"],
                        SNAPSHOT),
         "columns": [dict(key="builds", label="Builds"), dict(key="runs", label="Runs"),
                     dict(key="hand", label="Tested by hand"), dict(key="lanes", label="Test and sanitizer lanes")],

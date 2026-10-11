@@ -56,6 +56,8 @@ export type SessionTileValues = {
   longestPrompts: Session | null;
   /** The day with the most sessions open (a prompt that is not a slash command), the earliest on a tie. */
   busiestDay: { day: number; open: number } | null;
+  /** Later days with as many sessions open as the busiest day (a tie), in order. */
+  busiestTies: number[];
   medianPrompts: number | null;
 };
 
@@ -198,6 +200,13 @@ export function sessionTiles(
       busiestDay = { day, open: set.size };
     }
   }
+  const top = busiestDay as { day: number; open: number } | null;
+  const busiestTies = top
+    ? [...open]
+        .filter(([day, set]) => set.size === top.open && day !== top.day)
+        .map(([day]) => day)
+        .sort((a, b) => a - b)
+    : [];
   let longestPrompts: Session | null = null;
   for (const s of sessions) {
     if (!longestPrompts || s.prompts > longestPrompts.prompts)
@@ -213,6 +222,7 @@ export function sessionTiles(
     })),
     longestPrompts,
     busiestDay,
+    busiestTies,
     medianPrompts: median(sessions.map((s) => s.prompts)),
   };
 }

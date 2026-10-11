@@ -235,11 +235,18 @@ export function runSessionModelTests(sm: typeof SessionModel, m: typeof Model) {
     day: 5,
     open: 1,
   });
-  // Ties go to the earliest day.
-  assert.deepEqual(
-    sm.sessionTiles(sessions.slice(3), ticks, AREAS).busiestDay,
-    { day: 2, open: 1 },
-  );
+  // Ties go to the earliest day; the later tied days are listed.
+  {
+    const tie = sm.sessionTiles(sessions.slice(3), ticks, AREAS);
+    assert.deepEqual(tie.busiestDay, { day: 2, open: 1 });
+    assert.ok(tie.busiestTies.length > 0);
+    assert.deepEqual(
+      tie.busiestTies,
+      [...tie.busiestTies].sort((a, b) => a - b),
+    );
+    assert.ok(!tie.busiestTies.includes(2));
+  }
+  assert.deepEqual(all.busiestTies, []);
 
   // Empty input: zeros and nulls, no crash.
   const none = sm.sessionTiles([], ticks, AREAS);
@@ -254,6 +261,7 @@ export function runSessionModelTests(sm: typeof SessionModel, m: typeof Model) {
     ],
     longestPrompts: null,
     busiestDay: null,
+    busiestTies: [],
     medianPrompts: null,
   });
   assert.equal(sm.sessionTiles([]).busiestDay, null);

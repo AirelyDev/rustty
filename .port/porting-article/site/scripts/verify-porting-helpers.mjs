@@ -788,7 +788,7 @@ assert.equal(scTiles.find((t) => t.key === "cost").extra.label, "API-equivalent 
 assert.throws(() => sc.resolveTiles([{ key: "x", value: "nope", label: "x" }], scFacts));
 // tile notes: {fact_id} placeholders resolve to facts between plain text; an unknown id throws
 const scDays = scTiles.find((t) => t.key === "days").note;
-assert.equal(scDays[0], "Agents worked on ");
+assert.equal(scDays[0], "Agents committed on ");
 assert.equal(scDays[1].id, "commit_days");
 assert.equal(scDays[3].display, "41–51");
 assert.deepEqual(sc.noteParts("plain", () => assert.fail()), ["plain"]);
@@ -919,13 +919,14 @@ assert.deepEqual(
     const t = epData.totals;
     const logRows = JSON.parse(readFileSync("public/porting/every-prompt-log.json", "utf8")).rows;
     const linked = logRows.filter((r) => r.commits.length > 0).length;
+    const websiteCodex = logRows.filter((r) => r.website && r.tool === "codex").length;
     const days = ep.dayCount(epData);
     const want = {
       caption: [
         `except ${t.redactions} redactions`,
         `for ${t.pastedLost} prompts it no longer exists`,
-        `The ${t.articleWork} prompts about this article are included`,
-        `the ${t.website} prompts typed in the website folders`,
+        `The ${t.articleWork} prompts of the October sessions about this article are included`,
+        `the ${t.website} prompts typed in the website folders (${websiteCodex} of them in the Codex app)`,
         "(typed prompt, slash command or shell escape)",
         `the ${t.sessionsCommandOnly} sessions that hold only Claude Code commands or shell escapes`,
         `the ${t.commandsAndShell} Claude Code commands and shell escapes are one click away`,
@@ -933,13 +934,13 @@ assert.deepEqual(
         `The ${t.foundingPrompts} founding prompts`,
       ],
       summary: [
-        `${fmtInt(t.prompts)} human prompts (${t.articleWork} of them about this article)`,
-        `in ${days} days`,
+        `${fmtInt(t.prompts)} human prompts to the port and its website (${t.articleWork} of them about this article)`,
+        `over ${days} days`,
         `${fmtInt(t.bySource["claude-mac"])} in Claude Code on the Mac`,
         `${fmtInt(t.bySource["claude-vm"])} in Claude Code on the Linux VM`,
         `${fmtInt(t.bySource.codex)} in the Codex app`,
         `They came in ${fmtInt(t.sessions)} sessions, ${t.sessionsCommandOnly} of them only Claude Code commands or shell escapes`,
-        `on the busiest day, ${t.busiestParallelDay.day}, ${t.busiestParallelDay.open} sessions had an instruction or decision`,
+        `on the busiest days, ${[t.busiestParallelDay.day, ...t.busiestParallelDay.tied].join(" and ")}, ${t.busiestParallelDay.open} sessions each had an instruction or decision`,
         `the longest session held ${t.longestSessionPrompts.prompts} prompts over ${t.longestSessionPrompts.spannedDays} days`,
         `${t.medianChars} characters long (all prompts)`,
         `${t.decisions} prompts only answer`,
@@ -1024,6 +1025,10 @@ assert.deepEqual(
   assert.deepEqual(
     { day: ep.shortDate(ep.dayDate(epData.window[0], st.busiestDay.day)), open: st.busiestDay.open },
     { day: ep.shortDate(new Date(`${et.busiestParallelDay.day}T00:00:00Z`)), open: et.busiestParallelDay.open },
+  );
+  assert.deepEqual(
+    st.busiestTies.map((d) => ep.shortDate(ep.dayDate(epData.window[0], d))),
+    (et.busiestParallelDay.tied ?? []).map((d) => ep.shortDate(new Date(`${d}T00:00:00Z`))),
   );
   assert.deepEqual(
     { key: st.longestPrompts.key, prompts: st.longestPrompts.prompts, spannedDays: st.longestPrompts.spannedDays },

@@ -103,21 +103,30 @@ export default function SessionTiles({
         <span>
           {busy && busyDate ? (
             <>
-              sessions with an instruction or decision on the busiest day,{" "}
-              {WEEKDAYS[busyDate.getUTCDay()]} {shortDate(busyDate)}{" "}
+              sessions with an instruction or decision on the busiest day
+              {v.busiestTies.length ? "s (a tie)" : ""},{" "}
+              {[busy.day, ...v.busiestTies].map((day, k, all) => {
+                const d = dayDate(start, day);
+                return (
+                  <span key={day}>
+                    {k > 0 ? (k === all.length - 1 ? " and " : ", ") : ""}
+                    {WEEKDAYS[d.getUTCDay()]} {shortDate(d)}{" "}
+                    <button
+                      type="button"
+                      className={s.linkBtn}
+                      onClick={() => onDay(day)}
+                    >
+                      {all.length > 1 ? "show it" : "show that day"}
+                    </button>
+                  </span>
+                );
+              })}{" "}
               <Tooltip
                 id="ep-sessions-rule"
                 content={data.rules.sessions ?? ""}
               >
                 <span className={s.ruleMark}>rule</span>
-              </Tooltip>{" "}
-              <button
-                type="button"
-                className={s.linkBtn}
-                onClick={() => onDay(busy.day)}
-              >
-                show that day
-              </button>
+              </Tooltip>
             </>
           ) : (
             "no session at work on these days"

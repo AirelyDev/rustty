@@ -1,7 +1,7 @@
 """Count the author-approved redacted values in a git history, without printing them.
 
 Reads the "redact" rows of the untracked approved-redactions CSVs (the only files that hold the
-values; every extract's review, 2026-10-10, 2026-10-11, 2026-10-11d and 2026-10-11e by default) and, for the given revisions
+values; every extract's review, 2026-10-10, 2026-10-11 and 2026-10-11b to 2026-10-11e by default) and, for the given revisions
 of a repository, reports per CSV file and line number:
 - hits: whole-word occurrences in `git log -p` over the revisions (patches and commit messages;
   JSON files are scanned decoded, so a value right after an escape such as \\n still counts),
@@ -33,7 +33,8 @@ from pathlib import Path
 # APPROVED are the default approved-redactions CSVs (untracked research data; hold the values), one
 # per extract; a value approved in either is scanned.
 _DATA = Path.home() / "projects/rustty/.port/journey-article/research/data"
-APPROVED = [_DATA / f"prompts-redactions-approved-{tag}.csv" for tag in ("2026-10-10", "2026-10-11", "2026-10-11d", "2026-10-11e")]
+REVIEW_TAGS = ("2026-10-10", "2026-10-11", "2026-10-11b", "2026-10-11c", "2026-10-11d", "2026-10-11e")
+APPROVED = [_DATA / f"prompts-redactions-approved-{tag}.csv" for tag in REVIEW_TAGS]
 # MARK starts each commit in the log stream so hits can be counted per commit.
 MARK = "\x1ecommit "
 # DATASET_GLOBS are the prompt-log dataset files, the only places a person-reason value is counted.

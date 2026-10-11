@@ -1618,8 +1618,12 @@ class PlatformTableDataTest(StaticChartsBase):
         self.assertNotIn("No full workspace test run", rows["windows"]["lanes"]["detail"])
         bsd = rows["freebsd"]
         self.assertEqual(bsd["lastRef"], "110adad44")
-        for col in ("builds", "runs", "hand", "lanes"):
+        for col in ("builds", "runs", "hand"):
             self.assertEqual(bsd[col]["status"], "yes", col)  # committed run record at 110adad44
+        # One native run and no sanitizers: the lanes cell is partial and says so.
+        self.assertEqual(bsd["lanes"]["status"], "partial")
+        self.assertIn("one run, no sanitizers", bsd["lanes"]["text"])
+        self.assertIn("No sanitizers", bsd["lanes"]["detail"])
         self.assertIn("6,665 passed, 23 failed", bsd["lanes"]["detail"])
         self.assertIn("15 of 18", bsd["lanes"]["detail"])
         self.assertIn("DMA-BUF", bsd["claim"])  # the three environment-blocked tests stay in the claim
@@ -2139,7 +2143,11 @@ class EveryPromptTest(unittest.TestCase):
         data, _ = self.build(extra_raw=extra)
         # s1 spans 1 July to 1 August, s9 is active on 1 and 6 August: a /resume does not open s1 on 1 August,
         # and no day has two sessions with a typed prompt.
-        self.assertEqual(data["totals"]["busiestParallelDay"], {"day": "2026-07-01", "open": 1})
+        busy = data["totals"]["busiestParallelDay"]
+        self.assertEqual((busy["day"], busy["open"]), ("2026-07-01", 1))
+        self.assertIn("2026-08-06", busy["tied"])  # every other day with one session ties, in order
+        self.assertEqual(busy["tied"], sorted(busy["tied"]))
+        self.assertNotIn("2026-07-01", busy["tied"])
         f = data["sessionFields"]
         by = {x[0]: session_row(data, x) for x in data["sessions"]}
         self.assertEqual(by["claude-mac-s1"]["spannedDays"], 32)
@@ -2150,7 +2158,7 @@ class EveryPromptTest(unittest.TestCase):
         self.assertIsInstance(t["medianPromptsPerSession"], int)
         extra.append(r("claude-mac-20260801T190000Z-0", "2026-08-01T19:00:00Z", "s1", "typed this time"))
         data, _ = self.build(extra_raw=extra)
-        self.assertEqual(data["totals"]["busiestParallelDay"], {"day": "2026-08-01", "open": 2})
+        self.assertEqual(data["totals"]["busiestParallelDay"], {"day": "2026-08-01", "open": 2, "tied": []})
 
     def test_excluded_session_message(self):
         with self.assertRaises(SystemExit) as cm:

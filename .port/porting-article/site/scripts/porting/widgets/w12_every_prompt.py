@@ -79,10 +79,13 @@ REDACTION_REVIEWS = [f"prompts-redactions-approved-{PREV_TAG}.csv",
                      f"prompts-redactions-approved-{FOUNDING_TAG}.csv",
                      "prompts-redactions-approved-2026-10-11d.csv", APPROVED]
 GLOSSARY_EXTRA = f"prompts-glossary-extra-{PREV_TAG}.tsv"
-OVERRIDES = f"prompts-article-overrides-{DATE_TAG}.csv"
+# OVERRIDES: the 2026-10-11f overrides add the author's rule that the 7 October site rebrand session is
+# website work (the extract is still 2026-10-11e).
+OVERRIDES = "prompts-article-overrides-2026-10-11f.csv"
 # COUNTS is the post-override counts file committed next to the redacted log on the research
 # branch (one value per line, so facts can link a line); `counts()` makes its content.
-COUNTS = f"prompts-counts-{DATE_TAG}.json"
+# It carries the 2026-10-11f tag (the extract is 2026-10-11e; the overrides changed after it).
+COUNTS = "prompts-counts-2026-10-11f.json"
 GLOSSARY = "r2-glossary-ids.csv"
 DAY_HOUR = f"r2-human-story-day-hour-commits-prompts-{PREV_TAG}.csv"
 
@@ -93,8 +96,8 @@ LOG_URL = "/porting/every-prompt-log.json"
 
 # SOURCES_HREF is the source link of the section's data: the redacted log as committed on the
 # research branch (byte-identical to LOG_PATH), next to the counts-only manifest.
-SOURCES_HREF = ("https://github.com/AirelyDev/rustty/blob/064f0f66ecb10b451f9e99d48faca34fbc6afdb5/"
-                ".port/porting-article/research/data/prompts-redacted-2026-10-11e.json")
+SOURCES_HREF = ("https://github.com/AirelyDev/rustty/blob/f153b70146edeaf792db0b65469dedbc792e9816/"
+                ".port/porting-article/research/data/prompts-redacted-2026-10-11f.json")
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
 # WINDOW is in Pacific days: the founding session started on the evening of 20 June Pacific
@@ -814,6 +817,8 @@ def _session_totals(sessions: list, start: date) -> dict:
         for d in x["_activeDays"]:
             open_per_day[d] = open_per_day.get(d, 0) + 1
     busiest = min(open_per_day, key=lambda d: (-open_per_day[d], d)) if open_per_day else 0
+    # Days tied with the busiest one (same number of sessions), in order; the earliest is `busiest`.
+    tied = sorted(d for d, n in open_per_day.items() if n == open_per_day.get(busiest) and d != busiest)
     most = max(sessions, key=lambda x: (x["prompts"], -x["firstDay"])) if sessions else None
     median = statistics.median(x["prompts"] for x in sessions) if sessions else 0
     return {
@@ -822,7 +827,8 @@ def _session_totals(sessions: list, start: date) -> dict:
         "foundingSessions": sum(1 for x in sessions if x["founding"]),
         "sessionsByArea": {a: sum(1 for x in sessions if x["area"] == a) for a in AREAS},
         "busiestParallelDay": {"day": (start + timedelta(days=busiest)).isoformat(),
-                               "open": open_per_day.get(busiest, 0)},
+                               "open": open_per_day.get(busiest, 0),
+                               "tied": [(start + timedelta(days=d)).isoformat() for d in tied]},
         "longestSessionPrompts": {"key": most["key"] if most else "", "prompts": most["prompts"] if most else 0,
                                   "spannedDays": most["spannedDays"] if most else 0},
         "medianPromptsPerSession": int(median) if median == int(median) else median,
@@ -874,6 +880,9 @@ def counts(data: dict, log: dict, manifest: dict) -> dict:
         "before_cutoff_codex": sum(1 for r in early if r["tool"] == "codex"),
         "before_cutoff_claude_website": sum(1 for r in early if r["tool"] == "claude" and r["website"]),
         "website_prompts": t["website"],
+        "website_prompts_in_website_sessions": sum(
+            1 for r in log["rows"] if r["website"] and log["sessions"][r["session"]]["area"] == "website"),
+        "website_prompts_codex": sum(1 for r in log["rows"] if r["website"] and r["tool"] == "codex"),
         "after_cutoff_prompts": len(late),
         "after_cutoff_article_work": sum(1 for r in late if r["articleWork"]),
         "after_cutoff_port_work": sum(1 for r in late if not r["articleWork"]),
@@ -891,6 +900,7 @@ def counts(data: dict, log: dict, manifest: dict) -> dict:
         "sessions_command_only": t["sessionsCommandOnly"],
         "sessions_busiest_parallel_day": t["busiestParallelDay"]["day"],
         "sessions_busiest_parallel_open": t["busiestParallelDay"]["open"],
+        "sessions_busiest_parallel_tied": ", ".join(t["busiestParallelDay"]["tied"]),
         "sessions_longest_prompts": t["longestSessionPrompts"]["prompts"],
         "sessions_longest_spanned_days": t["longestSessionPrompts"]["spannedDays"],
         "sessions_median_prompts": t["medianPromptsPerSession"],
