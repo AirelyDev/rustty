@@ -684,9 +684,19 @@ impl Application {
             AsyncBackend::Epoll => rustty_xev::Backend::Epoll,
             AsyncBackend::IoUring => rustty_xev::Backend::IoUring,
         };
+        // `#[cfg]` is the image of `comptime xev.dynamic`, as in `lib.rs`'s
+        // `detect` call: only Linux has the Dynamic layer. On FreeBSD (kqueue
+        // only) `xev.dynamic` is false and the reference's `prefer` call is
+        // comptime-elided, so the result is `false` (N555).
+        #[cfg(target_os = "linux")]
         let result = if rustty_xev::DYNAMIC {
             rustty_xev::prefer(backend)
         } else {
+            false
+        };
+        #[cfg(not(target_os = "linux"))]
+        let result = {
+            let _ = backend;
             false
         };
 

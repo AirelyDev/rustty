@@ -313,6 +313,14 @@ fn main() {
         return;
     }
 
+    // N557: keep the bundled C libraries' symbols out of the dynamic symbol
+    // table of every binary this crate links (its GTK tests). Otherwise the
+    // system Pango, cairo and FreeType that GTK loads bind to the bundled
+    // HarfBuzz/FreeType/fontconfig, whose ABI is not theirs (a SIGSEGV in
+    // `hb_ot_metrics_get_position` on FreeBSD 15.1). `crates/rustty/build.rs`
+    // does the same for the executable.
+    println!("cargo:rustc-link-arg=-Wl,--exclude-libs,ALL");
+
     let manifest_dir =
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));

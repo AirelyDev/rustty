@@ -181,3 +181,6 @@ test/cases/**/*.actual.png
 
 # rustty-xev wasi_file test fixture (left behind when the test aborts under wasmtime)
 wasi-test-file.txt
+
+# FreeBSD core dumps (kern.corefile default %N.core in the working dir), e.g. from deliberate-abort tests
+*.core

@@ -11768,3 +11768,61 @@ pin `246f70287`. UD380 came out of the same work.
   (NC1, NC2), and Ghostty's uncorrected SGR table must fail the manifest arm (NC3, 24 wrong tags). Regression check:
   restoring the old Rustty `wasm-sgr` page turns the gate RED (33 problems). Lane verdict: PASS
   (`bash .port/tools/ci.sh --webgl`).
+
+## N553–N564 — the first native FreeBSD run (freebsd-green, 2026-10-11)
+
+V23 run natively: FreeBSD 15.1-RELEASE-p4 arm64 in UTM (QEMU), Rust 1.98.1 from pkg, GTK 4.20.4. Ghostty was also
+built at the pin on the same VM (Zig 0.16.0 from pkg, `zig build`), as the behaviour oracle. Each finding was
+first classified as port error, reference defect, or environment; only the first two are listed here, the
+environment notes are in V23.
+
+- **N553 (FIXED): the thread pool's FreeBSD futex wake was not clamped, so "wake all" woke one waiter and
+  shutdown deadlocked.** `thread_pool::tests::multi_worker_quiesce_then_join_50x` aborted on its 60 s watchdog.
+  The FreeBSD `futex_wake` passed `u32::MAX` to `_umtx_op(UMTX_OP_WAKE_PRIVATE)` with a comment that the count
+  slot is a `c_ulong`, following the old `std/Thread/Futex.zig` `FreebsdImpl`. The kernel narrows it to `int`:
+  a C probe woke 1 of 4 waiters with `0xffffffff` and 4 of 4 with `0x7fffffff`. The pin's toolchain clamps
+  (`std/Io/Threaded.zig:1158-1165`, `@min(max_waiters, maxInt(c_int))`), so the fix is fidelity, not a
+  deviation. After: `rustty-xev` 48 passed, 0 failed.
+- **N554 (FIXED): `random_secure` had no FreeBSD arm and returned `EntropyUnavailable`.** Its comment said
+  arc4random_buf is used "where libc provides it (all the BSDs and Darwin)", but the cfg named macOS/iOS only.
+  FreeBSD now takes that arm, as the reference's `link_libc and arc4random_buf != void` probe does.
+- **N555 (FIXED): the GTK apprt did not compile for FreeBSD.** `gdk::DmabufTextureBuilder` is Linux-only in
+  gtk4-rs (GTK exports the C API on FreeBSD; `render_surface.zig:321` calls it on every platform): a local
+  wrapper over the identical `gdk4-sys` calls stands in off Linux. `rustty_xev::DYNAMIC`/`prefer` exist only on
+  Linux: the call is `#[cfg(target_os = "linux")]`, the image of `comptime xev.dynamic`, as `lib.rs`'s `detect`
+  already was. The live-test helper's `gdk::DmabufTexture` check is by GType name.
+- **N556 (FIXED): the FreeBSD executable was PIE.** FreeBSD's clang driver ignores `-no-pie` ("argument unused
+  during compilation"); `build.rs` now passes `-Wl,--no-pie` there. `file` reports `executable` (ET_EXEC), as
+  the reference's default (`Config.zig` `pie = false`).
+- **N557 (FIXED): the GUI crashed at its first window (SIGSEGV in `hb_ot_metrics_get_position`).** The executable
+  exported the 93 bundled-HarfBuzz functions the Rust code calls (and 42 FreeType, 28 fontconfig), so the
+  system Pango that GTK loads bound those names to the bundled 11.0.0 and the rest to the system 14.2.1, mixing
+  two copies (`this=0x1`). Ghostty bundles the same 11.0.0 but exports its whole API (603 symbols), so Pango
+  uses its copy consistently and does not crash (checked with the pin build on the VM). Fix: `--exclude-libs,ALL`
+  for the `rustty` package and `rustty-apprt`'s tests on Linux and FreeBSD, so each side keeps its own copy (0
+  exported). Latent on Linux (Fedora's libraries happened to be compatible). Re-validated on rvm (Fedora 44
+  aarch64, pinned 1.93.1): 0 exported, still ET_EXEC; `rustty-apprt` gtk suite 163 passed, 0 failed; live
+  `first_light`, `window_live`, `input_focus` and both DMA-BUF KATs under `RUSTTY_REQUIRE_DMABUF=1` pass;
+  clippy `-D warnings` clean for the changed crates (`gtk` and `gtk,wayland,x11`). That clippy run caught
+  the N555 wrapper placed after `render_surface.rs`'s test module (`items_after_test_module`); moved.
+- **N558 (FIXED, test): `walk_finds_the_share_tree_above_the_executable` (port-added) built a `share/` tree;
+  the walk looks for `local/share` on FreeBSD (`resourcesdir.zig:103`).**
+- **N559 (FIXED): the CLI's errno-name table had no FreeBSD arm, so error messages printed bare numbers** (3
+  `edit_config` tests). It now has `rustty-termio`'s FreeBSD table, which matches Zig 0.16's `std.posix.E` for
+  FreeBSD entry for entry (98).
+- **N560 (FIXED, test): `i18n_translate` ran on FreeBSD,** where the reference's i18n default is off (glibc
+  only, `Config.zig:263-271`, as the test's own comment said). Gated to macOS/iOS and glibc Linux/FreeBSD.
+- **N561 (FIXED): every kitty file and temporary-file image load failed on FreeBSD (`InvalidData`).**
+  `realpath_of_handle` had macOS, Linux and Windows arms and returned `Unsupported` elsewhere. FreeBSD now uses
+  `fcntl(F_KINFO)`, as Zig 0.16's `File.realPath` does (`Io/Threaded.zig:6872-6896`). 12 unit tests and
+  `kitty_temp_dir_security` pass.
+- **N562 (FIXED, test; on main, not FreeBSD-specific): `strip_defaults::release_test_lanes_run_unstripped` failed
+  on every host since `e0fb9a6e8`.** The first `run_watchdogged cargo test --release` in `check_release_lane.sh`
+  is now inside `run_exclusive`, defined before the export. The lane is right (the function is called after the
+  export); the test now matches the main lane's exact steps and the `run_exclusive` call site.
+- **N563 (FIXED, test): the read-thread hang-up test's socket stand-in gives no `POLLHUP` on FreeBSD after
+  `shutdown(SHUT_RDWR)`** (only `POLLIN`, even with the reader's own `SHUT_WR`; measured). A real FreeBSD pty
+  reports `POLLIN | POLLHUP` when its slave closes, so the product path is fine. On FreeBSD the stand-in closes
+  the peer, with the pair close-on-exec. 5 of 5 runs pass.
+- **N564 (FIXED, test): `gen_terminfo_produces_compiled_entry` looked in `share/terminfo`;** the reference and
+  the port write `share/site-terminfo` on FreeBSD (`GhosttyResources.zig:33-74`).

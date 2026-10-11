@@ -3408,6 +3408,23 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    drop `RESET_UNDERLINE: 8` from `SGR_ATTR_TAGS` and renumber the rest to match `sgr.h`, or build the table from `typeLayout.types.GhosttySgrAttributeTag.values` as `wasm-vt` already does for `GhosttyFormatterFormat`.
 - upstream status: not reported
 
+### UD381 — the pty's tty name is missing on FreeBSD, which the reference's own test expects
+
+- id:              UD381 (freebsd-green, 2026-10-11)
+- kind:            non-crash (breaks evident intent; R13)
+- upstream project: ghostty
+- severity:        low (the GTK app does not read the tty name; the reference's FreeBSD test fails)
+- reference:       at 246f70287, `src/pty.zig` `getProcessInfo(.tty_name)` switches on `.macos` (`TIOCPTYGNAME`) and `.linux` (`ptsname_r`), `else => return null`; its test (`pty.zig:513-514`) asserts `.freebsd => startsWith(tty_name.?, "/dev/")`
+- defect:          on FreeBSD the accessor returns null, so the reference's own test fails at the `.?` unwrap; the test is the statement of intent (FreeBSD reports its `/dev/pts/N` name), and FreeBSD's libc has `ptsname_r`.
+- ReleaseSafe:     the reference test panics on FreeBSD; the app has no other reader of the name on FreeBSD (only the embedded C API's `ghostty_surface_tty_name`, macOS).
+- ReleaseFast:     the same (null name).
+- reachability:    none in the shipped GTK app; the reference test suite on FreeBSD.
+- port handling:   `crates/rustty-os/src/pty.rs` `getTtyName`: FreeBSD takes the linux arm's `ptsname_r` (PORT NOTE).
+- parity row(s):   none; found by the first native FreeBSD run (V23).
+- test:            `pty::tests::pty_open_size_and_name` passes on FreeBSD 15.1 (failed before the arm); unchanged on macOS/Linux.
+- proposed fix:    add `.freebsd` to the `.linux` arm of `getProcessInfo(.tty_name)` (`ptsname_r` exists on FreeBSD).
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

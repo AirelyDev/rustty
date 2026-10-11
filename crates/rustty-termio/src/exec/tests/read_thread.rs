@@ -46,9 +46,20 @@ fn gather_stage_reads_output_that_arrives_with_the_hangup() {
     // write end is not enough in this binary, where other tests fork
     // children that can hold a copy of it for a moment, and then the poll
     // can see the data before the hangup (measured: an extra outer poll).
+    //
+    // FreeBSD (N563) reports `POLLHUP` on a Unix stream socket only once the
+    // peer is closed: after a peer `shutdown(SHUT_RDWR)` it reports `POLLIN`
+    // alone, even with the reader's own `SHUT_WR` (measured on 15.1; a real
+    // pty reports `POLLIN | POLLHUP` when its slave closes, as on Linux and
+    // macOS). There the hangup closes the peer instead, and the pair is
+    // close-on-exec so a forked child drops its copy when it execs.
     let mut fds = [0 as libc::c_int; 2];
+    #[cfg(target_os = "freebsd")]
+    let sock_type = libc::SOCK_STREAM | libc::SOCK_CLOEXEC;
+    #[cfg(not(target_os = "freebsd"))]
+    let sock_type = libc::SOCK_STREAM;
     assert_eq!(
-        unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) },
+        unsafe { libc::socketpair(libc::AF_UNIX, sock_type, 0, fds.as_mut_ptr()) },
         0
     );
     let (data_r, data_w) = (fds[0], fds[1]);
@@ -83,7 +94,10 @@ fn gather_stage_reads_output_that_arrives_with_the_hangup() {
                     // (a peer's SHUT_WR alone gives `POLLIN`, and read then
                     // returns 0 forever, so the gather stage never ends).
                     // macOS reports `POLLIN | POLLHUP` for either.
+                    #[cfg(not(target_os = "freebsd"))]
                     assert_eq!(unsafe { libc::shutdown(data_w, libc::SHUT_RDWR) }, 0);
+                    #[cfg(target_os = "freebsd")]
+                    assert_eq!(unsafe { libc::close(data_w) }, 0);
                 }
             }),
         ));
@@ -126,6 +140,7 @@ fn gather_stage_reads_output_that_arrives_with_the_hangup() {
     }
     unsafe {
         libc::close(data_r);
+        #[cfg(not(target_os = "freebsd"))]
         libc::close(data_w);
         libc::close(quit_r);
         libc::close(quit_w);

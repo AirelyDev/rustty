@@ -583,15 +583,18 @@ mod tests {
         // `identity-oracle` — see the module R2 identity note).
         let primary_name = rustty_terminfo::entry::rustty().names[0].clone();
         let primary_name = String::from_utf8(primary_name).unwrap();
+        // The directory `gen_terminfo` writes for the host: `site-terminfo` on
+        // FreeBSD (N564: this hard-coded `terminfo`).
+        let tinfo = share.join(terminfo_dir_name(std::env::consts::OS));
         assert!(
-            compiled_entry_exists(&share.join("terminfo"), &primary_name),
+            compiled_entry_exists(&tinfo, &primary_name),
             "no compiled {primary_name} entry under {}",
-            share.join("terminfo").display()
+            tinfo.display()
         );
         // Terminfo SOURCE + termcap emitted alongside the compiled DB (P1.3),
         // named after `crate::APP` (Task 14).
-        let src = share.join(format!("terminfo/{}.terminfo", crate::APP));
-        let cap = share.join(format!("terminfo/{}.termcap", crate::APP));
+        let src = tinfo.join(format!("{}.terminfo", crate::APP));
+        let cap = tinfo.join(format!("{}.termcap", crate::APP));
         assert!(
             src.is_file(),
             "no {}.terminfo source at {}",
