@@ -363,7 +363,15 @@ SKIPPED_GATES=()
 #   --print-scope     with --changed-since: print the computed scope and exit 6
 #                     (a non-verdict mode: never 0).
 #   --prune-targets   delete each per-gate target dir this script created
-#                     (target/ci-targets/<name>) once its last gate ends.
+#                     (target/ci-targets/<name>) once its last gate ends, and
+#                     only when every gate that used it ended GREEN (rc 0): a
+#                     RED, killed (rc >= 128) or BLOCKED gate keeps its dir,
+#                     with the reason printed, so the rerun reuses the build
+#                     (P8: killing G-VALGRIND's shards pruned ci-targets/valgrind,
+#                     which the rerun then rebuilt from scratch). Never
+#                     target/debug: the developer's IDE (rust-analyzer's
+#                     flycheck) shares it, so ci.sh does not delete it. The
+#                     sanitizer gates delete their own target/san-<san>.
 #   --tier T          product | parity | all (default all). Every registry entry
 #                     carries exactly one tier= trait (ci_registry_check): parity
 #                     gates exist because Rustty tracks the Ghostty oracle (they

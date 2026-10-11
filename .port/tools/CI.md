@@ -375,7 +375,7 @@ bash .port/tools/ci.sh --tier parity            # only the parity gates (exit 4)
 | `--heavy-cap N` | At most N heavy gates run at once (default 2, never more than `--jobs`). A heavy gate also waits while another one runs and the checkout's volume has less than `CI_MIN_FREE_GB` (15) free. |
 | `--changed-since <rev>` | The long gates run only the crates changed since `<rev>` and their reverse dependents. Every other gate runs in full. |
 | `--print-scope` | With `--changed-since`: print the scope and each long gate's decision, then exit 6. It runs no gate, so it is never a verdict. |
-| `--prune-targets` | Deletes each per-gate target dir under `target/ci-targets/` once the last gate using it ends. |
+| `--prune-targets` | Deletes each per-gate target dir under `target/ci-targets/` once the last gate using it ends, if every gate that used it ended GREEN. Never `target/debug`. |
 | `--tier product\|parity\|all` | Runs only that tier's gates (default `all`). See "Parity and product tiers" below. |
 | `--sccache` | Sets `RUSTC_WRAPPER=sccache` when sccache is on PATH. Without sccache the run is unchanged. |
 
@@ -582,9 +582,37 @@ Each arm has a negative control.
 `ci.sh` deletes only `target/ci-targets/<name>` dirs. `<name>` must be a plain
 word, the target root must be `<checkout>/target/ci-targets`, and the dir must
 hold the `.created-by-ci-sh` marker that ci.sh writes when it creates the dir.
-A dir without the marker is refused by name. Each dir is deleted when the last
-gate that uses it ends. This is the only deletion `ci.sh` makes. The sanitizer
-gates already delete their own `target/san-<san>` dirs at the end of each pass.
+A dir without the marker is refused by name. This is the only deletion
+`ci.sh` makes.
+
+A dir is deleted when the last gate that uses it ends, and only if every gate
+that used it ended GREEN, meaning rc 0 on all of its units. A gate that ended
+RED, was killed (rc 128 or more) or ended BLOCKED keeps its dir. ci.sh prints
+`kept <dir>: <gate> ended RED (exit N)`, `was killed` or `ended BLOCKED`. That
+gate is the one about to be rerun, and the rerun reuses its build. In Phase 8,
+killing G-VALGRIND's shards ended the gate and pruned `ci-targets/valgrind`,
+so the rerun rebuilt it from nothing. G-CI-SELF arm H proves the rule with a
+RED, a self-killed (SIGTERM, 143), a BLOCKED and a RED-plus-GREEN shared dir.
+Its control is a prune that ignores the verdict.
+
+**`target/debug` is never pruned.** The developer's IDE shares it
+(rust-analyzer's flycheck builds there), so deleting it would cost every
+editor session a cold rebuild. `--prune-targets` touches only
+`target/ci-targets/`.
+
+**`target/san-<san>`** is deleted by `sanitizers.sh` itself on every way out
+of a pass:
+
+- the end of the crate loop, whether the crates were GREEN or RED;
+- the disk-floor BLOCKED stop;
+- an INT, TERM or HUP. A trap deletes the dir being built in, the shared
+  `san-<san>` or the current `san-<san>-<crate>`, then exits 128 plus the
+  signal number.
+
+Before CI hygiene B an interrupted pass left its dir behind. A SIGKILL cannot
+be trapped. In that case the next pass's opening `drop_target` clears the
+dir. G-SAN-SELF arm D2 covers all four paths with a stub `run_crate`. Its
+control installs no trap, and the SIGTERM then leaves the dir behind.
 
 ---
 

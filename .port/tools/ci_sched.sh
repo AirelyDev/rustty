@@ -325,6 +325,12 @@ ci_target_dir() {  # ci_target_dir NAME -> the path, created with its marker
   if [ ! -d "$d" ]; then mkdir -p "$d" && : > "$d/$CI_TARGET_MARK"; fi
   echo "$d"
 }
+ci_rc_word() {  # ci_rc_word RC -> why a gate's dir is kept
+  case "$1" in ''|*[!0-9]*) echo "ended with no recorded exit code"; return 0 ;; esac
+  if [ "$1" -eq 3 ]; then echo "ended BLOCKED (exit 3)"
+  elif [ "$1" -ge 128 ]; then echo "was killed (exit $1)"
+  else echo "ended RED (exit $1)"; fi
+}
 ci_prune_target() {  # ci_prune_target NAME
   local name="$1" d
   case "$name" in ''|*[!a-z0-9-]*) echo "ci.sh: --prune-targets: refusing '$name' (not a plain dir name)" >&2; return 1 ;; esac
@@ -424,7 +430,7 @@ ci_plan() {
   local entry gid gkind gres gtraits grun n=0 phase i k nsh
   GS_ID=(); GS_KIND=(); GS_RES=(); GS_TRAITS=(); GS_RUN=(); GS_CAT=(); GS_TEXT=()
   GS_NARROWED=(); GS_NOTE=(); GS_ENV=(); GS_ARGS=(); GS_LEFT=(); GS_T0=(); GS_RCS=(); GS_STATE=()
-  GS_UNITS=(); GS_UNITLIST=(); GS_MUTEX=(); GS_AFTER=(); GS_TIER=()
+  GS_UNITS=(); GS_UNITLIST=(); GS_MUTEX=(); GS_AFTER=(); GS_TIER=(); GS_FINAL_RC=()
   CI_ORDER=()
   ci_registry_check || exit 2
   for entry in "${GATE_REGISTRY[@]}"; do
@@ -570,6 +576,7 @@ ci_gate_finish() {  # print gate I whole, classify it, record timings, prune
     esac
   done
   ci_classify "$i" "$rc" "$log"
+  GS_FINAL_RC[i]="$rc"
   echo "   (gate ${GS_ID[$i]}: ${secs}s)"
   ci_timing_row "${GS_ID[$i]}" "${GS_KIND[$i]}" "$rc" "$secs"
   GS_STATE[$i]="done"
@@ -579,6 +586,22 @@ ci_gate_finish() {  # print gate I whole, classify it, record timings, prune
       case "${GS_STATE[$other]}" in pending|running) ;; *) continue ;; esac
       [ "$(trait_val "${GS_TRAITS[$other]}" dir 2>/dev/null)" = "$dirname" ] && return 0
     done
+    # And only when every gate that used it ended GREEN (rc 0, i.e. all of its
+    # units rc 0). A RED, killed or BLOCKED gate is the one about to be rerun,
+    # and its build is the thing the rerun wants: in P8, killing G-VALGRIND's
+    # shards ended the gate and pruned ci-targets/valgrind, which the rerun
+    # then rebuilt from nothing.
+    local kept=""
+    for other in ${CI_ORDER[@]+"${CI_ORDER[@]}"}; do
+      [ "${GS_STATE[$other]}" = "done" ] || continue
+      [ "$(trait_val "${GS_TRAITS[$other]}" dir 2>/dev/null)" = "$dirname" ] || continue
+      [ "${GS_FINAL_RC[$other]:-}" = 0 ] && continue
+      kept="$kept${kept:+, }${GS_ID[$other]} $(ci_rc_word "${GS_FINAL_RC[$other]}")"
+    done
+    if [ -n "$kept" ]; then
+      echo "   (--prune-targets: kept $CI_TARGET_ROOT/$dirname: $kept; a rerun reuses its build)"
+      return 0
+    fi
     ci_prune_target "$dirname" || true
   fi
 }
@@ -704,7 +727,11 @@ ci_on_signal() {
 #      tooling change is a full run (exit 0); SCOPED-GREEN vs plain BLOCKED.
 #      Control: the scoped banner removed (the run falls through to PASS).
 #   G  --fast still exits 4 and names its skips, serial and parallel.
-#   H  --prune-targets deletes only marked dirs under target/ci-targets.
+#   H  --prune-targets deletes only marked dirs under target/ci-targets, and
+#      only when every gate using the dir ended GREEN: a RED, a killed
+#      (rc >= 128) and a BLOCKED gate each keep theirs, with the reason, as
+#      does a dir shared by a RED and a GREEN gate. Control: a prune that
+#      ignores the verdict deletes the RED gate's dir.
 #   K  the heavy-start disk floor with a stubbed df: 1 GB free runs heavy
 #      gates one at a time, 100 GB in parallel. Control: floor check dropped.
 #   M  a wrapper killed before it records its rc is RED (exit 2), never a
@@ -1048,6 +1075,32 @@ P2|HARD|light|dir=second,tier=product|bash $GATES/fake.sh P2 0 0'
   if [ -d "$tr/handmade" ] && [ "$(printf '%s\n' "$CST_OUT" | grep -c '^rc=1$')" = 3 ] && cst_has "no $CI_TARGET_MARK"; then
     cst_ok "H control: an unmarked dir, a non-plain name and a foreign root are each refused"
   else cst_bad "H prune refusals"; fi
+  # Only a GREEN gate's dir goes. KS kills itself (SIGTERM: rc 143, as a unit
+  # killed from outside records); S1 (RED) and S2 (GREEN) share one dir.
+  # shellcheck disable=SC2016  # $GATES expands in the fixture's ci.sh
+  R='PG|HARD|light|dir=green,tier=product|bash $GATES/fake.sh PG 0 0
+PR|HARD|light|dir=red,tier=product|bash $GATES/fake.sh PR 1 0
+KS|HARD|light|dir=killed,tier=product|bash $GATES/killself.sh
+PB|HARD|light|dir=blocked,tier=product|bash $GATES/fake.sh PB 3 0 BLOCKED: fixture
+S1|HARD|light|dir=shared,tier=product|bash $GATES/fake.sh S1 1 0
+S2|HARD|light|dir=shared,tier=product|bash $GATES/fake.sh S2 0 0'
+  for k in keep keep-mut; do
+    # shellcheck disable=SC2016  # the scheduler's code, literally
+    if [ "$k" = keep ]; then cst_make keep "$R"
+    else CST_MUT_FILE=ci_sched.sh CST_MUT_OLD='      [ "${GS_FINAL_RC[$other]:-}" = 0 ] && continue' CST_MUT_NEW='      continue' cst_make keep-mut "$R"; fi
+    printf '#!/usr/bin/env bash\nkill -TERM $$\nsleep 5\n' > "$CST_BASE/$k/.port/tools/gates/killself.sh"
+  done
+  cst_run keep --jobs 4 --prune-targets
+  tr="$CST_BASE/keep/target/ci-targets"
+  if [ "$CST_RC" = 1 ] && [ ! -d "$tr/green" ] && [ -f "$tr/red/$CI_TARGET_MARK" ] && [ -d "$tr/killed" ] && [ -d "$tr/blocked" ] && [ -d "$tr/shared" ] \
+     && cst_has "(--prune-targets: deleted $tr/green)" && cst_has "kept $tr/red: PR ended RED (exit 1)" \
+     && cst_has "kept $tr/killed: KS was killed (exit 143)" && cst_has "kept $tr/blocked: PB ended BLOCKED (exit 3)" \
+     && cst_has "kept $tr/shared: S1 ended RED (exit 1)"; then
+    cst_ok "H --prune-targets deletes only the GREEN gate's dir; RED, killed (143), BLOCKED and a RED+GREEN shared dir are kept, each with its reason"
+  else cst_bad "H prune after a non-GREEN gate (exit $CST_RC)"; fi
+  cst_run keep-mut --jobs 4 --prune-targets
+  if [ ! -d "$CST_BASE/keep-mut/target/ci-targets/red" ]; then cst_ok "H control: a prune that ignores the verdict deletes the RED gate's dir, noticed"
+  else cst_bad "H control: a verdict-blind prune went unnoticed"; fi
 
   # J — every registry kind is dispatched (G8b/G8 sat unrun for months), and
   # exclusive gates run last and alone.
