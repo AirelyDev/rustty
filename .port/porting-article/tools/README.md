@@ -27,7 +27,7 @@ Options: `--research` (research dir, default `~/projects/rustty/.port/journey-ar
 `--allowlist` (default `redaction-allowlist.txt` here), `--cutoff` (ISO UTC), `--founding` (approved
 founding-sessions CSV: the proposed file's columns with `decision` = `include` or `exclude`; a row
 without a valid decision is refused; without the flag no founding prompt is kept), `--include-website`
-(also keep Claude Code prompts typed in the website folders over the whole window; recorded in the
+(also keep Claude Code prompts and Codex human turns typed in the website folders over the whole window; recorded in the
 manifest as `counts.include_website` and `rules.website`).
 
 The output date suffix is `DATE_TAG` in the script (now `2026-10-11`); earlier runs' files are
@@ -57,17 +57,19 @@ never overwritten.
   rustty-stats). Paths containing `ghostty-website` are kept from 2026-10-08 00:00 Pacific on
   (article work). Window: 2026-06-21 00:00 Pacific to the cutoff.
 - **Website folders** (`--include-website`, `WEBSITE_RULE`). Claude Code prompts (Mac and VM history)
-  whose project is under `~/projects/ghostty-website*` (the Rustty site checkout and its worktrees,
+  and Codex human turns (root sessions only; subagent, auto-review and injected context are dropped and
+  archive copies read once, as for Rustty) whose project / `cwd` is under `~/projects/ghostty-website*` (the Rustty site checkout and its worktrees,
   matched as a `projects/ghostty-website*` path component) are kept over the whole window with
   `project_marker: website`. Every session with such a prompt is article work (reason
   `project:website`) for all of its prompts, whatever the date. Website prompts never link Rustty
-  commits (`commits_basis: other-repo`). Codex keeps the older rule (website `cwd` only from
-  2026-10-08 00:00 Pacific).
+  commits (`commits_basis: other-repo`). Codex was added on 2026-10-11 (run `2026-10-11d`).
 - **Codex human turns.** Subagent rollouts (`drop: subagent`) and auto-review rollouts (model
   `codex-auto-review` or `guardian_review` threads; `drop: auto-review`) are dropped whole. Inside
   a root session, injected context (`# AGENTS.md instructions`, `<environment_context>`,
   `<recommended_plugins>`, `<codex_internal_context>` goal nudges, `<subagent_notification>` …)
-  is dropped as `injected-context`; replays of the same turn are `duplicate`.
+  is dropped as `injected-context`; replays of the same turn are `duplicate`. The Codex app's in-app
+  browser header (`# In app browser:` with the page URL and tab count, up to `## My request for Codex:`)
+  is cut, so only the typed request is kept.
 - **Kind.** `command` when the text starts with a slash command (`/clear`, `/goal …`); a path
   such as `/Users/…` is a prompt.
 - **Pasted text.** `none` without a `[Pasted text #N]` placeholder; `kept` when every referenced

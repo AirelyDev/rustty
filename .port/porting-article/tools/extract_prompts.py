@@ -103,7 +103,8 @@ ARTICLE_RULE = ("A session is article work if it has a prompt on or after 2026-1
                 "(any of its prompts was typed in a project path containing 'ghostty-website', OR any of "
                 "its prompts matches \\b(article|journey|website|porting page|disclosure)\\b, case-insensitive). "
                 "Only that session's prompts on or after the cutoff are tagged; earlier prompts never are.")
-WEBSITE_RULE = ("With --include-website: Claude Code prompts typed in a website folder (a projects/ghostty-website* folder, "
+WEBSITE_RULE = ("With --include-website: Claude Code prompts and Codex human turns (root sessions; subagent, "
+                "auto-review and injected context dropped as for Rustty; archive copies read once) typed in a website folder (a projects/ghostty-website* folder, "
                 "worktrees included) are kept over the whole window, marked project_marker 'website', and every "
                 "session with such a prompt is article work (reason project:website) for all of its prompts, "
                 "whatever the date. Website prompts never link Rustty commits (basis other-repo).")
@@ -493,6 +494,17 @@ INJECT_TAGS = ("recommended_plugins", "environment_context", "codex_internal_con
 INJECT_WRAPPED = re.compile(r"^\s*<([A-Za-z_][\w-]*)(?:\s[^>]*)?>[\s\S]*</\1>\s*$")
 
 
+# the Codex app's in-app browser wraps a typed request in a context header (page URL, tab count);
+# only the text after "## My request for Codex:" was typed
+APP_BROWSER_RE = re.compile(r"^\s*# In app browser:[ \t]*\n(?:[ \t]*(?:- [^\n]*)?\n)*?[ \t]*## My request for Codex:[ \t]*\n?")
+
+
+def strip_app_context(text):
+    """Drop the Codex in-app browser header in front of a typed request (see APP_BROWSER_RE)."""
+    m = APP_BROWSER_RE.match(text)
+    return text[m.end():] if m else text
+
+
 def is_injected(text):
     t = text.lstrip()
     if t.startswith("# AGENTS.md instructions") or t.startswith("<INSTRUCTIONS>"):
@@ -510,8 +522,10 @@ def codex_mode(approval, sandbox, collab):
     return "default"
 
 
-def codex_prompts(sessions, window):
+def codex_prompts(sessions, window, include_website=False):
     """Codex rollout files (each a list of decoded records) -> human turns.
+
+    include_website: also keep turns whose cwd is a website folder over the whole window (WEBSITE_RULE).
 
     A source unit is a user-role `message` item (`response_item` records). Tool results are
     `function_call_output` items, not user messages, so they are not units at all."""
@@ -561,7 +575,7 @@ def codex_prompts(sessions, window):
             if ts is None:
                 res.drop("unparseable")
                 continue
-            if not _in_project(cwd, ts):
+            if not _in_project(cwd, ts, include_website):
                 res.drop("other-project")
                 continue
             if ts < start:
@@ -572,6 +586,7 @@ def codex_prompts(sessions, window):
                 continue
             blocks = [b.get("text") or "" for b in (p.get("content") or [])
                       if isinstance(b, dict) and b.get("type") in ("input_text", "text")]
+            blocks = [strip_app_context(b) for b in blocks]
             human = [b for b in blocks if b.strip() and not is_injected(b)]
             if not human:
                 res.drop("injected-context" if blocks else "empty")
@@ -1132,7 +1147,8 @@ def main(argv=None):
     ap.add_argument("--allowlist", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "redaction-allowlist.txt"))
     ap.add_argument("--cutoff", default=None, help="ISO UTC; default: now")
     ap.add_argument("--include-website", action="store_true",
-                    help="also keep Claude Code prompts typed in ~/projects/ghostty-website* over the whole window, "
+                    help="also keep Claude Code prompts and Codex human turns typed in ~/projects/ghostty-website* "
+                         "over the whole window, "
                          "as article work (see WEBSITE_RULE)")
     ap.add_argument("--founding", default=None,
                     help="approved founding-sessions CSV (columns of prompts-founding-sessions-proposed-<date>.csv, "
@@ -1167,7 +1183,8 @@ def main(argv=None):
                 continue
             seen_ids.add(sid)
             codex_files.append(path)
-    results["codex"] = codex_prompts(([r for r in read_jsonl(p) if r] for p in codex_files), window)
+    results["codex"] = codex_prompts(([r for r in read_jsonl(p) if r] for p in codex_files), window,
+                                     include_website=a.include_website)
     sources = source_summary(results)
     if "claude-vm" not in sources:
         sources["claude-vm"] = {"status": "pending"}
@@ -1330,7 +1347,8 @@ def main(argv=None):
                              "2026-10-08 00:00 Pacific (article work).",
                   "human_turns": "Claude: every history row (typed prompts and slash commands; subagent prompts are "
                                  "never in the history). Codex: user-role message items of root sessions, minus "
-                                 "injected context (AGENTS.md, environment/plugin/goal/subagent notices), minus "
+                                 "injected context (AGENTS.md, environment/plugin/goal/subagent notices; the in-app "
+                                 "browser header before '## My request for Codex:' is cut), minus "
                                  "replays; subagent and auto-review sessions are dropped whole.",
                   "settings": "transcript (the call answering the prompt, live transcript or rustty-stats per-call "
                               "rows; for Codex the turn context) > session (rustty-stats, one model in the "

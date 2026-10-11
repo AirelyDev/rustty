@@ -157,6 +157,41 @@ class CodexTest(unittest.TestCase):
         self.assertEqual(len(res.prompts), 2)
         self.assertEqual(res.dropped, {"injected-context": 6, "duplicate": 2})
 
+    def test_codex_app_browser_header_stripped(self):
+        wrapped = ("\n# In app browser:\n- The user has the in-app browser open with 1 tab.\n"
+                   "- Current URL: http://localhost:3000/\n\n## My request for Codex:\nmake the logo bigger\n")
+        self.assertEqual(ep.strip_app_context(wrapped), "make the logo bigger\n")
+        self.assertEqual(ep.strip_app_context("plain request"), "plain request")
+        # a header without the request marker is left alone (not guessed)
+        self.assertEqual(ep.strip_app_context("# In app browser:\n- x\n"), "# In app browser:\n- x\n")
+        sess = codex_session()
+        sess[-1]["payload"]["content"][0]["text"] = wrapped
+        res = ep.codex_prompts([sess], WINDOW)
+        self.assertEqual(res.prompts[-1]["text"], "make the logo bigger\n")
+        self.assertEqual(res.prompts[-1]["chars"], len("make the logo bigger\n"))
+
+    def test_codex_include_website(self):
+        site = "/Users/example/projects/ghostty-website-journey"
+        # July website turns: dropped without the flag, kept and marked with it
+        off = ep.codex_prompts([codex_session(cwd=site)], WINDOW)
+        self.assertEqual(off.dropped, {"other-project": 5})
+        on = ep.codex_prompts([codex_session(cwd=site)], WINDOW, include_website=True)
+        self.assertEqual([p["text"] for p in on.prompts], ["Run the build please\n", "Go ahead\n"])
+        self.assertEqual({p["project_marker"] for p in on.prompts}, {"website"})
+        self.assertEqual(on.dropped, {"injected-context": 3})
+        sessions = ep.article_sessions(on.prompts, include_website=True)
+        self.assertEqual(sessions, {"cx1": "project:website"})
+        self.assertTrue(all(ep.is_article_work(p, sessions) for p in on.prompts))
+        # subagent and auto-review rollouts in a website folder stay dropped whole
+        sub = ep.codex_prompts([codex_session(cwd=site, sub=True, thread_source="subagent")], WINDOW,
+                               include_website=True)
+        self.assertEqual((sub.prompts, sub.dropped), ([], {"subagent": 5}))
+        rev = ep.codex_prompts([codex_session(cwd=site, model="codex-auto-review")], WINDOW, include_website=True)
+        self.assertEqual((rev.prompts, rev.dropped), ([], {"auto-review": 5}))
+        # an unrelated folder is still dropped with the flag
+        other = ep.codex_prompts([codex_session(cwd="/Users/example/projects/other")], WINDOW, include_website=True)
+        self.assertEqual(other.dropped, {"other-project": 5})
+
 
 class SettingsTest(unittest.TestCase):
     def test_settings_purged_window(self):
