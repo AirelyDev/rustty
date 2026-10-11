@@ -1649,8 +1649,7 @@ mod tests {
     // -----------------------------------------------------------------------
     // The 8 loop-driven `test "wasi: ..."` blocks. These need a live WASI host
     // (`poll_oneoff`/`clock_time_get`), so they compile for `wasm32-wasip1` and
-    // RUN under a wasm runtime — see `.port/phase-2/VERIFICATION_DEBT.md` for the
-    // runnable recipe. They are real tests, not stubs.
+    // run under wasmtime (G-WASI in `.port/tools/ci.sh`).
     // -----------------------------------------------------------------------
 
     /// PORT-ADDED (N431): a callback re-enters the loop through a pointer the
@@ -1721,6 +1720,14 @@ mod tests {
     /// PORT NOTE: `test "wasi: loop time"`.
     #[test]
     fn wasi_loop_time() {
+        // PORT NOTE: host precondition, not in the reference. WASI leaves the
+        // monotonic clock's origin to the runtime, and wasmtime (the G-WASI
+        // runner) starts it at instance start, so `now()` (milliseconds) is 0
+        // for the guest's first millisecond. The reference's "never init zero"
+        // means `init` caches a real clock reading, not the field's zero; wait
+        // until that reading is at least 1 ms so the assertion checks that.
+        while get_now().unwrap() < ns_per_ms {}
+
         let mut l = Loop::init(Options::default()).unwrap();
 
         // should never init zero
@@ -1968,24 +1975,193 @@ mod tests {
         l.deinit();
     }
 
-    /// PORT NOTE: `test "wasi: file"` — DOCUMENTED SKIP-STUB (the established
-    /// precedent: the font-shaper fontconfig / web_canvas skip-stubs). The
-    /// reference body opens `zig-cache/wasi-test-file.txt` through
-    /// `posix.openatWasi(dir.fd, ...)` with an explicit WASI rights mask; that
-    /// requires the test host to grant a PREOPENED directory, which
-    /// `cargo test --target wasm32-wasip1` does not do by default. The test count
-    /// is held here and the runnable recipe (`wasmtime --dir=.`) is recorded in
-    /// `.port/phase-2/VERIFICATION_DEBT.md`. This is verification debt, NOT a
-    /// scope exclusion: the read/pread/write/pwrite/close operations the test
-    /// drives ARE ported above (`Loop::start` + `Completion::perform`).
+    /// PORT NOTE: `test "wasi: file"`. Needs a preopened directory: the runner is
+    /// `wasmtime --dir=.` (G-WASI), which maps the test's working directory (the
+    /// crate root, as cargo sets it) to the guest's `.`. Two adaptations, both
+    /// mechanical:
+    /// - the reference path is `zig-cache/wasi-test-file.txt`; cargo has no
+    ///   `zig-cache` directory, so the file is created in the working directory
+    ///   itself and deleted at the end, as the reference deletes its own;
+    /// - `posix.openatWasi(dir.fd, path, 0x0, oflags, 0x0, base, fdflags)` is the
+    ///   raw `path_open` import below, called with the same seven arguments in the
+    ///   same order. (That passes `fdflags` as the INHERITING rights and 0 as the
+    ///   fd flags, which is what the reference call does; `openatWasi` itself is
+    ///   gone from Zig 0.16's std, so the reference body no longer compiles for
+    ///   WASI at the pin.) `std.fs.cwd()` is the preopen the guest resolves `.` to,
+    ///   reached here through `std::fs::File::open(".")`.
     #[test]
-    fn wasi_file_skip_stub() {
-        // The op surface the reference test drives exists and is nameable.
-        let _ = core::mem::size_of::<Operation>();
-        let _ = ReadBuffer::Array([0; 32]);
-        let _ = WriteBuffer::Array {
-            array: [0; 32],
-            len: 0,
+    fn wasi_file() {
+        use std::os::fd::AsRawFd;
+
+        #[link(wasm_import_module = "wasi_snapshot_preview1")]
+        unsafe extern "C" {
+            fn path_open(
+                fd: wasi::fd_t,
+                dirflags: u32,
+                path: *const u8,
+                path_len: usize,
+                oflags: u16,
+                fs_rights_base: u64,
+                fs_rights_inheriting: u64,
+                fs_flags: u16,
+                opened_fd: *mut wasi::fd_t,
+            ) -> u16;
+        }
+
+        // wasi.O / wasi.RIGHT / wasi.FDFLAG (the preview1 ABI values).
+        const O_CREAT: u16 = 1 << 0;
+        const O_TRUNC: u16 = 1 << 3;
+        const RIGHT_FD_DATASYNC: u64 = 1 << 0;
+        const RIGHT_FD_READ: u64 = 1 << 1;
+        const RIGHT_FD_SEEK: u64 = 1 << 2;
+        const RIGHT_FD_FDSTAT_SET_FLAGS: u64 = 1 << 3;
+        const RIGHT_FD_SYNC: u64 = 1 << 4;
+        const RIGHT_FD_TELL: u64 = 1 << 5;
+        const RIGHT_FD_WRITE: u64 = 1 << 6;
+        const RIGHT_FD_ADVISE: u64 = 1 << 7;
+        const RIGHT_FD_ALLOCATE: u64 = 1 << 8;
+        const RIGHT_FD_FILESTAT_GET: u64 = 1 << 21;
+        const RIGHT_FD_FILESTAT_SET_SIZE: u64 = 1 << 22;
+        const RIGHT_FD_FILESTAT_SET_TIMES: u64 = 1 << 23;
+        const RIGHT_POLL_FD_READWRITE: u64 = 1 << 27;
+        const FDFLAG_DSYNC: u16 = 1 << 1;
+        const FDFLAG_RSYNC: u16 = 1 << 3;
+        const FDFLAG_SYNC: u16 = 1 << 4;
+
+        fn read_cb(
+            ud: *mut core::ffi::c_void,
+            _l: *mut Loop,
+            _c: *mut Completion,
+            r: Result,
+        ) -> CallbackAction {
+            let ptr = ud as *mut Option<usize>;
+            let n = match r {
+                Result::Read(Ok(n)) => n,
+                Result::Read(Err(ReadError::EOF)) => 0,
+                _ => unreachable!(),
+            };
+            unsafe { *ptr = Some(n) };
+            CallbackAction::Disarm
+        }
+
+        fn write_cb(
+            ud: *mut core::ffi::c_void,
+            _l: *mut Loop,
+            _c: *mut Completion,
+            r: Result,
+        ) -> CallbackAction {
+            let ptr = ud as *mut Option<usize>;
+            let n = match r {
+                Result::Write(Ok(n)) => n,
+                _ => unreachable!(),
+            };
+            unsafe { *ptr = Some(n) };
+            CallbackAction::Disarm
+        }
+
+        fn close_cb(
+            _ud: *mut core::ffi::c_void,
+            _l: *mut Loop,
+            _c: *mut Completion,
+            r: Result,
+        ) -> CallbackAction {
+            match r {
+                Result::Close(Ok(())) => {}
+                _ => unreachable!(),
+            }
+            CallbackAction::Disarm
+        }
+
+        let mut l = Loop::init(Options::default()).unwrap();
+
+        // Create a file
+        let path = "wasi-test-file.txt";
+        let dir = std::fs::File::open(".").unwrap();
+        let f: wasi::fd_t = {
+            let oflags = O_CREAT | O_TRUNC;
+            let base = RIGHT_FD_WRITE
+                | RIGHT_FD_READ
+                | RIGHT_FD_DATASYNC
+                | RIGHT_FD_SEEK
+                | RIGHT_FD_TELL
+                | RIGHT_FD_FDSTAT_SET_FLAGS
+                | RIGHT_FD_SYNC
+                | RIGHT_FD_ALLOCATE
+                | RIGHT_FD_ADVISE
+                | RIGHT_FD_FILESTAT_SET_TIMES
+                | RIGHT_FD_FILESTAT_SET_SIZE
+                | RIGHT_FD_FILESTAT_GET
+                | RIGHT_POLL_FD_READWRITE;
+            let fdflags = FDFLAG_SYNC | FDFLAG_RSYNC | FDFLAG_DSYNC;
+            let mut fd: wasi::fd_t = 0;
+            let errno = unsafe {
+                path_open(
+                    dir.as_raw_fd() as wasi::fd_t,
+                    0x0,
+                    path.as_ptr(),
+                    path.len(),
+                    oflags,
+                    base,
+                    u64::from(fdflags),
+                    0x0,
+                    &mut fd,
+                )
+            };
+            assert_eq!(errno, 0, "path_open failed");
+            fd
         };
+
+        // Start a reader
+        let mut read_buf = [0u8; 128];
+        let mut read_len: Option<usize> = None;
+        let mut c_read = Completion {
+            op: Operation::Read {
+                fd: f,
+                buffer: ReadBuffer::Slice(&mut read_buf[..] as *mut [u8]),
+            },
+            userdata: &mut read_len as *mut Option<usize> as *mut core::ffi::c_void,
+            callback: read_cb,
+            ..Completion::default()
+        };
+        unsafe { l.add(&mut c_read) };
+
+        // Tick. The reader should NOT read because we are blocked with no data.
+        l.run(RunMode::UntilDone).unwrap();
+        assert!(read_len.unwrap() == 0);
+
+        // Start a writer
+        let write_buf = b"hello!";
+        let mut write_len: Option<usize> = None;
+        let mut c_write = Completion {
+            op: Operation::Write {
+                fd: f,
+                buffer: WriteBuffer::Slice(&write_buf[..] as *const [u8]),
+            },
+            userdata: &mut write_len as *mut Option<usize> as *mut core::ffi::c_void,
+            callback: write_cb,
+            ..Completion::default()
+        };
+        unsafe { l.add(&mut c_write) };
+
+        l.run(RunMode::UntilDone).unwrap();
+        assert!(write_len.unwrap() == write_buf.len());
+
+        // Close
+        let mut c_close = Completion {
+            op: Operation::Close { fd: f },
+            userdata: core::ptr::null_mut(),
+            callback: close_cb,
+            ..Completion::default()
+        };
+        unsafe { l.add(&mut c_close) };
+        l.run(RunMode::UntilDone).unwrap();
+
+        // Read and verify we've written
+        let verify = std::fs::read(path).unwrap();
+        assert_eq!(&verify[..], &write_buf[..]);
+
+        std::fs::remove_file(path).unwrap();
+        drop(dir);
+        l.deinit();
     }
 }

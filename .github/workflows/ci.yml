@@ -277,6 +277,23 @@ jobs:
           rustup target add x86_64-pc-windows-msvc || true
           rustup target add x86_64-unknown-freebsd || true
 
+      # G-WASI runs rustty-xev's wasi_poll tests under wasmtime. A pinned
+      # release tarball, checked against its sha256, on both legs.
+      - name: Install wasmtime (G-WASI)
+        shell: bash
+        run: |
+          v=v48.0.2
+          case "${{ runner.os }}" in
+            Linux) a=x86_64-linux; sum=f2b0ad1ce9253f2f9a38793c2c42cd1cba4e90b27dc40d685eaf723dc8438d94 ;;
+            macOS) a=aarch64-macos; sum=8abc55958f04678bf01d4d0c46868f45aa8083bacc29e5a1685f971f110fbc14 ;;
+          esac
+          f="wasmtime-$v-$a.tar.xz"
+          cd "$RUNNER_TEMP"
+          curl -sSfLO "https://github.com/bytecodealliance/wasmtime/releases/download/$v/$f"
+          echo "$sum  $f" | shasum -a 256 -c -
+          tar -xJf "$f"
+          echo "$PWD/wasmtime-$v-$a" >> "$GITHUB_PATH"
+
       # G-XCF and G-EXAMPLES (swift-vt-xcframework) run `xtask xcframework-vt`,
       # which builds the reference's Apple universal bundle: a lipo'd
       # aarch64 + x86_64 macOS slice, plus iOS device and simulator slices

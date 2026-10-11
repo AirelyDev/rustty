@@ -1793,6 +1793,10 @@ mod tests {
     // below, and multi-threaded correctness of the lock-free containers is proven
     // on `.port/phase-2/mirihar-threadpool/`.
     #[test]
+    #[cfg_attr(
+        target_os = "wasi",
+        ignore = "needs OS threads: wasm32-wasip1 has none, so std::thread::spawn fails (the pool's spawn-failure path unregisters, as the reference's `catch return self.unregister(null)` does, and no worker ever runs a task). Port-added test; the reference ThreadPool has no tests. Runs on every native target."
+    )]
     fn schedule_runs_all_tasks_and_deinit_joins() {
         run_schedule_all(1, 200);
     }
@@ -1985,6 +1989,10 @@ mod tests {
     // applied). The watchdog stays so any regression FAILS loudly instead of
     // wedging the suite.
     #[test]
+    #[cfg_attr(
+        target_os = "wasi",
+        ignore = "needs OS threads: wasm32-wasip1 has none, so std::thread::spawn fails (the pool's spawn-failure path unregisters, as the reference's `catch return self.unregister(null)` does, and no worker ever runs a task). Port-added test; the reference ThreadPool has no tests. Runs on every native target."
+    )]
     fn multi_worker_quiesce_then_join_50x() {
         // Under Miri the whole pool runs interpreted (and the futex is the
         // spin/yield stand-in), so 50x64 would take hours. The shape under test

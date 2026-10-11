@@ -11725,3 +11725,46 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   running, and its `defer thread.deinit()` frees the thread under it; that is a test-only failure path, so no UD.
   After: 60/60 under the same load, 20/20 alone under LSan (0 leaks), and 20/20 native. Miri: the test is a
   recorded MIRI EXCEPTION (interpreter ICE), so no Miri run.
+
+## N550–N552 — the WebAssembly lane run for real (wasm-green, 2026-10-10)
+
+V8's `wasi_poll` half and the wasm example pages were run end to end for the first time: libxev's WASI backend under
+wasmtime (new gate G-WASI, `.port/tools/gates/check_wasi_xev.sh`) and the example pages against Ghostty's in headless
+Chrome (`.port/tools/gates/wasm_examples_browser_gate.mjs`, in the `--webgl` lane). Head `98edf073a` plus this branch;
+pin `246f70287`. UD380 came out of the same work.
+
+- **N550 (FIXED): `wasi_poll::tests::wasi_loop_time` failed under wasmtime, and only wasmtime can run the backend.**
+  The reference's "should never init zero" assertion (`now() > 0`, in milliseconds) assumes the WASI monotonic clock
+  started at least 1 ms before `Loop::init`. WASI leaves the origin to the runtime, and wasmtime 49.0.2 starts it at
+  instance start (`Instant` printed 96 µs), so `now()` is 0. Node 25's `node:wasi` (203106 s), iwasm 2.4.5 and wazero
+  1.12 use host uptime, but none of them can run the loop: `poll_oneoff` with `SUBSCRIPTION_CLOCK_ABSTIME` (the
+  reference's subscription) returns ENOTSUP on wazero (errno 58) and an error on iwasm (errno 39), and Node blocks on
+  it (every timer test hangs). Measured per test on all four runtimes. Fix (test only): `wasi_loop_time` first waits
+  until `get_now()` is at least 1 ms (PORT NOTE), so the assertion checks what it means, that `init` cached a real
+  clock reading. Negative control: `init` caching 0 instead of `get_now()` makes the test FAIL. The other changes in
+  the run: the 8 `wasi_watcher` skip-stubs (`AsyncTests` x3, `TimerTests` x5) and `wasi_file_skip_stub` are live ports
+  now (`wasi_file` opens its file through the raw `path_open` with the reference's seven arguments; `openatWasi` no
+  longer exists in Zig 0.16's std, so the reference body does not compile for WASI at the pin), two port-added
+  thread-pool tests are `#[cfg_attr(target_os = "wasi", ignore = ...)]` with the reason (wasm32-wasip1 has no threads;
+  the pool's spawn-failure path unregisters, as the reference's does), and an unfenced Zig snippet in a `wasi_watcher.rs`
+  doc comment, which failed as a doctest on this target, is fenced as `zig`. Result: 34 passed, 2
+  ignored, 0 failed, doctests included. No-op `Loop::tick` control: every loop-driving test fails or hangs (the only
+  passes are the pure `batch_get_put` and the four stream tests the reference itself skips on WASI). No-preopen control:
+  `wasi_file` fails on its fixture ("failed to find a pre-opened file descriptor"). Both the second control and an
+  anti-vacuity list of the 17 loop-driving tests are arms of G-WASI.
+- **N551 (FIXED): `.port/tools/wasm-parity.mjs` could not parse the pin's type manifest.** At `246f70287` the manifest
+  names an enum-typed field by its enum type (`FormatterTerminalOptions.emit` is `GhosttyFormatterFormat`), and the
+  harness's `setField` only knew primitive types, so it threw `bad field type GhosttyFormatterFormat`. Nothing ran the
+  harness, so the break was unseen. Fix: the enum branch example/wasm-vt's own `setField` has (an `i32` write when the
+  type row says `kind: "enum"`, `underlying: "i32"`), and `PLAIN` read from `<Prefix>FormatterFormat.values`. After:
+  BYTE-EXACT PARITY against `ghostty-vt.wasm` built at the pin. Now in the `--webgl` lane.
+- **N552 (FIXED): G-EXAMPLES called `example/wasm-*` "covered by the --webgl lane", and nothing in that lane opened
+  them.** The lane ran the WebGL2 pixel gate, the log-emission check and the web_canvas font check only;
+  `wasm-vt-roundtrip.mjs`, `web-canvas-instantiate.mjs` and `wasm-parity.mjs` existed and ran nowhere, and
+  `wasm-sgr` / `wasm-key-encode` had no check at all. Fix: the lane now runs all three plus the new example gate, which
+  loads `wasm-vt`, `wasm-sgr` and `wasm-key-encode` from this tree and from the oracle at the pin, drives the same
+  inputs into both (139 outputs) and requires identical `#output` text after the rename, and checks every constant table
+  the pages hard-code against the module's own manifest. Controls: different inputs and different keys must differ
+  (NC1, NC2), and Ghostty's uncorrected SGR table must fail the manifest arm (NC3, 24 wrong tags). Regression check:
+  restoring the old Rustty `wasm-sgr` page turns the gate RED (33 problems). Lane verdict: PASS
+  (`bash .port/tools/ci.sh --webgl`).
