@@ -571,7 +571,7 @@ record "(d)" $?
 
 ( set -e
 echo "== (c) struct layouts match rustty_type_json() =="
-node .port/tools/check-vt-struct-layouts.mjs
+RUSTTY_TARGET_DIR="$TDIR" node .port/tools/check-vt-struct-layouts.mjs
 )
 record "(c)" $?
 
